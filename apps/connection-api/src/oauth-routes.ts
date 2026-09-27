@@ -24,6 +24,7 @@ import {
 	type ProviderCredentialRequest,
 	providerCredentialRequestSchema,
 	providerReconnectRequestSchema,
+	providerUpgradeRequestSchema,
 	reapprovalCampaignDraftSchema,
 	sharedScopeNameSchema,
 } from "@agent-infra/connection-contracts";
@@ -2455,6 +2456,19 @@ export function createConnectionOAuthApp(
 			"/api/v1/connection/connections/:connectionId/upgrade",
 			async (context) => {
 				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const rawBody = await context.req.text();
+				let parsedBody: unknown = {};
+				if (rawBody) {
+					try {
+						parsedBody = JSON.parse(rawBody);
+					} catch {
+						throw new ConnectionError(
+							"INVALID_REQUEST",
+							"Invalid upgrade request",
+						);
+					}
+				}
+				const body = parseJsonBody(providerUpgradeRequestSchema, parsedBody);
 				const session = await currentBrowserApiAccount(context);
 				if (session instanceof Response) return session;
 				const connectionId = context.req.param("connectionId");
@@ -2464,13 +2478,14 @@ export function createConnectionOAuthApp(
 						context,
 						{
 							operation: "connection.account.upgrade",
-							request: { connectionId },
+							request: { connectionId, ...body },
 							subject: session.account.principalId,
 						},
 						() =>
 							management.service.upgradeProviderConnection(
 								session.account.principalId,
 								connectionId,
+								body.accessRequestId,
 							),
 					),
 				);

@@ -6,6 +6,8 @@ export async function seedApprovedConnectPermit(
 	sql: Sql,
 	input: {
 		principalId: string;
+		actionVersionIds?: readonly string[];
+		renewalApproverId?: string;
 		providerReleaseId: string;
 		scopes: readonly string[];
 	},
@@ -32,6 +34,8 @@ export async function seedApprovedConnectPermit(
 		WHERE action.provider_release_id = ${input.providerReleaseId}
 			AND action.status = 'PUBLISHED'
 			AND action.required_scopes <@ ${sql.json([...input.scopes])}::jsonb
+			AND (${input.actionVersionIds ? sql.json([...input.actionVersionIds]) : null}::jsonb IS NULL
+				OR ${sql.json([...(input.actionVersionIds ?? [])])}::jsonb @> jsonb_build_array(action.id))
 	`;
 	await sql`
 		UPDATE connection_capability_profiles
@@ -45,9 +49,21 @@ export async function seedApprovedConnectPermit(
 			renewal_lead_seconds, status, created_by_principal_id, published_at
 		) VALUES (
 			${policyId}, ${input.providerReleaseId}, ${profileId}, 100,
-			true, 86400, 86400, 0, 'PUBLISHED', ${input.principalId}, now()
+			true, 86400, 86400, ${input.renewalApproverId ? 2592000 : 0},
+			${input.renewalApproverId ? "DRAFT" : "PUBLISHED"}, ${input.principalId},
+			CASE WHEN ${Boolean(input.renewalApproverId)} THEN NULL ELSE now() END
 		)
 	`;
+	if (input.renewalApproverId) {
+		const stageId = `fixture-stage-${suffix}`;
+		await sql`INSERT INTO connection_access_policy_durations (id, policy_version_id, duration_kind, duration_days)
+			VALUES (${`fixture-duration-${suffix}`}, ${policyId}, 'FINITE', 90)`;
+		await sql`INSERT INTO connection_approval_stages (id, policy_version_id, ordinal, name, quorum_type, timeout_seconds)
+			VALUES (${stageId}, ${policyId}, 1, 'Renewal review', 'ANY', 86400)`;
+		await sql`INSERT INTO connection_approval_stage_approvers (policy_version_id, stage_id, approver_principal_id, display_snapshot)
+			VALUES (${policyId}, ${stageId}, ${input.renewalApproverId}, '{}'::jsonb)`;
+		await sql`UPDATE connection_access_policy_versions SET status = 'PUBLISHED', published_at = now(), revision = revision + 1 WHERE id = ${policyId}`;
+	}
 	await sql`
 		INSERT INTO connection_access_requests (
 			id, applicant_principal_id, provider_release_id,

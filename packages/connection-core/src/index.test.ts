@@ -1666,59 +1666,86 @@ describe("Connection application service", () => {
 		).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
 	});
 
-	it("upgrades a ProviderRelease with the stored credential and stable identity", async () => {
-		const repository = new MemoryRepository();
-		repository.getProviderCredentialForUpgrade = async () => ({
-			accessToken: "stored-token",
-			credentialVersionId: "credential-v1",
-			externalAccount: "alice",
-			grantedScopes: ["rehoboam.metadata.read"],
-			providerId: "rehoboam",
-		});
-		let stored: Record<string, unknown> | undefined;
-		repository.storeProviderCredential = async (input) => {
-			stored = input;
-			return { connectionId: "connection-rehoboam" };
-		};
-		const service = new ConnectionApplicationService(
-			repository,
-			{ execute: async () => ({}) },
-			undefined,
-			{
-				rehoboam: {
-					providerId: "rehoboam",
-					providerReleaseId: "rehoboam-connection-v4",
-					validateCredential: async (accessToken) => {
-						expect(accessToken).toBe("stored-token");
-						return {
-							accessToken,
-							displayName: "Alice",
-							externalAccount: "alice",
-							grantedScopes: [
-								"rehoboam.metadata.read",
-								"rehoboam.release.read",
-							],
-							providerId: "rehoboam",
-							providerReleaseId: "rehoboam-connection-v4",
-						};
+	it.each([undefined, "approved-upgrade-request"])(
+		"upgrades with stored credential and approval %s",
+		async (accessRequestId) => {
+			const repository = new MemoryRepository();
+			repository.getProviderCredentialForUpgrade = async () => ({
+				accessToken: "stored-token",
+				credentialVersionId: "credential-v1",
+				externalAccount: "alice",
+				grantedScopes: ["rehoboam.metadata.read"],
+				providerId: "rehoboam",
+			});
+			let stored: Record<string, unknown> | undefined;
+			repository.storeProviderCredential = async (input) => {
+				stored = input;
+				return { connectionId: "connection-rehoboam" };
+			};
+			const service = new ConnectionApplicationService(
+				repository,
+				{ execute: async () => ({}) },
+				undefined,
+				{
+					rehoboam: {
+						providerId: "rehoboam",
+						providerReleaseId: "rehoboam-connection-v4",
+						validateCredential: async (accessToken) => {
+							expect(accessToken).toBe("stored-token");
+							return {
+								accessToken,
+								displayName: "Alice",
+								externalAccount: "alice",
+								grantedScopes: [
+									"rehoboam.metadata.read",
+									"rehoboam.release.read",
+								],
+								providerId: "rehoboam",
+								providerReleaseId: "rehoboam-connection-v4",
+							};
+						},
 					},
 				},
-			},
-		);
-		expect(
-			await service.upgradeProviderConnection(
-				"principal-alice",
-				"connection-rehoboam",
-			),
-		).toEqual({ connectionId: "connection-rehoboam" });
-		expect(stored).toMatchObject({
-			expectedConnectionId: "connection-rehoboam",
-			expectedCredentialVersionId: "credential-v1",
-			principalId: "principal-alice",
-			grantedScopes: ["rehoboam.metadata.read", "rehoboam.release.read"],
-			providerReleaseId: "rehoboam-connection-v4",
-		});
-	});
+			);
+			expect(
+				await service.upgradeProviderConnection(
+					"principal-alice",
+					"connection-rehoboam",
+					accessRequestId,
+				),
+			).toEqual({ connectionId: "connection-rehoboam" });
+			expect(stored).toMatchObject({
+				expectedConnectionId: "connection-rehoboam",
+				expectedCredentialVersionId: "credential-v1",
+				principalId: "principal-alice",
+				grantedScopes: ["rehoboam.metadata.read", "rehoboam.release.read"],
+				providerReleaseId: "rehoboam-connection-v4",
+			});
+			if (accessRequestId) {
+				expect(stored?.accessRequestId).toBe(accessRequestId);
+				expect(repository.connectValidations).toEqual([
+					{
+						principalId: "principal-alice",
+						providerId: "rehoboam",
+						requestId: accessRequestId,
+					},
+				]);
+				stored = undefined;
+				repository.connectValidationError = new ConnectionError(
+					"FORBIDDEN",
+					"Approval is unavailable",
+				);
+				await expect(
+					service.upgradeProviderConnection(
+						"principal-alice",
+						"connection-rehoboam",
+						accessRequestId,
+					),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				expect(stored).toBeUndefined();
+			}
+		},
+	);
 
 	it("does not retry an uncertain Bitbucket write with the same idempotency key", async () => {
 		const repository = new MemoryRepository();

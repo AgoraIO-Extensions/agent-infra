@@ -123,6 +123,7 @@ describe("approved personal Connection reconnect", () => {
 				await repository.publishProviderCatalog({
 					...githubConnectionCatalog,
 					providerReleaseId: nextReleaseId,
+					executorDigest: `sha256:${"0".repeat(64)}`,
 					actions: githubConnectionCatalog.actions.map((action) => ({
 						...action,
 						id: `${action.id}-${nextReleaseId}`,

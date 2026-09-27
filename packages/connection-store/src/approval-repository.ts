@@ -158,7 +158,7 @@ export class PostgresConnectionApprovalRepository {
 			`;
 			if (enforcement?.state === "ENFORCED") {
 				const [baseline] = await sql<{ count: number }[]>`
-					SELECT count(*)::int AS count FROM connection_access_authorizations
+					SELECT count(*)::int AS count FROM connection_effective_access_authorizations
 					WHERE source = 'PRE_LAUNCH_BASELINE'
 				`;
 				return { baselinedConnections: baseline?.count ?? 0 };
@@ -201,7 +201,7 @@ export class PostgresConnectionApprovalRepository {
 				>`
 					SELECT principal_id, provider_release_id, external_account_fingerprint,
 						state
-					FROM connection_access_authorizations
+					FROM connection_effective_access_authorizations
 					WHERE connection_id = ${account.id}
 						AND (valid_until IS NULL OR valid_until > now())
 						AND (state = 'ACTIVE' OR (state = 'REAPPROVAL_REQUIRED'
@@ -235,7 +235,7 @@ export class PostgresConnectionApprovalRepository {
 					invalid("Personal Connection has no provable credential scopes");
 				const scopes = [...account.scope_json].sort();
 				const [priorAuthorization] = await sql<{ id: string }[]>`
-					SELECT id FROM connection_access_authorizations WHERE connection_id = ${account.id}
+					SELECT id FROM connection_effective_access_authorizations WHERE connection_id = ${account.id}
 				`;
 				if (priorAuthorization)
 					invalid("Personal Connection has a revoked authorization");
@@ -1084,11 +1084,13 @@ export class PostgresConnectionApprovalRepository {
 				SELECT access.id, account.id AS account_id,
 					account.owner_principal_id, account.provider_id
 				FROM connection_accounts account
-				JOIN connection_access_authorizations access
+				JOIN connection_effective_access_authorizations access
 					ON access.connection_id = account.id
 				WHERE account.owner_type = 'PERSONAL'
-					AND access.provider_release_id = ${policy.provider_release_id}
-					AND access.capability_profile_id = ${policy.capability_profile_id}
+					AND ((access.provider_release_id = ${policy.provider_release_id}
+						AND access.capability_profile_id = ${policy.capability_profile_id})
+						OR (access.approved_provider_release_id = ${policy.provider_release_id}
+							AND access.approved_capability_profile_id = ${policy.capability_profile_id}))
 					AND access.state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'DISCONNECTED')
 				ORDER BY account.id FOR UPDATE OF account, access
 			`;

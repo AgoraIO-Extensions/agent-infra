@@ -130,7 +130,11 @@ export const upgradeProviderConnection = <ThrowOnError extends boolean = false>(
             type: 'apiKey'
         }],
     url: '/api/v1/connection/connections/{connectionId}/upgrade',
-    ...options
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });
 
 export const connectProviderCredential = <ThrowOnError extends boolean = false>(options: Options<ConnectProviderCredentialData, ThrowOnError>): RequestResult<ConnectProviderCredentialResponses, ConnectProviderCredentialErrors, ThrowOnError> => (options.client ?? client).post<ConnectProviderCredentialResponses, ConnectProviderCredentialErrors, ThrowOnError>({

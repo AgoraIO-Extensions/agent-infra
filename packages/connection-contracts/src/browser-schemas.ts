@@ -68,6 +68,10 @@ export const providerReconnectRequestSchema = z.union([
 	}),
 ]);
 
+export const providerUpgradeRequestSchema = z.strictObject({
+	accessRequestId: opaqueId.optional(),
+});
+
 export const authorizationPreviewRequestSchema = z.strictObject({
 	actionVersionIds: z.array(opaqueId).min(1).max(500).optional(),
 	connectionId: opaqueId,

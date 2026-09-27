@@ -85,7 +85,7 @@ BEGIN
           SELECT 1 FROM connection_access_authorizations access
           WHERE access.connection_id = account.id
             AND access.principal_id = account.owner_principal_id
-            AND access.provider_release_id = account.provider_release_id
+            AND COALESCE(access.upgraded_provider_release_id, access.provider_release_id) = account.provider_release_id
             AND (access.state = 'ACTIVE' OR (
               access.state = 'REAPPROVAL_REQUIRED'
               AND access.reapproval_deadline_at > now()
@@ -421,6 +421,9 @@ CREATE TABLE connection_access_authorizations (
   provider_release_id TEXT NOT NULL REFERENCES connection_provider_releases(id) ON DELETE RESTRICT,
   capability_profile_id TEXT NOT NULL REFERENCES connection_capability_profiles(id) ON DELETE RESTRICT,
   source TEXT NOT NULL CHECK (source IN ('APPROVED_REQUEST', 'PRE_LAUNCH_BASELINE')),
+  upgraded_provider_release_id TEXT REFERENCES connection_provider_releases(id) ON DELETE RESTRICT,
+  upgraded_capability_profile_id TEXT,
+  upgraded_external_account_fingerprint TEXT,
   source_request_id TEXT REFERENCES connection_access_requests(id) ON DELETE RESTRICT,
   external_account_fingerprint TEXT NOT NULL,
   state TEXT NOT NULL CHECK (state IN (
@@ -443,8 +446,25 @@ CREATE TABLE connection_access_authorizations (
     (id, applicant_principal_id, provider_release_id, capability_profile_id)
     ON DELETE RESTRICT,
   CHECK ((validity_kind = 'FINITE') = (valid_until IS NOT NULL)),
+  CHECK ((upgraded_provider_release_id IS NULL) = (upgraded_capability_profile_id IS NULL)),
+  CHECK ((upgraded_provider_release_id IS NULL) = (upgraded_external_account_fingerprint IS NULL)),
+  FOREIGN KEY (upgraded_capability_profile_id, upgraded_provider_release_id)
+    REFERENCES connection_capability_profiles(id, provider_release_id) ON DELETE RESTRICT,
   CHECK (source <> 'APPROVED_REQUEST' OR source_request_id IS NOT NULL)
 );
+
+-- Historical approval bindings stay immutable; execution reads the mapped version.
+CREATE VIEW connection_effective_access_authorizations AS
+SELECT id, principal_id, connection_id,
+  COALESCE(upgraded_provider_release_id, provider_release_id) AS provider_release_id,
+  COALESCE(upgraded_capability_profile_id, capability_profile_id) AS capability_profile_id,
+  provider_release_id AS approved_provider_release_id,
+  capability_profile_id AS approved_capability_profile_id,
+  source, source_request_id,
+  COALESCE(upgraded_external_account_fingerprint, external_account_fingerprint) AS external_account_fingerprint,
+  state, validity_kind,
+  valid_until, reapproval_deadline_at, revision, created_at, updated_at
+FROM connection_access_authorizations;
 
 CREATE UNIQUE INDEX connection_access_authorizations_current
   ON connection_access_authorizations (connection_id)

@@ -905,7 +905,7 @@ export class PostgresConnectionAccessRequestRepository
 
 	async expireDueAuthorizations(limit = 50) {
 		const candidates = await this.sql<{ connection_id: string; id: string }[]>`
-			SELECT id, connection_id FROM connection_access_authorizations
+			SELECT id, connection_id FROM connection_effective_access_authorizations
 			WHERE state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'DISCONNECTED')
 				AND (valid_until <= now() OR (
 					state = 'REAPPROVAL_REQUIRED' AND reapproval_deadline_at <= now()
@@ -1008,7 +1008,7 @@ export class PostgresConnectionAccessRequestRepository
 			`;
 			if (!admin) forbidden();
 			const [candidate] = await sql<{ connection_id: string }[]>`
-				SELECT connection_id FROM connection_access_authorizations
+				SELECT connection_id FROM connection_effective_access_authorizations
 				WHERE id = ${input.authorizationId}
 			`;
 			if (!candidate) forbidden();
@@ -1021,10 +1021,10 @@ export class PostgresConnectionAccessRequestRepository
 			`;
 			if (!account) forbidden();
 			const [authorization] = await sql<{ revision: string; state: string }[]>`
-				SELECT access.revision::text, access.state FROM connection_access_authorizations access
+				SELECT access.revision::text, access.state FROM connection_effective_access_authorizations access
 				WHERE access.id = ${input.authorizationId} AND access.connection_id = ${account.id}
 					AND NOT EXISTS (
-						SELECT 1 FROM connection_access_authorizations newer
+						SELECT 1 FROM connection_effective_access_authorizations newer
 						WHERE newer.connection_id = access.connection_id AND newer.id <> access.id
 							AND (newer.created_at > access.created_at
 								OR newer.state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'SUSPENDED', 'DISCONNECTED'))
@@ -1110,7 +1110,7 @@ export class PostgresConnectionAccessRequestRepository
 				access.state, access.valid_until,
 				owner.display_name AS owner_display_name,
 				account.provider_id
-			FROM connection_access_authorizations access
+			FROM connection_effective_access_authorizations access
 			JOIN connection_accounts account ON account.id = access.connection_id
 			JOIN connection_principals owner ON owner.id = access.principal_id
 			WHERE account.owner_type = 'PERSONAL'
@@ -1229,10 +1229,12 @@ export class PostgresConnectionAccessRequestRepository
 		>`
 				SELECT access.id, access.external_account_fingerprint,
 					account.external_account, account.owner_principal_id, account.provider_id
-				FROM connection_access_authorizations access
+				FROM connection_effective_access_authorizations access
 				JOIN connection_accounts account ON account.id = access.connection_id
-				WHERE access.provider_release_id = ${input.providerReleaseId}
-					AND access.capability_profile_id = ${input.capabilityProfileId}
+				WHERE ((access.provider_release_id = ${input.providerReleaseId}
+					AND access.capability_profile_id = ${input.capabilityProfileId})
+					OR (access.approved_provider_release_id = ${input.providerReleaseId}
+						AND access.approved_capability_profile_id = ${input.capabilityProfileId}))
 					AND access.state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'DISCONNECTED')
 					AND (access.valid_until IS NULL OR access.valid_until > now())
 					AND NOT (
@@ -1425,11 +1427,12 @@ export class PostgresConnectionAccessRequestRepository
 						external_account_fingerprint: string;
 						id: string;
 						valid_until: Date;
+						provider_release_id: string;
 					}[]
 				>`
 					SELECT access.id, access.valid_until, access.external_account_fingerprint,
-						account.external_account
-					FROM connection_access_authorizations access
+						account.external_account, access.provider_release_id
+					FROM connection_effective_access_authorizations access
 					JOIN connection_accounts account ON account.id = access.connection_id
 					JOIN connection_credential_versions credential
 						ON credential.connection_id = account.id AND credential.status = 'ACTIVE'
@@ -1437,8 +1440,8 @@ export class PostgresConnectionAccessRequestRepository
 						ON profile.id = access.capability_profile_id
 					WHERE access.id = ${input.renewalAuthorizationId}
 						AND access.principal_id = ${input.applicantPrincipalId}
-						AND access.provider_release_id = ${input.providerReleaseId}
-						AND access.capability_profile_id = ${input.capabilityProfileId}
+						AND access.approved_provider_release_id = ${input.providerReleaseId}
+						AND access.approved_capability_profile_id = ${input.capabilityProfileId}
 						AND access.validity_kind = 'FINITE' AND access.valid_until > now()
 						AND access.state = 'ACTIVE'
 						AND access.reapproval_deadline_at IS NULL
@@ -1449,7 +1452,7 @@ export class PostgresConnectionAccessRequestRepository
 						AND profile.required_scopes @> credential.scope_json
 						AND access.valid_until <= now() + ${policy.renewal_lead_seconds} * interval '1 second'
 						AND NOT EXISTS (
-							SELECT 1 FROM connection_access_authorizations newer
+							SELECT 1 FROM connection_effective_access_authorizations newer
 							WHERE newer.connection_id = access.connection_id AND newer.id <> access.id
 								AND newer.created_at >= access.created_at
 						)
@@ -1460,7 +1463,7 @@ export class PostgresConnectionAccessRequestRepository
 					renewalTarget.external_account_fingerprint !==
 						canonicalHash({
 							externalAccount: renewalTarget.external_account,
-							providerReleaseId: input.providerReleaseId,
+							providerReleaseId: renewalTarget.provider_release_id,
 						})
 				)
 					forbidden();
@@ -1599,7 +1602,7 @@ export class PostgresConnectionAccessRequestRepository
 					) SELECT
 						${`authorization-renewal-${randomUUID()}`},
 						access.id, ${input.id}, access.valid_until, 'PENDING'
-					FROM connection_access_authorizations access
+					FROM connection_effective_access_authorizations access
 					WHERE access.id = ${input.renewalAuthorizationId}
 				`;
 			}
@@ -2214,7 +2217,7 @@ async function completeRenewalInTransaction(
 	>`
 		SELECT access.connection_id, access.provider_release_id,
 			access.state, account.external_account, access.valid_until <= now() AS validity_elapsed
-		FROM connection_access_authorizations access
+		FROM connection_effective_access_authorizations access
 		JOIN connection_accounts account ON account.id = access.connection_id
 		JOIN connection_access_requests request ON request.id = ${requestId}
 		JOIN connection_credential_versions credential
@@ -2223,8 +2226,8 @@ async function completeRenewalInTransaction(
 			ON profile.id = access.capability_profile_id
 		WHERE access.id = ${renewal.access_authorization_id}
 			AND access.principal_id = request.applicant_principal_id
-			AND access.provider_release_id = request.provider_release_id
-			AND access.capability_profile_id = request.capability_profile_id
+			AND access.approved_provider_release_id = request.provider_release_id
+			AND access.approved_capability_profile_id = request.capability_profile_id
 			AND access.validity_kind = 'FINITE'
 			AND access.valid_until = (
 				SELECT prior_valid_until FROM connection_authorization_renewals
@@ -2238,7 +2241,7 @@ async function completeRenewalInTransaction(
 			AND account.status = 'ACTIVE'
 			AND profile.required_scopes @> credential.scope_json
 			AND NOT EXISTS (
-				SELECT 1 FROM connection_access_authorizations newer
+				SELECT 1 FROM connection_effective_access_authorizations newer
 				WHERE newer.connection_id = access.connection_id AND newer.id <> access.id
 					AND newer.created_at >= access.created_at
 			)
@@ -2246,7 +2249,7 @@ async function completeRenewalInTransaction(
 	`;
 	if (!target) forbidden();
 	const [fingerprint] = await sql<{ external_account_fingerprint: string }[]>`
-		SELECT external_account_fingerprint FROM connection_access_authorizations
+		SELECT external_account_fingerprint FROM connection_effective_access_authorizations
 		WHERE id = ${renewal.access_authorization_id}
 	`;
 	if (
@@ -2392,7 +2395,7 @@ export async function consumeConnectPermitInTransaction(
 	await sql`
 		UPDATE connection_access_reapproval_targets target
 		SET status = 'COMPLETED', completed_at = now()
-		FROM connection_access_authorizations prior
+		FROM connection_effective_access_authorizations prior
 		WHERE prior.id = target.access_authorization_id
 			AND prior.connection_id = ${input.connectionId}
 			AND prior.id <> ${input.accessAuthorizationId}
@@ -2402,7 +2405,7 @@ export async function consumeConnectPermitInTransaction(
 	await sql`
 		UPDATE connection_work_items item
 		SET status = 'COMPLETED', completed_at = now(), updated_at = now()
-		FROM connection_access_authorizations prior
+		FROM connection_effective_access_authorizations prior
 		WHERE prior.id = item.business_id
 			AND prior.connection_id = ${input.connectionId}
 			AND prior.state = 'REVOKED'

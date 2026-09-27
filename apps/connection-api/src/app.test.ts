@@ -2231,8 +2231,16 @@ describe("Connection API", () => {
 			upgradeProviderConnection: async (
 				principalId: string,
 				connectionId: string,
+				accessRequestId?: string,
 			) => {
-				calls.push({ name: "upgrade", value: { connectionId, principalId } });
+				calls.push({
+					name: "upgrade",
+					value: {
+						connectionId,
+						principalId,
+						...(accessRequestId ? { accessRequestId } : {}),
+					},
+				});
 				return { connectionId };
 			},
 		} as unknown as ConnectionApplicationService;
@@ -2516,6 +2524,48 @@ describe("Connection API", () => {
 				},
 			},
 		]);
+		const approvedUpgrade = await app.request(
+			"/api/v1/connection/connections/connection-old/upgrade",
+			{
+				method: "POST",
+				headers: {
+					cookie,
+					origin: "https://connection.example",
+					"content-type": "application/json",
+					"idempotency-key": "approved-upgrade-test",
+				},
+				body: JSON.stringify({ accessRequestId: "approved-request" }),
+			},
+		);
+		expect(approvedUpgrade.status).toBe(200);
+		expect(calls.at(-1)).toEqual({
+			name: "upgrade",
+			value: {
+				connectionId: "connection-old",
+				principalId: "principal-user",
+				accessRequestId: "approved-request",
+			},
+		});
+		for (const body of [
+			'{"accessRequestId":',
+			'{"principalId":"other"}',
+			'{"accessRequestId":""}',
+		]) {
+			const invalidUpgrade = await app.request(
+				"/api/v1/connection/connections/connection-old/upgrade",
+				{
+					method: "POST",
+					headers: {
+						cookie,
+						origin: "https://connection.example",
+						"content-type": "application/json",
+						"idempotency-key": "invalid-upgrade-test",
+					},
+					body,
+				},
+			);
+			expect(invalidUpgrade.status).toBe(400);
+		}
 	});
 
 	it("allows only Connection administrators to open the administrator console", async () => {

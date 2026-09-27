@@ -618,6 +618,17 @@ export const connectionApi = {
 				path: { connectionId },
 			}),
 		),
+	upgradeApprovedConnection: (input: {
+		connectionId: string;
+		accessRequestId: string;
+	}) =>
+		unwrap<ConnectionCreated>(
+			upgradeProviderConnection({
+				headers: commandHeaders(),
+				path: { connectionId: input.connectionId },
+				body: { accessRequestId: input.accessRequestId },
+			}),
+		),
 	listAdministrators: () =>
 		unwrap<AdministratorsResponse>(listAdministrators()),
 	listAuditCalls: (query: ListAuditCallsData["query"]) =>

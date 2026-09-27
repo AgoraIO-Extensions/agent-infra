@@ -36,6 +36,7 @@ import {
 	consumeConnectPermitInTransaction,
 	lookupApprovedConnectPermit,
 } from "./access-request-repository";
+import { migrateCompatibleApproval } from "./approval-upgrade";
 
 const githubProvider = "github";
 
@@ -1903,11 +1904,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 							WHERE inventory.connection_id = ${input.connectionId}
 						)
 						AND NOT EXISTS (
-							SELECT 1 FROM connection_access_authorizations access
+							SELECT 1 FROM connection_effective_access_authorizations access
 							WHERE access.connection_id = ${input.connectionId}
 						)
 				) OR EXISTS (
-					SELECT 1 FROM connection_access_authorizations access
+					SELECT 1 FROM connection_effective_access_authorizations access
 					WHERE access.connection_id = ${input.connectionId}
 						AND access.principal_id = ${input.principalId}
 						AND access.provider_release_id = ${account.provider_release_id}
@@ -2046,7 +2047,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					AND (
 						${eligibility.ownerType === "SHARED"}
 						OR EXISTS (
-							SELECT 1 FROM connection_access_authorizations access
+							SELECT 1 FROM connection_effective_access_authorizations access
 							JOIN connection_capability_profile_actions approved
 								ON approved.capability_profile_id = access.capability_profile_id
 								AND approved.action_version_id = action.id
@@ -2071,7 +2072,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 								WHERE enforcement.id = 'personal' AND enforcement.state = 'PRE_LAUNCH'
 							)
 							AND NOT EXISTS (
-								SELECT 1 FROM connection_access_authorizations access
+								SELECT 1 FROM connection_effective_access_authorizations access
 								WHERE access.connection_id = ${input.connectionId}
 							)
 							AND EXISTS (
@@ -2842,12 +2843,12 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 										WHERE inventory.connection_id = account.id
 									)
 									AND NOT EXISTS (
-										SELECT 1 FROM connection_access_authorizations access
+										SELECT 1 FROM connection_effective_access_authorizations access
 										WHERE access.connection_id = account.id
 									)
 							)
 							OR EXISTS (
-								SELECT 1 FROM connection_access_authorizations access
+								SELECT 1 FROM connection_effective_access_authorizations access
 								WHERE access.connection_id = account.id
 									AND access.principal_id = active_grant.principal_id
 									AND access.provider_release_id = account.provider_release_id
@@ -3410,7 +3411,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			JOIN connection_credential_versions prior
 				ON prior.id = account.last_credential_version_id
 				AND prior.connection_id = account.id
-			JOIN connection_access_authorizations access
+			JOIN connection_effective_access_authorizations access
 				ON access.connection_id = account.id
 				AND access.principal_id = account.owner_principal_id
 				AND access.provider_release_id = account.provider_release_id
@@ -3631,6 +3632,30 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			const connectionId = existing?.id ?? `connection-${randomUUID()}`;
 			let reconnectAuthorizationId: string | undefined;
 			if (!input.accessRequestId) {
+				if (
+					existing &&
+					input.expectedCredentialVersionId &&
+					existing.provider_release_id !== input.providerReleaseId &&
+					isEquivalentApprovedCredential({
+						connectionId: existing.id,
+						expectedConnectionId: input.expectedConnectionId,
+						expectedStatus: "ACTIVE",
+						storedStatus: existing.status,
+						currentScopes: activeCredential?.scope_json,
+						grantedScopes,
+						providerReleaseId: existing.provider_release_id,
+						storedProviderReleaseId: existing.provider_release_id,
+					})
+				) {
+					await migrateCompatibleApproval(sql, {
+						connectionId: existing.id,
+						principalId: input.principalId,
+						externalAccount: input.externalAccount,
+						fromReleaseId: existing.provider_release_id,
+						toReleaseId: input.providerReleaseId,
+					});
+					existing.provider_release_id = input.providerReleaseId;
+				}
 				const reconnecting =
 					existing?.status === "DISCONNECTED" &&
 					!activeCredential &&
@@ -3652,7 +3677,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					forbidden();
 				const [authorized] = await sql<{ id: string }[]>`
 					SELECT access.id
-					FROM connection_access_authorizations access
+					FROM connection_effective_access_authorizations access
 					JOIN connection_capability_profiles profile
 						ON profile.id = access.capability_profile_id
 					WHERE access.connection_id = ${connectionId}
@@ -3776,6 +3801,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async getProviderCredentialForUpgrade(input: {
+		allowCurrentRelease?: boolean;
 		connectionId: string;
 		principalId: string;
 	}) {
@@ -3804,8 +3830,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		`;
 		if (!row) forbidden();
 		if (
+			!input.allowCurrentRelease &&
 			this.publishedProviderReleaseIds.get(row.provider_id) ===
-			row.provider_release_id
+				row.provider_release_id
 		) {
 			throw new ConnectionError(
 				"INVALID_REQUEST",
@@ -3879,8 +3906,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						account.owner_type, account.provider_id, account.provider_release_id,
 						account.status, release.status AS release_status,
 						access.id AS access_id,
-						access.capability_profile_id AS access_capability_profile_id,
-						access.provider_release_id AS access_provider_release_id,
+						access.approved_capability_profile_id AS access_capability_profile_id,
+						access.approved_provider_release_id AS access_provider_release_id,
 						access.state AS access_state, access.validity_kind AS access_validity_kind,
 						access.valid_until AS access_valid_until,
 						CASE WHEN access.validity_kind = 'FINITE' THEN
@@ -3903,15 +3930,16 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						AND credential.status = 'ACTIVE'
 					LEFT JOIN LATERAL (
 						SELECT id, capability_profile_id, provider_release_id,
+							approved_capability_profile_id, approved_provider_release_id,
 							state, validity_kind, valid_until
-						FROM connection_access_authorizations
+						FROM connection_effective_access_authorizations
 						WHERE connection_id = account.id
 						ORDER BY (state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'SUSPENDED', 'DISCONNECTED')) DESC,
 							created_at DESC, updated_at DESC, id DESC LIMIT 1
 					) access ON account.owner_type = 'PERSONAL'
 					LEFT JOIN connection_access_policy_versions renewal_policy
-						ON renewal_policy.capability_profile_id = access.capability_profile_id
-						AND renewal_policy.provider_release_id = access.provider_release_id
+						ON renewal_policy.capability_profile_id = access.approved_capability_profile_id
+						AND renewal_policy.provider_release_id = access.approved_provider_release_id
 						AND renewal_policy.status = 'PUBLISHED'
 					LEFT JOIN connection_shared_scopes shared_scope
 						ON shared_scope.id = account.shared_scope_id
@@ -3931,7 +3959,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						account.owner_type, account.provider_id, account.provider_release_id,
 						account.status, release.status,
 						credential.scope_json, access.id, access.capability_profile_id,
-						access.provider_release_id, access.state, access.validity_kind,
+						access.provider_release_id, access.approved_capability_profile_id,
+						access.approved_provider_release_id, access.state, access.validity_kind,
 						access.valid_until, renewal_policy.renewal_lead_seconds
 					ORDER BY account.display_name, account.id
 				`,
@@ -4547,12 +4576,12 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 								WHERE inventory.connection_id = account.id
 							)
 							AND NOT EXISTS (
-								SELECT 1 FROM connection_access_authorizations access
+								SELECT 1 FROM connection_effective_access_authorizations access
 								WHERE access.connection_id = account.id
 							)
 					)
 					OR EXISTS (
-						SELECT 1 FROM connection_access_authorizations access
+						SELECT 1 FROM connection_effective_access_authorizations access
 						JOIN connection_capability_profile_actions profile_action
 							ON profile_action.capability_profile_id = access.capability_profile_id
 							AND profile_action.action_version_id = call.action_version_id

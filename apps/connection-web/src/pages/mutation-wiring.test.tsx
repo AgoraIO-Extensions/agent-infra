@@ -41,6 +41,11 @@ const api = vi.hoisted(() => ({
 	upgradeProviderConnection: vi.fn(async (connectionId: string) => ({
 		connectionId,
 	})),
+	upgradeApprovedConnection: vi.fn(
+		async (input: { connectionId: string; accessRequestId: string }) => ({
+			connectionId: input.connectionId,
+		}),
+	),
 	createAuthorizationPreview: vi.fn(
 		async (input?: {
 			actionVersionIds?: string[];
@@ -960,9 +965,39 @@ describe("Connection 管理 mutation wiring", () => {
 			"/connection/connections?provider=confluence&intent=connect&accessRequestId=request-approved",
 		);
 		renderPage(<ConnectionsPage />);
+		await screen.findByRole("heading", { name: "选择已有连接" });
+		expect(
+			screen.queryByRole("heading", { name: "连接公司 Confluence" }),
+		).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "连接其他账号" }));
 		expect(
 			await screen.findByRole("heading", { name: "连接公司 Confluence" }),
 		).toBeTruthy();
+	});
+
+	it("批准后复用明确选择的连接凭证，不重复收集 PAT", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=confluence&intent=connect&accessRequestId=request-approved",
+		);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "使用现有凭证" }),
+		);
+		await waitFor(() =>
+			expect(api.upgradeApprovedConnection).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.upgradeApprovedConnection)[0]?.[0]).toEqual({
+			connectionId: "connection-confluence",
+			accessRequestId: "request-approved",
+		});
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
+		await waitFor(() =>
+			expect(
+				screen.queryByRole("heading", { name: "选择已有连接" }),
+			).toBeNull(),
+		);
 	});
 
 	it("不接受 URL 中伪造或不匹配的批准申请", async () => {

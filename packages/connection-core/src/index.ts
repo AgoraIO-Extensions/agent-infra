@@ -748,6 +748,7 @@ export interface ConnectionRepository {
 		expectedCredentialVersionId?: string;
 	}): Promise<{ connectionId: string }>;
 	getProviderCredentialForUpgrade(input: {
+		allowCurrentRelease?: boolean;
 		connectionId: string;
 		principalId: string;
 	}): Promise<
@@ -1185,11 +1186,23 @@ export class ConnectionApplicationService {
 		);
 	}
 
-	async upgradeProviderConnection(principalId: string, connectionId: string) {
+	async upgradeProviderConnection(
+		principalId: string,
+		connectionId: string,
+		accessRequestId?: string,
+	) {
 		const current = await this.repository.getProviderCredentialForUpgrade({
+			...(accessRequestId ? { allowCurrentRelease: true } : {}),
 			connectionId,
 			principalId,
 		});
+		if (accessRequestId) {
+			await this.repository.validatePersonalConnectRequest({
+				principalId,
+				providerId: current.providerId,
+				requestId: accessRequestId,
+			});
+		}
 		const connector = this.credentialConnectors[current.providerId];
 		if (!connector) {
 			throw new ConnectionError(
@@ -1222,6 +1235,7 @@ export class ConnectionApplicationService {
 		}
 		return this.repository.storeProviderCredential({
 			...identity,
+			...(accessRequestId ? { accessRequestId } : {}),
 			expectedConnectionId: connectionId,
 			expectedCredentialVersionId: current.credentialVersionId,
 			principalId,

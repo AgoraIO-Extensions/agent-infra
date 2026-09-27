@@ -243,6 +243,24 @@
 		"/api/v1/connection/connections/{connectionId}/upgrade": {
 			"post": {
 				"operationId": "upgradeProviderConnection",
+				"requestBody": {
+					"required": false,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"additionalProperties": false,
+								"properties": {
+									"accessRequestId": {
+										"type": "string",
+										"minLength": 1,
+										"maxLength": 512
+									}
+								}
+							}
+						}
+					}
+				},
 				"parameters": [
 					{ "$ref": "#/components/parameters/ConnectionId" },
 					{ "$ref": "#/components/parameters/IdempotencyKey" }
@@ -251,6 +269,7 @@
 					"200": { "$ref": "#/components/responses/ConnectionCreated" },
 					"400": { "$ref": "#/components/responses/Error" },
 					"401": { "$ref": "#/components/responses/Error" },
+					"403": { "$ref": "#/components/responses/Error" },
 					"404": { "$ref": "#/components/responses/Error" },
 					"409": { "$ref": "#/components/responses/Error" },
 					"503": { "$ref": "#/components/responses/Error" }

@@ -135,6 +135,22 @@ export function ConnectionsPage() {
 		Date.parse(prepareConnect.data?.connectExpiresAt ?? "") > Date.now()
 			? accessRequestId
 			: undefined;
+	const overview = useQuery({
+		queryKey: ["connections"],
+		queryFn: connectionApi.getConnections,
+	});
+	const [newCredentialRequestId, setNewCredentialRequestId] =
+		useState<string>();
+	const [completedAccessRequestId, setCompletedAccessRequestId] =
+		useState<string>();
+	const reusableConnections = (
+		overview.data?.overview.connections ?? []
+	).filter(
+		(connection) =>
+			connection.providerId === approvedProvider &&
+			connection.providerId !== "github" &&
+			connection.status === "ACTIVE",
+	);
 	const [bulkUpgrade, setBulkUpgrade] = useState<{
 		completed: number;
 		failedConnectionIds: string[];
@@ -146,6 +162,7 @@ export function ConnectionsPage() {
 		"callback_failed";
 	useEffect(() => {
 		const search = new URLSearchParams(window.location.search);
+		if (accessRequestId && completedAccessRequestId === accessRequestId) return;
 		if (!["connect", "reauthorize"].includes(search.get("intent") ?? ""))
 			return;
 		const provider = search.get("provider");
@@ -160,6 +177,12 @@ export function ConnectionsPage() {
 				setApprovalRequiredProvider(provider as ConnectorProviderId);
 			return;
 		}
+		if (
+			overview.isPending ||
+			(reusableConnections.length > 0 &&
+				newCredentialRequestId !== accessRequestId)
+		)
+			return;
 		if (provider === "bitbucket") setBitbucketOpen(true);
 		if (provider === "rehoboam") setRehoboamOpen(true);
 		if (provider === "manhattan") setManhattanOpen(true);
@@ -176,11 +199,11 @@ export function ConnectionsPage() {
 		requestReady,
 		prepareConnect.isSuccess,
 		prepareConnect.isError,
+		overview.isPending,
+		reusableConnections.length,
+		newCredentialRequestId,
+		completedAccessRequestId,
 	]);
-	const overview = useQuery({
-		queryKey: ["connections"],
-		queryFn: connectionApi.getConnections,
-	});
 	const accessRequests = useQuery({
 		queryKey: ["connection-access-requests"],
 		queryFn: connectionApi.listConnectionAccessRequests,
@@ -209,6 +232,23 @@ export function ConnectionsPage() {
 		onSuccess: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 			setUpgradeNotice("连接已升级，可以重新确认客户端授权。");
+		},
+	});
+	const approvedUpgrade = useMutation({
+		mutationFn: connectionApi.upgradeApprovedConnection,
+		onSuccess: async (_result, variables) => {
+			setCompletedAccessRequestId(variables.accessRequestId);
+			await queryClient.invalidateQueries({ queryKey: ["connections"] });
+			await queryClient.invalidateQueries({
+				queryKey: ["connection-access-requests"],
+			});
+			await queryClient.invalidateQueries({
+				queryKey: ["connection-access-options"],
+			});
+			await queryClient.invalidateQueries({
+				queryKey: ["approved-connection-request", variables.accessRequestId],
+			});
+			setUpgradeNotice("已使用现有凭证完成连接，可以确认客户端授权。");
 		},
 	});
 	const connectCredential = (
@@ -606,6 +646,41 @@ export function ConnectionsPage() {
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}
 			{upgrade.isError ? <PageError error={upgrade.error} /> : null}
+			{approvedUpgrade.isError ? (
+				<PageError error={approvedUpgrade.error} />
+			) : null}
+			{approvedAccessRequestId &&
+			completedAccessRequestId !== approvedAccessRequestId &&
+			newCredentialRequestId !== approvedAccessRequestId &&
+			reusableConnections.length > 0 ? (
+				<section className="content-stack" aria-label="使用已批准的连接">
+					<h2>选择已有连接</h2>
+					{reusableConnections.map((connection) => (
+						<div className="connection-selected-account" key={connection.id}>
+							<div>
+								<p title={connection.displayName}>{connection.displayName}</p>
+							</div>
+							<Button
+								disabled={approvedUpgrade.isPending}
+								onClick={() =>
+									approvedUpgrade.mutate({
+										connectionId: connection.id,
+										accessRequestId: approvedAccessRequestId,
+									})
+								}
+							>
+								使用现有凭证
+							</Button>
+						</div>
+					))}
+					<Button
+						disabled={approvedUpgrade.isPending}
+						onClick={() => setNewCredentialRequestId(approvedAccessRequestId)}
+					>
+						连接其他账号
+					</Button>
+				</section>
+			) : null}
 			{upgradeNotice ? (
 				<p className="alert alert-success" role="status">
 					{upgradeNotice}

@@ -1136,7 +1136,9 @@ export type DisconnectConnectionResponses = {
 export type DisconnectConnectionResponse = DisconnectConnectionResponses[keyof DisconnectConnectionResponses];
 
 export type UpgradeProviderConnectionData = {
-    body?: never;
+    body?: {
+        accessRequestId?: string;
+    };
     headers: {
         'Idempotency-Key': string;
     };
@@ -1156,6 +1158,10 @@ export type UpgradeProviderConnectionErrors = {
      * Stable browser error
      */
     401: Error;
+    /**
+     * Stable browser error
+     */
+    403: Error;
     /**
      * Stable browser error
      */

@@ -1192,6 +1192,18 @@ Request 总有效期到达才进入 EXPIRED；阶段仍为 current PENDING 且 R
 
 Access Authorization 冻结 Principal、Connection、稳定外部账号指纹、ProviderRelease、Capability Profile、有效期和 revision。Invocation 建立与 Provider submission admission 都必须验证 current ACTIVE Authorization 及数据库时间；后台 expiry worker 只推进状态和通知，不是唯一门禁。到期、撤销和暂停提升 account/authorization revision 与 execution fence，并暂停相关 Grant；`SUBMISSION_STARTED` 调用仍按 Effect/UNCERTAIN 语义收敛。
 
+Provider 兼容升级是版本绑定的受控迁移，不是新的公司批准。原 Request、Decision、PolicyVersion、Capability Profile 和批准时的版本绑定必须保留为不可变审批来源；迁移记录必须关联原批准与精确目标 ProviderRelease、逐项 ActionVersion 映射及兼容性依据。不得改写历史 Request，也不得只删除 exact-release 检查来放行升级。
+
+存储保留 Authorization 原 `provider_release_id` / `capability_profile_id` 与 source Request 的复合外键，通过成对的 `upgraded_provider_release_id` / `upgraded_capability_profile_id` 保存当前映射；统一 effective view 用于执行资格与能力范围校验，审批来源字段用于原策略撤销、重审和续期。迁移审计记录每次源/目标版本、能力包与逐项映射。兼容升级后的续期仍按原批准来源申请和审核，并校验当前映射账号与凭证；升级本身不续期，升级期间已提交的续期申请仍可正常完成。
+
+首期自动兼容证明采用保守的充分条件：源/目标 PUBLISHED Release 的认证配置、部署配置和有效执行器摘要相同，获批 Action 的名称、效果、输入 Schema、所需 scopes 与描述逐项相同且一一对应。不因目录额外增加其他 Action 拒绝迁移；执行器摘要变化时不能只根据 Action 名称或 Schema 猜测等价，走重新审批及存储凭证复用入口。
+
+兼容性判断覆盖整个获批 Capability Profile，而非只检查某个 Consumer 当前勾选的子集；Consumer Grant 仍是独立且不大于公司批准上限的授权。目标仅包含原获批能力的一一映射，Provider 目录新增加的其他能力不纳入批准。既有 Consumer 选择按该映射保留，不得以默认 READ 集合或目标目录全集替代。获批范围之外的能力必须先经新公司审批，Consumer 尚未确认的能力仍需独立预览与确认。
+
+兼容性依据必须证明同一 Principal、Connection 与稳定外部账号，canonical scopes 不扩大，获批 Action 的外部效果、资源范围、输入约束及默认行为不扩大。Action 名称、READ/WRITE 标签或数量相同均不能单独构成证明；仅对比 JSON Schema 也不能证明执行器语义未变。缺失证明、映射歧义、权限扩大或账号改变时保留原批准和凭证状态，转入先审批后升级路径；有效的存储凭证可在新批准后复用和重新验证，不要求无故重新输入 PAT。
+
+迁移与凭证版本切换必须在同一事务内重新校验账号、current Credential CAS、批准状态、数据库时间与并发撤销，并提升 Authorization revision 和 account execution fence。迁移保留原 `validUntil`、永久/有限类型及重审期限，不恢复已过期、撤销或暂停资格。旧 Preview 和未提交调用不能跨新 fence 生效；已提交操作保留真实结果。原批准策略的撤销与 material 重审必须继续覆盖其迁移后的资格，不能通过升级脱离原策略约束。普通升级、批量/任务升级与已批准申请入口遵循同一规则。
+
 Consumer Grant 预览与确认也只选择 Access Authorization 的 exact Capability Profile ActionVersion 集合，不能仅按 Credential scopes 展示或提交额外 Action。pre-launch 清单中的旧账号在 cutoff 前最多沿用当时 active Grant ActionVersion 并集；确认时重新读取当前资格，过期、撤销和重审截止后的旧 Preview 不得产生 Grant。
 
 WorkItem、Notification 和 NotificationReceipt 只提供站内投影与已读状态。审批状态变化、WorkItem recipient、audit 和 outbox 同事务写入；独立 dispatcher 幂等投递。读取或归档 Notification 不能批准申请、完成 WorkItem 或恢复授权。首期页面加载、窗口聚焦和有界轮询刷新，不新增 WebSocket/SSE。
