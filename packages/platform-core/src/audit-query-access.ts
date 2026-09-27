@@ -17,6 +17,7 @@ export interface PlatformAuditCandidateV1 {
 	readonly conversationId: string | null;
 	readonly executionId: string | null;
 	readonly executionConversationId: string | null;
+	readonly generationIsolationValid: boolean;
 	readonly binding: PlatformExecutionAuditBindingV1 | null;
 	readonly attempt: {
 		readonly schemaVersion: unknown;
@@ -52,9 +53,13 @@ export function requirePlatformAuditCandidateAccessV1(
 					(candidate.actorType === scope.principal.kind &&
 						candidate.actorId === scope.principal.id) ||
 					(candidate.actorType === "system" &&
-						["task.status.changed", "task.control.created"].includes(
+						(["task.status.changed", "task.control.created"].includes(
 							candidate.action,
-						))
+						) ||
+							(candidate.action.startsWith("conversation.generation.") &&
+								candidate.generationIsolationValid &&
+								candidate.conversationId ===
+									candidate.executionConversationId)))
 				))
 		)
 			throw new PlatformAuditScopeErrorV1("access_denied");

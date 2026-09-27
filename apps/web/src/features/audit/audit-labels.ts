@@ -44,6 +44,7 @@ export const auditActionLabels: Record<AuditRecord["action"], string> = {
 	"conversation.task.status": "对话任务状态",
 	"conversation.generation.isolation.started": "开始会话代次隔离",
 	"conversation.generation.isolation.confirmed": "确认会话代次隔离",
+	"conversation.generation.execution.failed": "会话代次执行失败",
 	"secret.decrypt": "解密凭证",
 	"secret.activate": "激活凭证版本",
 	"secret.rewrap": "更新凭证加密",

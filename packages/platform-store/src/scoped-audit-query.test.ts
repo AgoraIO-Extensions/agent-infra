@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { ScopedPlatformAuditActionV1Schema } from "@agent-infra/contracts/pilot";
 import {
 	type ApiPrincipalV1,
 	createConversationEventUseCaseV1,
 	createTaskApiAuditV1,
 	type PlatformAuditQueryScopeV1,
+	platformAuditQueryActionsV1,
 	type TaskAuthorizationBoundaryV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
@@ -127,6 +129,12 @@ async function fixture(
 }
 
 describe("controlled PostgreSQL audit query", () => {
+	it("keeps Core audit actions equal to the public contract", () => {
+		expect(platformAuditQueryActionsV1).toEqual(
+			ScopedPlatformAuditActionV1Schema.options,
+		);
+	});
+
 	it.each(["user", "application"] as const)(
 		"queries accepted and replayed attempts through the same original %s Execution",
 		async (kind) => {
@@ -1006,35 +1014,60 @@ describe("controlled PostgreSQL audit query", () => {
 		).rejects.toMatchObject({ code: "unavailable" });
 	});
 
-	it("pages existing generation isolation audit beside old governance records", async () => {
+	it("pages generation isolation and execution failure with trusted principal binding", async () => {
 		const f = await fixture();
+		const other = await fixture({ kind: "user", id: randomUUID() }, f.agentId);
 		const governanceId = randomUUID();
 		const startedId = randomUUID();
 		const confirmedId = randomUUID();
+		const failedId = randomUUID();
+		const operationId = `generation:${f.conversationId}:1`;
+		const controlRecordId = randomUUID();
+		const itemId = randomUUID();
+		const [authorization] = await sql<
+			{ id: string }[]
+		>`select id from platform.task_authorization_records where execution_id = ${f.executionId}`;
+		if (!authorization) throw new Error("Fixture authorization is missing");
+		await sql`insert into platform.task_control_records (id, execution_id, authorization_record_id, reason)
+			values (${controlRecordId}, ${f.executionId}, ${authorization.id}, 'generation_isolation')`;
+		await sql`insert into platform.conversation_generation_tombstones
+			(operation_id, conversation_id, session_generation, execution_id, item_id, control_record_id, control_source_id, original_principal, host_session_ref, status, failure_code, confirmed_at)
+			values (${operationId}, ${f.conversationId}, 1, ${f.executionId}, ${itemId}, ${controlRecordId}, ${authorization.id}, ${sql.json(f.principal)}, 'host-session', 'confirmed', 'RUNTIME_SESSION_RECOVERY_FAILED', now())`;
 		await sql`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, occurred_at)
 			values (${governanceId}, 'legacy-governance-trace', 'user', 'governance-user', 'agent.application.rejected', 'agent_application', 'legacy-application', 'rejected', '2024-01-02T10:00:00Z')`;
-		for (const [id, action, time] of [
+		for (const [id, action, targetType, targetId, time] of [
 			[
 				startedId,
 				"conversation.generation.isolation.started",
+				"conversation",
+				f.conversationId,
 				"2024-01-02T10:01:00Z",
 			],
 			[
 				confirmedId,
 				"conversation.generation.isolation.confirmed",
+				"conversation",
+				f.conversationId,
 				"2024-01-02T10:02:00Z",
+			],
+			[
+				failedId,
+				"conversation.generation.execution.failed",
+				"execution",
+				f.executionId,
+				"2024-01-02T10:03:00Z",
 			],
 		] as const) {
 			await sql`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, agent_id, occurred_at, details)
-				values (${id}, 'isolation-trace', 'system', 'platform-worker', ${action}, 'conversation', ${f.conversationId}, 'succeeded', ${f.agentId}, ${time}, ${sql.json({ executionId: f.executionId })})`;
+				values (${id}, 'isolation-trace', 'system', 'platform-worker', ${action}, ${targetType}, ${targetId}, 'succeeded', ${f.agentId}, ${time}, ${sql.json({ operationId, originalPrincipal: f.principal, ...(action === "conversation.generation.isolation.started" ? { executionId: f.executionId, authorizationRecordId: authorization.id, controlRecordId } : {}) })})`;
 		}
 		const filters = {
 			from: "2024-01-02T10:00:00Z",
-			until: "2024-01-02T10:03:00Z",
+			until: "2024-01-02T10:04:00Z",
 		};
 		const ids: string[] = [];
 		let cursor: string | null = null;
-		for (let index = 0; index < 3; index++) {
+		for (let index = 0; index < 4; index++) {
 			const result = await query.listAudit(
 				admin,
 				{ limit: 1, filters, ...(cursor ? { cursor } : {}) },
@@ -1043,18 +1076,25 @@ describe("controlled PostgreSQL audit query", () => {
 			ids.push(...result.items.map((item) => item.auditId));
 			cursor = result.nextCursor;
 		}
-		expect(ids).toEqual([confirmedId, startedId, governanceId]);
+		expect(ids).toEqual([failedId, confirmedId, startedId, governanceId]);
 		expect(cursor).toBeNull();
 		for (const [id, action] of [
 			[startedId, "conversation.generation.isolation.started"],
 			[confirmedId, "conversation.generation.isolation.confirmed"],
+			[failedId, "conversation.generation.execution.failed"],
 		] as const) {
 			await expect(
 				query.getAudit(admin, id, detail, request()),
 			).resolves.toMatchObject({
 				action,
-				result: "succeeded",
-				subject: { kind: "conversation", subjectId: f.conversationId },
+				result: id === failedId ? "failed" : "succeeded",
+				subject: {
+					kind: id === failedId ? "execution" : "conversation",
+					subjectId: id === failedId ? f.executionId : f.conversationId,
+				},
+				executionId: f.executionId,
+				originalPrincipal: f.principal,
+				executor: "platform_worker",
 			});
 			const filtered = await query.listAudit(
 				admin,
@@ -1064,8 +1104,30 @@ describe("controlled PostgreSQL audit query", () => {
 			expect(filtered.items.map((item) => item.auditId)).toEqual([id]);
 			await expect(
 				query.getAudit(f.scope, id, detail, request()),
+			).resolves.toMatchObject({ auditId: id });
+			await expect(
+				query.getAudit(other.scope, id, detail, request()),
 			).rejects.toMatchObject({ code: "access_denied" });
 		}
+		const own = await query.listAudit(
+			f.scope,
+			{ limit: 10, filters: { ...filters, principal: f.principal } },
+			request(),
+		);
+		expect(own.items.map((item) => item.auditId)).toEqual([
+			failedId,
+			confirmedId,
+			startedId,
+		]);
+		const forgedId = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, agent_id, details)
+			values (${forgedId}, 'forged-isolation-trace', 'system', 'platform-worker', 'conversation.generation.isolation.confirmed', 'conversation', ${f.conversationId}, 'succeeded', ${f.agentId}, ${sql.json({ operationId, originalPrincipal: other.principal })})`;
+		await expect(
+			query.getAudit(admin, forgedId, detail, request()),
+		).rejects.toMatchObject({ code: "unavailable" });
+		await expect(
+			query.getAudit(f.scope, forgedId, detail, request()),
+		).rejects.toMatchObject({ code: "access_denied" });
 	});
 
 	it("durably records malformed/rebound requests without persisting caller filters, cursors, IDs or secret sentinels", async () => {

@@ -92,6 +92,7 @@ type Row = AuditRow & {
 	acceptanceCount: number | null;
 	boundConversationId: string | null;
 	executionConversationId: string | null;
+	generationIsolationValid: boolean;
 };
 
 function deny(): never {
@@ -161,6 +162,23 @@ function candidates(
 		and accepted.actor_type = r.boundary -> 'principal' ->> 'kind'
 		and accepted.actor_id = r.boundary -> 'principal' ->> 'id'
 		and r.boundary ->> 'agentId' = e.agent_id and r.boundary ->> 'channelId' = e.channel_id`;
+	const generationIsolationValid = transaction`
+		t.operation_id is not null and a.source = 'platform' and a."actorType" = 'system'
+		and a."agentId" = e.agent_id and t.conversation_id = e.conversation_id
+		and t.execution_id = e.execution_id and t.control_source_id = r.id
+		and t.operation_id = concat('generation:', t.conversation_id, ':', t.session_generation)
+		and control.authorization_record_id = r.id and control.reason = 'generation_isolation'
+		and t.original_principal = r.boundary -> 'principal'
+		and a.details -> 'originalPrincipal' = t.original_principal
+		and ((a.action = 'conversation.generation.isolation.started'
+			and a."targetType" = 'conversation' and a."targetId" = t.conversation_id
+			and a.details ->> 'executionId' = t.execution_id
+			and a.details ->> 'authorizationRecordId' = r.id
+			and a.details ->> 'controlRecordId' = t.control_record_id)
+			or (a.action = 'conversation.generation.isolation.confirmed'
+				and a."targetType" = 'conversation' and a."targetId" = t.conversation_id and t.status = 'confirmed')
+			or (a.action = 'conversation.generation.execution.failed'
+				and a."targetType" = 'execution' and a."targetId" = t.execution_id and t.status = 'confirmed'))`;
 	const currentAccess =
 		scope.kind === "administrator"
 			? transaction`true`
@@ -186,7 +204,9 @@ function candidates(
 		and a."agentId" = e.agent_id
 		and (a.source <> 'conversation' or (a."conversationId" = e.conversation_id and a."actorId" = e.actor_id))
 		and (a.source = 'conversation' or (a."actorType" = ${scope.principal.kind} and a."actorId" = ${scope.principal.id})
-			or (a."actorType" = 'system' and a.action in ('task.status.changed', 'task.control.created')))
+			or (a."actorType" = 'system' and (a.action in ('task.status.changed', 'task.control.created')
+				or (a.action like 'conversation.generation.%' and ${generationIsolationValid}))))
+		and (a.action not like 'conversation.generation.%' or ${generationIsolationValid})
 		and ((${scope.principal.kind} = 'user' and e.channel_id not like 'api:%') or e.channel_id = ${`api:${scope.principal.kind}`})
 		and agent.authorization_revision is not null
 		and exists (select 1 from platform.agent_applications application where application.agent_id = e.agent_id)
@@ -215,9 +235,15 @@ function candidates(
 			select 'platform'::text as source, id as "auditId", trace_id as "traceId", request_id as "requestId",
 				actor_type as "actorType", actor_id as "actorId", action, target_type as "targetType", target_id as "targetId",
 				outcome, agent_id as "agentId", occurred_at as "occurredAt", details,
-				case when target_type = 'execution' then target_id else null end as "executionId",
-				null::text as "conversationId",
+				case when target_type = 'execution' then target_id
+					when action in ('conversation.generation.isolation.started', 'conversation.generation.isolation.confirmed')
+						then (select t.execution_id from platform.conversation_generation_tombstones t where t.operation_id = details ->> 'operationId')
+					else null end as "executionId",
+				case when action like 'conversation.generation.%'
+					then (select t.conversation_id from platform.conversation_generation_tombstones t where t.operation_id = details ->> 'operationId')
+					else null end as "conversationId",
 				case when action = 'execution.operation.observed' then coalesce(details -> 'fact' ->> 'phase', 'unknown')
+					when action = 'conversation.generation.execution.failed' then 'failed'
 					when action = 'task.status.changed' then coalesce(details ->> 'status', 'unknown')
 					when action in ('task.authorization.accepted','task.control.created') and outcome = 'succeeded' then 'accepted'
 					else outcome::text end as result
@@ -235,12 +261,16 @@ function candidates(
 				e.conversation_id as "executionConversationId",
 				e.actor_id as "executionActorId", e.agent_id as "executionAgentId", e.channel_id as "channelId",
 				r.id as "authorizationRecordId", r.boundary,
+				coalesce(${generationIsolationValid}, false) as "generationIsolationValid",
 				accepted.actor_type as "acceptedActorType", accepted.actor_id as "acceptedActorId",
 				accepted.target_id as "acceptedExecutionId", accepted.agent_id as "acceptedAgentId",
 				accepted.details ->> 'authorizationRecordId' as "acceptedAuthorizationRecordId",
 				accepted.acceptance_count::int as "acceptanceCount"
 			from records a
 			left join platform.conversation_executions e on e.execution_id = a."executionId"
+			left join platform.conversation_generation_tombstones t on t.operation_id = a.details ->> 'operationId'
+				and a.action like 'conversation.generation.%' and t.execution_id = a."executionId"
+			left join platform.task_control_records control on control.id = t.control_record_id
 			left join platform.agents agent on agent.id = coalesce(e.agent_id, a."agentId")
 			left join platform.task_authorization_records r on r.execution_id = e.execution_id
 			left join lateral (
@@ -321,6 +351,7 @@ function requireCandidateAccess(
 			conversationId: row.conversationId,
 			executionId: row.executionId,
 			executionConversationId: row.executionConversationId,
+			generationIsolationValid: row.generationIsolationValid,
 			binding: executionBinding(row),
 			attempt: details
 				? {
@@ -350,6 +381,7 @@ const executionActions = new Set([
 	"conversation.task.status",
 	"conversation.generation.isolation.started",
 	"conversation.generation.isolation.confirmed",
+	"conversation.generation.execution.failed",
 	"audit.query.completed",
 	"audit.query.failed",
 ]);
@@ -374,6 +406,11 @@ function project(
 			"cancelled",
 			"unknown",
 		].includes(row.result)
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	if (
+		row.action.startsWith("conversation.generation.") &&
+		!row.generationIsolationValid
 	)
 		throw new PlatformAuditScopeErrorV1("unavailable");
 	const binding = executionBinding(row);
@@ -438,6 +475,10 @@ function project(
 			: null;
 	if (row.action === "conversation.task.status") {
 		actor = { kind: "system", actorId: "platform_worker" };
+		executor = "platform_worker";
+	}
+	if (row.action.startsWith("conversation.generation.")) {
+		actor = { kind: "system", actorId: row.actorId };
 		executor = "platform_worker";
 	}
 	let result = row.result;

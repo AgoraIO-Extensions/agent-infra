@@ -50,6 +50,7 @@ const bound: PlatformAuditCandidateV1 = {
 	conversationId: "conversation-a",
 	executionId: "execution-a",
 	executionConversationId: "conversation-a",
+	generationIsolationValid: false,
 	binding,
 	attempt: null,
 };
@@ -71,6 +72,7 @@ const attempt: PlatformAuditCandidateV1 = {
 	conversationId: null,
 	executionId: null,
 	executionConversationId: null,
+	generationIsolationValid: false,
 	binding: null,
 	attempt: attemptDetails,
 };
@@ -96,6 +98,21 @@ describe("audit candidate access", () => {
 		expect(() =>
 			requirePlatformAuditCandidateAccessV1(attempt, scope),
 		).not.toThrow();
+		expect(() =>
+			requirePlatformAuditCandidateAccessV1(
+				{
+					...bound,
+					source: "platform",
+					action: "conversation.generation.isolation.started",
+					actorType: "system",
+					actorId: "platform_worker",
+					targetType: "conversation",
+					targetId: "conversation-a",
+					generationIsolationValid: true,
+				},
+				scope,
+			),
+		).not.toThrow();
 	});
 
 	it.each([
@@ -109,6 +126,12 @@ describe("audit candidate access", () => {
 			source: "platform" as const,
 			actorType: "system",
 			actorId: "platform_worker",
+		},
+		{
+			source: "platform" as const,
+			action: "conversation.generation.isolation.started",
+			actorType: "system",
+			generationIsolationValid: false,
 		},
 	])("denies an inconsistent execution candidate: %j", (change) => {
 		expect(() =>

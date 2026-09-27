@@ -1296,7 +1296,7 @@ function isScopedAuditOpenApiAddition(previous, current) {
 	};
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"f6f1da2d9153a897630329f5f5a27bfc670b53c936570c03e6e24c17647cc75c"
+		"b956648e3ac86f37ceec3466e127a1523b3a9f952d768dcfc1667f2d1936d9ed"
 	)
 		return false;
 	const normalized = structuredClone(current);

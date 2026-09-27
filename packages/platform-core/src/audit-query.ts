@@ -92,6 +92,7 @@ export const platformAuditQueryActionsV1 = [
 	"conversation.task.status",
 	"conversation.generation.isolation.started",
 	"conversation.generation.isolation.confirmed",
+	"conversation.generation.execution.failed",
 	"secret.decrypt",
 	"secret.activate",
 	"secret.rewrap",
