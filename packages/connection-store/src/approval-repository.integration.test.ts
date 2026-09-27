@@ -579,14 +579,20 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					actorPrincipalId: adminId,
 					disclaimerVersionId: disclaimerId,
 				});
-				for (const missing of ["disclaimer", "approvers"] as const) {
+				for (const missing of [
+					"disclaimer",
+					"approvers",
+					"default-duration",
+				] as const) {
 					const incompleteId = `incomplete-${missing}-${suffix}`;
 					const incompleteDraft: ApprovalPolicyDraft = {
 						allowPermanent: false,
 						capabilityProfileId: profileId,
 						connectTtlSeconds: 604_800,
 						createdByPrincipalId: adminId,
-						defaultDurationDays: 90,
+						...(missing === "default-duration"
+							? {}
+							: { defaultDurationDays: 90 }),
 						disclaimerVersionIds:
 							missing === "disclaimer" ? [] : [disclaimerId],
 						durations: [
@@ -630,6 +636,14 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						SELECT status FROM connection_access_policy_versions WHERE id = ${incompleteId}
 					`;
 					expect(incomplete?.status).toBe("DRAFT");
+					if (missing === "default-duration") {
+						await expect(
+							sql`UPDATE connection_access_policy_versions SET status = 'PUBLISHED', published_at = now() WHERE id = ${incompleteId}`,
+						).rejects.toMatchObject({
+							code: "23514",
+							constraint_name: "connection_access_policy_versions_check1",
+						});
+					}
 					await expect(
 						repository.updatePolicyDraft({
 							...incompleteDraft,
@@ -699,6 +713,19 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						ORDER BY revision
 					`;
 					expect(draftEvents).toEqual([{ revision: "2" }, { revision: "3" }]);
+					if (missing === "default-duration") {
+						expect(
+							await repository.getPolicyDraft(incompleteId),
+						).not.toHaveProperty("defaultDurationDays");
+						await repository.updatePolicyDraft({
+							...incompleteDraft,
+							expectedRevision: "3",
+							defaultDurationDays: 90,
+						});
+						expect(await repository.getPolicyDraft(incompleteId)).toMatchObject(
+							{ revision: "4", defaultDurationDays: 90 },
+						);
+					}
 					if (missing === "approvers") {
 						const staleProfileId = `stale-profile-${suffix}`;
 						const stalePolicyId = `stale-policy-${suffix}`;

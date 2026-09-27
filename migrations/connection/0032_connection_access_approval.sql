@@ -173,7 +173,7 @@ CREATE TABLE connection_access_policy_versions (
     (status = 'DRAFT' AND published_at IS NULL)
     OR (status <> 'DRAFT' AND published_at IS NOT NULL)
   ),
-  CHECK (allow_permanent OR default_duration_days IS NOT NULL)
+  CHECK (status = 'DRAFT' OR allow_permanent OR default_duration_days IS NOT NULL)
 );
 
 CREATE UNIQUE INDEX connection_access_policy_versions_current

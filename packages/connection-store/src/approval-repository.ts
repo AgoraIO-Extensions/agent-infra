@@ -876,6 +876,7 @@ export class PostgresConnectionApprovalRepository {
 			`;
 			if (
 				!validation?.profile_published ||
+				(!policy.allow_permanent && policy.default_duration_days === null) ||
 				validation.stage_count < 1 ||
 				validation.stage_count > 10 ||
 				validation.invalid_stage_count > 0 ||
