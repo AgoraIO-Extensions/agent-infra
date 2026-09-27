@@ -687,14 +687,12 @@ it.each(["close", "stop"] as const)(
 		let stallRead = false;
 		let readEntered = false;
 		let releaseRead = () => {};
-		let stalledFile: DurableJsonFile<unknown> | undefined;
 		const readCommitted = DurableJsonFile.prototype.readCommitted;
 		const spy = vi.spyOn(DurableJsonFile.prototype, "readCommitted");
 		spy.mockImplementation(function (this: DurableJsonFile<unknown>) {
 			if (stallRead) {
 				stallRead = false;
 				readEntered = true;
-				stalledFile = this;
 				return new Promise((resolve, reject) => {
 					releaseRead = () => {
 						void readCommitted.call(this).then(resolve, reject);
@@ -760,8 +758,6 @@ it.each(["close", "stop"] as const)(
 						]);
 					} finally {
 						clearTimeout(timer);
-						releaseRead();
-						if (stalledFile) await readCommitted.call(stalledFile);
 					}
 					expect(continuationSettled).toBe(true);
 					expect(requests()).toBe(1);
