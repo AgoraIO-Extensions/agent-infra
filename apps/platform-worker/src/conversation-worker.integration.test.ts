@@ -1101,18 +1101,35 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		}
 		const [before] =
 			await sql`select delivery_fence::int as fence, host_session_ref, turn_id from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
-		const readPersistedIds = async () => {
-			const [row] = await sql<{ eventIds: string[]; auditIds: string[] }[]>`
-				select array(select event_id from platform.conversation_events
-				             where execution_id=${active.execution_id} order by sequence) as "eventIds",
-				       array(select id from platform.audit_events
-				             where target_id=${active.execution_id} order by id) as "auditIds"
+		const readPersistedRows = async () => {
+			const events = await sql<
+				{
+					eventId: string;
+					adapterEventKey: string;
+					eventDigest: string;
+					eventType: string;
+					eventPayloadText: string;
+					sequence: number;
+					conversationCursor: number;
+				}[]
+			>`
+				select event_id as "eventId", adapter_event_key as "adapterEventKey",
+				       event_digest as "eventDigest", event_type as "eventType",
+				       event_payload::text as "eventPayloadText", sequence::int as sequence,
+				       conversation_cursor::int as "conversationCursor"
+				from platform.conversation_events
+				where execution_id=${active.execution_id} order by sequence
 			`;
-			if (!row) throw Error("Persisted event IDs are unavailable");
-			return row;
+			const audits = await sql<{ id: string }[]>`
+				select id from platform.audit_events
+				where target_id=${active.execution_id}
+				  and action='execution.operation.observed'
+				order by id
+			`;
+			return { events, auditIds: audits.map((audit) => audit.id) };
 		};
-		const beforeIds = realCodexE2e ? await readPersistedIds() : undefined;
-		if (realCodexE2e) expect(beforeIds?.eventIds).toHaveLength(1);
+		const beforeRows = realCodexE2e ? await readPersistedRows() : undefined;
+		if (realCodexE2e) expect(beforeRows?.events).toHaveLength(1);
 		const priorRequests = requests.length;
 		for (const child of children) child.kill("SIGKILL");
 		await Promise.all(children.map((child) => once(child, "exit")));
@@ -1266,13 +1283,22 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		});
 		expect(await dispatchCount()).toBe(1);
 		if (realCodexE2e) {
-			if (!beforeIds) throw Error("Pre-kill event IDs are unavailable");
-			const afterIds = await readPersistedIds();
-			expect(afterIds.eventIds.slice(0, beforeIds.eventIds.length)).toEqual(
-				beforeIds.eventIds,
+			if (!beforeRows) throw Error("Pre-kill event rows are unavailable");
+			const afterRows = await readPersistedRows();
+			expect(afterRows.events.slice(0, beforeRows.events.length)).toEqual(
+				beforeRows.events,
 			);
-			expect(afterIds.auditIds).toEqual(
-				expect.arrayContaining(beforeIds.auditIds),
+			const firstEvent = beforeRows.events[0];
+			if (!firstEvent) throw Error("Pre-kill event is unavailable");
+			expect(
+				afterRows.events.filter(
+					(event) =>
+						event.eventType === firstEvent.eventType &&
+						event.eventPayloadText === firstEvent.eventPayloadText,
+				),
+			).toHaveLength(1);
+			expect(afterRows.auditIds).toEqual(
+				expect.arrayContaining(beforeRows.auditIds),
 			);
 		}
 		expect(
@@ -1341,6 +1367,36 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				"started",
 				"completed",
 			]);
+			if (!beforeRows) throw Error("Pre-kill event rows are unavailable");
+			const finalRows = await readPersistedRows();
+			expect(finalRows.events.slice(0, beforeRows.events.length)).toEqual(
+				beforeRows.events,
+			);
+			const firstEvent = beforeRows.events[0];
+			if (!firstEvent) throw Error("Pre-kill event is unavailable");
+			expect(
+				finalRows.events.filter(
+					(event) =>
+						event.eventType === firstEvent.eventType &&
+						event.eventPayloadText === firstEvent.eventPayloadText,
+				),
+			).toHaveLength(1);
+			expect(
+				finalRows.events.every((event, index) => {
+					if (index === 0) return true;
+					const previous = finalRows.events[index - 1];
+					return (
+						previous !== undefined &&
+						event.sequence === previous.sequence + 1 &&
+						event.conversationCursor === previous.conversationCursor + 1
+					);
+				}),
+			).toBe(true);
+			expect(finalRows.auditIds).toEqual(
+				operationFacts
+					.map((fact) => `operation-observed:${fact.eventId}`)
+					.sort(),
+			);
 			expect(operationFacts.every((fact) => fact.kind === "model")).toBe(true);
 			expect(
 				operationFacts.every(
