@@ -1220,6 +1220,7 @@ export class PostgresConnectionAccessRequestRepository
 		// ponytail: one transaction holds all matching accounts; batch campaigns if the population grows beyond bounded admin operations.
 		const affected = await sql<
 			{
+				effective_provider_release_id: string;
 				external_account: string;
 				external_account_fingerprint: string;
 				id: string;
@@ -1228,6 +1229,7 @@ export class PostgresConnectionAccessRequestRepository
 			}[]
 		>`
 				SELECT access.id, access.external_account_fingerprint,
+					access.provider_release_id AS effective_provider_release_id,
 					account.external_account, account.owner_principal_id, account.provider_id
 				FROM connection_effective_access_authorizations access
 				JOIN connection_accounts account ON account.id = access.connection_id
@@ -1261,7 +1263,7 @@ export class PostgresConnectionAccessRequestRepository
 				authorization.external_account_fingerprint !==
 				canonicalHash({
 					externalAccount: authorization.external_account,
-					providerReleaseId: input.providerReleaseId,
+					providerReleaseId: authorization.effective_provider_release_id,
 				})
 			)
 				forbidden();

@@ -307,6 +307,30 @@ describe("compatible approval upgrade", () => {
 				const [policy] =
 					await sql`SELECT policy.id, policy.revision::text FROM connection_access_policy_versions policy
 				JOIN connection_access_requests request ON request.policy_version_id = policy.id WHERE request.id = ${requestId}`;
+				const campaign = {
+					id: `upgraded-campaign-${suffix}`,
+					actorPrincipalId: principalId,
+					capabilityProfileId: before?.capability_profile_id,
+					providerReleaseId: v5.providerReleaseId,
+					triggerKind: "PROVIDER_RELEASE" as const,
+					triggerVersionId: v8.providerReleaseId,
+					deadlineAt: new Date(Date.now() + 7 * 86400000).toISOString(),
+					reason: "Reapprove original policy after upgrade",
+				};
+				await sql`UPDATE connection_access_authorizations SET upgraded_external_account_fingerprint = 'invalid' WHERE id = ${after.id}`;
+				await expect(
+					requests.createReapprovalCampaign(campaign),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await sql`UPDATE connection_access_authorizations SET upgraded_external_account_fingerprint = ${secondUpgrade?.external_account_fingerprint} WHERE id = ${after.id}`;
+				await expect(
+					requests.createReapprovalCampaign(campaign),
+				).resolves.toEqual({ campaignId: campaign.id, affectedConnections: 1 });
+				const [reapproval] =
+					await sql`SELECT state, reapproval_deadline_at FROM connection_access_authorizations WHERE id = ${after.id}`;
+				expect(reapproval?.state).toBe("REAPPROVAL_REQUIRED");
+				expect(reapproval?.reapproval_deadline_at.toISOString()).toBe(
+					campaign.deadlineAt,
+				);
 				await approval.revokePolicy({
 					actorPrincipalId: principalId,
 					policyVersionId: policy?.id,

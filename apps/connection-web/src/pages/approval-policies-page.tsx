@@ -58,7 +58,7 @@ export function ApprovalPoliciesPage() {
 	>({});
 	const [query, setQuery] = useState("");
 	const [allowPermanent, setAllowPermanent] = useState(false);
-	const [durationDays, setDurationDays] = useState(90);
+	const [durationDays, setDurationDays] = useState<number | "">(90);
 	const [disclaimerIds, setDisclaimerIds] = useState<string[]>([]);
 	const [tab, setTab] = useState<"chain" | "catalog">("chain");
 	const [profileName, setProfileName] = useState("");
@@ -245,7 +245,7 @@ export function ApprovalPoliciesPage() {
 			setProfileId(result.draft.capabilityProfileId);
 			setDisclaimerIds(result.draft.disclaimerVersionIds);
 			setAllowPermanent(result.draft.allowPermanent);
-			setDurationDays(result.draft.defaultDurationDays ?? 90);
+			setDurationDays(result.draft.defaultDurationDays ?? "");
 			setStageIndex(0);
 			setQuery("");
 		},
@@ -373,15 +373,14 @@ export function ApprovalPoliciesPage() {
 			allowPermanent,
 			capabilityProfileId: profile.id,
 			connectTtlSeconds: base?.connectTtlSeconds ?? 7 * 86_400,
-			defaultDurationDays:
-				base && durationDays === (base.defaultDurationDays ?? 90)
-					? base.defaultDurationDays
-					: durationDays,
+			defaultDurationDays: durationDays === "" ? undefined : durationDays,
 			disclaimerVersionIds: disclaimerIds,
 			durations: [
-				...(base && durationDays === (base.defaultDurationDays ?? 90)
+				...(base && durationDays === (base.defaultDurationDays ?? "")
 					? base.durations.filter((duration) => duration.kind === "FINITE")
-					: [{ days: durationDays, kind: "FINITE" as const }]),
+					: durationDays === ""
+						? []
+						: [{ days: durationDays, kind: "FINITE" as const }]),
 				...(allowPermanent ? [{ kind: "PERMANENT" as const }] : []),
 			],
 			priority: base?.priority ?? 100,
@@ -871,7 +870,11 @@ export function ApprovalPoliciesPage() {
 											max={3650}
 											value={durationDays}
 											onChange={(event) =>
-												setDurationDays(Number(event.target.value))
+												setDurationDays(
+													event.target.value === ""
+														? ""
+														: Number(event.target.value),
+												)
 											}
 										/>
 									</label>

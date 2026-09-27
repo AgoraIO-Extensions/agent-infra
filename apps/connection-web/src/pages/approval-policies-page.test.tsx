@@ -125,64 +125,91 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-it("reloads an incomplete draft and saves edits with its revision and original timing", async () => {
-	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
-		profiles: [
-			{
-				id: "profile-1",
-				name: "Jira Read",
-				providerReleaseId: "jira-release-1",
-				effectCeiling: "READ",
-				status: "PUBLISHED",
+it.each([
+	{ defaultDays: 30, setDefault: false },
+	{ defaultDays: undefined, setDefault: false },
+	{ defaultDays: undefined, setDefault: true },
+])(
+	"preserves or completes an incomplete draft default: %j",
+	async ({ defaultDays, setDefault }) => {
+		const loaded = await api.getConnectionAccessPolicyDraft();
+		loaded.draft.defaultDurationDays = defaultDays;
+		loaded.draft.allowPermanent = defaultDays !== undefined;
+		loaded.draft.durations = [{ kind: "FINITE", days: 30 }];
+		api.getConnectionAccessPolicyDraft.mockResolvedValueOnce(loaded);
+		api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+			profiles: [
+				{
+					id: "profile-1",
+					name: "Jira Read",
+					providerReleaseId: "jira-release-1",
+					effectCeiling: "READ",
+					status: "PUBLISHED",
+				},
+			],
+			providers: [
+				{ provider: "jira", providerReleaseId: "jira-release-1", actions: [] },
+			],
+			disclaimers: [],
+			policies: [
+				{
+					id: "policy-1",
+					capabilityProfileId: "profile-1",
+					providerReleaseId: "jira-release-1",
+					revision: "4",
+					status: "DRAFT",
+					materialChange: false,
+				},
+			],
+		});
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		render(
+			<QueryClientProvider client={client}>
+				<ApprovalPoliciesPage />
+			</QueryClientProvider>,
+		);
+		fireEvent.click(await screen.findByRole("button", { name: "编辑草稿" }));
+		const name = await screen.findByLabelText("阶段名称");
+		expect((name as HTMLInputElement).value).toBe("待配置审批人");
+		fireEvent.change(name, { target: { value: "安全审批" } });
+		if (defaultDays === undefined) {
+			fireEvent.click(screen.getByRole("tab", { name: "能力与条款" }));
+			const duration = screen.getByLabelText(
+				"允许时长（天）",
+			) as HTMLInputElement;
+			expect(duration.value).toBe("");
+			if (setDefault) fireEvent.change(duration, { target: { value: "90" } });
+		}
+		expect(screen.queryByRole("button", { name: "发布策略" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+		await waitFor(() =>
+			expect(api.updateConnectionAccessPolicy).toHaveBeenCalledOnce(),
+		);
+		expect(api.updateConnectionAccessPolicy.mock.calls[0]?.[0]).toMatchObject({
+			policyId: "policy-1",
+			revision: "4",
+			body: {
+				priority: 123,
+				connectTtlSeconds: 7200,
+				requestTtlSeconds: 14400,
+				renewalLeadSeconds: 3600,
+				defaultDurationDays: setDefault ? 90 : defaultDays,
+				allowPermanent: defaultDays !== undefined,
+				disclaimerVersionIds: [],
+				stages: [{ name: "安全审批", approverCandidateIds: [] }],
 			},
-		],
-		providers: [
-			{ provider: "jira", providerReleaseId: "jira-release-1", actions: [] },
-		],
-		disclaimers: [],
-		policies: [
-			{
-				id: "policy-1",
-				capabilityProfileId: "profile-1",
-				providerReleaseId: "jira-release-1",
-				revision: "4",
-				status: "DRAFT",
-				materialChange: false,
-			},
-		],
-	});
-	const client = new QueryClient({
-		defaultOptions: { queries: { retry: false } },
-	});
-	render(
-		<QueryClientProvider client={client}>
-			<ApprovalPoliciesPage />
-		</QueryClientProvider>,
-	);
-	fireEvent.click(await screen.findByRole("button", { name: "编辑草稿" }));
-	const name = await screen.findByLabelText("阶段名称");
-	expect((name as HTMLInputElement).value).toBe("待配置审批人");
-	fireEvent.change(name, { target: { value: "安全审批" } });
-	expect(screen.queryByRole("button", { name: "发布策略" })).toBeNull();
-	fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
-	await waitFor(() =>
-		expect(api.updateConnectionAccessPolicy).toHaveBeenCalledOnce(),
-	);
-	expect(api.updateConnectionAccessPolicy.mock.calls[0]?.[0]).toMatchObject({
-		policyId: "policy-1",
-		revision: "4",
-		body: {
-			priority: 123,
-			connectTtlSeconds: 7200,
-			requestTtlSeconds: 14400,
-			renewalLeadSeconds: 3600,
-			defaultDurationDays: 30,
-			allowPermanent: true,
-			disclaimerVersionIds: [],
-			stages: [{ name: "安全审批", approverCandidateIds: [] }],
-		},
-	});
-});
+		});
+		const saved = api.updateConnectionAccessPolicy.mock.calls[0]?.[0] as {
+			body: { durations: unknown[] };
+		};
+		expect(saved.body.durations).toEqual([
+			{ kind: "FINITE", days: setDefault ? 90 : 30 },
+			...(defaultDays !== undefined ? [{ kind: "PERMANENT" }] : []),
+		]);
+	},
+);
 
 it("publishes a material policy only with an explicit reapproval deadline", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
