@@ -998,7 +998,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						command.executionId,
 					).catch(() => {});
 					if (this.closed || this.handles.get(ref)?.retiring) {
-						void mark;
+						await mark;
 						throw error;
 					}
 					let timer: ReturnType<typeof setTimeout> | undefined;
