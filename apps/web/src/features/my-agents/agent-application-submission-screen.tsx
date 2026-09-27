@@ -16,7 +16,10 @@ import {
 	agentApplicationEditActionLabels,
 } from "./my-agent-applications.js";
 
-type RequestError = Error & { readonly retryable?: boolean };
+type RequestError = Error & {
+	readonly code?: string;
+	readonly retryable?: boolean;
+};
 
 type AgentApplicationSubmissionScreenProps =
 	| {
@@ -70,6 +73,9 @@ export function AgentApplicationSubmissionScreen(
 			取消
 		</Link>
 	);
+	const validationError =
+		props.error?.code === "INVALID_REQUEST" ||
+		props.error?.code === "MODEL_SELECTION_INVALID";
 
 	return (
 		<section aria-labelledby="agent-application-submission-heading">
@@ -102,9 +108,11 @@ export function AgentApplicationSubmissionScreen(
 					{props.error ? (
 						<Alert variant="destructive" className="my-3">
 							<AlertDescription>
-								{props.error.retryable === false
-									? "申请已变更或当前不可用，请刷新页面后核对。"
-									: "申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。"}
+								{validationError
+									? "申请内容未通过服务端校验，请检查字段后重试。"
+									: props.error.retryable === false
+										? "申请已变更或当前不可用，请刷新页面后核对。"
+										: "申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。"}
 							</AlertDescription>
 						</Alert>
 					) : null}
@@ -117,6 +125,7 @@ export function AgentApplicationSubmissionScreen(
 							}
 							{...props}
 							cancelAction={cancelAction}
+							serverError={props.error}
 						/>
 					)}
 					{props.result ? (
@@ -151,8 +160,9 @@ export function AgentApplicationSubmissionScreen(
 					</ol>
 					<p>审批结果可在申请详情中查看。</p>
 					<p className="text-muted-foreground text-sm">
-						模板、人员与获准模型端点由部署环境提供。当前按已提供的 ID
-						填写，服务端会校验权限与配置。
+						标准模板与获准模型从部署提供的选项中选择。共同 Owner
+						和使用范围所需的用户或组织
+						ID，请向部署管理员获取；服务端会校验权限与配置。
 					</p>
 				</aside>
 			</div>
