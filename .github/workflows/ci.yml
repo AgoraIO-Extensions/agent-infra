@@ -88,8 +88,8 @@ jobs:
             --env AGENT_INFRA_REAL_CODEX_E2E \
             --env PLATFORM_TEST_DATABASE_URL \
             agent-infra-codex-native-test \
-            pnpm --filter @agent-infra/platform-worker exec vitest run \
-            src/conversation-worker.integration.test.ts --cache=false
+            pnpm exec vitest run \
+            tests/conversation-worker.integration.test.ts --cache=false
 
       - name: Run tests
         run: pnpm test

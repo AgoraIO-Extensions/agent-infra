@@ -65,15 +65,33 @@ importers:
 
   .:
     devDependencies:
+      '@agent-infra/agent-runtime':
+        specifier: workspace:*
+        version: link:packages/agent-runtime
       '@agent-infra/config':
         specifier: workspace:*
         version: link:packages/config
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:packages/contracts
+      '@agent-infra/model-catalog':
+        specifier: workspace:*
+        version: link:packages/model-catalog
+      '@agent-infra/platform-core':
+        specifier: workspace:*
+        version: link:packages/platform-core
+      '@agent-infra/platform-store':
+        specifier: workspace:*
+        version: link:packages/platform-store
       '@biomejs/biome':
         specifier: ^2.5.6
         version: 2.5.7
       '@hono/node-server':
         specifier: 2.0.12
         version: 2.0.12(hono@4.13.0)
+      '@kubernetes/client-node':
+        specifier: 2.0.0
+        version: 2.0.0
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.3
@@ -83,6 +101,9 @@ importers:
       openid-client:
         specifier: 6.8.8
         version: 6.8.8
+      postgres:
+        specifier: 'catalog:'
+        version: 3.4.9
       turbo:
         specifier: ^2.10.7
         version: 2.10.8

@@ -46,23 +46,23 @@ import {
 import { KubeConfig } from "@kubernetes/client-node";
 import postgres from "postgres";
 import { expect, it } from "vitest";
-import { catalogFixture } from "../../../packages/model-catalog/src/catalog.fixture.js";
-import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
-import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
-import { setProductionDeploymentInput } from "../../../tests/fixtures/platform-api-production-deployment.js";
-import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
-import type { ProductionPlatformApiInputV1 } from "../../platform-api/src/deployment.js";
+import { createRuntimeHostApp } from "../apps/agent-runtime-host/src/app.js";
+import type { ProductionPlatformApiInputV1 } from "../apps/platform-api/src/deployment.js";
 import {
 	createPlatformApiShutdown,
 	startPlatformApiFromDeployment,
-} from "../../platform-api/src/index.js";
+} from "../apps/platform-api/src/index.js";
 import {
 	fakeKubernetesApi,
 	workloadDesiredFixture,
 	workloadTestPolicy,
-} from "./kubernetes.fixture.js";
-import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
-import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
+} from "../apps/platform-worker/src/kubernetes.fixture.js";
+import { createKubernetesRuntimeAdapterV1 } from "../apps/platform-worker/src/kubernetes-runtime-adapter.js";
+import { workloadResourceConfigurationHashV1 } from "../apps/platform-worker/src/workload-runtime.js";
+import { catalogFixture } from "../packages/model-catalog/src/catalog.fixture.js";
+import { migratePlatformDatabase } from "../packages/platform-store/src/migrate.js";
+import { startPostgresTestDatabase } from "../packages/platform-store/src/postgres-test.js";
+import { setProductionDeploymentInput } from "./fixtures/platform-api-production-deployment.js";
 
 const execFile = promisify(execFileCallback);
 const realCodexE2e = process.env.AGENT_INFRA_REAL_CODEX_E2E === "1";
@@ -698,14 +698,20 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		);
 		// The build publishes the real deployment module without the mounted configuration.
 		await execFile("pnpm", ["build"], {
-			cwd: resolve(import.meta.dirname, ".."),
+			cwd: resolve(import.meta.dirname, "../apps/platform-worker"),
 			timeout: 30_000,
 		});
 		moduleDirectory = await mkdtemp(
-			join(resolve(import.meta.dirname, "../dist"), "cli-test-"),
+			join(
+				resolve(import.meta.dirname, "../apps/platform-worker/dist"),
+				"cli-test-",
+			),
 		);
 		await copyFile(
-			resolve(import.meta.dirname, "../dist/deployment.mjs"),
+			resolve(
+				import.meta.dirname,
+				"../apps/platform-worker/dist/deployment.mjs",
+			),
 			join(moduleDirectory, "deployment.mjs"),
 		);
 		const configSource = `import { readFile } from 'node:fs/promises'; import { createPrivateKey } from 'node:crypto';
@@ -727,7 +733,12 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		const start = () => {
 			const child = spawn(
 				process.execPath,
-				[resolve(import.meta.dirname, "../dist/index.mjs")],
+				[
+					resolve(
+						import.meta.dirname,
+						"../apps/platform-worker/dist/index.mjs",
+					),
+				],
 				{
 					env: {
 						...process.env,
@@ -949,7 +960,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			setProductionDeploymentInput(input);
 			apiRunning = await startPlatformApiFromDeployment({
 				moduleSpecifier: new URL(
-					"../../../tests/fixtures/platform-api-production-deployment.ts",
+					"./fixtures/platform-api-production-deployment.ts",
 					import.meta.url,
 				).href,
 				port: 0,
