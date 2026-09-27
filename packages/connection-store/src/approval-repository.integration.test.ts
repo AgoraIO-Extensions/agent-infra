@@ -2441,6 +2441,51 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					const [transitionPermit] =
 						await sql`SELECT count(*)::int AS count FROM connection_connect_permits WHERE request_id = ${transitionRequest}`;
 					expect(transitionPermit?.count).toBe(0);
+					const blockedTransition = await requestRepository.getRequest(
+						applicantId,
+						transitionRequest,
+					);
+					const blockedStage = blockedTransition.stages[1];
+					if (!blockedStage)
+						throw new Error("Blocked transition stage is missing");
+					const rerouteInput = {
+						actorPrincipalId: adminId,
+						requestId: transitionRequest,
+						expectedRequestRevision: blockedTransition.revision,
+						expectedStageRevision: blockedStage.revision,
+						expectedRoutingRevision: blockedStage.routingRevision,
+						reason: "Replace inactive reviewer",
+					};
+					await expect(
+						requestRepository.reroute({
+							...rerouteInput,
+							approvers: (quorumType === "ANY"
+								? [approverId]
+								: [approverId, adminId]
+							).map((principalId) => ({
+								principalId,
+								displaySnapshot: { displayName: "Reviewer" },
+							})),
+						}),
+					).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+					expect(
+						await requestRepository.getRequest(applicantId, transitionRequest),
+					).toEqual(blockedTransition);
+					await sql`UPDATE connection_principals SET status = 'ACTIVE' WHERE id = ${delegateId}`;
+					await requestRepository.reroute({
+						...rerouteInput,
+						approvers: (quorumType === "ANY"
+							? [delegateId]
+							: [delegateId, adminId]
+						).map((principalId) => ({
+							principalId,
+							displaySnapshot: { displayName: "Reviewer" },
+						})),
+					});
+					expect(
+						(await requestRepository.getRequest(applicantId, transitionRequest))
+							.state,
+					).toBe("IN_REVIEW");
 				}
 			} finally {
 				await connections.close();

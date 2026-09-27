@@ -624,6 +624,16 @@ export class PostgresConnectionAccessRequestRepository
 				)
 			)
 				forbidden();
+			const [duplicateApprover] = await sql<{ id: string }[]>`
+				SELECT stage.id FROM connection_request_stages stage
+				JOIN connection_request_routing_revisions routing ON routing.request_stage_id = stage.id AND routing.revision = stage.routing_revision
+				JOIN connection_request_stage_approvers approver ON approver.routing_revision_id = routing.id
+				WHERE stage.request_id = ${input.requestId} AND stage.id <> ${target.request_stage_id}
+					AND approver.approver_principal_id IN ${sql(input.approvers.map((item) => item.principalId))}
+				LIMIT 1
+			`;
+			if (duplicateApprover)
+				invalid("An approver cannot appear in multiple stages");
 			const [decided] = await sql<{ id: string }[]>`
 				SELECT id FROM connection_approval_decisions
 				WHERE request_stage_id = ${target.request_stage_id} LIMIT 1
@@ -633,6 +643,7 @@ export class PostgresConnectionAccessRequestRepository
 				SELECT id FROM connection_principals
 				WHERE id IN ${sql(input.approvers.map((item) => item.principalId))}
 					AND status = 'ACTIVE'
+				FOR SHARE
 			`;
 			if (principals.length !== input.approvers.length) forbidden();
 			const nextRevision = Number(target.routing_revision) + 1;
