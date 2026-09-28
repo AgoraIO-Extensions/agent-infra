@@ -6,7 +6,7 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LoginAction } from "./login-action";
+import { isSafeLoginEndpoint, LoginAction } from "./login-action";
 
 afterEach(() => {
 	cleanup();
@@ -14,6 +14,33 @@ afterEach(() => {
 });
 
 describe("LoginAction", () => {
+	it("requires HTTPS except for same-origin loopback HTTP", () => {
+		expect(
+			isSafeLoginEndpoint(
+				"http://example.test/auth/login",
+				"http://example.test",
+			),
+		).toBe(false);
+		expect(
+			isSafeLoginEndpoint(
+				"http://localhost:3000/auth/login",
+				"http://localhost:3000",
+			),
+		).toBe(true);
+		expect(
+			isSafeLoginEndpoint(
+				"http://127.0.0.1:3511/auth/login",
+				"http://127.0.0.1:3511",
+			),
+		).toBe(true);
+		expect(
+			isSafeLoginEndpoint(
+				"https://example.test/auth/login",
+				"https://example.test",
+			),
+		).toBe(true);
+	});
+
 	it("posts the Platform JSON login contract with browser credentials", async () => {
 		const fetchMock = vi
 			.fn()

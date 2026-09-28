@@ -10,6 +10,19 @@ type LoginActionProps = {
 
 type LoginState = "idle" | "submitting" | "error";
 
+export function isSafeLoginEndpoint(endpoint: string, currentOrigin: string) {
+	const target = new URL(endpoint, currentOrigin);
+	const loopbackHttp =
+		target.protocol === "http:" &&
+		["localhost", "127.0.0.1", "[::1]"].includes(target.hostname);
+	return (
+		(target.protocol === "https:" || loopbackHttp) &&
+		target.origin === currentOrigin &&
+		!target.username &&
+		!target.password
+	);
+}
+
 /**
  * Consume the Platform browser login contract. The endpoint is configured by
  * deployment, but the credential-bearing request must stay same-origin.
@@ -24,14 +37,9 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 		setState("submitting");
 		try {
 			const target = new URL(endpoint, window.location.href);
-			if (
-				!["http:", "https:"].includes(target.protocol) ||
-				target.origin !== window.location.origin ||
-				target.username ||
-				target.password
-			)
+			if (!isSafeLoginEndpoint(endpoint, window.location.origin))
 				throw new Error(
-					"Login must use a same-origin HTTP(S) endpoint without userinfo",
+					"Login must use HTTPS or loopback HTTP without userinfo",
 				);
 			const response = await fetch(target.href, {
 				method: "POST",
