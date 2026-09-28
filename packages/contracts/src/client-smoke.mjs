@@ -34,6 +34,19 @@ try {
 		'import { client } from "./generated/client.gen.js";\nimport type { ProtocolErrorV1 } from "./generated/types.gen.js";\n\nclient.setConfig({ baseUrl: "https://example.invalid" });\nexport const isRetryable = (error: ProtocolErrorV1): boolean => error.retryable;\n',
 		"utf8",
 	);
+	await createClient({
+		input: resolve(
+			packageRoot,
+			"artifacts/openapi/platform-auth.v1.openapi.json",
+		),
+		output: resolve(temporaryRoot, "auth-generated"),
+		plugins: ["@hey-api/client-fetch", "@hey-api/typescript", "@hey-api/sdk"],
+	});
+	await writeFile(
+		resolve(temporaryRoot, "auth-consumer.ts"),
+		'import { loginPlatformEmployeeV1, logoutPlatformEmployeeV1 } from "./auth-generated/sdk.gen.js";\nexport const login = loginPlatformEmployeeV1;\nexport const logout = logoutPlatformEmployeeV1;\n',
+		"utf8",
+	);
 	await writeFile(
 		resolve(temporaryRoot, "tsconfig.json"),
 		`${JSON.stringify(
@@ -47,7 +60,12 @@ try {
 					strict: true,
 					target: "ESNext",
 				},
-				include: ["consumer.ts", "generated/**/*.ts"],
+				include: [
+					"consumer.ts",
+					"generated/**/*.ts",
+					"auth-consumer.ts",
+					"auth-generated/**/*.ts",
+				],
 			},
 			null,
 			2,
