@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { HttpProtocolError } from "./common.js";
 import { registerManagementRoutes } from "./management-routes.js";
+import { registerV2CompatibilityRoutes } from "./v2-compat.js";
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -255,6 +256,7 @@ function createApp(
 		readApplicationProjection,
 		readAgentProjection,
 	});
+	registerV2CompatibilityRoutes(app);
 	return {
 		app,
 		submit,
@@ -276,6 +278,20 @@ function createApp(
 		recordAccessRejection,
 	};
 }
+
+it("serves the generated V2 agent list through the platform app", async () => {
+	const { app } = createApp();
+	const response = await app.request("http://localhost/api/v2/agents");
+	expect(response.status).toBe(200);
+	const body = (await response.json()) as {
+		items: Array<{
+			schemaVersion: number;
+			configuration: Record<string, unknown>;
+		}>;
+	};
+	expect(body.items[0]?.schemaVersion).toBe(2);
+	expect(body.items[0]?.configuration).not.toHaveProperty("actions");
+});
 
 const headers = {
 	"content-type": "application/json",

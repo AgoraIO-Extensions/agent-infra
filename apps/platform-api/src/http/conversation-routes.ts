@@ -1,13 +1,16 @@
 import {
 	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
+	ConversationDetailProjectionV2Schema,
 	ConversationPageV1Schema,
 	ConversationProjectionV1Schema,
 	ConversationSseMessageV1Schema,
 	ConversationSseMessageV2Schema,
 	CreateConversationRequestV1Schema,
 	ExecutionDetailProjectionV1Schema,
+	ExecutionDetailProjectionV2Schema,
 	framePilotSseMessageV1,
+	framePilotSseMessageV2,
 	MessageCommandRequestV1Schema,
 	MessageProjectionV1Schema,
 	ModelSelectionUpdateRequestV1Schema,
@@ -480,6 +483,17 @@ async function writeSseMessage(
 	});
 }
 
+async function writeSseMessageV2(
+	stream: { writeSSE(message: { id?: string; data: string }): Promise<void> },
+	message: ReturnType<typeof ConversationSseMessageV2Schema.parse>,
+): Promise<void> {
+	const frame = framePilotSseMessageV2(message);
+	await stream.writeSSE({
+		...(frame.id === undefined ? {} : { id: frame.id }),
+		data: JSON.stringify(frame.data),
+	});
+}
+
 function replaySelector(request: Request, traceId: string) {
 	const search = new URL(request.url).searchParams;
 	if (
@@ -705,6 +719,24 @@ export function registerConversationRoutes(
 				metadata.traceId,
 			);
 			if (!detail) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+			const v2 = context.req.header("x-agent-infra-v2") === "1";
+			if (v2) {
+				return context.json(
+					project(
+						() =>
+							ConversationDetailProjectionV2Schema.parse({
+								schemaVersion: 2,
+								conversation: conversationProjection(
+									detail.conversation,
+									effective,
+								),
+								messages: messageProjections(detail),
+								events: detail.events.map(eventProjection),
+							}),
+						metadata.traceId,
+					),
+				);
+			}
 			return context.json(
 				project(
 					() =>
@@ -923,6 +955,23 @@ export function registerConversationRoutes(
 					metadata.traceId,
 				);
 				if (!result) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+				if (context.req.header("x-agent-infra-v2") === "1") {
+					const projection = project(
+						() => executionProjection(result),
+						metadata.traceId,
+					);
+					return context.json(
+						project(
+							() =>
+								ExecutionDetailProjectionV2Schema.parse({
+									...projection,
+									schemaVersion: 2,
+									events: result.events.map(eventProjection),
+								}),
+							metadata.traceId,
+						),
+					);
+				}
 				return context.json(
 					project(() => executionProjection(result), metadata.traceId),
 				);
@@ -962,6 +1011,7 @@ export function registerConversationRoutes(
 				}
 			}
 			const request = context.req.raw;
+			const v2 = context.req.header("x-agent-infra-v2") === "1";
 			return streamSSE(
 				context,
 				async (stream) => {
@@ -1010,6 +1060,11 @@ export function registerConversationRoutes(
 								return;
 							}
 							const message = eventProjection(persisted);
+							if (v2) {
+								await writeSseMessageV2(stream, message);
+								cursor = persisted.conversationCursor;
+								continue;
+							}
 							// V1 clients retain their original wire types; V2 facts stay durable.
 							if (message.schemaVersion === 1)
 								await writeSseMessage(stream, message);

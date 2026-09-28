@@ -1,0 +1,100 @@
+import { Hono } from "hono";
+import { describe, expect, it } from "vitest";
+import { registerV2CompatibilityRoutes } from "./v2-compat.js";
+
+describe("V2 compatibility routes", () => {
+	it("projects agent pages as schema version 2 without platform actions", async () => {
+		const app = new Hono();
+		app.get("/api/v1/agents", (context) =>
+			context.json({
+				items: [
+					{
+						schemaVersion: 1,
+						agentId: "agent-1",
+						configuration: { actions: [], owners: [] },
+					},
+				],
+				nextCursor: null,
+			}),
+		);
+		registerV2CompatibilityRoutes(app);
+
+		const response = await app.request("http://localhost/api/v2/agents");
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			items: [
+				{
+					schemaVersion: 2,
+					agentId: "agent-1",
+					configuration: { owners: [] },
+				},
+			],
+			nextCursor: null,
+		});
+	});
+
+	it("rewrites V2 application input to the V1 foundation contract", async () => {
+		const app = new Hono();
+		app.post("/api/v1/agent-applications", async (context) => {
+			const body = (await context.req.json()) as Record<string, unknown>;
+			return context.json({
+				schemaVersion: 1,
+				applicationId: "application-1",
+				agentId: null,
+				name: body.name,
+				description: "description",
+				source: { kind: "standard", templateId: "template-1" },
+				status: "pending_approval",
+				resourceProfile: {
+					profileId: "profile-1",
+					displayName: "profile",
+					estimatedResources: {
+						cpuMillicores: 1,
+						memoryMiB: 1,
+						storageGiB: 1,
+					},
+				},
+				configuration: { owners: [], actions: [] },
+				submittedAt: "2026-01-01T00:00:00.000Z",
+				decision: null,
+			});
+		});
+		registerV2CompatibilityRoutes(app);
+
+		const response = await app.request(
+			new Request("http://localhost/api/v2/agent-applications", {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"idempotency-key": "idem-1",
+				},
+				body: JSON.stringify({
+					schemaVersion: 2,
+					name: "new agent",
+					description: "description",
+					source: { kind: "standard", templateId: "template-1" },
+					coOwnerIds: [],
+					availability: [],
+					modelConfiguration: undefined,
+					environment: [],
+					secrets: [],
+				}),
+			}),
+		);
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as Record<string, unknown>;
+		expect(body.schemaVersion).toBe(2);
+		expect(body.configuration).not.toHaveProperty("actions");
+	});
+
+	it("rejects unsupported agent list scopes", async () => {
+		const app = new Hono();
+		app.get("/api/v1/agents", () => new Response("unexpected"));
+		registerV2CompatibilityRoutes(app);
+
+		const response = await app.request(
+			"http://localhost/api/v2/agents?scope=visible",
+		);
+		expect(response.status).toBe(400);
+	});
+});

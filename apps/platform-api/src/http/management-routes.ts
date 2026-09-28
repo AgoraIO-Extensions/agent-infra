@@ -1437,6 +1437,8 @@ export function registerManagementRoutes(
 						metadata.traceId,
 					);
 			const queryPage = pageInput(context.req.raw, metadata.traceId);
+			const ownerOnly =
+				context.req.header("x-agent-infra-v2-scope") === "owner";
 			const scope = api
 				? ({
 						kind: "principal" as const,
@@ -1455,7 +1457,9 @@ export function registerManagementRoutes(
 							),
 						),
 					} satisfies AgentManagementAgentScopeV1)
-				: userScope(identity);
+				: ownerOnly
+					? ownerScope(identity)
+					: userScope(identity);
 			const page = await queryOrUnavailable(
 				() => dependencies.query.listAgents(scope, queryPage),
 				metadata.traceId,

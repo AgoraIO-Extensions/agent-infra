@@ -28,6 +28,7 @@ import {
 	registerTaskRoutes,
 	type TaskRoutesDependencies,
 } from "./http/task-routes.js";
+import { registerV2CompatibilityRoutes } from "./http/v2-compat.js";
 
 export const platformApiService = "platform-api";
 
@@ -86,5 +87,6 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	registerSessionAuditRoutes(app, dependencies.sessionAudit);
 	if (dependencies.tasks) registerTaskRoutes(app, dependencies.tasks);
 	if (dependencies.files) registerFileRoutesV1(app, dependencies.files);
+	registerV2CompatibilityRoutes(app);
 	return app;
 }

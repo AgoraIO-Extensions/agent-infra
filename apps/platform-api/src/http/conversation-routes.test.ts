@@ -1,7 +1,9 @@
 import {
 	ConversationDetailProjectionV1Schema,
+	ConversationDetailProjectionV2Schema,
 	ConversationSseMessageV1Schema,
 	ExecutionDetailProjectionV1Schema,
+	ExecutionDetailProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { Hono } from "hono";
@@ -11,6 +13,7 @@ import {
 	type ConversationRoutesDependencies,
 	registerConversationRoutes,
 } from "./conversation-routes.js";
+import { registerV2CompatibilityRoutes } from "./v2-compat.js";
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -199,6 +202,7 @@ function dependencies(
 function testApp(input = dependencies()) {
 	const app = new Hono();
 	registerConversationRoutes(app, input);
+	registerV2CompatibilityRoutes(app);
 	return { app, dependencies: input };
 }
 
@@ -208,6 +212,24 @@ const commandHeaders = {
 };
 
 describe("Conversation HTTP routes", () => {
+	it("serves V2 detail and execution projections with durable events", async () => {
+		const { app } = testApp();
+		const detail = await app.request("/api/v2/conversations/conversation-1");
+		const execution = await app.request(
+			"/api/v2/conversations/conversation-1/executions/execution-1",
+		);
+		expect(detail.status).toBe(200);
+		expect(execution.status).toBe(200);
+		const detailBody = ConversationDetailProjectionV2Schema.parse(
+			await detail.json(),
+		);
+		const executionBody = ExecutionDetailProjectionV2Schema.parse(
+			await execution.json(),
+		);
+		expect(detailBody.events).toHaveLength(1);
+		expect(executionBody.events).toHaveLength(1);
+	});
+
 	it("maps generated command requests to the Core seam without caller identity", async () => {
 		const { app, dependencies: input } = testApp();
 		const create = await app.request("/api/v1/agents/agent-1/conversations", {
