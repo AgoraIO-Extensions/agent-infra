@@ -12,6 +12,8 @@ const fake = vi.hoisted(() => ({
 		| undefined,
 	traceExports: 0,
 	metricExports: 0,
+	throwTrace: false,
+	throwMetric: false,
 	resolveTrace: undefined as (() => void) | undefined,
 	rejectTrace: undefined as ((error: Error) => void) | undefined,
 	resolveMetric: undefined as (() => void) | undefined,
@@ -23,6 +25,7 @@ vi.mock("@opentelemetry/exporter-trace-otlp-proto", () => ({
 			fake.traceExporter = this;
 		}
 		export(_data: unknown, done: (result: { code: number }) => void) {
+			if (fake.throwTrace) throw new Error("PRIVATE_SENTINEL");
 			fake.traceExports++;
 			done({ code: 0 });
 		}
@@ -35,6 +38,7 @@ vi.mock("@opentelemetry/exporter-metrics-otlp-proto", () => ({
 			fake.metricExporter = this;
 		}
 		export(_data: unknown, done: (result: { code: number }) => void) {
+			if (fake.throwMetric) throw new Error("PRIVATE_SENTINEL");
 			fake.metricExports++;
 			done({ code: 0 });
 		}
@@ -76,7 +80,34 @@ vi.mock("@opentelemetry/sdk-metrics", () => ({
 afterEach(() => {
 	fake.resolveTrace?.();
 	fake.resolveMetric?.();
+	fake.throwTrace = false;
+	fake.throwMetric = false;
 	vi.useRealTimers();
+});
+
+it("contains synchronous trace and metric exporter failures", () => {
+	const telemetry = startObservability({
+		service: "platform-api",
+		otlpEndpoint: "http://127.0.0.1:4318/",
+		output: new Writable({
+			write(_chunk, _encoding, done) {
+				done();
+			},
+		}),
+	});
+	fake.throwTrace = true;
+	fake.throwMetric = true;
+	let traceResult: { code: number } | undefined;
+	let metricResult: { code: number } | undefined;
+	fake.traceExporter?.export([], (result) => {
+		traceResult = result;
+	});
+	fake.metricExporter?.export([], (result) => {
+		metricResult = result;
+	});
+	expect(traceResult?.code).toBe(ExportResultCode.FAILED);
+	expect(metricResult?.code).toBe(ExportResultCode.FAILED);
+	expect(telemetry.status()).toMatchObject({ exportFailures: 2 });
 });
 
 it("keeps timed-out shutdown visible and blocks later exports", async () => {

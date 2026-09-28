@@ -224,10 +224,15 @@ export function startObservability(options: ObservabilityOptions) {
 					callback({ code: ExportResultCode.FAILED });
 					return;
 				}
-				return super.export(spans, (result) => {
-					noteExport(result.code);
-					callback(result);
-				});
+				try {
+					return super.export(spans, (result) => {
+						noteExport(result.code);
+						callback(result);
+					});
+				} catch {
+					noteExport(ExportResultCode.FAILED);
+					callback({ code: ExportResultCode.FAILED });
+				}
 			}
 		}
 		class MetricExporter extends OTLPMetricExporter {
@@ -239,10 +244,15 @@ export function startObservability(options: ObservabilityOptions) {
 					callback({ code: ExportResultCode.FAILED });
 					return;
 				}
-				return super.export(data, (result) => {
-					noteExport(result.code);
-					callback(result);
-				});
+				try {
+					return super.export(data, (result) => {
+						noteExport(result.code);
+						callback(result);
+					});
+				} catch {
+					noteExport(ExportResultCode.FAILED);
+					callback({ code: ExportResultCode.FAILED });
+				}
 			}
 		}
 		const traceExporter = new TraceExporter({
