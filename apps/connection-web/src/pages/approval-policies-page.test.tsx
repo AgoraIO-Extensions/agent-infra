@@ -59,10 +59,39 @@ const api = vi.hoisted(() => ({
 			providers: [],
 		}),
 	),
+	getApprovalCapabilityProfile: vi.fn(async (id: string) => ({
+		profile: {
+			id,
+			providerReleaseId: "jira-release-1",
+			name: "Jira Read",
+			effectCeiling: "READ" as const,
+			revision: "1",
+			status: "PUBLISHED",
+			actions: [
+				{
+					id: "jira.read@v1",
+					name: "jira.read",
+					description: "Read",
+					effect: "READ" as const,
+					status: "PUBLISHED",
+				},
+			],
+		},
+	})),
 	createApprovalCapabilityProfile: vi.fn(async (_body: unknown) => ({
 		capabilityProfileId: "profile-created",
 	})),
-	publishApprovalCapabilityProfile: vi.fn(async () => undefined),
+	updateApprovalCapabilityProfileDraft: vi.fn(async (_input: unknown) => ({
+		capabilityProfileId: "draft-1",
+	})),
+	publishApprovalCapabilityProfile: vi.fn(async (_id: string) => undefined),
+	createApprovalDisclaimer: vi.fn(async (_body: unknown) => ({
+		disclaimerVersionId: "disclaimer-created",
+	})),
+	updateApprovalDisclaimerDraft: vi.fn(async (_input: unknown) => ({
+		disclaimerVersionId: "disclaimer-1",
+	})),
+	publishApprovalDisclaimer: vi.fn(async (_id: string) => undefined),
 	listApprovalRoutingBlocked: vi.fn(async () => ({ requests: [] })),
 	listOutboxFailures: vi.fn(
 		async (): Promise<OutboxFailuresResponse> => ({ events: [] }),
@@ -131,7 +160,7 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-it("applies whole-provider presets, retains manual choices across search and publishes exact actions", async () => {
+it("creates an exact capability draft from the independent catalog without publishing it", async () => {
 	const actions = [
 		{
 			id: "read-user",
@@ -178,7 +207,8 @@ it("applies whole-provider presets, retains manual choices across search and pub
 			<ApprovalPoliciesPage />
 		</QueryClientProvider>,
 	);
-	fireEvent.click(screen.getByRole("tab", { name: "能力与条款" }));
+	fireEvent.click(screen.getByRole("tab", { name: "目录管理" }));
+	fireEvent.click(screen.getByRole("button", { name: "新建能力包" }));
 	expect(
 		(screen.getByRole("button", { name: "全选" }) as HTMLButtonElement)
 			.disabled,
@@ -238,7 +268,7 @@ it("applies whole-provider presets, retains manual choices across search and pub
 	fireEvent.change(screen.getByRole("textbox", { name: "名称" }), {
 		target: { value: "GitHub Mixed" },
 	});
-	fireEvent.click(screen.getByRole("button", { name: "发布能力包" }));
+	fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
 	await waitFor(() =>
 		expect(api.createApprovalCapabilityProfile).toHaveBeenCalledOnce(),
 	);
@@ -247,6 +277,429 @@ it("applies whole-provider presets, retains manual choices across search and pub
 		name: "GitHub Mixed",
 		actionVersionIds: ["write-repo", "write-branch", "read-user"],
 	});
+	expect(api.publishApprovalCapabilityProfile).not.toHaveBeenCalled();
+});
+
+it("shows exact published actions and required disclaimer content in a policy", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		profiles: [
+			{
+				id: "profile-1",
+				providerReleaseId: "github-release",
+				name: "GitHub read",
+				effectCeiling: "READ",
+				revision: "1",
+				status: "PUBLISHED",
+			},
+		],
+		policies: [],
+		providers: [
+			{ provider: "github", providerReleaseId: "github-release", actions: [] },
+		],
+		disclaimers: [
+			{
+				id: "global-1",
+				kind: "GLOBAL",
+				revision: "1",
+				providerId: null,
+				locale: "zh-CN",
+				content: "正式全局条款",
+				materialChange: false,
+				status: "PUBLISHED",
+			},
+			{
+				id: "github-1",
+				kind: "PROVIDER",
+				revision: "1",
+				providerId: "github",
+				locale: "zh-CN",
+				content: "GitHub 附加正文",
+				materialChange: false,
+				status: "PUBLISHED",
+			},
+		],
+	});
+	api.getApprovalCapabilityProfile.mockResolvedValueOnce({
+		profile: {
+			id: "profile-1",
+			providerReleaseId: "github-release",
+			name: "GitHub read",
+			effectCeiling: "READ",
+			revision: "1",
+			status: "PUBLISHED",
+			actions: [
+				{
+					id: "read-1",
+					name: "github.get_issue",
+					description: "Read an issue",
+					effect: "READ",
+					status: "PUBLISHED",
+				},
+			],
+		},
+	});
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	fireEvent.click(screen.getByRole("tab", { name: "能力与条款" }));
+	await screen.findByRole("option", { name: /github · github-release/ });
+	fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+		target: { value: "github-release" },
+	});
+	fireEvent.change(screen.getByRole("combobox", { name: "能力包" }), {
+		target: { value: "profile-1" },
+	});
+	expect(await screen.findByText("Read an issue")).toBeTruthy();
+	expect(screen.getByText("github.get_issue")).toBeTruthy();
+	const global = screen.getByRole("checkbox", {
+		name: /全局基础条款/,
+	}) as HTMLInputElement;
+	expect(global.checked).toBe(true);
+	expect(global.disabled).toBe(true);
+	expect(screen.getByText("正式全局条款")).toBeTruthy();
+	fireEvent.click(screen.getByRole("checkbox", { name: /github 附加条款/ }));
+	expect(screen.getByText("GitHub 附加正文")).toBeTruthy();
+	fireEvent.click(screen.getByRole("button", { name: "在目录中复制或管理" }));
+	expect(
+		screen
+			.getByRole("region", { name: "目录管理" })
+			.querySelector(".approval-directory-list > button.active")?.textContent,
+	).toContain("GitHub read");
+});
+
+it("does not invent a global disclaimer for an existing policy", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		profiles: [
+			{
+				id: "profile-1",
+				providerReleaseId: "github-release",
+				name: "GitHub read",
+				effectCeiling: "READ",
+				revision: "2",
+				status: "PUBLISHED",
+			},
+		],
+		policies: [
+			{
+				id: "policy-1",
+				providerReleaseId: "github-release",
+				capabilityProfileId: "profile-1",
+				materialChange: false,
+				status: "PUBLISHED",
+				revision: "2",
+				disclaimerVersionIds: [],
+			},
+		],
+		providers: [
+			{ provider: "github", providerReleaseId: "github-release", actions: [] },
+		],
+		disclaimers: [
+			{
+				id: "global-1",
+				kind: "GLOBAL",
+				providerId: null,
+				locale: "zh-CN",
+				content: "未绑定条款",
+				materialChange: false,
+				revision: "1",
+				status: "PUBLISHED",
+			},
+		],
+	});
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	fireEvent.click(screen.getByRole("tab", { name: "能力与条款" }));
+	expect(await screen.findByText("当前策略未绑定全局基础条款。")).toBeTruthy();
+	expect(screen.queryByText("未绑定条款")).toBeNull();
+});
+
+it("copies a published profile into a draft and publishes only on an explicit command", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		profiles: [
+			{
+				id: "profile-1",
+				providerReleaseId: "github-release",
+				name: "GitHub read",
+				effectCeiling: "READ",
+				revision: "1",
+				status: "PUBLISHED",
+			},
+		],
+		policies: [],
+		disclaimers: [],
+		providers: [
+			{
+				provider: "github",
+				providerReleaseId: "github-release",
+				actions: [
+					{ id: "read-1", name: "github.get_issue", effect: "READ" },
+					{ id: "write-1", name: "github.create_issue", effect: "WRITE" },
+				],
+			},
+		],
+	});
+	api.getApprovalCapabilityProfile.mockResolvedValueOnce({
+		profile: {
+			id: "profile-1",
+			providerReleaseId: "github-release",
+			name: "GitHub read",
+			effectCeiling: "READ",
+			revision: "1",
+			status: "PUBLISHED",
+			actions: [
+				{
+					id: "read-1",
+					name: "github.get_issue",
+					description: "Read an issue",
+					effect: "READ",
+					status: "PUBLISHED",
+				},
+			],
+		},
+	});
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	fireEvent.click(screen.getByRole("tab", { name: "目录管理" }));
+	await screen.findByText("Read an issue");
+	fireEvent.click(screen.getByRole("button", { name: "复制为新能力包" }));
+	expect(
+		(screen.getByRole("textbox", { name: "名称" }) as HTMLInputElement).value,
+	).toBe("GitHub read 新版");
+	fireEvent.change(screen.getByRole("textbox", { name: "名称" }), {
+		target: { value: "GitHub read" },
+	});
+	expect(screen.getByRole("alert").textContent).toContain(
+		"同名发布会替换现有能力包",
+	);
+	expect(
+		(screen.getByRole("button", { name: "保存草稿" }) as HTMLButtonElement)
+			.disabled,
+	).toBe(true);
+	fireEvent.change(screen.getByRole("textbox", { name: "名称" }), {
+		target: { value: "GitHub read 新版" },
+	});
+	expect(
+		(
+			screen.getByRole("checkbox", {
+				name: /github.get_issue/,
+			}) as HTMLInputElement
+		).checked,
+	).toBe(true);
+	fireEvent.click(
+		screen.getByRole("checkbox", { name: /github.create_issue/ }),
+	);
+	fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+	await waitFor(() =>
+		expect(api.createApprovalCapabilityProfile).toHaveBeenCalledOnce(),
+	);
+	expect(api.createApprovalCapabilityProfile.mock.calls[0]?.[0]).toEqual({
+		providerReleaseId: "github-release",
+		name: "GitHub read 新版",
+		actionVersionIds: ["read-1", "write-1"],
+	});
+	expect(api.publishApprovalCapabilityProfile).not.toHaveBeenCalled();
+});
+
+it("publishes an existing capability draft from the directory", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		profiles: [
+			{
+				id: "draft-1",
+				providerReleaseId: "github-release",
+				name: "GitHub draft",
+				effectCeiling: "READ",
+				revision: "1",
+				status: "DRAFT",
+			},
+		],
+		policies: [],
+		disclaimers: [],
+		providers: [
+			{ provider: "github", providerReleaseId: "github-release", actions: [] },
+		],
+	});
+	api.getApprovalCapabilityProfile.mockResolvedValueOnce({
+		profile: {
+			id: "draft-1",
+			providerReleaseId: "github-release",
+			name: "GitHub draft",
+			effectCeiling: "READ",
+			revision: "1",
+			status: "DRAFT",
+			actions: [
+				{
+					id: "read-1",
+					name: "github.get_issue",
+					description: "Read an issue",
+					effect: "READ",
+					status: "PUBLISHED",
+				},
+			],
+		},
+	});
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	fireEvent.click(screen.getByRole("tab", { name: "目录管理" }));
+	await screen.findByText("Read an issue");
+	fireEvent.click(screen.getByRole("button", { name: "发布能力包" }));
+	await waitFor(() =>
+		expect(api.publishApprovalCapabilityProfile).toHaveBeenCalledOnce(),
+	);
+	expect(api.publishApprovalCapabilityProfile.mock.calls[0]?.[0]).toBe(
+		"draft-1",
+	);
+});
+
+it("updates a capability draft with its current revision", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		profiles: [
+			{
+				id: "draft-1",
+				providerReleaseId: "github-release",
+				name: "GitHub draft",
+				effectCeiling: "READ",
+				revision: "1",
+				status: "DRAFT",
+			},
+		],
+		policies: [],
+		disclaimers: [],
+		providers: [
+			{
+				provider: "github",
+				providerReleaseId: "github-release",
+				actions: [{ id: "read-1", name: "github.get_issue", effect: "READ" }],
+			},
+		],
+	});
+	api.getApprovalCapabilityProfile.mockResolvedValueOnce({
+		profile: {
+			id: "draft-1",
+			providerReleaseId: "github-release",
+			name: "GitHub draft",
+			effectCeiling: "READ",
+			revision: "1",
+			status: "DRAFT",
+			actions: [
+				{
+					id: "read-1",
+					name: "github.get_issue",
+					description: "Read an issue",
+					effect: "READ",
+					status: "PUBLISHED",
+				},
+			],
+		},
+	});
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	fireEvent.click(screen.getByRole("tab", { name: "目录管理" }));
+	await screen.findByText("Read an issue");
+	fireEvent.click(screen.getByRole("button", { name: "修改草稿" }));
+	fireEvent.change(screen.getByRole("textbox", { name: "名称" }), {
+		target: { value: "GitHub draft revised" },
+	});
+	fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+	await waitFor(() =>
+		expect(api.updateApprovalCapabilityProfileDraft).toHaveBeenCalledOnce(),
+	);
+	expect(api.updateApprovalCapabilityProfileDraft.mock.calls[0]?.[0]).toEqual({
+		profileId: "draft-1",
+		revision: "1",
+		body: {
+			name: "GitHub draft revised",
+			providerReleaseId: "github-release",
+			actionVersionIds: ["read-1"],
+		},
+	});
+	expect(api.publishApprovalCapabilityProfile).not.toHaveBeenCalled();
+});
+
+it("updates a disclaimer draft without publishing it", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		profiles: [],
+		policies: [],
+		providers: [
+			{ provider: "github", providerReleaseId: "github-release", actions: [] },
+		],
+		disclaimers: [
+			{
+				id: "disclaimer-1",
+				kind: "PROVIDER",
+				providerId: "github",
+				locale: "zh-CN",
+				content: "原条款",
+				revision: "1",
+				materialChange: false,
+				status: "DRAFT",
+			},
+		],
+	});
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	fireEvent.click(screen.getByRole("tab", { name: "目录管理" }));
+	fireEvent.click(screen.getByRole("tab", { name: "免责声明" }));
+	fireEvent.click(await screen.findByRole("button", { name: "修改草稿" }));
+	fireEvent.change(screen.getByRole("textbox", { name: "条款正文" }), {
+		target: { value: "修订条款" },
+	});
+	fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+	await waitFor(() =>
+		expect(api.updateApprovalDisclaimerDraft).toHaveBeenCalledOnce(),
+	);
+	expect(api.updateApprovalDisclaimerDraft.mock.calls[0]?.[0]).toEqual({
+		disclaimerId: "disclaimer-1",
+		revision: "1",
+		body: {
+			kind: "PROVIDER",
+			providerId: "github",
+			locale: "zh-CN",
+			content: "修订条款",
+			materialChange: false,
+		},
+	});
+	expect(api.publishApprovalDisclaimer).not.toHaveBeenCalled();
 });
 
 it("keeps the action checklist compact despite global input styles", () => {
@@ -289,6 +742,7 @@ it("shows only current-provider disclaimers and clears hidden selections", async
 			{
 				id: "global",
 				kind: "GLOBAL",
+				revision: "1",
 				providerId: null,
 				locale: "zh-CN",
 				content: "基础条款",
@@ -298,6 +752,7 @@ it("shows only current-provider disclaimers and clears hidden selections", async
 			{
 				id: "github",
 				kind: "PROVIDER",
+				revision: "1",
 				providerId: "github",
 				locale: "zh-CN",
 				content: "GitHub 条款",
@@ -307,6 +762,7 @@ it("shows only current-provider disclaimers and clears hidden selections", async
 			{
 				id: "jira",
 				kind: "PROVIDER",
+				revision: "1",
 				providerId: "jira",
 				locale: "zh-CN",
 				content: "Jira 条款",
@@ -326,9 +782,10 @@ it("shows only current-provider disclaimers and clears hidden selections", async
 	);
 	fireEvent.click(screen.getByRole("tab", { name: "能力与条款" }));
 	const global = (await screen.findByRole("checkbox", {
-		name: "全局基础条款 · zh-CN",
+		name: /全局基础条款 · zh-CN/,
 	})) as HTMLInputElement;
-	fireEvent.click(global);
+	expect(global.checked).toBe(true);
+	expect(global.disabled).toBe(true);
 	expect(
 		screen.queryByRole("checkbox", { name: /附加条款 · zh-CN/ }),
 	).toBeNull();
@@ -377,6 +834,7 @@ it("keeps disclaimer and permanent-duration controls compact and clickable", asy
 			{
 				id: "disclaimer-1",
 				kind: "GLOBAL",
+				revision: "1",
 				locale: "zh-CN",
 				content: "测试条款",
 				materialChange: false,
@@ -403,24 +861,27 @@ it("keeps disclaimer and permanent-duration controls compact and clickable", asy
 		);
 		fireEvent.click(screen.getByRole("tab", { name: "能力与条款" }));
 		const disclaimer = (await screen.findByRole("checkbox", {
-			name: "全局基础条款 · zh-CN",
+			name: /全局基础条款 · zh-CN/,
 		})) as HTMLInputElement;
-		const material = screen.getByRole("checkbox", {
-			name: "重大内容变化",
-		}) as HTMLInputElement;
 		const permanent = screen.getByRole("checkbox", {
 			name: "允许永久有效",
 		}) as HTMLInputElement;
-		for (const checkbox of [disclaimer, material, permanent]) {
+		for (const checkbox of [disclaimer, permanent]) {
 			expect(getComputedStyle(checkbox).width).toBe("16px");
 			expect(getComputedStyle(checkbox).minHeight).toBe("16px");
 		}
-		fireEvent.click(screen.getByText("全局基础条款 · zh-CN"));
-		fireEvent.click(screen.getByText("重大内容变化"));
 		fireEvent.click(screen.getByText("允许永久有效"));
 		expect(disclaimer.checked).toBe(true);
-		expect(material.checked).toBe(true);
+		expect(disclaimer.disabled).toBe(true);
 		expect(permanent.checked).toBe(true);
+		fireEvent.click(screen.getByRole("tab", { name: "目录管理" }));
+		fireEvent.click(screen.getByRole("tab", { name: "免责声明" }));
+		fireEvent.click(screen.getByRole("button", { name: "新建免责声明" }));
+		const material = screen.getByRole("checkbox", {
+			name: "重大内容变化",
+		}) as HTMLInputElement;
+		fireEvent.click(material);
+		expect(material.checked).toBe(true);
 	} finally {
 		style.remove();
 	}
@@ -479,6 +940,7 @@ it.each([
 					name: "Jira Read",
 					providerReleaseId: "jira-release-1",
 					effectCeiling: "READ",
+					revision: "1",
 					status: "PUBLISHED",
 				},
 			],
@@ -494,6 +956,7 @@ it.each([
 					revision: "4",
 					status: "DRAFT",
 					materialChange: false,
+					disclaimerVersionIds: [],
 				},
 			],
 		});
@@ -549,7 +1012,18 @@ it.each([
 it("publishes a material policy only with an explicit reapproval deadline", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
 		profiles: [],
-		disclaimers: [],
+		disclaimers: [
+			{
+				id: "global-1",
+				kind: "GLOBAL",
+				providerId: null,
+				locale: "zh-CN",
+				content: "基础条款",
+				materialChange: false,
+				revision: "1",
+				status: "PUBLISHED",
+			},
+		],
 		providers: [],
 		policies: [
 			{
@@ -559,6 +1033,7 @@ it("publishes a material policy only with an explicit reapproval deadline", asyn
 				materialChange: false,
 				status: "DRAFT",
 				revision: "1",
+				disclaimerVersionIds: ["global-1"],
 			},
 		],
 	});
@@ -590,6 +1065,41 @@ it("publishes a material policy only with an explicit reapproval deadline", asyn
 	});
 });
 
+it("keeps a draft without a global disclaimer unpublished", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		profiles: [],
+		disclaimers: [],
+		providers: [],
+		policies: [
+			{
+				id: "policy-1",
+				providerReleaseId: "jira-release-1",
+				capabilityProfileId: "profile-1",
+				materialChange: false,
+				status: "DRAFT",
+				revision: "1",
+				disclaimerVersionIds: [],
+			},
+		],
+	});
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	expect(
+		(
+			(await screen.findByRole("button", {
+				name: "发布策略",
+			})) as HTMLButtonElement
+		).disabled,
+	).toBe(true);
+});
+
 it("revokes the current policy with its revision and reason", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
 		profiles: [],
@@ -603,6 +1113,7 @@ it("revokes the current policy with its revision and reason", async () => {
 				materialChange: false,
 				status: "PUBLISHED",
 				revision: "7",
+				disclaimerVersionIds: [],
 			},
 		],
 	});
@@ -749,6 +1260,7 @@ it("publishes a material disclaimer reapproval campaign with a chosen deadline",
 				providerReleaseId: "jira-release-1",
 				name: "研发读写",
 				effectCeiling: "WRITE",
+				revision: "1",
 				status: "PUBLISHED",
 			},
 		],
@@ -760,12 +1272,14 @@ it("publishes a material disclaimer reapproval campaign with a chosen deadline",
 				materialChange: false,
 				status: "PUBLISHED",
 				revision: "2",
+				disclaimerVersionIds: [],
 			},
 		],
 		disclaimers: [
 			{
 				id: "disclaimer-material-1",
 				kind: "GLOBAL",
+				revision: "1",
 				locale: "zh-CN",
 				content: "正式条款",
 				status: "PUBLISHED",

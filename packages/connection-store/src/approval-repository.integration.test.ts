@@ -536,6 +536,18 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					name: "Approval read",
 					providerReleaseId: releaseId,
 				});
+				expect(await repository.getCapabilityProfile(profileId)).toMatchObject({
+					id: profileId,
+					status: "DRAFT",
+					actions: [
+						{
+							id: actionId,
+							name: "approval-provider.read",
+							effect: "READ",
+							status: "PUBLISHED",
+						},
+					],
+				});
 				await sql`UPDATE connection_principal_roles SET status = 'REVOKED', revoked_at = now() WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
 				await expect(
 					repository.publishCapabilityProfile({
@@ -552,6 +564,63 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					actorPrincipalId: adminId,
 					capabilityProfileId: profileId,
 				});
+				expect(await repository.getCapabilityProfile(profileId)).toMatchObject({
+					status: "PUBLISHED",
+					actions: [
+						{
+							id: actionId,
+							description: "Approval integration read",
+							effect: "READ",
+						},
+					],
+				});
+				const editableProfileId = `approval-edit-profile-${suffix}`;
+				await repository.createCapabilityProfileDraft({
+					id: editableProfileId,
+					providerReleaseId: releaseId,
+					name: "Editable profile",
+					actionVersionIds: [actionId],
+				});
+				await repository.updateCapabilityProfileDraft({
+					id: editableProfileId,
+					providerReleaseId: releaseId,
+					name: "Edited profile",
+					actionVersionIds: [actionId, writeActionId],
+					expectedRevision: "1",
+					actorPrincipalId: adminId,
+				});
+				expect(
+					await repository.getCapabilityProfile(editableProfileId),
+				).toMatchObject({
+					name: "Edited profile",
+					revision: "2",
+					status: "DRAFT",
+					actions: [{ id: actionId }, { id: writeActionId }],
+				});
+				await expect(
+					repository.updateCapabilityProfileDraft({
+						id: editableProfileId,
+						providerReleaseId: releaseId,
+						name: "Stale update",
+						actionVersionIds: [actionId],
+						expectedRevision: "1",
+						actorPrincipalId: adminId,
+					}),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				await repository.publishCapabilityProfile({
+					actorPrincipalId: adminId,
+					capabilityProfileId: editableProfileId,
+				});
+				await expect(
+					repository.updateCapabilityProfileDraft({
+						id: editableProfileId,
+						providerReleaseId: releaseId,
+						name: "Published mutation",
+						actionVersionIds: [actionId],
+						expectedRevision: "3",
+						actorPrincipalId: adminId,
+					}),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
 				const disclaimerDigest = createHash("sha256")
 					.update("Approval integration disclaimer", "utf8")
 					.digest("hex");
@@ -579,6 +648,69 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					actorPrincipalId: adminId,
 					disclaimerVersionId: disclaimerId,
 				});
+				const editableDisclaimerId = `approval-edit-disclaimer-${suffix}`;
+				await repository.createDisclaimerDraft({
+					id: editableDisclaimerId,
+					kind: "PROVIDER",
+					providerId: `approval-provider-${suffix}`,
+					locale: "zh-CN",
+					content: "Original wording",
+					materialChange: false,
+					ownerMetadata: { owner: "integration" },
+				});
+				await repository.updateDisclaimerDraft({
+					id: editableDisclaimerId,
+					kind: "PROVIDER",
+					providerId: `approval-provider-${suffix}`,
+					locale: "zh-CN",
+					content: "Updated wording",
+					materialChange: false,
+					actorPrincipalId: adminId,
+					expectedRevision: "1",
+				});
+				expect(
+					(await repository.listCatalog()).disclaimers.find(
+						(item) => item.id === editableDisclaimerId,
+					),
+				).toMatchObject({
+					content: "Updated wording",
+					revision: "2",
+					status: "DRAFT",
+				});
+				const [updatedDisclaimer] = await sql<{ content_sha256: string }[]>`
+					SELECT content_sha256 FROM connection_disclaimer_versions WHERE id = ${editableDisclaimerId}
+				`;
+				expect(updatedDisclaimer?.content_sha256).toBe(
+					createHash("sha256").update("Updated wording", "utf8").digest("hex"),
+				);
+				await expect(
+					repository.updateDisclaimerDraft({
+						id: editableDisclaimerId,
+						kind: "PROVIDER",
+						providerId: `approval-provider-${suffix}`,
+						locale: "zh-CN",
+						content: "Stale wording",
+						materialChange: false,
+						actorPrincipalId: adminId,
+						expectedRevision: "1",
+					}),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				await repository.publishDisclaimer({
+					actorPrincipalId: adminId,
+					disclaimerVersionId: editableDisclaimerId,
+				});
+				await expect(
+					repository.updateDisclaimerDraft({
+						id: editableDisclaimerId,
+						kind: "PROVIDER",
+						providerId: `approval-provider-${suffix}`,
+						locale: "zh-CN",
+						content: "Published mutation",
+						materialChange: false,
+						actorPrincipalId: adminId,
+						expectedRevision: "3",
+					}),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
 				for (const missing of [
 					"disclaimer",
 					"approvers",
@@ -858,6 +990,11 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						},
 					],
 				});
+				expect(
+					(await repository.listCatalog()).policies.find(
+						(item) => item.id === policyId,
+					)?.disclaimerVersionIds,
+				).toEqual([disclaimerId]);
 				await sql`UPDATE connection_principal_roles SET status = 'REVOKED', revoked_at = now(), revision = revision + 1 WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
 				await expect(sql`
 					INSERT INTO connection_access_policy_durations (id, policy_version_id, duration_kind, duration_days)

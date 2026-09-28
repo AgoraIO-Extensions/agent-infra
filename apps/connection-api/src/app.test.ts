@@ -1093,6 +1093,37 @@ describe("Connection API", () => {
 			{ headers },
 		);
 		expect(readDraft.status).toBe(404);
+		const profileDetail = await app.request(
+			"/api/v1/connection/admin/capability-profiles/profile-1",
+			{ headers },
+		);
+		expect(profileDetail.status).toBe(404);
+		const updateProfile = await app.request(
+			"/api/v1/connection/admin/capability-profiles/profile-1",
+			{
+				method: "PUT",
+				body: "{}",
+				headers: {
+					...headers,
+					"if-match": '"1"',
+					"content-type": "application/json",
+				},
+			},
+		);
+		expect(updateProfile.status).toBe(404);
+		const updateDisclaimer = await app.request(
+			"/api/v1/connection/admin/disclaimers/disclaimer-1",
+			{
+				method: "PUT",
+				body: "{}",
+				headers: {
+					...headers,
+					"if-match": '"1"',
+					"content-type": "application/json",
+				},
+			},
+		);
+		expect(updateDisclaimer.status).toBe(404);
 		const disclaimers = await app.request(
 			"/api/v1/connection/admin/disclaimers",
 			{ headers },
@@ -1170,6 +1201,30 @@ describe("Connection API", () => {
 			management: {
 				approvalCatalog: {
 					listCatalog: async () => ({ disclaimers: [] }),
+					getCapabilityProfile: async (id: string) => ({
+						id,
+						providerReleaseId: "github-release",
+						name: "GitHub read",
+						effectCeiling: "READ",
+						status: "PUBLISHED",
+						actions: [
+							{
+								id: "github.read@v1",
+								name: "github.read",
+								description: "Read",
+								effect: "READ",
+								status: "PUBLISHED",
+							},
+						],
+					}),
+					updateCapabilityProfileDraft: async (input: unknown) => {
+						calls.push({ profileDraft: input });
+						return { capabilityProfileId: "profile-1" };
+					},
+					updateDisclaimerDraft: async (input: unknown) => {
+						calls.push({ disclaimerDraft: input });
+						return { disclaimerVersionId: "disclaimer-1" };
+					},
 					listPolicyApproverPrincipalIds: async () => ["approver-1"],
 					publishPolicy: async (input: unknown) => {
 						calls.push({ publishPolicy: input });
@@ -1316,6 +1371,81 @@ describe("Connection API", () => {
 			},
 		);
 		expect(disclaimers.status).toBe(200);
+		const profileDetail = await app.request(
+			"/api/v1/connection/admin/capability-profiles/profile-1",
+			{ headers: { cookie: "connection_session=test" } },
+		);
+		expect(profileDetail.status).toBe(200);
+		expect(await profileDetail.json()).toMatchObject({
+			profile: {
+				id: "profile-1",
+				actions: [{ id: "github.read@v1", effect: "READ" }],
+			},
+		});
+		const updateHeaders = {
+			"content-type": "application/json",
+			cookie: "connection_session=test",
+			"idempotency-key": "update-catalog-draft-1",
+			origin: "https://connection.example",
+		};
+		const missingRevision = await app.request(
+			"/api/v1/connection/admin/capability-profiles/profile-1",
+			{
+				method: "PUT",
+				headers: updateHeaders,
+				body: JSON.stringify({
+					providerReleaseId: "github-release",
+					name: "GitHub read",
+					actionVersionIds: ["github.read@v1"],
+				}),
+			},
+		);
+		expect(missingRevision.status).toBe(400);
+		const updatedProfile = await app.request(
+			"/api/v1/connection/admin/capability-profiles/profile-1",
+			{
+				method: "PUT",
+				headers: { ...updateHeaders, "if-match": '"1"' },
+				body: JSON.stringify({
+					providerReleaseId: "github-release",
+					name: "GitHub read",
+					actionVersionIds: ["github.read@v1"],
+				}),
+			},
+		);
+		expect(updatedProfile.status).toBe(200);
+		expect(calls.at(-1)).toMatchObject({
+			profileDraft: {
+				id: "profile-1",
+				expectedRevision: "1",
+				actorPrincipalId: "admin-1",
+			},
+		});
+		const updatedDisclaimer = await app.request(
+			"/api/v1/connection/admin/disclaimers/disclaimer-1",
+			{
+				method: "PUT",
+				headers: {
+					...updateHeaders,
+					"if-match": '"1"',
+					"idempotency-key": "update-disclaimer-draft-1",
+				},
+				body: JSON.stringify({
+					kind: "GLOBAL",
+					locale: "zh-CN",
+					content: "Updated",
+					materialChange: false,
+				}),
+			},
+		);
+		expect(updatedDisclaimer.status).toBe(200);
+		expect(calls.at(-1)).toMatchObject({
+			disclaimerDraft: {
+				id: "disclaimer-1",
+				expectedRevision: "1",
+				actorPrincipalId: "admin-1",
+			},
+		});
 		const listed = await app.request(
 			"/api/v1/connection/admin/access-authorizations",
 			{
