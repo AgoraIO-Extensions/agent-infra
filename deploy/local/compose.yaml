@@ -29,7 +29,9 @@ services:
         condition: service_healthy
 
   object-storage:
-    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    image: cgr.dev/chainguard/minio@sha256:4d397a26fe49d7f9ed39b8b566534848936f7efa50ab6328ac97b2a44eeabf4c
     ports: !override
       - "127.0.0.1:${PLATFORM_LOCAL_OBJECT_STORAGE_PORT:-9000}:9000"
       - "127.0.0.1:${PLATFORM_LOCAL_OBJECT_STORAGE_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "MC_HOST_local=\"http://$${MINIO_ROOT_USER}:$${MINIO_ROOT_PASSWORD}@127.0.0.1:9000\" mc ready --quiet local >/dev/null"]
