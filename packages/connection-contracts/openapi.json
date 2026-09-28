@@ -3373,8 +3373,15 @@
 			"ApprovalPolicyCatalog": {
 				"type": "object",
 				"additionalProperties": false,
-				"required": ["profiles", "policies", "disclaimers", "providers"],
+				"required": [
+					"profiles",
+					"policies",
+					"disclaimers",
+					"providers",
+					"approvalDirectoryEnabled"
+				],
 				"properties": {
+					"approvalDirectoryEnabled": { "type": "boolean" },
 					"profiles": {
 						"type": "array",
 						"items": {

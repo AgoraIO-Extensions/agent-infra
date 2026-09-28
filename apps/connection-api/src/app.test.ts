@@ -752,6 +752,11 @@ describe("Connection API", () => {
 					authorizeConnectionAdministration: async () => true,
 				} as unknown as ConnectionApplicationService,
 				approvalCatalog: {
+					listCatalog: async () => ({
+						profiles: [],
+						policies: [],
+						disclaimers: [],
+					}),
 					getPolicyDraft: async () => ({
 						...body,
 						id: "draft-1",
@@ -855,6 +860,14 @@ describe("Connection API", () => {
 			"content-type": "application/json",
 			"idempotency-key": "draft-disabled-directory",
 		};
+		const policyCatalog = await app.request(
+			"/api/v1/connection/admin/access-policies",
+			{ headers },
+		);
+		expect(policyCatalog.status).toBe(200);
+		expect(await policyCatalog.json()).toMatchObject({
+			approvalDirectoryEnabled: false,
+		});
 		const searched = await app.request(
 			"/api/v1/connection/admin/employee-candidates?query=reviewer",
 			{ headers },
@@ -973,6 +986,12 @@ describe("Connection API", () => {
 			},
 		);
 		expect(published.status).toBe(503);
+		expect(await published.json()).toMatchObject({
+			error: {
+				messageKey: "connection.error.approval_directory_unavailable",
+				retryable: false,
+			},
+		});
 	});
 
 	it("preserves retryable directory unavailability in direct and wrapped browser routes", async () => {

@@ -372,6 +372,21 @@ describe("LDAP directory boundary", () => {
 		]);
 	});
 
+	it("rejects absent and ambiguous uid entries without an active-state mapping", async () => {
+		const authenticator = new LdapDirectoryAuthenticator(
+			validOptionsWithoutActiveState,
+		);
+		const identity = { issuer: validOptions.issuer, subject: "alice-id" };
+		ldapOverride.entries = [];
+		await expect(authenticator.isActive(identity)).resolves.toBe(false);
+		ldapOverride.entries = [{ uid: "alice-id" }, { uid: "alice-id" }];
+		await expect(authenticator.isActive(identity)).resolves.toBe(false);
+		expect(ldapSearches.map((search) => search.filter)).toEqual([
+			"(uid=alice-id)",
+			"(uid=alice-id)",
+		]);
+	});
+
 	it("searches a bounded employee projection without filtering active state", async () => {
 		const authenticator = new LdapDirectoryAuthenticator({
 			...validOptions,

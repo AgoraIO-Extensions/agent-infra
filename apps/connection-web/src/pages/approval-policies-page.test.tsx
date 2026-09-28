@@ -53,6 +53,7 @@ const api = vi.hoisted(() => ({
 	})),
 	listApprovalPolicyCatalog: vi.fn(
 		async (): Promise<ApprovalPolicyCatalog> => ({
+			approvalDirectoryEnabled: true,
 			profiles: [],
 			policies: [],
 			disclaimers: [],
@@ -184,6 +185,7 @@ it("creates an exact capability draft from the independent catalog without publi
 		},
 	];
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [],
 		policies: [],
 		disclaimers: [],
@@ -282,6 +284,7 @@ it("creates an exact capability draft from the independent catalog without publi
 
 it("shows exact published actions and required disclaimer content in a policy", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [
 			{
 				id: "profile-1",
@@ -375,6 +378,7 @@ it("shows exact published actions and required disclaimer content in a policy", 
 
 it("does not invent a global disclaimer for an existing policy", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [
 			{
 				id: "profile-1",
@@ -428,6 +432,7 @@ it("does not invent a global disclaimer for an existing policy", async () => {
 
 it("copies a published profile into a draft and publishes only on an explicit command", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [
 			{
 				id: "profile-1",
@@ -522,6 +527,7 @@ it("copies a published profile into a draft and publishes only on an explicit co
 
 it("publishes an existing capability draft from the directory", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [
 			{
 				id: "draft-1",
@@ -579,6 +585,7 @@ it("publishes an existing capability draft from the directory", async () => {
 
 it("updates a capability draft with its current revision", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [
 			{
 				id: "draft-1",
@@ -651,6 +658,7 @@ it("updates a capability draft with its current revision", async () => {
 
 it("updates a disclaimer draft without publishing it", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [],
 		policies: [],
 		providers: [
@@ -732,6 +740,7 @@ it("keeps the action checklist compact despite global input styles", () => {
 
 it("shows only current-provider disclaimers and clears hidden selections", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [],
 		policies: [],
 		providers: [
@@ -827,6 +836,7 @@ it("shows only current-provider disclaimers and clears hidden selections", async
 
 it("keeps disclaimer and permanent-duration controls compact and clickable", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [],
 		policies: [],
 		providers: [],
@@ -934,6 +944,7 @@ it.each([
 		loaded.draft.durations = [{ kind: "FINITE", days: 30 }];
 		api.getConnectionAccessPolicyDraft.mockResolvedValueOnce(loaded);
 		api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+			approvalDirectoryEnabled: true,
 			profiles: [
 				{
 					id: "profile-1",
@@ -1009,8 +1020,47 @@ it.each([
 	},
 );
 
+it("keeps draft editing available but blocks publishing before the employee directory is enabled", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: false,
+		profiles: [],
+		disclaimers: [],
+		providers: [],
+		policies: [
+			{
+				id: "policy-1",
+				providerReleaseId: "jira-release-1",
+				capabilityProfileId: "profile-1",
+				materialChange: false,
+				status: "DRAFT",
+				revision: "1",
+				disclaimerVersionIds: [],
+			},
+		],
+	});
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
+	render(
+		<QueryClientProvider client={client}>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	expect(
+		await screen.findByRole("button", { name: "发布策略" }),
+	).toHaveProperty("disabled", true);
+	expect(screen.getByRole("button", { name: "编辑草稿" })).toHaveProperty(
+		"disabled",
+		false,
+	);
+	expect(
+		screen.getByText("员工目录尚未启用，暂不能发布审批策略。"),
+	).toBeTruthy();
+});
+
 it("publishes a material policy only with an explicit reapproval deadline", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [],
 		disclaimers: [
 			{
@@ -1067,6 +1117,7 @@ it("publishes a material policy only with an explicit reapproval deadline", asyn
 
 it("keeps a draft without a global disclaimer unpublished", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [],
 		disclaimers: [],
 		providers: [],
@@ -1102,6 +1153,7 @@ it("keeps a draft without a global disclaimer unpublished", async () => {
 
 it("revokes the current policy with its revision and reason", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [],
 		disclaimers: [],
 		providers: [],
@@ -1254,6 +1306,7 @@ it("requires confirmation and sends the current revision when revoking access", 
 
 it("publishes a material disclaimer reapproval campaign with a chosen deadline", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [
 			{
 				id: "profile-1",

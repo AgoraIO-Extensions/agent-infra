@@ -169,7 +169,7 @@ tag 的 catalog guard 从已提交的 Git 版本读取 migration journal 和 man
 实际执行顺序以 journal 的 `idx` 和 `when` 为准，不按文件名排序，避免已有审计迁移的数据库跳过审批表。
 升级回归必须覆盖仅含审计索引的基线升级至审批版本，并验证重复迁移幂等。
 
-允许先部署管理模块、后配置启用。正式目录与免责声明尚未就绪时，保持
+允许先部署管理模块、后配置启用。员工身份映射未验证或免责声明尚未就绪时，保持
 `CONNECTION_APPROVAL_DIRECTORY_ENABLED=false`，管理员可搜索、选择并保存已完成唯一 LDAP 身份映射的员工候选草稿，
 但不得发布 Policy 或为新连接绕过审批。免责声明通过管理界面补充，目录参数通过部署配置与
 Secret 补充；该阶段不执行 cutoff，也不自动扩张旧连接的账号、scope 或 Grant。迁移评审、
@@ -184,11 +184,13 @@ Secret 补充；该阶段不执行 cutoff，也不自动扩张旧连接的账号
 的记录不参与候选搜索。员工邮箱仅用于精确查找 LDAP 账号，身份关联仍取 LDAP
 issuer + uid；没有对应账号的员工不返回，映射歧义或上游异常时拒绝搜索，不能降级为
 以邮箱或外部 `iamId` 授权。未配置该数据源时保留现有 LDAP 搜索。
-搜索和保存草稿不要求在职属性配置，也不恢复已停用身份；发布与实际审批仍遵循
-[HLD 16.7](HLD-connection-M1.md#167-connection-access-approval) 的严格校验。
-该配置不替代 Identity Owner 对唯一邮箱映射、在职属性与稳定 uid 的确认，也不自动开启
-`CONNECTION_APPROVAL_DIRECTORY_ENABLED`。上线前需验证公司员工列表实际响应、服务密钥权限、
-LDAP 映射与重名、离职和重复邮箱负向场景；不得复用源码中的历史硬编码密钥。
+启用审批目录不要求 `LDAP_ACTIVE_ATTRIBUTE` 与 `LDAP_ACTIVE_VALUE`；两者若配置则须成对提供。
+未配置时发布与实际审批仅按 LDAP issuer + uid 的唯一条目存在性复核，不能据此宣称在职或离职即时停权，
+详见 [HLD 16.7](HLD-connection-M1.md#167-connection-access-approval)。
+员工列表配置不替代唯一邮箱映射与稳定 uid 的生产验证，也不自动开启
+`CONNECTION_APPROVAL_DIRECTORY_ENABLED`。上线前需验证实际目录响应、服务密钥权限、
+LDAP 映射与缺失、重复账号和重复邮箱负向场景；无在职字段时不得将离职但仍保留 LDAP 条目的账号视为已停权。
+不得复用源码中的历史硬编码密钥。
 
 启用 `ENFORCED` 前，Data Owner 必须确认个人 Connection 清单和 baseline 适用性，DBA/SRE 必须完成
 0032 迁移重放及兼容回滚演练，Identity/Security/QA 必须确认正式目录、免责声明和真实 Provider
