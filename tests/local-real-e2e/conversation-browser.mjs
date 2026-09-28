@@ -470,7 +470,13 @@ assert(
 	`Pass the absolute path to a private browser journey config${checkConfig ? " after --check-config" : ""}`,
 );
 await privateFile(configPath);
-const input = configuration(JSON.parse(await readFile(configPath, "utf8")));
+let parsedConfig;
+try {
+	parsedConfig = JSON.parse(await readFile(configPath, "utf8"));
+} catch {
+	assert.fail("Browser journey config must contain valid JSON");
+}
+const input = configuration(parsedConfig);
 await privateFile(input.owner.stateFile);
 await privateFile(input.other.stateFile);
 if (checkConfig) {

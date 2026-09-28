@@ -89,3 +89,22 @@ test("configuration-only smoke does not expose malformed state file contents", a
 		await rm(fixture.directory, { recursive: true, force: true });
 	}
 });
+
+test("configuration-only smoke does not expose malformed config contents", async () => {
+	const fixture = await fixtureDirectory();
+	try {
+		const secret = "prompt-secret-must-not-leak";
+		await writeFile(fixture.config, `not-json ${secret}`, { mode: 0o600 });
+		const result = spawnSync(
+			process.execPath,
+			[script, "--check-config", fixture.config],
+			{ cwd: process.cwd(), encoding: "utf8" },
+		);
+		if (result.error) throw result.error;
+		assert.notEqual(result.status, 0);
+		assert.match(`${result.stderr}${result.stdout}`, /must contain valid JSON/);
+		assert.doesNotMatch(`${result.stderr}${result.stdout}`, new RegExp(secret));
+	} finally {
+		await rm(fixture.directory, { recursive: true, force: true });
+	}
+});
