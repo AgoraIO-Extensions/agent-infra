@@ -195,7 +195,10 @@ it("waits for the durable started receipt before applying a filesystem mutation"
 		startedReceipt.resolve();
 		await execution;
 		expect(await readFile(path, "utf8")).toBe("durable first");
-		expect(phases.map((receipt) => receipt.phase)).toEqual(["started", "completed"]);
+		expect(phases.map((receipt) => receipt.phase)).toEqual([
+			"started",
+			"completed",
+		]);
 	} finally {
 		startedReceipt.resolve();
 		await Promise.allSettled([execution]);
