@@ -212,6 +212,9 @@ function createApp(
 	const resolveAgentQueryGrantType = vi.fn().mockResolvedValue("any");
 	const authorizeCredentialScope = vi.fn().mockResolvedValue(undefined);
 	const recordAccessRejection = vi.fn().mockResolvedValue(undefined);
+	const listUserCredentials = vi.fn();
+	const listApiApplications = vi.fn();
+	const listApplicationCredentials = vi.fn();
 
 	registerManagementRoutes(app, {
 		identity: {
@@ -229,12 +232,12 @@ function createApp(
 					apiIdentity: {
 						authorizeCredentialScope,
 						resolveAgentQueryGrantType,
-						listUserCredentials: vi.fn(),
+						listUserCredentials,
 						issueUserCredential: vi.fn(),
 						revokeUserCredential: vi.fn(),
-						listApplications: vi.fn(),
+						listApplications: listApiApplications,
 						createApplication: vi.fn(),
-						listApplicationCredentials: vi.fn(),
+						listApplicationCredentials,
 						issueApplicationCredential: vi.fn(),
 						revokeApplicationCredential: vi.fn(),
 						grantCredentialDelivery: vi.fn(),
@@ -271,6 +274,9 @@ function createApp(
 		prepareSecretReplacements,
 		allocateApplicationIds,
 		apiIdentity,
+		listUserCredentials,
+		listApiApplications,
+		listApplicationCredentials,
 		resolveAgentQueryGrantType,
 		authorizeCredentialScope,
 		recordAccessRejection,
@@ -296,6 +302,85 @@ const applicationBody = {
 };
 
 describe("management routes", () => {
+	it("pages credential and application lists by stable IDs", async () => {
+		const {
+			app,
+			listUserCredentials,
+			listApiApplications,
+			listApplicationCredentials,
+		} = createApp({ api: true });
+		const credential = {
+			schemaVersion: 1 as const,
+			principal: { kind: "user" as const, id: "user-1" },
+			scopes: ["agent:read" as const],
+			expiresAt: null,
+			revokedAt: null,
+			createdAt: new Date("2026-09-01T00:00:00Z"),
+		};
+		listUserCredentials.mockResolvedValue(
+			["credential-3", "credential-1", "credential-2"].map((credentialId) => ({
+				...credential,
+				credentialId,
+			})),
+		);
+		listApplicationCredentials.mockResolvedValue(
+			["application-credential-3", "application-credential-1"].map(
+				(credentialId) => ({
+					...credential,
+					credentialId,
+					principal: { kind: "application", id: "application-1" },
+				}),
+			),
+		);
+		listApiApplications.mockResolvedValue(
+			["application-3", "application-1", "application-2"].map((id) => ({
+				id,
+				name: id,
+				responsibleUserId: "user-1",
+				status: "active",
+				authorizationRevision: "revision-1",
+			})),
+		);
+		for (const [path, firstId, secondId] of [
+			["/api/v1/api-credentials", "credential-1", "credential-2"],
+			["/api/v1/applications", "application-1", "application-2"],
+			[
+				"/api/v1/applications/application-1/credentials",
+				"application-credential-1",
+				"application-credential-3",
+			],
+		] as const) {
+			const first = await app.request(`${path}?limit=1`);
+			expect(first.status).toBe(200);
+			const firstPage = (await first.json()) as {
+				items: Array<{ credentialId?: string; applicationId?: string }>;
+				nextCursor: string | null;
+			};
+			expect(
+				firstPage.items.map((item) => item.credentialId ?? item.applicationId),
+			).toEqual([firstId]);
+			expect(firstPage.nextCursor).toBe(firstId);
+			const second = await app.request(`${path}?limit=1&cursor=${firstId}`);
+			expect(second.status).toBe(200);
+			const secondPage = (await second.json()) as typeof firstPage;
+			expect(
+				secondPage.items.map((item) => item.credentialId ?? item.applicationId),
+			).toEqual([secondId]);
+			if (path.includes("application-1/credentials")) {
+				expect(secondPage.nextCursor).toBeNull();
+			} else {
+				expect(secondPage.nextCursor).toBe(secondId);
+				const last = await app.request(`${path}?limit=1&cursor=${secondId}`);
+				const lastPage = (await last.json()) as typeof firstPage;
+				expect(lastPage.items).toHaveLength(1);
+				expect(lastPage.nextCursor).toBeNull();
+			}
+		}
+		expect((await app.request("/api/v1/api-credentials?limit=0")).status).toBe(
+			400,
+		);
+	});
+
 	it("submits a validated application once and returns an authoritative projection", async () => {
 		const {
 			app,

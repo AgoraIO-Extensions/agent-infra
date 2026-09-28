@@ -1077,6 +1077,10 @@ describe("PostgreSQL Agent-management Adapter", () => {
 		});
 		await seedStates([state]);
 		await adminClient`
+			update platform.agents set authorization_revision = 'revision-1'
+			where id = ${state.agentId}
+		`;
+		await adminClient`
 			insert into platform.agent_principal_grants
 				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
 			values
@@ -1093,6 +1097,23 @@ describe("PostgreSQL Agent-management Adapter", () => {
 		expect((await query.listAgents(scope, { limit: 10 })).items).toHaveLength(
 			1,
 		);
+		await adminClient`
+			update platform.agents set authorization_revision = 'revision-2'
+			where id = ${state.agentId}
+		`;
+		expect(await query.getAgent(scope, state.agentId)).toBeUndefined();
+		await adminClient`
+			update platform.agents set authorization_revision = null
+			where id = ${state.agentId}
+		`;
+		expect((await query.listAgents(scope, { limit: 10 })).items).toEqual([]);
+		expect(
+			await query.getAgent({ kind: "administrator" }, state.agentId),
+		).toMatchObject({ management: { principalGrants: [] } });
+		await adminClient`
+			update platform.agents set authorization_revision = 'revision-1'
+			where id = ${state.agentId}
+		`;
 		await adminClient`
 			update platform.agent_principal_grants set revoked_at = now()
 			where agent_id = ${state.agentId} and grant_type = 'manage'

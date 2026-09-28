@@ -629,6 +629,20 @@ export class PostgresApiIdentityStoreV1 {
 				)
 				.returning({ agentId: agentPrincipalGrants.agentId });
 			if (rows.length !== 1) return false;
+			const authorizationRevision = randomUUID();
+			await transaction
+				.update(agents)
+				.set({ authorizationRevision })
+				.where(eq(agents.id, input.agentId));
+			await transaction
+				.update(agentPrincipalGrants)
+				.set({ authorizationRevision })
+				.where(
+					and(
+						eq(agentPrincipalGrants.agentId, input.agentId),
+						isNull(agentPrincipalGrants.revokedAt),
+					),
+				);
 			if (input.audit) {
 				await writeApiIdentityAudit(transaction, {
 					...input.audit,
