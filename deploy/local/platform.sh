@@ -18,6 +18,8 @@ docker_endpoint=$("${docker_target[@]}" context inspect "$PLATFORM_LOCAL_DOCKER_
 compose=("${docker_target[@]}" compose --project-name "$PLATFORM_LOCAL_PROJECT" -f docker-compose.yml -f deploy/local/compose.yaml)
 worker_release="$PLATFORM_LOCAL_PROJECT"
 worker_deployment="$worker_release-agent-infra-platform-worker"
+database_service="$worker_release-postgres"
+database_endpoint="$database_service-docker"
 
 worker_context() {
   : "${PLATFORM_LOCAL_KUBECONFIG:?Set an explicit local kubeconfig}"
@@ -112,9 +114,84 @@ worker_values() {
     --set enterpriseDirectorySync.enabled=false
     --set web.placement=external
     --set platformApi.placement=external
+    --set-string "database.secretRef.name=$database_service"
+    --set-string database.secretRef.key=url
     --set-string platformWorker.deploymentModule=file:///app/dist/deployment.mjs
   )
 }
+
+connect_worker_database() {
+  local container database_ip
+  container=$("${compose[@]}" ps -q postgres)
+  [[ -n "$container" ]] || { echo "Local PostgreSQL container is missing" >&2; return 1; }
+  if [[ $("${docker_target[@]}" container inspect "$container" --format '{{if index .NetworkSettings.Networks "kind"}}connected{{end}}') != connected ]]; then
+    "${docker_target[@]}" network connect kind "$container"
+  fi
+  database_ip=$("${docker_target[@]}" container inspect "$container" --format '{{(index .NetworkSettings.Networks "kind").IPAddress}}')
+  [[ "$database_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "Local PostgreSQL has no IPv4 address on the kind network" >&2
+    return 1
+  }
+  "${kube_target[@]}" apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: $database_service
+  labels:
+    app.kubernetes.io/managed-by: agent-infra-local
+spec:
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: $database_endpoint
+  labels:
+    app.kubernetes.io/managed-by: agent-infra-local
+    kubernetes.io/service-name: $database_service
+    endpointslice.kubernetes.io/managed-by: agent-infra-local
+addressType: IPv4
+ports:
+  - name: postgres
+    port: 5432
+    protocol: TCP
+endpoints:
+  - addresses: ["$database_ip"]
+    conditions:
+      ready: true
+EOF
+  "${compose[@]}" config --format json | node -e '
+    let input = "";
+    process.stdin.on("data", (chunk) => { input += chunk; });
+    process.stdin.on("end", () => {
+      const source = new URL(JSON.parse(input).services["platform-api"].environment.PLATFORM_DATABASE_URL);
+      if (source.hostname !== "postgres" || source.port !== "5432" || source.protocol !== "postgresql:") {
+        throw new Error("Local API database URL must target Compose postgres:5432");
+      }
+      source.hostname = process.argv[1];
+      process.stdout.write(JSON.stringify({
+        apiVersion: "v1", kind: "Secret", type: "Opaque",
+        metadata: { name: process.argv[2], labels: { "app.kubernetes.io/managed-by": "agent-infra-local" } },
+        data: { url: Buffer.from(source.toString()).toString("base64") },
+      }));
+    });
+  ' "$database_service.$PLATFORM_LOCAL_NAMESPACE.svc.cluster.local" "$database_service" |
+    "${kube_target[@]}" apply --server-side --field-manager=agent-infra-local -f -
+}
+
+disconnect_worker_database() {
+  local container
+  "${kube_target[@]}" delete "endpointslice/$database_endpoint" "service/$database_service" "secret/$database_service" --ignore-not-found
+  container=$("${compose[@]}" ps -q postgres)
+  if [[ -n "$container" && $("${docker_target[@]}" container inspect "$container" --format '{{if index .NetworkSettings.Networks "kind"}}connected{{end}}') == connected ]]; then
+    "${docker_target[@]}" network disconnect kind "$container"
+  fi
+}
+
 case "${1:-}" in
   build)
     "${compose[@]}" --profile runtime build web platform-api platform-worker agent-runtime-host
@@ -133,6 +210,7 @@ case "${1:-}" in
     "${helm_target[@]}" template "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" >/dev/null
     "${compose[@]}" stop web platform-api
     "${compose[@]}" up --detach --wait postgres object-storage
+    connect_worker_database
     "${helm_target[@]}" upgrade --install "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" --wait --timeout 5m
     "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
     "${compose[@]}" up --detach --wait platform-api web
@@ -142,6 +220,7 @@ case "${1:-}" in
     "${compose[@]}" ps postgres object-storage platform-api web
     "${helm_target[@]}" status "$worker_release"
     "${kube_target[@]}" get deployment "$worker_deployment"
+    "${kube_target[@]}" get "service/$database_service" "endpointslice/$database_endpoint" "secret/$database_service"
     ;;
   stop)
     worker_context
@@ -163,6 +242,7 @@ case "${1:-}" in
     if ! ensure_agents_stopped || ! "${helm_target[@]}" uninstall "$worker_release" --ignore-not-found --wait --timeout 5m; then
       abort_stop
     fi
+    disconnect_worker_database
     "${compose[@]}" stop object-storage postgres
     ;;
   *)

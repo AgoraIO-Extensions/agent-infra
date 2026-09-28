@@ -10,6 +10,7 @@
 复制 [.env.example](.env.example) 到仓库外的本地配置文件，填写本地 Docker context、独立
 Compose project、API 专属部署目录、浏览器信任的 localhost TLS 文件、私有 kind kubeconfig、
 context、已创建的 namespace 和 Worker values 文件。执行前载入所填写的本地配置。
+各 host 端口可在配置文件中为当前 project 单独设置，避免与其他本地运行实例冲突。
 `platform.sh` 要求 Docker 使用本机 Unix socket，并核对 kind control-plane 容器标签、
 暴露端口与 kubeconfig 的 loopback API 地址；Helm release 和 namespace 均与 Compose
 project 同名。普通停止保留数据库、对象存储卷和 Agent PVC。
@@ -35,7 +36,8 @@ API 专属目录至少包含 `platform-api.mjs`。该模块导出
 Worker 的当前用户目录；这不替代实际账号和完整首通验收。
 模型凭证由 Owner 在申请和配置时提交，经现有加密公钥加密，只由 Worker 解密注入。
 
-Web 使用 `https://localhost:3001`，`/api/` 同源转发给 API，SSE 不经过响应缓冲。
+Web 默认使用 `https://localhost:3001`（可由 `PLATFORM_LOCAL_WEB_PORT` 调整），
+`/api/` 同源转发给 API，SSE 不经过响应缓冲。
 TLS 文件须可由 Web 镜像中的非 root 用户读取。开发时也可使用 `pnpm dev:web`，通过
 `PLATFORM_WEB_TLS_CERT_FILE`、`PLATFORM_WEB_TLS_KEY_FILE` 和
 `PLATFORM_API_PROXY_TARGET` 配置相同的 HTTPS/同源访问。
@@ -68,6 +70,14 @@ API 使用与所选 Docker context 的 kind control-plane 一致的 loopback 端
 `runtimeAuthSecretRef`；脚本把部署模块固定为镜像内的
 `file:///app/dist/deployment.mjs`。本地 `build` 不会自动发布
 镜像或生成 manifest Digest。迁移由上面的命令完成，
+`up` 将当前 project 的 PostgreSQL 容器接入所选 Docker context 的 `kind` 网络，
+并在同名 namespace 建立 `<project>-postgres` Service 与 EndpointSlice。Worker 的
+`database.secretRef` 被固定到同名本地 Secret：脚本从 Compose API 的数据库 URL
+派生同一账号、密码和库名，只把主机换成
+`<project>-postgres.<namespace>.svc.cluster.local`。Secret 通过 Kubernetes API 写入，
+不进入 values 文件、源码或脚本输出。重复 `up` 会刷新容器 IP 和 Secret；`status`
+回读路由对象；正常 `stop` 在 Worker 卸载后删除路由与该 Secret，并断开容器的
+`kind` 网络，保留数据库和对象卷。此路由仅供隔离本地 kind 使用。
 脚本会固定关闭 Helm migration、目录服务及拓扑占位进程；升级前关闭已有 Web/API，
 启动数据服务并等待 Worker Deployment 就绪，再开放 Compose 中的 Web/API。Worker
 启动失败时 Web/API 保持关闭。

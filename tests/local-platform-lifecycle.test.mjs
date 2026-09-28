@@ -29,6 +29,8 @@ async function fixture() {
 	await mkdir(bin);
 	await mkdir(api);
 	const log = join(directory, "commands.log");
+	const manifest = join(directory, "database-route.yaml");
+	const networkState = join(directory, "kind-network-connected");
 	const kubeconfig = join(directory, "kubeconfig");
 	const values = join(directory, "worker.values.yaml");
 	const cert = join(directory, "tls.crt");
@@ -54,6 +56,20 @@ elif [[ "$*" == *"container inspect isolated-control-plane"* ]]; then
   printf '%s\\n' "$FAKE_KIND_LABEL"
 elif [[ "$*" == *"port isolated-control-plane 6443/tcp"* ]]; then
   printf '%s\\n' "$FAKE_KIND_PORT"
+elif [[ "$*" == *"compose"*"ps -q postgres"* ]]; then
+  printf 'fixture-postgres\\n'
+elif [[ "$*" == *"compose"*"config --format json"* ]]; then
+  printf '%s\\n' '{"services":{"platform-api":{"environment":{"PLATFORM_DATABASE_URL":"postgresql://fixture:fixture@postgres:5432/fixture"}}}}'
+elif [[ "$*" == *"container inspect fixture-postgres"*"IPAddress"* ]]; then
+  printf '172.18.0.42\\n'
+elif [[ "$*" == *"container inspect fixture-postgres"* ]]; then
+  [[ -f "$FAKE_NETWORK_STATE" ]] && printf 'connected\\n'
+elif [[ "$*" == *"network connect kind fixture-postgres"* ]]; then
+  touch "$FAKE_NETWORK_STATE"
+  printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
+elif [[ "$*" == *"network disconnect kind fixture-postgres"* ]]; then
+  rm -f "$FAKE_NETWORK_STATE"
+  printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
 else
   printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
 fi`,
@@ -85,6 +101,11 @@ elif [[ "$*" == *"get pods -l agent-infra.agora.io/agent"* ]]; then
   printf '%s' "$FAKE_AGENT_PODS"
 else
   printf 'kubectl %s\\n' "$*" >> "$COMMAND_LOG"
+  if [[ "$*" == *"apply -f -"* ]]; then
+    cat >> "$MANIFEST_LOG"
+  elif [[ "$*" == *"apply --server-side"* ]]; then
+    cat >> "$MANIFEST_LOG"
+  fi
   if [[ "$*" == *"scale deployment/agent-infra-verify-agent-infra-platform-worker --replicas=1"* && -n "$FAKE_RESTORE_SCALE_EXIT" ]]; then
     exit "$FAKE_RESTORE_SCALE_EXIT"
   fi
@@ -94,6 +115,8 @@ fi`,
 		...process.env,
 		PATH: `${bin}:${process.env.PATH}`,
 		COMMAND_LOG: log,
+		MANIFEST_LOG: manifest,
+		FAKE_NETWORK_STATE: networkState,
 		FAKE_KUBE_SERVER: "https://127.0.0.1:6443",
 		FAKE_KIND_LABEL: "isolated",
 		FAKE_KIND_PORT: "127.0.0.1:6443",
@@ -117,6 +140,7 @@ fi`,
 	return {
 		env,
 		log,
+		manifest,
 		async close() {
 			await rm(directory, { recursive: true, force: true });
 		},
@@ -143,6 +167,10 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		assert.match(up[0], /--set enterpriseDirectorySync\.enabled=false/);
 		assert.match(
 			up[0],
+			/--set-string database\.secretRef\.name=agent-infra-verify-postgres/,
+		);
+		assert.match(
+			up[0],
 			/--set-string platformWorker\.deploymentModule=file:\/\/\/app\/dist\/deployment\.mjs/,
 		);
 		assert.match(up[1], /^docker .* compose .* stop web platform-api$/);
@@ -150,15 +178,31 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			up[2],
 			/^docker .* compose .* up --detach --wait postgres object-storage$/,
 		);
-		assert.match(up[3], /^helm .* upgrade --install agent-infra-verify /);
+		assert.match(up[3], /network connect kind fixture-postgres$/);
+		assert.match(up[4], /^kubectl .* apply -f -$/);
+		const manifest = await readFile(f.manifest, "utf8");
+		assert.match(manifest, /name: agent-infra-verify-postgres/);
+		assert.match(manifest, /addresses: \["172\.18\.0\.42"\]/);
+		assert.match(manifest, /"kind":"Secret"/);
+		const encodedUrl = manifest.match(/"data":\{"url":"([^"]+)"\}/)?.[1];
+		assert.ok(encodedUrl);
+		assert.equal(
+			Buffer.from(encodedUrl, "base64").toString(),
+			"postgresql://fixture:fixture@agent-infra-verify-postgres.agent-infra-verify.svc.cluster.local:5432/fixture",
+		);
 		assert.match(
-			up[4],
+			up[7],
 			/^kubectl .* --context kind-isolated --namespace agent-infra-verify rollout status deployment\/agent-infra-verify-agent-infra-platform-worker/,
 		);
 		assert.match(
-			up[5],
+			up[8],
 			/^docker .* compose .* up --detach --wait platform-api web$/,
 		);
+		assert.match(
+			up[5],
+			/apply --server-side --field-manager=agent-infra-local -f -/,
+		);
+		assert.match(up[6], /^helm .* upgrade --install agent-infra-verify /);
 
 		await writeFile(f.log, "");
 		assert.equal(run("status", f.env).status, 0);
@@ -168,6 +212,10 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			/compose .* ps postgres object-storage platform-api web/,
 		);
 		assert.match(status, /helm .* status agent-infra-verify/);
+		assert.match(
+			status,
+			/get service\/agent-infra-verify-postgres endpointslice\/agent-infra-verify-postgres-docker secret\/agent-infra-verify-postgres/,
+		);
 		assert.match(
 			status,
 			/kubectl .* get deployment agent-infra-verify-agent-infra-platform-worker/,
@@ -191,8 +239,16 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		assert.match(stopSteps[1], /kubectl .* scale .* --replicas=0/);
 		assert.match(stopSteps[2], /kubectl .* rollout status/);
 		assert.match(stopSteps[3], /helm .* uninstall/);
-		assert.match(stopSteps[4], /compose .* stop object-storage postgres/);
-		assert.doesNotMatch(stop, /--volumes|delete|down/);
+		assert.match(
+			stopSteps[4],
+			/delete endpointslice\/agent-infra-verify-postgres-docker service\/agent-infra-verify-postgres secret\/agent-infra-verify-postgres/,
+		);
+		assert.match(stopSteps[5], /network disconnect kind fixture-postgres/);
+		assert.match(stopSteps[6], /compose .* stop object-storage postgres/);
+		assert.doesNotMatch(
+			stop,
+			/--volumes|compose .* down|delete (persistentvolumeclaim|pvc|namespace)/,
+		);
 	} finally {
 		await f.close();
 	}
@@ -209,8 +265,14 @@ test("local up keeps API and Web closed when Worker upgrade fails", async () => 
 			steps[2],
 			/compose .* up --detach --wait postgres object-storage$/,
 		);
-		assert.match(steps[3], /helm .* upgrade --install/);
-		assert.equal(steps.length, 4);
+		assert.match(steps[3], /network connect kind fixture-postgres/);
+		assert.match(steps[4], /kubectl .* apply -f -/);
+		assert.match(
+			steps[5],
+			/apply --server-side --field-manager=agent-infra-local -f -/,
+		);
+		assert.match(steps[6], /helm .* upgrade --install/);
+		assert.equal(steps.length, 7);
 	} finally {
 		await f.close();
 	}
