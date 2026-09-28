@@ -86,68 +86,60 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 		error: null,
 		createdAt: timestamp,
 	};
-	let detailReads = 0;
+	let phase: "ready" | "submitted" | "running" | "completed" = "ready";
+	let detailReadsAfterSubmit = 0;
 	let submitRequests = 0;
-	let completionSignaled = false;
-	await page.exposeFunction("markConversationComplete", () => {
-		completionSignaled = true;
+	await page.addInitScript(() => {
+		type FixtureWindow = Window & {
+			conversationStreamRevision: number;
+			hasConversationStream: () => boolean;
+			emitConversationFrame: (value: unknown, id: string) => void;
+		};
+		const fixture = window as unknown as FixtureWindow;
+		const realFetch = window.fetch.bind(window);
+		const encoder = new TextEncoder();
+		let activeController:
+			| ReadableStreamDefaultController<Uint8Array>
+			| undefined;
+		fixture.conversationStreamRevision = 0;
+		fixture.hasConversationStream = () => Boolean(activeController);
+		fixture.emitConversationFrame = (value, id) => {
+			if (!activeController)
+				throw new Error("The conversation stream is not open");
+			activeController.enqueue(
+				encoder.encode(`id: ${id}\n` + `data: ${JSON.stringify(value)}\n\n`),
+			);
+		};
+		window.fetch = async (input, init) => {
+			const url = new URL(
+				typeof input === "string"
+					? input
+					: input instanceof Request
+						? input.url
+						: String(input),
+				window.location.href,
+			);
+			if (!url.pathname.endsWith("/events")) return realFetch(input, init);
+			let controllerForStream:
+				| ReadableStreamDefaultController<Uint8Array>
+				| undefined;
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controllerForStream = controller;
+					activeController = controller;
+					fixture.conversationStreamRevision += 1;
+				},
+				cancel() {
+					if (activeController === controllerForStream)
+						activeController = undefined;
+				},
+			});
+			return new Response(body, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
 	});
-	await page.addInitScript(
-		({ first, terminal }: { first: unknown; terminal: unknown }) => {
-			const realFetch = window.fetch.bind(window);
-			let messageAccepted = false;
-			window.fetch = async (input, init) => {
-				const url = new URL(
-					typeof input === "string"
-						? input
-						: input instanceof Request
-							? input.url
-							: String(input),
-					window.location.href,
-				);
-				if (!url.pathname.endsWith("/events")) {
-					const response = await realFetch(input, init);
-					if (
-						url.pathname.endsWith("/messages") &&
-						(init?.method ??
-							(input instanceof Request ? input.method : "GET")) === "POST"
-					)
-						messageAccepted = response.ok;
-					return response;
-				}
-				const encoder = new TextEncoder();
-				const frame = (value: unknown, id?: string) =>
-					`${id ? `id: ${id}\n` : ""}data: ${JSON.stringify(value)}\n\n`;
-				const body = new ReadableStream<Uint8Array>({
-					async start(controller) {
-						while (!messageAccepted)
-							await new Promise((resolve) => setTimeout(resolve, 10));
-						setTimeout(
-							() =>
-								controller.enqueue(
-									encoder.encode(frame(first, "live-event-1")),
-								),
-							40,
-						);
-						setTimeout(() => {
-							controller.enqueue(
-								encoder.encode(frame(terminal, "live-event-2")),
-							);
-							controller.close();
-							void (
-								window as unknown as { markConversationComplete: () => void }
-							).markConversationComplete();
-						}, 220);
-					},
-				});
-				return new Response(body, {
-					status: 200,
-					headers: { "content-type": "text/event-stream" },
-				});
-			};
-		},
-		{ first: firstDelta, terminal: completed },
-	);
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
@@ -160,26 +152,37 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 			return;
 		}
 		if (path === `/api/v2/conversations/${conversationId}`) {
-			detailReads += 1;
-			if (detailReads > 1) {
-				await expect
-					.poll(() => completionSignaled, {
-						timeout: 2_000,
-						message: "The refresh must wait for the terminal SSE frame",
-					})
-					.toBe(true);
-			}
+			if (phase !== "ready") detailReadsAfterSubmit += 1;
+			const events =
+				phase === "completed"
+					? [firstDelta, completed]
+					: phase === "running"
+						? [firstDelta]
+						: [];
 			const detail = ConversationDetailProjectionV2Schema.parse({
 				schemaVersion: 2,
-				conversation:
-					detailReads > 1
-						? {
-								...initialConversation,
-								lastConversationCursor: "live-cursor-2",
-							}
-						: initialConversation,
-				messages: detailReads > 1 ? [submittedMessage, finalAnswer] : [],
-				events: detailReads > 1 ? [firstDelta, completed] : [],
+				conversation: {
+					...initialConversation,
+					status:
+						phase === "ready" || phase === "completed" ? "ready" : "active",
+					lastConversationCursor: events.at(-1)?.conversationCursor ?? null,
+				},
+				messages:
+					phase === "ready"
+						? []
+						: [
+								{
+									...submittedMessage,
+									status:
+										phase === "completed"
+											? "completed"
+											: phase === "running"
+												? "processing"
+												: "submitted",
+								},
+								...(phase === "completed" ? [finalAnswer] : []),
+							],
+				events,
 			});
 			await route.fulfill({ json: detail });
 			return;
@@ -190,6 +193,7 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 				await route.fulfill({ status: 409, json: { code: "DUPLICATE" } });
 				return;
 			}
+			phase = "submitted";
 			await route.fulfill({
 				status: 202,
 				json: { schemaVersion: 1, status: "submitted", messageId, executionId },
@@ -207,6 +211,11 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 	await input.fill("请输出一段实时结果");
 	const send = page.getByRole("button", { name: "发送", exact: true });
 	await expect(send).toBeEnabled();
+	const initialStreamRevision = await page.evaluate(
+		() =>
+			(window as unknown as { conversationStreamRevision: number })
+				.conversationStreamRevision,
+	);
 	await Promise.all([
 		page.waitForResponse(
 			(response) =>
@@ -228,6 +237,27 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 		}),
 	]);
 	await expect.poll(() => submitRequests).toBe(1);
+	await expect.poll(() => detailReadsAfterSubmit).toBeGreaterThan(0);
+	await page.waitForFunction((revision) => {
+		const fixture = window as unknown as {
+			conversationStreamRevision: number;
+			hasConversationStream: () => boolean;
+		};
+		return (
+			fixture.conversationStreamRevision > revision &&
+			fixture.hasConversationStream()
+		);
+	}, initialStreamRevision);
+	phase = "running";
+	await page.evaluate(
+		(frame) =>
+			(
+				window as unknown as {
+					emitConversationFrame: (value: unknown, id: string) => void;
+				}
+			).emitConversationFrame(frame, "live-event-1"),
+		firstDelta,
+	);
 	await expect(
 		page.getByText("第一段实时输出。", { exact: true }),
 	).toBeVisible();
@@ -237,6 +267,16 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 	await expect(
 		page.getByRole("status").filter({ hasText: "消息已受理" }),
 	).toBeVisible();
+	phase = "completed";
+	await page.evaluate(
+		(frame) =>
+			(
+				window as unknown as {
+					emitConversationFrame: (value: unknown, id: string) => void;
+				}
+			).emitConversationFrame(frame, "live-event-2"),
+		completed,
+	);
 	await expect(
 		page.getByText("第一段实时输出。第二段完成输出。", { exact: true }),
 	).toBeVisible({
