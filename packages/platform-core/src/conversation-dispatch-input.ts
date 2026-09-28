@@ -7,10 +7,6 @@ import type {
 	ConversationMetadataRecoveryV1,
 	DispatchConversationCommandV1,
 } from "./conversation-dispatch-types.js";
-import type {
-	ConversationExecutionRelayKeyBindingV1,
-	ConversationExecutionSourceV1,
-} from "./conversation-execution-types.js";
 import {
 	exactObject,
 	invalidInput,
@@ -20,6 +16,10 @@ import {
 	text,
 	unavailable,
 } from "./conversation-dispatch-values.js";
+import type {
+	ConversationExecutionRelayKeyBindingV1,
+	ConversationExecutionSourceV1,
+} from "./conversation-execution-types.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import { isTaskPrincipalChannelV1 } from "./task-authorization.js";
 
@@ -174,10 +174,9 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			: relayKeyBinding(input.relayKeyBinding);
 	if (
 		(parsedExecutionSource === undefined) !==
-		(parsedRelayKeyBinding === undefined) ||
+			(parsedRelayKeyBinding === undefined) ||
 		(parsedRelayKeyBinding &&
-			((parsedExecutionSource === "web" ||
-				parsedExecutionSource === "wecom")
+			(parsedExecutionSource === "web" || parsedExecutionSource === "wecom"
 				? parsedRelayKeyBinding.purpose !== "personal"
 				: parsedRelayKeyBinding.purpose !== "agent-default"))
 	)
