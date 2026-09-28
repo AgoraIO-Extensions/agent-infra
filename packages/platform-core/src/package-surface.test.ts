@@ -109,6 +109,7 @@ describe("platform-core package surface", () => {
 			"platformIdempotencyV1",
 			"projectConversationExecutionV1",
 			"projectConversationMessagesV1",
+			"publicTaskStatusEventV1",
 			"requireConversationOperationSuccessorV2",
 			"resolveFileLimitsV1",
 			"sameApiPrincipalV1",

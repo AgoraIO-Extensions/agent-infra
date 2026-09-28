@@ -7,6 +7,7 @@ import {
 	type ConversationEventUseCaseV1,
 	createConversationEventUseCaseV1,
 	parseConversationPersistedEventPayloadV1,
+	publicTaskStatusEventV1,
 } from "./conversation-events.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 
@@ -441,8 +442,39 @@ describe("Conversation event ingestion", () => {
 	});
 });
 
-describe("platform-owned persisted stop reason", () => {
-	it("reads only the unknown timeout reason and rejects runtime or unbounded reason payloads", () => {
+describe("platform-owned task status reasons", () => {
+	it("publishes only bounded reasons for the matching state", () => {
+		expect(
+			publicTaskStatusEventV1({
+				isTask: true,
+				status: "failed",
+				reason: "TASK_WAIT_TIMEOUT",
+			}),
+		).toEqual({
+			type: "task.status",
+			status: "failed",
+			reason: "TASK_WAIT_TIMEOUT",
+		});
+		expect(
+			publicTaskStatusEventV1({
+				isTask: true,
+				status: "failed",
+				reason: "private runtime text",
+			}),
+		).toEqual({
+			type: "task.status",
+			status: "failed",
+		});
+		expect(
+			publicTaskStatusEventV1({
+				isTask: false,
+				status: "failed",
+				reason: "TASK_WAIT_TIMEOUT",
+			}),
+		).toBeNull();
+	});
+
+	it("reads bounded failure and stop reasons while rejecting invalid pairs", () => {
 		expect(
 			parseConversationPersistedEventPayloadV1({
 				type: "task.status",
@@ -453,6 +485,17 @@ describe("platform-owned persisted stop reason", () => {
 			type: "task.status",
 			status: "unknown",
 			reason: "STOP_CONFIRMATION_TIMEOUT",
+		});
+		expect(
+			parseConversationPersistedEventPayloadV1({
+				type: "task.status",
+				status: "failed",
+				reason: "AGENT_UNAVAILABLE",
+			}),
+		).toEqual({
+			type: "task.status",
+			status: "failed",
+			reason: "AGENT_UNAVAILABLE",
 		});
 		for (const payload of [
 			{
@@ -465,6 +508,7 @@ describe("platform-owned persisted stop reason", () => {
 				status: "unknown",
 				reason: "private runtime text",
 			},
+			{ type: "task.status", status: "waiting", reason: "TASK_WAIT_TIMEOUT" },
 			{
 				type: "execution.status",
 				status: "unknown",

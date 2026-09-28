@@ -4,6 +4,7 @@ import {
 	decideConversationStopConfirmationTimeoutV1,
 	decideConversationTaskWaitingV1,
 	parseTaskAuthorizationBoundaryV1,
+	publicTaskStatusEventV1,
 } from "@agent-infra/platform-core";
 import {
 	type DispatchState,
@@ -67,11 +68,12 @@ export async function recordTaskStatus(
 	workerId: string,
 	reason?: string,
 ) {
-	if (
-		state.execution.task_wait_order === null &&
-		reason !== "STOP_CONFIRMATION_TIMEOUT"
-	)
-		return;
+	const event = publicTaskStatusEventV1({
+		isTask: state.execution.task_wait_order !== null,
+		status,
+		reason,
+	});
+	if (!event) return;
 	const [execution] = await transaction<{ sequence: string }[]>`
 		update platform.conversation_executions
 		set last_event_sequence = last_event_sequence + 1
@@ -80,16 +82,11 @@ export async function recordTaskStatus(
 	`;
 	const [conversation] = await transaction<{ cursor: string }[]>`
 		update platform.conversations set last_conversation_cursor = last_conversation_cursor + 1,
-			updated_at = clock_timestamp() where id = ${state.conversation.id}
+			updated_at = greatest(updated_at, clock_timestamp()) where id = ${state.conversation.id}
 		returning last_conversation_cursor::text as cursor
 	`;
 	if (!execution || !conversation) throw new StaleDispatchLease();
 	const eventId = randomUUID();
-	const event = {
-		type: "task.status",
-		status,
-		...(reason === "STOP_CONFIRMATION_TIMEOUT" ? { reason } : {}),
-	};
 	const [authorization] = await transaction<{ boundary: unknown }[]>`
 		select boundary from platform.task_authorization_records where execution_id = ${state.execution.execution_id}
 	`;
@@ -111,7 +108,7 @@ export async function recordTaskStatus(
 			 conversation_cursor, event_type, event_payload, event_digest, source, runtime_cursor, occurred_at)
 		values (${eventId}, ${state.conversation.id}, ${state.execution.execution_id},
 			${`platform:${eventId}`}, ${execution.sequence}, ${conversation.cursor},
-			'task.status', ${transaction.json(event)},
+			'task.status', ${transaction.json({ ...event })},
 			${createHash("sha256").update(JSON.stringify(event)).digest("hex")}, 'platform', null, clock_timestamp())
 	`;
 	await transaction`

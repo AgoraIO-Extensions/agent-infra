@@ -413,7 +413,7 @@ export class PostgresConversationDispatchStoreV1
 						sessionGeneration: claim.sessionGeneration,
 					})})
       `;
-			await transaction`update platform.conversations set host_session_ref = ${input.hostSessionRef}, updated_at = clock_timestamp() where id = ${claim.conversationId}`;
+			await transaction`update platform.conversations set host_session_ref = ${input.hostSessionRef}, updated_at = greatest(updated_at, clock_timestamp()) where id = ${claim.conversationId}`;
 		});
 	}
 
@@ -520,7 +520,7 @@ export class PostgresConversationDispatchStoreV1
 				plan.failureCode,
 			);
 			await transaction`
-        update platform.conversations set session_generation = ${plan.nextGeneration}, status = ${plan.conversationStatus}, updated_at = clock_timestamp()
+        update platform.conversations set session_generation = ${plan.nextGeneration}, status = ${plan.conversationStatus}, updated_at = greatest(updated_at, clock_timestamp())
         where id = ${claim.conversationId} and session_generation = ${claim.sessionGeneration}
       `;
 			await transaction`update platform.conversation_generation_tombstones set status = 'confirmed', confirmed_at = clock_timestamp() where operation_id = ${isolation.operation_id}`;
@@ -741,7 +741,7 @@ export class PostgresConversationDispatchStoreV1
 				`;
 						if (rows.length !== 1) throw new StaleDispatchLease();
 						if (state.execution.status === "waiting") {
-							await transaction`update platform.conversations set status = 'active', updated_at = clock_timestamp() where id = ${input.claim.conversationId}`;
+							await transaction`update platform.conversations set status = 'active', updated_at = greatest(updated_at, clock_timestamp()) where id = ${input.claim.conversationId}`;
 							await recordTaskStatus(
 								transaction,
 								state,
@@ -799,7 +799,7 @@ export class PostgresConversationDispatchStoreV1
 				const payload = exactPayload(state.outbox.payload, claim.operation);
 				if (!payload) throw new StaleDispatchLease();
 				const refs = await transaction<{ id: string }[]>`
-				update platform.conversations set host_session_ref = ${input.hostSessionRef}, updated_at = clock_timestamp()
+				update platform.conversations set host_session_ref = ${input.hostSessionRef}, updated_at = greatest(updated_at, clock_timestamp())
 				where id = ${claim.conversationId} and session_generation = ${claim.sessionGeneration}
 					and (host_session_ref is null or host_session_ref = ${input.hostSessionRef}) returning id
 			`;
@@ -887,7 +887,7 @@ export class PostgresConversationDispatchStoreV1
 					}
 				}
 				await transaction`
-				update platform.conversations set status = 'ready', updated_at = clock_timestamp()
+				update platform.conversations set status = 'ready', updated_at = greatest(updated_at, clock_timestamp())
 				where id = ${claim.conversationId} and status = 'active'
 					and not exists (select 1 from platform.conversation_executions e
 						where e.conversation_id = ${claim.conversationId} and e.status in ('submitted', 'processing', 'unknown'))
@@ -976,7 +976,7 @@ export class PostgresConversationDispatchStoreV1
 				);
 			const rows = await transaction<{ id: string }[]>`
 				update platform.conversations
-				set host_session_ref = ${input.hostSessionRef}, updated_at = clock_timestamp()
+				set host_session_ref = ${input.hostSessionRef}, updated_at = greatest(updated_at, clock_timestamp())
 				where id = ${input.claim.conversationId}
 					and session_generation = ${input.claim.sessionGeneration}
 					and authorization_revision = ${state.conversation.authorization_revision}
@@ -1032,7 +1032,7 @@ export class PostgresConversationDispatchStoreV1
 					["completed", "failed", "cancelled"].includes(state.execution.status)
 				) {
 					await transaction`
-						update platform.conversations set status = 'ready', updated_at = clock_timestamp()
+						update platform.conversations set status = 'ready', updated_at = greatest(updated_at, clock_timestamp())
 						where id = ${input.claim.conversationId} and status = 'active'
 							and not exists (select 1 from platform.conversation_executions e
 								where e.conversation_id = ${input.claim.conversationId} and e.status in ('submitted', 'processing', 'unknown'))

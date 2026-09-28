@@ -861,6 +861,9 @@ export type TaskProjectionV1 = {
         payload: {
             reason: 'STOP_CONFIRMATION_TIMEOUT';
             status: 'unknown';
+        } | {
+            reason: 'TASK_WAIT_TIMEOUT' | 'AGENT_UNAVAILABLE' | 'CONVERSATION_UNAVAILABLE';
+            status: 'failed';
         };
         schemaVersion: 2;
         sequence: number;
@@ -936,6 +939,9 @@ export type TaskSseMessageV1 = PersistedConversationEventV1 | {
     payload: {
         reason: 'STOP_CONFIRMATION_TIMEOUT';
         status: 'unknown';
+    } | {
+        reason: 'TASK_WAIT_TIMEOUT' | 'AGENT_UNAVAILABLE' | 'CONVERSATION_UNAVAILABLE';
+        status: 'failed';
     };
     schemaVersion: 2;
     sequence: number;

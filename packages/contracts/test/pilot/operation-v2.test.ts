@@ -210,8 +210,8 @@ describe("Pilot mixed-version operation contracts", () => {
 	});
 });
 
-describe("stop confirmation reason contract", () => {
-	it("carries only a bounded V2 timeout reason while keeping V1 strict", () => {
+describe("task status reason contract", () => {
+	it("carries bounded V2 reasons while keeping V1 strict", () => {
 		const timeout = {
 			...original,
 			schemaVersion: 2,
@@ -224,9 +224,24 @@ describe("stop confirmation reason contract", () => {
 		expect(ConversationSseMessageV1Schema.safeParse(timeout).success).toBe(
 			false,
 		);
+		for (const reason of [
+			"TASK_WAIT_TIMEOUT",
+			"AGENT_UNAVAILABLE",
+			"CONVERSATION_UNAVAILABLE",
+		]) {
+			const failure = { ...timeout, payload: { status: "failed", reason } };
+			expect(ConversationSseMessageV2Schema.safeParse(failure).success).toBe(
+				true,
+			);
+			expect(ConversationSseMessageV1Schema.safeParse(failure).success).toBe(
+				false,
+			);
+		}
 		for (const payload of [
 			{ status: "cancelled", reason: "STOP_CONFIRMATION_TIMEOUT" },
 			{ status: "unknown", reason: "arbitrary internal error" },
+			{ status: "waiting", reason: "TASK_WAIT_TIMEOUT" },
+			{ status: "failed", reason: "arbitrary internal error" },
 			{
 				status: "unknown",
 				reason: "STOP_CONFIRMATION_TIMEOUT",

@@ -119,7 +119,7 @@ describe("contract compatibility command", () => {
 			await writeFile(currentPath, JSON.stringify(current));
 			expect(comparePaths(currentPath, previousPath).status).toBe(0);
 			const widened = structuredClone(current);
-			widened.components.schemas.TaskStatusEventV2.properties.payload.additionalProperties = true;
+			widened.components.schemas.TaskStatusEventV2.properties.payload.anyOf[0].additionalProperties = true;
 			await writeFile(currentPath, JSON.stringify(widened));
 			expect(comparePaths(currentPath, previousPath).status).toBe(1);
 			const changedRoute = structuredClone(current);

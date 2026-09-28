@@ -40,13 +40,23 @@ export const ExecutionOperationEventV2Schema = z.strictObject({
 	payload: RuntimeOperationFactV2Schema,
 });
 
-/** Platform-owned stop confirmation reasons, separate from Runtime operation facts. */
+/** Bounded Platform-owned task reasons, separate from Runtime operation facts. */
 export const TaskStatusEventV2Schema = TaskStatusEventV1Schema.extend({
 	schemaVersion: z.literal(2),
-	payload: z.strictObject({
-		status: z.literal("unknown"),
-		reason: z.literal("STOP_CONFIRMATION_TIMEOUT"),
-	}),
+	payload: z.union([
+		z.strictObject({
+			status: z.literal("unknown"),
+			reason: z.literal("STOP_CONFIRMATION_TIMEOUT"),
+		}),
+		z.strictObject({
+			status: z.literal("failed"),
+			reason: z.enum([
+				"TASK_WAIT_TIMEOUT",
+				"AGENT_UNAVAILABLE",
+				"CONVERSATION_UNAVAILABLE",
+			]),
+		}),
+	]),
 });
 
 /** Mixed history preserves each original event version and stable reference. */

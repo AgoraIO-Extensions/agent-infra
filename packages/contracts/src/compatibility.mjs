@@ -166,7 +166,6 @@ function compareSchema(previous, current, path, changes) {
 		}
 		return;
 	}
-
 	const previousTypes = valueSet(previous.type);
 	const currentTypes = valueSet(current.type);
 	if (previousTypes.length === 0 && currentTypes.length > 0) {
@@ -754,7 +753,7 @@ function isTaskApiOpenApiAddition(previous, current) {
 	};
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"ef0a365fbd0876fbc37baa0ce7833e7d5f87880f8c08b713b36a6f0b61c6da03"
+		"d977db5619f02145d901f8108827ac9ee7368fe7b20fdfcc88ce1b39993d4e0f"
 	)
 		return false;
 	const normalized = structuredClone(current);
@@ -1231,11 +1230,11 @@ function isWecomReceiptOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
-// #482 / Runtime HLD 8.4: one versioned, bounded platform stop-timeout reason.
+// #482 / Runtime HLD 8.4: versioned, bounded Platform task reasons.
 function isStopConfirmationReasonOpenApiAddition(previous, current) {
 	const name = "TaskStatusEventV2";
 	const expectedHash =
-		"024502cf26b142f1e0aad4b8d2f7fb2ff388a80636c4f705a89993a81d8c507f";
+		"254973f01eda3b03114b95c522771aa09d37dcd3028b5b49e603051d3c3f2ca0";
 	if (previous.components?.schemas?.[name] !== undefined) return false;
 	const schema = current.components?.schemas?.[name];
 	const matchesReason = (value) =>

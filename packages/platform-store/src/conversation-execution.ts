@@ -497,7 +497,7 @@ export class PostgresConversationExecutionTransactionV1
 							modelOptionId: plan.outboxIntent.modelOptionId,
 							reasoningLevel: plan.outboxIntent.reasoningLevel,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
-					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt},
+					 ${plan.outboxIntent.requestId}, clock_timestamp(),
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`;
 			await transaction`
@@ -715,7 +715,7 @@ export class PostgresConversationExecutionTransactionV1
 							modelOptionId: plan.outboxIntent.modelOptionId,
 							reasoningLevel: plan.outboxIntent.reasoningLevel,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
-					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt},
+					 ${plan.outboxIntent.requestId}, clock_timestamp(),
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`;
 			await transaction`
@@ -873,7 +873,7 @@ export class PostgresConversationExecutionTransactionV1
 							sessionGeneration: plan.outboxIntent.sessionGeneration,
 							stopRequestId: plan.outboxIntent.stopRequestId,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
-					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt},
+					 ${plan.outboxIntent.requestId}, clock_timestamp(),
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`;
 			}

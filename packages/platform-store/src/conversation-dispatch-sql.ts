@@ -229,7 +229,7 @@ export async function cancelStoppedTurn(
 				where e.conversation_id = ${conversation.id} and s.execution_id <> ${execution.execution_id} and s.status = 'submitted')
 			and not exists (select 1 from platform.conversation_generation_tombstones t
 				where t.conversation_id = ${conversation.id} and t.status = 'pending')
-			then 'ready'::platform.conversation_status else status end, updated_at = clock_timestamp()
+			then 'ready'::platform.conversation_status else status end, updated_at = greatest(updated_at, clock_timestamp())
 		where id = ${conversation.id}
 			and session_generation = ${payload.sessionGeneration}
 			and authorization_revision = ${conversation.authorization_revision}
@@ -536,7 +536,7 @@ export async function applyTransition(
 	if (effectiveTransition.conversationStatus !== undefined) {
 		const rows = await transaction<{ id: string }[]>`
 			update platform.conversations
-			set status = ${effectiveTransition.conversationStatus}, updated_at = clock_timestamp()
+			set status = ${effectiveTransition.conversationStatus}, updated_at = greatest(updated_at, clock_timestamp())
 			where id = ${claim.conversationId}
 				and session_generation = ${claim.sessionGeneration}
 				and authorization_revision = ${state.conversation.authorization_revision}

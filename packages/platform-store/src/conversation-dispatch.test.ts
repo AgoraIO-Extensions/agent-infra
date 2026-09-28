@@ -4160,6 +4160,7 @@ describe("durable waiting task dispatch from real admission", () => {
 				"waiting",
 				"failed",
 			]);
+			expect(events.at(-1)?.event_payload.reason).toBe("TASK_WAIT_TIMEOUT");
 			expect(
 				await client`select details from platform.audit_events where target_id = ${loser.executionId} and action = 'task.status.changed'`,
 			).toEqual([

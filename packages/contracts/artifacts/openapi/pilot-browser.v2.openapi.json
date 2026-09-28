@@ -3786,22 +3786,48 @@
             "type": "string"
           },
           "payload": {
-            "additionalProperties": false,
-            "properties": {
-              "reason": {
-                "const": "STOP_CONFIRMATION_TIMEOUT",
-                "type": "string"
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "const": "STOP_CONFIRMATION_TIMEOUT",
+                    "type": "string"
+                  },
+                  "status": {
+                    "const": "unknown",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status",
+                  "reason"
+                ],
+                "type": "object"
               },
-              "status": {
-                "const": "unknown",
-                "type": "string"
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "TASK_WAIT_TIMEOUT",
+                      "AGENT_UNAVAILABLE",
+                      "CONVERSATION_UNAVAILABLE"
+                    ],
+                    "type": "string"
+                  },
+                  "status": {
+                    "const": "failed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status",
+                  "reason"
+                ],
+                "type": "object"
               }
-            },
-            "required": [
-              "status",
-              "reason"
-            ],
-            "type": "object"
+            ]
           },
           "schemaVersion": {
             "const": 2,
