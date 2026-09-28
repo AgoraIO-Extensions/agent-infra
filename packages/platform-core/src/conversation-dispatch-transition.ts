@@ -141,7 +141,8 @@ export function decideConversationStopConfirmationTimeoutV1(input: {
 	readonly alreadyTimedOut: boolean;
 }) {
 	if (
-		(input.executionStatus !== "processing" &&
+		(input.executionStatus !== "submitted" &&
+			input.executionStatus !== "processing" &&
 			input.executionStatus !== "unknown") ||
 		input.alreadyTimedOut ||
 		input.observedAt < input.confirmationDeadline

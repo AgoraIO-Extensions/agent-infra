@@ -17,6 +17,7 @@ import {
 	conversationStopStatus,
 	platformSchema,
 } from "./schema-common";
+import { relayKeyVersions } from "./schema-relay-keys";
 
 export const conversations = platformSchema.table(
 	"conversations",
@@ -136,6 +137,21 @@ export const conversationExecutions = platformSchema.table(
 			columns: [table.conversationId],
 			foreignColumns: [conversations.id],
 			name: "conversation_execution_conversation_fk",
+		}),
+		foreignKey({
+			columns: [
+				table.relayKeyPurpose,
+				table.relayKeySubjectId,
+				table.relayKeyVersion,
+				table.relayKeyId,
+			],
+			foreignColumns: [
+				relayKeyVersions.purpose,
+				relayKeyVersions.subjectId,
+				relayKeyVersions.keyVersion,
+				relayKeyVersions.keyId,
+			],
+			name: "conversation_execution_key_version_fk",
 		}),
 		check(
 			"conversation_execution_id_non_empty",

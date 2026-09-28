@@ -1805,6 +1805,26 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "conversation_execution_key_version_fk": {
+          "name": "conversation_execution_key_version_fk",
+          "tableFrom": "conversation_executions",
+          "tableTo": "relay_key_versions",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "relay_key_purpose",
+            "relay_key_subject_id",
+            "relay_key_version",
+            "relay_key_id"
+          ],
+          "columnsTo": [
+            "purpose",
+            "subject_id",
+            "key_version",
+            "key_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},

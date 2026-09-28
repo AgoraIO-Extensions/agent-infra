@@ -4,8 +4,9 @@ import {
 	allocateDeploymentApplicationIds,
 	allocateDeploymentDirectApplicationIds,
 	createDeploymentIdentityScope,
+	withApiIdentityResolverV1,
 } from "./deployment-identity.js";
-import type { IdentityContext } from "./http/identity.js";
+import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
 
 const identity: IdentityContext = {
 	schemaVersion: 1,
@@ -18,6 +19,39 @@ const identity: IdentityContext = {
 };
 
 describe("deployment identity scope", () => {
+	it("uses the Platform Store credential resolver even when the host supplies one", async () => {
+		let hostCalls = 0;
+		let storeCalls = 0;
+		const resolved = withApiIdentityResolverV1<IdentityAdapter>(
+			{
+				async resolve() {
+					return identity;
+				},
+				async hydrateUsers() {
+					return [];
+				},
+				async resolveApiCredential() {
+					hostCalls += 1;
+					return identity;
+				},
+			},
+			{
+				async resolveApiCredential() {
+					storeCalls += 1;
+					return null;
+				},
+			},
+		);
+		await expect(
+			resolved.resolveApiCredential?.(
+				"revoked-credential",
+				new Request("https://platform.test/agents"),
+			),
+		).resolves.toBeNull();
+		expect(storeCalls).toBe(1);
+		expect(hostCalls).toBe(0);
+	});
+
 	it("rejects malformed or invalid API authorization without using the browser identity", async () => {
 		let browserResolutions = 0;
 		const scope = createDeploymentIdentityScope({

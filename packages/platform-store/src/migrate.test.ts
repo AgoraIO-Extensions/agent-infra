@@ -266,6 +266,8 @@ describe("Platform PostgreSQL migration foundation", () => {
 				.flatMap((table) =>
 					getTableConfig(table).indexes.map((index) => index.config.name),
 				)
+				// The composite FK target constraint is authored in the SQL migration.
+				.concat("relay_key_version_identity_unique")
 				.toSorted();
 			const migratedIndexes = await client`
 					select indexes.indexname

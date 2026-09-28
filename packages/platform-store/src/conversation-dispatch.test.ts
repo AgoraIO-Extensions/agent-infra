@@ -3672,6 +3672,34 @@ async function expireTask(executionId: string) {
 }
 
 describe("durable stop confirmation", () => {
+	it("times out an unconfirmed stop while the execution is submitted", async () => {
+		const work = await seed("conversation.turn.stop.v1", {
+			executionStatus: "submitted",
+		});
+		await client`update platform.outbox_items set status = 'retry_scheduled', available_at = clock_timestamp() + interval '1 day' where id = ${work.itemId}`;
+		await client`update platform.conversation_stops set confirmation_deadline = clock_timestamp() - interval '1 second' where execution_id = ${work.executionId}`;
+		const restarted = open();
+		try {
+			const decision = await restarted.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "submitted-stop-timeout-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (decision.outcome !== "claimed")
+				throw new Error(`Expected stop claim: ${decision.outcome}`);
+			expect(decision.claim.executionStatus).toBe("unknown");
+			const [state] = await client`select e.status, s.confirmation_timed_out_at
+				from platform.conversation_executions e
+				join platform.conversation_stops s on s.execution_id = e.execution_id
+				where e.execution_id = ${work.executionId}`;
+			expect(state?.status).toBe("unknown");
+			expect(state?.confirmation_timed_out_at).not.toBeNull();
+		} finally {
+			await restarted.close();
+		}
+	});
+
 	it("discovers an expired stop before retry availability after restart, refuses a running ACK and confirms only a real terminal event", async () => {
 		const work = await seed("conversation.turn.stop.v1", {
 			executionStatus: "processing",

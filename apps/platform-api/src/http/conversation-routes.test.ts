@@ -608,6 +608,38 @@ describe("Conversation persisted SSE", () => {
 			},
 		},
 	};
+	it("keeps V1 details readable when V2 operation facts are persisted", async () => {
+		const input = dependencies();
+		const scope = { actorId: identity.userId, channelId: "web" };
+		const detail = await input.query.get(scope, conversation.conversationId);
+		const execution = await input.query.getExecution(
+			scope,
+			conversation.conversationId,
+			"execution-1",
+		);
+		if (!detail || !execution) throw new Error("Missing detail fixture");
+		input.query.get = vi.fn().mockResolvedValue({
+			...detail,
+			events: [...detail.events, operationEvent],
+		});
+		input.query.getExecution = vi.fn().mockResolvedValue({
+			...execution,
+			events: [...execution.events, operationEvent],
+		});
+		const { app } = testApp(input);
+		const v1Detail = await app.request("/api/v1/conversations/conversation-1");
+		const v1Execution = await app.request(
+			"/api/v1/conversations/conversation-1/executions/execution-1",
+		);
+		expect(v1Detail.status).toBe(200);
+		expect(v1Execution.status).toBe(200);
+		expect(
+			ConversationDetailProjectionV1Schema.parse(await v1Detail.json()),
+		).toHaveProperty("messages");
+		expect(
+			ExecutionDetailProjectionV1Schema.parse(await v1Execution.json()),
+		).toHaveProperty("processSummary");
+	});
 	it("keeps V1 streaming after validated V2 facts using the original cursor", async () => {
 		const query = dependencies().query;
 		query.replay = vi

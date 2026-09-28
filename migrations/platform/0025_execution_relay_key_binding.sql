@@ -35,7 +35,9 @@ ALTER TABLE "platform"."conversation_executions" ADD COLUMN "relay_key_subject_i
 ALTER TABLE "platform"."conversation_executions" ADD COLUMN "relay_key_id" text;--> statement-breakpoint
 ALTER TABLE "platform"."conversation_executions" ADD COLUMN "relay_key_version" bigint;--> statement-breakpoint
 ALTER TABLE "platform"."relay_key_versions" ADD CONSTRAINT "relay_key_version_subject_fk" FOREIGN KEY ("purpose","subject_id") REFERENCES "platform"."relay_key_subjects"("purpose","subject_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "platform"."relay_key_versions" ADD CONSTRAINT "relay_key_version_identity_unique" UNIQUE ("purpose","subject_id","key_version","key_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "relay_key_version_key_id_unique" ON "platform"."relay_key_versions" USING btree ("key_id");--> statement-breakpoint
+ALTER TABLE "platform"."conversation_executions" ADD CONSTRAINT "conversation_execution_key_version_fk" FOREIGN KEY ("relay_key_purpose","relay_key_subject_id","relay_key_version","relay_key_id") REFERENCES "platform"."relay_key_versions"("purpose","subject_id","key_version","key_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "platform"."conversation_executions" ADD CONSTRAINT "conversation_execution_key_binding" CHECK ((
 				"platform"."conversation_executions"."execution_source" IS NULL
 				AND "platform"."conversation_executions"."relay_key_purpose" IS NULL

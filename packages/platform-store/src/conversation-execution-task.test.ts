@@ -369,6 +369,64 @@ describe("durable task admission", () => {
 		}
 	});
 
+	it("rejects nonexistent or mismatched Relay Key identities", async () => {
+		const result = await taskUseCase().submitTask(command("invalid-relay-key"));
+		if (result.outcome !== "accepted")
+			throw new Error("Expected accepted task");
+		await sql`insert into platform.relay_key_versions
+			(purpose, subject_id, key_version, key_id, ciphertext)
+			values ('agent-default', 'agent_task', 2, 'relay-key-task-2', ${sql.json({
+				schemaVersion: 1,
+				purpose: "agent-default",
+				subjectId: "agent_task",
+				keyId: "relay-key-task-2",
+				keyVersion: 2,
+			})})`;
+		await sql`insert into platform.relay_key_subjects
+			(purpose, subject_id, last_version, current_version)
+			values ('agent-default', 'other_agent', 1, 1)`;
+		await sql`insert into platform.relay_key_versions
+			(purpose, subject_id, key_version, key_id, ciphertext)
+			values ('agent-default', 'other_agent', 1, 'relay-key-other-1', ${sql.json(
+				{
+					schemaVersion: 1,
+					purpose: "agent-default",
+					subjectId: "other_agent",
+					keyId: "relay-key-other-1",
+					keyVersion: 1,
+				},
+			)})`;
+		for (const [keyId, version] of [
+			["missing-key", 1],
+			["relay-key-task-2", 1],
+			["relay-key-task-1", 2],
+		] as const) {
+			await expect(
+				sql`update platform.conversation_executions
+					set relay_key_id = ${keyId}, relay_key_version = ${version}
+					where execution_id = ${result.result.executionId}`,
+			).rejects.toMatchObject({
+				code: "23503",
+				constraint_name: "conversation_execution_key_version_fk",
+			});
+		}
+		await expect(
+			sql`update platform.conversation_executions
+				set relay_key_subject_id = 'other_agent'
+				where execution_id = ${result.result.executionId}`,
+		).rejects.toMatchObject({
+			code: "23503",
+			constraint_name: "conversation_execution_key_version_fk",
+		});
+		await expect(
+			sql`delete from platform.relay_key_versions
+				where purpose = 'agent-default' and subject_id = 'agent_task' and key_version = 1`,
+		).rejects.toMatchObject({
+			code: "23503",
+			constraint_name: "conversation_execution_key_version_fk",
+		});
+	});
+
 	it("falls back to the current default when a continued task's selection disappeared", async () => {
 		await sql`insert into platform.conversations
 			(id, agent_id, actor_id, channel_id, status, session_generation,

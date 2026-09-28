@@ -19,7 +19,6 @@ export function withApiIdentityResolverV1<T extends IdentityAdapter>(
 	identity: T,
 	apiIdentity: ApiIdentityResolverV1,
 ): T {
-	if (identity.resolveApiCredential) return identity;
 	// Keep the deployment adapter as the live prototype so revocation and
 	// directory changes made by the host are observed on every request.
 	const resolved = Object.create(identity) as T;
