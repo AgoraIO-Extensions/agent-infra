@@ -58,6 +58,29 @@ it("contains asynchronous log destination errors", async () => {
 	expect(telemetry.status().droppedLogs).toBe(2);
 });
 
+it("keeps malformed operation references out of logs", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-worker",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	telemetry.record({
+		stage: "model",
+		outcome: "completed",
+		operationRef: "PRIVATE_SENTINEL\n",
+		attemptRef: "a".repeat(129),
+	});
+	expect(lines).toHaveLength(1);
+	expect(lines[0]).not.toContain("PRIVATE_SENTINEL");
+	expect(lines[0]).not.toContain("attemptRef");
+});
+
 it("keeps invalid observational input out of business control flow", () => {
 	const telemetry = startObservability({
 		service: "platform-api",

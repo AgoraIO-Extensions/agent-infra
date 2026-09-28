@@ -81,9 +81,16 @@ const stages = new Set<string>(operationalStages);
 const codes = new Set<string>(operationalCodes);
 const identifier =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const operationIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 function safeId(value: string | undefined) {
 	return value && identifier.test(value) ? value : undefined;
+}
+
+function safeOperationRef(value: string | undefined) {
+	return typeof value === "string" && operationIdentifier.test(value)
+		? value
+		: undefined;
 }
 
 function signalUrl(endpoint: string, signal: "traces" | "metrics") {
@@ -252,10 +259,12 @@ export function startObservability(options: ObservabilityOptions) {
 				...(safeId(event.executionId)
 					? { executionId: event.executionId }
 					: {}),
-				...(safeId(event.operationRef)
+				...(safeOperationRef(event.operationRef)
 					? { operationRef: event.operationRef }
 					: {}),
-				...(safeId(event.attemptRef) ? { attemptRef: event.attemptRef } : {}),
+				...(safeOperationRef(event.attemptRef)
+					? { attemptRef: event.attemptRef }
+					: {}),
 			};
 			try {
 				operations.add(1, labels);
