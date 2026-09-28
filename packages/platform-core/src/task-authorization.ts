@@ -127,6 +127,7 @@ function accessSources(
 	principalValue: TaskPrincipalV1,
 	user: CurrentTaskUserV1 | undefined,
 	agent: AgentManagementStateV1,
+	currentAgentAuthorizationRevision?: string | null,
 ): readonly TaskAccessSourceV1[] {
 	if (principalValue.kind === "application") {
 		return agent.principalGrants?.some(
@@ -134,6 +135,7 @@ function accessSources(
 				grant.principal.kind === "application" &&
 				grant.principal.id === principalValue.id &&
 				grant.grantType === "use" &&
+				grant.authorizationRevision === currentAgentAuthorizationRevision &&
 				grant.revokedAt === null,
 		)
 			? [{ kind: "application", applicationId: principalValue.id }]
@@ -278,7 +280,12 @@ export function captureApplicationTaskAuthorizationBoundaryV1(input: {
 		kind: "application",
 		id: application.applicationId,
 	};
-	const sources = accessSources(subject, undefined, agent);
+	const sources = accessSources(
+		subject,
+		undefined,
+		agent,
+		input.agentAuthorizationRevision,
+	);
 	if (sources.length === 0) return null;
 	return parseTaskAuthorizationBoundaryV1({
 		schemaVersion: 1,
@@ -303,6 +310,7 @@ export function isTaskAuthorizationCurrentV1(input: {
 	readonly user?: CurrentTaskUserV1;
 	readonly application?: CurrentTaskApplicationV1;
 	readonly agent: AgentManagementStateV1;
+	readonly currentAgentAuthorizationRevision?: string | null;
 }): boolean {
 	const boundary = parseTaskAuthorizationBoundaryV1(input.boundary);
 	const agent = parseAgentManagementPortState(input.agent);
@@ -322,7 +330,12 @@ export function isTaskAuthorizationCurrentV1(input: {
 			return false;
 	}
 	const current = new Set(
-		accessSources(boundary.principal, user, agent).map(sourceKey),
+		accessSources(
+			boundary.principal,
+			user,
+			agent,
+			input.currentAgentAuthorizationRevision,
+		).map(sourceKey),
 	);
 	return boundary.accessSources.some((source) =>
 		current.has(sourceKey(source)),

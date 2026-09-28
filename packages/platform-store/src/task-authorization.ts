@@ -154,6 +154,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 					const [deployment] = await transaction
 						.select({
 							configurationRevision: agents.currentConfigurationRevision,
+							currentAgentAuthorizationRevision: agents.authorizationRevision,
 							workload: workloadReconciliations.state,
 						})
 						.from(agents)
@@ -173,6 +174,8 @@ export class PostgresTaskAuthorizationStoreV1 {
 						boundary,
 						revokedAt: record.revokedAt,
 						agent,
+						currentAgentAuthorizationRevision:
+							deployment.currentAgentAuthorizationRevision,
 						configurationRevision: deployment.configurationRevision,
 						workload: decoded && !decoded.legacy ? decoded.state : null,
 					};

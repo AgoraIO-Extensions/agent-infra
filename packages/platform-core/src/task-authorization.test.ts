@@ -139,6 +139,7 @@ describe("task authorization boundary", () => {
 			isTaskAuthorizationCurrentV1({
 				boundary,
 				application,
+				currentAgentAuthorizationRevision: "agent-access-4",
 				agent: {
 					...grantedAgent,
 					principalGrants: [
@@ -150,6 +151,61 @@ describe("task authorization boundary", () => {
 				},
 			}),
 		).toBe(false);
+	});
+
+	it("rejects stale application grants without cancelling an unrelated active grant", () => {
+		const application: CurrentTaskApplicationV1 = {
+			schemaVersion: 1,
+			applicationId: "application-a",
+			accountStatus: "active",
+			authorizationRevision: "application-access-2",
+		};
+		const grant = {
+			principal: {
+				kind: "application" as const,
+				id: application.applicationId,
+			},
+			grantType: "use" as const,
+			authorizationRevision: "agent-access-4",
+			revokedAt: null,
+		};
+		const grantedAgent = { ...agent, principalGrants: [grant] };
+		expect(
+			captureApplicationTaskAuthorizationBoundaryV1({
+				application,
+				agent: grantedAgent,
+				channelId: "api",
+				agentAuthorizationRevision: "agent-access-5",
+			}),
+		).toBeNull();
+		const boundary = captureApplicationTaskAuthorizationBoundaryV1({
+			application,
+			agent: grantedAgent,
+			channelId: "api",
+			agentAuthorizationRevision: "agent-access-4",
+		});
+		if (!boundary) throw new Error("Expected an admitted task boundary");
+		expect(
+			isTaskAuthorizationCurrentV1({
+				boundary,
+				application,
+				agent: grantedAgent,
+				currentAgentAuthorizationRevision: "agent-access-5",
+			}),
+		).toBe(false);
+		expect(
+			isTaskAuthorizationCurrentV1({
+				boundary,
+				application,
+				agent: {
+					...grantedAgent,
+					principalGrants: [
+						{ ...grant, authorizationRevision: "agent-access-5" },
+					],
+				},
+				currentAgentAuthorizationRevision: "agent-access-5",
+			}),
+		).toBe(true);
 	});
 
 	it("rejects an application source bound to a user principal", () => {
