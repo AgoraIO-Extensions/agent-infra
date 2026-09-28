@@ -1,3 +1,7 @@
+import { createHash, generateKeyPairSync } from "node:crypto";
+
+import { createRelayKeyEncryptorV1 } from "@agent-infra/secret-store";
+import { createRelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -334,6 +338,135 @@ describe("Relay Key version authority on PostgreSQL", () => {
 					(purpose, subject_id, key_version, key_id)
 				values (${binding.purpose}, ${binding.subjectId}, ${binding.keyVersion}, ${"wrong-key"})
 			`).rejects.toMatchObject({ code: "23503" });
+		} finally {
+			await client.end();
+		}
+	}, 120_000);
+
+	it("reads and decrypts only the accepted ciphertext version after replacement and revoke", async () => {
+		if (!database) throw new Error("PostgreSQL test database is unavailable");
+		const client = postgres(database.databaseUrl, { max: 2 });
+		const { publicKey, privateKey } = generateKeyPairSync("rsa", {
+			modulusLength: 3072,
+		});
+		const publicKeyDer = publicKey.export({ format: "der", type: "spki" });
+		const encryptor = createRelayKeyEncryptorV1({
+			encryptionKeys: {
+				schemaVersion: 1,
+				activeWrappingKeyVersion: "test-wrapping-key",
+				keys: [
+					{
+						schemaVersion: 1,
+						keyVersion: "test-wrapping-key",
+						wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+						publicKeySpkiDerBase64: publicKeyDer.toString("base64"),
+						publicKeyFingerprint: createHash("sha256")
+							.update(publicKeyDer)
+							.digest("hex"),
+						rsaModulusBits: 3072,
+						status: "active",
+					},
+				],
+			},
+		});
+		const decryptor = createRelayKeyWorkerDecryptorV1({
+			keys: [
+				{
+					keyVersion: "test-wrapping-key",
+					privateKeyPkcs8DerBase64: privateKey
+						.export({ format: "der", type: "pkcs8" })
+						.toString("base64"),
+				},
+			],
+		});
+		const target = { purpose: "personal" as const, subjectId: "user-crypto" };
+		const k1 = "sk-user-crypto-version-one";
+		const k2 = "sk-user-crypto-version-two";
+		async function decryptedText(
+			record: unknown,
+			binding: RelayKeyVersionBindingV1,
+		) {
+			const result = await decryptor.decrypt({
+				encryptedRecord: record,
+				expectedBinding: binding,
+			});
+			expect(result.outcome).toBe("decrypted");
+			if (result.outcome !== "decrypted") throw new Error();
+			try {
+				return Buffer.from(result.plaintext).toString("utf8");
+			} finally {
+				result.plaintext.fill(0);
+			}
+		}
+		try {
+			const first = await client.begin((sql) =>
+				replaceRelayKeyVersionInTransaction(sql, {
+					...target,
+					expectedCurrentVersion: null,
+					encrypt: (binding) =>
+						encryptor.encrypt({ ...binding, plaintext: k1 }),
+				}),
+			);
+			if (first.outcome !== "replaced") throw new Error();
+			const acceptedBinding = first.binding;
+			const second = await client.begin((sql) =>
+				replaceRelayKeyVersionInTransaction(sql, {
+					...target,
+					expectedCurrentVersion: 1,
+					encrypt: (binding) =>
+						encryptor.encrypt({ ...binding, plaintext: k2 }),
+				}),
+			);
+			if (second.outcome !== "replaced") throw new Error();
+			expect(
+				await client.begin((sql) =>
+					currentRelayKeyVersionInTransaction(sql, target),
+				),
+			).toEqual(second.binding);
+			const pinnedRecord = await client.begin((sql) =>
+				readRelayKeyVersionInTransaction(sql, acceptedBinding),
+			);
+			const currentRecord = await client.begin((sql) =>
+				readRelayKeyVersionInTransaction(sql, second.binding),
+			);
+			expect(pinnedRecord).not.toBeNull();
+			expect(JSON.stringify(pinnedRecord)).not.toContain(k1);
+			expect(JSON.stringify(currentRecord)).not.toContain(k2);
+			expect(await decryptedText(pinnedRecord, acceptedBinding)).toBe(k1);
+			expect(await decryptedText(currentRecord, second.binding)).toBe(k2);
+			expect(
+				await decryptor.decrypt({
+					encryptedRecord: pinnedRecord,
+					expectedBinding: second.binding,
+				}),
+			).toEqual({ outcome: "failed", code: "RELAY_KEY_METADATA_INVALID" });
+			expect(
+				await client.begin((sql) =>
+					readRelayKeyVersionInTransaction(sql, {
+						...acceptedBinding,
+						subjectId: "other-user",
+					}),
+				),
+			).toBeNull();
+			expect(
+				await client.begin((sql) =>
+					revokeCurrentRelayKeyInTransaction(sql, {
+						...target,
+						expectedCurrentVersion: 2,
+					}),
+				),
+			).toBe("revoked");
+			expect(
+				await client.begin((sql) =>
+					currentRelayKeyVersionInTransaction(sql, target),
+				),
+			).toBeNull();
+			expect(
+				await client.begin((sql) =>
+					readRelayKeyVersionInTransaction(sql, acceptedBinding),
+				),
+			).toEqual(pinnedRecord);
+			expect(await decryptedText(pinnedRecord, acceptedBinding)).toBe(k1);
 		} finally {
 			await client.end();
 		}
