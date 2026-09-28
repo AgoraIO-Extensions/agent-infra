@@ -284,6 +284,99 @@ it.each([
 	},
 );
 
+it("does not turn ACP progress during permission into a tool start", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-permission-progress-"));
+	const marker = join(path, "permission-entered");
+	let releaseAuthorization: () => void = () => {};
+	const authorizationRelease = new Promise<void>((resolve) => {
+		releaseAuthorization = resolve;
+	});
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		authorizeExternalAction: async (action) => {
+			await driver.validateExternalAction(action);
+			if (action.kind === "tool") {
+				await writeFile(marker, "entered");
+				await authorizationRelease;
+			}
+		},
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async (_directory, _selection, admit) => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: {
+				ACP_TEST_MODE: "tool-progress-during-permission",
+				ACP_TEST_PERMISSION_MARKER: marker,
+			},
+			authorize: async () => {
+				await admit();
+				return true;
+			},
+		}),
+	});
+	try {
+		const executionId = "execution-permission-progress";
+		const accepted = await driver.execute({
+			schemaVersion: 2,
+			kind: "submit-turn",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId,
+			turnId: "turn-permission-progress",
+			operationId: "operation-permission-progress",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		});
+		await vi.waitFor(async () => {
+			const events = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				executionId,
+			);
+			expect(
+				events.some(
+					(event) =>
+						event.type === "text" &&
+						event.payload.delta === "permission-progress-marker",
+				),
+			).toBe(true);
+		});
+		const phases = (
+			await driver.replayEvents(accepted.nativeSessionRef, executionId)
+		).flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "tool"
+				? [event.payload.phase]
+				: [],
+		);
+		expect(phases).toEqual(["intent"]);
+		releaseAuthorization();
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, executionId),
+			).toBe("completed"),
+		);
+	} finally {
+		releaseAuthorization();
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it("permits a second native tool while the first authorized tool is still in progress", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-concurrent-tools-"));
 	const driver = await GenericAcpRuntimeDriver.open({
