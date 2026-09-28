@@ -263,6 +263,70 @@ describe("PostgreSQL API identity store", () => {
 		]);
 	});
 
+	it("advances the Agent authorization revision when revoking a grant", async () => {
+		await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
+			platform.agents cascade`;
+		await adminClient`
+			insert into platform.agents (id, authorization_revision)
+			values ('agent_revoke_revision', 'authorization_revision_1')
+		`;
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values
+				('agent_revoke_revision', 'application', 'revoked-app', 'manage',
+				'authorization_revision_1'),
+				('agent_revoke_revision', 'application', 'remaining-app', 'use',
+				'authorization_revision_1')
+		`;
+		const request = {
+			actor: {
+				schemaVersion: 1 as const,
+				userId: "user_owner",
+				accountStatus: "active" as const,
+				isAdministrator: true,
+			},
+			agentId: "agent_revoke_revision",
+			principal: { kind: "application" as const, id: "revoked-app" },
+			grantType: "manage" as const,
+		};
+		await expect(
+			store.revokeAgentGrant({
+				...request,
+				audit: { ...userAudit, action: "api.agent.grant.revoked" },
+			}),
+		).resolves.toBe(true);
+		const [agent] = await adminClient`
+			select authorization_revision from platform.agents
+			where id = 'agent_revoke_revision'
+		`;
+		expect(agent?.authorization_revision).not.toBe("authorization_revision_1");
+		const grants = await adminClient`
+			select principal_id, authorization_revision, revoked_at
+			from platform.agent_principal_grants
+			where agent_id = 'agent_revoke_revision'
+			order by principal_id
+		`;
+		expect(grants[0]).toMatchObject({
+			principal_id: "remaining-app",
+			authorization_revision: agent?.authorization_revision,
+			revoked_at: null,
+		});
+		expect(grants[1]).toMatchObject({
+			principal_id: "revoked-app",
+			authorization_revision: "authorization_revision_1",
+			revoked_at: expect.any(Date),
+		});
+		await expect(store.revokeAgentGrant(request)).resolves.toBe(false);
+		const [unchanged] = await adminClient`
+			select authorization_revision from platform.agents
+			where id = 'agent_revoke_revision'
+		`;
+		expect(unchanged?.authorization_revision).toBe(
+			agent?.authorization_revision,
+		);
+	});
+
 	it("rejects grant writes after the actor's manage grant is revoked", async () => {
 		await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
 			platform.agents cascade`;

@@ -11,7 +11,7 @@ import {
 	type AgentManagementTransactionRequestV1,
 	snapshotAgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
-import { and, asc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -211,7 +211,7 @@ export async function readAgentManagementState(
 				and(
 					eq(agentPrincipalGrants.agentId, agentId),
 					application.authorizationRevision === null
-						? undefined
+						? sql`false`
 						: eq(
 								agentPrincipalGrants.authorizationRevision,
 								application.authorizationRevision,
@@ -703,10 +703,8 @@ function agentScopeCondition(scope: AgentManagementAgentScopeV1) {
 						? inArray(agentPrincipalGrants.grantType, ["manage", "use"])
 						: eq(agentPrincipalGrants.grantType, scope.grantType)
 				}
-				and (
-					${isNull(agents.authorizationRevision)}
-					or ${agentPrincipalGrants.authorizationRevision} = ${agents.authorizationRevision}
-				)
+				and ${agents.authorizationRevision} is not null
+				and ${agentPrincipalGrants.authorizationRevision} = ${agents.authorizationRevision}
 				and ${agentPrincipalGrants.revokedAt} is null
 		)`;
 	}
@@ -790,10 +788,8 @@ const projectionAccessSelection = {
 		)
 		from ${agentPrincipalGrants}
 		where ${agentPrincipalGrants.agentId} = ${agentApplications.agentId}
-			and (
-				${isNull(agents.authorizationRevision)}
-				or ${agentPrincipalGrants.authorizationRevision} = ${agents.authorizationRevision}
-			)
+			and ${agents.authorizationRevision} is not null
+			and ${agentPrincipalGrants.authorizationRevision} = ${agents.authorizationRevision}
 	), '[]'::jsonb)`,
 };
 
