@@ -69,11 +69,14 @@ export const workloadInput = {
   不能验证标准模板；自定义 Agent 可使用空数组。
 - `executionCapacityProfiles` 必须由真实负载/conformance 证据产生，绑定精确 image digest、
   resource profile 与资源配置 hash。空数组不允许新 Turn。撤回容量证明仍保留原执行控制。
-- 内置消费者只接通平台 Web 渠道的当前 Core 权威判断。未知渠道返回 unavailable；企微仍需
+- 内置消费者接通平台 Web 与固定 `api:user` / `api:application` 渠道的当前 Core 权威判断。
+  API 任务沿原 Conversation/Execution 与自动发现循环执行，应用消费自己的当前授权事实。
+  未知渠道返回 unavailable；企微仍需
   其独立装配与验收。标准模板的渠道资格不取决于暂时 Ready 状态；自定义平台入口须有已验证
   兼容事实。新业务仍需通过当前身份、Agent 使用权、配置、Workload 与容量终审。
 - Worker-only 文件不得挂载到 API、Agent 或 Web，也不得进入日志、任务正文或 Git。目录
-  Adapter 的具体接入与 API taskBoundary 接线由各自后继完成。
+  Adapter 的具体接入依赖受信任目录装配；API 任务的正式原生闭环与故障矩阵仍按
+  [#482](https://github.com/AgoraIO-Extensions/agent-infra/issues/482) 验收。
 
 ## 验证边界
 

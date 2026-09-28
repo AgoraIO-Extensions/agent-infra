@@ -3,6 +3,7 @@ import {
 	PersistedConversationEventV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
+import type { PersistedConversationEventV2 } from "../../pilot/generated-v2/types.gen.js";
 import { currentExecution } from "./conversation-screen-state.js";
 import { event, history, timestamp } from "./conversation-test-fixtures.js";
 
@@ -98,6 +99,54 @@ describe("current conversation execution", () => {
 		expect(currentExecution(projection, projection.events)).toEqual({
 			executionId: "execution-2",
 			status: "submitted",
+		});
+	});
+});
+
+describe("stop confirmation timeout presentation", () => {
+	it("does not infer a stop timeout from an unrelated V2 task status", () => {
+		const unrelated = {
+			...event(1),
+			schemaVersion: 2,
+			type: "task.status",
+			payload: { status: "processing", reason: "TASK_WAIT_TIMEOUT" },
+		} as unknown as PersistedConversationEventV2;
+		expect(currentExecution(null, [unrelated])).toEqual({
+			executionId: unrelated.executionId,
+			status: "processing",
+		});
+	});
+
+	it("retains the controlled timeout explanation through a later running event until a real terminal", () => {
+		const timeout = {
+			...event(1),
+			schemaVersion: 2 as const,
+			type: "task.status" as const,
+			payload: {
+				status: "unknown" as const,
+				reason: "STOP_CONFIRMATION_TIMEOUT" as const,
+			},
+		};
+		const running = {
+			...event(2),
+			schemaVersion: 1 as const,
+			type: "execution.status" as const,
+			payload: { status: "processing" as const },
+		};
+		expect(currentExecution(null, [timeout, running])).toEqual({
+			executionId: timeout.executionId,
+			status: "unknown",
+			reason: "STOP_CONFIRMATION_TIMEOUT",
+		});
+		const completed = {
+			...event(3),
+			schemaVersion: 1 as const,
+			type: "execution.status" as const,
+			payload: { status: "completed" as const },
+		};
+		expect(currentExecution(null, [timeout, running, completed])).toEqual({
+			executionId: timeout.executionId,
+			status: "completed",
 		});
 	});
 });

@@ -162,7 +162,7 @@ export function registerSessionAuditRoutes(
 		);
 
 		try {
-			if (auditPage.items.some(({ actor }) => actor.kind !== "user")) {
+			if (auditPage.items.some(({ actor }) => actor.kind === "system")) {
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
 			const actorById = await hydrateAuditUsers(
@@ -174,7 +174,10 @@ export function registerSessionAuditRoutes(
 				PlatformAuditProjectionV1Schema.parse({
 					schemaVersion: 1,
 					...publicAuditFields(item),
-					actor: actorById.get(item.actor.actorId),
+					actor:
+						item.actor.kind === "application"
+							? { kind: "application", actorId: item.actor.actorId }
+							: actorById.get(item.actor.actorId),
 				}),
 			);
 			return context.json({ items, nextCursor: auditPage.nextCursor });
@@ -203,8 +206,8 @@ export function registerSessionAuditRoutes(
 					schemaVersion: 2,
 					...publicAuditFields(item),
 					actor:
-						item.actor.kind === "system"
-							? { kind: "system", actorId: item.actor.actorId }
+						item.actor.kind === "system" || item.actor.kind === "application"
+							? { kind: item.actor.kind, actorId: item.actor.actorId }
 							: actorById.get(item.actor.actorId),
 				}),
 			);

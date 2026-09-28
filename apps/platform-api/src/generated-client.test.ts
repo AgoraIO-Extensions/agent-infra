@@ -42,7 +42,13 @@ const {
 	updateConversationModelSelection,
 	withdrawAgentApplication,
 } = generatedSdk;
-const { getAgentV2, listAgentsV2, listPlatformAuditV2 } = generatedSdkV2;
+const {
+	getAgentV2,
+	getConversationV2,
+	getExecutionDetailV2,
+	listAgentsV2,
+	listPlatformAuditV2,
+} = generatedSdkV2;
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -519,5 +525,37 @@ describe("generated Conversation client", () => {
 			kind: "control",
 			type: "timeline.reload",
 		});
+	});
+});
+
+describe("generated V2 compatibility client", () => {
+	it("reaches mounted agent and conversation projections", async () => {
+		const { app } = testApp();
+		const client = createClientV2({
+			baseUrl: "https://platform.example.test",
+			fetch: async (input: string | URL | Request, init?: RequestInit) =>
+				app.fetch(input instanceof Request ? input : new Request(input, init)),
+		});
+
+		const responses = await Promise.all([
+			listAgentsV2({ client }),
+			getAgentV2({ client, path: { agentId: "agent-1" } }),
+			getConversationV2({
+				client,
+				path: { conversationId: "conversation-1" },
+			}),
+			getExecutionDetailV2({
+				client,
+				path: {
+					conversationId: "conversation-1",
+					executionId: "execution-1",
+				},
+			}),
+		]);
+
+		expect(responses.map(({ response }) => response.status)).toEqual([
+			200, 200, 200, 200,
+		]);
+		expect(responses.every(({ error }) => error === undefined)).toBe(true);
 	});
 });

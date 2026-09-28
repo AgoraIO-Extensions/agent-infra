@@ -1,14 +1,75 @@
 import { Buffer } from "node:buffer";
 
-import { desc, eq, sql } from "drizzle-orm";
+import { parseTaskApiAuditInputV1 } from "@agent-infra/platform-core";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 import { auditEvents } from "./schema.js";
 
+const taskApiAuditMetadata = {
+	actorKind: "unknown",
+	actorKinds: ["user", "application", "unknown"],
+	subjectKind: "unknown",
+	subjectKinds: ["unknown", "agent", "conversation", "execution"],
+	details: "task_api",
+} as const;
+
 const platformAuditActionMetadata = {
+	"task.api.access": taskApiAuditMetadata,
+	"task.api.subscription.started": taskApiAuditMetadata,
+	"task.api.subscription.ended": taskApiAuditMetadata,
+	"api.access.rejected": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_access",
+	},
+	"api.application.created": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
+	"api.credential.issued": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
+	"api.credential.revoked": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
+	"api.credential.delivery.granted": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
+	"api.credential.delivery.revoked": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
+	"api.agent.grant.granted": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
+	"api.agent.grant.revoked": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
 	"agent.application.submitted": {
 		actorKind: "user",
+		actorKinds: ["user", "application"],
 		subjectKind: "agent_application",
 		details: false,
 	},
@@ -131,6 +192,9 @@ const configurationChangedFields = [
 ] as const;
 
 export type PlatformAuditActionV1 = keyof typeof platformAuditActionMetadata;
+const managementAuditActions = Object.keys(platformAuditActionMetadata).filter(
+	(action) => !action.startsWith("task.api."),
+);
 export type PlatformAuditChangedFieldV1 =
 	(typeof configurationChangedFields)[number];
 
@@ -150,12 +214,20 @@ export interface PlatformAuditProjectionV1 {
 	readonly schemaVersion: 1;
 	readonly auditId: string;
 	readonly actor: {
-		readonly kind: "user" | "system";
+		readonly kind: "user" | "application" | "system" | "unknown";
 		readonly actorId: string;
 	};
 	readonly action: PlatformAuditActionV1;
 	readonly subject: {
-		readonly kind: "agent_application" | "agent" | "secret" | "secret_key";
+		readonly kind:
+			| "agent_application"
+			| "agent"
+			| "secret"
+			| "secret_key"
+			| "grant"
+			| "unknown"
+			| "conversation"
+			| "execution";
 		readonly subjectId: string;
 	};
 	readonly result: "succeeded" | "failed";
@@ -261,8 +333,10 @@ function validDate(input: unknown): input is Date {
 function changedFields(
 	action: PlatformAuditActionV1,
 	details: unknown,
-): readonly PlatformAuditChangedFieldV1[] {
+): readonly string[] {
 	const detailKind = platformAuditActionMetadata[action].details;
+	if (detailKind === "task_api")
+		return [(details as { reason: string }).reason];
 	if (detailKind === false) {
 		if (details !== null) throw new PlatformAuditQueryError("unavailable");
 		return [];
@@ -295,6 +369,69 @@ function changedFields(
 		}
 		return [];
 	}
+	if (detailKind === "api_identity") {
+		if (
+			!exactObject(details, ["recipient", "grantType"]) &&
+			!exactObject(details, ["recipient"])
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		const value = details as {
+			readonly recipient: unknown;
+			readonly grantType?: unknown;
+		};
+		const recipient = value.recipient;
+		if (
+			value.grantType !== undefined &&
+			value.grantType !== null &&
+			value.grantType !== "manage" &&
+			value.grantType !== "use"
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		if (recipient !== null) {
+			if (!exactObject(recipient, ["kind", "id"]))
+				throw new PlatformAuditQueryError("unavailable");
+			const value = recipient as {
+				readonly kind: unknown;
+				readonly id: unknown;
+			};
+			if (
+				(value.kind !== "user" && value.kind !== "application") ||
+				!validText(value.id)
+			)
+				throw new PlatformAuditQueryError("unavailable");
+		}
+		return [];
+	}
+	if (detailKind === "api_access") {
+		if (!exactObject(details, ["reason", "requiredScopes"]))
+			throw new PlatformAuditQueryError("unavailable");
+		const value = details as {
+			readonly reason: unknown;
+			readonly requiredScopes: unknown;
+		};
+		if (
+			value.reason !== "account_inactive" &&
+			value.reason !== "invalid_credential" &&
+			value.reason !== "missing_scope" &&
+			value.reason !== "operation_forbidden" &&
+			value.reason !== "resource_unavailable"
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		if (
+			!Array.isArray(value.requiredScopes) ||
+			value.requiredScopes.some(
+				(scope) =>
+					scope !== "agent:create" &&
+					scope !== "agent:manage" &&
+					scope !== "agent:use" &&
+					scope !== "agent:read",
+			) ||
+			new Set(value.requiredScopes).size !== value.requiredScopes.length
+		) {
+			throw new PlatformAuditQueryError("unavailable");
+		}
+		return [value.reason as string];
+	}
 	if (!exactObject(details, ["changedFields"])) {
 		throw new PlatformAuditQueryError("unavailable");
 	}
@@ -317,6 +454,8 @@ function changedFields(
 }
 
 interface AuditRow {
+	readonly requestId: string | null;
+	readonly agentId: string | null;
 	readonly auditId: string;
 	readonly traceId: string;
 	readonly actorType: string;
@@ -343,24 +482,80 @@ function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
 	const action = row.action as PlatformAuditActionV1;
 	const metadata = platformAuditActionMetadata[action];
 	const expectedActorType = metadata.actorKind;
+	const allowedActorTypes =
+		"actorKinds" in metadata ? metadata.actorKinds : [expectedActorType];
 	const expectedTargetType = metadata.subjectKind;
+	const allowedTargetTypes =
+		"subjectKinds" in metadata ? metadata.subjectKinds : [expectedTargetType];
 	if (
-		row.actorType !== expectedActorType ||
-		row.targetType !== expectedTargetType ||
+		!allowedActorTypes.some((actorType) => actorType === row.actorType) ||
+		!allowedTargetTypes.some((targetType) => targetType === row.targetType) ||
 		(row.outcome !== "succeeded" &&
 			row.outcome !== "rejected" &&
 			row.outcome !== "failed")
 	) {
 		throw new PlatformAuditQueryError("unavailable");
 	}
+	if (metadata.details === "task_api") {
+		try {
+			const details = row.details as Record<string, unknown>;
+			if (
+				!exactObject(details, [
+					"schemaVersion",
+					"operation",
+					"phase",
+					"reason",
+					"target",
+					...(Object.hasOwn(details, "subscriptionId")
+						? ["subscriptionId"]
+						: []),
+				])
+			)
+				throw new PlatformAuditQueryError("unavailable");
+			const parsed = parseTaskApiAuditInputV1({
+				...details,
+				auditId: row.auditId,
+				requestId: row.requestId,
+				traceId: row.traceId,
+				result: row.outcome,
+				occurredAt: row.occurredAt,
+				principal:
+					row.actorType === "unknown"
+						? { kind: "unknown" }
+						: { kind: row.actorType, id: row.actorId },
+			});
+			const target = parsed.target;
+			const expectedId =
+				target.kind === "unknown"
+					? "unknown"
+					: target.kind === "agent"
+						? target.agentId
+						: target.kind === "conversation"
+							? target.conversationId
+							: target.executionId;
+			if (
+				row.action !== `task.api.${parsed.phase}` ||
+				row.targetType !== target.kind ||
+				row.targetId !== expectedId ||
+				row.agentId !== (target.kind === "unknown" ? null : target.agentId) ||
+				(row.actorType === "unknown" && row.actorId !== "unknown")
+			)
+				throw new PlatformAuditQueryError("unavailable");
+		} catch {
+			throw new PlatformAuditQueryError("unavailable");
+		}
+	}
 	const fields = changedFields(action, row.details);
 	return {
 		schemaVersion: 1,
 		auditId: row.auditId,
-		actor: { kind: expectedActorType, actorId: row.actorId },
+		actor: {
+			kind: row.actorType as PlatformAuditProjectionV1["actor"]["kind"],
+			actorId: row.actorId,
+		},
 		action,
 		subject: {
-			kind: expectedTargetType,
+			kind: row.targetType as PlatformAuditProjectionV1["subject"]["kind"],
 			subjectId:
 				expectedTargetType === "secret_key" ? "secret-key" : row.targetId,
 		},
@@ -372,6 +567,8 @@ function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
 }
 
 const auditSelection = {
+	requestId: auditEvents.requestId,
+	agentId: auditEvents.agentId,
 	auditId: auditEvents.id,
 	traceId: auditEvents.traceId,
 	actorType: auditEvents.actorType,
@@ -400,9 +597,28 @@ export class PostgresPlatformAuditQueryV1 {
 		scope: PlatformAuditAdministratorScopeV1,
 		page: PlatformAuditPageInputV1,
 	): Promise<PlatformAuditPageV1> {
+		return this.#listAudit(scope, page, false);
+	}
+
+	/** Existing management contracts expose only their established audit action family. */
+	async listManagementAudit(
+		scope: PlatformAuditAdministratorScopeV1,
+		page: PlatformAuditPageInputV1,
+	): Promise<PlatformAuditPageV1> {
+		return this.#listAudit(scope, page, true);
+	}
+
+	async #listAudit(
+		scope: PlatformAuditAdministratorScopeV1,
+		page: PlatformAuditPageInputV1,
+		management: boolean,
+	): Promise<PlatformAuditPageV1> {
 		requireScope(scope);
 		requirePage(page);
 		try {
+			const actionScope = management
+				? inArray(auditEvents.action, managementAuditActions)
+				: sql`true`;
 			let rows: AuditRow[];
 			if (page.cursor) {
 				const cursor = this.#database.$with("audit_cursor").as(
@@ -412,7 +628,7 @@ export class PostgresPlatformAuditQueryV1 {
 							occurredAt: auditEvents.occurredAt,
 						})
 						.from(auditEvents)
-						.where(eq(auditEvents.id, page.cursor)),
+						.where(and(eq(auditEvents.id, page.cursor), actionScope)),
 				);
 				const auditPage = this.#database.$with("audit_page").as(
 					this.#database
@@ -420,7 +636,10 @@ export class PostgresPlatformAuditQueryV1 {
 						.from(auditEvents)
 						.innerJoin(cursor, sql`true`)
 						.where(
-							sql<boolean>`(${auditEvents.occurredAt}, ${auditEvents.id}) < (${cursor.occurredAt}, ${cursor.auditId})`,
+							and(
+								actionScope,
+								sql<boolean>`(${auditEvents.occurredAt}, ${auditEvents.id}) < (${cursor.occurredAt}, ${cursor.auditId})`,
+							),
 						)
 						.orderBy(desc(auditEvents.occurredAt), desc(auditEvents.id))
 						.limit(page.limit + 1),
@@ -429,6 +648,8 @@ export class PostgresPlatformAuditQueryV1 {
 					.with(cursor, auditPage)
 					.select({
 						cursorId: cursor.auditId,
+						requestId: auditPage.requestId,
+						agentId: auditPage.agentId,
 						auditId: auditPage.auditId,
 						traceId: auditPage.traceId,
 						actorType: auditPage.actorType,
@@ -453,6 +674,7 @@ export class PostgresPlatformAuditQueryV1 {
 				rows = await this.#database
 					.select(auditSelection)
 					.from(auditEvents)
+					.where(actionScope)
 					.orderBy(desc(auditEvents.occurredAt), desc(auditEvents.id))
 					.limit(page.limit + 1);
 			}

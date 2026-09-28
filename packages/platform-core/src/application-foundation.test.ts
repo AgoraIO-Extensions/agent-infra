@@ -93,6 +93,49 @@ async function rejectedBeforePersistence(
 }
 
 describe("Application foundation use case", () => {
+	it("accepts API creation without creating a pending approval state", async () => {
+		const transaction = new FakeApplicationFoundationTransactionV1();
+		const useCase = createUseCase(transaction);
+		const result = await useCase.submit(applicationFoundationCommandV1, {
+			...applicationFoundationActorContextV1,
+			principal: { kind: "application", id: "application-caller" },
+			creationMode: "api",
+		});
+		expect(result.status).toBe("creating");
+		expect(transaction.snapshot().applications[0]?.status).toBe("creating");
+		expect(transaction.snapshot().auditEvents[0]?.actorType).toBe(
+			"application",
+		);
+	});
+
+	it("gives an API application principal its own initial availability", async () => {
+		let captured: ApplicationFoundationWritePlanV1 | undefined;
+		const useCase = createApplicationFoundationUseCaseV1(
+			{
+				...applicationFoundationAdmissionDependenciesV1(),
+				transaction: readyTransaction({
+					async commit(plan) {
+						captured = plan;
+						return { outcome: "committed", result: plan.result };
+					},
+				}),
+			},
+			{ now: () => new Date(serverInstant) },
+		);
+		await useCase.submit(
+			{ ...applicationFoundationCommandV1, availability: [] },
+			{
+				...applicationFoundationActorContextV1,
+				principal: { kind: "application", id: "application-caller" },
+				creationMode: "api",
+			},
+			pendingSecretRecordAttachmentFixtureV1(),
+		);
+		expect(captured?.access.availability).toEqual([
+			{ kind: "application", applicationId: "application-caller" },
+		]);
+	});
+
 	it("rejects a staged actor getter without reading it", async () => {
 		let getterReads = 0;
 		const context = Object.defineProperty(

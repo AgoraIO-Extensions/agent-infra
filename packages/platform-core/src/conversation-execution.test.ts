@@ -1650,6 +1650,7 @@ describe("Conversation metadata recovery planning", () => {
 	async function evaluate(
 		state: ConversationMetadataRecoveryStateV1,
 		executionId?: string,
+		currentAuthority: ConversationExecutionAuthorityV1 = authority,
 	) {
 		let plan: ConversationMetadataRecoveryWritePlanV1 | undefined;
 		let allocatedIds = 0;
@@ -1660,7 +1661,7 @@ describe("Conversation metadata recovery planning", () => {
 			{
 				authorization: {
 					async authorize() {
-						return { outcome: "allowed", authority };
+						return { outcome: "allowed", authority: currentAuthority };
 					},
 				},
 				transaction: {
@@ -1684,6 +1685,39 @@ describe("Conversation metadata recovery planning", () => {
 		});
 		return { result, plan, allocatedIds };
 	}
+
+	it("recovers original application metadata without borrowing an equal-ID user boundary", async () => {
+		const state: ConversationMetadataRecoveryStateV1 = fixture();
+		const candidate = state.candidates[0];
+		if (!state.conversation || !candidate) throw Error();
+		Object.assign(state.conversation, { channelId: "api:application" });
+		Object.assign(candidate.execution, { channelId: "api:application" });
+		const applicationBoundary = {
+			...taskBoundary,
+			principal: { kind: "application" as const, id: authority.actorId },
+			channelId: "api:application",
+			accessSources: [
+				{ kind: "application" as const, applicationId: authority.actorId },
+			],
+		};
+		Object.assign(candidate, { boundary: applicationBoundary });
+		const appAuthority = {
+			...authority,
+			channelId: "api:application",
+			taskBoundary: applicationBoundary,
+		};
+		expect(await evaluate(state, undefined, appAuthority)).toMatchObject({
+			result: { outcome: "scheduled" },
+			allocatedIds: 1,
+		});
+		Object.assign(candidate, {
+			boundary: { ...taskBoundary, channelId: "api:application" },
+		});
+		expect(await evaluate(state, undefined, appAuthority)).toMatchObject({
+			result: { outcome: "not_applicable" },
+			allocatedIds: 0,
+		});
+	});
 
 	it.each(["succeeded", "failed"])(
 		"plans original %s outbox recovery without changing input state",

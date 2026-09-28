@@ -364,6 +364,125 @@ describe("PostgreSQL Platform audit query", () => {
 		}
 	});
 
+	it("preserves an application actor for API-created applications", async () => {
+		await seedAudit({
+			auditId: "audit_application_actor",
+			occurredAt: new Date("2026-09-03T00:00:00.000Z"),
+			actorType: "application",
+			actorId: "application_api",
+		});
+		const adapter = openAdapter();
+		const page = await adapter.listAudit(administrator, {
+			schemaVersion: 1,
+			limit: 10,
+		});
+		expect(page.items[0]).toMatchObject({
+			action: "agent.application.submitted",
+			actor: { kind: "application", actorId: "application_api" },
+		});
+	});
+
+	it("decodes API identity audit metadata without exposing extra details", async () => {
+		await seedAudit({
+			auditId: "audit_api_identity",
+			occurredAt: new Date("2026-09-03T00:00:01.000Z"),
+			actorType: "application",
+			actorId: "application_api",
+			action: "api.agent.grant.granted",
+			targetType: "grant",
+			targetId: "agent_api",
+			details: {
+				recipient: { kind: "user", id: "user_recipient" },
+				grantType: "use",
+			},
+		});
+		const page = await openAdapter().listAudit(administrator, {
+			schemaVersion: 1,
+			limit: 10,
+		});
+		expect(page.items[0]).toEqual({
+			schemaVersion: 1,
+			auditId: "audit_api_identity",
+			actor: { kind: "application", actorId: "application_api" },
+			action: "api.agent.grant.granted",
+			subject: { kind: "grant", subjectId: "agent_api" },
+			result: "succeeded",
+			summary: "api.agent.grant.granted",
+			occurredAt: new Date("2026-09-03T00:00:01.000Z"),
+			traceId: "trace_audit_api_identity",
+		});
+	});
+
+	it("projects API access rejections with validated reason metadata", async () => {
+		await seedAudit({
+			auditId: "audit_api_access_rejected",
+			occurredAt: new Date("2026-09-03T00:00:02.000Z"),
+			action: "api.access.rejected",
+			targetType: "grant",
+			targetId: "agent_api",
+			outcome: "rejected",
+			details: {
+				reason: "missing_scope",
+				requiredScopes: ["agent:read", "agent:use"],
+			},
+		});
+
+		const page = await openAdapter().listAudit(administrator, {
+			schemaVersion: 1,
+			limit: 10,
+		});
+		expect(page.items[0]).toEqual({
+			schemaVersion: 1,
+			auditId: "audit_api_access_rejected",
+			actor: { kind: "user", actorId: "user_actor" },
+			action: "api.access.rejected",
+			subject: { kind: "grant", subjectId: "agent_api" },
+			result: "failed",
+			summary: "api.access.rejected: missing_scope",
+			occurredAt: new Date("2026-09-03T00:00:02.000Z"),
+			traceId: "trace_audit_api_access_rejected",
+		});
+
+		for (const [index, details] of [
+			{
+				reason: "unknown_reason",
+				requiredScopes: [],
+			},
+			{
+				reason: "missing_scope",
+				requiredScopes: ["agent:read", "agent:read"],
+			},
+			{
+				reason: "missing_scope",
+				requiredScopes: ["connection:read"],
+			},
+			{
+				reason: "missing_scope",
+				requiredScopes: "agent:read",
+			},
+		].entries()) {
+			await clearDatabase();
+			await seedAudit({
+				auditId: `audit_api_access_malformed_${index}`,
+				occurredAt: new Date("2026-09-03T00:00:03.000Z"),
+				action: "api.access.rejected",
+				targetType: "grant",
+				outcome: "rejected",
+				details,
+			});
+			await expect(
+				openAdapter().listAudit(administrator, {
+					schemaVersion: 1,
+					limit: 10,
+				}),
+			).rejects.toMatchObject({
+				name: "PlatformAuditQueryError",
+				code: "unavailable",
+				message: "Platform audit persistence is unavailable",
+			});
+		}
+	});
+
 	it("returns only whitelisted metadata and normalizes rejected outcomes", async () => {
 		await seedAudit({
 			auditId: "audit_configuration",

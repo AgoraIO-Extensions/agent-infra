@@ -14,6 +14,7 @@ import {
 	type ConversationRoutesDependencies,
 	registerConversationRoutes,
 } from "./conversation-routes.js";
+import { registerV2CompatibilityRoutes } from "./v2-compat.js";
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -229,6 +230,7 @@ function dependencies(
 function testApp(input = dependencies()) {
 	const app = new Hono();
 	registerConversationRoutes(app, input);
+	registerV2CompatibilityRoutes(app);
 	return { app, dependencies: input };
 }
 
@@ -238,6 +240,24 @@ const commandHeaders = {
 };
 
 describe("Conversation HTTP routes", () => {
+	it("serves V2 detail and execution projections with durable events", async () => {
+		const { app } = testApp();
+		const detail = await app.request("/api/v2/conversations/conversation-1");
+		const execution = await app.request(
+			"/api/v2/conversations/conversation-1/executions/execution-1",
+		);
+		expect(detail.status).toBe(200);
+		expect(execution.status).toBe(200);
+		const detailBody = ConversationDetailProjectionV2Schema.parse(
+			await detail.json(),
+		);
+		const executionBody = ExecutionDetailProjectionV2Schema.parse(
+			await execution.json(),
+		);
+		expect(detailBody.events).toHaveLength(1);
+		expect(executionBody.events).toHaveLength(1);
+	});
+
 	it("maps generated command requests to the Core seam without caller identity", async () => {
 		const { app, dependencies: input } = testApp();
 		const create = await app.request("/api/v1/agents/agent-1/conversations", {
@@ -694,6 +714,88 @@ describe("Conversation HTTP routes", () => {
 });
 
 describe("Conversation persisted SSE", () => {
+	it("keeps V1 detail readable with persisted V2 operation facts", async () => {
+		const input = dependencies();
+		const detail = await input.query.get(
+			{ actorId: identity.userId, channelId: "web" },
+			conversation.conversationId,
+		);
+		if (!detail) throw new Error("Missing detail fixture");
+		input.query.get = vi.fn().mockResolvedValue({
+			...detail,
+			events: [...detail.events, persistedOperationEvent],
+		});
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1",
+		);
+		expect(response.status).toBe(200);
+		expect(
+			ConversationDetailProjectionV1Schema.parse(await response.json()),
+		).toHaveProperty("messages");
+	});
+
+	it.each([
+		{ eventSchemaVersion: undefined },
+		{
+			eventPayload: {
+				...persistedOperationEvent.eventPayload,
+				secret: "must-not-pass",
+			},
+		},
+		{ eventId: "invalid\nevent" },
+		{ sequence: 0 },
+	])("rejects malformed V2 facts before V1 streaming: %j", async (change) => {
+		const input = dependencies();
+		input.query.replay = vi.fn().mockResolvedValue({
+			outcome: "events",
+			events: [{ ...persistedOperationEvent, ...change }],
+			resumeCursor: "cursor-2",
+		});
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		expect(response.status).toBe(503);
+	});
+
+	it.each([
+		{ path: "/api/v1/conversations/conversation-1/events", reason: false },
+		{ path: "/api/v2/conversations/conversation-1/events", reason: true },
+	])(
+		"projects task timeout reason by SSE version: %j",
+		async ({ path, reason }) => {
+			const input = dependencies();
+			input.query.replay = vi
+				.fn()
+				.mockResolvedValueOnce({
+					outcome: "events",
+					events: [
+						{
+							...persistedEvent,
+							eventType: "task.status",
+							eventPayload: {
+								type: "task.status",
+								status: "unknown",
+								reason: "STOP_CONFIRMATION_TIMEOUT",
+							},
+						},
+					],
+					resumeCursor: "cursor-1",
+				})
+				.mockResolvedValue({
+					outcome: "reload",
+					reason: "cursor_expired",
+					resumeCursor: "cursor-1",
+				});
+			const response = await testApp(input).app.request(path);
+			const body = await response.text();
+			expect(response.status).toBe(200);
+			expect(body).toContain('"type":"task.status"');
+			expect(body.includes('"reason":"STOP_CONFIRMATION_TIMEOUT"')).toBe(
+				reason,
+			);
+		},
+	);
+
 	it("keeps V1 replay available when persisted V2 operation facts are present", async () => {
 		const input = dependencies();
 		input.query.replay = vi
@@ -830,7 +932,6 @@ describe("Conversation persisted SSE", () => {
 			payload: persistedOperationEvent.eventPayload,
 		});
 	});
-
 	it("maps the persisted model fallback notice without local policy", async () => {
 		const input = dependencies();
 		input.query.replay = vi

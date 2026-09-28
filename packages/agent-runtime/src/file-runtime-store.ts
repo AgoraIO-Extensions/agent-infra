@@ -1320,7 +1320,14 @@ export class FileRuntimeStore {
 			(action.kind !== "model" && action.kind !== "tool")
 		)
 			runtimeAuthorizationDenied();
-		await this.authorizedOriginalExecution(action, readNow);
+		const session = await this.authorizedOriginalExecution(action, readNow);
+		const original = session.operations[action.runtimeOperationId];
+		if (
+			original?.state !== "resolved" ||
+			original.result?.outcome !== "accepted" ||
+			original.result.status !== "running"
+		)
+			runtimeAuthorizationDenied();
 	}
 
 	async resolveOriginalExecutionBinding(

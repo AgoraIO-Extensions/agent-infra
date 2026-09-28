@@ -9,6 +9,7 @@ import {
 	PersistedConversationEventV1Schema,
 	pilotBrowserSseOpenApiPathsV1,
 	resolvePilotReplaySelectorV1,
+	TaskStatusEventV1Schema,
 } from "../../src/pilot/sse.js";
 
 const baseEvent = {
@@ -109,6 +110,25 @@ describe("Pilot SSE contracts", () => {
 				}).success,
 			).toBe(false);
 		}
+	});
+
+	it("accepts a bounded Platform task status event", () => {
+		const event = {
+			...baseEvent,
+			type: "task.status",
+			payload: { status: "waiting" },
+		} as const;
+		expect(TaskStatusEventV1Schema.parse(event)).toEqual(event);
+		expect(framePilotSseMessageV1(event)).toEqual({
+			id: event.eventId,
+			data: event,
+		});
+		expect(
+			TaskStatusEventV1Schema.safeParse({
+				...event,
+				payload: { status: "waiting", credential: "forbidden" },
+			}).success,
+		).toBe(false);
 	});
 
 	it("defines heartbeat, reload, and authorization controls outside persisted events", () => {

@@ -32,7 +32,10 @@ async function configDigest(image) {
 		const config = manifests[0].Config;
 		assert.match(config, /^(?:blobs\/sha256\/[a-f0-9]{64}|[a-f0-9]{64}\.json)$/);
 		runCommand(tar, ["-xf", archive, "-C", temp, config], options);
-		return `sha256:${sha256(await readFile(join(temp, config)))}`;
+		const digest = sha256(await readFile(join(temp, config)));
+		assert.equal(basename(config).replace(/\.json$/, ""), digest,
+			"exported config bytes differ from the archive's content Digest");
+		return `sha256:${digest}`;
 	} finally {
 		await rm(temp, { recursive: true, force: true });
 	}
@@ -113,15 +116,18 @@ export async function verifyCustomBaseImage(image, { published = false, contextP
 		childLoaded = true;
 		const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
 		const exportedDigest = metadata["containerimage.digest"];
-		const childConfigDigest = metadata["containerimage.config.digest"];
 		const child = inspect(childReference);
+		const exportedConfigDigest = await configDigest(childReference);
+		// Buildx may omit the config Digest when it prefers the image manifest Digest.
+		const declaredConfigDigest = metadata["containerimage.config.digest"];
+		const childConfigDigest = declaredConfigDigest === undefined ? exportedConfigDigest : declaredConfigDigest;
 		assert.equal(`${child.Os}/${child.Architecture}`, platform, "child platform differs from Base Image");
 		const childImageId = child.Id;
 		assert.match(exportedDigest, digestPattern);
 		assert.match(childConfigDigest, digestPattern);
 		assert.match(childImageId, digestPattern);
 		if (child.Descriptor) assert.equal(child.Descriptor.digest, exportedDigest);
-		assert.equal(await configDigest(childReference), childConfigDigest);
+		assert.equal(exportedConfigDigest, childConfigDigest);
 		// Classic Docker's load exporter reports the config ID instead of a manifest Digest.
 		const childDigest = exportedDigest === childConfigDigest ? null : exportedDigest;
 		assert.ok(!published || childDigest, "published acceptance requires a child manifest Digest; use OCI-capable Docker storage");

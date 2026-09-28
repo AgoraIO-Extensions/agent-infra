@@ -38,11 +38,11 @@ import {
 function parseAuthorityContext(
 	input: unknown,
 ): AgentConfigurationAuthorityContextV1 {
-	const authority = exactObject(input, [
-		"schemaVersion",
-		"users",
-		"organizationIds",
-	]);
+	const authority = exactObject(
+		input,
+		["schemaVersion", "users", "organizationIds"],
+		["applicationIds"],
+	);
 	if (authority.schemaVersion !== 1) invalidCommand();
 	const users = denseArray(authority.users, maxAccessTargets).map(
 		(userInput) => {
@@ -71,6 +71,13 @@ function parseAuthorityContext(
 		organizationIds: [
 			...parseAgentManagementStringArray(authority.organizationIds, true),
 		],
+		...(Object.hasOwn(authority, "applicationIds")
+			? {
+					applicationIds: [
+						...parseAgentManagementStringArray(authority.applicationIds, true),
+					],
+				}
+			: {}),
 	};
 }
 

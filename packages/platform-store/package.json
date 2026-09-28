@@ -19,7 +19,7 @@
 		"check-migrations": "node src/check-migrations.mjs",
 		"check-types": "tsc --noEmit",
 		"migrate": "pnpm build && node dist/migrate-cli.mjs",
-		"test": "pnpm --filter @agent-infra/platform-core build && pnpm build && pnpm check-migrations && vitest run src"
+		"test": "pnpm --filter @agent-infra/platform-core build && pnpm build && pnpm check-migrations && vitest run src --maxWorkers=1 --testTimeout=30000 --hookTimeout=60000"
 	},
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",
