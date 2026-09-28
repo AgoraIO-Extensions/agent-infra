@@ -8,6 +8,13 @@
       "when": 1790573081000,
       "tag": "0000_snapshot",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790573082000,
+      "tag": "0001_scan_generation",
+      "breakpoints": true
     }
   ]
 }

@@ -1,8 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import {
-	createSnapshot,
+	createDirectorySynchronizer,
 	type createWeComSource,
-	type DirectorySnapshot,
 	type DirectoryStore,
 	requireCurrentSnapshot,
 	toDirectorySnapshotV1,
@@ -15,17 +14,6 @@ export interface DirectoryServiceInput {
 	readToken: string;
 	rootDepartmentId: number;
 	now?: () => number;
-}
-
-export class DirectorySyncError extends Error {
-	constructor(
-		readonly reason:
-			| "source_unavailable"
-			| "invalid_snapshot"
-			| "store_unavailable",
-	) {
-		super("Enterprise directory sync failed");
-	}
 }
 
 function tokenMatches(provided: string | undefined, expected: string) {
@@ -42,6 +30,7 @@ export function createDirectoryService(input: DirectoryServiceInput) {
 		throw new Error("Directory read credential is invalid");
 	}
 	const now = input.now ?? Date.now;
+	const synchronizer = createDirectorySynchronizer(input);
 	const app = new Hono();
 	app.get("/healthz", (context) => context.json({ status: "ready" }));
 	app.get("/readyz", async (context) => {
@@ -77,37 +66,5 @@ export function createDirectoryService(input: DirectoryServiceInput) {
 			});
 		}
 	});
-	return {
-		app,
-		async syncOnce() {
-			const startedAt = now();
-			let complete: Awaited<ReturnType<typeof input.source.fetchComplete>>;
-			try {
-				complete = await input.source.fetchComplete();
-			} catch {
-				throw new DirectorySyncError("source_unavailable");
-			}
-			let snapshot: DirectorySnapshot;
-			try {
-				snapshot = createSnapshot({
-					...complete,
-					rootDepartmentId: input.rootDepartmentId,
-					startedAt,
-					completedAt: now(),
-				});
-			} catch {
-				throw new DirectorySyncError("invalid_snapshot");
-			}
-			try {
-				await input.store.publish(snapshot);
-			} catch {
-				throw new DirectorySyncError("store_unavailable");
-			}
-			return {
-				revision: snapshot.revision,
-				fetchedAt: snapshot.fetchedAt,
-				validUntil: snapshot.validUntil,
-			};
-		},
-	};
+	return { app, syncOnce: synchronizer.syncOnce };
 }

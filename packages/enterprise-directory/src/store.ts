@@ -1,7 +1,11 @@
 import type { DirectorySnapshot } from "./snapshot.js";
 
 export interface DirectoryStore {
-	publish(snapshot: DirectorySnapshot): Promise<void>;
+	beginScan(): Promise<bigint>;
+	publish(
+		snapshot: DirectorySnapshot,
+		generation: bigint,
+	): Promise<"published" | "superseded">;
 	latest(): Promise<DirectorySnapshot | null>;
 	close(): Promise<void>;
 }

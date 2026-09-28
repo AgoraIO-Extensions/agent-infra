@@ -1,13 +1,16 @@
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:https";
 import { pathToFileURL } from "node:url";
-import { createWeComSource } from "@agent-infra/enterprise-directory";
+import {
+	createWeComSource,
+	DirectorySyncError,
+	nextSyncDelay,
+} from "@agent-infra/enterprise-directory";
 import { createPostgresDirectoryStore } from "@agent-infra/enterprise-directory-store";
 import { serve } from "@hono/node-server";
-import { createDirectoryService, DirectorySyncError } from "./service.js";
+import { createDirectoryService } from "./service.js";
 
 const RETRY_MS = 5 * 60_000;
-const DAILY_MS = 23 * 60 * 60_000;
 
 function required(name: string) {
 	const value = process.env[name];
@@ -61,18 +64,30 @@ export async function startDirectorySync() {
 		timer = setTimeout(async () => {
 			const startedAt = Date.now();
 			try {
-				const snapshot = await service.syncOnce();
+				const result = await service.syncOnce();
 				console.info(
 					JSON.stringify({
 						service: "enterprise-directory-sync",
-						event: "snapshot_published",
-						revision: snapshot.revision,
-						fetchedAt: snapshot.fetchedAt,
-						validUntil: snapshot.validUntil,
+						event:
+							result.status === "published"
+								? "snapshot_published"
+								: "snapshot_superseded",
+						...(result.status === "published"
+							? {
+									revision: result.revision,
+									fetchedAt: result.fetchedAt,
+									validUntil: result.validUntil,
+								}
+							: {}),
 						durationMs: Date.now() - startedAt,
 					}),
 				);
-				if (!stopped) schedule(DAILY_MS);
+				if (!stopped)
+					schedule(
+						result.status === "published"
+							? nextSyncDelay(result.validUntil, Date.now())
+							: RETRY_MS,
+					);
 			} catch (error) {
 				console.error(
 					JSON.stringify({

@@ -3,8 +3,8 @@ import {
 	fromDirectorySnapshotV1,
 	toDirectorySnapshotV1,
 } from "@agent-infra/enterprise-directory";
-import { desc } from "drizzle-orm";
-import { jsonb, pgSchema, timestamp, uuid } from "drizzle-orm/pg-core";
+import { desc, sql as drizzleSql } from "drizzle-orm";
+import { bigint, jsonb, pgSchema, timestamp, uuid } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
@@ -12,6 +12,7 @@ import postgres from "postgres";
 const directorySchema = pgSchema("enterprise_directory");
 const snapshots = directorySchema.table("snapshots", {
 	revision: uuid("revision").primaryKey(),
+	generation: bigint("generation", { mode: "bigint" }),
 	fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
 	validUntil: timestamp("valid_until", { withTimezone: true }).notNull(),
 	contents: jsonb("contents").notNull(),
@@ -23,20 +24,52 @@ export function createPostgresDirectoryStore(
 	const sql = postgres(databaseUrl, { max: 4 });
 	const db = drizzle(sql);
 	return {
-		async publish(value) {
+		async beginScan() {
+			const rows = await sql`
+				SELECT nextval('enterprise_directory.scan_generation') AS generation
+			`;
+			const value = rows[0]?.generation;
+			if (value === undefined)
+				throw new Error("Directory scan generation unavailable");
+			return BigInt(value);
+		},
+		async publish(value, generation) {
+			if (generation < 1n) throw new Error("Invalid directory scan generation");
 			const snapshot = toDirectorySnapshotV1(value);
-			await db.insert(snapshots).values({
-				revision: snapshot.revision,
-				fetchedAt: new Date(snapshot.fetchedAt),
-				validUntil: new Date(snapshot.validUntil),
-				contents: snapshot,
+			return sql.begin(async (transaction) => {
+				await transaction`
+					SELECT pg_catalog.pg_advisory_xact_lock(
+						pg_catalog.hashtextextended('agent-infra:enterprise-directory:publish', 0)
+					)
+				`;
+				const rows = await transaction`
+					SELECT generation FROM enterprise_directory.snapshots
+					WHERE generation IS NOT NULL
+					ORDER BY generation DESC LIMIT 1
+				`;
+				if (rows[0] && BigInt(rows[0].generation) >= generation)
+					return "superseded" as const;
+				await transaction`
+					INSERT INTO enterprise_directory.snapshots
+						(revision, generation, fetched_at, valid_until, contents)
+					VALUES (
+						${snapshot.revision}, ${generation.toString()},
+						${new Date(snapshot.fetchedAt)}, ${new Date(snapshot.validUntil)},
+						${JSON.stringify(snapshot)}::jsonb
+					)
+				`;
+				return "published" as const;
 			});
 		},
 		async latest() {
 			const rows = await db
 				.select({ contents: snapshots.contents })
 				.from(snapshots)
-				.orderBy(desc(snapshots.fetchedAt), desc(snapshots.revision))
+				.orderBy(
+					drizzleSql`${snapshots.generation} DESC NULLS LAST`,
+					desc(snapshots.fetchedAt),
+					desc(snapshots.revision),
+				)
 				.limit(1);
 			return rows[0] ? fromDirectorySnapshotV1(rows[0].contents) : null;
 		},
@@ -68,6 +101,7 @@ export async function migrateDirectoryStore(
 		});
 		await sql`GRANT USAGE ON SCHEMA enterprise_directory TO ${sql(runtimeRole)}`;
 		await sql`GRANT SELECT, INSERT ON TABLE enterprise_directory.snapshots TO ${sql(runtimeRole)}`;
+		await sql`GRANT USAGE ON SEQUENCE enterprise_directory.scan_generation TO ${sql(runtimeRole)}`;
 	} finally {
 		await sql.end();
 	}

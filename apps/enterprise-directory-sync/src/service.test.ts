@@ -14,12 +14,19 @@ function fixture() {
 	let published: DirectorySnapshot | null = null;
 	let fail = false;
 	let storeFail = false;
+	let beginFail = false;
+	let generation = 0n;
 	let clock = now;
 	let scanDelay = 0;
 	const store: DirectoryStore = {
+		async beginScan() {
+			if (beginFail) throw new Error("private database detail");
+			return ++generation;
+		},
 		async publish(snapshot) {
 			if (storeFail) throw new Error("private database detail");
 			published = snapshot;
+			return "published";
 		},
 		async latest() {
 			return published;
@@ -57,6 +64,9 @@ function fixture() {
 		},
 		setStoreFail(value: boolean) {
 			storeFail = value;
+		},
+		setBeginFail(value: boolean) {
+			beginFail = value;
 		},
 		setScanDelay(value: number) {
 			scanDelay = value;
@@ -136,7 +146,7 @@ describe("directory service", () => {
 	});
 
 	it("failed sync retains old revision, and expired old revision is refused", async () => {
-		const { service, setFail, setStoreFail, current } = fixture();
+		const { service, setFail, setStoreFail, setBeginFail, current } = fixture();
 		await service.syncOnce();
 		const first = current()?.revision;
 		setFail(true);
@@ -149,10 +159,16 @@ describe("directory service", () => {
 			reason: "store_unavailable",
 		});
 		setStoreFail(false);
+		setBeginFail(true);
+		await expect(service.syncOnce()).rejects.toMatchObject({
+			reason: "store_unavailable",
+		});
+		setBeginFail(false);
 		expect(current()?.revision).toBe(first);
 		const expired = createDirectoryService({
 			store: {
-				publish: async () => {},
+				beginScan: async () => 1n,
+				publish: async () => "published",
 				latest: async () => current(),
 				close: async () => {},
 			},
