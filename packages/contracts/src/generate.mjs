@@ -61,6 +61,7 @@ import {
 	RuntimeModelConfigurationV4Schema,
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
+	RuntimeOperationResponseV4Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
@@ -119,6 +120,10 @@ const artifactPaths = {
 	runtimeOpenapiV3: resolve(
 		artifactRoot,
 		"openapi/runtime-host.v3.openapi.json",
+	),
+	runtimeOpenapiV4: resolve(
+		artifactRoot,
+		"openapi/runtime-host.v4.openapi.json",
 	),
 	readinessJsonSchema: resolve(
 		artifactRoot,
@@ -554,6 +559,38 @@ function buildArtifacts() {
 			},
 		},
 	});
+	const runtimeOpenapiV4 = createDocument({
+		openapi: "3.1.0",
+		info: { title: "Agent Infra RuntimeHost Contract", version: "4.0.0" },
+		security: [{ RuntimeServiceBearer: [] }],
+		paths: {
+			"/internal/runtime/v4/turns": {
+				post: postOperation(
+					"submitRuntimeTurnV4",
+					RuntimeHostV4SchemaDefinitions.RuntimeSubmitTurnRequestV4,
+					RuntimeOperationResponseV4Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v4/instructions": {
+				post: postOperation(
+					"supplementRuntimeTurnV4",
+					RuntimeHostV4SchemaDefinitions.RuntimeSupplementRequestV4,
+					RuntimeOperationResponseV4Schema,
+					"application/json",
+				),
+			},
+		},
+		components: {
+			securitySchemes: {
+				RuntimeServiceBearer: { type: "http", scheme: "bearer" },
+			},
+			schemas: {
+				ProtocolErrorV1: ProtocolErrorV1Schema,
+				...RuntimeHostV4SchemaDefinitions,
+			},
+		},
+	});
 
 	const pilotBrowserOpenapi = createDocument({
 		openapi: "3.1.0",
@@ -743,6 +780,7 @@ function buildArtifacts() {
 		runtimeJsonSchemaV3,
 		runtimeJsonSchemaV4,
 		runtimeOpenapiV3,
+		runtimeOpenapiV4,
 		runtimeJsonSchema,
 		runtimeJsonSchemaV2,
 		runtimeConfigurationJsonSchemaV3: jsonSchemaDocument({

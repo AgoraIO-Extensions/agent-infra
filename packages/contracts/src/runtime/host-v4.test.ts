@@ -12,6 +12,7 @@ import {
 	runtimeRequestSigningPayloadV4,
 	validateRuntimeBusinessBindingV4,
 	validateRuntimePrivateRelayKeyFieldV1,
+	validateVerifiedRuntimeExecutionGrantClaimsV4,
 } from "./host-v4.js";
 
 type BusinessRequest = RuntimeSubmitTurnRequestV4 | RuntimeSupplementRequestV4;
@@ -87,8 +88,23 @@ function claims(value: BusinessRequest) {
 
 const privateField = RuntimePrivateRelayKeyFieldV1Schema.parse({
 	schemaVersion: 1,
-	executionId: request.executionId,
-	keyBinding: request.keyBinding,
+	context: {
+		requestId: request.requestId,
+		grantId: "grant-1",
+		requestDigest: digest(request),
+		traceId: request.traceId,
+		principal: request.principal,
+		executionSource: request.executionSource,
+		channelId: request.channelId,
+		agentId: request.agentId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		hostSessionRef: request.hostSessionRef,
+		operation: request.operation,
+		keyBinding: request.keyBinding,
+	},
 	keyDelivery: { relayKey: "private-key-value-k1" },
 });
 
@@ -104,13 +120,24 @@ it("binds the Key reference/version into the Grant digest without the Key", asyn
 			keyDelivery: privateField.keyDelivery,
 		}).success,
 	).toBe(false);
-	expect(validateRuntimePrivateRelayKeyFieldV1(privateField, request)).toEqual(
-		privateField,
-	);
+	expect(
+		validateRuntimePrivateRelayKeyFieldV1(privateField, {
+			request,
+			grantId: "grant-1",
+			requestDigest: digest(request),
+		}),
+	).toEqual(privateField);
 	expect(await runtimeRequestDigestV4(request)).toBe(digest(request));
 	await expect(
 		validateRuntimeBusinessBindingV4(request, claims(request)),
 	).resolves.toBeUndefined();
+	expect(
+		validateVerifiedRuntimeExecutionGrantClaimsV4(claims(request), {
+			expectedIssuer: "platform-worker",
+			expectedWorkerId: "worker-1",
+			now: 1,
+		}),
+	).toEqual(claims(request));
 	expect(
 		digest({
 			...request,
@@ -357,8 +384,45 @@ it("rejects static credential fallback and an unprintable private Key", () => {
 	}
 	expect(() =>
 		validateRuntimePrivateRelayKeyFieldV1(
-			{ ...privateField, executionId: "other-execution" },
-			request,
+			{
+				...privateField,
+				context: { ...privateField.context, executionId: "other-execution" },
+			},
+			{ request, grantId: "grant-1", requestDigest: digest(request) },
 		),
 	).toThrow("RuntimeHostV4 private Key field is invalid");
+	for (const changed of [
+		{ ...privateField.context, channelId: "wecom" },
+		{ ...privateField.context, grantId: "other-grant" },
+		{ ...privateField.context, requestDigest: "0".repeat(64) },
+		{
+			...privateField.context,
+			operation: { ...privateField.context.operation, deliveryFence: 2 },
+		},
+	]) {
+		expect(() =>
+			validateRuntimePrivateRelayKeyFieldV1(
+				{ ...privateField, context: changed },
+				{ request, grantId: "grant-1", requestDigest: digest(request) },
+			),
+		).toThrow("RuntimeHostV4 private Key field is invalid");
+	}
+});
+
+it("rejects V4 claims with the wrong issuer, worker or lifetime", () => {
+	const grant = claims(request);
+	for (const changed of [
+		{ ...grant, issuer: "other-issuer" },
+		{ ...grant, workerId: "other-worker" },
+		{ ...grant, expiresAt: 31_000 },
+		{ ...grant, issuedAt: 2 },
+	]) {
+		expect(() =>
+			validateVerifiedRuntimeExecutionGrantClaimsV4(changed, {
+				expectedIssuer: "platform-worker",
+				expectedWorkerId: "worker-1",
+				now: 1,
+			}),
+		).toThrow("Runtime Execution Grant V4 claims are inconsistent");
+	}
 });

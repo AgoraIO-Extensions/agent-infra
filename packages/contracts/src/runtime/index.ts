@@ -131,21 +131,27 @@ import {
 	RuntimeBusinessGrantClaimsV4Schema,
 	RuntimeExecutionGrantV4Schema,
 	RuntimeExecutionSourceV1Schema,
+	RuntimeOperationResponseV4Schema,
+	RuntimePrivateRelayKeyContextV1Schema,
 	RuntimePrivateRelayKeyFieldV1Schema,
 	RuntimeRelayKeyBindingV1Schema,
 	RuntimeRelayKeyDeliveryV1Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	RuntimeSupplementRequestV4Schema,
+	VerifiedRuntimeExecutionGrantV4Schema,
 } from "./host-v4.ts";
 
 export const RuntimeHostV4SchemaDefinitions = {
 	RuntimeBusinessGrantClaimsV4: RuntimeBusinessGrantClaimsV4Schema,
 	RuntimeExecutionGrantV4: RuntimeExecutionGrantV4Schema,
+	VerifiedRuntimeExecutionGrantV4: VerifiedRuntimeExecutionGrantV4Schema,
 	RuntimeKeyedHandleScopeV4: RuntimeKeyedHandleScopeV4Schema,
 	RuntimeExecutionSourceV1: RuntimeExecutionSourceV1Schema,
 	RuntimeRelayKeyBindingV1: RuntimeRelayKeyBindingV1Schema,
 	RuntimeRelayKeyDeliveryV1: RuntimeRelayKeyDeliveryV1Schema,
+	RuntimePrivateRelayKeyContextV1: RuntimePrivateRelayKeyContextV1Schema,
 	RuntimePrivateRelayKeyFieldV1: RuntimePrivateRelayKeyFieldV1Schema,
+	RuntimeOperationResponseV4: RuntimeOperationResponseV4Schema,
 	RuntimeSubmitTurnRequestV4: RuntimeSubmitTurnRequestV4Schema,
 	RuntimeSupplementRequestV4: RuntimeSupplementRequestV4Schema,
 };

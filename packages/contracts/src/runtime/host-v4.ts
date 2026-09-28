@@ -7,7 +7,11 @@ import {
 	RuntimeOperationBindingV2Schema,
 	RuntimePrincipalV1Schema,
 } from "./grant-v2.ts";
-import { RuntimeInputV1Schema, RuntimeSelectionV1Schema } from "./host.ts";
+import {
+	RuntimeInputV1Schema,
+	RuntimeOperationResultV2Schema,
+	RuntimeSelectionV1Schema,
+} from "./host.ts";
 
 const keyReference = {
 	subjectId: OpaqueIdV1Schema,
@@ -51,6 +55,41 @@ export const RuntimeExecutionGrantV4Schema = z.strictObject({
 	token: RuntimeExecutionGrantV2Schema.shape.token,
 });
 
+export const VerifiedRuntimeExecutionGrantV4Schema = z.strictObject({
+	token: RuntimeExecutionGrantV4Schema.shape.token,
+	claims: RuntimeBusinessGrantClaimsV4Schema,
+});
+
+export const RuntimeExecutionGrantMaximumLifetimeMsV4 = 30_000;
+
+// Cryptographic JWS verification remains a RuntimeHost responsibility. This
+// helper validates the claims after signature verification and before the
+// request binding or Driver side-effect checks.
+export function validateVerifiedRuntimeExecutionGrantClaimsV4(
+	input: unknown,
+	context: { expectedIssuer: string; expectedWorkerId: string; now: number },
+): RuntimeBusinessGrantClaimsV4 {
+	const claims = RuntimeBusinessGrantClaimsV4Schema.parse(input);
+	const command = claims.allowedCommands[0];
+	if (
+		claims.issuer !== context.expectedIssuer ||
+		claims.workerId !== context.expectedWorkerId ||
+		!Number.isSafeInteger(context.now) ||
+		claims.issuedAt > context.now ||
+		claims.expiresAt <= context.now ||
+		claims.expiresAt <= claims.issuedAt ||
+		claims.expiresAt - claims.issuedAt >
+			RuntimeExecutionGrantMaximumLifetimeMsV4 ||
+		(command !== "turn.submit" && command !== "turn.supplement") ||
+		(claims.operation.kind === "execution" &&
+			claims.operation.deliveryFence !==
+				claims.operation.executionDeliveryFence)
+	) {
+		throw new Error("Runtime Execution Grant V4 claims are inconsistent");
+	}
+	return claims;
+}
+
 // This field is confined to the authenticated, confidential Worker-Host transport.
 // It is deliberately not part of a business request or Grant claims. The
 // surrounding private transport must bind it to the same accepted Execution
@@ -63,16 +102,39 @@ export const RuntimeRelayKeyDeliveryV1Schema = z.strictObject({
 		.regex(/^[\x21-\x7e]+$/),
 });
 
+export const RuntimePrivateRelayKeyContextV1Schema = z.strictObject({
+	requestId: RequestIdV1Schema,
+	grantId: OpaqueIdV1Schema,
+	requestDigest: z.string().regex(/^[a-f0-9]{64}$/),
+	traceId: OpaqueIdV1Schema,
+	principal: RuntimePrincipalV1Schema,
+	executionSource: RuntimeExecutionSourceV1Schema,
+	channelId: OpaqueIdV1Schema,
+	agentId: OpaqueIdV1Schema,
+	conversationId: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+	turnId: OpaqueIdV1Schema,
+	sessionGeneration: z.number().int().positive().safe(),
+	hostSessionRef: OpaqueIdV1Schema.nullable(),
+	operation: RuntimeOperationBindingV2Schema,
+	keyBinding: RuntimeRelayKeyBindingV1Schema,
+});
+
 export const RuntimePrivateRelayKeyFieldV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
-	executionId: OpaqueIdV1Schema,
-	keyBinding: RuntimeRelayKeyBindingV1Schema,
+	context: RuntimePrivateRelayKeyContextV1Schema,
 	keyDelivery: RuntimeRelayKeyDeliveryV1Schema,
 });
 
 export type RuntimePrivateRelayKeyFieldV1 = z.infer<
 	typeof RuntimePrivateRelayKeyFieldV1Schema
 >;
+
+export type RuntimePrivateRelayKeyAcceptanceV1 = {
+	readonly request: RuntimeBusinessRequestV4;
+	readonly grantId: string;
+	readonly requestDigest: string;
+};
 
 const context = {
 	schemaVersion: z.literal(4),
@@ -104,14 +166,24 @@ export const RuntimeSupplementRequestV4Schema = z.strictObject({
 	input: RuntimeInputV1Schema,
 });
 
+export const RuntimeOperationResponseV4Schema = z.strictObject({
+	schemaVersion: z.literal(4),
+	hostSessionRef: OpaqueIdV1Schema,
+	operationId: OpaqueIdV1Schema,
+	result: RuntimeOperationResultV2Schema,
+});
+
 export type RuntimeSubmitTurnRequestV4 = z.infer<
 	typeof RuntimeSubmitTurnRequestV4Schema
 >;
 export type RuntimeSupplementRequestV4 = z.infer<
 	typeof RuntimeSupplementRequestV4Schema
 >;
+export type RuntimeOperationResponseV4 = z.infer<
+	typeof RuntimeOperationResponseV4Schema
+>;
 
-type RuntimeBusinessRequestV4 =
+export type RuntimeBusinessRequestV4 =
 	| RuntimeSubmitTurnRequestV4
 	| RuntimeSupplementRequestV4;
 
@@ -196,20 +268,47 @@ export async function validateRuntimeBusinessBindingV4(
 
 export function validateRuntimePrivateRelayKeyFieldV1(
 	field: unknown,
-	accepted: Pick<RuntimeBusinessRequestV4, "executionId" | "keyBinding">,
+	accepted: RuntimePrivateRelayKeyAcceptanceV1,
 ): RuntimePrivateRelayKeyFieldV1 {
 	try {
-		const acceptedExecutionId = OpaqueIdV1Schema.parse(accepted.executionId);
-		const acceptedKeyBinding = RuntimeRelayKeyBindingV1Schema.parse(
-			accepted.keyBinding,
-		);
+		const acceptedRequest =
+			"selection" in accepted.request
+				? RuntimeSubmitTurnRequestV4Schema.parse(accepted.request)
+				: RuntimeSupplementRequestV4Schema.parse(accepted.request);
+		const expectedGrantId = OpaqueIdV1Schema.parse(accepted.grantId);
+		const expectedRequestDigest = z
+			.string()
+			.regex(/^[a-f0-9]{64}$/)
+			.parse(accepted.requestDigest);
 		const parsed = RuntimePrivateRelayKeyFieldV1Schema.parse(field);
 		if (
-			parsed.executionId !== acceptedExecutionId ||
-			parsed.keyBinding.purpose !== acceptedKeyBinding.purpose ||
-			parsed.keyBinding.subjectId !== acceptedKeyBinding.subjectId ||
-			parsed.keyBinding.ciphertextRef !== acceptedKeyBinding.ciphertextRef ||
-			parsed.keyBinding.version !== acceptedKeyBinding.version
+			parsed.context.requestId !== acceptedRequest.requestId ||
+			parsed.context.grantId !== expectedGrantId ||
+			parsed.context.requestDigest !== expectedRequestDigest ||
+			parsed.context.traceId !== acceptedRequest.traceId ||
+			parsed.context.principal.kind !== acceptedRequest.principal.kind ||
+			parsed.context.principal.id !== acceptedRequest.principal.id ||
+			parsed.context.executionSource !== acceptedRequest.executionSource ||
+			parsed.context.channelId !== acceptedRequest.channelId ||
+			parsed.context.agentId !== acceptedRequest.agentId ||
+			parsed.context.conversationId !== acceptedRequest.conversationId ||
+			parsed.context.executionId !== acceptedRequest.executionId ||
+			parsed.context.turnId !== acceptedRequest.turnId ||
+			parsed.context.sessionGeneration !== acceptedRequest.sessionGeneration ||
+			parsed.context.hostSessionRef !== acceptedRequest.hostSessionRef ||
+			parsed.context.operation.kind !== acceptedRequest.operation.kind ||
+			parsed.context.operation.id !== acceptedRequest.operation.id ||
+			parsed.context.operation.deliveryFence !==
+				acceptedRequest.operation.deliveryFence ||
+			parsed.context.operation.executionDeliveryFence !==
+				acceptedRequest.operation.executionDeliveryFence ||
+			parsed.context.keyBinding.purpose !==
+				acceptedRequest.keyBinding.purpose ||
+			parsed.context.keyBinding.subjectId !==
+				acceptedRequest.keyBinding.subjectId ||
+			parsed.context.keyBinding.ciphertextRef !==
+				acceptedRequest.keyBinding.ciphertextRef ||
+			parsed.context.keyBinding.version !== acceptedRequest.keyBinding.version
 		) {
 			throw new Error();
 		}
