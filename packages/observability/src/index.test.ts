@@ -22,7 +22,8 @@ it("emits only bounded metadata and drops logs under backpressure", () => {
 	telemetry.record({
 		stage: "http",
 		outcome: "completed",
-		requestId: "Bearer secret-token",
+		requestId: "sk-secret-token",
+		executionId: "123e4567-e89b-42d3-a456-426614174000",
 		code: "SECRET_TOKEN" as "RUNTIME_UNAVAILABLE",
 		// The runtime entry point must ignore extra caller fields too.
 		message: "PRIVATE_SENTINEL",
@@ -30,6 +31,9 @@ it("emits only bounded metadata and drops logs under backpressure", () => {
 	telemetry.record({ stage: "http", outcome: "failed" });
 	expect(lines).toHaveLength(1);
 	expect(lines[0]).toContain('"stage":"http"');
+	expect(lines[0]).toContain(
+		'"executionId":"123e4567-e89b-42d3-a456-426614174000"',
+	);
 	expect(lines[0]).not.toMatch(/secret-token|SECRET_TOKEN|PRIVATE_SENTINEL/);
 	expect(telemetry.status()).toEqual({
 		enabled: false,
@@ -38,6 +42,20 @@ it("emits only bounded metadata and drops logs under backpressure", () => {
 		droppedLogs: 1,
 		invalidRecords: 0,
 	});
+});
+
+it("contains asynchronous log destination errors", async () => {
+	const output = new Writable({
+		write(_chunk, _encoding, done) {
+			setImmediate(() => done(new Error("PRIVATE_SENTINEL")));
+		},
+	});
+	const telemetry = startObservability({ service: "platform-api", output });
+	active.push(telemetry);
+	telemetry.record({ stage: "http", outcome: "completed" });
+	await new Promise((resolve) => output.once("error", resolve));
+	telemetry.record({ stage: "http", outcome: "failed" });
+	expect(telemetry.status().droppedLogs).toBe(2);
 });
 
 it("keeps invalid observational input out of business control flow", () => {

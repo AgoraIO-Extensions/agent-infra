@@ -51,6 +51,8 @@ export interface OperationalEvent {
 	readonly code?: OperationalCode;
 	readonly requestId?: string;
 	readonly traceId?: string;
+	readonly agentId?: string;
+	readonly conversationId?: string;
 	readonly executionId?: string;
 	readonly operationRef?: string;
 	readonly attemptRef?: string;
@@ -74,7 +76,8 @@ const outcomes = new Set<OperationalOutcome>([
 ]);
 const stages = new Set<string>(operationalStages);
 const codes = new Set<string>(operationalCodes);
-const identifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const identifier =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function safeId(value: string | undefined) {
 	return value && identifier.test(value) ? value : undefined;
@@ -119,6 +122,11 @@ export function startObservability(options: ObservabilityOptions) {
 		backpressured = false;
 	};
 	output.on("drain", onDrain);
+	const onError = () => {
+		backpressured = true;
+		droppedLogs++;
+	};
+	output.on("error", onError);
 	const logger = pino(
 		{
 			base: { service: options.service },
@@ -232,6 +240,10 @@ export function startObservability(options: ObservabilityOptions) {
 				...(event.code && codes.has(event.code) ? { code: event.code } : {}),
 				...(safeId(event.requestId) ? { requestId: event.requestId } : {}),
 				...(safeId(event.traceId) ? { traceId: event.traceId } : {}),
+				...(safeId(event.agentId) ? { agentId: event.agentId } : {}),
+				...(safeId(event.conversationId)
+					? { conversationId: event.conversationId }
+					: {}),
 				...(safeId(event.executionId)
 					? { executionId: event.executionId }
 					: {}),

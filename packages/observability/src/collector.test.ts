@@ -40,9 +40,11 @@ it("exports correlated traces and bounded metrics to a local OTLP collector", as
 		telemetry.record({
 			stage: "model",
 			outcome: "completed",
-			executionId: "execution-collector-1",
-			operationRef: "operation-1",
-			attemptRef: "attempt-1",
+			agentId: "123e4567-e89b-42d3-a456-426614174001",
+			conversationId: "123e4567-e89b-42d3-a456-426614174002",
+			executionId: "123e4567-e89b-42d3-a456-426614174003",
+			operationRef: "123e4567-e89b-42d3-a456-426614174004",
+			attemptRef: "123e4567-e89b-42d3-a456-426614174005",
 			durationMs: 14,
 			message: "PRIVATE_SENTINEL",
 		} as Parameters<typeof telemetry.record>[0]);
@@ -57,7 +59,7 @@ it("exports correlated traces and bounded metrics to a local OTLP collector", as
 		expect(requests.map((item) => item.path)).toContain("/v1/metrics");
 		expect(
 			requests.find((item) => item.path === "/v1/traces")?.body.toString(),
-		).toContain("execution-collector-1");
+		).toContain("123e4567-e89b-42d3-a456-426614174003");
 		for (const request of requests)
 			expect(request.body.toString()).not.toContain("PRIVATE_SENTINEL");
 		expect(telemetry.status().exportFailures).toBe(0);
