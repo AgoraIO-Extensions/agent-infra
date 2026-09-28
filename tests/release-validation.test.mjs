@@ -46,8 +46,16 @@ async function fixture() {
 			"utf8",
 		),
 	);
-	values.platformWorker.deploymentModule =
-		"file:///app/deployment/platform-worker.mjs";
+	values.platformWorker.deploymentModule = "file:///app/dist/deployment.mjs";
+	values.platformWorker.configurationModuleSecretRef = {
+		name: "worker-reviewed-configuration",
+		key: "configuration.mjs",
+	};
+	values.platformWorker.runtimeAuthSecretRef = {
+		name: "worker-runtime-auth",
+		privateKeyKey: "runtime-grant.pem",
+		serviceTokenKey: "service-token",
+	};
 	const images = {};
 	for (const [index, key] of imageKeys.entries()) {
 		const digest = `sha256:${String(index + 1).repeat(64)}`;
