@@ -217,18 +217,16 @@ describe("Connection runtime configuration", () => {
 		);
 	});
 
-	it("keeps employee directory approval disabled until active LDAP is configured", () => {
+	it("enables employee directory approval without an LDAP active-state attribute", () => {
 		expect(
 			connectionApiRuntimeConfig(accountBase).approvalDirectoryEnabled,
 		).toBe(false);
-		expect(() =>
-			connectionApiRuntimeConfig({
-				...accountBase,
-				CONNECTION_APPROVAL_DIRECTORY_ENABLED: "true",
-			}),
-		).toThrow(
-			"Approval employee search requires LDAP active-state configuration",
-		);
+		const withoutActiveState = connectionApiRuntimeConfig({
+			...accountBase,
+			CONNECTION_APPROVAL_DIRECTORY_ENABLED: "true",
+		});
+		expect(withoutActiveState.approvalDirectoryEnabled).toBe(true);
+		expect(withoutActiveState.ldap.activeAttribute).toBeUndefined();
 		const configured = connectionApiRuntimeConfig({
 			...accountBase,
 			CONNECTION_APPROVAL_DIRECTORY_ENABLED: "true",
