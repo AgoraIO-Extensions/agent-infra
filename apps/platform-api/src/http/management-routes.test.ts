@@ -5,6 +5,7 @@ import {
 	AgentProjectionV1Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
+import { ApiIdentityError } from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
@@ -676,6 +677,12 @@ describe("management routes", () => {
 		});
 		const grantCredentialDelivery = vi.fn().mockResolvedValue(undefined);
 		const revokeCredentialDelivery = vi.fn().mockResolvedValue(true);
+		const issueApplicationCredential = vi
+			.fn()
+			.mockRejectedValueOnce(new ApiIdentityError("resource_unavailable"))
+			.mockImplementation((_actor, _applicationId, value) =>
+				issueCredential(value),
+			);
 		const listCredentials = vi.fn().mockResolvedValue([
 			{
 				schemaVersion: 1,
@@ -714,11 +721,7 @@ describe("management routes", () => {
 						principal: { kind: "application", id: "application-1" },
 					}),
 				),
-				issueApplicationCredential: vi
-					.fn()
-					.mockImplementation((_actor, _applicationId, value) =>
-						issueCredential(value),
-					),
+				issueApplicationCredential,
 				revokeApplicationCredential: vi.fn(),
 				grantCredentialDelivery: vi
 					.fn()
@@ -813,15 +816,13 @@ describe("management routes", () => {
 			},
 		);
 
-		expect(response.status).toBe(201);
-		const issuedForOther = await response.json();
-		expect(issuedForOther).toMatchObject({
-			metadata: { principal: { kind: "application", id: "application-1" } },
-		});
-		expect(issuedForOther).not.toHaveProperty("credential");
-		expect(issueCredential).toHaveBeenCalledWith(
+		expect(response.status).toBe(404);
+		expect(issueApplicationCredential).toHaveBeenCalledWith(
+			expect.objectContaining({ userId: "user-1" }),
+			"application-1",
 			expect.objectContaining({ recipient: { kind: "user", id: "user-2" } }),
 		);
+		expect(issueCredential).not.toHaveBeenCalled();
 
 		resolve.mockResolvedValue({
 			...identity,
@@ -845,6 +846,7 @@ describe("management routes", () => {
 			metadata: { principal: { kind: "application", id: "application-1" } },
 			credential: expect.any(String),
 		});
+		expect(issueCredential).toHaveBeenCalledOnce();
 	});
 
 	it("grants and revokes an application principal through the owner boundary", async () => {

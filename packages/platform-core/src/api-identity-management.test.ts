@@ -338,24 +338,25 @@ describe("API identity management authorization", () => {
 		);
 	});
 
-	it("allows an administrator to manage application metadata without receiving plaintext", async () => {
+	it("rejects other-user issuance even for a responsible user or administrator", async () => {
 		const store = storeFixture();
 		const useCase = management(store);
-		const administrator = { ...actor(), isAdministrator: true };
-		const result = await useCase.issueApplicationCredential(
-			administrator,
-			application.id,
-			{
-				credential: "admin-issued-secret",
-				recipient: { kind: "user", id: "recipient-1" },
-				scopes: ["agent:read"],
-				expiresAt: null,
-				audit: { ...audit, action: "api.credential.issued" },
-			},
-		);
-		expect(result.credentialId).toBe("credential-1");
-		expect(store.issueCredential).toHaveBeenCalledWith(
+		for (const caller of [actor(), { ...actor(), isAdministrator: true }]) {
+			await expect(
+				useCase.issueApplicationCredential(caller, application.id, {
+					credential: "undeliverable-secret",
+					recipient: { kind: "user", id: "recipient-1" },
+					scopes: ["agent:read"],
+					expiresAt: null,
+					audit: { ...audit, action: "api.credential.issued" },
+				}),
+			).rejects.toMatchObject({ code: "resource_unavailable" });
+		}
+		expect(store.issueCredential).not.toHaveBeenCalled();
+		expect(store.writeAudit).toHaveBeenCalledTimes(2);
+		expect(store.writeAudit).toHaveBeenCalledWith(
 			expect.objectContaining({
+				outcome: "rejected",
 				recipient: { kind: "user", id: "recipient-1" },
 			}),
 		);

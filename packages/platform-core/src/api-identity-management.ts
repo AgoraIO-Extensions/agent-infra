@@ -568,10 +568,7 @@ export function createApiIdentityManagementV1(input: {
 				await rejectWithAudit(audit, application.id, recipient);
 				throw new ApiIdentityError("resource_unavailable");
 			}
-			const isResponsibleUser =
-				principal.kind === "user" &&
-				application.responsibleUserId === principal.id;
-			if (!isResponsibleUser && !sameApiPrincipalV1(principal, recipient)) {
+			if (!sameApiPrincipalV1(principal, recipient)) {
 				await rejectWithAudit(audit, application.id, recipient);
 				throw new ApiIdentityError("resource_unavailable");
 			}
