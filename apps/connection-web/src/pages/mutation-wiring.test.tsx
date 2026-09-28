@@ -586,6 +586,14 @@ describe("Connection 管理 mutation wiring", () => {
 					policyVersionId: "policy-1",
 					presentationId: "presentation-1",
 					effectCeiling: "READ",
+					actions: [
+						{
+							id: "github.list_repositories@v1",
+							name: "github.list_repositories",
+							description: "列出仓库",
+							effect: "READ",
+						},
+					],
 					requiredScopes: ["repo"],
 					durations: [{ kind: "FINITE", days: 90 }, { kind: "PERMANENT" }],
 					disclaimers: [
@@ -919,6 +927,20 @@ describe("Connection 管理 mutation wiring", () => {
 					policyVersionId: "policy-1",
 					presentationId: "presentation-1",
 					effectCeiling: "WRITE",
+					actions: [
+						{
+							id: "jira.get_issue@v1",
+							name: "jira.get_issue",
+							description: "查看问题",
+							effect: "READ",
+						},
+						{
+							id: "jira.create_issue@v1",
+							name: "jira.create_issue",
+							description: "创建问题",
+							effect: "WRITE",
+						},
+					],
 					requiredScopes: ["read", "write"],
 					durations: [{ kind: "FINITE", days: 90 }],
 					disclaimers: [

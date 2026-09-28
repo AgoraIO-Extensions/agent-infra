@@ -85,3 +85,50 @@ it("validates composed approval responses without accepting unknown fields", () 
 		);
 	}
 });
+
+it("requires a bounded exact Action projection in each access option", () => {
+	const validator = new Validator({
+		...document,
+		$ref: "#/components/schemas/AccessOption",
+	});
+	const option = {
+		actions: [
+			{
+				id: "github.create_issue@v1",
+				name: "github.create_issue",
+				description: "创建问题",
+				effect: "WRITE",
+			},
+		],
+		capabilityProfileId: "profile-1",
+		capabilityProfileName: "仅写",
+		disclaimers: [],
+		durations: [{ kind: "FINITE", days: 90 }],
+		effectCeiling: "WRITE",
+		policyVersionId: "policy-1",
+		presentationId: "presentation-1",
+		providerId: "github",
+		providerReleaseId: "github-v1",
+		requiredScopes: [],
+	};
+	const { actions, ...withoutActions } = option;
+	expect(validator.validate(option).valid).toBe(true);
+	expect(validator.validate(withoutActions).valid).toBe(false);
+	expect(validator.validate({ ...option, actions: [] }).valid).toBe(false);
+	expect(
+		validator.validate({ ...option, actions: Array(501).fill(actions[0]) })
+			.valid,
+	).toBe(false);
+	expect(
+		validator.validate({
+			...option,
+			actions: [{ ...actions[0], effect: "EXECUTE" }],
+		}).valid,
+	).toBe(false);
+	expect(
+		validator.validate({
+			...option,
+			actions: [{ ...actions[0], unexpected: true }],
+		}).valid,
+	).toBe(false);
+});

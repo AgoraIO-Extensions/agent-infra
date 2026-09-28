@@ -65,6 +65,12 @@ export type ApprovalRerouteInput = {
 };
 
 export type AccessOption = {
+	actions: readonly {
+		id: string;
+		name: string;
+		description: string;
+		effect: "READ" | "WRITE";
+	}[];
 	capabilityProfileId: string;
 	capabilityProfileName: string;
 	disclaimers: readonly {

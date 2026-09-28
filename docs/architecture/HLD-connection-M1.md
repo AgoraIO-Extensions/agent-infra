@@ -1206,6 +1206,8 @@ Provider 兼容升级是版本绑定的受控迁移，不是新的公司批准�
 
 Consumer Grant 预览与确认也只选择 Access Authorization 的 exact Capability Profile ActionVersion 集合，不能仅按 Credential scopes 展示或提交额外 Action。pre-launch 清单中的旧账号在 cutoff 前最多沿用当时 active Grant ActionVersion 并集；确认时重新读取当前资格，过期、撤销和重审截止后的旧 Preview 不得产生 Grant。
 
+申请选项只从当前 PUBLISHED Policy 及其 exact PUBLISHED Capability Profile 生成，向申请者展示该 Profile 的精确 ActionVersion 名称、说明和逐项 READ/WRITE 效果；展示投影不能改变获批集合，也不能仅用 effect ceiling 推断是否同时包含 READ 和 WRITE。缺少能力成员时拒绝返回该选项。
+
 WorkItem、Notification 和 NotificationReceipt 只提供站内投影与已读状态。审批状态变化、WorkItem recipient、audit 和 outbox 同事务写入；独立 dispatcher 幂等投递。读取或归档 Notification 不能批准申请、完成 WorkItem 或恢复授权。首期页面加载、窗口聚焦和有界轮询刷新，不新增 WebSocket/SSE。
 
 员工候选搜索只向管理员返回最小展示投影，身份关联使用 LDAP issuer + uid 的 Principal 映射；姓名、邮箱、alias 和外部目录 iamId 不得成为授权键。搜索、选择及保存 DRAFT 不要求配置或验证在职状态，但必须完成唯一 LDAP 身份映射、候选有效期和当前管理员归属校验。保存草稿不授予审批权限，也不得恢复已有 Principal 或 identity 的停用状态。生产员工目录 contract 未通过 Identity Owner gate 时，Policy 发布保持禁用；发布、实际审批、重新分配与代理授权仍须校验有效在职身份。

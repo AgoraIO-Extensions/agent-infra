@@ -1138,6 +1138,14 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					await requestRepository.listAccessOptions(applicantId)
 				).find((item) => item.policyVersionId === policyId);
 				if (!option) throw new Error("Approval option is missing");
+				expect(option.actions).toEqual([
+					{
+						id: actionId,
+						name: "approval-provider.read",
+						description: "Approval integration read",
+						effect: "READ",
+					},
+				]);
 				await requestRepository.createRequest({
 					applicantPrincipalId: applicantId,
 					capabilityProfileId: profileId,

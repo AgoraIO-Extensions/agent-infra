@@ -334,6 +334,25 @@ export class PostgresConnectionAccessRequestRepository
 		`;
 			return Promise.all(
 				policies.map(async (policy) => {
+					const actions = await sql<
+						{
+							id: string;
+							name: string;
+							description: string;
+							effect: "READ" | "WRITE";
+						}[]
+					>`
+						SELECT action.id, action.name, action.description, action.effect
+						FROM connection_capability_profile_actions member
+						JOIN connection_action_versions action
+							ON action.id = member.action_version_id
+							AND action.provider_release_id = member.provider_release_id
+						WHERE member.capability_profile_id = ${policy.capability_profile_id}
+							AND member.provider_release_id = ${policy.provider_release_id}
+						ORDER BY action.name, action.id
+					`;
+					if (!actions.length || actions.length > 500)
+						invalid("Capability profile actions are unavailable");
 					const durations = await sql<
 						{
 							duration_days: number | null;
@@ -390,6 +409,7 @@ export class PostgresConnectionAccessRequestRepository
 					)
 				`;
 					return {
+						actions,
 						capabilityProfileId: policy.capability_profile_id,
 						capabilityProfileName: policy.capability_profile_name,
 						disclaimers: disclaimers.map((item) => ({
