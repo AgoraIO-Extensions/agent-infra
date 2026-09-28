@@ -56,17 +56,25 @@ export function claudeQuery(options: Options, message: SDKUserMessage) {
 		close() {
 			closing ??= (async () => {
 				finishInput();
-				// The SDK's `close()` starts async cleanup but deliberately returns
-				// void. Calling it here can leave an abort rejection detached from
-				// the driver when a streaming request is still pending. Returning
-				// the async generator lets us observe that cleanup promise while
-				// keeping the SDK's forceful close semantics.
-				if (typeof native.return === "function")
-					await native.return().catch(() => {});
-				else native.close();
-				if (!child) return;
+				// A pending SDK read can leave `native.return()` unresolved. Trigger
+				// that cleanup after the process group is retired so it cannot block
+				// the forceful close path.
+				const finishNativeCleanup = () => {
+					if (typeof native.return === "function") {
+						try {
+							void Promise.resolve(native.return()).catch(() => {});
+						} catch {
+							// The child process still needs to be retired.
+						}
+					} else native.close();
+				};
+				if (!child) {
+					finishNativeCleanup();
+					return;
+				}
 				const pid = child.pid;
 				if (!pid) throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+				let retired = false;
 				for (const signal of ["SIGTERM", "SIGKILL"] as const) {
 					try {
 						process.kill(-pid, signal);
@@ -90,10 +98,16 @@ export function claudeQuery(options: Options, message: SDKUserMessage) {
 							else if (code !== "EPERM")
 								throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 						}
-						if (childClosed && groupGone) return;
+						if (childClosed && groupGone) {
+							retired = true;
+							break;
+						}
 						await delay(25);
 					} while (Date.now() < deadline);
+					if (retired) break;
 				}
+				finishNativeCleanup();
+				if (retired) return;
 				throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 			})();
 			return closing;
