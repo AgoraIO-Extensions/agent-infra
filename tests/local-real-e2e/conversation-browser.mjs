@@ -195,6 +195,30 @@ async function run(input, evidence) {
 		evidence.executionHash = digest(receipt.executionId);
 		await expect
 			.poll(
+				() =>
+					page.evaluate(() => {
+						const frames = window.__agentInfraSseFrames ?? [];
+						const firstFrame = frames.find(
+							(frame) => frame.type === "text.delta" && frame.textLength > 0,
+						);
+						const terminalFrame = frames.find(
+							(frame) =>
+								frame.type === "execution.status" &&
+								frame.status === "completed",
+						);
+						return Boolean(
+							firstFrame &&
+								terminalFrame &&
+								firstFrame.at < terminalFrame.at &&
+								terminalFrame.visibleTextLength >
+									(window.__agentInfraStreamStartAssistantLength ?? 0),
+						);
+					}),
+				{ timeout: 180_000, intervals: [500, 1000, 2000] },
+			)
+			.toBe(true);
+		await expect
+			.poll(
 				async () => {
 					const detail = await conversationDetail(
 						owner,
@@ -223,7 +247,6 @@ async function run(input, evidence) {
 			new Set(events.map((event) => event.eventId)).size,
 			events.length,
 		);
-		await expect(page.locator(".assistant-markdown").last()).not.toBeEmpty();
 		const sseFrames = await page.evaluate(
 			() => window.__agentInfraSseFrames ?? [],
 		);
@@ -253,6 +276,7 @@ async function run(input, evidence) {
 			firstFrame.at < terminalFrame.at,
 			"An incremental text frame must arrive before the terminal frame",
 		);
+		await expect(page.locator(".assistant-markdown").last()).not.toBeEmpty();
 		evidence.sse = {
 			status: 200,
 			eventCount: events.length,
