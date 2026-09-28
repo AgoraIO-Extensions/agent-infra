@@ -51,3 +51,20 @@ it("rejects old Pod credentials and Key references from V4 options", () => {
 		}).success,
 	).toBe(false);
 });
+
+it("rejects duplicate options and defaults absent from the allowed set", () => {
+	const option = configuration.modelOptions[0];
+	for (const changed of [
+		{ ...configuration, modelOptions: [option, option] },
+		{
+			...configuration,
+			modelOptions: [{ ...option, reasoningLevels: ["high", "high"] }],
+		},
+		{ ...configuration, defaultModelOptionId: "unknown" },
+		{ ...configuration, defaultReasoningLevel: "low" },
+	]) {
+		expect(RuntimeModelConfigurationV4Schema.safeParse(changed).success).toBe(
+			false,
+		);
+	}
+});
