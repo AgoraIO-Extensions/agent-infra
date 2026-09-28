@@ -1724,13 +1724,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				? previousEvent.payload
 				: undefined;
 		if (previous?.phase === "intent") return previous;
-		// A late permission callback cannot rewrite an already observed start
-		// as a new denied attempt or authorize its replay.
-		if (previous?.phase === "started") unavailable();
+		// A repeated permission callback for one native tool use is not a new attempt.
+		if (previous) unavailable();
 		const model = generationFact(turn);
 		const created = {
 			kind: "tool" as const,
-			operationRef: previous?.operationRef ?? randomUUID(),
+			operationRef: randomUUID(),
 			attemptRef: randomUUID(),
 			phase: "intent" as const,
 			toolId: metadataId(value.name, "tool"),

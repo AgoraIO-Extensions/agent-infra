@@ -312,6 +312,64 @@ it.each([
 	},
 );
 
+it("records one failed attempt when Claude repeats a denied tool permission", async () => {
+	const decisions: string[] = [];
+	await withClaudeSource(
+		async (request, options) => {
+			const response = await request();
+			expect(response.ok).toBe(true);
+			await response.text();
+			const input = {
+				file_path: join(String(options.cwd), "..", "outside.txt"),
+			};
+			const hook = options.hooks?.PreToolUse?.[0]?.hooks[0];
+			const hookDecision = await hook?.(
+				{
+					hook_event_name: "PreToolUse",
+					session_id: String(options.sessionId),
+					transcript_path: "synthetic-unused",
+					cwd: String(options.cwd),
+					tool_name: "Read",
+					tool_input: input,
+					tool_use_id: "same-native-tool",
+				},
+				"same-native-tool",
+				{ signal: new AbortController().signal },
+			);
+			decisions.push(
+				hookDecision &&
+					"hookSpecificOutput" in hookDecision &&
+					hookDecision.hookSpecificOutput &&
+					"permissionDecision" in hookDecision.hookSpecificOutput &&
+					hookDecision.hookSpecificOutput.permissionDecision === "deny"
+					? "deny"
+					: "allow",
+			);
+			const permission = await options.canUseTool?.("Read", input, {
+				signal: new AbortController().signal,
+				toolUseID: "same-native-tool",
+				requestId: "synthetic-permission-request",
+			});
+			decisions.push(permission?.behavior ?? "missing");
+		},
+		async (action, driver) => driver.validateExternalAction(action),
+		async ({ driver, ref, command }) => {
+			await vi.waitFor(() => expect(decisions).toHaveLength(2), {
+				timeout: 15_000,
+			});
+			expect(decisions).toEqual(["deny", "deny"]);
+			const events = await driver.replayEvents(ref, command.executionId);
+			const facts = events.flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload]
+					: [],
+			);
+			expect(facts.map((fact) => fact.phase)).toEqual(["intent", "failed"]);
+			expect(new Set(facts.map((fact) => fact.attemptRef)).size).toBe(1);
+		},
+	);
+}, 20_000);
+
 it("blocks Claude model requests before current authority when durable intent fails", async () => {
 	let inject = false;
 	let responseStatus = 0;
