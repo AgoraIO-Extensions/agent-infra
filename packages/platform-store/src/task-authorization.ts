@@ -82,10 +82,16 @@ export async function requireCurrentTaskApiAccess(
 		if (!grant) throw new TaskAuthorizationStoreError();
 	}
 	if (boundary.principal.kind === "application") {
-		const [application] = await transaction<{ status: string }[]>`
-			select status from platform.platform_applications where id = ${boundary.principal.id} for share
+		const [application] = await transaction<
+			{ status: string; authorization_revision: string }[]
+		>`
+			select status, authorization_revision from platform.platform_applications
+			where id = ${boundary.principal.id} for share
 		`;
-		if (application?.status !== "active")
+		if (
+			application?.status !== "active" ||
+			application.authorization_revision !== boundary.identityRevision
+		)
 			throw new TaskAuthorizationStoreError();
 	}
 }

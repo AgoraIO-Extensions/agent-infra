@@ -98,7 +98,11 @@ async function rewriteV2Request(
 	headers.set("x-agent-infra-v2", "1");
 	if (ownerScope !== null) headers.set("x-agent-infra-v2-scope", ownerScope);
 	if (request.method === "GET" || request.method === "HEAD") {
-		return new Request(url, { method: request.method, headers });
+		return new Request(url, {
+			method: request.method,
+			headers,
+			signal: request.signal,
+		});
 	}
 	const body = await request.clone().text();
 	const rewrittenBody = v2RequestBody(pathname, request.method, body);
@@ -107,6 +111,7 @@ async function rewriteV2Request(
 		method: request.method,
 		headers,
 		body: rewrittenBody,
+		signal: request.signal,
 	});
 }
 

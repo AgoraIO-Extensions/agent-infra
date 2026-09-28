@@ -885,6 +885,8 @@ export function registerManagementRoutes(
 			);
 			const recipient =
 				body.recipient ?? ({ kind: "user", id: identity.userId } as const);
+			if (recipient.kind !== "user" || recipient.id !== identity.userId)
+				throw new HttpProtocolError("FORBIDDEN", metadata.traceId);
 			const credential = generateApiCredentialV1(randomBytes);
 			const issued = await queryOrUnavailable(
 				() =>

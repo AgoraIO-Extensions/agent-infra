@@ -665,9 +665,8 @@ describe("management routes", () => {
 			},
 		);
 
-		expect(response.status).toBe(201);
-		expect(await response.json()).not.toHaveProperty("credential");
-		expect(issueCredential).toHaveBeenCalled();
+		expect(response.status).toBe(403);
+		expect(issueCredential).not.toHaveBeenCalled();
 
 		resolve.mockResolvedValue({
 			...identity,
