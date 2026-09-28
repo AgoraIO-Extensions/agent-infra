@@ -401,7 +401,10 @@ it("denies a repeated Claude tool ID with a different tool name", async () => {
 					? [event.payload]
 					: [],
 			);
-			expect(facts).toMatchObject([{ phase: "intent", toolId: "Read" }]);
+			expect(facts[0]).toMatchObject({ phase: "intent", toolId: "Read" });
+			expect(facts.every((fact) => fact.toolId === "Read")).toBe(true);
+			expect(new Set(facts.map((fact) => fact.operationRef)).size).toBe(1);
+			expect(new Set(facts.map((fact) => fact.attemptRef)).size).toBe(1);
 		},
 	);
 }, 20_000);
