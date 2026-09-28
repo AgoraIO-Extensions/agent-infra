@@ -5,6 +5,10 @@ import {
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, test } from "@playwright/test";
+import {
+	execution,
+	history,
+} from "../src/features/conversation/conversation-test-fixtures";
 
 const timestamp = "2026-09-28T02:00:00Z";
 const agentId = "agent-1";
@@ -15,7 +19,9 @@ const messageId = "message-live-1";
 function event(
 	type: "text.delta" | "execution.status",
 	sequence: number,
-	payload: { text: string } | { status: "completed" },
+	payload:
+		| { text: string }
+		| { status: "processing" | "completed" | "cancelled" },
 ) {
 	return PersistedConversationEventV2Schema.parse({
 		schemaVersion: 1,
@@ -28,6 +34,50 @@ function event(
 		occurredAt: timestamp,
 		type,
 		payload,
+	});
+}
+
+function ownerSession() {
+	return {
+		schemaVersion: 1,
+		user: {
+			userId: "user-owner-1",
+			displayName: "开发 Owner",
+			roles: ["employee"],
+		},
+	};
+}
+
+function activeAgent() {
+	return AgentProjectionV2Schema.parse({
+		...pilotFakeScenariosV2.starting.response.body,
+		agentId,
+		managementStatus: "available",
+		serviceAvailability: "ready",
+		configuration: {
+			...pilotFakeScenariosV2.starting.response.body.configuration,
+			modelOptions: [
+				{
+					optionId: "model-primary",
+					displayName: "Primary model",
+					modelId: "gpt-5",
+					reasoningLevels: ["medium", "high"],
+				},
+				{
+					optionId: "model-secondary",
+					displayName: "Secondary model",
+					modelId: "claude",
+					reasoningLevels: ["high"],
+				},
+			],
+			defaultModelOptionId: "model-primary",
+			defaultReasoningLevel: "medium",
+		},
+		capabilities: {
+			...pilotFakeScenariosV2.starting.response.body.capabilities,
+			modelSelection: true,
+			supplementaryInstruction: true,
+		},
 	});
 }
 
@@ -341,4 +391,276 @@ test("renders an authorization failure without retaining another subject's conve
 	await expect(
 		page.getByText("请输出一段实时结果", { exact: true }),
 	).toHaveCount(0);
+});
+
+test("saves the next-message model and stops the bound execution", async ({
+	page,
+}) => {
+	const agent = activeAgent();
+	const processing = event("execution.status", 1, { status: "processing" });
+	const cancelled = event("execution.status", 2, { status: "cancelled" });
+	const userMessage = {
+		messageId,
+		role: "user" as const,
+		text: "继续检查当前任务",
+		status: "processing" as const,
+		executionId,
+		replyToMessageId: null,
+		answerVersion: null,
+		isCurrentAnswer: null,
+		error: null,
+		createdAt: timestamp,
+	};
+	let phase: "active" | "cancelled" = "active";
+	let selectedModelOptionId = "model-primary";
+	let selectedReasoningLevel = "medium";
+	let selectionBody: unknown;
+	let stopBody: unknown;
+	let stopIdempotencyKey: string | undefined;
+	const detail = () => {
+		const events =
+			phase === "cancelled" ? [processing, cancelled] : [processing];
+		return ConversationDetailProjectionV2Schema.parse({
+			...history(conversationId, events),
+			conversation: {
+				...history(conversationId, []).conversation,
+				status: phase === "cancelled" ? "ready" : "active",
+				selectedModelOptionId,
+				selectedReasoningLevel,
+			},
+			messages: [
+				{
+					...userMessage,
+					status: phase === "cancelled" ? "cancelled" : "processing",
+				},
+			],
+		});
+	};
+	await page.addInitScript(() => {
+		const realFetch = window.fetch.bind(window);
+		window.fetch = async (input, init) => {
+			const request = new Request(input, init);
+			const response = await realFetch(request);
+			if (!new URL(request.url).pathname.endsWith("/events")) return response;
+			void response.body?.cancel();
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode(": heartbeat\n\n"));
+					const close = () => controller.close();
+					if (request.signal.aborted) close();
+					else request.signal.addEventListener("abort", close, { once: true });
+				},
+			});
+			return new Response(body, {
+				status: response.status,
+				statusText: response.statusText,
+				headers: response.headers,
+			});
+		};
+	});
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		const path = new URL(request.url()).pathname;
+		if (path.endsWith("/events")) {
+			await route.fulfill({
+				status: 200,
+				contentType: "text/event-stream",
+				body: ": heartbeat\n\n",
+			});
+			return;
+		}
+		if (path.endsWith("/session")) {
+			await route.fulfill({ json: ownerSession() });
+			return;
+		}
+		if (path === `/api/v2/agents/${agentId}`) {
+			await route.fulfill({ json: agent });
+			return;
+		}
+		if (path === `/api/v2/conversations/${conversationId}`) {
+			await route.fulfill({ json: detail() });
+			return;
+		}
+		if (path.endsWith("/model-selection")) {
+			selectionBody = request.postDataJSON();
+			selectedModelOptionId = "model-secondary";
+			selectedReasoningLevel = "high";
+			await route.fulfill({
+				status: 200,
+				json: {
+					schemaVersion: 1,
+					conversationId,
+					agentId,
+					title: "实时验收会话",
+					status: "active",
+					selectedModelOptionId,
+					selectedReasoningLevel,
+					lastConversationCursor: null,
+					createdAt: timestamp,
+					updatedAt: timestamp,
+				},
+			});
+			return;
+		}
+		if (path.endsWith("/stop")) {
+			stopBody = request.postDataJSON();
+			stopIdempotencyKey = request.headers()["idempotency-key"];
+			phase = "cancelled";
+			await route.fulfill({
+				status: 202,
+				json: {
+					schemaVersion: 1,
+					status: "submitted",
+					messageId: null,
+					executionId,
+				},
+			});
+			return;
+		}
+		await route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	await expect(page.getByRole("button", { name: "停止回复" })).toBeVisible();
+	await page.getByRole("combobox", { name: "模型" }).click();
+	await page.getByRole("option", { name: "Secondary model" }).click();
+	await page.getByRole("combobox", { name: "推理强度" }).click();
+	await page.getByRole("option", { name: "high" }).click();
+	await page.getByRole("button", { name: "保存模型选择" }).click();
+	await expect(
+		page.getByRole("status").filter({
+			hasText: "模型选择已保存，从下一条消息开始生效。",
+		}),
+	).toBeVisible();
+	await page.getByRole("button", { name: "停止回复" }).click();
+	await expect(
+		page.getByRole("status").filter({ hasText: "原回复已结束。" }),
+	).toBeVisible();
+	expect(selectionBody).toEqual({
+		schemaVersion: 1,
+		modelOptionId: "model-secondary",
+		reasoningLevel: "high",
+	});
+	expect(stopBody).toEqual({
+		schemaVersion: 1,
+		targetExecutionId: executionId,
+	});
+	expect(stopIdempotencyKey).toBeTruthy();
+	expect(stopIdempotencyKey).not.toBe("undefined");
+	await page.setViewportSize({ width: 390, height: 844 });
+	expect(
+		await page.evaluate(
+			() =>
+				Math.max(
+					document.documentElement.scrollWidth,
+					document.body.scrollWidth,
+				) <= innerWidth,
+		),
+	).toBe(true);
+});
+
+test("regenerates a terminal answer and opens its execution details", async ({
+	page,
+}) => {
+	const agent = activeAgent();
+	const completed = event("execution.status", 1, { status: "completed" });
+	const originalMessage = {
+		messageId,
+		role: "user" as const,
+		text: "请检查当前任务",
+		status: "completed" as const,
+		executionId,
+		replyToMessageId: null,
+		answerVersion: null,
+		isCurrentAnswer: null,
+		error: null,
+		createdAt: timestamp,
+	};
+	const answer = {
+		messageId: "answer-live-1",
+		role: "assistant" as const,
+		text: "已完成检查。",
+		status: "completed" as const,
+		executionId,
+		replyToMessageId: messageId,
+		answerVersion: 1,
+		isCurrentAnswer: true,
+		error: null,
+		createdAt: timestamp,
+	};
+	const detail = ConversationDetailProjectionV2Schema.parse({
+		...history(conversationId, [completed]),
+		conversation: {
+			...history(conversationId, []).conversation,
+			status: "ready",
+			selectedModelOptionId: "model-primary",
+			selectedReasoningLevel: "medium",
+		},
+		messages: [originalMessage, answer],
+	});
+	let regenerateBody: unknown;
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		const path = new URL(request.url()).pathname;
+		if (path.endsWith("/events")) {
+			await route.fulfill({
+				status: 200,
+				contentType: "text/event-stream",
+				body: ": heartbeat\n\n",
+			});
+			return;
+		}
+		if (path.endsWith("/session")) {
+			await route.fulfill({ json: ownerSession() });
+			return;
+		}
+		if (path === `/api/v2/agents/${agentId}`) {
+			await route.fulfill({ json: agent });
+			return;
+		}
+		if (path === `/api/v2/conversations/${conversationId}`) {
+			await route.fulfill({ json: detail });
+			return;
+		}
+		if (path.endsWith(`/executions/${executionId}`)) {
+			await route.fulfill({ json: execution(conversationId, executionId) });
+			return;
+		}
+		if (path.endsWith("/regenerate")) {
+			regenerateBody = request.postDataJSON();
+			await route.fulfill({
+				status: 202,
+				json: {
+					schemaVersion: 1,
+					status: "submitted",
+					messageId: null,
+					executionId: "execution-regenerated",
+				},
+			});
+			return;
+		}
+		await route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	await expect(page.getByText("已完成检查。", { exact: true })).toBeVisible();
+	await page.getByRole("button", { name: "重新生成" }).click();
+	await expect(
+		page.getByRole("status").filter({ hasText: "消息已受理" }),
+	).toBeVisible();
+	expect(regenerateBody).toEqual({
+		schemaVersion: 1,
+		messageId,
+	});
+	await page.getByRole("button", { name: "执行详情" }).click();
+	const details = page.getByRole("region", { name: "执行详情" });
+	await expect(details).toBeVisible();
+	await expect(details.getByText("模型与工具调用事实")).toBeVisible();
+	await expect(
+		details.getByRole("button", { name: "核实原执行状态" }),
+	).toBeVisible();
 });
