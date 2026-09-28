@@ -1118,7 +1118,6 @@ export class RuntimeHost {
 			operation,
 			this.options.store.nativeSessionRef(hostSessionRef),
 		);
-		await this.options.afterDriverResult?.(operation.operationId);
 		if (
 			operation.kind === "submit-turn" &&
 			driverRecord.result.outcome === "accepted" &&
@@ -1134,6 +1133,7 @@ export class RuntimeHost {
 				driverRecord.nativeSessionRef,
 			);
 		}
+		await this.options.afterDriverResult?.(operation.operationId);
 		const result = await this.currentDriverResult(driverRecord, operation);
 		if (isInterruption(operation) && result.outcome === "unknown") {
 			return unknownOperationResponse(hostSessionRef, operation);
