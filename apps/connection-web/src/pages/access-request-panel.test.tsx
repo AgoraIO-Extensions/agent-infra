@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { AccessOptionsResponse } from "@agent-infra/connection-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -30,6 +32,31 @@ import { AccessRequestPanel } from "./access-request-panel";
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
+});
+
+it("keeps disclaimer consent beside its text despite global input sizing", () => {
+	const style = document.createElement("style");
+	style.textContent = `input { width: 100%; min-height: 39px; }\n${readFileSync(
+		resolve(import.meta.dirname, "approval-policies-page.css"),
+		"utf8",
+	)}`;
+	const row = document.createElement("label");
+	row.className = "approval-disclaimer-confirm";
+	row.innerHTML =
+		'<input type="checkbox"><span>我确认仅为已说明的工作目的申请 Connection。</span>';
+	document.head.append(style);
+	document.body.append(row);
+	try {
+		const checkbox = row.querySelector("input");
+		if (!checkbox) throw new Error("Disclaimer checkbox is missing");
+		expect(getComputedStyle(row).display).toBe("flex");
+		expect(getComputedStyle(checkbox).width).toBe("16px");
+		expect(getComputedStyle(checkbox).flex).toBe("0 0 16px");
+		expect(getComputedStyle(checkbox).minHeight).toBe("0");
+	} finally {
+		style.remove();
+		row.remove();
+	}
 });
 
 it("shows exact approved actions and labels a write-only bundle accurately", async () => {
