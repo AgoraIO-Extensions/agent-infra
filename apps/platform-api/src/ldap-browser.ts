@@ -3,6 +3,7 @@ import type {
 	createLdapIdentityDirectory,
 	LdapAccount,
 } from "@agent-infra/identity";
+import { resolveLdapPrincipal } from "@agent-infra/identity";
 
 type Directory = ReturnType<typeof createLdapIdentityDirectory>;
 const SESSION_COOKIE = "__Host-platform-session";
@@ -149,40 +150,8 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 	const digest = (token: string) =>
 		createHash("sha256").update(token).digest("hex");
 
-	async function current(account: LdapAccount) {
-		const disabled = await input.isPlatformDisabled(account.userId);
-		if (typeof disabled !== "boolean")
-			throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
-		const isDisabled = account.accountStatus === "disabled" || disabled;
-		const organizationIds = isDisabled
-			? []
-			: await input.organizationIds(account);
-		if (
-			!Array.isArray(organizationIds) ||
-			organizationIds.some(
-				(id) => typeof id !== "string" || !id || id.length > 1024,
-			) ||
-			new Set(organizationIds).size !== organizationIds.length
-		)
-			throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
-		return {
-			schemaVersion: 1 as const,
-			userId: account.userId,
-			displayName: account.displayName,
-			accountStatus: isDisabled ? ("disabled" as const) : ("active" as const),
-			organizationIds,
-			roles: account.roles,
-			authorizationRevision: createHash("sha256")
-				.update(
-					JSON.stringify([
-						account.authorizationRevision,
-						disabled,
-						organizationIds,
-					]),
-				)
-				.digest("hex"),
-		};
-	}
+	const current = (account: LdapAccount) =>
+		resolveLdapPrincipal(account, input);
 
 	const identityAdapter = {
 		async resolve(request: Request) {
@@ -197,7 +166,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			)
 				return null;
 			const platformDisabled = await input.isPlatformDisabled(
-				input.directory.userIdForUid(session.uid),
+				await input.directory.userIdForUid(session.uid),
 			);
 			if (typeof platformDisabled !== "boolean")
 				throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");

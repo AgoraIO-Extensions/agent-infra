@@ -11,7 +11,7 @@ import {
 const origin = "https://platform.example.test";
 const account: LdapAccount = {
 	uid: "stable-a",
-	userId: "ldap_stable-a",
+	userId: "e8c99945-5b39-4bcb-8f99-c29a7788432f",
 	email: "person.a@example.test",
 	displayName: "Person A",
 	accountStatus: "active",
@@ -46,7 +46,7 @@ function fixture(sessions = memorySessions()) {
 	let organizationsAvailable = true;
 	let now = 1000;
 	const directory = {
-		userIdForUid: vi.fn((uid: string) =>
+		userIdForUid: vi.fn(async (uid: string) =>
 			uid === account.uid ? account.userId : "invalid-user",
 		),
 		authenticate: vi.fn(async (login: string, password: string) =>

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	Client,
 	type ClientOptions,
@@ -11,6 +11,18 @@ type LdapEntry = Awaited<
 	ReturnType<LdapClient["search"]>
 >["searchEntries"][number];
 type AccountStatus = "active" | "disabled";
+
+/** #481 persists an atomic, one-to-one issuer/UID to random Platform ID mapping. */
+export interface LdapIdentityIds {
+	findByUid(issuer: string, uid: string): Promise<string | null>;
+	findUidByUserId(issuer: string, userId: string): Promise<string | null>;
+	getOrCreate(
+		issuer: string,
+		uid: string,
+		/** Used only when this issuer/UID has no existing ID. */
+		candidateUserId: string,
+	): Promise<string>;
+}
 
 export interface LdapIdentityConfiguration {
 	readonly url: string;
@@ -25,6 +37,7 @@ export interface LdapIdentityConfiguration {
 	readonly activeAttribute: string;
 	/** Supplied only after the deployed directory's #388 active-state contract is verified. */
 	readonly parseAccountStatus: (value: string) => AccountStatus | null;
+	readonly identityIds: LdapIdentityIds;
 	readonly administratorUids?: readonly string[];
 	readonly ca?: string;
 	readonly timeoutMs?: number;
@@ -85,6 +98,17 @@ function hash(value: unknown): string {
 	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function opaqueUserId(value: unknown): string {
+	if (
+		typeof value !== "string" ||
+		!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+			value,
+		)
+	)
+		throw new LdapIdentityUnavailableError();
+	return value;
+}
+
 /** A first-party LDAP adapter; deployment must provide the verified #388 status parser. */
 export function createLdapIdentityDirectory(
 	configuration: LdapIdentityConfiguration,
@@ -121,6 +145,15 @@ export function createLdapIdentityDirectory(
 			attributeName(name);
 		if (typeof config.parseAccountStatus !== "function") throw new Error();
 		if (
+			!config.identityIds ||
+			["findByUid", "findUidByUserId", "getOrCreate"].some(
+				(method) =>
+					typeof config.identityIds[method as keyof LdapIdentityIds] !==
+					"function",
+			)
+		)
+			throw new Error();
+		if (
 			config.ca !== undefined &&
 			(typeof config.ca !== "string" ||
 				config.ca.length > 64 * 1024 ||
@@ -138,7 +171,6 @@ export function createLdapIdentityDirectory(
 	} catch {
 		throw new LdapIdentityUnavailableError();
 	}
-	const issuerHash = hash(config.issuer);
 	const clientOptions: ClientOptions = {
 		url: config.url,
 		timeout: timeoutMs,
@@ -152,24 +184,6 @@ export function createLdapIdentityDirectory(
 	};
 	const createClient =
 		config.createClient ?? ((options: ClientOptions) => new Client(options));
-	const userId = (uid: string) =>
-		`ldap_${issuerHash}_${Buffer.from(uid).toString("base64url")}`;
-
-	function parseUserId(value: string): string {
-		const prefix = `ldap_${issuerHash}_`;
-		if (
-			!value.startsWith(prefix) ||
-			!/^[A-Za-z0-9_-]+$/u.test(value.slice(prefix.length))
-		)
-			throw new LdapIdentityUnavailableError();
-		const uid = requiredText(
-			Buffer.from(value.slice(prefix.length), "base64url").toString("utf8"),
-			256,
-		);
-		if (userId(uid) !== value) throw new LdapIdentityUnavailableError();
-		return uid;
-	}
-
 	async function find(
 		attributeNameToSearch: string,
 		value: string,
@@ -200,7 +214,7 @@ export function createLdapIdentityDirectory(
 		}
 	}
 
-	function account(entry: LdapEntry): LdapAccount {
+	function account(entry: LdapEntry): Omit<LdapAccount, "userId"> {
 		const uid = requiredText(attribute(entry, config.uidAttribute), 256);
 		const email = attribute(entry, config.emailAttribute).trim().toLowerCase();
 		if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/u.test(email))
@@ -216,7 +230,6 @@ export function createLdapIdentityDirectory(
 			: (["employee"] as const);
 		return {
 			uid,
-			userId: userId(uid),
 			email,
 			displayName,
 			accountStatus: status,
@@ -225,7 +238,9 @@ export function createLdapIdentityDirectory(
 		};
 	}
 
-	async function verifyUniqueEmail(value: LdapAccount): Promise<void> {
+	async function verifyUniqueEmail(
+		value: Omit<LdapAccount, "userId">,
+	): Promise<void> {
 		const entry = await find(config.emailAttribute, value.email);
 		if (
 			!entry ||
@@ -237,7 +252,11 @@ export function createLdapIdentityDirectory(
 		}
 	}
 
-	async function current(uid: string): Promise<LdapAccount | null> {
+	async function current(
+		uid: string,
+		createIdentity = false,
+		expectedEmail?: string,
+	): Promise<LdapAccount | null> {
 		try {
 			requiredText(uid, 256);
 			const entry = await find(config.uidAttribute, uid);
@@ -245,19 +264,47 @@ export function createLdapIdentityDirectory(
 			const parsed = account(entry);
 			if (parsed.uid !== uid) throw new LdapIdentityUnavailableError();
 			await verifyUniqueEmail(parsed);
-			return parsed;
+			if (
+				createIdentity &&
+				(parsed.accountStatus !== "active" || parsed.email !== expectedEmail)
+			)
+				return null;
+			const storedId = createIdentity
+				? await config.identityIds.getOrCreate(config.issuer, uid, randomUUID())
+				: await config.identityIds.findByUid(config.issuer, uid);
+			return storedId ? { ...parsed, userId: opaqueUserId(storedId) } : null;
 		} catch {
 			throw new LdapIdentityUnavailableError();
 		}
 	}
 
 	return {
-		userIdForUid(uid: string) {
-			return userId(requiredText(uid, 256));
+		async userIdForUid(uid: string) {
+			try {
+				const id = await config.identityIds.findByUid(
+					config.issuer,
+					requiredText(uid, 256),
+				);
+				return opaqueUserId(id);
+			} catch {
+				throw new LdapIdentityUnavailableError();
+			}
 		},
-		current,
+		current: (uid: string) => current(uid),
 		async currentByUserId(id: string) {
-			return current(parseUserId(id));
+			try {
+				const uid = await config.identityIds.findUidByUserId(
+					config.issuer,
+					opaqueUserId(id),
+				);
+				if (!uid) return null;
+				const found = await current(requiredText(uid, 256));
+				if (found && found.userId !== id)
+					throw new LdapIdentityUnavailableError();
+				return found;
+			} catch {
+				throw new LdapIdentityUnavailableError();
+			}
 		},
 		async authenticate(
 			login: string,
@@ -279,7 +326,7 @@ export function createLdapIdentityDirectory(
 				} finally {
 					await client.unbind().catch(() => undefined);
 				}
-				const verified = await current(first.uid);
+				const verified = await current(first.uid, true, first.email);
 				return verified?.accountStatus === "active" &&
 					verified.email === first.email
 					? verified

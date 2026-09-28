@@ -23,6 +23,7 @@ function fixture() {
 	let entries = [employee];
 	let password = "correct-password";
 	let serviceAvailable = true;
+	const ids = new Map<string, string>();
 	const binds: string[] = [];
 	const options: ClientOptions[] = [];
 	const searches: string[] = [];
@@ -39,6 +40,26 @@ function fixture() {
 		activeAttribute: "employeeStatus",
 		parseAccountStatus: (value) =>
 			value === "enabled" ? "active" : value === "disabled" ? "disabled" : null,
+		identityIds: {
+			async findByUid(issuer, uid) {
+				return ids.get(JSON.stringify([issuer, uid])) ?? null;
+			},
+			async findUidByUserId(issuer, userId) {
+				for (const [key, value] of ids)
+					if (value === userId) {
+						const [storedIssuer, uid] = JSON.parse(key) as [string, string];
+						if (storedIssuer === issuer) return uid;
+					}
+				return null;
+			},
+			async getOrCreate(issuer, uid, candidateUserId) {
+				const key = JSON.stringify([issuer, uid]);
+				const existing = ids.get(key);
+				if (existing) return existing;
+				ids.set(key, candidateUserId);
+				return candidateUserId;
+			},
+		},
 		administratorUids: ["stable-a"],
 		createClient(clientOptions) {
 			options.push(clientOptions);
@@ -70,6 +91,7 @@ function fixture() {
 	};
 	return {
 		config,
+		ids,
 		binds,
 		options,
 		searches,
@@ -118,9 +140,14 @@ describe("first-party LDAP identity directory", () => {
 			accountStatus: "active",
 			roles: ["employee", "system_admin"],
 		});
-		expect(account?.userId).toMatch(/^ldap_[a-f0-9]{64}_/u);
-		expect(directory.userIdForUid("stable-a")).toBe(account?.userId);
-		expect(() => directory.userIdForUid("")).toThrow(
+		expect(account?.userId).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+		);
+		expect(account?.userId).not.toContain("stable-a");
+		await expect(directory.userIdForUid("stable-a")).resolves.toBe(
+			account?.userId,
+		);
+		await expect(directory.userIdForUid("")).rejects.toThrow(
 			LdapIdentityUnavailableError,
 		);
 		expect(state.binds).toEqual([
@@ -144,16 +171,30 @@ describe("first-party LDAP identity directory", () => {
 		]);
 		if (!account) throw new Error("expected account");
 		expect(await directory.currentByUserId(account.userId)).toEqual(account);
+		const secondInstance = createLdapIdentityDirectory(state.config);
+		expect(await secondInstance.currentByUserId(account.userId)).toEqual(
+			account,
+		);
 		const otherIssuer = createLdapIdentityDirectory({
 			...state.config,
 			issuer: "other-company",
 		});
-		expect((await otherIssuer.current("stable-a"))?.userId).not.toBe(
-			account?.userId,
-		);
+		expect(
+			(await otherIssuer.authenticate("login-a", "correct-password"))?.userId,
+		).not.toBe(account?.userId);
 		await expect(
 			directory.currentByUserId("ldap_forged_stable-a"),
 		).rejects.toThrow(LdapIdentityUnavailableError);
+		const otherId = (
+			await otherIssuer.authenticate("login-a", "correct-password")
+		)?.userId;
+		if (!otherId) throw new Error("expected other issuer ID");
+		await expect(directory.currentByUserId(otherId)).resolves.toBeNull();
+		state.ids.clear();
+		await expect(directory.userIdForUid("stable-a")).rejects.toThrow(
+			LdapIdentityUnavailableError,
+		);
+		await expect(directory.current("stable-a")).resolves.toBeNull();
 	});
 
 	it("never grants administrator from an empty or mismatched UID set", async () => {
@@ -172,12 +213,14 @@ describe("first-party LDAP identity directory", () => {
 	it("does not accept wrong passwords, absent users or disabled accounts", async () => {
 		const state = fixture();
 		const directory = createLdapIdentityDirectory(state.config);
+		await directory.authenticate("login-a", "correct-password");
 		await expect(
 			directory.authenticate("login-a", "incorrect"),
 		).resolves.toBeNull();
 		await expect(
 			directory.authenticate("absent", "correct-password"),
 		).resolves.toBeNull();
+		expect(state.ids.size).toBe(1);
 		state.setEntries([{ ...employee, employeeStatus: "disabled" }]);
 		await expect(
 			directory.authenticate("login-a", "correct-password"),
@@ -189,6 +232,71 @@ describe("first-party LDAP identity directory", () => {
 		await expect(directory.current("stable-a")).rejects.toThrow(
 			LdapIdentityUnavailableError,
 		);
+	});
+
+	it("does not create an ID for an inactive employee", async () => {
+		const state = fixture();
+		state.setEntries([{ ...employee, employeeStatus: "disabled" }]);
+		const directory = createLdapIdentityDirectory(state.config);
+		await expect(
+			directory.authenticate("login-a", "correct-password"),
+		).resolves.toBeNull();
+		expect(state.ids.size).toBe(0);
+	});
+
+	it("does not create an ID if status or email changes after password bind", async () => {
+		for (const changed of [
+			{ ...employee, employeeStatus: "disabled" },
+			{ ...employee, mail: "changed@example.test" },
+		]) {
+			const state = fixture();
+			const directory = createLdapIdentityDirectory({
+				...state.config,
+				createClient(options) {
+					const client = state.config.createClient?.(options);
+					if (!client) throw new Error("expected fixture client");
+					return {
+						...client,
+						async bind(dn, password) {
+							await client.bind(dn, password);
+							if (dn === employee.dn) state.setEntries([changed]);
+						},
+					};
+				},
+			});
+			await expect(
+				directory.authenticate("login-a", "correct-password"),
+			).resolves.toBeNull();
+			expect(state.ids.size).toBe(0);
+		}
+	});
+
+	it("rejects malformed or unavailable persistent identity mappings", async () => {
+		const state = fixture();
+		const malformed = createLdapIdentityDirectory({
+			...state.config,
+			identityIds: {
+				...state.config.identityIds,
+				async getOrCreate() {
+					return "stable-a";
+				},
+			},
+		});
+		await expect(
+			malformed.authenticate("login-a", "correct-password"),
+		).rejects.toThrow(LdapIdentityUnavailableError);
+		const unavailable = createLdapIdentityDirectory({
+			...state.config,
+			identityIds: {
+				...state.config.identityIds,
+				async getOrCreate() {
+					throw new Error("private database detail");
+				},
+			},
+		});
+		await expect(
+			unavailable.authenticate("login-a", "correct-password"),
+		).rejects.toThrow("LDAP_IDENTITY_UNAVAILABLE");
 	});
 
 	it("fails closed on duplicate or malformed UID, missing email and unavailable LDAP", async () => {
