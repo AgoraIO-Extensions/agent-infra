@@ -780,6 +780,20 @@ describe("Conversation persisted SSE", () => {
 		expect(body).toContain("id: event-1");
 		expect(body).toContain("id: operation-event-1");
 		expect(body).toContain('"type":"timeline.reload"');
+		const reloadFrame = body
+			.split("\n\n")
+			.find((frame) => frame.includes('"type":"timeline.reload"'));
+		const reloadData = reloadFrame?.match(/^data: (.+)$/m)?.[1];
+		if (!reloadData) throw new Error("Expected V2 reload SSE payload");
+		expect(
+			ConversationSseMessageV2Schema.parse(JSON.parse(reloadData)),
+		).toMatchObject({
+			schemaVersion: 1,
+			kind: "control",
+			type: "timeline.reload",
+			reason: "cursor_expired",
+			resumeCursor: "cursor-2",
+		});
 		const frames = body
 			.split("\n\n")
 			.filter((frame) => frame.includes('"type":"execution.operation"'));
@@ -913,6 +927,20 @@ describe("Conversation persisted SSE", () => {
 			expect(body).toContain('"type":"authorization.revoked"');
 			expect(body).toContain('"code":"AUTHORIZATION_REVOKED"');
 			expect(body).not.toContain("user-1");
+			if (version === "v2") {
+				const revokedFrame = body
+					.split("\n\n")
+					.find((frame) => frame.includes('"type":"authorization.revoked"'));
+				const revokedData = revokedFrame?.match(/^data: (.+)$/m)?.[1];
+				if (!revokedData) throw new Error("Expected V2 revoked SSE payload");
+				expect(
+					ConversationSseMessageV2Schema.parse(JSON.parse(revokedData)),
+				).toMatchObject({
+					schemaVersion: 1,
+					kind: "control",
+					type: "authorization.revoked",
+				});
+			}
 		},
 	);
 

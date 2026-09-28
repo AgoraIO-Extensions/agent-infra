@@ -592,6 +592,58 @@ async function writeAuthorizationRevoked(
 	);
 }
 
+async function writeAuthorizationRevokedV2(
+	stream: { writeSSE(message: { id?: string; data: string }): Promise<void> },
+	traceId: string,
+): Promise<void> {
+	await writeSseMessageV2(
+		stream,
+		ConversationSseMessageV2Schema.parse({
+			schemaVersion: 1,
+			kind: "control",
+			type: "authorization.revoked",
+			error: new HttpProtocolError("AUTHORIZATION_REVOKED", traceId).body,
+		}),
+	);
+}
+
+type ConversationReplayReload = Extract<
+	ConversationReplayResultV1,
+	{ readonly outcome: "reload" }
+>;
+
+async function writeTimelineReload(
+	stream: { writeSSE(message: { id?: string; data: string }): Promise<void> },
+	reload: ConversationReplayReload,
+): Promise<void> {
+	await writeSseMessage(
+		stream,
+		ConversationSseMessageV1Schema.parse({
+			schemaVersion: 1,
+			kind: "control",
+			type: "timeline.reload",
+			reason: reload.reason,
+			resumeCursor: reload.resumeCursor,
+		}),
+	);
+}
+
+async function writeTimelineReloadV2(
+	stream: { writeSSE(message: { id?: string; data: string }): Promise<void> },
+	reload: ConversationReplayReload,
+): Promise<void> {
+	await writeSseMessageV2(
+		stream,
+		ConversationSseMessageV2Schema.parse({
+			schemaVersion: 1,
+			kind: "control",
+			type: "timeline.reload",
+			reason: reload.reason,
+			resumeCursor: reload.resumeCursor,
+		}),
+	);
+}
+
 interface ConversationSseStream {
 	readonly aborted: boolean;
 	writeSSE(message: { id?: string; data: string }): Promise<void>;
@@ -609,6 +661,10 @@ async function streamConversationEvents(
 	writeMessage: (
 		stream: ConversationSseStream,
 		message: unknown,
+	) => Promise<void>,
+	writeReload: (
+		stream: ConversationSseStream,
+		reload: ConversationReplayReload,
 	) => Promise<void>,
 	writeRevoked: (
 		stream: ConversationSseStream,
@@ -636,16 +692,7 @@ async function streamConversationEvents(
 							await writeRevoked(stream, traceId);
 						return;
 					}
-					await writeMessage(
-						stream,
-						ConversationSseMessageV1Schema.parse({
-							schemaVersion: 1,
-							kind: "control",
-							type: "timeline.reload",
-							reason: batch.reason,
-							resumeCursor: batch.resumeCursor,
-						}),
-					);
+					await writeReload(stream, batch);
 					return;
 				}
 				for (const persisted of batch.events) {
@@ -1100,6 +1147,7 @@ export function registerConversationRoutes(
 				initialReplay,
 				eventProjectionForV1,
 				(stream, message) => writeSseMessage(stream, message as SseMessage),
+				writeTimelineReload,
 				writeAuthorizationRevoked,
 			);
 		}),
@@ -1205,7 +1253,8 @@ export function registerConversationRoutes(
 				initialReplay,
 				eventProjectionV2,
 				(stream, message) => writeSseMessageV2(stream, message as SseMessageV2),
-				writeAuthorizationRevoked,
+				writeTimelineReloadV2,
+				writeAuthorizationRevokedV2,
 			);
 		}),
 	);
