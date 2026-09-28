@@ -123,7 +123,14 @@ it("preserves legacy rows and fences slow scans across runtime instances", async
 			startedAt: now + 60_000,
 			completedAt: now + 2 * 60_000,
 			departments,
-			members,
+			members: [
+				{
+					userId: "wecom-b",
+					email: "b@example.test",
+					active: true,
+					departmentIds: [1],
+				},
+			],
 		});
 		const slow = createSnapshot({
 			rootDepartmentId: 1,
@@ -132,9 +139,20 @@ it("preserves legacy rows and fences slow scans across runtime instances", async
 			departments,
 			members,
 		});
-		expect(await otherStore.publish(fast, fastGeneration)).toBe("published");
-		expect(await store.publish(slow, slowGeneration)).toBe("superseded");
-		expect(await store.publish(fast, fastGeneration)).toBe("superseded");
+		expect(await otherStore.publish(fast, fastGeneration)).toMatchObject({
+			status: "published",
+			summary: {
+				baselineRevision: laterLegacy.revision,
+				addedMembers: 1,
+				removedMembers: 1,
+			},
+		});
+		expect(await store.publish(slow, slowGeneration)).toEqual({
+			status: "superseded",
+		});
+		expect(await store.publish(fast, fastGeneration)).toEqual({
+			status: "superseded",
+		});
 		expect(await store.latest()).toEqual(fast);
 		expect(await otherStore.latest()).toEqual(fast);
 		const published = await administrator`
@@ -191,8 +209,15 @@ it("preserves legacy rows and fences slow scans across runtime instances", async
 		expect(fastInsertPaused).toBe(true);
 		const slowPublish = store.publish(concurrentSlow, concurrentSlowGeneration);
 		expect(await Promise.all([fastPublish, slowPublish])).toEqual([
-			"published",
-			"superseded",
+			expect.objectContaining({
+				status: "published",
+				summary: expect.objectContaining({
+					baselineRevision: fast.revision,
+					addedMembers: 1,
+					removedMembers: 1,
+				}),
+			}),
+			{ status: "superseded" },
 		]);
 		expect(await store.latest()).toEqual(concurrentFast);
 		const concurrentRows = await administrator`

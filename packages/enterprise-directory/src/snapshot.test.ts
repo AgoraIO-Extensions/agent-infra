@@ -4,6 +4,7 @@ import {
 	fromDirectorySnapshotV1,
 	requireCurrentSnapshot,
 	resolveActiveMemberByEmail,
+	summarizeSnapshotChange,
 	toDirectorySnapshotV1,
 } from "./index.js";
 
@@ -34,6 +35,70 @@ const snapshot = () =>
 	});
 
 describe("directory snapshot", () => {
+	it("summarizes only aggregate changes and unmappable members", () => {
+		const previous = snapshot();
+		const firstMember = previous.members[0];
+		if (!firstMember) throw new Error("member missing");
+		const current = createSnapshot({
+			rootDepartmentId: 1,
+			startedAt: now + 1,
+			completedAt: now + 1,
+			departments: previous.departments,
+			members: [
+				{ ...firstMember, departmentIds: [1] },
+				{
+					userId: "wecom-c",
+					email: " a@EXAMPLE.test ",
+					active: true,
+					departmentIds: [2],
+				},
+				{
+					userId: "wecom-d",
+					email: " ",
+					active: false,
+					departmentIds: [2],
+				},
+				{
+					userId: "wecom-e",
+					email: "bad-address",
+					active: true,
+					departmentIds: [2],
+				},
+				{
+					userId: "wecom-f",
+					email: "f@example.test",
+					active: true,
+					departmentIds: [2],
+				},
+			],
+		});
+		const summary = summarizeSnapshotChange(current, previous);
+		expect(summary).toEqual({
+			baselineRevision: previous.revision,
+			departmentCount: 2,
+			memberCount: 5,
+			addedMembers: 4,
+			removedMembers: 1,
+			membershipChangedMembers: 1,
+			inactiveMembers: 1,
+			missingEmailMembers: 1,
+			invalidEmailMembers: 1,
+			duplicateEmailMembers: 2,
+			unmappableMembers: 4,
+		});
+		expect(summarizeSnapshotChange(current, null)).toMatchObject({
+			baselineRevision: null,
+			addedMembers: null,
+			removedMembers: null,
+			membershipChangedMembers: null,
+		});
+		expect(JSON.stringify(summary)).not.toContain("wecom-");
+		expect(JSON.stringify(summary)).not.toContain("@example.test");
+		expect(
+			resolveActiveMemberByEmail(current, "a@example.test", now + 1),
+		).toBeNull();
+	});
+
 	it("maps wire data into an independent domain snapshot", () => {
 		const original = snapshot();
 		const mapped = fromDirectorySnapshotV1(toDirectorySnapshotV1(original));

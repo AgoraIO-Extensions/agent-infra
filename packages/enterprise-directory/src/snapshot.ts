@@ -28,6 +28,20 @@ export interface DirectorySnapshot {
 	members: DirectoryMember[];
 }
 
+export interface DirectorySnapshotSummary {
+	baselineRevision: string | null;
+	departmentCount: number;
+	memberCount: number;
+	addedMembers: number | null;
+	removedMembers: number | null;
+	membershipChangedMembers: number | null;
+	inactiveMembers: number;
+	missingEmailMembers: number;
+	invalidEmailMembers: number;
+	duplicateEmailMembers: number;
+	unmappableMembers: number;
+}
+
 export class DirectoryUnavailableError extends Error {
 	constructor() {
 		super("Enterprise directory snapshot is unavailable");
@@ -36,6 +50,63 @@ export class DirectoryUnavailableError extends Error {
 
 function normalizeEmail(email: string) {
 	return email.trim().toLowerCase();
+}
+
+export function summarizeSnapshotChange(
+	snapshot: DirectorySnapshot,
+	previous: DirectorySnapshot | null,
+): DirectorySnapshotSummary {
+	const previousMembers = previous
+		? new Map(previous.members.map((member) => [member.userId, member]))
+		: null;
+	const currentIds = new Set(snapshot.members.map((member) => member.userId));
+	const emailCounts = new Map<string, number>();
+	for (const member of snapshot.members) {
+		const email = normalizeEmail(member.email);
+		if (email) emailCounts.set(email, (emailCounts.get(email) ?? 0) + 1);
+	}
+	let addedMembers = 0;
+	let membershipChangedMembers = 0;
+	let inactiveMembers = 0;
+	let missingEmailMembers = 0;
+	let invalidEmailMembers = 0;
+	let duplicateEmailMembers = 0;
+	let unmappableMembers = 0;
+	for (const member of snapshot.members) {
+		const old = previousMembers?.get(member.userId);
+		if (previousMembers && !old) addedMembers += 1;
+		if (
+			old &&
+			(old.departmentIds.length !== member.departmentIds.length ||
+				member.departmentIds.some((id) => !old.departmentIds.includes(id)))
+		)
+			membershipChangedMembers += 1;
+		const email = normalizeEmail(member.email);
+		const missing = !email;
+		const invalid = !missing && !z.email().safeParse(email).success;
+		const duplicate = !missing && (emailCounts.get(email) ?? 0) > 1;
+		if (!member.active) inactiveMembers += 1;
+		if (missing) missingEmailMembers += 1;
+		if (invalid) invalidEmailMembers += 1;
+		if (duplicate) duplicateEmailMembers += 1;
+		if (!member.active || missing || invalid || duplicate)
+			unmappableMembers += 1;
+	}
+	return {
+		baselineRevision: previous?.revision ?? null,
+		departmentCount: snapshot.departments.length,
+		memberCount: snapshot.members.length,
+		addedMembers: previousMembers ? addedMembers : null,
+		removedMembers: previousMembers
+			? [...previousMembers.keys()].filter((id) => !currentIds.has(id)).length
+			: null,
+		membershipChangedMembers: previousMembers ? membershipChangedMembers : null,
+		inactiveMembers,
+		missingEmailMembers,
+		invalidEmailMembers,
+		duplicateEmailMembers,
+		unmappableMembers,
+	};
 }
 
 export function validateSnapshot(
