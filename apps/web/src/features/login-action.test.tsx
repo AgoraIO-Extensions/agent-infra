@@ -34,6 +34,7 @@ describe("LoginAction", () => {
 		expect(fetchMock).toHaveBeenCalledWith("http://localhost:3000/auth/login", {
 			method: "POST",
 			credentials: "include",
+			redirect: "error",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ login: "alice", password: "correct horse" }),
 		});

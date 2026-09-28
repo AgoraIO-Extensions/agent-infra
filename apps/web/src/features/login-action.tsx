@@ -29,6 +29,7 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 			const response = await fetch(target.href, {
 				method: "POST",
 				credentials: "include",
+				redirect: "error",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ login, password }),
 			});
