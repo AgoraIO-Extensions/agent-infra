@@ -999,7 +999,12 @@ export function ApprovalPoliciesPage() {
 									编辑草稿
 								</Button>
 								<Button
-									disabled={busy}
+									disabled={busy || !catalog.data?.approvalDirectoryEnabled}
+									title={
+										!catalog.data?.approvalDirectoryEnabled
+											? "员工目录尚未启用，暂不能发布审批策略"
+											: undefined
+									}
 									onClick={() => {
 										setPolicyMaterial(false);
 										setPolicyDeadline("");
@@ -1010,6 +1015,11 @@ export function ApprovalPoliciesPage() {
 									<Check size={16} />
 									发布策略
 								</Button>
+								{catalog.data && !catalog.data.approvalDirectoryEnabled ? (
+									<span role="status">
+										员工目录尚未启用，暂不能发布审批策略。
+									</span>
+								) : null}
 							</>
 						) : selectedPolicy?.status === "PUBLISHED" ? (
 							<Button

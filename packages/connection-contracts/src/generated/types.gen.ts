@@ -592,6 +592,7 @@ export type ApprovalPolicyRevokeResult = {
 };
 
 export type ApprovalPolicyCatalog = {
+    approvalDirectoryEnabled: boolean;
     profiles: Array<{
         id: string;
         providerReleaseId: string;

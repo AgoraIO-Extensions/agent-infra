@@ -53,6 +53,7 @@ const api = vi.hoisted(() => ({
 	})),
 	listApprovalPolicyCatalog: vi.fn(
 		async (): Promise<ApprovalPolicyCatalog> => ({
+			approvalDirectoryEnabled: true,
 			profiles: [],
 			policies: [],
 			disclaimers: [],
@@ -155,6 +156,7 @@ it("applies whole-provider presets, retains manual choices across search and pub
 		},
 	];
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [],
 		policies: [],
 		disclaimers: [],
@@ -279,6 +281,7 @@ it("keeps the action checklist compact despite global input styles", () => {
 
 it("shows only current-provider disclaimers and clears hidden selections", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [],
 		policies: [],
 		providers: [
@@ -370,6 +373,7 @@ it("shows only current-provider disclaimers and clears hidden selections", async
 
 it("keeps disclaimer and permanent-duration controls compact and clickable", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [],
 		policies: [],
 		providers: [],
@@ -473,6 +477,7 @@ it.each([
 		loaded.draft.durations = [{ kind: "FINITE", days: 30 }];
 		api.getConnectionAccessPolicyDraft.mockResolvedValueOnce(loaded);
 		api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+			approvalDirectoryEnabled: true,
 			profiles: [
 				{
 					id: "profile-1",
@@ -546,8 +551,46 @@ it.each([
 	},
 );
 
+it("keeps draft editing available but blocks publishing before the employee directory is enabled", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: false,
+		profiles: [],
+		disclaimers: [],
+		providers: [],
+		policies: [
+			{
+				id: "policy-1",
+				providerReleaseId: "jira-release-1",
+				capabilityProfileId: "profile-1",
+				materialChange: false,
+				status: "DRAFT",
+				revision: "1",
+			},
+		],
+	});
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
+	render(
+		<QueryClientProvider client={client}>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	expect(
+		await screen.findByRole("button", { name: "发布策略" }),
+	).toHaveProperty("disabled", true);
+	expect(screen.getByRole("button", { name: "编辑草稿" })).toHaveProperty(
+		"disabled",
+		false,
+	);
+	expect(
+		screen.getByText("员工目录尚未启用，暂不能发布审批策略。"),
+	).toBeTruthy();
+});
+
 it("publishes a material policy only with an explicit reapproval deadline", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [],
 		disclaimers: [],
 		providers: [],
@@ -592,6 +635,7 @@ it("publishes a material policy only with an explicit reapproval deadline", asyn
 
 it("revokes the current policy with its revision and reason", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [],
 		disclaimers: [],
 		providers: [],
@@ -743,6 +787,7 @@ it("requires confirmation and sends the current revision when revoking access", 
 
 it("publishes a material disclaimer reapproval campaign with a chosen deadline", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
 		profiles: [
 			{
 				id: "profile-1",
