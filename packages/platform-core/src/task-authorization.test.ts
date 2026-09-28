@@ -119,7 +119,10 @@ describe("task authorization boundary", () => {
 			...agent,
 			principalGrants: [
 				{
-					principal: { kind: "application" as const, id: application.applicationId },
+					principal: {
+						kind: "application" as const,
+						id: application.applicationId,
+					},
 					grantType: "use" as const,
 					authorizationRevision: "agent-access-4",
 					revokedAt: null,
@@ -138,7 +141,9 @@ describe("task authorization boundary", () => {
 			agent: grantedAgent,
 			currentAgentAuthorizationRevision: "agent-access-4",
 		};
-		expect(isTaskAuthorizationCurrentV1({ ...current, application })).toBe(true);
+		expect(isTaskAuthorizationCurrentV1({ ...current, application })).toBe(
+			true,
+		);
 		expect(
 			isTaskAuthorizationCurrentV1({
 				...current,
