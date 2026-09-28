@@ -18,6 +18,8 @@ export function AdminAgentApplicationsWorkflow() {
 			pendingDecision={decision.isPending ? decision.variables : undefined}
 			session={session.state}
 			state={applications.state}
+			onRetry={() => void applications.refetch()}
+			retrying={applications.isFetching}
 		/>
 	);
 }
