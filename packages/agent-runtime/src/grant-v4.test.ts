@@ -2,7 +2,9 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 
 import {
 	RuntimeBusinessGrantClaimsV4Schema,
+	type RuntimeBusinessRequestV4,
 	RuntimeSubmitTurnRequestV4Schema,
+	RuntimeSupplementRequestV4Schema,
 	runtimeRequestSigningPayloadV4,
 } from "@agent-infra/contracts/runtime";
 import { describe, expect, it } from "vitest";
@@ -10,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
 	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV4,
+	createRuntimeExecutionKeyDeliveryValidatorV4,
 } from "./grant-v4.js";
 
 const keys = generateKeyPairSync("ed25519");
@@ -23,6 +26,10 @@ const options = {
 	now: () => now,
 };
 const validateGrant = createRuntimeExecutionGrantValidatorV4(
+	new Map([["fixture", keys.publicKey]]),
+	options,
+);
+const validateKeyDelivery = createRuntimeExecutionKeyDeliveryValidatorV4(
 	new Map([["fixture", keys.publicKey]]),
 	options,
 );
@@ -64,6 +71,7 @@ const request = RuntimeSubmitTurnRequestV4Schema.parse({
 function signed(
 	changes: Record<string, unknown> = {},
 	headerChanges: Record<string, unknown> = {},
+	baseRequest: RuntimeBusinessRequestV4 = request,
 ) {
 	const claims = RuntimeBusinessGrantClaimsV4Schema.parse({
 		schemaVersion: 4,
@@ -73,25 +81,27 @@ function signed(
 		expiresAt: now + 30_000,
 		grantId: "grant-fixture",
 		workerId: "worker-fixture",
-		principal: request.principal,
-		agentId: request.agentId,
-		channelId: request.channelId,
-		conversationId: request.conversationId,
-		executionId: request.executionId,
-		turnId: request.turnId,
-		sessionGeneration: request.sessionGeneration,
-		traceId: request.traceId,
-		hostSessionRef: request.hostSessionRef,
-		operation: request.operation,
+		principal: baseRequest.principal,
+		agentId: baseRequest.agentId,
+		channelId: baseRequest.channelId,
+		conversationId: baseRequest.conversationId,
+		executionId: baseRequest.executionId,
+		turnId: baseRequest.turnId,
+		sessionGeneration: baseRequest.sessionGeneration,
+		traceId: baseRequest.traceId,
+		hostSessionRef: baseRequest.hostSessionRef,
+		operation: baseRequest.operation,
 		requestDigest: createHash("sha256")
-			.update(runtimeRequestSigningPayloadV4(request))
+			.update(runtimeRequestSigningPayloadV4(baseRequest))
 			.digest("hex"),
 		purpose: "business",
 		authorizationRecordId: "authorization-fixture",
-		allowedCommands: ["turn.submit"],
+		allowedCommands: [
+			"selection" in baseRequest ? "turn.submit" : "turn.supplement",
+		],
 		attachments: [],
-		executionSource: request.executionSource,
-		relayKeyBinding: request.keyBinding,
+		executionSource: baseRequest.executionSource,
+		relayKeyBinding: baseRequest.keyBinding,
 		...changes,
 	});
 	const header = Buffer.from(
@@ -109,12 +119,113 @@ function signed(
 		keys.privateKey,
 	).toString("base64url");
 	return {
-		...request,
-		grant: { ...request.grant, token: `${header}.${payload}.${signature}` },
+		...baseRequest,
+		grant: { ...baseRequest.grant, token: `${header}.${payload}.${signature}` },
+	};
+}
+
+function privateFieldFor(value: RuntimeBusinessRequestV4) {
+	const { claims } = verifyGrant(value.grant);
+	return {
+		schemaVersion: 1,
+		context: {
+			requestId: value.requestId,
+			grantId: claims.grantId,
+			requestDigest: claims.requestDigest,
+			traceId: value.traceId,
+			principal: value.principal,
+			executionSource: value.executionSource,
+			channelId: value.channelId,
+			agentId: value.agentId,
+			conversationId: value.conversationId,
+			executionId: value.executionId,
+			turnId: value.turnId,
+			sessionGeneration: value.sessionGeneration,
+			hostSessionRef: value.hostSessionRef,
+			operation: value.operation,
+			keyBinding: value.keyBinding,
+		},
+		keyDelivery: { relayKey: "private-key-value-k1" },
 	};
 }
 
 describe("Runtime V4 Grant trust boundary", () => {
+	it("accepts a private Key only after the signed submit and supplement bindings", async () => {
+		const submitted = signed();
+		await expect(
+			validateKeyDelivery({
+				businessRequest: submitted,
+				privateKeyField: privateFieldFor(submitted),
+			}),
+		).resolves.toMatchObject({
+			request: submitted,
+			relayKey: "private-key-value-k1",
+		});
+
+		const { selection: _selection, ...supplementBase } = request;
+		const supplementRequest = RuntimeSupplementRequestV4Schema.parse({
+			...supplementBase,
+			hostSessionRef: "session-fixture",
+			operation: {
+				kind: "message",
+				id: "message-fixture",
+				deliveryFence: 2,
+				executionDeliveryFence: 1,
+			},
+		});
+		const supplemented = signed({}, {}, supplementRequest);
+		await expect(
+			validateKeyDelivery({
+				businessRequest: supplemented,
+				privateKeyField: privateFieldFor(supplemented),
+			}),
+		).resolves.toMatchObject({
+			request: supplemented,
+			relayKey: "private-key-value-k1",
+		});
+	});
+
+	it("rejects substituted private context even when the request is changed to match", async () => {
+		const submitted = signed();
+		const privateKeyField = privateFieldFor(submitted);
+		for (const context of [
+			{ ...privateKeyField.context, grantId: "other-grant" },
+			{ ...privateKeyField.context, requestDigest: "0".repeat(64) },
+			{ ...privateKeyField.context, executionId: "other-execution" },
+			{ ...privateKeyField.context, channelId: "wecom" },
+			{
+				...privateKeyField.context,
+				keyBinding: { ...privateKeyField.context.keyBinding, version: 2 },
+			},
+			{
+				...privateKeyField.context,
+				operation: { ...privateKeyField.context.operation, deliveryFence: 2 },
+			},
+		]) {
+			await expect(
+				validateKeyDelivery({
+					businessRequest: submitted,
+					privateKeyField: { ...privateKeyField, context },
+				}),
+			).rejects.toThrow("Runtime authorization is unavailable");
+		}
+		await expect(
+			validateKeyDelivery({
+				businessRequest: { ...submitted, executionId: "other-execution" },
+				privateKeyField: {
+					...privateKeyField,
+					context: {
+						...privateKeyField.context,
+						executionId: "other-execution",
+					},
+				},
+			}),
+		).rejects.toThrow("Runtime authorization is unavailable");
+		await expect(
+			validateKeyDelivery({ businessRequest: submitted }),
+		).rejects.toThrow("Runtime authorization is unavailable");
+	});
+
 	it("verifies Ed25519 JWS and binds the accepted Execution and Key version", async () => {
 		const accepted = signed();
 		const verified = verifyGrant(accepted.grant);

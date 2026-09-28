@@ -4,9 +4,12 @@ import { TextDecoder } from "node:util";
 import {
 	RuntimeExecutionGrantV4Schema,
 	RuntimeSubmitTurnRequestV4Schema,
+	RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV4Schema,
+	RuntimeSupplementTransportV4Schema,
 	VerifiedRuntimeExecutionGrantV4Schema,
 	validateRuntimeBusinessBindingV4,
+	validateRuntimePrivateRelayKeyFieldV1,
 	validateVerifiedRuntimeExecutionGrantClaimsV4,
 } from "@agent-infra/contracts/runtime";
 
@@ -121,6 +124,52 @@ export function createRuntimeExecutionGrantValidatorV4(
 				verifyGrant(parsedRequest.grant),
 				options,
 			);
+		} catch {
+			runtimeAuthorizationDenied();
+		}
+	};
+}
+
+// The Host must authenticate the Worker transport before calling this validator.
+export function createRuntimeExecutionKeyDeliveryValidatorV4(
+	publicKeys: ReadonlyMap<string, KeyObject>,
+	options: {
+		readonly expectedIssuer: string;
+		readonly expectedWorkerId: string;
+		readonly now?: () => number;
+	},
+) {
+	const validateGrant = createRuntimeExecutionGrantValidatorV4(
+		publicKeys,
+		options,
+	);
+	return async (transport: unknown) => {
+		try {
+			const businessRequest =
+				transport !== null &&
+				typeof transport === "object" &&
+				"businessRequest" in transport
+					? transport.businessRequest
+					: undefined;
+			const parsed =
+				businessRequest !== null &&
+				typeof businessRequest === "object" &&
+				"selection" in businessRequest
+					? RuntimeSubmitTurnTransportV4Schema.parse(transport)
+					: RuntimeSupplementTransportV4Schema.parse(transport);
+			const accepted = await validateGrant(parsed.businessRequest);
+			const privateField = validateRuntimePrivateRelayKeyFieldV1(
+				parsed.privateKeyField,
+				{
+					request: accepted.request,
+					grantId: accepted.claims.grantId,
+					requestDigest: accepted.claims.requestDigest,
+				},
+			);
+			return {
+				...accepted,
+				relayKey: privateField.keyDelivery.relayKey,
+			};
 		} catch {
 			runtimeAuthorizationDenied();
 		}
