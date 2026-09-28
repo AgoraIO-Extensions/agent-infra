@@ -746,6 +746,12 @@ it("captures current application independently from its responsible user and rec
 		afterCredentialRevocation &&
 			isTaskAuthorizationCurrentV1(afterCredentialRevocation),
 	).toBe(true);
+	await sql`update platform.platform_applications set authorization_revision = 'app_2' where id = 'shared'`;
+	const stale = await authorizationStore.readExecution(
+		accepted.result.executionId,
+	);
+	expect(stale?.application?.accountStatus).toBe("active");
+	expect(stale && isTaskAuthorizationCurrentV1(stale)).toBe(false);
 	await sql`update platform.platform_applications set status = 'disabled', authorization_revision = 'app_2' where id = 'shared'`;
 	expect(await authorizationStore.captureApplicationBoundary(input)).toBeNull();
 	const disabled = await authorizationStore.readExecution(

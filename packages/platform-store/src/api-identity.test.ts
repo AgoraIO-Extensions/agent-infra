@@ -184,6 +184,32 @@ describe("PostgreSQL API identity store", () => {
 		expect(userCredential.metadata).not.toHaveProperty("credential");
 	});
 
+	it("rejects a duplicate credential hash across principals, including revoked rows", async () => {
+		await adminClient`truncate platform.audit_events,
+			platform.api_credential_delivery_grants, platform.platform_api_credentials,
+			platform.platform_applications cascade`;
+		const first = await store.issueCredential({
+			principal: { kind: "user", id: "user_one" },
+			credential: "duplicate-credential-fixture",
+			scopes: ["agent:read"],
+			expiresAt: null,
+			audit: { ...userAudit, action: "api.credential.issued" },
+		});
+		await store.revokeCredential(first.credentialId);
+		await expect(
+			adminClient`insert into platform.platform_api_credentials
+				(id, principal_type, principal_id, credential_hash, scopes)
+				select 'duplicate-other-principal', 'user', 'user_two', credential_hash, '["agent:read"]'::jsonb
+				from platform.platform_api_credentials where id = ${first.credentialId}`,
+		).rejects.toMatchObject({
+			code: "23505",
+			constraint_name: "platform_api_credential_hash_unique",
+		});
+		const [row] = await adminClient<[{ total: number }]>`
+			select count(*)::int as total from platform.platform_api_credentials`;
+		expect(row?.total).toBe(1);
+	});
+
 	it("advances the Agent authorization revision with a new grant", async () => {
 		await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
 			platform.agents cascade`;

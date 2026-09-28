@@ -584,6 +584,7 @@ function applicationHarness() {
 	Object.assign(h.boundary, {
 		principal: { kind: "application", id: "user" },
 		channelId: "api:application",
+		identityRevision: "app-2",
 		accessSources: [{ kind: "application", applicationId: "user" }],
 	});
 	Object.assign(h.claim, { channelId: "api:application" });
@@ -617,7 +618,7 @@ it("renews application authority from current subject without resolving its resp
 	expect(h.ports.resolveCurrentUser).not.toHaveBeenCalled();
 });
 
-it.each(["disabled", "revoked-grant", "missing-subject"])(
+it.each(["disabled", "revoked-grant", "missing-subject", "stale-revision"])(
 	"cancels application controlled operations after %s",
 	async (change) => {
 		const h = applicationHarness();
@@ -625,6 +626,8 @@ it.each(["disabled", "revoked-grant", "missing-subject"])(
 			Object.assign(h.application, { accountStatus: "disabled" });
 		if (change === "revoked-grant")
 			Object.assign(h.agent, { principalGrants: [] });
+		if (change === "stale-revision")
+			Object.assign(h.application, { authorizationRevision: "app-3" });
 		if (change === "missing-subject") {
 			if (!h.record) throw Error();
 			h.setRecord({ ...h.record, application: undefined });

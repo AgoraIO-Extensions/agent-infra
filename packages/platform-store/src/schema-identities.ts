@@ -7,6 +7,7 @@ import {
 	primaryKey,
 	text,
 	timestamp,
+	unique,
 	varchar,
 } from "drizzle-orm/pg-core";
 import { agents } from "./schema-agents";
@@ -88,6 +89,7 @@ export const platformApiCredentials = platformSchema.table(
 			"platform_api_credential_scopes_array",
 			sql`jsonb_typeof(${table.scopes}) = 'array'`,
 		),
+		unique("platform_api_credential_hash_unique").on(table.credentialHash),
 		index("platform_api_credential_principal_idx").on(
 			table.principalType,
 			table.principalId,
