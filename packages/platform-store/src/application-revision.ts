@@ -543,6 +543,10 @@ export class PostgresApplicationRevisionTransactionV1
 							and(
 								eq(agentPrincipalGrants.agentId, plan.application.agentId),
 								isNull(agentPrincipalGrants.revokedAt),
+								eq(
+									agentPrincipalGrants.authorizationRevision,
+									plan.expected.authorizationRevision,
+								),
 							),
 						);
 				}

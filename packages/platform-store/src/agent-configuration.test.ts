@@ -830,7 +830,9 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		await adminClient`
 			insert into platform.agent_principal_grants
 				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
-			values ('agent_01', 'application', 'caller-app', 'use', 'authorization_9')
+			values
+				('agent_01', 'application', 'caller-app', 'use', 'authorization_9'),
+				('agent_01', 'application', 'stale-app', 'use', 'authorization_8')
 		`;
 		const plan = await captureAccessPlan("authorization_10");
 		const adapter = openTransaction();
@@ -883,10 +885,16 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		});
 		await expect(
 			adminClient`
-				select authorization_revision from platform.agent_principal_grants
-				where agent_id = 'agent_01' and principal_id = 'caller-app'
+				select principal_id, authorization_revision from platform.agent_principal_grants
+				where agent_id = 'agent_01' order by principal_id
 			`,
-		).resolves.toEqual([{ authorization_revision: "authorization_10" }]);
+		).resolves.toEqual([
+			{
+				principal_id: "caller-app",
+				authorization_revision: "authorization_10",
+			},
+			{ principal_id: "stale-app", authorization_revision: "authorization_8" },
+		]);
 	});
 
 	it.each([

@@ -701,6 +701,13 @@ describe("PostgreSQL application revision transaction", () => {
 	it("atomically revises content, configuration, access, management, and bounded effects", async () => {
 		await resetDatabase();
 		await seed("rejected");
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values
+				(${agentId}, 'application', 'current-app', 'use', 'authorization_9'),
+				(${agentId}, 'application', 'stale-app', 'use', 'authorization_8')
+		`;
 		const state = managementState("rejected");
 		const adapter = openAdapter();
 		const revision = useCase(adapter, state);
@@ -742,6 +749,18 @@ describe("PostgreSQL application revision transaction", () => {
 				audit: 2,
 			},
 		});
+		expect(
+			await adminClient`
+			select principal_id, authorization_revision from platform.agent_principal_grants
+			where agent_id = ${agentId} order by principal_id
+		`,
+		).toEqual([
+			{
+				principal_id: "current-app",
+				authorization_revision: "authorization_10",
+			},
+			{ principal_id: "stale-app", authorization_revision: "authorization_8" },
+		]);
 		expect(stored.configuration).toMatchObject({
 			revision: 8,
 			environment: [{ name: "LOG_LEVEL", value: "debug" }],

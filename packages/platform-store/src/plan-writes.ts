@@ -62,6 +62,10 @@ export async function advanceAgentConfigurationRevision(
 			and(
 				eq(agentPrincipalGrants.agentId, plan.agentId),
 				isNull(agentPrincipalGrants.revokedAt),
+				eq(
+					agentPrincipalGrants.authorizationRevision,
+					plan.expectedAuthorizationRevision,
+				),
 			),
 		);
 	return true;

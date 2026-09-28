@@ -209,6 +209,12 @@ function createApp(
 	const resolveApiCredential = options.api
 		? vi.fn().mockResolvedValue(apiIdentity)
 		: undefined;
+	const resolveBrowser = vi.fn().mockResolvedValue({
+		...identity,
+		roles: options.administrator
+			? (["employee", "system_admin"] as const)
+			: identity.roles,
+	});
 	const resolveAgentQueryGrantType = vi.fn().mockResolvedValue("any");
 	const authorizeCredentialScope = vi.fn().mockResolvedValue(undefined);
 	const recordAccessRejection = vi.fn().mockResolvedValue(undefined);
@@ -218,12 +224,7 @@ function createApp(
 
 	registerManagementRoutes(app, {
 		identity: {
-			resolve: vi.fn().mockResolvedValue({
-				...identity,
-				roles: options.administrator
-					? (["employee", "system_admin"] as const)
-					: identity.roles,
-			}),
+			resolve: resolveBrowser,
 			hydrateUsers: vi.fn().mockResolvedValue([]),
 			...(resolveApiCredential ? { resolveApiCredential } : {}),
 		},
@@ -275,6 +276,7 @@ function createApp(
 		allocateApplicationIds,
 		apiIdentity,
 		resolveApiCredential,
+		resolveBrowser,
 		listUserCredentials,
 		listApiApplications,
 		listApplicationCredentials,
@@ -303,6 +305,32 @@ const applicationBody = {
 };
 
 describe("management routes", () => {
+	it.each([
+		["GET", "/api/v1/api-credentials"],
+		["POST", "/api/v1/api-credentials"],
+		["DELETE", "/api/v1/api-credentials/credential-1"],
+		["GET", "/api/v1/applications"],
+		["POST", "/api/v1/applications"],
+		["POST", "/api/v1/applications/application-1/credential-delivery"],
+		["DELETE", "/api/v1/applications/application-1/credential-delivery"],
+		["GET", "/api/v1/applications/application-1/credentials"],
+		["POST", "/api/v1/applications/application-1/credentials"],
+		["DELETE", "/api/v1/applications/application-1/credentials/credential-1"],
+	])(
+		"rejects Authorization with a browser session on %s %s",
+		async (method, path) => {
+			const { app, resolveBrowser } = createApp({ api: true });
+			for (const authorization of ["", "Bearer invalid"]) {
+				const response = await app.request(path, {
+					method,
+					headers: { Authorization: authorization, Cookie: "session=valid" },
+				});
+				expect(response.status).toBe(401);
+			}
+			expect(resolveBrowser).not.toHaveBeenCalled();
+		},
+	);
+
 	it("rejects malformed Authorization without falling back to the browser identity", async () => {
 		const input = createApp({ api: true });
 		input.resolveApiCredential?.mockResolvedValue(null);
