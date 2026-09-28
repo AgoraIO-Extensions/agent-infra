@@ -81,6 +81,7 @@ export function validateVerifiedRuntimeExecutionGrantClaimsV4(
 		claims.expiresAt - claims.issuedAt >
 			RuntimeExecutionGrantMaximumLifetimeMsV4 ||
 		(command !== "turn.submit" && command !== "turn.supplement") ||
+		claims.eventAccess !== undefined ||
 		(claims.operation.kind === "execution" &&
 			claims.operation.deliveryFence !==
 				claims.operation.executionDeliveryFence)

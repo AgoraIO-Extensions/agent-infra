@@ -400,8 +400,8 @@ function exactObject(
 function validId(input: unknown): input is string {
 	return (
 		typeof input === "string" &&
-		input.length > 0 &&
-		input.length <= 1024 &&
+		Buffer.byteLength(input, "utf8") > 0 &&
+		Buffer.byteLength(input, "utf8") <= 1024 &&
 		!input.includes("\0") &&
 		String.prototype.isWellFormed.call(input)
 	);

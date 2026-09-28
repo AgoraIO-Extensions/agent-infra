@@ -163,6 +163,13 @@ describe("Runtime V4 Grant trust boundary", () => {
 			{ issuer: "other-issuer" },
 			{ workerId: "other-worker" },
 			{ expiresAt: now + 30_001 },
+			{
+				eventAccess: {
+					command: "events.persist",
+					consumer: "platform_worker_persistence",
+					afterCursor: null,
+				},
+			},
 		]) {
 			const changed = signed(changes);
 			await expect(validateGrant(changed)).rejects.toThrow(

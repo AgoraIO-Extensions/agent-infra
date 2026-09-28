@@ -274,5 +274,16 @@ describe("Relay Key ciphertext V1", () => {
 				wrappingKeyVersion,
 			),
 		).toThrow("Relay Key AAD binding is invalid");
+		expect(() =>
+			encodeRelayKeyAadV1(
+				{
+					purpose: "personal",
+					subjectId: "\u{1F600}".repeat(260),
+					keyId: "key_01",
+					keyVersion: 1,
+				},
+				wrappingKeyVersion,
+			),
+		).toThrow("Relay Key AAD binding is invalid");
 	});
 });
