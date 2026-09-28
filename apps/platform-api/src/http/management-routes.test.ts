@@ -394,6 +394,21 @@ describe("management routes", () => {
 		] as const) {
 			const first = await app.request(`${path}?limit=1`);
 			expect(first.status).toBe(200);
+			if (path === "/api/v1/api-credentials") {
+				expect(listUserCredentials).toHaveBeenCalledWith(expect.anything(), {
+					limit: 1,
+				});
+			} else if (path === "/api/v1/applications") {
+				expect(listApiApplications).toHaveBeenCalledWith(expect.anything(), {
+					limit: 1,
+				});
+			} else {
+				expect(listApplicationCredentials).toHaveBeenCalledWith(
+					expect.anything(),
+					"application-1",
+					{ limit: 1 },
+				);
+			}
 			const firstPage = (await first.json()) as {
 				items: Array<{ credentialId?: string; applicationId?: string }>;
 				nextCursor: string | null;
@@ -404,6 +419,23 @@ describe("management routes", () => {
 			expect(firstPage.nextCursor).toBe(firstId);
 			const second = await app.request(`${path}?limit=1&cursor=${firstId}`);
 			expect(second.status).toBe(200);
+			if (path === "/api/v1/api-credentials") {
+				expect(listUserCredentials).toHaveBeenLastCalledWith(
+					expect.anything(),
+					{ limit: 1, afterId: firstId },
+				);
+			} else if (path === "/api/v1/applications") {
+				expect(listApiApplications).toHaveBeenLastCalledWith(
+					expect.anything(),
+					{ limit: 1, afterId: firstId },
+				);
+			} else {
+				expect(listApplicationCredentials).toHaveBeenLastCalledWith(
+					expect.anything(),
+					"application-1",
+					{ limit: 1, afterId: firstId },
+				);
+			}
 			const secondPage = (await second.json()) as typeof firstPage;
 			expect(
 				secondPage.items.map((item) => item.credentialId ?? item.applicationId),

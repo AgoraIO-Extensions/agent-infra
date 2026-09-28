@@ -273,6 +273,56 @@ describe("PostgreSQL API identity store", () => {
 		await expect(store.hasAgentGrant(input)).resolves.toBe(false);
 	});
 
+	it("bounds credential and application list reads at the PostgreSQL cursor", async () => {
+		await adminClient`truncate platform.platform_api_credentials,
+			platform.platform_applications cascade`;
+		await adminClient`
+			insert into platform.platform_applications
+				(id, name, responsible_user_id, authorization_revision)
+			values
+				('app_a', 'A', 'user_owner', 'revision_1'),
+				('app_b', 'B', 'user_owner', 'revision_1'),
+				('app_c', 'C', 'user_owner', 'revision_1'),
+				('app_other', 'Other', 'other_user', 'revision_1')
+		`;
+		await adminClient`
+			insert into platform.platform_api_credentials
+				(id, principal_type, principal_id, credential_hash, scopes)
+			values
+				('credential_a', 'user', 'user_owner', repeat('a', 64), '["agent:read"]'::jsonb),
+				('credential_b', 'user', 'user_owner', repeat('b', 64), '["agent:read"]'::jsonb),
+				('credential_c', 'user', 'user_owner', repeat('c', 64), '["agent:read"]'::jsonb),
+				('credential_other', 'user', 'other_user', repeat('d', 64), '["agent:read"]'::jsonb)
+		`;
+		const principal = { kind: "user" as const, id: "user_owner" };
+		expect(
+			(await store.listCredentials({ principal, page: { limit: 1 } })).map(
+				(item) => item.credentialId,
+			),
+		).toEqual(["credential_a", "credential_b"]);
+		expect(
+			(
+				await store.listCredentials({
+					principal,
+					page: { limit: 1, afterId: "credential_a" },
+				})
+			).map((item) => item.credentialId),
+		).toEqual(["credential_b", "credential_c"]);
+		expect(
+			(await store.listApplications("user_owner", { limit: 1 })).map(
+				(item) => item.id,
+			),
+		).toEqual(["app_a", "app_b"]);
+		expect(
+			(
+				await store.listApplications("user_owner", {
+					limit: 1,
+					afterId: "app_a",
+				})
+			).map((item) => item.id),
+		).toEqual(["app_b", "app_c"]);
+	});
+
 	it("advances the Agent authorization revision when revoking a grant", async () => {
 		await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
 			platform.agents cascade`;

@@ -59,6 +59,7 @@ export interface ApiIdentityStorePortV1 {
 	): Promise<ApiIdentityApplicationV1 | null>;
 	listApplications(
 		responsibleUserId?: string,
+		page?: { readonly limit: number; readonly afterId?: string },
 	): Promise<readonly ApiIdentityApplicationV1[]>;
 	issueCredential(
 		input: ApiIdentityCredentialIssueInputV1,
@@ -66,6 +67,7 @@ export interface ApiIdentityStorePortV1 {
 	listCredentials(input: {
 		readonly principal?: ApiPrincipalV1;
 		readonly applicationId?: string;
+		readonly page?: { readonly limit: number; readonly afterId?: string };
 	}): Promise<readonly ApiCredentialMetadataV1[]>;
 	getCredentialMetadata(
 		credentialId: string,
@@ -145,6 +147,7 @@ export interface ApiIdentityManagementInterfaceV1 {
 	): Promise<void>;
 	listUserCredentials(
 		actor: ApiIdentityActorV1,
+		page?: { readonly limit: number; readonly afterId?: string },
 	): Promise<readonly ApiCredentialMetadataV1[]>;
 	issueUserCredential(
 		actor: ApiIdentityActorV1,
@@ -158,6 +161,7 @@ export interface ApiIdentityManagementInterfaceV1 {
 	): Promise<void>;
 	listApplications(
 		actor: ApiIdentityActorV1,
+		page?: { readonly limit: number; readonly afterId?: string },
 	): Promise<readonly ApiIdentityApplicationV1[]>;
 	createApplication(input: {
 		readonly actor: ApiIdentityActorV1;
@@ -169,6 +173,7 @@ export interface ApiIdentityManagementInterfaceV1 {
 	listApplicationCredentials(
 		actor: ApiIdentityActorV1,
 		applicationId: string,
+		page?: { readonly limit: number; readonly afterId?: string },
 	): Promise<readonly ApiCredentialMetadataV1[]>;
 	issueApplicationCredential(
 		actor: ApiIdentityActorV1,
@@ -467,10 +472,11 @@ export function createApiIdentityManagementV1(input: {
 		async recordAccessRejection(actor, input) {
 			await rejectWithAudit(accessAudit(actor, input), input.targetId);
 		},
-		async listUserCredentials(actor) {
+		async listUserCredentials(actor, page) {
 			const userId = requireUserActor(actor);
 			return input.store.listCredentials({
 				principal: { kind: "user", id: userId },
+				page,
 			});
 		},
 		async issueUserCredential(actor, value) {
@@ -512,10 +518,11 @@ export function createApiIdentityManagementV1(input: {
 				throw new ApiIdentityError("resource_unavailable");
 			}
 		},
-		async listApplications(actor) {
+		async listApplications(actor, page) {
 			const userId = requireUserActor(actor);
 			return input.store.listApplications(
 				actor.isAdministrator ? undefined : userId,
+				page,
 			);
 		},
 		async createApplication(value) {
@@ -538,10 +545,11 @@ export function createApiIdentityManagementV1(input: {
 			if (!application) throw new ApiIdentityError("dependency_unavailable");
 			return application;
 		},
-		async listApplicationCredentials(actor, applicationId) {
+		async listApplicationCredentials(actor, applicationId, page) {
 			await applicationForActor(actor, applicationId);
 			return input.store.listCredentials({
 				principal: { kind: "application", id: applicationId },
+				page,
 			});
 		},
 		async issueApplicationCredential(actor, applicationId, value) {

@@ -248,11 +248,10 @@ function pageInput(
 
 function pageById<T>(
 	items: readonly T[],
-	request: Request,
-	traceId: string,
+	pageInput: AgentManagementPageInputV1,
 	id: (item: T) => string,
 ): { items: T[]; nextCursor: string | null } {
-	const { limit, afterId } = pageInput(request, traceId);
+	const { limit, afterId } = pageInput;
 	const ordered = [...items].sort((left, right) =>
 		id(left) < id(right) ? -1 : id(left) > id(right) ? 1 : 0,
 	);
@@ -646,16 +645,12 @@ export function registerManagementRoutes(
 				dependencies.apiIdentity,
 				metadata.traceId,
 			);
+			const queryPage = pageInput(context.req.raw, metadata.traceId);
 			const items = await queryOrUnavailable(
-				() => management.listUserCredentials(actor(identity)),
+				() => management.listUserCredentials(actor(identity), queryPage),
 				metadata.traceId,
 			);
-			const page = pageById(
-				items,
-				context.req.raw,
-				metadata.traceId,
-				(item) => item.credentialId,
-			);
+			const page = pageById(items, queryPage, (item) => item.credentialId);
 			return context.json({
 				items: page.items.map((item) =>
 					apiCredentialProjection(item, metadata.traceId),
@@ -741,16 +736,12 @@ export function registerManagementRoutes(
 				dependencies.apiIdentity,
 				metadata.traceId,
 			);
+			const queryPage = pageInput(context.req.raw, metadata.traceId);
 			const items = await queryOrUnavailable(
-				() => management.listApplications(actor(identity)),
+				() => management.listApplications(actor(identity), queryPage),
 				metadata.traceId,
 			);
-			const page = pageById(
-				items,
-				context.req.raw,
-				metadata.traceId,
-				(item) => item.id,
-			);
+			const page = pageById(items, queryPage, (item) => item.id);
 			return context.json({
 				items: page.items.map((item) =>
 					ApiApplicationProjectionV1Schema.parse({
@@ -892,20 +883,17 @@ export function registerManagementRoutes(
 				dependencies.apiIdentity,
 				metadata.traceId,
 			);
+			const queryPage = pageInput(context.req.raw, metadata.traceId);
 			const items = await queryOrUnavailable(
 				() =>
 					management.listApplicationCredentials(
 						actor(identity),
 						context.req.param("applicationId"),
+						queryPage,
 					),
 				metadata.traceId,
 			);
-			const page = pageById(
-				items,
-				context.req.raw,
-				metadata.traceId,
-				(item) => item.credentialId,
-			);
+			const page = pageById(items, queryPage, (item) => item.credentialId);
 			return context.json({
 				items: page.items.map((item) =>
 					apiCredentialProjection(item, metadata.traceId),

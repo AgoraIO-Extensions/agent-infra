@@ -10,7 +10,7 @@ import {
 	isApiCredentialScopeV1,
 	parseCurrentTaskUserV1,
 } from "@agent-infra/platform-core";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
@@ -229,16 +229,23 @@ export class PostgresApiIdentityStoreV1 {
 		};
 	}
 
-	async listApplications(responsibleUserId?: string) {
+	async listApplications(
+		responsibleUserId?: string,
+		page?: { readonly limit: number; readonly afterId?: string },
+	) {
 		const query = this.#database
 			.select()
 			.from(platformApplications)
+			.where(
+				and(
+					responsibleUserId
+						? eq(platformApplications.responsibleUserId, responsibleUserId)
+						: undefined,
+					page?.afterId ? gt(platformApplications.id, page.afterId) : undefined,
+				),
+			)
 			.orderBy(platformApplications.id);
-		const rows = responsibleUserId
-			? await query.where(
-					eq(platformApplications.responsibleUserId, responsibleUserId),
-				)
-			: await query;
+		const rows = page ? await query.limit(page.limit + 1) : await query;
 		return rows.map((row) => ({
 			id: row.id,
 			name: row.name,
@@ -418,30 +425,30 @@ export class PostgresApiIdentityStoreV1 {
 	async listCredentials(input: {
 		readonly principal?: ApiPrincipalV1;
 		readonly applicationId?: string;
+		readonly page?: { readonly limit: number; readonly afterId?: string };
 	}): Promise<readonly ApiCredentialMetadataV1[]> {
-		const rows = input.principal
-			? await this.#database
-					.select()
-					.from(platformApiCredentials)
-					.where(
-						and(
-							eq(platformApiCredentials.principalType, input.principal.kind),
-							eq(platformApiCredentials.principalId, input.principal.id),
-						),
-					)
-					.orderBy(platformApiCredentials.id)
-			: input.applicationId
-				? await this.#database
-						.select()
-						.from(platformApiCredentials)
-						.where(
-							and(
-								eq(platformApiCredentials.principalType, "application"),
-								eq(platformApiCredentials.principalId, input.applicationId),
-							),
-						)
-						.orderBy(platformApiCredentials.id)
-				: [];
+		const principal =
+			input.principal ??
+			(input.applicationId
+				? { kind: "application" as const, id: input.applicationId }
+				: undefined);
+		if (!principal) return [];
+		const query = this.#database
+			.select()
+			.from(platformApiCredentials)
+			.where(
+				and(
+					eq(platformApiCredentials.principalType, principal.kind),
+					eq(platformApiCredentials.principalId, principal.id),
+					input.page?.afterId
+						? gt(platformApiCredentials.id, input.page.afterId)
+						: undefined,
+				),
+			)
+			.orderBy(platformApiCredentials.id);
+		const rows = input.page
+			? await query.limit(input.page.limit + 1)
+			: await query;
 		return rows.map(metadata);
 	}
 
