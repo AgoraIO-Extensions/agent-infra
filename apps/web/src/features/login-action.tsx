@@ -26,9 +26,13 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 			const target = new URL(endpoint, window.location.href);
 			if (
 				!["http:", "https:"].includes(target.protocol) ||
-				target.origin !== window.location.origin
+				target.origin !== window.location.origin ||
+				target.username ||
+				target.password
 			)
-				throw new Error("Login must use a same-origin HTTP(S) endpoint");
+				throw new Error(
+					"Login must use a same-origin HTTP(S) endpoint without userinfo",
+				);
 			const response = await fetch(target.href, {
 				method: "POST",
 				credentials: "include",
