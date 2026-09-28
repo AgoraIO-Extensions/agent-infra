@@ -37,6 +37,7 @@ it("emits only bounded metadata and drops logs under backpressure", () => {
 	expect(lines[0]).not.toMatch(/secret-token|SECRET_TOKEN|PRIVATE_SENTINEL/);
 	expect(telemetry.status()).toEqual({
 		enabled: false,
+		captureFailures: 0,
 		exportFailures: 0,
 		lastExportFailureAt: undefined,
 		droppedLogs: 1,
@@ -99,6 +100,28 @@ it("keeps invalid observational input out of business control flow", () => {
 		}),
 	).not.toThrow();
 	expect(telemetry.status().invalidRecords).toBe(1);
+});
+
+it("contains capture failures and reports them independently", () => {
+	const telemetry = startObservability({
+		service: "platform-api",
+		output: new Writable({
+			write(_chunk, _encoding, done) {
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	const event = Object.defineProperty({}, "stage", {
+		get() {
+			throw new Error("PRIVATE_SENTINEL");
+		},
+	}) as Parameters<typeof telemetry.record>[0];
+	expect(() => telemetry.record(event)).not.toThrow();
+	expect(telemetry.status()).toMatchObject({
+		captureFailures: 1,
+		invalidRecords: 0,
+	});
 });
 
 it("reports OTLP failures without failing an observed operation", async () => {

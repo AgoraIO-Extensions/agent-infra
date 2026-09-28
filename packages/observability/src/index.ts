@@ -133,6 +133,7 @@ export function startObservability(options: ObservabilityOptions) {
 	let backpressured = false;
 	let droppedLogs = 0;
 	let invalidRecords = 0;
+	let captureFailures = 0;
 	let exportFailures = 0;
 	let lastExportFailureAt: string | undefined;
 	const onDrain = () => {
@@ -234,44 +235,44 @@ export function startObservability(options: ObservabilityOptions) {
 	let closing: Promise<void> | undefined;
 	return {
 		record(event: OperationalEvent) {
-			if (!stages.has(event.stage) || !outcomes.has(event.outcome)) {
-				invalidRecords++;
-				return;
-			}
-			if (
-				event.durationMs !== undefined &&
-				(!Number.isFinite(event.durationMs) ||
-					event.durationMs < 0 ||
-					event.durationMs > 86_400_000)
-			) {
-				invalidRecords++;
-				return;
-			}
-			const labels = {
-				service: options.service,
-				stage: event.stage,
-				outcome: event.outcome,
-			};
-			const details = {
-				...labels,
-				...(event.code && codes.has(event.code) ? { code: event.code } : {}),
-				...(safeId(event.requestId) ? { requestId: event.requestId } : {}),
-				...(safeId(event.traceId) ? { traceId: event.traceId } : {}),
-				...(safeId(event.agentId) ? { agentId: event.agentId } : {}),
-				...(safeId(event.conversationId)
-					? { conversationId: event.conversationId }
-					: {}),
-				...(safeId(event.executionId)
-					? { executionId: event.executionId }
-					: {}),
-				...(safeOperationRef(event.operationRef)
-					? { operationRef: event.operationRef }
-					: {}),
-				...(safeOperationRef(event.attemptRef)
-					? { attemptRef: event.attemptRef }
-					: {}),
-			};
 			try {
+				if (!stages.has(event.stage) || !outcomes.has(event.outcome)) {
+					invalidRecords++;
+					return;
+				}
+				if (
+					event.durationMs !== undefined &&
+					(!Number.isFinite(event.durationMs) ||
+						event.durationMs < 0 ||
+						event.durationMs > 86_400_000)
+				) {
+					invalidRecords++;
+					return;
+				}
+				const labels = {
+					service: options.service,
+					stage: event.stage,
+					outcome: event.outcome,
+				};
+				const details = {
+					...labels,
+					...(event.code && codes.has(event.code) ? { code: event.code } : {}),
+					...(safeId(event.requestId) ? { requestId: event.requestId } : {}),
+					...(safeId(event.traceId) ? { traceId: event.traceId } : {}),
+					...(safeId(event.agentId) ? { agentId: event.agentId } : {}),
+					...(safeId(event.conversationId)
+						? { conversationId: event.conversationId }
+						: {}),
+					...(safeId(event.executionId)
+						? { executionId: event.executionId }
+						: {}),
+					...(safeOperationRef(event.operationRef)
+						? { operationRef: event.operationRef }
+						: {}),
+					...(safeOperationRef(event.attemptRef)
+						? { attemptRef: event.attemptRef }
+						: {}),
+				};
 				operations.add(1, labels);
 				if (event.durationMs !== undefined)
 					duration.record(event.durationMs, labels);
@@ -283,11 +284,12 @@ export function startObservability(options: ObservabilityOptions) {
 					logger.error(details, "operation");
 				else logger.info(details, "operation");
 			} catch {
-				// Telemetry does not decide the business outcome.
+				captureFailures++;
 			}
 		},
 		status: () => ({
 			enabled: sdk !== undefined,
+			captureFailures,
 			exportFailures,
 			lastExportFailureAt,
 			droppedLogs,
