@@ -331,8 +331,8 @@ case "${1:-}" in
         echo "Worker release exists without its Deployment" >&2
         exit 1
       fi
-      "${compose[@]}" stop web platform-api
       ensure_agents_stopped
+      "${compose[@]}" stop web platform-api
       disconnect_worker_database
       "${compose[@]}" stop object-storage postgres
       exit 0

@@ -456,6 +456,26 @@ test("local stop refuses a release missing its Worker Deployment", async () => {
 	}
 });
 
+test("local stop keeps API and Web running when Agents remain but Worker Deployment is absent", async () => {
+	const f = await fixture();
+	try {
+		const result = run("stop", {
+			...f.env,
+			FAKE_WORKER_REPLICAS: "",
+			FAKE_HELM_LIST_RESULT: "",
+			FAKE_AGENT_WORKLOADS: "agent-1 1\n",
+		});
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /Stop each Agent/);
+		assert.doesNotMatch(
+			await readFile(f.log, "utf8"),
+			/compose .* stop|delete |network disconnect/,
+		);
+	} finally {
+		await f.close();
+	}
+});
+
 test("local stop keeps Compose running if Worker uninstall fails", async () => {
 	const f = await fixture();
 	try {
