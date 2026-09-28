@@ -13,12 +13,12 @@ import {
 	VerifiedRuntimeExecutionGrantV2Schema,
 	validateVerifiedRuntimeExecutionGrantClaimsV2,
 } from "./grant-v2.ts";
-import { runtimeRequestSigningPayloadV3 } from "./host-v3.ts";
 import {
 	RuntimeExecutionSourceV1Schema,
 	RuntimePinnedExecutionKeyScopeV4Schema,
 	RuntimeRelayKeyBindingV1Schema,
 } from "./host-v4.ts";
+import { canonicalRuntimeRequestSigningPayload } from "./request-signing.ts";
 
 // Event requests retain V2 Grant semantics and never carry the private Key field.
 const eventContext = {
@@ -85,7 +85,7 @@ export async function runtimeEventRequestDigestV4(
 		.union([RuntimeEventReadRequestV4Schema, RuntimeEventAckRequestV4Schema])
 		.parse(request);
 	const payload = new TextEncoder().encode(
-		runtimeRequestSigningPayloadV3({ ...parsed }),
+		canonicalRuntimeRequestSigningPayload({ ...parsed }),
 	);
 	const digest = await globalThis.crypto.subtle.digest("SHA-256", payload);
 	return Array.from(new Uint8Array(digest), (byte) =>
