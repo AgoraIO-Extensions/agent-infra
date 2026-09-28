@@ -317,15 +317,23 @@ export function createLdapIdentityDirectory(
 				if (!entry) return null;
 				const first = account(entry);
 				if (first.accountStatus !== "active") return null;
+				const firstDn = requiredText(entry.dn);
 				const client = createClient(clientOptions);
 				try {
-					await client.bind(requiredText(entry.dn), password);
+					await client.bind(firstDn, password);
 				} catch (error) {
 					if (error instanceof InvalidCredentialsError) return null;
 					throw error;
 				} finally {
 					await client.unbind().catch(() => undefined);
 				}
+				const rebound = await find(config.loginAttribute, login);
+				if (
+					!rebound ||
+					requiredText(rebound.dn) !== firstDn ||
+					account(rebound).uid !== first.uid
+				)
+					return null;
 				const verified = await current(first.uid, true, first.email);
 				return verified?.accountStatus === "active" &&
 					verified.email === first.email

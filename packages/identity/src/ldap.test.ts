@@ -155,6 +155,7 @@ describe("first-party LDAP identity directory", () => {
 			employee.dn,
 			state.config.serviceBindDn,
 			state.config.serviceBindDn,
+			state.config.serviceBindDn,
 		]);
 		expect(
 			state.options.every(
@@ -165,6 +166,7 @@ describe("first-party LDAP identity directory", () => {
 			),
 		).toBe(true);
 		expect(state.searches).toEqual([
+			"(uid=login-a)",
 			"(uid=login-a)",
 			"(entryUUID=stable-a)",
 			"(mail=person.a@example.test)",
@@ -260,6 +262,40 @@ describe("first-party LDAP identity directory", () => {
 						async bind(dn, password) {
 							await client.bind(dn, password);
 							if (dn === employee.dn) state.setEntries([changed]);
+						},
+					};
+				},
+			});
+			await expect(
+				directory.authenticate("login-a", "correct-password"),
+			).resolves.toBeNull();
+			expect(state.ids.size).toBe(0);
+		}
+	});
+
+	it("rejects login DN reassignment after password bind", async () => {
+		for (const changed of [
+			[
+				{ ...employee, entryUUID: "stable-b", mail: "other@example.test" },
+				{
+					...employee,
+					dn: "uid=moved,ou=people,dc=example,dc=test",
+					uid: "moved",
+				},
+			],
+			[{ ...employee, dn: "uid=renamed,ou=people,dc=example,dc=test" }],
+		]) {
+			const state = fixture();
+			const directory = createLdapIdentityDirectory({
+				...state.config,
+				createClient(options) {
+					const client = state.config.createClient?.(options);
+					if (!client) throw new Error("expected fixture client");
+					return {
+						...client,
+						async bind(dn, password) {
+							await client.bind(dn, password);
+							if (dn === employee.dn) state.setEntries(changed);
 						},
 					};
 				},
