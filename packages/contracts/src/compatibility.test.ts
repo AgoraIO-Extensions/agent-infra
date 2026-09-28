@@ -175,6 +175,12 @@ describe("contract compatibility command", () => {
 					delete value.paths["/api/v1/agents"].post.security;
 				},
 				(value: typeof current) => {
+					delete value.paths["/api/v1/api-credentials"].get.security;
+				},
+				(value: typeof current) => {
+					delete value.paths["/api/v1/agents/{agentId}/grants"].post.security;
+				},
+				(value: typeof current) => {
 					value.components.schemas.SubmitTaskRequestV1.additionalProperties = true;
 				},
 				(value: typeof current) => {

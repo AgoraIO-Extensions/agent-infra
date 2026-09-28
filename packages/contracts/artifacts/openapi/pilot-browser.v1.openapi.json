@@ -7152,7 +7152,12 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       },
       "post": {
         "operationId": "grantAgentPrincipal",
@@ -7258,7 +7263,12 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       }
     },
     "/api/v1/agents/{agentId}/lifecycle": {
@@ -8380,7 +8390,12 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       },
       "post": {
         "operationId": "issueApiCredential",
@@ -8475,7 +8490,12 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       }
     },
     "/api/v1/api-credentials/{credentialId}": {
@@ -8566,7 +8586,12 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       }
     },
     "/api/v1/applications": {
@@ -8696,7 +8721,12 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       },
       "post": {
         "operationId": "createApiApplication",
@@ -8791,7 +8821,12 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       }
     },
     "/api/v1/applications/{applicationId}/credential-delivery": {
@@ -8892,7 +8927,12 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       },
       "post": {
         "operationId": "grantApplicationCredentialDelivery",
@@ -8991,7 +9031,12 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       }
     },
     "/api/v1/applications/{applicationId}/credentials": {
@@ -9130,7 +9175,12 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       },
       "post": {
         "operationId": "issueApplicationCredential",
@@ -9236,7 +9286,12 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       }
     },
     "/api/v1/applications/{applicationId}/credentials/{credentialId}": {
@@ -9336,7 +9391,12 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       }
     },
     "/api/v1/conversations/{conversationId}": {

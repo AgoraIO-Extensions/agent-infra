@@ -716,10 +716,14 @@ const wecomSetupPath = z.strictObject({
 	agentId: pathId(),
 	sessionId: pathId(),
 });
+const platformApiCredentialSecurity = [{ platformApiCredential: [] }] as {
+	platformApiCredential: string[];
+}[];
 export const pilotBrowserHttpOpenApiPathsV1 = {
 	"/api/v1/api-credentials": {
 		get: {
 			operationId: "listApiCredentials",
+			security: platformApiCredentialSecurity,
 			requestParams: { query: pageQuery },
 			responses: {
 				"200": jsonResponse("API credentials", apiCredentialPageV1),
@@ -728,6 +732,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		},
 		post: {
 			operationId: "issueApiCredential",
+			security: platformApiCredentialSecurity,
 			requestBody: requiredJsonRequestBody(ApiCredentialIssueRequestV1Schema),
 			responses: {
 				"201": jsonResponse(
@@ -741,6 +746,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 	"/api/v1/api-credentials/{credentialId}": {
 		delete: {
 			operationId: "revokeApiCredential",
+			security: platformApiCredentialSecurity,
 			requestParams: { path: credentialPath },
 			responses: {
 				"204": { description: "API credential revoked" },
@@ -751,6 +757,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 	"/api/v1/applications": {
 		get: {
 			operationId: "listApiApplications",
+			security: platformApiCredentialSecurity,
 			requestParams: { query: pageQuery },
 			responses: {
 				"200": jsonResponse("API applications", apiApplicationPageV1),
@@ -759,6 +766,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		},
 		post: {
 			operationId: "createApiApplication",
+			security: platformApiCredentialSecurity,
 			requestBody: requiredJsonRequestBody(ApiApplicationCreateRequestV1Schema),
 			responses: {
 				"201": jsonResponse(
@@ -772,6 +780,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 	"/api/v1/applications/{applicationId}/credentials": {
 		get: {
 			operationId: "listApplicationCredentials",
+			security: platformApiCredentialSecurity,
 			requestParams: { path: applicationPath, query: pageQuery },
 			responses: {
 				"200": jsonResponse(
@@ -783,6 +792,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		},
 		post: {
 			operationId: "issueApplicationCredential",
+			security: platformApiCredentialSecurity,
 			requestParams: { path: applicationPath },
 			requestBody: requiredJsonRequestBody(ApiCredentialIssueRequestV1Schema),
 			responses: {
@@ -797,6 +807,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 	"/api/v1/applications/{applicationId}/credentials/{credentialId}": {
 		delete: {
 			operationId: "revokeApplicationCredential",
+			security: platformApiCredentialSecurity,
 			requestParams: { path: applicationCredentialPath },
 			responses: {
 				"204": { description: "Application credential revoked" },
@@ -807,6 +818,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 	"/api/v1/applications/{applicationId}/credential-delivery": {
 		post: {
 			operationId: "grantApplicationCredentialDelivery",
+			security: platformApiCredentialSecurity,
 			requestParams: { path: applicationPath },
 			requestBody: requiredJsonRequestBody(ApiPrincipalV1Schema),
 			responses: {
@@ -816,6 +828,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		},
 		delete: {
 			operationId: "revokeApplicationCredentialDelivery",
+			security: platformApiCredentialSecurity,
 			requestParams: { path: applicationPath },
 			requestBody: requiredJsonRequestBody(ApiPrincipalV1Schema),
 			responses: {
@@ -1067,9 +1080,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		},
 		post: {
 			operationId: "createAgentDirectly",
-			security: [{ platformApiCredential: [] }] as {
-				platformApiCredential: string[];
-			}[],
+			security: platformApiCredentialSecurity,
 			requestParams: { header: idempotencyHeader },
 			requestBody: requiredJsonRequestBody(
 				AgentApplicationCreateRequestV2Schema,
@@ -1096,6 +1107,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 	"/api/v1/agents/{agentId}/grants": {
 		post: {
 			operationId: "grantAgentPrincipal",
+			security: platformApiCredentialSecurity,
 			requestParams: { path: agentPath },
 			requestBody: requiredJsonRequestBody(ApiAgentGrantRequestV1Schema),
 			responses: {
@@ -1108,6 +1120,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		},
 		delete: {
 			operationId: "revokeAgentPrincipalGrant",
+			security: platformApiCredentialSecurity,
 			requestParams: { path: agentPath },
 			requestBody: requiredJsonRequestBody(ApiAgentGrantRequestV1Schema),
 			responses: {

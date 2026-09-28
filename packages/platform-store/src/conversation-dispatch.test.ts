@@ -3774,6 +3774,14 @@ describe("durable stop confirmation", () => {
 					transition: { executionStatus: "processing" },
 				}),
 			).toBe(false);
+			expect(
+				await restarted.finish({
+					claim: owned,
+					status: "succeeded",
+					transition: { executionStatus: "submitted" },
+				}),
+			).toBe(false);
+			expect((await taskQueueState(work.executionId)).status).toBe("unknown");
 			const [unconfirmed] =
 				await client`select status from platform.conversation_stops where execution_id = ${work.executionId}`;
 			expect(unconfirmed?.status).toBe("submitted");
@@ -4198,6 +4206,17 @@ describe("durable waiting task dispatch from real admission", () => {
 					leaseDurationMs: 30_000,
 				}),
 			).toBe(true);
+			const secondClaim = await h.own(
+				second.itemId,
+				"cross-conversation-second-worker",
+			);
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: secondClaim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			expect((await taskQueueState(first.executionId)).status).toBe("unknown");
 		} finally {
 			await h.close();
 		}

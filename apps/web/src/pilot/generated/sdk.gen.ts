@@ -90,6 +90,7 @@ export const createConversation = <ThrowOnError extends boolean = false>(options
 });
 
 export const revokeAgentPrincipalGrant = <ThrowOnError extends boolean = false>(options: Options<RevokeAgentPrincipalGrantData, ThrowOnError>): RequestResult<RevokeAgentPrincipalGrantResponses, RevokeAgentPrincipalGrantErrors, ThrowOnError> => (options.client ?? client).delete<RevokeAgentPrincipalGrantResponses, RevokeAgentPrincipalGrantErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/agents/{agentId}/grants',
     ...options,
     headers: {
@@ -99,6 +100,7 @@ export const revokeAgentPrincipalGrant = <ThrowOnError extends boolean = false>(
 });
 
 export const grantAgentPrincipal = <ThrowOnError extends boolean = false>(options: Options<GrantAgentPrincipalData, ThrowOnError>): RequestResult<GrantAgentPrincipalResponses, GrantAgentPrincipalErrors, ThrowOnError> => (options.client ?? client).post<GrantAgentPrincipalResponses, GrantAgentPrincipalErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/agents/{agentId}/grants',
     ...options,
     headers: {
@@ -143,9 +145,14 @@ export const submitWecomCredentials = <ThrowOnError extends boolean = false>(opt
     }
 });
 
-export const listApiCredentials = <ThrowOnError extends boolean = false>(options?: Options<ListApiCredentialsData, ThrowOnError>): RequestResult<ListApiCredentialsResponses, ListApiCredentialsErrors, ThrowOnError> => (options?.client ?? client).get<ListApiCredentialsResponses, ListApiCredentialsErrors, ThrowOnError>({ url: '/api/v1/api-credentials', ...options });
+export const listApiCredentials = <ThrowOnError extends boolean = false>(options?: Options<ListApiCredentialsData, ThrowOnError>): RequestResult<ListApiCredentialsResponses, ListApiCredentialsErrors, ThrowOnError> => (options?.client ?? client).get<ListApiCredentialsResponses, ListApiCredentialsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/api-credentials',
+    ...options
+});
 
 export const issueApiCredential = <ThrowOnError extends boolean = false>(options: Options<IssueApiCredentialData, ThrowOnError>): RequestResult<IssueApiCredentialResponses, IssueApiCredentialErrors, ThrowOnError> => (options.client ?? client).post<IssueApiCredentialResponses, IssueApiCredentialErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/api-credentials',
     ...options,
     headers: {
@@ -154,11 +161,20 @@ export const issueApiCredential = <ThrowOnError extends boolean = false>(options
     }
 });
 
-export const revokeApiCredential = <ThrowOnError extends boolean = false>(options: Options<RevokeApiCredentialData, ThrowOnError>): RequestResult<RevokeApiCredentialResponses, RevokeApiCredentialErrors, ThrowOnError> => (options.client ?? client).delete<RevokeApiCredentialResponses, RevokeApiCredentialErrors, ThrowOnError>({ url: '/api/v1/api-credentials/{credentialId}', ...options });
+export const revokeApiCredential = <ThrowOnError extends boolean = false>(options: Options<RevokeApiCredentialData, ThrowOnError>): RequestResult<RevokeApiCredentialResponses, RevokeApiCredentialErrors, ThrowOnError> => (options.client ?? client).delete<RevokeApiCredentialResponses, RevokeApiCredentialErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/api-credentials/{credentialId}',
+    ...options
+});
 
-export const listApiApplications = <ThrowOnError extends boolean = false>(options?: Options<ListApiApplicationsData, ThrowOnError>): RequestResult<ListApiApplicationsResponses, ListApiApplicationsErrors, ThrowOnError> => (options?.client ?? client).get<ListApiApplicationsResponses, ListApiApplicationsErrors, ThrowOnError>({ url: '/api/v1/applications', ...options });
+export const listApiApplications = <ThrowOnError extends boolean = false>(options?: Options<ListApiApplicationsData, ThrowOnError>): RequestResult<ListApiApplicationsResponses, ListApiApplicationsErrors, ThrowOnError> => (options?.client ?? client).get<ListApiApplicationsResponses, ListApiApplicationsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/applications',
+    ...options
+});
 
 export const createApiApplication = <ThrowOnError extends boolean = false>(options: Options<CreateApiApplicationData, ThrowOnError>): RequestResult<CreateApiApplicationResponses, CreateApiApplicationErrors, ThrowOnError> => (options.client ?? client).post<CreateApiApplicationResponses, CreateApiApplicationErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/applications',
     ...options,
     headers: {
@@ -168,6 +184,7 @@ export const createApiApplication = <ThrowOnError extends boolean = false>(optio
 });
 
 export const revokeApplicationCredentialDelivery = <ThrowOnError extends boolean = false>(options: Options<RevokeApplicationCredentialDeliveryData, ThrowOnError>): RequestResult<RevokeApplicationCredentialDeliveryResponses, RevokeApplicationCredentialDeliveryErrors, ThrowOnError> => (options.client ?? client).delete<RevokeApplicationCredentialDeliveryResponses, RevokeApplicationCredentialDeliveryErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/applications/{applicationId}/credential-delivery',
     ...options,
     headers: {
@@ -177,6 +194,7 @@ export const revokeApplicationCredentialDelivery = <ThrowOnError extends boolean
 });
 
 export const grantApplicationCredentialDelivery = <ThrowOnError extends boolean = false>(options: Options<GrantApplicationCredentialDeliveryData, ThrowOnError>): RequestResult<GrantApplicationCredentialDeliveryResponses, GrantApplicationCredentialDeliveryErrors, ThrowOnError> => (options.client ?? client).post<GrantApplicationCredentialDeliveryResponses, GrantApplicationCredentialDeliveryErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/applications/{applicationId}/credential-delivery',
     ...options,
     headers: {
@@ -185,9 +203,14 @@ export const grantApplicationCredentialDelivery = <ThrowOnError extends boolean 
     }
 });
 
-export const listApplicationCredentials = <ThrowOnError extends boolean = false>(options: Options<ListApplicationCredentialsData, ThrowOnError>): RequestResult<ListApplicationCredentialsResponses, ListApplicationCredentialsErrors, ThrowOnError> => (options.client ?? client).get<ListApplicationCredentialsResponses, ListApplicationCredentialsErrors, ThrowOnError>({ url: '/api/v1/applications/{applicationId}/credentials', ...options });
+export const listApplicationCredentials = <ThrowOnError extends boolean = false>(options: Options<ListApplicationCredentialsData, ThrowOnError>): RequestResult<ListApplicationCredentialsResponses, ListApplicationCredentialsErrors, ThrowOnError> => (options.client ?? client).get<ListApplicationCredentialsResponses, ListApplicationCredentialsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/applications/{applicationId}/credentials',
+    ...options
+});
 
 export const issueApplicationCredential = <ThrowOnError extends boolean = false>(options: Options<IssueApplicationCredentialData, ThrowOnError>): RequestResult<IssueApplicationCredentialResponses, IssueApplicationCredentialErrors, ThrowOnError> => (options.client ?? client).post<IssueApplicationCredentialResponses, IssueApplicationCredentialErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/applications/{applicationId}/credentials',
     ...options,
     headers: {
@@ -196,7 +219,11 @@ export const issueApplicationCredential = <ThrowOnError extends boolean = false>
     }
 });
 
-export const revokeApplicationCredential = <ThrowOnError extends boolean = false>(options: Options<RevokeApplicationCredentialData, ThrowOnError>): RequestResult<RevokeApplicationCredentialResponses, RevokeApplicationCredentialErrors, ThrowOnError> => (options.client ?? client).delete<RevokeApplicationCredentialResponses, RevokeApplicationCredentialErrors, ThrowOnError>({ url: '/api/v1/applications/{applicationId}/credentials/{credentialId}', ...options });
+export const revokeApplicationCredential = <ThrowOnError extends boolean = false>(options: Options<RevokeApplicationCredentialData, ThrowOnError>): RequestResult<RevokeApplicationCredentialResponses, RevokeApplicationCredentialErrors, ThrowOnError> => (options.client ?? client).delete<RevokeApplicationCredentialResponses, RevokeApplicationCredentialErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/applications/{applicationId}/credentials/{credentialId}',
+    ...options
+});
 
 export const getConversation = <ThrowOnError extends boolean = false>(options: Options<GetConversationData, ThrowOnError>): RequestResult<GetConversationResponses, GetConversationErrors, ThrowOnError> => (options.client ?? client).get<GetConversationResponses, GetConversationErrors, ThrowOnError>({ url: '/api/v1/conversations/{conversationId}', ...options });
 
