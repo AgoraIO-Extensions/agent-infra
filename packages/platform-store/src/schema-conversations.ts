@@ -121,15 +121,15 @@ export const conversationExecutions = platformSchema.table(
 		}),
 		modelOptionId: text("model_option_id"),
 		reasoningLevel: text("reasoning_level"),
+		taskWaitOrder: bigint("task_wait_order", { mode: "number" }),
+		taskWaitDeadline: timestamp("task_wait_deadline", {
+			withTimezone: true,
+		}),
 		executionSource: text("execution_source"),
 		relayKeyPurpose: text("relay_key_purpose"),
 		relayKeySubjectId: text("relay_key_subject_id"),
 		relayKeyId: text("relay_key_id"),
 		relayKeyVersion: bigint("relay_key_version", { mode: "number" }),
-		taskWaitOrder: bigint("task_wait_order", { mode: "number" }),
-		taskWaitDeadline: timestamp("task_wait_deadline", {
-			withTimezone: true,
-		}),
 	},
 	(table) => [
 		foreignKey({
