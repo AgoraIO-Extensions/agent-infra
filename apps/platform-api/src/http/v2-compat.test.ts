@@ -87,6 +87,34 @@ describe("V2 compatibility routes", () => {
 		expect(body.configuration).not.toHaveProperty("actions");
 	});
 
+	it.each([
+		["/api/v2/agent-applications", "POST"],
+		["/api/v2/agent-applications/application-1", "PUT"],
+		["/api/v2/agents/agent-1/configuration", "PUT"],
+	] as const)(
+		"rejects invalid V2 schema versions at %s",
+		async (path, method) => {
+			const app = new Hono();
+			let forwarded = 0;
+			app.all("/api/v1/*", () => {
+				forwarded += 1;
+				return new Response(null, { status: 200 });
+			});
+			registerV2CompatibilityRoutes(app);
+			for (const schemaVersion of [1, 3, undefined]) {
+				const response = await app.request(
+					new Request(`http://localhost${path}`, {
+						method,
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({ schemaVersion, name: "invalid" }),
+					}),
+				);
+				expect(response.status).toBe(400);
+			}
+			expect(forwarded).toBe(0);
+		},
+	);
+
 	it("rejects unsupported agent list scopes", async () => {
 		const app = new Hono();
 		app.get("/api/v1/agents", () => new Response("unexpected"));

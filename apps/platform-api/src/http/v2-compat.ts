@@ -24,7 +24,11 @@ function isSupportedV2Path(pathname: string): boolean {
 	);
 }
 
-function v2RequestBody(pathname: string, method: string, body: string): string {
+function v2RequestBody(
+	pathname: string,
+	method: string,
+	body: string,
+): string | null {
 	if (!body || (method !== "POST" && method !== "PUT")) return body;
 	let value: unknown;
 	try {
@@ -39,6 +43,7 @@ function v2RequestBody(pathname: string, method: string, body: string): string {
 		(pathname === "/api/v2/agent-applications" ||
 			/^\/api\/v2\/agent-applications\/[^/]+$/.test(pathname))
 	) {
+		if (input.schemaVersion !== 2) return null;
 		return JSON.stringify({
 			...input,
 			schemaVersion: 1,
@@ -49,6 +54,7 @@ function v2RequestBody(pathname: string, method: string, body: string): string {
 		method === "PUT" &&
 		/^\/api\/v2\/agents\/[^/]+\/configuration$/.test(pathname)
 	) {
+		if (input.schemaVersion !== 2) return null;
 		return JSON.stringify({ ...input, schemaVersion: 1 });
 	}
 	return body;
@@ -88,7 +94,7 @@ function v2ManagementPayload(pathname: string, value: unknown): unknown {
 async function rewriteV2Request(
 	request: Request,
 	pathname: string,
-): Promise<Request> {
+): Promise<Request | null> {
 	const url = new URL(request.url);
 	url.pathname = pathname.replace(/^\/api\/v2(?=\/|$)/, "/api/v1");
 	const search = url.searchParams;
@@ -106,6 +112,7 @@ async function rewriteV2Request(
 	}
 	const body = await request.clone().text();
 	const rewrittenBody = v2RequestBody(pathname, request.method, body);
+	if (rewrittenBody === null) return null;
 	headers.delete("content-length");
 	return new Request(url, {
 		method: request.method,
@@ -129,7 +136,9 @@ async function proxyV2Request(
 	) {
 		return new Response(null, { status: 400 });
 	}
-	const response = await app.fetch(await rewriteV2Request(request, pathname));
+	const rewritten = await rewriteV2Request(request, pathname);
+	if (!rewritten) return new Response(null, { status: 400 });
+	const response = await app.fetch(rewritten);
 	if (
 		!v2ManagementPaths.some((pattern) => pattern.test(pathname)) ||
 		!response.ok ||

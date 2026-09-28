@@ -735,7 +735,7 @@ export class PostgresConversationQueryV1 {
 						};
 					}
 					after = decoded[2];
-					if (executionId !== undefined) {
+					if (executionId !== undefined && after !== 0) {
 						const [anchor] = await transaction<EventIdentityRow[]>`
 							select conversation_cursor from platform.conversation_events
 							where conversation_id = ${conversationId} and execution_id = ${executionId}
