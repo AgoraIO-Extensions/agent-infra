@@ -1,11 +1,14 @@
 export * from "./configuration.ts";
+export * from "./configuration-v4.ts";
 export * from "./driver.ts";
+export * from "./driver-v4.ts";
 export * from "./events.ts";
 export * from "./events-v2.ts";
 export * from "./grant.ts";
 export * from "./grant-v2.ts";
 export * from "./host.ts";
 export * from "./host-v3.ts";
+export * from "./host-v4.ts";
 export * from "./legacy-migration-v1.ts";
 export * from "./readiness.ts";
 
@@ -120,6 +123,45 @@ export const RuntimeGrantV2SchemaDefinitions = {
 	RuntimeControlGrantClaimsV2: RuntimeControlGrantClaimsV2Schema,
 	RuntimeExecutionGrantClaimsV2: RuntimeExecutionGrantClaimsV2Schema,
 	VerifiedRuntimeExecutionGrantV2: VerifiedRuntimeExecutionGrantV2Schema,
+};
+
+import { RuntimeModelConfigurationV4Schema } from "./configuration-v4.ts";
+import { RuntimeKeyedHandleScopeV4Schema } from "./driver-v4.ts";
+import {
+	RuntimeBusinessGrantClaimsV4Schema,
+	RuntimeExecutionGrantV4Schema,
+	RuntimeExecutionSourceV1Schema,
+	RuntimeOperationResponseV4Schema,
+	RuntimePrivateRelayKeyContextV1Schema,
+	RuntimePrivateRelayKeyFieldV1Schema,
+	RuntimeRelayKeyBindingV1Schema,
+	RuntimeRelayKeyDeliveryV1Schema,
+	RuntimeSubmitTurnRequestV4Schema,
+	RuntimeSubmitTurnTransportV4Schema,
+	RuntimeSupplementRequestV4Schema,
+	RuntimeSupplementTransportV4Schema,
+	VerifiedRuntimeExecutionGrantV4Schema,
+} from "./host-v4.ts";
+
+export const RuntimeHostV4SchemaDefinitions = {
+	RuntimeBusinessGrantClaimsV4: RuntimeBusinessGrantClaimsV4Schema,
+	RuntimeExecutionGrantV4: RuntimeExecutionGrantV4Schema,
+	VerifiedRuntimeExecutionGrantV4: VerifiedRuntimeExecutionGrantV4Schema,
+	RuntimeKeyedHandleScopeV4: RuntimeKeyedHandleScopeV4Schema,
+	RuntimeExecutionSourceV1: RuntimeExecutionSourceV1Schema,
+	RuntimeRelayKeyBindingV1: RuntimeRelayKeyBindingV1Schema,
+	RuntimeRelayKeyDeliveryV1: RuntimeRelayKeyDeliveryV1Schema,
+	RuntimePrivateRelayKeyContextV1: RuntimePrivateRelayKeyContextV1Schema,
+	RuntimePrivateRelayKeyFieldV1: RuntimePrivateRelayKeyFieldV1Schema,
+	RuntimeOperationResponseV4: RuntimeOperationResponseV4Schema,
+	RuntimeSubmitTurnRequestV4: RuntimeSubmitTurnRequestV4Schema,
+	RuntimeSubmitTurnTransportV4: RuntimeSubmitTurnTransportV4Schema,
+	RuntimeSupplementRequestV4: RuntimeSupplementRequestV4Schema,
+	RuntimeSupplementTransportV4: RuntimeSupplementTransportV4Schema,
+};
+
+export const RuntimeModelConfigurationV4SchemaDefinitions = {
+	RuntimeModelConfigurationV4: RuntimeModelConfigurationV4Schema,
 };
 
 import {

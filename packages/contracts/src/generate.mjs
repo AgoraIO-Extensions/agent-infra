@@ -57,10 +57,13 @@ import {
 	RuntimeHostV1SchemaDefinitions,
 	RuntimeHostV2SchemaDefinitions,
 	RuntimeHostV3SchemaDefinitions,
+	RuntimeHostV4SchemaDefinitions,
 	RuntimeLegacyMigrationV1SchemaDefinitions,
 	RuntimeModelConfigurationV3Schema,
+	RuntimeModelConfigurationV4Schema,
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
+	RuntimeOperationResponseV4Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
@@ -112,9 +115,17 @@ const artifactPaths = {
 		artifactRoot,
 		"json-schema/runtime.v3.schema.json",
 	),
+	runtimeJsonSchemaV4: resolve(
+		artifactRoot,
+		"json-schema/runtime.v4.schema.json",
+	),
 	runtimeOpenapiV3: resolve(
 		artifactRoot,
 		"openapi/runtime-host.v3.openapi.json",
+	),
+	runtimeOpenapiV4: resolve(
+		artifactRoot,
+		"openapi/runtime-host.v4.openapi.json",
 	),
 	readinessJsonSchema: resolve(
 		artifactRoot,
@@ -183,6 +194,10 @@ const artifactPaths = {
 	runtimeConfigurationJsonSchemaV3: resolve(
 		artifactRoot,
 		"json-schema/runtime-configuration.v3.schema.json",
+	),
+	runtimeConfigurationJsonSchemaV4: resolve(
+		artifactRoot,
+		"json-schema/runtime-configuration.v4.schema.json",
 	),
 	runtimeOpenapi: resolve(artifactRoot, "openapi/runtime-host.v1.openapi.json"),
 	runtimeOpenapiV2: resolve(
@@ -457,6 +472,14 @@ function buildArtifacts() {
 		title: "Agent Infra Runtime Contracts V3",
 		definitions: runtimeDefinitionsV3,
 	});
+	const runtimeJsonSchemaV4 = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime.v4.schema.json",
+		title: "Agent Infra Runtime Contracts V4",
+		definitions: {
+			...RuntimeGrantV2SchemaDefinitions,
+			...RuntimeHostV4SchemaDefinitions,
+		},
+	});
 	const v3Operations = [
 		[
 			"turns",
@@ -535,6 +558,38 @@ function buildArtifacts() {
 			schemas: {
 				ProtocolErrorV1: ProtocolErrorV1Schema,
 				...runtimeDefinitionsV3,
+			},
+		},
+	});
+	const runtimeOpenapiV4 = createDocument({
+		openapi: "3.1.0",
+		info: { title: "Agent Infra RuntimeHost Contract", version: "4.0.0" },
+		security: [{ RuntimeServiceBearer: [] }],
+		paths: {
+			"/internal/runtime/v4/turns": {
+				post: postOperation(
+					"submitRuntimeTurnV4",
+					RuntimeHostV4SchemaDefinitions.RuntimeSubmitTurnTransportV4,
+					RuntimeOperationResponseV4Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v4/instructions": {
+				post: postOperation(
+					"supplementRuntimeTurnV4",
+					RuntimeHostV4SchemaDefinitions.RuntimeSupplementTransportV4,
+					RuntimeOperationResponseV4Schema,
+					"application/json",
+				),
+			},
+		},
+		components: {
+			securitySchemes: {
+				RuntimeServiceBearer: { type: "http", scheme: "bearer" },
+			},
+			schemas: {
+				ProtocolErrorV1: ProtocolErrorV1Schema,
+				...RuntimeHostV4SchemaDefinitions,
 			},
 		},
 	});
@@ -730,7 +785,9 @@ function buildArtifacts() {
 		secretLifecycleJsonSchema,
 		workerResultJsonSchema,
 		runtimeJsonSchemaV3,
+		runtimeJsonSchemaV4,
 		runtimeOpenapiV3,
+		runtimeOpenapiV4,
 		runtimeJsonSchema,
 		runtimeJsonSchemaV2,
 		runtimeConfigurationJsonSchemaV3: jsonSchemaDocument({
@@ -738,6 +795,13 @@ function buildArtifacts() {
 			title: "Agent Infra Runtime Configuration V3",
 			definitions: {
 				RuntimeModelConfigurationV3: RuntimeModelConfigurationV3Schema,
+			},
+		}),
+		runtimeConfigurationJsonSchemaV4: jsonSchemaDocument({
+			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-configuration.v4.schema.json",
+			title: "Agent Infra Runtime Configuration V4",
+			definitions: {
+				RuntimeModelConfigurationV4: RuntimeModelConfigurationV4Schema,
 			},
 		}),
 		runtimeOpenapi,
