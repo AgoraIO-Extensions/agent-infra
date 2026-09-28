@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import {
 	RuntimeBusinessGrantClaimsV4Schema,
@@ -305,6 +306,7 @@ describe("Runtime V4 Grant trust boundary", () => {
 			executionId: "execution-fixture",
 			turnId: "turn-fixture",
 			sessionGeneration: 1,
+			hostSessionRef: null,
 			keyBinding: {
 				purpose: "personal",
 				subjectId: "user-fixture",
@@ -316,6 +318,7 @@ describe("Runtime V4 Grant trust boundary", () => {
 			...acceptedK1,
 			executionId: "execution-next",
 			turnId: "turn-next",
+			hostSessionRef: "session-fixture",
 			keyBinding: {
 				...acceptedK1.keyBinding,
 				ciphertextRef: "key-next",
@@ -326,14 +329,75 @@ describe("Runtime V4 Grant trust boundary", () => {
 			[acceptedK1.executionId, acceptedK1],
 			[acceptedK2.executionId, acceptedK2],
 		]);
+		function replayInput(value: RuntimeBusinessRequestV4) {
+			const {
+				requestId: _requestId,
+				traceId: _traceId,
+				grant: _grant,
+				...input
+			} = value;
+			const {
+				deliveryFence: _deliveryFence,
+				executionDeliveryFence: _executionDeliveryFence,
+				...operation
+			} = input.operation;
+			return { ...input, operation };
+		}
+		const hostSessions = new Map<string, string>();
+		const saved = new Map<
+			string,
+			{
+				input: object;
+				hostSessionRef: string;
+				result: string;
+				deliveryFence: number;
+				executionDeliveryFence: number;
+			}
+		>();
 		let driverCalls = 0;
+		const driverKeys: string[] = [];
 		async function fakeHost(value: unknown) {
 			const accepted = await validateKeyDelivery(value);
+			const operationId = `${accepted.request.operation.kind}:${accepted.request.operation.id}`;
+			const replay = saved.get(operationId);
+			if (replay) {
+				if (
+					!isDeepStrictEqual(replay.input, replayInput(accepted.request)) ||
+					hostSessions.get(accepted.request.conversationId) !==
+						replay.hostSessionRef ||
+					accepted.request.operation.deliveryFence < replay.deliveryFence ||
+					accepted.request.operation.executionDeliveryFence <
+						replay.executionDeliveryFence
+				) {
+					throw new TypeError("Host replay is invalid");
+				}
+				replay.deliveryFence = accepted.request.operation.deliveryFence;
+				replay.executionDeliveryFence =
+					accepted.request.operation.executionDeliveryFence;
+				return replay.result;
+			}
 			const trusted = pinned.get(accepted.request.executionId);
 			if (!trusted) throw new TypeError("Accepted Execution is unavailable");
-			validateRuntimePinnedExecutionKeyScopeV4(trusted, accepted.request);
+			validateRuntimePinnedExecutionKeyScopeV4(
+				trusted,
+				accepted.request,
+				hostSessions.get(accepted.request.conversationId) ?? null,
+			);
 			driverCalls += 1;
-			return accepted.relayKey;
+			driverKeys.push(accepted.relayKey);
+			if ("selection" in accepted.request)
+				hostSessions.set(accepted.request.conversationId, "session-fixture");
+			const hostSessionRef = hostSessions.get(accepted.request.conversationId);
+			if (!hostSessionRef) throw new TypeError("Host Session is unavailable");
+			saved.set(operationId, {
+				input: replayInput(accepted.request),
+				hostSessionRef,
+				result: "accepted",
+				deliveryFence: accepted.request.operation.deliveryFence,
+				executionDeliveryFence:
+					accepted.request.operation.executionDeliveryFence,
+			});
+			return "accepted";
 		}
 		const substitutedFirst = signed(
 			{},
@@ -358,7 +422,28 @@ describe("Runtime V4 Grant trust boundary", () => {
 				businessRequest: original,
 				privateKeyField: privateFieldFor(original),
 			}),
-		).resolves.toBe("private-key-value-k1");
+		).resolves.toBe("accepted");
+		await expect(
+			fakeHost({
+				businessRequest: original,
+				privateKeyField: privateFieldFor(original),
+			}),
+		).resolves.toBe("accepted");
+		const retryOriginal = signed(
+			{},
+			{},
+			RuntimeSubmitTurnRequestV4Schema.parse({
+				...request,
+				requestId: "request-retry",
+			}),
+		);
+		await expect(
+			fakeHost({
+				businessRequest: retryOriginal,
+				privateKeyField: privateFieldFor(retryOriginal),
+			}),
+		).resolves.toBe("accepted");
+		expect(driverCalls).toBe(1);
 		const { selection: _selection, ...supplementBase } = request;
 		const originalSupplement = signed(
 			{},
@@ -380,7 +465,23 @@ describe("Runtime V4 Grant trust boundary", () => {
 				businessRequest: originalSupplement,
 				privateKeyField: privateFieldFor(originalSupplement),
 			}),
-		).resolves.toBe("private-key-value-k1");
+		).resolves.toBe("accepted");
+		const wrongSupplementSession = signed(
+			{},
+			{},
+			RuntimeSupplementRequestV4Schema.parse({
+				...originalSupplement,
+				requestId: "request-wrong-supplement-session",
+				hostSessionRef: "foreign-session",
+				operation: { ...originalSupplement.operation, id: "message-other" },
+			}),
+		);
+		await expect(
+			fakeHost({
+				businessRequest: wrongSupplementSession,
+				privateKeyField: privateFieldFor(wrongSupplementSession),
+			}),
+		).rejects.toThrow("RuntimeHostV4 pinned Execution Key is invalid");
 		const nextExecution = signed(
 			{},
 			{},
@@ -389,6 +490,7 @@ describe("Runtime V4 Grant trust boundary", () => {
 				requestId: "request-next",
 				executionId: "execution-next",
 				turnId: "turn-next",
+				hostSessionRef: "session-fixture",
 				operation: {
 					...request.operation,
 					id: "execution-next",
@@ -400,12 +502,101 @@ describe("Runtime V4 Grant trust boundary", () => {
 				},
 			}),
 		);
+		const wrongNextSession = signed(
+			{},
+			{},
+			RuntimeSubmitTurnRequestV4Schema.parse({
+				...nextExecution,
+				requestId: "request-next-wrong-session",
+				hostSessionRef: "foreign-session",
+			}),
+		);
+		await expect(
+			fakeHost({
+				businessRequest: wrongNextSession,
+				privateKeyField: privateFieldFor(
+					wrongNextSession,
+					"private-key-value-k2",
+				),
+			}),
+		).rejects.toThrow("RuntimeHostV4 pinned Execution Key is invalid");
+		hostSessions.set("conversation-fixture", "foreign-session");
 		await expect(
 			fakeHost({
 				businessRequest: nextExecution,
 				privateKeyField: privateFieldFor(nextExecution, "private-key-value-k2"),
 			}),
-		).resolves.toBe("private-key-value-k2");
+		).rejects.toThrow("RuntimeHostV4 pinned Execution Key is invalid");
+		hostSessions.set("conversation-fixture", "session-fixture");
+		await expect(
+			fakeHost({
+				businessRequest: nextExecution,
+				privateKeyField: privateFieldFor(nextExecution, "private-key-value-k2"),
+			}),
+		).resolves.toBe("accepted");
+		const resumedNextExecution = signed(
+			{},
+			{},
+			RuntimeSubmitTurnRequestV4Schema.parse({
+				...nextExecution,
+				requestId: "request-next-resumed",
+				operation: {
+					...nextExecution.operation,
+					deliveryFence: 2,
+					executionDeliveryFence: 2,
+				},
+			}),
+		);
+		await expect(
+			fakeHost({
+				businessRequest: resumedNextExecution,
+				privateKeyField: privateFieldFor(
+					resumedNextExecution,
+					"private-key-value-k2",
+				),
+			}),
+		).resolves.toBe("accepted");
+		await expect(
+			fakeHost({
+				businessRequest: nextExecution,
+				privateKeyField: privateFieldFor(nextExecution, "private-key-value-k2"),
+			}),
+		).rejects.toThrow("Host replay is invalid");
+		expect(driverCalls).toBe(3);
+		hostSessions.set("conversation-fixture", "foreign-session");
+		await expect(
+			fakeHost({
+				businessRequest: nextExecution,
+				privateKeyField: privateFieldFor(nextExecution, "private-key-value-k2"),
+			}),
+		).rejects.toThrow("Host replay is invalid");
+		const staleNextSession = signed(
+			{},
+			{},
+			RuntimeSubmitTurnRequestV4Schema.parse({
+				...nextExecution,
+				requestId: "request-next-stale-session",
+			}),
+		);
+		await expect(
+			fakeHost({
+				businessRequest: staleNextSession,
+				privateKeyField: privateFieldFor(
+					staleNextSession,
+					"private-key-value-k2",
+				),
+			}),
+		).rejects.toThrow("Host replay is invalid");
+		await expect(
+			fakeHost({
+				businessRequest: wrongNextSession,
+				privateKeyField: privateFieldFor(
+					wrongNextSession,
+					"private-key-value-k2",
+				),
+			}),
+		).rejects.toThrow("Host replay is invalid");
+		hostSessions.set("conversation-fixture", "session-fixture");
 		for (const changed of [
 			{ ...request, keyBinding: { ...request.keyBinding, version: 2 } },
 			{
@@ -426,7 +617,7 @@ describe("Runtime V4 Grant trust boundary", () => {
 					businessRequest: substituted,
 					privateKeyField: privateFieldFor(substituted),
 				}),
-			).rejects.toThrow("RuntimeHostV4 pinned Execution Key is invalid");
+			).rejects.toThrow("Host replay is invalid");
 		}
 		await expect(
 			fakeHost({
@@ -438,5 +629,10 @@ describe("Runtime V4 Grant trust boundary", () => {
 			}),
 		).rejects.toThrow("Runtime authorization is unavailable");
 		expect(driverCalls).toBe(3);
+		expect(driverKeys).toEqual([
+			"private-key-value-k1",
+			"private-key-value-k1",
+			"private-key-value-k2",
+		]);
 	});
 });
