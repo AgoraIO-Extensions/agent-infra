@@ -137,6 +137,9 @@ describe("Pilot browser contracts", () => {
 			);
 
 		expect(operations.sort()).toEqual(requiredOperations.sort());
+		expect(document.paths?.["/api/v1/agents"]?.post?.security).toEqual([
+			{ platformApiCredential: [] },
+		]);
 		for (const path of Object.values(document.paths ?? {})) {
 			for (const operation of Object.values(path ?? {})) {
 				if (

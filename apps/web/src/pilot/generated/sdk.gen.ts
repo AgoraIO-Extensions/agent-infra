@@ -58,6 +58,7 @@ export const withdrawAgentApplication = <ThrowOnError extends boolean = false>(o
 export const listAgents = <ThrowOnError extends boolean = false>(options?: Options<ListAgentsData, ThrowOnError>): RequestResult<ListAgentsResponses, ListAgentsErrors, ThrowOnError> => (options?.client ?? client).get<ListAgentsResponses, ListAgentsErrors, ThrowOnError>({ url: '/api/v1/agents', ...options });
 
 export const createAgentDirectly = <ThrowOnError extends boolean = false>(options: Options<CreateAgentDirectlyData, ThrowOnError>): RequestResult<CreateAgentDirectlyResponses, CreateAgentDirectlyErrors, ThrowOnError> => (options.client ?? client).post<CreateAgentDirectlyResponses, CreateAgentDirectlyErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/agents',
     ...options,
     headers: {

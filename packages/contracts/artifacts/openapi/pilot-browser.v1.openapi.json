@@ -6563,7 +6563,12 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       }
     },
     "/api/v1/agents/{agentId}": {

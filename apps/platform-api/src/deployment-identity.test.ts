@@ -18,6 +18,37 @@ const identity: IdentityContext = {
 };
 
 describe("deployment identity scope", () => {
+	it("rejects malformed or invalid API authorization without using the browser identity", async () => {
+		let browserResolutions = 0;
+		const scope = createDeploymentIdentityScope({
+			async resolve() {
+				browserResolutions += 1;
+				return identity;
+			},
+			async resolveApiCredential() {
+				return null;
+			},
+			async hydrateUsers() {
+				return [];
+			},
+		});
+		for (const authorization of ["", "bearer invalid", "Bearer invalid"]) {
+			await scope.requestScope(
+				new Request("https://platform.test/agents", {
+					headers: { Authorization: authorization },
+				}),
+				async () => {
+					await expect(scope.currentIdentity("trace_01")).rejects.toMatchObject(
+						{
+							body: { code: "AUTHENTICATION_REQUIRED" },
+						},
+					);
+				},
+			);
+		}
+		expect(browserResolutions).toBe(0);
+	});
+
 	it("keeps concurrent HTTP identities separate and rechecks current status", async () => {
 		let active = true;
 		const scope = createDeploymentIdentityScope({

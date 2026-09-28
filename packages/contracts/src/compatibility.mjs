@@ -925,7 +925,7 @@ function isAgentDirectCreationOpenApiAddition(previous, current) {
 	};
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"6a96512f7940a4b06e579b8703550c814dbcf38268e228176eb97d8e0386ccfe"
+		"46c9deb24236e4470db7845b20cb9f25876bfc01d5e25ef209b66a56b1b97fe8"
 	)
 		return false;
 	const normalized = structuredClone(current);

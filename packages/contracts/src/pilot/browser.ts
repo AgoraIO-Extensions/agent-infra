@@ -1067,6 +1067,9 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		},
 		post: {
 			operationId: "createAgentDirectly",
+			security: [{ platformApiCredential: [] }] as {
+				platformApiCredential: string[];
+			}[],
 			requestParams: { header: idempotencyHeader },
 			requestBody: requiredJsonRequestBody(
 				AgentApplicationCreateRequestV2Schema,

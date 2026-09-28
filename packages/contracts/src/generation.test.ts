@@ -120,6 +120,13 @@ describe("standard contract artifacts", () => {
 		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
 			"/api/v1/conversations/{conversationId}/events",
 		);
+		expect(
+			artifacts.pilotBrowserOpenapi.paths["/api/v1/agents"].post.security,
+		).toEqual([{ platformApiCredential: [] }]);
+		expect(
+			artifacts.pilotBrowserOpenapi.components.securitySchemes
+				.platformApiCredential,
+		).toEqual({ type: "http", scheme: "bearer" });
 		expect(Object.keys(artifacts.pilotBrowserOpenapiV2.paths)).toEqual([
 			"/api/v2/admin/agent-applications",
 			"/api/v2/admin/agent-applications/{applicationId}/decision",
