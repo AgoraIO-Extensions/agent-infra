@@ -114,6 +114,7 @@ export function createConversationDispatchUseCaseV1(
 		authority: ConversationDispatchAuthorityV1,
 		hostSessionRef: string,
 		responseStatus: ConversationRuntimeStatusV1,
+		recoveredOriginalTurn = false,
 	): Promise<ConversationDispatchDecisionV1> {
 		const responseFinalStatus =
 			responseStatus === "completed" ||
@@ -177,11 +178,39 @@ export function createConversationDispatchUseCaseV1(
 		try {
 			// Recover a committed event whose acknowledgement was lost, including
 			// the last metadata event when the remaining stream is empty.
-			if (claim.runtimeCursor)
-				await dependencies.runtimeHost.acknowledge?.(
-					{ ...eventRequest, confirmedCursor: claim.runtimeCursor },
-					eventHeartbeat.signal,
-				);
+			if (claim.runtimeCursor && dependencies.runtimeHost.acknowledge) {
+				const committed = {
+					...eventRequest,
+					confirmedCursor: claim.runtimeCursor,
+				};
+				try {
+					await dependencies.runtimeHost.acknowledge(
+						committed,
+						eventHeartbeat.signal,
+					);
+				} catch (error) {
+					if (
+						!recoveredOriginalTurn ||
+						terminalCommitPossible ||
+						claim.metadataRecovery ||
+						authority.controlOnly ||
+						!dependencies.runtimeHost.renewAuthorization ||
+						!(error instanceof ConversationRuntimeHostError) ||
+						error.code !== "RUNTIME_GRANT_INVALID"
+					)
+						throw error;
+					if (!(await dependencies.store.renew({ claim, leaseDurationMs })))
+						return retryInterruptedDrain();
+					await dependencies.runtimeHost.renewAuthorization(
+						eventRequest,
+						eventHeartbeat.signal,
+					);
+					await dependencies.runtimeHost.acknowledge(
+						committed,
+						eventHeartbeat.signal,
+					);
+				}
+			}
 			for await (const eventInput of dependencies.runtimeHost.events(
 				eventRequest,
 				eventHeartbeat.signal,
@@ -1047,6 +1076,7 @@ export function createConversationDispatchUseCaseV1(
 				authority,
 				response.hostSessionRef,
 				response.result.status,
+				recoveringOriginalTurn,
 			);
 		},
 	};

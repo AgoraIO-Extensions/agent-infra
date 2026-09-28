@@ -10,6 +10,7 @@ import {
 	type ConversationEventUseCaseV1,
 	type ConversationRuntimeDispatchRequestV1,
 	type ConversationRuntimeEventV1,
+	ConversationRuntimeHostError,
 	type ConversationRuntimeHostPortV1,
 	type ConversationRuntimeOperationEventV2,
 	createConversationDispatchUseCaseV1,
@@ -720,6 +721,80 @@ describe("Conversation Worker dispatch", () => {
 		expect(harness.events.persisted).toHaveLength(2);
 		expect(inner.sideEffectCount()).toBe(1);
 	});
+
+	it.each([true, false])(
+		"%s: retries an expired recovered ACK only while its lease is held",
+		async (leaseOwned) => {
+			const calls: string[] = [];
+			const store = new MemoryDispatchStore(
+				claim({
+					executionStatus: "unknown",
+					hostSessionRef: "host-original",
+					runtimeCursor: "cursor-3",
+				}),
+			);
+			const renewLease = store.renew.bind(store);
+			store.renew = async () => {
+				calls.push("lease");
+				return renewLease();
+			};
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				async dispatch() {
+					throw new Error("Original Turn must not be dispatched again");
+				},
+				async recoverStatus() {
+					throw new Error("Unexpected recovery path");
+				},
+				async recoverOriginalStatus(request) {
+					calls.length = 0;
+					store.renewable = leaseOwned;
+					return {
+						schemaVersion: 2,
+						executionId: request.executionId,
+						hostSessionRef: request.hostSessionRef,
+						outcome: "found",
+						status: "running",
+					};
+				},
+				async renewAuthorization() {
+					calls.push("host-renew");
+				},
+				async acknowledge(request) {
+					calls.push(`ack:${request.confirmedCursor}`);
+					if (
+						request.confirmedCursor === "cursor-3" &&
+						!calls.includes("host-renew")
+					)
+						throw new ConversationRuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							false,
+						);
+				},
+				async *events(request) {
+					expect(request.afterCursor).toBe("cursor-3");
+					calls.push("events");
+					yield runtimeEvent(4);
+				},
+			};
+			const h = setup({ store, runtimeHost });
+			expect(await dispatch(h.useCase)).toMatchObject({
+				outcome: leaseOwned ? "accepted" : "retry",
+			});
+			expect(calls).toEqual(
+				leaseOwned
+					? [
+							"ack:cursor-3",
+							"lease",
+							"host-renew",
+							"ack:cursor-3",
+							"events",
+							"ack:cursor-4",
+						]
+					: ["ack:cursor-3", "lease"],
+			);
+			expect(h.events.persisted).toHaveLength(leaseOwned ? 1 : 0);
+		},
+	);
 
 	it("does not release an active execution when current authority is denied", async () => {
 		const store = new MemoryDispatchStore(
