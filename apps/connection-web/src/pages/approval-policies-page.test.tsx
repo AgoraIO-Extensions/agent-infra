@@ -59,6 +59,10 @@ const api = vi.hoisted(() => ({
 			providers: [],
 		}),
 	),
+	createApprovalCapabilityProfile: vi.fn(async (_body: unknown) => ({
+		capabilityProfileId: "profile-created",
+	})),
+	publishApprovalCapabilityProfile: vi.fn(async () => undefined),
 	listApprovalRoutingBlocked: vi.fn(async () => ({ requests: [] })),
 	listOutboxFailures: vi.fn(
 		async (): Promise<OutboxFailuresResponse> => ({ events: [] }),
@@ -125,6 +129,152 @@ afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
 	vi.restoreAllMocks();
+});
+
+it("applies whole-provider presets, retains manual choices across search and publishes exact actions", async () => {
+	const actions = [
+		{
+			id: "read-user",
+			name: "github.get_current_user",
+			effect: "READ" as const,
+		},
+		{
+			id: "read-branches",
+			name: "github.list_branches",
+			effect: "READ" as const,
+		},
+		{
+			id: "write-repo",
+			name: "github.create_repository",
+			effect: "WRITE" as const,
+		},
+		{
+			id: "write-branch",
+			name: "github.delete_branch",
+			effect: "WRITE" as const,
+		},
+	];
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		profiles: [],
+		policies: [],
+		disclaimers: [],
+		providers: [
+			{ provider: "github", providerReleaseId: "github-release", actions },
+			{
+				provider: "jira",
+				providerReleaseId: "jira-release",
+				actions: [
+					{ id: "jira-write", name: "jira.create_issue", effect: "WRITE" },
+				],
+			},
+		],
+	});
+	const { container } = render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	fireEvent.click(screen.getByRole("tab", { name: "能力与条款" }));
+	expect(
+		(screen.getByRole("button", { name: "全选" }) as HTMLButtonElement)
+			.disabled,
+	).toBe(true);
+	await screen.findByRole("option", { name: /github · github-release/ });
+	fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+		target: { value: "github-release" },
+	});
+	expect(screen.getByText("已选 0 / 4")).toBeTruthy();
+	fireEvent.click(screen.getByRole("button", { name: "仅只读" }));
+	expect(screen.getByText("已选 2 / 4")).toBeTruthy();
+	expect(
+		(
+			screen.getByRole("checkbox", {
+				name: /github.get_current_user/,
+			}) as HTMLInputElement
+		).checked,
+	).toBe(true);
+	fireEvent.change(screen.getByRole("searchbox", { name: "搜索能力" }), {
+		target: { value: "create" },
+	});
+	expect(
+		container.querySelectorAll('.approval-action-list input[type="checkbox"]'),
+	).toHaveLength(1);
+	fireEvent.click(screen.getByRole("button", { name: "全选" }));
+	expect(screen.getByText("已选 4 / 4")).toBeTruthy();
+	fireEvent.click(screen.getByRole("button", { name: "清空" }));
+	expect(screen.getByText("已选 0 / 4")).toBeTruthy();
+	fireEvent.click(screen.getByRole("button", { name: "仅只写" }));
+	expect(screen.getByText("已选 2 / 4")).toBeTruthy();
+	fireEvent.change(screen.getByRole("searchbox", { name: "搜索能力" }), {
+		target: { value: "" },
+	});
+	fireEvent.click(
+		screen.getByRole("checkbox", { name: /github.get_current_user/ }),
+	);
+	expect(screen.getByText("已选 3 / 4")).toBeTruthy();
+	fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+		target: { value: "jira-release" },
+	});
+	expect(screen.getByText("已选 0 / 1")).toBeTruthy();
+	expect(
+		screen.getByRole("searchbox", { name: "搜索能力" }).getAttribute("value"),
+	).toBe("");
+	expect(
+		(screen.getByRole("button", { name: "仅只读" }) as HTMLButtonElement)
+			.disabled,
+	).toBe(true);
+	fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+		target: { value: "github-release" },
+	});
+	expect(screen.getByText("已选 0 / 4")).toBeTruthy();
+	fireEvent.click(screen.getByRole("button", { name: "仅只写" }));
+	fireEvent.click(
+		screen.getByRole("checkbox", { name: /github.get_current_user/ }),
+	);
+	fireEvent.change(screen.getByRole("textbox", { name: "名称" }), {
+		target: { value: "GitHub Mixed" },
+	});
+	fireEvent.click(screen.getByRole("button", { name: "发布能力包" }));
+	await waitFor(() =>
+		expect(api.createApprovalCapabilityProfile).toHaveBeenCalledOnce(),
+	);
+	expect(api.createApprovalCapabilityProfile.mock.calls[0]?.[0]).toEqual({
+		providerReleaseId: "github-release",
+		name: "GitHub Mixed",
+		actionVersionIds: ["write-repo", "write-branch", "read-user"],
+	});
+});
+
+it("keeps the action checklist compact despite global input styles", () => {
+	const style = document.createElement("style");
+	style.textContent = readFileSync(
+		resolve(import.meta.dirname, "approval-policies-page.css"),
+		"utf8",
+	);
+	const checklist = document.createElement("div");
+	checklist.className = "approval-catalog-editor";
+	checklist.innerHTML =
+		'<div class="approval-action-list"><label><input type="checkbox"><span>github.get_current_user</span><small>READ</small></label></div>';
+	document.head.append(style);
+	document.body.append(checklist);
+	try {
+		const checkbox = checklist.querySelector("input");
+		const row = checklist.querySelector("label");
+		if (!checkbox || !row) throw new Error("Capability checklist is missing");
+		expect(getComputedStyle(checkbox).width).toBe("16px");
+		expect(getComputedStyle(checkbox).minHeight).toBe("16px");
+		expect(getComputedStyle(row).display).toBe("grid");
+		expect(getComputedStyle(row).gridTemplateColumns).toBe(
+			"16px minmax(0, 1fr) auto",
+		);
+	} finally {
+		style.remove();
+		checklist.remove();
+	}
 });
 
 it("does not clip employee candidates at the approval panel boundary", async () => {
