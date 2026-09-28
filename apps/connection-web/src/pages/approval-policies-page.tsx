@@ -23,6 +23,8 @@ import {
 } from "../components/ui/dialog";
 import { ConsoleShell, PageError } from "../shell";
 import { PageHeader } from "../views";
+import { ApprovalCatalogManager } from "./approval-catalog-manager";
+import { ApprovalPolicySelection } from "./approval-policy-selection";
 import "./approval-policies-page.css";
 
 type StageDraft = AccessPolicyDraft["stages"][number];
@@ -59,15 +61,8 @@ export function ApprovalPoliciesPage() {
 	const [allowPermanent, setAllowPermanent] = useState(false);
 	const [durationDays, setDurationDays] = useState<number | "">(90);
 	const [disclaimerIds, setDisclaimerIds] = useState<string[]>([]);
+	const [area, setArea] = useState<"policy" | "catalog">("policy");
 	const [tab, setTab] = useState<"chain" | "catalog">("chain");
-	const [profileName, setProfileName] = useState("");
-	const [selectedActions, setSelectedActions] = useState<string[]>([]);
-	const [actionQuery, setActionQuery] = useState("");
-	const [disclaimerContent, setDisclaimerContent] = useState("");
-	const [disclaimerMaterial, setDisclaimerMaterial] = useState(false);
-	const [disclaimerKind, setDisclaimerKind] = useState<"GLOBAL" | "PROVIDER">(
-		"GLOBAL",
-	);
 	const [notice, setNotice] = useState("");
 	const [blockedId, setBlockedId] = useState("");
 	const [rerouteCandidateIds, setRerouteCandidateIds] = useState<string[]>([]);
@@ -195,25 +190,21 @@ export function ApprovalPoliciesPage() {
 	const provider = catalog.data?.providers.find(
 		(item) => item.providerReleaseId === providerReleaseId,
 	);
-	const providerActions = provider?.actions ?? [];
-	const readActions = providerActions.filter(
-		(action) => action.effect === "READ",
-	);
-	const writeActions = providerActions.filter(
-		(action) => action.effect === "WRITE",
-	);
-	const normalizedActionQuery = actionQuery.trim().toLowerCase();
-	const visibleActions = providerActions.filter(
-		(action) =>
-			action.name.toLowerCase().includes(normalizedActionQuery) ||
-			action.effect.toLowerCase().includes(normalizedActionQuery),
-	);
 	const profile = catalog.data?.profiles.find((item) => item.id === profileId);
 	const activeStage = stages[stageIndex];
 	const selectedPolicy = catalog.data?.policies.find(
 		(item) => item.id === policyId,
 	);
 	const published = selectedPolicy?.status === "PUBLISHED";
+	const policyHasGlobalDisclaimer =
+		selectedPolicy?.disclaimerVersionIds.some((id) =>
+			catalog.data?.disclaimers.some(
+				(item) =>
+					item.id === id &&
+					item.kind === "GLOBAL" &&
+					item.status === "PUBLISHED",
+			),
+		) ?? false;
 	useEffect(() => {
 		if (creatingNew || policyId || !catalog.data?.policies.length) return;
 		const first = catalog.data.policies[0];
@@ -221,6 +212,7 @@ export function ApprovalPoliciesPage() {
 		setPolicyId(first.id);
 		setProfileId(first.capabilityProfileId);
 		setProviderReleaseId(first.providerReleaseId);
+		setDisclaimerIds(first.disclaimerVersionIds);
 	}, [catalog.data, creatingNew, policyId]);
 	const savedStages = useQuery({
 		queryKey: ["approval-policy-stages", policyId],
@@ -304,46 +296,18 @@ export function ApprovalPoliciesPage() {
 			});
 		},
 	});
-	const createProfile = useMutation({
-		mutationFn: connectionApi.createApprovalCapabilityProfile,
-		onSuccess: async (created) => {
-			await connectionApi.publishApprovalCapabilityProfile(
-				created.capabilityProfileId,
-			);
-			setProfileId(created.capabilityProfileId);
-			setNotice("能力包已发布。 ");
-			await refresh();
-		},
-	});
-	const createDisclaimer = useMutation({
-		mutationFn: connectionApi.createApprovalDisclaimer,
-		onSuccess: async (created) => {
-			await connectionApi.publishApprovalDisclaimer(
-				created.disclaimerVersionId,
-			);
-			setDisclaimerIds((current) => [...current, created.disclaimerVersionId]);
-			setDisclaimerContent("");
-			setDisclaimerMaterial(false);
-			setNotice("免责声明版本已发布。 ");
-			await refresh();
-		},
-	});
 	const busy =
 		loadDraft.isPending ||
 		updatePolicy.isPending ||
 		createPolicy.isPending ||
 		publishPolicy.isPending ||
-		revokePolicy.isPending ||
-		createProfile.isPending ||
-		createDisclaimer.isPending;
+		revokePolicy.isPending;
 	const error =
 		loadDraft.error ||
 		updatePolicy.error ||
 		createPolicy.error ||
 		publishPolicy.error ||
 		revokePolicy.error ||
-		createProfile.error ||
-		createDisclaimer.error ||
 		reroute.error ||
 		revokeAuthorization.error ||
 		createCampaign.error;
@@ -363,6 +327,7 @@ export function ApprovalPoliciesPage() {
 		setCreatingNew(false);
 		setProfileId(next.capabilityProfileId);
 		setProviderReleaseId(next.providerReleaseId);
+		setDisclaimerIds(next.disclaimerVersionIds);
 		setStageIndex(0);
 		setTab("chain");
 	}
@@ -372,12 +337,30 @@ export function ApprovalPoliciesPage() {
 			return;
 		}
 		const base = editingDraft?.draft;
+		const globalId =
+			disclaimerIds.find((id) =>
+				catalog.data?.disclaimers.some(
+					(item) => item.id === id && item.kind === "GLOBAL",
+				),
+			) ??
+			catalog.data?.disclaimers.find(
+				(item) => item.kind === "GLOBAL" && item.status === "PUBLISHED",
+			)?.id;
 		const body: AccessPolicyDraft = {
 			allowPermanent,
 			capabilityProfileId: profile.id,
 			connectTtlSeconds: base?.connectTtlSeconds ?? 7 * 86_400,
 			defaultDurationDays: durationDays === "" ? undefined : durationDays,
-			disclaimerVersionIds: disclaimerIds,
+			disclaimerVersionIds: [
+				...(globalId ? [globalId] : []),
+				...disclaimerIds.filter(
+					(id) =>
+						id !== globalId &&
+						!catalog.data?.disclaimers.some(
+							(item) => item.id === id && item.kind === "GLOBAL",
+						),
+				),
+			],
 			durations: [
 				...(base && durationDays === (base.defaultDurationDays ?? "")
 					? base.durations.filter((duration) => duration.kind === "FINITE")
@@ -399,7 +382,7 @@ export function ApprovalPoliciesPage() {
 
 	return (
 		<ConsoleShell>
-			<PageHeader title="连接审批策略" />
+			<PageHeader title="连接审批管理" />
 			{catalog.isError ? <PageError error={catalog.error} /> : null}
 			{error ? <PageError error={error} /> : null}
 			{notice ? (
@@ -407,7 +390,38 @@ export function ApprovalPoliciesPage() {
 					{notice}
 				</p>
 			) : null}
-			<div className="approval-layout">
+			<div
+				className="approval-area-tabs"
+				role="tablist"
+				aria-label="审批管理视图"
+			>
+				<button
+					type="button"
+					role="tab"
+					aria-selected={area === "policy"}
+					className={area === "policy" ? "active" : ""}
+					onClick={() => setArea("policy")}
+				>
+					审批策略
+				</button>
+				<button
+					type="button"
+					role="tab"
+					aria-selected={area === "catalog"}
+					className={area === "catalog" ? "active" : ""}
+					onClick={() => setArea("catalog")}
+				>
+					目录管理
+				</button>
+			</div>
+			{area === "catalog" ? (
+				<ApprovalCatalogManager
+					catalog={catalog.data}
+					initialProfileId={profileId}
+					onRefresh={refresh}
+				/>
+			) : null}
+			<div className="approval-layout" hidden={area === "catalog"}>
 				<aside className="approval-list" aria-label="审批策略列表">
 					<div className="approval-list-header">
 						<strong>策略版本</strong>
@@ -419,6 +433,9 @@ export function ApprovalPoliciesPage() {
 								setCreatingNew(true);
 								setEditingDraft(null);
 								setPolicyId("");
+								setProviderReleaseId("");
+								setProfileId("");
+								setDisclaimerIds([]);
 								setStages([newStage(1)]);
 								setStageIndex(0);
 							}}
@@ -685,292 +702,40 @@ export function ApprovalPoliciesPage() {
 							</aside>
 						</div>
 					) : (
-						<div className="approval-catalog-editor">
-							<label>
-								Provider
-								<select
-									value={providerReleaseId}
-									disabled={Boolean(policyId)}
-									onChange={(event) => {
-										setProviderReleaseId(event.target.value);
-										setProfileId("");
-										setSelectedActions([]);
-										setActionQuery("");
-										const nextProvider = catalog.data?.providers.find(
-											(item) => item.providerReleaseId === event.target.value,
-										)?.provider;
-										setDisclaimerIds((current) =>
-											current.filter((id) => {
-												const disclaimer = catalog.data?.disclaimers.find(
-													(item) => item.id === id,
-												);
-												return (
-													disclaimer?.kind === "GLOBAL" ||
-													(disclaimer?.kind === "PROVIDER" &&
-														disclaimer.providerId === nextProvider)
-												);
-											}),
+						<ApprovalPolicySelection
+							catalog={catalog.data}
+							providerReleaseId={providerReleaseId}
+							profileId={profileId}
+							disclaimerIds={disclaimerIds}
+							durationDays={durationDays}
+							allowPermanent={allowPermanent}
+							editable={editable}
+							locked={Boolean(policyId)}
+							onProvider={(nextId) => {
+								setProviderReleaseId(nextId);
+								setProfileId("");
+								const nextProvider = catalog.data?.providers.find(
+									(item) => item.providerReleaseId === nextId,
+								)?.provider;
+								setDisclaimerIds((current) =>
+									current.filter((id) => {
+										const disclaimer = catalog.data?.disclaimers.find(
+											(item) => item.id === id,
 										);
-									}}
-								>
-									<option value="">选择连接器</option>
-									{catalog.data?.providers.map((item) => (
-										<option
-											key={item.providerReleaseId}
-											value={item.providerReleaseId}
-										>
-											{item.provider} · {item.providerReleaseId}
-										</option>
-									))}
-								</select>
-							</label>
-							<label>
-								能力包
-								<select
-									value={profileId}
-									disabled={Boolean(policyId)}
-									onChange={(event) => setProfileId(event.target.value)}
-								>
-									<option value="">选择已发布能力包</option>
-									{catalog.data?.profiles
-										.filter(
-											(item) =>
-												item.providerReleaseId === providerReleaseId &&
-												item.status === "PUBLISHED",
-										)
-										.map((item) => (
-											<option key={item.id} value={item.id}>
-												{item.name} · {item.effectCeiling}
-											</option>
-										))}
-								</select>
-							</label>
-							{editable ? (
-								<>
-									<div className="approval-subsection">
-										<h3>新能力包</h3>
-										<label>
-											名称
-											<input
-												placeholder="能力包名称"
-												value={profileName}
-												onChange={(event) => setProfileName(event.target.value)}
-											/>
-										</label>
-										<div className="approval-action-toolbar">
-											<input
-												type="search"
-												aria-label="搜索能力"
-												placeholder="搜索能力"
-												value={actionQuery}
-												disabled={!provider}
-												onChange={(event) => setActionQuery(event.target.value)}
-											/>
-											<span role="status">
-												已选 {selectedActions.length} / {providerActions.length}
-											</span>
-											<fieldset
-												className="approval-action-presets"
-												aria-label="快捷选择"
-											>
-												<button
-													type="button"
-													disabled={!providerActions.length}
-													onClick={() =>
-														setSelectedActions(
-															providerActions.map((action) => action.id),
-														)
-													}
-												>
-													全选
-												</button>
-												<button
-													type="button"
-													disabled={!readActions.length}
-													onClick={() =>
-														setSelectedActions(
-															readActions.map((action) => action.id),
-														)
-													}
-												>
-													仅只读
-												</button>
-												<button
-													type="button"
-													disabled={!writeActions.length}
-													onClick={() =>
-														setSelectedActions(
-															writeActions.map((action) => action.id),
-														)
-													}
-												>
-													仅只写
-												</button>
-												<button
-													type="button"
-													disabled={!selectedActions.length}
-													onClick={() => setSelectedActions([])}
-												>
-													清空
-												</button>
-											</fieldset>
-										</div>
-										<div className="approval-action-list">
-											{visibleActions.map((action) => (
-												<label key={action.id}>
-													<input
-														type="checkbox"
-														checked={selectedActions.includes(action.id)}
-														onChange={() =>
-															setSelectedActions((value) =>
-																value.includes(action.id)
-																	? value.filter((id) => id !== action.id)
-																	: [...value, action.id],
-															)
-														}
-													/>
-													<span>{action.name}</span>
-													<small
-														className={
-															action.effect === "WRITE"
-																? "approval-action-write"
-																: ""
-														}
-													>
-														{action.effect}
-													</small>
-												</label>
-											))}
-											{!provider ? (
-												<p>选择连接器后显示能力</p>
-											) : !visibleActions.length ? (
-												<p>没有匹配的能力</p>
-											) : null}
-										</div>
-										<Button
-											disabled={
-												busy || !profileName.trim() || !selectedActions.length
-											}
-											onClick={() =>
-												createProfile.mutate({
-													providerReleaseId,
-													name: profileName,
-													actionVersionIds: selectedActions,
-												})
-											}
-										>
-											发布能力包
-										</Button>
-									</div>
-									<div className="approval-subsection">
-										<h3>免责声明</h3>
-										<fieldset>
-											<legend>已发布版本</legend>
-											{catalog.data?.disclaimers
-												.filter(
-													(item) =>
-														item.status === "PUBLISHED" &&
-														(item.kind === "GLOBAL" ||
-															item.providerId === provider?.provider),
-												)
-												.map((item) => (
-													<label className="approval-disclaimer" key={item.id}>
-														<input
-															type="checkbox"
-															checked={disclaimerIds.includes(item.id)}
-															onChange={() =>
-																setDisclaimerIds((value) =>
-																	value.includes(item.id)
-																		? value.filter((id) => id !== item.id)
-																		: [...value, item.id],
-																)
-															}
-														/>
-														{item.kind === "GLOBAL"
-															? "全局基础条款"
-															: `${item.providerId} 附加条款`}{" "}
-														· {item.locale}
-													</label>
-												))}
-										</fieldset>
-										<select
-											value={disclaimerKind}
-											onChange={(event) =>
-												setDisclaimerKind(
-													event.target.value as "GLOBAL" | "PROVIDER",
-												)
-											}
-										>
-											<option value="GLOBAL">全局基础条款</option>
-											<option value="PROVIDER">Provider 附加条款</option>
-										</select>
-										<textarea
-											placeholder="填写已批准的正式免责声明正文"
-											value={disclaimerContent}
-											onChange={(event) =>
-												setDisclaimerContent(event.target.value)
-											}
-										/>
-										<label className="approval-toggle">
-											<input
-												type="checkbox"
-												checked={disclaimerMaterial}
-												onChange={(event) =>
-													setDisclaimerMaterial(event.target.checked)
-												}
-											/>
-											重大内容变化
-										</label>
-										<Button
-											disabled={
-												busy ||
-												!disclaimerContent.trim() ||
-												(disclaimerKind === "PROVIDER" && !provider)
-											}
-											onClick={() =>
-												createDisclaimer.mutate({
-													kind: disclaimerKind,
-													locale: "zh-CN",
-													content: disclaimerContent,
-													materialChange: disclaimerMaterial,
-													...(disclaimerKind === "PROVIDER"
-														? { providerId: provider?.provider }
-														: {}),
-												})
-											}
-										>
-											发布免责声明版本
-										</Button>
-									</div>
-									<label>
-										允许时长（天）
-										<input
-											type="number"
-											min={1}
-											max={3650}
-											value={durationDays}
-											onChange={(event) =>
-												setDurationDays(
-													event.target.value === ""
-														? ""
-														: Number(event.target.value),
-												)
-											}
-										/>
-									</label>
-									<label className="approval-toggle">
-										<input
-											type="checkbox"
-											checked={allowPermanent}
-											onChange={(event) =>
-												setAllowPermanent(event.target.checked)
-											}
-										/>
-										允许永久有效
-									</label>
-								</>
-							) : null}
-						</div>
+										return (
+											disclaimer?.kind === "GLOBAL" ||
+											(disclaimer?.kind === "PROVIDER" &&
+												disclaimer.providerId === nextProvider)
+										);
+									}),
+								);
+							}}
+							onProfile={setProfileId}
+							onDisclaimerIds={setDisclaimerIds}
+							onDurationDays={setDurationDays}
+							onAllowPermanent={setAllowPermanent}
+							onOpenDirectory={() => setArea("catalog")}
+						/>
 					)}
 					<div className="approval-editor-actions">
 						{editable ? (
@@ -999,11 +764,17 @@ export function ApprovalPoliciesPage() {
 									编辑草稿
 								</Button>
 								<Button
-									disabled={busy || !catalog.data?.approvalDirectoryEnabled}
+									disabled={
+										busy ||
+										!policyHasGlobalDisclaimer ||
+										!catalog.data?.approvalDirectoryEnabled
+									}
 									title={
 										!catalog.data?.approvalDirectoryEnabled
 											? "员工目录尚未启用，暂不能发布审批策略"
-											: undefined
+											: !policyHasGlobalDisclaimer
+												? "先保存包含全局基础条款的草稿"
+												: undefined
 									}
 									onClick={() => {
 										setPolicyMaterial(false);
@@ -1036,8 +807,14 @@ export function ApprovalPoliciesPage() {
 					</div>
 				</section>
 			</div>
-			<ApprovalDelegationsPanel />
-			<section className="approval-routing" aria-label="审批异常处理">
+			<div hidden={area === "catalog"}>
+				<ApprovalDelegationsPanel />
+			</div>
+			<section
+				className="approval-routing"
+				aria-label="审批异常处理"
+				hidden={area === "catalog"}
+			>
 				<div className="section-heading">
 					<div>
 						<h2>需要管理员处理</h2>
@@ -1144,7 +921,11 @@ export function ApprovalPoliciesPage() {
 					<p>{blocked.isPending ? "正在加载…" : "当前没有需要处理的申请。"}</p>
 				)}
 			</section>
-			<section className="approval-authorizations" aria-label="投递异常">
+			<section
+				className="approval-authorizations"
+				aria-label="投递异常"
+				hidden={area === "catalog"}
+			>
 				<div className="section-heading">
 					<h2>投递异常</h2>
 					<span className="status">
@@ -1195,7 +976,11 @@ export function ApprovalPoliciesPage() {
 					<p>{outboxFailures.isPending ? "正在加载…" : "当前没有投递异常。"}</p>
 				)}
 			</section>
-			<section className="approval-authorizations" aria-label="连接资格">
+			<section
+				className="approval-authorizations"
+				aria-label="连接资格"
+				hidden={area === "catalog"}
+			>
 				<div className="section-heading">
 					<div>
 						<h2>连接资格</h2>

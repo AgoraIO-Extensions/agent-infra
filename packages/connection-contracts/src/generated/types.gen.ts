@@ -512,6 +512,24 @@ export type CapabilityProfileCreated = {
     capabilityProfileId: string;
 };
 
+export type CapabilityProfileDetailResponse = {
+    profile: {
+        id: string;
+        providerReleaseId: string;
+        name: string;
+        effectCeiling: 'READ' | 'WRITE';
+        revision: string;
+        status: string;
+        actions: Array<{
+            id: string;
+            name: string;
+            description: string;
+            effect: 'READ' | 'WRITE';
+            status: string;
+        }>;
+    };
+};
+
 export type DisclaimerDraft = {
     kind: 'GLOBAL' | 'PROVIDER' | 'POLICY';
     locale: string;
@@ -568,6 +586,7 @@ export type AdminDisclaimersResponse = {
         kind: string;
         locale: string;
         content: string;
+        revision: string;
         materialChange: boolean;
         providerId: string | null;
         status: string;
@@ -598,6 +617,7 @@ export type ApprovalPolicyCatalog = {
         providerReleaseId: string;
         name: string;
         effectCeiling: 'READ' | 'WRITE';
+        revision: string;
         status: string;
     }>;
     policies: Array<{
@@ -607,12 +627,14 @@ export type ApprovalPolicyCatalog = {
         materialChange: boolean;
         status: string;
         revision: string;
+        disclaimerVersionIds: Array<string>;
     }>;
     disclaimers: Array<{
         id: string;
         kind: string;
         locale: string;
         content: string;
+        revision: string;
         materialChange: boolean;
         providerId: string | null;
         status: string;
@@ -2115,6 +2137,80 @@ export type CreateApprovalCapabilityProfileResponses = {
 
 export type CreateApprovalCapabilityProfileResponse = CreateApprovalCapabilityProfileResponses[keyof CreateApprovalCapabilityProfileResponses];
 
+export type GetApprovalCapabilityProfileData = {
+    body?: never;
+    path: {
+        profileId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/capability-profiles/{profileId}';
+};
+
+export type GetApprovalCapabilityProfileErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type GetApprovalCapabilityProfileError = GetApprovalCapabilityProfileErrors[keyof GetApprovalCapabilityProfileErrors];
+
+export type GetApprovalCapabilityProfileResponses = {
+    /**
+     * Exact capability profile members for administrators
+     */
+    200: CapabilityProfileDetailResponse;
+};
+
+export type GetApprovalCapabilityProfileResponse = GetApprovalCapabilityProfileResponses[keyof GetApprovalCapabilityProfileResponses];
+
+export type UpdateApprovalCapabilityProfileDraftData = {
+    body: CapabilityProfileDraft;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        profileId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/capability-profiles/{profileId}';
+};
+
+export type UpdateApprovalCapabilityProfileDraftErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type UpdateApprovalCapabilityProfileDraftError = UpdateApprovalCapabilityProfileDraftErrors[keyof UpdateApprovalCapabilityProfileDraftErrors];
+
+export type UpdateApprovalCapabilityProfileDraftResponses = {
+    /**
+     * Profile draft updated
+     */
+    200: CapabilityProfileCreated;
+};
+
+export type UpdateApprovalCapabilityProfileDraftResponse = UpdateApprovalCapabilityProfileDraftResponses[keyof UpdateApprovalCapabilityProfileDraftResponses];
+
 export type PublishApprovalCapabilityProfileData = {
     body?: never;
     headers: {
@@ -2217,6 +2313,49 @@ export type CreateApprovalDisclaimerResponses = {
 };
 
 export type CreateApprovalDisclaimerResponse = CreateApprovalDisclaimerResponses[keyof CreateApprovalDisclaimerResponses];
+
+export type UpdateApprovalDisclaimerDraftData = {
+    body: DisclaimerDraft;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        disclaimerId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/disclaimers/{disclaimerId}';
+};
+
+export type UpdateApprovalDisclaimerDraftErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type UpdateApprovalDisclaimerDraftError = UpdateApprovalDisclaimerDraftErrors[keyof UpdateApprovalDisclaimerDraftErrors];
+
+export type UpdateApprovalDisclaimerDraftResponses = {
+    /**
+     * Disclaimer draft updated
+     */
+    200: DisclaimerCreated;
+};
+
+export type UpdateApprovalDisclaimerDraftResponse = UpdateApprovalDisclaimerDraftResponses[keyof UpdateApprovalDisclaimerDraftResponses];
 
 export type PublishApprovalDisclaimerData = {
     body?: never;

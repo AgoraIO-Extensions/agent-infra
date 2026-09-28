@@ -1016,6 +1016,73 @@ export function createConnectionOAuthApp(
 		});
 
 		app.get(
+			"/api/v1/connection/admin/capability-profiles/:profileId",
+			async (context) => {
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				context.header("cache-control", "no-store");
+				return context.json({
+					profile: await catalog.getCapabilityProfile(
+						context.req.param("profileId"),
+					),
+				});
+			},
+		);
+
+		app.put(
+			"/api/v1/connection/admin/capability-profiles/:profileId",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const ifMatch = context.req.header("if-match");
+				if (!ifMatch || !/^"[1-9][0-9]*"$/.test(ifMatch))
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"A current draft revision is required",
+					);
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				const body = parseJsonBody(
+					capabilityProfileDraftSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const id = context.req.param("profileId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.capability-profile.draft-update",
+							request: { ...body, id, expectedRevision: ifMatch.slice(1, -1) },
+							subject: session.account.principalId,
+						},
+						() =>
+							catalog.updateCapabilityProfileDraft({
+								...body,
+								id,
+								expectedRevision: ifMatch.slice(1, -1),
+								actorPrincipalId: session.account.principalId,
+							}),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result);
+			},
+		);
+
+		app.get(
 			"/api/v1/connection/admin/access-policies/:policyId/stages",
 			async (context) => {
 				const session = await currentBrowserApiAdministrator(context);
@@ -1157,6 +1224,53 @@ export function createConnectionOAuthApp(
 			context.header("cache-control", "no-store");
 			return context.json(result, 201);
 		});
+
+		app.put(
+			"/api/v1/connection/admin/disclaimers/:disclaimerId",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const ifMatch = context.req.header("if-match");
+				if (!ifMatch || !/^"[1-9][0-9]*"$/.test(ifMatch))
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"A current draft revision is required",
+					);
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				const body = parseJsonBody(
+					disclaimerDraftSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const id = context.req.param("disclaimerId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.disclaimer.draft-update",
+							request: { ...body, id, expectedRevision: ifMatch.slice(1, -1) },
+							subject: session.account.principalId,
+						},
+						() =>
+							catalog.updateDisclaimerDraft({
+								...body,
+								id,
+								expectedRevision: ifMatch.slice(1, -1),
+								actorPrincipalId: session.account.principalId,
+							}),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result);
+			},
+		);
 
 		app.post(
 			"/api/v1/connection/admin/disclaimers/:disclaimerId/publish",

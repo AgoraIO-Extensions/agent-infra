@@ -346,10 +346,11 @@ export class PostgresConnectionApprovalRepository {
 					id: string;
 					name: string;
 					provider_release_id: string;
+					revision: string;
 					status: string;
 				}[]
 			>`
-				SELECT id, provider_release_id, name, effect_ceiling, status
+				SELECT id, provider_release_id, name, effect_ceiling, revision::text, status
 				FROM connection_capability_profiles ORDER BY name, created_at DESC
 			`,
 			this.sql<
@@ -360,10 +361,15 @@ export class PostgresConnectionApprovalRepository {
 					revision: string;
 					material_change: boolean;
 					status: string;
+					disclaimer_version_ids: string[];
 				}[]
 			>`
 				SELECT id, provider_release_id, capability_profile_id,
-					status, revision::text, material_change
+					status, revision::text, material_change,
+					COALESCE((SELECT array_agg(disclaimer_version_id ORDER BY ordinal)
+						FROM connection_access_policy_disclaimers
+						WHERE policy_version_id = connection_access_policy_versions.id),
+						ARRAY[]::text[]) AS disclaimer_version_ids
 				FROM connection_access_policy_versions ORDER BY created_at DESC
 			`,
 			this.sql<
@@ -374,10 +380,11 @@ export class PostgresConnectionApprovalRepository {
 					locale: string;
 					material_change: boolean;
 					provider_id: string | null;
+					revision: string;
 					status: string;
 				}[]
 			>`
-				SELECT id, kind, locale, content, material_change, provider_id, status
+				SELECT id, kind, locale, content, material_change, provider_id, revision::text, status
 				FROM connection_disclaimer_versions ORDER BY created_at DESC
 			`,
 		]);
@@ -387,12 +394,14 @@ export class PostgresConnectionApprovalRepository {
 				id: profile.id,
 				name: profile.name,
 				providerReleaseId: profile.provider_release_id,
+				revision: profile.revision,
 				status: profile.status,
 			})),
 			policies: policies.map((policy) => ({
 				capabilityProfileId: policy.capability_profile_id,
 				id: policy.id,
 				materialChange: policy.material_change,
+				disclaimerVersionIds: policy.disclaimer_version_ids,
 				providerReleaseId: policy.provider_release_id,
 				revision: policy.revision,
 				status: policy.status,
@@ -404,8 +413,57 @@ export class PostgresConnectionApprovalRepository {
 				locale: disclaimer.locale,
 				materialChange: disclaimer.material_change,
 				providerId: disclaimer.provider_id,
+				revision: disclaimer.revision,
 				status: disclaimer.status,
 			})),
+		};
+	}
+
+	async getCapabilityProfile(capabilityProfileId: string) {
+		const [profile] = await this.sql<
+			{
+				effect_ceiling: "READ" | "WRITE";
+				id: string;
+				name: string;
+				provider_release_id: string;
+				revision: string;
+				status: string;
+			}[]
+		>`
+			SELECT id, provider_release_id, name, effect_ceiling, revision::text, status
+			FROM connection_capability_profiles WHERE id = ${capabilityProfileId}
+		`;
+		if (!profile)
+			throw new ConnectionError(
+				"RESOURCE_NOT_FOUND",
+				"Capability profile is unavailable",
+			);
+		const actions = await this.sql<
+			{
+				description: string;
+				effect: "READ" | "WRITE";
+				id: string;
+				name: string;
+				status: string;
+			}[]
+		>`
+			SELECT action.id, action.name, action.description, action.effect, action.status
+			FROM connection_capability_profile_actions member
+			JOIN connection_action_versions action
+				ON action.id = member.action_version_id
+				AND action.provider_release_id = member.provider_release_id
+			WHERE member.capability_profile_id = ${profile.id}
+				AND member.provider_release_id = ${profile.provider_release_id}
+			ORDER BY action.name, action.id
+		`;
+		return {
+			id: profile.id,
+			providerReleaseId: profile.provider_release_id,
+			name: profile.name,
+			effectCeiling: profile.effect_ceiling,
+			revision: profile.revision,
+			status: profile.status,
+			actions,
 		};
 	}
 
@@ -516,6 +574,72 @@ export class PostgresConnectionApprovalRepository {
 					) VALUES (${input.id}, ${input.providerReleaseId}, ${actionVersionId})
 				`;
 			}
+			await sql`
+				UPDATE connection_capability_profiles SET effect_ceiling = CASE WHEN EXISTS (
+					SELECT 1 FROM connection_capability_profile_actions member
+					JOIN connection_action_versions action
+						ON action.id = member.action_version_id
+						AND action.provider_release_id = member.provider_release_id
+					WHERE member.capability_profile_id = ${input.id} AND action.effect = 'WRITE'
+				) THEN 'WRITE' ELSE 'READ' END WHERE id = ${input.id}
+			`;
+		});
+		return { capabilityProfileId: input.id };
+	}
+
+	async updateCapabilityProfileDraft(
+		input: CapabilityProfileDraft & {
+			actorPrincipalId: string;
+			expectedRevision: string;
+		},
+	) {
+		unique(input.actionVersionIds, "Capability profile actions are invalid");
+		if (!/^[1-9][0-9]*$/.test(input.expectedRevision))
+			invalid("Draft revision is invalid");
+		await this.sql.begin(async (sql) => {
+			const [admin] = await sql<{ id: string }[]>`
+				SELECT principal.id FROM connection_principals principal
+				JOIN connection_principal_roles role_binding ON role_binding.principal_id = principal.id
+				WHERE principal.id = ${input.actorPrincipalId} AND principal.status = 'ACTIVE'
+					AND role_binding.role = 'CONNECTION_ADMIN' AND role_binding.status = 'ACTIVE'
+				FOR SHARE OF principal, role_binding
+			`;
+			if (!admin)
+				throw new ConnectionError("FORBIDDEN", "Administrator required");
+			const [profile] = await sql<{ provider_release_id: string }[]>`
+				SELECT provider_release_id FROM connection_capability_profiles
+				WHERE id = ${input.id} AND status = 'DRAFT'
+					AND revision::text = ${input.expectedRevision} FOR UPDATE
+			`;
+			if (!profile || profile.provider_release_id !== input.providerReleaseId)
+				invalid(
+					"Capability profile draft is unavailable or its revision changed",
+				);
+			await sql`DELETE FROM connection_capability_profile_actions WHERE capability_profile_id = ${input.id}`;
+			for (const actionVersionId of input.actionVersionIds)
+				await sql`
+					INSERT INTO connection_capability_profile_actions (
+						capability_profile_id, provider_release_id, action_version_id
+					) VALUES (${input.id}, ${input.providerReleaseId}, ${actionVersionId})
+				`;
+			await sql`
+				UPDATE connection_capability_profiles SET name = ${input.name},
+					effect_ceiling = CASE WHEN EXISTS (
+						SELECT 1 FROM connection_capability_profile_actions member
+						JOIN connection_action_versions action
+							ON action.id = member.action_version_id
+							AND action.provider_release_id = member.provider_release_id
+						WHERE member.capability_profile_id = ${input.id} AND action.effect = 'WRITE'
+					) THEN 'WRITE' ELSE 'READ' END,
+					revision = revision + 1
+				WHERE id = ${input.id}
+			`;
+			await this.auditAndEnqueue(sql, {
+				actorPrincipalId: input.actorPrincipalId,
+				aggregateId: input.id,
+				event: "connection.capability-profile.draft-updated",
+				aggregateRevision: String(BigInt(input.expectedRevision) + 1n),
+			});
 		});
 		return { capabilityProfileId: input.id };
 	}
@@ -636,6 +760,46 @@ export class PostgresConnectionApprovalRepository {
 				${input.materialChange}, 'DRAFT'
 			)
 		`;
+		return { disclaimerVersionId: input.id };
+	}
+
+	async updateDisclaimerDraft(
+		input: Omit<DisclaimerDraft, "ownerMetadata"> & {
+			actorPrincipalId: string;
+			expectedRevision: string;
+			id: string;
+		},
+	) {
+		if (!/^[1-9][0-9]*$/.test(input.expectedRevision))
+			invalid("Draft revision is invalid");
+		await this.sql.begin(async (sql) => {
+			const [admin] = await sql<{ id: string }[]>`
+				SELECT principal.id FROM connection_principals principal
+				JOIN connection_principal_roles role_binding ON role_binding.principal_id = principal.id
+				WHERE principal.id = ${input.actorPrincipalId} AND principal.status = 'ACTIVE'
+					AND role_binding.role = 'CONNECTION_ADMIN' AND role_binding.status = 'ACTIVE'
+				FOR SHARE OF principal, role_binding
+			`;
+			if (!admin)
+				throw new ConnectionError("FORBIDDEN", "Administrator required");
+			const result = await sql`
+				UPDATE connection_disclaimer_versions
+				SET kind = ${input.kind}, provider_id = ${input.providerId ?? null},
+					locale = ${input.locale}, content = ${input.content},
+					content_sha256 = ${createHash("sha256").update(input.content, "utf8").digest("hex")},
+					material_change = ${input.materialChange}, revision = revision + 1
+				WHERE id = ${input.id} AND status = 'DRAFT'
+					AND revision::text = ${input.expectedRevision}
+			`;
+			if (result.count !== 1)
+				invalid("Disclaimer draft is unavailable or its revision changed");
+			await this.auditAndEnqueue(sql, {
+				actorPrincipalId: input.actorPrincipalId,
+				aggregateId: input.id,
+				event: "connection.disclaimer.draft-updated",
+				aggregateRevision: String(BigInt(input.expectedRevision) + 1n),
+			});
+		});
 		return { disclaimerVersionId: input.id };
 	}
 

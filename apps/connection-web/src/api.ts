@@ -33,6 +33,7 @@ import {
 	archiveConnectionNotifications,
 	authorizationConsentRequestSchema,
 	authorizationPreviewRequestSchema,
+	type CapabilityProfileDetailResponse,
 	type CapabilityProfileDraft,
 	type ConnectionCreated,
 	type ConnectionsResponse,
@@ -54,6 +55,7 @@ import {
 	disclaimerDraftSchema,
 	disconnectConnection,
 	disconnectSharedConnection,
+	getApprovalCapabilityProfile,
 	getApprovalPolicyStages,
 	getAuditCall,
 	getConnectionAccessPolicyDraft,
@@ -122,6 +124,8 @@ import {
 	submitConnectionAccessRenewal,
 	submitConnectionAccessRequest,
 	type TokenList,
+	updateApprovalCapabilityProfileDraft,
+	updateApprovalDisclaimerDraft,
 	updateConnectionAccessPolicy,
 	upgradeProviderConnection,
 } from "@agent-infra/connection-contracts";
@@ -363,6 +367,10 @@ export const connectionApi = {
 		),
 	listApprovalPolicyCatalog: () =>
 		unwrap<ApprovalPolicyCatalog>(listApprovalPolicyCatalog()),
+	getApprovalCapabilityProfile: (profileId: string) =>
+		unwrap<CapabilityProfileDetailResponse>(
+			getApprovalCapabilityProfile({ path: { profileId } }),
+		),
 	listApprovalDelegations: () =>
 		unwrap<ApprovalDelegationsResponse>(listApprovalDelegations()),
 	listOutboxFailures: () =>
@@ -402,6 +410,22 @@ export const connectionApi = {
 				headers: commandHeaders(),
 			}),
 		),
+	updateApprovalCapabilityProfileDraft: (input: {
+		profileId: string;
+		revision: string;
+		body: CapabilityProfileDraft;
+	}) =>
+		unwrap(
+			updateApprovalCapabilityProfileDraft({
+				body: parseClientInput(
+					capabilityProfileDraftSchema,
+					input.body,
+					"能力包无效",
+				),
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { profileId: input.profileId },
+			}),
+		),
 	publishApprovalCapabilityProfile: (profileId: string) =>
 		unwrap<void>(
 			publishApprovalCapabilityProfile({
@@ -414,6 +438,22 @@ export const connectionApi = {
 			createApprovalDisclaimer({
 				body: parseClientInput(disclaimerDraftSchema, body, "免责声明无效"),
 				headers: commandHeaders(),
+			}),
+		),
+	updateApprovalDisclaimerDraft: (input: {
+		disclaimerId: string;
+		revision: string;
+		body: DisclaimerDraft;
+	}) =>
+		unwrap(
+			updateApprovalDisclaimerDraft({
+				body: parseClientInput(
+					disclaimerDraftSchema,
+					input.body,
+					"免责声明无效",
+				),
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { disclaimerId: input.disclaimerId },
 			}),
 		),
 	publishApprovalDisclaimer: (disclaimerId: string) =>

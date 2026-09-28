@@ -966,6 +966,77 @@
 				}
 			}
 		},
+		"/api/v1/connection/admin/capability-profiles/{profileId}": {
+			"get": {
+				"operationId": "getApprovalCapabilityProfile",
+				"parameters": [
+					{
+						"name": "profileId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Exact capability profile members for administrators",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/CapabilityProfileDetailResponse"
+								}
+							}
+						}
+					},
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" }
+				}
+			},
+			"put": {
+				"operationId": "updateApprovalCapabilityProfileDraft",
+				"parameters": [
+					{ "$ref": "#/components/parameters/IdempotencyKey" },
+					{
+						"name": "profileId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					},
+					{
+						"name": "If-Match",
+						"in": "header",
+						"required": true,
+						"schema": { "type": "string", "pattern": "^\"[1-9][0-9]*\"$" }
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/CapabilityProfileDraft"
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Profile draft updated",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/CapabilityProfileCreated"
+								}
+							}
+						}
+					},
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
 		"/api/v1/connection/admin/capability-profiles/{profileId}/publish": {
 			"post": {
 				"operationId": "publishApprovalCapabilityProfile",
@@ -1027,6 +1098,48 @@
 					"400": { "$ref": "#/components/responses/Error" },
 					"401": { "$ref": "#/components/responses/Error" },
 					"404": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/disclaimers/{disclaimerId}": {
+			"put": {
+				"operationId": "updateApprovalDisclaimerDraft",
+				"parameters": [
+					{ "$ref": "#/components/parameters/IdempotencyKey" },
+					{
+						"name": "disclaimerId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					},
+					{
+						"name": "If-Match",
+						"in": "header",
+						"required": true,
+						"schema": { "type": "string", "pattern": "^\"[1-9][0-9]*\"$" }
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": { "$ref": "#/components/schemas/DisclaimerDraft" }
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Disclaimer draft updated",
+						"content": {
+							"application/json": {
+								"schema": { "$ref": "#/components/schemas/DisclaimerCreated" }
+							}
+						}
+					},
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
 				}
 			}
 		},
@@ -3037,6 +3150,50 @@
 				"required": ["capabilityProfileId"],
 				"properties": { "capabilityProfileId": { "type": "string" } }
 			},
+			"CapabilityProfileDetailResponse": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["profile"],
+				"properties": {
+					"profile": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"id",
+							"providerReleaseId",
+							"name",
+							"effectCeiling",
+							"revision",
+							"status",
+							"actions"
+						],
+						"properties": {
+							"id": { "type": "string" },
+							"providerReleaseId": { "type": "string" },
+							"name": { "type": "string" },
+							"effectCeiling": { "type": "string", "enum": ["READ", "WRITE"] },
+							"revision": { "type": "string" },
+							"status": { "type": "string" },
+							"actions": {
+								"type": "array",
+								"maxItems": 500,
+								"items": {
+									"type": "object",
+									"additionalProperties": false,
+									"required": ["id", "name", "description", "effect", "status"],
+									"properties": {
+										"id": { "type": "string" },
+										"name": { "type": "string" },
+										"description": { "type": "string" },
+										"effect": { "type": "string", "enum": ["READ", "WRITE"] },
+										"status": { "type": "string" }
+									}
+								}
+							}
+						}
+					}
+				}
+			},
 			"DisclaimerDraft": {
 				"type": "object",
 				"additionalProperties": false,
@@ -3235,6 +3392,7 @@
 								"providerReleaseId",
 								"name",
 								"effectCeiling",
+								"revision",
 								"status"
 							],
 							"properties": {
@@ -3245,6 +3403,7 @@
 									"type": "string",
 									"enum": ["READ", "WRITE"]
 								},
+								"revision": { "type": "string" },
 								"status": { "type": "string" }
 							}
 						}
@@ -3260,7 +3419,8 @@
 								"capabilityProfileId",
 								"materialChange",
 								"status",
-								"revision"
+								"revision",
+								"disclaimerVersionIds"
 							],
 							"properties": {
 								"id": { "type": "string" },
@@ -3268,7 +3428,11 @@
 								"capabilityProfileId": { "type": "string" },
 								"materialChange": { "type": "boolean" },
 								"status": { "type": "string" },
-								"revision": { "type": "string" }
+								"revision": { "type": "string" },
+								"disclaimerVersionIds": {
+									"type": "array",
+									"items": { "type": "string" }
+								}
 							}
 						}
 					},
@@ -3282,6 +3446,7 @@
 								"kind",
 								"locale",
 								"content",
+								"revision",
 								"status",
 								"materialChange",
 								"providerId"
@@ -3291,6 +3456,7 @@
 								"kind": { "type": "string" },
 								"locale": { "type": "string" },
 								"content": { "type": "string" },
+								"revision": { "type": "string" },
 								"materialChange": { "type": "boolean" },
 								"providerId": { "type": ["string", "null"] },
 								"status": { "type": "string" }
