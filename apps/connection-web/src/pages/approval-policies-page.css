@@ -802,9 +802,13 @@
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
-.approval-disclaimer-confirm input {
+.approval-disclaimer-confirm input[type="checkbox"] {
 	margin-top: 4px;
-	flex: none;
+	width: 16px;
+	height: 16px;
+	min-height: 0;
+	padding: 0;
+	flex: 0 0 16px;
 }
 .approval-request-form > .button {
 	justify-self: start;
