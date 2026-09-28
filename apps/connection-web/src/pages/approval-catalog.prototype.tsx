@@ -24,7 +24,7 @@ import "./approval-catalog.prototype.css";
 type Variant = "A" | "B" | "C";
 type CatalogKind = "profiles" | "disclaimers";
 type ProfileKey = "read" | "write";
-type CopySource = "profile" | "disclaimer" | null;
+type EditorKind = "profile" | "disclaimer" | null;
 
 const variants: { key: Variant; name: string }[] = [
 	{ key: "A", name: "目录与策略分栏" },
@@ -64,6 +64,7 @@ const writeActions = [
 	"github.create_pull_request_review_comment",
 	"github.reply_pull_request_review_comment",
 ];
+const exampleActions = [...readActions, ...writeActions];
 
 const profiles = {
 	read: { name: "GitHub 只读", reads: 78, writes: 0 },
@@ -87,11 +88,20 @@ export function ApprovalCatalogPrototype() {
 	const [selectedDisclaimer, setSelectedDisclaimer] = useState("github");
 	const [includeGithub, setIncludeGithub] = useState(true);
 	const [inspectorOpen, setInspectorOpen] = useState(true);
-	const [copySource, setCopySource] = useState<CopySource>(null);
+	const [editorKind, setEditorKind] = useState<EditorKind>(null);
+	const [editorMode, setEditorMode] = useState<"new" | "copy">("new");
 	const [copyName, setCopyName] = useState("");
 	const [copyActions, setCopyActions] = useState<string[]>([]);
+	const [actionQuery, setActionQuery] = useState("");
+	const [editorProvider, setEditorProvider] = useState("GitHub");
+	const [disclaimerScope, setDisclaimerScope] = useState("GLOBAL");
 	const [copyText, setCopyText] = useState("");
 	const [notice, setNotice] = useState("");
+	const [draftSummary, setDraftSummary] = useState<{
+		kind: "profile" | "disclaimer";
+		name: string;
+		detail: string;
+	} | null>(null);
 	const [showAll, setShowAll] = useState(false);
 
 	const switchVariant = useCallback((next: Variant) => {
@@ -100,7 +110,7 @@ export function ApprovalCatalogPrototype() {
 		url.searchParams.set("variant", next);
 		history.replaceState(null, "", url);
 		setArea(next === "C" ? "catalog" : "policy");
-		setCopySource(null);
+		setEditorKind(null);
 	}, []);
 
 	useEffect(() => {
@@ -123,30 +133,63 @@ export function ApprovalCatalogPrototype() {
 		return () => window.removeEventListener("keydown", onKey);
 	}, [variant, switchVariant]);
 
+	function newProfile() {
+		setEditorKind("profile");
+		setEditorMode("new");
+		setCopyName("");
+		setCopyActions([]);
+		setActionQuery("");
+		setEditorProvider("GitHub");
+		setNotice("");
+	}
+
 	function copyProfile() {
-		setCopySource("profile");
+		setEditorKind("profile");
+		setEditorMode("copy");
 		setCopyName(`${profiles[profile].name} 副本`);
 		setCopyActions([
 			...readActions,
 			...(profile === "write" ? writeActions : []),
 		]);
+		setActionQuery("");
+		setEditorProvider("GitHub");
+		setNotice("");
+	}
+
+	function newDisclaimer() {
+		setEditorKind("disclaimer");
+		setEditorMode("new");
+		setCopyName("");
+		setCopyText("");
+		setDisclaimerScope("GLOBAL");
 		setNotice("");
 	}
 
 	function copyDisclaimer() {
-		setCopySource("disclaimer");
+		setEditorKind("disclaimer");
+		setEditorMode("copy");
 		setCopyName(
 			selectedDisclaimer === "global"
 				? "全局基础条款新版本"
 				: "GitHub 附加条款新版本",
 		);
 		setCopyText(selectedDisclaimer === "global" ? globalText : githubText);
+		setDisclaimerScope(selectedDisclaimer === "global" ? "GLOBAL" : "PROVIDER");
 		setNotice("");
 	}
 
 	function saveCopy() {
+		if (editorKind)
+			setDraftSummary({
+				kind: editorKind,
+				name: copyName,
+				detail:
+					editorKind === "profile"
+						? `${editorProvider} · ${copyActions.length} 项示例能力`
+						: `${disclaimerScope === "GLOBAL" ? "全局" : "Provider"} · zh-CN`,
+			});
 		setNotice(`${copyName}：草稿已保存在本地原型状态，未发布。`);
-		setCopySource(null);
+		setEditorKind(null);
 	}
 
 	const props = {
@@ -168,6 +211,9 @@ export function ApprovalCatalogPrototype() {
 		setShowAll,
 		copyProfile,
 		copyDisclaimer,
+		newProfile,
+		newDisclaimer,
+		draftSummary,
 	};
 	const current = variants.find((item) => item.key === variant) ?? variants[0];
 	return (
@@ -219,6 +265,11 @@ export function ApprovalCatalogPrototype() {
 					<h1>连接审批管理</h1>
 					<span className="proto-environment">GitHub / 生产目录示例</span>
 				</header>
+				{notice ? (
+					<p className="proto-notice" role="status">
+						{notice}
+					</p>
+				) : null}
 				{variant === "A" ? (
 					<VariantA {...props} />
 				) : variant === "B" ? (
@@ -227,24 +278,34 @@ export function ApprovalCatalogPrototype() {
 					<VariantC {...props} />
 				)}
 			</main>
-			{copySource ? (
+			{editorKind ? (
 				<div className="proto-overlay" role="presentation">
 					<section
 						className="proto-dialog"
 						role="dialog"
 						aria-modal="true"
-						aria-label="复制为新版本"
+						aria-label={editorMode === "new" ? "新建目录版本" : "复制为新版本"}
 					>
 						<header>
 							<div>
-								<h2>复制为新版本</h2>
-								<p>原版本保持不变</p>
+								<h2>
+									{editorMode === "new"
+										? editorKind === "profile"
+											? "新建能力包"
+											: "新建免责声明版本"
+										: "复制为新版本"}
+								</h2>
+								<p>
+									{editorMode === "copy"
+										? "原版本保持不变"
+										: "从空白内容开始配置"}
+								</p>
 							</div>
 							<button
 								type="button"
 								className="proto-icon"
 								aria-label="关闭"
-								onClick={() => setCopySource(null)}
+								onClick={() => setEditorKind(null)}
 							>
 								<X size={18} />
 							</button>
@@ -256,47 +317,148 @@ export function ApprovalCatalogPrototype() {
 								onChange={(event) => setCopyName(event.target.value)}
 							/>
 						</label>
-						{copySource === "profile" ? (
+						{editorKind === "profile" ? (
 							<div className="proto-copy-actions">
-								<strong>能力清单</strong>
-								<span>{copyActions.length} 项示例能力已选</span>
-								{[
-									"github.create_issue",
-									"github.create_pull_request",
-									"github.delete_repository",
-								].map((action) => (
-									<label key={action} className="proto-check">
+								<label>
+									Provider
+									<select
+										value={editorProvider}
+										disabled={editorMode === "copy"}
+										onChange={(event) => {
+											setEditorProvider(event.target.value);
+											setCopyActions([]);
+										}}
+									>
+										<option>GitHub</option>
+										<option>Jira</option>
+									</select>
+								</label>
+								<div className="proto-copy-toolbar">
+									<strong>能力清单</strong>
+									<span>
+										{copyActions.length} /{" "}
+										{editorProvider === "GitHub" ? exampleActions.length : 0}{" "}
+										项示例能力已选
+									</span>
+								</div>
+								{editorProvider === "GitHub" ? (
+									<>
 										<input
-											type="checkbox"
-											checked={copyActions.includes(action)}
-											onChange={() =>
-												setCopyActions((current) =>
-													current.includes(action)
-														? current.filter((item) => item !== action)
-														: [...current, action],
-												)
-											}
+											type="search"
+											aria-label="搜索能力"
+											placeholder="搜索能力名称"
+											value={actionQuery}
+											onChange={(event) => setActionQuery(event.target.value)}
 										/>
-										<span>{action}</span>
-										<small>WRITE</small>
-									</label>
-								))}
+										<fieldset
+											className="proto-copy-presets"
+											aria-label="快捷选择"
+										>
+											<button
+												type="button"
+												onClick={() => setCopyActions(exampleActions)}
+											>
+												全选
+											</button>
+											<button
+												type="button"
+												onClick={() => setCopyActions(readActions)}
+											>
+												仅只读
+											</button>
+											<button
+												type="button"
+												onClick={() => setCopyActions(writeActions)}
+											>
+												仅只写
+											</button>
+											<button
+												type="button"
+												disabled={!copyActions.length}
+												onClick={() => setCopyActions([])}
+											>
+												清空
+											</button>
+										</fieldset>
+										<div className="proto-copy-list">
+											{exampleActions
+												.filter((action) =>
+													action
+														.toLowerCase()
+														.includes(actionQuery.trim().toLowerCase()),
+												)
+												.map((action) => (
+													<label key={action} className="proto-check">
+														<input
+															type="checkbox"
+															checked={copyActions.includes(action)}
+															onChange={() =>
+																setCopyActions((current) =>
+																	current.includes(action)
+																		? current.filter((item) => item !== action)
+																		: [...current, action],
+																)
+															}
+														/>
+														<span>{action}</span>
+														<small
+															className={
+																writeActions.includes(action) ? "write" : ""
+															}
+														>
+															{writeActions.includes(action) ? "WRITE" : "READ"}
+														</small>
+													</label>
+												))}
+										</div>
+										<p>
+											原型仅列出 27 项示例能力；正式目录为 GitHub v9 的 143 项。
+										</p>
+									</>
+								) : (
+									<p>Jira 目录未加入此示例。</p>
+								)}
 							</div>
 						) : (
-							<label>
-								条款正文
-								<textarea
-									value={copyText}
-									rows={8}
-									onChange={(event) => setCopyText(event.target.value)}
-								/>
-							</label>
+							<div className="proto-disclaimer-editor">
+								<label>
+									条款类型
+									<select
+										value={disclaimerScope}
+										disabled={editorMode === "copy"}
+										onChange={(event) => setDisclaimerScope(event.target.value)}
+									>
+										<option value="GLOBAL">全局基础条款</option>
+										<option value="PROVIDER">Provider 附加条款</option>
+									</select>
+								</label>
+								{disclaimerScope === "PROVIDER" ? (
+									<label>
+										Provider
+										<select
+											defaultValue="GitHub"
+											disabled={editorMode === "copy"}
+										>
+											<option>GitHub</option>
+											<option>Jira</option>
+										</select>
+									</label>
+								) : null}
+								<label>
+									条款正文
+									<textarea
+										value={copyText}
+										rows={8}
+										onChange={(event) => setCopyText(event.target.value)}
+									/>
+								</label>
+							</div>
 						)}
 						<footer>
 							<button
 								type="button"
 								className="proto-secondary"
-								onClick={() => setCopySource(null)}
+								onClick={() => setEditorKind(null)}
 							>
 								取消
 							</button>
@@ -304,7 +466,12 @@ export function ApprovalCatalogPrototype() {
 								type="button"
 								className="proto-primary"
 								onClick={saveCopy}
-								disabled={!copyName.trim()}
+								disabled={
+									!copyName.trim() ||
+									(editorKind === "profile"
+										? !copyActions.length
+										: !copyText.trim())
+								}
 							>
 								保存草稿
 							</button>
@@ -374,6 +541,13 @@ type VariantProps = {
 	setShowAll: (value: boolean) => void;
 	copyProfile: () => void;
 	copyDisclaimer: () => void;
+	newProfile: () => void;
+	newDisclaimer: () => void;
+	draftSummary: {
+		kind: "profile" | "disclaimer";
+		name: string;
+		detail: string;
+	} | null;
 };
 
 function ProfileSummary({
@@ -596,6 +770,15 @@ function CatalogList(props: VariantProps) {
 					</button>
 				</>
 			)}
+			{props.draftSummary?.kind ===
+			(props.kind === "profiles" ? "profile" : "disclaimer") ? (
+				<div className="proto-draft-row" role="status">
+					<strong>
+						{props.draftSummary.name} <small>草稿</small>
+					</strong>
+					<span>{props.draftSummary.detail}</span>
+				</div>
+			) : null}
 		</div>
 	);
 }
@@ -669,8 +852,8 @@ function VariantA(props: VariantProps) {
 							className="proto-primary"
 							onClick={
 								props.kind === "profiles"
-									? props.copyProfile
-									: props.copyDisclaimer
+									? props.newProfile
+									: props.newDisclaimer
 							}
 						>
 							<Plus size={16} />
@@ -793,14 +976,28 @@ function VariantB(props: VariantProps) {
 					>
 						<header>
 							<h2>目录管理</h2>
-							<button
-								type="button"
-								className="proto-icon"
-								aria-label="关闭目录"
-								onClick={() => props.setArea("policy")}
-							>
-								<X size={18} />
-							</button>
+							<div className="proto-drawer-actions">
+								<button
+									type="button"
+									className="proto-primary"
+									onClick={
+										props.kind === "profiles"
+											? props.newProfile
+											: props.newDisclaimer
+									}
+								>
+									<Plus size={15} />
+									{props.kind === "profiles" ? "新建能力包" : "新建条款版本"}
+								</button>
+								<button
+									type="button"
+									className="proto-icon"
+									aria-label="关闭目录"
+									onClick={() => props.setArea("policy")}
+								>
+									<X size={18} />
+								</button>
+							</div>
 						</header>
 						<div className="proto-master">
 							<CatalogList {...props} />
@@ -849,7 +1046,7 @@ function VariantC(props: VariantProps) {
 					type="button"
 					className="proto-primary"
 					onClick={
-						props.kind === "profiles" ? props.copyProfile : props.copyDisclaimer
+						props.kind === "profiles" ? props.newProfile : props.newDisclaimer
 					}
 				>
 					<Plus size={16} />
