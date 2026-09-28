@@ -67,6 +67,23 @@ async function decrypt(
 }
 
 describe("Relay Key ciphertext V1", () => {
+	it("rejects a wrapping key with false modulus or fingerprint metadata", () => {
+		for (const descriptor of [
+			{ ...activeWrappingKey, rsaModulusBits: 4096 },
+			{ ...activeWrappingKey, publicKeyFingerprint: "0".repeat(64) },
+		]) {
+			expect(() =>
+				createRelayKeyEncryptorV1({
+					encryptionKeys: {
+						schemaVersion: 1,
+						activeWrappingKeyVersion: wrappingKeyVersion,
+						keys: [descriptor],
+					},
+				}),
+			).toThrow("Relay Key encryption keys are invalid");
+		}
+	});
+
 	it("retains independently encrypted K1 and K2 for the same subject", async () => {
 		const binding = {
 			purpose: "personal" as const,
