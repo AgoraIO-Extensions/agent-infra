@@ -263,9 +263,13 @@ describe("Platform PostgreSQL migration foundation", () => {
 			);
 
 			const authoredIndexes = platformInfrastructureTables
-				.flatMap((table) =>
-					getTableConfig(table).indexes.map((index) => index.config.name),
-				)
+				.flatMap((table) => {
+					const config = getTableConfig(table);
+					return [
+						...config.indexes.map((index) => index.config.name),
+						...config.uniqueConstraints.map((constraint) => constraint.name),
+					];
+				})
 				// The composite FK target constraint is authored in the SQL migration.
 				.concat("relay_key_version_identity_unique")
 				.toSorted();
