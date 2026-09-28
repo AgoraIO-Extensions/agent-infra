@@ -78,8 +78,9 @@ it("preserves legacy rows and fences slow scans across runtime instances", async
 			INSERT INTO enterprise_directory.snapshots
 				(revision, fetched_at, valid_until, contents)
 			VALUES (
-				${legacy.revision}, ${new Date(legacy.fetchedAt)},
-				${new Date(legacy.validUntil)}, ${JSON.stringify(legacy)}::jsonb
+				${legacy.revision}, ${new Date(legacy.fetchedAt).toISOString()}::timestamptz,
+				${new Date(legacy.validUntil).toISOString()}::timestamptz,
+				${JSON.stringify(legacy)}::jsonb
 			)
 		`;
 		const laterLegacy = createSnapshot({
@@ -93,8 +94,9 @@ it("preserves legacy rows and fences slow scans across runtime instances", async
 			INSERT INTO enterprise_directory.snapshots
 				(revision, fetched_at, valid_until, contents)
 			VALUES (
-				${laterLegacy.revision}, ${new Date(laterLegacy.fetchedAt)},
-				${new Date(laterLegacy.validUntil)}, ${JSON.stringify(laterLegacy)}::jsonb
+				${laterLegacy.revision}, ${new Date(laterLegacy.fetchedAt).toISOString()}::timestamptz,
+				${new Date(laterLegacy.validUntil).toISOString()}::timestamptz,
+				${JSON.stringify(laterLegacy)}::jsonb
 			)
 		`;
 		await migrateDirectoryStore(

@@ -54,7 +54,8 @@ export function createPostgresDirectoryStore(
 						(revision, generation, fetched_at, valid_until, contents)
 					VALUES (
 						${snapshot.revision}, ${generation.toString()},
-						${new Date(snapshot.fetchedAt)}, ${new Date(snapshot.validUntil)},
+						${new Date(snapshot.fetchedAt).toISOString()}::timestamptz,
+						${new Date(snapshot.validUntil).toISOString()}::timestamptz,
 						${JSON.stringify(snapshot)}::jsonb
 					)
 				`;
