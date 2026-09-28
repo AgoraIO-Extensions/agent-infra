@@ -106,7 +106,7 @@ export interface LdapBrowserInput {
 	readonly directory: Directory;
 	readonly sessions: LdapSessionStore;
 	/** Platform DB authority supplied by #481; unavailable results must throw. */
-	readonly isPlatformDisabled: (uid: string) => Promise<boolean>;
+	readonly isPlatformDisabled: (userId: string) => Promise<boolean>;
 	/** Complete, current directory mapping supplied by the #889/#504 integration. */
 	readonly organizationIds: (
 		account: LdapAccount,
@@ -131,6 +131,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			origin.username ||
 			origin.password ||
 			!input.directory ||
+			typeof input.directory.userIdForUid !== "function" ||
 			!input.sessions ||
 			["create", "find", "revoke", "revokeUid"].some(
 				(method) =>
@@ -149,7 +150,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 		createHash("sha256").update(token).digest("hex");
 
 	async function current(account: LdapAccount) {
-		const disabled = await input.isPlatformDisabled(account.uid);
+		const disabled = await input.isPlatformDisabled(account.userId);
 		if (typeof disabled !== "boolean")
 			throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
 		const isDisabled = account.accountStatus === "disabled" || disabled;
@@ -195,7 +196,9 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				request.headers.get("origin") !== origin.origin
 			)
 				return null;
-			const platformDisabled = await input.isPlatformDisabled(session.uid);
+			const platformDisabled = await input.isPlatformDisabled(
+				input.directory.userIdForUid(session.uid),
+			);
 			if (typeof platformDisabled !== "boolean")
 				throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
 			if (platformDisabled) {

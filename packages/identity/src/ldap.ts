@@ -252,6 +252,9 @@ export function createLdapIdentityDirectory(
 	}
 
 	return {
+		userIdForUid(uid: string) {
+			return userId(requiredText(uid, 256));
+		},
 		current,
 		async currentByUserId(id: string) {
 			return current(parseUserId(id));

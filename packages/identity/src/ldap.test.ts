@@ -119,6 +119,10 @@ describe("first-party LDAP identity directory", () => {
 			roles: ["employee", "system_admin"],
 		});
 		expect(account?.userId).toMatch(/^ldap_[a-f0-9]{64}_/u);
+		expect(directory.userIdForUid("stable-a")).toBe(account?.userId);
+		expect(() => directory.userIdForUid("")).toThrow(
+			LdapIdentityUnavailableError,
+		);
 		expect(state.binds).toEqual([
 			state.config.serviceBindDn,
 			employee.dn,

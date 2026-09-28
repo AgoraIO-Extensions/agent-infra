@@ -46,6 +46,9 @@ function fixture(sessions = memorySessions()) {
 	let organizationsAvailable = true;
 	let now = 1000;
 	const directory = {
+		userIdForUid: vi.fn((uid: string) =>
+			uid === account.uid ? account.userId : "invalid-user",
+		),
 		authenticate: vi.fn(async (login: string, password: string) =>
 			login === "login-a" && password === "correct-password" ? current : null,
 		),
@@ -126,6 +129,7 @@ describe("LDAP browser adapter", () => {
 			roles: ["employee", "system_admin"],
 		});
 		expect(state.directory.current).toHaveBeenCalledWith("stable-a");
+		expect(state.isPlatformDisabled).toHaveBeenCalledWith(account.userId);
 		state.setDisabled(true);
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 		state.setDisabled(false);
