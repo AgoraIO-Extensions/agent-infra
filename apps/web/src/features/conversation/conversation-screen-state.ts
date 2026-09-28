@@ -61,7 +61,12 @@ export function currentExecution(
 			continue;
 		const nextStatus =
 			event.payload.status === "waiting" ? "submitted" : event.payload.status;
-		if (event.type === "task.status" && event.schemaVersion === 2)
+		if (
+			event.type === "task.status" &&
+			event.schemaVersion === 2 &&
+			event.payload.status === "unknown" &&
+			event.payload.reason === "STOP_CONFIRMATION_TIMEOUT"
+		)
 			stopTimeouts.add(event.executionId);
 		if (isTerminal(nextStatus)) stopTimeouts.delete(event.executionId);
 		persistedStatuses.add(event.executionId);

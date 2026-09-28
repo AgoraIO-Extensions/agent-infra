@@ -342,6 +342,33 @@ describe("durable task admission", () => {
 		).rejects.toMatchObject({ code: "23514" });
 	});
 
+	it("rejects partially populated Relay Key bindings", async () => {
+		const result = await taskUseCase().submitTask(
+			command("partial-relay-key-binding"),
+		);
+		if (result.outcome !== "accepted")
+			throw new Error("Expected accepted task");
+		const binding = {
+			executionSource: "platform-api",
+			purpose: "agent-default",
+			subjectId: "agent_task",
+			keyId: "relay-key-task-1",
+			version: 1,
+		};
+		for (const missing of Object.keys(binding) as (keyof typeof binding)[]) {
+			const partial = { ...binding, [missing]: null };
+			await expect(
+				sql`update platform.conversation_executions
+					set execution_source = ${partial.executionSource},
+						relay_key_purpose = ${partial.purpose},
+						relay_key_subject_id = ${partial.subjectId},
+						relay_key_id = ${partial.keyId},
+						relay_key_version = ${partial.version}
+					where execution_id = ${result.result.executionId}`,
+			).rejects.toMatchObject({ code: "23514" });
+		}
+	});
+
 	it("falls back to the current default when a continued task's selection disappeared", async () => {
 		await sql`insert into platform.conversations
 			(id, agent_id, actor_id, channel_id, status, session_generation,

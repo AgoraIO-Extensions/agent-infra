@@ -4100,30 +4100,56 @@ describe("durable waiting task dispatch from real admission", () => {
 		}
 	});
 
-	it("atomically reserves capacity across Conversations and retains unknown occupancy after restart and deadline expiry", async () => {
+	it("enforces Agent FIFO across Conversations", async () => {
+		const h = await waitingTaskHarness(2);
+		try {
+			const first = await h.submit("cross-conversation-first");
+			const secondConversationId = `waiting-cross-conversation-${fixture++}`;
+			await client`insert into platform.conversations
+				(id, agent_id, actor_id, channel_id, status, session_generation, authorization_revision)
+				values (${secondConversationId}, ${h.agentId}, 'waiting-user', 'api', 'ready', 1, 'waiting-grant')`;
+			const second = await h.submit(
+				"cross-conversation-second",
+				secondConversationId,
+			);
+			expect(
+				await h.store.claim({
+					schemaVersion: 1,
+					itemId: second.itemId,
+					workerId: "cross-conversation-second-worker",
+					leaseDurationMs: 30_000,
+				}),
+			).toEqual({ outcome: "busy" });
+			const firstClaim = await h.own(
+				first.itemId,
+				"cross-conversation-first-worker",
+			);
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: firstClaim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+		} finally {
+			await h.close();
+		}
+	});
+
+	it("retains capacity occupancy across Conversations after restart and deadline expiry", async () => {
 		const h = await waitingTaskHarness();
 		const restarted = open();
 		try {
 			const works = [await h.submit("first"), await h.submit("second")];
-			const originals = await Promise.all(
-				works.map((work, index) =>
-					h.own(work.itemId, `capacity-waiting-${index}`),
-				),
-			);
-			const prepared = await Promise.all(
-				originals.map((claim) =>
-					h.store.prepareRuntimeDispatch({ claim, leaseDurationMs: 30_000 }),
-				),
-			);
-			expect(prepared.filter((outcome) => outcome === true)).toHaveLength(1);
-			const winnerIndex = prepared.indexOf(true);
-			const loserIndex = winnerIndex === 0 ? 1 : 0;
-			const winner = works[winnerIndex];
-			const loser = works[loserIndex];
-			const winnerClaim = originals[winnerIndex];
-			const loserClaim = originals[loserIndex];
-			if (!winner || !loser || !winnerClaim || !loserClaim)
-				throw new Error("Missing capacity fixture");
+			const winner = works[0];
+			const loser = works[1];
+			if (!winner || !loser) throw new Error("Missing capacity fixture");
+			const winnerClaim = await h.own(winner.itemId, "capacity-winner");
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: winnerClaim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
 			expect((await taskQueueState(loser.executionId)).status).toBe("waiting");
 			const original = await taskQueueState(winner.executionId);
 			await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${winner.itemId}`;
@@ -4154,6 +4180,7 @@ describe("durable waiting task dispatch from real admission", () => {
 				}),
 			).toBe(true);
 			expect((await taskQueueState(winner.executionId)).status).toBe("unknown");
+			const loserClaim = await h.own(loser.itemId, "capacity-loser");
 			expect(
 				await h.store.prepareRuntimeDispatch({
 					claim: loserClaim,

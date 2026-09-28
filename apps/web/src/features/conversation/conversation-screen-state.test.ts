@@ -3,6 +3,7 @@ import {
 	PersistedConversationEventV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
+import type { PersistedConversationEventV2 } from "../../pilot/generated-v2/types.gen.js";
 import { currentExecution } from "./conversation-screen-state.js";
 import { event, history, timestamp } from "./conversation-test-fixtures.js";
 
@@ -103,6 +104,19 @@ describe("current conversation execution", () => {
 });
 
 describe("stop confirmation timeout presentation", () => {
+	it("does not infer a stop timeout from an unrelated V2 task status", () => {
+		const unrelated = {
+			...event(1),
+			schemaVersion: 2,
+			type: "task.status",
+			payload: { status: "processing", reason: "TASK_WAIT_TIMEOUT" },
+		} as unknown as PersistedConversationEventV2;
+		expect(currentExecution(null, [unrelated])).toEqual({
+			executionId: unrelated.executionId,
+			status: "processing",
+		});
+	});
+
 	it("retains the controlled timeout explanation through a later running event until a real terminal", () => {
 		const timeout = {
 			...event(1),

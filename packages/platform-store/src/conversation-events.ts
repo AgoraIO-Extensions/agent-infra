@@ -788,10 +788,11 @@ export class PostgresConversationEventTransactionV1
 		return this.#transaction(async (transaction) => {
 			// Match stop and dispatch: outbox before Conversation, then Execution.
 			if (persistedRequest.command.dispatchLease) {
-				await transaction`
+				const lockedOutbox = await transaction<{ id: string }[]>`
 					select id from platform.outbox_items
 					where id = ${persistedRequest.command.dispatchLease.itemId} for update
 				`;
+				if (lockedOutbox.length !== 1) unavailable();
 			}
 			const conversation = await lockConversation(
 				transaction,

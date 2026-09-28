@@ -719,7 +719,7 @@ describe("durable task upgrade over real PostgreSQL and formal HTTP", () => {
 		expect(await historicalSnapshot()).toEqual(old);
 	});
 
-	it("admits upgraded custom platform-adapter tasks with verified capacity and no Platform model selection", async () => {
+	it("admits upgraded custom platform-adapter tasks in Agent FIFO order without Platform model selection", async () => {
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		await installVerifiedWorkload("platform-adapter");
 		await startUpgradedApi();
@@ -745,27 +745,38 @@ describe("durable task upgrade over real PostgreSQL and formal HTTP", () => {
 			databaseUrl: database.databaseUrl,
 		});
 		try {
-			const outcomes = await Promise.all(
-				[first, second].map(async (task, index) => {
-					const [row] = await db.unsafe(
-						"select id from platform.outbox_items where payload->>'executionId'=$1",
-						[task.executionId],
-					);
-					const decision = await store.claim({
-						schemaVersion: 1,
-						itemId: String(row?.id),
-						workerId: `upgrade-capacity-${index}`,
-						leaseDurationMs: 30_000,
-					});
-					if (decision.outcome !== "claimed")
-						throw new Error(`Expected custom task claim: ${decision.outcome}`);
-					return store.prepareRuntimeDispatch({
-						claim: decision.claim,
-						leaseDurationMs: 30_000,
-					});
-				}),
+			const [firstOutbox] = await db.unsafe(
+				"select id from platform.outbox_items where payload->>'executionId'=$1",
+				[first.executionId],
 			);
-			expect(outcomes.sort()).toEqual(["capacity_wait", true].sort());
+			const [secondOutbox] = await db.unsafe(
+				"select id from platform.outbox_items where payload->>'executionId'=$1",
+				[second.executionId],
+			);
+			expect(
+				await store.claim({
+					schemaVersion: 1,
+					itemId: String(secondOutbox?.id),
+					workerId: "upgrade-capacity-second",
+					leaseDurationMs: 30_000,
+				}),
+			).toEqual({ outcome: "busy" });
+			const decision = await store.claim({
+				schemaVersion: 1,
+				itemId: String(firstOutbox?.id),
+				workerId: "upgrade-capacity-first",
+				leaseDurationMs: 30_000,
+			});
+			if (decision.outcome !== "claimed")
+				throw new Error(
+					`Expected first custom task claim: ${decision.outcome}`,
+				);
+			expect(
+				await store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
 			expect(
 				(await db.unsafe("select status from platform.conversation_executions"))
 					.map((row) => row.status)

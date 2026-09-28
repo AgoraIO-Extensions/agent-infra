@@ -205,7 +205,12 @@ export const conversationExecutions = platformSchema.table(
 				AND ${table.relayKeyId} IS NULL
 				AND ${table.relayKeyVersion} IS NULL
 			) OR (
-				${table.executionSource} in ('web', 'wecom', 'platform-api', 'eval')
+				${table.executionSource} IS NOT NULL
+				AND ${table.relayKeyPurpose} IS NOT NULL
+				AND ${table.relayKeySubjectId} IS NOT NULL
+				AND ${table.relayKeyId} IS NOT NULL
+				AND ${table.relayKeyVersion} IS NOT NULL
+				AND ${table.executionSource} in ('web', 'wecom', 'platform-api', 'eval')
 				AND ${table.relayKeyPurpose} in ('personal', 'agent-default')
 				AND char_length(${table.relayKeySubjectId}) > 0
 				AND char_length(${table.relayKeyId}) > 0

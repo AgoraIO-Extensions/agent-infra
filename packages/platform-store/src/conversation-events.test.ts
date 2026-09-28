@@ -1311,6 +1311,35 @@ describe("PostgreSQL Conversation event transaction", () => {
 		}
 	});
 
+	it("fails closed when a dispatch lease outbox row is missing", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		const { events, close } = openEvents("event_postgres_missing_outbox");
+		try {
+			await expect(
+				events.persist({
+					...eventInput(conversationId, executionId),
+					dispatchLease: {
+						schemaVersion: 1,
+						itemId: `missing-outbox:${executionId}`,
+						leaseOwner: "worker-event",
+						deliveryFence: 5,
+					},
+				}),
+			).rejects.toMatchObject({ code: "unavailable" });
+			const [state] = await client`
+				select e.last_event_sequence::int as sequence,
+					c.last_conversation_cursor::int as cursor,
+					(select count(*)::int from platform.conversation_events where execution_id = ${executionId}) as events
+				from platform.conversation_executions e
+				join platform.conversations c on c.id = e.conversation_id
+				where e.execution_id = ${executionId}
+			`;
+			expect(state).toEqual({ sequence: 0, cursor: 0, events: 0 });
+		} finally {
+			await close();
+		}
+	});
+
 	it("uses database time for operational event updates", async () => {
 		const { conversationId, executionId } = await seedConversation();
 		const { events, close } = openEvents("event_postgres_database_time");

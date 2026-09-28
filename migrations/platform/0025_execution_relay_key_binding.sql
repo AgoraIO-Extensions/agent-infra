@@ -43,7 +43,12 @@ ALTER TABLE "platform"."conversation_executions" ADD CONSTRAINT "conversation_ex
 				AND "platform"."conversation_executions"."relay_key_id" IS NULL
 				AND "platform"."conversation_executions"."relay_key_version" IS NULL
 			) OR (
-				"platform"."conversation_executions"."execution_source" in ('web', 'wecom', 'platform-api', 'eval')
+				"platform"."conversation_executions"."execution_source" IS NOT NULL
+				AND "platform"."conversation_executions"."relay_key_purpose" IS NOT NULL
+				AND "platform"."conversation_executions"."relay_key_subject_id" IS NOT NULL
+				AND "platform"."conversation_executions"."relay_key_id" IS NOT NULL
+				AND "platform"."conversation_executions"."relay_key_version" IS NOT NULL
+				AND "platform"."conversation_executions"."execution_source" in ('web', 'wecom', 'platform-api', 'eval')
 				AND "platform"."conversation_executions"."relay_key_purpose" in ('personal', 'agent-default')
 				AND char_length("platform"."conversation_executions"."relay_key_subject_id") > 0
 				AND char_length("platform"."conversation_executions"."relay_key_id") > 0
