@@ -295,8 +295,15 @@ async function run(input, evidence) {
 		await page.screenshot({
 			path: join(evidence.directory, "conversation-desktop.png"),
 		});
+		const renderedAnswer = await page
+			.locator(".assistant-markdown")
+			.last()
+			.innerText();
+		assert(renderedAnswer.trim(), "Completed assistant reply must be visible");
 		await page.reload();
-		await expect(page.locator(".assistant-markdown").last()).not.toBeEmpty();
+		await expect(page.locator(".assistant-markdown").last()).toHaveText(
+			renderedAnswer,
+		);
 		const restored = await conversationDetail(
 			owner,
 			input.origin,
@@ -346,6 +353,7 @@ async function run(input, evidence) {
 		await expect(
 			otherPage.getByText(input.prompt, { exact: true }),
 		).toHaveCount(0);
+		await expect(otherPage.locator(".assistant-markdown")).toHaveCount(0);
 		await otherPage.screenshot({
 			path: join(evidence.directory, "cross-user-mobile.png"),
 		});
