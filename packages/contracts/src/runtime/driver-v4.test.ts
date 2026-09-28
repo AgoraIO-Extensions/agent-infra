@@ -6,6 +6,7 @@ import {
 
 const k1: RuntimeKeyedHandleScopeV4 = {
 	principal: { kind: "user", id: "alice" },
+	executionSource: "web",
 	channelId: "web",
 	agentId: "agent-1",
 	conversationId: "conversation-1",

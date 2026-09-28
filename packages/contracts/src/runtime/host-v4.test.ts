@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 
 import { expect, it } from "vitest";
-import { RuntimeBusinessGrantClaimsV2Schema } from "./grant-v2.js";
 import {
+	RuntimeBusinessGrantClaimsV4Schema,
 	type RuntimeSubmitTurnRequestV4,
 	RuntimeSubmitTurnRequestV4Schema,
 	type RuntimeSupplementRequestV4,
 	RuntimeSupplementRequestV4Schema,
+	runtimeRequestDigestV4,
 	runtimeRequestSigningPayloadV4,
 	validateRuntimeBusinessBindingV4,
 } from "./host-v4.js";
@@ -18,6 +19,7 @@ const request = RuntimeSubmitTurnRequestV4Schema.parse({
 	requestId: "request-1",
 	traceId: "trace-1",
 	principal: { kind: "user", id: "alice" },
+	executionSource: "web",
 	channelId: "web",
 	agentId: "agent-1",
 	conversationId: "conversation-1",
@@ -31,7 +33,7 @@ const request = RuntimeSubmitTurnRequestV4Schema.parse({
 		deliveryFence: 1,
 		executionDeliveryFence: 1,
 	},
-	grant: { schemaVersion: 2, format: "runtime-execution-jws", token: "a.b.c" },
+	grant: { schemaVersion: 4, format: "runtime-execution-jws", token: "a.b.c" },
 	keyBinding: {
 		purpose: "personal",
 		subjectId: "alice",
@@ -54,8 +56,8 @@ function digest(value: BusinessRequest): string {
 }
 
 function claims(value: BusinessRequest) {
-	return RuntimeBusinessGrantClaimsV2Schema.parse({
-		schemaVersion: 2,
+	return RuntimeBusinessGrantClaimsV4Schema.parse({
+		schemaVersion: 4,
 		issuer: "platform-worker",
 		audience: "runtime_host",
 		issuedAt: 1,
@@ -70,6 +72,7 @@ function claims(value: BusinessRequest) {
 		turnId: value.turnId,
 		sessionGeneration: value.sessionGeneration,
 		traceId: value.traceId,
+		executionSource: value.executionSource,
 		hostSessionRef: value.hostSessionRef,
 		operation: value.operation,
 		requestDigest: digest(value),
@@ -80,15 +83,16 @@ function claims(value: BusinessRequest) {
 	});
 }
 
-it("binds the Key reference/version into the Grant digest without the Key", () => {
+it("binds the Key reference/version into the Grant digest without the Key", async () => {
 	const payload = runtimeRequestSigningPayloadV4(request);
 	expect(payload).toContain('"ciphertextRef":"key-1"');
 	expect(payload).toContain('"version":1');
 	expect(payload).not.toContain("private-key-value-k1");
 	expect(payload).not.toContain("keyDelivery");
-	expect(() =>
-		validateRuntimeBusinessBindingV4(request, claims(request), digest(request)),
-	).not.toThrow();
+	expect(await runtimeRequestDigestV4(request)).toBe(digest(request));
+	await expect(
+		validateRuntimeBusinessBindingV4(request, claims(request)),
+	).resolves.toBeUndefined();
 	expect(
 		digest({
 			...request,
@@ -97,7 +101,7 @@ it("binds the Key reference/version into the Grant digest without the Key", () =
 	).not.toBe(digest(request));
 });
 
-it("rejects substituted subject, channel, operation fence and stale Grant digest", () => {
+it("rejects substituted subject, channel, operation fence and stale Grant digest", async () => {
 	const grant = claims(request);
 	for (const changed of [
 		{ ...request, keyBinding: { ...request.keyBinding, subjectId: "bob" } },
@@ -108,19 +112,23 @@ it("rejects substituted subject, channel, operation fence and stale Grant digest
 		},
 		{ ...request, keyBinding: { ...request.keyBinding, version: 2 } },
 	]) {
-		expect(() =>
-			validateRuntimeBusinessBindingV4(changed, grant, digest(changed)),
-		).toThrow("RuntimeHostV4 binding is invalid");
+		await expect(
+			validateRuntimeBusinessBindingV4(changed, grant),
+		).rejects.toThrow("RuntimeHostV4 binding is invalid");
 	}
-	expect(() =>
-		validateRuntimeBusinessBindingV4(request, grant, "0".repeat(64)),
-	).toThrow("RuntimeHostV4 binding is invalid");
+	await expect(
+		validateRuntimeBusinessBindingV4(request, {
+			...grant,
+			requestDigest: "0".repeat(64),
+		}),
+	).rejects.toThrow("RuntimeHostV4 binding is invalid");
 });
 
-it("accepts an Agent default Key for an API principal and rejects cross-Agent reuse", () => {
+it("accepts an Agent default Key for an API principal and rejects cross-Agent reuse", async () => {
 	const apiRequest = RuntimeSubmitTurnRequestV4Schema.parse({
 		...request,
 		principal: { kind: "application", id: "api-client" },
+		executionSource: "platform-api",
 		channelId: "platform-api",
 		keyBinding: {
 			purpose: "agent-default",
@@ -129,24 +137,19 @@ it("accepts an Agent default Key for an API principal and rejects cross-Agent re
 			version: 2,
 		},
 	});
-	expect(() =>
-		validateRuntimeBusinessBindingV4(
-			apiRequest,
-			claims(apiRequest),
-			digest(apiRequest),
-		),
-	).not.toThrow();
-	expect(() =>
+	await expect(
+		validateRuntimeBusinessBindingV4(apiRequest, claims(apiRequest)),
+	).resolves.toBeUndefined();
+	await expect(
 		validateRuntimeBusinessBindingV4(
 			{
 				...apiRequest,
 				keyBinding: { ...apiRequest.keyBinding, subjectId: "agent-2" },
 			},
 			claims(apiRequest),
-			digest(apiRequest),
 		),
-	).toThrow("RuntimeHostV4 binding is invalid");
-	expect(() =>
+	).rejects.toThrow("RuntimeHostV4 binding is invalid");
+	await expect(
 		validateRuntimeBusinessBindingV4(
 			{
 				...apiRequest,
@@ -158,12 +161,11 @@ it("accepts an Agent default Key for an API principal and rejects cross-Agent re
 				},
 			},
 			claims(apiRequest),
-			digest(apiRequest),
 		),
-	).toThrow("RuntimeHostV4 binding is invalid");
+	).rejects.toThrow("RuntimeHostV4 binding is invalid");
 });
 
-it("keeps the original Key binding for a supplement after Key replacement", () => {
+it("keeps the original Key binding for a supplement after Key replacement", async () => {
 	const { selection: _selection, ...original } = request;
 	const supplement = RuntimeSupplementRequestV4Schema.parse({
 		...original,
@@ -176,27 +178,117 @@ it("keeps the original Key binding for a supplement after Key replacement", () =
 			executionDeliveryFence: 1,
 		},
 	});
-	expect(() =>
-		validateRuntimeBusinessBindingV4(
-			supplement,
-			claims(supplement),
-			digest(supplement),
-		),
-	).not.toThrow();
+	await expect(
+		validateRuntimeBusinessBindingV4(supplement, claims(supplement)),
+	).resolves.toBeUndefined();
 	const changed = {
 		...supplement,
 		keyBinding: { ...supplement.keyBinding, version: 2 },
 	};
-	expect(() =>
-		validateRuntimeBusinessBindingV4(
-			changed,
-			claims(supplement),
-			digest(changed),
-		),
-	).toThrow("RuntimeHostV4 binding is invalid");
+	await expect(
+		validateRuntimeBusinessBindingV4(changed, claims(supplement)),
+	).rejects.toThrow("RuntimeHostV4 binding is invalid");
+});
+
+it("rejects a freshly signed request with the wrong Key purpose for its source", async () => {
+	const apiUser = RuntimeSubmitTurnRequestV4Schema.parse({
+		...request,
+		executionSource: "platform-api",
+		channelId: "platform-api",
+	});
+	const webDefault = RuntimeSubmitTurnRequestV4Schema.parse({
+		...request,
+		keyBinding: {
+			purpose: "agent-default",
+			subjectId: "agent-1",
+			ciphertextRef: "agent-key-1",
+			version: 1,
+		},
+	});
+	for (const wrongPurpose of [apiUser, webDefault]) {
+		await expect(
+			validateRuntimeBusinessBindingV4(wrongPurpose, claims(wrongPurpose)),
+		).rejects.toThrow("RuntimeHostV4 binding is invalid");
+	}
+});
+
+it("does not trust a request-supplied source over persisted acceptance authority", async () => {
+	const apiRequest = RuntimeSubmitTurnRequestV4Schema.parse({
+		...request,
+		executionSource: "platform-api",
+		channelId: "platform-api",
+		principal: { kind: "application", id: "api-client" },
+		keyBinding: {
+			purpose: "agent-default",
+			subjectId: "agent-1",
+			ciphertextRef: "agent-key-1",
+			version: 1,
+		},
+	});
+	await expect(
+		validateRuntimeBusinessBindingV4(apiRequest, {
+			...claims(apiRequest),
+			executionSource: "web",
+		}),
+	).rejects.toThrow("RuntimeHostV4 binding is invalid");
+});
+
+it("rejects freshly signed requests that violate Grant operation or attachment scope", async () => {
+	for (const changed of [
+		{
+			...request,
+			operation: { ...request.operation, id: "other-execution" },
+		},
+		{
+			...request,
+			operation: { ...request.operation, deliveryFence: 2 },
+		},
+	]) {
+		await expect(
+			validateRuntimeBusinessBindingV4(changed, claims(changed)),
+		).rejects.toThrow("RuntimeHostV4 binding is invalid");
+	}
+	const withAttachment = RuntimeSubmitTurnRequestV4Schema.parse({
+		...request,
+		input: { text: "hello", attachments: ["attachment-1"] },
+	});
+	await expect(
+		validateRuntimeBusinessBindingV4(withAttachment, claims(withAttachment)),
+	).rejects.toThrow("RuntimeHostV4 binding is invalid");
+	await expect(
+		validateRuntimeBusinessBindingV4(withAttachment, {
+			...claims(withAttachment),
+			attachments: [{ attachmentId: "attachment-1", operations: ["read"] }],
+		}),
+	).resolves.toBeUndefined();
+	const twoAttachments = RuntimeSubmitTurnRequestV4Schema.parse({
+		...request,
+		input: { text: "hello", attachments: ["attachment-1", "attachment-2"] },
+	});
+	await expect(
+		validateRuntimeBusinessBindingV4(twoAttachments, {
+			...claims(twoAttachments),
+			attachments: [
+				{ attachmentId: "attachment-1", operations: ["read"] },
+				{ attachmentId: "attachment-1", operations: ["read"] },
+			],
+		}),
+	).rejects.toThrow("RuntimeHostV4 binding is invalid");
+	await expect(
+		validateRuntimeBusinessBindingV4(request, {
+			...claims(request),
+			traceId: "other-trace",
+		}),
+	).rejects.toThrow("RuntimeHostV4 binding is invalid");
 });
 
 it("rejects static credential fallback and an unprintable private Key", () => {
+	expect(
+		RuntimeSubmitTurnRequestV4Schema.safeParse({
+			...request,
+			grant: { ...request.grant, schemaVersion: 2 },
+		}).success,
+	).toBe(false);
 	expect(
 		RuntimeSubmitTurnRequestV4Schema.safeParse({
 			...request,

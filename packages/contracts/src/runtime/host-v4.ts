@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { OpaqueIdV1Schema, RequestIdV1Schema } from "../index.ts";
 import {
-	type RuntimeBusinessGrantClaimsV2,
+	RuntimeBusinessGrantClaimsV2Schema,
 	RuntimeExecutionGrantV2Schema,
 	RuntimeOperationBindingV2Schema,
 	RuntimePrincipalV1Schema,
@@ -23,6 +23,33 @@ export type RuntimeRelayKeyBindingV1 = z.infer<
 	typeof RuntimeRelayKeyBindingV1Schema
 >;
 
+export const RuntimeExecutionSourceV1Schema = z.enum([
+	"web",
+	"wecom",
+	"platform-api",
+	"eval",
+]);
+export type RuntimeExecutionSourceV1 = z.infer<
+	typeof RuntimeExecutionSourceV1Schema
+>;
+
+// The source is fixed by task acceptance and signed as part of the V4 Grant.
+// A request field alone must not select the Relay Key purpose.
+export const RuntimeBusinessGrantClaimsV4Schema =
+	RuntimeBusinessGrantClaimsV2Schema.extend({
+		schemaVersion: z.literal(4),
+		executionSource: RuntimeExecutionSourceV1Schema,
+	});
+export type RuntimeBusinessGrantClaimsV4 = z.infer<
+	typeof RuntimeBusinessGrantClaimsV4Schema
+>;
+
+export const RuntimeExecutionGrantV4Schema = z.strictObject({
+	schemaVersion: z.literal(4),
+	format: z.literal("runtime-execution-jws"),
+	token: RuntimeExecutionGrantV2Schema.shape.token,
+});
+
 // This field is confined to the authenticated, confidential Worker-Host transport.
 export const RuntimeRelayKeyDeliveryV1Schema = z.strictObject({
 	relayKey: z
@@ -37,6 +64,7 @@ const context = {
 	requestId: RequestIdV1Schema,
 	traceId: OpaqueIdV1Schema,
 	principal: RuntimePrincipalV1Schema,
+	executionSource: RuntimeExecutionSourceV1Schema,
 	channelId: OpaqueIdV1Schema,
 	agentId: OpaqueIdV1Schema,
 	conversationId: OpaqueIdV1Schema,
@@ -45,7 +73,7 @@ const context = {
 	sessionGeneration: z.number().int().positive().safe(),
 	hostSessionRef: OpaqueIdV1Schema.nullable(),
 	operation: RuntimeOperationBindingV2Schema,
-	grant: RuntimeExecutionGrantV2Schema,
+	grant: RuntimeExecutionGrantV4Schema,
 	keyBinding: RuntimeRelayKeyBindingV1Schema,
 	keyDelivery: RuntimeRelayKeyDeliveryV1Schema,
 };
@@ -73,25 +101,45 @@ type RuntimeBusinessRequestV4 =
 	| RuntimeSubmitTurnRequestV4
 	| RuntimeSupplementRequestV4;
 
-export function validateRuntimeBusinessBindingV4(
+export async function validateRuntimeBusinessBindingV4(
 	request: RuntimeBusinessRequestV4,
-	claims: RuntimeBusinessGrantClaimsV2,
-	requestDigest: string,
-): void {
+	claims: RuntimeBusinessGrantClaimsV4,
+): Promise<void> {
 	const command = "selection" in request ? "turn.submit" : "turn.supplement";
 	const operationKind = "selection" in request ? "execution" : "message";
+	const expectedPurpose =
+		claims.executionSource === "web" || claims.executionSource === "wecom"
+			? "personal"
+			: "agent-default";
 	const expectedSubject =
 		request.keyBinding.purpose === "personal"
 			? request.principal.kind === "user"
 				? request.principal.id
 				: null
 			: request.agentId;
+	const requestedAttachments = new Set(request.input.attachments);
+	const claimedAttachments = new Set(
+		claims.attachments.map((entry) => entry.attachmentId),
+	);
 	if (
+		request.executionSource !== claims.executionSource ||
+		request.keyBinding.purpose !== expectedPurpose ||
 		expectedSubject === null ||
 		request.keyBinding.subjectId !== expectedSubject ||
 		claims.allowedCommands[0] !== command ||
 		request.operation.kind !== operationKind ||
-		claims.requestDigest !== requestDigest ||
+		(operationKind === "execution" &&
+			(request.operation.id !== request.executionId ||
+				request.operation.deliveryFence !==
+					request.operation.executionDeliveryFence)) ||
+		requestedAttachments.size !== request.input.attachments.length ||
+		claimedAttachments.size !== claims.attachments.length ||
+		claimedAttachments.size !== requestedAttachments.size ||
+		claims.attachments.some(
+			(entry) => !requestedAttachments.has(entry.attachmentId),
+		) ||
+		claims.requestDigest !== (await runtimeRequestDigestV4(request)) ||
+		claims.traceId !== request.traceId ||
 		claims.principal.kind !== request.principal.kind ||
 		claims.principal.id !== request.principal.id ||
 		claims.agentId !== request.agentId ||
@@ -109,6 +157,18 @@ export function validateRuntimeBusinessBindingV4(
 	) {
 		throw new TypeError("RuntimeHostV4 binding is invalid");
 	}
+}
+
+export async function runtimeRequestDigestV4(
+	request: RuntimeBusinessRequestV4,
+): Promise<string> {
+	const payload = new TextEncoder().encode(
+		runtimeRequestSigningPayloadV4(request),
+	);
+	const digest = await globalThis.crypto.subtle.digest("SHA-256", payload);
+	return Array.from(new Uint8Array(digest), (byte) =>
+		byte.toString(16).padStart(2, "0"),
+	).join("");
 }
 
 export function runtimeRequestSigningPayloadV4(

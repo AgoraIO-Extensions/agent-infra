@@ -2,10 +2,14 @@ import { z } from "zod";
 
 import { OpaqueIdV1Schema } from "../index.ts";
 import { RuntimePrincipalV1Schema } from "./grant-v2.ts";
-import { RuntimeRelayKeyBindingV1Schema } from "./host-v4.ts";
+import {
+	RuntimeExecutionSourceV1Schema,
+	RuntimeRelayKeyBindingV1Schema,
+} from "./host-v4.ts";
 
 export const RuntimeKeyedHandleScopeV4Schema = z.strictObject({
 	principal: RuntimePrincipalV1Schema,
+	executionSource: RuntimeExecutionSourceV1Schema,
 	channelId: OpaqueIdV1Schema,
 	agentId: OpaqueIdV1Schema,
 	conversationId: OpaqueIdV1Schema,
@@ -39,6 +43,7 @@ export function validateRuntimeKeyedHandleTransitionV4(
 	if (
 		former.principal.kind === current.principal.kind &&
 		former.principal.id === current.principal.id &&
+		former.executionSource === current.executionSource &&
 		former.channelId === current.channelId &&
 		former.agentId === current.agentId &&
 		former.conversationId === current.conversationId &&

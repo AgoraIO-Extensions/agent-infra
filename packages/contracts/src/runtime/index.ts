@@ -128,6 +128,9 @@ export const RuntimeGrantV2SchemaDefinitions = {
 import { RuntimeModelConfigurationV4Schema } from "./configuration-v4.ts";
 import { RuntimeKeyedHandleScopeV4Schema } from "./driver-v4.ts";
 import {
+	RuntimeBusinessGrantClaimsV4Schema,
+	RuntimeExecutionGrantV4Schema,
+	RuntimeExecutionSourceV1Schema,
 	RuntimeRelayKeyBindingV1Schema,
 	RuntimeRelayKeyDeliveryV1Schema,
 	RuntimeSubmitTurnRequestV4Schema,
@@ -135,7 +138,10 @@ import {
 } from "./host-v4.ts";
 
 export const RuntimeHostV4SchemaDefinitions = {
+	RuntimeBusinessGrantClaimsV4: RuntimeBusinessGrantClaimsV4Schema,
+	RuntimeExecutionGrantV4: RuntimeExecutionGrantV4Schema,
 	RuntimeKeyedHandleScopeV4: RuntimeKeyedHandleScopeV4Schema,
+	RuntimeExecutionSourceV1: RuntimeExecutionSourceV1Schema,
 	RuntimeRelayKeyBindingV1: RuntimeRelayKeyBindingV1Schema,
 	RuntimeRelayKeyDeliveryV1: RuntimeRelayKeyDeliveryV1Schema,
 	RuntimeSubmitTurnRequestV4: RuntimeSubmitTurnRequestV4Schema,
