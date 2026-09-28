@@ -187,13 +187,14 @@ export async function observeStopConfirmationTimeout(
 ) {
 	const [stop] = await transaction<
 		{
+			status: string;
 			confirmation_deadline: Date;
 			confirmation_timed_out_at: Date | null;
 			observed_at: Date;
 		}[]
-	>`select confirmation_deadline, confirmation_timed_out_at, clock_timestamp() as observed_at
+	>`select status, confirmation_deadline, confirmation_timed_out_at, clock_timestamp() as observed_at
 		from platform.conversation_stops where execution_id = ${state.execution.execution_id}`;
-	if (!stop) return;
+	if (stop?.status !== "submitted") return;
 	const decision = decideConversationStopConfirmationTimeoutV1({
 		executionStatus: state.execution.status,
 		confirmationDeadline: stop.confirmation_deadline.getTime(),
@@ -204,7 +205,8 @@ export async function observeStopConfirmationTimeout(
 	const rows = await transaction<{ execution_id: string }[]>`
 		update platform.conversation_stops set confirmation_timed_out_at = clock_timestamp(), updated_at = clock_timestamp()
 		where execution_id = ${state.execution.execution_id}
-			and confirmation_timed_out_at is null and confirmation_deadline <= clock_timestamp()
+			and status = 'submitted' and confirmation_timed_out_at is null
+			and confirmation_deadline <= clock_timestamp()
 		returning execution_id
 	`;
 	if (rows.length === 0) return;

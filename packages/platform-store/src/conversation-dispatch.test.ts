@@ -3879,6 +3879,52 @@ describe("durable stop confirmation", () => {
 		}
 	});
 
+	it("does not time out a confirmed stop while its Execution is still processing", async () => {
+		const h = await waitingTaskHarness();
+		try {
+			const first = await h.submit("stop-confirmed-before-retry");
+			const owned = await h.own(first.itemId);
+			await h.store.prepareRuntimeDispatch({
+				claim: owned,
+				leaseDurationMs: 30_000,
+			});
+			await h.store.recordRuntimeResponse({
+				claim: owned,
+				hostSessionRef: "confirmed-stop-session",
+				transition: {
+					executionStatus: "processing",
+					conversationStatus: "active",
+				},
+			});
+			await h.control(first.executionId, "stop");
+			await client`update platform.conversation_stops
+				set status = 'completed', confirmation_deadline = clock_timestamp() - interval '1 second'
+				where execution_id = ${first.executionId}`;
+			expect(
+				await h.store.renew({ claim: owned, leaseDurationMs: 30_000 }),
+			).toBe(true);
+			expect((await taskQueueState(first.executionId)).status).toBe(
+				"processing",
+			);
+			const [stop] = await client`
+				select status, confirmation_timed_out_at from platform.conversation_stops
+				where execution_id = ${first.executionId}
+			`;
+			expect(stop).toEqual({
+				status: "completed",
+				confirmation_timed_out_at: null,
+			});
+			const [timeout] = await client`
+				select count(*)::int as count from platform.conversation_events
+				where execution_id = ${first.executionId}
+					and event_payload->>'reason' = 'STOP_CONFIRMATION_TIMEOUT'
+			`;
+			expect(timeout?.count).toBe(0);
+		} finally {
+			await h.close();
+		}
+	});
+
 	it("marks expired stop confirmation unknown while retaining its original binding and blocking the next task", async () => {
 		const h = await waitingTaskHarness();
 		try {
