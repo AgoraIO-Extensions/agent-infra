@@ -87,9 +87,11 @@ bash deploy/local/platform.sh status
 namespace/Pod 标签和端口，缺省拒绝全部出站。不增加另一条 allow-all NetworkPolicy。
 Worker 预检与 Agent 模型调用都必须在真实网络上验证。
 
-停止时先通过 Platform 正常停止 Agent 并确认调谐完成。脚本随后核对 namespace 中的
-Agent StatefulSet 已缩至零副本且 Agent Pod 已退出；否则拒绝卸载 Worker。Worker 卸载
-失败时保持 Compose 服务运行。正常停止不删除 Agent PVC、数据库、对象存储卷或审计。
+停止时先通过 Platform 正常停止 Agent 并确认调谐完成。脚本先关闭 Web/API 写入口，
+把 Worker 缩至零副本并等待退出，再核对 namespace 中的 Agent StatefulSet 已缩至零副本
+且 Agent Pod 已退出；否则先恢复 Worker，待其就绪后恢复 Web/API。Helm 卸载须等待
+完成；失败时也尝试恢复。若 Worker 无法恢复，Web/API 保持关闭，数据库与对象存储
+继续运行并给出诊断。正常停止不删除 Agent PVC、数据卷或审计。
 再次启动复用相同 project 和数据卷。
 
 ```bash

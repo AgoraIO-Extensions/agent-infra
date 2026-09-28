@@ -85,6 +85,15 @@ ensure_agents_stopped() {
   }
 }
 
+restore_local_services() {
+  if ! "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas="$worker_replicas" ||
+     ! "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m; then
+    echo "Worker could not be restored; API and Web remain stopped" >&2
+    return 1
+  fi
+  "${compose[@]}" up --detach --wait platform-api web
+}
+
 worker_values() {
   : "${PLATFORM_LOCAL_WORKER_VALUES:?Set an absolute local Worker values file}"
   [[ "$PLATFORM_LOCAL_WORKER_VALUES" = /* && -r "$PLATFORM_LOCAL_WORKER_VALUES" ]] || {
@@ -128,9 +137,29 @@ case "${1:-}" in
     ;;
   stop)
     worker_context
-    ensure_agents_stopped
-    "${helm_target[@]}" uninstall "$worker_release" --ignore-not-found
-    "${compose[@]}" stop web platform-api object-storage postgres
+    worker_replicas=$("${kube_target[@]}" get deployment "$worker_deployment" -o jsonpath='{.spec.replicas}')
+    [[ "$worker_replicas" =~ ^[0-9]+$ ]] || { echo "Worker deployment has no valid replica count" >&2; exit 1; }
+    "${compose[@]}" stop web platform-api
+    if ! "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas=0 ||
+       ! "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m; then
+      restore_local_services || echo "Local services could not be fully restored" >&2
+      exit 1
+    fi
+    if ! worker_pods=$("${kube_target[@]}" get pods -l "app.kubernetes.io/instance=$worker_release,app.kubernetes.io/component=platform-worker" -o name); then
+      restore_local_services || echo "Local services could not be fully restored" >&2
+      exit 1
+    fi
+    if [[ -n "$worker_pods" ]]; then
+      if ! "${kube_target[@]}" wait --for=delete pod -l "app.kubernetes.io/instance=$worker_release,app.kubernetes.io/component=platform-worker" --timeout=5m; then
+        restore_local_services || echo "Local services could not be fully restored" >&2
+        exit 1
+      fi
+    fi
+    if ! ensure_agents_stopped || ! "${helm_target[@]}" uninstall "$worker_release" --ignore-not-found --wait --timeout 5m; then
+      restore_local_services || echo "Local services could not be fully restored" >&2
+      exit 1
+    fi
+    "${compose[@]}" stop object-storage postgres
     ;;
   *)
     echo "Usage: bash deploy/local/platform.sh build|data|migrate|up|status|stop" >&2
