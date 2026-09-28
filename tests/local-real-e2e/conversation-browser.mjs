@@ -294,6 +294,10 @@ async function run(input, evidence) {
 		};
 		await page.screenshot({
 			path: join(evidence.directory, "conversation-desktop.png"),
+			mask: [
+				page.locator(".message-text"),
+				page.locator(".assistant-markdown"),
+			],
 		});
 		const renderedAnswer = await page
 			.locator(".assistant-markdown")
@@ -333,6 +337,10 @@ async function run(input, evidence) {
 		);
 		await page.screenshot({
 			path: join(evidence.directory, "conversation-mobile.png"),
+			mask: [
+				page.locator(".message-text"),
+				page.locator(".assistant-markdown"),
+			],
 		});
 		const denied = await other.request.get(
 			`${input.origin}/api/v2/conversations/${encodeURIComponent(conversationId)}`,
@@ -350,6 +358,11 @@ async function run(input, evidence) {
 		await otherPage.goto(
 			`${input.origin}/agents/${encodeURIComponent(input.agentId)}/conversations?conversation=${encodeURIComponent(conversationId)}`,
 		);
+		await expect(
+			otherPage.getByText(
+				"当前登录或访问权限已失效，请重新登录或返回 Agent 列表。",
+			),
+		).toBeVisible();
 		await expect(
 			otherPage.getByText(input.prompt, { exact: true }),
 		).toHaveCount(0);
