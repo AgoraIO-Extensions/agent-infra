@@ -78,6 +78,29 @@ it("removes output listeners on close before reusing the destination", async () 
 	expect(second.status().droppedLogs).toBe(1);
 	await second.close();
 	expect(output.listenerCount("error")).toBe(0);
+	expect(() =>
+		second.record({ stage: "http", outcome: "completed" }),
+	).not.toThrow();
+	expect(second.status().droppedLogs).toBe(2);
+});
+
+it("handles an asynchronous output error after close while a write is pending", async () => {
+	let finishWrite: ((error?: Error | null) => void) | undefined;
+	const output = new Writable({
+		write(_chunk, _encoding, done) {
+			finishWrite = done;
+		},
+	});
+	const telemetry = startObservability({ service: "platform-api", output });
+	active.push(telemetry);
+	telemetry.record({ stage: "http", outcome: "completed" });
+	expect(finishWrite).toBeDefined();
+	await telemetry.close();
+	expect(output.listenerCount("error")).toBe(1);
+	finishWrite?.(new Error("PRIVATE_SENTINEL"));
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	expect(telemetry.status().droppedLogs).toBe(1);
+	expect(output.listenerCount("error")).toBe(0);
 });
 
 it("keeps malformed operation references out of logs", () => {

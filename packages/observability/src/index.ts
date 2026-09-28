@@ -143,6 +143,8 @@ export function startObservability(options: ObservabilityOptions) {
 			: undefined;
 	const output = options.output ?? process.stdout;
 	let backpressured = false;
+	let closingOutput = false;
+	let pendingWrites = 0;
 	let droppedLogs = 0;
 	let invalidRecords = 0;
 	let captureFailures = 0;
@@ -164,13 +166,22 @@ export function startObservability(options: ObservabilityOptions) {
 		},
 		{
 			write(line: string) {
-				if (backpressured) {
+				if (backpressured || closingOutput) {
 					droppedLogs++;
 					return;
 				}
+				pendingWrites++;
 				try {
-					if (!output.write(line)) backpressured = true;
+					if (
+						!output.write(line, () => {
+							pendingWrites--;
+							if (closingOutput && pendingWrites === 0)
+								setImmediate(() => output.off("error", onError));
+						})
+					)
+						backpressured = true;
 				} catch {
+					pendingWrites--;
 					backpressured = true;
 					droppedLogs++;
 				}
@@ -321,8 +332,9 @@ export function startObservability(options: ObservabilityOptions) {
 		}),
 		close() {
 			closing ??= (async () => {
+				closingOutput = true;
 				output.off("drain", onDrain);
-				output.off("error", onError);
+				if (pendingWrites === 0) output.off("error", onError);
 				let timer: ReturnType<typeof setTimeout> | undefined;
 				try {
 					await Promise.race([
