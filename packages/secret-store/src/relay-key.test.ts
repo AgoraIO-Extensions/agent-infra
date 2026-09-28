@@ -297,6 +297,78 @@ describe("Relay Key ciphertext V1", () => {
 		).toBe("RELAY_KEY_METADATA_INVALID");
 	});
 
+	it("snapshots plain ciphertext metadata before decrypting", async () => {
+		const binding = {
+			purpose: "personal" as const,
+			subjectId: "user_01",
+			keyId: "personal_01",
+			keyVersion: 1,
+		};
+		const encrypted = record(binding, plaintextK1);
+		expect(await decrypt(JSON.parse(JSON.stringify(encrypted)), binding)).toBe(
+			plaintextK1,
+		);
+
+		let getterReads = 0;
+		const rootGetter = { ...encrypted };
+		Object.defineProperty(rootGetter, "crypto", {
+			enumerable: true,
+			get() {
+				getterReads += 1;
+				return encrypted.crypto;
+			},
+		});
+		const nestedGetter = { ...encrypted, crypto: { ...encrypted.crypto } };
+		Object.defineProperty(nestedGetter.crypto, "wrappedDek", {
+			enumerable: true,
+			get() {
+				getterReads += 1;
+				return encrypted.crypto.wrappedDek;
+			},
+		});
+		const hiddenField = { ...encrypted };
+		Object.defineProperty(hiddenField, "hidden", { value: true });
+		for (const hostile of [
+			rootGetter,
+			nestedGetter,
+			{ ...encrypted, [Symbol("extra")]: true },
+			{
+				...encrypted,
+				crypto: { ...encrypted.crypto, [Symbol("extra")]: true },
+			},
+			Object.assign(Object.create({ inherited: true }), encrypted),
+			new Proxy({ ...encrypted }, {}),
+			hiddenField,
+		]) {
+			expect(await decrypt(hostile, binding)).toBe(
+				"RELAY_KEY_METADATA_INVALID",
+			);
+		}
+		const expectedGetter = { ...binding };
+		Object.defineProperty(expectedGetter, "subjectId", {
+			enumerable: true,
+			get() {
+				getterReads += 1;
+				return binding.subjectId;
+			},
+		});
+		expect(await decrypt(encrypted, expectedGetter)).toBe(
+			"RELAY_KEY_METADATA_INVALID",
+		);
+		const plaintextGetter = { ...binding, plaintext: plaintextK1 };
+		Object.defineProperty(plaintextGetter, "plaintext", {
+			enumerable: true,
+			get() {
+				getterReads += 1;
+				return plaintextK1;
+			},
+		});
+		expect(() => encryptor.encrypt(plaintextGetter)).toThrow(
+			"Relay Key encryption input is invalid",
+		);
+		expect(getterReads).toBe(0);
+	});
+
 	it("rejects malformed inputs and keeps decrypt off the main export", () => {
 		expect(() =>
 			record(
