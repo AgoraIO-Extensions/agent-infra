@@ -145,6 +145,58 @@ test("kind values render the reviewable Kubernetes workload-plane topology", () 
 	);
 });
 
+test("optional Worker configuration is mounted from its own Secret", () => {
+	const result = render(
+		"--set-string",
+		"platformWorker.configurationSecretRef.name=agent-infra-worker-configuration",
+		"--set-string",
+		"platformWorker.configurationSecretRef.key=config",
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const resources = objects(result.stdout);
+	const worker = resource(
+		resources,
+		"Deployment",
+		"topology-agent-infra-platform-worker",
+	).spec.template.spec;
+	const container = worker.containers[0];
+	assert.equal(
+		container.env.find(
+			(entry) => entry.name === "PLATFORM_WORKER_CONFIGURATION_FILE",
+		)?.value,
+		"/var/run/agent-infra/deployment/config.json",
+	);
+	assert.deepEqual(
+		worker.volumes.find((volume) => volume.name === "deployment-configuration")
+			?.secret,
+		{
+			secretName: "agent-infra-worker-configuration",
+			items: [{ key: "config", path: "config.json" }],
+		},
+	);
+	assert.equal(
+		container.volumeMounts.find(
+			(mount) => mount.name === "deployment-configuration",
+		)?.readOnly,
+		true,
+	);
+	const api = resource(
+		resources,
+		"Deployment",
+		"topology-agent-infra-platform-api",
+	).spec.template.spec;
+	assert.equal(
+		(api.volumes ?? []).some(
+			(volume) => volume.name === "deployment-configuration",
+		),
+		false,
+	);
+});
+
 test("deployment configuration fails closed before rendering unsafe values", () => {
 	const invalidConfigurations = [
 		["--set-string", "images.platformWorker.digest=latest"],

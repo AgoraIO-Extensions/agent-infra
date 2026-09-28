@@ -115,6 +115,7 @@
       "additionalProperties": false,
       "required": ["replicas"],
       "properties": {
+        "configurationSecretRef": { "$ref": "#/$defs/secretRef" },
         "deploymentModule": { "type": "string", "maxLength": 256, "pattern": "^(?:$|(?:file:///|/)[^\\s]+)$" },
         "replicas": {
           "type": "integer",

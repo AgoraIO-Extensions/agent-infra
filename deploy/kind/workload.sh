@@ -15,6 +15,10 @@ export PATH="$state_dir/bin:$PATH"
 cluster_name="workload-${RANDOM}-$$"
 registry_name="${cluster_name}-registry"
 export KUBECONFIG="$state_dir/kubeconfig"
+workload_kind_context="kind-$cluster_name"
+kube() {
+  kubectl --kubeconfig "$KUBECONFIG" --context "$workload_kind_context" "$@"
+}
 cleanup() {
   "$kind_bin" delete cluster --name "$cluster_name"
   docker rm --force "$registry_name" >/dev/null 2>&1 || true
@@ -53,8 +57,8 @@ curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
 printf '%s  %s\n' \
   9382d2b27a76f40c170454b408653e6d71e2205ef0aef069e942bb690e7381d0 \
   "$state_dir/calico.yaml" | shasum -a 256 --check --status
-kubectl create --request-timeout=60s -f "$state_dir/calico.yaml"
-kubectl rollout status daemonset/calico-node --namespace kube-system --timeout=300s
-kubectl wait nodes --all --for=condition=Ready --timeout=300s
+kube create --request-timeout=60s -f "$state_dir/calico.yaml"
+kube rollout status daemonset/calico-node --namespace kube-system --timeout=300s
+kube wait nodes --all --for=condition=Ready --timeout=300s
 export WORKLOAD_KIND_TEST=1
 pnpm --filter @agent-infra/platform-worker exec vitest run src/workload.kind.test.ts
