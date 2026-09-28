@@ -406,6 +406,15 @@ describe("management routes", () => {
 		};
 		// Re-register the route with the API identity boundary for this request.
 		const apiApp = new Hono();
+		let credentialRevoked = false;
+		const resolveApiCredential = vi.fn(async () =>
+			credentialRevoked
+				? {
+						...apiIdentity,
+						credential: { ...apiIdentity.credential, revokedAt: new Date() },
+					}
+				: apiIdentity,
+		);
 		const prepareSecretReplacements = vi.fn().mockResolvedValue({
 			secrets: [],
 			modelConfiguration: undefined,
@@ -414,7 +423,7 @@ describe("management routes", () => {
 			identity: {
 				resolve: vi.fn(),
 				hydrateUsers: vi.fn().mockResolvedValue([]),
-				resolveApiCredential: vi.fn().mockResolvedValue(apiIdentity),
+				resolveApiCredential,
 			},
 			apiIdentity: {
 				authorizeCredentialScope: vi.fn(),
@@ -510,6 +519,38 @@ describe("management routes", () => {
 			expect.objectContaining({ creationMode: "api" }),
 			attachment,
 		);
+		prepareSecretReplacements.mockImplementationOnce(async () => {
+			credentialRevoked = true;
+			return {
+				secrets: [{ name: "BOT_TOKEN", replace: true }],
+				modelConfiguration: undefined,
+				attachment,
+			};
+		});
+		const revoked = await apiApp.request("/api/v1/agents", {
+			method: "POST",
+			headers: {
+				...headers,
+				Authorization: "Bearer secret",
+				"Idempotency-Key": "Direct.Aa-03",
+			},
+			body: JSON.stringify({
+				schemaVersion: 2,
+				name: "Revoked during preparation",
+				description: "Must not be created",
+				source: { kind: "standard", templateId: "template-1" },
+				coOwnerIds: [],
+				availability: [],
+				environment: [],
+				secrets: [{ name: "BOT_TOKEN", value: "secret-value" }],
+			}),
+		});
+		expect(revoked.status).toBe(403);
+		expect(await revoked.json()).toMatchObject({
+			code: "AUTHORIZATION_REVOKED",
+		});
+		expect(resolveApiCredential).toHaveBeenCalledTimes(6);
+		expect(direct.submit).toHaveBeenCalledTimes(2);
 	});
 
 	it("does not return an application credential to its responsible user", async () => {

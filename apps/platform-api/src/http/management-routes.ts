@@ -1074,6 +1074,32 @@ export function registerManagementRoutes(
 				metadata,
 				ids,
 			);
+			const currentApiIdentity = await resolveApiIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			if (
+				currentApiIdentity.principal.kind !== apiIdentity.principal.kind ||
+				currentApiIdentity.principal.id !== apiIdentity.principal.id ||
+				currentApiIdentity.ownerId !== apiIdentity.ownerId ||
+				currentApiIdentity.credential.credentialId !==
+					apiIdentity.credential.credentialId ||
+				currentApiIdentity.authorizationRevision !==
+					apiIdentity.authorizationRevision
+			)
+				throw new HttpProtocolError("AUTHORIZATION_REVOKED", metadata.traceId);
+			await management.authorizeCredentialScope(
+				apiActor(currentApiIdentity),
+				["agent:create"],
+				apiAccessAudit(
+					apiIdentityContext(currentApiIdentity),
+					metadata,
+					"agents",
+					"missing_scope",
+					["agent:create"],
+				),
+			);
 			await dependencies.foundation.submit(
 				{
 					schemaVersion: 2,
