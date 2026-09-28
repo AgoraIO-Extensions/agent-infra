@@ -393,12 +393,17 @@ describe("PostgreSQL API identity store", () => {
 		);
 	});
 
-	it("rejects grant writes after caller grant or credential revocation", async () => {
+	it("rejects grant writes after application disablement, grant or credential revocation", async () => {
 		await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
 			platform.platform_api_credentials, platform.agents cascade`;
 		await adminClient`
 			insert into platform.agents (id, authorization_revision)
 			values ('agent_grant_race', 'revision_1')
+		`;
+		await adminClient`
+			insert into platform.platform_applications
+				(id, name, responsible_user_id, authorization_revision)
+			values ('manager-app', 'Manager', 'user_owner', 'revision_1')
 		`;
 		await adminClient`
 			insert into platform.platform_api_credentials
@@ -436,6 +441,34 @@ describe("PostgreSQL API identity store", () => {
 				authorizationRevision,
 			});
 		await expect(grant("revision_2")).resolves.toBe(true);
+		await adminClient`
+			update platform.platform_applications set status = 'disabled'
+			where id = 'manager-app'
+		`;
+		await expect(grant("revision_disabled")).resolves.toBe(false);
+		await expect(
+			store.revokeAgentGrant({
+				actor,
+				agentId: "agent_grant_race",
+				principal: { kind: "application", id: "recipient-app" },
+				grantType: "use",
+			}),
+		).resolves.toBe(false);
+		const [disabledWrite] = await adminClient`
+			select agents.authorization_revision, grants.revoked_at
+			from platform.agents
+			join platform.agent_principal_grants grants
+				on grants.agent_id = agents.id and grants.principal_id = 'recipient-app'
+			where agents.id = 'agent_grant_race'
+		`;
+		expect(disabledWrite).toEqual({
+			authorization_revision: "revision_2",
+			revoked_at: null,
+		});
+		await adminClient`
+			update platform.platform_applications set status = 'active'
+			where id = 'manager-app'
+		`;
 		await expect(
 			store.revokeAgentGrant({
 				actor: administratorActor,
