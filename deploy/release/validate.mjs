@@ -11,6 +11,7 @@ import { runCommand } from "./run-command.mjs";
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const chart = resolve(repositoryRoot, "deploy/helm/agent-infra");
 const imageKeys = ["web", "platformApi", "platformWorker", "runtimeHost"];
+const optionalImageKey = "enterpriseDirectorySync";
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const placeholderDigest = `sha256:${"0".repeat(64)}`;
 const timeoutMs = {
@@ -47,8 +48,11 @@ function validateManifest(manifest) {
 	if (!/^linux\/(?:amd64|arm64)$/.test(manifest.platform)) {
 		fail("image manifest platform is invalid");
 	}
-	expectKeys(manifest.images, imageKeys, "image manifest images");
-	for (const key of imageKeys) {
+	const manifestImageKeys = Object.hasOwn(manifest.images ?? {}, optionalImageKey)
+		? [...imageKeys, optionalImageKey]
+		: imageKeys;
+	expectKeys(manifest.images, manifestImageKeys, "image manifest images");
+	for (const key of manifestImageKeys) {
 		const image = manifest.images[key];
 		expectKeys(image, ["repository", "digest"], `${key} image`);
 		if (typeof image.repository !== "string" || image.repository.length === 0) {
@@ -61,7 +65,13 @@ function validateManifest(manifest) {
 }
 
 function validateImageReferences(manifest, values) {
-	for (const key of imageKeys) {
+	if (values?.enterpriseDirectorySync?.enabled && !manifest.images[optionalImageKey]) {
+		fail("enterpriseDirectorySync image is required when directory sync is enabled");
+	}
+	for (const key of Object.keys(manifest.images)) {
+		if (key === optionalImageKey && !values?.enterpriseDirectorySync?.enabled) {
+			continue;
+		}
 		const configured = values?.images?.[key];
 		if (
 			configured?.repository !== manifest.images[key].repository ||

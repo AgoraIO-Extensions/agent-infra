@@ -8,6 +8,9 @@ images:
   platformWorker:
     repository: ghcr.io/agoraio-extensions/agent-infra/platform-worker
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  enterpriseDirectorySync:
+    repository: ghcr.io/agoraio-extensions/agent-infra/enterprise-directory-sync
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
   runtimeHost:
     repository: ghcr.io/agoraio-extensions/agent-infra/agent-runtime-host
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -54,6 +57,28 @@ platformApi:
 platformWorker:
   deploymentModule: ""
   replicas: 1
+
+enterpriseDirectorySync:
+  enabled: false
+  rootDepartmentId: 1
+  corpId: ""
+  runtimeDatabaseRole: ""
+  databaseSecretRef:
+    name: agent-infra-directory-database
+    key: url
+  migrationDatabaseSecretRef:
+    name: agent-infra-directory-migration-database
+    key: url
+  corpSecretRef:
+    name: agent-infra-directory-wecom
+    key: corp-secret
+  readTokenSecretRef:
+    name: agent-infra-directory-read-token
+    key: token
+  tlsSecretRef:
+    name: agent-infra-directory-tls
+    certKey: tls.crt
+    privateKeyKey: tls.key
 
 migration:
   enabled: true

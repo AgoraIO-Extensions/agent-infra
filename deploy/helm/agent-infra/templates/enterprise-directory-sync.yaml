@@ -1,0 +1,191 @@
+{{- if .Values.enterpriseDirectorySync.enabled -}}
+{{- if ne .Values.platformApi.placement "in-cluster" -}}
+{{- fail "Enterprise Directory Sync requires in-cluster Platform API placement" -}}
+{{- end -}}
+{{- $name := include "agent-infra.componentName" (dict "root" . "suffix" "enterprise-directory-sync") -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+{{- if .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-migration
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-weight: "-5"
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: {{ include "agent-infra.image" .Values.images.enterpriseDirectorySync }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["node", "scripts/migrate.mjs"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          env:
+            - name: DIRECTORY_MIGRATION_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.enterpriseDirectorySync.migrationDatabaseSecretRef.name }}
+                  key: {{ .Values.enterpriseDirectorySync.migrationDatabaseSecretRef.key }}
+            - name: DIRECTORY_RUNTIME_DATABASE_ROLE
+              value: {{ .Values.enterpriseDirectorySync.runtimeDatabaseRole | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+    app.kubernetes.io/component: enterprise-directory-sync
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: enterprise-directory-sync
+  ports:
+    - name: https
+      port: 3004
+      targetPort: https
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+    app.kubernetes.io/component: enterprise-directory-sync
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: enterprise-directory-sync
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Chart.Name }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: enterprise-directory-sync
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: enterprise-directory-sync
+          image: {{ include "agent-infra.image" .Values.images.enterpriseDirectorySync }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          ports:
+            - name: https
+              containerPort: 3004
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: https
+              scheme: HTTPS
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          env:
+            - name: DIRECTORY_ROOT_DEPARTMENT_ID
+              value: {{ .Values.enterpriseDirectorySync.rootDepartmentId | quote }}
+            - name: WECOM_CORP_ID
+              value: {{ .Values.enterpriseDirectorySync.corpId | quote }}
+            - name: DIRECTORY_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.enterpriseDirectorySync.databaseSecretRef.name }}
+                  key: {{ .Values.enterpriseDirectorySync.databaseSecretRef.key }}
+            - name: DIRECTORY_READ_TOKEN_FILE
+              value: /var/run/directory/read-token/token
+            - name: WECOM_CORP_SECRET_FILE
+              value: /var/run/directory/wecom/corp-secret
+            - name: DIRECTORY_TLS_KEY_FILE
+              value: /var/run/directory/tls/tls.key
+            - name: DIRECTORY_TLS_CERT_FILE
+              value: /var/run/directory/tls/tls.crt
+          volumeMounts:
+            - name: read-token
+              mountPath: /var/run/directory/read-token
+              readOnly: true
+            - name: wecom
+              mountPath: /var/run/directory/wecom
+              readOnly: true
+            - name: tls
+              mountPath: /var/run/directory/tls
+              readOnly: true
+      volumes:
+        - name: read-token
+          secret:
+            secretName: {{ .Values.enterpriseDirectorySync.readTokenSecretRef.name }}
+            items:
+              - key: {{ .Values.enterpriseDirectorySync.readTokenSecretRef.key }}
+                path: token
+        - name: wecom
+          secret:
+            secretName: {{ .Values.enterpriseDirectorySync.corpSecretRef.name }}
+            items:
+              - key: {{ .Values.enterpriseDirectorySync.corpSecretRef.key }}
+                path: corp-secret
+        - name: tls
+          secret:
+            secretName: {{ .Values.enterpriseDirectorySync.tlsSecretRef.name }}
+            items:
+              - key: {{ .Values.enterpriseDirectorySync.tlsSecretRef.certKey }}
+                path: tls.crt
+              - key: {{ .Values.enterpriseDirectorySync.tlsSecretRef.privateKeyKey }}
+                path: tls.key
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: enterprise-directory-sync
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: platform-api
+      ports:
+        - protocol: TCP
+          port: 3004
+{{- end }}
