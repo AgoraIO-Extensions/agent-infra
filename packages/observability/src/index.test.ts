@@ -47,6 +47,28 @@ it("emits only bounded metadata and drops logs under backpressure", () => {
 	});
 });
 
+it("keeps the validated service label after caller options change", () => {
+	const lines: string[] = [];
+	const options = {
+		service: "platform-api",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	};
+	const telemetry = startObservability(
+		options as Parameters<typeof startObservability>[0],
+	);
+	active.push(telemetry);
+	options.service = "PRIVATE_SENTINEL";
+	telemetry.record({ stage: "http", outcome: "completed" });
+	expect(lines).toHaveLength(1);
+	expect(lines[0]).toContain('"service":"platform-api"');
+	expect(lines[0]).not.toContain("PRIVATE_SENTINEL");
+});
+
 it("reports shutdown and ignores records once close begins", async () => {
 	const lines: string[] = [];
 	const output = new Writable({

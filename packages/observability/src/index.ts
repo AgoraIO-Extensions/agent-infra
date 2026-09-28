@@ -124,24 +124,26 @@ function signalUrl(endpoint: string, signal: "traces" | "metrics") {
 }
 
 export function startObservability(options: ObservabilityOptions) {
-	if (!services.includes(options.service))
+	const {
+		service,
+		otlpEndpoint,
+		metricIntervalMs,
+		output: configuredOutput,
+	} = options;
+	if (!services.includes(service))
 		throw new TypeError("Invalid observability service");
 	if (
-		options.metricIntervalMs !== undefined &&
-		(!Number.isSafeInteger(options.metricIntervalMs) ||
-			options.metricIntervalMs < 1000 ||
-			options.metricIntervalMs > 60_000)
+		metricIntervalMs !== undefined &&
+		(!Number.isSafeInteger(metricIntervalMs) ||
+			metricIntervalMs < 1000 ||
+			metricIntervalMs > 60_000)
 	)
 		throw new TypeError("Invalid observability metric interval");
 	const traceUrl =
-		options.otlpEndpoint !== undefined
-			? signalUrl(options.otlpEndpoint, "traces")
-			: undefined;
+		otlpEndpoint !== undefined ? signalUrl(otlpEndpoint, "traces") : undefined;
 	const metricUrl =
-		options.otlpEndpoint !== undefined
-			? signalUrl(options.otlpEndpoint, "metrics")
-			: undefined;
-	const output = options.output ?? process.stdout;
+		otlpEndpoint !== undefined ? signalUrl(otlpEndpoint, "metrics") : undefined;
+	const output = configuredOutput ?? process.stdout;
 	let backpressured = false;
 	let closingOutput = false;
 	let abandonExports = false;
@@ -175,7 +177,7 @@ export function startObservability(options: ObservabilityOptions) {
 	output.on("error", onError);
 	const logger = pino(
 		{
-			base: { service: options.service },
+			base: { service },
 			timestamp: pino.stdTimeFunctions.isoTime,
 		},
 		{
@@ -254,7 +256,7 @@ export function startObservability(options: ObservabilityOptions) {
 			concurrencyLimit: 1,
 		});
 		const resource = defaultResource().merge(
-			resourceFromAttributes({ "service.name": options.service }),
+			resourceFromAttributes({ "service.name": service }),
 		);
 		providers = {
 			tracer: new BasicTracerProvider({
@@ -273,11 +275,8 @@ export function startObservability(options: ObservabilityOptions) {
 				readers: [
 					new PeriodicExportingMetricReader({
 						exporter: metricExporter,
-						exportIntervalMillis: options.metricIntervalMs ?? 5000,
-						exportTimeoutMillis: Math.min(
-							options.metricIntervalMs ?? 5000,
-							2000,
-						),
+						exportIntervalMillis: metricIntervalMs ?? 5000,
+						exportTimeoutMillis: Math.min(metricIntervalMs ?? 5000, 2000),
 					}),
 				],
 			}),
@@ -327,7 +326,7 @@ export function startObservability(options: ObservabilityOptions) {
 					return;
 				}
 				const labels = {
-					service: options.service,
+					service,
 					stage,
 					outcome,
 				};
