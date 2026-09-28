@@ -559,10 +559,9 @@ export class PostgresAgentConfigurationQueryV1 {
 									? grant.grantType === "manage"
 									: grant.grantType === "manage" || grant.grantType === "use"),
 						);
-					const ownerAllowed =
-						input.principal?.kind === "application" ? false : owner;
+					const ownerAllowed = input.principal === undefined && owner;
 					const availabilityAllowed =
-						input.principal?.kind === "application" ? false : available;
+						input.principal === undefined && available;
 					if (
 						!input.isAdministrator &&
 						!principalAllowed &&

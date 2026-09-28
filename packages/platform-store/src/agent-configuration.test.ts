@@ -1976,6 +1976,49 @@ describe("PostgreSQL Agent configuration query", () => {
 		});
 	});
 
+	it.each([
+		{ actorId: "owner_01", available: false },
+		{ actorId: "viewer_01", available: true },
+	])(
+		"does not fall back to owner or availability after a user API grant is revoked: %j",
+		async ({ actorId, available }) => {
+			await clearDatabase();
+			await seed();
+			if (available) {
+				await adminClient`
+					insert into platform.agent_availability (agent_id, target_type, target_id)
+					values ('agent_01', 'user', ${actorId})
+				`;
+			}
+			await adminClient`
+				insert into platform.agent_principal_grants
+					(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+				values ('agent_01', 'user', ${actorId}, 'use', 'authorization_9')
+			`;
+			const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+			adapters.push(query);
+			const input = {
+				agentId: "agent_01",
+				actorId,
+				organizationIds: [],
+				isAdministrator: false,
+				principal: { kind: "user" as const, id: actorId },
+				intent: "discover" as const,
+			};
+			await expect(query.read(input)).resolves.toMatchObject({
+				outcome: "found",
+			});
+			await adminClient`
+				update platform.agent_principal_grants set revoked_at = now()
+				where agent_id = 'agent_01' and principal_type = 'user'
+					and principal_id = ${actorId}
+			`;
+			await expect(query.read(input)).resolves.toEqual({
+				outcome: "unavailable",
+			});
+		},
+	);
+
 	it("fails closed on legacy NULL and malicious configuration, authorization, or replay records", async () => {
 		await clearDatabase();
 		await seed();
