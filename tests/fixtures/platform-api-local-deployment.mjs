@@ -49,6 +49,7 @@ export function createPlatformApiAssemblyInput() {
 			imageAdmission: admissions,
 			modelAdmission: admissions,
 			secretAdmission: admissions,
+			actionAdmission: admissions,
 			channelAdmission: admissions,
 		},
 		deploymentConfiguration: {

@@ -26,6 +26,7 @@ export function createPlatformApiAssemblyInput() {
 			imageAdmission: { admitImage: unavailable },
 			modelAdmission: { admitModels: unavailable },
 			secretAdmission: { admitSecrets: unavailable },
+			actionAdmission: { admitActions: unavailable },
 			channelAdmission: { admitChannels: unavailable },
 		},
 		allocateApplicationIds: unavailable,
