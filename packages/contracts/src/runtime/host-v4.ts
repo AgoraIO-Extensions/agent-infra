@@ -213,20 +213,30 @@ const pinnedExecutionKeyScopeSchema = z.object({
 	executionId: OpaqueIdV1Schema,
 	turnId: OpaqueIdV1Schema,
 	sessionGeneration: z.number().int().positive().safe(),
+	hostSessionRef: OpaqueIdV1Schema.nullable(),
 	keyBinding: RuntimeRelayKeyBindingV1Schema,
 });
 export type RuntimePinnedExecutionKeyScopeV4 = z.infer<
 	typeof pinnedExecutionKeyScopeSchema
 >;
 
+// Resolve durable same-operation replays before this pre-Driver check.
 // The pinned scope comes from the original accepted Execution, never the new request.
 export function validateRuntimePinnedExecutionKeyScopeV4(
 	pinned: unknown,
 	request: unknown,
+	trustedHostSessionRef: unknown,
 ): void {
 	try {
 		const original = pinnedExecutionKeyScopeSchema.parse(pinned);
 		const next = pinnedExecutionKeyScopeSchema.parse(request);
+		const trustedSession = OpaqueIdV1Schema.nullable().parse(
+			trustedHostSessionRef,
+		);
+		const submit =
+			request !== null && typeof request === "object" && "selection" in request;
+		if (submit) RuntimeSubmitTurnRequestV4Schema.parse(request);
+		else RuntimeSupplementRequestV4Schema.parse(request);
 		if (
 			original.principal.kind !== next.principal.kind ||
 			original.principal.id !== next.principal.id ||
@@ -237,6 +247,12 @@ export function validateRuntimePinnedExecutionKeyScopeV4(
 			original.executionId !== next.executionId ||
 			original.turnId !== next.turnId ||
 			original.sessionGeneration !== next.sessionGeneration ||
+			(submit
+				? original.hostSessionRef !== next.hostSessionRef ||
+					original.hostSessionRef !== trustedSession
+				: next.hostSessionRef !== trustedSession ||
+					(original.hostSessionRef !== null &&
+						original.hostSessionRef !== next.hostSessionRef)) ||
 			original.keyBinding.purpose !== next.keyBinding.purpose ||
 			original.keyBinding.subjectId !== next.keyBinding.subjectId ||
 			original.keyBinding.ciphertextRef !== next.keyBinding.ciphertextRef ||
