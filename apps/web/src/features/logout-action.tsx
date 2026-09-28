@@ -21,8 +21,12 @@ export function LogoutAction({ endpoint, onLoggedOut }: LogoutActionProps) {
 				headers: { "X-Platform-CSRF": "1" },
 			});
 			if (!response.ok) throw new Error(`Logout failed: ${response.status}`);
-			await onLoggedOut();
-			setState("idle");
+			try {
+				await onLoggedOut();
+				setState("idle");
+			} catch {
+				window.location.reload();
+			}
 		} catch {
 			setState("error");
 		}

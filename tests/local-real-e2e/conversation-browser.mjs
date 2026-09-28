@@ -92,12 +92,28 @@ async function run(input, evidence) {
 		const page = await owner.newPage();
 		await page.addInitScript(() => {
 			window.__agentInfraSseFrames = [];
+			window.__agentInfraAssistantRenders = [];
 			window.__agentInfraStreamStartAssistantLength = 0;
 			const assistantTextLength = () =>
 				[...document.querySelectorAll(".assistant-markdown")].reduce(
 					(max, node) => Math.max(max, node.textContent?.trim().length ?? 0),
 					0,
 				);
+			let lastAssistantLength = 0;
+			const recordAssistantRender = () => {
+				const visibleTextLength = assistantTextLength();
+				if (visibleTextLength <= lastAssistantLength) return;
+				lastAssistantLength = visibleTextLength;
+				window.__agentInfraAssistantRenders.push({
+					at: performance.now(),
+					visibleTextLength,
+				});
+			};
+			new MutationObserver(recordAssistantRender).observe(document, {
+				characterData: true,
+				childList: true,
+				subtree: true,
+			});
 			const fetchImpl = window.fetch.bind(window);
 			window.fetch = async (input, init) => {
 				const response = await fetchImpl(input, init);
@@ -253,6 +269,9 @@ async function run(input, evidence) {
 		const streamStartAssistantLength = await page.evaluate(
 			() => window.__agentInfraStreamStartAssistantLength ?? 0,
 		);
+		const assistantRenders = await page.evaluate(
+			() => window.__agentInfraAssistantRenders ?? [],
+		);
 		assert(
 			sseFrames.length >= 2,
 			"Browser must observe incremental SSE frames",
@@ -269,8 +288,13 @@ async function run(input, evidence) {
 			"SSE must include text and terminal frames",
 		);
 		assert(
-			terminalFrame.visibleTextLength > streamStartAssistantLength,
-			"The page must display assistant text before the terminal frame",
+			assistantRenders.some(
+				(render) =>
+					render.at >= firstFrame.at &&
+					render.at < terminalFrame.at &&
+					render.visibleTextLength > streamStartAssistantLength,
+			),
+			"The page must render incremental assistant text before the terminal frame",
 		);
 		assert(
 			firstFrame.at < terminalFrame.at,
@@ -287,6 +311,9 @@ async function run(input, evidence) {
 				status: frame.status ?? null,
 				textLength: frame.textLength ?? null,
 				visibleTextLength: frame.visibleTextLength,
+			})),
+			assistantRenders: assistantRenders.map((render) => ({
+				visibleTextLength: render.visibleTextLength,
 			})),
 			cursorHash: detail.conversation.lastConversationCursor
 				? digest(detail.conversation.lastConversationCursor)
