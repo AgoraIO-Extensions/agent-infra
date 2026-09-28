@@ -1129,7 +1129,7 @@ it.each(["read", "write", "edit"])(
 	30_000,
 );
 
-it("excludes a delayed durable start acknowledgement from actual pinned Pi tool timing", async () => {
+it("waits for a delayed durable start acknowledgement before the pinned Pi tool action", async () => {
 	const blocked = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
 	const fixture = await nativeToolsFixture(
@@ -1177,16 +1177,15 @@ it("excludes a delayed durable start acknowledgement from actual pinned Pi tool 
 	try {
 		await fixture.start();
 		await blocked.promise;
-		await vi.waitFor(async () =>
-			expect(await readFile(join(fixture.workspace, "owner.txt"), "utf8")).toBe(
-				"changed",
-			),
-		);
-		await new Promise<void>((done) => setTimeout(done, 100));
+		await expect(
+			readFile(join(fixture.workspace, "owner.txt"), "utf8"),
+		).rejects.toThrow();
 		expect(fixture.requests).toHaveLength(1);
-		const acknowledgedAt = Date.now();
 		release.resolve();
 		await fixture.complete();
+		expect(await readFile(join(fixture.workspace, "owner.txt"), "utf8")).toBe(
+			"changed",
+		);
 		const facts = (await fixture.facts()).flatMap((event) =>
 			event.type === "operation" && event.payload.kind === "tool"
 				? [event.payload]
@@ -1197,11 +1196,6 @@ it("excludes a delayed durable start acknowledgement from actual pinned Pi tool 
 			"started",
 			"completed",
 		]);
-		const result = facts.at(-1);
-		expect(Date.parse(result?.finishedAt ?? "")).toBeLessThan(acknowledgedAt);
-		expect(result?.durationMs).toBeLessThan(
-			acknowledgedAt - Date.parse(result?.startedAt ?? ""),
-		);
 	} finally {
 		release.resolve();
 		writes.mockRestore();
