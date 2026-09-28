@@ -1,11 +1,19 @@
 import type { Writable } from "node:stream";
-import { metrics, trace } from "@opentelemetry/api";
 import { ExportResultCode } from "@opentelemetry/core";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
-import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
-import { NodeSDK } from "@opentelemetry/sdk-node";
-import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import {
+	defaultResource,
+	resourceFromAttributes,
+} from "@opentelemetry/resources";
+import {
+	MeterProvider,
+	PeriodicExportingMetricReader,
+} from "@opentelemetry/sdk-metrics";
+import {
+	BasicTracerProvider,
+	BatchSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
 import pino from "pino";
 
 export const operationalStages = [
@@ -172,7 +180,9 @@ export function startObservability(options: ObservabilityOptions) {
 		exportFailures++;
 		lastExportFailureAt = new Date().toISOString();
 	};
-	let sdk: NodeSDK | undefined;
+	let providers:
+		| { tracer: BasicTracerProvider; meter: MeterProvider }
+		| undefined;
 	if (traceUrl && metricUrl) {
 		class TraceExporter extends OTLPTraceExporter {
 			override export(
@@ -204,33 +214,42 @@ export function startObservability(options: ObservabilityOptions) {
 			timeoutMillis: 2000,
 			concurrencyLimit: 1,
 		});
-		sdk = new NodeSDK({
-			serviceName: options.service,
-			autoDetectResources: false,
-			spanProcessors: [
-				new BatchSpanProcessor(traceExporter, {
-					maxQueueSize: 512,
-					maxExportBatchSize: 32,
-					scheduledDelayMillis: 1000,
-					exportTimeoutMillis: 2000,
-				}),
-			],
-			metricReaders: [
-				new PeriodicExportingMetricReader({
-					exporter: metricExporter,
-					exportIntervalMillis: options.metricIntervalMs ?? 5000,
-					exportTimeoutMillis: Math.min(options.metricIntervalMs ?? 5000, 2000),
-				}),
-			],
-		});
-		sdk.start();
+		const resource = defaultResource().merge(
+			resourceFromAttributes({ "service.name": options.service }),
+		);
+		providers = {
+			tracer: new BasicTracerProvider({
+				resource,
+				spanProcessors: [
+					new BatchSpanProcessor(traceExporter, {
+						maxQueueSize: 512,
+						maxExportBatchSize: 32,
+						scheduledDelayMillis: 1000,
+						exportTimeoutMillis: 2000,
+					}),
+				],
+			}),
+			meter: new MeterProvider({
+				resource,
+				readers: [
+					new PeriodicExportingMetricReader({
+						exporter: metricExporter,
+						exportIntervalMillis: options.metricIntervalMs ?? 5000,
+						exportTimeoutMillis: Math.min(
+							options.metricIntervalMs ?? 5000,
+							2000,
+						),
+					}),
+				],
+			}),
+		};
 	}
-	const meter = metrics.getMeter("agent-infra-observability");
-	const tracer = trace.getTracer("agent-infra-observability");
-	const operations = meter.createCounter("agent_platform_operations_total", {
+	const meter = providers?.meter.getMeter("agent-infra-observability");
+	const tracer = providers?.tracer.getTracer("agent-infra-observability");
+	const operations = meter?.createCounter("agent_platform_operations_total", {
 		description: "Observed platform stage outcomes",
 	});
-	const duration = meter.createHistogram("agent_platform_operation_duration", {
+	const duration = meter?.createHistogram("agent_platform_operation_duration", {
 		unit: "ms",
 		description: "Observed platform stage duration",
 	});
@@ -280,12 +299,9 @@ export function startObservability(options: ObservabilityOptions) {
 					...(safeOperationRef(operationRef) ? { operationRef } : {}),
 					...(safeOperationRef(attemptRef) ? { attemptRef } : {}),
 				};
-				operations.add(1, labels);
-				if (durationMs !== undefined) duration.record(durationMs, labels);
-				const span = tracer.startSpan(`platform.${stage}`, {
-					attributes: details,
-				});
-				span.end();
+				operations?.add(1, labels);
+				if (durationMs !== undefined) duration?.record(durationMs, labels);
+				tracer?.startSpan(`platform.${stage}`, { attributes: details }).end();
 				if (outcome === "failed" || outcome === "unknown")
 					logger.error(details, "operation");
 				else logger.info(details, "operation");
@@ -294,7 +310,7 @@ export function startObservability(options: ObservabilityOptions) {
 			}
 		},
 		status: () => ({
-			enabled: sdk !== undefined,
+			enabled: providers !== undefined,
 			captureFailures,
 			exportFailures,
 			lastExportFailureAt,
@@ -308,7 +324,12 @@ export function startObservability(options: ObservabilityOptions) {
 				try {
 					await Promise.race([
 						Promise.resolve()
-							.then(() => sdk?.shutdown())
+							.then(() =>
+								Promise.all([
+									providers?.tracer.shutdown(),
+									providers?.meter.shutdown(),
+								]),
+							)
 							.catch(() => noteExport(1)),
 						new Promise<void>((resolve) => {
 							timer = setTimeout(() => {

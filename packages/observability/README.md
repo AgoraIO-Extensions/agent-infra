@@ -2,6 +2,8 @@
 
 `startObservability` 输出 Pino JSON 日志；配置 OTLP/HTTP 地址后，同时导出 OpenTelemetry Trace 和 Metric。未配置地址时，导出明确禁用，运行日志仍可用。输入只接受固定的阶段、结果和故障代码，以及受限关联元数据；正文、附件、思考、凭证和原始错误不属于输入契约。
 
+每次启动持有独立的 Trace 与 Metric provider；并发实例和关闭后重启分别导出到各自配置的 OTLP 地址，不注册进程全局 provider。`status().enabled` 只表示本实例已配置并创建导出器，不代表 collector 已收到数据；导出失败由 `exportFailures` 单独报告。
+
 | 指标 | 单位 | 标签 | 计数边界 |
 | --- | --- | --- | --- |
 | `agent_platform_operations_total` | 次 | `service`、`stage`、`outcome` | 阶段拥有者确认结果后调用一次 `record`；重放消费者须先按持久操作、尝试和事件标识去重。 |
