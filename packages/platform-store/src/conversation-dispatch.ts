@@ -620,6 +620,11 @@ export class PostgresConversationDispatchStoreV1
 						isTurn(input.claim.operation) &&
 						state.execution.status === "submitted"
 					) {
+						if (isAgentDispatchStoppedV1(agent.status)) {
+							await failStoppedUnsentTurn(transaction, state, input.claim);
+							stopped = true;
+							return;
+						}
 						let workload: WorkloadReconciliationStateV1;
 						let desired: ReturnType<typeof validateAgentWorkloadDesiredV1>;
 						try {

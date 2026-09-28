@@ -695,6 +695,40 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		},
 	);
 
+	it("fails an unsent Turn as stopped before decoding missing workload evidence", async () => {
+		const work = await seed();
+		await client`update platform.agent_applications
+			set status = 'stopped', desired_state = 'stopped', service_availability = null
+			where agent_id = 'agent-dispatch'`;
+		await client`update platform.workload_reconciliations
+			set state = state #- '{verified,executionCapacity}' #- '{candidate,executionCapacity}'
+			where agent_id = 'agent-dispatch'`;
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			expect(
+				await store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe("agent_not_running");
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "failed",
+			});
+			const [message] = await client<
+				{ status: string; failure_code: string | null }[]
+			>`select status, failure_code from platform.conversation_messages
+				where message_id = ${work.messageId}`;
+			expect(message).toMatchObject({
+				status: "failed",
+				failure_code: "AGENT_NOT_RUNNING",
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("rolls back the stopped Agent failure if the outbox cannot close", async () => {
 		const work = await seed();
 		await client`update platform.agent_applications set status = 'stopped',
