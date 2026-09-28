@@ -2586,7 +2586,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					renewal_lead_seconds, status, created_by_principal_id, published_at
 				) VALUES (
 					${validPolicyId}, ${releaseId}, ${validProfileId}, 10,
-					90, 86400, 86400, 0, 'PUBLISHED', ${adminId}, now()
+					90, 86400, 86400, 0, 'DRAFT', ${adminId}, NULL
 				)
 			`;
 				await sql`
@@ -2599,6 +2599,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					policy_version_id, disclaimer_version_id, ordinal
 				) VALUES (${validPolicyId}, ${disclaimerId}, 1)
 			`;
+				await sql`UPDATE connection_access_policy_versions SET status = 'PUBLISHED', published_at = now() WHERE id = ${validPolicyId}`;
 				const validOption = (
 					await requestRepository.listAccessOptions(applicantId)
 				).find((option) => option.policyVersionId === validPolicyId);
