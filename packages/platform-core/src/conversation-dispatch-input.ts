@@ -7,6 +7,10 @@ import type {
 	ConversationMetadataRecoveryV1,
 	DispatchConversationCommandV1,
 } from "./conversation-dispatch-types.js";
+import type {
+	ConversationExecutionRelayKeyBindingV1,
+	ConversationExecutionSourceV1,
+} from "./conversation-execution-types.js";
 import {
 	exactObject,
 	invalidInput,
@@ -61,6 +65,36 @@ function executionStatus(
 	return value;
 }
 
+function executionSource(value: unknown): ConversationExecutionSourceV1 {
+	if (
+		value !== "web" &&
+		value !== "wecom" &&
+		value !== "platform-api" &&
+		value !== "eval"
+	)
+		return unavailable();
+	return value;
+}
+
+function relayKeyBinding(
+	value: unknown,
+): ConversationExecutionRelayKeyBindingV1 {
+	const input = exactObject(value, [
+		"purpose",
+		"subjectId",
+		"keyId",
+		"keyVersion",
+	]);
+	if (input.purpose !== "personal" && input.purpose !== "agent-default")
+		return unavailable();
+	return {
+		purpose: input.purpose,
+		subjectId: text(input.subjectId),
+		keyId: text(input.keyId),
+		keyVersion: positiveInteger(input.keyVersion),
+	};
+}
+
 export function parseCommand(value: unknown): DispatchConversationCommandV1 {
 	try {
 		const input = exactObject(value, ["schemaVersion", "itemId", "workerId"]);
@@ -111,6 +145,8 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"runtimeTerminalEventSeen",
 			"metadataRecovery",
 			"taskWaitOrder",
+			"executionSource",
+			"relayKeyBinding",
 		],
 	);
 	if (
@@ -128,6 +164,24 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		input.metadataRecovery === undefined
 			? undefined
 			: parseConversationMetadataRecoveryV1(input.metadataRecovery);
+	const parsedExecutionSource =
+		input.executionSource === undefined
+			? undefined
+			: executionSource(input.executionSource);
+	const parsedRelayKeyBinding =
+		input.relayKeyBinding === undefined
+			? undefined
+			: relayKeyBinding(input.relayKeyBinding);
+	if (
+		(parsedExecutionSource === undefined) !==
+		(parsedRelayKeyBinding === undefined) ||
+		(parsedRelayKeyBinding &&
+			((parsedExecutionSource === "web" ||
+				parsedExecutionSource === "wecom")
+				? parsedRelayKeyBinding.purpose !== "personal"
+				: parsedRelayKeyBinding.purpose !== "agent-default"))
+	)
+		return unavailable();
 	if (
 		metadataRecovery &&
 		(!isTurnOperation(parsedOperation) ||
@@ -217,6 +271,12 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		modelConfigurationRevision,
 		modelOptionId,
 		reasoningLevel,
+		...(parsedExecutionSource
+			? { executionSource: parsedExecutionSource }
+			: {}),
+		...(parsedRelayKeyBinding
+			? { relayKeyBinding: parsedRelayKeyBinding }
+			: {}),
 		hostSessionRef: nullableText(input.hostSessionRef),
 		runtimeCursor: nullableText(input.runtimeCursor),
 		...(input.runtimeTerminalEventSeen === true

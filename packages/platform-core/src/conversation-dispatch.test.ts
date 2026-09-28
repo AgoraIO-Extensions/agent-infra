@@ -2364,6 +2364,26 @@ describe("application original-generation isolation", () => {
 			parseClaim(applicationClaim()).generationIsolation?.originalPrincipal,
 		).toEqual({ kind: "application", id: "actor-1" });
 	});
+	it("preserves the accepted execution source and Relay Key binding", () => {
+		const original = claim({
+			executionSource: "web",
+			relayKeyBinding: {
+				purpose: "personal",
+				subjectId: "actor-1",
+				keyId: "relay-key-1",
+				keyVersion: 3,
+			},
+		});
+		expect(parseClaim(original)).toMatchObject({
+			executionSource: "web",
+			relayKeyBinding: {
+				purpose: "personal",
+				subjectId: "actor-1",
+				keyId: "relay-key-1",
+				keyVersion: 3,
+			},
+		});
+	});
 	it("plans application isolation and confirmation on the original execution and generation", () => {
 		const original = applicationClaim();
 		const plan = planConversationGenerationIsolationV1({

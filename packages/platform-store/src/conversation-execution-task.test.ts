@@ -193,6 +193,8 @@ afterAll(async () => {
 
 describe("durable task admission", () => {
 	it("rejects new standard work when the Agent-default Relay Key is missing", async () => {
+		await sql`delete from platform.relay_key_versions
+			where purpose = 'agent-default' and subject_id = 'agent_task'`;
 		await sql`delete from platform.relay_key_subjects where purpose = 'agent-default' and subject_id = 'agent_task'`;
 		await expect(
 			taskUseCase().submitTask(command("missing-relay-key")),
@@ -586,6 +588,7 @@ it("admits application work and isolates a user with the same ID", async () => {
 			...originalBoundary,
 			principal: { kind: "application", id: "shared" },
 			channelId: "api:application",
+			identityRevision: "app_1",
 			accessSources: [{ kind: "application", applicationId: "shared" }],
 		},
 	};
