@@ -95,6 +95,7 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 	await page.addInitScript(
 		({ first, terminal }: { first: unknown; terminal: unknown }) => {
 			const realFetch = window.fetch.bind(window);
+			let messageAccepted = false;
 			window.fetch = async (input, init) => {
 				const url = new URL(
 					typeof input === "string"
@@ -104,12 +105,23 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 							: String(input),
 					window.location.href,
 				);
-				if (!url.pathname.endsWith("/events")) return realFetch(input, init);
+				if (!url.pathname.endsWith("/events")) {
+					const response = await realFetch(input, init);
+					if (
+						url.pathname.endsWith("/messages") &&
+						(init?.method ??
+							(input instanceof Request ? input.method : "GET")) === "POST"
+					)
+						messageAccepted = response.ok;
+					return response;
+				}
 				const encoder = new TextEncoder();
 				const frame = (value: unknown, id?: string) =>
 					`${id ? `id: ${id}\n` : ""}data: ${JSON.stringify(value)}\n\n`;
 				const body = new ReadableStream<Uint8Array>({
-					start(controller) {
+					async start(controller) {
+						while (!messageAccepted)
+							await new Promise((resolve) => setTimeout(resolve, 10));
 						setTimeout(
 							() =>
 								controller.enqueue(
