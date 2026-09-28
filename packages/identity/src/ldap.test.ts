@@ -16,17 +16,20 @@ const employee = {
 	entryUUID: "stable-a",
 	mail: "Person.A@Example.Test",
 	cn: "Person A",
-	employeeStatus: "enabled",
 };
 
 function fixture() {
 	let entries = [employee];
 	let password = "correct-password";
+	let bindAllowed = true;
+	let currentStatus: "active" | "disabled" | null = "active";
+	let verifierAvailable = true;
 	let serviceAvailable = true;
 	const ids = new Map<string, string>();
 	const binds: string[] = [];
 	const options: ClientOptions[] = [];
 	const searches: string[] = [];
+	const verifications: { issuer: string; uid: string }[] = [];
 	const config: LdapIdentityConfiguration = {
 		url: "ldaps://ldap.example.test:636",
 		issuer: "company-ldap",
@@ -37,9 +40,11 @@ function fixture() {
 		uidAttribute: "entryUUID",
 		emailAttribute: "mail",
 		displayNameAttribute: "cn",
-		activeAttribute: "employeeStatus",
-		parseAccountStatus: (value) =>
-			value === "enabled" ? "active" : value === "disabled" ? "disabled" : null,
+		async verifyCurrentStatus(identity) {
+			verifications.push(identity);
+			if (!verifierAvailable) throw new Error("private verifier detail");
+			return currentStatus;
+		},
 		identityIds: {
 			async findByUid(issuer, uid) {
 				return ids.get(JSON.stringify([issuer, uid])) ?? null;
@@ -67,7 +72,7 @@ function fixture() {
 				async bind(dn: string, candidate?: string) {
 					binds.push(dn);
 					if (!serviceAvailable) throw new Error("secret-provider-detail");
-					if (dn === employee.dn && candidate !== password)
+					if (dn === employee.dn && (!bindAllowed || candidate !== password))
 						throw new InvalidCredentialsError("secret-provider-detail");
 				},
 				async search(_base: string, searchOptions) {
@@ -95,11 +100,21 @@ function fixture() {
 		binds,
 		options,
 		searches,
+		verifications,
 		setEntries(value: typeof entries) {
 			entries = value;
 		},
 		setPassword(value: string) {
 			password = value;
+		},
+		setBindAllowed(value: boolean) {
+			bindAllowed = value;
+		},
+		setCurrentStatus(value: "active" | "disabled" | null) {
+			currentStatus = value;
+		},
+		setVerifierAvailable(value: boolean) {
+			verifierAvailable = value;
 		},
 		setServiceAvailable(value: boolean) {
 			serviceAvailable = value;
@@ -108,7 +123,7 @@ function fixture() {
 }
 
 describe("first-party LDAP identity directory", () => {
-	it("requires LDAPS and a deployment-verified active-state parser", () => {
+	it("requires LDAPS and rejects a malformed current-status verifier", () => {
 		const { config } = fixture();
 		for (const url of [
 			"ldap://ldap.example.test",
@@ -122,11 +137,8 @@ describe("first-party LDAP identity directory", () => {
 		expect(() =>
 			createLdapIdentityDirectory({
 				...config,
-				parseAccountStatus: undefined as never,
+				verifyCurrentStatus: "active" as never,
 			}),
-		).toThrow(LdapIdentityUnavailableError);
-		expect(() =>
-			createLdapIdentityDirectory({ ...config, activeAttribute: "cn)(uid=*" }),
 		).toThrow(LdapIdentityUnavailableError);
 	});
 
@@ -212,7 +224,7 @@ describe("first-party LDAP identity directory", () => {
 		}
 	});
 
-	it("does not accept wrong passwords, absent users or disabled accounts", async () => {
+	it("uses user bind for new login and the injected verifier for existing sessions", async () => {
 		const state = fixture();
 		const directory = createLdapIdentityDirectory(state.config);
 		await directory.authenticate("login-a", "correct-password");
@@ -223,22 +235,81 @@ describe("first-party LDAP identity directory", () => {
 			directory.authenticate("absent", "correct-password"),
 		).resolves.toBeNull();
 		expect(state.ids.size).toBe(1);
-		state.setEntries([{ ...employee, employeeStatus: "disabled" }]);
+		state.setBindAllowed(false);
+		state.setCurrentStatus("disabled");
 		await expect(
 			directory.authenticate("login-a", "correct-password"),
 		).resolves.toBeNull();
 		await expect(directory.current("stable-a")).resolves.toMatchObject({
 			accountStatus: "disabled",
 		});
-		state.setEntries([{ ...employee, employeeStatus: "unknown" }]);
+		expect(state.verifications).toContainEqual({
+			issuer: "company-ldap",
+			uid: "stable-a",
+		});
+		state.setCurrentStatus(null);
 		await expect(directory.current("stable-a")).rejects.toThrow(
 			LdapIdentityUnavailableError,
 		);
+		state.setVerifierAvailable(false);
+		await expect(directory.current("stable-a")).rejects.toThrow(
+			"LDAP_IDENTITY_UNAVAILABLE",
+		);
 	});
 
-	it("does not create an ID for an inactive employee", async () => {
+	it("does not infer current activity from a searchable entry", async () => {
 		const state = fixture();
-		state.setEntries([{ ...employee, employeeStatus: "disabled" }]);
+		const directory = createLdapIdentityDirectory({
+			...state.config,
+			verifyCurrentStatus: undefined,
+		});
+		const account = await directory.authenticate("login-a", "correct-password");
+		if (!account) throw new Error("expected bound account");
+		await expect(directory.current("stable-a")).rejects.toThrow(
+			"LDAP_IDENTITY_UNAVAILABLE",
+		);
+		await expect(directory.currentByUserId(account.userId)).rejects.toThrow(
+			"LDAP_IDENTITY_UNAVAILABLE",
+		);
+		const unknown = createLdapIdentityDirectory({
+			...state.config,
+			async verifyCurrentStatus() {
+				return "unknown" as never;
+			},
+		});
+		await expect(unknown.current("stable-a")).rejects.toThrow(
+			"LDAP_IDENTITY_UNAVAILABLE",
+		);
+	});
+
+	it("bounds an unresponsive current-status verifier", async () => {
+		const state = fixture();
+		const directory = createLdapIdentityDirectory({
+			...state.config,
+			timeoutMs: 100,
+			async verifyCurrentStatus() {
+				return new Promise<never>(() => undefined);
+			},
+		});
+		await expect(directory.current("stable-a")).rejects.toThrow(
+			"LDAP_IDENTITY_UNAVAILABLE",
+		);
+	});
+
+	it("rejects deleted accounts for login and current sessions", async () => {
+		const state = fixture();
+		const directory = createLdapIdentityDirectory(state.config);
+		await directory.authenticate("login-a", "correct-password");
+		state.setEntries([]);
+		await expect(
+			directory.authenticate("login-a", "correct-password"),
+		).resolves.toBeNull();
+		await expect(directory.current("stable-a")).resolves.toBeNull();
+	});
+
+	it("does not create an ID when the user bind rejects a disabled account", async () => {
+		const state = fixture();
+		state.setBindAllowed(false);
 		const directory = createLdapIdentityDirectory(state.config);
 		await expect(
 			directory.authenticate("login-a", "correct-password"),
@@ -246,31 +317,27 @@ describe("first-party LDAP identity directory", () => {
 		expect(state.ids.size).toBe(0);
 	});
 
-	it("does not create an ID if status or email changes after password bind", async () => {
-		for (const changed of [
-			{ ...employee, employeeStatus: "disabled" },
-			{ ...employee, mail: "changed@example.test" },
-		]) {
-			const state = fixture();
-			const directory = createLdapIdentityDirectory({
-				...state.config,
-				createClient(options) {
-					const client = state.config.createClient?.(options);
-					if (!client) throw new Error("expected fixture client");
-					return {
-						...client,
-						async bind(dn, password) {
-							await client.bind(dn, password);
-							if (dn === employee.dn) state.setEntries([changed]);
-						},
-					};
-				},
-			});
-			await expect(
-				directory.authenticate("login-a", "correct-password"),
-			).resolves.toBeNull();
-			expect(state.ids.size).toBe(0);
-		}
+	it("does not create an ID if email changes after password bind", async () => {
+		const state = fixture();
+		const directory = createLdapIdentityDirectory({
+			...state.config,
+			createClient(options) {
+				const client = state.config.createClient?.(options);
+				if (!client) throw new Error("expected fixture client");
+				return {
+					...client,
+					async bind(dn, password) {
+						await client.bind(dn, password);
+						if (dn === employee.dn)
+							state.setEntries([{ ...employee, mail: "changed@example.test" }]);
+					},
+				};
+			},
+		});
+		await expect(
+			directory.authenticate("login-a", "correct-password"),
+		).resolves.toBeNull();
+		expect(state.ids.size).toBe(0);
 	});
 
 	it("rejects login DN reassignment after password bind", async () => {
