@@ -697,7 +697,7 @@ describe("PostgreSQL Connection business authority", () => {
 					state: sharedOAuthState,
 				});
 				expect(
-					await repository.consumeOAuthTransaction(sharedOAuthState),
+					await repository.consumeOAuthTransaction(sharedOAuthState, "github"),
 				).toEqual({
 					codeVerifier: `shared-verifier-${suffix}`,
 					principalId: adminPrincipalId,
@@ -714,8 +714,11 @@ describe("PostgreSQL Connection business authority", () => {
 						"https://connection.example/oauth/callback?provider=manhattan",
 					state: manhattanState,
 				});
+				await expect(
+					repository.consumeOAuthTransaction(manhattanState, "github"),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
 				expect(
-					await repository.consumeOAuthTransaction(manhattanState),
+					await repository.consumeOAuthTransaction(manhattanState, "manhattan"),
 				).toEqual({
 					codeVerifier: `manhattan-verifier-${suffix}`,
 					principalId: eligiblePrincipalA,

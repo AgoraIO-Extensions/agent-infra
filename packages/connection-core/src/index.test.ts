@@ -317,9 +317,9 @@ class MemoryRepository implements ConnectionRepository {
 	}) {
 		this.oauthTransactions.set(input.state, input);
 	}
-	async consumeOAuthTransaction(state: string) {
+	async consumeOAuthTransaction(state: string, providerId: string) {
 		const transaction = this.oauthTransactions.get(state);
-		if (!transaction)
+		if (!transaction || transaction.providerId !== providerId)
 			throw new ConnectionError(
 				"INVALID_REQUEST",
 				"OAuth state is invalid, expired, or already consumed",
@@ -1333,9 +1333,6 @@ describe("Connection application service", () => {
 		await expect(
 			service.completeGithubOAuth("one-time-code", state),
 		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
-		await expect(
-			service.completeProviderOAuth("manhattan", "one-time-code", state),
-		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
 		const next = await service.startProviderOAuth(
 			"alice",
 			"manhattan",
@@ -1355,22 +1352,15 @@ describe("Connection application service", () => {
 		).rejects.toMatchObject({ code: "FORBIDDEN" });
 		expect(repository.storedOAuthCredential).toBeUndefined();
 		repository.connectValidationError = undefined;
-		const approved = await service.startProviderOAuth(
-			"alice",
-			"manhattan",
-			"https://connection.example/oauth/callback?provider=manhattan",
-			"approved-request",
-		);
-		await service.completeProviderOAuth(
-			"manhattan",
-			"one-time-code",
-			new URL(approved.authorizationUrl).searchParams.get("state") ?? "",
-		);
+		await service.completeProviderOAuth("manhattan", "one-time-code", state);
 		expect(repository.storedOAuthCredential).toMatchObject({
 			accessRequestId: "approved-request",
 			accessToken: "personal-token",
 			principalId: "alice",
 		});
+		await expect(
+			service.completeProviderOAuth("manhattan", "one-time-code", state),
+		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
 	});
 
 	it("reconciles an admitted write with missing terminal evidence", async () => {

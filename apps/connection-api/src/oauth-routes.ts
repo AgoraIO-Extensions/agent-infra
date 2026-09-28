@@ -2934,6 +2934,11 @@ export function createConnectionOAuthApp(
 			context.header("referrer-policy", "no-referrer");
 			try {
 				const providerId = context.req.query("provider") ?? "github";
+				if (providerId !== "github" && providerId !== "manhattan")
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"Unsupported OAuth provider",
+					);
 				if (providerId === "manhattan") {
 					const state = context.req.query("state") ?? "";
 					if (!state || getCookie(context, manhattanOAuthStateCookie) !== state)

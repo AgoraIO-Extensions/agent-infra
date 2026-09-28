@@ -3440,7 +3440,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		return { providerId: target.provider_id };
 	}
 
-	async consumeOAuthTransaction(state: string) {
+	async consumeOAuthTransaction(state: string, providerId: string) {
 		const stateHash = hash(state);
 		return this.sql.begin(async (sql) => {
 			const [row] = await sql<
@@ -3459,6 +3459,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				UPDATE connection_oauth_transactions
 				SET consumed_at = now()
 				WHERE state_hash = ${stateHash}
+					AND provider_id = ${providerId}
 					AND consumed_at IS NULL
 					AND expires_at > now()
 				RETURNING principal_id, provider_id, access_request_id, reconnect_connection_id,

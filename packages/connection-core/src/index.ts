@@ -707,7 +707,10 @@ export interface ConnectionRepository {
 		actorPrincipalId: string;
 		connectionId: string;
 	}): Promise<void>;
-	consumeOAuthTransaction(state: string): Promise<OAuthTransaction>;
+	consumeOAuthTransaction(
+		state: string,
+		providerId: string,
+	): Promise<OAuthTransaction>;
 	createOAuthTransaction(
 		input: OAuthTransaction & { state: string },
 	): Promise<void>;
@@ -1823,7 +1826,10 @@ export class ConnectionApplicationService {
 				"OAuth callback requires code and state",
 			);
 		}
-		const transaction = await this.repository.consumeOAuthTransaction(state);
+		const transaction = await this.repository.consumeOAuthTransaction(
+			state,
+			providerId,
+		);
 		if (transaction.providerId !== providerId) {
 			throw new ConnectionError(
 				"INVALID_REQUEST",

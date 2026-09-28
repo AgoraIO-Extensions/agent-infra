@@ -177,9 +177,9 @@ class TestRepository implements ConnectionRepository {
 	}) {
 		this.oauthTransactions.set(input.state, input);
 	}
-	async consumeOAuthTransaction(state: string) {
+	async consumeOAuthTransaction(state: string, providerId: string) {
 		const transaction = this.oauthTransactions.get(state);
-		if (!transaction) {
+		if (!transaction || transaction.providerId !== providerId) {
 			throw new ConnectionError(
 				"INVALID_REQUEST",
 				"OAuth state is invalid, expired, or already consumed",
@@ -3613,6 +3613,32 @@ describe("Connection API", () => {
 			"/connection/connections?oauth=permission_denied&provider=manhattan",
 		);
 		expect(response.headers.get("location")).not.toContain("secret-code");
+	});
+
+	it("rejects unsupported OAuth callback providers before consuming state", async () => {
+		let attempts = 0;
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			management: {
+				githubRedirectUri: "https://connection.example/oauth/callback",
+				service: {
+					completeProviderOAuth: async () => {
+						attempts += 1;
+					},
+				} as unknown as ConnectionApplicationService,
+			},
+			resource: "https://connection.example/mcp",
+			service: {} as ConnectionOAuthService,
+		});
+		const response = await app.request(
+			"/oauth/callback?provider=unknown&code=provider-code&state=opaque-state",
+			{ redirect: "manual" },
+		);
+		expect(response.status).toBe(303);
+		expect(response.headers.get("location")).toBe(
+			"/connection/connections?oauth=callback_failed",
+		);
+		expect(attempts).toBe(0);
 	});
 
 	it("serves direct GitHub actions through the MCP JSON-RPC contract", async () => {
