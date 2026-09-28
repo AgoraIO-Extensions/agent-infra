@@ -141,6 +141,64 @@ it("preserves legacy rows and fences slow scans across runtime instances", async
 			SELECT count(*)::int AS count FROM enterprise_directory.snapshots
 		`;
 		expect(published[0]?.count).toBe(3);
+		await administrator`
+			CREATE FUNCTION enterprise_directory.delay_snapshot_insert()
+			RETURNS trigger LANGUAGE plpgsql AS $$
+			BEGIN
+				PERFORM pg_sleep(2);
+				RETURN NEW;
+			END;
+			$$
+		`;
+		await administrator`
+			CREATE TRIGGER delay_snapshot_insert
+			BEFORE INSERT ON enterprise_directory.snapshots
+			FOR EACH ROW EXECUTE FUNCTION enterprise_directory.delay_snapshot_insert()
+		`;
+		const concurrentSlowGeneration = await store.beginScan();
+		const concurrentFastGeneration = await otherStore.beginScan();
+		const concurrentFast = createSnapshot({
+			rootDepartmentId: 1,
+			startedAt: now + 4 * 60_000,
+			completedAt: now + 5 * 60_000,
+			departments,
+			members,
+		});
+		const concurrentSlow = createSnapshot({
+			rootDepartmentId: 1,
+			startedAt: now + 3 * 60_000,
+			completedAt: now + 6 * 60_000,
+			departments,
+			members,
+		});
+		const fastPublish = otherStore.publish(
+			concurrentFast,
+			concurrentFastGeneration,
+		);
+		void fastPublish.catch(() => undefined);
+		let fastInsertPaused = false;
+		for (let attempt = 0; attempt < 80; attempt += 1) {
+			const activity = await administrator`
+				SELECT count(*)::int AS waiting FROM pg_stat_activity
+				WHERE usename = ${runtimeRole} AND wait_event = 'PgSleep'
+			`;
+			if (activity[0]?.waiting === 1) {
+				fastInsertPaused = true;
+				break;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		expect(fastInsertPaused).toBe(true);
+		const slowPublish = store.publish(concurrentSlow, concurrentSlowGeneration);
+		expect(await Promise.all([fastPublish, slowPublish])).toEqual([
+			"published",
+			"superseded",
+		]);
+		expect(await store.latest()).toEqual(concurrentFast);
+		const concurrentRows = await administrator`
+			SELECT count(*)::int AS count FROM enterprise_directory.snapshots
+		`;
+		expect(concurrentRows[0]?.count).toBe(4);
 		await expect(store.publish(fast, 0n)).rejects.toThrow(
 			"Invalid directory scan generation",
 		);
