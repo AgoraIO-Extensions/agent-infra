@@ -144,10 +144,9 @@ it("does not clip employee candidates at the approval panel boundary", async () 
 				<ApprovalPoliciesPage />
 			</QueryClientProvider>,
 		);
-		fireEvent.change(
-			screen.getByRole("combobox", { name: "审批人" }),
-			{ target: { value: "guo" } },
-		);
+		fireEvent.change(screen.getByRole("combobox", { name: "审批人" }), {
+			target: { value: "guo" },
+		});
 		await screen.findByRole("option", { name: "guo" });
 		const panel = container.querySelector(".approval-layout");
 		const dropdown = container.querySelector(".employee-picker-dropdown");
