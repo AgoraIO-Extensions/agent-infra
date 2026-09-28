@@ -127,9 +127,7 @@ describe("LDAP browser adapter", () => {
 		});
 		expect(state.directory.current).toHaveBeenCalledWith("stable-a");
 		state.setDisabled(true);
-		expect(await state.adapter.identityAdapter.resolve(request)).toMatchObject({
-			accountStatus: "disabled",
-		});
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 		state.setDisabled(false);
 		state.setCurrent({ ...account, accountStatus: "disabled" });
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
@@ -158,7 +156,7 @@ describe("LDAP browser adapter", () => {
 		state.setDisabled(true);
 		expect(
 			await state.adapter.identityAdapter.resolve(write(origin)),
-		).toMatchObject({ accountStatus: "disabled" });
+		).toBeNull();
 		state.setDisabled(false);
 		expect(
 			await state.adapter.identityAdapter.resolve(write(origin)),
@@ -174,12 +172,26 @@ describe("LDAP browser adapter", () => {
 		});
 		state.setDisabled(true);
 		state.setOrganizationsAvailable(false);
-		expect(await state.adapter.identityAdapter.resolve(request)).toMatchObject({
-			accountStatus: "disabled",
-			organizationIds: [],
-		});
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 		state.setDisabled(false);
 		state.setOrganizationsAvailable(true);
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+	});
+
+	it("revokes a Platform-disabled session before an unavailable LDAP lookup", async () => {
+		const state = fixture();
+		const cookie =
+			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
+		const request = new Request(`${origin}/api/v1/session`, {
+			headers: { cookie },
+		});
+		state.setDisabled(true);
+		vi.mocked(state.directory.current).mockRejectedValueOnce(
+			new Error("private LDAP outage"),
+		);
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+		expect(state.directory.current).not.toHaveBeenCalled();
+		state.setDisabled(false);
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 	});
 
