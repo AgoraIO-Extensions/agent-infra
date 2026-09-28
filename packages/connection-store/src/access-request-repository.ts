@@ -332,7 +332,7 @@ export class PostgresConnectionAccessRequestRepository
 				AND profile.status = 'PUBLISHED' AND release.status = 'PUBLISHED'
 			ORDER BY release.provider, profile.name
 		`;
-			return Promise.all(
+			const options = await Promise.all(
 				policies.map(async (policy) => {
 					const members = await sql<
 						{
@@ -357,7 +357,7 @@ export class PostgresConnectionAccessRequestRepository
 						members.length > 500 ||
 						members.some((action) => action.status !== "PUBLISHED")
 					)
-						invalid("Capability profile actions are unavailable");
+						return null;
 					const actions = members.map(
 						({ status: _status, ...action }) => action,
 					);
@@ -444,6 +444,7 @@ export class PostgresConnectionAccessRequestRepository
 					};
 				}),
 			);
+			return options.flatMap((option) => (option === null ? [] : [option]));
 		});
 	}
 
@@ -1447,6 +1448,22 @@ export class PostgresConnectionAccessRequestRepository
 			) {
 				invalid("Approval policy does not match the requested capability");
 			}
+			const actionStatuses = await sql<{ status: string }[]>`
+				SELECT action.status
+				FROM connection_capability_profile_actions member
+				JOIN connection_action_versions action
+					ON action.id = member.action_version_id
+					AND action.provider_release_id = member.provider_release_id
+				WHERE member.capability_profile_id = ${input.capabilityProfileId}
+					AND member.provider_release_id = ${input.providerReleaseId}
+				FOR SHARE OF action
+			`;
+			if (
+				!actionStatuses.length ||
+				actionStatuses.length > 500 ||
+				actionStatuses.some((action) => action.status !== "PUBLISHED")
+			)
+				invalid("Capability profile actions are unavailable");
 			let renewalValidUntil: Date | undefined;
 			if (input.renewalAuthorizationId) {
 				if (input.duration.kind !== "FINITE")
