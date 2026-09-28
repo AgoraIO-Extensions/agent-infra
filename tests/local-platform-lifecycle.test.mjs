@@ -31,6 +31,7 @@ async function fixture() {
 	const log = join(directory, "commands.log");
 	const manifest = join(directory, "database-route.yaml");
 	const networkState = join(directory, "kind-network-connected");
+	const routeState = join(directory, "database-route.json");
 	const kubeconfig = join(directory, "kubeconfig");
 	const values = join(directory, "worker.values.yaml");
 	const cert = join(directory, "tls.crt");
@@ -66,8 +67,11 @@ elif [[ "$*" == *"container inspect fixture-postgres"*"IPAddress"* ]]; then
   printf '172.18.0.42\\n'
 elif [[ "$*" == *"container inspect fixture-postgres"* ]]; then
   if [[ -f "$FAKE_NETWORK_STATE" ]]; then cat "$FAKE_NETWORK_STATE"; else printf '%s' "$FAKE_PRECONNECTED_ALIASES"; fi
-elif [[ "$*" == *"network connect --alias agent-infra-verify-postgres kind fixture-postgres"* ]]; then
-  printf 'agent-infra-verify-postgres' > "$FAKE_NETWORK_STATE"
+elif [[ "$*" == *"network connect --alias "*" kind fixture-postgres"* ]]; then
+  command="$*"
+  alias="\${command#*--alias }"
+  alias="\${alias%% kind fixture-postgres*}"
+  printf '%s' "$alias" > "$FAKE_NETWORK_STATE"
   printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
 elif [[ "$*" == *"network disconnect kind fixture-postgres"* ]]; then
   rm -f "$FAKE_NETWORK_STATE"
@@ -98,6 +102,8 @@ if [[ "$*" == *"config view"* ]]; then
 elif [[ "$*" == *"--ignore-not-found -o json" ]]; then
   if [[ -n "$FAKE_FOREIGN_RESOURCE" && "$*" == *"get $FAKE_FOREIGN_RESOURCE "* ]]; then
     printf '%s\\n' '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"another-owner"}}}'
+  elif [[ "$*" == *"get endpointslice/agent-infra-verify-postgres-docker "* && -f "$FAKE_ROUTE_STATE" ]]; then
+    cat "$FAKE_ROUTE_STATE"
   fi
 elif [[ "$*" == *"get deployment agent-infra-verify-agent-infra-platform-worker"*"-o jsonpath="* ]]; then
   printf '%s' "$FAKE_WORKER_REPLICAS"
@@ -110,9 +116,16 @@ elif [[ "$*" == *"get pods -l agent-infra.agora.io/agent"* ]]; then
 else
   printf 'kubectl %s\\n' "$*" >> "$COMMAND_LOG"
   if [[ "$*" == *"apply -f -"* ]]; then
-    cat >> "$MANIFEST_LOG"
+    payload=$(cat)
+    printf '%s\\n' "$payload" >> "$MANIFEST_LOG"
+    alias=$(printf '%s\\n' "$payload" | sed -n 's/^    agent-infra.agora.io\\/local-network-alias: //p')
+    if [[ -n "$alias" ]]; then
+      printf '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"agent-infra-local","agent-infra.agora.io/local-project":"agent-infra-verify"},"annotations":{"agent-infra.agora.io/local-network-alias":"%s"}}}' "$alias" > "$FAKE_ROUTE_STATE"
+    fi
   elif [[ "$*" == *"apply --server-side"* ]]; then
     cat >> "$MANIFEST_LOG"
+  elif [[ "$*" == *"delete endpointslice/agent-infra-verify-postgres-docker"* ]]; then
+    rm -f "$FAKE_ROUTE_STATE"
   fi
   if [[ "$*" == *"scale deployment/agent-infra-verify-agent-infra-platform-worker --replicas=1"* && -n "$FAKE_RESTORE_SCALE_EXIT" ]]; then
     exit "$FAKE_RESTORE_SCALE_EXIT"
@@ -125,6 +138,7 @@ fi`,
 		COMMAND_LOG: log,
 		MANIFEST_LOG: manifest,
 		FAKE_NETWORK_STATE: networkState,
+		FAKE_ROUTE_STATE: routeState,
 		FAKE_KUBE_SERVER: "https://127.0.0.1:6443",
 		FAKE_KIND_LABEL: "isolated",
 		FAKE_KIND_PORT: "127.0.0.1:6443",
@@ -193,12 +207,16 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		);
 		assert.match(
 			up[3],
-			/network connect --alias agent-infra-verify-postgres kind fixture-postgres$/,
+			/network connect --alias agent-infra-verify-postgres-[0-9a-f]{16} kind fixture-postgres$/,
 		);
 		assert.match(up[4], /^kubectl .* apply -f -$/);
 		const manifest = await readFile(f.manifest, "utf8");
 		assert.match(manifest, /name: agent-infra-verify-postgres/);
 		assert.match(manifest, /addresses: \["172\.18\.0\.42"\]/);
+		assert.match(
+			manifest,
+			/agent-infra\.agora\.io\/local-network-alias: agent-infra-verify-postgres-[0-9a-f]{16}/,
+		);
 		assert.match(manifest, /"kind":"Secret"/);
 		const encodedUrl = manifest.match(/"data":\{"url":"([^"]+)"\}/)?.[1];
 		assert.ok(encodedUrl);
@@ -221,6 +239,10 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		assert.match(up[6], /^helm .* upgrade --install agent-infra-verify /);
 
 		await writeFile(f.log, "");
+		assert.equal(run("up", f.env).status, 0);
+		assert.doesNotMatch(await readFile(f.log, "utf8"), /network connect/);
+
+		await writeFile(f.log, "");
 		assert.equal(run("status", f.env).status, 0);
 		const status = await readFile(f.log, "utf8");
 		assert.match(
@@ -238,7 +260,13 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		);
 
 		await writeFile(f.log, "");
-		assert.equal(run("stop", f.env).status, 0);
+		assert.equal(
+			JSON.parse(await readFile(f.env.FAKE_ROUTE_STATE, "utf8")).metadata
+				.annotations["agent-infra.agora.io/local-network-alias"],
+			await readFile(f.env.FAKE_NETWORK_STATE, "utf8"),
+		);
+		const stopped = run("stop", f.env);
+		assert.equal(stopped.status, 0, stopped.stderr);
 		const stop = await readFile(f.log, "utf8");
 		assert.match(
 			stop,
@@ -255,11 +283,11 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		assert.match(stopSteps[1], /kubectl .* scale .* --replicas=0/);
 		assert.match(stopSteps[2], /kubectl .* rollout status/);
 		assert.match(stopSteps[3], /helm .* uninstall/);
+		assert.match(stopSteps[4], /network disconnect kind fixture-postgres/);
 		assert.match(
-			stopSteps[4],
+			stopSteps[5],
 			/delete endpointslice\/agent-infra-verify-postgres-docker service\/agent-infra-verify-postgres secret\/agent-infra-verify-postgres/,
 		);
-		assert.match(stopSteps[5], /network disconnect kind fixture-postgres/);
 		assert.match(stopSteps[6], /compose .* stop object-storage postgres/);
 		assert.doesNotMatch(
 			stop,
@@ -283,7 +311,7 @@ test("local up keeps API and Web closed when Worker upgrade fails", async () => 
 		);
 		assert.match(
 			steps[3],
-			/network connect --alias agent-infra-verify-postgres kind fixture-postgres/,
+			/network connect --alias agent-infra-verify-postgres-[0-9a-f]{16} kind fixture-postgres/,
 		);
 		assert.match(steps[4], /kubectl .* apply -f -/);
 		assert.match(
@@ -307,7 +335,6 @@ test("local up rejects remote Kubernetes and missing Worker values before starti
 		assert.notEqual(remote.status, 0);
 		assert.match(remote.stderr, /loopback endpoint/);
 		assert.equal(await readFile(f.log, "utf8"), "");
-
 		const missingValues = run("up", {
 			...f.env,
 			PLATFORM_LOCAL_WORKER_VALUES: join(
@@ -326,6 +353,20 @@ test("local up rejects remote Kubernetes and missing Worker values before starti
 test("local commands refuse foreign database route resources and network links", async () => {
 	const f = await fixture();
 	try {
+		const sameAliasWithoutMarker = run("up", {
+			...f.env,
+			FAKE_PRECONNECTED_ALIASES: "agent-infra-verify-postgres-1234567890abcdef",
+		});
+		assert.notEqual(sameAliasWithoutMarker.status, 0);
+		assert.match(sameAliasWithoutMarker.stderr, /outside this project/);
+		assert.equal(await readFile(f.log, "utf8"), "");
+		const stopSameAliasWithoutMarker = run("stop", {
+			...f.env,
+			FAKE_PRECONNECTED_ALIASES: "agent-infra-verify-postgres-1234567890abcdef",
+		});
+		assert.notEqual(stopSameAliasWithoutMarker.status, 0);
+		assert.match(stopSameAliasWithoutMarker.stderr, /outside this project/);
+		assert.equal(await readFile(f.log, "utf8"), "");
 		for (const resource of [
 			"service/agent-infra-verify-postgres",
 			"endpointslice/agent-infra-verify-postgres-docker",

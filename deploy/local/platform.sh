@@ -152,27 +152,59 @@ database_network_aliases() {
   "${docker_target[@]}" container inspect "$1" --format '{{with index .NetworkSettings.Networks "kind"}}{{join .Aliases " "}}{{end}}'
 }
 
+database_route_alias() {
+  "${kube_target[@]}" get "endpointslice/$database_endpoint" --ignore-not-found -o json | node -e '
+    let input = "";
+    process.stdin.on("data", (chunk) => { input += chunk; });
+    process.stdin.on("end", () => {
+      if (!input.trim()) return;
+      try {
+        const resource = JSON.parse(input);
+        const labels = resource.metadata?.labels ?? {};
+        const alias = resource.metadata?.annotations?.["agent-infra.agora.io/local-network-alias"];
+        if (labels["app.kubernetes.io/managed-by"] !== "agent-infra-local" ||
+            labels["agent-infra.agora.io/local-project"] !== process.argv[1] ||
+            typeof alias !== "string" ||
+            !new RegExp("^" + process.argv[2] + "-[0-9a-f]{16}$").test(alias)) process.exitCode = 1;
+        else process.stdout.write(alias);
+      } catch {
+        process.exitCode = 1;
+      }
+    });
+  ' "$PLATFORM_LOCAL_PROJECT" "$database_service"
+}
+
 check_database_network_ownership() {
-  local container aliases
+  local container aliases owned_alias
   container=$("${compose[@]}" ps --all -q postgres)
   [[ -n "$container" ]] || return 0
   aliases=$(database_network_aliases "$container")
-  if [[ -n "$aliases" && " $aliases " != *" $database_service "* ]]; then
-    echo "Local PostgreSQL is connected to kind outside this project" >&2
-    return 1
+  if [[ -n "$aliases" ]]; then
+    owned_alias=$(database_route_alias) || {
+      echo "Local PostgreSQL kind connection has no owned route marker" >&2
+      return 1
+    }
+    if [[ -z "$owned_alias" || "$aliases" != "$owned_alias" ]]; then
+      echo "Local PostgreSQL is connected to kind outside this project" >&2
+      return 1
+    fi
   fi
 }
 
 connect_worker_database() {
-  local container database_ip aliases
+  local container database_ip aliases network_alias
   container=$("${compose[@]}" ps -q postgres)
   [[ -n "$container" ]] || { echo "Local PostgreSQL container is missing" >&2; return 1; }
   aliases=$(database_network_aliases "$container")
   if [[ -z "$aliases" ]]; then
-    "${docker_target[@]}" network connect --alias "$database_service" kind "$container"
-  elif [[ " $aliases " != *" $database_service "* ]]; then
-    echo "Local PostgreSQL is connected to kind outside this project" >&2
-    return 1
+    network_alias="$database_service-$(node -e 'process.stdout.write(require("node:crypto").randomBytes(8).toString("hex"))')"
+    "${docker_target[@]}" network connect --alias "$network_alias" kind "$container"
+  else
+    network_alias=$(database_route_alias)
+    [[ "$aliases" == "$network_alias" ]] || {
+      echo "Local PostgreSQL is connected to kind outside this project" >&2
+      return 1
+    }
   fi
   database_ip=$("${docker_target[@]}" container inspect "$container" --format '{{(index .NetworkSettings.Networks "kind").IPAddress}}')
   [[ "$database_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
@@ -203,6 +235,8 @@ metadata:
     agent-infra.agora.io/local-project: $PLATFORM_LOCAL_PROJECT
     kubernetes.io/service-name: $database_service
     endpointslice.kubernetes.io/managed-by: agent-infra-local
+  annotations:
+    agent-infra.agora.io/local-network-alias: $network_alias
 addressType: IPv4
 ports:
   - name: postgres
@@ -244,14 +278,14 @@ disconnect_worker_database() {
   local container aliases
   check_database_resource_ownership
   check_database_network_ownership
-  "${kube_target[@]}" delete "endpointslice/$database_endpoint" "service/$database_service" "secret/$database_service" --ignore-not-found
-  container=$("${compose[@]}" ps -q postgres)
+  container=$("${compose[@]}" ps --all -q postgres)
   if [[ -n "$container" ]]; then
     aliases=$(database_network_aliases "$container")
-    if [[ " $aliases " == *" $database_service "* ]]; then
+    if [[ -n "$aliases" ]]; then
       "${docker_target[@]}" network disconnect kind "$container"
     fi
   fi
+  "${kube_target[@]}" delete "endpointslice/$database_endpoint" "service/$database_service" "secret/$database_service" --ignore-not-found
 }
 
 case "${1:-}" in
