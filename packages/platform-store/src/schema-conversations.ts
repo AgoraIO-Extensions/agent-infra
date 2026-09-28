@@ -231,6 +231,13 @@ export const conversationExecutions = platformSchema.table(
 				AND char_length(${table.relayKeySubjectId}) > 0
 				AND char_length(${table.relayKeyId}) > 0
 				AND ${table.relayKeyVersion} between 1 and 9007199254740991
+				AND ((${table.executionSource} = 'web' AND ${table.channelId} = 'web')
+					OR (${table.executionSource} = 'wecom' AND (${table.channelId} = 'wecom'
+						OR left(${table.channelId}, 10) = 'wecom_bot:'
+						OR left(${table.channelId}, 10) = 'wecom_app:'))
+					OR (${table.executionSource} = 'platform-api' AND (${table.channelId} = 'api'
+						OR ${table.channelId} LIKE 'api:%'))
+					OR (${table.executionSource} = 'eval' AND ${table.channelId} = 'eval'))
 				AND ((${table.executionSource} in ('web', 'wecom')
 					AND ${table.relayKeyPurpose} = 'personal'
 					AND ${table.relayKeySubjectId} = ${table.actorId})

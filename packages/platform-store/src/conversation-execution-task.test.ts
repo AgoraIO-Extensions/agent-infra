@@ -408,6 +408,43 @@ describe("durable task admission", () => {
 		}
 	});
 
+	it("rejects an execution source outside its channel even with a matching Relay Key", async () => {
+		const result = await taskUseCase().submitTask(
+			command("source-channel-binding"),
+		);
+		if (result.outcome !== "accepted")
+			throw new Error("Expected accepted task");
+		await sql`insert into platform.relay_key_subjects
+			(purpose, subject_id, last_version, current_version)
+			values ('personal', 'user_task', 1, 1)`;
+		await sql`insert into platform.relay_key_versions
+			(purpose, subject_id, key_version, key_id, ciphertext)
+			values ('personal', 'user_task', 1, 'relay-key-user-1', ${sql.json({
+				schemaVersion: 1,
+				purpose: "personal",
+				subjectId: "user_task",
+				keyId: "relay-key-user-1",
+				keyVersion: 1,
+			})})`;
+		for (const [source, purpose, subjectId, keyId, channelId] of [
+			["web", "personal", "user_task", "relay-key-user-1", "api"],
+			["wecom", "personal", "user_task", "relay-key-user-1", "api"],
+			["eval", "agent-default", "agent_task", "relay-key-task-1", "api"],
+			["wecom", "personal", "user_task", "relay-key-user-1", "wecomXbot:bot"],
+		] as const) {
+			await expect(
+				sql`update platform.conversation_executions
+					set execution_source = ${source}, channel_id = ${channelId},
+						relay_key_purpose = ${purpose},
+						relay_key_subject_id = ${subjectId}, relay_key_id = ${keyId}
+					where execution_id = ${result.result.executionId}`,
+			).rejects.toMatchObject({
+				code: "23514",
+				constraint_name: "conversation_execution_key_binding",
+			});
+		}
+	});
+
 	it("rejects nonexistent or mismatched Relay Key identities", async () => {
 		const result = await taskUseCase().submitTask(command("invalid-relay-key"));
 		if (result.outcome !== "accepted")
