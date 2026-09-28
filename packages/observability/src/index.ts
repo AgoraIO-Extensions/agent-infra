@@ -145,6 +145,8 @@ export function startObservability(options: ObservabilityOptions) {
 	let backpressured = false;
 	let closingOutput = false;
 	let pendingWrites = 0;
+	let errorEvents = 0;
+	let awaitingWriteError = false;
 	let droppedLogs = 0;
 	let invalidRecords = 0;
 	let captureFailures = 0;
@@ -154,9 +156,19 @@ export function startObservability(options: ObservabilityOptions) {
 		backpressured = false;
 	};
 	output.on("drain", onDrain);
+	const releaseErrorListener = () => {
+		if (closingOutput && pendingWrites === 0 && !awaitingWriteError)
+			setImmediate(() => {
+				if (closingOutput && pendingWrites === 0 && !awaitingWriteError)
+					output.off("error", onError);
+			});
+	};
 	const onError = () => {
+		errorEvents++;
+		awaitingWriteError = false;
 		backpressured = true;
 		droppedLogs++;
+		if (closingOutput && pendingWrites === 0) output.off("error", onError);
 	};
 	output.on("error", onError);
 	const logger = pino(
@@ -171,12 +183,14 @@ export function startObservability(options: ObservabilityOptions) {
 					return;
 				}
 				pendingWrites++;
+				const previousErrorEvents = errorEvents;
 				try {
 					if (
-						!output.write(line, () => {
+						!output.write(line, (error) => {
 							pendingWrites--;
-							if (closingOutput && pendingWrites === 0)
-								setImmediate(() => output.off("error", onError));
+							if (error && errorEvents === previousErrorEvents)
+								awaitingWriteError = true;
+							releaseErrorListener();
 						})
 					)
 						backpressured = true;
@@ -334,7 +348,8 @@ export function startObservability(options: ObservabilityOptions) {
 			closing ??= (async () => {
 				closingOutput = true;
 				output.off("drain", onDrain);
-				if (pendingWrites === 0) output.off("error", onError);
+				if (pendingWrites === 0 && !awaitingWriteError)
+					output.off("error", onError);
 				let timer: ReturnType<typeof setTimeout> | undefined;
 				try {
 					await Promise.race([

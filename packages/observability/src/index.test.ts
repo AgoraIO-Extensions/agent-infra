@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { Writable } from "node:stream";
 import { afterEach, expect, it } from "vitest";
 import { startObservability } from "./index.js";
@@ -97,6 +98,46 @@ it("handles an asynchronous output error after close while a write is pending", 
 	expect(finishWrite).toBeDefined();
 	await telemetry.close();
 	expect(output.listenerCount("error")).toBe(1);
+	finishWrite?.(new Error("PRIVATE_SENTINEL"));
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	expect(telemetry.status().droppedLogs).toBe(1);
+	expect(output.listenerCount("error")).toBe(0);
+});
+
+it("keeps the error listener until a delayed write error arrives after close", async () => {
+	let finishWrite: ((error?: Error | null) => void) | undefined;
+	const output = Object.assign(new EventEmitter(), {
+		write(_line: string, done: (error?: Error | null) => void) {
+			finishWrite = done;
+			return true;
+		},
+	}) as unknown as Writable;
+	const telemetry = startObservability({ service: "platform-api", output });
+	active.push(telemetry);
+	telemetry.record({ stage: "http", outcome: "completed" });
+	await telemetry.close();
+	finishWrite?.(new Error("PRIVATE_SENTINEL"));
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	expect(output.listenerCount("error")).toBe(1);
+	output.emit("error", new Error("PRIVATE_SENTINEL"));
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	expect(telemetry.status().droppedLogs).toBe(1);
+	expect(output.listenerCount("error")).toBe(0);
+});
+
+it("releases the listener when the write error precedes its callback", async () => {
+	let finishWrite: ((error?: Error | null) => void) | undefined;
+	const output = Object.assign(new EventEmitter(), {
+		write(_line: string, done: (error?: Error | null) => void) {
+			finishWrite = done;
+			return true;
+		},
+	}) as unknown as Writable;
+	const telemetry = startObservability({ service: "platform-api", output });
+	active.push(telemetry);
+	telemetry.record({ stage: "http", outcome: "completed" });
+	await telemetry.close();
+	output.emit("error", new Error("PRIVATE_SENTINEL"));
 	finishWrite?.(new Error("PRIVATE_SENTINEL"));
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	expect(telemetry.status().droppedLogs).toBe(1);
