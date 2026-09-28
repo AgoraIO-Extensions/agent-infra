@@ -100,6 +100,18 @@ describe("API identity management authorization", () => {
 		await expect(
 			useCase.authorizeCredentialScope(apiActor, ["agent:manage"]),
 		).resolves.toBeUndefined();
+		await expect(
+			useCase.authorizeCredentialScope(
+				{
+					...apiActor,
+					credential: { ...apiActor.credential, scopes: ["agent:manage"] },
+				},
+				["agent:manage", "agent:create"],
+			),
+		).rejects.toMatchObject({ code: "not_authorized" });
+		await expect(
+			useCase.authorizeCredentialScope(apiActor, []),
+		).rejects.toMatchObject({ code: "not_authorized" });
 		expect(await useCase.resolveAgentQueryGrantType(apiActor)).toBe("any");
 		await expect(
 			useCase.authorizeCredentialScope(

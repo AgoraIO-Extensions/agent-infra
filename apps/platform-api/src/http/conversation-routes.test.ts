@@ -739,6 +739,53 @@ describe("Conversation persisted SSE", () => {
 		expect(body).toContain('"payload":{"status":"waiting"}');
 	});
 
+	it.each([
+		{ header: {}, schemaVersion: 1, reason: false },
+		{
+			header: { "x-agent-infra-v2": "1" },
+			schemaVersion: 2,
+			reason: true,
+		},
+	])(
+		"projects bounded task reasons for the requested SSE version: %j",
+		async ({ header, schemaVersion, reason }) => {
+			const input = dependencies();
+			input.query.replay = vi
+				.fn()
+				.mockResolvedValueOnce({
+					outcome: "events",
+					events: [
+						{
+							...persistedEvent,
+							eventType: "task.status",
+							eventPayload: {
+								type: "task.status",
+								status: "unknown",
+								reason: "STOP_CONFIRMATION_TIMEOUT",
+							},
+						},
+					],
+					resumeCursor: "cursor-1",
+				})
+				.mockResolvedValue({
+					outcome: "reload",
+					reason: "cursor_expired",
+					resumeCursor: "cursor-1",
+				});
+			const response = await testApp(input).app.request(
+				"/api/v1/conversations/conversation-1/events",
+				{ headers: header },
+			);
+			expect(response.status).toBe(200);
+			const body = await response.text();
+			expect(body).toContain(`"schemaVersion":${schemaVersion}`);
+			expect(body).toContain('"type":"task.status"');
+			expect(body.includes('"reason":"STOP_CONFIRMATION_TIMEOUT"')).toBe(
+				reason,
+			);
+		},
+	);
+
 	it("maps the persisted model fallback notice without local policy", async () => {
 		const input = dependencies();
 		input.query.replay = vi

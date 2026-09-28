@@ -902,7 +902,9 @@ export function createAgentManagementV1(
 						const authorized = actorContext.principal
 							? !administratorApplicationCommand &&
 								!applicationCommand &&
-								principalGrant
+								principalGrant &&
+								(command.command !== "disable_agent" ||
+									actorContext.isAdministrator)
 							: applicationCommand
 								? administratorApplicationCommand
 									? actorContext.isAdministrator

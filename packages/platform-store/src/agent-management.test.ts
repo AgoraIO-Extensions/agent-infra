@@ -270,6 +270,21 @@ async function seedStates(states: readonly AgentManagementStateV1[]) {
 			)}
 		`;
 	}
+	const principalGrants = states.flatMap((state) =>
+		(state.principalGrants ?? []).map((grant) => ({
+			agent_id: state.agentId,
+			principal_type: grant.principal.kind,
+			principal_id: grant.principal.id,
+			grant_type: grant.grantType,
+			authorization_revision: grant.authorizationRevision,
+			revoked_at: grant.revokedAt,
+		})),
+	);
+	if (principalGrants.length > 0) {
+		await adminClient`
+			insert into platform.agent_principal_grants ${adminClient(principalGrants)}
+		`;
+	}
 }
 
 async function waitForBlockedQuery(includes: readonly string[]): Promise<void> {

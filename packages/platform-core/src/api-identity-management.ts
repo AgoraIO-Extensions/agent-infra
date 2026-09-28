@@ -283,7 +283,10 @@ export function createApiIdentityManagementV1(input: {
 		required: readonly ApiCredentialScopeV1[],
 	): void => {
 		const credential = requireCredential(actor);
-		if (!required.some((scope) => hasApiCredentialScopeV1(credential, scope))) {
+		if (
+			required.length === 0 ||
+			!required.every((scope) => hasApiCredentialScopeV1(credential, scope))
+		) {
 			throw new ApiIdentityError("not_authorized");
 		}
 	};
