@@ -107,6 +107,7 @@ worker_values() {
     --set enterpriseDirectorySync.enabled=false
     --set web.placement=external
     --set platformApi.placement=external
+    --set-string platformWorker.deploymentModule=file:///app/dist/deployment.mjs
   )
 }
 case "${1:-}" in

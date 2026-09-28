@@ -140,7 +140,7 @@ HTTP `202` 仅表示新配置修订已提交；同一发布重试沿用原 key�
 
 ### Workload 调谐
 
-生产 Worker 必须在 `platformWorker.deploymentModule` 显式配置部署镜像中已打包模块的绝对路径或 `file:///` URL，例如 `file:///app/deployment/platform-worker.mjs`；该示例不代表基础镜像包含此文件。仓库基础镜像不提供环境专属装配包，发布前必须在最终镜像内确认模块可加载并导出下述工厂。未配置路径时，生产 Helm 渲染失败；Kind 拓扑仅运行占位进程，不代表生产 Worker 可用。Worker 加载部署包导出的
+生产 Worker 必须在 `platformWorker.deploymentModule` 显式配置部署镜像中已打包模块的绝对路径或 `file:///` URL，例如仓库基础镜像中的 `file:///app/dist/deployment.mjs`。生产 Helm 同时要求 `platformWorker.configurationModuleSecretRef` 指向受信任的相邻 `configuration.mjs`，并要求 `platformWorker.runtimeAuthSecretRef` 指向 Worker 独占的签名私钥与服务 token；只读挂载与 Secret 名称不能证明模块已实际导入或业务流程已运行。发布前必须在最终镜像与实际挂载下确认模块可加载并导出下述工厂。缺少任一引用时生产 Helm 渲染失败；Kind 拓扑仅运行占位进程，不代表生产 Worker 可用。Worker 加载部署包导出的
 `createPlatformWorkloadWorkerOptionsV1(signal: AbortSignal)`。部署包必须在装配前检查
 signal，并把它传给数据库、网络和其他异步装配操作；取消后须停止继续创建资源并清理已经
 创建的资源。收到 SIGINT 或 SIGTERM 后，Worker 会取消装配并停止已有循环；装配或停止未在

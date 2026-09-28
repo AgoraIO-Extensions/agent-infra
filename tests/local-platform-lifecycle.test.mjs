@@ -139,6 +139,10 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		);
 		assert.match(up[0], /--set enterpriseDirectorySync\.enabled=false/);
 		assert.match(
+			up[0],
+			/--set-string platformWorker\.deploymentModule=file:\/\/\/app\/dist\/deployment\.mjs/,
+		);
+		assert.match(
 			up[1],
 			/^docker .* compose .* up --detach --wait postgres object-storage platform-api web$/,
 		);

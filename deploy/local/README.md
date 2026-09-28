@@ -60,10 +60,14 @@ Worker 使用 [`createProductionWorkloadWorkerOptionsV1`](../../apps/platform-wo
 为 `in-cluster`，复用 [Helm](../README.md#workload-调谐) 的 namespace-scoped RBAC。
 Worker 必须能导入与 `dist/deployment.mjs` 相邻的受信任 `configuration.mjs`；该模块提供
 真实的 `workloadInput`、`signing`、`serviceToken` 和当前用户 `directory`。基础 Worker
-镜像只打包两个工厂，不提供此配置模块。配置代码可在受审阅的最终镜像中，私钥、服务
-token、数据库 URL 和 Kubernetes 凭证只从部署 Secret/只读文件读取，不写进镜像。
-当前 Helm 尚未挂载此模块或 Runtime 签名材料；完成受控挂载和最终镜像校验前，
-`up` 的 Helm rollout 不能作为真实 Worker 通过证据。
+镜像只打包两个工厂，不提供此配置模块。生产 Helm 要求
+`platformWorker.configurationModuleSecretRef` 引用经审阅的模块源码，入口文件只读挂到
+`/app/dist/configuration.mjs`，其余同 Secret 代码挂到 `/var/run/agent-infra/deployment`；
+`platformWorker.runtimeAuthSecretRef` 引用 Worker 专属的
+签名私钥与服务 token，分别挂到 `/var/run/agent-infra/runtime-auth/runtime-grant.pem` 和
+`service-token`。模块按这些固定路径读取私有材料；数据库 URL 和 Worker keyring 仍用
+现有专属 Secret，Kubernetes 凭证由 Pod ServiceAccount 提供。values 只保存 Secret
+名称与键，不保存源码、私钥或 token。挂载成功或 Helm rollout 不能代替业务循环证据。
 
 Worker 与 API 使用同一模板 Digest、ModelCatalog revision 和资源政策。Worker 的
 `runtimeProbe` 使用 `createWorkloadReadinessAuthorizationV1`，`workerId` 与
@@ -74,8 +78,10 @@ Worker 与 API 使用同一模板 Digest、ModelCatalog revision 和资源政策
 `PLATFORM_LOCAL_KUBECONFIG` 必须为可读绝对路径，context 必须是 `kind-*` 且当前集群
 API 使用与所选 Docker context 的 kind control-plane 一致的 loopback 端口，namespace
 须已创建且与 Compose project 同名。`PLATFORM_LOCAL_WORKER_VALUES` 是可读绝对
-路径，指向最终 Worker 镜像 Digest、`platformWorker.deploymentModule` 和受控 Secret
-引用；本地 `build` 不会自动发布镜像或生成 manifest Digest。迁移由上面的命令完成，
+路径，指向最终 Worker 镜像 Digest、`configurationModuleSecretRef` 与
+`runtimeAuthSecretRef`；脚本把部署模块固定为镜像内的
+`file:///app/dist/deployment.mjs`。本地 `build` 不会自动发布
+镜像或生成 manifest Digest。迁移由上面的命令完成，
 脚本会固定关闭 Helm migration、目录服务及拓扑占位进程，并保持 Web/API 在 Compose 中。
 
 ```bash
