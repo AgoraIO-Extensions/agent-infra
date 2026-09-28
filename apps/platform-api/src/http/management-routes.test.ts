@@ -285,6 +285,28 @@ function createApp(
 	};
 }
 
+it.each([
+	{ path: "/api/v1/agents", method: "GET" },
+	{ path: "/api/v1/agents/agent-1", method: "GET" },
+	{ path: "/api/v1/agents/agent-1/lifecycle", method: "POST" },
+	{ path: "/api/v1/agents/agent-1/grants", method: "POST" },
+])(
+	"rejects a malformed API Authorization before browser fallback: $path",
+	async ({ path, method }) => {
+		const { app } = createApp({ api: true, administrator: true });
+		for (const authorization of ["", "Basic invalid"]) {
+			const response = await app.request(path, {
+				method,
+				headers: {
+					Authorization: authorization,
+					Cookie: "session=browser-admin",
+				},
+			});
+			expect(response.status).toBe(401);
+		}
+	},
+);
+
 it("serves the generated V2 agent list through the platform app", async () => {
 	const { app } = createApp();
 	const response = await app.request("http://localhost/api/v2/agents");

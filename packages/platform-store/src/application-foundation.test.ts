@@ -14,7 +14,6 @@ import {
 	applicationFoundationConfigurationV1,
 	applicationFoundationTransactionConformance,
 	captureApplicationFoundationSubmission,
-	captureApplicationFoundationWritePlan,
 	emptyApplicationFoundationSnapshot,
 } from "../../platform-core/src/application-foundation.conformance.ts";
 import {
@@ -324,8 +323,18 @@ describe("PostgreSQL application foundation transaction", () => {
 		const adapter = new builtStore.PostgresApplicationFoundationTransactionV1({
 			databaseUrl,
 		});
-		const plan = await captureApplicationFoundationWritePlan();
+		const { plan, attachments } =
+			await captureApplicationFoundationSubmission();
+		const materializedAttachments =
+			await materializeSecretRecordFixtureAttachments(attachments);
 		const malicious = [
+			{
+				...structuredClone(plan),
+				result: {
+					...structuredClone(plan.result),
+					status: "creating",
+				},
+			},
 			{
 				...structuredClone(plan),
 				access: {
@@ -343,7 +352,9 @@ describe("PostgreSQL application foundation transaction", () => {
 		] as readonly ApplicationFoundationWritePlanV1[];
 		try {
 			for (const invalid of malicious) {
-				await expect(adapter.commit(invalid)).rejects.toMatchObject({
+				await expect(
+					adapter.commit(invalid, materializedAttachments),
+				).rejects.toMatchObject({
 					name: "ApplicationFoundationError",
 					code: "persistence_failed",
 				});

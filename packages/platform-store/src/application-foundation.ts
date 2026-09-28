@@ -142,6 +142,7 @@ function validatedPlan(input: ApplicationFoundationWritePlanV1) {
 		!validText(plan.application.description, 65_536) ||
 		(plan.application.status !== "pending_approval" &&
 			plan.application.status !== "creating") ||
+		plan.application.status !== result.status ||
 		!validText(plan.application.traceId) ||
 		!validText(plan.application.requestId) ||
 		plan.configurationRevision.agentId !== plan.agent.agentId ||

@@ -176,8 +176,8 @@ function actor(identity: IdentityContext): AgentManagementActorContextV1 {
 	};
 }
 
-function hasBearerCredential(request: Request): boolean {
-	return /^Bearer\s+[^\s]+$/.test(request.headers.get("authorization") ?? "");
+function hasAuthorizationHeader(request: Request): boolean {
+	return request.headers.has("authorization");
 }
 
 function apiIdentityContext(
@@ -562,7 +562,7 @@ async function resolveAgentGrantContext(
 	request: Request,
 	traceId: string,
 ) {
-	const api = hasBearerCredential(request)
+	const api = hasAuthorizationHeader(request)
 		? await resolveApiIdentity(dependencies.identity, request, traceId)
 		: null;
 	const identity = api
@@ -1489,7 +1489,7 @@ export function registerManagementRoutes(
 
 	app.get("/api/v1/agents", (context) =>
 		boundary(context, async (metadata) => {
-			const api = hasBearerCredential(context.req.raw)
+			const api = hasAuthorizationHeader(context.req.raw)
 				? await resolveApiIdentity(
 						dependencies.identity,
 						context.req.raw,
@@ -1544,7 +1544,7 @@ export function registerManagementRoutes(
 
 	app.get("/api/v1/agents/:agentId", (context) =>
 		boundary(context, async (metadata) => {
-			const api = hasBearerCredential(context.req.raw)
+			const api = hasAuthorizationHeader(context.req.raw)
 				? await resolveApiIdentity(
 						dependencies.identity,
 						context.req.raw,
@@ -1606,7 +1606,7 @@ export function registerManagementRoutes(
 
 	app.post("/api/v1/agents/:agentId/lifecycle", (context) =>
 		boundary(context, async (metadata) => {
-			const api = hasBearerCredential(context.req.raw)
+			const api = hasAuthorizationHeader(context.req.raw)
 				? await resolveApiIdentity(
 						dependencies.identity,
 						context.req.raw,
