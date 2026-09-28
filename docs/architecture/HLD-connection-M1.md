@@ -186,7 +186,8 @@ Manhattan 的首个 **[设计决策]** Provider profile 固定为
 v3 的密码交换仅适用于与员工 IAM 分离的 OAuth password-grant 账号，不能用于公司账号。v4 改由
 Connection 发起员工 SSO authorization-code 授权、服务端回调交换个人 Token，并加密保存 Token 与刷新凭证；
 浏览器不再把公司密码发送给 Connection 或 Manhattan。授权后 Manhattan 通过固定 user-info endpoint
-验证 Token 并执行现有 RBAC 校验。机器 key 和 OAuth client secret 只由 Secret Manager 注入，不得
+验证 Token 并执行现有 RBAC 校验。GZ3 pilot 的机器 key 和 OAuth client secret 由现有 Kubernetes Secret 注入；
+Secret Manager 治理另由 [#907](https://github.com/AgoraIO-Extensions/agent-infra/issues/907) 跟踪，不作为此 pilot 的发布前置。Secret 不得
 进入 credential envelope。手工 Bearer v1、HCI Cookie v2 和密码交换 v3 保持不可变；`manhattan-connection-v4` 发布当前用户、SDK dump 列表/详情和 Symbol
 列表四个 READ Actions，固定访问 `/api/connection/*`，禁止调用方提交 URL、Header 或用户邮箱；响应上限
 为 64 KiB。首版不开放上传、删除、重新解析、配置或告警写入。
@@ -2372,7 +2373,7 @@ Audit 使用每 partition hash chain 或外部 append-only sink。保留策略�
 - issuer/authorization/token/profile endpoint来自 immutable ProviderRelease。
 - 不接受 password grant、implicit flow 或任意 callback。动态 client registration 默认关闭；仅在 G-01 证明目标 Direct MCP Client 版本确有需要时，才按 22.4 的 redirect URI、software metadata 和注册生命周期约束启用。
 - login CSRF、session fixation、mix-up attack、code injection 和 open redirect 有专门测试。
-- OAuth client secret 在 KMS，不能进入 Web bundle、Consumer 或 repo。
+- GZ3 pilot 的 OAuth client secret 通过 Kubernetes Secret 注入进程；后续 Secret Manager 治理见 [#907](https://github.com/AgoraIO-Extensions/agent-infra/issues/907)。不能进入 Web bundle、Consumer 或 repo。
 
 ### 27.4 SSRF 与网络出口
 
