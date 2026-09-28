@@ -1,5 +1,14 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
 
+import {
+	type RuntimeSubmitTurnRequestV4,
+	RuntimeSubmitTurnRequestV4Schema,
+	type RuntimeSubmitTurnTransportV4,
+	RuntimeSubmitTurnTransportV4Schema,
+	runtimeRequestSigningPayloadV4,
+	validateRuntimePinnedExecutionKeyScopeV4,
+	validateRuntimePrivateRelayKeyFieldV1,
+} from "@agent-infra/contracts/runtime";
 import { createRelayKeyEncryptorV1 } from "@agent-infra/secret-store";
 import { createRelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { getTableConfig } from "drizzle-orm/pg-core";
@@ -398,6 +407,72 @@ describe("Relay Key version authority on PostgreSQL", () => {
 				result.plaintext.fill(0);
 			}
 		}
+		async function fakeWorkerTransport(request: RuntimeSubmitTurnRequestV4) {
+			const binding = {
+				purpose: request.keyBinding.purpose,
+				subjectId: request.keyBinding.subjectId,
+				keyId: request.keyBinding.ciphertextRef,
+				keyVersion: request.keyBinding.version,
+			};
+			const record = await client.begin((sql) =>
+				readRelayKeyVersionInTransaction(sql, binding),
+			);
+			if (!record) return null;
+			const result = await decryptor.decrypt({
+				encryptedRecord: record,
+				expectedBinding: binding,
+			});
+			if (result.outcome !== "decrypted") return null;
+			try {
+				const {
+					schemaVersion: _schemaVersion,
+					grant: _grant,
+					input: _input,
+					selection: _selection,
+					...context
+				} = request;
+				return RuntimeSubmitTurnTransportV4Schema.parse({
+					businessRequest: request,
+					privateKeyField: {
+						schemaVersion: 1,
+						context: {
+							...context,
+							grantId: "grant-crypto-fixture",
+							requestDigest: createHash("sha256")
+								.update(runtimeRequestSigningPayloadV4(request))
+								.digest("hex"),
+						},
+						keyDelivery: {
+							relayKey: Buffer.from(result.plaintext).toString("utf8"),
+						},
+					},
+				});
+			} finally {
+				result.plaintext.fill(0);
+			}
+		}
+		const driverKeys: string[] = [];
+		function fakeHost(
+			transport: RuntimeSubmitTurnTransportV4,
+			original: RuntimeSubmitTurnRequestV4,
+		) {
+			const privateField = validateRuntimePrivateRelayKeyFieldV1(
+				transport.privateKeyField,
+				{
+					request: transport.businessRequest,
+					grantId: "grant-crypto-fixture",
+					requestDigest: createHash("sha256")
+						.update(runtimeRequestSigningPayloadV4(transport.businessRequest))
+						.digest("hex"),
+				},
+			);
+			validateRuntimePinnedExecutionKeyScopeV4(
+				original,
+				transport.businessRequest,
+				null,
+			);
+			driverKeys.push(privateField.keyDelivery.relayKey);
+		}
 		try {
 			const first = await client.begin((sql) =>
 				replaceRelayKeyVersionInTransaction(sql, {
@@ -434,6 +509,81 @@ describe("Relay Key version authority on PostgreSQL", () => {
 			expect(JSON.stringify(currentRecord)).not.toContain(k2);
 			expect(await decryptedText(pinnedRecord, acceptedBinding)).toBe(k1);
 			expect(await decryptedText(currentRecord, second.binding)).toBe(k2);
+			const k1Request = RuntimeSubmitTurnRequestV4Schema.parse({
+				schemaVersion: 4,
+				requestId: "request-crypto-k1",
+				traceId: "trace-crypto",
+				principal: { kind: "user", id: target.subjectId },
+				executionSource: "web",
+				channelId: "web",
+				agentId: "agent-crypto",
+				conversationId: "conversation-crypto",
+				executionId: "execution-crypto-k1",
+				turnId: "turn-crypto-k1",
+				sessionGeneration: 1,
+				hostSessionRef: null,
+				operation: {
+					kind: "execution",
+					id: "execution-crypto-k1",
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+				},
+				grant: {
+					schemaVersion: 4,
+					format: "runtime-execution-jws",
+					token: "a.b.c",
+				},
+				keyBinding: {
+					purpose: acceptedBinding.purpose,
+					subjectId: acceptedBinding.subjectId,
+					ciphertextRef: acceptedBinding.keyId,
+					version: acceptedBinding.keyVersion,
+				},
+				input: { text: "synthetic input", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-crypto",
+					reasoningLevel: "high",
+				},
+			});
+			const k2Request = RuntimeSubmitTurnRequestV4Schema.parse({
+				...k1Request,
+				requestId: "request-crypto-k2",
+				executionId: "execution-crypto-k2",
+				turnId: "turn-crypto-k2",
+				operation: { ...k1Request.operation, id: "execution-crypto-k2" },
+				keyBinding: {
+					purpose: second.binding.purpose,
+					subjectId: second.binding.subjectId,
+					ciphertextRef: second.binding.keyId,
+					version: second.binding.keyVersion,
+				},
+			});
+			const k1Transport = await fakeWorkerTransport(k1Request);
+			const k2Transport = await fakeWorkerTransport(k2Request);
+			if (!k1Transport || !k2Transport)
+				throw new Error("Missing fake Key delivery");
+			fakeHost(k1Transport, k1Request);
+			const reboundRequest = RuntimeSubmitTurnRequestV4Schema.parse({
+				...k1Request,
+				requestId: "request-crypto-rebound",
+				keyBinding: k2Request.keyBinding,
+			});
+			const reboundTransport = await fakeWorkerTransport(reboundRequest);
+			if (!reboundTransport) throw new Error("Missing fake rebound delivery");
+			expect(() => fakeHost(reboundTransport, k1Request)).toThrow(
+				"RuntimeHostV4 pinned Execution Key is invalid",
+			);
+			fakeHost(k2Transport, k2Request);
+			expect(
+				await fakeWorkerTransport(
+					RuntimeSubmitTurnRequestV4Schema.parse({
+						...k1Request,
+						principal: { kind: "user", id: "other-user" },
+						keyBinding: { ...k1Request.keyBinding, subjectId: "other-user" },
+					}),
+				),
+			).toBeNull();
 			expect(
 				await decryptor.decrypt({
 					encryptedRecord: pinnedRecord,
@@ -467,6 +617,10 @@ describe("Relay Key version authority on PostgreSQL", () => {
 				),
 			).toEqual(pinnedRecord);
 			expect(await decryptedText(pinnedRecord, acceptedBinding)).toBe(k1);
+			const resumedK1 = await fakeWorkerTransport(k1Request);
+			if (!resumedK1) throw new Error("Missing pinned Key after revoke");
+			fakeHost(resumedK1, k1Request);
+			expect(driverKeys).toEqual([k1, k2, k1]);
 		} finally {
 			await client.end();
 		}
