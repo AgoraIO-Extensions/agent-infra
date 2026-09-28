@@ -152,7 +152,10 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 		const disabled = await input.isPlatformDisabled(account.uid);
 		if (typeof disabled !== "boolean")
 			throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
-		const organizationIds = await input.organizationIds(account);
+		const isDisabled = account.accountStatus === "disabled" || disabled;
+		const organizationIds = isDisabled
+			? []
+			: await input.organizationIds(account);
 		if (
 			!Array.isArray(organizationIds) ||
 			organizationIds.some(
@@ -165,10 +168,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			schemaVersion: 1 as const,
 			userId: account.userId,
 			displayName: account.displayName,
-			accountStatus:
-				account.accountStatus === "disabled" || disabled
-					? ("disabled" as const)
-					: ("active" as const),
+			accountStatus: isDisabled ? ("disabled" as const) : ("active" as const),
 			organizationIds,
 			roles: account.roles,
 			authorizationRevision: createHash("sha256")
@@ -276,7 +276,11 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 		)
 			return response(403);
 		const token = cookie(request);
-		if (token) await input.sessions.revoke(digest(token));
+		try {
+			if (token) await input.sessions.revoke(digest(token));
+		} catch {
+			return response(503);
+		}
 		const result = response(204);
 		result.headers.append("Set-Cookie", sessionCookie("", 0));
 		return result;

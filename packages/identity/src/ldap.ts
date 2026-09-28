@@ -225,6 +225,18 @@ export function createLdapIdentityDirectory(
 		};
 	}
 
+	async function verifyUniqueEmail(value: LdapAccount): Promise<void> {
+		const entry = await find(config.emailAttribute, value.email);
+		if (
+			!entry ||
+			attribute(entry, config.uidAttribute) !== value.uid ||
+			attribute(entry, config.emailAttribute).trim().toLowerCase() !==
+				value.email
+		) {
+			throw new LdapIdentityUnavailableError();
+		}
+	}
+
 	async function current(uid: string): Promise<LdapAccount | null> {
 		try {
 			requiredText(uid, 256);
@@ -232,6 +244,7 @@ export function createLdapIdentityDirectory(
 			if (!entry) return null;
 			const parsed = account(entry);
 			if (parsed.uid !== uid) throw new LdapIdentityUnavailableError();
+			await verifyUniqueEmail(parsed);
 			return parsed;
 		} catch {
 			throw new LdapIdentityUnavailableError();

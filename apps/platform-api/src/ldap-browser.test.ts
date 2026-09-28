@@ -43,6 +43,7 @@ function fixture(sessions = memorySessions()) {
 	let current: LdapAccount | null = account;
 	let disabled = false;
 	let organizationIds: readonly string[] = ["org-a"];
+	let organizationsAvailable = true;
 	let now = 1000;
 	const directory = {
 		authenticate: vi.fn(async (login: string, password: string) =>
@@ -57,7 +58,10 @@ function fixture(sessions = memorySessions()) {
 		directory,
 		sessions,
 		isPlatformDisabled,
-		organizationIds: async () => organizationIds,
+		organizationIds: async () => {
+			if (!organizationsAvailable) throw new Error("directory unavailable");
+			return organizationIds;
+		},
 		now: () => now,
 	});
 	const login = (
@@ -89,6 +93,9 @@ function fixture(sessions = memorySessions()) {
 		},
 		setOrganizations(value: readonly string[]) {
 			organizationIds = value;
+		},
+		setOrganizationsAvailable(value: boolean) {
+			organizationsAvailable = value;
 		},
 		setNow(value: number) {
 			now = value;
@@ -156,6 +163,24 @@ describe("LDAP browser adapter", () => {
 		expect(
 			await state.adapter.identityAdapter.resolve(write(origin)),
 		).toBeNull();
+	});
+
+	it("revokes a disabled user's session even when the directory is unavailable", async () => {
+		const state = fixture();
+		const cookie =
+			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
+		const request = new Request(`${origin}/api/v1/session`, {
+			headers: { cookie },
+		});
+		state.setDisabled(true);
+		state.setOrganizationsAvailable(false);
+		expect(await state.adapter.identityAdapter.resolve(request)).toMatchObject({
+			accountStatus: "disabled",
+			organizationIds: [],
+		});
+		state.setDisabled(false);
+		state.setOrganizationsAvailable(true);
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 	});
 
 	it("shares revocation across instances and fails closed when session storage fails", async () => {
@@ -282,5 +307,25 @@ describe("LDAP browser adapter", () => {
 		);
 		expect(logout?.status).toBe(204);
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+	});
+
+	it("returns an opaque failure when session revocation is unavailable", async () => {
+		const sessions = memorySessions();
+		const state = fixture({
+			...sessions,
+			async revoke() {
+				throw new Error("private session store detail");
+			},
+		});
+		const cookie =
+			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
+		const result = await state.adapter.handleRequest(
+			new Request(`${origin}/auth/logout`, {
+				method: "POST",
+				headers: { origin, cookie, "x-platform-csrf": "1" },
+			}),
+		);
+		expect(result?.status).toBe(503);
+		expect(await result?.text()).not.toContain("private session store detail");
 	});
 });
