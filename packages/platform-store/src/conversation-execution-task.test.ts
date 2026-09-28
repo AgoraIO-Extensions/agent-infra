@@ -192,6 +192,22 @@ afterAll(async () => {
 });
 
 describe("durable task admission", () => {
+	it("rejects new standard work when the Agent-default Relay Key is missing", async () => {
+		await sql`delete from platform.relay_key_subjects where purpose = 'agent-default' and subject_id = 'agent_task'`;
+		await expect(
+			taskUseCase().submitTask(command("missing-relay-key")),
+		).resolves.toEqual({
+			outcome: "denied",
+			reason: "relay_key_unavailable",
+		});
+		expect(await counts()).toMatchObject({
+			conversations: 0,
+			executions: 0,
+			messages: 0,
+			outboxes: 0,
+		});
+	});
+
 	it("creates a default Conversation once and saves discoverable waiting work atomically", async () => {
 		const task = taskUseCase();
 		const decisions = await Promise.all([
