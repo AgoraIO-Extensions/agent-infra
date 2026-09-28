@@ -151,6 +151,17 @@ beforeEach(async () => {
 	};
 	await sql`insert into platform.agents (id, current_configuration_revision, authorization_revision)
 		values ('agent_task', 1, 'grant_1')`;
+	await sql`insert into platform.relay_key_subjects (purpose, subject_id, last_version, current_version)
+		values ('agent-default', 'agent_task', 1, 1)`;
+	await sql`insert into platform.relay_key_versions
+		(purpose, subject_id, key_version, key_id, ciphertext)
+		values ('agent-default', 'agent_task', 1, 'relay-key-task-1', ${sql.json({
+			schemaVersion: 1,
+			purpose: "agent-default",
+			subjectId: "agent_task",
+			keyId: "relay-key-task-1",
+			keyVersion: 1,
+		})})`;
 	await sql`insert into platform.agent_applications
 		(id, agent_id, applicant_id, name, description, status, trace_id, request_id,
 		 submitted_at, management_revision, approval_revision, service_availability, desired_state,
@@ -168,7 +179,9 @@ afterEach(async () => {
 		platform.conversation_audit_events, platform.outbox_items, platform.idempotency_records,
 		platform.conversation_stops, platform.conversation_messages,
 		platform.conversation_executions, platform.conversations,
-		platform.agent_configuration_revisions, platform.agent_applications, platform.agents, platform.platform_applications, platform.platform_api_credentials cascade`;
+		platform.agent_configuration_revisions, platform.agent_applications,
+		platform.relay_key_versions, platform.relay_key_subjects, platform.agents,
+		platform.platform_applications, platform.platform_api_credentials cascade`;
 });
 
 afterAll(async () => {

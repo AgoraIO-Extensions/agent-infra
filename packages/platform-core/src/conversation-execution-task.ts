@@ -9,9 +9,12 @@ import {
 import type {
 	ConversationExecutionAuthorityV1,
 	ConversationExecutionConversationStateV1,
+	ConversationExecutionRelayKeyBindingV1,
+	ConversationExecutionSourceV1,
 	ConversationModelConfigurationV1,
 	ConversationModelSelectionFallbackWriteV1,
 } from "./conversation-execution-types.js";
+import { conversationExecutionSourceV1 } from "./conversation-execution-types.js";
 import {
 	digest,
 	invalidInput,
@@ -67,6 +70,8 @@ export interface ConversationTaskAdmissionPlanV1 {
 	readonly modelConfigurationRevision: number | null;
 	readonly modelOptionId: string | null;
 	readonly reasoningLevel: string | null;
+	readonly executionSource: ConversationExecutionSourceV1 | null;
+	readonly relayKeyBinding: ConversationExecutionRelayKeyBindingV1 | null;
 	readonly acceptedAt: Date;
 	readonly waitDeadline: Date;
 	readonly waitOrder: number;
@@ -120,7 +125,8 @@ export type ConversationTaskSubmitDecisionV1 =
 			readonly reason:
 				| "agent_unavailable"
 				| "conversation_unavailable"
-				| "model_unavailable";
+				| "model_unavailable"
+				| "relay_key_unavailable";
 	  }
 	| { readonly outcome: "capacity_full" }
 	| { readonly outcome: "conflict"; readonly reason: "idempotency_conflict" };
@@ -423,6 +429,11 @@ export function createConversationTaskAdmissionUseCaseV1(
 							modelConfigurationRevision: model?.configurationRevision ?? null,
 							modelOptionId,
 							reasoningLevel,
+							executionSource:
+								state.sourceKind === "standard"
+									? conversationExecutionSourceV1(authority.channelId)
+									: null,
+							relayKeyBinding: null,
 							acceptedAt,
 							waitDeadline: new Date(deadlineMs),
 							waitOrder,

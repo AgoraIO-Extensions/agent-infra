@@ -53,6 +53,8 @@ export {
 	type ConversationExecutionAuthorizationPortV1,
 	type ConversationExecutionConversationStateV1,
 	ConversationExecutionError,
+	type ConversationExecutionRelayKeyBindingV1,
+	type ConversationExecutionSourceV1,
 	type ConversationExecutionStateV1,
 	type ConversationExecutionTransactionPortV1,
 	type ConversationExecutionUseCaseDependenciesV1,

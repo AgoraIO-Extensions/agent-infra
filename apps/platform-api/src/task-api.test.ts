@@ -217,7 +217,7 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 	beforeEach(async () => {
 		userActive = true;
 		await db.unsafe(
-			"truncate platform.agents,platform.conversations,platform.platform_applications cascade",
+			"truncate platform.agents,platform.conversations,platform.relay_key_versions,platform.relay_key_subjects,platform.platform_applications cascade",
 		);
 		await db.unsafe(
 			"truncate platform.outbox_items,platform.idempotency_records,platform.audit_events,platform.platform_api_credentials",
@@ -225,6 +225,23 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 		await db.unsafe(
 			"insert into platform.agents(id,current_configuration_revision,authorization_revision) values($1,7,'authorization_9')",
 			[configuration.agentId],
+		);
+		await db.unsafe(
+			"insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('agent-default',$1,1,1)",
+			[configuration.agentId],
+		);
+		await db.unsafe(
+			"insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('agent-default',$1,1,'relay-task-api-1',$2::text::jsonb)",
+			[
+				configuration.agentId,
+				JSON.stringify({
+					schemaVersion: 1,
+					purpose: "agent-default",
+					subjectId: configuration.agentId,
+					keyId: "relay-task-api-1",
+					keyVersion: 1,
+				}),
+			],
 		);
 		await db.unsafe(
 			"insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values('agent_application',$1,'owner_01','Agent','Synthetic task test','available','trace_seed','request_seed',now(),11,1,'ready','running',1,1)",

@@ -24,6 +24,7 @@ import {
 	readIdempotency,
 	reserveIdempotency,
 } from "./conversation-execution-sql.js";
+import { currentRelayKeyVersionInTransaction } from "./relay-key-versions.js";
 import { insertTaskAuthorization } from "./task-authorization.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
@@ -33,6 +34,15 @@ type SubmitRequest = Parameters<
 type SubmitDecide = Parameters<
 	ConversationTaskAdmissionTransactionPortV1["submitTask"]
 >[1];
+
+function executionSource(channelId: string) {
+	if (channelId === "web") return "web" as const;
+	if (channelId === "wecom") return "wecom" as const;
+	if (channelId === "eval") return "eval" as const;
+	if (channelId === "api" || channelId.startsWith("api:"))
+		return "platform-api" as const;
+	throw new TypeError("Conversation execution channel is invalid");
+}
 
 function replayResult(value: unknown): ConversationTaskSubmitResultV1 {
 	if (
@@ -221,8 +231,24 @@ export async function submitConversationTask(
 	};
 	const decision = decide(state);
 	if ("outcome" in decision) return decision;
-	const plan = decision;
+	let plan = decision;
 	const statusEvent = plan.statusEvent;
+	if (plan.relayKeyBinding !== null) unavailable();
+	if (plan.executionSource !== null) {
+		if (executionSource(authority.channelId) !== plan.executionSource)
+			unavailable();
+		const keySubject =
+			plan.executionSource === "web" || plan.executionSource === "wecom"
+				? { purpose: "personal" as const, subjectId: authority.actorId }
+				: { purpose: "agent-default" as const, subjectId: authority.agentId };
+		const relayKeyBinding = await currentRelayKeyVersionInTransaction(
+			transaction,
+			keySubject,
+		);
+		if (!relayKeyBinding)
+			return { outcome: "denied", reason: "relay_key_unavailable" };
+		plan = { ...plan, relayKeyBinding };
+	}
 	const finalCursor =
 		plan.modelSelectionFallback?.timelineEvent.conversationCursor ??
 		statusEvent.conversationCursor;
@@ -285,12 +311,17 @@ export async function submitConversationTask(
 			(execution_id, conversation_id, agent_id, actor_id, channel_id,
 			 turn_id, status, task_wait_order, task_wait_deadline, session_generation,
 			 delivery_fence, authorization_revision, model_configuration_revision,
-			 model_option_id, reasoning_level, last_event_sequence, created_at, updated_at)
+			 model_option_id, reasoning_level, execution_source, relay_key_purpose,
+			 relay_key_subject_id, relay_key_id, relay_key_version, last_event_sequence,
+			 created_at, updated_at)
 		values (${plan.executionId}, ${plan.conversationId}, ${authority.agentId},
 			${authority.actorId}, ${authority.channelId}, ${plan.turnId}, ${plan.executionStatus},
 			${plan.waitOrder}, ${plan.waitDeadline}, ${plan.outbox.payload.sessionGeneration}, 0,
 			${authority.authorizationRevision}, ${plan.modelConfigurationRevision},
-			${plan.modelOptionId}, ${plan.reasoningLevel}, ${statusEvent.sequence},
+			${plan.modelOptionId}, ${plan.reasoningLevel}, ${plan.executionSource},
+			${plan.relayKeyBinding?.purpose ?? null}, ${plan.relayKeyBinding?.subjectId ?? null},
+			${plan.relayKeyBinding?.keyId ?? null}, ${plan.relayKeyBinding?.keyVersion ?? null},
+			${statusEvent.sequence},
 			${plan.acceptedAt}, ${plan.acceptedAt})
 	`;
 	await transaction`

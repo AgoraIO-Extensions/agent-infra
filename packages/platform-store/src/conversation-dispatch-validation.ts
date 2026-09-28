@@ -162,6 +162,32 @@ export function requireCommand(input: {
 }
 
 export function requireClaim(claim: ConversationDispatchClaimV1) {
+	if (
+		(claim.executionSource === undefined) !==
+		(claim.relayKeyBinding === undefined)
+	) {
+		throw new TypeError("Conversation dispatch key binding is invalid");
+	}
+	if (claim.relayKeyBinding) {
+		const { purpose, subjectId, keyId, keyVersion } = claim.relayKeyBinding;
+		if (
+			(claim.executionSource !== "web" &&
+				claim.executionSource !== "wecom" &&
+				claim.executionSource !== "platform-api" &&
+				claim.executionSource !== "eval") ||
+			!validText(subjectId) ||
+			!validText(keyId) ||
+			!Number.isSafeInteger(keyVersion) ||
+			keyVersion < 1 ||
+			(claim.executionSource === "web" || claim.executionSource === "wecom"
+				? purpose !== "personal"
+				: (claim.executionSource === "platform-api" ||
+						claim.executionSource === "eval") &&
+					purpose !== "agent-default")
+		) {
+			throw new TypeError("Conversation dispatch key binding is invalid");
+		}
+	}
 	if (claim?.metadataRecovery !== undefined) {
 		parseConversationMetadataRecoveryV1(claim.metadataRecovery);
 		if (

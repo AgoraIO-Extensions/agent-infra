@@ -1,6 +1,8 @@
 import type {
 	ConversationDispatchClaimDecisionV1,
 	ConversationDispatchClaimV1,
+	ConversationExecutionRelayKeyBindingV1,
+	ConversationExecutionSourceV1,
 } from "@agent-infra/platform-core";
 import {
 	maximumSafeCounter,
@@ -280,6 +282,41 @@ export async function claimWork(
         order by file_id
     `
 		: [];
+	const hasRelayKeyBinding = [
+		execution.execution_source,
+		execution.relay_key_purpose,
+		execution.relay_key_subject_id,
+		execution.relay_key_id,
+		execution.relay_key_version,
+	].some((value) => value !== null);
+	let executionSource: ConversationExecutionSourceV1 | undefined;
+	let relayKeyBinding: ConversationExecutionRelayKeyBindingV1 | undefined;
+	if (hasRelayKeyBinding) {
+		const source = execution.execution_source;
+		const purpose = execution.relay_key_purpose;
+		const version = safeCounter(execution.relay_key_version, 1);
+		if (
+			(source !== "web" &&
+				source !== "wecom" &&
+				source !== "platform-api" &&
+				source !== "eval") ||
+			(purpose !== "personal" && purpose !== "agent-default") ||
+			!execution.relay_key_subject_id ||
+			!execution.relay_key_id ||
+			version === undefined ||
+			((source === "web" || source === "wecom") && purpose !== "personal") ||
+			((source === "platform-api" || source === "eval") &&
+				purpose !== "agent-default")
+		)
+			return { outcome: "stale" };
+		executionSource = source;
+		relayKeyBinding = {
+			purpose,
+			subjectId: execution.relay_key_subject_id,
+			keyId: execution.relay_key_id,
+			keyVersion: version,
+		};
+	}
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
 		...(execution.task_wait_order === null
@@ -308,6 +345,8 @@ export async function claimWork(
 				: Number(execution.model_configuration_revision),
 		modelOptionId: execution.model_option_id,
 		reasoningLevel: execution.reasoning_level,
+		...(executionSource ? { executionSource } : {}),
+		...(relayKeyBinding ? { relayKeyBinding } : {}),
 		hostSessionRef: conversation.host_session_ref,
 		runtimeCursor: execution.last_runtime_cursor,
 		...(terminalEvent?.seen ? { runtimeTerminalEventSeen: true as const } : {}),

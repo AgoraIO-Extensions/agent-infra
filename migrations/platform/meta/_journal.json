@@ -176,6 +176,13 @@
       "when": 1790415695881,
       "tag": "0024_stop_confirmation_deadline",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790594521208,
+      "tag": "0025_execution_relay_key_binding",
+      "breakpoints": true
     }
   ]
 }

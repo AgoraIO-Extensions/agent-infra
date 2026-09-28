@@ -121,6 +121,11 @@ export const conversationExecutions = platformSchema.table(
 		}),
 		modelOptionId: text("model_option_id"),
 		reasoningLevel: text("reasoning_level"),
+		executionSource: text("execution_source"),
+		relayKeyPurpose: text("relay_key_purpose"),
+		relayKeySubjectId: text("relay_key_subject_id"),
+		relayKeyId: text("relay_key_id"),
+		relayKeyVersion: bigint("relay_key_version", { mode: "number" }),
 		taskWaitOrder: bigint("task_wait_order", { mode: "number" }),
 		taskWaitDeadline: timestamp("task_wait_deadline", {
 			withTimezone: true,
@@ -189,6 +194,24 @@ export const conversationExecutions = platformSchema.table(
 				AND ${table.modelConfigurationRevision} between 1 and 9007199254740991
 				AND char_length(${table.modelOptionId}) > 0
 				AND char_length(${table.reasoningLevel}) > 0
+			)`,
+		),
+		check(
+			"conversation_execution_key_binding",
+			sql`(
+				${table.executionSource} IS NULL
+				AND ${table.relayKeyPurpose} IS NULL
+				AND ${table.relayKeySubjectId} IS NULL
+				AND ${table.relayKeyId} IS NULL
+				AND ${table.relayKeyVersion} IS NULL
+			) OR (
+				${table.executionSource} in ('web', 'wecom', 'platform-api', 'eval')
+				AND ${table.relayKeyPurpose} in ('personal', 'agent-default')
+				AND char_length(${table.relayKeySubjectId}) > 0
+				AND char_length(${table.relayKeyId}) > 0
+				AND ${table.relayKeyVersion} between 1 and 9007199254740991
+				AND ((${table.executionSource} in ('web', 'wecom') AND ${table.relayKeyPurpose} = 'personal')
+					OR (${table.executionSource} in ('platform-api', 'eval') AND ${table.relayKeyPurpose} = 'agent-default'))
 			)`,
 		),
 		uniqueIndex("conversation_execution_id_conversation_unique").on(

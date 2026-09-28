@@ -1,3 +1,7 @@
+import type {
+	ConversationExecutionRelayKeyBindingV1,
+	ConversationExecutionSourceV1,
+} from "./conversation-execution-types.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
 
@@ -122,6 +126,8 @@ export interface ConversationDispatchClaimV1 {
 	readonly modelConfigurationRevision: number | null;
 	readonly modelOptionId: string | null;
 	readonly reasoningLevel: string | null;
+	readonly executionSource?: ConversationExecutionSourceV1;
+	readonly relayKeyBinding?: ConversationExecutionRelayKeyBindingV1;
 	readonly hostSessionRef: string | null;
 	readonly runtimeCursor: string | null;
 	/** Derived by the Store from the original committed Runtime terminal event. */

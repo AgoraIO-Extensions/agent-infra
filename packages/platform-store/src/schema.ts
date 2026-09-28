@@ -41,6 +41,7 @@ import {
 	taskAuthorizationRecords,
 	taskControlRecords,
 } from "./schema-operations";
+import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 
 export {
 	agentApplications,
@@ -104,6 +105,7 @@ export {
 	taskAuthorizationRecords,
 	taskControlRecords,
 } from "./schema-operations";
+export { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 
 export const platformInfrastructureTables = [
 	workloadReconciliations,
@@ -139,4 +141,6 @@ export const platformInfrastructureTables = [
 	platformApiCredentials,
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,
+	relayKeySubjects,
+	relayKeyVersions,
 ] as const;

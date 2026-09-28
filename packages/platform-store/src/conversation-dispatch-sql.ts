@@ -112,6 +112,8 @@ export async function lockExecution(
 			status, session_generation::text, delivery_fence::text,
 			authorization_revision, last_runtime_cursor,
 			model_configuration_revision::text, model_option_id, reasoning_level,
+			execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id,
+			relay_key_version::text,
 			task_wait_order::text, task_wait_deadline
 		from platform.conversation_executions
 		where execution_id = ${executionId} and conversation_id = ${conversationId}
@@ -300,6 +302,24 @@ export function bindingMatches(
 			validText(execution.model_option_id)) &&
 		(execution.reasoning_level === null ||
 			validText(execution.reasoning_level));
+	const executionRelayKeyValid =
+		(execution.execution_source === null &&
+			execution.relay_key_purpose === null &&
+			execution.relay_key_subject_id === null &&
+			execution.relay_key_id === null &&
+			execution.relay_key_version === null) ||
+		(execution.execution_source !== null &&
+			(execution.execution_source === "web" ||
+				execution.execution_source === "wecom" ||
+				execution.execution_source === "platform-api" ||
+				execution.execution_source === "eval") &&
+			(execution.execution_source === "web" ||
+			execution.execution_source === "wecom"
+				? execution.relay_key_purpose === "personal"
+				: execution.relay_key_purpose === "agent-default") &&
+			validText(execution.relay_key_subject_id) &&
+			validText(execution.relay_key_id) &&
+			safeCounter(execution.relay_key_version, 1) !== undefined);
 	return (
 		outbox.scope_type === "conversation" &&
 		outbox.scope_id === payload.conversationId &&
@@ -322,6 +342,7 @@ export function bindingMatches(
 		validText(outbox.trace_id) &&
 		validText(outbox.request_id) &&
 		executionSelectionValid &&
+		executionRelayKeyValid &&
 		(selectedOperation === "conversation.turn.stop.v1" ||
 			(payload.modelConfigurationRevision === executionModelRevision &&
 				payload.modelOptionId === execution.model_option_id &&
@@ -354,6 +375,17 @@ function claimMatchesState(
 		state.execution.model_configuration_revision === null
 			? null
 			: safeCounter(state.execution.model_configuration_revision, 1);
+	const executionRelayKeyMatches =
+		state.execution.execution_source === null
+			? claim.executionSource === undefined &&
+				claim.relayKeyBinding === undefined
+			: claim.executionSource === state.execution.execution_source &&
+				claim.relayKeyBinding?.purpose === state.execution.relay_key_purpose &&
+				claim.relayKeyBinding.subjectId ===
+					state.execution.relay_key_subject_id &&
+				claim.relayKeyBinding.keyId === state.execution.relay_key_id &&
+				claim.relayKeyBinding.keyVersion ===
+					safeCounter(state.execution.relay_key_version, 1);
 	return (
 		state.outbox.status === "processing" &&
 		(state.execution.task_wait_order === null
@@ -388,7 +420,8 @@ function claimMatchesState(
 		executionFence === claim.executionDeliveryFence &&
 		modelConfigurationRevision === claim.modelConfigurationRevision &&
 		state.execution.model_option_id === claim.modelOptionId &&
-		state.execution.reasoning_level === claim.reasoningLevel
+		state.execution.reasoning_level === claim.reasoningLevel &&
+		executionRelayKeyMatches
 	);
 }
 

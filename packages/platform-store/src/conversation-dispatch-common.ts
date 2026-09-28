@@ -69,6 +69,11 @@ export interface ExecutionRow {
 	model_configuration_revision: string | number | null;
 	model_option_id: string | null;
 	reasoning_level: string | null;
+	execution_source: string | null;
+	relay_key_purpose: string | null;
+	relay_key_subject_id: string | null;
+	relay_key_id: string | null;
+	relay_key_version: string | number | null;
 	task_wait_order: string | number | null;
 	task_wait_deadline: Date | null;
 }

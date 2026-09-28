@@ -383,6 +383,31 @@ async function initializeOldDatabase() {
 
 async function startUpgradedApi() {
 	await db.unsafe(
+		"insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values ('agent-default',$1,1,1),('personal',$2,1,1)",
+		[configuration.agentId, actorId],
+	);
+	await db.unsafe(
+		"insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values ('agent-default',$1,1,'relay-upgrade-agent-1',$3::text::jsonb),('personal',$2,1,'relay-upgrade-user-1',$4::text::jsonb)",
+		[
+			configuration.agentId,
+			actorId,
+			JSON.stringify({
+				schemaVersion: 1,
+				purpose: "agent-default",
+				subjectId: configuration.agentId,
+				keyId: "relay-upgrade-agent-1",
+				keyVersion: 1,
+			}),
+			JSON.stringify({
+				schemaVersion: 1,
+				purpose: "personal",
+				subjectId: actorId,
+				keyId: "relay-upgrade-user-1",
+				keyVersion: 1,
+			}),
+		],
+	);
+	await db.unsafe(
 		"insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values($1,'user',$2,'use',$3)",
 		[configuration.agentId, actorId, grant],
 	);

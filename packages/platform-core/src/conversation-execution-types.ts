@@ -3,6 +3,31 @@ import type { PersistedConversationEventV1 } from "./conversation-events.js";
 import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
 import type { TaskAuthorizationBoundaryV1 } from "./task-authorization.js";
 
+export type ConversationExecutionSourceV1 =
+	| "web"
+	| "wecom"
+	| "platform-api"
+	| "eval";
+
+/** Immutable, non-secret reference to the Relay Key selected at acceptance. */
+export interface ConversationExecutionRelayKeyBindingV1 {
+	readonly purpose: "personal" | "agent-default";
+	readonly subjectId: string;
+	readonly keyId: string;
+	readonly keyVersion: number;
+}
+
+export function conversationExecutionSourceV1(
+	channelId: string,
+): ConversationExecutionSourceV1 {
+	if (channelId === "web") return "web";
+	if (channelId === "wecom") return "wecom";
+	if (channelId === "eval") return "eval";
+	if (channelId === "api" || channelId.startsWith("api:"))
+		return "platform-api";
+	throw new TypeError("Conversation execution channel is invalid");
+}
+
 export interface ConversationExecutionAuthorityV1 {
 	readonly schemaVersion: 1;
 	readonly actorId: string;

@@ -59,7 +59,8 @@ afterEach(async () => {
 		platform.conversation_audit_events, platform.audit_events,
 		platform.outbox_items, platform.idempotency_records,
 		platform.conversation_stops, platform.conversation_messages,
-		platform.conversation_executions, platform.conversations`;
+		platform.conversation_executions, platform.conversations,
+		platform.relay_key_versions, platform.relay_key_subjects`;
 	await client`truncate platform.agents cascade`;
 });
 
@@ -145,6 +146,19 @@ async function seedCapacityAgent(
 		attempts: 0,
 	};
 	await client`insert into platform.agents (id, current_configuration_revision) values (${agentId}, 4) on conflict do nothing`;
+	await client`insert into platform.relay_key_subjects (purpose, subject_id, last_version, current_version)
+		values ('agent-default', ${agentId}, 1, 1) on conflict (purpose, subject_id) do nothing`;
+	await client`insert into platform.relay_key_versions
+		(purpose, subject_id, key_version, key_id, ciphertext)
+		values ('agent-default', ${agentId}, 1, ${`relay-key-${agentId}-1`}, ${client.json(
+			{
+				schemaVersion: 1,
+				purpose: "agent-default",
+				subjectId: agentId,
+				keyId: `relay-key-${agentId}-1`,
+				keyVersion: 1,
+			},
+		)}) on conflict (purpose, subject_id, key_version) do nothing`;
 	await client`insert into platform.agent_applications
 		(id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at,
 		management_revision, approval_revision, desired_state, service_availability, workload_revision, fence)

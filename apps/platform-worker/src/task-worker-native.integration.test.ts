@@ -793,6 +793,32 @@ it.skipIf(!enabled)(
 				},
 			};
 			await sql`insert into platform.agents (id, current_configuration_revision, authorization_revision) values (${desired.agentId}, 1, 'authority-1')`;
+			for (const key of [
+				{
+					purpose: "agent-default",
+					subjectId: desired.agentId,
+					keyId: "relay-agent-cli-1",
+				},
+				{
+					purpose: "personal",
+					subjectId: user.userId,
+					keyId: "relay-user-cli-1",
+				},
+			] as const) {
+				await sql`insert into platform.relay_key_subjects (purpose, subject_id, last_version, current_version)
+					values (${key.purpose}, ${key.subjectId}, 1, 1)`;
+				await sql`insert into platform.relay_key_versions
+					(purpose, subject_id, key_version, key_id, ciphertext)
+					values (${key.purpose}, ${key.subjectId}, 1, ${key.keyId}, ${sql.json(
+						{
+							schemaVersion: 1,
+							purpose: key.purpose,
+							subjectId: key.subjectId,
+							keyId: key.keyId,
+							keyVersion: 1,
+						},
+					)})`;
+			}
 			await sql`insert into platform.agent_applications (id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, service_availability, workload_revision, fence) values ('application-cli', ${desired.agentId}, 'user-cli', 'Controlled Agent', 'Fixture', 'available', 'trace', 'request', now(), 1, 1, 'running', 'ready', 1, 1)`;
 			await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values (${desired.agentId}, 'user-cli', now())`;
 			await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${desired.agentId}, 1, 'codex', now(), ${sql.json(JSON.parse(JSON.stringify(configuration)))})`;
@@ -1848,7 +1874,7 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 					conversations:
 						await legacySql`select * from platform.conversations where id in ${legacySql(upgradeConversationIds)} order by id`,
 					executions:
-						await legacySql`select to_jsonb(e)-'task_wait_order'-'task_wait_deadline' as record from platform.conversation_executions e where execution_id in ${legacySql(upgradeIds)} order by execution_id`,
+						await legacySql`select to_jsonb(e)-'task_wait_order'-'task_wait_deadline'-'execution_source'-'relay_key_purpose'-'relay_key_subject_id'-'relay_key_id'-'relay_key_version' as record from platform.conversation_executions e where execution_id in ${legacySql(upgradeIds)} order by execution_id`,
 					messages:
 						await legacySql`select * from platform.conversation_messages where execution_id in ${legacySql(upgradeIds)} order by message_id`,
 					events:
