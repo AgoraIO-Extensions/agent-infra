@@ -229,6 +229,22 @@ describe("LDAP browser adapter", () => {
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 	});
 
+	it("does not return a principal when Platform disable arrives during resolution", async () => {
+		const state = fixture();
+		const cookie =
+			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
+		const request = new Request(`${origin}/api/v1/session`, {
+			headers: { cookie },
+		});
+		state.isPlatformDisabled
+			.mockResolvedValueOnce(false)
+			.mockResolvedValueOnce(true);
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+		expect(state.isPlatformDisabled).toHaveBeenCalledTimes(3);
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+		expect(state.isPlatformDisabled).toHaveBeenCalledTimes(3);
+	});
+
 	it("shares revocation across instances and fails closed when session storage fails", async () => {
 		const sessions = memorySessions();
 		const first = fixture(sessions);

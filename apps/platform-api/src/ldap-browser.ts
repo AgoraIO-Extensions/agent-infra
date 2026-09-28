@@ -163,8 +163,10 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				return null;
 			}
 			const identity = await current(account);
-			if (identity.accountStatus === "disabled")
+			if (identity.accountStatus === "disabled") {
 				await input.sessions.revokeUid(session.uid);
+				return null;
+			}
 			return identity;
 		},
 		async hydrateUsers(ids: readonly string[]) {
