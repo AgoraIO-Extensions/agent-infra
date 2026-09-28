@@ -1,6 +1,7 @@
 import type { DirectoryStore } from "@agent-infra/enterprise-directory";
 import {
 	fromDirectorySnapshotV1,
+	summarizeSnapshotChange,
 	toDirectorySnapshotV1,
 } from "@agent-infra/enterprise-directory";
 import { desc, sql as drizzleSql } from "drizzle-orm";
@@ -43,12 +44,20 @@ export function createPostgresDirectoryStore(
 					)
 				`;
 				const rows = await transaction`
-					SELECT generation FROM enterprise_directory.snapshots
-					WHERE generation IS NOT NULL
-					ORDER BY generation DESC LIMIT 1
+					SELECT generation, contents FROM enterprise_directory.snapshots
+					ORDER BY generation DESC NULLS LAST, fetched_at DESC, revision DESC
+					LIMIT 1
 				`;
-				if (rows[0] && BigInt(rows[0].generation) >= generation)
-					return "superseded" as const;
+				if (
+					rows[0]?.generation !== null &&
+					rows[0]?.generation !== undefined &&
+					BigInt(rows[0].generation) >= generation
+				)
+					return { status: "superseded" } as const;
+				const summary = summarizeSnapshotChange(
+					value,
+					rows[0] ? fromDirectorySnapshotV1(rows[0].contents) : null,
+				);
 				await transaction`
 					INSERT INTO enterprise_directory.snapshots
 						(revision, generation, fetched_at, valid_until, contents)
@@ -59,7 +68,7 @@ export function createPostgresDirectoryStore(
 						${JSON.stringify(snapshot)}::jsonb
 					)
 				`;
-				return "published" as const;
+				return { status: "published", summary } as const;
 			});
 		},
 		async latest() {

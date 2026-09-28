@@ -54,20 +54,21 @@ export function createDirectorySynchronizer(input: DirectorySyncInput) {
 			} catch {
 				throw new DirectorySyncError("invalid_snapshot");
 			}
-			let status: "published" | "superseded";
+			let result: Awaited<ReturnType<DirectoryStore["publish"]>>;
 			try {
-				status = await input.store.publish(snapshot, generation);
+				result = await input.store.publish(snapshot, generation);
 			} catch {
 				throw new DirectorySyncError("store_unavailable");
 			}
-			return status === "published"
+			return result.status === "published"
 				? {
-						status,
+						status: result.status,
 						revision: snapshot.revision,
 						fetchedAt: snapshot.fetchedAt,
 						validUntil: snapshot.validUntil,
+						summary: result.summary,
 					}
-				: { status };
+				: { status: result.status };
 		},
 	};
 }
