@@ -59,6 +59,27 @@ it("contains asynchronous log destination errors", async () => {
 	expect(telemetry.status().droppedLogs).toBe(2);
 });
 
+it("removes output listeners on close before reusing the destination", async () => {
+	const output = new Writable({
+		write(_chunk, _encoding, done) {
+			done();
+		},
+	});
+	const first = startObservability({ service: "platform-api", output });
+	active.push(first);
+	expect(output.listenerCount("error")).toBe(1);
+	await first.close();
+	expect(output.listenerCount("error")).toBe(0);
+	const second = startObservability({ service: "platform-api", output });
+	active.push(second);
+	expect(output.listenerCount("error")).toBe(1);
+	output.emit("error", new Error("PRIVATE_SENTINEL"));
+	expect(first.status().droppedLogs).toBe(0);
+	expect(second.status().droppedLogs).toBe(1);
+	await second.close();
+	expect(output.listenerCount("error")).toBe(0);
+});
+
 it("keeps malformed operation references out of logs", () => {
 	const lines: string[] = [];
 	const telemetry = startObservability({
@@ -221,6 +242,9 @@ it("rejects credential-bearing exporter URLs", () => {
 			service: "platform-api",
 			otlpEndpoint: "https://user:secret@collector.example/",
 		}),
+	).toThrow("Invalid observability endpoint");
+	expect(() =>
+		startObservability({ service: "platform-api", otlpEndpoint: "" }),
 	).toThrow("Invalid observability endpoint");
 });
 

@@ -133,12 +133,14 @@ export function startObservability(options: ObservabilityOptions) {
 			options.metricIntervalMs > 60_000)
 	)
 		throw new TypeError("Invalid observability metric interval");
-	const traceUrl = options.otlpEndpoint
-		? signalUrl(options.otlpEndpoint, "traces")
-		: undefined;
-	const metricUrl = options.otlpEndpoint
-		? signalUrl(options.otlpEndpoint, "metrics")
-		: undefined;
+	const traceUrl =
+		options.otlpEndpoint !== undefined
+			? signalUrl(options.otlpEndpoint, "traces")
+			: undefined;
+	const metricUrl =
+		options.otlpEndpoint !== undefined
+			? signalUrl(options.otlpEndpoint, "metrics")
+			: undefined;
 	const output = options.output ?? process.stdout;
 	let backpressured = false;
 	let droppedLogs = 0;
@@ -320,6 +322,7 @@ export function startObservability(options: ObservabilityOptions) {
 		close() {
 			closing ??= (async () => {
 				output.off("drain", onDrain);
+				output.off("error", onError);
 				let timer: ReturnType<typeof setTimeout> | undefined;
 				try {
 					await Promise.race([
