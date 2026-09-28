@@ -19,6 +19,49 @@ const identity: IdentityContext = {
 };
 
 describe("deployment identity scope", () => {
+	it("keeps host methods bound when the identity adapter uses private state", async () => {
+		class PrivateIdentityAdapter implements IdentityAdapter {
+			#current = identity;
+
+			async resolve(_request: Request) {
+				return this.#current;
+			}
+
+			async hydrateUsers(_userIds: readonly string[]) {
+				return [this.#current];
+			}
+
+			async resolveUser(userId: string) {
+				return {
+					schemaVersion: 1,
+					userId,
+					accountStatus: "active",
+					organizationIds: this.#current.organizationIds,
+					authorizationRevision: this.#current.authorizationRevision,
+				};
+			}
+		}
+		const host = new PrivateIdentityAdapter();
+		const wrapped = withApiIdentityResolverV1<IdentityAdapter>(host, {
+			async resolveApiCredential(_credential, resolveUser) {
+				return resolveUser?.("alice") ?? null;
+			},
+		});
+		expect(await wrapped.resolve(new Request("https://platform.test"))).toEqual(
+			identity,
+		);
+		expect(await wrapped.hydrateUsers(["alice"])).toEqual([identity]);
+		expect(await wrapped.resolveUser?.("alice")).toMatchObject({
+			userId: "alice",
+		});
+		expect(
+			await wrapped.resolveApiCredential?.(
+				"fixture",
+				new Request("https://platform.test"),
+			),
+		).toMatchObject({ userId: "alice" });
+	});
+
 	it("uses the Platform Store credential resolver even when the host supplies one", async () => {
 		let hostCalls = 0;
 		let storeCalls = 0;

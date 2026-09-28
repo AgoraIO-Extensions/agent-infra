@@ -237,6 +237,27 @@ function pageInput(
 	};
 }
 
+function pageById<T>(
+	items: readonly T[],
+	request: Request,
+	traceId: string,
+	id: (item: T) => string,
+): { items: T[]; nextCursor: string | null } {
+	const { limit, afterId } = pageInput(request, traceId);
+	const ordered = [...items].sort((left, right) =>
+		id(left) < id(right) ? -1 : id(left) > id(right) ? 1 : 0,
+	);
+	const remaining = ordered.filter(
+		(item) => afterId === undefined || id(item) > afterId,
+	);
+	const page = remaining.slice(0, limit);
+	const last = page.at(-1);
+	return {
+		items: page,
+		nextCursor: remaining.length > limit && last ? id(last) : null,
+	};
+}
+
 function fail(
 	code: ConstructorParameters<typeof HttpProtocolError>[0],
 	traceId: string,
@@ -620,11 +641,17 @@ export function registerManagementRoutes(
 				() => management.listUserCredentials(actor(identity)),
 				metadata.traceId,
 			);
+			const page = pageById(
+				items,
+				context.req.raw,
+				metadata.traceId,
+				(item) => item.credentialId,
+			);
 			return context.json({
-				items: items.map((item) =>
+				items: page.items.map((item) =>
 					apiCredentialProjection(item, metadata.traceId),
 				),
-				nextCursor: null,
+				nextCursor: page.nextCursor,
 			});
 		}),
 	);
@@ -709,8 +736,14 @@ export function registerManagementRoutes(
 				() => management.listApplications(actor(identity)),
 				metadata.traceId,
 			);
+			const page = pageById(
+				items,
+				context.req.raw,
+				metadata.traceId,
+				(item) => item.id,
+			);
 			return context.json({
-				items: items.map((item) =>
+				items: page.items.map((item) =>
 					ApiApplicationProjectionV1Schema.parse({
 						schemaVersion: 1,
 						applicationId: item.id,
@@ -720,7 +753,7 @@ export function registerManagementRoutes(
 						authorizationRevision: item.authorizationRevision,
 					}),
 				),
-				nextCursor: null,
+				nextCursor: page.nextCursor,
 			});
 		}),
 	);
@@ -858,11 +891,17 @@ export function registerManagementRoutes(
 					),
 				metadata.traceId,
 			);
+			const page = pageById(
+				items,
+				context.req.raw,
+				metadata.traceId,
+				(item) => item.credentialId,
+			);
 			return context.json({
-				items: items.map((item) =>
+				items: page.items.map((item) =>
 					apiCredentialProjection(item, metadata.traceId),
 				),
-				nextCursor: null,
+				nextCursor: page.nextCursor,
 			});
 		}),
 	);
@@ -885,7 +924,7 @@ export function registerManagementRoutes(
 			);
 			const recipient =
 				body.recipient ?? ({ kind: "user", id: identity.userId } as const);
-			if (recipient.kind !== "user" || recipient.id !== identity.userId)
+			if (recipient.kind !== "user")
 				throw new HttpProtocolError("FORBIDDEN", metadata.traceId);
 			const credential = generateApiCredentialV1(randomBytes);
 			const issued = await queryOrUnavailable(

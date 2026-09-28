@@ -163,7 +163,9 @@ export function isAgentAccessAllowedV1(
 			(grant) =>
 				grant.principal.kind === actor.principal?.kind &&
 				grant.principal.id === actor.principal?.id &&
-				grant.grantType === (intent === "manage" ? "manage" : "use") &&
+				(intent === "discover"
+					? grant.grantType === "manage" || grant.grantType === "use"
+					: grant.grantType === intent) &&
 				grant.revokedAt === null,
 		);
 	}
