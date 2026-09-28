@@ -4,6 +4,7 @@ import { workspacePathAllowed } from "./workspace-path.js";
 export type ClaudeToolRequestObserver = (request: {
 	name: string;
 	toolUseID: string;
+	input: unknown;
 	permitted: boolean;
 }) => Promise<void>;
 
@@ -52,6 +53,7 @@ export function claudeWorkspaceTools(
 								await observer?.({
 									name: input.tool_name,
 									toolUseID: input.tool_use_id,
+									input: input.tool_input,
 									permitted,
 								});
 							} catch {

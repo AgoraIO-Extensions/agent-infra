@@ -1092,21 +1092,46 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		}
 		let native: ReturnType<typeof claudeQuery>;
 		try {
+			const toolRequests = new Map<
+				string,
+				{
+					name: string;
+					inputDigest: string;
+					intent: Promise<RuntimeOperationFactV2>;
+				}
+			>();
 			const observeToolRequest = async (
 				name: string,
 				toolUseID: string,
+				input: unknown,
 				permitted: boolean,
 			) => {
 				if (this.failedToolGates.has(file)) unavailable();
+				const serializedInput = JSON.stringify(input);
+				if (serializedInput === undefined) unavailable();
+				const inputDigest = createHash("sha256")
+					.update(serializedInput)
+					.digest("hex");
 				const toolCallId = createHash("sha256").update(toolUseID).digest("hex");
-				const intent = await this.toolRequestStarted(
-					file,
-					command.executionId,
-					{
-						toolCallId,
+				const existing = toolRequests.get(toolCallId);
+				if (
+					existing &&
+					(existing.name !== name || existing.inputDigest !== inputDigest)
+				)
+					unavailable();
+				const value = { toolCallId, name };
+				const intentPromise = existing
+					? existing.intent.then(() =>
+							this.toolRequestStarted(file, command.executionId, value, true),
+						)
+					: this.toolRequestStarted(file, command.executionId, value);
+				if (!existing)
+					toolRequests.set(toolCallId, {
 						name,
-					},
-				);
+						inputDigest,
+						intent: intentPromise,
+					});
+				const intent = await intentPromise;
 				if (
 					this.failedToolGates.has(file) ||
 					file
@@ -1142,8 +1167,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			const workspaceTools = claudeWorkspaceTools(
 				join(directory, "workspace"),
 				join(directory, "memory"),
-				async ({ name, toolUseID, permitted }) =>
-					observeToolRequest(name, toolUseID, permitted),
+				async ({ name, toolUseID, input, permitted }) =>
+					observeToolRequest(name, toolUseID, input, permitted),
 			);
 			native = claudeQuery(
 				{
@@ -1172,6 +1197,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							await observeToolRequest(
 								name,
 								toolOptions.toolUseID,
+								input,
 								permission.behavior === "allow",
 							);
 							if (
@@ -1701,6 +1727,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		file: DurableJsonFile<Session>,
 		executionId: string,
 		value: { readonly toolCallId: string; readonly name: string },
+		allowExistingIntent = false,
 	) {
 		const turn = file
 			.read()
@@ -1725,7 +1752,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				: undefined;
 		const toolId = metadataId(value.name, "tool");
 		if (previous?.phase === "intent") {
-			if (previous.toolId !== toolId) unavailable();
+			if (!allowExistingIntent || previous.toolId !== toolId) unavailable();
 			return previous;
 		}
 		// A repeated permission callback for one native tool use is not a new attempt.
