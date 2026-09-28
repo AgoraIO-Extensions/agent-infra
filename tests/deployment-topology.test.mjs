@@ -182,6 +182,7 @@ test("enterprise directory deployment keeps migration ahead of its runtime resou
 	);
 	assert.equal(migration.spec.template.spec.serviceAccountName, undefined);
 	assert.equal(deployment.spec.template.spec.serviceAccountName, name);
+	assert.equal(deployment.spec.strategy.type, "Recreate");
 	assert.ok(resource(resources, "ServiceAccount", name));
 	assert.ok(resource(resources, "Service", name));
 	assert.ok(resource(resources, "NetworkPolicy", name));
