@@ -3363,13 +3363,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			await sql`
 				INSERT INTO connection_oauth_transactions (
 					state_hash, principal_id, verifier_ciphertext, verifier_nonce,
-					verifier_tag, redirect_uri, shared_scope_id, access_request_id,
+					verifier_tag, redirect_uri, provider_id, shared_scope_id, access_request_id,
 					reconnect_connection_id, expires_at
 				)
 				VALUES (
 					${stateHash}, ${input.principalId}, ${protectedVerifier.ciphertext},
 					${protectedVerifier.nonce}, ${protectedVerifier.tag},
-					${input.redirectUri}, ${input.sharedScopeId ?? null},
+					${input.redirectUri}, ${input.providerId}, ${input.sharedScopeId ?? null},
 					${input.accessRequestId ?? null}, ${input.reconnectConnectionId ?? null},
 					now() + interval '10 minutes'
 				)
@@ -3440,12 +3440,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		return { providerId: target.provider_id };
 	}
 
-	async consumeOAuthTransaction(state: string) {
+	async consumeOAuthTransaction(state: string, providerId: string) {
 		const stateHash = hash(state);
 		return this.sql.begin(async (sql) => {
 			const [row] = await sql<
 				{
 					principal_id: string;
+					provider_id: string;
 					access_request_id: string | null;
 					reconnect_connection_id: string | null;
 					redirect_uri: string;
@@ -3458,9 +3459,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				UPDATE connection_oauth_transactions
 				SET consumed_at = now()
 				WHERE state_hash = ${stateHash}
+					AND provider_id = ${providerId}
 					AND consumed_at IS NULL
 					AND expires_at > now()
-				RETURNING principal_id, access_request_id, reconnect_connection_id,
+				RETURNING principal_id, provider_id, access_request_id, reconnect_connection_id,
 					redirect_uri, shared_scope_id, verifier_ciphertext,
 					verifier_nonce, verifier_tag
 			`;
@@ -3486,6 +3488,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					`oauth:${stateHash}:${row.principal_id}`,
 				),
 				principalId: row.principal_id,
+				providerId: row.provider_id,
 				redirectUri: row.redirect_uri,
 				...(row.shared_scope_id ? { sharedScopeId: row.shared_scope_id } : {}),
 			};

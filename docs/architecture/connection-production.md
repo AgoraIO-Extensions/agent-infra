@@ -9,12 +9,13 @@ Runtime、SQLite、global alias 和 Runtime token 不进入部署拓扑。[#301]
 ## 前置条件
 
 - PostgreSQL 可通过 `DATABASE_URL` 访问。
-- Bootstrap 只接收 Secret Manager 注入进程环境的 `DATABASE_URL`。
-- 公司 LDAP、Connection identity key、Credential key 和 Provider Secret 由 Secret Manager 注入
+- Bootstrap 只接收现有 Kubernetes Secret 注入进程环境的 `DATABASE_URL`。
+- 公司 LDAP、Connection identity key、Credential key 和 Provider Secret 由现有 Kubernetes Secret 注入
   pilot API；缺少任一必需值时进程必须在监听端口前失败。
 
-不得创建或持久化已填写的 `.env.production` 文件。部署 orchestrator 必须从 Secret Manager 直接向
-进程环境或 Secret Service reference 注入值。
+不得创建或持久化已填写的 `.env.production` 文件。GZ3 继续使用现有 Kubernetes Secret
+及 `secretKeyRef` 注入值；不把值放进 Helm values 或 release 历史。后续 Secret Manager 治理见
+[#907](https://github.com/AgoraIO-Extensions/agent-infra/issues/907)，不作为本次发布前置条件。
 
 ## 部署
 
@@ -37,7 +38,7 @@ Compose 只向主机发布 `connection-web:8080`，由它将 `/api/v1/connection
 ## 首个 Connection 管理员
 
 目标员工必须先通过 LDAP 成功登录一次，使稳定 identity mapping 已存在。随后由持有部署权限的操作员
-在 Secret Manager 注入完整 Connection runtime 配置的环境中执行：
+在 Kubernetes Secret 已注入完整 Connection runtime 配置的环境中执行：
 
 ```bash
 pnpm connection:admin:bootstrap -- --ldap-subject '<stable-ldap-uid>'
@@ -75,15 +76,23 @@ Provider Effect 或 secret 暴露检查失败时，Helm 必须把 API/Web 镜像
 审批 cutoff 生效后，该旧版不理解审批 fence，不再是合法回滚点；只能回滚到理解当前 schema 和审批协议的
 已验收版本。不能以停用业务路由为理由将旧版重新部署到该数据库。
 
-Jira/Confluence Server 的 `JIRA_TOKEN_*` 参数由 Secret Manager 注入服务端，用于按需签发短期应用级
+Jira/Confluence Server 的 `JIRA_TOKEN_*` 参数由 Kubernetes Secret 注入服务端，用于按需签发短期应用级
 `accessToken`；它不进入用户 credential envelope。用户的 Jira 用户名/密码仍按 Connection
 credential 规则加密保存，并由 Adapter 与该应用级 Header 一起发送。Connection 不读取或执行
 本机 Atlassian CLI 配置或脚本。
 
-Rehoboam Provider 的 `REHOBOAM_KONG_API_KEY` 由 Secret Manager 注入服务端，只用于通过固定
+Rehoboam Provider 的 `REHOBOAM_KONG_API_KEY` 由 Kubernetes Secret 注入服务端，只用于通过固定
 Rehoboam Ingress 的 Kong `key-auth`。用户从 Rehoboam Security 创建隐含 `metadata:read` 的 PAT 并提交给
 Connection；Connection 不接收 Rehoboam 密码，只加密保存该 PAT。
 机器 `apiKey` 不进入浏览器、用户 credential envelope、MCP 参数或调用结果。
+
+Manhattan v4 连接使用公司 OAuth confidential client 的 authorization-code 回调，不再收集公司密码。
+先登记精确回调 `https://agent-connector.gz3.agoralab.co/oauth/callback?provider=manhattan`，
+再由现有 Kubernetes Secret 注入 `MANHATTAN_OAUTH_CLIENT_ID`、`MANHATTAN_OAUTH_CLIENT_SECRET` 和现有
+`MANHATTAN_KONG_API_KEY`。Connection 用服务端 client secret 交换并刷新个人 Token，经 Manhattan
+`/api/connection/whoami` 验证身份及 RBAC 后才加密存储；旧 v3 Connection 不自动升级，需要重新授权。
+此发布包含 `0035_provider_oauth_transactions.sql`，必须先执行经评审的生产 migration 路径；
+普通 GZ3 `--no-hooks` 发布脚本会按设计阻止直接部署。
 
 ## 验收边界
 
@@ -92,7 +101,7 @@ Connection；Connection 不接收 Rehoboam 密码，只加密保存该 PAT。
 Bearer 调用、真实 GitHub OAuth App、两个独立 ConsumerInstance、PostgreSQL 备份/恢复、受控 egress，
 以及最小只读与写入 Provider canary。参数清单见
 `.env.conformance.example`；本机验收可使用被 Git 忽略的 `.env.conformance.local`，部署环境必须由
-Secret Manager 注入。实际值不得进入已跟踪文件、日志或聊天。不能仅凭 test double 或本机 unit
+Kubernetes Secret 注入。实际值不得进入已跟踪文件、日志或聊天。不能仅凭 test double 或本机 unit
 test 验收。
 
 ## GZ3 受监督发布

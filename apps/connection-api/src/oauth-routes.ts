@@ -92,6 +92,7 @@ export type ConnectionOAuthServerOptions = {
 			providerReleaseId: string;
 		}[];
 		githubRedirectUri: string;
+		providerRedirectUris?: Readonly<Record<string, string>>;
 		approvalService?: ConnectionAccessApprovalService;
 		notificationDispatcher?: PostgresConnectionNotificationDispatcher;
 		service: ConnectionApplicationService;
@@ -102,6 +103,7 @@ export type ConnectionOAuthServerOptions = {
 
 const browserSessionCookie = "connection_session";
 const browserSessionCookiePath = "/";
+const manhattanOAuthStateCookie = "connection_manhattan_oauth_state";
 
 const dynamicRegistrationFields = new Set([
 	"application_type",
@@ -2180,6 +2182,20 @@ export function createConnectionOAuthApp(
 				await context.req.json().catch(() => ({})),
 			);
 			const sharedScopeId = body.sharedScopeId;
+			const providerId = body.providerId;
+			if (sharedScopeId && providerId !== "github")
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					"Shared OAuth is not supported for this provider",
+				);
+			if (
+				providerId !== "github" &&
+				!management.providerRedirectUris?.[providerId]
+			)
+				throw new ConnectionError(
+					"PROVIDER_FAILED",
+					"Provider OAuth redirect is not configured",
+				);
 			const session = sharedScopeId
 				? await currentBrowserApiAdministrator(context)
 				: await currentBrowserApiAccount(context);
@@ -2189,7 +2205,7 @@ export function createConnectionOAuthApp(
 					options,
 					context,
 					{
-						operation: "connection.github-oauth.start",
+						operation: `connection.${providerId}-oauth.start`,
 						replayable: false,
 						request: body,
 						subject: session.account.principalId,
@@ -2201,14 +2217,36 @@ export function createConnectionOAuthApp(
 									sharedScopeId,
 									management.githubRedirectUri,
 								)
-							: management.service.startGithubOAuth(
-									session.account.principalId,
-									management.githubRedirectUri,
-									body.accessRequestId,
-								),
+							: providerId === "github"
+								? management.service.startGithubOAuth(
+										session.account.principalId,
+										management.githubRedirectUri,
+										body.accessRequestId,
+									)
+								: management.service.startProviderOAuth(
+										session.account.principalId,
+										providerId,
+										management.providerRedirectUris?.[providerId] ?? "",
+										body.accessRequestId,
+										body.reconnectConnectionId,
+									),
 				),
 			);
 			if (authorization instanceof Response) return authorization;
+			if (providerId === "manhattan")
+				setCookie(
+					context,
+					manhattanOAuthStateCookie,
+					new URL(authorization.authorizationUrl).searchParams.get("state") ??
+						"",
+					{
+						httpOnly: true,
+						maxAge: 600,
+						path: "/oauth/callback",
+						sameSite: "Lax",
+						secure: new URL(options.issuer).protocol === "https:",
+					},
+				);
 			context.header("cache-control", "no-store");
 			return context.json({ authorizationUrl: authorization.authorizationUrl });
 		});
@@ -2892,11 +2930,36 @@ export function createConnectionOAuthApp(
 			},
 		);
 		app.get("/oauth/callback", async (context) => {
+			context.header("cache-control", "no-store");
+			context.header("referrer-policy", "no-referrer");
 			try {
-				await management.service.completeGithubOAuth(
-					context.req.query("code") ?? "",
-					context.req.query("state") ?? "",
-				);
+				const providerId = context.req.query("provider") ?? "github";
+				if (providerId !== "github" && providerId !== "manhattan")
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"Unsupported OAuth provider",
+					);
+				if (providerId === "manhattan") {
+					const state = context.req.query("state") ?? "";
+					if (!state || getCookie(context, manhattanOAuthStateCookie) !== state)
+						throw new ConnectionError(
+							"INVALID_REQUEST",
+							"Manhattan OAuth browser state does not match",
+						);
+					deleteCookie(context, manhattanOAuthStateCookie, {
+						path: "/oauth/callback",
+					});
+				}
+				await (providerId === "github"
+					? management.service.completeGithubOAuth(
+							context.req.query("code") ?? "",
+							context.req.query("state") ?? "",
+						)
+					: management.service.completeProviderOAuth(
+							providerId,
+							context.req.query("code") ?? "",
+							context.req.query("state") ?? "",
+						));
 				return context.redirect("/connection/connections", 303);
 			} catch (error) {
 				console.error(
@@ -2906,7 +2969,12 @@ export function createConnectionOAuthApp(
 					}),
 				);
 				return context.redirect(
-					"/connection/connections?oauth=callback_failed",
+					context.req.query("provider") === "manhattan"
+						? (error as { providerAuthorizationDenied?: unknown })
+								.providerAuthorizationDenied === true
+							? "/connection/connections?oauth=permission_denied&provider=manhattan"
+							: "/connection/connections?oauth=callback_failed&provider=manhattan"
+						: "/connection/connections?oauth=callback_failed",
 					303,
 				);
 			}

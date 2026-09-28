@@ -2327,8 +2327,20 @@
 				"type": "object",
 				"additionalProperties": false,
 				"not": { "required": ["accessRequestId", "sharedScopeId"] },
+				"allOf": [
+					{
+						"not": { "required": ["accessRequestId", "reconnectConnectionId"] }
+					},
+					{ "not": { "required": ["sharedScopeId", "reconnectConnectionId"] } }
+				],
 				"properties": {
 					"accessRequestId": { "type": "string" },
+					"providerId": {
+						"type": "string",
+						"enum": ["github", "manhattan"],
+						"default": "github"
+					},
+					"reconnectConnectionId": { "type": "string" },
 					"sharedScopeId": { "type": "string" }
 				}
 			},
@@ -3390,7 +3402,7 @@
 							"accessRequestId": { "type": "string" },
 							"providerId": {
 								"type": "string",
-								"enum": ["confluence", "jira", "manhattan"]
+								"enum": ["confluence", "jira"]
 							},
 							"username": {
 								"type": "string",

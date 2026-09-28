@@ -1,2 +1,2 @@
 export const manhattanExecutorDigest =
-	"sha256:a48e62e72771bcc03d8d2d67b943996711625ecfb246ee817fd511314b9fbd25";
+	"sha256:1b3fa3070f7b23b6cbe2d9739365d505256f9c1b7d74ce150d25bb6a455ee557";

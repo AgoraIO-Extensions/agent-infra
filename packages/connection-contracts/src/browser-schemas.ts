@@ -31,11 +31,21 @@ export const issueTokenRequestSchema = z.strictObject({
 export const oauthTransactionRequestSchema = z
 	.strictObject({
 		accessRequestId: opaqueId.optional(),
+		providerId: z.enum(["github", "manhattan"]).default("github"),
+		reconnectConnectionId: opaqueId.optional(),
 		sharedScopeId: opaqueId.optional(),
 	})
-	.refine((value) => !(value.accessRequestId && value.sharedScopeId), {
-		message: "Personal and shared connection targets are mutually exclusive",
-	});
+	.refine(
+		(value) =>
+			[
+				value.accessRequestId,
+				value.reconnectConnectionId,
+				value.sharedScopeId,
+			].filter(Boolean).length <= 1,
+		{
+			message: "Connection targets are mutually exclusive",
+		},
+	);
 
 export const providerCredentialRequestSchema = z.union([
 	z.strictObject({
@@ -50,7 +60,7 @@ export const providerCredentialRequestSchema = z.union([
 	z.strictObject({
 		accessRequestId: opaqueId.optional(),
 		password: z.string().min(1).max(1_024),
-		providerId: z.enum(["confluence", "jira", "manhattan"]),
+		providerId: z.enum(["confluence", "jira"]),
 		username: z.string().trim().min(1).max(256),
 	}),
 	z.strictObject({

@@ -607,6 +607,7 @@ export type OAuthTransaction = {
 	reconnectConnectionId?: string;
 	codeVerifier: string;
 	principalId: string;
+	providerId: string;
 	redirectUri: string;
 	sharedScopeId?: string;
 };
@@ -706,7 +707,10 @@ export interface ConnectionRepository {
 		actorPrincipalId: string;
 		connectionId: string;
 	}): Promise<void>;
-	consumeOAuthTransaction(state: string): Promise<OAuthTransaction>;
+	consumeOAuthTransaction(
+		state: string,
+		providerId: string,
+	): Promise<OAuthTransaction>;
 	createOAuthTransaction(
 		input: OAuthTransaction & { state: string },
 	): Promise<void>;
@@ -1048,6 +1052,9 @@ export class ConnectionApplicationService {
 		private readonly credentialConnectors: Readonly<
 			Record<string, ProviderCredentialConnector>
 		> = {},
+		private readonly providerOAuth: Readonly<
+			Record<string, GitHubOAuthProvider>
+		> = {},
 	) {}
 
 	async overview(principalId: string, options?: { includeActivity?: boolean }) {
@@ -1196,6 +1203,11 @@ export class ConnectionApplicationService {
 			connectionId,
 			principalId,
 		});
+		if (current.providerId === "manhattan")
+			throw new ConnectionError(
+				"PROVIDER_REAUTHORIZATION_REQUIRED",
+				"Manhattan requires a new SSO authorization",
+			);
 		if (accessRequestId) {
 			await this.repository.validatePersonalConnectRequest({
 				principalId,
@@ -1561,10 +1573,7 @@ export class ConnectionApplicationService {
 	private async refreshCredentialBeforeInvocation(
 		invocation: InvocationContext,
 	) {
-		if (
-			invocation.providerId !== "github" ||
-			!this.repository.claimCredentialRefresh
-		) {
+		if (!this.repository.claimCredentialRefresh) {
 			return false;
 		}
 		const claim = await this.repository.claimCredentialRefresh(invocation);
@@ -1582,7 +1591,9 @@ export class ConnectionApplicationService {
 			);
 		}
 		if (
-			!this.oauth ||
+			!(invocation.providerId === "github"
+				? this.oauth
+				: this.providerOAuth[invocation.providerId]) ||
 			!this.repository.startCredentialRefresh ||
 			!this.repository.failCredentialRefresh ||
 			!this.repository.completeCredentialRefresh
@@ -1595,7 +1606,9 @@ export class ConnectionApplicationService {
 		await this.repository.startCredentialRefresh(claim);
 		let identity: GitHubOAuthIdentity;
 		try {
-			identity = await this.oauth.refresh(claim.refreshToken);
+			identity = await this.requireProviderOAuth(invocation.providerId).refresh(
+				claim.refreshToken,
+			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message.toLowerCase() : "";
 			await this.repository.failCredentialRefresh(
@@ -1713,20 +1726,36 @@ export class ConnectionApplicationService {
 		accessRequestId?: string,
 		reconnectConnectionId?: string,
 	) {
+		return this.startProviderOAuth(
+			principalId,
+			"github",
+			redirectUri,
+			accessRequestId,
+			reconnectConnectionId,
+		);
+	}
+
+	async startProviderOAuth(
+		principalId: string,
+		providerId: string,
+		redirectUri: string,
+		accessRequestId?: string,
+		reconnectConnectionId?: string,
+	) {
 		if (accessRequestId && reconnectConnectionId) {
 			throw new ConnectionError(
 				"INVALID_REQUEST",
 				"Connection targets are mutually exclusive",
 			);
 		}
-		const oauth = this.requireOAuth();
+		const oauth = this.requireProviderOAuth(providerId);
 		await this.repository.ensurePrincipal({ principalId });
 		if (reconnectConnectionId) {
 			const target = await this.repository.validatePersonalReconnect?.({
 				principalId,
 				connectionId: reconnectConnectionId,
 			});
-			if (target?.providerId !== "github")
+			if (target?.providerId !== providerId)
 				throw new ConnectionError(
 					"FORBIDDEN",
 					"Reconnect target is unavailable",
@@ -1734,7 +1763,7 @@ export class ConnectionApplicationService {
 		} else {
 			await this.repository.validatePersonalConnectRequest({
 				principalId,
-				providerId: "github",
+				providerId,
 				...(accessRequestId ? { requestId: accessRequestId } : {}),
 			});
 		}
@@ -1746,6 +1775,7 @@ export class ConnectionApplicationService {
 			...(reconnectConnectionId ? { reconnectConnectionId } : {}),
 			codeVerifier,
 			principalId,
+			providerId,
 			redirectUri,
 			state,
 		});
@@ -1771,6 +1801,7 @@ export class ConnectionApplicationService {
 		await this.repository.createOAuthTransaction({
 			codeVerifier,
 			principalId: actorPrincipalId,
+			providerId: "github",
 			redirectUri,
 			sharedScopeId,
 			state,
@@ -1785,20 +1816,33 @@ export class ConnectionApplicationService {
 	}
 
 	async completeGithubOAuth(code: string, state: string) {
+		return this.completeProviderOAuth("github", code, state);
+	}
+
+	async completeProviderOAuth(providerId: string, code: string, state: string) {
 		if (!code || !state) {
 			throw new ConnectionError(
 				"INVALID_REQUEST",
 				"OAuth callback requires code and state",
 			);
 		}
-		const transaction = await this.repository.consumeOAuthTransaction(state);
+		const transaction = await this.repository.consumeOAuthTransaction(
+			state,
+			providerId,
+		);
+		if (transaction.providerId !== providerId) {
+			throw new ConnectionError(
+				"INVALID_REQUEST",
+				"OAuth state does not match provider",
+			);
+		}
 		if (!transaction.sharedScopeId) {
 			if (transaction.reconnectConnectionId) {
 				const target = await this.repository.validatePersonalReconnect?.({
 					principalId: transaction.principalId,
 					connectionId: transaction.reconnectConnectionId,
 				});
-				if (target?.providerId !== "github")
+				if (target?.providerId !== providerId)
 					throw new ConnectionError(
 						"FORBIDDEN",
 						"Reconnect target is unavailable",
@@ -1806,34 +1850,64 @@ export class ConnectionApplicationService {
 			} else {
 				await this.repository.validatePersonalConnectRequest({
 					principalId: transaction.principalId,
-					providerId: "github",
+					providerId,
 					...(transaction.accessRequestId
 						? { requestId: transaction.accessRequestId }
 						: {}),
 				});
 			}
 		}
-		const identity = await this.requireOAuth().exchangeCode({
+		const identity = await this.requireProviderOAuth(providerId).exchangeCode({
 			code,
 			codeVerifier: transaction.codeVerifier,
 			redirectUri: transaction.redirectUri,
 		});
-		return transaction.sharedScopeId
-			? this.repository.storeSharedGithubOAuthCredential({
-					...identity,
-					actorPrincipalId: transaction.principalId,
-					sharedScopeId: transaction.sharedScopeId,
-				})
-			: this.repository.storeGithubOAuthCredential({
-					...identity,
-					...(transaction.reconnectConnectionId
-						? { expectedConnectionId: transaction.reconnectConnectionId }
-						: {}),
-					...(transaction.accessRequestId
-						? { accessRequestId: transaction.accessRequestId }
-						: {}),
-					principalId: transaction.principalId,
-				});
+		if (providerId === "github" && transaction.sharedScopeId)
+			return this.repository.storeSharedGithubOAuthCredential({
+				...identity,
+				actorPrincipalId: transaction.principalId,
+				sharedScopeId: transaction.sharedScopeId,
+			});
+		if (providerId === "github")
+			return this.repository.storeGithubOAuthCredential({
+				...identity,
+				...(transaction.reconnectConnectionId
+					? { expectedConnectionId: transaction.reconnectConnectionId }
+					: {}),
+				...(transaction.accessRequestId
+					? { accessRequestId: transaction.accessRequestId }
+					: {}),
+				principalId: transaction.principalId,
+			});
+		const connector = this.credentialConnectors[providerId];
+		if (!connector)
+			throw new ConnectionError(
+				"PROVIDER_FAILED",
+				"Provider credential connector is unavailable",
+			);
+		return this.repository.storeProviderCredential({
+			...identity,
+			...(transaction.reconnectConnectionId
+				? { expectedConnectionId: transaction.reconnectConnectionId }
+				: {}),
+			...(transaction.accessRequestId
+				? { accessRequestId: transaction.accessRequestId }
+				: {}),
+			principalId: transaction.principalId,
+			providerId,
+			providerReleaseId: connector.providerReleaseId,
+		});
+	}
+
+	private requireProviderOAuth(providerId: string): GitHubOAuthProvider {
+		const oauth =
+			providerId === "github" ? this.oauth : this.providerOAuth[providerId];
+		if (!oauth)
+			throw new ConnectionError(
+				"PROVIDER_FAILED",
+				`${providerId} OAuth is not configured`,
+			);
+		return oauth;
 	}
 
 	private requireOAuth(): GitHubOAuthProvider {

@@ -284,6 +284,9 @@ const api = vi.hoisted(() => ({
 	startGithubOAuth: vi.fn(async () => ({
 		authorizationUrl: "https://github.example/authorize",
 	})),
+	startManhattanOAuth: vi.fn(async () => ({
+		authorizationUrl: "https://oauth.agoralab.co/oauth/authorize",
+	})),
 }));
 
 vi.mock("../api", async (importOriginal) => ({
@@ -1199,6 +1202,70 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 	});
 
+	it("Manhattan 从浏览器授权，不再收集公司密码", async () => {
+		approvedFor("manhattan");
+		api.startManhattanOAuth.mockRejectedValueOnce(
+			new Error("OAuth not configured"),
+		);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Manhattan 未连接" }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
+		await waitFor(() => expect(api.startManhattanOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startManhattanOAuth)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
+		});
+		expect(screen.queryByLabelText("公司密码")).toBeNull();
+	});
+
+	it("审批后继续连接会自动发起一次 Manhattan OAuth", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=manhattan&intent=connect&accessRequestId=request-approved",
+		);
+		api.startManhattanOAuth.mockRejectedValueOnce(
+			new Error("OAuth not configured"),
+		);
+		renderPage(<ConnectionsPage />);
+		await waitFor(() => expect(api.startManhattanOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startManhattanOAuth)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
+		});
+	});
+
+	it("已有 Manhattan 连接时仍显示新授权的 RBAC 拒绝", async () => {
+		const initial = await api.getConnections();
+		const sample = initial.overview.connections[0];
+		if (!sample) throw new Error("Connection fixture is empty");
+		api.getConnections.mockResolvedValueOnce({
+			...initial,
+			overview: {
+				...initial.overview,
+				connections: [
+					...initial.overview.connections,
+					{
+						...sample,
+						id: "connection-manhattan",
+						providerId: "manhattan" as const,
+						requiresReconnect: false,
+						status: "ACTIVE" as const,
+					},
+				],
+			},
+		});
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?oauth=permission_denied&provider=manhattan",
+		);
+		renderPage(<ConnectionsPage />);
+		expect(
+			await screen.findByText("当前账号缺少 Manhattan 访问权限。"),
+		).toBeTruthy();
+	});
+
 	it("升级授权沿用旧版选择，不默认勾选新增 Action", async () => {
 		const overview = await api.getConnections();
 		const grant = overview.overview.grants[0];
@@ -1492,29 +1559,25 @@ describe("Connection 管理 mutation wiring", () => {
 			renderPage(<ConnectionsPage />);
 			await screen.findByRole("button", { name: "查看连接申请" });
 			expect(api.connectProviderCredential).not.toHaveBeenCalled();
+			expect(api.startManhattanOAuth).not.toHaveBeenCalled();
 			expect(api.reauthorizeProviderConnection).not.toHaveBeenCalled();
 			expect(screen.queryByLabelText("公司密码")).toBeNull();
 		},
 	);
 
-	it("Manhattan 凭证提交携带批准的申请 ID", async () => {
+	it("Manhattan OAuth 携带批准的申请 ID", async () => {
 		approvedFor("manhattan");
+		api.startManhattanOAuth.mockRejectedValueOnce(
+			new Error("OAuth not configured"),
+		);
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("button", { name: "Manhattan 未连接" });
 		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
-		fireEvent.change(screen.getByLabelText("公司密码"), {
-			target: { value: "fixture-manhattan-password" },
-		});
-		fireEvent.click(screen.getByRole("button", { name: "连接" }));
-		await waitFor(() =>
-			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
-		);
-		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
-			providerId: "manhattan",
+		await waitFor(() => expect(api.startManhattanOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startManhattanOAuth)[0]?.[0]).toEqual({
 			accessRequestId: "request-approved",
-			username: "guoxianzhe@agora.io",
-			password: "fixture-manhattan-password",
 		});
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
 	});
 
 	it("断开的 Connection 不显示在已连接账号列表", async () => {

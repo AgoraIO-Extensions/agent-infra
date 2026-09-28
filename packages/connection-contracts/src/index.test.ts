@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	connectionBrowserOpenApi,
 	oauthTransactionRequestSchema,
+	providerCredentialRequestSchema,
 } from "./index";
 
 describe("Connection Browser OpenAPI", () => {
@@ -13,16 +14,21 @@ describe("Connection Browser OpenAPI", () => {
 		for (const input of [
 			{},
 			{ accessRequestId: "request-1" },
+			{ providerId: "manhattan", accessRequestId: "request-1" },
+			{ providerId: "manhattan", reconnectConnectionId: "connection-1" },
 			{ sharedScopeId: "shared-1" },
 		]) {
 			expect(oauthTransactionRequestSchema.safeParse(input).success).toBe(true);
 		}
-		expect(
-			oauthTransactionRequestSchema.safeParse({
-				accessRequestId: "request-1",
-				sharedScopeId: "shared-1",
-			}).success,
-		).toBe(false);
+		for (const input of [
+			{ accessRequestId: "request-1", sharedScopeId: "shared-1" },
+			{ accessRequestId: "request-1", reconnectConnectionId: "connection-1" },
+			{ sharedScopeId: "shared-1", reconnectConnectionId: "connection-1" },
+		]) {
+			expect(oauthTransactionRequestSchema.safeParse(input).success).toBe(
+				false,
+			);
+		}
 	});
 	it("keeps the versioned browser surface free of caller identity selectors", () => {
 		expect(connectionBrowserOpenApi.openapi).toBe("3.1.0");
@@ -30,6 +36,13 @@ describe("Connection Browser OpenAPI", () => {
 		for (const forbidden of ['"actorPrincipalId"', '"credential"']) {
 			expect(serialized).not.toContain(forbidden);
 		}
+		expect(
+			providerCredentialRequestSchema.safeParse({
+				providerId: "manhattan",
+				username: "employee",
+				password: "company-password",
+			}).success,
+		).toBe(false);
 		// One schema property plus the same field in that schema's required list.
 		expect(serialized.match(/"accessToken"/g)).toHaveLength(2);
 		expect(
@@ -64,7 +77,7 @@ describe("Connection Browser OpenAPI", () => {
 						accessRequestId: { type: "string" },
 						password: { maxLength: 1024, minLength: 1, type: "string" },
 						providerId: {
-							enum: ["confluence", "jira", "manhattan"],
+							enum: ["confluence", "jira"],
 							type: "string",
 						},
 						username: { maxLength: 256, minLength: 1, type: "string" },

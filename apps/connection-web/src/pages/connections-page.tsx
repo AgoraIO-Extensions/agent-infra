@@ -71,9 +71,6 @@ export function ConnectionsPage() {
 	const [rehoboamOpen, setRehoboamOpen] = useState(false);
 	const [rehoboamPending, setRehoboamPending] = useState(false);
 	const [rehoboamError, setRehoboamError] = useState<Error | null>(null);
-	const [manhattanOpen, setManhattanOpen] = useState(false);
-	const [manhattanPending, setManhattanPending] = useState(false);
-	const [manhattanError, setManhattanError] = useState<Error | null>(null);
 	const [jiraOpen, setJiraOpen] = useState(false);
 	const [jiraPending, setJiraPending] = useState(false);
 	const [jiraError, setJiraError] = useState<Error | null>(null);
@@ -102,6 +99,7 @@ export function ConnectionsPage() {
 	const accessRequestId = connectSearch.get("accessRequestId") ?? undefined;
 	const approvedProvider = connectSearch.get("provider");
 	const prepareAttempted = useRef<string | undefined>(undefined);
+	const startedManhattanRequest = useRef<string | undefined>(undefined);
 	const approvedRequest = useQuery({
 		queryKey: ["approved-connection-request", accessRequestId],
 		queryFn: () =>
@@ -161,6 +159,18 @@ export function ConnectionsPage() {
 	const callbackFailed =
 		new URLSearchParams(window.location.search).get("oauth") ===
 		"callback_failed";
+	const permissionDenied =
+		new URLSearchParams(window.location.search).get("oauth") ===
+		"permission_denied";
+	const callbackProvider =
+		new URLSearchParams(window.location.search).get("provider") === "manhattan"
+			? "manhattan"
+			: "github";
+	const manhattanOAuth = useMutation({
+		mutationFn: connectionApi.startManhattanOAuth,
+		onSuccess: ({ authorizationUrl }) =>
+			window.location.assign(authorizationUrl),
+	});
 	useEffect(() => {
 		const search = new URLSearchParams(window.location.search);
 		if (accessRequestId && completedAccessRequestId === accessRequestId) return;
@@ -184,9 +194,16 @@ export function ConnectionsPage() {
 				newCredentialRequestId !== accessRequestId)
 		)
 			return;
+		if (
+			provider === "manhattan" &&
+			approvedAccessRequestId &&
+			startedManhattanRequest.current !== approvedAccessRequestId
+		) {
+			startedManhattanRequest.current = approvedAccessRequestId;
+			manhattanOAuth.mutate({ accessRequestId: approvedAccessRequestId });
+		}
 		if (provider === "bitbucket") setBitbucketOpen(true);
 		if (provider === "rehoboam") setRehoboamOpen(true);
-		if (provider === "manhattan") setManhattanOpen(true);
 		if (provider === "confluence") setConfluenceOpen(true);
 		if (provider === "jira") setJiraOpen(true);
 		if (provider === "jenkins-ci" || provider === "jenkins-release") {
@@ -204,6 +221,7 @@ export function ConnectionsPage() {
 		reusableConnections.length,
 		newCredentialRequestId,
 		completedAccessRequestId,
+		manhattanOAuth.mutate,
 	]);
 	const accessRequests = useQuery({
 		queryKey: ["connection-access-requests"],
@@ -310,28 +328,6 @@ export function ConnectionsPage() {
 			);
 		} finally {
 			setRehoboamPending(false);
-		}
-	};
-	const connectManhattan = async (credential: {
-		password: string;
-		username: string;
-	}) => {
-		setManhattanPending(true);
-		setManhattanError(null);
-		try {
-			await connectCredential({
-				providerId: "manhattan",
-				...credential,
-			});
-			setManhattanOpen(false);
-			setReconnectTargetId(null);
-			await queryClient.invalidateQueries({ queryKey: ["connections"] });
-		} catch (error) {
-			setManhattanError(
-				error instanceof Error ? error : new Error("Manhattan 连接失败"),
-			);
-		} finally {
-			setManhattanPending(false);
 		}
 	};
 	const connectJira = async (credential: {
@@ -459,7 +455,12 @@ export function ConnectionsPage() {
 		if (providerId === "bitbucket") setBitbucketOpen(true);
 		else if (providerId === "datalego") void connectDatalego(targetId);
 		else if (providerId === "rehoboam") setRehoboamOpen(true);
-		else if (providerId === "manhattan") setManhattanOpen(true);
+		else if (providerId === "manhattan")
+			manhattanOAuth.mutate(
+				targetId
+					? { reconnectConnectionId: targetId }
+					: { accessRequestId: approvedAccessRequestId },
+			);
 		else if (providerId === "jira") setJiraOpen(true);
 		else if (providerId === "confluence") setConfluenceOpen(true);
 		else if (providerId === "jenkins-ci" || providerId === "jenkins-release") {
@@ -500,18 +501,19 @@ export function ConnectionsPage() {
 		},
 		[data?.grants],
 	);
-	const githubConnectionHealthy = data?.connections.some(
+	const callbackConnectionHealthy = data?.connections.some(
 		(connection) =>
-			connection.providerId === "github" &&
+			connection.providerId === callbackProvider &&
 			connection.status === "ACTIVE" &&
 			!connection.requiresReconnect,
 	);
 	useEffect(() => {
-		if (!callbackFailed || !githubConnectionHealthy) return;
+		if (!callbackFailed || !callbackConnectionHealthy) return;
 		const url = new URL(window.location.href);
 		url.searchParams.delete("oauth");
+		url.searchParams.delete("provider");
 		window.history.replaceState(null, "", url);
-	}, [callbackFailed, githubConnectionHealthy]);
+	}, [callbackFailed, callbackConnectionHealthy]);
 	useEffect(() => {
 		if (!data || recoveryHandled.current) return;
 		const search = new URLSearchParams(window.location.search);
@@ -544,6 +546,13 @@ export function ConnectionsPage() {
 				...new Set(
 					data.upgradeTasks
 						.filter((task) => task.status === "PENDING_CONNECTION")
+						.filter((task) =>
+							data.connections.every(
+								(connection) =>
+									connection.id !== task.connectionId ||
+									connection.providerId !== "manhattan",
+							),
+						)
 						.map((task) => task.connectionId),
 				),
 			]
@@ -630,9 +639,15 @@ export function ConnectionsPage() {
 					正在加载 Connection...
 				</div>
 			) : null}
-			{callbackFailed && overview.isSuccess && !githubConnectionHealthy ? (
+			{callbackFailed && overview.isSuccess && !callbackConnectionHealthy ? (
 				<p className="alert alert-warning" role="status">
-					GitHub 授权回跳未确认，请以当前连接状态为准。
+					{providerLabel(callbackProvider)}{" "}
+					授权回跳未确认，请以当前连接状态为准。
+				</p>
+			) : null}
+			{permissionDenied && overview.isSuccess ? (
+				<p className="alert alert-warning" role="status">
+					当前账号缺少 Manhattan 访问权限。
 				</p>
 			) : null}
 			{overview.isError ? <PageError error={overview.error} /> : null}
@@ -648,7 +663,9 @@ export function ConnectionsPage() {
 			) : null}
 			{bitbucketError ? <PageError error={bitbucketError} /> : null}
 			{rehoboamError ? <PageError error={rehoboamError} /> : null}
-			{manhattanError ? <PageError error={manhattanError} /> : null}
+			{manhattanOAuth.isError ? (
+				<PageError error={manhattanOAuth.error} />
+			) : null}
 			{jiraError ? <PageError error={jiraError} /> : null}
 			{confluenceError ? <PageError error={confluenceError} /> : null}
 			{datalegoError ? <PageError error={datalegoError} /> : null}
@@ -1040,70 +1057,6 @@ export function ConnectionsPage() {
 							<Button type="submit" disabled={jenkinsPending}>
 								<SlidersHorizontal aria-hidden="true" size={17} />
 								{jenkinsPending ? "正在验证" : "连接"}
-							</Button>
-						</div>
-					</form>
-				</DialogContent>
-			</Dialog>
-
-			<Dialog
-				open={manhattanOpen}
-				onOpenChange={(open) => {
-					setManhattanOpen(open);
-					if (!open) {
-						setManhattanError(null);
-						setReconnectTargetId(null);
-					}
-				}}
-			>
-				<DialogContent aria-describedby={undefined}>
-					<DialogHeader>
-						<DialogTitle>连接 Manhattan</DialogTitle>
-						<DialogClose asChild>
-							<Button
-								variant="secondary"
-								size="icon"
-								type="button"
-								aria-label="关闭"
-							>
-								<X aria-hidden="true" size={18} />
-							</Button>
-						</DialogClose>
-					</DialogHeader>
-					<form
-						className="form-stack"
-						onSubmit={(event: FormEvent<HTMLFormElement>) => {
-							event.preventDefault();
-							const form = new FormData(event.currentTarget);
-							const username = form.get("username");
-							const password = form.get("password");
-							if (typeof username === "string" && typeof password === "string")
-								void connectManhattan({ password, username });
-						}}
-					>
-						<label htmlFor="manhattan-username">公司账号</label>
-						<input
-							autoComplete="username"
-							defaultValue={overview.data?.account.email ?? ""}
-							id="manhattan-username"
-							maxLength={256}
-							name="username"
-							required
-							type="text"
-						/>
-						<label htmlFor="manhattan-password">公司密码</label>
-						<input
-							autoComplete="current-password"
-							id="manhattan-password"
-							maxLength={1024}
-							name="password"
-							required
-							type="password"
-						/>
-						<div className="dialog-actions">
-							<Button type="submit" disabled={manhattanPending}>
-								<KeyRound aria-hidden="true" size={17} />
-								{manhattanPending ? "正在验证" : "连接"}
 							</Button>
 						</div>
 					</form>

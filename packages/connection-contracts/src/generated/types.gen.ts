@@ -228,8 +228,10 @@ export type ConnectionsResponse = {
     overview: Overview;
 };
 
-export type OAuthTransactionRequest = {
+export type OAuthTransactionRequest = unknown & {
     accessRequestId?: string;
+    providerId?: 'github' | 'manhattan';
+    reconnectConnectionId?: string;
     sharedScopeId?: string;
 };
 
@@ -650,7 +652,7 @@ export type ProviderCredentialRequest = {
     accessToken: string;
 } | {
     accessRequestId?: string;
-    providerId: 'confluence' | 'jira' | 'manhattan';
+    providerId: 'confluence' | 'jira';
     username: string;
     password: string;
 } | {

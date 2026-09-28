@@ -542,10 +542,24 @@ export const connectionApi = {
 				body: parseClientInput(
 					oauthTransactionRequestSchema,
 					{
+						providerId: "github",
 						...(sharedScopeId ? { sharedScopeId } : {}),
 						...(accessRequestId ? { accessRequestId } : {}),
 					},
 					"共享组信息无效，请刷新后重试",
+				),
+				headers: commandHeaders(),
+			}),
+		),
+	startManhattanOAuth: (
+		input: { accessRequestId?: string; reconnectConnectionId?: string } = {},
+	) =>
+		unwrap<OAuthTransaction>(
+			startGithubOAuth({
+				body: parseClientInput(
+					oauthTransactionRequestSchema,
+					{ providerId: "manhattan", ...input },
+					"Manhattan 授权请求无效",
 				),
 				headers: commandHeaders(),
 			}),

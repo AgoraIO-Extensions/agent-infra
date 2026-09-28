@@ -681,6 +681,7 @@ describe("PostgreSQL Connection business authority", () => {
 					repository.createOAuthTransaction({
 						codeVerifier: `ineligible-verifier-${suffix}`,
 						principalId: eligiblePrincipalA,
+						providerId: "github",
 						redirectUri: "https://connection.example/oauth/callback",
 						sharedScopeId: scope.sharedScopeId,
 						state: `ineligible-state-${suffix}`,
@@ -690,17 +691,40 @@ describe("PostgreSQL Connection business authority", () => {
 				await repository.createOAuthTransaction({
 					codeVerifier: `shared-verifier-${suffix}`,
 					principalId: adminPrincipalId,
+					providerId: "github",
 					redirectUri: "https://connection.example/oauth/callback",
 					sharedScopeId: scope.sharedScopeId,
 					state: sharedOAuthState,
 				});
 				expect(
-					await repository.consumeOAuthTransaction(sharedOAuthState),
+					await repository.consumeOAuthTransaction(sharedOAuthState, "github"),
 				).toEqual({
 					codeVerifier: `shared-verifier-${suffix}`,
 					principalId: adminPrincipalId,
+					providerId: "github",
 					redirectUri: "https://connection.example/oauth/callback",
 					sharedScopeId: scope.sharedScopeId,
+				});
+				const manhattanState = `manhattan-state-${suffix}`;
+				await repository.createOAuthTransaction({
+					codeVerifier: `manhattan-verifier-${suffix}`,
+					principalId: eligiblePrincipalA,
+					providerId: "manhattan",
+					redirectUri:
+						"https://connection.example/oauth/callback?provider=manhattan",
+					state: manhattanState,
+				});
+				await expect(
+					repository.consumeOAuthTransaction(manhattanState, "github"),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				expect(
+					await repository.consumeOAuthTransaction(manhattanState, "manhattan"),
+				).toEqual({
+					codeVerifier: `manhattan-verifier-${suffix}`,
+					principalId: eligiblePrincipalA,
+					providerId: "manhattan",
+					redirectUri:
+						"https://connection.example/oauth/callback?provider=manhattan",
 				});
 				const connection = await repository.storeSharedGithubOAuthCredential({
 					accessToken: `shared-provider-secret-${suffix}`,
