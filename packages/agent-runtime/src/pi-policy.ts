@@ -47,12 +47,6 @@ export function createPiWorkspaceTools(
 			call.startedAt = new Date().toISOString();
 			call.started = performance.now();
 		}
-		const operation = action();
-		call.pending.add(operation);
-		void operation.then(
-			() => call.pending.delete(operation),
-			() => call.pending.delete(operation),
-		);
 		if (first) {
 			call.startedReceipt = receipt({
 				toolCallId: call.toolCallId,
@@ -61,8 +55,17 @@ export function createPiWorkspaceTools(
 				startedAt: call.startedAt,
 			}).catch(() => {
 				call.unconfirmed = true;
+				throw new Error("RUNTIME_TOOL_RESULT_UNCONFIRMED");
 			});
 		}
+		if (call.startedReceipt) await call.startedReceipt;
+		if (call.unconfirmed) throw new Error("RUNTIME_TOOL_RESULT_UNCONFIRMED");
+		const operation = action();
+		call.pending.add(operation);
+		void operation.then(
+			() => call.pending.delete(operation),
+			() => call.pending.delete(operation),
+		);
 		return operation;
 	};
 	const guard = async (path: string) => {

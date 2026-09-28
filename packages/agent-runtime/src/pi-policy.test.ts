@@ -165,6 +165,44 @@ it("does not report starts for rejected paths, invalid edits or tools still in t
 	}
 });
 
+it("waits for the durable started receipt before applying a filesystem mutation", async () => {
+	const workspace = await realpath(
+		await mkdtemp(join(tmpdir(), "pi-start-order-")),
+	);
+	const startedReceipt = Promise.withResolvers<void>();
+	const phases: NativeToolReceipt[] = [];
+	const tools = createPiWorkspaceTools(
+		workspace,
+		async () => {},
+		async (receipt) => {
+			phases.push(receipt);
+			if (receipt.phase === "started") await startedReceipt.promise;
+		},
+	);
+	const path = join(workspace, "ordered.txt");
+	const execution = tools.write.execute(
+		"ordered-call",
+		{ path: "ordered.txt", content: "durable first" },
+		undefined,
+		undefined,
+		{ cwd: workspace } as ExtensionContext,
+	);
+	try {
+		await vi.waitFor(() =>
+			expect(phases.map((receipt) => receipt.phase)).toEqual(["started"]),
+		);
+		await expect(readFile(path, "utf8")).rejects.toThrow();
+		startedReceipt.resolve();
+		await execution;
+		expect(await readFile(path, "utf8")).toBe("durable first");
+		expect(phases.map((receipt) => receipt.phase)).toEqual(["started", "completed"]);
+	} finally {
+		startedReceipt.resolve();
+		await Promise.allSettled([execution]);
+		await rm(workspace, { recursive: true, force: true });
+	}
+});
+
 it.each(["read", "write", "edit"] as const)(
 	"requires a fresh durable permit in the real %s execute boundary without a tool_call event",
 	async (name) => {
