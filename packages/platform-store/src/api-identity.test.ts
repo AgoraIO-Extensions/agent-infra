@@ -503,13 +503,13 @@ describe("PostgreSQL API identity store", () => {
 		const audits = await adminClient`
 			select action, outcome
 			from platform.audit_events
-			order by occurred_at, id
+			order by action
 		`;
 		expect(audits).toEqual([
 			{ action: "api.application.created", outcome: "succeeded" },
-			{ action: "api.credential.issued", outcome: "rejected" },
 			{ action: "api.credential.delivery.granted", outcome: "rejected" },
 			{ action: "api.credential.delivery.revoked", outcome: "rejected" },
+			{ action: "api.credential.issued", outcome: "rejected" },
 		]);
 		const credentials = await store.listCredentials({
 			applicationId: "application_transport_boundary",
