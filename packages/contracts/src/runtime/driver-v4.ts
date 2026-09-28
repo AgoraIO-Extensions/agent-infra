@@ -40,23 +40,29 @@ export function validateRuntimeKeyedHandleTransitionV4(
 	const current = RuntimeKeyedHandleScopeV4Schema.parse(next);
 	if (previous === null) return "start";
 	const former = RuntimeKeyedHandleScopeV4Schema.parse(previous);
-	if (
+	const sameSession =
 		former.principal.kind === current.principal.kind &&
 		former.principal.id === current.principal.id &&
 		former.executionSource === current.executionSource &&
 		former.channelId === current.channelId &&
 		former.agentId === current.agentId &&
 		former.conversationId === current.conversationId &&
-		former.executionId === current.executionId &&
 		former.sessionGeneration === current.sessionGeneration &&
-		former.hostSessionRef === current.hostSessionRef &&
+		former.hostSessionRef === current.hostSessionRef;
+	const sameSelectionAndKey =
 		former.modelOptionId === current.modelOptionId &&
 		former.reasoningLevel === current.reasoningLevel &&
 		former.keyBinding.purpose === current.keyBinding.purpose &&
 		former.keyBinding.subjectId === current.keyBinding.subjectId &&
 		former.keyBinding.ciphertextRef === current.keyBinding.ciphertextRef &&
-		former.keyBinding.version === current.keyBinding.version
+		former.keyBinding.version === current.keyBinding.version;
+	if (
+		!sameSession ||
+		(former.executionId === current.executionId && !sameSelectionAndKey)
 	) {
+		throw new TypeError("Runtime keyed handle transition is unproven");
+	}
+	if (former.executionId === current.executionId) {
 		return "reuse";
 	}
 	if (

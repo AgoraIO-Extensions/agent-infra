@@ -28,13 +28,18 @@ it("reuses a native handle only within the same Execution and Key scope", () => 
 	expect(validateRuntimeKeyedHandleTransitionV4(k1, k1)).toBe("reuse");
 });
 
-it("requires proved retirement even when model selection stays the same", () => {
+it("rejects a changed Session scope or a Key rebind within one Execution", () => {
 	for (const changed of [
 		{ ...k1, channelId: "wecom" },
 		{ ...k1, principal: { kind: "user" as const, id: "bob" } },
-		{ ...k1, executionId: "execution-2" },
+		{ ...k1, agentId: "agent-2" },
+		{ ...k1, conversationId: "conversation-2" },
+		{ ...k1, sessionGeneration: 2 },
+		{ ...k1, executionSource: "wecom" as const },
 		{ ...k1, keyBinding: { ...k1.keyBinding, version: 2 } },
 		{ ...k1, keyBinding: { ...k1.keyBinding, subjectId: "bob" } },
+		{ ...k1, modelOptionId: "model-b" },
+		{ ...k1, reasoningLevel: "low" },
 		{ ...k1, hostSessionRef: "session-2" },
 	]) {
 		expect(() => validateRuntimeKeyedHandleTransitionV4(k1, changed)).toThrow(
@@ -47,12 +52,38 @@ it("requires proved retirement even when model selection stays the same", () => 
 				sessionContinued: true,
 			}),
 		).toThrow("Runtime keyed handle transition is unproven");
-		expect(
+		expect(() =>
 			validateRuntimeKeyedHandleTransitionV4(k1, changed, {
 				stopped: true,
 				drained: true,
 				sessionContinued: true,
 			}),
-		).toBe("rebuild");
+		).toThrow("Runtime keyed handle transition is unproven");
 	}
+});
+
+it("rebuilds for an adjacent Execution only after the original Session is drained", () => {
+	const next = {
+		...k1,
+		executionId: "execution-2",
+		modelOptionId: "model-b",
+		keyBinding: { ...k1.keyBinding, version: 2 },
+	};
+	expect(() => validateRuntimeKeyedHandleTransitionV4(k1, next)).toThrow(
+		"Runtime keyed handle transition is unproven",
+	);
+	expect(() =>
+		validateRuntimeKeyedHandleTransitionV4(k1, next, {
+			stopped: true,
+			drained: false,
+			sessionContinued: true,
+		}),
+	).toThrow("Runtime keyed handle transition is unproven");
+	expect(
+		validateRuntimeKeyedHandleTransitionV4(k1, next, {
+			stopped: true,
+			drained: true,
+			sessionContinued: true,
+		}),
+	).toBe("rebuild");
 });

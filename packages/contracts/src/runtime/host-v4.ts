@@ -204,6 +204,51 @@ export type RuntimeBusinessRequestV4 =
 	| RuntimeSubmitTurnRequestV4
 	| RuntimeSupplementRequestV4;
 
+const pinnedExecutionKeyScopeSchema = z.object({
+	principal: RuntimePrincipalV1Schema,
+	executionSource: RuntimeExecutionSourceV1Schema,
+	channelId: OpaqueIdV1Schema,
+	agentId: OpaqueIdV1Schema,
+	conversationId: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+	turnId: OpaqueIdV1Schema,
+	sessionGeneration: z.number().int().positive().safe(),
+	keyBinding: RuntimeRelayKeyBindingV1Schema,
+});
+export type RuntimePinnedExecutionKeyScopeV4 = z.infer<
+	typeof pinnedExecutionKeyScopeSchema
+>;
+
+// The pinned scope comes from the original accepted Execution, never the new request.
+export function validateRuntimePinnedExecutionKeyScopeV4(
+	pinned: unknown,
+	request: unknown,
+): void {
+	try {
+		const original = pinnedExecutionKeyScopeSchema.parse(pinned);
+		const next = pinnedExecutionKeyScopeSchema.parse(request);
+		if (
+			original.principal.kind !== next.principal.kind ||
+			original.principal.id !== next.principal.id ||
+			original.executionSource !== next.executionSource ||
+			original.channelId !== next.channelId ||
+			original.agentId !== next.agentId ||
+			original.conversationId !== next.conversationId ||
+			original.executionId !== next.executionId ||
+			original.turnId !== next.turnId ||
+			original.sessionGeneration !== next.sessionGeneration ||
+			original.keyBinding.purpose !== next.keyBinding.purpose ||
+			original.keyBinding.subjectId !== next.keyBinding.subjectId ||
+			original.keyBinding.ciphertextRef !== next.keyBinding.ciphertextRef ||
+			original.keyBinding.version !== next.keyBinding.version
+		) {
+			throw new Error();
+		}
+	} catch {
+		throw new TypeError("RuntimeHostV4 pinned Execution Key is invalid");
+	}
+}
+
 export async function validateRuntimeBusinessBindingV4(
 	request: unknown,
 	claims: unknown,
