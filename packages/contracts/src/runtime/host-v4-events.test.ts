@@ -143,6 +143,37 @@ const operationEvent = {
 	},
 };
 
+it("binds V4 event read and ACK digests to source and Key without signing the Grant", async () => {
+	const { afterCursor: _afterCursor, ...readContext } = readRequest;
+	const ackRequest = RuntimeEventAckRequestV4Schema.parse({
+		...readContext,
+		requestId: "request-ack-1",
+		confirmedCursor: "cursor-2",
+	});
+	for (const request of [readRequest, ackRequest]) {
+		const digest = await runtimeEventRequestDigestV4(request);
+		expect(digest).toMatch(/^[0-9a-f]{64}$/);
+		expect(
+			await runtimeEventRequestDigestV4({
+				...request,
+				grant: { ...request.grant, token: "d.e.f" },
+			}),
+		).toBe(digest);
+		expect(
+			await runtimeEventRequestDigestV4({
+				...request,
+				executionSource: "wecom",
+			}),
+		).not.toBe(digest);
+		expect(
+			await runtimeEventRequestDigestV4({
+				...request,
+				keyBinding: { ...request.keyBinding, version: 2 },
+			}),
+		).not.toBe(digest);
+	}
+});
+
 it("binds V4 event read and ACK to the original Keyed Execution and scoped V2 Grant", async () => {
 	const readVerification = await verified(readRequest);
 	await expect(
