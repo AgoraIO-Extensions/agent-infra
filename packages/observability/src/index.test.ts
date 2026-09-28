@@ -116,3 +116,9 @@ it("rejects credential-bearing exporter URLs", () => {
 		}),
 	).toThrow("Invalid observability endpoint");
 });
+
+it("rejects an unbounded service metric label at runtime", () => {
+	expect(() =>
+		startObservability({ service: "platform-api:private" as "platform-api" }),
+	).toThrow("Invalid observability service");
+});

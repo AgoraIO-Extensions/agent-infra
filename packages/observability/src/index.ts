@@ -58,11 +58,14 @@ export interface OperationalEvent {
 	readonly attemptRef?: string;
 }
 
+const services = [
+	"platform-api",
+	"platform-worker",
+	"enterprise-directory-sync",
+] as const;
+
 export interface ObservabilityOptions {
-	readonly service:
-		| "platform-api"
-		| "platform-worker"
-		| "enterprise-directory-sync";
+	readonly service: (typeof services)[number];
 	readonly otlpEndpoint?: string;
 	readonly output?: Pick<Writable, "write" | "on" | "off">;
 	readonly metricIntervalMs?: number;
@@ -99,6 +102,8 @@ function signalUrl(endpoint: string, signal: "traces" | "metrics") {
 }
 
 export function startObservability(options: ObservabilityOptions) {
+	if (!services.includes(options.service))
+		throw new TypeError("Invalid observability service");
 	if (
 		options.metricIntervalMs !== undefined &&
 		(!Number.isSafeInteger(options.metricIntervalMs) ||
