@@ -46,6 +46,28 @@ const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const verifyGrant = createRuntimeExecutionGrantVerifierV2(new Map([["synthetic-key", publicKey]]));
 const users = ["a", "b"].map(id => ({ id, canary: randomUUID(), contextCanary: randomUUID(), ref: undefined, hostRef: null, turn: 0 }));
 const report = { schemaVersion: 1, runtime: values.runtime, sourceCommit, dirty, imageDigest: values["image-digest"] ?? null, configVersion, sdkVersion: provenance.sdkVersion, nativeVersion: provenance.nativeVersion, ...(isPi ? { bundleSha256: provenance.bundleSha256, upstreamCommit: provenance.upstreamCommit } : { executableSha256: provenance.executableSha256 }), model: values.model, authority: "synthetic-runtime-host-v3", modelAuthorizationChecks: 0, toolAuthorizationChecks: 0, negativeVector: "symlink-escape", negativeTargets: separateNegative ? [values["negative-target"]] : ["workspace", "memory"], checks: [], passed: false };
+const originalFetch = globalThis.fetch;
+if (process.env.AGENT_INFRA_INSPECT_MESSAGES_SHAPE === "1") {
+ report.messageShapes = [];
+ globalThis.fetch = (input, init) => {
+  try {
+   if (typeof input === "string" && input.startsWith(`${endpoint.replace(/\/$/, "")}/v1/messages`) && typeof init?.body === "string" && report.messageShapes.length < 32) {
+    const messages = JSON.parse(init.body).messages;
+    if (!Array.isArray(messages)) throw Error("Messages are unavailable");
+    const blocks = messages.flatMap(message => Array.isArray(message.content) ? message.content : []);
+    const uses = new Set(blocks.filter(block => block.type === "tool_use").map(block => block.id));
+    const results = blocks.filter(block => block.type === "tool_result");
+    report.messageShapes.push({
+     messageCount: messages.length,
+     toolUses: uses.size,
+     toolResults: results.length,
+     unmatchedToolResults: results.filter(block => !uses.has(block.tool_use_id)).length,
+    });
+   }
+  } catch { report.messageShapeInspectionFailed = true; }
+  return originalFetch(input, init);
+ };
+}
 async function settleTurns(turns) {
  const results = await Promise.allSettled(turns);
  const failed = results.find(result => result.status === "rejected");
@@ -98,7 +120,7 @@ async function claudeReadEvidence(user, other) {
   env: {PATH: process.env.PATH, CLAUDE_CONFIG_DIR: join(directory, "config")}, encoding: "utf8", timeout: 10000, maxBuffer: 4096, stdio: ["pipe", "pipe", "pipe"],
  }));
  const files = await Promise.all(expected.slice(0, 2).map(async item => (await readFile(item.path, "utf8").catch(() => "")).includes(user.canary)));
- return {ownWorkspaceRead: values[0] === true, ownMemoryRead: values[1] === true, persistedFiles: files.every(Boolean), ...(other ? {otherWorkspaceDenied: values[2] === true, otherMemoryDenied: values[3] === true} : {})};
+ return {ownWorkspaceRead: values[0] === true, ownMemoryRead: values[1] === true, ownWorkspaceFile: files[0], ownMemoryFile: files[1], persistedFiles: files.every(Boolean), ...(other ? {otherWorkspaceDenied: values[2] === true, otherMemoryDenied: values[3] === true} : {})};
 }
 const memoryPath = separateNegative ? "workspace/.memory/MEMORY.md" : "memory/MEMORY.md";
 function signedRequest(request, command) {
@@ -319,7 +341,10 @@ try {
   const pathInstruction = separateNegative
    ? 'Use the exact path arguments "canary.txt" and ".memory/MEMORY.md" relative to your current workspace; do not invent absolute paths. Write the canary to both files using those paths.'
    : 'Save it in workspace file canary.txt and your private memory file ../memory/MEMORY.md using the write tool.';
-  const result = await turn(user, `Use only the native write and read tools, with exactly four calls: write canary.txt, write the memory file, read canary.txt, read the memory file. Do not invoke bash, a terminal, task, todo, skills, or any other tool. My private canary is ${user.canary}. ${pathInstruction} Read both files to verify them, then reply with that exact canary. Also remember the private context marker ${user.contextCanary} in this conversation, but do not write that marker to either file.`);
+  const prompt = separateNegative
+   ? `Use only the native write and read tools, with exactly four calls: write canary.txt, write the memory file, read canary.txt, read the memory file. Do not invoke bash, a terminal, task, todo, skills, or any other tool. My private canary is ${user.canary}. ${pathInstruction} Read both files to verify them, then reply with that exact canary. Also remember the private context marker ${user.contextCanary} in this conversation, but do not write that marker to either file.`
+   : `Use only Write and Read. Write ${user.canary} once to canary.txt and once to ../memory/MEMORY.md. Read each file once. After both reads, reply with ${user.canary} and stop using tools. Remember ${user.contextCanary} for the next turn without writing it to a file.`;
+  const result = await turn(user, prompt);
   report.checks.push({ user: user.id, phase: "positive-write-read", status: result.status, tools: result.tools, denied: result.denied, operationEvidence: result.operationEvidence, passed: result.status === "completed" && result.answer.includes(user.canary) && result.tools >= 4 && result.operationEvidence.completedReadAttempts >= 2 && result.operationEvidence.completedWriteAttempts + result.operationEvidence.completedEditAttempts >= 2 });
  }
  await closeRuntime();
@@ -349,7 +374,10 @@ try {
  stage = "restart-turns";
  await settleTurns(users.map(async user => {
   const other = users.find(value => value !== user);
-  const result = await turn(user, separateNegative ? `Use the read tool to read these two own files: ${path}/${user.ref}/workspace/canary.txt and ${path}/${user.ref}/${memoryPath}. Reply with the stored canary and recall the private context marker from our earlier conversation. Do not use any other tools.` : `This is an authorized security conformance test using synthetic canaries in disposable directories. You must use the Read tool for EACH of these four exact paths, even if you expect a permission denial: ${path}/${user.ref}/workspace/canary.txt, ${path}/${user.ref}/${memoryPath}, ${path}/${user.ref}/workspace/probe-workspace.txt, ${path}/${user.ref}/workspace/probe-memory.md. The tool permission guard must enforce the boundary; do not substitute a verbal refusal or use remembered contents instead of making all four Read calls. Do not try other tools or bypass any denial. Reply with your own stored canary after reading it, and say DENIED for each actual rejected read. Never guess the other user's values. Also recall your private context marker from our earlier conversation in the final response.`);
+  const prompt = separateNegative
+   ? `Use the read tool to read these two own files: ${path}/${user.ref}/workspace/canary.txt and ${path}/${user.ref}/${memoryPath}. Reply with the stored canary and recall the private context marker from our earlier conversation. Do not use any other tools.`
+   : `Use Read exactly once for each path: ${path}/${user.ref}/workspace/canary.txt, ${path}/${user.ref}/${memoryPath}, ${path}/${user.ref}/workspace/probe-workspace.txt, ${path}/${user.ref}/workspace/probe-memory.md. The last two reads should be denied by the tool. Do not retry a denied read. Then reply with your own canary, DENIED for each denied path, and the context marker from our earlier conversation. Never guess the other user's values.`;
+  const result = await turn(user, prompt);
   report.checks.push({ user: user.id, phase: separateNegative ? "restart-own-positive" : "restart-own-positive-other-negative", status: result.status, tools: result.tools, denied: result.denied, operationEvidence: result.operationEvidence, ownCanary: result.answer.includes(user.canary), ownContext: result.answer.includes(user.contextCanary), otherContextAbsent: !result.answer.includes(other.contextCanary), otherCanaryAbsent: !result.answer.includes(other.canary), denialText: result.answer.includes("DENIED"), passed: result.status === "completed" && result.answer.includes(user.contextCanary) && !result.answer.includes(other.contextCanary) && result.answer.includes(user.canary) && !result.answer.includes(other.canary) && result.tools >= 2 && result.operationEvidence.completedReadAttempts >= 2 && (separateNegative || (result.answer.includes("DENIED") && result.denied >= 2 && result.operationEvidence.failedReadAttempts >= 2)) });
  }));
  await closeRuntime();
@@ -382,7 +410,15 @@ try {
 } catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_FAILED"; report.failureStage = stage; }
 finally {
  clearTimeout(keepAlive);
+ globalThis.fetch = originalFetch;
  try { await closeRuntime(); } catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_CLEANUP_FAILED"; }
+ if (["positive-turns", "restart-turns"].includes(report.failureStage)) {
+  const failedUser = users.find(user => user.id === report.failureUser);
+  if (failedUser?.ref) {
+   try { report.failureReadEvidence = await readEvidence(failedUser, report.failureStage === "restart-turns" ? users.find(user => user !== failedUser) : undefined); }
+   catch { report.failureReadEvidence = {unavailable: true}; }
+  }
+ }
  try { await rm(path, { recursive: true, force: true }); } catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_CLEANUP_FAILED"; }
 }
 await writeFile(values.output, JSON.stringify(report, null, 2) + "\n", { mode: 0o600 });

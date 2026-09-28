@@ -28,7 +28,8 @@ export function claudeWorkspaceTools(
 	return {
 		tools: ["Read", "Write", "Edit"],
 		settings: {
-			autoMemoryEnabled: true,
+			// Explicit private memory stays available without SDK-initiated writes.
+			autoMemoryEnabled: false,
 			autoMemoryDirectory: memory,
 			autoDreamEnabled: false,
 			claudeMdExcludes: ["**"],
