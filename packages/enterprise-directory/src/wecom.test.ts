@@ -71,6 +71,24 @@ describe("WeCom complete fetch", () => {
 					],
 				},
 			},
+			{
+				...complete,
+				"/cgi-bin/user/list:2": { errcode: 0, userlist: [] },
+			},
+			{
+				...complete,
+				"/cgi-bin/user/list:1": {
+					errcode: 0,
+					userlist: [
+						{
+							userid: "u1",
+							email: "u1@example.test",
+							status: 1,
+							department: [2],
+						},
+					],
+				},
+			},
 		]) {
 			await expect(source(failed).fetchComplete()).rejects.toThrow();
 		}

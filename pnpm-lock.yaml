@@ -462,6 +462,9 @@ importers:
 
   packages/enterprise-directory:
     dependencies:
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       zod:
         specifier: 'catalog:'
         version: 4.4.3

@@ -3,6 +3,7 @@ import { validateSnapshot } from "@agent-infra/enterprise-directory";
 import { desc } from "drizzle-orm";
 import { jsonb, pgSchema, timestamp, uuid } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
+import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 
 const directorySchema = pgSchema("enterprise_directory");
@@ -42,11 +43,20 @@ export function createPostgresDirectoryStore(
 
 export async function migrateDirectoryStore(
 	databaseUrl: string,
-	migration: string,
+	migrationsFolder: string,
 ): Promise<void> {
 	const sql = postgres(databaseUrl, { max: 1 });
 	try {
-		await sql.unsafe(migration);
+		await sql`
+			select pg_catalog.pg_advisory_lock(
+				pg_catalog.hashtextextended('agent-infra:enterprise-directory:migrations', 0)
+			)
+		`;
+		await migrate(drizzle(sql), {
+			migrationsFolder,
+			migrationsSchema: "enterprise_directory_migrations",
+			migrationsTable: "history",
+		});
 	} finally {
 		await sql.end();
 	}

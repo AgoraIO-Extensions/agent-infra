@@ -59,11 +59,26 @@ export async function startDirectorySync() {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const schedule = (delay: number) => {
 		timer = setTimeout(async () => {
+			const startedAt = Date.now();
 			try {
-				await service.syncOnce();
+				const revision = await service.syncOnce();
+				console.info(
+					JSON.stringify({
+						service: "enterprise-directory-sync",
+						event: "snapshot_published",
+						revision,
+						durationMs: Date.now() - startedAt,
+					}),
+				);
 				if (!stopped) schedule(DAILY_MS);
 			} catch {
-				console.error("Enterprise directory sync failed");
+				console.error(
+					JSON.stringify({
+						service: "enterprise-directory-sync",
+						event: "snapshot_sync_failed",
+						durationMs: Date.now() - startedAt,
+					}),
+				);
 				if (!stopped) schedule(RETRY_MS);
 			}
 		}, delay);
@@ -92,7 +107,12 @@ if (
 			process.once("SIGINT", () => void running.close());
 		})
 		.catch(() => {
-			console.error("Enterprise directory failed to start");
+			console.error(
+				JSON.stringify({
+					service: "enterprise-directory-sync",
+					event: "startup_failed",
+				}),
+			);
 			process.exitCode = 1;
 		});
 }

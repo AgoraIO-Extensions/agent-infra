@@ -1,34 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { EnterpriseDirectorySnapshotV1Schema } from "@agent-infra/contracts/enterprise-directory";
 import { z } from "zod";
 
 export const MAX_SNAPSHOT_AGE_MS = 24 * 60 * 60 * 1_000;
 
-const departmentSchema = z.strictObject({
-	id: z.number().int().positive(),
-	name: z.string().trim().min(1),
-	parentId: z.number().int().nonnegative(),
-});
-
-const memberSchema = z.strictObject({
-	userId: z.string().trim().min(1),
-	email: z.string(),
-	active: z.boolean(),
-	departmentIds: z.array(z.number().int().positive()).min(1),
-});
-
-const snapshotSchema = z.strictObject({
-	schemaVersion: z.literal(1),
-	revision: z.uuid(),
-	source: z.literal("wecom"),
-	rootDepartmentId: z.number().int().positive(),
-	fetchedAt: z.number().int().nonnegative(),
-	validUntil: z.number().int().positive(),
-	complete: z.literal(true),
-	departments: z.array(departmentSchema).min(1),
-	members: z.array(memberSchema),
-});
-
-export type DirectorySnapshot = z.infer<typeof snapshotSchema>;
+export type DirectorySnapshot = z.infer<
+	typeof EnterpriseDirectorySnapshotV1Schema
+>;
 export type DirectoryDepartment = DirectorySnapshot["departments"][number];
 export type DirectoryMember = DirectorySnapshot["members"][number];
 
@@ -43,7 +21,7 @@ function normalizeEmail(email: string) {
 }
 
 export function validateSnapshot(value: unknown): DirectorySnapshot {
-	const snapshot = snapshotSchema.parse(value);
+	const snapshot = EnterpriseDirectorySnapshotV1Schema.parse(value);
 	if (
 		snapshot.validUntil <= snapshot.fetchedAt ||
 		snapshot.validUntil > snapshot.fetchedAt + MAX_SNAPSHOT_AGE_MS

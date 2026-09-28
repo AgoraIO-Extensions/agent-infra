@@ -20,6 +20,7 @@
 		"test": "vitest run src"
 	},
 	"dependencies": {
+		"@agent-infra/contracts": "workspace:*",
 		"zod": "catalog:"
 	},
 	"devDependencies": {

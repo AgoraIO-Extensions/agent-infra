@@ -94,6 +94,7 @@ export function createWeComSource(config: WeComSourceConfig) {
 				}),
 			);
 			const membersById = new Map<string, DirectoryMember>();
+			const membersByDepartment = new Map<number, Set<string>>();
 			for (const department of departments) {
 				const users = await get(
 					"/cgi-bin/user/list",
@@ -105,7 +106,15 @@ export function createWeComSource(config: WeComSourceConfig) {
 					},
 					usersResponse,
 				);
+				const returnedIds = new Set<string>();
 				for (const user of users.userlist) {
+					if (
+						returnedIds.has(user.userid) ||
+						!user.department.includes(department.id)
+					) {
+						throw new WeComSourceError();
+					}
+					returnedIds.add(user.userid);
 					const member = {
 						userId: user.userid,
 						email: user.email,
@@ -117,6 +126,16 @@ export function createWeComSource(config: WeComSourceConfig) {
 						throw new WeComSourceError();
 					}
 					membersById.set(member.userId, member);
+				}
+				membersByDepartment.set(department.id, returnedIds);
+			}
+			for (const member of membersById.values()) {
+				if (
+					member.departmentIds.some(
+						(id) => !membersByDepartment.get(id)?.has(member.userId),
+					)
+				) {
+					throw new WeComSourceError();
 				}
 			}
 			return { departments, members: [...membersById.values()] };
