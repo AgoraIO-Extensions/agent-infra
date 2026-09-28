@@ -170,6 +170,49 @@ describe("V2 compatibility routes", () => {
 		},
 	);
 
+	it.each([
+		["/api/v2/agent-applications", "POST"],
+		["/api/v2/agent-applications/application-1", "PUT"],
+		["/api/v2/agents/agent-1/configuration", "PUT"],
+	] as const)(
+		"rejects V2 actions before forwarding at %s",
+		async (path, method) => {
+			const app = new Hono();
+			let forwarded = 0;
+			app.all("/api/v1/*", () => {
+				forwarded += 1;
+				return new Response(null, { status: 200 });
+			});
+			registerV2CompatibilityRoutes(app);
+			const validBody = path.includes("agent-applications")
+				? {
+						schemaVersion: 2,
+						name: "Agent",
+						description: "Description",
+						source: { kind: "standard", templateId: "template-1" },
+						coOwnerIds: [],
+						availability: [],
+						environment: [],
+						secrets: [],
+					}
+				: { schemaVersion: 2, coOwnerIds: [] };
+			const valid = await app.request(`http://localhost${path}`, {
+				method,
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(validBody),
+			});
+			expect(valid.status).toBe(200);
+			expect(forwarded).toBe(1);
+			const response = await app.request(`http://localhost${path}`, {
+				method,
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ ...validBody, actions: [] }),
+			});
+			expect(response.status).toBe(400);
+			expect(forwarded).toBe(1);
+		},
+	);
+
 	it("rejects unsupported agent list scopes", async () => {
 		const app = new Hono();
 		app.get("/api/v1/agents", () => new Response("unexpected"));

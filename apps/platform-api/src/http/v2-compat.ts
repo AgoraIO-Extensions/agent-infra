@@ -1,3 +1,8 @@
+import {
+	AgentApplicationCreateRequestV2Schema,
+	AgentApplicationUpdateRequestV2Schema,
+	AgentConfigurationUpdateRequestV2Schema,
+} from "@agent-infra/contracts/pilot";
 import type { Hono } from "hono";
 
 const v2ManagementPaths = [
@@ -43,19 +48,25 @@ function v2RequestBody(
 		(pathname === "/api/v2/agent-applications" ||
 			/^\/api\/v2\/agent-applications\/[^/]+$/.test(pathname))
 	) {
-		if (input.schemaVersion !== 2) return null;
+		const parsed = (
+			method === "POST"
+				? AgentApplicationCreateRequestV2Schema
+				: AgentApplicationUpdateRequestV2Schema
+		).safeParse(input);
+		if (!parsed.success) return null;
 		return JSON.stringify({
-			...input,
+			...parsed.data,
 			schemaVersion: 1,
-			actions: input.actions ?? [],
+			actions: [],
 		});
 	}
 	if (
 		method === "PUT" &&
 		/^\/api\/v2\/agents\/[^/]+\/configuration$/.test(pathname)
 	) {
-		if (input.schemaVersion !== 2) return null;
-		return JSON.stringify({ ...input, schemaVersion: 1 });
+		const parsed = AgentConfigurationUpdateRequestV2Schema.safeParse(input);
+		if (!parsed.success) return null;
+		return JSON.stringify({ ...parsed.data, schemaVersion: 1 });
 	}
 	return body;
 }

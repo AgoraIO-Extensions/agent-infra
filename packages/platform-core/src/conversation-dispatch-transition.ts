@@ -158,7 +158,9 @@ export function decideConversationStopConfirmationStatusV1(input: {
 	readonly executionStatus: ConversationDispatchExecutionStatusV1;
 	readonly confirmationTimedOut: boolean;
 }): ConversationDispatchExecutionStatusV1 {
-	return input.executionStatus === "processing" && input.confirmationTimedOut
+	return (input.executionStatus === "submitted" ||
+		input.executionStatus === "processing") &&
+		input.confirmationTimedOut
 		? "unknown"
 		: input.executionStatus;
 }

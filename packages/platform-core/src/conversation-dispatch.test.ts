@@ -17,8 +17,32 @@ import {
 	type ConversationRuntimeOperationEventV2,
 	createConversationDispatchUseCaseV1,
 	decideConversationDispatchRetryTransitionV1,
+	decideConversationStopConfirmationStatusV1,
 	planConversationGenerationConfirmationV1,
 } from "./index.js";
+
+describe("stop confirmation timeout status", () => {
+	it.each(["submitted", "processing", "unknown"] as const)(
+		"keeps a timed-out %s execution uncertain",
+		(executionStatus) => {
+			expect(
+				decideConversationStopConfirmationStatusV1({
+					executionStatus,
+					confirmationTimedOut: true,
+				}),
+			).toBe("unknown");
+		},
+	);
+
+	it("preserves submitted work before the confirmation deadline", () => {
+		expect(
+			decideConversationStopConfirmationStatusV1({
+				executionStatus: "submitted",
+				confirmationTimedOut: false,
+			}),
+		).toBe("submitted");
+	});
+});
 
 describe("current-state retry transition", () => {
 	it.each(["completed", "failed", "cancelled"] as const)(
