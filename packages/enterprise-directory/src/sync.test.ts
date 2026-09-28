@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DirectorySnapshot } from "./snapshot.js";
+import { summarizeSnapshotChange } from "./snapshot.js";
 import type { DirectoryStore } from "./store.js";
 import { createDirectorySynchronizer, nextSyncDelay } from "./sync.js";
 import type { createWeComSource } from "./wecom.js";
@@ -16,8 +17,9 @@ describe("directory synchronization", () => {
 		const store: DirectoryStore = {
 			beginScan: async () => ++generation,
 			publish: async (snapshot) => {
+				const summary = summarizeSnapshotChange(snapshot, current);
 				current = snapshot;
-				return "published";
+				return { status: "published", summary };
 			},
 			latest: async () => current,
 			close: async () => {},
@@ -40,19 +42,21 @@ describe("directory synchronization", () => {
 		const first = await sync.syncOnce();
 		expect(first.status).toBe("published");
 		if (first.status !== "published") throw new Error("first scan missing");
+		expect(first.summary.baselineRevision).toBeNull();
 		clock += nextSyncDelay(first.validUntil, clock);
 		const second = await sync.syncOnce();
 		expect(second.status).toBe("published");
 		if (second.status !== "published") throw new Error("second scan missing");
 		expect(second.fetchedAt).toBeLessThan(first.validUntil);
 		expect(second.revision).not.toBe(first.revision);
+		expect(second.summary.baselineRevision).toBe(first.revision);
 		expect(nextSyncDelay(second.validUntil, second.validUntil - hour)).toBe(0);
 	});
 
 	it("keeps superseded scans distinct from published authority", async () => {
 		const store: DirectoryStore = {
 			beginScan: async () => 1n,
-			publish: async () => "superseded",
+			publish: async () => ({ status: "superseded" }),
 			latest: async () => null,
 			close: async () => {},
 		};

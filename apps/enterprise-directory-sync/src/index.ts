@@ -11,6 +11,37 @@ import { serve } from "@hono/node-server";
 import { createDirectoryService } from "./service.js";
 
 const RETRY_MS = 5 * 60_000;
+type SyncResult = Awaited<
+	ReturnType<ReturnType<typeof createDirectoryService>["syncOnce"]>
+>;
+
+export function syncLogRecord(result: SyncResult, durationMs: number) {
+	return {
+		service: "enterprise-directory-sync",
+		event:
+			result.status === "published"
+				? "snapshot_published"
+				: "snapshot_superseded",
+		...(result.status === "published"
+			? {
+					revision: result.revision,
+					fetchedAt: result.fetchedAt,
+					validUntil: result.validUntil,
+					...result.summary,
+				}
+			: {}),
+		durationMs,
+	};
+}
+
+export function syncFailureLogRecord(error: unknown, durationMs: number) {
+	return {
+		service: "enterprise-directory-sync",
+		event: "snapshot_sync_failed",
+		reason: error instanceof DirectorySyncError ? error.reason : "unexpected",
+		durationMs,
+	};
+}
 
 function required(name: string) {
 	const value = process.env[name];
@@ -66,21 +97,7 @@ export async function startDirectorySync() {
 			try {
 				const result = await service.syncOnce();
 				console.info(
-					JSON.stringify({
-						service: "enterprise-directory-sync",
-						event:
-							result.status === "published"
-								? "snapshot_published"
-								: "snapshot_superseded",
-						...(result.status === "published"
-							? {
-									revision: result.revision,
-									fetchedAt: result.fetchedAt,
-									validUntil: result.validUntil,
-								}
-							: {}),
-						durationMs: Date.now() - startedAt,
-					}),
+					JSON.stringify(syncLogRecord(result, Date.now() - startedAt)),
 				);
 				if (!stopped)
 					schedule(
@@ -90,13 +107,7 @@ export async function startDirectorySync() {
 					);
 			} catch (error) {
 				console.error(
-					JSON.stringify({
-						service: "enterprise-directory-sync",
-						event: "snapshot_sync_failed",
-						reason:
-							error instanceof DirectorySyncError ? error.reason : "unexpected",
-						durationMs: Date.now() - startedAt,
-					}),
+					JSON.stringify(syncFailureLogRecord(error, Date.now() - startedAt)),
 				);
 				if (!stopped) schedule(RETRY_MS);
 			}
