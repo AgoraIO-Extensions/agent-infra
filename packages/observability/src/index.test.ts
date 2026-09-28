@@ -140,6 +140,19 @@ it("rejects credential-bearing exporter URLs", () => {
 	).toThrow("Invalid observability endpoint");
 });
 
+it("redacts malformed exporter URLs from thrown errors", () => {
+	const endpoint = "https://user:PRIVATE_SENTINEL@";
+	let failure: unknown;
+	try {
+		startObservability({ service: "platform-api", otlpEndpoint: endpoint });
+	} catch (error) {
+		failure = error;
+	}
+	expect(failure).toBeInstanceOf(TypeError);
+	expect((failure as Error).message).toBe("Invalid observability endpoint");
+	expect(JSON.stringify(failure)).not.toContain("PRIVATE_SENTINEL");
+});
+
 it("rejects an unbounded service metric label at runtime", () => {
 	expect(() =>
 		startObservability({ service: "platform-api:private" as "platform-api" }),

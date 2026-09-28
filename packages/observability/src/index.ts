@@ -94,7 +94,12 @@ function safeOperationRef(value: string | undefined) {
 }
 
 function signalUrl(endpoint: string, signal: "traces" | "metrics") {
-	const url = new URL(endpoint);
+	let url: URL;
+	try {
+		url = new URL(endpoint);
+	} catch {
+		throw new TypeError("Invalid observability endpoint");
+	}
 	if (
 		!["http:", "https:"].includes(url.protocol) ||
 		!url.hostname ||
