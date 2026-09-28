@@ -60,7 +60,7 @@ async function fixture(
 		pilotFakeScenariosV2.starting.response.body,
 	);
 	let deployment = deploymentConfiguration;
-	let rejectNextPendingQueue = false;
+	let pendingQueueUnavailable = false;
 	const session = {
 		schemaVersion: 1,
 		user: {
@@ -96,8 +96,7 @@ async function fixture(
 		updateAgentApplication: () => ({ status: 200, body: application }),
 		withdrawAgentApplication: () => ({ status: 200, body: application }),
 		listPendingAgentApplications: () => {
-			if (rejectNextPendingQueue) {
-				rejectNextPendingQueue = false;
+			if (pendingQueueUnavailable) {
 				return {
 					status: 503,
 					body: {
@@ -260,8 +259,11 @@ async function fixture(
 		) {
 			rejectNextApplication = code;
 		},
-		rejectNextPendingQueue() {
-			rejectNextPendingQueue = true;
+		unavailablePendingQueue() {
+			pendingQueueUnavailable = true;
+		},
+		recoverPendingQueue() {
+			pendingQueueUnavailable = false;
 		},
 		rejectNextWithdrawal() {
 			rejectNextWithdrawal = true;
@@ -558,13 +560,15 @@ test("administrator can recover a temporarily unavailable pending queue", async 
 	page,
 }, info) => {
 	const api = await fixture(page, "admin");
-	api.rejectNextPendingQueue();
+	api.unavailablePendingQueue();
 	await page.goto("/admin/approvals");
 	await expect(page.getByRole("alert")).toContainText(
 		"审批列表暂时无法读取，请稍后重试。",
+		{ timeout: 15_000 },
 	);
 	const retry = page.getByRole("button", { name: "重新加载审批" });
 	await expect(retry).toBeVisible();
+	api.recoverPendingQueue();
 	await retry.focus();
 	await page.keyboard.press("Enter");
 	await expect(page.getByRole("button", { name: "审阅申请" })).toBeVisible();
