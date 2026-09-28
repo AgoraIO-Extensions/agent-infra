@@ -567,7 +567,7 @@ function buildArtifacts() {
 			"/internal/runtime/v4/turns": {
 				post: postOperation(
 					"submitRuntimeTurnV4",
-					RuntimeHostV4SchemaDefinitions.RuntimeSubmitTurnRequestV4,
+					RuntimeHostV4SchemaDefinitions.RuntimeSubmitTurnTransportV4,
 					RuntimeOperationResponseV4Schema,
 					"application/json",
 				),
@@ -575,7 +575,7 @@ function buildArtifacts() {
 			"/internal/runtime/v4/instructions": {
 				post: postOperation(
 					"supplementRuntimeTurnV4",
-					RuntimeHostV4SchemaDefinitions.RuntimeSupplementRequestV4,
+					RuntimeHostV4SchemaDefinitions.RuntimeSupplementTransportV4,
 					RuntimeOperationResponseV4Schema,
 					"application/json",
 				),

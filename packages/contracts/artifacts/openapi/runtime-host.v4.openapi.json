@@ -1250,7 +1250,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RuntimeSupplementRequestV4"
+                "$ref": "#/components/schemas/RuntimeSupplementTransportV4"
               }
             }
           },
@@ -1347,7 +1347,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RuntimeSubmitTurnRequestV4"
+                "$ref": "#/components/schemas/RuntimeSubmitTurnTransportV4"
               }
             }
           },
