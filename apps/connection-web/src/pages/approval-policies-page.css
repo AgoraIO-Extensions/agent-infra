@@ -82,7 +82,8 @@
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
 	background: var(--surface-raised);
-	overflow: hidden;
+	/* Employee candidates extend beyond the editor; only the list should scroll. */
+	overflow: visible;
 }
 .approval-list {
 	border-right: 1px solid var(--border);
