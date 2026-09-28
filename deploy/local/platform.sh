@@ -88,6 +88,10 @@ ensure_agents_stopped() {
 }
 
 restore_local_services() {
+  if [[ "$worker_replicas" == 0 ]]; then
+    echo "Worker had zero replicas; API and Web remain stopped" >&2
+    return 1
+  fi
   if ! "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas="$worker_replicas" ||
      ! "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m; then
     echo "Worker could not be restored; API and Web remain stopped" >&2

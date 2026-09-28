@@ -512,6 +512,28 @@ test("local stop leaves API closed when Worker restoration fails", async () => {
 	}
 });
 
+test("local stop leaves API closed when an existing zero-replica Worker cannot be uninstalled", async () => {
+	const f = await fixture();
+	try {
+		const result = run("stop", {
+			...f.env,
+			FAKE_WORKER_REPLICAS: "0",
+			FAKE_HELM_UNINSTALL_EXIT: "7",
+		});
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/Worker had zero replicas; API and Web remain stopped/,
+		);
+		const log = await readFile(f.log, "utf8");
+		assert.match(log, /compose .* stop web platform-api/);
+		assert.doesNotMatch(log, /compose .* up --detach --wait platform-api web/);
+		assert.doesNotMatch(log, /compose .* stop object-storage postgres/);
+	} finally {
+		await f.close();
+	}
+});
+
 test("local commands reject a mismatched Docker kind endpoint and namespace", async () => {
 	const f = await fixture();
 	try {
