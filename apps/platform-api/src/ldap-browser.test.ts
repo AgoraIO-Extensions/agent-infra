@@ -245,6 +245,25 @@ describe("LDAP browser adapter", () => {
 		expect(state.isPlatformDisabled).toHaveBeenCalledTimes(3);
 	});
 
+	it("revokes a session when its UID mapping changes during resolution", async () => {
+		const state = fixture();
+		const cookie =
+			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
+		const request = new Request(`${origin}/api/v1/session`, {
+			headers: { cookie },
+		});
+		const reassignedUserId = "5f5a7c76-1097-462e-80d0-c60b42df978b";
+		state.setCurrent({ ...account, userId: reassignedUserId });
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+		expect(state.isPlatformDisabled).toHaveBeenNthCalledWith(2, account.userId);
+		expect(state.isPlatformDisabled).toHaveBeenNthCalledWith(
+			3,
+			reassignedUserId,
+		);
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+		expect(state.isPlatformDisabled).toHaveBeenCalledTimes(3);
+	});
+
 	it("shares revocation across instances and fails closed when session storage fails", async () => {
 		const sessions = memorySessions();
 		const first = fixture(sessions);

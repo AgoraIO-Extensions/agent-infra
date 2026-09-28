@@ -148,9 +148,8 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				request.headers.get("origin") !== origin.origin
 			)
 				return null;
-			const platformDisabled = await input.isPlatformDisabled(
-				await input.directory.userIdForUid(session.uid),
-			);
+			const userId = await input.directory.userIdForUid(session.uid);
+			const platformDisabled = await input.isPlatformDisabled(userId);
 			if (typeof platformDisabled !== "boolean")
 				throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
 			if (platformDisabled) {
@@ -163,7 +162,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				return null;
 			}
 			const identity = await current(account);
-			if (identity.accountStatus === "disabled") {
+			if (identity.accountStatus === "disabled" || identity.userId !== userId) {
 				await input.sessions.revokeUid(session.uid);
 				return null;
 			}
