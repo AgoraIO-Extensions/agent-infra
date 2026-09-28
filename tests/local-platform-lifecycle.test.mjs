@@ -56,8 +56,10 @@ elif [[ "$*" == *"container inspect isolated-control-plane"* ]]; then
   printf '%s\\n' "$FAKE_KIND_LABEL"
 elif [[ "$*" == *"port isolated-control-plane 6443/tcp"* ]]; then
   printf '%s\\n' "$FAKE_KIND_PORT"
-elif [[ "$*" == *"compose"*"ps -q postgres"* ]]; then
+elif [[ "$*" == *"compose"*"ps --all -q postgres"* ]]; then
   printf 'fixture-postgres\\n'
+elif [[ "$*" == *"compose"*"ps -q postgres"* ]]; then
+  [[ "$FAKE_CONTAINER_RUNNING" == 1 ]] && printf 'fixture-postgres\\n'
 elif [[ "$*" == *"compose"*"config --format json"* ]]; then
   printf '{"services":{"platform-api":{"environment":{"PLATFORM_DATABASE_URL":"%s"}}}}\\n' "$FAKE_DATABASE_URL"
 elif [[ "$*" == *"container inspect fixture-postgres"*"IPAddress"* ]]; then
@@ -132,6 +134,7 @@ fi`,
 		FAKE_WORKER_PODS: "",
 		FAKE_FOREIGN_RESOURCE: "",
 		FAKE_PRECONNECTED_ALIASES: "",
+		FAKE_CONTAINER_RUNNING: "1",
 		FAKE_RESTORE_SCALE_EXIT: "",
 		FAKE_HELM_UNINSTALL_EXIT: "",
 		FAKE_HELM_UPGRADE_EXIT: "",
@@ -339,6 +342,17 @@ test("local commands refuse foreign database route resources and network links",
 		});
 		assert.notEqual(preconnected.status, 0);
 		assert.match(preconnected.stderr, /connected to kind outside this project/);
+		assert.equal(await readFile(f.log, "utf8"), "");
+		const stoppedPreconnected = run("up", {
+			...f.env,
+			FAKE_CONTAINER_RUNNING: "0",
+			FAKE_PRECONNECTED_ALIASES: "another-owner-db",
+		});
+		assert.notEqual(stoppedPreconnected.status, 0);
+		assert.match(
+			stoppedPreconnected.stderr,
+			/connected to kind outside this project/,
+		);
 		assert.equal(await readFile(f.log, "utf8"), "");
 	} finally {
 		await f.close();

@@ -154,7 +154,7 @@ database_network_aliases() {
 
 check_database_network_ownership() {
   local container aliases
-  container=$("${compose[@]}" ps -q postgres)
+  container=$("${compose[@]}" ps --all -q postgres)
   [[ -n "$container" ]] || return 0
   aliases=$(database_network_aliases "$container")
   if [[ -n "$aliases" && " $aliases " != *" $database_service "* ]]; then
