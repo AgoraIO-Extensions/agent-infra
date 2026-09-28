@@ -50,6 +50,10 @@ async function fixture() {
 		`
 if [[ "$*" == *"context inspect"* ]]; then
   printf 'unix:///private/isolated/docker.sock\\n'
+elif [[ "$*" == *"container inspect isolated-control-plane"* ]]; then
+  printf '%s\\n' "$FAKE_KIND_LABEL"
+elif [[ "$*" == *"port isolated-control-plane 6443/tcp"* ]]; then
+  printf '%s\\n' "$FAKE_KIND_PORT"
 else
   printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
 fi`,
@@ -69,6 +73,10 @@ fi`,
 		`
 if [[ "$*" == *"config view"* ]]; then
   printf '%s' "$FAKE_KUBE_SERVER"
+elif [[ "$*" == *"get statefulsets -l agent-infra.agora.io/agent"* ]]; then
+  printf '%s' "$FAKE_AGENT_WORKLOADS"
+elif [[ "$*" == *"get pods -l agent-infra.agora.io/agent"* ]]; then
+  printf '%s' "$FAKE_AGENT_PODS"
 else
   printf 'kubectl %s\\n' "$*" >> "$COMMAND_LOG"
 fi`,
@@ -78,6 +86,10 @@ fi`,
 		PATH: `${bin}:${process.env.PATH}`,
 		COMMAND_LOG: log,
 		FAKE_KUBE_SERVER: "https://127.0.0.1:6443",
+		FAKE_KIND_LABEL: "isolated",
+		FAKE_KIND_PORT: "127.0.0.1:6443",
+		FAKE_AGENT_WORKLOADS: "",
+		FAKE_AGENT_PODS: "",
 		FAKE_HELM_UNINSTALL_EXIT: "",
 		PLATFORM_LOCAL_DOCKER_CONTEXT: "isolated",
 		PLATFORM_LOCAL_PROJECT: "agent-infra-verify",
@@ -182,7 +194,7 @@ test("local up rejects remote Kubernetes and missing Worker values before starti
 	}
 });
 
-test("local stop still stops Compose if Worker uninstall fails and reports the failure", async () => {
+test("local stop keeps Compose running if Worker uninstall fails", async () => {
 	const f = await fixture();
 	try {
 		const result = run("stop", { ...f.env, FAKE_HELM_UNINSTALL_EXIT: "7" });
@@ -192,10 +204,61 @@ test("local stop still stops Compose if Worker uninstall fails and reports the f
 			log,
 			/helm .* uninstall agent-infra-verify --ignore-not-found/,
 		);
+		assert.doesNotMatch(log, /compose .* stop/);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local commands reject a mismatched Docker kind endpoint and namespace", async () => {
+	const f = await fixture();
+	try {
+		const wrongPort = run("up", {
+			...f.env,
+			FAKE_KIND_PORT: "127.0.0.1:7443",
+		});
+		assert.notEqual(wrongPort.status, 0);
+		assert.match(wrongPort.stderr, /does not match the local kind/);
+		const wrongLabel = run("status", {
+			...f.env,
+			FAKE_KIND_LABEL: "other-cluster",
+		});
+		assert.notEqual(wrongLabel.status, 0);
+		assert.match(wrongLabel.stderr, /label does not match/);
+		const wrongNamespace = run("stop", {
+			...f.env,
+			PLATFORM_LOCAL_NAMESPACE: "another-project",
+		});
+		assert.notEqual(wrongNamespace.status, 0);
 		assert.match(
-			log,
-			/compose .* stop web platform-api object-storage postgres/,
+			wrongNamespace.stderr,
+			/must match the isolated Compose project/,
 		);
+		assert.equal(await readFile(f.log, "utf8"), "");
+	} finally {
+		await f.close();
+	}
+});
+
+test("local stop refuses active Agent Workloads and Pods before uninstall", async () => {
+	const f = await fixture();
+	try {
+		const activeWorkload = run("stop", {
+			...f.env,
+			FAKE_AGENT_WORKLOADS: "agent-1 1\n",
+		});
+		assert.notEqual(activeWorkload.status, 0);
+		assert.match(activeWorkload.stderr, /Stop each Agent/);
+		assert.equal(await readFile(f.log, "utf8"), "");
+
+		const activePod = run("stop", {
+			...f.env,
+			FAKE_AGENT_WORKLOADS: "agent-1 0\n",
+			FAKE_AGENT_PODS: "pod/agent-1-0\n",
+		});
+		assert.notEqual(activePod.status, 0);
+		assert.match(activePod.stderr, /Agent Pods to terminate/);
+		assert.equal(await readFile(f.log, "utf8"), "");
 	} finally {
 		await f.close();
 	}

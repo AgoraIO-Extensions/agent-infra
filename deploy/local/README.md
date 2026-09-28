@@ -10,8 +10,9 @@
 复制 [.env.example](.env.example) 到仓库外的本地配置文件，填写本地 Docker context、独立
 Compose project、API 专属部署目录、浏览器信任的 localhost TLS 文件、私有 kind kubeconfig、
 context、已创建的 namespace 和 Worker values 文件。执行前载入所填写的本地配置。
-`platform.sh` 拒绝远程 Docker endpoint 和非 loopback 的 Kubernetes API；Helm release
-与 Compose project 同名，普通停止保留数据库、对象存储卷和 Agent PVC。
+`platform.sh` 要求 Docker 使用本机 Unix socket，并核对 kind control-plane 容器标签、
+暴露端口与 kubeconfig 的 loopback API 地址；Helm release 和 namespace 均与 Compose
+project 同名。普通停止保留数据库、对象存储卷和 Agent PVC。
 
 API 专属目录至少包含 `platform-api.mjs`。该模块导出
 `createPlatformApiAssemblyInput()`，调用
@@ -71,7 +72,8 @@ Worker 与 API 使用同一模板 Digest、ModelCatalog revision 和资源政策
 [工程 Spec](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#93-服务端授权上下文)。
 
 `PLATFORM_LOCAL_KUBECONFIG` 必须为可读绝对路径，context 必须是 `kind-*` 且当前集群
-API 使用 loopback，namespace 须已创建。`PLATFORM_LOCAL_WORKER_VALUES` 是可读绝对
+API 使用与所选 Docker context 的 kind control-plane 一致的 loopback 端口，namespace
+须已创建且与 Compose project 同名。`PLATFORM_LOCAL_WORKER_VALUES` 是可读绝对
 路径，指向最终 Worker 镜像 Digest、`platformWorker.deploymentModule` 和受控 Secret
 引用；本地 `build` 不会自动发布镜像或生成 manifest Digest。迁移由上面的命令完成，
 脚本会固定关闭 Helm migration、目录服务及拓扑占位进程，并保持 Web/API 在 Compose 中。
@@ -85,8 +87,9 @@ bash deploy/local/platform.sh status
 namespace/Pod 标签和端口，缺省拒绝全部出站。不增加另一条 allow-all NetworkPolicy。
 Worker 预检与 Agent 模型调用都必须在真实网络上验证。
 
-停止时先通过 Platform 正常停止 Agent 并确认调谐完成，再调用脚本卸载本 project 的
-Worker release、停止 Compose 服务；这不删除 Agent PVC、数据库、对象存储卷或审计。
+停止时先通过 Platform 正常停止 Agent 并确认调谐完成。脚本随后核对 namespace 中的
+Agent StatefulSet 已缩至零副本且 Agent Pod 已退出；否则拒绝卸载 Worker。Worker 卸载
+失败时保持 Compose 服务运行。正常停止不删除 Agent PVC、数据库、对象存储卷或审计。
 再次启动复用相同 project 和数据卷。
 
 ```bash

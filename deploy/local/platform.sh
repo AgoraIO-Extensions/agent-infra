@@ -35,14 +35,54 @@ worker_context() {
     echo "PLATFORM_LOCAL_NAMESPACE must be a Kubernetes namespace name" >&2
     exit 1
   }
+  [[ "$PLATFORM_LOCAL_NAMESPACE" == "$PLATFORM_LOCAL_PROJECT" ]] || {
+    echo "PLATFORM_LOCAL_NAMESPACE must match the isolated Compose project" >&2
+    exit 1
+  }
   local server
   server=$(kubectl --kubeconfig "$PLATFORM_LOCAL_KUBECONFIG" --context "$PLATFORM_LOCAL_KUBE_CONTEXT" config view --minify --output=jsonpath='{.clusters[0].cluster.server}')
   [[ "$server" =~ ^https://(127\.0\.0\.1|\[::1\]):[1-9][0-9]*$ ]] || {
     echo "Local kind API server must use a loopback endpoint" >&2
     exit 1
   }
+  local cluster node cluster_label published_api
+  cluster=${PLATFORM_LOCAL_KUBE_CONTEXT#kind-}
+  node="$cluster-control-plane"
+  cluster_label=$("${docker_target[@]}" container inspect "$node" --format '{{index .Config.Labels "io.x-k8s.kind.cluster"}}') || {
+    echo "Local kind control-plane is missing from the selected Docker context" >&2
+    exit 1
+  }
+  [[ "$cluster_label" == "$cluster" ]] || {
+    echo "Local kind control-plane label does not match the selected context ($cluster_label != $cluster)" >&2
+    exit 1
+  }
+  published_api=$("${docker_target[@]}" port "$node" 6443/tcp) || {
+    echo "Local kind API port is not published by the selected Docker context" >&2
+    exit 1
+  }
+  [[ "$published_api" == "${server#https://}" ]] || {
+    echo "Kubeconfig API endpoint does not match the local kind control-plane" >&2
+    exit 1
+  }
   helm_target=(helm --kubeconfig "$PLATFORM_LOCAL_KUBECONFIG" --kube-context "$PLATFORM_LOCAL_KUBE_CONTEXT" --namespace "$PLATFORM_LOCAL_NAMESPACE")
   kube_target=(kubectl --kubeconfig "$PLATFORM_LOCAL_KUBECONFIG" --context "$PLATFORM_LOCAL_KUBE_CONTEXT" --namespace "$PLATFORM_LOCAL_NAMESPACE")
+}
+
+ensure_agents_stopped() {
+  local active_workloads active_pods
+  active_workloads=$("${kube_target[@]}" get statefulsets -l agent-infra.agora.io/agent -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.spec.replicas}{"\n"}{end}')
+  while read -r name replicas; do
+    [[ -z "$name" ]] && continue
+    [[ "$replicas" == 0 ]] || {
+      echo "Stop each Agent and wait for its Workload to scale to zero before stopping Platform" >&2
+      return 1
+    }
+  done <<< "$active_workloads"
+  active_pods=$("${kube_target[@]}" get pods -l agent-infra.agora.io/agent -o name)
+  [[ -z "$active_pods" ]] || {
+    echo "Wait for Agent Pods to terminate before stopping Platform" >&2
+    return 1
+  }
 }
 
 worker_values() {
@@ -88,10 +128,9 @@ case "${1:-}" in
     ;;
   stop)
     worker_context
-    worker_stop_status=0
-    "${helm_target[@]}" uninstall "$worker_release" --ignore-not-found || worker_stop_status=$?
+    ensure_agents_stopped
+    "${helm_target[@]}" uninstall "$worker_release" --ignore-not-found
     "${compose[@]}" stop web platform-api object-storage postgres
-    exit "$worker_stop_status"
     ;;
   *)
     echo "Usage: bash deploy/local/platform.sh build|data|migrate|up|status|stop" >&2
