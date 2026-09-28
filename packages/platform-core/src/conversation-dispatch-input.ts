@@ -177,8 +177,10 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			(parsedRelayKeyBinding === undefined) ||
 		(parsedRelayKeyBinding &&
 			(parsedExecutionSource === "web" || parsedExecutionSource === "wecom"
-				? parsedRelayKeyBinding.purpose !== "personal"
-				: parsedRelayKeyBinding.purpose !== "agent-default"))
+				? parsedRelayKeyBinding.purpose !== "personal" ||
+					parsedRelayKeyBinding.subjectId !== input.actorId
+				: parsedRelayKeyBinding.purpose !== "agent-default" ||
+					parsedRelayKeyBinding.subjectId !== input.agentId))
 	)
 		return unavailable();
 	if (

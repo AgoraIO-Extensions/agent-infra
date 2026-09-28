@@ -180,10 +180,8 @@ export function requireClaim(claim: ConversationDispatchClaimV1) {
 			!Number.isSafeInteger(keyVersion) ||
 			keyVersion < 1 ||
 			(claim.executionSource === "web" || claim.executionSource === "wecom"
-				? purpose !== "personal"
-				: (claim.executionSource === "platform-api" ||
-						claim.executionSource === "eval") &&
-					purpose !== "agent-default")
+				? purpose !== "personal" || subjectId !== claim.actorId
+				: purpose !== "agent-default" || subjectId !== claim.agentId)
 		) {
 			throw new TypeError("Conversation dispatch key binding is invalid");
 		}

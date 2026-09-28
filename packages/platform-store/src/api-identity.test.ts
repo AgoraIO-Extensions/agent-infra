@@ -336,18 +336,20 @@ describe("PostgreSQL API identity store", () => {
 			(agent_id, principal_type, principal_id, grant_type, authorization_revision)
 			values ('agent_grant_race', 'user', 'actor_race', 'manage', 'revision_1'),
 				('agent_grant_race', 'user', 'target_race', 'use', 'revision_1')`;
+		const credential = await store.issueCredential({
+			principal: { kind: "user", id: "actor_race" },
+			credential: "actor-race-credential",
+			scopes: ["agent:manage"],
+			expiresAt: null,
+			audit: { ...userAudit, action: "api.credential.issued" },
+		});
 		const actor = {
 			schemaVersion: 1 as const,
 			userId: "actor_race",
 			accountStatus: "active" as const,
 			principal: { kind: "user" as const, id: "actor_race" },
 			isAdministrator: false,
-			credential: {
-				principal: { kind: "user" as const, id: "actor_race" },
-				scopes: ["agent:manage" as const],
-				expiresAt: null,
-				revokedAt: null,
-			},
+			credential: credential.metadata,
 		};
 		const management = createApiIdentityManagementV1({
 			store,
@@ -399,6 +401,61 @@ describe("PostgreSQL API identity store", () => {
 			where agent_id = 'agent_grant_race' and principal_id in ('recipient_race', 'target_race')`;
 		expect(agent?.authorization_revision).toBe("revision_1");
 		expect(grants).toEqual([{ principal_id: "target_race", revoked_at: null }]);
+	});
+
+	it("rejects grant writes when a credential is revoked after actor resolution", async () => {
+		await adminClient`truncate platform.audit_events, platform.platform_api_credentials,
+			platform.agent_principal_grants, platform.agents cascade`;
+		await adminClient`insert into platform.agents (id, authorization_revision)
+			values ('agent_credential_race', 'revision_1')`;
+		await adminClient`insert into platform.agent_principal_grants
+			(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_credential_race', 'user', 'actor_race', 'manage', 'revision_1'),
+				('agent_credential_race', 'user', 'target_race', 'use', 'revision_1')`;
+		const credential = await store.issueCredential({
+			principal: { kind: "user", id: "actor_race" },
+			credential: "late-revoked-credential",
+			scopes: ["agent:manage"],
+			expiresAt: null,
+			audit: { ...userAudit, action: "api.credential.issued" },
+		});
+		const actor = {
+			schemaVersion: 1 as const,
+			userId: "actor_race",
+			accountStatus: "active" as const,
+			principal: { kind: "user" as const, id: "actor_race" },
+			isAdministrator: false,
+			credential: credential.metadata,
+		};
+		await store.revokeCredential(credential.credentialId);
+		await expect(
+			store.grantAgent({
+				actor,
+				agentId: "agent_credential_race",
+				principal: { kind: "user", id: "new_grantee" },
+				grantType: "use",
+				authorizationRevision: "revision_2",
+			}),
+		).rejects.toMatchObject({ code: "resource_unavailable" });
+		await expect(
+			store.revokeAgentGrant({
+				actor,
+				agentId: "agent_credential_race",
+				principal: { kind: "user", id: "target_race" },
+				grantType: "use",
+			}),
+		).rejects.toMatchObject({ code: "resource_unavailable" });
+		const [agent] = await adminClient`
+			select authorization_revision from platform.agents
+			where id = 'agent_credential_race'`;
+		const grants = await adminClient`
+			select principal_id, revoked_at from platform.agent_principal_grants
+			where agent_id = 'agent_credential_race' order by principal_id`;
+		expect(agent?.authorization_revision).toBe("revision_1");
+		expect(grants).toEqual([
+			{ principal_id: "actor_race", revoked_at: null },
+			{ principal_id: "target_race", revoked_at: null },
+		]);
 	});
 
 	it("rejects application credential transport at the Store boundary", async () => {

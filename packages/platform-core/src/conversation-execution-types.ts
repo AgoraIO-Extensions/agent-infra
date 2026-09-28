@@ -21,7 +21,12 @@ export function conversationExecutionSourceV1(
 	channelId: string,
 ): ConversationExecutionSourceV1 {
 	if (channelId === "web") return "web";
-	if (channelId === "wecom") return "wecom";
+	if (
+		channelId === "wecom" ||
+		channelId.startsWith("wecom_bot:") ||
+		channelId.startsWith("wecom_app:")
+	)
+		return "wecom";
 	if (channelId === "eval") return "eval";
 	if (channelId === "api" || channelId.startsWith("api:"))
 		return "platform-api";

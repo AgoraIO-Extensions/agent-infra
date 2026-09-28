@@ -25,7 +25,7 @@ export interface ApiIdentityActorV1 {
 	/** Present when this actor was authenticated with an API credential. */
 	readonly credential?: Pick<
 		ApiCredentialMetadataV1,
-		"principal" | "scopes" | "expiresAt" | "revokedAt"
+		"credentialId" | "principal" | "scopes" | "expiresAt" | "revokedAt"
 	>;
 }
 

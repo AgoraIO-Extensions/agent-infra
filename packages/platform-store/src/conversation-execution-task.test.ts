@@ -192,6 +192,45 @@ afterAll(async () => {
 });
 
 describe("durable task admission", () => {
+	it.each(["wecom_bot:bot", "wecom_app:app"])(
+		"binds %s work to the sender's personal Relay Key",
+		async (channelId) => {
+			const boundary = currentAuthority.taskBoundary;
+			if (!boundary) throw new Error("Expected task authorization boundary");
+			currentAuthority = {
+				...currentAuthority,
+				channelId,
+				taskBoundary: { ...boundary, channelId },
+			};
+			await sql`insert into platform.relay_key_subjects
+				(purpose, subject_id, last_version, current_version)
+				values ('personal', 'user_task', 1, 1)`;
+			await sql`insert into platform.relay_key_versions
+				(purpose, subject_id, key_version, key_id, ciphertext)
+				values ('personal', 'user_task', 1, 'relay-key-user-1', ${sql.json({
+					schemaVersion: 1,
+					purpose: "personal",
+					subjectId: "user_task",
+					keyId: "relay-key-user-1",
+					keyVersion: 1,
+				})})`;
+			const result = await taskUseCase().submitTask(
+				command(channelId.replace(":", "-")),
+			);
+			if (result.outcome !== "accepted")
+				throw new Error("Expected accepted WeCom task");
+			const [execution] = await sql`
+				select execution_source, relay_key_purpose, relay_key_subject_id
+				from platform.conversation_executions
+				where execution_id = ${result.result.executionId}`;
+			expect(execution).toMatchObject({
+				execution_source: "wecom",
+				relay_key_purpose: "personal",
+				relay_key_subject_id: "user_task",
+			});
+		},
+	);
+
 	it("rejects new standard work when the Agent-default Relay Key is missing", async () => {
 		await sql`delete from platform.relay_key_versions
 			where purpose = 'agent-default' and subject_id = 'agent_task'`;

@@ -37,7 +37,12 @@ type SubmitDecide = Parameters<
 
 function executionSource(channelId: string) {
 	if (channelId === "web") return "web" as const;
-	if (channelId === "wecom") return "wecom" as const;
+	if (
+		channelId === "wecom" ||
+		channelId.startsWith("wecom_bot:") ||
+		channelId.startsWith("wecom_app:")
+	)
+		return "wecom" as const;
 	if (channelId === "eval") return "eval" as const;
 	if (channelId === "api" || channelId.startsWith("api:"))
 		return "platform-api" as const;

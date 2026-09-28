@@ -2384,6 +2384,29 @@ describe("application original-generation isolation", () => {
 			},
 		});
 	});
+	it.each([
+		["web", "personal", "different-actor"],
+		["wecom", "personal", "different-actor"],
+		["platform-api", "agent-default", "different-agent"],
+		["eval", "agent-default", "different-agent"],
+	] as const)(
+		"rejects %s claims bound to another Relay Key subject",
+		(executionSource, purpose, subjectId) => {
+			expect(() =>
+				parseClaim(
+					claim({
+						executionSource,
+						relayKeyBinding: {
+							purpose,
+							subjectId,
+							keyId: "relay-key-1",
+							keyVersion: 1,
+						},
+					}),
+				),
+			).toThrow();
+		},
+	);
 	it("plans application isolation and confirmation on the original execution and generation", () => {
 		const original = applicationClaim();
 		const plan = planConversationGenerationIsolationV1({

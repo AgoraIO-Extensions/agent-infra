@@ -85,6 +85,32 @@ async function hasCurrentAgentManageAuthority(
 	actor: ApiIdentityActorV1,
 ): Promise<boolean> {
 	if (actor.accountStatus !== "active") return false;
+	if (actor.principal) {
+		const credentialId = actor.credential?.credentialId;
+		if (!credentialId) return false;
+		const [credential] = await transaction
+			.select({
+				principalType: platformApiCredentials.principalType,
+				principalId: platformApiCredentials.principalId,
+				scopes: platformApiCredentials.scopes,
+				expiresAt: platformApiCredentials.expiresAt,
+				revokedAt: platformApiCredentials.revokedAt,
+			})
+			.from(platformApiCredentials)
+			.where(eq(platformApiCredentials.id, credentialId))
+			.limit(1)
+			.for("share");
+		if (
+			!credential ||
+			credential.principalType !== actor.principal.kind ||
+			credential.principalId !== actor.principal.id ||
+			credential.revokedAt !== null ||
+			(credential.expiresAt !== null &&
+				credential.expiresAt.getTime() <= Date.now()) ||
+			!credential.scopes.includes("agent:manage")
+		)
+			return false;
+	}
 	if (actor.isAdministrator) return true;
 	if (actor.principal?.kind === "user" && actor.principal.id !== actor.userId)
 		return false;

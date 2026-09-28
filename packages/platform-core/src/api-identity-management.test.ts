@@ -66,6 +66,7 @@ function actor(
 		principal,
 		isAdministrator: false,
 		credential: {
+			credentialId: "credential-1",
 			principal,
 			scopes: [
 				"agent:create",
@@ -118,6 +119,7 @@ describe("API identity management authorization", () => {
 				{
 					...apiActor,
 					credential: {
+						credentialId: apiActor.credential.credentialId,
 						principal: apiActor.principal,
 						scopes: ["agent:read"],
 						expiresAt: null,
