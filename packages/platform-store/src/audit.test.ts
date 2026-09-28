@@ -382,6 +382,51 @@ describe("PostgreSQL Platform audit query", () => {
 		});
 	});
 
+	it.each([
+		"agent.lifecycle.stopped",
+		"agent.lifecycle.restarted",
+		"agent.lifecycle.creation_retried",
+		"agent.lifecycle.disabled",
+	])("decodes application actor for %s", async (action) => {
+		await seedAudit({
+			auditId: "audit_application_lifecycle",
+			occurredAt: new Date("2026-09-03T00:00:01.000Z"),
+			actorType: "application",
+			actorId: "application_api",
+			action,
+			targetType: "agent",
+			targetId: "agent_api",
+		});
+		const page = await openAdapter().listAudit(administrator, {
+			schemaVersion: 1,
+			limit: 10,
+		});
+		expect(page.items[0]).toMatchObject({
+			action,
+			actor: { kind: "application", actorId: "application_api" },
+			subject: { kind: "agent", subjectId: "agent_api" },
+		});
+	});
+
+	it("rejects a system actor on an Agent lifecycle audit", async () => {
+		await seedAudit({
+			auditId: "audit_invalid_lifecycle_actor",
+			occurredAt: new Date("2026-09-03T00:00:02.000Z"),
+			actorType: "system",
+			action: "agent.lifecycle.stopped",
+			targetType: "agent",
+		});
+		await expect(
+			openAdapter().listAudit(administrator, {
+				schemaVersion: 1,
+				limit: 10,
+			}),
+		).rejects.toMatchObject({
+			name: "PlatformAuditQueryError",
+			code: "unavailable",
+		});
+	});
+
 	it("decodes API identity audit metadata without exposing extra details", async () => {
 		await seedAudit({
 			auditId: "audit_api_identity",

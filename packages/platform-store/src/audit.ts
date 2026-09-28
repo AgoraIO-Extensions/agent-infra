@@ -88,21 +88,25 @@ const platformAuditActionMetadata = {
 	},
 	"agent.lifecycle.stopped": {
 		actorKind: "user",
+		actorKinds: ["user", "application"],
 		subjectKind: "agent",
 		details: false,
 	},
 	"agent.lifecycle.restarted": {
 		actorKind: "user",
+		actorKinds: ["user", "application"],
 		subjectKind: "agent",
 		details: false,
 	},
 	"agent.lifecycle.creation_retried": {
 		actorKind: "user",
+		actorKinds: ["user", "application"],
 		subjectKind: "agent",
 		details: false,
 	},
 	"agent.lifecycle.disabled": {
 		actorKind: "user",
+		actorKinds: ["user", "application"],
 		subjectKind: "agent",
 		details: false,
 	},
