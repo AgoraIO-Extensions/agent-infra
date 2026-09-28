@@ -7,6 +7,7 @@ import {
 	primaryKey,
 	text,
 	timestamp,
+	unique,
 	uniqueIndex,
 } from "drizzle-orm/pg-core";
 
@@ -69,6 +70,12 @@ export const relayKeyVersions = platformSchema.table(
 			foreignColumns: [relayKeySubjects.purpose, relayKeySubjects.subjectId],
 			name: "relay_key_version_subject_fk",
 		}),
+		unique("relay_key_version_identity_unique").on(
+			table.purpose,
+			table.subjectId,
+			table.keyVersion,
+			table.keyId,
+		),
 		uniqueIndex("relay_key_version_key_id_unique").on(table.keyId),
 		check(
 			"relay_key_version_purpose",

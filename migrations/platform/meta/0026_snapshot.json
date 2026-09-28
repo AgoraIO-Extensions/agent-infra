@@ -3896,7 +3896,18 @@
           ]
         }
       },
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "relay_key_version_identity_unique": {
+          "name": "relay_key_version_identity_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "purpose",
+            "subject_id",
+            "key_version",
+            "key_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "relay_key_version_purpose": {

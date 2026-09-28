@@ -63,6 +63,13 @@ export function validateRuntimeKeyedHandleTransitionV4(
 		throw new TypeError("Runtime keyed handle transition is unproven");
 	}
 	if (former.executionId === current.executionId) {
+		if (
+			retirement?.stopped !== false ||
+			retirement.drained !== false ||
+			retirement.sessionContinued !== true
+		) {
+			throw new TypeError("Runtime keyed handle transition is unproven");
+		}
 		return "reuse";
 	}
 	if (

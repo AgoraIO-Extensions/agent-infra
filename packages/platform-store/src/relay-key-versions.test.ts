@@ -1,3 +1,4 @@
+import { getTableConfig } from "drizzle-orm/pg-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -15,6 +16,7 @@ import {
 	revokeCurrentRelayKeyInTransaction,
 	snapshotRelayKeyCiphertextV1,
 } from "./relay-key-versions.ts";
+import { relayKeyVersions } from "./schema-relay-keys.ts";
 
 function ciphertext(binding: RelayKeyVersionBindingV1) {
 	return {
@@ -117,6 +119,22 @@ function transaction() {
 }
 
 describe("Relay Key version authority", () => {
+	it("declares the four-column Execution binding constraint alongside Key ID uniqueness", () => {
+		const config = getTableConfig(relayKeyVersions);
+		expect(
+			config.uniqueConstraints.map((constraint) => ({
+				name: constraint.name,
+				columns: constraint.columns.map((column) => column.name),
+			})),
+		).toContainEqual({
+			name: "relay_key_version_identity_unique",
+			columns: ["purpose", "subject_id", "key_version", "key_id"],
+		});
+		expect(config.indexes.map((index) => index.config.name)).toContain(
+			"relay_key_version_key_id_unique",
+		);
+	});
+
 	it("pins K1 for accepted work while K2 and later versions become current", async () => {
 		const { sql, versions } = transaction();
 		const target = { purpose: "personal" as const, subjectId: "user-a" };
@@ -269,8 +287,21 @@ describe("Relay Key version authority on PostgreSQL", () => {
 					key_id text not null unique,
 					ciphertext jsonb not null,
 					primary key (purpose, subject_id, key_version),
+					constraint relay_key_version_identity_unique
+						unique (purpose, subject_id, key_version, key_id),
 					foreign key (purpose, subject_id)
 						references platform.relay_key_subjects (purpose, subject_id)
+				)
+			`;
+			await client`
+				create table platform.relay_key_binding_probe (
+					purpose text not null,
+					subject_id text not null,
+					key_version bigint not null,
+					key_id text not null,
+					foreign key (purpose, subject_id, key_version, key_id)
+						references platform.relay_key_versions
+							(purpose, subject_id, key_version, key_id)
 				)
 			`;
 		} finally {
@@ -279,6 +310,35 @@ describe("Relay Key version authority on PostgreSQL", () => {
 	}, 120_000);
 
 	afterAll(async () => database?.stop());
+
+	it("enforces the exact four-column binding in PostgreSQL", async () => {
+		if (!database) throw new Error("PostgreSQL test database is unavailable");
+		const client = postgres(database.databaseUrl, { max: 2 });
+		try {
+			const first = await client.begin((sql) =>
+				replaceRelayKeyVersionInTransaction(sql, {
+					purpose: "personal",
+					subjectId: "user-fk",
+					expectedCurrentVersion: null,
+					encrypt: ciphertext,
+				}),
+			);
+			if (first.outcome !== "replaced") throw new Error();
+			const binding = first.binding;
+			await client`
+				insert into platform.relay_key_binding_probe
+					(purpose, subject_id, key_version, key_id)
+				values (${binding.purpose}, ${binding.subjectId}, ${binding.keyVersion}, ${binding.keyId})
+			`;
+			await expect(client`
+				insert into platform.relay_key_binding_probe
+					(purpose, subject_id, key_version, key_id)
+				values (${binding.purpose}, ${binding.subjectId}, ${binding.keyVersion}, ${"wrong-key"})
+			`).rejects.toMatchObject({ code: "23503" });
+		} finally {
+			await client.end();
+		}
+	}, 120_000);
 
 	it("serializes concurrent replacement and preserves pinned versions after revoke", async () => {
 		if (!database) throw new Error("PostgreSQL test database is unavailable");

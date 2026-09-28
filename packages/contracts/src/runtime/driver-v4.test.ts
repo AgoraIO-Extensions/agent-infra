@@ -23,9 +23,31 @@ const k1: RuntimeKeyedHandleScopeV4 = {
 	},
 };
 
-it("reuses a native handle only within the same Execution and Key scope", () => {
+it("reuses a native handle only with proven same-Execution continuity", () => {
 	expect(validateRuntimeKeyedHandleTransitionV4(null, k1)).toBe("start");
-	expect(validateRuntimeKeyedHandleTransitionV4(k1, k1)).toBe("reuse");
+	expect(
+		validateRuntimeKeyedHandleTransitionV4(k1, k1, {
+			stopped: false,
+			drained: false,
+			sessionContinued: true,
+		}),
+	).toBe("reuse");
+});
+
+it("rejects same-Execution reuse without continuity or after retirement", () => {
+	expect(() => validateRuntimeKeyedHandleTransitionV4(k1, k1)).toThrow(
+		"Runtime keyed handle transition is unproven",
+	);
+	for (const retirement of [
+		{ stopped: true, drained: false, sessionContinued: true },
+		{ stopped: false, drained: true, sessionContinued: true },
+		{ stopped: true, drained: true, sessionContinued: true },
+		{ stopped: false, drained: false, sessionContinued: false },
+	]) {
+		expect(() =>
+			validateRuntimeKeyedHandleTransitionV4(k1, k1, retirement),
+		).toThrow("Runtime keyed handle transition is unproven");
+	}
 });
 
 it("rejects a changed Session scope or a Key rebind within one Execution", () => {

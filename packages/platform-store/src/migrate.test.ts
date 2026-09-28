@@ -270,8 +270,6 @@ describe("Platform PostgreSQL migration foundation", () => {
 						...config.uniqueConstraints.map((constraint) => constraint.name),
 					];
 				})
-				// The composite FK target constraint is authored in the SQL migration.
-				.concat("relay_key_version_identity_unique")
 				.toSorted();
 			const migratedIndexes = await client`
 					select indexes.indexname
