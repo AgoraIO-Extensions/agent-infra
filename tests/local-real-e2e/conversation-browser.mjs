@@ -312,14 +312,14 @@ async function run(input, evidence) {
 		assert(
 			events.length > 0 &&
 				events.every(
-						(event) =>
-							event.eventId &&
-							event.conversationId === conversationId &&
-							(!event.executionId || event.executionId === receipt.executionId),
-					) &&
-					events.some((event) => event.executionId === receipt.executionId),
-				"Persisted events must stay bound to this conversation and execution",
-			);
+					(event) =>
+						event.eventId &&
+						event.conversationId === conversationId &&
+						(!event.executionId || event.executionId === receipt.executionId),
+				) &&
+				events.some((event) => event.executionId === receipt.executionId),
+			"Persisted events must stay bound to this conversation and execution",
+		);
 		assert.equal(
 			new Set(events.map((event) => event.eventId)).size,
 			events.length,
