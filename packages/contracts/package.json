@@ -19,6 +19,11 @@
 			"import": "./dist/enterprise-directory.mjs"
 		},
 		"./openapi/enterprise-directory.v1": "./artifacts/openapi/enterprise-directory.v1.openapi.json",
+		"./platform-auth": {
+			"types": "./dist/platform-auth.d.mts",
+			"import": "./dist/platform-auth.mjs"
+		},
+		"./openapi/platform-auth.v1": "./artifacts/openapi/platform-auth.v1.openapi.json",
 		"./runtime": {
 			"types": "./dist/runtime/index.d.mts",
 			"import": "./dist/runtime/index.mjs"

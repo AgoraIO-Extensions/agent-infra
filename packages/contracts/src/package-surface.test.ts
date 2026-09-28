@@ -24,6 +24,13 @@ describe("contracts package surface", () => {
 		expect(manifest.exports["./openapi/enterprise-directory.v1"]).toBe(
 			"./artifacts/openapi/enterprise-directory.v1.openapi.json",
 		);
+		expect(manifest.exports["./platform-auth"]).toEqual({
+			types: "./dist/platform-auth.d.mts",
+			import: "./dist/platform-auth.mjs",
+		});
+		expect(manifest.exports["./openapi/platform-auth.v1"]).toBe(
+			"./artifacts/openapi/platform-auth.v1.openapi.json",
+		);
 		expect(manifest.exports["./workload"]).toEqual({
 			types: "./dist/workload/index.d.mts",
 			import: "./dist/workload/index.mjs",
@@ -87,6 +94,10 @@ describe("contracts package surface", () => {
 			"artifacts/openapi/enterprise-directory.v1.openapi.json",
 		);
 		expect(packedFiles).toContain("dist/pilot/index.d.mts");
+		expect(packedFiles).toContain("dist/platform-auth.d.mts");
+		expect(packedFiles).toContain(
+			"artifacts/openapi/platform-auth.v1.openapi.json",
+		);
 		expect(packedFiles).toContain("dist/workload/index.d.mts");
 		expect(packedFiles).toContain("dist/runtime/index.d.mts");
 		expect(packedFiles).toContain("artifacts/openapi/common.v1.openapi.json");

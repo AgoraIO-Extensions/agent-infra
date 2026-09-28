@@ -139,6 +139,11 @@ export {
 	type ProductionPlatformApiInputV1,
 } from "./deployment.js";
 export {
+	createLdapBrowserAdapter,
+	type LdapBrowserInput,
+	type LdapSessionStore,
+} from "./ldap-browser.js";
+export {
 	createPendingSecretRecordAttachmentResolverV1,
 	type PreparedSecretPlaintextV1,
 } from "./secret-preparation.js";
