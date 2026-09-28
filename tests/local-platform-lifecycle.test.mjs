@@ -65,6 +65,8 @@ fi`,
 printf 'helm %s\\n' "$*" >> "$COMMAND_LOG"
 if [[ "$*" == *"uninstall"* && -n "$FAKE_HELM_UNINSTALL_EXIT" ]]; then
   exit "$FAKE_HELM_UNINSTALL_EXIT"
+elif [[ "$*" == *"upgrade --install"* && -n "$FAKE_HELM_UPGRADE_EXIT" ]]; then
+  exit "$FAKE_HELM_UPGRADE_EXIT"
 fi`,
 	);
 	await executable(
@@ -101,6 +103,7 @@ fi`,
 		FAKE_WORKER_PODS: "",
 		FAKE_RESTORE_SCALE_EXIT: "",
 		FAKE_HELM_UNINSTALL_EXIT: "",
+		FAKE_HELM_UPGRADE_EXIT: "",
 		PLATFORM_LOCAL_DOCKER_CONTEXT: "isolated",
 		PLATFORM_LOCAL_PROJECT: "agent-infra-verify",
 		PLATFORM_LOCAL_API_DIRECTORY: api,
@@ -144,12 +147,16 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		);
 		assert.match(
 			up[1],
-			/^docker .* compose .* up --detach --wait postgres object-storage platform-api web$/,
+			/^docker .* compose .* up --detach --wait postgres object-storage$/,
 		);
 		assert.match(up[2], /^helm .* upgrade --install agent-infra-verify /);
 		assert.match(
 			up[3],
 			/^kubectl .* --context kind-isolated --namespace agent-infra-verify rollout status deployment\/agent-infra-verify-agent-infra-platform-worker/,
+		);
+		assert.match(
+			up[4],
+			/^docker .* compose .* up --detach --wait platform-api web$/,
 		);
 
 		await writeFile(f.log, "");
@@ -185,6 +192,23 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		assert.match(stopSteps[3], /helm .* uninstall/);
 		assert.match(stopSteps[4], /compose .* stop object-storage postgres/);
 		assert.doesNotMatch(stop, /--volumes|delete|down/);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up keeps API and Web closed when Worker upgrade fails", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", { ...f.env, FAKE_HELM_UPGRADE_EXIT: "7" });
+		assert.notEqual(result.status, 0);
+		const steps = (await readFile(f.log, "utf8")).trim().split("\n");
+		assert.match(
+			steps[1],
+			/compose .* up --detach --wait postgres object-storage$/,
+		);
+		assert.match(steps[2], /helm .* upgrade --install/);
+		assert.equal(steps.length, 3);
 	} finally {
 		await f.close();
 	}

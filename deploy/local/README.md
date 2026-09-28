@@ -82,7 +82,8 @@ API 使用与所选 Docker context 的 kind control-plane 一致的 loopback 端
 `runtimeAuthSecretRef`；脚本把部署模块固定为镜像内的
 `file:///app/dist/deployment.mjs`。本地 `build` 不会自动发布
 镜像或生成 manifest Digest。迁移由上面的命令完成，
-脚本会固定关闭 Helm migration、目录服务及拓扑占位进程，并保持 Web/API 在 Compose 中。
+脚本会固定关闭 Helm migration、目录服务及拓扑占位进程；先启动数据服务并等待 Worker
+Deployment 就绪，再开放 Compose 中的 Web/API。Worker 启动失败时 Web/API 不启动。
 
 ```bash
 bash deploy/local/platform.sh up

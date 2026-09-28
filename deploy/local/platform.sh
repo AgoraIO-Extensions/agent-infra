@@ -126,9 +126,10 @@ case "${1:-}" in
     worker_context
     worker_values
     "${helm_target[@]}" template "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" >/dev/null
-    "${compose[@]}" up --detach --wait postgres object-storage platform-api web
+    "${compose[@]}" up --detach --wait postgres object-storage
     "${helm_target[@]}" upgrade --install "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" --wait --timeout 5m
     "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
+    "${compose[@]}" up --detach --wait platform-api web
     ;;
   status)
     worker_context
