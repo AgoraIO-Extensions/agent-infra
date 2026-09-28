@@ -4,7 +4,7 @@ import {
 	PersistedConversationEventV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import {
 	execution,
 	history,
@@ -78,6 +78,31 @@ function activeAgent() {
 			modelSelection: true,
 			supplementaryInstruction: true,
 		},
+	});
+}
+
+async function keepConversationStreamOpen(page: Page) {
+	await page.addInitScript(() => {
+		const realFetch = window.fetch.bind(window);
+		window.fetch = async (input, init) => {
+			const request = new Request(input, init);
+			const response = await realFetch(request);
+			if (!new URL(request.url).pathname.endsWith("/events")) return response;
+			void response.body?.cancel();
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode(": heartbeat\n\n"));
+					const close = () => controller.close();
+					if (request.signal.aborted) close();
+					else request.signal.addEventListener("abort", close, { once: true });
+				},
+			});
+			return new Response(body, {
+				status: response.status,
+				statusText: response.statusText,
+				headers: response.headers,
+			});
+		};
 	});
 }
 
@@ -436,28 +461,7 @@ test("saves the next-message model and stops the bound execution", async ({
 			],
 		});
 	};
-	await page.addInitScript(() => {
-		const realFetch = window.fetch.bind(window);
-		window.fetch = async (input, init) => {
-			const request = new Request(input, init);
-			const response = await realFetch(request);
-			if (!new URL(request.url).pathname.endsWith("/events")) return response;
-			void response.body?.cancel();
-			const body = new ReadableStream<Uint8Array>({
-				start(controller) {
-					controller.enqueue(new TextEncoder().encode(": heartbeat\n\n"));
-					const close = () => controller.close();
-					if (request.signal.aborted) close();
-					else request.signal.addEventListener("abort", close, { once: true });
-				},
-			});
-			return new Response(body, {
-				status: response.status,
-				statusText: response.statusText,
-				headers: response.headers,
-			});
-		};
-	});
+	await keepConversationStreamOpen(page);
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
@@ -502,7 +506,7 @@ test("saves the next-message model and stops the bound execution", async ({
 			});
 			return;
 		}
-		if (path.endsWith("/stop")) {
+		if (path.endsWith("/stops")) {
 			stopBody = request.postDataJSON();
 			stopIdempotencyKey = request.headers()["idempotency-key"];
 			phase = "cancelled";
@@ -601,6 +605,7 @@ test("regenerates a terminal answer and opens its execution details", async ({
 		messages: [originalMessage, answer],
 	});
 	let regenerateBody: unknown;
+	await keepConversationStreamOpen(page);
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
@@ -628,7 +633,7 @@ test("regenerates a terminal answer and opens its execution details", async ({
 			await route.fulfill({ json: execution(conversationId, executionId) });
 			return;
 		}
-		if (path.endsWith("/regenerate")) {
+		if (path.endsWith("/regenerations")) {
 			regenerateBody = request.postDataJSON();
 			await route.fulfill({
 				status: 202,
