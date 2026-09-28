@@ -2,7 +2,7 @@
 
 `enterprise-directory-sync` 使用独立数据库和企微通讯录读取权限，抓取配置根部门及其全部子部门的员工详情。每个部门成功返回、成员关系一致且部门图完整后，服务才将一份快照作为单条数据库记录发布。失败不会修改已发布版本；读取时仍按 `validUntil` 拒绝过期版本。
 
-数据库读写由 `enterprise-directory-store` 的 Drizzle Adapter 完成；迁移 Job 使用独立迁移账号按 `migrations/enterprise-directory/` 的 Drizzle journal 执行。部署方须为运行账号授予 `enterprise_directory` schema 的 `USAGE` 及 `snapshots` 表的 `SELECT/INSERT`，迁移账号须能创建独立的迁移 history schema。
+数据库读写由 `enterprise-directory-store` 的 Drizzle Adapter 完成；迁移 Job 使用独立迁移账号按 `migrations/enterprise-directory/` 的 Drizzle journal 执行。迁移入口要求 `DIRECTORY_RUNTIME_DATABASE_ROLE` 指定已存在、与迁移账号不同的运行数据库角色，并在迁移后授予该角色 `enterprise_directory` schema 的 `USAGE` 及 `snapshots` 表的 `SELECT/INSERT`，不授予删改或迁移 history 访问。迁移账号须能创建独立的迁移 history schema。部署方仍须分别配置迁移与运行账号凭据。
 
 内部接口为 `GET /internal/directory/snapshot`，Zod 源与生成的 OpenAPI 3.1 分别由 `@agent-infra/contracts/enterprise-directory` 和 `@agent-infra/contracts/openapi/enterprise-directory.v1` 发布；仅经带证书校验的 HTTPS 和 `Authorization: Bearer <部署密钥>` 调用。成功返回 `schemaVersion: 1`、UUID `revision`、`source: "wecom"`、`rootDepartmentId`、毫秒时间戳 `fetchedAt` 和 `validUntil`、`complete: true`、`departments` 与 `members`。`fetchedAt` 是抓取完成时间，`validUntil` 最迟为抓取开始后 24 小时；扫描超过一天时拒绝发布。无有效快照返回 503，认证失败返回 401；响应禁止缓存。调用方必须验证 Schema、完整性和时效，不能保留旧版作为权限来源。
 

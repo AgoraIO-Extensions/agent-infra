@@ -44,7 +44,13 @@ export function createPostgresDirectoryStore(
 export async function migrateDirectoryStore(
 	databaseUrl: string,
 	migrationsFolder: string,
+	runtimeRole: string,
 ): Promise<void> {
+	if (
+		!/^[a-z_][a-z0-9_]{0,62}$/u.test(runtimeRole) ||
+		runtimeRole === decodeURIComponent(new URL(databaseUrl).username)
+	)
+		throw new Error("DIRECTORY_RUNTIME_DATABASE_ROLE is invalid");
 	const sql = postgres(databaseUrl, { max: 1 });
 	try {
 		await sql`
@@ -57,6 +63,8 @@ export async function migrateDirectoryStore(
 			migrationsSchema: "enterprise_directory_migrations",
 			migrationsTable: "history",
 		});
+		await sql`GRANT USAGE ON SCHEMA enterprise_directory TO ${sql(runtimeRole)}`;
+		await sql`GRANT SELECT, INSERT ON TABLE enterprise_directory.snapshots TO ${sql(runtimeRole)}`;
 	} finally {
 		await sql.end();
 	}

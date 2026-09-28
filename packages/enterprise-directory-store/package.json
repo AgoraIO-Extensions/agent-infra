@@ -16,7 +16,8 @@
 	],
 	"scripts": {
 		"build": "tsdown",
-		"check-types": "tsc --noEmit"
+		"check-types": "tsc --noEmit",
+		"test": "pnpm build && vitest run src"
 	},
 	"dependencies": {
 		"@agent-infra/enterprise-directory": "workspace:*",
@@ -27,6 +28,7 @@
 		"@agent-infra/config": "workspace:*",
 		"@types/node": "catalog:",
 		"tsdown": "0.22.14",
-		"typescript": "catalog:"
+		"typescript": "catalog:",
+		"vitest": "catalog:"
 	}
 }
