@@ -1,0 +1,136 @@
+{
+  "$defs": {
+    "RuntimeModelConfigurationV4": {
+      "additionalProperties": false,
+      "properties": {
+        "configVersion": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "type": "string"
+        },
+        "defaultModelOptionId": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "type": "string"
+        },
+        "defaultReasoningLevel": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "type": "string"
+        },
+        "modelOptions": {
+          "items": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "authentication": {
+                    "const": "bearer",
+                    "type": "string"
+                  },
+                  "endpoint": {
+                    "maxLength": 2048,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "model": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "modelOptionId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "protocol": {
+                    "const": "openai-responses-v1",
+                    "type": "string"
+                  },
+                  "reasoningLevels": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                      "type": "string"
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "modelOptionId",
+                  "endpoint",
+                  "model",
+                  "reasoningLevels",
+                  "protocol",
+                  "authentication"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "authentication": {
+                    "enum": [
+                      "bearer",
+                      "api-key"
+                    ],
+                    "type": "string"
+                  },
+                  "endpoint": {
+                    "maxLength": 2048,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "model": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "modelOptionId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "protocol": {
+                    "const": "anthropic-messages-v1",
+                    "type": "string"
+                  },
+                  "reasoningLevels": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                      "type": "string"
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "modelOptionId",
+                  "endpoint",
+                  "model",
+                  "reasoningLevels",
+                  "protocol",
+                  "authentication"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 4,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "configVersion",
+        "defaultModelOptionId",
+        "defaultReasoningLevel",
+        "modelOptions"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-configuration.v4.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Infra Runtime Configuration V4"
+}

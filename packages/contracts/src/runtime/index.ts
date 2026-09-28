@@ -131,6 +131,7 @@ import {
 	RuntimeBusinessGrantClaimsV4Schema,
 	RuntimeExecutionGrantV4Schema,
 	RuntimeExecutionSourceV1Schema,
+	RuntimePrivateRelayKeyFieldV1Schema,
 	RuntimeRelayKeyBindingV1Schema,
 	RuntimeRelayKeyDeliveryV1Schema,
 	RuntimeSubmitTurnRequestV4Schema,
@@ -144,6 +145,7 @@ export const RuntimeHostV4SchemaDefinitions = {
 	RuntimeExecutionSourceV1: RuntimeExecutionSourceV1Schema,
 	RuntimeRelayKeyBindingV1: RuntimeRelayKeyBindingV1Schema,
 	RuntimeRelayKeyDeliveryV1: RuntimeRelayKeyDeliveryV1Schema,
+	RuntimePrivateRelayKeyFieldV1: RuntimePrivateRelayKeyFieldV1Schema,
 	RuntimeSubmitTurnRequestV4: RuntimeSubmitTurnRequestV4Schema,
 	RuntimeSupplementRequestV4: RuntimeSupplementRequestV4Schema,
 };

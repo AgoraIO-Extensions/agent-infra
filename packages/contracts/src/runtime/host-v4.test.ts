@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import {
 	RuntimeBusinessGrantClaimsV4Schema,
+	RuntimePrivateRelayKeyFieldV1Schema,
 	type RuntimeSubmitTurnRequestV4,
 	RuntimeSubmitTurnRequestV4Schema,
 	type RuntimeSupplementRequestV4,
@@ -10,6 +11,7 @@ import {
 	runtimeRequestDigestV4,
 	runtimeRequestSigningPayloadV4,
 	validateRuntimeBusinessBindingV4,
+	validateRuntimePrivateRelayKeyFieldV1,
 } from "./host-v4.js";
 
 type BusinessRequest = RuntimeSubmitTurnRequestV4 | RuntimeSupplementRequestV4;
@@ -40,7 +42,6 @@ const request = RuntimeSubmitTurnRequestV4Schema.parse({
 		ciphertextRef: "key-1",
 		version: 1,
 	},
-	keyDelivery: { relayKey: "private-key-value-k1" },
 	input: { text: "hello", attachments: [] },
 	selection: {
 		schemaVersion: 1,
@@ -73,6 +74,7 @@ function claims(value: BusinessRequest) {
 		sessionGeneration: value.sessionGeneration,
 		traceId: value.traceId,
 		executionSource: value.executionSource,
+		relayKeyBinding: value.keyBinding,
 		hostSessionRef: value.hostSessionRef,
 		operation: value.operation,
 		requestDigest: digest(value),
@@ -83,12 +85,28 @@ function claims(value: BusinessRequest) {
 	});
 }
 
+const privateField = RuntimePrivateRelayKeyFieldV1Schema.parse({
+	schemaVersion: 1,
+	executionId: request.executionId,
+	keyBinding: request.keyBinding,
+	keyDelivery: { relayKey: "private-key-value-k1" },
+});
+
 it("binds the Key reference/version into the Grant digest without the Key", async () => {
 	const payload = runtimeRequestSigningPayloadV4(request);
 	expect(payload).toContain('"ciphertextRef":"key-1"');
 	expect(payload).toContain('"version":1');
 	expect(payload).not.toContain("private-key-value-k1");
-	expect(payload).not.toContain("keyDelivery");
+	expect(payload).not.toContain("relayKey");
+	expect(
+		RuntimeSubmitTurnRequestV4Schema.safeParse({
+			...request,
+			keyDelivery: privateField.keyDelivery,
+		}).success,
+	).toBe(false);
+	expect(validateRuntimePrivateRelayKeyFieldV1(privateField, request)).toEqual(
+		privateField,
+	);
 	expect(await runtimeRequestDigestV4(request)).toBe(digest(request));
 	await expect(
 		validateRuntimeBusinessBindingV4(request, claims(request)),
@@ -121,6 +139,18 @@ it("rejects substituted subject, channel, operation fence and stale Grant digest
 			...grant,
 			requestDigest: "0".repeat(64),
 		}),
+	).rejects.toThrow("RuntimeHostV4 binding is invalid");
+	await expect(
+		validateRuntimeBusinessBindingV4(request, {
+			...grant,
+			relayKeyBinding: { ...grant.relayKeyBinding, version: 2 },
+		}),
+	).rejects.toThrow("RuntimeHostV4 binding is invalid");
+	await expect(
+		validateRuntimeBusinessBindingV4(request, {
+			...grant,
+			purpose: "control",
+		} as unknown),
 	).rejects.toThrow("RuntimeHostV4 binding is invalid");
 });
 
@@ -292,7 +322,7 @@ it("rejects static credential fallback and an unprintable private Key", () => {
 	expect(
 		RuntimeSubmitTurnRequestV4Schema.safeParse({
 			...request,
-			keyDelivery: undefined,
+			keyBinding: undefined,
 		}).success,
 	).toBe(false);
 	expect(
@@ -304,7 +334,25 @@ it("rejects static credential fallback and an unprintable private Key", () => {
 	expect(
 		RuntimeSubmitTurnRequestV4Schema.safeParse({
 			...request,
-			keyDelivery: { relayKey: "private-key-value-k1\n" },
+			keyBinding: { ...request.keyBinding, version: 0 },
 		}).success,
 	).toBe(false);
+	for (const relayKey of [
+		" private-key-value-k1",
+		"private-key-value-k1 ",
+		"private-key-value k1",
+	]) {
+		expect(
+			RuntimePrivateRelayKeyFieldV1Schema.safeParse({
+				...privateField,
+				keyDelivery: { relayKey },
+			}).success,
+		).toBe(false);
+	}
+	expect(() =>
+		validateRuntimePrivateRelayKeyFieldV1(
+			{ ...privateField, executionId: "other-execution" },
+			request,
+		),
+	).toThrow("RuntimeHostV4 private Key field is invalid");
 });

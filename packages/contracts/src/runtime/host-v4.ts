@@ -39,6 +39,7 @@ export const RuntimeBusinessGrantClaimsV4Schema =
 	RuntimeBusinessGrantClaimsV2Schema.extend({
 		schemaVersion: z.literal(4),
 		executionSource: RuntimeExecutionSourceV1Schema,
+		relayKeyBinding: RuntimeRelayKeyBindingV1Schema,
 	});
 export type RuntimeBusinessGrantClaimsV4 = z.infer<
 	typeof RuntimeBusinessGrantClaimsV4Schema
@@ -51,13 +52,27 @@ export const RuntimeExecutionGrantV4Schema = z.strictObject({
 });
 
 // This field is confined to the authenticated, confidential Worker-Host transport.
+// It is deliberately not part of a business request or Grant claims. The
+// surrounding private transport must bind it to the same accepted Execution
+// and key reference before the Host can expose it to a Driver.
 export const RuntimeRelayKeyDeliveryV1Schema = z.strictObject({
 	relayKey: z
 		.string()
 		.min(16)
 		.max(8192)
-		.regex(/^[\x20-\x7e]+$/),
+		.regex(/^[\x21-\x7e]+$/),
 });
+
+export const RuntimePrivateRelayKeyFieldV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	executionId: OpaqueIdV1Schema,
+	keyBinding: RuntimeRelayKeyBindingV1Schema,
+	keyDelivery: RuntimeRelayKeyDeliveryV1Schema,
+});
+
+export type RuntimePrivateRelayKeyFieldV1 = z.infer<
+	typeof RuntimePrivateRelayKeyFieldV1Schema
+>;
 
 const context = {
 	schemaVersion: z.literal(4),
@@ -75,7 +90,6 @@ const context = {
 	operation: RuntimeOperationBindingV2Schema,
 	grant: RuntimeExecutionGrantV4Schema,
 	keyBinding: RuntimeRelayKeyBindingV1Schema,
-	keyDelivery: RuntimeRelayKeyDeliveryV1Schema,
 };
 
 export const RuntimeSubmitTurnRequestV4Schema = z.strictObject({
@@ -102,60 +116,106 @@ type RuntimeBusinessRequestV4 =
 	| RuntimeSupplementRequestV4;
 
 export async function validateRuntimeBusinessBindingV4(
-	request: RuntimeBusinessRequestV4,
-	claims: RuntimeBusinessGrantClaimsV4,
+	request: unknown,
+	claims: unknown,
 ): Promise<void> {
-	const command = "selection" in request ? "turn.submit" : "turn.supplement";
-	const operationKind = "selection" in request ? "execution" : "message";
+	let parsedRequest: RuntimeBusinessRequestV4;
+	let parsedClaims: RuntimeBusinessGrantClaimsV4;
+	try {
+		parsedRequest =
+			request !== null && typeof request === "object" && "selection" in request
+				? RuntimeSubmitTurnRequestV4Schema.parse(request)
+				: RuntimeSupplementRequestV4Schema.parse(request);
+		parsedClaims = RuntimeBusinessGrantClaimsV4Schema.parse(claims);
+	} catch {
+		throw new TypeError("RuntimeHostV4 binding is invalid");
+	}
+	const command =
+		"selection" in parsedRequest ? "turn.submit" : "turn.supplement";
+	const operationKind = "selection" in parsedRequest ? "execution" : "message";
 	const expectedPurpose =
-		claims.executionSource === "web" || claims.executionSource === "wecom"
+		parsedClaims.executionSource === "web" ||
+		parsedClaims.executionSource === "wecom"
 			? "personal"
 			: "agent-default";
 	const expectedSubject =
-		request.keyBinding.purpose === "personal"
-			? request.principal.kind === "user"
-				? request.principal.id
+		parsedRequest.keyBinding.purpose === "personal"
+			? parsedRequest.principal.kind === "user"
+				? parsedRequest.principal.id
 				: null
-			: request.agentId;
-	const requestedAttachments = new Set(request.input.attachments);
+			: parsedRequest.agentId;
+	const requestedAttachments = new Set(parsedRequest.input.attachments);
 	const claimedAttachments = new Set(
-		claims.attachments.map((entry) => entry.attachmentId),
+		parsedClaims.attachments.map((entry) => entry.attachmentId),
 	);
 	if (
-		request.executionSource !== claims.executionSource ||
-		request.keyBinding.purpose !== expectedPurpose ||
+		parsedRequest.executionSource !== parsedClaims.executionSource ||
+		parsedRequest.keyBinding.purpose !== expectedPurpose ||
 		expectedSubject === null ||
-		request.keyBinding.subjectId !== expectedSubject ||
-		claims.allowedCommands[0] !== command ||
-		request.operation.kind !== operationKind ||
+		parsedRequest.keyBinding.subjectId !== expectedSubject ||
+		parsedClaims.relayKeyBinding.purpose !== parsedRequest.keyBinding.purpose ||
+		parsedClaims.relayKeyBinding.subjectId !==
+			parsedRequest.keyBinding.subjectId ||
+		parsedClaims.relayKeyBinding.ciphertextRef !==
+			parsedRequest.keyBinding.ciphertextRef ||
+		parsedClaims.relayKeyBinding.version !== parsedRequest.keyBinding.version ||
+		parsedClaims.allowedCommands[0] !== command ||
+		parsedRequest.operation.kind !== operationKind ||
 		(operationKind === "execution" &&
-			(request.operation.id !== request.executionId ||
-				request.operation.deliveryFence !==
-					request.operation.executionDeliveryFence)) ||
-		requestedAttachments.size !== request.input.attachments.length ||
-		claimedAttachments.size !== claims.attachments.length ||
+			(parsedRequest.operation.id !== parsedRequest.executionId ||
+				parsedRequest.operation.deliveryFence !==
+					parsedRequest.operation.executionDeliveryFence)) ||
+		requestedAttachments.size !== parsedRequest.input.attachments.length ||
+		claimedAttachments.size !== parsedClaims.attachments.length ||
 		claimedAttachments.size !== requestedAttachments.size ||
-		claims.attachments.some(
+		parsedClaims.attachments.some(
 			(entry) => !requestedAttachments.has(entry.attachmentId),
 		) ||
-		claims.requestDigest !== (await runtimeRequestDigestV4(request)) ||
-		claims.traceId !== request.traceId ||
-		claims.principal.kind !== request.principal.kind ||
-		claims.principal.id !== request.principal.id ||
-		claims.agentId !== request.agentId ||
-		claims.channelId !== request.channelId ||
-		claims.conversationId !== request.conversationId ||
-		claims.executionId !== request.executionId ||
-		claims.turnId !== request.turnId ||
-		claims.sessionGeneration !== request.sessionGeneration ||
-		claims.hostSessionRef !== request.hostSessionRef ||
-		claims.operation.kind !== request.operation.kind ||
-		claims.operation.id !== request.operation.id ||
-		claims.operation.deliveryFence !== request.operation.deliveryFence ||
-		claims.operation.executionDeliveryFence !==
-			request.operation.executionDeliveryFence
+		parsedClaims.requestDigest !==
+			(await runtimeRequestDigestV4(parsedRequest)) ||
+		parsedClaims.traceId !== parsedRequest.traceId ||
+		parsedClaims.principal.kind !== parsedRequest.principal.kind ||
+		parsedClaims.principal.id !== parsedRequest.principal.id ||
+		parsedClaims.agentId !== parsedRequest.agentId ||
+		parsedClaims.channelId !== parsedRequest.channelId ||
+		parsedClaims.conversationId !== parsedRequest.conversationId ||
+		parsedClaims.executionId !== parsedRequest.executionId ||
+		parsedClaims.turnId !== parsedRequest.turnId ||
+		parsedClaims.sessionGeneration !== parsedRequest.sessionGeneration ||
+		parsedClaims.hostSessionRef !== parsedRequest.hostSessionRef ||
+		parsedClaims.operation.kind !== parsedRequest.operation.kind ||
+		parsedClaims.operation.id !== parsedRequest.operation.id ||
+		parsedClaims.operation.deliveryFence !==
+			parsedRequest.operation.deliveryFence ||
+		parsedClaims.operation.executionDeliveryFence !==
+			parsedRequest.operation.executionDeliveryFence
 	) {
 		throw new TypeError("RuntimeHostV4 binding is invalid");
+	}
+}
+
+export function validateRuntimePrivateRelayKeyFieldV1(
+	field: unknown,
+	accepted: Pick<RuntimeBusinessRequestV4, "executionId" | "keyBinding">,
+): RuntimePrivateRelayKeyFieldV1 {
+	try {
+		const acceptedExecutionId = OpaqueIdV1Schema.parse(accepted.executionId);
+		const acceptedKeyBinding = RuntimeRelayKeyBindingV1Schema.parse(
+			accepted.keyBinding,
+		);
+		const parsed = RuntimePrivateRelayKeyFieldV1Schema.parse(field);
+		if (
+			parsed.executionId !== acceptedExecutionId ||
+			parsed.keyBinding.purpose !== acceptedKeyBinding.purpose ||
+			parsed.keyBinding.subjectId !== acceptedKeyBinding.subjectId ||
+			parsed.keyBinding.ciphertextRef !== acceptedKeyBinding.ciphertextRef ||
+			parsed.keyBinding.version !== acceptedKeyBinding.version
+		) {
+			throw new Error();
+		}
+		return parsed;
+	} catch {
+		throw new TypeError("RuntimeHostV4 private Key field is invalid");
 	}
 }
 
@@ -183,7 +243,7 @@ export function runtimeRequestSigningPayloadV4(
 	} catch {
 		throw new TypeError("RuntimeHostV4 request is invalid");
 	}
-	const { grant: _grant, keyDelivery: _keyDelivery, ...payload } = request;
+	const { grant: _grant, ...payload } = request;
 	function canonical(value: unknown): unknown {
 		if (Array.isArray(value)) return value.map(canonical);
 		if (value !== null && typeof value === "object") {

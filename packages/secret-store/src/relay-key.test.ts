@@ -246,6 +246,23 @@ describe("Relay Key ciphertext V1", () => {
 				"short",
 			),
 		).toThrow("Relay Key encryption input is invalid");
+		for (const value of [
+			" leading-space-secret",
+			"trailing-space-secret ",
+			"embedded space-secret",
+		]) {
+			expect(() =>
+				record(
+					{
+						purpose: "personal",
+						subjectId: "user_01",
+						keyId: "key_01",
+						keyVersion: 1,
+					},
+					value,
+				),
+			).toThrow("Relay Key encryption input is invalid");
+		}
 		expect(() =>
 			encodeRelayKeyAadV1(
 				{

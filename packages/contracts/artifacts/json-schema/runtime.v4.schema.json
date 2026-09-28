@@ -1,0 +1,2931 @@
+{
+  "$defs": {
+    "RuntimeBusinessCommandV2": {
+      "enum": [
+        "turn.submit",
+        "turn.supplement",
+        "turn.stop",
+        "session.status",
+        "execution.renew",
+        "events.persist",
+        "events.ack"
+      ],
+      "type": "string"
+    },
+    "RuntimeBusinessGrantClaimsV2": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "allowedCommands": {
+          "items": {
+            "enum": [
+              "turn.submit",
+              "turn.supplement",
+              "turn.stop",
+              "session.status",
+              "execution.renew",
+              "events.persist",
+              "events.ack"
+            ],
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "type": "array"
+        },
+        "attachments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "attachmentId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "const": "read",
+                  "type": "string"
+                },
+                "maxItems": 1,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "attachmentId",
+              "operations"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "audience": {
+          "const": "runtime_host",
+          "type": "string"
+        },
+        "authorizationRecordId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "eventAccess": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "afterCursor": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "command": {
+                  "const": "events.persist",
+                  "type": "string"
+                },
+                "consumer": {
+                  "const": "platform_worker_persistence",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command",
+                "consumer",
+                "afterCursor"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "const": "events.ack",
+                  "type": "string"
+                },
+                "confirmedCursor": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "consumer": {
+                  "const": "platform_worker_persistence",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command",
+                "consumer",
+                "confirmedCursor"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "grantId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "hostSessionRef": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issuedAt": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "issuer": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "operation": {
+          "additionalProperties": false,
+          "properties": {
+            "deliveryFence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "executionDeliveryFence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "execution",
+                "message",
+                "stop",
+                "generation"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "deliveryFence",
+            "executionDeliveryFence"
+          ],
+          "type": "object"
+        },
+        "principal": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        "purpose": {
+          "const": "business",
+          "type": "string"
+        },
+        "requestDigest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 2,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workerId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "issuer",
+        "audience",
+        "issuedAt",
+        "expiresAt",
+        "grantId",
+        "workerId",
+        "principal",
+        "agentId",
+        "channelId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "traceId",
+        "hostSessionRef",
+        "operation",
+        "requestDigest",
+        "purpose",
+        "authorizationRecordId",
+        "allowedCommands",
+        "attachments"
+      ],
+      "type": "object"
+    },
+    "RuntimeBusinessGrantClaimsV4": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "allowedCommands": {
+          "items": {
+            "enum": [
+              "turn.submit",
+              "turn.supplement",
+              "turn.stop",
+              "session.status",
+              "execution.renew",
+              "events.persist",
+              "events.ack"
+            ],
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "type": "array"
+        },
+        "attachments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "attachmentId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "const": "read",
+                  "type": "string"
+                },
+                "maxItems": 1,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "attachmentId",
+              "operations"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "audience": {
+          "const": "runtime_host",
+          "type": "string"
+        },
+        "authorizationRecordId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "eventAccess": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "afterCursor": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "command": {
+                  "const": "events.persist",
+                  "type": "string"
+                },
+                "consumer": {
+                  "const": "platform_worker_persistence",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command",
+                "consumer",
+                "afterCursor"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "const": "events.ack",
+                  "type": "string"
+                },
+                "confirmedCursor": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "consumer": {
+                  "const": "platform_worker_persistence",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command",
+                "consumer",
+                "confirmedCursor"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "executionSource": {
+          "enum": [
+            "web",
+            "wecom",
+            "platform-api",
+            "eval"
+          ],
+          "type": "string"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "grantId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "hostSessionRef": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issuedAt": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "issuer": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "operation": {
+          "additionalProperties": false,
+          "properties": {
+            "deliveryFence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "executionDeliveryFence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "execution",
+                "message",
+                "stop",
+                "generation"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "deliveryFence",
+            "executionDeliveryFence"
+          ],
+          "type": "object"
+        },
+        "principal": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        "purpose": {
+          "const": "business",
+          "type": "string"
+        },
+        "relayKeyBinding": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "personal",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "agent-default",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "requestDigest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 4,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workerId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "issuer",
+        "audience",
+        "issuedAt",
+        "expiresAt",
+        "grantId",
+        "workerId",
+        "principal",
+        "agentId",
+        "channelId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "traceId",
+        "hostSessionRef",
+        "operation",
+        "requestDigest",
+        "purpose",
+        "authorizationRecordId",
+        "allowedCommands",
+        "attachments",
+        "executionSource",
+        "relayKeyBinding"
+      ],
+      "type": "object"
+    },
+    "RuntimeControlCommandV2": {
+      "enum": [
+        "turn.stop",
+        "session.status",
+        "generation.cancel",
+        "events.persist",
+        "events.ack"
+      ],
+      "type": "string"
+    },
+    "RuntimeControlGrantClaimsV2": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "allowedCommands": {
+          "items": {
+            "enum": [
+              "turn.stop",
+              "session.status",
+              "generation.cancel",
+              "events.persist",
+              "events.ack"
+            ],
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "type": "array"
+        },
+        "audience": {
+          "const": "runtime_host",
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "controlRecordId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "eventAccess": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "afterCursor": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "command": {
+                  "const": "events.persist",
+                  "type": "string"
+                },
+                "consumer": {
+                  "const": "platform_worker_persistence",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command",
+                "consumer",
+                "afterCursor"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "const": "events.ack",
+                  "type": "string"
+                },
+                "confirmedCursor": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "consumer": {
+                  "const": "platform_worker_persistence",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command",
+                "consumer",
+                "confirmedCursor"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "grantId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "hostSessionRef": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issuedAt": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "issuer": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "operation": {
+          "additionalProperties": false,
+          "properties": {
+            "deliveryFence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "executionDeliveryFence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "execution",
+                "message",
+                "stop",
+                "generation"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "deliveryFence",
+            "executionDeliveryFence"
+          ],
+          "type": "object"
+        },
+        "principal": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        "purpose": {
+          "const": "control",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "stop",
+            "authorization_revoked",
+            "recovery",
+            "generation_isolation"
+          ],
+          "type": "string"
+        },
+        "requestDigest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 2,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workerId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "issuer",
+        "audience",
+        "issuedAt",
+        "expiresAt",
+        "grantId",
+        "workerId",
+        "principal",
+        "agentId",
+        "channelId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "traceId",
+        "hostSessionRef",
+        "operation",
+        "requestDigest",
+        "purpose",
+        "controlRecordId",
+        "reason",
+        "allowedCommands"
+      ],
+      "type": "object"
+    },
+    "RuntimeControlReasonV2": {
+      "enum": [
+        "stop",
+        "authorization_revoked",
+        "recovery",
+        "generation_isolation"
+      ],
+      "type": "string"
+    },
+    "RuntimeExecutionGrantClaimsV2": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "allowedCommands": {
+              "items": {
+                "enum": [
+                  "turn.submit",
+                  "turn.supplement",
+                  "turn.stop",
+                  "session.status",
+                  "execution.renew",
+                  "events.persist",
+                  "events.ack"
+                ],
+                "type": "string"
+              },
+              "maxItems": 1,
+              "minItems": 1,
+              "type": "array"
+            },
+            "attachments": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "attachmentId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "operations": {
+                    "items": {
+                      "const": "read",
+                      "type": "string"
+                    },
+                    "maxItems": 1,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "attachmentId",
+                  "operations"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "audience": {
+              "const": "runtime_host",
+              "type": "string"
+            },
+            "authorizationRecordId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "channelId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "eventAccess": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "afterCursor": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "command": {
+                      "const": "events.persist",
+                      "type": "string"
+                    },
+                    "consumer": {
+                      "const": "platform_worker_persistence",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "command",
+                    "consumer",
+                    "afterCursor"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "command": {
+                      "const": "events.ack",
+                      "type": "string"
+                    },
+                    "confirmedCursor": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "consumer": {
+                      "const": "platform_worker_persistence",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "command",
+                    "consumer",
+                    "confirmedCursor"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "expiresAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "grantId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "hostSessionRef": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "issuedAt": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "issuer": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operation": {
+              "additionalProperties": false,
+              "properties": {
+                "deliveryFence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "executionDeliveryFence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "execution",
+                    "message",
+                    "stop",
+                    "generation"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "deliveryFence",
+                "executionDeliveryFence"
+              ],
+              "type": "object"
+            },
+            "principal": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "user",
+                    "application"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "purpose": {
+              "const": "business",
+              "type": "string"
+            },
+            "requestDigest": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 2,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "turnId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "workerId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "issuer",
+            "audience",
+            "issuedAt",
+            "expiresAt",
+            "grantId",
+            "workerId",
+            "principal",
+            "agentId",
+            "channelId",
+            "conversationId",
+            "executionId",
+            "turnId",
+            "sessionGeneration",
+            "traceId",
+            "hostSessionRef",
+            "operation",
+            "requestDigest",
+            "purpose",
+            "authorizationRecordId",
+            "allowedCommands",
+            "attachments"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "allowedCommands": {
+              "items": {
+                "enum": [
+                  "turn.stop",
+                  "session.status",
+                  "generation.cancel",
+                  "events.persist",
+                  "events.ack"
+                ],
+                "type": "string"
+              },
+              "maxItems": 1,
+              "minItems": 1,
+              "type": "array"
+            },
+            "audience": {
+              "const": "runtime_host",
+              "type": "string"
+            },
+            "channelId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "controlRecordId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "eventAccess": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "afterCursor": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "command": {
+                      "const": "events.persist",
+                      "type": "string"
+                    },
+                    "consumer": {
+                      "const": "platform_worker_persistence",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "command",
+                    "consumer",
+                    "afterCursor"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "command": {
+                      "const": "events.ack",
+                      "type": "string"
+                    },
+                    "confirmedCursor": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "consumer": {
+                      "const": "platform_worker_persistence",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "command",
+                    "consumer",
+                    "confirmedCursor"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "expiresAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "grantId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "hostSessionRef": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "issuedAt": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "issuer": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operation": {
+              "additionalProperties": false,
+              "properties": {
+                "deliveryFence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "executionDeliveryFence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "execution",
+                    "message",
+                    "stop",
+                    "generation"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "deliveryFence",
+                "executionDeliveryFence"
+              ],
+              "type": "object"
+            },
+            "principal": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "user",
+                    "application"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "purpose": {
+              "const": "control",
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "stop",
+                "authorization_revoked",
+                "recovery",
+                "generation_isolation"
+              ],
+              "type": "string"
+            },
+            "requestDigest": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 2,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "turnId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "workerId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "issuer",
+            "audience",
+            "issuedAt",
+            "expiresAt",
+            "grantId",
+            "workerId",
+            "principal",
+            "agentId",
+            "channelId",
+            "conversationId",
+            "executionId",
+            "turnId",
+            "sessionGeneration",
+            "traceId",
+            "hostSessionRef",
+            "operation",
+            "requestDigest",
+            "purpose",
+            "controlRecordId",
+            "reason",
+            "allowedCommands"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RuntimeExecutionGrantV2": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "runtime-execution-jws",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 2,
+          "type": "number"
+        },
+        "token": {
+          "maxLength": 262144,
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "format",
+        "token"
+      ],
+      "type": "object"
+    },
+    "RuntimeExecutionGrantV4": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "runtime-execution-jws",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 4,
+          "type": "number"
+        },
+        "token": {
+          "maxLength": 262144,
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "format",
+        "token"
+      ],
+      "type": "object"
+    },
+    "RuntimeExecutionSourceV1": {
+      "enum": [
+        "web",
+        "wecom",
+        "platform-api",
+        "eval"
+      ],
+      "type": "string"
+    },
+    "RuntimeKeyedHandleScopeV4": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "executionSource": {
+          "enum": [
+            "web",
+            "wecom",
+            "platform-api",
+            "eval"
+          ],
+          "type": "string"
+        },
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "keyBinding": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "personal",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "agent-default",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "modelOptionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "principal": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        "reasoningLevel": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "principal",
+        "executionSource",
+        "channelId",
+        "agentId",
+        "conversationId",
+        "executionId",
+        "sessionGeneration",
+        "hostSessionRef",
+        "modelOptionId",
+        "reasoningLevel",
+        "keyBinding"
+      ],
+      "type": "object"
+    },
+    "RuntimeOperationBindingV2": {
+      "additionalProperties": false,
+      "properties": {
+        "deliveryFence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "executionDeliveryFence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "execution",
+            "message",
+            "stop",
+            "generation"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "deliveryFence",
+        "executionDeliveryFence"
+      ],
+      "type": "object"
+    },
+    "RuntimePrincipalV1": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "user",
+            "application"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    "RuntimePrivateRelayKeyFieldV1": {
+      "additionalProperties": false,
+      "properties": {
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "keyBinding": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "personal",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "agent-default",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "keyDelivery": {
+          "additionalProperties": false,
+          "properties": {
+            "relayKey": {
+              "maxLength": 8192,
+              "minLength": 16,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "relayKey"
+          ],
+          "type": "object"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "executionId",
+        "keyBinding",
+        "keyDelivery"
+      ],
+      "type": "object"
+    },
+    "RuntimeRelayKeyBindingV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ciphertextRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "purpose": {
+              "const": "personal",
+              "type": "string"
+            },
+            "subjectId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "purpose",
+            "subjectId",
+            "ciphertextRef",
+            "version"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ciphertextRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "purpose": {
+              "const": "agent-default",
+              "type": "string"
+            },
+            "subjectId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "purpose",
+            "subjectId",
+            "ciphertextRef",
+            "version"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RuntimeRelayKeyDeliveryV1": {
+      "additionalProperties": false,
+      "properties": {
+        "relayKey": {
+          "maxLength": 8192,
+          "minLength": 16,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relayKey"
+      ],
+      "type": "object"
+    },
+    "RuntimeSubmitTurnRequestV4": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "executionSource": {
+          "enum": [
+            "web",
+            "wecom",
+            "platform-api",
+            "eval"
+          ],
+          "type": "string"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "runtime-execution-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 4,
+              "type": "number"
+            },
+            "token": {
+              "maxLength": 262144,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "hostSessionRef": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "attachments": {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "text": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "attachments"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "attachments": {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "attachments"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "keyBinding": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "personal",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "agent-default",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "operation": {
+          "additionalProperties": false,
+          "properties": {
+            "deliveryFence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "executionDeliveryFence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "execution",
+                "message",
+                "stop",
+                "generation"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "deliveryFence",
+            "executionDeliveryFence"
+          ],
+          "type": "object"
+        },
+        "principal": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 4,
+          "type": "number"
+        },
+        "selection": {
+          "additionalProperties": false,
+          "properties": {
+            "modelOptionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "reasoningLevel": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "modelOptionId",
+            "reasoningLevel"
+          ],
+          "type": "object"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "principal",
+        "executionSource",
+        "channelId",
+        "agentId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "hostSessionRef",
+        "operation",
+        "grant",
+        "keyBinding",
+        "input",
+        "selection"
+      ],
+      "type": "object"
+    },
+    "RuntimeSupplementRequestV4": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "executionSource": {
+          "enum": [
+            "web",
+            "wecom",
+            "platform-api",
+            "eval"
+          ],
+          "type": "string"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "runtime-execution-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 4,
+              "type": "number"
+            },
+            "token": {
+              "maxLength": 262144,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "input": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "attachments": {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "text": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "attachments"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "attachments": {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "attachments"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "keyBinding": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "personal",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "agent-default",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "operation": {
+          "additionalProperties": false,
+          "properties": {
+            "deliveryFence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "executionDeliveryFence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "execution",
+                "message",
+                "stop",
+                "generation"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "deliveryFence",
+            "executionDeliveryFence"
+          ],
+          "type": "object"
+        },
+        "principal": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 4,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "principal",
+        "executionSource",
+        "channelId",
+        "agentId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "hostSessionRef",
+        "operation",
+        "grant",
+        "keyBinding",
+        "input"
+      ],
+      "type": "object"
+    },
+    "VerifiedRuntimeExecutionGrantV2": {
+      "additionalProperties": false,
+      "properties": {
+        "claims": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "allowedCommands": {
+                  "items": {
+                    "enum": [
+                      "turn.submit",
+                      "turn.supplement",
+                      "turn.stop",
+                      "session.status",
+                      "execution.renew",
+                      "events.persist",
+                      "events.ack"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "attachments": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attachmentId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "operations": {
+                        "items": {
+                          "const": "read",
+                          "type": "string"
+                        },
+                        "maxItems": 1,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "attachmentId",
+                      "operations"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "audience": {
+                  "const": "runtime_host",
+                  "type": "string"
+                },
+                "authorizationRecordId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "channelId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "eventAccess": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "afterCursor": {
+                          "anyOf": [
+                            {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "command": {
+                          "const": "events.persist",
+                          "type": "string"
+                        },
+                        "consumer": {
+                          "const": "platform_worker_persistence",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "command",
+                        "consumer",
+                        "afterCursor"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "command": {
+                          "const": "events.ack",
+                          "type": "string"
+                        },
+                        "confirmedCursor": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "consumer": {
+                          "const": "platform_worker_persistence",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "command",
+                        "consumer",
+                        "confirmedCursor"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "expiresAt": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "grantId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "hostSessionRef": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "issuedAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "issuer": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "operation": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "deliveryFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "executionDeliveryFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "execution",
+                        "message",
+                        "stop",
+                        "generation"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id",
+                    "deliveryFence",
+                    "executionDeliveryFence"
+                  ],
+                  "type": "object"
+                },
+                "principal": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "user",
+                        "application"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "purpose": {
+                  "const": "business",
+                  "type": "string"
+                },
+                "requestDigest": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 2,
+                  "type": "number"
+                },
+                "sessionGeneration": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "traceId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "turnId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "workerId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "issuer",
+                "audience",
+                "issuedAt",
+                "expiresAt",
+                "grantId",
+                "workerId",
+                "principal",
+                "agentId",
+                "channelId",
+                "conversationId",
+                "executionId",
+                "turnId",
+                "sessionGeneration",
+                "traceId",
+                "hostSessionRef",
+                "operation",
+                "requestDigest",
+                "purpose",
+                "authorizationRecordId",
+                "allowedCommands",
+                "attachments"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "allowedCommands": {
+                  "items": {
+                    "enum": [
+                      "turn.stop",
+                      "session.status",
+                      "generation.cancel",
+                      "events.persist",
+                      "events.ack"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "audience": {
+                  "const": "runtime_host",
+                  "type": "string"
+                },
+                "channelId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "controlRecordId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "eventAccess": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "afterCursor": {
+                          "anyOf": [
+                            {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "command": {
+                          "const": "events.persist",
+                          "type": "string"
+                        },
+                        "consumer": {
+                          "const": "platform_worker_persistence",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "command",
+                        "consumer",
+                        "afterCursor"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "command": {
+                          "const": "events.ack",
+                          "type": "string"
+                        },
+                        "confirmedCursor": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "consumer": {
+                          "const": "platform_worker_persistence",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "command",
+                        "consumer",
+                        "confirmedCursor"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "expiresAt": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "grantId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "hostSessionRef": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "issuedAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "issuer": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "operation": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "deliveryFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "executionDeliveryFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "execution",
+                        "message",
+                        "stop",
+                        "generation"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id",
+                    "deliveryFence",
+                    "executionDeliveryFence"
+                  ],
+                  "type": "object"
+                },
+                "principal": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "user",
+                        "application"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "purpose": {
+                  "const": "control",
+                  "type": "string"
+                },
+                "reason": {
+                  "enum": [
+                    "stop",
+                    "authorization_revoked",
+                    "recovery",
+                    "generation_isolation"
+                  ],
+                  "type": "string"
+                },
+                "requestDigest": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 2,
+                  "type": "number"
+                },
+                "sessionGeneration": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "traceId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "turnId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "workerId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "issuer",
+                "audience",
+                "issuedAt",
+                "expiresAt",
+                "grantId",
+                "workerId",
+                "principal",
+                "agentId",
+                "channelId",
+                "conversationId",
+                "executionId",
+                "turnId",
+                "sessionGeneration",
+                "traceId",
+                "hostSessionRef",
+                "operation",
+                "requestDigest",
+                "purpose",
+                "controlRecordId",
+                "reason",
+                "allowedCommands"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "token": {
+          "maxLength": 262144,
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "claims"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime.v4.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Infra Runtime Contracts V4"
+}

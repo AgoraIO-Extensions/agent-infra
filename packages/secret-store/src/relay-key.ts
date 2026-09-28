@@ -99,7 +99,7 @@ export function createRelayKeyEncryptorV1(options: {
 					typeof input.plaintext !== "string" ||
 					input.plaintext.length < 16 ||
 					input.plaintext.length > 8192 ||
-					!/^[\x20-\x7e]+$/.test(input.plaintext)
+					!/^[\x21-\x7e]+$/.test(input.plaintext)
 				) {
 					throw new Error();
 				}
