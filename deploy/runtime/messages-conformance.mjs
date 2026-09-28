@@ -229,7 +229,7 @@ function operationEvidence(facts) {
 async function turn(user, text) {
  let operation = "submit";
  let lastStatus = null, observedEvents = 0;
- const eventSummary = [];
+ const eventSummary = [], recentEventSummary = [];
  const operationFacts = [], eventKeys = new Set(), operationCursors = new Set();
  try {
  user.turn++;
@@ -279,9 +279,12 @@ async function turn(user, text) {
      operationCursors.add(fact.cursor);
      operationFacts.push(fact.payload);
     }
-    if (eventSummary.length < 20) eventSummary.push(event.type === "operation"
+    const summary = event.type === "operation"
      ? { type: event.type, kind: event.payload.kind, phase: event.payload.phase, failureCode: event.payload.failureCode ?? null }
-     : { type: event.type, phase: event.type === "tool" ? event.payload.phase : null });
+     : { type: event.type, phase: event.type === "tool" ? event.payload.phase : null };
+    if (eventSummary.length < 20) eventSummary.push(summary);
+    recentEventSummary.push(summary);
+    if (recentEventSummary.length > 20) recentEventSummary.shift();
     afterCursor = event.cursor;
     if (event.type === "text") answer += event.payload.delta;
     if (event.type === "tool" && event.payload.phase === "completed") tools++;
@@ -303,20 +306,22 @@ async function turn(user, text) {
   report.failureLastStatus ??= lastStatus;
   report.failureObservedEvents ??= observedEvents;
   report.failureEventSummary ??= eventSummary;
+  report.failureRecentEventSummary ??= recentEventSummary;
   report.failureOperationFactCounts ??= Object.fromEntries(["model", "tool"].map(kind => [kind, Object.fromEntries(["intent", "started", "completed", "failed", "unknown"].map(phase => [phase, operationFacts.filter(fact => fact.kind === kind && fact.phase === phase).length]))]));
+  report.failureToolFactCounts ??= Object.fromEntries(["read", "write", "edit", "other"].map(tool => [tool, Object.fromEntries(["intent", "completed", "failed", "unknown"].map(phase => [phase, operationFacts.filter(fact => fact.kind === "tool" && ("toolId" in fact && ["read", "write", "edit"].includes(fact.toolId.toLowerCase()) ? fact.toolId.toLowerCase() : "other") === tool && fact.phase === phase).length]))]));
   throw error;
  }
 }
 let stage = "positive-turns";
 try {
  await openRuntime();
- await settleTurns(users.map(async user => {
+ for (const user of users) {
   const pathInstruction = separateNegative
    ? 'Use the exact path arguments "canary.txt" and ".memory/MEMORY.md" relative to your current workspace; do not invent absolute paths. Write the canary to both files using those paths.'
    : 'Save it in workspace file canary.txt and your private memory file ../memory/MEMORY.md using the write tool.';
   const result = await turn(user, `Use only the native write and read tools, with exactly four calls: write canary.txt, write the memory file, read canary.txt, read the memory file. Do not invoke bash, a terminal, task, todo, skills, or any other tool. My private canary is ${user.canary}. ${pathInstruction} Read both files to verify them, then reply with that exact canary. Also remember the private context marker ${user.contextCanary} in this conversation, but do not write that marker to either file.`);
   report.checks.push({ user: user.id, phase: "positive-write-read", status: result.status, tools: result.tools, denied: result.denied, operationEvidence: result.operationEvidence, passed: result.status === "completed" && result.answer.includes(user.canary) && result.tools >= 4 && result.operationEvidence.completedReadAttempts >= 2 && result.operationEvidence.completedWriteAttempts + result.operationEvidence.completedEditAttempts >= 2 });
- }));
+ }
  await closeRuntime();
  stage = "positive-readback";
  for (const user of users) {
