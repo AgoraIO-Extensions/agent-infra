@@ -62,6 +62,7 @@ export function ApprovalPoliciesPage() {
 	const [tab, setTab] = useState<"chain" | "catalog">("chain");
 	const [profileName, setProfileName] = useState("");
 	const [selectedActions, setSelectedActions] = useState<string[]>([]);
+	const [actionQuery, setActionQuery] = useState("");
 	const [disclaimerContent, setDisclaimerContent] = useState("");
 	const [disclaimerMaterial, setDisclaimerMaterial] = useState(false);
 	const [disclaimerKind, setDisclaimerKind] = useState<"GLOBAL" | "PROVIDER">(
@@ -193,6 +194,19 @@ export function ApprovalPoliciesPage() {
 
 	const provider = catalog.data?.providers.find(
 		(item) => item.providerReleaseId === providerReleaseId,
+	);
+	const providerActions = provider?.actions ?? [];
+	const readActions = providerActions.filter(
+		(action) => action.effect === "READ",
+	);
+	const writeActions = providerActions.filter(
+		(action) => action.effect === "WRITE",
+	);
+	const normalizedActionQuery = actionQuery.trim().toLowerCase();
+	const visibleActions = providerActions.filter(
+		(action) =>
+			action.name.toLowerCase().includes(normalizedActionQuery) ||
+			action.effect.toLowerCase().includes(normalizedActionQuery),
 	);
 	const profile = catalog.data?.profiles.find((item) => item.id === profileId);
 	const activeStage = stages[stageIndex];
@@ -681,6 +695,7 @@ export function ApprovalPoliciesPage() {
 										setProviderReleaseId(event.target.value);
 										setProfileId("");
 										setSelectedActions([]);
+										setActionQuery("");
 									}}
 								>
 									<option value="">选择连接器</option>
@@ -719,13 +734,74 @@ export function ApprovalPoliciesPage() {
 								<>
 									<div className="approval-subsection">
 										<h3>新能力包</h3>
-										<input
-											placeholder="能力包名称"
-											value={profileName}
-											onChange={(event) => setProfileName(event.target.value)}
-										/>
+										<label>
+											名称
+											<input
+												placeholder="能力包名称"
+												value={profileName}
+												onChange={(event) => setProfileName(event.target.value)}
+											/>
+										</label>
+										<div className="approval-action-toolbar">
+											<input
+												type="search"
+												aria-label="搜索能力"
+												placeholder="搜索能力"
+												value={actionQuery}
+												disabled={!provider}
+												onChange={(event) => setActionQuery(event.target.value)}
+											/>
+											<span role="status">
+												已选 {selectedActions.length} / {providerActions.length}
+											</span>
+											<fieldset
+												className="approval-action-presets"
+												aria-label="快捷选择"
+											>
+												<button
+													type="button"
+													disabled={!providerActions.length}
+													onClick={() =>
+														setSelectedActions(
+															providerActions.map((action) => action.id),
+														)
+													}
+												>
+													全选
+												</button>
+												<button
+													type="button"
+													disabled={!readActions.length}
+													onClick={() =>
+														setSelectedActions(
+															readActions.map((action) => action.id),
+														)
+													}
+												>
+													仅只读
+												</button>
+												<button
+													type="button"
+													disabled={!writeActions.length}
+													onClick={() =>
+														setSelectedActions(
+															writeActions.map((action) => action.id),
+														)
+													}
+												>
+													仅只写
+												</button>
+												<button
+													type="button"
+													disabled={!selectedActions.length}
+													onClick={() => setSelectedActions([])}
+												>
+													清空
+												</button>
+											</fieldset>
+										</div>
 										<div className="approval-action-list">
-											{provider?.actions.map((action) => (
+											{visibleActions.map((action) => (
 												<label key={action.id}>
 													<input
 														type="checkbox"
@@ -738,10 +814,23 @@ export function ApprovalPoliciesPage() {
 															)
 														}
 													/>
-													{action.name}
-													<small>{action.effect}</small>
+													<span>{action.name}</span>
+													<small
+														className={
+															action.effect === "WRITE"
+																? "approval-action-write"
+																: ""
+														}
+													>
+														{action.effect}
+													</small>
 												</label>
 											))}
+											{!provider ? (
+												<p>选择连接器后显示能力</p>
+											) : !visibleActions.length ? (
+												<p>没有匹配的能力</p>
+											) : null}
 										</div>
 										<Button
 											disabled={
@@ -765,7 +854,7 @@ export function ApprovalPoliciesPage() {
 											{catalog.data?.disclaimers
 												.filter((item) => item.status === "PUBLISHED")
 												.map((item) => (
-													<span className="approval-disclaimer" key={item.id}>
+													<label className="approval-disclaimer" key={item.id}>
 														<input
 															type="checkbox"
 															checked={disclaimerIds.includes(item.id)}
@@ -778,7 +867,7 @@ export function ApprovalPoliciesPage() {
 															}
 														/>
 														{item.kind} · {item.locale}
-													</span>
+													</label>
 												))}
 										</fieldset>
 										<select

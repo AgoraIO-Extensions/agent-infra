@@ -268,6 +268,12 @@ export type AccessConnectReady = {
 export type AccessOption = {
     providerId: string;
     providerReleaseId: string;
+    actions: Array<{
+        id: string;
+        name: string;
+        description: string;
+        effect: 'READ' | 'WRITE';
+    }>;
     capabilityProfileId: string;
     capabilityProfileName: string;
     policyVersionId: string;

@@ -35,6 +35,15 @@ const stageLabels: Record<string, string> = {
 	SKIPPED_BY_CANCEL: "已取消",
 };
 
+function permissionLabel(
+	actions: readonly { effect: "READ" | "WRITE" }[] | undefined,
+) {
+	if (!actions?.length) return "能力详情暂不可用";
+	const hasRead = actions.some((action) => action.effect === "READ");
+	const hasWrite = actions.some((action) => action.effect === "WRITE");
+	return hasRead && hasWrite ? "读取与写入" : hasWrite ? "仅写" : "只读";
+}
+
 export function AccessRequestPanel(props: {
 	onSubmitted: () => void;
 	providerId: string;
@@ -156,6 +165,7 @@ export function AccessRequestPanel(props: {
 		const duration = durations?.[durationIndex];
 		if (
 			!selectedOption ||
+			!selectedOption.actions?.length ||
 			!duration ||
 			!purpose.trim() ||
 			!selectedOption.disclaimers.every((item) => confirmed.includes(item.id))
@@ -319,13 +329,40 @@ export function AccessRequestPanel(props: {
 						</div>
 						<div>
 							<span>权限</span>
-							<strong>
-								{selectedOption.effectCeiling === "WRITE"
-									? "读取与写入"
-									: "只读"}
-							</strong>
+							<strong>{permissionLabel(selectedOption.actions)}</strong>
 						</div>
 					</div>
+					<section className="approval-profile-actions" aria-label="能力范围">
+						<div className="approval-profile-actions-header">
+							<strong>能力范围</strong>
+							<span>{selectedOption.actions?.length ?? 0} 项</span>
+						</div>
+						{selectedOption.actions?.length ? (
+							<ul>
+								{selectedOption.actions.map((action) => (
+									<li key={action.id}>
+										<div>
+											<strong>{action.name}</strong>
+											{action.description ? (
+												<span>{action.description}</span>
+											) : null}
+										</div>
+										<small
+											className={
+												action.effect === "WRITE"
+													? "approval-profile-write"
+													: ""
+											}
+										>
+											{action.effect === "WRITE" ? "写入" : "读取"}
+										</small>
+									</li>
+								))}
+							</ul>
+						) : (
+							<p role="status">能力详情暂不可用</p>
+						)}
+					</section>
 					<div className="approval-request-form">
 						<label>
 							用途
@@ -382,6 +419,7 @@ export function AccessRequestPanel(props: {
 							<Button
 								disabled={
 									submit.isPending ||
+									!selectedOption.actions?.length ||
 									!purpose.trim() ||
 									!selectedOption.disclaimers.every((item) =>
 										confirmed.includes(item.id),
@@ -412,7 +450,8 @@ export function AccessRequestPanel(props: {
 								>
 									<strong>{item.capabilityProfileName}</strong>
 									<span>
-										{item.effectCeiling === "WRITE" ? "读取与写入" : "只读"}
+										{permissionLabel(item.actions)} ·{" "}
+										{item.actions?.length ?? 0} 项
 									</span>
 									<ChevronRight size={16} />
 								</button>
