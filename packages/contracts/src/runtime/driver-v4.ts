@@ -64,9 +64,9 @@ export function validateRuntimeKeyedHandleTransitionV4(
 	}
 	if (former.executionId === current.executionId) {
 		if (
-			retirement?.stopped ||
-			retirement?.drained ||
-			retirement?.sessionContinued === false
+			retirement?.stopped !== false ||
+			retirement.drained !== false ||
+			retirement.sessionContinued !== true
 		) {
 			throw new TypeError("Runtime keyed handle transition is unproven");
 		}
