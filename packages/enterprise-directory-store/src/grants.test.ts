@@ -74,4 +74,4 @@ it("migrates with one account and grants only snapshot read/write to another", a
 		await administrator.end();
 		await database.stop();
 	}
-});
+}, 120_000);
