@@ -5,11 +5,14 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createDocument } from "zod-openapi";
 import {
+	EnterpriseDirectorySnapshotV1Schema,
+	enterpriseDirectoryOpenApiPathsV1,
+} from "./enterprise-directory.ts";
+import {
 	fileExchangeOpenApiPathsV1,
 	fileOpenApiPathsV1,
 	fileSchemasV1,
 } from "./files.ts";
-
 import {
 	IdempotencyKeyV1Schema,
 	OpaqueCursorV1Schema,
@@ -39,6 +42,7 @@ import {
 	pilotTaskSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
 } from "./pilot/index.ts";
+import { platformAuthOpenApiPathsV1 } from "./platform-auth.ts";
 import {
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesResponseV1Schema,
@@ -88,6 +92,14 @@ if (rootOption !== -1 && !process.argv[rootOption + 1]) {
 	throw new Error("--root requires a directory");
 }
 const artifactPaths = {
+	enterpriseDirectoryOpenapi: resolve(
+		artifactRoot,
+		"openapi/enterprise-directory.v1.openapi.json",
+	),
+	platformAuthOpenapi: resolve(
+		artifactRoot,
+		"openapi/platform-auth.v1.openapi.json",
+	),
 	standardTemplateReleaseOpenapi: resolve(
 		artifactRoot,
 		"openapi/standard-template-release.v1.openapi.json",
@@ -626,6 +638,20 @@ function buildArtifacts() {
 		io: "input",
 	});
 	return {
+		enterpriseDirectoryOpenapi: createDocument({
+			openapi: "3.1.0",
+			info: { title: "Enterprise Directory Snapshot API", version: "1.0.0" },
+			security: [{ DirectoryServiceBearer: [] }],
+			paths: enterpriseDirectoryOpenApiPathsV1,
+			components: {
+				securitySchemes: {
+					DirectoryServiceBearer: { type: "http", scheme: "bearer" },
+				},
+				schemas: {
+					EnterpriseDirectorySnapshotV1: EnterpriseDirectorySnapshotV1Schema,
+				},
+			},
+		}),
 		readinessJsonSchema: jsonSchemaDocument({
 			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-readiness.v1.schema.json",
 			title: "Agent Infra Workload Readiness V1",
@@ -665,6 +691,20 @@ function buildArtifacts() {
 			info: { title: "Platform Authenticated Files API", version: "1.0.0" },
 			paths: { ...fileOpenApiPathsV1, ...fileExchangeOpenApiPathsV1 },
 			components: { schemas: fileSchemasV1 },
+		}),
+		platformAuthOpenapi: createDocument({
+			openapi: "3.1.0",
+			info: { title: "Platform Browser Authentication API", version: "1.0.0" },
+			paths: platformAuthOpenApiPathsV1,
+			components: {
+				securitySchemes: {
+					PlatformSession: {
+						type: "apiKey",
+						in: "cookie",
+						name: "__Host-platform-session",
+					},
+				},
+			},
 		}),
 		jsonSchema,
 		openapi,

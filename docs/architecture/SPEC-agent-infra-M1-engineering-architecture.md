@@ -163,6 +163,7 @@ agent-infra/
     connection-store/        Connection DB 的 Drizzle Adapter
     identity/                Platform IdentityAdapter、IdentityContext 与测试 Fake
     enterprise-directory/    企微快照、完整性与内网读取契约
+    enterprise-directory-store/  目录快照的 Drizzle/PostgreSQL Adapter
     image-registry/          ImageRegistryAdapter、OCI Digest/Manifest 与测试 Fake
     secret-store/            版本化 AEAD 密文、DEK 封装与密钥轮换
     model-catalog/           ModelCatalogAdapter 与模型端点政策
@@ -249,6 +250,7 @@ M1 的 Schema family 由以下主责 artifact 维护；表中 Issue 是既有交
 | --- | --- | --- |
 | 公共 primitives、错误模型、生成与兼容工具 | Platform Core/API | [#179](https://github.com/AgoraIO-Extensions/agent-infra/issues/179) |
 | Platform HTTP/OpenAPI、SSE 与生产 Web Client | Platform Core/API，Web/API 消费方评审 | [#180](https://github.com/AgoraIO-Extensions/agent-infra/issues/180) |
+| 企微目录快照内部 HTTP/OpenAPI | 目录服务，Platform 消费方评审 | [#889](https://github.com/AgoraIO-Extensions/agent-infra/issues/889) |
 | RuntimeHost/Driver wire Schema | Codex Runtime，Worker 消费方评审 | [#181](https://github.com/AgoraIO-Extensions/agent-infra/issues/181) |
 | Registry、Secret、Kubernetes Workload 与 Runtime Manifest Contract | Agent Workload，Core/Delivery 消费方评审 | [#182](https://github.com/AgoraIO-Extensions/agent-infra/issues/182)；OCI admission 由 [#188](https://github.com/AgoraIO-Extensions/agent-infra/issues/188) 实现 |
 

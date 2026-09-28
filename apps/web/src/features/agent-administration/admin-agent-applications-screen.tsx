@@ -1,3 +1,4 @@
+import { RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +39,8 @@ type AdminAgentApplicationsScreenProps = {
 	pendingDecision?: PendingDecision;
 	session: AdministrationSessionState;
 	state: PendingAgentApplicationsState | { kind: "loading" };
+	onRetry?: () => void;
+	retrying?: boolean;
 };
 
 type ApplicationReviewProps = {
@@ -313,6 +316,8 @@ export function AdminAgentApplicationsScreen({
 	pendingDecision,
 	session,
 	state,
+	onRetry,
+	retrying = false,
 }: AdminAgentApplicationsScreenProps) {
 	const [openApplicationId, setOpenApplicationId] = useState<string | null>(
 		null,
@@ -358,6 +363,18 @@ export function AdminAgentApplicationsScreen({
 							? "审批列表暂时无法读取，请稍后重试。"
 							: "审批列表不可用，请联系管理员。"}
 					</AlertDescription>
+					{state.retryable && onRetry ? (
+						<Button
+							className="mt-4"
+							variant="outline"
+							disabled={retrying}
+							onClick={onRetry}
+							type="button"
+						>
+							<RefreshCwIcon aria-hidden="true" data-icon="inline-start" />
+							{retrying ? "正在重试…" : "重新加载审批"}
+						</Button>
+					) : null}
 				</Alert>
 			) : (
 				<>

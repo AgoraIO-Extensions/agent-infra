@@ -3,7 +3,9 @@ import { defineConfig } from "tsdown";
 export default defineConfig({
 	entry: [
 		"./src/index.ts",
+		"./src/enterprise-directory.ts",
 		"./src/files.ts",
+		"./src/platform-auth.ts",
 		"./src/pilot/index.ts",
 		"./src/runtime/index.ts",
 		"./src/workload/index.ts",

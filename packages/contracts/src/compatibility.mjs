@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageRoot, "../..");
 const artifactRelativePaths = [
+	"packages/contracts/artifacts/openapi/enterprise-directory.v1.openapi.json",
 	"packages/contracts/artifacts/json-schema/files.v1.schema.json",
 	"packages/contracts/artifacts/openapi/files.v1.openapi.json",
 	"packages/contracts/artifacts/json-schema/common.v1.schema.json",
@@ -24,6 +25,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/openapi/common.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-browser.v2.openapi.json",
+	"packages/contracts/artifacts/openapi/platform-auth.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-delegated.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v2.openapi.json",

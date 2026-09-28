@@ -73,6 +73,17 @@ const images = [
 		],
 	},
 	{
+		key: "enterpriseDirectorySync",
+		name: "enterprise-directory-sync",
+		dockerfile: "apps/enterprise-directory-sync/Dockerfile",
+		command: [
+			"node",
+			"--input-type=module",
+			"-e",
+			`${assertInjectedRuntime}await import('./dist/index.mjs')`,
+		],
+	},
+	{
 		key: "runtimeHost",
 		name: "agent-runtime-host",
 		dockerfile: "apps/agent-runtime-host/Dockerfile",

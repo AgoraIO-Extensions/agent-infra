@@ -83,6 +83,45 @@ services:
     init: true
     read_only: true
 
+  enterprise-directory-migration:
+    build:
+      context: .
+      dockerfile: apps/enterprise-directory-sync/Dockerfile
+    command: ["node", "scripts/migrate.mjs"]
+    init: true
+    read_only: true
+    profiles: ["enterprise-directory"]
+    environment:
+      DIRECTORY_MIGRATION_DATABASE_URL: ${DIRECTORY_MIGRATION_DATABASE_URL:-}
+      DIRECTORY_RUNTIME_DATABASE_ROLE: ${DIRECTORY_RUNTIME_DATABASE_ROLE:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  enterprise-directory-sync:
+    build:
+      context: .
+      dockerfile: apps/enterprise-directory-sync/Dockerfile
+    init: true
+    read_only: true
+    profiles: ["enterprise-directory"]
+    environment:
+      DIRECTORY_ROOT_DEPARTMENT_ID: ${DIRECTORY_ROOT_DEPARTMENT_ID:-1}
+      WECOM_CORP_ID: ${WECOM_CORP_ID:-}
+      DIRECTORY_DATABASE_URL: ${DIRECTORY_DATABASE_URL:-}
+      DIRECTORY_READ_TOKEN_FILE: /run/secrets/directory_read_token
+      WECOM_CORP_SECRET_FILE: /run/secrets/directory_corp_secret
+      DIRECTORY_TLS_CERT_FILE: /run/secrets/directory_tls_cert
+      DIRECTORY_TLS_KEY_FILE: /run/secrets/directory_tls_key
+    secrets:
+      - directory_read_token
+      - directory_corp_secret
+      - directory_tls_cert
+      - directory_tls_key
+    depends_on:
+      enterprise-directory-migration:
+        condition: service_completed_successfully
+
   connection-api:
     build:
       context: .
@@ -130,3 +169,13 @@ services:
 volumes:
   local-topology-object-storage:
   local-topology-postgres:
+
+secrets:
+  directory_read_token:
+    file: ${DIRECTORY_READ_TOKEN_PATH:-/dev/null}
+  directory_corp_secret:
+    file: ${DIRECTORY_CORP_SECRET_PATH:-/dev/null}
+  directory_tls_cert:
+    file: ${DIRECTORY_TLS_CERT_PATH:-/dev/null}
+  directory_tls_key:
+    file: ${DIRECTORY_TLS_KEY_PATH:-/dev/null}

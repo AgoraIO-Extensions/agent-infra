@@ -10,6 +10,7 @@
     "web",
     "platformApi",
     "platformWorker",
+    "enterpriseDirectorySync",
     "migration",
     "workloadTopology"
   ],
@@ -17,11 +18,12 @@
     "images": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["web", "platformApi", "platformWorker", "runtimeHost", "pullPolicy"],
+      "required": ["web", "platformApi", "platformWorker", "enterpriseDirectorySync", "runtimeHost", "pullPolicy"],
       "properties": {
         "web": { "$ref": "#/$defs/image" },
         "platformApi": { "$ref": "#/$defs/image" },
         "platformWorker": { "$ref": "#/$defs/image" },
+        "enterpriseDirectorySync": { "$ref": "#/$defs/image" },
         "runtimeHost": { "$ref": "#/$defs/image" },
         "pullPolicy": {
           "type": "string",
@@ -120,6 +122,41 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 10
+        }
+      }
+    },
+    "enterpriseDirectorySync": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "rootDepartmentId",
+        "corpId",
+        "runtimeDatabaseRole",
+        "databaseSecretRef",
+        "migrationDatabaseSecretRef",
+        "corpSecretRef",
+        "readTokenSecretRef",
+        "tlsSecretRef"
+      ],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "rootDepartmentId": { "type": "integer", "minimum": 1 },
+        "corpId": { "type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9_-]*$" },
+        "runtimeDatabaseRole": { "type": "string", "pattern": "^(?:$|[a-z_][a-z0-9_]{0,62})$" },
+        "databaseSecretRef": { "$ref": "#/$defs/secretRef" },
+        "migrationDatabaseSecretRef": { "$ref": "#/$defs/secretRef" },
+        "corpSecretRef": { "$ref": "#/$defs/secretRef" },
+        "readTokenSecretRef": { "$ref": "#/$defs/secretRef" },
+        "tlsSecretRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "certKey", "privateKeyKey"],
+          "properties": {
+            "name": { "$ref": "#/$defs/kubernetesName" },
+            "certKey": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+            "privateKeyKey": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" }
+          }
         }
       }
     },
