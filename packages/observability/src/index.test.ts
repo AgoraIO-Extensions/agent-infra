@@ -160,6 +160,31 @@ it("uses one validated snapshot of observational input", () => {
 	expect(lines[0]).not.toContain("PRIVATE_SENTINEL");
 });
 
+it("rejects objects that coerce to a valid correlation ID", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-api",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	telemetry.record({
+		stage: "http",
+		outcome: "completed",
+		requestId: {
+			secret: "PRIVATE_SENTINEL",
+			toString: () => "123e4567-e89b-42d3-a456-426614174000",
+		} as unknown as string,
+	});
+	expect(lines).toHaveLength(1);
+	expect(lines[0]).not.toContain("PRIVATE_SENTINEL");
+	expect(lines[0]).not.toContain("requestId");
+});
+
 it("reports OTLP failures without failing an observed operation", async () => {
 	const output = new Writable({
 		write(_chunk, _encoding, done) {

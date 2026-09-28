@@ -83,8 +83,10 @@ const identifier =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const operationIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-function safeId(value: string | undefined) {
-	return value && identifier.test(value) ? value : undefined;
+function safeId(value: unknown) {
+	return typeof value === "string" && identifier.test(value)
+		? value
+		: undefined;
 }
 
 function safeOperationRef(value: string | undefined) {
