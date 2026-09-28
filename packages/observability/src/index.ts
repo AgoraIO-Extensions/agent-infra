@@ -144,6 +144,7 @@ export function startObservability(options: ObservabilityOptions) {
 	const output = options.output ?? process.stdout;
 	let backpressured = false;
 	let closingOutput = false;
+	let abandonExports = false;
 	let state: "active" | "closing" | "closed" = "active";
 	let pendingWrites = 0;
 	let errorEvents = 0;
@@ -216,6 +217,11 @@ export function startObservability(options: ObservabilityOptions) {
 			override export(
 				...[spans, callback]: Parameters<OTLPTraceExporter["export"]>
 			) {
+				if (abandonExports) {
+					noteExport(ExportResultCode.FAILED);
+					callback({ code: ExportResultCode.FAILED });
+					return;
+				}
 				return super.export(spans, (result) => {
 					noteExport(result.code);
 					callback(result);
@@ -226,6 +232,11 @@ export function startObservability(options: ObservabilityOptions) {
 			override export(
 				...[data, callback]: Parameters<OTLPMetricExporter["export"]>
 			) {
+				if (abandonExports) {
+					noteExport(ExportResultCode.FAILED);
+					callback({ code: ExportResultCode.FAILED });
+					return;
+				}
 				return super.export(data, (result) => {
 					noteExport(result.code);
 					callback(result);
@@ -358,26 +369,38 @@ export function startObservability(options: ObservabilityOptions) {
 				if (pendingWrites === 0 && !awaitingWriteError)
 					output.off("error", onError);
 				let timer: ReturnType<typeof setTimeout> | undefined;
+				let timedOut = false;
 				try {
-					await Promise.race([
-						Promise.resolve()
-							.then(() =>
-								Promise.all([
-									providers?.tracer.shutdown(),
-									providers?.meter.shutdown(),
-								]),
+					const shutdown = Promise.resolve()
+						.then(() =>
+							Promise.allSettled([
+								Promise.resolve().then(() => providers?.tracer.shutdown()),
+								Promise.resolve().then(() => providers?.meter.shutdown()),
+							]),
+						)
+						.then((results) => {
+							if (
+								!timedOut &&
+								results.some((result) => result.status === "rejected")
 							)
-							.catch(() => noteExport(1)),
+								noteExport(ExportResultCode.FAILED);
+						})
+						.finally(() => {
+							state = "closed";
+						});
+					await Promise.race([
+						shutdown,
 						new Promise<void>((resolve) => {
 							timer = setTimeout(() => {
-								noteExport(1);
+								timedOut = true;
+								abandonExports = true;
+								noteExport(ExportResultCode.FAILED);
 								resolve();
 							}, 5000);
 						}),
 					]);
 				} finally {
 					clearTimeout(timer);
-					state = "closed";
 				}
 			})();
 			return closing;
