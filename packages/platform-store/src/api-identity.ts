@@ -770,6 +770,7 @@ export class PostgresApiIdentityStoreV1 {
 		const [row] = await this.#database
 			.select({ agentId: agentPrincipalGrants.agentId })
 			.from(agentPrincipalGrants)
+			.innerJoin(agents, eq(agents.id, agentPrincipalGrants.agentId))
 			.where(
 				and(
 					eq(agentPrincipalGrants.agentId, input.agentId),
@@ -779,6 +780,10 @@ export class PostgresApiIdentityStoreV1 {
 					),
 					eq(agentPrincipalGrants.principalId, input.principal.id),
 					eq(agentPrincipalGrants.grantType, input.grantType),
+					eq(
+						agentPrincipalGrants.authorizationRevision,
+						agents.authorizationRevision,
+					),
 					isNull(agentPrincipalGrants.revokedAt),
 				),
 			)

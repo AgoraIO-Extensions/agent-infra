@@ -1207,6 +1207,30 @@ describe("management routes", () => {
 		);
 	});
 
+	it("starts a stopped Agent through the supported restart transition", async () => {
+		const input = createApp({ api: true });
+		input.getAgent.mockResolvedValue({
+			...agentRecord,
+			management: { ...management, status: "stopped" },
+		});
+		const response = await input.app.request(
+			"/api/v1/agents/agent-1/lifecycle",
+			{
+				method: "POST",
+				headers: { ...headers, Authorization: "Bearer secret" },
+				body: JSON.stringify({ schemaVersion: 1, command: "start" }),
+			},
+		);
+		expect(response.status).toBe(202);
+		expect(input.executeManagementCommand).toHaveBeenCalledWith(
+			expect.objectContaining({
+				command: "restart_agent",
+				expectedRevision: management.revision,
+			}),
+			expect.anything(),
+		);
+	});
+
 	it("upgrades a custom image through the configuration use case", async () => {
 		const upgraded = createApp();
 		upgraded.readAgentProjection.mockResolvedValue({

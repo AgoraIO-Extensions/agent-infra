@@ -263,6 +263,30 @@ describe("PostgreSQL API identity store", () => {
 		]);
 	});
 
+	it("does not report a superseded Agent grant as current authority", async () => {
+		await adminClient`truncate platform.agent_principal_grants, platform.agents cascade`;
+		await adminClient`
+			insert into platform.agents (id, authorization_revision)
+			values ('agent_grant_read', 'revision_1')
+		`;
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_grant_read', 'user', 'user_reader', 'use', 'revision_1')
+		`;
+		const input = {
+			agentId: "agent_grant_read",
+			principal: { kind: "user" as const, id: "user_reader" },
+			grantType: "use" as const,
+		};
+		await expect(store.hasAgentGrant(input)).resolves.toBe(true);
+		await adminClient`
+			update platform.agents set authorization_revision = 'revision_2'
+			where id = 'agent_grant_read'
+		`;
+		await expect(store.hasAgentGrant(input)).resolves.toBe(false);
+	});
+
 	it("advances the Agent authorization revision when revoking a grant", async () => {
 		await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
 			platform.agents cascade`;
