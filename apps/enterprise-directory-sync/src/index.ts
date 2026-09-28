@@ -1,10 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:https";
 import { pathToFileURL } from "node:url";
-import {
-	createPostgresDirectoryStore,
-	createWeComSource,
-} from "@agent-infra/enterprise-directory";
+import { createWeComSource } from "@agent-infra/enterprise-directory";
+import { createPostgresDirectoryStore } from "@agent-infra/enterprise-directory-store";
 import { serve } from "@hono/node-server";
 import { createDirectoryService } from "./service.js";
 

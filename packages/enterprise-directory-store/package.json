@@ -1,5 +1,5 @@
 {
-	"name": "@agent-infra/enterprise-directory",
+	"name": "@agent-infra/enterprise-directory-store",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
@@ -16,17 +16,17 @@
 	],
 	"scripts": {
 		"build": "tsdown",
-		"check-types": "tsc --noEmit",
-		"test": "vitest run src"
+		"check-types": "tsc --noEmit"
 	},
 	"dependencies": {
-		"zod": "catalog:"
+		"@agent-infra/enterprise-directory": "workspace:*",
+		"drizzle-orm": "catalog:",
+		"postgres": "catalog:"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
 		"@types/node": "catalog:",
 		"tsdown": "0.22.14",
-		"typescript": "catalog:",
-		"vitest": "catalog:"
+		"typescript": "catalog:"
 	}
 }

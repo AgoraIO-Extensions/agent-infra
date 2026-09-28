@@ -163,6 +163,7 @@ agent-infra/
     connection-store/        Connection DB 的 Drizzle Adapter
     identity/                Platform IdentityAdapter、IdentityContext 与测试 Fake
     enterprise-directory/    企微快照、完整性与内网读取契约
+    enterprise-directory-store/  目录快照的 Drizzle/PostgreSQL Adapter
     image-registry/          ImageRegistryAdapter、OCI Digest/Manifest 与测试 Fake
     secret-store/            版本化 AEAD 密文、DEK 封装与密钥轮换
     model-catalog/           ModelCatalogAdapter 与模型端点政策
