@@ -107,6 +107,37 @@ function fixture(sessions = memorySessions()) {
 }
 
 describe("LDAP browser adapter", () => {
+	it("hydrates roles only for a current active LDAP and Platform user", async () => {
+		const state = fixture();
+		await expect(
+			state.adapter.identityAdapter.hydrateUsers([account.userId]),
+		).resolves.toEqual([
+			{
+				userId: account.userId,
+				displayName: account.displayName,
+				roles: account.roles,
+			},
+		]);
+		state.setCurrent({ ...account, accountStatus: "disabled" });
+		await expect(
+			state.adapter.identityAdapter.hydrateUsers([account.userId]),
+		).rejects.toThrow("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+		state.setCurrent(account);
+		state.setDisabled(true);
+		await expect(
+			state.adapter.identityAdapter.hydrateUsers([account.userId]),
+		).rejects.toThrow("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+		state.setDisabled(false);
+		state.setOrganizationsAvailable(false);
+		await expect(
+			state.adapter.identityAdapter.hydrateUsers([account.userId]),
+		).rejects.toThrow();
+		state.setOrganizationsAvailable(true);
+		await expect(
+			state.adapter.identityAdapter.hydrateUsers(["other-user"]),
+		).rejects.toThrow("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+	});
+
 	it("issues a secure hash-only session and resolves current LDAP and Platform facts", async () => {
 		const state = fixture();
 		const result = await state.login();

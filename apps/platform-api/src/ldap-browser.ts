@@ -171,11 +171,15 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			return Promise.all(
 				ids.map(async (id) => {
 					const account = await input.directory.currentByUserId(id);
-					if (!account) throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+					if (!account || account.userId !== id)
+						throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+					const identity = await current(account);
+					if (identity.accountStatus !== "active")
+						throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
 					return {
-						userId: account.userId,
-						displayName: account.displayName,
-						roles: account.roles,
+						userId: identity.userId,
+						displayName: identity.displayName,
+						roles: identity.roles,
 					};
 				}),
 			);
