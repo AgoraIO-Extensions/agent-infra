@@ -1,0 +1,100 @@
+import { Writable } from "node:stream";
+import { afterEach, expect, it } from "vitest";
+import { startObservability } from "./index.js";
+
+const active: Array<{ close(): Promise<void> }> = [];
+
+afterEach(async () => {
+	await Promise.all(active.splice(0).map((item) => item.close()));
+});
+
+it("emits only bounded metadata and drops logs under backpressure", () => {
+	const lines: string[] = [];
+	const output = new Writable({
+		highWaterMark: 1,
+		write(chunk) {
+			lines.push(String(chunk));
+			// Hold the first write to simulate a stalled log collector.
+		},
+	});
+	const telemetry = startObservability({ service: "platform-api", output });
+	active.push(telemetry);
+	telemetry.record({
+		stage: "http",
+		outcome: "completed",
+		requestId: "Bearer secret-token",
+		code: "SECRET_TOKEN" as "RUNTIME_UNAVAILABLE",
+		// The runtime entry point must ignore extra caller fields too.
+		message: "PRIVATE_SENTINEL",
+	} as Parameters<typeof telemetry.record>[0]);
+	telemetry.record({ stage: "http", outcome: "failed" });
+	expect(lines).toHaveLength(1);
+	expect(lines[0]).toContain('"stage":"http"');
+	expect(lines[0]).not.toMatch(/secret-token|SECRET_TOKEN|PRIVATE_SENTINEL/);
+	expect(telemetry.status()).toEqual({
+		enabled: false,
+		exportFailures: 0,
+		lastExportFailureAt: undefined,
+		droppedLogs: 1,
+		invalidRecords: 0,
+	});
+});
+
+it("keeps invalid observational input out of business control flow", () => {
+	const telemetry = startObservability({
+		service: "platform-api",
+		output: new Writable({
+			write(_chunk, _encoding, done) {
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	expect(() =>
+		telemetry.record({
+			stage: "http",
+			outcome: "completed",
+			durationMs: Number.POSITIVE_INFINITY,
+		}),
+	).not.toThrow();
+	expect(telemetry.status().invalidRecords).toBe(1);
+});
+
+it("reports OTLP failures without failing an observed operation", async () => {
+	const output = new Writable({
+		write(_chunk, _encoding, done) {
+			done();
+		},
+	});
+	const telemetry = startObservability({
+		service: "platform-worker",
+		otlpEndpoint: "http://127.0.0.1:1/",
+		metricIntervalMs: 1000,
+		output,
+	});
+	active.push(telemetry);
+	expect(() =>
+		telemetry.record({
+			stage: "worker",
+			outcome: "failed",
+			code: "RUNTIME_UNAVAILABLE",
+			executionId: "execution-1",
+			durationMs: 12,
+		}),
+	).not.toThrow();
+	const deadline = Date.now() + 5000;
+	while (telemetry.status().exportFailures === 0 && Date.now() < deadline)
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	expect(telemetry.status().enabled).toBe(true);
+	expect(telemetry.status().exportFailures).toBeGreaterThan(0);
+	expect(telemetry.status().lastExportFailureAt).toMatch(/^\d{4}-/);
+}, 10_000);
+
+it("rejects credential-bearing exporter URLs", () => {
+	expect(() =>
+		startObservability({
+			service: "platform-api",
+			otlpEndpoint: "https://user:secret@collector.example/",
+		}),
+	).toThrow("Invalid observability endpoint");
+});
