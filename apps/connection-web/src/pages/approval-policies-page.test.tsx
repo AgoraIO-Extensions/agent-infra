@@ -277,6 +277,97 @@ it("keeps the action checklist compact despite global input styles", () => {
 	}
 });
 
+it("shows only current-provider disclaimers and clears hidden selections", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		profiles: [],
+		policies: [],
+		providers: [
+			{ provider: "github", providerReleaseId: "github-release", actions: [] },
+			{ provider: "jira", providerReleaseId: "jira-release", actions: [] },
+		],
+		disclaimers: [
+			{
+				id: "global",
+				kind: "GLOBAL",
+				providerId: null,
+				locale: "zh-CN",
+				content: "基础条款",
+				materialChange: false,
+				status: "PUBLISHED",
+			},
+			{
+				id: "github",
+				kind: "PROVIDER",
+				providerId: "github",
+				locale: "zh-CN",
+				content: "GitHub 条款",
+				materialChange: false,
+				status: "PUBLISHED",
+			},
+			{
+				id: "jira",
+				kind: "PROVIDER",
+				providerId: "jira",
+				locale: "zh-CN",
+				content: "Jira 条款",
+				materialChange: false,
+				status: "PUBLISHED",
+			},
+		],
+	});
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	fireEvent.click(screen.getByRole("tab", { name: "能力与条款" }));
+	const global = (await screen.findByRole("checkbox", {
+		name: "全局基础条款 · zh-CN",
+	})) as HTMLInputElement;
+	fireEvent.click(global);
+	expect(
+		screen.queryByRole("checkbox", { name: /附加条款 · zh-CN/ }),
+	).toBeNull();
+	fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+		target: { value: "github-release" },
+	});
+	const github = screen.getByRole("checkbox", {
+		name: "github 附加条款 · zh-CN",
+	}) as HTMLInputElement;
+	fireEvent.click(github);
+	fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+		target: { value: "jira-release" },
+	});
+	expect(
+		screen.queryByRole("checkbox", { name: "github 附加条款 · zh-CN" }),
+	).toBeNull();
+	expect(
+		screen.getByRole("checkbox", { name: "jira 附加条款 · zh-CN" }),
+	).toBeTruthy();
+	expect(global.checked).toBe(true);
+	fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+		target: { value: "github-release" },
+	});
+	expect(
+		(
+			screen.getByRole("checkbox", {
+				name: "github 附加条款 · zh-CN",
+			}) as HTMLInputElement
+		).checked,
+	).toBe(false);
+	fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+		target: { value: "" },
+	});
+	expect(
+		screen.queryByRole("checkbox", { name: /附加条款 · zh-CN/ }),
+	).toBeNull();
+	expect(global.checked).toBe(true);
+});
+
 it("keeps disclaimer and permanent-duration controls compact and clickable", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
 		profiles: [],
@@ -312,7 +403,7 @@ it("keeps disclaimer and permanent-duration controls compact and clickable", asy
 		);
 		fireEvent.click(screen.getByRole("tab", { name: "能力与条款" }));
 		const disclaimer = (await screen.findByRole("checkbox", {
-			name: "GLOBAL · zh-CN",
+			name: "全局基础条款 · zh-CN",
 		})) as HTMLInputElement;
 		const material = screen.getByRole("checkbox", {
 			name: "重大内容变化",
@@ -324,7 +415,7 @@ it("keeps disclaimer and permanent-duration controls compact and clickable", asy
 			expect(getComputedStyle(checkbox).width).toBe("16px");
 			expect(getComputedStyle(checkbox).minHeight).toBe("16px");
 		}
-		fireEvent.click(screen.getByText("GLOBAL · zh-CN"));
+		fireEvent.click(screen.getByText("全局基础条款 · zh-CN"));
 		fireEvent.click(screen.getByText("重大内容变化"));
 		fireEvent.click(screen.getByText("允许永久有效"));
 		expect(disclaimer.checked).toBe(true);
