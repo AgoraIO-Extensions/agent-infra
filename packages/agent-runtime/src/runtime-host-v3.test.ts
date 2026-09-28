@@ -2304,6 +2304,24 @@ describe("Runtime V3 durable authorization", () => {
 					controlOperation: { kind: "execution", id: status.executionId },
 					confirmedCursor: event.value.cursor,
 				});
+				const repeatedStatus = signV3Fixture(
+					{
+						...base(accepted.hostSessionRef),
+						originalOperationDigest: originalDigest(),
+					},
+					"session.status",
+					{
+						purpose: "control",
+						reason: "recovery",
+						claims: { controlRecordId: "status-recheck" },
+					},
+				);
+				await expect(
+					host.recoverStatusV3(
+						repeatedStatus,
+						verifyRuntimeV2Fixture(repeatedStatus.grant),
+					),
+				).resolves.toMatchObject({ outcome: "found", status: "completed" });
 				const conflicting = signV3Fixture(
 					{ ...eventBase, confirmedCursor: event.value.cursor },
 					"events.ack",

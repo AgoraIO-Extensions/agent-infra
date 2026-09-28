@@ -223,7 +223,11 @@ export function applyRuntimeAuthority(
 		mode === "query" &&
 		current?.stopped === true &&
 		(current.control?.reason === "stop" ||
-			current.control?.reason === "authorization_revoked") &&
+			current.control?.reason === "authorization_revoked" ||
+			(current.control?.reason === "recovery" &&
+				current.controlOperation?.kind === "execution" &&
+				claims.allowedCommands.length === 1 &&
+				claims.allowedCommands[0] === "session.status")) &&
 		(current.controlOperation?.kind === "stop" ||
 			(current.controlOperation?.kind === "execution" &&
 				current.controlOperation.id === claims.executionId)) &&
