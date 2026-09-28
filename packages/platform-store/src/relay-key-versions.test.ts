@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest";
+import postgres from "postgres";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import {
+	type PostgresTestDatabase,
+	startPostgresTestDatabase,
+} from "./postgres-test.ts";
 
 import {
 	currentRelayKeyVersionInTransaction,
@@ -29,8 +35,8 @@ function ciphertext(binding: RelayKeyVersionBindingV1) {
 	};
 }
 
-// A small transaction double checks the authority's state transitions. The
-// PostgreSQL locking and migration are separate integration handoff gates.
+// The transaction double checks state transitions; the PostgreSQL test below
+// checks row locking. Migration registration remains a separate handoff gate.
 function transaction() {
 	type Row = { last_version: number; current_version: number | null };
 	const subjects = new Map<string, Row>();
@@ -234,4 +240,141 @@ describe("Relay Key version authority", () => {
 			).toBeNull();
 		}
 	});
+});
+
+describe("Relay Key version authority on PostgreSQL", () => {
+	let database: PostgresTestDatabase | undefined;
+
+	beforeAll(async () => {
+		database = await startPostgresTestDatabase("relay-key-versions");
+		const client = postgres(database.databaseUrl, { max: 1 });
+		try {
+			await client`create schema platform`;
+			await client`
+				create table platform.relay_key_subjects (
+					purpose text not null,
+					subject_id text not null,
+					last_version bigint not null default 0,
+					current_version bigint,
+					updated_at timestamptz not null default now(),
+					primary key (purpose, subject_id),
+					check (current_version is null or current_version between 1 and last_version)
+				)
+			`;
+			await client`
+				create table platform.relay_key_versions (
+					purpose text not null,
+					subject_id text not null,
+					key_version bigint not null,
+					key_id text not null unique,
+					ciphertext jsonb not null,
+					primary key (purpose, subject_id, key_version),
+					foreign key (purpose, subject_id)
+						references platform.relay_key_subjects (purpose, subject_id)
+				)
+			`;
+		} finally {
+			await client.end();
+		}
+	}, 120_000);
+
+	afterAll(async () => database?.stop());
+
+	it("serializes concurrent replacement and preserves pinned versions after revoke", async () => {
+		if (!database) throw new Error("PostgreSQL test database is unavailable");
+		const client = postgres(database.databaseUrl, { max: 4 });
+		const target = { purpose: "personal" as const, subjectId: "user-a" };
+		try {
+			const attempts = await Promise.all(
+				Array.from({ length: 2 }, () =>
+					client.begin((sql) =>
+						replaceRelayKeyVersionInTransaction(sql, {
+							...target,
+							expectedCurrentVersion: null,
+							encrypt: ciphertext,
+						}),
+					),
+				),
+			);
+			expect(attempts.map(({ outcome }) => outcome).sort()).toEqual([
+				"replaced",
+				"stale",
+			]);
+			const first = attempts.find((attempt) => attempt.outcome === "replaced");
+			if (first?.outcome !== "replaced") throw new Error();
+			expect(first.binding.keyVersion).toBe(1);
+			const second = await client.begin((sql) =>
+				replaceRelayKeyVersionInTransaction(sql, {
+					...target,
+					expectedCurrentVersion: 1,
+					encrypt: ciphertext,
+				}),
+			);
+			if (second.outcome !== "replaced") throw new Error();
+			expect(second.binding.keyVersion).toBe(2);
+			expect(
+				await client.begin((sql) =>
+					currentRelayKeyVersionInTransaction(sql, target),
+				),
+			).toEqual(second.binding);
+			expect(
+				await client.begin((sql) =>
+					readRelayKeyVersionInTransaction(sql, first.binding),
+				),
+			).toEqual(ciphertext(first.binding));
+			for (const changed of [
+				{ purpose: "agent-default" as const },
+				{ subjectId: "user-b" },
+				{ keyId: "another-key" },
+				{ keyVersion: 2 },
+			]) {
+				expect(
+					await client.begin((sql) =>
+						readRelayKeyVersionInTransaction(sql, {
+							...first.binding,
+							...changed,
+						}),
+					),
+				).toBeNull();
+			}
+			expect(
+				await client.begin((sql) =>
+					revokeCurrentRelayKeyInTransaction(sql, {
+						...target,
+						expectedCurrentVersion: 1,
+					}),
+				),
+			).toBe("stale");
+			expect(
+				await client.begin((sql) =>
+					revokeCurrentRelayKeyInTransaction(sql, {
+						...target,
+						expectedCurrentVersion: 2,
+					}),
+				),
+			).toBe("revoked");
+			expect(
+				await client.begin((sql) =>
+					currentRelayKeyVersionInTransaction(sql, target),
+				),
+			).toBeNull();
+			expect(
+				await client.begin((sql) =>
+					readRelayKeyVersionInTransaction(sql, first.binding),
+				),
+			).toEqual(ciphertext(first.binding));
+			const third = await client.begin((sql) =>
+				replaceRelayKeyVersionInTransaction(sql, {
+					...target,
+					expectedCurrentVersion: null,
+					encrypt: ciphertext,
+				}),
+			);
+			expect(third.outcome).toBe("replaced");
+			if (third.outcome === "replaced")
+				expect(third.binding.keyVersion).toBe(3);
+		} finally {
+			await client.end();
+		}
+	}, 120_000);
 });
