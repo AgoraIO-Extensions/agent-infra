@@ -1723,7 +1723,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			previousEvent.payload.kind === "tool"
 				? previousEvent.payload
 				: undefined;
-		if (previous?.phase === "intent") return previous;
+		const toolId = metadataId(value.name, "tool");
+		if (previous?.phase === "intent") {
+			if (previous.toolId !== toolId) unavailable();
+			return previous;
+		}
 		// A repeated permission callback for one native tool use is not a new attempt.
 		if (previous) unavailable();
 		const model = generationFact(turn);
@@ -1732,7 +1736,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			operationRef: randomUUID(),
 			attemptRef: randomUUID(),
 			phase: "intent" as const,
-			toolId: metadataId(value.name, "tool"),
+			toolId,
 			...(model ? { parentOperationRef: model.operationRef } : {}),
 		};
 		await file.update((state) => {

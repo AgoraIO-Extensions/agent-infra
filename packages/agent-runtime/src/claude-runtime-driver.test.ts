@@ -370,6 +370,42 @@ it("records one failed attempt when Claude repeats a denied tool permission", as
 	);
 }, 20_000);
 
+it("denies a repeated Claude tool ID with a different tool name", async () => {
+	const decisions: string[] = [];
+	await withClaudeSource(
+		async (request, options) => {
+			const response = await request();
+			expect(response.ok).toBe(true);
+			await response.text();
+			const input = {
+				file_path: join(String(options.cwd), "synthetic.txt"),
+			};
+			for (const name of ["Read", "Write"]) {
+				const decision = await options.canUseTool?.(name, input, {
+					signal: new AbortController().signal,
+					toolUseID: "same-native-tool",
+					requestId: "synthetic-permission-request",
+				});
+				decisions.push(decision?.behavior ?? "missing");
+			}
+		},
+		async (action, driver) => driver.validateExternalAction(action),
+		async ({ driver, ref, command }) => {
+			await vi.waitFor(() => expect(decisions).toHaveLength(2), {
+				timeout: 15_000,
+			});
+			expect(decisions).toEqual(["allow", "deny"]);
+			const events = await driver.replayEvents(ref, command.executionId);
+			const facts = events.flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload]
+					: [],
+			);
+			expect(facts).toMatchObject([{ phase: "intent", toolId: "Read" }]);
+		},
+	);
+}, 20_000);
+
 it("blocks Claude model requests before current authority when durable intent fails", async () => {
 	let inject = false;
 	let responseStatus = 0;
