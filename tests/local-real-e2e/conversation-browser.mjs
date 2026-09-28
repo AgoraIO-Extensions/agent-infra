@@ -92,25 +92,12 @@ async function run(input, evidence) {
 		const page = await owner.newPage();
 		await page.addInitScript(() => {
 			window.__agentInfraSseFrames = [];
-			window.__agentInfraAssistantSnapshots = [];
-			const recordAssistantSnapshot = () => {
-				const length = [
-					...document.querySelectorAll(".assistant-markdown"),
-				].reduce(
+			window.__agentInfraStreamStartAssistantLength = 0;
+			const assistantTextLength = () =>
+				[...document.querySelectorAll(".assistant-markdown")].reduce(
 					(max, node) => Math.max(max, node.textContent?.trim().length ?? 0),
 					0,
 				);
-				if (length > 0)
-					window.__agentInfraAssistantSnapshots.push({
-						at: performance.now(),
-						length,
-					});
-			};
-			new MutationObserver(recordAssistantSnapshot).observe(document, {
-				characterData: true,
-				childList: true,
-				subtree: true,
-			});
 			const fetchImpl = window.fetch.bind(window);
 			window.fetch = async (input, init) => {
 				const response = await fetchImpl(input, init);
@@ -124,6 +111,7 @@ async function run(input, evidence) {
 				);
 				if (!url.pathname.endsWith("/events") || !response.body)
 					return response;
+				window.__agentInfraStreamStartAssistantLength = assistantTextLength();
 				let pending = "";
 				const decoder = new TextDecoder();
 				const stream = response.body.pipeThrough(
@@ -154,6 +142,7 @@ async function run(input, evidence) {
 													: undefined,
 											type: parsed.type,
 											at: performance.now(),
+											visibleTextLength: assistantTextLength(),
 										});
 									} catch {}
 								}
@@ -238,8 +227,8 @@ async function run(input, evidence) {
 		const sseFrames = await page.evaluate(
 			() => window.__agentInfraSseFrames ?? [],
 		);
-		const assistantSnapshots = await page.evaluate(
-			() => window.__agentInfraAssistantSnapshots ?? [],
+		const streamStartAssistantLength = await page.evaluate(
+			() => window.__agentInfraStreamStartAssistantLength ?? 0,
 		);
 		assert(
 			sseFrames.length >= 2,
@@ -257,7 +246,7 @@ async function run(input, evidence) {
 			"SSE must include text and terminal frames",
 		);
 		assert(
-			assistantSnapshots.some((snapshot) => snapshot.at < terminalFrame.at),
+			terminalFrame.visibleTextLength > streamStartAssistantLength,
 			"The page must display assistant text before the terminal frame",
 		);
 		assert(
@@ -273,6 +262,7 @@ async function run(input, evidence) {
 				type: frame.type,
 				status: frame.status ?? null,
 				textLength: frame.textLength ?? null,
+				visibleTextLength: frame.visibleTextLength,
 			})),
 			cursorHash: detail.conversation.lastConversationCursor
 				? digest(detail.conversation.lastConversationCursor)
