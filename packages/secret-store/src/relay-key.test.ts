@@ -19,23 +19,21 @@ const wrappingKeyVersion = "wrapping-2026-09";
 const plaintextK1 = "sk-user-1-secret-K1";
 const plaintextK2 = "sk-user-1-secret-K2";
 
+const activeWrappingKey = {
+	schemaVersion: 1 as const,
+	keyVersion: wrappingKeyVersion,
+	wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+	publicKeySpkiDerBase64: publicKeyDer.toString("base64"),
+	publicKeyFingerprint: createHash("sha256").update(publicKeyDer).digest("hex"),
+	rsaModulusBits: 3072,
+	status: "active" as const,
+};
+
 const encryptor = createRelayKeyEncryptorV1({
 	encryptionKeys: {
 		schemaVersion: 1,
 		activeWrappingKeyVersion: wrappingKeyVersion,
-		keys: [
-			{
-				schemaVersion: 1,
-				keyVersion: wrappingKeyVersion,
-				wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
-				publicKeySpkiDerBase64: publicKeyDer.toString("base64"),
-				publicKeyFingerprint: createHash("sha256")
-					.update(publicKeyDer)
-					.digest("hex"),
-				rsaModulusBits: 3072,
-				status: "active",
-			},
-		],
+		keys: [activeWrappingKey],
 	},
 });
 const decryptor = createRelayKeyWorkerDecryptorV1({
@@ -54,8 +52,12 @@ function record(binding: RelayKeyBindingV1, plaintext: string) {
 async function decrypt(
 	encryptedRecord: unknown,
 	expectedBinding: RelayKeyBindingV1,
+	selectedDecryptor = decryptor,
 ) {
-	const result = await decryptor.decrypt({ encryptedRecord, expectedBinding });
+	const result = await selectedDecryptor.decrypt({
+		encryptedRecord,
+		expectedBinding,
+	});
 	if (result.outcome === "decrypted") {
 		const value = Buffer.from(result.plaintext).toString("utf8");
 		result.plaintext.fill(0);
@@ -92,6 +94,78 @@ describe("Relay Key ciphertext V1", () => {
 		expect(await decrypt(k2, { ...binding, keyVersion: 2 })).toBe(plaintextK2);
 		expect(await decrypt(k1, { ...binding, keyVersion: 2 })).toBe(
 			"RELAY_KEY_METADATA_INVALID",
+		);
+	});
+
+	it("keeps K1 readable across wrapping key rotation and fails closed without its private key", async () => {
+		const rotatedPair = generateKeyPairSync("rsa", { modulusLength: 3072 });
+		const rotatedPublicDer = rotatedPair.publicKey.export({
+			format: "der",
+			type: "spki",
+		});
+		const rotatedPrivateDer = rotatedPair.privateKey.export({
+			format: "der",
+			type: "pkcs8",
+		});
+		const rotatedWrappingKeyVersion = "wrapping-2026-10";
+		const rotatedEncryptor = createRelayKeyEncryptorV1({
+			encryptionKeys: {
+				schemaVersion: 1,
+				activeWrappingKeyVersion: rotatedWrappingKeyVersion,
+				keys: [
+					{ ...activeWrappingKey, status: "retiring" },
+					{
+						schemaVersion: 1,
+						keyVersion: rotatedWrappingKeyVersion,
+						wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+						publicKeySpkiDerBase64: rotatedPublicDer.toString("base64"),
+						publicKeyFingerprint: createHash("sha256")
+							.update(rotatedPublicDer)
+							.digest("hex"),
+						rsaModulusBits: 3072,
+						status: "active",
+					},
+				],
+			},
+		});
+		const binding = {
+			purpose: "personal" as const,
+			subjectId: "user_01",
+			keyId: "relay-key-user-01",
+		};
+		const k1Binding = { ...binding, keyVersion: 1 };
+		const k2Binding = {
+			...binding,
+			keyId: "relay-key-user-01-k2",
+			keyVersion: 2,
+		};
+		const k1 = record(k1Binding, plaintextK1);
+		const k2 = rotatedEncryptor.encrypt({
+			...k2Binding,
+			plaintext: plaintextK2,
+		});
+		const rotatedPrivateKey = {
+			keyVersion: rotatedWrappingKeyVersion,
+			privateKeyPkcs8DerBase64: rotatedPrivateDer.toString("base64"),
+		};
+		const bothKeys = createRelayKeyWorkerDecryptorV1({
+			keys: [
+				{
+					keyVersion: wrappingKeyVersion,
+					privateKeyPkcs8DerBase64: privateKeyDer.toString("base64"),
+				},
+				rotatedPrivateKey,
+			],
+		});
+		const newKeyOnly = createRelayKeyWorkerDecryptorV1({
+			keys: [rotatedPrivateKey],
+		});
+		expect(k1.crypto.wrappingKeyVersion).toBe(wrappingKeyVersion);
+		expect(k2.crypto.wrappingKeyVersion).toBe(rotatedWrappingKeyVersion);
+		expect(await decrypt(k1, k1Binding, bothKeys)).toBe(plaintextK1);
+		expect(await decrypt(k2, k2Binding, bothKeys)).toBe(plaintextK2);
+		expect(await decrypt(k1, k1Binding, newKeyOnly)).toBe(
+			"RELAY_KEY_UNAVAILABLE",
 		);
 	});
 
