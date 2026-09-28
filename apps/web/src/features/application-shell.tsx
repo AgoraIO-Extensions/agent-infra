@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/sheet";
 import { Sidebar } from "@/components/ui/sidebar";
 import type { BrowserSessionProjectionV1 } from "../pilot/generated/types.gen";
+import { LogoutAction } from "./logout-action";
 import {
 	BrowserSessionQueryContext,
 	useBrowserSession,
@@ -202,9 +203,10 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					</div>
 				</div>
 				{user && logoutUrl && (
-					<a className="platform-nav-item" href={logoutUrl}>
-						退出登录
-					</a>
+					<LogoutAction
+						endpoint={logoutUrl}
+						onLoggedOut={() => session.refetch()}
+					/>
 				)}
 			</div>
 		</>

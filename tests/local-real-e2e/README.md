@@ -76,3 +76,48 @@ node --test tests/local-real-e2e/local-browser.test.ts
 覆盖配置和私密文件权限、实际登录会话校验、Cookie 属性、匿名与伪造身份、Host/Origin/
 CSRF 拒绝、调用方身份头与上游 Cookie 隔离、切换与退出、禁止上游重定向，以及 SSE 的
 即时转发和断连取消。测试通过仅证明受控开发入口行为。
+
+## 对话真实浏览器验收
+
+登录入口完成后，使用专用配置运行对话旅程：
+
+```bash
+node tests/local-real-e2e/conversation-browser.mjs /absolute/local-development/conversation.json
+```
+
+对话旅程配置只保存 origin、Agent ID、测试提示词和两个浏览器主体的私有
+`storageState` 文件路径；它不保存 token 正文：
+
+```json
+{
+  "origin": "https://127.0.0.1:3511",
+  "agentId": "agent-under-test",
+  "prompt": "请返回一段可核对的结果",
+  "owner": {
+    "userId": "controlled-owner",
+    "stateFile": "/absolute/local-development/owner-state.json"
+  },
+  "other": {
+    "userId": "controlled-other",
+    "stateFile": "/absolute/local-development/other-state.json"
+  }
+}
+```
+
+两个 `storageState` 必须由同一受控部署登录流程生成、属于当前用户且权限为 `0600`；
+不得把 token、Cookie 或真实消息正文提交到仓库。
+
+该旅程会在 Owner 浏览器中创建会话、提交文本、读取 SSE，并在回答完成后刷新页面。
+它记录浏览器实际消费到的增量 `text.delta` 与终态 `execution.status` 帧，并要求页面在终态
+帧前显示增量文本、增量帧先于 `completed` 终态帧到达；随后回读持久化事件、恢复页面和窄
+屏布局。第二个独立浏览器主体同时请求
+会话详情和 `/events` 订阅，两者必须得到 `403` 或 `404`，页面不得保留另一个主体的正文。
+
+输出目录中的 `evidence.json` 只保存主体、会话、执行和事件 ID 的 SHA-256，以及状态码和
+帧类型，不保存 token、消息正文或原始凭证。桌面和移动截图会遮盖用户消息与 assistant 正文，
+只保留布局和状态证据。`modelCallVerified` 与 `connectionVerified` 默认为 `false`；受控浏览器
+旅程的通过不能替代真实模型调用或 Connection 授权证据。
+
+`apps/web/tests/conversation-live.spec.ts` 是 Playwright 的合成 fixture 测试：它在浏览器
+内延迟返回两帧 SSE，专门验证提交防重、增量渲染、刷新恢复和权限失效 UI。fixture 通过不
+代表部署后端、模型或 Connection 已经可用。
