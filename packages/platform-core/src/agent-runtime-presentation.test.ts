@@ -92,6 +92,25 @@ function fixture() {
 }
 
 describe("Agent runtime presentation policy", () => {
+	it("lets API managers discover without inheriting use permission", () => {
+		const principal = { kind: "application" as const, id: "application_01" };
+		const apiActor = { ...actor, principal };
+		const grant = (grantType: "manage" | "use") => ({
+			principal,
+			grantType,
+			authorizationRevision: "revision_1",
+			revokedAt: null,
+		});
+		const manageOnly = { ...management, principalGrants: [grant("manage")] };
+		expect(isAgentAccessAllowedV1(manageOnly, apiActor, "discover")).toBe(true);
+		expect(isAgentAccessAllowedV1(manageOnly, apiActor, "manage")).toBe(true);
+		expect(isAgentAccessAllowedV1(manageOnly, apiActor, "use")).toBe(false);
+		const useOnly = { ...management, principalGrants: [grant("use")] };
+		expect(isAgentAccessAllowedV1(useOnly, apiActor, "discover")).toBe(true);
+		expect(isAgentAccessAllowedV1(useOnly, apiActor, "use")).toBe(true);
+		expect(isAgentAccessAllowedV1(useOnly, apiActor, "manage")).toBe(false);
+	});
+
 	it.each([false, true])(
 		"rejects another Agent's configuration before projecting source or capabilities (runtime present: %s)",
 		(hasRuntime) => {

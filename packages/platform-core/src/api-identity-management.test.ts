@@ -183,6 +183,41 @@ describe("API identity management authorization", () => {
 		);
 	});
 
+	it("rejects expired or revoked actor credentials before management calls", async () => {
+		const store = storeFixture();
+		const useCase = management(store);
+		const apiActor = actor({ kind: "application", id: "application-caller" });
+		for (const stale of [
+			{ revokedAt: new Date("2026-09-25T00:00:00Z") },
+			{ expiresAt: new Date("2020-01-01T00:00:00Z") },
+		]) {
+			const staleActor = {
+				...apiActor,
+				credential: { ...apiActor.credential, ...stale },
+			};
+			await expect(
+				useCase.authorizeCredentialScope(staleActor, ["agent:manage"]),
+			).rejects.toMatchObject({ code: "not_authorized" });
+			await expect(
+				useCase.resolveAgentQueryGrantType(staleActor),
+			).rejects.toMatchObject({ code: "not_authorized" });
+			await expect(
+				useCase.grantAgent({
+					actor: staleActor,
+					agentId: "agent-1",
+					principal: { kind: "user", id: "recipient-1" },
+					grantType: "use",
+					audit: {
+						...audit,
+						actor: apiActor.principal,
+						action: "api.agent.grant.granted",
+					},
+				}),
+			).rejects.toMatchObject({ code: "not_authorized" });
+		}
+		expect(store.grantAgent).not.toHaveBeenCalled();
+	});
+
 	it("audits rejected scope and query authorization in the same API audit port", async () => {
 		const store = storeFixture();
 		const useCase = management(store);
