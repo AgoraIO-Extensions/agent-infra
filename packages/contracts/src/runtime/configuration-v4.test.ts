@@ -24,6 +24,45 @@ it("accepts a Key-free V4 configuration", () => {
 	);
 });
 
+it("accepts HTTPS and literal loopback HTTP model endpoints", () => {
+	for (const endpoint of [
+		"https://relay.example.test/v1",
+		"HTTPS://relay.example.test/v1",
+		"http://127.0.0.1:8080/v1",
+		"http://[::1]:8080/v1",
+	]) {
+		expect(
+			RuntimeModelConfigurationV4Schema.safeParse({
+				...configuration,
+				modelOptions: [{ ...configuration.modelOptions[0], endpoint }],
+			}).success,
+		).toBe(true);
+	}
+});
+
+it("rejects unsafe model endpoint schemes and authorities", () => {
+	for (const endpoint of [
+		"file:///tmp/model",
+		"javascript:alert(1)",
+		"http://localhost:8080/v1",
+		"HTTP://127.0.0.1:8080/v1",
+		"http://127.1:8080/v1",
+		"http://127.0.0.1.evil.test/v1",
+		"http://169.254.169.254/v1",
+		"https://user:synthetic-credential@relay.example.test/v1",
+		"https://relay.example.test/v1?key=synthetic-credential",
+		"https://relay.example.test/v1#fragment",
+		"https://relay.example.test\\other/v1",
+	]) {
+		expect(
+			RuntimeModelConfigurationV4Schema.safeParse({
+				...configuration,
+				modelOptions: [{ ...configuration.modelOptions[0], endpoint }],
+			}).success,
+		).toBe(false);
+	}
+});
+
 it("rejects old Pod credentials and Key references from V4 options", () => {
 	const option = configuration.modelOptions[0];
 	expect(

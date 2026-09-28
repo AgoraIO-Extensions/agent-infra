@@ -200,16 +200,22 @@ export function createRelayKeyWorkerDecryptorV1(input: {
 					},
 					Buffer.from(record.crypto.wrappedDek, "base64"),
 				);
-				const fingerprint = Buffer.from(
-					createHash("sha256").update(dek).digest("hex"),
+				const fingerprint = createHash("sha256").update(dek).digest();
+				const expectedFingerprint = Buffer.from(
+					record.crypto.dekFingerprint,
+					"hex",
 				);
-				const expectedFingerprint = Buffer.from(record.crypto.dekFingerprint);
-				if (
-					dek.byteLength !== 32 ||
-					fingerprint.byteLength !== expectedFingerprint.byteLength ||
-					!timingSafeEqual(fingerprint, expectedFingerprint)
-				) {
-					throw new Error();
+				try {
+					if (
+						dek.byteLength !== 32 ||
+						fingerprint.byteLength !== expectedFingerprint.byteLength ||
+						!timingSafeEqual(fingerprint, expectedFingerprint)
+					) {
+						throw new Error();
+					}
+				} finally {
+					fingerprint.fill(0);
+					expectedFingerprint.fill(0);
 				}
 				const decipher = createDecipheriv(
 					"aes-256-gcm",

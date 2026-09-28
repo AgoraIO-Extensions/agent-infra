@@ -2,7 +2,7 @@
   "$defs": {
     "RuntimeModelConfigurationV4": {
       "additionalProperties": false,
-      "description": "JSON Schema validates structure only. Configuration admission additionally requires unique modelOptionId values, unique reasoningLevels within each option, and a default option/reasoning pair present in modelOptions, as enforced by RuntimeModelConfigurationV4Schema. Passing JSON Schema validation does not replace shared semantic validation or Runtime Host admission.",
+      "description": "JSON Schema validates structure only. Configuration admission additionally requires endpoint URL semantics, unique modelOptionId values, unique reasoningLevels within each option, and a default option/reasoning pair present in modelOptions, as enforced by RuntimeModelConfigurationV4Schema. Passing JSON Schema validation does not replace shared semantic validation or Runtime Host admission.",
       "properties": {
         "configVersion": {
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
@@ -29,6 +29,7 @@
                   "endpoint": {
                     "maxLength": 2048,
                     "minLength": 1,
+                    "pattern": "^(?:[Hh][Tt][Tt][Pp][Ss]:\\/\\/|http:\\/\\/(?:127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?(?:\\/|$))",
                     "type": "string"
                   },
                   "model": {
@@ -76,6 +77,7 @@
                   "endpoint": {
                     "maxLength": 2048,
                     "minLength": 1,
+                    "pattern": "^(?:[Hh][Tt][Tt][Pp][Ss]:\\/\\/|http:\\/\\/(?:127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?(?:\\/|$))",
                     "type": "string"
                   },
                   "model": {
