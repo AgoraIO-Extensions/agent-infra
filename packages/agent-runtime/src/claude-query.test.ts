@@ -7,6 +7,7 @@ import { claudeQuery } from "./claude-query.js";
 const fixture = vi.hoisted(() => ({
 	script: "",
 	child: undefined as ChildProcessWithoutNullStreams | undefined,
+	nativeReturn: undefined as (() => Promise<void>) | undefined,
 }));
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 	query: ({ options }: { options: Options }) => {
@@ -17,12 +18,16 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 			env: process.env,
 			signal: new AbortController().signal,
 		}) as ChildProcessWithoutNullStreams;
-		return { close() {} };
+		return {
+			close() {},
+			...(fixture.nativeReturn ? { return: fixture.nativeReturn } : {}),
+		};
 	},
 }));
 
 afterEach(async () => {
 	vi.restoreAllMocks();
+	fixture.nativeReturn = undefined;
 	const child = fixture.child;
 	if (!child?.pid) return;
 	const closed = child.exitCode !== null || child.signalCode !== null;
@@ -60,6 +65,16 @@ setInterval(()=>{},1000);
 	await handle.close();
 	expect(signals).toContain("SIGKILL");
 	expect(() => nativeKill(-handle.pid, 0)).toThrow();
+}, 10000);
+
+it("retires the native group before awaiting a stalled SDK cleanup", async () => {
+	fixture.nativeReturn = () => new Promise<void>(() => {});
+	const handle = await start(
+		"process.stdout.write('ready');setInterval(()=>{},1000)",
+	);
+
+	await expect(handle.close()).resolves.toBeUndefined();
+	expect(() => process.kill(-handle.pid, 0)).toThrow();
 }, 10000);
 
 it.each(["denied", "no-exit"])(

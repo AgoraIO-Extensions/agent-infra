@@ -432,8 +432,10 @@ describe("Runtime Driver shared conformance", () => {
 				).toMatchObject({ status: restarted.recoveryStatus ?? "running" });
 				expect(await restarted.createdTurnCount()).toBe(1);
 			},
-			// OpenCode and Pi recovery start original and restored native processes.
-			name === "OpenCode" || name === "Pi" ? 30_000 : undefined,
+			// Messages Drivers restart their native processes under full-suite load.
+			name === "Claude" || name === "OpenCode" || name === "Pi"
+				? 30_000
+				: undefined,
 		);
 
 	it.each(driverNames)(
@@ -498,6 +500,7 @@ describe("Runtime Driver shared conformance", () => {
 						},
 					}),
 				).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+				await fixture.emitRunningEvent();
 				expect(fixture.turnSelections()).toEqual([first.selection]);
 
 				fixture.completeStopAsCancelled();
@@ -532,6 +535,7 @@ describe("Runtime Driver shared conformance", () => {
 				expect((await host.submitTurnV2(second)).result).toMatchObject({
 					outcome: "accepted",
 				});
+				await fixture.emitRunningEvent();
 				expect(fixture.turnSelections()).toEqual([
 					first.selection,
 					second.selection,

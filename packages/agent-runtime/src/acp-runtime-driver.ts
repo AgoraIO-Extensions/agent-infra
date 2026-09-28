@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
 import type {
+	RuntimeOperationFactV2,
 	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
 import { retireAcpProcess } from "./acp-process.js";
 import { type AcpLaunch, openAcpSession } from "./acp-session.js";
-import { SessionRuntimeDriver } from "./session-runtime-driver.js";
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
+import {
+	type NativeSessionOptions,
+	SessionRuntimeDriver,
+} from "./session-runtime-driver.js";
 
 export interface AcpRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -17,11 +22,26 @@ export interface GenericAcpRuntimeDriverOptions {
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
+	readonly authorizeExternalAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<void>;
 	readonly modelOptions: readonly AcpRuntimeModelOption[];
 	readonly launch: (
 		directory: string,
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
+		modelRequestIntent?: NativeSessionOptions["modelRequestIntent"],
+		modelRequestStarted?: () => Promise<void>,
+		modelUsage?: (
+			usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
+		) => Promise<void>,
+		toolRequestStarted?: (tool: {
+			readonly toolCallId: string;
+			readonly name: string;
+			readonly permitted?: boolean;
+			readonly executionBoundary?: true;
+		}) => Promise<void>,
+		modelRequestFinished?: NativeSessionOptions["modelRequestFinished"],
 	) => Promise<AcpLaunch>;
 }
 
@@ -31,6 +51,7 @@ export const GenericAcpRuntimeDriver = {
 	open(options: GenericAcpRuntimeDriverOptions) {
 		return SessionRuntimeDriver.open({
 			...options,
+			modelLifecycleAtTransport: true,
 			cursorPrefix: "acp",
 			retireSession: retireAcpProcess,
 			completionStatus: (reason): RuntimeStatusV1 =>
@@ -41,11 +62,60 @@ export const GenericAcpRuntimeDriver = {
 						: ["max_tokens", "max_turn_requests", "refusal"].includes(reason)
 							? "failed"
 							: "unknown",
-			openSession: async ({ selection, admit, update, ...session }) => {
+			openSession: async ({
+				selection,
+				admit,
+				modelRequestIntent,
+				modelRequestStarted,
+				modelUsage,
+				modelRequestFinished,
+				toolRequestStarted,
+				update,
+				...session
+			}) => {
 				const phases = new Map<string, string>();
-				return openAcpSession({
+				const normalizeToolRequestStarted = (
+					callback: typeof toolRequestStarted | undefined,
+				) =>
+					callback
+						? async (tool: {
+								readonly toolCallId: string;
+								readonly name: string;
+								readonly permitted?: boolean;
+								readonly executionBoundary?: true;
+							}) => {
+								await callback({
+									...tool,
+									toolCallId: createHash("sha256")
+										.update(tool.toolCallId)
+										.digest("hex"),
+								});
+								// A waiting-for-permission status is not an actual start.
+								// Permit the native post-authorization start to be recorded.
+								if (
+									tool.executionBoundary &&
+									tool.permitted !== false &&
+									phases.get(tool.toolCallId) === "started"
+								)
+									phases.delete(tool.toolCallId);
+							}
+						: undefined;
+				const normalizedToolRequestStarted =
+					normalizeToolRequestStarted(toolRequestStarted);
+				const launch = await options.launch(
+					session.directory,
+					selection,
+					admit,
+					modelRequestIntent,
+					modelRequestStarted,
+					modelUsage,
+					normalizedToolRequestStarted,
+					modelRequestFinished,
+				);
+				const native = await openAcpSession({
 					...session,
-					launch: await options.launch(session.directory, selection, admit),
+					toolRequestStarted: normalizedToolRequestStarted,
+					launch,
 					update: async ({ update: event }) => {
 						if (
 							event.sessionUpdate === "agent_message_chunk" &&
@@ -65,8 +135,10 @@ export const GenericAcpRuntimeDriver = {
 									? "completed"
 									: event.status === "failed"
 										? "failed"
-										: "started";
-							if (phases.get(event.toolCallId) !== phase) {
+										: event.status === "in_progress"
+											? "started"
+											: undefined;
+							if (phase && phases.get(event.toolCallId) !== phase) {
 								phases.set(event.toolCallId, phase);
 								await update({
 									type: "tool",
@@ -75,11 +147,9 @@ export const GenericAcpRuntimeDriver = {
 											.update(event.toolCallId)
 											.digest("hex"),
 										name:
-											event.kind === "read"
-												? "Read"
-												: event.kind === "edit"
-													? "Edit"
-													: "unavailable",
+											typeof event.kind === "string" && event.kind
+												? event.kind
+												: "unknown",
 										phase,
 									},
 								});
@@ -87,6 +157,21 @@ export const GenericAcpRuntimeDriver = {
 						} else await update();
 					},
 				});
+				return {
+					...native,
+					startTurn: (next: NativeSessionOptions) => {
+						native.startTurn?.(next);
+						launch.onTurn?.({
+							modelRequestIntent: next.modelRequestIntent,
+							modelRequestStarted: next.modelRequestStarted,
+							modelUsage: next.modelUsage,
+							modelRequestFinished: next.modelRequestFinished,
+							toolRequestStarted: normalizeToolRequestStarted(
+								next.toolRequestStarted,
+							),
+						});
+					},
+				};
 			},
 		});
 	},
