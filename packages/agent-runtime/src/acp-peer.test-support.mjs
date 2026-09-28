@@ -140,6 +140,7 @@ const connection = new AgentSideConnection(
 					"tool-permission",
 					"tool-permission-write",
 					"tool-status-before-permission",
+					"tool-progress-during-permission",
 					"tool-permission-hold",
 					"tool-permission-completed-hold",
 					"tool-permission-concurrent",
@@ -163,7 +164,7 @@ const connection = new AgentSideConnection(
 				await updateTool("pending");
 				if (process.env.ACP_TEST_MODE === "tool-status-before-permission")
 					await updateTool("in_progress");
-				const permission = await connection.requestPermission({
+				const permissionRequest = connection.requestPermission({
 					sessionId,
 					toolCall: {
 						toolCallId: "tool-permission",
@@ -176,6 +177,28 @@ const connection = new AgentSideConnection(
 						{ optionId: "reject", name: "Reject", kind: "reject_once" },
 					],
 				});
+				if (process.env.ACP_TEST_MODE === "tool-progress-during-permission") {
+					const deadline = Date.now() + 3_000;
+					while (
+						!(await readFile(
+							process.env.ACP_TEST_PERMISSION_MARKER,
+							"utf8",
+						).catch(() => undefined))
+					) {
+						if (Date.now() >= deadline)
+							throw new Error("Permission marker missing");
+						await new Promise((resolve) => setTimeout(resolve, 10));
+					}
+					await updateTool("in_progress");
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate: "agent_message_chunk",
+							content: { type: "text", text: "permission-progress-marker" },
+						},
+					});
+				}
+				const permission = await permissionRequest;
 				const allowed =
 					permission.outcome?.outcome === "selected" &&
 					permission.outcome.optionId === "allow";

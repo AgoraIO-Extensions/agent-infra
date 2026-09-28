@@ -74,6 +74,7 @@ export const GenericAcpRuntimeDriver = {
 				...session
 			}) => {
 				const phases = new Map<string, string>();
+				const pendingPermissions = new Map<string, number>();
 				const normalizeToolRequestStarted = (
 					callback: typeof toolRequestStarted | undefined,
 				) =>
@@ -84,20 +85,35 @@ export const GenericAcpRuntimeDriver = {
 								readonly permitted?: boolean;
 								readonly executionBoundary?: true;
 							}) => {
-								await callback({
-									...tool,
-									toolCallId: createHash("sha256")
-										.update(tool.toolCallId)
-										.digest("hex"),
-								});
-								// A waiting-for-permission status is not an actual start.
-								// Permit the native post-authorization start to be recorded.
-								if (
-									tool.executionBoundary &&
-									tool.permitted !== false &&
-									phases.get(tool.toolCallId) === "started"
-								)
-									phases.delete(tool.toolCallId);
+								if (tool.executionBoundary)
+									pendingPermissions.set(
+										tool.toolCallId,
+										(pendingPermissions.get(tool.toolCallId) ?? 0) + 1,
+									);
+								try {
+									await callback({
+										...tool,
+										toolCallId: createHash("sha256")
+											.update(tool.toolCallId)
+											.digest("hex"),
+									});
+									// A waiting-for-permission status is not an actual start.
+									// Permit the native post-authorization start to be recorded.
+									if (
+										tool.executionBoundary &&
+										tool.permitted !== false &&
+										phases.get(tool.toolCallId) === "started"
+									)
+										phases.delete(tool.toolCallId);
+								} finally {
+									if (tool.executionBoundary) {
+										const remaining =
+											(pendingPermissions.get(tool.toolCallId) ?? 1) - 1;
+										if (remaining)
+											pendingPermissions.set(tool.toolCallId, remaining);
+										else pendingPermissions.delete(tool.toolCallId);
+									}
+								}
 							}
 						: undefined;
 				const normalizedToolRequestStarted =
@@ -138,7 +154,11 @@ export const GenericAcpRuntimeDriver = {
 										: event.status === "in_progress"
 											? "started"
 											: undefined;
-							if (phase && phases.get(event.toolCallId) !== phase) {
+							if (
+								phase &&
+								!pendingPermissions.has(event.toolCallId) &&
+								phases.get(event.toolCallId) !== phase
+							) {
 								phases.set(event.toolCallId, phase);
 								await update({
 									type: "tool",
