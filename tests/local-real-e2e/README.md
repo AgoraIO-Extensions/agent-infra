@@ -108,8 +108,9 @@ node tests/local-real-e2e/conversation-browser.mjs /absolute/local-development/c
 不得把 token、Cookie 或真实消息正文提交到仓库。
 
 该旅程会在 Owner 浏览器中创建会话、提交文本、读取 SSE，并在回答完成后刷新页面。
-它记录浏览器实际消费到的增量 `text.delta` 与终态 `execution.status` 帧，并要求增量帧先
-于终态帧到达；随后回读持久化事件、恢复页面和窄屏布局。第二个独立浏览器主体同时请求
+它记录浏览器实际消费到的增量 `text.delta` 与终态 `execution.status` 帧，并要求页面在终态
+帧前显示增量文本、增量帧先于 `completed` 终态帧到达；随后回读持久化事件、恢复页面和窄
+屏布局。第二个独立浏览器主体同时请求
 会话详情和 `/events` 订阅，两者必须得到 `403` 或 `404`，页面不得保留另一个主体的正文。
 
 输出目录中的 `evidence.json` 只保存主体、会话、执行和事件 ID 的 SHA-256，以及状态码和

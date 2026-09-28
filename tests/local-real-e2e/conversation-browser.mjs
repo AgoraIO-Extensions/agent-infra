@@ -92,6 +92,25 @@ async function run(input, evidence) {
 		const page = await owner.newPage();
 		await page.addInitScript(() => {
 			window.__agentInfraSseFrames = [];
+			window.__agentInfraAssistantSnapshots = [];
+			const recordAssistantSnapshot = () => {
+				const length = [
+					...document.querySelectorAll(".assistant-markdown"),
+				].reduce(
+					(max, node) => Math.max(max, node.textContent?.trim().length ?? 0),
+					0,
+				);
+				if (length > 0)
+					window.__agentInfraAssistantSnapshots.push({
+						at: performance.now(),
+						length,
+					});
+			};
+			new MutationObserver(recordAssistantSnapshot).observe(document, {
+				characterData: true,
+				childList: true,
+				subtree: true,
+			});
 			const fetchImpl = window.fetch.bind(window);
 			window.fetch = async (input, init) => {
 				const response = await fetchImpl(input, init);
@@ -121,9 +140,19 @@ async function run(input, evidence) {
 								const data = frame.match(/^data: (.+)$/m)?.[1];
 								if (id && data) {
 									try {
+										const parsed = JSON.parse(data);
 										window.__agentInfraSseFrames.push({
 											id,
-											type: JSON.parse(data).type,
+											status:
+												parsed.type === "execution.status"
+													? parsed.payload?.status
+													: undefined,
+											textLength:
+												parsed.type === "text.delta" &&
+												typeof parsed.payload?.text === "string"
+													? parsed.payload.text.length
+													: undefined,
+											type: parsed.type,
 											at: performance.now(),
 										});
 									} catch {}
@@ -209,17 +238,27 @@ async function run(input, evidence) {
 		const sseFrames = await page.evaluate(
 			() => window.__agentInfraSseFrames ?? [],
 		);
+		const assistantSnapshots = await page.evaluate(
+			() => window.__agentInfraAssistantSnapshots ?? [],
+		);
 		assert(
 			sseFrames.length >= 2,
 			"Browser must observe incremental SSE frames",
 		);
-		const firstFrame = sseFrames.find((frame) => frame.type === "text.delta");
+		const firstFrame = sseFrames.find(
+			(frame) => frame.type === "text.delta" && frame.textLength > 0,
+		);
 		const terminalFrame = sseFrames.find(
-			(frame) => frame.type === "execution.status",
+			(frame) =>
+				frame.type === "execution.status" && frame.status === "completed",
 		);
 		assert(
 			firstFrame && terminalFrame,
 			"SSE must include text and terminal frames",
+		);
+		assert(
+			assistantSnapshots.some((snapshot) => snapshot.at < terminalFrame.at),
+			"The page must display assistant text before the terminal frame",
 		);
 		assert(
 			firstFrame.at < terminalFrame.at,
@@ -232,6 +271,8 @@ async function run(input, evidence) {
 			observedFrames: sseFrames.map((frame) => ({
 				idHash: digest(frame.id),
 				type: frame.type,
+				status: frame.status ?? null,
+				textLength: frame.textLength ?? null,
 			})),
 			cursorHash: detail.conversation.lastConversationCursor
 				? digest(detail.conversation.lastConversationCursor)
