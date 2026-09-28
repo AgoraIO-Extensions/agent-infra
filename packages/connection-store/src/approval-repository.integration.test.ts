@@ -2562,6 +2562,12 @@ describe("PostgreSQL Connection access approval catalog", () => {
 							.state,
 					).toBe("IN_REVIEW");
 				}
+				await sql`UPDATE connection_action_versions SET status = 'DISABLED' WHERE id = ${actionId}`;
+				await expect(
+					requestRepository.listAccessOptions(applicantId),
+				).rejects.toMatchObject({
+					code: "INVALID_REQUEST",
+				});
 			} finally {
 				await connections.close();
 				await dispatcher.close();

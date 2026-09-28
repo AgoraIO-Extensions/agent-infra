@@ -334,15 +334,16 @@ export class PostgresConnectionAccessRequestRepository
 		`;
 			return Promise.all(
 				policies.map(async (policy) => {
-					const actions = await sql<
+					const members = await sql<
 						{
 							id: string;
 							name: string;
 							description: string;
 							effect: "READ" | "WRITE";
+							status: string;
 						}[]
 					>`
-						SELECT action.id, action.name, action.description, action.effect
+						SELECT action.id, action.name, action.description, action.effect, action.status
 						FROM connection_capability_profile_actions member
 						JOIN connection_action_versions action
 							ON action.id = member.action_version_id
@@ -351,8 +352,15 @@ export class PostgresConnectionAccessRequestRepository
 							AND member.provider_release_id = ${policy.provider_release_id}
 						ORDER BY action.name, action.id
 					`;
-					if (!actions.length || actions.length > 500)
+					if (
+						!members.length ||
+						members.length > 500 ||
+						members.some((action) => action.status !== "PUBLISHED")
+					)
 						invalid("Capability profile actions are unavailable");
+					const actions = members.map(
+						({ status: _status, ...action }) => action,
+					);
 					const durations = await sql<
 						{
 							duration_days: number | null;

@@ -1206,7 +1206,7 @@ Provider 兼容升级是版本绑定的受控迁移，不是新的公司批准�
 
 Consumer Grant 预览与确认也只选择 Access Authorization 的 exact Capability Profile ActionVersion 集合，不能仅按 Credential scopes 展示或提交额外 Action。pre-launch 清单中的旧账号在 cutoff 前最多沿用当时 active Grant ActionVersion 并集；确认时重新读取当前资格，过期、撤销和重审截止后的旧 Preview 不得产生 Grant。
 
-申请选项只从当前 PUBLISHED Policy 及其 exact PUBLISHED Capability Profile 生成，向申请者展示该 Profile 的精确 ActionVersion 名称、说明和逐项 READ/WRITE 效果；展示投影不能改变获批集合，也不能仅用 effect ceiling 推断是否同时包含 READ 和 WRITE。缺少能力成员时拒绝返回该选项。
+申请选项只从当前 PUBLISHED Policy 及其 exact PUBLISHED Capability Profile 生成，向申请者展示该 Profile 的精确 ActionVersion 名称、说明和逐项 READ/WRITE 效果；展示投影不能改变获批集合，也不能仅用 effect ceiling 推断是否同时包含 READ 和 WRITE。缺少能力成员或任何成员未处于 PUBLISHED 状态时拒绝返回该选项，不得只过滤失效成员并缩小展示范围。
 
 WorkItem、Notification 和 NotificationReceipt 只提供站内投影与已读状态。审批状态变化、WorkItem recipient、audit 和 outbox 同事务写入；独立 dispatcher 幂等投递。读取或归档 Notification 不能批准申请、完成 WorkItem 或恢复授权。首期页面加载、窗口聚焦和有界轮询刷新，不新增 WebSocket/SSE。
 
