@@ -325,7 +325,8 @@ export function isTaskAuthorizationCurrentV1(input: {
 		const application = parseCurrentTaskApplicationV1(input.application);
 		if (
 			boundary.principal.id !== application.applicationId ||
-			application.accountStatus !== "active"
+			application.accountStatus !== "active" ||
+			application.authorizationRevision !== boundary.identityRevision
 		)
 			return false;
 	}
