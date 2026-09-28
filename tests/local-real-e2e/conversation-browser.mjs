@@ -111,11 +111,11 @@ async function run(input, evidence) {
 					new TransformStream({
 						transform(chunk, controller) {
 							pending += decoder.decode(chunk, { stream: true });
-							let boundary = pending.indexOf("\\n\\n");
+								let boundary = pending.indexOf("\n\n");
 							while (boundary >= 0) {
 								const frame = pending.slice(0, boundary);
 								pending = pending.slice(boundary + 2);
-								const id = frame.match(/^id: ([^\\n]+)$/m)?.[1];
+									const id = frame.match(/^id: ([^\n]+)$/m)?.[1];
 								const data = frame.match(/^data: (.+)$/m)?.[1];
 								if (id && data) {
 									try {
@@ -126,7 +126,7 @@ async function run(input, evidence) {
 										});
 									} catch {}
 								}
-								boundary = pending.indexOf("\\n\\n");
+									boundary = pending.indexOf("\n\n");
 							}
 							controller.enqueue(chunk);
 						},
