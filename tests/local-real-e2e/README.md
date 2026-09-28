@@ -114,8 +114,9 @@ node tests/local-real-e2e/conversation-browser.mjs /absolute/local-development/c
 会话详情和 `/events` 订阅，两者必须得到 `403` 或 `404`，页面不得保留另一个主体的正文。
 
 输出目录中的 `evidence.json` 只保存主体、会话、执行和事件 ID 的 SHA-256，以及状态码和
-帧类型，不保存 token、消息正文或原始凭证。`modelCallVerified` 与 `connectionVerified`
-默认为 `false`；受控浏览器旅程的通过不能替代真实模型调用或 Connection 授权证据。
+帧类型，不保存 token、消息正文或原始凭证。桌面和移动截图会遮盖用户消息与 assistant 正文，
+只保留布局和状态证据。`modelCallVerified` 与 `connectionVerified` 默认为 `false`；受控浏览器
+旅程的通过不能替代真实模型调用或 Connection 授权证据。
 
 `apps/web/tests/conversation-live.spec.ts` 是 Playwright 的合成 fixture 测试：它在浏览器
 内延迟返回两帧 SSE，专门验证提交防重、增量渲染、刷新恢复和权限失效 UI。fixture 通过不
