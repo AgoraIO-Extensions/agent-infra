@@ -2410,6 +2410,7 @@
 				"required": [
 					"providerId",
 					"providerReleaseId",
+					"actions",
 					"capabilityProfileId",
 					"capabilityProfileName",
 					"policyVersionId",
@@ -2422,6 +2423,22 @@
 				"properties": {
 					"providerId": { "type": "string" },
 					"providerReleaseId": { "type": "string" },
+					"actions": {
+						"type": "array",
+						"minItems": 1,
+						"maxItems": 500,
+						"items": {
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["id", "name", "description", "effect"],
+							"properties": {
+								"id": { "type": "string" },
+								"name": { "type": "string" },
+								"description": { "type": "string" },
+								"effect": { "type": "string", "enum": ["READ", "WRITE"] }
+							}
+						}
+					},
 					"capabilityProfileId": { "type": "string" },
 					"capabilityProfileName": { "type": "string" },
 					"policyVersionId": { "type": "string" },

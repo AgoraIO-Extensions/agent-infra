@@ -1138,6 +1138,14 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					await requestRepository.listAccessOptions(applicantId)
 				).find((item) => item.policyVersionId === policyId);
 				if (!option) throw new Error("Approval option is missing");
+				expect(option.actions).toEqual([
+					{
+						id: actionId,
+						name: "approval-provider.read",
+						description: "Approval integration read",
+						effect: "READ",
+					},
+				]);
 				await requestRepository.createRequest({
 					applicantPrincipalId: applicantId,
 					capabilityProfileId: profileId,
@@ -2554,6 +2562,92 @@ describe("PostgreSQL Connection access approval catalog", () => {
 							.state,
 					).toBe("IN_REVIEW");
 				}
+				const validProfileId = `approval-valid-profile-${suffix}`;
+				const validPolicyId = `approval-valid-policy-${suffix}`;
+				await sql`
+				INSERT INTO connection_capability_profiles (
+					id, provider_release_id, name, effect_ceiling, required_scopes,
+					authorization_digest, status
+				) VALUES (
+					${validProfileId}, ${releaseId}, 'Write only', 'WRITE',
+					'["approval.read"]'::jsonb, ${suffix}, 'DRAFT'
+				)
+			`;
+				await sql`
+				INSERT INTO connection_capability_profile_actions (
+					capability_profile_id, provider_release_id, action_version_id
+				) VALUES (${validProfileId}, ${releaseId}, ${writeActionId})
+			`;
+				await sql`UPDATE connection_capability_profiles SET status = 'PUBLISHED' WHERE id = ${validProfileId}`;
+				await sql`
+				INSERT INTO connection_access_policy_versions (
+					id, provider_release_id, capability_profile_id, priority,
+					default_duration_days, request_ttl_seconds, connect_ttl_seconds,
+					renewal_lead_seconds, status, created_by_principal_id, published_at
+				) VALUES (
+					${validPolicyId}, ${releaseId}, ${validProfileId}, 10,
+					90, 86400, 86400, 0, 'DRAFT', ${adminId}, NULL
+				)
+			`;
+				await sql`
+				INSERT INTO connection_access_policy_durations (
+					id, policy_version_id, duration_kind, duration_days
+				) VALUES (${`approval-valid-duration-${suffix}`}, ${validPolicyId}, 'FINITE', 90)
+			`;
+				await sql`
+				INSERT INTO connection_access_policy_disclaimers (
+					policy_version_id, disclaimer_version_id, ordinal
+				) VALUES (${validPolicyId}, ${disclaimerId}, 1)
+			`;
+				await sql`UPDATE connection_access_policy_versions SET status = 'PUBLISHED', published_at = now() WHERE id = ${validPolicyId}`;
+				const validOption = (
+					await requestRepository.listAccessOptions(applicantId)
+				).find((option) => option.policyVersionId === validPolicyId);
+				if (!validOption)
+					throw new Error("Independent valid option is missing");
+				await sql`UPDATE connection_action_versions SET status = 'DISABLED' WHERE id = ${actionId}`;
+				const remainingOptions =
+					await requestRepository.listAccessOptions(applicantId);
+				expect(
+					remainingOptions.some(
+						(option) => option.policyVersionId === policyId,
+					),
+				).toBe(false);
+				expect(
+					remainingOptions.find(
+						(option) => option.policyVersionId === validPolicyId,
+					)?.actions,
+				).toEqual([
+					{
+						id: writeActionId,
+						name: "approval-provider.write",
+						description: "Approval integration write",
+						effect: "WRITE",
+					},
+				]);
+				await sql`UPDATE connection_action_versions SET status = 'DISABLED' WHERE id = ${writeActionId}`;
+				await expect(
+					requestRepository.createRequest({
+						id: `approval-disabled-action-request-${suffix}`,
+						applicantPrincipalId: applicantId,
+						providerReleaseId: releaseId,
+						capabilityProfileId: validProfileId,
+						policyVersionId: validPolicyId,
+						presentationId: validOption.presentationId,
+						purpose: "Reject a stale ActionVersion",
+						duration: { kind: "FINITE", days: 90 },
+						disclaimerConfirmations: [
+							{
+								disclaimerVersionId: disclaimerId,
+								contentSha256: disclaimerDigest,
+								locale: "zh-CN",
+							},
+						],
+					}),
+				).rejects.toMatchObject({
+					code: "INVALID_REQUEST",
+					message: "Capability profile actions are unavailable",
+				});
 			} finally {
 				await connections.close();
 				await dispatcher.close();

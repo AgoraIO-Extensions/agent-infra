@@ -232,6 +232,7 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 - 管理员搜索、选择审批人并保存草稿不以在职状态配置为前提；保存候选人不授予审批权限。发布策略及实际审批仍须验证审批人的有效身份。
 
 - 员工创建任何个人 Connection 前，必须选择已发布的 Capability Profile、申请有效期、填写用途并确认精确免责声明版本。
+- 申请者选择能力包时可查看该包获批的精确 Action 清单、说明及每项读写属性；只能选择已绑定已发布审批策略的整包，不能自行增删其中的能力。
 - Connection 按已发布 Policy 的顺序阶段通知审批人；每阶段可以要求任意一人、全部或至少 N 人通过。禁止申请人自审、越级审批和自动批准。
 - 全部阶段通过后，Connection 只在服务端生成一次性 Connect Permit；用户才可以进入 Provider OAuth 或提交 PAT/API Key。一次 Permit 只能成功创建一个外部账号 Connection。
 - Provider OAuth、PAT/API Key 验证和 Consumer Grant 是三种不同事务。公司审批不证明 Provider 身份，也不自动授权任何 Consumer。
