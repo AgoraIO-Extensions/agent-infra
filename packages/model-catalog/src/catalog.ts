@@ -69,6 +69,10 @@ const snapshotSchema = z
 			endpoints.length,
 	);
 
+/** Deployment-owned catalog snapshot. Consumers may inspect choices, never credentials. */
+export const ModelCatalogSnapshotV1Schema = snapshotSchema;
+export type ModelCatalogSnapshotV1 = z.infer<typeof snapshotSchema>;
+
 export interface ModelCatalogAdapterV1 {
 	resolve(
 		input: { readonly endpointId: string; readonly catalogRevision: string },

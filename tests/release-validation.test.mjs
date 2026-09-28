@@ -16,7 +16,13 @@ import { parse, stringify } from "yaml";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const validator = resolve(repositoryRoot, "deploy/release/validate.mjs");
-const imageKeys = ["web", "platformApi", "platformWorker", "runtimeHost"];
+const imageKeys = [
+	"web",
+	"platformApi",
+	"platformWorker",
+	"enterpriseDirectorySync",
+	"runtimeHost",
+];
 
 function validate(fixture, args, environment = {}) {
 	return spawnSync(process.execPath, [validator, ...args], {
@@ -132,6 +138,36 @@ test("release validation accepts only matching immutable image references", asyn
 		]);
 		assert.notEqual(mismatch.status, 0);
 		assert.match(mismatch.stderr, /platformWorker image does not match/);
+	} finally {
+		await rm(release.directory, { recursive: true, force: true });
+	}
+});
+
+test("legacy four-image manifests are accepted only while directory sync is disabled", async () => {
+	const release = await fixture();
+	try {
+		delete release.manifest.images.enterpriseDirectorySync;
+		await writeFile(
+			release.manifestPath,
+			`${JSON.stringify(release.manifest)}\n`,
+		);
+		const disabled = validate(release, [
+			"release",
+			release.manifestPath,
+			release.valuesPath,
+		]);
+		assert.equal(disabled.status, 0, disabled.stderr);
+
+		release.values.enterpriseDirectorySync.enabled = true;
+		release.values.enterpriseDirectorySync.corpId = "corp-fixture";
+		await writeFile(release.valuesPath, stringify(release.values));
+		const enabled = validate(release, [
+			"release",
+			release.manifestPath,
+			release.valuesPath,
+		]);
+		assert.notEqual(enabled.status, 0);
+		assert.match(enabled.stderr, /enterpriseDirectorySync image is required/);
 	} finally {
 		await rm(release.directory, { recursive: true, force: true });
 	}

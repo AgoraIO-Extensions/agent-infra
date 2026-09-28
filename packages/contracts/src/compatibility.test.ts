@@ -309,6 +309,12 @@ describe("contract compatibility command", () => {
 			"AgentLifecycleCommandRequestV1",
 			"AgentProjectionV2",
 			"ApprovalDecisionRequestV1",
+			"DeploymentConfigurationProjectionV2",
+			"DeploymentConfigurationStatusV2",
+			"DeploymentModelCatalogProjectionV2",
+			"DeploymentModelEndpointProjectionV2",
+			"DeploymentModelProjectionV2",
+			"DeploymentTemplateProjectionV2",
 		])
 			delete previous.components.schemas[name];
 		const directory = await mkdtemp(

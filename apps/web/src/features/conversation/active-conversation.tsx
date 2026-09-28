@@ -4,9 +4,12 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "../../components/ui/button.js";
 import { Label } from "../../components/ui/label.js";
 import {
-	NativeSelect,
-	NativeSelectOption,
-} from "../../components/ui/native-select.js";
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "../../components/ui/select.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { CommandNotice } from "./conversation-command-notice.js";
@@ -340,52 +343,65 @@ export function ActiveConversation({
 							</legend>
 							<div className="min-w-0 space-y-1">
 								<Label htmlFor={`${composerId}-model`}>模型</Label>
-								<NativeSelect
-									id={`${composerId}-model`}
-									value={currentModelId}
-									onChange={(event) => {
-										setModelId(event.target.value);
+								<Select
+									disabled={blocked || commandLocked}
+									value={currentModelId || null}
+									itemToStringLabel={(value) =>
+										(!option && value === currentModelId
+											? "当前选项已移除"
+											: options.find((item) => item.optionId === value)
+													?.displayName) ?? String(value)
+									}
+									onValueChange={(value) => {
+										if (!value) return;
+										setModelId(value);
 										setReasoning(
-											options.find(
-												(item) => item.optionId === event.target.value,
-											)?.reasoningLevels[0],
+											options.find((item) => item.optionId === value)
+												?.reasoningLevels[0],
 										);
 									}}
 								>
-									<NativeSelectOption value="" disabled>
-										请选择模型
-									</NativeSelectOption>
-									{!option && currentModelId && (
-										<NativeSelectOption value={currentModelId} disabled>
-											当前选项已移除
-										</NativeSelectOption>
-									)}
-									{options.map((item) => (
-										<NativeSelectOption
-											key={item.optionId}
-											value={item.optionId}
-										>
-											{item.displayName}
-										</NativeSelectOption>
-									))}
-								</NativeSelect>
+									<SelectTrigger
+										id={`${composerId}-model`}
+										className="h-11 w-full text-base md:text-sm"
+									>
+										<SelectValue placeholder="请选择模型" />
+									</SelectTrigger>
+									<SelectContent>
+										{!option && currentModelId && (
+											<SelectItem value={currentModelId} disabled>
+												当前选项已移除
+											</SelectItem>
+										)}
+										{options.map((item) => (
+											<SelectItem key={item.optionId} value={item.optionId}>
+												{item.displayName}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
 							</div>
 							<div className="min-w-0 space-y-1">
 								<Label htmlFor={`${composerId}-reasoning`}>推理强度</Label>
-								<NativeSelect
-									id={`${composerId}-reasoning`}
-									value={currentReasoning}
-									onChange={(event) => setReasoning(event.target.value)}
+								<Select
+									disabled={blocked || commandLocked}
+									value={currentReasoning || null}
+									onValueChange={(value) => setReasoning(value ?? undefined)}
 								>
-									<NativeSelectOption value="" disabled>
-										请选择推理强度
-									</NativeSelectOption>
-									{option?.reasoningLevels.map((value) => (
-										<NativeSelectOption key={value} value={value}>
-											{value}
-										</NativeSelectOption>
-									))}
-								</NativeSelect>
+									<SelectTrigger
+										id={`${composerId}-reasoning`}
+										className="h-11 w-full text-base md:text-sm"
+									>
+										<SelectValue placeholder="请选择推理强度" />
+									</SelectTrigger>
+									<SelectContent>
+										{option?.reasoningLevels.map((value) => (
+											<SelectItem key={value} value={value}>
+												{value}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
 							</div>
 							<Button
 								type="button"

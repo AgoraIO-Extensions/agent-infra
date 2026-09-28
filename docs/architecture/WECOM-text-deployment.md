@@ -27,7 +27,7 @@ Owner 无需提供公网回调 URL、Token、EncodingAESKey 或内部配置标�
 再由 Worker 验证凭证与 Core 激活绑定；SDK 缺少宿主校验时必须补齐，无法建立可信关联则拒绝并提供手动入口。
 不照抄官方示例中输出 Secret、消息正文或原始 payload 的日志。
 
-部署必须提供实时公司身份映射、加密/keyring、连接状态指标，以及 PostgreSQL 中唯一连接持有者的租约与隔离。
+目标部署需提供同集群企微目录每日完整快照、当前 LDAP 账号状态和唯一邮箱关联，以及加密/keyring、连接状态指标、PostgreSQL 中唯一连接持有者的租约与隔离。组织变化按快照生效；LDAP 停用和 Platform 管理员禁用立即拒绝。具体授权规则以[平台 PRD §7.1](../prd/PRD-agent-platform-M1.md#71-可用范围)为准。
 替换凭证、解绑、重启和多副本接管都要验证旧持有者不再处理消息或发送回复。
 对可能挤掉其他部署连接的验证或重新绑定，先向 Owner 展示影响并确认；不拿生产机器人做无提示的连接探测。
 
@@ -46,7 +46,7 @@ Owner 无需提供公网回调 URL、Token、EncodingAESKey 或内部配置标�
 - `connections.bindings`：现有部署托管长连接的可信解析器；仅使用页面配置时返回空数组。
 - `connections.protectReply/revealReply`：Worker 内部回复上下文保护，使用既有加密路由实现；不需公网回调。
 - `connections.observeConnection/observeSetup/observeIngress`：固定状态指标出口，不添加 Bot ID、用户 ID 或正文标签。
-- `setup.directory`：实时公司身份目录；`setup.decryptor`：由 Worker-only 私钥 keyring 创建的 `createSecretKeyringDecryptorV1`。
+- `setup.directory`：现有身份目录接口；接入独立企微快照服务后须按当前 LDAP 状态、邮箱唯一关联和快照有效期实现该接口，不能把现有部署输入视为已完成新身份验收。`setup.decryptor`：由 Worker-only 私钥 keyring 创建的 `createSecretKeyringDecryptorV1`。
 
 配置候选与密文保存在 `wecom_setup_sessions`，不写入 Runtime Secret 投影表。
 Worker 实际认证通过、Owner/配置版本/连接租约仍有效后，通过原 Agent 配置事务激活引用。
@@ -81,9 +81,9 @@ API 仅持公钥，Worker 使用私钥 keyring，密文绑定 Agent、渠道、�
 两类传输调用同一 Channel Core，用同一 PostgreSQL 事务提交 Conversation、Message、Execution、
 原任务授权、Runtime outbox、回复意图与审计。`PlatformConversationWorkerOptionsV2.wecom`
 接入共享 Worker 的当前授权与回复处理，不能再创建 Runtime 调度循环。
-接入方式不改变按发送者隔离、默认模型、撤权停止和审计边界。
+接入方式不改变按发送者隔离、默认模型、撤权停止和审计边界；标准模板按[平台 PRD 第 8 节](../prd/PRD-agent-platform-M1.md#8-标准模板的模型配置)在任务受理时绑定本次 Relay Key 版本。
 
-部署身份 Adapter 把企微发送者映射到公司身份并实时返回账号/组织状态；
+部署身份 Adapter 从完整、未过期的企微目录快照与 LDAP 按唯一邮箱关联发送者，实时核对 LDAP 账号及 Platform 禁用状态；
 使用加密 userid 的协议按企微[身份对接协议](https://developer.work.weixin.qq.com/document/path/101521)转换，
 不能把未经验证的标识、Owner 或平台服务身份当作消息发送者。
 

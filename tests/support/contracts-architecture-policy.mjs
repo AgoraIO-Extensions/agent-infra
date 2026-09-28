@@ -25,6 +25,7 @@ const forbiddenPlatformCoreImports = [
 const dedicatedStorePaths = new Set([
 	"packages/platform-store",
 	"packages/connection-store",
+	"packages/enterprise-directory-store",
 ]);
 const runtimeDependencySections = [
 	"dependencies",

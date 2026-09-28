@@ -6,6 +6,7 @@ export function usePendingAgentApplications() {
 	const query = useQuery({
 		queryKey: ["admin", "agent-applications"],
 		queryFn: () => loadPendingAgentApplications(),
+		retry: false,
 	});
 
 	return {

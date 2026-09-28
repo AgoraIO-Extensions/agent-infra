@@ -1,12 +1,17 @@
 import {
 	AgentApplicationProjectionV1Schema,
 	AgentProjectionV1Schema,
+	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
+	DeploymentConfigurationProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 
-import { pilotFakeScenariosV1 } from "./index.js";
-import { createPilotAgentMockServerV1 } from "./mock-server.js";
+import { pilotFakeScenariosV1, pilotFakeScenariosV2 } from "./index.js";
+import {
+	createPilotAgentMockServerV1,
+	createPilotAgentMockServerV2,
+} from "./mock-server.js";
 
 const startingAgent = AgentProjectionV1Schema.parse(
 	pilotFakeScenariosV1.starting.response.body,
@@ -15,6 +20,9 @@ const secondAgent = AgentProjectionV1Schema.parse({
 	...startingAgent,
 	agentId: "agent-pilot-2",
 });
+const startingAgentV2 = AgentProjectionV2Schema.parse(
+	pilotFakeScenariosV2.starting.response.body,
+);
 const pendingApplication = AgentApplicationProjectionV1Schema.parse({
 	schemaVersion: 1,
 	applicationId: "application-pilot-1",
@@ -94,6 +102,32 @@ const applicationInput = {
 };
 
 describe("Pilot Agent Mock Server", () => {
+	it("routes the v2 deployment configuration endpoint", async () => {
+		const deploymentConfiguration =
+			DeploymentConfigurationProjectionV2Schema.parse({
+				schemaVersion: 2,
+				status: "empty",
+				templates: [],
+				modelCatalog: { status: "empty", revision: null, endpoints: [] },
+			});
+		const server = createPilotAgentMockServerV2({
+			getDeploymentConfiguration: {
+				status: 200,
+				body: deploymentConfiguration,
+			},
+			listAgents: { status: 200, body: { items: [], nextCursor: null } },
+			getAgent: { status: 200, body: startingAgentV2 },
+		});
+
+		const response = await server.fetch(
+			new Request(
+				"https://platform.example.test/api/v2/deployment/configuration",
+			),
+		);
+
+		expect(await response.json()).toEqual(deploymentConfiguration);
+	});
+
 	it("routes list pages by the generated client's cursor request", async () => {
 		const server = createPilotAgentMockServerV1({
 			listAgents: (request) => ({

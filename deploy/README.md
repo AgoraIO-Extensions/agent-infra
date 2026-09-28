@@ -6,6 +6,9 @@
 - Web 与 `platform-api` 分别选择 `external` 或 `in-cluster`，两者不获得 Kubernetes API 凭证。
 - Platform migration 使用独立的 Helm pre-install/pre-upgrade Job，并复用
   `platform-api` 的不可变镜像。
+- `enterpriseDirectorySync.enabled` 可选部署独立目录同步服务；其 migration Job 使用独立
+  DB Secret，运行 Pod 使用目录 DB、企微 Corp Secret、内部读取 Token 和 TLS Secret。
+  pre-install Job 不引用安装后才创建的 ServiceAccount。
 - 镜像只接受 `repository@sha256:<digest>`；values 不接受 Tag、内联数据库 URL 或密钥内容。
 - `platform-api` 只挂载版本化加密公钥，`platform-worker` 只挂载包含同一版本的解密
   keyring，两个引用必须属于不同 Secret。
@@ -23,6 +26,23 @@ Ingress。真实 Agent Workload 的创建、停止、升级、回滚和失败恢
 KubernetesRuntimeAdapter 调谐；镜像发布与 release/rollback 校验属于
 [#334](https://github.com/AgoraIO-Extensions/agent-infra/issues/334)。
 
+目录服务由 [#889](https://github.com/AgoraIO-Extensions/agent-infra/issues/889) 独立交付。
+启用 Helm 部署时，设置 `enterpriseDirectorySync.enabled=true`、`platformApi.placement=in-cluster`、
+真实 Corp ID、不可变目录镜像
+Digest、已存在的独立运行数据库角色 `runtimeDatabaseRole`，并预先创建 values 中引用的五个 Secret：目录运行 DB URL、独立 migration DB URL、
+企微 Corp Secret、至少 32 字节的内部读取 Token 和服务端 TLS 证书/私钥。
+`enterpriseDirectorySync` 的 ClusterIP HTTPS Service 只允许同一 release 的 Platform API Pod
+入站；外置 API 不能启用该 Helm 目录部署。证书信任与 Token 消费由 Platform API 的独立
+装配负责；模板渲染不证明真实目录权限。
+
+根 Compose 的 `enterprise-directory` profile 需要在受控 env file 中提供
+`DIRECTORY_DATABASE_URL`、`DIRECTORY_MIGRATION_DATABASE_URL`、`DIRECTORY_RUNTIME_DATABASE_ROLE`、`DIRECTORY_ROOT_DEPARTMENT_ID`、
+`WECOM_CORP_ID`，以及 `DIRECTORY_READ_TOKEN_PATH`、`DIRECTORY_CORP_SECRET_PATH`、
+`DIRECTORY_TLS_CERT_PATH`、`DIRECTORY_TLS_KEY_PATH` 指向本机受控文件。运行入口是
+`docker compose --env-file <private-env-file> --profile enterprise-directory up -d enterprise-directory-sync`；
+它等待 PostgreSQL 健康和独立目录 migration 成功，再启动 HTTPS 服务。空环境仅可用于
+`docker compose --profile enterprise-directory config --quiet` 的结构检查，不能作为业务运行证据。
+
 ## Helm 检查
 
 ```bash
@@ -34,7 +54,7 @@ deploy/kind/topology.sh render
 
 ## 不可变镜像与 release 检查
 
-从 clean Git commit 构建四个 Platform 镜像并生成 image manifest：
+从 clean Git commit 构建部署镜像并生成 image manifest：
 
 ```bash
 IMAGE_REPOSITORY_PREFIX=registry.example/agent-infra \

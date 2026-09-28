@@ -13,7 +13,40 @@ import type {
 	AgentLifecycleCommandRequestV1,
 	ApprovalDecisionRequestV1,
 } from "../src/pilot/generated/types.gen";
-import type { AgentApplicationCreateRequestV2Writable } from "../src/pilot/generated-v2/types.gen";
+import type {
+	AgentApplicationCreateRequestV2Writable,
+	DeploymentConfigurationProjectionV2,
+} from "../src/pilot/generated-v2/types.gen";
+
+const deploymentConfiguration: DeploymentConfigurationProjectionV2 = {
+	modelCatalog: {
+		endpoints: [
+			{
+				displayName: "Primary endpoint",
+				endpointId: "endpoint-primary",
+				models: [
+					{
+						modelId: "gpt-5",
+						reasoningLevels: ["medium", "high"],
+					},
+				],
+			},
+		],
+		revision: "catalog-browser",
+		status: "populated",
+	},
+	schemaVersion: 2,
+	status: "populated",
+	templates: [
+		{
+			allowedEnvironmentKeys: ["LOG_LEVEL"],
+			allowedSecretKeys: ["MODEL_API_KEY"],
+			connectionEnabled: false,
+			displayName: "Codex",
+			templateId: "codex",
+		},
+	],
+};
 
 async function fixture(
 	page: Page,
@@ -26,6 +59,8 @@ async function fixture(
 	let agent = AgentProjectionV2Schema.parse(
 		pilotFakeScenariosV2.starting.response.body,
 	);
+	let deployment = deploymentConfiguration;
+	let pendingQueueUnavailable = false;
 	const session = {
 		schemaVersion: 1,
 		user: {
@@ -36,6 +71,10 @@ async function fixture(
 	};
 	const server = createPilotAgentMockServerV2({
 		getCurrentSession: { status: 200, body: session },
+		getDeploymentConfiguration: () => ({
+			status: 200,
+			body: deployment,
+		}),
 		listAgents: (request) => {
 			const ownerScope =
 				new URL(request.url).searchParams.get("scope") === "owner";
@@ -56,19 +95,37 @@ async function fixture(
 		createAgentApplication: () => ({ status: 201, body: application }),
 		updateAgentApplication: () => ({ status: 200, body: application }),
 		withdrawAgentApplication: () => ({ status: 200, body: application }),
-		listPendingAgentApplications: () => ({
-			status: 200,
-			body: {
-				items: application.status === "pending_approval" ? [application] : [],
-				nextCursor: null,
-			},
-		}),
+		listPendingAgentApplications: () => {
+			if (pendingQueueUnavailable) {
+				return {
+					status: 503,
+					body: {
+						schemaVersion: 1 as const,
+						code: "DEPENDENCY_UNAVAILABLE" as const,
+						message: "Controlled pending queue failure",
+						retryable: true,
+						traceId: "trace-pending-queue-retry",
+					},
+				};
+			}
+			return {
+				status: 200,
+				body: {
+					items: application.status === "pending_approval" ? [application] : [],
+					nextCursor: null,
+				},
+			};
+		},
 		decideAgentApplication: () => ({ status: 200, body: application }),
 		updateAgentConfiguration: () => ({ status: 200, body: agent }),
 		commandAgentLifecycle: () => ({ status: 202, body: agent }),
 	});
 	let release: (() => void) | undefined;
 	let nextGate: Promise<void> | undefined;
+	let rejectNextApplication:
+		| "DEPENDENCY_UNAVAILABLE"
+		| "AUTHORIZATION_REVOKED"
+		| undefined;
 	let rejectNextWithdrawal = false;
 	const commands: { path: string; body: unknown; key: string | undefined }[] =
 		[];
@@ -88,6 +145,21 @@ async function fixture(
 			});
 			await nextGate;
 			nextGate = undefined;
+			if (pathname.endsWith("/agent-applications") && rejectNextApplication) {
+				const code = rejectNextApplication;
+				rejectNextApplication = undefined;
+				await route.fulfill({
+					status: code === "AUTHORIZATION_REVOKED" ? 403 : 503,
+					json: {
+						schemaVersion: 1,
+						code,
+						message: "Controlled application rejection",
+						retryable: code !== "AUTHORIZATION_REVOKED",
+						traceId: "trace-application-retry",
+					},
+				});
+				return;
+			}
 			if (pathname.endsWith("/withdraw") && rejectNextWithdrawal) {
 				rejectNextWithdrawal = false;
 				await route.fulfill({
@@ -156,6 +228,12 @@ async function fixture(
 	});
 	return {
 		commands,
+		staleDeployment() {
+			deployment = { ...deployment, status: "stale" };
+		},
+		freshDeployment() {
+			deployment = deploymentConfiguration;
+		},
 		holdNextCommand() {
 			nextGate = new Promise<void>((resolve) => {
 				release = resolve;
@@ -173,6 +251,19 @@ async function fixture(
 					reason: "Capacity is unavailable",
 				},
 			};
+		},
+		rejectNextApplication(
+			code:
+				| "DEPENDENCY_UNAVAILABLE"
+				| "AUTHORIZATION_REVOKED" = "DEPENDENCY_UNAVAILABLE",
+		) {
+			rejectNextApplication = code;
+		},
+		unavailablePendingQueue() {
+			pendingQueueUnavailable = true;
+		},
+		recoverPendingQueue() {
+			pendingQueueUnavailable = false;
 		},
 		rejectNextWithdrawal() {
 			rejectNextWithdrawal = true;
@@ -250,13 +341,15 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await page
 		.getByLabel("用途说明", { exact: true })
 		.fill("Helps the release team");
-	await page.getByLabel("Agent 来源").focus();
-	await page.getByLabel("Agent 来源").selectOption("custom-platform-adapter");
+	const source = page.getByRole("combobox", { name: "Agent 来源" });
+	await source.click();
+	await page
+		.getByRole("option", { name: "自定义 Agent · 平台交互入口" })
+		.click();
+	await source.focus();
 	await page.keyboard.press("Tab");
 	await expect(page.getByLabel("镜像地址")).toBeFocused();
-	await expect(page.getByLabel("Agent 来源")).toHaveValue(
-		"custom-platform-adapter",
-	);
+	await expect(source).toContainText("自定义 Agent · 平台交互入口");
 	await page.getByLabel("镜像地址").fill("registry.example/agents/release:v1");
 	await capture(page, info, "create-application");
 	api.holdNextCommand();
@@ -321,6 +414,106 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await expect(page.getByRole("button", { name: "撤回申请" })).toHaveCount(0);
 });
 
+test("field errors and transient submission recover on desktop and mobile", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	await page.goto("/my-agents/new");
+	const name = page.getByLabel("Agent 名称");
+	const ownerIds = page.getByLabel("共同 Owner 用户 ID");
+	const submit = page.getByRole("button", { name: "提交申请", exact: true });
+	await name.fill("中文发布 Agent");
+	await page.getByLabel("用途说明", { exact: true }).fill("用于中文发布验收");
+	await page.getByRole("combobox", { name: "Agent 来源" }).click();
+	await page
+		.getByRole("option", { name: "自定义 Agent · 平台交互入口" })
+		.click();
+	await page.getByLabel("镜像地址").fill("registry.example/agents/release:v1");
+	await ownerIds.fill("user-2\nuser-2");
+	await page.getByRole("button", { name: "添加 Secret" }).click();
+	await page.getByLabel("Secret 名称").fill("TEST_SECRET");
+	await page.getByLabel("替换值").fill("synthetic-first-value");
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	await expect(ownerIds).toBeFocused();
+	await expect(ownerIds).toHaveAttribute("aria-invalid", "true");
+	await expect(page.getByText("共同 Owner 用户 ID不能重复。")).toBeVisible();
+	expect(api.commands).toHaveLength(0);
+
+	await ownerIds.fill("user-2");
+	await expect(ownerIds).not.toHaveAttribute("aria-invalid", "true");
+	api.rejectNextApplication();
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	await expect(page.getByRole("alert")).toContainText("申请提交失败");
+	await expect(name).toHaveValue("中文发布 Agent");
+	await expect(ownerIds).toHaveValue("user-2");
+	await expect(page.getByLabel("替换值")).toHaveCount(0);
+	expect(api.commands).toHaveLength(1);
+	await capture(page, info, "application-field-recovery");
+
+	await page.getByRole("button", { name: "添加 Secret" }).click();
+	await page.getByLabel("Secret 名称").fill("TEST_SECRET");
+	await page.getByLabel("替换值").fill("synthetic-retry-value");
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	await expect(page.getByRole("status")).toBeFocused();
+	expect(api.commands).toHaveLength(2);
+	expect(api.commands[1]?.body).toMatchObject({
+		name: "中文发布 Agent",
+		coOwnerIds: ["user-2"],
+		secrets: [{ name: "TEST_SECRET", value: "synthetic-retry-value" }],
+	});
+});
+
+test("stale deployment options block submission in the browser", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	api.staleDeployment();
+	await page.goto("/my-agents/new");
+	await page.getByLabel("Agent 名称").fill("中文模板 Agent");
+	await page.getByLabel("用途说明", { exact: true }).fill("验证过期部署选项");
+	await page.getByRole("button", { name: "提交申请", exact: true }).click();
+	await expect(page.locator("#application-template-id-error")).toHaveText(
+		"部署选项已过期，请重新加载后再提交。",
+	);
+	await expect(page.locator("#application-template-id")).toBeFocused();
+	expect(api.commands).toHaveLength(0);
+	await capture(page, info, "application-stale-options");
+	api.freshDeployment();
+	await page.getByRole("button", { name: "重新加载部署选项" }).click();
+	await expect(page.locator("#application-deployment-status")).toHaveCount(0);
+	await expect(page.getByLabel("Agent 名称")).toHaveValue("中文模板 Agent");
+	await page.getByRole("combobox", { name: "标准模板 ID" }).click();
+	await page.getByRole("option", { name: "Codex" }).click();
+	await expect(page.locator("#application-template-id-error")).toHaveCount(0);
+});
+
+test("authorization rejection keeps non-sensitive input and clears Secret", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	await page.goto("/my-agents/new");
+	await page.getByLabel("Agent 名称").fill("中文权限 Agent");
+	await page.getByLabel("用途说明", { exact: true }).fill("验证撤权后拒绝");
+	await page.getByRole("combobox", { name: "Agent 来源" }).click();
+	await page
+		.getByRole("option", { name: "自定义 Agent · 平台交互入口" })
+		.click();
+	await page.getByLabel("镜像地址").fill("registry.example/agents/release:v1");
+	await page.getByRole("button", { name: "添加 Secret" }).click();
+	await page.getByLabel("Secret 名称").fill("TEST_SECRET");
+	await page.getByLabel("替换值").fill("synthetic-rejected-value");
+	api.rejectNextApplication("AUTHORIZATION_REVOKED");
+	await page.getByRole("button", { name: "提交申请", exact: true }).click();
+	await expect(page.getByRole("alert")).toContainText("当前不可用");
+	await expect(page.getByLabel("Agent 名称")).toHaveValue("中文权限 Agent");
+	await expect(page.getByLabel("替换值")).toHaveCount(0);
+	expect(api.commands).toHaveLength(1);
+	await capture(page, info, "application-authorization-rejected");
+});
+
 test("administrator rejection, approval, empty queue and pending controls", async ({
 	page,
 }, info) => {
@@ -361,6 +554,25 @@ test("administrator rejection, approval, empty queue and pending controls", asyn
 		schemaVersion: 1,
 		decision: "approve",
 	});
+});
+
+test("administrator can recover a temporarily unavailable pending queue", async ({
+	page,
+}, info) => {
+	const api = await fixture(page, "admin");
+	api.unavailablePendingQueue();
+	await page.goto("/admin/approvals");
+	await expect(page.getByRole("alert")).toContainText(
+		"审批列表暂时无法读取，请稍后重试。",
+		{ timeout: 15_000 },
+	);
+	const retry = page.getByRole("button", { name: "重新加载审批" });
+	await expect(retry).toBeVisible();
+	api.recoverPendingQueue();
+	await retry.focus();
+	await page.keyboard.press("Enter");
+	await expect(page.getByRole("button", { name: "审阅申请" })).toBeVisible();
+	await capture(page, info, "approvals-recovered");
 });
 
 test("Owner configuration checkbox, Secret clearing, lifecycle and custom image upgrade", async ({

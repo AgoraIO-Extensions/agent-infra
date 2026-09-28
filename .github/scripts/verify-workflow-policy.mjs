@@ -1604,11 +1604,11 @@ export function validateWorkflowDocuments(workflows) {
     "litellm.force_streaming_api_base_substrings": '["https://"]',
     "github_action_config.auto_describe": "false",
     "github_action_config.pr_actions":
-      '["opened", "reopened", "ready_for_review", "review_requested"]',
+      '["opened", "reopened", "ready_for_review", "review_requested", "edited"]',
   };
   if (
     JSON.stringify(prAgent?.on?.pull_request_target?.types) !==
-      JSON.stringify(["opened", "reopened", "ready_for_review", "review_requested"]) ||
+      JSON.stringify(["opened", "reopened", "ready_for_review", "review_requested", "edited"]) ||
     !sameObject(prAgent?.permissions, {}) ||
     !sameObject(prAgent?.concurrency, {
       group: "pr-agent-review-${{ github.event.pull_request.number }}",
