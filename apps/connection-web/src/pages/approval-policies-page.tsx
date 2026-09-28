@@ -696,6 +696,21 @@ export function ApprovalPoliciesPage() {
 										setProfileId("");
 										setSelectedActions([]);
 										setActionQuery("");
+										const nextProvider = catalog.data?.providers.find(
+											(item) => item.providerReleaseId === event.target.value,
+										)?.provider;
+										setDisclaimerIds((current) =>
+											current.filter((id) => {
+												const disclaimer = catalog.data?.disclaimers.find(
+													(item) => item.id === id,
+												);
+												return (
+													disclaimer?.kind === "GLOBAL" ||
+													(disclaimer?.kind === "PROVIDER" &&
+														disclaimer.providerId === nextProvider)
+												);
+											}),
+										);
 									}}
 								>
 									<option value="">选择连接器</option>
@@ -852,7 +867,12 @@ export function ApprovalPoliciesPage() {
 										<fieldset>
 											<legend>已发布版本</legend>
 											{catalog.data?.disclaimers
-												.filter((item) => item.status === "PUBLISHED")
+												.filter(
+													(item) =>
+														item.status === "PUBLISHED" &&
+														(item.kind === "GLOBAL" ||
+															item.providerId === provider?.provider),
+												)
 												.map((item) => (
 													<label className="approval-disclaimer" key={item.id}>
 														<input
@@ -866,7 +886,10 @@ export function ApprovalPoliciesPage() {
 																)
 															}
 														/>
-														{item.kind} · {item.locale}
+														{item.kind === "GLOBAL"
+															? "全局基础条款"
+															: `${item.providerId} 附加条款`}{" "}
+														· {item.locale}
 													</label>
 												))}
 										</fieldset>
