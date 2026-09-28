@@ -3,9 +3,11 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import {
 	RuntimeBusinessGrantClaimsV4Schema,
 	type RuntimeBusinessRequestV4,
+	type RuntimePinnedExecutionKeyScopeV4,
 	RuntimeSubmitTurnRequestV4Schema,
 	RuntimeSupplementRequestV4Schema,
 	runtimeRequestSigningPayloadV4,
+	validateRuntimePinnedExecutionKeyScopeV4,
 } from "@agent-infra/contracts/runtime";
 import { describe, expect, it } from "vitest";
 
@@ -124,7 +126,10 @@ function signed(
 	};
 }
 
-function privateFieldFor(value: RuntimeBusinessRequestV4) {
+function privateFieldFor(
+	value: RuntimeBusinessRequestV4,
+	relayKey = "private-key-value-k1",
+) {
 	const { claims } = verifyGrant(value.grant);
 	return {
 		schemaVersion: 1,
@@ -145,7 +150,7 @@ function privateFieldFor(value: RuntimeBusinessRequestV4) {
 			operation: value.operation,
 			keyBinding: value.keyBinding,
 		},
-		keyDelivery: { relayKey: "private-key-value-k1" },
+		keyDelivery: { relayKey },
 	};
 }
 
@@ -287,5 +292,151 @@ describe("Runtime V4 Grant trust boundary", () => {
 				"Runtime authorization is unavailable",
 			);
 		}
+	});
+
+	it("rejects a re-signed Key substitution against trusted accepted Execution scopes", async () => {
+		const original = signed();
+		const acceptedK1: RuntimePinnedExecutionKeyScopeV4 = {
+			principal: { kind: "user", id: "user-fixture" },
+			executionSource: "web",
+			channelId: "web",
+			agentId: "agent-fixture",
+			conversationId: "conversation-fixture",
+			executionId: "execution-fixture",
+			turnId: "turn-fixture",
+			sessionGeneration: 1,
+			keyBinding: {
+				purpose: "personal",
+				subjectId: "user-fixture",
+				ciphertextRef: "key-fixture",
+				version: 1,
+			},
+		};
+		const acceptedK2: RuntimePinnedExecutionKeyScopeV4 = {
+			...acceptedK1,
+			executionId: "execution-next",
+			turnId: "turn-next",
+			keyBinding: {
+				...acceptedK1.keyBinding,
+				ciphertextRef: "key-next",
+				version: 2,
+			},
+		};
+		const pinned = new Map([
+			[acceptedK1.executionId, acceptedK1],
+			[acceptedK2.executionId, acceptedK2],
+		]);
+		let driverCalls = 0;
+		async function fakeHost(value: unknown) {
+			const accepted = await validateKeyDelivery(value);
+			const trusted = pinned.get(accepted.request.executionId);
+			if (!trusted) throw new TypeError("Accepted Execution is unavailable");
+			validateRuntimePinnedExecutionKeyScopeV4(trusted, accepted.request);
+			driverCalls += 1;
+			return accepted.relayKey;
+		}
+		const substitutedFirst = signed(
+			{},
+			{},
+			RuntimeSubmitTurnRequestV4Schema.parse({
+				...request,
+				keyBinding: { ...request.keyBinding, version: 2 },
+			}),
+		);
+		await expect(
+			fakeHost({
+				businessRequest: substitutedFirst,
+				privateKeyField: privateFieldFor(
+					substitutedFirst,
+					"private-key-value-k2",
+				),
+			}),
+		).rejects.toThrow("RuntimeHostV4 pinned Execution Key is invalid");
+		expect(driverCalls).toBe(0);
+		await expect(
+			fakeHost({
+				businessRequest: original,
+				privateKeyField: privateFieldFor(original),
+			}),
+		).resolves.toBe("private-key-value-k1");
+		const { selection: _selection, ...supplementBase } = request;
+		const originalSupplement = signed(
+			{},
+			{},
+			RuntimeSupplementRequestV4Schema.parse({
+				...supplementBase,
+				requestId: "request-supplement",
+				hostSessionRef: "session-fixture",
+				operation: {
+					kind: "message",
+					id: "message-fixture",
+					deliveryFence: 2,
+					executionDeliveryFence: 1,
+				},
+			}),
+		);
+		await expect(
+			fakeHost({
+				businessRequest: originalSupplement,
+				privateKeyField: privateFieldFor(originalSupplement),
+			}),
+		).resolves.toBe("private-key-value-k1");
+		const nextExecution = signed(
+			{},
+			{},
+			RuntimeSubmitTurnRequestV4Schema.parse({
+				...request,
+				requestId: "request-next",
+				executionId: "execution-next",
+				turnId: "turn-next",
+				operation: {
+					...request.operation,
+					id: "execution-next",
+				},
+				keyBinding: {
+					...request.keyBinding,
+					ciphertextRef: "key-next",
+					version: 2,
+				},
+			}),
+		);
+		await expect(
+			fakeHost({
+				businessRequest: nextExecution,
+				privateKeyField: privateFieldFor(nextExecution, "private-key-value-k2"),
+			}),
+		).resolves.toBe("private-key-value-k2");
+		for (const changed of [
+			{ ...request, keyBinding: { ...request.keyBinding, version: 2 } },
+			{
+				...request,
+				principal: { kind: "user" as const, id: "other-user" },
+				keyBinding: { ...request.keyBinding, subjectId: "other-user" },
+			},
+			{ ...request, agentId: "other-agent" },
+			{ ...request, channelId: "wecom" },
+		]) {
+			const substituted = signed(
+				{},
+				{},
+				RuntimeSubmitTurnRequestV4Schema.parse(changed),
+			);
+			await expect(
+				fakeHost({
+					businessRequest: substituted,
+					privateKeyField: privateFieldFor(substituted),
+				}),
+			).rejects.toThrow("RuntimeHostV4 pinned Execution Key is invalid");
+		}
+		await expect(
+			fakeHost({
+				businessRequest: {
+					...original,
+					grant: { ...original.grant, schemaVersion: 2 },
+				},
+				privateKeyField: privateFieldFor(original),
+			}),
+		).rejects.toThrow("Runtime authorization is unavailable");
+		expect(driverCalls).toBe(3);
 	});
 });
