@@ -120,12 +120,59 @@ worker_values() {
   )
 }
 
+check_database_resource_ownership() {
+  local resource name
+  for resource in service endpointslice secret; do
+    case "$resource" in
+      service|secret) name="$database_service" ;;
+      endpointslice) name="$database_endpoint" ;;
+    esac
+    if ! "${kube_target[@]}" get "$resource/$name" --ignore-not-found -o json |
+      node -e '
+        let input = "";
+        process.stdin.on("data", (chunk) => { input += chunk; });
+        process.stdin.on("end", () => {
+          if (!input.trim()) return;
+          try {
+            const labels = JSON.parse(input).metadata?.labels ?? {};
+            if (labels["app.kubernetes.io/managed-by"] !== "agent-infra-local" ||
+                labels["agent-infra.agora.io/local-project"] !== process.argv[1]) process.exitCode = 1;
+          } catch {
+            process.exitCode = 1;
+          }
+        });
+      ' "$PLATFORM_LOCAL_PROJECT"; then
+      echo "Local database $resource/$name is not owned by this project" >&2
+      return 1
+    fi
+  done
+}
+
+database_network_aliases() {
+  "${docker_target[@]}" container inspect "$1" --format '{{with index .NetworkSettings.Networks "kind"}}{{join .Aliases " "}}{{end}}'
+}
+
+check_database_network_ownership() {
+  local container aliases
+  container=$("${compose[@]}" ps -q postgres)
+  [[ -n "$container" ]] || return 0
+  aliases=$(database_network_aliases "$container")
+  if [[ -n "$aliases" && " $aliases " != *" $database_service "* ]]; then
+    echo "Local PostgreSQL is connected to kind outside this project" >&2
+    return 1
+  fi
+}
+
 connect_worker_database() {
-  local container database_ip
+  local container database_ip aliases
   container=$("${compose[@]}" ps -q postgres)
   [[ -n "$container" ]] || { echo "Local PostgreSQL container is missing" >&2; return 1; }
-  if [[ $("${docker_target[@]}" container inspect "$container" --format '{{if index .NetworkSettings.Networks "kind"}}connected{{end}}') != connected ]]; then
-    "${docker_target[@]}" network connect kind "$container"
+  aliases=$(database_network_aliases "$container")
+  if [[ -z "$aliases" ]]; then
+    "${docker_target[@]}" network connect --alias "$database_service" kind "$container"
+  elif [[ " $aliases " != *" $database_service "* ]]; then
+    echo "Local PostgreSQL is connected to kind outside this project" >&2
+    return 1
   fi
   database_ip=$("${docker_target[@]}" container inspect "$container" --format '{{(index .NetworkSettings.Networks "kind").IPAddress}}')
   [[ "$database_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
@@ -139,6 +186,7 @@ metadata:
   name: $database_service
   labels:
     app.kubernetes.io/managed-by: agent-infra-local
+    agent-infra.agora.io/local-project: $PLATFORM_LOCAL_PROJECT
 spec:
   ports:
     - name: postgres
@@ -152,6 +200,7 @@ metadata:
   name: $database_endpoint
   labels:
     app.kubernetes.io/managed-by: agent-infra-local
+    agent-infra.agora.io/local-project: $PLATFORM_LOCAL_PROJECT
     kubernetes.io/service-name: $database_service
     endpointslice.kubernetes.io/managed-by: agent-infra-local
 addressType: IPv4
@@ -168,27 +217,40 @@ EOF
     let input = "";
     process.stdin.on("data", (chunk) => { input += chunk; });
     process.stdin.on("end", () => {
-      const source = new URL(JSON.parse(input).services["platform-api"].environment.PLATFORM_DATABASE_URL);
-      if (source.hostname !== "postgres" || source.port !== "5432" || source.protocol !== "postgresql:") {
-        throw new Error("Local API database URL must target Compose postgres:5432");
+      try {
+        const source = new URL(JSON.parse(input).services["platform-api"].environment.PLATFORM_DATABASE_URL);
+        if (source.hostname !== "postgres" || source.port !== "5432" || source.protocol !== "postgresql:") {
+          throw new Error("unexpected database target");
+        }
+        source.hostname = process.argv[1];
+        process.stdout.write(JSON.stringify({
+          apiVersion: "v1", kind: "Secret", type: "Opaque",
+          metadata: { name: process.argv[2], labels: {
+            "app.kubernetes.io/managed-by": "agent-infra-local",
+            "agent-infra.agora.io/local-project": process.argv[3],
+          } },
+          data: { url: Buffer.from(source.toString()).toString("base64") },
+        }));
+      } catch {
+        console.error("Local API database URL is invalid or does not target Compose postgres:5432");
+        process.exitCode = 1;
       }
-      source.hostname = process.argv[1];
-      process.stdout.write(JSON.stringify({
-        apiVersion: "v1", kind: "Secret", type: "Opaque",
-        metadata: { name: process.argv[2], labels: { "app.kubernetes.io/managed-by": "agent-infra-local" } },
-        data: { url: Buffer.from(source.toString()).toString("base64") },
-      }));
     });
-  ' "$database_service.$PLATFORM_LOCAL_NAMESPACE.svc.cluster.local" "$database_service" |
+  ' "$database_service.$PLATFORM_LOCAL_NAMESPACE.svc.cluster.local" "$database_service" "$PLATFORM_LOCAL_PROJECT" |
     "${kube_target[@]}" apply --server-side --field-manager=agent-infra-local -f -
 }
 
 disconnect_worker_database() {
-  local container
+  local container aliases
+  check_database_resource_ownership
+  check_database_network_ownership
   "${kube_target[@]}" delete "endpointslice/$database_endpoint" "service/$database_service" "secret/$database_service" --ignore-not-found
   container=$("${compose[@]}" ps -q postgres)
-  if [[ -n "$container" && $("${docker_target[@]}" container inspect "$container" --format '{{if index .NetworkSettings.Networks "kind"}}connected{{end}}') == connected ]]; then
-    "${docker_target[@]}" network disconnect kind "$container"
+  if [[ -n "$container" ]]; then
+    aliases=$(database_network_aliases "$container")
+    if [[ " $aliases " == *" $database_service "* ]]; then
+      "${docker_target[@]}" network disconnect kind "$container"
+    fi
   fi
 }
 
@@ -207,6 +269,8 @@ case "${1:-}" in
     [[ -r "${PLATFORM_WEB_TLS_CERT_FILE:?}" && -r "${PLATFORM_WEB_TLS_KEY_FILE:?}" ]] || { echo "Local Web TLS files are missing" >&2; exit 1; }
     worker_context
     worker_values
+    check_database_resource_ownership
+    check_database_network_ownership
     "${helm_target[@]}" template "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" >/dev/null
     "${compose[@]}" stop web platform-api
     "${compose[@]}" up --detach --wait postgres object-storage
@@ -224,7 +288,21 @@ case "${1:-}" in
     ;;
   stop)
     worker_context
-    worker_replicas=$("${kube_target[@]}" get deployment "$worker_deployment" -o jsonpath='{.spec.replicas}')
+    check_database_resource_ownership
+    check_database_network_ownership
+    worker_replicas=$("${kube_target[@]}" get deployment "$worker_deployment" --ignore-not-found -o jsonpath='{.spec.replicas}')
+    if [[ -z "$worker_replicas" ]]; then
+      existing_release=$("${helm_target[@]}" list --all --filter "^${worker_release}$" -q)
+      if [[ -n "$existing_release" ]]; then
+        echo "Worker release exists without its Deployment" >&2
+        exit 1
+      fi
+      "${compose[@]}" stop web platform-api
+      ensure_agents_stopped
+      disconnect_worker_database
+      "${compose[@]}" stop object-storage postgres
+      exit 0
+    fi
     [[ "$worker_replicas" =~ ^[0-9]+$ ]] || { echo "Worker deployment has no valid replica count" >&2; exit 1; }
     "${compose[@]}" stop web platform-api
     if ! "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas=0 ||

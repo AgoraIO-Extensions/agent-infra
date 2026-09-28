@@ -78,6 +78,8 @@ API 使用与所选 Docker context 的 kind control-plane 一致的 loopback 端
 不进入 values 文件、源码或脚本输出。重复 `up` 会刷新容器 IP 和 Secret；`status`
 回读路由对象；正常 `stop` 在 Worker 卸载后删除路由与该 Secret，并断开容器的
 `kind` 网络，保留数据库和对象卷。此路由仅供隔离本地 kind 使用。
+脚本会拒绝同名但不属于当前 project 的 Kubernetes 对象及预先由其他流程连接的
+`kind` 网络链路；Helm 卸载后若路由清理中断，可再次执行 `stop` 完成清理。
 脚本会固定关闭 Helm migration、目录服务及拓扑占位进程；升级前关闭已有 Web/API，
 启动数据服务并等待 Worker Deployment 就绪，再开放 Compose 中的 Web/API。Worker
 启动失败时 Web/API 保持关闭。

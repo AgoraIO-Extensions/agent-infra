@@ -59,13 +59,13 @@ elif [[ "$*" == *"port isolated-control-plane 6443/tcp"* ]]; then
 elif [[ "$*" == *"compose"*"ps -q postgres"* ]]; then
   printf 'fixture-postgres\\n'
 elif [[ "$*" == *"compose"*"config --format json"* ]]; then
-  printf '%s\\n' '{"services":{"platform-api":{"environment":{"PLATFORM_DATABASE_URL":"postgresql://fixture:fixture@postgres:5432/fixture"}}}}'
+  printf '{"services":{"platform-api":{"environment":{"PLATFORM_DATABASE_URL":"%s"}}}}\\n' "$FAKE_DATABASE_URL"
 elif [[ "$*" == *"container inspect fixture-postgres"*"IPAddress"* ]]; then
   printf '172.18.0.42\\n'
 elif [[ "$*" == *"container inspect fixture-postgres"* ]]; then
-  [[ -f "$FAKE_NETWORK_STATE" ]] && printf 'connected\\n'
-elif [[ "$*" == *"network connect kind fixture-postgres"* ]]; then
-  touch "$FAKE_NETWORK_STATE"
+  if [[ -f "$FAKE_NETWORK_STATE" ]]; then cat "$FAKE_NETWORK_STATE"; else printf '%s' "$FAKE_PRECONNECTED_ALIASES"; fi
+elif [[ "$*" == *"network connect --alias agent-infra-verify-postgres kind fixture-postgres"* ]]; then
+  printf 'agent-infra-verify-postgres' > "$FAKE_NETWORK_STATE"
   printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
 elif [[ "$*" == *"network disconnect kind fixture-postgres"* ]]; then
   rm -f "$FAKE_NETWORK_STATE"
@@ -83,6 +83,8 @@ if [[ "$*" == *"uninstall"* && -n "$FAKE_HELM_UNINSTALL_EXIT" ]]; then
   exit "$FAKE_HELM_UNINSTALL_EXIT"
 elif [[ "$*" == *"upgrade --install"* && -n "$FAKE_HELM_UPGRADE_EXIT" ]]; then
   exit "$FAKE_HELM_UPGRADE_EXIT"
+elif [[ "$*" == *"list --all --filter ^agent-infra-verify$ -q"* ]]; then
+  printf '%s' "$FAKE_HELM_LIST_RESULT"
 fi`,
 	);
 	await executable(
@@ -91,7 +93,11 @@ fi`,
 		`
 if [[ "$*" == *"config view"* ]]; then
   printf '%s' "$FAKE_KUBE_SERVER"
-elif [[ "$*" == *"get deployment agent-infra-verify-agent-infra-platform-worker -o jsonpath="* ]]; then
+elif [[ "$*" == *"--ignore-not-found -o json" ]]; then
+  if [[ -n "$FAKE_FOREIGN_RESOURCE" && "$*" == *"get $FAKE_FOREIGN_RESOURCE "* ]]; then
+    printf '%s\\n' '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"another-owner"}}}'
+  fi
+elif [[ "$*" == *"get deployment agent-infra-verify-agent-infra-platform-worker"*"-o jsonpath="* ]]; then
   printf '%s' "$FAKE_WORKER_REPLICAS"
 elif [[ "$*" == *"get pods -l app.kubernetes.io/instance=agent-infra-verify,app.kubernetes.io/component=platform-worker"* ]]; then
   printf '%s' "$FAKE_WORKER_PODS"
@@ -124,9 +130,13 @@ fi`,
 		FAKE_AGENT_PODS: "",
 		FAKE_WORKER_REPLICAS: "1",
 		FAKE_WORKER_PODS: "",
+		FAKE_FOREIGN_RESOURCE: "",
+		FAKE_PRECONNECTED_ALIASES: "",
 		FAKE_RESTORE_SCALE_EXIT: "",
 		FAKE_HELM_UNINSTALL_EXIT: "",
 		FAKE_HELM_UPGRADE_EXIT: "",
+		FAKE_HELM_LIST_RESULT: "",
+		FAKE_DATABASE_URL: "postgresql://fixture:fixture@postgres:5432/fixture",
 		PLATFORM_LOCAL_DOCKER_CONTEXT: "isolated",
 		PLATFORM_LOCAL_PROJECT: "agent-infra-verify",
 		PLATFORM_LOCAL_API_DIRECTORY: api,
@@ -178,7 +188,10 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			up[2],
 			/^docker .* compose .* up --detach --wait postgres object-storage$/,
 		);
-		assert.match(up[3], /network connect kind fixture-postgres$/);
+		assert.match(
+			up[3],
+			/network connect --alias agent-infra-verify-postgres kind fixture-postgres$/,
+		);
 		assert.match(up[4], /^kubectl .* apply -f -$/);
 		const manifest = await readFile(f.manifest, "utf8");
 		assert.match(manifest, /name: agent-infra-verify-postgres/);
@@ -265,7 +278,10 @@ test("local up keeps API and Web closed when Worker upgrade fails", async () => 
 			steps[2],
 			/compose .* up --detach --wait postgres object-storage$/,
 		);
-		assert.match(steps[3], /network connect kind fixture-postgres/);
+		assert.match(
+			steps[3],
+			/network connect --alias agent-infra-verify-postgres kind fixture-postgres/,
+		);
 		assert.match(steps[4], /kubectl .* apply -f -/);
 		assert.match(
 			steps[5],
@@ -299,6 +315,87 @@ test("local up rejects remote Kubernetes and missing Worker values before starti
 		assert.notEqual(missingValues.status, 0);
 		assert.match(missingValues.stderr, /absolute readable file/);
 		assert.equal(await readFile(f.log, "utf8"), "");
+	} finally {
+		await f.close();
+	}
+});
+
+test("local commands refuse foreign database route resources and network links", async () => {
+	const f = await fixture();
+	try {
+		for (const resource of [
+			"service/agent-infra-verify-postgres",
+			"endpointslice/agent-infra-verify-postgres-docker",
+			"secret/agent-infra-verify-postgres",
+		]) {
+			const result = run("up", { ...f.env, FAKE_FOREIGN_RESOURCE: resource });
+			assert.notEqual(result.status, 0);
+			assert.match(result.stderr, /not owned by this project/);
+			assert.equal(await readFile(f.log, "utf8"), "");
+		}
+		const preconnected = run("stop", {
+			...f.env,
+			FAKE_PRECONNECTED_ALIASES: "another-owner-db",
+		});
+		assert.notEqual(preconnected.status, 0);
+		assert.match(preconnected.stderr, /connected to kind outside this project/);
+		assert.equal(await readFile(f.log, "utf8"), "");
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up redacts malformed database connection input", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", {
+			...f.env,
+			FAKE_DATABASE_URL: "not-a-url-fixture-password-sentinel",
+		});
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /Local API database URL is invalid/);
+		assert.doesNotMatch(result.stderr, /fixture-password-sentinel/);
+		assert.doesNotMatch(await readFile(f.log, "utf8"), /upgrade --install/);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local stop can finish owned route cleanup after an earlier Helm uninstall", async () => {
+	const f = await fixture();
+	try {
+		const result = run("stop", {
+			...f.env,
+			FAKE_WORKER_REPLICAS: "",
+			FAKE_HELM_LIST_RESULT: "",
+		});
+		assert.equal(result.status, 0);
+		const log = await readFile(f.log, "utf8");
+		assert.match(
+			log,
+			/delete endpointslice\/agent-infra-verify-postgres-docker/,
+		);
+		assert.match(log, /compose .* stop object-storage postgres/);
+		assert.doesNotMatch(log, /uninstall|scale deployment/);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local stop refuses a release missing its Worker Deployment", async () => {
+	const f = await fixture();
+	try {
+		const result = run("stop", {
+			...f.env,
+			FAKE_WORKER_REPLICAS: "",
+			FAKE_HELM_LIST_RESULT: "agent-infra-verify",
+		});
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /release exists without its Deployment/);
+		assert.doesNotMatch(
+			await readFile(f.log, "utf8"),
+			/compose .* stop|delete /,
+		);
 	} finally {
 		await f.close();
 	}
