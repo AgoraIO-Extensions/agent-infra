@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { PlatformLoginRequestV1Schema } from "@agent-infra/contracts/platform-auth";
 import type {
 	createLdapIdentityDirectory,
 	LdapAccount,
@@ -8,16 +9,15 @@ import { resolveLdapPrincipal } from "@agent-infra/identity";
 type Directory = ReturnType<typeof createLdapIdentityDirectory>;
 const SESSION_COOKIE = "__Host-platform-session";
 const SESSION_MS = 15 * 60_000;
-const MAX_LOGIN_BYTES = 4096;
+const MAX_LOGIN_BYTES = 32_768;
 const LOGIN_BODY_TIMEOUT_MS = 5000;
 
-function response(status: number, location?: string): Response {
+function response(status: number): Response {
 	return new Response(null, {
 		status,
 		headers: {
 			"Cache-Control": "no-store",
 			"Referrer-Policy": "no-referrer",
-			...(location ? { Location: location } : {}),
 		},
 	});
 }
@@ -42,7 +42,7 @@ async function loginBody(
 	request: Request,
 ): Promise<{ login: string; password: string } | null> {
 	if (
-		!/^application\/x-www-form-urlencoded(?:;|$)/iu.test(
+		!/^application\/json(?:;|$)/iu.test(
 			request.headers.get("content-type") ?? "",
 		) ||
 		!request.body
@@ -66,13 +66,12 @@ async function loginBody(
 			if (length > MAX_LOGIN_BYTES) return null;
 			chunks.push(value);
 		}
-		const params = new URLSearchParams(
-			new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)),
+		const parsed = PlatformLoginRequestV1Schema.safeParse(
+			JSON.parse(
+				new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)),
+			),
 		);
-		if ([...params.keys()].sort().join(",") !== "login,password") return null;
-		const login = params.get("login");
-		const password = params.get("password");
-		return login && password ? { login, password } : null;
+		return parsed.success ? parsed.data : null;
 	} catch {
 		return null;
 	} finally {
@@ -84,22 +83,6 @@ async function loginBody(
 			/* A timed-out read may still be pending. */
 		}
 	}
-}
-
-function loginPage(): Response {
-	return new Response(
-		'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录 Agent 平台</title><body><main><h1>Agent 平台</h1><form action="/auth/login" method="post"><label>员工账号 <input name="login" autocomplete="username" required></label><label>密码 <input name="password" type="password" autocomplete="current-password" required></label><button type="submit">登录</button></form></main></body></html>',
-		{
-			headers: {
-				"Content-Type": "text/html; charset=utf-8",
-				"Cache-Control": "no-store",
-				"Referrer-Policy": "no-referrer",
-				"X-Content-Type-Options": "nosniff",
-				"Content-Security-Policy":
-					"default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-			},
-		},
-	);
 }
 
 export interface LdapBrowserInput {
@@ -218,7 +201,6 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 		if (url.origin !== origin.origin || request.url.length > 8192 || url.search)
 			return response(400);
 		if (url.pathname === "/auth/login") {
-			if (request.method === "GET") return loginPage();
 			if (request.method !== "POST") return response(405);
 			if (request.headers.get("origin") !== origin.origin) return response(403);
 			const body = await loginBody(request);
@@ -241,7 +223,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			} catch {
 				return response(503);
 			}
-			const result = response(303, "/agents");
+			const result = response(204);
 			result.headers.append(
 				"Set-Cookie",
 				sessionCookie(token, SESSION_MS / 1000),

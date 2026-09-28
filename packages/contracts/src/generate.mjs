@@ -13,7 +13,6 @@ import {
 	fileOpenApiPathsV1,
 	fileSchemasV1,
 } from "./files.ts";
-
 import {
 	IdempotencyKeyV1Schema,
 	OpaqueCursorV1Schema,
@@ -41,6 +40,7 @@ import {
 	pilotSseSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
 } from "./pilot/index.ts";
+import { platformAuthOpenApiPathsV1 } from "./platform-auth.ts";
 import {
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesResponseV1Schema,
@@ -93,6 +93,10 @@ const artifactPaths = {
 	enterpriseDirectoryOpenapi: resolve(
 		artifactRoot,
 		"openapi/enterprise-directory.v1.openapi.json",
+	),
+	platformAuthOpenapi: resolve(
+		artifactRoot,
+		"openapi/platform-auth.v1.openapi.json",
 	),
 	standardTemplateReleaseOpenapi: resolve(
 		artifactRoot,
@@ -680,6 +684,20 @@ function buildArtifacts() {
 			info: { title: "Platform Authenticated Files API", version: "1.0.0" },
 			paths: { ...fileOpenApiPathsV1, ...fileExchangeOpenApiPathsV1 },
 			components: { schemas: fileSchemasV1 },
+		}),
+		platformAuthOpenapi: createDocument({
+			openapi: "3.1.0",
+			info: { title: "Platform Browser Authentication API", version: "1.0.0" },
+			paths: platformAuthOpenApiPathsV1,
+			components: {
+				securitySchemes: {
+					PlatformSession: {
+						type: "apiKey",
+						in: "cookie",
+						name: "__Host-platform-session",
+					},
+				},
+			},
 		}),
 		jsonSchema,
 		openapi,

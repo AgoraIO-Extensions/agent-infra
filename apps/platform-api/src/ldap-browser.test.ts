@@ -68,7 +68,7 @@ function fixture(sessions = memorySessions()) {
 		now: () => now,
 	});
 	const login = (
-		body = "login=login-a&password=correct-password",
+		body = JSON.stringify({ login: "login-a", password: "correct-password" }),
 		headers: Record<string, string> = {},
 	) =>
 		adapter.handleRequest(
@@ -76,7 +76,7 @@ function fixture(sessions = memorySessions()) {
 				method: "POST",
 				headers: {
 					origin,
-					"content-type": "application/x-www-form-urlencoded",
+					"content-type": "application/json",
 					...headers,
 				},
 				body,
@@ -110,8 +110,7 @@ describe("LDAP browser adapter", () => {
 	it("issues a secure hash-only session and resolves current LDAP and Platform facts", async () => {
 		const state = fixture();
 		const result = await state.login();
-		expect(result?.status).toBe(303);
-		expect(result?.headers.get("location")).toBe("/agents");
+		expect(result?.status).toBe(204);
 		const setCookie = result?.headers.get("set-cookie") ?? "";
 		expect(setCookie).toMatch(
 			/^__Host-platform-session=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=900$/u,
@@ -244,7 +243,7 @@ describe("LDAP browser adapter", () => {
 					method: "POST",
 					headers: {
 						origin,
-						"content-type": "application/x-www-form-urlencoded",
+						"content-type": "application/json",
 					},
 					body,
 					duplex: "half",
@@ -256,7 +255,16 @@ describe("LDAP browser adapter", () => {
 		} finally {
 			vi.useRealTimers();
 		}
-		expect((await state.login("x".repeat(4097)))?.status).toBe(400);
+		expect(
+			(
+				await state.login(
+					JSON.stringify({ login: "login-a", password: "x".repeat(4096) }),
+				)
+			)?.status,
+		).toBe(401);
+		expect(state.directory.authenticate).toHaveBeenCalledOnce();
+		vi.mocked(state.directory.authenticate).mockClear();
+		expect((await state.login("x".repeat(32_769)))?.status).toBe(400);
 		expect(state.directory.authenticate).not.toHaveBeenCalled();
 	});
 
@@ -267,13 +275,21 @@ describe("LDAP browser adapter", () => {
 				?.status,
 		).toBe(403);
 		expect(state.directory.authenticate).not.toHaveBeenCalled();
-		expect((await state.login("login=login-a&password=wrong"))?.status).toBe(
-			401,
-		);
 		expect(
 			(
 				await state.login(
-					"login=login-a&password=correct-password&userId=admin",
+					JSON.stringify({ login: "login-a", password: "wrong" }),
+				)
+			)?.status,
+		).toBe(401);
+		expect(
+			(
+				await state.login(
+					JSON.stringify({
+						login: "login-a",
+						password: "correct-password",
+						userId: "admin",
+					}),
 				)
 			)?.status,
 		).toBe(400);
@@ -307,6 +323,11 @@ describe("LDAP browser adapter", () => {
 		const cookie =
 			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
 		const request = new Request(origin, { headers: { cookie } });
+		expect(await state.adapter.identityAdapter.resolve(request)).not.toBeNull();
+		const getLogout = await state.adapter.handleRequest(
+			new Request(`${origin}/auth/logout`, { headers: { cookie } }),
+		);
+		expect(getLogout?.status).toBe(405);
 		expect(await state.adapter.identityAdapter.resolve(request)).not.toBeNull();
 		const denied = await state.adapter.handleRequest(
 			new Request(`${origin}/auth/logout`, {
