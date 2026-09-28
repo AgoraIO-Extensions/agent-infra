@@ -6,6 +6,8 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
+import { persistedEventsMatchExecution } from "./conversation-browser-validation.mjs";
+
 const requireWebDependency = createRequire(
 	new URL("../../apps/web/package.json", import.meta.url),
 );
@@ -310,14 +312,11 @@ async function run(input, evidence) {
 		);
 		const events = detail.events ?? [];
 		assert(
-			events.length > 0 &&
-				events.every(
-					(event) =>
-						event.eventId &&
-						event.conversationId === conversationId &&
-						(!event.executionId || event.executionId === receipt.executionId),
-				) &&
-				events.some((event) => event.executionId === receipt.executionId),
+			persistedEventsMatchExecution(
+				events,
+				conversationId,
+				receipt.executionId,
+			),
 			"Persisted events must stay bound to this conversation and execution",
 		);
 		assert.equal(

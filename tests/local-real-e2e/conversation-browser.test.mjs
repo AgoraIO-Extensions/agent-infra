@@ -5,7 +5,49 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { persistedEventsMatchExecution } from "./conversation-browser-validation.mjs";
+
 const script = join(import.meta.dirname, "conversation-browser.mjs");
+
+test("persisted event validation rejects missing, empty, and non-string execution IDs", () => {
+	const event = {
+		eventId: "event-1",
+		conversationId: "conversation-1",
+	};
+	for (const executionId of [undefined, null, "", 0, {}]) {
+		assert.equal(
+			persistedEventsMatchExecution(
+				[{ ...event, executionId }],
+				"conversation-1",
+				"execution-1",
+			),
+			false,
+			`executionId=${String(executionId)} must be rejected`,
+		);
+	}
+});
+
+test("persisted event validation accepts a complete execution-bound event set", () => {
+	assert.equal(
+		persistedEventsMatchExecution(
+			[
+				{
+					eventId: "event-1",
+					conversationId: "conversation-1",
+					executionId: "execution-1",
+				},
+				{
+					eventId: "event-2",
+					conversationId: "conversation-1",
+					executionId: "execution-1",
+				},
+			],
+			"conversation-1",
+			"execution-1",
+		),
+		true,
+	);
+});
 
 async function fixtureDirectory() {
 	const directory = await mkdtemp(
