@@ -9,35 +9,22 @@ import { persistedEventsMatchExecution } from "./conversation-browser-validation
 
 const script = join(import.meta.dirname, "conversation-browser.mjs");
 
-test("persisted event validation rejects missing, empty, and non-string execution IDs", () => {
-	const event = {
-		eventId: "event-1",
-		conversationId: "conversation-1",
-	};
-	for (const executionId of [undefined, null, "", 0, {}]) {
-		assert.equal(
-			persistedEventsMatchExecution(
-				[{ ...event, executionId }],
-				"conversation-1",
-				"execution-1",
-			),
-			false,
-			`executionId=${String(executionId)} must be rejected`,
-		);
-	}
-});
-
-test("persisted event validation accepts a complete execution-bound event set", () => {
+test("persisted event validation accepts mixed conversation and execution history", () => {
 	assert.equal(
 		persistedEventsMatchExecution(
 			[
 				{
-					eventId: "event-1",
+					eventId: "conversation-event-1",
 					conversationId: "conversation-1",
-					executionId: "execution-1",
+					executionId: null,
 				},
 				{
-					eventId: "event-2",
+					eventId: "earlier-execution-event-1",
+					conversationId: "conversation-1",
+					executionId: "execution-old",
+				},
+				{
+					eventId: "current-execution-event-1",
 					conversationId: "conversation-1",
 					executionId: "execution-1",
 				},
@@ -46,6 +33,55 @@ test("persisted event validation accepts a complete execution-bound event set", 
 			"execution-1",
 		),
 		true,
+	);
+});
+
+test("persisted event validation rejects malformed or unbound current history", () => {
+	const currentEvent = {
+		eventId: "current-execution-event-1",
+		conversationId: "conversation-1",
+		executionId: "execution-1",
+	};
+	for (const executionId of [undefined, null, "", 0, {}]) {
+		assert.equal(
+			persistedEventsMatchExecution(
+				[{ ...currentEvent, executionId }],
+				"conversation-1",
+				"execution-1",
+			),
+			false,
+			`executionId=${String(executionId)} must be rejected as the current event`,
+		);
+	}
+	assert.equal(
+		persistedEventsMatchExecution(
+			[
+				{ ...currentEvent, conversationId: "other-conversation" },
+				{ ...currentEvent, eventId: "current-execution-event-2" },
+			],
+			"conversation-1",
+			"execution-1",
+		),
+		false,
+	);
+	assert.equal(
+		persistedEventsMatchExecution(
+			[
+				{
+					eventId: "conversation-event-1",
+					conversationId: "conversation-1",
+					executionId: null,
+				},
+				{
+					eventId: "earlier-execution-event-1",
+					conversationId: "conversation-1",
+					executionId: "execution-old",
+				},
+			],
+			"conversation-1",
+			"execution-1",
+		),
+		false,
 	);
 });
 

@@ -317,7 +317,7 @@ async function run(input, evidence) {
 				conversationId,
 				receipt.executionId,
 			),
-			"Persisted events must stay bound to this conversation and execution",
+			"Current-execution events must stay bound to this conversation and execution",
 		);
 		assert.equal(
 			new Set(events.map((event) => event.eventId)).size,
