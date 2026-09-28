@@ -94,6 +94,11 @@ restore_local_services() {
   "${compose[@]}" up --detach --wait platform-api web
 }
 
+abort_stop() {
+  restore_local_services || echo "Local services could not be fully restored" >&2
+  exit 1
+}
+
 worker_values() {
   : "${PLATFORM_LOCAL_WORKER_VALUES:?Set an absolute local Worker values file}"
   [[ "$PLATFORM_LOCAL_WORKER_VALUES" = /* && -r "$PLATFORM_LOCAL_WORKER_VALUES" ]] || {
@@ -126,6 +131,7 @@ case "${1:-}" in
     worker_context
     worker_values
     "${helm_target[@]}" template "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" >/dev/null
+    "${compose[@]}" stop web platform-api
     "${compose[@]}" up --detach --wait postgres object-storage
     "${helm_target[@]}" upgrade --install "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" --wait --timeout 5m
     "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
@@ -144,22 +150,18 @@ case "${1:-}" in
     "${compose[@]}" stop web platform-api
     if ! "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas=0 ||
        ! "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m; then
-      restore_local_services || echo "Local services could not be fully restored" >&2
-      exit 1
+      abort_stop
     fi
     if ! worker_pods=$("${kube_target[@]}" get pods -l "app.kubernetes.io/instance=$worker_release,app.kubernetes.io/component=platform-worker" -o name); then
-      restore_local_services || echo "Local services could not be fully restored" >&2
-      exit 1
+      abort_stop
     fi
     if [[ -n "$worker_pods" ]]; then
       if ! "${kube_target[@]}" wait --for=delete pod -l "app.kubernetes.io/instance=$worker_release,app.kubernetes.io/component=platform-worker" --timeout=5m; then
-        restore_local_services || echo "Local services could not be fully restored" >&2
-        exit 1
+        abort_stop
       fi
     fi
     if ! ensure_agents_stopped || ! "${helm_target[@]}" uninstall "$worker_release" --ignore-not-found --wait --timeout 5m; then
-      restore_local_services || echo "Local services could not be fully restored" >&2
-      exit 1
+      abort_stop
     fi
     "${compose[@]}" stop object-storage postgres
     ;;

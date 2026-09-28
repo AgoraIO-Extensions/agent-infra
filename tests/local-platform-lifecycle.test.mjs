@@ -145,17 +145,18 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			up[0],
 			/--set-string platformWorker\.deploymentModule=file:\/\/\/app\/dist\/deployment\.mjs/,
 		);
+		assert.match(up[1], /^docker .* compose .* stop web platform-api$/);
 		assert.match(
-			up[1],
+			up[2],
 			/^docker .* compose .* up --detach --wait postgres object-storage$/,
 		);
-		assert.match(up[2], /^helm .* upgrade --install agent-infra-verify /);
+		assert.match(up[3], /^helm .* upgrade --install agent-infra-verify /);
 		assert.match(
-			up[3],
+			up[4],
 			/^kubectl .* --context kind-isolated --namespace agent-infra-verify rollout status deployment\/agent-infra-verify-agent-infra-platform-worker/,
 		);
 		assert.match(
-			up[4],
+			up[5],
 			/^docker .* compose .* up --detach --wait platform-api web$/,
 		);
 
@@ -203,12 +204,13 @@ test("local up keeps API and Web closed when Worker upgrade fails", async () => 
 		const result = run("up", { ...f.env, FAKE_HELM_UPGRADE_EXIT: "7" });
 		assert.notEqual(result.status, 0);
 		const steps = (await readFile(f.log, "utf8")).trim().split("\n");
+		assert.match(steps[1], /compose .* stop web platform-api$/);
 		assert.match(
-			steps[1],
+			steps[2],
 			/compose .* up --detach --wait postgres object-storage$/,
 		);
-		assert.match(steps[2], /helm .* upgrade --install/);
-		assert.equal(steps.length, 3);
+		assert.match(steps[3], /helm .* upgrade --install/);
+		assert.equal(steps.length, 4);
 	} finally {
 		await f.close();
 	}

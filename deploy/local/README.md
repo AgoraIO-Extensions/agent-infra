@@ -55,25 +55,11 @@ bash deploy/local/platform.sh up
 bash deploy/local/platform.sh status
 ```
 
-Worker 使用 [`createProductionWorkloadWorkerOptionsV1`](../../apps/platform-worker/src/workload-deployment.ts)
-装配，并在最终部署镜像内提供 `platformWorker.deploymentModule`。配置 `kubernetes.mode`
-为 `in-cluster`，复用 [Helm](../README.md#workload-调谐) 的 namespace-scoped RBAC。
-Worker 必须能导入与 `dist/deployment.mjs` 相邻的受信任 `configuration.mjs`；该模块提供
-真实的 `workloadInput`、`signing`、`serviceToken` 和当前用户 `directory`。基础 Worker
-镜像只打包两个工厂，不提供此配置模块。生产 Helm 要求
-`platformWorker.configurationModuleSecretRef` 引用经审阅的模块源码，入口文件只读挂到
-`/app/dist/configuration.mjs`，其余同 Secret 代码挂到 `/var/run/agent-infra/deployment`；
-`platformWorker.runtimeAuthSecretRef` 引用 Worker 专属的
-签名私钥与服务 token，分别挂到 `/var/run/agent-infra/runtime-auth/runtime-grant.pem` 和
-`service-token`。模块按这些固定路径读取私有材料；数据库 URL 和 Worker keyring 仍用
-现有专属 Secret，Kubernetes 凭证由 Pod ServiceAccount 提供。values 只保存 Secret
-名称与键，不保存源码、私钥或 token。挂载成功或 Helm rollout 不能代替业务循环证据。
-
-Worker 与 API 使用同一模板 Digest、ModelCatalog revision 和资源政策。Worker 的
-`runtimeProbe` 使用 `createWorkloadReadinessAuthorizationV1`，`workerId` 与
-`policy.runtimeAuth.workerId` 一致；仅把公钥、服务 token 的 Secret 引用和本机 Workload
-绑定注入 Agent。专用就绪授权见
-[工程 Spec](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#93-服务端授权上下文)。
+Worker 的模块接口、私有文件挂载和 Runtime 授权以
+[Worker 部署模块说明](../platform-worker/README.md) 为准。本地 values 只引用已经创建的
+`configurationModuleSecretRef`、`runtimeAuthSecretRef` 和 Worker 镜像 Digest；
+Kubernetes 凭证由 Pod ServiceAccount 提供。Worker 与 API 使用同一模板 Digest、
+ModelCatalog revision 和资源政策。挂载或 rollout 成功仍需后续业务验收。
 
 `PLATFORM_LOCAL_KUBECONFIG` 必须为可读绝对路径，context 必须是 `kind-*` 且当前集群
 API 使用与所选 Docker context 的 kind control-plane 一致的 loopback 端口，namespace
@@ -82,8 +68,9 @@ API 使用与所选 Docker context 的 kind control-plane 一致的 loopback 端
 `runtimeAuthSecretRef`；脚本把部署模块固定为镜像内的
 `file:///app/dist/deployment.mjs`。本地 `build` 不会自动发布
 镜像或生成 manifest Digest。迁移由上面的命令完成，
-脚本会固定关闭 Helm migration、目录服务及拓扑占位进程；先启动数据服务并等待 Worker
-Deployment 就绪，再开放 Compose 中的 Web/API。Worker 启动失败时 Web/API 不启动。
+脚本会固定关闭 Helm migration、目录服务及拓扑占位进程；升级前关闭已有 Web/API，
+启动数据服务并等待 Worker Deployment 就绪，再开放 Compose 中的 Web/API。Worker
+启动失败时 Web/API 保持关闭。
 
 ```bash
 bash deploy/local/platform.sh up
