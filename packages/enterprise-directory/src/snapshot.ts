@@ -1,14 +1,32 @@
 import { randomUUID } from "node:crypto";
-import { EnterpriseDirectorySnapshotV1Schema } from "@agent-infra/contracts/enterprise-directory";
 import { z } from "zod";
 
 export const MAX_SNAPSHOT_AGE_MS = 24 * 60 * 60 * 1_000;
 
-export type DirectorySnapshot = z.infer<
-	typeof EnterpriseDirectorySnapshotV1Schema
->;
-export type DirectoryDepartment = DirectorySnapshot["departments"][number];
-export type DirectoryMember = DirectorySnapshot["members"][number];
+export interface DirectoryDepartment {
+	id: number;
+	name: string;
+	parentId: number;
+}
+
+export interface DirectoryMember {
+	userId: string;
+	email: string;
+	active: boolean;
+	departmentIds: number[];
+}
+
+export interface DirectorySnapshot {
+	schemaVersion: 1;
+	revision: string;
+	source: "wecom";
+	rootDepartmentId: number;
+	fetchedAt: number;
+	validUntil: number;
+	complete: true;
+	departments: DirectoryDepartment[];
+	members: DirectoryMember[];
+}
 
 export class DirectoryUnavailableError extends Error {
 	constructor() {
@@ -20,11 +38,21 @@ function normalizeEmail(email: string) {
 	return email.trim().toLowerCase();
 }
 
-export function validateSnapshot(value: unknown): DirectorySnapshot {
-	const snapshot = EnterpriseDirectorySnapshotV1Schema.parse(value);
+export function validateSnapshot(
+	snapshot: DirectorySnapshot,
+): DirectorySnapshot {
 	if (
+		snapshot.schemaVersion !== 1 ||
+		snapshot.source !== "wecom" ||
+		snapshot.complete !== true ||
+		!Number.isSafeInteger(snapshot.rootDepartmentId) ||
+		snapshot.rootDepartmentId < 1 ||
+		!Number.isSafeInteger(snapshot.fetchedAt) ||
+		snapshot.fetchedAt < 0 ||
+		!Number.isSafeInteger(snapshot.validUntil) ||
 		snapshot.validUntil <= snapshot.fetchedAt ||
-		snapshot.validUntil > snapshot.fetchedAt + MAX_SNAPSHOT_AGE_MS
+		snapshot.validUntil > snapshot.fetchedAt + MAX_SNAPSHOT_AGE_MS ||
+		snapshot.departments.length === 0
 	) {
 		throw new DirectoryUnavailableError();
 	}
@@ -39,9 +67,14 @@ export function validateSnapshot(value: unknown): DirectorySnapshot {
 	}
 	for (const department of snapshot.departments) {
 		if (
-			department.id === snapshot.rootDepartmentId
+			!Number.isSafeInteger(department.id) ||
+			department.id < 1 ||
+			!Number.isSafeInteger(department.parentId) ||
+			department.parentId < 0 ||
+			!department.name.trim() ||
+			(department.id === snapshot.rootDepartmentId
 				? department.parentId !== 0
-				: !departments.has(department.parentId)
+				: !departments.has(department.parentId))
 		) {
 			throw new DirectoryUnavailableError();
 		}
@@ -57,6 +90,14 @@ export function validateSnapshot(value: unknown): DirectorySnapshot {
 	}
 	const memberIds = new Set<string>();
 	for (const member of snapshot.members) {
+		if (
+			!member.userId.trim() ||
+			typeof member.email !== "string" ||
+			typeof member.active !== "boolean" ||
+			member.departmentIds.length === 0 ||
+			member.departmentIds.some((id) => !Number.isSafeInteger(id) || id < 1)
+		)
+			throw new DirectoryUnavailableError();
 		if (memberIds.has(member.userId)) throw new DirectoryUnavailableError();
 		memberIds.add(member.userId);
 		if (
@@ -90,10 +131,11 @@ export function createSnapshot(input: {
 }
 
 export function requireCurrentSnapshot(
-	value: unknown,
+	value: DirectorySnapshot | null,
 	now = Date.now(),
 ): DirectorySnapshot {
 	try {
+		if (!value) throw new DirectoryUnavailableError();
 		const snapshot = validateSnapshot(value);
 		if (snapshot.fetchedAt > now || snapshot.validUntil <= now) {
 			throw new DirectoryUnavailableError();

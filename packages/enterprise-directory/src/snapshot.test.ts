@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
 	createSnapshot,
+	fromDirectorySnapshotV1,
 	requireCurrentSnapshot,
 	resolveActiveMemberByEmail,
-	validateSnapshot,
-} from "./snapshot.js";
+	toDirectorySnapshotV1,
+} from "./index.js";
 
 const now = Date.UTC(2026, 8, 28, 0, 0, 0);
 const snapshot = () =>
@@ -33,6 +34,26 @@ const snapshot = () =>
 	});
 
 describe("directory snapshot", () => {
+	it("maps wire data into an independent domain snapshot", () => {
+		const original = snapshot();
+		const mapped = fromDirectorySnapshotV1(toDirectorySnapshotV1(original));
+		expect(mapped).toEqual(original);
+		const mappedMember = mapped.members[0];
+		const originalMember = original.members[0];
+		if (!mappedMember || !originalMember) throw new Error("member missing");
+		mappedMember.email = "changed@example.test";
+		expect(originalMember.email).toBe("A@example.test");
+		expect(() =>
+			createSnapshot({
+				rootDepartmentId: 1,
+				startedAt: now,
+				completedAt: now,
+				departments: [{ id: 1, name: "   ", parentId: 0 }],
+				members: [],
+			}),
+		).toThrow();
+	});
+
 	it("resolves only one active member with a trusted email", () => {
 		const current = requireCurrentSnapshot(snapshot(), now);
 		expect(
@@ -81,20 +102,26 @@ describe("directory snapshot", () => {
 		).toThrow();
 		expect(() => requireCurrentSnapshot(value, now - 1)).toThrow();
 		expect(() =>
-			requireCurrentSnapshot({ ...value, complete: false }, now),
+			fromDirectorySnapshotV1({ ...value, complete: false }),
 		).toThrow();
 		expect(() =>
-			validateSnapshot({ ...value, validUntil: value.validUntil + 1 }),
+			fromDirectorySnapshotV1({
+				...value,
+				validUntil: value.validUntil + 1,
+			}),
 		).toThrow();
 	});
 
 	it("rejects missing and cyclic departments, duplicate members and unknown membership", () => {
 		const value = snapshot();
 		expect(() =>
-			validateSnapshot({ ...value, departments: value.departments.slice(1) }),
+			fromDirectorySnapshotV1({
+				...value,
+				departments: value.departments.slice(1),
+			}),
 		).toThrow();
 		expect(() =>
-			validateSnapshot({
+			fromDirectorySnapshotV1({
 				...value,
 				departments: [
 					value.departments[0],
@@ -103,13 +130,13 @@ describe("directory snapshot", () => {
 			}),
 		).toThrow();
 		expect(() =>
-			validateSnapshot({
+			fromDirectorySnapshotV1({
 				...value,
 				members: [...value.members, value.members[0]],
 			}),
 		).toThrow();
 		expect(() =>
-			validateSnapshot({
+			fromDirectorySnapshotV1({
 				...value,
 				members: [{ ...value.members[0], departmentIds: [3] }],
 			}),

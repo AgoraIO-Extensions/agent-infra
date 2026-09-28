@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { createWeComSource } from "@agent-infra/enterprise-directory";
 import { createPostgresDirectoryStore } from "@agent-infra/enterprise-directory-store";
 import { serve } from "@hono/node-server";
-import { createDirectoryService } from "./service.js";
+import { createDirectoryService, DirectorySyncError } from "./service.js";
 
 const RETRY_MS = 5 * 60_000;
 const DAILY_MS = 23 * 60 * 60_000;
@@ -61,21 +61,25 @@ export async function startDirectorySync() {
 		timer = setTimeout(async () => {
 			const startedAt = Date.now();
 			try {
-				const revision = await service.syncOnce();
+				const snapshot = await service.syncOnce();
 				console.info(
 					JSON.stringify({
 						service: "enterprise-directory-sync",
 						event: "snapshot_published",
-						revision,
+						revision: snapshot.revision,
+						fetchedAt: snapshot.fetchedAt,
+						validUntil: snapshot.validUntil,
 						durationMs: Date.now() - startedAt,
 					}),
 				);
 				if (!stopped) schedule(DAILY_MS);
-			} catch {
+			} catch (error) {
 				console.error(
 					JSON.stringify({
 						service: "enterprise-directory-sync",
 						event: "snapshot_sync_failed",
+						reason:
+							error instanceof DirectorySyncError ? error.reason : "unexpected",
 						durationMs: Date.now() - startedAt,
 					}),
 				);

@@ -1,5 +1,8 @@
 import type { DirectoryStore } from "@agent-infra/enterprise-directory";
-import { validateSnapshot } from "@agent-infra/enterprise-directory";
+import {
+	fromDirectorySnapshotV1,
+	toDirectorySnapshotV1,
+} from "@agent-infra/enterprise-directory";
 import { desc } from "drizzle-orm";
 import { jsonb, pgSchema, timestamp, uuid } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -21,7 +24,7 @@ export function createPostgresDirectoryStore(
 	const db = drizzle(sql);
 	return {
 		async publish(value) {
-			const snapshot = validateSnapshot(value);
+			const snapshot = toDirectorySnapshotV1(value);
 			await db.insert(snapshots).values({
 				revision: snapshot.revision,
 				fetchedAt: new Date(snapshot.fetchedAt),
@@ -35,7 +38,7 @@ export function createPostgresDirectoryStore(
 				.from(snapshots)
 				.orderBy(desc(snapshots.fetchedAt), desc(snapshots.revision))
 				.limit(1);
-			return rows[0]?.contents ?? null;
+			return rows[0] ? fromDirectorySnapshotV1(rows[0].contents) : null;
 		},
 		close: () => sql.end(),
 	};

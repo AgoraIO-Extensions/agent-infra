@@ -19,6 +19,7 @@
                 },
                 "name": {
                   "minLength": 1,
+                  "pattern": "\\S",
                   "type": "string"
                 },
                 "parentId": {
@@ -63,6 +64,7 @@
                 },
                 "userId": {
                   "minLength": 1,
+                  "pattern": "\\S",
                   "type": "string"
                 }
               },

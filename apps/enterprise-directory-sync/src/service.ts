@@ -2,8 +2,10 @@ import { timingSafeEqual } from "node:crypto";
 import {
 	createSnapshot,
 	type createWeComSource,
+	type DirectorySnapshot,
 	type DirectoryStore,
 	requireCurrentSnapshot,
+	toDirectorySnapshotV1,
 } from "@agent-infra/enterprise-directory";
 import { Hono } from "hono";
 
@@ -13,6 +15,17 @@ export interface DirectoryServiceInput {
 	readToken: string;
 	rootDepartmentId: number;
 	now?: () => number;
+}
+
+export class DirectorySyncError extends Error {
+	constructor(
+		readonly reason:
+			| "source_unavailable"
+			| "invalid_snapshot"
+			| "store_unavailable",
+	) {
+		super("Enterprise directory sync failed");
+	}
 }
 
 function tokenMatches(provided: string | undefined, expected: string) {
@@ -33,8 +46,15 @@ export function createDirectoryService(input: DirectoryServiceInput) {
 	app.get("/healthz", (context) => context.json({ status: "ready" }));
 	app.get("/readyz", async (context) => {
 		try {
-			requireCurrentSnapshot(await input.store.latest(), now());
-			return context.json({ status: "ready" });
+			const snapshot = requireCurrentSnapshot(
+				await input.store.latest(),
+				now(),
+			);
+			return context.json({
+				status: "ready",
+				fetchedAt: snapshot.fetchedAt,
+				validUntil: snapshot.validUntil,
+			});
 		} catch {
 			return context.json({ status: "unavailable" }, 503);
 		}
@@ -48,7 +68,9 @@ export function createDirectoryService(input: DirectoryServiceInput) {
 				await input.store.latest(),
 				now(),
 			);
-			return context.json(snapshot, 200, { "Cache-Control": "no-store" });
+			return context.json(toDirectorySnapshotV1(snapshot), 200, {
+				"Cache-Control": "no-store",
+			});
 		} catch {
 			return context.json({ error: "directory_unavailable" }, 503, {
 				"Cache-Control": "no-store",
@@ -59,15 +81,33 @@ export function createDirectoryService(input: DirectoryServiceInput) {
 		app,
 		async syncOnce() {
 			const startedAt = now();
-			const complete = await input.source.fetchComplete();
-			const snapshot = createSnapshot({
-				...complete,
-				rootDepartmentId: input.rootDepartmentId,
-				startedAt,
-				completedAt: now(),
-			});
-			await input.store.publish(snapshot);
-			return snapshot.revision;
+			let complete: Awaited<ReturnType<typeof input.source.fetchComplete>>;
+			try {
+				complete = await input.source.fetchComplete();
+			} catch {
+				throw new DirectorySyncError("source_unavailable");
+			}
+			let snapshot: DirectorySnapshot;
+			try {
+				snapshot = createSnapshot({
+					...complete,
+					rootDepartmentId: input.rootDepartmentId,
+					startedAt,
+					completedAt: now(),
+				});
+			} catch {
+				throw new DirectorySyncError("invalid_snapshot");
+			}
+			try {
+				await input.store.publish(snapshot);
+			} catch {
+				throw new DirectorySyncError("store_unavailable");
+			}
+			return {
+				revision: snapshot.revision,
+				fetchedAt: snapshot.fetchedAt,
+				validUntil: snapshot.validUntil,
+			};
 		},
 	};
 }

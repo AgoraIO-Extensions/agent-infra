@@ -12,14 +12,14 @@ export const EnterpriseDirectorySnapshotV1Schema = z.strictObject({
 		.array(
 			z.strictObject({
 				id: z.number().int().positive(),
-				name: z.string().trim().min(1),
+				name: z.string().min(1).regex(/\S/u),
 				parentId: z.number().int().nonnegative(),
 			}),
 		)
 		.min(1),
 	members: z.array(
 		z.strictObject({
-			userId: z.string().trim().min(1),
+			userId: z.string().min(1).regex(/\S/u),
 			email: z.string(),
 			active: z.boolean(),
 			departmentIds: z.array(z.number().int().positive()).min(1),

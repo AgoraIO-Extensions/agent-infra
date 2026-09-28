@@ -3,6 +3,7 @@ import {
 	DirectoryUnavailableError,
 	requireCurrentSnapshot,
 } from "./snapshot.js";
+import { fromDirectorySnapshotV1 } from "./wire.js";
 
 export interface DirectoryClientConfig {
 	endpoint: string;
@@ -33,7 +34,10 @@ export function createDirectoryClient(config: DirectoryClientConfig) {
 					signal: AbortSignal.timeout(5_000),
 				});
 				if (!response.ok) throw new DirectoryUnavailableError();
-				return requireCurrentSnapshot(await response.json(), now);
+				return requireCurrentSnapshot(
+					fromDirectorySnapshotV1(await response.json()),
+					now,
+				);
 			} catch {
 				throw new DirectoryUnavailableError();
 			}
