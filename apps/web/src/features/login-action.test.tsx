@@ -92,6 +92,30 @@ describe("LoginAction", () => {
 		expect(onLoggedIn).not.toHaveBeenCalled();
 	});
 
+	it("rejects a non-HTTP endpoint before sending credentials", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		const onLoggedIn = vi.fn();
+		render(
+			<LoginAction
+				endpoint="blob:http://localhost:3000/credential-target"
+				onLoggedIn={onLoggedIn}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("账号"), {
+			target: { value: "alice" },
+		});
+		fireEvent.change(screen.getByLabelText("密码"), {
+			target: { value: "secret" },
+		});
+		fireEvent.submit(screen.getByRole("button", { name: "登录" }));
+
+		await screen.findByRole("status");
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(onLoggedIn).not.toHaveBeenCalled();
+	});
+
 	it("does not report a session when the post succeeds but refresh stays anonymous", async () => {
 		vi.stubGlobal(
 			"fetch",

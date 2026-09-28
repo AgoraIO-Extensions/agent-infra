@@ -114,7 +114,7 @@ async function conversationDetail(context, origin, conversationId) {
 async function conversationStream(context, origin, conversationId) {
 	return context.request.get(
 		`${origin}/api/v2/conversations/${encodeURIComponent(conversationId)}/events`,
-		{ timeout: 10_000 },
+		{ timeout: 30_000 },
 	);
 }
 
