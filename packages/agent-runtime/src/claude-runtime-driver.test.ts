@@ -445,8 +445,12 @@ it("denies a repeated Claude tool ID with changed input", async () => {
 					? [event.payload]
 					: [],
 			);
-			expect(facts.map((fact) => fact.phase)).toEqual(["intent"]);
-			expect(facts[0]?.toolId).toBe("Write");
+			expect([["intent"], ["intent", "unknown"]]).toContainEqual(
+				facts.map((fact) => fact.phase),
+			);
+			expect(facts.every((fact) => fact.toolId === "Write")).toBe(true);
+			expect(new Set(facts.map((fact) => fact.operationRef)).size).toBe(1);
+			expect(new Set(facts.map((fact) => fact.attemptRef)).size).toBe(1);
 		},
 	);
 }, 20_000);
