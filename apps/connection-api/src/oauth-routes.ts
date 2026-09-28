@@ -327,11 +327,15 @@ function browserApiError(
 }
 
 function browserConnectionError(context: Context, error: ConnectionError) {
+	const directoryGateUnavailable =
+		error.code === "PROVIDER_UNAVAILABLE" &&
+		error.message === "Employee directory approval gate is unavailable";
 	return browserApiError(context, {
 		code: error.code,
-		messageKey:
-			error.code === "INVALID_REQUEST" &&
-			error.message === "Provider credential validation failed"
+		messageKey: directoryGateUnavailable
+			? "connection.error.approval_directory_unavailable"
+			: error.code === "INVALID_REQUEST" &&
+					error.message === "Provider credential validation failed"
 				? "connection.error.provider_authentication_failed"
 				: error.code === "FORBIDDEN" || error.code === "RESOURCE_NOT_FOUND"
 					? "connection.error.resource_not_found"
@@ -342,7 +346,8 @@ function browserConnectionError(context: Context, error: ConnectionError) {
 							: error.code === "PROVIDER_UNAVAILABLE"
 								? "connection.error.provider_unavailable"
 								: "connection.error.request_failed",
-		retryable: error.code === "PROVIDER_UNAVAILABLE",
+		retryable:
+			error.code === "PROVIDER_UNAVAILABLE" && !directoryGateUnavailable,
 		status:
 			error.code === "FORBIDDEN" || error.code === "RESOURCE_NOT_FOUND"
 				? 404
@@ -1006,6 +1011,7 @@ export function createConnectionOAuthApp(
 			return context.json({
 				...(await catalog.listCatalog()),
 				providers: management.catalogs ?? [],
+				approvalDirectoryEnabled: management.approvalDirectoryEnabled === true,
 			});
 		});
 

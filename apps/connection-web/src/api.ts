@@ -204,6 +204,8 @@ const errorMessages: Record<string, string> = {
 	"connection.error.provider_authentication_failed":
 		"外部平台凭证无效，或平台暂时无法访问",
 	"connection.error.provider_unavailable": "外部平台暂时无法访问，请稍后重试",
+	"connection.error.approval_directory_unavailable":
+		"员工目录尚未启用，暂不能发布审批策略，请联系系统管理员。",
 	"connection.error.request_failed": "请求无法完成",
 	"connection.error.resource_not_found": "无法访问该资源",
 	"connection.error.result_uncertain": "请求结果暂时无法确认，请勿重复操作",
