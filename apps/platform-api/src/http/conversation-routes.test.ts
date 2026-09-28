@@ -486,6 +486,27 @@ describe("Conversation HTTP routes", () => {
 			type: "execution.operation",
 			payload: persistedOperationEvent.eventPayload,
 		});
+
+		const v1ConversationResponse = await app.request(
+			"/api/v1/conversations/conversation-1",
+		);
+		const v1ExecutionResponse = await app.request(
+			"/api/v1/conversations/conversation-1/executions/execution-1",
+		);
+		expect(v1ConversationResponse.status).toBe(200);
+		expect(
+			ConversationDetailProjectionV1Schema.parse(
+				await v1ConversationResponse.json(),
+			).messages,
+		).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ role: "assistant", text: "Hello" }),
+			]),
+		);
+		expect(v1ExecutionResponse.status).toBe(200);
+		expect(
+			ExecutionDetailProjectionV1Schema.parse(await v1ExecutionResponse.json()),
+		).toMatchObject({ status: "completed", error: null });
 	});
 
 	it("uses the authoritative Core status across a normal read transition", async () => {
