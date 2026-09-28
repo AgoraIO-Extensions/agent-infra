@@ -25,7 +25,7 @@ export interface ApiIdentityActorV1 {
 	/** Present when this actor was authenticated with an API credential. */
 	readonly credential?: Pick<
 		ApiCredentialMetadataV1,
-		"principal" | "scopes" | "expiresAt" | "revokedAt"
+		"credentialId" | "principal" | "scopes" | "expiresAt" | "revokedAt"
 	>;
 }
 
@@ -97,13 +97,15 @@ export interface ApiIdentityStorePortV1 {
 		audit: ApiIdentityAuditInputV1,
 	): Promise<boolean>;
 	grantAgent(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly agentId: string;
 		readonly principal: ApiPrincipalV1;
 		readonly grantType: "manage" | "use";
 		readonly authorizationRevision: string;
 		readonly audit: ApiIdentityAuditInputV1;
-	}): Promise<void>;
+	}): Promise<boolean>;
 	revokeAgentGrant(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly agentId: string;
 		readonly principal: ApiPrincipalV1;
 		readonly grantType: "manage" | "use";
@@ -283,7 +285,9 @@ export function createApiIdentityManagementV1(input: {
 		required: readonly ApiCredentialScopeV1[],
 	): void => {
 		const credential = requireCredential(actor);
-		if (!required.some((scope) => hasApiCredentialScopeV1(credential, scope))) {
+		if (
+			!required.every((scope) => hasApiCredentialScopeV1(credential, scope))
+		) {
 			throw new ApiIdentityError("not_authorized");
 		}
 	};
@@ -708,13 +712,19 @@ export function createApiIdentityManagementV1(input: {
 			}
 			await requireActiveRecipient(value.principal, audit, value.agentId);
 			const authorizationRevision = input.idFactory();
-			await input.store.grantAgent({
-				agentId: value.agentId,
-				principal: value.principal,
-				grantType: value.grantType,
-				authorizationRevision,
-				audit,
-			});
+			if (
+				!(await input.store.grantAgent({
+					actor: value.actor,
+					agentId: value.agentId,
+					principal: value.principal,
+					grantType: value.grantType,
+					authorizationRevision,
+					audit,
+				}))
+			) {
+				await rejectWithAudit(audit, value.agentId, value.principal);
+				throw new ApiIdentityError("resource_unavailable");
+			}
 			return authorizationRevision;
 		},
 		async revokeAgentGrant(value) {
@@ -731,6 +741,7 @@ export function createApiIdentityManagementV1(input: {
 			}
 			if (
 				!(await input.store.revokeAgentGrant({
+					actor: value.actor,
 					agentId: value.agentId,
 					principal: value.principal,
 					grantType: value.grantType,

@@ -19,10 +19,28 @@ export function withApiIdentityResolverV1<T extends IdentityAdapter>(
 	identity: T,
 	apiIdentity: ApiIdentityResolverV1,
 ): T {
-	if (identity.resolveApiCredential) return identity;
 	// Keep the deployment adapter as the live prototype so revocation and
 	// directory changes made by the host are observed on every request.
 	const resolved = Object.create(identity) as T;
+	Object.defineProperties(resolved, {
+		resolve: {
+			enumerable: true,
+			value: (request: Request) => identity.resolve(request),
+		},
+		hydrateUsers: {
+			enumerable: true,
+			value: (userIds: readonly string[]) => identity.hydrateUsers(userIds),
+		},
+		resolveUser: {
+			enumerable: true,
+			get: () => {
+				const current = identity.resolveUser;
+				return current
+					? (userId: string) => current.call(identity, userId)
+					: undefined;
+			},
+		},
+	});
 	Object.defineProperty(resolved, "resolveApiCredential", {
 		enumerable: true,
 		value: (credential: string) =>
@@ -54,9 +72,7 @@ export function createDeploymentIdentityScope(identity: IdentityAdapter) {
 			if (!request)
 				throw new Error("Authenticated request scope is unavailable");
 			// Resolve again at admission: a previous session lookup is not authority.
-			if (
-				/^Bearer\s+[^\s]+$/.test(request.headers.get("authorization") ?? "")
-			) {
+			if (request.headers.has("authorization")) {
 				const api = await resolveApiIdentity(identity, request, traceId);
 				return {
 					schemaVersion: 1 as const,

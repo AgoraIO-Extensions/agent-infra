@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
 	type ApiCredentialMetadataV1,
 	type ApiCredentialScopeV1,
+	type ApiIdentityActorV1,
 	type ApiIdentityAuditInputV1,
 	type ApiPrincipalV1,
 	hashApiCredentialV1,
@@ -14,6 +15,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 import {
+	agentOwners,
 	agentPrincipalGrants,
 	agents,
 	apiCredentialDeliveryGrants,
@@ -70,6 +72,75 @@ async function writeApiIdentityAudit(
 
 function principalType(principal: ApiPrincipalV1): "user" | "application" {
 	return principal.kind;
+}
+
+async function hasCurrentManageAuthority(
+	database: Pick<ApiIdentityDatabase, "select">,
+	actor: ApiIdentityActorV1,
+	agentId: string,
+	authorizationRevision: string | null,
+): Promise<boolean> {
+	if (actor.accountStatus !== "active") return false;
+	if (actor.principal !== undefined) {
+		const credentialId = actor.credential?.credentialId;
+		if (!credentialId) return false;
+		const [credential] = await database
+			.select({
+				principalType: platformApiCredentials.principalType,
+				principalId: platformApiCredentials.principalId,
+				scopes: platformApiCredentials.scopes,
+				expiresAt: platformApiCredentials.expiresAt,
+				revokedAt: platformApiCredentials.revokedAt,
+			})
+			.from(platformApiCredentials)
+			.where(eq(platformApiCredentials.id, credentialId))
+			.limit(1)
+			.for("share");
+		if (
+			!credential ||
+			credential.principalType !== actor.principal.kind ||
+			credential.principalId !== actor.principal.id ||
+			credential.revokedAt !== null ||
+			(credential.expiresAt !== null &&
+				credential.expiresAt.getTime() <= Date.now()) ||
+			!credential.scopes.includes("agent:manage")
+		)
+			return false;
+	}
+	if (actor.isAdministrator) return true;
+	if (actor.principal?.kind === "user" && actor.principal.id !== actor.userId)
+		return false;
+	if (actor.principal === undefined) {
+		const [owner] = await database
+			.select({ agentId: agentOwners.agentId })
+			.from(agentOwners)
+			.where(
+				and(
+					eq(agentOwners.agentId, agentId),
+					eq(agentOwners.ownerId, actor.userId),
+				),
+			)
+			.limit(1)
+			.for("share");
+		return owner !== undefined;
+	}
+	if (authorizationRevision === null) return false;
+	const [grant] = await database
+		.select({ agentId: agentPrincipalGrants.agentId })
+		.from(agentPrincipalGrants)
+		.where(
+			and(
+				eq(agentPrincipalGrants.agentId, agentId),
+				eq(agentPrincipalGrants.principalType, actor.principal.kind),
+				eq(agentPrincipalGrants.principalId, actor.principal.id),
+				eq(agentPrincipalGrants.grantType, "manage"),
+				eq(agentPrincipalGrants.authorizationRevision, authorizationRevision),
+				isNull(agentPrincipalGrants.revokedAt),
+			),
+		)
+		.limit(1)
+		.for("share");
+	return grant !== undefined;
 }
 
 function metadata(
@@ -544,28 +615,49 @@ export class PostgresApiIdentityStoreV1 {
 	}
 
 	async grantAgent(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly agentId: string;
 		readonly principal: ApiPrincipalV1;
 		readonly grantType: "manage" | "use";
 		readonly authorizationRevision: string;
 		readonly audit?: ApiIdentityAuditInputV1;
-	}): Promise<void> {
-		await this.#database.transaction(async (transaction) => {
+	}): Promise<boolean> {
+		return this.#database.transaction(async (transaction) => {
 			const [agent] = await transaction
+				.select({ authorizationRevision: agents.authorizationRevision })
+				.from(agents)
+				.where(eq(agents.id, input.agentId))
+				.limit(1)
+				.for("update");
+			if (
+				!agent ||
+				!(await hasCurrentManageAuthority(
+					transaction,
+					input.actor,
+					input.agentId,
+					agent.authorizationRevision,
+				))
+			)
+				return false;
+			await transaction
 				.update(agents)
 				.set({ authorizationRevision: input.authorizationRevision })
-				.where(eq(agents.id, input.agentId))
-				.returning({ id: agents.id });
-			if (!agent) throw new Error("Agent not found");
-			await transaction
-				.update(agentPrincipalGrants)
-				.set({ authorizationRevision: input.authorizationRevision })
-				.where(
-					and(
-						eq(agentPrincipalGrants.agentId, input.agentId),
-						isNull(agentPrincipalGrants.revokedAt),
-					),
-				);
+				.where(eq(agents.id, input.agentId));
+			if (agent.authorizationRevision !== null) {
+				await transaction
+					.update(agentPrincipalGrants)
+					.set({ authorizationRevision: input.authorizationRevision })
+					.where(
+						and(
+							eq(agentPrincipalGrants.agentId, input.agentId),
+							eq(
+								agentPrincipalGrants.authorizationRevision,
+								agent.authorizationRevision,
+							),
+							isNull(agentPrincipalGrants.revokedAt),
+						),
+					);
+			}
 			await transaction
 				.insert(agentPrincipalGrants)
 				.values({
@@ -594,10 +686,12 @@ export class PostgresApiIdentityStoreV1 {
 					targetId: input.agentId,
 				});
 			}
+			return true;
 		});
 	}
 
 	async revokeAgentGrant(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly agentId: string;
 		readonly principal: ApiPrincipalV1;
 		readonly grantType: "manage" | "use";
@@ -606,12 +700,22 @@ export class PostgresApiIdentityStoreV1 {
 	}): Promise<boolean> {
 		return this.#database.transaction(async (transaction) => {
 			const [agent] = await transaction
-				.select({ id: agents.id })
+				.select({ authorizationRevision: agents.authorizationRevision })
 				.from(agents)
 				.where(eq(agents.id, input.agentId))
 				.limit(1)
 				.for("update");
-			if (!agent) return false;
+			if (
+				!agent ||
+				agent.authorizationRevision === null ||
+				!(await hasCurrentManageAuthority(
+					transaction,
+					input.actor,
+					input.agentId,
+					agent.authorizationRevision,
+				))
+			)
+				return false;
 			const rows = await transaction
 				.update(agentPrincipalGrants)
 				.set({ revokedAt: input.revokedAt ?? new Date() })
@@ -624,6 +728,10 @@ export class PostgresApiIdentityStoreV1 {
 						),
 						eq(agentPrincipalGrants.principalId, input.principal.id),
 						eq(agentPrincipalGrants.grantType, input.grantType),
+						eq(
+							agentPrincipalGrants.authorizationRevision,
+							agent.authorizationRevision,
+						),
 						isNull(agentPrincipalGrants.revokedAt),
 					),
 				)
@@ -640,6 +748,10 @@ export class PostgresApiIdentityStoreV1 {
 				.where(
 					and(
 						eq(agentPrincipalGrants.agentId, input.agentId),
+						eq(
+							agentPrincipalGrants.authorizationRevision,
+							agent.authorizationRevision,
+						),
 						isNull(agentPrincipalGrants.revokedAt),
 					),
 				);

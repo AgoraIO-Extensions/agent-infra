@@ -328,7 +328,7 @@ export function assemblePlatformApi(
 		requestScope: input.requestScope,
 		...(files ? { files: files.dependencies } : {}),
 		management: {
-			identity: input.identity,
+			identity: identityAdapter,
 			foundation,
 			revision,
 			management,

@@ -46,7 +46,7 @@ function storeFixture(overrides: Partial<ApiIdentityStorePortV1> = {}) {
 		hasCredentialDelivery: vi.fn().mockResolvedValue(true),
 		revokeCredentialDelivery: vi.fn().mockResolvedValue(true),
 		revokeCredential: vi.fn().mockResolvedValue(true),
-		grantAgent: vi.fn(),
+		grantAgent: vi.fn().mockResolvedValue(true),
 		revokeAgentGrant: vi.fn().mockResolvedValue(true),
 		...overrides,
 	};
@@ -66,6 +66,7 @@ function actor(
 		principal,
 		isAdministrator: false,
 		credential: {
+			credentialId: "credential-actor",
 			principal,
 			scopes: [
 				"agent:create",
@@ -106,6 +107,7 @@ describe("API identity management authorization", () => {
 				{
 					...apiActor,
 					credential: {
+						credentialId: "credential-actor",
 						principal: apiActor.principal,
 						scopes: ["agent:read"],
 						expiresAt: null,
@@ -113,6 +115,18 @@ describe("API identity management authorization", () => {
 					},
 				},
 				["agent:manage"],
+			),
+		).rejects.toMatchObject({ code: "not_authorized" });
+		await expect(
+			useCase.authorizeCredentialScope(
+				{
+					...apiActor,
+					credential: {
+						...apiActor.credential,
+						scopes: ["agent:read"],
+					},
+				},
+				["agent:read", "agent:manage"],
 			),
 		).rejects.toMatchObject({ code: "not_authorized" });
 		await expect(
@@ -424,6 +438,33 @@ describe("API identity management authorization", () => {
 					actor: { kind: "application", id: "application-caller" },
 					grantType: "use",
 				}),
+			}),
+		);
+	});
+
+	it("audits a grant rejected by the Store's current-authority check", async () => {
+		const store = storeFixture({
+			grantAgent: vi.fn().mockResolvedValue(false),
+		});
+		await expect(
+			management(store).grantAgent({
+				actor: actor({ kind: "application", id: "application-caller" }),
+				agentId: "agent-1",
+				principal: { kind: "user", id: "recipient-1" },
+				grantType: "use",
+				audit: {
+					...audit,
+					actor: { kind: "application", id: "application-caller" },
+					action: "api.agent.grant.granted",
+				},
+			}),
+		).rejects.toMatchObject({ code: "resource_unavailable" });
+		expect(store.writeAudit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				action: "api.agent.grant.granted",
+				outcome: "rejected",
+				targetId: "agent-1",
+				recipient: { kind: "user", id: "recipient-1" },
 			}),
 		);
 	});

@@ -274,6 +274,7 @@ function createApp(
 		prepareSecretReplacements,
 		allocateApplicationIds,
 		apiIdentity,
+		resolveApiCredential,
 		listUserCredentials,
 		listApiApplications,
 		listApplicationCredentials,
@@ -302,6 +303,18 @@ const applicationBody = {
 };
 
 describe("management routes", () => {
+	it("rejects malformed Authorization without falling back to the browser identity", async () => {
+		const input = createApp({ api: true });
+		input.resolveApiCredential?.mockResolvedValue(null);
+		for (const authorization of ["", "bearer invalid", "Bearer invalid"]) {
+			const response = await input.app.request("/api/v1/agents/agent-1", {
+				headers: { Authorization: authorization },
+			});
+			expect(response.status).toBe(401);
+		}
+		expect(input.getAgent).not.toHaveBeenCalled();
+	});
+
 	it("pages credential and application lists by stable IDs", async () => {
 		const {
 			app,

@@ -19,6 +19,13 @@ const userAudit: ApiIdentityAuditInputV1 = {
 	action: "api.application.created",
 };
 
+const administratorActor = {
+	schemaVersion: 1 as const,
+	userId: "user_owner",
+	accountStatus: "active" as const,
+	isAdministrator: true,
+};
+
 describe("PostgreSQL API identity store", () => {
 	let databaseUrl = "";
 	let adminClient: ReturnType<typeof postgres>;
@@ -192,12 +199,20 @@ describe("PostgreSQL API identity store", () => {
 			values ('agent_grant_revision', 'authorization_revision_1')
 		`;
 		await adminClient`
+			insert into platform.agent_owners (agent_id, owner_id, created_at)
+			values ('agent_grant_revision', 'user_owner', now())
+		`;
+		await adminClient`
 			insert into platform.agent_principal_grants
 				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
-			values ('agent_grant_revision', 'application', 'existing-app', 'use',
-				'authorization_revision_1')
+			values
+				('agent_grant_revision', 'application', 'existing-app', 'use',
+					'authorization_revision_1'),
+				('agent_grant_revision', 'application', 'stale-app', 'use',
+					'authorization_revision_0')
 		`;
 		await store.grantAgent({
+			actor: { ...administratorActor, isAdministrator: false },
 			agentId: "agent_grant_revision",
 			principal: { kind: "application", id: "new-app" },
 			grantType: "manage",
@@ -227,6 +242,10 @@ describe("PostgreSQL API identity store", () => {
 				principal_id: "new-app",
 				authorization_revision: "authorization_revision_2",
 			},
+			{
+				principal_id: "stale-app",
+				authorization_revision: "authorization_revision_0",
+			},
 		]);
 	});
 
@@ -244,10 +263,13 @@ describe("PostgreSQL API identity store", () => {
 				('agent_revoke_revision', 'application', 'revoked-app', 'manage',
 				'authorization_revision_1'),
 				('agent_revoke_revision', 'application', 'remaining-app', 'use',
-				'authorization_revision_1')
+				'authorization_revision_1'),
+				('agent_revoke_revision', 'application', 'stale-app', 'use',
+				'authorization_revision_0')
 		`;
 		await expect(
 			store.revokeAgentGrant({
+				actor: administratorActor,
 				agentId: "agent_revoke_revision",
 				principal: { kind: "application", id: "revoked-app" },
 				grantType: "manage",
@@ -275,8 +297,14 @@ describe("PostgreSQL API identity store", () => {
 			authorization_revision: "authorization_revision_1",
 			revoked_at: expect.any(Date),
 		});
+		expect(grants[2]).toMatchObject({
+			principal_id: "stale-app",
+			authorization_revision: "authorization_revision_0",
+			revoked_at: null,
+		});
 		await expect(
 			store.revokeAgentGrant({
+				actor: administratorActor,
 				agentId: "agent_revoke_revision",
 				principal: { kind: "application", id: "revoked-app" },
 				grantType: "manage",
@@ -289,6 +317,86 @@ describe("PostgreSQL API identity store", () => {
 		expect(unchanged?.authorization_revision).toBe(
 			agent?.authorization_revision,
 		);
+	});
+
+	it("rejects grant writes after caller grant or credential revocation", async () => {
+		await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
+			platform.platform_api_credentials, platform.agents cascade`;
+		await adminClient`
+			insert into platform.agents (id, authorization_revision)
+			values ('agent_grant_race', 'revision_1')
+		`;
+		await adminClient`
+			insert into platform.platform_api_credentials
+				(id, principal_type, principal_id, credential_hash, scopes)
+			values ('credential_manager', 'application', 'manager-app',
+				repeat('a', 64), '["agent:manage"]'::jsonb)
+		`;
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_grant_race', 'application', 'manager-app', 'manage',
+				'revision_1')
+		`;
+		const principal = { kind: "application" as const, id: "manager-app" };
+		const actor = {
+			schemaVersion: 1 as const,
+			userId: "user_owner",
+			accountStatus: "active" as const,
+			principal,
+			isAdministrator: false,
+			credential: {
+				credentialId: "credential_manager",
+				principal,
+				scopes: ["agent:manage"] as const,
+				expiresAt: null,
+				revokedAt: null,
+			},
+		};
+		const grant = (authorizationRevision: string) =>
+			store.grantAgent({
+				actor,
+				agentId: "agent_grant_race",
+				principal: { kind: "application", id: "recipient-app" },
+				grantType: "use",
+				authorizationRevision,
+			});
+		await expect(grant("revision_2")).resolves.toBe(true);
+		await expect(
+			store.revokeAgentGrant({
+				actor: administratorActor,
+				agentId: "agent_grant_race",
+				principal,
+				grantType: "manage",
+			}),
+		).resolves.toBe(true);
+		await expect(grant("revision_denied")).resolves.toBe(false);
+		await expect(
+			store.grantAgent({
+				actor: administratorActor,
+				agentId: "agent_grant_race",
+				principal,
+				grantType: "manage",
+				authorizationRevision: "revision_3",
+			}),
+		).resolves.toBe(true);
+		await expect(store.revokeCredential("credential_manager")).resolves.toBe(
+			true,
+		);
+		await expect(grant("revision_denied_again")).resolves.toBe(false);
+		await expect(
+			store.revokeAgentGrant({
+				actor,
+				agentId: "agent_grant_race",
+				principal: { kind: "application", id: "recipient-app" },
+				grantType: "use",
+			}),
+		).resolves.toBe(false);
+		const [agent] = await adminClient`
+			select authorization_revision from platform.agents
+			where id = 'agent_grant_race'
+		`;
+		expect(agent?.authorization_revision).toBe("revision_3");
 	});
 
 	it("rejects application credential transport at the Store boundary", async () => {

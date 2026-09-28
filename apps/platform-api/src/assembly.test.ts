@@ -65,19 +65,20 @@ describe("Platform API production assembly", () => {
 			PostgresTaskAuthorizationStoreV1.prototype,
 			"close",
 		);
+		const deploymentIdentity = {
+			resolve: vi.fn().mockResolvedValue(identity),
+			hydrateUsers: vi.fn().mockResolvedValue([]),
+			resolveUser: vi.fn().mockResolvedValue({
+				schemaVersion: 1,
+				userId: identity.userId,
+				accountStatus: "active",
+				organizationIds: identity.organizationIds,
+				authorizationRevision: "directory-1",
+			}),
+		};
 		const assembly = assemblePlatformApi({
 			databaseUrl: "postgres://invalid:invalid@127.0.0.1:1/invalid",
-			identity: {
-				resolve: vi.fn().mockResolvedValue(identity),
-				hydrateUsers: vi.fn().mockResolvedValue([]),
-				resolveUser: vi.fn().mockResolvedValue({
-					schemaVersion: 1,
-					userId: identity.userId,
-					accountStatus: "active",
-					organizationIds: identity.organizationIds,
-					authorizationRevision: "directory-1",
-				}),
-			},
+			identity: deploymentIdentity,
 			admissions: {
 				authorizationAdmission: { authorize: unavailable },
 				imageAdmission: { admitImage: unavailable },
@@ -90,6 +91,12 @@ describe("Platform API production assembly", () => {
 			prepareConfigurationSecrets: unavailable,
 			presentAgent: unavailable,
 		});
+		expect(assembly.dependencies.management.identity).not.toBe(
+			deploymentIdentity,
+		);
+		expect(
+			assembly.dependencies.management.identity?.resolveApiCredential,
+		).toBeTypeOf("function");
 		const server = startPlatformApi({
 			dependencies: assembly.dependencies,
 			log: () => {},
