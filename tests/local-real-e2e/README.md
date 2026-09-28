@@ -107,6 +107,16 @@ node tests/local-real-e2e/conversation-browser.mjs /absolute/local-development/c
 两个 `storageState` 必须由同一受控部署登录流程生成、属于当前用户且权限为 `0600`；
 不得把 token、Cookie 或真实消息正文提交到仓库。
 
+没有可用服务端点时，可先运行 Node 24 的配置 smoke；它只检查配置、私有文件权限和
+Playwright state JSON，不启动浏览器、不访问网络，输出中的主体和 Agent 标识仅为 SHA-256：
+
+```bash
+node tests/local-real-e2e/conversation-browser.mjs --check-config \
+  /absolute/local-development/conversation.json
+```
+
+输出包含 `endpointChecked: false`，不能作为页面、SSE、模型或 Connection 验收证据。
+
 该旅程会在 Owner 浏览器中创建会话、提交文本、读取 SSE，并在回答完成后刷新页面。
 它记录浏览器实际消费到的增量 `text.delta` 与终态 `execution.status` 帧，并要求页面在终态
 帧前显示增量文本、增量帧先于 `completed` 终态帧到达；随后回读持久化事件、恢复页面和窄
