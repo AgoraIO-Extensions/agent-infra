@@ -89,6 +89,8 @@ if [[ "$*" == *"uninstall"* && -n "$FAKE_HELM_UNINSTALL_EXIT" ]]; then
   exit "$FAKE_HELM_UNINSTALL_EXIT"
 elif [[ "$*" == *"upgrade --install"* && -n "$FAKE_HELM_UPGRADE_EXIT" ]]; then
   exit "$FAKE_HELM_UPGRADE_EXIT"
+elif [[ "$*" == *"get values agent-infra-verify --all --output json"* ]]; then
+  printf '{"platformWorker":{"replicas":%s}}\\n' "$FAKE_CONFIGURED_WORKER_REPLICAS"
 elif [[ "$*" == *"list --all --filter ^agent-infra-verify$ -q"* ]]; then
   printf '%s' "$FAKE_HELM_LIST_RESULT"
 fi`,
@@ -152,6 +154,7 @@ fi`,
 		FAKE_RESTORE_SCALE_EXIT: "",
 		FAKE_HELM_UNINSTALL_EXIT: "",
 		FAKE_HELM_UPGRADE_EXIT: "",
+		FAKE_CONFIGURED_WORKER_REPLICAS: "1",
 		FAKE_HELM_LIST_RESULT: "",
 		FAKE_DATABASE_URL: "postgresql://fixture:fixture@postgres:5432/fixture",
 		PLATFORM_LOCAL_DOCKER_CONTEXT: "isolated",
@@ -225,11 +228,11 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			"postgresql://fixture:fixture@agent-infra-verify-postgres.agent-infra-verify.svc.cluster.local:5432/fixture",
 		);
 		assert.match(
-			up[7],
+			up[9],
 			/^kubectl .* --context kind-isolated --namespace agent-infra-verify rollout status deployment\/agent-infra-verify-agent-infra-platform-worker/,
 		);
 		assert.match(
-			up[8],
+			up[10],
 			/^docker .* compose .* up --detach --wait platform-api web$/,
 		);
 		assert.match(
@@ -237,6 +240,12 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			/apply --server-side --field-manager=agent-infra-local -f -/,
 		);
 		assert.match(up[6], /^helm .* upgrade --install agent-infra-verify /);
+		assert.match(
+			up[7],
+			/^helm .* get values agent-infra-verify --all --output json$/,
+		);
+		assert.match(up[8], /kubectl .* scale .* --replicas=1$/);
+		assert.equal(up.length, 11);
 
 		await writeFile(f.log, "");
 		assert.equal(run("up", f.env).status, 0);
@@ -320,6 +329,27 @@ test("local up keeps API and Web closed when Worker upgrade fails", async () => 
 		);
 		assert.match(steps[6], /helm .* upgrade --install/);
 		assert.equal(steps.length, 7);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up refuses to reopen API when the installed Worker has no configured replicas", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", {
+			...f.env,
+			FAKE_CONFIGURED_WORKER_REPLICAS: "0",
+		});
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /Local Worker replica count is invalid/);
+		const log = await readFile(f.log, "utf8");
+		assert.match(
+			log,
+			/helm .* get values agent-infra-verify --all --output json/,
+		);
+		assert.doesNotMatch(log, /kubectl .* scale .* --replicas=0/);
+		assert.doesNotMatch(log, /compose .* up --detach --wait platform-api web/);
 	} finally {
 		await f.close();
 	}

@@ -314,6 +314,17 @@ case "${1:-}" in
     "${compose[@]}" up --detach --wait postgres object-storage
     connect_worker_database
     "${helm_target[@]}" upgrade --install "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" --wait --timeout 5m
+    worker_replicas=$("${helm_target[@]}" get values "$worker_release" --all --output json | node -e '
+      try {
+        const replicas = JSON.parse(require("node:fs").readFileSync(0, "utf8")).platformWorker.replicas;
+        if (!Number.isInteger(replicas) || replicas < 1) throw new Error();
+        process.stdout.write(String(replicas));
+      } catch {
+        console.error("Local Worker replica count is invalid");
+        process.exitCode = 1;
+      }
+    ')
+    "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas="$worker_replicas"
     "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
     "${compose[@]}" up --detach --wait platform-api web
     ;;
