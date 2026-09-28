@@ -307,6 +307,35 @@ describe("AdminAgentApplicationsScreen", () => {
 		);
 	});
 
+	it("offers a keyboard reachable retry while the pending queue is unavailable", () => {
+		const onRetry = vi.fn();
+		const { rerender } = render(
+			<AdminAgentApplicationsScreen
+				onDecision={vi.fn()}
+				onRetry={onRetry}
+				session={{ kind: "ready", session: administratorSession }}
+				state={{ kind: "unavailable", retryable: true }}
+			/>,
+		);
+
+		const retry = screen.getByRole("button", { name: "重新加载审批" });
+		expect(retry.getAttribute("type")).toBe("button");
+		fireEvent.click(retry);
+		expect(onRetry).toHaveBeenCalledTimes(1);
+
+		rerender(
+			<AdminAgentApplicationsScreen
+				onDecision={vi.fn()}
+				onRetry={onRetry}
+				retrying
+				session={{ kind: "ready", session: administratorSession }}
+				state={{ kind: "unavailable", retryable: true }}
+			/>,
+		);
+		const pendingRetry = screen.getByRole("button", { name: "正在重试…" });
+		expect(pendingRetry.getAttribute("disabled")).not.toBeNull();
+	});
+
 	it("renders a decision error only once while a review dialog is open", async () => {
 		render(
 			<AdminAgentApplicationsScreen

@@ -60,6 +60,7 @@ async function fixture(
 		pilotFakeScenariosV2.starting.response.body,
 	);
 	let deployment = deploymentConfiguration;
+	let pendingQueueUnavailable = false;
 	const session = {
 		schemaVersion: 1,
 		user: {
@@ -94,13 +95,27 @@ async function fixture(
 		createAgentApplication: () => ({ status: 201, body: application }),
 		updateAgentApplication: () => ({ status: 200, body: application }),
 		withdrawAgentApplication: () => ({ status: 200, body: application }),
-		listPendingAgentApplications: () => ({
-			status: 200,
-			body: {
-				items: application.status === "pending_approval" ? [application] : [],
-				nextCursor: null,
-			},
-		}),
+		listPendingAgentApplications: () => {
+			if (pendingQueueUnavailable) {
+				return {
+					status: 503,
+					body: {
+						schemaVersion: 1 as const,
+						code: "DEPENDENCY_UNAVAILABLE" as const,
+						message: "Controlled pending queue failure",
+						retryable: true,
+						traceId: "trace-pending-queue-retry",
+					},
+				};
+			}
+			return {
+				status: 200,
+				body: {
+					items: application.status === "pending_approval" ? [application] : [],
+					nextCursor: null,
+				},
+			};
+		},
 		decideAgentApplication: () => ({ status: 200, body: application }),
 		updateAgentConfiguration: () => ({ status: 200, body: agent }),
 		commandAgentLifecycle: () => ({ status: 202, body: agent }),
@@ -243,6 +258,12 @@ async function fixture(
 				| "AUTHORIZATION_REVOKED" = "DEPENDENCY_UNAVAILABLE",
 		) {
 			rejectNextApplication = code;
+		},
+		unavailablePendingQueue() {
+			pendingQueueUnavailable = true;
+		},
+		recoverPendingQueue() {
+			pendingQueueUnavailable = false;
 		},
 		rejectNextWithdrawal() {
 			rejectNextWithdrawal = true;
@@ -533,6 +554,25 @@ test("administrator rejection, approval, empty queue and pending controls", asyn
 		schemaVersion: 1,
 		decision: "approve",
 	});
+});
+
+test("administrator can recover a temporarily unavailable pending queue", async ({
+	page,
+}, info) => {
+	const api = await fixture(page, "admin");
+	api.unavailablePendingQueue();
+	await page.goto("/admin/approvals");
+	await expect(page.getByRole("alert")).toContainText(
+		"审批列表暂时无法读取，请稍后重试。",
+		{ timeout: 15_000 },
+	);
+	const retry = page.getByRole("button", { name: "重新加载审批" });
+	await expect(retry).toBeVisible();
+	api.recoverPendingQueue();
+	await retry.focus();
+	await page.keyboard.press("Enter");
+	await expect(page.getByRole("button", { name: "审阅申请" })).toBeVisible();
+	await capture(page, info, "approvals-recovered");
 });
 
 test("Owner configuration checkbox, Secret clearing, lifecycle and custom image upgrade", async ({
