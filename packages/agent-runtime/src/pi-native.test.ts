@@ -379,6 +379,98 @@ it("runs the pinned Pi CLI against Messages and persists the confirmed result", 
 	}
 }, 30_000);
 
+it("attributes a reused Pi session's model facts to its second execution", async () => {
+	const path = await mkdtemp(join(tmpdir(), "pi-native-reused-facts-"));
+	const fixture = await openMessagesRuntimeDriverConformanceFixture(
+		path,
+		false,
+		"pi",
+	);
+	try {
+		const firstCommand = {
+			schemaVersion: 2 as const,
+			kind: "submit-turn" as const,
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-first",
+			turnId: "turn-first",
+			operationId: "operation-first",
+			input: { text: "synthetic first input", attachments: [] },
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "model-option-primary",
+				reasoningLevel: "high",
+			},
+		};
+		const first = await fixture.driver.execute(firstCommand);
+		await fixture.completeStopAsCompleted();
+		const firstEvents = await fixture.driver.replayEvents(
+			first.nativeSessionRef,
+			firstCommand.executionId,
+		);
+		const ownerFile = join(path, first.nativeSessionRef, "process.json");
+		const firstPid = JSON.parse(await readFile(ownerFile, "utf8")).owner.pid;
+
+		const secondCommand = {
+			...firstCommand,
+			nativeSessionRef: first.nativeSessionRef,
+			executionId: "execution-second",
+			turnId: "turn-second",
+			operationId: "operation-second",
+		};
+		const second = await fixture.driver.execute(secondCommand);
+		expect(second.result.outcome).toBe("accepted");
+		await vi.waitFor(
+			async () => {
+				const facts = (
+					await fixture.driver.replayEvents(
+						second.nativeSessionRef,
+						secondCommand.executionId,
+					)
+				).flatMap((event) =>
+					event.type === "operation" && event.payload.kind === "model"
+						? [event.payload.phase]
+						: [],
+				);
+				expect(facts).toEqual(["intent", "started"]);
+			},
+			{ timeout: 5000 },
+		);
+		await fixture.completeStopAsCompleted();
+		expect(JSON.parse(await readFile(ownerFile, "utf8")).owner.pid).toBe(
+			firstPid,
+		);
+		expect(
+			await fixture.driver.replayEvents(
+				first.nativeSessionRef,
+				firstCommand.executionId,
+			),
+		).toEqual(firstEvents);
+		const secondFacts = (
+			await fixture.driver.replayEvents(
+				second.nativeSessionRef,
+				secondCommand.executionId,
+			)
+		).flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "model"
+				? [event.payload]
+				: [],
+		);
+		expect(secondFacts.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"completed",
+		]);
+		expect(secondFacts.at(-1)).toMatchObject({
+			usage: { inputTokens: 10, outputTokens: 2 },
+		});
+	} finally {
+		await fixture.close();
+		await rm(path, { recursive: true, force: true });
+	}
+}, 30_000);
+
 type NativeTool = { id: string; name: string; input: Record<string, unknown> };
 async function nativeToolsFixture(
 	tools: NativeTool[],
