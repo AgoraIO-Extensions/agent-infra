@@ -579,8 +579,8 @@ export class PostgresScopedPlatformAuditQueryV1 {
 			max: 5,
 			connect_timeout: 2,
 		});
-		// The Agent lock in the query transaction guards the current management
-		// read. Keep Drizzle's timestamp/JSON codecs off the raw query pool.
+		// Agent and application locks guard the current management read.
+		// Keep Drizzle's timestamp/JSON codecs off the raw query pool.
 		this.#managementClient = postgres(options.databaseUrl, {
 			max: 5,
 			connect_timeout: 2,
@@ -634,6 +634,10 @@ export class PostgresScopedPlatformAuditQueryV1 {
 				for share
 			`;
 		}
+		const [applicationState] = await transaction`
+			select id from platform.agent_applications where agent_id = ${agentId} for share
+		`;
+		if (!applicationState) deny();
 		const management = await readAgentManagementState(
 			this.#managementDatabase,
 			agentId,
