@@ -854,7 +854,7 @@ export function ApprovalPoliciesPage() {
 											{catalog.data?.disclaimers
 												.filter((item) => item.status === "PUBLISHED")
 												.map((item) => (
-													<span className="approval-disclaimer" key={item.id}>
+													<label className="approval-disclaimer" key={item.id}>
 														<input
 															type="checkbox"
 															checked={disclaimerIds.includes(item.id)}
@@ -867,7 +867,7 @@ export function ApprovalPoliciesPage() {
 															}
 														/>
 														{item.kind} · {item.locale}
-													</span>
+													</label>
 												))}
 										</fieldset>
 										<select

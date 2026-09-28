@@ -412,12 +412,15 @@
 .approval-catalog-editor .approval-action-list label:hover {
 	background: var(--surface-muted);
 }
-.approval-action-list input[type="checkbox"] {
+.approval-action-list input[type="checkbox"],
+.approval-catalog-editor .approval-disclaimer input[type="checkbox"],
+.approval-catalog-editor .approval-toggle input[type="checkbox"] {
 	width: 16px;
 	height: 16px;
 	min-height: 16px;
 	margin: 0;
 	padding: 0;
+	flex: none;
 	accent-color: var(--accent-button);
 }
 .approval-action-list label span {

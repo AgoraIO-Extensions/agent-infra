@@ -277,6 +277,64 @@ it("keeps the action checklist compact despite global input styles", () => {
 	}
 });
 
+it("keeps disclaimer and permanent-duration controls compact and clickable", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		profiles: [],
+		policies: [],
+		providers: [],
+		disclaimers: [
+			{
+				id: "disclaimer-1",
+				kind: "GLOBAL",
+				locale: "zh-CN",
+				content: "测试条款",
+				materialChange: false,
+				providerId: null,
+				status: "PUBLISHED",
+			},
+		],
+	});
+	const style = document.createElement("style");
+	style.textContent = readFileSync(
+		resolve(import.meta.dirname, "approval-policies-page.css"),
+		"utf8",
+	);
+	document.head.append(style);
+	try {
+		render(
+			<QueryClientProvider
+				client={
+					new QueryClient({ defaultOptions: { queries: { retry: false } } })
+				}
+			>
+				<ApprovalPoliciesPage />
+			</QueryClientProvider>,
+		);
+		fireEvent.click(screen.getByRole("tab", { name: "能力与条款" }));
+		const disclaimer = (await screen.findByRole("checkbox", {
+			name: "GLOBAL · zh-CN",
+		})) as HTMLInputElement;
+		const material = screen.getByRole("checkbox", {
+			name: "重大内容变化",
+		}) as HTMLInputElement;
+		const permanent = screen.getByRole("checkbox", {
+			name: "允许永久有效",
+		}) as HTMLInputElement;
+		for (const checkbox of [disclaimer, material, permanent]) {
+			expect(getComputedStyle(checkbox).width).toBe("16px");
+			expect(getComputedStyle(checkbox).minHeight).toBe("16px");
+		}
+		fireEvent.click(screen.getByText("GLOBAL · zh-CN"));
+		fireEvent.click(screen.getByText("重大内容变化"));
+		fireEvent.click(screen.getByText("允许永久有效"));
+		expect(disclaimer.checked).toBe(true);
+		expect(material.checked).toBe(true);
+		expect(permanent.checked).toBe(true);
+	} finally {
+		style.remove();
+	}
+});
+
 it("does not clip employee candidates at the approval panel boundary", async () => {
 	const style = document.createElement("style");
 	style.textContent = readFileSync(
