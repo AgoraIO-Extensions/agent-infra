@@ -2613,6 +2613,537 @@
       ],
       "type": "object"
     },
+    "RuntimeSubmitTurnTransportV4": {
+      "additionalProperties": false,
+      "properties": {
+        "businessRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "channelId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionSource": {
+              "enum": [
+                "web",
+                "wecom",
+                "platform-api",
+                "eval"
+              ],
+              "type": "string"
+            },
+            "grant": {
+              "additionalProperties": false,
+              "properties": {
+                "format": {
+                  "const": "runtime-execution-jws",
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 4,
+                  "type": "number"
+                },
+                "token": {
+                  "maxLength": 262144,
+                  "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "format",
+                "token"
+              ],
+              "type": "object"
+            },
+            "hostSessionRef": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "attachments": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "text": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "attachments"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "attachments": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "attachments"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "keyBinding": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ciphertextRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "purpose": {
+                      "const": "personal",
+                      "type": "string"
+                    },
+                    "subjectId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "purpose",
+                    "subjectId",
+                    "ciphertextRef",
+                    "version"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ciphertextRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "purpose": {
+                      "const": "agent-default",
+                      "type": "string"
+                    },
+                    "subjectId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "purpose",
+                    "subjectId",
+                    "ciphertextRef",
+                    "version"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "operation": {
+              "additionalProperties": false,
+              "properties": {
+                "deliveryFence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "executionDeliveryFence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "execution",
+                    "message",
+                    "stop",
+                    "generation"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "deliveryFence",
+                "executionDeliveryFence"
+              ],
+              "type": "object"
+            },
+            "principal": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "user",
+                    "application"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 4,
+              "type": "number"
+            },
+            "selection": {
+              "additionalProperties": false,
+              "properties": {
+                "modelOptionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "reasoningLevel": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "modelOptionId",
+                "reasoningLevel"
+              ],
+              "type": "object"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "turnId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "traceId",
+            "principal",
+            "executionSource",
+            "channelId",
+            "agentId",
+            "conversationId",
+            "executionId",
+            "turnId",
+            "sessionGeneration",
+            "hostSessionRef",
+            "operation",
+            "grant",
+            "keyBinding",
+            "input",
+            "selection"
+          ],
+          "type": "object"
+        },
+        "privateKeyField": {
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "channelId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionSource": {
+                  "enum": [
+                    "web",
+                    "wecom",
+                    "platform-api",
+                    "eval"
+                  ],
+                  "type": "string"
+                },
+                "grantId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "hostSessionRef": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "keyBinding": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "ciphertextRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "purpose": {
+                          "const": "personal",
+                          "type": "string"
+                        },
+                        "subjectId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "version": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "purpose",
+                        "subjectId",
+                        "ciphertextRef",
+                        "version"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "ciphertextRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "purpose": {
+                          "const": "agent-default",
+                          "type": "string"
+                        },
+                        "subjectId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "version": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "purpose",
+                        "subjectId",
+                        "ciphertextRef",
+                        "version"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "operation": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "deliveryFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "executionDeliveryFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "execution",
+                        "message",
+                        "stop",
+                        "generation"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id",
+                    "deliveryFence",
+                    "executionDeliveryFence"
+                  ],
+                  "type": "object"
+                },
+                "principal": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "user",
+                        "application"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "requestDigest": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "requestId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "sessionGeneration": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "traceId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "turnId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "requestId",
+                "grantId",
+                "requestDigest",
+                "traceId",
+                "principal",
+                "executionSource",
+                "channelId",
+                "agentId",
+                "conversationId",
+                "executionId",
+                "turnId",
+                "sessionGeneration",
+                "hostSessionRef",
+                "operation",
+                "keyBinding"
+              ],
+              "type": "object"
+            },
+            "keyDelivery": {
+              "additionalProperties": false,
+              "properties": {
+                "relayKey": {
+                  "maxLength": 8192,
+                  "minLength": 16,
+                  "pattern": "^[\\x21-\\x7e]+$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "relayKey"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "context",
+            "keyDelivery"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "businessRequest",
+        "privateKeyField"
+      ],
+      "type": "object"
+    },
     "RuntimeSupplementRequestV4": {
       "additionalProperties": false,
       "properties": {
@@ -2868,6 +3399,506 @@
         "grant",
         "keyBinding",
         "input"
+      ],
+      "type": "object"
+    },
+    "RuntimeSupplementTransportV4": {
+      "additionalProperties": false,
+      "properties": {
+        "businessRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "channelId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionSource": {
+              "enum": [
+                "web",
+                "wecom",
+                "platform-api",
+                "eval"
+              ],
+              "type": "string"
+            },
+            "grant": {
+              "additionalProperties": false,
+              "properties": {
+                "format": {
+                  "const": "runtime-execution-jws",
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 4,
+                  "type": "number"
+                },
+                "token": {
+                  "maxLength": 262144,
+                  "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "format",
+                "token"
+              ],
+              "type": "object"
+            },
+            "hostSessionRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "attachments": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "text": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "attachments"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "attachments": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "attachments"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "keyBinding": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ciphertextRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "purpose": {
+                      "const": "personal",
+                      "type": "string"
+                    },
+                    "subjectId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "purpose",
+                    "subjectId",
+                    "ciphertextRef",
+                    "version"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ciphertextRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "purpose": {
+                      "const": "agent-default",
+                      "type": "string"
+                    },
+                    "subjectId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "purpose",
+                    "subjectId",
+                    "ciphertextRef",
+                    "version"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "operation": {
+              "additionalProperties": false,
+              "properties": {
+                "deliveryFence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "executionDeliveryFence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "execution",
+                    "message",
+                    "stop",
+                    "generation"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "deliveryFence",
+                "executionDeliveryFence"
+              ],
+              "type": "object"
+            },
+            "principal": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "user",
+                    "application"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 4,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "turnId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "traceId",
+            "principal",
+            "executionSource",
+            "channelId",
+            "agentId",
+            "conversationId",
+            "executionId",
+            "turnId",
+            "sessionGeneration",
+            "hostSessionRef",
+            "operation",
+            "grant",
+            "keyBinding",
+            "input"
+          ],
+          "type": "object"
+        },
+        "privateKeyField": {
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "channelId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionSource": {
+                  "enum": [
+                    "web",
+                    "wecom",
+                    "platform-api",
+                    "eval"
+                  ],
+                  "type": "string"
+                },
+                "grantId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "hostSessionRef": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "keyBinding": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "ciphertextRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "purpose": {
+                          "const": "personal",
+                          "type": "string"
+                        },
+                        "subjectId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "version": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "purpose",
+                        "subjectId",
+                        "ciphertextRef",
+                        "version"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "ciphertextRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "purpose": {
+                          "const": "agent-default",
+                          "type": "string"
+                        },
+                        "subjectId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "version": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "purpose",
+                        "subjectId",
+                        "ciphertextRef",
+                        "version"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "operation": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "deliveryFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "executionDeliveryFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "execution",
+                        "message",
+                        "stop",
+                        "generation"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id",
+                    "deliveryFence",
+                    "executionDeliveryFence"
+                  ],
+                  "type": "object"
+                },
+                "principal": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "user",
+                        "application"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "requestDigest": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "requestId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "sessionGeneration": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "traceId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "turnId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "requestId",
+                "grantId",
+                "requestDigest",
+                "traceId",
+                "principal",
+                "executionSource",
+                "channelId",
+                "agentId",
+                "conversationId",
+                "executionId",
+                "turnId",
+                "sessionGeneration",
+                "hostSessionRef",
+                "operation",
+                "keyBinding"
+              ],
+              "type": "object"
+            },
+            "keyDelivery": {
+              "additionalProperties": false,
+              "properties": {
+                "relayKey": {
+                  "maxLength": 8192,
+                  "minLength": 16,
+                  "pattern": "^[\\x21-\\x7e]+$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "relayKey"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "context",
+            "keyDelivery"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "businessRequest",
+        "privateKeyField"
       ],
       "type": "object"
     },

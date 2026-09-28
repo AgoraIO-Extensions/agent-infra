@@ -137,7 +137,9 @@ import {
 	RuntimeRelayKeyBindingV1Schema,
 	RuntimeRelayKeyDeliveryV1Schema,
 	RuntimeSubmitTurnRequestV4Schema,
+	RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV4Schema,
+	RuntimeSupplementTransportV4Schema,
 	VerifiedRuntimeExecutionGrantV4Schema,
 } from "./host-v4.ts";
 
@@ -153,7 +155,9 @@ export const RuntimeHostV4SchemaDefinitions = {
 	RuntimePrivateRelayKeyFieldV1: RuntimePrivateRelayKeyFieldV1Schema,
 	RuntimeOperationResponseV4: RuntimeOperationResponseV4Schema,
 	RuntimeSubmitTurnRequestV4: RuntimeSubmitTurnRequestV4Schema,
+	RuntimeSubmitTurnTransportV4: RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV4: RuntimeSupplementRequestV4Schema,
+	RuntimeSupplementTransportV4: RuntimeSupplementTransportV4Schema,
 };
 
 export const RuntimeModelConfigurationV4SchemaDefinitions = {

@@ -1007,6 +1007,22 @@
         ],
         "type": "object"
       },
+      "RuntimeSubmitTurnTransportV4": {
+        "additionalProperties": false,
+        "properties": {
+          "businessRequest": {
+            "$ref": "#/components/schemas/RuntimeSubmitTurnRequestV4"
+          },
+          "privateKeyField": {
+            "$ref": "#/components/schemas/RuntimePrivateRelayKeyFieldV1"
+          }
+        },
+        "required": [
+          "businessRequest",
+          "privateKeyField"
+        ],
+        "type": "object"
+      },
       "RuntimeSupplementRequestV4": {
         "additionalProperties": false,
         "properties": {
@@ -1176,6 +1192,22 @@
           "grant",
           "keyBinding",
           "input"
+        ],
+        "type": "object"
+      },
+      "RuntimeSupplementTransportV4": {
+        "additionalProperties": false,
+        "properties": {
+          "businessRequest": {
+            "$ref": "#/components/schemas/RuntimeSupplementRequestV4"
+          },
+          "privateKeyField": {
+            "$ref": "#/components/schemas/RuntimePrivateRelayKeyFieldV1"
+          }
+        },
+        "required": [
+          "businessRequest",
+          "privateKeyField"
         ],
         "type": "object"
       },

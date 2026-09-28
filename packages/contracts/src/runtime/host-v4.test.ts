@@ -6,8 +6,10 @@ import {
 	RuntimePrivateRelayKeyFieldV1Schema,
 	type RuntimeSubmitTurnRequestV4,
 	RuntimeSubmitTurnRequestV4Schema,
+	RuntimeSubmitTurnTransportV4Schema,
 	type RuntimeSupplementRequestV4,
 	RuntimeSupplementRequestV4Schema,
+	RuntimeSupplementTransportV4Schema,
 	runtimeRequestDigestV4,
 	runtimeRequestSigningPayloadV4,
 	validateRuntimeBusinessBindingV4,
@@ -106,6 +108,56 @@ const privateField = RuntimePrivateRelayKeyFieldV1Schema.parse({
 		keyBinding: request.keyBinding,
 	},
 	keyDelivery: { relayKey: "private-key-value-k1" },
+});
+
+it("requires an independent private field for each V4 transport", () => {
+	const transport = RuntimeSubmitTurnTransportV4Schema.parse({
+		businessRequest: request,
+		privateKeyField: privateField,
+	});
+	expect(digest(transport.businessRequest)).toBe(digest(request));
+	expect(
+		RuntimeSubmitTurnTransportV4Schema.safeParse({
+			businessRequest: request,
+		}).success,
+	).toBe(false);
+	expect(
+		RuntimeSubmitTurnTransportV4Schema.safeParse({
+			businessRequest: { ...request, privateKeyField: privateField },
+			privateKeyField: privateField,
+		}).success,
+	).toBe(false);
+	const { selection: _selection, ...supplement } = request;
+	const supplementRequest = RuntimeSupplementRequestV4Schema.parse({
+		...supplement,
+		hostSessionRef: "session-1",
+		operation: {
+			kind: "message",
+			id: "message-1",
+			deliveryFence: 2,
+			executionDeliveryFence: 1,
+		},
+	});
+	const supplementField = {
+		...privateField,
+		context: {
+			...privateField.context,
+			hostSessionRef: supplementRequest.hostSessionRef,
+			operation: supplementRequest.operation,
+			requestDigest: digest(supplementRequest),
+		},
+	};
+	const supplemented = RuntimeSupplementTransportV4Schema.parse({
+		businessRequest: supplementRequest,
+		privateKeyField: supplementField,
+	});
+	expect(
+		validateRuntimePrivateRelayKeyFieldV1(supplemented.privateKeyField, {
+			request: supplemented.businessRequest,
+			grantId: "grant-1",
+			requestDigest: digest(supplementRequest),
+		}),
+	).toEqual(supplementField);
 });
 
 it("binds the Key reference/version into the Grant digest without the Key", async () => {

@@ -167,6 +167,16 @@ export const RuntimeSupplementRequestV4Schema = z.strictObject({
 	input: RuntimeInputV1Schema,
 });
 
+export const RuntimeSubmitTurnTransportV4Schema = z.strictObject({
+	businessRequest: RuntimeSubmitTurnRequestV4Schema,
+	privateKeyField: RuntimePrivateRelayKeyFieldV1Schema,
+});
+
+export const RuntimeSupplementTransportV4Schema = z.strictObject({
+	businessRequest: RuntimeSupplementRequestV4Schema,
+	privateKeyField: RuntimePrivateRelayKeyFieldV1Schema,
+});
+
 export const RuntimeOperationResponseV4Schema = z.strictObject({
 	schemaVersion: z.literal(4),
 	hostSessionRef: OpaqueIdV1Schema,
@@ -179,6 +189,12 @@ export type RuntimeSubmitTurnRequestV4 = z.infer<
 >;
 export type RuntimeSupplementRequestV4 = z.infer<
 	typeof RuntimeSupplementRequestV4Schema
+>;
+export type RuntimeSubmitTurnTransportV4 = z.infer<
+	typeof RuntimeSubmitTurnTransportV4Schema
+>;
+export type RuntimeSupplementTransportV4 = z.infer<
+	typeof RuntimeSupplementTransportV4Schema
 >;
 export type RuntimeOperationResponseV4 = z.infer<
 	typeof RuntimeOperationResponseV4Schema
