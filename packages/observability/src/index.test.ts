@@ -38,12 +38,44 @@ it("emits only bounded metadata and drops logs under backpressure", () => {
 	expect(lines[0]).not.toMatch(/secret-token|SECRET_TOKEN|PRIVATE_SENTINEL/);
 	expect(telemetry.status()).toEqual({
 		enabled: false,
+		state: "active",
 		captureFailures: 0,
 		exportFailures: 0,
 		lastExportFailureAt: undefined,
 		droppedLogs: 1,
 		invalidRecords: 0,
 	});
+});
+
+it("reports shutdown and ignores records once close begins", async () => {
+	const lines: string[] = [];
+	const output = new Writable({
+		write(chunk, _encoding, done) {
+			lines.push(String(chunk));
+			done();
+		},
+	});
+	const telemetry = startObservability({ service: "platform-api", output });
+	active.push(telemetry);
+	telemetry.record({ stage: "http", outcome: "completed" });
+	const closing = telemetry.close();
+	expect(telemetry.status().state).toBe("closing");
+	const inaccessible = Object.defineProperty({}, "stage", {
+		get() {
+			throw new Error("PRIVATE_SENTINEL");
+		},
+	}) as Parameters<typeof telemetry.record>[0];
+	expect(() => telemetry.record(inaccessible)).not.toThrow();
+	await closing;
+	expect(telemetry.status()).toMatchObject({
+		state: "closed",
+		captureFailures: 0,
+		droppedLogs: 1,
+	});
+	expect(lines).toHaveLength(1);
+	telemetry.record({ stage: "http", outcome: "completed" });
+	expect(telemetry.status().droppedLogs).toBe(2);
+	expect(lines).toHaveLength(1);
 });
 
 it("contains asynchronous log destination errors", async () => {

@@ -144,6 +144,7 @@ export function startObservability(options: ObservabilityOptions) {
 	const output = options.output ?? process.stdout;
 	let backpressured = false;
 	let closingOutput = false;
+	let state: "active" | "closing" | "closed" = "active";
 	let pendingWrites = 0;
 	let errorEvents = 0;
 	let awaitingWriteError = false;
@@ -283,6 +284,10 @@ export function startObservability(options: ObservabilityOptions) {
 	let closing: Promise<void> | undefined;
 	return {
 		record(event: OperationalEvent) {
+			if (state !== "active") {
+				droppedLogs++;
+				return;
+			}
 			try {
 				const {
 					stage,
@@ -338,6 +343,7 @@ export function startObservability(options: ObservabilityOptions) {
 		},
 		status: () => ({
 			enabled: providers !== undefined,
+			state,
 			captureFailures,
 			exportFailures,
 			lastExportFailureAt,
@@ -346,6 +352,7 @@ export function startObservability(options: ObservabilityOptions) {
 		}),
 		close() {
 			closing ??= (async () => {
+				state = "closing";
 				closingOutput = true;
 				output.off("drain", onDrain);
 				if (pendingWrites === 0 && !awaitingWriteError)
@@ -370,6 +377,7 @@ export function startObservability(options: ObservabilityOptions) {
 					]);
 				} finally {
 					clearTimeout(timer);
+					state = "closed";
 				}
 			})();
 			return closing;
