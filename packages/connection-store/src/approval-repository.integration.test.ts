@@ -581,6 +581,12 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					name: "Editable profile",
 					actionVersionIds: [actionId],
 				});
+				expect(
+					await repository.getCapabilityProfile(editableProfileId),
+				).toMatchObject({
+					effectCeiling: "READ",
+					revision: "1",
+				});
 				await repository.updateCapabilityProfileDraft({
 					id: editableProfileId,
 					providerReleaseId: releaseId,
@@ -593,10 +599,23 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					await repository.getCapabilityProfile(editableProfileId),
 				).toMatchObject({
 					name: "Edited profile",
+					effectCeiling: "WRITE",
 					revision: "2",
 					status: "DRAFT",
 					actions: [{ id: actionId }, { id: writeActionId }],
 				});
+				const writeOnlyProfileId = `approval-write-profile-${suffix}`;
+				await repository.createCapabilityProfileDraft({
+					id: writeOnlyProfileId,
+					providerReleaseId: releaseId,
+					name: "Write draft",
+					actionVersionIds: [writeActionId],
+				});
+				expect(
+					(await repository.listCatalog()).profiles.find(
+						(item) => item.id === writeOnlyProfileId,
+					),
+				).toMatchObject({ effectCeiling: "WRITE", status: "DRAFT" });
 				await expect(
 					repository.updateCapabilityProfileDraft({
 						id: editableProfileId,

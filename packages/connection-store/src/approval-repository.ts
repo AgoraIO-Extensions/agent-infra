@@ -574,6 +574,15 @@ export class PostgresConnectionApprovalRepository {
 					) VALUES (${input.id}, ${input.providerReleaseId}, ${actionVersionId})
 				`;
 			}
+			await sql`
+				UPDATE connection_capability_profiles SET effect_ceiling = CASE WHEN EXISTS (
+					SELECT 1 FROM connection_capability_profile_actions member
+					JOIN connection_action_versions action
+						ON action.id = member.action_version_id
+						AND action.provider_release_id = member.provider_release_id
+					WHERE member.capability_profile_id = ${input.id} AND action.effect = 'WRITE'
+				) THEN 'WRITE' ELSE 'READ' END WHERE id = ${input.id}
+			`;
 		});
 		return { capabilityProfileId: input.id };
 	}
@@ -606,10 +615,6 @@ export class PostgresConnectionApprovalRepository {
 				invalid(
 					"Capability profile draft is unavailable or its revision changed",
 				);
-			await sql`
-				UPDATE connection_capability_profiles SET name = ${input.name}, revision = revision + 1
-				WHERE id = ${input.id}
-			`;
 			await sql`DELETE FROM connection_capability_profile_actions WHERE capability_profile_id = ${input.id}`;
 			for (const actionVersionId of input.actionVersionIds)
 				await sql`
@@ -617,6 +622,18 @@ export class PostgresConnectionApprovalRepository {
 						capability_profile_id, provider_release_id, action_version_id
 					) VALUES (${input.id}, ${input.providerReleaseId}, ${actionVersionId})
 				`;
+			await sql`
+				UPDATE connection_capability_profiles SET name = ${input.name},
+					effect_ceiling = CASE WHEN EXISTS (
+						SELECT 1 FROM connection_capability_profile_actions member
+						JOIN connection_action_versions action
+							ON action.id = member.action_version_id
+							AND action.provider_release_id = member.provider_release_id
+						WHERE member.capability_profile_id = ${input.id} AND action.effect = 'WRITE'
+					) THEN 'WRITE' ELSE 'READ' END,
+					revision = revision + 1
+				WHERE id = ${input.id}
+			`;
 			await this.auditAndEnqueue(sql, {
 				actorPrincipalId: input.actorPrincipalId,
 				aggregateId: input.id,
