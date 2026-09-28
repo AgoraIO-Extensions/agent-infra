@@ -1,3 +1,4 @@
+import { createApiIdentityManagementV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -224,6 +225,12 @@ describe("PostgreSQL API identity store", () => {
 				'authorization_revision_1')
 		`;
 		await store.grantAgent({
+			actor: {
+				schemaVersion: 1,
+				userId: "user_owner",
+				accountStatus: "active",
+				isAdministrator: true,
+			},
 			agentId: "agent_grant_revision",
 			principal: { kind: "application", id: "new-app" },
 			grantType: "manage",
@@ -254,6 +261,80 @@ describe("PostgreSQL API identity store", () => {
 				authorization_revision: "authorization_revision_2",
 			},
 		]);
+	});
+
+	it("rejects grant writes after the actor's manage grant is revoked", async () => {
+		await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
+			platform.agents cascade`;
+		await adminClient`insert into platform.agents (id, authorization_revision)
+			values ('agent_grant_race', 'revision_1')`;
+		await adminClient`insert into platform.agent_principal_grants
+			(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_grant_race', 'user', 'actor_race', 'manage', 'revision_1'),
+				('agent_grant_race', 'user', 'target_race', 'use', 'revision_1')`;
+		const actor = {
+			schemaVersion: 1 as const,
+			userId: "actor_race",
+			accountStatus: "active" as const,
+			principal: { kind: "user" as const, id: "actor_race" },
+			isAdministrator: false,
+			credential: {
+				principal: { kind: "user" as const, id: "actor_race" },
+				scopes: ["agent:manage" as const],
+				expiresAt: null,
+				revokedAt: null,
+			},
+		};
+		const management = createApiIdentityManagementV1({
+			store,
+			directory: {
+				resolveUser: async (userId) => ({
+					userId,
+					accountStatus: "active",
+				}),
+			},
+			agentAccess: {
+				async canManage() {
+					await adminClient`update platform.agent_principal_grants
+						set revoked_at = now()
+						where agent_id = 'agent_grant_race' and principal_id = 'actor_race'`;
+					return true;
+				},
+			},
+			idFactory: () => "revision_2",
+		});
+		const audit = {
+			...userAudit,
+			actor: { kind: "user" as const, id: "actor_race" },
+		};
+		await expect(
+			management.grantAgent({
+				actor,
+				agentId: "agent_grant_race",
+				principal: { kind: "user", id: "recipient_race" },
+				grantType: "use",
+				audit: { ...audit, action: "api.agent.grant.granted" },
+			}),
+		).rejects.toMatchObject({ code: "resource_unavailable" });
+		await adminClient`update platform.agent_principal_grants
+			set revoked_at = null
+			where agent_id = 'agent_grant_race' and principal_id = 'actor_race'`;
+		await expect(
+			management.revokeAgentGrant({
+				actor,
+				agentId: "agent_grant_race",
+				principal: { kind: "user", id: "target_race" },
+				grantType: "use",
+				audit: { ...audit, action: "api.agent.grant.revoked" },
+			}),
+		).rejects.toMatchObject({ code: "resource_unavailable" });
+		const [agent] = await adminClient`
+			select authorization_revision from platform.agents where id = 'agent_grant_race'`;
+		const grants = await adminClient`
+			select principal_id, revoked_at from platform.agent_principal_grants
+			where agent_id = 'agent_grant_race' and principal_id in ('recipient_race', 'target_race')`;
+		expect(agent?.authorization_revision).toBe("revision_1");
+		expect(grants).toEqual([{ principal_id: "target_race", revoked_at: null }]);
 	});
 
 	it("rejects application credential transport at the Store boundary", async () => {

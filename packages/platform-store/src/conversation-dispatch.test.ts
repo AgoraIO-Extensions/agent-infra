@@ -1797,6 +1797,46 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("rejects a substituted current stop before observing its expired deadline", async () => {
+		const work = await seed(undefined, {
+			executionStatus: "processing",
+			hostSessionRef: "host-original",
+		});
+		await seedStop(work);
+		const { store, decision } = await claim(
+			`conversation:stop:${work.stopRequestId}`,
+		);
+		try {
+			if (decision.outcome !== "claimed")
+				throw new Error("Expected a current stop claim");
+			await client`update platform.conversation_stops
+				set confirmation_deadline = clock_timestamp() - interval '1 second'
+				where execution_id = ${work.executionId}`;
+			const [before] = await client`
+				select status, confirmation_timed_out_at from platform.conversation_stops
+				where execution_id = ${work.executionId}`;
+			const [auditBefore] = await client`
+				select count(*)::int as count from platform.audit_events
+				where target_id = ${work.executionId}`;
+			expect(
+				await store.readRuntimeState({
+					claim: { ...decision.claim, stopRequestId: "another-stop" },
+				}),
+			).toBeNull();
+			const [after] = await client`
+				select status, confirmation_timed_out_at from platform.conversation_stops
+				where execution_id = ${work.executionId}`;
+			const [auditAfter] = await client`
+				select count(*)::int as count from platform.audit_events
+				where target_id = ${work.executionId}`;
+			expect(after).toEqual(before);
+			expect(auditAfter).toEqual(auditBefore);
+			expect((await dispatchState(work))?.execution_status).toBe("processing");
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("keeps supplementary and stop fences independent from the Execution fence", async () => {
 		for (const operation of [
 			"conversation.turn.supplement.v1",

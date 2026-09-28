@@ -609,6 +609,18 @@ describe("Conversation persisted SSE", () => {
 		},
 	};
 	it("keeps V1 details readable when V2 operation facts are persisted", async () => {
+		const timeoutEvent = {
+			...operationEvent,
+			eventId: "timeout-event-3",
+			sequence: 3,
+			conversationCursor: "cursor-3",
+			eventType: "task.status",
+			eventPayload: {
+				type: "task.status",
+				status: "unknown",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+			},
+		};
 		const input = dependencies();
 		const scope = { actorId: identity.userId, channelId: "web" };
 		const detail = await input.query.get(scope, conversation.conversationId);
@@ -620,7 +632,7 @@ describe("Conversation persisted SSE", () => {
 		if (!detail || !execution) throw new Error("Missing detail fixture");
 		input.query.get = vi.fn().mockResolvedValue({
 			...detail,
-			events: [...detail.events, operationEvent],
+			events: [...detail.events, operationEvent, timeoutEvent],
 		});
 		input.query.getExecution = vi.fn().mockResolvedValue({
 			...execution,

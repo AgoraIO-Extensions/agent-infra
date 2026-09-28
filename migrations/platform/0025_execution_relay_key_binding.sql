@@ -55,6 +55,10 @@ ALTER TABLE "platform"."conversation_executions" ADD CONSTRAINT "conversation_ex
 				AND char_length("platform"."conversation_executions"."relay_key_subject_id") > 0
 				AND char_length("platform"."conversation_executions"."relay_key_id") > 0
 				AND "platform"."conversation_executions"."relay_key_version" between 1 and 9007199254740991
-				AND (("platform"."conversation_executions"."execution_source" in ('web', 'wecom') AND "platform"."conversation_executions"."relay_key_purpose" = 'personal')
-					OR ("platform"."conversation_executions"."execution_source" in ('platform-api', 'eval') AND "platform"."conversation_executions"."relay_key_purpose" = 'agent-default'))
+				AND (("platform"."conversation_executions"."execution_source" in ('web', 'wecom')
+					AND "platform"."conversation_executions"."relay_key_purpose" = 'personal'
+					AND "platform"."conversation_executions"."relay_key_subject_id" = "platform"."conversation_executions"."actor_id")
+					OR ("platform"."conversation_executions"."execution_source" in ('platform-api', 'eval')
+					AND "platform"."conversation_executions"."relay_key_purpose" = 'agent-default'
+					AND "platform"."conversation_executions"."relay_key_subject_id" = "platform"."conversation_executions"."agent_id"))
 			));

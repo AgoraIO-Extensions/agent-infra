@@ -231,8 +231,12 @@ export const conversationExecutions = platformSchema.table(
 				AND char_length(${table.relayKeySubjectId}) > 0
 				AND char_length(${table.relayKeyId}) > 0
 				AND ${table.relayKeyVersion} between 1 and 9007199254740991
-				AND ((${table.executionSource} in ('web', 'wecom') AND ${table.relayKeyPurpose} = 'personal')
-					OR (${table.executionSource} in ('platform-api', 'eval') AND ${table.relayKeyPurpose} = 'agent-default'))
+				AND ((${table.executionSource} in ('web', 'wecom')
+					AND ${table.relayKeyPurpose} = 'personal'
+					AND ${table.relayKeySubjectId} = ${table.actorId})
+					OR (${table.executionSource} in ('platform-api', 'eval')
+					AND ${table.relayKeyPurpose} = 'agent-default'
+					AND ${table.relayKeySubjectId} = ${table.agentId}))
 			)`,
 		),
 		uniqueIndex("conversation_execution_id_conversation_unique").on(

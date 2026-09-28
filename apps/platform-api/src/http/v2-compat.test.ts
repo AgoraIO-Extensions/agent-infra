@@ -1,3 +1,4 @@
+import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { registerV2CompatibilityRoutes } from "./v2-compat.js";
@@ -85,6 +86,60 @@ describe("V2 compatibility routes", () => {
 		const body = (await response.json()) as Record<string, unknown>;
 		expect(body.schemaVersion).toBe(2);
 		expect(body.configuration).not.toHaveProperty("actions");
+	});
+
+	it("projects the V2 configuration PUT response as an Agent", async () => {
+		const app = new Hono();
+		app.put("/api/v1/agents/agent-1/configuration", async (context) => {
+			expect(await context.req.json()).toEqual({
+				schemaVersion: 1,
+				coOwnerIds: ["user-1"],
+			});
+			return context.json({
+				schemaVersion: 1,
+				agentId: "agent-1",
+				name: "Agent",
+				description: "Configuration fixture",
+				source: { kind: "standard", templateId: "template-1" },
+				managementStatus: "available",
+				serviceAvailability: "ready",
+				configuration: {
+					owners: [
+						{ userId: "user-1", displayName: "Ada", roles: ["employee"] },
+					],
+					availability: [],
+					modelOptions: [],
+					defaultModelOptionId: null,
+					defaultReasoningLevel: null,
+					actions: [],
+					environment: [],
+					channels: [],
+					secrets: [],
+				},
+				capabilities: {
+					modelSelection: false,
+					attachments: false,
+					resultFiles: false,
+					connection: false,
+					supplementaryInstruction: false,
+				},
+				interactionUrl: null,
+			});
+		});
+		registerV2CompatibilityRoutes(app);
+
+		const response = await app.request(
+			"http://localhost/api/v2/agents/agent-1/configuration",
+			{
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ schemaVersion: 2, coOwnerIds: ["user-1"] }),
+			},
+		);
+		expect(response.status).toBe(200);
+		const result = AgentProjectionV2Schema.parse(await response.json());
+		expect(result.schemaVersion).toBe(2);
+		expect(result.configuration).not.toHaveProperty("actions");
 	});
 
 	it.each([

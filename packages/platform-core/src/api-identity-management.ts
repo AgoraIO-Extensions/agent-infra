@@ -97,6 +97,7 @@ export interface ApiIdentityStorePortV1 {
 		audit: ApiIdentityAuditInputV1,
 	): Promise<boolean>;
 	grantAgent(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly agentId: string;
 		readonly principal: ApiPrincipalV1;
 		readonly grantType: "manage" | "use";
@@ -104,6 +105,7 @@ export interface ApiIdentityStorePortV1 {
 		readonly audit: ApiIdentityAuditInputV1;
 	}): Promise<void>;
 	revokeAgentGrant(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly agentId: string;
 		readonly principal: ApiPrincipalV1;
 		readonly grantType: "manage" | "use";
@@ -715,6 +717,7 @@ export function createApiIdentityManagementV1(input: {
 			await requireActiveRecipient(value.principal, audit, value.agentId);
 			const authorizationRevision = input.idFactory();
 			await input.store.grantAgent({
+				actor: value.actor,
 				agentId: value.agentId,
 				principal: value.principal,
 				grantType: value.grantType,
@@ -737,6 +740,7 @@ export function createApiIdentityManagementV1(input: {
 			}
 			if (
 				!(await input.store.revokeAgentGrant({
+					actor: value.actor,
 					agentId: value.agentId,
 					principal: value.principal,
 					grantType: value.grantType,

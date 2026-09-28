@@ -445,8 +445,13 @@ export async function ownedState(
 	if (!conversation || !execution) return undefined;
 	const state = { outbox, conversation, execution };
 	if (!claimMatchesState(claim, state)) return undefined;
-	await observeStopConfirmationTimeout(transaction, state, claim.leaseOwner);
 	const stop = await readStop(transaction, claim.executionId);
+	if (
+		claim.operation === "conversation.turn.stop.v1" &&
+		stop?.stop_request_id !== claim.stopRequestId
+	)
+		return undefined;
+	await observeStopConfirmationTimeout(transaction, state, claim.leaseOwner);
 	return allowStopChange ||
 		claim.metadataRecovery !== undefined ||
 		(stop?.status === "submitted") === claim.stopPending

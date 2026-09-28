@@ -396,6 +396,15 @@ describe("durable task admission", () => {
 					keyVersion: 1,
 				},
 			)})`;
+		await expect(
+			sql`update platform.conversation_executions
+				set relay_key_subject_id = 'other_agent',
+					relay_key_id = 'relay-key-other-1'
+				where execution_id = ${result.result.executionId}`,
+		).rejects.toMatchObject({
+			code: "23514",
+			constraint_name: "conversation_execution_key_binding",
+		});
 		for (const [keyId, version] of [
 			["missing-key", 1],
 			["relay-key-task-2", 1],
@@ -415,8 +424,32 @@ describe("durable task admission", () => {
 				set relay_key_subject_id = 'other_agent'
 				where execution_id = ${result.result.executionId}`,
 		).rejects.toMatchObject({
-			code: "23503",
-			constraint_name: "conversation_execution_key_version_fk",
+			code: "23514",
+			constraint_name: "conversation_execution_key_binding",
+		});
+		await sql`insert into platform.relay_key_subjects
+			(purpose, subject_id, last_version, current_version)
+			values ('personal', 'other_user', 1, 1)`;
+		await sql`insert into platform.relay_key_versions
+			(purpose, subject_id, key_version, key_id, ciphertext)
+			values ('personal', 'other_user', 1, 'relay-key-other-user-1', ${sql.json(
+				{
+					schemaVersion: 1,
+					purpose: "personal",
+					subjectId: "other_user",
+					keyId: "relay-key-other-user-1",
+					keyVersion: 1,
+				},
+			)})`;
+		await expect(
+			sql`update platform.conversation_executions
+				set execution_source = 'web', relay_key_purpose = 'personal',
+					relay_key_subject_id = 'other_user',
+					relay_key_id = 'relay-key-other-user-1'
+				where execution_id = ${result.result.executionId}`,
+		).rejects.toMatchObject({
+			code: "23514",
+			constraint_name: "conversation_execution_key_binding",
 		});
 		await expect(
 			sql`delete from platform.relay_key_versions
