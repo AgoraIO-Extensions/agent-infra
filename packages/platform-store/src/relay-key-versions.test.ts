@@ -377,4 +377,73 @@ describe("Relay Key version authority on PostgreSQL", () => {
 			await client.end();
 		}
 	}, 120_000);
+
+	it("holds the selected version until its read transaction commits", async () => {
+		if (!database) throw new Error("PostgreSQL test database is unavailable");
+		const client = postgres(database.databaseUrl, { max: 4 });
+		const target = { purpose: "personal" as const, subjectId: "user-locked" };
+		try {
+			const first = await client.begin((sql) =>
+				replaceRelayKeyVersionInTransaction(sql, {
+					...target,
+					expectedCurrentVersion: null,
+					encrypt: ciphertext,
+				}),
+			);
+			if (first.outcome !== "replaced") throw new Error();
+			let reportRead = (_value: RelayKeyVersionBindingV1 | null) => {};
+			const read = new Promise<RelayKeyVersionBindingV1 | null>((resolve) => {
+				reportRead = resolve;
+			});
+			let release = () => {};
+			const hold = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const acceptance = client.begin(async (sql) => {
+				const selected = await currentRelayKeyVersionInTransaction(sql, target);
+				reportRead(selected);
+				await hold;
+				return selected;
+			});
+			try {
+				expect(await read).toEqual(first.binding);
+				const replacement = client.begin((sql) =>
+					replaceRelayKeyVersionInTransaction(sql, {
+						...target,
+						expectedCurrentVersion: 1,
+						encrypt: ciphertext,
+					}),
+				);
+				try {
+					let blocked = false;
+					for (let attempt = 0; attempt < 100 && !blocked; attempt += 1) {
+						const rows = await client<{ blocked: boolean }[]>`
+							select exists (
+								select 1 from pg_stat_activity
+								where datname = current_database()
+									and pid <> pg_backend_pid()
+									and wait_event_type = 'Lock'
+									and query like '%relay_key_subjects%'
+							) as blocked
+						`;
+						blocked = rows[0]?.blocked ?? false;
+						if (!blocked)
+							await new Promise((resolve) => setTimeout(resolve, 25));
+					}
+					expect(blocked).toBe(true);
+				} finally {
+					release();
+				}
+				const [selected, second] = await Promise.all([acceptance, replacement]);
+				expect(selected).toEqual(first.binding);
+				expect(second.outcome).toBe("replaced");
+				if (second.outcome === "replaced")
+					expect(second.binding.keyVersion).toBe(2);
+			} finally {
+				release();
+			}
+		} finally {
+			await client.end();
+		}
+	}, 120_000);
 });
