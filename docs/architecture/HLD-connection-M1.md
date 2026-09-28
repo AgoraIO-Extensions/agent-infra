@@ -1212,7 +1212,7 @@ Consumer Grant 预览与确认也只选择 Access Authorization 的 exact Capabi
 
 WorkItem、Notification 和 NotificationReceipt 只提供站内投影与已读状态。审批状态变化、WorkItem recipient、audit 和 outbox 同事务写入；独立 dispatcher 幂等投递。读取或归档 Notification 不能批准申请、完成 WorkItem 或恢复授权。首期页面加载、窗口聚焦和有界轮询刷新，不新增 WebSocket/SSE。
 
-员工候选搜索只向管理员返回最小展示投影，身份关联使用 LDAP issuer + uid 的 Principal 映射；姓名、邮箱、alias 和外部目录 iamId 不得成为授权键。搜索、选择及保存 DRAFT 不要求配置或验证在职状态，但必须完成唯一 LDAP 身份映射、候选有效期和当前管理员归属校验。保存草稿不授予审批权限，也不得恢复已有 Principal 或 identity 的停用状态。生产员工目录 contract 未通过 Identity Owner gate 时，Policy 发布保持禁用；发布、实际审批、重新分配与代理授权仍须校验有效在职身份。
+员工候选搜索只向管理员返回最小展示投影，身份关联使用 LDAP issuer + uid 的 Principal 映射；姓名、邮箱、alias 和外部目录 iamId 不得成为授权键。搜索、选择及保存 DRAFT 不要求配置或验证在职状态，但必须完成唯一 LDAP 身份映射、候选有效期和当前管理员归属校验。保存草稿不授予审批权限，也不得恢复已有 Principal 或 identity 的停用状态。启用审批目录不要求 LDAP active-state 字段；发布、实际审批、重新分配与代理授权仍须按 LDAP issuer + uid 复核唯一账号条目，缺失、重复或查询失败时拒绝操作。配置了成对的 active-state 字段时额外按该字段过滤。未配置时条目存在性不能证明员工仍在职，也不保证离职即时停权；此限制不解除唯一身份映射的生产验证及 enforcement cutoff 门禁。
 
 模块部署与 Policy 发布独立：DRAFT 可暂缺 Disclaimer bundle 和 Stage approvers，但仍验证已提供数据的结构、数量上限与重复项；审批目录门禁未启用时，可保存已通过上述身份映射的员工候选，不能接受调用方伪造身份。PUBLISHED 的完整性校验与目录门禁保持不变。未配置时不开放新申请，既有连接仍遵守 pre-launch 与 cutoff 规则；此分阶段部署不豁免迁移、人工验证或 cutoff 的安全要求。
 

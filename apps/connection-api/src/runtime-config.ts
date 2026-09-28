@@ -238,11 +238,6 @@ export function connectionApiRuntimeConfig(
 			"CONNECTION_APPROVAL_DIRECTORY_ENABLED must be true or false",
 		);
 	}
-	if (directoryEnabled && (!activeAttribute || !activeValue)) {
-		throw new Error(
-			"Approval employee search requires LDAP active-state configuration",
-		);
-	}
 	if ((activeAttribute === undefined) !== (activeValue === undefined)) {
 		throw new Error(
 			"LDAP_ACTIVE_ATTRIBUTE and LDAP_ACTIVE_VALUE must be configured together",
