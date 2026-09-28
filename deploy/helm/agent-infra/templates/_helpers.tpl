@@ -23,6 +23,15 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if eq .Values.images.platformWorker.digest $placeholderDigest -}}
 {{- fail "platform Worker image digest must be replaced" -}}
 {{- end -}}
+{{- if and .Values.enterpriseDirectorySync.enabled (eq .Values.images.enterpriseDirectorySync.digest $placeholderDigest) -}}
+{{- fail "Enterprise Directory Sync image digest must be replaced" -}}
+{{- end -}}
+{{- if and .Values.enterpriseDirectorySync.enabled (not .Values.enterpriseDirectorySync.corpId) -}}
+{{- fail "Enterprise Directory Sync corpId is required" -}}
+{{- end -}}
+{{- if and .Values.enterpriseDirectorySync.enabled .Values.migration.enabled (not .Values.enterpriseDirectorySync.runtimeDatabaseRole) -}}
+{{- fail "Enterprise Directory Sync runtimeDatabaseRole is required for migration" -}}
+{{- end -}}
 {{- if and (or .Values.migration.enabled (eq .Values.platformApi.placement "in-cluster")) (eq .Values.images.platformApi.digest $placeholderDigest) -}}
 {{- fail "Platform API image digest must be replaced" -}}
 {{- end -}}

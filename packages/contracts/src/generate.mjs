@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createDocument } from "zod-openapi";
 import {
+	EnterpriseDirectorySnapshotV1Schema,
+	enterpriseDirectoryOpenApiPathsV1,
+} from "./enterprise-directory.ts";
+import {
 	fileExchangeOpenApiPathsV1,
 	fileOpenApiPathsV1,
 	fileSchemasV1,
@@ -86,6 +90,10 @@ if (rootOption !== -1 && !process.argv[rootOption + 1]) {
 	throw new Error("--root requires a directory");
 }
 const artifactPaths = {
+	enterpriseDirectoryOpenapi: resolve(
+		artifactRoot,
+		"openapi/enterprise-directory.v1.openapi.json",
+	),
 	standardTemplateReleaseOpenapi: resolve(
 		artifactRoot,
 		"openapi/standard-template-release.v1.openapi.json",
@@ -619,6 +627,20 @@ function buildArtifacts() {
 		io: "input",
 	});
 	return {
+		enterpriseDirectoryOpenapi: createDocument({
+			openapi: "3.1.0",
+			info: { title: "Enterprise Directory Snapshot API", version: "1.0.0" },
+			security: [{ DirectoryServiceBearer: [] }],
+			paths: enterpriseDirectoryOpenApiPathsV1,
+			components: {
+				securitySchemes: {
+					DirectoryServiceBearer: { type: "http", scheme: "bearer" },
+				},
+				schemas: {
+					EnterpriseDirectorySnapshotV1: EnterpriseDirectorySnapshotV1Schema,
+				},
+			},
+		}),
 		readinessJsonSchema: jsonSchemaDocument({
 			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-readiness.v1.schema.json",
 			title: "Agent Infra Workload Readiness V1",

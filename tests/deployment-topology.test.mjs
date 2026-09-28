@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { parseAllDocuments } from "yaml";
+import { parse, parseAllDocuments } from "yaml";
 
 const chart = "deploy/helm/agent-infra";
 const kindValues = "deploy/environments/kind.values.yaml";
@@ -143,6 +143,121 @@ test("kind values render the reviewable Kubernetes workload-plane topology", () 
 		route.spec.template.spec.volumes[0].secret.secretName,
 		"agent-infra-kind-topology-tls",
 	);
+});
+
+test("enterprise directory deployment keeps migration ahead of its runtime resources", () => {
+	const disabled = render();
+	assert.equal(disabled.status, 0, disabled.stderr);
+	assert.equal(
+		objects(disabled.stdout).some((item) =>
+			item.metadata?.name?.includes("enterprise-directory-sync"),
+		),
+		false,
+	);
+
+	const enabled = render(
+		"--set",
+		"enterpriseDirectorySync.enabled=true",
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set",
+		"migration.enabled=true",
+		"--set-string",
+		"enterpriseDirectorySync.corpId=corp-fixture",
+		"--set-string",
+		"enterpriseDirectorySync.runtimeDatabaseRole=directory_runtime",
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+		"--set-string",
+		`images.enterpriseDirectorySync.digest=${validDigest}`,
+	);
+	assert.equal(enabled.status, 0, enabled.stderr);
+	const resources = objects(enabled.stdout);
+	const name = "topology-agent-infra-enterprise-directory-sync";
+	const migration = resource(resources, "Job", `${name}-migration`);
+	const deployment = resource(resources, "Deployment", name);
+	assert.equal(
+		migration.metadata.annotations["helm.sh/hook"],
+		"pre-install,pre-upgrade",
+	);
+	assert.equal(migration.spec.template.spec.serviceAccountName, undefined);
+	assert.equal(deployment.spec.template.spec.serviceAccountName, name);
+	assert.equal(deployment.spec.strategy.type, "Recreate");
+	assert.ok(resource(resources, "ServiceAccount", name));
+	assert.ok(resource(resources, "Service", name));
+	assert.ok(resource(resources, "NetworkPolicy", name));
+	assert.deepEqual(
+		migration.spec.template.spec.containers[0].env[0].valueFrom.secretKeyRef,
+		{ name: "agent-infra-directory-migration-database", key: "url" },
+	);
+	assert.deepEqual(migration.spec.template.spec.containers[0].env[1], {
+		name: "DIRECTORY_RUNTIME_DATABASE_ROLE",
+		value: "directory_runtime",
+	});
+	assert.deepEqual(
+		deployment.spec.template.spec.containers[0].env.find(
+			(entry) => entry.name === "DIRECTORY_DATABASE_URL",
+		).valueFrom.secretKeyRef,
+		{ name: "agent-infra-directory-database", key: "url" },
+	);
+	const rollback = render(
+		"--set",
+		"enterpriseDirectorySync.enabled=true",
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set",
+		"migration.enabled=false",
+		"--set-string",
+		"enterpriseDirectorySync.corpId=corp-fixture",
+		"--set-string",
+		"enterpriseDirectorySync.runtimeDatabaseRole=directory_runtime",
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+		"--set-string",
+		`images.enterpriseDirectorySync.digest=${validDigest}`,
+	);
+	assert.equal(rollback.status, 0, rollback.stderr);
+	assert.equal(
+		resource(objects(rollback.stdout), "Job", `${name}-migration`),
+		undefined,
+	);
+	const inaccessible = render(
+		"--set",
+		"enterpriseDirectorySync.enabled=true",
+		"--set-string",
+		"enterpriseDirectorySync.corpId=corp-fixture",
+		"--set-string",
+		"enterpriseDirectorySync.runtimeDatabaseRole=directory_runtime",
+		"--set-string",
+		`images.enterpriseDirectorySync.digest=${validDigest}`,
+	);
+	assert.notEqual(inaccessible.status, 0);
+	assert.match(
+		inaccessible.stderr,
+		/requires in-cluster Platform API placement/,
+	);
+});
+
+test("enterprise directory Compose profile migrates before serving with separate file secrets", async () => {
+	const compose = parse(await readFile("docker-compose.yml", "utf8"));
+	const migration = compose.services["enterprise-directory-migration"];
+	const service = compose.services["enterprise-directory-sync"];
+	assert.deepEqual(migration.profiles, ["enterprise-directory"]);
+	assert.deepEqual(service.profiles, ["enterprise-directory"]);
+	assert.equal(migration.depends_on.postgres.condition, "service_healthy");
+	assert.equal(
+		service.depends_on["enterprise-directory-migration"].condition,
+		"service_completed_successfully",
+	);
+	assert.equal(migration.read_only, true);
+	assert.equal(service.read_only, true);
+	assert.deepEqual(service.secrets, [
+		"directory_read_token",
+		"directory_corp_secret",
+		"directory_tls_cert",
+		"directory_tls_key",
+	]);
+	for (const name of service.secrets) assert.ok(compose.secrets[name].file);
 });
 
 test("deployment configuration fails closed before rendering unsafe values", () => {

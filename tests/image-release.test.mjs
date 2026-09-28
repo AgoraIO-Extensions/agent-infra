@@ -162,6 +162,7 @@ test("image build validates reproducibility and read-only non-root execution", a
 				"apps/web/Dockerfile",
 				"apps/platform-api/Dockerfile",
 				"apps/platform-worker/Dockerfile",
+				"apps/enterprise-directory-sync/Dockerfile",
 				"apps/agent-runtime-host/Dockerfile",
 			]),
 		});
@@ -175,6 +176,7 @@ test("image build validates reproducibility and read-only non-root execution", a
 			"web",
 			"platformApi",
 			"platformWorker",
+			"enterpriseDirectorySync",
 			"runtimeHost",
 		]);
 		for (const image of Object.values(manifest.images)) {
@@ -193,7 +195,7 @@ test("image build validates reproducibility and read-only non-root execution", a
 		const builds = calls.filter(
 			(args) => args[0] === "buildx" && args[1] === "build",
 		);
-		assert.equal(builds.length, 8);
+		assert.equal(builds.length, 10);
 		const contexts = new Set(builds.map((args) => args.at(-1)));
 		assert.equal(contexts.size, 1);
 		assert.notEqual(resolve([...contexts][0]), repositoryRoot);
@@ -225,14 +227,14 @@ test("image build validates reproducibility and read-only non-root execution", a
 		assert.equal(
 			calls.filter((args) => args[0] === "load" && args[1] === "--input")
 				.length,
-			8,
+			10,
 		);
 		const pushes = calls.filter((args) => args[0] === "push");
 		const readbacks = calls.filter(
 			(args) => args[0] === "manifest" && args[1] === "inspect",
 		);
-		assert.equal(pushes.length, 4);
-		assert.equal(readbacks.length, 4);
+		assert.equal(pushes.length, 5);
+		assert.equal(readbacks.length, 5);
 		assert.ok(
 			calls.indexOf(pushes[0]) >
 				calls.findLastIndex(
@@ -279,8 +281,8 @@ test("image build validates reproducibility and read-only non-root execution", a
 		const userProbes = calls.filter(
 			(args) => args[0] === "run" && args.includes("--entrypoint"),
 		);
-		assert.equal(probes.length, 4);
-		assert.equal(userProbes.length, 4);
+		assert.equal(probes.length, 5);
+		assert.equal(userProbes.length, 5);
 		for (const args of userProbes) {
 			assert.ok(args.includes("--read-only"));
 			assert.deepEqual(args.slice(args.indexOf("--entrypoint")), [
@@ -303,6 +305,7 @@ test("image build validates reproducibility and read-only non-root execution", a
 				if (
 					args[referenceIndex].includes("/platform-api:") ||
 					args[referenceIndex].includes("/platform-worker:") ||
+					args[referenceIndex].includes("/enterprise-directory-sync:") ||
 					args[referenceIndex].includes("/agent-runtime-host:")
 				) {
 					assert.match(args.at(-1), /package\.json/);
@@ -395,8 +398,8 @@ test("image publication isolates mutable tags by platform", async () => {
 				.map((args) => args[1]);
 		const amd64References = await publishedReferences(amd64);
 		const arm64References = await publishedReferences(arm64);
-		assert.equal(amd64References.length, 4);
-		assert.equal(arm64References.length, 4);
+		assert.equal(amd64References.length, 5);
+		assert.equal(arm64References.length, 5);
 		assert.ok(
 			amd64References.every((reference) =>
 				reference.endsWith(`:${commitSha}-linux-amd64`),

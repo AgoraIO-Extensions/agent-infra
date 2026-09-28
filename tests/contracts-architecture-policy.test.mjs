@@ -80,6 +80,12 @@ test("only dedicated Store packages import database implementation dependencies"
 		}),
 		[],
 	);
+	assert.deepEqual(
+		checkSourceImports('import postgres from "postgres";', {
+			path: "packages/enterprise-directory-store/src/index.ts",
+		}),
+		[],
+	);
 });
 
 test("only dedicated Store packages declare database runtime dependencies", () => {
@@ -110,6 +116,13 @@ test("only dedicated Store packages declare database runtime dependencies", () =
 		checkProductionManifestDependencies(
 			{ dependencies: { "drizzle-orm": "1.0.0", postgres: "1.0.0" } },
 			{ path: "packages/connection-store" },
+		),
+		[],
+	);
+	assert.deepEqual(
+		checkProductionManifestDependencies(
+			{ dependencies: { postgres: "1.0.0" } },
+			{ path: "packages/enterprise-directory-store" },
 		),
 		[],
 	);
