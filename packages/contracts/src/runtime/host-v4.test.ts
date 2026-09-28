@@ -291,6 +291,12 @@ it("rejects freshly signed requests that violate Grant operation or attachment s
 			attachments: [{ attachmentId: "attachment-1", operations: ["read"] }],
 		}),
 	).resolves.toBeUndefined();
+	await expect(
+		validateRuntimeBusinessBindingV4(withAttachment, {
+			...claims(withAttachment),
+			attachments: [{ attachmentId: "attachment-1", operations: ["write"] }],
+		} as unknown),
+	).rejects.toThrow("RuntimeHostV4 binding is invalid");
 	const twoAttachments = RuntimeSubmitTurnRequestV4Schema.parse({
 		...request,
 		input: { text: "hello", attachments: ["attachment-1", "attachment-2"] },
