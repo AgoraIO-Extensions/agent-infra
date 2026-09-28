@@ -68,6 +68,20 @@ test("persisted event validation rejects malformed or unbound current history", 
 		persistedEventsMatchExecution(
 			[
 				{
+					eventId: "malformed-history-event-1",
+					conversationId: "conversation-1",
+				},
+				currentEvent,
+			],
+			"conversation-1",
+			"execution-1",
+		),
+		false,
+	);
+	assert.equal(
+		persistedEventsMatchExecution(
+			[
+				{
 					eventId: "conversation-event-1",
 					conversationId: "conversation-1",
 					executionId: null,

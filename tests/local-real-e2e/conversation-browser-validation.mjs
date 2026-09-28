@@ -21,7 +21,7 @@ export function persistedEventsMatchExecution(
 		)
 			return false;
 
-		if (event.executionId == null) continue;
+		if (event.executionId === null) continue;
 		if (typeof event.executionId !== "string" || event.executionId.length === 0)
 			return false;
 		if (event.executionId === executionId) currentExecutionEvents += 1;
