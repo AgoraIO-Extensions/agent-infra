@@ -9,18 +9,24 @@ import {
 import { githubConnectionCatalog } from "@agent-infra/openconnector-adapter";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
-
+import { seedApprovedConnectPermit } from "./approved-connect-fixture";
 import { migrateConnectionDatabase } from "./migrations";
 import { PostgresConnectionOAuthRepository } from "./oauth-repository";
 import { PostgresConnectionRepository } from "./repository";
 import { assertIsolatedTestDatabaseUrl } from "./test-database";
 
 const databaseUrl = process.env.CONNECTION_TEST_DATABASE_URL;
+const bootstrapDatabaseUrl = process.env.CONNECTION_BOOTSTRAP_TEST_DATABASE_URL;
 assertIsolatedTestDatabaseUrl(databaseUrl, process.env.DATABASE_URL);
+assertIsolatedTestDatabaseUrl(bootstrapDatabaseUrl, process.env.DATABASE_URL);
 if (process.env.CI && !databaseUrl) {
 	throw new Error("CONNECTION_TEST_DATABASE_URL is required in CI");
 }
+if (process.env.CI && !bootstrapDatabaseUrl) {
+	throw new Error("CONNECTION_BOOTSTRAP_TEST_DATABASE_URL is required in CI");
+}
 const integrationTest = databaseUrl ? it : it.skip;
+const bootstrapTest = bootstrapDatabaseUrl ? it : it.skip;
 
 async function authorizeCurrentConsumer(
 	authority: Pick<
@@ -41,6 +47,142 @@ async function authorizeCurrentConsumer(
 }
 
 describe("PostgreSQL Connection business authority", () => {
+	integrationTest(
+		"orders grant history by consent decisions rather than Grant IDs",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 31),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			const principalId = `history-user-${suffix}`;
+			const consumerId = `history-consumer-${suffix}`;
+			const actionIds = githubConnectionCatalog.actions
+				.slice(0, 14)
+				.map((action) => action.id);
+			try {
+				await repository.publishGithubCatalog(githubConnectionCatalog);
+				await sql`INSERT INTO connection_principals (id, display_name, email)
+				VALUES (${principalId}, 'History user', 'history@example.invalid'),
+					(${`unrelated-${suffix}`}, 'Other user', 'other@example.invalid')`;
+				await repository.publishConsumerDeclaration({
+					actionVersionIds: actionIds,
+					consumer: { id: consumerId, name: "History consumer" },
+					providerReleaseId: githubConnectionCatalog.providerReleaseId,
+				});
+				await sql`INSERT INTO connection_consumer_instances
+				(id, consumer_id, kind, auth_subject, status, principal_id)
+				VALUES (${`instance-${suffix}`}, ${consumerId}, 'DEVICE', ${`subject-${suffix}`}, 'ACTIVE', ${principalId})`;
+				const { connectionId } = await repository.storeGithubOAuthCredential({
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId,
+						providerReleaseId: githubConnectionCatalog.providerReleaseId,
+						scopes: [
+							"delete_repo",
+							"read:user",
+							"repo",
+							"user:email",
+							"workflow",
+						],
+					}),
+					accessToken: `test-history-${suffix}`,
+					displayName: "History account",
+					externalAccount: `history-${suffix}`,
+					principalId,
+					grantedScopes: [
+						"delete_repo",
+						"read:user",
+						"repo",
+						"user:email",
+						"workflow",
+					],
+				});
+				const historyIds: string[] = [];
+				for (const [index, count] of [1, 14, 3].entries()) {
+					const preview =
+						await repository.createCurrentConsumerAuthorizationPreview({
+							principalId,
+							consumerId,
+							connectionId,
+							actionVersionIds: actionIds.slice(0, count),
+						});
+					const { grantId } =
+						await repository.confirmCurrentConsumerAuthorization({
+							principalId,
+							previewId: preview.previewId,
+							confirmationToken: preview.confirmationToken,
+							idempotencyKey: randomUUID(),
+						});
+					await sql.begin(async (tx) => {
+						await tx`UPDATE connection_grants SET status = 'PAUSED_CREDENTIAL' WHERE id = ${grantId}`;
+						await tx`UPDATE connection_authorization_roots SET current_grant_id = NULL, fence = fence + 1
+						WHERE current_grant_id = ${grantId}`;
+					});
+					// Deterministic IDs deliberately put the oldest decision first lexicographically.
+					const historyId = `grant-history-${index}-${suffix}`;
+					historyIds.unshift(historyId);
+					await sql`INSERT INTO connection_grants
+					SELECT (jsonb_populate_record(NULL::connection_grants,
+						to_jsonb(original) || jsonb_build_object('id', ${historyId}::text))).*
+					FROM connection_grants original WHERE original.id = ${grantId}`;
+					await sql`INSERT INTO connection_grant_actions
+					SELECT (jsonb_populate_record(NULL::connection_grant_actions,
+						to_jsonb(original) || jsonb_build_object('grant_id', ${historyId}::text))).*
+					FROM connection_grant_actions original WHERE original.grant_id = ${grantId}`;
+					// Equal confirmation timestamps must still respect the monotonically increasing root fence.
+					await sql`UPDATE connection_authorization_consents SET confirmed_at = '2026-01-01T00:00:00Z'
+					WHERE id = (SELECT consent_id FROM connection_grants WHERE id = ${grantId})`;
+					const overview = await repository.getOverview(principalId);
+					expect(overview.grants[0]?.actions).toHaveLength(count);
+					expect(
+						overview.grants
+							.filter((grant) => historyIds.includes(grant.id))
+							.map((grant) => grant.id),
+					).toEqual(historyIds);
+					expect(
+						(await repository.getOverview(`unrelated-${suffix}`)).grants,
+					).toEqual([]);
+				}
+				await authorizeCurrentConsumer(repository, {
+					principalId,
+					consumerId,
+					connectionId,
+				});
+				const [historyCredential] = await sql<
+					{ id: string }[]
+				>`SELECT id FROM connection_credential_versions WHERE connection_id = ${connectionId} AND status = 'ACTIVE'`;
+				await repository.storeGithubOAuthCredential({
+					expectedConnectionId: connectionId,
+					expectedCredentialVersionId: historyCredential?.id,
+					accessToken: `test-history-reconnected-${suffix}`,
+					displayName: "History account",
+					externalAccount: `history-${suffix}`,
+					principalId,
+					grantedScopes: [
+						"delete_repo",
+						"read:user",
+						"repo",
+						"user:email",
+						"workflow",
+					],
+				});
+				const latest = (await repository.getOverview(principalId)).grants[0];
+				expect(latest?.status).toBe("ACTIVE");
+				expect(latest?.actions).toHaveLength(14);
+			} finally {
+				await sql.end();
+				await repository.close();
+			}
+		},
+		30_000,
+	);
+
 	integrationTest(
 		"disables the incompatible GitHub OAuth v7 release and check actions",
 		async () => {
@@ -135,6 +277,11 @@ describe("PostgreSQL Connection business authority", () => {
 					VALUES (${principalId}, 'GitHub Profile Test')
 				`;
 				const stored = await repository.storeGithubOAuthCredential({
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId,
+						providerReleaseId: githubConnectionCatalog.providerReleaseId,
+						scopes: ["repo"],
+					}),
 					accessToken: "github-profile-test-secret",
 					displayName: "Shared Profile Name",
 					externalAccount: "42",
@@ -209,19 +356,19 @@ describe("PostgreSQL Connection business authority", () => {
 		60_000,
 	);
 
-	integrationTest(
+	bootstrapTest(
 		"bootstraps one audited Connection administrator without promoting ordinary Principals",
 		async () => {
-			if (!databaseUrl) return;
+			if (!bootstrapDatabaseUrl) return;
 			await migrateConnectionDatabase(
-				databaseUrl,
+				bootstrapDatabaseUrl,
 				resolve(import.meta.dirname, "../../../migrations/connection"),
 			);
 			const repository = new PostgresConnectionRepository(
-				databaseUrl,
+				bootstrapDatabaseUrl,
 				Buffer.alloc(32, 31),
 			);
-			const sql = postgres(databaseUrl, { max: 1 });
+			const sql = postgres(bootstrapDatabaseUrl, { max: 1 });
 			const suffix = randomUUID();
 			const adminPrincipalId = `principal-admin-${suffix}`;
 			const disabledAdminPrincipalId = `principal-disabled-admin-${suffix}`;
@@ -504,6 +651,11 @@ describe("PostgreSQL Connection business authority", () => {
 					});
 				}
 				const personalConnection = await repository.storeGithubOAuthCredential({
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId: adminPrincipalId,
+						providerReleaseId: catalog.providerReleaseId,
+						scopes: ["repo"],
+					}),
 					accessToken: `personal-provider-secret-${suffix}`,
 					displayName: "Personal GitHub",
 					externalAccount: `personal-github-${suffix}`,
@@ -864,6 +1016,11 @@ describe("PostgreSQL Connection business authority", () => {
 					providerReleaseId: v1.providerReleaseId,
 				});
 				const connection = await repository.storeGithubOAuthCredential({
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId,
+						providerReleaseId: v1.providerReleaseId,
+						scopes: ["repo"],
+					}),
 					accessToken: `provider-secret-${suffix}`,
 					displayName: "Catalog test GitHub",
 					externalAccount,
@@ -925,6 +1082,11 @@ describe("PostgreSQL Connection business authority", () => {
 
 				await repository.storeGithubOAuthCredential({
 					accessToken: `replacement-provider-secret-${suffix}`,
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId,
+						providerReleaseId: v2.providerReleaseId,
+						scopes: ["repo"],
+					}),
 					displayName: "Catalog test GitHub",
 					externalAccount,
 					grantedScopes: ["repo"],
@@ -1054,6 +1216,11 @@ describe("PostgreSQL Connection business authority", () => {
 					providerReleaseId: githubConnectionCatalog.providerReleaseId,
 				});
 				const accountA = await repository.storeGithubOAuthCredential({
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId: identity.principalId,
+						providerReleaseId: githubConnectionCatalog.providerReleaseId,
+						scopes: grantedScopes,
+					}),
 					accessToken: `provider-a-${suffix}`,
 					displayName: "GitHub A",
 					externalAccount: `github-a-${suffix}`,
@@ -1061,6 +1228,11 @@ describe("PostgreSQL Connection business authority", () => {
 					principalId: identity.principalId,
 				});
 				const accountB = await repository.storeGithubOAuthCredential({
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId: identity.principalId,
+						providerReleaseId: githubConnectionCatalog.providerReleaseId,
+						scopes: grantedScopes,
+					}),
 					accessToken: `provider-b-${suffix}`,
 					displayName: "GitHub B",
 					externalAccount: `github-b-${suffix}`,
@@ -1068,6 +1240,13 @@ describe("PostgreSQL Connection business authority", () => {
 					principalId: identity.principalId,
 				});
 				const limitedAccount = await repository.storeGithubOAuthCredential({
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId: identity.principalId,
+						providerReleaseId: githubConnectionCatalog.providerReleaseId,
+						scopes: grantedScopes.filter(
+							(scope) => scope !== "delete_repo" && scope !== "workflow",
+						),
+					}),
 					accessToken: `provider-limited-${suffix}`,
 					displayName: "GitHub Limited",
 					externalAccount: `github-limited-${suffix}`,
@@ -1234,6 +1413,10 @@ describe("PostgreSQL Connection business authority", () => {
 					FOR EACH ROW EXECUTE FUNCTION connection_test_delay_authorization_root_insert()
 				`;
 				let previewReconnectResults: PromiseSettledResult<unknown>[];
+				const [accountBCredential] = await sql<{ id: string }[]>`
+					SELECT id FROM connection_credential_versions
+					WHERE connection_id = ${accountB.connectionId} AND status = 'ACTIVE'
+				`;
 				try {
 					const preview = service.createCurrentConsumerAuthorizationPreview({
 						connectionId: accountB.connectionId,
@@ -1245,6 +1428,8 @@ describe("PostgreSQL Connection business authority", () => {
 						preview,
 						repository.storeGithubOAuthCredential({
 							accessToken: `provider-b-reconnected-${suffix}`,
+							expectedConnectionId: accountB.connectionId,
+							expectedCredentialVersionId: accountBCredential?.id,
 							displayName: "GitHub B",
 							externalAccount: `github-b-${suffix}`,
 							grantedScopes,
@@ -1284,6 +1469,10 @@ describe("PostgreSQL Connection business authority", () => {
 					FOR EACH ROW EXECUTE FUNCTION connection_test_delay_authorization_consent_insert()
 				`;
 				let confirmReconnectResults: PromiseSettledResult<unknown>[];
+				const [updatedAccountBCredential] = await sql<{ id: string }[]>`
+					SELECT id FROM connection_credential_versions
+					WHERE connection_id = ${accountB.connectionId} AND status = 'ACTIVE'
+				`;
 				try {
 					const confirm = service.confirmCurrentConsumerAuthorization({
 						confirmationToken: confirmPreview.confirmationToken,
@@ -1296,6 +1485,8 @@ describe("PostgreSQL Connection business authority", () => {
 						confirm,
 						repository.storeGithubOAuthCredential({
 							accessToken: `provider-b-confirm-reconnected-${suffix}`,
+							expectedConnectionId: accountB.connectionId,
+							expectedCredentialVersionId: updatedAccountBCredential?.id,
 							displayName: "GitHub B",
 							externalAccount: `github-b-${suffix}`,
 							grantedScopes,
@@ -1395,6 +1586,11 @@ describe("PostgreSQL Connection business authority", () => {
 					providerReleaseId: githubConnectionCatalog.providerReleaseId,
 				});
 				const connection = await repository.storeGithubOAuthCredential({
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId: identity.principalId,
+						providerReleaseId: githubConnectionCatalog.providerReleaseId,
+						scopes: grantedScopes,
+					}),
 					accessToken: providerToken,
 					displayName: "Business GitHub",
 					externalAccount,
@@ -1435,6 +1631,8 @@ describe("PostgreSQL Connection business authority", () => {
 					await repository.resolveDirectIdentity(identity);
 				await repository.storeGithubOAuthCredential({
 					accessToken: replacementProviderToken,
+					expectedConnectionId: connection.connectionId,
+					expectedCredentialVersionId: originalInvocation.credentialVersionId,
 					displayName: "Business GitHub",
 					externalAccount,
 					grantedScopes,
@@ -1551,6 +1749,11 @@ describe("PostgreSQL Connection business authority", () => {
 				);
 				await repository.storeGithubOAuthCredential({
 					accessToken: `provider-secret-${randomUUID()}`,
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId: identity.principalId,
+						providerReleaseId: githubConnectionCatalog.providerReleaseId,
+						scopes: reducedScopes,
+					}),
 					displayName: "Business GitHub",
 					externalAccount,
 					grantedScopes: reducedScopes,
@@ -1776,6 +1979,10 @@ describe("PostgreSQL Connection business authority", () => {
 						)
 					`;
 				if (!rootBeforeRace) throw new Error("missing authorization root");
+				const [credentialBeforeRace] = await sql<{ id: string }[]>`
+					SELECT id FROM connection_credential_versions
+					WHERE connection_id = ${connection.connectionId} AND status = 'ACTIVE'
+				`;
 				await sql`
 						CREATE OR REPLACE FUNCTION connection_test_delay_disconnect()
 						RETURNS trigger LANGUAGE plpgsql AS $$
@@ -1803,6 +2010,8 @@ describe("PostgreSQL Connection business authority", () => {
 						disconnect,
 						repository.storeGithubOAuthCredential({
 							accessToken: `provider-secret-${randomUUID()}`,
+							expectedConnectionId: connection.connectionId,
+							expectedCredentialVersionId: credentialBeforeRace?.id,
 							displayName: "Business GitHub",
 							externalAccount,
 							grantedScopes: reducedScopes,
@@ -1813,13 +2022,11 @@ describe("PostgreSQL Connection business authority", () => {
 					await sql`DROP TRIGGER connection_test_delay_disconnect ON connection_accounts`;
 					await sql`DROP FUNCTION connection_test_delay_disconnect()`;
 				}
-				for (const result of raceResults) {
-					if (result.status === "rejected") throw result.reason;
-				}
 				expect(raceResults.map((result) => result.status)).toEqual([
 					"fulfilled",
-					"fulfilled",
+					"rejected",
 				]);
+				expect(raceResults[1]).toMatchObject({ status: "rejected" });
 				const [raceState] = await sql<
 					{
 						account_status: string;
@@ -1838,7 +2045,7 @@ describe("PostgreSQL Connection business authority", () => {
 						WHERE account.id = ${connection.connectionId}
 					`;
 				expect(raceState).toEqual({
-					account_status: "ACTIVE",
+					account_status: "DISCONNECTED",
 					current_grant_id: null,
 					fence: (BigInt(rootBeforeRace.fence) + 1n).toString(),
 					grant_status: "REVOKED",
@@ -1850,9 +2057,7 @@ describe("PostgreSQL Connection business authority", () => {
 							AND event IN ('CONNECTION_CONNECTED', 'CONNECTION_DISCONNECTED')
 						ORDER BY id DESC LIMIT 2
 					`;
-				expect(new Set(raceAudit.map((record) => record.event))).toEqual(
-					new Set(["CONNECTION_CONNECTED", "CONNECTION_DISCONNECTED"]),
-				);
+				expect(raceAudit[0]?.event).toBe("CONNECTION_DISCONNECTED");
 				await expect(
 					service.invokeDirectForIdentity(identity, "github.get_repository", {
 						owner: "AgoraIO-Extensions",

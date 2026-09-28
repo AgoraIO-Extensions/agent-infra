@@ -69,9 +69,11 @@ Credential。命令幂等，但系统已有其他管理员或目标 role 已撤�
 - Direct MCP、Delegated Invocation、Credential 和持久写契约仍以 HLD 为准。HCI pilot 的通过只能
   形成具名环境和客户端证据，不能代替尚未关闭的广泛生产身份、KMS、egress、Consent 和恢复门禁。
 
-当前不可变回滚点是 `connection-api:v0.0.1` 和 `connection-web:v0.0.1`。身份、Credential、授权、
+审批 enforcement 尚未启用时，当前不可变回滚点是 `connection-api:v0.0.1` 和 `connection-web:v0.0.1`。身份、Credential、授权、
 Provider Effect 或 secret 暴露检查失败时，Helm 必须把 API/Web 镜像恢复为该版本；v0.0.1 只开放
 健康检查，因此回滚会立即关闭 OAuth、MCP 和 Provider 业务路由，但不删除 PostgreSQL 权威数据。
+审批 cutoff 生效后，该旧版不理解审批 fence，不再是合法回滚点；只能回滚到理解当前 schema 和审批协议的
+已验收版本。不能以停用业务路由为理由将旧版重新部署到该数据库。
 
 Jira/Confluence Server 的 `JIRA_TOKEN_*` 参数由 Secret Manager 注入服务端，用于按需签发短期应用级
 `accessToken`；它不进入用户 credential envelope。用户的 Jira 用户名/密码仍按 Connection
@@ -88,7 +90,7 @@ Manhattan v4 连接使用公司 OAuth confidential client 的 authorization-code
 再由 Secret Manager 注入 `MANHATTAN_OAUTH_CLIENT_ID`、`MANHATTAN_OAUTH_CLIENT_SECRET` 和现有
 `MANHATTAN_KONG_API_KEY`。Connection 用服务端 client secret 交换并刷新个人 Token，经 Manhattan
 `/api/connection/whoami` 验证身份及 RBAC 后才加密存储；旧 v3 Connection 不自动升级，需要重新授权。
-此发布包含 `0032_provider_oauth_transactions.sql`，必须先执行经评审的生产 migration 路径；
+此发布包含 `0035_provider_oauth_transactions.sql`，必须先执行经评审的生产 migration 路径；
 普通 GZ3 `--no-hooks` 发布脚本会按设计阻止直接部署。
 
 ## 验收边界
@@ -102,6 +104,38 @@ Secret Manager 注入。实际值不得进入已跟踪文件、日志或聊天�
 test 验收。
 
 ## GZ3 受监督发布
+
+### 管理员操作记录
+
+`/connection/admin/action-calls` 使用当前浏览器会话查询调用记录；仅当前有效的
+`CONNECTION_ADMIN` 可访问列表与详情。姓名、邮箱、Action 和 Call ID 搜索与时间、结果组合过滤。
+日期按 UTC+08:00 的自然日计算，自定义结束分钟包含在范围内，单次范围不超过 93 天。
+分页每页最多 50 条，按创建时间和 Call ID 排序；查询审计写入失败时不返回查询结果。
+
+页面遵循 [HLD 21.7、21.8 与 26 节](HLD-connection-M1.md#26-审计模型与查询权限)，
+只展示固定白名单的输入输出摘要，不提供原始 JSON、Credential、业务正文或对话内容。
+未知 Action、未记录的事件、失败原因和耗时不推断或补造。历史调用的人员姓名、邮箱与
+Consumer 名称来自当前身份目录，不表示执行时的 profile 快照；稳定标识保留在技术详情。
+
+本入口不覆盖尚未创建 Call 的请求拒绝，也不关闭审计防篡改、保留策略、outbox 或 PITR 门禁。
+新增查询索引必须走下述经评审的 migration 发布流程；上线前确认表规模和建索引锁影响。
+
+输入摘要结合已冻结 Action schema 区分无需参数、未传入可选参数和历史未记录；输出支持
+固定字段的脱敏投影、集合数量和账号指纹，不按少量 Action 名称排除整个 Provider。
+未适配结构明确标记，不将其显示为无输入或无输出。
+
+详情中的「后端排查信息」默认折叠，不提供 curl、复制、导出或重放。Connection 在实际传输边界
+按执行批次采集 HTTP 方法、服务地址、脱敏路径模板、开始/响应头或异常时间、HTTP 状态和
+受控格式的对方请求编号；不记录 URL 用户信息、查询参数、片段、任意请求头、响应头或正文，
+不向上游注入额外请求头。请求编号只接受具名 Header 的 UUID、十六进制或已知 Provider 格式。
+耗时截止到响应头或传输异常，不表示完整响应读取或业务执行耗时；超时不证明对方未执行。
+
+诊断与调用终态或有效 lease 的对账状态在同一事务保存。每批最多采集 32 次 HTTP 请求，超过时
+保留超限数量；查询最多展示最近 20 批并明确截断。Call 创建前的 OAuth/credential 操作不属于
+该 Call 的诊断。历史数据不回填；进程崩溃前未提交的诊断可能缺失，不能用它代替持久
+Attempt、Effect receipt、完整审计或恢复证据，数据保留门禁不因此关闭。
+
+### 发布步骤
 
 创建 PR 前先运行：
 
@@ -123,3 +157,45 @@ pnpm connection:gz3:release connection-vX.Y.Z --publish --deploy
 `--no-hooks`，并通过无 watch 的 Deployment image/readyReplica 轮询验收，避免旧 Kubernetes 的
 `event bookmark expired` 造成伪失败。检测到 `migrations/connection` 变化时命令 fail closed，必须改走
 经过评审的 migration 发布流程。脚本不会读取 Secret、自动合并 PR 或执行 Provider WRITE Action。
+
+审批迁移 `0032_connection_access_approval` 属于上述需评审的发布，不得用普通 GZ3 脚本跳过
+migration hook。候选提交必须包含 `packages/connection-contracts/approval-fence.json`；正常 Connection
+tag 的 catalog guard 从已提交的 Git 版本读取 migration journal 和 manifest，拒绝缺失、移除或
+协议版本下降。工作区未提交文件的单元测试不等于 tag 发布验证。
+
+审计迁移 `0033_audit_query_indexes` 与 `0034_call_diagnostics` 先进入主线，其既有 journal 时间戳保持不变。
+审批迁移尚未发布，journal 将 `0032_connection_access_approval` 排在这些审计迁移之后；
+实际执行顺序以 journal 的 `idx` 和 `when` 为准，不按文件名排序，避免已有审计迁移的数据库跳过审批表。
+升级回归必须覆盖仅含审计索引的基线升级至审批版本，并验证重复迁移幂等。
+
+允许先部署管理模块、后配置启用。正式目录与免责声明尚未就绪时，保持
+`CONNECTION_APPROVAL_DIRECTORY_ENABLED=false`，管理员可搜索、选择并保存已完成唯一 LDAP 身份映射的员工候选草稿，
+但不得发布 Policy 或为新连接绕过审批。免责声明通过管理界面补充，目录参数通过部署配置与
+Secret 补充；该阶段不执行 cutoff，也不自动扩张旧连接的账号、scope 或 Grant。迁移评审、
+代码评审与适用于本次部署的人工验证仍须完成，不能用此分阶段安排豁免下述启用门禁。
+
+审批人搜索可使用与 Rehoboam 相同的公司员工列表契约：配置
+`CONNECTION_EMPLOYEE_DIRECTORY_URL` 为经过批准的 HTTPS 员工列表完整地址，配置
+`CONNECTION_EMPLOYEE_DIRECTORY_SERVICE_KEY` 为 Secret 中的专用服务密钥，两项必须同时配置。
+服务端使用 `agora-service-key` 请求头；响应为含 `name`、`email`、`iamId` 的数组。
+管理员请求不能覆盖地址或请求头；不跟随重定向，不关闭 TLS 验证，响应限制为 5 MiB。
+服务端按姓名和邮箱做不区分大小写的包含匹配，最多处理 20 个匹配员工；没有 `iamId`
+的记录不参与候选搜索。员工邮箱仅用于精确查找 LDAP 账号，身份关联仍取 LDAP
+issuer + uid；没有对应账号的员工不返回，映射歧义或上游异常时拒绝搜索，不能降级为
+以邮箱或外部 `iamId` 授权。未配置该数据源时保留现有 LDAP 搜索。
+搜索和保存草稿不要求在职属性配置，也不恢复已停用身份；发布与实际审批仍遵循
+[HLD 16.7](HLD-connection-M1.md#167-connection-access-approval) 的严格校验。
+该配置不替代 Identity Owner 对唯一邮箱映射、在职属性与稳定 uid 的确认，也不自动开启
+`CONNECTION_APPROVAL_DIRECTORY_ENABLED`。上线前需验证公司员工列表实际响应、服务密钥权限、
+LDAP 映射与重名、离职和重复邮箱负向场景；不得复用源码中的历史硬编码密钥。
+
+启用 `ENFORCED` 前，Data Owner 必须确认个人 Connection 清单和 baseline 适用性，DBA/SRE 必须完成
+0032 迁移重放及兼容回滚演练，Identity/Security/QA 必须确认正式目录、免责声明和真实 Provider
+验收，并提供 cutoff 后只准部署审批兼容镜像的集群级控制及审计证据。当前 guard 只覆盖上述正常
+tag 路径，不能阻止手工 Helm、旧镜像或其他部署途径；缺少集群级控制时保持 `PRE_LAUNCH`，不得
+执行 cutover。cutover 一经执行不可用旧镜像回滚，也不得通过手工修改数据库状态关闭审批。
+
+站内投影 outbox 连续 10 次失败后进入 `FAILED`，管理员审批页展示脱敏的事件类型、次数与创建时间。
+管理员可对已排查原因的失败事件显式重投递；该动作只重新排队站内 WorkItem/Notification
+投影，不重试 Provider 请求或已提交的外部 WRITE。事件真正送达后运营待办才完成；仅归档失败
+通知不完成待办。恢复前必须先核对缺失的审计/任务事实，不得为了消除告警伪造业务完成状态。

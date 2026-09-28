@@ -2,9 +2,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ldapEvents = vi.hoisted(() => [] as string[]);
 const ldapSearches = vi.hoisted(
-	() => [] as Array<{ attributes: string[]; filter: string }>,
+	() =>
+		[] as Array<{
+			attributes: string[];
+			filter: string;
+			paged?: unknown;
+			sizeLimit?: number;
+		}>,
 );
 const ldapDelays = vi.hoisted(() => ({ bindMs: 0, searchMs: 0, unbindMs: 0 }));
+const ldapOverride = vi.hoisted(() => ({
+	entries: undefined as Array<Record<string, string>> | undefined,
+}));
+const employeePages = vi.hoisted(
+	() => [] as Array<Array<Record<string, string>>>,
+);
 
 vi.mock("ldapts", () => ({
 	Client: class {
@@ -34,11 +46,45 @@ vi.mock("ldapts", () => ({
 				filter: options.filter,
 			});
 			return {
-				searchEntries: [
+				searchEntries: ldapOverride.entries ?? [
 					{
 						displayName: "Alice",
 						dn: "cn=alice,ou=users,dc=example,dc=com",
 						employeeStatus: "active",
+						mail: "alice@example.com",
+						uid: "alice-id",
+					},
+				],
+			};
+		}
+
+		async *searchPaginated(
+			_baseDn: string,
+			options: {
+				attributes: string[];
+				filter: string;
+				paged: unknown;
+				sizeLimit: number;
+			},
+		) {
+			ldapSearches.push({
+				attributes: options.attributes,
+				filter: options.filter,
+				paged: options.paged,
+				sizeLimit: options.sizeLimit,
+			});
+			if (employeePages.length) {
+				for (const searchEntries of employeePages) {
+					ldapEvents.push("employee-page");
+					yield { searchEntries };
+				}
+				return;
+			}
+			yield {
+				searchEntries: [
+					{
+						alias: "alice",
+						displayName: "Alice",
 						mail: "alice@example.com",
 						uid: "alice-id",
 					},
@@ -84,13 +130,115 @@ describe("LDAP directory boundary", () => {
 		ldapDelays.bindMs = 0;
 		ldapDelays.searchMs = 0;
 		ldapDelays.unbindMs = 0;
+		ldapOverride.entries = undefined;
 	});
 
-	afterEach(() => vi.useRealTimers());
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	it("uses the company employee list for discovery and LDAP for the stable identity", async () => {
+		const fetchEmployees = vi.fn(async () =>
+			Response.json([
+				{
+					name: "Alice Employee",
+					email: "alice@example.com",
+					iamId: "not-the-ldap-uid",
+				},
+				{ name: "Bob", email: "bob@example.com", iamId: "other" },
+			]),
+		);
+		vi.stubGlobal("fetch", fetchEmployees);
+		const directory = new LdapDirectoryAuthenticator({
+			...validOptionsWithoutActiveState,
+			employeeDirectory: {
+				url: "https://employees.example/users",
+				serviceKey: "test-key",
+			},
+		});
+		await expect(directory.searchEmployees("ALICE")).resolves.toEqual([
+			{
+				alias: null,
+				displayName: "Alice Employee",
+				email: "alice@example.com",
+				issuer: validOptions.issuer,
+				subject: "alice-id",
+			},
+		]);
+		expect(fetchEmployees).toHaveBeenCalledWith(
+			"https://employees.example/users",
+			expect.objectContaining({
+				redirect: "error",
+				headers: {
+					"agora-service-key": "test-key",
+					Accept: "application/json",
+				},
+			}),
+		);
+		expect(ldapSearches[0]?.filter).toBe("(mail=alice@example.com)");
+	});
+
+	it("rejects mismatched LDAP email and does not fall back on upstream failure", async () => {
+		const directory = new LdapDirectoryAuthenticator({
+			...validOptions,
+			employeeDirectory: {
+				url: "https://employees.example/users",
+				serviceKey: "test-key",
+			},
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json([
+					{ name: "Bob", email: "bob@example.com", iamId: "bob" },
+				]),
+			),
+		);
+		await expect(directory.searchEmployees("bob")).rejects.toThrow(
+			"Directory authentication failed",
+		);
+		ldapSearches.length = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("private diagnostic", { status: 503 })),
+		);
+		await expect(directory.searchEmployees("alice")).rejects.toThrow(
+			"Directory authentication failed",
+		);
+		expect(ldapSearches).toHaveLength(0);
+	});
 
 	it("escapes every RFC4515 special filter byte", () => {
 		expect(escapeLdapFilterValue("alice*)(uid=*)\\\0")).toBe(
 			"alice\\2a\\29\\28uid=\\2a\\29\\5c\\00",
+		);
+	});
+
+	it("omits missing active LDAP identities and rejects ambiguous email mappings", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json([
+					{ name: "Alice", email: "alice@example.com", iamId: "external" },
+				]),
+			),
+		);
+		const directory = new LdapDirectoryAuthenticator({
+			...validOptions,
+			employeeDirectory: {
+				url: "https://employees.example/users",
+				serviceKey: "test-key",
+			},
+		});
+		ldapOverride.entries = [];
+		await expect(directory.searchEmployees("alice")).resolves.toEqual([]);
+		ldapOverride.entries = [
+			{ uid: "first", mail: "alice@example.com" },
+			{ uid: "second", mail: "alice@example.com" },
+		];
+		await expect(directory.searchEmployees("alice")).rejects.toThrow(
+			"Directory authentication failed",
 		);
 	});
 
@@ -222,5 +370,82 @@ describe("LDAP directory boundary", () => {
 				filter: "(uid=alice-id\\2a\\29\\28uid=\\2a\\29)",
 			},
 		]);
+	});
+
+	it("searches a bounded employee projection without filtering active state", async () => {
+		const authenticator = new LdapDirectoryAuthenticator({
+			...validOptions,
+			aliasAttribute: "alias",
+		});
+		await expect(
+			authenticator.searchEmployees("ali*)(uid=*)"),
+		).resolves.toEqual([
+			{
+				alias: "alice",
+				displayName: "Alice",
+				email: "alice@example.com",
+				issuer: validOptions.issuer,
+				subject: "alice-id",
+			},
+		]);
+		expect(ldapSearches[0]).toEqual({
+			attributes: ["uid", "displayName", "mail", "alias"],
+			filter:
+				"(|(displayName=*ali\\2a\\29\\28uid=\\2a\\29*)(mail=*ali\\2a\\29\\28uid=\\2a\\29*)(alias=*ali\\2a\\29\\28uid=\\2a\\29*))",
+			paged: { pageSize: 10 },
+			sizeLimit: 21,
+		});
+	});
+
+	it("returns twenty candidates without reading the next page for broad searches", async () => {
+		const page = (offset: number, count: number) =>
+			Array.from({ length: count }, (_, index) => ({
+				uid: `employee-${offset + index}`,
+				displayName: "Common name",
+			}));
+		employeePages.push(page(0, 10), page(10, 10), page(20, 10));
+		try {
+			const candidates = await new LdapDirectoryAuthenticator(
+				validOptions,
+			).searchEmployees("Common");
+			expect(candidates).toHaveLength(20);
+			expect(candidates[19]?.subject).toBe("employee-19");
+			expect(
+				ldapEvents.filter((event) => event === "employee-page"),
+			).toHaveLength(2);
+			expect(ldapEvents.at(-1)).toBe("unbind");
+		} finally {
+			employeePages.length = 0;
+		}
+	});
+
+	it("still rejects ambiguous employee identities in a bounded page", async () => {
+		employeePages.push([
+			{ uid: "same-id", displayName: "First" },
+			{ uid: "same-id", displayName: "Second" },
+		]);
+		try {
+			await expect(
+				new LdapDirectoryAuthenticator(validOptions).searchEmployees("Common"),
+			).rejects.toThrow("Directory authentication failed");
+		} finally {
+			employeePages.length = 0;
+		}
+	});
+
+	it("searches employees without an active-state mapping but still validates query bounds", async () => {
+		const authenticator = new LdapDirectoryAuthenticator(
+			validOptionsWithoutActiveState,
+		);
+		await expect(authenticator.searchEmployees("alice")).resolves.toMatchObject(
+			[{ subject: "alice-id" }],
+		);
+		expect(ldapSearches).toHaveLength(1);
+		for (const query of ["a", "a".repeat(65)]) {
+			await expect(authenticator.searchEmployees(query)).rejects.toThrow(
+				"Directory authentication failed",
+			);
+		}
+		expect(ldapSearches).toHaveLength(1);
 	});
 });

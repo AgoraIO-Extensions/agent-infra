@@ -1,9 +1,77 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import ts from "typescript";
 import { parse } from "yaml";
 
 const read = (path) => readFile(path, "utf8");
+
+test("runtime publication, consumer grants and approval management share every Provider catalog", async () => {
+	const file = ts.createSourceFile(
+		"runtime-app.ts",
+		await read("apps/connection-api/src/runtime-app.ts"),
+		ts.ScriptTarget.Latest,
+		true,
+		ts.ScriptKind.TS,
+	);
+	let names;
+	let loops = 0;
+	let managementBindings = 0;
+	function visit(node) {
+		if (
+			ts.isVariableDeclaration(node) &&
+			ts.isIdentifier(node.name) &&
+			node.name.text === "catalogs"
+		) {
+			const initializer = node.initializer;
+			assert.ok(
+				initializer &&
+					ts.isAsExpression(initializer) &&
+					ts.isArrayLiteralExpression(initializer.expression),
+			);
+			names = initializer.expression.elements.map((element) => {
+				assert.ok(ts.isIdentifier(element));
+				return element.text;
+			});
+		}
+		if (
+			ts.isForOfStatement(node) &&
+			ts.isIdentifier(node.expression) &&
+			node.expression.text === "catalogs"
+		)
+			loops++;
+		if (ts.isShorthandPropertyAssignment(node) && node.name.text === "catalogs")
+			managementBindings++;
+		ts.forEachChild(node, visit);
+	}
+	visit(file);
+	assert.deepEqual(names, [
+		"githubConnectionCatalog",
+		"bitbucketServerConnectionCatalog",
+		"jiraServerConnectionCatalog",
+		"confluenceServerConnectionCatalog",
+		"datalegoConnectionCatalog",
+		"jenkinsCiConnectionCatalog",
+		"jenkinsReleaseConnectionCatalog",
+		"manhattanConnectionCatalog",
+		"rehoboamConnectionCatalog",
+	]);
+	assert.equal(loops, 2);
+	assert.equal(managementBindings, 1);
+});
+
+test("Turbo forwards every CI Connection integration database", async () => {
+	const workflow = parse(await read(".github/workflows/ci.yml"));
+	const turbo = JSON.parse(await read("turbo.json"));
+	const databaseVariables = Object.values(workflow.jobs)
+		.flatMap((job) => job.steps ?? [])
+		.flatMap((step) => Object.keys(step.env ?? {}))
+		.filter((name) => /^CONNECTION_.*TEST_DATABASE_URL$/.test(name));
+	assert.equal(new Set(databaseVariables).size, 6);
+	for (const name of databaseVariables) {
+		assert.ok(turbo.tasks.test.env.includes(name), `${name} must reach tests`);
+	}
+});
 
 test("production code reaches PostgreSQL only through connection-store", async () => {
 	const apiManifest = JSON.parse(

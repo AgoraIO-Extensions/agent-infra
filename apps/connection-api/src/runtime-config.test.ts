@@ -47,6 +47,29 @@ const accountBase = {
 };
 
 describe("Connection runtime configuration", () => {
+	it("configures employee discovery independently without enabling the approval gate", () => {
+		const config = connectionApiRuntimeConfig({
+			...accountBase,
+			CONNECTION_EMPLOYEE_DIRECTORY_URL: "https://employees.example/users",
+			CONNECTION_EMPLOYEE_DIRECTORY_SERVICE_KEY: "test-key",
+		});
+		expect(config.ldap.employeeDirectory).toEqual({
+			url: "https://employees.example/users",
+			serviceKey: "test-key",
+		});
+		expect(config.approvalDirectoryEnabled).toBe(false);
+		for (const extra of [
+			{ CONNECTION_EMPLOYEE_DIRECTORY_URL: "https://employees.example/users" },
+			{ CONNECTION_EMPLOYEE_DIRECTORY_SERVICE_KEY: "test-key" },
+			{
+				CONNECTION_EMPLOYEE_DIRECTORY_URL: "http://employees.example/users",
+				CONNECTION_EMPLOYEE_DIRECTORY_SERVICE_KEY: "test-key",
+			},
+		])
+			expect(() =>
+				connectionApiRuntimeConfig({ ...accountBase, ...extra }),
+			).toThrow();
+	});
 	it("requires one HTTPS account authority and derives the MCP resource", () => {
 		const config = connectionApiRuntimeConfig(accountBase);
 		expect(config.publicBaseUrl).toBe("https://connection.example/");
@@ -192,6 +215,29 @@ describe("Connection runtime configuration", () => {
 		).toThrow(
 			"LDAP_ACTIVE_ATTRIBUTE and LDAP_ACTIVE_VALUE must be configured together",
 		);
+	});
+
+	it("keeps employee directory approval disabled until active LDAP is configured", () => {
+		expect(
+			connectionApiRuntimeConfig(accountBase).approvalDirectoryEnabled,
+		).toBe(false);
+		expect(() =>
+			connectionApiRuntimeConfig({
+				...accountBase,
+				CONNECTION_APPROVAL_DIRECTORY_ENABLED: "true",
+			}),
+		).toThrow(
+			"Approval employee search requires LDAP active-state configuration",
+		);
+		const configured = connectionApiRuntimeConfig({
+			...accountBase,
+			CONNECTION_APPROVAL_DIRECTORY_ENABLED: "true",
+			LDAP_ACTIVE_ATTRIBUTE: "employeeStatus",
+			LDAP_ACTIVE_VALUE: "active",
+			LDAP_ALIAS_ATTRIBUTE: "alias",
+		});
+		expect(configured.approvalDirectoryEnabled).toBe(true);
+		expect(configured.ldap.aliasAttribute).toBe("alias");
 	});
 
 	it("keeps the production skeleton migration config database-only", () => {

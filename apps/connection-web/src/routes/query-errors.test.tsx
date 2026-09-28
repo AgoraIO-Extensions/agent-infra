@@ -20,7 +20,9 @@ const failedQuery = vi.hoisted(() =>
 vi.mock("../api", () => ({
 	connectionApi: new Proxy(
 		{
+			getConnectionAccessOptions: vi.fn(async () => ({ options: [] })),
 			getConnections: failedQuery,
+			listConnectionAccessRequests: vi.fn(async () => ({ requests: [] })),
 			getSharedConnections: failedQuery,
 			listAdministrators: failedQuery,
 			listTokens: failedQuery,
@@ -63,10 +65,8 @@ describe("Connection 查询失败状态", () => {
 			screen.getByRole("searchbox", { name: "搜索连接器" }),
 		);
 		fireEvent.click(screen.getByRole("button", { name: "Bitbucket 未连接" }));
-		fireEvent.click(screen.getByRole("button", { name: "连接" }));
-		expect(
-			screen.getByRole("heading", { name: "连接公司 Bitbucket" }),
-		).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
+		expect(screen.getByText("当前没有可申请的连接能力。")).toBeTruthy();
 	});
 
 	it.each([

@@ -1,7 +1,9 @@
 import {
+	ConnectionAccessApprovalService,
 	ConnectionApplicationService,
 	ConnectionOAuthService,
 	ConnectionRecoveryService,
+	observeProviderFetch,
 	ProviderExecutorRouter,
 	portablePatConsumerId,
 	rehoboamAiConsumer,
@@ -9,6 +11,9 @@ import {
 import { LdapDirectoryAuthenticator } from "@agent-infra/connection-identity";
 import {
 	PostgresBrowserCommandIdempotency,
+	PostgresConnectionAccessRequestRepository,
+	PostgresConnectionApprovalRepository,
+	PostgresConnectionNotificationDispatcher,
 	PostgresConnectionOAuthRepository,
 	PostgresConnectionPatBindingRepository,
 	PostgresConnectionRepository,
@@ -46,6 +51,7 @@ import {
 import {
 	RehoboamAdapter,
 	rehoboamConnectionCatalog,
+	rehoboamLegacyProviderReleaseIds,
 } from "@agent-infra/openconnector-adapter/rehoboam";
 import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
@@ -77,7 +83,21 @@ export async function createConnectionRuntime(
 		config.databaseUrl,
 		config.credentialKey,
 	);
-	for (const catalog of [
+	const approvalRepository = new PostgresConnectionAccessRequestRepository(
+		config.databaseUrl,
+		(sql, connectionId) =>
+			repository.restoreGrantsAfterRenewal(sql, connectionId),
+	);
+	const notificationDispatcher = new PostgresConnectionNotificationDispatcher(
+		config.databaseUrl,
+	);
+	const approvalService = new ConnectionAccessApprovalService(
+		approvalRepository,
+	);
+	const approvalCatalog = new PostgresConnectionApprovalRepository(
+		config.databaseUrl,
+	);
+	const catalogs = [
 		githubConnectionCatalog,
 		bitbucketServerConnectionCatalog,
 		jiraServerConnectionCatalog,
@@ -87,7 +107,8 @@ export async function createConnectionRuntime(
 		jenkinsReleaseConnectionCatalog,
 		manhattanConnectionCatalog,
 		rehoboamConnectionCatalog,
-	]) {
+	] as const;
+	for (const catalog of catalogs) {
 		await repository.publishProviderCatalog(catalog, {
 			mode: "USER_ACTION_REQUIRED",
 			reason: `${catalog.provider} Provider authorization contract changed`,
@@ -98,17 +119,7 @@ export async function createConnectionRuntime(
 		{ id: portablePatConsumerId, name: "Portable Connection PAT" },
 		rehoboamAiConsumer,
 	]) {
-		for (const catalog of [
-			githubConnectionCatalog,
-			bitbucketServerConnectionCatalog,
-			jiraServerConnectionCatalog,
-			confluenceServerConnectionCatalog,
-			datalegoConnectionCatalog,
-			jenkinsCiConnectionCatalog,
-			jenkinsReleaseConnectionCatalog,
-			manhattanConnectionCatalog,
-			rehoboamConnectionCatalog,
-		]) {
+		for (const catalog of catalogs) {
 			await repository.publishConsumerDeclaration({
 				actionVersionIds: catalog.actions.map((action) => action.id),
 				consumer,
@@ -136,22 +147,27 @@ export async function createConnectionRuntime(
 			)) as unknown as typeof fetch;
 	};
 	const githubPrimaryFetch = config.githubEgressProxyUrl
-		? proxyFetch(config.githubEgressProxyUrl)
-		: undefined;
+		? observeProviderFetch("github", proxyFetch(config.githubEgressProxyUrl))
+		: observeProviderFetch("github", fetch);
 	const githubFetch =
-		githubPrimaryFetch && config.githubReadFallbackProxyUrl
+		config.githubEgressProxyUrl && config.githubReadFallbackProxyUrl
 			? createReadFallbackFetch(
 					githubPrimaryFetch,
-					proxyFetch(config.githubReadFallbackProxyUrl),
+					observeProviderFetch(
+						"github-fallback",
+						proxyFetch(config.githubReadFallbackProxyUrl),
+					),
 				)
 			: githubPrimaryFetch;
 	const github = new OpenConnectorGitHubAdapter(githubFetch);
 	const bitbucketFetch = createGuardedFetch({
+		fetch: observeProviderFetch("bitbucket", fetch),
 		allowPrivateNetwork: false,
 		maxRedirects: 0,
 	});
 	const bitbucket = new BitbucketServerAdapter(bitbucketFetch);
 	const jiraFetch = createGuardedFetch({
+		fetch: observeProviderFetch("atlassian", fetch),
 		allowPrivateNetwork: false,
 		maxRedirects: 0,
 	});
@@ -169,25 +185,38 @@ export async function createConnectionRuntime(
 			? createFixedOriginFetch(
 					jenkinsReleaseProfile.apiOrigin,
 					"http://10.80.1.129:8080",
+					observeProviderFetch("jenkins", fetch),
 				)
 			: undefined;
 	const jenkinsFetch = createGuardedFetch({
 		allowPrivateNetwork: false,
-		...(jenkinsRouteFetch ? { fetch: jenkinsRouteFetch } : {}),
+		fetch: jenkinsRouteFetch ?? observeProviderFetch("jenkins", fetch),
 		maxRedirects: 0,
 	});
 	const jenkins = new JenkinsAdapter(jenkinsReleaseProfile, jenkinsFetch);
 	const jenkinsCi = new JenkinsAdapter(
 		jenkinsCiProfile,
-		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: observeProviderFetch("jenkins-ci", fetch),
+		}),
 		new JiraServerOAuthTokenProvider(jiraFetch, config.jenkinsCiToken),
 	);
 	const rehoboam = new RehoboamAdapter(
-		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: observeProviderFetch("rehoboam", fetch),
+		}),
 		config.rehoboamApiKey,
 	);
 	const manhattan = new ManhattanAdapter(
-		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: observeProviderFetch("manhattan", fetch),
+		}),
 		config.manhattanApiKey,
 	);
 	const manhattanOAuth = new ManhattanOAuthAdapter(
@@ -197,7 +226,11 @@ export async function createConnectionRuntime(
 		config.manhattanOAuth.clientSecret,
 	);
 	const datalego = new DataLegoAdapter(
-		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: observeProviderFetch("datalego", fetch),
+		}),
 	);
 	const executors = new ProviderExecutorRouter({
 		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
@@ -209,6 +242,9 @@ export async function createConnectionRuntime(
 		[jenkinsReleaseConnectionCatalog.providerReleaseId]: jenkins,
 		[manhattanConnectionCatalog.providerReleaseId]: manhattan,
 		[rehoboamConnectionCatalog.providerReleaseId]: rehoboam,
+		...Object.fromEntries(
+			rehoboamLegacyProviderReleaseIds.map((id) => [id, rehoboam]),
+		),
 	});
 	const service = new ConnectionApplicationService(
 		repository,
@@ -241,16 +277,11 @@ export async function createConnectionRuntime(
 			},
 			issuer: config.publicBaseUrl,
 			management: {
-				catalogs: [
-					githubConnectionCatalog,
-					bitbucketServerConnectionCatalog,
-					jiraServerConnectionCatalog,
-					confluenceServerConnectionCatalog,
-					datalegoConnectionCatalog,
-					jenkinsCiConnectionCatalog,
-					jenkinsReleaseConnectionCatalog,
-					rehoboamConnectionCatalog,
-				],
+				approvalCatalog,
+				approvalService,
+				notificationDispatcher,
+				approvalDirectoryEnabled: config.approvalDirectoryEnabled,
+				catalogs,
 				githubRedirectUri: config.github.redirectUri,
 				providerRedirectUris: {
 					manhattan: config.manhattanOAuth.redirectUri,
@@ -286,6 +317,8 @@ export async function createConnectionRuntime(
 	});
 	return {
 		app,
+		approvalMaintenance: approvalRepository,
+		notificationDispatcher,
 		recovery: new ConnectionRecoveryService(repository, executors),
 	};
 }

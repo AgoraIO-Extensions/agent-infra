@@ -8,7 +8,11 @@ import {
 import {
 	type ActionDefinition,
 	type ActionName,
+	type AuditCall,
+	type AuditFilter,
+	type AuditRawDetail,
 	authorizationSnapshotMatches,
+	type CallDiagnostics,
 	type CallStatus,
 	ConnectionError,
 	type ConnectionOverview,
@@ -23,10 +27,16 @@ import {
 	normalizeSharedScopeDisplayName,
 	type OAuthTransaction,
 	type ProviderUpgradeCampaignSummary,
+	projectCallDiagnostics,
 	type ReconciliationJob,
 	type StoredCall,
 } from "@agent-infra/connection-core";
 import postgres from "postgres";
+import {
+	consumeConnectPermitInTransaction,
+	lookupApprovedConnectPermit,
+} from "./access-request-repository";
+import { migrateCompatibleApproval } from "./approval-upgrade";
 
 const githubProvider = "github";
 
@@ -133,7 +143,7 @@ function selectAuthorizationActions(
 			);
 	if (actions.some((action) => !action)) {
 		invalidAuthorizationPreview(
-			"Authorization action selection exceeds the Consumer declaration",
+			"Authorization action selection exceeds declared or approved capabilities",
 		);
 	}
 	const selected = actions as ActionDefinition[];
@@ -301,6 +311,28 @@ class CredentialProtector {
 			);
 		}
 	}
+}
+
+export function isEquivalentApprovedCredential(input: {
+	connectionId?: string;
+	currentScopes?: unknown;
+	expectedConnectionId?: string;
+	expectedStatus: "ACTIVE" | "DISCONNECTED";
+	grantedScopes: readonly string[];
+	providerReleaseId: string;
+	storedProviderReleaseId?: string;
+	storedStatus?: string;
+}) {
+	return Boolean(
+		input.expectedConnectionId &&
+			input.connectionId === input.expectedConnectionId &&
+			input.storedStatus === input.expectedStatus &&
+			input.storedProviderReleaseId === input.providerReleaseId &&
+			Array.isArray(input.currentScopes) &&
+			input.currentScopes.every((scope) => typeof scope === "string") &&
+			JSON.stringify([...input.currentScopes].sort()) ===
+				JSON.stringify([...input.grantedScopes].sort()),
+	);
 }
 
 export class PostgresConnectionRepository implements ConnectionRepository {
@@ -731,6 +763,92 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		if (await this.isConnectionAdministrator(principalId)) return true;
 		await this.recordConnectionAdministratorDenial(principalId);
 		return false;
+	}
+
+	async listAuditCalls(principalId: string, filter: AuditFilter) {
+		return this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, principalId);
+			const query = filter.query ?? "";
+			const rows = await sql<AuditCall[]>`
+				SELECT call.id AS "callId", to_char(call.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "createdAt",
+					call.principal_id AS "principalId", principal.display_name AS person, principal.email,
+					call.consumer_id AS "consumerId", consumer.display_name AS consumer, call.instance_id AS "instanceId", call.actor_key AS "actorKey",
+					call.connection_id AS "connectionId", account.provider_id AS "providerId", action.name AS action,
+					call.action_version_id AS "actionVersionId", call.status
+				FROM connection_calls call
+				JOIN connection_principals principal ON principal.id = call.principal_id
+				JOIN connection_consumers consumer ON consumer.id = call.consumer_id
+				JOIN connection_accounts account ON account.id = call.connection_id
+				JOIN connection_action_versions action ON action.id = call.action_version_id
+				WHERE call.created_at >= ${filter.from}::text::timestamptz AND call.created_at < ${filter.to}::text::timestamptz
+					AND (${filter.status ?? null}::text IS NULL OR call.status = ${filter.status ?? ""})
+					AND (${query} = '' OR strpos(lower(principal.display_name), lower(${query})) > 0
+						OR strpos(lower(coalesce(principal.email, '')), lower(${query})) > 0
+						OR strpos(lower(action.name), lower(${query})) > 0
+						OR strpos(lower(call.id), lower(${query})) > 0)
+					AND (${filter.after?.createdAt ?? null}::text IS NULL OR
+						(call.created_at, call.id) < (${filter.after?.createdAt ?? null}::text::timestamptz, ${filter.after?.callId ?? ""}))
+				ORDER BY call.created_at DESC, call.id DESC LIMIT 51
+			`;
+			await sql`INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (${principalId}, 'AUDIT_CALLS_QUERIED', ${sql.json({ filterHash: filter.binding, from: filter.from, to: filter.to, returned: Math.min(rows.length, 50) })})`;
+			return rows;
+		});
+	}
+
+	async getAuditCall(
+		principalId: string,
+		callId: string,
+	): Promise<AuditRawDetail> {
+		return this.sql
+			.begin(async (sql) => {
+				await this.requireConnectionAdministrator(sql, principalId);
+				const [row] = await sql<Omit<AuditRawDetail, "timeline">[]>`
+				SELECT call.id AS "callId", to_char(call.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "createdAt",
+					call.principal_id AS "principalId", principal.display_name AS person, principal.email,
+					call.consumer_id AS "consumerId", consumer.display_name AS consumer, call.instance_id AS "instanceId", call.actor_key AS "actorKey",
+					call.connection_id AS "connectionId", account.provider_id AS "providerId", action.name AS action,
+					call.action_version_id AS "actionVersionId", call.status, call.request_input AS "requestInput", call.result
+					, action.input_schema AS "inputSchema"
+				FROM connection_calls call
+				JOIN connection_principals principal ON principal.id = call.principal_id
+				JOIN connection_consumers consumer ON consumer.id = call.consumer_id
+				JOIN connection_accounts account ON account.id = call.connection_id
+				JOIN connection_action_versions action ON action.id = call.action_version_id
+				WHERE call.id = ${callId}
+			`;
+				const timeline = row
+					? await sql<{ event: string; occurredAt: string }[]>`
+				SELECT event, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "occurredAt"
+				FROM connection_audit_records WHERE call_id = ${callId}
+					AND event IN ('CALL_AUTHORIZED', 'CALL_DENIED_LOCAL', 'CALL_SUCCEEDED', 'CALL_FAILED', 'CALL_UNCERTAIN')
+				ORDER BY created_at, id LIMIT 100
+			`
+					: [];
+				await sql`INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (${principalId}, 'AUDIT_CALL_DETAIL_QUERIED', ${sql.json({ callIdHash: createHash("sha256").update(callId).digest("hex"), found: Boolean(row) })})`;
+				const diagnosticRows = row
+					? await sql<{ diagnostic: unknown }[]>`
+					SELECT diagnostic FROM connection_call_diagnostics
+					WHERE call_id = ${callId} ORDER BY created_at DESC, execution_id DESC LIMIT 21
+				`
+					: [];
+				return row
+					? {
+							...row,
+							timeline,
+							diagnosticRecords: diagnosticRows
+								.slice(0, 20)
+								.map((item) => item.diagnostic),
+							diagnosticsTruncated: diagnosticRows.length > 20,
+						}
+					: undefined;
+			})
+			.then((row) => {
+				if (!row)
+					throw new ConnectionError("RESOURCE_NOT_FOUND", "Resource not found");
+				return row;
+			});
 	}
 
 	private async recordConnectionAdministratorDenial(principalId: string) {
@@ -1421,9 +1539,17 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		});
 	}
 
+	async restoreGrantsAfterRenewal(
+		sql: postgres.TransactionSql,
+		connectionId: string,
+	) {
+		await this.restoreGrantsAfterReconnect(sql, connectionId, true);
+	}
+
 	private async restoreGrantsAfterReconnect(
 		sql: postgres.TransactionSql,
 		connectionId: string,
+		renewal = false,
 	) {
 		const currentGrants = await sql<
 			{
@@ -1468,7 +1594,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				ON active_grant.id = root.current_grant_id
 				AND active_grant.root_id = root.id
 				AND active_grant.actor_key = root.actor_key
-				AND active_grant.status = 'ACTIVE'
+				AND (active_grant.status = 'ACTIVE' OR (${renewal} AND active_grant.status = 'PAUSED_CONNECTION'))
 			WHERE active_grant.connection_id = ${connectionId}
 			ORDER BY active_grant.principal_id, root.id
 			FOR UPDATE OF root, active_grant
@@ -1481,10 +1607,17 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					consumerId: grant.consumer_id,
 					principalId: grant.principal_id,
 				});
+				if (renewal)
+					target = selectAuthorizationActions(target, grant.action_version_ids);
 			} catch (error) {
-				if (!(error instanceof ConnectionError) || error.code !== "FORBIDDEN") {
+				if (
+					!(error instanceof ConnectionError) ||
+					(error.code !== "FORBIDDEN" &&
+						!(renewal && error.code === "INVALID_REQUEST"))
+				) {
 					throw error;
 				}
+				target = undefined;
 			}
 			const decision = decideReconnectAuthorization({
 				current: {
@@ -1546,7 +1679,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				}
 				await sql`
 					UPDATE connection_grants SET status = 'REPLACED'
-					WHERE id = ${grant.id} AND status = 'ACTIVE'
+					WHERE id = ${grant.id} AND (status = 'ACTIVE' OR (${renewal} AND status = 'PAUSED_CONNECTION'))
 				`;
 				const updatedRoots = await sql`
 					UPDATE connection_authorization_roots
@@ -1562,7 +1695,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				await sql`
 					INSERT INTO connection_audit_records (principal_id, event, detail)
 					VALUES (
-						${grant.principal_id}, 'GRANT_RESTORED_AFTER_RECONNECT',
+						${grant.principal_id}, ${renewal ? "GRANT_RESTORED_AFTER_RENEWAL" : "GRANT_RESTORED_AFTER_RECONNECT"},
 						${sql.json({
 							connectionId,
 							consumerId: grant.consumer_id,
@@ -1748,10 +1881,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				owner_principal_id: string | null;
 				owner_type: "PERSONAL" | "SHARED";
 				provider_id: string;
+				provider_release_id: string;
+				external_account: string;
 				shared_scope_id: string | null;
 			}[]
 		>`
-			SELECT owner_principal_id, owner_type, provider_id, shared_scope_id
+			SELECT owner_principal_id, owner_type, provider_id,
+				provider_release_id, external_account, shared_scope_id
 			FROM connection_accounts
 			WHERE id = ${input.connectionId} AND status = 'ACTIVE'
 			FOR SHARE
@@ -1759,6 +1895,35 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		if (!account) forbidden();
 		if (account.owner_type === "PERSONAL") {
 			if (account.owner_principal_id !== input.principalId) forbidden();
+			const [allowed] = await sql<{ valid: boolean }[]>`
+				SELECT EXISTS (
+					SELECT 1 FROM connection_access_enforcement enforcement
+					WHERE enforcement.id = 'personal' AND enforcement.state = 'PRE_LAUNCH'
+						AND EXISTS (
+							SELECT 1 FROM connection_pre_launch_accounts inventory
+							WHERE inventory.connection_id = ${input.connectionId}
+						)
+						AND NOT EXISTS (
+							SELECT 1 FROM connection_effective_access_authorizations access
+							WHERE access.connection_id = ${input.connectionId}
+						)
+				) OR EXISTS (
+					SELECT 1 FROM connection_effective_access_authorizations access
+					WHERE access.connection_id = ${input.connectionId}
+						AND access.principal_id = ${input.principalId}
+						AND access.provider_release_id = ${account.provider_release_id}
+						AND access.external_account_fingerprint = ${canonicalHash({
+							externalAccount: account.external_account,
+							providerReleaseId: account.provider_release_id,
+						})}
+						AND (access.valid_until IS NULL OR access.valid_until > now())
+						AND (access.state = 'ACTIVE' OR (
+							access.state = 'REAPPROVAL_REQUIRED'
+							AND access.reapproval_deadline_at > now()
+						))
+				) AS valid
+			`;
+			if (!allowed?.valid) forbidden();
 			return {
 				ownerType: "PERSONAL",
 				providerId: account.provider_id,
@@ -1879,6 +2044,52 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				WHERE declared.declaration_id = ${subject.declaration_id}
 					AND action.provider_release_id = ${subject.provider_release_id}
 					AND action.status = 'PUBLISHED'
+					AND (
+						${eligibility.ownerType === "SHARED"}
+						OR EXISTS (
+							SELECT 1 FROM connection_effective_access_authorizations access
+							JOIN connection_capability_profile_actions approved
+								ON approved.capability_profile_id = access.capability_profile_id
+								AND approved.action_version_id = action.id
+							WHERE access.connection_id = ${input.connectionId}
+								AND access.principal_id = ${input.principalId}
+								AND access.provider_release_id = ${subject.provider_release_id}
+								AND access.external_account_fingerprint = ${canonicalHash({
+									externalAccount: subject.external_account,
+									providerReleaseId: subject.provider_release_id,
+								})}
+								AND (access.valid_until IS NULL OR access.valid_until > now())
+								AND (access.state = 'ACTIVE' OR (
+									access.state = 'REAPPROVAL_REQUIRED'
+									AND access.reapproval_deadline_at > now()
+								))
+						)
+						OR (
+							EXISTS (
+								SELECT 1 FROM connection_access_enforcement enforcement
+								JOIN connection_pre_launch_accounts inventory
+									ON inventory.connection_id = ${input.connectionId}
+								WHERE enforcement.id = 'personal' AND enforcement.state = 'PRE_LAUNCH'
+							)
+							AND NOT EXISTS (
+								SELECT 1 FROM connection_effective_access_authorizations access
+								WHERE access.connection_id = ${input.connectionId}
+							)
+							AND EXISTS (
+								SELECT 1 FROM connection_grants grant_version
+								JOIN connection_authorization_roots root
+									ON root.id = grant_version.root_id
+									AND root.current_grant_id = grant_version.id
+									AND root.status = 'ACTIVE'
+								JOIN connection_grant_actions member
+									ON member.grant_id = grant_version.id
+								WHERE grant_version.connection_id = ${input.connectionId}
+									AND grant_version.status = 'ACTIVE'
+									AND root.principal_id = ${input.principalId}
+									AND member.action_version_id = action.id
+							)
+						)
+					)
 				ORDER BY action.id
 				FOR SHARE OF declared, action
 			`;
@@ -2621,6 +2832,46 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					AND account.execution_fence = active_grant.connection_execution_fence
 					AND account.status = 'ACTIVE'
 					AND (
+						account.owner_type = 'SHARED'
+						OR (
+							EXISTS (
+								SELECT 1 FROM connection_access_enforcement enforcement
+								WHERE enforcement.id = 'personal'
+									AND enforcement.state = 'PRE_LAUNCH'
+									AND EXISTS (
+										SELECT 1 FROM connection_pre_launch_accounts inventory
+										WHERE inventory.connection_id = account.id
+									)
+									AND NOT EXISTS (
+										SELECT 1 FROM connection_effective_access_authorizations access
+										WHERE access.connection_id = account.id
+									)
+							)
+							OR EXISTS (
+								SELECT 1 FROM connection_effective_access_authorizations access
+								WHERE access.connection_id = account.id
+									AND access.principal_id = active_grant.principal_id
+									AND access.provider_release_id = account.provider_release_id
+									AND access.external_account_fingerprint =
+										active_grant.external_account_fingerprint
+									AND (access.valid_until IS NULL OR access.valid_until > now())
+									AND (
+										access.state = 'ACTIVE'
+										OR (access.state = 'REAPPROVAL_REQUIRED'
+											AND access.reapproval_deadline_at > now())
+									)
+									AND (${action ?? null}::text IS NULL OR EXISTS (
+										SELECT 1 FROM connection_capability_profile_actions profile_action
+										JOIN connection_action_versions approved_action
+											ON approved_action.id = profile_action.action_version_id
+										WHERE profile_action.capability_profile_id = access.capability_profile_id
+											AND approved_action.name = ${action ?? ""}
+											AND approved_action.provider_release_id = account.provider_release_id
+									))
+							)
+						)
+					)
+					AND (
 						(
 							account.owner_type = 'PERSONAL'
 							AND account.owner_principal_id = active_grant.principal_id
@@ -3112,16 +3363,81 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			await sql`
 				INSERT INTO connection_oauth_transactions (
 					state_hash, principal_id, verifier_ciphertext, verifier_nonce,
-					verifier_tag, redirect_uri, provider_id, shared_scope_id, expires_at
+					verifier_tag, redirect_uri, provider_id, shared_scope_id, access_request_id,
+					reconnect_connection_id, expires_at
 				)
 				VALUES (
 					${stateHash}, ${input.principalId}, ${protectedVerifier.ciphertext},
 					${protectedVerifier.nonce}, ${protectedVerifier.tag},
 					${input.redirectUri}, ${input.providerId}, ${input.sharedScopeId ?? null},
+					${input.accessRequestId ?? null}, ${input.reconnectConnectionId ?? null},
 					now() + interval '10 minutes'
 				)
 			`;
 		});
+	}
+
+	async validatePersonalConnectRequest(input: {
+		principalId: string;
+		providerId: string;
+		requestId?: string;
+	}) {
+		if (!input.requestId) {
+			forbidden();
+		}
+		const permit = await lookupApprovedConnectPermit(
+			this.sql,
+			input.principalId,
+			input.requestId,
+		);
+		if (permit.providerId !== input.providerId) forbidden();
+	}
+
+	async validatePersonalReconnect(input: {
+		connectionId: string;
+		principalId: string;
+	}) {
+		const [target] = await this.sql<
+			{
+				external_account: string;
+				external_account_fingerprint: string;
+				provider_id: string;
+				provider_release_id: string;
+			}[]
+		>`
+			SELECT account.provider_id, account.provider_release_id,
+				account.external_account, access.external_account_fingerprint
+			FROM connection_accounts account
+			JOIN connection_credential_versions prior
+				ON prior.id = account.last_credential_version_id
+				AND prior.connection_id = account.id
+			JOIN connection_effective_access_authorizations access
+				ON access.connection_id = account.id
+				AND access.principal_id = account.owner_principal_id
+				AND access.provider_release_id = account.provider_release_id
+			JOIN connection_capability_profiles profile
+				ON profile.id = access.capability_profile_id
+			WHERE account.id = ${input.connectionId}
+				AND account.owner_type = 'PERSONAL'
+				AND account.owner_principal_id = ${input.principalId}
+				AND account.status = 'DISCONNECTED'
+				AND prior.status = 'REVOKED'
+				AND access.state = 'DISCONNECTED'
+				AND (access.valid_until IS NULL OR access.valid_until > now())
+				AND profile.required_scopes @> prior.scope_json
+		`;
+		if (
+			!target ||
+			target.external_account_fingerprint !==
+				canonicalHash({
+					externalAccount: target.external_account,
+					providerReleaseId: target.provider_release_id,
+				}) ||
+			this.publishedProviderReleaseIds.get(target.provider_id) !==
+				target.provider_release_id
+		)
+			forbidden();
+		return { providerId: target.provider_id };
 	}
 
 	async consumeOAuthTransaction(state: string) {
@@ -3131,6 +3447,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				{
 					principal_id: string;
 					provider_id: string;
+					access_request_id: string | null;
+					reconnect_connection_id: string | null;
 					redirect_uri: string;
 					shared_scope_id: string | null;
 					verifier_ciphertext: string;
@@ -3143,7 +3461,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				WHERE state_hash = ${stateHash}
 					AND consumed_at IS NULL
 					AND expires_at > now()
-				RETURNING principal_id, provider_id, redirect_uri, shared_scope_id, verifier_ciphertext,
+				RETURNING principal_id, provider_id, access_request_id, reconnect_connection_id,
+					redirect_uri, shared_scope_id, verifier_ciphertext,
 					verifier_nonce, verifier_tag
 			`;
 			if (!row) {
@@ -3153,6 +3472,12 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				);
 			}
 			return {
+				...(row.access_request_id
+					? { accessRequestId: row.access_request_id }
+					: {}),
+				...(row.reconnect_connection_id
+					? { reconnectConnectionId: row.reconnect_connection_id }
+					: {}),
 				codeVerifier: this.protector.decrypt(
 					{
 						ciphertext: row.verifier_ciphertext,
@@ -3170,6 +3495,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async storeGithubOAuthCredential(input: {
+		accessRequestId?: string;
+		expectedConnectionId?: string;
+		expectedCredentialVersionId?: string;
 		accessToken: string;
 		displayName: string;
 		externalAccount: string;
@@ -3195,6 +3523,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async storeProviderCredential(input: {
+		accessRequestId?: string;
 		accessToken: string;
 		displayName: string;
 		externalAccount: string;
@@ -3218,6 +3547,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			forbidden();
 		}
 		return this.sql.begin(async (sql) => {
+			const [enforcement] = await sql<{ state: string }[]>`
+				SELECT state FROM connection_access_enforcement
+				WHERE id = 'personal' FOR SHARE
+			`;
+			if (!enforcement) forbidden();
 			const [principal] = await sql<{ id: string }[]>`
 					SELECT id FROM connection_principals
 					WHERE id = ${input.principalId} AND status = 'ACTIVE'
@@ -3255,8 +3589,17 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				ORDER BY root.id
 				FOR UPDATE OF active_grant
 			`;
-			const [existing] = await sql<{ id: string }[]>`
-					SELECT account.id FROM connection_accounts account
+			const [existing] = await sql<
+				{
+					id: string;
+					last_credential_version_id: string | null;
+					provider_release_id: string;
+					status: string;
+				}[]
+			>`
+					SELECT account.id, account.last_credential_version_id,
+						account.provider_release_id, account.status
+					FROM connection_accounts account
 					WHERE owner_type = 'PERSONAL'
 						AND account.owner_principal_id = ${input.principalId}
 						AND account.provider_id = ${input.providerId}
@@ -3264,10 +3607,18 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					FOR UPDATE OF account
 				`;
 			const [activeCredential] = existing
-				? await sql<{ id: string }[]>`
-					SELECT id FROM connection_credential_versions
+				? await sql<{ id: string; scope_json: unknown }[]>`
+					SELECT id, scope_json FROM connection_credential_versions
 					WHERE connection_id = ${existing.id} AND status = 'ACTIVE'
 					FOR UPDATE
+				`
+				: [];
+			const [lastCredential] = existing?.last_credential_version_id
+				? await sql<{ id: string; scope_json: unknown }[]>`
+					SELECT id, scope_json FROM connection_credential_versions
+					WHERE id = ${existing.last_credential_version_id}
+						AND connection_id = ${existing.id}
+					FOR SHARE
 				`
 				: [];
 			if (
@@ -3281,6 +3632,87 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				);
 			}
 			const connectionId = existing?.id ?? `connection-${randomUUID()}`;
+			let reconnectAuthorizationId: string | undefined;
+			if (!input.accessRequestId) {
+				if (
+					existing &&
+					input.expectedCredentialVersionId &&
+					existing.provider_release_id !== input.providerReleaseId &&
+					isEquivalentApprovedCredential({
+						connectionId: existing.id,
+						expectedConnectionId: input.expectedConnectionId,
+						expectedStatus: "ACTIVE",
+						storedStatus: existing.status,
+						currentScopes: activeCredential?.scope_json,
+						grantedScopes,
+						providerReleaseId: existing.provider_release_id,
+						storedProviderReleaseId: existing.provider_release_id,
+					})
+				) {
+					await migrateCompatibleApproval(sql, {
+						connectionId: existing.id,
+						principalId: input.principalId,
+						externalAccount: input.externalAccount,
+						fromReleaseId: existing.provider_release_id,
+						toReleaseId: input.providerReleaseId,
+					});
+					existing.provider_release_id = input.providerReleaseId;
+				}
+				const reconnecting =
+					existing?.status === "DISCONNECTED" &&
+					!activeCredential &&
+					Boolean(lastCredential);
+				if (
+					!isEquivalentApprovedCredential({
+						connectionId: existing?.id,
+						currentScopes: reconnecting
+							? lastCredential?.scope_json
+							: activeCredential?.scope_json,
+						expectedConnectionId: input.expectedConnectionId,
+						expectedStatus: reconnecting ? "DISCONNECTED" : "ACTIVE",
+						grantedScopes,
+						providerReleaseId: input.providerReleaseId,
+						storedProviderReleaseId: existing?.provider_release_id,
+						storedStatus: existing?.status,
+					})
+				)
+					forbidden();
+				const [authorized] = await sql<{ id: string }[]>`
+					SELECT access.id
+					FROM connection_effective_access_authorizations access
+					JOIN connection_capability_profiles profile
+						ON profile.id = access.capability_profile_id
+					WHERE access.connection_id = ${connectionId}
+						AND access.principal_id = ${input.principalId}
+						AND access.provider_release_id = ${input.providerReleaseId}
+						AND access.external_account_fingerprint = ${canonicalHash({
+							externalAccount: input.externalAccount,
+							providerReleaseId: input.providerReleaseId,
+						})}
+						AND (access.valid_until IS NULL OR access.valid_until > now())
+						AND (
+							(${reconnecting} AND access.state = 'DISCONNECTED')
+							OR (NOT ${reconnecting} AND (
+								access.state = 'ACTIVE' OR (
+									access.state = 'REAPPROVAL_REQUIRED'
+									AND access.reapproval_deadline_at > now()
+								)
+							))
+						)
+						AND profile.required_scopes @> ${sql.json(grantedScopes)}::jsonb
+					FOR UPDATE OF access
+				`;
+				if (!authorized) forbidden();
+				if (reconnecting) reconnectAuthorizationId = authorized.id;
+			}
+			if (existing && input.accessRequestId) {
+				await sql`
+					UPDATE connection_access_authorizations
+					SET state = 'REVOKED', revision = revision + 1, updated_at = now()
+					WHERE connection_id = ${connectionId}
+						AND state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'SUSPENDED', 'DISCONNECTED')
+				`;
+			}
 			if (existing) {
 				await sql`
 					UPDATE connection_accounts
@@ -3337,6 +3769,27 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					${input.expiresAt ?? null}, ${input.refreshExpiresAt ?? null}
 				)
 			`;
+			await sql`
+				UPDATE connection_accounts
+				SET last_credential_version_id = ${credentialId}
+				WHERE id = ${connectionId}
+			`;
+			if (reconnectAuthorizationId) {
+				await sql`
+					UPDATE connection_access_authorizations
+					SET state = 'ACTIVE', revision = revision + 1, updated_at = now()
+					WHERE id = ${reconnectAuthorizationId} AND state = 'DISCONNECTED'
+				`;
+			}
+			if (input.accessRequestId) {
+				await consumeConnectPermitInTransaction(sql, {
+					accessAuthorizationId: `access-authorization-${randomUUID()}`,
+					connectionId,
+					grantedScopes,
+					principalId: input.principalId,
+					requestId: input.accessRequestId,
+				});
+			}
 			await this.restoreGrantsAfterReconnect(sql, connectionId);
 			await sql`
 				INSERT INTO connection_audit_records (principal_id, event, detail)
@@ -3350,6 +3803,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async getProviderCredentialForUpgrade(input: {
+		allowCurrentRelease?: boolean;
 		connectionId: string;
 		principalId: string;
 	}) {
@@ -3378,8 +3832,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		`;
 		if (!row) forbidden();
 		if (
+			!input.allowCurrentRelease &&
 			this.publishedProviderReleaseIds.get(row.provider_id) ===
-			row.provider_release_id
+				row.provider_release_id
 		) {
 			throw new ConnectionError(
 				"INVALID_REQUEST",
@@ -3430,6 +3885,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				`,
 			this.sql<
 				{
+					access_id: string | null;
+					access_capability_profile_id: string | null;
+					access_provider_release_id: string | null;
+					renewal_opens_at: Date | null;
+					access_state: string | null;
+					access_valid_until: Date | null;
+					access_validity_kind: "FINITE" | "PERMANENT" | null;
 					action_version_ids: unknown;
 					display_name: string;
 					credential_scope_known: boolean;
@@ -3445,6 +3907,14 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					SELECT account.id, account.external_account, account.display_name,
 						account.owner_type, account.provider_id, account.provider_release_id,
 						account.status, release.status AS release_status,
+						access.id AS access_id,
+						access.approved_capability_profile_id AS access_capability_profile_id,
+						access.approved_provider_release_id AS access_provider_release_id,
+						access.state AS access_state, access.validity_kind AS access_validity_kind,
+						access.valid_until AS access_valid_until,
+						CASE WHEN access.validity_kind = 'FINITE' THEN
+							access.valid_until - renewal_policy.renewal_lead_seconds * interval '1 second'
+						ELSE NULL END AS renewal_opens_at,
 						credential.scope_json IS NOT NULL AS credential_scope_known,
 						COALESCE(
 							jsonb_agg(action.id ORDER BY action.id)
@@ -3460,6 +3930,19 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					LEFT JOIN connection_credential_versions credential
 						ON credential.connection_id = account.id
 						AND credential.status = 'ACTIVE'
+					LEFT JOIN LATERAL (
+						SELECT id, capability_profile_id, provider_release_id,
+							approved_capability_profile_id, approved_provider_release_id,
+							state, validity_kind, valid_until
+						FROM connection_effective_access_authorizations
+						WHERE connection_id = account.id
+						ORDER BY (state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'SUSPENDED', 'DISCONNECTED')) DESC,
+							created_at DESC, updated_at DESC, id DESC LIMIT 1
+					) access ON account.owner_type = 'PERSONAL'
+					LEFT JOIN connection_access_policy_versions renewal_policy
+						ON renewal_policy.capability_profile_id = access.approved_capability_profile_id
+						AND renewal_policy.provider_release_id = access.approved_provider_release_id
+						AND renewal_policy.status = 'PUBLISHED'
 					LEFT JOIN connection_shared_scopes shared_scope
 						ON shared_scope.id = account.shared_scope_id
 					LEFT JOIN connection_shared_scope_principals membership
@@ -3477,7 +3960,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					GROUP BY account.id, account.external_account, account.display_name,
 						account.owner_type, account.provider_id, account.provider_release_id,
 						account.status, release.status,
-						credential.scope_json
+						credential.scope_json, access.id, access.capability_profile_id,
+						access.provider_release_id, access.approved_capability_profile_id,
+						access.approved_provider_release_id, access.state, access.validity_kind,
+						access.valid_until, renewal_policy.renewal_lead_seconds
 					ORDER BY account.display_name, account.id
 				`,
 			options.includeActivity === false
@@ -3546,14 +4032,22 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					FROM connection_grants stored_grant
 					JOIN connection_consumers consumer ON consumer.id = stored_grant.consumer_id
 					JOIN connection_accounts account ON account.id = stored_grant.connection_id
+					LEFT JOIN connection_authorization_consents consent
+						ON consent.id = stored_grant.consent_id AND consent.root_id = stored_grant.root_id
+					LEFT JOIN connection_authorization_previews preview
+						ON preview.id = consent.preview_id AND preview.root_id = consent.root_id
 					LEFT JOIN connection_grant_actions grant_action
 						ON grant_action.grant_id = stored_grant.id
 					LEFT JOIN connection_action_versions action
 						ON action.id = grant_action.action_version_id
 					WHERE stored_grant.principal_id = ${principalId}
 					GROUP BY stored_grant.id, consumer.display_name,
-						account.provider_id, account.display_name, account.external_account
-					ORDER BY stored_grant.id
+						account.provider_id, account.display_name, account.external_account,
+						preview.root_fence, consent.confirmed_at
+					-- Root fences order authorization decisions, not random Grant IDs.
+					ORDER BY preview.root_fence DESC NULLS LAST,
+						consent.confirmed_at DESC NULLS LAST,
+						stored_grant.connection_revision DESC NULLS LAST, stored_grant.id
 				`,
 			this.sql<{ id: string; name: string }[]>`
 					SELECT DISTINCT consumer.id, consumer.display_name AS name
@@ -3631,6 +4125,24 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				status: call.status,
 			})),
 			connections: connections.map((connection) => ({
+				accessAuthorization:
+					connection.access_id &&
+					connection.access_state &&
+					connection.access_validity_kind &&
+					connection.access_capability_profile_id &&
+					connection.access_provider_release_id
+						? {
+								capabilityProfileId: connection.access_capability_profile_id,
+								id: connection.access_id,
+								providerReleaseId: connection.access_provider_release_id,
+								renewalOpensAt:
+									connection.renewal_opens_at?.toISOString() ?? null,
+								state: connection.access_state,
+								validityKind: connection.access_validity_kind,
+								validUntil:
+									connection.access_valid_until?.toISOString() ?? null,
+							}
+						: null,
 				actionVersionIds:
 					connection.release_status === "PUBLISHED" &&
 					connection.credential_scope_known &&
@@ -3816,6 +4328,12 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				RETURNING id
 			`;
 			if (!account) forbidden();
+			await sql`
+				UPDATE connection_access_authorizations
+				SET state = 'DISCONNECTED', revision = revision + 1, updated_at = now()
+				WHERE connection_id = ${input.connectionId}
+					AND state = 'ACTIVE'
+			`;
 			await sql`
 					UPDATE connection_credential_versions
 					SET status = 'REVOKED', revision = revision + 1
@@ -4048,8 +4566,41 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					AND account.provider_release_id = active_grant.provider_release_id
 					AND account.revision = active_grant.connection_revision
 					AND account.execution_fence = active_grant.connection_execution_fence
-					AND account.status = 'ACTIVE'
-					AND (
+				AND account.status = 'ACTIVE'
+				AND (
+					account.owner_type = 'SHARED'
+					OR EXISTS (
+						SELECT 1 FROM connection_access_enforcement enforcement
+						WHERE enforcement.id = 'personal'
+							AND enforcement.state = 'PRE_LAUNCH'
+							AND EXISTS (
+								SELECT 1 FROM connection_pre_launch_accounts inventory
+								WHERE inventory.connection_id = account.id
+							)
+							AND NOT EXISTS (
+								SELECT 1 FROM connection_effective_access_authorizations access
+								WHERE access.connection_id = account.id
+							)
+					)
+					OR EXISTS (
+						SELECT 1 FROM connection_effective_access_authorizations access
+						JOIN connection_capability_profile_actions profile_action
+							ON profile_action.capability_profile_id = access.capability_profile_id
+							AND profile_action.action_version_id = call.action_version_id
+						WHERE access.connection_id = account.id
+							AND access.principal_id = call.principal_id
+							AND access.provider_release_id = account.provider_release_id
+							AND access.external_account_fingerprint =
+								active_grant.external_account_fingerprint
+							AND (access.valid_until IS NULL OR access.valid_until > now())
+							AND (
+								access.state = 'ACTIVE'
+								OR (access.state = 'REAPPROVAL_REQUIRED'
+									AND access.reapproval_deadline_at > now())
+							)
+					)
+				)
+				AND (
 						(
 							account.owner_type = 'PERSONAL'
 							AND account.owner_principal_id = call.principal_id
@@ -4094,6 +4645,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async setCallResult(input: {
+		diagnostics?: CallDiagnostics;
 		callId: string;
 		result?: Record<string, unknown>;
 		status: CallStatus;
@@ -4109,6 +4661,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				FOR UPDATE OF call
 			`;
 			if (!call) return;
+			await this.persistCallDiagnostics(sql, input.callId, input.diagnostics);
 			if (call.effect === "WRITE") {
 				const effectStatus =
 					input.status === "DENIED_LOCAL" ? "FAILED" : input.status;
@@ -4203,6 +4756,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async completeReconciliationJob(input: {
+		diagnostics?: CallDiagnostics;
 		callId: string;
 		leaseId: string;
 		result: Record<string, unknown>;
@@ -4215,6 +4769,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				FOR UPDATE
 			`;
 			if (!job) return;
+			await this.persistCallDiagnostics(sql, input.callId, input.diagnostics);
 			await sql`
 				UPDATE connection_dispatches dispatch SET status = 'SUCCEEDED'
 				FROM connection_effects effect
@@ -4239,17 +4794,36 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async rescheduleReconciliationJob(input: {
+		diagnostics?: CallDiagnostics;
 		callId: string;
 		leaseId: string;
 		reason: string;
 	}) {
-		await this.sql`
+		await this.sql.begin(async (sql) => {
+			const rows = await sql`
 			UPDATE connection_reconciliation_jobs
 			SET status = 'PENDING', lease_id = NULL, leased_at = NULL,
 				lease_expires_at = NULL, next_attempt_at = now() + interval '30 seconds',
 					reason = ${input.reason.slice(0, 500)}, updated_at = now()
 				WHERE call_id = ${input.callId} AND lease_id = ${input.leaseId}
 					AND status = 'LEASED' AND lease_expires_at > now()
+				RETURNING call_id
 			`;
+			if (rows.length)
+				await this.persistCallDiagnostics(sql, input.callId, input.diagnostics);
+		});
+	}
+
+	private async persistCallDiagnostics(
+		sql: postgres.TransactionSql,
+		callId: string,
+		value?: CallDiagnostics,
+	) {
+		if (!value) return;
+		const diagnostic = projectCallDiagnostics(value);
+		if (!diagnostic) throw new Error("Invalid call diagnostic");
+		await sql`INSERT INTO connection_call_diagnostics (execution_id, call_id, diagnostic)
+			VALUES (${diagnostic.executionId}, ${callId}, ${sql.json(diagnostic)})
+			ON CONFLICT (execution_id) DO NOTHING`;
 	}
 }

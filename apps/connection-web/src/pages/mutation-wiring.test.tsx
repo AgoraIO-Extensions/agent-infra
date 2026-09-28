@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
 
-import type { ProviderUpgradeTask } from "@agent-infra/connection-contracts";
+import type {
+	AccessOptionsResponse,
+	AccessRequestsResponse,
+	ProviderUpgradeTask,
+} from "@agent-infra/connection-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+	act,
 	cleanup,
 	fireEvent,
 	render,
@@ -17,11 +22,36 @@ const api = vi.hoisted(() => ({
 	connectProviderCredential: vi.fn(async () => ({
 		connectionId: "connection-bitbucket",
 	})),
+	getConnectionAccessOptions: vi.fn(
+		async (): Promise<AccessOptionsResponse> => ({ options: [] }),
+	),
+	reauthorizeProviderConnection: vi.fn(async () => ({
+		connectionId: "connection-confluence",
+	})),
+	listConnectionAccessRequests: vi.fn(
+		async (): Promise<AccessRequestsResponse> => ({ requests: [] }),
+	),
+	submitConnectionAccessRequest: vi.fn(async () => ({
+		requestId: "request-created",
+	})),
+	submitConnectionAccessRenewal: vi.fn(async () => ({
+		requestId: "renewal-created",
+	})),
+	cancelConnectionAccessRequest: vi.fn(async () => undefined),
 	upgradeProviderConnection: vi.fn(async (connectionId: string) => ({
 		connectionId,
 	})),
+	upgradeApprovedConnection: vi.fn(
+		async (input: { connectionId: string; accessRequestId: string }) => ({
+			connectionId: input.connectionId,
+		}),
+	),
 	createAuthorizationPreview: vi.fn(
-		async (input?: { actionVersionIds?: string[] }) => ({
+		async (input?: {
+			actionVersionIds?: string[];
+			connectionId?: string;
+			consumerId?: string;
+		}) => ({
 			idempotencyKey: "confirmation-idempotency-key",
 			preview: {
 				actions: [
@@ -45,15 +75,15 @@ const api = vi.hoisted(() => ({
 						input.actionVersionIds.includes(action.id),
 				),
 				confirmationToken: "confirmation-token",
-				consumer: { id: "consumer-codex", name: "Codex" },
+				consumer: { id: input?.consumerId ?? "consumer-codex", name: "Codex" },
 				effectSummary: ["WRITE" as const],
-				expiresAt: "2026-08-26T12:00:00.000Z",
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
 				previewId: "preview-id",
 				requiredScopes: ["repo"],
 				targetConnection: {
 					displayName: "GitHub",
 					externalAccount: "guoxianzhe",
-					id: "connection-personal",
+					id: input?.connectionId ?? "connection-personal",
 				},
 			},
 		}),
@@ -61,6 +91,18 @@ const api = vi.hoisted(() => ({
 	createSharedScope: vi.fn(async () => ({ sharedScopeId: "scope-created" })),
 	disconnectConnection: vi.fn(async () => undefined),
 	disconnectSharedConnection: vi.fn(async () => undefined),
+	getConnectionAccessRequest: vi.fn(async (requestId: string) => ({
+		connectExpiresAt: "2030-01-01T00:00:00.000Z",
+		id: requestId,
+		providerId: new URLSearchParams(window.location.search).get("provider"),
+		state: "APPROVED_PENDING_CONNECTION",
+	})),
+	prepareConnectionAccess: vi.fn(async (requestId: string) => ({
+		requestId,
+		providerId: new URLSearchParams(window.location.search).get("provider"),
+		providerReleaseId: "fixture-release",
+		connectExpiresAt: "2030-01-01T00:00:00.000Z",
+	})),
 	getConnections: vi.fn(async () => ({
 		account: { displayName: "郭贤哲", email: "guoxianzhe@agora.io" },
 		isAdministrator: true,
@@ -124,7 +166,7 @@ const api = vi.hoisted(() => ({
 					actionVersionIds: ["github.get_repository@v2"],
 					actions: [
 						{
-							effect: "READ" as const,
+							effect: "READ" as "READ" | "WRITE",
 							id: "github.get_repository@v2",
 							name: "github.get_repository",
 						},
@@ -247,7 +289,10 @@ const api = vi.hoisted(() => ({
 	})),
 }));
 
-vi.mock("../api", () => ({ connectionApi: api }));
+vi.mock("../api", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../api")>()),
+	connectionApi: api,
+}));
 vi.mock("../shell", () => ({
 	ConsoleShell: ({ children }: { children: ReactNode }) => <>{children}</>,
 	PageError: () => <div role="alert">请求失败</div>,
@@ -278,7 +323,121 @@ function calls(mock: unknown) {
 	return (mock as { mock: { calls: unknown[][] } }).mock.calls;
 }
 
+function approvedFor(provider: string) {
+	window.history.replaceState(
+		{},
+		"",
+		`/connection/connections?provider=${provider}&accessRequestId=request-approved`,
+	);
+}
+
 describe("Connection 管理 mutation wiring", () => {
+	it("切换客户端自动加载，旧客户端的迟到响应不能覆盖当前预览", async () => {
+		const overview = await api.getConnections();
+		overview.overview.consumers.push({
+			id: "consumer-other",
+			name: "Other client",
+		});
+		api.getConnections.mockResolvedValueOnce(overview);
+		const oldResponse = await api.createAuthorizationPreview();
+		oldResponse.preview.consumer.name = "Slow client";
+		const newResponse = await api.createAuthorizationPreview({
+			consumerId: "consumer-other",
+		});
+		newResponse.preview.consumer.name = "Other client";
+		const finalResponse = structuredClone(newResponse);
+		finalResponse.preview.actions = finalResponse.preview.actions.filter(
+			(action) => action.effect === "READ",
+		);
+		let finishOld!: (value: typeof oldResponse) => void;
+		api.createAuthorizationPreview
+			.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						finishOld = resolve;
+					}),
+			)
+			.mockResolvedValueOnce(newResponse)
+			.mockResolvedValueOnce(finalResponse);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /GitHub 已连接/ }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
+		fireEvent.change(screen.getByRole("combobox", { name: "客户端" }), {
+			target: { value: "consumer-other" },
+		});
+		await screen.findByText("Other client", {
+			selector: ".account-switch span",
+		});
+		await act(async () => finishOld(oldResponse));
+		await waitFor(() =>
+			expect(
+				(screen.getByRole("button", { name: "确认授权" }) as HTMLButtonElement)
+					.disabled,
+			).toBe(false),
+		);
+		expect(
+			screen.getByText("Other client", { selector: ".account-switch span" }),
+		).toBeTruthy();
+		expect(
+			screen.queryByText("Slow client", { selector: ".account-switch span" }),
+		).toBeNull();
+		expect(api.confirmAuthorization).not.toHaveBeenCalled();
+	});
+
+	it("发现预览身份不匹配时禁止展示和确认", async () => {
+		const response = await api.createAuthorizationPreview({
+			consumerId: "unexpected-consumer",
+		});
+		api.createAuthorizationPreview.mockResolvedValueOnce(response);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /GitHub 已连接/ }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
+		await screen.findByRole("alert");
+		expect(screen.queryByRole("button", { name: "确认授权" })).toBeNull();
+		expect(api.confirmAuthorization).not.toHaveBeenCalled();
+	});
+
+	it("刷新发现预览失败后不使用缓存继续确认", async () => {
+		const overview = await api.getConnections();
+		const grant = overview.overview.grants[0];
+		if (!grant) throw new Error("Grant required");
+		grant.actions = [
+			{
+				id: "github.get_pull_request@v2",
+				name: "github.get_pull_request",
+				effect: "READ",
+			},
+		];
+		api.getConnections.mockResolvedValueOnce(overview);
+		const discovery = await api.createAuthorizationPreview();
+		const final = structuredClone(discovery);
+		final.preview.actions = final.preview.actions.filter(
+			(action) => action.effect === "READ",
+		);
+		const action = final.preview.actions[0];
+		if (!action) throw new Error("Action required");
+		action.description = "Changed purpose";
+		api.createAuthorizationPreview
+			.mockResolvedValueOnce(discovery)
+			.mockResolvedValueOnce(final)
+			.mockRejectedValueOnce(new Error("Discovery unavailable"));
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /GitHub 已连接/ }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
+		fireEvent.click(
+			await screen.findByRole("button", { name: "刷新授权内容" }),
+		);
+		await screen.findByText("请求失败");
+		expect(screen.queryByRole("button", { name: "确认授权" })).toBeNull();
+		expect(api.confirmAuthorization).not.toHaveBeenCalled();
+	});
+
 	it("升级连接时显示进行中和成功反馈", async () => {
 		let finishUpgrade: ((value: { connectionId: string }) => void) | undefined;
 		api.upgradeProviderConnection.mockImplementationOnce(
@@ -302,6 +461,166 @@ describe("Connection 管理 mutation wiring", () => {
 			(await screen.findByText("连接已升级，可以重新确认客户端授权。"))
 				.textContent,
 		).toBe("连接已升级，可以重新确认客户端授权。");
+	});
+
+	it.each(["EXPIRED", "REAPPROVAL_REQUIRED"])(
+		"按 %s 资格状态展示客户端授权入口",
+		async (state) => {
+			const overview = await api.getConnections();
+			api.getConnections.mockResolvedValueOnce({
+				...overview,
+				overview: {
+					...overview.overview,
+					connections: overview.overview.connections.map((connection) =>
+						connection.id === "connection-personal"
+							? {
+									...connection,
+									accessAuthorization: {
+										state,
+										validityKind: "FINITE",
+										validUntil:
+											state === "EXPIRED"
+												? "2026-01-01T00:00:00.000Z"
+												: "2030-01-01T00:00:00.000Z",
+									},
+								}
+							: connection,
+					),
+				},
+			});
+			renderPage(<ConnectionsPage />);
+			fireEvent.click(
+				await screen.findByRole("button", { name: /GitHub 已连接/ }),
+			);
+			expect(
+				(
+					screen.getByRole("button", {
+						name: "授权客户端",
+					}) as HTMLButtonElement
+				).disabled,
+			).toBe(state === "EXPIRED");
+			if (state === "EXPIRED")
+				expect(screen.getByRole("button", { name: "重新申请" })).toBeTruthy();
+			else {
+				fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
+				await waitFor(() =>
+					expect(api.createAuthorizationPreview).toHaveBeenCalled(),
+				);
+			}
+		},
+	);
+
+	it("有效期内断开的原账号走同账号重连 API", async () => {
+		const overview = await api.getConnections();
+		api.getConnections.mockResolvedValueOnce({
+			...overview,
+			overview: {
+				...overview.overview,
+				connections: overview.overview.connections.map((connection) =>
+					connection.id === "connection-confluence"
+						? {
+								...connection,
+								status: "DISCONNECTED",
+								requiresReconnect: true,
+								accessAuthorization: {
+									state: "DISCONNECTED",
+									validityKind: "FINITE",
+									validUntil: "2030-01-01T00:00:00.000Z",
+								},
+							}
+						: connection,
+				),
+			},
+		});
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /Confluence 未连接/ }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
+		fireEvent.change(screen.getByLabelText("Confluence 密码"), {
+			target: { value: "renewed-credential" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await waitFor(() =>
+			expect(api.reauthorizeProviderConnection).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.reauthorizeProviderConnection)[0]?.[0]).toEqual({
+			connectionId: "connection-confluence",
+			body: {
+				providerId: "confluence",
+				username: "guoxianzhe@agora.io",
+				password: "renewed-credential",
+			},
+		});
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
+	});
+
+	it("有限期资格在续期窗口内从 Provider 详情发起专门续期", async () => {
+		const overview = await api.getConnections();
+		api.getConnections.mockResolvedValueOnce({
+			...overview,
+			overview: {
+				...overview.overview,
+				connections: overview.overview.connections.map((connection) =>
+					connection.id === "connection-personal"
+						? {
+								...connection,
+								accessAuthorization: {
+									id: "access-1",
+									capabilityProfileId: "profile-1",
+									providerReleaseId: "github-release-1",
+									state: "ACTIVE",
+									validityKind: "FINITE",
+									validUntil: "2030-01-01T00:00:00.000Z",
+									renewalOpensAt: "2020-01-01T00:00:00.000Z",
+								},
+							}
+						: connection,
+				),
+			},
+		});
+		api.getConnectionAccessOptions.mockResolvedValueOnce({
+			options: [
+				{
+					providerId: "github",
+					providerReleaseId: "github-release-1",
+					capabilityProfileId: "profile-1",
+					capabilityProfileName: "代码协作只读",
+					policyVersionId: "policy-1",
+					presentationId: "presentation-1",
+					effectCeiling: "READ",
+					requiredScopes: ["repo"],
+					durations: [{ kind: "FINITE", days: 90 }, { kind: "PERMANENT" }],
+					disclaimers: [
+						{
+							id: "disclaimer-1",
+							content: "公司正式条款",
+							contentSha256: "a".repeat(64),
+							locale: "zh-CN",
+						},
+					],
+				},
+			],
+		});
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(await screen.findByRole("button", { name: "申请续期" }));
+		fireEvent.click(screen.getByRole("button", { name: /代码协作只读/ }));
+		fireEvent.change(screen.getByLabelText("用途"), {
+			target: { value: "持续代码协作" },
+		});
+		fireEvent.click(screen.getByRole("checkbox", { name: "公司正式条款" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		await waitFor(() =>
+			expect(api.submitConnectionAccessRenewal).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.submitConnectionAccessRenewal)[0]?.[0]).toMatchObject({
+			authorizationId: "access-1",
+			body: {
+				duration: { kind: "FINITE", days: 90 },
+				presentationId: "presentation-1",
+			},
+		});
+		expect(api.submitConnectionAccessRequest).not.toHaveBeenCalled();
 	});
 
 	it("批量升级按 Connection 去重并隔离失败", async () => {
@@ -473,8 +792,287 @@ describe("Connection 管理 mutation wiring", () => {
 		renderPage(<ConnectionsPage />);
 
 		expect(
+			await screen.findByRole("heading", { name: "申请连接 Confluence" }),
+		).toBeTruthy();
+		expect(screen.getByRole("button", { name: "查看连接申请" })).toBeTruthy();
+		expect(screen.queryByLabelText("Confluence 密码")).toBeNull();
+	});
+
+	it("Provider 详情展示当前审批阶段并允许取消", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=jira",
+		);
+		api.listConnectionAccessRequests.mockResolvedValueOnce({
+			requests: [
+				{
+					id: "request-jira-1",
+					providerId: "jira",
+					providerReleaseId: "jira-release-1",
+					capabilityProfileName: "研发读写",
+					connectExpiresAt: null,
+					revision: "1",
+					state: "IN_REVIEW",
+					renewal: false,
+					purpose: "项目协作",
+					createdAt: "2026-09-24T00:00:00.000Z",
+					expiresAt: "2026-10-08T00:00:00.000Z",
+					duration: { kind: "FINITE", days: 90 },
+					currentStageOrdinal: 2,
+					stages: [
+						{
+							ordinal: 1,
+							name: "主管审批",
+							state: "APPROVED",
+							revision: "2",
+							routingRevision: "1",
+							openedAt: "2026-09-24T00:00:00.000Z",
+							completedAt: "2026-09-24T01:00:00.000Z",
+							decisions: [
+								{
+									approverName: "研发主管",
+									actorName: "研发主管",
+									decision: "APPROVE",
+									comment: null,
+									decidedAt: "2026-09-24T01:00:00.000Z",
+								},
+							],
+						},
+						{
+							ordinal: 2,
+							name: "安全审批",
+							state: "PENDING",
+							revision: "1",
+							routingRevision: "1",
+							openedAt: "2026-09-24T01:00:00.000Z",
+							completedAt: null,
+							decisions: [],
+						},
+						{
+							ordinal: 3,
+							name: "高层审批",
+							state: "NOT_STARTED",
+							revision: "1",
+							routingRevision: "1",
+							openedAt: null,
+							completedAt: null,
+							decisions: [],
+						},
+					],
+				},
+			],
+		});
+		renderPage(<ConnectionsPage />);
+		expect(await screen.findByText("安全审批")).toBeTruthy();
+		expect(screen.getByText(/研发主管 · 通过/)).toBeTruthy();
+		expect(screen.getByLabelText("审批与连接进度").textContent).toContain(
+			"等待前置审批",
+		);
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "申请其他能力",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(false);
+		expect(screen.queryByRole("button", { name: "提交申请" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "取消申请" }));
+		await waitFor(() =>
+			expect(api.cancelConnectionAccessRequest).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.cancelConnectionAccessRequest)[0]?.[0]).toBe(
+			"request-jira-1",
+		);
+	});
+
+	it("Provider 已有待审申请时仍可确认条款并申请其他能力", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=jira",
+		);
+		api.listConnectionAccessRequests.mockResolvedValueOnce({
+			requests: [
+				{
+					id: "pending-other-profile",
+					providerId: "jira",
+					providerReleaseId: "jira-release-1",
+					capabilityProfileName: "其他待审能力",
+					connectExpiresAt: null,
+					revision: "1",
+					state: "IN_REVIEW",
+					renewal: false,
+					purpose: "已有申请",
+					createdAt: "2026-09-24T00:00:00.000Z",
+					expiresAt: "2030-01-01T00:00:00.000Z",
+					duration: { kind: "FINITE", days: 90 },
+					currentStageOrdinal: 1,
+					stages: [],
+				},
+			],
+		});
+		api.getConnectionAccessOptions.mockResolvedValueOnce({
+			options: [
+				{
+					providerId: "jira",
+					providerReleaseId: "jira-release-1",
+					capabilityProfileId: "profile-read-write",
+					capabilityProfileName: "研发读写",
+					policyVersionId: "policy-1",
+					presentationId: "presentation-1",
+					effectCeiling: "WRITE",
+					requiredScopes: ["read", "write"],
+					durations: [{ kind: "FINITE", days: 90 }],
+					disclaimers: [
+						{
+							id: "disclaimer-1",
+							content: "公司正式条款",
+							contentSha256: "a".repeat(64),
+							locale: "zh-CN",
+						},
+					],
+				},
+			],
+		});
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "申请其他能力" }),
+		);
+		fireEvent.click(await screen.findByRole("button", { name: /研发读写/ }));
+		const submit = screen.getByRole("button", {
+			name: "提交申请",
+		}) as HTMLButtonElement;
+		expect(submit.disabled).toBe(true);
+		fireEvent.change(screen.getByLabelText("用途"), {
+			target: { value: "项目协作" },
+		});
+		fireEvent.click(screen.getByRole("checkbox", { name: "公司正式条款" }));
+		expect(submit.disabled).toBe(false);
+		fireEvent.click(submit);
+		await waitFor(() =>
+			expect(api.submitConnectionAccessRequest).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.submitConnectionAccessRequest)[0]?.[0]).toMatchObject({
+			providerReleaseId: "jira-release-1",
+			presentationId: "presentation-1",
+			purpose: "项目协作",
+			duration: { kind: "FINITE", days: 90 },
+		});
+	});
+
+	it("批准后恢复链接才打开目标 Provider 的连接界面", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=confluence&intent=connect&accessRequestId=request-approved",
+		);
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("heading", { name: "选择已有连接" });
+		expect(
+			screen.queryByRole("heading", { name: "连接公司 Confluence" }),
+		).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "连接其他账号" }));
+		expect(
 			await screen.findByRole("heading", { name: "连接公司 Confluence" }),
 		).toBeTruthy();
+	});
+
+	it("批准后复用明确选择的连接凭证，不重复收集 PAT", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=confluence&intent=connect&accessRequestId=request-approved",
+		);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "使用现有凭证" }),
+		);
+		await waitFor(() =>
+			expect(api.upgradeApprovedConnection).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.upgradeApprovedConnection)[0]?.[0]).toEqual({
+			connectionId: "connection-confluence",
+			accessRequestId: "request-approved",
+		});
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
+		await waitFor(() =>
+			expect(
+				screen.queryByRole("heading", { name: "选择已有连接" }),
+			).toBeNull(),
+		);
+	});
+
+	it("新凭证连接完成后不因账号列表刷新重新打开窗口或复用已消费申请", async () => {
+		const initial = await api.getConnections();
+		const updated = await api.getConnections();
+		const existing = updated.overview.connections.find(
+			(connection) => connection.providerId === "confluence",
+		);
+		if (!existing) throw new Error("Confluence fixture missing");
+		updated.overview.connections.push({
+			...existing,
+			id: "connection-confluence-new",
+			displayName: "New Confluence",
+		});
+		api.getConnections
+			.mockResolvedValueOnce(initial)
+			.mockResolvedValueOnce(updated);
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=confluence&intent=connect&accessRequestId=request-approved",
+		);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "连接其他账号" }),
+		);
+		fireEvent.change(await screen.findByLabelText("Confluence 密码"), {
+			target: { value: "fixture-password" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await waitFor(() =>
+			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
+		);
+		await waitFor(() =>
+			expect(api.getConnectionAccessRequest).toHaveBeenCalledTimes(2),
+		);
+		await waitFor(() =>
+			expect(screen.queryByLabelText("Confluence 密码")).toBeNull(),
+		);
+		expect(screen.queryByRole("heading", { name: "选择已有连接" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: /Confluence 已连接/ }));
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
+		expect(screen.queryByLabelText("Confluence 密码")).toBeNull();
+		expect(api.connectProviderCredential).toHaveBeenCalledOnce();
+	});
+
+	it("不接受 URL 中伪造或不匹配的批准申请", async () => {
+		approvedFor("jira");
+		api.getConnectionAccessRequest.mockResolvedValueOnce({
+			connectExpiresAt: "2030-01-01T00:00:00.000Z",
+			id: "request-approved",
+			providerId: "bitbucket",
+			state: "APPROVED_PENDING_CONNECTION",
+		});
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(await screen.findByRole("button", { name: "Jira 未连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
+		expect(screen.getByText("当前没有可申请的连接能力。")).toBeTruthy();
+		expect(screen.queryByLabelText("Jira 密码")).toBeNull();
+	});
+
+	it("连接窗口过期时不展示 Provider 凭证表单", async () => {
+		approvedFor("jira");
+		api.getConnectionAccessRequest.mockResolvedValueOnce({
+			connectExpiresAt: "2020-01-01T00:00:00.000Z",
+			id: "request-approved",
+			providerId: "jira",
+			state: "APPROVED_PENDING_CONNECTION",
+		});
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(await screen.findByRole("button", { name: "申请连接" }));
+		expect(screen.queryByLabelText("Jira 密码")).toBeNull();
 	});
 
 	it("根据 MCP 授权链接直接打开目标 Provider 的客户端授权界面", async () => {
@@ -506,19 +1104,12 @@ describe("Connection 管理 mutation wiring", () => {
 	});
 
 	it("连接页调用 GitHub、Bitbucket、授权、断开和 Grant API", async () => {
+		approvedFor("bitbucket");
 		vi.spyOn(window, "confirm").mockReturnValue(true);
 		const open = vi.spyOn(window, "open");
 		renderPage(<ConnectionsPage />);
-		await screen.findByRole("heading", { name: "客户端授权" });
-		expect(
-			screen.getByRole("heading", { name: "connectionE2E2" }),
-		).toBeTruthy();
-		expect(screen.getAllByText("329435106").length).toBeGreaterThanOrEqual(1);
-		expect(screen.getAllByText("GitHub").length).toBeGreaterThanOrEqual(2);
-		expect(screen.queryByText("github.get_repository")).toBeNull();
-
-		fireEvent.click(screen.getByRole("button", { name: "Bitbucket 未连接" }));
-		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await screen.findByRole("button", { name: "Bitbucket 未连接" });
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
 		fireEvent.change(screen.getByLabelText("Personal Access Token"), {
 			target: { value: "test-bitbucket-pat" },
 		});
@@ -527,14 +1118,25 @@ describe("Connection 管理 mutation wiring", () => {
 			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
 		);
 		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
 			accessToken: "test-bitbucket-pat",
 			providerId: "bitbucket",
 		});
+		expect(api.prepareConnectionAccess).toHaveBeenCalledWith(
+			"request-approved",
+			expect.anything(),
+		);
 
 		fireEvent.click(screen.getByRole("button", { name: /GitHub 已连接/ }));
-		fireEvent.click(screen.getByRole("button", { name: "再连接" }));
-		await waitFor(() => expect(api.startGithubOAuth).toHaveBeenCalledOnce());
-		expect(calls(api.startGithubOAuth)[0]?.[0]).toBeUndefined();
+		expect(screen.getByRole("heading", { name: "客户端授权" })).toBeTruthy();
+		expect(
+			screen.getByRole("heading", { name: "connectionE2E2" }),
+		).toBeTruthy();
+		expect(screen.getAllByText("329435106").length).toBeGreaterThanOrEqual(1);
+		expect(screen.queryByText("github.get_repository")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
+		expect(await screen.findByText("当前没有可申请的连接能力。")).toBeTruthy();
+		expect(api.startGithubOAuth).not.toHaveBeenCalled();
 		expect(open).not.toHaveBeenCalled();
 
 		fireEvent.click(
@@ -550,11 +1152,18 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(calls(api.revokeGrant)[0]?.[0]).toBe("grant-codex");
 
 		fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
-		fireEvent.click(screen.getByRole("button", { name: "查看授权内容" }));
-		await screen.findByRole("button", { name: "查看授权差异" });
-		expect(screen.getByText("已选择 1 / 共 2 项")).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: "查看授权差异" }));
-		await screen.findByRole("button", { name: "确认授权" });
+		await screen.findByText("已选择 0 / 共 2 项");
+		expect(screen.queryByRole("button", { name: "查看授权内容" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "查看授权差异" })).toBeNull();
+		fireEvent.click(
+			screen.getByRole("checkbox", { name: /github.get_pull_request/ }),
+		);
+		await waitFor(() =>
+			expect(
+				(screen.getByRole("button", { name: "确认授权" }) as HTMLButtonElement)
+					.disabled,
+			).toBe(false),
+		);
 		expect(calls(api.createAuthorizationPreview).at(-1)?.[0]).toEqual({
 			actionVersionIds: ["github.get_pull_request@v2"],
 			connectionId: "connection-personal",
@@ -572,6 +1181,7 @@ describe("Connection 管理 mutation wiring", () => {
 	});
 
 	it("Manhattan 从浏览器授权，不再收集公司密码", async () => {
+		approvedFor("manhattan");
 		api.startManhattanOAuth.mockRejectedValueOnce(
 			new Error("OAuth not configured"),
 		);
@@ -579,9 +1189,28 @@ describe("Connection 管理 mutation wiring", () => {
 		fireEvent.click(
 			await screen.findByRole("button", { name: "Manhattan 未连接" }),
 		);
-		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
 		await waitFor(() => expect(api.startManhattanOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startManhattanOAuth)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
+		});
 		expect(screen.queryByLabelText("公司密码")).toBeNull();
+	});
+
+	it("审批后继续连接会自动发起一次 Manhattan OAuth", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=manhattan&intent=connect&accessRequestId=request-approved",
+		);
+		api.startManhattanOAuth.mockRejectedValueOnce(
+			new Error("OAuth not configured"),
+		);
+		renderPage(<ConnectionsPage />);
+		await waitFor(() => expect(api.startManhattanOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startManhattanOAuth)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
+		});
 	});
 
 	it("已有 Manhattan 连接时仍显示新授权的 RBAC 拒绝", async () => {
@@ -615,12 +1244,170 @@ describe("Connection 管理 mutation wiring", () => {
 		).toBeTruthy();
 	});
 
-	it("连接页调用 Jira Server credential API", async () => {
+	it("升级授权沿用旧版选择，不默认勾选新增 Action", async () => {
+		const overview = await api.getConnections();
+		const grant = overview.overview.grants[0];
+		if (!grant) throw new Error("测试需要旧 Grant");
+		grant.status = "PAUSED_CREDENTIAL";
+		grant.actionVersionIds = ["github.create_pull_request@v5"];
+		grant.actions = [
+			{
+				id: "github.create_pull_request@v5",
+				name: "github.create_pull_request",
+				effect: "WRITE",
+			},
+		];
+		overview.overview.upgradeTasks = [
+			{
+				campaignId: "campaign-upgrade",
+				connectionId: "connection-personal",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "github",
+				reason: "Provider upgraded",
+				status: "PENDING_AUTHORIZATION",
+				targetProviderReleaseId: "github-v6",
+				taskId: "task-upgrade",
+			},
+		];
+		api.getConnections.mockResolvedValueOnce(overview);
 		renderPage(<ConnectionsPage />);
-		await screen.findByRole("heading", { name: "客户端授权" });
+		fireEvent.click(await screen.findByRole("button", { name: "确认授权" }));
+		await screen.findByText("已选择 1 / 共 2 项");
+		expect(
+			(
+				screen.getByRole("checkbox", {
+					name: /github.create_pull_request/,
+				}) as HTMLInputElement
+			).checked,
+		).toBe(true);
+		expect(
+			(
+				screen.getByRole("checkbox", {
+					name: /github.get_pull_request/,
+				}) as HTMLInputElement
+			).checked,
+		).toBe(false);
+	});
+
+	it.each([
+		{ entry: "upgrade", count: 14, status: "PAUSED_CREDENTIAL" },
+		{ entry: "normal", count: 14, status: "PAUSED_CREDENTIAL" },
+		{ entry: "upgrade", count: 3, status: "PAUSED_CREDENTIAL" },
+		{ entry: "upgrade", count: 3, status: "ACTIVE" },
+		{ entry: "upgrade", count: 0, status: "REVOKED" },
+		{ entry: "upgrade", count: 0, status: "TERMINATED" },
+	])(
+		"$entry 入口沿用最新 $status 授权的 $count 项，不合并历史权限",
+		async ({ entry, count, status }) => {
+			const overview = await api.getConnections();
+			const template = overview.overview.grants[0];
+			if (!template) throw new Error("测试需要 Grant");
+			const actions = Array.from({ length: 15 }, (_, index) => ({
+				id: `rehoboam.action_${index}@v6`,
+				name:
+					index === 0
+						? "rehoboam.get_current_user"
+						: `rehoboam.action_${index}`,
+				effect: index < 10 ? ("READ" as const) : ("WRITE" as const),
+				description: `Action ${index}`,
+				requiredScopes: [],
+			}));
+			const oldActions = actions.slice(0, 14).map((action) => ({
+				...action,
+				id: action.id.replace("@v6", "@v5"),
+			}));
+			const latest = {
+				...template,
+				id: "grant-z-latest",
+				status,
+				actions: oldActions.slice(0, count || 14),
+				actionVersionIds: oldActions
+					.slice(0, count || 14)
+					.map((action) => action.id),
+			};
+			// The server returns newest decisions first, regardless of lexicographic IDs.
+			overview.overview.grants = [
+				{ ...template, connectionId: "other-connection", actions: oldActions },
+				{ ...template, consumerId: "other-consumer", actions: oldActions },
+				latest,
+				{
+					...template,
+					id: "grant-a-old",
+					status: "PAUSED_CREDENTIAL",
+					actions: oldActions.slice(0, 1),
+				},
+				{
+					...template,
+					id: "grant-b-old-full",
+					status: "PAUSED_CREDENTIAL",
+					actions: oldActions,
+				},
+			];
+			overview.overview.upgradeTasks = [
+				{
+					campaignId: "campaign-upgrade",
+					connectionId: template.connectionId,
+					consumerId: template.consumerId,
+					consumerName: "Codex",
+					deadlineAt: null,
+					providerId: "github",
+					reason: "Provider upgraded",
+					status: "PENDING_AUTHORIZATION",
+					targetProviderReleaseId: "provider-v6",
+					taskId: "task-upgrade",
+				},
+			];
+			const response = await api.createAuthorizationPreview();
+			response.preview.actions = actions;
+			api.createAuthorizationPreview.mockResolvedValueOnce(response);
+			api.getConnections.mockResolvedValueOnce(overview);
+			renderPage(<ConnectionsPage />);
+			if (entry === "upgrade") {
+				fireEvent.click(
+					await screen.findByRole("button", { name: "确认授权" }),
+				);
+			} else {
+				fireEvent.click(
+					await screen.findByRole("button", { name: /GitHub 已连接/ }),
+				);
+				fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
+			}
+			await screen.findByText(`已选择 ${count} / 共 15 项`);
+			for (const [index, action] of actions.entries()) {
+				expect(
+					(
+						screen.getByRole("checkbox", {
+							name: `${action.name} ${action.effect === "READ" ? "读取" : "写入"}`,
+						}) as HTMLInputElement
+					).checked,
+				).toBe(index < count);
+			}
+		},
+	);
+
+	it("GitHub OAuth 携带批准的申请 ID", async () => {
+		approvedFor("github");
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /GitHub 已连接/ }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
+		await waitFor(() => expect(api.startGithubOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startGithubOAuth)[0]).toEqual([
+			undefined,
+			"request-approved",
+		]);
+	});
+
+	it("连接页调用 Jira Server credential API", async () => {
+		approvedFor("jira");
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("button", { name: "Jira 未连接" });
 
 		fireEvent.click(screen.getByRole("button", { name: "Jira 未连接" }));
-		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
 		fireEvent.change(screen.getByLabelText("Jira 用户名"), {
 			target: { value: "guoxianzhe@agora.io" },
 		});
@@ -632,6 +1419,7 @@ describe("Connection 管理 mutation wiring", () => {
 			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
 		);
 		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
 			password: "jira-password",
 			providerId: "jira",
 			username: "guoxianzhe@agora.io",
@@ -639,13 +1427,14 @@ describe("Connection 管理 mutation wiring", () => {
 	});
 
 	it("连接页调用 Jenkins deployment credential API", async () => {
+		approvedFor("jenkins-release");
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });
 
 		fireEvent.click(
 			screen.getByRole("button", { name: /Jenkins Release 已连接/ }),
 		);
-		fireEvent.click(screen.getByRole("button", { name: "再连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
 		fireEvent.change(screen.getByLabelText("Jenkins 用户名"), {
 			target: { value: "jenkins-user" },
 		});
@@ -657,6 +1446,7 @@ describe("Connection 管理 mutation wiring", () => {
 			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
 		);
 		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
 			apiToken: "jenkins-api-token",
 			providerId: "jenkins-release",
 			username: "jenkins-user",
@@ -664,11 +1454,12 @@ describe("Connection 管理 mutation wiring", () => {
 	});
 
 	it("连接页调用 Rehoboam credential API", async () => {
+		approvedFor("rehoboam");
 		renderPage(<ConnectionsPage />);
-		await screen.findByRole("heading", { name: "客户端授权" });
+		await screen.findByRole("button", { name: "Rehoboam 未连接" });
 
 		fireEvent.click(screen.getByRole("button", { name: "Rehoboam 未连接" }));
-		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
 		fireEvent.change(screen.getByLabelText("Rehoboam PAT"), {
 			target: { value: "rehoboam-personal-pat" },
 		});
@@ -677,23 +1468,94 @@ describe("Connection 管理 mutation wiring", () => {
 			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
 		);
 		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
 			accessToken: "rehoboam-personal-pat",
 			providerId: "rehoboam",
 		});
 	});
 
-	it("连接页使用浏览器会话调用 DataLego credential API", async () => {
+	it("DataLego 即时重连显式使用目标账号而不是新建接口", async () => {
+		const overview = await api.getConnections();
+		api.getConnections.mockResolvedValueOnce({
+			...overview,
+			overview: {
+				...overview.overview,
+				connections: overview.overview.connections.map((connection) =>
+					connection.id === "connection-datalego-old"
+						? {
+								...connection,
+								requiresReconnect: true,
+								accessAuthorization: {
+									state: "DISCONNECTED",
+									validityKind: "PERMANENT",
+									validUntil: null,
+								},
+							}
+						: connection,
+				),
+			},
+		});
 		renderPage(<ConnectionsPage />);
-		await screen.findByRole("heading", { name: "客户端授权" });
+		fireEvent.click(
+			await screen.findByRole("button", { name: "DataLego 未连接" }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
+		await waitFor(() =>
+			expect(api.reauthorizeProviderConnection).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.reauthorizeProviderConnection)[0]?.[0]).toEqual({
+			connectionId: "connection-datalego-old",
+			body: { providerId: "datalego" },
+		});
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
+	});
+
+	it("连接页使用浏览器会话调用 DataLego credential API", async () => {
+		approvedFor("datalego");
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("button", { name: "DataLego 未连接" });
 
 		fireEvent.click(screen.getByRole("button", { name: "DataLego 未连接" }));
-		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
 		await waitFor(() =>
 			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
 		);
 		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
 			providerId: "datalego",
+			accessRequestId: "request-approved",
 		});
+	});
+
+	it.each(["datalego", "manhattan"])(
+		"%s 恢复链接没有审批时不提交凭证",
+		async (providerId) => {
+			window.history.replaceState(
+				{},
+				"",
+				`/connection/connections?provider=${providerId}&intent=connect`,
+			);
+			renderPage(<ConnectionsPage />);
+			await screen.findByRole("button", { name: "查看连接申请" });
+			expect(api.connectProviderCredential).not.toHaveBeenCalled();
+			expect(api.startManhattanOAuth).not.toHaveBeenCalled();
+			expect(api.reauthorizeProviderConnection).not.toHaveBeenCalled();
+			expect(screen.queryByLabelText("公司密码")).toBeNull();
+		},
+	);
+
+	it("Manhattan OAuth 携带批准的申请 ID", async () => {
+		approvedFor("manhattan");
+		api.startManhattanOAuth.mockRejectedValueOnce(
+			new Error("OAuth not configured"),
+		);
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("button", { name: "Manhattan 未连接" });
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
+		await waitFor(() => expect(api.startManhattanOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startManhattanOAuth)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
+		});
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
 	});
 
 	it("断开的 Connection 不显示在已连接账号列表", async () => {
@@ -709,11 +1571,12 @@ describe("Connection 管理 mutation wiring", () => {
 	});
 
 	it("连接页调用 Jenkins CI credential API", async () => {
+		approvedFor("jenkins-ci");
 		renderPage(<ConnectionsPage />);
-		await screen.findByRole("heading", { name: "客户端授权" });
+		await screen.findByRole("button", { name: "Jenkins CI 未连接" });
 
 		fireEvent.click(screen.getByRole("button", { name: "Jenkins CI 未连接" }));
-		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
 		fireEvent.change(screen.getByLabelText("Jenkins 用户名"), {
 			target: { value: "jenkins-ci-user" },
 		});
@@ -725,6 +1588,7 @@ describe("Connection 管理 mutation wiring", () => {
 			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
 		);
 		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
 			apiToken: "jenkins-ci-api-token",
 			providerId: "jenkins-ci",
 			username: "jenkins-ci-user",
@@ -732,11 +1596,12 @@ describe("Connection 管理 mutation wiring", () => {
 	});
 
 	it("连接页调用 Confluence Server credential API", async () => {
+		approvedFor("confluence");
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });
 
 		fireEvent.click(screen.getByRole("button", { name: /Confluence 已连接/ }));
-		fireEvent.click(screen.getByRole("button", { name: "再连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
 		fireEvent.change(screen.getByLabelText("Confluence 密码"), {
 			target: { value: "confluence-password" },
 		});
@@ -745,6 +1610,7 @@ describe("Connection 管理 mutation wiring", () => {
 			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
 		);
 		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
 			password: "confluence-password",
 			providerId: "confluence",
 			username: "guoxianzhe@agora.io",

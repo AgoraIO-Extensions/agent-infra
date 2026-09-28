@@ -3,10 +3,17 @@ import type {
 	DirectoryIdentity,
 } from "@agent-infra/connection-core";
 import { Client, type Entry } from "ldapts";
+import {
+	type EmployeeDirectoryOptions,
+	searchDirectoryEmployees,
+	validateEmployeeDirectory,
+} from "./employee-directory";
 
 export type LdapDirectoryOptions = {
+	employeeDirectory?: EmployeeDirectoryOptions;
 	activeAttribute?: string;
 	activeValue?: string;
+	aliasAttribute?: string;
 	connectTimeoutMs?: number;
 	displayNameAttribute: string;
 	emailAttribute: string;
@@ -112,6 +119,8 @@ export class LdapDirectoryAuthenticator implements DirectoryAuthenticator {
 		LdapDirectoryOptions;
 
 	constructor(options: LdapDirectoryOptions) {
+		if (options.employeeDirectory)
+			validateEmployeeDirectory(options.employeeDirectory);
 		const { activeAttribute, activeValue, ...baseOptions } = options;
 		if ((activeAttribute === undefined) !== (activeValue === undefined)) {
 			throw new Error(
@@ -135,6 +144,14 @@ export class LdapDirectoryAuthenticator implements DirectoryAuthenticator {
 		}
 		this.options = {
 			...baseOptions,
+			...(options.aliasAttribute
+				? {
+						aliasAttribute: requireAttribute(
+							options.aliasAttribute,
+							"LDAP alias attribute",
+						),
+					}
+				: {}),
 			...(activeAttribute !== undefined && activeValue !== undefined
 				? {
 						activeAttribute: requireAttribute(
@@ -223,6 +240,120 @@ export class LdapDirectoryAuthenticator implements DirectoryAuthenticator {
 			Date.now() + this.options.operationTimeoutMs,
 		);
 		return entries.length === 1;
+	}
+
+	async searchEmployees(query: string) {
+		const normalized = query.trim();
+		if (normalized.length < 2 || normalized.length > 64) {
+			throw new DirectoryAuthenticationError();
+		}
+		const deadline = Date.now() + this.options.operationTimeoutMs;
+		const escaped = escapeLdapFilterValue(normalized);
+		if (this.options.employeeDirectory) {
+			try {
+				const employees = await searchDirectoryEmployees(
+					this.options.employeeDirectory,
+					normalized,
+					AbortSignal.timeout(remainingMilliseconds(deadline)),
+				);
+				const candidates = [];
+				const subjects = new Set<string>();
+				for (const employee of employees) {
+					// Email is only a lookup hint; LDAP remains the identity authority.
+					const entries = await this.searchEntries(
+						`(${this.options.emailAttribute}=${escapeLdapFilterValue(employee.email)})`,
+						deadline,
+					);
+					if (entries.length === 0) continue;
+					if (entries.length !== 1) throw new DirectoryAuthenticationError();
+					const entry = entries[0] as Entry;
+					const subject = singleAttribute(entry, this.options.uidAttribute);
+					const email = singleAttribute(entry, this.options.emailAttribute);
+					if (
+						!subject ||
+						email?.toLowerCase() !== employee.email ||
+						subjects.has(subject)
+					) {
+						throw new DirectoryAuthenticationError();
+					}
+					subjects.add(subject);
+					candidates.push({
+						alias: null,
+						displayName: employee.name,
+						email,
+						issuer: this.options.issuer,
+						subject,
+					});
+				}
+				return candidates;
+			} catch {
+				throw new DirectoryAuthenticationError();
+			}
+		}
+		const fields = [
+			this.options.displayNameAttribute,
+			this.options.emailAttribute,
+			...(this.options.aliasAttribute ? [this.options.aliasAttribute] : []),
+		];
+		const filter = `(|${fields.map((field) => `(${field}=*${escaped}*)`).join("")})`;
+		const client = await this.createClient(deadline);
+		try {
+			await beforeDeadline(
+				client.bind(
+					this.options.serviceBindDn,
+					this.options.serviceBindPassword,
+				),
+				deadline,
+			);
+			const entries: Entry[] = [];
+			const paginator = client.searchPaginated(this.options.usersBaseDn, {
+				attributes: [
+					this.options.uidAttribute,
+					this.options.displayNameAttribute,
+					this.options.emailAttribute,
+					...(this.options.aliasAttribute ? [this.options.aliasAttribute] : []),
+				],
+				derefAliases: "never",
+				filter,
+				paged: { pageSize: 10 },
+				scope: "sub",
+				sizeLimit: 21,
+				timeLimit: Math.ceil(remainingMilliseconds(deadline) / 1_000),
+			});
+			for (;;) {
+				const page = await beforeDeadline(paginator.next(), deadline);
+				if (page.done) break;
+				entries.push(...page.value.searchEntries);
+				if (entries.length >= 20) break;
+			}
+			const subjects = new Set<string>();
+			return entries.slice(0, 20).map((entry) => {
+				const subject = singleAttribute(entry, this.options.uidAttribute);
+				const displayName = singleAttribute(
+					entry,
+					this.options.displayNameAttribute,
+				);
+				if (!subject || !displayName || subjects.has(subject)) {
+					throw new DirectoryAuthenticationError();
+				}
+				subjects.add(subject);
+				return {
+					alias: this.options.aliasAttribute
+						? (singleAttribute(entry, this.options.aliasAttribute) ?? null)
+						: null,
+					displayName,
+					email: singleAttribute(entry, this.options.emailAttribute) ?? null,
+					issuer: this.options.issuer,
+					subject,
+				};
+			});
+		} finally {
+			const cleanup = client.unbind().catch(() => undefined);
+			await beforeDeadline(
+				cleanup,
+				Math.min(deadline, Date.now() + cleanupTimeoutMs),
+			).catch(() => undefined);
+		}
 	}
 
 	private accountFilter(attribute: string, value: string) {

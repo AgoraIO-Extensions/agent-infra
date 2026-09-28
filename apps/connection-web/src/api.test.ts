@@ -13,5 +13,8 @@ describe("Connection Web 表单校验", () => {
 		expect(() => connectionApi.createSharedScope("   ")).toThrow(
 			"共享组名称需为 1 到 120 个字符",
 		);
+		expect(() =>
+			connectionApi.startGithubOAuth("shared-1", "request-1"),
+		).toThrow("共享组信息无效，请刷新后重试");
 	});
 });

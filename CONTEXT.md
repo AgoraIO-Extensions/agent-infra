@@ -36,6 +36,38 @@ _Avoid_: PAT、Consumer Declaration
 Principal 在 Connection 中建立的、对应一个稳定外部账号的连接。
 _Avoid_: PAT、ConsumerInstance
 
+**Connection Access Policy**:
+系统管理员发布的、决定 Principal 申请个人 Provider Connection 时所需能力包、有效期和顺序审批阶段的不可变规则版本。
+_Avoid_: Consumer Declaration、Connection Grant
+
+**Capability Profile**:
+Connection Access Policy 可引用的具名 Provider 能力上限，固定 ProviderRelease、ActionVersion 集合、外部效果和所需 scope。
+_Avoid_: Consumer Declaration、Provider OAuth Scope
+
+**Connection Access Request**:
+Principal 在提供 Provider Credential 前，为一个 Capability Profile 和有效期发起的公司审批申请。
+_Avoid_: Provider OAuth、Connection Grant、授权预览
+
+**Connect Permit**:
+Connection Access Request 全部审批通过后产生、只在服务端保存且只能成功创建一个 Provider Connection 的一次性资格。
+_Avoid_: OAuth state、Credential、Connection Grant
+
+**Connection Access Authorization**:
+Provider Connection 创建后绑定 Principal、稳定外部账号、Capability Profile 和有效期的公司准入权威。
+_Avoid_: Connection Access Request、Connection Grant、Provider OAuth Scope
+
+**Approval Decision**:
+当前审批阶段的合格审批人或有效代理提交的不可变通过或拒绝事实。
+_Avoid_: Notification、管理员备注
+
+**WorkItem**:
+审批、连接、续期或升级领域向 Principal 提供的当前可操作任务投影，不是业务状态权威。
+_Avoid_: Notification、Approval Decision
+
+**Notification**:
+业务事件面向一个接收人的不可变站内通知；读取或归档通知不完成对应 WorkItem。
+_Avoid_: WorkItem、外部通知投递
+
 **Provider Connection Upgrade**:
 在认证方式、Credential scope 与稳定外部账号兼容时，复用 current Credential 将 Provider Connection 迁移到新的 ProviderRelease。
 _Avoid_: Credential Rotation、Consumer 授权

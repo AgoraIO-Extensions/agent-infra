@@ -2,10 +2,34 @@ import { describe, expect, it } from "vitest";
 
 import {
 	connectionBrowserOpenApi,
+	oauthTransactionRequestSchema,
 	providerCredentialRequestSchema,
 } from "./index";
 
 describe("Connection Browser OpenAPI", () => {
+	it("declares mutually exclusive OAuth targets while allowing either target or neither", () => {
+		expect(
+			connectionBrowserOpenApi.components.schemas.OAuthTransactionRequest.not,
+		).toEqual({ required: ["accessRequestId", "sharedScopeId"] });
+		for (const input of [
+			{},
+			{ accessRequestId: "request-1" },
+			{ providerId: "manhattan", accessRequestId: "request-1" },
+			{ providerId: "manhattan", reconnectConnectionId: "connection-1" },
+			{ sharedScopeId: "shared-1" },
+		]) {
+			expect(oauthTransactionRequestSchema.safeParse(input).success).toBe(true);
+		}
+		for (const input of [
+			{ accessRequestId: "request-1", sharedScopeId: "shared-1" },
+			{ accessRequestId: "request-1", reconnectConnectionId: "connection-1" },
+			{ sharedScopeId: "shared-1", reconnectConnectionId: "connection-1" },
+		]) {
+			expect(oauthTransactionRequestSchema.safeParse(input).success).toBe(
+				false,
+			);
+		}
+	});
 	it("keeps the versioned browser surface free of caller identity selectors", () => {
 		expect(connectionBrowserOpenApi.openapi).toBe("3.1.0");
 		const serialized = JSON.stringify(connectionBrowserOpenApi);
@@ -28,6 +52,7 @@ describe("Connection Browser OpenAPI", () => {
 				{
 					additionalProperties: false,
 					properties: {
+						accessRequestId: { type: "string" },
 						providerId: { const: "datalego", type: "string" },
 					},
 					required: ["providerId"],
@@ -36,6 +61,7 @@ describe("Connection Browser OpenAPI", () => {
 				{
 					additionalProperties: false,
 					properties: {
+						accessRequestId: { type: "string" },
 						accessToken: { maxLength: 8192, minLength: 1, type: "string" },
 						providerId: {
 							enum: ["bitbucket", "rehoboam"],
@@ -48,6 +74,7 @@ describe("Connection Browser OpenAPI", () => {
 				{
 					additionalProperties: false,
 					properties: {
+						accessRequestId: { type: "string" },
 						password: { maxLength: 1024, minLength: 1, type: "string" },
 						providerId: {
 							enum: ["confluence", "jira"],
@@ -61,6 +88,7 @@ describe("Connection Browser OpenAPI", () => {
 				{
 					additionalProperties: false,
 					properties: {
+						accessRequestId: { type: "string" },
 						apiToken: { maxLength: 8192, minLength: 1, type: "string" },
 						providerId: {
 							enum: ["jenkins-ci", "jenkins-release"],

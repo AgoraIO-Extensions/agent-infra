@@ -739,14 +739,15 @@ export function createConnectionApp(options: ConnectionAppOptions = {}) {
 							request.id,
 							-32001,
 							error.message,
-							error.code === "PROVIDER_REAUTHORIZATION_REQUIRED"
-								? {
-										nextAction: { type: "REAUTHORIZE_PROVIDER" },
-										reasonCode: error.code,
-									}
-								: error.code === "PROVIDER_RESOURCE_NOT_FOUND"
-									? { providerHttpStatus: 404 }
-									: undefined,
+							error.data ??
+								(error.code === "PROVIDER_REAUTHORIZATION_REQUIRED"
+									? {
+											nextAction: { type: "REAUTHORIZE_PROVIDER" },
+											reasonCode: error.code,
+										}
+									: error.code === "PROVIDER_RESOURCE_NOT_FOUND"
+										? { providerHttpStatus: 404 }
+										: undefined),
 						),
 					);
 				throw error;

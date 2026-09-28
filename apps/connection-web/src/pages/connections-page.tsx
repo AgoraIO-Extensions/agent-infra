@@ -1,7 +1,9 @@
 import type {
+	AccessRequestsResponse,
 	AuthorizationPreviewResponse,
 	Connection,
 	Grant,
+	ProviderCredentialRequest,
 } from "@agent-infra/connection-contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -25,7 +27,7 @@ import {
 	useState,
 } from "react";
 
-import { connectionApi } from "../api";
+import { ConnectionApiError, connectionApi } from "../api";
 import { Button } from "../components/ui/button";
 import {
 	Dialog,
@@ -44,6 +46,15 @@ import {
 	providerLabel,
 	Status,
 } from "../views";
+import { AccessRequestPanel } from "./access-request-panel";
+
+const accessStateLabels: Record<string, string> = {
+	DISCONNECTED: "已断开",
+	EXPIRED: "已到期",
+	REAPPROVAL_REQUIRED: "待重审",
+	REVOKED: "已撤销",
+	SUSPENDED: "已暂停",
+};
 
 export function ConnectionsPage() {
 	const queryClient = useQueryClient();
@@ -51,9 +62,7 @@ export function ConnectionsPage() {
 	const [authorization, setAuthorization] = useState<{
 		connectionId: string;
 		consumerId: string;
-		initialActionVersionIds: string[];
-		preview: AuthorizationPreviewResponse | null;
-		reviewed: boolean;
+		initialActions: Grant["actions"] | null;
 	} | null>(null);
 	const [showHistory, setShowHistory] = useState(false);
 	const [bitbucketOpen, setBitbucketOpen] = useState(false);
@@ -76,6 +85,71 @@ export function ConnectionsPage() {
 	const [jenkinsPending, setJenkinsPending] = useState(false);
 	const [jenkinsError, setJenkinsError] = useState<Error | null>(null);
 	const [upgradeNotice, setUpgradeNotice] = useState<string | null>(null);
+	const [requestTrigger, setRequestTrigger] = useState(0);
+	const [requestTargetProvider, setRequestTargetProvider] = useState("");
+	const [renewalTarget, setRenewalTarget] =
+		useState<Connection["accessAuthorization"]>(null);
+	const [renewalProviderId, setRenewalProviderId] = useState("");
+	const [reconnectTargetId, setReconnectTargetId] = useState<string | null>(
+		null,
+	);
+	const [approvalRequiredProvider, setApprovalRequiredProvider] =
+		useState<ConnectorProviderId | null>(null);
+	const connectSearch = new URLSearchParams(window.location.search);
+	const accessRequestId = connectSearch.get("accessRequestId") ?? undefined;
+	const approvedProvider = connectSearch.get("provider");
+	const prepareAttempted = useRef<string | undefined>(undefined);
+	const startedManhattanRequest = useRef<string | undefined>(undefined);
+	const approvedRequest = useQuery({
+		queryKey: ["approved-connection-request", accessRequestId],
+		queryFn: () =>
+			connectionApi.getConnectionAccessRequest(accessRequestId ?? ""),
+		enabled: Boolean(accessRequestId),
+	});
+	const prepareConnect = useMutation({
+		mutationFn: connectionApi.prepareConnectionAccess,
+	});
+	const requestReady = Boolean(
+		approvedRequest.data?.id === accessRequestId &&
+			approvedRequest.data?.state === "APPROVED_PENDING_CONNECTION" &&
+			approvedRequest.data?.connectExpiresAt &&
+			Date.parse(approvedRequest.data.connectExpiresAt) > Date.now() &&
+			approvedRequest.data?.providerId === approvedProvider,
+	);
+	useEffect(() => {
+		if (
+			!requestReady ||
+			!accessRequestId ||
+			prepareAttempted.current === accessRequestId
+		)
+			return;
+		prepareAttempted.current = accessRequestId;
+		prepareConnect.mutate(accessRequestId);
+	}, [accessRequestId, requestReady, prepareConnect.mutate]);
+	const [completedAccessRequestId, setCompletedAccessRequestId] =
+		useState<string>();
+	const approvedAccessRequestId =
+		requestReady &&
+		completedAccessRequestId !== accessRequestId &&
+		prepareConnect.data?.requestId === accessRequestId &&
+		prepareConnect.data?.providerId === approvedProvider &&
+		Date.parse(prepareConnect.data?.connectExpiresAt ?? "") > Date.now()
+			? accessRequestId
+			: undefined;
+	const overview = useQuery({
+		queryKey: ["connections"],
+		queryFn: connectionApi.getConnections,
+	});
+	const [newCredentialRequestId, setNewCredentialRequestId] =
+		useState<string>();
+	const reusableConnections = (
+		overview.data?.overview.connections ?? []
+	).filter(
+		(connection) =>
+			connection.providerId === approvedProvider &&
+			connection.providerId !== "github" &&
+			connection.status === "ACTIVE",
+	);
 	const [bulkUpgrade, setBulkUpgrade] = useState<{
 		completed: number;
 		failedConnectionIds: string[];
@@ -92,11 +166,42 @@ export function ConnectionsPage() {
 		new URLSearchParams(window.location.search).get("provider") === "manhattan"
 			? "manhattan"
 			: "github";
+	const manhattanOAuth = useMutation({
+		mutationFn: connectionApi.startManhattanOAuth,
+		onSuccess: ({ authorizationUrl }) =>
+			window.location.assign(authorizationUrl),
+	});
 	useEffect(() => {
 		const search = new URLSearchParams(window.location.search);
+		if (accessRequestId && completedAccessRequestId === accessRequestId) return;
 		if (!["connect", "reauthorize"].includes(search.get("intent") ?? ""))
 			return;
 		const provider = search.get("provider");
+		if (
+			accessRequestId &&
+			(approvedRequest.isPending ||
+				(requestReady && !prepareConnect.isSuccess && !prepareConnect.isError))
+		)
+			return;
+		if (!approvedAccessRequestId) {
+			if (provider)
+				setApprovalRequiredProvider(provider as ConnectorProviderId);
+			return;
+		}
+		if (
+			overview.isPending ||
+			(reusableConnections.length > 0 &&
+				newCredentialRequestId !== accessRequestId)
+		)
+			return;
+		if (
+			provider === "manhattan" &&
+			approvedAccessRequestId &&
+			startedManhattanRequest.current !== approvedAccessRequestId
+		) {
+			startedManhattanRequest.current = approvedAccessRequestId;
+			manhattanOAuth.mutate({ accessRequestId: approvedAccessRequestId });
+		}
 		if (provider === "bitbucket") setBitbucketOpen(true);
 		if (provider === "rehoboam") setRehoboamOpen(true);
 		if (provider === "confluence") setConfluenceOpen(true);
@@ -105,16 +210,35 @@ export function ConnectionsPage() {
 			setJenkinsProviderId(provider);
 			setJenkinsOpen(true);
 		}
-	}, []);
-	const overview = useQuery({
-		queryKey: ["connections"],
-		queryFn: connectionApi.getConnections,
+	}, [
+		accessRequestId,
+		approvedAccessRequestId,
+		approvedRequest.isPending,
+		requestReady,
+		prepareConnect.isSuccess,
+		prepareConnect.isError,
+		overview.isPending,
+		reusableConnections.length,
+		newCredentialRequestId,
+		completedAccessRequestId,
+		manhattanOAuth.mutate,
+	]);
+	const accessRequests = useQuery({
+		queryKey: ["connection-access-requests"],
+		queryFn: connectionApi.listConnectionAccessRequests,
+		refetchInterval: 30_000,
 	});
 	const oauth = useGithubOAuth();
-	const manhattanOAuth = useMutation({
-		mutationFn: connectionApi.startManhattanOAuth,
-		onSuccess: ({ authorizationUrl }) =>
-			window.location.assign(authorizationUrl),
+	const reconnectOAuth = useMutation({
+		mutationFn: (connectionId: string) =>
+			connectionApi.reauthorizeProviderConnection({
+				connectionId,
+				body: { mode: "OAUTH" },
+			}),
+		onSuccess: (result) => {
+			if ("authorizationUrl" in result)
+				window.location.assign(result.authorizationUrl);
+		},
 	});
 	const disconnect = useMutation({
 		mutationFn: connectionApi.disconnectConnection,
@@ -129,15 +253,55 @@ export function ConnectionsPage() {
 			setUpgradeNotice("连接已升级，可以重新确认客户端授权。");
 		},
 	});
+	async function completeAccessRequest(requestId: string) {
+		setCompletedAccessRequestId(requestId);
+		await Promise.all([
+			queryClient.invalidateQueries({
+				queryKey: ["approved-connection-request", requestId],
+			}),
+			queryClient.invalidateQueries({
+				queryKey: ["connection-access-requests"],
+			}),
+			queryClient.invalidateQueries({
+				queryKey: ["connection-access-options"],
+			}),
+		]);
+	}
+	const approvedUpgrade = useMutation({
+		mutationFn: connectionApi.upgradeApprovedConnection,
+		onSuccess: async (_result, variables) => {
+			await completeAccessRequest(variables.accessRequestId);
+			await queryClient.invalidateQueries({ queryKey: ["connections"] });
+			setUpgradeNotice("已使用现有凭证完成连接，可以确认客户端授权。");
+		},
+	});
+	const connectCredential = async (
+		body: ProviderCredentialRequest,
+		targetId = reconnectTargetId,
+	) => {
+		if (targetId)
+			return connectionApi.reauthorizeProviderConnection({
+				connectionId: targetId,
+				body,
+			});
+		const requestId = approvedAccessRequestId;
+		const result = await connectionApi.connectProviderCredential({
+			...body,
+			accessRequestId: requestId,
+		});
+		if (requestId) await completeAccessRequest(requestId);
+		return result;
+	};
 	const connectBitbucket = async (accessToken: string) => {
 		setBitbucketPending(true);
 		setBitbucketError(null);
 		try {
-			await connectionApi.connectProviderCredential({
+			await connectCredential({
 				accessToken,
 				providerId: "bitbucket",
 			});
 			setBitbucketOpen(false);
+			setReconnectTargetId(null);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 		} catch (error) {
 			setBitbucketError(
@@ -151,11 +315,12 @@ export function ConnectionsPage() {
 		setRehoboamPending(true);
 		setRehoboamError(null);
 		try {
-			await connectionApi.connectProviderCredential({
+			await connectCredential({
 				accessToken,
 				providerId: "rehoboam",
 			});
 			setRehoboamOpen(false);
+			setReconnectTargetId(null);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 		} catch (error) {
 			setRehoboamError(
@@ -172,11 +337,12 @@ export function ConnectionsPage() {
 		setJiraPending(true);
 		setJiraError(null);
 		try {
-			await connectionApi.connectProviderCredential({
+			await connectCredential({
 				providerId: "jira",
 				...credential,
 			});
 			setJiraOpen(false);
+			setReconnectTargetId(null);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 		} catch (error) {
 			setJiraError(error instanceof Error ? error : new Error("Jira 连接失败"));
@@ -191,11 +357,12 @@ export function ConnectionsPage() {
 		setConfluencePending(true);
 		setConfluenceError(null);
 		try {
-			await connectionApi.connectProviderCredential({
+			await connectCredential({
 				providerId: "confluence",
 				...credential,
 			});
 			setConfluenceOpen(false);
+			setReconnectTargetId(null);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 		} catch (error) {
 			setConfluenceError(
@@ -205,26 +372,18 @@ export function ConnectionsPage() {
 			setConfluencePending(false);
 		}
 	};
-	const connectDatalego = useCallback(async () => {
+	const connectDatalego = async (targetId: string | null = null) => {
 		setDatalegoError(null);
 		try {
-			await connectionApi.connectProviderCredential({ providerId: "datalego" });
+			await connectCredential({ providerId: "datalego" }, targetId);
+			setReconnectTargetId(null);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 		} catch (error) {
 			setDatalegoError(
 				error instanceof Error ? error : new Error("DataLego 连接失败"),
 			);
 		}
-	}, [queryClient]);
-	useEffect(() => {
-		const search = new URLSearchParams(window.location.search);
-		if (
-			["connect", "reauthorize"].includes(search.get("intent") ?? "") &&
-			search.get("provider") === "datalego"
-		) {
-			void connectDatalego();
-		}
-	}, [connectDatalego]);
+	};
 	const connectJenkins = async (credential: {
 		apiToken: string;
 		username: string;
@@ -232,11 +391,12 @@ export function ConnectionsPage() {
 		setJenkinsPending(true);
 		setJenkinsError(null);
 		try {
-			await connectionApi.connectProviderCredential({
+			await connectCredential({
 				providerId: jenkinsProviderId,
 				...credential,
 			});
 			setJenkinsOpen(false);
+			setReconnectTargetId(null);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 		} catch (error) {
 			setJenkinsError(
@@ -248,18 +408,31 @@ export function ConnectionsPage() {
 			setJenkinsPending(false);
 		}
 	};
-	const preview = useMutation({
-		mutationFn: connectionApi.createAuthorizationPreview,
-		onSuccess: (value, variables) =>
-			setAuthorization((current) =>
-				current
-					? {
-							...current,
-							preview: value,
-							reviewed: Boolean(variables.actionVersionIds),
-						}
-					: current,
-			),
+	const preview = useQuery({
+		queryKey: [
+			"authorization-discovery",
+			authorization?.connectionId,
+			authorization?.consumerId,
+		],
+		queryFn: async () => {
+			const input = {
+				connectionId: authorization?.connectionId ?? "",
+				consumerId: authorization?.consumerId ?? "",
+			};
+			const value = await connectionApi.createAuthorizationPreview(input);
+			if (
+				value.preview.consumer.id !== input.consumerId ||
+				value.preview.targetConnection.id !== input.connectionId
+			) {
+				throw new Error("授权对象已变化，请重新加载。");
+			}
+			return value;
+		},
+		enabled: Boolean(authorization?.consumerId),
+		gcTime: 0,
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
+		refetchOnWindowFocus: false,
 	});
 	const confirm = useMutation({
 		mutationFn: connectionApi.confirmAuthorization,
@@ -274,12 +447,20 @@ export function ConnectionsPage() {
 			queryClient.invalidateQueries({ queryKey: ["connections"] }),
 	});
 
-	const beginOAuth = () => oauth.begin();
-	const connectProvider = (providerId: ConnectorProviderId) => {
+	const beginOAuth = () => oauth.begin(undefined, approvedAccessRequestId);
+	const openProviderCredential = (
+		providerId: ConnectorProviderId,
+		targetId: string | null = null,
+	) => {
 		if (providerId === "bitbucket") setBitbucketOpen(true);
-		else if (providerId === "datalego") void connectDatalego();
+		else if (providerId === "datalego") void connectDatalego(targetId);
 		else if (providerId === "rehoboam") setRehoboamOpen(true);
-		else if (providerId === "manhattan") manhattanOAuth.mutate();
+		else if (providerId === "manhattan")
+			manhattanOAuth.mutate(
+				targetId
+					? { reconnectConnectionId: targetId }
+					: { accessRequestId: approvedAccessRequestId },
+			);
 		else if (providerId === "jira") setJiraOpen(true);
 		else if (providerId === "confluence") setConfluenceOpen(true);
 		else if (providerId === "jenkins-ci" || providerId === "jenkins-release") {
@@ -287,8 +468,39 @@ export function ConnectionsPage() {
 			setJenkinsOpen(true);
 		} else beginOAuth();
 	};
+	const connectProvider = (providerId: ConnectorProviderId) => {
+		if (!approvedAccessRequestId || approvedProvider !== providerId) {
+			setRenewalTarget(null);
+			setRenewalProviderId("");
+			setReconnectTargetId(null);
+			setRequestTargetProvider(providerId);
+			setRequestTrigger((value) => value + 1);
+			document
+				.getElementById(`connection-access-${providerId}`)
+				?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+			return;
+		}
+		openProviderCredential(providerId);
+	};
 
 	const data = overview.data?.overview;
+	const previousActions = useCallback(
+		(connectionId: string, consumerId: string) => {
+			const grant = data?.grants.find(
+				(entry) =>
+					entry.connectionId === connectionId &&
+					entry.consumerId === consumerId,
+			);
+			if (!grant) return null;
+			// Overview is newest-consent first; never fall back past a revoked decision.
+			return ["ACTIVE", "PAUSED_CONNECTION", "PAUSED_CREDENTIAL"].includes(
+				grant.status,
+			)
+				? grant.actions
+				: [];
+		},
+		[data?.grants],
+	);
 	const callbackConnectionHealthy = data?.connections.some(
 		(connection) =>
 			connection.providerId === callbackProvider &&
@@ -318,11 +530,12 @@ export function ConnectionsPage() {
 		setAuthorization({
 			connectionId: candidates[0].id,
 			consumerId: data.consumers[0]?.id ?? "",
-			initialActionVersionIds: [],
-			preview: null,
-			reviewed: false,
+			initialActions: previousActions(
+				candidates[0].id,
+				data.consumers[0]?.id ?? "",
+			),
 		});
-	}, [data]);
+	}, [data, previousActions]);
 	const visibleGrants = data
 		? showHistory
 			? data.grants
@@ -439,6 +652,15 @@ export function ConnectionsPage() {
 			) : null}
 			{overview.isError ? <PageError error={overview.error} /> : null}
 			{oauth.isError ? <PageError error={oauth.error} /> : null}
+			{approvedRequest.isError ? (
+				<PageError error={approvedRequest.error} />
+			) : null}
+			{prepareConnect.isError ? (
+				<PageError error={prepareConnect.error} />
+			) : null}
+			{reconnectOAuth.isError ? (
+				<PageError error={reconnectOAuth.error} />
+			) : null}
 			{bitbucketError ? <PageError error={bitbucketError} /> : null}
 			{rehoboamError ? <PageError error={rehoboamError} /> : null}
 			{manhattanOAuth.isError ? (
@@ -451,6 +673,41 @@ export function ConnectionsPage() {
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}
 			{upgrade.isError ? <PageError error={upgrade.error} /> : null}
+			{approvedUpgrade.isError ? (
+				<PageError error={approvedUpgrade.error} />
+			) : null}
+			{approvedAccessRequestId &&
+			completedAccessRequestId !== approvedAccessRequestId &&
+			newCredentialRequestId !== approvedAccessRequestId &&
+			reusableConnections.length > 0 ? (
+				<section className="content-stack" aria-label="使用已批准的连接">
+					<h2>选择已有连接</h2>
+					{reusableConnections.map((connection) => (
+						<div className="connection-selected-account" key={connection.id}>
+							<div>
+								<p title={connection.displayName}>{connection.displayName}</p>
+							</div>
+							<Button
+								disabled={approvedUpgrade.isPending}
+								onClick={() =>
+									approvedUpgrade.mutate({
+										connectionId: connection.id,
+										accessRequestId: approvedAccessRequestId,
+									})
+								}
+							>
+								使用现有凭证
+							</Button>
+						</div>
+					))}
+					<Button
+						disabled={approvedUpgrade.isPending}
+						onClick={() => setNewCredentialRequestId(approvedAccessRequestId)}
+					>
+						连接其他账号
+					</Button>
+				</section>
+			) : null}
 			{upgradeNotice ? (
 				<p className="alert alert-success" role="status">
 					{upgradeNotice}
@@ -458,15 +715,24 @@ export function ConnectionsPage() {
 			) : null}
 			{!data && !overview.isPending ? (
 				<ConnectorManagementWorkspace
+					accessRequests={accessRequests.data?.requests ?? []}
+					accessRequestsError={accessRequests.error}
+					accessRequestsPending={accessRequests.isPending}
 					connections={[]}
 					grants={[]}
 					hasGrantHistory={false}
 					onAuthorize={() => undefined}
 					onConnect={connectProvider}
+					onRenew={() => undefined}
+					onRequestSubmitted={() => undefined}
 					onDisconnect={() => undefined}
 					onReconnect={() => undefined}
 					onRevoke={() => undefined}
 					revokePending={false}
+					requestTrigger={requestTrigger}
+					requestTargetProvider={requestTargetProvider}
+					renewalTarget={null}
+					renewalProviderId=""
 					onShowHistoryChange={() => undefined}
 					onUpgrade={() => undefined}
 					showHistory={false}
@@ -553,9 +819,10 @@ export function ConnectionsPage() {
 																setAuthorization({
 																	connectionId: task.connectionId,
 																	consumerId: task.consumerId,
-																	initialActionVersionIds: [],
-																	preview: null,
-																	reviewed: false,
+																	initialActions: previousActions(
+																		task.connectionId,
+																		task.consumerId,
+																	),
 																})
 															}
 														>
@@ -573,6 +840,9 @@ export function ConnectionsPage() {
 						</section>
 					) : null}
 					<ConnectorManagementWorkspace
+						accessRequests={accessRequests.data?.requests ?? []}
+						accessRequestsError={accessRequests.error}
+						accessRequestsPending={accessRequests.isPending}
 						connections={data.connections}
 						grants={visibleGrants}
 						hasGrantHistory={data.grants.length > 0}
@@ -580,19 +850,27 @@ export function ConnectionsPage() {
 							setAuthorization({
 								connectionId,
 								consumerId: consumerId ?? data.consumers[0]?.id ?? "",
-								initialActionVersionIds: consumerId
-									? (data.grants.find(
-											(grant) =>
-												grant.connectionId === connectionId &&
-												grant.consumerId === consumerId &&
-												grant.status === "ACTIVE",
-										)?.actionVersionIds ?? [])
-									: [],
-								preview: null,
-								reviewed: false,
+								initialActions: previousActions(
+									connectionId,
+									consumerId ?? data.consumers[0]?.id ?? "",
+								),
 							})
 						}
 						onConnect={connectProvider}
+						onRenew={(connection) => {
+							if (!connection.accessAuthorization) return;
+							setRenewalTarget(connection.accessAuthorization);
+							setRenewalProviderId(connection.providerId);
+							setRequestTargetProvider(connection.providerId);
+							setRequestTrigger((value) => value + 1);
+							document
+								.getElementById(`connection-access-${connection.providerId}`)
+								?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+						}}
+						onRequestSubmitted={() => {
+							setRenewalTarget(null);
+							setRenewalProviderId("");
+						}}
 						onDisconnect={(connectionId) => {
 							const connection = data.connections.find(
 								(entry) => entry.id === connectionId,
@@ -605,24 +883,28 @@ export function ConnectionsPage() {
 								disconnect.mutate(connectionId);
 						}}
 						onReconnect={(connection) => {
-							if (connection.providerId === "datalego") void connectDatalego();
-							else if (connection.providerId === "bitbucket")
-								setBitbucketOpen(true);
-							else if (connection.providerId === "rehoboam")
-								setRehoboamOpen(true);
-							else if (connection.providerId === "manhattan")
-								manhattanOAuth.mutate();
-							else if (connection.providerId === "jira") setJiraOpen(true);
-							else if (connection.providerId === "confluence")
-								setConfluenceOpen(true);
-							else if (
-								connection.providerId === "jenkins-ci" ||
-								connection.providerId === "jenkins-release"
+							if (
+								connection.status === "DISCONNECTED" &&
+								connection.accessAuthorization?.state === "DISCONNECTED" &&
+								(!connection.accessAuthorization.validUntil ||
+									Date.parse(connection.accessAuthorization.validUntil) >
+										Date.now())
 							) {
-								setJenkinsProviderId(connection.providerId);
-								setJenkinsOpen(true);
-							} else beginOAuth();
+								setReconnectTargetId(connection.id);
+								if (connection.providerId === "github")
+									reconnectOAuth.mutate(connection.id);
+								else
+									openProviderCredential(
+										connection.providerId as ConnectorProviderId,
+										connection.id,
+									);
+							} else
+								connectProvider(connection.providerId as ConnectorProviderId);
 						}}
+						requestTrigger={requestTrigger}
+						requestTargetProvider={requestTargetProvider}
+						renewalTarget={renewalTarget}
+						renewalProviderId={renewalProviderId}
 						onRevoke={(grantId) => revokeGrant.mutate(grantId)}
 						revokePending={revokeGrant.isPending}
 						onShowHistoryChange={setShowHistory}
@@ -638,7 +920,7 @@ export function ConnectionsPage() {
 			<Dialog
 				open={Boolean(authorization && data)}
 				onOpenChange={(open) => {
-					if (!open) setAuthorization(null);
+					if (!open && !confirm.isPending) setAuthorization(null);
 				}}
 			>
 				{authorization && data ? (
@@ -651,69 +933,63 @@ export function ConnectionsPage() {
 									size="icon"
 									type="button"
 									aria-label="关闭"
+									disabled={confirm.isPending}
 								>
 									<X aria-hidden="true" size={18} />
 								</Button>
 							</DialogClose>
 						</DialogHeader>
-						{authorization.preview ? (
-							<PreviewContent
-								key={authorization.preview.preview.previewId}
-								value={authorization.preview}
-								busy={confirm.isPending || preview.isPending}
-								initialActionVersionIds={authorization.initialActionVersionIds}
-								reviewed={authorization.reviewed}
-								onReview={(actionVersionIds) =>
-									preview.mutate({
-										actionVersionIds,
-										connectionId: authorization.connectionId,
-										consumerId: authorization.consumerId,
+						<div className="form-stack">
+							<label htmlFor="consumer">客户端</label>
+							<select
+								id="consumer"
+								value={authorization.consumerId}
+								disabled={confirm.isPending}
+								onChange={(event) =>
+									setAuthorization({
+										...authorization,
+										consumerId: event.target.value,
+										initialActions: previousActions(
+											authorization.connectionId,
+											event.target.value,
+										),
 									})
 								}
-								onConfirm={() =>
-									confirm.mutate({
-										confirmationToken:
-											authorization.preview?.preview.confirmationToken ?? "",
-										idempotencyKey: authorization.preview?.idempotencyKey ?? "",
-										previewId: authorization.preview?.preview.previewId ?? "",
+							>
+								{data.consumers.map((consumer) => (
+									<option key={consumer.id} value={consumer.id}>
+										{consumer.name}
+									</option>
+								))}
+							</select>
+						</div>
+						{preview.isFetching ? (
+							<p role="status">正在加载授权内容...</p>
+						) : preview.data && !preview.isError ? (
+							<PreviewContent
+								key={`${authorization.connectionId}:${authorization.consumerId}:${preview.dataUpdatedAt}`}
+								value={preview.data}
+								busy={confirm.isPending}
+								initialActions={authorization.initialActions}
+								onCancel={() => setAuthorization(null)}
+								onRefresh={() => {
+									void preview.refetch();
+								}}
+								onConfirm={(value) =>
+									confirm.mutateAsync({
+										confirmationToken: value.preview.confirmationToken,
+										idempotencyKey: value.idempotencyKey,
+										previewId: value.preview.previewId,
 									})
 								}
 							/>
-						) : (
-							<div className="form-stack">
-								<label htmlFor="consumer">客户端</label>
-								<select
-									id="consumer"
-									value={authorization.consumerId}
-									onChange={(event) =>
-										setAuthorization({
-											...authorization,
-											consumerId: event.target.value,
-										})
-									}
-								>
-									{data.consumers.map((consumer) => (
-										<option key={consumer.id} value={consumer.id}>
-											{consumer.name}
-										</option>
-									))}
-								</select>
-								<Button
-									type="button"
-									disabled={!authorization.consumerId || preview.isPending}
-									onClick={() =>
-										preview.mutate({
-											connectionId: authorization.connectionId,
-											consumerId: authorization.consumerId,
-										})
-									}
-								>
-									查看授权内容
-								</Button>
-							</div>
-						)}
-						{preview.isError ? <PageError error={preview.error} /> : null}
-						{confirm.isError ? <PageError error={confirm.error} /> : null}
+						) : null}
+						{preview.isError ? (
+							<>
+								<PageError error={preview.error} />
+								<Button onClick={() => void preview.refetch()}>重试</Button>
+							</>
+						) : null}
 					</DialogContent>
 				) : null}
 			</Dialog>
@@ -722,7 +998,10 @@ export function ConnectionsPage() {
 				open={jenkinsOpen}
 				onOpenChange={(open) => {
 					setJenkinsOpen(open);
-					if (!open) setJenkinsError(null);
+					if (!open) {
+						setJenkinsError(null);
+						setReconnectTargetId(null);
+					}
 				}}
 			>
 				<DialogContent aria-describedby={undefined}>
@@ -788,7 +1067,10 @@ export function ConnectionsPage() {
 				open={rehoboamOpen}
 				onOpenChange={(open) => {
 					setRehoboamOpen(open);
-					if (!open) setRehoboamError(null);
+					if (!open) {
+						setRehoboamError(null);
+						setReconnectTargetId(null);
+					}
 				}}
 			>
 				<DialogContent aria-describedby={undefined}>
@@ -836,10 +1118,47 @@ export function ConnectionsPage() {
 			</Dialog>
 
 			<Dialog
+				open={approvalRequiredProvider !== null}
+				onOpenChange={(open) => {
+					if (!open) setApprovalRequiredProvider(null);
+				}}
+			>
+				<DialogContent aria-describedby={undefined}>
+					<DialogHeader>
+						<DialogTitle>
+							申请连接 {providerLabel(approvalRequiredProvider ?? "")}
+						</DialogTitle>
+						<DialogClose asChild>
+							<Button
+								variant="secondary"
+								size="icon"
+								type="button"
+								aria-label="关闭"
+							>
+								<X aria-hidden="true" size={18} />
+							</Button>
+						</DialogClose>
+					</DialogHeader>
+					<p>连接外部账号前需要完成审批。</p>
+					<Button
+						onClick={() => {
+							const providerId = approvalRequiredProvider;
+							setApprovalRequiredProvider(null);
+							if (providerId) connectProvider(providerId);
+						}}
+					>
+						查看连接申请
+					</Button>
+				</DialogContent>
+			</Dialog>
+			<Dialog
 				open={bitbucketOpen}
 				onOpenChange={(open) => {
 					setBitbucketOpen(open);
-					if (!open) setBitbucketError(null);
+					if (!open) {
+						setBitbucketError(null);
+						setReconnectTargetId(null);
+					}
 				}}
 			>
 				<DialogContent aria-describedby={undefined}>
@@ -893,7 +1212,10 @@ export function ConnectionsPage() {
 				open={confluenceOpen}
 				onOpenChange={(open) => {
 					setConfluenceOpen(open);
-					if (!open) setConfluenceError(null);
+					if (!open) {
+						setConfluenceError(null);
+						setReconnectTargetId(null);
+					}
 				}}
 			>
 				<DialogContent aria-describedby={undefined}>
@@ -963,7 +1285,10 @@ export function ConnectionsPage() {
 				open={jiraOpen}
 				onOpenChange={(open) => {
 					setJiraOpen(open);
-					if (!open) setJiraError(null);
+					if (!open) {
+						setJiraError(null);
+						setReconnectTargetId(null);
+					}
 				}}
 			>
 				<DialogContent aria-describedby={undefined}>
@@ -1044,24 +1369,38 @@ function actionVersions(connection: Connection) {
 }
 
 function ConnectorManagementWorkspace(props: {
+	accessRequests: AccessRequestsResponse["requests"];
+	accessRequestsError: unknown;
+	accessRequestsPending: boolean;
 	connections: Connection[];
 	grants: Grant[];
 	hasGrantHistory: boolean;
 	onAuthorize: (connectionId: string, consumerId?: string) => void;
 	onConnect: (providerId: ConnectorProviderId) => void;
+	onRenew: (connection: Connection) => void;
+	onRequestSubmitted: () => void;
 	onDisconnect: (connectionId: string) => void;
 	onReconnect: (connection: Connection) => void;
 	onRevoke: (grantId: string) => void;
 	onShowHistoryChange: (show: boolean) => void;
 	onUpgrade: (connectionId: string) => void;
 	revokePending: boolean;
+	requestTrigger: number;
+	requestTargetProvider: string;
+	renewalTarget: Connection["accessAuthorization"];
+	renewalProviderId: string;
 	showHistory: boolean;
 	upgradingConnectionId: string | null;
 }) {
 	const activeConnections = props.connections.filter(
 		(connection) => connection.status === "ACTIVE",
 	);
+	const requestedProvider = new URLSearchParams(window.location.search).get(
+		"provider",
+	);
 	const initialProvider =
+		connectorDefinitions.find((item) => item.providerId === requestedProvider)
+			?.providerId ??
 		activeConnections.find((connection) => connection.providerId === "github")
 			?.providerId ??
 		activeConnections[0]?.providerId ??
@@ -1078,9 +1417,27 @@ function ConnectorManagementWorkspace(props: {
 	const connector =
 		connectorDefinitions.find((item) => item.providerId === providerId) ??
 		connectorDefinitions[0];
-	const accounts = activeConnections.filter(
-		(connection) => connection.providerId === connector?.providerId,
+	const currentRequest = props.accessRequests.find(
+		(item) =>
+			item.providerId === connector?.providerId &&
+			[
+				"SUBMITTED",
+				"IN_REVIEW",
+				"ROUTING_BLOCKED",
+				"APPROVED_PENDING_CONNECTION",
+			].includes(item.state),
 	);
+	const accounts = props.connections
+		.filter(
+			(connection) =>
+				connection.status === "ACTIVE" ||
+				(connection.status === "DISCONNECTED" &&
+					connection.accessAuthorization?.state === "DISCONNECTED" &&
+					(!connection.accessAuthorization.validUntil ||
+						Date.parse(connection.accessAuthorization.validUntil) >
+							Date.now())),
+		)
+		.filter((connection) => connection.providerId === connector?.providerId);
 	const selected =
 		accounts.find((connection) => connection.id === connectionId) ??
 		accounts[0];
@@ -1089,7 +1446,14 @@ function ConnectorManagementWorkspace(props: {
 		: [];
 	const Icon = connector?.icon;
 	const authorizationAvailable =
-		selected?.status === "ACTIVE" && !selected.requiresReconnect;
+		selected?.status === "ACTIVE" &&
+		!selected.requiresReconnect &&
+		(!selected.accessAuthorization ||
+			(["ACTIVE", "REAPPROVAL_REQUIRED"].includes(
+				selected.accessAuthorization.state,
+			) &&
+				(!selected.accessAuthorization.validUntil ||
+					Date.parse(selected.accessAuthorization.validUntil) > Date.now())));
 
 	return (
 		<section className="connection-management-workspace">
@@ -1146,13 +1510,45 @@ function ConnectorManagementWorkspace(props: {
 						<h2>{connector?.name}</h2>
 						<p>{connector?.description}</p>
 					</div>
-					<Button
-						variant={accounts.length ? "secondary" : "primary"}
-						onClick={() => connector && props.onConnect(connector.providerId)}
-					>
-						{accounts.length ? "再连接" : "连接"}
-					</Button>
+					{currentRequest?.state === "APPROVED_PENDING_CONNECTION" &&
+					currentRequest.connectExpiresAt &&
+					Date.parse(currentRequest.connectExpiresAt) > Date.now() ? (
+						<a
+							className="button button-primary"
+							href={`/connection/connections?provider=${encodeURIComponent(providerId)}&intent=connect&accessRequestId=${encodeURIComponent(currentRequest.id)}`}
+						>
+							连接账号
+						</a>
+					) : (
+						<Button
+							variant={accounts.length ? "secondary" : "primary"}
+							onClick={() => connector && props.onConnect(connector.providerId)}
+						>
+							{currentRequest?.state === "APPROVED_PENDING_CONNECTION"
+								? "重新申请"
+								: currentRequest
+									? "申请其他能力"
+									: "申请连接"}
+						</Button>
+					)}
 				</header>
+				{connector ? (
+					<AccessRequestPanel
+						key={connector.providerId}
+						onSubmitted={props.onRequestSubmitted}
+						providerId={connector.providerId}
+						renewalTarget={
+							props.renewalProviderId === connector.providerId
+								? (props.renewalTarget ?? null)
+								: null
+						}
+						requests={props.accessRequests}
+						requestsError={props.accessRequestsError}
+						requestsPending={props.accessRequestsPending}
+						startProviderId={props.requestTargetProvider}
+						startSignal={props.requestTrigger}
+					/>
+				) : null}
 				{selected ? (
 					<div className="connection-account-workspace">
 						<section className="connection-account-list">
@@ -1203,6 +1599,16 @@ function ConnectorManagementWorkspace(props: {
 									<h2 className="sr-only">客户端授权</h2>
 									<h3>{selected.displayName}</h3>
 									<p>{selected.externalAccount}</p>
+									{selected.accessAuthorization ? (
+										<p className="connection-access-validity">
+											{selected.accessAuthorization.state === "ACTIVE"
+												? selected.accessAuthorization.validityKind ===
+													"PERMANENT"
+													? "审批：永久有效"
+													: `审批有效至 ${new Date(selected.accessAuthorization.validUntil ?? "").toLocaleString()}`
+												: `审批：${accessStateLabels[selected.accessAuthorization.state] ?? selected.accessAuthorization.state}`}
+										</p>
+									) : null}
 								</div>
 								<Status value={selected.status} />
 							</div>
@@ -1279,26 +1685,95 @@ function ConnectorManagementWorkspace(props: {
 								)}
 							</div>
 							<div className="connection-account-actions">
-								{selected.requiresReconnect ? (
+								{!currentRequest &&
+								selected.status === "ACTIVE" &&
+								!selected.requiresReconnect &&
+								["REAPPROVAL_REQUIRED", "SUSPENDED"].includes(
+									selected.accessAuthorization?.state ?? "",
+								) ? (
 									<Button
 										variant="secondary"
-										disabled={props.upgradingConnectionId === selected.id}
 										onClick={() =>
-											selected.providerId === "github" ||
-											selected.providerId === "manhattan"
-												? props.onReconnect(selected)
-												: props.onUpgrade(selected.id)
+											props.onConnect(
+												selected.providerId as ConnectorProviderId,
+											)
 										}
 									>
-										{props.upgradingConnectionId === selected.id
-											? "正在升级"
-											: selected.providerId === "github" ||
-													selected.providerId === "manhattan"
-												? "重新连接"
-												: "升级连接"}
+										申请重审
 									</Button>
 								) : null}
-								{selected.ownerType === "PERSONAL" ? (
+								{selected.status === "ACTIVE" &&
+								!selected.requiresReconnect &&
+								selected.accessAuthorization?.state === "EXPIRED" ? (
+									<Button
+										variant="secondary"
+										onClick={() =>
+											props.onConnect(
+												selected.providerId as ConnectorProviderId,
+											)
+										}
+									>
+										重新申请
+									</Button>
+								) : null}
+								{!currentRequest &&
+								selected.status === "ACTIVE" &&
+								!selected.requiresReconnect &&
+								selected.accessAuthorization?.validityKind === "FINITE" &&
+								selected.accessAuthorization.renewalOpensAt &&
+								Date.parse(selected.accessAuthorization.renewalOpensAt) <=
+									Date.now() &&
+								selected.accessAuthorization.state === "ACTIVE" ? (
+									<Button
+										variant="secondary"
+										onClick={() => props.onRenew(selected)}
+									>
+										申请续期
+									</Button>
+								) : null}
+								{selected.requiresReconnect ? (
+									selected.status === "DISCONNECTED" &&
+									selected.accessAuthorization?.state === "DISCONNECTED" &&
+									(!selected.accessAuthorization.validUntil ||
+										Date.parse(selected.accessAuthorization.validUntil) >
+											Date.now()) ? (
+										<Button
+											variant="secondary"
+											onClick={() => props.onReconnect(selected)}
+										>
+											重新连接
+										</Button>
+									) : selected.accessAuthorization ? (
+										<Button
+											variant="secondary"
+											onClick={() =>
+												props.onConnect(
+													selected.providerId as ConnectorProviderId,
+												)
+											}
+										>
+											重新申请
+										</Button>
+									) : (
+										<Button
+											variant="secondary"
+											disabled={props.upgradingConnectionId === selected.id}
+											onClick={() =>
+												selected.providerId === "github"
+													? props.onReconnect(selected)
+													: props.onUpgrade(selected.id)
+											}
+										>
+											{props.upgradingConnectionId === selected.id
+												? "正在升级"
+												: selected.providerId === "github"
+													? "重新连接"
+													: "升级连接"}
+										</Button>
+									)
+								) : null}
+								{selected.ownerType === "PERSONAL" &&
+								selected.status === "ACTIVE" ? (
 									<Button
 										variant="danger"
 										onClick={() => props.onDisconnect(selected.id)}
@@ -1321,23 +1796,117 @@ function ConnectorManagementWorkspace(props: {
 
 export function PreviewContent(props: {
 	busy: boolean;
-	initialActionVersionIds?: string[];
-	onConfirm: () => void;
-	onReview?: (actionVersionIds: string[]) => void;
-	reviewed?: boolean;
+	initialActions?: Grant["actions"] | null;
+	onConfirm: (value: AuthorizationPreviewResponse) => unknown;
+	onCancel: () => void;
+	onRefresh: () => void;
 	value: AuthorizationPreviewResponse;
 }) {
-	const availableActionIds = new Set(
-		props.value.preview.actions.map((action) => action.id),
-	);
-	const defaultSelection = props.initialActionVersionIds?.length
-		? props.initialActionVersionIds.filter((id) => availableActionIds.has(id))
-		: props.value.preview.actions
-				.filter((action) => action.effect === "READ")
-				.map((action) => action.id);
+	const defaultSelection =
+		props.initialActions !== undefined && props.initialActions !== null
+			? props.value.preview.actions
+					.filter((action) =>
+						props.initialActions?.some(
+							(previous) =>
+								previous.name === action.name &&
+								previous.effect === action.effect,
+						),
+					)
+					.map((action) => action.id)
+			: props.value.preview.actions
+					.filter((action) => action.effect === "READ")
+					.map((action) => action.id);
 	const [selected, setSelected] = useState(() => new Set(defaultSelection));
 	const [query, setQuery] = useState("");
 	const [effect, setEffect] = useState<"ALL" | "READ" | "WRITE">("ALL");
+	const submitting = useRef(false);
+	const [submitError, setSubmitError] = useState<Error | null>(null);
+	const [needsRefresh, setNeedsRefresh] = useState(false);
+	const [notice, setNotice] = useState("");
+	const actionVersionIds = [...selected].sort();
+	const finalPreview = useQuery({
+		queryKey: [
+			"authorization-final",
+			props.value.preview.previewId,
+			props.value.preview.consumer.id,
+			props.value.preview.targetConnection.id,
+			actionVersionIds,
+		],
+		queryFn: () =>
+			connectionApi.createAuthorizationPreview({
+				actionVersionIds,
+				connectionId: props.value.preview.targetConnection.id,
+				consumerId: props.value.preview.consumer.id,
+			}),
+		enabled: selected.size > 0,
+		retry: false,
+		gcTime: 0,
+		staleTime: Number.POSITIVE_INFINITY,
+		refetchOnWindowFocus: false,
+	});
+	const selectedActions = props.value.preview.actions.filter((action) =>
+		selected.has(action.id),
+	);
+	const matches = Boolean(
+		finalPreview.data &&
+			authorizationFacts(finalPreview.data) ===
+				authorizationFacts({
+					...props.value,
+					preview: { ...props.value.preview, actions: selectedActions },
+				}),
+	);
+	const changed = Boolean(finalPreview.data && !matches);
+	const invalidFinalPreview =
+		finalPreview.error instanceof ConnectionApiError &&
+		finalPreview.error.detail.code === "INVALID_REQUEST";
+	const added = selectedActions.filter(
+		(action) =>
+			!props.initialActions?.some(
+				(previous) =>
+					previous.name === action.name && previous.effect === action.effect,
+			),
+	);
+	const removed = (props.initialActions ?? []).filter(
+		(previous) =>
+			!selectedActions.some(
+				(action) =>
+					previous.name === action.name && previous.effect === action.effect,
+			),
+	);
+	const submit = async () => {
+		if (
+			submitting.current ||
+			props.busy ||
+			finalPreview.isFetching ||
+			finalPreview.isError ||
+			!matches ||
+			needsRefresh ||
+			!finalPreview.data
+		)
+			return;
+		const expiresAt = Date.parse(finalPreview.data.preview.expiresAt);
+		if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+			setNotice("授权预览已过期，刷新后请重新确认。");
+			void finalPreview.refetch();
+			return;
+		}
+		submitting.current = true;
+		setSubmitError(null);
+		try {
+			await props.onConfirm(finalPreview.data);
+		} catch (error) {
+			setSubmitError(
+				error instanceof Error ? error : new Error("授权确认失败"),
+			);
+			if (
+				error instanceof ConnectionApiError &&
+				error.detail.code === "INVALID_REQUEST"
+			)
+				setNeedsRefresh(true);
+		} finally {
+			submitting.current = false;
+		}
+	};
 	const visibleActions = useMemo(() => {
 		const normalized = query.trim().toLowerCase();
 		return props.value.preview.actions.filter(
@@ -1348,15 +1917,26 @@ export function PreviewContent(props: {
 					action.description.toLowerCase().includes(normalized)),
 		);
 	}, [effect, props.value.preview.actions, query]);
-	if (props.reviewed === false && props.onReview) {
-		return (
-			<div className="compact content-stack">
-				<div className="account-switch">
-					<strong>
-						{props.value.preview.targetConnection.externalAccount}
-					</strong>
-					<span>{props.value.preview.consumer.name}</span>
-				</div>
+	return (
+		<div className="authorization-selection compact content-stack">
+			<div className="account-switch">
+				<strong>{props.value.preview.targetConnection.externalAccount}</strong>
+				<span>{props.value.preview.consumer.name}</span>
+			</div>
+			{props.value.preview.currentConnection &&
+			props.value.preview.currentConnection.id !==
+				props.value.preview.targetConnection.id ? (
+				<p className="alert alert-warning">
+					账号切换：{props.value.preview.currentConnection.externalAccount} →{" "}
+					{props.value.preview.targetConnection.externalAccount}
+				</p>
+			) : null}
+			<fieldset
+				disabled={props.busy}
+				className="authorization-options content-stack"
+				style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
+			>
+				<legend className="sr-only">授权能力</legend>
 				<div className="permission-controls">
 					<input
 						aria-label="搜索能力"
@@ -1403,11 +1983,27 @@ export function PreviewContent(props: {
 				<p className="scope-summary">
 					已选择 {selected.size} / 共 {props.value.preview.actions.length} 项
 				</p>
-				<ul className="permission-list">
+				<p className="scope-summary" aria-live="polite">
+					新增授权 {added.length} 项，取消授权 {removed.length} 项
+				</p>
+				{removed.length ? (
+					<details>
+						<summary>取消的权限</summary>
+						<ul>
+							{removed.map((action) => (
+								<li key={action.id}>
+									{action.name}（{action.effect === "WRITE" ? "写入" : "读取"}）
+								</li>
+							))}
+						</ul>
+					</details>
+				) : null}
+				<ul className="permission-list authorization-actions">
 					{visibleActions.map((action) => (
 						<li key={action.id}>
 							<label className="permission-option">
 								<input
+									aria-label={`${action.name} ${action.effect === "WRITE" ? "写入" : "读取"}`}
 									checked={selected.has(action.id)}
 									type="checkbox"
 									onChange={(event) =>
@@ -1422,42 +2018,16 @@ export function PreviewContent(props: {
 								<span>
 									<strong>{action.name}</strong>
 									<small>{action.effect === "WRITE" ? "写入" : "读取"}</small>
+									{props.initialActions &&
+									!props.initialActions.some(
+										(previous) =>
+											previous.name === action.name &&
+											previous.effect === action.effect,
+									) ? (
+										<small>新增能力</small>
+									) : null}
 								</span>
 							</label>
-						</li>
-					))}
-				</ul>
-				<div className="dialog-actions">
-					<Button
-						type="button"
-						disabled={props.busy || selected.size === 0}
-						onClick={() => props.onReview?.([...selected].sort())}
-					>
-						查看授权差异
-					</Button>
-				</div>
-			</div>
-		);
-	}
-	return (
-		<div className="compact content-stack">
-			<div className="account-switch authorization-summary">
-				<div>
-					<strong>
-						{props.value.preview.targetConnection.externalAccount}
-					</strong>
-					<span>{props.value.preview.consumer.name}</span>
-				</div>
-				<Button type="button" disabled={props.busy} onClick={props.onConfirm}>
-					<Check aria-hidden="true" size={17} />
-					{props.busy ? "正在确认" : "确认授权"}
-				</Button>
-			</div>
-			<ul className="permission-list">
-				{props.value.preview.actions.map((action) => (
-					<li key={action.id}>
-						<div>
-							<strong>{action.name}</strong>
 							<p>{action.description}</p>
 							<p className="scope-summary">
 								所需 scope：
@@ -1465,15 +2035,84 @@ export function PreviewContent(props: {
 									? action.requiredScopes.join("、")
 									: "无"}
 							</p>
-						</div>
-						<span className="effect-badge">
-							{action.effect === "WRITE" ? "写入" : "读取"}
-						</span>
-					</li>
-				))}
-			</ul>
+						</li>
+					))}
+				</ul>
+			</fieldset>
+			{notice ? <p role="status">{notice}</p> : null}
+			{finalPreview.isError ? (
+				<>
+					<PageError error={finalPreview.error} />
+					<Button onClick={() => void finalPreview.refetch()}>重试</Button>
+				</>
+			) : null}
+			{submitError ? <PageError error={submitError} /> : null}
+			{changed || needsRefresh || invalidFinalPreview ? (
+				<div role="alert">
+					<p>授权内容已变化，请刷新后重新确认。</p>
+					<Button onClick={props.onRefresh}>刷新授权内容</Button>
+				</div>
+			) : null}
+			<div className="dialog-actions authorization-footer">
+				<Button
+					variant="secondary"
+					type="button"
+					disabled={props.busy}
+					onClick={props.onCancel}
+				>
+					取消
+				</Button>
+				<Button
+					type="button"
+					disabled={
+						props.busy ||
+						selected.size === 0 ||
+						finalPreview.isFetching ||
+						finalPreview.isError ||
+						!matches ||
+						needsRefresh
+					}
+					onClick={() => void submit()}
+				>
+					<Check aria-hidden="true" size={17} />
+					{props.busy
+						? "正在确认"
+						: finalPreview.isFetching
+							? "正在校验"
+							: "确认授权"}
+				</Button>
+			</div>
 		</div>
 	);
+}
+
+function authorizationFacts(value: AuthorizationPreviewResponse) {
+	const { consumer, currentConnection, targetConnection, actions } =
+		value.preview;
+	return JSON.stringify({
+		consumer: [consumer.id, consumer.name],
+		currentAccount: currentConnection
+			? [
+					currentConnection.id,
+					currentConnection.externalAccount,
+					currentConnection.displayName,
+				]
+			: null,
+		account: [
+			targetConnection.id,
+			targetConnection.externalAccount,
+			targetConnection.displayName,
+		],
+		actions: [...actions]
+			.sort((a, b) => a.id.localeCompare(b.id))
+			.map((action) => [
+				action.id,
+				action.name,
+				action.description,
+				action.effect,
+				[...action.requiredScopes].sort(),
+			]),
+	});
 }
 
 function GrantPermissions(props: {

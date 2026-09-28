@@ -143,6 +143,8 @@ class MemoryRepository implements ConnectionRepository {
 		ReconciliationJob
 	>();
 	storedOAuthCredential?: {
+		accessRequestId?: string;
+		expectedConnectionId?: string;
 		accessToken: string;
 		displayName: string;
 		externalAccount: string;
@@ -160,6 +162,7 @@ class MemoryRepository implements ConnectionRepository {
 	private oauthTransactions = new Map<
 		string,
 		{
+			accessRequestId?: string;
 			codeVerifier: string;
 			principalId: string;
 			providerId: string;
@@ -172,6 +175,12 @@ class MemoryRepository implements ConnectionRepository {
 	private leaseSequence = 0;
 	directInvocation = direct;
 	credentialAccessToken = "test-secret";
+	connectValidationError?: ConnectionError;
+	readonly connectValidations: Array<{
+		principalId: string;
+		providerId: string;
+		requestId?: string;
+	}> = [];
 	refreshClaim?: CredentialRefreshClaim | "IN_PROGRESS" | "REAUTH_REQUIRED";
 	refreshStarted = false;
 	refreshFailure?: "INVALID_GRANT" | "UNCERTAIN";
@@ -179,6 +188,14 @@ class MemoryRepository implements ConnectionRepository {
 	failSuccessfulFinalization = false;
 	rejectNextDispatch = false;
 	async ensurePrincipal() {}
+	async validatePersonalConnectRequest(input: {
+		principalId: string;
+		providerId: string;
+		requestId?: string;
+	}) {
+		this.connectValidations.push(input);
+		if (this.connectValidationError) throw this.connectValidationError;
+	}
 	async authorizeConnectionAdministration() {
 		return false;
 	}
@@ -289,6 +306,8 @@ class MemoryRepository implements ConnectionRepository {
 	async disconnectConnection() {}
 	async disconnectSharedConnection() {}
 	async createOAuthTransaction(input: {
+		accessRequestId?: string;
+		reconnectConnectionId?: string;
 		codeVerifier: string;
 		principalId: string;
 		providerId: string;
@@ -309,6 +328,8 @@ class MemoryRepository implements ConnectionRepository {
 		return transaction;
 	}
 	async storeGithubOAuthCredential(input: {
+		accessRequestId?: string;
+		expectedConnectionId?: string;
 		accessToken: string;
 		displayName: string;
 		externalAccount: string;
@@ -317,7 +338,19 @@ class MemoryRepository implements ConnectionRepository {
 		this.storedOAuthCredential = input;
 		return { connectionId: "connection-oauth" };
 	}
+	async validatePersonalReconnect(input: {
+		connectionId: string;
+		principalId: string;
+	}) {
+		if (
+			input.connectionId !== "connection-oauth" ||
+			input.principalId !== "alice"
+		)
+			throw new ConnectionError("FORBIDDEN", "Reconnect target is unavailable");
+		return { providerId: "github" };
+	}
 	async storeProviderCredential(input: {
+		accessRequestId?: string;
 		accessToken: string;
 		displayName: string;
 		externalAccount: string;
@@ -1039,6 +1072,46 @@ describe("Connection application service", () => {
 		expect(repository.reconciliationJobs).toHaveLength(0);
 	});
 
+	it("preserves Provider-owned details for deterministic write rejection", async () => {
+		const repository = new MemoryRepository();
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => {
+				throw Object.assign(new Error("Rehoboam rejected dispatch"), {
+					providerCode: "PIPELINE_REF_NOT_FOUND",
+					providerDetails: { ref: "missing", workflow: "build.yml" },
+					providerMessage: "GitHub ref does not exist: missing",
+					providerRetryable: false,
+					providerStatus: 400,
+					providerSubmissionOutcome: "rejected",
+				});
+			},
+		});
+
+		await expect(
+			service.invokeDirect("direct", "github.createPullRequest", {
+				base: "main",
+				head: "feature/invalid",
+				idempotencyKey: "rehoboam-invalid-1",
+				repository: "acme/widgets",
+				title: "Invalid",
+			}),
+		).rejects.toMatchObject({
+			code: "INVALID_REQUEST",
+			data: {
+				providerCode: "PIPELINE_REF_NOT_FOUND",
+				providerDetails: { ref: "missing", workflow: "build.yml" },
+				providerHttpStatus: 400,
+				retryable: false,
+				submissionOutcome: "rejected",
+			},
+			message:
+				"Provider rejected the action: GitHub ref does not exist: missing",
+		});
+
+		expect(repository.calls[0]?.status).toBe("FAILED");
+		expect(repository.reconciliationJobs).toHaveLength(0);
+	});
+
 	it("requires reauthorization when a Provider rejects the credential", async () => {
 		const repository = new MemoryRepository();
 		const service = new ConnectionApplicationService(repository, {
@@ -1181,6 +1254,23 @@ describe("Connection application service", () => {
 			grantedScopes: ["repo"],
 			sharedScopeId: "shared-scope-company",
 		});
+		const reconnect = await service.startGithubOAuth(
+			"alice",
+			"https://connection.test/oauth/github/callback",
+			undefined,
+			"connection-oauth",
+		);
+		const reconnectState = new URL(reconnect.authorizationUrl).searchParams.get(
+			"state",
+		);
+		await service.completeGithubOAuth(
+			"authorization-code",
+			reconnectState ?? "",
+		);
+		expect(repository.storedOAuthCredential).toMatchObject({
+			expectedConnectionId: "connection-oauth",
+			externalAccount: "alice-github",
+		});
 	});
 
 	it("binds Manhattan OAuth state to its provider and stores only the exchanged token", async () => {
@@ -1219,10 +1309,24 @@ describe("Connection application service", () => {
 			},
 			{ manhattan: oauth },
 		);
+		repository.connectValidationError = new ConnectionError(
+			"FORBIDDEN",
+			"Connect approval is required",
+		);
+		await expect(
+			service.startProviderOAuth(
+				"alice",
+				"manhattan",
+				"https://connection.example/oauth/callback?provider=manhattan",
+				"approved-request",
+			),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		repository.connectValidationError = undefined;
 		const start = await service.startProviderOAuth(
 			"alice",
 			"manhattan",
 			"https://connection.example/oauth/callback?provider=manhattan",
+			"approved-request",
 		);
 		const state =
 			new URL(start.authorizationUrl).searchParams.get("state") ?? "";
@@ -1236,13 +1340,34 @@ describe("Connection application service", () => {
 			"alice",
 			"manhattan",
 			"https://connection.example/oauth/callback?provider=manhattan",
+			"approved-request",
+		);
+		repository.connectValidationError = new ConnectionError(
+			"FORBIDDEN",
+			"Connect approval was revoked",
+		);
+		await expect(
+			service.completeProviderOAuth(
+				"manhattan",
+				"one-time-code",
+				new URL(next.authorizationUrl).searchParams.get("state") ?? "",
+			),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		expect(repository.storedOAuthCredential).toBeUndefined();
+		repository.connectValidationError = undefined;
+		const approved = await service.startProviderOAuth(
+			"alice",
+			"manhattan",
+			"https://connection.example/oauth/callback?provider=manhattan",
+			"approved-request",
 		);
 		await service.completeProviderOAuth(
 			"manhattan",
 			"one-time-code",
-			new URL(next.authorizationUrl).searchParams.get("state") ?? "",
+			new URL(approved.authorizationUrl).searchParams.get("state") ?? "",
 		);
 		expect(repository.storedOAuthCredential).toMatchObject({
+			accessRequestId: "approved-request",
 			accessToken: "personal-token",
 			principalId: "alice",
 		});
@@ -1623,6 +1748,79 @@ describe("Connection application service", () => {
 		expect(repository.storedOAuthCredential).toBeUndefined();
 	});
 
+	it("rejects a personal credential connection before Provider validation", async () => {
+		const repository = new MemoryRepository();
+		repository.connectValidationError = new ConnectionError(
+			"FORBIDDEN",
+			"Connection access approval is required",
+		);
+		let providerValidations = 0;
+		const service = new ConnectionApplicationService(
+			repository,
+			{ execute: async () => ({}) },
+			undefined,
+			{
+				bitbucket: {
+					providerId: "bitbucket",
+					providerReleaseId: "bitbucket-server-v1",
+					validateCredential: async () => {
+						providerValidations += 1;
+						throw new Error("must not run");
+					},
+				},
+			},
+		);
+		await expect(
+			service.connectProviderCredential(
+				"alice",
+				"bitbucket",
+				"test-pat",
+				"request-approved",
+			),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		expect(providerValidations).toBe(0);
+		expect(repository.connectValidations).toEqual([
+			{
+				principalId: "alice",
+				providerId: "bitbucket",
+				requestId: "request-approved",
+			},
+		]);
+	});
+
+	it("rejects personal OAuth before creating a Provider authorization URL", async () => {
+		const repository = new MemoryRepository();
+		repository.connectValidationError = new ConnectionError(
+			"FORBIDDEN",
+			"Connection access approval is required",
+		);
+		let authorizationUrls = 0;
+		const service = new ConnectionApplicationService(
+			repository,
+			{ execute: async () => ({}) },
+			{
+				exchangeCode: async () => {
+					throw new Error("must not run");
+				},
+				getAuthorizationUrl: () => {
+					authorizationUrls += 1;
+					return "https://github.test/authorize";
+				},
+				refresh: async () => {
+					throw new Error("must not run");
+				},
+			},
+		);
+		await expect(
+			service.startGithubOAuth(
+				"alice",
+				"https://connection.test/oauth/github/callback",
+				"request-approved",
+			),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		expect(authorizationUrls).toBe(0);
+	});
+
 	it("classifies Provider credential transport failures as unavailable", async () => {
 		const service = new ConnectionApplicationService(
 			new MemoryRepository(),
@@ -1643,59 +1841,86 @@ describe("Connection application service", () => {
 		).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
 	});
 
-	it("upgrades a ProviderRelease with the stored credential and stable identity", async () => {
-		const repository = new MemoryRepository();
-		repository.getProviderCredentialForUpgrade = async () => ({
-			accessToken: "stored-token",
-			credentialVersionId: "credential-v1",
-			externalAccount: "alice",
-			grantedScopes: ["rehoboam.metadata.read"],
-			providerId: "rehoboam",
-		});
-		let stored: Record<string, unknown> | undefined;
-		repository.storeProviderCredential = async (input) => {
-			stored = input;
-			return { connectionId: "connection-rehoboam" };
-		};
-		const service = new ConnectionApplicationService(
-			repository,
-			{ execute: async () => ({}) },
-			undefined,
-			{
-				rehoboam: {
-					providerId: "rehoboam",
-					providerReleaseId: "rehoboam-connection-v4",
-					validateCredential: async (accessToken) => {
-						expect(accessToken).toBe("stored-token");
-						return {
-							accessToken,
-							displayName: "Alice",
-							externalAccount: "alice",
-							grantedScopes: [
-								"rehoboam.metadata.read",
-								"rehoboam.release.read",
-							],
-							providerId: "rehoboam",
-							providerReleaseId: "rehoboam-connection-v4",
-						};
+	it.each([undefined, "approved-upgrade-request"])(
+		"upgrades with stored credential and approval %s",
+		async (accessRequestId) => {
+			const repository = new MemoryRepository();
+			repository.getProviderCredentialForUpgrade = async () => ({
+				accessToken: "stored-token",
+				credentialVersionId: "credential-v1",
+				externalAccount: "alice",
+				grantedScopes: ["rehoboam.metadata.read"],
+				providerId: "rehoboam",
+			});
+			let stored: Record<string, unknown> | undefined;
+			repository.storeProviderCredential = async (input) => {
+				stored = input;
+				return { connectionId: "connection-rehoboam" };
+			};
+			const service = new ConnectionApplicationService(
+				repository,
+				{ execute: async () => ({}) },
+				undefined,
+				{
+					rehoboam: {
+						providerId: "rehoboam",
+						providerReleaseId: "rehoboam-connection-v4",
+						validateCredential: async (accessToken) => {
+							expect(accessToken).toBe("stored-token");
+							return {
+								accessToken,
+								displayName: "Alice",
+								externalAccount: "alice",
+								grantedScopes: [
+									"rehoboam.metadata.read",
+									"rehoboam.release.read",
+								],
+								providerId: "rehoboam",
+								providerReleaseId: "rehoboam-connection-v4",
+							};
+						},
 					},
 				},
-			},
-		);
-		expect(
-			await service.upgradeProviderConnection(
-				"principal-alice",
-				"connection-rehoboam",
-			),
-		).toEqual({ connectionId: "connection-rehoboam" });
-		expect(stored).toMatchObject({
-			expectedConnectionId: "connection-rehoboam",
-			expectedCredentialVersionId: "credential-v1",
-			principalId: "principal-alice",
-			grantedScopes: ["rehoboam.metadata.read", "rehoboam.release.read"],
-			providerReleaseId: "rehoboam-connection-v4",
-		});
-	});
+			);
+			expect(
+				await service.upgradeProviderConnection(
+					"principal-alice",
+					"connection-rehoboam",
+					accessRequestId,
+				),
+			).toEqual({ connectionId: "connection-rehoboam" });
+			expect(stored).toMatchObject({
+				expectedConnectionId: "connection-rehoboam",
+				expectedCredentialVersionId: "credential-v1",
+				principalId: "principal-alice",
+				grantedScopes: ["rehoboam.metadata.read", "rehoboam.release.read"],
+				providerReleaseId: "rehoboam-connection-v4",
+			});
+			if (accessRequestId) {
+				expect(stored?.accessRequestId).toBe(accessRequestId);
+				expect(repository.connectValidations).toEqual([
+					{
+						principalId: "principal-alice",
+						providerId: "rehoboam",
+						requestId: accessRequestId,
+					},
+				]);
+				stored = undefined;
+				repository.connectValidationError = new ConnectionError(
+					"FORBIDDEN",
+					"Approval is unavailable",
+				);
+				await expect(
+					service.upgradeProviderConnection(
+						"principal-alice",
+						"connection-rehoboam",
+						accessRequestId,
+					),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				expect(stored).toBeUndefined();
+			}
+		},
+	);
 
 	it("requires SSO instead of upgrading an unrefreshable Manhattan token", async () => {
 		const repository = new MemoryRepository();

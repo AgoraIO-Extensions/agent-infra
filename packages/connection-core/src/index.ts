@@ -1,8 +1,26 @@
 import { createHash } from "node:crypto";
 import type { Schema } from "@cfworker/json-schema";
 import { Validator } from "@cfworker/json-schema";
+import {
+	type AuditCall,
+	type AuditFilter,
+	type AuditQuery,
+	type AuditRawDetail,
+	auditFilter,
+	auditPage,
+	projectAuditDetail,
+} from "./audit";
 
+export * from "./access-approval";
+export * from "./audit";
+export * from "./call-diagnostics";
 export * from "./oauth";
+
+import {
+	type CallDiagnostics,
+	newCallDiagnostics,
+	withCallDiagnostics,
+} from "./call-diagnostics";
 
 export const forbiddenSelectorNames = new Set([
 	"accountId",
@@ -94,6 +112,15 @@ export type ConnectionOverview = {
 	actions: ActionDefinition[];
 	calls: CallProjection[];
 	connections: Array<{
+		accessAuthorization?: {
+			capabilityProfileId: string;
+			id: string;
+			providerReleaseId: string;
+			renewalOpensAt: string | null;
+			state: string;
+			validityKind: "FINITE" | "PERMANENT";
+			validUntil: string | null;
+		} | null;
 		actionVersionIds: string[];
 		displayName: string;
 		externalAccount: string;
@@ -576,6 +603,8 @@ export function decideReconnectAuthorization(input: {
 }
 
 export type OAuthTransaction = {
+	accessRequestId?: string;
+	reconnectConnectionId?: string;
 	codeVerifier: string;
 	principalId: string;
 	providerId: string;
@@ -593,6 +622,11 @@ export type ReconciliationJob = {
 };
 
 export interface ConnectionRepository {
+	listAuditCalls?(
+		principalId: string,
+		filter: AuditFilter,
+	): Promise<AuditCall[]>;
+	getAuditCall?(principalId: string, callId: string): Promise<AuditRawDetail>;
 	ensurePrincipal(input: { principalId: string }): Promise<void>;
 	authorizeConnectionAdministration(principalId: string): Promise<boolean>;
 	isConnectionAdministrator(principalId: string): Promise<boolean>;
@@ -660,6 +694,7 @@ export interface ConnectionRepository {
 	}): Promise<{ call: StoredCall; created: boolean }>;
 	claimReconciliationJob(): Promise<ReconciliationJob | undefined>;
 	completeReconciliationJob(input: {
+		diagnostics?: CallDiagnostics;
 		callId: string;
 		leaseId: string;
 		result: Record<string, unknown>;
@@ -676,7 +711,19 @@ export interface ConnectionRepository {
 	createOAuthTransaction(
 		input: OAuthTransaction & { state: string },
 	): Promise<void>;
+	validatePersonalConnectRequest(input: {
+		principalId: string;
+		providerId: string;
+		requestId?: string;
+	}): Promise<void>;
+	validatePersonalReconnect?(input: {
+		connectionId: string;
+		principalId: string;
+	}): Promise<{ providerId: string }>;
 	storeGithubOAuthCredential(input: {
+		accessRequestId?: string;
+		expectedConnectionId?: string;
+		expectedCredentialVersionId?: string;
 		accessToken: string;
 		displayName: string;
 		externalAccount: string;
@@ -687,6 +734,7 @@ export interface ConnectionRepository {
 		refreshToken?: string;
 	}): Promise<{ connectionId: string }>;
 	storeProviderCredential(input: {
+		accessRequestId?: string;
 		accessToken: string;
 		displayName: string;
 		externalAccount: string;
@@ -701,6 +749,7 @@ export interface ConnectionRepository {
 		expectedCredentialVersionId?: string;
 	}): Promise<{ connectionId: string }>;
 	getProviderCredentialForUpgrade(input: {
+		allowCurrentRelease?: boolean;
 		connectionId: string;
 		principalId: string;
 	}): Promise<
@@ -788,6 +837,7 @@ export interface ConnectionRepository {
 		principalId: string;
 	}): Promise<InvocationContext[]>;
 	setCallResult(input: {
+		diagnostics?: CallDiagnostics;
 		callId: string;
 		result?: Record<string, unknown>;
 		status: CallStatus;
@@ -799,6 +849,7 @@ export interface ConnectionRepository {
 	}): Promise<void>;
 	revokeGrant(input: { grantId: string; principalId: string }): Promise<void>;
 	rescheduleReconciliationJob(input: {
+		diagnostics?: CallDiagnostics;
 		callId: string;
 		leaseId: string;
 		reason: string;
@@ -913,6 +964,7 @@ export class ConnectionError extends Error {
 			| "RESOURCE_NOT_FOUND"
 			| "RESULT_UNCERTAIN",
 		message: string,
+		readonly data?: Record<string, unknown>,
 	) {
 		super(message);
 	}
@@ -1055,7 +1107,15 @@ export class ConnectionApplicationService {
 		principalId: string,
 		providerId: string,
 		accessToken: string,
+		accessRequestId?: string,
+		reconnectConnectionId?: string,
 	) {
+		if (accessRequestId && reconnectConnectionId) {
+			throw new ConnectionError(
+				"INVALID_REQUEST",
+				"Connection targets are mutually exclusive",
+			);
+		}
 		if (!accessToken || accessToken.length > 8_192) {
 			throw new ConnectionError("INVALID_REQUEST", "Provider token is invalid");
 		}
@@ -1067,6 +1127,23 @@ export class ConnectionApplicationService {
 			);
 		}
 		await this.repository.ensurePrincipal({ principalId });
+		if (reconnectConnectionId) {
+			const target = await this.repository.validatePersonalReconnect?.({
+				principalId,
+				connectionId: reconnectConnectionId,
+			});
+			if (target?.providerId !== providerId)
+				throw new ConnectionError(
+					"FORBIDDEN",
+					"Reconnect target is unavailable",
+				);
+		} else {
+			await this.repository.validatePersonalConnectRequest({
+				principalId,
+				providerId,
+				...(accessRequestId ? { requestId: accessRequestId } : {}),
+			});
+		}
 		let identity: ProviderCredentialIdentity;
 		try {
 			identity = await connector.validateCredential(accessToken);
@@ -1090,12 +1167,36 @@ export class ConnectionApplicationService {
 		}
 		return this.repository.storeProviderCredential({
 			...identity,
+			accessRequestId,
+			...(reconnectConnectionId
+				? { expectedConnectionId: reconnectConnectionId }
+				: {}),
 			principalId,
 		});
 	}
 
-	async upgradeProviderConnection(principalId: string, connectionId: string) {
+	reconnectProviderCredential(
+		principalId: string,
+		connectionId: string,
+		providerId: string,
+		credential: string,
+	) {
+		return this.connectProviderCredential(
+			principalId,
+			providerId,
+			credential,
+			undefined,
+			connectionId,
+		);
+	}
+
+	async upgradeProviderConnection(
+		principalId: string,
+		connectionId: string,
+		accessRequestId?: string,
+	) {
 		const current = await this.repository.getProviderCredentialForUpgrade({
+			...(accessRequestId ? { allowCurrentRelease: true } : {}),
 			connectionId,
 			principalId,
 		});
@@ -1104,6 +1205,13 @@ export class ConnectionApplicationService {
 				"PROVIDER_REAUTHORIZATION_REQUIRED",
 				"Manhattan requires a new SSO authorization",
 			);
+		if (accessRequestId) {
+			await this.repository.validatePersonalConnectRequest({
+				principalId,
+				providerId: current.providerId,
+				requestId: accessRequestId,
+			});
+		}
 		const connector = this.credentialConnectors[current.providerId];
 		if (!connector) {
 			throw new ConnectionError(
@@ -1136,6 +1244,7 @@ export class ConnectionApplicationService {
 		}
 		return this.repository.storeProviderCredential({
 			...identity,
+			...(accessRequestId ? { accessRequestId } : {}),
 			expectedConnectionId: connectionId,
 			expectedCredentialVersionId: current.credentialVersionId,
 			principalId,
@@ -1144,6 +1253,32 @@ export class ConnectionApplicationService {
 
 	isConnectionAdministrator(principalId: string) {
 		return this.repository.isConnectionAdministrator(principalId);
+	}
+
+	async listAuditCalls(principalId: string, query: AuditQuery) {
+		if (!this.repository.listAuditCalls)
+			throw new ConnectionError(
+				"PROVIDER_UNAVAILABLE",
+				"Audit query unavailable",
+			);
+		const filter = auditFilter(principalId, query);
+		return auditPage(
+			await this.repository.listAuditCalls(principalId, filter),
+			filter.binding,
+		);
+	}
+
+	async getAuditCall(principalId: string, callId: string) {
+		if (!callId || callId.length > 512)
+			throw new ConnectionError("INVALID_REQUEST", "Invalid call ID");
+		if (!this.repository.getAuditCall)
+			throw new ConnectionError(
+				"PROVIDER_UNAVAILABLE",
+				"Audit query unavailable",
+			);
+		return projectAuditDetail(
+			await this.repository.getAuditCall(principalId, callId),
+		);
 	}
 
 	authorizeConnectionAdministration(principalId: string) {
@@ -1582,21 +1717,59 @@ export class ConnectionApplicationService {
 		return this.repository.disconnectConnection({ connectionId, principalId });
 	}
 
-	async startGithubOAuth(principalId: string, redirectUri: string) {
-		return this.startProviderOAuth(principalId, "github", redirectUri);
+	async startGithubOAuth(
+		principalId: string,
+		redirectUri: string,
+		accessRequestId?: string,
+		reconnectConnectionId?: string,
+	) {
+		return this.startProviderOAuth(
+			principalId,
+			"github",
+			redirectUri,
+			accessRequestId,
+			reconnectConnectionId,
+		);
 	}
 
 	async startProviderOAuth(
 		principalId: string,
 		providerId: string,
 		redirectUri: string,
+		accessRequestId?: string,
+		reconnectConnectionId?: string,
 	) {
+		if (accessRequestId && reconnectConnectionId) {
+			throw new ConnectionError(
+				"INVALID_REQUEST",
+				"Connection targets are mutually exclusive",
+			);
+		}
 		const oauth = this.requireProviderOAuth(providerId);
 		await this.repository.ensurePrincipal({ principalId });
+		if (reconnectConnectionId) {
+			const target = await this.repository.validatePersonalReconnect?.({
+				principalId,
+				connectionId: reconnectConnectionId,
+			});
+			if (target?.providerId !== providerId)
+				throw new ConnectionError(
+					"FORBIDDEN",
+					"Reconnect target is unavailable",
+				);
+		} else {
+			await this.repository.validatePersonalConnectRequest({
+				principalId,
+				providerId,
+				...(accessRequestId ? { requestId: accessRequestId } : {}),
+			});
+		}
 		const state = randomToken();
 		const codeVerifier = randomToken();
 		const codeChallenge = base64UrlHash(codeVerifier);
 		await this.repository.createOAuthTransaction({
+			...(accessRequestId ? { accessRequestId } : {}),
+			...(reconnectConnectionId ? { reconnectConnectionId } : {}),
 			codeVerifier,
 			principalId,
 			providerId,
@@ -1657,6 +1830,27 @@ export class ConnectionApplicationService {
 				"OAuth state does not match provider",
 			);
 		}
+		if (!transaction.sharedScopeId) {
+			if (transaction.reconnectConnectionId) {
+				const target = await this.repository.validatePersonalReconnect?.({
+					principalId: transaction.principalId,
+					connectionId: transaction.reconnectConnectionId,
+				});
+				if (target?.providerId !== providerId)
+					throw new ConnectionError(
+						"FORBIDDEN",
+						"Reconnect target is unavailable",
+					);
+			} else {
+				await this.repository.validatePersonalConnectRequest({
+					principalId: transaction.principalId,
+					providerId,
+					...(transaction.accessRequestId
+						? { requestId: transaction.accessRequestId }
+						: {}),
+				});
+			}
+		}
 		const identity = await this.requireProviderOAuth(providerId).exchangeCode({
 			code,
 			codeVerifier: transaction.codeVerifier,
@@ -1671,6 +1865,12 @@ export class ConnectionApplicationService {
 		if (providerId === "github")
 			return this.repository.storeGithubOAuthCredential({
 				...identity,
+				...(transaction.reconnectConnectionId
+					? { expectedConnectionId: transaction.reconnectConnectionId }
+					: {}),
+				...(transaction.accessRequestId
+					? { accessRequestId: transaction.accessRequestId }
+					: {}),
 				principalId: transaction.principalId,
 			});
 		const connector = this.credentialConnectors[providerId];
@@ -1681,6 +1881,12 @@ export class ConnectionApplicationService {
 			);
 		return this.repository.storeProviderCredential({
 			...identity,
+			...(transaction.reconnectConnectionId
+				? { expectedConnectionId: transaction.reconnectConnectionId }
+				: {}),
+			...(transaction.accessRequestId
+				? { accessRequestId: transaction.accessRequestId }
+				: {}),
 			principalId: transaction.principalId,
 			providerId,
 			providerReleaseId: connector.providerReleaseId,
@@ -1784,6 +1990,7 @@ export class ConnectionApplicationService {
 		}
 		let providerResponded = false;
 		let submissionStarted = false;
+		const diagnostics = newCallDiagnostics("EXECUTE");
 		try {
 			const credential = await this.repository.getCredential(invocation);
 			await this.repository.verifyInvocation({ ...invocation, action });
@@ -1795,16 +2002,19 @@ export class ConnectionApplicationService {
 				});
 				submissionStarted = true;
 			}
-			const result = await this.executor.execute({
-				action,
-				actionVersionId: actionDefinition.id,
-				credential,
-				input: delegatedRequestInput(input),
-				providerId: invocation.providerId,
-				providerReleaseId: invocation.providerReleaseId,
-			});
+			const result = await withCallDiagnostics(diagnostics, () =>
+				this.executor.execute({
+					action,
+					actionVersionId: actionDefinition.id,
+					credential,
+					input: delegatedRequestInput(input),
+					providerId: invocation.providerId,
+					providerReleaseId: invocation.providerReleaseId,
+				}),
+			);
 			providerResponded = true;
 			await this.repository.setCallResult({
+				diagnostics,
 				callId: call.callId,
 				result,
 				status: "SUCCEEDED",
@@ -1823,7 +2033,11 @@ export class ConnectionApplicationService {
 						? "DENIED_LOCAL"
 						: "FAILED";
 			try {
-				await this.repository.setCallResult({ callId: call.callId, status });
+				await this.repository.setCallResult({
+					callId: call.callId,
+					status,
+					diagnostics,
+				});
 			} catch {
 				if (!providerResponded && !submissionStarted) throw error;
 			}
@@ -1863,24 +2077,8 @@ export class ConnectionApplicationService {
 			) {
 				throw new ConnectionError(
 					"PROVIDER_RESOURCE_NOT_FOUND",
-					"Provider resource was not found",
-				);
-			}
-			if (
-				typeof error === "object" &&
-				error !== null &&
-				(error as { providerCode?: unknown }).providerCode ===
-					"invalid_input" &&
-				[400, 404, 409, 422].includes(
-					(error as { providerStatus?: number }).providerStatus ?? 0,
-				)
-			) {
-				throw new ConnectionError(
-					"INVALID_REQUEST",
-					typeof (error as { providerMessage?: unknown }).providerMessage ===
-						"string"
-						? `Provider rejected the action input: ${(error as { providerMessage: string }).providerMessage}`
-						: "Provider rejected the action input",
+					providerMessage(error, "Provider resource was not found"),
+					providerFailureData(error),
 				);
 			}
 			if (isProviderReauthorizationFailure(error)) {
@@ -1893,6 +2091,17 @@ export class ConnectionApplicationService {
 				throw new ConnectionError(
 					"INVALID_REQUEST",
 					providerFailureMessage(error),
+					providerFailureData(error),
+				);
+			}
+			if (isDeterministicProviderRejection(error)) {
+				const message = providerMessage(error, "Provider rejected the request");
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					(error as { providerCode?: unknown }).providerCode === "invalid_input"
+						? `Provider rejected the action input: ${message}`
+						: `Provider rejected the action: ${message}`,
+					providerFailureData(error),
 				);
 			}
 			throw new ConnectionError("PROVIDER_FAILED", "Provider request failed");
@@ -1973,23 +2182,29 @@ export class ConnectionRecoveryService {
 	async runOnce(): Promise<boolean> {
 		const job = await this.repository.claimReconciliationJob();
 		if (!job) return false;
+		const diagnostics = newCallDiagnostics("RECONCILE");
 		try {
-			const result = await this.reconciler.reconcile({
-				action: job.action,
-				actionVersionId: job.actionVersionId,
-				credential: await this.repository.getCredential(job.invocation),
-				input: job.input,
-				providerId: job.invocation.providerId,
-				providerReleaseId: job.invocation.providerReleaseId,
-			});
+			const credential = await this.repository.getCredential(job.invocation);
+			const result = await withCallDiagnostics(diagnostics, () =>
+				this.reconciler.reconcile({
+					action: job.action,
+					actionVersionId: job.actionVersionId,
+					credential,
+					input: job.input,
+					providerId: job.invocation.providerId,
+					providerReleaseId: job.invocation.providerReleaseId,
+				}),
+			);
 			if (result) {
 				await this.repository.completeReconciliationJob({
+					diagnostics,
 					callId: job.callId,
 					leaseId: job.leaseId,
 					result,
 				});
 			} else {
 				await this.repository.rescheduleReconciliationJob({
+					diagnostics,
 					callId: job.callId,
 					leaseId: job.leaseId,
 					reason: "Provider evidence is not yet available",
@@ -1997,6 +2212,7 @@ export class ConnectionRecoveryService {
 			}
 		} catch (error) {
 			await this.repository.rescheduleReconciliationJob({
+				diagnostics,
 				callId: job.callId,
 				leaseId: job.leaseId,
 				reason:
@@ -2036,14 +2252,53 @@ function isProviderPermissionFailure(error: unknown) {
 	);
 }
 
-function providerFailureMessage(error: unknown) {
+function providerFailureMessage(
+	error: unknown,
+	fallback = "Provider rejected the request",
+) {
 	const message =
 		typeof error === "object" &&
 		error !== null &&
 		typeof (error as { providerMessage?: unknown }).providerMessage === "string"
 			? (error as { providerMessage: string }).providerMessage
-			: "Provider rejected the request";
+			: fallback;
 	return `Provider rejected the action: ${message}`;
+}
+
+function providerMessage(error: unknown, fallback: string) {
+	return typeof error === "object" &&
+		error !== null &&
+		typeof (error as { providerMessage?: unknown }).providerMessage === "string"
+		? (error as { providerMessage: string }).providerMessage
+		: fallback;
+}
+
+function providerFailureData(error: unknown) {
+	if (typeof error !== "object" || error === null) return undefined;
+	const provider = error as {
+		providerCode?: unknown;
+		providerDetails?: unknown;
+		providerRetryable?: unknown;
+		providerStatus?: unknown;
+		providerSubmissionOutcome?: unknown;
+	};
+	return {
+		...(typeof provider.providerCode === "string"
+			? { providerCode: provider.providerCode }
+			: {}),
+		...(provider.providerDetails && typeof provider.providerDetails === "object"
+			? { providerDetails: provider.providerDetails }
+			: {}),
+		...(typeof provider.providerRetryable === "boolean"
+			? { retryable: provider.providerRetryable }
+			: {}),
+		...(typeof provider.providerStatus === "number"
+			? { providerHttpStatus: provider.providerStatus }
+			: {}),
+		...(typeof provider.providerSubmissionOutcome === "string"
+			? { submissionOutcome: provider.providerSubmissionOutcome }
+			: {}),
+	};
 }
 
 function isProviderReauthorizationFailure(error: unknown) {

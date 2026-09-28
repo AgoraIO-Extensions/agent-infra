@@ -11,6 +11,13 @@ interface StartOptions {
 	hostname?: string;
 	log?: (message: string) => void;
 	port?: number;
+	approvalMaintenance?: {
+		expireDueAuthorizations(limit?: number): Promise<number>;
+		expireDueRequests(limit?: number): Promise<number>;
+	};
+	approvalMaintenanceIntervalMs?: number;
+	notificationDispatcher?: { runOnce(): Promise<boolean> };
+	notificationDispatchIntervalMs?: number;
 	recovery?: { runOnce(): Promise<boolean> };
 	recoveryIntervalMs?: number;
 }
@@ -61,6 +68,59 @@ export function startConnectionApi(options: StartOptions) {
 					recoveryRunning = false;
 				});
 		}, options.recoveryIntervalMs ?? 1_000);
+		timer.unref();
+		server.once("close", () => clearInterval(timer));
+	}
+	if (options.approvalMaintenance) {
+		let running = false;
+		const timer = setInterval(() => {
+			if (running) return;
+			running = true;
+			void (async () => {
+				for (const operation of [
+					"expireDueAuthorizations",
+					"expireDueRequests",
+				] as const) {
+					try {
+						await options.approvalMaintenance?.[operation]();
+					} catch {
+						log(
+							JSON.stringify({
+								operation,
+								error: "Approval maintenance operation failed",
+								service: connectionApiService,
+								status: "approval_maintenance_failed",
+							}),
+						);
+					}
+				}
+			})().finally(() => {
+				running = false;
+			});
+		}, options.approvalMaintenanceIntervalMs ?? 30_000);
+		timer.unref();
+		server.once("close", () => clearInterval(timer));
+	}
+	if (options.notificationDispatcher) {
+		let running = false;
+		const timer = setInterval(() => {
+			if (running) return;
+			running = true;
+			void options.notificationDispatcher
+				?.runOnce()
+				.catch(() =>
+					log(
+						JSON.stringify({
+							error: "Notification dispatch failed",
+							service: connectionApiService,
+							status: "notification_dispatch_failed",
+						}),
+					),
+				)
+				.finally(() => {
+					running = false;
+				});
+		}, options.notificationDispatchIntervalMs ?? 5_000);
 		timer.unref();
 		server.once("close", () => clearInterval(timer));
 	}

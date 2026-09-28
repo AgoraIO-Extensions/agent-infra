@@ -1,21 +1,59 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
+import type { ComponentProps, ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { connectionApi } from "../api";
 import { PreviewContent } from "../pages/connections-page";
 import { SharedScopeSection } from "../pages/shared-connections-page";
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	vi.restoreAllMocks();
+});
+
+function renderPreview(
+	element: ReactElement<ComponentProps<typeof PreviewContent>>,
+) {
+	vi.spyOn(connectionApi, "createAuthorizationPreview").mockImplementation(
+		async (input) => ({
+			...element.props.value,
+			preview: {
+				...element.props.value.preview,
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				actions: element.props.value.preview.actions.filter((action) =>
+					input.actionVersionIds?.includes(action.id),
+				),
+			},
+		}),
+	);
+	return render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			{element}
+		</QueryClientProvider>,
+	);
+}
 
 describe("Connection 管理交互", () => {
-	it("批量选择当前筛选结果并清空 Grant 能力", () => {
-		const onReview = vi.fn();
-		render(
+	it("批量选择当前筛选结果并清空 Grant 能力", async () => {
+		const onConfirm = vi.fn();
+		renderPreview(
 			<PreviewContent
 				busy={false}
-				onConfirm={vi.fn()}
-				onReview={onReview}
-				reviewed={false}
+				onConfirm={onConfirm}
+				onCancel={vi.fn()}
+				onRefresh={vi.fn()}
 				value={{
 					idempotencyKey: "idempotency-preview",
 					preview: {
@@ -67,19 +105,33 @@ describe("Connection 管理交互", () => {
 		fireEvent.click(screen.getByRole("button", { name: "清空" }));
 		expect(screen.getByText("已选择 0 / 共 3 项")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "选择当前结果" }));
-		fireEvent.click(screen.getByRole("button", { name: "查看授权差异" }));
-		expect(onReview).toHaveBeenCalledWith([
-			"github.create_issue@v8",
-			"github.update_issue@v8",
-		]);
+		await waitFor(() =>
+			expect(
+				(screen.getByRole("button", { name: "确认授权" }) as HTMLButtonElement)
+					.disabled,
+			).toBe(false),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "确认授权" }));
+		expect(onConfirm).toHaveBeenCalledWith(
+			expect.objectContaining({
+				preview: expect.objectContaining({
+					actions: [
+						expect.objectContaining({ id: "github.create_issue@v8" }),
+						expect.objectContaining({ id: "github.update_issue@v8" }),
+					],
+				}),
+			}),
+		);
 	});
 
-	it("授权确认显示账号、Consumer、外部效果和所需 scope", () => {
+	it("授权确认显示账号、Consumer、外部效果和所需 scope", async () => {
 		const onConfirm = vi.fn();
-		render(
+		renderPreview(
 			<PreviewContent
 				busy={false}
 				onConfirm={onConfirm}
+				onCancel={vi.fn()}
+				onRefresh={vi.fn()}
 				value={{
 					idempotencyKey: "idempotency-preview",
 					preview: {
@@ -110,10 +162,19 @@ describe("Connection 管理交互", () => {
 
 		expect(screen.getByText("guoxianzhe")).toBeTruthy();
 		expect(screen.getByText("Codex")).toBeTruthy();
-		expect(screen.getByText("写入")).toBeTruthy();
+		expect(screen.getByText("写入", { selector: "small" })).toBeTruthy();
 		expect(screen.getByText("所需 scope：repo、workflow")).toBeTruthy();
+		fireEvent.click(
+			screen.getByRole("checkbox", { name: "github.create_pull_request 写入" }),
+		);
+		await waitFor(() =>
+			expect(
+				(screen.getByRole("button", { name: "确认授权" }) as HTMLButtonElement)
+					.disabled,
+			).toBe(false),
+		);
 		const confirmButton = screen.getByRole("button", { name: "确认授权" });
-		expect(confirmButton.closest(".authorization-summary")).toBeTruthy();
+		expect(confirmButton.closest(".authorization-footer")).toBeTruthy();
 		fireEvent.click(confirmButton);
 		expect(onConfirm).toHaveBeenCalledOnce();
 	});

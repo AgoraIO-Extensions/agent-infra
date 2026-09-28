@@ -1,6 +1,7 @@
 type RuntimeEnvironment = Record<string, string | undefined>;
 
 export type ConnectionApiRuntimeConfig = {
+	approvalDirectoryEnabled: boolean;
 	githubEgressProxyUrl?: string;
 	githubReadFallbackProxyUrl?: string;
 	jenkinsReleaseRoute: "internal" | "public";
@@ -9,8 +10,10 @@ export type ConnectionApiRuntimeConfig = {
 	identityKey: Uint8Array;
 	identityRealm: string;
 	ldap: {
+		employeeDirectory?: { url: string; serviceKey: string };
 		activeAttribute?: string;
 		activeValue?: string;
+		aliasAttribute?: string;
 		connectTimeoutMs: number;
 		displayNameAttribute: string;
 		emailAttribute: string;
@@ -215,6 +218,31 @@ export function connectionApiRuntimeConfig(
 ): ConnectionApiRuntimeConfig {
 	const activeAttribute = environment.LDAP_ACTIVE_ATTRIBUTE || undefined;
 	const activeValue = environment.LDAP_ACTIVE_VALUE || undefined;
+	const employeeDirectoryUrl = environment.CONNECTION_EMPLOYEE_DIRECTORY_URL;
+	const employeeDirectoryKey =
+		environment.CONNECTION_EMPLOYEE_DIRECTORY_SERVICE_KEY;
+	if (Boolean(employeeDirectoryUrl) !== Boolean(employeeDirectoryKey)) {
+		throw new Error(
+			"Employee directory URL and service key must be configured together",
+		);
+	}
+	const directoryEnabled =
+		environment.CONNECTION_APPROVAL_DIRECTORY_ENABLED === "true";
+	if (
+		environment.CONNECTION_APPROVAL_DIRECTORY_ENABLED &&
+		!["true", "false"].includes(
+			environment.CONNECTION_APPROVAL_DIRECTORY_ENABLED,
+		)
+	) {
+		throw new Error(
+			"CONNECTION_APPROVAL_DIRECTORY_ENABLED must be true or false",
+		);
+	}
+	if (directoryEnabled && (!activeAttribute || !activeValue)) {
+		throw new Error(
+			"Approval employee search requires LDAP active-state configuration",
+		);
+	}
 	if ((activeAttribute === undefined) !== (activeValue === undefined)) {
 		throw new Error(
 			"LDAP_ACTIVE_ATTRIBUTE and LDAP_ACTIVE_VALUE must be configured together",
@@ -239,6 +267,7 @@ export function connectionApiRuntimeConfig(
 		);
 	}
 	return {
+		approvalDirectoryEnabled: directoryEnabled,
 		...(githubEgressProxyUrl === undefined ? {} : { githubEgressProxyUrl }),
 		...(githubReadFallbackProxyUrl === undefined
 			? {}
@@ -255,6 +284,20 @@ export function connectionApiRuntimeConfig(
 		identityRealm: requireValue(environment, "CONNECTION_IDENTITY_REALM"),
 		jenkinsReleaseRoute: jenkinsReleaseRoute(environment),
 		ldap: {
+			...(employeeDirectoryUrl && employeeDirectoryKey
+				? {
+						employeeDirectory: {
+							url: requireHttps(
+								employeeDirectoryUrl,
+								"CONNECTION_EMPLOYEE_DIRECTORY_URL",
+							),
+							serviceKey: employeeDirectoryKey,
+						},
+					}
+				: {}),
+			...(environment.LDAP_ALIAS_ATTRIBUTE
+				? { aliasAttribute: environment.LDAP_ALIAS_ATTRIBUTE }
+				: {}),
 			...(activeAttribute !== undefined && activeValue !== undefined
 				? { activeAttribute, activeValue }
 				: {}),
