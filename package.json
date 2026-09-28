@@ -22,6 +22,7 @@
 		"dev:platform-worker": "turbo run dev -F @agent-infra/platform-worker",
 		"dev:connection-api": "turbo run dev -F @agent-infra/connection-api",
 		"dev:connection-web": "turbo run dev -F @agent-infra/connection-web",
+		"prototype:approval": "pnpm --dir apps/connection-web exec vite dev --host 127.0.0.1 --port 4181",
 		"connection:conformance": "pnpm --filter @agent-infra/connection-api conformance",
 		"connection:github:e2e": "node tests/github-connection-e2e.mjs",
 		"connection:admin:bootstrap": "pnpm --filter @agent-infra/connection-api admin:bootstrap",
