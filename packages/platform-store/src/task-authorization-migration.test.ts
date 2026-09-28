@@ -153,7 +153,7 @@ async function snapshotHistory() {
 	]) {
 		const record =
 			table === "conversation_executions"
-				? "to_jsonb(record) - 'task_wait_order' - 'task_wait_deadline'"
+				? "to_jsonb(record) - 'task_wait_order' - 'task_wait_deadline' - 'execution_source' - 'relay_key_purpose' - 'relay_key_subject_id' - 'relay_key_id' - 'relay_key_version'"
 				: "to_jsonb(record)";
 		snapshots.push(
 			await sql.unsafe(
