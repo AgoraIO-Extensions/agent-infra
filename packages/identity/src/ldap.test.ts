@@ -52,12 +52,13 @@ function fixture() {
 				async search(_base: string, searchOptions) {
 					const filter = searchOptions?.filter?.toString() ?? "";
 					searches.push(filter);
-					const match = /^\((uid|entryUUID)=(.*)\)$/u.exec(filter);
+					const match = /^\((uid|entryUUID|mail)=(.*)\)$/u.exec(filter);
 					return {
 						searchEntries: match
-							? entries.filter(
-									(entry) =>
-										entry[match[1] as "uid" | "entryUUID"] === match[2],
+							? entries.filter((entry) =>
+									match[1] === "mail"
+										? entry.mail.toLowerCase() === match[2]?.toLowerCase()
+										: entry[match[1] as "uid" | "entryUUID"] === match[2],
 								)
 							: [],
 						searchReferences: [],
@@ -122,6 +123,7 @@ describe("first-party LDAP identity directory", () => {
 			state.config.serviceBindDn,
 			employee.dn,
 			state.config.serviceBindDn,
+			state.config.serviceBindDn,
 		]);
 		expect(
 			state.options.every(
@@ -131,7 +133,11 @@ describe("first-party LDAP identity directory", () => {
 					item.autoRebind === false,
 			),
 		).toBe(true);
-		expect(state.searches).toEqual(["(uid=login-a)", "(entryUUID=stable-a)"]);
+		expect(state.searches).toEqual([
+			"(uid=login-a)",
+			"(entryUUID=stable-a)",
+			"(mail=person.a@example.test)",
+		]);
 		if (!account) throw new Error("expected account");
 		expect(await directory.currentByUserId(account.userId)).toEqual(account);
 		const otherIssuer = createLdapIdentityDirectory({
@@ -198,6 +204,27 @@ describe("first-party LDAP identity directory", () => {
 		await expect(directory.current("stable-a")).rejects.toThrow(
 			"LDAP_IDENTITY_UNAVAILABLE",
 		);
+	});
+
+	it("rejects shared LDAP email across stable UIDs", async () => {
+		const state = fixture();
+		state.setEntries([
+			employee,
+			{
+				...employee,
+				dn: "uid=login-b,ou=people,dc=example,dc=test",
+				uid: "login-b",
+				entryUUID: "stable-b",
+				mail: "person.a@example.test",
+			},
+		]);
+		const directory = createLdapIdentityDirectory(state.config);
+		await expect(directory.current("stable-a")).rejects.toThrow(
+			LdapIdentityUnavailableError,
+		);
+		await expect(
+			directory.authenticate("login-a", "correct-password"),
+		).rejects.toThrow(LdapIdentityUnavailableError);
 	});
 
 	it("passes a structured equality filter for hostile login input", async () => {
