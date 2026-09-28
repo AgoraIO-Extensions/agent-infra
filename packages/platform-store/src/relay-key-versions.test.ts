@@ -407,7 +407,11 @@ describe("Relay Key version authority on PostgreSQL", () => {
 				result.plaintext.fill(0);
 			}
 		}
+		const acceptedScopes = new Map<string, RuntimeSubmitTurnRequestV4>();
 		async function fakeWorkerTransport(request: RuntimeSubmitTurnRequestV4) {
+			const original = acceptedScopes.get(request.executionId);
+			if (!original) return null;
+			validateRuntimePinnedExecutionKeyScopeV4(original, request, null);
 			const binding = {
 				purpose: request.keyBinding.purpose,
 				subjectId: request.keyBinding.subjectId,
@@ -559,6 +563,8 @@ describe("Relay Key version authority on PostgreSQL", () => {
 					version: second.binding.keyVersion,
 				},
 			});
+			acceptedScopes.set(k1Request.executionId, k1Request);
+			acceptedScopes.set(k2Request.executionId, k2Request);
 			const k1Transport = await fakeWorkerTransport(k1Request);
 			const k2Transport = await fakeWorkerTransport(k2Request);
 			if (!k1Transport || !k2Transport)
@@ -569,21 +575,26 @@ describe("Relay Key version authority on PostgreSQL", () => {
 				requestId: "request-crypto-rebound",
 				keyBinding: k2Request.keyBinding,
 			});
-			const reboundTransport = await fakeWorkerTransport(reboundRequest);
-			if (!reboundTransport) throw new Error("Missing fake rebound delivery");
-			expect(() => fakeHost(reboundTransport, k1Request)).toThrow(
+			await expect(fakeWorkerTransport(reboundRequest)).rejects.toThrow(
 				"RuntimeHostV4 pinned Execution Key is invalid",
 			);
 			fakeHost(k2Transport, k2Request);
-			expect(
-				await fakeWorkerTransport(
-					RuntimeSubmitTurnRequestV4Schema.parse({
-						...k1Request,
-						principal: { kind: "user", id: "other-user" },
-						keyBinding: { ...k1Request.keyBinding, subjectId: "other-user" },
-					}),
-				),
-			).toBeNull();
+			for (const changes of [
+				{ principal: { kind: "user", id: "other-user" } },
+				{
+					principal: { kind: "user", id: "other-user" },
+					keyBinding: { ...k1Request.keyBinding, subjectId: "other-user" },
+				},
+			]) {
+				await expect(
+					fakeWorkerTransport(
+						RuntimeSubmitTurnRequestV4Schema.parse({
+							...k1Request,
+							...changes,
+						}),
+					),
+				).rejects.toThrow("RuntimeHostV4 pinned Execution Key is invalid");
+			}
 			expect(
 				await decryptor.decrypt({
 					encryptedRecord: pinnedRecord,
