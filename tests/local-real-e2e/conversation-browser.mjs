@@ -78,10 +78,8 @@ async function validateStorageState(path) {
 	let parsed;
 	try {
 		parsed = JSON.parse(await readFile(path, "utf8"));
-	} catch (error) {
-		assert.fail(
-			`Browser state file must contain valid JSON: ${error instanceof Error ? error.message : String(error)}`,
-		);
+	} catch {
+		assert.fail("Browser state file must contain valid JSON");
 	}
 	assert(
 		parsed && typeof parsed === "object" && !Array.isArray(parsed),
