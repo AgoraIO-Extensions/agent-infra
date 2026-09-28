@@ -124,6 +124,42 @@ it("contains capture failures and reports them independently", () => {
 	});
 });
 
+it("uses one validated snapshot of observational input", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-api",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	let stageReads = 0;
+	let requestIdReads = 0;
+	const event = {
+		get stage() {
+			return ++stageReads === 1 ? "http" : "PRIVATE_SENTINEL";
+		},
+		outcome: "completed",
+		get requestId() {
+			return ++requestIdReads === 1
+				? "123e4567-e89b-42d3-a456-426614174000"
+				: "PRIVATE_SENTINEL";
+		},
+	} as Parameters<typeof telemetry.record>[0];
+	telemetry.record(event);
+	expect(stageReads).toBe(1);
+	expect(requestIdReads).toBe(1);
+	expect(lines).toHaveLength(1);
+	expect(lines[0]).toContain('"stage":"http"');
+	expect(lines[0]).toContain(
+		'"requestId":"123e4567-e89b-42d3-a456-426614174000"',
+	);
+	expect(lines[0]).not.toContain("PRIVATE_SENTINEL");
+});
+
 it("reports OTLP failures without failing an observed operation", async () => {
 	const output = new Writable({
 		write(_chunk, _encoding, done) {

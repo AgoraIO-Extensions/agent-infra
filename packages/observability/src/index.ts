@@ -236,51 +236,55 @@ export function startObservability(options: ObservabilityOptions) {
 	return {
 		record(event: OperationalEvent) {
 			try {
-				if (!stages.has(event.stage) || !outcomes.has(event.outcome)) {
+				const {
+					stage,
+					outcome,
+					durationMs,
+					code,
+					requestId,
+					traceId,
+					agentId,
+					conversationId,
+					executionId,
+					operationRef,
+					attemptRef,
+				} = event;
+				if (!stages.has(stage) || !outcomes.has(outcome)) {
 					invalidRecords++;
 					return;
 				}
 				if (
-					event.durationMs !== undefined &&
-					(!Number.isFinite(event.durationMs) ||
-						event.durationMs < 0 ||
-						event.durationMs > 86_400_000)
+					durationMs !== undefined &&
+					(!Number.isFinite(durationMs) ||
+						durationMs < 0 ||
+						durationMs > 86_400_000)
 				) {
 					invalidRecords++;
 					return;
 				}
 				const labels = {
 					service: options.service,
-					stage: event.stage,
-					outcome: event.outcome,
+					stage,
+					outcome,
 				};
 				const details = {
 					...labels,
-					...(event.code && codes.has(event.code) ? { code: event.code } : {}),
-					...(safeId(event.requestId) ? { requestId: event.requestId } : {}),
-					...(safeId(event.traceId) ? { traceId: event.traceId } : {}),
-					...(safeId(event.agentId) ? { agentId: event.agentId } : {}),
-					...(safeId(event.conversationId)
-						? { conversationId: event.conversationId }
-						: {}),
-					...(safeId(event.executionId)
-						? { executionId: event.executionId }
-						: {}),
-					...(safeOperationRef(event.operationRef)
-						? { operationRef: event.operationRef }
-						: {}),
-					...(safeOperationRef(event.attemptRef)
-						? { attemptRef: event.attemptRef }
-						: {}),
+					...(code && codes.has(code) ? { code } : {}),
+					...(safeId(requestId) ? { requestId } : {}),
+					...(safeId(traceId) ? { traceId } : {}),
+					...(safeId(agentId) ? { agentId } : {}),
+					...(safeId(conversationId) ? { conversationId } : {}),
+					...(safeId(executionId) ? { executionId } : {}),
+					...(safeOperationRef(operationRef) ? { operationRef } : {}),
+					...(safeOperationRef(attemptRef) ? { attemptRef } : {}),
 				};
 				operations.add(1, labels);
-				if (event.durationMs !== undefined)
-					duration.record(event.durationMs, labels);
-				const span = tracer.startSpan(`platform.${event.stage}`, {
+				if (durationMs !== undefined) duration.record(durationMs, labels);
+				const span = tracer.startSpan(`platform.${stage}`, {
 					attributes: details,
 				});
 				span.end();
-				if (event.outcome === "failed" || event.outcome === "unknown")
+				if (outcome === "failed" || outcome === "unknown")
 					logger.error(details, "operation");
 				else logger.info(details, "operation");
 			} catch {
