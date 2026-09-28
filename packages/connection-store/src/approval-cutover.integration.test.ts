@@ -45,10 +45,13 @@ describe("personal Connection approval cutover", () => {
 						"utf8",
 					),
 				);
-				journal.entries = journal.entries.filter(
+				const totalMigrations = journal.entries.length;
+				const approvalIndex = journal.entries.findIndex(
 					(entry: { tag: string }) =>
-						entry.tag !== "0032_connection_access_approval",
+						entry.tag === "0032_connection_access_approval",
 				);
+				if (approvalIndex < 0) throw new Error("Approval migration is missing");
+				journal.entries = journal.entries.slice(0, approvalIndex);
 				await mkdir(resolve(baselineDirectory, "meta"));
 				await writeFile(
 					resolve(baselineDirectory, "meta/_journal.json"),
@@ -70,7 +73,7 @@ describe("personal Connection approval cutover", () => {
 					await probe`SELECT to_regclass('public.connection_access_enforcement') AS approval_table, (SELECT count(*)::int FROM drizzle.__drizzle_migrations) AS migrations`;
 				expect(after).toEqual({
 					approval_table: "connection_access_enforcement",
-					migrations: journal.entries.length + 1,
+					migrations: totalMigrations,
 				});
 			} finally {
 				await probe.end();
