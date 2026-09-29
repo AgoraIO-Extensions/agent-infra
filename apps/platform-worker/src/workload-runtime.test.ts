@@ -545,7 +545,11 @@ describe("assembled Workload Runtime contracts", () => {
 			},
 		);
 		expect(candidate.modelProjection).toMatchObject({ schemaVersion: 4 });
-		expect(candidate.deployment?.secretRefs).toEqual([]);
+		expect(
+			candidate.deployment === null
+				? null
+				: validateAgentWorkloadDesiredV1(candidate.deployment).secretRefs,
+		).toEqual([]);
 	});
 
 	it("uses the deployed candidate protocol during a V4 promotion", () => {
