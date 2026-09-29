@@ -12,6 +12,7 @@ import {
 	randomBytes,
 	timingSafeEqual,
 } from "node:crypto";
+import { types } from "node:util";
 
 import { validateSecretEncryptionKeySetV1 } from "@agent-infra/contracts/workload";
 
@@ -93,20 +94,29 @@ export function createRelayKeyEncryptorV1(options: {
 	return {
 		encrypt(input) {
 			let binding: RelayKeyBindingV1;
+			let plaintextValue: string;
 			try {
-				binding = parseBinding(input);
+				const source = exactObject(input, [
+					"purpose",
+					"subjectId",
+					"keyId",
+					"keyVersion",
+					"plaintext",
+				]);
+				binding = parseBinding(source);
 				if (
-					typeof input.plaintext !== "string" ||
-					input.plaintext.length < 16 ||
-					input.plaintext.length > 8192 ||
-					!/^[\x21-\x7e]+$/.test(input.plaintext)
+					typeof source.plaintext !== "string" ||
+					source.plaintext.length < 16 ||
+					source.plaintext.length > 8192 ||
+					!/^[\x21-\x7e]+$/.test(source.plaintext)
 				) {
 					throw new Error();
 				}
+				plaintextValue = source.plaintext;
 			} catch {
 				throw new TypeError("Relay Key encryption input is invalid");
 			}
-			const plaintext = Buffer.from(input.plaintext, "utf8");
+			const plaintext = Buffer.from(plaintextValue, "utf8");
 			const dek = randomBytes(32);
 			try {
 				const nonce = randomBytes(12);
@@ -190,16 +200,22 @@ export function createRelayKeyWorkerDecryptorV1(input: {
 					},
 					Buffer.from(record.crypto.wrappedDek, "base64"),
 				);
-				const fingerprint = Buffer.from(
-					createHash("sha256").update(dek).digest("hex"),
+				const fingerprint = createHash("sha256").update(dek).digest();
+				const expectedFingerprint = Buffer.from(
+					record.crypto.dekFingerprint,
+					"hex",
 				);
-				const expectedFingerprint = Buffer.from(record.crypto.dekFingerprint);
-				if (
-					dek.byteLength !== 32 ||
-					fingerprint.byteLength !== expectedFingerprint.byteLength ||
-					!timingSafeEqual(fingerprint, expectedFingerprint)
-				) {
-					throw new Error();
+				try {
+					if (
+						dek.byteLength !== 32 ||
+						fingerprint.byteLength !== expectedFingerprint.byteLength ||
+						!timingSafeEqual(fingerprint, expectedFingerprint)
+					) {
+						throw new Error();
+					}
+				} finally {
+					fingerprint.fill(0);
+					expectedFingerprint.fill(0);
 				}
 				const decipher = createDecipheriv(
 					"aes-256-gcm",
@@ -386,15 +402,34 @@ function exactObject(
 	keys: readonly string[],
 	strict = true,
 ): Record<string, unknown> {
-	if (input === null || typeof input !== "object" || Array.isArray(input))
+	if (
+		input === null ||
+		typeof input !== "object" ||
+		Array.isArray(input) ||
+		types.isProxy(input) ||
+		Object.getPrototypeOf(input) !== Object.prototype
+	)
 		throw new Error();
-	const record = input as Record<string, unknown>;
-	const present = Object.keys(record);
+	const present = Reflect.ownKeys(input);
 	if (strict ? present.length !== keys.length : present.length < keys.length)
 		throw new Error();
-	if (!keys.every((key) => Object.hasOwn(record, key))) throw new Error();
-	if (strict && !present.every((key) => keys.includes(key))) throw new Error();
-	return record;
+	const snapshot: Record<string, unknown> = {};
+	for (const key of present) {
+		if (typeof key !== "string") throw new Error();
+		const descriptor = Object.getOwnPropertyDescriptor(input, key);
+		if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value"))
+			throw new Error();
+		Object.defineProperty(snapshot, key, {
+			value: descriptor.value,
+			enumerable: true,
+			configurable: true,
+			writable: true,
+		});
+	}
+	if (!keys.every((key) => Object.hasOwn(snapshot, key))) throw new Error();
+	if (strict && !present.every((key) => keys.includes(key as string)))
+		throw new Error();
+	return snapshot;
 }
 
 function validId(input: unknown): input is string {

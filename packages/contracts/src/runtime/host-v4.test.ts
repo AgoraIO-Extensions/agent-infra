@@ -274,6 +274,91 @@ it("accepts an Agent default Key for an API principal and rejects cross-Agent re
 	).rejects.toThrow("RuntimeHostV4 binding is invalid");
 });
 
+it("binds Web and WeCom personal Keys and API and Eval Agent-default Keys", async () => {
+	for (const source of ["web", "wecom"] as const) {
+		for (const userId of ["alice", "bob"] as const) {
+			const executionId = `execution-${source}-${userId}`;
+			const scoped = RuntimeSubmitTurnRequestV4Schema.parse({
+				...request,
+				requestId: `request-${source}-${userId}`,
+				principal: { kind: "user", id: userId },
+				executionSource: source,
+				channelId: source,
+				conversationId: `conversation-${source}-${userId}`,
+				executionId,
+				turnId: `turn-${source}-${userId}`,
+				operation: { ...request.operation, id: executionId },
+				keyBinding: {
+					purpose: "personal",
+					subjectId: userId,
+					ciphertextRef: `key-${userId}`,
+					version: userId === "alice" ? 1 : 2,
+				},
+			});
+			await expect(
+				validateRuntimeBusinessBindingV4(scoped, claims(scoped)),
+			).resolves.toBeUndefined();
+			const wrongUser = {
+				...scoped,
+				keyBinding: {
+					...scoped.keyBinding,
+					subjectId: userId === "alice" ? "bob" : "alice",
+				},
+			};
+			await expect(
+				validateRuntimeBusinessBindingV4(wrongUser, claims(wrongUser)),
+			).rejects.toThrow("RuntimeHostV4 binding is invalid");
+			const wrongPurpose = {
+				...scoped,
+				keyBinding: {
+					purpose: "agent-default" as const,
+					subjectId: "agent-1",
+					ciphertextRef: "agent-key-1",
+					version: 1,
+				},
+			};
+			await expect(
+				validateRuntimeBusinessBindingV4(wrongPurpose, claims(wrongPurpose)),
+			).rejects.toThrow("RuntimeHostV4 binding is invalid");
+		}
+	}
+	for (const source of ["platform-api", "eval"] as const) {
+		const executionId = `execution-${source}`;
+		const scoped = RuntimeSubmitTurnRequestV4Schema.parse({
+			...request,
+			requestId: `request-${source}`,
+			principal: { kind: "application", id: `client-${source}` },
+			executionSource: source,
+			channelId: source,
+			conversationId: `conversation-${source}`,
+			executionId,
+			turnId: `turn-${source}`,
+			operation: { ...request.operation, id: executionId },
+			keyBinding: {
+				purpose: "agent-default",
+				subjectId: "agent-1",
+				ciphertextRef: "agent-key-1",
+				version: 2,
+			},
+		});
+		await expect(
+			validateRuntimeBusinessBindingV4(scoped, claims(scoped)),
+		).resolves.toBeUndefined();
+		const wrongPurpose = {
+			...scoped,
+			keyBinding: {
+				purpose: "personal" as const,
+				subjectId: "alice",
+				ciphertextRef: "key-alice",
+				version: 1,
+			},
+		};
+		await expect(
+			validateRuntimeBusinessBindingV4(wrongPurpose, claims(wrongPurpose)),
+		).rejects.toThrow("RuntimeHostV4 binding is invalid");
+	}
+});
+
 it("keeps the original Key binding for a supplement after Key replacement", async () => {
 	const { selection: _selection, ...original } = request;
 	const supplement = RuntimeSupplementRequestV4Schema.parse({
