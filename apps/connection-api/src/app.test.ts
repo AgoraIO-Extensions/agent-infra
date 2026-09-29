@@ -992,6 +992,26 @@ describe("Connection API", () => {
 				retryable: false,
 			},
 		});
+		const revised = await app.request(
+			"/api/v1/connection/admin/capability-profiles/profile-1/revise",
+			{
+				method: "POST",
+				headers: {
+					...headers,
+					"if-match": '"2"',
+					"idempotency-key": "revise-disabled-directory",
+				},
+				body: JSON.stringify({
+					name: "Revised",
+					providerReleaseId: "release-1",
+					actionVersionIds: ["action-1"],
+				}),
+			},
+		);
+		expect(revised.status).toBe(503);
+		expect(await revised.json()).toMatchObject({
+			error: { messageKey: "connection.error.approval_directory_unavailable" },
+		});
 	});
 
 	it("preserves retryable directory unavailability in direct and wrapped browser routes", async () => {
@@ -1219,7 +1239,17 @@ describe("Connection API", () => {
 			issuer: "https://connection.example/",
 			management: {
 				approvalCatalog: {
-					listCatalog: async () => ({ disclaimers: [] }),
+					listCatalog: async () => ({
+						disclaimers: [],
+						policies: [
+							{
+								id: "policy-1",
+								status: "PUBLISHED",
+								capabilityProfileId: "profile-1",
+								disclaimerVersionIds: ["disclaimer-1"],
+							},
+						],
+					}),
 					getCapabilityProfile: async (id: string) => ({
 						id,
 						providerReleaseId: "github-release",
@@ -1243,6 +1273,22 @@ describe("Connection API", () => {
 					updateDisclaimerDraft: async (input: unknown) => {
 						calls.push({ disclaimerDraft: input });
 						return { disclaimerVersionId: "disclaimer-1" };
+					},
+					revisePublishedCapabilityProfile: async (input: unknown) => {
+						calls.push({ revisedProfile: input });
+						return { capabilityProfileId: "profile-2", affectedPolicies: 1 };
+					},
+					retirePublishedCapabilityProfile: async (input: unknown) => {
+						calls.push({ retiredProfile: input });
+						return { affectedPolicies: 1 };
+					},
+					revisePublishedDisclaimer: async (input: unknown) => {
+						calls.push({ revisedDisclaimer: input });
+						return { disclaimerVersionId: "disclaimer-2", affectedPolicies: 1 };
+					},
+					retirePublishedDisclaimer: async (input: unknown) => {
+						calls.push({ retiredDisclaimer: input });
+						return { affectedPolicies: 1 };
 					},
 					listPolicyApproverPrincipalIds: async () => ["approver-1"],
 					publishPolicy: async (input: unknown) => {
@@ -1462,6 +1508,102 @@ describe("Connection API", () => {
 			disclaimerDraft: {
 				id: "disclaimer-1",
 				expectedRevision: "1",
+				actorPrincipalId: "admin-1",
+			},
+		});
+		const revisedProfile = await app.request(
+			"/api/v1/connection/admin/capability-profiles/profile-1/revise",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "revise-profile-1",
+				},
+				body: JSON.stringify({
+					providerReleaseId: "github-release",
+					name: "GitHub read",
+					actionVersionIds: ["github.read@v1"],
+				}),
+			},
+		);
+		expect(revisedProfile.status).toBe(200);
+		expect(await revisedProfile.json()).toMatchObject({
+			capabilityProfileId: "profile-2",
+			affectedPolicies: 1,
+		});
+		expect(calls.at(-1)).toMatchObject({
+			revisedProfile: {
+				sourceId: "profile-1",
+				expectedRevision: "2",
+				actorPrincipalId: "admin-1",
+			},
+		});
+		const retiredProfile = await app.request(
+			"/api/v1/connection/admin/capability-profiles/profile-1/retire",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "retire-profile-1",
+				},
+			},
+		);
+		expect(retiredProfile.status).toBe(200);
+		expect(calls.at(-1)).toMatchObject({
+			retiredProfile: { sourceId: "profile-1", actorPrincipalId: "admin-1" },
+		});
+		const missingRevisionRetire = await app.request(
+			"/api/v1/connection/admin/disclaimers/disclaimer-1/retire",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"idempotency-key": "retire-disclaimer-missing",
+				},
+			},
+		);
+		expect(missingRevisionRetire.status).toBe(400);
+		const revisedDisclaimer = await app.request(
+			"/api/v1/connection/admin/disclaimers/disclaimer-1/revise",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "revise-disclaimer-1",
+				},
+				body: JSON.stringify({
+					kind: "GLOBAL",
+					locale: "zh-CN",
+					content: "Updated",
+					materialChange: false,
+				}),
+			},
+		);
+		expect(revisedDisclaimer.status).toBe(200);
+		expect(calls.at(-1)).toMatchObject({
+			revisedDisclaimer: {
+				sourceId: "disclaimer-1",
+				actorPrincipalId: "admin-1",
+			},
+		});
+		const retiredDisclaimer = await app.request(
+			"/api/v1/connection/admin/disclaimers/disclaimer-1/retire",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "retire-disclaimer-1",
+				},
+			},
+		);
+		expect(retiredDisclaimer.status).toBe(200);
+		expect(calls.at(-1)).toMatchObject({
+			retiredDisclaimer: {
+				sourceId: "disclaimer-1",
 				actorPrincipalId: "admin-1",
 			},
 		});

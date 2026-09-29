@@ -32,7 +32,9 @@ const approvalTopics = [
 	"connection.approval-delegation.created",
 	"connection.approval-delegation.revoked",
 	"connection.capability-profile.published",
+	"connection.capability-profile.retired",
 	"connection.disclaimer.published",
+	"connection.disclaimer.retired",
 	"connection.reapproval-campaign.created",
 ] as const;
 

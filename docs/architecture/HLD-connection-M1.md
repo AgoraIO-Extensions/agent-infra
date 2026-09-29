@@ -1158,6 +1158,8 @@ type CredentialVersion = {
 
 `ConnectionAccessPolicyVersion` 固定 exact ProviderRelease、Capability Profile、离散时长、Disclaimer version bundle 和 1–10 个严格顺序 ApprovalStage。每阶段固定 LDAP Principal 候选集合与 `ANY | ALL | AT_LEAST_N` quorum；PUBLISHED 后不可修改。同一最高优先级匹配多条、没有匹配或任何安全输入缺失时拒绝申请。
 
+目录管理员对已发布 Capability Profile 或 Disclaimer 的“编辑”在单个事务中创建新的不可变发布版本，并把引用旧版的 current PUBLISHED Policy 复制成绑定新版的替代版本；原 Profile、Disclaimer 和 Policy 仅转为 SUPERSEDED。替代 Policy 保留原审批阶段、期限、优先级及其余条款，新申请只看到新版；旧 Request、Permit、Authorization 和 Grant 仍绑定原版，不自动扩权或重写确认。管理员“删除”仅把目标及引用它的 current Policy 转为 SUPERSEDED，从新申请目录撤下，不硬删除或撤销既有资格。所有操作校验管理员身份、目标 revision 和并发引用，审计/outbox 与状态更新同事务；重大免责声明变更仍遵循下文的重审门禁，不能通过快捷修订绕过。
+
 紧急撤销 current PUBLISHED Policy 时，在同一事务将其 ProviderRelease + Capability Profile 的 PUBLISHED/SUPERSEDED 版本标记 REVOKED，取消对应未终结 Request/未消费 Permit，暂停该组合的 ACTIVE、REAPPROVAL_REQUIRED 与 DISCONNECTED 个人 Access Authorization，提升 account revision/execution fence 并暂停 active Grant。进行中的 Renewal 同样取消；Request、WorkItem、Notification、audit/outbox 同事务收敛。旧 Provider submission 已进入 `SUBMISSION_STARTED` 时仍保留真实结果或 `UNCERTAIN`。撤销不能因状态重放而恢复资格。
 
 替代版本发布明确记录是否为 material；material 发布必须携带管理员指定的未来重审截止时间和原因，在同一事务创建 POLICY ReapprovalCampaign 并标记受影响资格为 REAPPROVAL_REQUIRED。新增 material Disclaimer bundle 不能声明为非 material。非 material 换版只影响新申请，不改变既有 Authorization。

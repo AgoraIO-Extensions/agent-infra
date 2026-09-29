@@ -3,11 +3,17 @@ import type {
 	CapabilityProfileDetailResponse,
 } from "@agent-infra/connection-contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, Plus } from "lucide-react";
+import { Copy, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { connectionApi } from "../api";
 import { Button } from "../components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogHeader,
+	DialogTitle,
+} from "../components/ui/dialog";
 import { PageError } from "../shell";
 
 type Catalog = ApprovalPolicyCatalog;
@@ -32,6 +38,14 @@ export function ApprovalCatalogManager(props: {
 		id: string;
 		revision: string;
 	} | null>(null);
+	const [revisingProfile, setRevisingProfile] = useState<Profile | null>(null);
+	const [revisingDisclaimer, setRevisingDisclaimer] =
+		useState<Disclaimer | null>(null);
+	const [retiring, setRetiring] = useState<
+		| { kind: "profile"; item: Profile }
+		| { kind: "disclaimer"; item: Disclaimer }
+		| null
+	>(null);
 	const [providerLocked, setProviderLocked] = useState(false);
 	const [disclaimerScopeLocked, setDisclaimerScopeLocked] = useState(false);
 	const [profileName, setProfileName] = useState("");
@@ -50,6 +64,14 @@ export function ApprovalCatalogManager(props: {
 	const disclaimer = props.catalog?.disclaimers.find(
 		(item) => item.id === disclaimerId,
 	);
+	const visibleProfiles =
+		props.catalog?.profiles.filter(
+			(item) => item.status === "PUBLISHED" || item.status === "DRAFT",
+		) ?? [];
+	const visibleDisclaimers =
+		props.catalog?.disclaimers.filter(
+			(item) => item.status === "PUBLISHED" || item.status === "DRAFT",
+		) ?? [];
 	const detail = useQuery({
 		queryKey: ["approval-profile-detail", profileId],
 		queryFn: () => connectionApi.getApprovalCapabilityProfile(profileId),
@@ -69,6 +91,7 @@ export function ApprovalCatalogManager(props: {
 		props.catalog?.profiles.some(
 			(item) =>
 				item.id !== editingProfile?.id &&
+				item.id !== revisingProfile?.id &&
 				item.status === "PUBLISHED" &&
 				item.providerReleaseId === providerReleaseId &&
 				item.name === profileName.trim(),
@@ -83,10 +106,27 @@ export function ApprovalCatalogManager(props: {
 		) ?? false;
 
 	useEffect(() => {
-		if (!profileId && props.catalog?.profiles[0])
-			setProfileId(props.catalog.profiles[0].id);
-		if (!disclaimerId && props.catalog?.disclaimers[0])
-			setDisclaimerId(props.catalog.disclaimers[0].id);
+		const active = (status: string) =>
+			status === "PUBLISHED" || status === "DRAFT";
+		if (
+			!profileId ||
+			props.catalog?.profiles.some(
+				(item) => item.id === profileId && !active(item.status),
+			)
+		)
+			setProfileId(
+				props.catalog?.profiles.find((item) => active(item.status))?.id ?? "",
+			);
+		if (
+			!disclaimerId ||
+			props.catalog?.disclaimers.some(
+				(item) => item.id === disclaimerId && !active(item.status),
+			)
+		)
+			setDisclaimerId(
+				props.catalog?.disclaimers.find((item) => active(item.status))?.id ??
+					"",
+			);
 	}, [props.catalog, profileId, disclaimerId]);
 
 	const saveProfile = useMutation({
@@ -95,17 +135,28 @@ export function ApprovalCatalogManager(props: {
 			providerReleaseId: string;
 			actionVersionIds: string[];
 		}) =>
-			editingProfile
-				? connectionApi.updateApprovalCapabilityProfileDraft({
-						profileId: editingProfile.id,
-						revision: editingProfile.revision,
+			revisingProfile
+				? connectionApi.revisePublishedApprovalCapabilityProfile({
+						profileId: revisingProfile.id,
+						revision: revisingProfile.revision,
 						body,
 					})
-				: connectionApi.createApprovalCapabilityProfile(body),
+				: editingProfile
+					? connectionApi.updateApprovalCapabilityProfileDraft({
+							profileId: editingProfile.id,
+							revision: editingProfile.revision,
+							body,
+						})
+					: connectionApi.createApprovalCapabilityProfile(body),
 		onSuccess: async (created) => {
 			setEditor(null);
 			setProfileId(created.capabilityProfileId);
-			setNotice("能力包草稿已保存；发布前可核对完整清单。");
+			setNotice(
+				revisingProfile
+					? "能力包已更新，新申请使用新版；既有批准不变。"
+					: "能力包草稿已保存；发布前可核对完整清单。",
+			);
+			setRevisingProfile(null);
 			await props.onRefresh();
 			await client.invalidateQueries({ queryKey: ["approval-profile-detail"] });
 		},
@@ -126,17 +177,28 @@ export function ApprovalCatalogManager(props: {
 			materialChange: boolean;
 			providerId?: string;
 		}) =>
-			editingDisclaimer
-				? connectionApi.updateApprovalDisclaimerDraft({
-						disclaimerId: editingDisclaimer.id,
-						revision: editingDisclaimer.revision,
+			revisingDisclaimer
+				? connectionApi.revisePublishedApprovalDisclaimer({
+						disclaimerId: revisingDisclaimer.id,
+						revision: revisingDisclaimer.revision,
 						body,
 					})
-				: connectionApi.createApprovalDisclaimer(body),
+				: editingDisclaimer
+					? connectionApi.updateApprovalDisclaimerDraft({
+							disclaimerId: editingDisclaimer.id,
+							revision: editingDisclaimer.revision,
+							body,
+						})
+					: connectionApi.createApprovalDisclaimer(body),
 		onSuccess: async (created) => {
 			setEditor(null);
 			setDisclaimerId(created.disclaimerVersionId);
-			setNotice("免责声明草稿已保存；发布前可核对正文。");
+			setNotice(
+				revisingDisclaimer
+					? "免责声明已更新，新申请使用新版；既有确认不变。"
+					: "免责声明草稿已保存；发布前可核对正文。",
+			);
+			setRevisingDisclaimer(null);
 			await props.onRefresh();
 		},
 	});
@@ -147,21 +209,44 @@ export function ApprovalCatalogManager(props: {
 			await props.onRefresh();
 		},
 	});
+	const retireVersion = useMutation({
+		mutationFn: (target: NonNullable<typeof retiring>) =>
+			target.kind === "profile"
+				? connectionApi.retirePublishedApprovalCapabilityProfile({
+						profileId: target.item.id,
+						revision: target.item.revision,
+					})
+				: connectionApi.retirePublishedApprovalDisclaimer({
+						disclaimerId: target.item.id,
+						revision: target.item.revision,
+					}),
+		onSuccess: async (result) => {
+			setRetiring(null);
+			setNotice(
+				`已从新申请中移除，${result.affectedPolicies} 条策略不再接受新申请；既有批准不变。`,
+			);
+			await props.onRefresh();
+		},
+	});
 	const error =
 		saveProfile.error ||
 		publishProfile.error ||
 		saveDisclaimer.error ||
-		publishDisclaimer.error;
+		publishDisclaimer.error ||
+		retireVersion.error;
 	const busy =
 		saveProfile.isPending ||
 		publishProfile.isPending ||
 		saveDisclaimer.isPending ||
-		publishDisclaimer.isPending;
+		publishDisclaimer.isPending ||
+		retireVersion.isPending;
 
 	function newProfile() {
+		setRevisingProfile(null);
 		setKind("profiles");
 		setEditor("profile");
 		setEditingProfile(null);
+		setRevisingProfile(null);
 		setProviderLocked(false);
 		setProfileName("");
 		setProviderReleaseId(props.catalog?.providers[0]?.providerReleaseId ?? "");
@@ -195,6 +280,7 @@ export function ApprovalCatalogManager(props: {
 			id: source.id,
 			revision: sourceDetail.profile.revision,
 		});
+		setRevisingProfile(null);
 		setProviderLocked(true);
 		setProfileName(source.name);
 		setProviderReleaseId(source.providerReleaseId);
@@ -203,10 +289,21 @@ export function ApprovalCatalogManager(props: {
 		setNotice("");
 	}
 
+	function editPublishedProfile(
+		source: Profile,
+		sourceDetail: CapabilityProfileDetailResponse,
+	) {
+		editProfileDraft(source, sourceDetail);
+		setEditingProfile(null);
+		setRevisingProfile(source);
+	}
+
 	function newDisclaimer() {
+		setRevisingDisclaimer(null);
 		setKind("disclaimers");
 		setEditor("disclaimer");
 		setEditingDisclaimer(null);
+		setRevisingDisclaimer(null);
 		setDisclaimerScopeLocked(false);
 		setDisclaimerKind("GLOBAL");
 		setDisclaimerProvider("");
@@ -232,6 +329,12 @@ export function ApprovalCatalogManager(props: {
 	function editDisclaimerDraft(source: Disclaimer) {
 		copyDisclaimer(source);
 		setEditingDisclaimer({ id: source.id, revision: source.revision });
+	}
+
+	function editPublishedDisclaimer(source: Disclaimer) {
+		copyDisclaimer(source);
+		setRevisingDisclaimer(source);
+		setMaterialChange(false);
 	}
 
 	return (
@@ -278,7 +381,7 @@ export function ApprovalCatalogManager(props: {
 						</button>
 					</div>
 					{kind === "profiles"
-						? props.catalog?.profiles.map((item) => (
+						? visibleProfiles.map((item) => (
 								<button
 									key={item.id}
 									type="button"
@@ -298,7 +401,7 @@ export function ApprovalCatalogManager(props: {
 									</span>
 								</button>
 							))
-						: props.catalog?.disclaimers.map((item) => (
+						: visibleDisclaimers.map((item) => (
 								<button
 									key={item.id}
 									type="button"
@@ -320,10 +423,10 @@ export function ApprovalCatalogManager(props: {
 									</span>
 								</button>
 							))}
-					{!props.catalog?.profiles.length && kind === "profiles" ? (
+					{!visibleProfiles.length && kind === "profiles" ? (
 						<p>暂无能力包。</p>
 					) : null}
-					{!props.catalog?.disclaimers.length && kind === "disclaimers" ? (
+					{!visibleDisclaimers.length && kind === "disclaimers" ? (
 						<p>暂无免责声明。</p>
 					) : null}
 				</aside>
@@ -331,11 +434,13 @@ export function ApprovalCatalogManager(props: {
 					{editor === "profile" ? (
 						<div className="approval-directory-form">
 							<h3>
-								{editingProfile
-									? "修改能力包草稿"
-									: providerLocked
-										? "复制为新能力包"
-										: "新建能力包"}
+								{revisingProfile
+									? "编辑已发布能力包"
+									: editingProfile
+										? "修改能力包草稿"
+										: providerLocked
+											? "复制为新能力包"
+											: "新建能力包"}
 							</h3>
 							<label>
 								名称
@@ -481,14 +586,18 @@ export function ApprovalCatalogManager(props: {
 										})
 									}
 								>
-									保存草稿
+									{revisingProfile ? "保存并发布" : "保存草稿"}
 								</Button>
 							</div>
 						</div>
 					) : editor === "disclaimer" ? (
 						<div className="approval-directory-form">
 							<h3>
-								{editingDisclaimer ? "修改免责声明草稿" : "新建免责声明版本"}
+								{revisingDisclaimer
+									? "编辑已发布免责声明"
+									: editingDisclaimer
+										? "修改免责声明草稿"
+										: "新建免责声明版本"}
 							</h3>
 							<label>
 								条款类型
@@ -544,14 +653,18 @@ export function ApprovalCatalogManager(props: {
 									onChange={(event) => setDisclaimerContent(event.target.value)}
 								/>
 							</label>
-							<label className="approval-toggle">
-								<input
-									type="checkbox"
-									checked={materialChange}
-									onChange={(event) => setMaterialChange(event.target.checked)}
-								/>
-								重大内容变化
-							</label>
+							{!revisingDisclaimer ? (
+								<label className="approval-toggle">
+									<input
+										type="checkbox"
+										checked={materialChange}
+										onChange={(event) =>
+											setMaterialChange(event.target.checked)
+										}
+									/>
+									重大内容变化
+								</label>
+							) : null}
 							<div className="approval-directory-actions">
 								<Button variant="secondary" onClick={() => setEditor(null)}>
 									取消
@@ -574,7 +687,7 @@ export function ApprovalCatalogManager(props: {
 										})
 									}
 								>
-									保存草稿
+									{revisingDisclaimer ? "保存并发布" : "保存草稿"}
 								</Button>
 							</div>
 						</div>
@@ -646,7 +759,30 @@ export function ApprovalCatalogManager(props: {
 									</div>
 								</>
 							)}
-							{profile.status === "DRAFT" ? (
+							{profile.status === "PUBLISHED" ? (
+								<div className="approval-directory-actions">
+									<Button
+										variant="secondary"
+										disabled={!detail.data}
+										onClick={() =>
+											detail.data && editPublishedProfile(profile, detail.data)
+										}
+									>
+										<Pencil size={15} />
+										编辑
+									</Button>
+									<Button
+										variant="danger"
+										disabled={busy}
+										onClick={() =>
+											setRetiring({ kind: "profile", item: profile })
+										}
+									>
+										<Trash2 size={15} />
+										移除
+									</Button>
+								</div>
+							) : profile.status === "DRAFT" ? (
 								<div className="approval-directory-actions">
 									{publishConflict ? (
 										<p role="alert">
@@ -716,7 +852,29 @@ export function ApprovalCatalogManager(props: {
 							<div className="approval-disclaimer-content">
 								{disclaimer.content}
 							</div>
-							{disclaimer.status === "DRAFT" ? (
+							{disclaimer.status === "PUBLISHED" &&
+							disclaimer.kind !== "POLICY" ? (
+								<div className="approval-directory-actions">
+									<Button
+										variant="secondary"
+										disabled={busy}
+										onClick={() => editPublishedDisclaimer(disclaimer)}
+									>
+										<Pencil size={15} />
+										编辑
+									</Button>
+									<Button
+										variant="danger"
+										disabled={busy}
+										onClick={() =>
+											setRetiring({ kind: "disclaimer", item: disclaimer })
+										}
+									>
+										<Trash2 size={15} />
+										移除
+									</Button>
+								</div>
+							) : disclaimer.status === "DRAFT" ? (
 								<div className="approval-directory-actions">
 									<Button
 										variant="secondary"
@@ -738,6 +896,46 @@ export function ApprovalCatalogManager(props: {
 					)}
 				</div>
 			</div>
+			<Dialog
+				open={Boolean(retiring)}
+				onOpenChange={(open) => !open && setRetiring(null)}
+			>
+				<DialogContent aria-describedby={undefined}>
+					<DialogHeader>
+						<DialogTitle>从新申请中移除</DialogTitle>
+					</DialogHeader>
+					<p>
+						将移除该{retiring?.kind === "profile" ? "能力包" : "免责声明"}及
+						{retiring?.kind === "profile"
+							? props.catalog?.policies.filter(
+									(item) =>
+										item.status === "PUBLISHED" &&
+										item.capabilityProfileId === retiring.item.id,
+								).length
+							: props.catalog?.policies.filter(
+									(item) =>
+										item.status === "PUBLISHED" &&
+										item.disclaimerVersionIds.includes(retiring?.item.id ?? ""),
+								).length}
+						条关联策略的新申请入口。已有申请和批准保持不变。
+					</p>
+					{retireVersion.isError ? (
+						<PageError error={retireVersion.error} />
+					) : null}
+					<div className="approval-directory-actions">
+						<Button variant="secondary" onClick={() => setRetiring(null)}>
+							取消
+						</Button>
+						<Button
+							variant="danger"
+							disabled={!retiring || retireVersion.isPending}
+							onClick={() => retiring && retireVersion.mutate(retiring)}
+						>
+							确认移除
+						</Button>
+					</div>
+				</DialogContent>
+			</Dialog>
 		</section>
 	);
 }
