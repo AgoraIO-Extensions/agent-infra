@@ -2763,6 +2763,131 @@ export type GetApprovalPolicyStagesResponses = {
 
 export type GetApprovalPolicyStagesResponse = GetApprovalPolicyStagesResponses[keyof GetApprovalPolicyStagesResponses];
 
+export type GetPublishedConnectionAccessPolicyEditorSourceData = {
+    body?: never;
+    path: {
+        policyId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies/{policyId}/revision-source';
+};
+
+export type GetPublishedConnectionAccessPolicyEditorSourceErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type GetPublishedConnectionAccessPolicyEditorSourceError = GetPublishedConnectionAccessPolicyEditorSourceErrors[keyof GetPublishedConnectionAccessPolicyEditorSourceErrors];
+
+export type GetPublishedConnectionAccessPolicyEditorSourceResponses = {
+    /**
+     * Published policy editor source with administrator-bound candidates
+     */
+    200: AccessPolicyDraftResponse;
+};
+
+export type GetPublishedConnectionAccessPolicyEditorSourceResponse = GetPublishedConnectionAccessPolicyEditorSourceResponses[keyof GetPublishedConnectionAccessPolicyEditorSourceResponses];
+
+export type RevisePublishedConnectionAccessPolicyData = {
+    body: AccessPolicyDraft;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        policyId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies/{policyId}/revise';
+};
+
+export type RevisePublishedConnectionAccessPolicyErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type RevisePublishedConnectionAccessPolicyError = RevisePublishedConnectionAccessPolicyErrors[keyof RevisePublishedConnectionAccessPolicyErrors];
+
+export type RevisePublishedConnectionAccessPolicyResponses = {
+    /**
+     * Replacement policy published for new applications
+     */
+    200: AccessPolicyCreated;
+};
+
+export type RevisePublishedConnectionAccessPolicyResponse = RevisePublishedConnectionAccessPolicyResponses[keyof RevisePublishedConnectionAccessPolicyResponses];
+
+export type RetirePublishedConnectionAccessPolicyData = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        policyId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies/{policyId}/retire';
+};
+
+export type RetirePublishedConnectionAccessPolicyErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RetirePublishedConnectionAccessPolicyError = RetirePublishedConnectionAccessPolicyErrors[keyof RetirePublishedConnectionAccessPolicyErrors];
+
+export type RetirePublishedConnectionAccessPolicyResponses = {
+    /**
+     * Policy retired from new applications
+     */
+    200: AccessPolicyCreated;
+};
+
+export type RetirePublishedConnectionAccessPolicyResponse = RetirePublishedConnectionAccessPolicyResponses[keyof RetirePublishedConnectionAccessPolicyResponses];
+
 export type PublishConnectionAccessPolicyData = {
     body: ApprovalPolicyPublishRequest;
     headers: {

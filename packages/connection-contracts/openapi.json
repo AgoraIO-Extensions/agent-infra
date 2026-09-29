@@ -1460,6 +1460,111 @@
 				}
 			}
 		},
+		"/api/v1/connection/admin/access-policies/{policyId}/revision-source": {
+			"get": {
+				"operationId": "getPublishedConnectionAccessPolicyEditorSource",
+				"parameters": [
+					{
+						"name": "policyId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Published policy editor source with administrator-bound candidates",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AccessPolicyDraftResponse"
+								}
+							}
+						}
+					},
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"503": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/access-policies/{policyId}/revise": {
+			"post": {
+				"operationId": "revisePublishedConnectionAccessPolicy",
+				"parameters": [
+					{ "$ref": "#/components/parameters/IdempotencyKey" },
+					{
+						"name": "policyId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					},
+					{
+						"name": "If-Match",
+						"in": "header",
+						"required": true,
+						"schema": { "type": "string", "pattern": "^\"[1-9][0-9]*\"$" }
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": { "$ref": "#/components/schemas/AccessPolicyDraft" }
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Replacement policy published for new applications",
+						"content": {
+							"application/json": {
+								"schema": { "$ref": "#/components/schemas/AccessPolicyCreated" }
+							}
+						}
+					},
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" },
+					"503": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/access-policies/{policyId}/retire": {
+			"post": {
+				"operationId": "retirePublishedConnectionAccessPolicy",
+				"parameters": [
+					{ "$ref": "#/components/parameters/IdempotencyKey" },
+					{
+						"name": "policyId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					},
+					{
+						"name": "If-Match",
+						"in": "header",
+						"required": true,
+						"schema": { "type": "string", "pattern": "^\"[1-9][0-9]*\"$" }
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Policy retired from new applications",
+						"content": {
+							"application/json": {
+								"schema": { "$ref": "#/components/schemas/AccessPolicyCreated" }
+							}
+						}
+					},
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
 		"/api/v1/connection/admin/access-policies/{policyId}/publish": {
 			"post": {
 				"operationId": "publishConnectionAccessPolicy",
