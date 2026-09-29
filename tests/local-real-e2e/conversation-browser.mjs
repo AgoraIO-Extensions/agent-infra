@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
-import { persistedEventsMatchExecution } from "./conversation-browser-validation.mjs";
+import { currentExecutionEvents } from "./conversation-browser-validation.mjs";
 
 const requireWebDependency = createRequire(
 	new URL("../../apps/web/package.json", import.meta.url),
@@ -310,18 +310,14 @@ async function run(input, evidence) {
 			input.origin,
 			conversationId,
 		);
-		const events = detail.events ?? [];
-		assert(
-			persistedEventsMatchExecution(
-				events,
-				conversationId,
-				receipt.executionId,
-			),
-			"Current-execution events must stay bound to this conversation and execution",
+		const events = currentExecutionEvents(
+			detail,
+			conversationId,
+			receipt.executionId,
 		);
-		assert.equal(
-			new Set(events.map((event) => event.eventId)).size,
-			events.length,
+		assert(
+			events,
+			"Current-execution events must stay bound to this conversation and execution",
 		);
 		const sseFrames = await page.evaluate(
 			() => window.__agentInfraSseFrames ?? [],
@@ -364,6 +360,7 @@ async function run(input, evidence) {
 		evidence.sse = {
 			status: 200,
 			eventCount: events.length,
+			historyEventCount: detail.events.length,
 			eventIdHashes: events.map((event) => digest(event.eventId)),
 			observedFrames: sseFrames.map((frame) => ({
 				idHash: digest(frame.id),
