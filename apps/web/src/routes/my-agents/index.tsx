@@ -1,4 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import {
+	isRetryableAgentDiscoveryError,
+} from "../../features/agent-discovery/agent-discovery.js";
 import { useAgentDiscovery } from "../../features/agent-discovery/use-agent-discovery.js";
 
 import { MyAgentsScreen } from "../../features/my-agents/my-agents-screen.js";
@@ -23,7 +26,8 @@ function MyAgentsRoute() {
 					owned.isError || owned.data?.kind === "unavailable"
 				}
 				ownedAgentsRetryable={
-					owned.isError ||
+					(owned.isError &&
+						isRetryableAgentDiscoveryError(owned.error)) ||
 					(owned.data?.kind === "unavailable" && owned.data.retryable)
 				}
 				onRetryApplications={() => void query.refetch()}

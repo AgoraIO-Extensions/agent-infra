@@ -26,7 +26,22 @@ export type AgentDetailState =
 	| { kind: "ready"; agent: AgentProjectionV2 }
 	| UnavailableState;
 
-const retryableError = () => new Error("Agent data is temporarily unavailable");
+type RetryableAgentDiscoveryError = Error & { readonly retryable: true };
+
+const retryableError = (): RetryableAgentDiscoveryError =>
+	Object.assign(new Error("Agent data is temporarily unavailable"), {
+		retryable: true as const,
+	});
+
+export function isRetryableAgentDiscoveryError(
+	error: unknown,
+): error is RetryableAgentDiscoveryError {
+	return (
+		error instanceof Error &&
+		"retryable" in error &&
+		error.retryable === true
+	);
+}
 const maximumAgentDiscoveryPages = 100;
 
 export type AgentDiscoveryScope = "visible" | "owner";

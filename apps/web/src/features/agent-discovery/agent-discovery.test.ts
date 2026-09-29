@@ -103,6 +103,7 @@ describe("Agent discovery generated-client consumer", () => {
 			loadAgentDiscovery(createAgentClient(server)),
 		).rejects.toMatchObject({
 			message: "Agent data is temporarily unavailable",
+			retryable: true,
 		});
 		expect(server.requests).toHaveLength(2);
 	});
@@ -124,6 +125,7 @@ describe("Agent discovery generated-client consumer", () => {
 			loadAgentDiscovery(createAgentClient(server)),
 		).rejects.toMatchObject({
 			message: "Agent data is temporarily unavailable",
+			retryable: true,
 		});
 		expect(requests).toBe(100);
 	});
@@ -201,6 +203,7 @@ describe("Agent discovery generated-client consumer", () => {
 			loadAgentDetail("agent-pilot-1", createAgentClient(server)),
 		).rejects.toMatchObject({
 			message: "Agent data is temporarily unavailable",
+			retryable: true,
 		});
 	});
 });
