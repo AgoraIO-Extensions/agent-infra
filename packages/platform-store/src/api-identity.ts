@@ -8,6 +8,7 @@ import {
 	type ApiPrincipalV1,
 	hashApiCredentialV1,
 	isApiCredentialScopeV1,
+	isCurrentAgentGrantManageAllowedV1,
 	parseCurrentTaskUserV1,
 } from "@agent-infra/platform-core";
 import { and, eq, gt, isNull } from "drizzle-orm";
@@ -80,32 +81,37 @@ async function hasCurrentManageAuthority(
 	agentId: string,
 	authorizationRevision: string | null,
 ): Promise<boolean> {
-	if (actor.accountStatus !== "active") return false;
+	let credential: null | {
+		principalType: string;
+		principalId: string;
+		scopes: readonly string[];
+		expiresAt: Date | null;
+		revokedAt: Date | null;
+	} = null;
+	let applicationStatus: string | null = null;
+	let isOwner = false;
+	let grants: {
+		grantType: string;
+		authorizationRevision: string;
+		revokedAt: Date | null;
+	}[] = [];
 	if (actor.principal !== undefined) {
 		const credentialId = actor.credential?.credentialId;
-		if (!credentialId) return false;
-		const [credential] = await database
-			.select({
-				principalType: platformApiCredentials.principalType,
-				principalId: platformApiCredentials.principalId,
-				scopes: platformApiCredentials.scopes,
-				expiresAt: platformApiCredentials.expiresAt,
-				revokedAt: platformApiCredentials.revokedAt,
-			})
-			.from(platformApiCredentials)
-			.where(eq(platformApiCredentials.id, credentialId))
-			.limit(1)
-			.for("share");
-		if (
-			!credential ||
-			credential.principalType !== actor.principal.kind ||
-			credential.principalId !== actor.principal.id ||
-			credential.revokedAt !== null ||
-			(credential.expiresAt !== null &&
-				credential.expiresAt.getTime() <= Date.now()) ||
-			!credential.scopes.includes("agent:manage")
-		)
-			return false;
+		const [currentCredential] = credentialId
+			? await database
+					.select({
+						principalType: platformApiCredentials.principalType,
+						principalId: platformApiCredentials.principalId,
+						scopes: platformApiCredentials.scopes,
+						expiresAt: platformApiCredentials.expiresAt,
+						revokedAt: platformApiCredentials.revokedAt,
+					})
+					.from(platformApiCredentials)
+					.where(eq(platformApiCredentials.id, credentialId))
+					.limit(1)
+					.for("share")
+			: [];
+		credential = currentCredential ?? null;
 		if (actor.principal.kind === "application") {
 			const [application] = await database
 				.select({ status: platformApplications.status })
@@ -113,12 +119,9 @@ async function hasCurrentManageAuthority(
 				.where(eq(platformApplications.id, actor.principal.id))
 				.limit(1)
 				.for("share");
-			if (application?.status !== "active") return false;
+			applicationStatus = application?.status ?? null;
 		}
 	}
-	if (actor.isAdministrator) return true;
-	if (actor.principal?.kind === "user" && actor.principal.id !== actor.userId)
-		return false;
 	if (actor.principal === undefined) {
 		const [owner] = await database
 			.select({ agentId: agentOwners.agentId })
@@ -131,25 +134,32 @@ async function hasCurrentManageAuthority(
 			)
 			.limit(1)
 			.for("share");
-		return owner !== undefined;
+		isOwner = owner !== undefined;
+	} else if (authorizationRevision !== null) {
+		grants = await database
+			.select({
+				grantType: agentPrincipalGrants.grantType,
+				authorizationRevision: agentPrincipalGrants.authorizationRevision,
+				revokedAt: agentPrincipalGrants.revokedAt,
+			})
+			.from(agentPrincipalGrants)
+			.where(
+				and(
+					eq(agentPrincipalGrants.agentId, agentId),
+					eq(agentPrincipalGrants.principalType, actor.principal.kind),
+					eq(agentPrincipalGrants.principalId, actor.principal.id),
+				),
+			)
+			.for("share");
 	}
-	if (authorizationRevision === null) return false;
-	const [grant] = await database
-		.select({ agentId: agentPrincipalGrants.agentId })
-		.from(agentPrincipalGrants)
-		.where(
-			and(
-				eq(agentPrincipalGrants.agentId, agentId),
-				eq(agentPrincipalGrants.principalType, actor.principal.kind),
-				eq(agentPrincipalGrants.principalId, actor.principal.id),
-				eq(agentPrincipalGrants.grantType, "manage"),
-				eq(agentPrincipalGrants.authorizationRevision, authorizationRevision),
-				isNull(agentPrincipalGrants.revokedAt),
-			),
-		)
-		.limit(1)
-		.for("share");
-	return grant !== undefined;
+	return isCurrentAgentGrantManageAllowedV1({
+		actor,
+		credential,
+		applicationStatus,
+		isOwner,
+		authorizationRevision,
+		grants,
+	});
 }
 
 function metadata(

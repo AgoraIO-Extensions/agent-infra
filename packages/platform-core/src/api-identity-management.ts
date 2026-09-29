@@ -52,6 +52,57 @@ export function isSameApiCreationAuthorityV1(
 	);
 }
 
+/** Decide grant management from current, locked credential and Agent facts. */
+export function isCurrentAgentGrantManageAllowedV1(input: {
+	readonly actor: ApiIdentityActorV1;
+	readonly credential: null | {
+		readonly principalType: string;
+		readonly principalId: string;
+		readonly scopes: readonly string[];
+		readonly expiresAt: Date | null;
+		readonly revokedAt: Date | null;
+	};
+	readonly applicationStatus: string | null;
+	readonly isOwner: boolean;
+	readonly authorizationRevision: string | null;
+	readonly grants: readonly {
+		readonly grantType: string;
+		readonly authorizationRevision: string;
+		readonly revokedAt: Date | null;
+	}[];
+}): boolean {
+	const { actor, credential } = input;
+	if (actor.accountStatus !== "active") return false;
+	if (actor.principal) {
+		if (
+			!actor.credential?.credentialId ||
+			!credential ||
+			credential.principalType !== actor.principal.kind ||
+			credential.principalId !== actor.principal.id ||
+			credential.revokedAt !== null ||
+			(credential.expiresAt !== null &&
+				credential.expiresAt.getTime() <= Date.now()) ||
+			!credential.scopes.includes("agent:manage") ||
+			(actor.principal.kind === "application" &&
+				input.applicationStatus !== "active")
+		)
+			return false;
+	}
+	if (actor.isAdministrator) return true;
+	if (actor.principal?.kind === "user" && actor.principal.id !== actor.userId)
+		return false;
+	if (!actor.principal) return input.isOwner;
+	return (
+		input.authorizationRevision !== null &&
+		input.grants.some(
+			(grant) =>
+				grant.grantType === "manage" &&
+				grant.authorizationRevision === input.authorizationRevision &&
+				grant.revokedAt === null,
+		)
+	);
+}
+
 export interface ApiIdentityCredentialIssueInputV1 {
 	readonly principal: ApiPrincipalV1;
 	readonly credential: string;

@@ -8,6 +8,7 @@ import {
 	type AgentRuntimePresentationFactsV1,
 	type ApiPrincipalV1,
 	decideAgentRuntimePresentationV1,
+	isAgentConfigurationQueryAllowedV1,
 	isAgentOwnerV1,
 	isAgentRuntimePresentationVisibleV1,
 	snapshotAgentRuntimePresentationExpectationV1,
@@ -535,38 +536,14 @@ export class PostgresAgentConfigurationQueryV1 {
 											: `application\0${right.applicationId}`;
 								return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
 							});
-					const owner = ownerIds.includes(input.actorId);
-					const available = availability.some((target) =>
-						target.kind === "user"
-							? target.userId === input.actorId
-							: target.kind === "organization" &&
-								input.organizationIds.includes(target.organizationId),
-					);
-					const principalAllowed =
-						input.principal !== undefined &&
-						validateText(current.authorizationRevision) &&
-						principalGrants.some(
-							(grant) =>
-								(grant.principalType === "user" ||
-									grant.principalType === "application") &&
-								validateText(grant.principalId) &&
-								(grant.grantType === "manage" || grant.grantType === "use") &&
-								grant.principalType === input.principal?.kind &&
-								grant.principalId === input.principal?.id &&
-								grant.authorizationRevision === current.authorizationRevision &&
-								grant.revokedAt === null &&
-								(input.intent === "manage"
-									? grant.grantType === "manage"
-									: grant.grantType === "manage" || grant.grantType === "use"),
-						);
-					const ownerAllowed = input.principal === undefined && owner;
-					const availabilityAllowed =
-						input.principal === undefined && available;
 					if (
-						(input.principal !== undefined || !input.isAdministrator) &&
-						!principalAllowed &&
-						!ownerAllowed &&
-						(input.intent === "manage" || !availabilityAllowed)
+						!isAgentConfigurationQueryAllowedV1({
+							...input,
+							authorizationRevision: current.authorizationRevision,
+							ownerIds,
+							availability,
+							principalGrants,
+						})
 					) {
 						return { outcome: "unavailable" };
 					}

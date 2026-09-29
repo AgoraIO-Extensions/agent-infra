@@ -44,6 +44,7 @@ export {
 	parseStandardTemplateReleaseTargetV1,
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.js";
+export * from "./agent-configuration-query-access.js";
 export * from "./agent-management.js";
 export * from "./agent-runtime-presentation.js";
 export type {
