@@ -175,6 +175,17 @@ export async function finishWaitingTask(
 		returning id
 	`;
 	if (outboxes.length !== 1) throw new StaleDispatchLease();
+	const messages = await transaction<{ message_id: string }[]>`
+		update platform.conversation_messages
+		set status = 'failed', failure_code = ${reason},
+			updated_at = clock_timestamp()
+		where message_id = ${payload.messageId}
+			and conversation_id = ${state.conversation.id}
+			and execution_id = ${state.execution.execution_id}
+			and status = 'submitted'
+		returning message_id
+	`;
+	if (messages.length !== 1) throw new StaleDispatchLease();
 	await recordTaskStatus(transaction, state, status, workerId, reason);
 	state.execution.status = status;
 }

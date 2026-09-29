@@ -12,10 +12,12 @@ import {
 	type ConversationDispatchStorePortV1,
 	decideConversationDispatchCapacityV1,
 	decideConversationDispatchRetryTransitionV1,
+	isAgentDispatchStoppedV1,
 	isTaskPrincipalChannelV1,
 	parseTaskAuthorizationBoundaryV1,
 	planConversationGenerationConfirmationV1,
 	planConversationGenerationIsolationV1,
+	planStoppedAgentDispatchV1,
 	planTaskSystemControlV1,
 	type TaskPrincipalV1,
 	type WorkloadReconciliationStateV1,
@@ -25,12 +27,14 @@ import { claimWork } from "./conversation-dispatch-claim.js";
 import {
 	type Client,
 	DispatchCapacityUnavailable,
+	type DispatchState,
 	databaseOperation,
 	type OutboxRow,
 	requireSafeCounter,
 	StaleDispatchLease,
 	safeCounter,
 	symbolicCode,
+	type Transaction,
 	validText,
 } from "./conversation-dispatch-common.js";
 import {
@@ -69,6 +73,35 @@ import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.ts";
 
 export interface PostgresConversationDispatchOptionsV1 {
 	readonly databaseUrl: string;
+}
+
+async function failStoppedUnsentTurn(
+	transaction: Transaction,
+	state: DispatchState,
+	claim: ConversationDispatchClaimV1,
+) {
+	const plan = planStoppedAgentDispatchV1(claim.operation);
+	await applyTransition(transaction, state, claim, plan.transition);
+	if (claim.messageId && plan.messageStatus) {
+		const messages = await transaction<{ message_id: string }[]>`
+			update platform.conversation_messages
+			set status = ${plan.messageStatus}, failure_code = ${plan.failureCode},
+				updated_at = clock_timestamp()
+			where message_id = ${claim.messageId}
+				and execution_id = ${claim.executionId}
+				and conversation_id = ${claim.conversationId}
+				and status = 'submitted'
+			returning message_id
+		`;
+		if (messages.length !== 1) throw new StaleDispatchLease();
+	}
+	await closeOutbox(
+		transaction,
+		state,
+		claim,
+		plan.outboxStatus,
+		plan.failureCode,
+	);
 }
 
 export class PostgresConversationDispatchStoreV1
@@ -667,10 +700,50 @@ export class PostgresConversationDispatchStoreV1
 		});
 	}
 
+	async terminalizeStoppedUnsentTurn(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<true | false | "agent_not_running"> {
+		requireClaim(input.claim);
+		if (
+			!isTurn(input.claim.operation) ||
+			input.claim.executionStatus !== "submitted" ||
+			input.claim.stopPending ||
+			input.claim.metadataRecovery ||
+			input.claim.generationIsolation
+		)
+			throw new TypeError("Only an unsent Turn can be terminalized");
+		let stopped = false;
+		const owned = await transactionResult(this.#client, async (transaction) => {
+			// Serialize against lifecycle updates before locking the Conversation.
+			await transaction`select id from platform.agents where id = ${input.claim.agentId} for update`;
+			const state = await ownedState(transaction, input.claim);
+			if (state?.execution.status !== "submitted")
+				throw new StaleDispatchLease();
+			if (
+				await readGenerationIsolation(
+					transaction,
+					input.claim.conversationId,
+					input.claim.sessionGeneration,
+				)
+			)
+				throw new StaleDispatchLease();
+			const [agent] = await transaction<{ status: string | null }[]>`
+				select status from platform.agent_applications
+				where agent_id = ${input.claim.agentId}
+			`;
+			if (!isAgentDispatchStoppedV1(agent?.status ?? null)) return;
+			await failStoppedUnsentTurn(transaction, state, input.claim);
+			stopped = true;
+		});
+		return owned ? (stopped ? "agent_not_running" : true) : false;
+	}
+
 	async prepareRuntimeDispatch(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
-	}): Promise<boolean | "capacity_wait" | "capacity_unavailable"> {
+	}): Promise<
+		boolean | "capacity_wait" | "capacity_unavailable" | "agent_not_running"
+	> {
 		requireClaim(input.claim);
 		if (input.claim.metadataRecovery)
 			throw new TypeError("Metadata recovery cannot dispatch business work");
@@ -678,6 +751,7 @@ export class PostgresConversationDispatchStoreV1
 		let waitingFinished = false;
 		let leaseRescheduled = false;
 		try {
+			let stopped = false;
 			const prepared = await transactionResult(
 				this.#client,
 				async (transaction) => {
@@ -778,6 +852,14 @@ export class PostgresConversationDispatchStoreV1
 						isTurn(input.claim.operation) &&
 						["submitted", "waiting"].includes(state.execution.status)
 					) {
+						if (
+							state.execution.status === "submitted" &&
+							isAgentDispatchStoppedV1(agent.status)
+						) {
+							await failStoppedUnsentTurn(transaction, state, input.claim);
+							stopped = true;
+							return;
+						}
 						let workload: WorkloadReconciliationStateV1;
 						let desired: ReturnType<typeof validateAgentWorkloadDesiredV1>;
 						try {
@@ -843,6 +925,22 @@ export class PostgresConversationDispatchStoreV1
 							if (error instanceof DispatchCapacityUnavailable) throw error;
 							throw new DispatchCapacityUnavailable("capacity_unavailable");
 						}
+						if (capacityDecision === "agent_not_running") {
+							if (state.execution.status === "submitted") {
+								await failStoppedUnsentTurn(transaction, state, input.claim);
+								stopped = true;
+							} else {
+								await finishWaitingTask(
+									transaction,
+									state,
+									"failed",
+									"AGENT_NOT_RUNNING",
+									input.claim.leaseOwner,
+								);
+								waitingFinished = true;
+							}
+							return;
+						}
 						if (capacityDecision !== "admit")
 							throw new DispatchCapacityUnavailable(capacityDecision);
 						const rows = await transaction<{ execution_id: string }[]>`
@@ -869,7 +967,9 @@ export class PostgresConversationDispatchStoreV1
 					await renewLease(transaction, input.claim, input.leaseDurationMs);
 				},
 			);
-			return prepared && !waitingFinished && !leaseRescheduled;
+			return prepared && stopped
+				? "agent_not_running"
+				: prepared && !waitingFinished && !leaseRescheduled;
 		} catch (error) {
 			if (error instanceof DispatchCapacityUnavailable) return error.outcome;
 			throw error;
