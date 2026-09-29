@@ -2,8 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { AgentApplicationSubmissionScreen } from "../../features/my-agents/agent-application-submission-screen.js";
 import {
-	isRetryableDeploymentConfigurationError,
-	unavailableDeploymentConfiguration,
+	projectDeploymentConfiguration,
 } from "../../features/my-agents/deployment-configuration.js";
 import { useAgentApplicationSubmission } from "../../features/my-agents/use-agent-application-submission.js";
 import { useDeploymentConfiguration } from "../../features/my-agents/use-deployment-configuration.js";
@@ -22,18 +21,14 @@ function NewAgentApplicationRoute() {
 			</main>
 		);
 	}
-	const deploymentReadDenied =
-		deployment.isError &&
-		!isRetryableDeploymentConfigurationError(deployment.error);
-	const deploymentConfiguration =
-		!deploymentReadDenied && deployment.data?.kind === "ready"
-			? deployment.data.configuration
-			: unavailableDeploymentConfiguration;
-	const deploymentConfigurationRetryable = deployment.isError
-		? isRetryableDeploymentConfigurationError(deployment.error)
-		: deployment.data?.kind === "ready" ||
-			(deployment.data?.kind === "unavailable" && deployment.data.retryable) ||
-			false;
+	const {
+		configuration: deploymentConfiguration,
+		retryable: deploymentConfigurationRetryable,
+	} = projectDeploymentConfiguration(
+		deployment.data,
+		deployment.error,
+		deployment.isError,
+	);
 	const error =
 		submission.isError && submission.error instanceof Error
 			? submission.error

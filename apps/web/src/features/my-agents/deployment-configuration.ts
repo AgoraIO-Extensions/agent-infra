@@ -45,7 +45,25 @@ export const unavailableDeploymentConfiguration: DeploymentConfigurationProjecti
 		schemaVersion: 2,
 		status: "unavailable",
 		templates: [],
+		};
+
+export function projectDeploymentConfiguration(
+	state: DeploymentConfigurationState | undefined,
+	error: unknown,
+	isError: boolean,
+) {
+	return {
+		configuration:
+			!isError && state?.kind === "ready"
+				? state.configuration
+				: unavailableDeploymentConfiguration,
+		retryable: isError
+			? isRetryableDeploymentConfigurationError(error)
+			: state?.kind === "ready" ||
+				(state?.kind === "unavailable" && state.retryable) ||
+				false,
 	};
+}
 
 export async function loadDeploymentConfiguration(
 	client?: Client,

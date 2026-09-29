@@ -5,8 +5,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
 import {
-	isRetryableDeploymentConfigurationError,
-	unavailableDeploymentConfiguration,
+	projectDeploymentConfiguration,
 } from "../../../features/my-agents/deployment-configuration.js";
 import {
 	getAgentApplicationEditAction,
@@ -96,18 +95,14 @@ function EditAgentApplicationRoute() {
 		submission.isError && submission.error instanceof Error
 			? submission.error
 			: null;
-	const deploymentReadDenied =
-		deployment.isError &&
-		!isRetryableDeploymentConfigurationError(deployment.error);
-	const deploymentConfiguration =
-		!deploymentReadDenied && deployment.data?.kind === "ready"
-			? deployment.data.configuration
-			: unavailableDeploymentConfiguration;
-	const deploymentConfigurationRetryable = deployment.isError
-		? isRetryableDeploymentConfigurationError(deployment.error)
-		: deployment.data?.kind === "ready" ||
-			(deployment.data?.kind === "unavailable" && deployment.data.retryable) ||
-			false;
+	const {
+		configuration: deploymentConfiguration,
+		retryable: deploymentConfigurationRetryable,
+	} = projectDeploymentConfiguration(
+		deployment.data,
+		deployment.error,
+		deployment.isError,
+	);
 
 	return (
 		<main className="platform-content management-content">
