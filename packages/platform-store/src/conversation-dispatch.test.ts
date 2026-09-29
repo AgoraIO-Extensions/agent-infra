@@ -860,6 +860,9 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						await store.readRuntimeState({
 							claim: decision.claim,
 							runtimeSubmitProtocol,
+							...(runtimeSubmitProtocol === "v4"
+								? { allowPinnedV2Recovery: true }
+								: {}),
 						})
 					)?.originalOperationDigest,
 				).toBe(expected);
@@ -942,22 +945,14 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					expect(restarted.decision.claim.relayKeyBinding).toEqual(
 						decision.claim.relayKeyBinding,
 					);
-					const preferred = await restarted.store.readRuntimeState({
+					const recovered = await restarted.store.readRuntimeState({
 						claim: restarted.decision.claim,
 						runtimeSubmitProtocol: "v4",
+						allowPinnedV2Recovery: true,
 					});
-					const recovered = preferred
-						? { protocol: "v4", state: preferred }
-						: {
-								protocol: "v2",
-								state: await restarted.store.readRuntimeState({
-									claim: restarted.decision.claim,
-									runtimeSubmitProtocol: "v2",
-								}),
-							};
 					expect(recovered).toMatchObject({
-						protocol: runtimeSubmitProtocol,
-						state: { originalOperationDigest: expected },
+						runtimeSubmitProtocol,
+						originalOperationDigest: expected,
 					});
 				} finally {
 					await restarted.store.close();
@@ -967,6 +962,30 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			}
 		},
 	);
+
+	it("does not downgrade an unpinned submit without V4 Key provenance", async () => {
+		const work = await seed();
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed")
+				throw new Error("Expected an owned claim");
+			expect(
+				await store.readRuntimeState({
+					claim: decision.claim,
+					runtimeSubmitProtocol: "v4",
+					allowPinnedV2Recovery: true,
+				}),
+			).toBeNull();
+			expect(
+				await client`select runtime_submit_protocol, original_operation_digest
+					from platform.conversation_executions where execution_id = ${work.executionId}`,
+			).toEqual([
+				{ runtime_submit_protocol: null, original_operation_digest: null },
+			]);
+		} finally {
+			await store.close();
+		}
+	});
 
 	it("discovers only due Conversation work without taking another Worker's lease", async () => {
 		const store = new PostgresConversationDispatchStoreV1({ databaseUrl });
