@@ -1612,8 +1612,18 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						? { failureCode: "operation_failed" as const }
 						: {}),
 			});
-			if (value.phase === "unknown")
-				await this.status(file, executionId, "unknown");
+			if (value.phase === "unknown") {
+				const updated = file
+					.read()
+					.turns.find((entry) => entry.executionId === executionId);
+				const otherPendingTool = Object.values(
+					updated?.toolOperations ?? {},
+				).some(({ operationRef }) => {
+					const fact = updated && latestFact(updated, "tool", operationRef);
+					return fact && ["intent", "started"].includes(fact.phase);
+				});
+				if (!otherPendingTool) await this.status(file, executionId, "unknown");
+			}
 		});
 	}
 	private async toolPhase(
