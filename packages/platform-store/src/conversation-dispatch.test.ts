@@ -4466,14 +4466,10 @@ describe("durable waiting task dispatch from real admission", () => {
 		}
 	});
 
-	it("uses spare Agent capacity when an earlier task waits in another Conversation", async () => {
+	it("enforces Agent FIFO across Conversations", async () => {
 		const h = await waitingTaskHarness(2);
 		try {
 			const first = await h.submit("cross-conversation-first");
-			const blocked = await h.submit(
-				"cross-conversation-blocked",
-				first.conversationId,
-			);
 			const secondConversationId = `waiting-cross-conversation-${fixture++}`;
 			await client`insert into platform.conversations
 				(id, agent_id, actor_id, channel_id, status, session_generation, authorization_revision)
@@ -4482,6 +4478,14 @@ describe("durable waiting task dispatch from real admission", () => {
 				"cross-conversation-second",
 				secondConversationId,
 			);
+			expect(
+				await h.store.claim({
+					schemaVersion: 1,
+					itemId: second.itemId,
+					workerId: "cross-conversation-second-worker",
+					leaseDurationMs: 30_000,
+				}),
+			).toEqual({ outcome: "busy" });
 			const firstClaim = await h.own(
 				first.itemId,
 				"cross-conversation-first-worker",
@@ -4492,14 +4496,6 @@ describe("durable waiting task dispatch from real admission", () => {
 					leaseDurationMs: 30_000,
 				}),
 			).toBe(true);
-			expect(
-				await h.store.claim({
-					schemaVersion: 1,
-					itemId: blocked.itemId,
-					workerId: "cross-conversation-blocked-worker",
-					leaseDurationMs: 30_000,
-				}),
-			).toEqual({ outcome: "busy" });
 			const secondClaim = await h.own(
 				second.itemId,
 				"cross-conversation-second-worker",
@@ -4511,9 +4507,6 @@ describe("durable waiting task dispatch from real admission", () => {
 				}),
 			).toBe(true);
 			expect((await taskQueueState(first.executionId)).status).toBe("unknown");
-			expect((await taskQueueState(blocked.executionId)).status).toBe(
-				"waiting",
-			);
 			expect((await taskQueueState(second.executionId)).status).toBe("unknown");
 		} finally {
 			await h.close();
