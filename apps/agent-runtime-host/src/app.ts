@@ -19,8 +19,10 @@ import {
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSubmitTurnRequestV3Schema,
+	RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV1Schema,
 	RuntimeSupplementRequestV3Schema,
+	RuntimeSupplementTransportV4Schema,
 	type VerifiedExecutionGrantV1,
 	type VerifiedRuntimeExecutionGrantV2,
 	WorkloadReadinessRequestV1Schema,
@@ -294,6 +296,20 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 	v3Route("turns", RuntimeSubmitTurnRequestV3Schema, (request, verification) =>
 		options.host.submitTurnV3(request, verification),
 	);
+	app.post("/internal/runtime/v4/turns", async (context) => {
+		const transport = await parseBody(
+			context.req.raw,
+			RuntimeSubmitTurnTransportV4Schema,
+		);
+		return context.json(await options.host.submitTurnV4(transport));
+	});
+	app.post("/internal/runtime/v4/instructions", async (context) => {
+		const transport = await parseBody(
+			context.req.raw,
+			RuntimeSupplementTransportV4Schema,
+		);
+		return context.json(await options.host.supplementV4(transport));
+	});
 	v3Route(
 		"instructions",
 		RuntimeSupplementRequestV3Schema,

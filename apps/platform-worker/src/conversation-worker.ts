@@ -5,6 +5,7 @@ import {
 import {
 	openPostgresConversationDispatchStoreV1,
 	PostgresConversationEventTransactionV1,
+	PostgresExecutionKeyReaderV4,
 	PostgresLegacyTaskRecoveryReaderV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
@@ -53,6 +54,9 @@ export function createPlatformConversationWorkerV2(
 	const legacyControlStore = new PostgresLegacyTaskRecoveryReaderV1({
 		databaseUrl: options.databaseUrl,
 	});
+	const executionKeys = new PostgresExecutionKeyReaderV4({
+		databaseUrl: options.databaseUrl,
+	});
 	const transaction = new PostgresConversationEventTransactionV1({
 		databaseUrl: options.databaseUrl,
 	});
@@ -65,6 +69,7 @@ export function createPlatformConversationWorkerV2(
 			dispatchStore: store,
 			taskAuthorizationStore,
 			legacyControlStore,
+			executionKeys: options.executionKeys ?? executionKeys,
 		});
 		dispatch = createConversationDispatchUseCaseV1(
 			{
@@ -89,6 +94,7 @@ export function createPlatformConversationWorkerV2(
 			Promise.resolve().then(() => store.close()),
 			Promise.resolve().then(() => taskAuthorizationStore.close()),
 			Promise.resolve().then(() => legacyControlStore.close()),
+			Promise.resolve().then(() => executionKeys.close()),
 		]);
 		throw error;
 	}
@@ -197,6 +203,7 @@ export function createPlatformConversationWorkerV2(
 					Promise.resolve().then(() => store.close()),
 					Promise.resolve().then(() => taskAuthorizationStore.close()),
 					Promise.resolve().then(() => legacyControlStore.close()),
+					Promise.resolve().then(() => executionKeys.close()),
 				]);
 				const failure = [...runningResults, ...closeResults].find(
 					(result): result is PromiseRejectedResult =>

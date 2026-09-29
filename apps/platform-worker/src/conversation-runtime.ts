@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import type {
 	RuntimeBusinessCommandV2,
+	RuntimeBusinessRequestV4,
 	RuntimeControlCommandV2,
 	RuntimeControlReasonV2,
 } from "@agent-infra/contracts/runtime";
@@ -23,9 +24,15 @@ import {
 	type TaskUserDirectoryV1,
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
+import type { RelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 
 import { createWorkerRuntimeGrantSignerV2 } from "./runtime-grant-signer.js";
-import { createWorkerRuntimeHostClientV3 } from "./runtime-host-client.js";
+import { createWorkerRuntimeGrantSignerV4 } from "./runtime-grant-signer-v4.js";
+import {
+	createWorkerRuntimeHostClientV3,
+	createWorkerRuntimeHostClientV4,
+	type WorkerRuntimeHostClientOptionsV4,
+} from "./runtime-host-client.js";
 
 export type ConversationRuntimeStateV2 = TaskRuntimeRecoveryStateV1;
 
@@ -90,6 +97,8 @@ export interface ConversationRuntimeOptionsV2 {
 		readonly workerId: string;
 	}>;
 	readonly fetch?: typeof fetch;
+	readonly executionKeys?: WorkerRuntimeHostClientOptionsV4["executionKeys"];
+	readonly relayKeyDecryptor?: RelayKeyWorkerDecryptorV1;
 	readonly reconnectDelayMs?: number;
 	readonly signal?: AbortSignal;
 }
@@ -152,6 +161,7 @@ export function createConversationRuntimeV2(
 		? AbortSignal.any([controller.signal, options.signal])
 		: controller.signal;
 	const signRequest = createWorkerRuntimeGrantSignerV2(options.signing);
+	const signV4 = createWorkerRuntimeGrantSignerV4(options.signing);
 	const combined = (signal?: AbortSignal) =>
 		signal ? AbortSignal.any([lifetime, signal]) : lifetime;
 
@@ -366,7 +376,7 @@ export function createConversationRuntimeV2(
 				executionDeliveryFence: context.claim.executionDeliveryFence,
 			},
 		};
-		return { context, state, authority, client, base };
+		return { context, state, authority, client, base, target: postTarget };
 	}
 	async function latch(
 		prepared: Awaited<ReturnType<typeof prepare>>,
@@ -483,6 +493,58 @@ export function createConversationRuntimeV2(
 			}
 			if (request.operation === "turn.submit") {
 				if (!context.claim.input) unavailable("RUNTIME_REQUEST_INVALID");
+				if (context.claim.executionSource || context.claim.relayKeyBinding) {
+					if (
+						!context.claim.executionSource ||
+						!context.claim.relayKeyBinding ||
+						!context.claim.modelOptionId ||
+						!context.claim.reasoningLevel ||
+						authority.purpose !== "business" ||
+						!options.executionKeys ||
+						!options.relayKeyDecryptor
+					)
+						unavailable("RELAY_KEY_UNAVAILABLE");
+					const unsigned = {
+						...base,
+						schemaVersion: 4 as const,
+						executionSource: context.claim.executionSource,
+						keyBinding: {
+							purpose: context.claim.relayKeyBinding.purpose,
+							subjectId: context.claim.relayKeyBinding.subjectId,
+							ciphertextRef: context.claim.relayKeyBinding.keyId,
+							version: context.claim.relayKeyBinding.keyVersion,
+						},
+						input: {
+							...context.claim.input,
+							attachments: [...context.claim.input.attachments],
+						},
+						selection: {
+							schemaVersion: 1 as const,
+							modelOptionId: context.claim.modelOptionId,
+							reasoningLevel: context.claim.reasoningLevel,
+						},
+						grant: {
+							schemaVersion: 4 as const,
+							format: "runtime-execution-jws" as const,
+							token: "a.b.c",
+						},
+					} satisfies RuntimeBusinessRequestV4;
+					const keyedClient = createWorkerRuntimeHostClientV4({
+						...prepared.target,
+						fetch: options.fetch,
+						verifyGrant: signV4.verify,
+						executionKeys: options.executionKeys,
+						decryptor: options.relayKeyDecryptor,
+					});
+					const response = await keyedClient.submitTurn(
+						{
+							...unsigned,
+							grant: signV4.sign(unsigned, authority.authorizationRecordId),
+						},
+						active,
+					);
+					return { ...response, schemaVersion: 2 as const };
+				}
 				const body = {
 					...base,
 					input: {
@@ -513,6 +575,58 @@ export function createConversationRuntimeV2(
 					request.messageId !== context.claim.messageId
 				)
 					unavailable("RUNTIME_REQUEST_INVALID");
+				if (context.claim.executionSource || context.claim.relayKeyBinding) {
+					if (
+						!context.claim.executionSource ||
+						!context.claim.relayKeyBinding ||
+						authority.purpose !== "business" ||
+						!options.executionKeys ||
+						!options.relayKeyDecryptor
+					)
+						unavailable("RELAY_KEY_UNAVAILABLE");
+					const unsigned = {
+						...base,
+						schemaVersion: 4 as const,
+						executionSource: context.claim.executionSource,
+						keyBinding: {
+							purpose: context.claim.relayKeyBinding.purpose,
+							subjectId: context.claim.relayKeyBinding.subjectId,
+							ciphertextRef: context.claim.relayKeyBinding.keyId,
+							version: context.claim.relayKeyBinding.keyVersion,
+						},
+						hostSessionRef: state.hostSessionRef,
+						operation: {
+							kind: "message" as const,
+							id: context.claim.messageId,
+							deliveryFence: context.claim.deliveryFence,
+							executionDeliveryFence: context.claim.executionDeliveryFence,
+						},
+						input: {
+							...context.claim.input,
+							attachments: [...context.claim.input.attachments],
+						},
+						grant: {
+							schemaVersion: 4 as const,
+							format: "runtime-execution-jws" as const,
+							token: "a.b.c",
+						},
+					} satisfies RuntimeBusinessRequestV4;
+					const keyedClient = createWorkerRuntimeHostClientV4({
+						...prepared.target,
+						fetch: options.fetch,
+						verifyGrant: signV4.verify,
+						executionKeys: options.executionKeys,
+						decryptor: options.relayKeyDecryptor,
+					});
+					const response = await keyedClient.supplement(
+						{
+							...unsigned,
+							grant: signV4.sign(unsigned, authority.authorizationRecordId),
+						},
+						active,
+					);
+					return { ...response, schemaVersion: 1 as const };
+				}
 				const body = {
 					...base,
 					hostSessionRef: state.hostSessionRef,

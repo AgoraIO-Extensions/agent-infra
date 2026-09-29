@@ -31,6 +31,7 @@ import {
 	codexConversationKey,
 	runCodexConnectionRecovery,
 	validateModelAccess,
+	validateModelEndpoint,
 } from "./codex-app-server-bridge.js";
 import {
 	type CodexConnectionEvidence,
@@ -118,7 +119,7 @@ export interface CodexRuntimeDriverOptions {
 	readonly modelOptions: readonly CodexRuntimeModelOption[];
 	readonly authorizeExternalAction?: (
 		action: RuntimeExternalActionAuthorization,
-	) => Promise<void>;
+	) => Promise<void | { readonly relayKey: string }>;
 	// Independent client delivery is trusted deployment input, never a Runtime command.
 	readonly connectionClient?: {
 		/** Independently configured service allowlist; never derived from the profile. */
@@ -1962,8 +1963,15 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 			value.endpoint !== undefined &&
 			value.credential !== undefined,
 	);
+	const keyed = values.every(
+		(value) =>
+			isPlainRecord(value) &&
+			value.endpoint !== undefined &&
+			value.credential === undefined,
+	);
 	if (
 		!routed &&
+		!keyed &&
 		values.some(
 			(value) =>
 				isPlainRecord(value) &&
@@ -1975,6 +1983,7 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 	for (const value of values) {
 		const expectedKeys = ["modelOptionId", "model", "reasoningLevels"];
 		if (routed) expectedKeys.push("endpoint", "credential");
+		else if (keyed) expectedKeys.push("endpoint");
 		if (
 			!isPlainRecord(value) ||
 			!hasOnlyKeys(value, expectedKeys) ||
@@ -1992,14 +2001,17 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 		) {
 			configurationInvalid();
 		}
-		const internalModel = routed
-			? `${createHash("sha256").update(value.modelOptionId).digest("hex")}/${value.model}`
-			: value.model;
-		if (routed) {
-			const access = validateModelAccess({
-				endpoint: value.endpoint,
-				credential: value.credential,
-			});
+		const internalModel =
+			routed || keyed
+				? `${createHash("sha256").update(value.modelOptionId).digest("hex")}/${value.model}`
+				: value.model;
+		if (routed || keyed) {
+			const access = routed
+				? validateModelAccess({
+						endpoint: value.endpoint,
+						credential: value.credential,
+					})
+				: { endpoint: validateModelEndpoint(value.endpoint) };
 			if (!access) configurationInvalid();
 			routes.push({
 				internalModel,
@@ -2020,6 +2032,7 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 	}
 	return {
 		configured,
+		keyed,
 		defaultSelection: {
 			model: defaultOption.internalModel,
 			effort: options.defaultReasoningLevel,
@@ -2502,9 +2515,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly probeNative?: (
 			signal: AbortSignal,
 		) => Promise<RuntimeCapabilitiesV1>,
+		private readonly keyedRelay = false,
 		private readonly authorizeExternalAction?: (
 			action: RuntimeExternalActionAuthorization,
-		) => Promise<void>,
+		) => Promise<void | { readonly relayKey: string }>,
 		private readonly connectionClientOptions?: CodexRuntimeDriverOptions["connectionClient"],
 		private readonly recoveryLaunch?: typeof runCodexConnectionRecovery,
 		private readonly recoveryDirectory?: string,
@@ -3393,6 +3407,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			configured: modelOptions,
 			defaultSelection,
 			routes,
+			keyed,
 		} = configuredModelOptions(options);
 		if (
 			!privateLane &&
@@ -3579,6 +3594,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				modelTransport?.cancelTurn,
 				modelTransport?.revokeTurn,
 				probeNative,
+				keyed,
 				options.authorizeExternalAction,
 				connectionClient,
 				runCodexConnectionRecovery,
@@ -6286,6 +6302,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.notifyEventStream(streamKey);
 		};
 		try {
+			let relayKey: string | undefined;
 			// Never call Host while holding the Driver durable-file queue. Host may
 			// still be awaiting this Driver's original submit result.
 			// Model and tool actions require the Host authorization seam; fail closed
@@ -6294,7 +6311,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const waiting = new AbortController();
 			try {
 				signal.throwIfAborted();
-				await Promise.race([
+				const authorization = await Promise.race([
 					once(signal, "abort", { signal: waiting.signal }).then(() => {
 						throw unavailableError();
 					}),
@@ -6307,6 +6324,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						kind: "model",
 					}),
 				]);
+				if (this.keyedRelay) {
+					if (
+						!authorization ||
+						typeof authorization !== "object" ||
+						!("relayKey" in authorization) ||
+						typeof authorization.relayKey !== "string" ||
+						!/^[\x21-\x7e]{16,8192}$/.test(authorization.relayKey)
+					)
+						unavailable();
+					relayKey = authorization.relayKey;
+				}
 				signal.throwIfAborted();
 			} finally {
 				waiting.abort();
@@ -6348,6 +6376,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			)
 				unavailable();
 			this.assertExecutionConfiguration(state, session, execution);
+			return {
+				started: (startedAt: string) => record("started", { startedAt }),
+				finish: (outcome: CodexModelRequestOutcome) =>
+					record(outcome.phase === "succeeded" ? "completed" : outcome.phase, {
+						...(outcome.finishedAt ? { finishedAt: outcome.finishedAt } : {}),
+						...(outcome.durationMs === undefined
+							? {}
+							: { durationMs: outcome.durationMs }),
+						...(outcome.phase === "succeeded"
+							? outcome.usage
+								? { usage: outcome.usage }
+								: {}
+							: { failureCode: modelOperationFailure(outcome.failureCode) }),
+					}),
+				...(relayKey ? { credential: relayKey } : {}),
+			};
 		} catch (error) {
 			if (signal.aborted) {
 				await record("unknown", { failureCode: "interrupted" });
@@ -6361,21 +6405,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			throw error;
 		}
-		return {
-			started: (startedAt) => record("started", { startedAt }),
-			finish: (outcome) =>
-				record(outcome.phase === "succeeded" ? "completed" : outcome.phase, {
-					...(outcome.finishedAt ? { finishedAt: outcome.finishedAt } : {}),
-					...(outcome.durationMs === undefined
-						? {}
-						: { durationMs: outcome.durationMs }),
-					...(outcome.phase === "succeeded"
-						? outcome.usage
-							? { usage: outcome.usage }
-							: {}
-						: { failureCode: modelOperationFailure(outcome.failureCode) }),
-				}),
-		};
 	}
 
 	private async recoverUnconfirmedModelOperations() {

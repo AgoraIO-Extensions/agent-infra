@@ -6,6 +6,7 @@ import {
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createExecutionGrantVerifier,
+	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
 	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
@@ -229,7 +230,7 @@ export async function assembleRuntimeHost(
 								"Runtime authorization is not ready",
 								403,
 							);
-						await assembledHost.authorizeExternalAction(action);
+						return assembledHost.authorizeExternalAction(action);
 					},
 					launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
 					path: join(dataDirectory, "codex-driver.json"),
@@ -279,6 +280,18 @@ export async function assembleRuntimeHost(
 							expectedIssuer,
 							expectedWorkerId: runtimeWorkerId,
 						},
+						...(configuration && "keyed" in configuration && configuration.keyed
+							? {
+									allowLegacyBusiness: false,
+									validateGrantV4: createRuntimeExecutionGrantValidatorV4(
+										new Map([[keyId, publicKey]]),
+										{
+											expectedIssuer,
+											expectedWorkerId: runtimeWorkerId,
+										},
+									),
+								}
+							: {}),
 					}
 				: {}),
 		});

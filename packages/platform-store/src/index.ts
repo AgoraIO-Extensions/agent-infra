@@ -78,6 +78,7 @@ export {
 	type PostgresConversationQueryOptionsV1,
 	PostgresConversationQueryV1,
 } from "./conversation-query.ts";
+export { PostgresExecutionKeyReaderV4 } from "./execution-key-reader-v4.js";
 export { PostgresFileStoreV1 } from "./files.js";
 export {
 	openPostgresPlatformIdempotencyStore,

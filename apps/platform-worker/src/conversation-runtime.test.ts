@@ -47,6 +47,7 @@ function harness(
 	channelAuthorizationCurrent:
 		| ConversationRuntimeOptionsV2["channelAuthorizationCurrent"]
 		| null = async (record) => record.boundary.channelId === "web",
+	keyed = false,
 ) {
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
@@ -76,6 +77,17 @@ function harness(
 		executionStatus: "processing",
 		stopPending: false,
 	};
+	if (keyed) {
+		Object.assign(claim, {
+			executionSource: "web",
+			relayKeyBinding: {
+				purpose: "personal",
+				subjectId: "user",
+				keyId: "key-1",
+				keyVersion: 1,
+			},
+		});
+	}
 	const agent: AgentManagementStateV1 = {
 		schemaVersion: 1,
 		applicationId: "application",
@@ -184,6 +196,35 @@ function harness(
 	const legacyStore = {
 		readLegacyControlRecovery: vi.fn(async () => legacyRecord),
 	};
+	const executionKeys = {
+		readAcceptedExecution: vi.fn(async () => ({
+			scope: {
+				principal: { kind: "user" as const, id: "user" },
+				executionSource: "web" as const,
+				channelId: "web",
+				agentId: "agent",
+				conversationId: "conversation",
+				executionId: "execution",
+				turnId: "turn",
+				sessionGeneration: 1,
+				hostSessionRef: "host",
+				keyBinding: {
+					purpose: "personal" as const,
+					subjectId: "user",
+					ciphertextRef: "key-1",
+					version: 1,
+				},
+			},
+			trustedHostSessionRef: "host",
+		})),
+		readCiphertext: vi.fn(async () => ({ ciphertext: "synthetic" })),
+	};
+	const relayKeyDecryptor = {
+		decrypt: vi.fn(async () => ({
+			outcome: "decrypted" as const,
+			plaintext: new TextEncoder().encode("synthetic-relay-key-k1"),
+		})),
+	};
 	function useLegacy() {
 		record = null;
 		legacyRecord = {
@@ -241,7 +282,7 @@ function harness(
 		)
 			return new Response(
 				JSON.stringify({
-					schemaVersion: 3,
+					schemaVersion: path.includes("/v4/") ? 4 : 3,
 					hostSessionRef: "host",
 					operationId: "execution",
 					result: { outcome: "accepted", status: "running" },
@@ -254,7 +295,7 @@ function harness(
 		throw new Error(`Unexpected runtime request: ${path}`);
 	});
 	const resolver = vi.fn(async () => ({
-		baseUrl: "http://runtime.test",
+		baseUrl: keyed ? "https://runtime.test" : "http://runtime.test",
 		serviceToken: "synthetic-transport-proof",
 		workerId: "transport",
 	}));
@@ -274,6 +315,7 @@ function harness(
 		dispatchStore: store,
 		resolveRuntimeHost: resolver,
 		fetch: fetcher,
+		...(keyed ? { executionKeys, relayKeyDecryptor } : {}),
 		reconnectDelayMs,
 	});
 	async function authorize() {
@@ -327,6 +369,8 @@ function harness(
 		authorizationStore,
 		resolver,
 		fetcher,
+		executionKeys,
+		relayKeyDecryptor,
 		authorize,
 		request,
 		events,
@@ -342,6 +386,41 @@ function harness(
 }
 
 describe("Trusted conversation Runtime adapter", () => {
+	it("routes a keyed Execution through V4 with the original Key version", async () => {
+		const h = harness(1, undefined, true);
+		try {
+			const reference = await h.authorize();
+			const result = await h.runtime.runtimeHost.dispatch(h.request(reference));
+			expect(result).toMatchObject({ schemaVersion: 2 });
+			const [url, init] = h.fetcher.mock.calls[0] ?? [];
+			expect(String(url)).toBe(
+				"https://runtime.test/internal/runtime/v4/turns",
+			);
+			const transport = JSON.parse(String(init?.body));
+			expect(transport.businessRequest).toMatchObject({
+				executionSource: "web",
+				keyBinding: {
+					purpose: "personal",
+					subjectId: "user",
+					ciphertextRef: "key-1",
+					version: 1,
+				},
+			});
+			expect(transport.businessRequest.selection.modelOptionId).toBe("option");
+			expect(transport.privateKeyField.keyDelivery.relayKey).toBe(
+				"synthetic-relay-key-k1",
+			);
+			expect(h.executionKeys.readCiphertext).toHaveBeenCalledWith({
+				purpose: "personal",
+				subjectId: "user",
+				keyId: "key-1",
+				keyVersion: 1,
+			});
+		} finally {
+			h.runtime.close();
+		}
+	});
+
 	it.each(["cancel", "subject-disabled", "already-revoked"] as const)(
 		"recovers the lost original Session before stopping %s without restoring business authority",
 		async (reason) => {
