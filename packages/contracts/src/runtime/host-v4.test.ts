@@ -10,6 +10,7 @@ import {
 	type RuntimeSupplementRequestV4,
 	RuntimeSupplementRequestV4Schema,
 	RuntimeSupplementTransportV4Schema,
+	runtimeOperationDigestInputV4,
 	runtimeRequestDigestV4,
 	runtimeRequestSigningPayloadV4,
 	validateRuntimeBusinessBindingV4,
@@ -562,4 +563,52 @@ it("rejects V4 claims with the wrong issuer, worker or lifetime", () => {
 			}),
 		).toThrow("Runtime Execution Grant V4 claims are inconsistent");
 	}
+});
+
+it("publishes the immutable V4 operation digest input for recovery stores", () => {
+	const digestInput = runtimeOperationDigestInputV4(request);
+	expect(digestInput).toMatchObject({
+		kind: "submit-turn",
+		executionId: request.executionId,
+		executionSource: request.executionSource,
+		keyBinding: request.keyBinding,
+		operation: {
+			kind: request.operation.kind,
+			id: request.operation.id,
+		},
+	});
+	expect(digestInput.operation).not.toHaveProperty("deliveryFence");
+	expect(digestInput.operation).not.toHaveProperty("executionDeliveryFence");
+	expect(
+		runtimeOperationDigestInputV4({
+			...request,
+			keyBinding: { ...request.keyBinding, version: 2 },
+		}),
+	).not.toEqual(digestInput);
+
+	const { selection: _selection, ...supplementBase } = request;
+	const supplement = RuntimeSupplementRequestV4Schema.parse({
+		...supplementBase,
+		hostSessionRef: "session-1",
+		operation: {
+			kind: "message",
+			id: "message-1",
+			deliveryFence: 2,
+			executionDeliveryFence: 1,
+		},
+	});
+	const supplementDigestInput = runtimeOperationDigestInputV4(supplement);
+	expect(supplementDigestInput.kind).toBe("supplement");
+	expect(supplementDigestInput).not.toHaveProperty("selection");
+	expect(supplementDigestInput.operation).toEqual({
+		kind: "message",
+		id: "message-1",
+	});
+
+	expect(() =>
+		runtimeOperationDigestInputV4({
+			...request,
+			operation: { ...request.operation, deliveryFence: 0 },
+		} as RuntimeSubmitTurnRequestV4),
+	).toThrow("RuntimeHostV4 request is invalid");
 });
