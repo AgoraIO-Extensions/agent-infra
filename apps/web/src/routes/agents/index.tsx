@@ -39,6 +39,8 @@ function AgentsRoute() {
 								? { kind: "unavailable", retryable: true }
 								: query.data
 					}
+					onRetry={() => void query.refetch()}
+					retrying={query.isFetching}
 				/>
 			</div>
 		</main>

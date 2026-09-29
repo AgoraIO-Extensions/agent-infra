@@ -1,9 +1,9 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowRight, Bot, Search } from "lucide-react";
+import { ArrowRight, Bot, RefreshCw, Search } from "lucide-react";
 import { useId, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,6 +14,8 @@ import type { AgentDiscoveryState } from "./agent-discovery.js";
 type AgentDiscoveryScreenProps = {
 	query?: string;
 	onQueryChange?: (query: string) => void;
+	onRetry?: () => void;
+	retrying?: boolean;
 	state: AgentDiscoveryState | { kind: "loading" };
 };
 
@@ -40,6 +42,8 @@ export const agentChannelKindLabels = {
 export function AgentDiscoveryScreen({
 	query: controlledQuery,
 	onQueryChange,
+	onRetry,
+	retrying = false,
 	state,
 }: AgentDiscoveryScreenProps) {
 	const [localQuery, setLocalQuery] = useState(controlledQuery ?? "");
@@ -75,6 +79,18 @@ export function AgentDiscoveryScreen({
 							? "Agent 列表暂时无法读取，请稍后重试。"
 							: "Agent 列表暂时无法访问，请联系管理员。"}
 					</AlertDescription>
+					{state.retryable && onRetry ? (
+						<Button
+							className="mt-4"
+							variant="outline"
+							disabled={retrying}
+							onClick={onRetry}
+							type="button"
+						>
+							<RefreshCw aria-hidden="true" data-icon="inline-start" />
+							{retrying ? "正在重新加载…" : "重新加载 Agent"}
+						</Button>
+					) : null}
 				</Alert>
 			) : (
 				<>

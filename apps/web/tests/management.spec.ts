@@ -61,6 +61,16 @@ async function fixture(
 	);
 	let deployment = deploymentConfiguration;
 	let pendingQueueUnavailable = false;
+	let agentListUnavailable = false;
+	let agentDetailUnavailable = false;
+	let applicationsUnavailable = false;
+	const retryableReadFailure = {
+		schemaVersion: 1 as const,
+		code: "DEPENDENCY_UNAVAILABLE" as const,
+		message: "Controlled list failure",
+		retryable: true,
+		traceId: "trace-list-retry",
+	};
 	const session = {
 		schemaVersion: 1,
 		user: {
@@ -76,6 +86,12 @@ async function fixture(
 			body: deployment,
 		}),
 		listAgents: (request) => {
+			if (agentListUnavailable) {
+				return {
+					status: 503,
+					body: retryableReadFailure,
+				};
+			}
 			const ownerScope =
 				new URL(request.url).searchParams.get("scope") === "owner";
 			return {
@@ -86,11 +102,23 @@ async function fixture(
 				},
 			};
 		},
-		getAgent: () => ({ status: 200, body: agent }),
-		listAgentApplications: () => ({
-			status: 200,
-			body: { items: [application], nextCursor: null },
-		}),
+		getAgent: () =>
+			agentDetailUnavailable
+				? {
+						status: 503,
+						body: retryableReadFailure,
+					}
+				: { status: 200, body: agent },
+		listAgentApplications: () =>
+			applicationsUnavailable
+				? {
+						status: 503,
+						body: retryableReadFailure,
+					}
+				: {
+						status: 200,
+						body: { items: [application], nextCursor: null },
+					},
 		getAgentApplication: () => ({ status: 200, body: application }),
 		createAgentApplication: () => ({ status: 201, body: application }),
 		updateAgentApplication: () => ({ status: 200, body: application }),
@@ -264,6 +292,24 @@ async function fixture(
 		},
 		recoverPendingQueue() {
 			pendingQueueUnavailable = false;
+		},
+		unavailableAgentList() {
+			agentListUnavailable = true;
+		},
+		recoverAgentList() {
+			agentListUnavailable = false;
+		},
+		unavailableAgentDetail() {
+			agentDetailUnavailable = true;
+		},
+		recoverAgentDetail() {
+			agentDetailUnavailable = false;
+		},
+		unavailableApplications() {
+			applicationsUnavailable = true;
+		},
+		recoverApplications() {
+			applicationsUnavailable = false;
 		},
 		rejectNextWithdrawal() {
 			rejectNextWithdrawal = true;
@@ -869,6 +915,43 @@ test("employee collection is not presented as owned Agents", async ({
 		page.getByRole("heading", { name: "暂无你管理的 Agent" }),
 	).toBeVisible();
 	await expect(page.getByRole("link", { name: "配置与管理" })).toHaveCount(0);
+});
+
+test("retryable management reads recover through explicit browser actions", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unavailableAgentList();
+	await page.goto("/agents");
+	await expect(page.getByRole("alert")).toContainText(
+		"Agent 列表暂时无法读取，请稍后重试。",
+	);
+	const agentRetry = page.getByRole("button", { name: "重新加载 Agent" });
+	api.recoverAgentList();
+	await agentRetry.click();
+	await expect(
+		page.getByRole("heading", { name: "Release assistant" }),
+	).toBeVisible();
+
+	api.unavailableApplications();
+	await page.goto("/my-agents");
+	await expect(page.getByRole("alert")).toContainText(
+		"暂时无法读取申请，请稍后重试。",
+	);
+	api.recoverApplications();
+	await page.getByRole("button", { name: "重新加载申请" }).click();
+	await expect(page.getByRole("link", { name: "申请详情" })).toBeVisible();
+
+	api.unavailableAgentDetail();
+	await page.goto("/agents/agent-pilot-1");
+	await expect(page.getByRole("alert")).toContainText(
+		"暂时无法读取 Agent 信息，请稍后重试。",
+	);
+	api.recoverAgentDetail();
+	await page.getByRole("button", { name: "重新加载 Agent" }).click();
+	await expect(
+		page.getByRole("heading", { name: "Release assistant" }),
+	).toBeVisible();
 });
 
 test("withdraw confirmation traps focus and cancellation sends no request", async ({

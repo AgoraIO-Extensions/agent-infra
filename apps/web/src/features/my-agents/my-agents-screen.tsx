@@ -1,9 +1,9 @@
 import { Link } from "@tanstack/react-router";
-import { Plus } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
 import { useId } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -21,6 +21,10 @@ type MyAgentsScreenProps = {
 	ownedAgents?: AgentProjectionV2[];
 	ownedAgentsLoading?: boolean;
 	ownedAgentsUnavailable?: boolean;
+	onRetryApplications?: () => void;
+	onRetryOwnedAgents?: () => void;
+	retryingApplications?: boolean;
+	retryingOwnedAgents?: boolean;
 };
 
 export function MyAgentsScreen({
@@ -28,6 +32,10 @@ export function MyAgentsScreen({
 	ownedAgents,
 	ownedAgentsLoading = false,
 	ownedAgentsUnavailable = false,
+	onRetryApplications,
+	onRetryOwnedAgents,
+	retryingApplications = false,
+	retryingOwnedAgents = false,
 }: MyAgentsScreenProps) {
 	const id = useId();
 	return (
@@ -64,6 +72,18 @@ export function MyAgentsScreen({
 									? "暂时无法读取申请，请稍后重试。"
 									: "当前无法查看申请，请联系管理员。"}
 							</AlertDescription>
+							{state.retryable && onRetryApplications ? (
+								<Button
+									className="mt-4"
+									variant="outline"
+									disabled={retryingApplications}
+									onClick={onRetryApplications}
+									type="button"
+								>
+									<RefreshCw aria-hidden="true" data-icon="inline-start" />
+									{retryingApplications ? "正在重新加载…" : "重新加载申请"}
+								</Button>
+							) : null}
 						</Alert>
 					) : state.applications.length === 0 ? (
 						<Empty>
@@ -127,6 +147,20 @@ export function MyAgentsScreen({
 							<AlertDescription>
 								暂时无法读取你管理的 Agent，请稍后重试。
 							</AlertDescription>
+							{onRetryOwnedAgents ? (
+								<Button
+									className="mt-4"
+									variant="outline"
+									disabled={retryingOwnedAgents}
+									onClick={onRetryOwnedAgents}
+									type="button"
+								>
+									<RefreshCw aria-hidden="true" data-icon="inline-start" />
+									{retryingOwnedAgents
+										? "正在重新加载…"
+										: "重新加载已创建 Agent"}
+								</Button>
+							) : null}
 						</Alert>
 					) : ownedAgents === undefined ? (
 						<p className="py-8 text-muted-foreground">

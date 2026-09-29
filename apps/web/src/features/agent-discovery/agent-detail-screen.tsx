@@ -4,6 +4,7 @@ import {
 	ExternalLink,
 	History,
 	MessageSquare,
+	RefreshCw,
 	Settings,
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -18,7 +19,9 @@ import {
 } from "./agent-discovery-screen.js";
 
 type AgentDetailScreenProps = {
+	onRetry?: () => void;
 	ownerSettings?: { readonly agentId: string };
+	retrying?: boolean;
 	state: AgentDetailState | { kind: "loading" };
 };
 const channelStatusLabels = {
@@ -49,7 +52,9 @@ function safeInteractionUrl(input: string | null) {
 }
 
 export function AgentDetailScreen({
+	onRetry,
 	ownerSettings,
+	retrying = false,
 	state,
 }: AgentDetailScreenProps) {
 	if (state.kind === "loading")
@@ -66,6 +71,18 @@ export function AgentDetailScreen({
 							? "暂时无法读取 Agent 信息，请稍后重试。"
 							: "此 Agent 暂时无法访问。"}
 					</AlertDescription>
+					{state.retryable && onRetry ? (
+						<Button
+							className="mt-4"
+							variant="outline"
+							disabled={retrying}
+							onClick={onRetry}
+							type="button"
+						>
+							<RefreshCw aria-hidden="true" data-icon="inline-start" />
+							{retrying ? "正在重新加载…" : "重新加载 Agent"}
+						</Button>
+					) : null}
 				</Alert>
 				<Link
 					className={buttonVariants({ variant: "link", className: "px-0" })}

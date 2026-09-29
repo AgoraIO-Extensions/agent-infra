@@ -22,6 +22,10 @@ function MyAgentsRoute() {
 				ownedAgentsUnavailable={
 					owned.isError || owned.data?.kind === "unavailable"
 				}
+				onRetryApplications={() => void query.refetch()}
+				onRetryOwnedAgents={() => void owned.refetch()}
+				retryingApplications={query.isFetching}
+				retryingOwnedAgents={owned.isFetching}
 				state={
 					query.isPending
 						? { kind: "loading" }

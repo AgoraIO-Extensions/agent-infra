@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { RefreshCw } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 
 import { AgentConfigurationWorkflow } from "../../../features/agent-configuration/agent-configuration-workflow.js";
 import { useAgentDetail } from "../../../features/agent-discovery/use-agent-detail.js";
@@ -12,6 +13,10 @@ export const Route = createFileRoute("/agents/$agentId/configuration")({
 function AgentConfigurationRoute() {
 	const { agentId } = Route.useParams();
 	const query = useAgentDetail(agentId);
+	const retryable =
+		query.isError ||
+		!query.data ||
+		(query.data.kind === "unavailable" && query.data.retryable);
 	if (query.isPending) {
 		return <p aria-live="polite">正在读取配置…</p>;
 	}
@@ -31,6 +36,17 @@ function AgentConfigurationRoute() {
 					<Alert>
 						<AlertDescription>请稍后重试。</AlertDescription>
 					</Alert>
+					{retryable ? (
+						<Button
+							variant="outline"
+							disabled={query.isFetching}
+							onClick={() => void query.refetch()}
+							type="button"
+						>
+							<RefreshCw aria-hidden="true" data-icon="inline-start" />
+							{query.isFetching ? "正在重新加载…" : "重新加载配置"}
+						</Button>
+					) : null}
 					<Link
 						className={buttonVariants({ variant: "link", className: "px-0" })}
 						params={{ agentId }}

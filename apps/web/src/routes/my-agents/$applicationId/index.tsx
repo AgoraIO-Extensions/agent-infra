@@ -16,7 +16,9 @@ function MyAgentApplicationRoute() {
 	return (
 		<main className="platform-content management-content">
 			<MyAgentApplicationDetailScreen
+				onRetry={() => void query.refetch()}
 				onWithdraw={() => withdrawal.mutate()}
+				retrying={query.isFetching}
 				state={
 					query.isPending
 						? { kind: "loading" }
