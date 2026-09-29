@@ -1,14 +1,18 @@
 import { generateKeyPairSync } from "node:crypto";
 
+import { createRuntimeExecutionGrantVerifierV2 } from "@agent-infra/agent-runtime";
+
 import {
+	RuntimeEventReadRequestV4Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	validateRuntimeBusinessBindingV4,
+	validateRuntimeEventAccessV4,
 } from "@agent-infra/contracts/runtime";
 import { expect, it } from "vitest";
 
 import { createWorkerRuntimeGrantSignerV4 } from "./runtime-grant-signer-v4.js";
 
-const { privateKey } = generateKeyPairSync("ed25519");
+const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const signer = createWorkerRuntimeGrantSignerV4({
 	issuer: "platform-worker",
 	workerId: "worker-1",
@@ -74,4 +78,60 @@ it("signs the exact accepted Key and selection without a plaintext claim", async
 	expect(() =>
 		signer.verify({ ...grant, token: `${grant.token.slice(0, -1)}X` }),
 	).toThrow("Runtime V4 grant is invalid");
+});
+
+it("signs V4 event access against the original Key and execution fence", async () => {
+	const { input: _input, selection: _selection, ...base } = request;
+	const read = RuntimeEventReadRequestV4Schema.parse({
+		...base,
+		hostSessionRef: "session-1",
+		grant: {
+			schemaVersion: 2,
+			format: "runtime-execution-jws",
+			token: "a.b.c",
+		},
+		consumer: "platform_worker_persistence",
+		afterCursor: null,
+	});
+	const grant = await signer.signEvent(read, {
+		purpose: "business",
+		authorizationRecordId: "authorization-1",
+	});
+	const signed = { ...read, grant };
+	const verified = createRuntimeExecutionGrantVerifierV2(
+		new Map([["grant-key-1", publicKey]]),
+	)(grant);
+	const pinned = { ...read, hostSessionRef: null };
+	const context = {
+		expectedIssuer: "platform-worker",
+		expectedWorkerId: "worker-1",
+		now: 100,
+		trustedOperation: read.operation,
+	};
+	await expect(
+		validateRuntimeEventAccessV4(
+			signed,
+			verified,
+			pinned,
+			"session-1",
+			context,
+		),
+	).resolves.toEqual(signed);
+	for (const changed of [
+		{ ...signed, keyBinding: { ...signed.keyBinding, version: 2 } },
+		{
+			...signed,
+			operation: { ...signed.operation, executionDeliveryFence: 2 },
+		},
+	]) {
+		await expect(
+			validateRuntimeEventAccessV4(
+				changed,
+				verified,
+				pinned,
+				"session-1",
+				context,
+			),
+		).rejects.toThrow("RuntimeHostV4 event access is invalid");
+	}
 });

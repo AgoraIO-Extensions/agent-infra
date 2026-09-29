@@ -5,12 +5,15 @@ import { join } from "node:path";
 
 import {
 	createRuntimeExecutionGrantValidatorV4,
+	createRuntimeExecutionGrantVerifierV2,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	RuntimeHost,
 } from "@agent-infra/agent-runtime";
 import {
 	RuntimeBusinessGrantClaimsV4Schema,
+	RuntimeEventAckRequestV4Schema,
+	RuntimeEventReadRequestV4Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	runtimeRequestSigningPayloadV4,
 } from "@agent-infra/contracts/runtime";
@@ -299,6 +302,10 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 		const app = createRuntimeHostApp({
 			host,
 			serviceToken: "synthetic-service-token",
+			runtimeWorkerId: "worker-1",
+			verifyGrantV2: createRuntimeExecutionGrantVerifierV2(
+				new Map([["key-1", publicKey]]),
+			),
 			verifyGrant: () => {
 				throw new Error("V1 verifier must not run");
 			},
@@ -351,9 +358,136 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 		expect(await readFile(storePath, "utf8")).not.toContain(
 			"synthetic-relay-key-k1",
 		);
+		const { input: _input, selection: _selection, ...eventBase } = signed;
+		const unsignedRead = RuntimeEventReadRequestV4Schema.parse({
+			...eventBase,
+			hostSessionRef: accepted.hostSessionRef,
+			grant: {
+				schemaVersion: 2,
+				format: "runtime-execution-jws",
+				token: "a.b.c",
+			},
+			consumer: "platform_worker_persistence",
+			afterCursor: null,
+		});
+		const authority = {
+			purpose: "business" as const,
+			authorizationRecordId: "authorization-1",
+		};
+		const signedRead = {
+			...unsignedRead,
+			grant: await signer.signEvent(unsignedRead, authority),
+		};
+		const unauthenticatedRead = await app.request(
+			"/internal/runtime/v4/events/read",
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(signedRead),
+			},
+		);
+		expect(unauthenticatedRead.status).toBe(401);
+		for (const changed of [
+			{
+				...unsignedRead,
+				keyBinding: { ...unsignedRead.keyBinding, version: 2 },
+			},
+			{
+				...unsignedRead,
+				operation: {
+					...unsignedRead.operation,
+					deliveryFence: 2,
+					executionDeliveryFence: 2,
+				},
+			},
+		]) {
+			await expect(
+				client.readEvents({
+					...changed,
+					grant: await signer.signEvent(changed, authority),
+				}),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		}
+		const replay = await client.readEvents(signedRead);
+		expect(replay.events).toMatchObject([
+			{ executionId: request.executionId, type: "status" },
+		]);
+		const cursor = replay.events[0]?.cursor;
+		if (!cursor) throw new Error("V4 event cursor was not delivered");
+		await expect(
+			client.readEvents({
+				...signedRead,
+				keyBinding: { ...signedRead.keyBinding, version: 2 },
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		const { afterCursor: _afterCursor, ...ackBase } = unsignedRead;
+		const unsignedAck = RuntimeEventAckRequestV4Schema.parse({
+			...ackBase,
+			confirmedCursor: cursor,
+		});
+		const signedAck = {
+			...unsignedAck,
+			grant: await signer.signEvent(unsignedAck, authority),
+		};
+		await expect(client.acknowledgeEvents(signedAck)).resolves.toMatchObject({
+			schemaVersion: 4,
+			executionId: request.executionId,
+			confirmedCursor: cursor,
+		});
+		await expect(client.acknowledgeEvents(signedAck)).resolves.toMatchObject({
+			confirmedCursor: cursor,
+		});
+		const operationCursor = "operation-cursor-1";
+		const originalReplay = driver.replayEvents.bind(driver);
+		Object.assign(driver, {
+			replayEvents: async (...args: Parameters<typeof driver.replayEvents>) => {
+				if (args[2] === operationCursor) return [];
+				return [
+					...(await originalReplay(...args)),
+					{
+						schemaVersion: 2,
+						adapterEventKey: "operation-event-1",
+						executionId: request.executionId,
+						cursor: operationCursor,
+						occurredAt: "2026-09-29T00:00:00.000Z",
+						type: "operation",
+						payload: {
+							operationRef: "model-operation-1",
+							attemptRef: "model-attempt-1",
+							phase: "unknown",
+							failureCode: "recovery_unconfirmed",
+							kind: "model",
+							model: {
+								configVersion: "config-1",
+								modelOptionId: "model-a",
+								modelId: "gpt-5.6-sol",
+							},
+						},
+					},
+				];
+			},
+		});
+		const after = { ...unsignedRead, afterCursor: cursor };
+		await expect(
+			client.readEvents({
+				...after,
+				grant: await signer.signEvent(after, authority),
+			}),
+		).resolves.toMatchObject({
+			events: [
+				{
+					type: "operation",
+					cursor: operationCursor,
+					payload: { phase: "unknown", kind: "model" },
+				},
+			],
+		});
 		await expect(client.submitTurn(signed)).resolves.toEqual(accepted);
 		expect(await driver.sideEffectCount()).toBe(1);
-		expect(fetcher).toHaveBeenCalledTimes(2);
+		expect(await readFile(storePath, "utf8")).not.toContain(
+			"synthetic-relay-key-k1",
+		);
+		expect(fetcher).toHaveBeenCalledTimes(9);
 	} finally {
 		await host.close();
 		await store.close();

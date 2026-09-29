@@ -6,7 +6,9 @@ import type {
 	RuntimeCapabilitiesResponseV1,
 	RuntimeCapabilitiesV1,
 	RuntimeEventAckRequestV3,
+	RuntimeEventAckRequestV4,
 	RuntimeEventPersistRequestV3,
+	RuntimeEventReadRequestV4,
 	RuntimeGenerationCancelRequestV1,
 	RuntimeGenerationCancelRequestV3,
 	RuntimeOperationResponseV1,
@@ -39,6 +41,11 @@ import {
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnLookupV2Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
+	RuntimeEventAckRequestV4Schema,
+	RuntimeEventAckResponseV4Schema,
+	RuntimeEventReadRequestV4Schema,
+	RuntimeEventReplayResponseV4Schema,
+	RuntimeEventSchema,
 	RuntimeEventV1Schema,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeReplayRequestV1Schema,
@@ -49,6 +56,8 @@ import {
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
+	VerifiedRuntimeExecutionGrantV2Schema,
+	validateRuntimeEventAccessV4,
 	WorkloadReadinessRequestV1Schema,
 	WorkloadReadinessResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
@@ -439,6 +448,135 @@ export class RuntimeHost {
 	supplementV4(value: RuntimeSupplementTransportV4) {
 		if (this.closed || !this.v4) runtimeAuthorizationDenied();
 		return this.v4.supplement(value);
+	}
+
+	private async eventAuthorityV4(
+		request: RuntimeEventReadRequestV4 | RuntimeEventAckRequestV4,
+		verification: unknown,
+	) {
+		if (this.closed || !this.v4 || !this.options.grantValidationV2)
+			runtimeAuthorizationDenied();
+		const original =
+			this.options.store.readOriginalExecutionKeyScopeV4(request);
+		const verified =
+			VerifiedRuntimeExecutionGrantV2Schema.safeParse(verification);
+		if (
+			!original?.scope ||
+			original.hostSessionRef !== request.hostSessionRef ||
+			original.operation.kind !== "submit-turn" ||
+			!verified.success
+		)
+			runtimeAuthorizationDenied();
+		try {
+			await validateRuntimeEventAccessV4(
+				request,
+				verified.data,
+				original.scope,
+				original.hostSessionRef,
+				{
+					expectedIssuer: this.options.grantValidationV2.expectedIssuer,
+					expectedWorkerId: this.options.grantValidationV2.expectedWorkerId,
+					now: (this.options.grantValidationV2.now ?? Date.now)(),
+					trustedOperation: {
+						kind: "execution",
+						id: original.operation.operationId,
+						deliveryFence: original.operation.deliveryFence,
+						executionDeliveryFence: original.operation.deliveryFence,
+					},
+				},
+			);
+		} catch {
+			runtimeAuthorizationDenied();
+		}
+		return verified.data.claims;
+	}
+
+	async readEventsV4(value: RuntimeEventReadRequestV4, verification: unknown) {
+		const parsed = RuntimeEventReadRequestV4Schema.safeParse(value);
+		if (!parsed.success) invalidRequest();
+		const request = parsed.data;
+		return this.serialize(
+			this.options.store.sessionQueueKey(request),
+			async () => {
+				const claims = await this.eventAuthorityV4(request, verification);
+				const { session } = await this.options.store.authorizeRequestV3(
+					claims,
+					"query",
+					this.options.grantValidationV2?.now ?? Date.now,
+				);
+				const nativeSessionRef =
+					session.nativeSessionRef ?? nativeSessionRequired();
+				const replay = RuntimeEventSchema.array().safeParse(
+					await callDriver(() =>
+						this.options.driver.replayEvents(
+							nativeSessionRef,
+							request.executionId,
+							request.afterCursor ?? undefined,
+						),
+					),
+				);
+				if (
+					!replay.success ||
+					replay.data.some((event) => event.executionId !== request.executionId)
+				)
+					driverInvalid();
+				const events = replay.data.slice(0, 8);
+				for (const event of events) {
+					await this.eventAuthorityV4(request, verification);
+					await this.options.store.recordDeliveredCursor(
+						claims,
+						event.cursor,
+						this.options.grantValidationV2?.now ?? Date.now,
+					);
+				}
+				return RuntimeEventReplayResponseV4Schema.parse({
+					schemaVersion: 4,
+					hostSessionRef: request.hostSessionRef,
+					executionId: request.executionId,
+					events,
+				});
+			},
+		);
+	}
+
+	async acknowledgeEventsV4(
+		value: RuntimeEventAckRequestV4,
+		verification: unknown,
+	) {
+		const parsed = RuntimeEventAckRequestV4Schema.safeParse(value);
+		if (!parsed.success) invalidRequest();
+		const request = parsed.data;
+		return this.serialize(
+			this.options.store.sessionQueueKey(request),
+			async () => {
+				const claims = await this.eventAuthorityV4(request, verification);
+				await this.options.store.authorizeRequestV3(
+					claims,
+					"query",
+					this.options.grantValidationV2?.now ?? Date.now,
+				);
+				const session = this.options.store.checkAcknowledgableCursor(
+					claims,
+					request.confirmedCursor,
+				);
+				await this.options.store.acknowledgeCursor(
+					claims,
+					request.confirmedCursor,
+					this.options.grantValidationV2?.now ?? Date.now,
+				);
+				await this.eventAuthorityV4(request, verification);
+				await this.options.driver.acknowledgeEvents?.(
+					session.nativeSessionRef ?? nativeSessionRequired(),
+					request.executionId,
+					request.confirmedCursor,
+				);
+				return RuntimeEventAckResponseV4Schema.parse({
+					schemaVersion: 4,
+					executionId: request.executionId,
+					confirmedCursor: request.confirmedCursor,
+				});
+			},
+		);
 	}
 	async stopV3(value: RuntimeStopRequestV3, verification: unknown) {
 		return this.trustedHost().stop(value, verification);
