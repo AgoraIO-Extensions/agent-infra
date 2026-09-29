@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import {
+	RuntimeSubmitTurnRequestV4Schema,
+	runtimeOperationDigestInputV4,
+} from "@agent-infra/contracts/runtime";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -6,6 +10,7 @@ import {
 	workloadTestPolicy,
 } from "../../../apps/platform-worker/src/kubernetes.fixture.ts";
 import { workloadResourceConfigurationHashV1 } from "../../../apps/platform-worker/src/workload-runtime.ts";
+import { requestDigest } from "../../agent-runtime/src/file-runtime-store.ts";
 import {
 	type ConversationDispatchAuthorizationPortV1,
 	type ConversationDispatchClaimV1,
@@ -801,10 +806,16 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
-	it.each(["v2", "v4"] as const)(
-		"recovers a keyed %s submit with its pinned digest after Relay Key rotation",
-		async (runtimeSubmitProtocol) => {
-			const work = await seed();
+	it.each([
+		["v2", null],
+		["v4", null],
+		["v4", "host-existing"],
+	] as const)(
+		"recovers a keyed %s submit from %s with its pinned digest after Relay Key rotation",
+		async (runtimeSubmitProtocol, originalHostSessionRef) => {
+			const work = await seed("conversation.turn.submit.v1", {
+				hostSessionRef: originalHostSessionRef,
+			});
 			await client`insert into platform.relay_key_subjects
 			(purpose, subject_id, last_version, current_version)
 			values ('personal', 'actor-dispatch', 1, 1)`;
@@ -821,40 +832,66 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			try {
 				if (decision.outcome !== "claimed")
 					throw new Error("Expected a keyed claim");
-				const expected = createHash("sha256")
-					.update(
-						JSON.stringify({
-							agentId: "agent-dispatch",
-							conversationId: work.conversationId,
-							executionId: work.executionId,
-							...(runtimeSubmitProtocol === "v4"
-								? { executionSource: "web" }
-								: {}),
-							input: { attachments: [], text: "bounded dispatch fixture" },
-							...(runtimeSubmitProtocol === "v4"
-								? {
+				const input = { attachments: [], text: "bounded dispatch fixture" };
+				const selection = {
+					modelOptionId: "model-option-dispatch",
+					reasoningLevel: "medium",
+					schemaVersion: 1,
+				};
+				const expected =
+					runtimeSubmitProtocol === "v4"
+						? requestDigest(
+								runtimeOperationDigestInputV4(
+									RuntimeSubmitTurnRequestV4Schema.parse({
+										schemaVersion: 4,
+										requestId: decision.claim.requestId,
+										traceId: decision.claim.traceId,
+										principal: { kind: "user", id: "actor-dispatch" },
+										channelId: "web",
+										agentId: "agent-dispatch",
+										conversationId: work.conversationId,
+										executionId: work.executionId,
+										turnId: work.turnId,
+										sessionGeneration: 1,
+										hostSessionRef: originalHostSessionRef,
+										operation: {
+											kind: "execution",
+											id: work.executionId,
+											deliveryFence: decision.claim.executionDeliveryFence,
+											executionDeliveryFence:
+												decision.claim.executionDeliveryFence,
+										},
+										grant: {
+											schemaVersion: 4,
+											format: "runtime-execution-jws",
+											token: "a.b.c",
+										},
+										executionSource: "web",
 										keyBinding: {
-											ciphertextRef: "personal-key-1",
 											purpose: "personal",
 											subjectId: "actor-dispatch",
+											ciphertextRef: "personal-key-1",
 											version: 1,
 										},
-									}
-								: {}),
-							kind: "submit-turn",
-							...(runtimeSubmitProtocol === "v4"
-								? { operation: { id: work.executionId, kind: "execution" } }
-								: {}),
-							selection: {
-								modelOptionId: "model-option-dispatch",
-								reasoningLevel: "medium",
-								schemaVersion: 1,
-							},
-							sessionGeneration: 1,
-							turnId: work.turnId,
-						}),
-					)
-					.digest("base64url");
+										input,
+										selection,
+									}),
+								),
+							)
+						: createHash("sha256")
+								.update(
+									JSON.stringify({
+										agentId: "agent-dispatch",
+										conversationId: work.conversationId,
+										executionId: work.executionId,
+										input,
+										kind: "submit-turn",
+										selection,
+										sessionGeneration: 1,
+										turnId: work.turnId,
+									}),
+								)
+								.digest("base64url");
 				expect(
 					(
 						await store.readRuntimeState({
@@ -935,6 +972,10 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						runtimeSubmitProtocol,
 					}),
 				).toBeNull();
+				if (runtimeSubmitProtocol === "v4") {
+					await client`update platform.conversations set host_session_ref = 'host-accepted'
+					where id = ${work.conversationId}`;
+				}
 				const restarted = await claim(work.itemId, "key-takeover-worker");
 				try {
 					if (restarted.decision.outcome !== "claimed")
@@ -954,6 +995,12 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						runtimeSubmitProtocol,
 						originalOperationDigest: expected,
 					});
+					if (runtimeSubmitProtocol === "v4") {
+						expect(recovered).toMatchObject({
+							hostSessionRef: "host-accepted",
+							originalSubmitHostSessionRef: originalHostSessionRef,
+						});
+					}
 				} finally {
 					await restarted.store.close();
 				}

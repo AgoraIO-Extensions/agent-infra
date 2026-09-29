@@ -1,4 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
+import {
+	RuntimeSubmitTurnRequestV4Schema,
+	runtimeOperationDigestInputV4,
+} from "@agent-infra/contracts/runtime";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	type ConversationDispatchClaimDecisionV1,
@@ -169,9 +173,22 @@ export class PostgresConversationDispatchStoreV1
 					order by file_id
 				`;
 				const v4Submit = runtimeSubmitProtocol === "v4";
+				const originalSubmitHostSessionRef =
+					state.execution.runtime_submit_protocol === "v4"
+						? state.execution.original_submit_host_session_ref
+						: state.conversation.host_session_ref;
+				const principal: TaskPrincipalV1 = {
+					kind:
+						state.execution.channel_id === "api:application"
+							? "application"
+							: "user",
+					id: state.execution.actor_id,
+				};
 				if (
 					v4Submit &&
-					(!state.execution.relay_key_purpose ||
+					(!isTaskPrincipalChannelV1(principal, state.execution.channel_id) ||
+						!state.execution.execution_source ||
+						!state.execution.relay_key_purpose ||
 						!state.execution.relay_key_subject_id ||
 						!state.execution.relay_key_id ||
 						!state.execution.relay_key_version ||
@@ -237,8 +254,36 @@ export class PostgresConversationDispatchStoreV1
 						isolation.original_principal.id !== claim.actorId)
 				)
 					return null;
+				const digestInput = v4Submit
+					? runtimeOperationDigestInputV4(
+							RuntimeSubmitTurnRequestV4Schema.parse({
+								schemaVersion: 4,
+								requestId: claim.requestId,
+								traceId: claim.traceId,
+								...base,
+								principal,
+								channelId: state.execution.channel_id,
+								hostSessionRef: originalSubmitHostSessionRef,
+								operation: {
+									kind: "execution",
+									id: claim.executionId,
+									deliveryFence: claim.executionDeliveryFence,
+									executionDeliveryFence: claim.executionDeliveryFence,
+								},
+								grant: {
+									schemaVersion: 4,
+									format: "runtime-execution-jws",
+									token: "a.b.c",
+								},
+								executionSource: state.execution.execution_source,
+								keyBinding: original.keyBinding,
+								input: original.input,
+								selection: original.selection,
+							}),
+						)
+					: original;
 				const originalOperationDigest = createHash("sha256")
-					.update(JSON.stringify(canonical(original)))
+					.update(JSON.stringify(canonical(digestInput)))
 					.digest("base64url");
 				if (
 					state.execution.runtime_submit_protocol !== null ||
@@ -254,7 +299,8 @@ export class PostgresConversationDispatchStoreV1
 					const pinned = await transaction<{ execution_id: string }[]>`
 						update platform.conversation_executions
 						set runtime_submit_protocol = ${runtimeSubmitProtocol},
-							original_operation_digest = ${originalOperationDigest}
+							original_operation_digest = ${originalOperationDigest},
+							original_submit_host_session_ref = ${v4Submit ? originalSubmitHostSessionRef : null}
 						where execution_id = ${claim.executionId}
 							and runtime_submit_protocol is null
 							and original_operation_digest is null
@@ -272,6 +318,7 @@ export class PostgresConversationDispatchStoreV1
 								),
 							}),
 					hostSessionRef: state.conversation.host_session_ref,
+					...(v4Submit ? { originalSubmitHostSessionRef } : {}),
 					...(isolation
 						? { generationIsolation: isolationProjection(isolation) }
 						: {}),

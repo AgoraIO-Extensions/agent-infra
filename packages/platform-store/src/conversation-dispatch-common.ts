@@ -76,6 +76,7 @@ export interface ExecutionRow {
 	relay_key_version: string | number | null;
 	runtime_submit_protocol: "v2" | "v4" | null;
 	original_operation_digest: string | null;
+	original_submit_host_session_ref: string | null;
 	task_wait_order: string | number | null;
 	task_wait_deadline: Date | null;
 }
