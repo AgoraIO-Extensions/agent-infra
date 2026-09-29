@@ -150,12 +150,21 @@ export interface PlatformAuditProjectionV1 {
 	readonly schemaVersion: 1;
 	readonly auditId: string;
 	readonly actor: {
-		readonly kind: "user" | "system";
+		readonly kind: "user" | "application" | "system" | "unknown";
 		readonly actorId: string;
 	};
 	readonly action: PlatformAuditActionV1;
 	readonly subject: {
-		readonly kind: "agent_application" | "agent" | "secret" | "secret_key";
+		readonly kind:
+			| "agent_application"
+			| "agent"
+			| "secret"
+			| "secret_key"
+			| "grant"
+			| "unknown"
+			| "conversation"
+			| "execution"
+			| "configuration";
 		readonly subjectId: string;
 	};
 	readonly result: "succeeded" | "failed";
@@ -316,7 +325,7 @@ function changedFields(
 	return fields as PlatformAuditChangedFieldV1[];
 }
 
-interface AuditRow {
+export interface AuditRow {
 	readonly auditId: string;
 	readonly traceId: string;
 	readonly actorType: string;
@@ -329,7 +338,9 @@ interface AuditRow {
 	readonly details: unknown;
 }
 
-function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
+export function decodePlatformAuditRowV1(
+	row: AuditRow,
+): PlatformAuditProjectionV1 {
 	if (
 		!validText(row.auditId) ||
 		!validText(row.traceId) ||
@@ -457,7 +468,7 @@ export class PostgresPlatformAuditQueryV1 {
 					.limit(page.limit + 1);
 			}
 			const hasNext = rows.length > page.limit;
-			const items = rows.slice(0, page.limit).map(decodeRow);
+			const items = rows.slice(0, page.limit).map(decodePlatformAuditRowV1);
 			return {
 				items,
 				nextCursor: hasNext ? (items.at(-1)?.auditId ?? null) : null,
