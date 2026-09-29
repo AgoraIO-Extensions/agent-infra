@@ -90,7 +90,9 @@ Manhattan v4 连接使用公司 OAuth confidential client 的 authorization-code
 先登记精确回调 `https://agent-connector.gz3.agoralab.co/oauth/callback?provider=manhattan`，
 再由现有 Kubernetes Secret 注入 `MANHATTAN_OAUTH_CLIENT_ID`、`MANHATTAN_OAUTH_CLIENT_SECRET` 和现有
 `MANHATTAN_KONG_API_KEY`。Connection 用服务端 client secret 交换并刷新个人 Token，经 Manhattan
-`/api/connection/whoami` 验证身份及 RBAC 后才加密存储；旧 v3 Connection 不自动升级，需要重新授权。
+`/api/connection/whoami` 验证个人 Token 和邮箱身份后才加密存储，不要求建连时已有 SDK API 权限；
+SDK dump 和 Symbol Action 在实际调用时由 Manhattan 逐路由检查 RBAC，缺少权限返回 403。
+旧 v3 Connection 不自动升级，需要重新授权。
 此发布包含 `0035_provider_oauth_transactions.sql`，必须先执行经评审的生产 migration 路径；
 普通 GZ3 `--no-hooks` 发布脚本会按设计阻止直接部署。
 
