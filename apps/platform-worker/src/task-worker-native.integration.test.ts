@@ -1874,7 +1874,7 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 					conversations:
 						await legacySql`select * from platform.conversations where id in ${legacySql(upgradeConversationIds)} order by id`,
 					executions:
-						await legacySql`select to_jsonb(e)-'task_wait_order'-'task_wait_deadline'-'execution_source'-'relay_key_purpose'-'relay_key_subject_id'-'relay_key_id'-'relay_key_version' as record from platform.conversation_executions e where execution_id in ${legacySql(upgradeIds)} order by execution_id`,
+						await legacySql`select to_jsonb(e)-'task_wait_order'-'task_wait_deadline'-'execution_source'-'relay_key_purpose'-'relay_key_subject_id'-'relay_key_id'-'relay_key_version'-'runtime_submit_protocol'-'original_operation_digest' as record from platform.conversation_executions e where execution_id in ${legacySql(upgradeIds)} order by execution_id`,
 					messages:
 						await legacySql`select * from platform.conversation_messages where execution_id in ${legacySql(upgradeIds)} order by message_id`,
 					events:
@@ -1979,6 +1979,11 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			});
 			expect(await legacySnapshot()).toEqual(legacyBefore);
 			expect(await upgradeSnapshot()).toEqual(upgradeBefore);
+			expect(
+				await legacySql`select count(*)::int as count from platform.conversation_executions
+					where execution_id in ${legacySql(upgradeIds)}
+						and (runtime_submit_protocol is not null or original_operation_digest is not null)`,
+			).toEqual([{ count: 0 }]);
 			expect(
 				(
 					await legacySql`select * from platform_migrations.history order by id`
