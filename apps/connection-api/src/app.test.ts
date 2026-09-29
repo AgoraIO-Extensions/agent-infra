@@ -10,9 +10,10 @@ import {
 	type GitHubOAuthProvider,
 	type InvocationContext,
 	OAuthProtocolError,
+	type ProviderOAuthCallbackStage,
 	type StoredCall,
 } from "@agent-infra/connection-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createConnectionApp } from "./app";
 import { createConnectionOAuthApp } from "./oauth-routes";
@@ -4012,17 +4013,22 @@ describe("Connection API", () => {
 
 	it("redirects a rejected Provider OAuth callback without replaying it", async () => {
 		let attempts = 0;
+		const logged = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => undefined);
 		const app = createConnectionOAuthApp({
 			issuer: "https://connection.example/",
 			management: {
 				githubRedirectUri: "https://connection.example/oauth/callback",
 				service: {
-					completeGithubOAuth: async () => {
+					completeGithubOAuth: async (
+						_code: string,
+						_state: string,
+						onStage: (stage: ProviderOAuthCallbackStage) => void,
+					) => {
 						attempts += 1;
-						throw new ConnectionError(
-							"INVALID_REQUEST",
-							"OAuth state is invalid, expired, or already consumed",
-						);
+						onStage("token_exchange");
+						throw new Error("provider-code consumed-state provider-secret");
 					},
 				} as unknown as ConnectionApplicationService,
 			},
@@ -4030,16 +4036,28 @@ describe("Connection API", () => {
 			service: {} as ConnectionOAuthService,
 		});
 
-		const response = await app.request(
-			"/oauth/callback?code=provider-code&state=consumed-state",
-			{ redirect: "manual" },
-		);
+		try {
+			const response = await app.request(
+				"/oauth/callback?code=provider-code&state=consumed-state",
+				{ redirect: "manual" },
+			);
 
-		expect(attempts).toBe(1);
-		expect(response.status).toBe(303);
-		expect(response.headers.get("location")).toBe(
-			"/connection/connections?oauth=callback_failed",
-		);
+			expect(attempts).toBe(1);
+			expect(response.status).toBe(303);
+			expect(response.headers.get("location")).toBe(
+				"/connection/connections?oauth=callback_failed",
+			);
+			expect(JSON.parse(String(logged.mock.calls.at(-1)?.[0]))).toEqual({
+				category: "UNEXPECTED",
+				event: "connection_provider_oauth_callback_rejected",
+				stage: "token_exchange",
+			});
+			expect(JSON.stringify(logged.mock.calls)).not.toMatch(
+				/provider-code|consumed-state|provider-secret/,
+			);
+		} finally {
+			logged.mockRestore();
+		}
 	});
 
 	it("reports Manhattan RBAC denial without exposing the OAuth code", async () => {

@@ -34,6 +34,7 @@ import {
 	ConnectionError,
 	type ConnectionOAuthService,
 	OAuthProtocolError,
+	type ProviderOAuthCallbackStage,
 } from "@agent-infra/connection-core";
 import type {
 	PostgresConnectionApprovalRepository,
@@ -3371,6 +3372,7 @@ export function createConnectionOAuthApp(
 		app.get("/oauth/callback", async (context) => {
 			context.header("cache-control", "no-store");
 			context.header("referrer-policy", "no-referrer");
+			let stage: ProviderOAuthCallbackStage = "callback_input";
 			try {
 				const providerId = context.req.query("provider") ?? "github";
 				if (providerId !== "github" && providerId !== "manhattan")
@@ -3393,18 +3395,26 @@ export function createConnectionOAuthApp(
 					? management.service.completeGithubOAuth(
 							context.req.query("code") ?? "",
 							context.req.query("state") ?? "",
+							(value) => {
+								stage = value;
+							},
 						)
 					: management.service.completeProviderOAuth(
 							providerId,
 							context.req.query("code") ?? "",
 							context.req.query("state") ?? "",
+							(value) => {
+								stage = value;
+							},
 						));
 				return context.redirect("/connection/connections", 303);
 			} catch (error) {
 				console.error(
 					JSON.stringify({
-						errorType: error instanceof Error ? error.name : typeof error,
+						category:
+							error instanceof ConnectionError ? error.code : "UNEXPECTED",
 						event: "connection_provider_oauth_callback_rejected",
+						stage,
 					}),
 				);
 				return context.redirect(
