@@ -525,6 +525,25 @@ describe("PostgreSQL Platform audit query", () => {
 		);
 	});
 
+	it("accepts a configuration-targeted configuration revision", async () => {
+		await seedAudit({
+			auditId: "audit_configuration_target",
+			occurredAt: new Date("2026-09-02T05:30:00.000Z"),
+			action: "agent.configuration.revised",
+			targetType: "configuration",
+			targetId: "configuration_safe",
+			details: { changedFields: ["environment"] },
+		});
+		const page = await openAdapter().listAudit(administrator, {
+			schemaVersion: 1,
+			limit: 10,
+		});
+		expect(page.items[0]).toMatchObject({
+			action: "agent.configuration.revised",
+			subject: { kind: "configuration", subjectId: "configuration_safe" },
+		});
+	});
+
 	it("projects Secret lifecycle audits without exposing key metadata", async () => {
 		await seedAudit({
 			auditId: "audit_secret_decrypt",
