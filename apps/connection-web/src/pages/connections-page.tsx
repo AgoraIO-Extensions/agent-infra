@@ -647,7 +647,16 @@ export function ConnectionsPage() {
 			) : null}
 			{permissionDenied && overview.isSuccess ? (
 				<p className="alert alert-warning" role="status">
-					当前账号缺少 Manhattan 访问权限。
+					Manhattan 拒绝了这次连接。Connection 审批通过不代表已有 Manhattan SDK
+					读取权限。请联系 Manhattan 管理员，在
+					<a
+						href="https://manhattan.agoralab.co/permission/user"
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						Manhattan 用户管理
+					</a>
+					核对你的账号角色，开通后返回这里重试。
 				</p>
 			) : null}
 			{overview.isError ? <PageError error={overview.error} /> : null}

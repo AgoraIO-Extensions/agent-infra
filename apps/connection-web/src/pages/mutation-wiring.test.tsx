@@ -1262,8 +1262,14 @@ describe("Connection 管理 mutation wiring", () => {
 		);
 		renderPage(<ConnectionsPage />);
 		expect(
-			await screen.findByText("当前账号缺少 Manhattan 访问权限。"),
+			await screen.findByText(/Connection 审批通过不代表已有/),
 		).toBeTruthy();
+		const help = screen.getByRole("link", { name: "Manhattan 用户管理" });
+		expect(help.getAttribute("href")).toBe(
+			"https://manhattan.agoralab.co/permission/user",
+		);
+		expect(help.getAttribute("target")).toBe("_blank");
+		expect(help.getAttribute("rel")).toBe("noopener noreferrer");
 	});
 
 	it("升级授权沿用旧版选择，不默认勾选新增 Action", async () => {
