@@ -719,12 +719,12 @@ describe("durable task upgrade over real PostgreSQL and formal HTTP", () => {
 		expect(await historicalSnapshot()).toEqual(old);
 	});
 
-	it("admits upgraded custom platform-adapter tasks in Agent FIFO order without Platform model selection", async () => {
+	it("admits upgraded custom platform-adapter tasks in Conversation FIFO order without Platform model selection", async () => {
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		await installVerifiedWorkload("platform-adapter");
 		await startUpgradedApi();
 		const first = await submitApiTask("custom_first");
-		const second = await submitApiTask("custom_second");
+		const second = await submitApiTask("custom_second", first.conversationId);
 		expect(
 			await db.unsafe(
 				"select model_configuration_revision,model_option_id,reasoning_level from platform.conversation_executions order by execution_id",
