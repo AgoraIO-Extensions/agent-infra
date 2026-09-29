@@ -827,6 +827,34 @@ BuildServiceAdapter 的任务状态至少区分排队、运行、成功、失败
 
 成功结果形成不可变 Agent/系统版本；发布需要用户确认，Platform DB 保留当前运行版本与版本历史，升级和回滚复用既有 Agent 生命周期。合并受保护分支和正式生产发布仍需现有相应授权主体明确确认。签名、扫描和 Registry 准入沿用部署政策，不在 BuildServiceAdapter 外新增 Builder 审批流程。当前真实构建、OCI 导出/Digest 及 Registry push 尚待验证；本 Spec 不将某个具体构建器、rootless 实现或探针结果视为已验收事实。
 
+### 10.13 OpenCode 原生工具回执与来源
+
+标准 OpenCode 路径使用固定官方 release，版本和 target 字节以
+[OpenCode release 声明](../../packages/agent-runtime/src/opencode-release.json)为唯一来源。
+ACP 权限请求和进度通知只按各自协议含义消费。实际工具能力须逐项证明每次外部动作的
+持久 intent、当前授权、可信开始及结果或 unknown；权限通过、Plugin before/after hook
+或某个工具通过不能补足未观察到的实际尝试与失败终态。
+
+优先通过 upstream contribution 提供可等待、不可由模型或 Owner 关闭的原生接缝。
+官方 artifact 缺少可靠接缝时，记录对应能力未通过；不把完整 M1 义务改成模型子集或永久
+unsupported 清单。受控 derived/private artifact 另需明确的来源批准：固定 upstream
+tag/commit、最小补丁及协议、构建与依赖锁、每个 target 的 hash、许可/NOTICE、维护者与
+退出条件。平台 Runtime 维护者承担补丁、升级回归与上游跟进，来源决策由仓库 CODEOWNER
+按正式架构流程评审。没有具体来源批准与实际产物验证时，不构建、发布或启用该路径；运行时
+不下载依赖或编译源码，不另建 vendor 服务、插件平台或推理循环。
+
+原生工具接缝留在 Driver 与原生进程边界，复用唯一公共实际操作事实、现有 journal、Host
+授权和 Worker 事务/游标。控制通道不得被工具子进程继承或由模型配置改写；具体确认顺序、
+取消与隔离要求只在 [Runtime HLD 8.5.3](HLD-agent-runtime-M1.md#853-opencode-原生工具回执)维护。
+OpenCode 模型传输与 Execution Key 版本、原 Session 和 Connection 独立权限继续遵循
+既有契约；工具接缝通过不转移这些验收证明。
+
+候选与回滚 artifact 均须验证原数据、终态读取及 active/unknown 的兼容恢复，复用原 PVC
+并核实原 attempt；缺少原执行要求的接缝时保留未确认状态，不能重建 Session、降级协议或
+重发副作用。退出私有路径以官方 artifact 实际满足相同工具覆盖、隔离与故障矩阵为准，
+升级和回滚继续执行 10.4 的恢复流程。[Runtime HLD 11.1](HLD-agent-runtime-M1.md#111-通用-runtime-与-driver-验证)
+记录原生矩阵；文档决策、Fixture 或共享 Host 通过均不证明四模板真实模型/工具验收完成。
+
 ## 11. Agent Runtime 边界
 
 ### 11.1 Platform Conversation Contract
