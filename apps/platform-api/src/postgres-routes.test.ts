@@ -1,6 +1,8 @@
 import {
 	AgentApplicationProjectionV1Schema,
+	AgentApplicationProjectionV2Schema,
 	AgentProjectionV1Schema,
+	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
 	ConversationProjectionV1Schema,
@@ -89,6 +91,12 @@ const applicationBody = {
 	environment: [],
 	secrets: [],
 };
+const { actions: _retiredActions, ...applicationBodyWithoutActions } =
+	applicationBody;
+const applicationBodyV2 = {
+	...applicationBodyWithoutActions,
+	schemaVersion: 2 as const,
+};
 
 type Closable = { close(): Promise<void> };
 let testDatabase: PostgresTestDatabase | undefined;
@@ -146,21 +154,23 @@ beforeAll(async () => {
 	);
 
 	const foundationAdmissions = new FakeAgentConfigurationAdmissionsV1({
-		authorizations: ["agent-run", "agent-withdraw"].map((agentId) => ({
-			agentId,
-			actorId: identities.owner.userId,
-			authorizationRevision: "authorization-1",
-			authorityContext: {
-				schemaVersion: 1 as const,
-				users: [
-					{
-						userId: identities.owner.userId,
-						accountStatus: "active" as const,
-					},
-				],
-				organizationIds: ["org-1"],
-			},
-		})),
+		authorizations: ["agent-run", "agent-withdraw", "agent-v2"].map(
+			(agentId) => ({
+				agentId,
+				actorId: identities.owner.userId,
+				authorizationRevision: "authorization-1",
+				authorityContext: {
+					schemaVersion: 1 as const,
+					users: [
+						{
+							userId: identities.owner.userId,
+							accountStatus: "active" as const,
+						},
+					],
+					organizationIds: ["org-1"],
+				},
+			}),
+		),
 		images: [{ selection: applicationBody.source, source }],
 		models: [],
 		modelCredentials: [],
@@ -374,7 +384,9 @@ beforeAll(async () => {
 			allocateApplicationIds: async ({ idempotencyKey }) =>
 				idempotencyKey === "create-withdraw"
 					? { applicationId: "application-withdraw", agentId: "agent-withdraw" }
-					: { applicationId: "application-run", agentId: "agent-run" },
+					: idempotencyKey === "create-v2"
+						? { applicationId: "application-v2", agentId: "agent-v2" }
+						: { applicationId: "application-run", agentId: "agent-run" },
 			prepareSecretReplacements: async () => ({ secrets: [] }),
 			readApplicationProjection: projectionReaders.readApplicationProjection,
 			readAgentProjection: projectionReaders.readManagementAgentProjection,
@@ -535,6 +547,66 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				})
 			).status,
 		).toBe(200);
+
+		const v2Create = await app.request("/api/v2/agent-applications", {
+			method: "POST",
+			headers: {
+				...requestHeaders("owner", "create-v2"),
+				"content-type": "application/json",
+			},
+			body: JSON.stringify(applicationBodyV2),
+		});
+		expect(v2Create.status).toBe(201);
+		expect(
+			AgentApplicationProjectionV2Schema.safeParse(await v2Create.json())
+				.success,
+		).toBe(true);
+
+		const v2Decision = await app.request(
+			"/api/v2/admin/agent-applications/application-v2/decision",
+			{
+				method: "POST",
+				headers: {
+					...requestHeaders("admin", "approve-v2"),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ schemaVersion: 1, decision: "approve" }),
+			},
+		);
+		expect(v2Decision.status).toBe(200);
+		expect(
+			AgentApplicationProjectionV2Schema.safeParse(await v2Decision.json())
+				.success,
+		).toBe(true);
+
+		const v2Configuration = await app.request(
+			"/api/v2/agents/agent-v2/configuration",
+			{
+				method: "PUT",
+				headers: {
+					...requestHeaders("owner", "configuration-v2"),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					schemaVersion: 2,
+					environment: [{ name: "LOG_LEVEL", value: "debug-v2" }],
+				}),
+			},
+		);
+		expect(v2Configuration.status).toBe(200);
+		expect(
+			AgentProjectionV2Schema.safeParse(await v2Configuration.json()).success,
+		).toBe(true);
+		const v2Agents = await app.request("/api/v2/agents?scope=owner", {
+			headers: requestHeaders("owner"),
+		});
+		expect(v2Agents.status).toBe(200);
+		expect(
+			((await v2Agents.json()) as { items: unknown[] }).items.some(
+				(item) => AgentProjectionV2Schema.safeParse(item).success,
+			),
+		).toBe(true);
+
 		const createdConversation = await app.request(
 			"/api/v1/agents/agent-run/conversations",
 			{

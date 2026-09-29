@@ -24,6 +24,8 @@ import {
 	registerSessionAuditRoutes,
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
+import { registerV2ConfigurationRoutes } from "./http/v2-configuration-routes.js";
+import { registerV2ManagementRoutes } from "./http/v2-management-routes.js";
 
 export const platformApiService = "platform-api";
 
@@ -68,7 +70,9 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	if (requestScope)
 		app.use("*", (context, next) => requestScope(context.req.raw, next));
 	registerManagementRoutes(app, dependencies.management);
+	registerV2ManagementRoutes(app, dependencies.management);
 	registerConfigurationRoutes(app, dependencies.configuration);
+	registerV2ConfigurationRoutes(app, dependencies.configuration);
 	if (dependencies.deploymentConfiguration)
 		registerDeploymentConfigurationRoutes(
 			app,
