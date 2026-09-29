@@ -46,7 +46,6 @@ import {
 	RuntimeEventReadRequestV4Schema,
 	RuntimeEventReplayResponseV4Schema,
 	RuntimeEventSchema,
-	RuntimeEventV1Schema,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
@@ -257,10 +256,11 @@ async function* validatedDriverEventStream(
 				driverInvalid();
 			}
 			if (next.done) return;
-			const event = RuntimeEventV1Schema.safeParse(next.value);
+			const event = RuntimeEventSchema.safeParse(next.value);
 			if (!event.success || event.data.executionId !== executionId) {
 				driverInvalid();
 			}
+			if (event.data.type === "operation") continue;
 			yield event.data;
 		}
 	} finally {
@@ -1075,7 +1075,7 @@ export class RuntimeHost {
 		);
 		const nativeSessionRef =
 			session.nativeSessionRef ?? nativeSessionRequired();
-		const events = RuntimeEventV1Schema.array().safeParse(
+		const events = RuntimeEventSchema.array().safeParse(
 			await callDriver(() =>
 				this.options.driver.replayEvents(
 					nativeSessionRef,
@@ -1092,7 +1092,7 @@ export class RuntimeHost {
 		}
 		return {
 			schemaVersion: 1,
-			events: events.data,
+			events: events.data.filter((event) => event.type !== "operation"),
 		};
 	}
 
