@@ -118,6 +118,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 		"file-authority",
 		"configuration-v2",
 		"task-integrity",
+		"browser-main",
 		"stop-ack",
 	] as const)(
 		"upgrades the existing %s migration history without losing either schema",
@@ -135,7 +136,9 @@ describe("Platform PostgreSQL migration foundation", () => {
 							? migrations.slice(0, 15)
 							: history === "task-integrity"
 								? migrations.slice(0, 20)
-								: migrations.slice(0, 23);
+								: history === "browser-main"
+									? migrations.slice(0, 22)
+									: migrations.slice(0, 23);
 				for (const migration of legacy) {
 					for (const statement of migration.sql) await client.unsafe(statement);
 					await client`insert into platform_migrations.history (hash, created_at)
@@ -179,6 +182,19 @@ describe("Platform PostgreSQL migration foundation", () => {
 					);
 				}
 				const upgraded = await readPlatformCatalog(client);
+				if (history === "browser-main") {
+					for (const [table, column] of [
+						["browser_sessions", "expires_at"],
+						["agent_availability", "target_type"],
+						["conversation_executions", "task_wait_order"],
+					]) {
+						expect(
+							upgraded.columns.some(
+								(row) => row.table_name === table && row.column_name === column,
+							),
+						).toBe(true);
+					}
+				}
 				expect(
 					upgraded.columns.filter((column) => column.table_name === "files"),
 				).not.toHaveLength(0);
