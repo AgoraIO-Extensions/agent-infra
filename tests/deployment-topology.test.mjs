@@ -168,6 +168,10 @@ test("production Worker requires a private module and runtime authorization moun
 		"platformWorker.runtimeAuthSecretRef.privateKeyKey=grant.pem",
 		"--set-string",
 		"platformWorker.runtimeAuthSecretRef.serviceTokenKey=service-token",
+		"--set-string",
+		"platformWorker.trustedCaSecretRef.name=worker-trusted-ca",
+		"--set-string",
+		"platformWorker.trustedCaSecretRef.key=ca.pem",
 		"--set",
 		"platformApi.placement=in-cluster",
 		"--set-string",
@@ -219,6 +223,30 @@ test("production Worker requires a private module and runtime authorization moun
 			],
 		},
 	);
+	assert.deepEqual(
+		worker.volumes.find((volume) => volume.name === "trusted-ca")?.secret,
+		{
+			secretName: "worker-trusted-ca",
+			defaultMode: 288,
+			items: [{ key: "ca.pem", path: "ca.crt" }],
+		},
+	);
+	assert.deepEqual(
+		worker.containers[0].volumeMounts.find(
+			(mount) => mount.name === "trusted-ca",
+		),
+		{
+			name: "trusted-ca",
+			mountPath: "/var/run/agent-infra/trusted-ca",
+			readOnly: true,
+		},
+	);
+	assert.equal(
+		worker.containers[0].env.find(
+			(entry) => entry.name === "NODE_EXTRA_CA_CERTS",
+		)?.value,
+		"/var/run/agent-infra/trusted-ca/ca.crt",
+	);
 	const api = resource(
 		resources,
 		"Deployment",
@@ -226,10 +254,18 @@ test("production Worker requires a private module and runtime authorization moun
 	).spec.template.spec;
 	assert.equal(
 		(api.volumes ?? []).some((volume) =>
-			["deployment-module", "runtime-auth"].includes(volume.name),
+			["deployment-module", "runtime-auth", "trusted-ca"].includes(volume.name),
 		),
 		false,
 	);
+	const invalidCaRef = render(
+		"--set-string",
+		"platformWorker.trustedCaSecretRef.name=worker-trusted-ca",
+		"--set-string",
+		"platformWorker.trustedCaSecretRef.key=../ca.pem",
+	);
+	assert.notEqual(invalidCaRef.status, 0);
+	assert.match(invalidCaRef.stderr, /trustedCaSecretRef/);
 });
 
 test("enterprise directory deployment keeps migration ahead of its runtime resources", () => {
