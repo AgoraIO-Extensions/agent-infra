@@ -525,6 +525,7 @@ export type CapabilityProfileDetailResponse = {
     profile: {
         id: string;
         providerReleaseId: string;
+        providerId?: string;
         name: string;
         effectCeiling: 'READ' | 'WRITE';
         revision: string;

@@ -1206,6 +1206,16 @@ export function createConnectionOAuthApp(
 								"PROVIDER_UNAVAILABLE",
 								"Employee directory approval gate is unavailable",
 							);
+						if (
+							!body ||
+							!management.catalogs?.some(
+								(item) => item.providerReleaseId === body.providerReleaseId,
+							)
+						)
+							throw new ConnectionError(
+								"INVALID_REQUEST",
+								"Target ProviderRelease is unavailable for execution",
+							);
 						for (const policy of (await catalog.listCatalog()).policies.filter(
 							(item) =>
 								item.status === "PUBLISHED" &&

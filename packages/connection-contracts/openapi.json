@@ -3448,6 +3448,7 @@
 						"properties": {
 							"id": { "type": "string" },
 							"providerReleaseId": { "type": "string" },
+							"providerId": { "type": "string" },
 							"name": { "type": "string" },
 							"effectCeiling": { "type": "string", "enum": ["READ", "WRITE"] },
 							"revision": { "type": "string" },

@@ -50,6 +50,11 @@ export function ApprovalCatalogManager(props: {
 	const [disclaimerScopeLocked, setDisclaimerScopeLocked] = useState(false);
 	const [profileName, setProfileName] = useState("");
 	const [providerReleaseId, setProviderReleaseId] = useState("");
+	const [sourceRelease, setSourceRelease] = useState<{
+		id: string;
+		providerId: string | undefined;
+		actionCount: number;
+	} | null>(null);
 	const [actionIds, setActionIds] = useState<string[]>([]);
 	const [actionQuery, setActionQuery] = useState("");
 	const [disclaimerKind, setDisclaimerKind] = useState<"GLOBAL" | "PROVIDER">(
@@ -79,6 +84,12 @@ export function ApprovalCatalogManager(props: {
 	});
 	const provider = props.catalog?.providers.find(
 		(item) => item.providerReleaseId === providerReleaseId,
+	);
+	const historicalSource = Boolean(
+		sourceRelease &&
+			!props.catalog?.providers.some(
+				(item) => item.providerReleaseId === sourceRelease.id,
+			),
 	);
 	const providerActions = provider?.actions ?? [];
 	const normalizedQuery = actionQuery.trim().toLowerCase();
@@ -250,6 +261,7 @@ export function ApprovalCatalogManager(props: {
 		setProviderLocked(false);
 		setProfileName("");
 		setProviderReleaseId(props.catalog?.providers[0]?.providerReleaseId ?? "");
+		setSourceRelease(null);
 		setActionIds([]);
 		setActionQuery("");
 		setNotice("");
@@ -262,10 +274,24 @@ export function ApprovalCatalogManager(props: {
 		setKind("profiles");
 		setEditor("profile");
 		setEditingProfile(null);
-		setProviderLocked(true);
+		const historical = !props.catalog?.providers.some(
+			(item) => item.providerReleaseId === source.providerReleaseId,
+		);
+		setSourceRelease({
+			id: source.providerReleaseId,
+			providerId:
+				sourceDetail.profile.providerId ??
+				props.catalog?.providers.find(
+					(item) => item.providerReleaseId === source.providerReleaseId,
+				)?.provider,
+			actionCount: sourceDetail.profile.actions.length,
+		});
+		setProviderLocked(!historical);
 		setProfileName(`${source.name} 新版`);
 		setProviderReleaseId(source.providerReleaseId);
-		setActionIds(sourceDetail.profile.actions.map((action) => action.id));
+		setActionIds(
+			historical ? [] : sourceDetail.profile.actions.map((action) => action.id),
+		);
 		setActionQuery("");
 		setNotice("");
 	}
@@ -281,6 +307,11 @@ export function ApprovalCatalogManager(props: {
 			revision: sourceDetail.profile.revision,
 		});
 		setRevisingProfile(null);
+		setSourceRelease({
+			id: source.providerReleaseId,
+			providerId: sourceDetail.profile.providerId,
+			actionCount: sourceDetail.profile.actions.length,
+		});
 		setProviderLocked(true);
 		setProfileName(source.name);
 		setProviderReleaseId(source.providerReleaseId);
@@ -296,6 +327,14 @@ export function ApprovalCatalogManager(props: {
 		editProfileDraft(source, sourceDetail);
 		setEditingProfile(null);
 		setRevisingProfile(source);
+		if (
+			!props.catalog?.providers.some(
+				(item) => item.providerReleaseId === source.providerReleaseId,
+			)
+		) {
+			setProviderLocked(false);
+			setActionIds([]);
+		}
 	}
 
 	function newDisclaimer() {
@@ -464,16 +503,35 @@ export function ApprovalCatalogManager(props: {
 									}}
 								>
 									<option value="">选择连接器</option>
-									{props.catalog?.providers.map((item) => (
-										<option
-											key={item.providerReleaseId}
-											value={item.providerReleaseId}
-										>
-											{item.provider} · {item.providerReleaseId}
+									{historicalSource && sourceRelease ? (
+										<option value={sourceRelease.id} disabled>
+											{sourceRelease.providerId ?? "旧版"} · {sourceRelease.id}
+											（历史来源）
 										</option>
-									))}
+									) : null}
+									{props.catalog?.providers
+										.filter(
+											(item) =>
+												!historicalSource ||
+												item.provider === sourceRelease?.providerId,
+										)
+										.map((item) => (
+											<option
+												key={item.providerReleaseId}
+												value={item.providerReleaseId}
+											>
+												{item.provider} · {item.providerReleaseId}
+											</option>
+										))}
 								</select>
 							</label>
+							{historicalSource ? (
+								<p role="status">
+									{providerLocked
+										? "旧版草稿不能原地更换连接器，请复制为新能力包。"
+										: `旧版来源含 ${sourceRelease?.actionCount ?? 0} 项能力。请选择当前连接器版本，并重新勾选需要发布的能力；旧版授权不变。`}
+								</p>
+							) : null}
 							<div className="approval-action-toolbar">
 								<input
 									type="search"
@@ -575,6 +633,7 @@ export function ApprovalCatalogManager(props: {
 									disabled={
 										busy ||
 										!profileName.trim() ||
+										!provider ||
 										!actionIds.length ||
 										nameConflict
 									}
