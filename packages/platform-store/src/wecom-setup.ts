@@ -115,7 +115,7 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 	}
 	async activeBinding(agentId: string, reference: string) {
 		const rows = await this
-			.#sql`select 1 from platform.wecom_setup_sessions s join platform.agents a on a.id=s.agent_id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where s.session_id=${reference} and s.agent_id=${agentId} and s.status='active' and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind',s.kind,'bindingReference',s.session_id)) limit 1`;
+			.#sql`select 1 from platform.wecom_setup_sessions s join platform.agents a on a.id=s.agent_id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where s.session_id=${reference} and s.agent_id=${agentId} and s.status='active' and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind',s.kind,'bindingReference',s.session_id)) and not exists(select 1 from jsonb_array_elements(c.configuration->'channels') channel where channel->>'kind'=s.kind and channel->>'bindingReference'=s.session_id and channel->>'enabled'='false') limit 1`;
 		return rows.length === 1;
 	}
 	async consume(input: Parameters<WecomSetupStoreV1["consume"]>[0]) {

@@ -49,6 +49,8 @@ it("records callback verification once and rolls back the timestamp when audit f
 		await sql`update platform.wecom_setup_sessions set status='active' where session_id='setup-1'`;
 		await sql`delete from platform.agent_owners where agent_id='agent' and owner_id='owner'`;
 		expect(await store.activeBinding("agent", "setup-1")).toBe(true);
+		await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}',${sql.json([{ kind: "wecom_app", bindingReference: "setup-1", enabled: false }])}::jsonb) where agent_id='agent' and revision=1`;
+		expect(await store.activeBinding("agent", "setup-1")).toBe(false);
 		await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}','[]'::jsonb) where agent_id='agent' and revision=1`;
 		expect(await store.activeBinding("agent", "setup-1")).toBe(false);
 	} finally {
