@@ -35,7 +35,7 @@ separate CODEOWNER approval before publication or enablement.
 
 The candidate patch is the exact unified diff in
 `opencode-v1.18.30-effect-receipt.patch`. Its SHA-256 is
-`54f15c6fae8e30d1f1b5d466be93565d74900f80a53a40a3d71f6e9f5eac42ec`.
+`6309486910532cd91f627a60772469519bcae3e6fc7b29ea550ae1085dd763f2`.
 It adds a transport-agnostic receipt schema and validator. It deliberately
 does not pretend that a schema alone proves a tool effect.
 
@@ -70,9 +70,11 @@ the saved decision; a real retry receives a new leaf nonce. A lost terminal
 ACK is recovered by reading the same attempt and is never repaired by
 replaying a possibly effective write.
 
-The driver must reject a message with a mismatched execution, generation,
-fence, call, sequence, or target. File contents, credentials, model text, and
-raw native errors are excluded; `errorCode` is a bounded classification only.
+The validator rejects empty or over-256-byte identity and reference fields,
+negative or unsafe generation/sequence values, and mismatched execution,
+generation, fence, call, sequence, or target. File contents, credentials,
+model text, and raw native errors are excluded; `errorCode` is a bounded
+classification only.
 
 ## Leaf Coverage
 

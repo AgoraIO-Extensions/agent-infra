@@ -1,9 +1,9 @@
 diff --git a/packages/opencode/src/native/effect-receipt.ts b/packages/opencode/src/native/effect-receipt.ts
 new file mode 100644
-index 000000000..c6d6d2c14
+index 000000000..c5eeeb4dc
 --- /dev/null
 +++ b/packages/opencode/src/native/effect-receipt.ts
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,95 @@
 +/**
 + * Private Driver/native effect receipt boundary.
 + *
@@ -68,27 +68,32 @@ index 000000000..c6d6d2c14
 +  | (EffectReceipt & { readonly phase: "started" | "completed" })
 +  | (EffectReceipt & { readonly phase: "failed" | "cancelled" | "unknown"; readonly errorCode: string })
 +
++const boundedString = (value: unknown, max = 256): value is string =>
++  typeof value === "string" && value.length > 0 && value.length <= max
++
 +export function isEffectReceipt(value: unknown): value is EffectReceipt {
 +  if (!value || typeof value !== "object") return false
 +  const receipt = value as Partial<EffectReceipt>
 +  return (
 +    receipt.schema === EFFECT_RECEIPT_SCHEMA &&
-+    typeof receipt.sessionID === "string" &&
-+    typeof receipt.turnID === "string" &&
-+    typeof receipt.callID === "string" &&
-+    typeof receipt.executionID === "string" &&
++    boundedString(receipt.sessionID) &&
++    boundedString(receipt.turnID) &&
++    boundedString(receipt.callID) &&
++    boundedString(receipt.executionID) &&
 +    Number.isSafeInteger(receipt.generation) &&
-+    typeof receipt.fence === "string" &&
-+    typeof receipt.operationRef === "string" &&
-+    typeof receipt.attemptRef === "string" &&
-+    typeof receipt.leafNonce === "string" &&
++    receipt.generation >= 0 &&
++    boundedString(receipt.fence) &&
++    boundedString(receipt.operationRef) &&
++    boundedString(receipt.attemptRef) &&
++    boundedString(receipt.leafNonce) &&
 +    Number.isSafeInteger(receipt.sequence) &&
++    receipt.sequence >= 0 &&
 +    typeof receipt.phase === "string" &&
 +    effectReceiptPhases.includes(receipt.phase as EffectReceiptPhase) &&
 +    typeof receipt.target === "string" &&
 +    effectReceiptTargets.includes(receipt.target as EffectReceiptTarget) &&
-+    typeof receipt.targetRef === "string" &&
-+    typeof receipt.ackID === "string" &&
++    boundedString(receipt.targetRef) &&
++    boundedString(receipt.ackID) &&
 +    (receipt.phase === "failed" || receipt.phase === "cancelled" || receipt.phase === "unknown"
 +      ? typeof receipt.errorCode === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(receipt.errorCode)
 +      : receipt.errorCode === undefined)
