@@ -41,8 +41,8 @@ import {
 	taskAuthorizationRecords,
 	taskControlRecords,
 } from "./schema-operations";
-import { browserSessions } from "./schema-sessions";
 import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
+import { browserSessions } from "./schema-sessions";
 
 export {
 	agentApplications,
@@ -106,8 +106,8 @@ export {
 	taskAuthorizationRecords,
 	taskControlRecords,
 } from "./schema-operations";
-export { browserSessions } from "./schema-sessions";
 export { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
+export { browserSessions } from "./schema-sessions";
 
 export const platformInfrastructureTables = [
 	browserSessions,
