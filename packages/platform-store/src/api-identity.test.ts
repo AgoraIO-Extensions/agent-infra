@@ -458,6 +458,60 @@ describe("PostgreSQL API identity store", () => {
 		]);
 	});
 
+	it("rejects grant writes after an application's responsible user changes", async () => {
+		await adminClient`truncate platform.audit_events,
+			platform.agent_principal_grants, platform.platform_api_credentials,
+			platform.platform_applications, platform.agents cascade`;
+		await adminClient`insert into platform.agents (id, authorization_revision)
+			values ('agent_owner_change', 'revision_owner_1')`;
+		await adminClient`insert into platform.platform_applications
+			(id, name, responsible_user_id, status, authorization_revision)
+			values ('manager-owner-change', 'Manager', 'user_before', 'active', 'app-owner-1')`;
+		await adminClient`insert into platform.platform_api_credentials
+			(id, principal_type, principal_id, credential_hash, scopes)
+			values ('credential-owner-change', 'application', 'manager-owner-change',
+				repeat('b', 64), '["agent:manage"]'::jsonb)`;
+		await adminClient`insert into platform.agent_principal_grants
+			(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_owner_change', 'application', 'manager-owner-change',
+				'manage', 'revision_owner_1')`;
+		await adminClient`update platform.platform_applications
+			set responsible_user_id = 'user_after'
+			where id = 'manager-owner-change'`;
+		const principal = {
+			kind: "application" as const,
+			id: "manager-owner-change",
+		};
+		await expect(
+			store.grantAgent({
+				actor: {
+					schemaVersion: 1,
+					userId: "user_before",
+					accountStatus: "active",
+					principal,
+					isAdministrator: false,
+					credential: {
+						credentialId: "credential-owner-change",
+						principal,
+						scopes: ["agent:manage"],
+						expiresAt: null,
+						revokedAt: null,
+					},
+				},
+				agentId: "agent_owner_change",
+				principal: { kind: "application", id: "recipient-owner-change" },
+				grantType: "use",
+				authorizationRevision: "revision_owner_2",
+			}),
+		).rejects.toMatchObject({ code: "resource_unavailable" });
+		expect(
+			await adminClient`
+			select authorization_revision from platform.agents
+			where id = 'agent_owner_change'
+		`,
+		).toEqual([{ authorization_revision: "revision_owner_1" }]);
+	});
+
 	it("rejects application credential transport at the Store boundary", async () => {
 		await adminClient`truncate platform.audit_events,
 			platform.api_credential_delivery_grants, platform.platform_api_credentials,

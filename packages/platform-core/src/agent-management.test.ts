@@ -4,6 +4,7 @@ import { agentManagementV1Conformance } from "./agent-management.conformance.ts"
 import {
 	AgentManagementError,
 	type AgentManagementStateV1,
+	createAgentManagementV1,
 	isAgentAccessAllowedV1,
 	snapshotAgentManagementWritePlanV1,
 } from "./agent-management.ts";
@@ -58,6 +59,64 @@ it("allows an API manage grant to discover without granting use", () => {
 			"discover",
 		),
 	).toBe(false);
+});
+
+it("denies API principals from disabling an Agent", async () => {
+	const principal = { kind: "user" as const, id: "api-user" };
+	const state: AgentManagementStateV1 = {
+		schemaVersion: 1,
+		applicationId: "application_api_disable",
+		agentId: "agent_api_disable",
+		applicantId: "owner_api_disable",
+		status: "available",
+		revision: 1,
+		approvalRevision: 1,
+		decisionReason: null,
+		serviceAvailability: "ready",
+		desiredState: "running",
+		workloadRevision: 1,
+		fence: 1,
+		ownerIds: ["owner_api_disable"],
+		availability: [],
+		failureCode: null,
+		principalGrants: [
+			{
+				principal,
+				grantType: "manage",
+				authorizationRevision: "agent-auth-1",
+				revokedAt: null,
+			},
+		],
+	};
+	const management = createAgentManagementV1({
+		async executeAgentManagementTransaction(_request, decide) {
+			return decide(state);
+		},
+		async resolveAgentAccessState() {
+			return state;
+		},
+	});
+	expect(
+		await management.executeManagementCommand(
+			{
+				schemaVersion: 1,
+				command: "disable_agent",
+				agentId: state.agentId,
+				expectedRevision: state.revision,
+				idempotencyKey: "api-disable",
+				requestId: "request-api-disable",
+				traceId: "trace-api-disable",
+			},
+			{
+				schemaVersion: 1,
+				userId: principal.id,
+				accountStatus: "active",
+				organizationIds: [],
+				isAdministrator: true,
+				principal,
+			},
+		),
+	).toEqual({ outcome: "denied", writePlan: null });
 });
 
 it("snapshots management plans without reading hostile accessors or Proxy traps", async () => {
