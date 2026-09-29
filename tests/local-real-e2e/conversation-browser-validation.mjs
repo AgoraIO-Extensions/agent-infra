@@ -33,8 +33,9 @@ export function currentExecutionEvents(detail, conversationId, executionId) {
 }
 
 export function currentExecutionFrames(events, frames) {
+	if (!Array.isArray(events) || !Array.isArray(frames)) return [];
 	const eventIds = new Set(events.map((event) => event.eventId));
-	return frames.filter((frame) => eventIds.has(frame.id));
+	return frames.filter((frame) => frame && eventIds.has(frame.id));
 }
 
 export function restoredHistoryPreservesEvents(

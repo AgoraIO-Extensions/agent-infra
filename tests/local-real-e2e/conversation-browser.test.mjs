@@ -111,6 +111,11 @@ test("older execution frames cannot prove the submitted execution streamed", () 
 		{ id: "current-event", type: "execution.status", status: "submitted" },
 	];
 	assert.deepEqual(currentExecutionFrames(events, frames), [frames[1]]);
+	assert.deepEqual(currentExecutionFrames(events, null), []);
+	assert.deepEqual(currentExecutionFrames(null, frames), []);
+	assert.deepEqual(currentExecutionFrames(events, [null, ...frames]), [
+		frames[1],
+	]);
 });
 
 test("persisted event validation rejects missing execution IDs in either history subset", () => {
