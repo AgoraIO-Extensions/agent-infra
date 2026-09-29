@@ -390,17 +390,17 @@ export function createWorkloadRuntimeV1(
 		WorkloadReconciliationStateV1,
 		Record<string, boolean>
 	>();
-		function candidateKeyless(state: WorkloadReconciliationStateV1): boolean {
-			if (state.candidate.configuration.source.kind !== "standard") return false;
-			const projection = state.candidate.modelProjection;
-			if (
-				projection &&
-				typeof projection === "object" &&
-				"schemaVersion" in projection
-			)
-				return projection.schemaVersion === 4;
-			return options.runtimeModelVersion === 4;
-		}
+	function candidateKeyless(state: WorkloadReconciliationStateV1): boolean {
+		if (state.candidate.configuration.source.kind !== "standard") return false;
+		const projection = state.candidate.modelProjection;
+		if (
+			projection &&
+			typeof projection === "object" &&
+			"schemaVersion" in projection
+		)
+			return projection.schemaVersion === 4;
+		return options.runtimeModelVersion === 4;
+	}
 
 	function createAdapter(
 		recordCapabilities: (value: Record<string, boolean>) => void = () => {},
