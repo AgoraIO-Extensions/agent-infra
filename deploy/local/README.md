@@ -120,6 +120,9 @@ bash deploy/local/platform.sh status
 模型出站由 Worker 唯一调谐的 `modelEgress` 与 `dnsEgress` 配置：只允许固定 IP 或指定
 namespace/Pod 标签和端口，缺省拒绝全部出站。不增加另一条 allow-all NetworkPolicy。
 Worker 预检与 Agent 模型调用都必须在真实网络上验证。
+隔离 kind 的合成 A/B HTTPS 目标、测试 CA 和脱敏计数回执可通过
+[受控 Relay 探针](relay-probe.md)准备；它只为相同 Pod/Profile 的正负例提供目标，
+不能替代真实 Provider 或 Connection 验收。
 
 停止时先通过 Platform 正常停止 Agent 并确认调谐完成。脚本先关闭 Web/API 写入口，
 把 Worker 缩至零副本并等待退出，再核对 namespace 中的 Agent StatefulSet 已缩至零副本
