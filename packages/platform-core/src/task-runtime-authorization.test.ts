@@ -157,6 +157,34 @@ function harness() {
 const signal = () => new AbortController().signal;
 
 describe("task Runtime authorization Core use case", () => {
+	it("denies an application boundary without matching current application provenance", async () => {
+		const h = harness();
+		const boundary: TaskAuthorizationBoundaryV1 = {
+			...h.boundary,
+			principal: { kind: "application", id: h.claim.actorId },
+			identityRevision: "application-7",
+			accessSources: [{ kind: "application", applicationId: h.claim.actorId }],
+		};
+		if (!h.record) throw new Error("Missing test record");
+		h.setRecord({ ...h.record, boundary });
+		expect(await h.useCase.authorizeClaim(h.claim, signal())).toEqual({
+			outcome: "denied",
+		});
+		h.setRecord({
+			...h.record,
+			boundary,
+			application: {
+				schemaVersion: 1,
+				applicationId: "other-application",
+				accountStatus: "active",
+				authorizationRevision: "application-7",
+			},
+		});
+		expect(await h.useCase.authorizeClaim(h.claim, signal())).toEqual({
+			outcome: "denied",
+		});
+		expect(h.ports.recordControl).not.toHaveBeenCalled();
+	});
 	it("rechecks an application against current identity and use grant without a user lookup", async () => {
 		const h = harness();
 		const principal = { kind: "application" as const, id: "caller-app" };
@@ -199,6 +227,9 @@ describe("task Runtime authorization Core use case", () => {
 		h.ports.resolveCurrentUser.mockRejectedValue(
 			new Error("user lookup forbidden"),
 		);
+		expect(
+			await h.useCase.authorizeClaim(context.claim, signal()),
+		).toMatchObject({ outcome: "allowed", context: { principal } });
 		expect(
 			(await h.useCase.current(context, h.state, "turn.submit", signal()))
 				.authority.purpose,

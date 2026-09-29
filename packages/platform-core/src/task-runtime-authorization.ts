@@ -10,6 +10,7 @@ import {
 	type CurrentTaskApplicationV1,
 	type CurrentTaskUserV1,
 	isTaskAuthorizationCurrentV1,
+	parseCurrentTaskApplicationV1,
 	parseTaskAuthorizationBoundaryV1,
 	type TaskAuthorizationBoundaryV1,
 	type TaskPrincipalV1,
@@ -196,6 +197,16 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			boundary.agentAuthorizationRevision !== claim.authorizationRevision
 		)
 			denied("TASK_AUTHORIZATION_BINDING_INVALID");
+		if (boundary.principal.kind === "application") {
+			let application: CurrentTaskApplicationV1;
+			try {
+				application = parseCurrentTaskApplicationV1(record.application);
+			} catch {
+				denied("TASK_AUTHORIZATION_PROVENANCE_UNAVAILABLE");
+			}
+			if (application.applicationId !== boundary.principal.id)
+				denied("TASK_AUTHORIZATION_BINDING_INVALID");
+		}
 		return { ...record, boundary };
 	}
 	async function recordFor(
