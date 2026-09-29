@@ -89,6 +89,9 @@ function EditAgentApplicationRoute() {
 			</main>
 		);
 	}
+	if (deployment.isPending) {
+		return <p aria-live="polite">正在读取部署选项…</p>;
+	}
 	const error =
 		submission.isError && submission.error instanceof Error
 			? submission.error
