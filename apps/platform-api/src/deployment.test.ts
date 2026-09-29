@@ -805,7 +805,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			fetch(`${origin}/api/v1${path}`, {
 				method: "POST",
 				headers: {
-					authorization: sessionKeys[user],
+					cookie: `session=${sessionKeys[user]}`,
 					"content-type": "application/json",
 					"Idempotency-Key": key,
 				},
