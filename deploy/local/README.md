@@ -20,6 +20,13 @@ API 专属目录至少包含 `platform-api.mjs`。该模块导出
 [`createProductionPlatformApiAssemblyInputV1`](../../apps/platform-api/src/deployment.ts)。
 容器内可从 `../dist/index.mjs` 导入工厂，数据库 URL 取 `PLATFORM_DATABASE_URL`。部署输入为：
 
+使用第一方 LDAP 浏览器登录时，同一模块还须导出 `browserAuth`。用
+`createPostgresLdapBrowserDeployment()` 创建一次并将其 `identity` 传入装配输入、
+`browserAuth` 作为模块导出；两者因而共用 LDAP Adapter 和 Platform PostgreSQL
+会话表。API 只将 `/auth/login` 和 `/auth/logout` 交给此处理器；处理器失败返回
+无正文 503。先执行 Platform 增量迁移；跨 API 副本的到期和撤销由 PostgreSQL
+Store 执行，测试用内存 Store 不能作为正式部署配置。
+
 | 输入 | 来源和要求 |
 | --- | --- |
 | `identity`、`loadAuthorityContext` | 获准身份服务的真实 Adapter 和当前目录查询；每次敏感操作重新解析，不能固定管理员或信任浏览器身份字段 |
