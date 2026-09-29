@@ -951,6 +951,17 @@ test("retryable management reads recover through explicit browser actions", asyn
 	api.recoverApplications();
 	await page.getByRole("button", { name: "重新加载申请" }).click();
 	await expect(page.getByRole("link", { name: "申请详情" })).toBeVisible();
+	api.unavailableAgentList();
+	await page.reload();
+	await page.getByRole("tab", { name: "已创建 Agent" }).click();
+	await expect(page.getByRole("alert")).toContainText(
+		"暂时无法读取你管理的 Agent，请稍后重试。",
+	);
+	api.recoverAgentList();
+	await page.getByRole("button", { name: "重新加载已创建 Agent" }).click();
+	await expect(
+		page.getByRole("list", { name: "我管理的 Agent" }),
+	).toContainText("Release assistant");
 
 	api.unavailableAgentDetail();
 	await page.goto("/agents/agent-pilot-1");
@@ -961,6 +972,23 @@ test("retryable management reads recover through explicit browser actions", asyn
 	await page.getByRole("button", { name: "重新加载 Agent" }).click();
 	await expect(
 		page.getByRole("heading", { name: "Release assistant" }),
+	).toBeVisible();
+});
+
+test("configuration reads recover through the explicit browser action", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unavailableAgentDetail();
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(
+		page.getByRole("heading", { name: "配置暂不可用" }),
+	).toBeVisible();
+	await expect(page.getByRole("alert")).toHaveText("请稍后重试。");
+	api.recoverAgentDetail();
+	await page.getByRole("button", { name: "重新加载配置" }).click();
+	await expect(
+		page.getByRole("heading", { name: "配置与生命周期" }),
 	).toBeVisible();
 });
 
