@@ -358,6 +358,10 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		rotated: "synthetic-agent-execution-key-k2",
 		second: "synthetic-user-second-personal-key",
 	};
+	const browserSessionCookies = {
+		"user-cli": "worker_session=controlled-browser-first",
+		"user-second": "worker_session=controlled-browser-second",
+	};
 	const apiCredentials = {
 		"user-cli": "synthetic-user-cli-api-credential",
 		"user-second": "synthetic-user-second-api-credential",
@@ -1247,9 +1251,9 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 				fetch(`${apiOrigin}${path}`, {
 					method: "POST",
 					headers: {
-						authorization: keyedRuntime
-							? `Bearer ${apiCredentials[userId]}`
-							: `controlled-${userId}`,
+						...(keyedRuntime
+							? { authorization: `Bearer ${apiCredentials[userId]}` }
+							: { cookie: browserSessionCookies[userId] }),
 						"content-type": "application/json",
 						"Idempotency-Key": key,
 					},
@@ -1297,13 +1301,10 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 				imageRepository: "registry.example.test/agents/codex",
 				identity: {
 					resolve: async (request) => {
-						const token = request.headers.get("authorization");
-						const credentialUser = Object.entries(apiCredentials).find(
-							([, credential]) => credential === token,
+						const cookie = request.headers.get("cookie");
+						const userId = Object.entries(browserSessionCookies).find(
+							([, session]) => session === cookie,
 						)?.[0];
-						const userId = token?.startsWith("controlled-")
-							? token.slice("controlled-".length)
-							: credentialUser;
 						if (!userId || !["user-cli", "user-second"].includes(userId))
 							return null;
 						return {
@@ -1385,6 +1386,39 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 				log: () => {},
 			});
 			apiOrigin = `http://127.0.0.1:${(apiRunning.server.address() as AddressInfo).port}`;
+			if (!keyedRuntime) {
+				// Browser admission requires a server-resolved session. An API header
+				// must never fall back to that session, even when its cookie is valid.
+				const rejectedBrowserHeaders: Record<string, string>[] = [
+					{},
+					{ cookie: "worker_session=unregistered" },
+					{
+						cookie: browserSessionCookies["user-cli"],
+						authorization: "controlled-user-cli",
+					},
+					{
+						cookie: browserSessionCookies["user-cli"],
+						authorization: "Bearer invalid-browser-api-credential",
+					},
+				];
+				for (const [index, headers] of rejectedBrowserHeaders.entries()) {
+					const rejected = await fetch(
+						`${apiOrigin}/api/v1/agents/${desired.agentId}/conversations`,
+						{
+							method: "POST",
+							headers: {
+								...headers,
+								"content-type": "application/json",
+								"Idempotency-Key": `worker-browser-auth-negative-${index}`,
+							},
+							body: JSON.stringify({ schemaVersion: 1 }),
+						},
+					);
+					const body = await rejected.json();
+					expect(rejected.status, JSON.stringify(body)).toBe(401);
+					expect(body).toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
+				}
+			}
 			return admitHttp("user-cli", "worker-http");
 		};
 		if (!realCodexE2e && !packagedV4Fake) {
@@ -1702,7 +1736,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 		if (!realCodexE2e) {
 			const response = await fetch(
 				`${apiOrigin}/api/v2/conversations/${first.conversationId}/executions/${first.executionId}`,
-				{ headers: { authorization: "controlled-user-cli" } },
+				{ headers: { cookie: browserSessionCookies["user-cli"] } },
 			);
 			const body = await response.json();
 			expect(response.status, JSON.stringify(body)).toBe(200);
@@ -2155,7 +2189,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 			assertPersistedOperations(task.events);
 			const webRead = async (path: string) => {
 				const response = await fetch(`${apiOrigin}${path}`, {
-					headers: { authorization: "controlled-user-cli" },
+					headers: { cookie: browserSessionCookies["user-cli"] },
 				});
 				const body = await response.json();
 				expect(response.status, JSON.stringify(body)).toBe(404);
