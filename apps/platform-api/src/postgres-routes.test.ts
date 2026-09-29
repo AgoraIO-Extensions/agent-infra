@@ -606,6 +606,38 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				(item) => AgentProjectionV2Schema.safeParse(item).success,
 			),
 		).toBe(true);
+		const attackerV2Application = await app.request(
+			"/api/v2/agent-applications/application-v2",
+			{ headers: requestHeaders("attacker") },
+		);
+		expect(attackerV2Application.status).toBe(404);
+		const attackerV2Approval = await app.request(
+			"/api/v2/admin/agent-applications/application-v2/decision",
+			{
+				method: "POST",
+				headers: {
+					...requestHeaders("attacker", "attacker-approve-v2"),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ schemaVersion: 1, decision: "approve" }),
+			},
+		);
+		expect(attackerV2Approval.status).toBe(403);
+		const attackerV2Configuration = await app.request(
+			"/api/v2/agents/agent-v2/configuration",
+			{
+				method: "PUT",
+				headers: {
+					...requestHeaders("attacker", "attacker-configuration-v2"),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					schemaVersion: 2,
+					environment: [{ name: "LOG_LEVEL", value: "attacker" }],
+				}),
+			},
+		);
+		expect(attackerV2Configuration.status).toBe(404);
 
 		const createdConversation = await app.request(
 			"/api/v1/agents/agent-run/conversations",
