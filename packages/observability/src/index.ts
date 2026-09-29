@@ -7,6 +7,8 @@ import {
 	resourceFromAttributes,
 } from "@opentelemetry/resources";
 import {
+	AggregationTemporality,
+	InstrumentType,
 	MeterProvider,
 	PeriodicExportingMetricReader,
 } from "@opentelemetry/sdk-metrics";
@@ -66,6 +68,21 @@ export interface OperationalEvent {
 	readonly attemptRef?: string;
 }
 
+export const resourceKinds = [
+	"sse_connections",
+	"sse_pending_events",
+	"task_waiting",
+	"outbox_pending",
+	"postgres_pool_active",
+	"postgres_pool_idle",
+	"postgres_pool_waiting",
+] as const;
+
+export interface ResourceSnapshot {
+	readonly kind: (typeof resourceKinds)[number];
+	readonly value: number;
+}
+
 const services = [
 	"platform-api",
 	"platform-worker",
@@ -87,6 +104,7 @@ const outcomes = new Set<OperationalOutcome>([
 ]);
 const stages = new Set<string>(operationalStages);
 const codes = new Set<string>(operationalCodes);
+const knownResourceKinds = new Set<string>(resourceKinds);
 const identifier =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const operationIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -143,6 +161,7 @@ export function startObservability(options: ObservabilityOptions) {
 		otlpEndpoint !== undefined ? signalUrl(otlpEndpoint, "traces") : undefined;
 	const metricUrl =
 		otlpEndpoint !== undefined ? signalUrl(otlpEndpoint, "metrics") : undefined;
+	const metricInterval = metricIntervalMs ?? 5000;
 	const output = configuredOutput ?? process.stdout;
 	let backpressured = false;
 	let closingOutput = false;
@@ -156,6 +175,10 @@ export function startObservability(options: ObservabilityOptions) {
 	let captureFailures = 0;
 	let exportFailures = 0;
 	let lastExportFailureAt: string | undefined;
+	const resourceValues = new Map<
+		ResourceSnapshot["kind"],
+		{ value: number; sampledAt: number }
+	>();
 	const onDrain = () => {
 		backpressured = false;
 	};
@@ -236,6 +259,12 @@ export function startObservability(options: ObservabilityOptions) {
 			}
 		}
 		class MetricExporter extends OTLPMetricExporter {
+			override selectAggregationTemporality(instrumentType: InstrumentType) {
+				// Cumulative storage retains expired observable points indefinitely.
+				return instrumentType === InstrumentType.OBSERVABLE_GAUGE
+					? AggregationTemporality.DELTA
+					: super.selectAggregationTemporality(instrumentType);
+			}
 			override export(
 				...[data, callback]: Parameters<OTLPMetricExporter["export"]>
 			) {
@@ -285,8 +314,8 @@ export function startObservability(options: ObservabilityOptions) {
 				readers: [
 					new PeriodicExportingMetricReader({
 						exporter: metricExporter,
-						exportIntervalMillis: metricIntervalMs ?? 5000,
-						exportTimeoutMillis: Math.min(metricIntervalMs ?? 5000, 2000),
+						exportIntervalMillis: metricInterval,
+						exportTimeoutMillis: Math.min(metricInterval, 2000),
 					}),
 				],
 			}),
@@ -301,8 +330,49 @@ export function startObservability(options: ObservabilityOptions) {
 		unit: "ms",
 		description: "Observed platform stage duration",
 	});
+	meter
+		?.createObservableGauge("agent_platform_resource_count", {
+			unit: "1",
+			description: "Latest observed platform resource count",
+		})
+		.addCallback((result) => {
+			if (state !== "active") return;
+			try {
+				const now = performance.now();
+				for (const [kind, snapshot] of resourceValues) {
+					if (now - snapshot.sampledAt >= metricInterval * 3) {
+						resourceValues.delete(kind);
+						continue;
+					}
+					try {
+						result.observe(snapshot.value, { service, kind });
+					} catch {
+						captureFailures++;
+					}
+				}
+			} catch {
+				captureFailures++;
+			}
+		});
 	let closing: Promise<void> | undefined;
 	return {
+		observeResource(snapshot: ResourceSnapshot) {
+			if (state !== "active") return;
+			try {
+				const { kind, value } = snapshot;
+				if (
+					!knownResourceKinds.has(kind) ||
+					!Number.isSafeInteger(value) ||
+					value < 0
+				) {
+					invalidRecords++;
+					return;
+				}
+				resourceValues.set(kind, { value, sampledAt: performance.now() });
+			} catch {
+				captureFailures++;
+			}
+		},
 		record(event: OperationalEvent) {
 			if (state !== "active") {
 				droppedLogs++;
@@ -373,6 +443,7 @@ export function startObservability(options: ObservabilityOptions) {
 		close() {
 			closing ??= (async () => {
 				state = "closing";
+				resourceValues.clear();
 				closingOutput = true;
 				output.off("drain", onDrain);
 				if (pendingWrites === 0 && !awaitingWriteError)
