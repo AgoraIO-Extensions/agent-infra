@@ -9,6 +9,14 @@
 		".": {
 			"types": "./dist/index.d.mts",
 			"import": "./dist/index.mjs"
+		},
+		"./http": {
+			"types": "./dist/http.d.mts",
+			"import": "./dist/http.mjs"
+		},
+		"./worker": {
+			"types": "./dist/worker.d.mts",
+			"import": "./dist/worker.mjs"
 		}
 	},
 	"files": [
@@ -20,6 +28,7 @@
 		"test": "pnpm build && vitest run src"
 	},
 	"dependencies": {
+		"@agent-infra/platform-core": "workspace:*",
 		"@opentelemetry/api": "1.9.1",
 		"@opentelemetry/core": "2.11.0",
 		"@opentelemetry/exporter-metrics-otlp-proto": "0.222.0",
@@ -27,7 +36,8 @@
 		"@opentelemetry/resources": "2.11.0",
 		"@opentelemetry/sdk-metrics": "2.11.0",
 		"@opentelemetry/sdk-trace-base": "2.11.0",
-		"pino": "10.3.1"
+		"pino": "10.3.1",
+		"hono": "^4.12.32"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",

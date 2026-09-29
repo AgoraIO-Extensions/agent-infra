@@ -16,4 +16,16 @@
 
 `record` 只记录调用方已确认的阶段结果。`durationMs` 进入耗时直方图；当前 Span 在采集时创建并结束，其自身时长不是该阶段的实际耗时。业务 `traceId` 只是受控关联属性，尚未恢复持久工作项的 OpenTelemetry 上下文或建立跨进程 Span link。真实 API/Worker 装配、持久重放去重和全链路关联仍由 #441 交付。
 
+## HTTP 与已持久事件 Adapter
+
+`@agent-infra/observability/http` 的 `createHttpObservability(telemetry)` 是 Hono middleware，须在路由前注册。每个请求生成独立的 UUID `requestId`、`traceId`；`currentRequestMetadata()` 在该请求的 await 链内返回同一只读上下文，请求结束后及其后续异步任务返回 `undefined`。接入方的 `requestMetadata` 须消费该上下文，不能另行生成或采信外部 header。
+
+HTTP 只记录一次响应头建立阶段的结果与实测耗时：2xx/3xx 为 `completed`，4xx 为 `rejected`，5xx 或未被应用处理的异常为 `failed`。不读取 URL、header、body 或原始 error。流式响应返回后的传输耗时、连接数、积压与断流须由实际流入口另行采样；本 middleware 不声称这些数据已获得。
+
+`@agent-infra/observability/worker` 的 `createObservedConversationEvents({ transaction, telemetry }, options)` 保持 Core `ConversationEventUseCaseV1` 的输入、决定和错误契约。它复用原事务 Port，由 Core 校验输入、既有事实及持久返回值后才观测。每个 `accepted` 记录一次 `result_persist/completed`，只表示事件保存已确认，不表示任务业务成功；`replayed`、`stale` 不重复记录。保存或持久返回值确认失败记录受限 `PERSISTENCE_UNAVAILABLE`，再抛出原 Core 错误；采集失败不改变原决定、事务或 cursor ACK。
+
+模型/工具只记录同一事务历史中该 operation/attempt 的首个持久 `completed`、`failed` 或 `unknown`，不在内存中新增去重权威。恢复确认未知结果、Connection 元数据修订及同事件重放不再计数；合法新 attempt 单独计数。`intent`、`started` 不冒充终态，耗时只使用事实中已提供的值；模型用量、未获得的时间、原始故障、工具/模型名与 Connection 内容均不补值或进入观测输出。
+
+Issue #962 提供这些消费者 Adapter 及本地 fake 接入证据。实际进程装配、collector、四模板及 Connection 验收、跨进程 Span link、完整 Token 指标、SSE/资源采样、查询与告警仍属于 #441 的后续交付。
+
 Trace 队列最多保留 512 个 Span，每批最多导出 32 个；Trace 和 Metric 各最多并发一个 OTLP 请求，导出超时为两秒，`close()` 最多等待五秒。关闭超时后不再发起新的导出，状态保持 `closing`，直到 SDK shutdown 真正结束才变为 `closed`；此前已发出的请求仍受各自的导出超时约束。日志目的地阻塞或报错时，后续日志会丢弃并计入 `status().droppedLogs`。同步采集异常计入 `status().captureFailures`，导出回调只记录失败次数和时间，不记录原始错误。故障计数需要独立的进程健康入口；故障中的 exporter 无法可靠导出自己的故障指标。
