@@ -129,20 +129,24 @@ function probe(port, tls) {
 }
 
 async function startWeb(port, target, tlsFiles) {
-	const child = spawn("pnpm", ["dev:web", "--env-mode=loose", "--", "--port", String(port)], {
-		cwd: root,
-		detached: true,
-		stdio: ["ignore", "pipe", "pipe"],
-		env: {
-			...process.env,
-			PLATFORM_API_PROXY_TARGET: target,
-			PLATFORM_WEB_TLS_CERT_FILE: tlsFiles?.cert ?? "",
-			PLATFORM_WEB_TLS_KEY_FILE: tlsFiles?.key ?? "",
-			VITE_PLATFORM_LOGIN_URL: "/auth/login",
-			VITE_PLATFORM_LOGOUT_URL: "/auth/logout",
-			VITE_PLATFORM_DEVELOPMENT_MODE: "",
+	const child = spawn(
+		"pnpm",
+		["dev:web", "--env-mode=loose", "--", "--port", String(port)],
+		{
+			cwd: root,
+			detached: true,
+			stdio: ["ignore", "pipe", "pipe"],
+			env: {
+				...process.env,
+				PLATFORM_API_PROXY_TARGET: target,
+				PLATFORM_WEB_TLS_CERT_FILE: tlsFiles?.cert ?? "",
+				PLATFORM_WEB_TLS_KEY_FILE: tlsFiles?.key ?? "",
+				VITE_PLATFORM_LOGIN_URL: "/auth/login",
+				VITE_PLATFORM_LOGOUT_URL: "/auth/logout",
+				VITE_PLATFORM_DEVELOPMENT_MODE: "",
+			},
 		},
-	});
+	);
 	let output = "";
 	for (const stream of [child.stdout, child.stderr]) {
 		stream.on("data", (data) => {
