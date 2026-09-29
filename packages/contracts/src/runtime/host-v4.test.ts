@@ -569,8 +569,11 @@ it("publishes the immutable V4 operation digest input for recovery stores", () =
 	const digestInput = runtimeOperationDigestInputV4(request);
 	expect(digestInput).toMatchObject({
 		kind: "submit-turn",
+		principal: request.principal,
+		channelId: request.channelId,
 		executionId: request.executionId,
 		executionSource: request.executionSource,
+		hostSessionRef: request.hostSessionRef,
 		keyBinding: request.keyBinding,
 		operation: {
 			kind: request.operation.kind,
@@ -583,6 +586,18 @@ it("publishes the immutable V4 operation digest input for recovery stores", () =
 		runtimeOperationDigestInputV4({
 			...request,
 			keyBinding: { ...request.keyBinding, version: 2 },
+		}),
+	).not.toEqual(digestInput);
+	expect(
+		runtimeOperationDigestInputV4({
+			...request,
+			principal: { kind: "user", id: "bob" },
+		}),
+	).not.toEqual(digestInput);
+	expect(
+		runtimeOperationDigestInputV4({
+			...request,
+			channelId: "wecom",
 		}),
 	).not.toEqual(digestInput);
 
@@ -599,6 +614,7 @@ it("publishes the immutable V4 operation digest input for recovery stores", () =
 	});
 	const supplementDigestInput = runtimeOperationDigestInputV4(supplement);
 	expect(supplementDigestInput.kind).toBe("supplement");
+	expect(supplementDigestInput.hostSessionRef).toBe("session-1");
 	expect(supplementDigestInput).not.toHaveProperty("selection");
 	expect(supplementDigestInput.operation).toEqual({
 		kind: "message",
