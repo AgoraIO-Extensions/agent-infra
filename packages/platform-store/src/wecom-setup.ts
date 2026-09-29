@@ -150,6 +150,13 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 				await sql`select 1 from platform.wecom_setup_sessions s join platform.agents a on a.id=s.agent_id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
     where s.bot_id=${input.botId} and s.session_id!=${session.sessionId} and ((s.status='verifying' and s.expires_at>clock_timestamp()) or (s.agent_id!=${session.agentId} and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind',s.kind,'bindingReference',s.session_id))))`;
 			if (conflict) return false;
+			const [foreignBinding] =
+				await sql`select 1 from platform.wecom_connections w join platform.agents a on a.id=w.agent_id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
+    where w.bot_id=${input.botId} and w.agent_id<>${session.agentId}
+    and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference',w.binding_reference))
+    and not exists(select 1 from jsonb_array_elements(c.configuration->'channels') channel where channel->>'kind'='wecom_bot' and channel->>'bindingReference'=w.binding_reference and channel->>'enabled'='false')
+    for share of a`;
+			if (foreignBinding) return false;
 			const rows =
 				await sql`update platform.wecom_setup_sessions s set bot_id=${input.botId},application=${input.application ? sql.json(input.application) : null},encrypted_callback=${input.encryptedCallback ? sql.json(input.encryptedCallback as postgres.JSONValue) : null},encrypted_credential=${sql.json(credential as unknown as postgres.JSONValue)},status='verifying'
     from platform.agents a where s.session_id=${session.sessionId} and s.agent_id=${session.agentId} and s.actor_id=${session.actorId} and s.state_digest=${session.stateDigest} and s.kind=${session.kind ?? "wecom_bot"} and s.status='awaiting_input' and s.expires_at>clock_timestamp()

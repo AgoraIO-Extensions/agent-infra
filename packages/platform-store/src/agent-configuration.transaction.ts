@@ -237,6 +237,15 @@ export class PostgresAgentConfigurationTransactionV1
 					await transaction.execute(
 						sql`select pg_advisory_xact_lock(hashtextextended(${`wecom-setup:${candidate.botId}`},0))`,
 					);
+					const foreignBinding = await transaction.execute(sql`
+						select 1 from ${wecomConnections} w join ${agents} a on a.id=w.agent_id
+						join ${agentConfigurationRevisions} c on c.agent_id=a.id and c.revision=a.current_configuration_revision
+						where w.bot_id=${candidate.botId} and w.agent_id<>${plan.agentId}
+						and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference',w.binding_reference))
+						and not exists(select 1 from jsonb_array_elements(c.configuration->'channels') channel where channel->>'kind'='wecom_bot' and channel->>'bindingReference'=w.binding_reference and channel->>'enabled'='false')
+						for share of a
+					`);
+					if (foreignBinding.length) return { outcome: "stale" as const };
 					if (wecom.kind === "connection") {
 						const [connection] = await transaction
 							.select({ botId: wecomConnections.botId })

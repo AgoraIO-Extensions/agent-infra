@@ -56,6 +56,45 @@ it("fences competing replicas and invalidates an owner after expiry or unbinding
 	}
 }, 30_000);
 
+it("does not transfer an expired bot lease while another Agent still binds it", async () => {
+	const db = await startPostgresTestDatabase("wecom-cross-agent-lease");
+	const sql = postgres(db.databaseUrl);
+	const store = new PostgresWecomConnectionsV1(db);
+	try {
+		await migratePlatformDatabase(db);
+		await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values ('agent-a',1,'revision'),('agent-b',1,'revision')`;
+		for (const agentId of ["agent-a", "agent-b"]) {
+			await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,created_at,configuration) values (${agentId},1,'fixture',now(),${sql.json({ schemaVersion: 2, agentId, revision: 1, channels: [{ kind: "wecom_bot", bindingReference: `binding-${agentId}` }] })})`;
+		}
+		const first = await store.claim({
+			agentId: "agent-a",
+			bindingReference: "binding-agent-a",
+			botId: "shared-bot",
+			holderId: "worker-a",
+		});
+		if (!first) throw new Error("Missing first lease");
+		await sql`update platform.wecom_connections set lease_until=now()-interval '1 second' where bot_id='shared-bot'`;
+		const other = {
+			agentId: "agent-b",
+			bindingReference: "binding-agent-b",
+			botId: "shared-bot",
+			holderId: "worker-b",
+		};
+		expect(await store.claim(other)).toBeNull();
+		expect(
+			(
+				await sql`select agent_id from platform.wecom_connections where bot_id='shared-bot'`
+			)[0]?.agent_id,
+		).toBe("agent-a");
+		await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}','[]'::jsonb) where agent_id='agent-a'`;
+		expect(await store.claim(other)).not.toBeNull();
+	} finally {
+		await store.close();
+		await sql.end();
+		await db.stop();
+	}
+}, 30_000);
+
 it("does not let an expired setup probe terminate its replacement", async () => {
 	const db = await startPostgresTestDatabase("wecom-setup-fence");
 	const sql = postgres(db.databaseUrl);

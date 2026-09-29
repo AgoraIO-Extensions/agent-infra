@@ -27,6 +27,7 @@ it.each([
 	"replacement-success",
 	"replacement-wrong-secret",
 	"replacement-commit-unavailable",
+	"cross-agent-deployed-bot",
 ] as const)(
 	"manual onboarding %s uses Worker authentication and the existing configuration authority",
 	async (mode) => {
@@ -179,6 +180,21 @@ it.each([
 					},
 					"owner",
 				);
+			if (mode === "cross-agent-deployed-bot") {
+				await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values ('other-agent',1,'authorization')`;
+				await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values ('other-agent',1,'template_01',${sql.json({ ...configuration, agentId: "other-agent", channels: [{ kind: "wecom_bot", bindingReference: "deployed-binding" }] } as unknown as postgres.JSONValue)},now())`;
+				await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status) values ('fixture-bot','other-agent','deployed-binding','old-worker',1,now()-interval '1 second','disconnected')`;
+				await expect(submit()).rejects.toThrow("stale");
+				expect((await store.read(session.sessionId))?.status).toBe(
+					"awaiting_input",
+				);
+				expect(
+					(
+						await sql`select agent_id from platform.wecom_connections where bot_id='fixture-bot'`
+					)[0]?.agent_id,
+				).toBe("other-agent");
+				return;
+			}
 			if (mode === "concurrent-submit") {
 				const results = await Promise.allSettled([submit(), submit()]);
 				expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);

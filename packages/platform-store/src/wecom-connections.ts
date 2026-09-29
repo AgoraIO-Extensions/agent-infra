@@ -34,6 +34,12 @@ export class PostgresWecomConnectionsV1 {
    where a.id=${input.agentId} and ${admissible(this.#sql, input)}
    on conflict (bot_id) do update set agent_id=excluded.agent_id,binding_reference=excluded.binding_reference,holder_id=excluded.holder_id,fence=platform.wecom_connections.fence+1,lease_until=excluded.lease_until,status='verifying'
    where platform.wecom_connections.lease_until<=clock_timestamp() and platform.wecom_connections.fence<9007199254740991
+   and (platform.wecom_connections.agent_id=excluded.agent_id or not exists (
+     select 1 from platform.agents a join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
+     where a.id=platform.wecom_connections.agent_id
+     and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference',platform.wecom_connections.binding_reference))
+     and not exists(select 1 from jsonb_array_elements(c.configuration->'channels') channel where channel->>'kind'='wecom_bot' and channel->>'bindingReference'=platform.wecom_connections.binding_reference and channel->>'enabled'='false')
+   ))
    returning fence,lease_until`;
 		const row = rows[0];
 		return row
