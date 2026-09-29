@@ -468,6 +468,7 @@ export type GitHubProfileRefreshCandidate = CredentialForExecution & {
 
 export type GitHubOAuthAuthorization = {
 	codeChallenge: string;
+	requestedScopes?: readonly string[];
 	state: string;
 };
 
@@ -718,11 +719,11 @@ export interface ConnectionRepository {
 		principalId: string;
 		providerId: string;
 		requestId?: string;
-	}): Promise<void>;
+	}): Promise<{ requiredScopes: readonly string[] }>;
 	validatePersonalReconnect?(input: {
 		connectionId: string;
 		principalId: string;
-	}): Promise<{ providerId: string }>;
+	}): Promise<{ providerId: string; requiredScopes: readonly string[] }>;
 	storeGithubOAuthCredential(input: {
 		accessRequestId?: string;
 		expectedConnectionId?: string;
@@ -1762,6 +1763,7 @@ export class ConnectionApplicationService {
 		}
 		const oauth = this.requireProviderOAuth(providerId);
 		await this.repository.ensurePrincipal({ principalId });
+		let requestedScopes: readonly string[] | undefined;
 		if (reconnectConnectionId) {
 			const target = await this.repository.validatePersonalReconnect?.({
 				principalId,
@@ -1772,13 +1774,25 @@ export class ConnectionApplicationService {
 					"FORBIDDEN",
 					"Reconnect target is unavailable",
 				);
+			requestedScopes = target.requiredScopes;
 		} else {
-			await this.repository.validatePersonalConnectRequest({
+			const permit = await this.repository.validatePersonalConnectRequest({
 				principalId,
 				providerId,
 				...(accessRequestId ? { requestId: accessRequestId } : {}),
 			});
+			requestedScopes = permit.requiredScopes;
 		}
+		if (
+			providerId === "github" &&
+			(!requestedScopes?.length ||
+				requestedScopes.some((scope) => !scope.trim()) ||
+				new Set(requestedScopes).size !== requestedScopes.length)
+		)
+			throw new ConnectionError(
+				"FORBIDDEN",
+				"Approved OAuth scopes are unavailable",
+			);
 		const state = randomToken();
 		const codeVerifier = randomToken();
 		const codeChallenge = base64UrlHash(codeVerifier);
@@ -1795,6 +1809,7 @@ export class ConnectionApplicationService {
 			authorizationUrl: oauth.getAuthorizationUrl({
 				codeChallenge,
 				redirectUri,
+				...(providerId === "github" ? { requestedScopes } : {}),
 				state,
 			}),
 		};

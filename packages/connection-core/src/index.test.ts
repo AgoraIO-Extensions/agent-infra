@@ -177,6 +177,7 @@ class MemoryRepository implements ConnectionRepository {
 	directInvocation = direct;
 	credentialAccessToken = "test-secret";
 	connectValidationError?: ConnectionError;
+	readonly approvedScopes = new Map<string, readonly string[]>();
 	readonly connectValidations: Array<{
 		principalId: string;
 		providerId: string;
@@ -196,6 +197,12 @@ class MemoryRepository implements ConnectionRepository {
 	}) {
 		this.connectValidations.push(input);
 		if (this.connectValidationError) throw this.connectValidationError;
+		const key = `${input.principalId}:${input.requestId ?? ""}`;
+		if (this.approvedScopes.size && !this.approvedScopes.has(key))
+			throw new ConnectionError("FORBIDDEN", "Connect approval is required");
+		return {
+			requiredScopes: this.approvedScopes.get(key) ?? ["read:user", "repo"],
+		};
 	}
 	async authorizeConnectionAdministration() {
 		return false;
@@ -348,7 +355,7 @@ class MemoryRepository implements ConnectionRepository {
 			input.principalId !== "alice"
 		)
 			throw new ConnectionError("FORBIDDEN", "Reconnect target is unavailable");
-		return { providerId: "github" };
+		return { providerId: "github", requiredScopes: ["read:user", "repo"] };
 	}
 	async storeProviderCredential(input: {
 		accessRequestId?: string;
@@ -1288,6 +1295,75 @@ describe("Connection application service", () => {
 			expectedConnectionId: "connection-oauth",
 			externalAccount: "alice-github",
 		});
+	});
+
+	it("binds personal GitHub OAuth scopes to each approved request without widening reconnect or shared flow", async () => {
+		const repository = new MemoryRepository();
+		repository.approvedScopes.set("alice:request-read", ["read:user"]);
+		repository.approvedScopes.set("bob:request-write", ["read:user", "repo"]);
+		repository.approvedScopes.set("bob:request-empty", []);
+		const oauth: GitHubOAuthProvider = {
+			getAuthorizationUrl: ({ requestedScopes, state }) => {
+				const url = new URL("https://github.test/authorize");
+				url.searchParams.set("state", state);
+				url.searchParams.set(
+					"scope",
+					requestedScopes?.join(" ") ?? "shared-default",
+				);
+				return url.toString();
+			},
+			exchangeCode: async () => {
+				throw new Error("not used");
+			},
+			refresh: async () => {
+				throw new Error("not used");
+			},
+		};
+		const service = new ConnectionApplicationService(
+			repository,
+			{ execute: async () => ({}) },
+			oauth,
+		);
+		const redirectUri = "https://connection.test/oauth/callback";
+		const alice = await service.startGithubOAuth(
+			"alice",
+			redirectUri,
+			"request-read",
+		);
+		const bob = await service.startGithubOAuth(
+			"bob",
+			redirectUri,
+			"request-write",
+		);
+		expect(new URL(alice.authorizationUrl).searchParams.get("scope")).toBe(
+			"read:user",
+		);
+		expect(new URL(bob.authorizationUrl).searchParams.get("scope")).toBe(
+			"read:user repo",
+		);
+		await expect(
+			service.startGithubOAuth("bob", redirectUri, "request-read"),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		await expect(
+			service.startGithubOAuth("bob", redirectUri, "request-empty"),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		const reconnect = await service.startGithubOAuth(
+			"alice",
+			redirectUri,
+			undefined,
+			"connection-oauth",
+		);
+		expect(new URL(reconnect.authorizationUrl).searchParams.get("scope")).toBe(
+			"read:user repo",
+		);
+		const shared = await service.startSharedGithubOAuth(
+			"admin",
+			"shared-scope-company",
+			redirectUri,
+		);
+		expect(new URL(shared.authorizationUrl).searchParams.get("scope")).toBe(
+			"shared-default",
+		);
 	});
 
 	it("binds Manhattan OAuth state to its provider and stores only the exchanged token", async () => {

@@ -3391,6 +3391,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			input.requestId,
 		);
 		if (permit.providerId !== input.providerId) forbidden();
+		return { requiredScopes: permit.requiredScopes };
 	}
 
 	async validatePersonalReconnect(input: {
@@ -3403,10 +3404,12 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				external_account_fingerprint: string;
 				provider_id: string;
 				provider_release_id: string;
+				scope_json: unknown;
 			}[]
 		>`
 			SELECT account.provider_id, account.provider_release_id,
-				account.external_account, access.external_account_fingerprint
+				account.external_account, access.external_account_fingerprint,
+				prior.scope_json
 			FROM connection_accounts account
 			JOIN connection_credential_versions prior
 				ON prior.id = account.last_credential_version_id
@@ -3437,7 +3440,15 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				target.provider_release_id
 		)
 			forbidden();
-		return { providerId: target.provider_id };
+		if (
+			!Array.isArray(target.scope_json) ||
+			target.scope_json.some((scope) => typeof scope !== "string")
+		)
+			forbidden();
+		return {
+			providerId: target.provider_id,
+			requiredScopes: [...new Set(target.scope_json)].sort(),
+		};
 	}
 
 	async consumeOAuthTransaction(state: string, providerId: string) {

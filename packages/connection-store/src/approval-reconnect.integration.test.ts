@@ -65,7 +65,7 @@ describe("approved personal Connection reconnect", () => {
 						connectionId: connected.connectionId,
 						principalId,
 					}),
-				).toEqual({ providerId: "github" });
+				).toEqual({ providerId: "github", requiredScopes: ["repo"] });
 				const reconnected = await repository.storeGithubOAuthCredential({
 					accessToken: "fixture-token-second",
 					displayName: "Existing GitHub",
