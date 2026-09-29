@@ -317,6 +317,10 @@ p {
 .notification-panel small {
 	color: var(--text-muted);
 }
+.notification-panel header small {
+	display: block;
+	font-weight: normal;
+}
 .notification-panel p {
 	padding: 16px;
 }

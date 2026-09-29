@@ -88,6 +88,7 @@ type StageApproverRow = {
 
 type DecisionTarget = {
 	applicant_principal_id: string;
+	created_at: Date;
 	connect_ttl_seconds: number;
 	current_stage_ordinal: number;
 	policy_stage_id: string;
@@ -511,7 +512,14 @@ export class PostgresConnectionAccessRequestRepository
 					SELECT 1 FROM connection_principals actor
 					WHERE actor.id = ${principalId} AND actor.status = 'ACTIVE'
 				)
-				AND request.applicant_principal_id <> ${principalId}
+				AND (request.applicant_principal_id <> ${principalId} OR (
+					candidate.approver_principal_id = ${principalId} AND EXISTS (
+					SELECT 1 FROM connection_principal_roles role_binding
+					WHERE role_binding.principal_id = ${principalId}
+						AND role_binding.role = 'CONNECTION_ADMIN'
+						AND role_binding.status = 'ACTIVE'
+						AND role_binding.granted_at <= request.created_at
+				)))
 				AND (
 					candidate.approver_principal_id = ${principalId}
 					OR EXISTS (
@@ -598,6 +606,8 @@ export class PostgresConnectionAccessRequestRepository
 			const [target] = await sql<
 				{
 					applicant_principal_id: string;
+					created_at: Date;
+					policy_stage_id: string;
 					quorum_count: number | null;
 					quorum_type: "ALL" | "ANY" | "AT_LEAST_N";
 					original_approver_count: number;
@@ -607,7 +617,8 @@ export class PostgresConnectionAccessRequestRepository
 					stage_revision: string;
 				}[]
 			>`
-				SELECT request.applicant_principal_id,
+				SELECT request.applicant_principal_id, request.created_at,
+					stage.policy_stage_id,
 					request.revision::text AS request_revision,
 					stage.id AS request_stage_id,
 					stage.revision::text AS stage_revision,
@@ -651,8 +662,21 @@ export class PostgresConnectionAccessRequestRepository
 				input.approvers.some(
 					(item) => item.principalId === target.applicant_principal_id,
 				)
-			)
-				forbidden();
+			) {
+				const [selfApprover] = await sql<{ id: string }[]>`
+					SELECT original.stage_id AS id
+					FROM connection_approval_stage_approvers original
+					JOIN connection_principal_roles role_binding
+						ON role_binding.principal_id = original.approver_principal_id
+					WHERE original.stage_id = ${target.policy_stage_id}
+						AND original.approver_principal_id = ${target.applicant_principal_id}
+						AND role_binding.role = 'CONNECTION_ADMIN'
+						AND role_binding.status = 'ACTIVE'
+						AND role_binding.granted_at <= ${target.created_at}
+					FOR SHARE OF role_binding
+				`;
+				if (!selfApprover) forbidden();
+			}
 			const [duplicateApprover] = await sql<{ id: string }[]>`
 				SELECT stage.id FROM connection_request_stages stage
 				JOIN connection_request_routing_revisions routing ON routing.request_stage_id = stage.id AND routing.revision = stage.routing_revision
@@ -1430,6 +1454,12 @@ export class PostgresConnectionAccessRequestRepository
 				FOR SHARE
 			`;
 			if (!applicant) forbidden();
+			const [selfApprovalAdministrator] = await sql<{ id: string }[]>`
+				SELECT principal_id AS id FROM connection_principal_roles
+				WHERE principal_id = ${input.applicantPrincipalId}
+					AND role = 'CONNECTION_ADMIN' AND status = 'ACTIVE'
+				FOR SHARE
+			`;
 			const [policy] = await sql<PolicyRow[]>`
 				SELECT policy.provider_release_id, policy.capability_profile_id,
 					policy.request_ttl_seconds, policy.connect_ttl_seconds, policy.renewal_lead_seconds
@@ -1611,7 +1641,8 @@ export class PostgresConnectionAccessRequestRepository
 				const rows = stageRows.filter((row) => row.ordinal === ordinal);
 				const eligible = rows.filter(
 					(row) =>
-						row.principal_id !== input.applicantPrincipalId &&
+						(row.principal_id !== input.applicantPrincipalId ||
+							Boolean(selfApprovalAdministrator)) &&
 						row.principal_status === "ACTIVE",
 				);
 				const first = rows[0];
@@ -1658,7 +1689,8 @@ export class PostgresConnectionAccessRequestRepository
 				const rows = stageRows.filter((row) => row.ordinal === ordinal);
 				const eligible = rows.filter(
 					(row) =>
-						row.principal_id !== input.applicantPrincipalId &&
+						(row.principal_id !== input.applicantPrincipalId ||
+							Boolean(selfApprovalAdministrator)) &&
 						row.principal_status === "ACTIVE",
 				);
 				const first = rows[0];
@@ -1804,8 +1836,8 @@ export class PostgresConnectionAccessRequestRepository
 				);
 			}
 			const [target] = await sql<DecisionTarget[]>`
-				SELECT request.applicant_principal_id,
-					request.current_stage_ordinal, request.revision::text AS request_revision,
+			SELECT request.applicant_principal_id, request.created_at,
+				request.current_stage_ordinal, request.revision::text AS request_revision,
 					stage.id AS request_stage_id, stage.policy_stage_id,
 					stage.revision::text AS stage_revision,
 					stage.routing_revision::text AS routing_revision,
@@ -1840,7 +1872,19 @@ export class PostgresConnectionAccessRequestRepository
 				target.applicant_principal_id === input.actorPrincipalId ||
 				target.applicant_principal_id === input.approverPrincipalId
 			) {
-				forbidden();
+				if (
+					target.applicant_principal_id !== input.actorPrincipalId ||
+					input.actorPrincipalId !== input.approverPrincipalId
+				)
+					forbidden();
+				const [administrator] = await sql<{ id: string }[]>`
+					SELECT principal_id AS id FROM connection_principal_roles
+					WHERE principal_id = ${input.actorPrincipalId}
+						AND role = 'CONNECTION_ADMIN' AND status = 'ACTIVE'
+						AND granted_at <= ${target.created_at}
+					FOR SHARE
+				`;
+				if (!administrator) forbidden();
 			}
 			const activeParticipants = await sql<{ id: string }[]>`
 				SELECT id FROM connection_principals
@@ -2565,7 +2609,13 @@ export async function syncApprovalProjections(
 				AND principal.status = 'ACTIVE'
 			WHERE request.id = ${requestId}
 				AND stage.state = 'PENDING'
-				AND candidate.approver_principal_id <> request.applicant_principal_id
+				AND (candidate.approver_principal_id <> request.applicant_principal_id OR EXISTS (
+					SELECT 1 FROM connection_principal_roles role_binding
+					WHERE role_binding.principal_id = request.applicant_principal_id
+						AND role_binding.role = 'CONNECTION_ADMIN'
+						AND role_binding.status = 'ACTIVE'
+						AND role_binding.granted_at <= request.created_at
+				))
 				AND NOT EXISTS (
 					SELECT 1 FROM connection_approval_decisions decision
 					WHERE decision.request_stage_id = stage.id

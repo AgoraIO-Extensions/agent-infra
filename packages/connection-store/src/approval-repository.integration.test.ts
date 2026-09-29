@@ -1711,6 +1711,158 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					actorPrincipalId: adminId,
 					policyVersionId: policyId,
 				});
+				const verifyAdministratorSelfApproval = async () => {
+					const selfProfileId = `approval-self-profile-${suffix}`;
+					await repository.createCapabilityProfileDraft({
+						actionVersionIds: [actionId],
+						id: selfProfileId,
+						name: "Administrator read",
+						providerReleaseId: releaseId,
+					});
+					await repository.publishCapabilityProfile({
+						actorPrincipalId: adminId,
+						capabilityProfileId: selfProfileId,
+					});
+					const selfPolicyId = `approval-self-policy-${suffix}`;
+					await repository.createPolicyDraft({
+						allowPermanent: false,
+						capabilityProfileId: selfProfileId,
+						connectTtlSeconds: 604_800,
+						createdByPrincipalId: adminId,
+						defaultDurationDays: 90,
+						disclaimerVersionIds: [disclaimerId],
+						durations: [
+							{ days: 90, id: `self-duration-${suffix}`, kind: "FINITE" },
+						],
+						id: selfPolicyId,
+						priority: 90,
+						providerReleaseId: releaseId,
+						renewalLeadSeconds: 1_209_600,
+						requestTtlSeconds: 1_209_600,
+						stages: [
+							{
+								approvers: [
+									{
+										displaySnapshot: { displayName: "Approval Admin" },
+										principalId: adminId,
+									},
+								],
+								id: `self-stage-${suffix}`,
+								name: "Administrator",
+								quorumType: "ANY",
+								timeoutSeconds: 259_200,
+							},
+						],
+					});
+					await repository.publishPolicy({
+						actorPrincipalId: adminId,
+						policyVersionId: selfPolicyId,
+					});
+					const selfOption = (
+						await requestRepository.listAccessOptions(adminId)
+					).find((item) => item.policyVersionId === selfPolicyId);
+					if (!selfOption) throw new Error("Administrator option is missing");
+					const priorAdminWorkItems = (
+						await requestRepository.listNotifications(adminId)
+					).openWorkItems;
+					const selfRequestId = `admin-self-request-${suffix}`;
+					await requestRepository.createRequest({
+						applicantPrincipalId: adminId,
+						capabilityProfileId: selfProfileId,
+						disclaimerConfirmations: [
+							{
+								contentSha256: disclaimerDigest,
+								disclaimerVersionId: disclaimerId,
+								locale: "zh-CN",
+							},
+						],
+						duration: { days: 90, kind: "FINITE" },
+						id: selfRequestId,
+						policyVersionId: selfPolicyId,
+						presentationId: selfOption.presentationId,
+						providerReleaseId: releaseId,
+						purpose: "Administrator access",
+					});
+					const [initialSelfQueue] = (
+						await requestRepository.listApprovalQueue(adminId)
+					).filter((item) => item.id === selfRequestId);
+					if (!initialSelfQueue)
+						throw new Error("Administrator queue item is missing");
+					expect(initialSelfQueue.state).toBe("IN_REVIEW");
+					expect(
+						(await requestRepository.listNotifications(adminId)).openWorkItems,
+					).toBe(priorAdminWorkItems + 1);
+					await sql`UPDATE connection_access_requests SET state = 'ROUTING_BLOCKED', revision = revision + 1 WHERE id = ${selfRequestId}`;
+					const blockedSelf = await requestRepository.getRequest(
+						adminId,
+						selfRequestId,
+					);
+					const blockedSelfStage = blockedSelf.stages[0];
+					if (!blockedSelfStage)
+						throw new Error("Blocked administrator stage is missing");
+					await requestRepository.reroute({
+						actorPrincipalId: adminId,
+						approvers: [
+							{
+								principalId: adminId,
+								displaySnapshot: { displayName: "Approval Admin" },
+							},
+						],
+						expectedRequestRevision: blockedSelf.revision,
+						expectedRoutingRevision: blockedSelfStage.routingRevision,
+						expectedStageRevision: blockedSelfStage.revision,
+						reason: "Restore original administrator approver",
+						requestId: selfRequestId,
+					});
+					const [selfQueue] = (
+						await requestRepository.listApprovalQueue(adminId)
+					).filter((item) => item.id === selfRequestId);
+					if (!selfQueue)
+						throw new Error("Rerouted administrator item is missing");
+					const selfStage = selfQueue.stages[0];
+					if (!selfStage) throw new Error("Administrator stage is missing");
+					const selfDecision = {
+						actorPrincipalId: adminId,
+						approverPrincipalId: adminId,
+						decision: "APPROVE" as const,
+						expectedRequestRevision: selfQueue.revision,
+						expectedRoutingRevision: selfStage.routingRevision,
+						expectedStageRevision: selfStage.revision,
+						id: `admin-self-decision-${suffix}`,
+						requestId: selfRequestId,
+					};
+					await sql`UPDATE connection_principal_roles SET status = 'REVOKED', revoked_at = now() WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
+					expect(
+						(await requestRepository.listApprovalQueue(adminId)).some(
+							(item) => item.id === selfRequestId,
+						),
+					).toBe(false);
+					await expect(
+						requestRepository.decide(selfDecision),
+					).rejects.toMatchObject({ code: "FORBIDDEN" });
+					await sql`UPDATE connection_principal_roles SET status = 'ACTIVE', revoked_at = NULL WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
+					await expect(
+						requestRepository.decide({
+							...selfDecision,
+							actorPrincipalId: delegateId,
+							id: `admin-delegated-self-decision-${suffix}`,
+						}),
+					).rejects.toMatchObject({ code: "FORBIDDEN" });
+					expect(await requestRepository.decide(selfDecision)).toEqual({
+						replayed: false,
+						requestId: selfRequestId,
+					});
+					expect(
+						(await requestRepository.listNotifications(adminId)).openWorkItems,
+					).toBe(priorAdminWorkItems);
+					await requestRepository.markNotifications(
+						adminId,
+						(await requestRepository.listNotifications(adminId)).items
+							.filter((item) => item.businessId === selfRequestId)
+							.map((item) => item.id),
+						true,
+					);
+				};
 
 				const [policy] = await sql<{ revision: string; status: string }[]>`
 					SELECT revision::text, status
@@ -1926,6 +2078,26 @@ describe("PostgreSQL Connection access approval catalog", () => {
 				const blockedStage = blocked?.stages[0];
 				if (!blocked || !blockedStage)
 					throw new Error("Blocked stage is missing");
+				await sql`INSERT INTO connection_principal_roles (principal_id, role, status, grant_source)
+					VALUES (${approverId}, 'CONNECTION_ADMIN', 'ACTIVE', 'ADMIN')`;
+				await expect(
+					requestRepository.reroute({
+						actorPrincipalId: adminId,
+						approvers: [
+							{
+								principalId: approverId,
+								displaySnapshot: { displayName: "Approval Reviewer" },
+							},
+						],
+						expectedRequestRevision: blocked.revision,
+						expectedRoutingRevision: blockedStage.routingRevision,
+						expectedStageRevision: blockedStage.revision,
+						reason: "Late administrator grant cannot enable self-review",
+						requestId: blockedRequestId,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await sql`UPDATE connection_principal_roles SET status = 'REVOKED', revoked_at = now()
+				WHERE principal_id = ${approverId} AND role = 'CONNECTION_ADMIN'`;
 				await requestRepository.reroute({
 					actorPrincipalId: adminId,
 					approvers: [
@@ -3425,6 +3597,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 				).find((option) => option.policyVersionId === validPolicyId);
 				if (!validOption)
 					throw new Error("Independent valid option is missing");
+				await verifyAdministratorSelfApproval();
 				await sql`UPDATE connection_action_versions SET status = 'DISABLED' WHERE id = ${actionId}`;
 				const remainingOptions =
 					await requestRepository.listAccessOptions(applicantId);

@@ -236,7 +236,7 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 
 - 员工创建任何个人 Connection 前，必须选择已发布的 Capability Profile、申请有效期、填写用途并确认精确免责声明版本。
 - 申请者选择能力包时可查看该包获批的精确 Action 清单、说明及每项读写属性；只能选择已绑定已发布审批策略的整包，不能自行增删其中的能力。
-- Connection 按已发布 Policy 的顺序阶段通知审批人；每阶段可以要求任意一人、全部或至少 N 人通过。禁止申请人自审、越级审批和自动批准。
+- Connection 按已发布 Policy 的顺序阶段通知审批人；每阶段可以要求任意一人、全部或至少 N 人通过。普通申请人禁止自审；有效的 Connection 系统管理员作为申请人且已被当前 Policy 阶段指定为审批人时，可本人审批。该例外不允许越级、降低人数要求或自动批准，决定时须重新验证管理员身份。
 - 全部阶段通过后，Connection 只在服务端生成一次性 Connect Permit；用户才可以进入 Provider OAuth 或提交 PAT/API Key。一次 Permit 只能成功创建一个外部账号 Connection。
 - Provider OAuth、PAT/API Key 验证和 Consumer Grant 是三种不同事务。公司审批不证明 Provider 身份，也不自动授权任何 Consumer。
 - Policy 可以提供有限期限或明确的永久选项。永久只取消自然到期，不覆盖账号停用、撤销、换号、扩权、Provider/Action 停用或强制重审。
@@ -245,7 +245,7 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 - 到期、撤销或重审逾期立即阻止新调用并暂停相关 Consumer Grant；已经提交给 Provider 的操作保留真实结果或未知状态。
 - 管理员紧急撤销已发布审批策略时，立即终止该 Provider 版本和能力包下未完成的申请及未消费 Permit，暂停其既有个人 Connection 资格与新调用；已提交的 Provider 操作仍按真实结果收敛。
 - 发布替代策略不自动中断既有资格。管理员将换版标记为重大变更时必须指定重审截止时间和原因；发布与受影响资格进入限期重审同时生效，逾期未通过才暂停。重大免责声明变更不能按普通换版绕过重审。
-- 页面在现有 Provider 详情中展示完整审批时间线，并通过右上角铃铛提供待办和通知。已读不等于完成待办；首期使用轮询，不增加长连接。
+- 页面在现有 Provider 详情中展示完整审批时间线，并通过右上角铃铛提供待办和通知。铃铛数量包含未完成待办与未读通知；已读或归档通知不等于完成待办，通知操作失败须明确提示。首期使用轮询，不增加长连接。
 - 无匹配 Policy、匹配冲突、免责声明缺失、审批人无效、目录不可用或 Permit 失效时均 fail closed，不能进入 Credential 流程。
 
 ## 9. Consumer 授权

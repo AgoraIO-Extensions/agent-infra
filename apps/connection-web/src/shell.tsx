@@ -4,6 +4,7 @@ import {
 	Bell,
 	Bot,
 	Cable,
+	Check,
 	FileClock,
 	KeyRound,
 	ListChecks,
@@ -47,12 +48,13 @@ export function ConsoleShell(props: { children: ReactNode }) {
 				queryKey: ["connection-approval-notifications"],
 			}),
 	});
-	const notificationCount =
+	const workItemCount =
 		(notifications.data?.adminWorkItems ?? 0) +
 		(notifications.data?.openWorkItems ?? 0) +
 		(notifications.data?.reapprovalWorkItems ?? 0) +
-		(notifications.data?.upgradeWorkItems ?? 0) +
-		(notifications.data?.unreadCount ?? 0);
+		(notifications.data?.upgradeWorkItems ?? 0);
+	const notificationCount =
+		workItemCount + (notifications.data?.unreadCount ?? 0);
 
 	if (session.isPending) return <FullPageState>正在加载账号...</FullPageState>;
 	if (session.isError) {
@@ -139,7 +141,7 @@ export function ConsoleShell(props: { children: ReactNode }) {
 						type="button"
 						className="notification-link"
 						title="通知与待办"
-						aria-label={`通知与待办 ${notificationCount} 项`}
+						aria-label={`通知与待办 ${notificationCount} 项：待办 ${workItemCount}，未读通知 ${notifications.data?.unreadCount ?? 0}`}
 						aria-expanded={notificationsOpen}
 						onClick={() => setNotificationsOpen((value) => !value)}
 					>
@@ -151,7 +153,13 @@ export function ConsoleShell(props: { children: ReactNode }) {
 					{notificationsOpen ? (
 						<section className="notification-panel" aria-label="通知与待办">
 							<header>
-								<strong>通知与待办</strong>
+								<strong>
+									通知与待办
+									<small>
+										待办 {workItemCount} · 未读通知{" "}
+										{notifications.data?.unreadCount ?? 0}
+									</small>
+								</strong>
 								<button
 									type="button"
 									title="关闭通知"
@@ -161,6 +169,9 @@ export function ConsoleShell(props: { children: ReactNode }) {
 									<X size={16} />
 								</button>
 							</header>
+							{updateNotification.isError ? (
+								<PageError error={updateNotification.error} />
+							) : null}
 							<Link
 								to="/connection/approvals"
 								onClick={() => setNotificationsOpen(false)}
@@ -242,17 +253,17 @@ export function ConsoleShell(props: { children: ReactNode }) {
 											</div>
 											<button
 												type="button"
-												title="归档通知"
-												aria-label="归档通知"
+												title={item.readAt ? "归档通知" : "标记已读"}
+												aria-label={item.readAt ? "归档通知" : "标记已读"}
 												disabled={updateNotification.isPending}
 												onClick={() =>
 													updateNotification.mutate({
 														notificationId: item.id,
-														body: { action: "ARCHIVE" },
+														body: { action: item.readAt ? "ARCHIVE" : "READ" },
 													})
 												}
 											>
-												<X size={15} />
+												{item.readAt ? <X size={15} /> : <Check size={15} />}
 											</button>
 										</li>
 									))}

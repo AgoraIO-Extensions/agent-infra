@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import type { ApprovalNotificationsResponse } from "@agent-infra/connection-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	cleanup,
@@ -17,27 +18,34 @@ const mocks = vi.hoisted(() => ({
 		isAdministrator: true,
 	})),
 	logout: vi.fn(async () => undefined),
-	listConnectionNotifications: vi.fn(async () => ({
-		adminWorkItems: 1,
-		openWorkItems: 0,
-		reapprovalWorkItems: 0,
-		upgradeWorkItems: 0,
-		unreadCount: 0,
-		items: [
-			{
-				id: "notice-1",
-				businessId: "request-1",
-				businessType: "CONNECTION_ACCESS_REQUEST",
-				providerId: "jira",
-				state: "ROUTING_BLOCKED",
-				eventType: "ROUTING_BLOCKED",
-				createdAt: "2026-09-25T00:00:00Z",
-				readAt: null,
-				archivedAt: null,
-			},
-		],
-	})),
-	updateApprovalNotification: vi.fn(async () => undefined),
+	listConnectionNotifications: vi.fn(
+		async (): Promise<ApprovalNotificationsResponse> => ({
+			adminWorkItems: 1,
+			openWorkItems: 0,
+			reapprovalWorkItems: 0,
+			upgradeWorkItems: 0,
+			unreadCount: 0,
+			items: [
+				{
+					id: "notice-1",
+					businessId: "request-1",
+					businessType: "CONNECTION_ACCESS_REQUEST",
+					providerId: "jira",
+					state: "ROUTING_BLOCKED",
+					eventType: "ROUTING_BLOCKED",
+					createdAt: "2026-09-25T00:00:00Z",
+					readAt: null,
+					archivedAt: null,
+				},
+			],
+		}),
+	),
+	updateApprovalNotification: vi.fn(
+		async (_input: {
+			notificationId: string;
+			body: { action: "READ" | "ARCHIVE" };
+		}) => undefined,
+	),
 	navigate: vi.fn(async () => undefined),
 	redirect: vi.fn(),
 }));
@@ -82,6 +90,123 @@ afterEach(() => {
 });
 
 describe("Connection 控制台 Session", () => {
+	it("归档已读通知不消除未完成待办", async () => {
+		const initial = await mocks.listConnectionNotifications();
+		mocks.listConnectionNotifications
+			.mockResolvedValueOnce({
+				...initial,
+				items: initial.items.map((item) => ({
+					...item,
+					readAt: "2026-09-29T12:00:00Z",
+				})),
+			})
+			.mockResolvedValueOnce({
+				...initial,
+				items: [],
+				unreadCount: 0,
+			});
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		render(
+			<QueryClientProvider client={client}>
+				<ConsoleShell>内容</ConsoleShell>
+			</QueryClientProvider>,
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /通知与待办 1 项/ }),
+		);
+		expect(screen.getByText("待办 1 · 未读通知 0")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "归档通知" }));
+		await waitFor(() =>
+			expect(mocks.updateApprovalNotification.mock.calls[0]?.[0]).toEqual({
+				notificationId: "notice-1",
+				body: { action: "ARCHIVE" },
+			}),
+		);
+		expect(await screen.findByText("暂无通知")).toBeTruthy();
+		expect(screen.getByText("待办 1 · 未读通知 0")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /通知与待办 1 项/ }),
+		).toBeTruthy();
+	});
+
+	it("归档失败保留通知并提示错误", async () => {
+		const initial = await mocks.listConnectionNotifications();
+		mocks.listConnectionNotifications.mockResolvedValueOnce({
+			...initial,
+			items: initial.items.map((item) => ({
+				...item,
+				readAt: "2026-09-29T12:00:00Z",
+			})),
+		});
+		mocks.updateApprovalNotification.mockRejectedValueOnce(
+			new Error("归档失败，请重试"),
+		);
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		render(
+			<QueryClientProvider client={client}>
+				<ConsoleShell>内容</ConsoleShell>
+			</QueryClientProvider>,
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /通知与待办 1 项/ }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "归档通知" }));
+		expect(await screen.findByRole("alert")).toHaveProperty(
+			"textContent",
+			"归档失败，请重试",
+		);
+		expect(
+			screen.getByRole("link", { name: "jira · 待重新分配" }),
+		).toBeTruthy();
+	});
+
+	it("打开通知后更新已读样式与未读计数", async () => {
+		const initial = await mocks.listConnectionNotifications();
+		mocks.listConnectionNotifications
+			.mockResolvedValueOnce({ ...initial, adminWorkItems: 0, unreadCount: 1 })
+			.mockResolvedValueOnce({
+				...initial,
+				adminWorkItems: 0,
+				unreadCount: 0,
+				items: initial.items.map((item) => ({
+					...item,
+					readAt: "2026-09-29T12:00:00Z",
+				})),
+			});
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		render(
+			<QueryClientProvider client={client}>
+				<ConsoleShell>内容</ConsoleShell>
+			</QueryClientProvider>,
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /通知与待办 1 项/ }),
+		);
+		const link = screen.getByRole("link", { name: "jira · 待重新分配" });
+		expect(link.closest("li")?.className).toBe("unread");
+		fireEvent.click(screen.getByRole("button", { name: "标记已读" }));
+		await waitFor(() =>
+			expect(mocks.updateApprovalNotification.mock.calls[0]?.[0]).toEqual({
+				notificationId: "notice-1",
+				body: { action: "READ" },
+			}),
+		);
+		expect(
+			await screen.findByRole("button", { name: /通知与待办 0 项/ }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("link", { name: "jira · 待重新分配" }).closest("li")
+				?.className,
+		).toBe("");
+		expect(screen.getByRole("button", { name: "归档通知" })).toBeTruthy();
+	});
+
 	it("把管理员审批异常从铃铛导向现有处理页", async () => {
 		const client = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
@@ -92,7 +217,7 @@ describe("Connection 控制台 Session", () => {
 			</QueryClientProvider>,
 		);
 		fireEvent.click(
-			await screen.findByRole("button", { name: "通知与待办 1 项" }),
+			await screen.findByRole("button", { name: /通知与待办 1 项/ }),
 		);
 		expect(
 			screen.getByRole("link", { name: "审批异常 1" }).getAttribute("href"),
