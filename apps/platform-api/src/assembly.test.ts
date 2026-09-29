@@ -42,6 +42,11 @@ describe("Platform API production assembly", () => {
 				"data:text/javascript,export const invalid = true",
 			),
 		).rejects.toThrow("Platform API deployment module is invalid");
+		await expect(
+			loadPlatformApiAssembly(
+				"data:text/javascript,export function createPlatformApiAssemblyInput() {}; export const browserAuth = { handleRequest: true }",
+			),
+		).rejects.toThrow("Platform API deployment module is invalid");
 	});
 
 	it("registers the complete app before starting the Node server", async () => {
@@ -97,8 +102,12 @@ describe("Platform API production assembly", () => {
 		expect(
 			assembly.dependencies.management.identity?.resolveApiCredential,
 		).toBeTypeOf("function");
+		const browserAuth = {
+			handleRequest: vi.fn(async () => new Response(null, { status: 204 })),
+		};
 		const server = startPlatformApi({
 			dependencies: assembly.dependencies,
+			browserAuth,
 			log: () => {},
 			port: 0,
 		});
@@ -109,6 +118,20 @@ describe("Platform API production assembly", () => {
 		}
 
 		try {
+			const login = await fetch(`http://127.0.0.1:${address.port}/auth/login`, {
+				method: "POST",
+			});
+			expect(login.status).toBe(204);
+			expect(browserAuth.handleRequest).toHaveBeenCalledOnce();
+			browserAuth.handleRequest.mockRejectedValueOnce(
+				new Error("private directory failure"),
+			);
+			const failedLogout = await fetch(
+				`http://127.0.0.1:${address.port}/auth/logout`,
+				{ method: "POST" },
+			);
+			expect(failedLogout.status).toBe(503);
+			expect(await failedLogout.text()).toBe("");
 			for (const serviceAvailability of [
 				"starting",
 				"updating",
@@ -158,6 +181,7 @@ describe("Platform API production assembly", () => {
 				schemaVersion: 1,
 				user: { userId: "user-1" },
 			});
+			expect(browserAuth.handleRequest).toHaveBeenCalledTimes(2);
 		} finally {
 			await assembly.close();
 			expect(closeTaskAuthorization).toHaveBeenCalledOnce();
@@ -187,6 +211,30 @@ describe("Platform API production assembly", () => {
 		} finally {
 			blocker.close();
 			await once(blocker, "close");
+		}
+	});
+
+	it("mounts browser auth from the same deployment module as the API assembly", async () => {
+		const running = await startPlatformApiFromDeployment({
+			log: () => {},
+			moduleSpecifier: new URL(
+				"../../../tests/fixtures/platform-api-deployment.mjs",
+				import.meta.url,
+			).href,
+			port: 0,
+		});
+		const address = running.server.address();
+		if (!address || typeof address === "string") {
+			throw new Error("Platform API did not bind a TCP port");
+		}
+		try {
+			const origin = `http://127.0.0.1:${address.port}`;
+			expect(
+				(await fetch(`${origin}/auth/login`, { method: "POST" })).status,
+			).toBe(204);
+			expect((await fetch(`${origin}/healthz`)).status).toBe(200);
+		} finally {
+			await createPlatformApiShutdown(running)();
 		}
 	});
 

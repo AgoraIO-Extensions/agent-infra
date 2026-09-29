@@ -41,6 +41,7 @@ import {
 	taskAuthorizationRecords,
 	taskControlRecords,
 } from "./schema-operations";
+import { browserSessions } from "./schema-sessions";
 
 export {
 	agentApplications,
@@ -104,8 +105,10 @@ export {
 	taskAuthorizationRecords,
 	taskControlRecords,
 } from "./schema-operations";
+export { browserSessions } from "./schema-sessions";
 
 export const platformInfrastructureTables = [
+	browserSessions,
 	workloadReconciliations,
 	agents,
 	agentApplications,

@@ -40,6 +40,8 @@ export {
 	PostgresApplicationRevisionTransactionV1,
 } from "./application-revision.ts";
 export {
+	type AuditRow,
+	decodePlatformAuditRowV1,
 	type PlatformAuditActionV1,
 	type PlatformAuditAdministratorScopeV1,
 	type PlatformAuditChangedFieldV1,
@@ -50,6 +52,7 @@ export {
 	type PostgresPlatformAuditOptionsV1,
 	PostgresPlatformAuditQueryV1,
 } from "./audit.ts";
+export { PostgresLdapSessionStoreV1 } from "./browser-session.ts";
 export {
 	ConversationDispatchStoreError,
 	openPostgresConversationDispatchStoreV1,
@@ -102,6 +105,12 @@ export {
 	type ScheduleOutboxRetryInput,
 	type SucceededOutboxItem,
 } from "./outbox.ts";
+export {
+	PostgresScopedPlatformAuditQueryV1,
+	type ScopedPlatformAuditPageV1,
+	type ScopedPlatformAuditProjectionV1,
+	type ScopedPlatformAuditRequestMetadataV1,
+} from "./scoped-audit-query.ts";
 export {
 	openPostgresSecretActivationStoreV1,
 	type PostgresSecretActivationStoreOptionsV1,

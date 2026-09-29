@@ -114,6 +114,81 @@ describe("Platform PostgreSQL migration foundation", () => {
 		).toThrow("PLATFORM_DATABASE_URL must be a PostgreSQL URL");
 	});
 
+	it("upgrades a database with main 0021 browser sessions to application targets", async () => {
+		const database = await startPostgresTestDatabase(
+			"migration-0021-application-targets",
+		);
+		const client = postgres(database.databaseUrl, { max: 1 });
+		try {
+			await client.unsafe(`CREATE SCHEMA platform_migrations;
+					CREATE TABLE platform_migrations.history
+					(id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
+			for (const migration of migrations.slice(0, 22)) {
+				for (const statement of migration.sql) await client.unsafe(statement);
+				await client`insert into platform_migrations.history (hash, created_at)
+						values (${migration.hash}, ${migration.folderMillis})`;
+			}
+			const before = await client`
+					select id, hash, created_at
+					from platform_migrations.history
+					order by id
+				`;
+			expect(before).toHaveLength(22);
+			expect(
+				(
+					await client`
+							select table_name from information_schema.tables
+							where table_schema = 'platform' and table_name = 'browser_sessions'
+						`
+				).map((row) => row.table_name),
+			).toEqual(["browser_sessions"]);
+
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+
+			const catalog = await readPlatformCatalog(client);
+			expect(
+				catalog.columns
+					.filter((column) =>
+						[
+							"browser_sessions",
+							"agent_principal_grants",
+							"platform_applications",
+						].includes(column.table_name),
+					)
+					.map((column) => column.table_name),
+			).toEqual(
+				expect.arrayContaining([
+					"browser_sessions",
+					"agent_principal_grants",
+					"platform_applications",
+				]),
+			);
+			const after = await client`
+					select id, hash, created_at
+					from platform_migrations.history
+					order by id
+				`;
+			expect(after).toHaveLength(migrations.length);
+			expect(after.slice(0, before.length)).toEqual(before);
+
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+			expect(
+				await client`
+						select id, hash, created_at
+						from platform_migrations.history
+						order by id
+					`,
+			).toEqual(after);
+		} finally {
+			await client.end();
+			await database.stop();
+		}
+	}, 120_000);
+
 	it.each(["file-authority", "configuration-v2", "task-integrity"] as const)(
 		"upgrades the existing %s migration history without losing either schema",
 		async (history) => {
