@@ -1,9 +1,9 @@
 diff --git a/packages/opencode/src/native/effect-receipt.ts b/packages/opencode/src/native/effect-receipt.ts
 new file mode 100644
-index 000000000..c5eeeb4dc
+index 000000000..c318118ae
 --- /dev/null
 +++ b/packages/opencode/src/native/effect-receipt.ts
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,97 @@
 +/**
 + * Private Driver/native effect receipt boundary.
 + *
@@ -69,7 +69,9 @@ index 000000000..c5eeeb4dc
 +  | (EffectReceipt & { readonly phase: "failed" | "cancelled" | "unknown"; readonly errorCode: string })
 +
 +const boundedString = (value: unknown, max = 256): value is string =>
-+  typeof value === "string" && value.length > 0 && value.length <= max
++  typeof value === "string" &&
++  value.length > 0 &&
++  new TextEncoder().encode(value).byteLength <= max
 +
 +export function isEffectReceipt(value: unknown): value is EffectReceipt {
 +  if (!value || typeof value !== "object") return false
