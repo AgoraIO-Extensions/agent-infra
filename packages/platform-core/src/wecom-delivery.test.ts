@@ -4,6 +4,7 @@ import {
 	type WecomAuthorityV1,
 	type WecomAuthorizationPortV1,
 	type WecomDeliveryClaimV1,
+	type WecomSendPortV1,
 } from "./wecom-channel.ts";
 
 const boundary = {
@@ -61,7 +62,7 @@ function fixture() {
 			authority,
 		})),
 	};
-	const sender = { send: vi.fn(async () => "sent" as const) };
+	const sender = { send: vi.fn<WecomSendPortV1["send"]>(async () => "sent") };
 	return {
 		store,
 		authorization,
@@ -84,7 +85,15 @@ it("checks the original boundary and persists sending before producing the exter
 		scope: claim.scope,
 		replyHandle: "encrypted",
 		text: "final reply",
+		revalidate: expect.any(Function),
 	});
+	const revalidate = f.sender.send.mock.calls[0]?.[0]?.revalidate;
+	expect(await revalidate?.()).toBe(true);
+	f.authorization.authorize.mockResolvedValue({
+		outcome: "denied",
+		actorId: "actor",
+	});
+	expect(await revalidate?.()).toBe(false);
 	expect(f.store.finish).toHaveBeenCalledWith(claim, "sent");
 });
 it("cancels before sending when identity mapping or binding changes", async () => {

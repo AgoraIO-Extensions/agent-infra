@@ -290,6 +290,8 @@ export interface WecomSendPortV1 {
 		readonly scope: WecomScopeV1;
 		readonly replyHandle: string;
 		readonly text: string;
+		/** Rechecks the original actor, channel revision and task boundary before an external effect. */
+		readonly revalidate?: () => Promise<boolean>;
 	}): Promise<"sent" | "failed" | "unknown">;
 }
 export function createWecomDeliveryV1(dependencies: {
@@ -345,6 +347,18 @@ export function createWecomDeliveryV1(dependencies: {
 					scope: claim.scope,
 					replyHandle: claim.replyHandle,
 					text,
+					revalidate: async () => {
+						const latest = await dependencies.authorization.authorize(
+							claim.scope,
+							"use",
+							claim.taskBoundary,
+						);
+						return (
+							latest.outcome === "allowed" &&
+							latest.authority.actor.actorId === claim.actorId &&
+							latest.authority.channelRevision === claim.channelRevision
+						);
+					},
 				});
 			} catch {
 				status = "unknown";

@@ -31,23 +31,42 @@ const route: WecomReplyRouteV1 = {
 };
 const protect = createWecomReplyEncryptorV1(pair.publicKey);
 const reveal = createWecomReplyDecryptorV1(pair.privateKey);
-function sender(fetcher: typeof fetch, now?: () => Date) {
-	return createWecomSenderV1({
-		resolveConfiguration: async (s) => ({
-			bindingReference: s.bindingReference,
-			agentId: s.agentId,
-			kind: s.kind,
-			credentialVersion: "v1",
-			token: "fixture",
-			encodingAesKey: "fixture",
-			botId: "bot-1",
-			applicationId: "42",
-		}),
+function sender(
+	fetcher: typeof fetch,
+	now?: () => Date,
+	configuration?: Parameters<
+		typeof createWecomSenderV1
+	>[0]["resolveConfiguration"],
+	accessToken?: Parameters<
+		typeof createWecomSenderV1
+	>[0]["getApplicationAccessToken"],
+) {
+	const adapter = createWecomSenderV1({
+		resolveConfiguration:
+			configuration ??
+			(async (s) => ({
+				bindingReference: s.bindingReference,
+				agentId: s.agentId,
+				kind: s.kind,
+				credentialVersion: "v1",
+				token: "fixture",
+				encodingAesKey: "fixture",
+				botId: "bot-1",
+				applicationId: "42",
+			})),
 		revealReply: reveal,
-		getApplicationAccessToken: async () => "fixture-token",
+		getApplicationAccessToken: accessToken ?? (async () => "fixture-token"),
 		fetch: fetcher,
 		...(now ? { now } : {}),
 	});
+	return {
+		send(input: Parameters<typeof adapter.send>[0]) {
+			return adapter.send({
+				...input,
+				revalidate: input.revalidate ?? (async () => true),
+			});
+		},
+	};
 }
 const applicationScope = {
 	...scope,
@@ -275,6 +294,66 @@ describe("reply protection and external send", () => {
 			}),
 		).toBe("unknown");
 		expect(calls).toBe(1);
+	});
+	it("stops after the first application acknowledgment when Owner unbinds", async () => {
+		let bound = true;
+		let calls = 0;
+		const adapter = sender(
+			async () => {
+				calls++;
+				bound = false;
+				return Response.json({ errcode: 0 });
+			},
+			undefined,
+			async (s) =>
+				bound
+					? {
+							bindingReference: s.bindingReference,
+							agentId: s.agentId,
+							kind: s.kind,
+							credentialVersion: "v1",
+							token: "fixture",
+							encodingAesKey: "fixture",
+							applicationId: "42",
+						}
+					: null,
+		);
+		expect(
+			await adapter.send({
+				scope: applicationScope,
+				replyHandle: await protect(applicationRoute),
+				text: "x".repeat(4097),
+			}),
+		).toBe("unknown");
+		expect(calls).toBe(1);
+	});
+	it("stops after the first application acknowledgment when authorization is revoked", async () => {
+		let allowed = true;
+		let calls = 0;
+		let tokenCalls = 0;
+		const adapter = sender(
+			async () => {
+				calls++;
+				allowed = false;
+				return Response.json({ errcode: 0 });
+			},
+			undefined,
+			undefined,
+			async () => {
+				tokenCalls++;
+				return "fixture-token";
+			},
+		);
+		expect(
+			await adapter.send({
+				scope: applicationScope,
+				replyHandle: await protect(applicationRoute),
+				text: "x".repeat(4097),
+				revalidate: async () => allowed,
+			}),
+		).toBe("unknown");
+		expect(calls).toBe(1);
+		expect(tokenCalls).toBe(1);
 	});
 });
 

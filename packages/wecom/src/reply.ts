@@ -308,24 +308,26 @@ export function createWecomSenderV1(options: {
 			let url: string;
 			let bodies: unknown[];
 			let replyExpiresAt: number;
+			let config: WecomConfigurationV1;
 			try {
 				if (input.text.length === 0 || !input.text.isWellFormed())
 					return "failed";
-				const config = await options.resolveConfiguration(input.scope);
+				const resolved = await options.resolveConfiguration(input.scope);
 				const route = await options.revealReply(input.replyHandle);
 				if (
-					!config ||
-					config.bindingReference !== input.scope.bindingReference ||
-					config.agentId !== input.scope.agentId ||
-					config.kind !== input.scope.kind ||
+					!resolved ||
+					resolved.bindingReference !== input.scope.bindingReference ||
+					resolved.agentId !== input.scope.agentId ||
+					resolved.kind !== input.scope.kind ||
 					scopeDigest(route.scope) !== scopeDigest(input.scope) ||
-					route.bindingReference !== config.bindingReference ||
-					route.credentialVersion !== config.credentialVersion ||
+					route.bindingReference !== resolved.bindingReference ||
+					route.credentialVersion !== resolved.credentialVersion ||
 					!Number.isFinite(Date.parse(route.expiresAt)) ||
 					Date.parse(route.expiresAt) <=
 						(options.now?.() ?? new Date()).getTime()
 				)
 					return "failed";
+				config = resolved;
 				replyExpiresAt = Date.parse(route.expiresAt);
 				if (config.kind === "wecom_bot") {
 					const target = new URL(route.responseUrl ?? "");
@@ -351,9 +353,7 @@ export function createWecomSenderV1(options: {
 						Buffer.byteLength(input.text) > 20_480
 					)
 						return "failed";
-					const token = await options.getApplicationAccessToken(config);
-					if (!token) return "failed";
-					url = `https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`;
+					url = "";
 					bodies = applicationTextParts(input.text).map((content) => ({
 						touser: route.recipientId,
 						msgtype: "text",
@@ -367,6 +367,35 @@ export function createWecomSenderV1(options: {
 			for (const [index, body] of bodies.entries()) {
 				if (replyExpiresAt <= (options.now?.() ?? new Date()).getTime())
 					return index > 0 ? "unknown" : "failed";
+				try {
+					const current =
+						index === 0
+							? config
+							: await options.resolveConfiguration(input.scope);
+					if (
+						!current ||
+						current.bindingReference !== config.bindingReference ||
+						current.agentId !== config.agentId ||
+						current.kind !== config.kind ||
+						current.credentialVersion !== config.credentialVersion ||
+						current.token !== config.token ||
+						current.encodingAesKey !== config.encodingAesKey ||
+						current.applicationId !== config.applicationId ||
+						current.corporationId !== config.corporationId
+					)
+						return index > 0 ? "unknown" : "failed";
+					if (!input.revalidate || !(await input.revalidate()))
+						return index > 0 ? "unknown" : "failed";
+					if (current.kind === "wecom_app") {
+						const token = await options.getApplicationAccessToken(current);
+						if (!token) return index > 0 ? "unknown" : "failed";
+						url = `https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`;
+						if (!(await input.revalidate()))
+							return index > 0 ? "unknown" : "failed";
+					}
+				} catch {
+					return index > 0 ? "unknown" : "failed";
+				}
 				const status = await sendWecomMessage(
 					options.fetch ?? fetch,
 					url,
