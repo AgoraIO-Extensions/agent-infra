@@ -19,8 +19,14 @@ try {
 } finally {
   await sourceFile.close();
 }
-if (!/^[A-Za-z0-9_-]{43,128}$/.test(token)) {
-  throw new Error("Local proxy token must be a Base64URL value of at least 32 bytes");
+const decodedToken = Buffer.from(token, "base64url");
+if (
+  !/^[A-Za-z0-9_-]{43,128}$/.test(token) ||
+  decodedToken.length < 32 ||
+  decodedToken.length > 96 ||
+  decodedToken.toString("base64url") !== token
+) {
+  throw new Error("Local proxy token must be a Base64URL value of 32-96 bytes");
 }
 
 const template = await readFile(new URL("./nginx.conf", import.meta.url), "utf8");

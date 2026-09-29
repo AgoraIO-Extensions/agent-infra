@@ -13,6 +13,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 const script = "deploy/local/platform.sh";
+const proxyTokenValue = Buffer.from("a".repeat(32)).toString("base64url");
 
 async function executable(directory, name, body) {
 	const path = join(directory, name);
@@ -48,7 +49,7 @@ async function fixture() {
 		writeFile(join(api, "platform-api.mjs"), ""),
 		writeFile(cert, ""),
 		writeFile(key, ""),
-		writeFile(proxyToken, "a".repeat(43), { mode: 0o600 }),
+		writeFile(proxyToken, proxyTokenValue, { mode: 0o600 }),
 	]);
 	await executable(
 		bin,
@@ -209,13 +210,13 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		);
 		assert.match(
 			await readFile(nginxConfig, "utf8"),
-			/proxy_set_header X-Platform-Proxy-Token a{43};/,
+			new RegExp(`proxy_set_header X-Platform-Proxy-Token ${proxyTokenValue};`),
 		);
 		const runtimeToken = join(
 			f.env.PLATFORM_LOCAL_STATE_DIRECTORY,
 			"agent-infra-verify/proxy-token",
 		);
-		assert.equal(await readFile(runtimeToken, "utf8"), "a".repeat(43));
+		assert.equal(await readFile(runtimeToken, "utf8"), proxyTokenValue);
 		const up = (await readFile(f.log, "utf8")).trim().split("\n");
 		assert.match(
 			up[0],
@@ -345,7 +346,7 @@ test("local up, status and stop bind one Worker release to the private kind cont
 test("local up rejects an invalid proxy token before stopping services", async () => {
 	const f = await fixture();
 	try {
-		await writeFile(f.env.PLATFORM_LOCAL_PROXY_TOKEN_FILE, "invalid-token");
+		await writeFile(f.env.PLATFORM_LOCAL_PROXY_TOKEN_FILE, "a".repeat(45));
 		const result = run("up", f.env);
 		assert.notEqual(result.status, 0);
 		assert.match(result.stderr, /Local proxy token must be a Base64URL value/);
@@ -353,7 +354,7 @@ test("local up rejects an invalid proxy token before stopping services", async (
 			await readFile(f.log, "utf8"),
 			/compose .* stop web platform-api/,
 		);
-		assert.doesNotMatch(result.stderr, /a{43}/);
+		assert.doesNotMatch(result.stderr, new RegExp(proxyTokenValue));
 	} finally {
 		await f.close();
 	}

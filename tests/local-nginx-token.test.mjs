@@ -58,6 +58,20 @@ test("local nginx renders a private token and overwrites the browser header", as
 		);
 		assert.notEqual(linked.status, 0);
 		assert.equal(await readFile(outputPath, "utf8"), content);
+		for (const invalidToken of ["short", "a".repeat(43), "a".repeat(45)]) {
+			await writeFile(tokenPath, invalidToken);
+			const invalid = spawnSync(
+				"node",
+				["deploy/local/render-nginx.mjs", tokenPath, outputPath],
+				{ cwd: process.cwd(), encoding: "utf8" },
+			);
+			assert.notEqual(invalid.status, 0);
+			assert.match(
+				invalid.stderr,
+				/Local proxy token must be a Base64URL value/,
+			);
+			assert.equal(await readFile(outputPath, "utf8"), content);
+		}
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
