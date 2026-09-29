@@ -25,6 +25,8 @@ export interface TaskRuntimeRecoveryStateV1 {
 	readonly metadataRecovery?: ConversationMetadataRecoveryV1;
 	readonly generationIsolation?: ConversationGenerationIsolationV1;
 	readonly hostSessionRef: string | null;
+	/** V4 replay uses the submit-time reference even after a new Session is bound. */
+	readonly originalSubmitHostSessionRef?: string | null;
 	readonly runtimeCursor: string | null;
 	readonly originalOperationDigest: string;
 	readonly executionStatus: ConversationDispatchExecutionStatusV1;

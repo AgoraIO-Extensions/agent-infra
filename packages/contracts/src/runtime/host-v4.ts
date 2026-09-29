@@ -457,11 +457,14 @@ export function runtimeOperationDigestInputV4(input: RuntimeBusinessRequestV4) {
 	} = request.operation;
 	return {
 		kind: "selection" in request ? "submit-turn" : "supplement",
+		principal: request.principal,
+		channelId: request.channelId,
 		agentId: request.agentId,
 		conversationId: request.conversationId,
 		executionId: request.executionId,
 		turnId: request.turnId,
 		sessionGeneration: request.sessionGeneration,
+		hostSessionRef: request.hostSessionRef,
 		operation,
 		executionSource: request.executionSource,
 		keyBinding: request.keyBinding,

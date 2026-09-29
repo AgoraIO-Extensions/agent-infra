@@ -133,6 +133,7 @@ export const conversationExecutions = platformSchema.table(
 		relayKeyVersion: bigint("relay_key_version", { mode: "number" }),
 		runtimeSubmitProtocol: text("runtime_submit_protocol"),
 		originalOperationDigest: text("original_operation_digest"),
+		originalSubmitHostSessionRef: text("original_submit_host_session_ref"),
 	},
 	(table) => [
 		foreignKey({
@@ -181,7 +182,7 @@ export const conversationExecutions = platformSchema.table(
 		),
 		check(
 			"conversation_execution_original_digest_binding",
-			sql`(${table.runtimeSubmitProtocol} IS NULL AND ${table.originalOperationDigest} IS NULL) OR (${table.runtimeSubmitProtocol} IS NOT NULL AND ${table.originalOperationDigest} IS NOT NULL AND ${table.runtimeSubmitProtocol} in ('v2', 'v4') AND ${table.originalOperationDigest} ~ '^[A-Za-z0-9_-]{43}$' AND (${table.runtimeSubmitProtocol} <> 'v4' OR ${table.executionSource} IS NOT NULL))`,
+			sql`(${table.runtimeSubmitProtocol} IS NULL AND ${table.originalOperationDigest} IS NULL AND ${table.originalSubmitHostSessionRef} IS NULL) OR (${table.runtimeSubmitProtocol} IS NOT NULL AND ${table.originalOperationDigest} IS NOT NULL AND ${table.runtimeSubmitProtocol} in ('v2', 'v4') AND ${table.originalOperationDigest} ~ '^[A-Za-z0-9_-]{43}$' AND (${table.runtimeSubmitProtocol} <> 'v4' OR ${table.executionSource} IS NOT NULL) AND (${table.runtimeSubmitProtocol} <> 'v2' OR ${table.originalSubmitHostSessionRef} IS NULL))`,
 		),
 		check(
 			"conversation_execution_session_generation_safe",
