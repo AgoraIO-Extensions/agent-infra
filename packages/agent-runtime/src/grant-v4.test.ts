@@ -156,6 +156,23 @@ function privateFieldFor(
 }
 
 describe("Runtime V4 Grant trust boundary", () => {
+	it("rejects a signed Grant for a different deployed Agent", async () => {
+		const scopedValidator = createRuntimeExecutionGrantValidatorV4(
+			new Map([["fixture", keys.publicKey]]),
+			{ ...options, expectedAgentId: "agent-fixture" },
+		);
+		await expect(scopedValidator(signed())).resolves.toMatchObject({
+			request: { agentId: "agent-fixture" },
+		});
+		const otherAgentValidator = createRuntimeExecutionGrantValidatorV4(
+			new Map([["fixture", keys.publicKey]]),
+			{ ...options, expectedAgentId: "other-agent" },
+		);
+		await expect(otherAgentValidator(signed())).rejects.toThrow(
+			"Runtime authorization is unavailable",
+		);
+	});
+
 	it("accepts a private Key only after the signed submit and supplement bindings", async () => {
 		const submitted = signed();
 		await expect(
