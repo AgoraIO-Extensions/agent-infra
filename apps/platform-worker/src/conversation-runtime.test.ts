@@ -121,6 +121,7 @@ function harness(
 		executionStatus: "processing",
 		stopPending: false,
 	};
+	if (keyed) Object.assign(state, { runtimeSubmitProtocol: "v4" });
 	let user: CurrentTaskUserV1 | null = {
 		schemaVersion: 1,
 		userId: "user",
@@ -320,7 +321,7 @@ function harness(
 				}),
 			);
 		if (path.endsWith("/events/stream"))
-			return new Response(null, {
+			return new Response("", {
 				headers: { "content-type": "text/event-stream" },
 			});
 		throw new Error(`Unexpected runtime request: ${path}`);
@@ -540,6 +541,49 @@ describe("Trusted conversation Runtime adapter", () => {
 			const transport = JSON.parse(String(init?.body));
 			expect(transport.businessRequest.hostSessionRef).toBeNull();
 			expect(transport.privateKeyField.context.hostSessionRef).toBeNull();
+		} finally {
+			h.runtime.close();
+		}
+	});
+	it("keeps pinned V2 event recovery on the V3 read and ACK routes", async () => {
+		const h = harness(1, undefined, true);
+		Object.assign(h.state, {
+			runtimeSubmitProtocol: "v2",
+			runtimeCursor: "cursor-1",
+		});
+		try {
+			const reference = await h.authorize();
+			const controller = new AbortController();
+			const stream = h.runtime.runtimeHost.events(
+				h.events(reference),
+				controller.signal,
+			);
+			const iterator = stream[Symbol.asyncIterator]();
+			const pendingRead = iterator.next();
+			const abortTimer = setTimeout(() => controller.abort(), 20);
+			await expect(pendingRead).rejects.toMatchObject({
+				code: "RUNTIME_INTERRUPTED",
+			});
+			clearTimeout(abortTimer);
+			if (!h.runtime.runtimeHost.acknowledge)
+				throw new Error("Runtime ACK is unavailable");
+			await h.runtime.runtimeHost.acknowledge({
+				...h.events(reference),
+				confirmedCursor: "cursor-1",
+			});
+			const paths = h.fetcher.mock.calls.map(([url]) => String(url));
+			expect(paths[0]).toBe(
+				"https://runtime.test/internal/runtime/v3/events/stream",
+			);
+			expect(paths.at(-1)).toBe(
+				"https://runtime.test/internal/runtime/v3/events/ack",
+			);
+			expect(paths).not.toContain(
+				"https://runtime.test/internal/runtime/v4/events/read",
+			);
+			expect(paths).not.toContain(
+				"https://runtime.test/internal/runtime/v4/events/ack",
+			);
 		} finally {
 			h.runtime.close();
 		}

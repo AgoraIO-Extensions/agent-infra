@@ -6,6 +6,7 @@ import {
 	captureApplicationTaskAuthorizationBoundaryV1,
 	captureTaskAuthorizationBoundaryV1,
 	isTaskAuthorizationCurrentV1,
+	isTaskPrincipalChannelV1,
 	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
 	planTaskSystemControlV1,
@@ -497,6 +498,49 @@ it("requires current API user use grant even while its Owner and organization ac
 			channelId: "api:application",
 		}),
 	).toBeNull();
+});
+
+it("reserves bare api and binds canonical API channels to principal kind", () => {
+	const principal = { kind: "user" as const, id: user.userId };
+	const ownerAgent = { ...agent, ownerIds: [user.userId] };
+	expect(capture({ agent: ownerAgent, channelId: "api" })).toBeNull();
+	expect(capture({ agent: ownerAgent, channelId: "web" })).toMatchObject({
+		accessSources: expect.arrayContaining([
+			{ kind: "owner", userId: user.userId },
+		]),
+	});
+	const granted = {
+		...ownerAgent,
+		principalGrants: [
+			{
+				principal,
+				grantType: "use" as const,
+				revokedAt: null,
+				authorizationRevision: "agent-access-4",
+			},
+		],
+	};
+	expect(capture({ agent: granted, channelId: "api" })).toBeNull();
+	expect(capture({ agent: granted, channelId: "api:user" })).not.toBeNull();
+	expect(
+		capture({
+			agent: granted,
+			principal: { kind: "application", id: user.userId },
+			channelId: "api",
+		}),
+	).toBeNull();
+	for (const kind of ["user", "application"] as const) {
+		const subject = { kind, id: user.userId };
+		expect(isTaskPrincipalChannelV1(subject, "api")).toBe(false);
+		expect(isTaskPrincipalChannelV1(subject, `api:${kind}`)).toBe(true);
+		expect(isTaskPrincipalChannelV1(subject, "api:unknown")).toBe(false);
+		expect(
+			isTaskPrincipalChannelV1(
+				subject,
+				kind === "user" ? "api:application" : "api:user",
+			),
+		).toBe(false);
+	}
 });
 
 it.each(["owner", "user", "organization"] as const)(

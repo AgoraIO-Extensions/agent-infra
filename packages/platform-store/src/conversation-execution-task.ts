@@ -25,7 +25,10 @@ import {
 	reserveIdempotency,
 } from "./conversation-execution-sql.js";
 import { currentRelayKeyVersionInTransaction } from "./relay-key-versions.js";
-import { insertTaskAuthorization } from "./task-authorization.js";
+import {
+	insertTaskAuthorization,
+	requireCurrentTaskApiAccess,
+} from "./task-authorization.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
 type SubmitRequest = Parameters<
@@ -203,6 +206,14 @@ export async function submitConversationTask(
 	await transaction`select pg_advisory_xact_lock(pg_catalog.hashtextextended(${`task:principal:${scope.scopeId}`}, 0))`;
 	const existing = await readIdempotency(transaction, scope);
 	if (existing) {
+		const currentAgent = await readAgent(transaction, authority.agentId);
+		if (currentAgent.authorizationRevision !== authority.authorizationRevision)
+			return { outcome: "denied", reason: "agent_unavailable" };
+		await requireCurrentTaskApiAccess(
+			transaction,
+			authority.taskBoundary,
+			currentAgent.authorizationRevision,
+		);
 		if (existing.request_digest !== request.requestDigest)
 			return { outcome: "conflict", reason: "idempotency_conflict" };
 		if (existing.status !== "completed") unavailable();

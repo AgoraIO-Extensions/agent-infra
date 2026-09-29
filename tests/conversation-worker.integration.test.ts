@@ -3,7 +3,7 @@ import {
 	execFile as execFileCallback,
 	spawn,
 } from "node:child_process";
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { once } from "node:events";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type RequestListener } from "node:http";
@@ -16,6 +16,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
 	CodexRuntimeDriver,
+	createExecutionGrantVerifier,
 	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
 	createWorkloadReadinessVerifierV1,
@@ -32,7 +33,12 @@ import {
 	TaskProjectionV1Schema,
 	TaskSseMessageV1Schema,
 } from "@agent-infra/contracts/pilot";
-import type { RuntimeSubmitTurnRequestV3 } from "@agent-infra/contracts/runtime";
+import type {
+	ExecutionGrantClaimsV1,
+	ExecutionGrantV1,
+	RuntimeSubmitTurnRequestV2,
+	RuntimeSubmitTurnRequestV3,
+} from "@agent-infra/contracts/runtime";
 import {
 	createFakeModelCatalogAdapterV1,
 	projectRuntimeModelConfigurationV4,
@@ -142,12 +148,56 @@ async function writeSyntheticModelResponse(
 	response.end();
 }
 
-async function waitUntil(check: () => Promise<boolean>, label: string) {
+async function waitUntil(
+	check: () => Promise<boolean>,
+	label: string,
+	checkTimeoutMs = 5_000,
+) {
 	for (let attempt = 0; attempt < 150; attempt++) {
-		if (await check()) return;
+		let timer: NodeJS.Timeout | undefined;
+		try {
+			const result = await Promise.race([
+				check(),
+				new Promise<never>((_, reject) => {
+					timer = setTimeout(
+						() =>
+							reject(new Error(`Check timed out after ${checkTimeoutMs}ms`)),
+						checkTimeoutMs,
+					);
+				}),
+			]);
+			if (result) return;
+		} catch (error) {
+			throw new Error(`Check failed: ${label}`, { cause: error });
+		} finally {
+			if (timer) clearTimeout(timer);
+		}
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
 	throw Error(`Timed out: ${label}`);
+}
+
+async function settleQuery<T>(
+	query: Promise<T> & { cancel?: () => void },
+	label: string,
+	timeoutMs = 5_000,
+): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	let timedOut = false;
+	try {
+		return await Promise.race([
+			query,
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(() => {
+					timedOut = true;
+					reject(new Error(`Query timed out: ${label}`));
+				}, timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+		if (timedOut) query.cancel?.();
+	}
 }
 
 // Real PostgreSQL and the packaged production module/CLI, with controlled Kubernetes
@@ -164,9 +214,80 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				}
 			: await startPostgresTestDatabase("766-worker-dispatch");
 	const sql = postgres(database.databaseUrl, { max: 2 });
+	const diagnosticSql = postgres(database.databaseUrl, {
+		max: 1,
+		connect_timeout: 3,
+		idle_timeout: 5,
+		application_name: "conversation-worker-855-diagnostic",
+	});
 	const children: ChildProcess[] = [];
 	const output: string[] = [];
 	const traces: string[] = [];
+	const nativeStartedAt = Date.now();
+	let nativeStage = "setup";
+	const recordNativeStage = (
+		stage: string,
+		details: Record<string, unknown> = {},
+	) => {
+		nativeStage = stage;
+		process.stderr.write(
+			`[855-native-stage] ${JSON.stringify({
+				stage,
+				elapsedMs: Date.now() - nativeStartedAt,
+				...details,
+			})}\n`,
+		);
+	};
+	const sampleBlocking = async (stage: string) => {
+		try {
+			const rows = await diagnosticSql<
+				{
+					pid: number;
+					applicationName: string | null;
+					state: string | null;
+					waitEventType: string | null;
+					waitEvent: string | null;
+					blocking: boolean;
+				}[]
+			>`
+				select pid,
+				       application_name as "applicationName",
+				       state,
+				       wait_event_type as "waitEventType",
+				       wait_event as "waitEvent",
+				       cardinality(pg_blocking_pids(pid)) > 0 as blocking
+				from pg_stat_activity
+				where datname=current_database()
+				  and pid <> pg_backend_pid()
+				  and (application_name like 'conversation-worker-%'
+				       or application_name like 'platform-%')
+				order by pid
+			`;
+			recordNativeStage(`${stage}.pg_activity`, {
+				connections: rows.map(
+					({
+						pid,
+						applicationName,
+						state,
+						waitEventType,
+						waitEvent,
+						blocking,
+					}) => ({
+						pid,
+						applicationName,
+						state,
+						waitEventType,
+						waitEvent,
+						blocking,
+					}),
+				),
+			});
+		} catch (error) {
+			recordNativeStage(`${stage}.pg_activity_error`, {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	};
 	const requests: {
 		path: string;
 		executionId?: string;
@@ -710,9 +831,9 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			runtimeWorkerId: signing.workerId,
 			readinessWorkerId: signing.workerId,
 			serviceToken: "synthetic-runtime-token",
-			verifyGrant: () => {
-				throw Error("V1 disabled");
-			},
+			verifyGrant: createExecutionGrantVerifier(
+				new Map([[signing.keyId, keys.publicKey]]),
+			),
 			verifyGrantV2: createRuntimeExecutionGrantVerifierV2(
 				new Map([[signing.keyId, keys.publicKey]]),
 			),
@@ -854,6 +975,74 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				workerId: signing.workerId,
 				keyId: signing.keyId,
 				privateKey: keys.privateKey,
+			});
+			const legacyV2Unsigned: Omit<RuntimeSubmitTurnRequestV2, "grant"> = {
+				schemaVersion: 2,
+				requestId: "legacy-static-key-v2-request",
+				traceId: "legacy-static-key-v2-trace",
+				actorId: "user-cli",
+				channelId: "web",
+				agentId: desired.agentId,
+				conversationId: "legacy-static-key-v2-conversation",
+				executionId: "legacy-static-key-v2-execution",
+				turnId: "legacy-static-key-v2-turn",
+				sessionGeneration: 1,
+				deliveryFence: 1,
+				hostSessionRef: undefined,
+				input: { text: "must be rejected", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "worker-controlled-model",
+					reasoningLevel: "medium",
+				},
+			};
+			const legacyV2Claims: ExecutionGrantClaimsV1 = {
+				schemaVersion: 1,
+				issuer: signing.issuer,
+				audience: ["runtime_host"],
+				issuedAt: new Date(Date.now() - 1_000).toISOString(),
+				expiresAt: new Date(Date.now() + 30_000).toISOString(),
+				grantId: "legacy-static-key-v2-grant",
+				agentId: legacyV2Unsigned.agentId,
+				actorId: legacyV2Unsigned.actorId,
+				channelId: legacyV2Unsigned.channelId,
+				conversationId: legacyV2Unsigned.conversationId,
+				executionId: legacyV2Unsigned.executionId,
+				turnId: legacyV2Unsigned.turnId,
+				sessionGeneration: legacyV2Unsigned.sessionGeneration,
+				allowedCommands: ["turn.submit"],
+				attachments: [],
+				actionSetVersion: "packaged-v4-test",
+				actionIds: [],
+				traceId: legacyV2Unsigned.traceId,
+			};
+			const legacyV2Protected = Buffer.from(
+				JSON.stringify({ alg: "EdDSA", kid: signing.keyId }),
+			).toString("base64url");
+			const legacyV2Payload = Buffer.from(
+				JSON.stringify(legacyV2Claims),
+			).toString("base64url");
+			const legacyV2SigningInput = `${legacyV2Protected}.${legacyV2Payload}`;
+			const legacyV2Grant: ExecutionGrantV1 = {
+				schemaVersion: 1,
+				format: "compact-jws",
+				token: `${legacyV2SigningInput}.${sign(
+					null,
+					Buffer.from(legacyV2SigningInput, "ascii"),
+					keys.privateKey,
+				).toString("base64url")}`,
+			};
+			const legacyV2Response = await app.request("/internal/runtime/v2/turns", {
+				method: "POST",
+				headers: {
+					authorization: "Bearer synthetic-runtime-token",
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ ...legacyV2Unsigned, grant: legacyV2Grant }),
+			});
+			expect(legacyV2Response.status).toBe(403);
+			expect(await legacyV2Response.json()).toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
 			});
 			const legacyUnsigned: Omit<RuntimeSubmitTurnRequestV3, "grant"> = {
 				schemaVersion: 3,
@@ -2080,7 +2269,9 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 				(intent) => intent.executionId === second.executionId,
 			);
 			if (!secondIntent) throw Error("Second principal model intent missing");
+			recordNativeStage("third.admit.begin");
 			const third = await admitHttp("user-second", "worker-third");
+			recordNativeStage("third.admit.done", { executionId: third.executionId });
 			await waitUntil(async () => {
 				const [queuedThird] = await sql<{ status: string }[]>`
 					select status from platform.outbox_items
@@ -2090,9 +2281,20 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 					queuedThird?.status ?? "",
 				);
 			}, "third task remains queued behind second principal");
-			const heldThird = await sql.begin(
-				async (transaction) =>
-					transaction<{ id: string; status: string }[]>`
+			recordNativeStage("third.pending.observed", {
+				executionId: third.executionId,
+			});
+			let heldThird: { id: string; status: string }[];
+			try {
+				recordNativeStage("third.hold.begin", {
+					executionId: third.executionId,
+				});
+				heldThird = await sql.begin(async (transaction) => {
+					await transaction`
+						select set_config('lock_timeout', '3s', true),
+						       set_config('statement_timeout', '5s', true)
+					`;
+					return transaction<{ id: string; status: string }[]>`
 						update platform.outbox_items o
 						set available_at=clock_timestamp()+interval '1 hour'
 						where o.id=${`conversation:turn:${third.executionId}`}
@@ -2102,10 +2304,22 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 							select 1 from platform.conversation_executions e
 							where e.execution_id=${third.executionId} and e.status='waiting'
 						  )
-						returning o.id, o.status
-					`,
-			);
+								returning o.id, o.status
+							`;
+				});
+				recordNativeStage("third.hold.commit", {
+					executionId: third.executionId,
+					rows: heldThird.length,
+				});
+			} catch (error) {
+				recordNativeStage("third.hold.error", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+				await sampleBlocking("third.hold");
+				throw error;
+			}
 			expect(heldThird).toHaveLength(1);
+			recordNativeStage("second.response.release");
 			releaseSecondModelResponse?.();
 			await waitUntil(
 				async () =>
@@ -2117,6 +2331,9 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 					).length === 1,
 				"second principal native Codex execution completes",
 			);
+			recordNativeStage("second.completed", {
+				executionId: second.executionId,
+			});
 			const secondFacts = await sql<
 				{
 					phase: string;
@@ -2151,14 +2368,23 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 				),
 			).toBe(true);
 			const revokedRevision = "authority-2";
-			const revokedGrant = await sql.begin(async (transaction) => {
-				await transaction`
+			recordNativeStage("third.revoke.begin", {
+				executionId: third.executionId,
+			});
+			let revokedGrant: { principal_id: string; grant_type: string }[];
+			try {
+				revokedGrant = await sql.begin(async (transaction) => {
+					await transaction`
+						select set_config('lock_timeout', '3s', true),
+						       set_config('statement_timeout', '5s', true)
+					`;
+					await transaction`
 						select id from platform.agents
 						where id=${desired.agentId} for update
 					`;
-				const revoked = await transaction<
-					{ principal_id: string; grant_type: string }[]
-				>`
+					const revoked = await transaction<
+						{ principal_id: string; grant_type: string }[]
+					>`
 						update platform.agent_principal_grants
 						set revoked_at=clock_timestamp()
 						where agent_id=${desired.agentId}
@@ -2168,23 +2394,36 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 						  and revoked_at is null
 						returning principal_id, grant_type
 					`;
-				if (revoked.length !== 1)
-					throw Error("Expected one API grant to revoke");
-				const [agent] = await transaction<{ authorization_revision: string }[]>`
+					if (revoked.length !== 1)
+						throw Error("Expected one API grant to revoke");
+					const [agent] = await transaction<
+						{ authorization_revision: string }[]
+					>`
 						update platform.agents
 						set authorization_revision=${revokedRevision}
 						where id=${desired.agentId}
 						returning authorization_revision
 					`;
-				if (agent?.authorization_revision !== revokedRevision)
-					throw Error("Agent authorization revision did not advance");
-				await transaction`
+					if (agent?.authorization_revision !== revokedRevision)
+						throw Error("Agent authorization revision did not advance");
+					await transaction`
 						update platform.agent_principal_grants
 						set authorization_revision=${revokedRevision}
 						where agent_id=${desired.agentId} and revoked_at is null
 					`;
-				return revoked;
-			});
+					return revoked;
+				});
+				recordNativeStage("third.revoke.commit", {
+					executionId: third.executionId,
+					rows: revokedGrant.length,
+				});
+			} catch (error) {
+				recordNativeStage("third.revoke.error", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+				await sampleBlocking("third.revoke");
+				throw error;
+			}
 			expect(revokedGrant).toEqual([
 				{ principal_id: "user-second", grant_type: "use" },
 			]);
@@ -2231,6 +2470,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 					).length === 1,
 				"revoked queued principal is rejected before Runtime dispatch",
 			);
+			recordNativeStage("third.cancelled", { executionId: third.executionId });
 			expect(
 				requests.filter(
 					(request) =>
@@ -2356,6 +2596,47 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 		]);
 		expect(output.join("")).not.toContain("PRIVATE KEY");
 	} catch (error) {
+		recordNativeStage("catch", {
+			stageAtFailure: nativeStage,
+			error:
+				error instanceof Error
+					? {
+							name: error.name,
+							message: error.message,
+							stack: error.stack?.slice(0, 1200),
+						}
+					: String(error),
+		});
+		const snapshot = async <T>(
+			label: string,
+			query: Promise<T> & { cancel?: () => void },
+		) => {
+			try {
+				return await settleQuery(query, label);
+			} catch (snapshotError) {
+				return {
+					error:
+						snapshotError instanceof Error
+							? snapshotError.message
+							: String(snapshotError),
+				};
+			}
+		};
+		const [audit, outbox, execution] = await Promise.all([
+			snapshot(
+				"audit snapshot",
+				sql`select event_type, payload->>'errorCode' as error_code from platform.persisted_events`,
+			),
+			snapshot(
+				"outbox snapshot",
+				sql`select id, status, attempt_count, delivery_fence, available_at, lease_expires_at from platform.outbox_items`,
+			),
+			snapshot(
+				"execution snapshot",
+				sql`select execution_id, status, execution_source, relay_key_id from platform.conversation_executions`,
+			),
+		]);
+		recordNativeStage("catch.snapshots.done");
 		throw new Error(
 			JSON.stringify({
 				traces: traces.slice(-30),
@@ -2370,48 +2651,83 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 					exitCode: child.exitCode,
 					signalCode: child.signalCode,
 				})),
-				audit:
-					await sql`select event_type, payload->>'errorCode' as error_code from platform.persisted_events`,
-				outbox:
-					await sql`select id, status, attempt_count, delivery_fence, available_at, lease_expires_at from platform.outbox_items`,
-				execution:
-					await sql`select execution_id, status, execution_source, relay_key_id from platform.conversation_executions`,
+				audit,
+				outbox,
+				execution,
 			}),
 			{ cause: error },
 		);
 	} finally {
+		recordNativeStage("cleanup.begin");
 		releaseModelResponse?.();
+		releaseSecondModelResponse?.();
+		recordNativeStage("provider.gates.released");
 		for (const child of children)
 			if (child.exitCode === null) child.kill("SIGKILL");
-		await Promise.all(
-			children.map((child) =>
-				child.exitCode !== null || child.signalCode
-					? Promise.resolve()
-					: once(child, "exit"),
-			),
-		);
-		await Promise.all([
-			execution?.close(),
-			authorization?.close(),
-			apiRunning ? createPlatformApiShutdown(apiRunning)() : undefined,
-		]);
-		await sql.end({ timeout: 0 });
-		await host?.close();
+		const cleanup = async (label: string, action: () => Promise<unknown>) => {
+			let timer: NodeJS.Timeout | undefined;
+			try {
+				await Promise.race([
+					action(),
+					new Promise<never>((_, reject) => {
+						timer = setTimeout(
+							() => reject(new Error(`Cleanup timed out: ${label}`)),
+							5_000,
+						);
+					}),
+				]);
+				recordNativeStage(`cleanup.${label}.done`);
+			} catch (cleanupError) {
+				recordNativeStage(`cleanup.${label}.error`, {
+					error:
+						cleanupError instanceof Error
+							? cleanupError.message
+							: String(cleanupError),
+				});
+			} finally {
+				if (timer) clearTimeout(timer);
+			}
+		};
+		await cleanup("children", async () => {
+			await Promise.all(
+				children.map((child) =>
+					child.exitCode !== null || child.signalCode
+						? Promise.resolve()
+						: once(child, "exit"),
+				),
+			);
+		});
+		await cleanup("stores", async () => {
+			await Promise.all([
+				execution?.close(),
+				authorization?.close(),
+				apiRunning ? createPlatformApiShutdown(apiRunning)() : undefined,
+			]);
+		});
+		await cleanup("sql", () => sql.end({ timeout: 0 }));
+		await cleanup("diagnostic-sql", () => diagnosticSql.end({ timeout: 0 }));
+		await cleanup("host", async () => host?.close());
 		modelServer?.closeAllConnections();
 		runtimeServer?.closeAllConnections();
 		kube.closeAllConnections();
-		await Promise.all([
-			runtimeServer
-				? new Promise<void>((done) => runtimeServer?.close(() => done()))
-				: undefined,
-			new Promise<void>((done) => kube.close(() => done())),
-			modelServer
-				? new Promise<void>((done) => modelServer?.close(() => done()))
-				: undefined,
-		]);
-		await database.stop();
+		await cleanup("servers", async () => {
+			await Promise.all([
+				runtimeServer
+					? new Promise<void>((done) => runtimeServer?.close(() => done()))
+					: undefined,
+				new Promise<void>((done) => kube.close(() => done())),
+				modelServer
+					? new Promise<void>((done) => modelServer?.close(() => done()))
+					: undefined,
+			]);
+		});
+		await cleanup("database", () => database.stop());
 		if (moduleDirectory)
-			await rm(moduleDirectory, { recursive: true, force: true });
-		await rm(directory, { recursive: true, force: true });
+			await cleanup("module-directory", () =>
+				rm(moduleDirectory as string, { recursive: true, force: true }),
+			);
+		await cleanup("fixture-directory", () =>
+			rm(directory, { recursive: true, force: true }),
+		);
 	}
 }, 120_000);

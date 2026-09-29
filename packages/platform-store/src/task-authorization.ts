@@ -265,6 +265,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 					const [deployment] = await transaction
 						.select({
 							configurationRevision: agents.currentConfigurationRevision,
+							currentAgentAuthorizationRevision: agents.authorizationRevision,
 							workload: workloadReconciliations.state,
 						})
 						.from(agents)
@@ -292,6 +293,8 @@ export class PostgresTaskAuthorizationStoreV1 {
 						boundary,
 						revokedAt: record.revokedAt,
 						agent,
+						currentAgentAuthorizationRevision:
+							deployment.currentAgentAuthorizationRevision,
 						configurationRevision: deployment.configurationRevision,
 						workload: decoded && !decoded.legacy ? decoded.state : null,
 					};
@@ -405,23 +408,27 @@ export class PostgresTaskAuthorizationStoreV1 {
 						`;
 					}
 				}
-				if (
-					input.reason === "recovery" ||
-					input.reason === "stop" ||
-					input.reason === "authorization_revoked"
-				) {
-					const controls = await transaction<
-						{ id: string; reason: "stop" | "authorization_revoked" }[]
-					>`
+				const historicalControls = await transaction<
+					{ id: string; reason: "stop" | "authorization_revoked" }[]
+				>`
 						select id, reason from platform.task_control_records
 						where execution_id = ${input.executionId}
 							and authorization_record_id = ${record.id}
 							and reason in ('stop', 'authorization_revoked')
 					`;
-					// Keep the Host's original control binding across stop, revocation and
-					// recovery. Two historical bindings cannot identify the latched one.
-					if (controls.length > 1) throw new TaskAuthorizationStoreError();
-					const [control] = controls;
+				if (
+					historicalControls.length > 1 &&
+					(input.reason !== "recovery" ||
+						!["completed", "failed", "cancelled"].includes(execution.status))
+				)
+					throw new TaskAuthorizationStoreError();
+				if (
+					["recovery", "stop", "authorization_revoked"].includes(
+						input.reason,
+					) &&
+					historicalControls.length <= 1
+				) {
+					const [control] = historicalControls;
 					if (control) {
 						if (plan.revokeAuthorization) {
 							const newlyRevoked = await transaction<{ id: string }[]>`

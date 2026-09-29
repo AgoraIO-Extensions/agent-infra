@@ -332,7 +332,7 @@ export function createConversationRuntimeV2(
 		signal: AbortSignal,
 	) {
 		const context = contextFor(request);
-		let state = await stateFor(context, signal);
+		let state: ConversationRuntimeStateV2 = await stateFor(context, signal);
 		const beforeRoute = await current(context, state, command, signal);
 		let authority = beforeRoute.authority;
 		const target = await bounded(
@@ -494,7 +494,11 @@ export function createConversationRuntimeV2(
 		signal: AbortSignal,
 	) {
 		const { context, state, target, authority } = prepared;
-		if (!hasKeyedV4Selection(context.claim)) return null;
+		if (
+			!hasKeyedV4Selection(context.claim) ||
+			state.runtimeSubmitProtocol !== "v4"
+		)
+			return null;
 		if (
 			!state.hostSessionRef ||
 			!options.executionKeys ||
