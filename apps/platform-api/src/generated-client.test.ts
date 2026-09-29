@@ -18,11 +18,14 @@ const generatedSdkV2 = await import(
 const { createClient } = generatedClient;
 const { createClient: createClientV2 } = generatedClientV2;
 const {
+	getAgent,
 	createConversation,
 	getConversation,
 	getCurrentSession,
 	getExecutionDetail,
+	listAgentApplications,
 	listConversations,
+	listPendingAgentApplications,
 	listPlatformAudit,
 	regenerateAnswer,
 	stopExecution,
@@ -346,6 +349,29 @@ function testApp() {
 }
 
 describe("generated Pilot browser client", () => {
+	it("reports retired V1 management operations through the published client", async () => {
+		const { app, resolve } = testApp();
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async (input: string | URL | Request, init?: RequestInit) =>
+				app.fetch(input instanceof Request ? input : new Request(input, init)),
+		});
+		const results = await Promise.all([
+			listAgentApplications({ client }),
+			listPendingAgentApplications({ client }),
+			getAgent({ client, path: { agentId: "agent-1" } }),
+		]);
+
+		for (const result of results) {
+			expect(result.response.status).toBe(400);
+			expect(result.error).toMatchObject({
+				code: "INVALID_REQUEST",
+				retryable: false,
+			});
+		}
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
 	it("consumes every V2 management operation through the Hono Adapter", async () => {
 		const { app, resolve } = testApp();
 		const client = createClient({
