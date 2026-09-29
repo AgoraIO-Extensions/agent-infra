@@ -296,6 +296,7 @@ describe("contract compatibility command", () => {
 		for (const path of Object.keys(previous.paths)) {
 			if (
 				path !== "/api/v2/admin/audit" &&
+				path !== "/api/v2/admin/users/{userId}/disable" &&
 				!path.startsWith("/api/v2/conversations/")
 			)
 				delete previous.paths[path];
