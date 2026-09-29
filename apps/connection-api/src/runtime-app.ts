@@ -386,7 +386,16 @@ export function createPreSubmitGithubOAuthAdapter(
 		fetcher: primary,
 	});
 	return {
-		getAuthorizationUrl: (input) => defaultAdapter.getAuthorizationUrl(input),
+		getAuthorizationUrl: (input) => {
+			const authorizationUrl = defaultAdapter.getAuthorizationUrl(input);
+			if (!input.requestedScopes) return authorizationUrl;
+			const url = new URL(authorizationUrl);
+			url.searchParams.set(
+				"scope",
+				[...input.requestedScopes].sort().join(" "),
+			);
+			return url.toString();
+		},
 		exchangeCode: async (input, onStage) => {
 			const selected = await selectExchangeFetcher();
 			const observedFetch: typeof fetch = (request, init) => {

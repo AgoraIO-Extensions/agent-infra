@@ -2485,6 +2485,16 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					requestId,
 					providerId: `approval-provider-${suffix}`,
 				});
+				expect(
+					await connections.validatePersonalConnectRequest({
+						principalId: applicantId,
+						providerId: `approval-provider-${suffix}`,
+						requestId,
+					}),
+				).toEqual({ requiredScopes: ["approval.read"] });
+				expect(
+					await requestRepository.prepareConnect(applicantId, requestId),
+				).not.toHaveProperty("requiredScopes");
 				await expect(
 					requestRepository.prepareConnect(approverId, requestId),
 				).rejects.toMatchObject({ code: "FORBIDDEN" });

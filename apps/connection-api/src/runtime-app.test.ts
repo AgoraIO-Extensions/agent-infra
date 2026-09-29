@@ -12,6 +12,30 @@ const tokenUrl = "https://github.com/login/oauth/access_token";
 const profileUrl = "https://api.github.com/user";
 
 describe("GitHub OAuth pre-submit egress", () => {
+	it("uses the approved request scopes instead of catalog-wide defaults", () => {
+		const adapter = createPreSubmitGithubOAuthAdapter(
+			{ clientId: "client", clientSecret: "secret" },
+			vi.fn<typeof fetch>(),
+			async () => vi.fn<typeof fetch>(),
+		);
+		const input = {
+			codeChallenge: "challenge",
+			redirectUri: "https://connection.test/oauth/callback",
+			state: "state",
+		};
+		const limited = new URL(
+			adapter.getAuthorizationUrl({
+				...input,
+				requestedScopes: ["repo", "read:user"],
+			}),
+		);
+		expect(limited.searchParams.get("scope")).toBe("read:user repo");
+		const shared = new URL(adapter.getAuthorizationUrl(input));
+		expect(shared.searchParams.get("scope")).toBe(
+			"read:user user:email repo delete_repo workflow",
+		);
+	});
+
 	it("keeps the proxy after an HTTP response, even an error status", async () => {
 		const primary = vi
 			.fn<typeof fetch>()
