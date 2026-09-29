@@ -670,6 +670,18 @@ describe("Connection 管理 mutation wiring", () => {
 				targetProviderReleaseId: "rehoboam-connection-v4",
 				taskId: "task-beta-codex",
 			},
+			{
+				campaignId: "campaign-manhattan",
+				connectionId: "connection-manhattan",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "manhattan",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "manhattan-connection-v5",
+				taskId: "task-manhattan",
+			},
 		];
 		const refreshed = structuredClone(initial);
 		refreshed.overview.upgradeTasks = [
@@ -678,6 +690,7 @@ describe("Connection 管理 mutation wiring", () => {
 				status: "PENDING_AUTHORIZATION",
 			},
 			initial.overview.upgradeTasks[2],
+			initial.overview.upgradeTasks[3],
 		];
 		api.getConnections
 			.mockResolvedValueOnce(initial)
@@ -736,6 +749,60 @@ describe("Connection 管理 mutation wiring", () => {
 			),
 		);
 		expect(screen.queryByRole("heading", { name: "连接 Rehoboam" })).toBeNull();
+	});
+
+	it("Manhattan 升级引导申请新版能力，不复用旧凭证", async () => {
+		const initial = await api.getConnections();
+		initial.overview.upgradeTasks = [
+			{
+				campaignId: "campaign-manhattan",
+				connectionId: "connection-manhattan",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "manhattan",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "manhattan-connection-v5",
+				taskId: "task-manhattan",
+			},
+		];
+		api.getConnections.mockResolvedValueOnce(initial);
+		api.getConnectionAccessOptions.mockResolvedValueOnce({
+			options: ["v4", "v5"].map((version) => ({
+				providerId: "manhattan",
+				providerReleaseId: `manhattan-connection-${version}`,
+				capabilityProfileId: `profile-${version}`,
+				capabilityProfileName: `Manhattan ${version}`,
+				policyVersionId: `policy-${version}`,
+				presentationId: `presentation-${version}`,
+				effectCeiling: "READ" as const,
+				actions: [
+					{
+						id: `manhattan.get_current_user@${version}`,
+						name: "manhattan.get_current_user",
+						description: "当前用户",
+						effect: "READ" as const,
+					},
+				],
+				requiredScopes: ["manhattan.sdk.read"],
+				durations: [{ kind: "FINITE" as const, days: 90 }],
+				disclaimers: [],
+			})),
+		});
+		renderPage(<ConnectionsPage />);
+
+		fireEvent.click(
+			await screen.findByRole("button", { name: "申请新版能力" }),
+		);
+		expect(
+			await screen.findByText("Manhattan", { selector: "h2" }),
+		).toBeTruthy();
+		expect(
+			await screen.findByRole("button", { name: /Manhattan v5/ }),
+		).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /Manhattan v4/ })).toBeNull();
+		expect(api.upgradeProviderConnection).not.toHaveBeenCalled();
 	});
 
 	it("批量升级刷新失败后解除进行中状态", async () => {
@@ -1023,6 +1090,21 @@ describe("Connection 管理 mutation wiring", () => {
 				screen.queryByRole("heading", { name: "选择已有连接" }),
 			).toBeNull(),
 		);
+	});
+
+	it("Manhattan 新版申请获批后重新走 SSO，不提供旧凭证升级", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=manhattan&intent=connect&accessRequestId=request-approved",
+		);
+		renderPage(<ConnectionsPage />);
+		await waitFor(() => expect(api.startManhattanOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startManhattanOAuth)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
+		});
+		expect(api.upgradeApprovedConnection).not.toHaveBeenCalled();
+		expect(screen.queryByRole("button", { name: "使用现有凭证" })).toBeNull();
 	});
 
 	it("新凭证连接完成后不因账号列表刷新重新打开窗口或复用已消费申请", async () => {

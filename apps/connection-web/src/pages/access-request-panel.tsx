@@ -57,6 +57,7 @@ export function AccessRequestPanel(props: {
 	requestsPending: boolean;
 	startProviderId: string;
 	startSignal: number;
+	targetProviderReleaseId?: string;
 }) {
 	const client = useQueryClient();
 	const options = useQuery({
@@ -73,6 +74,8 @@ export function AccessRequestPanel(props: {
 		options.data?.options.filter(
 			(item) =>
 				item.providerId === props.providerId &&
+				(!props.targetProviderReleaseId ||
+					item.providerReleaseId === props.targetProviderReleaseId) &&
 				(!props.renewalTarget ||
 					(item.capabilityProfileId ===
 						props.renewalTarget.capabilityProfileId &&
