@@ -1211,11 +1211,7 @@ export function registerV2ManagementRoutes(
 							)
 					: undefined,
 			);
-			if (
-				api &&
-				body.command === "start" &&
-				current.management.status !== "stopped"
-			)
+			if (body.command === "start" && current.management.status !== "stopped")
 				fail("CONFLICT", metadata.traceId);
 			const commands = {
 				start: "restart_agent",

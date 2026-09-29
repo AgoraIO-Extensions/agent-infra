@@ -367,4 +367,33 @@ describe("V2 management routes", () => {
 			}),
 		);
 	});
+
+	it("allows browser start only for a stopped Agent", async () => {
+		const { app, getAgent, executeManagementCommand } = createApp();
+		getAgent.mockResolvedValue({
+			...agentRecord,
+			management: { ...management, status: "available" },
+		});
+		const request = () =>
+			app.request("/api/v2/agents/agent-1/lifecycle", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ schemaVersion: 1, command: "start" }),
+			});
+
+		const conflict = await request();
+		expect(conflict.status).toBe(409);
+		expect(executeManagementCommand).not.toHaveBeenCalled();
+
+		getAgent.mockResolvedValue({
+			...agentRecord,
+			management: { ...management, status: "stopped" },
+		});
+		const accepted = await request();
+		expect(accepted.status).toBe(202);
+		expect(executeManagementCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ command: "restart_agent" }),
+			expect.objectContaining({ userId: "user-1" }),
+		);
+	});
 });

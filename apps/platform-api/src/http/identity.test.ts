@@ -5,6 +5,7 @@ import { HttpProtocolError } from "./common";
 import {
 	hydrateBrowserUsers,
 	type IdentityAdapter,
+	resolveApiIdentity,
 	resolveCurrentTaskUser,
 	resolveIdentity,
 } from "./identity";
@@ -38,6 +39,29 @@ async function caught(task: Promise<unknown>): Promise<HttpProtocolError> {
 }
 
 describe("trusted identity boundary", () => {
+	it("maps API credential directory failures to a sanitized dependency error", async () => {
+		const identityAdapter = {
+			...adapter(activeIdentity),
+			resolveApiCredential: vi
+				.fn()
+				.mockRejectedValue(new Error("private directory response")),
+		};
+		const error = await caught(
+			resolveApiIdentity(
+				identityAdapter,
+				new Request("https://platform.example.test/api/v2/agents", {
+					headers: { Authorization: "Bearer application-token" },
+				}),
+				traceId,
+			),
+		);
+		expect(error.status).toBe(503);
+		expect(error.body.code).toBe("DEPENDENCY_UNAVAILABLE");
+		expect(JSON.stringify(error.body)).not.toContain(
+			"private directory response",
+		);
+	});
+
 	it("resolves the current identity only through the injected adapter", async () => {
 		const identityAdapter = adapter(activeIdentity);
 		const request = new Request(
