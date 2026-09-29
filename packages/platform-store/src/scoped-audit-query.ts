@@ -21,7 +21,7 @@ import {
 	projectPlatformOperationAuditV1,
 	projectPlatformTaskAuditSummaryV1,
 	requirePlatformExecutionAuditBindingV1,
-	type TaskApiAuditInputV1,
+	type TaskApiAuditDetailsV1,
 	type TaskAuthorizationBoundaryV1,
 } from "@agent-infra/platform-core";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -42,7 +42,7 @@ export interface ScopedPlatformAuditProjectionV1 {
 	readonly result: PlatformAuditQueryResultV1;
 	readonly summary: string;
 	readonly taskApi: Pick<
-		TaskApiAuditInputV1,
+		TaskApiAuditDetailsV1,
 		"operation" | "phase" | "reason" | "subscriptionId"
 	> | null;
 	readonly occurredAt: Date;
@@ -358,7 +358,7 @@ function project(
 	// agreement with the trusted actor, target and result columns.
 	const taskDetails =
 		row.action.startsWith("task.api.") && legacy
-			? (row.details as TaskApiAuditInputV1)
+			? (row.details as TaskApiAuditDetailsV1)
 			: null;
 	const taskApi = taskDetails
 		? {

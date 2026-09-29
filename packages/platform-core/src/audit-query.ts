@@ -56,7 +56,7 @@ function sameApiPrincipalV1(
 }
 
 /** Task API metadata consumed by audit projection; producers remain owned by #482. */
-export interface TaskApiAuditInputV1 {
+export interface TaskApiAuditDetailsV1 {
 	readonly operation: "submit" | "read" | "cancel" | "subscribe";
 	readonly phase: "access" | "subscription.started" | "subscription.ended";
 	readonly reason: string;
