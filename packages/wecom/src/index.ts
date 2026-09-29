@@ -217,7 +217,9 @@ export function createWecomAdapterV1(options: {
 				if (plain.length < 20) return invalid();
 				const length = plain.readUInt32BE(16);
 				if (length > plain.length - 20) return invalid();
-				const receiver = plain.subarray(20 + length).toString("utf8");
+				const receiver = new TextDecoder("utf-8", { fatal: true }).decode(
+					plain.subarray(20 + length),
+				);
 				if (
 					receiver !== (config.kind === "wecom_bot" ? "" : config.corporationId)
 				)

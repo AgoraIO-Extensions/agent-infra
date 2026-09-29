@@ -16,7 +16,7 @@ const config = {
 };
 function request(
 	payload: unknown,
-	receiver = "",
+	receiver: string | Buffer = "",
 	timestamp = String(now.getTime() / 1000),
 ) {
 	const message = Buffer.from(
@@ -164,6 +164,25 @@ it("validates application XML identity and rejects DTD or duplicate fields", asy
 				`<!DOCTYPE xml [<!ENTITY leak SYSTEM "file:///etc/passwd">]>${xml}`,
 				"corp-1",
 			),
+		),
+	).rejects.toThrow("Invalid WeCom callback");
+});
+it("rejects a signed application envelope with malformed UTF-8 receiver bytes", async () => {
+	const app = {
+		...config,
+		kind: "wecom_app" as const,
+		corporationId: "corp-\uFFFD",
+		applicationId: "42",
+	};
+	const xml = `<xml><ToUserName>${app.corporationId}</ToUserName><FromUserName>member-1</FromUserName><CreateTime>${now.getTime() / 1000}</CreateTime><MsgType>text</MsgType><Content>hello</Content><MsgId>1234</MsgId><AgentID>42</AgentID></xml>`;
+	const adapter = createWecomAdapterV1({
+		now: () => now,
+		protectReply: async () => "protected",
+	});
+	await expect(
+		adapter.receive(
+			app,
+			request(xml, Buffer.concat([Buffer.from("corp-"), Buffer.from([0xff])])),
 		),
 	).rejects.toThrow("Invalid WeCom callback");
 });
