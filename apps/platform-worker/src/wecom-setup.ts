@@ -175,17 +175,32 @@ export function createWecomSetupWorkerV1(
 					botId: session.botId,
 					holderId,
 				});
-				if (!claim) continue;
+				const probe =
+					!claim && session.kind !== "wecom_app"
+						? await store.claimReplacementProbe(session, holderId)
+						: null;
+				const ownedLease = claim ?? probe;
+				if (!ownedLease) continue;
+				const fail = (status: "auth_failed" | "conflict") => {
+					if (claim) return store.fail(session.sessionId, status, claim);
+					if (probe) return store.failReplacementProbe(probe, status);
+					throw new Error("WeCom setup lease unavailable");
+				};
 				nextKind = session.kind === "wecom_app" ? "wecom_bot" : "wecom_app";
 				const activation = createWecomSetupActivationV1({
 					transaction: {
 						read: (input) => transaction.read(input),
-						commit: (plan) =>
-							transaction.commitWecomSetup(plan, {
-								sessionId: session.sessionId,
-								holderId: claim.holderId,
-								fence: claim.fence,
-							}),
+						commit: (plan) => {
+							if (claim)
+								return transaction.commitWecomSetup(plan, {
+									sessionId: session.sessionId,
+									holderId: claim.holderId,
+									fence: claim.fence,
+								});
+							if (probe)
+								return transaction.commitWecomReplacementProbe(plan, probe);
+							throw new Error("WeCom setup lease unavailable");
+						},
 					},
 					readCurrentUser: (actorId) =>
 						resolveCurrentTaskUserV1(options.directory, actorId),
@@ -201,13 +216,13 @@ export function createWecomSetupWorkerV1(
 				});
 				try {
 					if (!(await activation.authority(session))) {
-						await store.fail(session.sessionId, "conflict", claim);
+						await fail("conflict");
 						continue;
 					}
 					const config = await credentials(session);
 					if ("kind" in config) {
 						if (!(await applicationAccess.token(config))) {
-							await store.fail(session.sessionId, "auth_failed", claim);
+							await fail("auth_failed");
 							continue;
 						}
 					} else {
@@ -215,8 +230,12 @@ export function createWecomSetupWorkerV1(
 							configuration: config,
 							...(options.endpoint ? { endpoint: options.endpoint } : {}),
 							isLocallyCurrent: () =>
-								!closed && Date.now() < claim.leaseUntil.getTime() - 1000,
-							isCurrent: () => leases.current(claim),
+								!closed && Date.now() < ownedLease.leaseUntil.getTime() - 1000,
+							isCurrent: () => {
+								if (claim) return leases.current(claim);
+								if (probe) return store.currentReplacementProbe(probe);
+								return Promise.resolve(false);
+							},
 							receive: async () => {
 								connection.close();
 								throw new Error("WeCom setup probe cannot receive messages");
@@ -232,11 +251,12 @@ export function createWecomSetupWorkerV1(
 						await connection.connect();
 						if (!(await connection.authentication)) {
 							if (connection.terminalReason === "auth_failed")
-								await store.fail(session.sessionId, "auth_failed", claim);
+								await fail("auth_failed");
 							return;
 						}
 						connection.close();
 						connecting = undefined;
+						if (probe && !(await store.verifyReplacementProbe(probe))) continue;
 					}
 					await activation.activate(session);
 					try {
@@ -245,13 +265,13 @@ export function createWecomSetupWorkerV1(
 						/* Observation only. */
 					}
 				} catch (error) {
-					if (!(await activation.authority(session)))
-						await store.fail(session.sessionId, "conflict", claim);
+					if (!(await activation.authority(session))) await fail("conflict");
 					else throw error;
 				} finally {
 					connecting?.close();
 					connecting = undefined;
-					await leases.release(claim);
+					if (claim) await leases.release(claim);
+					if (probe) await store.releaseReplacementProbe(probe);
 				}
 				return; // One bounded authentication probe per shared Worker poll.
 			}

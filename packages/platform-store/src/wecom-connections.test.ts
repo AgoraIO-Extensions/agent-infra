@@ -93,6 +93,7 @@ it("keeps an active binding connected while replacement credentials are verifyin
 	const db = await startPostgresTestDatabase("wecom-replacement-lease");
 	const sql = postgres(db.databaseUrl);
 	const leases = new PostgresWecomConnectionsV1(db);
+	const setup = new PostgresWecomSetupV1(db);
 	try {
 		await migratePlatformDatabase(db);
 		await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values ('agent',1,'revision')`;
@@ -105,6 +106,8 @@ it("keeps an active binding connected while replacement credentials are verifyin
 			holderId: "worker",
 		});
 		if (!active) throw new Error("Missing active connection");
+		expect(await leases.status(active, "connected")).toBe(true);
+		await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id) values ('active','agent','owner',1,'revision','old',now()+interval '1 day','active','bot')`;
 		await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id) values ('replacement','agent','owner',1,'revision',${"a".repeat(64)},now()+interval '5 minutes','verifying','bot')`;
 		expect(await leases.current(active)).toBe(true);
 		expect(await leases.renew(active)).toBe(true);
@@ -116,9 +119,28 @@ it("keeps an active binding connected while replacement credentials are verifyin
 				holderId: "probe",
 			}),
 		).toBeNull();
-		await sql`update platform.wecom_setup_sessions set status='auth_failed' where session_id='replacement'`;
+		const replacement = await setup.read("replacement");
+		if (!replacement) throw new Error("Missing replacement session");
+		const first = await setup.claimReplacementProbe(replacement, "probe-one");
+		if (!first) throw new Error("Missing replacement probe");
+		expect(
+			await setup.claimReplacementProbe(replacement, "probe-two"),
+		).toBeNull();
+		await sql`update platform.wecom_setup_sessions set probe_lease_until=now()-interval '1 second' where session_id='replacement'`;
+		const second = await setup.claimReplacementProbe(replacement, "probe-two");
+		if (!second) throw new Error("Missing replacement probe takeover");
+		expect(second.fence).toBeGreaterThan(first.fence);
+		expect(await setup.currentReplacementProbe(first)).toBe(false);
+		expect(await setup.verifyReplacementProbe(first)).toBe(false);
+		await setup.failReplacementProbe(first, "auth_failed");
+		expect((await setup.read("replacement"))?.status).toBe("verifying");
+		expect(await setup.currentReplacementProbe(second)).toBe(true);
+		expect(await setup.verifyReplacementProbe(second)).toBe(true);
+		await setup.failReplacementProbe(second, "auth_failed");
+		expect((await setup.read("replacement"))?.status).toBe("auth_failed");
 		expect(await leases.current(active)).toBe(true);
 	} finally {
+		await setup.close();
 		await leases.close();
 		await sql.end();
 		await db.stop();

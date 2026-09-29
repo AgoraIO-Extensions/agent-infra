@@ -97,9 +97,17 @@ export const wecomSetupSessions = platformSchema.table(
 		callbackVerifiedAt: timestamp("callback_verified_at", {
 			withTimezone: true,
 		}),
+		probeHolderId: text("probe_holder_id"),
+		probeFence: bigint("probe_fence", { mode: "number" }).notNull().default(0),
+		probeLeaseUntil: timestamp("probe_lease_until", { withTimezone: true }),
+		botVerifiedAt: timestamp("bot_verified_at", { withTimezone: true }),
 	},
 	(table) => [
 		check("wecom_setup_kind", sql`${table.kind} in ('wecom_bot','wecom_app')`),
+		check(
+			"wecom_probe_fence_safe",
+			sql`${table.probeFence} between 0 and 9007199254740991`,
+		),
 		check(
 			"wecom_setup_status",
 			sql`${table.status} in ('awaiting_input','verifying','active','auth_failed','conflict','cancelled','expired')`,

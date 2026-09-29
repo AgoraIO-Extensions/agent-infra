@@ -51,6 +51,7 @@ it("upgrades an existing Platform database with WeCom application setup columns"
 				>`select column_name from information_schema.columns where table_schema='platform' and table_name='wecom_setup_sessions'`
 			).map((row) => row.column_name);
 		expect(await columns()).not.toContain("callback_verified_at");
+		expect(await columns()).not.toContain("bot_verified_at");
 		await migratePlatformDatabase(db);
 		expect(await columns()).toEqual(
 			expect.arrayContaining([
@@ -58,6 +59,10 @@ it("upgrades an existing Platform database with WeCom application setup columns"
 				"application",
 				"encrypted_callback",
 				"callback_verified_at",
+				"probe_holder_id",
+				"probe_fence",
+				"probe_lease_until",
+				"bot_verified_at",
 			]),
 		);
 		const [history] = await sql<

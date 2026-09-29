@@ -149,13 +149,25 @@ export class PostgresAgentConfigurationTransactionV1
 			readonly fence: number;
 		},
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
-		return this.#commit(input, undefined, claim);
+		return this.#commit(input, undefined, { ...claim, kind: "connection" });
+	}
+
+	async commitWecomReplacementProbe(
+		input: AgentConfigurationWritePlanV1,
+		probe: {
+			readonly sessionId: string;
+			readonly holderId: string;
+			readonly fence: number;
+		},
+	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
+		return this.#commit(input, undefined, { ...probe, kind: "replacement" });
 	}
 
 	async #commit(
 		input: AgentConfigurationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
 		wecom?: {
+			readonly kind: "connection" | "replacement";
 			readonly sessionId: string;
 			readonly holderId: string;
 			readonly fence: number;
@@ -222,23 +234,28 @@ export class PostgresAgentConfigurationTransactionV1
 						.where(eq(wecomSetupSessions.sessionId, wecom.sessionId))
 						.limit(1);
 					if (!candidate?.botId) return { outcome: "stale" as const };
-					const [connection] = await transaction
-						.select({ botId: wecomConnections.botId })
-						.from(wecomConnections)
-						.where(
-							and(
-								eq(wecomConnections.botId, candidate.botId),
-								eq(wecomConnections.agentId, plan.agentId),
-								eq(wecomConnections.bindingReference, wecom.sessionId),
-								eq(wecomConnections.holderId, wecom.holderId),
-								eq(wecomConnections.fence, wecom.fence),
-								sql`${wecomConnections.leaseUntil} > clock_timestamp()`,
-								sql`${wecomConnections.status} in ('verifying','connected')`,
-							),
-						)
-						.for("update")
-						.limit(1);
-					if (!connection) return { outcome: "stale" as const };
+					await transaction.execute(
+						sql`select pg_advisory_xact_lock(hashtextextended(${`wecom-setup:${candidate.botId}`},0))`,
+					);
+					if (wecom.kind === "connection") {
+						const [connection] = await transaction
+							.select({ botId: wecomConnections.botId })
+							.from(wecomConnections)
+							.where(
+								and(
+									eq(wecomConnections.botId, candidate.botId),
+									eq(wecomConnections.agentId, plan.agentId),
+									eq(wecomConnections.bindingReference, wecom.sessionId),
+									eq(wecomConnections.holderId, wecom.holderId),
+									eq(wecomConnections.fence, wecom.fence),
+									sql`${wecomConnections.leaseUntil} > clock_timestamp()`,
+									sql`${wecomConnections.status} in ('verifying','connected')`,
+								),
+							)
+							.for("update")
+							.limit(1);
+						if (!connection) return { outcome: "stale" as const };
+					}
 					const [session] = await transaction
 						.select({
 							botId: wecomSetupSessions.botId,
@@ -258,13 +275,22 @@ export class PostgresAgentConfigurationTransactionV1
 								),
 								eq(wecomSetupSessions.status, "verifying"),
 								sql`${wecomSetupSessions.expiresAt} > clock_timestamp()`,
+								...(wecom.kind === "replacement"
+									? [
+											eq(wecomSetupSessions.probeHolderId, wecom.holderId),
+											eq(wecomSetupSessions.probeFence, wecom.fence),
+											sql`${wecomSetupSessions.probeLeaseUntil} > clock_timestamp()`,
+											sql`${wecomSetupSessions.botVerifiedAt} > clock_timestamp() - interval '30 seconds'`,
+										]
+									: []),
 							),
 						)
 						.for("update")
 						.limit(1);
 					if (
 						!session ||
-						session.botId !== connection.botId ||
+						session.botId !== candidate.botId ||
+						(wecom.kind === "replacement" && session.kind !== "wecom_bot") ||
 						(session.kind === "wecom_app" && !session.callbackVerifiedAt) ||
 						configuration.channelRevision !== wecom.sessionId ||
 						!configuration.channels.some(
@@ -286,7 +312,7 @@ export class PostgresAgentConfigurationTransactionV1
 						.for("share")
 						.limit(1);
 					if (!owner) return { outcome: "stale" as const };
-					setup = { botId: connection.botId };
+					setup = { botId: candidate.botId };
 				}
 				let applicationId: string | undefined;
 				if (plan.expectedManagementRevision !== null) {
@@ -323,6 +349,30 @@ export class PostgresAgentConfigurationTransactionV1
 				const previousConfiguration = decodeAgentConfigurationRecord(
 					previous.configuration,
 				);
+				if (wecom?.kind === "replacement" && setup) {
+					const [old] = await transaction
+						.select({ sessionId: wecomSetupSessions.sessionId })
+						.from(wecomSetupSessions)
+						.where(
+							and(
+								eq(wecomSetupSessions.agentId, plan.agentId),
+								eq(wecomSetupSessions.botId, setup.botId),
+								eq(wecomSetupSessions.kind, "wecom_bot"),
+								eq(wecomSetupSessions.status, "active"),
+								sql`${wecomSetupSessions.sessionId} != ${wecom.sessionId}`,
+							),
+						)
+						.limit(1);
+					if (
+						!old ||
+						!previousConfiguration.channels.some(
+							(channel) =>
+								channel.kind === "wecom_bot" &&
+								channel.bindingReference === old.sessionId,
+						)
+					)
+						return { outcome: "stale" as const };
+				}
 				if (
 					previousConfiguration.agentId !== plan.agentId ||
 					previousConfiguration.revision !== plan.baseRevision ||
@@ -395,7 +445,9 @@ export class PostgresAgentConfigurationTransactionV1
 								eq(wecomSetupSessions.sessionId, wecom.sessionId),
 								eq(wecomSetupSessions.status, "verifying"),
 								sql`${wecomSetupSessions.expiresAt} > clock_timestamp()`,
-								sql`exists (select 1 from ${wecomConnections} where ${wecomConnections.botId} = ${setup.botId} and ${wecomConnections.holderId} = ${wecom.holderId} and ${wecomConnections.fence} = ${wecom.fence} and ${wecomConnections.leaseUntil} > clock_timestamp())`,
+								wecom.kind === "connection"
+									? sql`exists (select 1 from ${wecomConnections} where ${wecomConnections.botId} = ${setup.botId} and ${wecomConnections.holderId} = ${wecom.holderId} and ${wecomConnections.fence} = ${wecom.fence} and ${wecomConnections.leaseUntil} > clock_timestamp())`
+									: sql`${wecomSetupSessions.probeHolderId} = ${wecom.holderId} and ${wecomSetupSessions.probeFence} = ${wecom.fence} and ${wecomSetupSessions.probeLeaseUntil} > clock_timestamp() and ${wecomSetupSessions.botVerifiedAt} > clock_timestamp() - interval '30 seconds'`,
 							),
 						)
 						.returning({ sessionId: wecomSetupSessions.sessionId });

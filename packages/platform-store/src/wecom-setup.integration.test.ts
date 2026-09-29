@@ -11,6 +11,7 @@ import { PostgresAgentConfigurationQueryV1 } from "./agent-configuration.ts";
 import { PostgresPlatformAuditQueryV1 } from "./audit.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import { startPostgresTestDatabase } from "./postgres-test.ts";
+import { PostgresWecomConnectionsV1 } from "./wecom-connections.ts";
 import { PostgresWecomSetupV1 } from "./wecom-setup.ts";
 
 it.each([
@@ -23,20 +24,30 @@ it.each([
 	"timeout",
 	"activation-unavailable",
 	"commit-unavailable",
+	"replacement-success",
+	"replacement-wrong-secret",
+	"replacement-commit-unavailable",
 ] as const)(
 	"manual onboarding %s uses Worker authentication and the existing configuration authority",
 	async (mode) => {
+		const replacement = mode.startsWith("replacement-");
 		const recovers = [
 			"timeout",
 			"activation-unavailable",
 			"commit-unavailable",
+			"replacement-commit-unavailable",
 		].includes(mode);
 		const succeeds =
-			["success", "probe-closed", "concurrent-submit"].includes(mode) ||
-			recovers;
+			[
+				"success",
+				"probe-closed",
+				"concurrent-submit",
+				"replacement-success",
+			].includes(mode) || recovers;
 		const db = await startPostgresTestDatabase("wecom-setup");
 		const sql = postgres(db.databaseUrl);
 		const store = new PostgresWecomSetupV1(db);
+		const leases = new PostgresWecomConnectionsV1(db);
 		const query = new PostgresAgentConfigurationQueryV1(db);
 		const audits = new PostgresPlatformAuditQueryV1(db);
 		const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -60,7 +71,10 @@ it.each([
 				socket.send(
 					JSON.stringify({
 						headers: frame.headers,
-						errcode: mode === "wrong-secret" ? 40014 : 0,
+						errcode:
+							mode === "wrong-secret" || mode === "replacement-wrong-secret"
+								? 40014
+								: 0,
 					}),
 				);
 			});
@@ -139,6 +153,19 @@ it.each([
 			await sql`insert into platform.agent_applications (id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,desired_state,service_availability,workload_revision,fence) values ('application','agent','owner','Fixture','Fixture','available','trace','request',now(),1,1,'running','ready',1,1)`;
 			await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values ('agent','owner',now())`;
 			await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values ('agent',1,'template_01',${sql.json(configuration as unknown as postgres.JSONValue)},now())`;
+			const oldClaim = {
+				agentId: "agent",
+				bindingReference: "old-binding",
+				botId: "fixture-bot",
+				holderId: "old-worker",
+				fence: 7,
+				leaseUntil: new Date(Date.now() + 60_000),
+			};
+			if (replacement) {
+				await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id) values ('old-binding','agent','owner',1,'authorization','old',now()+interval '1 day','active','fixture-bot')`;
+				await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status) values ('fixture-bot','agent','old-binding','old-worker',7,now()+interval '1 minute','connected')`;
+				expect(await leases.current(oldClaim)).toBe(true);
+			}
 			const session = await api.setup.begin("agent", "owner");
 			const submit = () =>
 				api.setup.submit(
@@ -172,7 +199,10 @@ it.each([
 			).rejects.toThrow("unavailable");
 			if (mode === "stale-config")
 				await sql`update platform.agents set authorization_revision='updated' where id='agent'`;
-			if (mode === "commit-unavailable")
+			if (
+				mode === "commit-unavailable" ||
+				mode === "replacement-commit-unavailable"
+			)
 				await sql`alter table platform.agent_configuration_revisions add constraint fixture_commit_unavailable check (revision < 2)`;
 			if (recovers) {
 				if (mode !== "timeout") await expect(worker.tick()).rejects.toThrow();
@@ -180,8 +210,12 @@ it.each([
 				const pending = await store.read(session.sessionId);
 				expect(pending?.status).toBe("verifying");
 				expect(pending?.encryptedCredential).toBeTruthy();
+				if (replacement) expect(await leases.current(oldClaim)).toBe(true);
 				dependencyUnavailable = false;
-				if (mode === "commit-unavailable")
+				if (
+					mode === "commit-unavailable" ||
+					mode === "replacement-commit-unavailable"
+				)
 					await sql`alter table platform.agent_configuration_revisions drop constraint fixture_commit_unavailable`;
 			}
 			await worker.tick();
@@ -189,7 +223,7 @@ it.each([
 			expect(saved?.status).toBe(
 				succeeds
 					? "active"
-					: mode === "wrong-secret"
+					: mode === "wrong-secret" || mode === "replacement-wrong-secret"
 						? "auth_failed"
 						: "conflict",
 			);
@@ -209,6 +243,12 @@ it.each([
 				},
 			]);
 			expect(current.configuration.revision).toBe(succeeds ? 2 : 1);
+			if (replacement) {
+				expect(await leases.current(oldClaim)).toBe(!succeeds);
+				expect((await store.read("old-binding"))?.status).toBe(
+					succeeds ? "cancelled" : "active",
+				);
+			}
 			expect(JSON.stringify(saved)).not.toContain("fixture-secret");
 			expect(
 				await sql`select secret_id from platform.secret_records`,
@@ -248,6 +288,7 @@ it.each([
 			await api.close();
 			await audits.close();
 			await query.close();
+			await leases.close();
 			await store.close();
 			await sql.end();
 			for (const socket of server.clients) socket.terminate();

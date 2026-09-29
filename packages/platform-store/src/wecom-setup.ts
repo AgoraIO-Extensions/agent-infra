@@ -29,6 +29,12 @@ type Row = {
 		| "disconnected"
 		| "auth_failed";
 };
+export interface WecomReplacementProbeV1 {
+	readonly sessionId: string;
+	readonly holderId: string;
+	readonly fence: number;
+	readonly leaseUntil: Date;
+}
 function record(row: Row): WecomSetupRecordV1 {
 	return {
 		sessionId: row.session_id,
@@ -181,7 +187,7 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 				);
 			const rows = await sql<
 				Row[]
-			>`select s.* from platform.wecom_setup_sessions s left join platform.wecom_connections w on w.bot_id=s.bot_id and w.binding_reference=s.session_id where s.kind=${kind} and (s.kind='wecom_bot' or s.callback_verified_at is not null) and s.status='verifying' and s.expires_at>clock_timestamp() and (w.lease_until is null or w.lease_until<=clock_timestamp()) order by w.lease_until nulls first,s.expires_at,s.session_id limit 25`;
+			>`select s.* from platform.wecom_setup_sessions s left join platform.wecom_connections w on w.bot_id=s.bot_id and w.binding_reference=s.session_id where s.kind=${kind} and (s.kind='wecom_bot' or s.callback_verified_at is not null) and s.status='verifying' and s.expires_at>clock_timestamp() and (w.lease_until is null or w.lease_until<=clock_timestamp()) and (s.probe_lease_until is null or s.probe_lease_until<=clock_timestamp()) order by w.lease_until nulls first,s.expires_at,s.session_id limit 25`;
 			return {
 				rows: rows.map(record),
 				ended: ended.map((row) => row.status as "expired" | "conflict"),
@@ -189,6 +195,71 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 		});
 		for (const status of result.ended) this.#observe(status);
 		return result.rows;
+	}
+	async claimReplacementProbe(
+		session: WecomSetupRecordV1,
+		holderId: string,
+	): Promise<WecomReplacementProbeV1 | null> {
+		const [row] = await this.#sql<
+			{ probe_fence: string; probe_lease_until: Date }[]
+		>`update platform.wecom_setup_sessions s
+    set probe_holder_id=${holderId},probe_fence=s.probe_fence+1,probe_lease_until=clock_timestamp()+interval '30 seconds',bot_verified_at=null
+    from platform.agents a,platform.agent_configuration_revisions c,platform.wecom_connections w,platform.wecom_setup_sessions active
+    where s.session_id=${session.sessionId} and s.agent_id=${session.agentId} and s.bot_id=${session.botId} and s.kind='wecom_bot' and s.status='verifying' and s.expires_at>clock_timestamp()
+    and a.id=s.agent_id and a.current_configuration_revision=s.configuration_revision and a.authorization_revision=s.authorization_revision
+    and c.agent_id=a.id and c.revision=a.current_configuration_revision
+    and w.bot_id=s.bot_id and w.agent_id=a.id and w.binding_reference<>s.session_id and w.status='connected' and w.lease_until>clock_timestamp()
+    and active.session_id=w.binding_reference and active.agent_id=a.id and active.bot_id=s.bot_id and active.kind='wecom_bot' and active.status='active'
+    and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference',w.binding_reference))
+    and not exists(select 1 from jsonb_array_elements(c.configuration->'channels') channel where channel->>'kind'='wecom_bot' and channel->>'bindingReference'=w.binding_reference and channel->>'enabled'='false')
+    and exists(select 1 from platform.agent_owners o where o.agent_id=a.id and o.owner_id=s.actor_id)
+    and (s.probe_lease_until is null or s.probe_lease_until<=clock_timestamp()) and s.probe_fence<9007199254740991
+    returning s.probe_fence,s.probe_lease_until`;
+		return row
+			? {
+					sessionId: session.sessionId,
+					holderId,
+					fence: Number(row.probe_fence),
+					leaseUntil: row.probe_lease_until,
+				}
+			: null;
+	}
+	async currentReplacementProbe(probe: WecomReplacementProbeV1) {
+		const rows = await this
+			.#sql`select 1 from platform.wecom_setup_sessions s join platform.agents a on a.id=s.agent_id
+    where s.session_id=${probe.sessionId} and s.probe_holder_id=${probe.holderId} and s.probe_fence=${probe.fence} and s.probe_lease_until>clock_timestamp()
+    and s.kind='wecom_bot' and s.status='verifying' and s.expires_at>clock_timestamp()
+    and a.current_configuration_revision=s.configuration_revision and a.authorization_revision=s.authorization_revision
+    and exists(select 1 from platform.agent_owners o where o.agent_id=a.id and o.owner_id=s.actor_id)`;
+		return rows.length === 1;
+	}
+	async verifyReplacementProbe(probe: WecomReplacementProbeV1) {
+		const rows = await this
+			.#sql`update platform.wecom_setup_sessions s set bot_verified_at=clock_timestamp()
+    from platform.agents a where s.session_id=${probe.sessionId} and s.probe_holder_id=${probe.holderId} and s.probe_fence=${probe.fence} and s.probe_lease_until>clock_timestamp()
+    and s.kind='wecom_bot' and s.status='verifying' and s.expires_at>clock_timestamp() and a.id=s.agent_id
+    and a.current_configuration_revision=s.configuration_revision and a.authorization_revision=s.authorization_revision
+    and exists(select 1 from platform.agent_owners o where o.agent_id=a.id and o.owner_id=s.actor_id) returning s.session_id`;
+		return rows.length === 1;
+	}
+	async releaseReplacementProbe(probe: WecomReplacementProbeV1) {
+		await this
+			.#sql`update platform.wecom_setup_sessions set probe_lease_until=clock_timestamp() where session_id=${probe.sessionId} and probe_holder_id=${probe.holderId} and probe_fence=${probe.fence}`;
+	}
+	async failReplacementProbe(
+		probe: WecomReplacementProbeV1,
+		status: "auth_failed" | "conflict",
+	) {
+		const changed = await this.#sql.begin(async (sql) => {
+			const rows = await sql<
+				Row[]
+			>`update platform.wecom_setup_sessions set status=${status},encrypted_credential=null,encrypted_callback=null,probe_lease_until=clock_timestamp()
+      where session_id=${probe.sessionId} and probe_holder_id=${probe.holderId} and probe_fence=${probe.fence} and probe_lease_until>clock_timestamp() and status='verifying' returning *`;
+			for (const row of rows)
+				await audit(sql, record(row), "wecom.setup_failed");
+			return rows.length > 0;
+		});
+		if (changed) this.#observe(status);
 	}
 	async fail(
 		sessionId: string,
