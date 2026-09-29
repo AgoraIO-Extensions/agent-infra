@@ -185,8 +185,12 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 			}
 		}, 60_000);
 
+		const ownerToolExpectation =
+			runtime === "OpenCode"
+				? "bounds owner %s at unknown when no native receipt and denies foreign paths and symlink escapes through native permission"
+				: "allows owner %s and denies foreign paths and symlink escapes through native permission";
 		it.each(["read", "write", "edit"])(
-			"allows owner %s and denies foreign paths and symlink escapes through native permission",
+			ownerToolExpectation,
 			async (toolName) => {
 				const path = await mkdtemp(join(tmpdir(), "opencode-tools-"));
 				const calls: string[] = [];
@@ -369,10 +373,10 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 									accepted.nativeSessionRef,
 									"execution-a",
 								),
-							).toBe("completed"),
+							).toBe(runtime === "OpenCode" ? "unknown" : "completed"),
 						{ timeout: 20_000 },
 					);
-					if (toolName === "read")
+					if (toolName === "read" && runtime === "Pi")
 						expect(calls.at(-1)).toContain("SYNTHETIC_OWNER_CANARY");
 					const ownerEvents = await driver.replayEvents(
 						accepted.nativeSessionRef,
@@ -397,22 +401,28 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 							? [event.payload]
 							: [],
 					);
-					expect(modelFacts.map((fact) => fact.phase)).toEqual([
-						"intent",
-						"started",
-						"completed",
-						"intent",
-						"started",
-						"completed",
-					]);
-					expect(persistedIntentsAtSend.slice(0, 2)).toEqual([1, 2]);
+					expect(modelFacts.map((fact) => fact.phase)).toEqual(
+						runtime === "OpenCode"
+							? ["intent", "started", "completed"]
+							: [
+									"intent",
+									"started",
+									"completed",
+									"intent",
+									"started",
+									"completed",
+								],
+					);
+					expect(
+						persistedIntentsAtSend.slice(0, runtime === "OpenCode" ? 1 : 2),
+					).toEqual(runtime === "OpenCode" ? [1] : [1, 2]);
 					expect(
 						new Set(
 							modelFacts
 								.filter((fact) => fact.phase === "intent")
 								.map((fact) => fact.attemptRef),
 						).size,
-					).toBe(2);
+					).toBe(runtime === "OpenCode" ? 1 : 2);
 					expect(modelFacts[2]?.usage).toMatchObject({
 						inputTokens: 10,
 						outputTokens: 10,
@@ -425,10 +435,23 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 							: [],
 					);
 					expect(ownerToolFacts.map((fact) => fact.phase)).toEqual(
-						runtime === "Pi" || toolName === "edit"
-							? ["intent", "started", "completed"]
-							: ["intent", "completed"],
+						runtime === "OpenCode"
+							? ["intent", "unknown"]
+							: runtime === "Pi" || toolName === "edit"
+								? ["intent", "started", "completed"]
+								: ["intent", "completed"],
 					);
+					if (runtime === "OpenCode") {
+						expect(ownerToolFacts[1]).toMatchObject({
+							phase: "unknown",
+							failureCode: "recovery_unconfirmed",
+							operationRef: ownerToolFacts[0]?.operationRef,
+							attemptRef: ownerToolFacts[0]?.attemptRef,
+						});
+						expect(ownerToolFacts[1]?.startedAt).toBeUndefined();
+						expect(ownerToolFacts[1]?.finishedAt).toBeUndefined();
+						expect(ownerToolFacts[1]?.durationMs).toBeUndefined();
+					}
 					if (runtime === "Pi") {
 						expect(ownerToolFacts.at(-1)?.startedAt).toEqual(
 							expect.any(String),
@@ -658,22 +681,32 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 									afterDenial.nativeSessionRef,
 									"execution-after-denial",
 								),
-							).toBe("completed"),
+							).toBe(runtime === "OpenCode" ? "unknown" : "completed"),
 						{ timeout: 20_000 },
 					);
-					expect(calls).toHaveLength(2);
+					expect(calls).toHaveLength(runtime === "OpenCode" ? 1 : 2);
+					const afterDenialEvents = await driver.replayEvents(
+						afterDenial.nativeSessionRef,
+						"execution-after-denial",
+					);
 					expect(
-						(
-							await driver.replayEvents(
-								afterDenial.nativeSessionRef,
-								"execution-after-denial",
-							)
-						).filter((e) => e.type === "tool"),
+						afterDenialEvents.filter((e) => e.type === "tool"),
 					).toContainEqual(
 						expect.objectContaining({
 							payload: expect.objectContaining({ phase: "completed" }),
 						}),
 					);
+					if (runtime === "OpenCode") {
+						const afterDenialToolFacts = afterDenialEvents.flatMap((event) =>
+							event.type === "operation" && event.payload.kind === "tool"
+								? [event.payload]
+								: [],
+						);
+						expect(afterDenialToolFacts.map((fact) => fact.phase)).toEqual([
+							"intent",
+							"unknown",
+						]);
+					}
 				} finally {
 					await driver.close();
 					server.closeAllConnections();

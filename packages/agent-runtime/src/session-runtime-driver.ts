@@ -53,6 +53,8 @@ export interface SessionRuntimeDriverOptions {
 	readonly completionStatus: (reason: string) => RuntimeStatusV1;
 	readonly modelLifecycleAtTransport?: boolean;
 	readonly toolLifecycleAtBoundary?: boolean;
+	/** Reject a model continuation when a tool has no trusted terminal receipt. */
+	readonly rejectUnconfirmedToolContinuation?: boolean;
 	readonly authorizeExternalAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<void>;
@@ -712,6 +714,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			return undefined;
 		});
 		if (previous) return previous;
+		for (const wake of this.waiters.get(binding.ref) ?? []) wake();
 		// The barrier does not depend on recoverable Turn history. Retire every owned
 		// effect source and drain in-flight events before confirming this control operation.
 		await this.files.get(binding.ref)?.catch(() => {});
@@ -741,6 +744,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	async validateExternalAction(action: RuntimeExternalActionAuthorization) {
 		if (
 			this.closed ||
+			this.cancelled(action.nativeSessionRef) ||
 			!["model", "tool"].includes(action.kind) ||
 			action.purpose
 		)
@@ -764,6 +768,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.at(-1);
 		if (
 			this.closed ||
+			this.cancelled(action.nativeSessionRef) ||
 			state.cancelled ||
 			turn?.status !== "running" ||
 			(action.kind === "model" &&
@@ -1143,6 +1148,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				);
 				admitted();
 			} catch {
+				await this.recoverUnknownOperationFacts(file, command.executionId);
 				await this.status(file, command.executionId, "unknown");
 			}
 		})();
@@ -1321,11 +1327,22 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				const turn = (await file.readCommitted()).turns.find(
 					(entry) => entry.executionId === executionId,
 				);
-				if (this.closed || !turn || terminal(turn.status) || turn.nativeResult)
+				if (
+					this.closed ||
+					this.cancelled(ref) ||
+					!turn ||
+					terminal(turn.status) ||
+					turn.nativeResult
+				)
 					unavailable();
 				const auxiliary = auxiliaryRequestState(turn);
 				if (auxiliary === "unconfirmed") unavailable();
 				if (auxiliary === "settled") break;
+				if (
+					auxiliary === "pending" &&
+					this.options.rejectUnconfirmedToolContinuation
+				)
+					unavailable();
 				// Native clients can request the next model response before a tool's
 				// durable terminal receipt arrives. Keep transport behind that receipt.
 				await changed;

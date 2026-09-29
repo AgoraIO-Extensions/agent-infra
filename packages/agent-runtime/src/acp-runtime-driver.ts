@@ -53,6 +53,7 @@ export const GenericAcpRuntimeDriver = {
 			...options,
 			modelLifecycleAtTransport: true,
 			toolLifecycleAtBoundary: true,
+			rejectUnconfirmedToolContinuation: true,
 			cursorPrefix: "acp",
 			retireSession: retireAcpProcess,
 			completionStatus: (reason): RuntimeStatusV1 =>
