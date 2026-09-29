@@ -271,10 +271,9 @@ it("requires confidential transport for private Key delivery", () => {
 it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "worker-host-v4-"));
 	const storePath = join(directory, "host.json");
+	const driverPath = join(directory, "driver.json");
 	let store = await FileRuntimeStore.open(storePath);
-	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"), [
-		request.selection,
-	]);
+	let driver = await FakeRuntimeDriver.open(driverPath, [request.selection]);
 	const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 	const now = Date.now();
 	const signer = createWorkerRuntimeGrantSignerV4({
@@ -549,10 +548,26 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 		await host.close();
 		await store.close();
 		store = await FileRuntimeStore.open(storePath);
-		host = await RuntimeHost.open({ ...hostOptions, store });
+		driver = await FakeRuntimeDriver.open(driverPath, [request.selection]);
+		host = await RuntimeHost.open({ ...hostOptions, driver, store });
 		app = createRuntimeHostApp({ ...appOptions, host });
 		await expect(client.acknowledgeEvents(controlAck)).resolves.toMatchObject({
 			confirmedCursor: operationCursor,
+		});
+		const recoveredRead = {
+			...unsignedRead,
+			requestId: "control-read-after-restart",
+		};
+		await expect(
+			client.readEvents({
+				...recoveredRead,
+				grant: await signer.signEvent(recoveredRead, control),
+			}),
+		).resolves.toMatchObject({
+			events: [{ executionId: request.executionId, type: "status" }],
+		});
+		await expect(client.readEvents(signedRead)).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
 		});
 		await expect(client.submitTurn(signed)).resolves.toEqual(accepted);
 		expect(await driver.sideEffectCount()).toBe(1);
