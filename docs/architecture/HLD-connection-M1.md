@@ -475,6 +475,7 @@ callback、后台 lease/outbox/reconciliation 可以在同一镜像中以不同�
 出口。LA3 `connection-provider-egress` 因 HCI 暂无合规 workload mTLS 入口而延期，不属于当前生产
 拓扑。完整区域决策见
 [Connection GZ3 控制面与 GitHub 代理出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
+该 ADR 的[GitHub OAuth 出口回退提案](../adr/ADR-connection-regional-control-plane-and-github-egress.md#待评审变更github-oauth-出口回退)尚未批准，不改变当前固定代理出口或 NetworkPolicy 门禁。
 
 GitHub WRITE 通过固定代理提交后，response lost 仍进入 `UNCERTAIN`，不能切换路径盲重试。
 GitHub OAuth code exchange 失败且消费状态未知时重新发起登录，不重放 code。Connection DB 最终
