@@ -140,13 +140,18 @@ real Provider/Connection acceptance.
 
 ## Ownership And Exit
 
-The packet intentionally leaves the long-term Runtime maintainer, security
-upgrader, and release approver unnamed. No Issue assignee or prior document
-approval is a substitute for an explicit human acceptance. Before enablement,
-the owner must be named, the rollback artifact and rollback command must be
-readable, and the exit condition must be demonstrated: the official artifact
-passes the same leaf, isolation, recovery, and target coverage matrix.
+The proposed accountable maintenance team is the existing CODEOWNERS team
+`@AgoraIO-Extensions/agent-infra-owners`. Subject to that team's explicit
+review acceptance, it would own the source patch, security upgrades and
+regression review, upstream follow-up, and retirement of this source path.
+The same team is the source-approval authority under §10.13, but its existing
+CODEOWNERS entry does not prove that it has accepted the additional long-term
+maintenance proposal. This packet records a proposal, not a signed handoff.
 
-Until those fields are filled and CODEOWNER approves the exact target bytes,
-the OpenCode native lane remains unavailable and #929/#930/#483 retain their
-original open acceptance criteria.
+No Issue assignee or prior document approval is a substitute for that explicit
+acceptance. Before enablement, the accepted owner must identify the rollback
+artifact and command, and the exit condition must be demonstrated: the
+official artifact passes the same leaf, isolation, recovery, and target
+coverage matrix. Until the team accepts this responsibility and CODEOWNER
+approves the exact target bytes, the OpenCode native lane remains unavailable
+and #929/#930/#483 retain their original open acceptance criteria.
