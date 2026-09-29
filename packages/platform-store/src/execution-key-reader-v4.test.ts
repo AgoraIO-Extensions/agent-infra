@@ -185,6 +185,39 @@ it("uses the immutable submit Session for submit recovery", async () => {
 	}
 });
 
+it("preserves an explicitly null V4 submit Session", async () => {
+	await sql`
+		update platform.conversation_executions
+		set runtime_submit_protocol = 'v4',
+			original_operation_digest = repeat('a', 43),
+			original_submit_host_session_ref = null
+		where execution_id = 'execution-1'
+	`;
+	await sql`
+		update platform.conversations
+		set host_session_ref = 'current-host'
+		where id = 'conversation-1'
+	`;
+	try {
+		const accepted = await reader.readAcceptedExecution(request);
+		expect(accepted?.scope.hostSessionRef).toBeNull();
+		expect(accepted?.trustedHostSessionRef).toBeNull();
+	} finally {
+		await sql`
+			update platform.conversation_executions
+			set runtime_submit_protocol = null,
+			original_operation_digest = null,
+			original_submit_host_session_ref = null
+			where execution_id = 'execution-1'
+		`;
+		await sql`
+			update platform.conversations
+			set host_session_ref = null
+			where id = 'conversation-1'
+		`;
+	}
+});
+
 it("withholds a terminal Execution's Key binding", async () => {
 	for (const status of ["completed", "failed", "cancelled"] as const) {
 		await sql`

@@ -246,6 +246,28 @@ describe("V2 management routes", () => {
 		expect(listAgents).toHaveBeenCalledTimes(0);
 	});
 
+	it("starts only a stopped Agent through the existing restart command", async () => {
+		const { app, getAgent, executeManagementCommand } = createApp();
+		const request = {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ schemaVersion: 1, command: "start" }),
+		};
+		const path = "/api/v2/agents/agent-1/lifecycle";
+		expect((await app.request(path, request)).status).toBe(409);
+		expect(executeManagementCommand).not.toHaveBeenCalled();
+
+		getAgent.mockResolvedValue({
+			...agentRecord,
+			management: { ...management, status: "stopped" },
+		});
+		expect((await app.request(path, request)).status).toBe(202);
+		expect(executeManagementCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ command: "restart_agent" }),
+			expect.anything(),
+		);
+	});
+
 	it("fails closed when identity resolution is unavailable", async () => {
 		const { app } = createApp({ identityFailure: true });
 		const unavailable = await app.request("/api/v2/agents");

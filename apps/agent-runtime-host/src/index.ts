@@ -224,7 +224,7 @@ export async function assembleRuntimeHost(
 				"Runtime authorization is not ready",
 				403,
 			);
-		await assembledHost.authorizeExternalAction(action);
+		return assembledHost.authorizeExternalAction(action);
 	};
 	const close = async () => {
 		try {

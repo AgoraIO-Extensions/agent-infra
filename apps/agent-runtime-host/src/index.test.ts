@@ -643,6 +643,10 @@ describe("RuntimeHost environment assembly", () => {
 						openedWith?.authorizeExternalAction?.(unboundAction),
 					).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
 					expect(authorization).toHaveBeenCalledWith(unboundAction);
+					authorization.mockResolvedValueOnce({ relayKey: "relay-key" });
+					await expect(
+						openedWith?.authorizeExternalAction?.(unboundAction),
+					).resolves.toEqual({ relayKey: "relay-key" });
 				}
 				expect(process.env.PATH).toBe(originalPath);
 				expect(openedWith).toMatchObject({

@@ -22,6 +22,7 @@ interface AcceptedExecutionRowV4 {
 	readonly channel_id: string;
 	readonly status: string;
 	readonly session_generation: string;
+	readonly runtime_submit_protocol: "v2" | "v4" | null;
 	readonly execution_source: string | null;
 	readonly relay_key_purpose: string | null;
 	readonly relay_key_subject_id: string | null;
@@ -65,6 +66,7 @@ export class PostgresExecutionKeyReaderV4 {
 			const rows = await sql<AcceptedExecutionRowV4[]>`
 					select e.actor_id, e.agent_id, e.conversation_id, e.execution_id,
 						e.turn_id, e.channel_id, e.status, e.session_generation::text,
+						e.runtime_submit_protocol,
 						e.execution_source, e.relay_key_purpose,
 						e.relay_key_subject_id, e.relay_key_id,
 						e.relay_key_version::text, c.host_session_ref,
@@ -95,7 +97,9 @@ export class PostgresExecutionKeyReaderV4 {
 				)
 					return null;
 				const pinnedHostSessionRef =
-					row.original_submit_host_session_ref ?? row.host_session_ref;
+					row.runtime_submit_protocol === "v4"
+						? row.original_submit_host_session_ref
+						: row.host_session_ref;
 				const scope = RuntimePinnedExecutionKeyScopeV4Schema.parse({
 					principal: boundary.principal,
 					executionSource: row.execution_source,
