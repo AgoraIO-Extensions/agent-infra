@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import type {
 	createLdapIdentityDirectory,
@@ -34,6 +35,7 @@ afterAll(async () => database?.stop());
 describe("Platform API PostgreSQL browser deployment", () => {
 	it("shares login and UID revocation across API instances", async () => {
 		let disabled = false;
+		const trustedProxyToken = randomBytes(32).toString("base64url");
 		const directory = {
 			userIdForUid: async () => account.userId,
 			authenticate: async () => account,
@@ -43,6 +45,7 @@ describe("Platform API PostgreSQL browser deployment", () => {
 		const input = {
 			databaseUrl: database.databaseUrl,
 			publicOrigin: origin,
+			trustedProxyToken,
 			directory,
 			isPlatformDisabled: async () => disabled,
 			organizationIds: async () => ["org-a"],
@@ -50,28 +53,70 @@ describe("Platform API PostgreSQL browser deployment", () => {
 		const first = createPostgresLdapBrowserDeployment(input);
 		const second = createPostgresLdapBrowserDeployment(input);
 		try {
-			const requestAtProxy = (host: string, forwardedProto: string) =>
+			const requestAtProxy = (
+				host: string,
+				forwardedProto: string,
+				token?: string,
+			) =>
 				new Request("http://localhost:3001/auth/login", {
 					method: "POST",
 					headers: {
 						host,
 						"x-forwarded-proto": forwardedProto,
+						...(token ? { "x-platform-proxy-token": token } : {}),
 						origin,
 						"content-type": "application/json",
 					},
 					body: JSON.stringify({ login: "person.a", password: "controlled" }),
 				});
+			expect(() =>
+				createPostgresLdapBrowserDeployment({
+					...input,
+					trustedProxyToken: "short",
+				}),
+			).toThrow("LDAP_BROWSER_PROXY_CONFIGURATION_INVALID");
 			expect(
 				(
 					await first.browserAuth.handleRequest(
-						requestAtProxy("bad.test", "https"),
+						requestAtProxy("bad.test", "https", trustedProxyToken),
 					)
 				)?.status,
 			).toBe(400);
 			expect(
 				(
 					await first.browserAuth.handleRequest(
-						requestAtProxy("localhost:3001", "http"),
+						requestAtProxy("localhost:3001", "http", trustedProxyToken),
+					)
+				)?.status,
+			).toBe(400);
+			expect(
+				(
+					await first.browserAuth.handleRequest(
+						requestAtProxy("localhost:3001", "https"),
+					)
+				)?.status,
+			).toBe(400);
+			expect(
+				(
+					await first.browserAuth.handleRequest(
+						requestAtProxy("localhost:3001", "https", "wrong-token"),
+					)
+				)?.status,
+			).toBe(400);
+			expect(
+				(
+					await first.browserAuth.handleRequest(
+						new Request("https://localhost:3001/auth/login", {
+							method: "POST",
+							headers: {
+								origin,
+								"content-type": "application/json",
+							},
+							body: JSON.stringify({
+								login: "person.a",
+								password: "controlled",
+							}),
+						}),
 					)
 				)?.status,
 			).toBe(400);
@@ -105,6 +150,7 @@ describe("Platform API PostgreSQL browser deployment", () => {
 							headers: {
 								host: "localhost:3001",
 								"x-forwarded-proto": "https",
+								"x-platform-proxy-token": trustedProxyToken,
 								origin,
 								"content-type": "application/json",
 							},

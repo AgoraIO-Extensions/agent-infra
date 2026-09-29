@@ -25,7 +25,10 @@ API 专属目录至少包含 `platform-api.mjs`。该模块导出
 `browserAuth` 作为模块导出；两者因而共用 LDAP Adapter 和 Platform PostgreSQL
 会话表。API 只将 `/auth/login` 和 `/auth/logout` 交给此处理器；处理器失败返回
 无正文 503。先执行 Platform 增量迁移；跨 API 副本的到期和撤销由 PostgreSQL
-Store 执行，测试用内存 Store 不能作为正式部署配置。
+Store 执行，测试用内存 Store 不能作为正式部署配置。该工厂还要求高熵
+`trustedProxyToken`，必须只在 TLS 代理和 API 专属配置中提供；代理覆盖客户端提交的
+`X-Platform-Proxy-Token`，API 才接受代理转发的 HTTP 登录请求。现有本地 nginx
+配置尚未注入该令牌，真实浏览器登录需先完成代理与 API 双端私有配置验收。
 
 | 输入 | 来源和要求 |
 | --- | --- |
