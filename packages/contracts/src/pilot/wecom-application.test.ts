@@ -8,6 +8,7 @@ const credentials = {
 	secret: "application-secret",
 	token: "callback-token",
 	encodingAesKey: "A".repeat(43),
+	takeoverConfirmed: true,
 };
 
 describe("WeCom application credentials", () => {
@@ -20,6 +21,7 @@ describe("WeCom application credentials", () => {
 	it.each([
 		{ ...credentials, applicationId: "0" },
 		{ ...credentials, encodingAesKey: "short" },
+		{ ...credentials, takeoverConfirmed: undefined },
 		{ ...credentials, unexpected: "field" },
 	])("rejects invalid or unexpected credential fields", (input) => {
 		expect(WecomApplicationCredentialsV1Schema.safeParse(input).success).toBe(

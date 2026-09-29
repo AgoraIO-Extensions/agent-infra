@@ -10,4 +10,5 @@ export const WecomApplicationCredentialsV1Schema = z.strictObject({
 		.string()
 		.regex(/^[A-Za-z0-9+/]{43}$/)
 		.meta({ writeOnly: true }),
+	takeoverConfirmed: z.boolean(),
 });
