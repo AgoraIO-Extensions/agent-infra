@@ -1,0 +1,39 @@
+{
+	"name": "@agent-infra/observability",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"main": "dist/index.mjs",
+	"types": "dist/index.d.mts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsdown",
+		"check-types": "tsc --noEmit",
+		"test": "pnpm build && vitest run src"
+	},
+	"dependencies": {
+		"@opentelemetry/api": "1.9.1",
+		"@opentelemetry/core": "2.11.0",
+		"@opentelemetry/exporter-metrics-otlp-proto": "0.222.0",
+		"@opentelemetry/exporter-trace-otlp-proto": "0.222.0",
+		"@opentelemetry/resources": "2.11.0",
+		"@opentelemetry/sdk-metrics": "2.11.0",
+		"@opentelemetry/sdk-trace-base": "2.11.0",
+		"pino": "10.3.1"
+	},
+	"devDependencies": {
+		"@agent-infra/config": "workspace:*",
+		"@types/node": "catalog:",
+		"tsdown": "0.22.14",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
+	}
+}

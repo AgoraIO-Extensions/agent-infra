@@ -342,6 +342,10 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 	await expect(
 		page.getByRole("status").filter({ hasText: "消息已受理" }),
 	).toBeVisible();
+	await test.info().attach("conversation-incremental-sse", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
 	phase = "completed";
 	await page.evaluate(
 		(frame) =>
@@ -362,8 +366,9 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 		page.getByText("第一段实时输出。第二段完成输出。", { exact: true }),
 	).toBeVisible();
 	await expect.poll(() => submitRequests).toBe(1);
-	await page.screenshot({
-		path: test.info().outputPath("conversation-live.png"),
+	await test.info().attach("conversation-completed-after-reload", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
 	});
 });
 
