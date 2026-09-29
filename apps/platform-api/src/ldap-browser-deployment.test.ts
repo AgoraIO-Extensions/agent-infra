@@ -1,3 +1,4 @@
+import { request as httpRequest } from "node:http";
 import type {
 	createLdapIdentityDirectory,
 	LdapAccount,
@@ -8,9 +9,10 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
+import { loadPlatformApiAssembly, startPlatformApi } from "./index.js";
 import { createPostgresLdapBrowserDeployment } from "./ldap-browser-deployment.js";
 
-const origin = "https://platform.example.test";
+const origin = "https://localhost:3001";
 const account: LdapAccount = {
 	uid: "stable-uid-a",
 	userId: "e8c99945-5b39-4bcb-8f99-c29a7788432f",
@@ -48,15 +50,88 @@ describe("Platform API PostgreSQL browser deployment", () => {
 		const first = createPostgresLdapBrowserDeployment(input);
 		const second = createPostgresLdapBrowserDeployment(input);
 		try {
-			const login = await first.browserAuth.handleRequest(
-				new Request(`${origin}/auth/login`, {
+			const requestAtProxy = (host: string, forwardedProto: string) =>
+				new Request("http://localhost:3001/auth/login", {
 					method: "POST",
-					headers: { origin, "content-type": "application/json" },
+					headers: {
+						host,
+						"x-forwarded-proto": forwardedProto,
+						origin,
+						"content-type": "application/json",
+					},
 					body: JSON.stringify({ login: "person.a", password: "controlled" }),
-				}),
+				});
+			expect(
+				(
+					await first.browserAuth.handleRequest(
+						requestAtProxy("bad.test", "https"),
+					)
+				)?.status,
+			).toBe(400);
+			expect(
+				(
+					await first.browserAuth.handleRequest(
+						requestAtProxy("localhost:3001", "http"),
+					)
+				)?.status,
+			).toBe(400);
+			const assembly = await loadPlatformApiAssembly(
+				new URL(
+					"../../../tests/fixtures/platform-api-deployment.mjs",
+					import.meta.url,
+				).href,
 			);
-			expect(login?.status).toBe(204);
-			const cookie = login?.headers.get("set-cookie")?.split(";")[0];
+			const server = startPlatformApi({
+				dependencies: assembly.dependencies,
+				browserAuth: first.browserAuth,
+				log: () => {},
+				port: 0,
+			});
+			let cookie: string | undefined;
+			try {
+				const address = server.address();
+				if (!address || typeof address === "string")
+					throw new Error("Platform API did not bind a TCP port");
+				const login = await new Promise<{
+					status: number | undefined;
+					setCookie: string | undefined;
+				}>((resolve, reject) => {
+					const request = httpRequest(
+						{
+							hostname: "127.0.0.1",
+							port: address.port,
+							path: "/auth/login",
+							method: "POST",
+							headers: {
+								host: "localhost:3001",
+								"x-forwarded-proto": "https",
+								origin,
+								"content-type": "application/json",
+							},
+						},
+						(response) => {
+							response.resume();
+							response.on("end", () =>
+								resolve({
+									status: response.statusCode,
+									setCookie: response.headers["set-cookie"]?.[0],
+								}),
+							);
+						},
+					);
+					request.on("error", reject);
+					request.end(
+						JSON.stringify({ login: "person.a", password: "controlled" }),
+					);
+				});
+				expect(login.status).toBe(204);
+				cookie = login.setCookie?.split(";")[0];
+			} finally {
+				await new Promise<void>((resolve, reject) =>
+					server.close((error) => (error ? reject(error) : resolve())),
+				);
+				await assembly.close();
+			}
 			expect(cookie).toMatch(/^__Host-platform-session=/u);
 			const request = new Request(`${origin}/api/v1/session`, {
 				headers: { cookie: cookie ?? "" },
