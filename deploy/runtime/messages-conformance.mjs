@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFile, writeFile, realpath, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,7 +14,9 @@ const { values } = parseArgs({ options: {
 } });
 if (!values.settings || !values.model || !values.output) throw Error("Supply --settings, --model and --output");
 const runtimeEntry = await realpath(resolve("node_modules/@agent-infra/agent-runtime/dist/index.mjs"));
-const { ClaudeRuntimeDriver, verifyClaudeInstallation, openOpenCodeRuntime, verifyOpenCodeInstallation, openPiRuntime, verifyPiInstallation } = await import(pathToFileURL(runtimeEntry).href);
+const { ClaudeRuntimeDriver, verifyClaudeInstallation, openOpenCodeRuntime, verifyOpenCodeInstallation, openPiRuntime, verifyPiInstallation, FileRuntimeStore, RuntimeHost, createRuntimeExecutionGrantValidatorV4, createRuntimeExecutionGrantVerifierV2, requestDigest } = await import(pathToFileURL(runtimeEntry).href);
+const contractsEntry = await realpath(resolve("node_modules/@agent-infra/contracts/dist/runtime/index.mjs"));
+const { RuntimeEventV2Schema, RuntimeEventAckRequestV4Schema, RuntimeEventReadRequestV4Schema, RuntimeExecutionGrantClaimsV2Schema, RuntimeExecutionGrantClaimsV4Schema, RuntimeExecutionGrantMaximumLifetimeMsV2, RuntimeExecutionGrantMaximumLifetimeMsV4, runtimeEventRequestDigestV4, runtimeOperationDigestInputV4, runtimeRequestDigestV4, runtimeRequestSigningPayloadV3 } = await import(pathToFileURL(contractsEntry).href);
 if (!["claude", "opencode", "pi"].includes(values.runtime)) throw Error("Unsupported conformance runtime");
 const isOpenCode = values.runtime === "opencode";
 const isPi = values.runtime === "pi";
@@ -38,9 +40,42 @@ if (typeof credential !== "string" || !credential) throw Error("Model credential
 const path = await realpath(await mkdtemp(join(tmpdir(), "messages-conformance-")));
 const configVersion = `conformance-${randomUUID()}`;
 const options = { path, executable, configVersion, defaultModelOptionId: "primary", defaultReasoningLevel: "medium", modelOptions: [{ modelOptionId: "primary", model: values.model, reasoningLevels: ["medium"], endpoint, credential, authentication: environment.ANTHROPIC_AUTH_TOKEN ? "bearer" : "api-key" }] };
-let driver;
-const users = ["a", "b"].map(id => ({ id, canary: randomUUID(), contextCanary: randomUUID(), ref: undefined, turn: 0 }));
-const report = { schemaVersion: 1, runtime: values.runtime, sourceCommit, dirty, imageDigest: values["image-digest"] ?? null, configVersion, sdkVersion: provenance.sdkVersion, nativeVersion: provenance.nativeVersion, ...(isPi ? { bundleSha256: provenance.bundleSha256, upstreamCommit: provenance.upstreamCommit } : { executableSha256: provenance.executableSha256 }), model: values.model, negativeVector: "symlink-escape", negativeTargets: separateNegative ? [values["negative-target"]] : ["workspace", "memory"], checks: [], passed: false };
+const modelFactId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(values.model) ? values.model : `model:${createHash("sha256").update(values.model).digest("hex")}`;
+let driver, host, hostStore;
+const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+const publicKeys = new Map([["synthetic-key", publicKey]]);
+const verifyLegacyGrant = createRuntimeExecutionGrantVerifierV2(publicKeys);
+const validateV4Grant = createRuntimeExecutionGrantValidatorV4(publicKeys, { expectedIssuer: "synthetic-platform", expectedWorkerId: "synthetic-worker" });
+const users = ["a", "b"].map(id => ({ id, canary: randomUUID(), contextCanary: randomUUID(), ref: undefined, hostRef: null, turn: 0 }));
+const keyByExecution = new Map();
+const report = { schemaVersion: 1, runtime: values.runtime, sourceCommit, dirty, imageDigest: values["image-digest"] ?? null, configVersion, sdkVersion: provenance.sdkVersion, nativeVersion: provenance.nativeVersion, ...(isPi ? { bundleSha256: provenance.bundleSha256, upstreamCommit: provenance.upstreamCommit } : { executableSha256: provenance.executableSha256 }), model: values.model, authority: "synthetic-runtime-host-v4", v4ExecutionKeyChecks: 0, privateKeyDeliveryChecks: 0, legacyStaticKeyRejections: 0, replayFenceChecks: 0, modelAuthorizationChecks: 0, toolAuthorizationChecks: 0, negativeVector: "symlink-escape", negativeTargets: separateNegative ? [values["negative-target"]] : ["workspace", "memory"], checks: [], passed: false };
+const originalFetch = globalThis.fetch;
+if (process.env.AGENT_INFRA_INSPECT_MESSAGES_SHAPE === "1") {
+ report.messageShapes = [];
+ globalThis.fetch = (input, init) => {
+  try {
+   if (typeof input === "string" && input.startsWith(`${endpoint.replace(/\/$/, "")}/v1/messages`) && typeof init?.body === "string" && report.messageShapes.length < 32) {
+    const messages = JSON.parse(init.body).messages;
+    if (!Array.isArray(messages)) throw Error("Messages are unavailable");
+    const blocks = messages.flatMap(message => Array.isArray(message.content) ? message.content : []);
+    const uses = new Set(blocks.filter(block => block.type === "tool_use").map(block => block.id));
+    const results = blocks.filter(block => block.type === "tool_result");
+    report.messageShapes.push({
+     messageCount: messages.length,
+     toolUses: uses.size,
+     toolResults: results.length,
+     unmatchedToolResults: results.filter(block => !uses.has(block.tool_use_id)).length,
+    });
+   }
+  } catch { report.messageShapeInspectionFailed = true; }
+  return originalFetch(input, init);
+ };
+}
+async function settleTurns(turns) {
+ const results = await Promise.allSettled(turns);
+ const failed = results.find(result => result.status === "rejected");
+ if (failed) throw failed.reason;
+}
 const keepAlive = setTimeout(() => {}, 600_000);
 // Inspect only this synthetic Turn through the pinned SDK; never emit transcript content.
 const historyProbe = `
@@ -88,10 +123,84 @@ async function claudeReadEvidence(user, other) {
   env: {PATH: process.env.PATH, CLAUDE_CONFIG_DIR: join(directory, "config")}, encoding: "utf8", timeout: 10000, maxBuffer: 4096, stdio: ["pipe", "pipe", "pipe"],
  }));
  const files = await Promise.all(expected.slice(0, 2).map(async item => (await readFile(item.path, "utf8").catch(() => "")).includes(user.canary)));
- return {ownWorkspaceRead: values[0] === true, ownMemoryRead: values[1] === true, persistedFiles: files.every(Boolean), ...(other ? {otherWorkspaceDenied: values[2] === true, otherMemoryDenied: values[3] === true} : {})};
+ return {ownWorkspaceRead: values[0] === true, ownMemoryRead: values[1] === true, ownWorkspaceFile: files[0], ownMemoryFile: files[1], persistedFiles: files.every(Boolean), ...(other ? {otherWorkspaceDenied: values[2] === true, otherMemoryDenied: values[3] === true} : {})};
 }
 const memoryPath = separateNegative ? "workspace/.memory/MEMORY.md" : "memory/MEMORY.md";
-const openDriver = () => isPi ? openPiRuntime(options) : isOpenCode ? openOpenCodeRuntime(options) : ClaudeRuntimeDriver.open(options);
+function signedToken(claims, schemaVersion) {
+ const header = Buffer.from(JSON.stringify({ alg: "EdDSA", kid: "synthetic-key", typ: "runtime-execution+jws" })).toString("base64url");
+ const input = `${header}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}`;
+ return { schemaVersion, format: "runtime-execution-jws", token: `${input}.${sign(null, Buffer.from(input), privateKey).toString("base64url")}` };
+}
+function signedV3Request(request, command) {
+ const issuedAt = Date.now();
+ const claims = RuntimeExecutionGrantClaimsV2Schema.parse({
+  schemaVersion: 2, issuer: "synthetic-platform", audience: "runtime_host", workerId: "synthetic-worker",
+  issuedAt, expiresAt: issuedAt + RuntimeExecutionGrantMaximumLifetimeMsV2, grantId: randomUUID(),
+  principal: request.principal, agentId: request.agentId, channelId: request.channelId,
+  conversationId: request.conversationId, executionId: request.executionId, turnId: request.turnId,
+  sessionGeneration: request.sessionGeneration, traceId: request.traceId, hostSessionRef: request.hostSessionRef,
+  operation: request.operation, allowedCommands: [command], purpose: "business",
+  authorizationRecordId: `authorization-${request.executionId}`, attachments: [],
+  requestDigest: createHash("sha256").update(runtimeRequestSigningPayloadV3(request)).digest("hex"),
+  ...(command === "events.persist" ? { eventAccess: { command, consumer: request.consumer, afterCursor: request.afterCursor } } : {}),
+ });
+ return { ...request, grant: signedToken(claims, 2) };
+}
+async function signedV4Request(request, command) {
+ const unsigned = { ...request, grant: { schemaVersion: 4, format: "runtime-execution-jws", token: "pending.pending.pending" } };
+ const now = Date.now();
+ const claims = RuntimeExecutionGrantClaimsV4Schema.parse({
+  schemaVersion: 4, issuer: "synthetic-platform", audience: "runtime_host", workerId: "synthetic-worker",
+  issuedAt: now, expiresAt: now + RuntimeExecutionGrantMaximumLifetimeMsV4, grantId: randomUUID(),
+  principal: request.principal, agentId: request.agentId, channelId: request.channelId,
+  conversationId: request.conversationId, executionId: request.executionId, turnId: request.turnId,
+  sessionGeneration: request.sessionGeneration, traceId: request.traceId, executionSource: request.executionSource,
+  relayKeyBinding: request.keyBinding, hostSessionRef: request.hostSessionRef, operation: request.operation,
+  requestDigest: await runtimeRequestDigestV4(unsigned), purpose: "business",
+  authorizationRecordId: `authorization-${request.executionId}`, allowedCommands: [command], attachments: [],
+ });
+ return { ...unsigned, grant: signedToken(claims, 4) };
+}
+async function signedV4EventRequest(request, command) {
+ const unsigned = { ...request, grant: { schemaVersion: 2, format: "runtime-execution-jws", token: "pending.pending.pending" } };
+ const now = Date.now();
+ const claims = RuntimeExecutionGrantClaimsV2Schema.parse({
+  schemaVersion: 2, issuer: "synthetic-platform", audience: "runtime_host", workerId: "synthetic-worker",
+  issuedAt: now, expiresAt: now + RuntimeExecutionGrantMaximumLifetimeMsV2, grantId: randomUUID(),
+  principal: request.principal, agentId: request.agentId, channelId: request.channelId,
+  conversationId: request.conversationId, executionId: request.executionId, turnId: request.turnId,
+  sessionGeneration: request.sessionGeneration, traceId: request.traceId, hostSessionRef: request.hostSessionRef,
+  operation: request.operation, allowedCommands: [command], purpose: "business",
+  authorizationRecordId: `authorization-${request.executionId}`, attachments: [],
+  eventAccess: command === "events.persist"
+   ? { command, consumer: request.consumer, afterCursor: request.afterCursor }
+   : { command, consumer: request.consumer, confirmedCursor: request.confirmedCursor },
+  requestDigest: await runtimeEventRequestDigestV4(unsigned),
+ });
+ return { ...unsigned, grant: signedToken(claims, 2) };
+}
+async function openRuntime() {
+ const authorizedOptions = { ...options, authorizeExternalAction: async action => {
+  if (!host) throw Error("Synthetic Host authorization is unavailable");
+  const delivery = await host.authorizeExternalAction(action);
+  if (action.kind === "model") {
+   const expected = keyByExecution.get(action.executionId);
+   if (!delivery || delivery.relayKey !== expected) throw Error("V4 private Key delivery did not match pinned Execution");
+   report.privateKeyDeliveryChecks++;
+  }
+  if (action.kind === "model") report.modelAuthorizationChecks++;
+  if (action.kind === "tool") report.toolAuthorizationChecks++;
+ } };
+ driver = isPi ? await openPiRuntime(authorizedOptions) : isOpenCode ? await openOpenCodeRuntime(authorizedOptions) : await ClaudeRuntimeDriver.open(authorizedOptions);
+ hostStore = await FileRuntimeStore.open(join(path, "host.json"));
+ host = await RuntimeHost.open({ driver, store: hostStore, grantValidation: { expectedIssuer: "synthetic-platform" }, grantValidationV2: { expectedIssuer: "synthetic-platform", expectedWorkerId: "synthetic-worker" }, allowLegacyBusiness: false, validateGrantV4 });
+}
+async function closeRuntime() {
+ const currentHost = host, currentDriver = driver;
+ host = undefined;
+ driver = undefined;
+ try { await currentHost?.close(); } finally { await currentDriver?.close(); }
+}
 async function piReadEvidence(user, other, negative) {
  const directory = join(path, user.ref), workspace = join(directory, "workspace");
  const state = JSON.parse(await readFile(join(directory, "state.json"), "utf8"));
@@ -129,7 +238,7 @@ async function readEvidence(user, other, negative) {
  if (messages.some(message => message.info.sessionID !== state.nativeId)) throw Error("Mismatched synthetic session");
  const nativeTools = messages.flatMap(message => message.parts).filter(part => part.type === "tool");
  report.diagnostics ??= [];
- report.diagnostics.push({ user: user.id, turn: user.turn, tools: nativeTools.map(part => ({ name: ["read", "write", "edit", "bash", "glob", "grep", "todowrite", "task"].includes(part.tool) ? part.tool : "other", status: part.state.status })) });
+ report.diagnostics.push({ user: user.id, turn: user.turn, tools: nativeTools.map(part => ({ name: ["read", "write", "edit", "bash", "glob", "grep", "todowrite", "task"].includes(part.tool) ? part.tool : "other", status: ["pending", "running", "completed", "error"].includes(part.state?.status) ? part.state.status : "unknown" })) });
  const tools = nativeTools.filter(part => part.tool === "read");
  const expected = negative ? [{ path: join(workspace, negative === "workspace" ? "probe-workspace.txt" : "probe-memory.md"), canary: other.canary, denied: true }] : [{ path: join(workspace, "canary.txt"), canary: user.canary }, { path: join(directory, memoryPath), canary: user.canary }];
  const checks = expected.map(expected => {
@@ -142,30 +251,181 @@ async function readEvidence(user, other, negative) {
  const persistedFiles = (await Promise.all(expected.slice(0, 2).map(async item => (await readFile(item.path, "utf8").catch(() => "")).includes(user.canary)))).every(Boolean);
  return { ownWorkspaceRead: checks[0], ownMemoryRead: checks[1], persistedFiles, ...(other ? { otherContextAbsent: !JSON.stringify(history).includes(other.contextCanary) } : {}) };
 }
-async function turn(user, text) {
- user.turn++;
- const command = { schemaVersion: 2, kind: "submit-turn", agentId: "synthetic-agent", conversationId: `conversation-${user.id}`, sessionGeneration: 1, executionId: `execution-${user.id}-${user.turn}`, turnId: `turn-${user.id}-${user.turn}`, operationId: `operation-${user.id}-${user.turn}`, selection: { schemaVersion: 1, modelOptionId: "primary", reasoningLevel: "medium" }, input: { text, attachments: [] }, ...(user.ref ? { nativeSessionRef: user.ref } : {}) };
- const accepted = await driver.execute(command); user.ref = accepted.nativeSessionRef;
- let answer = "", tools = 0, denied = 0;
- for await (const event of await driver.subscribeEvents(user.ref, command.executionId, undefined, AbortSignal.timeout(120_000))) {
-  if (event.type === "text") answer += event.payload.delta;
-  if (event.type === "tool" && event.payload.phase === "completed") tools++;
-  if (event.type === "tool" && event.payload.phase === "failed") denied++;
+function operationEvidence(facts) {
+ const attempts = new Map();
+ for (const fact of facts) {
+  const key = JSON.stringify([fact.operationRef, fact.attemptRef]);
+  const phases = attempts.get(key) ?? [];
+  if (phases.length && (phases[0].kind !== fact.kind || (fact.kind === "tool" && (phases[0].toolId !== fact.toolId || phases[0].parentOperationRef !== fact.parentOperationRef)))) throw Error("Operation identity changed");
+  phases.push(fact);
+  attempts.set(key, phases);
  }
- return { answer, tools, denied, status: await driver.getStatus(user.ref, command.executionId) };
+ const modelRefs = new Set(facts.filter(fact => fact.kind === "model").map(fact => fact.operationRef));
+ const evidence = { modelAttempts: 0, completedModelAttempts: 0, toolAttempts: 0, completedReadAttempts: 0, completedWriteAttempts: 0, completedEditAttempts: 0, timedToolAttempts: 0, failedReadAttempts: 0, failedReadWithoutStartAttempts: 0, unknownAttempts: 0, usageAvailableAttempts: 0 };
+ for (const phases of attempts.values()) {
+  const first = phases[0], last = phases.at(-1);
+  if (first.phase !== "intent" || !["completed", "failed", "unknown"].includes(last.phase) || phases.slice(1).some(fact => fact.phase === "intent") || phases.slice(0, -1).some(fact => ["completed", "failed"].includes(fact.phase)) || phases.filter(fact => fact.phase === "started").length > 1) throw Error("Operation attempt is not settled");
+  if (last.phase === "unknown") evidence.unknownAttempts++;
+  if (first.kind === "model") {
+   evidence.modelAttempts++;
+   if (phases.some(fact => fact.model.configVersion !== configVersion || fact.model.modelOptionId !== "primary" || fact.model.modelId !== modelFactId || fact.model.reasoningLevel !== "medium")) throw Error("Model selection changed");
+   if (last.phase === "completed") {
+    if (!phases.some(fact => fact.phase === "started") || !last.startedAt || !last.finishedAt || last.durationMs === undefined) throw Error("Completed model timing is missing");
+    evidence.completedModelAttempts++;
+   }
+   if (last.usage && Object.keys(last.usage).length) evidence.usageAvailableAttempts++;
+  } else {
+   evidence.toolAttempts++;
+   if (first.parentOperationRef && !modelRefs.has(first.parentOperationRef)) throw Error("Tool parent model is missing");
+   const tool = first.toolId.toLowerCase();
+   if (last.phase === "completed" && tool === "read") evidence.completedReadAttempts++;
+   if (last.phase === "completed" && tool === "write") evidence.completedWriteAttempts++;
+   if (last.phase === "completed" && tool === "edit") evidence.completedEditAttempts++;
+   if (last.phase === "completed" && last.startedAt && last.finishedAt && last.durationMs !== undefined) evidence.timedToolAttempts++;
+   if (isPi && last.phase === "completed" && (!phases.some(fact => fact.phase === "started") || !last.startedAt || !last.finishedAt || last.durationMs === undefined)) throw Error("Pi tool boundary timing is missing");
+   if (last.phase === "failed" && tool === "read") {
+    evidence.failedReadAttempts++;
+    if (!phases.some(fact => fact.phase === "started") && !last.startedAt && last.durationMs === undefined) evidence.failedReadWithoutStartAttempts++;
+   }
+  }
+ }
+ if (!evidence.completedModelAttempts || !evidence.toolAttempts || !evidence.usageAvailableAttempts) throw Error("Actual model, tool or available usage facts are missing");
+ return evidence;
 }
+async function turn(user, text) {
+ let operation = "submit";
+ let lastStatus = null, observedEvents = 0;
+ const eventSummary = [], recentEventSummary = [];
+ const operationFacts = [], eventKeys = new Set(), operationCursors = new Set();
+ try {
+ user.turn++;
+ if (user.turn === 1) {
+  for (const legacyMethod of ["submitTurnV2", "submitTurnV3"]) {
+   let rejected = false;
+   try { await host[legacyMethod]({ staticCredential: "synthetic-relay-key-v4", executionId: `legacy-${user.id}`, turnId: `legacy-${user.id}`, agentId: "synthetic-agent", conversationId: `conversation-${user.id}` }, undefined); }
+   catch { rejected = true; }
+   if (!rejected) throw Error(`${legacyMethod} accepted a V4 static-Key candidate`);
+   report.legacyStaticKeyRejections++;
+  }
+ }
+ const executionId = `execution-${user.id}-${user.turn}`;
+ const binding = { schemaVersion: 4, requestId: randomUUID(), traceId: randomUUID(), principal: { kind: "user", id: `synthetic-user-${user.id}` }, executionSource: "web", channelId: "web", agentId: "synthetic-agent", conversationId: `conversation-${user.id}`, sessionGeneration: 1, executionId, turnId: `turn-${user.id}-${user.turn}`, hostSessionRef: user.hostRef, operation: { kind: "execution", id: executionId, deliveryFence: 1, executionDeliveryFence: 1 }, keyBinding: { purpose: "personal", subjectId: `synthetic-user-${user.id}`, ciphertextRef: `synthetic-key-${user.id}`, version: 1 } };
+ const submission = { ...binding, selection: { schemaVersion: 1, modelOptionId: "primary", reasoningLevel: "medium" }, input: { text, attachments: [] } };
+ const request = await signedV4Request(submission, "turn.submit");
+ const expectedRelayKey = `synthetic-relay-key-${user.id}-v4`;
+ keyByExecution.set(executionId, expectedRelayKey);
+ const transport = { businessRequest: request, privateKeyField: { schemaVersion: 1, context: { requestId: request.requestId, grantId: request.grant.token.split(".")[1], requestDigest: request.grant.token.split(".")[1].padEnd(64, "0").slice(0, 64), traceId: request.traceId, principal: request.principal, executionSource: request.executionSource, channelId: request.channelId, agentId: request.agentId, conversationId: request.conversationId, executionId: request.executionId, turnId: request.turnId, sessionGeneration: request.sessionGeneration, hostSessionRef: request.hostSessionRef, operation: request.operation, keyBinding: request.keyBinding }, keyDelivery: { relayKey: expectedRelayKey } } };
+ const validated = await validateV4Grant(request);
+ transport.privateKeyField.context.grantId = validated.claims.grantId;
+ transport.privateKeyField.context.requestDigest = validated.claims.requestDigest;
+ const accepted = await host.submitTurnV4(transport);
+ if (accepted.result.outcome !== "accepted") throw Error("Synthetic task was not accepted");
+ report.v4ExecutionKeyChecks++;
+ const replayed = await host.submitTurnV4(transport);
+ if (replayed.operationId !== accepted.operationId || replayed.hostSessionRef !== accepted.hostSessionRef) throw Error("V4 replay changed the accepted Execution");
+ report.replayFenceChecks++;
+ operation = "session-binding";
+ user.hostRef = accepted.hostSessionRef;
+ const nativeRef = hostStore.nativeSessionRef(user.hostRef);
+ if (!nativeRef || (user.ref && user.ref !== nativeRef)) throw Error("Synthetic Session binding changed");
+ user.ref = nativeRef;
+ const current = { ...binding, hostSessionRef: user.hostRef };
+ const originalOperationDigest = requestDigest(runtimeOperationDigestInputV4(request));
+ const legacyCurrent = { schemaVersion: 3, requestId: randomUUID(), traceId: binding.traceId, principal: binding.principal, channelId: binding.channelId, agentId: binding.agentId, conversationId: binding.conversationId, sessionGeneration: binding.sessionGeneration, executionId: binding.executionId, turnId: binding.turnId, hostSessionRef: user.hostRef, operation: binding.operation };
+ const deadline = Date.now() + 120_000;
+ let answer = "", tools = 0, denied = 0, afterCursor = null;
+ while (Date.now() < deadline) {
+  operation = "recover-status";
+  const query = signedV3Request({ ...legacyCurrent, requestId: randomUUID(), originalOperationDigest }, "session.status");
+  const result = await host.recoverStatusV3(query, verifyLegacyGrant(query.grant), AbortSignal.timeout(Math.max(1, deadline - Date.now())));
+  if (result.outcome !== "found") throw Error("Original synthetic task could not be recovered");
+  const status = result.status;
+  lastStatus = status;
+  if (status === "unknown") {
+   operation = "status-unknown";
+   throw Error("Synthetic task outcome is unknown");
+  }
+  const terminal = ["completed", "failed", "cancelled"].includes(status);
+  if (!terminal) {
+   operation = "renew-authorization";
+   const renewal = signedV3Request({ ...legacyCurrent, requestId: randomUUID() }, "execution.renew");
+   await host.renewAuthorizationV3(renewal, verifyLegacyGrant(renewal.grant));
+  }
+  const eventRequest = RuntimeEventReadRequestV4Schema.parse({ ...current, requestId: randomUUID(), grant: { schemaVersion: 2, format: "runtime-execution-jws", token: "pending.pending.pending" }, consumer: "platform_worker_persistence", afterCursor });
+  const events = await signedV4EventRequest(eventRequest, "events.persist");
+  operation = "read-events-v4";
+  const replay = await host.readEventsV4(events, verifyLegacyGrant(events.grant));
+  for (const event of replay.events) {
+    observedEvents++;
+    if (event.type === "operation") {
+     const fact = RuntimeEventV2Schema.parse(event);
+     if (fact.executionId !== executionId || eventKeys.has(fact.adapterEventKey) || operationCursors.has(fact.cursor)) throw Error("Operation event identity is invalid");
+     eventKeys.add(fact.adapterEventKey);
+     operationCursors.add(fact.cursor);
+     operationFacts.push(fact.payload);
+    }
+    const summary = event.type === "operation"
+     ? { type: event.type, kind: event.payload.kind, phase: event.payload.phase, failureCode: event.payload.failureCode ?? null }
+     : { type: event.type, phase: event.type === "tool" ? event.payload.phase : null };
+    if (eventSummary.length < 20) eventSummary.push(summary);
+    recentEventSummary.push(summary);
+    if (recentEventSummary.length > 20) recentEventSummary.shift();
+    afterCursor = event.cursor;
+    if (event.type === "text") answer += event.payload.delta;
+    if (event.type === "tool" && event.payload.phase === "completed") tools++;
+    if (event.type === "tool" && event.payload.phase === "failed") denied++;
+   }
+  if (replay.events.length > 0) afterCursor = replay.events.at(-1).cursor;
+  if (terminal && afterCursor) {
+   operation = "ack-events-v4";
+   const ackRequest = RuntimeEventAckRequestV4Schema.parse({ ...current, requestId: randomUUID(), grant: { schemaVersion: 2, format: "runtime-execution-jws", token: "pending.pending.pending" }, consumer: "platform_worker_persistence", confirmedCursor: afterCursor });
+   const ack = await signedV4EventRequest(ackRequest, "events.ack");
+   await host.acknowledgeEventsV4(ack, verifyLegacyGrant(ack.grant));
+   report.replayFenceChecks++;
+   operation = "operation-facts";
+   return { answer, tools, denied, status, operationEvidence: operationEvidence(operationFacts) };
+  }
+ }
+ operation = "turn-timeout";
+ throw Error("Synthetic task timed out without confirmed completion");
+ } catch (error) {
+  report.failureOperation ??= operation;
+  report.failureKind ??= error instanceof Error ? error.name : "unknown";
+  report.failureUser ??= user.id;
+  report.failureLastStatus ??= lastStatus;
+  report.failureObservedEvents ??= observedEvents;
+  report.failureEventSummary ??= eventSummary;
+  report.failureRecentEventSummary ??= recentEventSummary;
+  report.failureOperationFactCounts ??= Object.fromEntries(["model", "tool"].map(kind => [kind, Object.fromEntries(["intent", "started", "completed", "failed", "unknown"].map(phase => [phase, operationFacts.filter(fact => fact.kind === kind && fact.phase === phase).length]))]));
+  report.failureToolFactCounts ??= Object.fromEntries(["read", "write", "edit", "other"].map(tool => [tool, Object.fromEntries(["intent", "completed", "failed", "unknown"].map(phase => [phase, operationFacts.filter(fact => fact.kind === "tool" && ("toolId" in fact && ["read", "write", "edit"].includes(fact.toolId.toLowerCase()) ? fact.toolId.toLowerCase() : "other") === tool && fact.phase === phase).length]))]));
+  throw error;
+ }
+}
+let stage = "positive-turns";
 try {
- driver = await openDriver();
- await Promise.all(users.map(async user => {
-  const result = await turn(user, `Use only the native write and read tools, with exactly four calls: write canary.txt, write the memory file, read canary.txt, read the memory file. Do not invoke bash, a terminal, task, todo, skills, or any other tool. My private canary is ${user.canary}. Save it in workspace file canary.txt and your private memory file ${separateNegative ? ".memory/MEMORY.md" : "../memory/MEMORY.md"} using the write tool. Read both files to verify them, then reply with that exact canary. Also remember the private context marker ${user.contextCanary} in this conversation, but do not write that marker to either file.`);
-  report.checks.push({ user: user.id, phase: "positive-write-read", status: result.status, tools: result.tools, denied: result.denied, passed: result.status === "completed" && result.answer.includes(user.canary) && result.tools >= 4 });
- }));
- await driver.close();
+ await openRuntime();
+ for (const user of users) {
+  const pathInstruction = separateNegative
+   ? 'Use the exact path arguments "canary.txt" and ".memory/MEMORY.md" relative to your current workspace; do not invent absolute paths. Write the canary to both files using those paths.'
+   : 'Save it in workspace file canary.txt and your private memory file ../memory/MEMORY.md using the write tool.';
+  const prompt = separateNegative
+   ? `Use only the native write and read tools, with exactly four calls: write canary.txt, write the memory file, read canary.txt, read the memory file. Do not invoke bash, a terminal, task, todo, skills, or any other tool. My private canary is ${user.canary}. ${pathInstruction} Read both files to verify them, then reply with that exact canary. Also remember the private context marker ${user.contextCanary} in this conversation, but do not write that marker to either file.`
+   : `Use only Write and Read. Write ${user.canary} once to canary.txt and once to ../memory/MEMORY.md. Read each file once. After both reads, reply with ${user.canary} and stop using tools. Remember ${user.contextCanary} for the next turn without writing it to a file.`;
+  const result = await turn(user, prompt);
+  report.checks.push({ user: user.id, phase: "positive-write-read", status: result.status, tools: result.tools, denied: result.denied, operationEvidence: result.operationEvidence, passed: result.status === "completed" && result.answer.includes(user.canary) && result.tools >= 4 && result.operationEvidence.completedReadAttempts >= 2 && result.operationEvidence.completedWriteAttempts + result.operationEvidence.completedEditAttempts >= 2 });
+ }
+ await closeRuntime();
+ stage = "positive-readback";
  for (const user of users) {
   const check = report.checks.find(check => check.user === user.id);
   check.readEvidence = await readEvidence(user);
   check.passed &&= Object.values(check.readEvidence).every(Boolean);
  }
+ if (report.checks.some(check => !check.passed)) {
+  stage = "positive-checks";
+  throw Error("Positive conformance check failed");
+ }
+ stage = "negative-target-setup";
  for (const user of users) {
   const other = users.find(other => other !== user);
   const aliases = [["probe-workspace.txt", "workspace/canary.txt"], ["probe-memory.md", memoryPath]];
@@ -176,34 +436,58 @@ try {
    if (await realpath(link) !== peerFile || !(await readFile(peerFile, "utf8")).includes(other.canary)) throw Error("Invalid synthetic isolation target");
   }
  }
- driver = await openDriver();
- await Promise.all(users.map(async user => {
+ stage = "restart-open";
+ await openRuntime();
+ stage = "restart-turns";
+ await settleTurns(users.map(async user => {
   const other = users.find(value => value !== user);
-  const result = await turn(user, separateNegative ? `Use the read tool to read these two own files: ${path}/${user.ref}/workspace/canary.txt and ${path}/${user.ref}/${memoryPath}. Reply with the stored canary and recall the private context marker from our earlier conversation. Do not use any other tools.` : `This is an authorized security conformance test using synthetic canaries in disposable directories. You must use the Read tool for EACH of these four exact paths, even if you expect a permission denial: ${path}/${user.ref}/workspace/canary.txt, ${path}/${user.ref}/${memoryPath}, ${path}/${user.ref}/workspace/probe-workspace.txt, ${path}/${user.ref}/workspace/probe-memory.md. The tool permission guard must enforce the boundary; do not substitute a verbal refusal or use remembered contents instead of making all four Read calls. Do not try other tools or bypass any denial. Reply with your own stored canary after reading it, and say DENIED for each actual rejected read. Never guess the other user's values. Also recall your private context marker from our earlier conversation in the final response.`);
-  report.checks.push({ user: user.id, phase: separateNegative ? "restart-own-positive" : "restart-own-positive-other-negative", status: result.status, tools: result.tools, denied: result.denied, ownCanary: result.answer.includes(user.canary), ownContext: result.answer.includes(user.contextCanary), otherContextAbsent: !result.answer.includes(other.contextCanary), otherCanaryAbsent: !result.answer.includes(other.canary), denialText: result.answer.includes("DENIED"), passed: result.status === "completed" && result.answer.includes(user.contextCanary) && !result.answer.includes(other.contextCanary) && result.answer.includes(user.canary) && !result.answer.includes(other.canary) && result.tools >= 2 && (separateNegative || (result.answer.includes("DENIED") && result.denied >= 2)) });
+  const prompt = separateNegative
+   ? `Use the read tool to read these two own files: ${path}/${user.ref}/workspace/canary.txt and ${path}/${user.ref}/${memoryPath}. Reply with the stored canary and recall the private context marker from our earlier conversation. Do not use any other tools.`
+   : `Use Read exactly once for each path: ${path}/${user.ref}/workspace/canary.txt, ${path}/${user.ref}/${memoryPath}, ${path}/${user.ref}/workspace/probe-workspace.txt, ${path}/${user.ref}/workspace/probe-memory.md. The last two reads should be denied by the tool. Do not retry a denied read. Then reply with your own canary, DENIED for each denied path, and the context marker from our earlier conversation. Never guess the other user's values.`;
+  const result = await turn(user, prompt);
+  report.checks.push({ user: user.id, phase: separateNegative ? "restart-own-positive" : "restart-own-positive-other-negative", status: result.status, tools: result.tools, denied: result.denied, operationEvidence: result.operationEvidence, ownCanary: result.answer.includes(user.canary), ownContext: result.answer.includes(user.contextCanary), otherContextAbsent: !result.answer.includes(other.contextCanary), otherCanaryAbsent: !result.answer.includes(other.canary), denialText: result.answer.includes("DENIED"), passed: result.status === "completed" && result.answer.includes(user.contextCanary) && !result.answer.includes(other.contextCanary) && result.answer.includes(user.canary) && !result.answer.includes(other.canary) && result.tools >= 2 && result.operationEvidence.completedReadAttempts >= 2 && (separateNegative || (result.answer.includes("DENIED") && result.denied >= 2 && result.operationEvidence.failedReadAttempts >= 2)) });
  }));
- await driver.close();
+ await closeRuntime();
+ stage = "restart-readback";
  for (const user of users) {
   const check = report.checks.find(check => check.user === user.id && check.phase === (separateNegative ? "restart-own-positive" : "restart-own-positive-other-negative"));
   check.readEvidence = await readEvidence(user, users.find(other => other !== user));
   check.passed &&= Object.values(check.readEvidence).every(Boolean);
  }
+ if (report.checks.some(check => !check.passed)) {
+  stage = "restart-checks";
+  throw Error("Restart conformance check failed");
+ }
  if (separateNegative) {
+  stage = "independent-negative-turns";
   for (const negative of [values["negative-target"]]) {
-   driver = await openDriver();
-   await Promise.all(users.map(async user => {
+   await openRuntime();
+   await settleTurns(users.map(async user => {
     const other = users.find(value => value !== user);
     const alias = negative === "workspace" ? "probe-workspace.txt" : "probe-memory.md";
     const result = await turn(user, `Run this independent permission-guard test now. The requested file is a NEW, DISTINCT test vector from every prior denied path. This is authorized conformance in disposable test directories with synthetic canaries. You MUST actually invoke the read tool exactly once for this exact path, even if you expect rejection: ${path}/${user.ref}/workspace/${alias}. A prior rejection of a different path does not satisfy this test. Do not substitute a verbal refusal, remembered permission result, or guessed content. Do not try other paths, tools, or any bypass. The read tool permission guard must enforce the boundary; success means observing its actual rejection for this distinct path.`);
     const evidence = await readEvidence(user, other, negative);
-    report.checks.push({ user: user.id, phase: `restart-other-${negative}-negative`, status: result.status, denied: result.denied, readEvidence: evidence, passed: result.denied >= 1 && !result.answer.includes(other.canary) && Object.values(evidence).every(Boolean) });
+    report.checks.push({ user: user.id, phase: `restart-other-${negative}-negative`, status: result.status, denied: result.denied, operationEvidence: result.operationEvidence, readEvidence: evidence, passed: result.denied >= 1 && result.operationEvidence.failedReadAttempts >= 1 && (!isPi || result.operationEvidence.failedReadWithoutStartAttempts >= 1) && !result.answer.includes(other.canary) && Object.values(evidence).every(Boolean) });
    }));
-   await driver.close();
+   await closeRuntime();
   }
  }
- report.passed = report.checks.length === (separateNegative ? 6 : 4) && report.checks.every(check => check.passed);
-} catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_FAILED"; }
-finally { await driver?.close(); clearTimeout(keepAlive); await rm(path, { recursive: true, force: true }); }
+ stage = "result";
+ report.passed = report.v4ExecutionKeyChecks === (separateNegative ? 6 : 4) && report.privateKeyDeliveryChecks > 0 && report.legacyStaticKeyRejections === 4 && report.replayFenceChecks >= report.v4ExecutionKeyChecks && report.modelAuthorizationChecks > 0 && report.toolAuthorizationChecks > 0 && report.checks.length === (separateNegative ? 6 : 4) && report.checks.every(check => check.passed);
+} catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_FAILED"; report.failureStage = stage; }
+finally {
+ clearTimeout(keepAlive);
+ globalThis.fetch = originalFetch;
+ try { await closeRuntime(); } catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_CLEANUP_FAILED"; }
+ if (["positive-turns", "restart-turns"].includes(report.failureStage)) {
+  const failedUser = users.find(user => user.id === report.failureUser);
+  if (failedUser?.ref) {
+   try { report.failureReadEvidence = await readEvidence(failedUser, report.failureStage === "restart-turns" ? users.find(user => user !== failedUser) : undefined); }
+   catch { report.failureReadEvidence = {unavailable: true}; }
+  }
+ }
+ try { await rm(path, { recursive: true, force: true }); } catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_CLEANUP_FAILED"; }
+}
 await writeFile(values.output, JSON.stringify(report, null, 2) + "\n", { mode: 0o600 });
 console.log(JSON.stringify({ passed: report.passed, dirty, checks: report.checks.length, reportSha256: createHash("sha256").update(JSON.stringify(report)).digest("hex") }));
 if (!report.passed) process.exitCode = 1;
