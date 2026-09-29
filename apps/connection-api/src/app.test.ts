@@ -1340,6 +1340,13 @@ describe("Connection API", () => {
 					},
 				} as never,
 				approvalDirectoryEnabled: true,
+				catalogs: [
+					{
+						provider: "github",
+						providerReleaseId: "github-release",
+						actions: [],
+					},
+				],
 				approvalService: {
 					createDelegation: async (principalId: string, input: unknown) => {
 						calls.push({ principalId, delegation: input });
@@ -1601,6 +1608,23 @@ describe("Connection API", () => {
 				actorPrincipalId: "admin-1",
 			},
 		});
+		const unavailableRelease = await app.request(
+			"/api/v1/connection/admin/capability-profiles/profile-1/revise",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "revise-unavailable-release",
+				},
+				body: JSON.stringify({
+					providerReleaseId: "historic-release",
+					name: "GitHub read",
+					actionVersionIds: ["old-action"],
+				}),
+			},
+		);
+		expect(unavailableRelease.status).toBe(400);
 		const retiredProfile = await app.request(
 			"/api/v1/connection/admin/capability-profiles/profile-1/retire",
 			{

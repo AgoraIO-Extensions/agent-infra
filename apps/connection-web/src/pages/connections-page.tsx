@@ -142,12 +142,14 @@ export function ConnectionsPage() {
 	});
 	const [newCredentialRequestId, setNewCredentialRequestId] =
 		useState<string>();
+	const [upgradeTargetReleaseId, setUpgradeTargetReleaseId] = useState("");
 	const reusableConnections = (
 		overview.data?.overview.connections ?? []
 	).filter(
 		(connection) =>
 			connection.providerId === approvedProvider &&
 			connection.providerId !== "github" &&
+			connection.providerId !== "manhattan" &&
 			connection.status === "ACTIVE",
 	);
 	const [bulkUpgrade, setBulkUpgrade] = useState<{
@@ -474,6 +476,7 @@ export function ConnectionsPage() {
 		} else beginOAuth();
 	};
 	const connectProvider = (providerId: ConnectorProviderId) => {
+		setUpgradeTargetReleaseId("");
 		if (!approvedAccessRequestId || approvedProvider !== providerId) {
 			setRenewalTarget(null);
 			setRenewalProviderId("");
@@ -486,6 +489,18 @@ export function ConnectionsPage() {
 			return;
 		}
 		openProviderCredential(providerId);
+	};
+	const requestManhattanUpgrade = (targetReleaseId: string) => {
+		const url = new URL(window.location.href);
+		url.searchParams.delete("accessRequestId");
+		url.searchParams.delete("intent");
+		window.history.replaceState(null, "", url);
+		setRenewalTarget(null);
+		setRenewalProviderId("");
+		setReconnectTargetId(null);
+		setRequestTargetProvider("manhattan");
+		setRequestTrigger((value) => value + 1);
+		setUpgradeTargetReleaseId(targetReleaseId);
 	};
 
 	const data = overview.data?.overview;
@@ -551,13 +566,7 @@ export function ConnectionsPage() {
 				...new Set(
 					data.upgradeTasks
 						.filter((task) => task.status === "PENDING_CONNECTION")
-						.filter((task) =>
-							data.connections.every(
-								(connection) =>
-									connection.id !== task.connectionId ||
-									connection.providerId !== "manhattan",
-							),
-						)
+						.filter((task) => task.providerId !== "manhattan")
 						.map((task) => task.connectionId),
 				),
 			]
@@ -736,6 +745,7 @@ export function ConnectionsPage() {
 					revokePending={false}
 					requestTrigger={requestTrigger}
 					requestTargetProvider={requestTargetProvider}
+					upgradeTargetReleaseId={upgradeTargetReleaseId}
 					renewalTarget={null}
 					renewalProviderId=""
 					onShowHistoryChange={() => undefined}
@@ -808,13 +818,21 @@ export function ConnectionsPage() {
 															disabled={
 																upgrade.isPending || bulkUpgrade?.running
 															}
-															onClick={() => upgrade.mutate(task.connectionId)}
+															onClick={() =>
+																task.providerId === "manhattan"
+																	? requestManhattanUpgrade(
+																			task.targetProviderReleaseId,
+																		)
+																	: upgrade.mutate(task.connectionId)
+															}
 															variant="secondary"
 														>
 															{upgrade.isPending &&
 															upgrade.variables === task.connectionId
 																? "正在升级"
-																: "处理升级"}
+																: task.providerId === "manhattan"
+																	? "申请新版能力"
+																	: "处理升级"}
 														</Button>
 													) : task.status === "PENDING_AUTHORIZATION" ? (
 														<button
@@ -908,6 +926,7 @@ export function ConnectionsPage() {
 						}}
 						requestTrigger={requestTrigger}
 						requestTargetProvider={requestTargetProvider}
+						upgradeTargetReleaseId={upgradeTargetReleaseId}
 						renewalTarget={renewalTarget}
 						renewalProviderId={renewalProviderId}
 						onRevoke={(grantId) => revokeGrant.mutate(grantId)}
@@ -1392,6 +1411,7 @@ function ConnectorManagementWorkspace(props: {
 	revokePending: boolean;
 	requestTrigger: number;
 	requestTargetProvider: string;
+	upgradeTargetReleaseId: string;
 	renewalTarget: Connection["accessAuthorization"];
 	renewalProviderId: string;
 	showHistory: boolean;
@@ -1412,6 +1432,10 @@ function ConnectorManagementWorkspace(props: {
 		connectorDefinitions[0]?.providerId ??
 		"github";
 	const [providerId, setProviderId] = useState(initialProvider);
+	useEffect(() => {
+		if (props.requestTargetProvider && props.requestTrigger)
+			setProviderId(props.requestTargetProvider);
+	}, [props.requestTargetProvider, props.requestTrigger]);
 	const [connectionId, setConnectionId] = useState<string | null>(null);
 	const [query, setQuery] = useState("");
 	const visibleConnectors = connectorDefinitions.filter((connector) =>
@@ -1552,6 +1576,7 @@ function ConnectorManagementWorkspace(props: {
 						requestsPending={props.accessRequestsPending}
 						startProviderId={props.requestTargetProvider}
 						startSignal={props.requestTrigger}
+						targetProviderReleaseId={props.upgradeTargetReleaseId}
 					/>
 				) : null}
 				{selected ? (
