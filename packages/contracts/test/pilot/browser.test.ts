@@ -145,10 +145,13 @@ describe("Pilot browser contracts", () => {
 					!("responses" in operation)
 				)
 					continue;
-				expect(operation.responses).toHaveProperty("500");
-				expect(JSON.stringify(operation.responses["500"])).toContain(
-					"INTERNAL_ERROR",
-				);
+				const responses = operation.responses as Record<string, unknown>;
+				if (Object.keys(responses).length === 1 && "400" in responses) {
+					expect(JSON.stringify(responses["400"])).toContain("retired");
+				} else {
+					expect(responses).toHaveProperty("500");
+					expect(JSON.stringify(responses["500"])).toContain("INTERNAL_ERROR");
+				}
 				if ("requestBody" in operation) {
 					expect(operation.requestBody).toMatchObject({ required: true });
 				}

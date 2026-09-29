@@ -983,6 +983,64 @@ function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #481 aligns the published V1 retirement response with the running router and
+// adds the direct-create operation to the existing V2 management surface. Both
+// changes are intentional version migration work; normalize them before the
+// existing additive checks compare the rest of the document.
+function normalizeAgentManagementAlignment(previous, current) {
+	const normalized = structuredClone(current);
+	const retired = [
+		["/api/v1/agent-applications", "get"],
+		["/api/v1/agent-applications", "post"],
+		["/api/v1/agent-applications/{applicationId}", "get"],
+		["/api/v1/agent-applications/{applicationId}", "put"],
+		["/api/v1/agent-applications/{applicationId}/withdraw", "post"],
+		["/api/v1/admin/agent-applications", "get"],
+		["/api/v1/admin/agent-applications/{applicationId}/decision", "post"],
+		["/api/v1/agents", "get"],
+		["/api/v1/agents", "post"],
+		["/api/v1/agents/{agentId}", "get"],
+		["/api/v1/agents/{agentId}/configuration", "put"],
+		["/api/v1/agents/{agentId}/lifecycle", "post"],
+	];
+	for (const [path, method] of retired) {
+		const operation = current.paths?.[path]?.[method];
+		if (!operation) continue;
+		const response = operation.responses?.["400"];
+		if (
+			Object.keys(operation.responses ?? {}).length !== 1 ||
+			response?.description !==
+				"This Agent management API version is retired. Use /api/v2." ||
+			response?.content?.["application/json"]?.schema?.$ref !==
+				"#/components/schemas/PilotProtocolErrorV1" ||
+			operation.requestBody !== undefined
+		)
+			return undefined;
+		if (previous.paths?.[path]?.[method] !== undefined)
+			normalized.paths[path][method] = previous.paths[path][method];
+	}
+
+	const directPath = "/api/v2/agents";
+	const directOperation = current.paths?.[directPath]?.post;
+	if (previous.paths?.[directPath]?.post === undefined && directOperation) {
+		if (
+			directOperation.operationId !== "createAgentDirectlyV2" ||
+			directOperation.requestBody?.content?.["application/json"]?.schema
+				?.$ref !== "#/components/schemas/AgentApplicationCreateRequestV2" ||
+			directOperation.responses?.["201"]?.content?.["application/json"]?.schema
+				?.$ref !== "#/components/schemas/AgentDirectCreationProjectionV2"
+		)
+			return undefined;
+		delete normalized.paths[directPath].post;
+		if (
+			previous.components?.schemas?.AgentDirectCreationProjectionV2 ===
+			undefined
+		)
+			delete normalized.components.schemas.AgentDirectCreationProjectionV2;
+	}
+	return normalized;
+}
+
 // #796 exposes deployment-owned, credential-free choices to the Web client.
 function isDeploymentConfigurationV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/deployment/configuration";
@@ -1188,20 +1246,22 @@ function isScopedAuditOpenApiAddition(previous, current) {
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
+		const aligned = normalizeAgentManagementAlignment(previous, current);
+		const comparable = aligned ?? current;
 		if (
-			!sameValue(previous, current) &&
-			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
-			!isAgentSummaryOpenApiAddition(previous, current) &&
-			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
-			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
-			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
-			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
-			!isAgentDirectCreationOpenApiAddition(previous, current) &&
-			!isAgentApiIdentityOpenApiAddition(previous, current) &&
-			!isConversationFactsV2OpenApiAddition(previous, current) &&
-			!isWecomReceiptOpenApiAddition(previous, current) &&
-			!isScopedAuditOpenApiAddition(previous, current) &&
-			!isFileAuthorityOpenApiAddition(previous, current)
+			!sameValue(previous, comparable) &&
+			!isModelSelectionFallbackOpenApiAddition(previous, comparable) &&
+			!isAgentSummaryOpenApiAddition(previous, comparable) &&
+			!isRuntimeStatusRecoveryOpenApiAddition(previous, comparable) &&
+			!isAgentLifecycleV2OpenApiAddition(previous, comparable) &&
+			!isDeploymentConfigurationV2OpenApiAddition(previous, comparable) &&
+			!isAgentOwnerScopeOpenApiAddition(previous, comparable) &&
+			!isAgentDirectCreationOpenApiAddition(previous, comparable) &&
+			!isAgentApiIdentityOpenApiAddition(previous, comparable) &&
+			!isConversationFactsV2OpenApiAddition(previous, comparable) &&
+			!isWecomReceiptOpenApiAddition(previous, comparable) &&
+			!isScopedAuditOpenApiAddition(previous, comparable) &&
+			!isFileAuthorityOpenApiAddition(previous, comparable)
 		) {
 			changes.push("changed OpenAPI contract");
 		}

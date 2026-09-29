@@ -1,4 +1,5 @@
 import { PilotProtocolErrorV1Schema } from "@agent-infra/contracts/pilot";
+import { ApiIdentityError } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
 
 import { createPlatformApp, createPlatformHealthApp } from "./app";
@@ -154,5 +155,204 @@ describe("platform API production assembly routes", () => {
 			code: "INVALID_REQUEST",
 			message: "This Agent management API version is retired. Use /api/v2.",
 		});
+	});
+
+	it("keeps API principal reads and lifecycle on the formal assembled V2 routes", async () => {
+		const browserResolve = vi.fn().mockResolvedValue({
+			schemaVersion: 1,
+			userId: "owner-1",
+			displayName: "Owner",
+			accountStatus: "active",
+			organizationIds: ["org-1"],
+			roles: ["employee"],
+			authorizationRevision: "browser-revision-1",
+		});
+		const apiContext = {
+			schemaVersion: 1 as const,
+			principal: { kind: "application" as const, id: "application-1" },
+			accountStatus: "active" as const,
+			organizationIds: ["org-1"],
+			authorizationRevision: "application-revision-1",
+			ownerId: "owner-1",
+			credential: {
+				schemaVersion: 1 as const,
+				credentialId: "credential-1",
+				principal: { kind: "application" as const, id: "application-1" },
+				scopes: ["agent:read", "agent:manage", "agent:create"] as const,
+				expiresAt: null,
+				revokedAt: null,
+				createdAt: new Date("2026-09-30T00:00:00Z"),
+			},
+		};
+		const resolveApiCredential = vi.fn().mockResolvedValue(apiContext);
+		const resolveAgentQueryGrantType = vi.fn().mockResolvedValue("use");
+		const getAgent = vi.fn().mockResolvedValue({
+			schemaVersion: 1,
+			agentId: "agent-1",
+			applicationId: "application-1",
+			name: "Agent",
+			description: "Agent",
+			sourceReference: "template-1",
+			management: {
+				schemaVersion: 1,
+				applicationId: "application-1",
+				agentId: "agent-1",
+				applicantId: "owner-1",
+				status: "stopped",
+				revision: 2,
+				approvalRevision: null,
+				decisionReason: null,
+				serviceAvailability: null,
+				desiredState: "stopped",
+				workloadRevision: 0,
+				fence: 0,
+				ownerIds: ["owner-1"],
+				availability: [],
+				failureCode: null,
+			},
+		});
+		const readAgentProjection = vi.fn().mockResolvedValue({
+			schemaVersion: 1,
+			agentId: "agent-1",
+			name: "Agent",
+			description: "Agent",
+			source: { kind: "standard", templateId: "template-1" },
+			managementStatus: "stopped",
+			serviceAvailability: null,
+			configuration: {
+				owners: [
+					{ userId: "owner-1", displayName: "Owner", roles: ["employee"] },
+				],
+				availability: [],
+				modelOptions: [],
+				defaultModelOptionId: null,
+				defaultReasoningLevel: null,
+				actions: [],
+				environment: [],
+				channels: [],
+				secrets: [],
+			},
+			capabilities: {
+				modelSelection: false,
+				attachments: false,
+				resultFiles: false,
+				connection: false,
+				supplementaryInstruction: false,
+			},
+			interactionUrl: null,
+		});
+		const executeManagementCommand = vi.fn().mockResolvedValue({
+			outcome: "accepted",
+			result: {},
+			writePlan: {},
+		});
+		const recordAccessRejection = vi.fn().mockResolvedValue(undefined);
+		const app = createPlatformApp({
+			management: {
+				identity: {
+					resolve: browserResolve,
+					resolveApiCredential,
+					hydrateUsers: vi.fn().mockResolvedValue([]),
+				},
+				apiIdentity: {
+					resolveAgentQueryGrantType,
+					authorizeCredentialScope: vi.fn().mockResolvedValue(undefined),
+					recordAccessRejection,
+				},
+				foundation: { submit: vi.fn() },
+				revision: { revise: vi.fn() },
+				management: { executeManagementCommand },
+				configuration: { upgradeCustomImage: vi.fn() },
+				query: {
+					listApplications: vi.fn(),
+					getApplication: vi.fn(),
+					listAgents: vi.fn(),
+					getAgent,
+				},
+				allocateApplicationIds: vi.fn(),
+				prepareSecretReplacements: vi.fn(),
+				readApplicationProjection: vi.fn(),
+				readAgentProjection,
+			},
+			configuration: {},
+			conversation: {},
+			sessionAudit: {},
+		} as never);
+
+		const read = await app.request("/api/v2/agents/agent-1", {
+			headers: {
+				Authorization: "Bearer api-token",
+				Cookie: "session=owner",
+			},
+		});
+		expect(read.status).toBe(200);
+		expect(browserResolve).not.toHaveBeenCalled();
+		expect(
+			((await read.json()) as { schemaVersion: number }).schemaVersion,
+		).toBe(2);
+		expect(getAgent).toHaveBeenCalledWith(
+			{
+				kind: "principal",
+				principal: { kind: "application", id: "application-1" },
+				grantType: "use",
+			},
+			"agent-1",
+		);
+
+		resolveAgentQueryGrantType.mockRejectedValueOnce(
+			new ApiIdentityError("not_authorized"),
+		);
+		const missingScope = await app.request("/api/v2/agents/agent-1", {
+			headers: { Authorization: "Bearer api-token" },
+		});
+		expect(missingScope.status).toBe(403);
+
+		resolveApiCredential.mockResolvedValueOnce({
+			...apiContext,
+			credential: { ...apiContext.credential, revokedAt: new Date() },
+		});
+		const revoked = await app.request("/api/v2/agents/agent-1", {
+			headers: { Authorization: "Bearer revoked-token" },
+		});
+		expect(revoked.status).toBe(403);
+
+		resolveApiCredential.mockResolvedValueOnce({
+			...apiContext,
+			credential: {
+				...apiContext.credential,
+				expiresAt: new Date(Date.now() - 1),
+			},
+		});
+		const expired = await app.request("/api/v2/agents/agent-1", {
+			headers: { Authorization: "Bearer expired-token" },
+		});
+		expect(expired.status).toBe(403);
+
+		const lifecycle = await app.request("/api/v2/agents/agent-1/lifecycle", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer api-token",
+				"content-type": "application/json",
+				"Idempotency-Key": "Api.Stop-01",
+			},
+			body: JSON.stringify({ schemaVersion: 1, command: "stop" }),
+		});
+		expect(lifecycle.status).toBe(202);
+		expect(executeManagementCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ command: "stop_agent" }),
+			expect.objectContaining({
+				apiAuthority: {
+					credentialId: "credential-1",
+					identityRevision: "application-revision-1",
+				},
+			}),
+		);
+
+		getAgent.mockResolvedValueOnce(undefined);
+		const crossSubject = await app.request("/api/v2/agents/other-agent", {
+			headers: { Authorization: "Bearer api-token" },
+		});
+		expect(crossSubject.status).toBe(404);
+		expect(recordAccessRejection).toHaveBeenCalled();
 	});
 });

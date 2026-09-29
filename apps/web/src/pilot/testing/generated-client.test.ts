@@ -5,12 +5,10 @@ import {
 	streamConversationEvents,
 	submitMessage,
 } from "../generated/sdk.gen.js";
-import type {
-	CreateAgentApplicationData,
-	SubmitMessageData,
-} from "../generated/types.gen.js";
+import type { SubmitMessageData } from "../generated/types.gen.js";
 import { listPlatformAuditV2 } from "../generated-v2/sdk.gen.js";
 import type {
+	CreateAgentApplicationV2Data,
 	ListPlatformAuditV2Responses,
 	PlatformAuditProjectionV2,
 } from "../generated-v2/types.gen.js";
@@ -21,7 +19,7 @@ describe("Pilot generated browser client", () => {
 		expect(submitMessage).toBeTypeOf("function");
 		expect(streamConversationEvents).toBeTypeOf("function");
 		expect(listPlatformAuditV2).toBeTypeOf("function");
-		expectTypeOf<CreateAgentApplicationData>().toMatchTypeOf<{
+		expectTypeOf<CreateAgentApplicationV2Data>().toMatchTypeOf<{
 			body: unknown;
 		}>();
 		expectTypeOf<SubmitMessageData>().toMatchTypeOf<{ body: unknown }>();

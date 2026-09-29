@@ -214,6 +214,13 @@ export type AgentConfigurationUpdateRequestV2 = {
     }>;
 };
 
+export type AgentDirectCreationProjectionV2 = {
+    agentId: string;
+    applicationId: string;
+    schemaVersion: 2;
+    status: 'creating';
+};
+
 export type AgentLifecycleCommandRequestV1 = {
     command: 'start' | 'stop' | 'restart' | 'retry_creation' | 'disable';
     schemaVersion: 1;
@@ -1272,6 +1279,58 @@ export type ListAgentsV2Responses = {
 };
 
 export type ListAgentsV2Response = ListAgentsV2Responses[keyof ListAgentsV2Responses];
+
+export type CreateAgentDirectlyV2Data = {
+    body: AgentApplicationCreateRequestV2Writable;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/agents';
+};
+
+export type CreateAgentDirectlyV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CreateAgentDirectlyV2Error = CreateAgentDirectlyV2Errors[keyof CreateAgentDirectlyV2Errors];
+
+export type CreateAgentDirectlyV2Responses = {
+    /**
+     * Agent creation accepted
+     */
+    201: AgentDirectCreationProjectionV2;
+};
+
+export type CreateAgentDirectlyV2Response = CreateAgentDirectlyV2Responses[keyof CreateAgentDirectlyV2Responses];
 
 export type GetAgentV2Data = {
     body?: never;

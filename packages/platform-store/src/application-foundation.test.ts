@@ -490,6 +490,70 @@ describe("PostgreSQL application foundation transaction", () => {
 		}
 	});
 
+	it.each([
+		["disabled", { accountStatus: "disabled" as const }],
+		["stale directory revision", { authorizationRevision: "user-revision-2" }],
+	])(
+		"rejects API user creation when the current directory is %s before commit",
+		async (_label, change) => {
+			await resetDatabase();
+			await adminClient`
+				insert into platform.platform_api_credentials
+					(id, principal_type, principal_id, credential_hash, scopes)
+				values ('credential-user-caller', 'user', 'owner_01', ${"b".repeat(64)}, ${adminClient.json(["agent:create"])})
+			`;
+			let currentUser: Record<string, unknown> = {
+				schemaVersion: 1,
+				userId: "owner_01",
+				accountStatus: "active",
+				organizationIds: [],
+				authorizationRevision: "user-revision-1",
+			};
+			const submission =
+				new builtStore.PostgresApplicationFoundationTransactionV1({
+					databaseUrl,
+					resolveUser: async () => currentUser,
+				});
+			try {
+				const foundation = createApplicationFoundationUseCaseV1({
+					...applicationFoundationAdmissionDependenciesV1(),
+					transaction: {
+						read: (input) => submission.read(input),
+						commit(plan, attachments) {
+							currentUser = { ...currentUser, ...change };
+							return submission.commit(plan, attachments);
+						},
+					},
+				});
+				await expect(
+					foundation.submit(
+						{
+							...applicationFoundationCommandV1,
+							applicationId: `application-user-${_label.replaceAll(" ", "-")}`,
+							agentId: `agent-user-${_label.replaceAll(" ", "-")}`,
+							idempotencyKey: `user-${_label.replaceAll(" ", "-")}`,
+						},
+						{
+							...applicationFoundationActorContextV1,
+							principal: { kind: "user", id: "owner_01" },
+							creationMode: "api",
+							apiAuthority: {
+								credentialId: "credential-user-caller",
+								identityRevision: "user-revision-1",
+							},
+						},
+						createSecretRecordFixtureResolver(),
+					),
+				).rejects.toMatchObject({ code: "not_authorized" });
+				await expect(
+					adminClient`select id from platform.agents where id like 'agent-user-%'`,
+				).resolves.toEqual([]);
+			} finally {
+				await submission.close();
+			}
+		},
+	);
+
 	it("rejects an API replay after its credential is revoked", async () => {
 		await resetDatabase();
 		await seedApiCreationAuthority();

@@ -7,6 +7,7 @@ import {
 	type ApplicationFoundationWritePlanV1,
 	type CommitApplicationFoundationResultV1,
 	type PendingSecretRecordAttachmentsV1,
+	parseCurrentTaskUserV1,
 	snapshotApplicationFoundationWritePlanV1,
 } from "@agent-infra/platform-core";
 import { and, eq, sql } from "drizzle-orm";
@@ -32,6 +33,8 @@ import { insertPendingSecretRecordAttachments } from "./secret-records.js";
 
 export interface PostgresApplicationFoundationOptions {
 	readonly databaseUrl: string;
+	/** Resolve current directory facts for API user principals at write time. */
+	readonly resolveUser?: (userId: string) => Promise<unknown | null>;
 }
 
 interface IdempotencyRow {
@@ -305,6 +308,7 @@ async function requirePersistedReplayIntegrity(
 async function requireCurrentApiCreationAuthority(
 	database: Pick<ReturnType<typeof drizzle>, "select">,
 	plan: ReturnType<typeof validatedPlan>["plan"],
+	resolveUser?: (userId: string) => Promise<unknown | null>,
 ): Promise<void> {
 	if (!plan.apiAuthority || !plan.principal) {
 		if (plan.application.status === "creating")
@@ -340,6 +344,23 @@ async function requireCurrentApiCreationAuthority(
 			credential.expiresAt.getTime() <= clock.now.getTime())
 	)
 		throw new ApplicationFoundationError("not_authorized");
+	if (plan.principal.kind === "user") {
+		let currentUser: ReturnType<typeof parseCurrentTaskUserV1>;
+		try {
+			if (!resolveUser) throw new Error("Current user resolver is unavailable");
+			currentUser = parseCurrentTaskUserV1(
+				await resolveUser(plan.principal.id),
+			);
+		} catch {
+			throw new ApplicationFoundationError("not_authorized");
+		}
+		if (
+			currentUser.userId !== plan.principal.id ||
+			currentUser.accountStatus !== "active" ||
+			currentUser.authorizationRevision !== plan.apiAuthority.identityRevision
+		)
+			throw new ApplicationFoundationError("not_authorized");
+	}
 	if (plan.principal.kind === "application") {
 		const [application] = await database
 			.select({
@@ -365,10 +386,12 @@ export class PostgresApplicationFoundationTransactionV1
 {
 	readonly #client;
 	readonly #database;
+	readonly #resolveUser;
 
 	constructor(options: PostgresApplicationFoundationOptions) {
 		this.#client = postgres(options.databaseUrl, { max: 10 });
 		this.#database = drizzle(this.#client);
+		this.#resolveUser = options.resolveUser;
 	}
 
 	async read(
@@ -418,7 +441,11 @@ export class PostgresApplicationFoundationTransactionV1
 		try {
 			const { plan, configuration, result } = validatedPlan(input);
 			return await this.#database.transaction(async (transaction) => {
-				await requireCurrentApiCreationAuthority(transaction, plan);
+				await requireCurrentApiCreationAuthority(
+					transaction,
+					plan,
+					this.#resolveUser,
+				);
 				const [reservation] = await transaction
 					.insert(idempotencyRecords)
 					.values({

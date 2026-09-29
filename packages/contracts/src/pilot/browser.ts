@@ -52,6 +52,12 @@ const errorResponses = {
 	),
 	"500": jsonResponse("Internal error", PilotInternalErrorV1Schema),
 };
+const retiredManagementResponses = {
+	"400": jsonResponse(
+		"This Agent management API version is retired. Use /api/v2.",
+		PilotProtocolErrorV1Schema,
+	),
+};
 
 export const BrowserUserProjectionV1Schema = z.strictObject({
 	userId: OpaqueIdV1Schema,
@@ -378,6 +384,10 @@ export const AgentProjectionV2Schema = AgentProjectionV1Schema.extend({
 	schemaVersion: z.literal(2),
 	configuration: AgentConfigurationProjectionV2Schema,
 });
+export const AgentDirectCreationProjectionV2Schema =
+	AgentDirectCreationProjectionV1Schema.extend({
+		schemaVersion: z.literal(2),
+	});
 
 export const AgentLifecycleCommandRequestV1Schema = z.discriminatedUnion(
 	"command",
@@ -971,123 +981,60 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 	"/api/v1/agent-applications": {
 		get: {
 			operationId: "listAgentApplications",
-			requestParams: { query: pageQuery },
-			responses: {
-				"200": jsonResponse("Current user's applications", applicationPage),
-				...errorResponses,
-			},
+			responses: retiredManagementResponses,
 		},
 		post: {
 			operationId: "createAgentApplication",
-			requestParams: { header: idempotencyHeader },
-			requestBody: requiredJsonRequestBody(
-				AgentApplicationCreateRequestV1Schema,
-			),
-			responses: {
-				"201": jsonResponse(
-					"Application submitted",
-					AgentApplicationProjectionV1Schema,
-				),
-				...errorResponses,
-			},
+			responses: retiredManagementResponses,
 		},
 	},
 	"/api/v1/agent-applications/{applicationId}": {
 		get: {
 			operationId: "getAgentApplication",
 			requestParams: { path: applicationPath },
-			responses: {
-				"200": jsonResponse(
-					"Application detail",
-					AgentApplicationProjectionV1Schema,
-				),
-				...errorResponses,
-			},
+			responses: retiredManagementResponses,
 		},
 		put: {
 			operationId: "updateAgentApplication",
-			requestParams: { path: applicationPath, header: idempotencyHeader },
-			requestBody: requiredJsonRequestBody(
-				AgentApplicationUpdateRequestV1Schema,
-			),
-			responses: {
-				"200": jsonResponse(
-					"Application updated",
-					AgentApplicationProjectionV1Schema,
-				),
-				...errorResponses,
-			},
+			requestParams: { path: applicationPath },
+			responses: retiredManagementResponses,
 		},
 	},
 	"/api/v1/agent-applications/{applicationId}/withdraw": {
 		post: {
 			operationId: "withdrawAgentApplication",
-			requestParams: { path: applicationPath, header: idempotencyHeader },
-			responses: {
-				"200": jsonResponse(
-					"Application withdrawn",
-					AgentApplicationProjectionV1Schema,
-				),
-				...errorResponses,
-			},
+			requestParams: { path: applicationPath },
+			responses: retiredManagementResponses,
 		},
 	},
 	"/api/v1/admin/agent-applications": {
 		get: {
 			operationId: "listPendingAgentApplications",
-			requestParams: { query: pageQuery },
-			responses: {
-				"200": jsonResponse("Pending applications", applicationPage),
-				...errorResponses,
-			},
+			responses: retiredManagementResponses,
 		},
 	},
 	"/api/v1/admin/agent-applications/{applicationId}/decision": {
 		post: {
 			operationId: "decideAgentApplication",
-			requestParams: { path: applicationPath, header: idempotencyHeader },
-			requestBody: requiredJsonRequestBody(ApprovalDecisionRequestV1Schema),
-			responses: {
-				"200": jsonResponse(
-					"Application decision",
-					AgentApplicationProjectionV1Schema,
-				),
-				...errorResponses,
-			},
+			requestParams: { path: applicationPath },
+			responses: retiredManagementResponses,
 		},
 	},
 	"/api/v1/agents": {
 		get: {
 			operationId: "listAgents",
-			requestParams: { query: pageQuery },
-			responses: {
-				"200": jsonResponse("Visible agents", agentPage),
-				...errorResponses,
-			},
+			responses: retiredManagementResponses,
 		},
 		post: {
 			operationId: "createAgentDirectly",
-			requestParams: { header: idempotencyHeader },
-			requestBody: requiredJsonRequestBody(
-				AgentApplicationCreateRequestV2Schema,
-			),
-			responses: {
-				"201": jsonResponse(
-					"Agent creation accepted",
-					AgentDirectCreationProjectionV1Schema,
-				),
-				...errorResponses,
-			},
+			responses: retiredManagementResponses,
 		},
 	},
 	"/api/v1/agents/{agentId}": {
 		get: {
 			operationId: "getAgent",
 			requestParams: { path: agentPath },
-			responses: {
-				"200": jsonResponse("Agent detail", AgentProjectionV1Schema),
-				...errorResponses,
-			},
+			responses: retiredManagementResponses,
 		},
 	},
 	"/api/v1/agents/{agentId}/grants": {
@@ -1116,30 +1063,15 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 	"/api/v1/agents/{agentId}/configuration": {
 		put: {
 			operationId: "updateAgentConfiguration",
-			requestParams: { path: agentPath, header: idempotencyHeader },
-			requestBody: requiredJsonRequestBody(
-				AgentConfigurationUpdateRequestV1Schema,
-			),
-			responses: {
-				"200": jsonResponse("Agent configuration", AgentProjectionV1Schema),
-				...errorResponses,
-			},
+			requestParams: { path: agentPath },
+			responses: retiredManagementResponses,
 		},
 	},
 	"/api/v1/agents/{agentId}/lifecycle": {
 		post: {
 			operationId: "commandAgentLifecycle",
-			requestParams: { path: agentPath, header: idempotencyHeader },
-			requestBody: requiredJsonRequestBody(
-				AgentLifecycleCommandRequestV1Schema,
-			),
-			responses: {
-				"202": jsonResponse(
-					"Lifecycle command accepted",
-					AgentProjectionV1Schema,
-				),
-				...errorResponses,
-			},
+			requestParams: { path: agentPath },
+			responses: retiredManagementResponses,
 		},
 	},
 	"/api/v1/agents/{agentId}/conversations": {
@@ -1367,6 +1299,20 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 				...errorResponses,
 			},
 		},
+		post: {
+			operationId: "createAgentDirectlyV2",
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationCreateRequestV2Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Agent creation accepted",
+					AgentDirectCreationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
 	},
 	"/api/v2/agents/{agentId}": {
 		get: {
@@ -1473,6 +1419,7 @@ export const pilotBrowserSchemasV2 = {
 	AgentApplicationProjectionV2: AgentApplicationProjectionV2Schema,
 	AgentConfigurationProjectionV2: AgentConfigurationProjectionV2Schema,
 	AgentProjectionV2: AgentProjectionV2Schema,
+	AgentDirectCreationProjectionV2: AgentDirectCreationProjectionV2Schema,
 	DeploymentConfigurationStatusV2: DeploymentConfigurationStatusV2Schema,
 	DeploymentConfigurationProjectionV2:
 		DeploymentConfigurationProjectionV2Schema,

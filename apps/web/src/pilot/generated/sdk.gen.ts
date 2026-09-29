@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AbandonUnknownWecomDeliveryData, AbandonUnknownWecomDeliveryErrors, AbandonUnknownWecomDeliveryResponses, BeginWecomSetupData, BeginWecomSetupErrors, BeginWecomSetupResponses, CancelWecomSetupData, CancelWecomSetupErrors, CancelWecomSetupResponses, CommandAgentLifecycleData, CommandAgentLifecycleErrors, CommandAgentLifecycleResponses, CompleteFileUploadData, CompleteFileUploadResponses, CreateAgentApplicationData, CreateAgentApplicationErrors, CreateAgentApplicationResponses, CreateAgentDirectlyData, CreateAgentDirectlyErrors, CreateAgentDirectlyResponses, CreateApiApplicationData, CreateApiApplicationErrors, CreateApiApplicationResponses, CreateConversationData, CreateConversationErrors, CreateConversationResponses, CreateFileUploadData, CreateFileUploadResponses, DecideAgentApplicationData, DecideAgentApplicationErrors, DecideAgentApplicationResponses, DownloadFileContentData, DownloadFileContentResponses, GetAgentApplicationData, GetAgentApplicationErrors, GetAgentApplicationResponses, GetAgentData, GetAgentErrors, GetAgentResponses, GetConversationData, GetConversationErrors, GetConversationResponses, GetCurrentSessionData, GetCurrentSessionErrors, GetCurrentSessionResponses, GetExecutionDetailData, GetExecutionDetailErrors, GetExecutionDetailResponses, GetOwnExecutionAuditData, GetOwnExecutionAuditErrors, GetOwnExecutionAuditResponses, GetScopedAdministratorAuditData, GetScopedAdministratorAuditErrors, GetScopedAdministratorAuditResponses, GetWecomBotConnectionData, GetWecomBotConnectionErrors, GetWecomBotConnectionResponses, GetWecomReceiptData, GetWecomReceiptErrors, GetWecomReceiptResponses, GetWecomSetupData, GetWecomSetupErrors, GetWecomSetupResponses, GrantAgentPrincipalData, GrantAgentPrincipalErrors, GrantAgentPrincipalResponses, GrantApplicationCredentialDeliveryData, GrantApplicationCredentialDeliveryErrors, GrantApplicationCredentialDeliveryResponses, IssueApiCredentialData, IssueApiCredentialErrors, IssueApiCredentialResponses, IssueApplicationCredentialData, IssueApplicationCredentialErrors, IssueApplicationCredentialResponses, IssueFileAccessData, IssueFileAccessResponses, ListAgentApplicationsData, ListAgentApplicationsErrors, ListAgentApplicationsResponses, ListAgentsData, ListAgentsErrors, ListAgentsResponses, ListApiApplicationsData, ListApiApplicationsErrors, ListApiApplicationsResponses, ListApiCredentialsData, ListApiCredentialsErrors, ListApiCredentialsResponses, ListApplicationCredentialsData, ListApplicationCredentialsErrors, ListApplicationCredentialsResponses, ListConversationsData, ListConversationsErrors, ListConversationsResponses, ListOwnExecutionAuditData, ListOwnExecutionAuditErrors, ListOwnExecutionAuditResponses, ListPendingAgentApplicationsData, ListPendingAgentApplicationsErrors, ListPendingAgentApplicationsResponses, ListPlatformAuditData, ListPlatformAuditErrors, ListPlatformAuditResponses, ListScopedAdministratorAuditData, ListScopedAdministratorAuditErrors, ListScopedAdministratorAuditResponses, ListWecomReceiptsData, ListWecomReceiptsErrors, ListWecomReceiptsResponses, ReadFileLimitsData, ReadFileLimitsResponses, RegenerateAnswerData, RegenerateAnswerErrors, RegenerateAnswerResponses, RevokeAgentPrincipalGrantData, RevokeAgentPrincipalGrantErrors, RevokeAgentPrincipalGrantResponses, RevokeApiCredentialData, RevokeApiCredentialErrors, RevokeApiCredentialResponses, RevokeApplicationCredentialData, RevokeApplicationCredentialDeliveryData, RevokeApplicationCredentialDeliveryErrors, RevokeApplicationCredentialDeliveryResponses, RevokeApplicationCredentialErrors, RevokeApplicationCredentialResponses, StopExecutionData, StopExecutionErrors, StopExecutionResponses, StreamConversationEventsData, StreamConversationEventsErrors, StreamConversationEventsResponse, StreamConversationEventsResponses, SubmitMessageData, SubmitMessageErrors, SubmitMessageResponses, SubmitWecomCredentialsData, SubmitWecomCredentialsErrors, SubmitWecomCredentialsResponses, UpdateAgentApplicationData, UpdateAgentApplicationErrors, UpdateAgentApplicationResponses, UpdateAgentConfigurationData, UpdateAgentConfigurationErrors, UpdateAgentConfigurationResponses, UpdateConversationModelSelectionData, UpdateConversationModelSelectionErrors, UpdateConversationModelSelectionResponses, UploadFileContentData, UploadFileContentResponses, WithdrawAgentApplicationData, WithdrawAgentApplicationErrors, WithdrawAgentApplicationResponses } from './types.gen';
+import type { AbandonUnknownWecomDeliveryData, AbandonUnknownWecomDeliveryErrors, AbandonUnknownWecomDeliveryResponses, BeginWecomSetupData, BeginWecomSetupErrors, BeginWecomSetupResponses, CancelWecomSetupData, CancelWecomSetupErrors, CancelWecomSetupResponses, CommandAgentLifecycleData, CommandAgentLifecycleErrors, CompleteFileUploadData, CompleteFileUploadResponses, CreateAgentApplicationData, CreateAgentApplicationErrors, CreateAgentDirectlyData, CreateAgentDirectlyErrors, CreateApiApplicationData, CreateApiApplicationErrors, CreateApiApplicationResponses, CreateConversationData, CreateConversationErrors, CreateConversationResponses, CreateFileUploadData, CreateFileUploadResponses, DecideAgentApplicationData, DecideAgentApplicationErrors, DownloadFileContentData, DownloadFileContentResponses, GetAgentApplicationData, GetAgentApplicationErrors, GetAgentData, GetAgentErrors, GetConversationData, GetConversationErrors, GetConversationResponses, GetCurrentSessionData, GetCurrentSessionErrors, GetCurrentSessionResponses, GetExecutionDetailData, GetExecutionDetailErrors, GetExecutionDetailResponses, GetOwnExecutionAuditData, GetOwnExecutionAuditErrors, GetOwnExecutionAuditResponses, GetScopedAdministratorAuditData, GetScopedAdministratorAuditErrors, GetScopedAdministratorAuditResponses, GetWecomBotConnectionData, GetWecomBotConnectionErrors, GetWecomBotConnectionResponses, GetWecomReceiptData, GetWecomReceiptErrors, GetWecomReceiptResponses, GetWecomSetupData, GetWecomSetupErrors, GetWecomSetupResponses, GrantAgentPrincipalData, GrantAgentPrincipalErrors, GrantAgentPrincipalResponses, GrantApplicationCredentialDeliveryData, GrantApplicationCredentialDeliveryErrors, GrantApplicationCredentialDeliveryResponses, IssueApiCredentialData, IssueApiCredentialErrors, IssueApiCredentialResponses, IssueApplicationCredentialData, IssueApplicationCredentialErrors, IssueApplicationCredentialResponses, IssueFileAccessData, IssueFileAccessResponses, ListAgentApplicationsData, ListAgentApplicationsErrors, ListAgentsData, ListAgentsErrors, ListApiApplicationsData, ListApiApplicationsErrors, ListApiApplicationsResponses, ListApiCredentialsData, ListApiCredentialsErrors, ListApiCredentialsResponses, ListApplicationCredentialsData, ListApplicationCredentialsErrors, ListApplicationCredentialsResponses, ListConversationsData, ListConversationsErrors, ListConversationsResponses, ListOwnExecutionAuditData, ListOwnExecutionAuditErrors, ListOwnExecutionAuditResponses, ListPendingAgentApplicationsData, ListPendingAgentApplicationsErrors, ListPlatformAuditData, ListPlatformAuditErrors, ListPlatformAuditResponses, ListScopedAdministratorAuditData, ListScopedAdministratorAuditErrors, ListScopedAdministratorAuditResponses, ListWecomReceiptsData, ListWecomReceiptsErrors, ListWecomReceiptsResponses, ReadFileLimitsData, ReadFileLimitsResponses, RegenerateAnswerData, RegenerateAnswerErrors, RegenerateAnswerResponses, RevokeAgentPrincipalGrantData, RevokeAgentPrincipalGrantErrors, RevokeAgentPrincipalGrantResponses, RevokeApiCredentialData, RevokeApiCredentialErrors, RevokeApiCredentialResponses, RevokeApplicationCredentialData, RevokeApplicationCredentialDeliveryData, RevokeApplicationCredentialDeliveryErrors, RevokeApplicationCredentialDeliveryResponses, RevokeApplicationCredentialErrors, RevokeApplicationCredentialResponses, StopExecutionData, StopExecutionErrors, StopExecutionResponses, StreamConversationEventsData, StreamConversationEventsErrors, StreamConversationEventsResponse, StreamConversationEventsResponses, SubmitMessageData, SubmitMessageErrors, SubmitMessageResponses, SubmitWecomCredentialsData, SubmitWecomCredentialsErrors, SubmitWecomCredentialsResponses, UpdateAgentApplicationData, UpdateAgentApplicationErrors, UpdateAgentConfigurationData, UpdateAgentConfigurationErrors, UpdateConversationModelSelectionData, UpdateConversationModelSelectionErrors, UpdateConversationModelSelectionResponses, UploadFileContentData, UploadFileContentResponses, WithdrawAgentApplicationData, WithdrawAgentApplicationErrors } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -18,64 +18,29 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
     meta?: keyof ClientMeta extends never ? Record<string, unknown> : ClientMeta;
 };
 
-export const listPendingAgentApplications = <ThrowOnError extends boolean = false>(options?: Options<ListPendingAgentApplicationsData, ThrowOnError>): RequestResult<ListPendingAgentApplicationsResponses, ListPendingAgentApplicationsErrors, ThrowOnError> => (options?.client ?? client).get<ListPendingAgentApplicationsResponses, ListPendingAgentApplicationsErrors, ThrowOnError>({ url: '/api/v1/admin/agent-applications', ...options });
+export const listPendingAgentApplications = <ThrowOnError extends boolean = false>(options?: Options<ListPendingAgentApplicationsData, ThrowOnError>): RequestResult<unknown, ListPendingAgentApplicationsErrors, ThrowOnError> => (options?.client ?? client).get<unknown, ListPendingAgentApplicationsErrors, ThrowOnError>({ url: '/api/v1/admin/agent-applications', ...options });
 
-export const decideAgentApplication = <ThrowOnError extends boolean = false>(options: Options<DecideAgentApplicationData, ThrowOnError>): RequestResult<DecideAgentApplicationResponses, DecideAgentApplicationErrors, ThrowOnError> => (options.client ?? client).post<DecideAgentApplicationResponses, DecideAgentApplicationErrors, ThrowOnError>({
-    url: '/api/v1/admin/agent-applications/{applicationId}/decision',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
-});
+export const decideAgentApplication = <ThrowOnError extends boolean = false>(options: Options<DecideAgentApplicationData, ThrowOnError>): RequestResult<unknown, DecideAgentApplicationErrors, ThrowOnError> => (options.client ?? client).post<unknown, DecideAgentApplicationErrors, ThrowOnError>({ url: '/api/v1/admin/agent-applications/{applicationId}/decision', ...options });
 
 export const listPlatformAudit = <ThrowOnError extends boolean = false>(options?: Options<ListPlatformAuditData, ThrowOnError>): RequestResult<ListPlatformAuditResponses, ListPlatformAuditErrors, ThrowOnError> => (options?.client ?? client).get<ListPlatformAuditResponses, ListPlatformAuditErrors, ThrowOnError>({ url: '/api/v1/admin/audit', ...options });
 
-export const listAgentApplications = <ThrowOnError extends boolean = false>(options?: Options<ListAgentApplicationsData, ThrowOnError>): RequestResult<ListAgentApplicationsResponses, ListAgentApplicationsErrors, ThrowOnError> => (options?.client ?? client).get<ListAgentApplicationsResponses, ListAgentApplicationsErrors, ThrowOnError>({ url: '/api/v1/agent-applications', ...options });
+export const listAgentApplications = <ThrowOnError extends boolean = false>(options?: Options<ListAgentApplicationsData, ThrowOnError>): RequestResult<unknown, ListAgentApplicationsErrors, ThrowOnError> => (options?.client ?? client).get<unknown, ListAgentApplicationsErrors, ThrowOnError>({ url: '/api/v1/agent-applications', ...options });
 
-export const createAgentApplication = <ThrowOnError extends boolean = false>(options: Options<CreateAgentApplicationData, ThrowOnError>): RequestResult<CreateAgentApplicationResponses, CreateAgentApplicationErrors, ThrowOnError> => (options.client ?? client).post<CreateAgentApplicationResponses, CreateAgentApplicationErrors, ThrowOnError>({
-    url: '/api/v1/agent-applications',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
-});
+export const createAgentApplication = <ThrowOnError extends boolean = false>(options?: Options<CreateAgentApplicationData, ThrowOnError>): RequestResult<unknown, CreateAgentApplicationErrors, ThrowOnError> => (options?.client ?? client).post<unknown, CreateAgentApplicationErrors, ThrowOnError>({ url: '/api/v1/agent-applications', ...options });
 
-export const getAgentApplication = <ThrowOnError extends boolean = false>(options: Options<GetAgentApplicationData, ThrowOnError>): RequestResult<GetAgentApplicationResponses, GetAgentApplicationErrors, ThrowOnError> => (options.client ?? client).get<GetAgentApplicationResponses, GetAgentApplicationErrors, ThrowOnError>({ url: '/api/v1/agent-applications/{applicationId}', ...options });
+export const getAgentApplication = <ThrowOnError extends boolean = false>(options: Options<GetAgentApplicationData, ThrowOnError>): RequestResult<unknown, GetAgentApplicationErrors, ThrowOnError> => (options.client ?? client).get<unknown, GetAgentApplicationErrors, ThrowOnError>({ url: '/api/v1/agent-applications/{applicationId}', ...options });
 
-export const updateAgentApplication = <ThrowOnError extends boolean = false>(options: Options<UpdateAgentApplicationData, ThrowOnError>): RequestResult<UpdateAgentApplicationResponses, UpdateAgentApplicationErrors, ThrowOnError> => (options.client ?? client).put<UpdateAgentApplicationResponses, UpdateAgentApplicationErrors, ThrowOnError>({
-    url: '/api/v1/agent-applications/{applicationId}',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
-});
+export const updateAgentApplication = <ThrowOnError extends boolean = false>(options: Options<UpdateAgentApplicationData, ThrowOnError>): RequestResult<unknown, UpdateAgentApplicationErrors, ThrowOnError> => (options.client ?? client).put<unknown, UpdateAgentApplicationErrors, ThrowOnError>({ url: '/api/v1/agent-applications/{applicationId}', ...options });
 
-export const withdrawAgentApplication = <ThrowOnError extends boolean = false>(options: Options<WithdrawAgentApplicationData, ThrowOnError>): RequestResult<WithdrawAgentApplicationResponses, WithdrawAgentApplicationErrors, ThrowOnError> => (options.client ?? client).post<WithdrawAgentApplicationResponses, WithdrawAgentApplicationErrors, ThrowOnError>({ url: '/api/v1/agent-applications/{applicationId}/withdraw', ...options });
+export const withdrawAgentApplication = <ThrowOnError extends boolean = false>(options: Options<WithdrawAgentApplicationData, ThrowOnError>): RequestResult<unknown, WithdrawAgentApplicationErrors, ThrowOnError> => (options.client ?? client).post<unknown, WithdrawAgentApplicationErrors, ThrowOnError>({ url: '/api/v1/agent-applications/{applicationId}/withdraw', ...options });
 
-export const listAgents = <ThrowOnError extends boolean = false>(options?: Options<ListAgentsData, ThrowOnError>): RequestResult<ListAgentsResponses, ListAgentsErrors, ThrowOnError> => (options?.client ?? client).get<ListAgentsResponses, ListAgentsErrors, ThrowOnError>({ url: '/api/v1/agents', ...options });
+export const listAgents = <ThrowOnError extends boolean = false>(options?: Options<ListAgentsData, ThrowOnError>): RequestResult<unknown, ListAgentsErrors, ThrowOnError> => (options?.client ?? client).get<unknown, ListAgentsErrors, ThrowOnError>({ url: '/api/v1/agents', ...options });
 
-export const createAgentDirectly = <ThrowOnError extends boolean = false>(options: Options<CreateAgentDirectlyData, ThrowOnError>): RequestResult<CreateAgentDirectlyResponses, CreateAgentDirectlyErrors, ThrowOnError> => (options.client ?? client).post<CreateAgentDirectlyResponses, CreateAgentDirectlyErrors, ThrowOnError>({
-    url: '/api/v1/agents',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
-});
+export const createAgentDirectly = <ThrowOnError extends boolean = false>(options?: Options<CreateAgentDirectlyData, ThrowOnError>): RequestResult<unknown, CreateAgentDirectlyErrors, ThrowOnError> => (options?.client ?? client).post<unknown, CreateAgentDirectlyErrors, ThrowOnError>({ url: '/api/v1/agents', ...options });
 
-export const getAgent = <ThrowOnError extends boolean = false>(options: Options<GetAgentData, ThrowOnError>): RequestResult<GetAgentResponses, GetAgentErrors, ThrowOnError> => (options.client ?? client).get<GetAgentResponses, GetAgentErrors, ThrowOnError>({ url: '/api/v1/agents/{agentId}', ...options });
+export const getAgent = <ThrowOnError extends boolean = false>(options: Options<GetAgentData, ThrowOnError>): RequestResult<unknown, GetAgentErrors, ThrowOnError> => (options.client ?? client).get<unknown, GetAgentErrors, ThrowOnError>({ url: '/api/v1/agents/{agentId}', ...options });
 
-export const updateAgentConfiguration = <ThrowOnError extends boolean = false>(options: Options<UpdateAgentConfigurationData, ThrowOnError>): RequestResult<UpdateAgentConfigurationResponses, UpdateAgentConfigurationErrors, ThrowOnError> => (options.client ?? client).put<UpdateAgentConfigurationResponses, UpdateAgentConfigurationErrors, ThrowOnError>({
-    url: '/api/v1/agents/{agentId}/configuration',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
-});
+export const updateAgentConfiguration = <ThrowOnError extends boolean = false>(options: Options<UpdateAgentConfigurationData, ThrowOnError>): RequestResult<unknown, UpdateAgentConfigurationErrors, ThrowOnError> => (options.client ?? client).put<unknown, UpdateAgentConfigurationErrors, ThrowOnError>({ url: '/api/v1/agents/{agentId}/configuration', ...options });
 
 export const listConversations = <ThrowOnError extends boolean = false>(options: Options<ListConversationsData, ThrowOnError>): RequestResult<ListConversationsResponses, ListConversationsErrors, ThrowOnError> => (options.client ?? client).get<ListConversationsResponses, ListConversationsErrors, ThrowOnError>({ url: '/api/v1/agents/{agentId}/conversations', ...options });
 
@@ -106,14 +71,7 @@ export const grantAgentPrincipal = <ThrowOnError extends boolean = false>(option
     }
 });
 
-export const commandAgentLifecycle = <ThrowOnError extends boolean = false>(options: Options<CommandAgentLifecycleData, ThrowOnError>): RequestResult<CommandAgentLifecycleResponses, CommandAgentLifecycleErrors, ThrowOnError> => (options.client ?? client).post<CommandAgentLifecycleResponses, CommandAgentLifecycleErrors, ThrowOnError>({
-    url: '/api/v1/agents/{agentId}/lifecycle',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
-});
+export const commandAgentLifecycle = <ThrowOnError extends boolean = false>(options: Options<CommandAgentLifecycleData, ThrowOnError>): RequestResult<unknown, CommandAgentLifecycleErrors, ThrowOnError> => (options.client ?? client).post<unknown, CommandAgentLifecycleErrors, ThrowOnError>({ url: '/api/v1/agents/{agentId}/lifecycle', ...options });
 
 export const getWecomBotConnection = <ThrowOnError extends boolean = false>(options: Options<GetWecomBotConnectionData, ThrowOnError>): RequestResult<GetWecomBotConnectionResponses, GetWecomBotConnectionErrors, ThrowOnError> => (options.client ?? client).get<GetWecomBotConnectionResponses, GetWecomBotConnectionErrors, ThrowOnError>({ url: '/api/v1/agents/{agentId}/wecom-bot', ...options });
 

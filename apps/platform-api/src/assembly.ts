@@ -73,15 +73,6 @@ export interface PlatformApiAssembly {
 export function assemblePlatformApi(
 	input: PlatformApiAssemblyInput,
 ): PlatformApiAssembly {
-	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
-		databaseUrl: input.databaseUrl,
-	});
-	const revisionTransaction = new PostgresApplicationRevisionTransactionV1({
-		databaseUrl: input.databaseUrl,
-	});
-	const managementTransaction = new PostgresAgentManagementTransactionV1({
-		databaseUrl: input.databaseUrl,
-	});
 	const apiIdentity =
 		input.apiIdentity ??
 		new PostgresApiIdentityStoreV1({ databaseUrl: input.databaseUrl });
@@ -90,6 +81,17 @@ export function assemblePlatformApi(
 		apiIdentity,
 	);
 	const identityAdapter = identity;
+	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
+		databaseUrl: input.databaseUrl,
+		resolveUser: identityAdapter.resolveUser,
+	});
+	const revisionTransaction = new PostgresApplicationRevisionTransactionV1({
+		databaseUrl: input.databaseUrl,
+	});
+	const managementTransaction = new PostgresAgentManagementTransactionV1({
+		databaseUrl: input.databaseUrl,
+		resolveUser: identityAdapter.resolveUser,
+	});
 	const managementQuery = new PostgresAgentManagementQueryV1({
 		databaseUrl: input.databaseUrl,
 	});

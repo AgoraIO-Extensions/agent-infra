@@ -170,7 +170,7 @@ Agent 读取入口，`bearer.grantPath` 必须是接受 `agent:manage` 的 grant
   "owner": { "userId": "controlled-owner", "stateFile": "/absolute/local-development/owner-state.json", "expectRole": "employee" },
   "other": { "userId": "controlled-other", "stateFile": "/absolute/local-development/other-state.json", "expectRole": "employee" },
   "bearer": {
-    "readPath": "/api/v1/agents/{agentId}",
+    "readPath": "/api/v2/agents/{agentId}",
     "grantPath": "/api/v1/agents/{agentId}/grants",
     "grantPrincipal": { "kind": "user", "id": "controlled-other" }
   }
@@ -186,11 +186,13 @@ Agent 读取入口，`bearer.grantPath` 必须是接受 `agent:manage` 的 grant
 - `assemblePlatformApi` 使用同一 PostgreSQL `PostgresApiIdentityStoreV1`，并把
   `resolveApiCredential`、`resolveUser` 和当前 authorization revision 绑定到部署目录；不能用
   fixture、调用方提交的 user ID 或静态 Bearer 替代。
-- 当前 `createPlatformApp` 只调用 `registerApiIdentityRoutes`；`management-routes.ts` 中由
-  `registerManagementRoutes` 提供的 legacy Bearer 分支未自动挂载。#504 必须实际挂载该
-  contract 的读取和 grant 路径，或提供完全等价且已记录的路径；仅挂载
-  `/api/v1/api-credentials`、`/api/v1/applications` 等浏览器身份路由，不足以证明 scope、
-  过期、撤销和 Agent grant。`bearer.*Path` 必须与实际装配路径一致。
+- 当前 `createPlatformApp` 已挂载 `registerApiIdentityRoutes`，其中包括凭证、应用和
+  `/api/v1/agents/{agentId}/grants`。#504 只需提供同一受信目录、隔离数据库、授权事实和运行
+  环境；不得为了验收恢复 `registerManagementRoutes` 的 legacy 管理读取分支，也不得用环境
+  自造等价路径替代正式入口。`bearer.grantPath` 固定为该已挂载的 grant 路径。
+- Agent Bearer 读取使用正式 V2 入口 `/api/v2/agents/{agentId}`；该入口必须由当前提交提供
+  应用 principal、`agent:read` scope、有效期/撤销和 Agent grant 校验。`bearer.readPath` 不得
+  指向已退休的 `/api/v1/agents/{agentId}`，也不得通过浏览器 cookie fallback。
 - `/api/v1/admin/audit` 对管理员可读，返回的 `summary`、`subjectId`、actor 和错误信息不得
   包含凭证值；日志采集也应以本次 run 的 request/trace ID 或 hash 关联，而不记录 token。
 - 如果 #504 能提供本次 run 的 API 日志文件，把路径放入 `logFiles`；脚本会回读并逐个检查凭证

@@ -164,6 +164,16 @@ function configuration(value) {
 		nonEmptyString(bearer[key], `bearer.${key} is required`);
 		assert(bearer[key].startsWith("/"), `bearer.${key} must be a path`);
 	}
+	assert.equal(
+		bearer.readPath,
+		"/api/v2/agents/{agentId}",
+		"bearer.readPath must use the formal V2 Agent detail route",
+	);
+	assert.equal(
+		bearer.grantPath,
+		"/api/v1/agents/{agentId}/grants",
+		"bearer.grantPath must use the mounted API identity grant route",
+	);
 	const grantPrincipal = record(
 		bearer.grantPrincipal ?? { kind: "user", id: subjects.other.userId },
 		"bearer.grantPrincipal must be an object",
@@ -386,7 +396,8 @@ async function run(input) {
 				secrets,
 			);
 			expectStatus(result, 400, "retired V1 management route");
-			assert.equal(result.code, "VERSION_RETIRED");
+			assert.equal(result.code, "INVALID_REQUEST");
+			assert.match(result.json?.message ?? "", /API version is retired/i);
 			return { status: result.status, code: result.code };
 		});
 

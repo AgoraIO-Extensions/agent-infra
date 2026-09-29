@@ -4933,60 +4933,7 @@
     "/api/v1/admin/agent-applications": {
       "get": {
         "operationId": "listPendingAgentApplications",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "cursor",
-            "schema": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "schema": {
-              "maximum": 100,
-              "minimum": 1,
-              "type": "integer"
-            }
-          }
-        ],
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "items": {
-                      "items": {
-                        "$ref": "#/components/schemas/AgentApplicationProjectionV1"
-                      },
-                      "type": "array"
-                    },
-                    "nextCursor": {
-                      "anyOf": [
-                        {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "required": [
-                    "items",
-                    "nextCursor"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Pending applications"
-          },
           "400": {
             "content": {
               "application/json": {
@@ -4995,67 +4942,7 @@
                 }
               }
             },
-            "description": "Invalid request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request is not authorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Resource is unavailable"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request conflicts with current state"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotInternalErrorV1"
-                }
-              }
-            },
-            "description": "Internal error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Dependency is temporarily unavailable"
+            "description": "This Agent management API version is retired. Use /api/v2."
           }
         }
       }
@@ -5072,40 +4959,9 @@
               "minLength": 1,
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9._~-]+$",
-              "type": "string"
-            }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ApprovalDecisionRequestV1"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentApplicationProjectionV1"
-                }
-              }
-            },
-            "description": "Application decision"
-          },
           "400": {
             "content": {
               "application/json": {
@@ -5114,67 +4970,7 @@
                 }
               }
             },
-            "description": "Invalid request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request is not authorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Resource is unavailable"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request conflicts with current state"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotInternalErrorV1"
-                }
-              }
-            },
-            "description": "Internal error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Dependency is temporarily unavailable"
+            "description": "This Agent management API version is retired. Use /api/v2."
           }
         }
       }
@@ -5312,60 +5108,7 @@
     "/api/v1/agent-applications": {
       "get": {
         "operationId": "listAgentApplications",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "cursor",
-            "schema": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "schema": {
-              "maximum": 100,
-              "minimum": 1,
-              "type": "integer"
-            }
-          }
-        ],
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "items": {
-                      "items": {
-                        "$ref": "#/components/schemas/AgentApplicationProjectionV1"
-                      },
-                      "type": "array"
-                    },
-                    "nextCursor": {
-                      "anyOf": [
-                        {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "required": [
-                    "items",
-                    "nextCursor"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Current user's applications"
-          },
           "400": {
             "content": {
               "application/json": {
@@ -5374,106 +5117,13 @@
                 }
               }
             },
-            "description": "Invalid request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request is not authorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Resource is unavailable"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request conflicts with current state"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotInternalErrorV1"
-                }
-              }
-            },
-            "description": "Internal error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Dependency is temporarily unavailable"
+            "description": "This Agent management API version is retired. Use /api/v2."
           }
         }
       },
       "post": {
         "operationId": "createAgentApplication",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9._~-]+$",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentApplicationCreateRequestV1"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentApplicationProjectionV1"
-                }
-              }
-            },
-            "description": "Application submitted"
-          },
           "400": {
             "content": {
               "application/json": {
@@ -5482,67 +5132,7 @@
                 }
               }
             },
-            "description": "Invalid request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request is not authorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Resource is unavailable"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request conflicts with current state"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotInternalErrorV1"
-                }
-              }
-            },
-            "description": "Internal error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Dependency is temporarily unavailable"
+            "description": "This Agent management API version is retired. Use /api/v2."
           }
         }
       }
@@ -5562,16 +5152,6 @@
           }
         ],
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentApplicationProjectionV1"
-                }
-              }
-            },
-            "description": "Application detail"
-          },
           "400": {
             "content": {
               "application/json": {
@@ -5580,67 +5160,7 @@
                 }
               }
             },
-            "description": "Invalid request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request is not authorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Resource is unavailable"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request conflicts with current state"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotInternalErrorV1"
-                }
-              }
-            },
-            "description": "Internal error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Dependency is temporarily unavailable"
+            "description": "This Agent management API version is retired. Use /api/v2."
           }
         }
       },
@@ -5655,40 +5175,9 @@
               "minLength": 1,
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9._~-]+$",
-              "type": "string"
-            }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentApplicationUpdateRequestV1"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentApplicationProjectionV1"
-                }
-              }
-            },
-            "description": "Application updated"
-          },
           "400": {
             "content": {
               "application/json": {
@@ -5697,67 +5186,7 @@
                 }
               }
             },
-            "description": "Invalid request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request is not authorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Resource is unavailable"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request conflicts with current state"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotInternalErrorV1"
-                }
-              }
-            },
-            "description": "Internal error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Dependency is temporarily unavailable"
+            "description": "This Agent management API version is retired. Use /api/v2."
           }
         }
       }
@@ -5774,30 +5203,9 @@
               "minLength": 1,
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9._~-]+$",
-              "type": "string"
-            }
           }
         ],
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentApplicationProjectionV1"
-                }
-              }
-            },
-            "description": "Application withdrawn"
-          },
           "400": {
             "content": {
               "application/json": {
@@ -5806,67 +5214,7 @@
                 }
               }
             },
-            "description": "Invalid request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request is not authorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Resource is unavailable"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request conflicts with current state"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotInternalErrorV1"
-                }
-              }
-            },
-            "description": "Internal error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Dependency is temporarily unavailable"
+            "description": "This Agent management API version is retired. Use /api/v2."
           }
         }
       }
@@ -5874,60 +5222,7 @@
     "/api/v1/agents": {
       "get": {
         "operationId": "listAgents",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "cursor",
-            "schema": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "schema": {
-              "maximum": 100,
-              "minimum": 1,
-              "type": "integer"
-            }
-          }
-        ],
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "items": {
-                      "items": {
-                        "$ref": "#/components/schemas/AgentProjectionV1"
-                      },
-                      "type": "array"
-                    },
-                    "nextCursor": {
-                      "anyOf": [
-                        {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "required": [
-                    "items",
-                    "nextCursor"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Visible agents"
-          },
           "400": {
             "content": {
               "application/json": {
@@ -5936,106 +5231,13 @@
                 }
               }
             },
-            "description": "Invalid request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request is not authorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Resource is unavailable"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request conflicts with current state"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotInternalErrorV1"
-                }
-              }
-            },
-            "description": "Internal error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Dependency is temporarily unavailable"
+            "description": "This Agent management API version is retired. Use /api/v2."
           }
         }
       },
       "post": {
         "operationId": "createAgentDirectly",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9._~-]+$",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentApplicationCreateRequestV2"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentDirectCreationProjectionV1"
-                }
-              }
-            },
-            "description": "Agent creation accepted"
-          },
           "400": {
             "content": {
               "application/json": {
@@ -6044,67 +5246,7 @@
                 }
               }
             },
-            "description": "Invalid request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request is not authorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Resource is unavailable"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request conflicts with current state"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotInternalErrorV1"
-                }
-              }
-            },
-            "description": "Internal error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Dependency is temporarily unavailable"
+            "description": "This Agent management API version is retired. Use /api/v2."
           }
         }
       }
@@ -6124,16 +5266,6 @@
           }
         ],
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentProjectionV1"
-                }
-              }
-            },
-            "description": "Agent detail"
-          },
           "400": {
             "content": {
               "application/json": {
@@ -6142,67 +5274,7 @@
                 }
               }
             },
-            "description": "Invalid request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request is not authorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Resource is unavailable"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request conflicts with current state"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotInternalErrorV1"
-                }
-              }
-            },
-            "description": "Internal error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Dependency is temporarily unavailable"
+            "description": "This Agent management API version is retired. Use /api/v2."
           }
         }
       }
@@ -6219,40 +5291,9 @@
               "minLength": 1,
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9._~-]+$",
-              "type": "string"
-            }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentConfigurationUpdateRequestV1"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentProjectionV1"
-                }
-              }
-            },
-            "description": "Agent configuration"
-          },
           "400": {
             "content": {
               "application/json": {
@@ -6261,67 +5302,7 @@
                 }
               }
             },
-            "description": "Invalid request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request is not authorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Resource is unavailable"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request conflicts with current state"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotInternalErrorV1"
-                }
-              }
-            },
-            "description": "Internal error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Dependency is temporarily unavailable"
+            "description": "This Agent management API version is retired. Use /api/v2."
           }
         }
       }
@@ -6811,40 +5792,9 @@
               "minLength": 1,
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9._~-]+$",
-              "type": "string"
-            }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentLifecycleCommandRequestV1"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentProjectionV1"
-                }
-              }
-            },
-            "description": "Lifecycle command accepted"
-          },
           "400": {
             "content": {
               "application/json": {
@@ -6853,67 +5803,7 @@
                 }
               }
             },
-            "description": "Invalid request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request is not authorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Resource is unavailable"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Request conflicts with current state"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotInternalErrorV1"
-                }
-              }
-            },
-            "description": "Internal error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
-                }
-              }
-            },
-            "description": "Dependency is temporarily unavailable"
+            "description": "This Agent management API version is retired. Use /api/v2."
           }
         }
       }

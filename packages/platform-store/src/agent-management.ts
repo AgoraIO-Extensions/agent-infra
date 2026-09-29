@@ -1,7 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { types } from "node:util";
-import type { ApiPrincipalV1 } from "@agent-infra/platform-core";
 import {
 	type AgentManagementAcceptedResultV1,
 	type AgentManagementDecisionV1,
@@ -9,6 +8,8 @@ import {
 	type AgentManagementStateV1,
 	type AgentManagementTransactionPortV1,
 	type AgentManagementTransactionRequestV1,
+	type ApiPrincipalV1,
+	parseCurrentTaskUserV1,
 	snapshotAgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
 import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
@@ -34,6 +35,8 @@ import {
 
 export interface PostgresAgentManagementOptionsV1 {
 	readonly databaseUrl: string;
+	/** Resolve current directory facts for API user principals at write time. */
+	readonly resolveUser?: (userId: string) => Promise<unknown | null>;
 }
 
 interface IdempotencyRow {
@@ -161,6 +164,7 @@ async function readIdempotency(
 async function currentApiCredentialAllowsManagement(
 	transaction: Transaction,
 	request: AgentManagementTransactionRequestV1,
+	resolveUser?: (userId: string) => Promise<unknown | null>,
 ): Promise<boolean> {
 	if (!request.apiAuthority) return true;
 	const [credential] = await transaction
@@ -194,6 +198,23 @@ async function currentApiCredentialAllowsManagement(
 		(credential.expiresAt === null ||
 			credential.expiresAt.getTime() > clock.nowMs);
 	if (!validCredential) return false;
+	if (request.apiAuthority.principal.kind === "user") {
+		try {
+			if (!resolveUser) return false;
+			const currentUser = parseCurrentTaskUserV1(
+				await resolveUser(request.apiAuthority.principal.id),
+			);
+			if (
+				currentUser.userId !== request.apiAuthority.principal.id ||
+				currentUser.accountStatus !== "active" ||
+				currentUser.authorizationRevision !==
+					request.apiAuthority.identityRevision
+			)
+				return false;
+		} catch {
+			return false;
+		}
+	}
 	if (request.apiAuthority.principal.kind === "application") {
 		const [application] = await transaction
 			.select({
@@ -475,10 +496,12 @@ export class PostgresAgentManagementTransactionV1
 {
 	readonly #client;
 	readonly #database;
+	readonly #resolveUser;
 
 	constructor(options: PostgresAgentManagementOptionsV1) {
 		this.#client = postgres(options.databaseUrl, { max: 1 });
 		this.#database = drizzle(this.#client);
+		this.#resolveUser = options.resolveUser;
 	}
 
 	async executeAgentManagementTransaction(
@@ -496,7 +519,11 @@ export class PostgresAgentManagementTransactionV1
 				);
 				if (firstReplay) {
 					if (
-						!(await currentApiCredentialAllowsManagement(transaction, request))
+						!(await currentApiCredentialAllowsManagement(
+							transaction,
+							request,
+							this.#resolveUser,
+						))
 					)
 						return { outcome: "denied", writePlan: null };
 					return firstReplay;
@@ -507,7 +534,13 @@ export class PostgresAgentManagementTransactionV1
 					await readIdempotency(transaction, request),
 					request,
 				);
-				if (!(await currentApiCredentialAllowsManagement(transaction, request)))
+				if (
+					!(await currentApiCredentialAllowsManagement(
+						transaction,
+						request,
+						this.#resolveUser,
+					))
+				)
 					return { outcome: "denied", writePlan: null };
 				if (secondReplay) return secondReplay;
 				const decision = decide(state && structuredClone(state));

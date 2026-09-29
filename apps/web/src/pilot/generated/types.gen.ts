@@ -1057,63 +1057,21 @@ export type AgentConfigurationUpdateRequestV1Writable = {
 export type ListPendingAgentApplicationsData = {
     body?: never;
     path?: never;
-    query?: {
-        cursor?: string;
-        limit?: number;
-    };
+    query?: never;
     url: '/api/v1/admin/agent-applications';
 };
 
 export type ListPendingAgentApplicationsErrors = {
     /**
-     * Invalid request
+     * This Agent management API version is retired. Use /api/v2.
      */
     400: PilotProtocolErrorV1;
-    /**
-     * Authentication required
-     */
-    401: PilotProtocolErrorV1;
-    /**
-     * Request is not authorized
-     */
-    403: PilotProtocolErrorV1;
-    /**
-     * Resource is unavailable
-     */
-    404: PilotProtocolErrorV1;
-    /**
-     * Request conflicts with current state
-     */
-    409: PilotProtocolErrorV1;
-    /**
-     * Internal error
-     */
-    500: PilotInternalErrorV1;
-    /**
-     * Dependency is temporarily unavailable
-     */
-    503: PilotProtocolErrorV1;
 };
 
 export type ListPendingAgentApplicationsError = ListPendingAgentApplicationsErrors[keyof ListPendingAgentApplicationsErrors];
 
-export type ListPendingAgentApplicationsResponses = {
-    /**
-     * Pending applications
-     */
-    200: {
-        items: Array<AgentApplicationProjectionV1>;
-        nextCursor: string | null;
-    };
-};
-
-export type ListPendingAgentApplicationsResponse = ListPendingAgentApplicationsResponses[keyof ListPendingAgentApplicationsResponses];
-
 export type DecideAgentApplicationData = {
-    body: ApprovalDecisionRequestV1;
-    headers: {
-        'Idempotency-Key': string;
-    };
+    body?: never;
     path: {
         applicationId: string;
     };
@@ -1123,45 +1081,12 @@ export type DecideAgentApplicationData = {
 
 export type DecideAgentApplicationErrors = {
     /**
-     * Invalid request
+     * This Agent management API version is retired. Use /api/v2.
      */
     400: PilotProtocolErrorV1;
-    /**
-     * Authentication required
-     */
-    401: PilotProtocolErrorV1;
-    /**
-     * Request is not authorized
-     */
-    403: PilotProtocolErrorV1;
-    /**
-     * Resource is unavailable
-     */
-    404: PilotProtocolErrorV1;
-    /**
-     * Request conflicts with current state
-     */
-    409: PilotProtocolErrorV1;
-    /**
-     * Internal error
-     */
-    500: PilotInternalErrorV1;
-    /**
-     * Dependency is temporarily unavailable
-     */
-    503: PilotProtocolErrorV1;
 };
 
 export type DecideAgentApplicationError = DecideAgentApplicationErrors[keyof DecideAgentApplicationErrors];
-
-export type DecideAgentApplicationResponses = {
-    /**
-     * Application decision
-     */
-    200: AgentApplicationProjectionV1;
-};
-
-export type DecideAgentApplicationResponse = DecideAgentApplicationResponses[keyof DecideAgentApplicationResponses];
 
 export type ListPlatformAuditData = {
     body?: never;
@@ -1221,63 +1146,21 @@ export type ListPlatformAuditResponse = ListPlatformAuditResponses[keyof ListPla
 export type ListAgentApplicationsData = {
     body?: never;
     path?: never;
-    query?: {
-        cursor?: string;
-        limit?: number;
-    };
+    query?: never;
     url: '/api/v1/agent-applications';
 };
 
 export type ListAgentApplicationsErrors = {
     /**
-     * Invalid request
+     * This Agent management API version is retired. Use /api/v2.
      */
     400: PilotProtocolErrorV1;
-    /**
-     * Authentication required
-     */
-    401: PilotProtocolErrorV1;
-    /**
-     * Request is not authorized
-     */
-    403: PilotProtocolErrorV1;
-    /**
-     * Resource is unavailable
-     */
-    404: PilotProtocolErrorV1;
-    /**
-     * Request conflicts with current state
-     */
-    409: PilotProtocolErrorV1;
-    /**
-     * Internal error
-     */
-    500: PilotInternalErrorV1;
-    /**
-     * Dependency is temporarily unavailable
-     */
-    503: PilotProtocolErrorV1;
 };
 
 export type ListAgentApplicationsError = ListAgentApplicationsErrors[keyof ListAgentApplicationsErrors];
 
-export type ListAgentApplicationsResponses = {
-    /**
-     * Current user's applications
-     */
-    200: {
-        items: Array<AgentApplicationProjectionV1>;
-        nextCursor: string | null;
-    };
-};
-
-export type ListAgentApplicationsResponse = ListAgentApplicationsResponses[keyof ListAgentApplicationsResponses];
-
 export type CreateAgentApplicationData = {
-    body: AgentApplicationCreateRequestV1Writable;
-    headers: {
-        'Idempotency-Key': string;
-    };
+    body?: never;
     path?: never;
     query?: never;
     url: '/api/v1/agent-applications';
@@ -1285,45 +1168,12 @@ export type CreateAgentApplicationData = {
 
 export type CreateAgentApplicationErrors = {
     /**
-     * Invalid request
+     * This Agent management API version is retired. Use /api/v2.
      */
     400: PilotProtocolErrorV1;
-    /**
-     * Authentication required
-     */
-    401: PilotProtocolErrorV1;
-    /**
-     * Request is not authorized
-     */
-    403: PilotProtocolErrorV1;
-    /**
-     * Resource is unavailable
-     */
-    404: PilotProtocolErrorV1;
-    /**
-     * Request conflicts with current state
-     */
-    409: PilotProtocolErrorV1;
-    /**
-     * Internal error
-     */
-    500: PilotInternalErrorV1;
-    /**
-     * Dependency is temporarily unavailable
-     */
-    503: PilotProtocolErrorV1;
 };
 
 export type CreateAgentApplicationError = CreateAgentApplicationErrors[keyof CreateAgentApplicationErrors];
-
-export type CreateAgentApplicationResponses = {
-    /**
-     * Application submitted
-     */
-    201: AgentApplicationProjectionV1;
-};
-
-export type CreateAgentApplicationResponse = CreateAgentApplicationResponses[keyof CreateAgentApplicationResponses];
 
 export type GetAgentApplicationData = {
     body?: never;
@@ -1336,51 +1186,15 @@ export type GetAgentApplicationData = {
 
 export type GetAgentApplicationErrors = {
     /**
-     * Invalid request
+     * This Agent management API version is retired. Use /api/v2.
      */
     400: PilotProtocolErrorV1;
-    /**
-     * Authentication required
-     */
-    401: PilotProtocolErrorV1;
-    /**
-     * Request is not authorized
-     */
-    403: PilotProtocolErrorV1;
-    /**
-     * Resource is unavailable
-     */
-    404: PilotProtocolErrorV1;
-    /**
-     * Request conflicts with current state
-     */
-    409: PilotProtocolErrorV1;
-    /**
-     * Internal error
-     */
-    500: PilotInternalErrorV1;
-    /**
-     * Dependency is temporarily unavailable
-     */
-    503: PilotProtocolErrorV1;
 };
 
 export type GetAgentApplicationError = GetAgentApplicationErrors[keyof GetAgentApplicationErrors];
 
-export type GetAgentApplicationResponses = {
-    /**
-     * Application detail
-     */
-    200: AgentApplicationProjectionV1;
-};
-
-export type GetAgentApplicationResponse = GetAgentApplicationResponses[keyof GetAgentApplicationResponses];
-
 export type UpdateAgentApplicationData = {
-    body: AgentApplicationUpdateRequestV1Writable;
-    headers: {
-        'Idempotency-Key': string;
-    };
+    body?: never;
     path: {
         applicationId: string;
     };
@@ -1390,51 +1204,15 @@ export type UpdateAgentApplicationData = {
 
 export type UpdateAgentApplicationErrors = {
     /**
-     * Invalid request
+     * This Agent management API version is retired. Use /api/v2.
      */
     400: PilotProtocolErrorV1;
-    /**
-     * Authentication required
-     */
-    401: PilotProtocolErrorV1;
-    /**
-     * Request is not authorized
-     */
-    403: PilotProtocolErrorV1;
-    /**
-     * Resource is unavailable
-     */
-    404: PilotProtocolErrorV1;
-    /**
-     * Request conflicts with current state
-     */
-    409: PilotProtocolErrorV1;
-    /**
-     * Internal error
-     */
-    500: PilotInternalErrorV1;
-    /**
-     * Dependency is temporarily unavailable
-     */
-    503: PilotProtocolErrorV1;
 };
 
 export type UpdateAgentApplicationError = UpdateAgentApplicationErrors[keyof UpdateAgentApplicationErrors];
 
-export type UpdateAgentApplicationResponses = {
-    /**
-     * Application updated
-     */
-    200: AgentApplicationProjectionV1;
-};
-
-export type UpdateAgentApplicationResponse = UpdateAgentApplicationResponses[keyof UpdateAgentApplicationResponses];
-
 export type WithdrawAgentApplicationData = {
     body?: never;
-    headers: {
-        'Idempotency-Key': string;
-    };
     path: {
         applicationId: string;
     };
@@ -1444,106 +1222,31 @@ export type WithdrawAgentApplicationData = {
 
 export type WithdrawAgentApplicationErrors = {
     /**
-     * Invalid request
+     * This Agent management API version is retired. Use /api/v2.
      */
     400: PilotProtocolErrorV1;
-    /**
-     * Authentication required
-     */
-    401: PilotProtocolErrorV1;
-    /**
-     * Request is not authorized
-     */
-    403: PilotProtocolErrorV1;
-    /**
-     * Resource is unavailable
-     */
-    404: PilotProtocolErrorV1;
-    /**
-     * Request conflicts with current state
-     */
-    409: PilotProtocolErrorV1;
-    /**
-     * Internal error
-     */
-    500: PilotInternalErrorV1;
-    /**
-     * Dependency is temporarily unavailable
-     */
-    503: PilotProtocolErrorV1;
 };
 
 export type WithdrawAgentApplicationError = WithdrawAgentApplicationErrors[keyof WithdrawAgentApplicationErrors];
 
-export type WithdrawAgentApplicationResponses = {
-    /**
-     * Application withdrawn
-     */
-    200: AgentApplicationProjectionV1;
-};
-
-export type WithdrawAgentApplicationResponse = WithdrawAgentApplicationResponses[keyof WithdrawAgentApplicationResponses];
-
 export type ListAgentsData = {
     body?: never;
     path?: never;
-    query?: {
-        cursor?: string;
-        limit?: number;
-    };
+    query?: never;
     url: '/api/v1/agents';
 };
 
 export type ListAgentsErrors = {
     /**
-     * Invalid request
+     * This Agent management API version is retired. Use /api/v2.
      */
     400: PilotProtocolErrorV1;
-    /**
-     * Authentication required
-     */
-    401: PilotProtocolErrorV1;
-    /**
-     * Request is not authorized
-     */
-    403: PilotProtocolErrorV1;
-    /**
-     * Resource is unavailable
-     */
-    404: PilotProtocolErrorV1;
-    /**
-     * Request conflicts with current state
-     */
-    409: PilotProtocolErrorV1;
-    /**
-     * Internal error
-     */
-    500: PilotInternalErrorV1;
-    /**
-     * Dependency is temporarily unavailable
-     */
-    503: PilotProtocolErrorV1;
 };
 
 export type ListAgentsError = ListAgentsErrors[keyof ListAgentsErrors];
 
-export type ListAgentsResponses = {
-    /**
-     * Visible agents
-     */
-    200: {
-        items: Array<AgentProjectionV1>;
-        nextCursor: string | null;
-    };
-};
-
-export type ListAgentsResponse = ListAgentsResponses[keyof ListAgentsResponses];
-
 export type CreateAgentDirectlyData = {
-    body: AgentApplicationCreateRequestV2Writable;
-    headers: {
-        'Idempotency-Key': string;
-    };
+    body?: never;
     path?: never;
     query?: never;
     url: '/api/v1/agents';
@@ -1551,45 +1254,12 @@ export type CreateAgentDirectlyData = {
 
 export type CreateAgentDirectlyErrors = {
     /**
-     * Invalid request
+     * This Agent management API version is retired. Use /api/v2.
      */
     400: PilotProtocolErrorV1;
-    /**
-     * Authentication required
-     */
-    401: PilotProtocolErrorV1;
-    /**
-     * Request is not authorized
-     */
-    403: PilotProtocolErrorV1;
-    /**
-     * Resource is unavailable
-     */
-    404: PilotProtocolErrorV1;
-    /**
-     * Request conflicts with current state
-     */
-    409: PilotProtocolErrorV1;
-    /**
-     * Internal error
-     */
-    500: PilotInternalErrorV1;
-    /**
-     * Dependency is temporarily unavailable
-     */
-    503: PilotProtocolErrorV1;
 };
 
 export type CreateAgentDirectlyError = CreateAgentDirectlyErrors[keyof CreateAgentDirectlyErrors];
-
-export type CreateAgentDirectlyResponses = {
-    /**
-     * Agent creation accepted
-     */
-    201: AgentDirectCreationProjectionV1;
-};
-
-export type CreateAgentDirectlyResponse = CreateAgentDirectlyResponses[keyof CreateAgentDirectlyResponses];
 
 export type GetAgentData = {
     body?: never;
@@ -1602,51 +1272,15 @@ export type GetAgentData = {
 
 export type GetAgentErrors = {
     /**
-     * Invalid request
+     * This Agent management API version is retired. Use /api/v2.
      */
     400: PilotProtocolErrorV1;
-    /**
-     * Authentication required
-     */
-    401: PilotProtocolErrorV1;
-    /**
-     * Request is not authorized
-     */
-    403: PilotProtocolErrorV1;
-    /**
-     * Resource is unavailable
-     */
-    404: PilotProtocolErrorV1;
-    /**
-     * Request conflicts with current state
-     */
-    409: PilotProtocolErrorV1;
-    /**
-     * Internal error
-     */
-    500: PilotInternalErrorV1;
-    /**
-     * Dependency is temporarily unavailable
-     */
-    503: PilotProtocolErrorV1;
 };
 
 export type GetAgentError = GetAgentErrors[keyof GetAgentErrors];
 
-export type GetAgentResponses = {
-    /**
-     * Agent detail
-     */
-    200: AgentProjectionV1;
-};
-
-export type GetAgentResponse = GetAgentResponses[keyof GetAgentResponses];
-
 export type UpdateAgentConfigurationData = {
-    body: AgentConfigurationUpdateRequestV1Writable;
-    headers: {
-        'Idempotency-Key': string;
-    };
+    body?: never;
     path: {
         agentId: string;
     };
@@ -1656,45 +1290,12 @@ export type UpdateAgentConfigurationData = {
 
 export type UpdateAgentConfigurationErrors = {
     /**
-     * Invalid request
+     * This Agent management API version is retired. Use /api/v2.
      */
     400: PilotProtocolErrorV1;
-    /**
-     * Authentication required
-     */
-    401: PilotProtocolErrorV1;
-    /**
-     * Request is not authorized
-     */
-    403: PilotProtocolErrorV1;
-    /**
-     * Resource is unavailable
-     */
-    404: PilotProtocolErrorV1;
-    /**
-     * Request conflicts with current state
-     */
-    409: PilotProtocolErrorV1;
-    /**
-     * Internal error
-     */
-    500: PilotInternalErrorV1;
-    /**
-     * Dependency is temporarily unavailable
-     */
-    503: PilotProtocolErrorV1;
 };
 
 export type UpdateAgentConfigurationError = UpdateAgentConfigurationErrors[keyof UpdateAgentConfigurationErrors];
-
-export type UpdateAgentConfigurationResponses = {
-    /**
-     * Agent configuration
-     */
-    200: AgentProjectionV1;
-};
-
-export type UpdateAgentConfigurationResponse = UpdateAgentConfigurationResponses[keyof UpdateAgentConfigurationResponses];
 
 export type ListConversationsData = {
     body?: never;
@@ -1912,10 +1513,7 @@ export type GrantAgentPrincipalResponses = {
 export type GrantAgentPrincipalResponse = GrantAgentPrincipalResponses[keyof GrantAgentPrincipalResponses];
 
 export type CommandAgentLifecycleData = {
-    body: AgentLifecycleCommandRequestV1;
-    headers: {
-        'Idempotency-Key': string;
-    };
+    body?: never;
     path: {
         agentId: string;
     };
@@ -1925,45 +1523,12 @@ export type CommandAgentLifecycleData = {
 
 export type CommandAgentLifecycleErrors = {
     /**
-     * Invalid request
+     * This Agent management API version is retired. Use /api/v2.
      */
     400: PilotProtocolErrorV1;
-    /**
-     * Authentication required
-     */
-    401: PilotProtocolErrorV1;
-    /**
-     * Request is not authorized
-     */
-    403: PilotProtocolErrorV1;
-    /**
-     * Resource is unavailable
-     */
-    404: PilotProtocolErrorV1;
-    /**
-     * Request conflicts with current state
-     */
-    409: PilotProtocolErrorV1;
-    /**
-     * Internal error
-     */
-    500: PilotInternalErrorV1;
-    /**
-     * Dependency is temporarily unavailable
-     */
-    503: PilotProtocolErrorV1;
 };
 
 export type CommandAgentLifecycleError = CommandAgentLifecycleErrors[keyof CommandAgentLifecycleErrors];
-
-export type CommandAgentLifecycleResponses = {
-    /**
-     * Lifecycle command accepted
-     */
-    202: AgentProjectionV1;
-};
-
-export type CommandAgentLifecycleResponse = CommandAgentLifecycleResponses[keyof CommandAgentLifecycleResponses];
 
 export type GetWecomBotConnectionData = {
     body?: never;

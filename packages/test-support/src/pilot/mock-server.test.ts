@@ -1,30 +1,24 @@
 import {
-	AgentApplicationProjectionV1Schema,
-	AgentProjectionV1Schema,
+	AgentApplicationCreateRequestV2Schema,
+	AgentApplicationProjectionV2Schema,
 	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 	DeploymentConfigurationProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 
-import { pilotFakeScenariosV1, pilotFakeScenariosV2 } from "./index.js";
-import {
-	createPilotAgentMockServerV1,
-	createPilotAgentMockServerV2,
-} from "./mock-server.js";
+import { pilotFakeScenariosV2 } from "./index.js";
+import { createPilotAgentMockServerV2 } from "./mock-server.js";
 
-const startingAgent = AgentProjectionV1Schema.parse(
-	pilotFakeScenariosV1.starting.response.body,
+const startingAgent = AgentProjectionV2Schema.parse(
+	pilotFakeScenariosV2.starting.response.body,
 );
-const secondAgent = AgentProjectionV1Schema.parse({
+const secondAgent = AgentProjectionV2Schema.parse({
 	...startingAgent,
 	agentId: "agent-pilot-2",
 });
-const startingAgentV2 = AgentProjectionV2Schema.parse(
-	pilotFakeScenariosV2.starting.response.body,
-);
-const pendingApplication = AgentApplicationProjectionV1Schema.parse({
-	schemaVersion: 1,
+const pendingApplication = AgentApplicationProjectionV2Schema.parse({
+	schemaVersion: 2,
 	applicationId: "application-pilot-1",
 	agentId: null,
 	name: "Release assistant request",
@@ -52,7 +46,6 @@ const pendingApplication = AgentApplicationProjectionV1Schema.parse({
 		modelOptions: [],
 		defaultModelOptionId: null,
 		defaultReasoningLevel: null,
-		actions: [],
 		environment: [],
 		channels: [],
 		secrets: [],
@@ -69,8 +62,8 @@ const administratorSession = BrowserSessionProjectionV1Schema.parse({
 		roles: ["system_admin"],
 	},
 });
-const applicationInput = {
-	schemaVersion: 1,
+const applicationInput = AgentApplicationCreateRequestV2Schema.parse({
+	schemaVersion: 2,
 	name: "Release assistant request",
 	description: "Helps the release team",
 	source: { kind: "standard" as const, templateId: "codex" },
@@ -90,16 +83,9 @@ const applicationInput = {
 		defaultOptionId: "model-option-1",
 		defaultReasoningLevel: "medium",
 	},
-	actions: [
-		{
-			providerId: "provider-1",
-			actionId: "action-1",
-			actionVersion: "1",
-		},
-	],
 	environment: [{ name: "LOG_LEVEL", value: "info" }],
 	secrets: [{ name: "API_TOKEN", value: "test-secret" }],
-};
+});
 
 describe("Pilot Agent Mock Server", () => {
 	it("routes the v2 deployment configuration endpoint", async () => {
@@ -116,7 +102,7 @@ describe("Pilot Agent Mock Server", () => {
 				body: deploymentConfiguration,
 			},
 			listAgents: { status: 200, body: { items: [], nextCursor: null } },
-			getAgent: { status: 200, body: startingAgentV2 },
+			getAgent: { status: 200, body: startingAgent },
 		});
 
 		const response = await server.fetch(
@@ -129,7 +115,7 @@ describe("Pilot Agent Mock Server", () => {
 	});
 
 	it("routes list pages by the generated client's cursor request", async () => {
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: (request) => ({
 				status: 200,
 				body:
@@ -141,11 +127,11 @@ describe("Pilot Agent Mock Server", () => {
 		});
 
 		const firstPage = await server.fetch(
-			new Request("https://platform.example.test/api/v1/agents"),
+			new Request("https://platform.example.test/api/v2/agents"),
 		);
 		const secondPage = await server.fetch(
 			new Request(
-				`https://platform.example.test/api/v1/agents?cursor=${cursor}`,
+				`https://platform.example.test/api/v2/agents?cursor=${cursor}`,
 			),
 		);
 
@@ -158,17 +144,17 @@ describe("Pilot Agent Mock Server", () => {
 			nextCursor: null,
 		});
 		expect(server.requests.map((request) => request.url)).toEqual([
-			"https://platform.example.test/api/v1/agents",
-			`https://platform.example.test/api/v1/agents?cursor=${cursor}`,
+			"https://platform.example.test/api/v2/agents",
+			`https://platform.example.test/api/v2/agents?cursor=${cursor}`,
 		]);
 	});
 
 	it("routes schema-validated Agent Application operations", async () => {
-		const withdrawnApplication = AgentApplicationProjectionV1Schema.parse({
+		const withdrawnApplication = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			status: "withdrawn",
 		});
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: { status: 200, body: { items: [], nextCursor: null } },
 			getAgent: { status: 200, body: startingAgent },
 			listAgentApplications: {
@@ -180,16 +166,16 @@ describe("Pilot Agent Mock Server", () => {
 		});
 
 		const list = await server.fetch(
-			new Request("https://platform.example.test/api/v1/agent-applications"),
+			new Request("https://platform.example.test/api/v2/agent-applications"),
 		);
 		const detail = await server.fetch(
 			new Request(
-				"https://platform.example.test/api/v1/agent-applications/application-pilot-1",
+				"https://platform.example.test/api/v2/agent-applications/application-pilot-1",
 			),
 		);
 		const withdrawal = await server.fetch(
 			new Request(
-				"https://platform.example.test/api/v1/agent-applications/application-pilot-1/withdraw",
+				"https://platform.example.test/api/v2/agent-applications/application-pilot-1/withdraw",
 				{
 					method: "POST",
 					headers: { "Idempotency-Key": "withdrawal-request-1" },
@@ -206,7 +192,7 @@ describe("Pilot Agent Mock Server", () => {
 		await expect(
 			server.fetch(
 				new Request(
-					"https://platform.example.test/api/v1/agent-applications/application-pilot-1/withdraw",
+					"https://platform.example.test/api/v2/agent-applications/application-pilot-1/withdraw",
 					{ method: "POST" },
 				),
 			),
@@ -214,7 +200,7 @@ describe("Pilot Agent Mock Server", () => {
 	});
 
 	it("routes schema-validated administrator decisions and lifecycle commands", async () => {
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: { status: 200, body: { items: [], nextCursor: null } },
 			getAgent: { status: 200, body: startingAgent },
 			getCurrentSession: { status: 200, body: administratorSession },
@@ -231,12 +217,12 @@ describe("Pilot Agent Mock Server", () => {
 		);
 		const pending = await server.fetch(
 			new Request(
-				"https://platform.example.test/api/v1/admin/agent-applications",
+				"https://platform.example.test/api/v2/admin/agent-applications",
 			),
 		);
 		const decision = await server.fetch(
 			new Request(
-				"https://platform.example.test/api/v1/admin/agent-applications/application-pilot-1/decision",
+				"https://platform.example.test/api/v2/admin/agent-applications/application-pilot-1/decision",
 				{
 					method: "POST",
 					headers: {
@@ -249,7 +235,7 @@ describe("Pilot Agent Mock Server", () => {
 		);
 		const lifecycle = await server.fetch(
 			new Request(
-				"https://platform.example.test/api/v1/agents/agent-pilot-1/lifecycle",
+				"https://platform.example.test/api/v2/agents/agent-pilot-1/lifecycle",
 				{
 					method: "POST",
 					headers: {
@@ -271,7 +257,7 @@ describe("Pilot Agent Mock Server", () => {
 		await expect(
 			server.fetch(
 				new Request(
-					"https://platform.example.test/api/v1/agents/agent-pilot-1/lifecycle",
+					"https://platform.example.test/api/v2/agents/agent-pilot-1/lifecycle",
 					{
 						method: "POST",
 						headers: { "Idempotency-Key": "agent-lifecycle-invalid" },
@@ -283,11 +269,11 @@ describe("Pilot Agent Mock Server", () => {
 	});
 
 	it("routes schema-validated Agent Application create and update commands", async () => {
-		const updatedApplication = AgentApplicationProjectionV1Schema.parse({
+		const updatedApplication = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			name: "Updated release assistant request",
 		});
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: { status: 200, body: { items: [], nextCursor: null } },
 			getAgent: { status: 200, body: startingAgent },
 			createAgentApplication: { status: 201, body: pendingApplication },
@@ -295,7 +281,7 @@ describe("Pilot Agent Mock Server", () => {
 		});
 
 		const created = await server.fetch(
-			new Request("https://platform.example.test/api/v1/agent-applications", {
+			new Request("https://platform.example.test/api/v2/agent-applications", {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
@@ -306,7 +292,7 @@ describe("Pilot Agent Mock Server", () => {
 		);
 		const updated = await server.fetch(
 			new Request(
-				"https://platform.example.test/api/v1/agent-applications/application-pilot-1",
+				"https://platform.example.test/api/v2/agent-applications/application-pilot-1",
 				{
 					method: "PUT",
 					headers: {
@@ -336,7 +322,7 @@ describe("Pilot Agent Mock Server", () => {
 
 		await expect(
 			server.fetch(
-				new Request("https://platform.example.test/api/v1/agent-applications", {
+				new Request("https://platform.example.test/api/v2/agent-applications", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify(applicationInput),
@@ -346,7 +332,7 @@ describe("Pilot Agent Mock Server", () => {
 		await expect(
 			server.fetch(
 				new Request(
-					"https://platform.example.test/api/v1/agent-applications/application-pilot-1",
+					"https://platform.example.test/api/v2/agent-applications/application-pilot-1",
 					{
 						method: "PUT",
 						headers: { "Idempotency-Key": "update-request-2" },
@@ -358,7 +344,7 @@ describe("Pilot Agent Mock Server", () => {
 		await expect(
 			server.fetch(
 				new Request(
-					"https://platform.example.test/api/v1/agent-applications/%E0",
+					"https://platform.example.test/api/v2/agent-applications/%E0",
 					{
 						method: "PUT",
 						headers: { "Idempotency-Key": "update-request-3" },
@@ -370,9 +356,9 @@ describe("Pilot Agent Mock Server", () => {
 	});
 
 	it("rejects invalid contract scenario data before serving a response", () => {
-		const protocolError = pilotFakeScenariosV1.unauthorized.response.body;
+		const protocolError = pilotFakeScenariosV2.unauthorized.response.body;
 		expect(() =>
-			createPilotAgentMockServerV1({
+			createPilotAgentMockServerV2({
 				listAgents: {
 					status: 200,
 					body: { items: [startingAgent], nextCursor: "" },
@@ -381,7 +367,7 @@ describe("Pilot Agent Mock Server", () => {
 			}),
 		).toThrow();
 		expect(() =>
-			createPilotAgentMockServerV1({
+			createPilotAgentMockServerV2({
 				listAgents: { status: 200, body: { items: [], nextCursor: null } },
 				getAgent: {
 					status: 403,
@@ -390,7 +376,7 @@ describe("Pilot Agent Mock Server", () => {
 			}),
 		).toThrow();
 		expect(() =>
-			createPilotAgentMockServerV1({
+			createPilotAgentMockServerV2({
 				listAgents: { status: 200, body: { items: [], nextCursor: null } },
 				getAgent: {
 					status: 200,
@@ -399,19 +385,19 @@ describe("Pilot Agent Mock Server", () => {
 			}),
 		).toThrow();
 		expect(() =>
-			createPilotAgentMockServerV1({
+			createPilotAgentMockServerV2({
 				listAgents: { status: 201, body: protocolError },
 				getAgent: { status: 200, body: startingAgent },
 			}),
 		).toThrow();
 		expect(() =>
-			createPilotAgentMockServerV1({
+			createPilotAgentMockServerV2({
 				listAgents: { status: 500, body: protocolError },
 				getAgent: { status: 200, body: startingAgent },
 			}),
 		).toThrow();
 		expect(() =>
-			createPilotAgentMockServerV1({
+			createPilotAgentMockServerV2({
 				listAgents: { status: 200, body: { items: [], nextCursor: null } },
 				getAgent: { status: 200, body: startingAgent },
 				withdrawAgentApplication: {
@@ -423,19 +409,19 @@ describe("Pilot Agent Mock Server", () => {
 	});
 
 	it("rejects requests that violate the generated Agent operation schemas", async () => {
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: { status: 200, body: { items: [], nextCursor: null } },
 			getAgent: { status: 200, body: startingAgent },
 		});
 
 		await expect(
 			server.fetch(
-				new Request("https://platform.example.test/api/v1/agents?limit=101"),
+				new Request("https://platform.example.test/api/v2/agents?limit=101"),
 			),
 		).rejects.toThrow();
 		await expect(
 			server.fetch(
-				new Request("https://platform.example.test/api/v1/agents/%E0"),
+				new Request("https://platform.example.test/api/v2/agents/%E0"),
 			),
 		).rejects.toThrow();
 	});

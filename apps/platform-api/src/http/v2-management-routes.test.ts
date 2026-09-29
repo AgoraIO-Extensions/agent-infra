@@ -3,6 +3,7 @@ import {
 	AgentProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
+import { ApiIdentityError } from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
@@ -140,6 +141,28 @@ function createApp(
 	const allocateApplicationIds = vi
 		.fn()
 		.mockResolvedValue({ applicationId: "application-1", agentId: "agent-1" });
+	const apiIdentity = {
+		authorizeCredentialScope: vi.fn().mockResolvedValue(undefined),
+		resolveAgentQueryGrantType: vi.fn().mockResolvedValue("use"),
+		recordAccessRejection: vi.fn().mockResolvedValue(undefined),
+	};
+	const apiContext = {
+		schemaVersion: 1 as const,
+		principal: { kind: "application" as const, id: "application-api" },
+		accountStatus: "active" as const,
+		organizationIds: ["org-1"],
+		authorizationRevision: "application-revision-1",
+		ownerId: "user-1",
+		credential: {
+			schemaVersion: 1 as const,
+			credentialId: "credential-api",
+			principal: { kind: "application" as const, id: "application-api" },
+			scopes: ["agent:create", "agent:manage", "agent:read"] as const,
+			expiresAt: null,
+			revokedAt: null,
+			createdAt: new Date("2026-09-01T00:00:00Z"),
+		},
+	};
 
 	registerV2ManagementRoutes(app, {
 		identity: {
@@ -152,10 +175,12 @@ function createApp(
 							: identity.roles,
 					}),
 			hydrateUsers: vi.fn().mockResolvedValue([]),
+			resolveApiCredential: vi.fn().mockResolvedValue(apiContext),
 		},
 		foundation: { submit },
 		revision: { revise: vi.fn().mockResolvedValue({}) },
 		management: { executeManagementCommand },
+		apiIdentity: apiIdentity as never,
 		configuration: { upgradeCustomImage: vi.fn().mockResolvedValue({}) },
 		query: { listApplications, getApplication, listAgents, getAgent },
 		allocateApplicationIds,
@@ -164,7 +189,15 @@ function createApp(
 		readAgentProjection,
 	});
 
-	return { app, submit, executeManagementCommand, listAgents, getAgent };
+	return {
+		app,
+		submit,
+		executeManagementCommand,
+		listAgents,
+		getAgent,
+		apiIdentity,
+		apiContext,
+	};
 }
 
 const headers = {
@@ -253,5 +286,85 @@ describe("V2 management routes", () => {
 		const error = PilotProtocolErrorV1Schema.parse(await unavailable.json());
 		expect(error.code).toBe("DEPENDENCY_UNAVAILABLE");
 		expect(JSON.stringify(error)).not.toContain("private identity detail");
+	});
+
+	it("reads through the API principal and never falls back to the browser cookie", async () => {
+		const { app, listAgents, apiIdentity } = createApp();
+		const response = await app.request("/api/v2/agents/agent-1", {
+			headers: {
+				Authorization: "Bearer application-token",
+				Cookie: "session=browser-owner",
+			},
+		});
+
+		expect(response.status).toBe(200);
+		expect(listAgents).not.toHaveBeenCalled();
+		expect(
+			((await response.json()) as { schemaVersion: number }).schemaVersion,
+		).toBe(2);
+		expect(apiIdentity.resolveAgentQueryGrantType).toHaveBeenCalledOnce();
+
+		apiIdentity.resolveAgentQueryGrantType.mockRejectedValueOnce(
+			new ApiIdentityError("not_authorized"),
+		);
+		const missingScope = await app.request("/api/v2/agents/agent-1", {
+			headers: { Authorization: "Bearer application-token" },
+		});
+		expect(missingScope.status).toBe(403);
+	});
+
+	it("supports API direct creation and lifecycle with current credential authority", async () => {
+		const { app, submit, executeManagementCommand } = createApp();
+		submit.mockImplementation(
+			async (request: { applicationId: string; agentId: string }) => ({
+				applicationId: request.applicationId,
+				agentId: request.agentId,
+				status: "creating" as const,
+			}),
+		);
+		const create = await app.request("/api/v2/agents", {
+			method: "POST",
+			headers: {
+				...headers,
+				Authorization: "Bearer application-token",
+			},
+			body: JSON.stringify(applicationBody),
+		});
+		expect(create.status).toBe(201);
+		expect(
+			((await create.json()) as { schemaVersion: number }).schemaVersion,
+		).toBe(2);
+		expect(submit).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				principal: { kind: "application", id: "application-api" },
+				creationMode: "api",
+				apiAuthority: {
+					credentialId: "credential-api",
+					identityRevision: "application-revision-1",
+				},
+			}),
+			undefined,
+		);
+
+		const lifecycle = await app.request("/api/v2/agents/agent-1/lifecycle", {
+			method: "POST",
+			headers: {
+				...headers,
+				Authorization: "Bearer application-token",
+			},
+			body: JSON.stringify({ schemaVersion: 1, command: "stop" }),
+		});
+		expect(lifecycle.status).toBe(202);
+		expect(executeManagementCommand).toHaveBeenLastCalledWith(
+			expect.objectContaining({ command: "stop_agent" }),
+			expect.objectContaining({
+				principal: { kind: "application", id: "application-api" },
+				apiAuthority: {
+					credentialId: "credential-api",
+					identityRevision: "application-revision-1",
+				},
+			}),
+		);
 	});
 });

@@ -461,7 +461,23 @@ describe("PostgreSQL Agent-management Adapter", () => {
 				identityRevision: "identity-1",
 			},
 		};
-		const adapter = new PostgresAgentManagementTransactionV1({ databaseUrl });
+		let currentUser: {
+			readonly schemaVersion: 1;
+			readonly userId: string;
+			readonly accountStatus: "active" | "disabled";
+			readonly organizationIds: readonly [];
+			readonly authorizationRevision: string;
+		} = {
+			schemaVersion: 1,
+			userId: "api-user",
+			accountStatus: "active",
+			organizationIds: [],
+			authorizationRevision: "identity-1",
+		};
+		const adapter = new PostgresAgentManagementTransactionV1({
+			databaseUrl,
+			resolveUser: async () => currentUser,
+		});
 		adapters.push(adapter);
 		const management = createAgentManagementV1(adapter);
 		expect(
@@ -471,6 +487,25 @@ describe("PostgreSQL Agent-management Adapter", () => {
 			),
 		).toMatchObject({ outcome: "accepted" });
 		const beforeRevocation = await databaseSnapshot();
+		currentUser = { ...currentUser, accountStatus: "disabled" };
+		expect(
+			await management.executeManagementCommand(
+				command("stop_agent", racing, "api-directory-disabled"),
+				apiActor,
+			),
+		).toMatchObject({ outcome: "denied" });
+		currentUser = {
+			...currentUser,
+			accountStatus: "active",
+			authorizationRevision: "identity-2",
+		};
+		expect(
+			await management.executeManagementCommand(
+				command("stop_agent", racing, "api-directory-stale"),
+				apiActor,
+			),
+		).toMatchObject({ outcome: "denied" });
+		currentUser = { ...currentUser, authorizationRevision: "identity-1" };
 		await adminClient`
 			update platform.platform_api_credentials
 			set scopes = '["agent:read"]'::jsonb
