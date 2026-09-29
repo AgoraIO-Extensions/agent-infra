@@ -112,6 +112,52 @@ describe("Application foundation use case", () => {
 		);
 	});
 
+	it("rechecks API authority through commit before replaying", async () => {
+		let commitCalls = 0;
+		const replayed = {
+			schemaVersion: 1 as const,
+			applicationId: applicationFoundationCommandV1.applicationId,
+			agentId: applicationFoundationCommandV1.agentId,
+			configurationRevision: 1 as const,
+			status: "creating" as const,
+		};
+		const useCase = createApplicationFoundationUseCaseV1(
+			{
+				...applicationFoundationAdmissionDependenciesV1(),
+				transaction: {
+					async read() {
+						return { outcome: "replayed", result: replayed };
+					},
+					async commit(plan) {
+						commitCalls += 1;
+						expect(plan.apiAuthority).toEqual({
+							credentialId: "credential-caller",
+							identityRevision: "app-7",
+						});
+						return { outcome: "replayed", result: plan.result };
+					},
+				},
+			},
+			{ now: () => new Date(serverInstant) },
+		);
+		await expect(
+			useCase.submit(
+				applicationFoundationCommandV1,
+				{
+					...applicationFoundationActorContextV1,
+					principal: { kind: "application", id: "application-caller" },
+					creationMode: "api",
+					apiAuthority: {
+						credentialId: "credential-caller",
+						identityRevision: "app-7",
+					},
+				},
+				pendingSecretRecordAttachmentFixtureV1(),
+			),
+		).resolves.toEqual(replayed);
+		expect(commitCalls).toBe(1);
+	});
+
 	it("keeps application availability separate from its initial grants at the 256-target limit", async () => {
 		let captured: ApplicationFoundationWritePlanV1 | undefined;
 		const dependencies = applicationFoundationAdmissionDependenciesV1();

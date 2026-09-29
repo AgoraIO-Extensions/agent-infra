@@ -923,7 +923,10 @@ export function createApplicationFoundationUseCaseV1(
 		} catch {
 			throw new ApplicationFoundationError("persistence_failed");
 		}
-		if (readDecision.outcome === "replayed") return readDecision.result;
+		// API retries must reach the Store commit transaction so its current
+		// credential and application authority check runs before replaying.
+		if (readDecision.outcome === "replayed" && creationMode !== "api")
+			return readDecision.result;
 		if (readDecision.outcome === "idempotency_conflict") {
 			throw new ApplicationFoundationError("idempotency_conflict");
 		}
