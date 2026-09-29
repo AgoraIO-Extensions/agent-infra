@@ -298,6 +298,13 @@ export const ApiCredentialIssueRequestV1Schema = z.strictObject({
 	recipient: ApiPrincipalV1Schema.optional(),
 });
 
+export const ApiCredentialDeliveryGrantRequestV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	principal: ApiPrincipalV1Schema,
+	scopes: z.array(ApiCredentialScopeV1Schema).min(1),
+	expiresAt: Rfc3339TimestampV1Schema.nullable(),
+});
+
 export const ApiCredentialIssueProjectionV1Schema = z.strictObject({
 	metadata: ApiCredentialMetadataProjectionV1Schema,
 	credential: nonEmptyString(),
@@ -818,7 +825,9 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		post: {
 			operationId: "grantApplicationCredentialDelivery",
 			requestParams: { path: applicationPath },
-			requestBody: requiredJsonRequestBody(ApiPrincipalV1Schema),
+			requestBody: requiredJsonRequestBody(
+				ApiCredentialDeliveryGrantRequestV1Schema,
+			),
 			responses: {
 				"204": { description: "Credential delivery granted" },
 				...errorResponses,
@@ -1377,6 +1386,8 @@ export const pilotBrowserSchemasV1 = {
 	ApiApplicationProjectionV1: ApiApplicationProjectionV1Schema,
 	ApiCredentialIssueProjectionV1: ApiCredentialIssueProjectionV1Schema,
 	ApiCredentialIssueRequestV1: ApiCredentialIssueRequestV1Schema,
+	ApiCredentialDeliveryGrantRequestV1:
+		ApiCredentialDeliveryGrantRequestV1Schema,
 	ApiCredentialMetadataProjectionV1: ApiCredentialMetadataProjectionV1Schema,
 	ApiCredentialScopeV1: ApiCredentialScopeV1Schema,
 	ApiPrincipalV1: ApiPrincipalV1Schema,

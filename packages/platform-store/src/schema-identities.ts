@@ -66,6 +66,7 @@ export const platformApiCredentials = platformSchema.table(
 			.defaultNow()
 			.notNull(),
 		lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+		recipientUserId: text("recipient_user_id"),
 	},
 	(table) => [
 		check(
@@ -87,6 +88,10 @@ export const platformApiCredentials = platformSchema.table(
 		check(
 			"platform_api_credential_scopes_array",
 			sql`jsonb_typeof(${table.scopes}) = 'array'`,
+		),
+		check(
+			"platform_api_credential_recipient_user_non_empty",
+			sql`${table.recipientUserId} is null or char_length(${table.recipientUserId}) > 0`,
 		),
 		index("platform_api_credential_principal_idx").on(
 			table.principalType,
@@ -160,6 +165,8 @@ export const apiCredentialDeliveryGrants = platformSchema.table(
 			.defaultNow()
 			.notNull(),
 		revokedAt: timestamp("revoked_at", { withTimezone: true }),
+		pendingScopes: jsonb("pending_scopes").$type<readonly string[]>(),
+		pendingExpiresAt: timestamp("pending_expires_at", { withTimezone: true }),
 	},
 	(table) => [
 		primaryKey({
@@ -176,6 +183,10 @@ export const apiCredentialDeliveryGrants = platformSchema.table(
 		check(
 			"api_credential_delivery_revision_non_empty",
 			sql`char_length(${table.authorizationRevision}) > 0`,
+		),
+		check(
+			"api_credential_delivery_pending_scopes_array",
+			sql`${table.pendingScopes} is null or (jsonb_typeof(${table.pendingScopes}) = 'array' and jsonb_array_length(${table.pendingScopes}) > 0)`,
 		),
 		index("api_credential_delivery_lookup_idx").on(
 			table.principalType,

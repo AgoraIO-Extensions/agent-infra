@@ -12,6 +12,7 @@ import {
 	ApiApplicationCreateRequestV1Schema,
 	ApiApplicationCredentialIssueProjectionV1Schema,
 	ApiApplicationProjectionV1Schema,
+	ApiCredentialDeliveryGrantRequestV1Schema,
 	ApiCredentialIssueProjectionV1Schema,
 	ApiCredentialIssueRequestV1Schema,
 	ApiCredentialMetadataProjectionV1Schema,
@@ -834,9 +835,9 @@ function registerManagementRoutesInternal(
 						context.req.raw,
 						metadata.traceId,
 					);
-					const { value: principal } = await parseJson(
+					const { value: body } = await parseJson(
 						context.req.raw,
-						ApiPrincipalV1Schema,
+						ApiCredentialDeliveryGrantRequestV1Schema,
 						metadata.traceId,
 					);
 					const management = apiIdentityOrUnavailable(
@@ -846,9 +847,15 @@ function registerManagementRoutesInternal(
 					await queryOrUnavailable(
 						() =>
 							management.grantCredentialDelivery({
-								actor: actor(identity),
+								actor: {
+									...actor(identity),
+									identityRevision: identity.authorizationRevision,
+								},
 								applicationId: context.req.param("applicationId"),
-								principal,
+								principal: body.principal,
+								scopes: body.scopes,
+								expiresAt:
+									body.expiresAt === null ? null : new Date(body.expiresAt),
 								audit: apiAudit(
 									identity,
 									metadata,
@@ -882,7 +889,10 @@ function registerManagementRoutesInternal(
 					await queryOrUnavailable(
 						() =>
 							management.revokeCredentialDelivery({
-								actor: actor(identity),
+								actor: {
+									...actor(identity),
+									identityRevision: identity.authorizationRevision,
+								},
 								applicationId: context.req.param("applicationId"),
 								principal,
 								audit: apiAudit(

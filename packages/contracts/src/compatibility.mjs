@@ -870,6 +870,7 @@ function isAgentApiIdentityOpenApiAddition(previous, current) {
 		"ApiApplicationCreateRequestV1",
 		"ApiApplicationCredentialIssueProjectionV1",
 		"ApiApplicationProjectionV1",
+		"ApiCredentialDeliveryGrantRequestV1",
 		"ApiCredentialIssueProjectionV1",
 		"ApiCredentialIssueRequestV1",
 		"ApiCredentialMetadataProjectionV1",

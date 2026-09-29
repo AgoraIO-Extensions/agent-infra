@@ -5,13 +5,14 @@ import {
 	type ApiCredentialScopeV1,
 	type ApiIdentityActorV1,
 	type ApiIdentityAuditInputV1,
+	ApiIdentityError,
 	type ApiPrincipalV1,
 	hashApiCredentialV1,
 	isApiCredentialScopeV1,
 	isCurrentAgentGrantManageAllowedV1,
 	parseCurrentTaskUserV1,
 } from "@agent-infra/platform-core";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
@@ -76,6 +77,31 @@ function principalType(principal: ApiPrincipalV1): "user" | "application" {
 	return principal.kind;
 }
 
+async function hasCurrentDeliveryManager(
+	actor: ApiIdentityActorV1,
+	responsibleUserId: string,
+	resolveUser?: (userId: string) => Promise<unknown | null>,
+): Promise<boolean> {
+	if (
+		actor.accountStatus !== "active" ||
+		actor.principal !== undefined ||
+		!actor.identityRevision ||
+		!resolveUser
+	)
+		return false;
+	try {
+		const current = parseCurrentTaskUserV1(await resolveUser(actor.userId));
+		return (
+			current.userId === actor.userId &&
+			current.accountStatus === "active" &&
+			current.authorizationRevision === actor.identityRevision &&
+			(actor.isAdministrator || responsibleUserId === actor.userId)
+		);
+	} catch {
+		return false;
+	}
+}
+
 async function hasCurrentManageAuthority(
 	database: Pick<ApiIdentityDatabase, "select">,
 	actor: ApiIdentityActorV1,
@@ -93,6 +119,7 @@ async function hasCurrentManageAuthority(
 	let applicationStatus: string | null = null;
 	let applicationResponsibleUserId: string | null = null;
 	let applicationRevision: string | null = null;
+	let recipientUserId: string | null = null;
 	let isOwner = false;
 	let grants: {
 		grantType: string;
@@ -101,21 +128,8 @@ async function hasCurrentManageAuthority(
 	}[] = [];
 	if (actor.principal !== undefined) {
 		const credentialId = actor.credential?.credentialId;
-		const [currentCredential] = credentialId
-			? await database
-					.select({
-						principalType: platformApiCredentials.principalType,
-						principalId: platformApiCredentials.principalId,
-						scopes: platformApiCredentials.scopes,
-						expiresAt: platformApiCredentials.expiresAt,
-						revokedAt: platformApiCredentials.revokedAt,
-					})
-					.from(platformApiCredentials)
-					.where(eq(platformApiCredentials.id, credentialId))
-					.limit(1)
-					.for("share")
-			: [];
-		credential = currentCredential ?? null;
+		if (!credentialId || !actor.credential?.scopes.includes("agent:manage"))
+			return false;
 		if (actor.principal.kind === "user") {
 			if (!resolveUser || !actor.identityRevision) return false;
 			try {
@@ -147,11 +161,71 @@ async function hasCurrentManageAuthority(
 			applicationResponsibleUserId = application?.responsibleUserId ?? null;
 			applicationRevision = application?.authorizationRevision ?? null;
 			if (
+				applicationStatus !== "active" ||
 				!actor.identityRevision ||
 				applicationRevision !== actor.identityRevision
 			)
 				return false;
+			const [recipient] = await database
+				.select({ recipientUserId: platformApiCredentials.recipientUserId })
+				.from(platformApiCredentials)
+				.where(eq(platformApiCredentials.id, credentialId))
+				.limit(1);
+			if (!recipient?.recipientUserId) return false;
+			recipientUserId = recipient.recipientUserId;
+			const [delivery] = await database
+				.select({
+					authorizationRevision:
+						apiCredentialDeliveryGrants.authorizationRevision,
+				})
+				.from(apiCredentialDeliveryGrants)
+				.where(
+					and(
+						eq(apiCredentialDeliveryGrants.applicationId, actor.principal.id),
+						eq(apiCredentialDeliveryGrants.principalType, "user"),
+						eq(
+							apiCredentialDeliveryGrants.principalId,
+							recipient.recipientUserId,
+						),
+						isNull(apiCredentialDeliveryGrants.revokedAt),
+					),
+				)
+				.limit(1)
+				.for("share");
+			if (delivery?.authorizationRevision !== applicationRevision) return false;
+			if (!resolveUser) return false;
+			try {
+				const currentRecipient = parseCurrentTaskUserV1(
+					await resolveUser(recipient.recipientUserId),
+				);
+				if (
+					currentRecipient.userId !== recipient.recipientUserId ||
+					currentRecipient.accountStatus !== "active"
+				)
+					return false;
+			} catch {
+				return false;
+			}
 		}
+		const [currentCredential] = await database
+			.select({
+				principalType: platformApiCredentials.principalType,
+				principalId: platformApiCredentials.principalId,
+				scopes: platformApiCredentials.scopes,
+				expiresAt: platformApiCredentials.expiresAt,
+				revokedAt: platformApiCredentials.revokedAt,
+				recipientUserId: platformApiCredentials.recipientUserId,
+			})
+			.from(platformApiCredentials)
+			.where(eq(platformApiCredentials.id, credentialId))
+			.limit(1)
+			.for("share");
+		if (
+			actor.principal.kind === "application" &&
+			currentCredential?.recipientUserId !== recipientUserId
+		)
+			return false;
+		credential = currentCredential ?? null;
 	}
 	if (actor.principal === undefined) {
 		const [owner] = await database
@@ -354,11 +428,26 @@ export class PostgresApiIdentityStoreV1 {
 					.for("update");
 				if (application?.status !== "active")
 					throw new Error("Application is not active");
+				let recipientActive = false;
+				try {
+					const currentRecipient = parseCurrentTaskUserV1(
+						await this.#resolveUser?.(input.recipient.id),
+					);
+					recipientActive =
+						currentRecipient.userId === input.recipient.id &&
+						currentRecipient.accountStatus === "active";
+				} catch {
+					// An unresolved recipient has no credential delivery authority.
+				}
+				if (!recipientActive)
+					throw new ApiIdentityError("resource_unavailable");
 				const [delivery] = await transaction
 					.select({
 						applicationId: apiCredentialDeliveryGrants.applicationId,
 						authorizationRevision:
 							apiCredentialDeliveryGrants.authorizationRevision,
+						pendingScopes: apiCredentialDeliveryGrants.pendingScopes,
+						pendingExpiresAt: apiCredentialDeliveryGrants.pendingExpiresAt,
 					})
 					.from(apiCredentialDeliveryGrants)
 					.where(
@@ -376,9 +465,29 @@ export class PostgresApiIdentityStoreV1 {
 					.for("update");
 				if (
 					!delivery ||
-					delivery.authorizationRevision !== application.authorizationRevision
+					delivery.authorizationRevision !==
+						application.authorizationRevision ||
+					!delivery.pendingScopes ||
+					input.scopes.length !== delivery.pendingScopes.length ||
+					input.scopes.some(
+						(scope) => !delivery.pendingScopes?.includes(scope),
+					) ||
+					input.expiresAt?.getTime() !== delivery.pendingExpiresAt?.getTime()
 				)
-					throw new Error("Credential delivery is not authorized");
+					throw new ApiIdentityError("resource_unavailable");
+				await transaction
+					.update(apiCredentialDeliveryGrants)
+					.set({ pendingScopes: null, pendingExpiresAt: null })
+					.where(
+						and(
+							eq(apiCredentialDeliveryGrants.applicationId, input.principal.id),
+							eq(
+								apiCredentialDeliveryGrants.principalType,
+								input.recipient.kind,
+							),
+							eq(apiCredentialDeliveryGrants.principalId, input.recipient.id),
+						),
+					);
 			}
 			const [created] = await transaction
 				.insert(platformApiCredentials)
@@ -388,6 +497,8 @@ export class PostgresApiIdentityStoreV1 {
 					principalId: input.principal.id,
 					credentialHash: hashApiCredentialV1(input.credential),
 					scopes: [...input.scopes],
+					recipientUserId:
+						input.recipient?.kind === "user" ? input.recipient.id : null,
 					expiresAt: input.expiresAt,
 				})
 				.returning();
@@ -434,10 +545,58 @@ export class PostgresApiIdentityStoreV1 {
 			.where(eq(platformApplications.id, resolved.principal.id))
 			.limit(1);
 		if (!application) return null;
+		const credentialActive =
+			resolved.revokedAt === null &&
+			(resolved.expiresAt === null ||
+				resolved.expiresAt.getTime() > Date.now());
+		const [credentialRow] = credentialActive
+			? await this.#database
+					.select({ recipientUserId: platformApiCredentials.recipientUserId })
+					.from(platformApiCredentials)
+					.where(eq(platformApiCredentials.id, resolved.credentialId))
+					.limit(1)
+			: [];
+		const [delivery] = credentialRow?.recipientUserId
+			? await this.#database
+					.select({
+						authorizationRevision:
+							apiCredentialDeliveryGrants.authorizationRevision,
+					})
+					.from(apiCredentialDeliveryGrants)
+					.where(
+						and(
+							eq(
+								apiCredentialDeliveryGrants.applicationId,
+								resolved.principal.id,
+							),
+							eq(apiCredentialDeliveryGrants.principalType, "user"),
+							eq(
+								apiCredentialDeliveryGrants.principalId,
+								credentialRow.recipientUserId,
+							),
+							isNull(apiCredentialDeliveryGrants.revokedAt),
+						),
+					)
+					.limit(1)
+			: [];
+		const recipient = credentialRow?.recipientUserId
+			? this.#resolveUser
+				? parseCurrentTaskUserV1(
+						await this.#resolveUser(credentialRow.recipientUserId),
+					)
+				: null
+			: null;
 		return {
 			schemaVersion: 1,
 			principal: resolved.principal,
-			accountStatus: application.status === "active" ? "active" : "disabled",
+			accountStatus:
+				credentialActive &&
+				application.status === "active" &&
+				delivery?.authorizationRevision === application.authorizationRevision &&
+				recipient?.userId === credentialRow?.recipientUserId &&
+				recipient?.accountStatus === "active"
+					? "active"
+					: "disabled",
 			organizationIds: [],
 			authorizationRevision: application.authorizationRevision,
 			ownerId: application.responsibleUserId,
@@ -512,11 +671,20 @@ export class PostgresApiIdentityStoreV1 {
 	}
 
 	async grantCredentialDelivery(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly applicationId: string;
 		readonly principal: ApiPrincipalV1;
+		readonly scopes: readonly ApiCredentialScopeV1[];
+		readonly expiresAt: Date | null;
 		readonly authorizationRevision: string;
 		readonly audit: ApiIdentityAuditInputV1;
 	}): Promise<void> {
+		if (
+			input.scopes.length === 0 ||
+			new Set(input.scopes).size !== input.scopes.length ||
+			input.scopes.some((scope) => !isApiCredentialScopeV1(scope))
+		)
+			throw new TypeError("Credential scopes are invalid");
 		if (input.principal.kind === "application") {
 			await writeApiIdentityAudit(this.#database, {
 				...input.audit,
@@ -530,6 +698,7 @@ export class PostgresApiIdentityStoreV1 {
 			const [application] = await transaction
 				.select({
 					status: platformApplications.status,
+					responsibleUserId: platformApplications.responsibleUserId,
 					authorizationRevision: platformApplications.authorizationRevision,
 				})
 				.from(platformApplications)
@@ -538,7 +707,12 @@ export class PostgresApiIdentityStoreV1 {
 				.for("update");
 			if (
 				application?.status !== "active" ||
-				application?.authorizationRevision !== input.authorizationRevision
+				application?.authorizationRevision !== input.authorizationRevision ||
+				!(await hasCurrentDeliveryManager(
+					input.actor,
+					application.responsibleUserId,
+					this.#resolveUser,
+				))
 			)
 				throw new Error("Application delivery authorization is stale");
 			await transaction
@@ -548,6 +722,8 @@ export class PostgresApiIdentityStoreV1 {
 					principalType: input.principal.kind,
 					principalId: input.principal.id,
 					authorizationRevision: input.authorizationRevision,
+					pendingScopes: [...input.scopes],
+					pendingExpiresAt: input.expiresAt,
 				})
 				.onConflictDoUpdate({
 					target: [
@@ -558,6 +734,8 @@ export class PostgresApiIdentityStoreV1 {
 					set: {
 						revokedAt: null,
 						authorizationRevision: input.authorizationRevision,
+						pendingScopes: [...input.scopes],
+						pendingExpiresAt: input.expiresAt,
 					},
 				});
 			await writeApiIdentityAudit(transaction, {
@@ -569,6 +747,7 @@ export class PostgresApiIdentityStoreV1 {
 	}
 
 	async revokeCredentialDelivery(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly applicationId: string;
 		readonly principal: ApiPrincipalV1;
 		readonly revokedAt?: Date;
@@ -585,15 +764,24 @@ export class PostgresApiIdentityStoreV1 {
 		}
 		return this.#database.transaction(async (transaction) => {
 			const [application] = await transaction
-				.select({ id: platformApplications.id })
+				.select({ responsibleUserId: platformApplications.responsibleUserId })
 				.from(platformApplications)
 				.where(eq(platformApplications.id, input.applicationId))
 				.limit(1)
 				.for("update");
-			if (!application) return false;
+			if (
+				!application ||
+				!(await hasCurrentDeliveryManager(
+					input.actor,
+					application.responsibleUserId,
+					this.#resolveUser,
+				))
+			)
+				return false;
+			const revokedAt = input.revokedAt ?? new Date();
 			const rows = await transaction
 				.update(apiCredentialDeliveryGrants)
-				.set({ revokedAt: input.revokedAt ?? new Date() })
+				.set({ revokedAt, pendingScopes: null, pendingExpiresAt: null })
 				.where(
 					and(
 						eq(apiCredentialDeliveryGrants.applicationId, input.applicationId),
@@ -606,6 +794,17 @@ export class PostgresApiIdentityStoreV1 {
 					applicationId: apiCredentialDeliveryGrants.applicationId,
 				});
 			if (rows.length !== 1) return false;
+			await transaction
+				.update(platformApiCredentials)
+				.set({ revokedAt })
+				.where(
+					and(
+						eq(platformApiCredentials.principalType, "application"),
+						eq(platformApiCredentials.principalId, input.applicationId),
+						eq(platformApiCredentials.recipientUserId, input.principal.id),
+						isNull(platformApiCredentials.revokedAt),
+					),
+				);
 			await writeApiIdentityAudit(transaction, {
 				...input.audit,
 				targetId: input.applicationId,
@@ -631,6 +830,7 @@ export class PostgresApiIdentityStoreV1 {
 					eq(apiCredentialDeliveryGrants.principalType, input.principal.kind),
 					eq(apiCredentialDeliveryGrants.principalId, input.principal.id),
 					isNull(apiCredentialDeliveryGrants.revokedAt),
+					isNotNull(apiCredentialDeliveryGrants.pendingScopes),
 					eq(platformApplications.status, "active"),
 					eq(
 						apiCredentialDeliveryGrants.authorizationRevision,

@@ -1930,6 +1930,44 @@
         ],
         "type": "object"
       },
+      "ApiCredentialDeliveryGrantRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "expiresAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "principal": {
+            "$ref": "#/components/schemas/ApiPrincipalV1"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/ApiCredentialScopeV1"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "principal",
+          "scopes",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
       "ApiCredentialIssueProjectionV1": {
         "additionalProperties": false,
         "properties": {
@@ -7215,7 +7253,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ApiPrincipalV1"
+                "$ref": "#/components/schemas/ApiCredentialDeliveryGrantRequestV1"
               }
             }
           },

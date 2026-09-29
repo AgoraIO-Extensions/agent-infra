@@ -343,6 +343,13 @@ export type ApiApplicationProjectionV1 = {
     status: 'active' | 'disabled';
 };
 
+export type ApiCredentialDeliveryGrantRequestV1 = {
+    expiresAt: string | null;
+    principal: ApiPrincipalV1;
+    schemaVersion: 1;
+    scopes: Array<ApiCredentialScopeV1>;
+};
+
 export type ApiCredentialIssueProjectionV1 = {
     credential: string;
     metadata: ApiCredentialMetadataProjectionV1;
@@ -2133,7 +2140,7 @@ export type RevokeApplicationCredentialDeliveryResponses = {
 export type RevokeApplicationCredentialDeliveryResponse = RevokeApplicationCredentialDeliveryResponses[keyof RevokeApplicationCredentialDeliveryResponses];
 
 export type GrantApplicationCredentialDeliveryData = {
-    body: ApiPrincipalV1;
+    body: ApiCredentialDeliveryGrantRequestV1;
     path: {
         applicationId: string;
     };

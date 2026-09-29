@@ -151,21 +151,24 @@ export interface ApiIdentityStorePortV1 {
 		credentialId: string,
 	): Promise<ApiCredentialMetadataV1 | null>;
 	grantCredentialDelivery(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly applicationId: string;
 		readonly principal: ApiPrincipalV1;
+		readonly scopes: readonly ApiCredentialScopeV1[];
+		readonly expiresAt: Date | null;
 		readonly authorizationRevision: string;
 		readonly audit: ApiIdentityAuditInputV1;
 	}): Promise<void>;
 	/**
-	 * Re-checks the currently active delivery grant immediately before a
-	 * credential value is persisted. Implementations must apply the same
-	 * application revision and active-status rules as issueCredential.
+	 * Re-checks an active, unconsumed delivery approval before a credential is
+	 * persisted. issueCredential locks and consumes the same approval.
 	 */
 	hasCredentialDelivery(input: {
 		readonly applicationId: string;
 		readonly principal: ApiPrincipalV1;
 	}): Promise<boolean>;
 	revokeCredentialDelivery(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly applicationId: string;
 		readonly principal: ApiPrincipalV1;
 		readonly revokedAt?: Date;
@@ -269,6 +272,8 @@ export interface ApiIdentityManagementInterfaceV1 {
 		readonly actor: ApiIdentityActorV1;
 		readonly applicationId: string;
 		readonly principal: ApiPrincipalV1;
+		readonly scopes: readonly ApiCredentialScopeV1[];
+		readonly expiresAt: Date | null;
 		readonly audit: ApiIdentityAuditInputV1;
 	}): Promise<void>;
 	revokeCredentialDelivery(input: {
@@ -677,8 +682,8 @@ export function createApiIdentityManagementV1(input: {
 				await rejectWithAudit(audit, application.id, recipient);
 				throw new ApiIdentityError("resource_unavailable");
 			}
+			await requireCredentialDelivery(application.id, recipient, audit);
 			try {
-				await requireCredentialDelivery(application.id, recipient, audit);
 				return await input.store.issueCredential({
 					...value,
 					recipient,
@@ -686,7 +691,10 @@ export function createApiIdentityManagementV1(input: {
 					audit,
 				});
 			} catch (error) {
-				if (error instanceof ApiIdentityError) throw error;
+				if (error instanceof ApiIdentityError) {
+					await rejectWithAudit(audit, application.id, recipient);
+					throw error;
+				}
 				if (input.store.writeAudit)
 					await input.store.writeAudit({
 						...audit,
@@ -758,8 +766,11 @@ export function createApiIdentityManagementV1(input: {
 			await requireActiveRecipient(value.principal, audit, application.id);
 			try {
 				await input.store.grantCredentialDelivery({
+					actor: value.actor,
 					applicationId: application.id,
 					principal: value.principal,
+					scopes: value.scopes,
+					expiresAt: value.expiresAt,
 					authorizationRevision: application.authorizationRevision,
 					audit,
 				});
@@ -795,6 +806,7 @@ export function createApiIdentityManagementV1(input: {
 			}
 			if (
 				!(await input.store.revokeCredentialDelivery({
+					actor: value.actor,
 					applicationId: application.id,
 					principal: value.principal,
 					audit,

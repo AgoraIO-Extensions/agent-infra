@@ -356,6 +356,12 @@ async function run(input) {
 	const browser = await chromium.launch();
 	const contexts = {};
 	const secrets = [];
+	const deliveryApproval = (userId, scopes, expiresAt = null) => ({
+		schemaVersion: 1,
+		principal: { kind: "user", id: userId },
+		scopes,
+		expiresAt,
+	});
 	const evidence = {
 		schemaVersion: 1,
 		mode: "api-identity-real",
@@ -460,7 +466,7 @@ async function run(input) {
 				input.origin,
 				"POST",
 				`/api/v1/applications/${encodeURIComponent(applicationIdValue)}/credential-delivery`,
-				{ kind: "user", id: input.subjects.owner.userId },
+				deliveryApproval(input.subjects.owner.userId, ["agent:read"]),
 				secrets,
 			);
 			const missing = await request(
@@ -468,7 +474,7 @@ async function run(input) {
 				input.origin,
 				"POST",
 				`/api/v1/applications/${encodeURIComponent(applicationIdValue)}/credential-delivery`,
-				{ kind: "user", id: `missing-${Date.now()}` },
+				deliveryApproval(`missing-${Date.now()}`, ["agent:read"]),
 				secrets,
 			);
 			expectStatus(self, 403, "self delivery grant");
@@ -482,7 +488,7 @@ async function run(input) {
 				input.origin,
 				"POST",
 				`/api/v1/applications/${encodeURIComponent(applicationIdValue)}/credential-delivery`,
-				{ kind: "user", id: input.subjects.owner.userId },
+				deliveryApproval(input.subjects.owner.userId, ["agent:read"]),
 				secrets,
 			);
 			expectStatus(result, 204, "admin delivery grant");
@@ -551,7 +557,7 @@ async function run(input) {
 				input.origin,
 				"POST",
 				`/api/v1/applications/${encodeURIComponent(applicationIdValue)}/credential-delivery`,
-				{ kind: "user", id: input.subjects.other.userId },
+				deliveryApproval(input.subjects.other.userId, ["agent:read"]),
 				secrets,
 			);
 			expectStatus(result, 204, "other delivery grant");
@@ -683,6 +689,24 @@ async function run(input) {
 		});
 
 		await step("other-issues-manage-credential", async () => {
+			const unapproved = await request(
+				contexts.other,
+				input.origin,
+				"POST",
+				`/api/v1/applications/${encodeURIComponent(applicationIdValue)}/credentials`,
+				{ schemaVersion: 1, scopes: ["agent:manage"], expiresAt: null },
+				secrets,
+			);
+			expectStatus(unapproved, 404, "unapproved application credential scope");
+			const approved = await request(
+				contexts.owner,
+				input.origin,
+				"POST",
+				`/api/v1/applications/${encodeURIComponent(applicationIdValue)}/credential-delivery`,
+				deliveryApproval(input.subjects.other.userId, ["agent:manage"]),
+				secrets,
+			);
+			expectStatus(approved, 204, "application manage credential approval");
 			const issued = await request(
 				contexts.other,
 				input.origin,
@@ -698,6 +722,7 @@ async function run(input) {
 			assert.deepEqual(issued.json.metadata.scopes, ["agent:manage"]);
 			return {
 				status: issued.status,
+				unapprovedStatus: unapproved.status,
 				credentialHash: digest(value),
 				credentialIdHash: digest(
 					credentialId(issued, "application manage credential issue"),
@@ -736,7 +761,20 @@ async function run(input) {
 		});
 
 		await step("expiring-credential-rejected", async () => {
-			const expiresAt = new Date(Date.now() + 1_500);
+			const expiresAt = new Date(Date.now() + 5_000);
+			const approved = await request(
+				contexts.owner,
+				input.origin,
+				"POST",
+				`/api/v1/applications/${encodeURIComponent(applicationIdValue)}/credential-delivery`,
+				deliveryApproval(
+					input.subjects.other.userId,
+					["agent:manage"],
+					expiresAt.toISOString(),
+				),
+				secrets,
+			);
+			expectStatus(approved, 204, "expiring credential approval");
 			const issued = await request(
 				contexts.other,
 				input.origin,
@@ -782,6 +820,15 @@ async function run(input) {
 		});
 
 		await step("revoked-credential-rejected", async () => {
+			const approved = await request(
+				contexts.owner,
+				input.origin,
+				"POST",
+				`/api/v1/applications/${encodeURIComponent(applicationIdValue)}/credential-delivery`,
+				deliveryApproval(input.subjects.other.userId, ["agent:read"]),
+				secrets,
+			);
+			expectStatus(approved, 204, "revocable credential approval");
 			const issued = await request(
 				contexts.other,
 				input.origin,
@@ -851,6 +898,16 @@ async function run(input) {
 				secrets,
 			);
 			expectStatus(revoked, 204, "other delivery revoke");
+			const existing = await request(
+				contexts.other,
+				input.origin,
+				"GET",
+				pathFor(input.bearer.readPath, input.agentId),
+				undefined,
+				secrets,
+				{ authorization: readCredentialValue },
+			);
+			expectStatus(existing, 403, "delivery-revoked bearer credential");
 			const denied = await request(
 				contexts.other,
 				input.origin,
@@ -862,6 +919,7 @@ async function run(input) {
 			expectStatus(denied, 404, "issue after delivery revoke");
 			return {
 				revokeStatus: revoked.status,
+				existingStatus: existing.status,
 				issueAfterRevokeStatus: denied.status,
 			};
 		});

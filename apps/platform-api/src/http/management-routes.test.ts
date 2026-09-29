@@ -871,7 +871,12 @@ describe("management routes", () => {
 		expect(listCredentials).toHaveBeenCalledWith({
 			principal: { kind: "application", id: "application-1" },
 		});
-		const deliveryBody = JSON.stringify({ kind: "user", id: "user-1" });
+		const deliveryBody = JSON.stringify({
+			schemaVersion: 1,
+			principal: { kind: "user", id: "user-1" },
+			scopes: ["agent:read"],
+			expiresAt: null,
+		});
 		const grantedAsOwner = await app.request(
 			"/api/v1/applications/application-1/credential-delivery",
 			{ method: "POST", headers, body: deliveryBody },
@@ -892,11 +897,17 @@ describe("management routes", () => {
 			expect.objectContaining({
 				applicationId: "application-1",
 				principal: { kind: "user", id: "user-1" },
+				scopes: ["agent:read"],
+				expiresAt: null,
 			}),
 		);
 		const revoked = await app.request(
 			"/api/v1/applications/application-1/credential-delivery",
-			{ method: "DELETE", headers, body: deliveryBody },
+			{
+				method: "DELETE",
+				headers,
+				body: JSON.stringify({ kind: "user", id: "user-1" }),
+			},
 		);
 		expect(revoked.status).toBe(204);
 		expect(revokeCredentialDelivery).toHaveBeenCalledOnce();

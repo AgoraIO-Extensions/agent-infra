@@ -333,6 +333,8 @@ describe("API identity management authorization", () => {
 					actor: actor(),
 					applicationId: application.id,
 					principal: { kind: "user", id: recipient },
+					scopes: ["agent:read"],
+					expiresAt: null,
 					audit,
 				}),
 			).rejects.toMatchObject({ code: "resource_unavailable" });
@@ -357,6 +359,8 @@ describe("API identity management authorization", () => {
 				actor: actor(),
 				applicationId: application.id,
 				principal: { kind: "user", id: "owner-1" },
+				scopes: ["agent:read"],
+				expiresAt: null,
 				audit,
 			}),
 		).rejects.toMatchObject({ code: "not_authorized" });
@@ -474,6 +478,8 @@ describe("API identity management authorization", () => {
 				actor: actor(),
 				applicationId: application.id,
 				principal: { kind: "user", id: "owner-1" },
+				scopes: ["agent:read"],
+				expiresAt: null,
 				audit,
 			}),
 		).rejects.toMatchObject({ code: "not_authorized" });

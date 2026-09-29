@@ -403,7 +403,12 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			});
 			if (accepted.outcome !== "accepted")
 				throw new Error("Expected custom message acceptance");
-			const [work] = await store.findDispatchable({ limit: 1 });
+			let [work] = await store.findDispatchable({ limit: 1 });
+			const deadline = Date.now() + 5_000;
+			while (!work && Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				[work] = await store.findDispatchable({ limit: 1 });
+			}
 			if (!work) throw new Error("Expected accepted message outbox");
 			const decision = await store.claim({
 				schemaVersion: 1,

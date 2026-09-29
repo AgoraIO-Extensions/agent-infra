@@ -189,6 +189,55 @@ describe("Platform PostgreSQL migration foundation", () => {
 		}
 	}, 120_000);
 
+	it("revokes pre-0023 application credentials without a recipient", async () => {
+		const database = await startPostgresTestDatabase(
+			"migration-0022-credential-delivery",
+		);
+		const client = postgres(database.databaseUrl, { max: 1 });
+		try {
+			await client.unsafe(`CREATE SCHEMA platform_migrations;
+				CREATE TABLE platform_migrations.history
+				(id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
+			for (const migration of migrations.slice(0, 23)) {
+				for (const statement of migration.sql) await client.unsafe(statement);
+				await client`insert into platform_migrations.history (hash, created_at)
+					values (${migration.hash}, ${migration.folderMillis})`;
+			}
+			await client`insert into platform.platform_applications
+				(id, name, responsible_user_id, authorization_revision)
+				values ('legacy_app', 'Legacy app', 'owner', 'revision_1')`;
+			await client`insert into platform.platform_api_credentials
+				(id, principal_type, principal_id, credential_hash, scopes)
+				values
+					('legacy_app_credential', 'application', 'legacy_app',
+						repeat('a', 64), '["agent:read"]'::jsonb),
+					('legacy_user_credential', 'user', 'owner',
+						repeat('b', 64), '["agent:read"]'::jsonb)`;
+
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+			expect(
+				await client`select id, recipient_user_id, revoked_at
+					from platform.platform_api_credentials order by id`,
+			).toEqual([
+				{
+					id: "legacy_app_credential",
+					recipient_user_id: null,
+					revoked_at: expect.any(Date),
+				},
+				{
+					id: "legacy_user_credential",
+					recipient_user_id: null,
+					revoked_at: null,
+				},
+			]);
+		} finally {
+			await client.end();
+			await database.stop();
+		}
+	}, 120_000);
+
 	it.each(["file-authority", "configuration-v2", "task-integrity"] as const)(
 		"upgrades the existing %s migration history without losing either schema",
 		async (history) => {

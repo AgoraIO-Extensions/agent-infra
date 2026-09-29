@@ -23,6 +23,7 @@ const administratorActor = {
 	schemaVersion: 1 as const,
 	userId: "user_owner",
 	accountStatus: "active" as const,
+	identityRevision: "user_revision_1",
 	isAdministrator: true,
 };
 
@@ -58,7 +59,16 @@ describe("PostgreSQL API identity store", () => {
 		databaseUrl = testDatabase.databaseUrl;
 		await migratePlatformDatabase({ databaseUrl });
 		adminClient = postgres(databaseUrl, { max: 1 });
-		store = new PostgresApiIdentityStoreV1({ databaseUrl });
+		store = new PostgresApiIdentityStoreV1({
+			databaseUrl,
+			resolveUser: async (userId) => ({
+				schemaVersion: 1,
+				userId,
+				accountStatus: "active",
+				organizationIds: [],
+				authorizationRevision: "user_revision_1",
+			}),
+		});
 	});
 
 	afterAll(async () => {
@@ -99,10 +109,13 @@ describe("PostgreSQL API identity store", () => {
 					action: "api.credential.issued",
 				},
 			}),
-		).rejects.toThrow("Credential delivery is not authorized");
+		).rejects.toMatchObject({ code: "resource_unavailable" });
 		await store.grantCredentialDelivery({
+			actor: administratorActor,
 			applicationId: "application_identity",
 			principal: { kind: "user", id: "user_recipient" },
+			scopes: ["agent:read"],
+			expiresAt: null,
 			authorizationRevision: "application_revision_1",
 			audit: {
 				...userAudit,
@@ -120,8 +133,11 @@ describe("PostgreSQL API identity store", () => {
 		).toBe(false);
 		await expect(
 			store.grantCredentialDelivery({
+				actor: administratorActor,
 				applicationId: "application_identity",
 				principal: { kind: "user", id: "user_recipient" },
+				scopes: ["agent:read"],
+				expiresAt: null,
 				authorizationRevision: "application_revision_1",
 				audit: {
 					...userAudit,
@@ -138,13 +154,61 @@ describe("PostgreSQL API identity store", () => {
 				expiresAt: null,
 				audit: { ...userAudit, action: "api.credential.issued" },
 			}),
-		).rejects.toThrow("Credential delivery is not authorized");
+		).rejects.toMatchObject({ code: "resource_unavailable" });
 		await store.grantCredentialDelivery({
+			actor: administratorActor,
 			applicationId: "application_identity",
 			principal: { kind: "user", id: "user_recipient" },
+			scopes: ["agent:read"],
+			expiresAt: null,
 			authorizationRevision: "application_revision_2",
 			audit: { ...userAudit, action: "api.credential.delivery.granted" },
 		});
+		const disabledRecipientStore = new PostgresApiIdentityStoreV1({
+			databaseUrl,
+			resolveUser: async (userId) => ({
+				schemaVersion: 1,
+				userId,
+				accountStatus: "disabled",
+				organizationIds: [],
+				authorizationRevision: "user_revision_2",
+			}),
+		});
+		try {
+			await expect(
+				disabledRecipientStore.issueCredential({
+					principal: { kind: "application", id: "application_identity" },
+					credential: "disabled-recipient-secret",
+					recipient: { kind: "user", id: "user_recipient" },
+					scopes: ["agent:read"],
+					expiresAt: null,
+					audit: { ...userAudit, action: "api.credential.issued" },
+				}),
+			).rejects.toMatchObject({ code: "resource_unavailable" });
+			await expect(
+				disabledRecipientStore.grantCredentialDelivery({
+					actor: administratorActor,
+					applicationId: "application_identity",
+					principal: { kind: "user", id: "user_recipient" },
+					scopes: ["agent:manage"],
+					expiresAt: null,
+					authorizationRevision: "application_revision_2",
+					audit: { ...userAudit, action: "api.credential.delivery.granted" },
+				}),
+			).rejects.toThrow("Application delivery authorization is stale");
+		} finally {
+			await disabledRecipientStore.close();
+		}
+		await expect(
+			store.issueCredential({
+				principal: { kind: "application", id: "application_identity" },
+				credential: "unapproved-scope-secret",
+				recipient: { kind: "user", id: "user_recipient" },
+				scopes: ["agent:manage"],
+				expiresAt: null,
+				audit: { ...userAudit, action: "api.credential.issued" },
+			}),
+		).rejects.toMatchObject({ code: "resource_unavailable" });
 		const applicationCredential = await store.issueCredential({
 			principal: { kind: "application", id: "application_identity" },
 			credential: "application-secret-value",
@@ -156,10 +220,29 @@ describe("PostgreSQL API identity store", () => {
 				action: "api.credential.issued",
 			},
 		});
+		expect(
+			await store.hasCredentialDelivery({
+				applicationId: "application_identity",
+				principal: { kind: "user", id: "user_recipient" },
+			}),
+		).toBe(false);
+		await expect(
+			store.issueCredential({
+				principal: { kind: "application", id: "application_identity" },
+				credential: "second-claim-secret",
+				recipient: { kind: "user", id: "user_recipient" },
+				scopes: ["agent:read"],
+				expiresAt: null,
+				audit: { ...userAudit, action: "api.credential.issued" },
+			}),
+		).rejects.toMatchObject({ code: "resource_unavailable" });
 
 		const applicationCredentials = await store.listCredentials({
 			applicationId: "application_identity",
 		});
+		expect(
+			await store.resolveApplicationCredential("application-secret-value"),
+		).toMatchObject({ accountStatus: "active" });
 		expect(applicationCredentials).toHaveLength(1);
 		expect(applicationCredentials[0]).toEqual(applicationCredential.metadata);
 		expect(JSON.stringify(applicationCredentials)).not.toContain(
@@ -172,6 +255,7 @@ describe("PostgreSQL API identity store", () => {
 		).not.toContain("application-secret-value");
 		expect(
 			await store.revokeCredentialDelivery({
+				actor: administratorActor,
 				applicationId: "application_identity",
 				principal: { kind: "user", id: "user_recipient" },
 				audit: {
@@ -187,18 +271,14 @@ describe("PostgreSQL API identity store", () => {
 			}),
 		).toBe(false);
 		expect(
-			await store.revokeCredential(
-				applicationCredential.credentialId,
-				new Date("2026-09-24T00:00:00.000Z"),
-				{ ...userAudit, action: "api.credential.revoked" },
-			),
-		).toBe(true);
-		expect(
 			await store.resolveCredential("application-secret-value"),
 		).toMatchObject({
 			credentialId: applicationCredential.credentialId,
-			revokedAt: new Date("2026-09-24T00:00:00.000Z"),
+			revokedAt: expect.any(Date),
 		});
+		expect(
+			await store.resolveApplicationCredential("application-secret-value"),
+		).toMatchObject({ accountStatus: "disabled" });
 
 		const audits = await adminClient`
 			select action
@@ -207,7 +287,6 @@ describe("PostgreSQL API identity store", () => {
 			limit 20
 		`;
 		expect(audits.map(({ action }) => action)).toEqual([
-			"api.credential.revoked",
 			"api.credential.delivery.revoked",
 			"api.credential.issued",
 			"api.credential.delivery.granted",
@@ -216,6 +295,62 @@ describe("PostgreSQL API identity store", () => {
 			"api.application.created",
 		]);
 		expect(userCredential.metadata).not.toHaveProperty("credential");
+	});
+
+	it("rechecks the responsible user before delivery grant changes", async () => {
+		await adminClient`truncate platform.audit_events, platform.api_credential_delivery_grants,
+			platform.platform_api_credentials, platform.platform_applications cascade`;
+		await store.createApplication({
+			applicationId: "application_owner_change",
+			name: "Owner change application",
+			responsibleUserId: "user_owner",
+			authorizationRevision: "application_revision_1",
+			audit: userAudit,
+		});
+		const owner = { ...administratorActor, isAdministrator: false };
+		await adminClient`update platform.platform_applications
+			set responsible_user_id = 'user_other'
+			where id = 'application_owner_change'`;
+		await expect(
+			store.grantCredentialDelivery({
+				actor: owner,
+				applicationId: "application_owner_change",
+				principal: { kind: "user", id: "user_recipient" },
+				scopes: ["agent:manage"],
+				expiresAt: null,
+				authorizationRevision: "application_revision_1",
+				audit: { ...userAudit, action: "api.credential.delivery.granted" },
+			}),
+		).rejects.toThrow("Application delivery authorization is stale");
+		expect(
+			await store.hasCredentialDelivery({
+				applicationId: "application_owner_change",
+				principal: { kind: "user", id: "user_recipient" },
+			}),
+		).toBe(false);
+		await store.grantCredentialDelivery({
+			actor: administratorActor,
+			applicationId: "application_owner_change",
+			principal: { kind: "user", id: "user_recipient" },
+			scopes: ["agent:read"],
+			expiresAt: null,
+			authorizationRevision: "application_revision_1",
+			audit: { ...userAudit, action: "api.credential.delivery.granted" },
+		});
+		expect(
+			await store.revokeCredentialDelivery({
+				actor: owner,
+				applicationId: "application_owner_change",
+				principal: { kind: "user", id: "user_recipient" },
+				audit: { ...userAudit, action: "api.credential.delivery.revoked" },
+			}),
+		).toBe(false);
+		expect(
+			await store.hasCredentialDelivery({
+				applicationId: "application_owner_change",
+				principal: { kind: "user", id: "user_recipient" },
+			}),
+		).toBe(true);
 	});
 
 	it("locks the delivery grant before persisting an application credential", async () => {
@@ -229,8 +364,11 @@ describe("PostgreSQL API identity store", () => {
 			audit: userAudit,
 		});
 		await store.grantCredentialDelivery({
+			actor: administratorActor,
 			applicationId: "application_delivery_lock",
 			principal: { kind: "user", id: "user_recipient" },
+			scopes: ["agent:read"],
+			expiresAt: null,
 			authorizationRevision: "application_revision_1",
 			audit: { ...userAudit, action: "api.credential.delivery.granted" },
 		});
@@ -269,9 +407,9 @@ describe("PostgreSQL API identity store", () => {
 			await waitForBlockedQuery(["api_credential_delivery_grants"]);
 			release?.();
 			await revoke;
-			await expect(issue).rejects.toThrow(
-				"Credential delivery is not authorized",
-			);
+			await expect(issue).rejects.toMatchObject({
+				code: "resource_unavailable",
+			});
 			expect(
 				await store.listCredentials({
 					applicationId: "application_delivery_lock",
@@ -599,9 +737,14 @@ describe("PostgreSQL API identity store", () => {
 		`;
 		await adminClient`
 			insert into platform.platform_api_credentials
-				(id, principal_type, principal_id, credential_hash, scopes)
+				(id, principal_type, principal_id, credential_hash, scopes, recipient_user_id)
 			values ('credential_manager', 'application', 'manager-app',
-				repeat('a', 64), '["agent:manage"]'::jsonb)
+				repeat('a', 64), '["agent:manage"]'::jsonb, 'user_recipient')
+		`;
+		await adminClient`
+			insert into platform.api_credential_delivery_grants
+				(application_id, principal_type, principal_id, authorization_revision)
+			values ('manager-app', 'user', 'user_recipient', 'revision_1')
 		`;
 		await adminClient`
 			insert into platform.agent_principal_grants
@@ -705,6 +848,99 @@ describe("PostgreSQL API identity store", () => {
 		expect(agent?.authorization_revision).toBe("revision_3");
 	});
 
+	it("serializes application grant writes with delivery revocation", async () => {
+		await adminClient`truncate platform.audit_events,
+			platform.agent_principal_grants, platform.api_credential_delivery_grants,
+			platform.platform_api_credentials, platform.platform_applications,
+			platform.agents cascade`;
+		await adminClient`
+			insert into platform.agents (id, authorization_revision)
+			values ('agent_delivery_race', 'agent_revision_1')
+		`;
+		await adminClient`
+			insert into platform.platform_applications
+				(id, name, responsible_user_id, authorization_revision)
+			values ('delivery-race-app', 'Delivery race', 'user_owner', 'app_revision_1')
+		`;
+		await adminClient`
+			insert into platform.api_credential_delivery_grants
+				(application_id, principal_type, principal_id, authorization_revision)
+			values ('delivery-race-app', 'user', 'user_recipient', 'app_revision_1')
+		`;
+		await adminClient`
+			insert into platform.platform_api_credentials
+				(id, principal_type, principal_id, credential_hash, scopes, recipient_user_id)
+			values ('credential_delivery_race', 'application', 'delivery-race-app',
+				repeat('d', 64), '["agent:manage"]'::jsonb, 'user_recipient')
+		`;
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_delivery_race', 'application', 'delivery-race-app',
+				'manage', 'agent_revision_1')
+		`;
+		const principal = { kind: "application" as const, id: "delivery-race-app" };
+		const actor = {
+			schemaVersion: 1 as const,
+			userId: "user_owner",
+			accountStatus: "active" as const,
+			principal,
+			identityRevision: "app_revision_1",
+			isAdministrator: false,
+			credential: {
+				credentialId: "credential_delivery_race",
+				principal,
+				scopes: ["agent:manage"] as const,
+				expiresAt: null,
+				revokedAt: null,
+			},
+		};
+		const blocker = postgres(databaseUrl, { max: 1 });
+		let release: (() => void) | undefined;
+		let markLocked: (() => void) | undefined;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const locked = new Promise<void>((resolve) => {
+			markLocked = resolve;
+		});
+		const revoke = blocker.begin(async (transaction) => {
+			await transaction`
+				update platform.api_credential_delivery_grants set revoked_at = now()
+				where application_id = 'delivery-race-app'
+					and principal_id = 'user_recipient'
+			`;
+			markLocked?.();
+			await held;
+		});
+		let pending: Promise<boolean> | undefined;
+		try {
+			await locked;
+			pending = store.grantAgent({
+				actor,
+				agentId: "agent_delivery_race",
+				principal: { kind: "user", id: "user_other" },
+				grantType: "use",
+				authorizationRevision: "agent_revision_2",
+			});
+			await waitForBlockedQuery(["api_credential_delivery_grants"]);
+			release?.();
+			await revoke;
+			expect(await pending).toBe(false);
+			expect(
+				await adminClient`
+					select principal_id from platform.agent_principal_grants
+					where agent_id = 'agent_delivery_race' and principal_id = 'user_other'
+				`,
+			).toEqual([]);
+		} finally {
+			release?.();
+			await revoke.catch(() => undefined);
+			await pending?.catch(() => undefined);
+			await blocker.end();
+		}
+	});
+
 	it.each(["grant", "revoke"] as const)(
 		"serializes %s authority against an application disablement",
 		async (operation) => {
@@ -722,9 +958,14 @@ describe("PostgreSQL API identity store", () => {
 			`;
 			await adminClient`
 				insert into platform.platform_api_credentials
-					(id, principal_type, principal_id, credential_hash, scopes)
+					(id, principal_type, principal_id, credential_hash, scopes, recipient_user_id)
 				values ('credential_lock', 'application', 'manager-lock-app',
-					repeat('e', 64), '["agent:manage"]'::jsonb)
+					repeat('e', 64), '["agent:manage"]'::jsonb, 'user_recipient')
+			`;
+			await adminClient`
+				insert into platform.api_credential_delivery_grants
+					(application_id, principal_type, principal_id, authorization_revision)
+				values ('manager-lock-app', 'user', 'user_recipient', 'app-lock-1')
 			`;
 			await adminClient`
 				insert into platform.agent_principal_grants
@@ -841,9 +1082,14 @@ describe("PostgreSQL API identity store", () => {
 		`;
 		await adminClient`
 			insert into platform.platform_api_credentials
-				(id, principal_type, principal_id, credential_hash, scopes)
+				(id, principal_type, principal_id, credential_hash, scopes, recipient_user_id)
 			values ('credential_recipient_lock', 'application', 'manager-recipient-lock',
-				repeat('f', 64), '["agent:manage"]'::jsonb)
+				repeat('f', 64), '["agent:manage"]'::jsonb, 'user_recipient')
+		`;
+		await adminClient`
+			insert into platform.api_credential_delivery_grants
+				(application_id, principal_type, principal_id, authorization_revision)
+			values ('manager-recipient-lock', 'user', 'user_recipient', 'manager-app-1')
 		`;
 		await adminClient`
 			insert into platform.agent_principal_grants
@@ -936,9 +1182,14 @@ describe("PostgreSQL API identity store", () => {
 		`;
 		await adminClient`
 			insert into platform.platform_api_credentials
-				(id, principal_type, principal_id, credential_hash, scopes)
+				(id, principal_type, principal_id, credential_hash, scopes, recipient_user_id)
 			values ('credential-owner-change', 'application', 'manager-owner-change',
-				repeat('b', 64), '["agent:manage"]'::jsonb)
+				repeat('b', 64), '["agent:manage"]'::jsonb, 'user_recipient')
+		`;
+		await adminClient`
+			insert into platform.api_credential_delivery_grants
+				(application_id, principal_type, principal_id, authorization_revision)
+			values ('manager-owner-change', 'user', 'user_recipient', 'app-owner-1')
 		`;
 		await adminClient`
 			insert into platform.agent_principal_grants
@@ -1016,14 +1267,18 @@ describe("PostgreSQL API identity store", () => {
 		).rejects.toThrow("Application credential transport is unavailable");
 		await expect(
 			store.grantCredentialDelivery({
+				actor: administratorActor,
 				applicationId: "application_transport_boundary",
 				principal: { kind: "application", id: "recipient-application" },
+				scopes: ["agent:read"],
+				expiresAt: null,
 				authorizationRevision: "application_revision_1",
 				audit: { ...userAudit, action: "api.credential.delivery.granted" },
 			}),
 		).rejects.toThrow("Application credential transport is unavailable");
 		await expect(
 			store.revokeCredentialDelivery({
+				actor: administratorActor,
 				applicationId: "application_transport_boundary",
 				principal: { kind: "application", id: "recipient-application" },
 				audit: { ...userAudit, action: "api.credential.delivery.revoked" },
