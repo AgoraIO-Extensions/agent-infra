@@ -30,6 +30,7 @@ import type {
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizer,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -54,9 +55,7 @@ export interface ClaudeRuntimeDriverOptions {
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly ClaudeRuntimeModelOption[];
-	readonly authorizeExternalAction?: (
-		action: RuntimeExternalActionAuthorization,
-	) => Promise<void>;
+	readonly authorizeExternalAction?: RuntimeExternalActionAuthorizer;
 }
 interface Binding {
 	ref: string;
@@ -749,7 +748,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		// Host inspection reads this journal. Release its mutation queue first,
 		// and do not queue another durable read after the current authority gate.
 		await this.validateExternalAction(action);
-		await this.options.authorizeExternalAction(action);
+		const authorization = await this.options.authorizeExternalAction(action);
 		if (intent.kind === "tool") {
 			const current = file
 				.read()
@@ -757,6 +756,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			if (this.failedToolGates.has(file) || current?.toolResultUnconfirmed)
 				unavailable();
 		}
+		return authorization;
 	}
 	private exclusive<T>(ref: string, action: () => Promise<T>): Promise<T> {
 		const task = (this.locks.get(ref) ?? Promise.resolve())
@@ -1015,11 +1015,13 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					throw error;
 				}
 				if (this.failedToolGates.has(file)) unavailable();
-				currentModelOperationRef = await this.modelRequestIntent(
+				const authorization = await this.modelRequestIntent(
 					file,
 					command.executionId,
 					request,
 				);
+				currentModelOperationRef = authorization.operationRef;
+				return authorization.delivery;
 			},
 			started: async (request) => {
 				await this.modelRequestStarted(
@@ -1674,7 +1676,14 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		} else unavailable();
 		await this.appendOperationFact(file, executionId, intent, true);
 		try {
-			await this.authorizeOperation(file, executionId, intent);
+			const delivery = await this.authorizeOperation(file, executionId, intent);
+			if (
+				!delivery ||
+				typeof delivery.relayKey !== "string" ||
+				!/^[\x21-\x7e]{16,8192}$/.test(delivery.relayKey)
+			)
+				unavailable();
+			return { operationRef: intent.operationRef, delivery };
 		} catch (error) {
 			// This callback has not returned to transport, so dispatch cannot have begun.
 			await this.modelPhase(
@@ -1696,7 +1705,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			);
 			throw error;
 		}
-		return intent.operationRef;
 	}
 	private async modelRequestStarted(
 		file: DurableJsonFile<Session>,

@@ -32,6 +32,18 @@ export interface RuntimeExternalActionAuthorization {
 	readonly purpose?: "source-reserve" | "source-bind";
 }
 
+/**
+ * A Host authorization may deliver the credential for exactly this external
+ * action. The value is intentionally not part of the durable action record.
+ */
+export interface RuntimeExternalActionAuthorizationResult {
+	readonly relayKey?: string;
+}
+
+export type RuntimeExternalActionAuthorizer = (
+	action: RuntimeExternalActionAuthorization,
+) => Promise<RuntimeExternalActionAuthorizationResult | void>;
+
 export interface RuntimeOriginalEvidenceBinding {
 	readonly principal: RuntimePrincipalV1;
 	readonly scope: {

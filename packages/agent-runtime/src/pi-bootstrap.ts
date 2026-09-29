@@ -3,16 +3,14 @@ import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RuntimeModelConfigurationV3Schema } from "@agent-infra/contracts/runtime";
-import type { RuntimeExternalActionAuthorization } from "./driver.js";
+import type { RuntimeExternalActionAuthorizer } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { PiRuntimeDriver } from "./pi-runtime-driver.js";
 
 export interface PiRuntimeOptions {
-	authorizeExternalAction?: (
-		action: RuntimeExternalActionAuthorization,
-	) => Promise<void>;
+	authorizeExternalAction?: RuntimeExternalActionAuthorizer;
 	path: string;
 	configVersion: string;
 	defaultModelOptionId: string;

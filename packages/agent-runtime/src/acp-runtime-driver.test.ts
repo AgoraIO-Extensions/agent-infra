@@ -204,8 +204,10 @@ it.each([
 		const path = await mkdtemp(join(tmpdir(), "acp-permission-facts-"));
 		const driver = await GenericAcpRuntimeDriver.open({
 			path,
-			authorizeExternalAction: (action) =>
-				driver.validateExternalAction(action),
+			authorizeExternalAction: async (action) => {
+				await driver.validateExternalAction(action);
+				return { relayKey: "synthetic-model-credential" };
+			},
 			configVersion: "configuration-a",
 			defaultModelOptionId: "primary",
 			defaultReasoningLevel: "high",
@@ -299,6 +301,7 @@ it("does not turn ACP progress during permission into a tool start", async () =>
 				await writeFile(marker, "entered");
 				await authorizationRelease;
 			}
+			return { relayKey: "synthetic-model-credential" };
 		},
 		configVersion: "configuration-a",
 		defaultModelOptionId: "primary",
@@ -390,7 +393,10 @@ it("permits a second native tool while the first authorized tool is still in pro
 	const path = await mkdtemp(join(tmpdir(), "acp-concurrent-tools-"));
 	const driver = await GenericAcpRuntimeDriver.open({
 		path,
-		authorizeExternalAction: (action) => driver.validateExternalAction(action),
+		authorizeExternalAction: async (action) => {
+			await driver.validateExternalAction(action);
+			return { relayKey: "synthetic-model-credential" };
+		},
 		configVersion: "configuration-a",
 		defaultModelOptionId: "primary",
 		defaultReasoningLevel: "high",
@@ -470,6 +476,7 @@ it.each(["permitted", "revoked", "missing"] as const)(
 			async (action: RuntimeExternalActionAuthorization) => {
 				await driver.validateExternalAction(action);
 				if (revoked) throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+				return { relayKey: "synthetic-model-credential" };
 			},
 		);
 		const driver = await GenericAcpRuntimeDriver.open({
@@ -580,8 +587,12 @@ it.each([
 		const path = await mkdtemp(join(tmpdir(), "acp-unknown-"));
 		const options: GenericAcpRuntimeDriverOptions = {
 			path,
-			authorizeExternalAction: (action: RuntimeExternalActionAuthorization) =>
-				driver.validateExternalAction(action),
+			authorizeExternalAction: async (
+				action: RuntimeExternalActionAuthorization,
+			) => {
+				await driver.validateExternalAction(action);
+				return { relayKey: "synthetic-model-credential" };
+			},
 			configVersion: "configuration-a",
 			defaultModelOptionId: "primary",
 			defaultReasoningLevel: "high",

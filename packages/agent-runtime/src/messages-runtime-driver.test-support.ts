@@ -18,6 +18,7 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 ) {
 	let loseResult = loseFirstResult;
 	let calls = 0;
+	const relayKeyByExecution = new Map<string, string>();
 	const selections: {
 		schemaVersion: 1;
 		modelOptionId: string;
@@ -32,9 +33,12 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 			});
 			request.on("end", () => {
 				const value = JSON.parse(body);
+				const expectedCredential =
+					value.model === "claude-opus-5"
+						? "synthetic-primary-credential"
+						: "synthetic-alternate-credential";
 				if (
-					request.headers.authorization !==
-						`Bearer synthetic-${id}-credential` ||
+					request.headers.authorization !== `Bearer ${expectedCredential}` ||
 					value.model !==
 						(id === "primary" ? "claude-opus-5" : "claude-sonnet-4-6")
 				) {
@@ -93,6 +97,11 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 			action: RuntimeExternalActionAuthorization,
 		) => {
 			await raw.validateExternalAction(action);
+			return {
+				relayKey:
+					relayKeyByExecution.get(action.executionId) ??
+					`synthetic-relay-${action.executionId}`,
+			};
 		},
 		configVersion: "conformance-1",
 		defaultModelOptionId: "model-option-primary",
@@ -102,7 +111,7 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 			model: id === "primary" ? "claude-opus-5" : "claude-sonnet-4-6",
 			reasoningLevels: ["low", "high"],
 			endpoint: `http://127.0.0.1:${ports[index]}`,
-			credential: `synthetic-${id}-credential`,
+			credential: `synthetic-configured-${id}-credential`,
 			authentication: "bearer" as const,
 		})),
 	};
@@ -121,6 +130,18 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 	function decorate() {
 		const execute = raw.execute.bind(raw);
 		raw.execute = async (command) => {
+			if (command.kind === "submit-turn") {
+				const modelOptionId =
+					"selection" in command
+						? command.selection.modelOptionId
+						: "model-option-primary";
+				relayKeyByExecution.set(
+					command.executionId,
+					modelOptionId === "model-option-primary"
+						? "synthetic-primary-credential"
+						: "synthetic-alternate-credential",
+				);
+			}
 			const previousCalls = calls;
 			const record = await execute(command);
 			if (

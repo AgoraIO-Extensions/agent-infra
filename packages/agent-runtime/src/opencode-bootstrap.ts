@@ -2,7 +2,7 @@ import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { RuntimeModelConfigurationV3Schema } from "@agent-infra/contracts/runtime";
 import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
-import type { RuntimeExternalActionAuthorization } from "./driver.js";
+import type { RuntimeExternalActionAuthorizer } from "./driver.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { workspacePathAllowed } from "./workspace-path.js";
@@ -13,9 +13,7 @@ export interface OpenCodeRuntimeOptions {
 	configVersion: string;
 	defaultModelOptionId: string;
 	defaultReasoningLevel: string;
-	authorizeExternalAction?: (
-		action: RuntimeExternalActionAuthorization,
-	) => Promise<void>;
+	authorizeExternalAction?: RuntimeExternalActionAuthorizer;
 	modelOptions: readonly {
 		modelOptionId: string;
 		model: string;
@@ -78,9 +76,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 				effort: selection.reasoningLevel,
 				admit,
 				client: "opencode",
-				beforeSend: async (request) => {
-					await currentModelRequestIntent?.(request);
-				},
+				beforeSend: async (request) => currentModelRequestIntent?.(request),
 				started: async () => {
 					await currentModelRequestStarted?.();
 				},

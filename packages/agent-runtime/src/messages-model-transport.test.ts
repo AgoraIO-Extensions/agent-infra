@@ -548,6 +548,92 @@ it("admits the bound option before sending and prevents a native retry after a p
 	}
 });
 
+it("uses the delivery returned for each request instead of the configured credential", async () => {
+	const configuredCredential = "synthetic-configured-credential";
+	const deliveryKeys = [
+		"synthetic-relay-key-execution-a",
+		"synthetic-relay-key-execution-b",
+	];
+	const upstreamHeaders: string[] = [];
+	let nextKey = 0;
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		credential: configuredCredential,
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		beforeSend: async () => ({ relayKey: deliveryKeys[nextKey++] }),
+		fetch: async (_url, init) => {
+			upstreamHeaders.push(
+				new Headers(init?.headers).get("authorization") ?? "",
+			);
+			return new Response(messages(["OK"]), {
+				headers: { "content-type": "text/event-stream" },
+			});
+		},
+	});
+	try {
+		const request = () =>
+			fetch(`${transport.modelAccess.endpoint}/v1/messages`, {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${transport.modelAccess.credential}`,
+				},
+				body: JSON.stringify({
+					model: "claude-opus-5",
+					output_config: { effort: "high" },
+					thinking: { type: "adaptive" },
+					stream: true,
+					messages: [],
+				}),
+			});
+		await (await request()).text();
+		await (await request()).text();
+		expect(upstreamHeaders).toEqual(deliveryKeys.map((key) => `Bearer ${key}`));
+		expect(upstreamHeaders).not.toContain(`Bearer ${configuredCredential}`);
+	} finally {
+		await transport.close();
+	}
+});
+
+it.each(["missing", "invalid"] as const)(
+	"fails closed before fetch when the final delivery key is %s",
+	async (mode) => {
+		let upstreamRequests = 0;
+		const transport = await openRuntimeMessagesTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-configured-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {},
+			beforeSend: async () =>
+				mode === "missing" ? undefined : { relayKey: "too-short" },
+			fetch: async () => {
+				upstreamRequests++;
+				return new Response(messages(["unexpected"]));
+			},
+		});
+		try {
+			const response = await fetch(
+				`${transport.modelAccess.endpoint}/v1/messages`,
+				{
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${transport.modelAccess.credential}`,
+					},
+					body: JSON.stringify({ model: "claude-opus-5", messages: [] }),
+				},
+			);
+			expect(response.ok).toBe(false);
+			expect(upstreamRequests).toBe(0);
+		} finally {
+			await transport.close();
+		}
+	},
+);
+
 it.each([200, 404, 501, 401])(
 	"contains token-count responses with status %s",
 	async (status) => {
@@ -790,6 +876,7 @@ it("blocks a second model request when its durable intent cannot be prepared", a
 			preparations++;
 			if (preparations === 2)
 				throw Error("synthetic intent persistence failure");
+			return { relayKey: "synthetic-delivery-key" };
 		},
 		fetch: async () => {
 			upstreamRequests++;
@@ -843,6 +930,7 @@ it.each([
 			admit: async () => {},
 			beforeSend: async (request) => {
 				phases.push(`intent:${request}`);
+				return { relayKey: "synthetic-delivery-key" };
 			},
 			started: async (request) => {
 				phases.push(`started:${request}`);

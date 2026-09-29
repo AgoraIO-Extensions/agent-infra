@@ -23,7 +23,9 @@ export interface AcpLaunch {
 		tool: Pick<ToolCall, "toolCallId" | "kind" | "rawInput">,
 	) => Promise<boolean>;
 	onTurn?: (callbacks: {
-		modelRequestIntent?: () => Promise<void>;
+		modelRequestIntent?: NonNullable<
+			NativeSessionOptions["modelRequestIntent"]
+		>;
 		modelRequestStarted?: () => Promise<void>;
 		modelRequestFinished?: (
 			state: "completed" | "failed" | "unknown",

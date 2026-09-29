@@ -560,6 +560,8 @@ async function nativeToolsFixture(
 				if (!guard) throw new Error("Missing tool business authority");
 				await guard(action);
 			}
+			if (action.kind === "model")
+				return { relayKey: "synthetic-model-credential" };
 		},
 		modelOptions: [
 			{

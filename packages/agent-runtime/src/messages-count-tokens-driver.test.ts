@@ -11,7 +11,10 @@ import {
 	completeClaudeResponse,
 } from "./claude-native.test-support.js";
 import { ClaudeRuntimeDriver } from "./claude-runtime-driver.js";
-import type { RuntimeExternalActionAuthorization } from "./driver.js";
+import type {
+	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
+} from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { SessionRuntimeDriver } from "./session-runtime-driver.js";
@@ -135,15 +138,23 @@ it.each(["claude", "shared"] as const)(
 			if (kind === "claude") {
 				const driver = await ClaudeRuntimeDriver.open({
 					...base,
-					authorizeExternalAction: (action) =>
-						driver.validateExternalAction(action),
+					authorizeExternalAction: async (action) => {
+						await driver.validateExternalAction(action);
+						return {
+							relayKey: `synthetic-delivery-${action.executionId}`,
+						};
+					},
 				});
 				return driver;
 			}
 			const sharedDriver = await SessionRuntimeDriver.open({
 				...base,
-				authorizeExternalAction: (action) =>
-					sharedDriver.validateExternalAction(action),
+				authorizeExternalAction: async (action) => {
+					await sharedDriver.validateExternalAction(action);
+					return {
+						relayKey: `synthetic-delivery-${action.executionId}`,
+					};
+				},
 				cursorPrefix: "count-test",
 				modelLifecycleAtTransport: true,
 				retireSession: async () => {},
@@ -458,7 +469,7 @@ async function withCountDriver(
 		| ((
 				action: RuntimeExternalActionAuthorization,
 				driver: ClaudeRuntimeDriver | SessionRuntimeDriver,
-		  ) => Promise<void>),
+		  ) => Promise<RuntimeExternalActionAuthorizationResult | void>),
 ) {
 	const path = await mkdtemp(join(tmpdir(), "count-admission-"));
 	let requests = 0;
@@ -538,7 +549,11 @@ async function withCountDriver(
 						? undefined
 						: async (action) => {
 								await driver.validateExternalAction(action);
-								await authorize?.(action, driver);
+								return (
+									(await authorize?.(action, driver)) ?? {
+										relayKey: `synthetic-delivery-${action.executionId}`,
+									}
+								);
 							},
 			});
 			return driver;
@@ -551,7 +566,11 @@ async function withCountDriver(
 					? undefined
 					: async (action) => {
 							await sharedDriver.validateExternalAction(action);
-							await authorize?.(action, sharedDriver);
+							return (
+								(await authorize?.(action, sharedDriver)) ?? {
+									relayKey: `synthetic-delivery-${action.executionId}`,
+								}
+							);
 						},
 			cursorPrefix: "count-admission",
 			modelLifecycleAtTransport: true,

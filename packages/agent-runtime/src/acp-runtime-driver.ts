@@ -6,7 +6,7 @@ import type {
 } from "@agent-infra/contracts/runtime";
 import { retireAcpProcess } from "./acp-process.js";
 import { type AcpLaunch, openAcpSession } from "./acp-session.js";
-import type { RuntimeExternalActionAuthorization } from "./driver.js";
+import type { RuntimeExternalActionAuthorizer } from "./driver.js";
 import {
 	type NativeSessionOptions,
 	SessionRuntimeDriver,
@@ -22,9 +22,7 @@ export interface GenericAcpRuntimeDriverOptions {
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
-	readonly authorizeExternalAction?: (
-		action: RuntimeExternalActionAuthorization,
-	) => Promise<void>;
+	readonly authorizeExternalAction?: RuntimeExternalActionAuthorizer;
 	readonly modelOptions: readonly AcpRuntimeModelOption[];
 	readonly launch: (
 		directory: string,

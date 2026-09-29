@@ -3,6 +3,7 @@ import { createServer, type ServerResponse } from "node:http";
 import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { forwardClaudeMessages } from "./claude-messages-stream.js";
 import { validateModelAccess } from "./codex-app-server-bridge.js";
+import type { RuntimeExternalActionAuthorizationResult } from "./driver.js";
 import type { NativeToolReceipt } from "./session-runtime-driver.js";
 
 export type RuntimeMessagesRequest = "messages" | "count_tokens";
@@ -15,7 +16,15 @@ export interface RuntimeMessagesTransportOptions {
 	readonly model: string;
 	readonly effort: string;
 	readonly admit: () => Promise<void>;
-	readonly beforeSend?: (request: RuntimeMessagesRequest) => Promise<void>;
+	/**
+	 * The final Host authorization must return the private key for this one
+	 * outbound request. When this callback is present, a missing result is
+	 * fail-closed and the configured model credential is never an upstream
+	 * fallback. Direct transport fixtures may omit the callback.
+	 */
+	readonly beforeSend?: (
+		request: RuntimeMessagesRequest,
+	) => Promise<RuntimeExternalActionAuthorizationResult | void>;
 	readonly started?: (request: RuntimeMessagesRequest) => Promise<void>;
 	readonly toolRequestStarted?: (tool: {
 		readonly toolCallId: string;
@@ -51,6 +60,17 @@ function reject(response: ServerResponse, status = 400) {
 		response.writeHead(status, { "content-type": "application/json" });
 		response.end(failureBody);
 	} else response.end(`event: error\ndata: ${failureBody}\n\n`);
+}
+
+const credentialPattern = /^[\x21-\x7e]{16,8192}$/;
+
+function deliveredCredential(
+	value: RuntimeExternalActionAuthorizationResult | void,
+) {
+	const relayKey = value?.relayKey;
+	if (typeof relayKey !== "string" || !credentialPattern.test(relayKey))
+		throw new Error("RUNTIME_CREDENTIAL_UNAVAILABLE");
+	return relayKey;
 }
 
 function toolReceipt(value: unknown): NativeToolReceipt {
@@ -303,6 +323,11 @@ export async function openRuntimeMessagesTransport(
 					admitted = true;
 				}
 				if (closed || controller.signal.aborted) throw new Error();
+				// Authorization is the last Host gate. The returned key is scoped to
+				// this Execution/attempt and must be consumed by this request only.
+				const requestCredential = options.beforeSend
+					? deliveredCredential(await options.beforeSend(requestKind))
+					: access.credential;
 				const headers: Record<string, string> = {
 					"content-type": "application/json",
 					"anthropic-version": "2023-06-01",
@@ -316,9 +341,8 @@ export async function openRuntimeMessagesTransport(
 				};
 				if (typeof beta === "string") headers["anthropic-beta"] = beta;
 				if (options.authentication === "api-key")
-					headers["x-api-key"] = access.credential;
-				else headers.authorization = `Bearer ${access.credential}`;
-				await options.beforeSend?.(requestKind);
+					headers["x-api-key"] = requestCredential;
+				else headers.authorization = `Bearer ${requestCredential}`;
 				intentPrepared = true;
 				sent = true;
 				await options.receipt?.("sent", undefined, undefined, requestKind);
@@ -398,7 +422,7 @@ export async function openRuntimeMessagesTransport(
 					upstream.body,
 					response,
 					options.model,
-					[access.credential, access.endpoint],
+					[requestCredential, access.credential, access.endpoint],
 					controller.signal,
 					async (reason, usage) => {
 						await options.receipt?.(

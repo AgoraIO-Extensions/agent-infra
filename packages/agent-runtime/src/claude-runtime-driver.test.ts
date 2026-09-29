@@ -10,7 +10,10 @@ import {
 	completeClaudeResponse,
 } from "./claude-native.test-support.js";
 import { ClaudeRuntimeDriver } from "./claude-runtime-driver.js";
-import type { RuntimeExternalActionAuthorization } from "./driver.js";
+import type {
+	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
+} from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 
 // Exercise the real Driver and HTTP transport; this mock is not native barrier evidence.
@@ -58,7 +61,7 @@ async function withClaudeSource(
 		| ((
 				action: RuntimeExternalActionAuthorization,
 				driver: ClaudeRuntimeDriver,
-		  ) => Promise<void>),
+		  ) => Promise<RuntimeExternalActionAuthorizationResult | void>),
 	verify: (context: {
 		driver: ClaudeRuntimeDriver;
 		ref: string;
@@ -130,7 +133,10 @@ async function withClaudeSource(
 			? {
 					authorizeExternalAction: (
 						action: RuntimeExternalActionAuthorization,
-					) => authorize(action, driver),
+					) =>
+						authorize(action, driver).then(
+							(result) => result ?? { relayKey: "synthetic-credential" },
+						),
 				}
 			: {}),
 	});
@@ -560,8 +566,10 @@ it("retains an unknown Claude dispatch and refuses retry after started and recei
 							credential: "synthetic-credential",
 						},
 					],
-					authorizeExternalAction: (action) =>
-						recovered.validateExternalAction(action),
+					authorizeExternalAction: async (action) => {
+						await recovered.validateExternalAction(action);
+						return { relayKey: "synthetic-credential" };
+					},
 				});
 				try {
 					expect(await recovered.getStatus(ref, command.executionId)).toBe(
@@ -799,8 +807,10 @@ it.each(["pending", "failed"] as const)(
 									credential: "synthetic-credential",
 								},
 							],
-							authorizeExternalAction: (action) =>
-								recovered.validateExternalAction(action),
+							authorizeExternalAction: async (action) => {
+								await recovered.validateExternalAction(action);
+								return { relayKey: "synthetic-credential" };
+							},
 						});
 						try {
 							expect(await recovered.getStatus(ref, command.executionId)).toBe(
@@ -1133,8 +1143,12 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 	if (!address || typeof address === "string") throw new Error();
 	const options = {
 		path,
-		authorizeExternalAction: (action: RuntimeExternalActionAuthorization) =>
-			driver.validateExternalAction(action),
+		authorizeExternalAction: async (
+			action: RuntimeExternalActionAuthorization,
+		) => {
+			await driver.validateExternalAction(action);
+			return { relayKey: "synthetic-model-credential" };
+		},
 		configVersion: "configuration-a",
 		defaultModelOptionId: "primary",
 		defaultReasoningLevel: "high",

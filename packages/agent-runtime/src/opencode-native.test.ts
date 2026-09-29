@@ -82,6 +82,7 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 					action: RuntimeExternalActionAuthorization,
 				) => {
 					await driver.validateExternalAction(action);
+					return { relayKey: "synthetic-native-credential" };
 				},
 				defaultModelOptionId: "primary",
 				defaultReasoningLevel: "high",
@@ -305,6 +306,7 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 						action: RuntimeExternalActionAuthorization,
 					) => {
 						await driver.validateExternalAction(action);
+						return { relayKey: "synthetic-native-credential" };
 					},
 					executable: process.env.OPENCODE_EXECUTABLE ?? "",
 					configVersion: "configuration-a",

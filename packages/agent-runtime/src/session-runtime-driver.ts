@@ -23,6 +23,8 @@ import type {
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
+	RuntimeExternalActionAuthorizer,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -53,9 +55,9 @@ export interface SessionRuntimeDriverOptions {
 	readonly completionStatus: (reason: string) => RuntimeStatusV1;
 	readonly modelLifecycleAtTransport?: boolean;
 	readonly toolLifecycleAtBoundary?: boolean;
-	readonly authorizeExternalAction?: (
-		action: RuntimeExternalActionAuthorization,
-	) => Promise<void>;
+	/** Reject a model continuation when a tool has no trusted terminal receipt. */
+	readonly rejectUnconfirmedToolContinuation?: boolean;
+	readonly authorizeExternalAction?: RuntimeExternalActionAuthorizer;
 }
 export interface NativeToolReceipt {
 	readonly toolCallId: string;
@@ -73,7 +75,9 @@ export interface NativeSessionOptions {
 	history?: { checkpoint: string; complete: boolean };
 	selection: RuntimeSelectionV1;
 	admit: () => Promise<void>;
-	modelRequestIntent?: (request?: "messages" | "count_tokens") => Promise<void>;
+	modelRequestIntent?: (
+		request?: "messages" | "count_tokens",
+	) => Promise<RuntimeExternalActionAuthorizationResult | void>;
 	modelRequestStarted?: () => Promise<void>;
 	modelUsage?: (
 		usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
@@ -989,11 +993,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					admitted();
 				},
 				modelRequestIntent: async (request) => {
-					currentModelOperationRef = await this.modelRequestIntent(
+					const authorization = await this.modelRequestIntent(
 						file,
 						command.executionId,
 						request,
 					);
+					currentModelOperationRef = authorization.operationRef;
+					return authorization.delivery;
 				},
 				modelRequestStarted: () =>
 					this.modelRequestStarted(
@@ -1381,7 +1387,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			// Host inspection reads this journal. Release the durable mutation queue
 			// before waiting, then keep current authority last before transport dispatch.
 			await this.validateExternalAction(action);
-			await this.options.authorizeExternalAction(action);
+			const delivery = await this.options.authorizeExternalAction(action);
+			if (
+				!delivery ||
+				typeof delivery.relayKey !== "string" ||
+				!/^[\x21-\x7e]{16,8192}$/.test(delivery.relayKey)
+			)
+				unavailable();
+			return { operationRef: intent.operationRef, delivery };
 		} catch (error) {
 			// This callback has not returned to transport, so dispatch cannot have begun.
 			await this.modelPhase(
@@ -1403,7 +1416,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			);
 			throw error;
 		}
-		return intent.operationRef;
 	}
 	private async modelRequestStarted(
 		file: DurableJsonFile<Session>,

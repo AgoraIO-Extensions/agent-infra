@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import {
 	createServer,
 	type IncomingHttpHeaders,
@@ -153,6 +153,24 @@ export async function claudeNativeFixture(
 			action: RuntimeExternalActionAuthorization,
 		) => {
 			await driver.validateExternalAction(action);
+			const state = JSON.parse(
+				await readFile(
+					join(path, action.nativeSessionRef, "state.json"),
+					"utf8",
+				),
+			) as {
+				turns: { executionId: string; selection: { modelOptionId: string } }[];
+			};
+			const turn = state.turns.find(
+				(entry) => entry.executionId === action.executionId,
+			);
+			const option = turn?.selection.modelOptionId;
+			return {
+				relayKey:
+					option === "option-two"
+						? "synthetic-credential-1"
+						: "synthetic-credential-0",
+			};
 		},
 		configVersion: "config-one",
 		defaultModelOptionId: "option-one",

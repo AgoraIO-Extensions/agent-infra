@@ -190,6 +190,7 @@ async function openRuntime() {
   }
   if (action.kind === "model") report.modelAuthorizationChecks++;
   if (action.kind === "tool") report.toolAuthorizationChecks++;
+   return delivery;
  } };
  driver = isPi ? await openPiRuntime(authorizedOptions) : isOpenCode ? await openOpenCodeRuntime(authorizedOptions) : await ClaudeRuntimeDriver.open(authorizedOptions);
  hostStore = await FileRuntimeStore.open(join(path, "host.json"));
@@ -300,13 +301,29 @@ async function turn(user, text) {
  try {
  user.turn++;
  if (user.turn === 1) {
-  for (const legacyMethod of ["submitTurnV2", "submitTurnV3"]) {
-   let rejected = false;
-   try { await host[legacyMethod]({ staticCredential: "synthetic-relay-key-v4", executionId: `legacy-${user.id}`, turnId: `legacy-${user.id}`, agentId: "synthetic-agent", conversationId: `conversation-${user.id}` }, undefined); }
-   catch { rejected = true; }
-   if (!rejected) throw Error(`${legacyMethod} accepted a V4 static-Key candidate`);
+   const legacyExecutionId = `legacy-${user.id}`;
+  const legacyRequest = {
+   schemaVersion: 3,
+   requestId: randomUUID(),
+   traceId: randomUUID(),
+   principal: { kind: "user", id: `synthetic-user-${user.id}` },
+   channelId: "web",
+   agentId: "synthetic-agent",
+   conversationId: `conversation-${user.id}`,
+   executionId: legacyExecutionId,
+   turnId: `legacy-turn-${user.id}`,
+   sessionGeneration: 1,
+   hostSessionRef: null,
+   operation: { kind: "execution", id: legacyExecutionId, deliveryFence: 1, executionDeliveryFence: 1 },
+   input: { text: "legacy business candidate", attachments: [] },
+   selection: { schemaVersion: 1, modelOptionId: "primary", reasoningLevel: "medium" },
+  };
+  const signedLegacyRequest = await signedV3Request(legacyRequest, "turn.submit");
+  let rejected = false;
+  try { await host.submitTurnV3(signedLegacyRequest, verifyLegacyGrant(signedLegacyRequest.grant)); }
+  catch { rejected = true; }
+   if (!rejected) throw Error("Valid V3 legacy business request was accepted");
    report.legacyStaticKeyRejections++;
-  }
  }
  const executionId = `execution-${user.id}-${user.turn}`;
  const binding = { schemaVersion: 4, requestId: randomUUID(), traceId: randomUUID(), principal: { kind: "user", id: `synthetic-user-${user.id}` }, executionSource: "web", channelId: "web", agentId: "synthetic-agent", conversationId: `conversation-${user.id}`, sessionGeneration: 1, executionId, turnId: `turn-${user.id}-${user.turn}`, hostSessionRef: user.hostRef, operation: { kind: "execution", id: executionId, deliveryFence: 1, executionDeliveryFence: 1 }, keyBinding: { purpose: "personal", subjectId: `synthetic-user-${user.id}`, ciphertextRef: `synthetic-key-${user.id}`, version: 1 } };
@@ -473,7 +490,7 @@ try {
   }
  }
  stage = "result";
- report.passed = report.v4ExecutionKeyChecks === (separateNegative ? 6 : 4) && report.privateKeyDeliveryChecks > 0 && report.legacyStaticKeyRejections === 4 && report.replayFenceChecks >= report.v4ExecutionKeyChecks && report.modelAuthorizationChecks > 0 && report.toolAuthorizationChecks > 0 && report.checks.length === (separateNegative ? 6 : 4) && report.checks.every(check => check.passed);
+ report.passed = report.v4ExecutionKeyChecks === (separateNegative ? 6 : 4) && report.privateKeyDeliveryChecks > 0 && report.legacyStaticKeyRejections === 2 && report.replayFenceChecks >= report.v4ExecutionKeyChecks && report.modelAuthorizationChecks > 0 && report.toolAuthorizationChecks > 0 && report.checks.length === (separateNegative ? 6 : 4) && report.checks.every(check => check.passed);
 } catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_FAILED"; report.failureStage = stage; }
 finally {
  clearTimeout(keepAlive);

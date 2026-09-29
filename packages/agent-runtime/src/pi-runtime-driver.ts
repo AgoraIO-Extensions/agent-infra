@@ -2,7 +2,10 @@ import type {
 	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
-import type { RuntimeExternalActionAuthorization } from "./driver.js";
+import type {
+	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
+} from "./driver.js";
 import {
 	type NativeProcessLaunch,
 	retireNativeProcess,
@@ -17,7 +20,7 @@ import {
 export interface PiRuntimeDriverOptions {
 	authorizeExternalAction?: (
 		action: RuntimeExternalActionAuthorization,
-	) => Promise<void>;
+	) => Promise<RuntimeExternalActionAuthorizationResult | void>;
 	path: string;
 	configVersion: string;
 	defaultModelOptionId: string;
@@ -73,7 +76,7 @@ export const PiRuntimeDriver = {
 					session.selection,
 					() => callbacks.admit(),
 					async (request) => {
-						await callbacks.modelRequestIntent?.(request);
+						return callbacks.modelRequestIntent?.(request);
 					},
 					async () => {
 						await callbacks.modelRequestStarted?.();
