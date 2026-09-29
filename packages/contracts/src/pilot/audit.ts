@@ -198,14 +198,8 @@ const detail = (operationId: string, security: Record<string, never[]>[]) => ({
 });
 
 export const pilotScopedAuditOpenApiPathsV1 = {
-	"/api/v1/audit": list("listOwnExecutionAudit", [
-		{ platformApiCredential: [] },
-		{},
-	]),
-	"/api/v1/audit/{auditId}": detail("getOwnExecutionAudit", [
-		{ platformApiCredential: [] },
-		{},
-	]),
+	"/api/v1/audit": list("listOwnExecutionAudit", [{}]),
+	"/api/v1/audit/{auditId}": detail("getOwnExecutionAudit", [{}]),
 	"/api/v3/admin/audit": list("listScopedAdministratorAudit", []),
 	"/api/v3/admin/audit/{auditId}": detail("getScopedAdministratorAudit", []),
 } as const;

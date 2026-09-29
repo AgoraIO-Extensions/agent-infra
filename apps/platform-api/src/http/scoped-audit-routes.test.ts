@@ -346,6 +346,29 @@ describe("scoped audit HTTP adapter", () => {
 		});
 	});
 
+	it("does not fall through to a browser session for an administrator bearer", async () => {
+		const { app, identity, audit } = fixture();
+		const response = await app.request("/api/v3/admin/audit", {
+			headers: { authorization: "Bearer invalid-credential" },
+		});
+		expect(response.status).toBe(401);
+		expect(identity.resolve).not.toHaveBeenCalled();
+		expect(audit.listAudit).not.toHaveBeenCalled();
+		expect(audit.recordDeniedQuery).toHaveBeenCalledExactlyOnceWith(
+			{
+				principal: null,
+				requestedScope: "administrator",
+				operation: "list",
+				result: "rejected",
+				reason: "AUTHENTICATION_REQUIRED",
+			},
+			expect.objectContaining({ traceId: expect.any(String) }),
+		);
+		expect(JSON.stringify(audit.recordDeniedQuery.mock.calls)).not.toContain(
+			"invalid-credential",
+		);
+	});
+
 	it.each([
 		"?ownerId=other-user",
 		"?principalKind=user",

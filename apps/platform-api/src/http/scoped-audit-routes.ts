@@ -38,6 +38,11 @@ async function queryScope(
 	traceId: string,
 	capturePrincipal: (principal: ApiPrincipalV1) => void,
 ): Promise<PlatformAuditQueryScopeV1> {
+	if (request.headers.has("authorization")) {
+		// API identity resolution is #481-owned. Do not let a bearer value
+		// fall through to a browser session on either audit route.
+		throw new HttpProtocolError("AUTHENTICATION_REQUIRED", traceId);
+	}
 	if (administrator) {
 		const user = await resolveIdentity(identity, request, traceId);
 		capturePrincipal({ kind: "user", id: user.userId });
@@ -47,11 +52,6 @@ async function queryScope(
 			kind: "administrator",
 			administratorId: user.userId,
 		});
-	}
-	if (request.headers.has("authorization")) {
-		// API identity resolution is #481-owned. Do not treat a bearer value as
-		// browser identity in this main-based audit patch.
-		throw new HttpProtocolError("AUTHENTICATION_REQUIRED", traceId);
 	}
 	const browser = await resolveIdentity(identity, request, traceId);
 	capturePrincipal({ kind: "user", id: browser.userId });

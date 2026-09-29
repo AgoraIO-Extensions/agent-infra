@@ -327,7 +327,11 @@ function project(
 	)
 		throw new PlatformAuditScopeErrorV1("unavailable");
 	const binding = executionBinding(row);
-	if (binding && row.agentId !== binding.agentId)
+	if (
+		binding &&
+		(row.agentId !== binding.agentId ||
+			(row.source === "conversation" && row.actorId !== binding.actorId))
+	)
 		throw new PlatformAuditScopeErrorV1("unavailable");
 	let originalPrincipal: ApiPrincipalV1 | null = null;
 	if (binding)

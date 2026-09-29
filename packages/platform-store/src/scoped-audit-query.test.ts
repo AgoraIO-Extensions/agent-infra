@@ -364,6 +364,18 @@ describe("controlled PostgreSQL audit query", () => {
 		});
 	});
 
+	it("rejects an administrator projection when a conversation row disagrees with its execution actor", async () => {
+		const f = await fixture();
+		await sql`
+			update platform.conversation_audit_events
+			set actor_id = 'different-conversation-actor'
+			where id = ${f.auditId}
+		`;
+		await expect(
+			query.getAudit(admin, f.auditId, detail, request()),
+		).rejects.toMatchObject({ code: "unavailable" });
+	});
+
 	it("applies current Web use rights before pagination, preserving authorized later rows", async () => {
 		const principal = { kind: "user" as const, id: randomUUID() };
 		const visible = await fixture(principal);
