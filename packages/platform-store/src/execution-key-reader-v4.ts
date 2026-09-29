@@ -20,6 +20,7 @@ interface AcceptedExecutionRowV4 {
 	readonly execution_id: string;
 	readonly turn_id: string;
 	readonly channel_id: string;
+	readonly status: string;
 	readonly session_generation: string;
 	readonly execution_source: string | null;
 	readonly relay_key_purpose: string | null;
@@ -27,6 +28,7 @@ interface AcceptedExecutionRowV4 {
 	readonly relay_key_id: string | null;
 	readonly relay_key_version: string | null;
 	readonly host_session_ref: string | null;
+	readonly original_submit_host_session_ref: string | null;
 	readonly boundary: unknown;
 	readonly revoked_at: Date | null;
 }
@@ -62,10 +64,11 @@ export class PostgresExecutionKeyReaderV4 {
 		return this.#client.begin(async (sql) => {
 			const rows = await sql<AcceptedExecutionRowV4[]>`
 					select e.actor_id, e.agent_id, e.conversation_id, e.execution_id,
-						e.turn_id, e.channel_id, e.session_generation::text,
+						e.turn_id, e.channel_id, e.status, e.session_generation::text,
 						e.execution_source, e.relay_key_purpose,
 						e.relay_key_subject_id, e.relay_key_id,
 						e.relay_key_version::text, c.host_session_ref,
+						e.original_submit_host_session_ref,
 						a.boundary, a.revoked_at
 					from platform.conversation_executions e
 					join platform.conversations c on c.id = e.conversation_id
@@ -74,7 +77,13 @@ export class PostgresExecutionKeyReaderV4 {
 					for share of e, c, a
 				`;
 			const row = rows[0];
-			if (!row || rows.length !== 1 || row.revoked_at !== null) return null;
+			if (
+				!row ||
+				rows.length !== 1 ||
+				row.revoked_at !== null ||
+				!["submitted", "processing", "unknown"].includes(row.status)
+			)
+				return null;
 			try {
 				const boundary = parseTaskAuthorizationBoundaryV1(row.boundary);
 				const version = safeVersion(row.relay_key_version);
@@ -85,6 +94,8 @@ export class PostgresExecutionKeyReaderV4 {
 					boundary.channelId !== row.channel_id
 				)
 					return null;
+				const pinnedHostSessionRef =
+					row.original_submit_host_session_ref ?? row.host_session_ref;
 				const scope = RuntimePinnedExecutionKeyScopeV4Schema.parse({
 					principal: boundary.principal,
 					executionSource: row.execution_source,
@@ -94,7 +105,7 @@ export class PostgresExecutionKeyReaderV4 {
 					executionId: row.execution_id,
 					turnId: row.turn_id,
 					sessionGeneration: safeVersion(row.session_generation),
-					hostSessionRef: row.host_session_ref,
+					hostSessionRef: pinnedHostSessionRef,
 					keyBinding: {
 						purpose: row.relay_key_purpose,
 						subjectId: row.relay_key_subject_id,
@@ -102,7 +113,11 @@ export class PostgresExecutionKeyReaderV4 {
 						version,
 					},
 				});
-				return { scope, trustedHostSessionRef: row.host_session_ref };
+				return {
+					scope,
+					trustedHostSessionRef:
+						"selection" in parsed ? pinnedHostSessionRef : row.host_session_ref,
+				};
 			} catch {
 				return null;
 			}

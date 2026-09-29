@@ -149,6 +149,61 @@ it("does not derive an accepted scope from a forged request", async () => {
 	expect(accepted?.scope.keyBinding).toEqual(request.keyBinding);
 });
 
+it("uses the immutable submit Session for submit recovery", async () => {
+	await sql`
+		update platform.conversation_executions
+		set runtime_submit_protocol = 'v4',
+			original_operation_digest = repeat('a', 43),
+			original_submit_host_session_ref = 'original-host'
+		where execution_id = 'execution-1'
+	`;
+	await sql`
+		update platform.conversations
+		set host_session_ref = 'current-host'
+		where id = 'conversation-1'
+	`;
+	try {
+		const accepted = await reader.readAcceptedExecution({
+			...request,
+			hostSessionRef: "original-host",
+		});
+		expect(accepted?.scope.hostSessionRef).toBe("original-host");
+		expect(accepted?.trustedHostSessionRef).toBe("original-host");
+	} finally {
+		await sql`
+			update platform.conversation_executions
+			set runtime_submit_protocol = null,
+				original_operation_digest = null,
+				original_submit_host_session_ref = null
+			where execution_id = 'execution-1'
+		`;
+		await sql`
+			update platform.conversations
+			set host_session_ref = null
+			where id = 'conversation-1'
+		`;
+	}
+});
+
+it("withholds a terminal Execution's Key binding", async () => {
+	for (const status of ["completed", "failed", "cancelled"] as const) {
+		await sql`
+			update platform.conversation_executions
+			set status = ${status}
+			where execution_id = 'execution-1'
+		`;
+		try {
+			expect(await reader.readAcceptedExecution(request)).toBeNull();
+		} finally {
+			await sql`
+				update platform.conversation_executions
+				set status = 'submitted'
+				where execution_id = 'execution-1'
+			`;
+		}
+	}
+});
+
 it("withholds a revoked Execution's Key binding", async () => {
 	await sql`update platform.task_authorization_records
 		set revoked_at = now() where id = 'authorization-1'`;
