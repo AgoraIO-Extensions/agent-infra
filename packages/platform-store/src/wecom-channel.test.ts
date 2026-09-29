@@ -150,6 +150,32 @@ it("commits one receipt with one execution under concurrent callbacks and replay
 		channelId: wecomChannelIdV1(message),
 	});
 });
+it("rejects an explicitly disabled binding before creating an execution", async () => {
+	const disabled = {
+		...configuration,
+		channels: [
+			{
+				kind: message.kind,
+				bindingReference: message.bindingReference,
+				enabled: false,
+			},
+		],
+	};
+	await sql`update platform.agent_configuration_revisions set configuration=${sql.json(disabled)} where agent_id=${message.agentId} and revision=1`;
+	try {
+		const attempted = {
+			...message,
+			senderId: "disabled_sender",
+			eventId: "disabled_event",
+		};
+		expect(await channel().receive(attempted)).toEqual({ outcome: "denied" });
+		expect(
+			await sql`select 1 from platform.wecom_receipts where scope->>'senderId'='disabled_sender'`,
+		).toHaveLength(0);
+	} finally {
+		await sql`update platform.agent_configuration_revisions set configuration=${sql.json(configuration)} where agent_id=${message.agentId} and revision=1`;
+	}
+});
 it("rolls back conversation, execution and Runtime outbox when receipt insertion fails", async () => {
 	await sql`create function platform.reject_wecom_receipt() returns trigger language plpgsql as $$begin raise exception 'Injected receipt failure';end$$`;
 	await sql`create trigger reject_wecom_receipt before insert on platform.wecom_receipts for each row execute function platform.reject_wecom_receipt()`;

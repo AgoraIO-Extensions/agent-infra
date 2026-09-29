@@ -389,7 +389,10 @@ async function boundedBody(request: Request): Promise<string> {
 	);
 }
 
-export { createWecomChannelAdmissionV1 } from "./admission.js";
+export {
+	createWecomChannelAdmissionV1,
+	type WecomManagedBotAdmissionV1,
+} from "./admission.js";
 export {
 	createWecomCallbackCipherV1,
 	type WecomCallbackKeysV1,

@@ -187,7 +187,12 @@ export function assemblePlatformApi(
 			? input.admissions({ configurationQuery })
 			: input.admissions;
 	const channelAdmission = resolveWecomBinding
-		? { channelAdmission: createWecomChannelAdmissionV1(resolveWecomBinding) }
+		? {
+				channelAdmission: createWecomChannelAdmissionV1(
+					resolveWecomBinding,
+					wecomSetup?.resolveManagedBotAdmission,
+				),
+			}
 		: {};
 	const presentAgent =
 		typeof input.presentAgent === "function"

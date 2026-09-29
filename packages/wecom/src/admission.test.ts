@@ -73,6 +73,44 @@ it("rejects retained channels that no longer resolve to current credentials", as
 	expect(result).toMatchObject({ status: "rejected" });
 });
 
+it("admits a retained managed bot using active binding metadata without API credentials", async () => {
+	const admission = createWecomChannelAdmissionV1(
+		async () => null,
+		async (reference) =>
+			reference === "managed"
+				? {
+						agentId: "agent-1",
+						kind: "wecom_bot",
+						bindingReference: reference,
+						credentialVersion: "session-1",
+					}
+				: null,
+	);
+	const input = {
+		schemaVersion: 1 as const,
+		agentId: "agent-1",
+		requestId: "request-1",
+		traceId: "trace-1",
+		current: [{ kind: "wecom_bot" as const, bindingReference: "managed" }],
+		requested: [],
+	};
+	expect(await admission.admitChannels(input)).toMatchObject({
+		status: "admitted",
+		channels: input.current,
+	});
+	expect(
+		await admission.admitChannels({ ...input, agentId: "other" }),
+	).toMatchObject({
+		status: "rejected",
+	});
+	expect(
+		await admission.admitChannels({
+			...input,
+			current: [{ kind: "wecom_app", bindingReference: "managed" }],
+		}),
+	).toMatchObject({ status: "rejected" });
+});
+
 it.each(["0", "02", "1234567890123456"])(
 	"rejects an invalid application ID %s before admission",
 	async (applicationId) => {

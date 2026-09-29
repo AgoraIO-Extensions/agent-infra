@@ -404,7 +404,8 @@ export function createWecomAuthorizationV1(dependencies: {
 				!configuration.channels.some(
 					(b) =>
 						b.kind === scope.kind &&
-						b.bindingReference === scope.bindingReference,
+						b.bindingReference === scope.bindingReference &&
+						!("enabled" in b && b.enabled === false),
 				) ||
 				(configuration.source.kind === "custom" &&
 					configuration.source.interactionMode !== "platform-adapter")

@@ -7,6 +7,7 @@ import { WebSocketServer } from "ws";
 import { assembleWecomSetupApiV1 } from "../../../apps/platform-api/src/wecom-setup-assembly.ts";
 import { createWecomSetupWorkerV1 } from "../../../apps/platform-worker/src/wecom-setup.ts";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
+import { createWecomChannelAdmissionV1 } from "../../wecom/src/admission.ts";
 import { PostgresAgentConfigurationQueryV1 } from "./agent-configuration.ts";
 import { PostgresPlatformAuditQueryV1 } from "./audit.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
@@ -302,17 +303,52 @@ it.each([
 				),
 			).toHaveLength(1);
 			if (mode === "success") {
+				const admission = createWecomChannelAdmissionV1(
+					(reference) => api.resolveBinding(reference, async () => null),
+					api.resolveManagedBotAdmission,
+				);
+				const retainedBot = {
+					schemaVersion: 1 as const,
+					agentId: "agent",
+					requestId: "retained-bot",
+					traceId: "retained-bot",
+					current: [
+						{ kind: "wecom_bot" as const, bindingReference: session.sessionId },
+					],
+					requested: [],
+				};
+				expect(await admission.admitChannels(retainedBot)).toMatchObject({
+					status: "admitted",
+					channels: retainedBot.current,
+				});
+				const managed = await api.resolveManagedBotAdmission(session.sessionId);
+				expect(managed).toEqual({
+					agentId: "agent",
+					kind: "wecom_bot",
+					bindingReference: session.sessionId,
+					credentialVersion: session.sessionId,
+				});
+				expect(JSON.stringify(managed)).not.toContain("fixture-secret");
 				const before = decrypt.mock.calls.length;
 				expect(await worker.bindings()).toHaveLength(1);
 				expect(await worker.bindings()).toHaveLength(1);
 				expect(decrypt).toHaveBeenCalledTimes(before + 1);
 				await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}','[]'::jsonb) where agent_id='agent' and revision=2`;
+				expect(
+					await api.resolveManagedBotAdmission(session.sessionId),
+				).toBeNull();
+				expect(await admission.admitChannels(retainedBot)).toMatchObject({
+					status: "rejected",
+				});
 				expect(await worker.bindings()).toHaveLength(0);
 				await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}',${sql.json([{ kind: "wecom_bot", bindingReference: session.sessionId }])}::jsonb) where agent_id='agent' and revision=2`;
 				expect(await worker.bindings()).toHaveLength(1);
 				expect(decrypt).toHaveBeenCalledTimes(before + 2);
 				await sql`update platform.wecom_setup_sessions set encrypted_credential='{}'::jsonb where session_id=${session.sessionId}`;
 				expect(await worker.bindings()).toHaveLength(0);
+				expect(
+					await api.resolveManagedBotAdmission(session.sessionId),
+				).toBeNull();
 				await sql`update platform.wecom_setup_sessions set encrypted_credential=${sql.json(saved?.encryptedCredential as postgres.JSONValue)} where session_id=${session.sessionId}`;
 				expect(await worker.bindings()).toHaveLength(1);
 				expect(decrypt).toHaveBeenCalledTimes(before + 3);

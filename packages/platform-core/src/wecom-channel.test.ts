@@ -216,6 +216,7 @@ it("requires the current company identity, active Owner, binding and Agent avail
 	let active = true;
 	let organizations = ["org-1"];
 	let owners = ["owner"];
+	let channelEnabled = true;
 	const auth = createWecomAuthorizationV1({
 		identity: {
 			async resolveSender() {
@@ -233,7 +234,19 @@ it("requires the current company identity, active Owner, binding and Agent avail
 		},
 		state: {
 			async readAuthorityState() {
-				return { management, configuration, authorizationRevision: "rev-1" };
+				return {
+					management,
+					configuration: channelEnabled
+						? configuration
+						: {
+								...configuration,
+								channels: configuration.channels.map((binding) => ({
+									...binding,
+									enabled: false,
+								})),
+							},
+					authorizationRevision: "rev-1",
+				};
 			},
 		},
 	});
@@ -248,6 +261,9 @@ it("requires the current company identity, active Owner, binding and Agent avail
 		},
 	});
 	if (initial.outcome !== "allowed") throw new Error("Expected authorization");
+	channelEnabled = false;
+	expect(await auth.authorize(message)).toMatchObject({ outcome: "denied" });
+	channelEnabled = true;
 	for (const patch of [
 		{ channelId: "wecom_bot:replacement" },
 		{ agentId: "agent-2" },

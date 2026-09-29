@@ -2,6 +2,13 @@ import { createHash } from "node:crypto";
 import type { AgentConfigurationChannelAdmissionPortV1 } from "@agent-infra/platform-core";
 import type { WecomConfigurationV1 } from "./index.js";
 
+export interface WecomManagedBotAdmissionV1 {
+	readonly agentId: string;
+	readonly kind: "wecom_bot";
+	readonly bindingReference: string;
+	readonly credentialVersion: string;
+}
+
 /** Resolver only returns configurations allocated by deployment to this Agent. */
 function validConfiguration(
 	config: WecomConfigurationV1 | null,
@@ -26,14 +33,46 @@ function validConfiguration(
 
 export function createWecomChannelAdmissionV1(
 	resolve: (reference: string) => Promise<WecomConfigurationV1 | null>,
+	resolveManagedBot?: (
+		reference: string,
+	) => Promise<WecomManagedBotAdmissionV1 | null>,
 ): AgentConfigurationChannelAdmissionPortV1 {
 	return {
 		async admitChannels(input) {
 			const resolved = new Map<string, WecomConfigurationV1 | null>();
+			const managed = new Map<string, WecomManagedBotAdmissionV1 | null>();
 			const load = async (reference: string) => {
 				if (!resolved.has(reference))
 					resolved.set(reference, await resolve(reference));
 				return resolved.get(reference) ?? null;
+			};
+			const version = async (channel: {
+				kind: "wecom_bot" | "wecom_app";
+				bindingReference: string;
+			}) => {
+				const config = await load(channel.bindingReference);
+				if (config !== null)
+					return validConfiguration(
+						config,
+						input.agentId,
+						channel.kind,
+						channel.bindingReference,
+					)
+						? config.credentialVersion
+						: null;
+				if (channel.kind !== "wecom_bot" || !resolveManagedBot) return null;
+				if (!managed.has(channel.bindingReference))
+					managed.set(
+						channel.bindingReference,
+						await resolveManagedBot(channel.bindingReference),
+					);
+				const proof = managed.get(channel.bindingReference);
+				return proof?.kind === "wecom_bot" &&
+					proof.agentId === input.agentId &&
+					proof.bindingReference === channel.bindingReference &&
+					proof.credentialVersion
+					? proof.credentialVersion
+					: null;
 			};
 			const channels = new Map(
 				input.current.map((channel) => [channel.kind, channel]),
@@ -43,14 +82,7 @@ export function createWecomChannelAdmissionV1(
 					channels.delete(change.kind);
 					continue;
 				}
-				if (
-					!validConfiguration(
-						await load(change.bindingReference),
-						input.agentId,
-						change.kind,
-						change.bindingReference,
-					)
-				)
+				if (!(await version(change)))
 					return {
 						schemaVersion: 1,
 						status: "rejected",
@@ -65,17 +97,10 @@ export function createWecomChannelAdmissionV1(
 			const result = [...channels.values()].sort((a, b) =>
 				a.kind.localeCompare(b.kind),
 			);
-			const versions: ([string, string, string] | null)[] = [];
+			const versions: [string, string, string][] = [];
 			for (const channel of result) {
-				const config = await load(channel.bindingReference);
-				if (
-					!validConfiguration(
-						config,
-						input.agentId,
-						channel.kind,
-						channel.bindingReference,
-					)
-				) {
+				const credentialVersion = await version(channel);
+				if (!credentialVersion) {
 					return {
 						schemaVersion: 1,
 						status: "rejected",
@@ -86,7 +111,7 @@ export function createWecomChannelAdmissionV1(
 				versions.push([
 					channel.kind,
 					channel.bindingReference,
-					config.credentialVersion,
+					credentialVersion,
 				]);
 			}
 			return {

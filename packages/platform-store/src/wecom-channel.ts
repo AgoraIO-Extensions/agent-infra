@@ -153,7 +153,7 @@ export class PostgresWecomChannelV1
 			await sql`select pg_advisory_xact_lock(hashtextextended(${plan.eventKey},0))`;
 			const [agent] = await sql<
 				{ configuration: unknown; authorization_revision: string }[]
-			>`select c.configuration,a.authorization_revision from platform.agents a join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where a.id=${plan.message.agentId} for share of a`;
+			>`select c.configuration,a.authorization_revision from platform.agents a join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where a.id=${plan.message.agentId} and not exists(select 1 from jsonb_array_elements(c.configuration->'channels') channel where channel->>'kind'=${plan.message.kind} and channel->>'bindingReference'=${plan.message.bindingReference} and channel->>'enabled'='false') for share of a`;
 			if (!agent) return reject("denied");
 			const [management] = await sql<
 				{
