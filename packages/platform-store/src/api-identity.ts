@@ -665,6 +665,15 @@ export class PostgresApiIdentityStoreV1 {
 				))
 			)
 				return false;
+			if (input.principal.kind === "application") {
+				const [recipient] = await transaction
+					.select({ status: platformApplications.status })
+					.from(platformApplications)
+					.where(eq(platformApplications.id, input.principal.id))
+					.limit(1)
+					.for("share");
+				if (recipient?.status !== "active") return false;
+			}
 			await transaction
 				.update(agents)
 				.set({ authorizationRevision: input.authorizationRevision })

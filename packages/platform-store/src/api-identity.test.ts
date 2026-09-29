@@ -645,6 +645,102 @@ describe("PostgreSQL API identity store", () => {
 		},
 	);
 
+	it("serializes an application recipient disablement against grant", async () => {
+		await adminClient`truncate platform.audit_events,
+			platform.agent_principal_grants, platform.platform_api_credentials,
+			platform.platform_applications, platform.agents cascade`;
+		await adminClient`
+			insert into platform.agents (id, authorization_revision)
+			values ('agent_recipient_lock', 'revision_recipient_1')
+		`;
+		await adminClient`
+			insert into platform.platform_applications
+				(id, name, responsible_user_id, status, authorization_revision)
+			values
+				('manager-recipient-lock', 'Manager', 'user_owner', 'active', 'manager-app-1'),
+				('recipient-recipient-lock', 'Recipient', 'user_owner', 'active', 'recipient-app-1')
+		`;
+		await adminClient`
+			insert into platform.platform_api_credentials
+				(id, principal_type, principal_id, credential_hash, scopes)
+			values ('credential_recipient_lock', 'application', 'manager-recipient-lock',
+				repeat('f', 64), '["agent:manage"]'::jsonb)
+		`;
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_recipient_lock', 'application', 'manager-recipient-lock',
+				'manage', 'revision_recipient_1')
+		`;
+		const principal = {
+			kind: "application" as const,
+			id: "manager-recipient-lock",
+		};
+		const actor = {
+			schemaVersion: 1 as const,
+			userId: "user_owner",
+			accountStatus: "active" as const,
+			principal,
+			isAdministrator: false,
+			credential: {
+				credentialId: "credential_recipient_lock",
+				principal,
+				scopes: ["agent:manage"] as const,
+				expiresAt: null,
+				revokedAt: null,
+			},
+		};
+		const blocker = postgres(databaseUrl, { max: 1 });
+		let release: (() => void) | undefined;
+		let markLocked: (() => void) | undefined;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const locked = new Promise<void>((resolve) => {
+			markLocked = resolve;
+		});
+		const disable = blocker.begin(async (transaction) => {
+			await transaction`
+				update platform.platform_applications set status = 'disabled'
+				where id = 'recipient-recipient-lock'
+			`;
+			markLocked?.();
+			await held;
+		});
+		let pending: Promise<boolean> | undefined;
+		try {
+			await locked;
+			pending = store.grantAgent({
+				actor,
+				agentId: "agent_recipient_lock",
+				principal: { kind: "application", id: "recipient-recipient-lock" },
+				grantType: "use",
+				authorizationRevision: "revision_recipient_2",
+			});
+			await waitForBlockedQuery(["platform_applications"]);
+			release?.();
+			await disable;
+			expect(await pending).toBe(false);
+			const [agent] = await adminClient`
+				select authorization_revision from platform.agents
+				where id = 'agent_recipient_lock'
+			`;
+			expect(agent?.authorization_revision).toBe("revision_recipient_1");
+			expect(
+				await adminClient`
+					select principal_id from platform.agent_principal_grants
+					where agent_id = 'agent_recipient_lock'
+						and principal_id = 'recipient-recipient-lock'
+				`,
+			).toEqual([]);
+		} finally {
+			release?.();
+			await disable.catch(() => undefined);
+			await pending?.catch(() => undefined);
+			await blocker.end();
+		}
+	});
+
 	it("rejects application credential transport at the Store boundary", async () => {
 		await adminClient`truncate platform.audit_events,
 			platform.api_credential_delivery_grants, platform.platform_api_credentials,
