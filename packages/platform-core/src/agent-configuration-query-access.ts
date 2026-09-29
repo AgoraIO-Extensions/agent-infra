@@ -21,6 +21,8 @@ export function isAgentConfigurationQueryAllowedV1(input: {
 	}[];
 }): boolean {
 	if (input.principal) {
+		if (input.principal.kind === "user" && input.principal.id !== input.actorId)
+			return false;
 		return (
 			isAgentManagementText(input.authorizationRevision) &&
 			input.principalGrants.some(
