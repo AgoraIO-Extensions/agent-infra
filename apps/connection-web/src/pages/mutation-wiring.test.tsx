@@ -751,7 +751,12 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(screen.queryByRole("heading", { name: "连接 Rehoboam" })).toBeNull();
 	});
 
-	it("Manhattan 升级引导申请新版能力，不复用旧凭证", async () => {
+	it("Manhattan 升级即使带旧版批准链接也只开放目标版本申请", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=manhattan&intent=connect&accessRequestId=old-v4-request",
+		);
 		const initial = await api.getConnections();
 		initial.overview.upgradeTasks = [
 			{
@@ -802,6 +807,7 @@ describe("Connection 管理 mutation wiring", () => {
 			await screen.findByRole("button", { name: /Manhattan v5/ }),
 		).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /Manhattan v4/ })).toBeNull();
+		expect(window.location.search).not.toContain("accessRequestId");
 		expect(api.upgradeProviderConnection).not.toHaveBeenCalled();
 	});
 

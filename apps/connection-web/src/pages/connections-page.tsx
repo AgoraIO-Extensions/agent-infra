@@ -491,7 +491,15 @@ export function ConnectionsPage() {
 		openProviderCredential(providerId);
 	};
 	const requestManhattanUpgrade = (targetReleaseId: string) => {
-		connectProvider("manhattan");
+		const url = new URL(window.location.href);
+		url.searchParams.delete("accessRequestId");
+		url.searchParams.delete("intent");
+		window.history.replaceState(null, "", url);
+		setRenewalTarget(null);
+		setRenewalProviderId("");
+		setReconnectTargetId(null);
+		setRequestTargetProvider("manhattan");
+		setRequestTrigger((value) => value + 1);
 		setUpgradeTargetReleaseId(targetReleaseId);
 	};
 
