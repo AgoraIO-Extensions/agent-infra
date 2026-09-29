@@ -465,6 +465,9 @@ export async function retryFencedStop(
 	claim: ConversationDispatchClaimV1,
 ): Promise<boolean> {
 	if (claim.operation !== "conversation.turn.stop.v1") return false;
+	// Keep the Agent -> outbox order used by claimWork and ownedState. A stale
+	// stop retry can otherwise hold the outbox while an Agent update holds Agent.
+	await transaction`select id from platform.agents where id = ${claim.agentId} for share`;
 	const [execution] = await transaction<{ delivery_fence: string | number }[]>`
 		select delivery_fence from platform.conversation_executions
 		where execution_id = ${claim.executionId} and conversation_id = ${claim.conversationId}
