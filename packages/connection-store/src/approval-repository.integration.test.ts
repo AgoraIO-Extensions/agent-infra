@@ -143,6 +143,40 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						},
 					],
 				});
+				const approvedRequestId = `catalog-approved-request-${suffix}`;
+				const accountId = `catalog-account-${suffix}`;
+				const authorizationId = `catalog-authorization-${suffix}`;
+				await sql`
+					INSERT INTO connection_accounts (
+						id, owner_type, owner_principal_id, provider_release_id,
+						provider_id, external_account, display_name, status
+					) VALUES (${accountId}, 'PERSONAL', ${applicantId}, ${releaseId},
+						${`catalog-provider-${suffix}`}, 'stable-account', 'Existing account', 'ACTIVE')
+				`;
+				await sql`
+					INSERT INTO connection_credential_versions (
+						id, connection_id, ciphertext, nonce, tag, scope_json, status
+					) VALUES (${`catalog-credential-${suffix}`}, ${accountId},
+						'fixture', 'fixture', 'fixture', '[]'::jsonb, 'ACTIVE')
+				`;
+				await sql`
+					INSERT INTO connection_access_requests (
+						id, applicant_principal_id, provider_release_id, capability_profile_id,
+						policy_version_id, purpose, duration_kind, state, expires_at
+					) VALUES (${approvedRequestId}, ${applicantId}, ${releaseId}, ${profileId},
+						${policyId}, 'Previously approved account', 'PERMANENT', 'CONSUMED',
+						now() + interval '1 day')
+				`;
+				await sql`
+					INSERT INTO connection_access_authorizations (
+						id, principal_id, connection_id, provider_release_id,
+						capability_profile_id, source, source_request_id,
+						external_account_fingerprint, state, validity_kind
+					) VALUES (${authorizationId}, ${applicantId}, ${accountId}, ${releaseId},
+						${profileId}, 'APPROVED_REQUEST', ${approvedRequestId},
+						${canonicalHash({ externalAccount: "stable-account", providerReleaseId: releaseId })},
+						'ACTIVE', 'PERMANENT')
+				`;
 				await expect(
 					catalog.revisePublishedCapabilityProfile({
 						id: "unused",
@@ -218,6 +252,74 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					revisedTerms.disclaimerVersionId,
 				);
 				expect(originalRequest?.policy_version_id).toBe(policyId);
+				if (!updatedOption) throw new Error("Published policy option missing");
+				const sourcePolicy = await catalog.getPublishedPolicyVersion(
+					updatedOption.policyVersionId,
+				);
+				const policyRevision = {
+					...sourcePolicy,
+					id: `policy-revised-${suffix}`,
+					sourceId: updatedOption.policyVersionId,
+					expectedRevision: sourcePolicy.revision,
+					priority: sourcePolicy.priority + 1,
+					durations: sourcePolicy.durations.map((duration) => ({
+						...duration,
+						id: `duration-revised-${randomUUID()}`,
+					})),
+					stages: sourcePolicy.stages.map((stage) => ({
+						...stage,
+						id: `stage-revised-${randomUUID()}`,
+					})),
+				};
+				await expect(
+					catalog.revisePublishedPolicy({
+						...policyRevision,
+						createdByPrincipalId: applicantId,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await expect(
+					catalog.revisePublishedPolicy({
+						...policyRevision,
+						stages: policyRevision.stages.map((stage) => ({
+							...stage,
+							approvers: [
+								{ principalId: "missing-principal", displaySnapshot: {} },
+							],
+						})),
+					}),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				const revisedPolicy =
+					await catalog.revisePublishedPolicy(policyRevision);
+				expect(revisedPolicy.policyVersionId).toBe(policyRevision.id);
+				const nextOption = (await requests.listAccessOptions(applicantId)).find(
+					(item) => item.providerReleaseId === releaseId,
+				);
+				expect(nextOption?.policyVersionId).toBe(policyRevision.id);
+				await expect(
+					catalog.revisePublishedPolicy({
+						...policyRevision,
+						id: `stale-${suffix}`,
+					}),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				const [historicalRequest] = await sql<{ policy_version_id: string }[]>`
+					SELECT policy_version_id FROM connection_access_requests WHERE id = ${requestId}
+				`;
+				expect(historicalRequest?.policy_version_id).toBe(policyId);
+				const [authorization] = await sql<
+					{
+						state: string;
+						capability_profile_id: string;
+						source_request_id: string;
+					}[]
+				>`
+					SELECT state, capability_profile_id, source_request_id
+					FROM connection_access_authorizations WHERE id = ${authorizationId}
+				`;
+				expect(authorization).toMatchObject({
+					state: "ACTIVE",
+					capability_profile_id: profileId,
+					source_request_id: approvedRequestId,
+				});
 				expect(
 					await catalog.retirePublishedDisclaimer({
 						sourceId: revisedTerms.disclaimerVersionId,
@@ -291,6 +393,31 @@ describe("PostgreSQL Connection access approval catalog", () => {
 				SELECT status FROM connection_access_policy_versions WHERE id = ${fixture.policy_version_id}
 			`;
 				expect(retiredPolicy?.status).toBe("SUPERSEDED");
+				const removableRequestId = await seedApprovedConnectPermit(sql, {
+					principalId: applicantId,
+					providerReleaseId: releaseId,
+					actionVersionIds: [readId],
+					scopes: [],
+				});
+				const [removable] = await sql<{ policy_version_id: string }[]>`
+					SELECT policy_version_id FROM connection_access_requests WHERE id = ${removableRequestId}
+				`;
+				if (!removable) throw new Error("Removable policy fixture missing");
+				expect(
+					await catalog.retirePublishedPolicy({
+						actorPrincipalId: adminId,
+						policyVersionId: removable.policy_version_id,
+						expectedRevision: "1",
+					}),
+				).toEqual({ policyVersionId: removable.policy_version_id });
+				const [removedPolicy] = await sql<{ status: string }[]>`
+					SELECT status FROM connection_access_policy_versions WHERE id = ${removable.policy_version_id}
+				`;
+				expect(removedPolicy?.status).toBe("SUPERSEDED");
+				const [stillActive] = await sql<{ state: string }[]>`
+					SELECT state FROM connection_access_authorizations WHERE id = ${authorizationId}
+				`;
+				expect(stillActive?.state).toBe("ACTIVE");
 				const dispatcher = new PostgresConnectionNotificationDispatcher(
 					databaseUrl,
 				);
@@ -299,10 +426,10 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					while (dispatched < 100 && (await dispatcher.runOnce())) dispatched++;
 					const retiredEvents = await sql<{ status: string }[]>`
 					SELECT status FROM connection_outbox_events
-					WHERE topic IN ('connection.capability-profile.retired', 'connection.disclaimer.retired')
-						AND aggregate_id IN (${revisedTerms.disclaimerVersionId}, ${winner.value.capabilityProfileId}, ${fixture.capability_profile_id})
+					WHERE topic IN ('connection.capability-profile.retired', 'connection.disclaimer.retired', 'connection.access-policy.retired')
+						AND aggregate_id IN (${revisedTerms.disclaimerVersionId}, ${winner.value.capabilityProfileId}, ${fixture.capability_profile_id}, ${removable.policy_version_id})
 				`;
-					expect(retiredEvents).toHaveLength(3);
+					expect(retiredEvents).toHaveLength(4);
 					expect(
 						retiredEvents.every((event) => event.status === "DELIVERED"),
 					).toBe(true);

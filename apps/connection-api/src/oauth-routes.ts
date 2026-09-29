@@ -1457,82 +1457,112 @@ export function createConnectionOAuthApp(
 			);
 		}
 
+		const getPolicyEditorSource = async (context: Context) => {
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			const catalog = management.approvalCatalog;
+			if (!catalog)
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Approval catalog is unavailable",
+				);
+			const result = await browserApiOperation(context, async () => {
+				const policyId = context.req.param("policyId");
+				if (!policyId)
+					throw new ConnectionError("INVALID_REQUEST", "Policy ID is required");
+				const publishedSource = context.req.path.endsWith("/revision-source");
+				const policy = publishedSource
+					? await catalog.getPublishedPolicyVersion(policyId)
+					: await catalog.getPolicyDraft(policyId);
+				const principalIds = policy.stages.flatMap((stage) =>
+					stage.approvers.map((approver) => approver.principalId),
+				);
+				const candidates =
+					await options.service.prepareEmployeeCandidatesForPrincipals(
+						session.account.principalId,
+						publishedSource ? [] : principalIds,
+					);
+				if (publishedSource)
+					for (const principalId of new Set(principalIds)) {
+						try {
+							candidates.push(
+								...(await options.service.prepareEmployeeCandidatesForPrincipals(
+									session.account.principalId,
+									[principalId],
+								)),
+							);
+						} catch (error) {
+							if (
+								!(
+									error instanceof OAuthProtocolError &&
+									error.error === "access_denied" &&
+									error.message === "Approver identity is unavailable"
+								)
+							)
+								throw error;
+						}
+					}
+				const candidateIds = new Map(
+					candidates.map((candidate) => [
+						candidate.principalId,
+						candidate.candidateId,
+					]),
+				);
+				return {
+					policyId: policy.id,
+					revision: policy.revision,
+					candidates: candidates.map(
+						({ candidateId, displayName, email, alias }) => ({
+							candidateId,
+							displayName,
+							email,
+							alias,
+						}),
+					),
+					draft: {
+						allowPermanent: policy.allowPermanent,
+						capabilityProfileId: policy.capabilityProfileId,
+						connectTtlSeconds: policy.connectTtlSeconds,
+						defaultDurationDays: policy.defaultDurationDays,
+						disclaimerVersionIds: policy.disclaimerVersionIds,
+						durations: policy.durations.map((duration) =>
+							duration.kind === "FINITE"
+								? { kind: duration.kind, days: duration.days }
+								: { kind: duration.kind },
+						),
+						priority: policy.priority,
+						providerReleaseId: policy.providerReleaseId,
+						renewalLeadSeconds: policy.renewalLeadSeconds,
+						requestTtlSeconds: policy.requestTtlSeconds,
+						stages: policy.stages.map((stage) => ({
+							name: stage.name,
+							quorumType: stage.quorumType,
+							quorumCount: stage.quorumCount,
+							timeoutSeconds: stage.timeoutSeconds,
+							approverCandidateIds: stage.approvers.flatMap((approver) => {
+								const candidateId = candidateIds.get(approver.principalId);
+								if (!candidateId && !publishedSource)
+									throw new ConnectionError(
+										"PROVIDER_UNAVAILABLE",
+										"Approver candidate is unavailable",
+									);
+								return candidateId ? [candidateId] : [];
+							}),
+						})),
+					},
+				};
+			});
+			if (result instanceof Response) return result;
+			context.header("cache-control", "no-store");
+			return context.json(result);
+		};
 		app.get(
 			"/api/v1/connection/admin/access-policies/:policyId",
-			async (context) => {
-				const session = await currentBrowserApiAdministrator(context);
-				if (session instanceof Response) return session;
-				const catalog = management.approvalCatalog;
-				if (!catalog)
-					throw new ConnectionError(
-						"PROVIDER_UNAVAILABLE",
-						"Approval catalog is unavailable",
-					);
-				const result = await browserApiOperation(context, async () => {
-					const policy = await catalog.getPolicyDraft(
-						context.req.param("policyId"),
-					);
-					const candidates =
-						await options.service.prepareEmployeeCandidatesForPrincipals(
-							session.account.principalId,
-							policy.stages.flatMap((stage) =>
-								stage.approvers.map((approver) => approver.principalId),
-							),
-						);
-					const candidateIds = new Map(
-						candidates.map((candidate) => [
-							candidate.principalId,
-							candidate.candidateId,
-						]),
-					);
-					return {
-						policyId: policy.id,
-						revision: policy.revision,
-						candidates: candidates.map(
-							({ candidateId, displayName, email, alias }) => ({
-								candidateId,
-								displayName,
-								email,
-								alias,
-							}),
-						),
-						draft: {
-							allowPermanent: policy.allowPermanent,
-							capabilityProfileId: policy.capabilityProfileId,
-							connectTtlSeconds: policy.connectTtlSeconds,
-							defaultDurationDays: policy.defaultDurationDays,
-							disclaimerVersionIds: policy.disclaimerVersionIds,
-							durations: policy.durations.map((duration) =>
-								duration.kind === "FINITE"
-									? { kind: duration.kind, days: duration.days }
-									: { kind: duration.kind },
-							),
-							priority: policy.priority,
-							providerReleaseId: policy.providerReleaseId,
-							renewalLeadSeconds: policy.renewalLeadSeconds,
-							requestTtlSeconds: policy.requestTtlSeconds,
-							stages: policy.stages.map((stage) => ({
-								name: stage.name,
-								quorumType: stage.quorumType,
-								quorumCount: stage.quorumCount,
-								timeoutSeconds: stage.timeoutSeconds,
-								approverCandidateIds: stage.approvers.map((approver) => {
-									const candidateId = candidateIds.get(approver.principalId);
-									if (!candidateId)
-										throw new ConnectionError(
-											"PROVIDER_UNAVAILABLE",
-											"Approver candidate is unavailable",
-										);
-									return candidateId;
-								}),
-							})),
-						},
-					};
-				});
-				if (result instanceof Response) return result;
-				context.header("cache-control", "no-store");
-				return context.json(result);
-			},
+			getPolicyEditorSource,
+		);
+		app.get(
+			"/api/v1/connection/admin/access-policies/:policyId/revision-source",
+			getPolicyEditorSource,
 		);
 
 		const saveAccessPolicyDraft = async (context: Context) => {
@@ -1664,6 +1694,134 @@ export function createConnectionOAuthApp(
 				);
 				if (result instanceof Response) return result;
 				return context.body(null, 204);
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/admin/access-policies/:policyId/revise",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const ifMatch = context.req.header("if-match");
+				if (!ifMatch || !/^"[1-9][0-9]*"$/.test(ifMatch))
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"A current revision is required",
+					);
+				if (!management.approvalDirectoryEnabled)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Employee directory approval gate is unavailable",
+					);
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				const sourceId = context.req.param("policyId");
+				const body = parseJsonBody(
+					accessPolicyDraftSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.access-policy.revise",
+							request: {
+								sourceId,
+								expectedRevision: ifMatch.slice(1, -1),
+								...body,
+							},
+							subject: session.account.principalId,
+						},
+						async () => {
+							const stages = [];
+							for (const stage of body.stages) {
+								const approvers = [];
+								for (const candidateId of stage.approverCandidateIds) {
+									const approver =
+										await options.service.resolveEmployeeCandidateForDraft(
+											session.account.principalId,
+											candidateId,
+										);
+									await options.service.ensureActiveEmployeePrincipal(
+										approver.principalId,
+									);
+									approvers.push(approver);
+								}
+								stages.push({
+									...stage,
+									id: `approval-stage-${randomUUID()}`,
+									approvers,
+								});
+							}
+							return catalog.revisePublishedPolicy({
+								...body,
+								id: `access-policy-${randomUUID()}`,
+								sourceId,
+								expectedRevision: ifMatch.slice(1, -1),
+								createdByPrincipalId: session.account.principalId,
+								durations: body.durations.map((duration) => ({
+									...duration,
+									id: `duration-${randomUUID()}`,
+								})),
+								stages,
+							});
+						},
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result);
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/admin/access-policies/:policyId/retire",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const ifMatch = context.req.header("if-match");
+				if (!ifMatch || !/^"[1-9][0-9]*"$/.test(ifMatch))
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"A current revision is required",
+					);
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				const policyVersionId = context.req.param("policyId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.access-policy.retire",
+							request: {
+								policyVersionId,
+								expectedRevision: ifMatch.slice(1, -1),
+							},
+							subject: session.account.principalId,
+						},
+						() =>
+							catalog.retirePublishedPolicy({
+								actorPrincipalId: session.account.principalId,
+								policyVersionId,
+								expectedRevision: ifMatch.slice(1, -1),
+							}),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result);
 			},
 		);
 

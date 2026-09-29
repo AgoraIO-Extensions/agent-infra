@@ -61,6 +61,7 @@ import {
 	getConnectionAccessPolicyDraft,
 	getConnectionAccessRequest,
 	getConnections,
+	getPublishedConnectionAccessPolicyEditorSource,
 	getSession,
 	getSharedConnections,
 	grantAdministrator,
@@ -109,9 +110,11 @@ import {
 	rerouteApprovalRequest,
 	retirePublishedApprovalCapabilityProfile,
 	retirePublishedApprovalDisclaimer,
+	retirePublishedConnectionAccessPolicy,
 	retryConnectionOutboxFailure,
 	revisePublishedApprovalCapabilityProfile,
 	revisePublishedApprovalDisclaimer,
+	revisePublishedConnectionAccessPolicy,
 	revokeAdminAccessAuthorization,
 	revokeAdministrator,
 	revokeApprovalDelegation,
@@ -521,6 +524,10 @@ export const connectionApi = {
 		),
 	getConnectionAccessPolicyDraft: (policyId: string) =>
 		unwrap(getConnectionAccessPolicyDraft({ path: { policyId } })),
+	getPublishedConnectionAccessPolicyEditorSource: (policyId: string) =>
+		unwrap(
+			getPublishedConnectionAccessPolicyEditorSource({ path: { policyId } }),
+		),
 	createConnectionAccessPolicy: (body: AccessPolicyDraft) =>
 		unwrap(
 			createConnectionAccessPolicy({
@@ -540,6 +547,32 @@ export const connectionApi = {
 					input.body,
 					"审批策略无效",
 				),
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { policyId: input.policyId },
+			}),
+		),
+	revisePublishedConnectionAccessPolicy: (input: {
+		policyId: string;
+		revision: string;
+		body: AccessPolicyDraft;
+	}) =>
+		unwrap(
+			revisePublishedConnectionAccessPolicy({
+				body: parseClientInput(
+					accessPolicyDraftSchema,
+					input.body,
+					"审批策略无效",
+				),
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { policyId: input.policyId },
+			}),
+		),
+	retirePublishedConnectionAccessPolicy: (input: {
+		policyId: string;
+		revision: string;
+	}) =>
+		unwrap(
+			retirePublishedConnectionAccessPolicy({
 				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
 				path: { policyId: input.policyId },
 			}),
