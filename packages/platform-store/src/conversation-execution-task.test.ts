@@ -1047,6 +1047,71 @@ it("captures current application independently from its responsible user and rec
 	expect(revoked && isTaskAuthorizationCurrentV1(revoked)).toBe(false);
 });
 
+it.each(["stop-first", "revoked-first"] as const)(
+	"creates one terminal recovery control after historical %s controls and ignores another execution",
+	async (order) => {
+		const accepted = await taskUseCase().submitTask(command(`dual-${order}`));
+		if (accepted.outcome !== "accepted") throw Error();
+		const target = await authorizationStore.readExecution(
+			accepted.result.executionId,
+		);
+		if (!target) throw Error();
+		const otherAccepted = await taskUseCase().submitTask(
+			command(`dual-other-${order}`),
+		);
+		if (otherAccepted.outcome !== "accepted") throw Error();
+		const other = await authorizationStore.readExecution(
+			otherAccepted.result.executionId,
+		);
+		if (!other) throw Error();
+		await sql`update platform.conversation_executions
+			set status = 'completed' where execution_id = ${target.executionId}`;
+		const controls =
+			order === "stop-first"
+				? [
+						{ id: "dual-stop", reason: "stop" },
+						{ id: "dual-revoked", reason: "authorization_revoked" },
+					]
+				: [
+						{ id: "dual-revoked", reason: "authorization_revoked" },
+						{ id: "dual-stop", reason: "stop" },
+					];
+		for (const control of controls) {
+			await sql`insert into platform.task_control_records
+				(id, execution_id, authorization_record_id, reason)
+				values (${control.id}, ${target.executionId}, ${target.authorizationRecordId}, ${control.reason})`;
+		}
+		await sql`insert into platform.task_control_records
+			(id, execution_id, authorization_record_id, reason)
+			values ('dual-other-stop', ${other.executionId}, ${other.authorizationRecordId}, 'stop')`;
+		const input = {
+			executionId: target.executionId,
+			authorizationRecordId: target.authorizationRecordId,
+			reason: "recovery" as const,
+			workerId: "worker-recovery",
+			traceId: `trace-dual-${order}`,
+			requestId: `request-dual-${order}`,
+		};
+		const recovery = await authorizationStore.recordControl(input);
+		expect(recovery).toMatchObject({ reason: "recovery" });
+		expect(await authorizationStore.recordControl(input)).toEqual(recovery);
+		const rows = await sql<{ id: string; reason: string }[]>`
+			select id, reason from platform.task_control_records
+			where execution_id = ${target.executionId}
+			order by id`;
+		expect(rows).toHaveLength(3);
+		expect(rows).toContainEqual({
+			id: recovery.controlRecordId,
+			reason: "recovery",
+		});
+		expect(rows).toContainEqual({ id: "dual-stop", reason: "stop" });
+		expect(rows).toContainEqual({
+			id: "dual-revoked",
+			reason: "authorization_revoked",
+		});
+	},
+);
+
 it("reads the current Agent grant revision for application task renewal", async () => {
 	await seedApplication();
 	const boundary = await authorizationStore.captureApplicationBoundary({

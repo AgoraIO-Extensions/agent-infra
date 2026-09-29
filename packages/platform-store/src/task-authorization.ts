@@ -323,7 +323,14 @@ export class PostgresTaskAuthorizationStoreV1 {
 		workerId: string;
 		traceId: string;
 		requestId: string;
-	}): Promise<{ controlRecordId: string }> {
+	}): Promise<{
+		controlRecordId: string;
+		reason:
+			| "stop"
+			| "authorization_revoked"
+			| "recovery"
+			| "generation_isolation";
+	}> {
 		try {
 			return await this.#client.begin(async (transaction) => {
 				await transaction`select set_config('lock_timeout', '5s', true)`;
@@ -413,10 +420,28 @@ export class PostgresTaskAuthorizationStoreV1 {
 						`;
 					}
 				}
-				const [existing] = await transaction<{ id: string }[]>`
-					select id from platform.task_control_records where execution_id = ${input.executionId} and reason = ${input.reason}
+				const historicalControls = await transaction<
+					{ id: string; reason: "stop" | "authorization_revoked" }[]
+				>`
+					select id, reason from platform.task_control_records
+					where execution_id = ${input.executionId}
+						and authorization_record_id = ${record.id}
+						and reason in ('stop', 'authorization_revoked')
 				`;
-				if (existing) return { controlRecordId: existing.id };
+				if (
+					historicalControls.length > 1 &&
+					(input.reason !== "recovery" ||
+						!["completed", "failed", "cancelled"].includes(execution.status))
+				)
+					throw new TaskAuthorizationStoreError();
+				const [existing] = await transaction<{ id: string }[]>`
+					select id from platform.task_control_records
+					where execution_id = ${input.executionId}
+						and authorization_record_id = ${record.id}
+						and reason = ${input.reason}
+				`;
+				if (existing)
+					return { controlRecordId: existing.id, reason: input.reason };
 				const controlRecordId = randomUUID();
 				if (plan.revokeAuthorization)
 					await transaction`
@@ -430,7 +455,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 					insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
 					values (${randomUUID()}, ${input.traceId}, 'system', ${plan.workerId}, ${plan.audit.action}, 'execution', ${input.executionId}, 'succeeded', ${input.requestId}, ${boundary.agentId}, ${transaction.json({ workerId: plan.workerId, originalPrincipal: plan.audit.originalPrincipal, controlRecordId, authorizationRecordId: record.id, reason: plan.audit.reason } as unknown as JsonValue)})
 				`;
-				return { controlRecordId };
+				return { controlRecordId, reason: input.reason };
 			});
 		} catch {
 			throw new TaskAuthorizationStoreError();
