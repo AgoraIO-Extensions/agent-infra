@@ -120,11 +120,18 @@ export class PostgresConversationDispatchStoreV1
 	async readRuntimeState(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly runtimeSubmitProtocol?: "v2" | "v4";
+		readonly allowPinnedV2Recovery?: boolean;
 	}) {
 		requireClaim(input.claim);
-		const runtimeSubmitProtocol = input.runtimeSubmitProtocol ?? "v2";
-		if (runtimeSubmitProtocol !== "v2" && runtimeSubmitProtocol !== "v4")
+		const requestedProtocol = input.runtimeSubmitProtocol ?? "v2";
+		if (requestedProtocol !== "v2" && requestedProtocol !== "v4")
 			throw new TypeError("Runtime submit protocol is invalid");
+		if (
+			input.allowPinnedV2Recovery !== undefined &&
+			(typeof input.allowPinnedV2Recovery !== "boolean" ||
+				(input.allowPinnedV2Recovery && requestedProtocol !== "v4"))
+		)
+			throw new TypeError("Runtime submit recovery option is invalid");
 		const claim = input.claim;
 		return databaseOperation(() =>
 			this.#client.begin(async (transaction) => {
@@ -134,6 +141,11 @@ export class PostgresConversationDispatchStoreV1
 					await retryFencedStop(transaction, claim);
 					return null;
 				}
+				const runtimeSubmitProtocol =
+					input.allowPinnedV2Recovery &&
+					state.execution.runtime_submit_protocol === "v2"
+						? "v2"
+						: requestedProtocol;
 				const payload = exactPayload(state.outbox.payload, claim.operation);
 				if (!payload) return null;
 				const stop = await readStop(transaction, claim.executionId);
@@ -301,6 +313,7 @@ export class PostgresConversationDispatchStoreV1
 						? { metadataRecovery: payload.metadataRecovery }
 						: {}),
 					originalOperationDigest,
+					runtimeSubmitProtocol,
 					executionStatus: state.execution.status,
 					stopPending: stop?.status === "submitted",
 				};
