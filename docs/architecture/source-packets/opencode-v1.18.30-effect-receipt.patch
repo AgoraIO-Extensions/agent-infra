@@ -1,9 +1,9 @@
 diff --git a/packages/opencode/src/native/effect-receipt.ts b/packages/opencode/src/native/effect-receipt.ts
 new file mode 100644
-index 000000000..290861855
+index 000000000..c6d6d2c14
 --- /dev/null
 +++ b/packages/opencode/src/native/effect-receipt.ts
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,90 @@
 +/**
 + * Private Driver/native effect receipt boundary.
 + *
@@ -30,6 +30,14 @@ index 000000000..290861855
 +  | "file.remove"
 +  | "process.dispatch"
 +  | "client.dispatch"
++
++export const effectReceiptTargets = [
++  "file.read",
++  "file.write",
++  "file.remove",
++  "process.dispatch",
++  "client.dispatch",
++] as const
 +
 +export type EffectReceipt = {
 +  readonly schema: typeof EFFECT_RECEIPT_SCHEMA
@@ -78,7 +86,11 @@ index 000000000..290861855
 +    typeof receipt.phase === "string" &&
 +    effectReceiptPhases.includes(receipt.phase as EffectReceiptPhase) &&
 +    typeof receipt.target === "string" &&
++    effectReceiptTargets.includes(receipt.target as EffectReceiptTarget) &&
 +    typeof receipt.targetRef === "string" &&
-+    typeof receipt.ackID === "string"
++    typeof receipt.ackID === "string" &&
++    (receipt.phase === "failed" || receipt.phase === "cancelled" || receipt.phase === "unknown"
++      ? typeof receipt.errorCode === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(receipt.errorCode)
++      : receipt.errorCode === undefined)
 +  )
 +}
