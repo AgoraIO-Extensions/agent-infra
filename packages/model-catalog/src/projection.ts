@@ -370,6 +370,7 @@ export async function projectRuntimeModelConfigurationV4(input: {
 		const model = configuration.modelConfiguration;
 		if (
 			source.kind !== "standard" ||
+			input.protocol !== "openai-responses-v1" ||
 			!model ||
 			[...configuration.environment, ...configuration.secrets].some(
 				({ name }) =>

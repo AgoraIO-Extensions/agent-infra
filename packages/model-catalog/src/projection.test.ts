@@ -172,6 +172,37 @@ it("projects V4 without reading or injecting a model credential", async () => {
 	).rejects.toThrow("MODEL_CONFIGURATION_UNAVAILABLE");
 });
 
+it("rejects non-Responses protocols for V4 projections", async () => {
+	await expect(
+		projectRuntimeModelConfigurationV4({
+			configuration: {
+				...configurationV2,
+				modelConfiguration: {
+					catalogRevision: "catalog-a",
+					defaultOptionId: "primary",
+					defaultReasoningLevel: "high",
+					options: [
+						{
+							optionId: "primary",
+							modelId: "model-a",
+							endpointId: "endpoint-a",
+							reasoningLevels: ["high"],
+							credential: {
+								secretId: "legacy-secret",
+								version: 1,
+								isSet: true,
+							},
+						},
+					],
+				},
+			},
+			catalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+			protocol: "anthropic-messages-v1",
+			signal: AbortSignal.timeout(1000),
+		}),
+	).rejects.toThrow("MODEL_CONFIGURATION_UNAVAILABLE");
+});
+
 it("preserves model projection while configuration records migrate from V1 to V2", async () => {
 	const historical: AgentConfigurationRecordV1 = {
 		...configurationV2,
