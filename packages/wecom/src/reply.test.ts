@@ -41,12 +41,25 @@ function sender(fetcher: typeof fetch) {
 			token: "fixture",
 			encodingAesKey: "fixture",
 			botId: "bot-1",
+			applicationId: "42",
 		}),
 		revealReply: reveal,
 		getApplicationAccessToken: async () => "fixture-token",
 		fetch: fetcher,
 	});
 }
+const applicationScope = {
+	...scope,
+	kind: "wecom_app" as const,
+	peerId: "sender-1",
+	conversationType: "single" as const,
+};
+const applicationRoute: WecomReplyRouteV1 = {
+	...route,
+	scope: applicationScope,
+	responseUrl: undefined,
+	recipientId: applicationScope.senderId,
+};
 describe("reply protection and external send", () => {
 	it("encrypts a fresh envelope and authenticates persisted reply data", async () => {
 		const one = await protect(route);
@@ -119,6 +132,82 @@ describe("reply protection and external send", () => {
 				async () => new Response("bad gateway", { status: 502 }),
 			).send({ scope, replyHandle: handle, text: "reply" }),
 		).toBe("unknown");
+	});
+	it("sends a long application reply in ordered UTF-8-bounded parts", async () => {
+		const content: string[] = [];
+		const adapter = sender(async (_url, init) => {
+			const body = JSON.parse(String(init?.body));
+			expect(body.touser).toBe(applicationScope.senderId);
+			expect(body.agentid).toBe(42);
+			content.push(body.text.content);
+			return Response.json({ errcode: 0 });
+		});
+		const text = `${"a".repeat(2047)}😀${"界".repeat(682)}`;
+		expect(
+			await adapter.send({
+				scope: applicationScope,
+				replyHandle: await protect(applicationRoute),
+				text,
+			}),
+		).toBe("sent");
+		expect(content.length).toBe(3);
+		expect(content.join("")).toBe(text);
+		expect(content.every((part) => Buffer.byteLength(part) <= 2048)).toBe(true);
+	});
+	it("keeps a 2048-byte application reply in one part", async () => {
+		let calls = 0;
+		const adapter = sender(async (_url, init) => {
+			calls++;
+			expect(JSON.parse(String(init?.body)).text.content).toBe(
+				"x".repeat(2048),
+			);
+			return Response.json({ errcode: 0 });
+		});
+		expect(
+			await adapter.send({
+				scope: applicationScope,
+				replyHandle: await protect(applicationRoute),
+				text: "x".repeat(2048),
+			}),
+		).toBe("sent");
+		expect(calls).toBe(1);
+	});
+	it.each([
+		["first", 1, "failed"],
+		["later", 2, "unknown"],
+	] as const)(
+		"stops after an explicit failure on the %s application part",
+		async (_position, failureAt, expected) => {
+			let calls = 0;
+			const adapter = sender(async () => {
+				calls++;
+				return Response.json({ errcode: calls === failureAt ? 40014 : 0 });
+			});
+			expect(
+				await adapter.send({
+					scope: applicationScope,
+					replyHandle: await protect(applicationRoute),
+					text: "x".repeat(4097),
+				}),
+			).toBe(expected);
+			expect(calls).toBe(failureAt);
+		},
+	);
+	it("does not send another application part after a lost response", async () => {
+		let calls = 0;
+		const adapter = sender(async () => {
+			calls++;
+			if (calls === 2) throw new Error("response lost");
+			return Response.json({ errcode: 0 });
+		});
+		expect(
+			await adapter.send({
+				scope: applicationScope,
+				replyHandle: await protect(applicationRoute),
+				text: "x".repeat(4097),
+			}),
+		).toBe("unknown");
+		expect(calls).toBe(2);
 	});
 });
 

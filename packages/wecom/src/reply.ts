@@ -226,6 +226,72 @@ export function createWecomReplyDecryptorV1(
 		}
 	};
 }
+function applicationTextParts(text: string): string[] {
+	const parts: string[] = [];
+	let part = "";
+	let bytes = 0;
+	for (const point of text) {
+		const pointBytes = Buffer.byteLength(point);
+		if (bytes + pointBytes > 2048) {
+			parts.push(part);
+			part = "";
+			bytes = 0;
+		}
+		part += point;
+		bytes += pointBytes;
+	}
+	if (part) parts.push(part);
+	return parts;
+}
+async function sendWecomMessage(
+	fetcher: typeof fetch,
+	url: string,
+	body: unknown,
+): Promise<"sent" | "failed" | "unknown"> {
+	try {
+		const response = await fetcher(url, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+			redirect: "error",
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (!response.ok) return "unknown";
+		const reader = response.body?.getReader();
+		if (!reader) return "unknown";
+		let size = 0;
+		const chunks: Uint8Array[] = [];
+		try {
+			for (;;) {
+				const part = await reader.read();
+				if (part.done) break;
+				size += part.value.byteLength;
+				if (size > 65536) return "unknown";
+				chunks.push(part.value);
+			}
+		} finally {
+			await reader.cancel();
+		}
+		const data = JSON.parse(
+			new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)),
+		) as {
+			errcode?: unknown;
+			invaliduser?: unknown;
+			unlicenseduser?: unknown;
+		};
+		if (data.errcode === 0 && !data.invaliduser && !data.unlicenseduser)
+			return "sent";
+		if (
+			(typeof data.errcode === "number" && data.errcode !== 0) ||
+			data.invaliduser ||
+			data.unlicenseduser
+		)
+			return "failed";
+		return "unknown";
+	} catch {
+		return "unknown";
+	}
+}
 export function createWecomSenderV1(options: {
 	readonly resolveConfiguration: (
 		scope: WecomScopeV1,
@@ -240,8 +306,10 @@ export function createWecomSenderV1(options: {
 	return {
 		async send(input) {
 			let url: string;
-			let body: unknown;
+			let bodies: unknown[];
 			try {
+				if (input.text.length === 0 || !input.text.isWellFormed())
+					return "failed";
 				const config = await options.resolveConfiguration(input.scope);
 				const route = await options.revealReply(input.replyHandle);
 				if (
@@ -270,74 +338,39 @@ export function createWecomSenderV1(options: {
 					)
 						return "failed";
 					url = target.href;
-					body = { msgtype: "markdown", markdown: { content: input.text } };
+					bodies = [{ msgtype: "markdown", markdown: { content: input.text } }];
 				} else {
 					if (
 						!config.applicationId ||
 						!/^[1-9][0-9]{0,14}$/.test(config.applicationId) ||
 						route.recipientId !== input.scope.senderId ||
 						/[|@]/.test(route.recipientId) ||
-						Buffer.byteLength(input.text) > 2048
+						Buffer.byteLength(input.text) > 20_480
 					)
 						return "failed";
 					const token = await options.getApplicationAccessToken(config);
 					if (!token) return "failed";
 					url = `https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`;
-					body = {
+					bodies = applicationTextParts(input.text).map((content) => ({
 						touser: route.recipientId,
 						msgtype: "text",
 						agentid: Number(config.applicationId),
-						text: { content: input.text },
-					};
+						text: { content },
+					}));
 				}
 			} catch {
 				return "failed";
 			}
-			try {
-				const response = await (options.fetch ?? fetch)(url, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(body),
-					redirect: "error",
-					signal: AbortSignal.timeout(10_000),
-				});
-				if (!response.ok) return "unknown";
-				const reader = response.body?.getReader();
-				if (!reader) return "unknown";
-				let size = 0;
-				const chunks: Uint8Array[] = [];
-				try {
-					for (;;) {
-						const part = await reader.read();
-						if (part.done) break;
-						size += part.value.byteLength;
-						if (size > 65536) return "unknown";
-						chunks.push(part.value);
-					}
-				} finally {
-					await reader.cancel();
-				}
-				const data = JSON.parse(
-					new TextDecoder("utf-8", { fatal: true }).decode(
-						Buffer.concat(chunks),
-					),
-				) as {
-					errcode?: unknown;
-					invaliduser?: unknown;
-					unlicenseduser?: unknown;
-				};
-				if (data.errcode === 0 && !data.invaliduser && !data.unlicenseduser)
-					return "sent";
-				if (
-					(typeof data.errcode === "number" && data.errcode !== 0) ||
-					data.invaliduser ||
-					data.unlicenseduser
-				)
-					return "failed";
-				return "unknown";
-			} catch {
-				return "unknown";
+			for (const [index, body] of bodies.entries()) {
+				const status = await sendWecomMessage(
+					options.fetch ?? fetch,
+					url,
+					body,
+				);
+				if (status !== "sent")
+					return index > 0 && status === "failed" ? "unknown" : status;
 			}
+			return "sent";
 		},
 	};
 }
