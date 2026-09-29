@@ -145,6 +145,93 @@ test("kind values render the reviewable Kubernetes workload-plane topology", () 
 	);
 });
 
+test("production Worker requires a private module and runtime authorization mounts", () => {
+	const production = [
+		"--set",
+		"workloadTopology.enabled=false",
+		"--set-string",
+		"platformWorker.deploymentModule=file:///app/dist/deployment.mjs",
+	];
+	const missing = render(...production);
+	assert.notEqual(missing.status, 0);
+	assert.match(missing.stderr, /configurationModuleSecretRef/);
+
+	const result = render(
+		...production,
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.name=worker-module",
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.key=configuration.mjs",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.name=worker-runtime-auth",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.privateKeyKey=grant.pem",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.serviceTokenKey=service-token",
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const resources = objects(result.stdout);
+	const worker = resource(
+		resources,
+		"Deployment",
+		"topology-agent-infra-platform-worker",
+	).spec.template.spec;
+	assert.equal(worker.securityContext.fsGroup, 1000);
+	assert.deepEqual(
+		worker.volumes.find((volume) => volume.name === "deployment-module")
+			?.secret,
+		{
+			secretName: "worker-module",
+			defaultMode: 288,
+		},
+	);
+	assert.deepEqual(
+		worker.containers[0].volumeMounts.find(
+			(mount) => mount.name === "deployment-module",
+		),
+		{
+			name: "deployment-module",
+			mountPath: "/app/dist/configuration.mjs",
+			subPath: "configuration.mjs",
+			readOnly: true,
+		},
+	);
+	assert.ok(
+		worker.containers[0].volumeMounts.some(
+			(mount) =>
+				mount.name === "deployment-module" &&
+				mount.mountPath === "/var/run/agent-infra/deployment" &&
+				mount.readOnly === true,
+		),
+	);
+	assert.deepEqual(
+		worker.volumes.find((volume) => volume.name === "runtime-auth")?.secret,
+		{
+			secretName: "worker-runtime-auth",
+			defaultMode: 288,
+			items: [
+				{ key: "grant.pem", path: "runtime-grant.pem" },
+				{ key: "service-token", path: "service-token" },
+			],
+		},
+	);
+	const api = resource(
+		resources,
+		"Deployment",
+		"topology-agent-infra-platform-api",
+	).spec.template.spec;
+	assert.equal(
+		(api.volumes ?? []).some((volume) =>
+			["deployment-module", "runtime-auth"].includes(volume.name),
+		),
+		false,
+	);
+});
+
 test("enterprise directory deployment keeps migration ahead of its runtime resources", () => {
 	const disabled = render();
 	assert.equal(disabled.status, 0, disabled.stderr);
@@ -833,6 +920,16 @@ test("production Worker requires an explicit packaged deployment module path", (
 		"workloadTopology.enabled=false",
 		"--set-string",
 		"platformWorker.deploymentModule=file:///app/deployment/platform-worker.mjs",
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.name=worker-module",
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.key=configuration.mjs",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.name=worker-runtime-auth",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.privateKeyKey=grant.pem",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.serviceTokenKey=service-token",
 	);
 	assert.equal(result.status, 0, result.stderr);
 	const worker = resource(

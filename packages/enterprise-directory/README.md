@@ -6,7 +6,7 @@
 
 内部接口为 `GET /internal/directory/snapshot`，Zod 源与生成的 OpenAPI 3.1 分别由 `@agent-infra/contracts/enterprise-directory` 和 `@agent-infra/contracts/openapi/enterprise-directory.v1` 发布；仅经带证书校验的 HTTPS 和 `Authorization: Bearer <部署密钥>` 调用。成功返回 `schemaVersion: 1`、UUID `revision`、`source: "wecom"`、`rootDepartmentId`、毫秒时间戳 `fetchedAt` 和 `validUntil`、`complete: true`、`departments` 与 `members`。`fetchedAt` 是抓取完成时间，`validUntil` 最迟为抓取开始后 24 小时；扫描超过一天时拒绝发布。无有效快照返回 503，认证失败返回 401；响应禁止缓存。调用方必须验证 Schema、完整性和时效，不能保留旧版作为权限来源。
 
-服务在 HTTP 与数据库边界将版本化 wire DTO 显式映射为目录领域快照，读取方再次验证完整性和时效。`/readyz` 只在持久快照有效时返回 200，并附 `fetchedAt`、`validUntil` 供部署告警核对；同步成功日志仅记录版本、时间和耗时，失败日志仅记录 `source_unavailable`、`invalid_snapshot` 或 `store_unavailable` 等受限原因及耗时，不记录成员、邮箱或企微凭据。部署方须对持续 503 和同步失败配置采集与告警。
+服务在 HTTP 与数据库边界将版本化 wire DTO 显式映射为目录领域快照，读取方再次验证完整性和时效。`/readyz` 只在持久快照有效时返回 200，并附 `fetchedAt`、`validUntil` 供部署告警核对。同步成功日志只对已发布版本记录版本、时间、耗时及聚合计数：部门/成员总数、相对实际前版的成员新增/移除/部门关系变化、inactive、缺失/无效/重复邮箱与不可唯一关联人数。首版 `baselineRevision` 和变更计数为 `null`；这些不可关联计数可能重叠，`unmappableMembers` 按人去重。被较新代次超越的扫描不输出发布计数；失败日志仅记录 `source_unavailable`、`invalid_snapshot` 或 `store_unavailable` 等受限原因及耗时。日志不记录成员标识、邮箱或企微凭据。部署方须对持续 503 和同步失败配置采集与告警。
 
 成功抓取后以下次失效时间为基准，提前 4 小时启动下一次完整扫描；失败每 5 分钟重试，旧版过期后仍拒绝读取。较旧的并发扫描若被超越，只记录 `snapshot_superseded`，不会声明其已发布，也不会改变当前版。
 

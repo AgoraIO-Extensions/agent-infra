@@ -15,8 +15,14 @@ pnpm --filter @agent-infra/platform-worker... build
 ```
 
 构建生成 `apps/platform-worker/dist/index.mjs` 与 `dist/deployment.mjs`。
-`configuration.mjs` 不属于构建输入，也不进入镜像。部署将自己的配置模块只读挂载到
-Worker 的 `dist/configuration.mjs`，然后执行：
+`configuration.mjs` 不属于构建输入，也不进入镜像。Helm 通过
+`platformWorker.configurationModuleSecretRef` 把经审阅的源码只读挂载到 Worker 的
+`dist/configuration.mjs`，并将同一只含受审阅代码的 Secret 完整挂到
+`/var/run/agent-infra/deployment`，供模块引用相邻部署代码。
+`platformWorker.runtimeAuthSecretRef` 在 Worker 内提供
+`/var/run/agent-infra/runtime-auth/runtime-grant.pem` 和 `service-token`。这些私有文件
+不放进代码 Secret 或镜像；模块必须读取实际路径并与 `policy.runtimeAuth` 的公钥、
+issuer、key ID 和 Worker ID 核对。随后执行：
 
 ```bash
 cd apps/platform-worker
@@ -35,26 +41,32 @@ Worker 镜像中的对应目录是 `/app/dist`。部署模块与配置模块必�
 ```javascript
 import { createPrivateKey } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { directory, registry, modelCatalog, policy } from "./environment.mjs";
+import {
+  directory,
+  registry,
+  modelCatalog,
+  policy,
+  loadReviewedKeyring,
+} from "/var/run/agent-infra/deployment/environment.mjs";
 
 export { directory };
 export const signing = {
   workerId: "platform-worker-runtime",
   issuer: "agent-platform",
   keyId: "runtime-grant-current",
-  privateKey: createPrivateKey(await readFile("/run/worker/runtime-grant.pem")),
+  privateKey: createPrivateKey(await readFile("/var/run/agent-infra/runtime-auth/runtime-grant.pem")),
 };
 export const serviceToken = (
-  await readFile("/run/worker/runtime-service-token", "utf8")
+  await readFile("/var/run/agent-infra/runtime-auth/service-token", "utf8")
 ).trim();
 export const workloadInput = {
-  databaseUrl: (await readFile("/run/worker/database-url", "utf8")).trim(),
+  databaseUrl: process.env.PLATFORM_DATABASE_URL,
   kubernetes: { mode: "in-cluster" },
   policy,
   registry,
   admissionPolicyRef: "approved-runtime-images",
   registrySubjectRef: "platform-worker",
-  keyring: JSON.parse(await readFile("/run/worker/keyring.json", "utf8")),
+  keyring: await loadReviewedKeyring(),
   modelCatalog,
   templateModelBindings: [],
   executionCapacityProfiles: [],
@@ -63,6 +75,13 @@ export const workloadInput = {
 
 - `directory.resolveUser(userId)` 必须查询部署的当前身份事实；依赖失败应抛错，不能返回一个
   假造的 active 用户，也不能把临时故障当作账号删除。账号确认不存在时才返回 `null`。
+- 示例中的 `environment.mjs` 必须是同一个受审阅代码 Secret 的键；不用它时把真实
+  `directory`、`registry`、`modelCatalog`、`policy` 和 keyring 加载逻辑写入
+  `configuration.mjs` 本身。私钥、数据库 URL 与 token 不得放进代码 Secret。
+- `loadReviewedKeyring()` 必须只读取 Worker 的
+  `/var/run/agent-infra/keyring/keyring.pem`，按
+  `AGENT_INFRA_WORKER_KEY_VERSIONS` 核对每个版本，并转成工厂要求的版本化 PKCS#8 DER
+  Base64 输入；不能把 PEM 原样传给工厂，也不能以同一把私钥冒充多个版本。
 - `policy.runtimeAuth` 的 Worker ID、issuer、key ID、公钥必须与 `signing` 匹配；其中只保存
   Kubernetes 内预置的 Runtime transport Secret 名称/键，不保存私钥或 Token 值。
 - `templateModelBindings` 使用当前获准标准模板 digest 与协议。上面空数组仅是形状示例，
