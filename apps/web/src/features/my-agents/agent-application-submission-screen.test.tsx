@@ -150,6 +150,7 @@ describe("AgentApplicationSubmissionScreen", () => {
 				onRefreshDeploymentConfiguration={vi.fn()}
 				onSubmit={vi.fn()}
 				refreshingDeploymentConfiguration={false}
+				deploymentConfigurationRetryable={true}
 				result={undefined}
 				submitting={false}
 				deploymentConfiguration={{
@@ -165,5 +166,33 @@ describe("AgentApplicationSubmissionScreen", () => {
 		expect(
 			screen.getByRole("button", { name: "重新加载部署选项" }),
 		).toBeTruthy();
+	});
+
+	it("does not retry when deployment classification is missing", async () => {
+		await renderWithMyAgentsRouter(
+			<AgentApplicationSubmissionScreenView
+				mode="create"
+				onRefreshDeploymentConfiguration={vi.fn()}
+				onSubmit={vi.fn()}
+				refreshingDeploymentConfiguration={false}
+				result={undefined}
+				submitting={false}
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					status: "unavailable",
+					modelCatalog: {
+						...deploymentConfiguration.modelCatalog,
+						status: "unavailable",
+					},
+				}}
+			/>,
+		);
+
+		expect(
+			screen.getAllByText("部署选项暂不可用，请联系管理员。").length,
+		).toBeGreaterThan(0);
+		expect(
+			screen.queryByRole("button", { name: "重新加载部署选项" }),
+		).toBeNull();
 	});
 });

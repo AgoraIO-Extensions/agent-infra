@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-
+import { isRetryableAgentDiscoveryError } from "../../features/agent-discovery/agent-discovery.js";
 import {
 	AgentDiscoveryScreen,
 	agentDiscoveryQueryMaxLength,
@@ -21,6 +21,9 @@ function AgentsRoute() {
 	const { q } = Route.useSearch();
 	const navigate = Route.useNavigate();
 	const query = useAgentDiscovery();
+	const retryable = query.isError
+		? isRetryableAgentDiscoveryError(query.error)
+		: query.data?.kind === "unavailable" && query.data.retryable;
 	return (
 		<main className="platform-content management-content">
 			<div className="space-y-6">
@@ -36,9 +39,11 @@ function AgentsRoute() {
 						query.isPending
 							? { kind: "loading" }
 							: query.isError || !query.data
-								? { kind: "unavailable", retryable: true }
+								? { kind: "unavailable", retryable }
 								: query.data
 					}
+					onRetry={() => void query.refetch()}
+					retrying={query.isFetching}
 				/>
 			</div>
 		</main>

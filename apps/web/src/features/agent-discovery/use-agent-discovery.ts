@@ -6,5 +6,6 @@ export function useAgentDiscovery(scope: AgentDiscoveryScope = "visible") {
 	return useQuery({
 		queryKey: ["agents", scope],
 		queryFn: () => loadAgentDiscovery(undefined, scope),
+		retry: false,
 	});
 }
