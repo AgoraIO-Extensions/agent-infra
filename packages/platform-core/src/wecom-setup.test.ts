@@ -69,7 +69,10 @@ it("binds a one-use setup to its Owner, Agent and configuration version before e
 	selfManaged = false;
 	const setup = await usecase.begin("agent", "owner");
 	exposeSetupBinding = true;
-	await expect(usecase.current("agent", "other-owner")).rejects.toThrow(
+	await expect(usecase.current("agent", "other-owner")).resolves.toEqual({
+		status: "disconnected",
+	});
+	await expect(usecase.current("agent", "not-owner")).rejects.toThrow(
 		"unavailable",
 	);
 	const input = {

@@ -5,7 +5,7 @@ import type {
 	AgentConfigurationWritePlanV1,
 	PendingSecretRecordAttachmentsV1,
 } from "@agent-infra/platform-core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { default as postgres } from "postgres";
 import {
@@ -28,8 +28,12 @@ import {
 import {
 	agentApplications,
 	agentConfigurationRevisions,
+	agentOwners,
 	agents,
+	auditEvents,
 	idempotencyRecords,
+	wecomConnections,
+	wecomSetupSessions,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
 
@@ -134,8 +138,39 @@ export class PostgresAgentConfigurationTransactionV1
 		input: AgentConfigurationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
+		return this.#commit(input, attachments);
+	}
+
+	async commitWecomSetup(
+		input: AgentConfigurationWritePlanV1,
+		claim: {
+			readonly sessionId: string;
+			readonly holderId: string;
+			readonly fence: number;
+		},
+	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
+		return this.#commit(input, undefined, claim);
+	}
+
+	async #commit(
+		input: AgentConfigurationWritePlanV1,
+		attachments?: PendingSecretRecordAttachmentsV1,
+		wecom?: {
+			readonly sessionId: string;
+			readonly holderId: string;
+			readonly fence: number;
+		},
+	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
 		try {
 			const plan = validatedPlan(input);
+			if (
+				wecom &&
+				(!validateText(wecom.sessionId) ||
+					!validateText(wecom.holderId) ||
+					!Number.isSafeInteger(wecom.fence) ||
+					wecom.fence < 1)
+			)
+				throw new AgentConfigurationStoreError();
 			const { configuration, result } = plan;
 			return await this.#database.transaction(async (transaction) => {
 				const [agent] = await transaction
@@ -178,6 +213,77 @@ export class PostgresAgentConfigurationTransactionV1
 					agent.authorizationRevision !== plan.expectedAuthorizationRevision
 				) {
 					return { outcome: "stale" as const };
+				}
+				let setup: { readonly botId: string } | undefined;
+				if (wecom) {
+					const [candidate] = await transaction
+						.select({ botId: wecomSetupSessions.botId })
+						.from(wecomSetupSessions)
+						.where(eq(wecomSetupSessions.sessionId, wecom.sessionId))
+						.limit(1);
+					if (!candidate?.botId) return { outcome: "stale" as const };
+					const [connection] = await transaction
+						.select({ botId: wecomConnections.botId })
+						.from(wecomConnections)
+						.where(
+							and(
+								eq(wecomConnections.botId, candidate.botId),
+								eq(wecomConnections.agentId, plan.agentId),
+								eq(wecomConnections.bindingReference, wecom.sessionId),
+								eq(wecomConnections.holderId, wecom.holderId),
+								eq(wecomConnections.fence, wecom.fence),
+								sql`${wecomConnections.leaseUntil} > clock_timestamp()`,
+								sql`${wecomConnections.status} in ('verifying','connected')`,
+							),
+						)
+						.for("update")
+						.limit(1);
+					if (!connection) return { outcome: "stale" as const };
+					const [session] = await transaction
+						.select({
+							botId: wecomSetupSessions.botId,
+						})
+						.from(wecomSetupSessions)
+						.where(
+							and(
+								eq(wecomSetupSessions.sessionId, wecom.sessionId),
+								eq(wecomSetupSessions.agentId, plan.agentId),
+								eq(wecomSetupSessions.actorId, plan.auditEvent.actorId),
+								eq(wecomSetupSessions.configurationRevision, plan.baseRevision),
+								eq(
+									wecomSetupSessions.authorizationRevision,
+									plan.expectedAuthorizationRevision,
+								),
+								eq(wecomSetupSessions.status, "verifying"),
+								sql`${wecomSetupSessions.expiresAt} > clock_timestamp()`,
+							),
+						)
+						.for("update")
+						.limit(1);
+					if (
+						!session ||
+						session.botId !== connection.botId ||
+						configuration.channelRevision !== wecom.sessionId ||
+						!configuration.channels.some(
+							(channel) =>
+								channel.kind === "wecom_bot" &&
+								channel.bindingReference === wecom.sessionId,
+						)
+					)
+						return { outcome: "stale" as const };
+					const [owner] = await transaction
+						.select({ ownerId: agentOwners.ownerId })
+						.from(agentOwners)
+						.where(
+							and(
+								eq(agentOwners.agentId, plan.agentId),
+								eq(agentOwners.ownerId, plan.auditEvent.actorId),
+							),
+						)
+						.for("share")
+						.limit(1);
+					if (!owner) return { outcome: "stale" as const };
+					setup = { botId: connection.botId };
 				}
 				let applicationId: string | undefined;
 				if (plan.expectedManagementRevision !== null) {
@@ -277,6 +383,33 @@ export class PostgresAgentConfigurationTransactionV1
 					updatedAt: plan.auditEvent.occurredAt,
 				});
 				await insertAgentConfigurationEffects(transaction, plan);
+				if (wecom && setup) {
+					const activated = await transaction
+						.update(wecomSetupSessions)
+						.set({ status: "active" })
+						.where(
+							and(
+								eq(wecomSetupSessions.sessionId, wecom.sessionId),
+								eq(wecomSetupSessions.status, "verifying"),
+								sql`${wecomSetupSessions.expiresAt} > clock_timestamp()`,
+								sql`exists (select 1 from ${wecomConnections} where ${wecomConnections.botId} = ${setup.botId} and ${wecomConnections.holderId} = ${wecom.holderId} and ${wecomConnections.fence} = ${wecom.fence} and ${wecomConnections.leaseUntil} > clock_timestamp())`,
+							),
+						)
+						.returning({ sessionId: wecomSetupSessions.sessionId });
+					if (activated.length !== 1) throw new StaleAgentConfigurationCommit();
+					await transaction.insert(auditEvents).values({
+						id: randomUUID(),
+						traceId: wecom.sessionId,
+						actorType: "system",
+						actorId: "platform-worker",
+						action: "wecom.setup_activated",
+						targetType: "agent",
+						targetId: plan.agentId,
+						outcome: "succeeded",
+						requestId: wecom.sessionId,
+						agentId: plan.agentId,
+					});
+				}
 				return { outcome: "committed" as const, result };
 			});
 		} catch (error) {

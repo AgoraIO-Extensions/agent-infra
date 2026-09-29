@@ -1,8 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import {
-	createAgentConfigurationUseCaseV1,
+	createWecomSetupActivationV1,
 	type TaskUserDirectoryV1,
 	type WecomSetupRecordV1,
 } from "@agent-infra/platform-core";
@@ -81,24 +81,6 @@ export function createWecomSetupWorkerV1(
 			decrypted.plaintext.fill(0);
 		}
 	}
-	async function authority(session: WecomSetupRecordV1) {
-		const user = await resolveCurrentTaskUserV1(
-			options.directory,
-			session.actorId,
-		);
-		if (user?.accountStatus !== "active") return null;
-		const current = await query.readAuthority({
-			agentId: session.agentId,
-			actorId: session.actorId,
-			organizationIds: user.organizationIds,
-			isAdministrator: false,
-		});
-		return current.outcome === "found" &&
-			current.configuration.revision === session.configurationRevision &&
-			current.authorizationRevision === session.authorizationRevision
-			? current
-			: null;
-	}
 	const worker = {
 		async bindings() {
 			const bindings = await store.bindings();
@@ -148,8 +130,30 @@ export function createWecomSetupWorkerV1(
 					holderId,
 				});
 				if (!claim) continue;
+				const activation = createWecomSetupActivationV1({
+					transaction: {
+						read: (input) => transaction.read(input),
+						commit: (plan) =>
+							transaction.commitWecomSetup(plan, {
+								sessionId: session.sessionId,
+								holderId: claim.holderId,
+								fence: claim.fence,
+							}),
+					},
+					readCurrentUser: (actorId) =>
+						resolveCurrentTaskUserV1(options.directory, actorId),
+					readAuthority: async (session, organizationIds) => {
+						const current = await query.readAuthority({
+							agentId: session.agentId,
+							actorId: session.actorId,
+							organizationIds: [...organizationIds],
+							isAdministrator: false,
+						});
+						return current.outcome === "found" ? current : null;
+					},
+				});
 				try {
-					if (!(await authority(session))) {
+					if (!(await activation.authority(session))) {
 						await store.fail(session.sessionId, "conflict", claim);
 						continue;
 					}
@@ -180,89 +184,14 @@ export function createWecomSetupWorkerV1(
 					}
 					connection.close();
 					connecting = undefined;
-					const unavailable = async (): Promise<never> => {
-						throw new Error("Unexpected WeCom configuration admission");
-					};
-					const configuration = createAgentConfigurationUseCaseV1({
-						transaction: {
-							read: (input) => transaction.read(input),
-							commit: (plan) =>
-								transaction.commitWecomSetup(plan, {
-									sessionId: session.sessionId,
-									holderId,
-									fence: claim.fence,
-								}),
-						},
-						authorizationAdmission: {
-							async authorize(request) {
-								const current = await authority(session);
-								return current
-									? {
-											schemaVersion: 1,
-											status: "admitted",
-											agentId: session.agentId,
-											actorId: session.actorId,
-											authorizationRevision: current.authorizationRevision,
-										}
-									: {
-											schemaVersion: 1,
-											status: "rejected",
-											agentId: request.agentId,
-											actorId: request.actorId,
-										};
-							},
-						},
-						channelAdmission: {
-							async admitChannels(input) {
-								return {
-									schemaVersion: 1,
-									status: "admitted",
-									agentId: session.agentId,
-									requestId: input.requestId,
-									channelRevision: session.sessionId,
-									channels: [
-										...input.current.filter((c) => c.kind !== "wecom_bot"),
-										{ kind: "wecom_bot", bindingReference: session.sessionId },
-									],
-								};
-							},
-						},
-						imageAdmission: { admitImage: unavailable },
-						modelAdmission: { admitModels: unavailable },
-						secretAdmission: { admitSecrets: unavailable },
-					});
-					await configuration.update(
-						{
-							schemaVersion: 2,
-							agentId: session.agentId,
-							idempotencyKey: session.sessionId,
-							requestId: session.sessionId,
-							traceId: session.sessionId,
-							changes: {
-								channels: [
-									{
-										kind: "wecom_bot",
-										enabled: true,
-										bindingReference: session.sessionId,
-									},
-								],
-							},
-						},
-						{
-							schemaVersion: 1,
-							actorId: session.actorId,
-							rawRequestDigest: createHash("sha256")
-								.update(session.sessionId)
-								.digest("hex"),
-						},
-					);
+					await activation.activate(session);
 					try {
 						options.observeSetup?.("active");
 					} catch {
 						/* Observation only. */
 					}
 				} catch (error) {
-					if (!(await authority(session)))
+					if (!(await activation.authority(session)))
 						await store.fail(session.sessionId, "conflict", claim);
 					else throw error;
 				} finally {
