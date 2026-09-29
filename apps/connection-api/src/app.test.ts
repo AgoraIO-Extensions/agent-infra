@@ -3907,6 +3907,54 @@ describe("Connection API", () => {
 		});
 	});
 
+	it("returns actionable MCP guidance for an Action permission denial", async () => {
+		const app = createTestApp({
+			executor: {
+				execute: async () => {
+					throw Object.assign(new Error("sensitive Provider response"), {
+						providerAuthorizationDenied: true,
+					});
+				},
+			},
+		});
+		const response = await app.request("/mcp", {
+			body: JSON.stringify({
+				id: 6,
+				jsonrpc: "2.0",
+				method: "tools/call",
+				params: {
+					arguments: {
+						actionId: "github.getRepository",
+						input: { repository: "acme/widgets" },
+					},
+					name: "execute_action",
+				},
+			}),
+			headers: {
+				authorization: "Bearer test",
+				"content-type": "application/json",
+			},
+			method: "POST",
+		});
+
+		const payload = await response.json();
+		expect(payload).toMatchObject({
+			error: {
+				code: -32001,
+				data: {
+					providerCode: "authorization_failed",
+					providerHttpStatus: 403,
+				},
+				message: expect.stringContaining("对应 API 权限或网关配置"),
+			},
+			id: 6,
+			jsonrpc: "2.0",
+		});
+		expect(JSON.stringify(payload)).not.toContain(
+			"sensitive Provider response",
+		);
+	});
+
 	it("returns typed MCP evidence when a Provider resource is not found", async () => {
 		const app = createTestApp({
 			executor: {

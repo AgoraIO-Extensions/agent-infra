@@ -731,10 +731,6 @@ input::placeholder {
 	background: var(--warning-soft);
 	color: var(--text);
 }
-.alert-warning a {
-	color: var(--accent);
-	font-weight: 600;
-}
 .secret-callout {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;

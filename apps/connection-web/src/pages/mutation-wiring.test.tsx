@@ -1281,14 +1281,13 @@ describe("Connection 管理 mutation wiring", () => {
 		);
 		renderPage(<ConnectionsPage />);
 		expect(
-			await screen.findByText(/Connection 审批通过不代表已有/),
+			await screen.findByText(
+				"Manhattan 拒绝了连接验证。请联系管理员核对账号或网关授权后重试。",
+			),
 		).toBeTruthy();
-		const help = screen.getByRole("link", { name: "Manhattan 用户管理" });
-		expect(help.getAttribute("href")).toBe(
-			"https://manhattan.agoralab.co/permission/user",
-		);
-		expect(help.getAttribute("target")).toBe("_blank");
-		expect(help.getAttribute("rel")).toBe("noopener noreferrer");
+		expect(
+			screen.queryByRole("link", { name: "Manhattan 用户管理" }),
+		).toBeNull();
 	});
 
 	it("升级授权沿用旧版选择，不默认勾选新增 Action", async () => {
