@@ -292,7 +292,7 @@ Connection 使用独立 `connection-web` 和独立浏览器会话，包含登录
 
 ### 8.1 浏览器与用户/应用 API
 
-- 管理和查询使用 `/api/v1/*` HTTP/JSON。
+- 管理和查询使用 OpenAPI 声明的 `/api/v1/*` 或 `/api/v2/*` HTTP/JSON。Agent 申请、审批、配置和管理的 V2 契约不包含旧 Action 配置；V1 管理入口退役时，V1 Conversation 入口仍独立保留。
 - 创建、更新和命令类请求支持 `Idempotency-Key`。
 - 浏览器与用户/应用 API 遵循 [Contract Schema authority](#64-contract-schema-authority)；生成并提交的 OpenAPI 3.1 是消费者使用的规范来源。
 - TypeScript 客户端由 OpenAPI 生成，禁止手写重复的请求/响应类型。
