@@ -1,1 +1,0 @@
-ALTER TABLE "platform"."platform_api_credentials" ADD CONSTRAINT "platform_api_credential_hash_unique" UNIQUE("credential_hash");
