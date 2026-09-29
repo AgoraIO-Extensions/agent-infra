@@ -2090,11 +2090,22 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 					queuedThird?.status ?? "",
 				);
 			}, "third task remains queued behind second principal");
-			await sql`
-				update platform.outbox_items
-				set available_at=clock_timestamp()+interval '1 hour'
-				where payload->>'executionId'=${third.executionId}
-			`;
+			const heldThird = await sql.begin(
+				async (transaction) =>
+					transaction<{ id: string; status: string }[]>`
+						update platform.outbox_items o
+						set available_at=clock_timestamp()+interval '1 hour'
+						where o.id=${`conversation:turn:${third.executionId}`}
+						  and o.payload->>'executionId'=${third.executionId}
+						  and o.status in ('pending','retry_scheduled')
+						  and exists (
+							select 1 from platform.conversation_executions e
+							where e.execution_id=${third.executionId} and e.status='waiting'
+						  )
+						returning o.id, o.status
+					`,
+			);
+			expect(heldThird).toHaveLength(1);
 			releaseSecondModelResponse?.();
 			await waitUntil(
 				async () =>
@@ -2139,38 +2150,84 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 						fact.auditEventId === fact.eventId,
 				),
 			).toBe(true);
-			await sql.begin(async (transaction) => {
+			const revokedRevision = "authority-2";
+			const revokedGrant = await sql.begin(async (transaction) => {
 				await transaction`
-					delete from platform.agent_availability
-					where agent_id=${desired.agentId}
-					  and target_type='user' and target_id='user-second'
-				`;
+						select id from platform.agents
+						where id=${desired.agentId} for update
+					`;
+				const revoked = await transaction<
+					{ principal_id: string; grant_type: string }[]
+				>`
+						update platform.agent_principal_grants
+						set revoked_at=clock_timestamp()
+						where agent_id=${desired.agentId}
+						  and principal_type='user'
+						  and principal_id='user-second'
+						  and grant_type='use'
+						  and revoked_at is null
+						returning principal_id, grant_type
+					`;
+				if (revoked.length !== 1)
+					throw Error("Expected one API grant to revoke");
+				const [agent] = await transaction<{ authorization_revision: string }[]>`
+						update platform.agents
+						set authorization_revision=${revokedRevision}
+						where id=${desired.agentId}
+						returning authorization_revision
+					`;
+				if (agent?.authorization_revision !== revokedRevision)
+					throw Error("Agent authorization revision did not advance");
 				await transaction`
-					update platform.agents set authorization_revision='authority-2'
-					where id=${desired.agentId}
-				`;
+						update platform.agent_principal_grants
+						set authorization_revision=${revokedRevision}
+						where agent_id=${desired.agentId} and revoked_at is null
+					`;
+				return revoked;
 			});
-			const [revoked] = await sql`
-				select authorization_revision from platform.agents
-				where id=${desired.agentId}
-				  and not exists (
-				    select 1 from platform.agent_availability
-				    where agent_id=${desired.agentId}
-				      and target_type='user' and target_id='user-second'
-				  )
-			`;
-			expect(revoked?.authorization_revision).toBe("authority-2");
+			expect(revokedGrant).toEqual([
+				{ principal_id: "user-second", grant_type: "use" },
+			]);
+			const grants = await sql<
+				{
+					principalId: string;
+					grantType: string;
+					authorizationRevision: string;
+					revoked: boolean;
+				}[]
+			>`
+					select principal_id as "principalId", grant_type as "grantType",
+					       authorization_revision as "authorizationRevision",
+					       revoked_at is not null as revoked
+					from platform.agent_principal_grants
+					where agent_id=${desired.agentId} and principal_type='user'
+					order by principal_id, grant_type
+				`;
+			expect(grants).toEqual([
+				{
+					principalId: "user-cli",
+					grantType: "use",
+					authorizationRevision: revokedRevision,
+					revoked: false,
+				},
+				{
+					principalId: "user-second",
+					grantType: "use",
+					authorizationRevision: "authority-1",
+					revoked: true,
+				},
+			]);
 			await sql`
-				update platform.outbox_items set available_at=clock_timestamp()
-				where payload->>'executionId'=${third.executionId}
-			`;
+					update platform.outbox_items set available_at=clock_timestamp()
+					where payload->>'executionId'=${third.executionId}
+				`;
 			await waitUntil(
 				async () =>
 					(
 						await sql`
-							select 1 from platform.conversation_executions
-							where execution_id=${third.executionId} and status='failed'
-						`
+								select 1 from platform.conversation_executions
+								where execution_id=${third.executionId} and status='cancelled'
+							`
 					).length === 1,
 				"revoked queued principal is rejected before Runtime dispatch",
 			);
@@ -2181,20 +2238,55 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 						request.executionId === third.executionId,
 				),
 			).toHaveLength(0);
-			const [rejected] = await sql<
-				{ outboxStatus: string; errorCode: string }[]
+			const [rejectedOutbox] = await sql<{ status: string }[]>`
+					select status from platform.outbox_items
+					where id=${`conversation:turn:${third.executionId}`}
+				`;
+			expect(rejectedOutbox?.status).toBe("failed");
+			const [rejectedMessage] = await sql<
+				{ status: string; failureCode: string | null }[]
 			>`
-				select o.status as "outboxStatus",
-				       p.payload->>'errorCode' as "errorCode"
-				from platform.outbox_items o
-				join platform.persisted_events p
-				  on p.stream_id='outbox:' || o.id and p.event_type='outbox.failed'
-				where o.payload->>'executionId'=${third.executionId}
-			`;
-			expect(rejected).toEqual({
-				outboxStatus: "failed",
-				errorCode: "AUTHORIZATION_REVOKED",
+					select status, failure_code as "failureCode"
+					from platform.conversation_messages
+					where execution_id=${third.executionId}
+				`;
+			expect(rejectedMessage).toEqual({
+				status: "failed",
+				failureCode: "AUTHORIZATION_REVOKED",
 			});
+			const cancelledStatusAudits = await sql<
+				{ reason: string | null; originalPrincipal: unknown }[]
+			>`
+					select details->>'reason' as reason,
+					       details->'originalPrincipal' as "originalPrincipal"
+					from platform.audit_events
+					where target_id=${third.executionId}
+					  and action='task.status.changed'
+					  and details->>'status'='cancelled'
+				`;
+			expect(cancelledStatusAudits).toEqual([
+				{
+					reason: "AUTHORIZATION_REVOKED",
+					originalPrincipal: { kind: "user", id: "user-second" },
+				},
+			]);
+			const controls = await sql<{ reason: string }[]>`
+				select reason from platform.task_control_records
+				where execution_id=${third.executionId}
+			`;
+			expect(controls).toEqual([{ reason: "authorization_revoked" }]);
+			const controlAudits = await sql`
+					select id from platform.audit_events
+					where target_id=${third.executionId}
+					  and action='task.control.created' and actor_type='system'
+				`;
+			expect(controlAudits).toHaveLength(1);
+			const [authorizationRecord] = await sql<{ revoked: boolean }[]>`
+					select revoked_at is not null as revoked
+					from platform.task_authorization_records
+					where execution_id=${third.executionId}
+				`;
+			expect(authorizationRecord?.revoked).toBe(true);
 			expect(modelRequests).toHaveLength(2);
 			expect(await dispatchCount()).toBe(2);
 		}
