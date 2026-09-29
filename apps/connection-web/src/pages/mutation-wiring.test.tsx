@@ -1235,6 +1235,25 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 	});
 
+	it("审批后点击连接账号会自动发起一次 GitHub OAuth", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=github&intent=connect&accessRequestId=request-approved",
+		);
+		api.startGithubOAuth.mockRejectedValueOnce(
+			new Error("OAuth not configured"),
+		);
+		renderPage(<ConnectionsPage />);
+		await waitFor(() => expect(api.startGithubOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startGithubOAuth)[0]).toEqual([
+			undefined,
+			"request-approved",
+		]);
+		await screen.findByRole("alert");
+		expect(api.startGithubOAuth).toHaveBeenCalledOnce();
+	});
+
 	it("已有 Manhattan 连接时仍显示新授权的 RBAC 拒绝", async () => {
 		const initial = await api.getConnections();
 		const sample = initial.overview.connections[0];

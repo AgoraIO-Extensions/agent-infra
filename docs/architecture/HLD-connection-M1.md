@@ -185,8 +185,10 @@ Manhattan 的首个 **[设计决策]** Provider profile 固定为
 `apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；
 v3 的密码交换仅适用于与员工 IAM 分离的 OAuth password-grant 账号，不能用于公司账号。v4 改由
 Connection 发起员工 SSO authorization-code 授权、服务端回调交换个人 Token，并加密保存 Token 与刷新凭证；
-浏览器不再把公司密码发送给 Connection 或 Manhattan。授权后 Manhattan 通过固定 user-info endpoint
-验证 Token 并执行现有 RBAC 校验。GZ3 pilot 的机器 key 和 OAuth client secret 由现有 Kubernetes Secret 注入；
+浏览器不再把公司密码发送给 Connection 或 Manhattan。授权后 Connection 通过 Manhattan 固定的
+`/api/connection/whoami` 验证个人 Token 和邮箱身份；建连不以 SDK API 权限为前置。除仅返回身份的
+`get_current_user` 外，SDK dump 和 Symbol READ Action 在实际调用时由 Manhattan 按对应路由执行
+RBAC 校验，缺少权限则返回 403 且不返回业务数据。GZ3 pilot 的机器 key 和 OAuth client secret 由现有 Kubernetes Secret 注入；
 Secret Manager 治理另由 [#907](https://github.com/AgoraIO-Extensions/agent-infra/issues/907) 跟踪，不作为此 pilot 的发布前置。Secret 不得
 进入 credential envelope。手工 Bearer v1、HCI Cookie v2 和密码交换 v3 保持不可变；`manhattan-connection-v4` 发布当前用户、SDK dump 列表/详情和 Symbol
 列表四个 READ Actions，固定访问 `/api/connection/*`，禁止调用方提交 URL、Header 或用户邮箱；响应上限
