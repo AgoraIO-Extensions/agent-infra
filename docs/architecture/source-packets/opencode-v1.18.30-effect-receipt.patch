@@ -1,14 +1,16 @@
 diff --git a/packages/opencode/src/native/effect-receipt.ts b/packages/opencode/src/native/effect-receipt.ts
 new file mode 100644
-index 000000000..c318118ae
+index 000000000..b74e2451a
 --- /dev/null
 +++ b/packages/opencode/src/native/effect-receipt.ts
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,108 @@
 +/**
 + * Private Driver/native effect receipt boundary.
 + *
 + * This module is intentionally transport agnostic. The Runtime Driver owns
 + * persistence, permit validation, ACK replay, and the process boundary.
++ * This validator checks structure only; the Driver binds each receipt to its
++ * durable attempt before accepting it.
 + */
 +export const EFFECT_RECEIPT_SCHEMA = 1 as const
 +
@@ -73,6 +75,14 @@ index 000000000..c318118ae
 +  value.length > 0 &&
 +  new TextEncoder().encode(value).byteLength <= max
 +
++const hasValidOptionalFields = (receipt: Partial<EffectReceipt>): boolean =>
++  receipt.phase === "intent" || receipt.phase === "permit"
++    ? receipt.startedAt === undefined && receipt.resultDigest === undefined
++    : (receipt.startedAt === undefined ||
++        (Number.isSafeInteger(receipt.startedAt) && receipt.startedAt >= 0)) &&
++      (receipt.resultDigest === undefined ||
++        (typeof receipt.resultDigest === "string" && /^[a-f0-9]{64}$/.test(receipt.resultDigest)))
++
 +export function isEffectReceipt(value: unknown): value is EffectReceipt {
 +  if (!value || typeof value !== "object") return false
 +  const receipt = value as Partial<EffectReceipt>
@@ -96,6 +106,7 @@ index 000000000..c318118ae
 +    effectReceiptTargets.includes(receipt.target as EffectReceiptTarget) &&
 +    boundedString(receipt.targetRef) &&
 +    boundedString(receipt.ackID) &&
++    hasValidOptionalFields(receipt) &&
 +    (receipt.phase === "failed" || receipt.phase === "cancelled" || receipt.phase === "unknown"
 +      ? typeof receipt.errorCode === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(receipt.errorCode)
 +      : receipt.errorCode === undefined)
