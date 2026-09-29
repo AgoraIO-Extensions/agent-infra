@@ -1,7 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { AgentApplicationSubmissionScreen } from "../../features/my-agents/agent-application-submission-screen.js";
-import { unavailableDeploymentConfiguration } from "../../features/my-agents/deployment-configuration.js";
+import {
+	isRetryableDeploymentConfigurationError,
+	unavailableDeploymentConfiguration,
+} from "../../features/my-agents/deployment-configuration.js";
 import { useAgentApplicationSubmission } from "../../features/my-agents/use-agent-application-submission.js";
 import { useDeploymentConfiguration } from "../../features/my-agents/use-deployment-configuration.js";
 
@@ -24,7 +27,7 @@ function NewAgentApplicationRoute() {
 			? deployment.data.configuration
 			: unavailableDeploymentConfiguration;
 	const deploymentConfigurationRetryable =
-		deployment.isError ||
+		isRetryableDeploymentConfigurationError(deployment.error) ||
 		deployment.data?.kind === "ready" ||
 		(deployment.data?.kind === "unavailable" && deployment.data.retryable);
 	const error =

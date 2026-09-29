@@ -1154,6 +1154,16 @@ test("deployment option authorization failures do not offer a retry action", asy
 	await expect(
 		page.getByRole("button", { name: "重新加载部署选项" }),
 	).toHaveCount(0);
+
+	await page.goto("/my-agents/application-browser-1/edit");
+	await expect(
+		page.locator('div[role="status"]').filter({
+			hasText: "部署选项暂不可用，请联系管理员。",
+		}),
+	).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "重新加载部署选项" }),
+	).toHaveCount(0);
 });
 
 test("owned Agent authorization failures do not offer a retry action", async ({

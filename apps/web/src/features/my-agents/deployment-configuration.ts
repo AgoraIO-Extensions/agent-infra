@@ -19,6 +19,18 @@ export type DeploymentConfigurationState =
 			retryable: boolean;
 	  };
 
+type RetryableDeploymentConfigurationError = Error & {
+	readonly retryable: true;
+};
+
+export function isRetryableDeploymentConfigurationError(
+	error: unknown,
+): error is RetryableDeploymentConfigurationError {
+	return (
+		error instanceof Error && "retryable" in error && error.retryable === true
+	);
+}
+
 function unavailable(error: { retryable?: boolean } | undefined) {
 	return {
 		kind: "unavailable" as const,

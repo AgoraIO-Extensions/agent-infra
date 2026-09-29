@@ -4,7 +4,10 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
-import { unavailableDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
+import {
+	isRetryableDeploymentConfigurationError,
+	unavailableDeploymentConfiguration,
+} from "../../../features/my-agents/deployment-configuration.js";
 import {
 	getAgentApplicationEditAction,
 	isRetryableMyAgentApplicationError,
@@ -97,7 +100,7 @@ function EditAgentApplicationRoute() {
 			? deployment.data.configuration
 			: unavailableDeploymentConfiguration;
 	const deploymentConfigurationRetryable =
-		deployment.isError ||
+		isRetryableDeploymentConfigurationError(deployment.error) ||
 		deployment.data?.kind === "ready" ||
 		(deployment.data?.kind === "unavailable" && deployment.data.retryable);
 
