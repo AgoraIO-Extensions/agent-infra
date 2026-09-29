@@ -1,5 +1,7 @@
 {{- $name := include "agent-infra.componentName" (dict "root" . "suffix" "platform-worker") -}}
 {{- $bindings := include "agent-infra.componentName" (dict "root" . "suffix" "adapter-bindings") -}}
+{{- $moduleRef := .Values.platformWorker.configurationModuleSecretRef | default dict -}}
+{{- $authRef := .Values.platformWorker.runtimeAuthSecretRef | default dict -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -68,6 +70,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -101,10 +104,37 @@ spec:
             - configMapRef:
                 name: {{ $bindings }}
           volumeMounts:
+            {{- if not .Values.workloadTopology.enabled }}
+            - name: deployment-module
+              mountPath: /app/dist/configuration.mjs
+              subPath: {{ required "platformWorker.configurationModuleSecretRef.key is required" $moduleRef.key }}
+              readOnly: true
+            - name: deployment-module
+              mountPath: /var/run/agent-infra/deployment
+              readOnly: true
+            - name: runtime-auth
+              mountPath: /var/run/agent-infra/runtime-auth
+              readOnly: true
+            {{- end }}
             - name: decryption-keyring
               mountPath: /var/run/agent-infra/keyring
               readOnly: true
       volumes:
+        {{- if not .Values.workloadTopology.enabled }}
+        - name: deployment-module
+          secret:
+            secretName: {{ required "platformWorker.configurationModuleSecretRef is required for production Worker" $moduleRef.name }}
+            defaultMode: 288
+        - name: runtime-auth
+          secret:
+            secretName: {{ required "platformWorker.runtimeAuthSecretRef is required for production Worker" $authRef.name }}
+            defaultMode: 288
+            items:
+              - key: {{ required "platformWorker.runtimeAuthSecretRef.privateKeyKey is required" $authRef.privateKeyKey }}
+                path: runtime-grant.pem
+              - key: {{ required "platformWorker.runtimeAuthSecretRef.serviceTokenKey is required" $authRef.serviceTokenKey }}
+                path: service-token
+        {{- end }}
         - name: decryption-keyring
           secret:
             secretName: {{ .Values.keys.workerDecryptionKeyring.secretRef.name }}
