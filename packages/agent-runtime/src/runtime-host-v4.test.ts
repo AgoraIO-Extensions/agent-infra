@@ -129,7 +129,7 @@ function fixture() {
 	};
 }
 
-it("pins the Key in the durable Execution and only exposes a re-delivered Key after Host restart", async () => {
+it("reinstalls the pinned Key on a running submit replay after Host restart", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-"));
 	directories.push(directory);
 	const store = await FileRuntimeStore.open(join(directory, "host.json"));
@@ -211,8 +211,26 @@ it("pins the Key in the durable Execution and only exposes a re-delivered Key af
 	await expect(reopened.authorizeExternalAction(action)).rejects.toMatchObject({
 		code: "RUNTIME_GRANT_INVALID",
 	});
+	await expect(
+		reopened.submitTurnV4({
+			...transport,
+			privateKeyField: {
+				...transport.privateKeyField,
+				context: {
+					...transport.privateKeyField.context,
+					executionId: "other-execution",
+				},
+			},
+		}),
+	).rejects.toThrow("RuntimeHostV4 private Key field is invalid");
+	await expect(reopened.authorizeExternalAction(action)).rejects.toMatchObject({
+		code: "RUNTIME_GRANT_INVALID",
+	});
 	await expect(reopened.submitTurnV4(transport)).resolves.toEqual(accepted);
 	expect(await driver.sideEffectCount()).toBe(1);
+	await expect(reopened.authorizeExternalAction(action)).resolves.toEqual({
+		relayKey: "synthetic-relay-key-k1",
+	});
 	const supplement = {
 		...request,
 		requestId: "request-2",
@@ -256,8 +274,8 @@ it("pins the Key in the durable Execution and only exposes a re-delivered Key af
 			},
 		}),
 	).rejects.toThrow("RuntimeHostV4 private Key field is invalid");
-	await expect(reopened.authorizeExternalAction(action)).rejects.toMatchObject({
-		code: "RUNTIME_GRANT_INVALID",
+	await expect(reopened.authorizeExternalAction(action)).resolves.toEqual({
+		relayKey: "synthetic-relay-key-k1",
 	});
 	await expect(
 		reopened.supplementV4({
@@ -272,6 +290,58 @@ it("pins the Key in the durable Execution and only exposes a re-delivered Key af
 	await expect(reopened.authorizeExternalAction(action)).resolves.toEqual({
 		relayKey: "synthetic-relay-key-k1",
 	});
+	await reopened.close();
+	await store.close();
+});
+
+it("does not reinstall a Key when replaying a terminal submit receipt", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-terminal-"));
+	directories.push(directory);
+	const store = await FileRuntimeStore.open(join(directory, "host.json"));
+	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+	const { request, claims, transport } = fixture();
+	const options = {
+		store,
+		driver,
+		grantValidation: { expectedIssuer: "agent-platform" },
+		grantValidationV2: {
+			expectedIssuer: "platform-worker",
+			expectedWorkerId: "worker-1",
+		},
+		allowLegacyBusiness: false,
+		validateGrantV4: async (value: unknown) => {
+			const parsed = value as RuntimeBusinessRequestV4;
+			await validateRuntimeBusinessBindingV4(parsed, claims);
+			return { request: parsed, claims };
+		},
+	};
+	const host = await RuntimeHost.open(options);
+	const accepted = await host.submitTurnV4(transport);
+	await driver.setOperationStatus(request.operation.id, "completed");
+	await store.resolveOperation(
+		accepted.hostSessionRef,
+		request.operation.id,
+		{ outcome: "accepted", status: "completed" },
+		store.nativeSessionRef(accepted.hostSessionRef),
+	);
+	await host.close();
+	const reopened = await RuntimeHost.open(options);
+	await expect(reopened.submitTurnV4(transport)).resolves.toMatchObject({
+		operationId: request.operation.id,
+		result: { outcome: "accepted", status: "completed" },
+	});
+	const action = {
+		nativeSessionRef: store.nativeSessionRef(accepted.hostSessionRef) as string,
+		executionId: request.executionId,
+		runtimeOperationId: request.executionId,
+		operationRef: "model-fact-1",
+		attemptRef: "attempt-1",
+		kind: "model" as const,
+	};
+	await expect(reopened.authorizeExternalAction(action)).rejects.toMatchObject({
+		code: "RUNTIME_GRANT_INVALID",
+	});
+	expect(await driver.sideEffectCount()).toBe(1);
 	await reopened.close();
 	await store.close();
 });

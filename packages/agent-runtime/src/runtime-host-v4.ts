@@ -175,8 +175,6 @@ export class RuntimeHostV4 {
 					},
 				});
 				this.options.assertOpen();
-				if (prepared.operation.state === "resolved")
-					return response(prepared.session.hostSessionRef, prepared.operation);
 				const privateField = validateRuntimePrivateRelayKeyFieldV1(
 					transport.privateKeyField,
 					{
@@ -185,6 +183,22 @@ export class RuntimeHostV4 {
 						requestDigest: claims.requestDigest,
 					},
 				);
+				if (prepared.operation.state === "resolved") {
+					const replayed = response(
+						prepared.session.hostSessionRef,
+						prepared.operation,
+					);
+					if (
+						replayed.result.outcome === "accepted" &&
+						replayed.result.status === "running"
+					)
+						this.options.installKey(
+							pinned,
+							prepared.session.hostSessionRef,
+							privateField.keyDelivery.relayKey,
+						);
+					return replayed;
+				}
 				this.options.installKey(
 					pinned,
 					prepared.session.hostSessionRef,
