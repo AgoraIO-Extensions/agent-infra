@@ -16,7 +16,7 @@ if (!values.settings || !values.model || !values.output) throw Error("Supply --s
 const runtimeEntry = await realpath(resolve("node_modules/@agent-infra/agent-runtime/dist/index.mjs"));
 const { ClaudeRuntimeDriver, verifyClaudeInstallation, openOpenCodeRuntime, verifyOpenCodeInstallation, openPiRuntime, verifyPiInstallation, FileRuntimeStore, RuntimeHost, createRuntimeExecutionGrantValidatorV4, createRuntimeExecutionGrantVerifierV2, requestDigest } = await import(pathToFileURL(runtimeEntry).href);
 const contractsEntry = await realpath(resolve("node_modules/@agent-infra/contracts/dist/runtime/index.mjs"));
-const { RuntimeEventV2Schema, RuntimeEventAckRequestV4Schema, RuntimeEventReadRequestV4Schema, RuntimeExecutionGrantClaimsV2Schema, RuntimeExecutionGrantClaimsV4Schema, RuntimeExecutionGrantMaximumLifetimeMsV2, RuntimeExecutionGrantMaximumLifetimeMsV4, runtimeEventRequestDigestV4, runtimeOperationDigestInputV4, runtimeRequestDigestV4, runtimeRequestSigningPayloadV3 } = await import(pathToFileURL(contractsEntry).href);
+const { RuntimeEventV2Schema, RuntimeEventAckRequestV4Schema, RuntimeEventReadRequestV4Schema, RuntimeExecutionGrantClaimsV2Schema, RuntimeBusinessGrantClaimsV4Schema, RuntimeExecutionGrantMaximumLifetimeMsV2, RuntimeExecutionGrantMaximumLifetimeMsV4, runtimeEventRequestDigestV4, runtimeOperationDigestInputV4, runtimeRequestDigestV4, runtimeRequestSigningPayloadV3 } = await import(pathToFileURL(contractsEntry).href);
 if (!["claude", "opencode", "pi"].includes(values.runtime)) throw Error("Unsupported conformance runtime");
 const isOpenCode = values.runtime === "opencode";
 const isPi = values.runtime === "pi";
@@ -149,7 +149,7 @@ function signedV3Request(request, command) {
 async function signedV4Request(request, command) {
  const unsigned = { ...request, grant: { schemaVersion: 4, format: "runtime-execution-jws", token: "pending.pending.pending" } };
  const now = Date.now();
- const claims = RuntimeExecutionGrantClaimsV4Schema.parse({
+ const claims = RuntimeBusinessGrantClaimsV4Schema.parse({
   schemaVersion: 4, issuer: "synthetic-platform", audience: "runtime_host", workerId: "synthetic-worker",
   issuedAt: now, expiresAt: now + RuntimeExecutionGrantMaximumLifetimeMsV4, grantId: randomUUID(),
   principal: request.principal, agentId: request.agentId, channelId: request.channelId,
