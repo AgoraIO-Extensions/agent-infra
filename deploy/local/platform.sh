@@ -344,6 +344,11 @@ case "${1:-}" in
     "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas="$worker_replicas"
     "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
     "${compose[@]}" up --detach --wait --force-recreate --no-deps platform-api
+    if ! node deploy/local/check-api-auth.mjs "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "${PLATFORM_LOCAL_API_PORT:-3000}" "${PLATFORM_LOCAL_WEB_PORT:-3001}"; then
+      "${compose[@]}" stop platform-api
+      echo "Local API login boundary is unavailable; Web remains stopped" >&2
+      exit 1
+    fi
     "${compose[@]}" up --detach --wait --force-recreate --no-deps web
     ;;
   status)

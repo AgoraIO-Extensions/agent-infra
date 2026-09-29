@@ -53,6 +53,16 @@ async function fixture() {
 	]);
 	await executable(
 		bin,
+		"node",
+		`
+if [[ "$1" == "deploy/local/check-api-auth.mjs" ]]; then
+  printf 'node %s\\n' "$*" >> "$COMMAND_LOG"
+  exit "\${FAKE_AUTH_PROBE_EXIT:-0}"
+fi
+exec "$REAL_NODE" "$@"`,
+	);
+	await executable(
+		bin,
 		"docker",
 		`
 if [[ "$*" == *"context inspect"* ]]; then
@@ -144,6 +154,7 @@ fi`,
 	const env = {
 		...process.env,
 		PATH: `${bin}:${process.env.PATH}`,
+		REAL_NODE: process.execPath,
 		COMMAND_LOG: log,
 		MANIFEST_LOG: manifest,
 		FAKE_NETWORK_STATE: networkState,
@@ -163,6 +174,7 @@ fi`,
 		FAKE_HELM_UPGRADE_EXIT: "",
 		FAKE_CONFIGURED_WORKER_REPLICAS: "1",
 		FAKE_HELM_LIST_RESULT: "",
+		FAKE_AUTH_PROBE_EXIT: "",
 		FAKE_DATABASE_URL: "postgresql://fixture:fixture@postgres:5432/fixture",
 		PLATFORM_LOCAL_DOCKER_CONTEXT: "isolated",
 		PLATFORM_LOCAL_PROJECT: "agent-infra-verify",
@@ -263,8 +275,9 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			up[10],
 			/^docker .* compose .* up --detach --wait --force-recreate --no-deps platform-api$/,
 		);
+		assert.match(up[11], /^node deploy\/local\/check-api-auth\.mjs /);
 		assert.match(
-			up[11],
+			up[12],
 			/^docker .* compose .* up --detach --wait --force-recreate --no-deps web$/,
 		);
 		assert.match(
@@ -277,7 +290,7 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			/^helm .* get values agent-infra-verify --all --output json$/,
 		);
 		assert.match(up[8], /kubectl .* scale .* --replicas=1$/);
-		assert.equal(up.length, 12);
+		assert.equal(up.length, 13);
 
 		await writeFile(f.log, "");
 		assert.equal(run("up", f.env).status, 0);
@@ -354,6 +367,22 @@ test("local up rejects an invalid proxy token before stopping services", async (
 			await readFile(f.log, "utf8"),
 			/compose .* stop web platform-api/,
 		);
+		assert.doesNotMatch(result.stderr, new RegExp(proxyTokenValue));
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up keeps Web and API closed when proxy token wiring fails", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", { ...f.env, FAKE_AUTH_PROBE_EXIT: "7" });
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /Local API login boundary is unavailable/);
+		const log = await readFile(f.log, "utf8");
+		assert.match(log, /node deploy\/local\/check-api-auth\.mjs /);
+		assert.match(log, /compose .* stop platform-api/);
+		assert.doesNotMatch(log, /compose .* up .* web/);
 		assert.doesNotMatch(result.stderr, new RegExp(proxyTokenValue));
 	} finally {
 		await f.close();
