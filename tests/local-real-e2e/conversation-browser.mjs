@@ -6,13 +6,26 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
+import { persistedEventsMatchExecution } from "./conversation-browser-validation.mjs";
+
 const requireWebDependency = createRequire(
 	new URL("../../apps/web/package.json", import.meta.url),
 );
-const { chromium, expect } = requireWebDependency("@playwright/test");
+let chromium;
+let expect;
+
+function loadBrowserDependency() {
+	if (chromium && expect) return;
+	({ chromium, expect } = requireWebDependency("@playwright/test"));
+}
 
 function digest(value) {
 	return createHash("sha256").update(value).digest("hex");
+}
+
+function nonEmptyString(value, message) {
+	assert(typeof value === "string" && value.trim().length > 0, message);
+	return value;
 }
 
 async function privateFile(path) {
@@ -31,6 +44,7 @@ async function privateFile(path) {
 function configuration(value) {
 	assert(value && typeof value === "object" && !Array.isArray(value));
 	const { origin, agentId, owner, other, prompt } = value;
+	nonEmptyString(origin, "origin is required");
 	const url = new URL(origin);
 	assert(
 		(url.protocol === "https:" ||
@@ -40,10 +54,43 @@ function configuration(value) {
 			!url.password,
 		"Use an HTTPS origin or loopback HTTP origin",
 	);
-	for (const field of [agentId, prompt, owner?.userId, other?.userId])
-		assert(typeof field === "string" && field.trim().length > 0);
+	nonEmptyString(agentId, "agentId is required");
+	nonEmptyString(prompt, "prompt is required");
+	for (const subject of [owner, other]) {
+		assert(
+			subject && typeof subject === "object" && !Array.isArray(subject),
+			"owner and other subjects are required",
+		);
+		nonEmptyString(subject.userId, "subject userId is required");
+		nonEmptyString(subject.stateFile, "subject stateFile is required");
+		assert(
+			isAbsolute(subject.stateFile),
+			"Browser state files must have absolute paths",
+		);
+	}
 	assert(owner.userId !== other.userId, "Two distinct users are required");
+	assert(
+		owner.stateFile !== other.stateFile,
+		"Two independent browser state files are required",
+	);
 	return value;
+}
+
+async function validateStorageState(path) {
+	let parsed;
+	try {
+		parsed = JSON.parse(await readFile(path, "utf8"));
+	} catch {
+		assert.fail("Browser state file must contain valid JSON");
+	}
+	assert(
+		parsed && typeof parsed === "object" && !Array.isArray(parsed),
+		"Browser state file must contain an object",
+	);
+	assert(
+		Array.isArray(parsed.cookies) && Array.isArray(parsed.origins),
+		"Browser state file must contain Playwright cookies and origins arrays",
+	);
 }
 
 async function currentUser(context, origin, expectedId) {
@@ -69,12 +116,14 @@ async function conversationDetail(context, origin, conversationId) {
 async function conversationStream(context, origin, conversationId) {
 	return context.request.get(
 		`${origin}/api/v2/conversations/${encodeURIComponent(conversationId)}/events`,
+		{ timeout: 30_000 },
 	);
 }
 
 async function run(input, evidence) {
 	await privateFile(input.owner.stateFile);
 	await privateFile(input.other.stateFile);
+	loadBrowserDependency();
 	const browser = await chromium.launch();
 	try {
 		const owner = await browser.newContext({
@@ -206,6 +255,10 @@ async function run(input, evidence) {
 		]);
 		assert.equal(submitted.status(), 202);
 		const receipt = await submitted.json();
+		assert(
+			["submitted", "processing"].includes(receipt.status),
+			"Message must be newly accepted",
+		);
 		assert(typeof receipt.executionId === "string" && receipt.executionId);
 		evidence.submitStatus = submitted.status();
 		evidence.executionHash = digest(receipt.executionId);
@@ -258,7 +311,14 @@ async function run(input, evidence) {
 			conversationId,
 		);
 		const events = detail.events ?? [];
-		assert(events.length > 0 && events.every((event) => event.eventId));
+		assert(
+			persistedEventsMatchExecution(
+				events,
+				conversationId,
+				receipt.executionId,
+			),
+			"Current-execution events must stay bound to this conversation and execution",
+		);
 		assert.equal(
 			new Set(events.map((event) => event.eventId)).size,
 			events.length,
@@ -402,13 +462,38 @@ async function run(input, evidence) {
 	}
 }
 
-const configPath = process.argv[2];
+const checkConfig = process.argv[2] === "--check-config";
+const configPath = checkConfig ? process.argv[3] : process.argv[2];
 assert(
 	configPath,
-	"Pass the absolute path to a private browser journey config",
+	`Pass the absolute path to a private browser journey config${checkConfig ? " after --check-config" : ""}`,
 );
 await privateFile(configPath);
-const input = configuration(JSON.parse(await readFile(configPath, "utf8")));
+let parsedConfig;
+try {
+	parsedConfig = JSON.parse(await readFile(configPath, "utf8"));
+} catch {
+	assert.fail("Browser journey config must contain valid JSON");
+}
+const input = configuration(parsedConfig);
+await privateFile(input.owner.stateFile);
+await privateFile(input.other.stateFile);
+if (checkConfig) {
+	await validateStorageState(input.owner.stateFile);
+	await validateStorageState(input.other.stateFile);
+	process.stdout.write(
+		`${JSON.stringify({
+			schemaVersion: 1,
+			mode: "configuration-only",
+			endpointChecked: false,
+			origin: input.origin,
+			agentHash: digest(input.agentId),
+			ownerUserHash: digest(input.owner.userId),
+			otherUserHash: digest(input.other.userId),
+		})}\n`,
+	);
+	process.exit(0);
+}
 const directory = await mkdtemp(join(tmpdir(), "agent-infra-real-browser-"));
 const evidence = {
 	schemaVersion: 1,

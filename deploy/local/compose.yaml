@@ -1,7 +1,11 @@
 services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:${PLATFORM_LOCAL_POSTGRES_PORT:-54329}:5432"
+
   web:
     ports: !override
-      - "127.0.0.1:3001:8443"
+      - "127.0.0.1:${PLATFORM_LOCAL_WEB_PORT:-3001}:8443"
     volumes:
       - ./deploy/local/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ${PLATFORM_WEB_TLS_CERT_FILE:?Set the local TLS certificate file}:/var/run/platform-web/tls.crt:ro
@@ -14,7 +18,7 @@ services:
 
   platform-api:
     ports: !override
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${PLATFORM_LOCAL_API_PORT:-3000}:3000"
     environment:
       PLATFORM_DATABASE_URL: postgresql://agent_infra:agent_infra_local@postgres:5432/agent_infra
       PLATFORM_API_DEPLOYMENT_MODULE: file:///app/deployment/platform-api.mjs
@@ -25,4 +29,9 @@ services:
         condition: service_healthy
 
   object-storage:
-    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    image: cgr.dev/chainguard/minio@sha256:4d397a26fe49d7f9ed39b8b566534848936f7efa50ab6328ac97b2a44eeabf4c
+    ports: !override
+      - "127.0.0.1:${PLATFORM_LOCAL_OBJECT_STORAGE_PORT:-9000}:9000"
+      - "127.0.0.1:${PLATFORM_LOCAL_OBJECT_STORAGE_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "MC_HOST_local=\"http://$${MINIO_ROOT_USER}:$${MINIO_ROOT_PASSWORD}@127.0.0.1:9000\" mc ready --quiet local >/dev/null"]

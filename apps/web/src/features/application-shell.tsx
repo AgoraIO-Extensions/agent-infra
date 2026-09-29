@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/sheet";
 import { Sidebar } from "@/components/ui/sidebar";
 import type { BrowserSessionProjectionV1 } from "../pilot/generated/types.gen";
+import { LoginAction } from "./login-action";
 import { LogoutAction } from "./logout-action";
 import {
 	BrowserSessionQueryContext,
@@ -296,9 +297,22 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 											: "请先登录，再查看 Agent、提交申请或继续对话。"}
 									</p>
 									{loginUrl ? (
-										<a className={buttonVariants()} href={loginUrl}>
-											{development ? "选择开发测试身份" : "前往登录"}
-										</a>
+										development ? (
+											<a className={buttonVariants()} href={loginUrl}>
+												选择开发测试身份
+											</a>
+										) : (
+											<LoginAction
+												endpoint={loginUrl}
+												onLoggedIn={async () => {
+													const result = await session.refetch();
+													if (result.data?.kind !== "ready")
+														throw new Error(
+															"Login session was not established",
+														);
+												}}
+											/>
+										)
 									) : (
 										<p role="status">登录入口尚未配置。</p>
 									)}

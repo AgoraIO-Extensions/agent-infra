@@ -3,7 +3,10 @@ import type {
 	DirectorySnapshot,
 	DirectoryStore,
 } from "@agent-infra/enterprise-directory";
-import { createDirectoryClient } from "@agent-infra/enterprise-directory";
+import {
+	createDirectoryClient,
+	summarizeSnapshotChange,
+} from "@agent-infra/enterprise-directory";
 import { describe, expect, it } from "vitest";
 import { createDirectoryService } from "./service.js";
 
@@ -25,8 +28,9 @@ function fixture() {
 		},
 		async publish(snapshot) {
 			if (storeFail) throw new Error("private database detail");
+			const summary = summarizeSnapshotChange(snapshot, published);
 			published = snapshot;
-			return "published";
+			return { status: "published", summary };
 		},
 		async latest() {
 			return published;
@@ -91,7 +95,15 @@ describe("directory service", () => {
 				})
 			).status,
 		).toBe(401);
-		await service.syncOnce();
+		const result = await service.syncOnce();
+		expect(result).toMatchObject({
+			status: "published",
+			summary: {
+				baselineRevision: null,
+				memberCount: 1,
+				addedMembers: null,
+			},
+		});
 		expect((await service.app.request("/readyz")).status).toBe(200);
 		expect(await (await service.app.request("/readyz")).json()).toEqual({
 			status: "ready",
@@ -168,7 +180,10 @@ describe("directory service", () => {
 		const expired = createDirectoryService({
 			store: {
 				beginScan: async () => 1n,
-				publish: async () => "published",
+				publish: async (snapshot) => ({
+					status: "published",
+					summary: summarizeSnapshotChange(snapshot, current()),
+				}),
 				latest: async () => current(),
 				close: async () => {},
 			},
