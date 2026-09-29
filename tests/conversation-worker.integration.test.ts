@@ -1643,7 +1643,9 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 			);
 			await sql`
 				update platform.outbox_items
-				set available_at=clock_timestamp(), lease_expires_at=null
+				set available_at=clock_timestamp(),
+				    lease_expires_at=case when status='processing'
+				      then clock_timestamp() else lease_expires_at end
 				where payload->>'executionId'=${second.executionId}
 			`;
 			await waitUntil(
