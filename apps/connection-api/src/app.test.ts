@@ -1290,6 +1290,39 @@ describe("Connection API", () => {
 						calls.push({ retiredDisclaimer: input });
 						return { affectedPolicies: 1 };
 					},
+					getPublishedPolicyVersion: async () => ({
+						id: "policy-1",
+						revision: "2",
+						providerReleaseId: "github-release",
+						capabilityProfileId: "profile-1",
+						priority: 100,
+						allowPermanent: true,
+						connectTtlSeconds: 3600,
+						requestTtlSeconds: 3600,
+						renewalLeadSeconds: 0,
+						createdByPrincipalId: "admin-1",
+						durations: [{ kind: "PERMANENT" }],
+						disclaimerVersionIds: ["disclaimer-1"],
+						stages: [
+							{
+								name: "Review",
+								quorumType: "ANY",
+								timeoutSeconds: 3600,
+								approvers: [
+									{ principalId: "approver-1", displaySnapshot: {} },
+									{ principalId: "missing-approver", displaySnapshot: {} },
+								],
+							},
+						],
+					}),
+					revisePublishedPolicy: async (input: unknown) => {
+						calls.push({ revisedPolicy: input });
+						return { policyVersionId: "policy-2" };
+					},
+					retirePublishedPolicy: async (input: unknown) => {
+						calls.push({ retiredPolicy: input });
+						return { policyVersionId: "policy-1" };
+					},
 					listPolicyApproverPrincipalIds: async () => ["approver-1"],
 					publishPolicy: async (input: unknown) => {
 						calls.push({ publishPolicy: input });
@@ -1377,6 +1410,32 @@ describe("Connection API", () => {
 				ensureActiveEmployeePrincipal: async (principalId: string) => {
 					calls.push({ verifiedApprover: principalId });
 				},
+				prepareEmployeeCandidatesForPrincipals: async (
+					_admin: string,
+					principals: string[],
+				) => {
+					if (principals.includes("missing-approver"))
+						throw new OAuthProtocolError(
+							"access_denied",
+							"Approver identity is unavailable",
+							403,
+						);
+					return principals.includes("approver-1")
+						? [
+								{
+									principalId: "approver-1",
+									candidateId: "candidate-approver-1",
+									displayName: "Reviewer",
+									email: null,
+									alias: null,
+								},
+							]
+						: [];
+				},
+				resolveEmployeeCandidateForDraft: async () => ({
+					principalId: "approver-1",
+					displaySnapshot: { displayName: "Reviewer" },
+				}),
 				getBrowserAccount: async () => ({
 					principalId: "admin-1",
 					displayName: "Admin",
@@ -1604,6 +1663,88 @@ describe("Connection API", () => {
 		expect(calls.at(-1)).toMatchObject({
 			retiredDisclaimer: {
 				sourceId: "disclaimer-1",
+				actorPrincipalId: "admin-1",
+			},
+		});
+		const policyEditor = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1/revision-source",
+			{ headers: { cookie: "connection_session=test" } },
+		);
+		expect(policyEditor.status).toBe(200);
+		expect(await policyEditor.json()).toMatchObject({
+			policyId: "policy-1",
+			revision: "2",
+			draft: { stages: [{ approverCandidateIds: ["candidate-approver-1"] }] },
+		});
+		const policyBody = {
+			providerReleaseId: "github-release",
+			capabilityProfileId: "profile-1",
+			priority: 101,
+			allowPermanent: true,
+			connectTtlSeconds: 3600,
+			requestTtlSeconds: 3600,
+			renewalLeadSeconds: 0,
+			durations: [{ kind: "PERMANENT" }],
+			disclaimerVersionIds: ["disclaimer-1"],
+			stages: [
+				{
+					name: "Updated review",
+					quorumType: "ANY",
+					timeoutSeconds: 3600,
+					approverCandidateIds: ["candidate-approver-1"],
+				},
+			],
+		};
+		const missingPolicyRevision = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1/revise",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"idempotency-key": "policy-revision-missing",
+				},
+				body: JSON.stringify(policyBody),
+			},
+		);
+		expect(missingPolicyRevision.status).toBe(400);
+		const revisedPolicy = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1/revise",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "policy-revision-1",
+				},
+				body: JSON.stringify(policyBody),
+			},
+		);
+		expect(revisedPolicy.status).toBe(200);
+		expect(await revisedPolicy.json()).toEqual({ policyVersionId: "policy-2" });
+		expect(calls.at(-1)).toMatchObject({
+			revisedPolicy: {
+				sourceId: "policy-1",
+				expectedRevision: "2",
+				createdByPrincipalId: "admin-1",
+				stages: [{ approvers: [{ principalId: "approver-1" }] }],
+			},
+		});
+		const retiredPolicy = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1/retire",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "policy-retire-1",
+				},
+			},
+		);
+		expect(retiredPolicy.status).toBe(200);
+		expect(calls.at(-1)).toMatchObject({
+			retiredPolicy: {
+				policyVersionId: "policy-1",
+				expectedRevision: "2",
 				actorPrincipalId: "admin-1",
 			},
 		});
