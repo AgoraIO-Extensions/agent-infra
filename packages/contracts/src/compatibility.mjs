@@ -767,6 +767,63 @@ function isTaskApiOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #481's existing API operations gain the same Bearer declaration as #482's
+// task routes. Accept only this complete, fixed annotation set.
+function isPlatformApiBearerOpenApiAddition(previous, current) {
+	const paths = [
+		["/api/v1/agents", ["post"]],
+		["/api/v1/agents/{agentId}/grants", ["post", "delete"]],
+		["/api/v1/api-credentials", ["get", "post"]],
+		["/api/v1/api-credentials/{credentialId}", ["delete"]],
+		["/api/v1/applications", ["get", "post"]],
+		[
+			"/api/v1/applications/{applicationId}/credential-delivery",
+			["post", "delete"],
+		],
+		["/api/v1/applications/{applicationId}/credentials", ["get", "post"]],
+		[
+			"/api/v1/applications/{applicationId}/credentials/{credentialId}",
+			["delete"],
+		],
+	];
+	const normalized = structuredClone(current);
+	let changed = 0;
+	for (const [path, methods] of paths) {
+		for (const method of methods) {
+			const before = previous.paths?.[path]?.[method];
+			if (!before) continue;
+			const after = normalized.paths?.[path]?.[method];
+			if (!after) return false;
+			if (before.security === undefined) {
+				if (!sameValue(after.security, [{ platformApiCredential: [] }]))
+					return false;
+				delete after.security;
+				changed += 1;
+			} else if (!sameValue(before.security, after.security)) {
+				return false;
+			}
+		}
+	}
+	if (changed === 0) return false;
+	const schemes = normalized.components?.securitySchemes;
+	if (
+		previous.components?.securitySchemes?.platformApiCredential === undefined &&
+		schemes?.platformApiCredential !== undefined
+	) {
+		if (
+			!sameValue(schemes.platformApiCredential, {
+				type: "http",
+				scheme: "bearer",
+			})
+		)
+			return false;
+		delete schemes.platformApiCredential;
+		if (Object.keys(schemes).length === 0)
+			delete normalized.components.securitySchemes;
+	}
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function isAgentSummaryOpenApiAddition(previous, current) {
 	const componentName = "ExecutionProcessSummaryV1";
 	const previousOptions = previous.components?.schemas?.[componentName]?.oneOf;
@@ -1277,6 +1334,7 @@ function findBreakingChanges(previous, current) {
 			!isTaskStatusOpenApiAddition(previous, current) &&
 			!isStopConfirmationReasonOpenApiAddition(previous, current) &&
 			!isTaskApiOpenApiAddition(previous, current) &&
+			!isPlatformApiBearerOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&

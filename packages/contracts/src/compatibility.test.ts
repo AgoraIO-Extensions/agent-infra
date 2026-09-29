@@ -167,6 +167,33 @@ describe("contract compatibility command", () => {
 			await writeFile(before, JSON.stringify(previous));
 			await writeFile(after, JSON.stringify(current));
 			expect(comparePaths(after, before).status).toBe(0);
+			const applicationApiBaseline = structuredClone(previous);
+			for (const [path, methods] of [
+				["/api/v1/agents", ["post"]],
+				["/api/v1/agents/{agentId}/grants", ["post", "delete"]],
+				["/api/v1/api-credentials", ["get", "post"]],
+				["/api/v1/api-credentials/{credentialId}", ["delete"]],
+				["/api/v1/applications", ["get", "post"]],
+				[
+					"/api/v1/applications/{applicationId}/credential-delivery",
+					["post", "delete"],
+				],
+				["/api/v1/applications/{applicationId}/credentials", ["get", "post"]],
+				[
+					"/api/v1/applications/{applicationId}/credentials/{credentialId}",
+					["delete"],
+				],
+			] as const) {
+				for (const method of methods)
+					delete applicationApiBaseline.paths[path][method].security;
+			}
+			await writeFile(before, JSON.stringify(applicationApiBaseline));
+			expect(comparePaths(after, before).status).toBe(0);
+			const missingBearer = structuredClone(current);
+			delete missingBearer.paths["/api/v1/applications"].post.security;
+			await writeFile(after, JSON.stringify(missingBearer));
+			expect(comparePaths(after, before).status).toBe(1);
+			await writeFile(before, JSON.stringify(previous));
 			const mutations = [
 				(value: typeof current) => {
 					delete value.paths["/api/v1/agents/{agentId}/tasks"].post.security;
