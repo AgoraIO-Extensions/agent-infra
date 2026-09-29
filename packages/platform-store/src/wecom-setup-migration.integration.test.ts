@@ -17,7 +17,7 @@ import { startPostgresTestDatabase } from "./postgres-test.js";
 
 for (const nextMigration of [
 	"0022_wecom_application_setup",
-	"0024_wecom_replacement_probe",
+	"0023_wecom_replacement_probe",
 ])
 	it(`upgrades a Platform database through ${nextMigration}`, async () => {
 		const folder = resolve(import.meta.dirname, "../../../migrations/platform");
@@ -55,7 +55,7 @@ for (const nextMigration of [
 					>`select column_name from information_schema.columns where table_schema='platform' and table_name='wecom_setup_sessions'`
 				).map((row) => row.column_name);
 			expect((await columns()).includes("callback_verified_at")).toBe(
-				nextMigration === "0024_wecom_replacement_probe",
+				nextMigration === "0023_wecom_replacement_probe",
 			);
 			expect(await columns()).not.toContain("bot_verified_at");
 			await migratePlatformDatabase(db);
