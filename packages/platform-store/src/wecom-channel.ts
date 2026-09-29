@@ -50,7 +50,7 @@ interface Row {
 	reply_handle: string;
 	expires_at: Date;
 	connection_bot_id: string | null;
-	connection_fence: number | null;
+	connection_fence: string | null;
 	delivery_status: WecomDeliveryStatusV1;
 	fence: number;
 }
