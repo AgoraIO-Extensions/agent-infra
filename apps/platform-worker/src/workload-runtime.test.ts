@@ -67,6 +67,7 @@ import {
 	resolveWorkloadExecutionCapacityV1,
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
+	workloadRuntimeTransportProtocolV2,
 } from "./workload-runtime.js";
 
 function configurationFixture(
@@ -477,6 +478,100 @@ function cleanupSecrets(
 }
 
 describe("assembled Workload Runtime contracts", () => {
+	it("does not carry a V1 model Secret into a V4 rollout candidate", async () => {
+		const catalog = catalogFixture();
+		const configuration = standardModelConfiguration();
+		const record = pendingSecretRecord({
+			name: "model:primary",
+			secretId: "model-secret-a",
+		});
+		const cleanup = secretCleanupStore(record);
+		const f = fixture(
+			{
+				runtimeModelVersion: 4,
+				modelCatalog: createDeploymentModelCatalogAdapterV1({
+					load: async () => catalog,
+				}),
+			},
+			{
+				configuration,
+				secrets: {
+					bindings: [{ materialization: "current", record }],
+					store: cleanup.store,
+					async auditDecryption() {},
+				},
+			},
+		);
+		const runtime = createWorkloadRuntimeV1(f.options);
+		const legacy = {
+			schemaVersion: 1 as const,
+			agentId: "agent-a",
+			sourceConfigurationRevision: configuration.revision,
+			sourceLifecycleRevision: 1,
+			revision: 1,
+			fence: 1,
+			phase: "preflight" as const,
+			candidate: {
+				configuration,
+				deployment: null,
+				modelProjection: { schemaVersion: 1 },
+			},
+			verified: null,
+			verifiedRevision: null,
+			identity: null,
+			rollback: false,
+			failureCode: null,
+			attempts: 0,
+		} as unknown as WorkloadReconciliationStateV1;
+		const candidate = await runtime.preflight(
+			{
+				configuration,
+				state: legacy,
+				management: f.management,
+				requestId: "request-v4-rollout",
+				traceId: "trace-v4-rollout",
+				secrets: {
+					bindings: [{ materialization: "current", record }],
+					store: cleanup.store,
+					async auditDecryption() {},
+				},
+			},
+			{
+				...legacy,
+				candidate: {
+					...legacy.candidate,
+					modelProjection: { schemaVersion: 1 },
+				},
+			},
+		);
+		expect(candidate.modelProjection).toMatchObject({ schemaVersion: 4 });
+		expect(candidate.deployment?.secretRefs).toEqual([]);
+	});
+
+	it("uses the deployed candidate protocol during a V4 promotion", () => {
+		const candidate = {
+			phase: "promoting",
+			candidate: {
+				deployment: { configRevision: 2 },
+				modelProjection: { schemaVersion: 4 },
+			},
+			verified: { modelProjection: { schemaVersion: 1 } },
+		} as unknown as WorkloadReconciliationStateV1;
+		expect(workloadRuntimeTransportProtocolV2(candidate, "control")).toBe(
+			"https",
+		);
+		expect(
+			workloadRuntimeTransportProtocolV2(
+				{
+					...candidate,
+					phase: "preflight",
+					candidate: { ...candidate.candidate, deployment: null },
+				},
+				"control",
+			),
+		).toBe("http");
+	});
+
 	it("materializes a V4 standard template without model Key Secret or Pod credential", async () => {
 		const decrypt = vi.fn();
 		const access = vi.fn();

@@ -356,6 +356,26 @@ function bindingsFor(
 	];
 }
 
+export function workloadRuntimeTransportProtocolV2(
+	state: WorkloadReconciliationStateV1,
+	purpose: "business" | "control",
+): "http" | "https" {
+	const projection =
+		purpose === "business"
+			? state.candidate.modelProjection
+			: state.phase === "preflight" ||
+					state.phase === "closing" ||
+					state.candidate.deployment === null
+				? state.verified?.modelProjection
+				: (state.candidate.modelProjection ?? state.verified?.modelProjection);
+	return projection &&
+		typeof projection === "object" &&
+		"schemaVersion" in projection &&
+		projection.schemaVersion === 4
+		? "https"
+		: "http";
+}
+
 export function createWorkloadRuntimeV1(
 	options: WorkloadRuntimeOptionsV1,
 ): WorkloadRuntimePortV1 & {
@@ -371,15 +391,19 @@ export function createWorkloadRuntimeV1(
 		Record<string, boolean>
 	>();
 	function candidateKeyless(state: WorkloadReconciliationStateV1): boolean {
+		if (state.candidate.configuration.source.kind !== "standard") return false;
 		const projection = state.candidate.modelProjection;
 		if (
 			projection &&
 			typeof projection === "object" &&
 			"schemaVersion" in projection
 		)
-			return projection.schemaVersion === 4;
+			return (
+				projection.schemaVersion === 4 || options.runtimeModelVersion === 4
+			);
 		return options.runtimeModelVersion === 4;
 	}
+
 	function createAdapter(
 		recordCapabilities: (value: Record<string, boolean>) => void = () => {},
 		state?: Pick<WorkloadReconciliationStateV1, "candidate">,
