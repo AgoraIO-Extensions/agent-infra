@@ -1211,10 +1211,12 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 				);
 			}
 			start();
+			const closedBeforeCompletedRequest = (await control()).closed;
 			const first = await submit(userCredential.credential, "user-native");
 			const replay = await submit(userCredential.credential, "user-native");
 			expect(replay.executionId).toBe(first.executionId);
 			await completed(first.executionId);
+			expect((await control()).closed).toBe(closedBeforeCompletedRequest);
 			const firstRead = TaskProjectionV1Schema.parse(
 				await checkedJson(
 					await taskRequest(taskPath(first), userCredential.credential),

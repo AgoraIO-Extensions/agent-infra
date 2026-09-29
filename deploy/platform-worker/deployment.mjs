@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { isPlatformConversationChannelCurrentV1 } from "@agent-infra/platform-core";
-import { PostgresExecutionKeyReaderV4 } from "@agent-infra/platform-store";
 import { createRelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 import {
  createProductionConversationRuntimeResolverV2,
@@ -30,7 +29,6 @@ async function prepare(signal) {
     databaseUrl: workload.databaseUrl,
     workerId: instanceId,
     signing,
-    executionKeys: new PostgresExecutionKeyReaderV4({ databaseUrl: workload.databaseUrl }),
     relayKeyDecryptor: createRelayKeyWorkerDecryptorV1(workloadInput.keyring),
     directory,
     channelAuthorizationCurrent: async (record, signal) => {

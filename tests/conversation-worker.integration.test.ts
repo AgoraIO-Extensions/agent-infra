@@ -2480,54 +2480,77 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 						request.executionId === third.executionId,
 				),
 			).toHaveLength(0);
-			const [rejectedOutbox] = await sql<{ status: string }[]>`
+			const readThirdAssertion = async <T>(
+				label: string,
+				query: Promise<T> & { cancel?: () => void },
+			): Promise<T> => {
+				recordNativeStage(`third.assertion.${label}.begin`);
+				const result = await settleQuery(query, `third.cancelled.${label}`);
+				recordNativeStage(`third.assertion.${label}.done`);
+				return result;
+			};
+			const [rejectedOutbox] = await readThirdAssertion(
+				"outbox",
+				sql<{ status: string }[]>`
 					select status from platform.outbox_items
 					where id=${`conversation:turn:${third.executionId}`}
-				`;
+				`,
+			);
 			expect(rejectedOutbox?.status).toBe("failed");
-			const [rejectedMessage] = await sql<
-				{ status: string; failureCode: string | null }[]
-			>`
+			const [rejectedMessage] = await readThirdAssertion(
+				"message",
+				sql<{ status: string; failureCode: string | null }[]>`
 					select status, failure_code as "failureCode"
 					from platform.conversation_messages
 					where execution_id=${third.executionId}
-				`;
+				`,
+			);
 			expect(rejectedMessage).toEqual({
 				status: "failed",
 				failureCode: "AUTHORIZATION_REVOKED",
 			});
-			const cancelledStatusAudits = await sql<
-				{ reason: string | null; originalPrincipal: unknown }[]
-			>`
+			const cancelledStatusAudits = await readThirdAssertion(
+				"status-audit",
+				sql<{ reason: string | null; originalPrincipal: unknown }[]>`
 					select details->>'reason' as reason,
 					       details->'originalPrincipal' as "originalPrincipal"
 					from platform.audit_events
 					where target_id=${third.executionId}
 					  and action='task.status.changed'
 					  and details->>'status'='cancelled'
-				`;
+				`,
+			);
 			expect(cancelledStatusAudits).toEqual([
 				{
 					reason: "AUTHORIZATION_REVOKED",
 					originalPrincipal: { kind: "user", id: "user-second" },
 				},
 			]);
-			const controls = await sql<{ reason: string }[]>`
+			const controls = await readThirdAssertion(
+				"control",
+				sql<{ reason: string }[]>`
 				select reason from platform.task_control_records
 				where execution_id=${third.executionId}
-			`;
+			`,
+			);
 			expect(controls).toEqual([{ reason: "authorization_revoked" }]);
-			const controlAudits = await sql`
+			const controlAudits = await readThirdAssertion(
+				"control-audit",
+				sql`
 					select id from platform.audit_events
 					where target_id=${third.executionId}
 					  and action='task.control.created' and actor_type='system'
-				`;
+				`,
+			);
 			expect(controlAudits).toHaveLength(1);
-			const [authorizationRecord] = await sql<{ revoked: boolean }[]>`
+			const [authorizationRecord] = await readThirdAssertion(
+				"authorization",
+				sql<{ revoked: boolean }[]>`
 					select revoked_at is not null as revoked
 					from platform.task_authorization_records
 					where execution_id=${third.executionId}
-				`;
+				`,
+			);
 			expect(authorizationRecord?.revoked).toBe(true);
 			expect(modelRequests).toHaveLength(2);
 			expect(await dispatchCount()).toBe(2);
@@ -2582,15 +2605,75 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 				"deferred conversation after capacity release",
 			);
 		}
+		recordNativeStage("native.assertions.done");
 		expect(ackCount).toBeGreaterThan(0);
-		for (const child of children.slice(2)) child.kill("SIGTERM");
-		await Promise.all(
-			children.map((child) =>
-				child.exitCode !== null || child.signalCode
-					? Promise.resolve()
-					: once(child, "exit"),
-			),
+		recordNativeStage("shutdown.begin", {
+			children: children.map((child, index) => ({
+				index,
+				pid: child.pid,
+				exitCode: child.exitCode,
+				signalCode: child.signalCode,
+			})),
+		});
+		const childExitPromises = children.map(
+			(child, index) =>
+				new Promise<void>((resolve) => {
+					const onExit = (
+						exitCode: number | null,
+						signalCode: NodeJS.Signals | null,
+					) => {
+						recordNativeStage("shutdown.child.exit", {
+							index,
+							pid: child.pid,
+							exitCode,
+							signalCode,
+						});
+						resolve();
+					};
+					if (child.exitCode !== null || child.signalCode !== null) {
+						onExit(child.exitCode, child.signalCode);
+						return;
+					}
+					child.once("exit", onExit);
+				}),
 		);
+		for (const [offset, child] of children.slice(2).entries()) {
+			const index = offset + 2;
+			const requested = child.exitCode === null && child.signalCode === null;
+			const sent = requested ? child.kill("SIGTERM") : false;
+			recordNativeStage("shutdown.signal", {
+				index,
+				pid: child.pid,
+				requested,
+				sent,
+				exitCode: child.exitCode,
+				signalCode: child.signalCode,
+			});
+		}
+		let shutdownTimer: NodeJS.Timeout | undefined;
+		try {
+			await Promise.race([
+				Promise.all(childExitPromises),
+				new Promise<never>((_, reject) => {
+					shutdownTimer = setTimeout(() => {
+						const activeChildren = children
+							.map((child, index) =>
+								child.exitCode === null && child.signalCode === null
+									? `${index}:${child.pid ?? "unknown"}`
+									: null,
+							)
+							.filter((value): value is string => value !== null);
+						reject(
+							new Error(
+								`Worker exit deadline exceeded: ${activeChildren.join(",")}`,
+							),
+						);
+					}, 15_000);
+				}),
+			]);
+		} finally {
+			if (shutdownTimer) clearTimeout(shutdownTimer);
+		}
 		expect(children.slice(2).map((child) => child.exitCode)).toEqual([0, 0]);
 		expect(children.slice(0, 2).map((child) => child.signalCode)).toEqual([
 			"SIGKILL",

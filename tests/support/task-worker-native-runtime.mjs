@@ -200,7 +200,7 @@ const model = createServer(async (request, response) => {
 	response.flushHeaders();
 	const held = { response, id };
 	response.once("close", () => {
-		closed++;
+		if (!response.writableFinished) closed++;
 		pending.delete(held);
 	});
 	if (holding) pending.add(held);

@@ -442,6 +442,7 @@ export function validateRuntimeModelProjectionV4(
 			content.options.some(
 				({ endpoint, modelId, reasoningLevels }) =>
 					!endpoint.available ||
+					endpoint.protocol !== "openai-responses-v1" ||
 					new Set(reasoningLevels).size !== reasoningLevels.length ||
 					reasoningLevels.some(
 						(level) => !endpoint.capabilities.reasoningLevels.includes(level),

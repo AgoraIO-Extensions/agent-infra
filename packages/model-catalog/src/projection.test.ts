@@ -149,6 +149,21 @@ it("projects V4 without reading or injecting a model credential", async () => {
 	expect(validateRuntimeModelProjectionV4(projected, configuration)).toEqual(
 		projected,
 	);
+	const tamperedContent = {
+		...projected,
+		options: projected.options.map((option) => ({
+			...option,
+			endpoint: { ...option.endpoint, protocol: "anthropic-messages-v1" },
+		})),
+	};
+	const { fingerprint: _fingerprint, ...tamperedWithoutFingerprint } =
+		tamperedContent;
+	expect(() =>
+		validateRuntimeModelProjectionV4({
+			...tamperedWithoutFingerprint,
+			fingerprint: hash(JSON.stringify(tamperedWithoutFingerprint)),
+		}),
+	).toThrow("MODEL_CONFIGURATION_UNAVAILABLE");
 	await revalidateRuntimeModelCatalogV4(
 		projected,
 		catalog,
