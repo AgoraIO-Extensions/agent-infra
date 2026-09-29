@@ -40,7 +40,7 @@ test("local API auth probe requires the configured token and rejects another", a
 			tokenMatches: request.headers["x-platform-proxy-token"] === expectedToken,
 		});
 		const correctRoute =
-			request.method === "GET" &&
+			request.method === "HEAD" &&
 			request.url === "/auth/login" &&
 			request.headers.host === "localhost:3001" &&
 			request.headers["x-forwarded-proto"] === "https";
@@ -58,6 +58,7 @@ test("local API auth probe requires the configured token and rejects another", a
 		assert.ok(address && typeof address !== "string");
 		const valid = await runProbe(tokenFile, address.port);
 		assert.equal(valid.code, 0, `${JSON.stringify(observed)}\n${valid.stderr}`);
+		assert.equal(observed[0]?.method, "HEAD");
 
 		expectedToken = randomBytes(32).toString("base64url");
 		const mismatch = await runProbe(tokenFile, address.port);

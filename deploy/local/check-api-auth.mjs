@@ -18,7 +18,7 @@ const request = (value) => new Promise((resolve, reject) => {
     hostname: "127.0.0.1",
     port: apiPort,
     path: "/auth/login",
-    method: "GET",
+    method: "HEAD",
     signal: AbortSignal.timeout(5000),
     headers: {
       host: `localhost:${webPort}`,
