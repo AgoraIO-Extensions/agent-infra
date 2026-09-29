@@ -35,7 +35,7 @@ separate CODEOWNER approval before publication or enablement.
 
 The candidate patch is the exact unified diff in
 `opencode-v1.18.30-effect-receipt.patch`. Its SHA-256 is
-`37113332c984c9a34c1bffbeaee95b936a299c5d771a67a5cf6d323d3ff28ece`.
+`b6d3985aced36ecbf932b58b8821a8104ab1bedbb9774927cfc2b8c7eb7f28b1`.
 It adds a transport-agnostic receipt schema and validator. It deliberately
 does not pretend that a schema alone proves a tool effect.
 
@@ -72,7 +72,8 @@ replaying a possibly effective write.
 
 The candidate validator rejects empty or over-256-byte (UTF-8) identity and
 reference fields, negative or unsafe generation/sequence values, invalid
-phase-specific optional fields, unknown fields, and raw native errors. It is
+phase-specific optional fields, unknown fields, inherited required fields,
+and raw native errors. It is
 structural validation only. Before accepting a receipt or granting a permit, the Driver
 must compare execution, generation, fence, call, sequence, target, and attempt
 against the original durable attempt. File contents, credentials, and model

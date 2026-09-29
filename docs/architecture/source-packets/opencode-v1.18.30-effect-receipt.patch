@@ -1,9 +1,9 @@
 diff --git a/packages/opencode/src/native/effect-receipt.ts b/packages/opencode/src/native/effect-receipt.ts
 new file mode 100644
-index 000000000..3472a9fb7
+index 000000000..e3e8985c4
 --- /dev/null
 +++ b/packages/opencode/src/native/effect-receipt.ts
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,159 @@
 +/**
 + * Private Driver/native effect receipt boundary.
 + *
@@ -67,8 +67,14 @@ index 000000000..3472a9fb7
 +}
 +
 +export type EffectReceiptResult =
-+  | (EffectReceipt & { readonly phase: "started" | "completed" })
-+  | (EffectReceipt & { readonly phase: "failed" | "cancelled" | "unknown"; readonly errorCode: string })
++  | (Omit<EffectReceipt, "phase" | "errorCode"> & {
++      readonly phase: "started" | "completed"
++      readonly errorCode?: never
++    })
++  | (Omit<EffectReceipt, "phase" | "errorCode"> & {
++      readonly phase: "failed" | "cancelled" | "unknown"
++      readonly errorCode: string
++    })
 +
 +const boundedString = (value: unknown, max = 256): value is string =>
 +  typeof value === "string" &&
@@ -96,6 +102,24 @@ index 000000000..3472a9fb7
 +  "errorCode",
 +])
 +
++const effectReceiptRequiredFields = [
++  "schema",
++  "sessionID",
++  "turnID",
++  "callID",
++  "executionID",
++  "generation",
++  "fence",
++  "operationRef",
++  "attemptRef",
++  "leafNonce",
++  "sequence",
++  "phase",
++  "target",
++  "targetRef",
++  "ackID",
++]
++
 +const hasValidOptionalFields = (receipt: Partial<EffectReceipt>): boolean =>
 +  receipt.phase === "intent" || receipt.phase === "permit"
 +    ? receipt.startedAt === undefined && receipt.resultDigest === undefined
@@ -107,9 +131,10 @@ index 000000000..3472a9fb7
 +        (typeof receipt.resultDigest === "string" && /^[a-f0-9]{64}$/.test(receipt.resultDigest)))
 +
 +export function isEffectReceipt(value: unknown): value is EffectReceipt {
-+  if (!value || typeof value !== "object") return false
++  if (!value || typeof value !== "object" || Array.isArray(value)) return false
 +  const receipt = value as Partial<EffectReceipt>
 +  if (Object.keys(receipt).some((field) => !effectReceiptFields.has(field))) return false
++  if (effectReceiptRequiredFields.some((field) => !Object.hasOwn(receipt, field))) return false
 +  return (
 +    receipt.schema === EFFECT_RECEIPT_SCHEMA &&
 +    boundedString(receipt.sessionID) &&
