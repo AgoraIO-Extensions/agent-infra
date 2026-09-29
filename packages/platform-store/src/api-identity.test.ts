@@ -206,6 +206,109 @@ describe("PostgreSQL API identity store", () => {
 		expect(userCredential.metadata).not.toHaveProperty("credential");
 	});
 
+	it.each(["revoke-first", "issue-first"] as const)(
+		"serializes credential delivery when %s holds the application lock",
+		async (order) => {
+			await adminClient`truncate platform.audit_events,
+				platform.api_credential_delivery_grants, platform.platform_api_credentials,
+				platform.platform_applications cascade`;
+			const applicationId = `application_delivery_${order}`;
+			const recipient = { kind: "user" as const, id: "user_recipient" };
+			await store.createApplication({
+				applicationId,
+				name: "Delivery lock test application",
+				responsibleUserId: "user_owner",
+				authorizationRevision: "application_revision_1",
+				audit: userAudit,
+			});
+			await store.grantCredentialDelivery({
+				applicationId,
+				principal: recipient,
+				authorizationRevision: "application_revision_1",
+				audit: { ...userAudit, action: "api.credential.delivery.granted" },
+			});
+
+			const blocker = postgres(databaseUrl, { max: 1 });
+			let release: (() => void) | undefined;
+			let markLocked: (() => void) | undefined;
+			const held = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const locked = new Promise<void>((resolve) => {
+				markLocked = resolve;
+			});
+			const block = blocker.begin(async (transaction) => {
+				if (order === "revoke-first") {
+					await transaction`
+						select application_id from platform.api_credential_delivery_grants
+						where application_id = ${applicationId} for update
+					`;
+				} else {
+					await transaction`
+						lock table platform.platform_api_credentials in share mode
+					`;
+				}
+				markLocked?.();
+				await held;
+			});
+			const issue = () =>
+				store.issueCredential({
+					principal: { kind: "application", id: applicationId },
+					credential: `delivery-lock-secret-${order}`,
+					recipient,
+					scopes: ["agent:read"],
+					expiresAt: null,
+					audit: { ...userAudit, action: "api.credential.issued" },
+				});
+			const revoke = () =>
+				store.revokeCredentialDelivery({
+					applicationId,
+					principal: recipient,
+					audit: { ...userAudit, action: "api.credential.delivery.revoked" },
+				});
+			let pendingIssue: ReturnType<typeof issue> | undefined;
+			let pendingRevoke: ReturnType<typeof revoke> | undefined;
+			try {
+				await locked;
+				if (order === "revoke-first") {
+					pendingRevoke = revoke();
+					await waitForBlockedQuery(["api_credential_delivery_grants"]);
+					pendingIssue = issue();
+				} else {
+					pendingIssue = issue();
+					await waitForBlockedQuery(["platform_api_credentials"]);
+					pendingRevoke = revoke();
+				}
+				await waitForBlockedQuery(["platform_applications"]);
+				release?.();
+				await block;
+				expect(await pendingRevoke).toBe(true);
+				if (order === "revoke-first") {
+					await expect(pendingIssue).rejects.toThrow(
+						"Credential delivery is not authorized",
+					);
+				} else {
+					await expect(pendingIssue).resolves.toMatchObject({
+						metadata: { principal: { kind: "application", id: applicationId } },
+					});
+				}
+				expect(
+					await store.hasCredentialDelivery({
+						applicationId,
+						principal: recipient,
+					}),
+				).toBe(false);
+				const credentials = await store.listCredentials({ applicationId });
+				expect(credentials).toHaveLength(order === "issue-first" ? 1 : 0);
+			} finally {
+				release?.();
+				await block.catch(() => undefined);
+				await Promise.allSettled([pendingIssue, pendingRevoke]);
+				await blocker.end();
+			}
+		},
+	);
+
 	it("rejects a duplicate credential hash across principals, including revoked rows", async () => {
 		await adminClient`truncate platform.audit_events,
 			platform.api_credential_delivery_grants, platform.platform_api_credentials,
