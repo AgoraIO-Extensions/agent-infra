@@ -185,9 +185,38 @@ export class PostgresConversationDispatchStoreV1
 						and record->>'status' = 'available'
 					order by file_id
 				`;
+				const keyed = state.execution.execution_source !== null;
+				if (
+					keyed &&
+					(!state.execution.relay_key_purpose ||
+						!state.execution.relay_key_subject_id ||
+						!state.execution.relay_key_id ||
+						!state.execution.relay_key_version ||
+						!state.execution.model_option_id ||
+						!state.execution.reasoning_level)
+				)
+					return null;
 				const original = {
 					...base,
 					kind: "submit-turn",
+					...(keyed
+						? {
+								operation: {
+									kind: "execution",
+									id: state.execution.execution_id,
+								},
+								executionSource: state.execution.execution_source,
+								keyBinding: {
+									purpose: state.execution.relay_key_purpose,
+									subjectId: state.execution.relay_key_subject_id,
+									ciphertextRef: state.execution.relay_key_id,
+									version: requireSafeCounter(
+										state.execution.relay_key_version,
+										1,
+									),
+								},
+							}
+						: {}),
 					input: {
 						text: message.text,
 						attachments: inputFiles.map((file) => file.file_id),

@@ -1064,6 +1064,115 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("recovers a keyed execution with its original V4 digest after Relay Key rotation", async () => {
+		const work = await seed();
+		await client`insert into platform.relay_key_subjects
+			(purpose, subject_id, last_version, current_version)
+			values ('personal', 'actor-dispatch', 1, 1)`;
+		await client`insert into platform.relay_key_versions
+			(purpose, subject_id, key_version, key_id, ciphertext)
+			values ('personal', 'actor-dispatch', 1, 'personal-key-1',
+				${client.json({ schemaVersion: 1, purpose: "personal", subjectId: "actor-dispatch", keyId: "personal-key-1", keyVersion: 1 })})`;
+		await client`update platform.conversation_executions
+			set execution_source = 'web', relay_key_purpose = 'personal',
+				relay_key_subject_id = 'actor-dispatch', relay_key_id = 'personal-key-1',
+				relay_key_version = 1
+			where execution_id = ${work.executionId}`;
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed")
+				throw new Error("Expected a keyed claim");
+			const expected = createHash("sha256")
+				.update(
+					JSON.stringify({
+						agentId: "agent-dispatch",
+						conversationId: work.conversationId,
+						executionId: work.executionId,
+						executionSource: "web",
+						input: { attachments: [], text: "bounded dispatch fixture" },
+						keyBinding: {
+							ciphertextRef: "personal-key-1",
+							purpose: "personal",
+							subjectId: "actor-dispatch",
+							version: 1,
+						},
+						kind: "submit-turn",
+						operation: { id: work.executionId, kind: "execution" },
+						selection: {
+							modelOptionId: "model-option-dispatch",
+							reasoningLevel: "medium",
+							schemaVersion: 1,
+						},
+						sessionGeneration: 1,
+						turnId: work.turnId,
+					}),
+				)
+				.digest("base64url");
+			expect(
+				(await store.readRuntimeState({ claim: decision.claim }))
+					?.originalOperationDigest,
+			).toBe(expected);
+			await client`insert into platform.relay_key_versions
+				(purpose, subject_id, key_version, key_id, ciphertext)
+				values ('personal', 'actor-dispatch', 2, 'personal-key-2',
+					${client.json({ schemaVersion: 1, purpose: "personal", subjectId: "actor-dispatch", keyId: "personal-key-2", keyVersion: 2 })})`;
+			await client`update platform.relay_key_subjects
+				set last_version = 2, current_version = 2
+				where purpose = 'personal' and subject_id = 'actor-dispatch'`;
+			expect(
+				(await store.readRuntimeState({ claim: decision.claim }))
+					?.originalOperationDigest,
+			).toBe(expected);
+			await expect(
+				store.readRuntimeState({
+					claim: { ...decision.claim, actorId: "other-user" },
+				}),
+			).rejects.toThrow("Conversation dispatch key binding is invalid");
+			expect(
+				await store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			expect(
+				await store.retry({
+					claim: decision.claim,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_ACCEPTANCE_UNKNOWN",
+					transition: {
+						executionStatus: "unknown",
+						conversationStatus: "active",
+					},
+				}),
+			).toBe(true);
+			expect(
+				await store.readRuntimeState({ claim: decision.claim }),
+			).toBeNull();
+			const restarted = await claim(work.itemId, "key-takeover-worker");
+			try {
+				if (restarted.decision.outcome !== "claimed")
+					throw new Error("Expected a retry claim after Worker restart");
+				expect(restarted.decision.claim.deliveryFence).toBeGreaterThan(
+					decision.claim.deliveryFence,
+				);
+				expect(restarted.decision.claim.relayKeyBinding).toEqual(
+					decision.claim.relayKeyBinding,
+				);
+				expect(
+					(
+						await restarted.store.readRuntimeState({
+							claim: restarted.decision.claim,
+						})
+					)?.originalOperationDigest,
+				).toBe(expected);
+			} finally {
+				await restarted.store.close();
+			}
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("discovers only due Conversation work without taking another Worker's lease", async () => {
 		const store = new PostgresConversationDispatchStoreV1({ databaseUrl });
 		try {
