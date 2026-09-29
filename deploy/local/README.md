@@ -15,23 +15,21 @@ context、已创建的 namespace 和 Worker values 文件。执行前载入所�
 暴露端口与 kubeconfig 的 loopback API 地址；Helm release 和 namespace 均与 Compose
 project 同名。普通停止保留数据库、对象存储卷和 Agent PVC。
 
-API 专属目录至少包含 `platform-api.mjs`。该模块导出
-`createPlatformApiAssemblyInput()`，调用
-[`createProductionPlatformApiAssemblyInputV1`](../../apps/platform-api/src/deployment.ts)。
-容器内可从 `../dist/index.mjs` 导入工厂，数据库 URL 取 `PLATFORM_DATABASE_URL`。部署输入为：
-
-使用第一方 LDAP 浏览器登录时，同一模块还须导出 `browserAuth`。用
-`createPostgresLdapBrowserDeployment()` 创建一次并将其 `identity` 传入装配输入、
-`browserAuth` 作为模块导出；两者因而共用 LDAP Adapter 和 Platform PostgreSQL
-会话表。API 只将 `/auth/login` 和 `/auth/logout` 交给此处理器；处理器失败返回
-无正文 503。先执行 Platform 增量迁移；跨 API 副本的到期和撤销由 PostgreSQL
-Store 执行，测试用内存 Store 不能作为正式部署配置。该工厂还要求高熵
-`trustedProxyToken`，必须只在 TLS 代理和 API 专属配置中提供。将 32–96 字节随机值
+API 镜像内置[部署模块](../platform-api/deployment.mjs)，固定从
+`file:///app/dist/deployment.mjs` 加载。API 专属目录只提供受审阅的
+`configuration.mjs` 及其私有导入；所需导出及受信身份、目录、Registry 和模型
+依赖见 [API 部署说明](../platform-api/README.md)。内置模块从
+`PLATFORM_DATABASE_URL` 取得数据库 URL，建立第一方 LDAP Adapter 和 PostgreSQL
+会话 Store，再将同一个身份 Adapter 交给生产 API 装配工厂。API 只将
+`/auth/login` 和 `/auth/logout` 交给浏览器处理器；处理器失败返回无正文 503。
+先执行 Platform 增量迁移；跨 API 副本的到期和撤销由 PostgreSQL Store 执行，
+测试用内存 Store 不能作为正式部署配置。工厂还要求高熵
+`trustedProxyToken`，只从 Compose Secret 读取。将 32–96 字节随机值
 编码为 Base64URL，保存在用户持有、权限为 `0600` 的
 `PLATFORM_LOCAL_PROXY_TOKEN_FILE`；其他用户可读或符号链接文件在启动前被拒绝。
 `migrate` 与 `up` 在当前 project 的 `0700` 私有状态目录生成 nginx 配置和 API 专用的只读运行副本，
 供容器中的非 root API 通过 Compose Secret `/run/secrets/platform_proxy_token` 读取；
-API 模块将该值传给工厂。代理固定覆盖客户端提交的 `X-Platform-Proxy-Token`；正常
+内置 API 模块将该值传给工厂。代理固定覆盖客户端提交的 `X-Platform-Proxy-Token`；正常
 `stop` 删除两个生成文件，即使源令牌变量已移除也可继续清理。默认状态目录为
 `${XDG_STATE_HOME:-$HOME/.local/state}/agent-infra/local`，
 可通过 `PLATFORM_LOCAL_STATE_DIRECTORY` 指定绝对路径。配置和令牌不进入镜像、源码或
@@ -45,7 +43,7 @@ Compose 环境变量。选定 Docker context 必须能读取 API 配置、TLS �
 
 | 输入 | 来源和要求 |
 | --- | --- |
-| `identity`、`loadAuthorityContext` | 获准身份服务的真实 Adapter 和当前目录查询；每次敏感操作重新解析，不能固定管理员或信任浏览器身份字段 |
+| `ldap`、`isPlatformDisabled`、`organizationIds`、`loadAuthorityContext` | 第一方 LDAP 配置、当前 Platform 停用状态、目录组织映射和权限事实；每次敏感操作重新解析，不能固定管理员或信任浏览器身份字段 |
 | `registry`、`templates`、`imageRepository` | 实际 OCI endpoint、按当前主体和 Digest 判断的准入政策、不可变标准模板与允许配置键；镜像 repository 与 Worker 保持一致 |
 | `modelCatalog` | 相同 revision 的有效获准端点快照；模型和推理强度必须在快照范围内 |
 | `encryptionKeys` | 版本化加密公钥；不含 Worker 解密私钥 |

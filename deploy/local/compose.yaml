@@ -21,7 +21,9 @@ services:
       - "127.0.0.1:${PLATFORM_LOCAL_API_PORT:-3000}:3000"
     environment:
       PLATFORM_DATABASE_URL: postgresql://agent_infra:agent_infra_local@postgres:5432/agent_infra
-      PLATFORM_API_DEPLOYMENT_MODULE: file:///app/deployment/platform-api.mjs
+      PLATFORM_API_DEPLOYMENT_MODULE: file:///app/dist/deployment.mjs
+      PLATFORM_API_CONFIGURATION_MODULE: file:///app/deployment/configuration.mjs
+      PLATFORM_API_PROXY_TOKEN_FILE: /run/secrets/platform_proxy_token
     volumes:
       - ${PLATFORM_LOCAL_API_DIRECTORY:?Set the API-only deployment directory}:/app/deployment:ro
     secrets:

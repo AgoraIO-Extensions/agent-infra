@@ -46,7 +46,7 @@ async function fixture() {
 			values,
 			"platformWorker:\n  deploymentModule: file:///app/dist/deployment.mjs\n",
 		),
-		writeFile(join(api, "platform-api.mjs"), ""),
+		writeFile(join(api, "configuration.mjs"), ""),
 		writeFile(cert, ""),
 		writeFile(key, ""),
 		writeFile(proxyToken, proxyTokenValue, { mode: 0o600 }),

@@ -319,7 +319,7 @@ case "${1:-}" in
     "${compose[@]}" run --rm --no-deps platform-api node node_modules/@agent-infra/platform-store/dist/migrate-cli.mjs
     ;;
   up)
-    [[ -f "${PLATFORM_LOCAL_API_DIRECTORY:?}/platform-api.mjs" ]] || { echo "API deployment module platform-api.mjs is missing" >&2; exit 1; }
+    [[ -r "${PLATFORM_LOCAL_API_DIRECTORY:?}/configuration.mjs" ]] || { echo "API configuration module configuration.mjs is missing" >&2; exit 1; }
     [[ -r "${PLATFORM_WEB_TLS_CERT_FILE:?}" && -r "${PLATFORM_WEB_TLS_KEY_FILE:?}" ]] || { echo "Local Web TLS files are missing" >&2; exit 1; }
     worker_context
     worker_values

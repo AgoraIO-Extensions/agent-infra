@@ -3,6 +3,9 @@
 	"private": true,
 	"type": "module",
 	"main": "dist/index.mjs",
+	"exports": {
+		".": "./dist/index.mjs"
+	},
 	"files": [
 		"dist"
 	],
