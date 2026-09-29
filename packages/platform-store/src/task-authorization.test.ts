@@ -160,6 +160,13 @@ describe("PostgreSQL task authorization current application facts", () => {
 				channelId: "web",
 			}),
 		).toBeNull();
+		expect(
+			await store.captureApplicationBoundary({
+				applicationId: "task-caller",
+				agentId: "agent_task_application",
+				channelId: "api-other",
+			}),
+		).toBeNull();
 		if (!boundary) throw new Error("Expected an application boundary");
 		await seedExecution();
 		await insertBoundary(boundary);

@@ -18,6 +18,8 @@ export function createDeploymentAuthorizationAdmission(input: {
 	>;
 	/** Deployment-owned current directory; Core validates all referenced subjects. */
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
+	/** Platform-owned application IDs for initial availability admission. */
+	readonly loadApplicationIds?: () => Promise<readonly string[]>;
 }): AgentConfigurationAuthorizationAdmissionPortV1 {
 	return {
 		async authorize(request) {
@@ -33,6 +35,12 @@ export function createDeploymentAuthorizationAdmission(input: {
 			if (identity.userId !== request.actorId) return rejected;
 			const currentRequest = input.identityScope.currentRequest();
 			const authorityContext = await input.loadAuthorityContext();
+			const currentAuthorityContext = input.loadApplicationIds
+				? {
+						...authorityContext,
+						applicationIds: await input.loadApplicationIds(),
+					}
+				: authorityContext;
 			if (
 				currentRequest.method === "POST" &&
 				new URL(currentRequest.url).pathname === "/api/v2/agent-applications"
@@ -46,7 +54,7 @@ export function createDeploymentAuthorizationAdmission(input: {
 					...rejected,
 					status: "admitted",
 					authorizationRevision: identity.authorizationRevision,
-					authorityContext,
+					authorityContext: currentAuthorityContext,
 				};
 			}
 			const current = await input.configurationQuery.readAuthority({
@@ -60,7 +68,7 @@ export function createDeploymentAuthorizationAdmission(input: {
 				...rejected,
 				status: "admitted",
 				authorizationRevision: current.authorizationRevision,
-				authorityContext,
+				authorityContext: currentAuthorityContext,
 				accessAuthority: {
 					state: current.management,
 					actorContext: {

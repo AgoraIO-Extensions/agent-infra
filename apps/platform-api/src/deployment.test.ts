@@ -341,6 +341,17 @@ beforeAll(async () => {
 	database = await startPostgresTestDatabase("production-api-assembly");
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 	reader = connectDatabase(database.databaseUrl, { max: 1 });
+	await reader.unsafe(
+		`insert into platform.platform_applications
+			(id, name, responsible_user_id, status, authorization_revision)
+		 values ($1, $2, $3, 'active', $4)`,
+		[
+			"application-target",
+			"Application target",
+			"alice",
+			"application-target-revision",
+		],
+	);
 	fixture = deploymentInput(database.databaseUrl);
 	await openApi();
 }, 60_000);
@@ -510,6 +521,28 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			404,
 		);
 		expect(await snapshot()).toEqual(revoked);
+	});
+	it("admits an active application availability target from the production Store", async () => {
+		const body = {
+			...applicationBody,
+			availability: [
+				{ kind: "application" as const, applicationId: "application-target" },
+			],
+		};
+		const created = AgentApplicationProjectionV2Schema.parse(
+			await json(
+				await request(
+					"/api/v2/agent-applications",
+					"alice",
+					body,
+					"create-application-target",
+				),
+				201,
+			),
+		);
+		expect(created.configuration.availability).toEqual([
+			{ kind: "application", applicationId: "application-target" },
+		]);
 	});
 	it("isolates two concurrent subjects while their real admissions await registry IO", async () => {
 		let entered!: () => void;

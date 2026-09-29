@@ -59,9 +59,7 @@ async function readCurrentApplication(
 function isSupportedTaskPrincipalChannel(
 	boundary: TaskAuthorizationBoundaryV1,
 ): boolean {
-	return (
-		boundary.principal.kind === "user" || boundary.channelId.startsWith("api")
-	);
+	return boundary.principal.kind === "user" || boundary.channelId === "api";
 }
 
 /** Recheck API use authority while the acceptance transaction owns its Agent snapshot. */
@@ -70,7 +68,7 @@ export async function requireCurrentTaskApiAccess(
 	boundary: TaskAuthorizationBoundaryV1 | undefined,
 	agentAuthorizationRevision: string | null,
 ): Promise<void> {
-	if (!boundary?.channelId.startsWith("api")) return;
+	if (boundary?.channelId !== "api") return;
 	const [grant] = await transaction<{ principal_id: string }[]>`
 		select principal_id from platform.agent_principal_grants
 		where agent_id = ${boundary.agentId}
@@ -174,7 +172,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 		agentId: string;
 		channelId: string;
 	}): Promise<TaskAuthorizationBoundaryV1 | null> {
-		if (!input.channelId.startsWith("api")) return null;
+		if (input.channelId !== "api") return null;
 		try {
 			return await this.#database.transaction(
 				async (transaction) => {

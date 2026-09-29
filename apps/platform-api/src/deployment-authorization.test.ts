@@ -115,6 +115,38 @@ describe("deployment authorization admission", () => {
 		});
 	});
 
+	it("supplies current application IDs for initial availability admission", async () => {
+		const readAuthority = vi.fn().mockResolvedValue({ outcome: "unavailable" });
+		const loadApplicationIds = vi
+			.fn<() => Promise<readonly string[]>>()
+			.mockResolvedValue(["application-active"]);
+		const admission = createDeploymentAuthorizationAdmission({
+			identityScope: scope,
+			configurationQuery: { readAuthority },
+			loadAuthorityContext: async () => authorityContext,
+			loadApplicationIds,
+		});
+		const ids = await allocateDeploymentApplicationIds({
+			identity,
+			idempotencyKey: "create-with-application-target",
+		});
+		await scope.requestScope(
+			new Request("https://platform.test/api/v2/agent-applications", {
+				method: "POST",
+				headers: { "Idempotency-Key": "create-with-application-target" },
+			}),
+			async () => {
+				await expect(
+					admission.authorize({ ...request, agentId: ids.agentId }),
+				).resolves.toMatchObject({
+					status: "admitted",
+					authorityContext: { applicationIds: ["application-active"] },
+				});
+			},
+		);
+		expect(loadApplicationIds).toHaveBeenCalledOnce();
+	});
+
 	it("fails closed when the current directory cannot be loaded", async () => {
 		const admission = createDeploymentAuthorizationAdmission({
 			identityScope: scope,

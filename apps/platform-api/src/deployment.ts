@@ -92,6 +92,10 @@ export function createProductionPlatformApiAssemblyInputV1(
 				identityScope,
 				configurationQuery,
 				loadAuthorityContext: input.loadAuthorityContext,
+				loadApplicationIds: async () =>
+					(await apiIdentity.listApplications())
+						.filter(({ status }) => status === "active")
+						.map(({ id }) => id),
 			}),
 		}),
 		deploymentConfiguration: {
