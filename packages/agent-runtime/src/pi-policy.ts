@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { constants } from "node:fs";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -7,33 +8,83 @@ import {
 	createWriteToolDefinition,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import type { NativeToolReceipt } from "./session-runtime-driver.js";
 import { workspacePathAllowed } from "./workspace-path.js";
+
+interface PiToolCall {
+	toolCallId: string;
+	name: string;
+	startedAt?: string;
+	started?: number;
+	startedReceipt?: Promise<void>;
+	unconfirmed?: boolean;
+	pending: Set<Promise<unknown>>;
+}
 
 /** Keep Pi's own argument parsing, mutation queue and text handling. Enforce the
  * boundary in its supported filesystem operations, after all path transformations. */
-export function createPiWorkspaceTools(workspace: string): {
+export function createPiWorkspaceTools(
+	workspace: string,
+	permit: (toolCallId: string, name: string) => Promise<void> = (
+		toolCallId,
+		name,
+	) => requestToolBoundary({ toolCallId, name }),
+	receipt: (value: NativeToolReceipt) => Promise<void> = requestToolBoundary,
+): {
 	read: ReturnType<typeof createReadToolDefinition>;
 	write: ReturnType<typeof createWriteToolDefinition>;
 	edit: ReturnType<typeof createEditToolDefinition>;
 } {
 	const memory = join(workspace, ".memory");
+	// Native edit/write queues call shared operations after execute has yielded.
+	const calls = new AsyncLocalStorage<PiToolCall>();
+	const dispatch = async <T>(action: () => Promise<T>): Promise<T> => {
+		const call = calls.getStore();
+		if (!call) throw new Error("RUNTIME_TOOL_INTENT_UNAVAILABLE");
+		if (call.unconfirmed) throw new Error("RUNTIME_TOOL_RESULT_UNCONFIRMED");
+		const first = call.started === undefined;
+		if (first) {
+			call.startedAt = new Date().toISOString();
+			call.started = performance.now();
+		}
+		if (first) {
+			call.startedReceipt = receipt({
+				toolCallId: call.toolCallId,
+				name: call.name,
+				phase: "started",
+				startedAt: call.startedAt,
+			}).catch(() => {
+				call.unconfirmed = true;
+				throw new Error("RUNTIME_TOOL_RESULT_UNCONFIRMED");
+			});
+		}
+		if (call.startedReceipt) await call.startedReceipt;
+		if (call.unconfirmed) throw new Error("RUNTIME_TOOL_RESULT_UNCONFIRMED");
+		const operation = action();
+		call.pending.add(operation);
+		void operation.then(
+			() => call.pending.delete(operation),
+			() => call.pending.delete(operation),
+		);
+		return operation;
+	};
 	const guard = async (path: string) => {
 		if (!(await workspacePathAllowed(workspace, memory, path)))
 			throw new Error("RUNTIME_WORKSPACE_ACCESS_DENIED");
 	};
 	const read = async (path: string) => {
 		await guard(path);
-		return readFile(path);
+		return dispatch(() => readFile(path));
 	};
 	const write = async (path: string, content: string) => {
 		await guard(path);
-		await writeFile(path, content, "utf8");
+		await dispatch(() => writeFile(path, content, "utf8"));
 	};
 	const check = async (path: string) => {
 		await guard(path);
 		await access(path, constants.R_OK);
 	};
-	return {
+	const tools = {
 		read: createReadToolDefinition(workspace, {
 			operations: { readFile: read, access: check },
 		}),
@@ -42,7 +93,7 @@ export function createPiWorkspaceTools(workspace: string): {
 				writeFile: write,
 				mkdir: async (directory) => {
 					await guard(join(directory, ".pi-directory-access"));
-					await mkdir(directory, { recursive: true });
+					await dispatch(() => mkdir(directory, { recursive: true }));
 				},
 			},
 		}),
@@ -50,6 +101,86 @@ export function createPiWorkspaceTools(workspace: string): {
 			operations: { readFile: read, writeFile: write, access: check },
 		}),
 	};
+	function withPermit<Args extends unknown[], Result>(
+		name: string,
+		execute: (toolCallId: string, ...args: Args) => Promise<Result>,
+	) {
+		return async (toolCallId: string, ...args: Args) => {
+			await permit(toolCallId, name);
+			const call: PiToolCall = { toolCallId, name, pending: new Set() };
+			return calls.run(call, async () => {
+				let result: Result | undefined;
+				let failed = false;
+				let error: unknown;
+				try {
+					result = await execute(toolCallId, ...args);
+				} catch (cause) {
+					failed = true;
+					error = cause;
+				}
+				await Promise.allSettled(call.pending);
+				const finishedAt = new Date().toISOString();
+				const timing =
+					call.started === undefined
+						? {}
+						: {
+								startedAt: call.startedAt,
+								durationMs: Math.floor(performance.now() - call.started),
+							};
+				try {
+					await call.startedReceipt;
+					if (call.unconfirmed) throw new Error();
+					await receipt({
+						toolCallId,
+						name,
+						phase: failed ? "failed" : "completed",
+						finishedAt,
+						...timing,
+					});
+				} catch {
+					await receipt({
+						toolCallId,
+						name,
+						phase: "unknown",
+						...(call.startedAt ? { startedAt: call.startedAt } : {}),
+					}).catch(() => {});
+					throw new Error("RUNTIME_TOOL_RESULT_UNCONFIRMED");
+				}
+				if (failed) throw error;
+				return result as Result;
+			});
+		};
+	}
+	tools.read.execute = withPermit("read", tools.read.execute);
+	tools.write.execute = withPermit("write", tools.write.execute);
+	tools.edit.execute = withPermit("edit", tools.edit.execute);
+	return tools;
+}
+
+async function requestToolBoundary(
+	value: { toolCallId: string; name: string } | NativeToolReceipt,
+) {
+	const receipt = "phase" in value;
+	const code = receipt
+		? "RUNTIME_TOOL_RESULT_UNCONFIRMED"
+		: "RUNTIME_TOOL_INTENT_UNAVAILABLE";
+	const endpoint = process.env.AGENT_INFRA_PI_TOOL_PERMIT_URL;
+	const token = process.env.AGENT_INFRA_PI_TOOL_PERMIT_TOKEN;
+	if (!endpoint || !token || !value.toolCallId) throw new Error(code);
+	const url = new URL(endpoint);
+	if (receipt) url.pathname = "/internal/tool-receipt";
+	try {
+		const response = await fetch(url, {
+			method: "POST",
+			headers: { "content-type": "application/json", "x-api-key": token },
+			body: JSON.stringify(value),
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (response.ok) return;
+	} catch {
+		// Only the confirmed durable acknowledgement releases the native caller.
+	}
+	throw new Error(code);
 }
 
 /** Loaded explicitly by the pinned Pi CLI; project and user extension discovery are disabled. */

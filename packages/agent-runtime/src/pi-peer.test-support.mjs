@@ -130,6 +130,19 @@ for await (const line of createInterface({ input: process.stdin })) {
 			success: true,
 		});
 		send({ type: "agent_start" });
+		if (mode === "tool") {
+			send({
+				type: "tool_execution_start",
+				toolCallId: "tool-1",
+				toolName: "read",
+			});
+			send({
+				type: "tool_execution_end",
+				toolCallId: "tool-1",
+				toolName: "read",
+				isError: false,
+			});
+		}
 		if (mode === "malformed") {
 			setTimeout(() => process.stdout.write("sensitive-vendor-canary\n"), 30);
 			continue;

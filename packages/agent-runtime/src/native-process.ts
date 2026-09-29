@@ -4,12 +4,22 @@ import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay, setImmediate } from "node:timers/promises";
 import { promisify } from "node:util";
+import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 export interface NativeProcessLaunch {
 	command: string;
 	args: string[];
 	env: NodeJS.ProcessEnv;
 	close?: () => Promise<void>;
 	reusable?: () => boolean;
+	onTurn?: (callbacks: {
+		modelUsage?: (
+			usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
+		) => Promise<void>;
+		toolRequestStarted?: (tool: {
+			readonly toolCallId: string;
+			readonly name: string;
+		}) => Promise<void>;
+	}) => void;
 }
 type OwnerVariable = "AGENT_INFRA_ACP_OWNER" | "AGENT_INFRA_PI_OWNER";
 
