@@ -119,7 +119,7 @@ export interface CodexRuntimeDriverOptions {
 	readonly modelOptions: readonly CodexRuntimeModelOption[];
 	readonly authorizeExternalAction?: (
 		action: RuntimeExternalActionAuthorization,
-	) => Promise<void | { readonly relayKey: string }>;
+	) => Promise<undefined | { readonly relayKey: string }>;
 	// Independent client delivery is trusted deployment input, never a Runtime command.
 	readonly connectionClient?: {
 		/** Independently configured service allowlist; never derived from the profile. */
@@ -2518,7 +2518,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly keyedRelay = false,
 		private readonly authorizeExternalAction?: (
 			action: RuntimeExternalActionAuthorization,
-		) => Promise<void | { readonly relayKey: string }>,
+		) => Promise<undefined | { readonly relayKey: string }>,
 		private readonly connectionClientOptions?: CodexRuntimeDriverOptions["connectionClient"],
 		private readonly recoveryLaunch?: typeof runCodexConnectionRecovery,
 		private readonly recoveryDirectory?: string,

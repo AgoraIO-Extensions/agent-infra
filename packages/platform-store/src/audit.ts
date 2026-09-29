@@ -500,8 +500,10 @@ export function decodePlatformAuditRowV1(
 	if (
 		!allowedActorTypes.some((actorType) => actorType === row.actorType) ||
 		(!allowedTargetTypes.some((targetType) => targetType === row.targetType) &&
-			!(action === "agent.configuration.revised" &&
-				row.targetType === "configuration")) ||
+			!(
+				action === "agent.configuration.revised" &&
+				row.targetType === "configuration"
+			)) ||
 		(row.targetType === "configuration" && subjectKind !== "configuration") ||
 		(row.outcome !== "succeeded" &&
 			row.outcome !== "rejected" &&
