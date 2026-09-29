@@ -181,6 +181,13 @@ describe("Platform API production assembly", () => {
 				schemaVersion: 1,
 				user: { userId: "user-1" },
 			});
+			const identityRoute = await fetch(
+				`http://127.0.0.1:${address.port}/api/v1/api-credentials`,
+			);
+			expect(identityRoute.status).toBe(503);
+			expect(await identityRoute.json()).toMatchObject({
+				code: "DEPENDENCY_UNAVAILABLE",
+			});
 			expect(browserAuth.handleRequest).toHaveBeenCalledTimes(2);
 		} finally {
 			await assembly.close();
