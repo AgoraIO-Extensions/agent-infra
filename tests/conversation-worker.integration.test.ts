@@ -170,6 +170,8 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	const requests: {
 		path: string;
 		executionId?: string;
+		operationId?: string;
+		sessionGeneration?: number;
 		businessHostSessionRef?: string | null;
 		deliveryFence?: number;
 		confirmedCursor?: string;
@@ -729,6 +731,10 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			const observedRequest: (typeof requests)[number] = {
 				path: req.url ?? "",
 				executionId: parsed.businessRequest?.executionId ?? parsed.executionId,
+				operationId:
+					parsed.businessRequest?.operation?.id ?? parsed.operation?.id,
+				sessionGeneration:
+					parsed.businessRequest?.sessionGeneration ?? parsed.sessionGeneration,
 				businessHostSessionRef: parsed.businessRequest?.hostSessionRef,
 				deliveryFence:
 					parsed.businessRequest?.operation?.executionDeliveryFence ??
@@ -1707,13 +1713,44 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 			async () =>
 				requests
 					.slice(priorRequests)
-					.some(
-						(request) =>
-							request.path.endsWith("/status") &&
-							request.executionId === active.execution_id,
+					.some((request) =>
+						keyedRuntime
+							? request.path === "/internal/runtime/v4/turns" &&
+								request.executionId === active.execution_id &&
+								request.operationId === active.execution_id &&
+								request.responseStatus === 200
+							: request.path.endsWith("/status") &&
+								request.executionId === active.execution_id,
 					),
 			"takeover queries original Runtime execution",
 		);
+		const takeoverRequest = requests
+			.slice(priorRequests)
+			.find((request) =>
+				keyedRuntime
+					? request.path === "/internal/runtime/v4/turns" &&
+						request.executionId === active.execution_id &&
+						request.operationId === active.execution_id &&
+						request.responseStatus === 200
+					: request.path.endsWith("/status") &&
+						request.executionId === active.execution_id,
+			);
+		if (!takeoverRequest)
+			throw Error("Takeover Runtime request was not observed");
+		if (keyedRuntime) {
+			expect(takeoverRequest).toMatchObject({
+				path: "/internal/runtime/v4/turns",
+				executionId: active.execution_id,
+				operationId: active.execution_id,
+				sessionGeneration: 1,
+				deliveryFence: target.fence + 1,
+				keyId: "relay-agent-k1",
+				keyVersion: 1,
+				privateKeyMatches: true,
+				keyInBusinessRequest: false,
+				responseStatus: 200,
+			});
+		}
 		await waitUntil(
 			async () =>
 				requests
@@ -1754,9 +1791,18 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 				expect.arrayContaining(beforeRows.auditIds),
 			);
 		}
-		expect(
-			requests.filter((request) => request.path.endsWith("/turns")),
-		).toHaveLength(1);
+		const activeTurnRequests = requests.filter(
+			(request) =>
+				request.path.endsWith("/turns") &&
+				request.executionId === active.execution_id,
+		);
+		expect(activeTurnRequests).toHaveLength(keyedRuntime ? 2 : 1);
+		if (keyedRuntime)
+			expect(
+				activeTurnRequests.every(
+					(request) => request.operationId === active.execution_id,
+				),
+			).toBe(true);
 		const [after] =
 			await sql`select delivery_fence::int as fence, host_session_ref, turn_id from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
 		expect(after?.host_session_ref).toBe(before?.host_session_ref);
