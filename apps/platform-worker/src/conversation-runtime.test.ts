@@ -170,7 +170,11 @@ function harness(
 	const directory = { resolveUser: vi.fn(async () => user) };
 	const store = {
 		readRuntimeState: vi.fn(
-			async () => state as ConversationRuntimeStateV2 | null,
+			async (
+				_input: Parameters<
+					ConversationRuntimeOptionsV2["dispatchStore"]["readRuntimeState"]
+				>[0],
+			) => state as ConversationRuntimeStateV2 | null,
 		),
 	};
 	const authorizationStore = {
@@ -493,6 +497,109 @@ describe("Trusted conversation Runtime adapter", () => {
 				keyId: "key-1",
 				keyVersion: 1,
 			});
+		} finally {
+			h.runtime.close();
+		}
+	});
+	it("keeps a V2-to-V4 bootstrap submit pinned to its nullable original scope", async () => {
+		const h = harness(1, undefined, true);
+		Object.assign(h.state, { runtimeSubmitProtocol: "v2" });
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.dispatch(h.request(reference)),
+			).resolves.toMatchObject({
+				schemaVersion: 2,
+			});
+			const [url, init] = h.fetcher.mock.calls[0] ?? [];
+			expect(String(url)).toBe(
+				"https://runtime.test/internal/runtime/v4/turns",
+			);
+			const transport = JSON.parse(String(init?.body));
+			expect(transport.businessRequest.hostSessionRef).toBeNull();
+			expect(transport.privateKeyField.context.hostSessionRef).toBeNull();
+		} finally {
+			h.runtime.close();
+		}
+	});
+	it("recovers a keyed Execution through the idempotent V4 submit", async () => {
+		const h = harness(1, undefined, true);
+		Object.assign(h.claim, { executionStatus: "unknown" });
+		Object.assign(h.state, {
+			executionStatus: "unknown",
+			runtimeSubmitProtocol: "v4",
+		});
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.recoverOriginalStatus?.({
+					...h.events(reference),
+					schemaVersion: 2,
+					hostSessionRef: "host",
+				}),
+			).resolves.toEqual({
+				schemaVersion: 2,
+				hostSessionRef: "host",
+				executionId: "execution",
+				outcome: "found",
+				status: "running",
+			});
+			expect(h.fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+				"https://runtime.test/internal/runtime/v4/turns",
+			]);
+			const body = JSON.parse(String(h.fetcher.mock.calls[0]?.[1]?.body));
+			expect(body.businessRequest).toMatchObject({
+				hostSessionRef: null,
+				input: { text: "original accepted input", attachments: [] },
+				selection: {
+					modelOptionId: "option",
+					reasoningLevel: "high",
+				},
+			});
+		} finally {
+			h.runtime.close();
+		}
+	});
+	it("keeps an explicitly pinned non-null submit Session compatible", async () => {
+		const h = harness(1, undefined, true);
+		Object.assign(h.claim, { executionStatus: "unknown" });
+		Object.assign(h.state, {
+			executionStatus: "unknown",
+			runtimeSubmitProtocol: "v4",
+			originalSubmitHostSessionRef: "original-host",
+			hostSessionRef: "assigned-host",
+		});
+		h.executionKeys.readAcceptedExecution.mockResolvedValue({
+			scope: {
+				principal: { kind: "user", id: "user" },
+				executionSource: "web",
+				channelId: "web",
+				agentId: "agent",
+				conversationId: "conversation",
+				executionId: "execution",
+				turnId: "turn",
+				sessionGeneration: 1,
+				hostSessionRef: "original-host",
+				keyBinding: {
+					purpose: "personal",
+					subjectId: "user",
+					ciphertextRef: "key-1",
+					version: 1,
+				},
+			},
+			trustedHostSessionRef: "original-host",
+		});
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.recoverOriginalStatus?.({
+					...h.events(reference),
+					schemaVersion: 2,
+					hostSessionRef: "assigned-host",
+				}),
+			).resolves.toMatchObject({ outcome: "found" });
+			const body = JSON.parse(String(h.fetcher.mock.calls[0]?.[1]?.body));
+			expect(body.businessRequest.hostSessionRef).toBe("original-host");
 		} finally {
 			h.runtime.close();
 		}

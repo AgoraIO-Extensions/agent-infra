@@ -78,6 +78,9 @@ import { setProductionDeploymentInput } from "./fixtures/platform-api-production
 
 const execFile = promisify(execFileCallback);
 const realCodexE2e = process.env.AGENT_INFRA_REAL_CODEX_E2E === "1";
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: This task-scoped fake harness flag is intentionally outside the default Turbo task environment.
+const packagedV4Fake = process.env.AGENT_INFRA_PACKAGED_V4_FAKE === "1";
+const keyedRuntime = realCodexE2e || packagedV4Fake;
 
 function syntheticModelEvents() {
 	const item = {
@@ -167,6 +170,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	const requests: {
 		path: string;
 		executionId?: string;
+		businessHostSessionRef?: string | null;
 		deliveryFence?: number;
 		confirmedCursor?: string;
 		responseStatus?: number;
@@ -176,6 +180,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		privateKeyMatches?: boolean;
 		keyInBusinessRequest?: boolean;
 	}[] = [];
+	let packagedV4ReadFailureInjected = false;
 	const modelRequests: { body: string; credential: string | undefined }[] = [];
 	const modelJournalAtArrival: {
 		executionId: string;
@@ -412,7 +417,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			schemaVersion: 2,
 			agentId: baseDesired.agentId,
 			revision: 1,
-			source: realCodexE2e
+			source: keyedRuntime
 				? {
 						kind: "standard",
 						templateId: "worker-controlled-codex",
@@ -430,7 +435,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 						interactionMode: "platform-adapter",
 						connectionEnabled: false,
 					},
-			modelConfiguration: realCodexE2e
+			modelConfiguration: keyedRuntime
 				? {
 						catalogRevision: "worker-controlled-catalog",
 						options: [
@@ -466,7 +471,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				{ ...catalogEndpoint, endpointId: "worker-controlled-endpoint" },
 			],
 		};
-		const modelProjection = realCodexE2e
+		const modelProjection = keyedRuntime
 			? await projectRuntimeModelConfigurationV4({
 					configuration,
 					protocol: "openai-responses-v1",
@@ -477,7 +482,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		const desired = baseDesired;
 		let runtimeCertificatePath: string | undefined;
 		let runtimePrivateKeyPath: string | undefined;
-		if (realCodexE2e) {
+		if (keyedRuntime) {
 			runtimeCertificatePath = join(directory, "runtime.crt");
 			runtimePrivateKeyPath = join(directory, "runtime.key");
 			const service = workloadResourceNameV1(desired.agentId);
@@ -522,7 +527,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		if (!identity || identity === "pending")
 			throw Error("Expected controlled Workload identity");
 		await adapter.promote(desired, identity);
-		if (realCodexE2e) {
+		if (keyedRuntime) {
 			expect(modelProjection?.schemaVersion).toBe(4);
 			expect(desired.secretRefs).toEqual([]);
 			const workload = fake.resources.get(
@@ -566,7 +571,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			failureCode: null,
 			attempts: 0,
 			capabilities: {
-				modelSelection: false,
+				modelSelection: keyedRuntime,
 				attachments: false,
 				resultFiles: false,
 				supplementaryInstruction: true,
@@ -577,7 +582,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		await sql`insert into platform.agent_applications (id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, service_availability, workload_revision, fence) values ('application-cli', ${desired.agentId}, 'user-cli', 'Controlled Agent', 'Fixture', 'available', 'trace', 'request', now(), 1, 1, 'running', 'ready', 1, 1)`;
 		await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values (${desired.agentId}, 'user-cli', now())`;
 		await sql`insert into platform.agent_availability (agent_id, target_type, target_id) values (${desired.agentId}, 'user', 'user-second')`;
-		if (realCodexE2e) {
+		if (keyedRuntime) {
 			for (const [subjectId, credential] of Object.entries(apiCredentials)) {
 				await sql`insert into platform.agent_principal_grants
 					(agent_id, principal_type, principal_id, grant_type, authorization_revision)
@@ -616,7 +621,18 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${desired.agentId}, 1, ${sql.json(JSON.parse(JSON.stringify(state)))}, now() + interval '1 hour')`;
 		const fakeDriver = realCodexE2e
 			? undefined
-			: await FakeRuntimeDriver.open(join(directory, "driver.json"));
+			: await FakeRuntimeDriver.open(
+					join(directory, "driver.json"),
+					keyedRuntime
+						? [
+								{
+									schemaVersion: 1,
+									modelOptionId: "worker-controlled-model",
+									reasoningLevel: "medium",
+								},
+							]
+						: undefined,
+				);
 		const driver = realCodexE2e
 			? await (async () => {
 					await verifyCodexPilotInstallation();
@@ -673,7 +689,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				expectedIssuer: signing.issuer,
 				expectedWorkerId: signing.workerId,
 			},
-			...(realCodexE2e
+			...(keyedRuntime
 				? {
 						allowLegacyBusiness: false,
 						validateGrantV4: createRuntimeExecutionGrantValidatorV4(
@@ -713,6 +729,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			const observedRequest: (typeof requests)[number] = {
 				path: req.url ?? "",
 				executionId: parsed.businessRequest?.executionId ?? parsed.executionId,
+				businessHostSessionRef: parsed.businessRequest?.hostSessionRef,
 				deliveryFence:
 					parsed.businessRequest?.operation?.executionDeliveryFence ??
 					parsed.operation?.executionDeliveryFence,
@@ -738,8 +755,34 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 							),
 						}
 					: {}),
+				...(parsed.keyBinding
+					? {
+							keyId: parsed.keyBinding.ciphertextRef,
+							keyVersion: parsed.keyBinding.version,
+						}
+					: {}),
 			};
 			requests.push(observedRequest);
+			if (
+				packagedV4Fake &&
+				req.url === "/internal/runtime/v4/events/read" &&
+				!packagedV4ReadFailureInjected
+			) {
+				packagedV4ReadFailureInjected = true;
+				observedRequest.responseStatus = 503;
+				traces.push(`response:${req.url}:503:transient-fixture`);
+				res.writeHead(503, { "content-type": "application/json" });
+				res.end(
+					JSON.stringify({
+						schemaVersion: 1,
+						code: "RUNTIME_UNAVAILABLE",
+						message: "synthetic transient V4 event read failure",
+						retryable: true,
+						traceId: parsed.traceId ?? crypto.randomUUID(),
+					}),
+				);
+				return;
+			}
 			const requestController = new AbortController();
 			res.on("close", () => requestController.abort());
 			const response = await app.request(`http://runtime${req.url}`, {
@@ -773,7 +816,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				stream.pipe(res);
 			} else res.end();
 		};
-		runtimeServer = realCodexE2e
+		runtimeServer = keyedRuntime
 			? createSecureServer(
 					{
 						cert: await readFile(runtimeCertificatePath ?? ""),
@@ -798,8 +841,8 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		)
 			throw Error();
 		const kubeUrl = `http://127.0.0.1:${address.port}`;
-		const runtimeUrl = `${realCodexE2e ? "https" : "http"}://127.0.0.1:${runtimeAddress.port}`;
-		if (realCodexE2e) {
+		const runtimeUrl = `${keyedRuntime ? "https" : "http"}://127.0.0.1:${runtimeAddress.port}`;
+		if (keyedRuntime) {
 			const legacySigner = createWorkerRuntimeGrantSignerV2({
 				issuer: signing.issuer,
 				workerId: signing.workerId,
@@ -903,9 +946,9 @@ workerDatabaseUrl.searchParams.set('application_name', 'conversation-worker-' + 
 export const workloadInput = { databaseUrl: workerDatabaseUrl.toString(), policy: ${JSON.stringify(policy)},
 kubernetes: { mode:'kubeconfig', path:${JSON.stringify(kubePath)}, context:'test', expectedServer:${JSON.stringify(kubeUrl)} },
 registry: { endpoint:'https://registry.example.test', imageReferencePrefix:'registry.example.test', policy:{authorize:async()=>({status:'rejected'})} },
-admissionPolicyRef:'policy',registrySubjectRef:'worker', templateModelBindings:${JSON.stringify(realCodexE2e ? [{ templateId: "worker-controlled-codex", imageDigest: desired.imageDigest, protocol: "openai-responses-v1" }] : [])}, runtimeModelVersion:${realCodexE2e ? 4 : "undefined"}, executionCapacityProfiles:[${JSON.stringify(capacity)}],
-keyring: { keys:[{keyVersion:${JSON.stringify(realCodexE2e ? "worker-key" : "key")},privateKeyPkcs8DerBase64:(await readFile(${JSON.stringify(join(directory, "wrapping.der"))})).toString('base64')}] },
-modelCatalog:{load:async()=>(${JSON.stringify(realCodexE2e ? controlledCatalog : {})})}, runtimeFetch: (url, init)=> fetch(${JSON.stringify(runtimeUrl)} + new URL(url).pathname,init), pollIntervalMs:100 };
+admissionPolicyRef:'policy',registrySubjectRef:'worker', templateModelBindings:${JSON.stringify(keyedRuntime ? [{ templateId: "worker-controlled-codex", imageDigest: desired.imageDigest, protocol: "openai-responses-v1" }] : [])}, runtimeModelVersion:${keyedRuntime ? 4 : "undefined"}, executionCapacityProfiles:[${JSON.stringify(capacity)}],
+keyring: { keys:[{keyVersion:${JSON.stringify(keyedRuntime ? "worker-key" : "key")},privateKeyPkcs8DerBase64:(await readFile(${JSON.stringify(join(directory, "wrapping.der"))})).toString('base64')}] },
+modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog : {})})}, runtimeFetch: (url, init)=> fetch(${JSON.stringify(runtimeUrl)} + new URL(url).pathname,init), pollIntervalMs:100 };
 `;
 		await writeFile(join(moduleDirectory, "configuration.mjs"), configSource, {
 			mode: 0o600,
@@ -1009,7 +1052,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(realCodexE2e ? controlledCatalog :
 				fetch(`${apiOrigin}${path}`, {
 					method: "POST",
 					headers: {
-						authorization: realCodexE2e
+						authorization: keyedRuntime
 							? `Bearer ${apiCredentials[userId]}`
 							: `controlled-${userId}`,
 						"content-type": "application/json",
@@ -1017,7 +1060,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(realCodexE2e ? controlledCatalog :
 					},
 					body: JSON.stringify(body),
 				});
-			if (!realCodexE2e) {
+			if (!keyedRuntime) {
 				const createdResponse = await command(
 					`/api/v1/agents/${desired.agentId}/conversations`,
 					`${key}-create`,
@@ -1060,14 +1103,17 @@ modelCatalog:{load:async()=>(${JSON.stringify(realCodexE2e ? controlledCatalog :
 				identity: {
 					resolve: async (request) => {
 						const token = request.headers.get("authorization");
-						if (
-							!token ||
-							!["controlled-user-cli", "controlled-user-second"].includes(token)
-						)
+						const credentialUser = Object.entries(apiCredentials).find(
+							([, credential]) => credential === token,
+						)?.[0];
+						const userId = token?.startsWith("controlled-")
+							? token.slice("controlled-".length)
+							: credentialUser;
+						if (!userId || !["user-cli", "user-second"].includes(userId))
 							return null;
 						return {
 							schemaVersion: 1,
-							userId: token.slice("controlled-".length),
+							userId,
 							displayName: "Controlled user",
 							accountStatus: "active",
 							organizationIds: [],
@@ -1146,7 +1192,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(realCodexE2e ? controlledCatalog :
 			apiOrigin = `http://127.0.0.1:${(apiRunning.server.address() as AddressInfo).port}`;
 			return admitHttp("user-cli", "worker-http");
 		};
-		if (!realCodexE2e) {
+		if (!realCodexE2e && !packagedV4Fake) {
 			// A database failure must not acknowledge a Runtime event that did not commit.
 			await sql.unsafe("create sequence platform.test_event_attempts");
 			await sql.unsafe(
@@ -1156,7 +1202,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(realCodexE2e ? controlledCatalog :
 				"create trigger test_event_failure before insert on platform.conversation_events for each row when (new.source = 'runtime') execute function platform.test_event_failure()",
 			);
 		}
-		if (realCodexE2e) {
+		if (keyedRuntime) {
 			start();
 			start();
 			await waitUntil(async () => {
@@ -1176,7 +1222,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(realCodexE2e ? controlledCatalog :
 			}, "both packaged Workers polling before first admission");
 		}
 		const first = await admitFirst();
-		if (realCodexE2e) {
+		if (keyedRuntime) {
 			await waitUntil(
 				async () => (await dispatchCount()) === 1,
 				"first HTTP dispatch",
@@ -1214,10 +1260,10 @@ modelCatalog:{load:async()=>(${JSON.stringify(realCodexE2e ? controlledCatalog :
 				set last_version=2, current_version=2
 				where purpose='agent-default' and subject_id=${desired.agentId}`;
 		}
-		const second = realCodexE2e
+		const second = keyedRuntime
 			? await admitHttp("user-second", "worker-second")
 			: await admit("second");
-		if (realCodexE2e) {
+		if (keyedRuntime) {
 			const [admission] = await sql<
 				{ actorId: string; principalId: string; accessKind: string }[]
 			>`
@@ -1234,7 +1280,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(realCodexE2e ? controlledCatalog :
 				accessKind: "user",
 			});
 		}
-		if (!realCodexE2e) {
+		if (!keyedRuntime) {
 			start();
 			start();
 		}
@@ -1259,6 +1305,124 @@ modelCatalog:{load:async()=>(${JSON.stringify(realCodexE2e ? controlledCatalog :
 			});
 			expect(modelRequests[0]?.body).toContain("controlled dispatch");
 			expect(modelJournalAtArrival).toHaveLength(1);
+		}
+		if (packagedV4Fake) {
+			expect(modelRequests).toHaveLength(0);
+			expect(
+				requests.find(
+					(request) => request.path === "/internal/runtime/v4/turns",
+				),
+			).toMatchObject({
+				executionId: first.executionId,
+				transportTls: true,
+				keyId: "relay-agent-k1",
+				keyVersion: 1,
+				privateKeyMatches: true,
+				keyInBusinessRequest: false,
+				responseStatus: 200,
+			});
+			await waitUntil(
+				async () =>
+					(
+						await sql`
+							select 1 from platform.persisted_events
+							where event_type='outbox.retry_scheduled'
+							  and payload->>'errorCode' = 'RUNTIME_UNAVAILABLE'
+						`
+					).length >= 1,
+				"V4 transient event retry is durable",
+			);
+			await sql`
+				update platform.outbox_items
+				set available_at=clock_timestamp(), lease_expires_at=null
+				where payload->>'executionId'=${first.executionId}
+				  and status='retry_scheduled'
+			`;
+			for (const child of children) child.kill("SIGKILL");
+			await Promise.all(children.map((child) => once(child, "exit")));
+			start();
+			start();
+			await waitUntil(
+				async () =>
+					(
+						await sql<{ application_name: string }[]>`
+							select distinct application_name from pg_stat_activity
+							where application_name like 'conversation-worker-%'
+							  and query like '%select id, operation from platform.outbox_items%'
+						`
+					).length >= 2,
+				"replacement Workers polling after V4 retry",
+			);
+			await waitUntil(
+				async () =>
+					requests.some(
+						(request) =>
+							request.path === "/internal/runtime/v4/events/read" &&
+							request.executionId === first.executionId &&
+							request.responseStatus === 200,
+					),
+				"V4 replay succeeds after replacement Worker recovery",
+			);
+			await waitUntil(
+				async () =>
+					requests.some(
+						(request) =>
+							request.path === "/internal/runtime/v4/events/ack" &&
+							request.executionId === first.executionId &&
+							request.responseStatus === 200,
+					),
+				"V4 replay cursor acknowledgement after recovery",
+			);
+			const readRequests = requests.filter(
+				(request) =>
+					request.path === "/internal/runtime/v4/events/read" &&
+					request.executionId === first.executionId,
+			);
+			expect(
+				readRequests.some((request) => request.responseStatus === 503),
+			).toBe(true);
+			expect(
+				readRequests.some((request) => request.responseStatus === 200),
+			).toBe(true);
+			expect(
+				readRequests.every((request) => request.keyId === "relay-agent-k1"),
+			).toBe(true);
+			expect(
+				requests
+					.filter(
+						(request) =>
+							request.path === "/internal/runtime/v4/events/ack" &&
+							request.executionId === first.executionId,
+					)
+					.every((request) => request.keyId === "relay-agent-k1"),
+			).toBe(true);
+			const [recovered] = await sql<
+				{ status: string; fence: number; cursor: string | null }[]
+			>`
+				select e.status, e.delivery_fence::int as fence,
+				       e.last_runtime_cursor as cursor
+				from platform.conversation_executions e
+				where e.execution_id=${first.executionId}
+			`;
+			expect(recovered?.status).toBe("processing");
+			expect(recovered?.cursor).toBeTruthy();
+			expect(
+				readRequests
+					.filter((request) => request.responseStatus === 200)
+					.every((request) => request.deliveryFence === recovered?.fence),
+			).toBe(true);
+			const [retryOutbox] = await sql<{ attemptCount: number }[]>`
+				select attempt_count::int as "attemptCount"
+				from platform.outbox_items
+				where payload->>'executionId'=${first.executionId}
+			`;
+			expect(retryOutbox?.attemptCount).toBeGreaterThan(0);
+			expect(
+				requests.filter(
+					(request) => request.path === "/internal/runtime/v3/status",
+				),
+			).toHaveLength(0);
+			return;
 		}
 		expect(children.every((child) => child.exitCode === null)).toBe(true);
 		if (!realCodexE2e) {

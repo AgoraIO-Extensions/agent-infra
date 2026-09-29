@@ -651,6 +651,36 @@ export class FileRuntimeStore {
 						409,
 					);
 				}
+				if (
+					input.kind === "submit-turn" &&
+					input.keyScopeV4 &&
+					input.authorization &&
+					input.authorization.purpose === "business" &&
+					operation.state === "resolved" &&
+					operation.result?.outcome === "accepted" &&
+					["running", "unknown"].includes(operation.result.status)
+				) {
+					const authority =
+						session.executionAuthorities?.[input.binding.executionId];
+					if (
+						!authority ||
+						authority.stopped ||
+						authority.control ||
+						authority.workerId !== input.authorization.workerId ||
+						authority.authorizationRecordId !==
+							input.authorization.authorizationRecordId ||
+						input.authorization.operation.kind !== "execution" ||
+						input.authorization.operation.id !== input.binding.executionId ||
+						input.authorization.operation.executionDeliveryFence <
+							authority.executionDeliveryFence ||
+						input.authorization.issuedAt < authority.issuedAt
+					)
+						runtimeAuthorizationDenied();
+					authority.executionDeliveryFence =
+						input.authorization.operation.executionDeliveryFence;
+					authority.issuedAt = input.authorization.issuedAt;
+					authority.expiresAt = input.authorization.expiresAt;
+				}
 				if (input.deliveryFence > operation.deliveryFence) {
 					operation.deliveryFence = input.deliveryFence;
 					session.highestFences[input.scope] = input.deliveryFence;
@@ -1226,8 +1256,9 @@ export class FileRuntimeStore {
 				authority.workerId !== claims.workerId ||
 				session.highestFences[`execution:${claims.executionId}`] !==
 					claims.operation.executionDeliveryFence
-			)
+			) {
 				runtimeAuthorizationDenied();
+			}
 			if (
 				claims.purpose === "business" &&
 				(authority.stopped ||

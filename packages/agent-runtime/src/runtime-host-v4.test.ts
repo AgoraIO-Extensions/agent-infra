@@ -6,8 +6,13 @@ import { join } from "node:path";
 import {
 	RuntimeBusinessGrantClaimsV4Schema,
 	type RuntimeBusinessRequestV4,
+	RuntimeEventAckRequestV4Schema,
+	RuntimeEventReadRequestV4Schema,
+	RuntimeExecutionGrantClaimsV2Schema,
 	RuntimeSubmitTurnRequestV4Schema,
+	runtimeEventRequestDigestV4,
 	runtimeRequestSigningPayloadV4,
+	VerifiedRuntimeExecutionGrantV2Schema,
 	validateRuntimeBusinessBindingV4,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it } from "vitest";
@@ -117,6 +122,53 @@ function fixture() {
 		claims,
 		transport: { businessRequest: request, privateKeyField },
 	};
+}
+
+async function eventVerification(
+	request:
+		| ReturnType<typeof RuntimeEventReadRequestV4Schema.parse>
+		| ReturnType<typeof RuntimeEventAckRequestV4Schema.parse>,
+) {
+	const read = "afterCursor" in request;
+	const claims = RuntimeExecutionGrantClaimsV2Schema.parse({
+		schemaVersion: 2,
+		issuer: "platform-worker",
+		audience: "runtime_host",
+		issuedAt: Date.now() - 1_000,
+		expiresAt: Date.now() + 29_000,
+		grantId: `event-${request.requestId}`,
+		workerId: "worker-1",
+		principal: request.principal,
+		agentId: request.agentId,
+		channelId: request.channelId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		traceId: request.traceId,
+		hostSessionRef: request.hostSessionRef,
+		operation: request.operation,
+		requestDigest: await runtimeEventRequestDigestV4(request),
+		purpose: "business",
+		authorizationRecordId: "authorization-1",
+		allowedCommands: [read ? "events.persist" : "events.ack"],
+		attachments: [],
+		eventAccess: read
+			? {
+					command: "events.persist",
+					consumer: request.consumer,
+					afterCursor: request.afterCursor,
+				}
+			: {
+					command: "events.ack",
+					consumer: request.consumer,
+					confirmedCursor: request.confirmedCursor,
+				},
+	});
+	return VerifiedRuntimeExecutionGrantV2Schema.parse({
+		token: request.grant.token,
+		claims,
+	});
 }
 
 it("reinstalls the pinned Key on a running submit replay after Host restart", async () => {
@@ -255,6 +307,80 @@ it("reinstalls the pinned Key on a running submit replay after Host restart", as
 		relayKey: "synthetic-relay-key-k1",
 	});
 	await reopened.close();
+	await store.close();
+});
+
+it("accepts V4 event read and ACK on the assigned Session for a nullable submit scope", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-events-"));
+	directories.push(directory);
+	const store = await FileRuntimeStore.open(join(directory, "host.json"));
+	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+	const { request, claims, transport } = fixture();
+	const options = {
+		store,
+		driver,
+		grantValidation: { expectedIssuer: "agent-platform" },
+		grantValidationV2: {
+			expectedIssuer: "platform-worker",
+			expectedWorkerId: "worker-1",
+		},
+		allowLegacyBusiness: false,
+		validateGrantV4: async (value: unknown) => {
+			const parsed = value as RuntimeBusinessRequestV4;
+			await validateRuntimeBusinessBindingV4(parsed, claims);
+			return { request: parsed, claims };
+		},
+	};
+	const host = await RuntimeHost.open(options);
+	const accepted = await host.submitTurnV4(transport);
+	const { input: _input, selection: _selection, ...eventBase } = request;
+	const operation = request.operation;
+	const read = RuntimeEventReadRequestV4Schema.parse({
+		...eventBase,
+		requestId: "event-read-1",
+		hostSessionRef: accepted.hostSessionRef,
+		operation,
+		grant: {
+			schemaVersion: 2,
+			format: "runtime-execution-jws",
+			token: "event-read.token.x",
+		},
+		consumer: "platform_worker_persistence",
+		afterCursor: null,
+	});
+	const replay = await host.readEventsV4(read, await eventVerification(read));
+	expect(replay.events).toHaveLength(1);
+	const firstEvent = replay.events[0];
+	if (!firstEvent) throw new Error("Fake V4 event is missing");
+	const ack = RuntimeEventAckRequestV4Schema.parse({
+		...eventBase,
+		requestId: "event-ack-1",
+		hostSessionRef: accepted.hostSessionRef,
+		operation,
+		grant: {
+			schemaVersion: 2,
+			format: "runtime-execution-jws",
+			token: "event-ack.token.x",
+		},
+		consumer: "platform_worker_persistence",
+		confirmedCursor: firstEvent.cursor,
+	});
+	await expect(
+		host.acknowledgeEventsV4(ack, await eventVerification(ack)),
+	).resolves.toMatchObject({
+		schemaVersion: 4,
+		executionId: request.executionId,
+		confirmedCursor: firstEvent.cursor,
+	});
+	const foreign = RuntimeEventReadRequestV4Schema.parse({
+		...read,
+		hostSessionRef: "foreign-host",
+		grant: { ...read.grant, token: "foreign.token.x" },
+	});
+	await expect(
+		host.readEventsV4(foreign, await eventVerification(foreign)),
+	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+	await host.close();
 	await store.close();
 });
 
