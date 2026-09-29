@@ -24,7 +24,8 @@ import {
 import {
 	type ConversationExecutionDetailV1,
 	ConversationQueryError,
-	type PostgresConversationQueryV1,
+	type ConversationQueryScopeV1,
+	type ConversationReplayResultV1,
 } from "@agent-infra/platform-store";
 import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -65,11 +66,24 @@ export interface TaskRoutesDependencies {
 		): Promise<ConversationTaskSubmitDecisionV1>;
 		stop: ConversationExecutionUseCaseV1["stop"];
 	};
-	readonly query: Pick<
-		PostgresConversationQueryV1,
-		"getExecution" | "replayExecution"
-	>;
+	readonly query: TaskQuery;
 	readonly streamPollIntervalMs?: number;
+}
+
+export interface TaskQuery {
+	getExecution(
+		scope: ConversationQueryScopeV1,
+		conversationId: string,
+		executionId: string,
+	): Promise<ConversationExecutionDetailV1 | undefined>;
+	replayExecution(
+		scope: ConversationQueryScopeV1,
+		conversationId: string,
+		executionId: string,
+		selector:
+			| { readonly kind: "cursor" | "last-event-id"; readonly value: string }
+			| undefined,
+	): Promise<ConversationReplayResultV1 | undefined>;
 }
 
 interface TaskRequestAudit {
