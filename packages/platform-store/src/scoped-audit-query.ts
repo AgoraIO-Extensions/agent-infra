@@ -156,6 +156,7 @@ function candidates(
 	const filters = query.filters;
 	const confirmedBinding = transaction`
 		accepted.acceptance_count = 1 and accepted.actor_id = e.actor_id and accepted.agent_id = e.agent_id
+		and accepted.details ->> 'authorizationRecordId' = r.id
 		and accepted.actor_type = r.boundary -> 'principal' ->> 'kind'
 		and accepted.actor_id = r.boundary -> 'principal' ->> 'id'
 		and r.boundary ->> 'agentId' = e.agent_id and r.boundary ->> 'channelId' = e.channel_id`;
@@ -179,8 +180,9 @@ function candidates(
 		and r.boundary -> 'principal' ->> 'id' = ${scope.principal.id}
 		and r.boundary ->> 'agentId' = e.agent_id and r.boundary ->> 'channelId' = e.channel_id
 		and r.boundary -> 'principal' ->> 'id' = e.actor_id
-		and accepted.acceptance_count = 1 and accepted.actor_type = ${scope.principal.kind}
-		and accepted.actor_id = ${scope.principal.id} and accepted.agent_id = e.agent_id
+		and ${confirmedBinding}
+		and accepted.actor_type = ${scope.principal.kind}
+		and accepted.actor_id = ${scope.principal.id}
 		and a."agentId" = e.agent_id
 		and (a.source <> 'conversation' or (a."conversationId" = e.conversation_id and a."actorId" = e.actor_id))
 		and (a.source = 'conversation' or (a."actorType" = ${scope.principal.kind} and a."actorId" = ${scope.principal.id})
@@ -253,7 +255,9 @@ function candidates(
 				and (${filters.result ?? null}::text is null or a.result = ${filters.result ?? null})
 				and (${filters.principal?.kind ?? null}::text is null or
 					((case when ${confirmedBinding} then accepted.actor_type else a."actorType" end) = ${filters.principal?.kind ?? null}
-					and (case when ${confirmedBinding} then accepted.actor_id else a."actorId" end) = ${filters.principal?.id ?? null}))
+						and (case when ${confirmedBinding} then accepted.actor_id else a."actorId" end) = ${filters.principal?.id ?? null}))
+				and (r.id is null or accepted.acceptance_count is null or accepted.acceptance_count <> 1
+					or accepted.details ->> 'authorizationRecordId' = r.id)
 		)`;
 }
 

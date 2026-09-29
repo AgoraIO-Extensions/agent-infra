@@ -722,4 +722,16 @@ describe("controlled PostgreSQL audit query", () => {
 			query.getAudit(admin, f.auditId, detail, request()),
 		).resolves.toMatchObject({ originalPrincipal: null });
 	});
+
+	it("does not admit an execution when its only accepted audit names another authorization record", async () => {
+		const f = await fixture();
+		await sql`
+			update platform.audit_events
+			set details = jsonb_set(details, '{authorizationRecordId}', to_jsonb(${randomUUID()}::text), false)
+			where action = 'task.authorization.accepted' and target_id = ${f.executionId}
+		`;
+		await expect(
+			query.getAudit(f.scope, f.auditId, detail, request()),
+		).rejects.toMatchObject({ code: "access_denied" });
+	});
 });
