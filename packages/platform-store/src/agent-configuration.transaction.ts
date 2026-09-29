@@ -383,6 +383,28 @@ export class PostgresAgentConfigurationTransactionV1
 					updatedAt: plan.auditEvent.occurredAt,
 				});
 				await insertAgentConfigurationEffects(transaction, plan);
+				const previousBot = previousConfiguration.channels.find(
+					(channel) => channel.kind === "wecom_bot",
+				);
+				if (
+					previousBot &&
+					!configuration.channels.some(
+						(channel) =>
+							channel.kind === "wecom_bot" &&
+							channel.bindingReference === previousBot.bindingReference,
+					)
+				) {
+					await transaction
+						.update(wecomSetupSessions)
+						.set({ status: "cancelled", encryptedCredential: null })
+						.where(
+							and(
+								eq(wecomSetupSessions.sessionId, previousBot.bindingReference),
+								eq(wecomSetupSessions.agentId, plan.agentId),
+								eq(wecomSetupSessions.status, "active"),
+							),
+						);
+				}
 				if (wecom && setup) {
 					const activated = await transaction
 						.update(wecomSetupSessions)
