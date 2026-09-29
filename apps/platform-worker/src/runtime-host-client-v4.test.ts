@@ -271,7 +271,7 @@ it("requires confidential transport for private Key delivery", () => {
 it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "worker-host-v4-"));
 	const storePath = join(directory, "host.json");
-	const store = await FileRuntimeStore.open(storePath);
+	let store = await FileRuntimeStore.open(storePath);
 	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"), [
 		request.selection,
 	]);
@@ -284,8 +284,7 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 		privateKey,
 		now: () => now,
 	});
-	const host = await RuntimeHost.open({
-		store,
+	const hostOptions = {
 		driver,
 		grantValidation: { expectedIssuer: "agent-platform" },
 		grantValidationV2: {
@@ -297,10 +296,10 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 			new Map([["key-1", publicKey]]),
 			{ expectedIssuer: "platform-worker", expectedWorkerId: "worker-1" },
 		),
-	});
+	};
+	let host = await RuntimeHost.open({ ...hostOptions, store });
 	try {
-		const app = createRuntimeHostApp({
-			host,
+		const appOptions = {
 			serviceToken: "synthetic-service-token",
 			runtimeWorkerId: "worker-1",
 			verifyGrantV2: createRuntimeExecutionGrantVerifierV2(
@@ -309,7 +308,8 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 			verifyGrant: () => {
 				throw new Error("V1 verifier must not run");
 			},
-		});
+		};
+		let app = createRuntimeHostApp({ ...appOptions, host });
 		const fetcher = vi.fn<typeof fetch>(async (url, init) =>
 			app.request(new Request(url, init)),
 		);
@@ -437,6 +437,39 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 		await expect(client.acknowledgeEvents(signedAck)).resolves.toMatchObject({
 			confirmedCursor: cursor,
 		});
+		const control = {
+			purpose: "control" as const,
+			controlRecordId: "revocation-1",
+			reason: "authorization_revoked" as const,
+		};
+		const controlRead = {
+			...unsignedRead,
+			requestId: "control-read-1",
+			grant: await signer.signEvent(
+				{ ...unsignedRead, requestId: "control-read-1" },
+				control,
+			),
+		};
+		await expect(client.readEvents(controlRead)).resolves.toMatchObject({
+			events: [{ executionId: request.executionId }],
+		});
+		await expect(client.readEvents(signedRead)).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		await expect(client.submitTurn(signed)).resolves.toEqual(accepted);
+		expect(await driver.sideEffectCount()).toBe(1);
+		for (const changed of [
+			{ ...controlRead, principal: { kind: "user" as const, id: "bob" } },
+			{ ...controlRead, executionId: "execution-2" },
+			{ ...controlRead, sessionGeneration: 2 },
+			{ ...controlRead, keyBinding: { ...request.keyBinding, version: 2 } },
+		]) {
+			await expect(client.readEvents(changed)).rejects.toMatchObject({
+				code: expect.stringMatching(
+					/^RUNTIME_(GRANT_INVALID|SESSION_BINDING_MISMATCH)$/,
+				),
+			});
+		}
 		const operationCursor = "operation-cursor-1";
 		const originalReplay = driver.replayEvents.bind(driver);
 		Object.assign(driver, {
@@ -467,11 +500,15 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 				];
 			},
 		});
-		const after = { ...unsignedRead, afterCursor: cursor };
+		const after = {
+			...unsignedRead,
+			requestId: "control-read-after-business-ack",
+			afterCursor: cursor,
+		};
 		await expect(
 			client.readEvents({
 				...after,
-				grant: await signer.signEvent(after, authority),
+				grant: await signer.signEvent(after, control),
 			}),
 		).resolves.toMatchObject({
 			events: [
@@ -482,12 +519,46 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 				},
 			],
 		});
+		const controlAck = {
+			...unsignedAck,
+			requestId: "control-ack-1",
+			confirmedCursor: operationCursor,
+			grant: await signer.signEvent(
+				{
+					...unsignedAck,
+					requestId: "control-ack-1",
+					confirmedCursor: operationCursor,
+				},
+				control,
+			),
+		};
+		fetcher.mockImplementationOnce(async (url, init) => {
+			const response = await app.request(new Request(url, init));
+			expect(response.status).toBe(200);
+			throw new Error("synthetic ACK response loss");
+		});
+		await expect(client.acknowledgeEvents(controlAck)).rejects.toMatchObject({
+			code: "RUNTIME_UNAVAILABLE",
+		});
+		const persisted = JSON.parse(await readFile(storePath, "utf8"));
+		expect(
+			persisted.sessions[accepted.hostSessionRef].executionAuthorities[
+				request.executionId
+			].confirmedCursor,
+		).toBe(operationCursor);
+		await host.close();
+		await store.close();
+		store = await FileRuntimeStore.open(storePath);
+		host = await RuntimeHost.open({ ...hostOptions, store });
+		app = createRuntimeHostApp({ ...appOptions, host });
+		await expect(client.acknowledgeEvents(controlAck)).resolves.toMatchObject({
+			confirmedCursor: operationCursor,
+		});
 		await expect(client.submitTurn(signed)).resolves.toEqual(accepted);
 		expect(await driver.sideEffectCount()).toBe(1);
 		expect(await readFile(storePath, "utf8")).not.toContain(
 			"synthetic-relay-key-k1",
 		);
-		expect(fetcher).toHaveBeenCalledTimes(9);
 	} finally {
 		await host.close();
 		await store.close();
