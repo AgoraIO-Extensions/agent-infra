@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { createSecureContext } from "node:tls";
 import { pathToFileURL } from "node:url";
 
+import type { RuntimeExternalActionAuthorization } from "@agent-infra/agent-runtime";
 import {
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
@@ -214,6 +215,17 @@ export async function assembleRuntimeHost(
 	let assembledHost: RuntimeHost | undefined;
 	let closeDriver: (() => Promise<void>) | undefined;
 	let openedStore: FileRuntimeStore | undefined;
+	const authorizeExternalAction = async (
+		action: RuntimeExternalActionAuthorization,
+	) => {
+		if (!assembledHost)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization is not ready",
+				403,
+			);
+		await assembledHost.authorizeExternalAction(action);
+	};
 	const close = async () => {
 		try {
 			await assembledHost?.close();
@@ -255,15 +267,7 @@ export async function assembleRuntimeHost(
 								}),
 							}
 						: {}),
-					authorizeExternalAction: async (action) => {
-						if (!assembledHost)
-							throw new RuntimeHostError(
-								"RUNTIME_GRANT_INVALID",
-								"Runtime authorization is not ready",
-								403,
-							);
-						return assembledHost.authorizeExternalAction(action);
-					},
+					authorizeExternalAction,
 					launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
 					path: join(dataDirectory, "codex-driver.json"),
 					configVersion: configuration.configVersion,
@@ -275,19 +279,28 @@ export async function assembleRuntimeHost(
 				? binding === "acp"
 					? await openOpenCodeRuntime({
 							...messagesConfiguration,
+							authorizeExternalAction,
 							path: join(dataDirectory, "acp-driver"),
 							executable:
 								environment.AGENT_INFRA_OPENCODE_EXECUTABLE ??
 								"/opt/opencode/bin/opencode",
+						} as Parameters<typeof openOpenCodeRuntime>[0] & {
+							authorizeExternalAction: typeof authorizeExternalAction;
 						})
 					: binding === "pi"
 						? await openPiRuntime({
 								...messagesConfiguration,
+								authorizeExternalAction,
 								path: join(dataDirectory, "pi-driver"),
+							} as Parameters<typeof openPiRuntime>[0] & {
+								authorizeExternalAction: typeof authorizeExternalAction;
 							})
 						: await ClaudeRuntimeDriver.open({
 								...messagesConfiguration,
+								authorizeExternalAction,
 								path: join(dataDirectory, "claude-driver"),
+							} as Parameters<typeof ClaudeRuntimeDriver.open>[0] & {
+								authorizeExternalAction: typeof authorizeExternalAction;
 							})
 				: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
 		closeDriver = async () => {
