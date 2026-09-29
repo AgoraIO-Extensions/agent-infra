@@ -624,6 +624,10 @@ describe("management routes", () => {
 				userId: "user-1",
 				principal: { kind: "application", id: "application-caller" },
 				creationMode: "api",
+				apiAuthority: {
+					credentialId: "credential-1",
+					identityRevision: "authorization-api-1",
+				},
 			}),
 			undefined,
 		);
