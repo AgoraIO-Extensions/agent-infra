@@ -209,6 +209,29 @@ test("reload preserves mixed history while allowing later events for the submitt
 			`event ${index} must retain its execution binding after reload`,
 		);
 	}
+	for (const changed of [
+		{ type: "execution.status", payload: { status: "failed" } },
+		{ type: "text.delta", payload: { text: "changed history" } },
+	]) {
+		const events = [
+			{ ...after.events[0], ...changed },
+			...after.events.slice(1),
+		];
+		const altered = ConversationDetailProjectionV2Schema.parse({
+			...after,
+			events,
+		});
+		assert.equal(
+			restoredHistoryPreservesEvents(
+				before,
+				altered,
+				"conversation-1",
+				"execution-1",
+			),
+			false,
+			"persisted event content must remain unchanged after reload",
+		);
+	}
 });
 
 async function fixtureDirectory() {

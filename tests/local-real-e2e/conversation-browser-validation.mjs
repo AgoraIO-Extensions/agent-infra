@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 export function currentExecutionEvents(detail, conversationId, executionId) {
 	if (
 		!detail ||
@@ -42,9 +44,8 @@ export function restoredHistoryPreservesEvents(
 	)
 		return false;
 
-	return before.events.every(
-		(event, index) =>
-			after.events[index]?.eventId === event.eventId &&
-			after.events[index]?.executionId === event.executionId,
+	return isDeepStrictEqual(
+		after.events.slice(0, before.events.length),
+		before.events,
 	);
 }
