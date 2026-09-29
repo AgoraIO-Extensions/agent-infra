@@ -11,6 +11,12 @@ type ProtocolErrorCode = PilotProtocolErrorV1["code"];
 
 const protocolErrors = {
 	INVALID_REQUEST: [400, "INVALID_REQUEST", "Request is invalid.", false],
+	VERSION_RETIRED: [
+		400,
+		"INVALID_REQUEST",
+		"This Agent management API version is retired. Use /api/v2.",
+		false,
+	],
 	CONFLICT: [
 		409,
 		"INVALID_REQUEST",
@@ -63,7 +69,7 @@ const protocolErrors = {
 	],
 } as const satisfies Partial<
 	Record<
-		ProtocolErrorCode | "BUSY" | "CONFLICT" | "FORBIDDEN",
+		ProtocolErrorCode | "BUSY" | "CONFLICT" | "FORBIDDEN" | "VERSION_RETIRED",
 		readonly [HttpErrorStatus, ProtocolErrorCode, string, boolean]
 	>
 >;

@@ -1,7 +1,5 @@
 import {
-	AgentApplicationProjectionV1Schema,
 	AgentApplicationProjectionV2Schema,
-	AgentProjectionV1Schema,
 	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
@@ -77,7 +75,7 @@ const identities = {
 } as const satisfies Record<string, IdentityContext>;
 
 const applicationBody = {
-	schemaVersion: 1 as const,
+	schemaVersion: 2 as const,
 	name: "Release assistant",
 	description: "Helps the release team",
 	source: {
@@ -87,15 +85,8 @@ const applicationBody = {
 	},
 	coOwnerIds: [],
 	availability: [{ kind: "organization" as const, organizationId: "org-1" }],
-	actions: [],
 	environment: [],
 	secrets: [],
-};
-const { actions: _retiredActions, ...applicationBodyWithoutActions } =
-	applicationBody;
-const applicationBodyV2 = {
-	...applicationBodyWithoutActions,
-	schemaVersion: 2 as const,
 };
 
 type Closable = { close(): Promise<void> };
@@ -429,9 +420,23 @@ describe("PostgreSQL Platform HTTP integration", () => {
 			...requestHeaders("owner", "create-run"),
 			"content-type": "application/json",
 		};
+		const retired = await app.request("/api/v1/agent-applications", {
+			method: "POST",
+			headers: ownerHeaders,
+			body: JSON.stringify({
+				...applicationBody,
+				schemaVersion: 1,
+				actions: [],
+			}),
+		});
+		expect(retired.status).toBe(400);
+		expect(await retired.json()).toMatchObject({
+			code: "INVALID_REQUEST",
+			message: "This Agent management API version is retired. Use /api/v2.",
+		});
 		expect(
 			(
-				await app.request("/api/v1/agent-applications", {
+				await app.request("/api/v2/agent-applications", {
 					method: "POST",
 					headers: ownerHeaders,
 					body: JSON.stringify(applicationBody),
@@ -441,7 +446,7 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		const { secrets: _secrets, ...updatedBody } = applicationBody;
 		expect(
 			(
-				await app.request("/api/v1/agent-applications/application-run", {
+				await app.request("/api/v2/agent-applications/application-run", {
 					method: "PUT",
 					headers: {
 						...requestHeaders("owner", "update-run"),
@@ -456,7 +461,7 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		).toBe(200);
 		expect(
 			(
-				await app.request("/api/v1/agent-applications", {
+				await app.request("/api/v2/agent-applications", {
 					method: "POST",
 					headers: {
 						...requestHeaders("owner", "create-withdraw"),
@@ -472,7 +477,7 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		expect(
 			(
 				await app.request(
-					"/api/v1/agent-applications/application-withdraw/withdraw",
+					"/api/v2/agent-applications/application-withdraw/withdraw",
 					{
 						method: "POST",
 						headers: requestHeaders("owner", "withdraw-1"),
@@ -480,7 +485,7 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				)
 			).status,
 		).toBe(200);
-		const applications = await app.request("/api/v1/agent-applications", {
+		const applications = await app.request("/api/v2/agent-applications", {
 			headers: requestHeaders("owner"),
 		});
 		expect(applications.status).toBe(200);
@@ -488,18 +493,18 @@ describe("PostgreSQL Platform HTTP integration", () => {
 			((await applications.json()) as { items: unknown[] }).items,
 		).toHaveLength(2);
 		const applicationDetail = await app.request(
-			"/api/v1/agent-applications/application-run",
+			"/api/v2/agent-applications/application-run",
 			{ headers: requestHeaders("owner") },
 		);
 		expect(applicationDetail.status).toBe(200);
 		expect(
-			AgentApplicationProjectionV1Schema.safeParse(
+			AgentApplicationProjectionV2Schema.safeParse(
 				await applicationDetail.json(),
 			).success,
 		).toBe(true);
 
 		const adminHeaders = requestHeaders("admin", "approve-run");
-		const pending = await app.request("/api/v1/admin/agent-applications", {
+		const pending = await app.request("/api/v2/admin/agent-applications", {
 			headers: requestHeaders("admin"),
 		});
 		expect(pending.status).toBe(200);
@@ -509,7 +514,7 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		expect(
 			(
 				await app.request(
-					"/api/v1/admin/agent-applications/application-run/decision",
+					"/api/v2/admin/agent-applications/application-run/decision",
 					{
 						method: "POST",
 						headers: { ...adminHeaders, "content-type": "application/json" },
@@ -518,30 +523,30 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				)
 			).status,
 		).toBe(200);
-		const agents = await app.request("/api/v1/agents", {
+		const agents = await app.request("/api/v2/agents", {
 			headers: requestHeaders("owner"),
 		});
 		expect(agents.status).toBe(200);
 		expect(((await agents.json()) as { items: unknown[] }).items).toHaveLength(
 			1,
 		);
-		const agentDetail = await app.request("/api/v1/agents/agent-run", {
+		const agentDetail = await app.request("/api/v2/agents/agent-run", {
 			headers: requestHeaders("owner"),
 		});
 		expect(agentDetail.status).toBe(200);
 		expect(
-			AgentProjectionV1Schema.safeParse(await agentDetail.json()).success,
+			AgentProjectionV2Schema.safeParse(await agentDetail.json()).success,
 		).toBe(true);
 		expect(
 			(
-				await app.request("/api/v1/agents/agent-run/configuration", {
+				await app.request("/api/v2/agents/agent-run/configuration", {
 					method: "PUT",
 					headers: {
 						...requestHeaders("owner", "configuration-1"),
 						"content-type": "application/json",
 					},
 					body: JSON.stringify({
-						schemaVersion: 1,
+						schemaVersion: 2,
 						environment: [{ name: "LOG_LEVEL", value: "debug" }],
 					}),
 				})
@@ -554,7 +559,7 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				...requestHeaders("owner", "create-v2"),
 				"content-type": "application/json",
 			},
-			body: JSON.stringify(applicationBodyV2),
+			body: JSON.stringify(applicationBody),
 		});
 		expect(v2Create.status).toBe(201);
 		expect(
@@ -701,7 +706,7 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		}
 		expect(
 			(
-				await app.request("/api/v1/agents/agent-run/lifecycle", {
+				await app.request("/api/v2/agents/agent-run/lifecycle", {
 					method: "POST",
 					headers: {
 						...requestHeaders("admin", "disable-1"),
@@ -740,16 +745,16 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		).toBe(true);
 
 		const applicationBeforeAttack = await app.request(
-			"/api/v1/agent-applications/application-run",
+			"/api/v2/agent-applications/application-run",
 			{ headers: requestHeaders("owner") },
 		);
-		const agentBeforeAttack = await app.request("/api/v1/agents/agent-run", {
+		const agentBeforeAttack = await app.request("/api/v2/agents/agent-run", {
 			headers: requestHeaders("owner"),
 		});
 		const applicationSnapshot = await applicationBeforeAttack.json();
 		const agentSnapshot = await agentBeforeAttack.json();
 		const deniedWrites = [
-			await app.request("/api/v1/agent-applications/application-run", {
+			await app.request("/api/v2/agent-applications/application-run", {
 				method: "PUT",
 				headers: {
 					...requestHeaders("attacker", "attack-update"),
@@ -757,22 +762,22 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				},
 				body: JSON.stringify({ ...updatedBody, name: "Attacker update" }),
 			}),
-			await app.request("/api/v1/agent-applications/application-run/withdraw", {
+			await app.request("/api/v2/agent-applications/application-run/withdraw", {
 				method: "POST",
 				headers: requestHeaders("attacker", "attack-withdraw"),
 			}),
-			await app.request("/api/v1/agents/agent-run/configuration", {
+			await app.request("/api/v2/agents/agent-run/configuration", {
 				method: "PUT",
 				headers: {
 					...requestHeaders("attacker", "attack-configuration"),
 					"content-type": "application/json",
 				},
 				body: JSON.stringify({
-					schemaVersion: 1,
+					schemaVersion: 2,
 					environment: [{ name: "ATTACKED", value: "true" }],
 				}),
 			}),
-			await app.request("/api/v1/agents/agent-run/lifecycle", {
+			await app.request("/api/v2/agents/agent-run/lifecycle", {
 				method: "POST",
 				headers: {
 					...requestHeaders("attacker", "attack-lifecycle"),
@@ -781,7 +786,7 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				body: JSON.stringify({ schemaVersion: 1, command: "stop" }),
 			}),
 			await app.request(
-				"/api/v1/admin/agent-applications/application-run/decision",
+				"/api/v2/admin/agent-applications/application-run/decision",
 				{
 					method: "POST",
 					headers: {
@@ -801,14 +806,14 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		]);
 		expect(
 			await (
-				await app.request("/api/v1/agent-applications/application-run", {
+				await app.request("/api/v2/agent-applications/application-run", {
 					headers: requestHeaders("owner"),
 				})
 			).json(),
 		).toEqual(applicationSnapshot);
 		expect(
 			await (
-				await app.request("/api/v1/agents/agent-run", {
+				await app.request("/api/v2/agents/agent-run", {
 					headers: requestHeaders("owner"),
 				})
 			).json(),
@@ -821,10 +826,10 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		).toEqual(auditItems);
 
 		for (const response of [
-			await app.request("/api/v1/agent-applications/application-run", {
+			await app.request("/api/v2/agent-applications/application-run", {
 				headers: requestHeaders("attacker"),
 			}),
-			await app.request("/api/v1/agents/agent-run", {
+			await app.request("/api/v2/agents/agent-run", {
 				headers: requestHeaders("attacker"),
 			}),
 			await app.request("/api/v1/admin/audit", {
