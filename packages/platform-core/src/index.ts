@@ -68,7 +68,11 @@ export * from "./application-foundation.js";
 export * from "./application-revision.js";
 export * from "./audit-query.js";
 export * from "./conversation-dispatch.js";
-export { decideConversationDispatchCapacityV1 } from "./conversation-dispatch-capacity.js";
+export {
+	decideConversationDispatchCapacityV1,
+	isAgentDispatchStoppedV1,
+	planStoppedAgentDispatchV1,
+} from "./conversation-dispatch-capacity.js";
 export * from "./conversation-events.js";
 export * from "./conversation-execution.js";
 export type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";

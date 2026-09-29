@@ -1028,6 +1028,9 @@ describe("Trusted conversation Runtime adapter", () => {
 					leaseExpiresAt = Date.now() + 30_000;
 					return true;
 				}),
+				async terminalizeStoppedUnsentTurn() {
+					return true;
+				},
 				async prepareRuntimeDispatch() {
 					return owned;
 				},

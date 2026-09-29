@@ -668,8 +668,16 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						claim: decision.claim,
 						leaseDurationMs: 30_000,
 					}),
-				).toBe("capacity_unavailable");
-				expect((await dispatchState(work))?.execution_status).toBe("submitted");
+				).toBe(
+					drift === "stopped" ? "agent_not_running" : "capacity_unavailable",
+				);
+				const observed = await dispatchState(work);
+				expect(observed?.execution_status).toBe(
+					drift === "stopped" ? "failed" : "submitted",
+				);
+				expect(observed?.status).toBe(
+					drift === "stopped" ? "failed" : "processing",
+				);
 			} finally {
 				await store.close();
 			}

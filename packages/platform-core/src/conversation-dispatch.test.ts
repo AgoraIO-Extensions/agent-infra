@@ -161,8 +161,11 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 	errorCode: string | undefined;
 	renewable = true;
 	recordable = true;
-	capacity: "available" | "capacity_wait" | "capacity_unavailable" =
-		"available";
+	capacity:
+		| "available"
+		| "capacity_wait"
+		| "capacity_unavailable"
+		| "agent_not_running" = "available";
 
 	constructor(seed = claim()) {
 		this.current = structuredClone(seed);
@@ -204,6 +207,17 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 
 	async renew() {
 		return this.renewable && this.outboxStatus === "processing";
+	}
+
+	async terminalizeStoppedUnsentTurn(input: {
+		claim: ConversationDispatchClaimV1;
+	}): Promise<true | false | "agent_not_running"> {
+		if (!this.#owned(input.claim)) return false;
+		if (this.capacity !== "agent_not_running") return true;
+		this.current = { ...this.current, executionStatus: "failed" };
+		this.outboxStatus = "failed";
+		this.errorCode = "AGENT_NOT_RUNNING";
+		return "agent_not_running";
 	}
 
 	async prepareRuntimeDispatch(input: {
@@ -453,6 +467,45 @@ function dispatch(
 }
 
 describe("Conversation Worker dispatch", () => {
+	it("fails an unstarted Turn before consulting unavailable authorization when Agent stop wins", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		let authorizationCalls = 0;
+		const f = setup({
+			runtimeHost,
+			authorization: {
+				async authorize() {
+					authorizationCalls++;
+					throw new Error("Identity service unavailable");
+				},
+			},
+		});
+		f.store.capacity = "agent_not_running";
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "rejected" });
+		expect(f.store.current.executionStatus).toBe("failed");
+		expect(f.store.outboxStatus).toBe("failed");
+		expect(f.store.errorCode).toBe("AGENT_NOT_RUNNING");
+		expect(authorizationCalls).toBe(0);
+		expect(runtimeHost.sideEffectCount()).toBe(0);
+	});
+	it("keeps a live Agent's unsent Turn retryable when authorization is unavailable", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		const f = setup({
+			runtimeHost,
+			authorization: {
+				async authorize() {
+					throw new Error("Identity service unavailable");
+				},
+			},
+		});
+		expect(await dispatch(f.useCase)).toMatchObject({
+			outcome: "retry",
+			retryScheduled: true,
+		});
+		expect(f.store.current.executionStatus).toBe("submitted");
+		expect(f.store.outboxStatus).toBe("retry_scheduled");
+		expect(f.store.errorCode).toBe("AUTHORIZATION_UNAVAILABLE");
+		expect(runtimeHost.sideEffectCount()).toBe(0);
+	});
 	it.each([
 		["unknown", false],
 		["unknown", true],
