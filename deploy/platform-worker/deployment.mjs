@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isPlatformConversationChannelCurrentV1 } from "@agent-infra/platform-core";
+import { createRelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 import {
  createProductionConversationRuntimeResolverV2,
  createProductionWorkloadWorkerOptionsV1,
@@ -28,6 +29,7 @@ async function prepare(signal) {
     databaseUrl: workload.databaseUrl,
     workerId: instanceId,
     signing,
+    relayKeyDecryptor: createRelayKeyWorkerDecryptorV1(workloadInput.keyring),
     directory,
     channelAuthorizationCurrent: async (record, signal) => {
      signal.throwIfAborted();

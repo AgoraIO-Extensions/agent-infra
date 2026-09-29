@@ -65,6 +65,15 @@ export const workloadInput = {
   假造的 active 用户，也不能把临时故障当作账号删除。账号确认不存在时才返回 `null`。
 - `policy.runtimeAuth` 的 Worker ID、issuer、key ID、公钥必须与 `signing` 匹配；其中只保存
   Kubernetes 内预置的 Runtime transport Secret 名称/键，不保存私钥或 Token 值。
+- 仅在标准模板已具备 Execution Key 受理与 V4 Host 镜像时设置
+  `workloadInput.runtimeModelVersion: 4`。V4 候选只投影目录中的模型配置，不读取旧的
+  `model:*` Secret，也不向 Pod 注入模型 credential。每个 Agent 的 Workload namespace
+  需预置名为 `<workload-resource-name>-tls` 的 `kubernetes.io/tls` Secret；证书须同时匹配
+  `<workload-resource-name>.<namespace>.svc` 和
+  `<workload-resource-name>-probe.<namespace>.svc`。Worker 的 Node 进程须在启动时信任
+  签发 CA（私有 CA 可通过 `NODE_EXTRA_CA_CERTS` 配置）；不得关闭证书校验。
+  缺失、过期或错配的证书使 V4 Workload 拒绝 apply/observe，V4 Worker 只向 HTTPS Host
+  交付 Execution Key。旧 V1–V3 候选按原版本读取，用于历史恢复。
 - `templateModelBindings` 使用当前获准标准模板 digest 与协议。上面空数组仅是形状示例，
   不能验证标准模板；自定义 Agent 可使用空数组。
 - `executionCapacityProfiles` 必须由真实负载/conformance 证据产生，绑定精确 image digest、

@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import type {
 	RuntimeAuthorizationRenewRequestV3,
 	RuntimeCapabilitiesRequestV1,
@@ -9,6 +11,7 @@ import type {
 	RuntimeGenerationCancelRequestV3,
 	RuntimeOperationResponseV1,
 	RuntimeOperationResponseV2,
+	RuntimePinnedExecutionKeyScopeV4,
 	RuntimeReplayRequestV1,
 	RuntimeReplayResponseV1,
 	RuntimeStatusRequestV1,
@@ -22,8 +25,10 @@ import type {
 	RuntimeSubmitTurnRequestV1,
 	RuntimeSubmitTurnRequestV2,
 	RuntimeSubmitTurnRequestV3,
+	RuntimeSubmitTurnTransportV4,
 	RuntimeSupplementRequestV1,
 	RuntimeSupplementRequestV3,
+	RuntimeSupplementTransportV4,
 	WorkloadReadinessRequestV1,
 	WorkloadReadinessResponseV1,
 } from "@agent-infra/contracts/runtime";
@@ -66,9 +71,17 @@ import {
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
 import { RuntimeHostV3 } from "./runtime-host-v3.js";
+import { RuntimeHostV4 } from "./runtime-host-v4.js";
 
 interface RuntimeHostOptions {
 	grantValidationV2?: RuntimeGrantValidationOptionsV2;
+	allowLegacyBusiness?: boolean;
+	validateGrantV4?: (request: unknown) => Promise<{
+		request:
+			| RuntimeSubmitTurnTransportV4["businessRequest"]
+			| RuntimeSupplementTransportV4["businessRequest"];
+		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
+	}>;
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
 	store: FileRuntimeStore;
 	driver: RuntimeDriver;
@@ -313,6 +326,15 @@ export class RuntimeHost {
 	private closed = false;
 
 	private readonly v3?: RuntimeHostV3;
+	private readonly v4?: RuntimeHostV4;
+	private readonly executionKeys = new Map<
+		string,
+		{
+			readonly scope: RuntimePinnedExecutionKeyScopeV4;
+			readonly hostSessionRef: string;
+			readonly relayKey: string;
+		}
+	>();
 	private constructor(private readonly options: RuntimeHostOptions) {
 		if (options.grantValidationV2)
 			this.v3 = new RuntimeHostV3({
@@ -322,6 +344,32 @@ export class RuntimeHost {
 				dispatch: (ref, operation, allowBusinessExecution) =>
 					this.dispatch(ref, operation, allowBusinessExecution),
 				serialize: (key, work) => this.serialize(key, work),
+			});
+		if (options.validateGrantV4)
+			this.v4 = new RuntimeHostV4({
+				store: options.store,
+				assertOpen: () => {
+					if (this.closed) runtimeAuthorizationDenied();
+				},
+				validateGrant: options.validateGrantV4,
+				dispatch: (ref, operation) => this.dispatch(ref, operation),
+				serialize: (key, work) => this.serialize(key, work),
+				installKey: (scope, hostSessionRef, relayKey) => {
+					const previous = this.executionKeys.get(scope.executionId);
+					if (
+						previous &&
+						(!isDeepStrictEqual(previous.scope, scope) ||
+							previous.hostSessionRef !== hostSessionRef ||
+							previous.relayKey !== relayKey)
+					)
+						runtimeAuthorizationDenied();
+					this.executionKeys.set(scope.executionId, {
+						scope,
+						hostSessionRef,
+						relayKey,
+					});
+				},
+				now: options.grantValidationV2?.now,
 			});
 	}
 
@@ -351,19 +399,38 @@ export class RuntimeHost {
 		while (this.queues.size > 0) {
 			await Promise.allSettled([...this.queues.values()]);
 		}
+		this.executionKeys.clear();
 	}
 	private requireLegacyHost() {
 		if (this.closed) runtimeAuthorizationDenied();
 	}
+	private requireLegacyBusiness() {
+		this.requireLegacyHost();
+		if (this.options.allowLegacyBusiness === false)
+			runtimeAuthorizationDenied();
+	}
 
 	submitTurnV3(value: RuntimeSubmitTurnRequestV3, verification: unknown) {
+		this.requireLegacyBusiness();
 		return this.trustedHost().submitTurn(value, verification);
 	}
 	supplementV3(value: RuntimeSupplementRequestV3, verification: unknown) {
+		this.requireLegacyBusiness();
 		return this.trustedHost().supplement(value, verification);
 	}
-	stopV3(value: RuntimeStopRequestV3, verification: unknown) {
-		return this.trustedHost().stop(value, verification);
+	submitTurnV4(value: RuntimeSubmitTurnTransportV4) {
+		if (this.closed || !this.v4) runtimeAuthorizationDenied();
+		return this.v4.submitTurn(value);
+	}
+	supplementV4(value: RuntimeSupplementTransportV4) {
+		if (this.closed || !this.v4) runtimeAuthorizationDenied();
+		return this.v4.supplement(value);
+	}
+	async stopV3(value: RuntimeStopRequestV3, verification: unknown) {
+		const response = await this.trustedHost().stop(value, verification);
+		if (response.result.outcome === "accepted")
+			this.executionKeys.delete(value.executionId);
+		return response;
 	}
 	recoverStatusV3(
 		value: RuntimeStatusRequestV3,
@@ -419,6 +486,22 @@ export class RuntimeHost {
 			this.options.grantValidationV2?.now ?? Date.now,
 		);
 		this.trustedHost();
+		if (action.kind === "model" && this.v4) {
+			const entry = this.executionKeys.get(action.executionId);
+			if (!entry) runtimeAuthorizationDenied();
+			const original = this.options.store.readOriginalExecutionKeyScopeV4(
+				entry.scope,
+			);
+			if (
+				!original?.scope ||
+				original.hostSessionRef !== entry.hostSessionRef ||
+				!isDeepStrictEqual(original.scope, entry.scope) ||
+				this.options.store.nativeSessionRef(entry.hostSessionRef) !==
+					action.nativeSessionRef
+			)
+				runtimeAuthorizationDenied();
+			return { relayKey: entry.relayKey };
+		}
 	}
 
 	/** Resolve the accepted original principal; this is not a Connection grant. */
@@ -442,7 +525,7 @@ export class RuntimeHost {
 		value: RuntimeSubmitTurnRequestV1,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
-		this.requireLegacyHost();
+		this.requireLegacyBusiness();
 		const parsed = RuntimeSubmitTurnRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -459,7 +542,7 @@ export class RuntimeHost {
 		value: RuntimeSubmitTurnRequestV2,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV2> {
-		this.requireLegacyHost();
+		this.requireLegacyBusiness();
 		const parsed = RuntimeSubmitTurnRequestV2Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -854,7 +937,7 @@ export class RuntimeHost {
 		value: RuntimeSupplementRequestV1,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
-		this.requireLegacyHost();
+		this.requireLegacyBusiness();
 		const parsed = RuntimeSupplementRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;

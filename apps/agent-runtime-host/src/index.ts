@@ -1,11 +1,15 @@
 import { createPublicKey, type KeyObject } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { createServer as createHttpsServer } from "node:https";
 import { isAbsolute, join, resolve } from "node:path";
+import { createSecureContext } from "node:tls";
 import { pathToFileURL } from "node:url";
 
 import {
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createExecutionGrantVerifier,
+	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
 	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
@@ -64,6 +68,7 @@ interface StartOptions {
 	log?: (message: string) => void;
 	port?: number;
 	configVersion?: string;
+	tls?: { readonly cert: Buffer; readonly key: Buffer };
 }
 
 function runtimePort(value: string | undefined, fallback: number) {
@@ -87,6 +92,12 @@ export function startRuntimeHost(options: StartOptions) {
 		{
 			fetch: createRuntimeHostApp(options).fetch,
 			port,
+			...(options.tls
+				? {
+						createServer: createHttpsServer,
+						serverOptions: options.tls,
+					}
+				: {}),
 		},
 		(info) =>
 			log(
@@ -156,6 +167,28 @@ export async function assembleRuntimeHost(
 	}
 	const configuration =
 		binding === "codex" ? readCodexPilotConfiguration(environment) : undefined;
+	let tls: StartOptions["tls"];
+	if (configuration && "keyed" in configuration && configuration.keyed) {
+		const certFile = required("AGENT_INFRA_RUNTIME_TLS_CERT_FILE");
+		const keyFile = required("AGENT_INFRA_RUNTIME_TLS_KEY_FILE");
+		if (
+			![certFile, keyFile].every(
+				(file) => isAbsolute(file) && resolve(file) === file,
+			)
+		)
+			runtimeConfigurationInvalid();
+		try {
+			tls = { cert: await readFile(certFile), key: await readFile(keyFile) };
+			createSecureContext(tls);
+		} catch {
+			runtimeConfigurationInvalid();
+		}
+	} else if (
+		environment.AGENT_INFRA_RUNTIME_TLS_CERT_FILE ||
+		environment.AGENT_INFRA_RUNTIME_TLS_KEY_FILE
+	) {
+		runtimeConfigurationInvalid();
+	}
 	const connectionProfile = readConnectionClientProfile(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE,
 	);
@@ -229,7 +262,7 @@ export async function assembleRuntimeHost(
 								"Runtime authorization is not ready",
 								403,
 							);
-						await assembledHost.authorizeExternalAction(action);
+						return assembledHost.authorizeExternalAction(action);
 					},
 					launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
 					path: join(dataDirectory, "codex-driver.json"),
@@ -279,6 +312,18 @@ export async function assembleRuntimeHost(
 							expectedIssuer,
 							expectedWorkerId: runtimeWorkerId,
 						},
+						...(configuration && "keyed" in configuration && configuration.keyed
+							? {
+									allowLegacyBusiness: false,
+									validateGrantV4: createRuntimeExecutionGrantValidatorV4(
+										new Map([[keyId, publicKey]]),
+										{
+											expectedIssuer,
+											expectedWorkerId: runtimeWorkerId,
+										},
+									),
+								}
+							: {}),
 					}
 				: {}),
 		});
@@ -314,6 +359,7 @@ export async function assembleRuntimeHost(
 				? { configVersion: activeConfiguration.configVersion }
 				: {}),
 			serviceToken,
+			...(tls ? { tls } : {}),
 			port,
 			close,
 			verifyGrant: (grant: ExecutionGrantV1) => {

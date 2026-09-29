@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -19,6 +20,7 @@ import {
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
+	validateRuntimeModelProjectionV4,
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationRecordV2,
@@ -36,7 +38,7 @@ import type {
 	V1Service,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
 	runtimeGrantFixture,
 	verificationForRuntimeGrant,
@@ -46,6 +48,7 @@ import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
 import {
 	readCodexPilotConfiguration,
 	readRuntimeModelConfigurationV3,
+	readRuntimeModelConfigurationV4,
 } from "../../agent-runtime-host/src/configuration.js";
 import { createProductionConversationRuntimeResolverV2 } from "./conversation-deployment.js";
 import {
@@ -474,6 +477,277 @@ function cleanupSecrets(
 }
 
 describe("assembled Workload Runtime contracts", () => {
+	it("materializes a V4 standard template without model Key Secret or Pod credential", async () => {
+		const decrypt = vi.fn();
+		const access = vi.fn();
+		const catalog = catalogFixture();
+		const signing = generateKeyPairSync("ed25519");
+		const f = fixture(
+			{
+				runtimeModelVersion: 4,
+				executionCapacityProfiles: [
+					{
+						schemaVersion: 1,
+						imageDigest: `sha256:${"a".repeat(64)}`,
+						resourceProfileRef: workloadTestPolicy.resourceProfileRef,
+						resourceConfigurationHash:
+							workloadResourceConfigurationHashV1(workloadTestPolicy),
+						conformanceEvidenceHash: "c".repeat(64),
+						maximumConcurrentExecutions: 2,
+					},
+				],
+				policy: {
+					...workloadTestPolicy,
+					runtimeAuth: {
+						workerId: "worker-a",
+						grantIssuer: "platform",
+						grantKeyId: "key-a",
+						grantPublicKey: signing.publicKey
+							.export({ type: "spki", format: "pem" })
+							.toString(),
+						serviceTokenSecret: { name: "transport", key: "token" },
+					},
+				},
+				modelCatalog: createDeploymentModelCatalogAdapterV1({
+					load: async () => catalog,
+				}),
+				modelAccess: { validate: access },
+				decryptor: { decrypt },
+			},
+			{ configuration: standardModelConfiguration() },
+		);
+		await f.tick(3);
+		const applying = f.state;
+		assert(applying);
+		const writesBeforeTls = f.writes.length;
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: f.client,
+			policy: f.options.policy,
+			modelProjection: validateRuntimeModelProjectionV4(
+				applying.candidate.modelProjection,
+				applying.candidate.configuration,
+			),
+			probe: async () => true,
+		});
+		await expect(
+			adapter.apply(applying.candidate.deployment),
+		).rejects.toMatchObject({
+			code: "unavailable",
+		});
+		expect(f.writes).toHaveLength(writesBeforeTls);
+		const directory = await mkdtemp(join(tmpdir(), "workload-runtime-tls-"));
+		onTestFinished(() => rm(directory, { recursive: true, force: true }));
+		const certPath = join(directory, "tls.crt");
+		const keyPath = join(directory, "tls.key");
+		const serviceName = workloadResourceNameV1("agent-a");
+		execFileSync(
+			"openssl",
+			[
+				"req",
+				"-x509",
+				"-newkey",
+				"rsa:2048",
+				"-nodes",
+				"-days",
+				"1",
+				"-keyout",
+				keyPath,
+				"-out",
+				certPath,
+				"-subj",
+				`/CN=${serviceName}`,
+				"-addext",
+				`subjectAltName=DNS:${serviceName}.workload-test.svc,DNS:${serviceName}-probe.workload-test.svc`,
+			],
+			{ stdio: "ignore" },
+		);
+		f.resources.set(`Secret/${serviceName}-tls`, {
+			apiVersion: "v1",
+			kind: "Secret",
+			metadata: {
+				name: `${serviceName}-tls`,
+				namespace: workloadTestPolicy.namespace,
+			},
+			type: "kubernetes.io/tls",
+			data: {
+				"tls.crt": (await readFile(certPath)).toString("base64"),
+				"tls.key": (await readFile(keyPath)).toString("base64"),
+			},
+		} as V1Secret);
+		await f.tick(1);
+		expect(f.state?.phase).toBe("observing");
+		expect(f.state?.candidate.modelProjection).toMatchObject({
+			schemaVersion: 4,
+		});
+		const workload = await f.client.read<V1StatefulSet>(
+			"StatefulSet",
+			workloadResourceNameV1("agent-a"),
+		);
+		const container = workload?.spec?.template.spec?.containers[0];
+		assert(container);
+		expect(
+			container.env?.some(({ name }) =>
+				name.startsWith("AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_"),
+			),
+		).toBe(false);
+		expect(container.envFrom).toEqual([]);
+		expect(container.readinessProbe?.httpGet?.scheme).toBe("HTTPS");
+		expect(container.volumeMounts).toContainEqual({
+			name: "runtime-host-tls",
+			mountPath: "/run/runtime-host-tls",
+			readOnly: true,
+		});
+		expect(workload.spec?.template.spec?.volumes).toContainEqual({
+			name: "runtime-host-tls",
+			secret: {
+				secretName: `${workloadResourceNameV1("agent-a")}-tls`,
+				optional: false,
+			},
+		});
+		expect(f.state?.candidate.deployment).toMatchObject({ secretRefs: [] });
+		const configRef = container.env?.find(
+			({ name }) => name === "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
+		)?.valueFrom?.secretKeyRef;
+		assert(configRef?.name);
+		const secret = await f.client.read<V1Secret>("Secret", configRef.name);
+		assert(secret?.data?.configuration);
+		const configuration = Buffer.from(
+			secret.data.configuration,
+			"base64",
+		).toString();
+		expect(JSON.parse(configuration)).toMatchObject({ schemaVersion: 4 });
+		expect(configuration).not.toContain("credentialEnvironmentVariable");
+		expect(configuration).not.toContain("model-secret-a");
+		expect(
+			readRuntimeModelConfigurationV4({
+				AGENT_INFRA_RUNTIME_MODEL_CONFIG: configuration,
+			}),
+		).toMatchObject({
+			keyed: true,
+			modelOptions: [{ modelOptionId: "primary" }],
+		});
+		expect(decrypt).not.toHaveBeenCalled();
+		expect(access).not.toHaveBeenCalled();
+		const resolver = createProductionConversationRuntimeResolverV2({
+			workload: f.options,
+			signing: {
+				workerId: "worker-a",
+				issuer: "platform",
+				keyId: "key-a",
+				privateKey: signing.privateKey,
+			},
+			serviceToken: "synthetic-transport",
+		});
+		await f.tick(4);
+		const observed = f.state;
+		expect(observed?.phase).toBe("ready");
+		assert(observed?.identity);
+		expect(
+			(
+				await resolver({
+					agentId: "agent-a",
+					workload: observed,
+					purpose: "control",
+					command: "session.status",
+					signal: new AbortController().signal,
+				})
+			).baseUrl,
+		).toMatch(/^https:\/\//);
+		const business = {
+			agentId: "agent-a",
+			workload: observed,
+			purpose: "business" as const,
+			command: "turn.submit" as const,
+			signal: new AbortController().signal,
+		};
+		expect((await resolver(business)).baseUrl).toMatch(/^https:\/\//);
+		const originalCatalog = structuredClone(catalog);
+		const writesBeforeCatalogChange = f.writes.length;
+		for (const change of [
+			"expired",
+			"removed",
+			"changed",
+			"metadata",
+			"internal",
+			"unsafe",
+		] as const) {
+			if (change === "expired") catalog.validUntil = Date.now() - 1;
+			else if (change === "removed") catalog.endpoints = [];
+			else {
+				assert(catalog.endpoints[0]);
+				const endpoint = catalog.endpoints[0];
+				if (change === "metadata")
+					endpoint.capabilities.reasoningLevels = ["low"];
+				else {
+					let baseUrl = "https://models.example.test/changed/v1";
+					if (change === "internal") baseUrl = "https://127.0.0.1/private/v1";
+					if (change === "unsafe")
+						baseUrl = "http://models.example.test/changed/v1";
+					endpoint.baseUrl = baseUrl;
+					endpoint.origin = new URL(baseUrl).origin;
+				}
+			}
+			await expect(resolver(business)).rejects.toMatchObject({
+				code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+			});
+			expect(
+				(
+					await resolver({
+						...business,
+						purpose: "control",
+						command: "session.status",
+					})
+				).baseUrl,
+			).toMatch(/^https:\/\//);
+			catalog.validUntil = originalCatalog.validUntil;
+			catalog.endpoints = structuredClone(originalCatalog.endpoints);
+		}
+		expect(f.writes).toHaveLength(writesBeforeCatalogChange);
+		const tlsSecret = f.resources.get(`Secret/${serviceName}-tls`) as V1Secret;
+		assert(tlsSecret.data);
+		const originalCert = tlsSecret.data["tls.crt"];
+		assert(originalCert);
+		tlsSecret.data["tls.crt"] = Buffer.from("invalid certificate").toString(
+			"base64",
+		);
+		const runtime = createWorkloadRuntimeV1(f.options);
+		expect(await runtime.observe(observed)).toBe("drifted");
+		await expect(
+			resolver({
+				agentId: "agent-a",
+				workload: observed,
+				purpose: "control",
+				command: "session.status",
+				signal: new AbortController().signal,
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+		const wildcardPath = join(directory, "wildcard.crt");
+		execFileSync(
+			"openssl",
+			[
+				"req",
+				"-x509",
+				"-key",
+				keyPath,
+				"-out",
+				wildcardPath,
+				"-days",
+				"1",
+				"-subj",
+				"/CN=wildcard",
+				"-addext",
+				"subjectAltName=DNS:*.workload-test.svc",
+			],
+			{ stdio: "ignore" },
+		);
+		tlsSecret.data["tls.crt"] = (await readFile(wildcardPath)).toString(
+			"base64",
+		);
+		expect(await runtime.observe(observed)).toBe("drifted");
+		tlsSecret.data["tls.crt"] = originalCert;
+		f.resources.delete(`Secret/${serviceName}-tls`);
+		expect(await runtime.observe(observed)).toBe("drifted");
+	});
 	it("rejects a Messages candidate bound to a Responses image before decrypting or probing", async () => {
 		const catalog = catalogFixture();
 		catalog.endpoints = catalog.endpoints.map((endpoint) => ({

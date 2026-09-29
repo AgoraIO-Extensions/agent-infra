@@ -74,8 +74,17 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				throw new Error();
 			input.signal.throwIfAborted();
 			const service = `${workloadResourceNameV1(input.agentId)}${input.purpose === "control" ? "-probe" : ""}`;
+			const projection =
+				input.purpose === "control"
+					? state.verified?.modelProjection
+					: state.candidate.modelProjection;
+			const keyedTransport =
+				!!projection &&
+				typeof projection === "object" &&
+				"schemaVersion" in projection &&
+				projection.schemaVersion === 4;
 			return {
-				baseUrl: `http://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
+				baseUrl: `${keyedTransport ? "https" : "http"}://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
 				serviceToken,
 				workerId: signing.workerId,
 			};

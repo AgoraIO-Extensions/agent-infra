@@ -1,5 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { request as httpsRequest } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -78,6 +80,88 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
+	it("rejects a V4 Codex configuration without transport TLS before opening a Driver", async () => {
+		await expect(
+			assembleRuntimeHost({
+				...(await environment()),
+				AGENT_INFRA_RUNTIME_DRIVER: "codex",
+				AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+					schemaVersion: 4,
+					configVersion: "keyless-1",
+					defaultModelOptionId: "primary",
+					defaultReasoningLevel: "medium",
+					modelOptions: [
+						{
+							modelOptionId: "primary",
+							protocol: "openai-responses-v1",
+							authentication: "bearer",
+							endpoint: "https://relay.example.test/v1",
+							model: "model-a",
+							reasoningLevels: ["medium"],
+						},
+					],
+				}),
+			}),
+		).rejects.toThrow("RUNTIME_CONFIGURATION_INVALID");
+		expect(runtimeAssemblyMocks.openCodexRuntimeDriver).not.toHaveBeenCalled();
+	});
+
+	it("serves TLS with a certificate validated by the Worker", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "runtime-tls-"));
+		directories.push(directory);
+		const certPath = join(directory, "tls.crt");
+		const keyPath = join(directory, "tls.key");
+		execFileSync(
+			"openssl",
+			[
+				"req",
+				"-x509",
+				"-newkey",
+				"rsa:2048",
+				"-nodes",
+				"-days",
+				"1",
+				"-keyout",
+				keyPath,
+				"-out",
+				certPath,
+				"-subj",
+				"/CN=localhost",
+				"-addext",
+				"subjectAltName=DNS:localhost",
+			],
+			{ stdio: "ignore" },
+		);
+		const cert = await readFile(certPath);
+		const runtime = await assembleRuntimeHost(await environment());
+		const ready = Promise.withResolvers<string>();
+		const server = startRuntimeHost({
+			...runtime,
+			tls: { cert, key: await readFile(keyPath) },
+			port: 0,
+			log: ready.resolve,
+		});
+		try {
+			const port = JSON.parse(await ready.promise).port as number;
+			const status = await new Promise<number>((resolve, reject) => {
+				const request = httpsRequest(
+					{ hostname: "localhost", port, path: "/healthz", ca: cert },
+					(response) => {
+						response.resume();
+						response.on("end", () => resolve(response.statusCode ?? 0));
+					},
+				);
+				request.on("error", reject);
+				request.end();
+			});
+			expect(status).toBe(200);
+		} finally {
+			await new Promise<void>((resolve, reject) =>
+				server.close((error) => (error ? reject(error) : resolve())),
+			);
+			await runtime.close();
+		}
+	});
 	it.each(["codex", "claude", "acp", "pi", "fake"])(
 		"checks %s process protection before reading private deployment inputs even through programmatic assembly",
 		async (driver) => {

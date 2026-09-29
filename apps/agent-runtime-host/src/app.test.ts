@@ -165,6 +165,24 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost HTTP/SSE adapter", () => {
+	it("rejects V4 private Key delivery before parsing without the Worker service token", async () => {
+		const { app, driver } = await setup();
+		for (const authorization of [undefined, "Bearer wrong-worker-token"]) {
+			const response = await app.request("/internal/runtime/v4/turns", {
+				method: "POST",
+				headers: authorization ? { authorization } : {},
+				body: JSON.stringify({
+					privateKeyField: { keyDelivery: { relayKey: "synthetic-key" } },
+				}),
+			});
+			expect(response.status).toBe(401);
+			expect(await response.json()).toMatchObject({
+				code: "RUNTIME_SERVICE_UNAUTHORIZED",
+			});
+		}
+		expect(await driver.sideEffectCount()).toBe(0);
+	});
+
 	it("adds a selection-required V2 Turn route without removing V1", async () => {
 		const { app } = await setup();
 		const legacy = await app.request("/internal/runtime/v1/turns", {

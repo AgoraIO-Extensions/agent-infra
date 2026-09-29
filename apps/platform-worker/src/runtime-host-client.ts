@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { isDeepStrictEqual } from "node:util";
 
 import { ProtocolErrorV1Schema } from "@agent-infra/contracts";
 import {
@@ -6,6 +7,8 @@ import {
 	type RuntimeAuthorizationRenewRequestV3,
 	RuntimeAuthorizationRenewRequestV3Schema,
 	RuntimeAuthorizationRenewResponseV3Schema,
+	type RuntimeBusinessGrantClaimsV4,
+	type RuntimeBusinessRequestV4,
 	type RuntimeEventAckRequestV3,
 	RuntimeEventAckRequestV3Schema,
 	RuntimeEventAckResponseV3Schema,
@@ -19,6 +22,10 @@ import {
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV3Schema,
+	RuntimeOperationResponseV4Schema,
+	type RuntimePinnedExecutionKeyScopeV4,
+	RuntimePrivateRelayKeyFieldV1Schema,
+	RuntimeRelayKeyDeliveryV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
 	type RuntimeStatusRequestV3,
@@ -32,9 +39,13 @@ import {
 	RuntimeSubmitTurnRequestV2Schema,
 	type RuntimeSubmitTurnRequestV3,
 	RuntimeSubmitTurnRequestV3Schema,
+	RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV1Schema,
 	type RuntimeSupplementRequestV3,
 	RuntimeSupplementRequestV3Schema,
+	RuntimeSupplementTransportV4Schema,
+	validateRuntimeBusinessBindingV4,
+	validateRuntimePinnedExecutionKeyScopeV4,
 } from "@agent-infra/contracts/runtime";
 import {
 	type ConversationOperationFactV2,
@@ -45,11 +56,33 @@ import {
 	type ConversationRuntimeOperationEventV2,
 	type ConversationRuntimeStatusRequestV2,
 } from "@agent-infra/platform-core";
+import type { RelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 
 export interface WorkerRuntimeHostClientOptionsV1 {
 	readonly baseUrl: string;
 	readonly serviceToken: string;
 	readonly fetch?: typeof fetch;
+}
+
+export interface WorkerRuntimeHostClientOptionsV4
+	extends WorkerRuntimeHostClientOptionsV1 {
+	readonly verifyGrant: (
+		grant: RuntimeBusinessRequestV4["grant"],
+	) => RuntimeBusinessGrantClaimsV4 | Promise<RuntimeBusinessGrantClaimsV4>;
+	readonly executionKeys: {
+		readAcceptedExecution(request: RuntimeBusinessRequestV4): Promise<{
+			readonly scope: RuntimePinnedExecutionKeyScopeV4;
+			readonly trustedHostSessionRef: string | null;
+		} | null>;
+		readCiphertext(binding: {
+			readonly purpose: "personal" | "agent-default";
+			readonly subjectId: string;
+			readonly keyId: string;
+			readonly keyVersion: number;
+		}): Promise<unknown | null>;
+	};
+	readonly decryptor: RelayKeyWorkerDecryptorV1;
+	readonly assertCurrentAuthorization: () => Promise<void>;
 }
 
 const maximumResponseBytes = 65_536;
@@ -139,6 +172,7 @@ function requestInit(
 			"x-trace-id": traceId,
 		},
 		body: JSON.stringify(body),
+		redirect: "error",
 		signal,
 	};
 }
@@ -660,5 +694,128 @@ export function createWorkerRuntimeHostClientV3(
 				yield event.schemaVersion === 2 ? operationEvent(event) : event;
 			}
 		},
+	};
+}
+
+/** The Key source must read the original accepted Execution, not a current Key alias. */
+export function createWorkerRuntimeHostClientV4(
+	options: WorkerRuntimeHostClientOptionsV4,
+) {
+	if (
+		!options?.serviceToken ||
+		!options.verifyGrant ||
+		!options.executionKeys ||
+		!options.decryptor ||
+		!options.assertCurrentAuthorization
+	)
+		throw new TypeError("RuntimeHost V4 client options are invalid");
+	const base = endpoint(options.baseUrl, "/");
+	if (
+		process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0" ||
+		(base.protocol !== "https:" &&
+			!(
+				base.protocol === "http:" &&
+				["127.0.0.1", "[::1]", "localhost"].includes(base.hostname)
+			))
+	)
+		throw new TypeError("RuntimeHost V4 transport must be confidential");
+	const fetcher = options.fetch ?? fetch;
+	async function send(request: RuntimeBusinessRequestV4, signal?: AbortSignal) {
+		let path: string;
+		try {
+			path = "selection" in request ? "turns" : "instructions";
+			const claims = await options.verifyGrant(request.grant);
+			await validateRuntimeBusinessBindingV4(request, claims);
+			const accepted =
+				await options.executionKeys.readAcceptedExecution(request);
+			if (!accepted) return failure("RUNTIME_GRANT_INVALID", false);
+			validateRuntimePinnedExecutionKeyScopeV4(
+				accepted.scope,
+				request,
+				accepted.trustedHostSessionRef,
+			);
+			const binding = {
+				purpose: accepted.scope.keyBinding.purpose,
+				subjectId: accepted.scope.keyBinding.subjectId,
+				keyId: accepted.scope.keyBinding.ciphertextRef,
+				keyVersion: accepted.scope.keyBinding.version,
+			};
+			const encryptedRecord =
+				await options.executionKeys.readCiphertext(binding);
+			if (!encryptedRecord) return failure("RELAY_KEY_UNAVAILABLE", false);
+			const decrypted = await options.decryptor.decrypt({
+				encryptedRecord,
+				expectedBinding: binding,
+			});
+			if (decrypted.outcome !== "decrypted")
+				return failure(decrypted.code, false);
+			let relayKey: string;
+			try {
+				relayKey = new TextDecoder("utf-8", { fatal: true }).decode(
+					decrypted.plaintext,
+				);
+				RuntimeRelayKeyDeliveryV1Schema.parse({ relayKey });
+			} finally {
+				decrypted.plaintext.fill(0);
+			}
+			const current =
+				await options.executionKeys.readAcceptedExecution(request);
+			if (!current || !isDeepStrictEqual(current, accepted))
+				return failure("RUNTIME_GRANT_INVALID", false);
+			const privateKeyField = RuntimePrivateRelayKeyFieldV1Schema.parse({
+				schemaVersion: 1,
+				context: {
+					requestId: request.requestId,
+					grantId: claims.grantId,
+					requestDigest: claims.requestDigest,
+					traceId: request.traceId,
+					principal: request.principal,
+					executionSource: request.executionSource,
+					channelId: request.channelId,
+					agentId: request.agentId,
+					conversationId: request.conversationId,
+					executionId: request.executionId,
+					turnId: request.turnId,
+					sessionGeneration: request.sessionGeneration,
+					hostSessionRef: request.hostSessionRef,
+					operation: request.operation,
+					keyBinding: request.keyBinding,
+				},
+				keyDelivery: { relayKey },
+			});
+			const transport =
+				"selection" in request
+					? RuntimeSubmitTurnTransportV4Schema.parse({
+							businessRequest: request,
+							privateKeyField,
+						})
+					: RuntimeSupplementTransportV4Schema.parse({
+							businessRequest: request,
+							privateKeyField,
+						});
+			await options.assertCurrentAuthorization();
+			const response = await post(
+				fetcher,
+				new URL(`internal/runtime/v4/${path}`, base),
+				options.serviceToken,
+				request.traceId,
+				transport,
+				signal,
+			);
+			try {
+				return RuntimeOperationResponseV4Schema.parse(
+					JSON.parse(await boundedResponseText(response)),
+				);
+			} catch {
+				return failure("RUNTIME_RESPONSE_INVALID", true);
+			}
+		} catch (error) {
+			if (error instanceof ConversationRuntimeHostError) throw error;
+			return failure("RUNTIME_REQUEST_INVALID", false);
+		}
+	}
+	return {
+		submitTurn: send,
+		supplement: send,
 	};
 }
