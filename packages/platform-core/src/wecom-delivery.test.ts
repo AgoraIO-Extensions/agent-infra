@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import {
 	createWecomDeliveryV1,
 	type WecomAuthorityV1,
+	type WecomAuthorizationPortV1,
 	type WecomDeliveryClaimV1,
 } from "./wecom-channel.ts";
 
@@ -55,7 +56,10 @@ function fixture() {
 		finish: vi.fn(async () => {}),
 	};
 	const authorization = {
-		authorize: vi.fn(async () => ({ outcome: "allowed" as const, authority })),
+		authorize: vi.fn<WecomAuthorizationPortV1["authorize"]>(async () => ({
+			outcome: "allowed",
+			authority,
+		})),
 	};
 	const sender = { send: vi.fn(async () => "sent" as const) };
 	return {
@@ -95,6 +99,33 @@ it("cancels before sending when identity mapping or binding changes", async () =
 	await f.useCase.dispatch();
 	expect(f.sender.send).not.toHaveBeenCalled();
 	expect(f.store.prepare).not.toHaveBeenCalled();
+	expect(f.store.finish).toHaveBeenCalledWith(claim, "cancelled");
+});
+it("leaves a reply retryable while the Agent is temporarily unavailable", async () => {
+	const f = fixture();
+	f.authorization.authorize.mockResolvedValueOnce({
+		outcome: "unavailable",
+		actorId: "actor",
+	});
+	expect(await f.useCase.dispatch()).toBe(true);
+	expect(f.store.prepare).not.toHaveBeenCalled();
+	expect(f.store.finish).not.toHaveBeenCalled();
+	expect(f.sender.send).not.toHaveBeenCalled();
+
+	expect(await f.useCase.dispatch()).toBe(true);
+	expect(f.store.prepare).toHaveBeenCalledTimes(1);
+	expect(f.sender.send).toHaveBeenCalledTimes(1);
+	expect(f.store.finish).toHaveBeenCalledWith(claim, "sent");
+});
+it("cancels a reply when authorization is denied", async () => {
+	const f = fixture();
+	f.authorization.authorize.mockResolvedValueOnce({
+		outcome: "denied",
+		actorId: "actor",
+	});
+	expect(await f.useCase.dispatch()).toBe(true);
+	expect(f.store.prepare).not.toHaveBeenCalled();
+	expect(f.sender.send).not.toHaveBeenCalled();
 	expect(f.store.finish).toHaveBeenCalledWith(claim, "cancelled");
 });
 it("does not send with a lost lease and records response loss as unknown without retry", async () => {

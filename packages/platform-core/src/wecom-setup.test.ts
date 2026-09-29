@@ -287,9 +287,15 @@ it("stages application credentials only for the current Owner and verified setup
 	expect(await usecase.acceptMessages(setup.sessionId)).toBe(true);
 	record = { ...record, connectionStatus: "disconnected" };
 	expect(await usecase.current("agent", "owner", "wecom_app")).toEqual({
+		status: "connected",
+		sessionId: setup.sessionId,
+	});
+	record = { ...record, callbackVerifiedAt: null };
+	expect(await usecase.current("agent", "owner", "wecom_app")).toEqual({
 		status: "disconnected",
 		sessionId: setup.sessionId,
 	});
+	record = { ...record, callbackVerifiedAt: now.toISOString() };
 	record = { ...record, connectionStatus: "auth_failed" };
 	expect(await usecase.current("agent", "owner", "wecom_app")).toEqual({
 		status: "auth_failed",
@@ -306,7 +312,7 @@ it("stages application credentials only for the current Owner and verified setup
 	});
 	expect(await usecase.acceptMessages(setup.sessionId)).toBe(true);
 	expect(await usecase.current("agent", "new-owner", "wecom_app")).toEqual({
-		status: "disconnected",
+		status: "connected",
 		sessionId: setup.sessionId,
 	});
 	exposedApplication = false;

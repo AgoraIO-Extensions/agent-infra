@@ -189,6 +189,7 @@ export function createWecomSetupV1(options: {
 			if (!session) return { status: "callback" as const };
 			if (session.agentId !== agentId || (session.kind ?? "wecom_bot") !== kind)
 				throw new WecomSetupError("unavailable");
+			// Application validation is one-shot; activation releases its probe lease.
 			return kind === "wecom_app"
 				? {
 						sessionId: session.sessionId,
@@ -196,9 +197,7 @@ export function createWecomSetupV1(options: {
 							session.status === "active" &&
 							session.connectionStatus === "auth_failed"
 								? ("auth_failed" as const)
-								: session.status === "active" &&
-										session.callbackVerifiedAt &&
-										session.connectionStatus === "connected"
+								: session.status === "active" && session.callbackVerifiedAt
 									? ("connected" as const)
 									: session.status === "auth_failed"
 										? ("auth_failed" as const)

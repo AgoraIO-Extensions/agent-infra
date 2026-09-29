@@ -309,6 +309,7 @@ export function createWecomDeliveryV1(dependencies: {
 				"use",
 				claim.taskBoundary,
 			);
+			if (current.outcome === "unavailable") return true;
 			if (
 				current.outcome !== "allowed" ||
 				current.authority.actor.actorId !== claim.actorId ||
