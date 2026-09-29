@@ -1,7 +1,6 @@
-import {
-	createConversationDispatchUseCaseV1,
-	createConversationEventUseCaseV1,
-} from "@agent-infra/platform-core";
+import { startObservability } from "@agent-infra/observability";
+import { createObservedConversationEvents } from "@agent-infra/observability/worker";
+import { createConversationDispatchUseCaseV1 } from "@agent-infra/platform-core";
 import {
 	openPostgresConversationDispatchStoreV1,
 	PostgresConversationEventTransactionV1,
@@ -25,6 +24,7 @@ export interface PlatformConversationWorkerOptionsV2
 	readonly leaseDurationMs?: number;
 	readonly retryDelayMs?: number;
 	readonly log?: (message: string) => void;
+	readonly telemetry?: ReturnType<typeof startObservability>;
 }
 
 export function createPlatformConversationWorkerV2(
@@ -60,6 +60,8 @@ export function createPlatformConversationWorkerV2(
 	const transaction = new PostgresConversationEventTransactionV1({
 		databaseUrl: options.databaseUrl,
 	});
+	const telemetry =
+		options.telemetry ?? startObservability({ service: "platform-worker" });
 	let runtime: ReturnType<typeof createConversationRuntimeV2> | undefined;
 	let dispatch: ReturnType<typeof createConversationDispatchUseCaseV1>;
 	try {
@@ -76,7 +78,7 @@ export function createPlatformConversationWorkerV2(
 				store,
 				authorization: runtime.authorization,
 				runtimeHost: runtime.runtimeHost,
-				events: createConversationEventUseCaseV1({ transaction }),
+				events: createObservedConversationEvents({ transaction, telemetry }),
 			},
 			{
 				leaseDurationMs: options.leaseDurationMs,
@@ -91,6 +93,7 @@ export function createPlatformConversationWorkerV2(
 				? [Promise.resolve().then(() => runtimeForCleanup.close())]
 				: []),
 			Promise.resolve().then(() => transaction.close()),
+			Promise.resolve().then(() => telemetry.close()),
 			Promise.resolve().then(() => store.close()),
 			Promise.resolve().then(() => taskAuthorizationStore.close()),
 			Promise.resolve().then(() => legacyControlStore.close()),
@@ -199,6 +202,7 @@ export function createPlatformConversationWorkerV2(
 					...[...running.values()].map((entry) => entry.promise),
 				]);
 				const closeResults = await Promise.allSettled([
+					Promise.resolve().then(() => telemetry.close()),
 					Promise.resolve().then(() => transaction.close()),
 					Promise.resolve().then(() => store.close()),
 					Promise.resolve().then(() => taskAuthorizationStore.close()),

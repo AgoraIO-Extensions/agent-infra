@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { startObservability } from "@agent-infra/observability";
 import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	createAgentConfigurationUseCaseV1,
@@ -52,6 +53,7 @@ interface AssemblyQueries {
 }
 
 export interface PlatformApiAssemblyInput {
+	readonly telemetry?: ReturnType<typeof startObservability>;
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly files?: PlatformFileDeploymentV1;
 	readonly databaseUrl: string;
@@ -81,6 +83,8 @@ export interface PlatformApiAssembly {
 export function assemblePlatformApi(
 	input: PlatformApiAssemblyInput,
 ): PlatformApiAssembly {
+	const telemetry =
+		input.telemetry ?? startObservability({ service: "platform-api" });
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl: input.databaseUrl,
 	});
@@ -429,6 +433,7 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		telemetry,
 		requestScope: input.requestScope,
 		...(files ? { files: files.dependencies } : {}),
 		management: {
@@ -484,6 +489,7 @@ export function assemblePlatformApi(
 		},
 	};
 	const adapters = [
+		telemetry,
 		...(files ? [files] : []),
 		foundationTransaction,
 		revisionTransaction,

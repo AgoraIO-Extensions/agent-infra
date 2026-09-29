@@ -14,6 +14,7 @@
 		"test": "vitest run src"
 	},
 	"dependencies": {
+		"@agent-infra/observability": "workspace:*",
 		"@agent-infra/contracts": "workspace:*",
 		"@agent-infra/identity": "workspace:*",
 		"@agent-infra/image-registry": "workspace:*",

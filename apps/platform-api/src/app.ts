@@ -1,3 +1,5 @@
+import type { startObservability } from "@agent-infra/observability";
+import { createHttpObservability } from "@agent-infra/observability/http";
 import { Hono } from "hono";
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
 import {
@@ -33,6 +35,7 @@ import { registerV2CompatibilityRoutes } from "./http/v2-compat.js";
 export const platformApiService = "platform-api";
 
 export interface PlatformAppDependencies {
+	readonly telemetry?: Pick<ReturnType<typeof startObservability>, "record">;
 	readonly requestScope?: (
 		request: Request,
 		work: () => Promise<void>,
@@ -46,8 +49,11 @@ export interface PlatformAppDependencies {
 	readonly sessionAudit: SessionAuditRoutesDependencies;
 }
 
-export function createPlatformHealthApp() {
+export function createPlatformHealthApp(
+	telemetry?: PlatformAppDependencies["telemetry"],
+) {
 	const app = new Hono();
+	if (telemetry) app.use("*", createHttpObservability(telemetry));
 	app.onError((error, context) => {
 		const protocol =
 			error instanceof HttpProtocolError
@@ -69,7 +75,7 @@ export function createPlatformHealthApp() {
 }
 
 export function createPlatformApp(dependencies: PlatformAppDependencies) {
-	const app = createPlatformHealthApp();
+	const app = createPlatformHealthApp(dependencies.telemetry);
 	const requestScope = dependencies.requestScope;
 	if (requestScope)
 		app.use("*", (context, next) => requestScope(context.req.raw, next));
