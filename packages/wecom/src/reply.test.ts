@@ -295,6 +295,63 @@ describe("reply protection and external send", () => {
 		).toBe("unknown");
 		expect(calls).toBe(1);
 	});
+	it("does not send an application reply that expires during access-token lookup", async () => {
+		let clock = Date.parse("2026-09-15T00:00:00Z");
+		let calls = 0;
+		const adapter = sender(
+			async () => {
+				calls++;
+				return Response.json({ errcode: 0 });
+			},
+			() => new Date(clock),
+			undefined,
+			async () => {
+				clock += 1_000;
+				return "fixture-token";
+			},
+		);
+		expect(
+			await adapter.send({
+				scope: applicationScope,
+				replyHandle: await protect({
+					...applicationRoute,
+					expiresAt: new Date(clock + 1_000).toISOString(),
+				}),
+				text: "fixture answer",
+			}),
+		).toBe("failed");
+		expect(calls).toBe(0);
+	});
+	it("stops later application parts if token lookup consumes the reply window", async () => {
+		let clock = Date.parse("2026-09-15T00:00:00Z");
+		let calls = 0;
+		let tokenCalls = 0;
+		const adapter = sender(
+			async () => {
+				calls++;
+				return Response.json({ errcode: 0 });
+			},
+			() => new Date(clock),
+			undefined,
+			async () => {
+				tokenCalls++;
+				if (tokenCalls === 2) clock += 1_000;
+				return "fixture-token";
+			},
+		);
+		expect(
+			await adapter.send({
+				scope: applicationScope,
+				replyHandle: await protect({
+					...applicationRoute,
+					expiresAt: new Date(clock + 1_000).toISOString(),
+				}),
+				text: "x".repeat(4097),
+			}),
+		).toBe("unknown");
+		expect(calls).toBe(1);
+		expect(tokenCalls).toBe(2);
+	});
 	it("stops after the first application acknowledgment when Owner unbinds", async () => {
 		let bound = true;
 		let calls = 0;

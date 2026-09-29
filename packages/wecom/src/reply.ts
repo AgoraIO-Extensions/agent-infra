@@ -393,6 +393,8 @@ export function createWecomSenderV1(options: {
 						if (!(await input.revalidate()))
 							return index > 0 ? "unknown" : "failed";
 					}
+					if (replyExpiresAt <= (options.now?.() ?? new Date()).getTime())
+						return index > 0 ? "unknown" : "failed";
 				} catch {
 					return index > 0 ? "unknown" : "failed";
 				}
