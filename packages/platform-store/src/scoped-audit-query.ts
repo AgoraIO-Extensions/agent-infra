@@ -186,7 +186,7 @@ function candidates(
 		and a."agentId" = e.agent_id
 		and (a.source <> 'conversation' or (a."conversationId" = e.conversation_id and a."actorId" = e.actor_id))
 		and (a.source = 'conversation' or (a."actorType" = ${scope.principal.kind} and a."actorId" = ${scope.principal.id})
-			or (a."actorType" = 'system' and a.action in ('task.status.changed', 'task.control.created')))
+			or (a."actorType" = 'system' and a.action in ('task.status.changed', 'task.control.created', 'execution.operation.observed')))
 		and ((${scope.principal.kind} = 'user' and e.channel_id not like 'api:%') or e.channel_id = ${`api:${scope.principal.kind}`})
 		and agent.authorization_revision is not null
 		and exists (select 1 from platform.agent_applications application where application.agent_id = e.agent_id)

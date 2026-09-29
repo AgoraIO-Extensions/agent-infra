@@ -501,6 +501,13 @@ describe("controlled PostgreSQL audit query", () => {
 		try {
 			await events.persist(command("intent", "intent"));
 			await events.persist(command("unknown", "unknown"));
+			await sql`
+				update platform.audit_events
+				set actor_type = 'system', actor_id = 'controlled-worker'
+				where target_id = ${f.executionId}
+					and action = 'execution.operation.observed'
+					and details -> 'fact' ->> 'phase' = 'unknown'
+			`;
 			const result = await query.listAudit(
 				f.scope,
 				{
@@ -517,6 +524,7 @@ describe("controlled PostgreSQL audit query", () => {
 			expect(result.items[0]).toMatchObject({
 				result: "unknown",
 				executor: "platform_worker",
+				actor: { kind: "system", actorId: "controlled-worker" },
 				originalPrincipal: f.principal,
 				operation: {
 					fact: {
