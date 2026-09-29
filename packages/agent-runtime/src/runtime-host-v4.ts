@@ -9,6 +9,7 @@ import {
 	RuntimeSubmitTurnTransportV4Schema,
 	type RuntimeSupplementTransportV4,
 	RuntimeSupplementTransportV4Schema,
+	runtimeOperationDigestInputV4,
 	validateRuntimePinnedExecutionKeyScopeV4,
 	validateRuntimePrivateRelayKeyFieldV1,
 } from "@agent-infra/contracts/runtime";
@@ -61,19 +62,7 @@ function scope(request: RuntimeBusinessRequestV4) {
 }
 
 function operationDigest(request: RuntimeBusinessRequestV4) {
-	return requestDigest({
-		kind: "selection" in request ? "submit-turn" : "supplement",
-		agentId: request.agentId,
-		conversationId: request.conversationId,
-		executionId: request.executionId,
-		turnId: request.turnId,
-		sessionGeneration: request.sessionGeneration,
-		operation: request.operation,
-		executionSource: request.executionSource,
-		keyBinding: request.keyBinding,
-		input: request.input,
-		...("selection" in request ? { selection: request.selection } : {}),
-	});
+	return requestDigest(runtimeOperationDigestInputV4(request));
 }
 
 function response(hostSessionRef: string, operation: StoredOperation) {

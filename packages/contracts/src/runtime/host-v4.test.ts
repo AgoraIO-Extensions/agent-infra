@@ -10,6 +10,7 @@ import {
 	type RuntimeSupplementRequestV4,
 	RuntimeSupplementRequestV4Schema,
 	RuntimeSupplementTransportV4Schema,
+	runtimeOperationDigestInputV4,
 	runtimeRequestDigestV4,
 	runtimeRequestSigningPayloadV4,
 	validateRuntimeBusinessBindingV4,
@@ -544,6 +545,28 @@ it("rejects static credential fallback and an unprintable private Key", () => {
 			),
 		).toThrow("RuntimeHostV4 private Key field is invalid");
 	}
+});
+
+it("publishes the immutable V4 operation digest input for recovery stores", () => {
+	const digestInput = runtimeOperationDigestInputV4(request);
+	expect(digestInput).toMatchObject({
+		kind: "submit-turn",
+		executionId: request.executionId,
+		executionSource: request.executionSource,
+		keyBinding: request.keyBinding,
+		operation: {
+			kind: request.operation.kind,
+			id: request.operation.id,
+		},
+	});
+	expect(digestInput.operation).not.toHaveProperty("deliveryFence");
+	expect(digestInput.operation).not.toHaveProperty("executionDeliveryFence");
+	expect(
+		runtimeOperationDigestInputV4({
+			...request,
+			keyBinding: { ...request.keyBinding, version: 2 },
+		}),
+	).not.toEqual(digestInput);
 });
 
 it("rejects V4 claims with the wrong issuer, worker or lifetime", () => {
