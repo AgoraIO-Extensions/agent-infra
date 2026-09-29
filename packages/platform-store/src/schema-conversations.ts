@@ -131,6 +131,8 @@ export const conversationExecutions = platformSchema.table(
 		relayKeySubjectId: text("relay_key_subject_id"),
 		relayKeyId: text("relay_key_id"),
 		relayKeyVersion: bigint("relay_key_version", { mode: "number" }),
+		runtimeSubmitProtocol: text("runtime_submit_protocol"),
+		originalOperationDigest: text("original_operation_digest"),
 	},
 	(table) => [
 		foreignKey({
@@ -176,6 +178,10 @@ export const conversationExecutions = platformSchema.table(
 		check(
 			"conversation_execution_task_wait_binding",
 			sql`(${table.taskWaitOrder} IS NULL AND ${table.taskWaitDeadline} IS NULL AND ${table.status}::text <> 'waiting') OR (${table.taskWaitOrder} IS NOT NULL AND ${table.taskWaitOrder} between 1 and 9007199254740991 AND ${table.taskWaitDeadline} IS NOT NULL)`,
+		),
+		check(
+			"conversation_execution_original_digest_binding",
+			sql`(${table.runtimeSubmitProtocol} IS NULL AND ${table.originalOperationDigest} IS NULL) OR (${table.runtimeSubmitProtocol} IS NOT NULL AND ${table.originalOperationDigest} IS NOT NULL AND ${table.runtimeSubmitProtocol} in ('v2', 'v4') AND ${table.originalOperationDigest} ~ '^[A-Za-z0-9_-]{43}$' AND (${table.runtimeSubmitProtocol} <> 'v4' OR ${table.executionSource} IS NOT NULL))`,
 		),
 		check(
 			"conversation_execution_session_generation_safe",
