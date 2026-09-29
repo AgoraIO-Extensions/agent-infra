@@ -1,0 +1,84 @@
+diff --git a/packages/opencode/src/native/effect-receipt.ts b/packages/opencode/src/native/effect-receipt.ts
+new file mode 100644
+index 000000000..290861855
+--- /dev/null
++++ b/packages/opencode/src/native/effect-receipt.ts
+@@ -0,0 +1,78 @@
++/**
++ * Private Driver/native effect receipt boundary.
++ *
++ * This module is intentionally transport agnostic. The Runtime Driver owns
++ * persistence, permit validation, ACK replay, and the process boundary.
++ */
++export const EFFECT_RECEIPT_SCHEMA = 1 as const
++
++export const effectReceiptPhases = [
++  "intent",
++  "permit",
++  "started",
++  "completed",
++  "failed",
++  "cancelled",
++  "unknown",
++] as const
++
++export type EffectReceiptPhase = (typeof effectReceiptPhases)[number]
++
++export type EffectReceiptTarget =
++  | "file.read"
++  | "file.write"
++  | "file.remove"
++  | "process.dispatch"
++  | "client.dispatch"
++
++export type EffectReceipt = {
++  readonly schema: typeof EFFECT_RECEIPT_SCHEMA
++  readonly sessionID: string
++  readonly turnID: string
++  readonly callID: string
++  readonly executionID: string
++  readonly generation: number
++  readonly fence: string
++  readonly operationRef: string
++  readonly attemptRef: string
++  readonly leafNonce: string
++  readonly sequence: number
++  readonly phase: EffectReceiptPhase
++  readonly target: EffectReceiptTarget
++  readonly targetRef: string
++  readonly ackID: string
++  readonly startedAt?: number
++  readonly resultDigest?: string
++  readonly errorCode?: string
++}
++
++export type EffectReceiptRequest = Omit<EffectReceipt, "phase" | "ackID" | "startedAt" | "resultDigest" | "errorCode"> & {
++  readonly phase: "intent" | "permit"
++}
++
++export type EffectReceiptResult =
++  | (EffectReceipt & { readonly phase: "started" | "completed" })
++  | (EffectReceipt & { readonly phase: "failed" | "cancelled" | "unknown"; readonly errorCode: string })
++
++export function isEffectReceipt(value: unknown): value is EffectReceipt {
++  if (!value || typeof value !== "object") return false
++  const receipt = value as Partial<EffectReceipt>
++  return (
++    receipt.schema === EFFECT_RECEIPT_SCHEMA &&
++    typeof receipt.sessionID === "string" &&
++    typeof receipt.turnID === "string" &&
++    typeof receipt.callID === "string" &&
++    typeof receipt.executionID === "string" &&
++    Number.isSafeInteger(receipt.generation) &&
++    typeof receipt.fence === "string" &&
++    typeof receipt.operationRef === "string" &&
++    typeof receipt.attemptRef === "string" &&
++    typeof receipt.leafNonce === "string" &&
++    Number.isSafeInteger(receipt.sequence) &&
++    typeof receipt.phase === "string" &&
++    effectReceiptPhases.includes(receipt.phase as EffectReceiptPhase) &&
++    typeof receipt.target === "string" &&
++    typeof receipt.targetRef === "string" &&
++    typeof receipt.ackID === "string"
++  )
++}

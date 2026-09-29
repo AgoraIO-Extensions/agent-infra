@@ -401,6 +401,9 @@ Driver 仍只准入本次 Execution 冻结的 B；压缩与后续普通采样都
 
 OpenCode 的来源、维护和启用前置以
 [工程 Spec 10.13](SPEC-agent-infra-M1-engineering-architecture.md#1013-opencode-原生工具回执与来源)为准。
+在该条款的时序修正正式生效前，不构建受控派生产物；修正生效后，隔离候选构建及原生验证
+只用于产生每个 target 的实际 hash 和评审证据，不改变运行 pin。最终发布或启用仍须由
+CODEOWNER 绑定具体 bytes、验证结果、维护者和退出条件批准。
 Generic ACP 保留权限、进度与未知结果的协议语义；接缝能力只由经过验证的原生执行回执提供。
 公开 Plugin 接缝的可用性须在固定源码和 artifact 中核对，不假定 before hook 位于工具内部
 权限检查之后，也不假定成功后的 after hook 覆盖抛错、取消或内部新尝试。
