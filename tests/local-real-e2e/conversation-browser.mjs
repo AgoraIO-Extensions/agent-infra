@@ -8,6 +8,7 @@ import { isAbsolute, join } from "node:path";
 
 import {
 	currentExecutionEvents,
+	currentExecutionFrames,
 	restoredHistoryPreservesEvents,
 } from "./conversation-browser-validation.mjs";
 
@@ -325,6 +326,7 @@ async function run(input, evidence) {
 		const sseFrames = await page.evaluate(
 			() => window.__agentInfraSseFrames ?? [],
 		);
+		const currentFrames = currentExecutionFrames(events, sseFrames);
 		const streamStartAssistantLength = await page.evaluate(
 			() => window.__agentInfraStreamStartAssistantLength ?? 0,
 		);
@@ -332,13 +334,13 @@ async function run(input, evidence) {
 			() => window.__agentInfraAssistantRenders ?? [],
 		);
 		assert(
-			sseFrames.length >= 2,
-			"Browser must observe incremental SSE frames",
+			currentFrames.length >= 2,
+			"Browser must observe incremental SSE frames for the submitted execution",
 		);
-		const firstFrame = sseFrames.find(
+		const firstFrame = currentFrames.find(
 			(frame) => frame.type === "text.delta" && frame.textLength > 0,
 		);
-		const terminalFrame = sseFrames.find(
+		const terminalFrame = currentFrames.find(
 			(frame) =>
 				frame.type === "execution.status" && frame.status === "completed",
 		);
@@ -365,7 +367,7 @@ async function run(input, evidence) {
 			eventCount: events.length,
 			historyEventCount: detail.events.length,
 			eventIdHashes: events.map((event) => digest(event.eventId)),
-			observedFrames: sseFrames.map((frame) => ({
+			observedFrames: currentFrames.map((frame) => ({
 				idHash: digest(frame.id),
 				type: frame.type,
 				status: frame.status ?? null,

@@ -8,6 +8,7 @@ import test from "node:test";
 import { ConversationDetailProjectionV2Schema } from "../../packages/contracts/src/pilot/operation-v2.ts";
 import {
 	currentExecutionEvents,
+	currentExecutionFrames,
 	restoredHistoryPreservesEvents,
 } from "./conversation-browser-validation.mjs";
 
@@ -94,6 +95,22 @@ test("conversation messages may have no execution while persisted events may not
 		currentExecutionEvents(invalidEvent, "conversation-1", "execution-1"),
 		null,
 	);
+});
+
+test("older execution frames cannot prove the submitted execution streamed", () => {
+	const detail = ConversationDetailProjectionV2Schema.parse(
+		mixedHistoryDetail(),
+	);
+	const events = currentExecutionEvents(
+		detail,
+		"conversation-1",
+		"execution-1",
+	);
+	const frames = [
+		{ id: "earlier-event", type: "execution.status", status: "completed" },
+		{ id: "current-event", type: "execution.status", status: "submitted" },
+	];
+	assert.deepEqual(currentExecutionFrames(events, frames), [frames[1]]);
 });
 
 test("persisted event validation rejects missing execution IDs in either history subset", () => {

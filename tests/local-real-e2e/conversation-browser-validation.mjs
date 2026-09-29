@@ -32,6 +32,11 @@ export function currentExecutionEvents(detail, conversationId, executionId) {
 	return currentEvents.length > 0 ? currentEvents : null;
 }
 
+export function currentExecutionFrames(events, frames) {
+	const eventIds = new Set(events.map((event) => event.eventId));
+	return frames.filter((frame) => eventIds.has(frame.id));
+}
+
 export function restoredHistoryPreservesEvents(
 	before,
 	after,
