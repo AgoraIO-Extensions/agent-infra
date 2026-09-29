@@ -1766,6 +1766,47 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						await requestRepository.listAccessOptions(adminId)
 					).find((item) => item.policyVersionId === selfPolicyId);
 					if (!selfOption) throw new Error("Administrator option is missing");
+					const [role] = await sql<{ granted_at: Date }[]>`
+						SELECT granted_at FROM connection_principal_roles
+						WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'
+					`;
+					if (!role) throw new Error("Administrator role is missing");
+					await sql`UPDATE connection_principal_roles SET granted_at = now() + interval '1 day'
+						WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
+					const futureGrantRequestId = `future-admin-request-${suffix}`;
+					await requestRepository.createRequest({
+						applicantPrincipalId: adminId,
+						capabilityProfileId: selfProfileId,
+						disclaimerConfirmations: [
+							{
+								contentSha256: disclaimerDigest,
+								disclaimerVersionId: disclaimerId,
+								locale: "zh-CN",
+							},
+						],
+						duration: { days: 90, kind: "FINITE" },
+						id: futureGrantRequestId,
+						policyVersionId: selfPolicyId,
+						presentationId: selfOption.presentationId,
+						providerReleaseId: releaseId,
+						purpose: "Future grant cannot self-approve",
+					});
+					expect(
+						(await requestRepository.listApprovalQueue(adminId)).some(
+							(item) => item.id === futureGrantRequestId,
+						),
+					).toBe(false);
+					await requestRepository.cancelRequest({
+						principalId: adminId,
+						requestId: futureGrantRequestId,
+					});
+					await sql`UPDATE connection_principal_roles SET granted_at = ${role.granted_at}
+						WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
+					const currentSelfOption = (
+						await requestRepository.listAccessOptions(adminId)
+					).find((item) => item.policyVersionId === selfPolicyId);
+					if (!currentSelfOption)
+						throw new Error("Current administrator option is missing");
 					const priorAdminWorkItems = (
 						await requestRepository.listNotifications(adminId)
 					).openWorkItems;
@@ -1783,7 +1824,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						duration: { days: 90, kind: "FINITE" },
 						id: selfRequestId,
 						policyVersionId: selfPolicyId,
-						presentationId: selfOption.presentationId,
+						presentationId: currentSelfOption.presentationId,
 						providerReleaseId: releaseId,
 						purpose: "Administrator access",
 					});
@@ -1830,6 +1871,53 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					const legacyStage = legacySelf.stages[0];
 					if (!legacyStage)
 						throw new Error("Legacy administrator stage is missing");
+					await expect(
+						requestRepository.reroute({
+							actorPrincipalId: adminId,
+							approvers: [
+								{
+									principalId: adminId,
+									displaySnapshot: { displayName: "Approval Admin" },
+								},
+								{
+									principalId: delegateId,
+									displaySnapshot: { displayName: "Approval Delegate" },
+								},
+							],
+							expectedRequestRevision: legacySelf.revision,
+							expectedRoutingRevision: legacyStage.routingRevision,
+							expectedStageRevision: legacyStage.revision,
+							reason: "Cannot replace existing reviewers while repairing",
+							requestId: selfRequestId,
+						}),
+					).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+					await sql`INSERT INTO connection_principal_roles (principal_id, role, status, grant_source)
+						VALUES (${delegateId}, 'CONNECTION_ADMIN', 'ACTIVE', 'ADMIN')`;
+					await sql`UPDATE connection_principals SET status = 'DISABLED' WHERE id = ${adminId}`;
+					expect(
+						(await requestRepository.listRoutingBlocked(delegateId)).some(
+							(item) => item.id === selfRequestId,
+						),
+					).toBe(false);
+					await expect(
+						requestRepository.reroute({
+							actorPrincipalId: delegateId,
+							approvers: [
+								{
+									principalId: adminId,
+									displaySnapshot: { displayName: "Approval Admin" },
+								},
+							],
+							expectedRequestRevision: legacySelf.revision,
+							expectedRoutingRevision: legacyStage.routingRevision,
+							expectedStageRevision: legacyStage.revision,
+							reason: "Inactive applicant cannot be restored",
+							requestId: selfRequestId,
+						}),
+					).rejects.toMatchObject({ code: "FORBIDDEN" });
+					await sql`UPDATE connection_principals SET status = 'ACTIVE' WHERE id = ${adminId}`;
+					await sql`UPDATE connection_principal_roles SET status = 'REVOKED', revoked_at = now()
+						WHERE principal_id = ${delegateId} AND role = 'CONNECTION_ADMIN'`;
 					await requestRepository.reroute({
 						actorPrincipalId: adminId,
 						approvers: [
@@ -1844,6 +1932,22 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						reason: "Restore original administrator approver",
 						requestId: selfRequestId,
 					});
+					const routedApprovers = await sql<
+						{ approver_principal_id: string }[]
+					>`
+						SELECT candidate.approver_principal_id
+						FROM connection_request_stage_approvers candidate
+						JOIN connection_request_routing_revisions routing
+							ON routing.id = candidate.routing_revision_id
+						JOIN connection_request_stages stage
+							ON stage.id = routing.request_stage_id
+							AND stage.routing_revision = routing.revision
+						WHERE stage.request_id = ${selfRequestId}
+						ORDER BY candidate.approver_principal_id
+					`;
+					expect(
+						routedApprovers.map((item) => item.approver_principal_id).sort(),
+					).toEqual([adminId, approverId].sort());
 					expect(
 						(await requestRepository.listRoutingBlocked(adminId)).some(
 							(item) => item.id === selfRequestId,

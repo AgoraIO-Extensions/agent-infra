@@ -580,6 +580,7 @@ export class PostgresConnectionAccessRequestRepository
 			WHERE request.expires_at > now() AND stage.state = 'PENDING'
 				AND (request.state = 'ROUTING_BLOCKED' OR (
 					request.state = 'IN_REVIEW'
+					AND applicant.status = 'ACTIVE'
 					AND EXISTS (
 						SELECT 1 FROM connection_approval_stage_approvers original
 						JOIN connection_principal_roles role_binding
@@ -688,26 +689,20 @@ export class PostgresConnectionAccessRequestRepository
 					"Approval routing changed",
 				);
 			}
+			const [decided] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_approval_decisions
+				WHERE request_stage_id = ${target.request_stage_id} LIMIT 1
+			`;
+			if (decided) invalid("A stage with decisions cannot be rerouted");
 			if (
 				target.request_state === "IN_REVIEW" &&
-				!input.approvers.some(
-					(item) => item.principalId === target.applicant_principal_id,
-				)
+				(input.approvers.length !== 1 ||
+					input.approvers[0]?.principalId !== target.applicant_principal_id)
 			)
 				throw new ConnectionError(
 					"IDEMPOTENCY_CONFLICT",
 					"Approval routing changed",
 				);
-			if (
-				target.quorum_type === "AT_LEAST_N" &&
-				(target.quorum_count ?? 0) > input.approvers.length
-			)
-				invalid("Reroute quorum is unsatisfiable");
-			if (
-				target.quorum_type === "ALL" &&
-				input.approvers.length < target.original_approver_count
-			)
-				invalid("Reroute cannot lower the required approver count");
 			if (
 				input.approvers.some(
 					(item) => item.principalId === target.applicant_principal_id,
@@ -716,6 +711,9 @@ export class PostgresConnectionAccessRequestRepository
 				const [selfApprover] = await sql<{ id: string }[]>`
 					SELECT original.stage_id AS id
 					FROM connection_approval_stage_approvers original
+					JOIN connection_principals applicant
+						ON applicant.id = original.approver_principal_id
+						AND applicant.status = 'ACTIVE'
 					JOIN connection_principal_roles role_binding
 						ON role_binding.principal_id = original.approver_principal_id
 					WHERE original.stage_id = ${target.policy_stage_id}
@@ -723,44 +721,67 @@ export class PostgresConnectionAccessRequestRepository
 						AND role_binding.role = 'CONNECTION_ADMIN'
 						AND role_binding.status = 'ACTIVE'
 						AND role_binding.granted_at <= ${target.created_at}
-					FOR SHARE OF role_binding
+					FOR SHARE OF role_binding, applicant
 				`;
 				if (!selfApprover) forbidden();
-				if (target.request_state === "IN_REVIEW") {
-					const [alreadyRouted] = await sql<{ id: string }[]>`
-						SELECT candidate.approver_principal_id AS id
-						FROM connection_request_routing_revisions routing
-						JOIN connection_request_stage_approvers candidate
-							ON candidate.routing_revision_id = routing.id
-						WHERE routing.request_stage_id = ${target.request_stage_id}
-							AND routing.revision = ${target.routing_revision}
-							AND candidate.approver_principal_id = ${target.applicant_principal_id}
-					`;
-					if (alreadyRouted) forbidden();
-				}
 			}
+			const currentApprovers =
+				target.request_state === "IN_REVIEW"
+					? await sql<
+							{
+								approver_principal_id: string;
+								display_snapshot: Record<string, string | null>;
+							}[]
+						>`
+					SELECT candidate.approver_principal_id, candidate.display_snapshot
+					FROM connection_request_routing_revisions routing
+					JOIN connection_request_stage_approvers candidate
+						ON candidate.routing_revision_id = routing.id
+					WHERE routing.request_stage_id = ${target.request_stage_id}
+						AND routing.revision = ${target.routing_revision}
+				`
+					: [];
+			if (
+				currentApprovers.some(
+					(item) =>
+						item.approver_principal_id === target.applicant_principal_id,
+				)
+			)
+				forbidden();
+			const approvers = [
+				...currentApprovers.map((item) => ({
+					principalId: item.approver_principal_id,
+					displaySnapshot: item.display_snapshot,
+				})),
+				...input.approvers,
+			];
+			if (
+				target.quorum_type === "AT_LEAST_N" &&
+				(target.quorum_count ?? 0) > approvers.length
+			)
+				invalid("Reroute quorum is unsatisfiable");
+			if (
+				target.quorum_type === "ALL" &&
+				approvers.length < target.original_approver_count
+			)
+				invalid("Reroute cannot lower the required approver count");
 			const [duplicateApprover] = await sql<{ id: string }[]>`
 				SELECT stage.id FROM connection_request_stages stage
 				JOIN connection_request_routing_revisions routing ON routing.request_stage_id = stage.id AND routing.revision = stage.routing_revision
 				JOIN connection_request_stage_approvers approver ON approver.routing_revision_id = routing.id
 				WHERE stage.request_id = ${input.requestId} AND stage.id <> ${target.request_stage_id}
-					AND approver.approver_principal_id IN ${sql(input.approvers.map((item) => item.principalId))}
+				AND approver.approver_principal_id IN ${sql(approvers.map((item) => item.principalId))}
 				LIMIT 1
 			`;
 			if (duplicateApprover)
 				invalid("An approver cannot appear in multiple stages");
-			const [decided] = await sql<{ id: string }[]>`
-				SELECT id FROM connection_approval_decisions
-				WHERE request_stage_id = ${target.request_stage_id} LIMIT 1
-			`;
-			if (decided) invalid("A stage with decisions cannot be rerouted");
 			const principals = await sql<{ id: string }[]>`
 				SELECT id FROM connection_principals
-				WHERE id IN ${sql(input.approvers.map((item) => item.principalId))}
+				WHERE id IN ${sql(approvers.map((item) => item.principalId))}
 					AND status = 'ACTIVE'
 				FOR SHARE
 			`;
-			if (principals.length !== input.approvers.length) forbidden();
+			if (principals.length !== approvers.length) forbidden();
 			const nextRevision = Number(target.routing_revision) + 1;
 			const routingId = `approval-routing-${randomUUID()}`;
 			await sql`
@@ -769,11 +790,11 @@ export class PostgresConnectionAccessRequestRepository
 					approver_principal_ids, reason, created_by_principal_id
 				) VALUES (
 					${routingId}, ${input.requestId}, ${target.request_stage_id},
-					${nextRevision}, ${sql.json(input.approvers.map((item) => item.principalId))},
+					${nextRevision}, ${sql.json(approvers.map((item) => item.principalId))},
 					${input.reason.trim()}, ${input.actorPrincipalId}
 				)
 			`;
-			for (const approver of input.approvers) {
+			for (const approver of approvers) {
 				await sql`
 					INSERT INTO connection_request_stage_approvers (
 						routing_revision_id, request_id, request_stage_id,
@@ -1520,6 +1541,7 @@ export class PostgresConnectionAccessRequestRepository
 				SELECT principal_id AS id FROM connection_principal_roles
 				WHERE principal_id = ${input.applicantPrincipalId}
 					AND role = 'CONNECTION_ADMIN' AND status = 'ACTIVE'
+					AND granted_at <= now()
 				FOR SHARE
 			`;
 			const [policy] = await sql<PolicyRow[]>`
