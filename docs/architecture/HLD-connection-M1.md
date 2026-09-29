@@ -471,11 +471,11 @@ flowchart TB
 
 M1 只有一个权威 Connection 业务部署单元 `connection-api`，单主位于 GZ3。MCP、HTTP、OAuth
 callback、后台 lease/outbox/reconciliation 可以在同一镜像中以不同进程角色运行；不增加独立
-业务 Worker 服务。国内 Provider 从 GZ3 直连；GitHub 服务端 OAuth 与 API 请求使用 GZ3 固定代理
-出口。LA3 `connection-provider-egress` 因 HCI 暂无合规 workload mTLS 入口而延期，不属于当前生产
+业务 Worker 服务。国内 Provider 从 GZ3 直连；GitHub 服务端请求默认使用 GZ3 固定代理，首次 OAuth
+code exchange 在 GZ3 pilot 可按 ADR 的受控条件直连回退。LA3 `connection-provider-egress` 因 HCI 暂无合规 workload mTLS 入口而延期，不属于当前生产
 拓扑。完整区域决策见
 [Connection GZ3 控制面与 GitHub 代理出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
-该 ADR 的[GitHub OAuth 出口回退提案](../adr/ADR-connection-regional-control-plane-and-github-egress.md#待评审变更github-oauth-出口回退)尚未批准，不改变当前固定代理出口或 NetworkPolicy 门禁。
+该 ADR 的[GitHub OAuth 出口回退决策](../adr/ADR-connection-regional-control-plane-and-github-egress.md#gz3-pilotgithub-oauth-出口回退)仅适用于 GZ3 pilot；此次发布不以独立 NetworkPolicy 签收为前置，广泛生产门禁保持不变。
 
 GitHub WRITE 通过固定代理提交后，response lost 仍进入 `UNCERTAIN`，不能切换路径盲重试。
 GitHub OAuth code exchange 失败且消费状态未知时重新发起登录，不重放 code。Connection DB 最终
@@ -2398,7 +2398,7 @@ Audit 使用每 partition hash chain 或外部 append-only sink。保留策略�
 - TLS SNI、证书 hostname 校验和 HTTP `Host` 继续使用 Catalog 原始 hostname，不能使用或接受调用方提供的替代值。
 - 每次 redirect 和新连接都重新执行 scheme、host、DNS/IP、TLS 和 header 校验；默认禁止跨 origin。
 - 禁止 Consumer 控制 Host、Authorization、Cookie、Proxy-*、Forwarded 和 hop-by-hop headers。
-- Egress Proxy 是唯一公网路径；NetworkPolicy 阻止 `connection-api` 直连公网。
+- Egress Proxy 是默认公网路径。GZ3 pilot 的首次 GitHub OAuth 直连回退按 ADR 接受实际 NetworkPolicy 未核实、直连 fetch 未证明 DNS/IP pinning 的风险；不得将应用目标白名单表述为网络层隔离。广泛生产仍要求核查 NetworkPolicy 并完成受控出口。
 
 ### 27.5 Secret 泄露防护
 
