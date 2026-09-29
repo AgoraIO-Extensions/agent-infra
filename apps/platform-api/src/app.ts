@@ -1,9 +1,6 @@
 import { Hono } from "hono";
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
-import {
-	type ConfigurationRoutesDependencies,
-	registerConfigurationRoutes,
-} from "./http/configuration-routes.js";
+import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import {
 	type ConversationRoutesDependencies,
 	registerConversationRoutes,
@@ -16,10 +13,8 @@ import {
 	type FileRoutesDependenciesV1,
 	registerFileRoutesV1,
 } from "./http/file-routes.js";
-import {
-	type ManagementRouteDependencies,
-	registerManagementRoutes,
-} from "./http/management-routes.js";
+import type { ManagementRouteDependencies } from "./http/management-routes.js";
+import { registerRetiredManagementRoutes } from "./http/retired-management-routes.js";
 import {
 	registerSessionAuditRoutes,
 	type SessionAuditRoutesDependencies,
@@ -29,6 +24,8 @@ import {
 	type TaskRoutesDependencies,
 } from "./http/task-routes.js";
 import { registerV2CompatibilityRoutes } from "./http/v2-compat.js";
+import { registerV2ConfigurationRoutes } from "./http/v2-configuration-routes.js";
+import { registerV2ManagementRoutes } from "./http/v2-management-routes.js";
 
 export const platformApiService = "platform-api";
 
@@ -73,8 +70,9 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	const requestScope = dependencies.requestScope;
 	if (requestScope)
 		app.use("*", (context, next) => requestScope(context.req.raw, next));
-	registerManagementRoutes(app, dependencies.management);
-	registerConfigurationRoutes(app, dependencies.configuration);
+	registerRetiredManagementRoutes(app);
+	registerV2ManagementRoutes(app, dependencies.management);
+	registerV2ConfigurationRoutes(app, dependencies.configuration);
 	if (dependencies.deploymentConfiguration)
 		registerDeploymentConfigurationRoutes(
 			app,

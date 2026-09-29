@@ -10,6 +10,7 @@ import {
 	type RuntimeSupplementRequestV4,
 	RuntimeSupplementRequestV4Schema,
 	RuntimeSupplementTransportV4Schema,
+	runtimeOperationDigestInputV4,
 	runtimeRequestDigestV4,
 	runtimeRequestSigningPayloadV4,
 	validateRuntimeBusinessBindingV4,
@@ -274,6 +275,91 @@ it("accepts an Agent default Key for an API principal and rejects cross-Agent re
 	).rejects.toThrow("RuntimeHostV4 binding is invalid");
 });
 
+it("binds Web and WeCom personal Keys and API and Eval Agent-default Keys", async () => {
+	for (const source of ["web", "wecom"] as const) {
+		for (const userId of ["alice", "bob"] as const) {
+			const executionId = `execution-${source}-${userId}`;
+			const scoped = RuntimeSubmitTurnRequestV4Schema.parse({
+				...request,
+				requestId: `request-${source}-${userId}`,
+				principal: { kind: "user", id: userId },
+				executionSource: source,
+				channelId: source,
+				conversationId: `conversation-${source}-${userId}`,
+				executionId,
+				turnId: `turn-${source}-${userId}`,
+				operation: { ...request.operation, id: executionId },
+				keyBinding: {
+					purpose: "personal",
+					subjectId: userId,
+					ciphertextRef: `key-${userId}`,
+					version: userId === "alice" ? 1 : 2,
+				},
+			});
+			await expect(
+				validateRuntimeBusinessBindingV4(scoped, claims(scoped)),
+			).resolves.toBeUndefined();
+			const wrongUser = {
+				...scoped,
+				keyBinding: {
+					...scoped.keyBinding,
+					subjectId: userId === "alice" ? "bob" : "alice",
+				},
+			};
+			await expect(
+				validateRuntimeBusinessBindingV4(wrongUser, claims(wrongUser)),
+			).rejects.toThrow("RuntimeHostV4 binding is invalid");
+			const wrongPurpose = {
+				...scoped,
+				keyBinding: {
+					purpose: "agent-default" as const,
+					subjectId: "agent-1",
+					ciphertextRef: "agent-key-1",
+					version: 1,
+				},
+			};
+			await expect(
+				validateRuntimeBusinessBindingV4(wrongPurpose, claims(wrongPurpose)),
+			).rejects.toThrow("RuntimeHostV4 binding is invalid");
+		}
+	}
+	for (const source of ["platform-api", "eval"] as const) {
+		const executionId = `execution-${source}`;
+		const scoped = RuntimeSubmitTurnRequestV4Schema.parse({
+			...request,
+			requestId: `request-${source}`,
+			principal: { kind: "application", id: `client-${source}` },
+			executionSource: source,
+			channelId: source,
+			conversationId: `conversation-${source}`,
+			executionId,
+			turnId: `turn-${source}`,
+			operation: { ...request.operation, id: executionId },
+			keyBinding: {
+				purpose: "agent-default",
+				subjectId: "agent-1",
+				ciphertextRef: "agent-key-1",
+				version: 2,
+			},
+		});
+		await expect(
+			validateRuntimeBusinessBindingV4(scoped, claims(scoped)),
+		).resolves.toBeUndefined();
+		const wrongPurpose = {
+			...scoped,
+			keyBinding: {
+				purpose: "personal" as const,
+				subjectId: "alice",
+				ciphertextRef: "key-alice",
+				version: 1,
+			},
+		};
+		await expect(
+			validateRuntimeBusinessBindingV4(wrongPurpose, claims(wrongPurpose)),
+		).rejects.toThrow("RuntimeHostV4 binding is invalid");
+	}
+});
+
 it("keeps the original Key binding for a supplement after Key replacement", async () => {
 	const { selection: _selection, ...original } = request;
 	const supplement = RuntimeSupplementRequestV4Schema.parse({
@@ -477,4 +563,68 @@ it("rejects V4 claims with the wrong issuer, worker or lifetime", () => {
 			}),
 		).toThrow("Runtime Execution Grant V4 claims are inconsistent");
 	}
+});
+
+it("publishes the immutable V4 operation digest input for recovery stores", () => {
+	const digestInput = runtimeOperationDigestInputV4(request);
+	expect(digestInput).toMatchObject({
+		kind: "submit-turn",
+		principal: request.principal,
+		channelId: request.channelId,
+		executionId: request.executionId,
+		executionSource: request.executionSource,
+		hostSessionRef: request.hostSessionRef,
+		keyBinding: request.keyBinding,
+		operation: {
+			kind: request.operation.kind,
+			id: request.operation.id,
+		},
+	});
+	expect(digestInput.operation).not.toHaveProperty("deliveryFence");
+	expect(digestInput.operation).not.toHaveProperty("executionDeliveryFence");
+	expect(
+		runtimeOperationDigestInputV4({
+			...request,
+			keyBinding: { ...request.keyBinding, version: 2 },
+		}),
+	).not.toEqual(digestInput);
+	expect(
+		runtimeOperationDigestInputV4({
+			...request,
+			principal: { kind: "user", id: "bob" },
+		}),
+	).not.toEqual(digestInput);
+	expect(
+		runtimeOperationDigestInputV4({
+			...request,
+			channelId: "wecom",
+		}),
+	).not.toEqual(digestInput);
+
+	const { selection: _selection, ...supplementBase } = request;
+	const supplement = RuntimeSupplementRequestV4Schema.parse({
+		...supplementBase,
+		hostSessionRef: "session-1",
+		operation: {
+			kind: "message",
+			id: "message-1",
+			deliveryFence: 2,
+			executionDeliveryFence: 1,
+		},
+	});
+	const supplementDigestInput = runtimeOperationDigestInputV4(supplement);
+	expect(supplementDigestInput.kind).toBe("supplement");
+	expect(supplementDigestInput.hostSessionRef).toBe("session-1");
+	expect(supplementDigestInput).not.toHaveProperty("selection");
+	expect(supplementDigestInput.operation).toEqual({
+		kind: "message",
+		id: "message-1",
+	});
+
+	expect(() =>
+		runtimeOperationDigestInputV4({
+			...request,
+			operation: { ...request.operation, deliveryFence: 0 },
+		} as RuntimeSubmitTurnRequestV4),
+	).toThrow("RuntimeHostV4 request is invalid");
 });

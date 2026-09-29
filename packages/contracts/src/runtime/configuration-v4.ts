@@ -5,6 +5,8 @@ import { RuntimeModelProtocolV1Schema } from "./configuration.ts";
 const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 const reasoning = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/);
 const loopbackHttp = /^http:\/\/(?:127\.0\.0\.1|\[::1\])(?::[0-9]+)?(?:\/|$)/;
+const dnsHostname =
+	/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/;
 const endpoint = z
 	.string()
 	.min(1)
@@ -16,8 +18,16 @@ const endpoint = z
 		if (/[\s\\?#]/.test(value)) return false;
 		try {
 			const url = new URL(value);
+			const hostname = url.hostname.toLowerCase().replace(/\.+$/, "");
+			const httpsAuthorityAllowed =
+				url.protocol === "https:" &&
+				dnsHostname.test(hostname) &&
+				!/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(hostname) &&
+				!hostname.startsWith("[") &&
+				hostname !== "localhost" &&
+				!hostname.endsWith(".localhost");
 			return (
-				(url.protocol === "https:" || loopbackHttp.test(value)) &&
+				(httpsAuthorityAllowed || loopbackHttp.test(value)) &&
 				!url.username &&
 				!url.password &&
 				!url.search &&
@@ -78,7 +88,7 @@ export const RuntimeModelConfigurationV4Schema = z
 			),
 	)
 	.describe(
-		"JSON Schema validates structure only. Configuration admission additionally requires endpoint URL semantics, unique modelOptionId values, unique reasoningLevels within each option, and a default option/reasoning pair present in modelOptions, as enforced by RuntimeModelConfigurationV4Schema. Passing JSON Schema validation does not replace shared semantic validation or Runtime Host admission.",
+		"JSON Schema validates structure only. Configuration admission additionally requires endpoint URL semantics (HTTPS DNS authority without IP literals or localhost), unique modelOptionId values, unique reasoningLevels within each option, and a default option/reasoning pair present in modelOptions, as enforced by RuntimeModelConfigurationV4Schema. Passing JSON Schema validation does not replace shared semantic validation or Runtime Host admission.",
 	);
 
 export type RuntimeModelConfigurationV4 = z.infer<

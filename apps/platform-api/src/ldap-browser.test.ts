@@ -170,6 +170,24 @@ describe("LDAP browser adapter", () => {
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 	});
 
+	it("refuses login before creating a session when identity authority is disabled or unavailable", async () => {
+		const create = vi.fn(async () => {});
+		const state = fixture({ ...memorySessions(), create });
+		state.setDisabled(true);
+		expect((await state.login())?.status).toBe(401);
+		state.setDisabled(false);
+		state.setCurrent({ ...account, accountStatus: "disabled" });
+		expect((await state.login())?.status).toBe(401);
+		state.setCurrent(account);
+		state.isPlatformDisabled.mockRejectedValueOnce(
+			new Error("private authority detail"),
+		);
+		const unavailable = await state.login();
+		expect(unavailable?.status).toBe(503);
+		expect(await unavailable?.text()).not.toContain("private authority detail");
+		expect(create).not.toHaveBeenCalled();
+	});
+
 	it("rejects cross-origin cookie writes and does not revive a revoked session", async () => {
 		const state = fixture();
 		const cookie =

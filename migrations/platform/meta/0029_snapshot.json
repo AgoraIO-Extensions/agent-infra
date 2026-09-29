@@ -1,6 +1,6 @@
 {
-  "id": "b79c5fd3-5a68-434f-984f-9287daa469f5",
-  "prevId": "a8483e7a-f184-47aa-9d2e-3c7b7a1cd270",
+  "id": "7ac3e06a-99bb-4735-987a-3aeb3043785a",
+  "prevId": "a0e6b11a-f800-47fe-beb7-403ee7d4371e",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1700,6 +1700,54 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "execution_source": {
+          "name": "execution_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "relay_key_purpose": {
+          "name": "relay_key_purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "relay_key_subject_id": {
+          "name": "relay_key_subject_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "relay_key_id": {
+          "name": "relay_key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "relay_key_version": {
+          "name": "relay_key_version",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "runtime_submit_protocol": {
+          "name": "runtime_submit_protocol",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "original_operation_digest": {
+          "name": "original_operation_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "original_submit_host_session_ref": {
+          "name": "original_submit_host_session_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1846,6 +1894,26 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "conversation_execution_key_version_fk": {
+          "name": "conversation_execution_key_version_fk",
+          "tableFrom": "conversation_executions",
+          "tableTo": "relay_key_versions",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "relay_key_purpose",
+            "relay_key_subject_id",
+            "relay_key_version",
+            "relay_key_id"
+          ],
+          "columnsTo": [
+            "purpose",
+            "subject_id",
+            "key_version",
+            "key_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1876,6 +1944,10 @@
           "name": "conversation_execution_task_wait_binding",
           "value": "(\"platform\".\"conversation_executions\".\"task_wait_order\" IS NULL AND \"platform\".\"conversation_executions\".\"task_wait_deadline\" IS NULL AND \"platform\".\"conversation_executions\".\"status\"::text <> 'waiting') OR (\"platform\".\"conversation_executions\".\"task_wait_order\" IS NOT NULL AND \"platform\".\"conversation_executions\".\"task_wait_order\" between 1 and 9007199254740991 AND \"platform\".\"conversation_executions\".\"task_wait_deadline\" IS NOT NULL)"
         },
+        "conversation_execution_original_digest_binding": {
+          "name": "conversation_execution_original_digest_binding",
+          "value": "(\"platform\".\"conversation_executions\".\"runtime_submit_protocol\" IS NULL AND \"platform\".\"conversation_executions\".\"original_operation_digest\" IS NULL AND \"platform\".\"conversation_executions\".\"original_submit_host_session_ref\" IS NULL) OR (\"platform\".\"conversation_executions\".\"runtime_submit_protocol\" IS NOT NULL AND \"platform\".\"conversation_executions\".\"original_operation_digest\" IS NOT NULL AND \"platform\".\"conversation_executions\".\"runtime_submit_protocol\" in ('v2', 'v4') AND \"platform\".\"conversation_executions\".\"original_operation_digest\" ~ '^[A-Za-z0-9_-]{43}$' AND (\"platform\".\"conversation_executions\".\"runtime_submit_protocol\" <> 'v4' OR \"platform\".\"conversation_executions\".\"execution_source\" IS NOT NULL) AND (\"platform\".\"conversation_executions\".\"runtime_submit_protocol\" <> 'v2' OR \"platform\".\"conversation_executions\".\"original_submit_host_session_ref\" IS NULL))"
+        },
         "conversation_execution_session_generation_safe": {
           "name": "conversation_execution_session_generation_safe",
           "value": "\"platform\".\"conversation_executions\".\"session_generation\" between 1 and 9007199254740991"
@@ -1899,6 +1971,10 @@
         "conversation_execution_model_selection": {
           "name": "conversation_execution_model_selection",
           "value": "(\n\t\t\t\t\"platform\".\"conversation_executions\".\"model_configuration_revision\" IS NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"model_option_id\" IS NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"reasoning_level\" IS NULL\n\t\t\t) OR (\n\t\t\t\t\"platform\".\"conversation_executions\".\"model_configuration_revision\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"model_option_id\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"reasoning_level\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"model_configuration_revision\" between 1 and 9007199254740991\n\t\t\t\tAND char_length(\"platform\".\"conversation_executions\".\"model_option_id\") > 0\n\t\t\t\tAND char_length(\"platform\".\"conversation_executions\".\"reasoning_level\") > 0\n\t\t\t)"
+        },
+        "conversation_execution_key_binding": {
+          "name": "conversation_execution_key_binding",
+          "value": "(\n\t\t\t\t\"platform\".\"conversation_executions\".\"execution_source\" IS NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_purpose\" IS NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_subject_id\" IS NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_id\" IS NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_version\" IS NULL\n\t\t\t) OR (\n\t\t\t\t\"platform\".\"conversation_executions\".\"execution_source\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_purpose\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_subject_id\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_id\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_version\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"execution_source\" in ('web', 'wecom', 'platform-api', 'eval')\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_purpose\" in ('personal', 'agent-default')\n\t\t\t\tAND char_length(\"platform\".\"conversation_executions\".\"relay_key_subject_id\") > 0\n\t\t\t\tAND char_length(\"platform\".\"conversation_executions\".\"relay_key_id\") > 0\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_version\" between 1 and 9007199254740991\n\t\t\t\tAND ((\"platform\".\"conversation_executions\".\"execution_source\" = 'web' AND \"platform\".\"conversation_executions\".\"channel_id\" = 'web')\n\t\t\t\t\tOR (\"platform\".\"conversation_executions\".\"execution_source\" = 'wecom' AND (\"platform\".\"conversation_executions\".\"channel_id\" = 'wecom'\n\t\t\t\t\t\tOR left(\"platform\".\"conversation_executions\".\"channel_id\", 10) = 'wecom_bot:'\n\t\t\t\t\t\tOR left(\"platform\".\"conversation_executions\".\"channel_id\", 10) = 'wecom_app:'))\n\t\t\t\t\tOR (\"platform\".\"conversation_executions\".\"execution_source\" = 'platform-api' AND (\"platform\".\"conversation_executions\".\"channel_id\" = 'api'\n\t\t\t\t\t\tOR \"platform\".\"conversation_executions\".\"channel_id\" LIKE 'api:%'))\n\t\t\t\t\tOR (\"platform\".\"conversation_executions\".\"execution_source\" = 'eval' AND \"platform\".\"conversation_executions\".\"channel_id\" = 'eval'))\n\t\t\t\tAND ((\"platform\".\"conversation_executions\".\"execution_source\" in ('web', 'wecom')\n\t\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_purpose\" = 'personal'\n\t\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_subject_id\" = \"platform\".\"conversation_executions\".\"actor_id\")\n\t\t\t\t\tOR (\"platform\".\"conversation_executions\".\"execution_source\" in ('platform-api', 'eval')\n\t\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_purpose\" = 'agent-default'\n\t\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_subject_id\" = \"platform\".\"conversation_executions\".\"agent_id\"))\n\t\t\t)"
         }
       },
       "isRLSEnabled": false
@@ -3405,7 +3481,15 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "platform_api_credential_hash_unique": {
+          "name": "platform_api_credential_hash_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "credential_hash"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "platform_api_credential_id_non_empty": {
@@ -3522,6 +3606,200 @@
         "platform_application_revision_non_empty": {
           "name": "platform_application_revision_non_empty",
           "value": "char_length(\"platform\".\"platform_applications\".\"authorization_revision\") > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.relay_key_subjects": {
+      "name": "relay_key_subjects",
+      "schema": "platform",
+      "columns": {
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject_id": {
+          "name": "subject_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_version": {
+          "name": "last_version",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "current_version": {
+          "name": "current_version",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "relay_key_subjects_purpose_subject_id_pk": {
+          "name": "relay_key_subjects_purpose_subject_id_pk",
+          "columns": [
+            "purpose",
+            "subject_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "relay_key_subject_purpose": {
+          "name": "relay_key_subject_purpose",
+          "value": "\"platform\".\"relay_key_subjects\".\"purpose\" in ('personal', 'agent-default')"
+        },
+        "relay_key_subject_id": {
+          "name": "relay_key_subject_id",
+          "value": "char_length(\"platform\".\"relay_key_subjects\".\"subject_id\") between 1 and 1024"
+        },
+        "relay_key_subject_last_version": {
+          "name": "relay_key_subject_last_version",
+          "value": "\"platform\".\"relay_key_subjects\".\"last_version\" between 0 and 9007199254740991"
+        },
+        "relay_key_subject_current_version": {
+          "name": "relay_key_subject_current_version",
+          "value": "\"platform\".\"relay_key_subjects\".\"current_version\" is null or \"platform\".\"relay_key_subjects\".\"current_version\" between 1 and \"platform\".\"relay_key_subjects\".\"last_version\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.relay_key_versions": {
+      "name": "relay_key_versions",
+      "schema": "platform",
+      "columns": {
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject_id": {
+          "name": "subject_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key_version": {
+          "name": "key_version",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key_id": {
+          "name": "key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ciphertext": {
+          "name": "ciphertext",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "relay_key_version_key_id_unique": {
+          "name": "relay_key_version_key_id_unique",
+          "columns": [
+            {
+              "expression": "key_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "relay_key_version_subject_fk": {
+          "name": "relay_key_version_subject_fk",
+          "tableFrom": "relay_key_versions",
+          "tableTo": "relay_key_subjects",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "purpose",
+            "subject_id"
+          ],
+          "columnsTo": [
+            "purpose",
+            "subject_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "relay_key_versions_purpose_subject_id_key_version_pk": {
+          "name": "relay_key_versions_purpose_subject_id_key_version_pk",
+          "columns": [
+            "purpose",
+            "subject_id",
+            "key_version"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "relay_key_version_identity_unique": {
+          "name": "relay_key_version_identity_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "purpose",
+            "subject_id",
+            "key_version",
+            "key_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "relay_key_version_purpose": {
+          "name": "relay_key_version_purpose",
+          "value": "\"platform\".\"relay_key_versions\".\"purpose\" in ('personal', 'agent-default')"
+        },
+        "relay_key_version_subject_id": {
+          "name": "relay_key_version_subject_id",
+          "value": "char_length(\"platform\".\"relay_key_versions\".\"subject_id\") between 1 and 1024"
+        },
+        "relay_key_version_key_id": {
+          "name": "relay_key_version_key_id",
+          "value": "char_length(\"platform\".\"relay_key_versions\".\"key_id\") between 1 and 1024"
+        },
+        "relay_key_version_safe": {
+          "name": "relay_key_version_safe",
+          "value": "\"platform\".\"relay_key_versions\".\"key_version\" between 1 and 9007199254740991"
+        },
+        "relay_key_version_ciphertext_binding": {
+          "name": "relay_key_version_ciphertext_binding",
+          "value": "(\"platform\".\"relay_key_versions\".\"ciphertext\"->>'purpose' = \"platform\".\"relay_key_versions\".\"purpose\"\n\t\t\t\tand \"platform\".\"relay_key_versions\".\"ciphertext\"->>'subjectId' = \"platform\".\"relay_key_versions\".\"subject_id\"\n\t\t\t\tand \"platform\".\"relay_key_versions\".\"ciphertext\"->>'keyId' = \"platform\".\"relay_key_versions\".\"key_id\"\n\t\t\t\tand \"platform\".\"relay_key_versions\".\"ciphertext\"->>'keyVersion' = \"platform\".\"relay_key_versions\".\"key_version\"::text) is true"
         }
       },
       "isRLSEnabled": false

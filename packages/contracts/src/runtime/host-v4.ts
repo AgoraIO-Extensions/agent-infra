@@ -204,7 +204,7 @@ export type RuntimeBusinessRequestV4 =
 	| RuntimeSubmitTurnRequestV4
 	| RuntimeSupplementRequestV4;
 
-const pinnedExecutionKeyScopeSchema = z.object({
+export const RuntimePinnedExecutionKeyScopeV4Schema = z.object({
 	principal: RuntimePrincipalV1Schema,
 	executionSource: RuntimeExecutionSourceV1Schema,
 	channelId: OpaqueIdV1Schema,
@@ -217,7 +217,7 @@ const pinnedExecutionKeyScopeSchema = z.object({
 	keyBinding: RuntimeRelayKeyBindingV1Schema,
 });
 export type RuntimePinnedExecutionKeyScopeV4 = z.infer<
-	typeof pinnedExecutionKeyScopeSchema
+	typeof RuntimePinnedExecutionKeyScopeV4Schema
 >;
 
 // Resolve durable same-operation replays before this pre-Driver check.
@@ -228,8 +228,8 @@ export function validateRuntimePinnedExecutionKeyScopeV4(
 	trustedHostSessionRef: unknown,
 ): void {
 	try {
-		const original = pinnedExecutionKeyScopeSchema.parse(pinned);
-		const next = pinnedExecutionKeyScopeSchema.parse(request);
+		const original = RuntimePinnedExecutionKeyScopeV4Schema.parse(pinned);
+		const next = RuntimePinnedExecutionKeyScopeV4Schema.parse(request);
 		const trustedSession = OpaqueIdV1Schema.nullable().parse(
 			trustedHostSessionRef,
 		);

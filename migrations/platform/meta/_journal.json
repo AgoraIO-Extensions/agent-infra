@@ -152,57 +152,64 @@
     {
       "idx": 21,
       "version": "7",
-      "when": 1790357687990,
-      "tag": "0021_task_wait_admission",
+      "when": 1790663754117,
+      "tag": "0021_browser_sessions",
       "breakpoints": true
     },
     {
       "idx": 22,
       "version": "7",
-      "when": 1790401626967,
+      "when": 1790663755117,
       "tag": "0022_application_targets",
       "breakpoints": true
     },
     {
       "idx": 23,
       "version": "7",
-      "when": 1790403880724,
-      "tag": "0023_application_generation_principal",
+      "when": 1790663756117,
+      "tag": "0023_task_wait_admission",
       "breakpoints": true
     },
     {
       "idx": 24,
       "version": "7",
-      "when": 1790415695881,
-      "tag": "0024_stop_confirmation_deadline",
+      "when": 1790663757117,
+      "tag": "0024_application_generation_principal",
       "breakpoints": true
     },
     {
       "idx": 25,
       "version": "7",
-      "when": 1790594521208,
-      "tag": "0025_execution_relay_key_binding",
+      "when": 1790663758117,
+      "tag": "0025_stop_confirmation_deadline",
       "breakpoints": true
     },
     {
       "idx": 26,
       "version": "7",
-      "when": 1790608640812,
-      "tag": "0026_credential_hash_unique",
+      "when": 1790663759117,
+      "tag": "0026_execution_relay_key_binding",
       "breakpoints": true
     },
     {
       "idx": 27,
       "version": "7",
-      "when": 1790667616473,
-      "tag": "0027_original_runtime_digest",
+      "when": 1790663760117,
+      "tag": "0027_credential_hash_unique",
       "breakpoints": true
     },
     {
       "idx": 28,
       "version": "7",
-      "when": 1790677360182,
-      "tag": "0028_original_v4_submit_session",
+      "when": 1790663761117,
+      "tag": "0028_original_runtime_digest",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790663762117,
+      "tag": "0029_original_v4_submit_session",
       "breakpoints": true
     }
   ]

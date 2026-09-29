@@ -19,23 +19,21 @@ const wrappingKeyVersion = "wrapping-2026-09";
 const plaintextK1 = "sk-user-1-secret-K1";
 const plaintextK2 = "sk-user-1-secret-K2";
 
+const activeWrappingKey = {
+	schemaVersion: 1 as const,
+	keyVersion: wrappingKeyVersion,
+	wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+	publicKeySpkiDerBase64: publicKeyDer.toString("base64"),
+	publicKeyFingerprint: createHash("sha256").update(publicKeyDer).digest("hex"),
+	rsaModulusBits: 3072,
+	status: "active" as const,
+};
+
 const encryptor = createRelayKeyEncryptorV1({
 	encryptionKeys: {
 		schemaVersion: 1,
 		activeWrappingKeyVersion: wrappingKeyVersion,
-		keys: [
-			{
-				schemaVersion: 1,
-				keyVersion: wrappingKeyVersion,
-				wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
-				publicKeySpkiDerBase64: publicKeyDer.toString("base64"),
-				publicKeyFingerprint: createHash("sha256")
-					.update(publicKeyDer)
-					.digest("hex"),
-				rsaModulusBits: 3072,
-				status: "active",
-			},
-		],
+		keys: [activeWrappingKey],
 	},
 });
 const decryptor = createRelayKeyWorkerDecryptorV1({
@@ -54,8 +52,12 @@ function record(binding: RelayKeyBindingV1, plaintext: string) {
 async function decrypt(
 	encryptedRecord: unknown,
 	expectedBinding: RelayKeyBindingV1,
+	selectedDecryptor = decryptor,
 ) {
-	const result = await decryptor.decrypt({ encryptedRecord, expectedBinding });
+	const result = await selectedDecryptor.decrypt({
+		encryptedRecord,
+		expectedBinding,
+	});
 	if (result.outcome === "decrypted") {
 		const value = Buffer.from(result.plaintext).toString("utf8");
 		result.plaintext.fill(0);
@@ -65,6 +67,23 @@ async function decrypt(
 }
 
 describe("Relay Key ciphertext V1", () => {
+	it("rejects a wrapping key with false modulus or fingerprint metadata", () => {
+		for (const descriptor of [
+			{ ...activeWrappingKey, rsaModulusBits: 4096 },
+			{ ...activeWrappingKey, publicKeyFingerprint: "0".repeat(64) },
+		]) {
+			expect(() =>
+				createRelayKeyEncryptorV1({
+					encryptionKeys: {
+						schemaVersion: 1,
+						activeWrappingKeyVersion: wrappingKeyVersion,
+						keys: [descriptor],
+					},
+				}),
+			).toThrow("Relay Key encryption keys are invalid");
+		}
+	});
+
 	it("retains independently encrypted K1 and K2 for the same subject", async () => {
 		const binding = {
 			purpose: "personal" as const,
@@ -92,6 +111,78 @@ describe("Relay Key ciphertext V1", () => {
 		expect(await decrypt(k2, { ...binding, keyVersion: 2 })).toBe(plaintextK2);
 		expect(await decrypt(k1, { ...binding, keyVersion: 2 })).toBe(
 			"RELAY_KEY_METADATA_INVALID",
+		);
+	});
+
+	it("keeps K1 readable across wrapping key rotation and fails closed without its private key", async () => {
+		const rotatedPair = generateKeyPairSync("rsa", { modulusLength: 3072 });
+		const rotatedPublicDer = rotatedPair.publicKey.export({
+			format: "der",
+			type: "spki",
+		});
+		const rotatedPrivateDer = rotatedPair.privateKey.export({
+			format: "der",
+			type: "pkcs8",
+		});
+		const rotatedWrappingKeyVersion = "wrapping-2026-10";
+		const rotatedEncryptor = createRelayKeyEncryptorV1({
+			encryptionKeys: {
+				schemaVersion: 1,
+				activeWrappingKeyVersion: rotatedWrappingKeyVersion,
+				keys: [
+					{ ...activeWrappingKey, status: "retiring" },
+					{
+						schemaVersion: 1,
+						keyVersion: rotatedWrappingKeyVersion,
+						wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+						publicKeySpkiDerBase64: rotatedPublicDer.toString("base64"),
+						publicKeyFingerprint: createHash("sha256")
+							.update(rotatedPublicDer)
+							.digest("hex"),
+						rsaModulusBits: 3072,
+						status: "active",
+					},
+				],
+			},
+		});
+		const binding = {
+			purpose: "personal" as const,
+			subjectId: "user_01",
+			keyId: "relay-key-user-01",
+		};
+		const k1Binding = { ...binding, keyVersion: 1 };
+		const k2Binding = {
+			...binding,
+			keyId: "relay-key-user-01-k2",
+			keyVersion: 2,
+		};
+		const k1 = record(k1Binding, plaintextK1);
+		const k2 = rotatedEncryptor.encrypt({
+			...k2Binding,
+			plaintext: plaintextK2,
+		});
+		const rotatedPrivateKey = {
+			keyVersion: rotatedWrappingKeyVersion,
+			privateKeyPkcs8DerBase64: rotatedPrivateDer.toString("base64"),
+		};
+		const bothKeys = createRelayKeyWorkerDecryptorV1({
+			keys: [
+				{
+					keyVersion: wrappingKeyVersion,
+					privateKeyPkcs8DerBase64: privateKeyDer.toString("base64"),
+				},
+				rotatedPrivateKey,
+			],
+		});
+		const newKeyOnly = createRelayKeyWorkerDecryptorV1({
+			keys: [rotatedPrivateKey],
+		});
+		expect(k1.crypto.wrappingKeyVersion).toBe(wrappingKeyVersion);
+		expect(k2.crypto.wrappingKeyVersion).toBe(rotatedWrappingKeyVersion);
+		expect(await decrypt(k1, k1Binding, bothKeys)).toBe(plaintextK1);
+		expect(await decrypt(k2, k2Binding, bothKeys)).toBe(plaintextK2);
+		expect(await decrypt(k1, k1Binding, newKeyOnly)).toBe(
+			"RELAY_KEY_UNAVAILABLE",
 		);
 	});
 
@@ -221,6 +312,78 @@ describe("Relay Key ciphertext V1", () => {
 				original,
 			),
 		).toBe("RELAY_KEY_METADATA_INVALID");
+	});
+
+	it("snapshots plain ciphertext metadata before decrypting", async () => {
+		const binding = {
+			purpose: "personal" as const,
+			subjectId: "user_01",
+			keyId: "personal_01",
+			keyVersion: 1,
+		};
+		const encrypted = record(binding, plaintextK1);
+		expect(await decrypt(JSON.parse(JSON.stringify(encrypted)), binding)).toBe(
+			plaintextK1,
+		);
+
+		let getterReads = 0;
+		const rootGetter = { ...encrypted };
+		Object.defineProperty(rootGetter, "crypto", {
+			enumerable: true,
+			get() {
+				getterReads += 1;
+				return encrypted.crypto;
+			},
+		});
+		const nestedGetter = { ...encrypted, crypto: { ...encrypted.crypto } };
+		Object.defineProperty(nestedGetter.crypto, "wrappedDek", {
+			enumerable: true,
+			get() {
+				getterReads += 1;
+				return encrypted.crypto.wrappedDek;
+			},
+		});
+		const hiddenField = { ...encrypted };
+		Object.defineProperty(hiddenField, "hidden", { value: true });
+		for (const hostile of [
+			rootGetter,
+			nestedGetter,
+			{ ...encrypted, [Symbol("extra")]: true },
+			{
+				...encrypted,
+				crypto: { ...encrypted.crypto, [Symbol("extra")]: true },
+			},
+			Object.assign(Object.create({ inherited: true }), encrypted),
+			new Proxy({ ...encrypted }, {}),
+			hiddenField,
+		]) {
+			expect(await decrypt(hostile, binding)).toBe(
+				"RELAY_KEY_METADATA_INVALID",
+			);
+		}
+		const expectedGetter = { ...binding };
+		Object.defineProperty(expectedGetter, "subjectId", {
+			enumerable: true,
+			get() {
+				getterReads += 1;
+				return binding.subjectId;
+			},
+		});
+		expect(await decrypt(encrypted, expectedGetter)).toBe(
+			"RELAY_KEY_METADATA_INVALID",
+		);
+		const plaintextGetter = { ...binding, plaintext: plaintextK1 };
+		Object.defineProperty(plaintextGetter, "plaintext", {
+			enumerable: true,
+			get() {
+				getterReads += 1;
+				return plaintextK1;
+			},
+		});
+		expect(() => encryptor.encrypt(plaintextGetter)).toThrow(
+			"Relay Key encryption input is invalid",
+		);
+		expect(getterReads).toBe(0);
 	});
 
 	it("rejects malformed inputs and keeps decrypt off the main export", () => {

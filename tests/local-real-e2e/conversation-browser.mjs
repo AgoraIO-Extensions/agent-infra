@@ -6,7 +6,11 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
-import { persistedEventsMatchExecution } from "./conversation-browser-validation.mjs";
+import {
+	currentExecutionEvents,
+	currentExecutionFrames,
+	restoredHistoryPreservesEvents,
+} from "./conversation-browser-validation.mjs";
 
 const requireWebDependency = createRequire(
 	new URL("../../apps/web/package.json", import.meta.url),
@@ -310,22 +314,19 @@ async function run(input, evidence) {
 			input.origin,
 			conversationId,
 		);
-		const events = detail.events ?? [];
-		assert(
-			persistedEventsMatchExecution(
-				events,
-				conversationId,
-				receipt.executionId,
-			),
-			"Current-execution events must stay bound to this conversation and execution",
+		const events = currentExecutionEvents(
+			detail,
+			conversationId,
+			receipt.executionId,
 		);
-		assert.equal(
-			new Set(events.map((event) => event.eventId)).size,
-			events.length,
+		assert(
+			events,
+			"Current-execution events must stay bound to this conversation and execution",
 		);
 		const sseFrames = await page.evaluate(
 			() => window.__agentInfraSseFrames ?? [],
 		);
+		const currentFrames = currentExecutionFrames(events, sseFrames);
 		const streamStartAssistantLength = await page.evaluate(
 			() => window.__agentInfraStreamStartAssistantLength ?? 0,
 		);
@@ -333,13 +334,13 @@ async function run(input, evidence) {
 			() => window.__agentInfraAssistantRenders ?? [],
 		);
 		assert(
-			sseFrames.length >= 2,
-			"Browser must observe incremental SSE frames",
+			currentFrames.length >= 2,
+			"Browser must observe incremental SSE frames for the submitted execution",
 		);
-		const firstFrame = sseFrames.find(
+		const firstFrame = currentFrames.find(
 			(frame) => frame.type === "text.delta" && frame.textLength > 0,
 		);
-		const terminalFrame = sseFrames.find(
+		const terminalFrame = currentFrames.find(
 			(frame) =>
 				frame.type === "execution.status" && frame.status === "completed",
 		);
@@ -364,8 +365,9 @@ async function run(input, evidence) {
 		evidence.sse = {
 			status: 200,
 			eventCount: events.length,
+			historyEventCount: detail.events.length,
 			eventIdHashes: events.map((event) => digest(event.eventId)),
-			observedFrames: sseFrames.map((frame) => ({
+			observedFrames: currentFrames.map((frame) => ({
 				idHash: digest(frame.id),
 				type: frame.type,
 				status: frame.status ?? null,
@@ -400,14 +402,14 @@ async function run(input, evidence) {
 			input.origin,
 			conversationId,
 		);
-		assert.deepEqual(
-			restored.events.slice(0, events.length).map((event) => event.eventId),
-			events.map((event) => event.eventId),
-			"Reload must preserve the original event sequence",
-		);
-		assert.equal(
-			new Set(restored.events.map((event) => event.eventId)).size,
-			restored.events.length,
+		assert(
+			restoredHistoryPreservesEvents(
+				detail,
+				restored,
+				conversationId,
+				receipt.executionId,
+			),
+			"Reload must preserve the original conversation event sequence",
 		);
 		evidence.reload = "restored";
 		await page.setViewportSize({ width: 390, height: 844 });

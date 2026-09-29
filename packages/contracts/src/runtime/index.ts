@@ -9,6 +9,7 @@ export * from "./grant-v2.ts";
 export * from "./host.ts";
 export * from "./host-v3.ts";
 export * from "./host-v4.ts";
+export * from "./host-v4-events.ts";
 export * from "./legacy-migration-v1.ts";
 export * from "./readiness.ts";
 

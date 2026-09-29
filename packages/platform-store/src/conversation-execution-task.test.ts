@@ -906,7 +906,7 @@ it("captures current application independently from its responsible user and rec
 	expect(revoked && isTaskAuthorizationCurrentV1(revoked)).toBe(false);
 });
 
-it("rejects an application authorization record for a stale Execution revision", async () => {
+it("rejects the first application authorization insert for a stale Execution revision", async () => {
 	await seedApplication();
 	const boundary = await authorizationStore.captureApplicationBoundary({
 		applicationId: "shared",
@@ -922,6 +922,8 @@ it("rejects an application authorization record for a stale Execution revision",
 	};
 	const task = await taskUseCase().submitTask(command("stale-execution"));
 	if (task.outcome !== "accepted") throw Error();
+	await sql`delete from platform.task_authorization_records
+		where execution_id = ${task.result.executionId}`;
 	await sql`update platform.conversation_executions
 		set authorization_revision = 'stale-revision'
 		where execution_id = ${task.result.executionId}`;
@@ -938,7 +940,7 @@ it("rejects an application authorization record for a stale Execution revision",
 	const [records] = await sql<
 		{ count: number }[]
 	>`select count(*)::int as count from platform.task_authorization_records where execution_id = ${task.result.executionId}`;
-	expect(records?.count).toBe(1);
+	expect(records?.count).toBe(0);
 });
 
 it.each(["disabled", "revoked-grant"])(
