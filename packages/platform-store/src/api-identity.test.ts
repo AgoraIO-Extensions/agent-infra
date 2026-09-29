@@ -482,6 +482,79 @@ describe("PostgreSQL API identity store", () => {
 		]);
 	});
 
+	it("rejects application grant writes after the application is disabled", async () => {
+		await adminClient`truncate platform.audit_events,
+			platform.platform_api_credentials, platform.agent_principal_grants,
+			platform.platform_applications, platform.agents cascade`;
+		await adminClient`
+			insert into platform.agents (id, authorization_revision)
+			values ('agent_application_status', 'revision_1')
+		`;
+		await adminClient`
+			insert into platform.platform_applications
+				(id, name, responsible_user_id, status, authorization_revision)
+			values ('manager-application', 'Manager', 'user_owner', 'active', 'app-revision-1')
+		`;
+		await adminClient`
+			insert into platform.platform_api_credentials
+				(id, principal_type, principal_id, credential_hash, scopes)
+			values ('manager-credential', 'application', 'manager-application',
+				repeat('c', 64), '["agent:manage"]'::jsonb)
+		`;
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_application_status', 'application', 'manager-application',
+				'manage', 'revision_1')
+		`;
+		const actor = {
+			schemaVersion: 1 as const,
+			userId: "user_owner",
+			accountStatus: "active" as const,
+			principal: { kind: "application" as const, id: "manager-application" },
+			isAdministrator: false,
+			credential: {
+				credentialId: "manager-credential",
+				principal: { kind: "application" as const, id: "manager-application" },
+				scopes: ["agent:manage"] as const,
+				expiresAt: null,
+				revokedAt: null,
+			},
+		};
+		await store.grantAgent({
+			actor,
+			agentId: "agent_application_status",
+			principal: { kind: "user", id: "recipient-before-disable" },
+			grantType: "use",
+			authorizationRevision: "revision_2",
+		});
+		const [grantedBeforeDisable] = await adminClient`
+			select principal_id from platform.agent_principal_grants
+			where agent_id = 'agent_application_status'
+				and principal_id = 'recipient-before-disable'
+				and revoked_at is null`;
+		expect(grantedBeforeDisable?.principal_id).toBe("recipient-before-disable");
+		await adminClient`
+			update platform.platform_applications set status = 'disabled'
+			where id = 'manager-application'
+		`;
+		await expect(
+			store.grantAgent({
+				actor,
+				agentId: "agent_application_status",
+				principal: { kind: "user", id: "recipient-after-disable" },
+				grantType: "use",
+				authorizationRevision: "revision_3",
+			}),
+		).rejects.toMatchObject({ code: "resource_unavailable" });
+		const [grantedAfterDisable] = await adminClient`
+			select principal_id from platform.agent_principal_grants
+			where agent_id = 'agent_application_status'
+				and principal_id = 'recipient-after-disable'
+				and revoked_at is null`;
+		expect(grantedAfterDisable).toBeUndefined();
+	});
+
 	it("rejects application credential transport at the Store boundary", async () => {
 		await adminClient`truncate platform.audit_events,
 			platform.api_credential_delivery_grants, platform.platform_api_credentials,
