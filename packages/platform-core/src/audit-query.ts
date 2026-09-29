@@ -115,6 +115,7 @@ export const platformAuditQueryActionsV1 = [
 	"task.authorization.accepted",
 	"task.status.changed",
 	"task.control.created",
+	"task.control.promoted",
 	"execution.operation.observed",
 	"conversation.task.accepted",
 	"conversation.message.accepted",

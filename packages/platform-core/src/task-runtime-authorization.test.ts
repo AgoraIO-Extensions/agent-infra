@@ -6,6 +6,7 @@ import type {
 	CurrentTaskApplicationV1,
 	CurrentTaskUserV1,
 	TaskAuthorizationBoundaryV1,
+	TaskSystemControlReasonV1,
 } from "./task-authorization.js";
 import {
 	createTaskRuntimeAuthorizationUseCaseV1,
@@ -124,9 +125,12 @@ function harness() {
 		readRuntimeState: vi.fn(async () => state),
 		readAuthorization: vi.fn(async () => record),
 		resolveCurrentUser: vi.fn(async () => user),
-		recordControl: vi.fn(async (input: { reason: string }) => ({
-			controlRecordId: `control-${input.reason}`,
-		})),
+		recordControl: vi.fn(
+			async (input: { reason: TaskSystemControlReasonV1 }) => ({
+				controlRecordId: `control-${input.reason}`,
+				reason: input.reason,
+			}),
+		),
 		readLegacyRecovery: vi.fn(
 			async (): Promise<LegacyTaskControlRecoveryV1 | null> => null,
 		),

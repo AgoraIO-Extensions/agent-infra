@@ -12,6 +12,7 @@ import {
 	parseTaskAuthorizationBoundaryV1,
 	planTaskSystemControlV1,
 	type TaskAuthorizationBoundaryV1,
+	type TaskSystemControlReasonV1,
 } from "@agent-infra/platform-core";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -323,14 +324,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 		workerId: string;
 		traceId: string;
 		requestId: string;
-	}): Promise<{
-		controlRecordId: string;
-		reason:
-			| "stop"
-			| "authorization_revoked"
-			| "recovery"
-			| "generation_isolation";
-	}> {
+	}): Promise<{ controlRecordId: string; reason: TaskSystemControlReasonV1 }> {
 		try {
 			return await this.#client.begin(async (transaction) => {
 				await transaction`select set_config('lock_timeout', '5s', true)`;
@@ -434,6 +428,30 @@ export class PostgresTaskAuthorizationStoreV1 {
 						!["completed", "failed", "cancelled"].includes(execution.status))
 				)
 					throw new TaskAuthorizationStoreError();
+				if (
+					["recovery", "stop", "authorization_revoked"].includes(
+						input.reason,
+					) &&
+					historicalControls.length <= 1
+				) {
+					const [control] = historicalControls;
+					if (control) {
+						if (plan.revokeAuthorization) {
+							const newlyRevoked = await transaction<{ id: string }[]>`
+								update platform.task_authorization_records
+								set revoked_at = now()
+								where id = ${record.id} and revoked_at is null
+								returning id
+							`;
+							if (newlyRevoked.length)
+								await transaction`
+									insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
+									values (${randomUUID()}, ${input.traceId}, 'system', ${plan.workerId}, 'task.control.promoted', 'execution', ${input.executionId}, 'succeeded', ${input.requestId}, ${boundary.agentId}, ${transaction.json({ workerId: plan.workerId, originalPrincipal: plan.audit.originalPrincipal, controlRecordId: control.id, authorizationRecordId: record.id, reason: input.reason } as unknown as JsonValue)})
+								`;
+						}
+						return { controlRecordId: control.id, reason: control.reason };
+					}
+				}
 				const [existing] = await transaction<{ id: string }[]>`
 					select id from platform.task_control_records
 					where execution_id = ${input.executionId}

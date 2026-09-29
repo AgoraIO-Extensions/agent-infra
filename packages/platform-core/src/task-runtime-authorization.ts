@@ -121,7 +121,10 @@ interface Options {
 			readonly requestId: string;
 		},
 		signal: AbortSignal,
-	): Promise<{ readonly controlRecordId: string }>;
+	): Promise<{
+		readonly controlRecordId: string;
+		readonly reason: TaskSystemControlReasonV1;
+	}>;
 }
 
 function unavailable(code = "AUTHORIZATION_UNAVAILABLE"): never {
@@ -276,10 +279,22 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			signal,
 		);
 		if (!record.controlRecordId) unavailable();
+		if (
+			record.reason !== reason &&
+			!(
+				reason === "recovery" &&
+				["stop", "authorization_revoked"].includes(record.reason)
+			) &&
+			!(
+				["stop", "authorization_revoked"].includes(reason) &&
+				["stop", "authorization_revoked"].includes(record.reason)
+			)
+		)
+			denied("TASK_AUTHORIZATION_BINDING_INVALID");
 		return {
 			purpose: "control",
 			controlRecordId: record.controlRecordId,
-			reason,
+			reason: record.reason,
 		};
 	}
 	function isolationAuthority(
