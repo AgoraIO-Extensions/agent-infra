@@ -8110,6 +8110,45 @@ it.each([true, false])(
 	},
 );
 
+it("rejects a Host Execution Key when Codex still has a static model credential", async () => {
+	const path = join(await runtimeDirectory(), "driver.json");
+	let upstreamCalls = 0;
+	const endpoint = await listen(
+		createServer((_request, response) => {
+			upstreamCalls++;
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.end(completedEvent());
+		}),
+	);
+	let access: CodexModelAccess | undefined;
+	const bridge = new TestCodexBridge();
+	const authorize = vi.fn(async () => ({
+		relayKey: "synthetic-execution-relay-key",
+	}));
+	const driver = await openDriverWithModelEndpoint(
+		path,
+		bridge,
+		endpoint,
+		(options) => {
+			access = options.modelAccess;
+		},
+		undefined,
+		upstreamModelAccess.credential,
+		authorize,
+	);
+	drivers.push(driver);
+	await driver.execute(submitCommand());
+	if (!access) throw new Error("missing local model access");
+	const response = await modelRequest(access, bridge);
+	await response.text();
+	expect(response.status).not.toBe(200);
+	expect(authorize).toHaveBeenCalledTimes(1);
+	expect(upstreamCalls).toBe(0);
+	expect(await readFile(path, "utf8")).not.toContain(
+		"synthetic-execution-relay-key",
+	);
+});
+
 it.each(["missing", "pending"] as const)(
 	"requires current model authorization and drains %s authorization on shutdown",
 	async (mode) => {

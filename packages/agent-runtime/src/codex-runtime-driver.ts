@@ -6334,7 +6334,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					)
 						unavailable();
 					relayKey = authorization.relayKey;
-				}
+				} else if (authorization !== undefined) unavailable();
 				signal.throwIfAborted();
 			} finally {
 				waiting.abort();
