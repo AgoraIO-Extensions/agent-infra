@@ -425,13 +425,17 @@ export class PostgresConnectionApprovalRepository {
 				effect_ceiling: "READ" | "WRITE";
 				id: string;
 				name: string;
+				provider_id: string;
 				provider_release_id: string;
 				revision: string;
 				status: string;
 			}[]
 		>`
-			SELECT id, provider_release_id, name, effect_ceiling, revision::text, status
-			FROM connection_capability_profiles WHERE id = ${capabilityProfileId}
+			SELECT profile.id, profile.provider_release_id, release.provider AS provider_id,
+				profile.name, profile.effect_ceiling, profile.revision::text, profile.status
+			FROM connection_capability_profiles profile
+			JOIN connection_provider_releases release ON release.id = profile.provider_release_id
+			WHERE profile.id = ${capabilityProfileId}
 		`;
 		if (!profile)
 			throw new ConnectionError(
@@ -458,6 +462,7 @@ export class PostgresConnectionApprovalRepository {
 		`;
 		return {
 			id: profile.id,
+			providerId: profile.provider_id,
 			providerReleaseId: profile.provider_release_id,
 			name: profile.name,
 			effectCeiling: profile.effect_ceiling,
@@ -609,6 +614,7 @@ export class PostgresConnectionApprovalRepository {
 			actorPrincipalId: string;
 			policyId: string;
 			profileId?: string;
+			providerReleaseId?: string;
 			oldDisclaimerId?: string;
 			newDisclaimerId?: string;
 		},
@@ -622,6 +628,32 @@ export class PostgresConnectionApprovalRepository {
 		`;
 		if (!approvers.length || approvers.some((item) => item.status !== "ACTIVE"))
 			invalid("Approval policy approvers are inactive");
+		if (input.providerReleaseId) {
+			const [sourcePolicy] = await sql<{ provider_release_id: string }[]>`
+				SELECT provider_release_id FROM connection_access_policy_versions WHERE id = ${input.policyId}
+			`;
+			if (sourcePolicy?.provider_release_id !== input.providerReleaseId) {
+				const [target] = await sql<{ provider: string }[]>`
+					SELECT provider FROM connection_provider_releases WHERE id = ${input.providerReleaseId}
+				`;
+				const terms = await sql<{ kind: string; provider_id: string | null }[]>`
+					SELECT disclaimer.kind, disclaimer.provider_id
+					FROM connection_access_policy_disclaimers link
+					JOIN connection_disclaimer_versions disclaimer ON disclaimer.id = link.disclaimer_version_id
+					WHERE link.policy_version_id = ${input.policyId}
+				`;
+				if (
+					!target ||
+					terms.some(
+						(term) =>
+							term.kind === "POLICY" ||
+							(term.kind === "PROVIDER" &&
+								term.provider_id !== target.provider),
+					)
+				)
+					invalid("Policy disclaimers cannot be carried to the target release");
+			}
+		}
 		const retired = await sql`
 			UPDATE connection_access_policy_versions
 			SET status = 'SUPERSEDED', revision = revision + 1
@@ -635,7 +667,7 @@ export class PostgresConnectionApprovalRepository {
 				connect_ttl_seconds, renewal_lead_seconds, material_change,
 				status, created_by_principal_id, published_at
 			)
-			SELECT ${id}, provider_release_id,
+			SELECT ${id}, ${input.providerReleaseId ? sql`${input.providerReleaseId}` : sql`provider_release_id`},
 				${input.profileId ? sql`${input.profileId}` : sql`capability_profile_id`},
 				priority, default_duration_days, allow_permanent, request_ttl_seconds,
 				connect_ttl_seconds, renewal_lead_seconds, false,
@@ -715,18 +747,22 @@ export class PostgresConnectionApprovalRepository {
 			invalid("Revision is invalid");
 		return this.sql.begin(async (sql) => {
 			await this.requireCatalogAdministrator(sql, input.actorPrincipalId);
-			const [source] = await sql<{ provider_release_id: string }[]>`
-				SELECT provider_release_id FROM connection_capability_profiles
-				WHERE id = ${input.sourceId} AND status = 'PUBLISHED'
-					AND revision::text = ${input.expectedRevision} FOR UPDATE
+			const [source] = await sql<
+				{ provider_release_id: string; provider_id: string }[]
+			>`
+				SELECT profile.provider_release_id, release.provider AS provider_id
+				FROM connection_capability_profiles profile
+				JOIN connection_provider_releases release ON release.id = profile.provider_release_id
+				WHERE profile.id = ${input.sourceId} AND profile.status = 'PUBLISHED'
+					AND profile.revision::text = ${input.expectedRevision} FOR UPDATE OF profile
 			`;
-			if (!source || source.provider_release_id !== input.providerReleaseId)
-				invalid("Published capability profile changed");
-			const [release] = await sql<{ id: string }[]>`
-				SELECT id FROM connection_provider_releases
+			if (!source) invalid("Published capability profile changed");
+			const [release] = await sql<{ id: string; provider: string }[]>`
+				SELECT id, provider FROM connection_provider_releases
 				WHERE id = ${input.providerReleaseId} AND status = 'PUBLISHED' FOR SHARE
 			`;
-			if (!release) invalid("Provider release is unavailable");
+			if (!release || release.provider !== source.provider_id)
+				invalid("Target release must belong to the same Provider");
 			const policies = await this.currentPolicyIds(sql, {
 				profileId: input.sourceId,
 			});
@@ -793,6 +829,7 @@ export class PostgresConnectionApprovalRepository {
 					actorPrincipalId: input.actorPrincipalId,
 					policyId,
 					profileId: id,
+					providerReleaseId: input.providerReleaseId,
 				});
 			await this.auditAndEnqueue(sql, {
 				actorPrincipalId: input.actorPrincipalId,

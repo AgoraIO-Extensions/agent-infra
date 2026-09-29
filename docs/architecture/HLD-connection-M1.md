@@ -1170,6 +1170,8 @@ type CredentialVersion = {
 
 目录管理员对已发布 Capability Profile 或 Disclaimer 的“编辑”在单个事务中创建新的不可变发布版本，并把引用旧版的 current PUBLISHED Policy 复制成绑定新版的替代版本；原 Profile、Disclaimer 和 Policy 仅转为 SUPERSEDED。替代 Policy 保留原审批阶段、期限、优先级及其余条款，新申请只看到新版；旧 Request、Permit、Authorization 和 Grant 仍绑定原版，不自动扩权或重写确认。管理员“删除”仅把目标及引用它的 current Policy 转为 SUPERSEDED，从新申请目录撤下，不硬删除或撤销既有资格。所有操作校验管理员身份、目标 revision 和并发引用，审计/outbox 与状态更新同事务；重大免责声明变更仍遵循下文的重审门禁，不能通过快捷修订绕过。
 
+当被编辑的 Profile 绑定的旧 ProviderRelease 不在当前运行 Catalog 时，管理页必须展示旧 release 来源并要求管理员显式选择当前同一 Provider 的可执行 release；切换时清空旧 ActionVersion 选择，不按名称、效果或序号自动映射。修订事务验证来源/目标 Provider 一致、目标 release 仍 PUBLISHED 且由当前执行器提供、所选 ActionVersion 全属目标 release，并将受影响的 current Policy 同时替换为目标 release/Profile 的新版本。旧 Policy、Request、Authorization、Credential 和 Grant 保留原 release 与批准范围；跨 Provider、旧执行器不可用、条款作用域不匹配或并发变更时拒绝修订。
+
 管理员对 current PUBLISHED Policy 的快捷“编辑”同样在一个事务中发布冻结所有字段的新 Policy Version，并将原版本转为 SUPERSEDED；可改变阶段、候选人、时长和已发布能力包/非重大条款，但只影响新申请。既有 Request、Permit、Authorization 和 Grant 继续按原 Policy 冻结值执行，不因快捷编辑触发重审或自动扩权。快捷“移除”仅将 current Policy 转为 SUPERSEDED，停止该策略的新申请，不终止待审或已批准资格；界面必须与紧急撤销明显区分。两者均以管理员身份和 current revision 做事务内 CAS，快捷编辑还须重新验证目录、候选人、Provider/Profile/Disclaimer 发布状态、阶段 quorum 和依赖完整性；新增重大 Disclaimer 仍须使用显式 material 发布与重审流程。
 
 紧急撤销 current PUBLISHED Policy 时，在同一事务将其 ProviderRelease + Capability Profile 的 PUBLISHED/SUPERSEDED 版本标记 REVOKED，取消对应未终结 Request/未消费 Permit，暂停该组合的 ACTIVE、REAPPROVAL_REQUIRED 与 DISCONNECTED 个人 Access Authorization，提升 account revision/execution fence 并暂停 active Grant。进行中的 Renewal 同样取消；Request、WorkItem、Notification、audit/outbox 同事务收敛。旧 Provider submission 已进入 `SUBMISSION_STARTED` 时仍保留真实结果或 `UNCERTAIN`。撤销不能因状态重放而恢复资格。
