@@ -131,3 +131,73 @@ node tests/local-real-e2e/conversation-browser.mjs --check-config \
 `apps/web/tests/conversation-live.spec.ts` 是 Playwright 的合成 fixture 测试：它在浏览器
 内延迟返回两帧 SSE，专门验证提交防重、增量渲染、刷新恢复和权限失效 UI。fixture 通过不
 代表部署后端、模型或 Connection 已经可用。
+
+## API 身份与授权真实验收
+
+`api-identity-browser.mjs` 使用三个由同一受控部署生成的独立浏览器 `storageState`，覆盖
+管理员、应用负责人和其他员工。它创建专用 API application，并回读应用列表隔离、delivery
+授予与撤销、应用凭证签发与撤销、`manage`/`use` Agent grant、凭证 scope、过期、撤销、跨
+主体拒绝和退休 V1 URI。管理员审计回读会检查所有已产生的响应和审计正文都不含凭证值。
+
+配置只保存主体 ID、Agent ID、状态文件和 Bearer 探针的真实路径，不保存 token。状态文件和
+输出目录必须属于当前用户且为 `0600`/`0700`。配置检查不访问后端：
+
+```bash
+node tests/local-real-e2e/api-identity-browser.mjs --check-config \
+  /absolute/local-development/api-identity.json
+```
+
+真实旅程使用 Node 24：
+
+```bash
+node tests/local-real-e2e/api-identity-browser.mjs \
+  /absolute/local-development/api-identity.json
+```
+
+最小配置形状如下。`bearer.readPath` 必须是接受应用 Bearer 凭证并验证 `agent:read` 的
+Agent 读取入口，`bearer.grantPath` 必须是接受 `agent:manage` 的 grant POST/DELETE 入口；
+脚本不会猜测或创建这两个入口。
+
+```json
+{
+  "schemaVersion": 1,
+  "mode": "api-identity-real",
+  "origin": "https://127.0.0.1:3511",
+  "outputDirectory": "/absolute/local-development/api-identity-evidence",
+  "logFiles": ["/absolute/local-development/platform-api-acceptance.log"],
+  "agentId": "agent-under-test",
+  "admin": { "userId": "controlled-admin", "stateFile": "/absolute/local-development/admin-state.json", "expectRole": "system_admin" },
+  "owner": { "userId": "controlled-owner", "stateFile": "/absolute/local-development/owner-state.json", "expectRole": "employee" },
+  "other": { "userId": "controlled-other", "stateFile": "/absolute/local-development/other-state.json", "expectRole": "employee" },
+  "bearer": {
+    "readPath": "/api/v1/agents/{agentId}",
+    "grantPath": "/api/v1/agents/{agentId}/grants",
+    "grantPrincipal": { "kind": "user", "id": "controlled-other" }
+  }
+}
+```
+
+### #504 装配依赖
+
+真实验收开始前，#504 需要在同一受信部署中提供以下可读回事实：
+
+- Platform API、浏览器会话入口和 `IdentityAdapter` 使用同一目录；三个主体均为当前 active，
+  管理员含 `system_admin`，Owner 对 `agentId` 具有管理权，数据库为本次专用隔离实例。
+- `assemblePlatformApi` 使用同一 PostgreSQL `PostgresApiIdentityStoreV1`，并把
+  `resolveApiCredential`、`resolveUser` 和当前 authorization revision 绑定到部署目录；不能用
+  fixture、调用方提交的 user ID 或静态 Bearer 替代。
+- 当前 `createPlatformApp` 只调用 `registerApiIdentityRoutes`；`management-routes.ts` 中由
+  `registerManagementRoutes` 提供的 legacy Bearer 分支未自动挂载。#504 必须实际挂载该
+  contract 的读取和 grant 路径，或提供完全等价且已记录的路径；仅挂载
+  `/api/v1/api-credentials`、`/api/v1/applications` 等浏览器身份路由，不足以证明 scope、
+  过期、撤销和 Agent grant。`bearer.*Path` 必须与实际装配路径一致。
+- `/api/v1/admin/audit` 对管理员可读，返回的 `summary`、`subjectId`、actor 和错误信息不得
+  包含凭证值；日志采集也应以本次 run 的 request/trace ID 或 hash 关联，而不记录 token。
+- 如果 #504 能提供本次 run 的 API 日志文件，把路径放入 `logFiles`；脚本会回读并逐个检查凭证
+  值。没有可读日志文件时，`evidence.logs.checked` 为 `false`，不能把它写成日志验收通过。
+- #504 负责启动和修复隔离环境；本脚本只消费已提供的 endpoint、数据库和状态文件，不启动或
+  恢复 default Colima，不接触生产 kube context。
+
+输出 `evidence.json` 只含主体、应用、凭证和 Agent 标识的 SHA-256、状态码、协议错误码和
+  审计数量。`endpointChecked: false` 的配置检查不能作为真实 API 验收证据；完整旅程必须
+  以当前部署返回的状态和回读结果为准。
