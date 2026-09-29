@@ -8,6 +8,9 @@
 | --- | --- | --- | --- |
 | `agent_platform_operations_total` | 次 | `service`、`stage`、`outcome` | 阶段拥有者确认结果后调用一次 `record`；重放消费者须先按持久操作、尝试和事件标识去重。 |
 | `agent_platform_operation_duration` | ms | `service`、`stage`、`outcome` | 阶段拥有者提供一次已确认耗时；缺失时不记录。 |
+| `agent_platform_resource_count` | `1`，当前数量 | `service`、`kind` | 阶段拥有者从权威运行状态采样后调用 `observeResource`；同种类只保留最新值，不按事件增量累加。 |
+
+`observeResource` 只接受非负安全整数和固定 `kind`：`sse_connections`、`sse_pending_events`、`task_waiting`、`outbox_pending`、`postgres_pool_active`、`postgres_pool_idle`、`postgres_pool_waiting`。未收到快照的种类不会输出零值；收到明确的零值才输出零。每个实例最多保留上述七种最新值，样本超过三个 Metric 导出间隔后停止观测，下一次可信采样才恢复。该 Gauge 使用 delta 聚合以避免 SDK 在无新观测时继续导出过期值；现有阶段计数器保持原聚合方式。真实 API/Worker 必须定期从各自权威状态采样，包内不读取 Store、SSE 或 PostgreSQL。过期停止输出只表示本进程没有新样本，不能证明下游查询后端已经删除旧时间序列。
 
 `service`、`stage` 和 `outcome` 均为封闭集合。请求、Trace、Agent、Conversation、Execution、操作和尝试引用只进入受控日志与 Trace，不作为指标标签。请求、Trace、Agent、Conversation 和 Execution ID 仅接受平台生成的 UUID；操作与尝试引用须来自可信持久事实，包内仅接受 1-128 字符、字母或数字开头且其余为字母、数字、`.`、`_`、`:`、`-` 的值。格式校验不证明引用来源可信；外部请求头和任意文本不得作为观测关联值。不符合格式的关联值会被省略，非法阶段、结果或耗时会被丢弃并计入 `status().invalidRecords`。
 

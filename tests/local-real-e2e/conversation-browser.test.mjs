@@ -5,98 +5,255 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { persistedEventsMatchExecution } from "./conversation-browser-validation.mjs";
+import { ConversationDetailProjectionV2Schema } from "../../packages/contracts/src/pilot/operation-v2.ts";
+import {
+	currentExecutionEvents,
+	currentExecutionFrames,
+	restoredHistoryPreservesEvents,
+} from "./conversation-browser-validation.mjs";
 
 const script = join(import.meta.dirname, "conversation-browser.mjs");
 
-test("persisted event validation accepts mixed conversation and execution history", () => {
+function persistedEvent(eventId, executionId) {
+	return {
+		schemaVersion: 1,
+		kind: "event",
+		eventId,
+		conversationId: "conversation-1",
+		executionId,
+		sequence: 1,
+		conversationCursor: eventId,
+		occurredAt: "2026-09-29T00:00:00.000Z",
+		type: "execution.status",
+		payload: { status: "completed" },
+	};
+}
+
+function mixedHistoryDetail() {
+	return {
+		schemaVersion: 2,
+		conversation: {
+			schemaVersion: 1,
+			conversationId: "conversation-1",
+			agentId: "agent-1",
+			title: null,
+			status: "ready",
+			selectedModelOptionId: null,
+			selectedReasoningLevel: null,
+			lastConversationCursor: "current-event",
+			createdAt: "2026-09-29T00:00:00.000Z",
+			updatedAt: "2026-09-29T00:00:00.000Z",
+		},
+		messages: [
+			{
+				messageId: "conversation-message",
+				role: "user",
+				text: "synthetic history message",
+				executionId: null,
+				replyToMessageId: null,
+				answerVersion: null,
+				isCurrentAnswer: null,
+				createdAt: "2026-09-29T00:00:00.000Z",
+				status: "completed",
+				error: null,
+			},
+		],
+		events: [
+			persistedEvent("earlier-event", "execution-old"),
+			persistedEvent("current-event", "execution-1"),
+		],
+	};
+}
+
+test("conversation detail keeps earlier execution events outside the submitted execution subset", () => {
+	const detail = ConversationDetailProjectionV2Schema.parse(
+		mixedHistoryDetail(),
+	);
+	assert.deepEqual(
+		currentExecutionEvents(detail, "conversation-1", "execution-1"),
+		[detail.events[1]],
+	);
+	assert.equal(detail.messages[0].executionId, null);
+	assert.equal(detail.events.length, 2);
+});
+
+test("conversation messages may have no execution while persisted events may not", () => {
+	const detail = mixedHistoryDetail();
 	assert.equal(
-		persistedEventsMatchExecution(
-			[
-				{
-					eventId: "conversation-event-1",
-					conversationId: "conversation-1",
-					executionId: null,
-				},
-				{
-					eventId: "earlier-execution-event-1",
-					conversationId: "conversation-1",
-					executionId: "execution-old",
-				},
-				{
-					eventId: "current-execution-event-1",
-					conversationId: "conversation-1",
-					executionId: "execution-1",
-				},
-			],
+		ConversationDetailProjectionV2Schema.safeParse(detail).success,
+		true,
+	);
+	const invalidEvent = {
+		...detail,
+		events: [{ ...detail.events[0], executionId: null }, detail.events[1]],
+	};
+	assert.equal(
+		ConversationDetailProjectionV2Schema.safeParse(invalidEvent).success,
+		false,
+	);
+	assert.equal(
+		currentExecutionEvents(invalidEvent, "conversation-1", "execution-1"),
+		null,
+	);
+});
+
+test("older execution frames cannot prove the submitted execution streamed", () => {
+	const detail = ConversationDetailProjectionV2Schema.parse(
+		mixedHistoryDetail(),
+	);
+	const events = currentExecutionEvents(
+		detail,
+		"conversation-1",
+		"execution-1",
+	);
+	const frames = [
+		{ id: "earlier-event", type: "execution.status", status: "completed" },
+		{ id: "current-event", type: "execution.status", status: "submitted" },
+	];
+	assert.deepEqual(currentExecutionFrames(events, frames), [frames[1]]);
+	assert.deepEqual(currentExecutionFrames(events, null), []);
+	assert.deepEqual(currentExecutionFrames(null, frames), []);
+	assert.deepEqual(currentExecutionFrames(events, [null, ...frames]), [
+		frames[1],
+	]);
+});
+
+test("persisted event validation rejects missing execution IDs in either history subset", () => {
+	for (const index of [0, 1]) {
+		for (const executionId of [undefined, null, "", 0, {}]) {
+			const detail = mixedHistoryDetail();
+			detail.events[index] = { ...detail.events[index], executionId };
+			assert.equal(
+				currentExecutionEvents(detail, "conversation-1", "execution-1"),
+				null,
+				`event ${index} with executionId=${String(executionId)} must be rejected`,
+			);
+		}
+	}
+});
+
+test("persisted event validation binds the conversation and unique event identities", () => {
+	const detail = mixedHistoryDetail();
+	assert.equal(
+		currentExecutionEvents(
+			{
+				...detail,
+				conversation: { ...detail.conversation, conversationId: "other" },
+			},
+			"conversation-1",
+			"execution-1",
+		),
+		null,
+	);
+	for (const index of [0, 1]) {
+		const events = [...detail.events];
+		events[index] = { ...events[index], conversationId: "other" };
+		assert.equal(
+			currentExecutionEvents(
+				{ ...detail, events },
+				"conversation-1",
+				"execution-1",
+			),
+			null,
+		);
+	}
+	assert.equal(
+		currentExecutionEvents(
+			{
+				...detail,
+				events: [
+					{ ...detail.events[0], eventId: "current-event" },
+					detail.events[1],
+				],
+			},
+			"conversation-1",
+			"execution-1",
+		),
+		null,
+	);
+});
+
+test("persisted event validation requires an event from the submitted execution", () => {
+	const detail = mixedHistoryDetail();
+	assert.equal(
+		currentExecutionEvents(detail, "conversation-1", "execution-2"),
+		null,
+	);
+});
+
+test("reload preserves mixed history while allowing later events for the submitted execution", () => {
+	const before = mixedHistoryDetail();
+	const after = {
+		...before,
+		events: [...before.events, persistedEvent("later-event", "execution-1")],
+	};
+	assert.equal(
+		restoredHistoryPreservesEvents(
+			before,
+			after,
 			"conversation-1",
 			"execution-1",
 		),
 		true,
 	);
-});
-
-test("persisted event validation rejects malformed or unbound current history", () => {
-	const currentEvent = {
-		eventId: "current-execution-event-1",
-		conversationId: "conversation-1",
-		executionId: "execution-1",
-	};
-	for (const executionId of [undefined, null, "", 0, {}]) {
+	assert.equal(
+		restoredHistoryPreservesEvents(
+			before,
+			{ ...after, events: [after.events[1], after.events[0], after.events[2]] },
+			"conversation-1",
+			"execution-1",
+		),
+		false,
+	);
+	assert.equal(
+		restoredHistoryPreservesEvents(
+			before,
+			{ ...after, events: after.events.slice(1) },
+			"conversation-1",
+			"execution-1",
+		),
+		false,
+	);
+	for (const index of [0, 1]) {
+		const events = [...after.events];
+		events[index] = {
+			...events[index],
+			executionId: index === 0 ? "execution-1" : "execution-old",
+		};
 		assert.equal(
-			persistedEventsMatchExecution(
-				[{ ...currentEvent, executionId }],
+			restoredHistoryPreservesEvents(
+				before,
+				{ ...after, events },
 				"conversation-1",
 				"execution-1",
 			),
 			false,
-			`executionId=${String(executionId)} must be rejected as the current event`,
+			`event ${index} must retain its execution binding after reload`,
 		);
 	}
-	assert.equal(
-		persistedEventsMatchExecution(
-			[
-				{ ...currentEvent, conversationId: "other-conversation" },
-				{ ...currentEvent, eventId: "current-execution-event-2" },
-			],
-			"conversation-1",
-			"execution-1",
-		),
-		false,
-	);
-	assert.equal(
-		persistedEventsMatchExecution(
-			[
-				{
-					eventId: "malformed-history-event-1",
-					conversationId: "conversation-1",
-				},
-				currentEvent,
-			],
-			"conversation-1",
-			"execution-1",
-		),
-		false,
-	);
-	assert.equal(
-		persistedEventsMatchExecution(
-			[
-				{
-					eventId: "conversation-event-1",
-					conversationId: "conversation-1",
-					executionId: null,
-				},
-				{
-					eventId: "earlier-execution-event-1",
-					conversationId: "conversation-1",
-					executionId: "execution-old",
-				},
-			],
-			"conversation-1",
-			"execution-1",
-		),
-		false,
-	);
+	for (const changed of [
+		{ type: "execution.status", payload: { status: "failed" } },
+		{ type: "text.delta", payload: { text: "changed history" } },
+	]) {
+		const events = [
+			{ ...after.events[0], ...changed },
+			...after.events.slice(1),
+		];
+		const altered = ConversationDetailProjectionV2Schema.parse({
+			...after,
+			events,
+		});
+		assert.equal(
+			restoredHistoryPreservesEvents(
+				before,
+				altered,
+				"conversation-1",
+				"execution-1",
+			),
+			false,
+			"persisted event content must remain unchanged after reload",
+		);
+	}
 });
 
 async function fixtureDirectory() {

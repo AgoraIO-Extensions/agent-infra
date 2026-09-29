@@ -6,6 +6,8 @@ import { defineConfig } from "vitest/config";
 
 const cert = process.env.PLATFORM_WEB_TLS_CERT_FILE;
 const key = process.env.PLATFORM_WEB_TLS_KEY_FILE;
+const platformApiTarget =
+	process.env.PLATFORM_API_PROXY_TARGET ?? "http://127.0.0.1:3000";
 if (Boolean(cert) !== Boolean(key)) {
 	throw new Error(
 		"Both Platform Web TLS certificate and key files are required",
@@ -23,9 +25,20 @@ export default defineConfig({
 				: undefined,
 		proxy: {
 			"/api": {
-				target:
-					process.env.PLATFORM_API_PROXY_TARGET ?? "http://127.0.0.1:3000",
+				target: platformApiTarget,
 				changeOrigin: false,
+			},
+			"/auth": {
+				target: platformApiTarget,
+				changeOrigin: false,
+				configure(proxy) {
+					proxy.on("proxyReq", (request) => {
+						request.setHeader(
+							"X-Forwarded-Proto",
+							cert && key ? "https" : "http",
+						);
+					});
+				},
 			},
 		},
 	},

@@ -82,6 +82,10 @@ test("consumes the Platform login contract and keeps the form retryable", async 
 	);
 	await expect(page.getByLabel("账号")).toHaveAttribute("aria-invalid", "true");
 	await expect(page.getByRole("button", { name: "登录" })).toBeEnabled();
+	await test.info().attach("login-retryable-error", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
 
 	await page.getByLabel("密码").fill("correct horse battery staple");
 	await page.getByRole("button", { name: "登录" }).click();
@@ -106,4 +110,8 @@ test("consumes the Platform login contract and keeps the form retryable", async 
 			document.documentElement.clientWidth,
 	);
 	expect(horizontalOverflow).toBe(false);
+	await test.info().attach("login-session-recovered", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
 });
