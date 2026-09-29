@@ -229,6 +229,14 @@ it("requires confidential transport for private Key delivery", () => {
 			assertCurrentAuthorization: async () => {},
 		}),
 	).toThrow("RuntimeHost V4 transport must be confidential");
+	vi.stubEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0");
+	try {
+		expect(() => fixture()).toThrow(
+			"RuntimeHost V4 transport must be confidential",
+		);
+	} finally {
+		vi.unstubAllEnvs();
+	}
 });
 
 it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", async () => {

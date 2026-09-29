@@ -711,11 +711,12 @@ export function createWorkerRuntimeHostClientV4(
 		throw new TypeError("RuntimeHost V4 client options are invalid");
 	const base = endpoint(options.baseUrl, "/");
 	if (
-		base.protocol !== "https:" &&
-		!(
-			base.protocol === "http:" &&
-			["127.0.0.1", "[::1]", "localhost"].includes(base.hostname)
-		)
+		process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0" ||
+		(base.protocol !== "https:" &&
+			!(
+				base.protocol === "http:" &&
+				["127.0.0.1", "[::1]", "localhost"].includes(base.hostname)
+			))
 	)
 		throw new TypeError("RuntimeHost V4 transport must be confidential");
 	const fetcher = options.fetch ?? fetch;
