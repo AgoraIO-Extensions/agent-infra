@@ -1,9 +1,9 @@
 diff --git a/packages/opencode/src/native/effect-receipt.ts b/packages/opencode/src/native/effect-receipt.ts
 new file mode 100644
-index 000000000..b74e2451a
+index 000000000..3472a9fb7
 --- /dev/null
 +++ b/packages/opencode/src/native/effect-receipt.ts
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,134 @@
 +/**
 + * Private Driver/native effect receipt boundary.
 + *
@@ -62,7 +62,7 @@ index 000000000..b74e2451a
 +  readonly errorCode?: string
 +}
 +
-+export type EffectReceiptRequest = Omit<EffectReceipt, "phase" | "ackID" | "startedAt" | "resultDigest" | "errorCode"> & {
++export type EffectReceiptRequest = Omit<EffectReceipt, "phase" | "startedAt" | "resultDigest" | "errorCode"> & {
 +  readonly phase: "intent" | "permit"
 +}
 +
@@ -75,29 +75,55 @@ index 000000000..b74e2451a
 +  value.length > 0 &&
 +  new TextEncoder().encode(value).byteLength <= max
 +
++const effectReceiptFields = new Set([
++  "schema",
++  "sessionID",
++  "turnID",
++  "callID",
++  "executionID",
++  "generation",
++  "fence",
++  "operationRef",
++  "attemptRef",
++  "leafNonce",
++  "sequence",
++  "phase",
++  "target",
++  "targetRef",
++  "ackID",
++  "startedAt",
++  "resultDigest",
++  "errorCode",
++])
++
 +const hasValidOptionalFields = (receipt: Partial<EffectReceipt>): boolean =>
 +  receipt.phase === "intent" || receipt.phase === "permit"
 +    ? receipt.startedAt === undefined && receipt.resultDigest === undefined
 +    : (receipt.startedAt === undefined ||
-+        (Number.isSafeInteger(receipt.startedAt) && receipt.startedAt >= 0)) &&
++        (typeof receipt.startedAt === "number" &&
++          Number.isSafeInteger(receipt.startedAt) &&
++          receipt.startedAt >= 0)) &&
 +      (receipt.resultDigest === undefined ||
 +        (typeof receipt.resultDigest === "string" && /^[a-f0-9]{64}$/.test(receipt.resultDigest)))
 +
 +export function isEffectReceipt(value: unknown): value is EffectReceipt {
 +  if (!value || typeof value !== "object") return false
 +  const receipt = value as Partial<EffectReceipt>
++  if (Object.keys(receipt).some((field) => !effectReceiptFields.has(field))) return false
 +  return (
 +    receipt.schema === EFFECT_RECEIPT_SCHEMA &&
 +    boundedString(receipt.sessionID) &&
 +    boundedString(receipt.turnID) &&
 +    boundedString(receipt.callID) &&
 +    boundedString(receipt.executionID) &&
++    typeof receipt.generation === "number" &&
 +    Number.isSafeInteger(receipt.generation) &&
 +    receipt.generation >= 0 &&
 +    boundedString(receipt.fence) &&
 +    boundedString(receipt.operationRef) &&
 +    boundedString(receipt.attemptRef) &&
 +    boundedString(receipt.leafNonce) &&
++    typeof receipt.sequence === "number" &&
 +    Number.isSafeInteger(receipt.sequence) &&
 +    receipt.sequence >= 0 &&
 +    typeof receipt.phase === "string" &&
