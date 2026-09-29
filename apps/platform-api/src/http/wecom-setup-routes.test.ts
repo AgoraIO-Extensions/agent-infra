@@ -40,6 +40,7 @@ it("authenticates setup routes and rejects cross-Owner, cross-Agent, replay and 
 					}
 				: null,
 		store: {
+			activeBinding: async () => false,
 			create: async (record) => {
 				records.set(record.sessionId, record);
 			},
@@ -133,6 +134,7 @@ it("keeps application setup on its own Owner route and withholds submitted secre
 					}
 				: null,
 		store: {
+			activeBinding: async () => false,
 			create: async (record) => {
 				records.set(record.sessionId, record);
 			},

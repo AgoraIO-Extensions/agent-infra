@@ -102,6 +102,11 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 		>`select s.*,case when w.status='auth_failed' then 'auth_failed' when w.lease_until>clock_timestamp() then w.status else 'disconnected' end as connection_status from platform.wecom_setup_sessions s left join platform.wecom_connections w on w.binding_reference=s.session_id and w.bot_id=s.bot_id where s.session_id=${sessionId}`;
 		return row ? record(row) : null;
 	}
+	async activeBinding(agentId: string, reference: string) {
+		const rows = await this
+			.#sql`select 1 from platform.wecom_setup_sessions s join platform.agents a on a.id=s.agent_id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where s.session_id=${reference} and s.agent_id=${agentId} and s.status='active' and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind',s.kind,'bindingReference',s.session_id)) limit 1`;
+		return rows.length === 1;
+	}
 	async consume(input: Parameters<WecomSetupStoreV1["consume"]>[0]) {
 		const { session } = input;
 		if (

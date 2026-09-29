@@ -133,9 +133,7 @@ export function assemblePlatformApi(
 					...(wecomSetup
 						? {
 								verifyCallback: wecomSetup.verifyCallback,
-								acceptMessages: async (reference: string) =>
-									!(await wecomSetup.referenceKind(reference)) ||
-									(await wecomSetup.isActive(reference)),
+								acceptMessages: wecomSetup.acceptMessages,
 							}
 						: {}),
 				})

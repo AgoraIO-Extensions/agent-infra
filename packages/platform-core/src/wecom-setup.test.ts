@@ -39,6 +39,13 @@ it("binds a one-use setup to its Owner, Agent and configuration version before e
 					}
 				: null,
 		store: {
+			async activeBinding(agentId, reference) {
+				return (
+					exposeSetupBinding &&
+					agentId === "agent" &&
+					reference === record?.sessionId
+				);
+			},
 			async create(value) {
 				record = value;
 			},
@@ -118,10 +125,11 @@ it("stages application credentials only for the current Owner and verified setup
 	let now = new Date();
 	let encrypted = 0;
 	let exposedApplication = false;
+	let originalOwnerActive = true;
 	const usecase = createWecomSetupV1({
 		now: () => now,
 		authority: async (agentId, actorId) =>
-			actorId === "owner"
+			(actorId === "owner" && originalOwnerActive) || actorId === "new-owner"
 				? {
 						configuration: {
 							...agentConfigurationConformanceRecordV1,
@@ -142,6 +150,13 @@ it("stages application credentials only for the current Owner and verified setup
 					}
 				: null,
 		store: {
+			async activeBinding(agentId, reference) {
+				return (
+					exposedApplication &&
+					agentId === "agent" &&
+					reference === record?.sessionId
+				);
+			},
 			async create(value) {
 				record = value;
 			},
@@ -251,6 +266,7 @@ it("stages application credentials only for the current Owner and verified setup
 		sessionId: setup.sessionId,
 		kind: "wecom_app",
 	});
+	expect(await usecase.acceptMessages(setup.sessionId)).toBe(false);
 	exposedApplication = true;
 	expect(await usecase.current("agent", "owner", "wecom_app")).toEqual({
 		status: "verifying",
@@ -262,13 +278,38 @@ it("stages application credentials only for the current Owner and verified setup
 		...existing,
 		status: "active",
 		callbackVerifiedAt: now.toISOString(),
+		connectionStatus: "connected",
 	};
 	expect(await usecase.current("agent", "owner", "wecom_app")).toEqual({
 		status: "connected",
 		sessionId: setup.sessionId,
 	});
+	expect(await usecase.acceptMessages(setup.sessionId)).toBe(true);
+	record = { ...record, connectionStatus: "disconnected" };
+	expect(await usecase.current("agent", "owner", "wecom_app")).toEqual({
+		status: "disconnected",
+		sessionId: setup.sessionId,
+	});
+	record = { ...record, connectionStatus: "auth_failed" };
+	expect(await usecase.current("agent", "owner", "wecom_app")).toEqual({
+		status: "auth_failed",
+		sessionId: setup.sessionId,
+	});
+	record = { ...record, connectionStatus: "disconnected" };
 	authorizationRevision = "a2";
 	expect(await usecase.callback(setup.sessionId)).toMatchObject({
 		status: "active",
 	});
+	originalOwnerActive = false;
+	expect(await usecase.callback(setup.sessionId)).toMatchObject({
+		status: "active",
+	});
+	expect(await usecase.acceptMessages(setup.sessionId)).toBe(true);
+	expect(await usecase.current("agent", "new-owner", "wecom_app")).toEqual({
+		status: "disconnected",
+		sessionId: setup.sessionId,
+	});
+	exposedApplication = false;
+	expect(await usecase.callback(setup.sessionId)).toBeNull();
+	expect(await usecase.acceptMessages(setup.sessionId)).toBe(false);
 });

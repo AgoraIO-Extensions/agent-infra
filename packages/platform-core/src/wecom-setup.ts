@@ -43,6 +43,7 @@ export interface WecomSetupRecordV1 {
 }
 export interface WecomSetupStoreV1 {
 	create(record: WecomSetupRecordV1): Promise<void>;
+	activeBinding(agentId: string, reference: string): Promise<boolean>;
 	pendingApplication?(
 		agentId: string,
 		actorId: string,
@@ -131,6 +132,14 @@ export function createWecomSetupV1(options: {
 		return { current, session };
 	}
 	return {
+		async acceptMessages(reference: string) {
+			const session = await options.store.read(reference);
+			return (
+				!session ||
+				(session.status === "active" &&
+					(await options.store.activeBinding(session.agentId, reference)))
+			);
+		},
 		async callback(reference: string) {
 			const session = await options.store.read(reference);
 			if (
@@ -139,15 +148,11 @@ export function createWecomSetupV1(options: {
 				!session.encryptedCallback
 			)
 				return null;
-			const current = await authority(session.agentId, session.actorId);
 			if (session.status === "active")
-				return current.configuration.channels.some(
-					(channel) =>
-						channel.kind === "wecom_app" &&
-						channel.bindingReference === reference,
-				)
+				return (await options.store.activeBinding(session.agentId, reference))
 					? session
 					: null;
+			const current = await authority(session.agentId, session.actorId);
 			return session.status === "verifying" &&
 				Date.parse(session.expiresAt) > now().getTime() &&
 				current.configuration.revision === session.configurationRevision &&
@@ -188,13 +193,20 @@ export function createWecomSetupV1(options: {
 				? {
 						sessionId: session.sessionId,
 						status:
-							session.status === "active" && session.callbackVerifiedAt
-								? ("connected" as const)
-								: session.status === "auth_failed"
-									? ("auth_failed" as const)
-									: session.callbackVerifiedAt
-										? ("verifying" as const)
-										: ("callback" as const),
+							session.status === "active" &&
+							session.connectionStatus === "auth_failed"
+								? ("auth_failed" as const)
+								: session.status === "active" &&
+										session.callbackVerifiedAt &&
+										session.connectionStatus === "connected"
+									? ("connected" as const)
+									: session.status === "auth_failed"
+										? ("auth_failed" as const)
+										: session.status === "active"
+											? ("disconnected" as const)
+											: session.callbackVerifiedAt
+												? ("verifying" as const)
+												: ("callback" as const),
 					}
 				: { status: session.connectionStatus ?? "disconnected" };
 		},

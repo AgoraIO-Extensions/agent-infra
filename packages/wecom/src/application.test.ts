@@ -53,3 +53,18 @@ it("rejects oversized provider responses without exposing a token", async () => 
 		}),
 	).rejects.toThrow("WeCom application unavailable");
 });
+
+it("redacts a provider transport error that contains the credential URL", async () => {
+	const access = createWecomApplicationAccessV1({
+		fetch: async (input) => {
+			throw new Error(`Request failed: ${String(input)}`);
+		},
+	});
+	await expect(
+		access.token({
+			corporationId: "corp",
+			applicationId: "7",
+			secret: "fixture-secret",
+		}),
+	).rejects.toThrow("WeCom application unavailable");
+});

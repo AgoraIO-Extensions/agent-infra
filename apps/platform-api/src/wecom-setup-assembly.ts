@@ -115,27 +115,18 @@ export function assembleWecomSetupApiV1(options: {
 	});
 	return {
 		setup,
-		async referenceKind(reference: string) {
-			const session = await store.read(reference);
-			return session ? (session.kind ?? "wecom_bot") : null;
-		},
-		async isActive(reference: string) {
-			const session = await store.read(reference);
-			return (
-				session?.status === "active" &&
-				(await store.bindings(session.kind ?? "wecom_bot")).some(
-					(binding) => binding.sessionId === reference,
-				)
-			);
-		},
+		acceptMessages: setup.acceptMessages,
 		async resolveBinding(
 			reference: string,
 			resolveBot: (reference: string) => Promise<WecomConfigurationV1 | null>,
 		): Promise<WecomConfigurationV1 | null> {
-			const kind = await this.referenceKind(reference);
-			if (!kind) return resolveBot(reference);
-			if (kind === "wecom_app") return this.resolveApplication(reference);
-			return (await this.isActive(reference)) ? resolveBot(reference) : null;
+			const session = await store.read(reference);
+			if (!session) return resolveBot(reference);
+			if (session.kind === "wecom_app")
+				return this.resolveApplication(reference);
+			return (await setup.acceptMessages(reference))
+				? resolveBot(reference)
+				: null;
 		},
 		callbackUrl: (sessionId: string) => {
 			if (!callbackOrigin) throw new Error("WeCom callback origin unavailable");
@@ -160,10 +151,7 @@ export function assembleWecomSetupApiV1(options: {
 		async verifyCallback(reference: string) {
 			const session = await store.read(reference);
 			if (session?.kind !== "wecom_app") return true;
-			if (session.status === "active")
-				return (await store.bindings("wecom_app")).some(
-					(binding) => binding.sessionId === reference,
-				);
+			if (session.status === "active") return setup.acceptMessages(reference);
 			return store.verifyCallback(reference);
 		},
 		async close() {
