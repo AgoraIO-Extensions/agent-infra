@@ -16,6 +16,7 @@ import {
 } from "vitest";
 import { PostgresConversationDispatchStoreV1 } from "./conversation-dispatch.ts";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.ts";
+import { parseAuthority } from "./conversation-execution-records.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
 	type PostgresTestDatabase,
@@ -104,14 +105,14 @@ beforeEach(async () => {
 		schemaVersion: 1,
 		actorId: "user_task",
 		agentId: "agent_task",
-		channelId: "api",
+		channelId: "api:user",
 		authorizationRevision: "grant_1",
 		supportsSupplementaryInstruction: false,
 		taskBoundary: {
 			schemaVersion: 1,
 			principal: { kind: "user", id: "user_task" },
 			agentId: "agent_task",
-			channelId: "api",
+			channelId: "api:user",
 			identityRevision: "identity_1",
 			agentAuthorizationRevision: "grant_1",
 			accessSources: [{ kind: "user", userId: "user_task" }],
@@ -154,6 +155,9 @@ beforeEach(async () => {
 	};
 	await sql`insert into platform.agents (id, current_configuration_revision, authorization_revision)
 		values ('agent_task', 1, 'grant_1')`;
+	await sql`insert into platform.agent_principal_grants
+		(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+		values ('agent_task', 'user', 'user_task', 'use', 'grant_1')`;
 	await sql`insert into platform.relay_key_subjects (purpose, subject_id, last_version, current_version)
 		values ('agent-default', 'agent_task', 1, 1)`;
 	await sql`insert into platform.relay_key_versions
@@ -543,7 +547,7 @@ describe("durable task admission", () => {
 		await sql`insert into platform.conversations
 			(id, agent_id, actor_id, channel_id, status, session_generation,
 			 authorization_revision, selected_model_option_id, selected_reasoning_level)
-			values ('task_model_fallback', 'agent_task', 'user_task', 'api', 'ready', 1,
+			values ('task_model_fallback', 'agent_task', 'user_task', 'api:user', 'ready', 1,
 			 'grant_1', 'removed_model', 'high')`;
 		const decision = await taskUseCase().submitTask(
 			command("fallback", { conversationId: "task_model_fallback" }),
@@ -775,16 +779,7 @@ async function seedApplication(applicationId = "shared") {
 it.each(["user-grant", "application-disabled", "application-grant"])(
 	"rechecks current API access before replay or key conflict after %s",
 	async (change) => {
-		if (change === "user-grant") {
-			const boundary = currentAuthority.taskBoundary;
-			if (!boundary) throw Error();
-			await sql`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent_task', 'user', 'user_task', 'use', 'grant_1')`;
-			currentAuthority = {
-				...currentAuthority,
-				channelId: "api:user",
-				taskBoundary: { ...boundary, channelId: "api:user" },
-			};
-		} else {
+		if (change !== "user-grant") {
 			await seedApplication();
 			const boundary = await authorizationStore.captureApplicationBoundary({
 				applicationId: "shared",
@@ -822,6 +817,83 @@ it.each(["user-grant", "application-disabled", "application-grant"])(
 		expect(await counts()).toEqual(before);
 	},
 );
+
+it("rejects bare api at capture, admission, and persisted read with or without a use grant", async () => {
+	await sql`insert into platform.agent_owners (agent_id, owner_id, created_at)
+		values ('agent_task', 'user_task', now())`;
+	await sql`insert into platform.agent_availability (agent_id, target_type, target_id)
+		values ('agent_task', 'user', 'user_task')`;
+	await sql`delete from platform.agent_principal_grants
+		where agent_id = 'agent_task' and principal_type = 'user' and principal_id = 'user_task'`;
+	const user = {
+		schemaVersion: 1 as const,
+		userId: "user_task",
+		accountStatus: "active" as const,
+		organizationIds: [],
+		authorizationRevision: "identity_1",
+	};
+	const input = { user, agentId: "agent_task", channelId: "api" };
+	expect(await authorizationStore.captureUserBoundary(input)).toBeNull();
+	const original = currentAuthority.taskBoundary;
+	if (!original) throw Error();
+	currentAuthority = {
+		...currentAuthority,
+		channelId: "api",
+		taskBoundary: {
+			...original,
+			channelId: "api",
+			accessSources: [{ kind: "owner", userId: "user_task" }],
+		},
+	};
+	const task = taskUseCase();
+	const before = await counts();
+	const authorizationWrites = () =>
+		sql<{ records: number; audits: number }[]>`
+			select (select count(*)::int from platform.task_authorization_records) as records,
+				(select count(*)::int from platform.audit_events
+					where action = 'task.authorization.accepted' and agent_id = 'agent_task') as audits
+		`;
+	const beforeAuthorization = await authorizationWrites();
+	expect(() => parseAuthority(currentAuthority)).toThrow();
+	await expect(task.submitTask(command("bare-api"))).rejects.toMatchObject({
+		code: "unavailable",
+	});
+	expect(await counts()).toEqual(before);
+	expect(await authorizationWrites()).toEqual(beforeAuthorization);
+
+	await sql`insert into platform.agent_principal_grants
+		(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+		values ('agent_task', 'user', 'user_task', 'use', 'grant_1')`;
+	expect(await authorizationStore.captureUserBoundary(input)).toBeNull();
+	currentAuthority = {
+		...currentAuthority,
+		taskBoundary: {
+			...original,
+			channelId: "api",
+		},
+	};
+	await expect(task.submitTask(command("bare-api"))).rejects.toMatchObject({
+		code: "unavailable",
+	});
+	expect(await counts()).toEqual(before);
+	expect(await authorizationWrites()).toEqual(beforeAuthorization);
+
+	currentAuthority = {
+		...currentAuthority,
+		channelId: "api:user",
+		taskBoundary: original,
+	};
+	const accepted = await task.submitTask(command("canonical-api"));
+	if (accepted.outcome !== "accepted") throw Error();
+	await sql`update platform.conversation_executions set channel_id = 'api'
+		where execution_id = ${accepted.result.executionId}`;
+	await sql`update platform.task_authorization_records
+		set boundary = jsonb_set(boundary, '{channelId}', '"api"')
+		where execution_id = ${accepted.result.executionId}`;
+	await expect(
+		authorizationStore.readExecution(accepted.result.executionId),
+	).rejects.toThrow("Task authorization persistence is unavailable");
+});
 
 it("rejects replay and key conflict after the Agent authorization revision changes", async () => {
 	const task = taskUseCase();

@@ -28,7 +28,9 @@ export function isTaskPrincipalChannelV1(
 	channelId: string,
 ): boolean {
 	return (
-		(subject.kind === "user" && !channelId.startsWith("api:")) ||
+		(subject.kind === "user" &&
+			channelId !== "api" &&
+			!channelId.startsWith("api:")) ||
 		channelId === taskApiChannelIdV1(subject)
 	);
 }

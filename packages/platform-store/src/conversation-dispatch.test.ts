@@ -3800,6 +3800,9 @@ async function waitingTaskHarness(maximumConcurrentExecutions = 1) {
 	const agentId = `waiting-agent-${fixture++}`;
 	const ready = await seedCapacityAgent(agentId, maximumConcurrentExecutions);
 	await client`update platform.agents set authorization_revision = 'waiting-grant' where id = ${agentId}`;
+	await client`insert into platform.agent_principal_grants
+		(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+		values (${agentId}, 'user', 'waiting-user', 'use', 'waiting-grant')`;
 	await client`insert into platform.agent_configuration_revisions
 		(agent_id, revision, source_reference, created_at, configuration)
 		values (${agentId}, 4, 'waiting-fixture', now(), ${client.json(ready.verified.configuration)})`;
@@ -3822,14 +3825,14 @@ async function waitingTaskHarness(maximumConcurrentExecutions = 1) {
 								schemaVersion: 1,
 								actorId: "waiting-user",
 								agentId,
-								channelId: "api",
+								channelId: "api:user",
 								authorizationRevision: "waiting-grant",
 								supportsSupplementaryInstruction: false,
 								taskBoundary: {
 									schemaVersion: 1,
 									principal: { kind: "user", id: "waiting-user" },
 									agentId,
-									channelId: "api",
+									channelId: "api:user",
 									identityRevision: "waiting-identity",
 									agentAuthorizationRevision: "waiting-grant",
 									accessSources: [{ kind: "user", userId: "waiting-user" }],
@@ -4474,7 +4477,7 @@ describe("durable waiting task dispatch from real admission", () => {
 			const secondConversationId = `waiting-cross-conversation-${fixture++}`;
 			await client`insert into platform.conversations
 				(id, agent_id, actor_id, channel_id, status, session_generation, authorization_revision)
-				values (${secondConversationId}, ${h.agentId}, 'waiting-user', 'api', 'ready', 1, 'waiting-grant')`;
+				values (${secondConversationId}, ${h.agentId}, 'waiting-user', 'api:user', 'ready', 1, 'waiting-grant')`;
 			const second = await h.submit(
 				"cross-conversation-second",
 				secondConversationId,
@@ -4949,7 +4952,7 @@ describe("durable waiting task dispatch from real admission", () => {
 								schemaVersion: 1,
 								actorId: "waiting-user",
 								agentId: h.agentId,
-								channelId: "api",
+								channelId: "api:user",
 								authorizationRevision: "waiting-grant",
 								supportsSupplementaryInstruction: false,
 							},
