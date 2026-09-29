@@ -449,6 +449,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				modelOptionId: null,
 				reasoningLevel: null,
 			});
+			expect(decision.claim.relayKeyBinding).toBeUndefined();
 			expect(
 				await store.prepareRuntimeDispatch({
 					claim: decision.claim,
