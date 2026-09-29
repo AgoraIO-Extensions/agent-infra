@@ -15,6 +15,12 @@ const pilotBrowserArtifactPath = fileURLToPath(
 		import.meta.url,
 	),
 );
+const pilotBrowserV2ArtifactPath = fileURLToPath(
+	new URL(
+		"../artifacts/openapi/pilot-browser.v2.openapi.json",
+		import.meta.url,
+	),
+);
 const runtimeHostV2ArtifactPath = fileURLToPath(
 	new URL("../artifacts/openapi/runtime-host.v2.openapi.json", import.meta.url),
 );
@@ -55,6 +61,183 @@ describe("contract compatibility command", () => {
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");
 	});
+
+	it.each([pilotBrowserArtifactPath, pilotBrowserV2ArtifactPath])(
+		"accepts only the reviewed API identity addition in %s",
+		async (artifactPath) => {
+			const current = JSON.parse(await readFile(artifactPath, "utf8"));
+			const previous = structuredClone(current);
+			for (const path of [
+				"/api/v1/api-credentials",
+				"/api/v1/api-credentials/{credentialId}",
+				"/api/v1/applications",
+				"/api/v1/applications/{applicationId}/credential-delivery",
+				"/api/v1/applications/{applicationId}/credentials",
+				"/api/v1/applications/{applicationId}/credentials/{credentialId}",
+				"/api/v1/agents/{agentId}/grants",
+			])
+				delete previous.paths[path];
+			for (const name of [
+				"ApiAgentGrantProjectionV1",
+				"ApiAgentGrantRequestV1",
+				"ApiApplicationCreateRequestV1",
+				"ApiApplicationCredentialIssueProjectionV1",
+				"ApiApplicationProjectionV1",
+				"ApiCredentialIssueProjectionV1",
+				"ApiCredentialIssueRequestV1",
+				"ApiCredentialMetadataProjectionV1",
+				"ApiCredentialScopeV1",
+				"ApiPrincipalV1",
+			])
+				delete previous.components.schemas[name];
+			if (previous.paths["/api/v1/agents"]?.post) {
+				delete previous.paths["/api/v1/agents"].post;
+				delete previous.components.schemas.AgentApplicationCreateRequestV2;
+				delete previous.components.schemas.AgentDirectCreationProjectionV1;
+			}
+			for (const version of ["V1", "V2"])
+				for (const stem of [
+					"AgentApplicationCreateRequest",
+					"AgentApplicationUpdateRequest",
+					"AgentConfigurationProjection",
+					"AgentConfigurationUpdateRequest",
+				]) {
+					const options =
+						previous.components.schemas[`${stem}${version}`]?.properties
+							?.availability?.items?.oneOf;
+					if (options)
+						previous.components.schemas[
+							`${stem}${version}`
+						].properties.availability.items.oneOf = options.filter(
+							(option: { properties?: { kind?: { const?: string } } }) =>
+								option.properties?.kind?.const !== "application",
+						);
+				}
+			for (const option of previous.components.schemas
+				.AgentLifecycleCommandRequestV1?.oneOf ?? []) {
+				const values = option.properties?.command?.enum;
+				if (values)
+					option.properties.command.enum = values.filter(
+						(value: string) => value !== "start",
+					);
+			}
+			for (const name of [
+				"PlatformAuditProjectionV1",
+				"PlatformAuditProjectionV2",
+			]) {
+				const actor = previous.components.schemas[name]?.properties?.actor;
+				if (!actor?.anyOf) continue;
+				const options = actor.anyOf.filter(
+					(option: { properties?: { kind?: { const?: string } } }) =>
+						option.properties?.kind?.const !== "application",
+				);
+				previous.components.schemas[name].properties.actor =
+					options.length === 1 ? options[0] : { ...actor, anyOf: options };
+			}
+			const directory = await mkdtemp(
+				resolve(tmpdir(), "agent-infra-identity-"),
+			);
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			try {
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				const auditName =
+					artifactPath === pilotBrowserArtifactPath
+						? "PlatformAuditProjectionV1"
+						: "PlatformAuditProjectionV2";
+				const availabilityName =
+					artifactPath === pilotBrowserArtifactPath
+						? "AgentApplicationUpdateRequestV1"
+						: "AgentApplicationUpdateRequestV2";
+				const mutations: Array<[string, (document: typeof current) => void]> = [
+					[
+						"availability",
+						(document) => {
+							document.components.schemas[
+								availabilityName
+							].properties.availability.items.oneOf.at(
+								-1,
+							).properties.applicationId.minLength = 0;
+						},
+					],
+					[
+						"start",
+						(document) => {
+							document.components.schemas.AgentLifecycleCommandRequestV1.oneOf
+								.find(
+									(option: {
+										properties?: { command?: { enum?: string[] } };
+									}) => option.properties?.command?.enum?.includes("start"),
+								)
+								.properties.command.enum.push("start");
+						},
+					],
+					[
+						"audit actor",
+						(document) => {
+							document.components.schemas[auditName].properties.actor.anyOf.at(
+								-1,
+							).properties.actorId.minLength = 0;
+						},
+					],
+					[
+						"existing session",
+						(document) => {
+							const path =
+								artifactPath === pilotBrowserArtifactPath
+									? "/api/v1/session"
+									: "/api/v2/agents";
+							delete document.paths[path].get.responses["200"];
+						},
+					],
+					[
+						"unreviewed route",
+						(document) => {
+							document.paths[
+								artifactPath === pilotBrowserArtifactPath
+									? "/api/v1/unreviewed"
+									: "/api/v2/unreviewed"
+							] = {};
+						},
+					],
+				];
+				if (artifactPath === pilotBrowserArtifactPath)
+					mutations.push(
+						[
+							"credential security",
+							(document) => {
+								document.paths["/api/v1/api-credentials"].post.security = [];
+							},
+						],
+						[
+							"credential scopes",
+							(document) => {
+								document.components.schemas.ApiCredentialIssueRequestV1.required =
+									document.components.schemas.ApiCredentialIssueRequestV1.required.filter(
+										(value: string) => value !== "scopes",
+									);
+							},
+						],
+						[
+							"direct creation",
+							(document) => {
+								document.paths["/api/v1/agents"].post.security = [];
+							},
+						],
+					);
+				for (const [name, mutate] of mutations) {
+					const changed = structuredClone(current);
+					mutate(changed);
+					await writeFile(currentPath, JSON.stringify(changed));
+					expect(comparePaths(currentPath, previousPath).status, name).toBe(1);
+				}
+			} finally {
+				await rm(directory, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it("accepts only the model-selection fallback OpenAPI addition", () => {
 		const result = compare(
