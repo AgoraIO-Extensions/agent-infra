@@ -89,7 +89,9 @@ class TestRepository implements ConnectionRepository {
 	}
 
 	async ensurePrincipal() {}
-	async validatePersonalConnectRequest() {}
+	async validatePersonalConnectRequest() {
+		return { requiredScopes: ["read:user", "repo"] };
+	}
 	async authorizeConnectionAdministration() {
 		return false;
 	}

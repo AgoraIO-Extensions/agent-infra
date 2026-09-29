@@ -35,10 +35,11 @@ export async function lookupApprovedConnectPermit(
 			connect_expires_at: Date;
 			provider_id: string;
 			provider_release_id: string;
+			required_scopes: unknown;
 		}[]
 	>`
 		SELECT request.connect_expires_at, release.provider AS provider_id,
-			request.provider_release_id
+			request.provider_release_id, profile.required_scopes
 		FROM connection_access_requests request
 		JOIN connection_provider_releases release
 			ON release.id = request.provider_release_id
@@ -58,10 +59,18 @@ export async function lookupApprovedConnectPermit(
 			AND permit.consumed_at IS NULL AND permit.expires_at > now()
 	`;
 	if (!row) forbidden();
+	if (
+		!Array.isArray(row.required_scopes) ||
+		row.required_scopes.some(
+			(scope) => typeof scope !== "string" || !scope || /\s/u.test(scope),
+		)
+	)
+		forbidden();
 	return {
 		connectExpiresAt: row.connect_expires_at.toISOString(),
 		providerId: row.provider_id,
 		providerReleaseId: row.provider_release_id,
+		requiredScopes: [...new Set(row.required_scopes)].sort(),
 		requestId,
 	};
 }
@@ -448,8 +457,10 @@ export class PostgresConnectionAccessRequestRepository
 		});
 	}
 
-	prepareConnect(principalId: string, requestId: string) {
-		return lookupApprovedConnectPermit(this.sql, principalId, requestId);
+	async prepareConnect(principalId: string, requestId: string) {
+		const { requiredScopes: _requiredScopes, ...publicPermit } =
+			await lookupApprovedConnectPermit(this.sql, principalId, requestId);
+		return publicPermit;
 	}
 
 	async listRequests(
