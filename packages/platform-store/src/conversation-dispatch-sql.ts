@@ -113,7 +113,7 @@ export async function lockExecution(
 			authorization_revision, last_runtime_cursor,
 			model_configuration_revision::text, model_option_id, reasoning_level,
 			execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id,
-			relay_key_version::text,
+			relay_key_version::text, runtime_submit_protocol, original_operation_digest,
 			task_wait_order::text, task_wait_deadline
 		from platform.conversation_executions
 		where execution_id = ${executionId} and conversation_id = ${conversationId}

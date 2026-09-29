@@ -119,8 +119,12 @@ export class PostgresConversationDispatchStoreV1
 	/** Recheck the live lease and derive recovery metadata from the original accepted task. */
 	async readRuntimeState(input: {
 		readonly claim: ConversationDispatchClaimV1;
+		readonly runtimeSubmitProtocol?: "v2" | "v4";
 	}) {
 		requireClaim(input.claim);
+		const runtimeSubmitProtocol = input.runtimeSubmitProtocol ?? "v2";
+		if (runtimeSubmitProtocol !== "v2" && runtimeSubmitProtocol !== "v4")
+			throw new TypeError("Runtime submit protocol is invalid");
 		const claim = input.claim;
 		return databaseOperation(() =>
 			this.#client.begin(async (transaction) => {
@@ -185,7 +189,7 @@ export class PostgresConversationDispatchStoreV1
 						and record->>'status' = 'available'
 					order by file_id
 				`;
-				const keyed = state.execution.execution_source !== null;
+				const keyed = runtimeSubmitProtocol === "v4";
 				if (
 					keyed &&
 					(!state.execution.relay_key_purpose ||
@@ -254,6 +258,31 @@ export class PostgresConversationDispatchStoreV1
 						isolation.original_principal.id !== claim.actorId)
 				)
 					return null;
+				const originalOperationDigest = createHash("sha256")
+					.update(JSON.stringify(canonical(original)))
+					.digest("base64url");
+				if (
+					state.execution.runtime_submit_protocol !== null ||
+					state.execution.original_operation_digest !== null
+				) {
+					if (
+						state.execution.runtime_submit_protocol !== runtimeSubmitProtocol ||
+						state.execution.original_operation_digest !==
+							originalOperationDigest
+					)
+						return null;
+				} else {
+					const pinned = await transaction<{ execution_id: string }[]>`
+						update platform.conversation_executions
+						set runtime_submit_protocol = ${runtimeSubmitProtocol},
+							original_operation_digest = ${originalOperationDigest}
+						where execution_id = ${claim.executionId}
+							and runtime_submit_protocol is null
+							and original_operation_digest is null
+						returning execution_id
+					`;
+					if (pinned.length !== 1) return null;
+				}
 				return {
 					...(state.execution.task_wait_order === null
 						? {}
@@ -271,9 +300,7 @@ export class PostgresConversationDispatchStoreV1
 					...(payload.metadataRecovery
 						? { metadataRecovery: payload.metadataRecovery }
 						: {}),
-					originalOperationDigest: createHash("sha256")
-						.update(JSON.stringify(canonical(original)))
-						.digest("base64url"),
+					originalOperationDigest,
 					executionStatus: state.execution.status,
 					stopPending: stop?.status === "submitted",
 				};
