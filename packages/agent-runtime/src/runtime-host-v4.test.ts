@@ -381,7 +381,14 @@ it("does not dispatch V4 business after Host closes during Grant validation", as
 	await store.close();
 });
 
-it.each(["expired-grant", "changed-fence", "changed-key-version"] as const)(
+const rejectedV4Cases = [
+	"expired-grant",
+	"changed-fence",
+	"changed-key-version",
+	"changed-private-context",
+] as const;
+
+it.each(rejectedV4Cases)(
 	"rejects %s before V4 Driver work",
 	async (substitution) => {
 		const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-denied-"));
@@ -407,7 +414,18 @@ it.each(["expired-grant", "changed-fence", "changed-key-version"] as const)(
 								keyBinding: { ...request.keyBinding, version: 2 },
 							},
 						}
-					: transport;
+					: substitution === "changed-private-context"
+						? {
+								...transport,
+								privateKeyField: {
+									...transport.privateKeyField,
+									context: {
+										...transport.privateKeyField.context,
+										executionId: "other-execution",
+									},
+								},
+							}
+						: transport;
 		const signedClaims =
 			substitution === "expired-grant"
 				? { ...claims, issuedAt: now - 2_000, expiresAt: now - 1_000 }
