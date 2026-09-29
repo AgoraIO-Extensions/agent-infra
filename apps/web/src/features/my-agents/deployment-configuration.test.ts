@@ -34,4 +34,23 @@ describe("projectDeploymentConfiguration", () => {
 			retryable: true,
 		});
 	});
+
+	it("does not invent retryability for an unavailable projection", () => {
+		const state: DeploymentConfigurationState = {
+			kind: "ready",
+			configuration: {
+				...deploymentConfiguration,
+				status: "unavailable",
+				modelCatalog: {
+					...deploymentConfiguration.modelCatalog,
+					status: "unavailable",
+				},
+			},
+		};
+
+		expect(projectDeploymentConfiguration(state, undefined, false)).toEqual({
+			configuration: state.configuration,
+			retryable: false,
+		});
+	});
 });

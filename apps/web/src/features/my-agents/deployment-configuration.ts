@@ -59,9 +59,10 @@ export function projectDeploymentConfiguration(
 				: unavailableDeploymentConfiguration,
 		retryable: isError
 			? isRetryableDeploymentConfigurationError(error)
-			: state?.kind === "ready" ||
-				(state?.kind === "unavailable" && state.retryable) ||
-				false,
+			: state?.kind === "ready"
+				? state.configuration.status !== "unavailable" &&
+					state.configuration.modelCatalog.status !== "unavailable"
+				: state?.kind === "unavailable" && state.retryable,
 	};
 }
 

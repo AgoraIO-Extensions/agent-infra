@@ -14,10 +14,9 @@ export const Route = createFileRoute("/agents/$agentId/configuration")({
 function AgentConfigurationRoute() {
 	const { agentId } = Route.useParams();
 	const query = useAgentDetail(agentId);
-	const retryable =
-		(query.isError && isRetryableAgentDiscoveryError(query.error)) ||
-		(query.data?.kind === "unavailable" && query.data.retryable) ||
-		false;
+	const retryable = query.isError
+		? isRetryableAgentDiscoveryError(query.error)
+		: query.data?.kind === "unavailable" && query.data.retryable;
 	if (query.isPending) {
 		return <p aria-live="polite">正在读取配置…</p>;
 	}

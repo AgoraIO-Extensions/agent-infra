@@ -12,10 +12,12 @@ export const Route = createFileRoute("/my-agents/")({
 function MyAgentsRoute() {
 	const query = useMyAgentApplications();
 	const owned = useAgentDiscovery("owner");
-	const applicationsRetryable =
-		(query.isError && isRetryableMyAgentApplicationError(query.error)) ||
-		(query.data?.kind === "unavailable" && query.data.retryable) ||
-		false;
+	const applicationsRetryable = query.isError
+		? isRetryableMyAgentApplicationError(query.error)
+		: query.data?.kind === "unavailable" && query.data.retryable;
+	const ownedAgentsRetryable = owned.isError
+		? isRetryableAgentDiscoveryError(owned.error)
+		: owned.data?.kind === "unavailable" && owned.data.retryable;
 
 	return (
 		<main className="platform-content management-content">
@@ -27,11 +29,7 @@ function MyAgentsRoute() {
 				ownedAgentsUnavailable={
 					owned.isError || owned.data?.kind === "unavailable"
 				}
-				ownedAgentsRetryable={
-					(owned.isError && isRetryableAgentDiscoveryError(owned.error)) ||
-					(owned.data?.kind === "unavailable" && owned.data.retryable) ||
-					false
-				}
+				ownedAgentsRetryable={ownedAgentsRetryable}
 				onRetryApplications={() => void query.refetch()}
 				onRetryOwnedAgents={() => void owned.refetch()}
 				retryingApplications={query.isFetching}

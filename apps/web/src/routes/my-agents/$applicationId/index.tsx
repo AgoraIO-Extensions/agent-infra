@@ -13,10 +13,9 @@ function MyAgentApplicationRoute() {
 	const { applicationId } = Route.useParams();
 	const query = useMyAgentApplication(applicationId);
 	const withdrawal = useWithdrawMyAgentApplication(applicationId);
-	const retryable =
-		(query.isError && isRetryableMyAgentApplicationError(query.error)) ||
-		(query.data?.kind === "unavailable" && query.data.retryable) ||
-		false;
+	const retryable = query.isError
+		? isRetryableMyAgentApplicationError(query.error)
+		: query.data?.kind === "unavailable" && query.data.retryable;
 
 	return (
 		<main className="platform-content management-content">

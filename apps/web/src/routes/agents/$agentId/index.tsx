@@ -13,10 +13,9 @@ function AgentDetailRoute() {
 	const { agentId } = Route.useParams();
 	const query = useAgentDetail(agentId);
 	const session = useBrowserSession();
-	const retryable =
-		(query.isError && isRetryableAgentDiscoveryError(query.error)) ||
-		(query.data?.kind === "unavailable" && query.data.retryable) ||
-		false;
+	const retryable = query.isError
+		? isRetryableAgentDiscoveryError(query.error)
+		: query.data?.kind === "unavailable" && query.data.retryable;
 	const agent = query.data?.kind === "ready" ? query.data.agent : undefined;
 	const canManage =
 		agent &&
