@@ -42,4 +42,45 @@ describe("RuntimeHost published artifact boundary", () => {
 			]);
 		}
 	});
+
+	it("publishes V4 event read and ACK wire contracts", async () => {
+		const openapi = JSON.parse(
+			await readFile(
+				new URL(
+					"../../artifacts/openapi/runtime-host.v4.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const jsonSchema = JSON.parse(
+			await readFile(
+				new URL(
+					"../../artifacts/json-schema/runtime.v4.schema.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		for (const [path, request, response] of [
+			[
+				"events/read",
+				"RuntimeEventReadRequestV4",
+				"RuntimeEventReplayResponseV4",
+			],
+			["events/ack", "RuntimeEventAckRequestV4", "RuntimeEventAckResponseV4"],
+		] as const) {
+			const operation = openapi.paths[`/internal/runtime/v4/${path}`].post;
+			expect(
+				operation.requestBody.content["application/json"].schema.$ref,
+			).toBe(`#/components/schemas/${request}`);
+			expect(
+				operation.responses["200"].content["application/json"].schema.$ref,
+			).toBe(`#/components/schemas/${response}`);
+			expect(openapi.components.schemas[request]).toBeDefined();
+			expect(openapi.components.schemas[response]).toBeDefined();
+			expect(jsonSchema.$defs[request]).toBeDefined();
+			expect(jsonSchema.$defs[response]).toBeDefined();
+		}
+	});
 });

@@ -310,6 +310,1088 @@
         ],
         "type": "object"
       },
+      "RuntimeEventAckRequestV4": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "channelId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "confirmedCursor": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "consumer": {
+            "const": "platform_worker_persistence",
+            "type": "string"
+          },
+          "conversationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "executionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "executionSource": {
+            "$ref": "#/components/schemas/RuntimeExecutionSourceV1"
+          },
+          "grant": {
+            "additionalProperties": false,
+            "properties": {
+              "format": {
+                "const": "runtime-execution-jws",
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 2,
+                "type": "number"
+              },
+              "token": {
+                "maxLength": 262144,
+                "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "format",
+              "token"
+            ],
+            "type": "object"
+          },
+          "hostSessionRef": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "keyBinding": {
+            "$ref": "#/components/schemas/RuntimeRelayKeyBindingV1"
+          },
+          "operation": {
+            "additionalProperties": false,
+            "properties": {
+              "deliveryFence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "executionDeliveryFence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "execution",
+                  "message",
+                  "stop",
+                  "generation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "deliveryFence",
+              "executionDeliveryFence"
+            ],
+            "type": "object"
+          },
+          "principal": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "user",
+                  "application"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          "requestId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 4,
+            "type": "number"
+          },
+          "sessionGeneration": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "traceId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "turnId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "requestId",
+          "traceId",
+          "principal",
+          "executionSource",
+          "channelId",
+          "agentId",
+          "conversationId",
+          "executionId",
+          "turnId",
+          "sessionGeneration",
+          "hostSessionRef",
+          "operation",
+          "grant",
+          "keyBinding",
+          "consumer",
+          "confirmedCursor"
+        ],
+        "type": "object"
+      },
+      "RuntimeEventAckResponseV4": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmedCursor": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "executionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 4,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "executionId",
+          "confirmedCursor"
+        ],
+        "type": "object"
+      },
+      "RuntimeEventReadRequestV4": {
+        "additionalProperties": false,
+        "properties": {
+          "afterCursor": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "channelId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "consumer": {
+            "const": "platform_worker_persistence",
+            "type": "string"
+          },
+          "conversationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "executionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "executionSource": {
+            "$ref": "#/components/schemas/RuntimeExecutionSourceV1"
+          },
+          "grant": {
+            "additionalProperties": false,
+            "properties": {
+              "format": {
+                "const": "runtime-execution-jws",
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 2,
+                "type": "number"
+              },
+              "token": {
+                "maxLength": 262144,
+                "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "format",
+              "token"
+            ],
+            "type": "object"
+          },
+          "hostSessionRef": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "keyBinding": {
+            "$ref": "#/components/schemas/RuntimeRelayKeyBindingV1"
+          },
+          "operation": {
+            "additionalProperties": false,
+            "properties": {
+              "deliveryFence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "executionDeliveryFence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "execution",
+                  "message",
+                  "stop",
+                  "generation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "deliveryFence",
+              "executionDeliveryFence"
+            ],
+            "type": "object"
+          },
+          "principal": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "user",
+                  "application"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          "requestId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 4,
+            "type": "number"
+          },
+          "sessionGeneration": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "traceId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "turnId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "requestId",
+          "traceId",
+          "principal",
+          "executionSource",
+          "channelId",
+          "agentId",
+          "conversationId",
+          "executionId",
+          "turnId",
+          "sessionGeneration",
+          "hostSessionRef",
+          "operation",
+          "grant",
+          "keyBinding",
+          "consumer",
+          "afterCursor"
+        ],
+        "type": "object"
+      },
+      "RuntimeEventReplayResponseV4": {
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "items": {
+              "anyOf": [
+                {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "adapterEventKey": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "cursor": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "executionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "occurredAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                          "type": "string"
+                        },
+                        "payload": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "delta": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "delta"
+                          ],
+                          "type": "object"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "type": {
+                          "const": "text",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "adapterEventKey",
+                        "executionId",
+                        "cursor",
+                        "occurredAt",
+                        "type",
+                        "payload"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "adapterEventKey": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "cursor": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "executionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "occurredAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                          "type": "string"
+                        },
+                        "payload": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "status": {
+                              "enum": [
+                                "idle",
+                                "running",
+                                "completed",
+                                "failed",
+                                "cancelled",
+                                "unavailable",
+                                "unknown"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "type": {
+                          "const": "status",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "adapterEventKey",
+                        "executionId",
+                        "cursor",
+                        "occurredAt",
+                        "type",
+                        "payload"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "adapterEventKey": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "cursor": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "executionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "occurredAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                          "type": "string"
+                        },
+                        "payload": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "name": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "phase": {
+                              "enum": [
+                                "started",
+                                "completed",
+                                "failed"
+                              ],
+                              "type": "string"
+                            },
+                            "toolCallId": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "toolCallId",
+                            "name",
+                            "phase"
+                          ],
+                          "type": "object"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "type": {
+                          "const": "tool",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "adapterEventKey",
+                        "executionId",
+                        "cursor",
+                        "occurredAt",
+                        "type",
+                        "payload"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "adapterEventKey": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "cursor": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "executionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "occurredAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                          "type": "string"
+                        },
+                        "payload": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fileId": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "mimeType": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "name": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "sizeBytes": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "fileId",
+                            "name",
+                            "mimeType",
+                            "sizeBytes"
+                          ],
+                          "type": "object"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "type": {
+                          "const": "file",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "adapterEventKey",
+                        "executionId",
+                        "cursor",
+                        "occurredAt",
+                        "type",
+                        "payload"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "adapterEventKey": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "cursor": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "executionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "occurredAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                          "type": "string"
+                        },
+                        "payload": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "status": {
+                              "enum": [
+                                "completed",
+                                "failed",
+                                "cancelled"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "type": {
+                          "const": "completed",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "adapterEventKey",
+                        "executionId",
+                        "cursor",
+                        "occurredAt",
+                        "type",
+                        "payload"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "adapterEventKey": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "cursor": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "executionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "occurredAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                          "type": "string"
+                        },
+                        "payload": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "code": {
+                                  "const": "RUNTIME_EXECUTION_FAILED",
+                                  "type": "string"
+                                },
+                                "message": {
+                                  "const": "Runtime execution failed",
+                                  "type": "string"
+                                },
+                                "retryable": {
+                                  "const": false,
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "code",
+                                "message",
+                                "retryable"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "code": {
+                                  "const": "RUNTIME_DEPENDENCY_UNAVAILABLE",
+                                  "type": "string"
+                                },
+                                "message": {
+                                  "const": "Runtime dependency is unavailable",
+                                  "type": "string"
+                                },
+                                "retryable": {
+                                  "const": true,
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "code",
+                                "message",
+                                "retryable"
+                              ],
+                              "type": "object"
+                            }
+                          ],
+                          "type": "object"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "type": {
+                          "const": "error",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "adapterEventKey",
+                        "executionId",
+                        "cursor",
+                        "occurredAt",
+                        "type",
+                        "payload"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "adapterEventKey": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "cursor": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "executionId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "occurredAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                      "type": "string"
+                    },
+                    "payload": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attemptRef": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "durationMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "failureCode": {
+                              "enum": [
+                                "authorization_denied",
+                                "authorization_unavailable",
+                                "dependency_unavailable",
+                                "request_rejected",
+                                "response_incomplete",
+                                "operation_failed",
+                                "persistence_unavailable",
+                                "interrupted",
+                                "recovery_unconfirmed"
+                              ],
+                              "type": "string"
+                            },
+                            "finishedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "const": "model",
+                              "type": "string"
+                            },
+                            "model": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "configVersion": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "modelId": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "modelOptionId": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "reasoningLevel": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "configVersion",
+                                "modelOptionId",
+                                "modelId"
+                              ],
+                              "type": "object"
+                            },
+                            "operationRef": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "parentOperationRef": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "phase": {
+                              "enum": [
+                                "intent",
+                                "started",
+                                "completed",
+                                "failed",
+                                "unknown"
+                              ],
+                              "type": "string"
+                            },
+                            "startedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                              "type": "string"
+                            },
+                            "usage": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "cachedInputTokens": {
+                                  "maximum": 9007199254740991,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "inputTokens": {
+                                  "maximum": 9007199254740991,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "outputTokens": {
+                                  "maximum": 9007199254740991,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                }
+                              },
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "operationRef",
+                            "attemptRef",
+                            "phase",
+                            "kind",
+                            "model"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attemptRef": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "connection": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "callRef": {
+                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                      "type": "string"
+                                    },
+                                    "serviceRef": {
+                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                      "type": "string"
+                                    },
+                                    "verification": {
+                                      "const": "verified",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "serviceRef",
+                                    "verification",
+                                    "callRef"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "callRef": {
+                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                      "type": "string"
+                                    },
+                                    "reason": {
+                                      "enum": [
+                                        "receipt_missing",
+                                        "record_unavailable",
+                                        "authorization_unavailable",
+                                        "binding_mismatch",
+                                        "response_unconfirmed"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "serviceRef": {
+                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                      "type": "string"
+                                    },
+                                    "verification": {
+                                      "const": "unverified",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "serviceRef",
+                                    "verification",
+                                    "reason"
+                                  ],
+                                  "type": "object"
+                                }
+                              ],
+                              "type": "object"
+                            },
+                            "durationMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "failureCode": {
+                              "enum": [
+                                "authorization_denied",
+                                "authorization_unavailable",
+                                "dependency_unavailable",
+                                "request_rejected",
+                                "response_incomplete",
+                                "operation_failed",
+                                "persistence_unavailable",
+                                "interrupted",
+                                "recovery_unconfirmed"
+                              ],
+                              "type": "string"
+                            },
+                            "finishedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "const": "tool",
+                              "type": "string"
+                            },
+                            "operationRef": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "parentOperationRef": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "phase": {
+                              "enum": [
+                                "intent",
+                                "started",
+                                "completed",
+                                "failed",
+                                "unknown"
+                              ],
+                              "type": "string"
+                            },
+                            "resultRef": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "startedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                              "type": "string"
+                            },
+                            "toolId": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "operationRef",
+                            "attemptRef",
+                            "phase",
+                            "kind",
+                            "toolId"
+                          ],
+                          "type": "object"
+                        }
+                      ],
+                      "type": "object"
+                    },
+                    "schemaVersion": {
+                      "const": 2,
+                      "type": "number"
+                    },
+                    "type": {
+                      "const": "operation",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "adapterEventKey",
+                    "executionId",
+                    "cursor",
+                    "occurredAt",
+                    "type",
+                    "payload"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "executionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "hostSessionRef": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 4,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "hostSessionRef",
+          "executionId",
+          "events"
+        ],
+        "type": "object"
+      },
       "RuntimeExecutionGrantV4": {
         "additionalProperties": false,
         "properties": {
@@ -1243,6 +2325,200 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/internal/runtime/v4/events/ack": {
+      "post": {
+        "operationId": "acknowledgeRuntimeEventsV4",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeEventAckRequestV4"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeEventAckResponseV4"
+                }
+              }
+            },
+            "description": "RuntimeHost response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid RuntimeHost request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Execution Grant is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime session or operation is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Generation, fence, or operation conflict"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost operation failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime or Driver is unavailable"
+          }
+        }
+      }
+    },
+    "/internal/runtime/v4/events/read": {
+      "post": {
+        "operationId": "readRuntimeEventsV4",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeEventReadRequestV4"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeEventReplayResponseV4"
+                }
+              }
+            },
+            "description": "RuntimeHost response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid RuntimeHost request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Execution Grant is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime session or operation is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Generation, fence, or operation conflict"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost operation failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime or Driver is unavailable"
+          }
+        }
+      }
+    },
     "/internal/runtime/v4/instructions": {
       "post": {
         "operationId": "supplementRuntimeTurnV4",

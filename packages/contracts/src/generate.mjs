@@ -48,6 +48,10 @@ import {
 	RuntimeCapabilitiesResponseV1Schema,
 	RuntimeDriverV1SchemaDefinitions,
 	RuntimeDriverV2SchemaDefinitions,
+	RuntimeEventAckRequestV4Schema,
+	RuntimeEventAckResponseV4Schema,
+	RuntimeEventReadRequestV4Schema,
+	RuntimeEventReplayResponseV4Schema,
 	RuntimeEventSchema,
 	RuntimeEventV1Schema,
 	RuntimeEventV1SchemaDefinitions,
@@ -478,6 +482,10 @@ function buildArtifacts() {
 		definitions: {
 			...RuntimeGrantV2SchemaDefinitions,
 			...RuntimeHostV4SchemaDefinitions,
+			RuntimeEventReadRequestV4: RuntimeEventReadRequestV4Schema,
+			RuntimeEventAckRequestV4: RuntimeEventAckRequestV4Schema,
+			RuntimeEventReplayResponseV4: RuntimeEventReplayResponseV4Schema,
+			RuntimeEventAckResponseV4: RuntimeEventAckResponseV4Schema,
 		},
 	});
 	const v3Operations = [
@@ -582,6 +590,22 @@ function buildArtifacts() {
 					"application/json",
 				),
 			},
+			"/internal/runtime/v4/events/read": {
+				post: postOperation(
+					"readRuntimeEventsV4",
+					RuntimeEventReadRequestV4Schema,
+					RuntimeEventReplayResponseV4Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v4/events/ack": {
+				post: postOperation(
+					"acknowledgeRuntimeEventsV4",
+					RuntimeEventAckRequestV4Schema,
+					RuntimeEventAckResponseV4Schema,
+					"application/json",
+				),
+			},
 		},
 		components: {
 			securitySchemes: {
@@ -590,6 +614,10 @@ function buildArtifacts() {
 			schemas: {
 				ProtocolErrorV1: ProtocolErrorV1Schema,
 				...RuntimeHostV4SchemaDefinitions,
+				RuntimeEventReadRequestV4: RuntimeEventReadRequestV4Schema,
+				RuntimeEventAckRequestV4: RuntimeEventAckRequestV4Schema,
+				RuntimeEventReplayResponseV4: RuntimeEventReplayResponseV4Schema,
+				RuntimeEventAckResponseV4: RuntimeEventAckResponseV4Schema,
 			},
 		},
 	});
