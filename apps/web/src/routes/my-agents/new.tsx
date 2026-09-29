@@ -1,9 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { AgentApplicationSubmissionScreen } from "../../features/my-agents/agent-application-submission-screen.js";
-import {
-	projectDeploymentConfiguration,
-} from "../../features/my-agents/deployment-configuration.js";
+import { projectDeploymentConfiguration } from "../../features/my-agents/deployment-configuration.js";
 import { useAgentApplicationSubmission } from "../../features/my-agents/use-agent-application-submission.js";
 import { useDeploymentConfiguration } from "../../features/my-agents/use-deployment-configuration.js";
 

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-	projectDeploymentConfiguration,
 	type DeploymentConfigurationState,
+	projectDeploymentConfiguration,
 } from "./deployment-configuration.js";
 import { deploymentConfiguration } from "./test-fixtures.js";
 

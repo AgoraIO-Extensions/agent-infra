@@ -45,7 +45,7 @@ export const unavailableDeploymentConfiguration: DeploymentConfigurationProjecti
 		schemaVersion: 2,
 		status: "unavailable",
 		templates: [],
-		};
+	};
 
 export function projectDeploymentConfiguration(
 	state: DeploymentConfigurationState | undefined,

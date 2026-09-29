@@ -4,9 +4,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
-import {
-	projectDeploymentConfiguration,
-} from "../../../features/my-agents/deployment-configuration.js";
+import { projectDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
 import {
 	getAgentApplicationEditAction,
 	isRetryableMyAgentApplicationError,
