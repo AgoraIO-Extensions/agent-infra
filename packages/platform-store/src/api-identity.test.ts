@@ -299,6 +299,95 @@ describe("PostgreSQL API identity store", () => {
 		await expect(store.hasAgentGrant(input)).resolves.toBe(false);
 	});
 
+	it("rechecks a user API actor's current directory revision before grant writes", async () => {
+		await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
+			platform.platform_api_credentials, platform.agents cascade`;
+		await adminClient`
+			insert into platform.agents (id, authorization_revision)
+			values ('agent_user_grant', 'agent_revision_1')
+		`;
+		await adminClient`
+			insert into platform.platform_api_credentials
+				(id, principal_type, principal_id, credential_hash, scopes)
+			values ('credential_user_grant', 'user', 'user_manager',
+				repeat('a', 64), '["agent:manage"]'::jsonb)
+		`;
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_user_grant', 'user', 'user_manager', 'manage',
+				'agent_revision_1')
+		`;
+		const principal = { kind: "user" as const, id: "user_manager" };
+		const actor = {
+			schemaVersion: 1 as const,
+			userId: "user_manager",
+			accountStatus: "active" as const,
+			principal,
+			identityRevision: "directory_revision_1",
+			isAdministrator: false,
+			credential: {
+				credentialId: "credential_user_grant",
+				principal,
+				scopes: ["agent:manage"] as const,
+				expiresAt: null,
+				revokedAt: null,
+			},
+		};
+		let accountStatus: "active" | "disabled" = "active";
+		let directoryRevision = "directory_revision_1";
+		const userStore = new PostgresApiIdentityStoreV1({
+			databaseUrl,
+			resolveUser: async (userId) => ({
+				schemaVersion: 1,
+				userId,
+				accountStatus,
+				organizationIds: [],
+				authorizationRevision: directoryRevision,
+			}),
+		});
+		const grant = (authorizationRevision: string) =>
+			userStore.grantAgent({
+				actor,
+				agentId: "agent_user_grant",
+				principal: { kind: "user", id: "user_recipient" },
+				grantType: "use",
+				authorizationRevision,
+			});
+		try {
+			await expect(grant("agent_revision_2")).resolves.toBe(true);
+			accountStatus = "disabled";
+			await expect(grant("agent_revision_3")).resolves.toBe(false);
+			await expect(
+				userStore.revokeAgentGrant({
+					actor,
+					agentId: "agent_user_grant",
+					principal: { kind: "user", id: "user_recipient" },
+					grantType: "use",
+				}),
+			).resolves.toBe(false);
+			accountStatus = "active";
+			directoryRevision = "directory_revision_2";
+			await expect(grant("agent_revision_4")).resolves.toBe(false);
+			const [agent] = await adminClient`
+				select authorization_revision from platform.agents
+				where id = 'agent_user_grant'
+			`;
+			const [recipient] = await adminClient`
+				select authorization_revision, revoked_at
+				from platform.agent_principal_grants
+				where agent_id = 'agent_user_grant' and principal_id = 'user_recipient'
+			`;
+			expect(agent?.authorization_revision).toBe("agent_revision_2");
+			expect(recipient).toEqual({
+				authorization_revision: "agent_revision_2",
+				revoked_at: null,
+			});
+		} finally {
+			await userStore.close();
+		}
+	});
+
 	it("bounds credential and application list reads at the PostgreSQL cursor", async () => {
 		await adminClient`truncate platform.platform_api_credentials,
 			platform.platform_applications cascade`;
@@ -454,6 +543,7 @@ describe("PostgreSQL API identity store", () => {
 			userId: "user_owner",
 			accountStatus: "active" as const,
 			principal,
+			identityRevision: "revision_1",
 			isAdministrator: false,
 			credential: {
 				credentialId: "credential_manager",
@@ -500,6 +590,12 @@ describe("PostgreSQL API identity store", () => {
 			update platform.platform_applications set status = 'active'
 			where id = 'manager-app'
 		`;
+		await adminClient`
+			update platform.platform_applications
+			set authorization_revision = 'application_revision_2'
+			where id = 'manager-app'
+		`;
+		await expect(grant("revision_stale_app")).resolves.toBe(false);
 		await expect(
 			store.revokeAgentGrant({
 				actor: administratorActor,
@@ -581,6 +677,7 @@ describe("PostgreSQL API identity store", () => {
 				userId: "user_owner",
 				accountStatus: "active" as const,
 				principal,
+				identityRevision: "app-lock-1",
 				isAdministrator: false,
 				credential: {
 					credentialId: "credential_lock",
@@ -691,6 +788,7 @@ describe("PostgreSQL API identity store", () => {
 			userId: "user_owner",
 			accountStatus: "active" as const,
 			principal,
+			identityRevision: "manager-app-1",
 			isAdministrator: false,
 			credential: {
 				credentialId: "credential_recipient_lock",
@@ -790,6 +888,7 @@ describe("PostgreSQL API identity store", () => {
 			userId: "user_before",
 			accountStatus: "active" as const,
 			principal,
+			identityRevision: "app-owner-1",
 			isAdministrator: false,
 			credential: {
 				credentialId: "credential-owner-change",

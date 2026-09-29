@@ -27,6 +27,7 @@ import {
 
 export interface PostgresApiIdentityStoreOptionsV1 {
 	readonly databaseUrl: string;
+	readonly resolveUser?: (userId: string) => Promise<unknown | null>;
 }
 
 export type {
@@ -80,6 +81,7 @@ async function hasCurrentManageAuthority(
 	actor: ApiIdentityActorV1,
 	agentId: string,
 	authorizationRevision: string | null,
+	resolveUser?: (userId: string) => Promise<unknown | null>,
 ): Promise<boolean> {
 	let credential: null | {
 		principalType: string;
@@ -90,6 +92,7 @@ async function hasCurrentManageAuthority(
 	} = null;
 	let applicationStatus: string | null = null;
 	let applicationResponsibleUserId: string | null = null;
+	let applicationRevision: string | null = null;
 	let isOwner = false;
 	let grants: {
 		grantType: string;
@@ -113,11 +116,28 @@ async function hasCurrentManageAuthority(
 					.for("share")
 			: [];
 		credential = currentCredential ?? null;
+		if (actor.principal.kind === "user") {
+			if (!resolveUser || !actor.identityRevision) return false;
+			try {
+				const currentUser = parseCurrentTaskUserV1(
+					await resolveUser(actor.principal.id),
+				);
+				if (
+					currentUser.userId !== actor.principal.id ||
+					currentUser.accountStatus !== "active" ||
+					currentUser.authorizationRevision !== actor.identityRevision
+				)
+					return false;
+			} catch {
+				return false;
+			}
+		}
 		if (actor.principal.kind === "application") {
 			const [application] = await database
 				.select({
 					status: platformApplications.status,
 					responsibleUserId: platformApplications.responsibleUserId,
+					authorizationRevision: platformApplications.authorizationRevision,
 				})
 				.from(platformApplications)
 				.where(eq(platformApplications.id, actor.principal.id))
@@ -125,6 +145,12 @@ async function hasCurrentManageAuthority(
 				.for("share");
 			applicationStatus = application?.status ?? null;
 			applicationResponsibleUserId = application?.responsibleUserId ?? null;
+			applicationRevision = application?.authorizationRevision ?? null;
+			if (
+				!actor.identityRevision ||
+				applicationRevision !== actor.identityRevision
+			)
+				return false;
 		}
 	}
 	if (actor.principal === undefined) {
@@ -193,10 +219,12 @@ function metadata(
 export class PostgresApiIdentityStoreV1 {
 	readonly #client;
 	readonly #database;
+	readonly #resolveUser;
 
 	constructor(options: PostgresApiIdentityStoreOptionsV1) {
 		this.#client = postgres(options.databaseUrl, { max: 4 });
 		this.#database = drizzle(this.#client);
+		this.#resolveUser = options.resolveUser;
 	}
 
 	async close(): Promise<void> {
@@ -668,6 +696,7 @@ export class PostgresApiIdentityStoreV1 {
 					input.actor,
 					input.agentId,
 					agent.authorizationRevision,
+					this.#resolveUser,
 				))
 			)
 				return false;
@@ -754,6 +783,7 @@ export class PostgresApiIdentityStoreV1 {
 					input.actor,
 					input.agentId,
 					agent.authorizationRevision,
+					this.#resolveUser,
 				))
 			)
 				return false;

@@ -75,7 +75,10 @@ export function assemblePlatformApi(
 ): PlatformApiAssembly {
 	const apiIdentity =
 		input.apiIdentity ??
-		new PostgresApiIdentityStoreV1({ databaseUrl: input.databaseUrl });
+		new PostgresApiIdentityStoreV1({
+			databaseUrl: input.databaseUrl,
+			resolveUser: input.identity.resolveUser,
+		});
 	const identity: IdentityAdapter = withApiIdentityResolverV1(
 		input.identity,
 		apiIdentity,

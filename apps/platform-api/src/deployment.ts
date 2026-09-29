@@ -62,6 +62,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 	}
 	const apiIdentity = new PostgresApiIdentityStoreV1({
 		databaseUrl: input.databaseUrl,
+		resolveUser: input.identity.resolveUser,
 	});
 	const identity: IdentityAdapter = withApiIdentityResolverV1(
 		input.identity,

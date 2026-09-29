@@ -21,6 +21,8 @@ export interface ApiIdentityActorV1 {
 	readonly userId: string;
 	readonly accountStatus?: "active" | "disabled";
 	readonly principal?: ApiPrincipalV1;
+	/** Directory or application revision observed when the API credential was resolved. */
+	readonly identityRevision?: string;
 	readonly isAdministrator: boolean;
 	/** Present when this actor was authenticated with an API credential. */
 	readonly credential?: Pick<

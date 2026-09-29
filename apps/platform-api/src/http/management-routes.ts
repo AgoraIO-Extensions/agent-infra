@@ -217,6 +217,7 @@ function apiActor(
 		userId: identity.ownerId,
 		accountStatus: identity.accountStatus,
 		principal: identity.principal,
+		identityRevision: identity.authorizationRevision,
 		isAdministrator: false,
 		credential: identity.credential,
 	};
