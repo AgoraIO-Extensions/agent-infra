@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { isAgentConfigurationOwner } from "../../../features/agent-configuration/agent-configuration.js";
 import { AgentDetailScreen } from "../../../features/agent-discovery/agent-detail-screen.js";
+import { isRetryableAgentDiscoveryError } from "../../../features/agent-discovery/agent-discovery.js";
 import { useAgentDetail } from "../../../features/agent-discovery/use-agent-detail.js";
 import { useBrowserSession } from "../../../features/use-browser-session.js";
 
@@ -12,6 +13,9 @@ function AgentDetailRoute() {
 	const { agentId } = Route.useParams();
 	const query = useAgentDetail(agentId);
 	const session = useBrowserSession();
+	const retryable =
+		isRetryableAgentDiscoveryError(query.error) ||
+		(query.data?.kind === "unavailable" && query.data.retryable);
 	const agent = query.data?.kind === "ready" ? query.data.agent : undefined;
 	const canManage =
 		agent &&
@@ -28,7 +32,7 @@ function AgentDetailRoute() {
 						query.isPending
 							? { kind: "loading" }
 							: query.isError || !query.data
-								? { kind: "unavailable", retryable: true }
+								? { kind: "unavailable", retryable }
 								: query.data
 					}
 					onRetry={() => void query.refetch()}

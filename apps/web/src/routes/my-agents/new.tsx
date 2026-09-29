@@ -23,6 +23,10 @@ function NewAgentApplicationRoute() {
 		deployment.data?.kind === "ready"
 			? deployment.data.configuration
 			: unavailableDeploymentConfiguration;
+	const deploymentConfigurationRetryable =
+		deployment.isError ||
+		deployment.data?.kind === "ready" ||
+		(deployment.data?.kind === "unavailable" && deployment.data.retryable);
 	const error =
 		submission.isError && submission.error instanceof Error
 			? submission.error
@@ -37,6 +41,7 @@ function NewAgentApplicationRoute() {
 				result={submission.data}
 				submitting={submission.isPending}
 				deploymentConfiguration={deploymentConfiguration}
+				deploymentConfigurationRetryable={deploymentConfigurationRetryable}
 				onRefreshDeploymentConfiguration={() => void deployment.refetch()}
 				refreshingDeploymentConfiguration={deployment.isFetching}
 			/>

@@ -75,6 +75,10 @@ function EditAgentApplicationRoute() {
 		deployment.data?.kind === "ready"
 			? deployment.data.configuration
 			: unavailableDeploymentConfiguration;
+	const deploymentConfigurationRetryable =
+		deployment.isError ||
+		deployment.data?.kind === "ready" ||
+		(deployment.data?.kind === "unavailable" && deployment.data.retryable);
 
 	return (
 		<main className="platform-content management-content">
@@ -87,6 +91,7 @@ function EditAgentApplicationRoute() {
 				result={submission.data}
 				submitting={submission.isPending}
 				deploymentConfiguration={deploymentConfiguration}
+				deploymentConfigurationRetryable={deploymentConfigurationRetryable}
 				onRefreshDeploymentConfiguration={() => void deployment.refetch()}
 				refreshingDeploymentConfiguration={deployment.isFetching}
 			/>

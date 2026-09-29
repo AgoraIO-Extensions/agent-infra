@@ -62,11 +62,14 @@ async function fixture(
 	let deployment = deploymentConfiguration;
 	let pendingQueueUnavailable = false;
 	let agentListUnavailable = false;
+	let agentListUnauthorized = false;
 	let ownedAgentListUnauthorized = false;
 	let agentDetailUnavailable = false;
+	let agentDetailUnauthorized = false;
 	let applicationsUnavailable = false;
 	let applicationDetailUnavailable = false;
 	let deploymentUnavailable = false;
+	let deploymentUnauthorized = false;
 	const retryableReadFailure = {
 		schemaVersion: 1 as const,
 		code: "DEPENDENCY_UNAVAILABLE" as const,
@@ -85,15 +88,26 @@ async function fixture(
 	const server = createPilotAgentMockServerV2({
 		getCurrentSession: { status: 200, body: session },
 		getDeploymentConfiguration: () =>
-			deploymentUnavailable
-				? { status: 503, body: retryableReadFailure }
-				: {
-						status: 200,
-						body: deployment,
-					},
+			deploymentUnauthorized
+				? {
+						status: 403,
+						body: pilotFakeScenariosV2.unauthorized.response.body,
+					}
+				: deploymentUnavailable
+					? { status: 503, body: retryableReadFailure }
+					: {
+							status: 200,
+							body: deployment,
+						},
 		listAgents: (request) => {
 			const ownerScope =
 				new URL(request.url).searchParams.get("scope") === "owner";
+			if (!ownerScope && agentListUnauthorized) {
+				return {
+					status: 403,
+					body: pilotFakeScenariosV2.unauthorized.response.body,
+				};
+			}
 			if (ownerScope && ownedAgentListUnauthorized) {
 				return {
 					status: 403,
@@ -115,12 +129,17 @@ async function fixture(
 			};
 		},
 		getAgent: () =>
-			agentDetailUnavailable
+			agentDetailUnauthorized
 				? {
-						status: 503,
-						body: retryableReadFailure,
+						status: 403,
+						body: pilotFakeScenariosV2.unauthorized.response.body,
 					}
-				: { status: 200, body: agent },
+				: agentDetailUnavailable
+					? {
+							status: 503,
+							body: retryableReadFailure,
+						}
+					: { status: 200, body: agent },
 		listAgentApplications: () =>
 			applicationsUnavailable
 				? {
@@ -283,6 +302,9 @@ async function fixture(
 		recoverDeployment() {
 			deploymentUnavailable = false;
 		},
+		unauthorizedDeployment() {
+			deploymentUnauthorized = true;
+		},
 		holdNextCommand() {
 			nextGate = new Promise<void>((resolve) => {
 				release = resolve;
@@ -317,6 +339,9 @@ async function fixture(
 		unavailableAgentList() {
 			agentListUnavailable = true;
 		},
+		unauthorizedAgentList() {
+			agentListUnauthorized = true;
+		},
 		recoverAgentList() {
 			agentListUnavailable = false;
 		},
@@ -325,6 +350,9 @@ async function fixture(
 		},
 		unavailableAgentDetail() {
 			agentDetailUnavailable = true;
+		},
+		unauthorizedAgentDetail() {
+			agentDetailUnauthorized = true;
 		},
 		recoverAgentDetail() {
 			agentDetailUnavailable = false;
@@ -995,6 +1023,36 @@ test("retryable management reads recover through explicit browser actions", asyn
 	).toBeVisible();
 });
 
+test("authorization failures do not offer retry actions for Agent reads", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unauthorizedAgentList();
+	await page.goto("/agents");
+	await expect(page.getByRole("alert")).toHaveText(
+		"Agent 列表暂时无法访问，请联系管理员。",
+	);
+	await expect(
+		page.getByRole("button", { name: "重新加载 Agent" }),
+	).toHaveCount(0);
+
+	api.unauthorizedAgentDetail();
+	await page.goto("/agents/agent-pilot-1");
+	await expect(page.getByRole("alert")).toHaveText("此 Agent 暂时无法访问。");
+	await expect(
+		page.getByRole("button", { name: "重新加载 Agent" }),
+	).toHaveCount(0);
+
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(
+		page.getByRole("heading", { name: "配置暂不可用" }),
+	).toBeVisible();
+	await expect(page.getByRole("alert")).toHaveText("请联系管理员。");
+	await expect(page.getByRole("button", { name: "重新加载配置" })).toHaveCount(
+		0,
+	);
+});
+
 test("configuration reads recover through the explicit browser action", async ({
 	page,
 }) => {
@@ -1046,6 +1104,22 @@ test("deployment option reads recover before submitting an application", async (
 	await expect(
 		page.getByRole("combobox", { name: "标准模板 ID" }),
 	).toBeVisible();
+});
+
+test("deployment option authorization failures do not offer a retry action", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unauthorizedDeployment();
+	await page.goto("/my-agents/new");
+	await expect(
+		page.locator('div[role="status"]').filter({
+			hasText: "部署选项暂不可用，请联系管理员。",
+		}),
+	).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "重新加载部署选项" }),
+	).toHaveCount(0);
 });
 
 test("owned Agent authorization failures do not offer a retry action", async ({
