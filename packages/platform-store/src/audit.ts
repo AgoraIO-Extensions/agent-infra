@@ -6,6 +6,12 @@ import postgres from "postgres";
 
 import { auditEvents } from "./schema.js";
 
+const wecomDeliveryAuditMetadata = {
+	actorKind: "system",
+	subjectKind: "agent",
+	details: "wecom_delivery",
+} as const;
+
 const platformAuditActionMetadata = {
 	"agent.application.submitted": {
 		actorKind: "user",
@@ -117,6 +123,67 @@ const platformAuditActionMetadata = {
 		subjectKind: "secret_key",
 		details: "secret",
 	},
+	"wecom.setup_started": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.credentials_submitted": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.setup_cancelled": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.setup_expired": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.setup_failed": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.callback_verified": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.connection_verifying": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.connection_connected": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.connection_disconnected": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.connection_auth_failed": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.denied": wecomDeliveryAuditMetadata,
+	"wecom.unavailable": wecomDeliveryAuditMetadata,
+	"wecom.conflict": wecomDeliveryAuditMetadata,
+	"wecom.accepted": wecomDeliveryAuditMetadata,
+	"wecom.unknown": wecomDeliveryAuditMetadata,
+	"wecom.sending": wecomDeliveryAuditMetadata,
+	"wecom.sent": wecomDeliveryAuditMetadata,
+	"wecom.failed": wecomDeliveryAuditMetadata,
+	"wecom.cancelled": wecomDeliveryAuditMetadata,
+	"wecom.expired": wecomDeliveryAuditMetadata,
+	"wecom.abandoned": wecomDeliveryAuditMetadata,
 } as const;
 
 const configurationChangedFields = [
@@ -302,6 +369,45 @@ function changedFields(
 		) {
 			throw new PlatformAuditQueryError("unavailable");
 		}
+		return [];
+	}
+	if (detailKind === "wecom_delivery") {
+		if (
+			!exactObject(details, [
+				"originalPrincipal",
+				"component",
+				"receiptId",
+				"status",
+			])
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		const value = details as {
+			readonly originalPrincipal: unknown;
+			readonly component: unknown;
+			readonly receiptId: unknown;
+			readonly status: unknown;
+		};
+		if (!exactObject(value.originalPrincipal, ["kind", "id"]))
+			throw new PlatformAuditQueryError("unavailable");
+		const originalPrincipal = value.originalPrincipal as {
+			readonly kind: unknown;
+			readonly id: unknown;
+		};
+		if (
+			(originalPrincipal.kind !== "user" &&
+				originalPrincipal.kind !== "unknown") ||
+			!validText(originalPrincipal.id) ||
+			(originalPrincipal.kind === "unknown" &&
+				originalPrincipal.id !== "unknown")
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		if (
+			(value.component !== "platform-api" &&
+				value.component !== "platform-worker") ||
+			!validText(value.receiptId) ||
+			value.status !== action.slice("wecom.".length)
+		)
+			throw new PlatformAuditQueryError("unavailable");
 		return [];
 	}
 	if (!exactObject(details, ["changedFields"])) {

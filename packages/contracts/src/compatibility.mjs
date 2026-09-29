@@ -1036,6 +1036,44 @@ function isWecomReceiptOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #481 publishes the scoped Platform audit surface and its bounded action set.
+function isScopedAuditOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v1/audit",
+		"/api/v1/audit/{auditId}",
+		"/api/v3/admin/audit",
+		"/api/v3/admin/audit/{auditId}",
+	];
+	const schemas = [
+		"ScopedPlatformAuditActionV1",
+		"ScopedPlatformAuditPageV1",
+		"ScopedPlatformAuditProjectionV1",
+		"ScopedPlatformAuditResultV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"5da78cc0349fdfdb0e0f3171f86b55f6815f652f2e8b1a94d67104fc1b5041e9"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -1049,6 +1087,7 @@ function findBreakingChanges(previous, current) {
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
+			!isScopedAuditOpenApiAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
