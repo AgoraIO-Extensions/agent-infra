@@ -6,7 +6,10 @@ import {
 	AgentProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
-import { ApiIdentityError } from "@agent-infra/platform-core";
+import {
+	ApiIdentityError,
+	ApplicationFoundationError,
+} from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
@@ -663,6 +666,41 @@ describe("management routes", () => {
 		expect(resolveApiCredential).toHaveBeenCalledTimes(6);
 		expect(direct.submit).toHaveBeenCalledTimes(2);
 	});
+
+	it.each([
+		["not_authorized", 404],
+		["conflict", 409],
+	] as const)(
+		"does not return 201 when foundation submission is %s",
+		async (code, expectedStatus) => {
+			const rejected = createApp({ api: true });
+			rejected.submit.mockRejectedValueOnce(
+				new ApplicationFoundationError(code),
+			);
+
+			const response = await rejected.app.request("/api/v1/agents", {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					Authorization: "Bearer secret",
+					"Idempotency-Key": `Foundation.${code}`,
+				},
+				body: JSON.stringify({
+					schemaVersion: 2,
+					name: "Rejected direct agent",
+					description: "Must not be reported as creating",
+					source: { kind: "standard", templateId: "template-1" },
+					coOwnerIds: [],
+					availability: [],
+					environment: [],
+					secrets: [],
+				}),
+			});
+			expect(response.status).toBe(expectedStatus);
+			expect(response.status).not.toBe(201);
+			expect(rejected.submit).toHaveBeenCalledTimes(1);
+		},
+	);
 
 	it("does not return an application credential to its responsible user", async () => {
 		const app = new Hono();
