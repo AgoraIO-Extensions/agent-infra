@@ -60,8 +60,6 @@ async function fixture(
 		values (${randomUUID()}, ${agentId}, ${principal.id}, 'Audit fixture', 'Controlled metadata', 'pending_approval', 'seed-trace', 'seed-request', now()) on conflict do nothing`;
 	await sql`insert into platform.agent_availability (agent_id, target_type, target_id) values (${agentId}, 'user', ${principal.id}) on conflict do nothing`;
 	await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values (${agentId}, 'different-owner', now()) on conflict do nothing`;
-	await sql`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision)
-		values (${agentId}, 'user', ${principal.id}, 'use', 'current-agent-revision') on conflict do nothing`;
 	const scope: PlatformAuditQueryScopeV1 = {
 		kind: "execution",
 		principal,
