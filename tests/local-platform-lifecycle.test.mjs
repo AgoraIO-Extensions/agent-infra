@@ -55,7 +55,7 @@ async function fixture() {
 		bin,
 		"node",
 		`
-if [[ "$1" == "deploy/local/check-api-auth.mjs" ]]; then
+if [[ "$1" == "deploy/local/check-api-auth.ts" ]]; then
   printf 'node %s\\n' "$*" >> "$COMMAND_LOG"
   exit "\${FAKE_AUTH_PROBE_EXIT:-0}"
 fi
@@ -275,7 +275,7 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			up[10],
 			/^docker .* compose .* up --detach --wait --force-recreate --no-deps platform-api$/,
 		);
-		assert.match(up[11], /^node deploy\/local\/check-api-auth\.mjs /);
+		assert.match(up[11], /^node deploy\/local\/check-api-auth\.ts /);
 		assert.match(
 			up[12],
 			/^docker .* compose .* up --detach --wait --force-recreate --no-deps web$/,
@@ -380,7 +380,7 @@ test("local up keeps Web and API closed when proxy token wiring fails", async ()
 		assert.notEqual(result.status, 0);
 		assert.match(result.stderr, /Local API login boundary is unavailable/);
 		const log = await readFile(f.log, "utf8");
-		assert.match(log, /node deploy\/local\/check-api-auth\.mjs /);
+		assert.match(log, /node deploy\/local\/check-api-auth\.ts /);
 		assert.match(log, /compose .* stop platform-api/);
 		assert.doesNotMatch(log, /compose .* up .* web/);
 		assert.doesNotMatch(result.stderr, new RegExp(proxyTokenValue));

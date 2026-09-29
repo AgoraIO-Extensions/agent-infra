@@ -7,12 +7,14 @@ const [tokenPath, outputPath] = process.argv.slice(2);
 if (!tokenPath || !outputPath || !isAbsolute(tokenPath) || !isAbsolute(outputPath)) {
   throw new Error("Local proxy token and output paths must be absolute");
 }
+const uid = process.getuid?.();
+if (uid === undefined) throw new Error("Local proxy token owner is unavailable");
 
 const sourceFile = await open(tokenPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-let token;
+let token: string;
 try {
   const source = await sourceFile.stat();
-  if (!source.isFile() || source.uid !== process.getuid() || (source.mode & 0o077) !== 0) {
+  if (!source.isFile() || source.uid !== uid || (source.mode & 0o077) !== 0) {
     throw new Error("Local proxy token source must be an owned private regular file");
   }
   token = (await sourceFile.readFile("utf8")).trim();
@@ -22,8 +24,6 @@ try {
 const decodedToken = Buffer.from(token, "base64url");
 if (
   !/^[A-Za-z0-9_-]{43,128}$/.test(token) ||
-  decodedToken.length < 32 ||
-  decodedToken.length > 96 ||
   decodedToken.toString("base64url") !== token
 ) {
   throw new Error("Local proxy token must be a Base64URL value of 32-96 bytes");
@@ -38,7 +38,7 @@ if (template.split(marker).length !== 2) {
 const directory = dirname(outputPath);
 await mkdir(directory, { recursive: true, mode: 0o700 });
 const info = await lstat(directory);
-if (!info.isDirectory() || info.uid !== process.getuid() || (info.mode & 0o077) !== 0) {
+if (!info.isDirectory() || info.uid !== uid || (info.mode & 0o077) !== 0) {
   throw new Error("Local nginx state directory must be owned by this user and private");
 }
 

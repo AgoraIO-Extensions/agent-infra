@@ -136,7 +136,7 @@ render_proxy_config() {
     echo "PLATFORM_LOCAL_PROXY_TOKEN_FILE must be an absolute readable file" >&2
     return 1
   }
-  node deploy/local/render-nginx.mjs "$PLATFORM_LOCAL_PROXY_TOKEN_FILE" "$PLATFORM_LOCAL_NGINX_CONFIG"
+  node deploy/local/render-nginx.ts "$PLATFORM_LOCAL_PROXY_TOKEN_FILE" "$PLATFORM_LOCAL_NGINX_CONFIG"
 }
 
 check_database_resource_ownership() {
@@ -344,7 +344,7 @@ case "${1:-}" in
     "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas="$worker_replicas"
     "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
     "${compose[@]}" up --detach --wait --force-recreate --no-deps platform-api
-    if ! node deploy/local/check-api-auth.mjs "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "${PLATFORM_LOCAL_API_PORT:-3000}" "${PLATFORM_LOCAL_WEB_PORT:-3001}"; then
+    if ! node deploy/local/check-api-auth.ts "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "${PLATFORM_LOCAL_API_PORT:-3000}" "${PLATFORM_LOCAL_WEB_PORT:-3001}"; then
       "${compose[@]}" stop platform-api
       echo "Local API login boundary is unavailable; Web remains stopped" >&2
       exit 1

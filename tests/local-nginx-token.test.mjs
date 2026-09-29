@@ -22,7 +22,7 @@ test("local nginx renders a private token and overwrites the browser header", as
 		await writeFile(tokenPath, `${token}\n`, { mode: 0o600 });
 		const result = spawnSync(
 			"node",
-			["deploy/local/render-nginx.mjs", tokenPath, outputPath],
+			["deploy/local/render-nginx.ts", tokenPath, outputPath],
 			{
 				cwd: process.cwd(),
 				encoding: "utf8",
@@ -53,7 +53,7 @@ test("local nginx renders a private token and overwrites the browser header", as
 		await symlink(tokenPath, linkedToken);
 		const linked = spawnSync(
 			"node",
-			["deploy/local/render-nginx.mjs", linkedToken, outputPath],
+			["deploy/local/render-nginx.ts", linkedToken, outputPath],
 			{ cwd: process.cwd(), encoding: "utf8" },
 		);
 		assert.notEqual(linked.status, 0);
@@ -62,7 +62,7 @@ test("local nginx renders a private token and overwrites the browser header", as
 			await writeFile(tokenPath, invalidToken);
 			const invalid = spawnSync(
 				"node",
-				["deploy/local/render-nginx.mjs", tokenPath, outputPath],
+				["deploy/local/render-nginx.ts", tokenPath, outputPath],
 				{ cwd: process.cwd(), encoding: "utf8" },
 			);
 			assert.notEqual(invalid.status, 0);

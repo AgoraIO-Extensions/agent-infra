@@ -13,7 +13,7 @@ if (
 }
 
 const token = (await readFile(tokenFile, "utf8")).trim();
-const request = (value) => new Promise((resolve, reject) => {
+const request = (value: string) => new Promise<number | undefined>((resolve, reject) => {
   const probe = httpRequest({
     hostname: "127.0.0.1",
     port: apiPort,

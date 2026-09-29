@@ -11,7 +11,7 @@ function runProbe(tokenFile, apiPort) {
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			process.execPath,
-			["deploy/local/check-api-auth.mjs", tokenFile, String(apiPort), "3001"],
+			["deploy/local/check-api-auth.ts", tokenFile, String(apiPort), "3001"],
 			{ cwd: process.cwd() },
 		);
 		let stderr = "";
