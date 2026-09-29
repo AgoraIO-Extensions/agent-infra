@@ -65,6 +65,8 @@ async function fixture(
 	let ownedAgentListUnauthorized = false;
 	let agentDetailUnavailable = false;
 	let applicationsUnavailable = false;
+	let applicationDetailUnavailable = false;
+	let deploymentUnavailable = false;
 	const retryableReadFailure = {
 		schemaVersion: 1 as const,
 		code: "DEPENDENCY_UNAVAILABLE" as const,
@@ -82,10 +84,13 @@ async function fixture(
 	};
 	const server = createPilotAgentMockServerV2({
 		getCurrentSession: { status: 200, body: session },
-		getDeploymentConfiguration: () => ({
-			status: 200,
-			body: deployment,
-		}),
+		getDeploymentConfiguration: () =>
+			deploymentUnavailable
+				? { status: 503, body: retryableReadFailure }
+				: {
+						status: 200,
+						body: deployment,
+					},
 		listAgents: (request) => {
 			const ownerScope =
 				new URL(request.url).searchParams.get("scope") === "owner";
@@ -126,7 +131,10 @@ async function fixture(
 						status: 200,
 						body: { items: [application], nextCursor: null },
 					},
-		getAgentApplication: () => ({ status: 200, body: application }),
+		getAgentApplication: () =>
+			applicationDetailUnavailable
+				? { status: 503, body: retryableReadFailure }
+				: { status: 200, body: application },
 		createAgentApplication: () => ({ status: 201, body: application }),
 		updateAgentApplication: () => ({ status: 200, body: application }),
 		withdrawAgentApplication: () => ({ status: 200, body: application }),
@@ -269,6 +277,12 @@ async function fixture(
 		freshDeployment() {
 			deployment = deploymentConfiguration;
 		},
+		unavailableDeployment() {
+			deploymentUnavailable = true;
+		},
+		recoverDeployment() {
+			deploymentUnavailable = false;
+		},
 		holdNextCommand() {
 			nextGate = new Promise<void>((resolve) => {
 				release = resolve;
@@ -320,6 +334,12 @@ async function fixture(
 		},
 		recoverApplications() {
 			applicationsUnavailable = false;
+		},
+		unavailableApplicationDetail() {
+			applicationDetailUnavailable = true;
+		},
+		recoverApplicationDetail() {
+			applicationDetailUnavailable = false;
 		},
 		rejectNextWithdrawal() {
 			rejectNextWithdrawal = true;
@@ -989,6 +1009,42 @@ test("configuration reads recover through the explicit browser action", async ({
 	await page.getByRole("button", { name: "重新加载配置" }).click();
 	await expect(
 		page.getByRole("heading", { name: "配置与生命周期" }),
+	).toBeVisible();
+});
+
+test("application detail reads recover through the explicit browser action", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unavailableApplicationDetail();
+	await page.goto("/my-agents/application-browser-1");
+	await expect(
+		page.getByRole("heading", { name: "申请详情暂不可用" }),
+	).toBeVisible();
+	await expect(page.getByRole("alert")).toContainText(
+		"暂时无法读取申请，请稍后重试。",
+	);
+	api.recoverApplicationDetail();
+	await page.getByRole("button", { name: "重新加载申请" }).click();
+	await expect(page.getByRole("heading", { name: "申请详情" })).toBeVisible();
+});
+
+test("deployment option reads recover before submitting an application", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unavailableDeployment();
+	await page.goto("/my-agents/new");
+	await expect(
+		page.getByText("部署选项需要刷新后才能提交标准模板申请。", {
+			exact: true,
+		}),
+	).toBeVisible();
+	api.recoverDeployment();
+	await page.getByRole("button", { name: "重新加载部署选项" }).click();
+	await expect(page.locator("#application-deployment-status")).toHaveCount(0);
+	await expect(
+		page.getByRole("combobox", { name: "标准模板 ID" }),
 	).toBeVisible();
 });
 
