@@ -32,6 +32,11 @@ export type ConnectionApiRuntimeConfig = {
 
 export type FullConnectionRuntimeConfig = ConnectionApiRuntimeConfig & {
 	credentialKey: Uint8Array;
+	argusOAuth: {
+		clientId: string;
+		clientSecret: string;
+		redirectUri: string;
+	};
 	github: {
 		authorizationUrl?: string;
 		clientId: string;
@@ -333,6 +338,14 @@ export function fullConnectionRuntimeConfig(
 	const api = connectionApiRuntimeConfig(environment);
 	return {
 		...api,
+		argusOAuth: {
+			clientId: requireValue(environment, "ARGUS_OAUTH_CLIENT_ID"),
+			clientSecret: requireValue(environment, "ARGUS_OAUTH_CLIENT_SECRET"),
+			redirectUri: new URL(
+				"/oauth/callback?provider=argus",
+				api.publicBaseUrl,
+			).toString(),
+		},
 		credentialKey: key32(
 			requireValue(environment, "CONNECTION_CREDENTIAL_KEY"),
 			"CONNECTION_CREDENTIAL_KEY",

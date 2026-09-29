@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 export const providerSources = {
+	argus: "packages/openconnector-adapter/src/argus.ts",
 	bitbucket: "packages/openconnector-adapter/src/bitbucket-server.ts",
 	confluence: "packages/openconnector-adapter/src/confluence-server.ts",
 	datalego: "packages/openconnector-adapter/src/datalego.ts",

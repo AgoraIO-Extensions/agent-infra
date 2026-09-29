@@ -13,6 +13,7 @@ describe("Connection Browser OpenAPI", () => {
 		).toEqual({ required: ["accessRequestId", "sharedScopeId"] });
 		for (const input of [
 			{},
+			{ providerId: "argus", accessRequestId: "request-1" },
 			{ accessRequestId: "request-1" },
 			{ providerId: "manhattan", accessRequestId: "request-1" },
 			{ providerId: "manhattan", reconnectConnectionId: "connection-1" },

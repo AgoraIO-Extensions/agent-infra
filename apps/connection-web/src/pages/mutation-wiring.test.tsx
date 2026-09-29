@@ -287,6 +287,9 @@ const api = vi.hoisted(() => ({
 	startManhattanOAuth: vi.fn(async () => ({
 		authorizationUrl: "https://oauth.agoralab.co/oauth/authorize",
 	})),
+	startArgusOAuth: vi.fn(async () => ({
+		authorizationUrl: "https://oauth.agoralab.co/oauth/authorize",
+	})),
 }));
 
 vi.mock("../api", async (importOriginal) => ({
@@ -1567,7 +1570,7 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 	});
 
-	it.each(["datalego", "manhattan"])(
+	it.each(["datalego", "manhattan", "argus"])(
 		"%s 恢复链接没有审批时不提交凭证",
 		async (providerId) => {
 			window.history.replaceState(
@@ -1579,6 +1582,7 @@ describe("Connection 管理 mutation wiring", () => {
 			await screen.findByRole("button", { name: "查看连接申请" });
 			expect(api.connectProviderCredential).not.toHaveBeenCalled();
 			expect(api.startManhattanOAuth).not.toHaveBeenCalled();
+			expect(api.startArgusOAuth).not.toHaveBeenCalled();
 			expect(api.reauthorizeProviderConnection).not.toHaveBeenCalled();
 			expect(screen.queryByLabelText("公司密码")).toBeNull();
 		},
@@ -1594,6 +1598,23 @@ describe("Connection 管理 mutation wiring", () => {
 		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
 		await waitFor(() => expect(api.startManhattanOAuth).toHaveBeenCalledOnce());
 		expect(calls(api.startManhattanOAuth)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
+		});
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
+	});
+
+	it("Argus OAuth 只携带获批的连接申请 ID", async () => {
+		approvedFor("argus");
+		api.startArgusOAuth.mockRejectedValueOnce(
+			new Error("OAuth not configured"),
+		);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Argus 未连接" }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
+		await waitFor(() => expect(api.startArgusOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startArgusOAuth)[0]?.[0]).toEqual({
 			accessRequestId: "request-approved",
 		});
 		expect(api.connectProviderCredential).not.toHaveBeenCalled();

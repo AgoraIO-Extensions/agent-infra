@@ -2711,7 +2711,7 @@
 					"accessRequestId": { "type": "string" },
 					"providerId": {
 						"type": "string",
-						"enum": ["github", "manhattan"],
+						"enum": ["argus", "github", "manhattan"],
 						"default": "github"
 					},
 					"reconnectConnectionId": { "type": "string" },

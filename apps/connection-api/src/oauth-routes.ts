@@ -104,6 +104,7 @@ export type ConnectionOAuthServerOptions = {
 const browserSessionCookie = "connection_session";
 const browserSessionCookiePath = "/";
 const manhattanOAuthStateCookie = "connection_manhattan_oauth_state";
+const argusOAuthStateCookie = "connection_argus_oauth_state";
 
 const dynamicRegistrationFields = new Set([
 	"application_type",
@@ -2662,10 +2663,12 @@ export function createConnectionOAuthApp(
 				),
 			);
 			if (authorization instanceof Response) return authorization;
-			if (providerId === "manhattan")
+			if (providerId === "manhattan" || providerId === "argus")
 				setCookie(
 					context,
-					manhattanOAuthStateCookie,
+					providerId === "argus"
+						? argusOAuthStateCookie
+						: manhattanOAuthStateCookie,
 					new URL(authorization.authorizationUrl).searchParams.get("state") ??
 						"",
 					{
@@ -3363,21 +3366,39 @@ export function createConnectionOAuthApp(
 			context.header("referrer-policy", "no-referrer");
 			try {
 				const providerId = context.req.query("provider") ?? "github";
-				if (providerId !== "github" && providerId !== "manhattan")
+				if (
+					providerId !== "github" &&
+					providerId !== "manhattan" &&
+					providerId !== "argus"
+				)
 					throw new ConnectionError(
 						"INVALID_REQUEST",
 						"Unsupported OAuth provider",
 					);
-				if (providerId === "manhattan") {
+				if (providerId === "manhattan" || providerId === "argus") {
 					const state = context.req.query("state") ?? "";
-					if (!state || getCookie(context, manhattanOAuthStateCookie) !== state)
+					if (
+						!state ||
+						getCookie(
+							context,
+							providerId === "argus"
+								? argusOAuthStateCookie
+								: manhattanOAuthStateCookie,
+						) !== state
+					)
 						throw new ConnectionError(
 							"INVALID_REQUEST",
-							"Manhattan OAuth browser state does not match",
+							"Provider OAuth browser state does not match",
 						);
-					deleteCookie(context, manhattanOAuthStateCookie, {
-						path: "/oauth/callback",
-					});
+					deleteCookie(
+						context,
+						providerId === "argus"
+							? argusOAuthStateCookie
+							: manhattanOAuthStateCookie,
+						{
+							path: "/oauth/callback",
+						},
+					);
 				}
 				await (providerId === "github"
 					? management.service.completeGithubOAuth(
@@ -3398,11 +3419,11 @@ export function createConnectionOAuthApp(
 					}),
 				);
 				return context.redirect(
-					context.req.query("provider") === "manhattan"
+					["manhattan", "argus"].includes(context.req.query("provider") ?? "")
 						? (error as { providerAuthorizationDenied?: unknown })
 								.providerAuthorizationDenied === true
-							? "/connection/connections?oauth=permission_denied&provider=manhattan"
-							: "/connection/connections?oauth=callback_failed&provider=manhattan"
+							? `/connection/connections?oauth=permission_denied&provider=${context.req.query("provider")}`
+							: `/connection/connections?oauth=callback_failed&provider=${context.req.query("provider")}`
 						: "/connection/connections?oauth=callback_failed",
 					303,
 				);

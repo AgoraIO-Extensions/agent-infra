@@ -1,0 +1,2 @@
+export const argusExecutorDigest =
+	"sha256:4c5c2b010e4cec4a0bcf9ecf240517cddc4b3238898eb118eecefe6b3c1ebcea";
