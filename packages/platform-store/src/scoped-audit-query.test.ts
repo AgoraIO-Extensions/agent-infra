@@ -708,7 +708,8 @@ describe("controlled PostgreSQL audit query", () => {
 	it("does not infer original ownership from a boundary whose accepted audit is missing or ambiguous", async () => {
 		const f = await fixture();
 		await sql`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
-			select ${randomUUID()}, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details
+			select ${randomUUID()}, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id,
+				jsonb_set(details, '{authorizationRecordId}', to_jsonb(${randomUUID()}::text), false)
 			from platform.audit_events where action = 'task.authorization.accepted' and target_id = ${f.executionId}`;
 		await expect(
 			query.getAudit(f.scope, f.auditId, detail, request()),

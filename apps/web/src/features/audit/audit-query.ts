@@ -100,11 +100,14 @@ async function readJson(
 	throwIfAborted(signal);
 	if (response.status !== 200)
 		throw new AuditReadError(failureForStatus(response.status));
+	let body: unknown;
 	try {
-		return await response.json();
+		body = await response.json();
 	} catch {
 		throw new AuditReadError({ kind: "invalid" });
 	}
+	throwIfAborted(signal);
+	return body;
 }
 
 async function request(

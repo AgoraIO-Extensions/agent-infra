@@ -355,9 +355,18 @@ export function decodePlatformAuditRowV1(
 	const metadata = platformAuditActionMetadata[action];
 	const expectedActorType = metadata.actorKind;
 	const expectedTargetType = metadata.subjectKind;
+	const subjectKind: PlatformAuditProjectionV1["subject"]["kind"] =
+		action === "agent.configuration.revised" &&
+		row.targetType === "configuration"
+			? "configuration"
+			: expectedTargetType;
 	if (
 		row.actorType !== expectedActorType ||
-		row.targetType !== expectedTargetType ||
+		(row.targetType !== expectedTargetType &&
+			!(
+				action === "agent.configuration.revised" &&
+				row.targetType === "configuration"
+			)) ||
 		(row.outcome !== "succeeded" &&
 			row.outcome !== "rejected" &&
 			row.outcome !== "failed")
@@ -371,9 +380,8 @@ export function decodePlatformAuditRowV1(
 		actor: { kind: expectedActorType, actorId: row.actorId },
 		action,
 		subject: {
-			kind: expectedTargetType,
-			subjectId:
-				expectedTargetType === "secret_key" ? "secret-key" : row.targetId,
+			kind: subjectKind,
+			subjectId: subjectKind === "secret_key" ? "secret-key" : row.targetId,
 		},
 		result: row.outcome === "succeeded" ? "succeeded" : "failed",
 		summary: fields.length === 0 ? action : `${action}: ${fields.join(", ")}`,

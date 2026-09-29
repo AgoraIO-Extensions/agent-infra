@@ -145,4 +145,23 @@ describe("Scoped audit browser transport", () => {
 			}),
 		).rejects.toMatchObject({ name: "AbortError" });
 	});
+
+	it("rejects cancellation that occurs while reading the response body", async () => {
+		const controller = new AbortController();
+		const transport = async () =>
+			({
+				status: 200,
+				json: async () => {
+					controller.abort();
+					return auditPage();
+				},
+			}) as Response;
+		await expect(
+			loadAuditPage({
+				scope: "own",
+				transport,
+				signal: controller.signal,
+			}),
+		).rejects.toMatchObject({ name: "AbortError" });
+	});
 });

@@ -242,7 +242,6 @@ function candidates(
 				select ac.*, count(*) over() as acceptance_count from platform.audit_events ac
 				where ac.action = 'task.authorization.accepted' and ac.outcome = 'succeeded'
 					and ac.target_type = 'execution' and ac.target_id = r.execution_id
-					and ac.details ->> 'authorizationRecordId' = r.id
 				limit 1
 			) accepted on true
 			where ${ownership}
@@ -435,6 +434,7 @@ function project(
 			"unknown",
 			"conversation",
 			"execution",
+			"configuration",
 		].includes(row.targetType)
 	)
 		throw new PlatformAuditScopeErrorV1("unavailable");
