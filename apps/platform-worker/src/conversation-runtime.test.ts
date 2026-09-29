@@ -413,6 +413,16 @@ function harness(
 }
 
 describe("Trusted conversation Runtime adapter", () => {
+	it("marks keyed recovery reads as V4", async () => {
+		const h = harness(1, undefined, true);
+		await h.authorize();
+		expect(
+			h.store.readRuntimeState.mock.calls.some(
+				([input]) => input.runtimeSubmitProtocol === "v4",
+			),
+		).toBe(true);
+	});
+
 	it("reads and acknowledges a keyed Execution on the V4 event route", async () => {
 		const h = harness(1, undefined, true);
 		try {

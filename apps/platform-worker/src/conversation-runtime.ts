@@ -89,6 +89,7 @@ export interface ConversationRuntimeOptionsV2 {
 	readonly dispatchStore: {
 		readRuntimeState(input: {
 			readonly claim: ConversationDispatchClaimV1;
+			readonly runtimeSubmitProtocol?: "v2" | "v4";
 		}): Promise<ConversationRuntimeStateV2 | null>;
 	};
 	readonly resolveRuntimeHost: (input: {
@@ -179,7 +180,15 @@ export function createConversationRuntimeV2(
 				? bounded(options.channelAuthorizationCurrent(record, signal), signal)
 				: unavailable("CHANNEL_AUTHORIZATION_UNAVAILABLE"),
 		readRuntimeState: (claim, signal) =>
-			bounded(options.dispatchStore.readRuntimeState({ claim }), signal),
+			bounded(
+				options.dispatchStore.readRuntimeState({
+					claim,
+					...(claim.relayKeyBinding
+						? { runtimeSubmitProtocol: "v4" as const }
+						: {}),
+				}),
+				signal,
+			),
 		readAuthorization: (executionId, signal) =>
 			bounded(
 				options.taskAuthorizationStore.readExecution(executionId),
