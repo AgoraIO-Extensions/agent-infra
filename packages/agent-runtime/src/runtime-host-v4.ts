@@ -191,12 +191,36 @@ export class RuntimeHostV4 {
 					if (
 						replayed.result.outcome === "accepted" &&
 						replayed.result.status === "running"
-					)
-						this.options.installKey(
-							pinned,
+					) {
+						const session = this.options.store.getSessionForQuery(
 							prepared.session.hostSessionRef,
-							privateField.keyDelivery.relayKey,
+							request,
+							request.operation.executionDeliveryFence,
 						);
+						const executionAuthority =
+							session.executionAuthorities?.[request.executionId];
+						const terminal = Object.values(session.operations).some(
+							(operation) =>
+								operation.executionId === request.executionId &&
+								operation.result?.outcome === "accepted" &&
+								["completed", "failed", "cancelled"].includes(
+									operation.result.status,
+								),
+						);
+						if (
+							executionAuthority?.workerId === claims.workerId &&
+							executionAuthority.authorizationRecordId ===
+								claims.authorizationRecordId &&
+							!executionAuthority.stopped &&
+							!executionAuthority.control &&
+							!terminal
+						)
+							this.options.installKey(
+								pinned,
+								prepared.session.hostSessionRef,
+								privateField.keyDelivery.relayKey,
+							);
+					}
 					return replayed;
 				}
 				this.options.installKey(

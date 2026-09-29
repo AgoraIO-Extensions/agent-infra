@@ -11,7 +11,7 @@ import {
 	validateRuntimeBusinessBindingV4,
 	validateVerifiedRuntimeExecutionGrantClaimsV4,
 } from "@agent-infra/contracts/runtime";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import { FakeRuntimeDriver } from "./fake-runtime-driver.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
@@ -25,6 +25,7 @@ import {
 	verifyRuntimeV2Fixture,
 } from "./grant-v2-fixture.test-support.js";
 import { RuntimeHost } from "./runtime-host.js";
+import { RuntimeHostV4 } from "./runtime-host-v4.js";
 
 const directories: string[] = [];
 
@@ -343,6 +344,155 @@ it("does not reinstall a Key when replaying a terminal submit receipt", async ()
 	});
 	expect(await driver.sideEffectCount()).toBe(1);
 	await reopened.close();
+	await store.close();
+});
+
+it("does not reinstall a stale running Key after a durable stop", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-stop-"));
+	directories.push(directory);
+	const store = await FileRuntimeStore.open(join(directory, "host.json"));
+	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+	const { request, claims, transport } = fixture();
+	const validateGrantV4 = async (value: unknown) => {
+		const parsed = value as RuntimeBusinessRequestV4;
+		await validateRuntimeBusinessBindingV4(parsed, claims);
+		return { request: parsed, claims };
+	};
+	const host = await RuntimeHost.open({
+		store,
+		driver,
+		grantValidation: { expectedIssuer: "agent-platform" },
+		grantValidationV2: {
+			expectedIssuer: "platform-worker",
+			expectedWorkerId: "worker-1",
+		},
+		allowLegacyBusiness: false,
+		validateGrantV4,
+	});
+	const accepted = await host.submitTurnV4(transport);
+	const stop = signV3Fixture(
+		{
+			schemaVersion: 3 as const,
+			requestId: "stop-request",
+			traceId: request.traceId,
+			principal: request.principal,
+			channelId: request.channelId,
+			agentId: request.agentId,
+			conversationId: request.conversationId,
+			executionId: request.executionId,
+			turnId: request.turnId,
+			sessionGeneration: request.sessionGeneration,
+			hostSessionRef: accepted.hostSessionRef,
+			operation: {
+				kind: "stop" as const,
+				id: "stop-1",
+				deliveryFence: 1,
+				executionDeliveryFence: 1,
+			},
+		},
+		"turn.stop",
+		{
+			now: Date.now(),
+			claims: {
+				issuer: "platform-worker",
+				workerId: "worker-1",
+				authorizationRecordId: "authorization-1",
+			},
+		},
+	);
+	await expect(
+		host.stopV3(stop, verifyRuntimeV2Fixture(stop.grant)),
+	).resolves.toMatchObject({ result: { outcome: "accepted" } });
+	expect(
+		store.readOriginalExecutionKeyScopeV4(request)?.operation.result,
+	).toEqual({ outcome: "accepted", status: "running" });
+	await host.close();
+	const installKey = vi.fn();
+	const replay = new RuntimeHostV4({
+		store,
+		assertOpen: () => undefined,
+		validateGrant: validateGrantV4,
+		dispatch: async () => {
+			throw new Error("resolved replay must not dispatch");
+		},
+		serialize: async (_key, work) => work(),
+		installKey,
+	});
+	await expect(replay.submitTurn(transport)).resolves.toEqual(accepted);
+	expect(installKey).not.toHaveBeenCalled();
+	await store.close();
+});
+
+it("clears the Key after a terminal status is durably confirmed", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-drained-"));
+	directories.push(directory);
+	const store = await FileRuntimeStore.open(join(directory, "host.json"));
+	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+	const { request, claims, transport } = fixture();
+	const host = await RuntimeHost.open({
+		store,
+		driver,
+		grantValidation: { expectedIssuer: "agent-platform" },
+		grantValidationV2: {
+			expectedIssuer: "platform-worker",
+			expectedWorkerId: "worker-1",
+		},
+		allowLegacyBusiness: false,
+		validateGrantV4: async (value: unknown) => {
+			const parsed = value as RuntimeBusinessRequestV4;
+			await validateRuntimeBusinessBindingV4(parsed, claims);
+			return { request: parsed, claims };
+		},
+	});
+	const accepted = await host.submitTurnV4(transport);
+	const action = {
+		nativeSessionRef: store.nativeSessionRef(accepted.hostSessionRef) as string,
+		executionId: request.executionId,
+		runtimeOperationId: request.executionId,
+		operationRef: "model-fact-1",
+		attemptRef: "attempt-1",
+		kind: "model" as const,
+	};
+	await expect(host.authorizeExternalAction(action)).resolves.toEqual({
+		relayKey: "synthetic-relay-key-k1",
+	});
+	await driver.setOperationStatus(request.executionId, "completed");
+	const status = signV3Fixture(
+		{
+			schemaVersion: 3 as const,
+			requestId: "status-request",
+			traceId: request.traceId,
+			principal: request.principal,
+			channelId: request.channelId,
+			agentId: request.agentId,
+			conversationId: request.conversationId,
+			executionId: request.executionId,
+			turnId: request.turnId,
+			sessionGeneration: request.sessionGeneration,
+			hostSessionRef: accepted.hostSessionRef,
+			operation: request.operation,
+			originalOperationDigest:
+				store.readOriginalExecutionKeyScopeV4(request)?.operation
+					.requestDigest ?? "",
+		},
+		"session.status",
+		{
+			now: Date.now(),
+			claims: {
+				issuer: "platform-worker",
+				workerId: "worker-1",
+				authorizationRecordId: "authorization-1",
+			},
+		},
+	);
+	await expect(
+		host.recoverStatusV3(status, verifyRuntimeV2Fixture(status.grant)),
+	).resolves.toMatchObject({ outcome: "found", status: "completed" });
+	await expect(host.authorizeExternalAction(action)).rejects.toMatchObject({
+		code: "RUNTIME_GRANT_INVALID",
+	});
+	expect(await driver.sideEffectCount()).toBe(1);
+	await host.close();
 	await store.close();
 });
 

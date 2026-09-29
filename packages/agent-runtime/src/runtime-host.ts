@@ -377,6 +377,20 @@ export class RuntimeHost {
 		if (this.closed) runtimeAuthorizationDenied();
 		return this.v3 ?? runtimeAuthorizationDenied();
 	}
+	private releaseExecutionKey(
+		hostSessionRef: string,
+		operation: StoredOperation,
+	) {
+		const entry = this.executionKeys.get(operation.executionId);
+		if (
+			entry?.hostSessionRef === hostSessionRef &&
+			entry.scope.agentId === operation.command.agentId &&
+			entry.scope.conversationId === operation.command.conversationId &&
+			entry.scope.sessionGeneration === operation.command.sessionGeneration &&
+			entry.scope.turnId === operation.turnId
+		)
+			this.executionKeys.delete(operation.executionId);
+	}
 	async close() {
 		if (this.closed) return;
 		this.closed = true;
@@ -427,10 +441,7 @@ export class RuntimeHost {
 		return this.v4.supplement(value);
 	}
 	async stopV3(value: RuntimeStopRequestV3, verification: unknown) {
-		const response = await this.trustedHost().stop(value, verification);
-		if (response.result.outcome === "accepted")
-			this.executionKeys.delete(value.executionId);
-		return response;
+		return this.trustedHost().stop(value, verification);
 	}
 	recoverStatusV3(
 		value: RuntimeStatusRequestV3,
@@ -1103,6 +1114,7 @@ export class RuntimeHost {
 						request.hostSessionRef,
 						request.tombstoneId,
 					);
+					this.releaseExecutionKey(request.hostSessionRef, prepared.operation);
 					await this.options.store.clearRecoveryBlocked(request.hostSessionRef);
 				}
 				return v1OperationResponse(response);
@@ -1139,6 +1151,12 @@ export class RuntimeHost {
 					nativeSessionRef,
 				);
 			}
+			if (
+				operation.kind !== "generation-cancel" &&
+				result.outcome === "accepted" &&
+				isTerminalRuntimeStatus(result.status)
+			)
+				this.releaseExecutionKey(hostSessionRef, operation);
 			return operationResponse(hostSessionRef, operation, result);
 		}
 		await this.options.afterOperationPrepared?.(operation.operationId);
@@ -1212,6 +1230,12 @@ export class RuntimeHost {
 			result,
 			driverRecord.nativeSessionRef,
 		);
+		if (
+			operation.kind !== "generation-cancel" &&
+			result.outcome === "accepted" &&
+			isTerminalRuntimeStatus(result.status)
+		)
+			this.releaseExecutionKey(hostSessionRef, operation);
 		await this.options.afterOperationResolved?.(operation.operationId);
 		return operationResponse(hostSessionRef, operation, result);
 	}
