@@ -114,10 +114,13 @@ export async function insertTaskAuthorization(
 			agent_id: string;
 			actor_id: string;
 			channel_id: string;
-			authorization_revision: string;
+			execution_authorization_revision: string;
+			agent_authorization_revision: string;
 		}[]
 	>`
-		select execution.agent_id, execution.actor_id, execution.channel_id, agent.authorization_revision
+		select execution.agent_id, execution.actor_id, execution.channel_id,
+			execution.authorization_revision as execution_authorization_revision,
+			agent.authorization_revision as agent_authorization_revision
 		from platform.conversation_executions execution
 		join platform.agents agent on agent.id = execution.agent_id
 		where execution.execution_id = ${input.executionId}
@@ -129,13 +132,16 @@ export async function insertTaskAuthorization(
 		boundary.principal.id !== binding.actor_id ||
 		boundary.agentId !== binding.agent_id ||
 		boundary.channelId !== binding.channel_id ||
-		boundary.agentAuthorizationRevision !== binding.authorization_revision
+		boundary.agentAuthorizationRevision !==
+			binding.agent_authorization_revision ||
+		binding.execution_authorization_revision !==
+			binding.agent_authorization_revision
 	)
 		throw new TaskAuthorizationStoreError();
 	await requireCurrentTaskApiAccess(
 		transaction,
 		boundary,
-		binding.authorization_revision,
+		binding.agent_authorization_revision,
 	);
 	const recordId = randomUUID();
 	await transaction`

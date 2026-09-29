@@ -21,7 +21,10 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
-import { PostgresTaskAuthorizationStoreV1 } from "./task-authorization.ts";
+import {
+	insertTaskAuthorization,
+	PostgresTaskAuthorizationStoreV1,
+} from "./task-authorization.ts";
 
 let database: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
@@ -901,6 +904,41 @@ it("captures current application independently from its responsible user and rec
 		accepted.result.executionId,
 	);
 	expect(revoked && isTaskAuthorizationCurrentV1(revoked)).toBe(false);
+});
+
+it("rejects an application authorization record for a stale Execution revision", async () => {
+	await seedApplication();
+	const boundary = await authorizationStore.captureApplicationBoundary({
+		applicationId: "shared",
+		agentId: "agent_task",
+		channelId: "api:application",
+	});
+	if (!boundary) throw Error();
+	currentAuthority = {
+		...currentAuthority,
+		actorId: "shared",
+		channelId: "api:application",
+		taskBoundary: boundary,
+	};
+	const task = await taskUseCase().submitTask(command("stale-execution"));
+	if (task.outcome !== "accepted") throw Error();
+	await sql`update platform.conversation_executions
+		set authorization_revision = 'stale-revision'
+		where execution_id = ${task.result.executionId}`;
+	await expect(
+		sql.begin((transaction) =>
+			insertTaskAuthorization(transaction, {
+				executionId: task.result.executionId,
+				boundary,
+				traceId: "trace_stale",
+				requestId: "request_stale",
+			}),
+		),
+	).rejects.toThrow("Task authorization persistence is unavailable");
+	const [records] = await sql<
+		{ count: number }[]
+	>`select count(*)::int as count from platform.task_authorization_records where execution_id = ${task.result.executionId}`;
+	expect(records?.count).toBe(1);
 });
 
 it.each(["disabled", "revoked-grant"])(
