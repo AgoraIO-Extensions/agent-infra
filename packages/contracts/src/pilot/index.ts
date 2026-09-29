@@ -5,3 +5,4 @@ export * from "./errors.ts";
 export * from "./operation-v2.ts";
 export * from "./sse.ts";
 export * from "./template-release.ts";
+export * from "./wecom-application.ts";
