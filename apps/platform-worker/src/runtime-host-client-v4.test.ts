@@ -149,6 +149,7 @@ it("delivers only the pinned version in the private V4 transport", async () => {
 	expect(f.readAcceptedExecution).toHaveBeenCalledTimes(2);
 	expect(f.plaintext.every((value) => value === 0)).toBe(true);
 	const [url, init] = f.fetcher.mock.calls[0] ?? [];
+	expect(init?.redirect).toBe("error");
 	expect(String(url)).toBe(
 		"https://runtime.example.test/internal/runtime/v4/turns",
 	);

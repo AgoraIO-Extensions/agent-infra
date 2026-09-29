@@ -172,6 +172,7 @@ function requestInit(
 			"x-trace-id": traceId,
 		},
 		body: JSON.stringify(body),
+		redirect: "error",
 		signal,
 	};
 }

@@ -27,10 +27,15 @@ export * from "./catalog.js";
 export { createMessagesModelAccessValidatorV1 } from "./messages-access.js";
 export {
 	projectRuntimeModelConfigurationV1,
+	projectRuntimeModelConfigurationV4,
 	type RuntimeModelProjectionV1,
+	type RuntimeModelProjectionV4,
 	revalidateRuntimeModelCatalogV1,
+	revalidateRuntimeModelCatalogV4,
 	runtimeModelInjectionV1,
+	runtimeModelInjectionV4,
 	type StandardTemplateModelBindingV1,
 	standardTemplateModelProtocolV1,
 	validateRuntimeModelProjectionV1,
+	validateRuntimeModelProjectionV4,
 } from "./projection.js";
