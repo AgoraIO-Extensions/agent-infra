@@ -167,49 +167,7 @@
       "idx": 23,
       "version": "7",
       "when": 1790663756117,
-      "tag": "0023_task_wait_admission",
-      "breakpoints": true
-    },
-    {
-      "idx": 24,
-      "version": "7",
-      "when": 1790663757117,
-      "tag": "0024_application_generation_principal",
-      "breakpoints": true
-    },
-    {
-      "idx": 25,
-      "version": "7",
-      "when": 1790663758117,
-      "tag": "0025_stop_confirmation_deadline",
-      "breakpoints": true
-    },
-    {
-      "idx": 26,
-      "version": "7",
-      "when": 1790663759117,
-      "tag": "0026_execution_relay_key_binding",
-      "breakpoints": true
-    },
-    {
-      "idx": 27,
-      "version": "7",
-      "when": 1790663760117,
-      "tag": "0027_credential_hash_unique",
-      "breakpoints": true
-    },
-    {
-      "idx": 28,
-      "version": "7",
-      "when": 1790663761117,
-      "tag": "0028_original_runtime_digest",
-      "breakpoints": true
-    },
-    {
-      "idx": 29,
-      "version": "7",
-      "when": 1790663762117,
-      "tag": "0029_original_v4_submit_session",
+      "tag": "0023_durable_task_api",
       "breakpoints": true
     }
   ]

@@ -135,7 +135,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 							? migrations.slice(0, 15)
 							: history === "task-integrity"
 								? migrations.slice(0, 20)
-								: migrations.slice(0, 24);
+								: migrations.slice(0, 23);
 				for (const migration of legacy) {
 					for (const statement of migration.sql) await client.unsafe(statement);
 					await client`insert into platform_migrations.history (hash, created_at)
