@@ -131,7 +131,12 @@ describe("platform API production assembly routes", () => {
 			{
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ kind: "user", id: "admin-1" }),
+				body: JSON.stringify({
+					schemaVersion: 1,
+					principal: { kind: "user", id: "admin-1" },
+					scopes: ["agent:read"],
+					expiresAt: null,
+				}),
 			},
 		);
 		expect(delivery.status).toBe(204);
@@ -139,6 +144,11 @@ describe("platform API production assembly routes", () => {
 			expect.objectContaining({
 				applicationId: "application-1",
 				principal: { kind: "user", id: "admin-1" },
+				scopes: ["agent:read"],
+				expiresAt: null,
+				actor: expect.objectContaining({
+					identityRevision: "owner-revision-1",
+				}),
 			}),
 		);
 
