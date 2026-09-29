@@ -544,19 +544,14 @@ export function createApiIdentityManagementV1(input: {
 		},
 		async resolveAgentQueryGrantType(actor, audit) {
 			try {
+				const snapshot = requireCredential(actor);
 				const credential = await requireCurrentCredential(actor);
-				if (
-					hasApiCredentialScopeV1(credential, "agent:manage") &&
-					hasApiCredentialScopeV1(credential, "agent:use")
-				)
-					return "any";
-				if (hasApiCredentialScopeV1(credential, "agent:manage"))
-					return "manage";
-				if (
-					hasApiCredentialScopeV1(credential, "agent:use") ||
-					hasApiCredentialScopeV1(credential, "agent:read")
-				)
-					return "use";
+				const hasScope = (scope: ApiCredentialScopeV1) =>
+					hasApiCredentialScopeV1(snapshot, scope) &&
+					hasApiCredentialScopeV1(credential, scope);
+				if (hasScope("agent:manage") && hasScope("agent:use")) return "any";
+				if (hasScope("agent:manage")) return "manage";
+				if (hasScope("agent:use") || hasScope("agent:read")) return "use";
 				throw new ApiIdentityError("not_authorized");
 			} catch (error) {
 				if (audit && input.store.writeAudit) {

@@ -193,6 +193,12 @@ describe("PostgreSQL API identity store", () => {
 				{ ...userAudit, action: "api.credential.revoked" },
 			),
 		).toBe(true);
+		expect(
+			await store.resolveCredential("application-secret-value"),
+		).toMatchObject({
+			credentialId: applicationCredential.credentialId,
+			revokedAt: new Date("2026-09-24T00:00:00.000Z"),
+		});
 
 		const audits = await adminClient`
 			select action
@@ -210,6 +216,72 @@ describe("PostgreSQL API identity store", () => {
 			"api.application.created",
 		]);
 		expect(userCredential.metadata).not.toHaveProperty("credential");
+	});
+
+	it("locks the delivery grant before persisting an application credential", async () => {
+		await adminClient`truncate platform.audit_events, platform.api_credential_delivery_grants,
+			platform.platform_api_credentials, platform.platform_applications cascade`;
+		await store.createApplication({
+			applicationId: "application_delivery_lock",
+			name: "Delivery lock application",
+			responsibleUserId: "user_owner",
+			authorizationRevision: "application_revision_1",
+			audit: userAudit,
+		});
+		await store.grantCredentialDelivery({
+			applicationId: "application_delivery_lock",
+			principal: { kind: "user", id: "user_recipient" },
+			authorizationRevision: "application_revision_1",
+			audit: { ...userAudit, action: "api.credential.delivery.granted" },
+		});
+		const blocker = postgres(databaseUrl, { max: 1 });
+		let release: (() => void) | undefined;
+		let markLocked: (() => void) | undefined;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const locked = new Promise<void>((resolve) => {
+			markLocked = resolve;
+		});
+		const revoke = blocker.begin(async (transaction) => {
+			await transaction`
+				select application_id from platform.api_credential_delivery_grants
+				where application_id = 'application_delivery_lock' for update
+			`;
+			markLocked?.();
+			await held;
+			await transaction`
+				update platform.api_credential_delivery_grants set revoked_at = now()
+				where application_id = 'application_delivery_lock'
+			`;
+		});
+		let issue: Promise<unknown> | undefined;
+		try {
+			await locked;
+			issue = store.issueCredential({
+				principal: { kind: "application", id: "application_delivery_lock" },
+				recipient: { kind: "user", id: "user_recipient" },
+				credential: "concurrent-delivery-secret",
+				scopes: ["agent:read"],
+				expiresAt: null,
+				audit: { ...userAudit, action: "api.credential.issued" },
+			});
+			await waitForBlockedQuery(["api_credential_delivery_grants"]);
+			release?.();
+			await revoke;
+			await expect(issue).rejects.toThrow(
+				"Credential delivery is not authorized",
+			);
+			expect(
+				await store.listCredentials({
+					applicationId: "application_delivery_lock",
+				}),
+			).toEqual([]);
+		} finally {
+			release?.();
+			await Promise.allSettled([revoke, ...(issue ? [issue] : [])]);
+			await blocker.end();
+		}
 	});
 
 	it("advances the Agent authorization revision with a new grant", async () => {

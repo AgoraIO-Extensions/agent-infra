@@ -372,7 +372,8 @@ export class PostgresApiIdentityStoreV1 {
 							isNull(apiCredentialDeliveryGrants.revokedAt),
 						),
 					)
-					.limit(1);
+					.limit(1)
+					.for("update");
 				if (
 					!delivery ||
 					delivery.authorizationRevision !== application.authorizationRevision
@@ -415,13 +416,7 @@ export class PostgresApiIdentityStoreV1 {
 			)
 			.limit(1);
 		if (!row) return null;
-		const result = metadata(row);
-		if (
-			result.revokedAt ||
-			(result.expiresAt && result.expiresAt.getTime() <= Date.now())
-		)
-			return null;
-		return result;
+		return metadata(row);
 	}
 
 	async resolveApplicationCredential(
