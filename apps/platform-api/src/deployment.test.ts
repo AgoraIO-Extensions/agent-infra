@@ -2,8 +2,8 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import {
-	AgentApplicationProjectionV1Schema,
-	AgentProjectionV1Schema,
+	AgentApplicationProjectionV2Schema,
+	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import {
@@ -113,8 +113,7 @@ const modelConfiguration = (credentialValue: string) => ({
 	defaultReasoningLevel: "medium",
 });
 const applicationBody = {
-	schemaVersion: 1,
-	actions: [],
+	schemaVersion: 2,
 	name: "Production assembly test",
 	description: "Synthetic persistent lifecycle",
 	source: { kind: "standard", templateId: "codex" },
@@ -299,7 +298,7 @@ function request(path: string, user: User, body?: unknown, key?: string) {
 		method:
 			body === undefined
 				? "GET"
-				: path === "/api/v1/agent-applications" || path.endsWith("/decision")
+				: path === "/api/v2/agent-applications" || path.endsWith("/decision")
 					? "POST"
 					: "PUT",
 		headers: {
@@ -353,8 +352,8 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 	it("creates, approves and configures an Agent without pretending its Workload is ready", async () => {
 		const empty = await snapshot();
 		expect(empty.agents).toEqual([]);
-		const path = "/api/v1/agent-applications";
-		const created = AgentApplicationProjectionV1Schema.parse(
+		const path = "/api/v2/agent-applications";
+		const created = AgentApplicationProjectionV2Schema.parse(
 			await json(
 				await request(path, "alice", applicationBody, "create-a"),
 				201,
@@ -385,7 +384,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		expect(await snapshot()).toEqual(submitted);
 		const applicationPath = `${path}/${created.applicationId}`;
 		await json(await request(applicationPath, "bob"), 404);
-		const decisionPath = `/api/v1/admin/agent-applications/${created.applicationId}/decision`;
+		const decisionPath = `/api/v2/admin/agent-applications/${created.applicationId}/decision`;
 		await json(
 			await request(
 				decisionPath,
@@ -396,7 +395,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			403,
 		);
 		expect(await snapshot()).toEqual(submitted);
-		const approved = AgentApplicationProjectionV1Schema.parse(
+		const approved = AgentApplicationProjectionV2Schema.parse(
 			await json(
 				await request(
 					decisionPath,
@@ -408,8 +407,8 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			),
 		);
 		expect(approved.status).toBe("creating");
-		const agentPath = `/api/v1/agents/${created.agentId}`;
-		const beforeRuntime = AgentProjectionV1Schema.parse(
+		const agentPath = `/api/v2/agents/${created.agentId}`;
+		const beforeRuntime = AgentProjectionV2Schema.parse(
 			await json(await request(agentPath, "alice"), 200),
 		);
 		expect(beforeRuntime).toMatchObject({
@@ -424,7 +423,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			},
 		});
 		const update = {
-			schemaVersion: 1,
+			schemaVersion: 2,
 			environment: [{ name: "LANG", value: "zh_CN.UTF-8" }],
 			modelConfiguration: modelConfiguration(plaintext.replacementModel),
 			secrets: [{ name: "BOT_TOKEN", value: plaintext.replacementSecret }],
@@ -470,9 +469,9 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		expect(await snapshot()).toEqual(configured);
 		await json(
 			await request(
-				`/api/v1/agents/${created.agentId}/configuration`,
+				`/api/v2/agents/${created.agentId}/configuration`,
 				"alice",
-				{ schemaVersion: 1, coOwnerIds: ["bob"] },
+				{ schemaVersion: 2, coOwnerIds: ["bob"] },
 				"grant-owner",
 			),
 			200,
@@ -482,7 +481,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				configurationPath,
 				"bob",
 				{
-					schemaVersion: 1,
+					schemaVersion: 2,
 					environment: [{ name: "LANG", value: "en_GB.UTF-8" }],
 				},
 				"coowner-change",
@@ -493,7 +492,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			await request(
 				configurationPath,
 				"alice",
-				{ schemaVersion: 1, coOwnerIds: [] },
+				{ schemaVersion: 2, coOwnerIds: [] },
 				"revoke-owner",
 			),
 			200,
@@ -503,7 +502,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			await request(
 				configurationPath,
 				"bob",
-				{ schemaVersion: 1, environment: [] },
+				{ schemaVersion: 2, environment: [] },
 				"revoked-change",
 			),
 			404,
@@ -533,16 +532,16 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		});
 		try {
 			const alice = request(
-				"/api/v1/agent-applications",
+				"/api/v2/agent-applications",
 				"alice",
 				applicationBody,
 				"concurrent",
 			);
 			await waiting;
-			const bob = AgentApplicationProjectionV1Schema.parse(
+			const bob = AgentApplicationProjectionV2Schema.parse(
 				await json(
 					await request(
-						"/api/v1/agent-applications",
+						"/api/v2/agent-applications",
 						"bob",
 						applicationBody,
 						"concurrent",
@@ -551,7 +550,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				),
 			);
 			release();
-			const a = AgentApplicationProjectionV1Schema.parse(
+			const a = AgentApplicationProjectionV2Schema.parse(
 				await json(await alice, 201),
 			);
 			expect(a.agentId).not.toBe(bob.agentId);
@@ -588,7 +587,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 					identity.resolve = async () => {
 						throw new Error("private directory sentinel");
 					};
-				const response = await fetch(`${origin}/api/v1/agent-applications`, {
+				const response = await fetch(`${origin}/api/v2/agent-applications`, {
 					method: "POST",
 					headers: {
 						"content-type": "application/json",
@@ -625,7 +624,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				: { ...identities.alice, accountStatus: "disabled" };
 		try {
 			const response = await request(
-				"/api/v1/agent-applications",
+				"/api/v2/agent-applications",
 				"alice",
 				applicationBody,
 				"mid-admission-revoked",
@@ -650,7 +649,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			try {
 				await json(
 					await request(
-						"/api/v1/agent-applications",
+						"/api/v2/agent-applications",
 						"alice",
 						applicationBody,
 						`rollback-${table}`,
@@ -669,10 +668,10 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		},
 	);
 	it("does not combine a stale configuration with newer runtime presentation facts", async () => {
-		const created = AgentApplicationProjectionV1Schema.parse(
+		const created = AgentApplicationProjectionV2Schema.parse(
 			await json(
 				await request(
-					"/api/v1/agent-applications",
+					"/api/v2/agent-applications",
 					"alice",
 					applicationBody,
 					"stale-projection",
@@ -682,7 +681,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		);
 		await json(
 			await request(
-				`/api/v1/admin/agent-applications/${created.applicationId}/decision`,
+				`/api/v2/admin/agent-applications/${created.applicationId}/decision`,
 				"admin",
 				{ schemaVersion: 1, decision: "approve" },
 				"approve-stale",
@@ -718,14 +717,14 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				return read.call(this, input);
 			});
 		try {
-			const stale = request(`/api/v1/agents/${created.agentId}`, "alice");
+			const stale = request(`/api/v2/agents/${created.agentId}`, "alice");
 			await waiting;
 			await json(
 				await request(
-					`/api/v1/agents/${created.agentId}/configuration`,
+					`/api/v2/agents/${created.agentId}/configuration`,
 					"alice",
 					{
-						schemaVersion: 1,
+						schemaVersion: 2,
 						environment: [{ name: "LANG", value: "en_GB.UTF-8" }],
 					},
 					"changed-projection",
@@ -1040,10 +1039,10 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 	);
 	it("revises the original pending application and encrypts replacement credentials", async () => {
 		const before = await snapshot();
-		const created = AgentApplicationProjectionV1Schema.parse(
+		const created = AgentApplicationProjectionV2Schema.parse(
 			await json(
 				await request(
-					"/api/v1/agent-applications",
+					"/api/v2/agent-applications",
 					"alice",
 					applicationBody,
 					"revise-application",
@@ -1057,10 +1056,10 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			modelConfiguration: modelConfiguration(plaintext.replacementModel),
 			secrets: [{ name: "BOT_TOKEN", value: plaintext.replacementSecret }],
 		};
-		const revised = AgentApplicationProjectionV1Schema.parse(
+		const revised = AgentApplicationProjectionV2Schema.parse(
 			await json(
 				await request(
-					`/api/v1/agent-applications/${created.applicationId}`,
+					`/api/v2/agent-applications/${created.applicationId}`,
 					"alice",
 					changed,
 					"revise-pending",
@@ -1083,9 +1082,9 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		expectNoPlaintext(after);
 		await json(
 			await request(
-				`/api/v1/agents/${created.agentId}/configuration`,
+				`/api/v2/agents/${created.agentId}/configuration`,
 				"bob",
-				{ schemaVersion: 1, environment: [] },
+				{ schemaVersion: 2, environment: [] },
 				"foreign-agent",
 			),
 			404,
@@ -1101,10 +1100,10 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			await openApi();
 			try {
 				const imageReference = `registry.example.test/agents/codex@${fixture.imageDigest}`;
-				const created = AgentApplicationProjectionV1Schema.parse(
+				const created = AgentApplicationProjectionV2Schema.parse(
 					await json(
 						await request(
-							"/api/v1/agent-applications",
+							"/api/v2/agent-applications",
 							"alice",
 							{
 								...applicationBody,
@@ -1131,16 +1130,16 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				});
 				await json(
 					await request(
-						`/api/v1/admin/agent-applications/${created.applicationId}/decision`,
+						`/api/v2/admin/agent-applications/${created.applicationId}/decision`,
 						"admin",
 						{ schemaVersion: 1, decision: "approve" },
 						`approve-${mode}`,
 					),
 					200,
 				);
-				const detail = AgentProjectionV1Schema.parse(
+				const detail = AgentProjectionV2Schema.parse(
 					await json(
-						await request(`/api/v1/agents/${created.agentId}`, "alice"),
+						await request(`/api/v2/agents/${created.agentId}`, "alice"),
 						200,
 					),
 				);

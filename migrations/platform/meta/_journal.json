@@ -148,6 +148,13 @@
       "when": 1790158201320,
       "tag": "0020_task_boundary_generation_binding",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790663754117,
+      "tag": "0021_browser_sessions",
+      "breakpoints": true
     }
   ]
 }

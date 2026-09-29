@@ -61,11 +61,14 @@ vi.mock("@opentelemetry/sdk-trace-base", () => ({
 }));
 
 vi.mock("@opentelemetry/sdk-metrics", () => ({
+	AggregationTemporality: { DELTA: 0, CUMULATIVE: 1 },
+	InstrumentType: { OBSERVABLE_GAUGE: "OBSERVABLE_GAUGE" },
 	MeterProvider: class {
 		getMeter() {
 			return {
 				createCounter: () => ({ add() {} }),
 				createHistogram: () => ({ record() {} }),
+				createObservableGauge: () => ({ addCallback() {} }),
 			};
 		}
 		shutdown() {

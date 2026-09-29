@@ -292,7 +292,7 @@ Connection 使用独立 `connection-web` 和独立浏览器会话，包含登录
 
 ### 8.1 浏览器与用户/应用 API
 
-- 管理和查询使用 `/api/v1/*` HTTP/JSON。
+- 管理和查询使用 OpenAPI 声明的 `/api/v1/*` 或 `/api/v2/*` HTTP/JSON。Agent 申请、审批、配置和管理的 V2 契约不包含旧 Action 配置；V1 管理入口退役时，V1 Conversation 入口仍独立保留。
 - 创建、更新和命令类请求支持 `Idempotency-Key`。
 - 浏览器与用户/应用 API 遵循 [Contract Schema authority](#64-contract-schema-authority)；生成并提交的 OpenAPI 3.1 是消费者使用的规范来源。
 - TypeScript 客户端由 OpenAPI 生成，禁止手写重复的请求/响应类型。
@@ -610,7 +610,10 @@ reasoning/加密项或历史、跳过实际压缩或更换 Session。既有内�
 [ADR: Codex 模型切换压缩使用当前有效选择](../adr/0014-use-current-selection-for-codex-switch-compaction.md)。
 
 模型 endpoint 必须使用 HTTPS；HTTP 仅允许原始 URL 显式使用 `127.0.0.1` 或 `[::1]`
-的 loopback 地址，不接受主机名或其他 IP 别名。本次交付的 Relay Key 必须为 16–8192 个可打印
+的 loopback 地址，不接受主机名或其他 IP 别名。V4 标准模板配置的 HTTPS endpoint
+只接受域名，不接受 IP 字面量、`localhost` 或其子域；目录准入仍须核对获准的固定 Relay
+端点，域名输入校验不能替代出站目的地址与禁止重定向的运行时约束。
+本次交付的 Relay Key 必须为 16–8192 个可打印
 非空格 ASCII 字符；配置准入拒绝过短值，避免逐子串泄漏检测误拒正常 SSE 字段。
 长度下限不替代既有凭证泄漏检测，也不作为凭证熵或供应商认证有效性的证明。
 
