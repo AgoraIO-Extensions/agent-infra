@@ -187,10 +187,13 @@ async function seedStates(states: readonly AgentManagementStateV1[]) {
 			states.map((state) => ({
 				id: state.agentId,
 				current_configuration_revision: 1,
+				authorization_revision:
+					state.principalGrants?.[0]?.authorizationRevision ?? null,
 				created_at: createdAt,
 			})),
 			"id",
 			"current_configuration_revision",
+			"authorization_revision",
 			"created_at",
 		)}
 	`;
@@ -252,7 +255,12 @@ async function seedStates(states: readonly AgentManagementStateV1[]) {
 		state.availability.map((target) => ({
 			agent_id: state.agentId,
 			target_type: target.kind,
-			target_id: target.kind === "user" ? target.userId : target.organizationId,
+			target_id:
+				target.kind === "user"
+					? target.userId
+					: target.kind === "organization"
+						? target.organizationId
+						: target.applicationId,
 		})),
 	);
 	if (availability.length > 0) {
@@ -263,6 +271,21 @@ async function seedStates(states: readonly AgentManagementStateV1[]) {
 				"target_type",
 				"target_id",
 			)}
+		`;
+	}
+	const principalGrants = states.flatMap((state) =>
+		(state.principalGrants ?? []).map((grant) => ({
+			agent_id: state.agentId,
+			principal_type: grant.principal.kind,
+			principal_id: grant.principal.id,
+			grant_type: grant.grantType,
+			authorization_revision: grant.authorizationRevision,
+			revoked_at: grant.revokedAt,
+		})),
+	);
+	if (principalGrants.length > 0) {
+		await adminClient`
+			insert into platform.agent_principal_grants ${adminClient(principalGrants)}
 		`;
 	}
 }
@@ -1063,6 +1086,68 @@ describe("PostgreSQL Agent-management Adapter", () => {
 			).items.map(({ agentId }) => agentId),
 		).toEqual([second.agentId]);
 		expect(customMapCalls).toBe(0);
+	});
+
+	it("keeps principal reads available through either independently active grant", async () => {
+		const state = stateFixture({
+			applicationId: "application_grant_read",
+			agentId: "agent_grant_read",
+		});
+		await seedStates([state]);
+		await adminClient`
+			update platform.agents set authorization_revision = 'revision-1'
+			where id = ${state.agentId}
+		`;
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values
+				(${state.agentId}, 'application', 'caller-app', 'manage', 'revision-1'),
+				(${state.agentId}, 'application', 'caller-app', 'use', 'revision-1')
+		`;
+		const query = new PostgresAgentManagementQueryV1({ databaseUrl });
+		adapters.push(query);
+		const scope = {
+			kind: "principal" as const,
+			principal: { kind: "application" as const, id: "caller-app" },
+			grantType: "any" as const,
+		};
+		expect((await query.listAgents(scope, { limit: 10 })).items).toHaveLength(
+			1,
+		);
+		await adminClient`
+			update platform.agents set authorization_revision = 'revision-2'
+			where id = ${state.agentId}
+		`;
+		expect(await query.getAgent(scope, state.agentId)).toBeUndefined();
+		await adminClient`
+			update platform.agents set authorization_revision = null
+			where id = ${state.agentId}
+		`;
+		expect((await query.listAgents(scope, { limit: 10 })).items).toEqual([]);
+		expect(
+			await query.getAgent({ kind: "administrator" }, state.agentId),
+		).toMatchObject({ management: { principalGrants: [] } });
+		await adminClient`
+			update platform.agents set authorization_revision = 'revision-1'
+			where id = ${state.agentId}
+		`;
+		await adminClient`
+			update platform.agent_principal_grants set revoked_at = now()
+			where agent_id = ${state.agentId} and grant_type = 'manage'
+		`;
+		expect(await query.getAgent(scope, state.agentId)).toMatchObject({
+			agentId: state.agentId,
+		});
+		expect(
+			await query.getAgent({ ...scope, grantType: "manage" }, state.agentId),
+		).toBeUndefined();
+		await adminClient`
+			update platform.agent_principal_grants set revoked_at = now()
+			where agent_id = ${state.agentId} and grant_type = 'use'
+		`;
+		expect((await query.listAgents(scope, { limit: 10 })).items).toEqual([]);
+		expect(await query.getAgent(scope, state.agentId)).toBeUndefined();
 	});
 
 	it("fails closed on malformed or forged Agent scopes", async () => {

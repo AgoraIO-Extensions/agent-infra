@@ -22,7 +22,10 @@ async function verify({ published = false, mode = "classic" } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "agent-infra-base-metadata-"));
 	try {
 		const docker = join(directory, "docker.mjs");
-		await writeFile(join(directory, `${configDigest.slice(7)}.json`), config);
+		await writeFile(
+			join(directory, `${configDigest.slice(7)}.json`),
+			mode === "oci-missing-config-tampered" ? '{"tampered":true}' : config,
+		);
 		await writeFile(
 			join(directory, "manifest.json"),
 			JSON.stringify([{ Config: `${configDigest.slice(7)}.json` }]),
@@ -40,7 +43,7 @@ if (args[0] === "buildx" && args[1] === "imagetools") process.stdout.write(${JSO
 else if (args[0] === "buildx" && args[1] === "build") {
   writeFileSync(args[args.indexOf("--metadata-file") + 1], JSON.stringify({
     "containerimage.digest": mode === "classic" ? configDigest : manifestDigest,
-    "containerimage.config.digest": mode === "bad-config" ? "sha256:" + "b".repeat(64) : configDigest,
+    ...(mode.startsWith("oci-missing-config") ? {} : { "containerimage.config.digest": mode === "bad-config" ? "sha256:" + "b".repeat(64) : configDigest }),
   }));
 } else if (args[0] === "image" && args[1] === "inspect") {
   const child = args.at(-1).startsWith("agent-infra-verification/");
@@ -104,6 +107,20 @@ test("published acceptance records a distinct child manifest and verified config
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(result.report.childDigest, manifestDigest);
 	assert.equal(result.report.childConfigDigest, configDigest);
+});
+
+test("OCI metadata without the optional config Digest still verifies exported config bytes", async () => {
+	const result = await verify({ published: true, mode: "oci-missing-config" });
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(result.report.childDigest, manifestDigest);
+	assert.equal(result.report.childConfigDigest, configDigest);
+});
+
+test("missing OCI config metadata cannot accept config bytes with a mismatched archive Digest", async () => {
+	const result = await verify({ mode: "oci-missing-config-tampered" });
+	assert.notEqual(result.status, 0);
+	assert.equal(result.report, null);
+	assert.match(result.stderr, /exported config bytes differ/);
 });
 
 test("published acceptance hashes the exact manifest bytes including surrounding whitespace", async () => {

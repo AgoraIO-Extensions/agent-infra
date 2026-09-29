@@ -75,6 +75,7 @@ async function validateRuntimeExecutionGrantV4(
 	options: {
 		readonly expectedIssuer: string;
 		readonly expectedWorkerId: string;
+		readonly expectedAgentId?: string;
 		readonly now?: () => number;
 	},
 ) {
@@ -95,6 +96,8 @@ async function validateRuntimeExecutionGrantV4(
 				now: (options.now ?? Date.now)(),
 			},
 		);
+		if (options.expectedAgentId && claims.agentId !== options.expectedAgentId)
+			runtimeAuthorizationDenied();
 		await validateRuntimeBusinessBindingV4(parsedRequest, claims);
 		return { request: parsedRequest, claims };
 	} catch {
@@ -107,6 +110,7 @@ export function createRuntimeExecutionGrantValidatorV4(
 	options: {
 		readonly expectedIssuer: string;
 		readonly expectedWorkerId: string;
+		readonly expectedAgentId?: string;
 		readonly now?: () => number;
 	},
 ) {
@@ -136,6 +140,7 @@ export function createRuntimeExecutionKeyDeliveryValidatorV4(
 	options: {
 		readonly expectedIssuer: string;
 		readonly expectedWorkerId: string;
+		readonly expectedAgentId?: string;
 		readonly now?: () => number;
 	},
 ) {

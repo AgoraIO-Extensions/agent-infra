@@ -30,6 +30,7 @@ const requiredOperations = [
 	"listPendingAgentApplications",
 	"decideAgentApplication",
 	"listAgents",
+	"createAgentDirectly",
 	"getAgent",
 	"updateAgentConfiguration",
 	"commandAgentLifecycle",
@@ -50,6 +51,18 @@ const requiredOperations = [
 	"getWecomSetup",
 	"submitWecomCredentials",
 	"cancelWecomSetup",
+	"listApiCredentials",
+	"issueApiCredential",
+	"revokeApiCredential",
+	"listApiApplications",
+	"createApiApplication",
+	"issueApplicationCredential",
+	"listApplicationCredentials",
+	"revokeApplicationCredential",
+	"grantApplicationCredentialDelivery",
+	"revokeApplicationCredentialDelivery",
+	"grantAgentPrincipal",
+	"revokeAgentPrincipalGrant",
 ];
 
 const validApplication = {
@@ -124,6 +137,9 @@ describe("Pilot browser contracts", () => {
 			);
 
 		expect(operations.sort()).toEqual(requiredOperations.sort());
+		expect(document.paths?.["/api/v1/agents"]?.post?.security).toEqual([
+			{ platformApiCredential: [] },
+		]);
 		for (const path of Object.values(document.paths ?? {})) {
 			for (const operation of Object.values(path ?? {})) {
 				if (

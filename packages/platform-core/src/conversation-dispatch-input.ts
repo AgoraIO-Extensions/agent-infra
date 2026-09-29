@@ -16,7 +16,12 @@ import {
 	text,
 	unavailable,
 } from "./conversation-dispatch-values.js";
+import type {
+	ConversationExecutionRelayKeyBindingV1,
+	ConversationExecutionSourceV1,
+} from "./conversation-execution-types.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
+import { isTaskPrincipalChannelV1 } from "./task-authorization.js";
 
 export function parseConversationMetadataRecoveryV1(
 	value: unknown,
@@ -47,6 +52,7 @@ function executionStatus(
 	value: unknown,
 ): ConversationDispatchExecutionStatusV1 {
 	if (
+		value !== "waiting" &&
 		value !== "submitted" &&
 		value !== "processing" &&
 		value !== "unknown" &&
@@ -57,6 +63,36 @@ function executionStatus(
 		return unavailable();
 	}
 	return value;
+}
+
+function executionSource(value: unknown): ConversationExecutionSourceV1 {
+	if (
+		value !== "web" &&
+		value !== "wecom" &&
+		value !== "platform-api" &&
+		value !== "eval"
+	)
+		return unavailable();
+	return value;
+}
+
+function relayKeyBinding(
+	value: unknown,
+): ConversationExecutionRelayKeyBindingV1 {
+	const input = exactObject(value, [
+		"purpose",
+		"subjectId",
+		"keyId",
+		"keyVersion",
+	]);
+	if (input.purpose !== "personal" && input.purpose !== "agent-default")
+		return unavailable();
+	return {
+		purpose: input.purpose,
+		subjectId: text(input.subjectId),
+		keyId: text(input.keyId),
+		keyVersion: positiveInteger(input.keyVersion),
+	};
 }
 
 export function parseCommand(value: unknown): DispatchConversationCommandV1 {
@@ -104,7 +140,14 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"executionStatus",
 			"stopPending",
 		],
-		["generationIsolation", "runtimeTerminalEventSeen", "metadataRecovery"],
+		[
+			"generationIsolation",
+			"runtimeTerminalEventSeen",
+			"metadataRecovery",
+			"taskWaitOrder",
+			"executionSource",
+			"relayKeyBinding",
+		],
 	);
 	if (
 		input.schemaVersion !== 1 ||
@@ -121,6 +164,25 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		input.metadataRecovery === undefined
 			? undefined
 			: parseConversationMetadataRecoveryV1(input.metadataRecovery);
+	const parsedExecutionSource =
+		input.executionSource === undefined
+			? undefined
+			: executionSource(input.executionSource);
+	const parsedRelayKeyBinding =
+		input.relayKeyBinding === undefined
+			? undefined
+			: relayKeyBinding(input.relayKeyBinding);
+	if (
+		(parsedExecutionSource === undefined) !==
+			(parsedRelayKeyBinding === undefined) ||
+		(parsedRelayKeyBinding &&
+			(parsedExecutionSource === "web" || parsedExecutionSource === "wecom"
+				? parsedRelayKeyBinding.purpose !== "personal" ||
+					parsedRelayKeyBinding.subjectId !== input.actorId
+				: parsedRelayKeyBinding.purpose !== "agent-default" ||
+					parsedRelayKeyBinding.subjectId !== input.agentId))
+	)
+		return unavailable();
 	if (
 		metadataRecovery &&
 		(!isTurnOperation(parsedOperation) ||
@@ -156,12 +218,19 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"originalPrincipal",
 		]);
 		const principal = exactObject(isolation.originalPrincipal, ["kind", "id"]);
-		if (principal.kind !== "user" || principal.id !== input.actorId)
+		if (
+			(principal.kind !== "user" && principal.kind !== "application") ||
+			principal.id !== input.actorId ||
+			!isTaskPrincipalChannelV1(
+				{ kind: principal.kind, id: text(principal.id) },
+				text(input.channelId),
+			)
+		)
 			unavailable();
 		generationIsolation = {
 			operationId: text(isolation.operationId),
 			controlRecordId: text(isolation.controlRecordId),
-			originalPrincipal: { kind: "user", id: text(principal.id) },
+			originalPrincipal: { kind: principal.kind, id: text(principal.id) },
 		};
 	}
 	const isStop = parsedOperation === "conversation.turn.stop.v1";
@@ -179,6 +248,9 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 	}
 	return {
 		schemaVersion: 1,
+		...(input.taskWaitOrder === undefined
+			? {}
+			: { taskWaitOrder: positiveInteger(input.taskWaitOrder) }),
 		itemId: text(input.itemId),
 		leaseOwner: text(input.leaseOwner),
 		operation: parsedOperation,
@@ -200,6 +272,12 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		modelConfigurationRevision,
 		modelOptionId,
 		reasoningLevel,
+		...(parsedExecutionSource
+			? { executionSource: parsedExecutionSource }
+			: {}),
+		...(parsedRelayKeyBinding
+			? { relayKeyBinding: parsedRelayKeyBinding }
+			: {}),
 		hostSessionRef: nullableText(input.hostSessionRef),
 		runtimeCursor: nullableText(input.runtimeCursor),
 		...(input.runtimeTerminalEventSeen === true

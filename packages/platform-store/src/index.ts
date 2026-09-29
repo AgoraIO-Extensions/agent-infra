@@ -24,6 +24,13 @@ export {
 	PostgresAgentManagementTransactionV1,
 } from "./agent-management.ts";
 export {
+	type ApiIdentityAuditActionV1,
+	type ApiIdentityAuditInputV1,
+	type ApiIdentityAuditReasonV1,
+	type PostgresApiIdentityStoreOptionsV1,
+	PostgresApiIdentityStoreV1,
+} from "./api-identity.ts";
+export {
 	type PostgresApplicationFoundationOptions,
 	PostgresApplicationFoundationTransactionV1,
 } from "./application-foundation.ts";
@@ -43,7 +50,6 @@ export {
 	type PostgresPlatformAuditOptionsV1,
 	PostgresPlatformAuditQueryV1,
 } from "./audit.ts";
-export { PostgresLdapSessionStoreV1 } from "./browser-session.ts";
 export {
 	ConversationDispatchStoreError,
 	openPostgresConversationDispatchStoreV1,
@@ -72,6 +78,7 @@ export {
 	type PostgresConversationQueryOptionsV1,
 	PostgresConversationQueryV1,
 } from "./conversation-query.ts";
+export { PostgresExecutionKeyReaderV4 } from "./execution-key-reader-v4.js";
 export { PostgresFileStoreV1 } from "./files.js";
 export {
 	openPostgresPlatformIdempotencyStore,
@@ -108,6 +115,10 @@ export {
 	PostgresSecretKeyRotationStoreV1,
 	SecretKeyRotationStoreError,
 } from "./secret-key-rotation.ts";
+export {
+	type PostgresTaskApiAuditOptionsV1,
+	PostgresTaskApiAuditStoreV1,
+} from "./task-api-audit.js";
 export {
 	PostgresTaskAuthorizationStoreV1,
 	TaskAuthorizationStoreError,

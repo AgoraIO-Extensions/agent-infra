@@ -37,7 +37,7 @@ export interface ApplicationFoundationSnapshot {
 		applicantId: string;
 		name: string;
 		description: string;
-		status: "pending_approval";
+		status: "pending_approval" | "creating";
 		traceId: string;
 		requestId: string;
 		submittedAt: Date;
@@ -79,7 +79,7 @@ export interface ApplicationFoundationSnapshot {
 		traceId: string;
 		requestId: string;
 		agentId: string;
-		actorType: "user";
+		actorType: "user" | "application";
 		actorId: string;
 		action: "agent.application.submitted";
 		targetType: "agent_application";
@@ -109,7 +109,9 @@ const emptySnapshot = (): ApplicationFoundationSnapshot => ({
 function accessTargetKey(target: AgentConfigurationAccessTargetV1): string {
 	return target.kind === "user"
 		? `user\0${target.userId}`
-		: `organization\0${target.organizationId}`;
+		: target.kind === "organization"
+			? `organization\0${target.organizationId}`
+			: `application\0${target.applicationId}`;
 }
 
 function validDate(value: unknown): value is Date {
@@ -149,10 +151,11 @@ function validatePlan(plan: ApplicationFoundationWritePlanV1): void {
 		applicationId: plan.application.applicationId,
 		agentId: plan.agent.agentId,
 		configurationRevision: 1,
-		status: "pending_approval",
+		status: plan.application.status,
 	};
 	const ownerIds = [...plan.access.ownerIds];
 	const targetKeys = plan.access.availability.map(accessTargetKey);
+	const principal = plan.principal;
 	if (
 		plan.schemaVersion !== 1 ||
 		!validText(plan.agent.agentId) ||
@@ -164,8 +167,14 @@ function validatePlan(plan: ApplicationFoundationWritePlanV1): void {
 		!validText(plan.application.name, 800) ||
 		Array.from(plan.application.name).length > 200 ||
 		!validText(plan.application.description, 65_536) ||
-		plan.application.applicantId !== plan.auditEvent.actorId ||
-		plan.application.status !== "pending_approval" ||
+		(plan.auditEvent.actorType === "user"
+			? plan.application.applicantId !== plan.auditEvent.actorId
+			: plan.auditEvent.actorType !== "application") ||
+		(principal !== undefined &&
+			(principal.kind !== plan.auditEvent.actorType ||
+				principal.id !== plan.auditEvent.actorId)) ||
+		(plan.application.status !== "pending_approval" &&
+			plan.application.status !== "creating") ||
 		plan.configurationRevision.agentId !== plan.agent.agentId ||
 		plan.configurationRevision.revision !== 1 ||
 		configuration.agentId !== plan.agent.agentId ||
@@ -184,7 +193,9 @@ function validatePlan(plan: ApplicationFoundationWritePlanV1): void {
 		plan.access.availability.some((target) =>
 			target.kind === "user"
 				? !validText(target.userId)
-				: !validText(target.organizationId),
+				: target.kind === "organization"
+					? !validText(target.organizationId)
+					: !validText(target.applicationId),
 		) ||
 		!sameValue(plan.result, expectedResult) ||
 		!validText(plan.idempotency.key, 128) ||
@@ -204,7 +215,8 @@ function validatePlan(plan: ApplicationFoundationWritePlanV1): void {
 		!validText(plan.application.traceId) ||
 		!validText(plan.application.requestId) ||
 		plan.auditEvent.agentId !== plan.agent.agentId ||
-		plan.auditEvent.actorType !== "user" ||
+		(plan.auditEvent.actorType !== "user" &&
+			plan.auditEvent.actorType !== "application") ||
 		plan.auditEvent.action !== "agent.application.submitted" ||
 		plan.auditEvent.targetType !== "agent_application" ||
 		plan.auditEvent.targetId !== plan.application.applicationId ||

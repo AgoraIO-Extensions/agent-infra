@@ -35,6 +35,7 @@ export interface AgentAccessAuthorityContextV1 {
 		readonly accountStatus: "active" | "disabled" | "revoked";
 	}[];
 	readonly organizationIds: readonly string[];
+	readonly applicationIds?: readonly string[];
 }
 
 export interface AgentAccessUpdatePlanFragmentV1 {
@@ -107,7 +108,22 @@ function parseCommand(input: unknown): AgentAccessUpdatePolicyCommandV1 {
 function parseAuthority(input: unknown): AgentAccessAuthorityContextV1 {
 	try {
 		const values = snapshotDataObject(input);
-		exact(values, ["schemaVersion", "users", "organizationIds"]);
+		const keys = Object.keys(values);
+		if (
+			keys.length < 3 ||
+			!keys.includes("schemaVersion") ||
+			!keys.includes("users") ||
+			!keys.includes("organizationIds") ||
+			keys.some(
+				(key) =>
+					key !== "schemaVersion" &&
+					key !== "users" &&
+					key !== "organizationIds" &&
+					key !== "applicationIds",
+			)
+		) {
+			invalidInput();
+		}
 		if (values.schemaVersion !== 1) invalidInput();
 		const users = dataArray(values.users).map((userInput) => {
 			const user = snapshotDataObject(userInput);
@@ -133,6 +149,9 @@ function parseAuthority(input: unknown): AgentAccessAuthorityContextV1 {
 			schemaVersion: 1,
 			users,
 			organizationIds: textArray(values.organizationIds, true),
+			...(Object.hasOwn(values, "applicationIds")
+				? { applicationIds: textArray(values.applicationIds, true) }
+				: {}),
 		};
 	} catch {
 		throw new AgentManagementError("unavailable");
@@ -162,6 +181,7 @@ export function decideAgentAccessUpdatePolicy(
 	const users = new Map(
 		authority.users.map(({ userId, accountStatus }) => [userId, accountStatus]),
 	);
+	const applications = new Set(authority.applicationIds ?? []);
 	if (users.get(actor.userId) !== actor.accountStatus) {
 		throw new AgentManagementError("unavailable");
 	}
@@ -225,7 +245,9 @@ export function decideAgentAccessUpdatePolicy(
 			availability.some((target) =>
 				target.kind === "user"
 					? users.get(target.userId) !== "active"
-					: !authority.organizationIds.includes(target.organizationId),
+					: target.kind === "organization"
+						? !authority.organizationIds.includes(target.organizationId)
+						: !applications.has(target.applicationId),
 			))
 	) {
 		return {

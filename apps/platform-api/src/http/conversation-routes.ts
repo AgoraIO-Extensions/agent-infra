@@ -15,6 +15,7 @@ import {
 	MessageCommandRequestV1Schema,
 	MessageProjectionV1Schema,
 	ModelSelectionUpdateRequestV1Schema,
+	PersistedConversationEventV2Schema,
 	RegenerateCommandRequestV1Schema,
 	resolvePilotReplaySelectorV1,
 	StopCommandRequestV1Schema,
@@ -25,6 +26,7 @@ import {
 	ConversationExecutionError,
 	type ConversationExecutionUseCaseV1,
 	type ConversationStateResultV1,
+	parseConversationOperationFactV2,
 	parseConversationPersistedEventPayloadV1,
 	parseTaskAuthorizationBoundaryV1,
 	projectConversationExecutionV1,
@@ -304,13 +306,9 @@ function project<T>(projection: () => T, traceId: string): T {
 	}
 }
 
-function eventProjection(input: ConversationQueryEventV1): SseMessage {
-	const persisted = parseConversationPersistedEventPayloadV1(
-		input.eventPayload,
-	);
-	if (persisted.type !== input.eventType) {
-		throw new Error("Invalid persisted event type");
-	}
+export function eventProjection(
+	input: ConversationQueryEventV1,
+): ReturnType<typeof ConversationSseMessageV2Schema.parse> {
 	const base = {
 		schemaVersion: 1,
 		kind: "event",
@@ -321,6 +319,24 @@ function eventProjection(input: ConversationQueryEventV1): SseMessage {
 		conversationCursor: input.conversationCursor,
 		occurredAt: input.occurredAt.toISOString(),
 	};
+	if (input.eventType === "execution.operation") {
+		if (input.eventSchemaVersion !== 2)
+			throw new Error("Operation event schema is invalid");
+		return PersistedConversationEventV2Schema.parse({
+			...base,
+			schemaVersion: 2,
+			type: "execution.operation",
+			payload: parseConversationOperationFactV2(input.eventPayload),
+		});
+	}
+	if (input.eventSchemaVersion !== undefined)
+		throw new Error("Persisted event schema is invalid");
+	const persisted = parseConversationPersistedEventPayloadV1(
+		input.eventPayload,
+	);
+	if (persisted.type !== input.eventType) {
+		throw new Error("Invalid persisted event type");
+	}
 	let projected: unknown;
 	if (persisted.type === "text.delta") {
 		projected = {
@@ -381,6 +397,19 @@ function eventProjection(input: ConversationQueryEventV1): SseMessage {
 				reason: persisted.reason,
 			},
 		};
+	} else if (persisted.type === "task.status") {
+		if (persisted.reason)
+			return ConversationSseMessageV2Schema.parse({
+				...base,
+				schemaVersion: 2,
+				type: "task.status",
+				payload: { status: persisted.status, reason: persisted.reason },
+			});
+		projected = {
+			...base,
+			type: "task.status",
+			payload: { status: persisted.status },
+		};
 	} else {
 		throw new Error("Unsupported persisted event type");
 	}
@@ -413,11 +442,15 @@ function eventProjectionV2(input: ConversationQueryEventV1): SseMessageV2 {
 function eventProjectionForV1(
 	input: ConversationQueryEventV1,
 ): SseMessage | undefined {
-	if (input.eventSchemaVersion === 2) {
-		eventProjectionV2(input);
-		return undefined;
-	}
-	return eventProjection(input);
+	const projected = eventProjectionV2(input);
+	if (projected.schemaVersion === 1) return projected;
+	if (projected.type === "task.status")
+		return ConversationSseMessageV1Schema.parse({
+			...projected,
+			schemaVersion: 1,
+			payload: { status: projected.payload.status },
+		});
+	return undefined;
 }
 
 function failure(
@@ -882,6 +915,24 @@ export function registerConversationRoutes(
 				metadata.traceId,
 			);
 			if (!detail) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+			const v2 = context.req.header("x-agent-infra-v2") === "1";
+			if (v2) {
+				return context.json(
+					project(
+						() =>
+							ConversationDetailProjectionV2Schema.parse({
+								schemaVersion: 2,
+								conversation: conversationProjection(
+									detail.conversation,
+									effective,
+								),
+								messages: messageProjections(detail),
+								events: detail.events.map(eventProjection),
+							}),
+						metadata.traceId,
+					),
+				);
+			}
 			return context.json(
 				project(
 					() =>
@@ -1100,6 +1151,23 @@ export function registerConversationRoutes(
 					metadata.traceId,
 				);
 				if (!result) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+				if (context.req.header("x-agent-infra-v2") === "1") {
+					const projection = project(
+						() => executionProjection(result),
+						metadata.traceId,
+					);
+					return context.json(
+						project(
+							() =>
+								ExecutionDetailProjectionV2Schema.parse({
+									...projection,
+									schemaVersion: 2,
+									events: result.events.map(eventProjection),
+								}),
+							metadata.traceId,
+						),
+					);
+				}
 				return context.json(
 					project(() => executionProjection(result), metadata.traceId),
 				);

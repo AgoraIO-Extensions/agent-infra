@@ -10,6 +10,7 @@ import {
 	type ConversationNormalizedEventV1,
 	type ConversationOperationFactV2,
 	type ConversationPersistedEventPayloadV1,
+	decideConversationStopConfirmationStatusV1,
 	type FileRecordV1,
 	isConfirmedResultFileV1,
 	type PersistedRuntimeConversationEventV1,
@@ -785,6 +786,14 @@ export class PostgresConversationEventTransactionV1
 		const persistedRequest = request(requestInput);
 		if (typeof decide !== "function") unavailable();
 		return this.#transaction(async (transaction) => {
+			// Match stop and dispatch: outbox before Conversation, then Execution.
+			if (persistedRequest.command.dispatchLease) {
+				const lockedOutbox = await transaction<{ id: string }[]>`
+					select id from platform.outbox_items
+					where id = ${persistedRequest.command.dispatchLease.itemId} for update
+				`;
+				if (lockedOutbox.length !== 1) unavailable();
+			}
 			const conversation = await lockConversation(
 				transaction,
 				persistedRequest.command.conversationId,
@@ -897,11 +906,19 @@ export class PostgresConversationEventTransactionV1
 			`;
 			if (updatedConversation.length !== 1) unavailable();
 			if (plan.transition) {
+				const [stop] = await transaction<{ timed_out: boolean }[]>`
+					select confirmation_timed_out_at is not null as timed_out
+					from platform.conversation_stops where execution_id = ${plan.event.executionId}
+				`;
+				const executionStatus = decideConversationStopConfirmationStatusV1({
+					executionStatus: plan.transition.executionStatus,
+					confirmationTimedOut: stop?.timed_out === true,
+				});
 				const transitionedExecution = await transaction<
 					{ execution_id: string }[]
 				>`
 					update platform.conversation_executions
-					set status = ${plan.transition.executionStatus}, updated_at = now()
+					set status = ${executionStatus}, updated_at = now()
 					where execution_id = ${plan.event.executionId}
 						and conversation_id = ${plan.event.conversationId}
 						and session_generation = ${plan.sessionGeneration}
@@ -913,6 +930,13 @@ export class PostgresConversationEventTransactionV1
 						returning execution_id
 				`;
 				if (transitionedExecution.length !== 1) unavailable();
+				if (
+					["completed", "failed", "cancelled"].includes(
+						plan.transition.executionStatus,
+					)
+				) {
+					await transaction`update platform.conversation_stops set status = 'completed', updated_at = now() where execution_id = ${plan.event.executionId}`;
+				}
 				const transitionedConversation = await transaction<{ id: string }[]>`
 					update platform.conversations
 					set status = ${plan.transition.conversationStatus}, updated_at = now()

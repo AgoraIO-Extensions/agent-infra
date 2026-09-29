@@ -2,6 +2,7 @@ import {
 	type ConversationExecutionAuthorityV1,
 	type ConversationExecutionConversationStateV1,
 	type ConversationModelConfigurationV1,
+	isTaskPrincipalChannelV1,
 	parseTaskAuthorizationBoundaryV1,
 } from "@agent-infra/platform-core";
 import {
@@ -43,7 +44,10 @@ export function parseAuthority(
 			: parseTaskAuthorizationBoundaryV1(input.taskBoundary);
 	if (
 		taskBoundary &&
-		(taskBoundary.principal.kind !== "user" ||
+		(!isTaskPrincipalChannelV1(
+			taskBoundary.principal,
+			taskBoundary.channelId,
+		) ||
 			taskBoundary.principal.id !== input.actorId ||
 			taskBoundary.agentId !== input.agentId ||
 			taskBoundary.channelId !== input.channelId ||

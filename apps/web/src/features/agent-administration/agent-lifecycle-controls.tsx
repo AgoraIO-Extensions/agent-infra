@@ -35,12 +35,14 @@ type AgentLifecycleControlsProps = {
 };
 
 const commandLabels = {
+	start: "启动 Agent",
 	stop: "停止 Agent",
 	restart: "重启 Agent",
 	retry_creation: "重试创建",
 	disable: "停用 Agent",
 } satisfies Record<AgentLifecycleCommand, string>;
 const commandProgressLabels = {
+	start: "启动中…",
 	stop: "停止中…",
 	restart: "重启中…",
 	retry_creation: "重试创建中…",
@@ -80,7 +82,7 @@ function visibleLifecycleCommands(
 		commands.push("stop", "restart");
 	}
 	if (isOwner && agent.managementStatus === "stopped") {
-		commands.push("restart");
+		commands.push("start");
 	}
 	if (
 		(isOwner || isAdministrator) &&
@@ -101,6 +103,11 @@ function visibleLifecycleCommands(
 }
 
 const confirmationCopy = {
+	start: {
+		title: "启动 Agent？",
+		description: "启动期间暂不能发送消息，已有历史保留。",
+		confirm: "确认启动",
+	},
 	stop: {
 		title: "停止 Agent？",
 		description: "停止后暂不能发送消息，个人历史与配置保留。",

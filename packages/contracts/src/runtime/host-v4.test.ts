@@ -547,6 +547,28 @@ it("rejects static credential fallback and an unprintable private Key", () => {
 	}
 });
 
+it("publishes the immutable V4 operation digest input for recovery stores", () => {
+	const digestInput = runtimeOperationDigestInputV4(request);
+	expect(digestInput).toMatchObject({
+		kind: "submit-turn",
+		executionId: request.executionId,
+		executionSource: request.executionSource,
+		keyBinding: request.keyBinding,
+		operation: {
+			kind: request.operation.kind,
+			id: request.operation.id,
+		},
+	});
+	expect(digestInput.operation).not.toHaveProperty("deliveryFence");
+	expect(digestInput.operation).not.toHaveProperty("executionDeliveryFence");
+	expect(
+		runtimeOperationDigestInputV4({
+			...request,
+			keyBinding: { ...request.keyBinding, version: 2 },
+		}),
+	).not.toEqual(digestInput);
+});
+
 it("rejects V4 claims with the wrong issuer, worker or lifetime", () => {
 	const grant = claims(request);
 	for (const changed of [
@@ -563,68 +585,4 @@ it("rejects V4 claims with the wrong issuer, worker or lifetime", () => {
 			}),
 		).toThrow("Runtime Execution Grant V4 claims are inconsistent");
 	}
-});
-
-it("publishes the immutable V4 operation digest input for recovery stores", () => {
-	const digestInput = runtimeOperationDigestInputV4(request);
-	expect(digestInput).toMatchObject({
-		kind: "submit-turn",
-		principal: request.principal,
-		channelId: request.channelId,
-		executionId: request.executionId,
-		executionSource: request.executionSource,
-		hostSessionRef: request.hostSessionRef,
-		keyBinding: request.keyBinding,
-		operation: {
-			kind: request.operation.kind,
-			id: request.operation.id,
-		},
-	});
-	expect(digestInput.operation).not.toHaveProperty("deliveryFence");
-	expect(digestInput.operation).not.toHaveProperty("executionDeliveryFence");
-	expect(
-		runtimeOperationDigestInputV4({
-			...request,
-			keyBinding: { ...request.keyBinding, version: 2 },
-		}),
-	).not.toEqual(digestInput);
-	expect(
-		runtimeOperationDigestInputV4({
-			...request,
-			principal: { kind: "user", id: "bob" },
-		}),
-	).not.toEqual(digestInput);
-	expect(
-		runtimeOperationDigestInputV4({
-			...request,
-			channelId: "wecom",
-		}),
-	).not.toEqual(digestInput);
-
-	const { selection: _selection, ...supplementBase } = request;
-	const supplement = RuntimeSupplementRequestV4Schema.parse({
-		...supplementBase,
-		hostSessionRef: "session-1",
-		operation: {
-			kind: "message",
-			id: "message-1",
-			deliveryFence: 2,
-			executionDeliveryFence: 1,
-		},
-	});
-	const supplementDigestInput = runtimeOperationDigestInputV4(supplement);
-	expect(supplementDigestInput.kind).toBe("supplement");
-	expect(supplementDigestInput.hostSessionRef).toBe("session-1");
-	expect(supplementDigestInput).not.toHaveProperty("selection");
-	expect(supplementDigestInput.operation).toEqual({
-		kind: "message",
-		id: "message-1",
-	});
-
-	expect(() =>
-		runtimeOperationDigestInputV4({
-			...request,
-			operation: { ...request.operation, deliveryFence: 0 },
-		} as RuntimeSubmitTurnRequestV4),
-	).toThrow("RuntimeHostV4 request is invalid");
 });

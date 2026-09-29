@@ -636,7 +636,6 @@ describe("Relay Key version authority on PostgreSQL", () => {
 			await client.end();
 		}
 	}, 120_000);
-
 	it("serializes concurrent replacement and preserves pinned versions after revoke", async () => {
 		if (!database) throw new Error("PostgreSQL test database is unavailable");
 		const client = postgres(database.databaseUrl, { max: 4 });

@@ -14,7 +14,6 @@ import {
 	applicationFoundationConfigurationV1,
 	applicationFoundationTransactionConformance,
 	captureApplicationFoundationSubmission,
-	captureApplicationFoundationWritePlan,
 	emptyApplicationFoundationSnapshot,
 } from "../../platform-core/src/application-foundation.conformance.ts";
 import {
@@ -324,8 +323,18 @@ describe("PostgreSQL application foundation transaction", () => {
 		const adapter = new builtStore.PostgresApplicationFoundationTransactionV1({
 			databaseUrl,
 		});
-		const plan = await captureApplicationFoundationWritePlan();
+		const { plan, attachments } =
+			await captureApplicationFoundationSubmission();
+		const materializedAttachments =
+			await materializeSecretRecordFixtureAttachments(attachments);
 		const malicious = [
+			{
+				...structuredClone(plan),
+				result: {
+					...structuredClone(plan.result),
+					status: "creating",
+				},
+			},
 			{
 				...structuredClone(plan),
 				access: {
@@ -343,7 +352,9 @@ describe("PostgreSQL application foundation transaction", () => {
 		] as readonly ApplicationFoundationWritePlanV1[];
 		try {
 			for (const invalid of malicious) {
-				await expect(adapter.commit(invalid)).rejects.toMatchObject({
+				await expect(
+					adapter.commit(invalid, materializedAttachments),
+				).rejects.toMatchObject({
 					name: "ApplicationFoundationError",
 					code: "persistence_failed",
 				});
@@ -433,6 +444,41 @@ describe("PostgreSQL application foundation transaction", () => {
 				configuration.close(),
 				query.close(),
 			]);
+		}
+	});
+
+	it("marks API-created applications eligible for workload reconciliation", async () => {
+		await resetDatabase();
+		const submission =
+			new builtStore.PostgresApplicationFoundationTransactionV1({
+				databaseUrl,
+			});
+		try {
+			const foundation = createApplicationFoundationUseCaseV1({
+				transaction: submission,
+				...applicationFoundationAdmissionDependenciesV1(),
+			});
+			await foundation.submit(
+				applicationFoundationCommandV1,
+				{
+					...applicationFoundationActorContextV1,
+					principal: { kind: "application", id: "application-caller" },
+					creationMode: "api",
+				},
+				createSecretRecordFixtureResolver(),
+			);
+			const [application] = await adminClient`
+				select status, management_revision, approval_revision
+				from platform.agent_applications
+				where id = ${applicationFoundationCommandV1.applicationId}
+			`;
+			expect(application).toMatchObject({
+				status: "creating",
+				management_revision: "1",
+				approval_revision: "1",
+			});
+		} finally {
+			await submission.close();
 		}
 	});
 

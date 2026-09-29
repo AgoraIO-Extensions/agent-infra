@@ -14,7 +14,7 @@ const dockerfiles = new Map([
 
 const digestPattern = /@sha256:[a-f0-9]{64}$/;
 
-test("Platform Worker typecheck waits for its own build and dist-backed dependencies", async () => {
+test("typechecks wait for their own build and dist-backed workspace dependencies", async () => {
 	const manifest = JSON.parse(
 		await readFile("apps/platform-worker/package.json", "utf8"),
 	);
@@ -24,7 +24,7 @@ test("Platform Worker typecheck waits for its own build and dist-backed dependen
 	assert.deepEqual(
 		turbo.tasks["check-types"].dependsOn,
 		["build", "^build", "^check-types"],
-		"typechecks must wait for package and dependency builds before reading dist exports",
+		"typechecks must not read dist while their own build replaces it",
 	);
 });
 

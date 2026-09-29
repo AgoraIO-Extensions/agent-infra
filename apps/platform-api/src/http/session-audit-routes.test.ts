@@ -122,6 +122,39 @@ describe("session and audit routes", () => {
 		expect(JSON.stringify(body)).not.toContain("details");
 	});
 
+	it("preserves application audit actors in both public versions", async () => {
+		const { app, identityAdapter, audit } = createApp();
+		audit.listAudit.mockResolvedValue({
+			items: [
+				{
+					schemaVersion: 1,
+					auditId: "audit-application",
+					actor: { kind: "application", actorId: "application-1" },
+					action: "api.agent.grant.granted",
+					subject: { kind: "grant", subjectId: "agent-1" },
+					result: "succeeded",
+					summary: "api.agent.grant.granted",
+					occurredAt: new Date("2026-09-02T06:00:00.000Z"),
+					traceId: "trace-application",
+				},
+			],
+			nextCursor: null,
+		});
+
+		for (const [path, schema] of [
+			["/api/v1/admin/audit", PlatformAuditProjectionV1Schema],
+			["/api/v2/admin/audit", PlatformAuditProjectionV2Schema],
+		] as const) {
+			const response = await app.request(path);
+			expect(response.status).toBe(200);
+			const item = ((await response.json()) as { items: unknown[] }).items[0];
+			expect(schema.parse(item)).toMatchObject({
+				actor: { kind: "application", actorId: "application-1" },
+			});
+		}
+		expect(identityAdapter.hydrateUsers).not.toHaveBeenCalled();
+	});
+
 	it("rejects non-administrators before querying audit persistence", async () => {
 		const { app, audit } = createApp({
 			...activeIdentity,

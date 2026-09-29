@@ -1,3 +1,4 @@
+import { createPrivateKey, X509Certificate } from "node:crypto";
 import {
 	type AgentWorkloadDesiredV1,
 	type SecretActivationFenceV1,
@@ -9,8 +10,11 @@ import {
 } from "@agent-infra/contracts/workload";
 import {
 	type RuntimeModelProjectionV1,
+	type RuntimeModelProjectionV4,
 	runtimeModelInjectionV1,
+	runtimeModelInjectionV4,
 	validateRuntimeModelProjectionV1,
+	validateRuntimeModelProjectionV4,
 } from "@agent-infra/model-catalog";
 import type {
 	KubernetesObject,
@@ -94,7 +98,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	readonly client: WorkerKubernetesClientV1;
 	readonly policy: KubernetesWorkloadPolicyV1;
 	/** Supplied from Worker persistent state, never restored from live annotations. */
-	readonly modelProjection?: RuntimeModelProjectionV1;
+	readonly modelProjection?:
+		| RuntimeModelProjectionV1
+		| RuntimeModelProjectionV4;
 	readonly probe: (input: {
 		readonly desired: AgentWorkloadDesiredV1;
 		readonly serviceOrigin: string;
@@ -106,12 +112,53 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	const modelProjection =
 		options.modelProjection === undefined
 			? undefined
-			: validateRuntimeModelProjectionV1(options.modelProjection);
+			: options.modelProjection.schemaVersion === 4
+				? validateRuntimeModelProjectionV4(options.modelProjection)
+				: validateRuntimeModelProjectionV1(options.modelProjection);
 	const modelInjection = modelProjection
-		? runtimeModelInjectionV1(modelProjection)
+		? modelProjection.schemaVersion === 4
+			? runtimeModelInjectionV4(modelProjection)
+			: runtimeModelInjectionV1(modelProjection)
 		: undefined;
+	const keyedTransport = modelProjection?.schemaVersion === 4;
+	async function transportTlsValid(agentId: string): Promise<boolean> {
+		if (!keyedTransport) return true;
+		const name = workloadResourceNameV1(agentId);
+		const secret = await client.read<V1Secret>("Secret", `${name}-tls`);
+		if (
+			secret?.type !== "kubernetes.io/tls" ||
+			!secret.data?.["tls.crt"] ||
+			!secret.data["tls.key"]
+		)
+			return false;
+		try {
+			const certificate = new X509Certificate(
+				Buffer.from(secret.data["tls.crt"], "base64"),
+			);
+			const privateKey = createPrivateKey(
+				Buffer.from(secret.data["tls.key"], "base64"),
+			);
+			return (
+				!secret.metadata?.deletionTimestamp &&
+				Date.parse(certificate.validFrom) <= Date.now() &&
+				Date.parse(certificate.validTo) > Date.now() &&
+				certificate.checkPrivateKey(privateKey) &&
+				[name, `${name}-probe`].every(
+					(service) =>
+						certificate.checkHost(`${service}.${policy.namespace}.svc`, {
+							subject: "never",
+							wildcards: false,
+							partialWildcards: false,
+						}) !== undefined,
+				)
+			);
+		} catch {
+			return false;
+		}
+	}
 	if (
 		client.namespace !== policy.namespace ||
+		(keyedTransport && !policy.runtimeAuth) ||
 		!Object.keys(policy.workerSelector).length ||
 		!Object.keys(policy.routeSelector).length ||
 		Object.keys(policy.platformAuthAnnotations).some((key) =>
@@ -289,6 +336,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		},
 	): Promise<"pending" | "healthy" | "unhealthy" | "drifted"> {
 		const value = desired(input);
+		if (!(await transportTlsValid(value.agentId))) return "drifted";
 		if (
 			closedRouteFence &&
 			(routeMode !== "closed" ||
@@ -499,7 +547,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		try {
 			return (await options.probe({
 				desired: value,
-				serviceOrigin: `http://${workloadResourceNameV1(value.agentId)}-probe.${policy.namespace}.svc:${value.service.port}`,
+				serviceOrigin: `${keyedTransport ? "https" : "http"}://${workloadResourceNameV1(value.agentId)}-probe.${policy.namespace}.svc:${value.service.port}`,
 			}))
 				? "healthy"
 				: "unhealthy";
@@ -1068,6 +1116,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				throw new WorkloadKubernetesError("conflict");
 			if (existingPvc && !matchesPersistentVolumeClaimSpec(existingPvc.spec))
 				throw new WorkloadKubernetesError("conflict");
+			if (value.replicas > 0 && !(await transportTlsValid(value.agentId)))
+				throw new WorkloadKubernetesError("unavailable");
 			if (!current && value.replicas === 0) {
 				const pvc = await client.read<V1PersistentVolumeClaim>(
 					"PersistentVolumeClaim",
@@ -1338,6 +1388,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 										httpGet: {
 											path: value.health.path,
 											port: value.service.port,
+											...(keyedTransport ? { scheme: "HTTPS" as const } : {}),
 										},
 										timeoutSeconds: value.health.timeoutSeconds,
 										failureThreshold: value.health.failureThreshold,
@@ -1349,6 +1400,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 											mountPath: value.persistentVolume.mountPath,
 										},
 										{ name: "runtime-tmp", mountPath: "/tmp" },
+										...(keyedTransport
+											? [
+													{
+														name: "runtime-host-tls",
+														mountPath: "/run/runtime-host-tls",
+														readOnly: true,
+													},
+												]
+											: []),
 									],
 								},
 							],
@@ -1363,6 +1423,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 									name: "runtime-tmp",
 									emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
 								},
+								...(keyedTransport
+									? [
+											{
+												name: "runtime-host-tls",
+												secret: { secretName: `${name}-tls`, optional: false },
+											},
+										]
+									: []),
 							],
 						},
 					},

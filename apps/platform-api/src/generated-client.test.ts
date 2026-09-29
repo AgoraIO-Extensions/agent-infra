@@ -1,3 +1,4 @@
+import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { describe, expect, it, vi } from "vitest";
 
 import { createPlatformApp } from "./app.js";
@@ -18,12 +19,17 @@ const generatedSdkV2 = await import(
 const { createClient } = generatedClient;
 const { createClient: createClientV2 } = generatedClientV2;
 const {
-	getAgent,
+	commandAgentLifecycle,
+	createAgentApplication,
 	createConversation,
+	decideAgentApplication,
+	getAgent,
+	getAgentApplication,
 	getConversation,
 	getCurrentSession,
 	getExecutionDetail,
 	listAgentApplications,
+	listAgents,
 	listConversations,
 	listPendingAgentApplications,
 	listPlatformAudit,
@@ -31,21 +37,17 @@ const {
 	stopExecution,
 	streamConversationEvents,
 	submitMessage,
+	updateAgentApplication,
+	updateAgentConfiguration,
 	updateConversationModelSelection,
+	withdrawAgentApplication,
 } = generatedSdk;
 const {
-	commandAgentLifecycleV2,
-	createAgentApplicationV2,
-	decideAgentApplicationV2,
 	getAgentV2,
-	getAgentApplicationV2,
-	listAgentApplicationsV2,
+	getConversationV2,
+	getExecutionDetailV2,
 	listAgentsV2,
-	listPendingAgentApplicationsV2,
 	listPlatformAuditV2,
-	updateAgentApplicationV2,
-	updateAgentConfigurationV2,
-	withdrawAgentApplicationV2,
 } = generatedSdkV2;
 
 const identity = {
@@ -148,12 +150,13 @@ const agentProjection = {
 	interactionUrl: null,
 };
 const applicationBody = {
-	schemaVersion: 2 as const,
+	schemaVersion: 1 as const,
 	name: applicationRecord.name,
 	description: applicationRecord.description,
 	source: { kind: "standard" as const, templateId: "template-1" },
 	coOwnerIds: [],
 	availability: management.availability,
+	actions: [],
 	environment: [],
 	secrets: [],
 };
@@ -349,30 +352,37 @@ function testApp() {
 }
 
 describe("generated Pilot browser client", () => {
-	it("reports retired V1 management operations through the published client", async () => {
+	it("consumes strict V2 Agent list and detail while retaining the V1 projection", async () => {
 		const { app, resolve } = testApp();
-		const client = createClient({
+		const requests: string[] = [];
+		const client = createClientV2({
 			baseUrl: "https://platform.example.test",
-			fetch: async (input: string | URL | Request, init?: RequestInit) =>
-				app.fetch(input instanceof Request ? input : new Request(input, init)),
+			fetch: async (input: string | URL | Request, init?: RequestInit) => {
+				const request =
+					input instanceof Request ? input : new Request(input, init);
+				requests.push(new URL(request.url).pathname);
+				return app.fetch(request);
+			},
 		});
-		const results = await Promise.all([
-			listAgentApplications({ client }),
-			listPendingAgentApplications({ client }),
-			getAgent({ client, path: { agentId: "agent-1" } }),
-		]);
-
-		for (const result of results) {
-			expect(result.response.status).toBe(400);
-			expect(result.error).toMatchObject({
-				code: "INVALID_REQUEST",
-				retryable: false,
-			});
-		}
-		expect(resolve).not.toHaveBeenCalled();
+		const list = await listAgentsV2({ client });
+		const detail = await getAgentV2({ client, path: { agentId: "agent-1" } });
+		expect(requests).toEqual(["/api/v2/agents", "/api/v2/agents/agent-1"]);
+		expect([list.response.status, detail.response.status]).toEqual([200, 200]);
+		expect([list.error, detail.error]).toEqual([undefined, undefined]);
+		expect(list.data.nextCursor).toBeNull();
+		expect(list.data.items).toEqual([detail.data]);
+		const projection = AgentProjectionV2Schema.parse(detail.data);
+		expect(projection.agentId).toBe("agent-1");
+		expect(projection.configuration).not.toHaveProperty("actions");
+		expect(resolve).toHaveBeenCalledTimes(2);
+		const owned = await listAgentsV2({ client, query: { scope: "owner" } });
+		expect(owned.response.status).toBe(200);
+		expect(owned.data.items).toEqual([detail.data]);
+		const original = await app.request("/api/v1/agents/agent-1");
+		expect(await original.json()).toEqual(agentProjection);
 	});
 
-	it("consumes every V2 management operation through the Hono Adapter", async () => {
+	it("consumes every #288 management operation through the Hono Adapter", async () => {
 		const { app, resolve } = testApp();
 		const client = createClient({
 			baseUrl: "https://platform.example.test",
@@ -387,44 +397,44 @@ describe("generated Pilot browser client", () => {
 		const idempotency = { "Idempotency-Key": "generated-client-1" };
 		const results = await Promise.all([
 			getCurrentSession({ client }),
-			listAgentApplicationsV2({ client: clientV2 }),
-			createAgentApplicationV2({
-				client: clientV2,
+			listAgentApplications({ client }),
+			createAgentApplication({
+				client,
 				body: applicationBody,
 				headers: idempotency,
 			}),
-			getAgentApplicationV2({
-				client: clientV2,
+			getAgentApplication({
+				client,
 				path: { applicationId: "application-1" },
 			}),
-			updateAgentApplicationV2({
-				client: clientV2,
+			updateAgentApplication({
+				client,
 				path: { applicationId: "application-1" },
-				body: applicationBody,
+				body: (({ secrets: _secrets, ...body }) => body)(applicationBody),
 				headers: idempotency,
 			}),
-			withdrawAgentApplicationV2({
-				client: clientV2,
+			withdrawAgentApplication({
+				client,
 				path: { applicationId: "application-1" },
 				headers: idempotency,
 			}),
-			listPendingAgentApplicationsV2({ client: clientV2 }),
-			decideAgentApplicationV2({
-				client: clientV2,
+			listPendingAgentApplications({ client }),
+			decideAgentApplication({
+				client,
 				path: { applicationId: "application-1" },
 				body: { schemaVersion: 1, decision: "approve" },
 				headers: idempotency,
 			}),
-			listAgentsV2({ client: clientV2 }),
-			getAgentV2({ client: clientV2, path: { agentId: "agent-1" } }),
-			updateAgentConfigurationV2({
-				client: clientV2,
+			listAgents({ client }),
+			getAgent({ client, path: { agentId: "agent-1" } }),
+			updateAgentConfiguration({
+				client,
 				path: { agentId: "agent-1" },
-				body: { schemaVersion: 2, environment: [] },
+				body: { schemaVersion: 1, environment: [] },
 				headers: idempotency,
 			}),
-			commandAgentLifecycleV2({
-				client: clientV2,
+			commandAgentLifecycle({
+				client,
 				path: { agentId: "agent-1" },
 				body: { schemaVersion: 1, command: "stop" },
 				headers: idempotency,
@@ -515,5 +525,37 @@ describe("generated Conversation client", () => {
 			kind: "control",
 			type: "timeline.reload",
 		});
+	});
+});
+
+describe("generated V2 compatibility client", () => {
+	it("reaches mounted agent and conversation projections", async () => {
+		const { app } = testApp();
+		const client = createClientV2({
+			baseUrl: "https://platform.example.test",
+			fetch: async (input: string | URL | Request, init?: RequestInit) =>
+				app.fetch(input instanceof Request ? input : new Request(input, init)),
+		});
+
+		const responses = await Promise.all([
+			listAgentsV2({ client }),
+			getAgentV2({ client, path: { agentId: "agent-1" } }),
+			getConversationV2({
+				client,
+				path: { conversationId: "conversation-1" },
+			}),
+			getExecutionDetailV2({
+				client,
+				path: {
+					conversationId: "conversation-1",
+					executionId: "execution-1",
+				},
+			}),
+		]);
+
+		expect(responses.map(({ response }) => response.status)).toEqual([
+			200, 200, 200, 200,
+		]);
+		expect(responses.every(({ error }) => error === undefined)).toBe(true);
 	});
 });
