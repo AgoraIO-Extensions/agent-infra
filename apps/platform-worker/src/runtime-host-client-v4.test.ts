@@ -1,5 +1,5 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -470,35 +470,40 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 			});
 		}
 		const operationCursor = "operation-cursor-1";
-		const originalReplay = driver.replayEvents.bind(driver);
-		Object.assign(driver, {
-			replayEvents: async (...args: Parameters<typeof driver.replayEvents>) => {
-				if (args[2] === operationCursor) return [];
-				return [
-					...(await originalReplay(...args)),
-					{
-						schemaVersion: 2,
-						adapterEventKey: "operation-event-1",
-						executionId: request.executionId,
-						cursor: operationCursor,
-						occurredAt: "2026-09-29T00:00:00.000Z",
-						type: "operation",
-						payload: {
-							operationRef: "model-operation-1",
-							attemptRef: "model-attempt-1",
-							phase: "unknown",
-							failureCode: "recovery_unconfirmed",
-							kind: "model",
-							model: {
-								configVersion: "config-1",
-								modelOptionId: "model-a",
-								modelId: "gpt-5.6-sol",
-							},
-						},
-					},
-				];
+		await host.close();
+		await store.close();
+		// The Fake Driver emits V1 events, so seed a durable V2 operation event.
+		const driverState = JSON.parse(await readFile(driverPath, "utf8")) as {
+			sessions: Record<string, { events: unknown[] }>;
+		};
+		const sessions = Object.values(driverState.sessions);
+		if (sessions.length !== 1 || !sessions[0])
+			throw new Error("Expected one durable Fake Driver session");
+		sessions[0].events.push({
+			schemaVersion: 2,
+			adapterEventKey: "operation-event-1",
+			executionId: request.executionId,
+			cursor: operationCursor,
+			occurredAt: "2026-09-29T00:00:00.000Z",
+			type: "operation",
+			payload: {
+				operationRef: "model-operation-1",
+				attemptRef: "model-attempt-1",
+				phase: "unknown",
+				failureCode: "recovery_unconfirmed",
+				kind: "model",
+				model: {
+					configVersion: "config-1",
+					modelOptionId: "model-a",
+					modelId: "gpt-5.6-sol",
+				},
 			},
 		});
+		await writeFile(driverPath, JSON.stringify(driverState), "utf8");
+		store = await FileRuntimeStore.open(storePath);
+		driver = await FakeRuntimeDriver.open(driverPath, [request.selection]);
+		host = await RuntimeHost.open({ ...hostOptions, driver, store });
+		app = createRuntimeHostApp({ ...appOptions, host });
 		const after = {
 			...unsignedRead,
 			requestId: "control-read-after-business-ack",
@@ -557,15 +562,14 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 		const recoveredRead = {
 			...unsignedRead,
 			requestId: "control-read-after-restart",
+			afterCursor: operationCursor,
 		};
 		await expect(
 			client.readEvents({
 				...recoveredRead,
 				grant: await signer.signEvent(recoveredRead, control),
 			}),
-		).resolves.toMatchObject({
-			events: [{ executionId: request.executionId, type: "status" }],
-		});
+		).resolves.toMatchObject({ events: [] });
 		await expect(client.readEvents(signedRead)).rejects.toMatchObject({
 			code: "RUNTIME_GRANT_INVALID",
 		});
