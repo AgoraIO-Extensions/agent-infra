@@ -637,6 +637,9 @@ importers:
 
   packages/observability:
     dependencies:
+      '@agent-infra/platform-core':
+        specifier: workspace:*
+        version: link:../platform-core
       '@opentelemetry/api':
         specifier: 1.9.1
         version: 1.9.1
@@ -658,6 +661,9 @@ importers:
       '@opentelemetry/sdk-trace-base':
         specifier: 2.11.0
         version: 2.11.0(@opentelemetry/api@1.9.1)
+      hono:
+        specifier: ^4.12.32
+        version: 4.13.0
       pino:
         specifier: 10.3.1
         version: 10.3.1
