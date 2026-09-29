@@ -25,13 +25,18 @@ it.each([
 	"activation-unavailable",
 	"commit-unavailable",
 	"replacement-success",
+	"replacement-expired-success",
 	"replacement-wrong-secret",
+	"replacement-disconnected-wrong-secret",
 	"replacement-commit-unavailable",
 	"cross-agent-deployed-bot",
 ] as const)(
 	"manual onboarding %s uses Worker authentication and the existing configuration authority",
 	async (mode) => {
 		const replacement = mode.startsWith("replacement-");
+		const offlineReplacement =
+			mode === "replacement-expired-success" ||
+			mode === "replacement-disconnected-wrong-secret";
 		const recovers = [
 			"timeout",
 			"activation-unavailable",
@@ -44,6 +49,7 @@ it.each([
 				"probe-closed",
 				"concurrent-submit",
 				"replacement-success",
+				"replacement-expired-success",
 			].includes(mode) || recovers;
 		const db = await startPostgresTestDatabase("wecom-setup");
 		const sql = postgres(db.databaseUrl);
@@ -73,7 +79,9 @@ it.each([
 					JSON.stringify({
 						headers: frame.headers,
 						errcode:
-							mode === "wrong-secret" || mode === "replacement-wrong-secret"
+							mode === "wrong-secret" ||
+							mode === "replacement-wrong-secret" ||
+							mode === "replacement-disconnected-wrong-secret"
 								? 40014
 								: 0,
 					}),
@@ -215,6 +223,8 @@ it.each([
 			).rejects.toThrow("unavailable");
 			if (mode === "stale-config")
 				await sql`update platform.agents set authorization_revision='updated' where id='agent'`;
+			if (offlineReplacement)
+				await sql`update platform.wecom_connections set lease_until=now()-interval '1 second',status=${mode === "replacement-expired-success" ? "connected" : "disconnected"} where bot_id='fixture-bot'`;
 			if (
 				mode === "commit-unavailable" ||
 				mode === "replacement-commit-unavailable"
@@ -239,7 +249,9 @@ it.each([
 			expect(saved?.status).toBe(
 				succeeds
 					? "active"
-					: mode === "wrong-secret" || mode === "replacement-wrong-secret"
+					: mode === "wrong-secret" ||
+							mode === "replacement-wrong-secret" ||
+							mode === "replacement-disconnected-wrong-secret"
 						? "auth_failed"
 						: "conflict",
 			);
@@ -260,10 +272,21 @@ it.each([
 			]);
 			expect(current.configuration.revision).toBe(succeeds ? 2 : 1);
 			if (replacement) {
-				expect(await leases.current(oldClaim)).toBe(!succeeds);
+				expect(await leases.current(oldClaim)).toBe(
+					!succeeds && !offlineReplacement,
+				);
 				expect((await store.read("old-binding"))?.status).toBe(
 					succeeds ? "cancelled" : "active",
 				);
+				if (offlineReplacement && !succeeds) {
+					const [connection] = await sql<
+						{ binding_reference: string; fence: string }[]
+					>`select binding_reference,fence from platform.wecom_connections where bot_id='fixture-bot'`;
+					expect(connection).toEqual({
+						binding_reference: "old-binding",
+						fence: "7",
+					});
+				}
 			}
 			expect(JSON.stringify(saved)).not.toContain("fixture-secret");
 			expect(
