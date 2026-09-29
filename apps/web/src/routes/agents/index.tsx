@@ -22,8 +22,9 @@ function AgentsRoute() {
 	const navigate = Route.useNavigate();
 	const query = useAgentDiscovery();
 	const retryable =
-		isRetryableAgentDiscoveryError(query.error) ||
-		(query.data?.kind === "unavailable" && query.data.retryable);
+		(query.isError && isRetryableAgentDiscoveryError(query.error)) ||
+		(query.data?.kind === "unavailable" && query.data.retryable) ||
+		false;
 	return (
 		<main className="platform-content management-content">
 			<div className="space-y-6">

@@ -13,8 +13,9 @@ function MyAgentsRoute() {
 	const query = useMyAgentApplications();
 	const owned = useAgentDiscovery("owner");
 	const applicationsRetryable =
-		isRetryableMyAgentApplicationError(query.error) ||
-		(query.data?.kind === "unavailable" && query.data.retryable);
+		(query.isError && isRetryableMyAgentApplicationError(query.error)) ||
+		(query.data?.kind === "unavailable" && query.data.retryable) ||
+		false;
 
 	return (
 		<main className="platform-content management-content">
@@ -28,7 +29,8 @@ function MyAgentsRoute() {
 				}
 				ownedAgentsRetryable={
 					(owned.isError && isRetryableAgentDiscoveryError(owned.error)) ||
-					(owned.data?.kind === "unavailable" && owned.data.retryable)
+					(owned.data?.kind === "unavailable" && owned.data.retryable) ||
+					false
 				}
 				onRetryApplications={() => void query.refetch()}
 				onRetryOwnedAgents={() => void owned.refetch()}

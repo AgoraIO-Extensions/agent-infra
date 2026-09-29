@@ -82,13 +82,10 @@ function requestError(input: { retryable?: boolean; code?: string } = {}) {
 	});
 }
 
-type RetryableMyAgentApplicationError = Error & { readonly retryable: true };
-
-export function isRetryableMyAgentApplicationError(
-	error: unknown,
-): error is RetryableMyAgentApplicationError {
+export function isRetryableMyAgentApplicationError(error: unknown): boolean {
 	return (
-		error instanceof Error && "retryable" in error && error.retryable === true
+		error instanceof Error &&
+		(!("retryable" in error) || error.retryable === true)
 	);
 }
 

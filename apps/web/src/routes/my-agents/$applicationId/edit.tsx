@@ -26,8 +26,9 @@ function EditAgentApplicationRoute() {
 	const submission = useAgentApplicationSubmission(applicationId);
 	const deployment = useDeploymentConfiguration();
 	const retryable =
-		isRetryableMyAgentApplicationError(query.error) ||
-		(query.data?.kind === "unavailable" && query.data.retryable);
+		(query.isError && isRetryableMyAgentApplicationError(query.error)) ||
+		(query.data?.kind === "unavailable" && query.data.retryable) ||
+		false;
 	if (query.isPending) {
 		return <p aria-live="polite">正在读取申请…</p>;
 	}
@@ -100,7 +101,8 @@ function EditAgentApplicationRoute() {
 			? deployment.data.configuration
 			: unavailableDeploymentConfiguration;
 	const deploymentConfigurationRetryable =
-		isRetryableDeploymentConfigurationError(deployment.error) ||
+		(deployment.isError &&
+			isRetryableDeploymentConfigurationError(deployment.error)) ||
 		deployment.data?.kind === "ready" ||
 		(deployment.data?.kind === "unavailable" && deployment.data.retryable) ||
 		false;

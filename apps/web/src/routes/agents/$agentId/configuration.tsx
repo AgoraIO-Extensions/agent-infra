@@ -15,8 +15,9 @@ function AgentConfigurationRoute() {
 	const { agentId } = Route.useParams();
 	const query = useAgentDetail(agentId);
 	const retryable =
-		isRetryableAgentDiscoveryError(query.error) ||
-		(query.data?.kind === "unavailable" && query.data.retryable);
+		(query.isError && isRetryableAgentDiscoveryError(query.error)) ||
+		(query.data?.kind === "unavailable" && query.data.retryable) ||
+		false;
 	if (query.isPending) {
 		return <p aria-live="polite">正在读取配置…</p>;
 	}

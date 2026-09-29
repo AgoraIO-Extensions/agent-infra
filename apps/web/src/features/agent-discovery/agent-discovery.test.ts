@@ -6,7 +6,11 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { createClient } from "../../pilot/generated-v2/client/index.js";
-import { loadAgentDetail, loadAgentDiscovery } from "./agent-discovery.js";
+import {
+	isRetryableAgentDiscoveryError,
+	loadAgentDetail,
+	loadAgentDiscovery,
+} from "./agent-discovery.js";
 
 const startingAgent = AgentProjectionV2Schema.parse(
 	pilotFakeScenariosV2.starting.response.body,
@@ -27,6 +31,17 @@ function createAgentClient(
 }
 
 describe("Agent discovery generated-client consumer", () => {
+	it("treats unclassified transport errors as retryable", () => {
+		expect(isRetryableAgentDiscoveryError(new Error("network failure"))).toBe(
+			true,
+		);
+		expect(
+			isRetryableAgentDiscoveryError(
+				Object.assign(new Error("forbidden"), { retryable: false }),
+			),
+		).toBe(false);
+	});
+
 	it("consumes the generated visible-Agent list and preserves its projection", async () => {
 		const server = createPilotAgentMockServerV2({
 			listAgents: {
