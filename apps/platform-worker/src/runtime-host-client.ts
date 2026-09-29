@@ -82,6 +82,7 @@ export interface WorkerRuntimeHostClientOptionsV4
 		}): Promise<unknown | null>;
 	};
 	readonly decryptor: RelayKeyWorkerDecryptorV1;
+	readonly assertCurrentAuthorization: () => Promise<void>;
 }
 
 const maximumResponseBytes = 65_536;
@@ -703,7 +704,8 @@ export function createWorkerRuntimeHostClientV4(
 		!options?.serviceToken ||
 		!options.verifyGrant ||
 		!options.executionKeys ||
-		!options.decryptor
+		!options.decryptor ||
+		!options.assertCurrentAuthorization
 	)
 		throw new TypeError("RuntimeHost V4 client options are invalid");
 	const base = endpoint(options.baseUrl, "/");
@@ -789,6 +791,7 @@ export function createWorkerRuntimeHostClientV4(
 							businessRequest: request,
 							privateKeyField,
 						});
+			await options.assertCurrentAuthorization();
 			const response = await post(
 				fetcher,
 				new URL(`internal/runtime/v4/${path}`, base),

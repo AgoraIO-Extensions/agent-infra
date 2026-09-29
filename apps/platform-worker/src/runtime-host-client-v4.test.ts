@@ -121,6 +121,7 @@ function fixture() {
 		verifyGrant: async () => claims,
 		executionKeys: { readAcceptedExecution, readCiphertext },
 		decryptor: { decrypt },
+		assertCurrentAuthorization: async () => {},
 		fetch: fetcher,
 	});
 	return {
@@ -224,6 +225,7 @@ it("requires confidential transport for private Key delivery", () => {
 				readCiphertext: f.readCiphertext,
 			},
 			decryptor: { decrypt: f.decrypt },
+			assertCurrentAuthorization: async () => {},
 		}),
 	).toThrow("RuntimeHost V4 transport must be confidential");
 });
@@ -297,6 +299,7 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 					plaintext: new TextEncoder().encode("synthetic-relay-key-k1"),
 				}),
 			},
+			assertCurrentAuthorization: async () => {},
 			fetch: fetcher,
 		});
 		const signed = {

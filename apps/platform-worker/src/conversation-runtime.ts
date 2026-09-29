@@ -376,7 +376,15 @@ export function createConversationRuntimeV2(
 				executionDeliveryFence: context.claim.executionDeliveryFence,
 			},
 		};
-		return { context, state, authority, client, base, target: postTarget };
+		return {
+			context,
+			state,
+			authority,
+			client,
+			base,
+			target: postTarget,
+			route: afterTargetRoute.record,
+		};
 	}
 	async function latch(
 		prepared: Awaited<ReturnType<typeof prepare>>,
@@ -484,6 +492,28 @@ export function createConversationRuntimeV2(
 				denied("RUNTIME_FENCE_STALE");
 			const prepared = await prepare(request, expectedOperation, active);
 			const { state, authority, client, base } = prepared;
+			const assertCurrentAuthorization = async () => {
+				const latest = await current(
+					context,
+					await stateFor(context, active),
+					expectedOperation,
+					active,
+				);
+				if (
+					authority.purpose !== "business" ||
+					latest.authority.purpose !== "business" ||
+					latest.authority.authorizationRecordId !==
+						authority.authorizationRecordId
+				)
+					denied();
+				if (
+					latest.record.configurationRevision !==
+						prepared.route.configurationRevision ||
+					!isDeepStrictEqual(latest.record.agent, prepared.route.agent) ||
+					!isDeepStrictEqual(latest.record.workload, prepared.route.workload)
+				)
+					unavailable("RUNTIME_ROUTE_STALE");
+			};
 			if (
 				authority.purpose === "control" &&
 				request.operation !== "turn.stop"
@@ -535,6 +565,7 @@ export function createConversationRuntimeV2(
 						verifyGrant: signV4.verify,
 						executionKeys: options.executionKeys,
 						decryptor: options.relayKeyDecryptor,
+						assertCurrentAuthorization,
 					});
 					const response = await keyedClient.submitTurn(
 						{
@@ -617,6 +648,7 @@ export function createConversationRuntimeV2(
 						verifyGrant: signV4.verify,
 						executionKeys: options.executionKeys,
 						decryptor: options.relayKeyDecryptor,
+						assertCurrentAuthorization,
 					});
 					const response = await keyedClient.supplement(
 						{

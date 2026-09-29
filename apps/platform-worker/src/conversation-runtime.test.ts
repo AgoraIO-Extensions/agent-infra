@@ -421,6 +421,55 @@ describe("Trusted conversation Runtime adapter", () => {
 		}
 	});
 
+	it("withholds the decrypted Key when current access is revoked during decryption", async () => {
+		const h = harness(1, undefined, true);
+		h.relayKeyDecryptor.decrypt.mockImplementationOnce(async () => {
+			h.setUser(null);
+			return {
+				outcome: "decrypted" as const,
+				plaintext: new TextEncoder().encode("synthetic-relay-key-k1"),
+			};
+		});
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.dispatch(h.request(reference)),
+			).rejects.toMatchObject({ code: "AUTHORIZATION_REVOKED" });
+			expect(h.authorizationStore.recordControl).toHaveBeenCalledWith(
+				expect.objectContaining({ reason: "authorization_revoked" }),
+			);
+			expect(h.fetcher).not.toHaveBeenCalled();
+		} finally {
+			h.runtime.close();
+		}
+	});
+
+	it("withholds the decrypted Key when the Workload route changes during decryption", async () => {
+		const h = harness(1, undefined, true);
+		h.relayKeyDecryptor.decrypt.mockImplementationOnce(async () => {
+			const original = h.record();
+			if (!original?.workload) throw new Error("Expected Workload");
+			h.setRecord({
+				...original,
+				agent: { ...original.agent, fence: 2 },
+				workload: { ...original.workload, fence: 2 },
+			});
+			return {
+				outcome: "decrypted" as const,
+				plaintext: new TextEncoder().encode("synthetic-relay-key-k1"),
+			};
+		});
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.dispatch(h.request(reference)),
+			).rejects.toMatchObject({ code: "RUNTIME_ROUTE_STALE" });
+			expect(h.fetcher).not.toHaveBeenCalled();
+		} finally {
+			h.runtime.close();
+		}
+	});
+
 	it.each(["cancel", "subject-disabled", "already-revoked"] as const)(
 		"recovers the lost original Session before stopping %s without restoring business authority",
 		async (reason) => {
