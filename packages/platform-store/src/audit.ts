@@ -491,10 +491,12 @@ export function decodePlatformAuditRowV1(
 	const allowedTargetTypes =
 		"subjectKinds" in metadata ? metadata.subjectKinds : [expectedTargetType];
 	const subjectKind: PlatformAuditProjectionV1["subject"]["kind"] =
-		row.targetType === "configuration" &&
-		action === "agent.configuration.revised"
-			? "configuration"
-			: expectedTargetType;
+		metadata.details === "task_api"
+			? (row.targetType as PlatformAuditProjectionV1["subject"]["kind"])
+			: row.targetType === "configuration" &&
+					action === "agent.configuration.revised"
+				? "configuration"
+				: expectedTargetType;
 	if (
 		!allowedActorTypes.some((actorType) => actorType === row.actorType) ||
 		!allowedTargetTypes.some((targetType) => targetType === row.targetType) ||

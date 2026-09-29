@@ -126,6 +126,7 @@ export async function claimWork(
 			select revoked_at is not null as revoked from platform.task_authorization_records
 			where execution_id = ${execution.execution_id}
 		`;
+		if (!authorization) throw new StaleDispatchLease();
 		if (authorization?.revoked) {
 			await finishWaitingTask(
 				transaction,

@@ -4734,6 +4734,26 @@ describe("durable stop confirmation", () => {
 });
 
 describe("durable waiting task dispatch from real admission", () => {
+	it("fails closed when a waiting task loses its authorization record", async () => {
+		const h = await waitingTaskHarness();
+		try {
+			const task = await h.submit("missing-authorization");
+			await client`
+				delete from platform.task_authorization_records
+				where execution_id = ${task.executionId}`;
+			expect(
+				await h.store.claim({
+					schemaVersion: 1,
+					itemId: task.itemId,
+					workerId: "missing-authorization-worker",
+					leaseDurationMs: 30_000,
+				}),
+			).toEqual({ outcome: "stale" });
+		} finally {
+			await h.close();
+		}
+	});
+
 	it("promotes only the earliest same-Conversation task despite reversed discovery order and concurrent claims", async () => {
 		const h = await waitingTaskHarness(2);
 		try {
