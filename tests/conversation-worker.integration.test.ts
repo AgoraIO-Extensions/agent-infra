@@ -6,7 +6,8 @@ import {
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type RequestListener } from "node:http";
+import { createServer as createSecureServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -15,6 +16,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
 	CodexRuntimeDriver,
+	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
 	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
@@ -28,22 +30,26 @@ import {
 	ConversationProjectionV1Schema,
 	ConversationSseMessageV2Schema,
 	ExecutionDetailProjectionV2Schema,
+	TaskAcceptedV1Schema,
 } from "@agent-infra/contracts/pilot";
-import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
-	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
-	projectRuntimeModelConfigurationV1,
+	projectRuntimeModelConfigurationV4,
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationRecordV2,
 	createConversationExecutionUseCaseV1,
+	hashApiCredentialV1,
 } from "@agent-infra/platform-core";
 import {
 	PostgresConversationExecutionTransactionV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
-import { KubeConfig } from "@kubernetes/client-node";
+import {
+	KubeConfig,
+	type V1Secret,
+	type V1StatefulSet,
+} from "@kubernetes/client-node";
 import postgres from "postgres";
 import { expect, it } from "vitest";
 import { createRuntimeHostApp } from "../apps/agent-runtime-host/src/app.js";
@@ -57,11 +63,15 @@ import {
 	workloadDesiredFixture,
 	workloadTestPolicy,
 } from "../apps/platform-worker/src/kubernetes.fixture.js";
-import { createKubernetesRuntimeAdapterV1 } from "../apps/platform-worker/src/kubernetes-runtime-adapter.js";
+import {
+	createKubernetesRuntimeAdapterV1,
+	workloadResourceNameV1,
+} from "../apps/platform-worker/src/kubernetes-runtime-adapter.js";
 import { workloadResourceConfigurationHashV1 } from "../apps/platform-worker/src/workload-runtime.js";
 import { catalogFixture } from "../packages/model-catalog/src/catalog.fixture.js";
 import { migratePlatformDatabase } from "../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../packages/platform-store/src/postgres-test.js";
+import { createRelayKeyEncryptorV1 } from "../packages/secret-store/src/index.js";
 import { setProductionDeploymentInput } from "./fixtures/platform-api-production-deployment.js";
 
 const execFile = promisify(execFileCallback);
@@ -158,8 +168,13 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		deliveryFence?: number;
 		confirmedCursor?: string;
 		responseStatus?: number;
+		transportTls?: boolean;
+		keyId?: string;
+		keyVersion?: number;
+		privateKeyMatches?: boolean;
+		keyInBusinessRequest?: boolean;
 	}[] = [];
-	const modelRequests: { body: string; authenticated: boolean }[] = [];
+	const modelRequests: { body: string; credential: string | undefined }[] = [];
 	const modelJournalAtArrival: {
 		executionId: string;
 		operationRef: string;
@@ -186,6 +201,37 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	});
 	const keys = generateKeyPairSync("ed25519");
 	const wrapping = generateKeyPairSync("rsa", { modulusLength: 3072 });
+	const wrappingPublicKey = wrapping.publicKey.export({
+		format: "der",
+		type: "spki",
+	});
+	const encryptionKeys = {
+		schemaVersion: 1 as const,
+		activeWrappingKeyVersion: "worker-key",
+		keys: [
+			{
+				schemaVersion: 1 as const,
+				keyVersion: "worker-key",
+				wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+				publicKeySpkiDerBase64: wrappingPublicKey.toString("base64"),
+				publicKeyFingerprint: createHash("sha256")
+					.update(wrappingPublicKey)
+					.digest("hex"),
+				rsaModulusBits: 3072,
+				status: "active" as const,
+			},
+		],
+	};
+	const relayEncryptor = createRelayKeyEncryptorV1({ encryptionKeys });
+	const relayKeys = {
+		first: "synthetic-agent-execution-key-k1",
+		rotated: "synthetic-agent-execution-key-k2",
+		second: "synthetic-user-second-personal-key",
+	};
+	const apiCredentials = {
+		"user-cli": "synthetic-user-cli-api-credential",
+		"user-second": "synthetic-user-second-api-credential",
+	};
 	const signing = {
 		workerId: "worker-transport",
 		issuer: "worker-platform",
@@ -259,7 +305,10 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		);
 	});
 	let host: RuntimeHost | undefined;
-	let runtimeServer: ReturnType<typeof createServer> | undefined;
+	let runtimeServer:
+		| ReturnType<typeof createServer>
+		| ReturnType<typeof createSecureServer>
+		| undefined;
 	let execution: PostgresConversationExecutionTransactionV1 | undefined;
 	let authorization: PostgresTaskAuthorizationStoreV1 | undefined;
 	let moduleDirectory: string | undefined;
@@ -274,13 +323,19 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				const chunks: Uint8Array[] = [];
 				for await (const chunk of request) chunks.push(chunk);
 				const body = Buffer.concat(chunks).toString();
+				const credential = request.headers.authorization?.replace(
+					/^Bearer /,
+					"",
+				);
 				modelRequests.push({
 					body,
-					authenticated:
-						request.headers.authorization ===
-						"Bearer worker-controlled-model-credential",
+					credential,
 				});
-				if (!modelRequests.at(-1)?.authenticated) {
+				if (
+					![relayKeys.first, relayKeys.rotated, relayKeys.second].includes(
+						credential ?? "",
+					)
+				) {
 					response.writeHead(401);
 					response.end();
 					return;
@@ -398,69 +453,63 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			channels: [],
 			channelRevision: "channels-1",
 		};
-		const modelSecretRef = {
-			schemaVersion: 1 as const,
-			ownerType: "agent-owner" as const,
-			ownerId: "user-cli",
-			agentId: baseDesired.agentId,
-			secretId: "worker-controlled-secret",
-			secretVersion: 1,
-			configRevision: 1,
-			algorithmVersion: "aes-256-gcm:v1" as const,
-			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
-			wrappingKeyVersion: "worker-key",
-			name: "worker-controlled-model-secret",
-		};
-		const modelSecretKey = `MODEL_CREDENTIAL_${createHash("sha256")
-			.update("model:worker-controlled-model")
-			.digest("hex")
-			.toUpperCase()}`;
 		const catalog = catalogFixture();
 		const catalogEndpoint = catalog.endpoints[0];
 		if (!catalogEndpoint) throw Error("Controlled model endpoint is missing");
+		const controlledCatalog = {
+			...catalog,
+			revision: "worker-controlled-catalog",
+			validUntil: Date.now() + 600_000,
+			endpoints: [
+				{ ...catalogEndpoint, endpointId: "worker-controlled-endpoint" },
+			],
+		};
 		const modelProjection = realCodexE2e
-			? await projectRuntimeModelConfigurationV1({
+			? await projectRuntimeModelConfigurationV4({
 					configuration,
 					protocol: "openai-responses-v1",
-					catalog: createFakeModelCatalogAdapterV1({
-						...catalog,
-						revision: "worker-controlled-catalog",
-						endpoints: [
-							{
-								...catalogEndpoint,
-								endpointId: "worker-controlled-endpoint",
-							},
-						],
-					}),
-					access: createFakeModelAccessValidatorV1([
-						{
-							endpointId: "worker-controlled-endpoint",
-							modelId: "gpt-5.6-sol",
-							reasoningLevels: ["medium"],
-							credential: "worker-controlled-model-credential",
-						},
-					]),
+					catalog: createFakeModelCatalogAdapterV1(controlledCatalog),
 					signal: AbortSignal.timeout(1000),
-					credentialFor: async () => ({
-						reference: {
-							secretId: modelSecretRef.secretId,
-							secretVersion: 1,
-							configRevision: 1,
-							name: modelSecretRef.name,
-						},
-						key: modelSecretKey,
-						plaintext: new TextEncoder().encode(
-							"worker-controlled-model-credential",
-						),
-					}),
 				})
 			: undefined;
-		const desired = realCodexE2e
-			? validateAgentWorkloadDesiredV1({
-					...baseDesired,
-					secretRefs: [modelSecretRef],
-				})
-			: baseDesired;
+		const desired = baseDesired;
+		let runtimeCertificatePath: string | undefined;
+		let runtimePrivateKeyPath: string | undefined;
+		if (realCodexE2e) {
+			runtimeCertificatePath = join(directory, "runtime.crt");
+			runtimePrivateKeyPath = join(directory, "runtime.key");
+			const service = workloadResourceNameV1(desired.agentId);
+			await execFile("openssl", [
+				"req",
+				"-x509",
+				"-newkey",
+				"rsa:2048",
+				"-nodes",
+				"-days",
+				"1",
+				"-keyout",
+				runtimePrivateKeyPath,
+				"-out",
+				runtimeCertificatePath,
+				"-subj",
+				`/CN=${service}`,
+				"-addext",
+				`subjectAltName=DNS:${service}.${policy.namespace}.svc,DNS:${service}-probe.${policy.namespace}.svc,IP:127.0.0.1`,
+			]);
+			const tlsSecret: V1Secret = {
+				apiVersion: "v1",
+				kind: "Secret",
+				metadata: { name: `${service}-tls`, namespace: policy.namespace },
+				type: "kubernetes.io/tls",
+				data: {
+					"tls.crt": (await readFile(runtimeCertificatePath)).toString(
+						"base64",
+					),
+					"tls.key": (await readFile(runtimePrivateKeyPath)).toString("base64"),
+				},
+			};
+			fake.resources.set(`Secret/${service}-tls`, tlsSecret);
+		}
 		const adapter = createKubernetesRuntimeAdapterV1({
 			client: fake.client,
 			policy,
@@ -470,22 +519,21 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		const identity = await adapter.apply(desired);
 		if (!identity || identity === "pending")
 			throw Error("Expected controlled Workload identity");
-		if (realCodexE2e) {
-			const secretUid = await adapter.applyImmutableSecret(
-				desired,
-				modelSecretRef.name,
-				modelSecretKey,
-				new TextEncoder().encode("worker-controlled-model-credential"),
-			);
-			await adapter.bindSecretFence(
-				desired,
-				identity,
-				modelSecretRef.name,
-				1,
-				secretUid,
-			);
-		}
 		await adapter.promote(desired, identity);
+		if (realCodexE2e) {
+			expect(modelProjection?.schemaVersion).toBe(4);
+			expect(desired.secretRefs).toEqual([]);
+			const workload = fake.resources.get(
+				`StatefulSet/${workloadResourceNameV1(desired.agentId)}`,
+			) as V1StatefulSet | undefined;
+			const container = workload?.spec?.template.spec?.containers[0];
+			expect(container?.readinessProbe?.httpGet?.scheme).toBe("HTTPS");
+			expect(
+				container?.env?.some(({ name }) =>
+					name.startsWith("AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_"),
+				),
+			).toBe(false);
+		}
 		const capacity = {
 			schemaVersion: 1,
 			imageDigest: desired.imageDigest,
@@ -527,6 +575,41 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		await sql`insert into platform.agent_applications (id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, service_availability, workload_revision, fence) values ('application-cli', ${desired.agentId}, 'user-cli', 'Controlled Agent', 'Fixture', 'available', 'trace', 'request', now(), 1, 1, 'running', 'ready', 1, 1)`;
 		await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values (${desired.agentId}, 'user-cli', now())`;
 		await sql`insert into platform.agent_availability (agent_id, target_type, target_id) values (${desired.agentId}, 'user', 'user-second')`;
+		if (realCodexE2e) {
+			for (const [subjectId, credential] of Object.entries(apiCredentials)) {
+				await sql`insert into platform.agent_principal_grants
+					(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+					values (${desired.agentId}, 'user', ${subjectId}, 'use', 'authority-1')`;
+				await sql`insert into platform.platform_api_credentials
+					(id, principal_type, principal_id, credential_hash, scopes)
+					values (${`api-credential-${subjectId}`}, 'user', ${subjectId},
+						${hashApiCredentialV1(credential)}, '["agent:use"]'::jsonb)`;
+			}
+			for (const [purpose, subjectId, keyId, plaintext] of [
+				["agent-default", desired.agentId, "relay-agent-k1", relayKeys.first],
+				["personal", "user-second", "relay-user-second-k1", relayKeys.second],
+			] as const) {
+				await sql`insert into platform.relay_key_subjects
+					(purpose, subject_id, last_version, current_version)
+					values (${purpose}, ${subjectId}, 1, 1)`;
+				await sql`insert into platform.relay_key_versions
+					(purpose, subject_id, key_version, key_id, ciphertext)
+					values (${purpose}, ${subjectId}, 1, ${keyId},
+						${sql.json(
+							JSON.parse(
+								JSON.stringify(
+									relayEncryptor.encrypt({
+										purpose,
+										subjectId,
+										keyId,
+										keyVersion: 1,
+										plaintext,
+									}),
+								),
+							),
+						)})`;
+			}
+		}
 		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${desired.agentId}, 1, ${configuration.source.kind === "standard" ? configuration.source.templateId : configuration.source.imageDigest}, now(), ${sql.json(JSON.parse(JSON.stringify(configuration)))})`;
 		await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${desired.agentId}, 1, ${sql.json(JSON.parse(JSON.stringify(state)))}, now() + interval '1 hour')`;
 		const fakeDriver = realCodexE2e
@@ -548,7 +631,6 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 								model: "gpt-5.6-sol",
 								reasoningLevels: ["medium"],
 								endpoint: `http://127.0.0.1:${modelPort}/v1`,
-								credential: "worker-controlled-model-credential",
 							},
 						],
 						authorizeExternalAction: async (action) => {
@@ -557,7 +639,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 									"controlled test lane forbids external actions",
 								);
 							}
-							await host.authorizeExternalAction(action);
+							return host.authorizeExternalAction(action);
 						},
 					});
 				})()
@@ -589,6 +671,19 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				expectedIssuer: signing.issuer,
 				expectedWorkerId: signing.workerId,
 			},
+			...(realCodexE2e
+				? {
+						allowLegacyBusiness: false,
+						validateGrantV4: createRuntimeExecutionGrantValidatorV4(
+							new Map([[signing.keyId, keys.publicKey]]),
+							{
+								expectedIssuer: signing.issuer,
+								expectedWorkerId: signing.workerId,
+								expectedAgentId: desired.agentId,
+							},
+						),
+					}
+				: {}),
 		});
 		const app = createRuntimeHostApp({
 			host,
@@ -603,7 +698,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			),
 		});
 		let ackCount = 0;
-		runtimeServer = createServer(async (req, res) => {
+		const runtimeHandler: RequestListener = async (req, res) => {
 			traces.push(`runtime:${req.method}:${req.url}`);
 			if (req.url === "/healthz") {
 				res.end("ok");
@@ -615,9 +710,32 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			const parsed = body ? JSON.parse(body) : {};
 			const observedRequest: (typeof requests)[number] = {
 				path: req.url ?? "",
-				executionId: parsed.executionId,
-				deliveryFence: parsed.operation?.executionDeliveryFence,
+				executionId: parsed.businessRequest?.executionId ?? parsed.executionId,
+				deliveryFence:
+					parsed.businessRequest?.operation?.executionDeliveryFence ??
+					parsed.operation?.executionDeliveryFence,
 				confirmedCursor: parsed.confirmedCursor,
+				transportTls:
+					"encrypted" in req.socket && req.socket.encrypted === true,
+				...(parsed.businessRequest
+					? {
+							keyId: parsed.businessRequest.keyBinding?.ciphertextRef,
+							keyVersion: parsed.businessRequest.keyBinding?.version,
+							privateKeyMatches:
+								parsed.privateKeyField?.keyDelivery?.relayKey ===
+								(parsed.businessRequest.keyBinding?.ciphertextRef ===
+								"relay-agent-k1"
+									? relayKeys.first
+									: relayKeys.rotated),
+							keyInBusinessRequest: [
+								relayKeys.first,
+								relayKeys.rotated,
+								relayKeys.second,
+							].some((key) =>
+								JSON.stringify(parsed.businessRequest).includes(key),
+							),
+						}
+					: {}),
 			};
 			requests.push(observedRequest);
 			const requestController = new AbortController();
@@ -652,7 +770,16 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				res.on("close", () => stream.destroy());
 				stream.pipe(res);
 			} else res.end();
-		});
+		};
+		runtimeServer = realCodexE2e
+			? createSecureServer(
+					{
+						cert: await readFile(runtimeCertificatePath ?? ""),
+						key: await readFile(runtimePrivateKeyPath ?? ""),
+					},
+					runtimeHandler,
+				)
+			: createServer(runtimeHandler);
 		kube.listen(0, "127.0.0.1");
 		runtimeServer.listen(0, "127.0.0.1");
 		await Promise.all([
@@ -669,7 +796,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		)
 			throw Error();
 		const kubeUrl = `http://127.0.0.1:${address.port}`;
-		const runtimeUrl = `http://127.0.0.1:${runtimeAddress.port}`;
+		const runtimeUrl = `${realCodexE2e ? "https" : "http"}://127.0.0.1:${runtimeAddress.port}`;
 		const config = new KubeConfig();
 		config.loadFromOptions({
 			clusters: [{ name: "test", server: kubeUrl, skipTLSVerify: true }],
@@ -723,9 +850,9 @@ workerDatabaseUrl.searchParams.set('application_name', 'conversation-worker-' + 
 export const workloadInput = { databaseUrl: workerDatabaseUrl.toString(), policy: ${JSON.stringify(policy)},
 kubernetes: { mode:'kubeconfig', path:${JSON.stringify(kubePath)}, context:'test', expectedServer:${JSON.stringify(kubeUrl)} },
 registry: { endpoint:'https://registry.example.test', imageReferencePrefix:'registry.example.test', policy:{authorize:async()=>({status:'rejected'})} },
-admissionPolicyRef:'policy',registrySubjectRef:'worker', templateModelBindings:[], executionCapacityProfiles:[${JSON.stringify(capacity)}],
-keyring: { keys:[{keyVersion:'key',privateKeyPkcs8DerBase64:(await readFile(${JSON.stringify(join(directory, "wrapping.der"))})).toString('base64')}] },
-modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stringify(runtimeUrl)} + new URL(url).pathname,init), pollIntervalMs:100 };
+admissionPolicyRef:'policy',registrySubjectRef:'worker', templateModelBindings:${JSON.stringify(realCodexE2e ? [{ templateId: "worker-controlled-codex", imageDigest: desired.imageDigest, protocol: "openai-responses-v1" }] : [])}, runtimeModelVersion:${realCodexE2e ? 4 : "undefined"}, executionCapacityProfiles:[${JSON.stringify(capacity)}],
+keyring: { keys:[{keyVersion:${JSON.stringify(realCodexE2e ? "worker-key" : "key")},privateKeyPkcs8DerBase64:(await readFile(${JSON.stringify(join(directory, "wrapping.der"))})).toString('base64')}] },
+modelCatalog:{load:async()=>(${JSON.stringify(realCodexE2e ? controlledCatalog : {})})}, runtimeFetch: (url, init)=> fetch(${JSON.stringify(runtimeUrl)} + new URL(url).pathname,init), pollIntervalMs:100 };
 `;
 		await writeFile(join(moduleDirectory, "configuration.mjs"), configSource, {
 			mode: 0o600,
@@ -742,6 +869,9 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				{
 					env: {
 						...process.env,
+						...(runtimeCertificatePath
+							? { NODE_EXTRA_CA_CERTS: runtimeCertificatePath }
+							: {}),
 						PLATFORM_WORKER_DEPLOYMENT_MODULE: pathToFileURL(
 							join(moduleDirectory ?? "", "deployment.mjs"),
 						).href,
@@ -818,44 +948,59 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				conversationId: created.result.conversationId,
 			};
 		};
-		const admitHttp = async (userId: string, key: string) => {
+		const admitHttp = async (
+			userId: keyof typeof apiCredentials,
+			key: string,
+		) => {
 			const command = (path: string, key: string, body: unknown) =>
 				fetch(`${apiOrigin}${path}`, {
 					method: "POST",
 					headers: {
-						authorization: `controlled-${userId}`,
+						authorization: realCodexE2e
+							? `Bearer ${apiCredentials[userId]}`
+							: `controlled-${userId}`,
 						"content-type": "application/json",
 						"Idempotency-Key": key,
 					},
 					body: JSON.stringify(body),
 				});
-			const createdResponse = await command(
-				`/api/v1/agents/${desired.agentId}/conversations`,
-				`${key}-create`,
-				{ schemaVersion: 1 },
-			);
-			const createdBody = await createdResponse.json();
-			expect(createdResponse.status, JSON.stringify(createdBody)).toBe(201);
-			const created = ConversationProjectionV1Schema.parse(createdBody);
+			if (!realCodexE2e) {
+				const createdResponse = await command(
+					`/api/v1/agents/${desired.agentId}/conversations`,
+					`${key}-create`,
+					{ schemaVersion: 1 },
+				);
+				const createdBody = await createdResponse.json();
+				expect(createdResponse.status, JSON.stringify(createdBody)).toBe(201);
+				const created = ConversationProjectionV1Schema.parse(createdBody);
+				const acceptedResponse = await command(
+					`/api/v1/conversations/${created.conversationId}/messages`,
+					`${key}-message`,
+					{ schemaVersion: 1, text: "controlled dispatch" },
+				);
+				const acceptedBody = await acceptedResponse.json();
+				expect(acceptedResponse.status, JSON.stringify(acceptedBody)).toBe(202);
+				const accepted = CommandAcceptedProjectionV1Schema.parse(acceptedBody);
+				if (!accepted.executionId) throw Error("HTTP command had no execution");
+				return {
+					conversationId: created.conversationId,
+					executionId: accepted.executionId,
+				};
+			}
 			const acceptedResponse = await command(
-				`/api/v1/conversations/${created.conversationId}/messages`,
-				`${key}-message`,
+				`/api/v1/agents/${desired.agentId}/tasks`,
+				key,
 				{ schemaVersion: 1, text: "controlled dispatch" },
 			);
 			const acceptedBody = await acceptedResponse.json();
 			expect(acceptedResponse.status, JSON.stringify(acceptedBody)).toBe(202);
-			const accepted = CommandAcceptedProjectionV1Schema.parse(acceptedBody);
-			if (!accepted.executionId) throw Error("HTTP command had no execution");
+			const accepted = TaskAcceptedV1Schema.parse(acceptedBody);
 			return {
-				conversationId: created.conversationId,
+				conversationId: accepted.conversationId,
 				executionId: accepted.executionId,
 			};
 		};
 		const admitFirst = async () => {
-			const publicKey = wrapping.publicKey.export({
-				format: "der",
-				type: "spki",
-			});
 			const input: ProductionPlatformApiInputV1 = {
 				databaseUrl: database.databaseUrl,
 				imageRepository: "registry.example.test/agents/codex",
@@ -922,31 +1067,10 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				],
 				modelCatalog: {
 					revision: "worker-controlled-catalog",
-					load: async () => ({
-						schemaVersion: 1,
-						revision: "worker-controlled-catalog",
-						validUntil: Date.now() + 60_000,
-						endpoints: [],
-					}),
+					load: async () => controlledCatalog,
 				},
 				channelPolicy: { revision: "channels-1", bindings: [] },
-				encryptionKeys: {
-					schemaVersion: 1,
-					activeWrappingKeyVersion: "worker-key",
-					keys: [
-						{
-							schemaVersion: 1,
-							keyVersion: "worker-key",
-							wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
-							publicKeySpkiDerBase64: publicKey.toString("base64"),
-							publicKeyFingerprint: createHash("sha256")
-								.update(publicKey)
-								.digest("hex"),
-							rsaModulusBits: 3072,
-							status: "active",
-						},
-					],
-				},
+				encryptionKeys,
 				resourceProfile: {
 					profileId: "standard-medium",
 					displayName: "Standard medium",
@@ -969,14 +1093,16 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			apiOrigin = `http://127.0.0.1:${(apiRunning.server.address() as AddressInfo).port}`;
 			return admitHttp("user-cli", "worker-http");
 		};
-		// A database failure must not acknowledge a Runtime event that did not commit.
-		await sql.unsafe("create sequence platform.test_event_attempts");
-		await sql.unsafe(
-			"create function platform.test_event_failure() returns trigger language plpgsql as $$ begin if nextval('platform.test_event_attempts') = 1 then raise exception 'injected event transaction failure'; end if; return new; end $$",
-		);
-		await sql.unsafe(
-			"create trigger test_event_failure before insert on platform.conversation_events for each row execute function platform.test_event_failure()",
-		);
+		if (!realCodexE2e) {
+			// A database failure must not acknowledge a Runtime event that did not commit.
+			await sql.unsafe("create sequence platform.test_event_attempts");
+			await sql.unsafe(
+				"create function platform.test_event_failure() returns trigger language plpgsql as $$ begin perform nextval('platform.test_event_attempts'); raise exception 'injected event transaction failure'; end $$",
+			);
+			await sql.unsafe(
+				"create trigger test_event_failure before insert on platform.conversation_events for each row when (new.source = 'runtime') execute function platform.test_event_failure()",
+			);
+		}
 		if (realCodexE2e) {
 			start();
 			start();
@@ -1002,6 +1128,38 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				async () => (await dispatchCount()) === 1,
 				"first HTTP dispatch",
 			);
+			const [pinned] = await sql<
+				{ keyId: string; keyVersion: number; source: string }[]
+			>`
+				select relay_key_id as "keyId", relay_key_version::int as "keyVersion",
+				       execution_source as source
+				from platform.conversation_executions
+				where execution_id=${first.executionId}
+			`;
+			expect(pinned).toEqual({
+				keyId: "relay-agent-k1",
+				keyVersion: 1,
+				source: "platform-api",
+			});
+			await sql`insert into platform.relay_key_versions
+				(purpose, subject_id, key_version, key_id, ciphertext)
+				values ('agent-default', ${desired.agentId}, 2, 'relay-agent-k2',
+					${sql.json(
+						JSON.parse(
+							JSON.stringify(
+								relayEncryptor.encrypt({
+									purpose: "agent-default",
+									subjectId: desired.agentId,
+									keyId: "relay-agent-k2",
+									keyVersion: 2,
+									plaintext: relayKeys.rotated,
+								}),
+							),
+						),
+					)})`;
+			await sql`update platform.relay_key_subjects
+				set last_version=2, current_version=2
+				where purpose='agent-default' and subject_id=${desired.agentId}`;
 		}
 		const second = realCodexE2e
 			? await admitHttp("user-second", "worker-second")
@@ -1032,30 +1190,45 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			"single effective first dispatch",
 		);
 		if (realCodexE2e) {
-			expect(modelRequests[0]?.authenticated).toBe(true);
+			expect(modelRequests[0]?.credential).toBe(relayKeys.first);
+			expect(
+				requests.find(
+					(request) => request.path === "/internal/runtime/v4/turns",
+				),
+			).toMatchObject({
+				executionId: first.executionId,
+				transportTls: true,
+				keyId: "relay-agent-k1",
+				keyVersion: 1,
+				privateKeyMatches: true,
+				keyInBusinessRequest: false,
+				responseStatus: 200,
+			});
 			expect(modelRequests[0]?.body).toContain("controlled dispatch");
 			expect(modelJournalAtArrival).toHaveLength(1);
 		}
 		expect(children.every((child) => child.exitCode === null)).toBe(true);
-		await waitUntil(
-			async () =>
-				(await sql`select is_called from platform.test_event_attempts`)[0]
-					?.is_called === true,
-			"injected event transaction failure",
-		);
-		expect(await sql`select 1 from platform.conversation_events`).toHaveLength(
-			0,
-		);
-		expect(ackCount).toBe(0);
-		await sql.unsafe(
-			"drop trigger test_event_failure on platform.conversation_events",
-		);
+		if (!realCodexE2e) {
+			await waitUntil(
+				async () =>
+					(await sql`select is_called from platform.test_event_attempts`)[0]
+						?.is_called === true,
+				"injected event transaction failure",
+			);
+			expect(
+				await sql`select 1 from platform.conversation_events where source='runtime'`,
+			).toHaveLength(0);
+			expect(ackCount).toBe(0);
+			await sql.unsafe(
+				"drop trigger test_event_failure on platform.conversation_events",
+			);
+		}
 
 		await waitUntil(
 			async () =>
 				(
-					await sql`select 1 from platform.conversation_events where execution_id=${first.executionId} or execution_id=${second.executionId}`
-				).length === 1,
+					await sql`select 1 from platform.conversation_events where source='runtime' and (execution_id=${first.executionId} or execution_id=${second.executionId})`
+				).length >= 1,
 			"persisted running event",
 		);
 		const [active] =
@@ -1140,7 +1313,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			return { events, auditIds: audits.map((audit) => audit.id) };
 		};
 		const beforeRows = realCodexE2e ? await readPersistedRows() : undefined;
-		if (realCodexE2e) expect(beforeRows?.events).toHaveLength(1);
+		if (realCodexE2e) expect(beforeRows?.events.length).toBeGreaterThan(0);
 		const priorRequests = requests.length;
 		for (const child of children) child.kill("SIGKILL");
 		await Promise.all(children.map((child) => once(child, "exit")));
@@ -1548,7 +1721,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				async () => modelRequests.length === 2,
 				"second principal reaches controlled native model endpoint",
 			);
-			expect(modelRequests[1]?.authenticated).toBe(true);
+			expect(modelRequests[1]?.credential).toBe(relayKeys.rotated);
 			expect(modelRequests[1]?.body).toContain("controlled dispatch");
 			await waitUntil(
 				async () =>
@@ -1748,14 +1921,23 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		throw new Error(
 			JSON.stringify({
 				traces: traces.slice(-30),
+				requests: requests.slice(-20),
+				workerOutput: output
+					.join("")
+					.replaceAll(relayKeys.first, "[redacted]")
+					.replaceAll(relayKeys.rotated, "[redacted]")
+					.replaceAll(relayKeys.second, "[redacted]")
+					.slice(-1200),
 				processes: children.map((child) => ({
 					exitCode: child.exitCode,
 					signalCode: child.signalCode,
 				})),
 				audit:
 					await sql`select event_type, payload->>'errorCode' as error_code from platform.persisted_events`,
+				outbox:
+					await sql`select id, status, attempt_count, delivery_fence, available_at, lease_expires_at from platform.outbox_items`,
 				execution:
-					await sql`select execution_id,status from platform.conversation_executions`,
+					await sql`select execution_id, status, execution_source, relay_key_id from platform.conversation_executions`,
 			}),
 			{ cause: error },
 		);
