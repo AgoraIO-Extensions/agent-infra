@@ -43,6 +43,8 @@ export function restoredHistoryPreservesEvents(
 		return false;
 
 	return before.events.every(
-		(event, index) => after.events[index]?.eventId === event.eventId,
+		(event, index) =>
+			after.events[index]?.eventId === event.eventId &&
+			after.events[index]?.executionId === event.executionId,
 	);
 }

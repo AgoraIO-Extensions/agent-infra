@@ -158,6 +158,23 @@ test("reload preserves mixed history while allowing later events for the submitt
 		),
 		false,
 	);
+	for (const index of [0, 1]) {
+		const events = [...after.events];
+		events[index] = {
+			...events[index],
+			executionId: index === 0 ? "execution-1" : "execution-old",
+		};
+		assert.equal(
+			restoredHistoryPreservesEvents(
+				before,
+				{ ...after, events },
+				"conversation-1",
+				"execution-1",
+			),
+			false,
+			`event ${index} must retain its execution binding after reload`,
+		);
+	}
 });
 
 async function fixtureDirectory() {
