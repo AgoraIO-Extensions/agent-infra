@@ -55,8 +55,13 @@ async function audit(
 	session: WecomSetupRecordV1,
 	action: string,
 ) {
+	const system = [
+		"wecom.setup_failed",
+		"wecom.setup_expired",
+		"wecom.callback_verified",
+	].includes(action);
 	await sql`insert into platform.audit_events (id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details)
- values (${randomUUID()},${session.sessionId},${action === "wecom.setup_failed" || action === "wecom.setup_expired" ? "system" : "user"},${action === "wecom.setup_failed" || action === "wecom.setup_expired" ? "platform-worker" : session.actorId},${action},'agent',${session.agentId},${action === "wecom.setup_failed" || action === "wecom.setup_expired" ? "failed" : "succeeded"},${session.sessionId},${session.agentId},NULL)`;
+ values (${randomUUID()},${session.sessionId},${system ? "system" : "user"},${action === "wecom.callback_verified" ? "platform-api" : system ? "platform-worker" : session.actorId},${action},'agent',${session.agentId},${action === "wecom.setup_failed" || action === "wecom.setup_expired" ? "failed" : "succeeded"},${session.sessionId},${session.agentId},NULL)`;
 }
 export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 	readonly #sql: ReturnType<typeof postgres>;
@@ -207,9 +212,16 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 	}
 
 	async verifyCallback(sessionId: string) {
-		const rows = await this
-			.#sql`update platform.wecom_setup_sessions s set callback_verified_at=clock_timestamp() from platform.agents a where s.session_id=${sessionId} and s.kind='wecom_app' and s.status='verifying' and s.expires_at>clock_timestamp() and a.id=s.agent_id and a.current_configuration_revision=s.configuration_revision and a.authorization_revision=s.authorization_revision and exists(select 1 from platform.agent_owners o where o.agent_id=a.id and o.owner_id=s.actor_id) returning s.session_id`;
-		return rows.length === 1;
+		return this.#sql.begin(async (sql) => {
+			const [row] = await sql<
+				Row[]
+			>`select s.* from platform.wecom_setup_sessions s join platform.agents a on a.id=s.agent_id where s.session_id=${sessionId} and s.kind='wecom_app' and s.status='verifying' and s.expires_at>clock_timestamp() and a.current_configuration_revision=s.configuration_revision and a.authorization_revision=s.authorization_revision and exists(select 1 from platform.agent_owners o where o.agent_id=a.id and o.owner_id=s.actor_id) for update of s`;
+			if (!row) return false;
+			if (row.callback_verified_at) return true;
+			await sql`update platform.wecom_setup_sessions set callback_verified_at=clock_timestamp() where session_id=${sessionId}`;
+			await audit(sql, record(row), "wecom.callback_verified");
+			return true;
+		});
 	}
 	async callbackKeyIds() {
 		const rows = await this
