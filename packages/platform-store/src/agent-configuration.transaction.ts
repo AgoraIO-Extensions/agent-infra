@@ -5,7 +5,7 @@ import type {
 	AgentConfigurationWritePlanV1,
 	PendingSecretRecordAttachmentsV1,
 } from "@agent-infra/platform-core";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, notInArray, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { default as postgres } from "postgres";
 import {
@@ -242,6 +242,8 @@ export class PostgresAgentConfigurationTransactionV1
 					const [session] = await transaction
 						.select({
 							botId: wecomSetupSessions.botId,
+							kind: wecomSetupSessions.kind,
+							callbackVerifiedAt: wecomSetupSessions.callbackVerifiedAt,
 						})
 						.from(wecomSetupSessions)
 						.where(
@@ -263,10 +265,11 @@ export class PostgresAgentConfigurationTransactionV1
 					if (
 						!session ||
 						session.botId !== connection.botId ||
+						(session.kind === "wecom_app" && !session.callbackVerifiedAt) ||
 						configuration.channelRevision !== wecom.sessionId ||
 						!configuration.channels.some(
 							(channel) =>
-								channel.kind === "wecom_bot" &&
+								channel.kind === session.kind &&
 								channel.bindingReference === wecom.sessionId,
 						)
 					)
@@ -383,28 +386,6 @@ export class PostgresAgentConfigurationTransactionV1
 					updatedAt: plan.auditEvent.occurredAt,
 				});
 				await insertAgentConfigurationEffects(transaction, plan);
-				const previousBot = previousConfiguration.channels.find(
-					(channel) => channel.kind === "wecom_bot",
-				);
-				if (
-					previousBot &&
-					!configuration.channels.some(
-						(channel) =>
-							channel.kind === "wecom_bot" &&
-							channel.bindingReference === previousBot.bindingReference,
-					)
-				) {
-					await transaction
-						.update(wecomSetupSessions)
-						.set({ status: "cancelled", encryptedCredential: null })
-						.where(
-							and(
-								eq(wecomSetupSessions.sessionId, previousBot.bindingReference),
-								eq(wecomSetupSessions.agentId, plan.agentId),
-								eq(wecomSetupSessions.status, "active"),
-							),
-						);
-				}
 				if (wecom && setup) {
 					const activated = await transaction
 						.update(wecomSetupSessions)
@@ -432,6 +413,33 @@ export class PostgresAgentConfigurationTransactionV1
 						agentId: plan.agentId,
 					});
 				}
+				const retainedWecomReferences = configuration.channels
+					.filter(
+						(channel) =>
+							channel.kind === "wecom_bot" || channel.kind === "wecom_app",
+					)
+					.map((channel) => channel.bindingReference);
+				await transaction
+					.update(wecomSetupSessions)
+					.set({
+						status: "cancelled",
+						encryptedCredential: null,
+						encryptedCallback: null,
+					})
+					.where(
+						and(
+							eq(wecomSetupSessions.agentId, plan.agentId),
+							eq(wecomSetupSessions.status, "active"),
+							...(retainedWecomReferences.length
+								? [
+										notInArray(
+											wecomSetupSessions.sessionId,
+											retainedWecomReferences,
+										),
+									]
+								: []),
+						),
+					);
 				return { outcome: "committed" as const, result };
 			});
 		} catch (error) {

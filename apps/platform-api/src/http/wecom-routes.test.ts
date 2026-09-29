@@ -30,6 +30,7 @@ const message = {
 function fixture(
 	outcome: "accepted" | "denied",
 	protectReply: () => Promise<string> = async () => "protected",
+	acceptMessages?: () => Promise<boolean>,
 ) {
 	const app = createPlatformHealthApp();
 	const seen: unknown[] = [];
@@ -37,6 +38,7 @@ function fixture(
 	const now = new Date();
 	registerWecomRoutesV1(app, {
 		resolveBinding: async () => config,
+		...(acceptMessages ? { acceptMessages } : {}),
 		adapter: createWecomAdapterV1({
 			now: () => now,
 			protectReply,
@@ -81,6 +83,19 @@ it("returns 503 when durable reply protection is unavailable", async () => {
 	const f = fixture("accepted", async () => {
 		throw new Error("reply store unavailable");
 	});
+	const response = await f.app.request(f.request());
+	expect(response.status).toBe(503);
+	expect(f.seen).toHaveLength(0);
+	expect(f.observed).toEqual(["unavailable"]);
+});
+it("keeps verified messages out of Core when binding state is unavailable", async () => {
+	const f = fixture(
+		"accepted",
+		async () => "protected",
+		async () => {
+			throw new Error("setup store unavailable");
+		},
+	);
 	const response = await f.app.request(f.request());
 	expect(response.status).toBe(503);
 	expect(f.seen).toHaveLength(0);

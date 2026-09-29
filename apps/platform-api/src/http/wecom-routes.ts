@@ -17,6 +17,8 @@ export interface WecomRoutesDependenciesV1 {
 	readonly resolveBinding: (
 		reference: string,
 	) => Promise<WecomConfigurationV1 | null>;
+	readonly verifyCallback?: (reference: string) => Promise<boolean>;
+	readonly acceptMessages?: (reference: string) => Promise<boolean>;
 	readonly adapter: ReturnType<typeof createWecomAdapterV1>;
 	readonly channel: ReturnType<typeof createWecomChannelV1>;
 	readonly observe: (
@@ -125,7 +127,35 @@ export function registerWecomRoutesV1(
 					configuration,
 					callbackRequest,
 				);
-				if (callback.type === "challenge") return context.text(callback.text);
+				if (callback.type === "challenge") {
+					try {
+						if (
+							dependencies.verifyCallback &&
+							!(await dependencies.verifyCallback(
+								configuration.bindingReference,
+							))
+						) {
+							observe("unavailable");
+							return context.text("Unavailable", 503);
+						}
+					} catch {
+						observe("unavailable");
+						return context.text("Unavailable", 503);
+					}
+					return context.text(callback.text);
+				}
+				try {
+					if (
+						dependencies.acceptMessages &&
+						!(await dependencies.acceptMessages(configuration.bindingReference))
+					) {
+						observe("unavailable");
+						return context.text("Unavailable", 503);
+					}
+				} catch {
+					observe("unavailable");
+					return context.text("Unavailable", 503);
+				}
 				message = callback.message;
 			} catch (error) {
 				if (error instanceof WecomReplyProtectionError) {

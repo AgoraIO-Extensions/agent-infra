@@ -13,6 +13,8 @@ import {
 import type { WecomRoutesDependenciesV1 } from "./http/wecom-routes.js";
 export interface WecomApiDeploymentV1 {
 	readonly identity: WecomIdentityPortV1;
+	readonly verifyCallback?: (reference: string) => Promise<boolean>;
+	readonly acceptMessages?: (reference: string) => Promise<boolean>;
 	readonly resolveBinding: (
 		reference: string,
 	) => Promise<WecomConfigurationV1 | null>;
@@ -31,6 +33,12 @@ export function assembleWecomApiV1(
 	return {
 		dependencies: {
 			resolveBinding: deployment.resolveBinding,
+			...(deployment.verifyCallback
+				? { verifyCallback: deployment.verifyCallback }
+				: {}),
+			...(deployment.acceptMessages
+				? { acceptMessages: deployment.acceptMessages }
+				: {}),
 			adapter: createWecomAdapterV1({ protectReply }),
 			channel: createWecomChannelV1({ authorization, store }),
 			observe: deployment.observe,

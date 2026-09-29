@@ -66,4 +66,14 @@ it("admits a current Owner and replaces only the bot binding after verification"
 		{ kind: "wecom_bot", bindingReference: session.sessionId },
 	]);
 	expect(captured?.configuration.channelRevision).toBe(session.sessionId);
+	const application = {
+		...session,
+		kind: "wecom_app" as const,
+		sessionId: "setup-app",
+	};
+	await activation.activate(application);
+	expect(captured?.configuration.channels).toEqual([
+		{ kind: "wecom_app", bindingReference: application.sessionId },
+		{ kind: "wecom_bot", bindingReference: "old-bot" },
+	]);
 });

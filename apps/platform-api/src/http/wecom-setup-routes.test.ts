@@ -2,10 +2,26 @@ import {
 	createWecomSetupV1,
 	type WecomSetupRecordV1,
 } from "@agent-infra/platform-core";
+import { Hono } from "hono";
 import { expect, it } from "vitest";
 import { agentConfigurationConformanceRecordV1 } from "../../../../packages/platform-core/src/agent-configuration.conformance.ts";
-import { createPlatformHealthApp } from "../app.ts";
+import { HttpProtocolError, requestMetadata } from "./common.ts";
 import { registerWecomSetupRoutesV1 } from "./wecom-setup-routes.ts";
+
+function testApp() {
+	const app = new Hono();
+	app.onError((error, context) => {
+		const protocol =
+			error instanceof HttpProtocolError
+				? error
+				: new HttpProtocolError(
+						"INTERNAL_ERROR",
+						requestMetadata(context.req.raw).traceId,
+					);
+		return context.json(protocol.body, protocol.status);
+	});
+	return app;
+}
 
 it("authenticates setup routes and rejects cross-Owner, cross-Agent, replay and identity injection", async () => {
 	let actor: string | null = "owner";
@@ -41,7 +57,7 @@ it("authenticates setup routes and rejects cross-Owner, cross-Agent, replay and 
 			return { fixture: "ciphertext" };
 		},
 	});
-	const app = createPlatformHealthApp();
+	const app = testApp();
 	registerWecomSetupRoutesV1(app, {
 		setup,
 		identity: {
@@ -100,4 +116,110 @@ it("authenticates setup routes and rejects cross-Owner, cross-Agent, replay and 
 	expect(await saved.text()).not.toContain("fixture-secret");
 	expect((await submit()).status).toBe(404);
 	expect(encrypted).toBe(1);
+});
+
+it("keeps application setup on its own Owner route and withholds submitted secrets", async () => {
+	let actor = "owner";
+	const records = new Map<string, WecomSetupRecordV1>();
+	const setup = createWecomSetupV1({
+		authority: async (agentId, actorId) =>
+			actorId === "owner"
+				? {
+						configuration: {
+							...agentConfigurationConformanceRecordV1,
+							agentId,
+						},
+						authorizationRevision: "fixture",
+					}
+				: null,
+		store: {
+			create: async (record) => {
+				records.set(record.sessionId, record);
+			},
+			read: async (id) => records.get(id) ?? null,
+			consume: async ({
+				session,
+				application,
+				encryptedCredential,
+				encryptedCallback,
+			}) => {
+				const saved = records.get(session.sessionId);
+				if (saved?.status !== "awaiting_input") return false;
+				records.set(session.sessionId, {
+					...saved,
+					status: "verifying",
+					application,
+					encryptedCredential,
+					encryptedCallback,
+				});
+				return true;
+			},
+			cancel: async () => false,
+		},
+		encrypt: async () => {
+			throw new Error("Bot encryptor must not run");
+		},
+		encryptApplication: async () => ({
+			encryptedCredential: { fixture: "ciphertext" },
+			encryptedCallback: { fixture: "callback-ciphertext" },
+		}),
+	});
+	const identity = {
+		resolve: async () => ({
+			schemaVersion: 1 as const,
+			userId: actor,
+			displayName: "Fixture",
+			accountStatus: "active" as const,
+			organizationIds: [],
+			roles: ["employee"],
+			authorizationRevision: "fixture",
+		}),
+		hydrateUsers: async () => [],
+	};
+	const app = testApp();
+	expect(() =>
+		registerWecomSetupRoutesV1(app, { setup, identity, application: true }),
+	).toThrow("callback URL unavailable");
+	registerWecomSetupRoutesV1(app, {
+		setup,
+		identity,
+		application: true,
+		callbackUrl: (id) => `https://example.invalid/callbacks/wecom/${id}`,
+	});
+	const base = "/api/v1/agents/agent/wecom-app-setup";
+	const begun = await app.request(base, { method: "POST" });
+	expect(begun.status).toBe(200);
+	const session = (await begun.json()) as {
+		sessionId: string;
+		state: string;
+		callbackUrl: string;
+	};
+	expect(session.callbackUrl).toContain(session.sessionId);
+	const url = `${base}/${session.sessionId}/credentials`;
+	const body = {
+		state: session.state,
+		corporationId: "corp",
+		applicationId: "7",
+		secret: "fixture-secret",
+		token: "fixture-token",
+		encodingAesKey: "A".repeat(43),
+		takeoverConfirmed: true,
+	};
+	const submit = (value: unknown) =>
+		app.request(url, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(value),
+		});
+	actor = "other";
+	expect((await submit(body)).status).toBe(404);
+	actor = "owner";
+	expect((await submit({ ...body, actorId: "owner" })).status).toBe(400);
+	expect((await submit({ ...body, takeoverConfirmed: false })).status).toBe(
+		400,
+	);
+	const saved = await submit(body);
+	expect(saved.status).toBe(200);
+	expect(await saved.text()).not.toContain("fixture-secret");
+	expect((await submit(body)).status).toBe(404);
 });

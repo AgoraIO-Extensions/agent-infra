@@ -117,6 +117,7 @@ it("stages application credentials only for the current Owner and verified setup
 	let authorizationRevision = "a1";
 	let now = new Date();
 	let encrypted = 0;
+	let exposedApplication = false;
 	const usecase = createWecomSetupV1({
 		now: () => now,
 		authority: async (agentId, actorId) =>
@@ -126,6 +127,16 @@ it("stages application credentials only for the current Owner and verified setup
 							...agentConfigurationConformanceRecordV1,
 							agentId,
 							revision,
+							...(exposedApplication && record
+								? {
+										channels: [
+											{
+												kind: "wecom_app" as const,
+												bindingReference: record.sessionId,
+											},
+										],
+									}
+								: {}),
 						},
 						authorizationRevision,
 					}
@@ -240,6 +251,24 @@ it("stages application credentials only for the current Owner and verified setup
 		sessionId: setup.sessionId,
 		kind: "wecom_app",
 	});
+	exposedApplication = true;
+	expect(await usecase.current("agent", "owner", "wecom_app")).toEqual({
+		status: "verifying",
+		sessionId: setup.sessionId,
+	});
+	const existing = await usecase.callback(setup.sessionId);
+	if (!existing) throw new Error("Missing setup record");
+	record = {
+		...existing,
+		status: "active",
+		callbackVerifiedAt: now.toISOString(),
+	};
+	expect(await usecase.current("agent", "owner", "wecom_app")).toEqual({
+		status: "connected",
+		sessionId: setup.sessionId,
+	});
 	authorizationRevision = "a2";
-	expect(await usecase.callback(setup.sessionId)).toBeNull();
+	expect(await usecase.callback(setup.sessionId)).toMatchObject({
+		status: "active",
+	});
 });

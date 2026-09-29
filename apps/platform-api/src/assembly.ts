@@ -6,6 +6,7 @@ import {
 	createApplicationFoundationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
+	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
 import {
 	PostgresAgentConfigurationQueryV1,
@@ -19,6 +20,10 @@ import {
 	PostgresPlatformAuditQueryV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
+import {
+	createWecomChannelAdmissionV1,
+	type WecomCallbackKeysV1,
+} from "@agent-infra/wecom";
 import type { PlatformAppDependencies } from "./app.js";
 import {
 	assemblePlatformFilesV1,
@@ -36,6 +41,12 @@ import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
 } from "./projection.js";
+import {
+	assembleWecomApiV1,
+	assembleWecomReceiptApiV1,
+	type WecomApiDeploymentV1,
+} from "./wecom-assembly.js";
+import { assembleWecomSetupApiV1 } from "./wecom-setup-assembly.js";
 
 type Admissions = Omit<AgentConfigurationUseCaseDependenciesV1, "transaction">;
 
@@ -58,6 +69,14 @@ export interface PlatformApiAssemblyInput {
 	readonly presentAgent:
 		| PresentPlatformAgent
 		| { readonly create: (queries: AssemblyQueries) => PresentPlatformAgent };
+	readonly wecom?: WecomApiDeploymentV1;
+	readonly wecomIdentity?: WecomIdentityPortV1;
+	readonly wecomCredentialEncryptionKeys?: unknown;
+	readonly wecomApplicationSetup?: {
+		readonly publicOrigin: string;
+		readonly callbackKeys: WecomCallbackKeysV1;
+		readonly replyEncryptionPublicKeyPem: string;
+	};
 }
 
 export interface PlatformApiAssembly {
@@ -68,6 +87,62 @@ export interface PlatformApiAssembly {
 export function assemblePlatformApi(
 	input: PlatformApiAssemblyInput,
 ): PlatformApiAssembly {
+	if (input.wecomApplicationSetup && !input.wecomCredentialEncryptionKeys)
+		throw new Error("WeCom application setup requires encryption keys");
+	if (
+		input.wecomCredentialEncryptionKeys &&
+		!input.wecom &&
+		!input.wecomIdentity
+	)
+		throw new Error("WeCom setup requires a receipt identity deployment");
+	const wecomSetup = input.wecomCredentialEncryptionKeys
+		? assembleWecomSetupApiV1({
+				databaseUrl: input.databaseUrl,
+				identity: input.identity,
+				encryptionKeys: input.wecomCredentialEncryptionKeys,
+				...(input.wecomApplicationSetup
+					? { application: input.wecomApplicationSetup }
+					: {}),
+			})
+		: undefined;
+	const wecomDeployment =
+		input.wecom ??
+		(input.wecomApplicationSetup && input.wecomIdentity
+			? {
+					identity: input.wecomIdentity,
+					replyEncryptionPublicKeyPem:
+						input.wecomApplicationSetup.replyEncryptionPublicKeyPem,
+					resolveBinding: async () => null,
+					observe: () => {},
+				}
+			: undefined);
+	const resolveWecomBinding = wecomDeployment
+		? (reference: string) =>
+				wecomSetup
+					? wecomSetup.resolveBinding(reference, (bindingReference) =>
+							wecomDeployment.resolveBinding(bindingReference),
+						)
+					: wecomDeployment.resolveBinding(reference)
+		: undefined;
+	const wecom =
+		wecomDeployment && resolveWecomBinding
+			? assembleWecomApiV1(input.databaseUrl, {
+					...wecomDeployment,
+					resolveBinding: resolveWecomBinding,
+					...(wecomSetup
+						? {
+								verifyCallback: wecomSetup.verifyCallback,
+								acceptMessages: async (reference: string) =>
+									!(await wecomSetup.referenceKind(reference)) ||
+									(await wecomSetup.isActive(reference)),
+							}
+						: {}),
+				})
+			: undefined;
+	const wecomReceipts =
+		!wecom && input.wecomIdentity
+			? assembleWecomReceiptApiV1(input.databaseUrl, input.wecomIdentity)
+			: undefined;
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl: input.databaseUrl,
 	});
@@ -109,6 +184,9 @@ export function assemblePlatformApi(
 		typeof input.admissions === "function"
 			? input.admissions({ configurationQuery })
 			: input.admissions;
+	const channelAdmission = resolveWecomBinding
+		? { channelAdmission: createWecomChannelAdmissionV1(resolveWecomBinding) }
+		: {};
 	const presentAgent =
 		typeof input.presentAgent === "function"
 			? input.presentAgent
@@ -116,15 +194,18 @@ export function assemblePlatformApi(
 	const foundation = createApplicationFoundationUseCaseV1({
 		transaction: foundationTransaction,
 		...admissions,
+		...channelAdmission,
 	});
 	const revision = createApplicationRevisionUseCaseV1({
 		transaction: revisionTransaction,
 		...admissions,
+		...channelAdmission,
 	});
 	const management = createAgentManagementV1(managementTransaction);
 	const configuration = createAgentConfigurationUseCaseV1({
 		transaction: configurationTransaction,
 		...admissions,
+		...channelAdmission,
 	});
 	const projections = createPlatformProjectionReaders({
 		identity: input.identity,
@@ -269,6 +350,31 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		...(wecomReceipts
+			? {
+					wecomReceipts: {
+						...wecomReceipts.dependencies,
+						identity: input.identity,
+					},
+				}
+			: {}),
+		...(wecomSetup
+			? {
+					wecomSetup: { identity: input.identity, setup: wecomSetup.setup },
+					...(input.wecomApplicationSetup
+						? {
+								wecomApplicationSetup: {
+									identity: input.identity,
+									setup: wecomSetup.setup,
+									callbackUrl: wecomSetup.callbackUrl,
+								},
+							}
+						: {}),
+				}
+			: {}),
+		...(wecom
+			? { wecom: { ...wecom.dependencies, identity: input.identity } }
+			: {}),
 		requestScope: input.requestScope,
 		...(files ? { files: files.dependencies } : {}),
 		management: {
@@ -317,6 +423,9 @@ export function assemblePlatformApi(
 		sessionAudit: { identity: input.identity, audit: auditQuery },
 	};
 	const adapters = [
+		...(wecomReceipts ? [wecomReceipts] : []),
+		...(wecomSetup ? [wecomSetup] : []),
+		...(wecom ? [wecom] : []),
 		...(files ? [files] : []),
 		foundationTransaction,
 		revisionTransaction,

@@ -185,7 +185,17 @@ export function createWecomSetupV1(options: {
 			if (session.agentId !== agentId || (session.kind ?? "wecom_bot") !== kind)
 				throw new WecomSetupError("unavailable");
 			return kind === "wecom_app"
-				? { status: "callback" as const, sessionId: session.sessionId }
+				? {
+						sessionId: session.sessionId,
+						status:
+							session.status === "active" && session.callbackVerifiedAt
+								? ("connected" as const)
+								: session.status === "auth_failed"
+									? ("auth_failed" as const)
+									: session.callbackVerifiedAt
+										? ("verifying" as const)
+										: ("callback" as const),
+					}
 				: { status: session.connectionStatus ?? "disconnected" };
 		},
 		async begin(

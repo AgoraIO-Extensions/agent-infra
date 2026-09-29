@@ -14,6 +14,7 @@ import {
 } from "@agent-infra/platform-store";
 import type { SecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
 import {
+	createWecomApplicationAccessV1,
 	createWecomWebSocketV1,
 	type WecomWebSocketConfigurationV1,
 } from "@agent-infra/wecom/worker";
@@ -21,6 +22,7 @@ import type { WecomConnectionsDeploymentV1 } from "./wecom-connections.js";
 export interface WecomSetupWorkerDeploymentV1 {
 	readonly decryptor: SecretKeyringDecryptorV1;
 	readonly directory: TaskUserDirectoryV1;
+	readonly applicationFetch?: typeof fetch;
 }
 export function createWecomSetupWorkerV1(
 	options: WecomSetupWorkerDeploymentV1 &
@@ -33,22 +35,35 @@ export function createWecomSetupWorkerV1(
 	const transaction = new PostgresAgentConfigurationTransactionV1(options);
 	const query = new PostgresAgentConfigurationQueryV1(options);
 	const holderId = randomUUID();
+	const applicationAccess = createWecomApplicationAccessV1(
+		options.applicationFetch ? { fetch: options.applicationFetch } : {},
+	);
 	const cachedBindings = new Map<
 		string,
 		{ ciphertext: string; configuration: WecomWebSocketConfigurationV1 }
 	>();
 	let closed = false;
+	let nextKind: "wecom_bot" | "wecom_app" = "wecom_bot";
 	let connecting: ReturnType<typeof createWecomWebSocketV1> | undefined;
-	async function credentials(
-		session: WecomSetupRecordV1,
-	): Promise<WecomWebSocketConfigurationV1> {
+	async function credentials(session: WecomSetupRecordV1): Promise<
+		| WecomWebSocketConfigurationV1
+		| {
+				kind: "wecom_app";
+				agentId: string;
+				bindingReference: string;
+				credentialVersion: string;
+				corporationId: string;
+				applicationId: string;
+				secret: string;
+		  }
+	> {
 		const record = validatePlatformSecretRecordV1(session.encryptedCredential);
 		if (
 			record.secretId !== session.sessionId ||
 			record.agentId !== session.agentId ||
 			record.ownerId !== session.actorId ||
 			record.ownerType !== "agent-owner" ||
-			record.name !== "wecom_bot" ||
+			record.name !== (session.kind ?? "wecom_bot") ||
 			record.configRevision !== session.configurationRevision ||
 			record.secretVersion !== 1
 		)
@@ -63,6 +78,25 @@ export function createWecomSetupWorkerV1(
 			const value = JSON.parse(
 				new TextDecoder("utf-8", { fatal: true }).decode(decrypted.plaintext),
 			);
+			if (session.kind === "wecom_app") {
+				if (
+					value.corporationId !== session.application?.corporationId ||
+					value.applicationId !== session.application?.applicationId ||
+					typeof value.secret !== "string" ||
+					!value.secret ||
+					Object.keys(value).length !== 3
+				)
+					throw new Error("WeCom credential unavailable");
+				return {
+					kind: "wecom_app",
+					agentId: session.agentId,
+					bindingReference: session.sessionId,
+					credentialVersion: session.sessionId,
+					corporationId: value.corporationId,
+					applicationId: value.applicationId,
+					secret: value.secret,
+				};
+			}
 			if (
 				value.botId !== session.botId ||
 				typeof value.secret !== "string" ||
@@ -100,6 +134,8 @@ export function createWecomSetupWorkerV1(
 					if (cached?.ciphertext === ciphertext) return cached.configuration;
 					cachedBindings.delete(binding.sessionId);
 					const configuration = await credentials(binding);
+					if ("kind" in configuration)
+						throw new Error("Invalid WebSocket configuration");
 					if (!closed)
 						cachedBindings.set(binding.sessionId, {
 							ciphertext,
@@ -120,9 +156,19 @@ export function createWecomSetupWorkerV1(
 		},
 		async tick() {
 			if (closed) return;
-			for (const session of await store.candidates()) {
+			const bots = await store.candidates();
+			const applications = await store.candidates("wecom_app");
+			const candidates =
+				nextKind === "wecom_bot"
+					? [...bots, ...applications]
+					: [...applications, ...bots];
+			for (const session of candidates) {
 				if (closed) return;
-				if (!session.botId) continue;
+				if (
+					!session.botId ||
+					(session.kind === "wecom_app" && !session.callbackVerifiedAt)
+				)
+					continue;
 				const claim = await leases.claim({
 					agentId: session.agentId,
 					bindingReference: session.sessionId,
@@ -130,6 +176,7 @@ export function createWecomSetupWorkerV1(
 					holderId,
 				});
 				if (!claim) continue;
+				nextKind = session.kind === "wecom_app" ? "wecom_bot" : "wecom_app";
 				const activation = createWecomSetupActivationV1({
 					transaction: {
 						read: (input) => transaction.read(input),
@@ -158,32 +205,39 @@ export function createWecomSetupWorkerV1(
 						continue;
 					}
 					const config = await credentials(session);
-					const connection = createWecomWebSocketV1({
-						configuration: config,
-						...(options.endpoint ? { endpoint: options.endpoint } : {}),
-						isLocallyCurrent: () =>
-							!closed && Date.now() < claim.leaseUntil.getTime() - 1000,
-						isCurrent: () => leases.current(claim),
-						receive: async () => {
-							connection.close();
-							throw new Error("WeCom setup probe cannot receive messages");
-						},
-						...(options.observeIngress
-							? { observeIngress: options.observeIngress }
-							: {}),
-						protectReply: options.protectReply,
-						revealReply: options.revealReply,
-						observe() {},
-					});
-					connecting = connection;
-					await connection.connect();
-					if (!(await connection.authentication)) {
-						if (connection.terminalReason === "auth_failed")
+					if ("kind" in config) {
+						if (!(await applicationAccess.token(config))) {
 							await store.fail(session.sessionId, "auth_failed", claim);
-						return;
+							continue;
+						}
+					} else {
+						const connection = createWecomWebSocketV1({
+							configuration: config,
+							...(options.endpoint ? { endpoint: options.endpoint } : {}),
+							isLocallyCurrent: () =>
+								!closed && Date.now() < claim.leaseUntil.getTime() - 1000,
+							isCurrent: () => leases.current(claim),
+							receive: async () => {
+								connection.close();
+								throw new Error("WeCom setup probe cannot receive messages");
+							},
+							...(options.observeIngress
+								? { observeIngress: options.observeIngress }
+								: {}),
+							protectReply: options.protectReply,
+							revealReply: options.revealReply,
+							observe() {},
+						});
+						connecting = connection;
+						await connection.connect();
+						if (!(await connection.authentication)) {
+							if (connection.terminalReason === "auth_failed")
+								await store.fail(session.sessionId, "auth_failed", claim);
+							return;
+						}
+						connection.close();
+						connecting = undefined;
 					}
-					connection.close();
-					connecting = undefined;
 					await activation.activate(session);
 					try {
 						options.observeSetup?.("active");

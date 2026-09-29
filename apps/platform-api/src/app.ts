@@ -21,6 +21,13 @@ import {
 } from "./http/session-audit-routes.js";
 import { registerV2ConfigurationRoutes } from "./http/v2-configuration-routes.js";
 import { registerV2ManagementRoutes } from "./http/v2-management-routes.js";
+import {
+	registerWecomReceiptRoutesV1,
+	registerWecomRoutesV1,
+	type WecomReceiptRoutesDependenciesV1,
+	type WecomRoutesDependenciesV1,
+} from "./http/wecom-routes.js";
+import { registerWecomSetupRoutesV1 } from "./http/wecom-setup-routes.js";
 
 export const platformApiService = "platform-api";
 
@@ -35,6 +42,12 @@ export interface PlatformAppDependencies {
 	readonly conversation: ConversationRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
 	readonly sessionAudit: SessionAuditRoutesDependencies;
+	readonly wecom?: WecomRoutesDependenciesV1;
+	readonly wecomReceipts?: WecomReceiptRoutesDependenciesV1;
+	readonly wecomSetup?: Parameters<typeof registerWecomSetupRoutesV1>[1];
+	readonly wecomApplicationSetup?: Parameters<
+		typeof registerWecomSetupRoutesV1
+	>[1];
 }
 
 export function createPlatformHealthApp() {
@@ -64,6 +77,16 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	const requestScope = dependencies.requestScope;
 	if (requestScope)
 		app.use("*", (context, next) => requestScope(context.req.raw, next));
+	if (dependencies.wecomSetup)
+		registerWecomSetupRoutesV1(app, dependencies.wecomSetup);
+	if (dependencies.wecomApplicationSetup)
+		registerWecomSetupRoutesV1(app, {
+			...dependencies.wecomApplicationSetup,
+			application: true,
+		});
+	if (dependencies.wecom) registerWecomRoutesV1(app, dependencies.wecom);
+	else if (dependencies.wecomReceipts)
+		registerWecomReceiptRoutesV1(app, dependencies.wecomReceipts);
 	registerRetiredManagementRoutes(app);
 	registerV2ManagementRoutes(app, dependencies.management);
 	registerV2ConfigurationRoutes(app, dependencies.configuration);

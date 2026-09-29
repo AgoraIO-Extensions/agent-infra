@@ -8,7 +8,7 @@ import type {
 	WecomSetupRecordV1,
 } from "./wecom-setup.js";
 
-/** Owns the admission and channel replacement policy after a successful bot probe. */
+/** Owns the admission and channel replacement policy after a successful probe. */
 export function createWecomSetupActivationV1(options: {
 	readonly transaction: AgentConfigurationTransactionPortV1;
 	readonly readCurrentUser: (actorId: string) => Promise<{
@@ -33,6 +33,7 @@ export function createWecomSetupActivationV1(options: {
 	return {
 		authority,
 		async activate(session: WecomSetupRecordV1) {
+			const kind = session.kind ?? "wecom_bot";
 			const unavailable = async (): Promise<never> => {
 				throw new Error("Unexpected WeCom configuration admission");
 			};
@@ -66,10 +67,8 @@ export function createWecomSetupActivationV1(options: {
 							requestId: input.requestId,
 							channelRevision: session.sessionId,
 							channels: [
-								...input.current.filter(
-									(channel) => channel.kind !== "wecom_bot",
-								),
-								{ kind: "wecom_bot", bindingReference: session.sessionId },
+								...input.current.filter((channel) => channel.kind !== kind),
+								{ kind, bindingReference: session.sessionId },
 							],
 						};
 					},
@@ -88,7 +87,7 @@ export function createWecomSetupActivationV1(options: {
 					changes: {
 						channels: [
 							{
-								kind: "wecom_bot",
+								kind,
 								enabled: true,
 								bindingReference: session.sessionId,
 							},

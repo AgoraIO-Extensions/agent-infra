@@ -155,6 +155,13 @@
       "when": 1790663754117,
       "tag": "0021_browser_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1790686705954,
+      "tag": "0022_wecom_application_setup",
+      "breakpoints": true
     }
   ]
 }
