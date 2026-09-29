@@ -76,6 +76,44 @@ describe("task authorization boundary", () => {
 		expect(boundary?.identityRevision).toBe("directory-7");
 	});
 
+	it("keeps an API user task across unrelated directory changes and rejects actual loss", () => {
+		const grant = {
+			principal: { kind: "user" as const, id: user.userId },
+			grantType: "use" as const,
+			authorizationRevision: "agent-access-4",
+			revokedAt: null,
+		};
+		const grantedAgent = { ...agent, principalGrants: [grant] };
+		const boundary = requiredBoundary({
+			agent: grantedAgent,
+			channelId: "api:user",
+		});
+		const current = {
+			boundary,
+			user: { ...user, authorizationRevision: "directory-8" },
+			agent: grantedAgent,
+			currentAgentAuthorizationRevision: "agent-access-4",
+		};
+		expect(isTaskAuthorizationCurrentV1(current)).toBe(true);
+		expect(
+			isTaskAuthorizationCurrentV1({
+				...current,
+				user: { ...current.user, accountStatus: "disabled" },
+			}),
+		).toBe(false);
+		expect(
+			isTaskAuthorizationCurrentV1({
+				...current,
+				agent: {
+					...grantedAgent,
+					principalGrants: [
+						{ ...grant, revokedAt: new Date("2026-09-30T00:00:00Z") },
+					],
+				},
+			}),
+		).toBe(false);
+	});
+
 	it("captures an independently authorized application principal", () => {
 		const application: CurrentTaskApplicationV1 = {
 			schemaVersion: 1,
