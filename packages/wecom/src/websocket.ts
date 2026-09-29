@@ -313,6 +313,19 @@ export function createWecomWebSocketV1(options: {
 				return "failed";
 			sending.add(ws.requestId);
 			try {
+				let authorized = false;
+				try {
+					authorized =
+						(!input.revalidate || (await input.revalidate())) &&
+						(await current()) &&
+						authenticated &&
+						!closed &&
+						ws.connectionId === connectionId &&
+						Date.parse(route.expiresAt) > now().getTime();
+				} catch {
+					return "failed";
+				}
+				if (!authorized) return "failed";
 				const ack = await client.replyStream(
 					{ headers: { req_id: ws.requestId } },
 					ws.streamId,

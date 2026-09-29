@@ -169,6 +169,30 @@ it("only reports sent after provider ACK and rejects a swapped sender", async ()
 	);
 	expect(await result).toBe("sent");
 });
+it("does not send a bot reply after the final actor authorization is revoked", async () => {
+	const s = await setup();
+	await s.authenticate();
+	s.push();
+	await expect.poll(() => s.messages.length).toBe(1);
+	const message = s.messages[0];
+	if (!message) throw new Error("Missing admitted message");
+	const sent: string[] = [];
+	s.socket.on("message", (data) => sent.push(data.toString()));
+	let checks = 0;
+	expect(
+		await s.adapter.sender.send({
+			scope: message,
+			replyHandle: message.replyHandle,
+			text: "fixture answer",
+			revalidate: async () => {
+				checks++;
+				return false;
+			},
+		}),
+	).toBe("failed");
+	expect(checks).toBe(1);
+	expect(sent).toEqual([]);
+});
 it("rejects stale timestamps and stops ingress and replies after losing ownership", async () => {
 	const s = await setup();
 	await s.authenticate();
