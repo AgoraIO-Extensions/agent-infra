@@ -209,7 +209,21 @@ async function resetDatabase(): Promise<void> {
 	await adminClient`truncate platform.audit_events, platform.outbox_items,
 		platform.idempotency_records, platform.agent_availability,
 		platform.agent_owners, platform.agent_configuration_revisions,
-		platform.agent_applications, platform.agents cascade`;
+		platform.agent_applications, platform.agents,
+		platform.platform_api_credentials, platform.platform_applications cascade`;
+}
+
+async function seedApiCreationAuthority() {
+	await adminClient`
+		insert into platform.platform_applications
+			(id, name, responsible_user_id, status, authorization_revision)
+		values ('application-caller', 'Caller', ${applicationFoundationActorContextV1.userId}, 'active', 'app-7')
+	`;
+	await adminClient`
+		insert into platform.platform_api_credentials
+			(id, principal_type, principal_id, credential_hash, scopes)
+		values ('credential-caller', 'application', 'application-caller', ${"a".repeat(64)}, ${adminClient.json(["agent:create"])})
+	`;
 }
 
 beforeAll(async () => {
@@ -449,6 +463,7 @@ describe("PostgreSQL application foundation transaction", () => {
 
 	it("marks API-created applications eligible for workload reconciliation", async () => {
 		await resetDatabase();
+		await seedApiCreationAuthority();
 		const submission =
 			new builtStore.PostgresApplicationFoundationTransactionV1({
 				databaseUrl,
@@ -464,6 +479,10 @@ describe("PostgreSQL application foundation transaction", () => {
 					...applicationFoundationActorContextV1,
 					principal: { kind: "application", id: "application-caller" },
 					creationMode: "api",
+					apiAuthority: {
+						credentialId: "credential-caller",
+						identityRevision: "app-7",
+					},
 				},
 				createSecretRecordFixtureResolver(),
 			);
@@ -481,6 +500,70 @@ describe("PostgreSQL application foundation transaction", () => {
 			await submission.close();
 		}
 	});
+
+	it.each(["credential revoked", "scope narrowed", "application disabled"])(
+		"rejects API creation when %s after admission but before commit",
+		async (change) => {
+			await resetDatabase();
+			await seedApiCreationAuthority();
+			const submission =
+				new builtStore.PostgresApplicationFoundationTransactionV1({
+					databaseUrl,
+				});
+			try {
+				const foundation = createApplicationFoundationUseCaseV1({
+					...applicationFoundationAdmissionDependenciesV1(),
+					transaction: {
+						read: (input) => submission.read(input),
+						async commit(plan, attachments) {
+							if (change === "credential revoked")
+								await adminClient`
+								update platform.platform_api_credentials
+								set revoked_at = clock_timestamp()
+								where id = 'credential-caller'
+							`;
+							else if (change === "scope narrowed")
+								await adminClient`
+								update platform.platform_api_credentials
+								set scopes = ${adminClient.json(["agent:read"])}
+								where id = 'credential-caller'
+							`;
+							else
+								await adminClient`
+								update platform.platform_applications
+								set status = 'disabled'
+								where id = 'application-caller'
+							`;
+							return submission.commit(plan, attachments);
+						},
+					},
+				});
+				await expect(
+					foundation.submit(
+						applicationFoundationCommandV1,
+						{
+							...applicationFoundationActorContextV1,
+							principal: { kind: "application", id: "application-caller" },
+							creationMode: "api",
+							apiAuthority: {
+								credentialId: "credential-caller",
+								identityRevision: "app-7",
+							},
+						},
+						createSecretRecordFixtureResolver(),
+					),
+				).rejects.toMatchObject({ code: "not_authorized" });
+				const [counts] = await adminClient`
+				select (select count(*) from platform.agents) as agents,
+					(select count(*) from platform.idempotency_records
+						where command_type = 'agent.application.submit.v1') as reservations
+			`;
+				expect(counts).toMatchObject({ agents: "0", reservations: "0" });
+			} finally {
+				await submission.close();
+			}
+		},
+	);
 
 	it("serializes concurrent exact submissions into one commit and one replay", async () => {
 		await resetDatabase();

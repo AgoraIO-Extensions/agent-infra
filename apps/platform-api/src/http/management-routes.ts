@@ -39,6 +39,7 @@ import type {
 import {
 	ApiIdentityError,
 	generateApiCredentialV1,
+	isSameApiCreationAuthorityV1,
 } from "@agent-infra/platform-core";
 import type {
 	AgentManagementAgentProjectionV1,
@@ -1118,15 +1119,7 @@ export function registerManagementRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
-			if (
-				currentApiIdentity.principal.kind !== apiIdentity.principal.kind ||
-				currentApiIdentity.principal.id !== apiIdentity.principal.id ||
-				currentApiIdentity.ownerId !== apiIdentity.ownerId ||
-				currentApiIdentity.credential.credentialId !==
-					apiIdentity.credential.credentialId ||
-				currentApiIdentity.authorizationRevision !==
-					apiIdentity.authorizationRevision
-			)
+			if (!isSameApiCreationAuthorityV1(apiIdentity, currentApiIdentity))
 				throw new HttpProtocolError("AUTHORIZATION_REVOKED", metadata.traceId);
 			await management.authorizeCredentialScope(
 				apiActor(currentApiIdentity),
@@ -1156,6 +1149,10 @@ export function registerManagementRoutes(
 					rawRequestDigest,
 					principal: apiIdentity.principal,
 					creationMode: "api",
+					apiAuthority: {
+						credentialId: currentApiIdentity.credential.credentialId,
+						identityRevision: currentApiIdentity.authorizationRevision,
+					},
 				},
 				prepared.attachment,
 			);

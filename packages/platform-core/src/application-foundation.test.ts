@@ -100,6 +100,10 @@ describe("Application foundation use case", () => {
 			...applicationFoundationActorContextV1,
 			principal: { kind: "application", id: "application-caller" },
 			creationMode: "api",
+			apiAuthority: {
+				credentialId: "credential-caller",
+				identityRevision: "app-7",
+			},
 		});
 		expect(result.status).toBe("creating");
 		expect(transaction.snapshot().applications[0]?.status).toBe("creating");
@@ -128,6 +132,10 @@ describe("Application foundation use case", () => {
 				...applicationFoundationActorContextV1,
 				principal: { kind: "application", id: "application-caller" },
 				creationMode: "api",
+				apiAuthority: {
+					credentialId: "credential-caller",
+					identityRevision: "app-7",
+				},
 			},
 			pendingSecretRecordAttachmentFixtureV1(),
 		);

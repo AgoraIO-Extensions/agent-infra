@@ -36,6 +36,10 @@ export interface ApplicationFoundationActorContextV1 {
 	/** API calls may be made by an application while the responsible user remains the Owner. */
 	readonly principal?: ApiPrincipalV1;
 	readonly creationMode?: "web" | "api";
+	readonly apiAuthority?: {
+		readonly credentialId: string;
+		readonly identityRevision: string;
+	};
 }
 
 export interface CommitApplicationFoundationResultV1 {
@@ -49,6 +53,10 @@ export interface CommitApplicationFoundationResultV1 {
 export interface ApplicationFoundationWritePlanV1 {
 	readonly schemaVersion: 1;
 	readonly principal?: ApiPrincipalV1;
+	readonly apiAuthority?: {
+		readonly credentialId: string;
+		readonly identityRevision: string;
+	};
 	readonly agent: {
 		readonly agentId: string;
 		readonly currentConfigurationRevision: 1;
@@ -265,7 +273,11 @@ const actorContextKeys = [
 	"userId",
 	"rawRequestDigest",
 ] as const;
-const actorContextOptionalKeys = ["principal", "creationMode"] as const;
+const actorContextOptionalKeys = [
+	"principal",
+	"creationMode",
+	"apiAuthority",
+] as const;
 
 function isEnumerableDataDescriptor(
 	descriptor: PropertyDescriptor | undefined,
@@ -436,7 +448,33 @@ function parseApplicationFoundationActorContextV1(
 	if (principal?.kind === "application" && creationMode !== "api") {
 		invalidApplicationFoundationInput();
 	}
-	return { schemaVersion, userId, rawRequestDigest, principal, creationMode };
+	let apiAuthority: ApplicationFoundationActorContextV1["apiAuthority"];
+	if (Object.hasOwn(values, "apiAuthority")) {
+		const authority = snapshotExactDataValues(values.apiAuthority, [
+			"credentialId",
+			"identityRevision",
+		]);
+		if (
+			!authority ||
+			!isCapturedText(authority.credentialId) ||
+			!isCapturedText(authority.identityRevision)
+		)
+			invalidApplicationFoundationInput();
+		apiAuthority = {
+			credentialId: authority.credentialId,
+			identityRevision: authority.identityRevision,
+		};
+	}
+	if (creationMode === "api" ? !principal || !apiAuthority : apiAuthority)
+		invalidApplicationFoundationInput();
+	return {
+		schemaVersion,
+		userId,
+		rawRequestDigest,
+		...(principal ? { principal } : {}),
+		creationMode,
+		...(apiAuthority ? { apiAuthority } : {}),
+	};
 }
 
 function requiredPlanObject(
@@ -519,7 +557,7 @@ export function snapshotApplicationFoundationWritePlanV1(
 				"outboxIntent",
 				"auditEvent",
 			],
-			["principal"],
+			["principal", "apiAuthority"],
 		);
 		if (!plan) throw new ApplicationFoundationError("persistence_failed");
 		const agent = requiredPlanObject(plan.agent, [
@@ -607,9 +645,27 @@ export function snapshotApplicationFoundationWritePlanV1(
 			}
 			principal = { kind: value.kind, id: value.id };
 		}
+		let apiAuthority: ApplicationFoundationWritePlanV1["apiAuthority"];
+		if (Object.hasOwn(plan, "apiAuthority")) {
+			const authority = snapshotExactDataValues(plan.apiAuthority, [
+				"credentialId",
+				"identityRevision",
+			]);
+			if (
+				!authority ||
+				!isCapturedText(authority.credentialId) ||
+				!isCapturedText(authority.identityRevision)
+			)
+				throw new ApplicationFoundationError("persistence_failed");
+			apiAuthority = {
+				credentialId: authority.credentialId,
+				identityRevision: authority.identityRevision,
+			};
+		}
 		return {
 			schemaVersion: plan.schemaVersion as 1,
 			...(principal === undefined ? {} : { principal }),
+			...(apiAuthority === undefined ? {} : { apiAuthority }),
 			agent: {
 				agentId: agent.agentId as string,
 				currentConfigurationRevision: agent.currentConfigurationRevision as 1,
@@ -912,6 +968,9 @@ export function createApplicationFoundationUseCaseV1(
 			...(actorContext.principal === undefined
 				? {}
 				: { principal: actorContext.principal }),
+			...(actorContext.apiAuthority === undefined
+				? {}
+				: { apiAuthority: actorContext.apiAuthority }),
 			agent: {
 				agentId: command.agentId,
 				currentConfigurationRevision: initialConfigurationRevision,
@@ -993,7 +1052,9 @@ export function createApplicationFoundationUseCaseV1(
 		} catch (error) {
 			const code = recognizedApplicationFoundationErrorCode(error);
 			throw new ApplicationFoundationError(
-				code === "conflict" || code === "idempotency_conflict"
+				code === "conflict" ||
+					code === "idempotency_conflict" ||
+					code === "not_authorized"
 					? code
 					: "persistence_failed",
 			);

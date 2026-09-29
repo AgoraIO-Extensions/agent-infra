@@ -29,6 +29,29 @@ export interface ApiIdentityActorV1 {
 	>;
 }
 
+/** An async API preparation may continue only under the same current creation authority. */
+export function isSameApiCreationAuthorityV1(
+	initial: {
+		readonly principal: ApiPrincipalV1;
+		readonly ownerId: string;
+		readonly authorizationRevision: string;
+		readonly credential: Pick<ApiCredentialMetadataV1, "credentialId">;
+	},
+	current: {
+		readonly principal: ApiPrincipalV1;
+		readonly ownerId: string;
+		readonly authorizationRevision: string;
+		readonly credential: Pick<ApiCredentialMetadataV1, "credentialId">;
+	},
+): boolean {
+	return (
+		sameApiPrincipalV1(initial.principal, current.principal) &&
+		initial.credential.credentialId === current.credential.credentialId &&
+		initial.ownerId === current.ownerId &&
+		initial.authorizationRevision === current.authorizationRevision
+	);
+}
+
 export interface ApiIdentityCredentialIssueInputV1 {
 	readonly principal: ApiPrincipalV1;
 	readonly credential: string;
