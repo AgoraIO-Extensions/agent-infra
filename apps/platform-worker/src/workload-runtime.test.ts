@@ -663,17 +663,29 @@ describe("assembled Workload Runtime contracts", () => {
 		expect((await resolver(business)).baseUrl).toMatch(/^https:\/\//);
 		const originalCatalog = structuredClone(catalog);
 		const writesBeforeCatalogChange = f.writes.length;
-		for (const change of ["expired", "removed", "changed", "unsafe"] as const) {
+		for (const change of [
+			"expired",
+			"removed",
+			"changed",
+			"metadata",
+			"internal",
+			"unsafe",
+		] as const) {
 			if (change === "expired") catalog.validUntil = Date.now() - 1;
 			else if (change === "removed") catalog.endpoints = [];
 			else {
 				assert(catalog.endpoints[0]);
-				catalog.endpoints[0].baseUrl =
-					change === "unsafe"
-						? "http://models.example.test/changed/v1"
-						: "https://models.example.test/changed/v1";
-				if (change === "unsafe")
-					catalog.endpoints[0].origin = "http://models.example.test";
+				const endpoint = catalog.endpoints[0];
+				if (change === "metadata")
+					endpoint.capabilities.reasoningLevels = ["low"];
+				else {
+					let baseUrl = "https://models.example.test/changed/v1";
+					if (change === "internal") baseUrl = "https://127.0.0.1/private/v1";
+					if (change === "unsafe")
+						baseUrl = "http://models.example.test/changed/v1";
+					endpoint.baseUrl = baseUrl;
+					endpoint.origin = new URL(baseUrl).origin;
+				}
 			}
 			await expect(resolver(business)).rejects.toMatchObject({
 				code: "RUNTIME_WORKLOAD_UNAVAILABLE",
