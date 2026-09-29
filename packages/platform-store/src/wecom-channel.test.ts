@@ -346,6 +346,47 @@ it("fences WebSocket ingress inside the transaction and reserves replies for the
 		if (accepted.outcome !== "accepted")
 			throw new Error("Expected WebSocket acceptance");
 		await sql`update platform.conversation_executions set status='completed' where execution_id=${accepted.receipt.executionId}`;
+		expect(
+			await channel().receive({ ...event, replyHandle: "callback-route" }),
+		).toEqual({ outcome: "conflict" });
+		const [fenced] = await sql<
+			{
+				reply_handle: string;
+				connection_bot_id: string | null;
+				connection_fence: string | null;
+			}[]
+		>`select reply_handle,connection_bot_id,connection_fence from platform.wecom_receipts where id=${accepted.receipt.receiptId}`;
+		expect(fenced).toEqual({
+			reply_handle: event.replyHandle,
+			connection_bot_id: message.providerId,
+			connection_fence: "1",
+		});
+		const callbackEvent = {
+			...event,
+			eventId: "callback-event",
+			replyHandle: "original-callback-route",
+		};
+		const callback = await channel().receive(callbackEvent);
+		if (callback.outcome !== "accepted")
+			throw new Error("Expected callback acceptance");
+		expect(
+			await channel(owner).receive(
+				{ ...callbackEvent, replyHandle: "websocket-route" },
+				fence,
+			),
+		).toEqual({ outcome: "conflict" });
+		const [unfenced] = await sql<
+			{
+				reply_handle: string;
+				connection_bot_id: string | null;
+				connection_fence: string | null;
+			}[]
+		>`select reply_handle,connection_bot_id,connection_fence from platform.wecom_receipts where id=${callback.receipt.receiptId}`;
+		expect(unfenced).toEqual({
+			reply_handle: callbackEvent.replyHandle,
+			connection_bot_id: null,
+			connection_fence: null,
+		});
 		expect(await other.claim()).toBeNull();
 		await sql`update platform.wecom_connections set fence=2,holder_id='worker-two' where bot_id=${message.providerId}`;
 		const freshFence = { ...fence, holderId: "worker-two", fence: 2 };

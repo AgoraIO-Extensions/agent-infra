@@ -49,6 +49,8 @@ interface Row {
 	execution_id: string | null;
 	reply_handle: string;
 	expires_at: Date;
+	connection_bot_id: string | null;
+	connection_fence: number | null;
 	delivery_status: WecomDeliveryStatusV1;
 	fence: number;
 }
@@ -187,6 +189,13 @@ export class PostgresWecomChannelV1
 			>`select * from platform.wecom_receipts where id=${plan.eventKey} for update`;
 			if (old) {
 				if (old.request_digest !== plan.requestDigest)
+					return reject("conflict");
+				const previouslyFenced = old.connection_bot_id !== null;
+				if (
+					previouslyFenced !== Boolean(plan.connectionFence) ||
+					(previouslyFenced &&
+						old.connection_bot_id !== plan.connectionFence?.botId)
+				)
 					return reject("conflict");
 				await sql`update platform.wecom_receipts set reply_handle=${plan.message.replyHandle},expires_at=${new Date(plan.message.replyExpiresAt)},connection_bot_id=${plan.connectionFence?.botId ?? null},connection_fence=${plan.connectionFence?.fence ?? null},updated_at=now() where id=${plan.eventKey} and delivery_status='pending'`;
 				return { outcome: "replayed", receipt: receipt(old) } as const;
