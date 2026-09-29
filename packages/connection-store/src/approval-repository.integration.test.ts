@@ -1746,6 +1746,10 @@ describe("PostgreSQL Connection access approval catalog", () => {
 										displaySnapshot: { displayName: "Approval Admin" },
 										principalId: adminId,
 									},
+									{
+										displaySnapshot: { displayName: "Approval Reviewer" },
+										principalId: approverId,
+									},
 								],
 								id: `self-stage-${suffix}`,
 								name: "Administrator",
@@ -1804,16 +1808,47 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						actorPrincipalId: adminId,
 						approvers: [
 							{
-								principalId: adminId,
-								displaySnapshot: { displayName: "Approval Admin" },
+								principalId: approverId,
+								displaySnapshot: { displayName: "Approval Reviewer" },
 							},
 						],
 						expectedRequestRevision: blockedSelf.revision,
 						expectedRoutingRevision: blockedSelfStage.routingRevision,
 						expectedStageRevision: blockedSelfStage.revision,
+						reason: "Simulate a legacy route without the applicant",
+						requestId: selfRequestId,
+					});
+					expect(
+						(await requestRepository.listRoutingBlocked(adminId)).some(
+							(item) => item.id === selfRequestId && item.state === "IN_REVIEW",
+						),
+					).toBe(true);
+					const legacySelf = await requestRepository.getRequest(
+						adminId,
+						selfRequestId,
+					);
+					const legacyStage = legacySelf.stages[0];
+					if (!legacyStage)
+						throw new Error("Legacy administrator stage is missing");
+					await requestRepository.reroute({
+						actorPrincipalId: adminId,
+						approvers: [
+							{
+								principalId: adminId,
+								displaySnapshot: { displayName: "Approval Admin" },
+							},
+						],
+						expectedRequestRevision: legacySelf.revision,
+						expectedRoutingRevision: legacyStage.routingRevision,
+						expectedStageRevision: legacyStage.revision,
 						reason: "Restore original administrator approver",
 						requestId: selfRequestId,
 					});
+					expect(
+						(await requestRepository.listRoutingBlocked(adminId)).some(
+							(item) => item.id === selfRequestId,
+						),
+					).toBe(false);
 					const [selfQueue] = (
 						await requestRepository.listApprovalQueue(adminId)
 					).filter((item) => item.id === selfRequestId);

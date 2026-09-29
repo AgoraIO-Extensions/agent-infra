@@ -575,7 +575,34 @@ export class PostgresConnectionAccessRequestRepository
 			JOIN connection_principals applicant ON applicant.id = request.applicant_principal_id
 			JOIN connection_provider_releases release ON release.id = request.provider_release_id
 			JOIN connection_capability_profiles profile ON profile.id = request.capability_profile_id
-			WHERE request.state = 'ROUTING_BLOCKED' AND request.expires_at > now()
+			JOIN connection_request_stages stage ON stage.request_id = request.id
+				AND stage.ordinal = request.current_stage_ordinal
+			WHERE request.expires_at > now() AND stage.state = 'PENDING'
+				AND (request.state = 'ROUTING_BLOCKED' OR (
+					request.state = 'IN_REVIEW'
+					AND EXISTS (
+						SELECT 1 FROM connection_approval_stage_approvers original
+						JOIN connection_principal_roles role_binding
+							ON role_binding.principal_id = original.approver_principal_id
+						WHERE original.stage_id = stage.policy_stage_id
+							AND original.approver_principal_id = request.applicant_principal_id
+							AND role_binding.role = 'CONNECTION_ADMIN'
+							AND role_binding.status = 'ACTIVE'
+							AND role_binding.granted_at <= request.created_at
+					)
+					AND NOT EXISTS (
+						SELECT 1 FROM connection_request_routing_revisions routing
+						JOIN connection_request_stage_approvers candidate
+							ON candidate.routing_revision_id = routing.id
+						WHERE routing.request_stage_id = stage.id
+							AND routing.revision = stage.routing_revision
+							AND candidate.approver_principal_id = request.applicant_principal_id
+					)
+					AND NOT EXISTS (
+						SELECT 1 FROM connection_approval_decisions decision
+						WHERE decision.request_stage_id = stage.id
+					)
+				))
 				AND EXISTS (
 					SELECT 1 FROM connection_principal_roles role_binding
 					JOIN connection_principals admin ON admin.id = role_binding.principal_id
@@ -619,6 +646,7 @@ export class PostgresConnectionAccessRequestRepository
 					applicant_principal_id: string;
 					created_at: Date;
 					policy_stage_id: string;
+					request_state: string;
 					quorum_count: number | null;
 					quorum_type: "ALL" | "ANY" | "AT_LEAST_N";
 					original_approver_count: number;
@@ -629,6 +657,7 @@ export class PostgresConnectionAccessRequestRepository
 				}[]
 			>`
 				SELECT request.applicant_principal_id, request.created_at,
+					request.state AS request_state,
 					stage.policy_stage_id,
 					request.revision::text AS request_revision,
 					stage.id AS request_stage_id,
@@ -644,7 +673,7 @@ export class PostgresConnectionAccessRequestRepository
 				JOIN connection_approval_stages policy_stage
 					ON policy_stage.id = stage.policy_stage_id
 				WHERE request.id = ${input.requestId}
-					AND request.state = 'ROUTING_BLOCKED'
+					AND request.state IN ('ROUTING_BLOCKED', 'IN_REVIEW')
 					AND request.expires_at > now() AND stage.state = 'PENDING'
 				FOR UPDATE OF request, stage
 			`;
@@ -659,6 +688,16 @@ export class PostgresConnectionAccessRequestRepository
 					"Approval routing changed",
 				);
 			}
+			if (
+				target.request_state === "IN_REVIEW" &&
+				!input.approvers.some(
+					(item) => item.principalId === target.applicant_principal_id,
+				)
+			)
+				throw new ConnectionError(
+					"IDEMPOTENCY_CONFLICT",
+					"Approval routing changed",
+				);
 			if (
 				target.quorum_type === "AT_LEAST_N" &&
 				(target.quorum_count ?? 0) > input.approvers.length
@@ -687,6 +726,18 @@ export class PostgresConnectionAccessRequestRepository
 					FOR SHARE OF role_binding
 				`;
 				if (!selfApprover) forbidden();
+				if (target.request_state === "IN_REVIEW") {
+					const [alreadyRouted] = await sql<{ id: string }[]>`
+						SELECT candidate.approver_principal_id AS id
+						FROM connection_request_routing_revisions routing
+						JOIN connection_request_stage_approvers candidate
+							ON candidate.routing_revision_id = routing.id
+						WHERE routing.request_stage_id = ${target.request_stage_id}
+							AND routing.revision = ${target.routing_revision}
+							AND candidate.approver_principal_id = ${target.applicant_principal_id}
+					`;
+					if (alreadyRouted) forbidden();
+				}
 			}
 			const [duplicateApprover] = await sql<{ id: string }[]>`
 				SELECT stage.id FROM connection_request_stages stage
