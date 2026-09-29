@@ -7,6 +7,7 @@ import {
 	createWorkloadRuntimeV1,
 	isWorkloadExecutionCapacityCurrentV1,
 	type WorkloadRuntimeOptionsV1,
+	workloadRuntimeTransportProtocolV2,
 } from "./workload-runtime.js";
 import { validateWorkloadRuntimeAuthV1 } from "./workload-runtime-auth.js";
 
@@ -75,7 +76,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			input.signal.throwIfAborted();
 			const service = `${workloadResourceNameV1(input.agentId)}${input.purpose === "control" ? "-probe" : ""}`;
 			return {
-				baseUrl: `http://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
+				baseUrl: `${workloadRuntimeTransportProtocolV2(state, input.purpose)}://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
 				serviceToken,
 				workerId: signing.workerId,
 			};

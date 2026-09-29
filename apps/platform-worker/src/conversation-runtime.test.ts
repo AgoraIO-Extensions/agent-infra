@@ -1,5 +1,13 @@
 import { generateKeyPairSync } from "node:crypto";
-import { createRuntimeExecutionGrantVerifierV2 } from "@agent-infra/agent-runtime";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	createRuntimeExecutionGrantVerifierV2,
+	FakeRuntimeDriver,
+	FileRuntimeStore,
+	RuntimeHost,
+} from "@agent-infra/agent-runtime";
 import type {
 	AgentConfigurationRecordV2,
 	AgentManagementStateV1,
@@ -9,14 +17,25 @@ import type {
 	TaskAuthorizationBoundaryV1,
 	WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
+import {
+	migratePlatformDatabase,
+	PostgresConversationEventTransactionV1,
+	PostgresTaskAuthorizationStoreV1,
+} from "@agent-infra/platform-store";
+import postgres from "postgres";
 import { describe, expect, it, vi } from "vitest";
 import { createConversationDispatchUseCaseV1 } from "../../../packages/platform-core/src/conversation-dispatch.js";
+import { normalizedEvent } from "../../../packages/platform-core/src/conversation-dispatch-transition.js";
+import { createConversationEventUseCaseV1 } from "../../../packages/platform-core/src/conversation-events.js";
+import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
+import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
 import {
 	type ConversationLegacyControlRecoveryV2,
 	type ConversationRuntimeOptionsV2,
 	type ConversationRuntimeStateV2,
 	createConversationRuntimeV2,
 } from "./conversation-runtime.js";
+import { createWorkerRuntimeGrantSignerV2 } from "./runtime-grant-signer.js";
 
 const keys = generateKeyPairSync("ed25519");
 const verify = createRuntimeExecutionGrantVerifierV2(
@@ -28,6 +47,7 @@ function harness(
 	channelAuthorizationCurrent:
 		| ConversationRuntimeOptionsV2["channelAuthorizationCurrent"]
 		| null = async (record) => record.boundary.channelId === "web",
+	keyed = false,
 ) {
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
@@ -57,6 +77,17 @@ function harness(
 		executionStatus: "processing",
 		stopPending: false,
 	};
+	if (keyed) {
+		Object.assign(claim, {
+			executionSource: "web",
+			relayKeyBinding: {
+				purpose: "personal",
+				subjectId: "user",
+				keyId: "key-1",
+				keyVersion: 1,
+			},
+		});
+	}
 	const agent: AgentManagementStateV1 = {
 		schemaVersion: 1,
 		applicationId: "application",
@@ -90,6 +121,7 @@ function harness(
 		executionStatus: "processing",
 		stopPending: false,
 	};
+	if (keyed) Object.assign(state, { runtimeSubmitProtocol: "v4" });
 	let user: CurrentTaskUserV1 | null = {
 		schemaVersion: 1,
 		userId: "user",
@@ -139,22 +171,64 @@ function harness(
 	const directory = { resolveUser: vi.fn(async () => user) };
 	const store = {
 		readRuntimeState: vi.fn(
-			async () => state as ConversationRuntimeStateV2 | null,
+			async (
+				_input: Parameters<
+					ConversationRuntimeOptionsV2["dispatchStore"]["readRuntimeState"]
+				>[0],
+			) => state as ConversationRuntimeStateV2 | null,
 		),
 	};
 	const authorizationStore = {
 		readExecution: vi.fn(async () => record),
-		recordControl: vi.fn(async (input: { reason: string }) => {
-			if (input.reason === "authorization_revoked" && record) {
-				record.revokedAt = new Date(now);
-				Object.assign(state, { stopPending: true });
-			}
-			return { controlRecordId: `control-${input.reason}` };
-		}),
+		recordControl: vi.fn(
+			async (
+				input: Parameters<
+					ConversationRuntimeOptionsV2["taskAuthorizationStore"]["recordControl"]
+				>[0],
+			) => {
+				if (input.reason === "authorization_revoked" && record) {
+					record.revokedAt = new Date(now);
+					Object.assign(state, { stopPending: true });
+				}
+				return {
+					controlRecordId: `control-${input.reason}`,
+					reason: input.reason,
+				};
+			},
+		),
 	};
 	let legacyRecord: ConversationLegacyControlRecoveryV2 | null = null;
 	const legacyStore = {
 		readLegacyControlRecovery: vi.fn(async () => legacyRecord),
+	};
+	const executionKeys = {
+		readAcceptedExecution: vi.fn(async () => ({
+			scope: {
+				principal: { kind: "user" as const, id: "user" },
+				executionSource: "web" as const,
+				channelId: "web",
+				agentId: "agent",
+				conversationId: "conversation",
+				executionId: "execution",
+				turnId: "turn",
+				sessionGeneration: 1,
+				hostSessionRef: "host",
+				keyBinding: {
+					purpose: "personal" as const,
+					subjectId: "user",
+					ciphertextRef: "key-1",
+					version: 1,
+				},
+			},
+			trustedHostSessionRef: "host",
+		})),
+		readCiphertext: vi.fn(async () => ({ ciphertext: "synthetic" })),
+	};
+	const relayKeyDecryptor = {
+		decrypt: vi.fn(async () => ({
+			outcome: "decrypted" as const,
+			plaintext: new TextEncoder().encode("synthetic-relay-key-k1"),
+		})),
 	};
 	function useLegacy() {
 		record = null;
@@ -179,6 +253,33 @@ function harness(
 	}
 	const fetcher = vi.fn<typeof fetch>(async (url) => {
 		const path = String(url);
+		if (path.endsWith("/v4/events/read"))
+			return new Response(
+				JSON.stringify({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					executionId: "execution",
+					events: [
+						{
+							schemaVersion: 1,
+							adapterEventKey: "event-1",
+							executionId: "execution",
+							cursor: "cursor-1",
+							occurredAt: "2026-09-29T00:00:00.000Z",
+							type: "status",
+							payload: { status: "running" },
+						},
+					],
+				}),
+			);
+		if (path.endsWith("/v4/events/ack"))
+			return new Response(
+				JSON.stringify({
+					schemaVersion: 4,
+					executionId: "execution",
+					confirmedCursor: state.runtimeCursor,
+				}),
+			);
 		if (path.endsWith("/status"))
 			return new Response(
 				JSON.stringify({
@@ -213,20 +314,20 @@ function harness(
 		)
 			return new Response(
 				JSON.stringify({
-					schemaVersion: 3,
+					schemaVersion: path.includes("/v4/") ? 4 : 3,
 					hostSessionRef: "host",
 					operationId: "execution",
 					result: { outcome: "accepted", status: "running" },
 				}),
 			);
 		if (path.endsWith("/events/stream"))
-			return new Response(null, {
+			return new Response("", {
 				headers: { "content-type": "text/event-stream" },
 			});
 		throw new Error(`Unexpected runtime request: ${path}`);
 	});
 	const resolver = vi.fn(async () => ({
-		baseUrl: "http://runtime.test",
+		baseUrl: keyed ? "https://runtime.test" : "http://runtime.test",
 		serviceToken: "synthetic-transport-proof",
 		workerId: "transport",
 	}));
@@ -246,6 +347,7 @@ function harness(
 		dispatchStore: store,
 		resolveRuntimeHost: resolver,
 		fetch: fetcher,
+		...(keyed ? { executionKeys, relayKeyDecryptor } : {}),
 		reconnectDelayMs,
 	});
 	async function authorize() {
@@ -299,6 +401,8 @@ function harness(
 		authorizationStore,
 		resolver,
 		fetcher,
+		executionKeys,
+		relayKeyDecryptor,
 		authorize,
 		request,
 		events,
@@ -314,6 +418,308 @@ function harness(
 }
 
 describe("Trusted conversation Runtime adapter", () => {
+	it("marks keyed recovery reads as V4", async () => {
+		const h = harness(1, undefined, true);
+		await h.authorize();
+		expect(
+			h.store.readRuntimeState.mock.calls.some(
+				([input]) => input.runtimeSubmitProtocol === "v4",
+			),
+		).toBe(true);
+	});
+
+	it("reads and acknowledges a keyed Execution on the V4 event route", async () => {
+		const h = harness(1, undefined, true);
+		try {
+			const reference = await h.authorize();
+			const stream = h.runtime.runtimeHost.events(h.events(reference));
+			const iterator = stream[Symbol.asyncIterator]();
+			await expect(iterator.next()).resolves.toMatchObject({
+				value: { executionId: "execution", cursor: "cursor-1" },
+			});
+			await iterator.return?.();
+			Object.assign(h.state, { runtimeCursor: "cursor-1" });
+			if (!h.runtime.runtimeHost.acknowledge)
+				throw new Error("Runtime ACK is unavailable");
+			await h.runtime.runtimeHost.acknowledge({
+				...h.events(reference),
+				confirmedCursor: "cursor-1",
+			});
+			const paths = h.fetcher.mock.calls.map(([url]) => String(url));
+			expect(paths).toEqual([
+				"https://runtime.test/internal/runtime/v4/events/read",
+				"https://runtime.test/internal/runtime/v4/events/ack",
+			]);
+			for (const [, init] of h.fetcher.mock.calls) {
+				const body = JSON.parse(String(init?.body));
+				expect(body.keyBinding).toEqual({
+					purpose: "personal",
+					subjectId: "user",
+					ciphertextRef: "key-1",
+					version: 1,
+				});
+				expect(verify(body.grant).claims.requestDigest).toMatch(
+					/^[0-9a-f]{64}$/,
+				);
+				expect(JSON.stringify(body)).not.toContain("synthetic-relay-key-k1");
+			}
+		} finally {
+			h.runtime.close();
+		}
+	});
+
+	it("routes a keyed Execution through V4 with the original Key version", async () => {
+		const h = harness(1, undefined, true);
+		try {
+			const reference = await h.authorize();
+			const result = await h.runtime.runtimeHost.dispatch(h.request(reference));
+			expect(result).toMatchObject({ schemaVersion: 2 });
+			const [url, init] = h.fetcher.mock.calls[0] ?? [];
+			expect(String(url)).toBe(
+				"https://runtime.test/internal/runtime/v4/turns",
+			);
+			const transport = JSON.parse(String(init?.body));
+			expect(transport.businessRequest).toMatchObject({
+				executionSource: "web",
+				keyBinding: {
+					purpose: "personal",
+					subjectId: "user",
+					ciphertextRef: "key-1",
+					version: 1,
+				},
+			});
+			expect(transport.businessRequest.selection.modelOptionId).toBe("option");
+			expect(transport.privateKeyField.keyDelivery.relayKey).toBe(
+				"synthetic-relay-key-k1",
+			);
+			expect(h.executionKeys.readCiphertext).toHaveBeenCalledWith({
+				purpose: "personal",
+				subjectId: "user",
+				keyId: "key-1",
+				keyVersion: 1,
+			});
+		} finally {
+			h.runtime.close();
+		}
+	});
+	it("keeps a custom task without model selection on the V2 route", async () => {
+		const h = harness(1, undefined, true);
+		Object.assign(h.claim, { modelOptionId: null, reasoningLevel: null });
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.dispatch(h.request(reference)),
+			).resolves.toMatchObject({ schemaVersion: 1 });
+			expect(h.store.readRuntimeState.mock.calls[0]?.[0]).not.toHaveProperty(
+				"runtimeSubmitProtocol",
+			);
+			const [url, init] = h.fetcher.mock.calls[0] ?? [];
+			expect(String(url)).toBe(
+				"https://runtime.test/internal/runtime/v3/turns",
+			);
+			const body = JSON.parse(String(init?.body));
+			expect(body).not.toHaveProperty("keyBinding");
+			expect(body).not.toHaveProperty("privateKeyField");
+		} finally {
+			h.runtime.close();
+		}
+	});
+	it("keeps a V2-to-V4 bootstrap submit pinned to its nullable original scope", async () => {
+		const h = harness(1, undefined, true);
+		Object.assign(h.state, { runtimeSubmitProtocol: "v2" });
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.dispatch(h.request(reference)),
+			).resolves.toMatchObject({
+				schemaVersion: 2,
+			});
+			const [url, init] = h.fetcher.mock.calls[0] ?? [];
+			expect(String(url)).toBe(
+				"https://runtime.test/internal/runtime/v4/turns",
+			);
+			const transport = JSON.parse(String(init?.body));
+			expect(transport.businessRequest.hostSessionRef).toBeNull();
+			expect(transport.privateKeyField.context.hostSessionRef).toBeNull();
+		} finally {
+			h.runtime.close();
+		}
+	});
+	it("keeps pinned V2 event recovery on the V3 read and ACK routes", async () => {
+		const h = harness(1, undefined, true);
+		Object.assign(h.state, {
+			runtimeSubmitProtocol: "v2",
+			runtimeCursor: "cursor-1",
+		});
+		try {
+			const reference = await h.authorize();
+			const controller = new AbortController();
+			const stream = h.runtime.runtimeHost.events(
+				h.events(reference),
+				controller.signal,
+			);
+			const iterator = stream[Symbol.asyncIterator]();
+			const pendingRead = iterator.next();
+			const abortTimer = setTimeout(() => controller.abort(), 20);
+			await expect(pendingRead).rejects.toMatchObject({
+				code: "RUNTIME_INTERRUPTED",
+			});
+			clearTimeout(abortTimer);
+			if (!h.runtime.runtimeHost.acknowledge)
+				throw new Error("Runtime ACK is unavailable");
+			await h.runtime.runtimeHost.acknowledge({
+				...h.events(reference),
+				confirmedCursor: "cursor-1",
+			});
+			const paths = h.fetcher.mock.calls.map(([url]) => String(url));
+			expect(paths[0]).toBe(
+				"https://runtime.test/internal/runtime/v3/events/stream",
+			);
+			expect(paths.at(-1)).toBe(
+				"https://runtime.test/internal/runtime/v3/events/ack",
+			);
+			expect(paths).not.toContain(
+				"https://runtime.test/internal/runtime/v4/events/read",
+			);
+			expect(paths).not.toContain(
+				"https://runtime.test/internal/runtime/v4/events/ack",
+			);
+		} finally {
+			h.runtime.close();
+		}
+	});
+	it("recovers a keyed Execution through the idempotent V4 submit", async () => {
+		const h = harness(1, undefined, true);
+		Object.assign(h.claim, { executionStatus: "unknown" });
+		Object.assign(h.state, {
+			executionStatus: "unknown",
+			runtimeSubmitProtocol: "v4",
+		});
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.recoverOriginalStatus?.({
+					...h.events(reference),
+					schemaVersion: 2,
+					hostSessionRef: "host",
+				}),
+			).resolves.toEqual({
+				schemaVersion: 2,
+				hostSessionRef: "host",
+				executionId: "execution",
+				outcome: "found",
+				status: "running",
+			});
+			expect(h.fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+				"https://runtime.test/internal/runtime/v4/turns",
+			]);
+			const body = JSON.parse(String(h.fetcher.mock.calls[0]?.[1]?.body));
+			expect(body.businessRequest).toMatchObject({
+				hostSessionRef: null,
+				input: { text: "original accepted input", attachments: [] },
+				selection: {
+					modelOptionId: "option",
+					reasoningLevel: "high",
+				},
+			});
+		} finally {
+			h.runtime.close();
+		}
+	});
+	it("keeps an explicitly pinned non-null submit Session compatible", async () => {
+		const h = harness(1, undefined, true);
+		Object.assign(h.claim, { executionStatus: "unknown" });
+		Object.assign(h.state, {
+			executionStatus: "unknown",
+			runtimeSubmitProtocol: "v4",
+			originalSubmitHostSessionRef: "original-host",
+			hostSessionRef: "assigned-host",
+		});
+		h.executionKeys.readAcceptedExecution.mockResolvedValue({
+			scope: {
+				principal: { kind: "user", id: "user" },
+				executionSource: "web",
+				channelId: "web",
+				agentId: "agent",
+				conversationId: "conversation",
+				executionId: "execution",
+				turnId: "turn",
+				sessionGeneration: 1,
+				hostSessionRef: "original-host",
+				keyBinding: {
+					purpose: "personal",
+					subjectId: "user",
+					ciphertextRef: "key-1",
+					version: 1,
+				},
+			},
+			trustedHostSessionRef: "original-host",
+		});
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.recoverOriginalStatus?.({
+					...h.events(reference),
+					schemaVersion: 2,
+					hostSessionRef: "assigned-host",
+				}),
+			).resolves.toMatchObject({ outcome: "found" });
+			const body = JSON.parse(String(h.fetcher.mock.calls[0]?.[1]?.body));
+			expect(body.businessRequest.hostSessionRef).toBe("original-host");
+		} finally {
+			h.runtime.close();
+		}
+	});
+
+	it("withholds the decrypted Key when current access is revoked during decryption", async () => {
+		const h = harness(1, undefined, true);
+		h.relayKeyDecryptor.decrypt.mockImplementationOnce(async () => {
+			h.setUser(null);
+			return {
+				outcome: "decrypted" as const,
+				plaintext: new TextEncoder().encode("synthetic-relay-key-k1"),
+			};
+		});
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.dispatch(h.request(reference)),
+			).rejects.toMatchObject({ code: "AUTHORIZATION_REVOKED" });
+			expect(h.authorizationStore.recordControl).toHaveBeenCalledWith(
+				expect.objectContaining({ reason: "authorization_revoked" }),
+			);
+			expect(h.fetcher).not.toHaveBeenCalled();
+		} finally {
+			h.runtime.close();
+		}
+	});
+
+	it("withholds the decrypted Key when the Workload route changes during decryption", async () => {
+		const h = harness(1, undefined, true);
+		h.relayKeyDecryptor.decrypt.mockImplementationOnce(async () => {
+			const original = h.record();
+			if (!original?.workload) throw new Error("Expected Workload");
+			h.setRecord({
+				...original,
+				agent: { ...original.agent, fence: 2 },
+				workload: { ...original.workload, fence: 2 },
+			});
+			return {
+				outcome: "decrypted" as const,
+				plaintext: new TextEncoder().encode("synthetic-relay-key-k1"),
+			};
+		});
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.dispatch(h.request(reference)),
+			).rejects.toMatchObject({ code: "RUNTIME_ROUTE_STALE" });
+			expect(h.fetcher).not.toHaveBeenCalled();
+		} finally {
+			h.runtime.close();
+		}
+	});
+
 	it.each(["cancel", "subject-disabled", "already-revoked"] as const)(
 		"recovers the lost original Session before stopping %s without restoring business authority",
 		async (reason) => {
@@ -794,7 +1200,7 @@ describe("Trusted conversation Runtime adapter", () => {
 		Object.assign(h.state, { stopPending: true });
 		h.authorizationStore.recordControl.mockImplementation(async () => {
 			h.store.readRuntimeState.mockResolvedValue(null);
-			return { controlRecordId: "control-stop" };
+			return { controlRecordId: "control-stop", reason: "stop" };
 		});
 		await expect(
 			h.runtime.runtimeHost.recoverOriginalStatus?.({
@@ -842,7 +1248,12 @@ describe("Trusted conversation Runtime adapter", () => {
 		expect(h.sent().body).not.toHaveProperty("input");
 		h.runtime.close();
 	});
-	it.each(["error", "eof"] as const)(
+	it.each([
+		"error",
+		"eof",
+		"grant-denied-terminal",
+		"grant-denied-pending",
+	] as const)(
 		"recovers the original event cursor immediately after concurrent stop closes the business stream with %s",
 		async (ending) => {
 			vi.useFakeTimers();
@@ -852,6 +1263,8 @@ describe("Trusted conversation Runtime adapter", () => {
 				h.store.readRuntimeState.mockImplementation(async () =>
 					structuredClone(h.state),
 				);
+				const grantDenied = ending.startsWith("grant-denied");
+				if (grantDenied) Object.assign(h.state, { runtimeCursor: "started" });
 				const context = await h.authorize();
 				const started = {
 					schemaVersion: 2,
@@ -905,6 +1318,23 @@ describe("Trusted conversation Runtime adapter", () => {
 					if (!String(url).endsWith("/events/stream"))
 						throw new Error("Recovery must not submit another Turn");
 					eventRequests += 1;
+					if (eventRequests === 1 && grantDenied) {
+						Object.assign(h.state, {
+							executionStatus:
+								ending === "grant-denied-pending" ? "processing" : "cancelled",
+							stopPending: ending === "grant-denied-pending",
+						});
+						return new Response(
+							JSON.stringify({
+								schemaVersion: 1,
+								code: "RUNTIME_GRANT_INVALID",
+								message: "Runtime Grant rejected",
+								retryable: false,
+								traceId: "trace",
+							}),
+							{ status: 403 },
+						);
+					}
 					return new Response(
 						eventRequests === 1
 							? new ReadableStream<Uint8Array>({
@@ -922,16 +1352,18 @@ describe("Trusted conversation Runtime adapter", () => {
 				const stream = h.runtime.runtimeHost
 					.events(h.events(context))
 					[Symbol.asyncIterator]();
-				expect((await stream.next()).value).toEqual(started);
-				Object.assign(h.state, {
-					runtimeCursor: "started",
-					executionStatus: "cancelled",
-					stopPending: false,
-				});
-				if (!oldPipe) throw new Error("Expected the business event stream");
-				if (ending === "error")
-					oldPipe.error(new Error("old business grant stream closed"));
-				else oldPipe.close();
+				if (!grantDenied) {
+					expect((await stream.next()).value).toEqual(started);
+					Object.assign(h.state, {
+						runtimeCursor: "started",
+						executionStatus: "cancelled",
+						stopPending: false,
+					});
+					if (!oldPipe) throw new Error("Expected the business event stream");
+					if (ending === "error")
+						oldPipe.error(new Error("old business grant stream closed"));
+					else oldPipe.close();
+				}
 				const next = stream.next().then(
 					(value) => ({ value }),
 					(error: unknown) => ({ error }),
@@ -941,13 +1373,22 @@ describe("Trusted conversation Runtime adapter", () => {
 					value: { done: false, value: interrupted },
 				});
 				expect(timers.mock.calls.some((call) => call[1] === 1_000)).toBe(false);
+				await h.runtime.runtimeHost.acknowledge?.({
+					...h.events(context),
+					confirmedCursor: "interrupted",
+				});
+				expect(h.fetcher).toHaveBeenCalledTimes(2);
 				Object.assign(h.state, { runtimeCursor: "interrupted" });
 				await h.runtime.runtimeHost.acknowledge?.({
 					...h.events(context),
 					confirmedCursor: "interrupted",
 				});
 				expect((await stream.next()).value).toEqual(terminal);
-				Object.assign(h.state, { runtimeCursor: "cancelled" });
+				Object.assign(h.state, {
+					runtimeCursor: "cancelled",
+					executionStatus: "cancelled",
+					stopPending: false,
+				});
 				await h.runtime.runtimeHost.acknowledge?.({
 					...h.events(context),
 					confirmedCursor: "cancelled",
@@ -960,12 +1401,23 @@ describe("Trusted conversation Runtime adapter", () => {
 					bodies.map(
 						(body) => body.afterCursor ?? body.confirmedCursor ?? null,
 					),
-				).toEqual([null, "started", "interrupted", "cancelled"]);
+				).toEqual([
+					grantDenied ? "started" : null,
+					"started",
+					"interrupted",
+					"cancelled",
+				]);
 				expect(verify(bodies[0].grant).claims.purpose).toBe("business");
 				for (const body of bodies.slice(1)) {
+					const reason =
+						ending === "grant-denied-pending" &&
+						body.confirmedCursor !== "cancelled"
+							? "stop"
+							: "recovery";
 					expect(verify(body.grant).claims).toMatchObject({
 						purpose: "control",
-						reason: "recovery",
+						reason,
+						controlRecordId: `control-${reason}`,
 						executionId: "execution",
 						turnId: "turn",
 						sessionGeneration: 1,
@@ -979,6 +1431,60 @@ describe("Trusted conversation Runtime adapter", () => {
 				h.runtime.close();
 				timers.mockRestore();
 				vi.useRealTimers();
+			}
+		},
+	);
+
+	it.each([
+		["RUNTIME_GRANT_INVALID", "none", 1],
+		["RUNTIME_SERVICE_UNAUTHORIZED", "concurrent", 1],
+		["RUNTIME_GRANT_INVALID", "existing", 1],
+		["RUNTIME_GRANT_INVALID", "concurrent", 2],
+	] as const)(
+		"rejects fatal %s with %s stop after %i event requests",
+		async (code, stop, expectedRequests) => {
+			const h = harness();
+			try {
+				h.store.readRuntimeState.mockImplementation(async () =>
+					structuredClone(h.state),
+				);
+				if (stop === "existing") Object.assign(h.state, { stopPending: true });
+				const context = await h.authorize();
+				h.fetcher.mockImplementation(async () => {
+					if (stop === "concurrent")
+						Object.assign(h.state, { stopPending: true });
+					if (h.fetcher.mock.calls.length > expectedRequests)
+						throw new Error("Fatal stream must not be retried");
+					return new Response(
+						JSON.stringify({
+							schemaVersion: 1,
+							code,
+							message: "Runtime request rejected",
+							retryable: false,
+							traceId: "trace",
+						}),
+						{ status: 403 },
+					);
+				});
+				const stream = h.runtime.runtimeHost.events(h.events(context));
+				await expect(
+					stream[Symbol.asyncIterator]().next(),
+				).rejects.toMatchObject({
+					code,
+					retryable: false,
+				});
+				expect(h.fetcher).toHaveBeenCalledTimes(expectedRequests);
+				const purposes = h.fetcher.mock.calls.map((call) => {
+					const body = JSON.parse(call[1]?.body as string);
+					return verify(body.grant).claims.purpose;
+				});
+				expect(purposes).toEqual(
+					expectedRequests === 2
+						? ["business", "control"]
+						: [stop === "existing" ? "control" : "business"],
+				);
+			} finally {
+				h.runtime.close();
 			}
 		},
 	);
@@ -1028,10 +1534,10 @@ describe("Trusted conversation Runtime adapter", () => {
 					leaseExpiresAt = Date.now() + 30_000;
 					return true;
 				}),
-				async terminalizeStoppedUnsentTurn() {
-					return true;
-				},
 				async prepareRuntimeDispatch() {
+					return owned;
+				},
+				async terminalizeStoppedUnsentTurn() {
 					return owned;
 				},
 				async cancelUnaccepted() {
@@ -1791,3 +2297,323 @@ describe("explicit historical metadata delivery", () => {
 		},
 	);
 });
+
+it.each(["stop", "authorization_revoked"] as const)(
+	"preserves persisted control continuity for %s across terminal lease takeover",
+	async (reason) => {
+		const database = await startPostgresTestDatabase("control-continuity");
+		const sql = postgres(database.databaseUrl, { max: 1 });
+		const taskStore = new PostgresTaskAuthorizationStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		const eventTransaction = new PostgresConversationEventTransactionV1({
+			databaseUrl: database.databaseUrl,
+		});
+		const directory = await mkdtemp(join(tmpdir(), "control-continuity-"));
+		const h = harness();
+		let host: RuntimeHost | undefined;
+		try {
+			await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
+			const record = h.record();
+			if (!record) throw new Error("Missing original authority");
+			await sql`insert into platform.conversations (id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision) values ('conversation','agent','user','web','active',1,'agent-7')`;
+			await sql`insert into platform.conversation_executions (execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,created_at) values ('execution','conversation','agent','user','web','turn','processing',1,1,'agent-7',now())`;
+			await sql`insert into platform.task_authorization_records (id,execution_id,boundary) values ('original-authorization','execution',${sql.json(JSON.parse(JSON.stringify(record.boundary)))})`;
+			h.authorizationStore.recordControl.mockImplementation((input) =>
+				taskStore.recordControl(input),
+			);
+			const controlRequest = {
+				executionId: "execution",
+				authorizationRecordId: "original-authorization",
+				workerId: "instance",
+				traceId: "trace",
+				requestId: "recovery-request",
+			};
+			const initialRecovery = await taskStore.recordControl({
+				...controlRequest,
+				reason: "recovery",
+			});
+			expect(
+				await sql`select reason from platform.task_control_records where id=${initialRecovery.controlRecordId}`,
+			).toEqual([{ reason: "recovery" }]);
+			expect(await sql`select * from platform.conversation_stops`).toHaveLength(
+				0,
+			);
+			h.store.readRuntimeState.mockImplementation(async () => {
+				const [state] = await sql<
+					{
+						status: ConversationRuntimeStateV2["executionStatus"];
+						last_runtime_cursor: string | null;
+					}[]
+				>`select status,last_runtime_cursor from platform.conversation_executions where execution_id='execution'`;
+				if (!state) throw new Error("Missing original execution");
+				return {
+					...h.state,
+					executionStatus: state.status,
+					runtimeCursor: state.last_runtime_cursor,
+				};
+			});
+			const driver = await FakeRuntimeDriver.open(
+				join(directory, "driver.json"),
+				[{ schemaVersion: 1, modelOptionId: "option", reasoningLevel: "high" }],
+			);
+			const storePath = join(directory, "host.json");
+			host = await RuntimeHost.open({
+				driver,
+				store: await FileRuntimeStore.open(storePath),
+				grantValidation: { expectedIssuer: "unused-v1" },
+				grantValidationV2: {
+					expectedIssuer: "platform",
+					expectedWorkerId: "transport",
+					now: () => now,
+				},
+			});
+			const app = createRuntimeHostApp({
+				host,
+				runtimeWorkerId: "transport",
+				serviceToken: "synthetic-transport-proof",
+				verifyGrant: () => {
+					throw new Error("V1 disabled");
+				},
+				verifyGrantV2: verify,
+			});
+			h.fetcher.mockImplementation(async (url, init) =>
+				app.request(String(url), init),
+			);
+			Object.assign(h.claim, {
+				deliveryFence: 1,
+				executionDeliveryFence: 1,
+				hostSessionRef: null,
+			});
+			Object.assign(h.state, { hostSessionRef: null });
+			const context = await h.authorize();
+			const accepted = await h.runtime.runtimeHost.dispatch({
+				...h.request(context),
+				deliveryFence: 1,
+				executionDeliveryFence: 1,
+			});
+			Object.assign(h.state, { hostSessionRef: accepted.hostSessionRef });
+			const stream = h.runtime.runtimeHost
+				.events(h.events(context))
+				[Symbol.asyncIterator]();
+			const first = await stream.next();
+			if (first.done) throw new Error("Expected original status event");
+			const events = createConversationEventUseCaseV1({
+				transaction: eventTransaction,
+			});
+			const persist = (event: typeof first.value) =>
+				events.persist({
+					schemaVersion: 1,
+					conversationId: "conversation",
+					executionId: "execution",
+					sessionGeneration: 1,
+					deliveryFence: 1,
+					adapterEventKey: event.adapterEventKey,
+					runtimeCursor: event.cursor,
+					occurredAt: event.occurredAt,
+					event: normalizedEvent(event),
+				});
+			expect(await persist(first.value)).toMatchObject({ outcome: "accepted" });
+			await h.runtime.runtimeHost.acknowledge?.({
+				...h.events(context),
+				confirmedCursor: first.value.cursor,
+			});
+			await stream.return?.();
+			const originalControl = await taskStore.recordControl({
+				executionId: "execution",
+				authorizationRecordId: "original-authorization",
+				reason,
+				workerId: "instance",
+				traceId: "trace",
+				requestId: "stop-request",
+			});
+			const sign = createWorkerRuntimeGrantSignerV2({
+				issuer: "platform",
+				workerId: "transport",
+				keyId: "signing",
+				privateKey: keys.privateKey,
+				now: () => now,
+			});
+			const stop = {
+				schemaVersion: 3 as const,
+				requestId: "stop-request",
+				traceId: "trace",
+				principal: { kind: "user" as const, id: "user" },
+				channelId: "web",
+				agentId: "agent",
+				conversationId: "conversation",
+				executionId: "execution",
+				turnId: "turn",
+				sessionGeneration: 1,
+				hostSessionRef: accepted.hostSessionRef,
+				operation: {
+					kind: "stop" as const,
+					id: "stop-request",
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+				},
+			};
+			const grant = sign(
+				stop,
+				{
+					purpose: "control",
+					reason,
+					controlRecordId: originalControl.controlRecordId,
+				},
+				"turn.stop",
+			);
+			expect(
+				await host.stopV3({ ...stop, grant }, verify(grant)),
+			).toMatchObject({ result: { status: "cancelled" } });
+			await sql`update platform.conversation_executions set status='cancelled' where execution_id='execution'`;
+			Object.assign(h.claim, {
+				deliveryFence: 2,
+				executionStatus: "cancelled",
+			});
+			h.directory.resolveUser.mockRejectedValue(
+				new Error("Original user unavailable"),
+			);
+			const recovery = await h.authorize();
+			const drain = h.runtime.runtimeHost
+				.events(h.events(recovery))
+				[Symbol.asyncIterator]();
+			const delivery = await drain.next().then(
+				(value) => ({ value }),
+				(error) => ({
+					failure: { code: error.code, retryable: error.retryable },
+				}),
+			);
+			expect(delivery).toMatchObject({ value: { done: false } });
+			if (!("value" in delivery) || delivery.value.done)
+				throw new Error("Expected durable terminal event");
+			const terminal = delivery.value;
+			expect(terminal.value).toMatchObject({
+				type: "completed",
+				payload: { status: "cancelled" },
+			});
+			const ackCount = () =>
+				h.fetcher.mock.calls.filter(([url]) =>
+					String(url).endsWith("/events/ack"),
+				).length;
+			const beforeCommit = ackCount();
+			await h.runtime.runtimeHost.acknowledge?.({
+				...h.events(recovery),
+				confirmedCursor: terminal.value.cursor,
+			});
+			expect(ackCount()).toBe(beforeCommit);
+			expect(await persist(terminal.value)).toMatchObject({
+				outcome: "accepted",
+			});
+			await h.runtime.runtimeHost.acknowledge?.({
+				...h.events(recovery),
+				confirmedCursor: terminal.value.cursor,
+			});
+			// FakeRuntimeDriver tails even a completed journal; close this fixture
+			// subscription after verifying delivery and the durable acknowledgement.
+			await drain.return?.();
+			const controlQueries = h.fetcher.mock.calls.filter(([url, init]) => {
+				if (
+					!String(url).endsWith("/events/stream") &&
+					!String(url).endsWith("/events/ack")
+				)
+					return false;
+				return (
+					verify(JSON.parse(init?.body as string).grant).claims.purpose ===
+					"control"
+				);
+			});
+			expect(controlQueries).toHaveLength(2);
+			for (const [, init] of controlQueries)
+				expect(
+					verify(JSON.parse(init?.body as string).grant).claims,
+				).toMatchObject({
+					purpose: "control",
+					reason,
+					controlRecordId: originalControl.controlRecordId,
+					operation: { deliveryFence: 1, executionDeliveryFence: 1 },
+				});
+			const saved = JSON.parse(await readFile(storePath, "utf8")).sessions[
+				accepted.hostSessionRef
+			];
+			expect(saved.executionAuthorities.execution).toMatchObject({
+				stopped: true,
+				control: { reason, controlRecordId: originalControl.controlRecordId },
+				confirmedCursor: terminal.value.cursor,
+			});
+			expect(
+				await sql`select reason from platform.task_control_records order by reason`,
+			).toEqual(
+				[{ reason: "recovery" }, { reason }].sort((a, b) =>
+					a.reason.localeCompare(b.reason),
+				),
+			);
+			expect(await driver.sideEffectCount()).toBe(2);
+			const beforeDenied = h.fetcher.mock.calls.length;
+			await expect(
+				h.runtime.runtimeHost.renewAuthorization?.(h.events(recovery)),
+			).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_CONTROL_ONLY" });
+			await expect(
+				h.runtime.runtimeHost.dispatch({
+					...h.request(recovery),
+					deliveryFence: 2,
+					executionDeliveryFence: 1,
+				}),
+			).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_CONTROL_ONLY" });
+			expect(h.fetcher).toHaveBeenCalledTimes(beforeDenied);
+			const continued = await taskStore.recordControl({
+				...controlRequest,
+				reason: reason === "stop" ? "authorization_revoked" : "stop",
+			});
+			expect(continued).toEqual(originalControl);
+			const controls =
+				await sql`select id,reason from platform.task_control_records order by reason`;
+			expect(controls).toHaveLength(2);
+			expect(
+				await taskStore.recordControl({
+					...controlRequest,
+					reason: "recovery",
+				}),
+			).toEqual(originalControl);
+			expect(
+				(
+					await sql`select revoked_at from platform.task_authorization_records where id='original-authorization'`
+				)[0]?.revoked_at,
+			).toBeInstanceOf(Date);
+			expect(
+				await sql`select action from platform.audit_events where action='task.control.promoted'`,
+			).toHaveLength(reason === "stop" ? 1 : 0);
+			const promoted = await h.authorize();
+			await h.runtime.runtimeHost.acknowledge?.({
+				...h.events(promoted),
+				confirmedCursor: terminal.value.cursor,
+			});
+			expect(
+				JSON.parse(await readFile(storePath, "utf8")).sessions[
+					accepted.hostSessionRef
+				].executionAuthorities.execution.control,
+			).toEqual({
+				controlRecordId: originalControl.controlRecordId,
+				reason,
+			});
+			expect(
+				await sql`select id,reason from platform.task_control_records order by reason`,
+			).toEqual(controls);
+			await expect(
+				taskStore.recordControl({
+					...controlRequest,
+					executionId: "other-execution",
+					reason: "recovery",
+				}),
+			).rejects.toThrow("Task authorization persistence is unavailable");
+		} finally {
+			h.runtime.close();
+			await host?.close();
+			await eventTransaction.close();
+			await taskStore.close();
+			await sql.end();
+			await database.stop();
+			await rm(directory, { recursive: true, force: true });
+		}
+	},
+	120_000,
+);

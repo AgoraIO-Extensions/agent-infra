@@ -825,21 +825,29 @@ export function validateModelAccess(
 	if (
 		!isPlainRecord(input) ||
 		!exactKeys(input, ["endpoint", "credential"]) ||
-		typeof input.endpoint !== "string" ||
-		input.endpoint.length > 2048 ||
-		/[\s\\?#]/.test(input.endpoint) ||
 		typeof input.credential !== "string" ||
 		!/^[\x21-\x7e]{16,8192}$/.test(input.credential)
 	) {
 		configurationInvalid();
 	}
+	return {
+		endpoint: validateModelEndpoint(input.endpoint),
+		credential: input.credential,
+	};
+}
+
+export function validateModelEndpoint(input: unknown): string {
+	if (
+		typeof input !== "string" ||
+		input.length > 2048 ||
+		/[\s\\?#]/.test(input)
+	)
+		configurationInvalid();
 	try {
-		const endpoint = new URL(input.endpoint);
+		const endpoint = new URL(input);
 		// Match the literal authority, not URL-normalized numeric host aliases.
 		const literalLoopback =
-			/^http:\/\/(?:127\.0\.0\.1|\[::1\])(?::[0-9]+)?(?:\/|$)/.test(
-				input.endpoint,
-			);
+			/^http:\/\/(?:127\.0\.0\.1|\[::1\])(?::[0-9]+)?(?:\/|$)/.test(input);
 		if (
 			(endpoint.protocol !== "https:" && !literalLoopback) ||
 			endpoint.username ||
@@ -852,7 +860,7 @@ export function validateModelAccess(
 	} catch {
 		configurationInvalid();
 	}
-	return { endpoint: input.endpoint, credential: input.credential };
+	return input;
 }
 
 function modelAccessArguments(access: CodexModelAccess | undefined) {

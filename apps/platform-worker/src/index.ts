@@ -1,4 +1,6 @@
 import { pathToFileURL } from "node:url";
+import { startObservability } from "@agent-infra/observability";
+import { createObservedConversationEvents } from "@agent-infra/observability/worker";
 import { startPlatformConversationWorkerFromDeploymentV2 } from "./conversation-worker.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
@@ -15,7 +17,6 @@ export * from "./workload-worker.js";
 import {
 	type ConversationDispatchAuthorizationPortV1,
 	createConversationDispatchUseCaseV1,
-	createConversationEventUseCaseV1,
 	createSecretActivationUseCaseV1,
 	createSecretKeyRotationUseCaseV1,
 } from "@agent-infra/platform-core";
@@ -56,6 +57,7 @@ export function createPlatformConversationDispatchWorkerV1(options: {
 	readonly runtimeHost: WorkerRuntimeHostClientOptionsV1;
 	readonly leaseDurationMs?: number;
 	readonly retryDelayMs?: number;
+	readonly telemetry?: ReturnType<typeof startObservability>;
 }) {
 	const store = openPostgresConversationDispatchStoreV1({
 		databaseUrl: options.databaseUrl,
@@ -63,14 +65,17 @@ export function createPlatformConversationDispatchWorkerV1(options: {
 	const eventTransaction = new PostgresConversationEventTransactionV1({
 		databaseUrl: options.databaseUrl,
 	});
+	const telemetry =
+		options.telemetry ?? startObservability({ service: "platform-worker" });
 	try {
 		const dispatch = createConversationDispatchUseCaseV1(
 			{
 				store,
 				authorization: options.authorization,
 				runtimeHost: createWorkerRuntimeHostClientV1(options.runtimeHost),
-				events: createConversationEventUseCaseV1({
+				events: createObservedConversationEvents({
 					transaction: eventTransaction,
+					telemetry,
 				}),
 			},
 			{
@@ -80,10 +85,19 @@ export function createPlatformConversationDispatchWorkerV1(options: {
 		);
 		return {
 			dispatch: dispatch.dispatch,
-			close: () => Promise.all([eventTransaction.close(), store.close()]),
+			close: () =>
+				Promise.all([
+					eventTransaction.close(),
+					store.close(),
+					telemetry.close(),
+				]),
 		};
 	} catch (error) {
-		void Promise.allSettled([eventTransaction.close(), store.close()]);
+		void Promise.allSettled([
+			eventTransaction.close(),
+			store.close(),
+			telemetry.close(),
+		]);
 		throw error;
 	}
 }

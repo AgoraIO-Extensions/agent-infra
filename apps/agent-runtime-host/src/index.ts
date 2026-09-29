@@ -1,11 +1,16 @@
 import { createPublicKey, type KeyObject } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { createServer as createHttpsServer } from "node:https";
 import { isAbsolute, join, resolve } from "node:path";
+import { createSecureContext } from "node:tls";
 import { pathToFileURL } from "node:url";
 
+import type { RuntimeExternalActionAuthorization } from "@agent-infra/agent-runtime";
 import {
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createExecutionGrantVerifier,
+	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
 	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
@@ -64,6 +69,7 @@ interface StartOptions {
 	log?: (message: string) => void;
 	port?: number;
 	configVersion?: string;
+	tls?: { readonly cert: Buffer; readonly key: Buffer };
 }
 
 function runtimePort(value: string | undefined, fallback: number) {
@@ -87,6 +93,12 @@ export function startRuntimeHost(options: StartOptions) {
 		{
 			fetch: createRuntimeHostApp(options).fetch,
 			port,
+			...(options.tls
+				? {
+						createServer: createHttpsServer,
+						serverOptions: options.tls,
+					}
+				: {}),
 		},
 		(info) =>
 			log(
@@ -156,6 +168,28 @@ export async function assembleRuntimeHost(
 	}
 	const configuration =
 		binding === "codex" ? readCodexPilotConfiguration(environment) : undefined;
+	let tls: StartOptions["tls"];
+	if (configuration && "keyed" in configuration && configuration.keyed) {
+		const certFile = required("AGENT_INFRA_RUNTIME_TLS_CERT_FILE");
+		const keyFile = required("AGENT_INFRA_RUNTIME_TLS_KEY_FILE");
+		if (
+			![certFile, keyFile].every(
+				(file) => isAbsolute(file) && resolve(file) === file,
+			)
+		)
+			runtimeConfigurationInvalid();
+		try {
+			tls = { cert: await readFile(certFile), key: await readFile(keyFile) };
+			createSecureContext(tls);
+		} catch {
+			runtimeConfigurationInvalid();
+		}
+	} else if (
+		environment.AGENT_INFRA_RUNTIME_TLS_CERT_FILE ||
+		environment.AGENT_INFRA_RUNTIME_TLS_KEY_FILE
+	) {
+		runtimeConfigurationInvalid();
+	}
 	const connectionProfile = readConnectionClientProfile(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE,
 	);
@@ -181,6 +215,17 @@ export async function assembleRuntimeHost(
 	let assembledHost: RuntimeHost | undefined;
 	let closeDriver: (() => Promise<void>) | undefined;
 	let openedStore: FileRuntimeStore | undefined;
+	const authorizeExternalAction = async (
+		action: RuntimeExternalActionAuthorization,
+	) => {
+		if (!assembledHost)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization is not ready",
+				403,
+			);
+		return assembledHost.authorizeExternalAction(action);
+	};
 	const close = async () => {
 		try {
 			await assembledHost?.close();
@@ -222,15 +267,7 @@ export async function assembleRuntimeHost(
 								}),
 							}
 						: {}),
-					authorizeExternalAction: async (action) => {
-						if (!assembledHost)
-							throw new RuntimeHostError(
-								"RUNTIME_GRANT_INVALID",
-								"Runtime authorization is not ready",
-								403,
-							);
-						await assembledHost.authorizeExternalAction(action);
-					},
+					authorizeExternalAction,
 					launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
 					path: join(dataDirectory, "codex-driver.json"),
 					configVersion: configuration.configVersion,
@@ -242,19 +279,28 @@ export async function assembleRuntimeHost(
 				? binding === "acp"
 					? await openOpenCodeRuntime({
 							...messagesConfiguration,
+							authorizeExternalAction,
 							path: join(dataDirectory, "acp-driver"),
 							executable:
 								environment.AGENT_INFRA_OPENCODE_EXECUTABLE ??
 								"/opt/opencode/bin/opencode",
+						} as Parameters<typeof openOpenCodeRuntime>[0] & {
+							authorizeExternalAction: typeof authorizeExternalAction;
 						})
 					: binding === "pi"
 						? await openPiRuntime({
 								...messagesConfiguration,
+								authorizeExternalAction,
 								path: join(dataDirectory, "pi-driver"),
+							} as Parameters<typeof openPiRuntime>[0] & {
+								authorizeExternalAction: typeof authorizeExternalAction;
 							})
 						: await ClaudeRuntimeDriver.open({
 								...messagesConfiguration,
+								authorizeExternalAction,
 								path: join(dataDirectory, "claude-driver"),
+							} as Parameters<typeof ClaudeRuntimeDriver.open>[0] & {
+								authorizeExternalAction: typeof authorizeExternalAction;
 							})
 				: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
 		closeDriver = async () => {
@@ -279,6 +325,19 @@ export async function assembleRuntimeHost(
 							expectedIssuer,
 							expectedWorkerId: runtimeWorkerId,
 						},
+						...(configuration && "keyed" in configuration && configuration.keyed
+							? {
+									allowLegacyBusiness: false,
+									validateGrantV4: createRuntimeExecutionGrantValidatorV4(
+										new Map([[keyId, publicKey]]),
+										{
+											expectedIssuer,
+											expectedWorkerId: runtimeWorkerId,
+											expectedAgentId: agentId ?? runtimeConfigurationInvalid(),
+										},
+									),
+								}
+							: {}),
 					}
 				: {}),
 		});
@@ -314,6 +373,7 @@ export async function assembleRuntimeHost(
 				? { configVersion: activeConfiguration.configVersion }
 				: {}),
 			serviceToken,
+			...(tls ? { tls } : {}),
 			port,
 			close,
 			verifyGrant: (grant: ExecutionGrantV1) => {

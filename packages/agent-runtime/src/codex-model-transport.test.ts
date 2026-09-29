@@ -408,6 +408,74 @@ afterEach(async () => {
 	for (const stop of close.splice(0).reverse()) await stop();
 });
 
+describe("execution-scoped V4 model credentials", () => {
+	it("uses the authorized Key for each native Turn on the same model route", async () => {
+		const received: string[] = [];
+		const endpoint = await listen(
+			createServer((incoming, response) => {
+				received.push(incoming.headers.authorization ?? "");
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const keys = new Map([
+			["turn-synthetic", "synthetic-relay-key-k1"],
+			["turn-next", "synthetic-relay-key-k2"],
+		]);
+		const value = await openCodexModelTransport(
+			[
+				{
+					internalModel: selectedInternalModel,
+					model: "synthetic-selected",
+					endpoint,
+				},
+			],
+			{
+				beforeRequest: async ({ turnId }) => ({
+					credential: keys.get(turnId),
+					started: async () => {},
+					finish: async () => {},
+				}),
+			},
+		);
+		close.push(value.close);
+		admitTurn(value, defaultNativeTurn);
+		const nextTurn = { threadId: "thread-synthetic", turnId: "turn-next" };
+		admitTurn(value, nextTurn);
+		expect((await request(value.modelAccess)).status).toBe(200);
+		expect((await request(value.modelAccess, {}, nextTurn)).status).toBe(200);
+		expect(received).toEqual([
+			"Bearer synthetic-relay-key-k1",
+			"Bearer synthetic-relay-key-k2",
+		]);
+	});
+
+	it("rejects a missing Execution Key before contacting Relay", async () => {
+		let calls = 0;
+		const endpoint = await listen(
+			createServer((_incoming, response) => {
+				calls++;
+				response.end(completedEvent());
+			}),
+		);
+		const value = await openCodexModelTransport(
+			[
+				{
+					internalModel: selectedInternalModel,
+					model: "synthetic-selected",
+					endpoint,
+				},
+			],
+			testObserver,
+		);
+		close.push(value.close);
+		admitTurn(value, defaultNativeTurn);
+		const result = await request(value.modelAccess);
+		expect(result.status).toBe(502);
+		expect(calls).toBe(0);
+	});
+});
+
 function observePersistenceDeadlines() {
 	// Keep real HTTP and admission clocks; expire only the persistence waits.
 	const callbacks: (() => void)[] = [];

@@ -3,8 +3,15 @@ import { isDeepStrictEqual } from "node:util";
 
 import type {
 	RuntimeBusinessCommandV2,
+	RuntimeBusinessRequestV4,
 	RuntimeControlCommandV2,
 	RuntimeControlReasonV2,
+	RuntimeEventV1,
+	RuntimeSubmitTurnRequestV4,
+} from "@agent-infra/contracts/runtime";
+import {
+	RuntimeEventAckRequestV4Schema,
+	RuntimeEventReadRequestV4Schema,
 } from "@agent-infra/contracts/runtime";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import {
@@ -14,6 +21,7 @@ import {
 	type ConversationRuntimeEventRequestV1,
 	ConversationRuntimeHostError,
 	type ConversationRuntimeHostPortV1,
+	type ConversationRuntimeOperationEventV2,
 	type ConversationRuntimeStatusRequestV2,
 	createTaskRuntimeAuthorizationUseCaseV1,
 	type LegacyTaskControlRecoveryV1,
@@ -23,11 +31,42 @@ import {
 	type TaskUserDirectoryV1,
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
+import type { RelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 
 import { createWorkerRuntimeGrantSignerV2 } from "./runtime-grant-signer.js";
-import { createWorkerRuntimeHostClientV3 } from "./runtime-host-client.js";
+import { createWorkerRuntimeGrantSignerV4 } from "./runtime-grant-signer-v4.js";
+import {
+	createWorkerRuntimeHostClientV3,
+	createWorkerRuntimeHostClientV4,
+	type WorkerRuntimeHostClientOptionsV4,
+} from "./runtime-host-client.js";
 
-export type ConversationRuntimeStateV2 = TaskRuntimeRecoveryStateV1;
+function hasKeyedV4Selection(
+	claim: ConversationDispatchClaimV1,
+): claim is ConversationDispatchClaimV1 & {
+	readonly executionSource: NonNullable<
+		ConversationDispatchClaimV1["executionSource"]
+	>;
+	readonly relayKeyBinding: NonNullable<
+		ConversationDispatchClaimV1["relayKeyBinding"]
+	>;
+	readonly modelOptionId: string;
+	readonly reasoningLevel: string;
+} {
+	return Boolean(
+		claim.executionSource &&
+			claim.relayKeyBinding &&
+			claim.modelOptionId &&
+			claim.reasoningLevel,
+	);
+}
+
+export type ConversationRuntimeStateV2 = TaskRuntimeRecoveryStateV1 & {
+	/** The Store's immutable submit protocol pin, when supplied by recovery. */
+	readonly runtimeSubmitProtocol?: "v2" | "v4";
+	/** The immutable Host Session Ref carried by the original V4 submit scope. */
+	readonly originalSubmitHostSessionRef?: string | null;
+};
 
 export interface ConversationTaskAuthorizationStoreV2 {
 	readExecution(
@@ -40,7 +79,10 @@ export interface ConversationTaskAuthorizationStoreV2 {
 		readonly workerId: string;
 		readonly traceId: string;
 		readonly requestId: string;
-	}): Promise<{ readonly controlRecordId: string }>;
+	}): Promise<{
+		readonly controlRecordId: string;
+		readonly reason: RuntimeControlReasonV2;
+	}>;
 }
 
 /** Read-only projection of already verified system migration evidence. */
@@ -73,6 +115,8 @@ export interface ConversationRuntimeOptionsV2 {
 	readonly dispatchStore: {
 		readRuntimeState(input: {
 			readonly claim: ConversationDispatchClaimV1;
+			readonly runtimeSubmitProtocol?: "v2" | "v4";
+			readonly allowPinnedV2Recovery?: boolean;
 		}): Promise<ConversationRuntimeStateV2 | null>;
 	};
 	readonly resolveRuntimeHost: (input: {
@@ -87,6 +131,8 @@ export interface ConversationRuntimeOptionsV2 {
 		readonly workerId: string;
 	}>;
 	readonly fetch?: typeof fetch;
+	readonly executionKeys?: WorkerRuntimeHostClientOptionsV4["executionKeys"];
+	readonly relayKeyDecryptor?: RelayKeyWorkerDecryptorV1;
 	readonly reconnectDelayMs?: number;
 	readonly signal?: AbortSignal;
 }
@@ -149,6 +195,63 @@ export function createConversationRuntimeV2(
 		? AbortSignal.any([controller.signal, options.signal])
 		: controller.signal;
 	const signRequest = createWorkerRuntimeGrantSignerV2(options.signing);
+	const signV4 = createWorkerRuntimeGrantSignerV4(options.signing);
+	function submitExecutionKeys(request: RuntimeSubmitTurnRequestV4) {
+		const executionKeys = options.executionKeys;
+		if (!executionKeys) unavailable("RELAY_KEY_UNAVAILABLE");
+		if (request.hostSessionRef !== null) return executionKeys;
+		return {
+			readAcceptedExecution: async (request: RuntimeBusinessRequestV4) => {
+				const accepted = await executionKeys.readAcceptedExecution(request);
+				if (!accepted) return null;
+				return {
+					scope: { ...accepted.scope, hostSessionRef: null },
+					trustedHostSessionRef: null,
+				};
+			},
+			readCiphertext: executionKeys.readCiphertext.bind(executionKeys),
+		};
+	}
+	async function submitKeyedV4(input: {
+		readonly target: {
+			readonly baseUrl: string;
+			readonly serviceToken: string;
+		};
+		readonly unsigned: RuntimeSubmitTurnRequestV4;
+		readonly authorizationRecordId: string;
+		readonly assertCurrentAuthorization: () => Promise<void>;
+		readonly signal: AbortSignal;
+	}) {
+		const createClient = (
+			executionKeys: NonNullable<ConversationRuntimeOptionsV2["executionKeys"]>,
+		) =>
+			createWorkerRuntimeHostClientV4({
+				...input.target,
+				fetch: options.fetch,
+				verifyGrant: signV4.verify,
+				executionKeys,
+				decryptor: options.relayKeyDecryptor as RelayKeyWorkerDecryptorV1,
+				assertCurrentAuthorization: input.assertCurrentAuthorization,
+			});
+		const request = {
+			...input.unsigned,
+			grant: signV4.sign(input.unsigned, input.authorizationRecordId),
+		};
+		return createClient(submitExecutionKeys(input.unsigned)).submitTurn(
+			request,
+			input.signal,
+		);
+	}
+	function submitHostSessionRef(state: ConversationRuntimeStateV2) {
+		if (state.originalSubmitHostSessionRef !== undefined)
+			return state.originalSubmitHostSessionRef;
+		if (
+			state.runtimeSubmitProtocol === "v2" ||
+			state.runtimeSubmitProtocol === "v4"
+		)
+			return null;
+		return state.hostSessionRef;
+	}
 	const combined = (signal?: AbortSignal) =>
 		signal ? AbortSignal.any([lifetime, signal]) : lifetime;
 
@@ -160,7 +263,18 @@ export function createConversationRuntimeV2(
 				? bounded(options.channelAuthorizationCurrent(record, signal), signal)
 				: unavailable("CHANNEL_AUTHORIZATION_UNAVAILABLE"),
 		readRuntimeState: (claim, signal) =>
-			bounded(options.dispatchStore.readRuntimeState({ claim }), signal),
+			bounded(
+				options.dispatchStore.readRuntimeState({
+					claim,
+					...(hasKeyedV4Selection(claim)
+						? {
+								runtimeSubmitProtocol: "v4" as const,
+								allowPinnedV2Recovery: true,
+							}
+						: {}),
+				}),
+				signal,
+			),
 		readAuthorization: (executionId, signal) =>
 			bounded(
 				options.taskAuthorizationStore.readExecution(executionId),
@@ -218,7 +332,7 @@ export function createConversationRuntimeV2(
 		signal: AbortSignal,
 	) {
 		const context = contextFor(request);
-		let state = await stateFor(context, signal);
+		let state: ConversationRuntimeStateV2 = await stateFor(context, signal);
 		const beforeRoute = await current(context, state, command, signal);
 		let authority = beforeRoute.authority;
 		const target = await bounded(
@@ -363,7 +477,71 @@ export function createConversationRuntimeV2(
 				executionDeliveryFence: context.claim.executionDeliveryFence,
 			},
 		};
-		return { context, state, authority, client, base };
+		return {
+			context,
+			state,
+			authority,
+			client,
+			base,
+			target: postTarget,
+			route: afterTargetRoute.record,
+		};
+	}
+	function keyedEvent(
+		request: Request,
+		command: "events.persist" | "events.ack",
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		signal: AbortSignal,
+	) {
+		const { context, state, target, authority } = prepared;
+		if (
+			!hasKeyedV4Selection(context.claim) ||
+			state.runtimeSubmitProtocol !== "v4"
+		)
+			return null;
+		if (
+			!state.hostSessionRef ||
+			!options.executionKeys ||
+			!options.relayKeyDecryptor
+		)
+			unavailable("RELAY_KEY_UNAVAILABLE");
+		return {
+			body: {
+				...prepared.base,
+				schemaVersion: 4 as const,
+				hostSessionRef: state.hostSessionRef,
+				executionSource: context.claim.executionSource,
+				keyBinding: {
+					purpose: context.claim.relayKeyBinding.purpose,
+					subjectId: context.claim.relayKeyBinding.subjectId,
+					ciphertextRef: context.claim.relayKeyBinding.keyId,
+					version: context.claim.relayKeyBinding.keyVersion,
+				},
+				consumer: "platform_worker_persistence" as const,
+				grant: {
+					schemaVersion: 2 as const,
+					format: "runtime-execution-jws" as const,
+					token: "a.b.c",
+				},
+			},
+			client: createWorkerRuntimeHostClientV4({
+				...target,
+				fetch: options.fetch,
+				verifyGrant: signV4.verify,
+				executionKeys: options.executionKeys,
+				decryptor: options.relayKeyDecryptor,
+				assertCurrentAuthorization: async () => {
+					const current = await prepare(request, command, signal);
+					if (
+						!isDeepStrictEqual(current.authority, authority) ||
+						current.state.runtimeCursor !== state.runtimeCursor ||
+						!isDeepStrictEqual(current.route, prepared.route) ||
+						!isDeepStrictEqual(current.target, target)
+					)
+						unavailable("RUNTIME_ROUTE_STALE");
+				},
+			}),
+		};
 	}
 	async function latch(
 		prepared: Awaited<ReturnType<typeof prepare>>,
@@ -386,11 +564,134 @@ export function createConversationRuntimeV2(
 		signal?: AbortSignal,
 	) {
 		const active = combined(signal);
-		const { state, authority, client, base } = await prepare(
-			request,
-			"session.status",
-			active,
-		);
+		const prepared = await prepare(request, "session.status", active);
+		const { context, state, authority, client, base, target, route } = prepared;
+		let businessAuthorizationRecordId: string | undefined;
+		let businessTarget = target;
+		let businessRoute = route;
+		if (
+			hasKeyedV4Selection(context.claim) &&
+			authority.purpose === "business"
+		) {
+			businessAuthorizationRecordId = authority.authorizationRecordId;
+		} else if (
+			context.kind === "business" &&
+			hasKeyedV4Selection(context.claim) &&
+			authority.purpose === "control" &&
+			authority.reason === "recovery" &&
+			(state.executionStatus === "unknown" ||
+				state.executionStatus === "processing") &&
+			!state.stopPending
+		) {
+			const business = await current(
+				context,
+				await stateFor(context, active),
+				"turn.submit",
+				active,
+			);
+			if (business.authority.purpose === "business") {
+				businessTarget = await bounded(
+					options.resolveRuntimeHost({
+						agentId: context.claim.agentId,
+						signal: active,
+						workload: business.record.workload,
+						purpose: "business",
+						command: "turn.submit",
+					}),
+					active,
+				);
+				if (businessTarget.workerId !== options.signing.workerId)
+					denied("RUNTIME_WORKER_BINDING_INVALID");
+				const latest = await current(
+					context,
+					await stateFor(context, active),
+					"turn.submit",
+					active,
+				);
+				if (
+					latest.authority.purpose !== "business" ||
+					latest.authority.authorizationRecordId !==
+						business.authority.authorizationRecordId
+				)
+					denied();
+				businessAuthorizationRecordId = latest.authority.authorizationRecordId;
+				businessRoute = latest.record;
+			}
+		}
+		if (businessAuthorizationRecordId && hasKeyedV4Selection(context.claim)) {
+			if (
+				!context.claim.input ||
+				!options.executionKeys ||
+				!options.relayKeyDecryptor
+			)
+				unavailable("RELAY_KEY_UNAVAILABLE");
+			const assertCurrentAuthorization = async () => {
+				const latest = await current(
+					context,
+					await stateFor(context, active),
+					"turn.submit",
+					active,
+				);
+				if (
+					latest.authority.purpose !== "business" ||
+					latest.authority.authorizationRecordId !==
+						businessAuthorizationRecordId
+				)
+					denied();
+				if (
+					latest.record.configurationRevision !==
+						businessRoute.configurationRevision ||
+					!isDeepStrictEqual(latest.record.agent, businessRoute.agent) ||
+					!isDeepStrictEqual(latest.record.workload, businessRoute.workload)
+				)
+					unavailable("RUNTIME_ROUTE_STALE");
+			};
+			const unsigned = {
+				...base,
+				schemaVersion: 4 as const,
+				hostSessionRef: submitHostSessionRef(state),
+				executionSource: context.claim.executionSource,
+				keyBinding: {
+					purpose: context.claim.relayKeyBinding.purpose,
+					subjectId: context.claim.relayKeyBinding.subjectId,
+					ciphertextRef: context.claim.relayKeyBinding.keyId,
+					version: context.claim.relayKeyBinding.keyVersion,
+				},
+				input: {
+					...context.claim.input,
+					attachments: [...context.claim.input.attachments],
+				},
+				selection: {
+					schemaVersion: 1 as const,
+					modelOptionId: context.claim.modelOptionId,
+					reasoningLevel: context.claim.reasoningLevel,
+				},
+				grant: {
+					schemaVersion: 4 as const,
+					format: "runtime-execution-jws" as const,
+					token: "a.b.c",
+				},
+			} satisfies RuntimeBusinessRequestV4;
+			const response = await submitKeyedV4({
+				target: businessTarget,
+				unsigned,
+				authorizationRecordId: businessAuthorizationRecordId,
+				assertCurrentAuthorization,
+				signal: active,
+			});
+			if (response.result.outcome !== "accepted")
+				throw new ConversationRuntimeHostError(
+					"RUNTIME_ACCEPTANCE_UNKNOWN",
+					true,
+				);
+			return {
+				schemaVersion: 2 as const,
+				hostSessionRef: response.hostSessionRef,
+				executionId: context.claim.executionId,
+				outcome: "found" as const,
+				status: response.result.status,
+			};
+		}
 		const body = {
 			...base,
 			originalOperationDigest: state.originalOperationDigest,
@@ -471,6 +772,28 @@ export function createConversationRuntimeV2(
 				denied("RUNTIME_FENCE_STALE");
 			const prepared = await prepare(request, expectedOperation, active);
 			const { state, authority, client, base } = prepared;
+			const assertCurrentAuthorization = async () => {
+				const latest = await current(
+					context,
+					await stateFor(context, active),
+					expectedOperation,
+					active,
+				);
+				if (
+					authority.purpose !== "business" ||
+					latest.authority.purpose !== "business" ||
+					latest.authority.authorizationRecordId !==
+						authority.authorizationRecordId
+				)
+					denied();
+				if (
+					latest.record.configurationRevision !==
+						prepared.route.configurationRevision ||
+					!isDeepStrictEqual(latest.record.agent, prepared.route.agent) ||
+					!isDeepStrictEqual(latest.record.workload, prepared.route.workload)
+				)
+					unavailable("RUNTIME_ROUTE_STALE");
+			};
 			if (
 				authority.purpose === "control" &&
 				request.operation !== "turn.stop"
@@ -480,6 +803,48 @@ export function createConversationRuntimeV2(
 			}
 			if (request.operation === "turn.submit") {
 				if (!context.claim.input) unavailable("RUNTIME_REQUEST_INVALID");
+				if (hasKeyedV4Selection(context.claim)) {
+					if (
+						authority.purpose !== "business" ||
+						!options.executionKeys ||
+						!options.relayKeyDecryptor
+					)
+						unavailable("RELAY_KEY_UNAVAILABLE");
+					const unsigned = {
+						...base,
+						schemaVersion: 4 as const,
+						hostSessionRef: submitHostSessionRef(state),
+						executionSource: context.claim.executionSource,
+						keyBinding: {
+							purpose: context.claim.relayKeyBinding.purpose,
+							subjectId: context.claim.relayKeyBinding.subjectId,
+							ciphertextRef: context.claim.relayKeyBinding.keyId,
+							version: context.claim.relayKeyBinding.keyVersion,
+						},
+						input: {
+							...context.claim.input,
+							attachments: [...context.claim.input.attachments],
+						},
+						selection: {
+							schemaVersion: 1 as const,
+							modelOptionId: context.claim.modelOptionId,
+							reasoningLevel: context.claim.reasoningLevel,
+						},
+						grant: {
+							schemaVersion: 4 as const,
+							format: "runtime-execution-jws" as const,
+							token: "a.b.c",
+						},
+					} satisfies RuntimeBusinessRequestV4;
+					const response = await submitKeyedV4({
+						target: prepared.target,
+						unsigned,
+						authorizationRecordId: authority.authorizationRecordId,
+						assertCurrentAuthorization,
+						signal: active,
+					});
+					return { ...response, schemaVersion: 2 as const };
+				}
 				const body = {
 					...base,
 					input: {
@@ -510,6 +875,57 @@ export function createConversationRuntimeV2(
 					request.messageId !== context.claim.messageId
 				)
 					unavailable("RUNTIME_REQUEST_INVALID");
+				if (hasKeyedV4Selection(context.claim)) {
+					if (
+						authority.purpose !== "business" ||
+						!options.executionKeys ||
+						!options.relayKeyDecryptor
+					)
+						unavailable("RELAY_KEY_UNAVAILABLE");
+					const unsigned = {
+						...base,
+						schemaVersion: 4 as const,
+						executionSource: context.claim.executionSource,
+						keyBinding: {
+							purpose: context.claim.relayKeyBinding.purpose,
+							subjectId: context.claim.relayKeyBinding.subjectId,
+							ciphertextRef: context.claim.relayKeyBinding.keyId,
+							version: context.claim.relayKeyBinding.keyVersion,
+						},
+						hostSessionRef: state.hostSessionRef,
+						operation: {
+							kind: "message" as const,
+							id: context.claim.messageId,
+							deliveryFence: context.claim.deliveryFence,
+							executionDeliveryFence: context.claim.executionDeliveryFence,
+						},
+						input: {
+							...context.claim.input,
+							attachments: [...context.claim.input.attachments],
+						},
+						grant: {
+							schemaVersion: 4 as const,
+							format: "runtime-execution-jws" as const,
+							token: "a.b.c",
+						},
+					} satisfies RuntimeBusinessRequestV4;
+					const keyedClient = createWorkerRuntimeHostClientV4({
+						...prepared.target,
+						fetch: options.fetch,
+						verifyGrant: signV4.verify,
+						executionKeys: options.executionKeys,
+						decryptor: options.relayKeyDecryptor,
+						assertCurrentAuthorization,
+					});
+					const response = await keyedClient.supplement(
+						{
+							...unsigned,
+							grant: signV4.sign(unsigned, authority.authorizationRecordId),
+						},
+						active,
+					);
+					return { ...response, schemaVersion: 1 as const };
+				}
 				const body = {
 					...base,
 					hostSessionRef: state.hostSessionRef,
@@ -637,13 +1053,22 @@ export function createConversationRuntimeV2(
 		},
 		async acknowledge(request, signal) {
 			const active = combined(signal);
-			const { state, authority, client, base } = await prepare(
-				request,
-				"events.ack",
-				active,
-			);
+			const prepared = await prepare(request, "events.ack", active);
+			const { state, authority, client, base } = prepared;
 			if (state.runtimeCursor !== request.confirmedCursor) return;
 			if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+			const keyed = keyedEvent(request, "events.ack", prepared, active);
+			if (keyed) {
+				const body = RuntimeEventAckRequestV4Schema.parse({
+					...keyed.body,
+					confirmedCursor: request.confirmedCursor,
+				});
+				await keyed.client.acknowledgeEvents(
+					{ ...body, grant: await signV4.signEvent(body, authority) },
+					active,
+				);
+				return;
+			}
 			const body = {
 				...base,
 				hostSessionRef: state.hostSessionRef,
@@ -659,11 +1084,8 @@ export function createConversationRuntimeV2(
 			const active = combined(signal);
 			for (;;) {
 				active.throwIfAborted();
-				const { state, authority, client, base } = await prepare(
-					request,
-					"events.persist",
-					active,
-				);
+				const prepared = await prepare(request, "events.persist", active);
+				const { state, authority, client, base } = prepared;
 				if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
 				const body = {
 					...base,
@@ -674,17 +1096,48 @@ export function createConversationRuntimeV2(
 				let terminal = false;
 				let streamFailure: ConversationRuntimeHostError | undefined;
 				try {
-					for await (const event of client.events(
-						{ ...body, grant: signRequest(body, authority, "events.persist") },
-						active,
-					)) {
+					const keyed = keyedEvent(request, "events.persist", prepared, active);
+					let events:
+						| Iterable<RuntimeEventV1 | ConversationRuntimeOperationEventV2>
+						| AsyncIterable<
+								RuntimeEventV1 | ConversationRuntimeOperationEventV2
+						  >;
+					if (keyed) {
+						const unsigned = RuntimeEventReadRequestV4Schema.parse({
+							...keyed.body,
+							afterCursor: state.runtimeCursor,
+						});
+						events = (
+							await keyed.client.readEvents(
+								{
+									...unsigned,
+									grant: await signV4.signEvent(unsigned, authority),
+								},
+								active,
+							)
+						).events;
+					} else {
+						events = client.events(
+							{
+								...body,
+								grant: signRequest(body, authority, "events.persist"),
+							},
+							active,
+						);
+					}
+					for await (const event of events) {
 						yield event;
 						if (event.type === "completed") terminal = true;
 					}
 				} catch (error) {
 					if (
 						!(error instanceof ConversationRuntimeHostError) ||
-						!error.retryable
+						(!error.retryable &&
+							!(
+								authority.purpose === "business" &&
+								!terminal &&
+								error.code === "RUNTIME_GRANT_INVALID"
+							))
 					)
 						throw error;
 					streamFailure = error;

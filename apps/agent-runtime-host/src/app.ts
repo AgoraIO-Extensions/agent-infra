@@ -6,7 +6,9 @@ import {
 	RuntimeAuthorizationRenewRequestV3Schema,
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeEventAckRequestV3Schema,
+	RuntimeEventAckRequestV4Schema,
 	RuntimeEventPersistRequestV3Schema,
+	RuntimeEventReadRequestV4Schema,
 	type RuntimeExecutionGrantV2,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeGenerationCancelRequestV3Schema,
@@ -19,8 +21,10 @@ import {
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSubmitTurnRequestV3Schema,
+	RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV1Schema,
 	RuntimeSupplementRequestV3Schema,
+	RuntimeSupplementTransportV4Schema,
 	type VerifiedExecutionGrantV1,
 	type VerifiedRuntimeExecutionGrantV2,
 	WorkloadReadinessRequestV1Schema,
@@ -294,6 +298,41 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 	v3Route("turns", RuntimeSubmitTurnRequestV3Schema, (request, verification) =>
 		options.host.submitTurnV3(request, verification),
 	);
+	app.post("/internal/runtime/v4/turns", async (context) => {
+		const transport = await parseBody(
+			context.req.raw,
+			RuntimeSubmitTurnTransportV4Schema,
+		);
+		return context.json(await options.host.submitTurnV4(transport));
+	});
+	app.post("/internal/runtime/v4/instructions", async (context) => {
+		const transport = await parseBody(
+			context.req.raw,
+			RuntimeSupplementTransportV4Schema,
+		);
+		return context.json(await options.host.supplementV4(transport));
+	});
+	app.post("/internal/runtime/v4/events/read", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeEventReadRequestV4Schema,
+		);
+		return context.json(
+			await options.host.readEventsV4(request, await verifyV2(request.grant)),
+		);
+	});
+	app.post("/internal/runtime/v4/events/ack", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeEventAckRequestV4Schema,
+		);
+		return context.json(
+			await options.host.acknowledgeEventsV4(
+				request,
+				await verifyV2(request.grant),
+			),
+		);
+	});
 	v3Route(
 		"instructions",
 		RuntimeSupplementRequestV3Schema,
@@ -350,6 +389,12 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 							data: JSON.stringify(event),
 						});
 					}
+				} catch (error) {
+					if (
+						!(error instanceof RuntimeHostError) ||
+						error.code !== "RUNTIME_GRANT_EXPIRED"
+					)
+						throw error;
 				} finally {
 					abort.abort();
 				}
