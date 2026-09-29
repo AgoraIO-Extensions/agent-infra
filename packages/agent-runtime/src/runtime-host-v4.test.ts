@@ -136,7 +136,7 @@ it("reinstalls the pinned Key on a running submit replay after Host restart", as
 	const store = await FileRuntimeStore.open(join(directory, "host.json"));
 	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
 	const { request, claims, transport } = fixture();
-	const grants = new Map([[request.operation.id, claims]]);
+	const grants = new Map([[request.requestId, claims]]);
 	const options = {
 		store,
 		driver,
@@ -148,7 +148,7 @@ it("reinstalls the pinned Key on a running submit replay after Host restart", as
 		allowLegacyBusiness: false,
 		validateGrantV4: async (value: unknown) => {
 			const parsed = value as RuntimeBusinessRequestV4;
-			const current = grants.get(parsed.operation.id);
+			const current = grants.get(parsed.requestId);
 			if (!current) throw new Error("Unknown test Grant");
 			await validateRuntimeBusinessBindingV4(parsed, current);
 			return { request: parsed, claims: current };
@@ -254,7 +254,7 @@ it("reinstalls the pinned Key on a running submit replay after Host restart", as
 			.update(runtimeRequestSigningPayloadV4(supplementRequest))
 			.digest("hex"),
 	});
-	grants.set(supplementRequest.operation.id, supplementClaims);
+	grants.set(supplementRequest.requestId, supplementClaims);
 	const privateKeyField = {
 		...transport.privateKeyField,
 		context: {
@@ -291,6 +291,42 @@ it("reinstalls the pinned Key on a running submit replay after Host restart", as
 	await expect(reopened.authorizeExternalAction(action)).resolves.toEqual({
 		relayKey: "synthetic-relay-key-k1",
 	});
+	const retrySupplement = {
+		...supplementRequest,
+		requestId: "request-3",
+		operation: { ...supplementRequest.operation, deliveryFence: 3 },
+	};
+	const retrySupplementClaims = RuntimeBusinessGrantClaimsV4Schema.parse({
+		...supplementClaims,
+		grantId: "grant-3",
+		operation: retrySupplement.operation,
+		requestDigest: createHash("sha256")
+			.update(runtimeRequestSigningPayloadV4(retrySupplement))
+			.digest("hex"),
+	});
+	grants.set(retrySupplement.requestId, retrySupplementClaims);
+	await expect(
+		reopened.supplementV4({
+			businessRequest: retrySupplement,
+			privateKeyField: {
+				...privateKeyField,
+				context: {
+					...privateKeyField.context,
+					requestId: retrySupplement.requestId,
+					grantId: retrySupplementClaims.grantId,
+					requestDigest: retrySupplementClaims.requestDigest,
+					operation: retrySupplement.operation,
+				},
+			},
+		}),
+	).resolves.toMatchObject({ operationId: "message-1" });
+	await expect(
+		reopened.supplementV4({
+			businessRequest: supplementRequest,
+			privateKeyField,
+		}),
+	).rejects.toMatchObject({ code: "RUNTIME_FENCE_STALE" });
+	expect(await driver.sideEffectCount()).toBe(2);
 	await reopened.close();
 	await store.close();
 });
@@ -344,6 +380,132 @@ it("does not reinstall a Key when replaying a terminal submit receipt", async ()
 	});
 	expect(await driver.sideEffectCount()).toBe(1);
 	await reopened.close();
+	await store.close();
+});
+
+it("replays the original Key under a newer Grant and fence without dispatching again", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-fence-"));
+	directories.push(directory);
+	const store = await FileRuntimeStore.open(join(directory, "host.json"));
+	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+	const { request, claims, transport } = fixture();
+	let clock = claims.issuedAt + 1_000;
+	const grants = new Map([[request.requestId, claims]]);
+	const options = {
+		store,
+		driver,
+		grantValidation: { expectedIssuer: "agent-platform" },
+		grantValidationV2: {
+			expectedIssuer: "platform-worker",
+			expectedWorkerId: "worker-1",
+			now: () => clock,
+		},
+		allowLegacyBusiness: false,
+		validateGrantV4: async (value: unknown) => {
+			const parsed = value as RuntimeBusinessRequestV4;
+			const current = grants.get(parsed.requestId);
+			if (!current) throw new Error("Unknown test Grant");
+			await validateRuntimeBusinessBindingV4(parsed, current);
+			return { request: parsed, claims: current };
+		},
+	};
+	let host = await RuntimeHost.open(options);
+	const accepted = await host.submitTurnV4(transport);
+	const action = {
+		nativeSessionRef: store.nativeSessionRef(accepted.hostSessionRef) as string,
+		executionId: request.executionId,
+		runtimeOperationId: request.executionId,
+		operationRef: "model-fact-1",
+		attemptRef: "attempt-1",
+		kind: "model" as const,
+	};
+	clock = claims.expiresAt + 1;
+	await expect(host.authorizeExternalAction(action)).rejects.toMatchObject({
+		code: "RUNTIME_GRANT_INVALID",
+	});
+	await host.close();
+	host = await RuntimeHost.open(options);
+	await expect(host.submitTurnV4(transport)).rejects.toMatchObject({
+		code: "RUNTIME_GRANT_INVALID",
+	});
+	const retryRequest = RuntimeSubmitTurnRequestV4Schema.parse({
+		...request,
+		requestId: "request-2",
+		operation: {
+			...request.operation,
+			deliveryFence: 2,
+			executionDeliveryFence: 2,
+		},
+	});
+	const retryClaims = RuntimeBusinessGrantClaimsV4Schema.parse({
+		...claims,
+		grantId: "grant-2",
+		issuedAt: clock - 1_000,
+		expiresAt: clock + 29_000,
+		operation: retryRequest.operation,
+		requestDigest: createHash("sha256")
+			.update(runtimeRequestSigningPayloadV4(retryRequest))
+			.digest("hex"),
+	});
+	grants.set(retryRequest.requestId, retryClaims);
+	const retryTransport = {
+		businessRequest: retryRequest,
+		privateKeyField: {
+			...transport.privateKeyField,
+			context: {
+				...transport.privateKeyField.context,
+				requestId: retryRequest.requestId,
+				grantId: retryClaims.grantId,
+				requestDigest: retryClaims.requestDigest,
+				operation: retryRequest.operation,
+			},
+		},
+	};
+	const wrongRequest = RuntimeSubmitTurnRequestV4Schema.parse({
+		...retryRequest,
+		requestId: "request-wrong-authority",
+	});
+	const wrongClaims = RuntimeBusinessGrantClaimsV4Schema.parse({
+		...retryClaims,
+		grantId: "grant-wrong-authority",
+		authorizationRecordId: "other-authorization",
+		requestDigest: createHash("sha256")
+			.update(runtimeRequestSigningPayloadV4(wrongRequest))
+			.digest("hex"),
+	});
+	grants.set(wrongRequest.requestId, wrongClaims);
+	await expect(
+		host.submitTurnV4({
+			businessRequest: wrongRequest,
+			privateKeyField: {
+				...retryTransport.privateKeyField,
+				context: {
+					...retryTransport.privateKeyField.context,
+					requestId: wrongRequest.requestId,
+					grantId: wrongClaims.grantId,
+					requestDigest: wrongClaims.requestDigest,
+				},
+			},
+		}),
+	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+	expect(
+		store.readOriginalExecutionKeyScopeV4(request)?.operation.deliveryFence,
+	).toBe(1);
+	await expect(host.authorizeExternalAction(action)).rejects.toMatchObject({
+		code: "RUNTIME_GRANT_INVALID",
+	});
+	await expect(host.submitTurnV4(retryTransport)).resolves.toEqual(accepted);
+	await expect(host.authorizeExternalAction(action)).resolves.toEqual({
+		relayKey: "synthetic-relay-key-k1",
+	});
+	expect(
+		store.readOriginalExecutionKeyScopeV4(request)?.operation.deliveryFence,
+	).toBe(2);
+	await expect(host.submitTurnV4(transport)).rejects.toMatchObject({
+		code: "RUNTIME_FENCE_STALE",
+	});
+	expect(await driver.sideEffectCount()).toBe(1);
+	await host.close();
 	await store.close();
 });
 

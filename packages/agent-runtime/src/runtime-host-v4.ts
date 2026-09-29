@@ -61,6 +61,11 @@ function scope(request: RuntimeBusinessRequestV4) {
 }
 
 function operationDigest(request: RuntimeBusinessRequestV4) {
+	const {
+		deliveryFence: _deliveryFence,
+		executionDeliveryFence: _executionDeliveryFence,
+		...operation
+	} = request.operation;
 	return requestDigest({
 		kind: "selection" in request ? "submit-turn" : "supplement",
 		agentId: request.agentId,
@@ -68,7 +73,7 @@ function operationDigest(request: RuntimeBusinessRequestV4) {
 		executionId: request.executionId,
 		turnId: request.turnId,
 		sessionGeneration: request.sessionGeneration,
-		operation: request.operation,
+		operation,
 		executionSource: request.executionSource,
 		keyBinding: request.keyBinding,
 		input: request.input,
@@ -183,6 +188,18 @@ export class RuntimeHostV4 {
 					},
 				});
 				this.options.assertOpen();
+				if (request.operation.deliveryFence < prepared.operation.deliveryFence)
+					throw new RuntimeHostError(
+						"RUNTIME_FENCE_STALE",
+						"Runtime delivery fence is stale",
+						409,
+						false,
+					);
+				const session = this.options.store.getSessionForQuery(
+					prepared.session.hostSessionRef,
+					request,
+					request.operation.executionDeliveryFence,
+				);
 				if (prepared.operation.state === "resolved") {
 					const replayed = response(
 						prepared.session.hostSessionRef,
@@ -192,13 +209,9 @@ export class RuntimeHostV4 {
 						replayed.result.outcome === "accepted" &&
 						replayed.result.status === "running"
 					) {
-						const session = this.options.store.getSessionForQuery(
-							prepared.session.hostSessionRef,
-							request,
-							request.operation.executionDeliveryFence,
-						);
 						const executionAuthority =
 							session.executionAuthorities?.[request.executionId];
+						const now = (this.options.now ?? Date.now)();
 						const terminal = Object.values(session.operations).some(
 							(operation) =>
 								operation.executionId === request.executionId &&
@@ -211,6 +224,11 @@ export class RuntimeHostV4 {
 							executionAuthority?.workerId === claims.workerId &&
 							executionAuthority.authorizationRecordId ===
 								claims.authorizationRecordId &&
+							executionAuthority.executionDeliveryFence ===
+								request.operation.executionDeliveryFence &&
+							executionAuthority.issuedAt <= now &&
+							executionAuthority.expiresAt > now &&
+							!executionAuthority.queryOnly &&
 							!executionAuthority.stopped &&
 							!executionAuthority.control &&
 							!terminal

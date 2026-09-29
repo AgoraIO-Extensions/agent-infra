@@ -626,10 +626,41 @@ export class FileRuntimeStore {
 				const resolvedReplay =
 					operation?.state === "resolved" &&
 					operation.requestDigest === input.requestDigest;
-				// A retry of an already-resolved operation only reads its durable
-				// receipt. Recovery query authority must not turn that read into a
-				// fresh business authorization decision.
-				if (!resolvedReplay) {
+				const currentAuthority =
+					session.executionAuthorities?.[input.binding.executionId];
+				if (
+					resolvedReplay &&
+					input.keyScopeV4 !== undefined &&
+					operation.result?.outcome === "accepted" &&
+					operation.result.status === "running" &&
+					(!currentAuthority ||
+						currentAuthority.workerId !== input.authorization.workerId ||
+						(input.authorization.purpose === "business" &&
+							currentAuthority.authorizationRecordId !==
+								input.authorization.authorizationRecordId))
+				)
+					runtimeAuthorizationDenied();
+				const refreshRunningV4 =
+					resolvedReplay &&
+					input.authorization.purpose === "business" &&
+					input.keyScopeV4 !== undefined &&
+					isDeepStrictEqual(operation.keyScopeV4, input.keyScopeV4) &&
+					operation.result?.outcome === "accepted" &&
+					operation.result.status === "running" &&
+					input.deliveryFence >= operation.deliveryFence &&
+					!session.generationBarrier &&
+					currentAuthority?.workerId === input.authorization.workerId &&
+					currentAuthority.authorizationRecordId ===
+						input.authorization.authorizationRecordId &&
+					input.authorization.operation.executionDeliveryFence >=
+						currentAuthority.executionDeliveryFence &&
+					currentAuthority.issuedAt <= input.authorization.issuedAt &&
+					!currentAuthority.queryOnly &&
+					!currentAuthority.stopped &&
+					!currentAuthority.control;
+				// A V4 running replay may renew its original business lease. Other
+				// resolved receipts remain reads, including stopped and control work.
+				if (!resolvedReplay || refreshRunningV4) {
 					session.executionAuthorities ??= {};
 					applyRuntimeAuthority(
 						session.executionAuthorities,
