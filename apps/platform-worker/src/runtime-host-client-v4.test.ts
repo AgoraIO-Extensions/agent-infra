@@ -312,26 +312,29 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 		const fetcher = vi.fn<typeof fetch>(async (url, init) =>
 			app.request(new Request(url, init)),
 		);
+		let businessRevoked = false;
+		const acceptedExecution = {
+			scope: {
+				principal: request.principal,
+				executionSource: request.executionSource,
+				channelId: request.channelId,
+				agentId: request.agentId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				turnId: request.turnId,
+				sessionGeneration: request.sessionGeneration,
+				hostSessionRef: request.hostSessionRef,
+				keyBinding: request.keyBinding,
+			},
+			trustedHostSessionRef: null,
+		};
 		const client = createWorkerRuntimeHostClientV4({
 			baseUrl: "https://runtime.example.test",
 			serviceToken: "synthetic-service-token",
 			verifyGrant: signer.verify,
 			executionKeys: {
-				readAcceptedExecution: async () => ({
-					scope: {
-						principal: request.principal,
-						executionSource: request.executionSource,
-						channelId: request.channelId,
-						agentId: request.agentId,
-						conversationId: request.conversationId,
-						executionId: request.executionId,
-						turnId: request.turnId,
-						sessionGeneration: request.sessionGeneration,
-						hostSessionRef: request.hostSessionRef,
-						keyBinding: request.keyBinding,
-					},
-					trustedHostSessionRef: null,
-				}),
+				readAcceptedExecution: async () =>
+					businessRevoked ? null : acceptedExecution,
 				readCiphertext: async () => ({ encrypted: true }),
 			},
 			decryptor: {
@@ -348,6 +351,8 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 			grant: signer.sign(request, "authorization-1"),
 		};
 		const accepted = await client.submitTurn(signed);
+		const firstDelivery = fetcher.mock.calls[0];
+		if (!firstDelivery) throw new Error("Expected initial V4 delivery");
 		expect(accepted).toMatchObject({
 			schemaVersion: 4,
 			operationId: request.executionId,
@@ -455,7 +460,17 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 		await expect(client.readEvents(signedRead)).rejects.toMatchObject({
 			code: "RUNTIME_GRANT_INVALID",
 		});
-		await expect(client.submitTurn(signed)).resolves.toEqual(accepted);
+		businessRevoked = true;
+		const deliveredCalls = fetcher.mock.calls.length;
+		await expect(client.submitTurn(signed)).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		expect(fetcher).toHaveBeenCalledTimes(deliveredCalls);
+		const hostReplay = await app.request(
+			new Request(firstDelivery[0], firstDelivery[1]),
+		);
+		expect(hostReplay.status).toBe(200);
+		expect(await hostReplay.json()).toEqual(accepted);
 		expect(await driver.sideEffectCount()).toBe(1);
 		for (const changed of [
 			{ ...controlRead, principal: { kind: "user" as const, id: "bob" } },
@@ -573,7 +588,11 @@ it("carries a signed V4 Turn through Worker, Host and durable Fake Driver", asyn
 		await expect(client.readEvents(signedRead)).rejects.toMatchObject({
 			code: "RUNTIME_GRANT_INVALID",
 		});
-		await expect(client.submitTurn(signed)).resolves.toEqual(accepted);
+		const restartedDeliveredCalls = fetcher.mock.calls.length;
+		await expect(client.submitTurn(signed)).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		expect(fetcher).toHaveBeenCalledTimes(restartedDeliveredCalls);
 		expect(await driver.sideEffectCount()).toBe(1);
 		expect(await readFile(storePath, "utf8")).not.toContain(
 			"synthetic-relay-key-k1",
