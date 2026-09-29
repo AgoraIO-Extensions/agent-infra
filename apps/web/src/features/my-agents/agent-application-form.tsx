@@ -637,7 +637,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const configuration = application?.configuration;
 	const persistedModelOptions = configuration?.modelOptions;
 	const deployment = props.deploymentConfiguration;
-	const deploymentRetryable = props.deploymentConfigurationRetryable ?? true;
+	const deploymentRetryable = props.deploymentConfigurationRetryable ?? false;
 	const modelEndpoints = deployment.modelCatalog.endpoints;
 	const [name, setName] = useState(application?.name ?? "");
 	const [description, setDescription] = useState(

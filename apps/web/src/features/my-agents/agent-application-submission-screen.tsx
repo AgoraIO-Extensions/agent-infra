@@ -81,7 +81,7 @@ export function AgentApplicationSubmissionScreen(
 	const deploymentUnavailable =
 		props.deploymentConfiguration.status !== "populated" ||
 		props.deploymentConfiguration.modelCatalog.status !== "populated";
-	const deploymentRetryable = props.deploymentConfigurationRetryable ?? true;
+	const deploymentRetryable = props.deploymentConfigurationRetryable ?? false;
 
 	return (
 		<section aria-labelledby="agent-application-submission-heading">

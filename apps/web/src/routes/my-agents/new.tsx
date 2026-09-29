@@ -22,16 +22,18 @@ function NewAgentApplicationRoute() {
 			</main>
 		);
 	}
+	const deploymentReadDenied =
+		deployment.isError &&
+		!isRetryableDeploymentConfigurationError(deployment.error);
 	const deploymentConfiguration =
-		deployment.data?.kind === "ready"
+		!deploymentReadDenied && deployment.data?.kind === "ready"
 			? deployment.data.configuration
 			: unavailableDeploymentConfiguration;
-	const deploymentConfigurationRetryable =
-		(deployment.isError &&
-			isRetryableDeploymentConfigurationError(deployment.error)) ||
-		deployment.data?.kind === "ready" ||
-		(deployment.data?.kind === "unavailable" && deployment.data.retryable) ||
-		false;
+	const deploymentConfigurationRetryable = deployment.isError
+		? isRetryableDeploymentConfigurationError(deployment.error)
+		: deployment.data?.kind === "ready" ||
+			(deployment.data?.kind === "unavailable" && deployment.data.retryable) ||
+			false;
 	const error =
 		submission.isError && submission.error instanceof Error
 			? submission.error
