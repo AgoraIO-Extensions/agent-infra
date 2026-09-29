@@ -121,6 +121,26 @@ it("keeps an active binding connected while replacement credentials are verifyin
 		).toBeNull();
 		const replacement = await setup.read("replacement");
 		if (!replacement) throw new Error("Missing replacement session");
+		await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values ('other-agent',1,'revision')`;
+		await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values ('other-agent','other-owner',now())`;
+		await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,created_at,configuration) values ('other-agent',1,'fixture',now(),${sql.json({ schemaVersion: 2, agentId: "other-agent", revision: 1, channels: [] })})`;
+		await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id) values ('other-agent-replacement','other-agent','other-owner',1,'revision',${"b".repeat(64)},now()+interval '5 minutes','verifying','bot')`;
+		await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id) values ('other-owner-replacement','agent','other-owner',1,'revision',${"c".repeat(64)},now()+interval '5 minutes','verifying','bot')`;
+		const otherAgent = await setup.read("other-agent-replacement");
+		const otherOwner = await setup.read("other-owner-replacement");
+		if (!otherAgent || !otherOwner) throw new Error("Missing denied sessions");
+		expect(
+			await setup.claimReplacementProbe(otherAgent, "cross-agent"),
+		).toBeNull();
+		expect(
+			await setup.claimReplacementProbe(otherOwner, "cross-owner"),
+		).toBeNull();
+		expect(
+			await setup.claimReplacementProbe(
+				{ ...replacement, agentId: "other-agent" },
+				"forged-agent",
+			),
+		).toBeNull();
 		const first = await setup.claimReplacementProbe(replacement, "probe-one");
 		if (!first) throw new Error("Missing replacement probe");
 		expect(

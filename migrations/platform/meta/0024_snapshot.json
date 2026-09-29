@@ -1,6 +1,6 @@
 {
-  "id": "e74fda97-fc50-4674-8e7d-7215ea315b8c",
-  "prevId": "d9144f01-b77e-4fad-b9fa-6d0d98bce61f",
+  "id": "c6c94d10-cbaa-4296-a907-238dc7e3d01e",
+  "prevId": "e74fda97-fc50-4674-8e7d-7215ea315b8c",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3888,6 +3888,31 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "probe_holder_id": {
+          "name": "probe_holder_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "probe_fence": {
+          "name": "probe_fence",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "probe_lease_until": {
+          "name": "probe_lease_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "bot_verified_at": {
+          "name": "bot_verified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -3936,6 +3961,10 @@
         "wecom_setup_kind": {
           "name": "wecom_setup_kind",
           "value": "\"platform\".\"wecom_setup_sessions\".\"kind\" in ('wecom_bot','wecom_app')"
+        },
+        "wecom_probe_fence_safe": {
+          "name": "wecom_probe_fence_safe",
+          "value": "\"platform\".\"wecom_setup_sessions\".\"probe_fence\" between 0 and 9007199254740991"
         },
         "wecom_setup_status": {
           "name": "wecom_setup_status",

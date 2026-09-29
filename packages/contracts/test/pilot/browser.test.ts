@@ -50,6 +50,11 @@ const requiredOperations = [
 	"getWecomSetup",
 	"submitWecomCredentials",
 	"cancelWecomSetup",
+	"getWecomAppConnection",
+	"beginWecomAppSetup",
+	"getWecomAppSetup",
+	"submitWecomAppCredentials",
+	"cancelWecomAppSetup",
 ];
 
 const validApplication = {
@@ -107,6 +112,42 @@ describe("Pilot browser contracts", () => {
 				}).success,
 			).toBe(expected);
 		}
+	});
+
+	it("publishes application setup with a callback URL and write-only credentials", () => {
+		const paths = pilotBrowserOpenApiPathsV1;
+		const begun =
+			paths["/api/v1/agents/{agentId}/wecom-app-setup"].post.responses["200"]
+				.content["application/json"].schema;
+		expect(
+			begun.safeParse({
+				sessionId: "setup",
+				agentId: "agent",
+				configurationRevision: 1,
+				expiresAt: "2026-09-21T00:00:00Z",
+				status: "awaiting_input",
+				state: "one-time-state",
+				callbackUrl: "https://example.invalid/callbacks/wecom/setup",
+			}).success,
+		).toBe(true);
+		const document = createDocument({
+			openapi: "3.1.0",
+			info: { title: "Pilot browser API", version: "1.0.0" },
+			paths,
+		});
+		const credentials =
+			document.paths?.[
+				"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials"
+			]?.post?.requestBody;
+		expect(JSON.stringify(credentials)).toContain('"writeOnly":true');
+		for (const path of [
+			"/api/v1/agents/{agentId}/wecom-app",
+			"/api/v1/agents/{agentId}/wecom-app-setup",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel",
+		])
+			expect(document.paths).toHaveProperty(path);
 	});
 
 	it("publishes the complete approved management and text-conversation journey", () => {

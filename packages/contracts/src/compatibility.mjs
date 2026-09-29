@@ -1036,6 +1036,29 @@ function isWecomReceiptOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #440 publishes Owner-managed application setup on the existing browser API.
+function isWecomApplicationOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v1/agents/{agentId}/wecom-app",
+		"/api/v1/agents/{agentId}/wecom-app-setup",
+		"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}",
+		"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials",
+		"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel",
+	];
+	if (paths.some((path) => previous.paths?.[path] !== undefined)) return false;
+	const addition = Object.fromEntries(
+		paths.map((path) => [path, current.paths?.[path]]),
+	);
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"d06bab756ce486299973d81c082e0b88ea18962fba541d10479ed5e428c1b0ef"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 // #481 publishes the scoped Platform audit surface and its bounded action set.
 function isScopedAuditOpenApiAddition(previous, current) {
 	const paths = [
@@ -1087,6 +1110,7 @@ function findBreakingChanges(previous, current) {
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
+			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current)
 		) {
