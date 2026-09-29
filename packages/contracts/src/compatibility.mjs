@@ -996,7 +996,6 @@ function isAgentDirectCreationOpenApiAddition(previous, current) {
 // paths and the application/start variants are additive to the existing V1/V2
 // contracts, so normalize them before running the generic breaking check.
 function isAgentApiIdentityOpenApiAddition(previous, current) {
-	const normalized = structuredClone(current);
 	const addedPaths = [
 		"/api/v1/api-credentials",
 		"/api/v1/api-credentials/{credentialId}",
@@ -1023,42 +1022,107 @@ function isAgentApiIdentityOpenApiAddition(previous, current) {
 		"AgentApplicationCreateRequestV2",
 		"AgentDirectCreationProjectionV1",
 	];
+	const availabilitySchemas = [
+		"AgentApplicationCreateRequestV1",
+		"AgentApplicationUpdateRequestV1",
+		"AgentConfigurationProjectionV1",
+		"AgentConfigurationUpdateRequestV1",
+		"AgentApplicationCreateRequestV2",
+		"AgentApplicationUpdateRequestV2",
+		"AgentConfigurationProjectionV2",
+		"AgentConfigurationUpdateRequestV2",
+	];
+	const auditSchemas = [
+		"PlatformAuditProjectionV1",
+		"PlatformAuditProjectionV2",
+	];
+	const currentSchemas = current.components?.schemas ?? {};
+	const directOperation = current.paths?.[directPath]?.post;
 	if (
 		addedPaths.some((path) => previous.paths?.[path] !== undefined) ||
 		addedSchemas.some(
 			(name) => previous.components?.schemas?.[name] !== undefined,
 		) ||
-		(normalized.paths?.[directPath]?.post !== undefined &&
-			previous.paths?.[directPath]?.post !== undefined)
+		(directOperation !== undefined &&
+			(previous.paths?.[directPath]?.post !== undefined ||
+				directSchemas.some(
+					(name) => previous.components?.schemas?.[name] !== undefined,
+				)))
 	)
 		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			addedPaths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			addedSchemas.map((name) => [name, currentSchemas[name]]),
+		),
+		direct:
+			directOperation === undefined
+				? null
+				: {
+						path: directOperation,
+						schemas: Object.fromEntries(
+							directSchemas.map((name) => [name, currentSchemas[name]]),
+						),
+					},
+		availability: Object.fromEntries(
+			availabilitySchemas.map((name) => [
+				name,
+				(
+					currentSchemas[name]?.properties?.availability?.items?.oneOf ?? []
+				).filter((option) => option?.properties?.kind?.const === "application"),
+			]),
+		),
+		start: (currentSchemas.AgentLifecycleCommandRequestV1?.oneOf ?? []).filter(
+			(option) => option?.properties?.command?.enum?.includes("start"),
+		),
+		audit: Object.fromEntries(
+			auditSchemas.map((name) => [
+				name,
+				(currentSchemas[name]?.properties?.actor?.anyOf ?? []).filter(
+					(option) => option?.properties?.kind?.const === "application",
+				),
+			]),
+		),
+	};
+	const expectedDigests = {
+		"1.0.0": "5a7299ff6a4b3db5cc97dc2092f53bed77abc0c8da2c3dc15d9298a8eba1b184",
+		"2.0.0": "ac2b504f2f54660a1f5e1356aa8e0dbf26bbeaf93dd66d2ba4866c8fc414d71b",
+	};
+	const version = previous.info?.version;
+	if (
+		current.info?.version !== version ||
+		!Object.hasOwn(expectedDigests, version) ||
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+			expectedDigests[version]
+	)
+		return false;
+	const normalized = structuredClone(current);
 	for (const path of addedPaths) delete normalized.paths[path];
-	if (normalized.paths?.[directPath]?.post !== undefined) {
+	if (directOperation !== undefined) {
 		delete normalized.paths[directPath].post;
-		for (const name of directSchemas) {
-			if (previous.components?.schemas?.[name] === undefined)
-				delete normalized.components.schemas[name];
-		}
+		for (const name of directSchemas)
+			delete normalized.components.schemas[name];
 	}
 	for (const name of addedSchemas) delete normalized.components.schemas[name];
-	for (const schema of Object.values(normalized.components.schemas)) {
+	for (const name of availabilitySchemas) {
+		const schema = normalized.components.schemas[name];
 		const options = schema?.properties?.availability?.items?.oneOf;
 		if (Array.isArray(options)) {
 			schema.properties.availability.items.oneOf = options.filter(
 				(option) => option?.properties?.kind?.const !== "application",
 			);
 		}
-		for (const option of schema?.oneOf ?? []) {
-			const command = option?.properties?.command;
-			if (Array.isArray(command?.enum)) {
-				command.enum = command.enum.filter((value) => value !== "start");
-			}
+	}
+	for (const option of normalized.components.schemas
+		.AgentLifecycleCommandRequestV1?.oneOf ?? []) {
+		const command = option?.properties?.command;
+		if (Array.isArray(command?.enum)) {
+			command.enum = command.enum.filter((value) => value !== "start");
 		}
 	}
-	for (const name of [
-		"PlatformAuditProjectionV1",
-		"PlatformAuditProjectionV2",
-	]) {
+	for (const name of auditSchemas) {
 		const actor = normalized.components.schemas[name]?.properties?.actor;
 		if (!Array.isArray(actor?.anyOf)) continue;
 		const options = actor.anyOf.filter(
