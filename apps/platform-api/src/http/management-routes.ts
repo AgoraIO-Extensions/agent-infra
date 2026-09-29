@@ -623,7 +623,7 @@ function apiAccessAudit(
 	};
 }
 
-export function registerManagementRoutes(
+export function registerApiIdentityRoutes(
 	app: Hono,
 	dependencies: ManagementRouteDependencies,
 ): void {
@@ -1060,6 +1060,13 @@ export function registerManagementRoutes(
 			return new Response(null, { status: 204 });
 		}),
 	);
+}
+
+export function registerManagementRoutes(
+	app: Hono,
+	dependencies: ManagementRouteDependencies,
+): void {
+	registerApiIdentityRoutes(app, dependencies);
 
 	app.post("/api/v1/agents", (context) =>
 		boundary(context, async (metadata) => {
