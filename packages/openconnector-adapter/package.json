@@ -8,6 +8,7 @@
 		"./confluence-server": "./src/confluence-server.ts",
 		"./datalego": "./src/datalego.ts",
 		"./manhattan": "./src/manhattan.ts",
+		"./argus": "./src/argus.ts",
 		"./rehoboam": "./src/rehoboam.ts"
 	},
 	"scripts": {
