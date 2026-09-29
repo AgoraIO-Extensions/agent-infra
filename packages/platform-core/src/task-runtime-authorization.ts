@@ -7,6 +7,7 @@ import {
 } from "./conversation-dispatch.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import {
+	type CurrentTaskApplicationV1,
 	type CurrentTaskUserV1,
 	isTaskAuthorizationCurrentV1,
 	parseTaskAuthorizationBoundaryV1,
@@ -32,6 +33,7 @@ export interface TaskRuntimeAuthorizationRecordV1 {
 	readonly boundary: TaskAuthorizationBoundaryV1;
 	readonly revokedAt: Date | null;
 	readonly agent: AgentManagementStateV1;
+	readonly application?: CurrentTaskApplicationV1 | null;
 	readonly currentAgentAuthorizationRevision?: string | null;
 	readonly configurationRevision: number;
 	readonly workload: WorkloadReconciliationStateV1 | null;
@@ -188,7 +190,6 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 		}
 		if (
 			record.executionId !== claim.executionId ||
-			boundary.principal.kind !== "user" ||
 			boundary.principal.id !== claim.actorId ||
 			boundary.agentId !== claim.agentId ||
 			boundary.channelId !== claim.channelId ||
@@ -364,10 +365,10 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 				authority: await control(context, "authorization_revoked", signal),
 				record,
 			};
-		const user = await options.resolveCurrentUser(
-			record.boundary.principal.id,
-			signal,
-		);
+		const user =
+			record.boundary.principal.kind === "user"
+				? await options.resolveCurrentUser(record.boundary.principal.id, signal)
+				: undefined;
 		const latest = await recordFor(context.claim, signal);
 		if (latest.authorizationRecordId !== context.authorizationRecordId)
 			denied("TASK_AUTHORIZATION_BINDING_INVALID");
@@ -375,10 +376,11 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			latest.revokedAt ||
 			(options.channelAuthorizationCurrent &&
 				!(await options.channelAuthorizationCurrent(latest, signal))) ||
-			!user ||
+			(record.boundary.principal.kind === "user" && !user) ||
 			!isTaskAuthorizationCurrentV1({
 				boundary: latest.boundary,
-				user,
+				...(user ? { user } : {}),
+				...(latest.application ? { application: latest.application } : {}),
 				agent: latest.agent,
 				currentAgentAuthorizationRevision:
 					latest.currentAgentAuthorizationRevision,

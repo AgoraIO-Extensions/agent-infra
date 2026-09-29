@@ -108,11 +108,34 @@ describe("Application foundation use case", () => {
 		);
 	});
 
-	it("gives an API application principal its own initial availability", async () => {
+	it("keeps application availability separate from its initial grants at the 256-target limit", async () => {
 		let captured: ApplicationFoundationWritePlanV1 | undefined;
+		const dependencies = applicationFoundationAdmissionDependenciesV1();
+		const availability = Array.from({ length: 256 }, (_, index) => ({
+			kind: "organization" as const,
+			organizationId: `organization-${String(index).padStart(3, "0")}`,
+		}));
 		const useCase = createApplicationFoundationUseCaseV1(
 			{
-				...applicationFoundationAdmissionDependenciesV1(),
+				...dependencies,
+				authorizationAdmission: {
+					async authorize(input) {
+						const admitted =
+							await dependencies.authorizationAdmission.authorize(input);
+						if (admitted.status !== "admitted") return admitted;
+						if (!admitted.authorityContext)
+							throw new Error("Missing test authority");
+						return {
+							...admitted,
+							authorityContext: {
+								...admitted.authorityContext,
+								organizationIds: availability.map(
+									(target) => target.organizationId,
+								),
+							},
+						};
+					},
+				},
 				transaction: readyTransaction({
 					async commit(plan) {
 						captured = plan;
@@ -123,7 +146,7 @@ describe("Application foundation use case", () => {
 			{ now: () => new Date(serverInstant) },
 		);
 		await useCase.submit(
-			{ ...applicationFoundationCommandV1, availability: [] },
+			{ ...applicationFoundationCommandV1, availability },
 			{
 				...applicationFoundationActorContextV1,
 				principal: { kind: "application", id: "application-caller" },
@@ -131,9 +154,11 @@ describe("Application foundation use case", () => {
 			},
 			pendingSecretRecordAttachmentFixtureV1(),
 		);
-		expect(captured?.access.availability).toEqual([
-			{ kind: "application", applicationId: "application-caller" },
-		]);
+		expect(captured?.access.availability).toEqual(availability);
+		expect(captured?.principal).toEqual({
+			kind: "application",
+			id: "application-caller",
+		});
 	});
 
 	it("rejects a staged actor getter without reading it", async () => {

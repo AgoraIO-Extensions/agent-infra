@@ -553,14 +553,21 @@ describe("management routes", () => {
 			secrets: [],
 			modelConfiguration: undefined,
 		});
+		const resolveApiCredential = vi.fn().mockResolvedValue(apiIdentity);
+		const authorizeCredentialScope = vi.fn(
+			async (actor: { credential?: { scopes: readonly string[] } }) => {
+				if (!actor.credential?.scopes.includes("agent:create"))
+					throw new ApiIdentityError("not_authorized");
+			},
+		);
 		registerManagementRoutes(apiApp, {
 			identity: {
 				resolve: vi.fn(),
 				hydrateUsers: vi.fn().mockResolvedValue([]),
-				resolveApiCredential: vi.fn().mockResolvedValue(apiIdentity),
+				resolveApiCredential,
 			},
 			apiIdentity: {
-				authorizeCredentialScope: vi.fn(),
+				authorizeCredentialScope,
 				resolveAgentQueryGrantType: vi.fn(),
 				listUserCredentials: vi.fn(),
 				issueUserCredential: vi.fn(),
@@ -653,6 +660,72 @@ describe("management routes", () => {
 			expect.objectContaining({ creationMode: "api" }),
 			attachment,
 		);
+		expect(resolveApiCredential).toHaveBeenCalledTimes(4);
+		expect(authorizeCredentialScope).toHaveBeenCalledTimes(4);
+		const rejectedBody = JSON.stringify({
+			schemaVersion: 2,
+			name: "Changed identity during preparation",
+			description: "Must not be created",
+			source: { kind: "standard", templateId: "template-1" },
+			coOwnerIds: [],
+			availability: [],
+			environment: [],
+			secrets: [],
+		});
+
+		resolveApiCredential
+			.mockResolvedValueOnce(apiIdentity)
+			.mockResolvedValueOnce({
+				...apiIdentity,
+				credential: { ...apiIdentity.credential, revokedAt: new Date() },
+			});
+		const revokedDuringPreparation = await apiApp.request("/api/v1/agents", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				Authorization: "Bearer secret",
+				"Idempotency-Key": "Direct.Aa-03",
+			},
+			body: rejectedBody,
+		});
+		expect(revokedDuringPreparation.status).toBe(403);
+		expect(direct.submit).toHaveBeenCalledTimes(2);
+
+		resolveApiCredential
+			.mockResolvedValueOnce(apiIdentity)
+			.mockResolvedValueOnce({
+				...apiIdentity,
+				credential: { ...apiIdentity.credential, scopes: ["agent:read"] },
+			});
+		const narrowedDuringPreparation = await apiApp.request("/api/v1/agents", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				Authorization: "Bearer secret",
+				"Idempotency-Key": "Direct.Aa-04",
+			},
+			body: rejectedBody,
+		});
+		expect(narrowedDuringPreparation.status).toBe(403);
+		expect(direct.submit).toHaveBeenCalledTimes(2);
+
+		resolveApiCredential
+			.mockResolvedValueOnce(apiIdentity)
+			.mockResolvedValueOnce({ ...apiIdentity, ownerId: "new-owner" });
+		const ownerChangedDuringPreparation = await apiApp.request(
+			"/api/v1/agents",
+			{
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					Authorization: "Bearer secret",
+					"Idempotency-Key": "Direct.Aa-05",
+				},
+				body: rejectedBody,
+			},
+		);
+		expect(ownerChangedDuringPreparation.status).toBe(403);
+		expect(direct.submit).toHaveBeenCalledTimes(2);
 	});
 
 	it("does not return an application credential to its responsible user", async () => {

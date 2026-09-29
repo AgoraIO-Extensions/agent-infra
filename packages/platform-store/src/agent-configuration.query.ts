@@ -563,7 +563,7 @@ export class PostgresAgentConfigurationQueryV1 {
 					const availabilityAllowed =
 						input.principal === undefined && available;
 					if (
-						!input.isAdministrator &&
+						(input.principal !== undefined || !input.isAdministrator) &&
 						!principalAllowed &&
 						!ownerAllowed &&
 						(input.intent === "manage" || !availabilityAllowed)

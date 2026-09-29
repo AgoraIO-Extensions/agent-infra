@@ -11,6 +11,7 @@ import {
 	isPlatformConversationChannelCurrentV1,
 	type LegacyTaskControlRecoveryV1,
 	type TaskRuntimeAuthorizationContextV1,
+	type TaskRuntimeAuthorizationRecordV1,
 	type TaskRuntimeRecoveryStateV1,
 } from "./task-runtime-authorization.js";
 import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
@@ -106,15 +107,7 @@ function harness() {
 		failureCode: null,
 		attempts: 0,
 	};
-	let record: {
-		authorizationRecordId: string;
-		executionId: string;
-		boundary: TaskAuthorizationBoundaryV1;
-		revokedAt: Date | null;
-		agent: AgentManagementStateV1;
-		configurationRevision: number;
-		workload: WorkloadReconciliationStateV1 | null;
-	} | null = {
+	let record: TaskRuntimeAuthorizationRecordV1 | null = {
 		authorizationRecordId: "original-authorization",
 		executionId: "execution",
 		boundary,
@@ -164,6 +157,79 @@ function harness() {
 const signal = () => new AbortController().signal;
 
 describe("task Runtime authorization Core use case", () => {
+	it("rechecks an application against current identity and use grant without a user lookup", async () => {
+		const h = harness();
+		const principal = { kind: "application" as const, id: "caller-app" };
+		const application = {
+			schemaVersion: 1 as const,
+			applicationId: principal.id,
+			accountStatus: "active" as const,
+			authorizationRevision: "app-7",
+		};
+		const boundary: TaskAuthorizationBoundaryV1 = {
+			...h.boundary,
+			principal,
+			identityRevision: application.authorizationRevision,
+			accessSources: [{ kind: "application", applicationId: principal.id }],
+		};
+		const initialGrant = {
+			principal,
+			grantType: "use" as const,
+			authorizationRevision: "agent-7",
+			revokedAt: null,
+		};
+		const agent: AgentManagementStateV1 = {
+			...h.agent,
+			principalGrants: [initialGrant],
+		};
+		const original = h.record;
+		if (!original) throw new Error("Missing test record");
+		const context: TaskRuntimeAuthorizationContextV1 = {
+			...h.context,
+			claim: { ...h.claim, actorId: principal.id },
+			principal,
+		};
+		h.setRecord({
+			...original,
+			boundary,
+			agent,
+			application,
+			currentAgentAuthorizationRevision: "agent-7",
+		});
+		h.ports.resolveCurrentUser.mockRejectedValue(
+			new Error("user lookup forbidden"),
+		);
+		expect(
+			(await h.useCase.current(context, h.state, "turn.submit", signal()))
+				.authority.purpose,
+		).toBe("business");
+		expect(h.ports.resolveCurrentUser).not.toHaveBeenCalled();
+		h.setRecord({
+			...original,
+			boundary,
+			application,
+			currentAgentAuthorizationRevision: "agent-7",
+			agent: {
+				...agent,
+				principalGrants: [{ ...initialGrant, revokedAt: new Date(1) }],
+			},
+		});
+		expect(
+			(await h.useCase.current(context, h.state, "turn.submit", signal()))
+				.authority,
+		).toMatchObject({ purpose: "control", reason: "authorization_revoked" });
+		h.setRecord({
+			...original,
+			boundary,
+			currentAgentAuthorizationRevision: "agent-7",
+			agent,
+			application: { ...application, accountStatus: "disabled" },
+		});
+		expect(
+			(await h.useCase.current(context, h.state, "turn.submit", signal()))
+				.authority,
+		).toMatchObject({ purpose: "control", reason: "authorization_revoked" });
+	});
 	it("intersects current organization membership with the original task without copying a new role", async () => {
 		const h = harness();
 		expect(

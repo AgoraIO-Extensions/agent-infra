@@ -1108,6 +1108,32 @@ export function registerManagementRoutes(
 				metadata,
 				ids,
 			);
+			const currentApiIdentity = await resolveApiIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			if (
+				currentApiIdentity.credential.credentialId !==
+					apiIdentity.credential.credentialId ||
+				currentApiIdentity.principal.kind !== apiIdentity.principal.kind ||
+				currentApiIdentity.principal.id !== apiIdentity.principal.id ||
+				currentApiIdentity.ownerId !== apiIdentity.ownerId ||
+				currentApiIdentity.authorizationRevision !==
+					apiIdentity.authorizationRevision
+			)
+				fail("FORBIDDEN", metadata.traceId);
+			await management.authorizeCredentialScope(
+				apiActor(currentApiIdentity),
+				["agent:create"],
+				apiAccessAudit(
+					apiIdentityContext(currentApiIdentity),
+					metadata,
+					"agents",
+					"missing_scope",
+					["agent:create"],
+				),
+			);
 			await dependencies.foundation.submit(
 				{
 					schemaVersion: 2,

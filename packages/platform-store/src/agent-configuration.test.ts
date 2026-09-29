@@ -1977,11 +1977,12 @@ describe("PostgreSQL Agent configuration query", () => {
 	});
 
 	it.each([
-		{ actorId: "owner_01", available: false },
-		{ actorId: "viewer_01", available: true },
+		{ actorId: "owner_01", available: false, isAdministrator: false },
+		{ actorId: "viewer_01", available: true, isAdministrator: false },
+		{ actorId: "administrator", available: false, isAdministrator: true },
 	])(
-		"does not fall back to owner or availability after a user API grant is revoked: %j",
-		async ({ actorId, available }) => {
+		"does not fall back to browser authority after a user API grant is revoked: %j",
+		async ({ actorId, available, isAdministrator }) => {
 			await clearDatabase();
 			await seed();
 			if (available) {
@@ -2001,7 +2002,7 @@ describe("PostgreSQL Agent configuration query", () => {
 				agentId: "agent_01",
 				actorId,
 				organizationIds: [],
-				isAdministrator: false,
+				isAdministrator,
 				principal: { kind: "user" as const, id: actorId },
 				intent: "discover" as const,
 			};

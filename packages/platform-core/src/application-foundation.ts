@@ -12,8 +12,6 @@ import {
 	type InitialAgentConfigurationCommandV2,
 	validateLegacyInitialActionsV1,
 } from "./agent-configuration.js";
-import { accessTargetKey } from "./agent-configuration-input.js";
-import { compareText } from "./agent-configuration-values.js";
 import type { ApiPrincipalV1 } from "./api-identity.js";
 import {
 	type PendingSecretRecordAttachmentResolverV1,
@@ -879,25 +877,6 @@ export function createApplicationFoundationUseCaseV1(
 			admitted = await admission.complete();
 		} catch (error) {
 			throw normalizeInitialAdmissionError(error);
-		}
-		if (
-			creationMode === "api" &&
-			principal.kind === "application" &&
-			!admitted.availability.some(
-				(target) =>
-					target.kind === "application" &&
-					target.applicationId === principal.id,
-			)
-		) {
-			admitted = {
-				...admitted,
-				availability: [
-					...admitted.availability,
-					{ kind: "application" as const, applicationId: principal.id },
-				].toSorted((left, right) =>
-					compareText(accessTargetKey(left), accessTargetKey(right)),
-				),
-			};
 		}
 		let submittedAt: Date;
 		try {
