@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
 	type ConversationDispatchExecutionStatusV1,
+	type CurrentTaskApplicationV1,
 	type CurrentTaskUserV1,
+	captureApplicationTaskAuthorizationBoundaryV1,
 	captureTaskAuthorizationBoundaryV1,
+	parseCurrentTaskApplicationV1,
 	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
 	planTaskSystemControlV1,
@@ -15,6 +18,7 @@ import { readAgentManagementState } from "./agent-management.js";
 import {
 	agents,
 	conversationExecutions,
+	platformApplications,
 	taskAuthorizationRecords,
 	workloadReconciliations,
 } from "./schema.js";
@@ -27,6 +31,72 @@ export class TaskAuthorizationStoreError extends Error {
 }
 
 type JsonValue = Parameters<ReturnType<typeof postgres>["json"]>[0];
+
+type Transaction = Parameters<
+	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
+>[0];
+
+async function readCurrentApplication(
+	transaction: Transaction,
+	applicationId: string,
+): Promise<CurrentTaskApplicationV1 | undefined> {
+	const [application] = await transaction
+		.select({
+			status: platformApplications.status,
+			authorizationRevision: platformApplications.authorizationRevision,
+		})
+		.from(platformApplications)
+		.where(eq(platformApplications.id, applicationId));
+	if (!application) return undefined;
+	return parseCurrentTaskApplicationV1({
+		schemaVersion: 1,
+		applicationId,
+		accountStatus: application.status,
+		authorizationRevision: application.authorizationRevision,
+	});
+}
+
+function isSupportedTaskPrincipalChannel(
+	boundary: TaskAuthorizationBoundaryV1,
+): boolean {
+	return (
+		boundary.principal.kind === "user" || boundary.channelId.startsWith("api")
+	);
+}
+
+/** Recheck API use authority while the acceptance transaction owns its Agent snapshot. */
+export async function requireCurrentTaskApiAccess(
+	transaction: postgres.TransactionSql,
+	boundary: TaskAuthorizationBoundaryV1 | undefined,
+	agentAuthorizationRevision: string | null,
+): Promise<void> {
+	if (!boundary?.channelId.startsWith("api")) return;
+	const [grant] = await transaction<{ principal_id: string }[]>`
+		select principal_id from platform.agent_principal_grants
+		where agent_id = ${boundary.agentId}
+			and principal_type = ${boundary.principal.kind}
+			and principal_id = ${boundary.principal.id}
+			and grant_type = 'use'
+			and revoked_at is null
+			and authorization_revision = ${agentAuthorizationRevision}
+		for share
+	`;
+	if (!grant) throw new TaskAuthorizationStoreError();
+	if (boundary.principal.kind !== "application") return;
+	const [application] = await transaction<
+		{ status: string; authorization_revision: string }[]
+	>`
+		select status, authorization_revision
+		from platform.platform_applications
+		where id = ${boundary.principal.id}
+		for share
+	`;
+	if (
+		application?.status !== "active" ||
+		application.authorization_revision !== boundary.identityRevision
+	)
+		throw new TaskAuthorizationStoreError();
+}
 
 /** Part of the existing task acceptance transaction, before its result is returned. */
 export async function insertTaskAuthorization(
@@ -57,13 +127,18 @@ export async function insertTaskAuthorization(
 	`;
 	if (
 		!binding ||
-		boundary.principal.kind !== "user" ||
+		!isSupportedTaskPrincipalChannel(boundary) ||
 		boundary.principal.id !== binding.actor_id ||
 		boundary.agentId !== binding.agent_id ||
 		boundary.channelId !== binding.channel_id ||
 		boundary.agentAuthorizationRevision !== binding.authorization_revision
 	)
 		throw new TaskAuthorizationStoreError();
+	await requireCurrentTaskApiAccess(
+		transaction,
+		boundary,
+		binding.authorization_revision,
+	);
 	const recordId = randomUUID();
 	await transaction`
 		insert into platform.task_authorization_records (id, execution_id, boundary)
@@ -85,6 +160,44 @@ export class PostgresTaskAuthorizationStoreV1 {
 		// keep a separate pool so json() retains the postgres serialization contract.
 		this.#queryClient = postgres(options.databaseUrl, { max: 5 });
 		this.#database = drizzle(this.#queryClient);
+	}
+
+	/** Capture independently authorized application facts from the current Store row. */
+	async captureApplicationBoundary(input: {
+		applicationId: string;
+		agentId: string;
+		channelId: string;
+	}): Promise<TaskAuthorizationBoundaryV1 | null> {
+		if (!input.channelId.startsWith("api")) return null;
+		try {
+			return await this.#database.transaction(
+				async (transaction) => {
+					const application = await readCurrentApplication(
+						transaction,
+						input.applicationId,
+					);
+					const management = await readAgentManagementState(
+						transaction,
+						input.agentId,
+					);
+					const [agent] = await transaction
+						.select({ authorizationRevision: agents.authorizationRevision })
+						.from(agents)
+						.where(eq(agents.id, input.agentId));
+					if (!application || !management || !agent?.authorizationRevision)
+						return null;
+					return captureApplicationTaskAuthorizationBoundaryV1({
+						application,
+						agent: management,
+						channelId: input.channelId,
+						agentAuthorizationRevision: agent.authorizationRevision,
+					});
+				},
+				{ isolationLevel: "repeatable read", accessMode: "read only" },
+			);
+		} catch {
+			throw new TaskAuthorizationStoreError();
+		}
 	}
 
 	/** Capture current access and its Agent revision from one consistent database snapshot. */
@@ -142,7 +255,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 						.where(eq(conversationExecutions.executionId, record.executionId));
 					if (
 						!execution ||
-						boundary.principal.kind !== "user" ||
+						!isSupportedTaskPrincipalChannel(boundary) ||
 						boundary.principal.id !== execution.actorId ||
 						boundary.agentId !== execution.agentId ||
 						boundary.channelId !== execution.channelId ||
@@ -169,6 +282,14 @@ export class PostgresTaskAuthorizationStoreV1 {
 						boundary.agentId,
 					);
 					return {
+						...(boundary.principal.kind === "application"
+							? {
+									application: await readCurrentApplication(
+										transaction,
+										boundary.principal.id,
+									),
+								}
+							: {}),
 						authorizationRecordId: record.id,
 						executionId: record.executionId,
 						boundary,
