@@ -69,9 +69,17 @@ describe("Platform user governance HTTP", () => {
 		expect((await request(path, body, true)).status).toBe(401);
 		expect((await request(path)).status).toBe(403);
 		expect(setPlatformDisabled).not.toHaveBeenCalled();
-		expect(recordRejected).toHaveBeenCalledTimes(1);
+		expect(recordRejected).toHaveBeenCalledTimes(2);
 		expect(recordRejected).toHaveBeenNthCalledWith(
 			1,
+			expect.objectContaining({
+				actorUserId: null,
+				targetUserId: null,
+				reason: "AUTHENTICATION_REQUIRED",
+			}),
+		);
+		expect(recordRejected).toHaveBeenNthCalledWith(
+			2,
 			expect.objectContaining({
 				actorUserId: administratorId,
 				targetUserId: targetId,

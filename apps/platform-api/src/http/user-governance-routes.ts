@@ -69,25 +69,23 @@ export function registerUserGovernanceRoutes(
 			return context.body(null, 204);
 		} catch (error) {
 			const protocol = mapCoreError(error, metadata.traceId);
-			if (actorUserId !== null) {
-				try {
-					if (!dependencies.users)
-						throw new Error("Governance audit is unavailable");
-					await dependencies.users.recordRejected({
-						actorUserId,
-						targetUserId,
-						traceId: metadata.traceId,
-						requestId: metadata.requestId,
-						reason: protocol.body.code,
-						outcome: protocol.status < 500 ? "rejected" : "failed",
-					});
-				} catch {
-					const unavailable = new HttpProtocolError(
-						"DEPENDENCY_UNAVAILABLE",
-						metadata.traceId,
-					);
-					return context.json(unavailable.body, unavailable.status);
-				}
+			try {
+				if (!dependencies.users)
+					throw new Error("Governance audit is unavailable");
+				await dependencies.users.recordRejected({
+					actorUserId,
+					targetUserId,
+					traceId: metadata.traceId,
+					requestId: metadata.requestId,
+					reason: protocol.body.code,
+					outcome: protocol.status < 500 ? "rejected" : "failed",
+				});
+			} catch {
+				const unavailable = new HttpProtocolError(
+					"DEPENDENCY_UNAVAILABLE",
+					metadata.traceId,
+				);
+				return context.json(unavailable.body, unavailable.status);
 			}
 			return context.json(protocol.body, protocol.status);
 		}

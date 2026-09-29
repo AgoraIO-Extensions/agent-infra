@@ -164,6 +164,11 @@ describe("PostgreSQL LDAP identity authority", () => {
 				},
 				{
 					actor_id: administrator,
+					action: "platform.user.disabled",
+					target_id: target,
+				},
+				{
+					actor_id: administrator,
 					action: "platform.user.enabled",
 					target_id: target,
 				},
@@ -278,6 +283,38 @@ describe("PostgreSQL LDAP identity authority", () => {
 				result: "failed",
 				summary: "platform.user.disable.rejected: RESOURCE_UNAVAILABLE",
 			});
+			await users.recordRejected({
+				actorUserId: null,
+				targetUserId: null,
+				traceId: "governance-anonymous-refusal",
+				requestId: "request-anonymous-refusal",
+				reason: "AUTHENTICATION_REQUIRED",
+				outcome: "rejected",
+			});
+			const [anonymous] = await sql`
+				select actor_type, actor_id, target_id, details
+				from platform.audit_events
+				where trace_id = 'governance-anonymous-refusal'
+			`;
+			expect(anonymous).toEqual({
+				actor_type: "unknown",
+				actor_id: "unresolved",
+				target_id: "unresolved",
+				details: { reason: "AUTHENTICATION_REQUIRED" },
+			});
+			const anonymousPage = await audit.listAudit(
+				{
+					schemaVersion: 1,
+					kind: "administrator",
+					administratorId: actorUserId,
+				},
+				{ schemaVersion: 1, limit: 100 },
+			);
+			expect(
+				anonymousPage.items.find(
+					(item) => item.traceId === "governance-anonymous-refusal",
+				),
+			).toMatchObject({ actor: { kind: "unknown", actorId: "unresolved" } });
 		} finally {
 			await Promise.all([users.close(), audit.close(), sql.end()]);
 		}

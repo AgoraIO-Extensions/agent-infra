@@ -25,6 +25,7 @@ const platformAuditActionMetadata = {
 	},
 	"platform.user.disable.rejected": {
 		actorKind: "user",
+		actorKinds: ["user", "unknown"],
 		subjectKind: "user",
 		details: "governance_rejection",
 	},
