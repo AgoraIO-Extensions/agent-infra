@@ -248,6 +248,33 @@ function harness(
 	}
 	const fetcher = vi.fn<typeof fetch>(async (url) => {
 		const path = String(url);
+		if (path.endsWith("/v4/events/read"))
+			return new Response(
+				JSON.stringify({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					executionId: "execution",
+					events: [
+						{
+							schemaVersion: 1,
+							adapterEventKey: "event-1",
+							executionId: "execution",
+							cursor: "cursor-1",
+							occurredAt: "2026-09-29T00:00:00.000Z",
+							type: "status",
+							payload: { status: "running" },
+						},
+					],
+				}),
+			);
+		if (path.endsWith("/v4/events/ack"))
+			return new Response(
+				JSON.stringify({
+					schemaVersion: 4,
+					executionId: "execution",
+					confirmedCursor: state.runtimeCursor,
+				}),
+			);
 		if (path.endsWith("/status"))
 			return new Response(
 				JSON.stringify({
@@ -386,6 +413,46 @@ function harness(
 }
 
 describe("Trusted conversation Runtime adapter", () => {
+	it("reads and acknowledges a keyed Execution on the V4 event route", async () => {
+		const h = harness(1, undefined, true);
+		try {
+			const reference = await h.authorize();
+			const stream = h.runtime.runtimeHost.events(h.events(reference));
+			const iterator = stream[Symbol.asyncIterator]();
+			await expect(iterator.next()).resolves.toMatchObject({
+				value: { executionId: "execution", cursor: "cursor-1" },
+			});
+			await iterator.return?.();
+			Object.assign(h.state, { runtimeCursor: "cursor-1" });
+			if (!h.runtime.runtimeHost.acknowledge)
+				throw new Error("Runtime ACK is unavailable");
+			await h.runtime.runtimeHost.acknowledge({
+				...h.events(reference),
+				confirmedCursor: "cursor-1",
+			});
+			const paths = h.fetcher.mock.calls.map(([url]) => String(url));
+			expect(paths).toEqual([
+				"https://runtime.test/internal/runtime/v4/events/read",
+				"https://runtime.test/internal/runtime/v4/events/ack",
+			]);
+			for (const [, init] of h.fetcher.mock.calls) {
+				const body = JSON.parse(String(init?.body));
+				expect(body.keyBinding).toEqual({
+					purpose: "personal",
+					subjectId: "user",
+					ciphertextRef: "key-1",
+					version: 1,
+				});
+				expect(verify(body.grant).claims.requestDigest).toMatch(
+					/^[0-9a-f]{64}$/,
+				);
+				expect(JSON.stringify(body)).not.toContain("synthetic-relay-key-k1");
+			}
+		} finally {
+			h.runtime.close();
+		}
+	});
+
 	it("routes a keyed Execution through V4 with the original Key version", async () => {
 		const h = harness(1, undefined, true);
 		try {

@@ -10,10 +10,17 @@ import {
 import {
 	RuntimeBusinessGrantClaimsV4Schema,
 	type RuntimeBusinessRequestV4,
+	type RuntimeEventAckRequestV4,
+	type RuntimeEventReadRequestV4,
+	RuntimeExecutionGrantClaimsV2Schema,
+	RuntimeExecutionGrantV2Schema,
 	RuntimeExecutionGrantV4Schema,
+	runtimeEventRequestDigestV4,
 	runtimeRequestSigningPayloadV4,
 	validateVerifiedRuntimeExecutionGrantClaimsV4,
 } from "@agent-infra/contracts/runtime";
+
+import type { WorkerRuntimeAuthorizationV2 } from "./runtime-grant-signer.js";
 
 interface SignerOptionsV4 {
 	readonly issuer: string;
@@ -45,6 +52,66 @@ export function createWorkerRuntimeGrantSignerV4(options: SignerOptionsV4) {
 	const publicKey = createPublicKey(options.privateKey);
 	const now = options.now ?? Date.now;
 	return {
+		async signEvent(
+			request: RuntimeEventReadRequestV4 | RuntimeEventAckRequestV4,
+			authority: WorkerRuntimeAuthorizationV2,
+		) {
+			const issuedAt = now();
+			const read = "afterCursor" in request;
+			const command = read ? "events.persist" : "events.ack";
+			const claims = RuntimeExecutionGrantClaimsV2Schema.parse({
+				schemaVersion: 2,
+				issuer: options.issuer,
+				audience: "runtime_host",
+				issuedAt,
+				expiresAt: issuedAt + 30_000,
+				grantId: (options.id ?? randomUUID)(),
+				workerId: options.workerId,
+				principal: request.principal,
+				agentId: request.agentId,
+				channelId: request.channelId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				turnId: request.turnId,
+				sessionGeneration: request.sessionGeneration,
+				traceId: request.traceId,
+				hostSessionRef: request.hostSessionRef,
+				operation: request.operation,
+				allowedCommands: [command],
+				...authority,
+				...(authority.purpose === "business" ? { attachments: [] } : {}),
+				eventAccess: read
+					? {
+							command,
+							consumer: request.consumer,
+							afterCursor: request.afterCursor,
+						}
+					: {
+							command,
+							consumer: request.consumer,
+							confirmedCursor: request.confirmedCursor,
+						},
+				requestDigest: await runtimeEventRequestDigestV4(request),
+			});
+			const header = Buffer.from(
+				JSON.stringify({
+					alg: "EdDSA",
+					kid: options.keyId,
+					typ: "runtime-execution+jws",
+				}),
+			).toString("base64url");
+			const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
+			const signingInput = `${header}.${payload}`;
+			return RuntimeExecutionGrantV2Schema.parse({
+				schemaVersion: 2,
+				format: "runtime-execution-jws",
+				token: `${signingInput}.${sign(
+					null,
+					Buffer.from(signingInput, "ascii"),
+					options.privateKey,
+				).toString("base64url")}`,
+			});
+		},
 		sign(request: RuntimeBusinessRequestV4, authorizationRecordId: string) {
 			if (!authorizationRecordId)
 				throw new TypeError("Runtime V4 business authorization is required");

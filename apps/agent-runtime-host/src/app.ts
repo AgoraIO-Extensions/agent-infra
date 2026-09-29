@@ -6,7 +6,9 @@ import {
 	RuntimeAuthorizationRenewRequestV3Schema,
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeEventAckRequestV3Schema,
+	RuntimeEventAckRequestV4Schema,
 	RuntimeEventPersistRequestV3Schema,
+	RuntimeEventReadRequestV4Schema,
 	type RuntimeExecutionGrantV2,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeGenerationCancelRequestV3Schema,
@@ -309,6 +311,27 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			RuntimeSupplementTransportV4Schema,
 		);
 		return context.json(await options.host.supplementV4(transport));
+	});
+	app.post("/internal/runtime/v4/events/read", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeEventReadRequestV4Schema,
+		);
+		return context.json(
+			await options.host.readEventsV4(request, await verifyV2(request.grant)),
+		);
+	});
+	app.post("/internal/runtime/v4/events/ack", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeEventAckRequestV4Schema,
+		);
+		return context.json(
+			await options.host.acknowledgeEventsV4(
+				request,
+				await verifyV2(request.grant),
+			),
+		);
 	});
 	v3Route(
 		"instructions",

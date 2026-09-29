@@ -11,9 +11,14 @@ import {
 	type RuntimeBusinessRequestV4,
 	type RuntimeEventAckRequestV3,
 	RuntimeEventAckRequestV3Schema,
+	type RuntimeEventAckRequestV4,
+	RuntimeEventAckRequestV4Schema,
 	RuntimeEventAckResponseV3Schema,
+	RuntimeEventAckResponseV4Schema,
 	type RuntimeEventPersistRequestV3,
 	RuntimeEventPersistRequestV3Schema,
+	type RuntimeEventReadRequestV4,
+	RuntimeEventReadRequestV4Schema,
 	RuntimeEventSchema,
 	RuntimeEventV1Schema,
 	type RuntimeEventV2,
@@ -46,6 +51,7 @@ import {
 	RuntimeSupplementTransportV4Schema,
 	validateRuntimeBusinessBindingV4,
 	validateRuntimePinnedExecutionKeyScopeV4,
+	validateRuntimeReplayResponseV4,
 } from "@agent-infra/contracts/runtime";
 import {
 	type ConversationOperationFactV2,
@@ -128,10 +134,13 @@ async function responseFailure(response: Response): Promise<never> {
 	}
 }
 
-async function boundedResponseText(response: Response): Promise<string> {
+async function boundedResponseText(
+	response: Response,
+	limit = maximumResponseBytes,
+): Promise<string> {
 	const reader = response.body?.getReader();
 	const length = response.headers.get("content-length");
-	if (length && /^\d+$/.test(length) && Number(length) > maximumResponseBytes) {
+	if (length && /^\d+$/.test(length) && Number(length) > limit) {
 		await reader?.cancel().catch(() => undefined);
 		return failure("RUNTIME_RESPONSE_INVALID", true);
 	}
@@ -143,7 +152,7 @@ async function boundedResponseText(response: Response): Promise<string> {
 			const next = await reader.read();
 			if (next.value) {
 				bytes += next.value.byteLength;
-				if (bytes > maximumResponseBytes) {
+				if (bytes > limit) {
 					return failure("RUNTIME_RESPONSE_INVALID", true);
 				}
 				chunks.push(next.value);
@@ -817,5 +826,68 @@ export function createWorkerRuntimeHostClientV4(
 	return {
 		submitTurn: send,
 		supplement: send,
+		async readEvents(value: RuntimeEventReadRequestV4, signal?: AbortSignal) {
+			const parsed = RuntimeEventReadRequestV4Schema.safeParse(value);
+			if (!parsed.success) return failure("RUNTIME_REQUEST_INVALID", false);
+			await options.assertCurrentAuthorization();
+			const response = await post(
+				fetcher,
+				new URL("internal/runtime/v4/events/read", base),
+				options.serviceToken,
+				parsed.data.traceId,
+				parsed.data,
+				signal,
+			);
+			try {
+				const replay = validateRuntimeReplayResponseV4(
+					JSON.parse(
+						await boundedResponseText(
+							response,
+							maximumEventFrameBytes * 8 + 16_384,
+						),
+					),
+					parsed.data,
+				);
+				return {
+					...replay,
+					events: replay.events.map((event) =>
+						event.schemaVersion === 2 ? operationEvent(event) : event,
+					),
+				};
+			} catch (error) {
+				if (error instanceof ConversationRuntimeHostError) throw error;
+				return failure("RUNTIME_EVENT_INVALID", true);
+			}
+		},
+		async acknowledgeEvents(
+			value: RuntimeEventAckRequestV4,
+			signal?: AbortSignal,
+		) {
+			const parsed = RuntimeEventAckRequestV4Schema.safeParse(value);
+			if (!parsed.success) return failure("RUNTIME_REQUEST_INVALID", false);
+			await options.assertCurrentAuthorization();
+			const response = await post(
+				fetcher,
+				new URL("internal/runtime/v4/events/ack", base),
+				options.serviceToken,
+				parsed.data.traceId,
+				parsed.data,
+				signal,
+			);
+			try {
+				const ack = RuntimeEventAckResponseV4Schema.parse(
+					JSON.parse(await boundedResponseText(response)),
+				);
+				if (
+					ack.executionId !== parsed.data.executionId ||
+					ack.confirmedCursor !== parsed.data.confirmedCursor
+				)
+					return failure("RUNTIME_RESPONSE_INVALID", true);
+				return ack;
+			} catch (error) {
+				if (error instanceof ConversationRuntimeHostError) throw error;
+				return failure("RUNTIME_RESPONSE_INVALID", true);
+			}
+		},
 	};
 }

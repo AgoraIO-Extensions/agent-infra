@@ -6,6 +6,11 @@ import type {
 	RuntimeBusinessRequestV4,
 	RuntimeControlCommandV2,
 	RuntimeControlReasonV2,
+	RuntimeEventV1,
+} from "@agent-infra/contracts/runtime";
+import {
+	RuntimeEventAckRequestV4Schema,
+	RuntimeEventReadRequestV4Schema,
 } from "@agent-infra/contracts/runtime";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import {
@@ -15,6 +20,7 @@ import {
 	type ConversationRuntimeEventRequestV1,
 	ConversationRuntimeHostError,
 	type ConversationRuntimeHostPortV1,
+	type ConversationRuntimeOperationEventV2,
 	type ConversationRuntimeStatusRequestV2,
 	createTaskRuntimeAuthorizationUseCaseV1,
 	type LegacyTaskControlRecoveryV1,
@@ -384,6 +390,61 @@ export function createConversationRuntimeV2(
 			base,
 			target: postTarget,
 			route: afterTargetRoute.record,
+		};
+	}
+	function keyedEvent(
+		request: Request,
+		command: "events.persist" | "events.ack",
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		signal: AbortSignal,
+	) {
+		const { context, state, target, authority } = prepared;
+		if (!context.claim.executionSource && !context.claim.relayKeyBinding)
+			return null;
+		if (
+			!context.claim.executionSource ||
+			!context.claim.relayKeyBinding ||
+			!state.hostSessionRef ||
+			!options.executionKeys ||
+			!options.relayKeyDecryptor
+		)
+			unavailable("RELAY_KEY_UNAVAILABLE");
+		return {
+			body: {
+				...prepared.base,
+				schemaVersion: 4 as const,
+				hostSessionRef: state.hostSessionRef,
+				executionSource: context.claim.executionSource,
+				keyBinding: {
+					purpose: context.claim.relayKeyBinding.purpose,
+					subjectId: context.claim.relayKeyBinding.subjectId,
+					ciphertextRef: context.claim.relayKeyBinding.keyId,
+					version: context.claim.relayKeyBinding.keyVersion,
+				},
+				consumer: "platform_worker_persistence" as const,
+				grant: {
+					schemaVersion: 2 as const,
+					format: "runtime-execution-jws" as const,
+					token: "a.b.c",
+				},
+			},
+			client: createWorkerRuntimeHostClientV4({
+				...target,
+				fetch: options.fetch,
+				verifyGrant: signV4.verify,
+				executionKeys: options.executionKeys,
+				decryptor: options.relayKeyDecryptor,
+				assertCurrentAuthorization: async () => {
+					const current = await prepare(request, command, signal);
+					if (
+						!isDeepStrictEqual(current.authority, authority) ||
+						current.state.runtimeCursor !== state.runtimeCursor ||
+						!isDeepStrictEqual(current.route, prepared.route) ||
+						!isDeepStrictEqual(current.target, target)
+					)
+						unavailable("RUNTIME_ROUTE_STALE");
+				},
+			}),
 		};
 	}
 	async function latch(
@@ -786,13 +847,22 @@ export function createConversationRuntimeV2(
 		},
 		async acknowledge(request, signal) {
 			const active = combined(signal);
-			const { state, authority, client, base } = await prepare(
-				request,
-				"events.ack",
-				active,
-			);
+			const prepared = await prepare(request, "events.ack", active);
+			const { state, authority, client, base } = prepared;
 			if (state.runtimeCursor !== request.confirmedCursor) return;
 			if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+			const keyed = keyedEvent(request, "events.ack", prepared, active);
+			if (keyed) {
+				const body = RuntimeEventAckRequestV4Schema.parse({
+					...keyed.body,
+					confirmedCursor: request.confirmedCursor,
+				});
+				await keyed.client.acknowledgeEvents(
+					{ ...body, grant: await signV4.signEvent(body, authority) },
+					active,
+				);
+				return;
+			}
 			const body = {
 				...base,
 				hostSessionRef: state.hostSessionRef,
@@ -808,11 +878,8 @@ export function createConversationRuntimeV2(
 			const active = combined(signal);
 			for (;;) {
 				active.throwIfAborted();
-				const { state, authority, client, base } = await prepare(
-					request,
-					"events.persist",
-					active,
-				);
+				const prepared = await prepare(request, "events.persist", active);
+				const { state, authority, client, base } = prepared;
 				if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
 				const body = {
 					...base,
@@ -823,10 +890,36 @@ export function createConversationRuntimeV2(
 				let terminal = false;
 				let streamFailure: ConversationRuntimeHostError | undefined;
 				try {
-					for await (const event of client.events(
-						{ ...body, grant: signRequest(body, authority, "events.persist") },
-						active,
-					)) {
+					const keyed = keyedEvent(request, "events.persist", prepared, active);
+					let events:
+						| Iterable<RuntimeEventV1 | ConversationRuntimeOperationEventV2>
+						| AsyncIterable<
+								RuntimeEventV1 | ConversationRuntimeOperationEventV2
+						  >;
+					if (keyed) {
+						const unsigned = RuntimeEventReadRequestV4Schema.parse({
+							...keyed.body,
+							afterCursor: state.runtimeCursor,
+						});
+						events = (
+							await keyed.client.readEvents(
+								{
+									...unsigned,
+									grant: await signV4.signEvent(unsigned, authority),
+								},
+								active,
+							)
+						).events;
+					} else {
+						events = client.events(
+							{
+								...body,
+								grant: signRequest(body, authority, "events.persist"),
+							},
+							active,
+						);
+					}
+					for await (const event of events) {
 						yield event;
 						if (event.type === "completed") terminal = true;
 					}
