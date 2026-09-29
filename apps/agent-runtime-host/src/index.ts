@@ -320,6 +320,7 @@ export async function assembleRuntimeHost(
 										{
 											expectedIssuer,
 											expectedWorkerId: runtimeWorkerId,
+											expectedAgentId: agentId ?? runtimeConfigurationInvalid(),
 										},
 									),
 								}
