@@ -69,6 +69,59 @@ it("keeps the validated service label after caller options change", () => {
 	expect(lines[0]).not.toContain("PRIVATE_SENTINEL");
 });
 
+it("bounds resource snapshots and stops reading them after close", async () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-api",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	const observe = telemetry.observeResource;
+	observe({ kind: "task_waiting", value: -1 });
+	observe({ kind: "task_waiting", value: 1.5 });
+	observe({ kind: "task_waiting", value: Number.POSITIVE_INFINITY });
+	observe({ kind: "task_waiting", value: Number.MAX_SAFE_INTEGER + 1 });
+	observe({ kind: "PRIVATE_SENTINEL", value: 1 } as unknown as Parameters<
+		typeof observe
+	>[0]);
+	observe(
+		Object.defineProperty({ kind: "task_waiting" }, "value", {
+			get() {
+				throw new Error("PRIVATE_SENTINEL");
+			},
+		}) as Parameters<typeof observe>[0],
+	);
+	observe({
+		kind: "task_waiting",
+		value: 2,
+		secret: "PRIVATE_SENTINEL",
+	} as Parameters<typeof observe>[0]);
+	expect(telemetry.status()).toMatchObject({
+		enabled: false,
+		invalidRecords: 5,
+		captureFailures: 1,
+	});
+	expect(lines).toHaveLength(0);
+	await telemetry.close();
+	observe(
+		Object.defineProperty({}, "kind", {
+			get() {
+				throw new Error("PRIVATE_SENTINEL");
+			},
+		}) as Parameters<typeof observe>[0],
+	);
+	expect(telemetry.status()).toMatchObject({
+		state: "closed",
+		invalidRecords: 5,
+		captureFailures: 1,
+	});
+});
+
 it("reports shutdown and ignores records once close begins", async () => {
 	const lines: string[] = [];
 	const output = new Writable({
