@@ -1131,7 +1131,7 @@ export function registerManagementRoutes(
 					["agent:create"],
 				),
 			);
-			await dependencies.foundation.submit(
+			const result = await dependencies.foundation.submit(
 				{
 					schemaVersion: 2,
 					...ids,
@@ -1155,12 +1155,18 @@ export function registerManagementRoutes(
 				},
 				prepared.attachment,
 			);
+			if (
+				result.applicationId !== ids.applicationId ||
+				result.agentId !== ids.agentId ||
+				result.status !== "creating"
+			)
+				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			return context.json(
 				{
 					schemaVersion: 1,
-					applicationId: ids.applicationId,
-					agentId: ids.agentId,
-					status: "creating",
+					applicationId: result.applicationId,
+					agentId: result.agentId,
+					status: result.status,
 				},
 				201,
 			);

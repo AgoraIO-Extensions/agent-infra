@@ -5,7 +5,10 @@ import {
 	AgentProjectionV1Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
-import { ApiIdentityError } from "@agent-infra/platform-core";
+import {
+	ApiIdentityError,
+	ApplicationFoundationError,
+} from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
@@ -530,6 +533,13 @@ describe("management routes", () => {
 
 	it("accepts direct creation only through an active scoped API principal", async () => {
 		const direct = createApp();
+		direct.submit.mockImplementation(async (command) => ({
+			schemaVersion: 1,
+			applicationId: command.applicationId,
+			agentId: command.agentId,
+			configurationRevision: 1,
+			status: "creating",
+		}));
 		const apiIdentity = {
 			schemaVersion: 1,
 			principal: { kind: "application", id: "application-caller" },
@@ -730,6 +740,38 @@ describe("management routes", () => {
 		);
 		expect(ownerChangedDuringPreparation.status).toBe(403);
 		expect(direct.submit).toHaveBeenCalledTimes(2);
+
+		direct.submit.mockRejectedValueOnce(
+			new ApplicationFoundationError("idempotency_conflict"),
+		);
+		const conflict = await apiApp.request("/api/v1/agents", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				Authorization: "Bearer secret",
+				"Idempotency-Key": "Direct.Aa-06",
+			},
+			body: rejectedBody,
+		});
+		expect(conflict.status).toBe(409);
+
+		direct.submit.mockImplementationOnce(async (command) => ({
+			schemaVersion: 1,
+			applicationId: command.applicationId,
+			agentId: command.agentId,
+			configurationRevision: 1,
+			status: "pending_approval",
+		}));
+		const inconsistent = await apiApp.request("/api/v1/agents", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				Authorization: "Bearer secret",
+				"Idempotency-Key": "Direct.Aa-07",
+			},
+			body: rejectedBody,
+		});
+		expect(inconsistent.status).toBe(503);
 	});
 
 	it("does not return an application credential to its responsible user", async () => {
