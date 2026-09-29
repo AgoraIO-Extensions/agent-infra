@@ -9,7 +9,10 @@ import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 
 export interface UserGovernanceRoutesDependencies {
 	readonly identity: IdentityAdapter;
-	readonly users?: Pick<PostgresPlatformUserDisablesV1, "setPlatformDisabled">;
+	readonly users?: Pick<
+		PostgresPlatformUserDisablesV1,
+		"setPlatformDisabled" | "recordRejected"
+	>;
 }
 
 /** Platform user status is a browser administrator operation. */
@@ -19,6 +22,8 @@ export function registerUserGovernanceRoutes(
 ): void {
 	app.put("/api/v2/admin/users/:userId/disable", async (context) => {
 		const metadata = requestMetadata(context.req.raw);
+		let actorUserId: string | null = null;
+		let targetUserId: string | null = null;
 		try {
 			if (context.req.raw.headers.has("authorization"))
 				throw new HttpProtocolError(
@@ -30,14 +35,17 @@ export function registerUserGovernanceRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
+			actorUserId = identity.userId;
+			const requestedUserId = context.req.param("userId");
+			targetUserId =
+				/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+					requestedUserId,
+				)
+					? requestedUserId
+					: null;
 			if (!identity.roles.includes("system_admin"))
 				throw new HttpProtocolError("FORBIDDEN", metadata.traceId);
-			const targetUserId = context.req.param("userId");
-			if (
-				!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
-					targetUserId,
-				)
-			)
+			if (targetUserId === null)
 				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
 			const { value } = await parseJson(
 				context.req.raw,
@@ -61,6 +69,26 @@ export function registerUserGovernanceRoutes(
 			return context.body(null, 204);
 		} catch (error) {
 			const protocol = mapCoreError(error, metadata.traceId);
+			if (actorUserId !== null) {
+				try {
+					if (!dependencies.users)
+						throw new Error("Governance audit is unavailable");
+					await dependencies.users.recordRejected({
+						actorUserId,
+						targetUserId,
+						traceId: metadata.traceId,
+						requestId: metadata.requestId,
+						reason: protocol.body.code,
+						outcome: protocol.status < 500 ? "rejected" : "failed",
+					});
+				} catch {
+					const unavailable = new HttpProtocolError(
+						"DEPENDENCY_UNAVAILABLE",
+						metadata.traceId,
+					);
+					return context.json(unavailable.body, unavailable.status);
+				}
+			}
 			return context.json(protocol.body, protocol.status);
 		}
 	});

@@ -247,6 +247,7 @@ function candidates(
 				limit 1
 			) accepted on true
 			where ${ownership}
+				and a."targetType" <> 'user'
 				and (${filters.from ?? null}::timestamptz is null or a."occurredAt" >= ${filters.from ?? null}::timestamptz)
 				and (${filters.until ?? null}::timestamptz is null or a."occurredAt" < ${filters.until ?? null}::timestamptz)
 				and (${filters.agentId ?? null}::text is null or a."agentId" = ${filters.agentId ?? null})

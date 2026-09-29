@@ -23,6 +23,11 @@ const platformAuditActionMetadata = {
 		subjectKind: "user",
 		details: false,
 	},
+	"platform.user.disable.rejected": {
+		actorKind: "user",
+		subjectKind: "user",
+		details: "governance_rejection",
+	},
 	"api.access.rejected": {
 		actorKind: "user",
 		actorKinds: ["user", "application"],
@@ -408,6 +413,14 @@ function changedFields(
 	details: unknown,
 ): readonly string[] {
 	const detailKind = platformAuditActionMetadata[action].details;
+	if (detailKind === "governance_rejection") {
+		if (!exactObject(details, ["reason"]))
+			throw new PlatformAuditQueryError("unavailable");
+		const reason = (details as { readonly reason: unknown }).reason;
+		if (!validText(reason) || reason.length > 64)
+			throw new PlatformAuditQueryError("unavailable");
+		return [reason];
+	}
 	if (detailKind === false) {
 		if (details !== null) throw new PlatformAuditQueryError("unavailable");
 		return [];

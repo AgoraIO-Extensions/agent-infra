@@ -44,6 +44,25 @@ afterAll(async () => {
 	await database?.stop();
 });
 
+it("keeps user governance events out of the scoped audit contract", async () => {
+	const id = randomUUID();
+	const actorId = randomUUID();
+	const targetId = randomUUID();
+	await sql`
+		insert into platform.audit_events
+			(id, trace_id, request_id, actor_type, actor_id, action,
+			 target_type, target_id, outcome, details)
+		values (${id}, 'governance-refusal-trace', 'governance-refusal-request',
+			'user', ${actorId}, 'platform.user.disable.rejected', 'user',
+			${targetId}, 'rejected', ${sql.json({ reason: "RESOURCE_UNAVAILABLE" })})
+	`;
+	const pageResult = await query.listAudit(admin, page, request());
+	expect(pageResult.items.some((item) => item.auditId === id)).toBe(false);
+	await expect(
+		query.getAudit(admin, id, detail, request()),
+	).rejects.toMatchObject({ code: "access_denied" });
+});
+
 async function fixture(
 	principal: Extract<ApiPrincipalV1, { kind: "user" }> = {
 		kind: "user",

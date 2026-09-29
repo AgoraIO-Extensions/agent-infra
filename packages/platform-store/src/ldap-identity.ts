@@ -111,6 +111,31 @@ export class PostgresPlatformUserDisablesV1 {
 		return row !== undefined;
 	}
 
+	async recordRejected(input: {
+		readonly actorUserId: string;
+		readonly targetUserId: string | null;
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly reason: string;
+		readonly outcome: "rejected" | "failed";
+	}): Promise<void> {
+		assertUserId(input.actorUserId);
+		if (input.targetUserId !== null) assertUserId(input.targetUserId);
+		assertText(input.traceId, 256);
+		assertText(input.requestId, 256);
+		assertText(input.reason, 64);
+		await this.sql`
+			insert into platform.audit_events
+				(id, trace_id, request_id, actor_type, actor_id, action,
+				 target_type, target_id, outcome, details)
+			values (${randomUUID()}, ${input.traceId}, ${input.requestId},
+				'user', ${input.actorUserId},
+				'platform.user.disable.rejected', 'user',
+				${input.targetUserId ?? "unresolved"}, ${input.outcome},
+				${this.sql.json({ reason: input.reason })})
+		`;
+	}
+
 	async setPlatformDisabled(input: {
 		readonly actorUserId: string;
 		readonly targetUserId: string;

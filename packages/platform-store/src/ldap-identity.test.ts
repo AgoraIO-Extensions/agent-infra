@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { PostgresPlatformAuditQueryV1 } from "./audit.js";
 import {
 	PostgresLdapIdentityIdsV1,
 	PostgresPlatformUserDisablesV1,
@@ -228,6 +229,57 @@ describe("PostgreSQL LDAP identity authority", () => {
 				"drop function if exists platform.reject_user_disable_audit()",
 			);
 			await Promise.all([ids.close(), users.close(), sql.end()]);
+		}
+	});
+
+	it("persists a bounded refusal without request values or false success", async () => {
+		const users = new PostgresPlatformUserDisablesV1(database.databaseUrl);
+		const audit = new PostgresPlatformAuditQueryV1({
+			databaseUrl: database.databaseUrl,
+		});
+		const sql = postgres(database.databaseUrl, { max: 1 });
+		const actorUserId = randomUUID();
+		const targetUserId = randomUUID();
+		try {
+			await users.recordRejected({
+				actorUserId,
+				targetUserId,
+				traceId: "governance-refusal",
+				requestId: "request-refusal",
+				reason: "RESOURCE_UNAVAILABLE",
+				outcome: "rejected",
+			});
+			const [record] = await sql`
+				select actor_type, actor_id, action, target_type, target_id,
+					outcome, details
+				from platform.audit_events where trace_id = 'governance-refusal'
+			`;
+			expect(record).toEqual({
+				actor_type: "user",
+				actor_id: actorUserId,
+				action: "platform.user.disable.rejected",
+				target_type: "user",
+				target_id: targetUserId,
+				outcome: "rejected",
+				details: { reason: "RESOURCE_UNAVAILABLE" },
+			});
+			const page = await audit.listAudit(
+				{
+					schemaVersion: 1,
+					kind: "administrator",
+					administratorId: actorUserId,
+				},
+				{ schemaVersion: 1, limit: 100 },
+			);
+			expect(
+				page.items.find((item) => item.traceId === "governance-refusal"),
+			).toMatchObject({
+				action: "platform.user.disable.rejected",
+				result: "failed",
+				summary: "platform.user.disable.rejected: RESOURCE_UNAVAILABLE",
+			});
+		} finally {
+			await Promise.all([users.close(), audit.close(), sql.end()]);
 		}
 	});
 });
