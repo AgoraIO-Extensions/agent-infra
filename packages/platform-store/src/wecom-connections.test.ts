@@ -88,3 +88,39 @@ it("does not let an expired setup probe terminate its replacement", async () => 
 		await db.stop();
 	}
 }, 30000);
+
+it("keeps an active binding connected while replacement credentials are verifying", async () => {
+	const db = await startPostgresTestDatabase("wecom-replacement-lease");
+	const sql = postgres(db.databaseUrl);
+	const leases = new PostgresWecomConnectionsV1(db);
+	try {
+		await migratePlatformDatabase(db);
+		await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values ('agent',1,'revision')`;
+		await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values ('agent','owner',now())`;
+		await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,created_at,configuration) values ('agent',1,'fixture',now(),${sql.json({ schemaVersion: 2, agentId: "agent", revision: 1, channels: [{ kind: "wecom_bot", bindingReference: "active" }] })})`;
+		const active = await leases.claim({
+			agentId: "agent",
+			bindingReference: "active",
+			botId: "bot",
+			holderId: "worker",
+		});
+		if (!active) throw new Error("Missing active connection");
+		await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id) values ('replacement','agent','owner',1,'revision',${"a".repeat(64)},now()+interval '5 minutes','verifying','bot')`;
+		expect(await leases.current(active)).toBe(true);
+		expect(await leases.renew(active)).toBe(true);
+		expect(
+			await leases.claim({
+				agentId: "agent",
+				bindingReference: "replacement",
+				botId: "bot",
+				holderId: "probe",
+			}),
+		).toBeNull();
+		await sql`update platform.wecom_setup_sessions set status='auth_failed' where session_id='replacement'`;
+		expect(await leases.current(active)).toBe(true);
+	} finally {
+		await leases.close();
+		await sql.end();
+		await db.stop();
+	}
+}, 30_000);

@@ -419,3 +419,59 @@ it("keeps an unclaimed connection receipt pending after its connection lease exp
 		await owner.close();
 	}
 });
+
+it("replays a claimed receipt after its connection lease expires before prepare", async () => {
+	await sql`update platform.wecom_receipts set delivery_status='abandoned'`;
+	await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status)
+    values (${message.providerId},${message.agentId},${message.bindingReference},'worker-stale',20,now()+interval '30 seconds','connected')
+    on conflict (bot_id) do update set agent_id=excluded.agent_id,binding_reference=excluded.binding_reference,holder_id=excluded.holder_id,fence=excluded.fence,lease_until=excluded.lease_until,status=excluded.status`;
+	const owner = new PostgresWecomChannelV1({
+		...db,
+		connectionHolderId: "worker-stale",
+	});
+	const replacement = new PostgresWecomChannelV1({
+		...db,
+		connectionHolderId: "worker-fresh",
+	});
+	try {
+		const event = {
+			...message,
+			eventId: "claimed-replay-event",
+			senderId: "claimed-replay-sender",
+		};
+		const accepted = await channel(owner).receive(event, {
+			botId: message.providerId,
+			holderId: "worker-stale",
+			fence: 20,
+		});
+		if (accepted.outcome !== "accepted")
+			throw new Error("Expected WebSocket acceptance");
+		await sql`update platform.conversation_executions set status='completed' where execution_id=${accepted.receipt.executionId}`;
+		const stale = await owner.claim();
+		expect(stale?.receiptId).toBe(accepted.receipt.receiptId);
+		await sql`update platform.wecom_connections set lease_until=now()-interval '1 second' where bot_id=${message.providerId}`;
+		expect(await owner.claim()).toBeNull();
+		expect(
+			await owner.read(accepted.receipt.receiptId, event.senderId),
+		).toMatchObject({ deliveryStatus: "pending" });
+		await sql`update platform.wecom_connections set holder_id='worker-fresh',fence=21,lease_until=now()+interval '30 seconds' where bot_id=${message.providerId}`;
+		expect(await replacement.claim()).toBeNull();
+		expect(
+			await channel(replacement).receive(
+				{ ...event, replyHandle: "fresh-reply" },
+				{
+					botId: message.providerId,
+					holderId: "worker-fresh",
+					fence: 21,
+				},
+			),
+		).toMatchObject({ outcome: "replayed", receipt: accepted.receipt });
+		const fresh = await replacement.claim();
+		expect(fresh?.receiptId).toBe(accepted.receipt.receiptId);
+		expect(fresh?.replyHandle).toBe("fresh-reply");
+		expect(fresh?.fence).not.toBe(stale?.fence);
+	} finally {
+		await owner.close();
+		await replacement.close();
+	}
+});
