@@ -22,6 +22,10 @@ function MyAgentsRoute() {
 				ownedAgentsUnavailable={
 					owned.isError || owned.data?.kind === "unavailable"
 				}
+				ownedAgentsRetryable={
+					owned.isError ||
+					(owned.data?.kind === "unavailable" && owned.data.retryable)
+				}
 				onRetryApplications={() => void query.refetch()}
 				onRetryOwnedAgents={() => void owned.refetch()}
 				retryingApplications={query.isFetching}

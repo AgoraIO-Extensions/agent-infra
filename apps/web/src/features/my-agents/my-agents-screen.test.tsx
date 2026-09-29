@@ -167,7 +167,7 @@ describe("MyAgentsScreen", () => {
 	it.each([
 		[{ ownedAgentsLoading: true }, "正在读取你管理的 Agent…"],
 		[
-			{ ownedAgentsUnavailable: true },
+			{ ownedAgentsUnavailable: true, ownedAgentsRetryable: true },
 			"暂时无法读取你管理的 Agent，请稍后重试。",
 		],
 		[{}, "尚未读取你管理的 Agent。"],

@@ -21,6 +21,7 @@ type MyAgentsScreenProps = {
 	ownedAgents?: AgentProjectionV2[];
 	ownedAgentsLoading?: boolean;
 	ownedAgentsUnavailable?: boolean;
+	ownedAgentsRetryable?: boolean;
 	onRetryApplications?: () => void;
 	onRetryOwnedAgents?: () => void;
 	retryingApplications?: boolean;
@@ -32,6 +33,7 @@ export function MyAgentsScreen({
 	ownedAgents,
 	ownedAgentsLoading = false,
 	ownedAgentsUnavailable = false,
+	ownedAgentsRetryable = false,
 	onRetryApplications,
 	onRetryOwnedAgents,
 	retryingApplications = false,
@@ -145,9 +147,11 @@ export function MyAgentsScreen({
 					) : ownedAgentsUnavailable ? (
 						<Alert className="my-5">
 							<AlertDescription>
-								暂时无法读取你管理的 Agent，请稍后重试。
+								{ownedAgentsRetryable
+									? "暂时无法读取你管理的 Agent，请稍后重试。"
+									: "当前无法查看你管理的 Agent，请联系管理员。"}
 							</AlertDescription>
-							{onRetryOwnedAgents ? (
+							{ownedAgentsRetryable && onRetryOwnedAgents ? (
 								<Button
 									className="mt-4"
 									variant="outline"

@@ -62,6 +62,7 @@ async function fixture(
 	let deployment = deploymentConfiguration;
 	let pendingQueueUnavailable = false;
 	let agentListUnavailable = false;
+	let ownedAgentListUnauthorized = false;
 	let agentDetailUnavailable = false;
 	let applicationsUnavailable = false;
 	const retryableReadFailure = {
@@ -86,14 +87,20 @@ async function fixture(
 			body: deployment,
 		}),
 		listAgents: (request) => {
+			const ownerScope =
+				new URL(request.url).searchParams.get("scope") === "owner";
+			if (ownerScope && ownedAgentListUnauthorized) {
+				return {
+					status: 403,
+					body: pilotFakeScenariosV2.unauthorized.response.body,
+				};
+			}
 			if (agentListUnavailable) {
 				return {
 					status: 503,
 					body: retryableReadFailure,
 				};
 			}
-			const ownerScope =
-				new URL(request.url).searchParams.get("scope") === "owner";
 			return {
 				status: 200,
 				body: {
@@ -298,6 +305,9 @@ async function fixture(
 		},
 		recoverAgentList() {
 			agentListUnavailable = false;
+		},
+		unauthorizedOwnedAgentList() {
+			ownedAgentListUnauthorized = true;
 		},
 		unavailableAgentDetail() {
 			agentDetailUnavailable = true;
@@ -952,6 +962,21 @@ test("retryable management reads recover through explicit browser actions", asyn
 	await expect(
 		page.getByRole("heading", { name: "Release assistant" }),
 	).toBeVisible();
+});
+
+test("owned Agent authorization failures do not offer a retry action", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unauthorizedOwnedAgentList();
+	await page.goto("/my-agents");
+	await page.getByRole("tab", { name: "已创建 Agent" }).click();
+	await expect(page.getByRole("alert")).toContainText(
+		"当前无法查看你管理的 Agent，请联系管理员。",
+	);
+	await expect(
+		page.getByRole("button", { name: "重新加载已创建 Agent" }),
+	).toHaveCount(0);
 });
 
 test("withdraw confirmation traps focus and cancellation sends no request", async ({
