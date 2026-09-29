@@ -61,6 +61,7 @@ async function fixture(
 	);
 	let deployment = deploymentConfiguration;
 	let pendingQueueUnavailable = false;
+	let pendingQueueUnauthorized = false;
 	let agentListUnavailable = false;
 	let agentListUnauthorized = false;
 	let ownedAgentListUnauthorized = false;
@@ -170,6 +171,12 @@ async function fixture(
 		updateAgentApplication: () => ({ status: 200, body: application }),
 		withdrawAgentApplication: () => ({ status: 200, body: application }),
 		listPendingAgentApplications: () => {
+			if (pendingQueueUnauthorized) {
+				return {
+					status: 403,
+					body: pilotFakeScenariosV2.unauthorized.response.body,
+				};
+			}
 			if (pendingQueueUnavailable) {
 				return {
 					status: 503,
@@ -344,6 +351,9 @@ async function fixture(
 		},
 		unavailablePendingQueue() {
 			pendingQueueUnavailable = true;
+		},
+		unauthorizedPendingQueue() {
+			pendingQueueUnauthorized = true;
 		},
 		recoverPendingQueue() {
 			pendingQueueUnavailable = false;
@@ -695,6 +705,20 @@ test("administrator can recover a temporarily unavailable pending queue", async 
 	await page.keyboard.press("Enter");
 	await expect(page.getByRole("button", { name: "审阅申请" })).toBeVisible();
 	await capture(page, info, "approvals-recovered");
+});
+
+test("administrator authorization failure does not offer a pending-queue retry", async ({
+	page,
+}) => {
+	const api = await fixture(page, "admin");
+	api.unauthorizedPendingQueue();
+	await page.goto("/admin/approvals");
+	await expect(page.getByRole("alert")).toHaveText(
+		"审批列表不可用，请联系管理员。",
+	);
+	await expect(page.getByRole("button", { name: "重新加载审批" })).toHaveCount(
+		0,
+	);
 });
 
 test("Owner configuration checkbox, Secret clearing, lifecycle and custom image upgrade", async ({

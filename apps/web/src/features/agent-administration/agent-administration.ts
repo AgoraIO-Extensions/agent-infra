@@ -32,6 +32,13 @@ export type PendingAgentApplicationsState =
 	| { kind: "ready"; applications: AgentApplicationProjectionV2[] }
 	| UnavailableState;
 
+export function isRetryableAgentAdministrationError(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		(!("retryable" in error) || error.retryable === true)
+	);
+}
+
 export type AgentApplicationDecision =
 	| Pick<
 			Extract<ApprovalDecisionRequestV1, { decision: "approve" }>,
