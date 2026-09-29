@@ -82,6 +82,7 @@ export const ScopedPlatformAuditActionV1Schema = z.enum([
 	"wecom.setup_expired",
 	"wecom.setup_failed",
 	"wecom.callback_verified",
+	"wecom.setup_activated",
 	"wecom.connection_verifying",
 	"wecom.connection_connected",
 	"wecom.connection_disconnected",

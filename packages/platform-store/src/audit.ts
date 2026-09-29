@@ -206,6 +206,11 @@ const platformAuditActionMetadata = {
 		subjectKind: "agent",
 		details: false,
 	},
+	"wecom.setup_activated": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
 	"wecom.connection_verifying": {
 		actorKind: "system",
 		subjectKind: "agent",
