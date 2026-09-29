@@ -1112,6 +1112,47 @@ it.each(["stop-first", "revoked-first"] as const)(
 	},
 );
 
+it.each(["processing", "unknown"] as const)(
+	"fails closed for dual historical controls on a non-terminal %s execution",
+	async (status) => {
+		const accepted = await taskUseCase().submitTask(command(`dual-${status}`));
+		if (accepted.outcome !== "accepted") throw Error();
+		const target = await authorizationStore.readExecution(
+			accepted.result.executionId,
+		);
+		if (!target) throw Error();
+		await sql`
+			update platform.conversation_executions
+			set status = ${status}
+			where execution_id = ${target.executionId}
+		`;
+		await sql`insert into platform.task_control_records
+			(id, execution_id, authorization_record_id, reason)
+			values
+			('nonterminal-stop', ${target.executionId}, ${target.authorizationRecordId}, 'stop'),
+			('nonterminal-revoked', ${target.executionId}, ${target.authorizationRecordId}, 'authorization_revoked')`;
+		const request = {
+			executionId: target.executionId,
+			authorizationRecordId: target.authorizationRecordId,
+			workerId: "worker-recovery",
+			traceId: `trace-nonterminal-${status}`,
+			requestId: `request-nonterminal-${status}`,
+			reason: "recovery" as const,
+		};
+		await expect(authorizationStore.recordControl(request)).rejects.toThrow(
+			"Task authorization persistence is unavailable",
+		);
+		const rows = await sql<{ id: string; reason: string }[]>`
+			select id, reason from platform.task_control_records
+			where execution_id = ${target.executionId}
+			order by id`;
+		expect(rows).toEqual([
+			{ id: "nonterminal-revoked", reason: "authorization_revoked" },
+			{ id: "nonterminal-stop", reason: "stop" },
+		]);
+	},
+);
+
 it("reads the current Agent grant revision for application task renewal", async () => {
 	await seedApplication();
 	const boundary = await authorizationStore.captureApplicationBoundary({

@@ -372,6 +372,18 @@ describe("task Runtime authorization Core use case", () => {
 });
 
 describe("terminal task event recovery authority", () => {
+	it("rejects an unrelated persisted control reason during terminal recovery", async () => {
+		const h = harness();
+		Object.assign(h.state, { executionStatus: "completed" });
+		h.ports.recordControl.mockResolvedValue({
+			controlRecordId: "unrelated-control",
+			reason: "generation_isolation",
+		});
+		await expect(
+			h.useCase.current(h.context, h.state, "events.persist", signal()),
+		).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_BINDING_INVALID" });
+	});
+
 	it.each(["healthy", "revoked", "directory-unavailable"])(
 		"permits only original queries and ACK for %s terminal history",
 		async (condition) => {
