@@ -227,7 +227,8 @@ export interface PlatformAuditProjectionV1 {
 			| "grant"
 			| "unknown"
 			| "conversation"
-			| "execution";
+			| "execution"
+			| "configuration";
 		readonly subjectId: string;
 	};
 	readonly result: "succeeded" | "failed";
@@ -453,7 +454,7 @@ function changedFields(
 	return fields as PlatformAuditChangedFieldV1[];
 }
 
-interface AuditRow {
+export interface AuditRow {
 	readonly requestId: string | null;
 	readonly agentId: string | null;
 	readonly auditId: string;
@@ -468,7 +469,9 @@ interface AuditRow {
 	readonly details: unknown;
 }
 
-function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
+export function decodePlatformAuditRowV1(
+	row: AuditRow,
+): PlatformAuditProjectionV1 {
 	if (
 		!validText(row.auditId) ||
 		!validText(row.traceId) ||
@@ -487,9 +490,13 @@ function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
 	const expectedTargetType = metadata.subjectKind;
 	const allowedTargetTypes =
 		"subjectKinds" in metadata ? metadata.subjectKinds : [expectedTargetType];
+	const isConfigurationTarget =
+		action === "agent.configuration.revised" &&
+		row.targetType === "configuration";
 	if (
 		!allowedActorTypes.some((actorType) => actorType === row.actorType) ||
-		!allowedTargetTypes.some((targetType) => targetType === row.targetType) ||
+		(!allowedTargetTypes.some((targetType) => targetType === row.targetType) &&
+			!isConfigurationTarget) ||
 		(row.outcome !== "succeeded" &&
 			row.outcome !== "rejected" &&
 			row.outcome !== "failed")
@@ -679,7 +686,7 @@ export class PostgresPlatformAuditQueryV1 {
 					.limit(page.limit + 1);
 			}
 			const hasNext = rows.length > page.limit;
-			const items = rows.slice(0, page.limit).map(decodeRow);
+			const items = rows.slice(0, page.limit).map(decodePlatformAuditRowV1);
 			return {
 				items,
 				nextCursor: hasNext ? (items.at(-1)?.auditId ?? null) : null,

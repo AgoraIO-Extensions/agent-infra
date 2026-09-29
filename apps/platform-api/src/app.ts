@@ -16,6 +16,10 @@ import {
 import type { ManagementRouteDependencies } from "./http/management-routes.js";
 import { registerRetiredManagementRoutes } from "./http/retired-management-routes.js";
 import {
+	registerScopedAuditRoutes,
+	type ScopedAuditRoutesDependencies,
+} from "./http/scoped-audit-routes.js";
+import {
 	registerSessionAuditRoutes,
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
@@ -41,6 +45,7 @@ export interface PlatformAppDependencies {
 	readonly tasks?: TaskRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
 	readonly sessionAudit: SessionAuditRoutesDependencies;
+	readonly scopedAudit?: ScopedAuditRoutesDependencies;
 }
 
 export function createPlatformHealthApp() {
@@ -84,6 +89,8 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	});
 	registerSessionAuditRoutes(app, dependencies.sessionAudit);
 	if (dependencies.tasks) registerTaskRoutes(app, dependencies.tasks);
+	if (dependencies.scopedAudit)
+		registerScopedAuditRoutes(app, dependencies.scopedAudit);
 	if (dependencies.files) registerFileRoutesV1(app, dependencies.files);
 	registerV2CompatibilityRoutes(app);
 	return app;
