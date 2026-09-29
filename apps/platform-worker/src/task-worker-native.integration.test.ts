@@ -1369,19 +1369,63 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 				),
 			).toHaveLength(0);
 			await sql.unsafe(
+				"create sequence platform.test_operation_audit_attempts",
+			);
+			await sql.unsafe(
+				"create function platform.test_operation_audit_failure() returns trigger language plpgsql as $$ begin perform nextval('platform.test_operation_audit_attempts'); raise exception 'injected operation audit transaction failure'; end $$",
+			);
+			await sql.unsafe(
+				"create trigger test_operation_audit_failure before insert on platform.audit_events for each row when (NEW.action = 'execution.operation.observed') execute function platform.test_operation_audit_failure()",
+			);
+			await sql.unsafe(
 				"drop trigger test_event_failure on platform.conversation_events",
 			);
 			await waitUntil(
 				async () =>
-					requests.some(
+					(
+						await sql`select is_called from platform.test_operation_audit_attempts`
+					)[0]?.is_called === true,
+				"native model fact audit transaction failed",
+			);
+			expect(
+				await sql`select 1 from platform.conversation_events where execution_id=${held.executionId} and event_type='execution.operation'`,
+			).toHaveLength(0);
+			expect(
+				await sql`select 1 from platform.audit_events where target_id=${held.executionId} and action='execution.operation.observed'`,
+			).toHaveLength(0);
+			const committedCursors = new Set(
+				(
+					await sql`select runtime_cursor from platform.conversation_events where execution_id=${held.executionId} and source='runtime'`
+				).map((row) => row.runtime_cursor),
+			);
+			expect(
+				requests
+					.filter(
 						(request) =>
 							request.executionId === held.executionId &&
-							request.path.endsWith("/ack") &&
+							request.path.endsWith("/events/ack") &&
 							request.responseStatus === 200,
-					),
-				"retried Runtime event committed before ACK",
+					)
+					.every((request) => committedCursors.has(request.confirmedCursor)),
+			).toBe(true);
+			await sql.unsafe(
+				"drop trigger test_operation_audit_failure on platform.audit_events",
 			);
-			checks.push("runtime-transaction-failure-no-premature-ack");
+			await waitUntil(async () => {
+				const [fact] =
+					await sql`select e.runtime_cursor from platform.conversation_events e join platform.audit_events a on a.details->>'eventId'=e.event_id and a.action='execution.operation.observed' where e.execution_id=${held.executionId} and e.event_type='execution.operation' order by e.conversation_cursor limit 1`;
+				return requests.some(
+					(request) =>
+						request.executionId === held.executionId &&
+						request.path.endsWith("/events/ack") &&
+						request.confirmedCursor === fact?.runtime_cursor &&
+						request.responseStatus === 200,
+				);
+			}, "retried native model fact and audit committed before cursor ACK");
+			checks.push(
+				"runtime-transaction-failure-no-premature-ack",
+				"native-model-audit-failure-rolls-back-fact-and-cursor-before-ack",
+			);
 			const queued = await submit(
 				applicationCredential.credential,
 				"queued-application-native",
