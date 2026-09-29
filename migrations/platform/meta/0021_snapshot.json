@@ -889,6 +889,21 @@
         }
       },
       "indexes": {
+        "browser_sessions_expires_at": {
+          "name": "browser_sessions_expires_at",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "browser_sessions_uid": {
           "name": "browser_sessions_uid",
           "columns": [

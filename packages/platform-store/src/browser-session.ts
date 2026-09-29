@@ -16,10 +16,13 @@ export class PostgresLdapSessionStoreV1 {
 
 	async create(digest: string, uid: string, expiresAt: number): Promise<void> {
 		assertDigest(digest);
-		await this.sql`
-			insert into platform.browser_sessions (token_digest, uid, expires_at)
-			values (${digest}, ${uid}, ${new Date(expiresAt)})
-		`;
+		await this.sql.begin(async (sql) => {
+			await sql`delete from platform.browser_sessions where expires_at <= clock_timestamp()`;
+			await sql`
+				insert into platform.browser_sessions (token_digest, uid, expires_at)
+				values (${digest}, ${uid}, ${new Date(expiresAt)})
+			`;
+		});
 	}
 
 	async find(digest: string, now: number): Promise<{ uid: string } | null> {

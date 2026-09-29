@@ -1,3 +1,4 @@
+import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PostgresLdapSessionStoreV1 } from "./browser-session.js";
 import { migratePlatformDatabase } from "./migrate.js";
@@ -67,6 +68,29 @@ describe("PostgreSQL browser sessions", () => {
 			expect(await store.find(digest, expiresAt - 1)).toBeNull();
 		} finally {
 			await store.close();
+		}
+	});
+
+	it("deletes expired rows on a subsequent login without removing active sessions", async () => {
+		const store = new PostgresLdapSessionStoreV1(database.databaseUrl);
+		const sql = postgres(database.databaseUrl);
+		const expired = "c".repeat(64);
+		const active = "d".repeat(64);
+		try {
+			await store.create(expired, "stable-uid-expired", Date.now() - 60_000);
+			await store.create(active, "stable-uid-active", Date.now() + 60_000);
+			const rows = await sql`
+				select token_digest from platform.browser_sessions
+				where token_digest in (${expired}, ${active})
+			`;
+			expect(rows.map((row) => String(row.token_digest).trim())).toEqual([
+				active,
+			]);
+			expect(await store.find(active, Date.now())).toEqual({
+				uid: "stable-uid-active",
+			});
+		} finally {
+			await Promise.all([store.close(), sql.end()]);
 		}
 	});
 });

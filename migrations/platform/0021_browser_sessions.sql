@@ -7,3 +7,5 @@ CREATE TABLE "platform"."browser_sessions" (
 );
 --> statement-breakpoint
 CREATE INDEX "browser_sessions_uid" ON "platform"."browser_sessions" USING btree ("uid");
+--> statement-breakpoint
+CREATE INDEX "browser_sessions_expires_at" ON "platform"."browser_sessions" USING btree ("expires_at");

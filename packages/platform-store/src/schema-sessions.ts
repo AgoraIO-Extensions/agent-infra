@@ -16,5 +16,6 @@ export const browserSessions = platformSchema.table(
 		),
 		check("browser_session_uid_nonempty", sql`char_length(${table.uid}) > 0`),
 		index("browser_sessions_uid").on(table.uid),
+		index("browser_sessions_expires_at").on(table.expiresAt),
 	],
 );
