@@ -95,6 +95,37 @@ it("does not transfer an expired bot lease while another Agent still binds it", 
 	}
 }, 30_000);
 
+it("claims an application setup only after its callback is verified", async () => {
+	const db = await startPostgresTestDatabase("wecom-application-lease");
+	const sql = postgres(db.databaseUrl);
+	const store = new PostgresWecomConnectionsV1(db);
+	try {
+		await migratePlatformDatabase(db);
+		await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values ('agent',1,'revision')`;
+		await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values ('agent','owner',now())`;
+		await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,created_at,configuration) values ('agent',1,'fixture',now(),${sql.json({ schemaVersion: 2, agentId: "agent", revision: 1, channels: [] })})`;
+		await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,kind,bot_id) values ('app-setup','agent','owner',1,'revision',${"a".repeat(64)},now()+interval '5 minutes','verifying','wecom_app','app:fixture')`;
+		const input = {
+			agentId: "agent",
+			bindingReference: "app-setup",
+			botId: "app:fixture",
+			holderId: "worker",
+		};
+		expect(await store.claim(input)).toBeNull();
+		await sql`update platform.wecom_setup_sessions set callback_verified_at=now() where session_id='app-setup'`;
+		const claim = await store.claim(input);
+		expect(claim).not.toBeNull();
+		if (!claim) throw new Error("Missing application setup lease");
+		expect(await store.current(claim)).toBe(true);
+		await sql`update platform.agents set authorization_revision='revoked' where id='agent'`;
+		expect(await store.current(claim)).toBe(false);
+	} finally {
+		await store.close();
+		await sql.end();
+		await db.stop();
+	}
+}, 30_000);
+
 it("does not let an expired setup probe terminate its replacement", async () => {
 	const db = await startPostgresTestDatabase("wecom-setup-fence");
 	const sql = postgres(db.databaseUrl);
