@@ -314,6 +314,7 @@ export function createWecomAdapterV1(options: {
 					responseUrl.username ||
 					responseUrl.password ||
 					responseUrl.hash ||
+					responseUrl.searchParams.size !== 1 ||
 					!responseUrl.searchParams.get("response_code")
 				)
 					return invalid();

@@ -91,6 +91,14 @@ it.each([
 		"unsafe reply host",
 		{ ...message, response_url: "https://evil.test/collect" },
 	],
+	[
+		"extra reply query parameter",
+		{ ...message, response_url: `${message.response_url}&trace=untrusted` },
+	],
+	[
+		"duplicate response code",
+		{ ...message, response_url: `${message.response_url}&response_code=other` },
+	],
 	["missing group identity", { ...message, chatid: undefined }],
 ])("rejects %s before protecting a reply route", async (_label, payload) => {
 	let calls = 0;

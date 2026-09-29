@@ -31,7 +31,7 @@ const route: WecomReplyRouteV1 = {
 };
 const protect = createWecomReplyEncryptorV1(pair.publicKey);
 const reveal = createWecomReplyDecryptorV1(pair.privateKey);
-function sender(fetcher: typeof fetch) {
+function sender(fetcher: typeof fetch, now?: () => Date) {
 	return createWecomSenderV1({
 		resolveConfiguration: async (s) => ({
 			bindingReference: s.bindingReference,
@@ -46,6 +46,7 @@ function sender(fetcher: typeof fetch) {
 		revealReply: reveal,
 		getApplicationAccessToken: async () => "fixture-token",
 		fetch: fetcher,
+		...(now ? { now } : {}),
 	});
 }
 const applicationScope = {
@@ -96,6 +97,30 @@ describe("reply protection and external send", () => {
 		).toBe("failed");
 		expect(calls).toBe(0);
 	});
+	it.each([
+		"?response_code=fixture&trace=untrusted",
+		"?response_code=fixture&response_code=other",
+	])(
+		"rejects a bot reply URL with an extra query parameter: %s",
+		async (query) => {
+			let calls = 0;
+			const adapter = sender(async () => {
+				calls++;
+				return Response.json({ errcode: 0 });
+			});
+			expect(
+				await adapter.send({
+					scope,
+					replyHandle: await protect({
+						...route,
+						responseUrl: `https://qyapi.weixin.qq.com/cgi-bin/aibot/response${query}`,
+					}),
+					text: "reply",
+				}),
+			).toBe("failed");
+			expect(calls).toBe(0);
+		},
+	);
 	it("sends once and leaves a lost response uncertain", async () => {
 		let calls = 0;
 		const adapter = sender(async () => {
@@ -227,6 +252,29 @@ describe("reply protection and external send", () => {
 			}),
 		).toBe("unknown");
 		expect(calls).toBe(2);
+	});
+	it("stops a multipart application reply when its window expires after the first acknowledgment", async () => {
+		let clock = Date.parse("2026-09-15T00:00:00Z");
+		let calls = 0;
+		const adapter = sender(
+			async () => {
+				calls++;
+				clock += 1_000;
+				return Response.json({ errcode: 0 });
+			},
+			() => new Date(clock),
+		);
+		expect(
+			await adapter.send({
+				scope: applicationScope,
+				replyHandle: await protect({
+					...applicationRoute,
+					expiresAt: new Date(clock + 1_000).toISOString(),
+				}),
+				text: "x".repeat(4097),
+			}),
+		).toBe("unknown");
+		expect(calls).toBe(1);
 	});
 });
 

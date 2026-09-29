@@ -102,7 +102,9 @@ export function wecomChannelIdV1(
 export function createWecomChannelV1(dependencies: {
 	readonly authorization: WecomAuthorizationPortV1;
 	readonly store: WecomChannelStorePortV1;
+	readonly now?: () => Date;
 }) {
+	const now = dependencies.now ?? (() => new Date());
 	return {
 		async receive(
 			input: WecomMessageV1,
@@ -136,6 +138,7 @@ export function createWecomChannelV1(dependencies: {
 				!isAgentManagementText(value.replyHandle, 12000) ||
 				!isAgentManagementText(value.replyExpiresAt) ||
 				!Number.isFinite(Date.parse(value.replyExpiresAt as string)) ||
+				Date.parse(value.replyExpiresAt as string) <= now().getTime() ||
 				(value.threadId !== null && !isAgentManagementText(value.threadId)) ||
 				!["wecom_bot", "wecom_app"].includes(value.kind as string) ||
 				!["single", "group"].includes(value.conversationType as string)
@@ -206,6 +209,8 @@ export function createWecomChannelV1(dependencies: {
 					...(connectionFence ? { connectionFence } : {}),
 				},
 				async (conversation) => {
+					if (Date.parse(message.replyExpiresAt) <= now().getTime())
+						throw new Error("Invalid WeCom message");
 					const created = await conversation.createConversation({
 						schemaVersion: 1,
 						agentId: message.agentId,

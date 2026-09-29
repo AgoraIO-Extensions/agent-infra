@@ -307,6 +307,7 @@ export function createWecomSenderV1(options: {
 		async send(input) {
 			let url: string;
 			let bodies: unknown[];
+			let replyExpiresAt: number;
 			try {
 				if (input.text.length === 0 || !input.text.isWellFormed())
 					return "failed";
@@ -325,6 +326,7 @@ export function createWecomSenderV1(options: {
 						(options.now?.() ?? new Date()).getTime()
 				)
 					return "failed";
+				replyExpiresAt = Date.parse(route.expiresAt);
 				if (config.kind === "wecom_bot") {
 					const target = new URL(route.responseUrl ?? "");
 					if (
@@ -333,6 +335,7 @@ export function createWecomSenderV1(options: {
 						target.username ||
 						target.password ||
 						target.hash ||
+						target.searchParams.size !== 1 ||
 						!target.searchParams.get("response_code") ||
 						Buffer.byteLength(input.text) > 20_480
 					)
@@ -362,6 +365,8 @@ export function createWecomSenderV1(options: {
 				return "failed";
 			}
 			for (const [index, body] of bodies.entries()) {
+				if (replyExpiresAt <= (options.now?.() ?? new Date()).getTime())
+					return index > 0 ? "unknown" : "failed";
 				const status = await sendWecomMessage(
 					options.fetch ?? fetch,
 					url,

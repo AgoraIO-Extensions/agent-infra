@@ -23,7 +23,7 @@ const message: WecomMessageV1 = {
 	replyHandle: "encrypted",
 	replyExpiresAt: "2026-09-15T01:00:00Z",
 };
-function fixture() {
+function fixture(now = () => new Date("2026-09-15T00:00:00Z")) {
 	let allowed = true;
 	let nextId = 0;
 	const receipts = new Map<
@@ -60,6 +60,7 @@ function fixture() {
 		},
 	};
 	const useCase = createWecomChannelV1({
+		now,
 		store,
 		authorization: {
 			async authorize(scope) {
@@ -102,6 +103,30 @@ function fixture() {
 	};
 }
 describe("managed WeCom channel", () => {
+	it("rejects an expired reply before creating a receipt or execution", async () => {
+		const f = fixture();
+		await expect(
+			f.useCase.receive({ ...message, replyExpiresAt: "2026-09-15T00:00:00Z" }),
+		).rejects.toThrow("Invalid WeCom message");
+		expect(f.receipts.size).toBe(0);
+		expect(f.conversations.size).toBe(0);
+	});
+	it("rechecks expiry after authorization before creating a conversation", async () => {
+		let reads = 0;
+		const f = fixture(
+			() =>
+				new Date(
+					reads++ === 0 ? "2026-09-15T00:00:00Z" : message.replyExpiresAt,
+				),
+		);
+		await expect(f.useCase.receive(message)).rejects.toThrow(
+			"Invalid WeCom message",
+		);
+		expect(f.receipts.size).toBe(0);
+		expect(
+			[...f.conversations.values()][0]?.snapshot().executions,
+		).toHaveLength(0);
+	});
 	it("replays the saved receipt without another execution and rejects changed content", async () => {
 		const f = fixture();
 		const first = await f.useCase.receive(message);
