@@ -40,6 +40,7 @@ export interface TaskRuntimeAuthorizationRecordV1 {
 	readonly revokedAt: Date | null;
 	readonly application?: CurrentTaskApplicationV1;
 	readonly agent: AgentManagementStateV1;
+	readonly currentAgentAuthorizationRevision?: string | null;
 	readonly configurationRevision: number;
 	readonly workload: WorkloadReconciliationStateV1 | null;
 }
@@ -407,6 +408,8 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 				user: user ?? undefined,
 				application: latest.application,
 				agent: latest.agent,
+				currentAgentAuthorizationRevision:
+					latest.currentAgentAuthorizationRevision,
 			})
 		)
 			return {

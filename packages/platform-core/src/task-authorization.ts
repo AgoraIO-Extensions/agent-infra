@@ -147,6 +147,7 @@ function accessSources(
 	user: CurrentTaskUserV1 | undefined,
 	agent: AgentManagementStateV1,
 	channelId: string,
+	currentAgentAuthorizationRevision?: string | null,
 ): readonly TaskAccessSourceV1[] {
 	if (!isTaskPrincipalChannelV1(principalValue, channelId)) return [];
 	if (principalValue.kind === "user" && user?.accountStatus !== "active")
@@ -157,6 +158,7 @@ function accessSources(
 				grant.principal.kind === principalValue.kind &&
 				grant.principal.id === principalValue.id &&
 				grant.grantType === "use" &&
+				grant.authorizationRevision === currentAgentAuthorizationRevision &&
 				grant.revokedAt === null,
 		);
 		if (!granted) return [];
@@ -277,7 +279,13 @@ export function captureTaskAuthorizationBoundaryV1(input: {
 	const user = parseCurrentTaskUserV1(input.user);
 	const agent = parseAgentManagementPortState(input.agent);
 	if (subject.kind !== "user" || subject.id !== user.userId) return null;
-	const sources = accessSources(subject, user, agent, input.channelId);
+	const sources = accessSources(
+		subject,
+		user,
+		agent,
+		input.channelId,
+		input.agentAuthorizationRevision,
+	);
 	if (sources.length === 0) return null;
 	return parseTaskAuthorizationBoundaryV1({
 		schemaVersion: 1,
@@ -304,7 +312,13 @@ export function captureApplicationTaskAuthorizationBoundaryV1(input: {
 		kind: "application",
 		id: application.applicationId,
 	};
-	const sources = accessSources(subject, undefined, agent, input.channelId);
+	const sources = accessSources(
+		subject,
+		undefined,
+		agent,
+		input.channelId,
+		input.agentAuthorizationRevision,
+	);
 	if (sources.length === 0) return null;
 	return parseTaskAuthorizationBoundaryV1({
 		schemaVersion: 1,
@@ -329,6 +343,7 @@ export function isTaskAuthorizationCurrentV1(input: {
 	readonly user?: CurrentTaskUserV1;
 	readonly application?: CurrentTaskApplicationV1;
 	readonly agent: AgentManagementStateV1;
+	readonly currentAgentAuthorizationRevision?: string | null;
 }): boolean {
 	const boundary = parseTaskAuthorizationBoundaryV1(input.boundary);
 	const agent = parseAgentManagementPortState(input.agent);
@@ -349,9 +364,13 @@ export function isTaskAuthorizationCurrentV1(input: {
 			return false;
 	}
 	const current = new Set(
-		accessSources(boundary.principal, user, agent, boundary.channelId).map(
-			sourceKey,
-		),
+		accessSources(
+			boundary.principal,
+			user,
+			agent,
+			boundary.channelId,
+			input.currentAgentAuthorizationRevision,
+		).map(sourceKey),
 	);
 	return boundary.accessSources.some((source) =>
 		current.has(sourceKey(source)),

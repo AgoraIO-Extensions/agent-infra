@@ -108,6 +108,76 @@ describe("task authorization boundary", () => {
 		});
 	});
 
+	it.each(["user", "application"] as const)(
+		"requires the current Agent revision for %s API use grants",
+		(kind) => {
+			const application: CurrentTaskApplicationV1 = {
+				schemaVersion: 1,
+				applicationId: "application-a",
+				accountStatus: "active",
+				authorizationRevision: "application-access-2",
+			};
+			const principal = {
+				kind,
+				id: kind === "user" ? user.userId : application.applicationId,
+			};
+			const grant = {
+				principal,
+				grantType: "use" as const,
+				authorizationRevision: "agent-access-4",
+				revokedAt: null,
+			};
+			const grantedAgent = { ...agent, principalGrants: [grant] };
+			const captureBoundary = (agentAuthorizationRevision: string) =>
+				kind === "user"
+					? captureTaskAuthorizationBoundaryV1({
+							principal,
+							user,
+							agent: grantedAgent,
+							channelId: "api:user",
+							agentAuthorizationRevision,
+						})
+					: captureApplicationTaskAuthorizationBoundaryV1({
+							application,
+							agent: grantedAgent,
+							channelId: "api:application",
+							agentAuthorizationRevision,
+						});
+			expect(captureBoundary("agent-access-5")).toBeNull();
+			const boundary = captureBoundary("agent-access-4");
+			if (!boundary) throw Error("Expected current API boundary");
+			const current = {
+				boundary,
+				...(kind === "user" ? { user } : { application }),
+				agent: grantedAgent,
+			};
+			expect(
+				isTaskAuthorizationCurrentV1({
+					...current,
+					currentAgentAuthorizationRevision: "agent-access-4",
+				}),
+			).toBe(true);
+			expect(
+				isTaskAuthorizationCurrentV1({
+					...current,
+					currentAgentAuthorizationRevision: "agent-access-5",
+				}),
+			).toBe(false);
+			expect(
+				isTaskAuthorizationCurrentV1({
+					...current,
+					agent: {
+						...grantedAgent,
+						principalGrants: [
+							{ ...grant, authorizationRevision: "agent-access-5" },
+						],
+					},
+					currentAgentAuthorizationRevision: "agent-access-5",
+				}),
+			).toBe(true);
+		},
+	);
+
 	it("rejects an application after its use grant is revoked", () => {
 		const application: CurrentTaskApplicationV1 = {
 			schemaVersion: 1,

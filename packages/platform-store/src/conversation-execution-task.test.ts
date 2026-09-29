@@ -975,6 +975,37 @@ it("captures current application independently from its responsible user and rec
 	expect(revoked && isTaskAuthorizationCurrentV1(revoked)).toBe(false);
 });
 
+it("reads the current Agent grant revision for application task renewal", async () => {
+	await seedApplication();
+	const boundary = await authorizationStore.captureApplicationBoundary({
+		applicationId: "shared",
+		agentId: "agent_task",
+		channelId: "api:application",
+	});
+	if (!boundary) throw Error();
+	currentAuthority = {
+		...currentAuthority,
+		actorId: "shared",
+		channelId: "api:application",
+		taskBoundary: boundary,
+	};
+	const accepted = await taskUseCase().submitTask(
+		command("application-revision"),
+	);
+	if (accepted.outcome !== "accepted") throw Error();
+	const current = await authorizationStore.readExecution(
+		accepted.result.executionId,
+	);
+	expect(current?.currentAgentAuthorizationRevision).toBe("grant_1");
+	expect(current && isTaskAuthorizationCurrentV1(current)).toBe(true);
+	await sql`update platform.agents set authorization_revision = 'grant_2' where id = 'agent_task'`;
+	const stale = await authorizationStore.readExecution(
+		accepted.result.executionId,
+	);
+	expect(stale?.currentAgentAuthorizationRevision).toBe("grant_2");
+	expect(stale && isTaskAuthorizationCurrentV1(stale)).toBe(false);
+});
+
 it("rejects the first application authorization insert for a stale Execution revision", async () => {
 	await seedApplication();
 	const boundary = await authorizationStore.captureApplicationBoundary({

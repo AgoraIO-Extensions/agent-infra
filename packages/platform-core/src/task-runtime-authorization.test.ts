@@ -114,6 +114,7 @@ function harness() {
 		boundary,
 		revokedAt: null,
 		agent,
+		currentAgentAuthorizationRevision: "agent-7",
 		configurationRevision: 1,
 		workload,
 	};
@@ -616,6 +617,19 @@ it("renews application authority from current subject without resolving its resp
 	);
 	expect(result.authority).toMatchObject({ purpose: "business" });
 	expect(h.ports.resolveCurrentUser).not.toHaveBeenCalled();
+});
+
+it("revokes application renewal when its use grant has an old Agent revision", async () => {
+	const h = applicationHarness();
+	if (!h.record) throw Error();
+	h.setRecord({
+		...h.record,
+		currentAgentAuthorizationRevision: "agent-8",
+	});
+	expect(
+		(await h.useCase.current(h.context, h.state, "execution.renew", signal()))
+			.authority,
+	).toMatchObject({ purpose: "control", reason: "authorization_revoked" });
 });
 
 it.each(["disabled", "revoked-grant", "missing-subject", "stale-revision"])(
