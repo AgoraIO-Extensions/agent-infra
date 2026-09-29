@@ -11,8 +11,8 @@ import {
 	type ToolCall,
 } from "@agentclientprotocol/sdk";
 import { spawnAcpProcess } from "./acp-process.js";
-
 import { acpStream } from "./acp-stream.js";
+import type { NativeSessionOptions } from "./session-runtime-driver.js";
 
 export interface AcpLaunch {
 	command: string;
@@ -53,6 +53,7 @@ export async function openAcpSession(options: {
 		readonly permitted?: boolean;
 		readonly executionBoundary?: true;
 	}) => Promise<void>;
+	toolReceipt?: NativeSessionOptions["toolReceipt"];
 }) {
 	const native = await spawnAcpProcess(
 		options.directory,
@@ -69,8 +70,10 @@ export async function openAcpSession(options: {
 		string,
 		Pick<ToolCall, "toolCallId" | "kind" | "rawInput">
 	>();
+	const unconfirmedTools = new Map<string, string>();
 	let activeSessionId: string | undefined;
 	let currentToolRequestStarted = options.toolRequestStarted;
+	let currentToolReceipt = options.toolReceipt;
 	const connection = client({ name: "agent-infra" })
 		.onNotification("session/update", async ({ params }) => {
 			if (loading || params.sessionId !== activeSessionId) return;
@@ -120,6 +123,11 @@ export async function openAcpSession(options: {
 							() => false,
 						)
 					: false;
+			if (admitted && once)
+				unconfirmedTools.set(
+					params.toolCall.toolCallId,
+					tool?.kind ?? params.toolCall.kind ?? "unknown",
+				);
 			const rejected = params.options.find(
 				(option) => option.kind === "reject_once",
 			);
@@ -190,8 +198,10 @@ export async function openAcpSession(options: {
 					readonly permitted?: boolean;
 					readonly executionBoundary?: true;
 				}) => Promise<void>;
+				toolReceipt?: NativeSessionOptions["toolReceipt"];
 			}) {
 				currentToolRequestStarted = next.toolRequestStarted;
+				currentToolReceipt = next.toolReceipt;
 			},
 			modelSelection: () => {
 				const model = configOptions.find(
@@ -251,12 +261,19 @@ export async function openAcpSession(options: {
 			},
 			async prompt(text: string) {
 				tools.clear();
+				unconfirmedTools.clear();
 				const responsePromise = connection.agent.request("session/prompt", {
 					sessionId: nativeId,
 					prompt: [{ type: "text", text }],
 				});
 				const response = await responsePromise;
 				await updates;
+				for (const [toolCallId, name] of unconfirmedTools) {
+					if (!currentToolReceipt)
+						throw new Error("RUNTIME_TOOL_RESULT_UNCONFIRMED");
+					await currentToolReceipt({ toolCallId, name, phase: "unknown" });
+				}
+				unconfirmedTools.clear();
 				return response;
 			},
 			cancel: () =>

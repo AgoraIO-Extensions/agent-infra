@@ -255,7 +255,7 @@ it.each([
 							accepted.nativeSessionRef,
 							command.executionId,
 						),
-					).toBe("completed"),
+					).toBe(permitted ? "unknown" : "completed"),
 				{ timeout: 3_000 },
 			);
 			const tools = (
@@ -269,14 +269,14 @@ it.each([
 					: [],
 			);
 			expect(tools.map((fact) => fact.phase)).toEqual(
-				!permitted ? ["intent", "failed"] : ["intent", "started", "completed"],
+				!permitted ? ["intent", "failed"] : ["intent", "unknown"],
 			);
 			if (!permitted)
 				expect(tools.at(-1)?.failureCode).toBe("authorization_denied");
-			if (mode === "tool-status-before-permission") {
-				expect(tools.at(-1)?.startedAt).toBeUndefined();
-				expect(tools.at(-1)?.durationMs).toBeUndefined();
-			}
+			else expect(tools.at(-1)?.failureCode).toBe("recovery_unconfirmed");
+			expect(tools.at(-1)?.startedAt).toBeUndefined();
+			if (permitted) expect(tools.at(-1)?.finishedAt).toBeUndefined();
+			expect(tools.at(-1)?.durationMs).toBeUndefined();
 		} finally {
 			await driver.close();
 			await rm(path, { recursive: true, force: true });
@@ -368,8 +368,17 @@ it("does not turn ACP progress during permission into a tool start", async () =>
 		await vi.waitFor(async () =>
 			expect(
 				await driver.getStatus(accepted.nativeSessionRef, executionId),
-			).toBe("completed"),
+			).toBe("unknown"),
 		);
+		expect(
+			(
+				await driver.replayEvents(accepted.nativeSessionRef, executionId)
+			).flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload.phase]
+					: [],
+			),
+		).toEqual(["intent", "unknown"]);
 	} finally {
 		releaseAuthorization();
 		await driver.close();
@@ -428,7 +437,7 @@ it("permits a second native tool while the first authorized tool is still in pro
 						accepted.nativeSessionRef,
 						"execution-concurrent",
 					),
-				).toBe("completed"),
+				).toBe("unknown"),
 			{ timeout: 10_000 },
 		);
 		const phases = (
@@ -442,8 +451,9 @@ it("permits a second native tool while the first authorized tool is still in pro
 				: [],
 		);
 		expect(phases.filter((phase) => phase === "intent")).toHaveLength(2);
-		expect(phases.filter((phase) => phase === "started")).toHaveLength(2);
-		expect(phases.filter((phase) => phase === "completed")).toHaveLength(2);
+		expect(phases.filter((phase) => phase === "started")).toHaveLength(0);
+		expect(phases.filter((phase) => phase === "completed")).toHaveLength(0);
+		expect(phases.filter((phase) => phase === "unknown")).toHaveLength(2);
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });
@@ -521,7 +531,7 @@ it.each(["permitted", "revoked", "missing"] as const)(
 							accepted.nativeSessionRef,
 							"execution-write",
 						),
-					).toBe("completed"),
+					).toBe(authority === "permitted" ? "unknown" : "completed"),
 				{ timeout: 10_000 },
 			);
 			expect(await readFile(effectPath, "utf8")).toBe(
@@ -537,9 +547,11 @@ it.each(["permitted", "revoked", "missing"] as const)(
 			);
 			expect(tools.map((fact) => fact.phase)).toEqual(
 				authority === "permitted"
-					? ["intent", "started", "completed"]
+					? ["intent", "unknown"]
 					: ["intent", "failed"],
 			);
+			if (authority === "permitted")
+				expect(tools.at(-1)?.failureCode).toBe("recovery_unconfirmed");
 			if (authority !== "permitted") {
 				expect(tools.at(-1)?.failureCode).toBe("authorization_denied");
 				expect(tools.at(-1)?.startedAt).toBeUndefined();
@@ -557,16 +569,14 @@ it.each([
 	{
 		mode: "tool-permission-hold",
 		phase: "started",
-		expected: ["intent", "started", "unknown"],
 	},
 	{
 		mode: "tool-permission-completed-hold",
 		phase: "completed",
-		expected: ["intent", "started", "completed"],
 	},
 ])(
 	"keeps a lost active turn unknown after restart with $mode",
-	async ({ mode, phase, expected }) => {
+	async ({ mode, phase }) => {
 		const path = await mkdtemp(join(tmpdir(), "acp-unknown-"));
 		const options: GenericAcpRuntimeDriverOptions = {
 			path,
@@ -626,28 +636,11 @@ it.each([
 				);
 				expect(
 					events.some(
-						(event) =>
-							event.type === "operation" &&
-							event.payload.kind === "tool" &&
-							event.payload.phase === phase,
+						(event) => event.type === "tool" && event.payload.phase === phase,
 					),
 				).toBe(true);
 			});
 			await driver.close();
-			if (mode === "tool-permission-hold") {
-				const statePath = join(path, accepted.nativeSessionRef, "state.json");
-				const state = JSON.parse(await readFile(statePath, "utf8"));
-				const pending = state.turns[0].events.find(
-					(event: { type: string; payload: { kind: string; phase: string } }) =>
-						event.type === "operation" &&
-						event.payload.kind === "tool" &&
-						event.payload.phase === "started",
-				);
-				expect(pending).toBeDefined();
-				pending.payload.startedAt = "2026-01-01T00:00:00Z";
-				pending.payload.durationMs = 123;
-				await writeFile(statePath, JSON.stringify(state));
-			}
 			driver = await GenericAcpRuntimeDriver.open(options);
 			expect(
 				await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
@@ -669,15 +662,14 @@ it.each([
 					? [event.payload]
 					: [],
 			);
-			expect(toolFacts.map((fact) => fact.phase)).toEqual(expected);
-			expect(toolFacts.at(-1)?.failureCode).toBe(
-				mode === "tool-permission-hold" ? "recovery_unconfirmed" : undefined,
-			);
-			if (mode === "tool-permission-hold") {
-				expect(toolFacts.at(-1)?.startedAt).toBeUndefined();
-				expect(toolFacts.at(-1)?.finishedAt).toBeUndefined();
-				expect(toolFacts.at(-1)?.durationMs).toBeUndefined();
-			}
+			expect(toolFacts.map((fact) => fact.phase)).toEqual([
+				"intent",
+				"unknown",
+			]);
+			expect(toolFacts.at(-1)?.failureCode).toBe("recovery_unconfirmed");
+			expect(toolFacts.at(-1)?.startedAt).toBeUndefined();
+			expect(toolFacts.at(-1)?.finishedAt).toBeUndefined();
+			expect(toolFacts.at(-1)?.durationMs).toBeUndefined();
 			expect(await driver.execute(command)).toEqual(accepted);
 			expect(await driver.lookupOperation(command)).toEqual({
 				state: "found",

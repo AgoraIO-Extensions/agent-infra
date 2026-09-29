@@ -52,6 +52,7 @@ export const GenericAcpRuntimeDriver = {
 		return SessionRuntimeDriver.open({
 			...options,
 			modelLifecycleAtTransport: true,
+			toolLifecycleAtBoundary: true,
 			cursorPrefix: "acp",
 			retireSession: retireAcpProcess,
 			completionStatus: (reason): RuntimeStatusV1 =>
@@ -70,6 +71,7 @@ export const GenericAcpRuntimeDriver = {
 				modelUsage,
 				modelRequestFinished,
 				toolRequestStarted,
+				toolReceipt,
 				update,
 				...session
 			}) => {
@@ -118,6 +120,16 @@ export const GenericAcpRuntimeDriver = {
 						: undefined;
 				const normalizedToolRequestStarted =
 					normalizeToolRequestStarted(toolRequestStarted);
+				const normalizeToolReceipt = (callback: typeof toolReceipt) =>
+					callback
+						? async (receipt: Parameters<NonNullable<typeof toolReceipt>>[0]) =>
+								callback({
+									...receipt,
+									toolCallId: createHash("sha256")
+										.update(receipt.toolCallId)
+										.digest("hex"),
+								})
+						: undefined;
 				const launch = await options.launch(
 					session.directory,
 					selection,
@@ -131,6 +143,7 @@ export const GenericAcpRuntimeDriver = {
 				const native = await openAcpSession({
 					...session,
 					toolRequestStarted: normalizedToolRequestStarted,
+					toolReceipt: normalizeToolReceipt(toolReceipt),
 					launch,
 					update: async ({ update: event }) => {
 						if (
@@ -180,7 +193,13 @@ export const GenericAcpRuntimeDriver = {
 				return {
 					...native,
 					startTurn: (next: NativeSessionOptions) => {
-						native.startTurn?.(next);
+						native.startTurn?.({
+							...next,
+							toolRequestStarted: normalizeToolRequestStarted(
+								next.toolRequestStarted,
+							),
+							toolReceipt: normalizeToolReceipt(next.toolReceipt),
+						});
 						launch.onTurn?.({
 							modelRequestIntent: next.modelRequestIntent,
 							modelRequestStarted: next.modelRequestStarted,
