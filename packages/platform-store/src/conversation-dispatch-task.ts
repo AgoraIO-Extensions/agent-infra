@@ -38,7 +38,7 @@ export async function waitingDecision(
 						or exists (select 1 from platform.conversation_stops s
 							where s.execution_id = e.execution_id and s.status = 'submitted'))) as occupied,
 				exists (select 1 from platform.conversation_executions e
-					where e.agent_id = ${state.execution.agent_id} and e.status = 'waiting'
+					where e.conversation_id = ${state.conversation.id} and e.status = 'waiting'
 						and e.task_wait_order < ${requireSafeCounter(state.execution.task_wait_order, 1)}) as earlier_waiting
 	`;
 	if (!snapshot || !state.execution.task_wait_deadline)
