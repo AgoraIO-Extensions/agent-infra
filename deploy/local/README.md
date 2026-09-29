@@ -81,6 +81,9 @@ Worker 的模块接口、私有文件挂载和 Runtime 授权以
 `configurationModuleSecretRef`、`runtimeAuthSecretRef` 和 Worker 镜像 Digest；
 Kubernetes 凭证由 Pod ServiceAccount 提供。Worker 与 API 使用同一模板 Digest、
 ModelCatalog revision 和资源政策。挂载或 rollout 成功仍需后续业务验收。
+内部 Host 或获准 Relay 使用私有 CA 时，本地 values 还需指定
+`platformWorker.trustedCaSecretRef`，指向已创建的 CA bundle Secret；Helm 只把它挂给
+Worker，证书与实际地址的匹配仍在业务请求中验证。
 
 `PLATFORM_LOCAL_KUBECONFIG` 必须为可读绝对路径，context 必须是 `kind-*` 且当前集群
 API 使用与所选 Docker context 的 kind control-plane 一致的 loopback 端口，namespace
