@@ -1422,6 +1422,58 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 					(request) => request.path === "/internal/runtime/v3/status",
 				),
 			).toHaveLength(0);
+			if (!apiOrigin) throw Error("Production API did not start");
+			const stopResponse = await fetch(
+				`${apiOrigin}/api/v1/conversations/${first.conversationId}/tasks/${first.executionId}/cancel`,
+				{
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${apiCredentials["user-cli"]}`,
+						"content-type": "application/json",
+						"Idempotency-Key": "packaged-v4-stop",
+					},
+					body: JSON.stringify({ schemaVersion: 1 }),
+				},
+			);
+			expect(stopResponse.status).toBe(202);
+			await waitUntil(
+				async () =>
+					(
+						await sql`
+							select 1 from platform.conversation_executions
+							where execution_id=${first.executionId} and status='cancelled'
+						`
+					).length === 1,
+				"first V4 execution stops before the second Key dispatch",
+			);
+			await sql`
+				update platform.outbox_items
+				set available_at=clock_timestamp(), lease_expires_at=null
+				where payload->>'executionId'=${second.executionId}
+			`;
+			await waitUntil(
+				async () =>
+					requests.some(
+						(request) =>
+							request.path === "/internal/runtime/v4/turns" &&
+							request.executionId === second.executionId &&
+							request.responseStatus === 200,
+					),
+				"second packaged Execution uses its pinned V4 Key",
+			);
+			const secondTurnRequests = requests.filter(
+				(request) =>
+					request.path === "/internal/runtime/v4/turns" &&
+					request.executionId === second.executionId,
+			);
+			expect(secondTurnRequests).toHaveLength(1);
+			expect(secondTurnRequests[0]).toMatchObject({
+				keyId: "relay-agent-k2",
+				keyVersion: 2,
+				privateKeyMatches: true,
+				keyInBusinessRequest: false,
+				transportTls: true,
+			});
 			return;
 		}
 		expect(children.every((child) => child.exitCode === null)).toBe(true);
