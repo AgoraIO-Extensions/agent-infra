@@ -5,6 +5,7 @@ import type {
 	LdapAccount,
 } from "@agent-infra/identity";
 import { migratePlatformDatabase } from "@agent-infra/platform-store";
+import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	type PostgresTestDatabase,
@@ -34,7 +35,7 @@ afterAll(async () => database?.stop());
 
 describe("Platform API PostgreSQL browser deployment", () => {
 	it("shares login and UID revocation across API instances", async () => {
-		let disabled = false;
+		const sql = postgres(database.databaseUrl, { max: 1 });
 		const trustedProxyToken = randomBytes(32).toString("base64url");
 		const directory = {
 			userIdForUid: async () => account.userId,
@@ -47,7 +48,6 @@ describe("Platform API PostgreSQL browser deployment", () => {
 			publicOrigin: origin,
 			trustedProxyToken,
 			directory,
-			isPlatformDisabled: async () => disabled,
 			organizationIds: async () => ["org-a"],
 		};
 		const first = createPostgresLdapBrowserDeployment(input);
@@ -185,14 +185,18 @@ describe("Platform API PostgreSQL browser deployment", () => {
 			expect(await second.identity.resolve(request)).toMatchObject({
 				userId: account.userId,
 			});
-			disabled = true;
+			await sql`
+				insert into platform.platform_user_disables (user_id, disabled_by)
+				values (${account.userId}, ${account.userId})
+			`;
 			expect(await second.identity.resolve(request)).toBeNull();
-			disabled = false;
+			await sql`delete from platform.platform_user_disables where user_id = ${account.userId}`;
 			expect(await first.identity.resolve(request)).toBeNull();
 		} finally {
 			await Promise.all([
 				first.browserAuth.close(),
 				second.browserAuth.close(),
+				sql.end(),
 			]);
 		}
 	});

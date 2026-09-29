@@ -856,6 +856,7 @@ function isAgentDirectCreationOpenApiAddition(previous, current) {
 function isAgentApiIdentityOpenApiAddition(previous, current) {
 	const normalized = structuredClone(current);
 	const addedPaths = [
+		"/api/v2/admin/users/{userId}/disable",
 		"/api/v1/api-credentials",
 		"/api/v1/api-credentials/{credentialId}",
 		"/api/v1/applications",
@@ -865,6 +866,7 @@ function isAgentApiIdentityOpenApiAddition(previous, current) {
 		"/api/v1/agents/{agentId}/grants",
 	];
 	const addedSchemas = [
+		"PlatformUserDisableCommandV1",
 		"ApiAgentGrantProjectionV1",
 		"ApiAgentGrantRequestV1",
 		"ApiApplicationCreateRequestV1",
@@ -918,6 +920,10 @@ function isAgentApiIdentityOpenApiAddition(previous, current) {
 		"PlatformAuditProjectionV1",
 		"PlatformAuditProjectionV2",
 	]) {
+		const subjectType =
+			normalized.components.schemas[name]?.properties?.subjectType;
+		if (Array.isArray(subjectType?.enum))
+			subjectType.enum = subjectType.enum.filter((value) => value !== "user");
 		const actor = normalized.components.schemas[name]?.properties?.actor;
 		if (!Array.isArray(actor?.anyOf)) continue;
 		const options = actor.anyOf.filter(

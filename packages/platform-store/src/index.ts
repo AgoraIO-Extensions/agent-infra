@@ -87,6 +87,10 @@ export {
 	type PostgresPlatformIdempotencyOptionsV1,
 } from "./idempotency.ts";
 export {
+	PostgresLdapIdentityIdsV1,
+	PostgresPlatformUserDisablesV1,
+} from "./ldap-identity.ts";
+export {
 	migratePlatformDatabase,
 	type PlatformMigrationOptions,
 	platformDatabaseUrlFromEnvironment,

@@ -7,10 +7,54 @@ import {
 	primaryKey,
 	text,
 	timestamp,
+	uniqueIndex,
 	varchar,
 } from "drizzle-orm/pg-core";
 import { agents } from "./schema-agents";
 import { platformSchema } from "./schema-common";
+
+export const ldapIdentityIds = platformSchema.table(
+	"ldap_identity_ids",
+	{
+		issuer: varchar("issuer", { length: 256 }).notNull(),
+		uid: varchar("uid", { length: 256 }).notNull(),
+		userId: text("user_id").notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.issuer, table.uid] }),
+		check(
+			"ldap_identity_issuer_non_empty",
+			sql`char_length(${table.issuer}) > 0`,
+		),
+		check("ldap_identity_uid_non_empty", sql`char_length(${table.uid}) > 0`),
+		check(
+			"ldap_identity_user_id_uuid_v4",
+			sql`${table.userId} ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'`,
+		),
+		uniqueIndex("ldap_identity_user_id_unique").on(table.userId),
+	],
+);
+
+export const platformUserDisables = platformSchema.table(
+	"platform_user_disables",
+	{
+		userId: text("user_id").primaryKey(),
+		disabledBy: text("disabled_by").notNull(),
+		disabledAt: timestamp("disabled_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		check(
+			"platform_user_disable_user_id_non_empty",
+			sql`char_length(${table.userId}) > 0`,
+		),
+		check(
+			"platform_user_disable_actor_non_empty",
+			sql`char_length(${table.disabledBy}) > 0`,
+		),
+	],
+);
 
 export const platformApplications = platformSchema.table(
 	"platform_applications",

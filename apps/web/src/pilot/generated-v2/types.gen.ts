@@ -590,9 +590,14 @@ export type PlatformAuditProjectionV2 = {
     result: 'succeeded' | 'failed';
     schemaVersion: 2;
     subjectId: string;
-    subjectType: 'agent_application' | 'agent' | 'configuration' | 'grant';
+    subjectType: 'agent_application' | 'agent' | 'configuration' | 'grant' | 'user';
     summary: string;
     traceId: string;
+};
+
+export type PlatformUserDisableCommandV1 = {
+    disabled: boolean;
+    schemaVersion: 1;
 };
 
 export type RuntimeConnectionAssociationV1 = {
@@ -957,6 +962,57 @@ export type ListPlatformAuditV2Responses = {
 };
 
 export type ListPlatformAuditV2Response = ListPlatformAuditV2Responses[keyof ListPlatformAuditV2Responses];
+
+export type SetPlatformUserDisabledV2Data = {
+    body: PlatformUserDisableCommandV1;
+    path: {
+        userId: string;
+    };
+    query?: never;
+    url: '/api/v2/admin/users/{userId}/disable';
+};
+
+export type SetPlatformUserDisabledV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type SetPlatformUserDisabledV2Error = SetPlatformUserDisabledV2Errors[keyof SetPlatformUserDisabledV2Errors];
+
+export type SetPlatformUserDisabledV2Responses = {
+    /**
+     * Platform user status updated
+     */
+    204: void;
+};
+
+export type SetPlatformUserDisabledV2Response = SetPlatformUserDisabledV2Responses[keyof SetPlatformUserDisabledV2Responses];
 
 export type ListAgentApplicationsV2Data = {
     body?: never;

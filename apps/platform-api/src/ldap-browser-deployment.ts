@@ -1,5 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
-import { PostgresLdapSessionStoreV1 } from "@agent-infra/platform-store";
+import {
+	PostgresLdapSessionStoreV1,
+	PostgresPlatformUserDisablesV1,
+} from "@agent-infra/platform-store";
 import {
 	createLdapBrowserAdapter,
 	type LdapBrowserInput,
@@ -7,7 +10,7 @@ import {
 
 /** Bind login routes and API identity to one directory and persistent session store. */
 export function createPostgresLdapBrowserDeployment(
-	input: Omit<LdapBrowserInput, "sessions"> & {
+	input: Omit<LdapBrowserInput, "sessions" | "isPlatformDisabled"> & {
 		databaseUrl: string;
 		/** Shared only by the trusted TLS proxy and API deployment. */
 		trustedProxyToken: string;
@@ -19,7 +22,15 @@ export function createPostgresLdapBrowserDeployment(
 	)
 		throw new Error("LDAP_BROWSER_PROXY_CONFIGURATION_INVALID");
 	const sessions = new PostgresLdapSessionStoreV1(input.databaseUrl);
-	const adapter = createLdapBrowserAdapter({ ...input, sessions });
+	const users = new PostgresPlatformUserDisablesV1(
+		input.databaseUrl,
+		(userId) => input.directory.currentByUserId(userId),
+	);
+	const adapter = createLdapBrowserAdapter({
+		...input,
+		sessions,
+		isPlatformDisabled: (userId) => users.isPlatformDisabled(userId),
+	});
 	const publicOrigin = new URL(input.publicOrigin);
 	const proxyToken = Buffer.from(input.trustedProxyToken);
 	const trustedProxy = (request: Request) => {
@@ -33,6 +44,7 @@ export function createPostgresLdapBrowserDeployment(
 	};
 	return {
 		identity: adapter.identityAdapter,
+		userGovernance: users,
 		browserAuth: {
 			handleRequest(request: Request) {
 				if (!trustedProxy(request)) return new Response(null, { status: 400 });
@@ -50,7 +62,9 @@ export function createPostgresLdapBrowserDeployment(
 				}
 				return adapter.handleRequest(request);
 			},
-			close: () => sessions.close(),
+			close: async () => {
+				await Promise.all([sessions.close(), users.close()]);
+			},
 		},
 	};
 }

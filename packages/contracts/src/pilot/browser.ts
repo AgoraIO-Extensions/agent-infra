@@ -584,12 +584,23 @@ export const PlatformAuditProjectionV1Schema = z.strictObject({
 			actorId: OpaqueIdV1Schema,
 		}),
 	]),
-	subjectType: z.enum(["agent_application", "agent", "configuration", "grant"]),
+	subjectType: z.enum([
+		"agent_application",
+		"agent",
+		"configuration",
+		"grant",
+		"user",
+	]),
 	subjectId: OpaqueIdV1Schema,
 	result: z.enum(["succeeded", "failed"]),
 	summary: nonEmptyString(),
 	occurredAt: Rfc3339TimestampV1Schema,
 	traceId: TraceIdV1Schema,
+});
+
+export const PlatformUserDisableCommandV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	disabled: z.boolean(),
 });
 
 export const PlatformAuditProjectionV2Schema =
@@ -674,6 +685,7 @@ const auditPageV2 = z.strictObject({
 	nextCursor: OpaqueCursorV1Schema.nullable(),
 });
 const applicationPath = z.strictObject({ applicationId: pathId() });
+const platformUserPath = z.strictObject({ userId: z.uuidv4() });
 const agentPath = z.strictObject({ agentId: pathId() });
 const credentialPath = z.strictObject({ credentialId: pathId() });
 const applicationCredentialPath = z.strictObject({
@@ -1199,6 +1211,17 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/admin/users/{userId}/disable": {
+		put: {
+			operationId: "setPlatformUserDisabledV2",
+			requestParams: { path: platformUserPath },
+			requestBody: requiredJsonRequestBody(PlatformUserDisableCommandV1Schema),
+			responses: {
+				"204": { description: "Platform user status updated" },
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/deployment/configuration": {
 		get: {
 			operationId: "getDeploymentConfigurationV2",
@@ -1422,6 +1445,7 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	PlatformUserDisableCommandV1: PlatformUserDisableCommandV1Schema,
 	AgentLifecycleCommandRequestV1: AgentLifecycleCommandRequestV1Schema,
 	ApprovalDecisionRequestV1: ApprovalDecisionRequestV1Schema,
 	AgentApplicationCreateRequestV2: AgentApplicationCreateRequestV2Schema,

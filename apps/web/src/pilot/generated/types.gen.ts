@@ -761,7 +761,7 @@ export type PlatformAuditProjectionV1 = {
     result: 'succeeded' | 'failed';
     schemaVersion: 1;
     subjectId: string;
-    subjectType: 'agent_application' | 'agent' | 'configuration' | 'grant';
+    subjectType: 'agent_application' | 'agent' | 'configuration' | 'grant' | 'user';
     summary: string;
     traceId: string;
 };

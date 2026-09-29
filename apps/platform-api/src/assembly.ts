@@ -36,6 +36,7 @@ import {
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/management-routes.js";
+import type { UserGovernanceRoutesDependencies } from "./http/user-governance-routes.js";
 import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
@@ -55,6 +56,7 @@ export interface PlatformApiAssemblyInput {
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
 	readonly apiIdentity?: PostgresApiIdentityStoreV1;
+	readonly userGovernance?: UserGovernanceRoutesDependencies["users"];
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly allocateApplicationIds: ManagementRouteDependencies["allocateApplicationIds"];
@@ -339,6 +341,7 @@ export function assemblePlatformApi(
 		: undefined;
 	const dependencies: PlatformAppDependencies = {
 		requestScope: input.requestScope,
+		userGovernance: { identity: input.identity, users: input.userGovernance },
 		...(files ? { files: files.dependencies } : {}),
 		management: {
 			identity: identityAdapter,

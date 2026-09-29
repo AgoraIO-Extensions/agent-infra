@@ -169,6 +169,13 @@
       "when": 1790719330689,
       "tag": "0023_credential_delivery_approval",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790722093615,
+      "tag": "0024_ldap_identity_authority",
+      "breakpoints": true
     }
   ]
 }

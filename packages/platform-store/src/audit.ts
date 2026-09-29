@@ -13,6 +13,16 @@ const wecomDeliveryAuditMetadata = {
 } as const;
 
 const platformAuditActionMetadata = {
+	"platform.user.disabled": {
+		actorKind: "user",
+		subjectKind: "user",
+		details: false,
+	},
+	"platform.user.enabled": {
+		actorKind: "user",
+		subjectKind: "user",
+		details: false,
+	},
 	"api.access.rejected": {
 		actorKind: "user",
 		actorKinds: ["user", "application"],
@@ -286,6 +296,7 @@ export interface PlatformAuditProjectionV1 {
 			| "secret"
 			| "secret_key"
 			| "grant"
+			| "user"
 			| "unknown"
 			| "conversation"
 			| "execution"

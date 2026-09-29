@@ -27,6 +27,7 @@ export interface ProductionPlatformApiInputV1
 	readonly imageRepository: string;
 	/** An actual deployment identity boundary; no browser-provided identity headers. */
 	readonly identity: IdentityAdapter;
+	readonly userGovernance?: PlatformApiAssemblyInput["userGovernance"];
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	/** Public wrapping keys only. Worker private keys belong to the Worker deployment. */
 	readonly encryptionKeys: unknown;
@@ -83,6 +84,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 	return {
 		databaseUrl: input.databaseUrl,
 		identity,
+		userGovernance: input.userGovernance,
 		apiIdentity,
 		requestScope: identityScope.requestScope,
 		conversationReplayWindow: input.conversationReplayWindow,

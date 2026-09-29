@@ -26,6 +26,10 @@ import {
 	registerSessionAuditRoutes,
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
+import {
+	registerUserGovernanceRoutes,
+	type UserGovernanceRoutesDependencies,
+} from "./http/user-governance-routes.js";
 import { registerV2ConfigurationRoutes } from "./http/v2-configuration-routes.js";
 import { registerV2ManagementRoutes } from "./http/v2-management-routes.js";
 
@@ -43,6 +47,7 @@ export interface PlatformAppDependencies {
 	readonly management: ManagementRouteDependencies;
 	readonly sessionAudit: SessionAuditRoutesDependencies;
 	readonly scopedAudit?: ScopedAuditRoutesDependencies;
+	readonly userGovernance?: UserGovernanceRoutesDependencies;
 }
 
 export function createPlatformHealthApp() {
@@ -75,6 +80,12 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	registerRetiredManagementRoutes(app);
 	registerApiIdentityRoutes(app, dependencies.management);
 	registerV2ManagementRoutes(app, dependencies.management);
+	registerUserGovernanceRoutes(
+		app,
+		dependencies.userGovernance ?? {
+			identity: dependencies.management.identity,
+		},
+	);
 	registerV2ConfigurationRoutes(app, dependencies.configuration);
 	if (dependencies.deploymentConfiguration)
 		registerDeploymentConfigurationRoutes(
