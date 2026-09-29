@@ -99,7 +99,7 @@ export function ConnectionsPage() {
 	const accessRequestId = connectSearch.get("accessRequestId") ?? undefined;
 	const approvedProvider = connectSearch.get("provider");
 	const prepareAttempted = useRef<string | undefined>(undefined);
-	const startedManhattanRequest = useRef<string | undefined>(undefined);
+	const startedOAuthRequest = useRef<string | undefined>(undefined);
 	const approvedRequest = useQuery({
 		queryKey: ["approved-connection-request", accessRequestId],
 		queryFn: () =>
@@ -171,6 +171,7 @@ export function ConnectionsPage() {
 		onSuccess: ({ authorizationUrl }) =>
 			window.location.assign(authorizationUrl),
 	});
+	const oauth = useGithubOAuth();
 	useEffect(() => {
 		const search = new URLSearchParams(window.location.search);
 		if (accessRequestId && completedAccessRequestId === accessRequestId) return;
@@ -195,12 +196,16 @@ export function ConnectionsPage() {
 		)
 			return;
 		if (
-			provider === "manhattan" &&
 			approvedAccessRequestId &&
-			startedManhattanRequest.current !== approvedAccessRequestId
+			startedOAuthRequest.current !== approvedAccessRequestId
 		) {
-			startedManhattanRequest.current = approvedAccessRequestId;
-			manhattanOAuth.mutate({ accessRequestId: approvedAccessRequestId });
+			if (provider === "manhattan" || provider === "github") {
+				startedOAuthRequest.current = approvedAccessRequestId;
+				if (provider === "github")
+					oauth.begin(undefined, approvedAccessRequestId);
+				else
+					manhattanOAuth.mutate({ accessRequestId: approvedAccessRequestId });
+			}
 		}
 		if (provider === "bitbucket") setBitbucketOpen(true);
 		if (provider === "rehoboam") setRehoboamOpen(true);
@@ -222,13 +227,13 @@ export function ConnectionsPage() {
 		newCredentialRequestId,
 		completedAccessRequestId,
 		manhattanOAuth.mutate,
+		oauth.begin,
 	]);
 	const accessRequests = useQuery({
 		queryKey: ["connection-access-requests"],
 		queryFn: connectionApi.listConnectionAccessRequests,
 		refetchInterval: 30_000,
 	});
-	const oauth = useGithubOAuth();
 	const reconnectOAuth = useMutation({
 		mutationFn: (connectionId: string) =>
 			connectionApi.reauthorizeProviderConnection({
