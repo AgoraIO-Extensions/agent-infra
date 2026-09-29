@@ -47,6 +47,7 @@ import {
 	ManhattanAdapter,
 	ManhattanOAuthAdapter,
 	manhattanConnectionCatalog,
+	manhattanLegacyProviderReleaseIds,
 } from "@agent-infra/openconnector-adapter/manhattan";
 import {
 	RehoboamAdapter,
@@ -241,6 +242,9 @@ export async function createConnectionRuntime(
 		[jenkinsCiConnectionCatalog.providerReleaseId]: jenkinsCi,
 		[jenkinsReleaseConnectionCatalog.providerReleaseId]: jenkins,
 		[manhattanConnectionCatalog.providerReleaseId]: manhattan,
+		...Object.fromEntries(
+			manhattanLegacyProviderReleaseIds.map((id) => [id, manhattan]),
+		),
 		[rehoboamConnectionCatalog.providerReleaseId]: rehoboam,
 		...Object.fromEntries(
 			rehoboamLegacyProviderReleaseIds.map((id) => [id, rehoboam]),
