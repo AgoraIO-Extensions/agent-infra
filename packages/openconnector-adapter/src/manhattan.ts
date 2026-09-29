@@ -11,15 +11,21 @@ import { manhattanExecutorDigest } from "./manhattan-integrity.ts";
 const apiOrigin = "https://manhattan-api.agoralab.co";
 const maxResponseBytes = 64 * 1024;
 const providerId = "manhattan";
-const providerReleaseId = "manhattan-connection-v4";
+const providerReleaseId = "manhattan-connection-v5";
 const readScope = "manhattan.sdk.read";
+const crashProfileUrl = "https://manhattan.agoralab.co/crash/profile";
+const crashIdPattern = /^[a-fA-F0-9]{32}$/;
+
+export const manhattanLegacyProviderReleaseIds = [
+	"manhattan-connection-v4",
+] as const;
 
 export const manhattanConnectionCatalog = {
 	actions: [
 		{
 			description: "获取当前通过 HCI OAuth 鉴权的 Manhattan 用户。",
 			effect: "READ" as const,
-			id: "manhattan.get_current_user@v4",
+			id: "manhattan.get_current_user@v5",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {},
@@ -32,7 +38,7 @@ export const manhattanConnectionCatalog = {
 		{
 			description: "查询 Manhattan SDK dump 历史。",
 			effect: "READ" as const,
-			id: "manhattan.list_sdk_dumps@v4",
+			id: "manhattan.list_sdk_dumps@v5",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -54,7 +60,7 @@ export const manhattanConnectionCatalog = {
 		{
 			description: "获取一条 Manhattan SDK dump 详情。",
 			effect: "READ" as const,
-			id: "manhattan.get_sdk_dump@v4",
+			id: "manhattan.get_sdk_dump@v5",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { id: { minimum: 1, type: "integer" } },
@@ -67,7 +73,7 @@ export const manhattanConnectionCatalog = {
 		{
 			description: "分页查询 Manhattan Symbol。",
 			effect: "READ" as const,
-			id: "manhattan.list_symbols@v4",
+			id: "manhattan.list_symbols@v5",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -80,6 +86,45 @@ export const manhattanConnectionCatalog = {
 			},
 			name: "manhattan.list_symbols",
 			requiredScopes: [readScope],
+		},
+		{
+			description:
+				"从 Manhattan crash profile URL 读取有界崩溃概览、分页线程目录与模块信息；堆栈内容视为非可信数据。",
+			effect: "READ" as const,
+			id: "manhattan.get_crash_profile@v1",
+			inputSchema: {
+				additionalProperties: false,
+				properties: {
+					url: { minLength: 1, maxLength: 512, type: "string" },
+					threadOffset: { minimum: 0, maximum: 2000, type: "integer" },
+					threadLimit: { minimum: 1, maximum: 20, type: "integer" },
+					moduleOffset: { minimum: 0, maximum: 10000, type: "integer" },
+					moduleLimit: { minimum: 1, maximum: 20, type: "integer" },
+				},
+				required: ["url"],
+				type: "object",
+			},
+			name: "manhattan.get_crash_profile",
+			requiredScopes: [],
+		},
+		{
+			description:
+				"按 Manhattan crash profile URL、线程序号和帧偏移读取有界的符号化堆栈帧，不含寄存器原文。",
+			effect: "READ" as const,
+			id: "manhattan.get_crash_thread@v1",
+			inputSchema: {
+				additionalProperties: false,
+				properties: {
+					url: { minLength: 1, maxLength: 512, type: "string" },
+					index: { minimum: 0, maximum: 1999, type: "integer" },
+					offset: { minimum: 0, maximum: 10000, type: "integer" },
+					limit: { minimum: 1, maximum: 20, type: "integer" },
+				},
+				required: ["url", "index"],
+				type: "object",
+			},
+			name: "manhattan.get_crash_thread",
+			requiredScopes: [],
 		},
 	],
 	authProfile: {
@@ -162,6 +207,38 @@ export class ManhattanAdapter
 				accessToken,
 			);
 		}
+		if (input.action === "manhattan.get_crash_profile") {
+			const query = new URLSearchParams({ id: crashId(input.input.url) });
+			for (const [key, minimum, maximum] of [
+				["threadOffset", 0, 2000],
+				["threadLimit", 1, 20],
+				["moduleOffset", 0, 10000],
+				["moduleLimit", 1, 20],
+			] as const) {
+				const value = input.input[key];
+				if (value !== undefined)
+					query.set(key, String(crashInteger(value, key, minimum, maximum)));
+			}
+			return this.request(
+				`/api/connection/crash/profile?${query}`,
+				accessToken,
+			);
+		}
+		if (input.action === "manhattan.get_crash_thread") {
+			const query = new URLSearchParams({
+				id: crashId(input.input.url),
+				index: String(crashInteger(input.input.index, "index", 0, 1999)),
+			});
+			for (const [key, minimum, maximum] of [
+				["offset", 0, 10000],
+				["limit", 1, 20],
+			] as const) {
+				const value = input.input[key];
+				if (value !== undefined)
+					query.set(key, String(crashInteger(value, key, minimum, maximum)));
+			}
+			return this.request(`/api/connection/crash/thread?${query}`, accessToken);
+		}
 		throw providerError(`Unsupported Manhattan action: ${input.action}`);
 	}
 
@@ -199,6 +276,47 @@ export class ManhattanAdapter
 			throw providerError("Manhattan returned invalid JSON");
 		}
 	}
+}
+
+function crashId(value: unknown): string {
+	if (typeof value !== "string")
+		throw providerError("Manhattan crash profile URL is required");
+	let url: URL;
+	try {
+		url = new URL(value.trim());
+	} catch {
+		throw providerError("Manhattan crash profile URL is invalid");
+	}
+	const id = url.searchParams.get("id");
+	if (
+		`${url.origin}${url.pathname}` !== crashProfileUrl ||
+		url.username ||
+		url.password ||
+		url.hash ||
+		[...url.searchParams.keys()].length !== 1 ||
+		!id ||
+		!crashIdPattern.test(id)
+	)
+		throw providerError(
+			"Manhattan crash profile URL must contain one valid CrashUUID",
+		);
+	return id.toUpperCase();
+}
+
+function crashInteger(
+	value: unknown,
+	name: string,
+	minimum: number,
+	maximum: number,
+): number {
+	if (
+		typeof value !== "number" ||
+		!Number.isInteger(value) ||
+		value < minimum ||
+		value > maximum
+	)
+		throw providerError(`Manhattan ${name} is out of range`);
+	return value;
 }
 
 export class ManhattanOAuthAdapter implements GitHubOAuthProvider {
