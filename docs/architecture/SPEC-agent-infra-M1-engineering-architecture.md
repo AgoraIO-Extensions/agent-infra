@@ -138,6 +138,7 @@ Connection control plane 单主部署在 GZ3，connection database 后续迁入�
 从 GZ3 直连；LA3 Provider Egress 仅作为满足 workload mTLS 门禁后的未来 TODO。区域职责与 WRITE
 `UNCERTAIN` 边界见
 [Connection GZ3 控制面与 GitHub 代理出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
+该 ADR 的[GitHub OAuth 出口回退提案](../adr/ADR-connection-regional-control-plane-and-github-egress.md#待评审变更github-oauth-出口回退)待 Security/SRE 评审，不属于当前部署契约。
 
 ### 4.2 不拆分的部署单元
 
