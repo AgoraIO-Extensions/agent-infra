@@ -507,11 +507,13 @@ export function createWorkloadRuntimeV1(
 	}
 	async function revalidateCandidateCatalog(
 		state: WorkloadReconciliationStateV1,
+		force = false,
 	) {
 		if (
 			state.candidate.configuration.source.kind !== "standard" ||
-			state.candidate.configuration.revision ===
-				state.verified?.configuration.revision
+			(!force &&
+				state.candidate.configuration.revision ===
+					state.verified?.configuration.revision)
 		)
 			return;
 		if (!options.modelCatalog) throw new ModelConfigurationErrorV1();
@@ -1012,6 +1014,8 @@ export function createWorkloadRuntimeV1(
 		async observe(state) {
 			observedCapabilities.delete(state);
 			if (!state.identity) return "pending";
+			if (state.phase === "ready" && candidateKeyless(state))
+				await revalidateCandidateCatalog(state, true);
 			let capabilities: Record<string, boolean> | undefined;
 			const observation = createAdapter((value) => {
 				capabilities = value;

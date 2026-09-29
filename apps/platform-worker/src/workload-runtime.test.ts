@@ -480,10 +480,22 @@ describe("assembled Workload Runtime contracts", () => {
 	it("materializes a V4 standard template without model Key Secret or Pod credential", async () => {
 		const decrypt = vi.fn();
 		const access = vi.fn();
+		const catalog = catalogFixture();
 		const signing = generateKeyPairSync("ed25519");
 		const f = fixture(
 			{
 				runtimeModelVersion: 4,
+				executionCapacityProfiles: [
+					{
+						schemaVersion: 1,
+						imageDigest: `sha256:${"a".repeat(64)}`,
+						resourceProfileRef: workloadTestPolicy.resourceProfileRef,
+						resourceConfigurationHash:
+							workloadResourceConfigurationHashV1(workloadTestPolicy),
+						conformanceEvidenceHash: "c".repeat(64),
+						maximumConcurrentExecutions: 2,
+					},
+				],
 				policy: {
 					...workloadTestPolicy,
 					runtimeAuth: {
@@ -496,7 +508,9 @@ describe("assembled Workload Runtime contracts", () => {
 						serviceTokenSecret: { name: "transport", key: "token" },
 					},
 				},
-				modelCatalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+				modelCatalog: createDeploymentModelCatalogAdapterV1({
+					load: async () => catalog,
+				}),
 				modelAccess: { validate: access },
 				decryptor: { decrypt },
 			},
@@ -639,6 +653,44 @@ describe("assembled Workload Runtime contracts", () => {
 				})
 			).baseUrl,
 		).toMatch(/^https:\/\//);
+		const business = {
+			agentId: "agent-a",
+			workload: observed,
+			purpose: "business" as const,
+			command: "turn.submit" as const,
+			signal: new AbortController().signal,
+		};
+		expect((await resolver(business)).baseUrl).toMatch(/^https:\/\//);
+		const originalCatalog = structuredClone(catalog);
+		const writesBeforeCatalogChange = f.writes.length;
+		for (const change of ["expired", "removed", "changed", "unsafe"] as const) {
+			if (change === "expired") catalog.validUntil = Date.now() - 1;
+			else if (change === "removed") catalog.endpoints = [];
+			else {
+				assert(catalog.endpoints[0]);
+				catalog.endpoints[0].baseUrl =
+					change === "unsafe"
+						? "http://models.example.test/changed/v1"
+						: "https://models.example.test/changed/v1";
+				if (change === "unsafe")
+					catalog.endpoints[0].origin = "http://models.example.test";
+			}
+			await expect(resolver(business)).rejects.toMatchObject({
+				code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+			});
+			expect(
+				(
+					await resolver({
+						...business,
+						purpose: "control",
+						command: "session.status",
+					})
+				).baseUrl,
+			).toMatch(/^https:\/\//);
+			catalog.validUntil = originalCatalog.validUntil;
+			catalog.endpoints = structuredClone(originalCatalog.endpoints);
+		}
+		expect(f.writes).toHaveLength(writesBeforeCatalogChange);
 		const tlsSecret = f.resources.get(`Secret/${serviceName}-tls`) as V1Secret;
 		assert(tlsSecret.data);
 		const originalCert = tlsSecret.data["tls.crt"];
