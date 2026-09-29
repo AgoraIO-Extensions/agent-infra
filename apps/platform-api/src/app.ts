@@ -13,7 +13,10 @@ import {
 	type FileRoutesDependenciesV1,
 	registerFileRoutesV1,
 } from "./http/file-routes.js";
-import type { ManagementRouteDependencies } from "./http/management-routes.js";
+import {
+	type ManagementRouteDependencies,
+	registerApiIdentityRoutes,
+} from "./http/management-routes.js";
 import { registerRetiredManagementRoutes } from "./http/retired-management-routes.js";
 import {
 	registerScopedAuditRoutes,
@@ -70,6 +73,7 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	if (requestScope)
 		app.use("*", (context, next) => requestScope(context.req.raw, next));
 	registerRetiredManagementRoutes(app);
+	registerApiIdentityRoutes(app, dependencies.management);
 	registerV2ManagementRoutes(app, dependencies.management);
 	registerV2ConfigurationRoutes(app, dependencies.configuration);
 	if (dependencies.deploymentConfiguration)

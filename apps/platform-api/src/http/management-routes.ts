@@ -635,339 +635,96 @@ function apiAccessAudit(
 	};
 }
 
+type ManagementRouteRegistrationMode = "identity" | "legacy";
+
+export function registerApiIdentityRoutes(
+	app: Hono,
+	dependencies: ManagementRouteDependencies,
+): void {
+	registerManagementRoutesInternal(app, dependencies, "identity");
+}
+
 export function registerManagementRoutes(
 	app: Hono,
 	dependencies: ManagementRouteDependencies,
 ): void {
-	app.get("/api/v1/api-credentials", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const management = apiIdentityOrUnavailable(
-				dependencies.apiIdentity,
-				metadata.traceId,
-			);
-			const queryPage = pageInput(context.req.raw, metadata.traceId);
-			const items = await queryOrUnavailable(
-				() => management.listUserCredentials(actor(identity), queryPage),
-				metadata.traceId,
-			);
-			const page = pageById(items, queryPage, (item) => item.credentialId);
-			return context.json({
-				items: page.items.map((item) =>
-					apiCredentialProjection(item, metadata.traceId),
-				),
-				nextCursor: page.nextCursor,
-			});
-		}),
-	);
+	registerApiIdentityRoutes(app, dependencies);
+	registerManagementRoutesInternal(app, dependencies, "legacy");
+}
 
-	app.post("/api/v1/api-credentials", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const { value: body } = await parseJson(
-				context.req.raw,
-				ApiCredentialIssueRequestV1Schema,
-				metadata.traceId,
-			);
-			if (body.recipient !== undefined) fail("FORBIDDEN", metadata.traceId);
-			const management = apiIdentityOrUnavailable(
-				dependencies.apiIdentity,
-				metadata.traceId,
-			);
-			const credential = generateApiCredentialV1(randomBytes);
-			const issued = await queryOrUnavailable(
-				() =>
-					management.issueUserCredential(actor(identity), {
-						credential,
-						scopes: body.scopes as ApiCredentialScopeV1[],
-						expiresAt:
-							body.expiresAt === null ? null : new Date(body.expiresAt),
-						audit: apiAudit(identity, metadata, "api.credential.issued"),
-					}),
-				metadata.traceId,
-			);
-			const projection = {
-				metadata: apiCredentialProjection(issued.metadata, metadata.traceId),
-				credential,
-			};
-			return context.json(
-				ApiCredentialIssueProjectionV1Schema.parse(projection),
-				201,
-			);
-		}),
-	);
-
-	app.delete("/api/v1/api-credentials/:credentialId", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const management = apiIdentityOrUnavailable(
-				dependencies.apiIdentity,
-				metadata.traceId,
-			);
-			await queryOrUnavailable(
-				() =>
-					management.revokeUserCredential(
-						actor(identity),
-						context.req.param("credentialId"),
-						new Date(),
-						apiAudit(identity, metadata, "api.credential.revoked"),
-					),
-				metadata.traceId,
-			);
-			return new Response(null, { status: 204 });
-		}),
-	);
-
-	app.get("/api/v1/applications", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const management = apiIdentityOrUnavailable(
-				dependencies.apiIdentity,
-				metadata.traceId,
-			);
-			const queryPage = pageInput(context.req.raw, metadata.traceId);
-			const items = await queryOrUnavailable(
-				() => management.listApplications(actor(identity), queryPage),
-				metadata.traceId,
-			);
-			const page = pageById(items, queryPage, (item) => item.id);
-			return context.json({
-				items: page.items.map((item) =>
-					ApiApplicationProjectionV1Schema.parse({
-						schemaVersion: 1,
-						applicationId: item.id,
-						name: item.name,
-						responsibleUserId: item.responsibleUserId,
-						status: item.status,
-						authorizationRevision: item.authorizationRevision,
-					}),
-				),
-				nextCursor: page.nextCursor,
-			});
-		}),
-	);
-
-	app.post("/api/v1/applications", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const { value: body } = await parseJson(
-				context.req.raw,
-				ApiApplicationCreateRequestV1Schema,
-				metadata.traceId,
-			);
-			const management = apiIdentityOrUnavailable(
-				dependencies.apiIdentity,
-				metadata.traceId,
-			);
-			const applicationId = `application_${randomUUID()}`;
-			const application = await queryOrUnavailable(
-				() =>
-					management.createApplication({
-						actor: actor(identity),
-						applicationId,
-						name: body.name,
-						authorizationRevision: randomUUID(),
-						audit: apiAudit(identity, metadata, "api.application.created"),
-					}),
-				metadata.traceId,
-			);
-			return context.json(
-				ApiApplicationProjectionV1Schema.parse({
-					schemaVersion: 1,
-					applicationId: application.id,
-					name: application.name,
-					responsibleUserId: application.responsibleUserId,
-					status: application.status,
-					authorizationRevision: application.authorizationRevision,
-				}),
-				201,
-			);
-		}),
-	);
-
-	app.post(
-		"/api/v1/applications/:applicationId/credential-delivery",
-		(context) =>
+function registerManagementRoutesInternal(
+	app: Hono,
+	dependencies: ManagementRouteDependencies,
+	mode: ManagementRouteRegistrationMode,
+): void {
+	if (mode !== "legacy") {
+		app.get("/api/v1/api-credentials", (context) =>
 			boundary(context, async (metadata) => {
 				const identity = await resolveIdentity(
 					dependencies.identity,
 					context.req.raw,
 					metadata.traceId,
 				);
-				const { value: principal } = await parseJson(
-					context.req.raw,
-					ApiPrincipalV1Schema,
-					metadata.traceId,
-				);
 				const management = apiIdentityOrUnavailable(
 					dependencies.apiIdentity,
 					metadata.traceId,
 				);
-				await queryOrUnavailable(
-					() =>
-						management.grantCredentialDelivery({
-							actor: actor(identity),
-							applicationId: context.req.param("applicationId"),
-							principal,
-							audit: apiAudit(
-								identity,
-								metadata,
-								"api.credential.delivery.granted",
-							),
-						}),
+				const queryPage = pageInput(context.req.raw, metadata.traceId);
+				const items = await queryOrUnavailable(
+					() => management.listUserCredentials(actor(identity), queryPage),
 					metadata.traceId,
 				);
-				return new Response(null, { status: 204 });
+				const page = pageById(items, queryPage, (item) => item.credentialId);
+				return context.json({
+					items: page.items.map((item) =>
+						apiCredentialProjection(item, metadata.traceId),
+					),
+					nextCursor: page.nextCursor,
+				});
 			}),
-	);
+		);
 
-	app.delete(
-		"/api/v1/applications/:applicationId/credential-delivery",
-		(context) =>
+		app.post("/api/v1/api-credentials", (context) =>
 			boundary(context, async (metadata) => {
 				const identity = await resolveIdentity(
 					dependencies.identity,
 					context.req.raw,
 					metadata.traceId,
 				);
-				const { value: principal } = await parseJson(
+				const { value: body } = await parseJson(
 					context.req.raw,
-					ApiPrincipalV1Schema,
+					ApiCredentialIssueRequestV1Schema,
 					metadata.traceId,
 				);
+				if (body.recipient !== undefined) fail("FORBIDDEN", metadata.traceId);
 				const management = apiIdentityOrUnavailable(
 					dependencies.apiIdentity,
 					metadata.traceId,
 				);
-				await queryOrUnavailable(
+				const credential = generateApiCredentialV1(randomBytes);
+				const issued = await queryOrUnavailable(
 					() =>
-						management.revokeCredentialDelivery({
-							actor: actor(identity),
-							applicationId: context.req.param("applicationId"),
-							principal,
-							audit: apiAudit(
-								identity,
-								metadata,
-								"api.credential.delivery.revoked",
-							),
-						}),
-					metadata.traceId,
-				);
-				return new Response(null, { status: 204 });
-			}),
-	);
-
-	app.get("/api/v1/applications/:applicationId/credentials", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const management = apiIdentityOrUnavailable(
-				dependencies.apiIdentity,
-				metadata.traceId,
-			);
-			const queryPage = pageInput(context.req.raw, metadata.traceId);
-			const items = await queryOrUnavailable(
-				() =>
-					management.listApplicationCredentials(
-						actor(identity),
-						context.req.param("applicationId"),
-						queryPage,
-					),
-				metadata.traceId,
-			);
-			const page = pageById(items, queryPage, (item) => item.credentialId);
-			return context.json({
-				items: page.items.map((item) =>
-					apiCredentialProjection(item, metadata.traceId),
-				),
-				nextCursor: page.nextCursor,
-			});
-		}),
-	);
-
-	app.post("/api/v1/applications/:applicationId/credentials", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const { value: body } = await parseJson(
-				context.req.raw,
-				ApiCredentialIssueRequestV1Schema,
-				metadata.traceId,
-			);
-			const management = apiIdentityOrUnavailable(
-				dependencies.apiIdentity,
-				metadata.traceId,
-			);
-			const recipient =
-				body.recipient ?? ({ kind: "user", id: identity.userId } as const);
-			const credential = generateApiCredentialV1(randomBytes);
-			const issued = await queryOrUnavailable(
-				() =>
-					management.issueApplicationCredential(
-						actor(identity),
-						context.req.param("applicationId"),
-						{
+						management.issueUserCredential(actor(identity), {
 							credential,
-							recipient,
 							scopes: body.scopes as ApiCredentialScopeV1[],
 							expiresAt:
 								body.expiresAt === null ? null : new Date(body.expiresAt),
 							audit: apiAudit(identity, metadata, "api.credential.issued"),
-						},
-					),
-				metadata.traceId,
-			);
-			const projection =
-				recipient.kind === "user" && recipient.id === identity.userId
-					? {
-							metadata: apiCredentialProjection(
-								issued.metadata,
-								metadata.traceId,
-							),
-							credential,
-						}
-					: {
-							metadata: apiCredentialProjection(
-								issued.metadata,
-								metadata.traceId,
-							),
-						};
-			return context.json(
-				ApiApplicationCredentialIssueProjectionV1Schema.parse(projection),
-				201,
-			);
-		}),
-	);
+						}),
+					metadata.traceId,
+				);
+				const projection = {
+					metadata: apiCredentialProjection(issued.metadata, metadata.traceId),
+					credential,
+				};
+				return context.json(
+					ApiCredentialIssueProjectionV1Schema.parse(projection),
+					201,
+				);
+			}),
+		);
 
-	app.delete(
-		"/api/v1/applications/:applicationId/credentials/:credentialId",
-		(context) =>
+		app.delete("/api/v1/api-credentials/:credentialId", (context) =>
 			boundary(context, async (metadata) => {
 				const identity = await resolveIdentity(
 					dependencies.identity,
@@ -980,9 +737,8 @@ export function registerManagementRoutes(
 				);
 				await queryOrUnavailable(
 					() =>
-						management.revokeApplicationCredential(
+						management.revokeUserCredential(
 							actor(identity),
-							context.req.param("applicationId"),
 							context.req.param("credentialId"),
 							new Date(),
 							apiAudit(identity, metadata, "api.credential.revoked"),
@@ -991,483 +747,668 @@ export function registerManagementRoutes(
 				);
 				return new Response(null, { status: 204 });
 			}),
-	);
+		);
 
-	app.post("/api/v1/agents/:agentId/grants", (context) =>
-		boundary(context, async (metadata) => {
-			const { identity, management, managementActor } =
-				await resolveAgentGrantContext(
-					dependencies,
-					context.req.raw,
-					metadata.traceId,
-				);
-			const { value: body } = await parseJson(
-				context.req.raw,
-				ApiAgentGrantRequestV1Schema,
-				metadata.traceId,
-			);
-			const agentId = context.req.param("agentId");
-			const authorizationRevision = await queryOrUnavailable(
-				() =>
-					management.grantAgent({
-						actor: managementActor,
-						agentId,
-						principal: body.principal,
-						grantType: body.grantType,
-						audit: apiAudit(identity, metadata, "api.agent.grant.granted"),
-					}),
-				metadata.traceId,
-			);
-			return context.json(
-				ApiAgentGrantProjectionV1Schema.parse({
-					schemaVersion: 1,
-					agentId,
-					principal: body.principal,
-					grantType: body.grantType,
-					authorizationRevision,
-					revokedAt: null,
-				}),
-			);
-		}),
-	);
-
-	app.delete("/api/v1/agents/:agentId/grants", (context) =>
-		boundary(context, async (metadata) => {
-			const { identity, management, managementActor } =
-				await resolveAgentGrantContext(
-					dependencies,
-					context.req.raw,
-					metadata.traceId,
-				);
-			const { value: body } = await parseJson(
-				context.req.raw,
-				ApiAgentGrantRequestV1Schema,
-				metadata.traceId,
-			);
-			const agentId = context.req.param("agentId");
-			await queryOrUnavailable(
-				() =>
-					management.revokeAgentGrant({
-						actor: managementActor,
-						agentId,
-						principal: body.principal,
-						grantType: body.grantType,
-						audit: apiAudit(identity, metadata, "api.agent.grant.revoked"),
-					}),
-				metadata.traceId,
-			);
-			return new Response(null, { status: 204 });
-		}),
-	);
-
-	app.post("/api/v1/agents", (context) =>
-		boundary(context, async (metadata) => {
-			const apiIdentity = await resolveApiIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const management = apiIdentityOrUnavailable(
-				dependencies.apiIdentity,
-				metadata.traceId,
-			);
-			await management.authorizeCredentialScope(
-				apiActor(apiIdentity),
-				["agent:create"],
-				apiAccessAudit(
-					apiIdentityContext(apiIdentity),
-					metadata,
-					"agents",
-					"missing_scope",
-					["agent:create"],
-				),
-			);
-			const { value: body, rawRequestDigest } = await parseJson(
-				context.req.raw,
-				AgentApplicationCreateRequestV2Schema,
-				metadata.traceId,
-			);
-			const idempotencyKey = parseIdempotencyKey(
-				context.req.raw,
-				metadata.traceId,
-			);
-			const ids = allocateDeploymentDirectApplicationIds(
-				apiIdentity.principal.kind,
-				apiIdentity.principal.id,
-				idempotencyKey,
-			);
-			const identity: IdentityContext = {
-				schemaVersion: 1,
-				userId: apiIdentity.ownerId,
-				displayName: apiIdentity.principal.id,
-				accountStatus: "active",
-				organizationIds: apiIdentity.organizationIds,
-				roles: [],
-				authorizationRevision: apiIdentity.authorizationRevision,
-				principal: apiIdentity.principal,
-			};
-			const prepared = await prepareApplicationInput(
-				dependencies,
-				body,
-				identity,
-				metadata,
-				ids,
-			);
-			const currentApiIdentity = await resolveApiIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			if (!isSameApiCreationAuthorityV1(apiIdentity, currentApiIdentity))
-				fail("FORBIDDEN", metadata.traceId);
-			await management.authorizeCredentialScope(
-				apiActor(currentApiIdentity),
-				["agent:create"],
-				apiAccessAudit(
-					apiIdentityContext(currentApiIdentity),
-					metadata,
-					"agents",
-					"missing_scope",
-					["agent:create"],
-				),
-			);
-			const result = await dependencies.foundation.submit(
-				{
-					schemaVersion: 2,
-					...ids,
-					idempotencyKey,
-					requestId: metadata.requestId,
-					traceId: metadata.traceId,
-					...applicationCommandFields(body, prepared, metadata.traceId),
-					secrets: prepared.secrets,
-					channels: [],
-				},
-				{
-					schemaVersion: 1,
-					userId: apiIdentity.ownerId,
-					rawRequestDigest,
-					principal: apiIdentity.principal,
-					creationMode: "api",
-					apiAuthority: {
-						credentialId: currentApiIdentity.credential.credentialId,
-						identityRevision: currentApiIdentity.authorizationRevision,
-					},
-				},
-				prepared.attachment,
-			);
-			if (
-				result.applicationId !== ids.applicationId ||
-				result.agentId !== ids.agentId ||
-				result.status !== "creating"
-			)
-				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
-			return context.json(
-				{
-					schemaVersion: 1,
-					applicationId: result.applicationId,
-					agentId: result.agentId,
-					status: result.status,
-				},
-				201,
-			);
-		}),
-	);
-
-	app.post("/api/v1/agent-applications", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const { value: body, rawRequestDigest } = await parseJson(
-				context.req.raw,
-				AgentApplicationCreateRequestV1Schema,
-				metadata.traceId,
-			);
-			const idempotencyKey = parseIdempotencyKey(
-				context.req.raw,
-				metadata.traceId,
-			);
-			let ids: Awaited<
-				ReturnType<ManagementRouteDependencies["allocateApplicationIds"]>
-			>;
-			try {
-				ids = await dependencies.allocateApplicationIds({
-					identity,
-					idempotencyKey,
-				});
-			} catch {
-				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
-			}
-			const prepared = await prepareApplicationInput(
-				dependencies,
-				body,
-				identity,
-				metadata,
-				ids,
-			);
-			await dependencies.foundation.submit(
-				{
-					schemaVersion: 2,
-					...ids,
-					idempotencyKey,
-					requestId: metadata.requestId,
-					traceId: metadata.traceId,
-					...applicationCommandFields(body, prepared, metadata.traceId),
-					secrets: prepared.secrets,
-					channels: [],
-				},
-				{ schemaVersion: 1, userId: identity.userId, rawRequestDigest },
-				prepared.attachment,
-			);
-			const application = await applicationOrUnavailable(
-				dependencies,
-				applicantScope(identity),
-				ids.applicationId,
-				metadata.traceId,
-			);
-			return context.json(
-				await projectApplication(dependencies, application, identity, metadata),
-				201,
-			);
-		}),
-	);
-
-	app.get("/api/v1/agent-applications", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const queryPage = pageInput(context.req.raw, metadata.traceId);
-			const page = await queryOrUnavailable(
-				() =>
-					dependencies.query.listApplications(
-						applicantScope(identity),
-						queryPage,
-					),
-				metadata.traceId,
-			);
-			return context.json({
-				items: await Promise.all(
-					page.items.map((item) =>
-						projectApplication(dependencies, item, identity, metadata),
-					),
-				),
-				nextCursor: page.nextAfterId,
-			});
-		}),
-	);
-
-	app.get("/api/v1/agent-applications/:applicationId", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const application = await applicationOrUnavailable(
-				dependencies,
-				applicantScope(identity),
-				context.req.param("applicationId"),
-				metadata.traceId,
-			);
-			return context.json(
-				await projectApplication(dependencies, application, identity, metadata),
-			);
-		}),
-	);
-
-	app.put("/api/v1/agent-applications/:applicationId", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const { value: body, rawRequestDigest } = await parseJson(
-				context.req.raw,
-				AgentApplicationUpdateRequestV1Schema,
-				metadata.traceId,
-			);
-			const idempotencyKey = parseIdempotencyKey(
-				context.req.raw,
-				metadata.traceId,
-			);
-			const applicationId = context.req.param("applicationId");
-			const current = await applicationOrUnavailable(
-				dependencies,
-				applicantScope(identity),
-				applicationId,
-				metadata.traceId,
-			);
-			const prepared = await prepareApplicationInput(
-				dependencies,
-				body,
-				identity,
-				metadata,
-				{ applicationId, agentId: current.agentId },
-			);
-			await dependencies.revision.revise(
-				{
-					schemaVersion: 2,
-					idempotencyKey,
-					requestId: metadata.requestId,
-					traceId: metadata.traceId,
-					...applicationCommandFields(body, prepared, metadata.traceId),
-					...(body.secrets === undefined ? {} : { secrets: prepared.secrets }),
-				},
-				{
-					schemaVersion: 1,
-					applicationId,
-					userId: identity.userId,
-					accountStatus: identity.accountStatus,
-					organizationIds: identity.organizationIds,
-					isAdministrator: identity.roles.includes("system_admin"),
-					rawRequestDigest,
-				},
-				prepared.attachment,
-			);
-			const application = await applicationOrUnavailable(
-				dependencies,
-				applicantScope(identity),
-				applicationId,
-				metadata.traceId,
-			);
-			return context.json(
-				await projectApplication(dependencies, application, identity, metadata),
-			);
-		}),
-	);
-
-	app.post("/api/v1/agent-applications/:applicationId/withdraw", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const applicationId = context.req.param("applicationId");
-			const scope = applicantScope(identity);
-			const current = await applicationOrUnavailable(
-				dependencies,
-				scope,
-				applicationId,
-				metadata.traceId,
-			);
-			await requireManagementAccepted(
-				await dependencies.management.executeManagementCommand(
-					{
-						schemaVersion: 1,
-						command: "withdraw_application",
-						applicationId,
-						expectedRevision: current.management.revision,
-						idempotencyKey: parseIdempotencyKey(
-							context.req.raw,
-							metadata.traceId,
-						),
-						requestId: metadata.requestId,
-						traceId: metadata.traceId,
-					},
-					actor(identity),
-				),
-				metadata.traceId,
-			);
-			const application = await applicationOrUnavailable(
-				dependencies,
-				scope,
-				applicationId,
-				metadata.traceId,
-			);
-			return context.json(
-				await projectApplication(dependencies, application, identity, metadata),
-			);
-		}),
-	);
-
-	app.get("/api/v1/admin/agent-applications", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			requireAdministrator(identity, metadata.traceId);
-			const queryPage = pageInput(context.req.raw, metadata.traceId);
-			const page = await queryOrUnavailable(
-				() =>
-					dependencies.query.listApplications(
-						{ kind: "administrator" },
-						queryPage,
-					),
-				metadata.traceId,
-			);
-			return context.json({
-				items: await Promise.all(
-					page.items.map((item) =>
-						projectApplication(dependencies, item, identity, metadata),
-					),
-				),
-				nextCursor: page.nextAfterId,
-			});
-		}),
-	);
-
-	app.post(
-		"/api/v1/admin/agent-applications/:applicationId/decision",
-		(context) =>
+		app.get("/api/v1/applications", (context) =>
 			boundary(context, async (metadata) => {
 				const identity = await resolveIdentity(
 					dependencies.identity,
 					context.req.raw,
 					metadata.traceId,
 				);
-				requireAdministrator(identity, metadata.traceId);
+				const management = apiIdentityOrUnavailable(
+					dependencies.apiIdentity,
+					metadata.traceId,
+				);
+				const queryPage = pageInput(context.req.raw, metadata.traceId);
+				const items = await queryOrUnavailable(
+					() => management.listApplications(actor(identity), queryPage),
+					metadata.traceId,
+				);
+				const page = pageById(items, queryPage, (item) => item.id);
+				return context.json({
+					items: page.items.map((item) =>
+						ApiApplicationProjectionV1Schema.parse({
+							schemaVersion: 1,
+							applicationId: item.id,
+							name: item.name,
+							responsibleUserId: item.responsibleUserId,
+							status: item.status,
+							authorizationRevision: item.authorizationRevision,
+						}),
+					),
+					nextCursor: page.nextCursor,
+				});
+			}),
+		);
+
+		app.post("/api/v1/applications", (context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
 				const { value: body } = await parseJson(
 					context.req.raw,
-					ApprovalDecisionRequestV1Schema,
+					ApiApplicationCreateRequestV1Schema,
+					metadata.traceId,
+				);
+				const management = apiIdentityOrUnavailable(
+					dependencies.apiIdentity,
+					metadata.traceId,
+				);
+				const applicationId = `application_${randomUUID()}`;
+				const application = await queryOrUnavailable(
+					() =>
+						management.createApplication({
+							actor: actor(identity),
+							applicationId,
+							name: body.name,
+							authorizationRevision: randomUUID(),
+							audit: apiAudit(identity, metadata, "api.application.created"),
+						}),
+					metadata.traceId,
+				);
+				return context.json(
+					ApiApplicationProjectionV1Schema.parse({
+						schemaVersion: 1,
+						applicationId: application.id,
+						name: application.name,
+						responsibleUserId: application.responsibleUserId,
+						status: application.status,
+						authorizationRevision: application.authorizationRevision,
+					}),
+					201,
+				);
+			}),
+		);
+
+		app.post(
+			"/api/v1/applications/:applicationId/credential-delivery",
+			(context) =>
+				boundary(context, async (metadata) => {
+					const identity = await resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					);
+					const { value: principal } = await parseJson(
+						context.req.raw,
+						ApiPrincipalV1Schema,
+						metadata.traceId,
+					);
+					const management = apiIdentityOrUnavailable(
+						dependencies.apiIdentity,
+						metadata.traceId,
+					);
+					await queryOrUnavailable(
+						() =>
+							management.grantCredentialDelivery({
+								actor: actor(identity),
+								applicationId: context.req.param("applicationId"),
+								principal,
+								audit: apiAudit(
+									identity,
+									metadata,
+									"api.credential.delivery.granted",
+								),
+							}),
+						metadata.traceId,
+					);
+					return new Response(null, { status: 204 });
+				}),
+		);
+
+		app.delete(
+			"/api/v1/applications/:applicationId/credential-delivery",
+			(context) =>
+				boundary(context, async (metadata) => {
+					const identity = await resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					);
+					const { value: principal } = await parseJson(
+						context.req.raw,
+						ApiPrincipalV1Schema,
+						metadata.traceId,
+					);
+					const management = apiIdentityOrUnavailable(
+						dependencies.apiIdentity,
+						metadata.traceId,
+					);
+					await queryOrUnavailable(
+						() =>
+							management.revokeCredentialDelivery({
+								actor: actor(identity),
+								applicationId: context.req.param("applicationId"),
+								principal,
+								audit: apiAudit(
+									identity,
+									metadata,
+									"api.credential.delivery.revoked",
+								),
+							}),
+						metadata.traceId,
+					);
+					return new Response(null, { status: 204 });
+				}),
+		);
+
+		app.get("/api/v1/applications/:applicationId/credentials", (context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const management = apiIdentityOrUnavailable(
+					dependencies.apiIdentity,
+					metadata.traceId,
+				);
+				const queryPage = pageInput(context.req.raw, metadata.traceId);
+				const items = await queryOrUnavailable(
+					() =>
+						management.listApplicationCredentials(
+							actor(identity),
+							context.req.param("applicationId"),
+							queryPage,
+						),
+					metadata.traceId,
+				);
+				const page = pageById(items, queryPage, (item) => item.credentialId);
+				return context.json({
+					items: page.items.map((item) =>
+						apiCredentialProjection(item, metadata.traceId),
+					),
+					nextCursor: page.nextCursor,
+				});
+			}),
+		);
+
+		app.post("/api/v1/applications/:applicationId/credentials", (context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const { value: body } = await parseJson(
+					context.req.raw,
+					ApiCredentialIssueRequestV1Schema,
+					metadata.traceId,
+				);
+				const management = apiIdentityOrUnavailable(
+					dependencies.apiIdentity,
+					metadata.traceId,
+				);
+				const recipient =
+					body.recipient ?? ({ kind: "user", id: identity.userId } as const);
+				const credential = generateApiCredentialV1(randomBytes);
+				const issued = await queryOrUnavailable(
+					() =>
+						management.issueApplicationCredential(
+							actor(identity),
+							context.req.param("applicationId"),
+							{
+								credential,
+								recipient,
+								scopes: body.scopes as ApiCredentialScopeV1[],
+								expiresAt:
+									body.expiresAt === null ? null : new Date(body.expiresAt),
+								audit: apiAudit(identity, metadata, "api.credential.issued"),
+							},
+						),
+					metadata.traceId,
+				);
+				const projection =
+					recipient.kind === "user" && recipient.id === identity.userId
+						? {
+								metadata: apiCredentialProjection(
+									issued.metadata,
+									metadata.traceId,
+								),
+								credential,
+							}
+						: {
+								metadata: apiCredentialProjection(
+									issued.metadata,
+									metadata.traceId,
+								),
+							};
+				return context.json(
+					ApiApplicationCredentialIssueProjectionV1Schema.parse(projection),
+					201,
+				);
+			}),
+		);
+
+		app.delete(
+			"/api/v1/applications/:applicationId/credentials/:credentialId",
+			(context) =>
+				boundary(context, async (metadata) => {
+					const identity = await resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					);
+					const management = apiIdentityOrUnavailable(
+						dependencies.apiIdentity,
+						metadata.traceId,
+					);
+					await queryOrUnavailable(
+						() =>
+							management.revokeApplicationCredential(
+								actor(identity),
+								context.req.param("applicationId"),
+								context.req.param("credentialId"),
+								new Date(),
+								apiAudit(identity, metadata, "api.credential.revoked"),
+							),
+						metadata.traceId,
+					);
+					return new Response(null, { status: 204 });
+				}),
+		);
+
+		app.post("/api/v1/agents/:agentId/grants", (context) =>
+			boundary(context, async (metadata) => {
+				const { identity, management, managementActor } =
+					await resolveAgentGrantContext(
+						dependencies,
+						context.req.raw,
+						metadata.traceId,
+					);
+				const { value: body } = await parseJson(
+					context.req.raw,
+					ApiAgentGrantRequestV1Schema,
+					metadata.traceId,
+				);
+				const agentId = context.req.param("agentId");
+				const authorizationRevision = await queryOrUnavailable(
+					() =>
+						management.grantAgent({
+							actor: managementActor,
+							agentId,
+							principal: body.principal,
+							grantType: body.grantType,
+							audit: apiAudit(identity, metadata, "api.agent.grant.granted"),
+						}),
+					metadata.traceId,
+				);
+				return context.json(
+					ApiAgentGrantProjectionV1Schema.parse({
+						schemaVersion: 1,
+						agentId,
+						principal: body.principal,
+						grantType: body.grantType,
+						authorizationRevision,
+						revokedAt: null,
+					}),
+				);
+			}),
+		);
+
+		app.delete("/api/v1/agents/:agentId/grants", (context) =>
+			boundary(context, async (metadata) => {
+				const { identity, management, managementActor } =
+					await resolveAgentGrantContext(
+						dependencies,
+						context.req.raw,
+						metadata.traceId,
+					);
+				const { value: body } = await parseJson(
+					context.req.raw,
+					ApiAgentGrantRequestV1Schema,
+					metadata.traceId,
+				);
+				const agentId = context.req.param("agentId");
+				await queryOrUnavailable(
+					() =>
+						management.revokeAgentGrant({
+							actor: managementActor,
+							agentId,
+							principal: body.principal,
+							grantType: body.grantType,
+							audit: apiAudit(identity, metadata, "api.agent.grant.revoked"),
+						}),
+					metadata.traceId,
+				);
+				return new Response(null, { status: 204 });
+			}),
+		);
+	}
+
+	if (mode !== "identity") {
+		app.post("/api/v1/agents", (context) =>
+			boundary(context, async (metadata) => {
+				const apiIdentity = await resolveApiIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const management = apiIdentityOrUnavailable(
+					dependencies.apiIdentity,
+					metadata.traceId,
+				);
+				await management.authorizeCredentialScope(
+					apiActor(apiIdentity),
+					["agent:create"],
+					apiAccessAudit(
+						apiIdentityContext(apiIdentity),
+						metadata,
+						"agents",
+						"missing_scope",
+						["agent:create"],
+					),
+				);
+				const { value: body, rawRequestDigest } = await parseJson(
+					context.req.raw,
+					AgentApplicationCreateRequestV2Schema,
+					metadata.traceId,
+				);
+				const idempotencyKey = parseIdempotencyKey(
+					context.req.raw,
+					metadata.traceId,
+				);
+				const ids = allocateDeploymentDirectApplicationIds(
+					apiIdentity.principal.kind,
+					apiIdentity.principal.id,
+					idempotencyKey,
+				);
+				const identity: IdentityContext = {
+					schemaVersion: 1,
+					userId: apiIdentity.ownerId,
+					displayName: apiIdentity.principal.id,
+					accountStatus: "active",
+					organizationIds: apiIdentity.organizationIds,
+					roles: [],
+					authorizationRevision: apiIdentity.authorizationRevision,
+					principal: apiIdentity.principal,
+				};
+				const prepared = await prepareApplicationInput(
+					dependencies,
+					body,
+					identity,
+					metadata,
+					ids,
+				);
+				const currentApiIdentity = await resolveApiIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				if (!isSameApiCreationAuthorityV1(apiIdentity, currentApiIdentity))
+					fail("FORBIDDEN", metadata.traceId);
+				await management.authorizeCredentialScope(
+					apiActor(currentApiIdentity),
+					["agent:create"],
+					apiAccessAudit(
+						apiIdentityContext(currentApiIdentity),
+						metadata,
+						"agents",
+						"missing_scope",
+						["agent:create"],
+					),
+				);
+				const result = await dependencies.foundation.submit(
+					{
+						schemaVersion: 2,
+						...ids,
+						idempotencyKey,
+						requestId: metadata.requestId,
+						traceId: metadata.traceId,
+						...applicationCommandFields(body, prepared, metadata.traceId),
+						secrets: prepared.secrets,
+						channels: [],
+					},
+					{
+						schemaVersion: 1,
+						userId: apiIdentity.ownerId,
+						rawRequestDigest,
+						principal: apiIdentity.principal,
+						creationMode: "api",
+						apiAuthority: {
+							credentialId: currentApiIdentity.credential.credentialId,
+							identityRevision: currentApiIdentity.authorizationRevision,
+						},
+					},
+					prepared.attachment,
+				);
+				if (
+					result.applicationId !== ids.applicationId ||
+					result.agentId !== ids.agentId ||
+					result.status !== "creating"
+				)
+					fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+				return context.json(
+					{
+						schemaVersion: 1,
+						applicationId: result.applicationId,
+						agentId: result.agentId,
+						status: result.status,
+					},
+					201,
+				);
+			}),
+		);
+
+		app.post("/api/v1/agent-applications", (context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const { value: body, rawRequestDigest } = await parseJson(
+					context.req.raw,
+					AgentApplicationCreateRequestV1Schema,
+					metadata.traceId,
+				);
+				const idempotencyKey = parseIdempotencyKey(
+					context.req.raw,
+					metadata.traceId,
+				);
+				let ids: Awaited<
+					ReturnType<ManagementRouteDependencies["allocateApplicationIds"]>
+				>;
+				try {
+					ids = await dependencies.allocateApplicationIds({
+						identity,
+						idempotencyKey,
+					});
+				} catch {
+					fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+				}
+				const prepared = await prepareApplicationInput(
+					dependencies,
+					body,
+					identity,
+					metadata,
+					ids,
+				);
+				await dependencies.foundation.submit(
+					{
+						schemaVersion: 2,
+						...ids,
+						idempotencyKey,
+						requestId: metadata.requestId,
+						traceId: metadata.traceId,
+						...applicationCommandFields(body, prepared, metadata.traceId),
+						secrets: prepared.secrets,
+						channels: [],
+					},
+					{ schemaVersion: 1, userId: identity.userId, rawRequestDigest },
+					prepared.attachment,
+				);
+				const application = await applicationOrUnavailable(
+					dependencies,
+					applicantScope(identity),
+					ids.applicationId,
+					metadata.traceId,
+				);
+				return context.json(
+					await projectApplication(
+						dependencies,
+						application,
+						identity,
+						metadata,
+					),
+					201,
+				);
+			}),
+		);
+
+		app.get("/api/v1/agent-applications", (context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const queryPage = pageInput(context.req.raw, metadata.traceId);
+				const page = await queryOrUnavailable(
+					() =>
+						dependencies.query.listApplications(
+							applicantScope(identity),
+							queryPage,
+						),
+					metadata.traceId,
+				);
+				return context.json({
+					items: await Promise.all(
+						page.items.map((item) =>
+							projectApplication(dependencies, item, identity, metadata),
+						),
+					),
+					nextCursor: page.nextAfterId,
+				});
+			}),
+		);
+
+		app.get("/api/v1/agent-applications/:applicationId", (context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const application = await applicationOrUnavailable(
+					dependencies,
+					applicantScope(identity),
+					context.req.param("applicationId"),
+					metadata.traceId,
+				);
+				return context.json(
+					await projectApplication(
+						dependencies,
+						application,
+						identity,
+						metadata,
+					),
+				);
+			}),
+		);
+
+		app.put("/api/v1/agent-applications/:applicationId", (context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const { value: body, rawRequestDigest } = await parseJson(
+					context.req.raw,
+					AgentApplicationUpdateRequestV1Schema,
+					metadata.traceId,
+				);
+				const idempotencyKey = parseIdempotencyKey(
+					context.req.raw,
 					metadata.traceId,
 				);
 				const applicationId = context.req.param("applicationId");
-				const scope = { kind: "administrator" as const };
+				const current = await applicationOrUnavailable(
+					dependencies,
+					applicantScope(identity),
+					applicationId,
+					metadata.traceId,
+				);
+				const prepared = await prepareApplicationInput(
+					dependencies,
+					body,
+					identity,
+					metadata,
+					{ applicationId, agentId: current.agentId },
+				);
+				await dependencies.revision.revise(
+					{
+						schemaVersion: 2,
+						idempotencyKey,
+						requestId: metadata.requestId,
+						traceId: metadata.traceId,
+						...applicationCommandFields(body, prepared, metadata.traceId),
+						...(body.secrets === undefined
+							? {}
+							: { secrets: prepared.secrets }),
+					},
+					{
+						schemaVersion: 1,
+						applicationId,
+						userId: identity.userId,
+						accountStatus: identity.accountStatus,
+						organizationIds: identity.organizationIds,
+						isAdministrator: identity.roles.includes("system_admin"),
+						rawRequestDigest,
+					},
+					prepared.attachment,
+				);
+				const application = await applicationOrUnavailable(
+					dependencies,
+					applicantScope(identity),
+					applicationId,
+					metadata.traceId,
+				);
+				return context.json(
+					await projectApplication(
+						dependencies,
+						application,
+						identity,
+						metadata,
+					),
+				);
+			}),
+		);
+
+		app.post("/api/v1/agent-applications/:applicationId/withdraw", (context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const applicationId = context.req.param("applicationId");
+				const scope = applicantScope(identity);
 				const current = await applicationOrUnavailable(
 					dependencies,
 					scope,
 					applicationId,
 					metadata.traceId,
 				);
-				const command =
-					body.decision === "approve"
-						? {
-								schemaVersion: 1 as const,
-								command: "approve_application" as const,
-								applicationId,
-								expectedRevision: current.management.revision,
-								idempotencyKey: parseIdempotencyKey(
-									context.req.raw,
-									metadata.traceId,
-								),
-								requestId: metadata.requestId,
-								traceId: metadata.traceId,
-							}
-						: {
-								schemaVersion: 1 as const,
-								command: "reject_application" as const,
-								applicationId,
-								expectedRevision: current.management.revision,
-								idempotencyKey: parseIdempotencyKey(
-									context.req.raw,
-									metadata.traceId,
-								),
-								requestId: metadata.requestId,
-								traceId: metadata.traceId,
-								reason: body.reason,
-							};
 				await requireManagementAccepted(
 					await dependencies.management.executeManagementCommand(
-						command,
+						{
+							schemaVersion: 1,
+							command: "withdraw_application",
+							applicationId,
+							expectedRevision: current.management.revision,
+							idempotencyKey: parseIdempotencyKey(
+								context.req.raw,
+								metadata.traceId,
+							),
+							requestId: metadata.requestId,
+							traceId: metadata.traceId,
+						},
 						actor(identity),
 					),
 					metadata.traceId,
@@ -1487,166 +1428,344 @@ export function registerManagementRoutes(
 					),
 				);
 			}),
-	);
+		);
 
-	app.get("/api/v1/agents", (context) =>
-		boundary(context, async (metadata) => {
-			const api = hasAuthorizationHeader(context.req.raw)
-				? await resolveApiIdentity(
-						dependencies.identity,
-						context.req.raw,
-						metadata.traceId,
-					)
-				: null;
-			const identity = api
-				? apiIdentityContext(api)
-				: await resolveIdentity(
-						dependencies.identity,
-						context.req.raw,
-						metadata.traceId,
-					);
-			const queryPage = pageInput(context.req.raw, metadata.traceId);
-			const scope = api
-				? ({
-						kind: "principal" as const,
-						principal: api.principal,
-						grantType: await apiIdentityOrUnavailable(
-							dependencies.apiIdentity,
-							metadata.traceId,
-						).resolveAgentQueryGrantType(
-							apiActor(api),
-							apiAccessAudit(
-								apiIdentityContext(api),
-								metadata,
-								"agents",
-								"missing_scope",
-								["agent:read"],
-							),
+		app.get("/api/v1/admin/agent-applications", (context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				requireAdministrator(identity, metadata.traceId);
+				const queryPage = pageInput(context.req.raw, metadata.traceId);
+				const page = await queryOrUnavailable(
+					() =>
+						dependencies.query.listApplications(
+							{ kind: "administrator" },
+							queryPage,
 						),
-					} satisfies AgentManagementAgentScopeV1)
-				: userScope(identity);
-			const page = await queryOrUnavailable(
-				() => dependencies.query.listAgents(scope, queryPage),
-				metadata.traceId,
-			);
-			return context.json({
-				items: await Promise.all(
-					page.items.map((item) =>
-						projectAgent(dependencies, item, identity, metadata),
+					metadata.traceId,
+				);
+				return context.json({
+					items: await Promise.all(
+						page.items.map((item) =>
+							projectApplication(dependencies, item, identity, metadata),
+						),
 					),
-				),
-				nextCursor: page.nextAfterId,
-			});
-		}),
-	);
+					nextCursor: page.nextAfterId,
+				});
+			}),
+		);
 
-	app.get("/api/v1/agents/:agentId", (context) =>
-		boundary(context, async (metadata) => {
-			const api = hasAuthorizationHeader(context.req.raw)
-				? await resolveApiIdentity(
-						dependencies.identity,
-						context.req.raw,
-						metadata.traceId,
-					)
-				: null;
-			const identity = api
-				? apiIdentityContext(api)
-				: await resolveIdentity(
+		app.post(
+			"/api/v1/admin/agent-applications/:applicationId/decision",
+			(context) =>
+				boundary(context, async (metadata) => {
+					const identity = await resolveIdentity(
 						dependencies.identity,
 						context.req.raw,
 						metadata.traceId,
 					);
-			const scope = api
-				? ({
-						kind: "principal" as const,
-						principal: api.principal,
-						grantType: await apiIdentityOrUnavailable(
-							dependencies.apiIdentity,
-							metadata.traceId,
-						).resolveAgentQueryGrantType(
-							apiActor(api),
-							apiAccessAudit(
-								apiIdentityContext(api),
-								metadata,
-								context.req.param("agentId"),
-								"missing_scope",
-								["agent:read"],
-							),
+					requireAdministrator(identity, metadata.traceId);
+					const { value: body } = await parseJson(
+						context.req.raw,
+						ApprovalDecisionRequestV1Schema,
+						metadata.traceId,
+					);
+					const applicationId = context.req.param("applicationId");
+					const scope = { kind: "administrator" as const };
+					const current = await applicationOrUnavailable(
+						dependencies,
+						scope,
+						applicationId,
+						metadata.traceId,
+					);
+					const command =
+						body.decision === "approve"
+							? {
+									schemaVersion: 1 as const,
+									command: "approve_application" as const,
+									applicationId,
+									expectedRevision: current.management.revision,
+									idempotencyKey: parseIdempotencyKey(
+										context.req.raw,
+										metadata.traceId,
+									),
+									requestId: metadata.requestId,
+									traceId: metadata.traceId,
+								}
+							: {
+									schemaVersion: 1 as const,
+									command: "reject_application" as const,
+									applicationId,
+									expectedRevision: current.management.revision,
+									idempotencyKey: parseIdempotencyKey(
+										context.req.raw,
+										metadata.traceId,
+									),
+									requestId: metadata.requestId,
+									traceId: metadata.traceId,
+									reason: body.reason,
+								};
+					await requireManagementAccepted(
+						await dependencies.management.executeManagementCommand(
+							command,
+							actor(identity),
 						),
-					} satisfies AgentManagementAgentScopeV1)
-				: userScope(identity);
-			const agent = await agentOrUnavailable(
-				dependencies,
-				scope,
-				context.req.param("agentId"),
-				metadata.traceId,
-				api
-					? async () =>
-							await apiIdentityOrUnavailable(
+						metadata.traceId,
+					);
+					const application = await applicationOrUnavailable(
+						dependencies,
+						scope,
+						applicationId,
+						metadata.traceId,
+					);
+					return context.json(
+						await projectApplication(
+							dependencies,
+							application,
+							identity,
+							metadata,
+						),
+					);
+				}),
+		);
+
+		app.get("/api/v1/agents", (context) =>
+			boundary(context, async (metadata) => {
+				const api = hasAuthorizationHeader(context.req.raw)
+					? await resolveApiIdentity(
+							dependencies.identity,
+							context.req.raw,
+							metadata.traceId,
+						)
+					: null;
+				const identity = api
+					? apiIdentityContext(api)
+					: await resolveIdentity(
+							dependencies.identity,
+							context.req.raw,
+							metadata.traceId,
+						);
+				const queryPage = pageInput(context.req.raw, metadata.traceId);
+				const scope = api
+					? ({
+							kind: "principal" as const,
+							principal: api.principal,
+							grantType: await apiIdentityOrUnavailable(
 								dependencies.apiIdentity,
 								metadata.traceId,
-							).recordAccessRejection(
+							).resolveAgentQueryGrantType(
+								apiActor(api),
+								apiAccessAudit(
+									apiIdentityContext(api),
+									metadata,
+									"agents",
+									"missing_scope",
+									["agent:read"],
+								),
+							),
+						} satisfies AgentManagementAgentScopeV1)
+					: userScope(identity);
+				const page = await queryOrUnavailable(
+					() => dependencies.query.listAgents(scope, queryPage),
+					metadata.traceId,
+				);
+				return context.json({
+					items: await Promise.all(
+						page.items.map((item) =>
+							projectAgent(dependencies, item, identity, metadata),
+						),
+					),
+					nextCursor: page.nextAfterId,
+				});
+			}),
+		);
+
+		app.get("/api/v1/agents/:agentId", (context) =>
+			boundary(context, async (metadata) => {
+				const api = hasAuthorizationHeader(context.req.raw)
+					? await resolveApiIdentity(
+							dependencies.identity,
+							context.req.raw,
+							metadata.traceId,
+						)
+					: null;
+				const identity = api
+					? apiIdentityContext(api)
+					: await resolveIdentity(
+							dependencies.identity,
+							context.req.raw,
+							metadata.traceId,
+						);
+				const scope = api
+					? ({
+							kind: "principal" as const,
+							principal: api.principal,
+							grantType: await apiIdentityOrUnavailable(
+								dependencies.apiIdentity,
+								metadata.traceId,
+							).resolveAgentQueryGrantType(
 								apiActor(api),
 								apiAccessAudit(
 									apiIdentityContext(api),
 									metadata,
 									context.req.param("agentId"),
-									"resource_unavailable",
+									"missing_scope",
+									["agent:read"],
 								),
-							)
-					: undefined,
-			);
-			return context.json(
-				await projectAgent(dependencies, agent, identity, metadata),
-			);
-		}),
-	);
+							),
+						} satisfies AgentManagementAgentScopeV1)
+					: userScope(identity);
+				const agent = await agentOrUnavailable(
+					dependencies,
+					scope,
+					context.req.param("agentId"),
+					metadata.traceId,
+					api
+						? async () =>
+								await apiIdentityOrUnavailable(
+									dependencies.apiIdentity,
+									metadata.traceId,
+								).recordAccessRejection(
+									apiActor(api),
+									apiAccessAudit(
+										apiIdentityContext(api),
+										metadata,
+										context.req.param("agentId"),
+										"resource_unavailable",
+									),
+								)
+						: undefined,
+				);
+				return context.json(
+					await projectAgent(dependencies, agent, identity, metadata),
+				);
+			}),
+		);
 
-	app.post("/api/v1/agents/:agentId/lifecycle", (context) =>
-		boundary(context, async (metadata) => {
-			const api = hasAuthorizationHeader(context.req.raw)
-				? await resolveApiIdentity(
-						dependencies.identity,
-						context.req.raw,
-						metadata.traceId,
-					)
-				: null;
-			const identity = api
-				? apiIdentityContext(api)
-				: await resolveIdentity(
-						dependencies.identity,
-						context.req.raw,
-						metadata.traceId,
-					);
-			const { value: body, rawRequestDigest } = await parseJson(
-				context.req.raw,
-				AgentLifecycleCommandRequestV1Schema,
-				metadata.traceId,
-			);
-			const agentId = context.req.param("agentId");
-			const idempotencyKey = parseIdempotencyKey(
-				context.req.raw,
-				metadata.traceId,
-			);
-			if (api) {
-				const management = apiIdentityOrUnavailable(
-					dependencies.apiIdentity,
+		app.post("/api/v1/agents/:agentId/lifecycle", (context) =>
+			boundary(context, async (metadata) => {
+				const api = hasAuthorizationHeader(context.req.raw)
+					? await resolveApiIdentity(
+							dependencies.identity,
+							context.req.raw,
+							metadata.traceId,
+						)
+					: null;
+				const identity = api
+					? apiIdentityContext(api)
+					: await resolveIdentity(
+							dependencies.identity,
+							context.req.raw,
+							metadata.traceId,
+						);
+				const { value: body, rawRequestDigest } = await parseJson(
+					context.req.raw,
+					AgentLifecycleCommandRequestV1Schema,
 					metadata.traceId,
 				);
-				await management.authorizeCredentialScope(
-					apiActor(api),
-					["agent:manage"],
-					apiAccessAudit(
-						apiIdentityContext(api),
-						metadata,
-						agentId,
-						"missing_scope",
-						["agent:manage"],
-					),
+				const agentId = context.req.param("agentId");
+				const idempotencyKey = parseIdempotencyKey(
+					context.req.raw,
+					metadata.traceId,
 				);
-			}
-			if (body.command === "upgrade_custom_image") {
 				if (api) {
+					const management = apiIdentityOrUnavailable(
+						dependencies.apiIdentity,
+						metadata.traceId,
+					);
+					await management.authorizeCredentialScope(
+						apiActor(api),
+						["agent:manage"],
+						apiAccessAudit(
+							apiIdentityContext(api),
+							metadata,
+							agentId,
+							"missing_scope",
+							["agent:manage"],
+						),
+					);
+				}
+				if (body.command === "upgrade_custom_image") {
+					if (api) {
+						const management = apiIdentityOrUnavailable(
+							dependencies.apiIdentity,
+							metadata.traceId,
+						);
+						await management.recordAccessRejection(
+							apiActor(api),
+							apiAccessAudit(
+								apiIdentityContext(api),
+								metadata,
+								agentId,
+								"operation_forbidden",
+							),
+						);
+						fail("FORBIDDEN", metadata.traceId);
+					}
+					await dependencies.configuration.upgradeCustomImage(
+						{
+							schemaVersion: 1,
+							agentId,
+							imageReference: body.imageReference,
+							idempotencyKey,
+							requestId: metadata.requestId,
+							traceId: metadata.traceId,
+						},
+						{
+							schemaVersion: 1,
+							actorId: identity.userId,
+							rawRequestDigest,
+						},
+					);
+					const projectionScope = identity.roles.includes("system_admin")
+						? ({ kind: "administrator" } as const)
+						: ownerScope(identity);
+					const agent = await agentOrUnavailable(
+						dependencies,
+						projectionScope,
+						agentId,
+						metadata.traceId,
+					);
+					return context.json(
+						await projectAgent(dependencies, agent, identity, metadata),
+						202,
+					);
+				}
+				const scope = api
+					? ({
+							kind: "principal" as const,
+							principal: api.principal,
+							grantType: "manage" as const,
+						} satisfies AgentManagementAgentScopeV1)
+					: identity.roles.includes("system_admin") &&
+							(body.command === "disable" || body.command === "retry_creation")
+						? ({ kind: "administrator" } as const)
+						: ownerScope(identity);
+				const current = await agentOrUnavailable(
+					dependencies,
+					scope,
+					agentId,
+					metadata.traceId,
+					api
+						? async () =>
+								await apiIdentityOrUnavailable(
+									dependencies.apiIdentity,
+									metadata.traceId,
+								).recordAccessRejection(
+									apiActor(api),
+									apiAccessAudit(
+										apiIdentityContext(api),
+										metadata,
+										agentId,
+										"resource_unavailable",
+									),
+								)
+						: undefined,
+				);
+				if (api && body.command === "disable") {
 					const management = apiIdentityOrUnavailable(
 						dependencies.apiIdentity,
 						metadata.traceId,
@@ -1662,27 +1781,62 @@ export function registerManagementRoutes(
 					);
 					fail("FORBIDDEN", metadata.traceId);
 				}
-				await dependencies.configuration.upgradeCustomImage(
-					{
-						schemaVersion: 1,
-						agentId,
-						imageReference: body.imageReference,
-						idempotencyKey,
-						requestId: metadata.requestId,
-						traceId: metadata.traceId,
-					},
-					{
-						schemaVersion: 1,
-						actorId: identity.userId,
-						rawRequestDigest,
-					},
+				if (
+					api &&
+					body.command === "start" &&
+					current.management.status !== "stopped"
+				)
+					fail("CONFLICT", metadata.traceId);
+				const commands = {
+					stop: "stop_agent",
+					restart: "restart_agent",
+					start: "restart_agent",
+					retry_creation: "retry_agent_creation",
+					disable: "disable_agent",
+				} as const;
+				await requireManagementAccepted(
+					await dependencies.management.executeManagementCommand(
+						{
+							schemaVersion: 1,
+							command: commands[body.command],
+							agentId,
+							expectedRevision: current.management.revision,
+							idempotencyKey,
+							requestId: metadata.requestId,
+							traceId: metadata.traceId,
+						},
+						actor(
+							identity,
+							api
+								? {
+										credentialId: api.credential.credentialId,
+										identityRevision: api.authorizationRevision,
+									}
+								: undefined,
+						),
+					),
+					metadata.traceId,
+					api
+						? async () => {
+								const management = apiIdentityOrUnavailable(
+									dependencies.apiIdentity,
+									metadata.traceId,
+								);
+								await management.recordAccessRejection(
+									apiActor(api),
+									apiAccessAudit(
+										apiIdentityContext(api),
+										metadata,
+										agentId,
+										"resource_unavailable",
+									),
+								);
+							}
+						: undefined,
 				);
-				const projectionScope = identity.roles.includes("system_admin")
-					? ({ kind: "administrator" } as const)
-					: ownerScope(identity);
 				const agent = await agentOrUnavailable(
 					dependencies,
-					projectionScope,
+					scope,
 					agentId,
 					metadata.traceId,
 				);
@@ -1690,117 +1844,7 @@ export function registerManagementRoutes(
 					await projectAgent(dependencies, agent, identity, metadata),
 					202,
 				);
-			}
-			const scope = api
-				? ({
-						kind: "principal" as const,
-						principal: api.principal,
-						grantType: "manage" as const,
-					} satisfies AgentManagementAgentScopeV1)
-				: identity.roles.includes("system_admin") &&
-						(body.command === "disable" || body.command === "retry_creation")
-					? ({ kind: "administrator" } as const)
-					: ownerScope(identity);
-			const current = await agentOrUnavailable(
-				dependencies,
-				scope,
-				agentId,
-				metadata.traceId,
-				api
-					? async () =>
-							await apiIdentityOrUnavailable(
-								dependencies.apiIdentity,
-								metadata.traceId,
-							).recordAccessRejection(
-								apiActor(api),
-								apiAccessAudit(
-									apiIdentityContext(api),
-									metadata,
-									agentId,
-									"resource_unavailable",
-								),
-							)
-					: undefined,
-			);
-			if (api && body.command === "disable") {
-				const management = apiIdentityOrUnavailable(
-					dependencies.apiIdentity,
-					metadata.traceId,
-				);
-				await management.recordAccessRejection(
-					apiActor(api),
-					apiAccessAudit(
-						apiIdentityContext(api),
-						metadata,
-						agentId,
-						"operation_forbidden",
-					),
-				);
-				fail("FORBIDDEN", metadata.traceId);
-			}
-			if (
-				api &&
-				body.command === "start" &&
-				current.management.status !== "stopped"
-			)
-				fail("CONFLICT", metadata.traceId);
-			const commands = {
-				stop: "stop_agent",
-				restart: "restart_agent",
-				start: "restart_agent",
-				retry_creation: "retry_agent_creation",
-				disable: "disable_agent",
-			} as const;
-			await requireManagementAccepted(
-				await dependencies.management.executeManagementCommand(
-					{
-						schemaVersion: 1,
-						command: commands[body.command],
-						agentId,
-						expectedRevision: current.management.revision,
-						idempotencyKey,
-						requestId: metadata.requestId,
-						traceId: metadata.traceId,
-					},
-					actor(
-						identity,
-						api
-							? {
-									credentialId: api.credential.credentialId,
-									identityRevision: api.authorizationRevision,
-								}
-							: undefined,
-					),
-				),
-				metadata.traceId,
-				api
-					? async () => {
-							const management = apiIdentityOrUnavailable(
-								dependencies.apiIdentity,
-								metadata.traceId,
-							);
-							await management.recordAccessRejection(
-								apiActor(api),
-								apiAccessAudit(
-									apiIdentityContext(api),
-									metadata,
-									agentId,
-									"resource_unavailable",
-								),
-							);
-						}
-					: undefined,
-			);
-			const agent = await agentOrUnavailable(
-				dependencies,
-				scope,
-				agentId,
-				metadata.traceId,
-			);
-			return context.json(
-				await projectAgent(dependencies, agent, identity, metadata),
-				202,
-			);
-		}),
-	);
+			}),
+		);
+	}
 }
