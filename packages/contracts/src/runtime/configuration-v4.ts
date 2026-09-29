@@ -5,6 +5,8 @@ import { RuntimeModelProtocolV1Schema } from "./configuration.ts";
 const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 const reasoning = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/);
 const loopbackHttp = /^http:\/\/(?:127\.0\.0\.1|\[::1\])(?::[0-9]+)?(?:\/|$)/;
+const dnsHostname =
+	/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/;
 const endpoint = z
 	.string()
 	.min(1)
@@ -19,6 +21,7 @@ const endpoint = z
 			const hostname = url.hostname.toLowerCase().replace(/\.+$/, "");
 			const httpsAuthorityAllowed =
 				url.protocol === "https:" &&
+				dnsHostname.test(hostname) &&
 				!/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(hostname) &&
 				!hostname.startsWith("[") &&
 				hostname !== "localhost" &&
