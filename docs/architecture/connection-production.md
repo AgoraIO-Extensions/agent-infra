@@ -140,6 +140,8 @@ Attempt、Effect receipt、完整审计或恢复证据，数据保留门禁不�
 
 ### 发布步骤
 
+GZ3 pilot 的首次 GitHub OAuth 直连回退依照[区域出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md#gz3-pilotgithub-oauth-出口回退)发布，不再要求单独的 Security/SRE NetworkPolicy 签收。当前网络层出口范围未核实，应用白名单不能证明隔离；部署就绪后仍须由申请人重新发起真实 GitHub OAuth，确认回调和连接状态，未验证时不得宣称该功能已验收。
+
 创建 PR 前先运行：
 
 ```bash
