@@ -137,6 +137,30 @@ describe("Platform API PostgreSQL browser deployment", () => {
 				const address = server.address();
 				if (!address || typeof address === "string")
 					throw new Error("Platform API did not bind a TCP port");
+				const probeStatus = (token: string) =>
+					new Promise<number | undefined>((resolve, reject) => {
+						const request = httpRequest(
+							{
+								hostname: "127.0.0.1",
+								port: address.port,
+								path: "/auth/login",
+								method: "HEAD",
+								headers: {
+									host: "localhost:3001",
+									"x-forwarded-proto": "https",
+									"x-platform-proxy-token": token,
+								},
+							},
+							(response) => {
+								response.resume();
+								response.on("end", () => resolve(response.statusCode));
+							},
+						);
+						request.on("error", reject);
+						request.end();
+					});
+				expect(await probeStatus(trustedProxyToken)).toBe(405);
+				expect(await probeStatus("wrong-token")).toBe(400);
 				const login = await new Promise<{
 					status: number | undefined;
 					setCookie: string | undefined;
