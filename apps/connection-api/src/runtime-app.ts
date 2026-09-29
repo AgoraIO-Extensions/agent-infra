@@ -22,6 +22,7 @@ import {
 import {
 	BitbucketServerAdapter,
 	bitbucketServerConnectionCatalog,
+	bitbucketServerLegacyProviderReleaseIds,
 	githubConnectionCatalog,
 	JenkinsAdapter,
 	jenkinsCiConnectionCatalog,
@@ -258,6 +259,9 @@ export async function createConnectionRuntime(
 	);
 	const executors = new ProviderExecutorRouter({
 		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
+		...Object.fromEntries(
+			bitbucketServerLegacyProviderReleaseIds.map((id) => [id, bitbucket]),
+		),
 		[githubConnectionCatalog.providerReleaseId]: github,
 		[jiraServerConnectionCatalog.providerReleaseId]: jira,
 		[confluenceServerConnectionCatalog.providerReleaseId]: confluence,

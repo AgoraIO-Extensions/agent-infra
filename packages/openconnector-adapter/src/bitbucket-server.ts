@@ -11,10 +11,14 @@ import { bitbucketServerExecutorDigest } from "./bitbucket-server-integrity.ts";
 const sourceCommit = "0618e8cdaeaaaa77e2eb23938ac639867d4f03d7";
 const providerId = "bitbucket";
 const apiOrigin = "https://bitbucket-api.agoralab.co";
-const providerReleaseId = `bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v6`;
+const providerReleaseId = `bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v7`;
 const credentialScope = "bitbucket.server.pat";
 const maxResponseBytes = 5 * 1024 * 1024;
 const requestTimeoutMs = 8_000;
+
+export const bitbucketServerLegacyProviderReleaseIds = [
+	`bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v6`,
+] as const;
 
 type JsonObject = Record<string, unknown>;
 type ActionEffect = "READ" | "WRITE";
@@ -325,7 +329,7 @@ export const bitbucketServerConnectionCatalog = {
 	actions: actionSpecs.map((action) => ({
 		description: action.description,
 		effect: action.effect,
-		id: `${providerId}.${action.name}@v6`,
+		id: `${providerId}.${action.name}@v7`,
 		inputSchema: {
 			additionalProperties: false,
 			properties: action.properties ?? {},
@@ -1153,8 +1157,9 @@ async function request(
 			throw invalidCredential("Bitbucket PAT was rejected");
 		}
 		if (!response.ok) {
-			throw providerError(
-				`Bitbucket Server request failed (${response.status})`,
+			throw Object.assign(
+				providerError(`Bitbucket Server request failed (${response.status})`),
+				{ providerStatus: response.status },
 			);
 		}
 		return response;
