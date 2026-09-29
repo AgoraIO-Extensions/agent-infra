@@ -402,7 +402,8 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   Analysis 开启大 diff 分块，最多 3 次 chunk 调用。局部结果
   合并不等于完整覆盖或完整跨文件推理。当前 Coverage Gate
   仍按单次 diff 的可信 token decision 判定；即使后续分块成功，已有裁剪证据仍失败，直到
-  单独批准并实现可信的分块覆盖证据契约。本配置不构成 coverage waiver。
+  [§7.3.1](#731-pr-agent-有界分块覆盖目标契约) 的分块证据通过批准、实现与启用验证。
+  本配置不构成 coverage waiver。
 - Claude 的结构化输出和可信 Publisher 校验只属于 Claude Adapter 的内部安全机制，不构成
   Automated Reviewer 的统一输出契约。
 - 只有选中 Claude 时，其 P0/P1 finding 才能进入现有无人值守 code-repair；PR-Agent finding
@@ -412,6 +413,95 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   CODEOWNERS Team 中非 Bot 成员对当前 head 的基础设施失败确认，不能覆盖未解决 Review thread、
   CI failure 或其他 Gate；新 commit 使其失效。
 - Automated Reviewer 不 Approve、不 Merge、不修改 branch/label，也不解决自己的线程。
+
+#### 7.3.1 PR-Agent 有界分块覆盖目标契约
+
+本节定义后续实现的批准依据。须先由 CODEOWNER 批准并合并本文变更，再通过独立关联 Issue/PR
+实现，最后使用合入后的默认分支完成 hosted 验证，才可启用分块判据。在此之前，保留上述
+single-diff Gate；已有 pruning 仍失败，不能用本节、旧 run 或路径并集提前放行。
+
+`complete` 只证明当前 head 的全部可评审变更进入有效模型请求、各块得到有效响应且结果成功
+发布。分块模式仍存在跨块关联遗漏风险；批准本契约接受该输入覆盖边界，跨文件正确性继续由
+确定性测试、独立评审和 CODEOWNER 判断。不得宣称它证明 full-context 推理，也不增加一轮
+只读局部摘要的模型调用冒充完整 diff 审阅。最多 3 个逻辑 chunk，沿用现有 token cap。
+
+##### 权威 diff 与输入核对
+
+- 可信 Analysis 从 GitHub 回读 repository ID/name、PR、base SHA 和 head SHA；获取对应 Git
+  objects，在不 checkout、执行 PR 代码、不加载其配置/attributes/external diff 的隔离目录中，
+  计算唯一 merge-base。用固定 Git 选项生成 `merge-base..head` 的完整文件清单及文本变更；
+  API patch 缺省、分页截断或 merge-base 获取失败不能视为零变更或退回 base。
+- 每个文件记录 old/new path、状态、mode、blob ID；每个变更 hunk 记录 old/new range，并对按
+  原顺序排列的新增/删除行的 side、行号和内容求 SHA-256；逐行数据只用于内存核对。以固定
+  字段顺序 JSON/UTF-8 编码后的摘要作为 file/hunk ID；不忽略空白、重复行或末尾换行变化。
+  上下文扩展及新旧 hunk 分栏可以
+  改变呈现，但须确定性还原同一组带位置的变更；有歧义、缺字节或缺行即失败。
+- 核对最终发给模型的 diff 区段；模板示例、PR 正文、文件名列表和模型自述不计入覆盖。
+  所有权威文件及其 hunk 必须在至少一个成功 chunk 中完整匹配，不能以另一块的重复内容补齐
+  缺项。rename 必须包含旧/新路径和内容变更；删除文件、纯删除 hunk 同样必须覆盖。
+  无文本 hunk 的纯 rename/mode 变化须匹配实际输入中的完整变更元数据。二进制、submodule、
+  不支持的编码或不能可靠还原的输入返回不完整，不得从权威清单移除后声称完整。
+- 固定镜像的 `get_pr_multi_diffs`、`handle_patch_deletions` 与 `_prepare_chunked_prediction`
+  分别可能过滤/省略 patch、移除删除 hunk、保留部分成功响应；上游 `remaining_files` 和
+  汇总成功都不是覆盖权威。实现必须对这些真实分支做负向验证；没有完整输入就保持失败，
+  不为生成文件、测试、大文件或删除专门豁免。
+
+##### 最小实施接口与证据
+
+在现有 Analysis job 内增加默认分支受信 TypeScript 采集步骤：以现有官方镜像和固定模板为
+唯一输入格式，在配置的模型 HTTP 请求边界运行仅本 job 可访问的 recorder，经现有 API base
+接收最终请求并原样转发至部署批准的上游。它只服务这一次 Analysis，不增加常驻服务、通用
+协议或 Python 镜像补丁。请求/响应解析只支持本仓当前部署的传输格式；未知格式失败关闭。
+
+recorder 在内存中解析实际请求的 diff 区段并与权威清单比对，对原样转发的输入和完整响应
+计算摘要；上游成功响应且结束状态完整、官方 review Schema 有效后，才登记该 chunk 成功。
+调用前的计划或“开始请求”不能证明送达。固定输入的有限重试归于同一 chunk，记录实际调用
+及最终响应；不能用重复请求替代缺块，也不能借重试扩大 3 个逻辑 chunk 或现有重试预算。
+上游 image、模板、采集器和传输格式的对应关系须固定并验证；不匹配时停止接受证据。
+
+同一次 Analysis 只产出一份最多 256 KiB UTF-8、版本固定的 metadata JSON，最小内容为：
+
+| 证据 | 必需内容 |
+| --- | --- |
+| 运行身份 | repository ID/name、PR、base/head/merge-base SHA、workflow/run ID、run attempt、Analysis job ID、provider、image digest、受信采集代码/模板版本及生效 token cap |
+| 权威清单 | 文件元数据及 file/hunk ID、range、变更行数与内容摘要、整个清单摘要；不持久化源码 |
+| 实际 chunks | 唯一 chunk ID、请求摘要、匹配的 file/hunk ID、实际调用/完成状态、响应摘要与解析结果；汇总覆盖缺项 |
+| 输出关联 | 同一 Analysis 的官方结构化合并输出摘要、全部成功 chunk 的响应摘要集合；失败块不得被汇总成功掩盖 |
+
+采集器对照固定镜像的合并语义核验官方合并输出与有效响应的对应关系，再沿用现有可信
+Publisher 的 Schema 校验与原生 Review receipt。Publisher 与 Gate 均回读当前 PR base/head，
+任一变化必须重跑；Publisher 校验待发布
+输出摘要；receipt 绑定同一 repo/PR/head/run/attempt、输出摘要和 coverage metadata 摘要。
+Coverage job 从同 run/attempt 的受信 Analysis 获取 metadata，重新计算权威 diff 并核对清单、
+chunk 结果及 receipt；回读 Review/comments 的作者、commit、数量和内容摘要后才可返回
+`complete`。不能接受 PR 文件、模型响应或其他 run 自报的 coverage JSON。
+
+metadata 使用已有受信 job 间的有界输出传递；缺失、截断、无法解析、大小超限、摘要不匹配或
+来源无法验证均失败，不另开 artifact/编码通道绕过 runner 防泄漏。Analysis 仍只有只读 GitHub
+权限，recorder 不持有 GitHub 写 Token。请求、响应、源码和凭证仅在必要的隔离内存/临时输入
+中处理，关闭上游 prompt/response debug 日志；持久证据、Check、Summary 与通知只保留元数据
+和摘要，不包含普通用户正文或 Secret。
+
+##### 失败结果与启用验证
+
+沿用现有稳定 reason：缺文件/hunk、过滤/裁剪、超过 3 块、单文件放不进 cap 或不支持的输入
+使用 `review-coverage-incomplete`；缺输出使用 `review-output-missing`；无效格式、wrong attempt、
+来源/摘要/receipt 不匹配使用 `review-output-invalid`；provider mismatch、旧 head、运行失败或
+取消继续走现有对应拒绝路径。任何缺块有效响应或无有效 publication 都不能成功。
+初次单 diff pruning 只有在新契约已启用、最终所有 chunk 证据通过时才可由完整证据取代；
+保留 pruning 事实，不隐藏日志、不只修改 parser，也不回退到宽松 single-diff 判断。
+
+实施验收必须包含：原 single-diff 回归；超过单块 cap 的 2/3 块完整正例；保持路径数相等的
+缺 hunk、重复块替代、删除/纯删除、rename/mode、二进制、ignore/超大 patch、空/无效响应、
+部分失败、超额 chunk、stale head/base、wrong repo/PR/attempt/provider/image、输出或 receipt
+篡改、源码伪造模板/路径标记、缺发布与 runner 输出丢失负例。格式转换 fixture 须来自固定
+镜像的实际请求格式；
+仅有历史路径并集不得标记 hunk 验收通过。
+
+启用 PR 必须给出默认分支受信 workflow 对同仓 current-head 测试 PR 的 hosted 正/负回执，
+证明缺项仍阻塞 required Gate，并核对 Review publication 和分支保护来源；实现 PR 自身的
+fixture/CI 不能替代该证据。先合入采集与 shadow 验证，完成 hosted 门槛后再以独立变更启用
+分块判据；此前所有旧 Gate 拒绝结果保持有效。
 
 ### 7.4 人工验证
 
