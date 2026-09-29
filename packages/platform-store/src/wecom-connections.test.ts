@@ -198,6 +198,35 @@ it("keeps an active binding connected while replacement credentials are verifyin
 		await setup.failReplacementProbe(second, "auth_failed");
 		expect((await setup.read("replacement"))?.status).toBe("auth_failed");
 		expect(await leases.current(active)).toBe(true);
+		await sql`update platform.wecom_connections set lease_until=now()-interval '1 second' where bot_id='bot'`;
+		await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id) values ('replacement-offline','agent','owner',1,'revision',${"d".repeat(64)},now()+interval '5 minutes','verifying','bot')`;
+		const offline = await setup.read("replacement-offline");
+		if (!offline) throw new Error("Missing offline replacement session");
+		const attemptedClaim = {
+			agentId: "agent",
+			bindingReference: "replacement-offline",
+			botId: "bot",
+			holderId: "offline-worker",
+		};
+		expect(await leases.claim(attemptedClaim)).toBeNull();
+		const [unchanged] = await sql<
+			{ binding_reference: string; fence: string }[]
+		>`select binding_reference,fence from platform.wecom_connections where bot_id='bot'`;
+		expect(unchanged).toEqual({
+			binding_reference: "active",
+			fence: String(active.fence),
+		});
+		const expiredProbe = await setup.claimReplacementProbe(
+			offline,
+			"expired-probe",
+		);
+		if (!expiredProbe) throw new Error("Missing expired-lease probe");
+		await setup.releaseReplacementProbe(expiredProbe);
+		await sql`update platform.wecom_connections set status='disconnected' where bot_id='bot'`;
+		expect(await leases.claim(attemptedClaim)).toBeNull();
+		expect(
+			await setup.claimReplacementProbe(offline, "disconnected-probe"),
+		).not.toBeNull();
 	} finally {
 		await setup.close();
 		await leases.close();

@@ -215,7 +215,7 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
     where s.session_id=${session.sessionId} and s.agent_id=${session.agentId} and s.bot_id=${session.botId} and s.kind='wecom_bot' and s.status='verifying' and s.expires_at>clock_timestamp()
     and a.id=s.agent_id and a.current_configuration_revision=s.configuration_revision and a.authorization_revision=s.authorization_revision
     and c.agent_id=a.id and c.revision=a.current_configuration_revision
-    and w.bot_id=s.bot_id and w.agent_id=a.id and w.binding_reference<>s.session_id and w.status='connected' and w.lease_until>clock_timestamp()
+    and w.bot_id=s.bot_id and w.agent_id=a.id and w.binding_reference<>s.session_id
     and active.session_id=w.binding_reference and active.agent_id=a.id and active.bot_id=s.bot_id and active.kind='wecom_bot' and active.status='active'
     and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference',w.binding_reference))
     and not exists(select 1 from jsonb_array_elements(c.configuration->'channels') channel where channel->>'kind'='wecom_bot' and channel->>'bindingReference'=w.binding_reference and channel->>'enabled'='false')
