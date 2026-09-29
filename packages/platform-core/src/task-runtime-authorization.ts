@@ -198,14 +198,21 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 		)
 			denied("TASK_AUTHORIZATION_BINDING_INVALID");
 		if (boundary.principal.kind === "application") {
-			let application: CurrentTaskApplicationV1;
-			try {
-				application = parseCurrentTaskApplicationV1(record.application);
-			} catch {
-				denied("TASK_AUTHORIZATION_PROVENANCE_UNAVAILABLE");
-			}
-			if (application.applicationId !== boundary.principal.id)
+			// A Web claim is bound to a user even when an application reuses its ID.
+			if (boundary.channelId === "web")
 				denied("TASK_AUTHORIZATION_BINDING_INVALID");
+			// Missing current facts are handled by current() so an already-running
+			// task can persist system control rather than losing its recovery path.
+			if (record.application != null) {
+				let application: CurrentTaskApplicationV1;
+				try {
+					application = parseCurrentTaskApplicationV1(record.application);
+				} catch {
+					denied("TASK_AUTHORIZATION_PROVENANCE_UNAVAILABLE");
+				}
+				if (application.applicationId !== boundary.principal.id)
+					denied("TASK_AUTHORIZATION_BINDING_INVALID");
+			}
 		}
 		return { ...record, boundary };
 	}

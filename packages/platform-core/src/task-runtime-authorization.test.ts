@@ -157,22 +157,24 @@ function harness() {
 const signal = () => new AbortController().signal;
 
 describe("task Runtime authorization Core use case", () => {
-	it("denies an application boundary without matching current application provenance", async () => {
+	it("rejects an application impersonating a Web user or mismatching current application facts", async () => {
 		const h = harness();
-		const boundary: TaskAuthorizationBoundaryV1 = {
+		const webBoundary: TaskAuthorizationBoundaryV1 = {
 			...h.boundary,
 			principal: { kind: "application", id: h.claim.actorId },
 			identityRevision: "application-7",
 			accessSources: [{ kind: "application", applicationId: h.claim.actorId }],
 		};
 		if (!h.record) throw new Error("Missing test record");
-		h.setRecord({ ...h.record, boundary });
+		h.setRecord({ ...h.record, boundary: webBoundary });
 		expect(await h.useCase.authorizeClaim(h.claim, signal())).toEqual({
 			outcome: "denied",
 		});
+		const apiBoundary = { ...webBoundary, channelId: "api" };
+		const apiClaim = { ...h.claim, channelId: "api" };
 		h.setRecord({
 			...h.record,
-			boundary,
+			boundary: apiBoundary,
 			application: {
 				schemaVersion: 1,
 				applicationId: "other-application",
@@ -180,10 +182,30 @@ describe("task Runtime authorization Core use case", () => {
 				authorizationRevision: "application-7",
 			},
 		});
-		expect(await h.useCase.authorizeClaim(h.claim, signal())).toEqual({
+		expect(await h.useCase.authorizeClaim(apiClaim, signal())).toEqual({
 			outcome: "denied",
 		});
 		expect(h.ports.recordControl).not.toHaveBeenCalled();
+	});
+	it("retains system control for a running application task without current facts", async () => {
+		const h = harness();
+		const claim = { ...h.claim, channelId: "api" };
+		const boundary: TaskAuthorizationBoundaryV1 = {
+			...h.boundary,
+			channelId: "api",
+			principal: { kind: "application", id: claim.actorId },
+			identityRevision: "application-7",
+			accessSources: [{ kind: "application", applicationId: claim.actorId }],
+		};
+		if (!h.record) throw new Error("Missing test record");
+		h.setRecord({ ...h.record, boundary, application: null });
+		expect(await h.useCase.authorizeClaim(claim, signal())).toMatchObject({
+			outcome: "allowed",
+		});
+		expect(h.ports.recordControl).toHaveBeenCalledWith(
+			expect.objectContaining({ reason: "authorization_revoked" }),
+			expect.any(AbortSignal),
+		);
 	});
 	it("rechecks an application against current identity and use grant without a user lookup", async () => {
 		const h = harness();
@@ -196,6 +218,7 @@ describe("task Runtime authorization Core use case", () => {
 		};
 		const boundary: TaskAuthorizationBoundaryV1 = {
 			...h.boundary,
+			channelId: "api",
 			principal,
 			identityRevision: application.authorizationRevision,
 			accessSources: [{ kind: "application", applicationId: principal.id }],
@@ -214,7 +237,7 @@ describe("task Runtime authorization Core use case", () => {
 		if (!original) throw new Error("Missing test record");
 		const context: TaskRuntimeAuthorizationContextV1 = {
 			...h.context,
-			claim: { ...h.claim, actorId: principal.id },
+			claim: { ...h.claim, actorId: principal.id, channelId: "api" },
 			principal,
 		};
 		h.setRecord({
