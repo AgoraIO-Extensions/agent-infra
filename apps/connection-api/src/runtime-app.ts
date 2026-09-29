@@ -3,6 +3,7 @@ import {
 	ConnectionApplicationService,
 	ConnectionOAuthService,
 	ConnectionRecoveryService,
+	type GitHubOAuthProvider,
 	observeProviderFetch,
 	ProviderExecutorRouter,
 	portablePatConsumerId,
@@ -160,7 +161,29 @@ export async function createConnectionRuntime(
 					),
 				)
 			: githubPrimaryFetch;
+	const selectGithubOAuthFetcher = config.githubEgressProxyUrl
+		? createGithubOAuthFetcherSelector(
+				githubPrimaryFetch,
+				createGithubOAuthDirectFetch(),
+				() =>
+					console.info(
+						JSON.stringify({
+							event: "github_oauth_egress_selected",
+							reason: "proxy_preflight_transport_failure",
+							route: "direct",
+						}),
+					),
+			)
+		: undefined;
 	const github = new OpenConnectorGitHubAdapter(githubFetch);
+	const githubOAuth = selectGithubOAuthFetcher
+		? createPreSubmitGithubOAuthAdapter(config.github, githubFetch, () =>
+				selectGithubOAuthFetcher(config.github.tokenUrl ?? githubOAuthTokenUrl),
+			)
+		: new OpenConnectorGitHubOAuthAdapter({
+				...config.github,
+				fetcher: githubFetch,
+			});
 	const bitbucketFetch = createGuardedFetch({
 		fetch: observeProviderFetch("bitbucket", fetch),
 		allowPrivateNetwork: false,
@@ -253,10 +276,7 @@ export async function createConnectionRuntime(
 	const service = new ConnectionApplicationService(
 		repository,
 		executors,
-		new OpenConnectorGitHubOAuthAdapter({
-			...config.github,
-			fetcher: githubFetch,
-		}),
+		githubOAuth,
 		{
 			bitbucket,
 			confluence,
@@ -341,6 +361,90 @@ export function createReadFallbackFetch(
 			if (method !== "GET" && method !== "HEAD") throw error;
 			return fallback(input, init);
 		}
+	};
+}
+
+const githubOAuthTokenUrl = "https://github.com/login/oauth/access_token";
+const githubOAuthProfileUrl = "https://api.github.com/user";
+const proxyPreflightTransportErrors = new Set([
+	"ECONNRESET",
+	"ECONNREFUSED",
+	"ETIMEDOUT",
+	"EHOSTUNREACH",
+	"ENETUNREACH",
+	"UND_ERR_CONNECT_TIMEOUT",
+	"UND_ERR_SOCKET",
+]);
+
+export function createPreSubmitGithubOAuthAdapter(
+	options: ConstructorParameters<typeof OpenConnectorGitHubOAuthAdapter>[0],
+	primary: typeof fetch,
+	selectExchangeFetcher: () => Promise<typeof fetch>,
+): GitHubOAuthProvider {
+	const defaultAdapter = new OpenConnectorGitHubOAuthAdapter({
+		...options,
+		fetcher: primary,
+	});
+	return {
+		getAuthorizationUrl: (input) => defaultAdapter.getAuthorizationUrl(input),
+		exchangeCode: async (input) =>
+			new OpenConnectorGitHubOAuthAdapter({
+				...options,
+				fetcher: await selectExchangeFetcher(),
+			}).exchangeCode(input),
+		refresh: (token) => defaultAdapter.refresh(token),
+	};
+}
+
+export function createGithubOAuthFetcherSelector(
+	primary: typeof fetch,
+	direct: typeof fetch,
+	onDirect: () => void = () => undefined,
+) {
+	return async (tokenUrl: string): Promise<typeof fetch> => {
+		if (tokenUrl !== githubOAuthTokenUrl) return primary;
+		let response: Response;
+		try {
+			response = await primary(tokenUrl, {
+				method: "HEAD",
+				redirect: "manual",
+				signal: AbortSignal.timeout(5_000),
+			});
+		} catch (error) {
+			const code = (error as { cause?: { code?: unknown } })?.cause?.code;
+			if (
+				!(error instanceof Error && error.name === "TimeoutError") &&
+				!(typeof code === "string" && proxyPreflightTransportErrors.has(code))
+			)
+				throw error;
+			onDirect();
+			return direct;
+		}
+		void response.body?.cancel().catch(() => undefined);
+		return primary;
+	};
+}
+
+export function createGithubOAuthDirectFetch(
+	transport: typeof fetch = createGuardedFetch({ maxRedirects: 0 }),
+): typeof fetch {
+	return async (input, init) => {
+		const request = input instanceof Request ? input : undefined;
+		const url = request?.url ?? String(input);
+		const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
+		if (
+			!(
+				(url === githubOAuthTokenUrl && method === "POST") ||
+				(url === githubOAuthProfileUrl && method === "GET")
+			)
+		)
+			throw new Error("GitHub OAuth direct target is not allowed");
+		const response = await transport(input, { ...init, redirect: "manual" });
+		if (response.status >= 300 && response.status < 400) {
+			await response.body?.cancel();
+			throw new Error("GitHub OAuth direct redirect is not allowed");
+		}
+		return response;
 	};
 }
 
