@@ -7,7 +7,7 @@ services:
     ports: !override
       - "127.0.0.1:${PLATFORM_LOCAL_WEB_PORT:-3001}:8443"
     volumes:
-      - ./deploy/local/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${PLATFORM_LOCAL_NGINX_CONFIG:?Render the local nginx configuration first}:/etc/nginx/conf.d/default.conf:ro
       - ${PLATFORM_WEB_TLS_CERT_FILE:?Set the local TLS certificate file}:/var/run/platform-web/tls.crt:ro
       - ${PLATFORM_WEB_TLS_KEY_FILE:?Set the local TLS key file}:/var/run/platform-web/tls.key:ro
     depends_on:
@@ -24,6 +24,8 @@ services:
       PLATFORM_API_DEPLOYMENT_MODULE: file:///app/deployment/platform-api.mjs
     volumes:
       - ${PLATFORM_LOCAL_API_DIRECTORY:?Set the API-only deployment directory}:/app/deployment:ro
+    secrets:
+      - platform_proxy_token
     depends_on:
       postgres:
         condition: service_healthy
@@ -35,3 +37,7 @@ services:
       - "127.0.0.1:${PLATFORM_LOCAL_OBJECT_STORAGE_CONSOLE_PORT:-9001}:9001"
     healthcheck:
       test: ["CMD-SHELL", "MC_HOST_local=\"http://$${MINIO_ROOT_USER}:$${MINIO_ROOT_PASSWORD}@127.0.0.1:9000\" mc ready --quiet local >/dev/null"]
+
+secrets:
+  platform_proxy_token:
+    file: ${PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE:?Render the local proxy token first}

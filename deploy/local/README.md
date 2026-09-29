@@ -26,9 +26,18 @@ API 专属目录至少包含 `platform-api.mjs`。该模块导出
 会话表。API 只将 `/auth/login` 和 `/auth/logout` 交给此处理器；处理器失败返回
 无正文 503。先执行 Platform 增量迁移；跨 API 副本的到期和撤销由 PostgreSQL
 Store 执行，测试用内存 Store 不能作为正式部署配置。该工厂还要求高熵
-`trustedProxyToken`，必须只在 TLS 代理和 API 专属配置中提供；代理覆盖客户端提交的
-`X-Platform-Proxy-Token`，API 才接受代理转发的 HTTP 登录请求。现有本地 nginx
-配置尚未注入该令牌，真实浏览器登录需先完成代理与 API 双端私有配置验收。
+`trustedProxyToken`，必须只在 TLS 代理和 API 专属配置中提供。将 32–96 字节随机值
+编码为 Base64URL，保存在用户持有、权限为 `0600` 的
+`PLATFORM_LOCAL_PROXY_TOKEN_FILE`；其他用户可读或符号链接文件在启动前被拒绝。
+`migrate` 与 `up` 在当前 project 的 `0700` 私有状态目录生成 nginx 配置和 API 专用的只读运行副本，
+供容器中的非 root API 通过 Compose Secret `/run/secrets/platform_proxy_token` 读取；
+API 模块将该值传给工厂。代理固定覆盖客户端提交的 `X-Platform-Proxy-Token`；正常
+`stop` 删除两个生成文件，即使源令牌变量已移除也可继续清理。默认状态目录为
+`${XDG_STATE_HOME:-$HOME/.local/state}/agent-infra/local`，
+可通过 `PLATFORM_LOCAL_STATE_DIRECTORY` 指定绝对路径。配置和令牌不进入镜像、源码或
+Compose 环境变量。选定 Docker context 必须能读取 API 配置、TLS 和生成状态目录；
+源令牌只由本地主机上的启动脚本读取。
+真实浏览器登录仍需当前 LDAP 与账号事实验收。
 
 | 输入 | 来源和要求 |
 | --- | --- |
@@ -95,7 +104,8 @@ Kubernetes 对象及预先由其他流程连接的链路均被拒绝。Helm 卸�
 链路，须先核对该测试容器的网络归属，再人工处理孤立连接。
 脚本会固定关闭 Helm migration、目录服务及拓扑占位进程；升级前关闭已有 Web/API，
 启动数据服务并等待 Worker Deployment 就绪，再开放 Compose 中的 Web/API。Worker
-启动失败时 Web/API 保持关闭。
+启动失败时 Web/API 保持关闭。每次 `up` 都重建 API 与 Web 容器，使新生成的代理令牌
+文件重新绑定；PostgreSQL 与对象存储容器不因此重建。
 
 ```bash
 bash deploy/local/platform.sh up
