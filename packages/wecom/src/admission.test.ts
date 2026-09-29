@@ -72,3 +72,31 @@ it("rejects retained channels that no longer resolve to current credentials", as
 	});
 	expect(result).toMatchObject({ status: "rejected" });
 });
+
+it.each(["0", "02", "1234567890123456"])(
+	"rejects an invalid application ID %s before admission",
+	async (applicationId) => {
+		const admission = createWecomChannelAdmissionV1(async () => ({
+			agentId: "agent-1",
+			bindingReference: "app",
+			kind: "wecom_app",
+			corporationId: "corp-1",
+			applicationId,
+			token: "fixture",
+			encodingAesKey: Buffer.alloc(32, 8).toString("base64").slice(0, 43),
+			credentialVersion: "v1",
+		}));
+		expect(
+			await admission.admitChannels({
+				schemaVersion: 1,
+				agentId: "agent-1",
+				requestId: "request-1",
+				traceId: "trace-1",
+				current: [],
+				requested: [
+					{ kind: "wecom_app", enabled: true, bindingReference: "app" },
+				],
+			}),
+		).toMatchObject({ status: "rejected" });
+	},
+);

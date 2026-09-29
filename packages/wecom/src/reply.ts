@@ -274,7 +274,7 @@ export function createWecomSenderV1(options: {
 				} else {
 					if (
 						!config.applicationId ||
-						!/^\d+$/.test(config.applicationId) ||
+						!/^[1-9][0-9]{0,14}$/.test(config.applicationId) ||
 						route.recipientId !== input.scope.senderId ||
 						/[|@]/.test(route.recipientId) ||
 						Buffer.byteLength(input.text) > 2048

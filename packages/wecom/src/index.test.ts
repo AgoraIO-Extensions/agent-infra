@@ -145,6 +145,33 @@ it("validates application XML identity and rejects DTD or duplicate fields", asy
 			conversationType: "single",
 		},
 	});
+	const outerRequest = async (fields: string) => {
+		const original = request(xml, "corp-1");
+		return new Request(original.url, {
+			method: "POST",
+			body: (await original.text()).replace("<Encrypt>", `${fields}<Encrypt>`),
+		});
+	};
+	await expect(
+		adapter.receive(
+			app,
+			await outerRequest(
+				"<ToUserName>corp-1</ToUserName><AgentID>42</AgentID>",
+			),
+		),
+	).resolves.toMatchObject({ type: "message" });
+	for (const fields of [
+		"<ToUserName>other-corp</ToUserName><AgentID>42</AgentID>",
+		"<ToUserName>corp-1</ToUserName><AgentID>43</AgentID>",
+		"<Unexpected>value</Unexpected>",
+	]) {
+		await expect(
+			adapter.receive(app, await outerRequest(fields)),
+		).rejects.toThrow("Invalid WeCom callback");
+	}
+	await expect(
+		adapter.receive({ ...app, applicationId: "042" }, request(xml, "corp-1")),
+	).rejects.toThrow("Invalid WeCom callback");
 	await expect(
 		adapter.receive(
 			app,

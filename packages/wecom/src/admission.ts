@@ -19,7 +19,8 @@ function validConfiguration(
 		/^[A-Za-z0-9+/]{43}$/.test(config.encodingAesKey) &&
 		(kind === "wecom_bot"
 			? !!config.botId
-			: !!config.corporationId && /^\d+$/.test(config.applicationId ?? ""))
+			: !!config.corporationId &&
+				/^[1-9][0-9]{0,14}$/.test(config.applicationId ?? ""))
 	);
 }
 

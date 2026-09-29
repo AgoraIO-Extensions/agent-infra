@@ -149,7 +149,8 @@ export function createWecomAdapterV1(options: {
 				if (config.kind === "wecom_bot") field(config.botId);
 				else if (config.kind === "wecom_app") {
 					field(config.corporationId);
-					if (!/^\d+$/.test(field(config.applicationId))) return invalid();
+					if (!/^[1-9][0-9]{0,14}$/.test(field(config.applicationId)))
+						return invalid();
 				} else return invalid();
 				const url = new URL(request.url);
 				const timestamp = field(url.searchParams.get("timestamp"), 20);
@@ -170,13 +171,29 @@ export function createWecomAdapterV1(options: {
 					return invalid();
 				const raw = request.method === "GET" ? "" : await boundedBody(request);
 				if (Buffer.byteLength(raw) > 128 * 1024) return invalid();
+				const envelope =
+					request.method === "POST" && config.kind === "wecom_app"
+						? parseWecomXml(raw)
+						: null;
+				if (
+					envelope &&
+					(Object.keys(envelope).some(
+						(key) =>
+							key !== "Encrypt" && key !== "ToUserName" && key !== "AgentID",
+					) ||
+						(envelope.ToUserName !== undefined &&
+							envelope.ToUserName !== config.corporationId) ||
+						(envelope.AgentID !== undefined &&
+							envelope.AgentID !== config.applicationId))
+				)
+					return invalid();
 				const encrypted =
 					request.method === "GET"
 						? field(url.searchParams.get("echostr"), 128 * 1024)
 						: field(
 								config.kind === "wecom_bot"
 									? exactRecord(JSON.parse(raw), ["encrypt"]).encrypt
-									: exactRecord(parseWecomXml(raw), ["Encrypt"]).Encrypt,
+									: envelope?.Encrypt,
 								128 * 1024,
 							);
 				const expected = createHash("sha1")
