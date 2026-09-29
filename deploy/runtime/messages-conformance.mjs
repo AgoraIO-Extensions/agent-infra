@@ -193,7 +193,7 @@ async function openRuntime() {
  } };
  driver = isPi ? await openPiRuntime(authorizedOptions) : isOpenCode ? await openOpenCodeRuntime(authorizedOptions) : await ClaudeRuntimeDriver.open(authorizedOptions);
  hostStore = await FileRuntimeStore.open(join(path, "host.json"));
- host = await RuntimeHost.open({ driver, store: hostStore, grantValidation: { expectedIssuer: "synthetic-platform" }, grantValidationV2: { expectedIssuer: "synthetic-platform", expectedWorkerId: "synthetic-worker" }, allowLegacyBusiness: false, validateV4Grant });
+ host = await RuntimeHost.open({ driver, store: hostStore, grantValidation: { expectedIssuer: "synthetic-platform" }, grantValidationV2: { expectedIssuer: "synthetic-platform", expectedWorkerId: "synthetic-worker" }, allowLegacyBusiness: false, validateGrantV4: validateV4Grant });
 }
 async function closeRuntime() {
  const currentHost = host, currentDriver = driver;
