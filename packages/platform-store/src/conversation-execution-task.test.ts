@@ -772,6 +772,75 @@ async function seedApplication(applicationId = "shared") {
 	await sql`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent_task', 'application', ${applicationId}, 'use', 'grant_1')`;
 }
 
+it.each(["user-grant", "application-disabled", "application-grant"])(
+	"rechecks current API access before replay or key conflict after %s",
+	async (change) => {
+		if (change === "user-grant") {
+			const boundary = currentAuthority.taskBoundary;
+			if (!boundary) throw Error();
+			await sql`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent_task', 'user', 'user_task', 'use', 'grant_1')`;
+			currentAuthority = {
+				...currentAuthority,
+				channelId: "api:user",
+				taskBoundary: { ...boundary, channelId: "api:user" },
+			};
+		} else {
+			await seedApplication();
+			const boundary = await authorizationStore.captureApplicationBoundary({
+				applicationId: "shared",
+				agentId: "agent_task",
+				channelId: "api:application",
+			});
+			if (!boundary) throw Error();
+			currentAuthority = {
+				...currentAuthority,
+				actorId: "shared",
+				channelId: "api:application",
+				taskBoundary: boundary,
+			};
+		}
+		const task = taskUseCase();
+		const accepted = await task.submitTask(command("replay-access"));
+		if (accepted.outcome !== "accepted") throw Error();
+		expect(await task.submitTask(command("replay-access"))).toMatchObject({
+			outcome: "replayed",
+			result: accepted.result,
+		});
+		const before = await counts();
+		if (change === "application-disabled")
+			await sql`update platform.platform_applications set status = 'disabled' where id = 'shared'`;
+		else
+			await sql`update platform.agent_principal_grants set revoked_at = now()
+				where principal_type = ${change === "user-grant" ? "user" : "application"}
+					and principal_id = ${change === "user-grant" ? "user_task" : "shared"}`;
+		await expect(
+			task.submitTask(command("replay-access")),
+		).rejects.toMatchObject({ code: "unavailable" });
+		await expect(
+			task.submitTask(command("replay-access", { text: "different" })),
+		).rejects.toMatchObject({ code: "unavailable" });
+		expect(await counts()).toEqual(before);
+	},
+);
+
+it("rejects replay and key conflict after the Agent authorization revision changes", async () => {
+	const task = taskUseCase();
+	const accepted = await task.submitTask(command("replay-agent-revision"));
+	if (accepted.outcome !== "accepted") throw Error();
+	const before = await counts();
+	await sql`update platform.agents set authorization_revision = 'grant_2' where id = 'agent_task'`;
+	expect(await task.submitTask(command("replay-agent-revision"))).toEqual({
+		outcome: "denied",
+		reason: "agent_unavailable",
+	});
+	expect(
+		await task.submitTask(
+			command("replay-agent-revision", { text: "different" }),
+		),
+	).toEqual({ outcome: "denied", reason: "agent_unavailable" });
+	expect(await counts()).toEqual(before);
+});
+
 it("admits application work and isolates a user with the same ID", async () => {
 	await seedApplication();
 	if (!currentAuthority.taskBoundary) throw Error();
