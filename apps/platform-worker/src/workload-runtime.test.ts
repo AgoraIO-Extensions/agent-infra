@@ -514,7 +514,7 @@ describe("assembled Workload Runtime contracts", () => {
 			candidate: {
 				configuration,
 				deployment: null,
-				modelProjection: { schemaVersion: 1 },
+				modelProjection: undefined,
 			},
 			verified: null,
 			verifiedRevision: null,
@@ -540,7 +540,7 @@ describe("assembled Workload Runtime contracts", () => {
 				...legacy,
 				candidate: {
 					...legacy.candidate,
-					modelProjection: { schemaVersion: 1 },
+					modelProjection: undefined,
 				},
 			},
 		);
@@ -574,6 +574,85 @@ describe("assembled Workload Runtime contracts", () => {
 				"control",
 			),
 		).toBe("http");
+	});
+
+	it("does not validate a retained V1 candidate as V4 during rollout", async () => {
+		const catalog = catalogFixture();
+		const configuration = standardModelConfiguration();
+		const record = pendingSecretRecord({
+			name: "model:primary",
+			secretId: "model-secret-a",
+		});
+		const cleanup = secretCleanupStore(record);
+		const f = fixture(
+			{
+				modelCatalog: createDeploymentModelCatalogAdapterV1({
+					load: async () => catalog,
+				}),
+				modelAccess: createFakeModelAccessValidatorV1([
+					{
+						endpointId: "endpoint-a",
+						modelId: "model-a",
+						reasoningLevels: ["medium"],
+						credential: "legacy-credential",
+					},
+				]),
+				decryptor: {
+					decrypt: async () => ({
+						outcome: "decrypted" as const,
+						plaintext: new TextEncoder().encode("legacy-credential"),
+					}),
+				},
+			},
+			{
+				configuration,
+				secrets: cleanupSecrets(cleanup),
+			},
+		);
+		const legacyState = {
+			schemaVersion: 1 as const,
+			agentId: "agent-a",
+			sourceConfigurationRevision: 1,
+			sourceLifecycleRevision: 1,
+			revision: 1,
+			fence: 1,
+			phase: "preflight" as const,
+			candidate: {
+				configuration,
+				deployment: null,
+				modelProjection: { schemaVersion: 1 },
+			},
+			verified: null,
+			verifiedRevision: null,
+			identity: null,
+			rollback: false,
+			failureCode: null,
+			attempts: 0,
+		} as unknown as WorkloadReconciliationStateV1;
+		const runtimeV1 = createWorkloadRuntimeV1(f.options);
+		const candidate = await runtimeV1.preflight(
+			{
+				configuration,
+				state: legacyState,
+				management: f.management,
+				requestId: "request-v1",
+				traceId: "trace-v1",
+				secrets: cleanupSecrets(cleanup),
+			},
+			legacyState,
+		);
+		expect(candidate.modelProjection).toMatchObject({ schemaVersion: 1 });
+		const retained = {
+			...legacyState,
+			phase: "ready" as const,
+			candidate,
+			identity: { uid: "workload-a", generation: 1 },
+		};
+		const runtimeV4 = createWorkloadRuntimeV1({
+			...f.options,
+			runtimeModelVersion: 4,
+		});
+		await expect(runtimeV4.observe(retained)).resolves.toBeDefined();
 	});
 
 	it("materializes a V4 standard template without model Key Secret or Pod credential", async () => {

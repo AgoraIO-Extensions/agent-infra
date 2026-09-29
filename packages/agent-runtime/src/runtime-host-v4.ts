@@ -58,7 +58,18 @@ function businessAuthority(claims: RuntimeBusinessGrantClaimsV4) {
 }
 
 function scope(request: RuntimeBusinessRequestV4) {
-	return RuntimePinnedExecutionKeyScopeV4Schema.parse(request);
+	return RuntimePinnedExecutionKeyScopeV4Schema.parse({
+		principal: request.principal,
+		executionSource: request.executionSource,
+		channelId: request.channelId,
+		agentId: request.agentId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		hostSessionRef: request.hostSessionRef,
+		keyBinding: request.keyBinding,
+	});
 }
 
 function operationDigest(request: RuntimeBusinessRequestV4) {

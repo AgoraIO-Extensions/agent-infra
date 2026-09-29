@@ -26,11 +26,11 @@ import {
 } from "@agent-infra/agent-runtime";
 import {
 	CommandAcceptedProjectionV1Schema,
-	ConversationDetailProjectionV2Schema,
 	ConversationProjectionV1Schema,
-	ConversationSseMessageV2Schema,
 	ExecutionDetailProjectionV2Schema,
 	TaskAcceptedV1Schema,
+	TaskProjectionV1Schema,
+	TaskSseMessageV1Schema,
 } from "@agent-infra/contracts/pilot";
 import type { RuntimeSubmitTurnRequestV3 } from "@agent-infra/contracts/runtime";
 import {
@@ -1925,22 +1925,24 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 				"recovered Codex execution completes",
 			);
 			if (!apiOrigin) throw Error("Production API did not start");
-			const read = async (path: string) => {
+			const taskPath = `/api/v1/conversations/${first.conversationId}/tasks/${first.executionId}`;
+			const readTask = async (path: string) => {
 				const response = await fetch(`${apiOrigin}${path}`, {
-					headers: { authorization: "controlled-user-cli" },
+					headers: {
+						authorization: `Bearer ${apiCredentials["user-cli"]}`,
+					},
 				});
 				const body = await response.json();
 				expect(response.status, JSON.stringify(body)).toBe(200);
 				return body;
 			};
-			const path = `/api/v2/conversations/${first.conversationId}`;
-			const history = ConversationDetailProjectionV2Schema.parse(
-				await read(path),
-			);
-			const executionDetail = ExecutionDetailProjectionV2Schema.parse(
-				await read(`${path}/executions/${first.executionId}`),
-			);
-			const assertPersistedOperations = (events: typeof history.events) => {
+			const task = TaskProjectionV1Schema.parse(await readTask(taskPath));
+			expect(task).toMatchObject({
+				conversationId: first.conversationId,
+				executionId: first.executionId,
+				status: "completed",
+			});
+			const assertPersistedOperations = (events: typeof task.events) => {
 				const operations = events.filter(
 					(event) => event.type === "execution.operation",
 				);
@@ -1961,8 +1963,39 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 					});
 				}
 			};
-			assertPersistedOperations(history.events);
-			assertPersistedOperations(executionDetail.events);
+			assertPersistedOperations(task.events);
+			const webRead = async (path: string) => {
+				const response = await fetch(`${apiOrigin}${path}`, {
+					headers: { authorization: "controlled-user-cli" },
+				});
+				const body = await response.json();
+				expect(response.status, JSON.stringify(body)).toBe(404);
+				expect(body).toMatchObject({
+					schemaVersion: 1,
+					code: "RESOURCE_UNAVAILABLE",
+				});
+			};
+			await webRead(`/api/v2/conversations/${first.conversationId}`);
+			await webRead(
+				`/api/v2/conversations/${first.conversationId}/executions/${first.executionId}`,
+			);
+			const secondPrincipal = await fetch(`${apiOrigin}${taskPath}`, {
+				headers: {
+					authorization: `Bearer ${apiCredentials["user-second"]}`,
+				},
+			});
+			const secondPrincipalBody = await secondPrincipal.json();
+			expect(secondPrincipal.status, JSON.stringify(secondPrincipalBody)).toBe(
+				404,
+			);
+			const invalidCredential = await fetch(`${apiOrigin}${taskPath}`, {
+				headers: { authorization: "Bearer invalid-task-credential" },
+			});
+			const invalidCredentialBody = await invalidCredential.json();
+			expect(
+				invalidCredential.status,
+				JSON.stringify(invalidCredentialBody),
+			).toBe(401);
 			const [cursorFact, ...replayedFacts] = operationFacts;
 			if (!cursorFact) throw Error("No persisted operation replay cursor");
 			expect(cursorFact.phase).toBe("intent");
@@ -1970,9 +2003,9 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 			const controller = new AbortController();
 			const timeout = setTimeout(() => controller.abort(), 10_000);
 			try {
-				const response = await fetch(`${apiOrigin}${path}/events`, {
+				const response = await fetch(`${apiOrigin}${taskPath}/events`, {
 					headers: {
-						authorization: "controlled-user-cli",
+						authorization: `Bearer ${apiCredentials["user-cli"]}`,
 						"Last-Event-ID": cursorFact.eventId,
 					},
 					signal: controller.signal,
@@ -1998,9 +2031,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 						const data = frame.match(/^data: (.+)$/m)?.[1];
 						expect(eventId).not.toBe(cursorFact.eventId);
 						if (eventId && data && pending.has(eventId)) {
-							const parsed = ConversationSseMessageV2Schema.parse(
-								JSON.parse(data),
-							);
+							const parsed = TaskSseMessageV1Schema.parse(JSON.parse(data));
 							const fact = operationFacts.find(
 								(item) => item.eventId === eventId,
 							);

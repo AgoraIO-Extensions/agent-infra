@@ -390,19 +390,17 @@ export function createWorkloadRuntimeV1(
 		WorkloadReconciliationStateV1,
 		Record<string, boolean>
 	>();
-	function candidateKeyless(state: WorkloadReconciliationStateV1): boolean {
-		if (state.candidate.configuration.source.kind !== "standard") return false;
-		const projection = state.candidate.modelProjection;
-		if (
-			projection &&
-			typeof projection === "object" &&
-			"schemaVersion" in projection
-		)
-			return (
-				projection.schemaVersion === 4 || options.runtimeModelVersion === 4
-			);
-		return options.runtimeModelVersion === 4;
-	}
+		function candidateKeyless(state: WorkloadReconciliationStateV1): boolean {
+			if (state.candidate.configuration.source.kind !== "standard") return false;
+			const projection = state.candidate.modelProjection;
+			if (
+				projection &&
+				typeof projection === "object" &&
+				"schemaVersion" in projection
+			)
+				return projection.schemaVersion === 4;
+			return options.runtimeModelVersion === 4;
+		}
 
 	function createAdapter(
 		recordCapabilities: (value: Record<string, boolean>) => void = () => {},
@@ -545,15 +543,20 @@ export function createWorkloadRuntimeV1(
 			state.candidate.configuration.source,
 			options.templateModelBindings,
 		);
-		const projection = candidateKeyless(state)
-			? validateRuntimeModelProjectionV4(
-					state.candidate.modelProjection,
-					state.candidate.configuration,
-				)
-			: validateRuntimeModelProjectionV1(
-					state.candidate.modelProjection,
-					state.candidate.configuration,
-				);
+		const candidateProjection = state.candidate.modelProjection;
+		const projection =
+			candidateProjection &&
+			typeof candidateProjection === "object" &&
+			"schemaVersion" in candidateProjection &&
+			candidateProjection.schemaVersion === 4
+				? validateRuntimeModelProjectionV4(
+						candidateProjection,
+						state.candidate.configuration,
+					)
+				: validateRuntimeModelProjectionV1(
+						candidateProjection,
+						state.candidate.configuration,
+					);
 		if (
 			projection.options.some((option) => option.endpoint.protocol !== protocol)
 		)

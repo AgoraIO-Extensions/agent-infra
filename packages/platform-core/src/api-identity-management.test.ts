@@ -41,7 +41,18 @@ function storeFixture(overrides: Partial<ApiIdentityStorePortV1> = {}) {
 			},
 		}),
 		listCredentials: vi.fn().mockResolvedValue([]),
-		getCredentialMetadata: vi.fn().mockResolvedValue(null),
+		getCredentialMetadata: vi.fn().mockImplementation(async (credentialId) => ({
+			schemaVersion: 1,
+			credentialId,
+			principal:
+				credentialId === "credential-application"
+					? { kind: "application" as const, id: "application-caller" }
+					: { kind: "user" as const, id: "owner-1" },
+			scopes: ["agent:create", "agent:manage", "agent:use", "agent:read"],
+			expiresAt: null,
+			revokedAt: null,
+			createdAt: new Date("2026-09-25T00:00:00Z"),
+		})),
 		grantCredentialDelivery: vi.fn(),
 		hasCredentialDelivery: vi.fn().mockResolvedValue(true),
 		revokeCredentialDelivery: vi.fn().mockResolvedValue(true),
@@ -66,7 +77,10 @@ function actor(
 		principal,
 		isAdministrator: false,
 		credential: {
-			credentialId: "credential-1",
+			credentialId:
+				principal.kind === "application"
+					? "credential-application"
+					: "credential-1",
 			principal,
 			scopes: [
 				"agent:create",
@@ -229,6 +243,37 @@ describe("API identity management authorization", () => {
 				reason: "operation_forbidden",
 			}),
 		);
+	});
+
+	it("rereads credential state before authorizing a scope", async () => {
+		for (const stale of [
+			{ revokedAt: new Date("2026-09-30T00:00:00Z") },
+			{ expiresAt: new Date("2020-01-01T00:00:00Z") },
+		]) {
+			const current = {
+				schemaVersion: 1 as const,
+				credentialId: "credential-application",
+				principal: { kind: "application" as const, id: "application-caller" },
+				scopes: ["agent:manage"] as const,
+				expiresAt: null,
+				revokedAt: null,
+				createdAt: new Date("2026-09-25T00:00:00Z"),
+				...stale,
+			};
+			const store = storeFixture({
+				getCredentialMetadata: vi.fn().mockResolvedValue(current),
+			});
+			const useCase = management(store);
+			await expect(
+				useCase.authorizeCredentialScope(
+					actor({ kind: "application", id: "application-caller" }),
+					["agent:manage"],
+				),
+			).rejects.toMatchObject({ code: "not_authorized" });
+			expect(store.getCredentialMetadata).toHaveBeenCalledWith(
+				"credential-application",
+			);
+		}
 	});
 
 	it("rejects disabled or missing recipients before granting delivery", async () => {

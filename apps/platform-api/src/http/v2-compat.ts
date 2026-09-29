@@ -104,6 +104,7 @@ async function rewriteV2Request(
 	const ownerScope = search.get("scope");
 	if (ownerScope !== null) search.delete("scope");
 	const headers = new Headers(request.headers);
+	headers.delete("x-agent-infra-v2-scope");
 	headers.set("x-agent-infra-v2", "1");
 	if (ownerScope !== null) headers.set("x-agent-infra-v2-scope", ownerScope);
 	if (request.method === "GET" || request.method === "HEAD") {

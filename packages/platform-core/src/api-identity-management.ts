@@ -280,17 +280,41 @@ export function createApiIdentityManagementV1(input: {
 			throw new ApiIdentityError("not_authorized");
 		return credential;
 	};
-	const requireCredentialScope = (
+	const requireCurrentCredential = async (
+		actor: ApiIdentityActorV1,
+	): Promise<ApiCredentialMetadataV1> => {
+		const credential = requireCredential(actor);
+		const current = await input.store.getCredentialMetadata(
+			credential.credentialId,
+		);
+		if (
+			current === null ||
+			current.credentialId !== credential.credentialId ||
+			!sameApiPrincipalV1(current.principal, credential.principal) ||
+			credential.revokedAt !== null ||
+			(credential.expiresAt !== null &&
+				credential.expiresAt.getTime() <= Date.now()) ||
+			current.revokedAt !== null ||
+			(current.expiresAt !== null && current.expiresAt.getTime() <= Date.now())
+		)
+			throw new ApiIdentityError("not_authorized");
+		return current;
+	};
+	const requireCredentialScope = async (
 		actor: ApiIdentityActorV1,
 		required: readonly ApiCredentialScopeV1[],
-	): void => {
-		const credential = requireCredential(actor);
+	): Promise<void> => {
+		const snapshot = requireCredential(actor);
+		const credential = await requireCurrentCredential(actor);
 		if (
 			required.length === 0 ||
-			!required.every((scope) => hasApiCredentialScopeV1(credential, scope))
-		) {
+			!required.every(
+				(scope) =>
+					hasApiCredentialScopeV1(snapshot, scope) &&
+					hasApiCredentialScopeV1(credential, scope),
+			)
+		)
 			throw new ApiIdentityError("not_authorized");
-		}
 	};
 	const requireUserActor = (actor: ApiIdentityActorV1): string => {
 		const principal = requireActiveActor(actor);
@@ -413,14 +437,14 @@ export function createApiIdentityManagementV1(input: {
 	): Promise<void> => {
 		requireActiveActor(actor);
 		if (actor.principal !== undefined)
-			requireCredentialScope(actor, ["agent:manage"]);
+			await requireCredentialScope(actor, ["agent:manage"]);
 		if (!(await input.agentAccess.canManage({ actor, agentId })))
 			throw new ApiIdentityError("resource_unavailable");
 	};
 	return {
 		async authorizeCredentialScope(actor, required, audit) {
 			try {
-				requireCredentialScope(actor, required);
+				await requireCredentialScope(actor, required);
 			} catch (error) {
 				if (audit && input.store.writeAudit) {
 					await rejectWithAudit(
@@ -437,7 +461,7 @@ export function createApiIdentityManagementV1(input: {
 		},
 		async resolveAgentQueryGrantType(actor, audit) {
 			try {
-				const credential = requireCredential(actor);
+				const credential = await requireCurrentCredential(actor);
 				if (
 					hasApiCredentialScopeV1(credential, "agent:manage") &&
 					hasApiCredentialScopeV1(credential, "agent:use")

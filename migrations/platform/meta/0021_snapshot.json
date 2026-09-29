@@ -1,5 +1,5 @@
 {
-  "id": "8be191cf-e217-4f9a-8aae-d4905b36eaed",
+  "id": "d9144f01-b77e-4fad-b9fa-6d0d98bce61f",
   "prevId": "bd0a66bd-bd12-4526-8dff-66df22bf7f2b",
   "version": "7",
   "dialect": "postgresql",
@@ -865,6 +865,77 @@
       },
       "isRLSEnabled": false
     },
+    "platform.browser_sessions": {
+      "name": "browser_sessions",
+      "schema": "platform",
+      "columns": {
+        "token_digest": {
+          "name": "token_digest",
+          "type": "char(64)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "uid": {
+          "name": "uid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "browser_sessions_expires_at": {
+          "name": "browser_sessions_expires_at",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "browser_sessions_uid": {
+          "name": "browser_sessions_uid",
+          "columns": [
+            {
+              "expression": "uid",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "browser_session_digest_hex": {
+          "name": "browser_session_digest_hex",
+          "value": "\"platform\".\"browser_sessions\".\"token_digest\" ~ '^[0-9a-f]{64}$'"
+        },
+        "browser_session_uid_nonempty": {
+          "name": "browser_session_uid_nonempty",
+          "value": "char_length(\"platform\".\"browser_sessions\".\"uid\") > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "platform.conversation_audit_events": {
       "name": "conversation_audit_events",
       "schema": "platform",
@@ -1256,7 +1327,7 @@
         },
         "conversation_event_source_binding": {
           "name": "conversation_event_source_binding",
-          "value": "(\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'runtime'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NOT NULL\n\t\t\t\t\tAND char_length(\"platform\".\"conversation_events\".\"runtime_cursor\") > 0\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" NOT IN ('model.selection.fell_back', 'task.status')\n\t\t\t\t) OR (\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'platform'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NULL\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" IN ('model.selection.fell_back', 'task.status')\n\t\t\t\t)"
+          "value": "(\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'runtime'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NOT NULL\n\t\t\t\t\tAND char_length(\"platform\".\"conversation_events\".\"runtime_cursor\") > 0\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" <> 'model.selection.fell_back'\n\t\t\t\t) OR (\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'platform'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NULL\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" = 'model.selection.fell_back'\n\t\t\t\t)"
         }
       },
       "isRLSEnabled": false
@@ -1307,18 +1378,6 @@
           "typeSchema": "platform",
           "primaryKey": false,
           "notNull": true
-        },
-        "task_wait_order": {
-          "name": "task_wait_order",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "task_wait_deadline": {
-          "name": "task_wait_deadline",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         },
         "session_generation": {
           "name": "session_generation",
@@ -1469,49 +1528,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "conversation_execution_task_wait_order_unique": {
-          "name": "conversation_execution_task_wait_order_unique",
-          "columns": [
-            {
-              "expression": "agent_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "task_wait_order",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"platform\".\"conversation_executions\".\"task_wait_order\" IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "conversation_execution_agent_wait_idx": {
-          "name": "conversation_execution_agent_wait_idx",
-          "columns": [
-            {
-              "expression": "agent_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "task_wait_order",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -1553,10 +1569,6 @@
         "conversation_execution_turn_id_non_empty": {
           "name": "conversation_execution_turn_id_non_empty",
           "value": "char_length(\"platform\".\"conversation_executions\".\"turn_id\") > 0"
-        },
-        "conversation_execution_task_wait_binding": {
-          "name": "conversation_execution_task_wait_binding",
-          "value": "(\"platform\".\"conversation_executions\".\"task_wait_order\" IS NULL AND \"platform\".\"conversation_executions\".\"task_wait_deadline\" IS NULL AND \"platform\".\"conversation_executions\".\"status\"::text <> 'waiting') OR (\"platform\".\"conversation_executions\".\"task_wait_order\" IS NOT NULL AND \"platform\".\"conversation_executions\".\"task_wait_order\" between 1 and 9007199254740991 AND \"platform\".\"conversation_executions\".\"task_wait_deadline\" IS NOT NULL)"
         },
         "conversation_execution_session_generation_safe": {
           "name": "conversation_execution_session_generation_safe",
@@ -4081,7 +4093,6 @@
       "name": "conversation_execution_status",
       "schema": "platform",
       "values": [
-        "waiting",
         "submitted",
         "processing",
         "unknown",

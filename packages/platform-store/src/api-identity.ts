@@ -110,6 +110,22 @@ async function hasCurrentAgentManageAuthority(
 			!credential.scopes.includes("agent:manage")
 		)
 			return false;
+		if (actor.principal.kind === "application") {
+			const [application] = await transaction
+				.select({
+					status: platformApplications.status,
+					responsibleUserId: platformApplications.responsibleUserId,
+				})
+				.from(platformApplications)
+				.where(eq(platformApplications.id, actor.principal.id))
+				.limit(1)
+				.for("share");
+			if (
+				application?.status !== "active" ||
+				application.responsibleUserId !== actor.userId
+			)
+				return false;
+		}
 	}
 	if (actor.isAdministrator) return true;
 	if (actor.principal?.kind === "user" && actor.principal.id !== actor.userId)

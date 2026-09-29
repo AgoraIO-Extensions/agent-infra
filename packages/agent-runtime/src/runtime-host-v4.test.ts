@@ -211,6 +211,22 @@ it("reinstalls the pinned Key on a running submit replay after Host restart", as
 	expect(store.readOriginalExecutionKeyScopeV4(request)?.scope).toMatchObject({
 		keyBinding: request.keyBinding,
 	});
+	expect(
+		Object.keys(
+			store.readOriginalExecutionKeyScopeV4(request)?.scope ?? {},
+		).sort(),
+	).toEqual([
+		"agentId",
+		"channelId",
+		"conversationId",
+		"executionId",
+		"executionSource",
+		"hostSessionRef",
+		"keyBinding",
+		"principal",
+		"sessionGeneration",
+		"turnId",
+	]);
 	const action = {
 		nativeSessionRef: store.nativeSessionRef(accepted.hostSessionRef) as string,
 		executionId: request.executionId,

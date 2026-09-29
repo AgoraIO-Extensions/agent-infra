@@ -224,6 +224,22 @@ describe("V2 compatibility routes", () => {
 		expect(response.status).toBe(400);
 	});
 
+	it("does not trust a caller supplied forwarded scope header", async () => {
+		const app = new Hono();
+		app.get("/api/v1/agents", (context) => {
+			expect(context.req.header("x-agent-infra-v2-scope")).toBeUndefined();
+			return context.json({ items: [], nextCursor: null });
+		});
+		registerV2CompatibilityRoutes(app);
+
+		const response = await app.request(
+			new Request("http://localhost/api/v2/agents", {
+				headers: { "x-agent-infra-v2-scope": "owner" },
+			}),
+		);
+		expect(response.status).toBe(200);
+	});
+
 	it("does not downgrade V2 conversation details through the V1 proxy", async () => {
 		const app = new Hono();
 		app.get("/api/v1/conversations/conversation-1", () =>
