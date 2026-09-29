@@ -23,6 +23,7 @@ import {
 	type InvocationContext,
 	normalizeSharedScopeDisplayName,
 	ProviderExecutorRouter,
+	type ProviderOAuthCallbackStage,
 	type ReconciliationJob,
 	type StoredCall,
 } from "./index";
@@ -1225,7 +1226,19 @@ describe("Connection application service", () => {
 		const state = authorizationUrl.searchParams.get("state");
 		expect(state).toHaveLength(43);
 		expect(authorizationUrl.searchParams.get("challenge")).toHaveLength(43);
-		await service.completeGithubOAuth("authorization-code", state ?? "");
+		const stages: ProviderOAuthCallbackStage[] = [];
+		await service.completeGithubOAuth(
+			"authorization-code",
+			state ?? "",
+			(stage) => stages.push(stage),
+		);
+		expect(stages).toEqual([
+			"callback_input",
+			"transaction",
+			"authorization",
+			"exchange",
+			"credential_store",
+		]);
 		expect(repository.storedOAuthCredential).toEqual({
 			accessToken: "provider-secret",
 			displayName: "Alice GitHub",
@@ -1233,9 +1246,13 @@ describe("Connection application service", () => {
 			grantedScopes: ["repo"],
 			principalId: "alice",
 		});
+		stages.length = 0;
 		await expect(
-			service.completeGithubOAuth("authorization-code", state ?? ""),
+			service.completeGithubOAuth("authorization-code", state ?? "", (stage) =>
+				stages.push(stage),
+			),
 		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		expect(stages).toEqual(["callback_input", "transaction"]);
 
 		const shared = await service.startSharedGithubOAuth(
 			"admin",

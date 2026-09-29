@@ -944,13 +944,25 @@ export interface GitHubOAuthProvider {
 	getAuthorizationUrl(
 		input: GitHubOAuthAuthorization & { redirectUri: string },
 	): string;
-	exchangeCode(input: {
-		code: string;
-		codeVerifier: string;
-		redirectUri: string;
-	}): Promise<GitHubOAuthIdentity>;
+	exchangeCode(
+		input: {
+			code: string;
+			codeVerifier: string;
+			redirectUri: string;
+		},
+		onStage?: (stage: ProviderOAuthCallbackStage) => void,
+	): Promise<GitHubOAuthIdentity>;
 	refresh(refreshToken: string): Promise<GitHubOAuthIdentity>;
 }
+
+export type ProviderOAuthCallbackStage =
+	| "callback_input"
+	| "transaction"
+	| "authorization"
+	| "exchange"
+	| "token_exchange"
+	| "profile_lookup"
+	| "credential_store";
 
 export class ConnectionError extends Error {
 	constructor(
@@ -1815,17 +1827,28 @@ export class ConnectionApplicationService {
 		};
 	}
 
-	async completeGithubOAuth(code: string, state: string) {
-		return this.completeProviderOAuth("github", code, state);
+	async completeGithubOAuth(
+		code: string,
+		state: string,
+		onStage?: (stage: ProviderOAuthCallbackStage) => void,
+	) {
+		return this.completeProviderOAuth("github", code, state, onStage);
 	}
 
-	async completeProviderOAuth(providerId: string, code: string, state: string) {
+	async completeProviderOAuth(
+		providerId: string,
+		code: string,
+		state: string,
+		onStage?: (stage: ProviderOAuthCallbackStage) => void,
+	) {
+		onStage?.("callback_input");
 		if (!code || !state) {
 			throw new ConnectionError(
 				"INVALID_REQUEST",
 				"OAuth callback requires code and state",
 			);
 		}
+		onStage?.("transaction");
 		const transaction = await this.repository.consumeOAuthTransaction(
 			state,
 			providerId,
@@ -1836,6 +1859,7 @@ export class ConnectionApplicationService {
 				"OAuth state does not match provider",
 			);
 		}
+		onStage?.("authorization");
 		if (!transaction.sharedScopeId) {
 			if (transaction.reconnectConnectionId) {
 				const target = await this.repository.validatePersonalReconnect?.({
@@ -1857,11 +1881,16 @@ export class ConnectionApplicationService {
 				});
 			}
 		}
-		const identity = await this.requireProviderOAuth(providerId).exchangeCode({
-			code,
-			codeVerifier: transaction.codeVerifier,
-			redirectUri: transaction.redirectUri,
-		});
+		onStage?.("exchange");
+		const identity = await this.requireProviderOAuth(providerId).exchangeCode(
+			{
+				code,
+				codeVerifier: transaction.codeVerifier,
+				redirectUri: transaction.redirectUri,
+			},
+			onStage,
+		);
+		onStage?.("credential_store");
 		if (providerId === "github" && transaction.sharedScopeId)
 			return this.repository.storeSharedGithubOAuthCredential({
 				...identity,

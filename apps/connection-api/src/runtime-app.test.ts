@@ -83,7 +83,12 @@ describe("GitHub OAuth pre-submit egress", () => {
 			codeVerifier: "verifier",
 			redirectUri: "https://connection.test/oauth/callback",
 		};
-		expect((await adapter.exchangeCode(input)).externalAccount).toBe("42");
+		const stages: string[] = [];
+		expect(
+			(await adapter.exchangeCode(input, (stage) => stages.push(stage)))
+				.externalAccount,
+		).toBe("42");
+		expect(stages).toEqual(["token_exchange", "profile_lookup"]);
 		expect(primary).toHaveBeenCalledOnce();
 		expect(transport.mock.calls.map(([url]) => String(url))).toEqual([
 			tokenUrl,
@@ -91,9 +96,11 @@ describe("GitHub OAuth pre-submit egress", () => {
 		]);
 
 		transport.mockRejectedValueOnce(failure);
-		await expect(adapter.exchangeCode(input)).rejects.toThrow(
-			"OAuth token request failed",
-		);
+		stages.length = 0;
+		await expect(
+			adapter.exchangeCode(input, (stage) => stages.push(stage)),
+		).rejects.toThrow("OAuth token request failed");
+		expect(stages).toEqual(["token_exchange"]);
 		expect(primary).toHaveBeenCalledTimes(2);
 		expect(transport).toHaveBeenCalledTimes(3);
 	});

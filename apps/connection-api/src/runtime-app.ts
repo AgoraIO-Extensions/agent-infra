@@ -387,11 +387,24 @@ export function createPreSubmitGithubOAuthAdapter(
 	});
 	return {
 		getAuthorizationUrl: (input) => defaultAdapter.getAuthorizationUrl(input),
-		exchangeCode: async (input) =>
-			new OpenConnectorGitHubOAuthAdapter({
+		exchangeCode: async (input, onStage) => {
+			const selected = await selectExchangeFetcher();
+			const observedFetch: typeof fetch = (request, init) => {
+				const url = request instanceof Request ? request.url : String(request);
+				const method = (
+					init?.method ?? (request instanceof Request ? request.method : "GET")
+				).toUpperCase();
+				if (url === githubOAuthTokenUrl && method === "POST")
+					onStage?.("token_exchange");
+				if (url === githubOAuthProfileUrl && method === "GET")
+					onStage?.("profile_lookup");
+				return selected(request, init);
+			};
+			return new OpenConnectorGitHubOAuthAdapter({
 				...options,
-				fetcher: await selectExchangeFetcher(),
-			}).exchangeCode(input),
+				fetcher: observedFetch,
+			}).exchangeCode(input);
+		},
 		refresh: (token) => defaultAdapter.refresh(token),
 	};
 }
