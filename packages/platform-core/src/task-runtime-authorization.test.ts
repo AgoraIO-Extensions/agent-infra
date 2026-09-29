@@ -157,7 +157,7 @@ function harness() {
 const signal = () => new AbortController().signal;
 
 describe("task Runtime authorization Core use case", () => {
-	it("rejects an application impersonating a Web user or mismatching current application facts", async () => {
+	it("rejects application tasks on non-API channels or with mismatching facts", async () => {
 		const h = harness();
 		const webBoundary: TaskAuthorizationBoundaryV1 = {
 			...h.boundary,
@@ -168,6 +168,21 @@ describe("task Runtime authorization Core use case", () => {
 		if (!h.record) throw new Error("Missing test record");
 		h.setRecord({ ...h.record, boundary: webBoundary });
 		expect(await h.useCase.authorizeClaim(h.claim, signal())).toEqual({
+			outcome: "denied",
+		});
+		const nonApiBoundary = { ...webBoundary, channelId: "wecom" };
+		const nonApiClaim = { ...h.claim, channelId: "wecom" };
+		h.setRecord({
+			...h.record,
+			boundary: nonApiBoundary,
+			application: {
+				schemaVersion: 1,
+				applicationId: h.claim.actorId,
+				accountStatus: "active",
+				authorizationRevision: "application-7",
+			},
+		});
+		expect(await h.useCase.authorizeClaim(nonApiClaim, signal())).toEqual({
 			outcome: "denied",
 		});
 		const apiBoundary = { ...webBoundary, channelId: "api" };

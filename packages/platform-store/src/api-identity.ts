@@ -89,6 +89,7 @@ async function hasCurrentManageAuthority(
 		revokedAt: Date | null;
 	} = null;
 	let applicationStatus: string | null = null;
+	let applicationResponsibleUserId: string | null = null;
 	let isOwner = false;
 	let grants: {
 		grantType: string;
@@ -114,12 +115,16 @@ async function hasCurrentManageAuthority(
 		credential = currentCredential ?? null;
 		if (actor.principal.kind === "application") {
 			const [application] = await database
-				.select({ status: platformApplications.status })
+				.select({
+					status: platformApplications.status,
+					responsibleUserId: platformApplications.responsibleUserId,
+				})
 				.from(platformApplications)
 				.where(eq(platformApplications.id, actor.principal.id))
 				.limit(1)
 				.for("share");
 			applicationStatus = application?.status ?? null;
+			applicationResponsibleUserId = application?.responsibleUserId ?? null;
 		}
 	}
 	if (actor.principal === undefined) {
@@ -156,6 +161,7 @@ async function hasCurrentManageAuthority(
 		actor,
 		credential,
 		applicationStatus,
+		applicationResponsibleUserId,
 		isOwner,
 		authorizationRevision,
 		grants,

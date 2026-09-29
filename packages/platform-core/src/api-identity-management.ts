@@ -63,6 +63,7 @@ export function isCurrentAgentGrantManageAllowedV1(input: {
 		readonly revokedAt: Date | null;
 	};
 	readonly applicationStatus: string | null;
+	readonly applicationResponsibleUserId: string | null;
 	readonly isOwner: boolean;
 	readonly authorizationRevision: string | null;
 	readonly grants: readonly {
@@ -84,7 +85,8 @@ export function isCurrentAgentGrantManageAllowedV1(input: {
 				credential.expiresAt.getTime() <= Date.now()) ||
 			!credential.scopes.includes("agent:manage") ||
 			(actor.principal.kind === "application" &&
-				input.applicationStatus !== "active")
+				(input.applicationStatus !== "active" ||
+					input.applicationResponsibleUserId !== actor.userId))
 		)
 			return false;
 	}

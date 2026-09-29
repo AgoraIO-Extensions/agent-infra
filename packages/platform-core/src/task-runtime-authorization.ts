@@ -198,8 +198,9 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 		)
 			denied("TASK_AUTHORIZATION_BINDING_INVALID");
 		if (boundary.principal.kind === "application") {
-			// A Web claim is bound to a user even when an application reuses its ID.
-			if (boundary.channelId === "web")
+			// Application task authorization is restricted to the API channel. A
+			// non-API claim must not reach runtime authorization with application facts.
+			if (boundary.channelId !== "api")
 				denied("TASK_AUTHORIZATION_BINDING_INVALID");
 			// Missing current facts are handled by current() so an already-running
 			// task can persist system control rather than losing its recovery path.
