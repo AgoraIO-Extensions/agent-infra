@@ -347,12 +347,26 @@ export function createWecomSetupV1(options: {
 				throw new WecomSetupError("stale");
 			return { ...publicState(session), status: "verifying" as const };
 		},
-		async read(agentId: string, actorId: string, sessionId: string) {
+		async read(
+			agentId: string,
+			actorId: string,
+			sessionId: string,
+			kind: "wecom_bot" | "wecom_app" = "wecom_bot",
+		) {
 			const { session } = await owned(agentId, actorId, sessionId);
+			if ((session.kind ?? "wecom_bot") !== kind)
+				throw new WecomSetupError("unavailable");
 			return publicState(session);
 		},
-		async cancel(agentId: string, actorId: string, sessionId: string) {
+		async cancel(
+			agentId: string,
+			actorId: string,
+			sessionId: string,
+			kind: "wecom_bot" | "wecom_app" = "wecom_bot",
+		) {
 			const { session } = await owned(agentId, actorId, sessionId);
+			if ((session.kind ?? "wecom_bot") !== kind)
+				throw new WecomSetupError("unavailable");
 			if (!(await options.store.cancel(session)))
 				throw new WecomSetupError("stale");
 			return { ...publicState(session), status: "cancelled" as const };

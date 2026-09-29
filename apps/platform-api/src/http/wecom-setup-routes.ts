@@ -126,6 +126,7 @@ export function registerWecomSetupRoutesV1(
 					agentId,
 					identity.userId,
 					sessionId,
+					dependencies.application ? "wecom_app" : "wecom_bot",
 				);
 				return context.json(
 					dependencies.application

@@ -122,6 +122,7 @@ it("authenticates setup routes and rejects cross-Owner, cross-Agent, replay and 
 it("keeps application setup on its own Owner route and withholds submitted secrets", async () => {
 	let actor = "owner";
 	const records = new Map<string, WecomSetupRecordV1>();
+	let cancellations = 0;
 	const setup = createWecomSetupV1({
 		authority: async (agentId, actorId) =>
 			actorId === "owner"
@@ -156,7 +157,14 @@ it("keeps application setup on its own Owner route and withholds submitted secre
 				});
 				return true;
 			},
-			cancel: async () => false,
+			cancel: async (session) => {
+				const saved = records.get(session.sessionId);
+				if (!saved || !["awaiting_input", "verifying"].includes(saved.status))
+					return false;
+				cancellations++;
+				records.set(session.sessionId, { ...saved, status: "cancelled" });
+				return true;
+			},
 		},
 		encrypt: async () => {
 			throw new Error("Bot encryptor must not run");
@@ -188,6 +196,7 @@ it("keeps application setup on its own Owner route and withholds submitted secre
 		application: true,
 		callbackUrl: (id) => `https://example.invalid/callbacks/wecom/${id}`,
 	});
+	registerWecomSetupRoutesV1(app, { setup, identity });
 	const base = "/api/v1/agents/agent/wecom-app-setup";
 	const begun = await app.request(base, { method: "POST" });
 	expect(begun.status).toBe(200);
@@ -224,4 +233,36 @@ it("keeps application setup on its own Owner route and withholds submitted secre
 	expect(saved.status).toBe(200);
 	expect(await saved.text()).not.toContain("fixture-secret");
 	expect((await submit(body)).status).toBe(404);
+	const botBase = "/api/v1/agents/agent/wecom-setup";
+	const bot = (await (
+		await app.request(botBase, { method: "POST" })
+	).json()) as { sessionId: string };
+	for (const [route, foreignId] of [
+		[base, bot.sessionId],
+		[botBase, session.sessionId],
+	] as const) {
+		expect((await app.request(`${route}/${foreignId}`)).status).toBe(404);
+		expect(
+			(await app.request(`${route}/${foreignId}/cancel`, { method: "POST" }))
+				.status,
+		).toBe(404);
+	}
+	expect(cancellations).toBe(0);
+	expect((await app.request(`${base}/${session.sessionId}`)).status).toBe(200);
+	expect((await app.request(`${botBase}/${bot.sessionId}`)).status).toBe(200);
+	expect(
+		(
+			await app.request(`${base}/${session.sessionId}/cancel`, {
+				method: "POST",
+			})
+		).status,
+	).toBe(200);
+	expect(
+		(
+			await app.request(`${botBase}/${bot.sessionId}/cancel`, {
+				method: "POST",
+			})
+		).status,
+	).toBe(200);
+	expect(cancellations).toBe(2);
 });
