@@ -750,6 +750,97 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("fails a second accepted Turn after Agent stop without authorization or Runtime send", async () => {
+		const first = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+		});
+		await client`update platform.outbox_items set status = 'succeeded' where id = ${first.itemId}`;
+		const second = {
+			executionId: `next-${first.executionId}`,
+			messageId: `next-${first.messageId}`,
+			turnId: `next-${first.turnId}`,
+			itemId: `conversation:turn:next-${first.executionId}`,
+		};
+		await client`insert into platform.conversation_executions
+			(execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id,
+			 status, session_generation, delivery_fence, authorization_revision,
+			 model_configuration_revision, model_option_id, reasoning_level, created_at, updated_at)
+			select ${second.executionId}, conversation_id, agent_id, actor_id, channel_id,
+				${second.turnId}, 'submitted', session_generation, 0, authorization_revision,
+				model_configuration_revision, model_option_id, reasoning_level, now(), now()
+			from platform.conversation_executions where execution_id = ${first.executionId}`;
+		await client`insert into platform.conversation_messages
+			(message_id, conversation_id, actor_id, role, text, execution_id, status,
+			 created_at, updated_at)
+			values (${second.messageId}, ${first.conversationId}, 'actor-dispatch',
+				'user', 'second accepted task', ${second.executionId}, 'submitted', now(), now())`;
+		await client`insert into platform.outbox_items
+			(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+			 available_at, created_at, updated_at)
+			select ${second.itemId}, scope_type, scope_id, operation,
+				payload || ${client.json({
+					executionId: second.executionId,
+					messageId: second.messageId,
+					turnId: second.turnId,
+				})}, trace_id, 'second-request', now(), now(), now()
+			from platform.outbox_items where id = ${first.itemId}`;
+		await client`update platform.conversations set status = 'active' where id = ${first.conversationId}`;
+		await client`update platform.agent_applications set status = 'stopped',
+			desired_state = 'stopped', service_availability = null
+			where agent_id = 'agent-dispatch'`;
+
+		const store = open();
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		let authorizationCalls = 0;
+		const dispatch = createConversationDispatchUseCaseV1({
+			store,
+			runtimeHost,
+			authorization: {
+				async authorize() {
+					authorizationCalls += 1;
+					throw new Error("Current identity is unavailable");
+				},
+			},
+			events: {
+				async persist() {
+					throw new Error("Stopped Turn must not produce Runtime events");
+				},
+			},
+		});
+		try {
+			const command = {
+				schemaVersion: 1 as const,
+				itemId: second.itemId,
+				workerId: "stopped-second-worker",
+			};
+			expect(await dispatch.dispatch(command)).toMatchObject({
+				outcome: "rejected",
+			});
+			expect(await dispatchState(second)).toMatchObject({
+				status: "failed",
+				execution_status: "failed",
+			});
+			const [message] = await client`
+				select status, failure_code from platform.conversation_messages
+				where message_id = ${second.messageId}`;
+			expect(message).toMatchObject({
+				status: "failed",
+				failure_code: "AGENT_NOT_RUNNING",
+			});
+			expect(await dispatch.dispatch(command)).toMatchObject({
+				outcome: "rejected",
+			});
+			expect(authorizationCalls).toBe(0);
+			expect(runtimeHost.sideEffectCount()).toBe(0);
+			expect(await dispatchState(first)).toMatchObject({
+				status: "succeeded",
+				execution_status: "completed",
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("rolls back the stopped Agent failure if the outbox cannot close", async () => {
 		const work = await seed();
 		await client`update platform.agent_applications set status = 'stopped',
