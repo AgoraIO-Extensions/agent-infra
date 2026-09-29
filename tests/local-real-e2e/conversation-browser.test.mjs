@@ -78,7 +78,10 @@ test("conversation detail keeps earlier execution events outside the submitted e
 
 test("conversation messages may have no execution while persisted events may not", () => {
 	const detail = mixedHistoryDetail();
-	assert.equal(ConversationDetailProjectionV2Schema.safeParse(detail).success, true);
+	assert.equal(
+		ConversationDetailProjectionV2Schema.safeParse(detail).success,
+		true,
+	);
 	const invalidEvent = {
 		...detail,
 		events: [{ ...detail.events[0], executionId: null }, detail.events[1]],
