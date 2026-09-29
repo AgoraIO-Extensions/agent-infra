@@ -67,6 +67,7 @@ async function fixture(
 	let agentDetailUnavailable = false;
 	let agentDetailUnauthorized = false;
 	let applicationsUnavailable = false;
+	let applicationsUnauthorized = false;
 	let applicationDetailUnavailable = false;
 	let applicationDetailUnauthorized = false;
 	let deploymentUnavailable = false;
@@ -142,15 +143,20 @@ async function fixture(
 						}
 					: { status: 200, body: agent },
 		listAgentApplications: () =>
-			applicationsUnavailable
+			applicationsUnauthorized
 				? {
-						status: 503,
-						body: retryableReadFailure,
+						status: 403,
+						body: pilotFakeScenariosV2.unauthorized.response.body,
 					}
-				: {
-						status: 200,
-						body: { items: [application], nextCursor: null },
-					},
+				: applicationsUnavailable
+					? {
+							status: 503,
+							body: retryableReadFailure,
+						}
+					: {
+							status: 200,
+							body: { items: [application], nextCursor: null },
+						},
 		getAgentApplication: () =>
 			applicationDetailUnauthorized
 				? {
@@ -359,6 +365,9 @@ async function fixture(
 		},
 		unauthorizedAgentDetail() {
 			agentDetailUnauthorized = true;
+		},
+		unauthorizedApplications() {
+			applicationsUnauthorized = true;
 		},
 		recoverAgentDetail() {
 			agentDetailUnavailable = false;
@@ -1067,6 +1076,15 @@ test("authorization failures do not offer retry actions for Agent reads", async 
 		page.getByRole("heading", { name: "申请暂不可用" }),
 	).toBeVisible();
 	await expect(page.getByRole("alert")).toHaveText("请联系管理员。");
+	await expect(page.getByRole("button", { name: "重新加载申请" })).toHaveCount(
+		0,
+	);
+
+	api.unauthorizedApplications();
+	await page.goto("/my-agents");
+	await expect(page.getByRole("alert")).toHaveText(
+		"当前无法查看申请，请联系管理员。",
+	);
 	await expect(page.getByRole("button", { name: "重新加载申请" })).toHaveCount(
 		0,
 	);

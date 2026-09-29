@@ -102,7 +102,8 @@ function EditAgentApplicationRoute() {
 	const deploymentConfigurationRetryable =
 		isRetryableDeploymentConfigurationError(deployment.error) ||
 		deployment.data?.kind === "ready" ||
-		(deployment.data?.kind === "unavailable" && deployment.data.retryable);
+		(deployment.data?.kind === "unavailable" && deployment.data.retryable) ||
+		false;
 
 	return (
 		<main className="platform-content management-content">

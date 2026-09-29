@@ -29,7 +29,8 @@ function NewAgentApplicationRoute() {
 	const deploymentConfigurationRetryable =
 		isRetryableDeploymentConfigurationError(deployment.error) ||
 		deployment.data?.kind === "ready" ||
-		(deployment.data?.kind === "unavailable" && deployment.data.retryable);
+		(deployment.data?.kind === "unavailable" && deployment.data.retryable) ||
+		false;
 	const error =
 		submission.isError && submission.error instanceof Error
 			? submission.error
