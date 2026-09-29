@@ -100,6 +100,48 @@ it.each(["timeout", "retry_exhausted", "auth_failed"])(
 	},
 );
 
+it("lets a replacement binding connect without retrying the failed binding", async () => {
+	let agentId = "original-agent";
+	let bindingReference = "original-binding";
+	const worker = createPlatformWecomConnectionsV1({
+		databaseUrl: "postgres://fixture",
+		holderId: "worker",
+		bindings: async () => [
+			{
+				botId: "bot",
+				agentId,
+				bindingReference,
+				credentialVersion: "v1",
+				secret: "fixture",
+			},
+		],
+		protectReply: async () => "fixture",
+		revealReply: async () => {
+			throw new Error("unused");
+		},
+		receive: async () => ({ outcome: "denied" }),
+	});
+	try {
+		await worker.tick();
+		mocks.terminal = "auth_failed";
+		await worker.tick();
+		expect(mocks.connect).toHaveBeenCalledTimes(1);
+
+		mocks.terminal = null;
+		agentId = "replacement-agent";
+		bindingReference = "replacement-binding";
+		await worker.tick();
+		expect(mocks.connect).toHaveBeenCalledTimes(2);
+
+		agentId = "original-agent";
+		bindingReference = "original-binding";
+		await worker.tick();
+		expect(mocks.connect).toHaveBeenCalledTimes(2);
+	} finally {
+		await worker.close();
+	}
+});
+
 it.each([false, true])(
 	"releases claimed leases after reconcile failure even if release fails: %s",
 	async (releaseFails) => {

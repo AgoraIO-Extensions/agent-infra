@@ -30,6 +30,16 @@ export interface WecomConnectionsDeploymentV1 {
 		outcome: "invalid" | "overloaded" | "unavailable",
 	) => void;
 }
+
+function bindingIdentity(
+	botId: string,
+	agentId: string,
+	bindingReference: string,
+	credentialVersion: string,
+): string {
+	return JSON.stringify([botId, agentId, bindingReference, credentialVersion]);
+}
+
 export function createPlatformWecomConnectionsV1(
 	options: WecomConnectionsDeploymentV1 & {
 		readonly databaseUrl: string;
@@ -50,8 +60,8 @@ export function createPlatformWecomConnectionsV1(
 			connection: ReturnType<typeof createWecomWebSocketV1>;
 		}
 	>();
-	const blocked = new Map<string, string>();
-	const retryAfter = new Map<string, { version: string; time: number }>();
+	const blocked = new Set<string>();
+	const retryAfter = new Map<string, { identity: string; time: number }>();
 	const statuses = new Map<string, Promise<unknown>>();
 	let closed = false;
 	let polling: Promise<void> | undefined;
@@ -63,11 +73,16 @@ export function createPlatformWecomConnectionsV1(
 		for (const [botId, entry] of active) {
 			const desired = bindings.find((b) => b.botId === botId);
 			const terminal = entry.connection.terminalReason;
-			if (terminal === "auth_failed")
-				blocked.set(botId, entry.credentialVersion);
+			const identity = bindingIdentity(
+				botId,
+				entry.claim.agentId,
+				entry.claim.bindingReference,
+				entry.credentialVersion,
+			);
+			if (terminal === "auth_failed") blocked.add(identity);
 			else if (terminal === "timeout" || terminal === "retry_exhausted")
 				retryAfter.set(botId, {
-					version: entry.credentialVersion,
+					identity,
 					time: Date.now() + 5000,
 				});
 			if (
@@ -90,15 +105,19 @@ export function createPlatformWecomConnectionsV1(
 		}
 		for (const configuration of bindings) {
 			const retry = retryAfter.get(configuration.botId);
+			const identity = bindingIdentity(
+				configuration.botId,
+				configuration.agentId,
+				configuration.bindingReference,
+				configuration.credentialVersion,
+			);
 			if (
 				closed ||
 				active.has(configuration.botId) ||
-				blocked.get(configuration.botId) === configuration.credentialVersion ||
-				(retry?.version === configuration.credentialVersion &&
-					Date.now() < retry.time)
+				blocked.has(identity) ||
+				(retry?.identity === identity && Date.now() < retry.time)
 			)
 				continue;
-			blocked.delete(configuration.botId);
 			retryAfter.delete(configuration.botId);
 			const claim = await leases.claim({
 				botId: configuration.botId,
