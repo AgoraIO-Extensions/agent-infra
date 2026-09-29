@@ -82,6 +82,16 @@ function requestError(input: { retryable?: boolean; code?: string } = {}) {
 	});
 }
 
+type RetryableMyAgentApplicationError = Error & { readonly retryable: true };
+
+export function isRetryableMyAgentApplicationError(
+	error: unknown,
+): error is RetryableMyAgentApplicationError {
+	return (
+		error instanceof Error && "retryable" in error && error.retryable === true
+	);
+}
+
 const retryableError = () => requestError();
 const maximumMyAgentApplicationPages = 100;
 

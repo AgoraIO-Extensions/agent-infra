@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { MyAgentApplicationDetailScreen } from "../../../features/my-agents/my-agent-application-detail-screen.js";
+import { isRetryableMyAgentApplicationError } from "../../../features/my-agents/my-agent-applications.js";
 import { useMyAgentApplication } from "../../../features/my-agents/use-my-agent-application.js";
 import { useWithdrawMyAgentApplication } from "../../../features/my-agents/use-withdraw-my-agent-application.js";
 
@@ -12,6 +13,9 @@ function MyAgentApplicationRoute() {
 	const { applicationId } = Route.useParams();
 	const query = useMyAgentApplication(applicationId);
 	const withdrawal = useWithdrawMyAgentApplication(applicationId);
+	const retryable =
+		isRetryableMyAgentApplicationError(query.error) ||
+		(query.data?.kind === "unavailable" && query.data.retryable);
 
 	return (
 		<main className="platform-content management-content">
@@ -23,7 +27,7 @@ function MyAgentApplicationRoute() {
 					query.isPending
 						? { kind: "loading" }
 						: query.isError || !query.data
-							? { kind: "unavailable", retryable: true }
+							? { kind: "unavailable", retryable }
 							: query.data
 				}
 				withdrawalError={withdrawal.isError}

@@ -68,6 +68,7 @@ async function fixture(
 	let agentDetailUnauthorized = false;
 	let applicationsUnavailable = false;
 	let applicationDetailUnavailable = false;
+	let applicationDetailUnauthorized = false;
 	let deploymentUnavailable = false;
 	let deploymentUnauthorized = false;
 	const retryableReadFailure = {
@@ -151,9 +152,14 @@ async function fixture(
 						body: { items: [application], nextCursor: null },
 					},
 		getAgentApplication: () =>
-			applicationDetailUnavailable
-				? { status: 503, body: retryableReadFailure }
-				: { status: 200, body: application },
+			applicationDetailUnauthorized
+				? {
+						status: 403,
+						body: pilotFakeScenariosV2.unauthorized.response.body,
+					}
+				: applicationDetailUnavailable
+					? { status: 503, body: retryableReadFailure }
+					: { status: 200, body: application },
 		createAgentApplication: () => ({ status: 201, body: application }),
 		updateAgentApplication: () => ({ status: 200, body: application }),
 		withdrawAgentApplication: () => ({ status: 200, body: application }),
@@ -365,6 +371,9 @@ async function fixture(
 		},
 		unavailableApplicationDetail() {
 			applicationDetailUnavailable = true;
+		},
+		unauthorizedApplicationDetail() {
+			applicationDetailUnauthorized = true;
 		},
 		recoverApplicationDetail() {
 			applicationDetailUnavailable = false;
@@ -1051,6 +1060,16 @@ test("authorization failures do not offer retry actions for Agent reads", async 
 	await expect(page.getByRole("button", { name: "重新加载配置" })).toHaveCount(
 		0,
 	);
+
+	api.unauthorizedApplicationDetail();
+	await page.goto("/my-agents/application-browser-1/edit");
+	await expect(
+		page.getByRole("heading", { name: "申请暂不可用" }),
+	).toBeVisible();
+	await expect(page.getByRole("alert")).toHaveText("请联系管理员。");
+	await expect(page.getByRole("button", { name: "重新加载申请" })).toHaveCount(
+		0,
+	);
 });
 
 test("configuration reads recover through the explicit browser action", async ({
@@ -1085,6 +1104,21 @@ test("application detail reads recover through the explicit browser action", asy
 	api.recoverApplicationDetail();
 	await page.getByRole("button", { name: "重新加载申请" }).click();
 	await expect(page.getByRole("heading", { name: "申请详情" })).toBeVisible();
+});
+
+test("editable application reads recover through the explicit browser action", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unavailableApplicationDetail();
+	await page.goto("/my-agents/application-browser-1/edit");
+	await expect(
+		page.getByRole("heading", { name: "申请暂不可用" }),
+	).toBeVisible();
+	await expect(page.getByRole("alert")).toContainText("请稍后重试。");
+	api.recoverApplicationDetail();
+	await page.getByRole("button", { name: "重新加载申请" }).click();
+	await expect(page.getByRole("heading", { name: "修改申请" })).toBeVisible();
 });
 
 test("deployment option reads recover before submitting an application", async ({

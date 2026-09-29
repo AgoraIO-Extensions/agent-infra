@@ -1,10 +1,14 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { RefreshCw } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
 import { unavailableDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
-import { getAgentApplicationEditAction } from "../../../features/my-agents/my-agent-applications.js";
+import {
+	getAgentApplicationEditAction,
+	isRetryableMyAgentApplicationError,
+} from "../../../features/my-agents/my-agent-applications.js";
 import { useAgentApplicationSubmission } from "../../../features/my-agents/use-agent-application-submission.js";
 import { useDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
 import { useMyAgentApplication } from "../../../features/my-agents/use-my-agent-application.js";
@@ -18,6 +22,9 @@ function EditAgentApplicationRoute() {
 	const query = useMyAgentApplication(applicationId);
 	const submission = useAgentApplicationSubmission(applicationId);
 	const deployment = useDeploymentConfiguration();
+	const retryable =
+		isRetryableMyAgentApplicationError(query.error) ||
+		(query.data?.kind === "unavailable" && query.data.retryable);
 	if (query.isPending) {
 		return <p aria-live="polite">正在读取申请…</p>;
 	}
@@ -35,7 +42,21 @@ function EditAgentApplicationRoute() {
 						申请暂不可用
 					</h1>
 					<Alert>
-						<AlertDescription>请稍后重试。</AlertDescription>
+						<AlertDescription>
+							{retryable ? "请稍后重试。" : "请联系管理员。"}
+						</AlertDescription>
+						{retryable ? (
+							<Button
+								className="mt-4"
+								variant="outline"
+								disabled={query.isFetching}
+								onClick={() => void query.refetch()}
+								type="button"
+							>
+								<RefreshCw aria-hidden="true" data-icon="inline-start" />
+								{query.isFetching ? "正在重新加载…" : "重新加载申请"}
+							</Button>
+						) : null}
 					</Alert>
 				</section>
 			</main>
