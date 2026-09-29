@@ -40,8 +40,9 @@ import type {
 	RuntimeSubmitTurnRequestV3,
 } from "@agent-infra/contracts/runtime";
 import {
-	createFakeModelCatalogAdapterV1,
+	createDeploymentModelCatalogAdapterV1,
 	projectRuntimeModelConfigurationV4,
+	runtimeModelInjectionV4,
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationRecordV2,
@@ -60,6 +61,7 @@ import {
 import postgres from "postgres";
 import { expect, it } from "vitest";
 import { createRuntimeHostApp } from "../apps/agent-runtime-host/src/app.js";
+import { readRuntimeModelConfigurationV4 } from "../apps/agent-runtime-host/src/configuration.js";
 import type { ProductionPlatformApiInputV1 } from "../apps/platform-api/src/deployment.js";
 import {
 	createPlatformApiShutdown,
@@ -319,6 +321,11 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		| undefined;
 	let modelServer: ReturnType<typeof createServer> | undefined;
 	let modelPort: number | undefined;
+	let redirectServer: ReturnType<typeof createServer> | undefined;
+	let redirectModelRequests = false;
+	let redirectTarget: string | undefined;
+	const redirectRequests: { body: string; authorization?: string }[] = [];
+	const redirectAttempts: { body: string; authorization?: string }[] = [];
 	let releaseModelResponse: (() => void) | undefined;
 	let releaseSecondModelResponse: (() => void) | undefined;
 	const modelResponseGate = realCodexE2e
@@ -357,6 +364,10 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		first: "synthetic-agent-execution-key-k1",
 		rotated: "synthetic-agent-execution-key-k2",
 		second: "synthetic-user-second-personal-key",
+	};
+	const browserSessionCookies = {
+		"user-cli": "worker_session=controlled-browser-first",
+		"user-second": "worker_session=controlled-browser-second",
 	};
 	const apiCredentials = {
 		"user-cli": "synthetic-user-cli-api-credential",
@@ -457,6 +468,17 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 					/^Bearer /,
 					"",
 				);
+				if (redirectModelRequests) {
+					redirectAttempts.push({
+						body,
+						...(request.headers.authorization
+							? { authorization: request.headers.authorization }
+							: {}),
+					});
+					response.writeHead(307, { location: redirectTarget ?? "" });
+					response.end();
+					return;
+				}
 				modelRequests.push({
 					body,
 					credential,
@@ -534,6 +556,24 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			if (!modelAddress || typeof modelAddress === "string")
 				throw Error("Controlled model server did not bind");
 			modelPort = modelAddress.port;
+			redirectServer = createServer(async (request, response) => {
+				const chunks: Uint8Array[] = [];
+				for await (const chunk of request) chunks.push(chunk);
+				redirectRequests.push({
+					body: Buffer.concat(chunks).toString(),
+					...(request.headers.authorization
+						? { authorization: request.headers.authorization }
+						: {}),
+				});
+				response.writeHead(500);
+				response.end();
+			});
+			redirectServer.listen(0, "127.0.0.1");
+			await once(redirectServer, "listening");
+			const redirectAddress = redirectServer.address();
+			if (!redirectAddress || typeof redirectAddress === "string")
+				throw Error("Controlled redirect endpoint did not bind");
+			redirectTarget = `http://127.0.0.1:${redirectAddress.port}/v1/responses`;
 		}
 		const baseDesired = workloadDesiredFixture(1, "agent-cli", "internal-only");
 		const configuration: AgentConfigurationRecordV2 = {
@@ -591,15 +631,52 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			revision: "worker-controlled-catalog",
 			validUntil: Date.now() + 600_000,
 			endpoints: [
-				{ ...catalogEndpoint, endpointId: "worker-controlled-endpoint" },
+				{
+					...catalogEndpoint,
+					endpointId: "worker-controlled-endpoint",
+					baseUrl: `http://127.0.0.1:${modelPort ?? 0}/v1`,
+					origin: `http://127.0.0.1:${modelPort ?? 0}`,
+					security: { tls: "loopback-http", redirects: "reject" },
+				},
 			],
 		};
+		const modelCatalog = keyedRuntime
+			? createDeploymentModelCatalogAdapterV1({
+					load: async () => structuredClone(controlledCatalog),
+				})
+			: undefined;
 		const modelProjection = keyedRuntime
 			? await projectRuntimeModelConfigurationV4({
 					configuration,
 					protocol: "openai-responses-v1",
-					catalog: createFakeModelCatalogAdapterV1(controlledCatalog),
+					catalog: modelCatalog as NonNullable<typeof modelCatalog>,
 					signal: AbortSignal.timeout(1000),
+				})
+			: undefined;
+		if (keyedRuntime && modelCatalog) {
+			const unapprovedConfiguration = structuredClone(configuration);
+			if (!unapprovedConfiguration.modelConfiguration)
+				throw Error("Controlled model configuration is missing");
+			unapprovedConfiguration.modelConfiguration.options[0] = {
+				...unapprovedConfiguration.modelConfiguration.options[0],
+				endpointId: "worker-unapproved-endpoint",
+			};
+			await expect(
+				projectRuntimeModelConfigurationV4({
+					configuration: unapprovedConfiguration,
+					protocol: "openai-responses-v1",
+					catalog: modelCatalog,
+					signal: AbortSignal.timeout(1000),
+				}),
+			).rejects.toThrow("MODEL_CONFIGURATION_UNAVAILABLE");
+			expect(redirectRequests).toHaveLength(0);
+		}
+		const modelInjection = modelProjection
+			? runtimeModelInjectionV4(modelProjection)
+			: undefined;
+		const runtimeModelConfiguration = modelInjection
+			? readRuntimeModelConfigurationV4({
+					AGENT_INFRA_RUNTIME_MODEL_CONFIG: modelInjection.configuration,
 				})
 			: undefined;
 		const desired = baseDesired;
@@ -759,21 +836,18 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		const driver = realCodexE2e
 			? await (async () => {
 					await verifyCodexPilotInstallation();
+					if (!runtimeModelConfiguration)
+						throw Error("Controlled V4 model configuration is missing");
 					return CodexRuntimeDriver.open({
 						nativeLane: "official-model-only",
 						path: join(directory, "driver.json"),
 						launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
-						configVersion: "worker-controlled-codex-v1",
-						defaultModelOptionId: "worker-controlled-model",
-						defaultReasoningLevel: "medium",
-						modelOptions: [
-							{
-								modelOptionId: "worker-controlled-model",
-								model: "gpt-5.6-sol",
-								reasoningLevels: ["medium"],
-								endpoint: `http://127.0.0.1:${modelPort}/v1`,
-							},
-						],
+						configVersion: runtimeModelConfiguration.configVersion,
+						defaultModelOptionId:
+							runtimeModelConfiguration.defaultModelOptionId,
+						defaultReasoningLevel:
+							runtimeModelConfiguration.defaultReasoningLevel,
+						modelOptions: runtimeModelConfiguration.modelOptions,
 						authorizeExternalAction: async (action) => {
 							if (action.kind === "tool" || !host) {
 								throw new Error(
@@ -1247,9 +1321,9 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 				fetch(`${apiOrigin}${path}`, {
 					method: "POST",
 					headers: {
-						authorization: keyedRuntime
-							? `Bearer ${apiCredentials[userId]}`
-							: `controlled-${userId}`,
+						...(keyedRuntime
+							? { authorization: `Bearer ${apiCredentials[userId]}` }
+							: { cookie: browserSessionCookies[userId] }),
 						"content-type": "application/json",
 						"Idempotency-Key": key,
 					},
@@ -1297,13 +1371,10 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 				imageRepository: "registry.example.test/agents/codex",
 				identity: {
 					resolve: async (request) => {
-						const token = request.headers.get("authorization");
-						const credentialUser = Object.entries(apiCredentials).find(
-							([, credential]) => credential === token,
+						const cookie = request.headers.get("cookie");
+						const userId = Object.entries(browserSessionCookies).find(
+							([, session]) => session === cookie,
 						)?.[0];
-						const userId = token?.startsWith("controlled-")
-							? token.slice("controlled-".length)
-							: credentialUser;
 						if (!userId || !["user-cli", "user-second"].includes(userId))
 							return null;
 						return {
@@ -1385,6 +1456,39 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 				log: () => {},
 			});
 			apiOrigin = `http://127.0.0.1:${(apiRunning.server.address() as AddressInfo).port}`;
+			if (!keyedRuntime) {
+				// Browser admission requires a server-resolved session. An API header
+				// must never fall back to that session, even when its cookie is valid.
+				const rejectedBrowserHeaders: Record<string, string>[] = [
+					{},
+					{ cookie: "worker_session=unregistered" },
+					{
+						cookie: browserSessionCookies["user-cli"],
+						authorization: "controlled-user-cli",
+					},
+					{
+						cookie: browserSessionCookies["user-cli"],
+						authorization: "Bearer invalid-browser-api-credential",
+					},
+				];
+				for (const [index, headers] of rejectedBrowserHeaders.entries()) {
+					const rejected = await fetch(
+						`${apiOrigin}/api/v1/agents/${desired.agentId}/conversations`,
+						{
+							method: "POST",
+							headers: {
+								...headers,
+								"content-type": "application/json",
+								"Idempotency-Key": `worker-browser-auth-negative-${index}`,
+							},
+							body: JSON.stringify({ schemaVersion: 1 }),
+						},
+					);
+					const body = await rejected.json();
+					expect(rejected.status, JSON.stringify(body)).toBe(401);
+					expect(body).toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
+				}
+			}
 			return admitHttp("user-cli", "worker-http");
 		};
 		if (!realCodexE2e && !packagedV4Fake) {
@@ -1500,6 +1604,31 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 			});
 			expect(modelRequests[0]?.body).toContain("controlled dispatch");
 			expect(modelJournalAtArrival).toHaveLength(1);
+			const approvedEndpoint = controlledCatalog.endpoints[0];
+			if (!approvedEndpoint || !redirectTarget)
+				throw Error("Controlled catalog redirect endpoint is missing");
+			redirectModelRequests = true;
+			let redirectProbe: Response;
+			try {
+				redirectProbe = await fetch(`${approvedEndpoint.baseUrl}/responses`, {
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${relayKeys.first}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ input: "redirect boundary probe" }),
+					redirect: "manual",
+				});
+			} finally {
+				redirectModelRequests = false;
+			}
+			expect(redirectProbe.status).toBe(307);
+			expect(redirectProbe.headers.get("location")).toBe(redirectTarget);
+			expect(redirectAttempts).toHaveLength(1);
+			expect(redirectAttempts[0]?.authorization).toBe(
+				`Bearer ${relayKeys.first}`,
+			);
+			expect(redirectRequests).toHaveLength(0);
 		}
 		if (packagedV4Fake) {
 			expect(modelRequests).toHaveLength(0);
@@ -1704,7 +1833,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 		if (!realCodexE2e) {
 			const response = await fetch(
 				`${apiOrigin}/api/v2/conversations/${first.conversationId}/executions/${first.executionId}`,
-				{ headers: { authorization: "controlled-user-cli" } },
+				{ headers: { cookie: browserSessionCookies["user-cli"] } },
 			);
 			const body = await response.json();
 			expect(response.status, JSON.stringify(body)).toBe(200);
@@ -2157,7 +2286,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 			assertPersistedOperations(task.events);
 			const webRead = async (path: string) => {
 				const response = await fetch(`${apiOrigin}${path}`, {
-					headers: { authorization: "controlled-user-cli" },
+					headers: { cookie: browserSessionCookies["user-cli"] },
 				});
 				const body = await response.json();
 				expect(response.status, JSON.stringify(body)).toBe(404);
@@ -2793,6 +2922,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 		await cleanup("diagnostic-sql", () => diagnosticSql.end({ timeout: 0 }));
 		await cleanup("host", async () => host?.close());
 		modelServer?.closeAllConnections();
+		redirectServer?.closeAllConnections();
 		runtimeServer?.closeAllConnections();
 		kube.closeAllConnections();
 		await cleanup("servers", async () => {
@@ -2803,6 +2933,9 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 				new Promise<void>((done) => kube.close(() => done())),
 				modelServer
 					? new Promise<void>((done) => modelServer?.close(() => done()))
+					: undefined,
+				redirectServer
+					? new Promise<void>((done) => redirectServer?.close(() => done()))
 					: undefined,
 			]);
 		});

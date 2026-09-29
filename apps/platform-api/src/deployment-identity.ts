@@ -25,7 +25,10 @@ export function withApiIdentityResolverV1<T extends IdentityAdapter>(
 	Object.defineProperties(resolved, {
 		resolve: {
 			enumerable: true,
-			value: (request: Request) => identity.resolve(request),
+			value: (request: Request) =>
+				request.headers.has("authorization")
+					? Promise.resolve(null)
+					: identity.resolve(request),
 		},
 		hydrateUsers: {
 			enumerable: true,
