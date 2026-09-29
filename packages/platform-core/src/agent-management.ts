@@ -43,6 +43,10 @@ export interface AgentManagementActorContextV1 {
 	readonly organizationIds: readonly string[];
 	readonly isAdministrator: boolean;
 	readonly principal?: ApiPrincipalV1;
+	readonly apiAuthority?: {
+		readonly credentialId: string;
+		readonly identityRevision: string;
+	};
 }
 
 interface AgentManagementCommandBaseV1 {
@@ -301,6 +305,11 @@ export interface AgentManagementTransactionRequestV1 {
 	readonly actorId: string;
 	readonly idempotencyKey: string;
 	readonly requestDigest: string;
+	readonly apiAuthority?: {
+		readonly credentialId: string;
+		readonly identityRevision: string;
+		readonly principal: ApiPrincipalV1;
+	};
 }
 
 export interface AgentManagementTransactionPortV1 {
@@ -854,6 +863,8 @@ export function createAgentManagementV1(
 		async executeManagementCommand(commandInput, actorContextInput) {
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
+			if (actorContext.principal && !actorContext.apiAuthority)
+				return { outcome: "denied", writePlan: null };
 			const applicationCommand = "applicationId" in command;
 			const subjectType = applicationCommand ? "agent_application" : "agent";
 			const subjectId = applicationCommand
@@ -871,6 +882,14 @@ export function createAgentManagementV1(
 						actorId: actorContext.principal?.id ?? actorContext.userId,
 						idempotencyKey: command.idempotencyKey,
 						requestDigest,
+						...(actorContext.apiAuthority && actorContext.principal
+							? {
+									apiAuthority: {
+										...actorContext.apiAuthority,
+										principal: actorContext.principal,
+									},
+								}
+							: {}),
 					},
 					(stateInput) => {
 						const state =

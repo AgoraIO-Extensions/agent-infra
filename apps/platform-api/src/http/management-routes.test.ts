@@ -1230,7 +1230,13 @@ describe("management routes", () => {
 				command: "restart_agent",
 				expectedRevision: management.revision,
 			}),
-			expect.anything(),
+			expect.objectContaining({
+				principal: { kind: "application", id: "application-caller" },
+				apiAuthority: {
+					credentialId: "credential-1",
+					identityRevision: "authorization-api-1",
+				},
+			}),
 		);
 	});
 

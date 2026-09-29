@@ -164,7 +164,10 @@ export interface ManagementRouteDependencies {
 	) => Promise<unknown>;
 }
 
-function actor(identity: IdentityContext): AgentManagementActorContextV1 {
+function actor(
+	identity: IdentityContext,
+	apiAuthority?: AgentManagementActorContextV1["apiAuthority"],
+): AgentManagementActorContextV1 {
 	return {
 		schemaVersion: 1,
 		userId: identity.userId,
@@ -174,6 +177,7 @@ function actor(identity: IdentityContext): AgentManagementActorContextV1 {
 		...(identity.principal === undefined
 			? {}
 			: { principal: identity.principal }),
+		...(apiAuthority === undefined ? {} : { apiAuthority }),
 	};
 }
 
@@ -1752,7 +1756,15 @@ export function registerManagementRoutes(
 						requestId: metadata.requestId,
 						traceId: metadata.traceId,
 					},
-					actor(identity),
+					actor(
+						identity,
+						api
+							? {
+									credentialId: api.credential.credentialId,
+									identityRevision: api.authorizationRevision,
+								}
+							: undefined,
+					),
 				),
 				metadata.traceId,
 				api

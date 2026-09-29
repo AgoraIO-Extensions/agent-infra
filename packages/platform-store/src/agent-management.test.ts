@@ -425,6 +425,213 @@ describe("PostgreSQL Agent-management Adapter", () => {
 		expect(counts).toEqual({ history: 1, outbox: 1, audit: 1, idempotency: 1 });
 	});
 
+	it("denies lifecycle after concurrent credential revocation", async () => {
+		const active = stateFixture({
+			applicationId: "application_api_active",
+			agentId: "agent_api_active",
+		});
+		const racing = stateFixture({
+			applicationId: "application_api_racing",
+			agentId: "agent_api_racing",
+		});
+		await seedStates([active, racing]);
+		await adminClient`
+			update platform.agents set authorization_revision = 'grant-1'
+			where id in (${active.agentId}, ${racing.agentId})
+		`;
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values
+				(${active.agentId}, 'user', 'api-user', 'manage', 'grant-1'),
+				(${racing.agentId}, 'user', 'api-user', 'manage', 'grant-1')
+		`;
+		await adminClient`
+			insert into platform.platform_api_credentials
+				(id, principal_type, principal_id, credential_hash, scopes)
+			values ('credential_lifecycle', 'user', 'api-user',
+				repeat('b', 64), '["agent:manage"]'::jsonb)
+		`;
+		const apiActor: AgentManagementActorContextV1 = {
+			...applicant,
+			userId: "api-user",
+			principal: { kind: "user", id: "api-user" },
+			apiAuthority: {
+				credentialId: "credential_lifecycle",
+				identityRevision: "identity-1",
+			},
+		};
+		const adapter = new PostgresAgentManagementTransactionV1({ databaseUrl });
+		adapters.push(adapter);
+		const management = createAgentManagementV1(adapter);
+		expect(
+			await management.executeManagementCommand(
+				command("stop_agent", active, "api-active"),
+				apiActor,
+			),
+		).toMatchObject({ outcome: "accepted" });
+		const beforeRevocation = await databaseSnapshot();
+		await adminClient`
+			update platform.platform_api_credentials
+			set scopes = '["agent:read"]'::jsonb
+			where id = 'credential_lifecycle'
+		`;
+		expect(
+			await management.executeManagementCommand(
+				command("stop_agent", racing, "api-scope-narrowed"),
+				apiActor,
+			),
+		).toMatchObject({ outcome: "denied" });
+		await adminClient`
+			update platform.platform_api_credentials
+			set scopes = '["agent:manage"]'::jsonb,
+				expires_at = now() - interval '1 second'
+			where id = 'credential_lifecycle'
+		`;
+		expect(
+			await management.executeManagementCommand(
+				command("stop_agent", racing, "api-expired"),
+				apiActor,
+			),
+		).toMatchObject({ outcome: "denied" });
+		await adminClient`
+			update platform.platform_api_credentials
+			set principal_id = 'other-user', expires_at = null
+			where id = 'credential_lifecycle'
+		`;
+		expect(
+			await management.executeManagementCommand(
+				command("stop_agent", racing, "api-other-user"),
+				apiActor,
+			),
+		).toMatchObject({ outcome: "denied" });
+		expect(await databaseSnapshot()).toEqual(beforeRevocation);
+		await adminClient`
+			update platform.platform_api_credentials set principal_id = 'api-user'
+			where id = 'credential_lifecycle'
+		`;
+		const revoker = postgres(databaseUrl, { max: 1 });
+		let releaseRevocation: (() => void) | undefined;
+		const held = new Promise<void>((resolve) => {
+			releaseRevocation = resolve;
+		});
+		let markRevocationLocked: (() => void) | undefined;
+		const revocationLocked = new Promise<void>((resolve) => {
+			markRevocationLocked = resolve;
+		});
+		const revocation = Promise.resolve(
+			revoker.begin(async (transaction) => {
+				await transaction`
+					update platform.platform_api_credentials set revoked_at = now()
+					where id = 'credential_lifecycle'
+				`;
+				markRevocationLocked?.();
+				await held;
+			}),
+		);
+		let pending:
+			| ReturnType<typeof management.executeManagementCommand>
+			| undefined;
+		try {
+			await revocationLocked;
+			pending = management.executeManagementCommand(
+				command("stop_agent", racing, "api-racing"),
+				apiActor,
+			);
+			await waitForBlockedQuery(["platform_api_credentials"]);
+			releaseRevocation?.();
+			await revocation;
+			expect(await pending).toMatchObject({ outcome: "denied" });
+			expect(
+				await management.executeManagementCommand(
+					command("stop_agent", active, "api-active"),
+					apiActor,
+				),
+			).toMatchObject({ outcome: "denied" });
+			expect(await databaseSnapshot()).toEqual(beforeRevocation);
+		} finally {
+			releaseRevocation?.();
+			await revocation.catch(() => undefined);
+			await pending?.catch(() => undefined);
+			await revoker.end();
+		}
+	});
+
+	it("rechecks application status and identity revision before API lifecycle commit", async () => {
+		const active = stateFixture({
+			applicationId: "application_api_app_active",
+			agentId: "agent_api_app_active",
+		});
+		const disabled = stateFixture({
+			applicationId: "application_api_app_disabled",
+			agentId: "agent_api_app_disabled",
+		});
+		await seedStates([active, disabled]);
+		await adminClient`
+			update platform.agents set authorization_revision = 'grant-app-1'
+			where id in (${active.agentId}, ${disabled.agentId})
+		`;
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values
+				(${active.agentId}, 'application', 'caller-app-lifecycle', 'manage', 'grant-app-1'),
+				(${disabled.agentId}, 'application', 'caller-app-lifecycle', 'manage', 'grant-app-1')
+		`;
+		await adminClient`
+			insert into platform.platform_applications
+				(id, name, responsible_user_id, authorization_revision)
+			values ('caller-app-lifecycle', 'Caller', 'user-owner', 'app-revision-1')
+		`;
+		await adminClient`
+			insert into platform.platform_api_credentials
+				(id, principal_type, principal_id, credential_hash, scopes)
+			values ('credential_app_lifecycle', 'application', 'caller-app-lifecycle',
+				repeat('c', 64), '["agent:manage"]'::jsonb)
+		`;
+		const appActor: AgentManagementActorContextV1 = {
+			...applicant,
+			userId: "user-owner",
+			principal: { kind: "application", id: "caller-app-lifecycle" },
+			apiAuthority: {
+				credentialId: "credential_app_lifecycle",
+				identityRevision: "app-revision-1",
+			},
+		};
+		const adapter = new PostgresAgentManagementTransactionV1({ databaseUrl });
+		adapters.push(adapter);
+		const management = createAgentManagementV1(adapter);
+		expect(
+			await management.executeManagementCommand(
+				command("stop_agent", active, "app-active"),
+				appActor,
+			),
+		).toMatchObject({ outcome: "accepted" });
+		const beforeDisable = await databaseSnapshot();
+		await adminClient`
+			update platform.platform_applications set status = 'disabled'
+			where id = 'caller-app-lifecycle'
+		`;
+		expect(
+			await management.executeManagementCommand(
+				command("stop_agent", disabled, "app-disabled"),
+				appActor,
+			),
+		).toMatchObject({ outcome: "denied" });
+		await adminClient`
+			update platform.platform_applications
+			set status = 'active', authorization_revision = 'app-revision-2'
+			where id = 'caller-app-lifecycle'
+		`;
+		expect(
+			await management.executeManagementCommand(
+				command("stop_agent", disabled, "app-stale-revision"),
+				appActor,
+			),
+		).toMatchObject({ outcome: "denied" });
+		expect(await databaseSnapshot()).toEqual(beforeDisable);
+	});
+
 	it("resolves authorization and readiness from one repeatable snapshot", async () => {
 		const state = stateFixture({
 			applicationId: "application_access_snapshot",

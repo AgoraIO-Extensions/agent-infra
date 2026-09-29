@@ -4,6 +4,7 @@ import { agentManagementV1Conformance } from "./agent-management.conformance.ts"
 import {
 	AgentManagementError,
 	type AgentManagementStateV1,
+	createAgentManagementV1,
 	snapshotAgentManagementWritePlanV1,
 } from "./agent-management.ts";
 import { FakeAgentManagementV1 } from "./fake-agent-management.ts";
@@ -12,6 +13,41 @@ describe("Fake Agent management Interface", () => {
 	agentManagementV1Conformance(async (options) =>
 		Promise.resolve(new FakeAgentManagementV1(options)),
 	);
+});
+
+it("denies an API-principal management command without credential authority", async () => {
+	let transactions = 0;
+	const management = createAgentManagementV1({
+		async executeAgentManagementTransaction() {
+			transactions += 1;
+			return { outcome: "denied", writePlan: null };
+		},
+		async resolveAgentAccessState() {
+			return undefined;
+		},
+	});
+	expect(
+		await management.executeManagementCommand(
+			{
+				schemaVersion: 1,
+				command: "stop_agent",
+				agentId: "agent-api",
+				expectedRevision: 1,
+				idempotencyKey: "missing-credential",
+				requestId: "request-missing-credential",
+				traceId: "trace-missing-credential",
+			},
+			{
+				schemaVersion: 1,
+				userId: "api-user",
+				accountStatus: "active",
+				organizationIds: [],
+				isAdministrator: false,
+				principal: { kind: "user", id: "api-user" },
+			},
+		),
+	).toEqual({ outcome: "denied", writePlan: null });
+	expect(transactions).toBe(0);
 });
 
 it("snapshots management plans without reading hostile accessors or Proxy traps", async () => {

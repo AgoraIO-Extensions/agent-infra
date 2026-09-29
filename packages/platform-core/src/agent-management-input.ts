@@ -150,11 +150,13 @@ export function parseAgentManagementActorContext(
 		"isAdministrator",
 	];
 	if (
-		Object.keys(values).length < requiredKeys.length ||
+		requiredKeys.some((key) => !Object.hasOwn(values, key)) ||
 		Object.keys(values).some(
-			(key) => !requiredKeys.includes(key) && key !== "principal",
-		) ||
-		(Object.hasOwn(values, "principal") && Object.keys(values).length !== 6)
+			(key) =>
+				!requiredKeys.includes(key) &&
+				key !== "principal" &&
+				key !== "apiAuthority",
+		)
 	)
 		invalidAgentManagementInput();
 	if (
@@ -177,6 +179,24 @@ export function parseAgentManagementActorContext(
 			invalidAgentManagementInput();
 		principal = { kind: value.kind, id: value.id };
 	}
+	let apiAuthority: AgentManagementActorContextV1["apiAuthority"];
+	if (Object.hasOwn(values, "apiAuthority")) {
+		const authority = snapshotAgentManagementDataObject(values.apiAuthority);
+		requireAgentManagementExactKeys(authority, [
+			"credentialId",
+			"identityRevision",
+		]);
+		if (
+			!principal ||
+			!isAgentManagementText(authority.credentialId) ||
+			!isAgentManagementText(authority.identityRevision)
+		)
+			invalidAgentManagementInput();
+		apiAuthority = {
+			credentialId: authority.credentialId,
+			identityRevision: authority.identityRevision,
+		};
+	}
 	return {
 		schemaVersion: 1,
 		userId: values.userId,
@@ -187,6 +207,7 @@ export function parseAgentManagementActorContext(
 		),
 		isAdministrator: values.isAdministrator,
 		...(principal === undefined ? {} : { principal }),
+		...(apiAuthority === undefined ? {} : { apiAuthority }),
 	};
 }
 

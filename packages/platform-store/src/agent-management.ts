@@ -28,6 +28,8 @@ import {
 	agentPrincipalGrants,
 	agents,
 	idempotencyRecords,
+	platformApiCredentials,
+	platformApplications,
 } from "./schema.js";
 
 export interface PostgresAgentManagementOptionsV1 {
@@ -154,6 +156,61 @@ async function readIdempotency(
 		.where(idempotencyWhere(request))
 		.limit(1);
 	return row;
+}
+
+async function currentApiCredentialAllowsManagement(
+	transaction: Transaction,
+	request: AgentManagementTransactionRequestV1,
+): Promise<boolean> {
+	if (!request.apiAuthority) return true;
+	const [credential] = await transaction
+		.select({
+			principalType: platformApiCredentials.principalType,
+			principalId: platformApiCredentials.principalId,
+			scopes: platformApiCredentials.scopes,
+			expiresAt: platformApiCredentials.expiresAt,
+			revokedAt: platformApiCredentials.revokedAt,
+		})
+		.from(platformApiCredentials)
+		.where(eq(platformApiCredentials.id, request.apiAuthority.credentialId))
+		.limit(1)
+		.for("share");
+	if (!credential) return false;
+	const [clock] = await transaction
+		.select({
+			nowMs: sql<number>`(extract(epoch from clock_timestamp()) * 1000)::float8`,
+		})
+		.from(platformApiCredentials)
+		.where(eq(platformApiCredentials.id, request.apiAuthority.credentialId))
+		.limit(1);
+	const validCredential =
+		clock !== undefined &&
+		request.apiAuthority.principal.id === request.actorId &&
+		credential.principalType === request.apiAuthority.principal.kind &&
+		credential.principalId === request.apiAuthority.principal.id &&
+		Array.isArray(credential.scopes) &&
+		credential.scopes.includes("agent:manage") &&
+		credential.revokedAt === null &&
+		(credential.expiresAt === null ||
+			credential.expiresAt.getTime() > clock.nowMs);
+	if (!validCredential) return false;
+	if (request.apiAuthority.principal.kind === "application") {
+		const [application] = await transaction
+			.select({
+				status: platformApplications.status,
+				authorizationRevision: platformApplications.authorizationRevision,
+			})
+			.from(platformApplications)
+			.where(eq(platformApplications.id, request.apiAuthority.principal.id))
+			.limit(1)
+			.for("share");
+		return (
+			application?.status === "active" &&
+			application.authorizationRevision ===
+				request.apiAuthority.identityRevision
+		);
+	}
+	return true;
 }
 
 export async function readAgentManagementState(
@@ -437,13 +494,21 @@ export class PostgresAgentManagementTransactionV1
 					await readIdempotency(transaction, request),
 					request,
 				);
-				if (firstReplay) return firstReplay;
+				if (firstReplay) {
+					if (
+						!(await currentApiCredentialAllowsManagement(transaction, request))
+					)
+						return { outcome: "denied", writePlan: null };
+					return firstReplay;
+				}
 				const state = await lockState(transaction, request);
 				const secondReplay = await replay(
 					transaction,
 					await readIdempotency(transaction, request),
 					request,
 				);
+				if (!(await currentApiCredentialAllowsManagement(transaction, request)))
+					return { outcome: "denied", writePlan: null };
 				if (secondReplay) return secondReplay;
 				const decision = decide(state && structuredClone(state));
 				if (decision.outcome !== "accepted") return decision;
