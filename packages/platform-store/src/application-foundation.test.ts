@@ -501,7 +501,98 @@ describe("PostgreSQL application foundation transaction", () => {
 		}
 	});
 
-	it.each(["credential revoked", "scope narrowed", "application disabled"])(
+	it("rejects an API replay after its credential is revoked", async () => {
+		await resetDatabase();
+		await seedApiCreationAuthority();
+		const submission =
+			new builtStore.PostgresApplicationFoundationTransactionV1({
+				databaseUrl,
+			});
+		const actor = {
+			...applicationFoundationActorContextV1,
+			principal: { kind: "application" as const, id: "application-caller" },
+			creationMode: "api" as const,
+			apiAuthority: {
+				credentialId: "credential-caller",
+				identityRevision: "app-7",
+			},
+		};
+		try {
+			const foundation = createApplicationFoundationUseCaseV1({
+				transaction: submission,
+				...applicationFoundationAdmissionDependenciesV1(),
+			});
+			await foundation.submit(
+				applicationFoundationCommandV1,
+				actor,
+				createSecretRecordFixtureResolver(),
+			);
+			await adminClient`
+				update platform.platform_api_credentials
+				set revoked_at = clock_timestamp()
+				where id = 'credential-caller'
+			`;
+			await expect(
+				foundation.submit(
+					applicationFoundationCommandV1,
+					actor,
+					createSecretRecordFixtureResolver(),
+				),
+			).rejects.toMatchObject({ code: "not_authorized" });
+			const [counts] = await adminClient`
+				select
+					(select count(*) from platform.agents) as agents,
+					(select count(*) from platform.agent_applications) as applications,
+					(select count(*) from platform.idempotency_records
+						where command_type = 'agent.application.submit.v1') as reservations
+			`;
+			expect(counts).toEqual({
+				agents: "1",
+				applications: "1",
+				reservations: "1",
+			});
+		} finally {
+			await submission.close();
+		}
+	});
+
+	it("rejects a creating plan without a proven principal", async () => {
+		await resetDatabase();
+		const adapter = new builtStore.PostgresApplicationFoundationTransactionV1({
+			databaseUrl,
+		});
+		const { plan, attachments } =
+			await captureApplicationFoundationSubmission();
+		const invalid = {
+			...structuredClone(plan),
+			application: { ...structuredClone(plan.application), status: "creating" },
+			result: { ...structuredClone(plan.result), status: "creating" },
+			auditEvent: {
+				...structuredClone(plan.auditEvent),
+				actorType: "application",
+				actorId: "application-caller",
+			},
+			principal: undefined,
+			apiAuthority: undefined,
+		} satisfies ApplicationFoundationWritePlanV1;
+		try {
+			await expect(adapter.commit(invalid, attachments)).rejects.toMatchObject({
+				code: "persistence_failed",
+			});
+			await expect(
+				adminClient`select id from platform.agents`,
+			).resolves.toEqual([]);
+		} finally {
+			await adapter.close();
+		}
+	});
+
+	it.each([
+		"credential revoked",
+		"credential principal mismatch",
+		"scope narrowed",
+		"application disabled",
+	])(
 		"rejects API creation when %s after admission but before commit",
 		async (change) => {
 			await resetDatabase();
@@ -520,6 +611,12 @@ describe("PostgreSQL application foundation transaction", () => {
 								await adminClient`
 								update platform.platform_api_credentials
 								set revoked_at = clock_timestamp()
+								where id = 'credential-caller'
+							`;
+							else if (change === "credential principal mismatch")
+								await adminClient`
+								update platform.platform_api_credentials
+								set principal_id = 'other-application'
 								where id = 'credential-caller'
 							`;
 							else if (change === "scope narrowed")

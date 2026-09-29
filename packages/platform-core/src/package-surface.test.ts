@@ -90,6 +90,7 @@ describe("platform-core package surface", () => {
 			"isConfirmedResultFileV1",
 			"isConversationGenerationBarrierConfirmedV1",
 			"isPlatformConversationChannelCurrentV1",
+			"isSameApiCreationAuthorityV1",
 			"isTaskAuthorizationCurrentV1",
 			"isTaskPrincipalChannelV1",
 			"parseAgentConfigurationChangesV1",

@@ -303,6 +303,64 @@ async function requirePersistedReplayIntegrity(
 	}
 }
 
+async function requireCurrentApiCreationAuthority(
+	database: Pick<ReturnType<typeof drizzle>, "select">,
+	plan: ReturnType<typeof validatedPlan>["plan"],
+): Promise<void> {
+	if (!plan.apiAuthority || !plan.principal) {
+		if (plan.application.status === "creating")
+			throw new ApplicationFoundationError("not_authorized");
+		return;
+	}
+	const [credential] = await database
+		.select({
+			principalType: platformApiCredentials.principalType,
+			principalId: platformApiCredentials.principalId,
+			scopes: platformApiCredentials.scopes,
+			expiresAt: platformApiCredentials.expiresAt,
+			revokedAt: platformApiCredentials.revokedAt,
+		})
+		.from(platformApiCredentials)
+		.where(eq(platformApiCredentials.id, plan.apiAuthority.credentialId))
+		.limit(1)
+		.for("share");
+	const [clock] = await database
+		.select({ now: sql<Date>`clock_timestamp()` })
+		.from(platformApiCredentials)
+		.where(eq(platformApiCredentials.id, plan.apiAuthority.credentialId))
+		.limit(1);
+	if (
+		!credential ||
+		!clock ||
+		credential.principalType !== plan.principal.kind ||
+		credential.principalId !== plan.principal.id ||
+		!Array.isArray(credential.scopes) ||
+		!credential.scopes.includes("agent:create") ||
+		credential.revokedAt !== null ||
+		(credential.expiresAt !== null &&
+			credential.expiresAt.getTime() <= clock.now.getTime())
+	)
+		throw new ApplicationFoundationError("not_authorized");
+	if (plan.principal.kind === "application") {
+		const [application] = await database
+			.select({
+				status: platformApplications.status,
+				responsibleUserId: platformApplications.responsibleUserId,
+				authorizationRevision: platformApplications.authorizationRevision,
+			})
+			.from(platformApplications)
+			.where(eq(platformApplications.id, plan.principal.id))
+			.limit(1)
+			.for("share");
+		if (
+			application?.status !== "active" ||
+			application.responsibleUserId !== plan.application.applicantId ||
+			application.authorizationRevision !== plan.apiAuthority.identityRevision
+		)
+			throw new ApplicationFoundationError("not_authorized");
+	}
+}
+
 export class PostgresApplicationFoundationTransactionV1
 	implements ApplicationFoundationTransactionPortV1
 {
@@ -361,6 +419,7 @@ export class PostgresApplicationFoundationTransactionV1
 		try {
 			const { plan, configuration, result } = validatedPlan(input);
 			return await this.#database.transaction(async (transaction) => {
+				await requireCurrentApiCreationAuthority(transaction, plan);
 				const [reservation] = await transaction
 					.insert(idempotencyRecords)
 					.values({
@@ -405,62 +464,6 @@ export class PostgresApplicationFoundationTransactionV1
 					}
 					return replay;
 				}
-				if (plan.apiAuthority && plan.principal) {
-					const [credential] = await transaction
-						.select({
-							principalType: platformApiCredentials.principalType,
-							principalId: platformApiCredentials.principalId,
-							scopes: platformApiCredentials.scopes,
-							expiresAt: platformApiCredentials.expiresAt,
-							revokedAt: platformApiCredentials.revokedAt,
-						})
-						.from(platformApiCredentials)
-						.where(
-							eq(platformApiCredentials.id, plan.apiAuthority.credentialId),
-						)
-						.limit(1)
-						.for("share");
-					const [clock] = await transaction
-						.select({ now: sql<Date>`clock_timestamp()` })
-						.from(platformApiCredentials)
-						.where(
-							eq(platformApiCredentials.id, plan.apiAuthority.credentialId),
-						)
-						.limit(1);
-					if (
-						!credential ||
-						!clock ||
-						credential.principalType !== plan.principal.kind ||
-						credential.principalId !== plan.principal.id ||
-						!Array.isArray(credential.scopes) ||
-						!credential.scopes.includes("agent:create") ||
-						credential.revokedAt !== null ||
-						(credential.expiresAt !== null &&
-							credential.expiresAt.getTime() <= clock.now.getTime())
-					)
-						throw new ApplicationFoundationError("not_authorized");
-					if (plan.principal.kind === "application") {
-						const [application] = await transaction
-							.select({
-								status: platformApplications.status,
-								responsibleUserId: platformApplications.responsibleUserId,
-								authorizationRevision:
-									platformApplications.authorizationRevision,
-							})
-							.from(platformApplications)
-							.where(eq(platformApplications.id, plan.principal.id))
-							.limit(1)
-							.for("share");
-						if (
-							application?.status !== "active" ||
-							application.responsibleUserId !== plan.application.applicantId ||
-							application.authorizationRevision !==
-								plan.apiAuthority.identityRevision
-						)
-							throw new ApplicationFoundationError("not_authorized");
-					}
-				}
-
 				await transaction.insert(agents).values({
 					id: plan.agent.agentId,
 					currentConfigurationRevision: plan.agent.currentConfigurationRevision,

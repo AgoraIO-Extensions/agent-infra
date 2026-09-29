@@ -112,6 +112,52 @@ describe("Application foundation use case", () => {
 		);
 	});
 
+	it("rechecks API authority through commit before replaying", async () => {
+		let commitCalls = 0;
+		const replayed = {
+			schemaVersion: 1 as const,
+			applicationId: applicationFoundationCommandV1.applicationId,
+			agentId: applicationFoundationCommandV1.agentId,
+			configurationRevision: 1 as const,
+			status: "creating" as const,
+		};
+		const useCase = createApplicationFoundationUseCaseV1(
+			{
+				...applicationFoundationAdmissionDependenciesV1(),
+				transaction: {
+					async read() {
+						return { outcome: "replayed", result: replayed };
+					},
+					async commit(plan) {
+						commitCalls += 1;
+						expect(plan.apiAuthority).toEqual({
+							credentialId: "credential-caller",
+							identityRevision: "app-7",
+						});
+						return { outcome: "replayed", result: plan.result };
+					},
+				},
+			},
+			{ now: () => new Date(serverInstant) },
+		);
+		await expect(
+			useCase.submit(
+				applicationFoundationCommandV1,
+				{
+					...applicationFoundationActorContextV1,
+					principal: { kind: "application", id: "application-caller" },
+					creationMode: "api",
+					apiAuthority: {
+						credentialId: "credential-caller",
+						identityRevision: "app-7",
+					},
+				},
+				pendingSecretRecordAttachmentFixtureV1(),
+			),
+		).resolves.toEqual(replayed);
+		expect(commitCalls).toBe(1);
+	});
+
 	it("gives an API application principal its own initial availability", async () => {
 		let captured: ApplicationFoundationWritePlanV1 | undefined;
 		const useCase = createApplicationFoundationUseCaseV1(
@@ -142,6 +188,66 @@ describe("Application foundation use case", () => {
 		expect(captured?.access.availability).toEqual([
 			{ kind: "application", applicationId: "application-caller" },
 		]);
+	});
+
+	it("keeps application availability separate from its initial grants at the 256-target limit", async () => {
+		let captured: ApplicationFoundationWritePlanV1 | undefined;
+		const dependencies = applicationFoundationAdmissionDependenciesV1();
+		const availability = Array.from({ length: 256 }, (_, index) => ({
+			kind: "organization" as const,
+			organizationId: `organization-${String(index).padStart(3, "0")}`,
+		}));
+		const useCase = createApplicationFoundationUseCaseV1(
+			{
+				...dependencies,
+				authorizationAdmission: {
+					async authorize(input) {
+						const admitted =
+							await dependencies.authorizationAdmission.authorize(input);
+						if (admitted.status !== "admitted") return admitted;
+						if (!admitted.authorityContext)
+							throw new Error("Missing test authority");
+						return {
+							...admitted,
+							authorityContext: {
+								...admitted.authorityContext,
+								organizationIds: availability.map(
+									(target) => target.organizationId,
+								),
+							},
+						};
+					},
+				},
+				transaction: readyTransaction({
+					async commit(plan) {
+						captured = plan;
+						return { outcome: "committed", result: plan.result };
+					},
+				}),
+			},
+			{ now: () => new Date(serverInstant) },
+		);
+		await useCase.submit(
+			{ ...applicationFoundationCommandV1, availability },
+			{
+				...applicationFoundationActorContextV1,
+				principal: { kind: "application", id: "application-caller" },
+				creationMode: "api",
+				apiAuthority: {
+					credentialId: "credential-caller",
+					identityRevision: "app-7",
+				},
+			},
+			pendingSecretRecordAttachmentFixtureV1(),
+		);
+		expect(captured?.access.availability).toEqual([
+			{ kind: "application", applicationId: "application-caller" },
+			...availability,
+		]);
+		expect(captured?.principal).toEqual({
+			kind: "application",
+			id: "application-caller",
+		});
 	});
 
 	it("rejects a staged actor getter without reading it", async () => {

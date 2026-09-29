@@ -50,6 +50,13 @@ describe("deployment identity scope", () => {
 		expect(await wrapped.resolve(new Request("https://platform.test"))).toEqual(
 			identity,
 		);
+		expect(
+			await wrapped.resolve(
+				new Request("https://platform.test", {
+					headers: { Authorization: "Bearer invalid" },
+				}),
+			),
+		).toBeNull();
 		expect(await wrapped.hydrateUsers(["alice"])).toEqual([identity]);
 		expect(await wrapped.resolveUser?.("alice")).toMatchObject({
 			userId: "alice",

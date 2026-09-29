@@ -26,6 +26,27 @@ describe("PostgreSQL API identity store", () => {
 	let testDatabase: PostgresTestDatabase | undefined;
 	let store: PostgresApiIdentityStoreV1;
 
+	async function waitForBlockedQuery(
+		includes: readonly string[],
+	): Promise<void> {
+		for (let attempt = 0; attempt < 100; attempt += 1) {
+			const rows = await adminClient<{ query: string }[]>`
+				select query from pg_stat_activity
+				where datname = current_database() and wait_event_type = 'Lock'
+			`;
+			if (
+				rows.some(({ query }) =>
+					includes.every((fragment) => query.toLowerCase().includes(fragment)),
+				)
+			)
+				return;
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		throw new Error(
+			`Timed out waiting for blocked query: ${includes.join(", ")}`,
+		);
+	}
+
 	beforeAll(async () => {
 		testDatabase = await startPostgresTestDatabase("platform-api-identity");
 		databaseUrl = testDatabase.databaseUrl;
@@ -516,6 +537,126 @@ describe("PostgreSQL API identity store", () => {
 			where id = 'agent_owner_change'
 		`,
 			).toEqual([{ authorization_revision: "revision_owner_1" }]);
+		},
+	);
+
+	it.each(["grant", "revoke"] as const)(
+		"serializes %s authority against an application disablement",
+		async (operation) => {
+			await adminClient`truncate platform.audit_events,
+				platform.agent_principal_grants, platform.platform_api_credentials,
+				platform.platform_applications, platform.agents cascade`;
+			await adminClient`
+				insert into platform.agents (id, authorization_revision)
+				values ('agent_grant_lock', 'revision_lock_1')
+			`;
+			await adminClient`
+				insert into platform.platform_applications
+					(id, name, responsible_user_id, status, authorization_revision)
+				values ('manager-lock-app', 'Manager', 'user_owner', 'active', 'app-lock-1')
+			`;
+			await adminClient`
+				insert into platform.platform_api_credentials
+					(id, principal_type, principal_id, credential_hash, scopes)
+				values ('credential_lock', 'application', 'manager-lock-app',
+					repeat('e', 64), '["agent:manage"]'::jsonb)
+			`;
+			await adminClient`
+				insert into platform.agent_principal_grants
+					(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+				values ('agent_grant_lock', 'application', 'manager-lock-app', 'manage',
+					'revision_lock_1')
+			`;
+			if (operation === "revoke") {
+				await adminClient`
+					insert into platform.agent_principal_grants
+						(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+					values ('agent_grant_lock', 'application', 'recipient-lock-app', 'use',
+						'revision_lock_1')
+				`;
+			}
+			const principal = {
+				kind: "application" as const,
+				id: "manager-lock-app",
+			};
+			const actor = {
+				schemaVersion: 1 as const,
+				userId: "user_owner",
+				accountStatus: "active" as const,
+				principal,
+				isAdministrator: false,
+				credential: {
+					credentialId: "credential_lock",
+					principal,
+					scopes: ["agent:manage"] as const,
+					expiresAt: null,
+					revokedAt: null,
+				},
+			};
+			const blocker = postgres(databaseUrl, { max: 1 });
+			let release: (() => void) | undefined;
+			let markLocked: (() => void) | undefined;
+			const held = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const locked = new Promise<void>((resolve) => {
+				markLocked = resolve;
+			});
+			const disable = blocker.begin(async (transaction) => {
+				await transaction`
+					update platform.platform_applications set status = 'disabled'
+					where id = 'manager-lock-app'
+				`;
+				markLocked?.();
+				await held;
+			});
+			let pending: Promise<unknown> | undefined;
+			try {
+				await locked;
+				pending =
+					operation === "grant"
+						? store.grantAgent({
+								actor,
+								agentId: "agent_grant_lock",
+								principal: { kind: "application", id: "recipient-lock-app" },
+								grantType: "use",
+								authorizationRevision: "revision_lock_2",
+							})
+						: store.revokeAgentGrant({
+								actor,
+								agentId: "agent_grant_lock",
+								principal: { kind: "application", id: "recipient-lock-app" },
+								grantType: "use",
+							});
+				await waitForBlockedQuery(["platform_applications"]);
+				release?.();
+				await disable;
+				await expect(pending).rejects.toMatchObject({
+					code: "resource_unavailable",
+				});
+				const [agent] = await adminClient`
+					select authorization_revision from platform.agents
+					where id = 'agent_grant_lock'
+				`;
+				expect(agent?.authorization_revision).toBe("revision_lock_1");
+				const [grant] = await adminClient`
+					select authorization_revision, revoked_at
+					from platform.agent_principal_grants
+					where agent_id = 'agent_grant_lock'
+						and principal_id = 'recipient-lock-app'
+				`;
+				if (operation === "grant") expect(grant).toBeUndefined();
+				else
+					expect(grant).toMatchObject({
+						authorization_revision: "revision_lock_1",
+						revoked_at: null,
+					});
+			} finally {
+				release?.();
+				await disable.catch(() => undefined);
+				await pending?.catch(() => undefined);
+				await blocker.end();
+			}
 		},
 	);
 
