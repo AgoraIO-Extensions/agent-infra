@@ -220,6 +220,11 @@ describe("PostgreSQL API identity store", () => {
 			values ('agent_grant_revision', 'authorization_revision_1')
 		`;
 		await adminClient`
+			insert into platform.platform_applications
+				(id, name, responsible_user_id, authorization_revision)
+			values ('new-app', 'New app', 'user_owner', 'application_revision_1')
+		`;
+		await adminClient`
 			insert into platform.agent_owners (agent_id, owner_id, created_at)
 			values ('agent_grant_revision', 'user_owner', now())
 		`;
@@ -420,6 +425,11 @@ describe("PostgreSQL API identity store", () => {
 		await adminClient`
 			insert into platform.agents (id, authorization_revision)
 			values ('agent_grant_race', 'revision_1')
+		`;
+		await adminClient`
+			insert into platform.platform_applications
+				(id, name, responsible_user_id, authorization_revision)
+			values ('recipient-app', 'Recipient', 'user_owner', 'application_revision_1')
 		`;
 		await adminClient`
 			insert into platform.platform_applications

@@ -56,8 +56,8 @@ describe("PostgreSQL task authorization current application facts", () => {
 				 1, 1, 'ready', 'running', 1, 1, 'trace-task', 'request-task', now())
 		`;
 		await adminClient`
-			insert into platform.agent_owners (agent_id, owner_id)
-			values ('agent_task_application', 'user-owner')
+			insert into platform.agent_owners (agent_id, owner_id, created_at)
+			values ('agent_task_application', 'user-owner', now())
 		`;
 		await adminClient`
 			insert into platform.platform_applications
@@ -113,6 +113,29 @@ describe("PostgreSQL task authorization current application facts", () => {
 			});
 		});
 	}
+
+	it("rejects acceptance when the execution revision is stale", async () => {
+		await reset();
+		await seed();
+		const boundary = await store.captureApplicationBoundary({
+			applicationId: "task-caller",
+			agentId: "agent_task_application",
+			channelId: "api",
+		});
+		if (!boundary) throw new Error("Expected an application boundary");
+		await seedExecution();
+		await adminClient`
+			update platform.conversation_executions
+			set authorization_revision = 'stale-execution-revision'
+			where execution_id = 'execution_task_application'
+		`;
+		await expect(acceptBoundary(boundary)).rejects.toThrow(
+			"Task authorization persistence is unavailable",
+		);
+		expect(
+			await adminClient`select id from platform.task_authorization_records`,
+		).toEqual([]);
+	});
 
 	it("captures active application facts and reads them back with the execution", async () => {
 		await reset();
