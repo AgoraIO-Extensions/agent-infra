@@ -1974,7 +1974,8 @@ describe("PostgreSQL Agent configuration query", () => {
 		await adminClient`
 				insert into platform.agent_principal_grants
 					(agent_id, principal_type, principal_id, grant_type, authorization_revision)
-				values ('agent_01', 'user', 'owner_01', 'manage', 'authorization_9')
+			values ('agent_01', 'user', 'owner_01', 'manage', 'authorization_9'),
+				('agent_01', 'user', 'other_user', 'manage', 'authorization_9')
 			`;
 		const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
 		adapters.push(query);
@@ -1989,6 +1990,15 @@ describe("PostgreSQL Agent configuration query", () => {
 		await expect(query.read(input)).resolves.toMatchObject({
 			outcome: "found",
 		});
+		for (const intent of ["discover", "manage"] as const) {
+			await expect(
+				query.read({
+					...input,
+					principal: { kind: "user", id: "other_user" },
+					intent,
+				}),
+			).resolves.toEqual({ outcome: "unavailable" });
+		}
 		await adminClient`
 				update platform.agent_principal_grants set revoked_at = now()
 				where agent_id = 'agent_01' and principal_type = 'user' and principal_id = 'owner_01'

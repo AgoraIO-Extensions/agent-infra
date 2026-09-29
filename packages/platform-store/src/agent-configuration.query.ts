@@ -544,6 +544,8 @@ export class PostgresAgentConfigurationQueryV1 {
 					);
 					const principalAllowed =
 						input.principal !== undefined &&
+						(input.principal.kind !== "user" ||
+							input.principal.id === input.actorId) &&
 						validateText(current.authorizationRevision) &&
 						principalGrants.some(
 							(grant) =>
