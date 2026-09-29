@@ -29,3 +29,20 @@ export function currentExecutionEvents(detail, conversationId, executionId) {
 
 	return currentEvents.length > 0 ? currentEvents : null;
 }
+
+export function restoredHistoryPreservesEvents(
+	before,
+	after,
+	conversationId,
+	executionId,
+) {
+	if (
+		!currentExecutionEvents(before, conversationId, executionId) ||
+		!currentExecutionEvents(after, conversationId, executionId)
+	)
+		return false;
+
+	return before.events.every(
+		(event, index) => after.events[index]?.eventId === event.eventId,
+	);
+}

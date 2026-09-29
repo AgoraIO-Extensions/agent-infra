@@ -6,7 +6,10 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ConversationDetailProjectionV2Schema } from "../../packages/contracts/src/pilot/operation-v2.ts";
-import { currentExecutionEvents } from "./conversation-browser-validation.mjs";
+import {
+	currentExecutionEvents,
+	restoredHistoryPreservesEvents,
+} from "./conversation-browser-validation.mjs";
 
 const script = join(import.meta.dirname, "conversation-browser.mjs");
 
@@ -119,6 +122,41 @@ test("persisted event validation requires an event from the submitted execution"
 	assert.equal(
 		currentExecutionEvents(detail, "conversation-1", "execution-2"),
 		null,
+	);
+});
+
+test("reload preserves mixed history while allowing later events for the submitted execution", () => {
+	const before = mixedHistoryDetail();
+	const after = {
+		...before,
+		events: [...before.events, persistedEvent("later-event", "execution-1")],
+	};
+	assert.equal(
+		restoredHistoryPreservesEvents(
+			before,
+			after,
+			"conversation-1",
+			"execution-1",
+		),
+		true,
+	);
+	assert.equal(
+		restoredHistoryPreservesEvents(
+			before,
+			{ ...after, events: [after.events[1], after.events[0], after.events[2]] },
+			"conversation-1",
+			"execution-1",
+		),
+		false,
+	);
+	assert.equal(
+		restoredHistoryPreservesEvents(
+			before,
+			{ ...after, events: after.events.slice(1) },
+			"conversation-1",
+			"execution-1",
+		),
+		false,
 	);
 });
 

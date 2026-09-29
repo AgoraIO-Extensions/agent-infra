@@ -6,7 +6,10 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
-import { currentExecutionEvents } from "./conversation-browser-validation.mjs";
+import {
+	currentExecutionEvents,
+	restoredHistoryPreservesEvents,
+} from "./conversation-browser-validation.mjs";
 
 const requireWebDependency = createRequire(
 	new URL("../../apps/web/package.json", import.meta.url),
@@ -397,14 +400,14 @@ async function run(input, evidence) {
 			input.origin,
 			conversationId,
 		);
-		assert.deepEqual(
-			restored.events.slice(0, events.length).map((event) => event.eventId),
-			events.map((event) => event.eventId),
-			"Reload must preserve the original event sequence",
-		);
-		assert.equal(
-			new Set(restored.events.map((event) => event.eventId)).size,
-			restored.events.length,
+		assert(
+			restoredHistoryPreservesEvents(
+				detail,
+				restored,
+				conversationId,
+				receipt.executionId,
+			),
+			"Reload must preserve the original conversation event sequence",
 		);
 		evidence.reload = "restored";
 		await page.setViewportSize({ width: 390, height: 844 });
