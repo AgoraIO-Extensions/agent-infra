@@ -317,9 +317,7 @@ describe("Secret encryptor V1", () => {
 			}),
 		).toThrow("Secret encryption input is invalid");
 		expect(Object.keys(secretStore).toSorted()).toEqual([
-			"createRelayKeyEncryptorV1",
 			"createSecretEncryptorV1",
-			"encodeRelayKeyAadV1",
 			"encodeSecretAadV1",
 			"reencryptSecretRecordV1",
 		]);

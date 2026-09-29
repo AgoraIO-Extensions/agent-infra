@@ -3,36 +3,6 @@ import type { PersistedConversationEventV1 } from "./conversation-events.js";
 import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
 import type { TaskAuthorizationBoundaryV1 } from "./task-authorization.js";
 
-export type ConversationExecutionSourceV1 =
-	| "web"
-	| "wecom"
-	| "platform-api"
-	| "eval";
-
-/** Immutable, non-secret reference to the Relay Key selected at acceptance. */
-export interface ConversationExecutionRelayKeyBindingV1 {
-	readonly purpose: "personal" | "agent-default";
-	readonly subjectId: string;
-	readonly keyId: string;
-	readonly keyVersion: number;
-}
-
-export function conversationExecutionSourceV1(
-	channelId: string,
-): ConversationExecutionSourceV1 {
-	if (channelId === "web") return "web";
-	if (
-		channelId === "wecom" ||
-		channelId.startsWith("wecom_bot:") ||
-		channelId.startsWith("wecom_app:")
-	)
-		return "wecom";
-	if (channelId === "eval") return "eval";
-	if (channelId === "api" || channelId.startsWith("api:"))
-		return "platform-api";
-	throw new TypeError("Conversation execution channel is invalid");
-}
-
 export interface ConversationExecutionAuthorityV1 {
 	readonly schemaVersion: 1;
 	readonly actorId: string;
@@ -200,7 +170,6 @@ export interface ConversationModelSelectionFallbackV1 {
 }
 
 export interface ConversationExecutionStateV1 {
-	readonly hasWaitingTask?: boolean;
 	readonly conversation: ConversationExecutionConversationStateV1 | undefined;
 	readonly modelConfiguration: ConversationModelConfigurationV1 | undefined;
 	readonly sourceMessage:
@@ -221,7 +190,6 @@ export interface ConversationExecutionStateV1 {
 				readonly modelOptionId: string | null;
 				readonly reasoningLevel: string | null;
 				readonly status:
-					| "waiting"
 					| "submitted"
 					| "processing"
 					| "unknown"
@@ -470,7 +438,6 @@ export interface ConversationStopWritePlanV1 {
 		readonly actorId: string;
 	};
 	readonly stopRequestId: string;
-	readonly confirmationDeadline: Date;
 	readonly outboxIntent: {
 		readonly operation: "conversation.turn.stop.v1";
 		readonly conversationId: string;

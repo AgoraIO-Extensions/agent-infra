@@ -4,9 +4,7 @@ import {
 } from "@agent-infra/contracts/workload";
 import type {
 	RuntimeModelProjectionV1,
-	RuntimeModelProjectionV4,
 	runtimeModelInjectionV1,
-	runtimeModelInjectionV4,
 } from "@agent-infra/model-catalog";
 import type {
 	KubernetesObject,
@@ -40,35 +38,29 @@ import type { workloadEgressRulesV1 } from "./workload-network.js";
 import { workloadRuntimeAuthEnvironmentV1 } from "./workload-runtime-auth.js";
 export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	readonly policy: KubernetesWorkloadPolicyV1;
-	readonly modelProjection:
-		| RuntimeModelProjectionV1
-		| RuntimeModelProjectionV4
-		| undefined;
+	readonly modelProjection: RuntimeModelProjectionV1 | undefined;
 	readonly modelInjection:
 		| ReturnType<typeof runtimeModelInjectionV1>
-		| ReturnType<typeof runtimeModelInjectionV4>
 		| undefined;
 	readonly egress: ReturnType<typeof workloadEgressRulesV1>;
 }) {
 	const { policy, modelProjection, modelInjection, egress } = dependencies;
-	const keyedTransport = modelProjection?.schemaVersion === 4;
 	function modelBindings(value: AgentWorkloadDesiredV1) {
 		if (!modelProjection || !modelInjection) return undefined;
 		if (
 			value.agentId !== modelProjection.agentId ||
 			value.configRevision !== modelProjection.configurationRevision ||
 			Object.keys(value.env).some((name) => name.startsWith("AGENT_INFRA_")) ||
-			(modelProjection.schemaVersion === 1 &&
-				modelProjection.options.some(
-					(option) =>
-						!value.secretRefs.some(
-							(ref) =>
-								ref.name === option.secretRef.name &&
-								ref.secretId === option.secretRef.secretId &&
-								ref.secretVersion === option.secretRef.secretVersion &&
-								ref.configRevision === option.secretRef.configRevision,
-						),
-				))
+			modelProjection.options.some(
+				(option) =>
+					!value.secretRefs.some(
+						(ref) =>
+							ref.name === option.secretRef.name &&
+							ref.secretId === option.secretRef.secretId &&
+							ref.secretVersion === option.secretRef.secretVersion &&
+							ref.configRevision === option.secretRef.configRevision,
+					),
+			)
 		)
 			throw new WorkloadKubernetesError("policy");
 		return modelInjection;
@@ -89,29 +81,14 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 			...Object.entries(value.env).map(([name, value]) => ({ name, value })),
 			...(injection?.env ?? []),
 			...runtimeAuth,
-			...(keyedTransport
-				? [
-						{
-							name: "AGENT_INFRA_RUNTIME_TLS_CERT_FILE",
-							value: "/run/runtime-host-tls/tls.crt",
-						},
-						{
-							name: "AGENT_INFRA_RUNTIME_TLS_KEY_FILE",
-							value: "/run/runtime-host-tls/tls.key",
-						},
-					]
-				: []),
 		];
 	}
 	function environmentSecrets(value: AgentWorkloadDesiredV1) {
 		modelBindings(value);
 		return value.secretRefs.filter(
 			(ref) =>
-				!(
-					modelProjection?.schemaVersion === 1 &&
-					modelProjection.options.some(
-						(option) => option.secretRef.name === ref.name,
-					)
+				!modelProjection?.options.some(
+					(option) => option.secretRef.name === ref.name,
 				),
 		);
 	}
@@ -358,7 +335,6 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		hasDriftedPodSpec,
 	} = createKubernetesPodValidationV1({
 		policy,
-		keyedTransport,
 		workloadEnvironment,
 		environmentSecrets,
 	});

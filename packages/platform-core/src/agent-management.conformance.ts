@@ -808,38 +808,6 @@ export function agentManagementV1Conformance(
 		});
 	});
 
-	it("does not let an API manage grant bypass administrator-only disable", async () => {
-		const state = stateFixture({
-			applicationId: "application_api_disable",
-			agentId: "agent_api_disable",
-			principalGrants: [
-				{
-					principal: { kind: "application", id: "application_caller" },
-					grantType: "manage",
-					authorizationRevision: "grant_1",
-					revokedAt: null,
-				},
-			],
-		});
-		const management = await createManagement({ states: [state] });
-		const apiActor = {
-			...applicant,
-			principal: { kind: "application" as const, id: "application_caller" },
-		};
-		expect(
-			await management.executeManagementCommand(
-				commandFixture("disable_agent", state),
-				apiActor,
-			),
-		).toEqual(denied);
-		expect(
-			await management.executeManagementCommand(
-				commandFixture("stop_agent", state),
-				apiActor,
-			),
-		).toMatchObject({ outcome: "accepted", result: { status: "stopped" } });
-	});
-
 	it("covers every management command and status pair without rejected side effects", async () => {
 		const statuses = [
 			"pending_approval",

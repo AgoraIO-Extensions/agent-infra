@@ -265,31 +265,6 @@ describe("production Worker deployment", () => {
 		).toBe("Bearer synthetic-model-credential");
 		expect(registryFetch).not.toHaveBeenCalled();
 	});
-	it("passes the V4 rollout gate through production assembly", async () => {
-		const deployment = await input();
-		const options = await createProductionWorkloadWorkerOptionsV1({
-			...deployment,
-			runtimeModelVersion: 4,
-		});
-		expect(options.runtimeModelVersion).toBe(4);
-		await expect(
-			createProductionWorkloadWorkerOptionsV1({
-				...deployment,
-				runtimeModelVersion: 3 as never,
-			}),
-		).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
-		vi.stubEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0");
-		try {
-			await expect(
-				createProductionWorkloadWorkerOptionsV1({
-					...deployment,
-					runtimeModelVersion: 4,
-				}),
-			).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
-		} finally {
-			vi.unstubAllEnvs();
-		}
-	});
 	it.each([
 		"context",
 		"server",
@@ -422,14 +397,6 @@ describe("authenticated Workload Runtime probe", () => {
 		expect(execute).not.toHaveBeenCalled();
 		expect(fetcher).toHaveBeenCalledOnce();
 		expect(fetcher.mock.calls[0]?.[1]?.redirect).toBe("error");
-		const httpsInput = {
-			...probeInput(),
-			baseUrl: probeInput().baseUrl.replace("http://", "https://"),
-		};
-		await expect(probe(httpsInput)).resolves.toMatchObject({ core: "passed" });
-		expect(String(fetcher.mock.calls[1]?.[0])).toBe(
-			`${httpsInput.baseUrl}/internal/runtime/v1/readiness`,
-		);
 		const denied = createWorkloadRuntimeProbeV1({
 			namespace: workloadTestPolicy.namespace,
 			workerId: "worker-a",
@@ -484,25 +451,6 @@ describe("authenticated Workload Runtime probe", () => {
 			}),
 		).rejects.toThrow("WORKER_RUNTIME_PROBE_FAILED");
 		expect(authorization.authorize).not.toHaveBeenCalled();
-	});
-	it("rejects an HTTPS certificate failure without retrying over HTTP", async () => {
-		const fetcher = vi.fn(async (_url: string | URL | Request) => {
-			throw new Error("CERT_HAS_EXPIRED");
-		});
-		const probe = createWorkloadRuntimeProbeV1({
-			namespace: workloadTestPolicy.namespace,
-			workerId: "worker-a",
-			authorization: authorize(),
-			fetch: fetcher,
-		});
-		await expect(
-			probe({
-				...probeInput(),
-				baseUrl: probeInput().baseUrl.replace("http://", "https://"),
-			}),
-		).rejects.toThrow("WORKER_RUNTIME_PROBE_FAILED");
-		expect(fetcher).toHaveBeenCalledOnce();
-		expect(String(fetcher.mock.calls[0]?.[0])).toMatch(/^https:\/\//);
 	});
 	it.each([
 		"oversize",

@@ -66,7 +66,6 @@ export interface ProductionWorkloadWorkerInputV1 {
 	>[0];
 	readonly templateModelBindings: PlatformWorkloadWorkerOptionsV1["templateModelBindings"];
 	readonly executionCapacityProfiles?: PlatformWorkloadWorkerOptionsV1["executionCapacityProfiles"];
-	readonly runtimeModelVersion?: PlatformWorkloadWorkerOptionsV1["runtimeModelVersion"];
 	readonly runtimeProbe: WorkloadRuntimeProbeAuthorizationV1;
 	/** Separate transports keep registry authentication out of model and Runtime requests. */
 	readonly modelFetch?: typeof fetch;
@@ -112,10 +111,6 @@ export async function createProductionWorkloadWorkerOptionsV1(
 				new URL(input.databaseUrl).protocol,
 			) ||
 			!Array.isArray(input.templateModelBindings) ||
-			(input.runtimeModelVersion !== undefined &&
-				input.runtimeModelVersion !== 4) ||
-			(input.runtimeModelVersion === 4 &&
-				process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") ||
 			typeof input.modelCatalog?.load !== "function" ||
 			typeof input.runtimeProbe?.authorize !== "function" ||
 			!input.policy.runtimeAuth ||
@@ -198,7 +193,6 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			admissionPolicyRef: input.admissionPolicyRef,
 			registrySubjectRef: input.registrySubjectRef,
 			templateModelBindings: structuredClone(input.templateModelBindings),
-			runtimeModelVersion: input.runtimeModelVersion,
 			executionCapacityProfiles: structuredClone(
 				input.executionCapacityProfiles,
 			),
@@ -230,10 +224,9 @@ export function createWorkloadRuntimeProbeV1(options: {
 					signal.addEventListener("abort", abort, { once: true });
 				}),
 				(async () => {
-					const host = `${workloadResourceNameV1(input.agentId)}-probe.${options.namespace}.svc:${input.manifest.service.port}`;
+					const origin = `http://${workloadResourceNameV1(input.agentId)}-probe.${options.namespace}.svc:${input.manifest.service.port}`;
 					if (
-						(input.baseUrl !== `http://${host}` &&
-							input.baseUrl !== `https://${host}`) ||
+						input.baseUrl !== origin ||
 						!Number.isSafeInteger(input.workloadRevision) ||
 						input.workloadRevision < 1
 					)
@@ -283,7 +276,7 @@ export function createWorkloadRuntimeProbeV1(options: {
 					)
 						throw new Error();
 					const response = await (options.fetch ?? fetch)(
-						`${input.baseUrl}/internal/runtime/v1/readiness`,
+						`${origin}/internal/runtime/v1/readiness`,
 						{
 							method: "POST",
 							redirect: "error",

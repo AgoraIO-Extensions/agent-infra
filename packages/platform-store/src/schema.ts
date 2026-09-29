@@ -27,12 +27,6 @@ import {
 	conversations,
 } from "./schema-conversations";
 import {
-	agentPrincipalGrants,
-	apiCredentialDeliveryGrants,
-	platformApiCredentials,
-	platformApplications,
-} from "./schema-identities";
-import {
 	auditEvents,
 	conversationGenerationTombstones,
 	idempotencyRecords,
@@ -41,7 +35,6 @@ import {
 	taskAuthorizationRecords,
 	taskControlRecords,
 } from "./schema-operations";
-import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 
 export {
 	agentApplications,
@@ -91,12 +84,6 @@ export {
 	conversations,
 } from "./schema-conversations";
 export {
-	agentPrincipalGrants,
-	apiCredentialDeliveryGrants,
-	platformApiCredentials,
-	platformApplications,
-} from "./schema-identities";
-export {
 	auditEvents,
 	conversationGenerationTombstones,
 	idempotencyRecords,
@@ -105,7 +92,6 @@ export {
 	taskAuthorizationRecords,
 	taskControlRecords,
 } from "./schema-operations";
-export { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 
 export const platformInfrastructureTables = [
 	workloadReconciliations,
@@ -137,10 +123,4 @@ export const platformInfrastructureTables = [
 	platformFiles,
 	platformFileAccesses,
 	fileReconciliation,
-	platformApplications,
-	platformApiCredentials,
-	agentPrincipalGrants,
-	apiCredentialDeliveryGrants,
-	relayKeySubjects,
-	relayKeyVersions,
 ] as const;

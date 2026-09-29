@@ -203,9 +203,7 @@ export function AgentDetailScreen({
 							.map((entry) =>
 								entry.kind === "user"
 									? `用户 ${entry.userId}`
-									: entry.kind === "organization"
-										? `组织 ${entry.organizationId}`
-										: `应用 ${entry.applicationId}`,
+									: `组织 ${entry.organizationId}`,
 							)
 							.join("、") || "未提供范围信息"}
 					</dd>

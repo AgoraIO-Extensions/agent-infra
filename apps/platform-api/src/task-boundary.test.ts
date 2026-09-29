@@ -145,32 +145,13 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 		browserIdentity = identity;
 		adapter.resolveUser = resolveUser;
 		resolveUser.mockReset().mockResolvedValue(currentUser);
-		await db.unsafe(
-			"truncate platform.agents, platform.conversations, platform.relay_key_versions, platform.relay_key_subjects cascade",
-		);
+		await db.unsafe("truncate platform.agents, platform.conversations cascade");
 		await db.unsafe(
 			"truncate platform.outbox_items, platform.idempotency_records, platform.audit_events",
 		);
 		await db.unsafe(
 			"insert into platform.agents(id,current_configuration_revision,authorization_revision) values($1,7,'authorization_9')",
 			[configuration.agentId],
-		);
-		await db.unsafe(
-			"insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('personal',$1,1,1)",
-			[identity.userId],
-		);
-		await db.unsafe(
-			"insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('personal',$1,1,'relay-task-boundary-1',$2::text::jsonb)",
-			[
-				identity.userId,
-				JSON.stringify({
-					schemaVersion: 1,
-					purpose: "personal",
-					subjectId: identity.userId,
-					keyId: "relay-task-boundary-1",
-					keyVersion: 1,
-				}),
-			],
 		);
 		await db.unsafe(
 			"insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values('application_01',$1,'owner_01','Agent','Synthetic task test','available','trace_seed','request_seed',now(),11,1,'ready','running',1,1)",

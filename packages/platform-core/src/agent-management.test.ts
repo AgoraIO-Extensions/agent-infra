@@ -4,7 +4,6 @@ import { agentManagementV1Conformance } from "./agent-management.conformance.ts"
 import {
 	AgentManagementError,
 	type AgentManagementStateV1,
-	isAgentAccessAllowedV1,
 	snapshotAgentManagementWritePlanV1,
 } from "./agent-management.ts";
 import { FakeAgentManagementV1 } from "./fake-agent-management.ts";
@@ -13,51 +12,6 @@ describe("Fake Agent management Interface", () => {
 	agentManagementV1Conformance(async (options) =>
 		Promise.resolve(new FakeAgentManagementV1(options)),
 	);
-});
-
-it("allows an API manage grant to discover without granting use", () => {
-	const grant = {
-		principal: { kind: "application" as const, id: "application-caller" },
-		grantType: "manage" as const,
-		authorizationRevision: "grant-1",
-		revokedAt: null,
-	};
-	const state: AgentManagementStateV1 = {
-		schemaVersion: 1,
-		applicationId: "application-access",
-		agentId: "agent-access",
-		applicantId: "owner-access",
-		status: "available",
-		revision: 1,
-		approvalRevision: 1,
-		decisionReason: null,
-		serviceAvailability: "ready",
-		desiredState: "running",
-		workloadRevision: 1,
-		fence: 1,
-		ownerIds: [],
-		availability: [],
-		failureCode: null,
-		principalGrants: [grant],
-	};
-	const actor = {
-		schemaVersion: 1 as const,
-		userId: "owner-access",
-		accountStatus: "active" as const,
-		organizationIds: [],
-		isAdministrator: false,
-		principal: { kind: "application" as const, id: "application-caller" },
-	};
-	expect(isAgentAccessAllowedV1(state, actor, "discover")).toBe(true);
-	expect(isAgentAccessAllowedV1(state, actor, "manage")).toBe(true);
-	expect(isAgentAccessAllowedV1(state, actor, "use")).toBe(false);
-	expect(
-		isAgentAccessAllowedV1(
-			{ ...state, principalGrants: [{ ...grant, revokedAt: new Date() }] },
-			actor,
-			"discover",
-		),
-	).toBe(false);
 });
 
 it("snapshots management plans without reading hostile accessors or Proxy traps", async () => {

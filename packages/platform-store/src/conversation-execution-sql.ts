@@ -38,16 +38,12 @@ import {
 	type parseStopResult,
 } from "./conversation-execution-records.js";
 
-export async function lockAgentConfiguration(
+async function lockAgentConfiguration(
 	transaction: Transaction,
 	agentId: string,
 ): Promise<
 	| {
 			readonly authorizationRevision: string | null;
-			readonly sourceKind: "standard" | "custom" | undefined;
-			readonly configuration?: ReturnType<
-				typeof decodeAgentConfigurationRecord
-			>;
 			readonly modelConfiguration: ConversationModelConfigurationV1 | undefined;
 	  }
 	| undefined
@@ -68,7 +64,6 @@ export async function lockAgentConfiguration(
 	if (row.configuration === null) {
 		return {
 			authorizationRevision: row.authorization_revision,
-			sourceKind: undefined,
 			modelConfiguration: undefined,
 		};
 	}
@@ -84,8 +79,6 @@ export async function lockAgentConfiguration(
 		const model = configuration.modelConfiguration;
 		return {
 			authorizationRevision: row.authorization_revision,
-			sourceKind: configuration.source.kind,
-			configuration,
 			modelConfiguration: model
 				? {
 						configurationRevision: revision,
@@ -261,16 +254,9 @@ export async function readMessageState(
 		for update
 	`;
 	if (activeRows.length > 1) unavailable();
-	const [waiting] = await transaction<{ present: boolean }[]>`
-		select exists(select 1 from platform.conversation_executions
-			where conversation_id = ${conversation.conversationId}
-				and status = 'waiting') as present
-	`;
-	const hasWaitingTask = waiting?.present === true;
 	const active = activeRows[0];
 	if (!active) {
 		return {
-			hasWaitingTask,
 			conversation,
 			modelConfiguration: agent?.modelConfiguration,
 			sourceMessage: undefined,
@@ -291,7 +277,6 @@ export async function readMessageState(
 	if (stop && stop.status !== "submitted" && stop.status !== "completed")
 		unavailable();
 	return {
-		hasWaitingTask,
 		conversation,
 		modelConfiguration: agent?.modelConfiguration,
 		sourceMessage: undefined,
@@ -401,11 +386,7 @@ export async function readStopState(
 	const target = rows[0];
 	if (!target) return state;
 	const status = text(target.status);
-	if (
-		status !== "waiting" &&
-		!activeExecutionStatuses.has(status) &&
-		!executionIsTerminal(status)
-	) {
+	if (!activeExecutionStatuses.has(status) && !executionIsTerminal(status)) {
 		unavailable();
 	}
 	const stops = await transaction<StopRow[]>`
@@ -434,7 +415,6 @@ export async function readStopState(
 			reasoningLevel:
 				target.reasoning_level === null ? null : text(target.reasoning_level),
 			status: status as
-				| "waiting"
 				| "submitted"
 				| "processing"
 				| "unknown"

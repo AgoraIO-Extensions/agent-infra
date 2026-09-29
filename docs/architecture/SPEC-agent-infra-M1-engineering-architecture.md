@@ -610,10 +610,7 @@ reasoning/加密项或历史、跳过实际压缩或更换 Session。既有内�
 [ADR: Codex 模型切换压缩使用当前有效选择](../adr/0014-use-current-selection-for-codex-switch-compaction.md)。
 
 模型 endpoint 必须使用 HTTPS；HTTP 仅允许原始 URL 显式使用 `127.0.0.1` 或 `[::1]`
-的 loopback 地址，不接受主机名或其他 IP 别名。V4 标准模板配置的 HTTPS endpoint
-只接受域名，不接受 IP 字面量、`localhost` 或其子域；目录准入仍须核对获准的固定 Relay
-端点，域名输入校验不能替代出站目的地址与禁止重定向的运行时约束。
-本次交付的 Relay Key 必须为 16–8192 个可打印
+的 loopback 地址，不接受主机名或其他 IP 别名。本次交付的 Relay Key 必须为 16–8192 个可打印
 非空格 ASCII 字符；配置准入拒绝过短值，避免逐子串泄漏检测误拒正常 SSE 字段。
 长度下限不替代既有凭证泄漏检测，也不作为凭证熵或供应商认证有效性的证明。
 

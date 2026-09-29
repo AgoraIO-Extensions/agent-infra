@@ -299,9 +299,7 @@ export function buildAgentApplicationRequest(
 export function buildAgentApplicationRequest(
 	mode: "create" | "update",
 	draft: AgentApplicationFormDraft,
-):
-	| AgentApplicationCreateRequestV2Writable
-	| AgentApplicationUpdateRequestV2Writable {
+) {
 	const body = requestBody(mode, draft);
 	const secrets = secretValues(draft);
 	if (mode === "create") return { ...body, secrets };

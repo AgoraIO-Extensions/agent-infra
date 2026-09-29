@@ -23,45 +23,31 @@ import {
 	snapshotObject,
 	unavailable,
 } from "./conversation-execution-values.js";
-import {
-	isTaskPrincipalChannelV1,
-	parseTaskAuthorizationBoundaryV1,
-} from "./task-authorization.js";
+import { parseTaskAuthorizationBoundaryV1 } from "./task-authorization.js";
 
 export function parseState(
 	input: ConversationExecutionStateV1,
 ): ConversationExecutionStateV1 {
 	try {
-		const values = snapshotObject(
-			input,
-			[
-				"conversation",
-				"modelConfiguration",
-				"sourceMessage",
-				"targetExecution",
-				"existingStop",
-				"activeExecution",
-			],
-			["hasWaitingTask"],
-		);
-		if (
-			values.hasWaitingTask !== undefined &&
-			typeof values.hasWaitingTask !== "boolean"
-		)
-			unavailable();
+		const values = snapshotObject(input, [
+			"conversation",
+			"modelConfiguration",
+			"sourceMessage",
+			"targetExecution",
+			"existingStop",
+			"activeExecution",
+		]);
 		if (values.conversation === undefined) {
 			if (
 				values.modelConfiguration !== undefined ||
 				values.sourceMessage !== undefined ||
 				values.targetExecution !== undefined ||
 				values.existingStop !== undefined ||
-				values.activeExecution !== undefined ||
-				values.hasWaitingTask === true
+				values.activeExecution !== undefined
 			) {
 				unavailable();
 			}
 			return {
-				hasWaitingTask: false,
 				conversation: undefined,
 				modelConfiguration: undefined,
 				sourceMessage: undefined,
@@ -222,8 +208,7 @@ export function parseState(
 					execution.modelOptionId === null,
 					execution.reasoningLevel === null,
 				]).size !== 1 ||
-				(status !== "waiting" &&
-					status !== "submitted" &&
+				(status !== "submitted" &&
 					status !== "processing" &&
 					status !== "unknown" &&
 					status !== "completed" &&
@@ -351,7 +336,6 @@ export function parseState(
 		const status =
 			conversation.status as ConversationExecutionConversationStateV1["status"];
 		return {
-			hasWaitingTask: values.hasWaitingTask === true,
 			conversation: {
 				schemaVersion: 1,
 				conversationId: conversation.conversationId,
@@ -569,7 +553,7 @@ export function planMetadataRecovery(
 			continue;
 		}
 		if (
-			!isTaskPrincipalChannelV1(boundary.principal, boundary.channelId) ||
+			boundary.principal.kind !== "user" ||
 			boundary.principal.id !== execution.actorId ||
 			boundary.agentId !== execution.agentId ||
 			boundary.channelId !== execution.channelId ||

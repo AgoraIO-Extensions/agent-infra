@@ -83,10 +83,7 @@ const sessionKeys: Record<User, string> = {
 };
 const identity: IdentityAdapter = {
 	async resolve(request) {
-		const session = request.headers
-			.get("cookie")
-			?.match(/(?:^|;\s*)session=([^;]+)/)?.[1];
-		return sessions.get(session ?? "") ?? null;
+		return sessions.get(request.headers.get("authorization") ?? "") ?? null;
 	},
 	async hydrateUsers(userIds) {
 		return userIds.map((userId) => {
@@ -306,7 +303,7 @@ function request(path: string, user: User, body?: unknown, key?: string) {
 					? "POST"
 					: "PUT",
 		headers: {
-			cookie: `session=${sessionKeys[user]}`,
+			authorization: sessionKeys[user],
 			"content-type": "application/json",
 			...(key ? { "Idempotency-Key": key } : {}),
 		},
@@ -598,7 +595,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 						"Idempotency-Key": `rejected-${mode}`,
 						...(mode === "anonymous" || mode === "forged"
 							? {}
-							: { cookie: `session=${sessionKeys.alice}` }),
+							: { authorization: sessionKeys.alice }),
 						"X-User-Id": "administrator",
 						"X-Role": "system_admin",
 					},
@@ -805,7 +802,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			fetch(`${origin}/api/v1${path}`, {
 				method: "POST",
 				headers: {
-					cookie: `session=${sessionKeys[user]}`,
+					authorization: sessionKeys[user],
 					"content-type": "application/json",
 					"Idempotency-Key": key,
 				},

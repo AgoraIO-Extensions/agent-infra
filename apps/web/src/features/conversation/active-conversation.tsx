@@ -76,11 +76,11 @@ export function ActiveConversation({
 	);
 	const handled = useRef<ConversationCommandResult | undefined>(undefined);
 	const conversation = timeline.history?.conversation;
-	const {
-		executionId: latestExecution,
-		status,
-		reason,
-	} = currentExecution(timeline.history, timeline.events, acceptedExecution);
+	const { executionId: latestExecution, status } = currentExecution(
+		timeline.history,
+		timeline.events,
+		acceptedExecution,
+	);
 	const active = Boolean(latestExecution && !isTerminal(status));
 	const uncertainExecution = active && status === "unknown";
 	const command = useConversationCommands({
@@ -253,9 +253,7 @@ export function ActiveConversation({
 				)}
 				{uncertainExecution && (
 					<p role="status">
-						{reason === "STOP_CONFIRMATION_TIMEOUT"
-							? "待核实：停止确认超时。平台仍在核实原执行，同会话暂不能发送下一条消息。"
-							: "原执行结果待核实，同会话暂不能发送下一条消息。"}
+						原执行结果待核实，同会话暂不能发送下一条消息。
 						<Button
 							variant="ghost"
 							data-c02-recover="recover-original"

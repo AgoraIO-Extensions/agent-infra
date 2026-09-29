@@ -84,27 +84,15 @@ export const workloadInput = {
   Base64 输入；不能把 PEM 原样传给工厂，也不能以同一把私钥冒充多个版本。
 - `policy.runtimeAuth` 的 Worker ID、issuer、key ID、公钥必须与 `signing` 匹配；其中只保存
   Kubernetes 内预置的 Runtime transport Secret 名称/键，不保存私钥或 Token 值。
-- 仅在标准模板已具备 Execution Key 受理与 V4 Host 镜像时设置
-  `workloadInput.runtimeModelVersion: 4`。V4 候选只投影目录中的模型配置，不读取旧的
-  `model:*` Secret，也不向 Pod 注入模型 credential。每个 Agent 的 Workload namespace
-  需预置名为 `<workload-resource-name>-tls` 的 `kubernetes.io/tls` Secret；证书须同时匹配
-  `<workload-resource-name>.<namespace>.svc` 和
-  `<workload-resource-name>-probe.<namespace>.svc`。Worker 的 Node 进程须在启动时信任
-  签发 CA（私有 CA 可通过 `NODE_EXTRA_CA_CERTS` 配置）；不得关闭证书校验。
-  缺失、过期或错配的证书使 V4 Workload 拒绝 apply/observe，V4 Worker 只向 HTTPS Host
-  交付 Execution Key。旧 V1–V3 候选按原版本读取，用于历史恢复。
 - `templateModelBindings` 使用当前获准标准模板 digest 与协议。上面空数组仅是形状示例，
   不能验证标准模板；自定义 Agent 可使用空数组。
 - `executionCapacityProfiles` 必须由真实负载/conformance 证据产生，绑定精确 image digest、
   resource profile 与资源配置 hash。空数组不允许新 Turn。撤回容量证明仍保留原执行控制。
-- 内置消费者接通平台 Web 与固定 `api:user` / `api:application` 渠道的当前 Core 权威判断。
-  API 任务沿原 Conversation/Execution 与自动发现循环执行，应用消费自己的当前授权事实。
-  未知渠道返回 unavailable；企微仍需
+- 内置消费者只接通平台 Web 渠道的当前 Core 权威判断。未知渠道返回 unavailable；企微仍需
   其独立装配与验收。标准模板的渠道资格不取决于暂时 Ready 状态；自定义平台入口须有已验证
   兼容事实。新业务仍需通过当前身份、Agent 使用权、配置、Workload 与容量终审。
 - Worker-only 文件不得挂载到 API、Agent 或 Web，也不得进入日志、任务正文或 Git。目录
-  Adapter 的具体接入依赖受信任目录装配；API 任务的正式原生闭环与故障矩阵仍按
-  [#482](https://github.com/AgoraIO-Extensions/agent-infra/issues/482) 验收。
+  Adapter 的具体接入与 API taskBoundary 接线由各自后继完成。
 
 ## 验证边界
 

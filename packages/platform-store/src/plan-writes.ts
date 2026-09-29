@@ -5,7 +5,7 @@ import type {
 	AgentConfigurationWritePlanV1,
 	AgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { drizzle } from "drizzle-orm/postgres-js";
 
 import {
@@ -13,7 +13,6 @@ import {
 	agentConfigurationRevisions,
 	agentManagementHistory,
 	agentOwners,
-	agentPrincipalGrants,
 	agents,
 	auditEvents,
 	outboxItems,
@@ -54,17 +53,7 @@ export async function advanceAgentConfigurationRevision(
 			),
 		)
 		.returning({ id: agents.id });
-	if (advanced.length !== 1) return false;
-	await transaction
-		.update(agentPrincipalGrants)
-		.set({ authorizationRevision: plan.nextAuthorizationRevision })
-		.where(
-			and(
-				eq(agentPrincipalGrants.agentId, plan.agentId),
-				isNull(agentPrincipalGrants.revokedAt),
-			),
-		);
-	return true;
+	return advanced.length === 1;
 }
 
 export async function replaceAgentAccess(
@@ -91,11 +80,7 @@ export async function replaceAgentAccess(
 				agentId: access.agentId,
 				targetType: target.kind,
 				targetId:
-					target.kind === "user"
-						? target.userId
-						: target.kind === "organization"
-							? target.organizationId
-							: target.applicationId,
+					target.kind === "user" ? target.userId : target.organizationId,
 			})),
 		);
 	}
@@ -189,9 +174,7 @@ export async function insertAgentManagementEffects(
 		traceId: plan.auditEvent.traceId,
 		requestId: plan.auditEvent.requestId,
 		agentId: plan.state.agentId,
-		actorType: plan.operation.startsWith("observe_")
-			? "system"
-			: (plan.auditEvent.actorType ?? "user"),
+		actorType: plan.operation.startsWith("observe_") ? "system" : "user",
 		actorId: plan.auditEvent.actorId,
 		action: plan.auditEvent.action,
 		targetType: plan.auditEvent.subjectType,

@@ -148,62 +148,6 @@
       "when": 1790158201320,
       "tag": "0020_task_boundary_generation_binding",
       "breakpoints": true
-    },
-    {
-      "idx": 21,
-      "version": "7",
-      "when": 1790357687990,
-      "tag": "0021_task_wait_admission",
-      "breakpoints": true
-    },
-    {
-      "idx": 22,
-      "version": "7",
-      "when": 1790401626967,
-      "tag": "0022_application_targets",
-      "breakpoints": true
-    },
-    {
-      "idx": 23,
-      "version": "7",
-      "when": 1790403880724,
-      "tag": "0023_application_generation_principal",
-      "breakpoints": true
-    },
-    {
-      "idx": 24,
-      "version": "7",
-      "when": 1790415695881,
-      "tag": "0024_stop_confirmation_deadline",
-      "breakpoints": true
-    },
-    {
-      "idx": 25,
-      "version": "7",
-      "when": 1790594521208,
-      "tag": "0025_execution_relay_key_binding",
-      "breakpoints": true
-    },
-    {
-      "idx": 26,
-      "version": "7",
-      "when": 1790608640812,
-      "tag": "0026_credential_hash_unique",
-      "breakpoints": true
-    },
-    {
-      "idx": 27,
-      "version": "7",
-      "when": 1790667616473,
-      "tag": "0027_original_runtime_digest",
-      "breakpoints": true
-    },
-    {
-      "idx": 28,
-      "version": "7",
-      "when": 1790677360182,
-      "tag": "0028_original_v4_submit_session",
-      "breakpoints": true
     }
   ]
 }

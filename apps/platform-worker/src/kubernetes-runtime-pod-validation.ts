@@ -19,14 +19,12 @@ import {
 } from "./kubernetes-runtime-comparison.js";
 export function createKubernetesPodValidationV1(dependencies: {
 	readonly policy: KubernetesWorkloadPolicyV1;
-	readonly keyedTransport: boolean;
 	readonly workloadEnvironment: (value: AgentWorkloadDesiredV1) => V1EnvVar[];
 	readonly environmentSecrets: (
 		value: AgentWorkloadDesiredV1,
 	) => AgentWorkloadDesiredV1["secretRefs"];
 }) {
-	const { policy, keyedTransport, workloadEnvironment, environmentSecrets } =
-		dependencies;
+	const { policy, workloadEnvironment, environmentSecrets } = dependencies;
 	function hasSafePodMetadata(
 		value: AgentWorkloadDesiredV1,
 		actual: V1Pod["metadata"],
@@ -393,7 +391,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 			httpGet: {
 				path: value.health.path,
 				port: value.service.port,
-				scheme: keyedTransport ? "HTTPS" : "HTTP",
+				scheme: "HTTP",
 			},
 			timeoutSeconds: value.health.timeoutSeconds,
 			failureThreshold: value.health.failureThreshold,
@@ -468,18 +466,6 @@ export function createKubernetesPodValidationV1(dependencies: {
 						subPathExpr: "",
 						mountPropagation: "None",
 					},
-					...(keyedTransport
-						? [
-								{
-									name: "runtime-host-tls",
-									mountPath: "/run/runtime-host-tls",
-									readOnly: true,
-									subPath: "",
-									subPathExpr: "",
-									mountPropagation: "None",
-								},
-							]
-						: []),
 				],
 			) ||
 			pod?.serviceAccountName !== workloadResourceNameV1(value.agentId) ||
@@ -518,17 +504,6 @@ export function createKubernetesPodValidationV1(dependencies: {
 						name: "runtime-tmp",
 						emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
 					},
-					...(keyedTransport
-						? [
-								{
-									name: "runtime-host-tls",
-									secret: {
-										secretName: `${workloadResourceNameV1(value.agentId)}-tls`,
-										optional: false,
-									},
-								},
-							]
-						: []),
 				],
 			)
 		);

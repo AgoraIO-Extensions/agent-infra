@@ -4,7 +4,6 @@ import {
 } from "@agent-infra/agent-runtime";
 import {
 	RuntimeModelConfigurationV3Schema,
-	RuntimeModelConfigurationV4Schema,
 	WorkloadReadinessBindingV1Schema,
 } from "@agent-infra/contracts/runtime";
 
@@ -55,42 +54,6 @@ export function readRuntimeModelConfigurationV3(
 	}
 }
 
-export function readRuntimeModelConfigurationV4(
-	environment: NodeJS.ProcessEnv,
-) {
-	try {
-		if (
-			Object.keys(environment).some((key) =>
-				key.startsWith("AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_"),
-			)
-		)
-			runtimeConfigurationInvalid();
-		const value = RuntimeModelConfigurationV4Schema.parse(
-			JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? ""),
-		);
-		if (
-			value.modelOptions.some(
-				(option) => option.protocol !== "openai-responses-v1",
-			)
-		)
-			runtimeConfigurationInvalid();
-		return {
-			keyed: true as const,
-			configVersion: value.configVersion,
-			defaultModelOptionId: value.defaultModelOptionId,
-			defaultReasoningLevel: value.defaultReasoningLevel,
-			modelOptions: value.modelOptions.map((option) => ({
-				modelOptionId: option.modelOptionId,
-				model: option.model,
-				endpoint: option.endpoint,
-				reasoningLevels: option.reasoningLevels,
-			})),
-		};
-	} catch {
-		runtimeConfigurationInvalid();
-	}
-}
-
 export interface CodexPilotConfiguration {
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
@@ -129,8 +92,6 @@ export function readCodexPilotConfiguration(
 	}
 	if (record(value) && value.schemaVersion === 3)
 		return readRuntimeModelConfigurationV3(environment, "codex");
-	if (record(value) && value.schemaVersion === 4)
-		return readRuntimeModelConfigurationV4(environment);
 	if (
 		!record(value) ||
 		!keys(value, [

@@ -3,7 +3,6 @@ import {
 	type ConversationEventUseCaseV1,
 	type ConversationOperationFactV2,
 	createConversationEventUseCaseV1,
-	createConversationExecutionUseCaseV1,
 	type FileRecordV1,
 } from "@agent-infra/platform-core";
 import { conversationEventConformanceV1 } from "@agent-infra/platform-core/testing";
@@ -11,7 +10,6 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
-import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.ts";
 import { PostgresConversationQueryV1 } from "./conversation-query.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
@@ -1122,114 +1120,7 @@ describe("PostgreSQL Conversation event transaction", () => {
 		}
 	});
 
-	it("persists an in-flight Runtime event while stop holds the original outbox lock", async () => {
-		const { conversationId, executionId } = await seedConversation();
-		const itemId = `conversation:turn:${executionId}`;
-		await client`
-			insert into platform.outbox_items
-				(id, scope_type, scope_id, operation, payload, status, attempt_count,
-				 trace_id, request_id, available_at, lease_owner, lease_expires_at,
-				 delivery_fence, created_at, updated_at)
-			values
-				(${itemId}, 'conversation', ${conversationId},
-				 'conversation.turn.submit.v1', ${client.json({ executionId })}, 'processing', 1,
-				 'trace-event-stop', 'request-event-stop', now(), 'worker-event',
-				 clock_timestamp() + interval '30 seconds', 7, now(), now())
-		`;
-		const { events, close } = openEvents(`event_stop_${executionId}`);
-		let persisted: ReturnType<typeof events.persist> | undefined;
-		try {
-			await client.begin(async (transaction) => {
-				await transaction`select set_config('lock_timeout', '500ms', true)`;
-				const [owner] = await transaction<
-					{ pid: number }[]
-				>`select pg_backend_pid() as pid`;
-				if (!owner) throw new Error("Missing stop transaction PID");
-				await transaction`select id from platform.outbox_items where id = ${itemId} for update`;
-				persisted = events.persist({
-					...eventInput(conversationId, executionId),
-					dispatchLease: {
-						schemaVersion: 1,
-						itemId,
-						leaseOwner: "worker-event",
-						deliveryFence: 7,
-					},
-				});
-				void persisted.catch(() => {});
-				await expect
-					.poll(async () => {
-						const rows = await client`
-						select 1 from pg_stat_activity
-						where datname = current_database() and wait_event_type = 'Lock'
-							and ${owner.pid} = any(pg_blocking_pids(pid))
-					`;
-						return rows.length;
-					})
-					.toBe(1);
-				const commands = createConversationExecutionUseCaseV1({
-					transaction: new PostgresConversationExecutionTransactionV1({
-						transaction,
-					}),
-					authorization: {
-						authorize: async () => ({
-							outcome: "allowed",
-							authority: {
-								schemaVersion: 1,
-								actorId: "actor_event",
-								agentId: "agent_event",
-								channelId: "channel_event",
-								authorizationRevision: "authorization_event",
-								supportsSupplementaryInstruction: true,
-							},
-						}),
-					},
-				});
-				await expect(
-					commands.stop({
-						schemaVersion: 1,
-						command: "stop",
-						conversationId,
-						targetExecutionId: executionId,
-						idempotencyKey: "stop-with-event-in-flight",
-						traceId: "trace-event-stop",
-						requestId: "request-event-stop",
-					}),
-				).resolves.toMatchObject({ outcome: "accepted" });
-			});
-			await expect(persisted).resolves.toMatchObject({ outcome: "accepted" });
-			await expect(
-				events.persist({
-					...eventInput(conversationId, executionId),
-					dispatchLease: {
-						schemaVersion: 1,
-						itemId,
-						leaseOwner: "worker-event",
-						deliveryFence: 7,
-					},
-				}),
-			).resolves.toMatchObject({ outcome: "replayed" });
-			const [state] = await client`
-				select e.last_event_sequence::int as sequence,
-					c.last_conversation_cursor::int as cursor, s.status as stop_status,
-					(select count(*)::int from platform.conversation_events where execution_id = ${executionId}) as events
-				from platform.conversation_executions e
-				join platform.conversations c on c.id = e.conversation_id
-				join platform.conversation_stops s on s.execution_id = e.execution_id
-				where e.execution_id = ${executionId}
-			`;
-			expect(state).toEqual({
-				sequence: 1,
-				cursor: 1,
-				stop_status: "submitted",
-				events: 1,
-			});
-		} finally {
-			await persisted?.catch(() => {});
-			await close();
-		}
-	});
-
-	it("rejects a new Runtime event when its dispatch lease expires before or during lock waiting", async () => {
+	it("rejects a new Runtime event after its dispatch lease expires", async () => {
 		const { conversationId, executionId } = await seedConversation();
 		const itemId = `conversation:turn:${executionId}`;
 		await client`
@@ -1253,7 +1144,6 @@ describe("PostgreSQL Conversation event transaction", () => {
 				deliveryFence: 7,
 			},
 		};
-		let pending: ReturnType<typeof events.persist> | undefined;
 		try {
 			await expect(events.persist(input)).resolves.toEqual({
 				outcome: "stale",
@@ -1266,75 +1156,6 @@ describe("PostgreSQL Conversation event transaction", () => {
 			await expect(events.persist(input)).resolves.toMatchObject({
 				outcome: "accepted",
 			});
-			await client.begin(async (transaction) => {
-				const [owner] = await transaction<
-					{ pid: number }[]
-				>`select pg_backend_pid() as pid`;
-				if (!owner) throw new Error("Missing Conversation lock owner PID");
-				await transaction`select id from platform.conversations where id = ${conversationId} for update`;
-				await client`update platform.outbox_items set lease_expires_at = clock_timestamp() + interval '1 second' where id = ${itemId}`;
-				pending = events.persist({
-					...input,
-					...eventInput(conversationId, executionId, "event-after-lock-wait"),
-				});
-				void pending.catch(() => {});
-				await expect
-					.poll(
-						async () =>
-							(
-								await client`
-					select 1 from pg_stat_activity
-					where datname = current_database() and wait_event_type = 'Lock'
-						and ${owner.pid} = any(pg_blocking_pids(pid))
-				`
-							).length,
-					)
-					.toBe(1);
-				await expect
-					.poll(async () => {
-						const [lease] = await client`
-						select lease_expires_at <= clock_timestamp() as expired
-						from platform.outbox_items where id = ${itemId}
-					`;
-						return lease?.expired;
-					})
-					.toBe(true);
-			});
-			await expect(pending).resolves.toEqual({ outcome: "stale" });
-			const [state] = await client`
-				select last_event_sequence::int as sequence from platform.conversation_executions where execution_id = ${executionId}
-			`;
-			expect(state?.sequence).toBe(1);
-		} finally {
-			await pending?.catch(() => {});
-			await close();
-		}
-	});
-
-	it("fails closed when a dispatch lease outbox row is missing", async () => {
-		const { conversationId, executionId } = await seedConversation();
-		const { events, close } = openEvents("event_postgres_missing_outbox");
-		try {
-			await expect(
-				events.persist({
-					...eventInput(conversationId, executionId),
-					dispatchLease: {
-						schemaVersion: 1,
-						itemId: `missing-outbox:${executionId}`,
-						leaseOwner: "worker-event",
-						deliveryFence: 5,
-					},
-				}),
-			).rejects.toMatchObject({ code: "unavailable" });
-			const [state] = await client`
-				select e.last_event_sequence::int as sequence,
-					c.last_conversation_cursor::int as cursor,
-					(select count(*)::int from platform.conversation_events where execution_id = ${executionId}) as events
-				from platform.conversation_executions e
-				join platform.conversations c on c.id = e.conversation_id
-				where e.execution_id = ${executionId}
-			`;
-			expect(state).toEqual({ sequence: 0, cursor: 0, events: 0 });
 		} finally {
 			await close();
 		}
@@ -1415,16 +1236,6 @@ describe("PostgreSQL Conversation event transaction", () => {
 				"runtime",
 				"model.selection.fell_back",
 				"runtime_cursor_forged",
-			),
-		).rejects.toMatchObject({
-			constraint_name: "conversation_event_source_binding",
-		});
-		await expect(
-			insert(
-				"event_runtime_task_status_forgery",
-				"runtime",
-				"task.status",
-				"runtime_forged",
 			),
 		).rejects.toMatchObject({
 			constraint_name: "conversation_event_source_binding",

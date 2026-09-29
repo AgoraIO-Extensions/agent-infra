@@ -82,9 +82,6 @@ export function createPlatformProjectionReaders(
 			actorId: metadata.identity.userId,
 			organizationIds: metadata.identity.organizationIds,
 			isAdministrator: metadata.identity.roles.includes("system_admin"),
-			...(metadata.identity.principal === undefined
-				? {}
-				: { principal: metadata.identity.principal }),
 			intent: "discover",
 		});
 		if (result.outcome !== "found") {

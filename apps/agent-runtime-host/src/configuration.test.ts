@@ -33,40 +33,6 @@ function environment(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Runtime deployment configuration", () => {
-	it("reads Key-free Codex V4 options and rejects deployment credentials", () => {
-		const env = {
-			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
-				schemaVersion: 4,
-				configVersion: "synthetic-keyed-1",
-				defaultModelOptionId: "option-default",
-				defaultReasoningLevel: "medium",
-				modelOptions: [
-					{
-						modelOptionId: "option-default",
-						endpoint: "https://relay.example.test/v1",
-						model: "synthetic-default",
-						protocol: "openai-responses-v1",
-						authentication: "bearer",
-						reasoningLevels: ["medium", "high"],
-					},
-				],
-			}),
-		};
-		expect(readCodexPilotConfiguration(env)).toMatchObject({
-			keyed: true,
-			modelOptions: [{ endpoint: "https://relay.example.test/v1" }],
-		});
-		expect(readCodexPilotConfiguration(env).modelOptions[0]).not.toHaveProperty(
-			"credential",
-		);
-		expect(() =>
-			readCodexPilotConfiguration({
-				...env,
-				AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT: "synthetic-legacy-key",
-			}),
-		).toThrow("RUNTIME_CONFIGURATION_INVALID");
-	});
-
 	it("consumes Responses V3 through the Codex startup reader", () => {
 		const env = environment({
 			schemaVersion: 3,

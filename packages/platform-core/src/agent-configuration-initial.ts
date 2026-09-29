@@ -48,16 +48,13 @@ function admittedInitialAccess(
 			.map(({ userId }) => userId),
 	);
 	const organizationIds = new Set(authority.organizationIds);
-	const applicationIds = new Set(authority.applicationIds ?? []);
 	if (
 		!activeUserIds.has(actorContext.actorId) ||
 		command.coOwnerIds.some((ownerId) => !activeUserIds.has(ownerId)) ||
 		command.availability.some((target) =>
 			target.kind === "user"
 				? !activeUserIds.has(target.userId)
-				: target.kind === "organization"
-					? !organizationIds.has(target.organizationId)
-					: !applicationIds.has(target.applicationId),
+				: !organizationIds.has(target.organizationId),
 		)
 	) {
 		throw new AgentConfigurationError("not_authorized");

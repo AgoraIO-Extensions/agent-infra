@@ -1,7 +1,4 @@
 import { randomUUID } from "node:crypto";
-
-export * from "./conversation-execution-task.js";
-
 import {
 	authorize,
 	parseConversationStateQuery,
@@ -53,8 +50,6 @@ export {
 	type ConversationExecutionAuthorizationPortV1,
 	type ConversationExecutionConversationStateV1,
 	ConversationExecutionError,
-	type ConversationExecutionRelayKeyBindingV1,
-	type ConversationExecutionSourceV1,
 	type ConversationExecutionStateV1,
 	type ConversationExecutionTransactionPortV1,
 	type ConversationExecutionUseCaseDependenciesV1,
@@ -86,9 +81,6 @@ export {
 	type CreateConversationDecisionV1,
 	type CreateConversationWritePlanV1,
 } from "./conversation-execution-types.js";
-
-/** Platform stop acknowledgement budget; callers cannot configure task runtime limits. */
-export const conversationStopConfirmationTimeoutMsV1 = 60_000;
 
 export function createConversationExecutionUseCaseV1(
 	dependencies: ConversationExecutionUseCaseDependenciesV1,
@@ -378,7 +370,6 @@ export function createConversationExecutionUseCaseV1(
 									},
 								};
 							}
-							if (state.hasWaitingTask) return { outcome: "busy" };
 							const occurredAt = safeNow(now);
 							const messageId = nextOpaqueId(newId);
 							const executionId = nextOpaqueId(newId);
@@ -606,8 +597,7 @@ export function createConversationExecutionUseCaseV1(
 								conversation.isolationPending
 							)
 								return { outcome: "denied" };
-							if (state.activeExecution || state.hasWaitingTask)
-								return { outcome: "busy" };
+							if (state.activeExecution) return { outcome: "busy" };
 							const modelSelection = effectiveModelSelection(
 								conversation,
 								state.modelConfiguration,
@@ -784,10 +774,6 @@ export function createConversationExecutionUseCaseV1(
 									actorId: authority.actorId,
 								},
 								stopRequestId,
-								confirmationDeadline: new Date(
-									occurredAt.getTime() +
-										conversationStopConfirmationTimeoutMsV1,
-								),
 								outboxIntent: {
 									operation: "conversation.turn.stop.v1",
 									conversationId: conversation.conversationId,

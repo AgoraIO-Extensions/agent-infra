@@ -27,7 +27,6 @@ interface MutableStoredOperation {
 
 interface MutableStoredSession {
 	hostSessionRef: string;
-	nativeSessionRef?: string;
 	highestFences: Record<string, unknown>;
 	operations: Record<string, MutableStoredOperation>;
 	generationBarrier?: unknown;
@@ -94,7 +93,7 @@ function host(
 	driver: FakeRuntimeDriver,
 	hooks: {
 		afterOperationPrepared?: () => void;
-		afterDriverResult?: (operationId: string) => void | Promise<void>;
+		afterDriverResult?: (operationId: string) => void;
 	} = {},
 ) {
 	return openIngressVerifiedRuntimeHost({
@@ -115,25 +114,6 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost crash-window recovery", () => {
-	it("persists the accepted native receipt before the Driver result hook", async () => {
-		const root = await directory();
-		const hostPath = join(root, "host.json");
-		const store = await FileRuntimeStore.open(hostPath);
-		const driver = await FakeRuntimeDriver.open(join(root, "driver.json"));
-		let receiptAtHook: string | undefined;
-		const runtimeHost = await host(store, driver, {
-			afterDriverResult: async () => {
-				const state = JSON.parse(
-					await readFile(hostPath, "utf8"),
-				) as MutableStoreState;
-				receiptAtHook = Object.values(state.sessions)[0]?.nativeSessionRef;
-			},
-		});
-		const accepted = await runtimeHost.submitTurn(request());
-		expect(receiptAtHook).toBeDefined();
-		expect(receiptAtHook).toBe(store.nativeSessionRef(accepted.hostSessionRef));
-	});
-
 	it("recovers a prepared operation that crashed before the Driver call", async () => {
 		const root = await directory();
 		const hostPath = join(root, "host.json");

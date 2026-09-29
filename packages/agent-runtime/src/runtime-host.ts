@@ -1,19 +1,14 @@
-import { isDeepStrictEqual } from "node:util";
-
 import type {
 	RuntimeAuthorizationRenewRequestV3,
 	RuntimeCapabilitiesRequestV1,
 	RuntimeCapabilitiesResponseV1,
 	RuntimeCapabilitiesV1,
 	RuntimeEventAckRequestV3,
-	RuntimeEventAckRequestV4,
 	RuntimeEventPersistRequestV3,
-	RuntimeEventReadRequestV4,
 	RuntimeGenerationCancelRequestV1,
 	RuntimeGenerationCancelRequestV3,
 	RuntimeOperationResponseV1,
 	RuntimeOperationResponseV2,
-	RuntimePinnedExecutionKeyScopeV4,
 	RuntimeReplayRequestV1,
 	RuntimeReplayResponseV1,
 	RuntimeStatusRequestV1,
@@ -27,10 +22,8 @@ import type {
 	RuntimeSubmitTurnRequestV1,
 	RuntimeSubmitTurnRequestV2,
 	RuntimeSubmitTurnRequestV3,
-	RuntimeSubmitTurnTransportV4,
 	RuntimeSupplementRequestV1,
 	RuntimeSupplementRequestV3,
-	RuntimeSupplementTransportV4,
 	WorkloadReadinessRequestV1,
 	WorkloadReadinessResponseV1,
 } from "@agent-infra/contracts/runtime";
@@ -41,11 +34,6 @@ import {
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnLookupV2Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
-	RuntimeEventAckRequestV4Schema,
-	RuntimeEventAckResponseV4Schema,
-	RuntimeEventReadRequestV4Schema,
-	RuntimeEventReplayResponseV4Schema,
-	RuntimeEventSchema,
 	RuntimeEventV1Schema,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeReplayRequestV1Schema,
@@ -56,8 +44,6 @@ import {
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
-	VerifiedRuntimeExecutionGrantV2Schema,
-	validateRuntimeEventAccessV4,
 	WorkloadReadinessRequestV1Schema,
 	WorkloadReadinessResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
@@ -80,17 +66,9 @@ import {
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
 import { RuntimeHostV3 } from "./runtime-host-v3.js";
-import { RuntimeHostV4 } from "./runtime-host-v4.js";
 
 interface RuntimeHostOptions {
 	grantValidationV2?: RuntimeGrantValidationOptionsV2;
-	allowLegacyBusiness?: boolean;
-	validateGrantV4?: (request: unknown) => Promise<{
-		request:
-			| RuntimeSubmitTurnTransportV4["businessRequest"]
-			| RuntimeSupplementTransportV4["businessRequest"];
-		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
-	}>;
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
 	store: FileRuntimeStore;
 	driver: RuntimeDriver;
@@ -335,15 +313,6 @@ export class RuntimeHost {
 	private closed = false;
 
 	private readonly v3?: RuntimeHostV3;
-	private readonly v4?: RuntimeHostV4;
-	private readonly executionKeys = new Map<
-		string,
-		{
-			readonly scope: RuntimePinnedExecutionKeyScopeV4;
-			readonly hostSessionRef: string;
-			readonly relayKey: string;
-		}
-	>();
 	private constructor(private readonly options: RuntimeHostOptions) {
 		if (options.grantValidationV2)
 			this.v3 = new RuntimeHostV3({
@@ -353,32 +322,6 @@ export class RuntimeHost {
 				dispatch: (ref, operation, allowBusinessExecution) =>
 					this.dispatch(ref, operation, allowBusinessExecution),
 				serialize: (key, work) => this.serialize(key, work),
-			});
-		if (options.validateGrantV4)
-			this.v4 = new RuntimeHostV4({
-				store: options.store,
-				assertOpen: () => {
-					if (this.closed) runtimeAuthorizationDenied();
-				},
-				validateGrant: options.validateGrantV4,
-				dispatch: (ref, operation) => this.dispatch(ref, operation),
-				serialize: (key, work) => this.serialize(key, work),
-				installKey: (scope, hostSessionRef, relayKey) => {
-					const previous = this.executionKeys.get(scope.executionId);
-					if (
-						previous &&
-						(!isDeepStrictEqual(previous.scope, scope) ||
-							previous.hostSessionRef !== hostSessionRef ||
-							previous.relayKey !== relayKey)
-					)
-						runtimeAuthorizationDenied();
-					this.executionKeys.set(scope.executionId, {
-						scope,
-						hostSessionRef,
-						relayKey,
-					});
-				},
-				now: options.grantValidationV2?.now,
 			});
 	}
 
@@ -408,167 +351,19 @@ export class RuntimeHost {
 		while (this.queues.size > 0) {
 			await Promise.allSettled([...this.queues.values()]);
 		}
-		this.executionKeys.clear();
 	}
 	private requireLegacyHost() {
 		if (this.closed) runtimeAuthorizationDenied();
 	}
-	private requireLegacyBusiness() {
-		this.requireLegacyHost();
-		if (this.options.allowLegacyBusiness === false)
-			runtimeAuthorizationDenied();
-	}
 
 	submitTurnV3(value: RuntimeSubmitTurnRequestV3, verification: unknown) {
-		this.requireLegacyBusiness();
 		return this.trustedHost().submitTurn(value, verification);
 	}
 	supplementV3(value: RuntimeSupplementRequestV3, verification: unknown) {
-		this.requireLegacyBusiness();
 		return this.trustedHost().supplement(value, verification);
 	}
-	submitTurnV4(value: RuntimeSubmitTurnTransportV4) {
-		if (this.closed || !this.v4) runtimeAuthorizationDenied();
-		return this.v4.submitTurn(value);
-	}
-	supplementV4(value: RuntimeSupplementTransportV4) {
-		if (this.closed || !this.v4) runtimeAuthorizationDenied();
-		return this.v4.supplement(value);
-	}
-
-	private async eventAuthorityV4(
-		request: RuntimeEventReadRequestV4 | RuntimeEventAckRequestV4,
-		verification: unknown,
-	) {
-		if (this.closed || !this.v4 || !this.options.grantValidationV2)
-			runtimeAuthorizationDenied();
-		const original =
-			this.options.store.readOriginalExecutionKeyScopeV4(request);
-		const verified =
-			VerifiedRuntimeExecutionGrantV2Schema.safeParse(verification);
-		if (
-			!original?.scope ||
-			original.hostSessionRef !== request.hostSessionRef ||
-			original.operation.kind !== "submit-turn" ||
-			!verified.success
-		)
-			runtimeAuthorizationDenied();
-		try {
-			await validateRuntimeEventAccessV4(
-				request,
-				verified.data,
-				original.scope,
-				original.hostSessionRef,
-				{
-					expectedIssuer: this.options.grantValidationV2.expectedIssuer,
-					expectedWorkerId: this.options.grantValidationV2.expectedWorkerId,
-					now: (this.options.grantValidationV2.now ?? Date.now)(),
-					trustedOperation: {
-						kind: "execution",
-						id: original.operation.operationId,
-						deliveryFence: original.operation.deliveryFence,
-						executionDeliveryFence: original.operation.deliveryFence,
-					},
-				},
-			);
-		} catch {
-			runtimeAuthorizationDenied();
-		}
-		return verified.data.claims;
-	}
-
-	async readEventsV4(value: RuntimeEventReadRequestV4, verification: unknown) {
-		const parsed = RuntimeEventReadRequestV4Schema.safeParse(value);
-		if (!parsed.success) invalidRequest();
-		const request = parsed.data;
-		return this.serialize(
-			this.options.store.sessionQueueKey(request),
-			async () => {
-				const claims = await this.eventAuthorityV4(request, verification);
-				const { session } = await this.options.store.authorizeRequestV3(
-					claims,
-					"query",
-					this.options.grantValidationV2?.now ?? Date.now,
-				);
-				const nativeSessionRef =
-					session.nativeSessionRef ?? nativeSessionRequired();
-				const replay = RuntimeEventSchema.array().safeParse(
-					await callDriver(() =>
-						this.options.driver.replayEvents(
-							nativeSessionRef,
-							request.executionId,
-							request.afterCursor ?? undefined,
-						),
-					),
-				);
-				if (
-					!replay.success ||
-					replay.data.some((event) => event.executionId !== request.executionId)
-				)
-					driverInvalid();
-				const events = replay.data.slice(0, 8);
-				for (const event of events) {
-					await this.eventAuthorityV4(request, verification);
-					await this.options.store.recordDeliveredCursor(
-						claims,
-						event.cursor,
-						this.options.grantValidationV2?.now ?? Date.now,
-					);
-				}
-				return RuntimeEventReplayResponseV4Schema.parse({
-					schemaVersion: 4,
-					hostSessionRef: request.hostSessionRef,
-					executionId: request.executionId,
-					events,
-				});
-			},
-		);
-	}
-
-	async acknowledgeEventsV4(
-		value: RuntimeEventAckRequestV4,
-		verification: unknown,
-	) {
-		const parsed = RuntimeEventAckRequestV4Schema.safeParse(value);
-		if (!parsed.success) invalidRequest();
-		const request = parsed.data;
-		return this.serialize(
-			this.options.store.sessionQueueKey(request),
-			async () => {
-				const claims = await this.eventAuthorityV4(request, verification);
-				await this.options.store.authorizeRequestV3(
-					claims,
-					"query",
-					this.options.grantValidationV2?.now ?? Date.now,
-				);
-				const session = this.options.store.checkAcknowledgableCursor(
-					claims,
-					request.confirmedCursor,
-				);
-				await this.options.store.acknowledgeCursor(
-					claims,
-					request.confirmedCursor,
-					this.options.grantValidationV2?.now ?? Date.now,
-				);
-				await this.eventAuthorityV4(request, verification);
-				await this.options.driver.acknowledgeEvents?.(
-					session.nativeSessionRef ?? nativeSessionRequired(),
-					request.executionId,
-					request.confirmedCursor,
-				);
-				return RuntimeEventAckResponseV4Schema.parse({
-					schemaVersion: 4,
-					executionId: request.executionId,
-					confirmedCursor: request.confirmedCursor,
-				});
-			},
-		);
-	}
-	async stopV3(value: RuntimeStopRequestV3, verification: unknown) {
-		const response = await this.trustedHost().stop(value, verification);
-		if (response.result.outcome === "accepted")
-			this.executionKeys.delete(value.executionId);
-		return response;
+	stopV3(value: RuntimeStopRequestV3, verification: unknown) {
+		return this.trustedHost().stop(value, verification);
 	}
 	recoverStatusV3(
 		value: RuntimeStatusRequestV3,
@@ -625,22 +420,6 @@ export class RuntimeHost {
 			this.options.grantValidationV2?.now ?? Date.now,
 		);
 		this.trustedHost();
-		if (action.kind === "model" && this.v4) {
-			const entry = this.executionKeys.get(action.executionId);
-			if (!entry) runtimeAuthorizationDenied();
-			const original = this.options.store.readOriginalExecutionKeyScopeV4(
-				entry.scope,
-			);
-			if (
-				!original?.scope ||
-				original.hostSessionRef !== entry.hostSessionRef ||
-				!isDeepStrictEqual(original.scope, entry.scope) ||
-				this.options.store.nativeSessionRef(entry.hostSessionRef) !==
-					action.nativeSessionRef
-			)
-				runtimeAuthorizationDenied();
-			return { relayKey: entry.relayKey };
-		}
 	}
 
 	private async bindOriginalNativeSession(action: {
@@ -734,7 +513,7 @@ export class RuntimeHost {
 		value: RuntimeSubmitTurnRequestV1,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
-		this.requireLegacyBusiness();
+		this.requireLegacyHost();
 		const parsed = RuntimeSubmitTurnRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -751,7 +530,7 @@ export class RuntimeHost {
 		value: RuntimeSubmitTurnRequestV2,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV2> {
-		this.requireLegacyBusiness();
+		this.requireLegacyHost();
 		const parsed = RuntimeSubmitTurnRequestV2Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -1146,7 +925,7 @@ export class RuntimeHost {
 		value: RuntimeSupplementRequestV1,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
-		this.requireLegacyBusiness();
+		this.requireLegacyHost();
 		const parsed = RuntimeSupplementRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -1410,21 +1189,6 @@ export class RuntimeHost {
 			operation,
 			this.options.store.nativeSessionRef(hostSessionRef),
 		);
-		if (
-			operation.kind === "submit-turn" &&
-			driverRecord.result.outcome === "accepted" &&
-			driverRecord.result.status === "running" &&
-			!this.options.store.nativeSessionRef(hostSessionRef)
-		) {
-			// Status observation can admit the first model request. Bind its
-			// validated native receipt before that request crosses Host authority.
-			await this.options.store.resolveOperation(
-				hostSessionRef,
-				operation.operationId,
-				driverRecord.result,
-				driverRecord.nativeSessionRef,
-			);
-		}
 		await this.options.afterDriverResult?.(operation.operationId);
 		const result = await this.currentDriverResult(driverRecord, operation);
 		if (isInterruption(operation) && result.outcome === "unknown") {

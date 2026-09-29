@@ -409,9 +409,7 @@ export function accessTargetKey(
 ): string {
 	return target.kind === "user"
 		? `user:${target.userId}`
-		: target.kind === "organization"
-			? `organization:${target.organizationId}`
-			: `application:${target.applicationId}`;
+		: `organization:${target.organizationId}`;
 }
 
 export function parseAvailability(
@@ -422,7 +420,7 @@ export function parseAvailability(
 			const target = exactObject(
 				targetInput,
 				["kind"],
-				["userId", "organizationId", "applicationId"],
+				["userId", "organizationId"],
 			);
 			if (target.kind === "user") {
 				if (
@@ -433,28 +431,16 @@ export function parseAvailability(
 				}
 				return { kind: "user" as const, userId: target.userId };
 			}
-			if (target.kind === "organization") {
-				if (
-					!isText(target.organizationId, idMaxBytes) ||
-					Object.keys(target).length !== 2
-				) {
-					invalidCommand();
-				}
-				return {
-					kind: "organization" as const,
-					organizationId: target.organizationId,
-				};
-			}
 			if (
-				target.kind !== "application" ||
-				!isText(target.applicationId, idMaxBytes) ||
+				target.kind !== "organization" ||
+				!isText(target.organizationId, idMaxBytes) ||
 				Object.keys(target).length !== 2
 			) {
 				invalidCommand();
 			}
 			return {
-				kind: "application" as const,
-				applicationId: target.applicationId,
+				kind: "organization" as const,
+				organizationId: target.organizationId,
 			};
 		})
 		.toSorted((left, right) =>

@@ -11,9 +11,6 @@ export type AgentApplicationCreateRequestV2 = {
     } | {
         kind: 'organization';
         organizationId: string;
-    } | {
-        applicationId: string;
-        kind: 'application';
     }>;
     coOwnerIds: Array<string>;
     description: string;
@@ -95,9 +92,6 @@ export type AgentApplicationUpdateRequestV2 = {
     } | {
         kind: 'organization';
         organizationId: string;
-    } | {
-        applicationId: string;
-        kind: 'application';
     }>;
     coOwnerIds: Array<string>;
     description: string;
@@ -142,9 +136,6 @@ export type AgentConfigurationProjectionV2 = {
     } | {
         kind: 'organization';
         organizationId: string;
-    } | {
-        applicationId: string;
-        kind: 'application';
     }>;
     channels: Array<{
         kind: 'web' | 'wecom_bot' | 'wecom_app';
@@ -181,9 +172,6 @@ export type AgentConfigurationUpdateRequestV2 = {
     } | {
         kind: 'organization';
         organizationId: string;
-    } | {
-        applicationId: string;
-        kind: 'application';
     }>;
     channels?: Array<{
         bindingReference: string;
@@ -215,7 +203,7 @@ export type AgentConfigurationUpdateRequestV2 = {
 };
 
 export type AgentLifecycleCommandRequestV1 = {
-    command: 'start' | 'stop' | 'restart' | 'retry_creation' | 'disable';
+    command: 'stop' | 'restart' | 'retry_creation' | 'disable';
     schemaVersion: 1;
 } | {
     command: 'upgrade_custom_image';
@@ -539,9 +527,9 @@ export type PersistedConversationEventV1 = {
     schemaVersion: 1;
     sequence: number;
     type: 'conversation.error';
-} | ModelSelectionFallbackEventV1 | TaskStatusEventV1;
+} | ModelSelectionFallbackEventV1;
 
-export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2 | TaskStatusEventV2;
+export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2;
 
 export type PilotInternalErrorV1 = {
     code: 'INTERNAL_ERROR';
@@ -571,9 +559,6 @@ export type PlatformAuditProjectionV2 = {
         displayName: string;
         roles: Array<'employee' | 'system_admin'>;
         userId: string;
-    } | {
-        actorId: string;
-        kind: 'application';
     } | {
         actorId: string;
         kind: 'system';
@@ -639,40 +624,6 @@ export type RuntimeOperationFailureV2 = 'authorization_denied' | 'authorization_
 
 export type SseEventIdV1 = string;
 
-export type TaskStatusEventV1 = {
-    conversationCursor: string;
-    conversationId: string;
-    eventId: SseEventIdV1;
-    executionId: string;
-    kind: 'event';
-    occurredAt: string;
-    payload: {
-        status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
-    };
-    schemaVersion: 1;
-    sequence: number;
-    type: 'task.status';
-};
-
-export type TaskStatusEventV2 = {
-    conversationCursor: string;
-    conversationId: string;
-    eventId: SseEventIdV1;
-    executionId: string;
-    kind: 'event';
-    occurredAt: string;
-    payload: {
-        reason: 'STOP_CONFIRMATION_TIMEOUT';
-        status: 'unknown';
-    } | {
-        reason: 'TASK_WAIT_TIMEOUT' | 'AGENT_UNAVAILABLE' | 'CONVERSATION_UNAVAILABLE';
-        status: 'failed';
-    };
-    schemaVersion: 2;
-    sequence: number;
-    type: 'task.status';
-};
-
 export type TimelineReloadSignalV1 = {
     kind: 'control';
     reason: 'unknown_event_id' | 'cross_conversation_cursor' | 'cross_conversation_event_id' | 'cursor_expired';
@@ -688,9 +639,6 @@ export type AgentApplicationCreateRequestV2Writable = {
     } | {
         kind: 'organization';
         organizationId: string;
-    } | {
-        applicationId: string;
-        kind: 'application';
     }>;
     coOwnerIds: Array<string>;
     description: string;
@@ -737,9 +685,6 @@ export type AgentApplicationUpdateRequestV2Writable = {
     } | {
         kind: 'organization';
         organizationId: string;
-    } | {
-        applicationId: string;
-        kind: 'application';
     }>;
     coOwnerIds: Array<string>;
     description: string;
@@ -786,9 +731,6 @@ export type AgentConfigurationUpdateRequestV2Writable = {
     } | {
         kind: 'organization';
         organizationId: string;
-    } | {
-        applicationId: string;
-        kind: 'application';
     }>;
     channels?: Array<{
         bindingReference: string;

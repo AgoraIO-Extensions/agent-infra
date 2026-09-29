@@ -827,12 +827,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 	it("commits the bounded access fragment and replays without duplicate effects", async () => {
 		await clearDatabase();
 		await seed();
-		await adminClient`
-			insert into platform.agent_principal_grants
-				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
-			values ('agent_01', 'application', 'caller-app', 'use', 'authorization_9')
-		`;
-		const plan = await captureAccessPlan("authorization_10");
+		const plan = await captureAccessPlan();
 		const adapter = openTransaction();
 		await expect(adapter.commit(plan)).resolves.toEqual({
 			outcome: "committed",
@@ -881,12 +876,6 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			outboxCount: 1,
 			auditCount: 1,
 		});
-		await expect(
-			adminClient`
-				select authorization_revision from platform.agent_principal_grants
-				where agent_id = 'agent_01' and principal_id = 'caller-app'
-			`,
-		).resolves.toEqual([{ authorization_revision: "authorization_10" }]);
 	});
 
 	it.each([
@@ -1941,69 +1930,6 @@ describe("PostgreSQL Agent configuration query", () => {
 		});
 		expect(forbidden).toEqual({ outcome: "unavailable" });
 		expect(missing).toEqual(forbidden);
-	});
-
-	it("allows a current management grant to read the configuration projection", async () => {
-		await clearDatabase();
-		await seed();
-		await adminClient`
-			insert into platform.agent_principal_grants
-				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
-			values ('agent_01', 'application', 'management-app', 'manage', 'authorization_9')
-		`;
-		const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
-		adapters.push(query);
-		await expect(
-			query.read({
-				agentId: "agent_01",
-				actorId: "owner_01",
-				organizationIds: [],
-				isAdministrator: false,
-				principal: { kind: "application", id: "management-app" },
-				intent: "discover",
-			}),
-		).resolves.toMatchObject({
-			outcome: "found",
-			configuration: { agentId: "agent_01" },
-		});
-	});
-
-	it("does not use Owner or administrator access after an API user grant is revoked", async () => {
-		await clearDatabase();
-		await seed();
-		await adminClient`
-				insert into platform.agent_principal_grants
-					(agent_id, principal_type, principal_id, grant_type, authorization_revision)
-				values ('agent_01', 'user', 'owner_01', 'manage', 'authorization_9')
-			`;
-		const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
-		adapters.push(query);
-		const input = {
-			agentId: "agent_01",
-			actorId: "owner_01",
-			organizationIds: [],
-			isAdministrator: false,
-			principal: { kind: "user" as const, id: "owner_01" },
-			intent: "discover" as const,
-		};
-		await expect(query.read(input)).resolves.toMatchObject({
-			outcome: "found",
-		});
-		await adminClient`
-				update platform.agent_principal_grants set revoked_at = now()
-				where agent_id = 'agent_01' and principal_type = 'user' and principal_id = 'owner_01'
-			`;
-		for (const intent of ["discover", "manage"] as const) {
-			await expect(query.read({ ...input, intent })).resolves.toEqual({
-				outcome: "unavailable",
-			});
-		}
-		await expect(
-			query.read({ ...input, isAdministrator: true }),
-		).resolves.toEqual({ outcome: "unavailable" });
-		await expect(
-			query.read({ ...input, principal: undefined }),
-		).resolves.toMatchObject({ outcome: "found" });
 	});
 
 	it("fails closed on legacy NULL and malicious configuration, authorization, or replay records", async () => {

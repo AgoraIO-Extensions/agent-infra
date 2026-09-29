@@ -22,8 +22,6 @@ import {
 } from "./postgres-test.ts";
 import { PostgresTaskAuthorizationStoreV1 } from "./task-authorization.ts";
 
-const now = () => new Date("2026-09-04T00:00:00.000Z");
-
 const authority: ConversationExecutionAuthorityV1 = {
 	schemaVersion: 1,
 	actorId: "user_01",
@@ -240,7 +238,7 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 			transaction,
 		},
 		{
-			now,
+			now: () => new Date("2026-09-04T00:00:00.000Z"),
 			newId: () => `conversation_fixture_${nextId++}`,
 		},
 	);
@@ -494,7 +492,7 @@ function createConversation(
 				transaction,
 			},
 			{
-				now,
+				now: () => new Date("2026-09-04T00:00:00.000Z"),
 				newId: () => `conversation_id_${nextId++}`,
 			},
 		),
@@ -1081,13 +1079,6 @@ describe("PostgreSQL Conversation command transaction", () => {
 					executionId: "conversation_id_3",
 				},
 			});
-
-			const [deadline] =
-				await client`select confirmation_deadline, created_at from platform.conversation_stops where execution_id = 'conversation_id_3'`;
-			expect(
-				deadline?.confirmation_deadline.getTime() -
-					deadline?.created_at.getTime(),
-			).toBe(60_000);
 
 			const [counts, stops, outbox, audit] = await Promise.all([
 				client`
@@ -1699,7 +1690,6 @@ it("atomically binds confirmed input files with their Message and preserves bind
 		};
 		const service = createFileAuthorityV1({
 			store: files,
-			now,
 			intentTtlMs: 60000,
 			accessTtlMs: 10000,
 			issuer: "platform",

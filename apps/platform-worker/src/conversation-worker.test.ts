@@ -8,7 +8,6 @@ const mocks = vi.hoisted(() => ({
 	eventsClose: vi.fn(async () => {}),
 	authorizationClose: vi.fn(async () => {}),
 	legacyClose: vi.fn(async () => {}),
-	executionKeysClose: vi.fn(async () => {}),
 	runtimeClose: vi.fn(),
 	dispatchAssemblyThrows: false,
 	signal: undefined as AbortSignal | undefined,
@@ -27,9 +26,6 @@ vi.mock("@agent-infra/platform-store", () => ({
 	},
 	PostgresLegacyTaskRecoveryReaderV1: class {
 		close = mocks.legacyClose;
-	},
-	PostgresExecutionKeyReaderV4: class {
-		close = mocks.executionKeysClose;
 	},
 }));
 vi.mock("@agent-infra/platform-core", () => ({
@@ -116,7 +112,6 @@ describe("Conversation Worker discovery and shutdown", () => {
 		expect(mocks.eventsClose).toHaveBeenCalledTimes(1);
 		expect(mocks.authorizationClose).toHaveBeenCalledTimes(1);
 		expect(mocks.legacyClose).toHaveBeenCalledTimes(1);
-		expect(mocks.executionKeysClose).toHaveBeenCalledTimes(1);
 		expect(await worker.tick()).toBe(0);
 	});
 	it("shares overlapping discovery and never claims from a duplicate tick", async () => {

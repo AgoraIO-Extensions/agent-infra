@@ -120,35 +120,6 @@ describe("standard contract artifacts", () => {
 		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
 			"/api/v1/conversations/{conversationId}/events",
 		);
-		expect(
-			artifacts.pilotBrowserOpenapi.paths["/api/v1/agents"].post.security,
-		).toEqual([{ platformApiCredential: [] }]);
-		for (const [path, method] of [
-			["/api/v1/api-credentials", "get"],
-			["/api/v1/api-credentials", "post"],
-			["/api/v1/api-credentials/{credentialId}", "delete"],
-			["/api/v1/applications", "get"],
-			["/api/v1/applications", "post"],
-			["/api/v1/applications/{applicationId}/credentials", "get"],
-			["/api/v1/applications/{applicationId}/credentials", "post"],
-			[
-				"/api/v1/applications/{applicationId}/credentials/{credentialId}",
-				"delete",
-			],
-			["/api/v1/applications/{applicationId}/credential-delivery", "post"],
-			["/api/v1/applications/{applicationId}/credential-delivery", "delete"],
-			["/api/v1/agents/{agentId}/grants", "post"],
-			["/api/v1/agents/{agentId}/grants", "delete"],
-		] as const) {
-			expect(
-				artifacts.pilotBrowserOpenapi.paths[path][method].security,
-				`${method} ${path}`,
-			).toEqual([{ platformApiCredential: [] }]);
-		}
-		expect(
-			artifacts.pilotBrowserOpenapi.components.securitySchemes
-				.platformApiCredential,
-		).toEqual({ type: "http", scheme: "bearer" });
 		expect(Object.keys(artifacts.pilotBrowserOpenapiV2.paths)).toEqual([
 			"/api/v2/admin/agent-applications",
 			"/api/v2/admin/agent-applications/{applicationId}/decision",

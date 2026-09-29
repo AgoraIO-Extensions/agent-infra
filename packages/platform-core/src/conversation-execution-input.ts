@@ -15,10 +15,7 @@ import {
 	snapshotObject,
 	unavailable,
 } from "./conversation-execution-values.js";
-import {
-	isTaskPrincipalChannelV1,
-	parseTaskAuthorizationBoundaryV1,
-} from "./task-authorization.js";
+import { parseTaskAuthorizationBoundaryV1 } from "./task-authorization.js";
 
 export function parseCreateCommand(
 	input: unknown,
@@ -216,9 +213,7 @@ export function parseConversationStateQuery(
 	return { schemaVersion: 1, conversationId: values.conversationId };
 }
 
-export function parseAuthority(
-	input: unknown,
-): ConversationExecutionAuthorityV1 {
+function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 	const values = snapshotObject(input, [
 		"schemaVersion",
 		"actorId",
@@ -248,10 +243,7 @@ export function parseAuthority(
 			: parseTaskAuthorizationBoundaryV1(values.taskBoundary);
 	if (
 		taskBoundary &&
-		(!isTaskPrincipalChannelV1(
-			taskBoundary.principal,
-			taskBoundary.channelId,
-		) ||
+		(taskBoundary.principal.kind !== "user" ||
 			taskBoundary.principal.id !== values.actorId ||
 			taskBoundary.agentId !== values.agentId ||
 			taskBoundary.channelId !== values.channelId ||

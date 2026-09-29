@@ -133,8 +133,7 @@ export interface AgentConfigurationSecretReplacementInputV1 {
 
 export type AgentConfigurationAccessTargetV1 =
 	| { readonly kind: "user"; readonly userId: string }
-	| { readonly kind: "organization"; readonly organizationId: string }
-	| { readonly kind: "application"; readonly applicationId: string };
+	| { readonly kind: "organization"; readonly organizationId: string };
 
 export interface AgentConfigurationAuthorityContextV1 {
 	readonly schemaVersion: 1;
@@ -143,7 +142,6 @@ export interface AgentConfigurationAuthorityContextV1 {
 		readonly accountStatus: "active" | "disabled" | "revoked";
 	}[];
 	readonly organizationIds: readonly string[];
-	readonly applicationIds?: readonly string[];
 }
 
 export interface AgentConfigurationAccessAuthorityV1 {

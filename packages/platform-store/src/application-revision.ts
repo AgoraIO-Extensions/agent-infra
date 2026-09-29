@@ -10,7 +10,7 @@ import type {
 	PendingSecretRecordAttachmentsV1,
 } from "@agent-infra/platform-core";
 import { snapshotApplicationRevisionWritePlanV1 } from "@agent-infra/platform-core";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -30,7 +30,6 @@ import {
 	agentConfigurationRevisions,
 	agentManagementHistory,
 	agentOwners,
-	agentPrincipalGrants,
 	agents,
 	idempotencyRecords,
 	outboxItems,
@@ -130,9 +129,7 @@ function resultValue(input: unknown): ApplicationRevisionResultV1 {
 function accessKey(target: AgentConfigurationAccessTargetV1): string {
 	return target.kind === "user"
 		? `user\0${target.userId}`
-		: target.kind === "organization"
-			? `organization\0${target.organizationId}`
-			: `application\0${target.applicationId}`;
+		: `organization\0${target.organizationId}`;
 }
 
 function compareAccessTargets(
@@ -175,9 +172,7 @@ function validateAccess(
 		availability.some((target) =>
 			target.kind === "user"
 				? !validText(target.userId)
-				: target.kind === "organization"
-					? !validText(target.organizationId)
-					: !validText(target.applicationId),
+				: target.kind !== "organization" || !validText(target.organizationId),
 		)
 	) {
 		unavailable();
@@ -536,15 +531,6 @@ export class PostgresApplicationRevisionTransactionV1
 						)
 						.returning({ id: agents.id });
 					if (advancedAgent.length !== 1) unavailable();
-					await transaction
-						.update(agentPrincipalGrants)
-						.set({ authorizationRevision: plan.nextAuthorizationRevision })
-						.where(
-							and(
-								eq(agentPrincipalGrants.agentId, plan.application.agentId),
-								isNull(agentPrincipalGrants.revokedAt),
-							),
-						);
 				}
 				if (
 					attachments !== undefined &&

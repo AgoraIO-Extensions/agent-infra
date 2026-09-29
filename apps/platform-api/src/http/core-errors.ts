@@ -1,7 +1,6 @@
 import {
 	AgentConfigurationError,
 	AgentManagementError,
-	ApiIdentityError,
 	ApplicationFoundationError,
 	ApplicationRevisionError,
 } from "@agent-infra/platform-core";
@@ -62,16 +61,6 @@ export function mapCoreError(
 			error.code === "invalid_input"
 				? "INVALID_REQUEST"
 				: "DEPENDENCY_UNAVAILABLE",
-			traceId,
-		);
-	}
-	if (error instanceof ApiIdentityError) {
-		return new HttpProtocolError(
-			error.code === "not_authorized"
-				? "FORBIDDEN"
-				: error.code === "resource_unavailable"
-					? "RESOURCE_UNAVAILABLE"
-					: "DEPENDENCY_UNAVAILABLE",
 			traceId,
 		);
 	}

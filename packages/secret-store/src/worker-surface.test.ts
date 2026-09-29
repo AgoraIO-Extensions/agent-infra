@@ -4,7 +4,6 @@ import * as workerSecretStore from "./worker.js";
 describe("Worker-only Secret Store surface", () => {
 	it("exposes keyring operations separately from the encrypt-only main entry", () => {
 		expect(Object.keys(workerSecretStore).toSorted()).toEqual([
-			"createRelayKeyWorkerDecryptorV1",
 			"createSecretKeyRotationCryptoV1",
 			"createSecretKeyringDecryptorV1",
 			"createWorkloadSecretKeyringDecryptorV1",

@@ -20,7 +20,6 @@ import {
 	agentAvailability,
 	agentConfigurationRevisions,
 	agentOwners,
-	agentPrincipalGrants,
 	agents,
 	auditEvents,
 	idempotencyRecords,
@@ -76,9 +75,7 @@ function accessTargetKey(
 ): string {
 	return target.kind === "user"
 		? `user\0${target.userId}`
-		: target.kind === "organization"
-			? `organization\0${target.organizationId}`
-			: `application\0${target.applicationId}`;
+		: `organization\0${target.organizationId}`;
 }
 
 function parseResult(input: unknown): CommitApplicationFoundationResultV1 {
@@ -92,7 +89,7 @@ function parseResult(input: unknown): CommitApplicationFoundationResultV1 {
 		!validText(result.applicationId) ||
 		!validText(result.agentId) ||
 		result.configurationRevision !== 1 ||
-		(result.status !== "pending_approval" && result.status !== "creating")
+		result.status !== "pending_approval"
 	) {
 		throw new ApplicationFoundationError("persistence_failed");
 	}
@@ -114,14 +111,13 @@ function validatedPlan(input: ApplicationFoundationWritePlanV1) {
 	const result = parseResult(plan.result);
 	const ownerIds = [...plan.access.ownerIds];
 	const targetKeys = plan.access.availability.map(accessTargetKey);
-	const principal = plan.principal;
 	const timestamp = plan.agent.createdAt;
 	const expectedResult: CommitApplicationFoundationResultV1 = {
 		schemaVersion: 1,
 		applicationId: plan.application.applicationId,
 		agentId: plan.agent.agentId,
 		configurationRevision: 1,
-		status: result.status,
+		status: "pending_approval",
 	};
 	const expectedPayload = {
 		schemaVersion: 1,
@@ -140,9 +136,7 @@ function validatedPlan(input: ApplicationFoundationWritePlanV1) {
 		!validText(plan.application.name, 800) ||
 		Array.from(plan.application.name).length > 200 ||
 		!validText(plan.application.description, 65_536) ||
-		(plan.application.status !== "pending_approval" &&
-			plan.application.status !== "creating") ||
-		plan.application.status !== result.status ||
+		plan.application.status !== "pending_approval" ||
 		!validText(plan.application.traceId) ||
 		!validText(plan.application.requestId) ||
 		plan.configurationRevision.agentId !== plan.agent.agentId ||
@@ -163,9 +157,7 @@ function validatedPlan(input: ApplicationFoundationWritePlanV1) {
 		plan.access.availability.some((target) =>
 			target.kind === "user"
 				? !validText(target.userId)
-				: target.kind === "organization"
-					? !validText(target.organizationId)
-					: !validText(target.applicationId),
+				: !validText(target.organizationId),
 		) ||
 		!sameValue(result, expectedResult) ||
 		!validText(plan.idempotency.key, 128) ||
@@ -180,13 +172,8 @@ function validatedPlan(input: ApplicationFoundationWritePlanV1) {
 		plan.auditEvent.traceId !== plan.application.traceId ||
 		plan.auditEvent.requestId !== plan.application.requestId ||
 		plan.auditEvent.agentId !== plan.agent.agentId ||
-		(plan.auditEvent.actorType !== "user" &&
-			plan.auditEvent.actorType !== "application") ||
-		(plan.auditEvent.actorType === "user" &&
-			plan.auditEvent.actorId !== plan.application.applicantId) ||
-		(principal !== undefined &&
-			(principal.kind !== plan.auditEvent.actorType ||
-				principal.id !== plan.auditEvent.actorId)) ||
+		plan.auditEvent.actorType !== "user" ||
+		plan.auditEvent.actorId !== plan.application.applicantId ||
 		plan.auditEvent.action !== "agent.application.submitted" ||
 		plan.auditEvent.targetType !== "agent_application" ||
 		plan.auditEvent.targetId !== plan.application.applicationId ||
@@ -412,17 +399,6 @@ export class PostgresApplicationFoundationTransactionV1
 					name: plan.application.name,
 					description: plan.application.description,
 					status: plan.application.status,
-					...(plan.application.status === "creating"
-						? {
-								managementRevision: 1,
-								// API creation bypasses Web approval, so it is immediately
-								// eligible for the Workload reconciliation candidate query.
-								approvalRevision: 1,
-								desiredState: "running" as const,
-								workloadRevision: 1,
-								fence: 1,
-							}
-						: {}),
 					traceId: plan.application.traceId,
 					requestId: plan.application.requestId,
 					submittedAt: plan.application.submittedAt,
@@ -452,26 +428,10 @@ export class PostgresApplicationFoundationTransactionV1
 							agentId: plan.access.agentId,
 							targetType: target.kind,
 							targetId:
-								target.kind === "user"
-									? target.userId
-									: target.kind === "organization"
-										? target.organizationId
-										: target.applicationId,
+								target.kind === "user" ? target.userId : target.organizationId,
 						})),
 					);
 				}
-				const grantPrincipal =
-					plan.principal ??
-					({ kind: "user", id: plan.application.applicantId } as const);
-				await transaction.insert(agentPrincipalGrants).values(
-					(["manage", "use"] as const).map((grantType) => ({
-						agentId: plan.agent.agentId,
-						principalType: grantPrincipal.kind,
-						principalId: grantPrincipal.id,
-						grantType,
-						authorizationRevision: plan.agent.authorizationRevision,
-					})),
-				);
 				await transaction.insert(outboxItems).values({
 					id: randomUUID(),
 					scopeType: plan.outboxIntent.scopeType,
@@ -497,27 +457,6 @@ export class PostgresApplicationFoundationTransactionV1
 					outcome: plan.auditEvent.outcome,
 					occurredAt: plan.auditEvent.occurredAt,
 				});
-				if (plan.result.status === "creating") {
-					await transaction.insert(auditEvents).values(
-						(["manage", "use"] as const).map((grantType) => ({
-							id: randomUUID(),
-							traceId: plan.auditEvent.traceId,
-							requestId: plan.auditEvent.requestId,
-							agentId: plan.auditEvent.agentId,
-							actorType: plan.auditEvent.actorType,
-							actorId: plan.auditEvent.actorId,
-							action: "api.agent.grant.granted" as const,
-							targetType: "grant" as const,
-							targetId: plan.agent.agentId,
-							outcome: "succeeded" as const,
-							details: {
-								recipient: grantPrincipal,
-								grantType,
-							},
-							occurredAt: plan.auditEvent.occurredAt,
-						})),
-					);
-				}
 				const [completed] = await transaction
 					.update(idempotencyRecords)
 					.set({

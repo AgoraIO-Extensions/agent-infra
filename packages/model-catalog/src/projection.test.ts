@@ -1,8 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-	RuntimeModelConfigurationV3Schema,
-	RuntimeModelConfigurationV4Schema,
-} from "@agent-infra/contracts/runtime";
+import { RuntimeModelConfigurationV3Schema } from "@agent-infra/contracts/runtime";
 import type {
 	AgentConfigurationRecordV1,
 	AgentConfigurationRecordV2,
@@ -13,12 +10,8 @@ import {
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
 	projectRuntimeModelConfigurationV1,
-	projectRuntimeModelConfigurationV4,
-	revalidateRuntimeModelCatalogV4,
 	runtimeModelInjectionV1,
-	runtimeModelInjectionV4,
 	validateRuntimeModelProjectionV1,
-	validateRuntimeModelProjectionV4,
 } from "./index.js";
 
 const hash = (s: string) =>
@@ -104,73 +97,6 @@ async function projection(
 		}),
 	});
 }
-
-it("projects V4 without reading or injecting a model credential", async () => {
-	const modelConfiguration = {
-		catalogRevision: "catalog-a",
-		defaultOptionId: "primary",
-		defaultReasoningLevel: "high",
-		options: [
-			{
-				optionId: "primary",
-				modelId: "model-a",
-				endpointId: "endpoint-a",
-				reasoningLevels: ["high"],
-				credential: {
-					secretId: "legacy-secret",
-					version: 1,
-					isSet: true as const,
-				},
-			},
-		],
-	};
-	const configuration = { ...configurationV2, modelConfiguration };
-	const catalog = createFakeModelCatalogAdapterV1(catalogFixture());
-	const projected = await projectRuntimeModelConfigurationV4({
-		configuration,
-		catalog,
-		protocol: "openai-responses-v1",
-		signal: AbortSignal.timeout(1000),
-	});
-	const injection = runtimeModelInjectionV4(projected);
-	expect(injection.env).toHaveLength(1);
-	expect(JSON.stringify({ projected, injection })).not.toContain(
-		"legacy-secret",
-	);
-	expect(JSON.stringify({ projected, injection })).not.toContain("CREDENTIAL_");
-	expect(
-		RuntimeModelConfigurationV4Schema.parse(
-			JSON.parse(injection.configuration),
-		),
-	).toMatchObject({
-		schemaVersion: 4,
-		modelOptions: [{ modelOptionId: "primary" }],
-	});
-	expect(validateRuntimeModelProjectionV4(projected, configuration)).toEqual(
-		projected,
-	);
-	await revalidateRuntimeModelCatalogV4(
-		projected,
-		catalog,
-		AbortSignal.timeout(1000),
-	);
-	expect(() =>
-		validateRuntimeModelProjectionV4(projected, {
-			...configuration,
-			agentId: "agent-b",
-		}),
-	).toThrow("MODEL_CONFIGURATION_UNAVAILABLE");
-	await expect(
-		revalidateRuntimeModelCatalogV4(
-			projected,
-			createFakeModelCatalogAdapterV1({
-				...catalogFixture(),
-				revision: "catalog-b",
-			}),
-			AbortSignal.timeout(1000),
-		),
-	).rejects.toThrow("MODEL_CONFIGURATION_UNAVAILABLE");
-});
 
 it("preserves model projection while configuration records migrate from V1 to V2", async () => {
 	const historical: AgentConfigurationRecordV1 = {

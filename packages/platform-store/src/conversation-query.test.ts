@@ -207,26 +207,6 @@ describe("PostgreSQL Conversation query", () => {
 		});
 	});
 
-	it("reconnects an execution with no events from its initial cursor", async () => {
-		const initial = await query.replayExecution(
-			actorOne,
-			"conversation-3",
-			"execution-conversation-3",
-			undefined,
-		);
-		expect(initial).toMatchObject({ outcome: "events", events: [] });
-		if (initial?.outcome !== "events")
-			throw new Error("Expected initial replay");
-		await expect(
-			query.replayExecution(
-				actorOne,
-				"conversation-3",
-				"execution-conversation-3",
-				{ kind: "cursor", value: initial.resumeCursor },
-			),
-		).resolves.toEqual(initial);
-	});
-
 	it("returns bounded reload controls without disclosing other conversations", async () => {
 		await expect(
 			query.replay(actorOne, "conversation-1", undefined),

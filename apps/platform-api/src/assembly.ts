@@ -3,30 +3,23 @@ import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	createAgentConfigurationUseCaseV1,
 	createAgentManagementV1,
-	createApiIdentityManagementV1,
 	createApplicationFoundationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
-	createConversationTaskAdmissionUseCaseV1,
-	createTaskApiAuditV1,
-	taskApiChannelIdV1,
 } from "@agent-infra/platform-core";
 import {
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
-	PostgresApiIdentityStoreV1,
 	PostgresApplicationFoundationTransactionV1,
 	PostgresApplicationRevisionTransactionV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
 	PostgresPlatformAuditQueryV1,
-	PostgresTaskApiAuditStoreV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
 import type { PlatformAppDependencies } from "./app.js";
-import { withApiIdentityResolverV1 } from "./deployment-identity.js";
 import {
 	assemblePlatformFilesV1,
 	type PlatformFileDeploymentV1,
@@ -39,7 +32,6 @@ import {
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/management-routes.js";
-import type { TaskRoutesDependencies } from "./http/task-routes.js";
 import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
@@ -57,12 +49,7 @@ export interface PlatformApiAssemblyInput {
 	readonly databaseUrl: string;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
-	readonly taskAdmissionPolicy?: {
-		readonly maximumWaitingTasksPerAgent: number;
-		readonly waitingTimeoutMs: number;
-	};
 	readonly identity: IdentityAdapter;
-	readonly apiIdentity?: PostgresApiIdentityStoreV1;
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly allocateApplicationIds: ManagementRouteDependencies["allocateApplicationIds"];
@@ -90,14 +77,6 @@ export function assemblePlatformApi(
 	const managementTransaction = new PostgresAgentManagementTransactionV1({
 		databaseUrl: input.databaseUrl,
 	});
-	const apiIdentity =
-		input.apiIdentity ??
-		new PostgresApiIdentityStoreV1({ databaseUrl: input.databaseUrl });
-	const identity: IdentityAdapter = withApiIdentityResolverV1(
-		input.identity,
-		apiIdentity,
-	);
-	const identityAdapter = identity;
 	const managementQuery = new PostgresAgentManagementQueryV1({
 		databaseUrl: input.databaseUrl,
 	});
@@ -111,9 +90,6 @@ export function assemblePlatformApi(
 		databaseUrl: input.databaseUrl,
 	});
 	const taskAuthorization = new PostgresTaskAuthorizationStoreV1({
-		databaseUrl: input.databaseUrl,
-	});
-	const taskApiAudit = new PostgresTaskApiAuditStoreV1({
 		databaseUrl: input.databaseUrl,
 	});
 	const conversationTransaction =
@@ -146,52 +122,6 @@ export function assemblePlatformApi(
 		...admissions,
 	});
 	const management = createAgentManagementV1(managementTransaction);
-	const apiIdentityManagement = createApiIdentityManagementV1({
-		store: apiIdentity,
-		directory: {
-			async resolveUser(userId) {
-				const current = await resolveCurrentTaskUser(
-					identityAdapter,
-					userId,
-					randomUUID(),
-				);
-				return current
-					? { userId: current.userId, accountStatus: current.accountStatus }
-					: null;
-			},
-		},
-		agentAccess: {
-			async canManage({ actor, agentId }) {
-				const principal = actor.principal ?? {
-					kind: "user" as const,
-					id: actor.userId,
-				};
-				if (actor.isAdministrator)
-					return (
-						(await managementQuery.getAgent(
-							{ kind: "administrator" },
-							agentId,
-						)) !== undefined
-					);
-				if (
-					actor.principal === undefined &&
-					principal.kind === "user" &&
-					(await managementQuery.getAgent(
-						{ kind: "owner", ownerId: principal.id },
-						agentId,
-					))
-				)
-					return true;
-				return (
-					(await managementQuery.getAgent(
-						{ kind: "principal", principal, grantType: "manage" },
-						agentId,
-					)) !== undefined
-				);
-			},
-		},
-		idFactory: randomUUID,
-	});
 	const configuration = createAgentConfigurationUseCaseV1({
 		transaction: configurationTransaction,
 		...admissions,
@@ -205,7 +135,7 @@ export function assemblePlatformApi(
 	const conversationAuthorization: ConversationAuthorization = {
 		async authorize(identity, request) {
 			const currentUser = await resolveCurrentTaskUser(
-				identityAdapter,
+				input.identity,
 				identity.userId,
 				randomUUID(),
 			);
@@ -290,101 +220,11 @@ export function assemblePlatformApi(
 			};
 		},
 	};
-	const authorizeTask: TaskRoutesDependencies["authorize"] = async (
-		identity,
-		request,
-	) => {
-		const principal = identity.principal;
-		const channelId = taskApiChannelIdV1(principal);
-		let agentId = request.agentId;
-		if (request.conversationId !== undefined) {
-			const target = await conversationQuery.getAuthorizationTarget(
-				{ actorId: principal.id, channelId },
-				request.conversationId,
-			);
-			if (!target || (agentId !== undefined && target.agentId !== agentId))
-				return null;
-			agentId = target.agentId;
-		}
-		if (!agentId) return null;
-		const taskBoundary =
-			principal.kind === "application"
-				? await taskAuthorization.captureApplicationBoundary({
-						applicationId: principal.id,
-						agentId,
-						channelId,
-					})
-				: await (async () => {
-						const user = await resolveCurrentTaskUser(
-							identityAdapter,
-							principal.id,
-							randomUUID(),
-						);
-						return user
-							? taskAuthorization.captureUserBoundary({
-									user,
-									agentId,
-									channelId,
-								})
-							: null;
-					})();
-		if (!taskBoundary) return null;
-		return {
-			schemaVersion: 1,
-			actorId: principal.id,
-			agentId,
-			channelId,
-			authorizationRevision: taskBoundary.agentAuthorizationRevision,
-			taskBoundary,
-			supportsSupplementaryInstruction: false,
-		};
-	};
-	const tasks: TaskRoutesDependencies = {
-		identity: identityAdapter,
-		audit: createTaskApiAuditV1(taskApiAudit),
-		authorize: authorizeTask,
-		query: conversationQuery,
-		commands(identity) {
-			const admission = createConversationTaskAdmissionUseCaseV1(
-				{
-					transaction: conversationTransaction,
-					authorization: {
-						async authorize(request) {
-							const authority = await authorizeTask(identity, request);
-							return authority
-								? { outcome: "allowed", authority }
-								: { outcome: "denied" };
-						},
-					},
-				},
-				input.taskAdmissionPolicy ?? {
-					maximumWaitingTasksPerAgent: 100,
-					waitingTimeoutMs: 300_000,
-				},
-			);
-			const controls = createConversationExecutionUseCaseV1({
-				transaction: conversationTransaction,
-				authorization: {
-					async authorize(request) {
-						const authority = await authorizeTask(identity, {
-							schemaVersion: 1,
-							operation: "task.cancel",
-							conversationId: request.conversationId,
-						});
-						return authority
-							? { outcome: "allowed", authority }
-							: { outcome: "denied" };
-					},
-				},
-			});
-			return { submitTask: admission.submitTask, stop: controls.stop };
-		},
-	};
 	const files = input.files
 		? assemblePlatformFilesV1({
 				databaseUrl: input.databaseUrl,
 				deployment: input.files,
-				identity: identityAdapter,
+				identity: input.identity,
 				conversationAuthorization,
 				async readCurrentLimits(identity, scope, kind) {
 					const configuration = await configurationQuery.read({
@@ -438,7 +278,6 @@ export function assemblePlatformApi(
 			management,
 			configuration,
 			query: managementQuery,
-			apiIdentity: apiIdentityManagement,
 			allocateApplicationIds: input.allocateApplicationIds,
 			prepareSecretReplacements: input.prepareApplicationSecrets,
 			readApplicationProjection: projections.readApplicationProjection,
@@ -475,20 +314,13 @@ export function assemblePlatformApi(
 				}),
 			query: conversationQuery,
 		},
-		tasks,
-		sessionAudit: {
-			identity: input.identity,
-			audit: {
-				listAudit: (scope, page) => auditQuery.listManagementAudit(scope, page),
-			},
-		},
+		sessionAudit: { identity: input.identity, audit: auditQuery },
 	};
 	const adapters = [
 		...(files ? [files] : []),
 		foundationTransaction,
 		revisionTransaction,
 		managementTransaction,
-		apiIdentity,
 		managementQuery,
 		configurationTransaction,
 		configurationQuery,
@@ -496,7 +328,6 @@ export function assemblePlatformApi(
 		conversationQuery,
 		auditQuery,
 		taskAuthorization,
-		taskApiAudit,
 	];
 	return {
 		dependencies,
