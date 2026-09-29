@@ -1172,6 +1172,82 @@ export function createConnectionOAuthApp(
 			},
 		);
 
+		for (const action of ["revise", "retire"] as const) {
+			app.post(
+				`/api/v1/connection/admin/capability-profiles/:profileId/${action}`,
+				async (context) => {
+					requireSameOrigin(context.req.raw.headers, options.issuer);
+					const session = await currentBrowserApiAdministrator(context);
+					if (session instanceof Response) return session;
+					const ifMatch = context.req.header("if-match");
+					if (!ifMatch || !/^"[1-9][0-9]*"$/.test(ifMatch))
+						throw new ConnectionError(
+							"INVALID_REQUEST",
+							"A current revision is required",
+						);
+					const catalog = management.approvalCatalog;
+					if (!catalog)
+						throw new ConnectionError(
+							"PROVIDER_UNAVAILABLE",
+							"Approval catalog is unavailable",
+						);
+					const sourceId = context.req.param("profileId");
+					const body =
+						action === "revise"
+							? parseJsonBody(
+									capabilityProfileDraftSchema,
+									await context.req.json().catch(() => undefined),
+								)
+							: undefined;
+					if (action === "revise") {
+						if (!management.approvalDirectoryEnabled)
+							throw new ConnectionError(
+								"PROVIDER_UNAVAILABLE",
+								"Employee directory approval gate is unavailable",
+							);
+						for (const policy of (await catalog.listCatalog()).policies.filter(
+							(item) =>
+								item.status === "PUBLISHED" &&
+								item.capabilityProfileId === sourceId,
+						))
+							await verifyPolicyApprovers(policy.id);
+					}
+					const result = await browserApiOperation(context, () =>
+						browserCommand(
+							options,
+							context,
+							{
+								operation: `connection.capability-profile.${action}`,
+								request: {
+									sourceId,
+									expectedRevision: ifMatch.slice(1, -1),
+									...body,
+								},
+								subject: session.account.principalId,
+							},
+							() =>
+								action === "revise" && body
+									? catalog.revisePublishedCapabilityProfile({
+											...body,
+											id: `capability-profile-${randomUUID()}`,
+											sourceId,
+											expectedRevision: ifMatch.slice(1, -1),
+											actorPrincipalId: session.account.principalId,
+										})
+									: catalog.retirePublishedCapabilityProfile({
+											sourceId,
+											expectedRevision: ifMatch.slice(1, -1),
+											actorPrincipalId: session.account.principalId,
+										}),
+						),
+					);
+					if (result instanceof Response) return result;
+					context.header("cache-control", "no-store");
+					return context.json(result);
+				},
+			);
+		}
+
 		app.get("/api/v1/connection/admin/disclaimers", async (context) => {
 			const session = await currentBrowserApiAdministrator(context);
 			if (session instanceof Response) return session;
@@ -1305,6 +1381,81 @@ export function createConnectionOAuthApp(
 				return context.body(null, 204);
 			},
 		);
+
+		for (const action of ["revise", "retire"] as const) {
+			app.post(
+				`/api/v1/connection/admin/disclaimers/:disclaimerId/${action}`,
+				async (context) => {
+					requireSameOrigin(context.req.raw.headers, options.issuer);
+					const session = await currentBrowserApiAdministrator(context);
+					if (session instanceof Response) return session;
+					const ifMatch = context.req.header("if-match");
+					if (!ifMatch || !/^"[1-9][0-9]*"$/.test(ifMatch))
+						throw new ConnectionError(
+							"INVALID_REQUEST",
+							"A current revision is required",
+						);
+					const catalog = management.approvalCatalog;
+					if (!catalog)
+						throw new ConnectionError(
+							"PROVIDER_UNAVAILABLE",
+							"Approval catalog is unavailable",
+						);
+					const sourceId = context.req.param("disclaimerId");
+					const body =
+						action === "revise"
+							? parseJsonBody(
+									disclaimerDraftSchema,
+									await context.req.json().catch(() => undefined),
+								)
+							: undefined;
+					if (action === "revise") {
+						if (!management.approvalDirectoryEnabled)
+							throw new ConnectionError(
+								"PROVIDER_UNAVAILABLE",
+								"Employee directory approval gate is unavailable",
+							);
+						for (const policy of (await catalog.listCatalog()).policies.filter(
+							(item) =>
+								item.status === "PUBLISHED" &&
+								item.disclaimerVersionIds.includes(sourceId),
+						))
+							await verifyPolicyApprovers(policy.id);
+					}
+					const result = await browserApiOperation(context, () =>
+						browserCommand(
+							options,
+							context,
+							{
+								operation: `connection.disclaimer.${action}`,
+								request: {
+									sourceId,
+									expectedRevision: ifMatch.slice(1, -1),
+									...body,
+								},
+								subject: session.account.principalId,
+							},
+							() =>
+								action === "revise" && body
+									? catalog.revisePublishedDisclaimer({
+											...body,
+											sourceId,
+											expectedRevision: ifMatch.slice(1, -1),
+											actorPrincipalId: session.account.principalId,
+										})
+									: catalog.retirePublishedDisclaimer({
+											sourceId,
+											expectedRevision: ifMatch.slice(1, -1),
+											actorPrincipalId: session.account.principalId,
+										}),
+						),
+					);
+					if (result instanceof Response) return result;
+					context.header("cache-control", "no-store");
+					return context.json(result);
+				},
+			);
+		}
 
 		app.get(
 			"/api/v1/connection/admin/access-policies/:policyId",

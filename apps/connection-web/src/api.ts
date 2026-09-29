@@ -107,7 +107,11 @@ import {
 	reauthorizeProviderConnection,
 	renameSharedScope,
 	rerouteApprovalRequest,
+	retirePublishedApprovalCapabilityProfile,
+	retirePublishedApprovalDisclaimer,
 	retryConnectionOutboxFailure,
+	revisePublishedApprovalCapabilityProfile,
+	revisePublishedApprovalDisclaimer,
 	revokeAdminAccessAuthorization,
 	revokeAdministrator,
 	revokeApprovalDelegation,
@@ -433,6 +437,32 @@ export const connectionApi = {
 				path: { profileId },
 			}),
 		),
+	revisePublishedApprovalCapabilityProfile: (input: {
+		profileId: string;
+		revision: string;
+		body: CapabilityProfileDraft;
+	}) =>
+		unwrap(
+			revisePublishedApprovalCapabilityProfile({
+				body: parseClientInput(
+					capabilityProfileDraftSchema,
+					input.body,
+					"能力包无效",
+				),
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { profileId: input.profileId },
+			}),
+		),
+	retirePublishedApprovalCapabilityProfile: (input: {
+		profileId: string;
+		revision: string;
+	}) =>
+		unwrap(
+			retirePublishedApprovalCapabilityProfile({
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { profileId: input.profileId },
+			}),
+		),
 	createApprovalDisclaimer: (body: DisclaimerDraft) =>
 		unwrap(
 			createApprovalDisclaimer({
@@ -461,6 +491,32 @@ export const connectionApi = {
 			publishApprovalDisclaimer({
 				headers: commandHeaders(),
 				path: { disclaimerId },
+			}),
+		),
+	revisePublishedApprovalDisclaimer: (input: {
+		disclaimerId: string;
+		revision: string;
+		body: DisclaimerDraft;
+	}) =>
+		unwrap(
+			revisePublishedApprovalDisclaimer({
+				body: parseClientInput(
+					disclaimerDraftSchema,
+					input.body,
+					"免责声明无效",
+				),
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { disclaimerId: input.disclaimerId },
+			}),
+		),
+	retirePublishedApprovalDisclaimer: (input: {
+		disclaimerId: string;
+		revision: string;
+	}) =>
+		unwrap(
+			retirePublishedApprovalDisclaimer({
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { disclaimerId: input.disclaimerId },
 			}),
 		),
 	getConnectionAccessPolicyDraft: (policyId: string) =>

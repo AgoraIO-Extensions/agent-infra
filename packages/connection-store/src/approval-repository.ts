@@ -555,6 +555,279 @@ export class PostgresConnectionApprovalRepository {
 		return rows.map((row) => row.approver_principal_id);
 	}
 
+	private async requireCatalogAdministrator(
+		sql: postgres.TransactionSql,
+		actorPrincipalId: string,
+	) {
+		const [admin] = await sql<{ id: string }[]>`
+			SELECT principal.id FROM connection_principals principal
+			JOIN connection_principal_roles role_binding ON role_binding.principal_id = principal.id
+			WHERE principal.id = ${actorPrincipalId} AND principal.status = 'ACTIVE'
+				AND role_binding.role = 'CONNECTION_ADMIN' AND role_binding.status = 'ACTIVE'
+			FOR SHARE OF principal, role_binding
+		`;
+		if (!admin)
+			throw new ConnectionError("FORBIDDEN", "Administrator required");
+	}
+
+	private async currentPolicyIds(
+		sql: postgres.TransactionSql,
+		input: { profileId?: string; disclaimerId?: string },
+	) {
+		const rows = await sql<{ id: string }[]>`
+			SELECT policy.id FROM connection_access_policy_versions policy
+			WHERE policy.status = 'PUBLISHED' AND ${
+				input.profileId
+					? sql`policy.capability_profile_id = ${input.profileId}`
+					: sql`EXISTS (
+						SELECT 1 FROM connection_access_policy_disclaimers link
+						WHERE link.policy_version_id = policy.id
+							AND link.disclaimer_version_id = ${input.disclaimerId ?? ""}
+					)`
+			}
+			ORDER BY policy.id FOR UPDATE OF policy
+		`;
+		return rows.map((row) => row.id);
+	}
+
+	private async replaceCurrentPolicy(
+		sql: postgres.TransactionSql,
+		input: {
+			actorPrincipalId: string;
+			policyId: string;
+			profileId?: string;
+			oldDisclaimerId?: string;
+			newDisclaimerId?: string;
+		},
+	) {
+		const id = `access-policy-${randomUUID()}`;
+		const approvers = await sql<{ status: string }[]>`
+			SELECT principal.status FROM connection_approval_stage_approvers approver
+			JOIN connection_principals principal ON principal.id = approver.approver_principal_id
+			WHERE approver.policy_version_id = ${input.policyId}
+			FOR SHARE OF principal
+		`;
+		if (!approvers.length || approvers.some((item) => item.status !== "ACTIVE"))
+			invalid("Approval policy approvers are inactive");
+		const retired = await sql`
+			UPDATE connection_access_policy_versions
+			SET status = 'SUPERSEDED', revision = revision + 1
+			WHERE id = ${input.policyId} AND status = 'PUBLISHED'
+		`;
+		if (retired.count !== 1) invalid("Published policy changed");
+		await sql`
+			INSERT INTO connection_access_policy_versions (
+				id, provider_release_id, capability_profile_id, priority,
+				default_duration_days, allow_permanent, request_ttl_seconds,
+				connect_ttl_seconds, renewal_lead_seconds, material_change,
+				status, created_by_principal_id, published_at
+			)
+			SELECT ${id}, provider_release_id,
+				${input.profileId ? sql`${input.profileId}` : sql`capability_profile_id`},
+				priority, default_duration_days, allow_permanent, request_ttl_seconds,
+				connect_ttl_seconds, renewal_lead_seconds, false,
+				'DRAFT', ${input.actorPrincipalId}, NULL
+			FROM connection_access_policy_versions WHERE id = ${input.policyId}
+		`;
+		const durations = await sql<
+			{ duration_kind: string; duration_days: number | null }[]
+		>`
+			SELECT duration_kind, duration_days FROM connection_access_policy_durations
+			WHERE policy_version_id = ${input.policyId}
+		`;
+		for (const duration of durations)
+			await sql`
+			INSERT INTO connection_access_policy_durations
+				(id, policy_version_id, duration_kind, duration_days)
+			VALUES (${`duration-${randomUUID()}`}, ${id}, ${duration.duration_kind}, ${duration.duration_days})
+		`;
+		const disclaimers = await sql<
+			{ disclaimer_version_id: string; ordinal: number }[]
+		>`
+			SELECT disclaimer_version_id, ordinal FROM connection_access_policy_disclaimers
+			WHERE policy_version_id = ${input.policyId} ORDER BY ordinal
+		`;
+		for (const disclaimer of disclaimers)
+			await sql`
+			INSERT INTO connection_access_policy_disclaimers
+				(policy_version_id, disclaimer_version_id, ordinal)
+			VALUES (${id}, ${
+				disclaimer.disclaimer_version_id === input.oldDisclaimerId
+					? (input.newDisclaimerId ?? disclaimer.disclaimer_version_id)
+					: disclaimer.disclaimer_version_id
+			}, ${disclaimer.ordinal})
+		`;
+		const stages = await sql<{ id: string }[]>`
+			SELECT id FROM connection_approval_stages
+			WHERE policy_version_id = ${input.policyId} ORDER BY ordinal
+		`;
+		for (const stage of stages) {
+			const stageId = `approval-stage-${randomUUID()}`;
+			await sql`
+				INSERT INTO connection_approval_stages
+					(id, policy_version_id, ordinal, name, quorum_type, quorum_count, timeout_seconds)
+				SELECT ${stageId}, ${id}, ordinal, name, quorum_type, quorum_count, timeout_seconds
+				FROM connection_approval_stages WHERE id = ${stage.id}
+			`;
+			await sql`
+				INSERT INTO connection_approval_stage_approvers
+					(policy_version_id, stage_id, approver_principal_id, display_snapshot)
+				SELECT ${id}, ${stageId}, approver_principal_id, display_snapshot
+				FROM connection_approval_stage_approvers WHERE stage_id = ${stage.id}
+			`;
+		}
+		await sql`
+			UPDATE connection_access_policy_versions
+			SET status = 'PUBLISHED', published_at = now(), revision = revision + 1
+			WHERE id = ${id} AND status = 'DRAFT'
+		`;
+		await this.auditAndEnqueue(sql, {
+			actorPrincipalId: input.actorPrincipalId,
+			aggregateId: id,
+			event: "connection.access-policy.published",
+		});
+	}
+
+	async revisePublishedCapabilityProfile(
+		input: CapabilityProfileDraft & {
+			actorPrincipalId: string;
+			expectedRevision: string;
+			sourceId: string;
+		},
+	) {
+		unique(input.actionVersionIds, "Capability profile actions are invalid");
+		if (input.actionVersionIds.length > 500)
+			invalid("Capability profile has too many actions");
+		if (!/^[1-9][0-9]*$/.test(input.expectedRevision))
+			invalid("Revision is invalid");
+		return this.sql.begin(async (sql) => {
+			await this.requireCatalogAdministrator(sql, input.actorPrincipalId);
+			const [source] = await sql<{ provider_release_id: string }[]>`
+				SELECT provider_release_id FROM connection_capability_profiles
+				WHERE id = ${input.sourceId} AND status = 'PUBLISHED'
+					AND revision::text = ${input.expectedRevision} FOR UPDATE
+			`;
+			if (!source || source.provider_release_id !== input.providerReleaseId)
+				invalid("Published capability profile changed");
+			const [release] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_provider_releases
+				WHERE id = ${input.providerReleaseId} AND status = 'PUBLISHED' FOR SHARE
+			`;
+			if (!release) invalid("Provider release is unavailable");
+			const policies = await this.currentPolicyIds(sql, {
+				profileId: input.sourceId,
+			});
+			const actions = await sql<
+				{
+					effect: "READ" | "WRITE";
+					id: string;
+					required_scopes: unknown;
+					status: string;
+				}[]
+			>`
+				SELECT id, effect, required_scopes, status FROM connection_action_versions
+				WHERE id IN ${sql(input.actionVersionIds)}
+					AND provider_release_id = ${input.providerReleaseId}
+				FOR SHARE
+			`;
+			if (
+				actions.length !== input.actionVersionIds.length ||
+				actions.some(
+					(action) =>
+						action.status !== "PUBLISHED" ||
+						!Array.isArray(action.required_scopes) ||
+						action.required_scopes.some((scope) => typeof scope !== "string"),
+				)
+			)
+				invalid("Capability profile actions are unavailable");
+			const scopes = [
+				...new Set(
+					actions.flatMap((action) => action.required_scopes as string[]),
+				),
+			].sort();
+			const id = `capability-profile-${randomUUID()}`;
+			await sql`
+				UPDATE connection_capability_profiles SET status = 'SUPERSEDED', revision = revision + 1
+				WHERE id = ${input.sourceId} AND status = 'PUBLISHED'
+			`;
+			await sql`
+				INSERT INTO connection_capability_profiles
+					(id, provider_release_id, name, effect_ceiling, required_scopes, authorization_digest, status)
+				VALUES (${id}, ${input.providerReleaseId}, ${input.name},
+					${actions.some((action) => action.effect === "WRITE") ? "WRITE" : "READ"},
+					${sql.json(scopes)}, ${canonicalHash({
+						actionVersionIds: [...input.actionVersionIds].sort(),
+						effectCeiling: actions.some((action) => action.effect === "WRITE")
+							? "WRITE"
+							: "READ",
+						providerReleaseId: input.providerReleaseId,
+						requiredScopes: scopes,
+					})}, 'DRAFT')
+			`;
+			for (const actionVersionId of input.actionVersionIds)
+				await sql`
+				INSERT INTO connection_capability_profile_actions
+					(capability_profile_id, provider_release_id, action_version_id)
+				VALUES (${id}, ${input.providerReleaseId}, ${actionVersionId})
+			`;
+			await sql`
+				UPDATE connection_capability_profiles
+				SET status = 'PUBLISHED', revision = revision + 1
+				WHERE id = ${id} AND status = 'DRAFT'
+			`;
+			for (const policyId of policies)
+				await this.replaceCurrentPolicy(sql, {
+					actorPrincipalId: input.actorPrincipalId,
+					policyId,
+					profileId: id,
+				});
+			await this.auditAndEnqueue(sql, {
+				actorPrincipalId: input.actorPrincipalId,
+				aggregateId: id,
+				event: "connection.capability-profile.published",
+			});
+			return { capabilityProfileId: id, affectedPolicies: policies.length };
+		});
+	}
+
+	async retirePublishedCapabilityProfile(input: {
+		actorPrincipalId: string;
+		expectedRevision: string;
+		sourceId: string;
+	}) {
+		if (!/^[1-9][0-9]*$/.test(input.expectedRevision))
+			invalid("Revision is invalid");
+		return this.sql.begin(async (sql) => {
+			await this.requireCatalogAdministrator(sql, input.actorPrincipalId);
+			const [source] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_capability_profiles
+				WHERE id = ${input.sourceId} AND status = 'PUBLISHED'
+					AND revision::text = ${input.expectedRevision} FOR UPDATE
+			`;
+			if (!source) invalid("Published capability profile changed");
+			const policies = await this.currentPolicyIds(sql, {
+				profileId: input.sourceId,
+			});
+			const updated = await sql`
+				UPDATE connection_capability_profiles SET status = 'SUPERSEDED', revision = revision + 1
+				WHERE id = ${input.sourceId} AND status = 'PUBLISHED'
+					AND revision::text = ${input.expectedRevision}
+			`;
+			if (updated.count !== 1) invalid("Published capability profile changed");
+			for (const policyId of policies)
+				await sql`
+				UPDATE connection_access_policy_versions SET status = 'SUPERSEDED', revision = revision + 1
+				WHERE id = ${policyId} AND status = 'PUBLISHED'
+			`;
+			await this.auditAndEnqueue(sql, {
+				actorPrincipalId: input.actorPrincipalId,
+				aggregateId: input.sourceId,
+				event: "connection.capability-profile.retired",
+			});
+			return { affectedPolicies: policies.length };
+		});
+	}
+
 	async createCapabilityProfileDraft(input: CapabilityProfileDraft) {
 		unique(input.actionVersionIds, "Capability profile actions are invalid");
 		await this.sql.begin(async (sql) => {
@@ -828,6 +1101,108 @@ export class PostgresConnectionApprovalRepository {
 				aggregateId: input.disclaimerVersionId,
 				event: "connection.disclaimer.published",
 			});
+		});
+	}
+
+	async revisePublishedDisclaimer(
+		input: Omit<DisclaimerDraft, "ownerMetadata" | "id"> & {
+			actorPrincipalId: string;
+			expectedRevision: string;
+			sourceId: string;
+		},
+	) {
+		if (!/^[1-9][0-9]*$/.test(input.expectedRevision))
+			invalid("Revision is invalid");
+		if (input.materialChange)
+			invalid("Material disclaimer requires explicit reapproval");
+		return this.sql.begin(async (sql) => {
+			await this.requireCatalogAdministrator(sql, input.actorPrincipalId);
+			const [source] = await sql<
+				{
+					kind: string;
+					provider_id: string | null;
+					locale: string;
+				}[]
+			>`
+				SELECT kind, provider_id, locale FROM connection_disclaimer_versions
+				WHERE id = ${input.sourceId} AND status = 'PUBLISHED'
+					AND revision::text = ${input.expectedRevision} FOR UPDATE
+			`;
+			if (
+				!source ||
+				source.kind !== input.kind ||
+				source.provider_id !== (input.providerId ?? null) ||
+				source.locale !== input.locale
+			)
+				invalid("Published disclaimer scope changed");
+			const policies = await this.currentPolicyIds(sql, {
+				disclaimerId: input.sourceId,
+			});
+			const id = `disclaimer-${randomUUID()}`;
+			await sql`
+				UPDATE connection_disclaimer_versions SET status = 'SUPERSEDED', revision = revision + 1
+				WHERE id = ${input.sourceId} AND status = 'PUBLISHED'
+			`;
+			await sql`
+				INSERT INTO connection_disclaimer_versions (
+					id, kind, provider_id, locale, content, content_sha256,
+					owner_metadata, material_change, status, published_at
+				) VALUES (${id}, ${input.kind}, ${input.providerId ?? null}, ${input.locale},
+					${input.content}, ${createHash("sha256").update(input.content, "utf8").digest("hex")},
+					${sql.json({ createdByPrincipalId: input.actorPrincipalId })},
+					false, 'PUBLISHED', now())
+			`;
+			for (const policyId of policies)
+				await this.replaceCurrentPolicy(sql, {
+					actorPrincipalId: input.actorPrincipalId,
+					policyId,
+					oldDisclaimerId: input.sourceId,
+					newDisclaimerId: id,
+				});
+			await this.auditAndEnqueue(sql, {
+				actorPrincipalId: input.actorPrincipalId,
+				aggregateId: id,
+				event: "connection.disclaimer.published",
+			});
+			return { disclaimerVersionId: id, affectedPolicies: policies.length };
+		});
+	}
+
+	async retirePublishedDisclaimer(input: {
+		actorPrincipalId: string;
+		expectedRevision: string;
+		sourceId: string;
+	}) {
+		if (!/^[1-9][0-9]*$/.test(input.expectedRevision))
+			invalid("Revision is invalid");
+		return this.sql.begin(async (sql) => {
+			await this.requireCatalogAdministrator(sql, input.actorPrincipalId);
+			const [source] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_disclaimer_versions
+				WHERE id = ${input.sourceId} AND status = 'PUBLISHED'
+					AND revision::text = ${input.expectedRevision} FOR UPDATE
+			`;
+			if (!source) invalid("Published disclaimer changed");
+			const policies = await this.currentPolicyIds(sql, {
+				disclaimerId: input.sourceId,
+			});
+			const updated = await sql`
+				UPDATE connection_disclaimer_versions SET status = 'SUPERSEDED', revision = revision + 1
+				WHERE id = ${input.sourceId} AND status = 'PUBLISHED'
+					AND revision::text = ${input.expectedRevision}
+			`;
+			if (updated.count !== 1) invalid("Published disclaimer changed");
+			for (const policyId of policies)
+				await sql`
+				UPDATE connection_access_policy_versions SET status = 'SUPERSEDED', revision = revision + 1
+				WHERE id = ${policyId} AND status = 'PUBLISHED'
+			`;
+			await this.auditAndEnqueue(sql, {
+				actorPrincipalId: input.actorPrincipalId,
+				aggregateId: input.sourceId,
+				event: "connection.disclaimer.retired",
+			});
+			return { affectedPolicies: policies.length };
 		});
 	}
 

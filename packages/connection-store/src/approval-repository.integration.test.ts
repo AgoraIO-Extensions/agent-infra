@@ -31,6 +31,290 @@ const integrationTest = databaseUrl ? it : it.skip;
 const materialTest = materialDatabaseUrl ? it : it.skip;
 
 describe("PostgreSQL Connection access approval catalog", () => {
+	integrationTest(
+		"revises and retires published catalog without changing an existing request",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const suffix = randomUUID();
+			const adminId = `catalog-admin-${suffix}`;
+			const applicantId = `catalog-applicant-${suffix}`;
+			const approverId = `catalog-approver-${suffix}`;
+			const releaseId = `catalog-release-${suffix}`;
+			const readId = `catalog.read@${suffix}`;
+			const writeId = `catalog.write@${suffix}`;
+			const profileId = `catalog-profile-${suffix}`;
+			const disclaimerId = `catalog-disclaimer-${suffix}`;
+			const policyId = `catalog-policy-${suffix}`;
+			const sql = postgres(databaseUrl);
+			const catalog = new PostgresConnectionApprovalRepository(databaseUrl);
+			const requests = new PostgresConnectionAccessRequestRepository(
+				databaseUrl,
+			);
+			try {
+				await sql`INSERT INTO connection_principals (id, display_name) VALUES
+				(${adminId}, 'Admin'), (${applicantId}, 'Applicant'), (${approverId}, 'Approver')`;
+				await sql`INSERT INTO connection_principal_roles (principal_id, role, status, grant_source)
+				VALUES (${adminId}, 'CONNECTION_ADMIN', 'ACTIVE', 'ADMIN')`;
+				await sql`INSERT INTO connection_provider_releases
+				(id, provider, source_commit, deployment_profile, auth_profile,
+				 executor_digest, catalog_checksum, status)
+				VALUES (${releaseId}, ${`catalog-provider-${suffix}`}, ${suffix}, '{}'::jsonb, '{}'::jsonb,
+				${`sha256:${"a".repeat(64)}`}, ${`connection-json-v1:${"b".repeat(64)}`}, 'PUBLISHED')`;
+				await sql`INSERT INTO connection_action_versions
+				(id, provider_release_id, name, description, effect, input_schema, required_scopes, status)
+				VALUES (${readId}, ${releaseId}, 'catalog.read', 'Read', 'READ', '{}'::jsonb, '[]'::jsonb, 'PUBLISHED'),
+					(${writeId}, ${releaseId}, 'catalog.write', 'Write', 'WRITE', '{}'::jsonb, '[]'::jsonb, 'PUBLISHED')`;
+				await catalog.createCapabilityProfileDraft({
+					id: profileId,
+					providerReleaseId: releaseId,
+					name: "Editable package",
+					actionVersionIds: [readId],
+				});
+				await catalog.publishCapabilityProfile({
+					actorPrincipalId: adminId,
+					capabilityProfileId: profileId,
+				});
+				await catalog.createDisclaimerDraft({
+					id: disclaimerId,
+					kind: "GLOBAL",
+					locale: "zh-CN",
+					content: "Original terms",
+					materialChange: false,
+					ownerMetadata: {},
+				});
+				await catalog.publishDisclaimer({
+					actorPrincipalId: adminId,
+					disclaimerVersionId: disclaimerId,
+				});
+				await catalog.createPolicyDraft({
+					id: policyId,
+					createdByPrincipalId: adminId,
+					providerReleaseId: releaseId,
+					capabilityProfileId: profileId,
+					priority: 100,
+					allowPermanent: true,
+					requestTtlSeconds: 86400,
+					connectTtlSeconds: 86400,
+					renewalLeadSeconds: 0,
+					durations: [{ id: `duration-${suffix}`, kind: "PERMANENT" }],
+					disclaimerVersionIds: [disclaimerId],
+					stages: [
+						{
+							id: `stage-${suffix}`,
+							name: "Review",
+							quorumType: "ANY",
+							timeoutSeconds: 86400,
+							approvers: [{ principalId: approverId, displaySnapshot: {} }],
+						},
+					],
+				});
+				await catalog.publishPolicy({
+					actorPrincipalId: adminId,
+					policyVersionId: policyId,
+					materialChange: false,
+				});
+				const originalOption = (
+					await requests.listAccessOptions(applicantId)
+				).find((item) => item.providerReleaseId === releaseId);
+				expect(originalOption?.actions.map((action) => action.id)).toEqual([
+					readId,
+				]);
+				const requestId = `catalog-request-${suffix}`;
+				await requests.createRequest({
+					id: requestId,
+					applicantPrincipalId: applicantId,
+					providerReleaseId: releaseId,
+					capabilityProfileId: profileId,
+					policyVersionId: policyId,
+					purpose: "Work",
+					duration: { kind: "PERMANENT" },
+					presentationId: originalOption?.presentationId ?? "",
+					disclaimerConfirmations: [
+						{
+							disclaimerVersionId: disclaimerId,
+							contentSha256: createHash("sha256")
+								.update("Original terms")
+								.digest("hex"),
+							locale: "zh-CN",
+						},
+					],
+				});
+				await expect(
+					catalog.revisePublishedCapabilityProfile({
+						id: "unused",
+						sourceId: profileId,
+						expectedRevision: "2",
+						actorPrincipalId: applicantId,
+						providerReleaseId: releaseId,
+						name: "Editable package",
+						actionVersionIds: [readId, writeId],
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				const revised = await catalog.revisePublishedCapabilityProfile({
+					id: "unused",
+					sourceId: profileId,
+					expectedRevision: "2",
+					actorPrincipalId: adminId,
+					providerReleaseId: releaseId,
+					name: "Editable package",
+					actionVersionIds: [readId, writeId],
+				});
+				expect(revised.affectedPolicies).toBe(1);
+				const newOption = (await requests.listAccessOptions(applicantId)).find(
+					(item) => item.providerReleaseId === releaseId,
+				);
+				expect(newOption?.capabilityProfileId).toBe(
+					revised.capabilityProfileId,
+				);
+				expect(newOption?.actions.map((action) => action.id).sort()).toEqual(
+					[readId, writeId].sort(),
+				);
+				const [originalRequest] = await sql<
+					{ capability_profile_id: string; policy_version_id: string }[]
+				>`
+				SELECT capability_profile_id, policy_version_id FROM connection_access_requests WHERE id = ${requestId}
+			`;
+				expect(originalRequest?.capability_profile_id).toBe(profileId);
+				await expect(
+					catalog.revisePublishedCapabilityProfile({
+						id: "unused",
+						sourceId: profileId,
+						expectedRevision: "2",
+						actorPrincipalId: adminId,
+						providerReleaseId: releaseId,
+						name: "Stale",
+						actionVersionIds: [readId],
+					}),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				await expect(
+					catalog.revisePublishedDisclaimer({
+						sourceId: disclaimerId,
+						expectedRevision: "2",
+						actorPrincipalId: adminId,
+						kind: "GLOBAL",
+						locale: "zh-CN",
+						content: "Material terms",
+						materialChange: true,
+					}),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				const revisedTerms = await catalog.revisePublishedDisclaimer({
+					sourceId: disclaimerId,
+					expectedRevision: "2",
+					actorPrincipalId: adminId,
+					kind: "GLOBAL",
+					locale: "zh-CN",
+					content: "Updated terms",
+					materialChange: false,
+				});
+				expect(revisedTerms.affectedPolicies).toBe(1);
+				const updatedOption = (
+					await requests.listAccessOptions(applicantId)
+				).find((item) => item.providerReleaseId === releaseId);
+				expect(updatedOption?.disclaimers[0]?.id).toBe(
+					revisedTerms.disclaimerVersionId,
+				);
+				expect(originalRequest?.policy_version_id).toBe(policyId);
+				expect(
+					await catalog.retirePublishedDisclaimer({
+						sourceId: revisedTerms.disclaimerVersionId,
+						expectedRevision: "1",
+						actorPrincipalId: adminId,
+					}),
+				).toEqual({ affectedPolicies: 1 });
+				expect(
+					(await requests.listAccessOptions(applicantId)).filter(
+						(item) => item.providerReleaseId === releaseId,
+					),
+				).toEqual([]);
+				const [unchangedRequest] = await sql<
+					{ capability_profile_id: string }[]
+				>`
+				SELECT capability_profile_id FROM connection_access_requests WHERE id = ${requestId}
+			`;
+				expect(unchangedRequest?.capability_profile_id).toBe(profileId);
+				const concurrent = await Promise.allSettled(
+					[readId, writeId].map((actionId) =>
+						catalog.revisePublishedCapabilityProfile({
+							id: "unused",
+							sourceId: revised.capabilityProfileId,
+							expectedRevision: "2",
+							actorPrincipalId: adminId,
+							providerReleaseId: releaseId,
+							name: "Editable package",
+							actionVersionIds: [actionId],
+						}),
+					),
+				);
+				expect(
+					concurrent.filter((result) => result.status === "fulfilled"),
+				).toHaveLength(1);
+				expect(
+					concurrent.filter((result) => result.status === "rejected"),
+				).toHaveLength(1);
+				const winner = concurrent.find(
+					(result) => result.status === "fulfilled",
+				);
+				if (winner?.status !== "fulfilled")
+					throw new Error("No winning revision");
+				expect(
+					await catalog.retirePublishedCapabilityProfile({
+						sourceId: winner.value.capabilityProfileId,
+						expectedRevision: "2",
+						actorPrincipalId: adminId,
+					}),
+				).toEqual({ affectedPolicies: 0 });
+				const fixtureRequestId = await seedApprovedConnectPermit(sql, {
+					principalId: applicantId,
+					providerReleaseId: releaseId,
+					actionVersionIds: [readId],
+					scopes: [],
+				});
+				const [fixture] = await sql<
+					{ capability_profile_id: string; policy_version_id: string }[]
+				>`
+				SELECT capability_profile_id, policy_version_id FROM connection_access_requests
+				WHERE id = ${fixtureRequestId}
+			`;
+				if (!fixture) throw new Error("Approved fixture missing");
+				expect(
+					await catalog.retirePublishedCapabilityProfile({
+						sourceId: fixture.capability_profile_id,
+						expectedRevision: "2",
+						actorPrincipalId: adminId,
+					}),
+				).toEqual({ affectedPolicies: 1 });
+				const [retiredPolicy] = await sql<{ status: string }[]>`
+				SELECT status FROM connection_access_policy_versions WHERE id = ${fixture.policy_version_id}
+			`;
+				expect(retiredPolicy?.status).toBe("SUPERSEDED");
+				const dispatcher = new PostgresConnectionNotificationDispatcher(
+					databaseUrl,
+				);
+				try {
+					let dispatched = 0;
+					while (dispatched < 100 && (await dispatcher.runOnce())) dispatched++;
+					const retiredEvents = await sql<{ status: string }[]>`
+					SELECT status FROM connection_outbox_events
+					WHERE topic IN ('connection.capability-profile.retired', 'connection.disclaimer.retired')
+						AND aggregate_id IN (${revisedTerms.disclaimerVersionId}, ${winner.value.capabilityProfileId}, ${fixture.capability_profile_id})
+				`;
+					expect(retiredEvents).toHaveLength(3);
+					expect(
+						retiredEvents.every((event) => event.status === "DELIVERED"),
+					).toBe(true);
+				} finally {
+					await dispatcher.close();
+				}
+			} finally {
+				await Promise.all([sql.end(), catalog.close(), requests.close()]);
+			}
+		},
+		30_000,
+	);
 	materialTest(
 		"publishes material policy replacement and reapproval atomically",
 		async () => {

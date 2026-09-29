@@ -512,6 +512,15 @@ export type CapabilityProfileCreated = {
     capabilityProfileId: string;
 };
 
+export type CapabilityProfileRevision = {
+    capabilityProfileId: string;
+    affectedPolicies: number;
+};
+
+export type CatalogRetirement = {
+    affectedPolicies: number;
+};
+
 export type CapabilityProfileDetailResponse = {
     profile: {
         id: string;
@@ -540,6 +549,11 @@ export type DisclaimerDraft = {
 
 export type DisclaimerCreated = {
     disclaimerVersionId: string;
+};
+
+export type DisclaimerRevision = {
+    disclaimerVersionId: string;
+    affectedPolicies: number;
 };
 
 export type ApprovalPolicyStageDraft = {
@@ -2249,6 +2263,92 @@ export type PublishApprovalCapabilityProfileResponses = {
 
 export type PublishApprovalCapabilityProfileResponse = PublishApprovalCapabilityProfileResponses[keyof PublishApprovalCapabilityProfileResponses];
 
+export type RevisePublishedApprovalCapabilityProfileData = {
+    body: CapabilityProfileDraft;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        profileId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/capability-profiles/{profileId}/revise';
+};
+
+export type RevisePublishedApprovalCapabilityProfileErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RevisePublishedApprovalCapabilityProfileError = RevisePublishedApprovalCapabilityProfileErrors[keyof RevisePublishedApprovalCapabilityProfileErrors];
+
+export type RevisePublishedApprovalCapabilityProfileResponses = {
+    /**
+     * Published profile and policies revised
+     */
+    200: CapabilityProfileRevision;
+};
+
+export type RevisePublishedApprovalCapabilityProfileResponse = RevisePublishedApprovalCapabilityProfileResponses[keyof RevisePublishedApprovalCapabilityProfileResponses];
+
+export type RetirePublishedApprovalCapabilityProfileData = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        profileId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/capability-profiles/{profileId}/retire';
+};
+
+export type RetirePublishedApprovalCapabilityProfileErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RetirePublishedApprovalCapabilityProfileError = RetirePublishedApprovalCapabilityProfileErrors[keyof RetirePublishedApprovalCapabilityProfileErrors];
+
+export type RetirePublishedApprovalCapabilityProfileResponses = {
+    /**
+     * Profile retired from new applications
+     */
+    200: CatalogRetirement;
+};
+
+export type RetirePublishedApprovalCapabilityProfileResponse = RetirePublishedApprovalCapabilityProfileResponses[keyof RetirePublishedApprovalCapabilityProfileResponses];
+
 export type ListApprovalDisclaimersData = {
     body?: never;
     path?: never;
@@ -2394,6 +2494,92 @@ export type PublishApprovalDisclaimerResponses = {
 };
 
 export type PublishApprovalDisclaimerResponse = PublishApprovalDisclaimerResponses[keyof PublishApprovalDisclaimerResponses];
+
+export type RevisePublishedApprovalDisclaimerData = {
+    body: DisclaimerDraft;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        disclaimerId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/disclaimers/{disclaimerId}/revise';
+};
+
+export type RevisePublishedApprovalDisclaimerErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RevisePublishedApprovalDisclaimerError = RevisePublishedApprovalDisclaimerErrors[keyof RevisePublishedApprovalDisclaimerErrors];
+
+export type RevisePublishedApprovalDisclaimerResponses = {
+    /**
+     * Published disclaimer and policies revised
+     */
+    200: DisclaimerRevision;
+};
+
+export type RevisePublishedApprovalDisclaimerResponse = RevisePublishedApprovalDisclaimerResponses[keyof RevisePublishedApprovalDisclaimerResponses];
+
+export type RetirePublishedApprovalDisclaimerData = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        disclaimerId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/disclaimers/{disclaimerId}/retire';
+};
+
+export type RetirePublishedApprovalDisclaimerErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RetirePublishedApprovalDisclaimerError = RetirePublishedApprovalDisclaimerErrors[keyof RetirePublishedApprovalDisclaimerErrors];
+
+export type RetirePublishedApprovalDisclaimerResponses = {
+    /**
+     * Disclaimer retired from new applications
+     */
+    200: CatalogRetirement;
+};
+
+export type RetirePublishedApprovalDisclaimerResponse = RetirePublishedApprovalDisclaimerResponses[keyof RetirePublishedApprovalDisclaimerResponses];
 
 export type ListApprovalPolicyCatalogData = {
     body?: never;
