@@ -35,3 +35,10 @@ export function createPlatformApiAssemblyInput() {
 		presentAgent: unavailable,
 	};
 }
+
+export const browserAuth = {
+	handleRequest(request) {
+		if (new URL(request.url).pathname !== "/auth/login") return null;
+		return new Response(null, { status: 204 });
+	},
+};

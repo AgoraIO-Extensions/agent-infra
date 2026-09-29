@@ -8,13 +8,27 @@
 ## 配置
 
 复制 [.env.example](.env.example) 到仓库外的本地配置文件，填写本地 Docker context、独立
-Compose project、API 专属部署目录和浏览器信任的 localhost TLS 文件。正常停止保留数据。
-`platform.sh` 拒绝远程 Docker endpoint；执行前载入所填写的本地配置。
+Compose project、API 专属部署目录、浏览器信任的 localhost TLS 文件、私有 kind kubeconfig、
+context、已创建的 namespace 和 Worker values 文件。执行前载入所填写的本地配置。
+各 host 端口可在配置文件中为当前 project 单独设置，避免与其他本地运行实例冲突。
+`platform.sh` 要求 Docker 使用本机 Unix socket，并核对 kind control-plane 容器标签、
+暴露端口与 kubeconfig 的 loopback API 地址；Helm release 和 namespace 均与 Compose
+project 同名。普通停止保留数据库、对象存储卷和 Agent PVC。
 
 API 专属目录至少包含 `platform-api.mjs`。该模块导出
 `createPlatformApiAssemblyInput()`，调用
 [`createProductionPlatformApiAssemblyInputV1`](../../apps/platform-api/src/deployment.ts)。
 容器内可从 `../dist/index.mjs` 导入工厂，数据库 URL 取 `PLATFORM_DATABASE_URL`。部署输入为：
+
+使用第一方 LDAP 浏览器登录时，同一模块还须导出 `browserAuth`。用
+`createPostgresLdapBrowserDeployment()` 创建一次并将其 `identity` 传入装配输入、
+`browserAuth` 作为模块导出；两者因而共用 LDAP Adapter 和 Platform PostgreSQL
+会话表。API 只将 `/auth/login` 和 `/auth/logout` 交给此处理器；处理器失败返回
+无正文 503。先执行 Platform 增量迁移；跨 API 副本的到期和撤销由 PostgreSQL
+Store 执行，测试用内存 Store 不能作为正式部署配置。该工厂还要求高熵
+`trustedProxyToken`，必须只在 TLS 代理和 API 专属配置中提供；代理覆盖客户端提交的
+`X-Platform-Proxy-Token`，API 才接受代理转发的 HTTP 登录请求。现有本地 nginx
+配置尚未注入该令牌，真实浏览器登录需先完成代理与 API 双端私有配置验收。
 
 | 输入 | 来源和要求 |
 | --- | --- |
@@ -32,7 +46,8 @@ API 专属目录至少包含 `platform-api.mjs`。该模块导出
 Worker 的当前用户目录；这不替代实际账号和完整首通验收。
 模型凭证由 Owner 在申请和配置时提交，经现有加密公钥加密，只由 Worker 解密注入。
 
-Web 使用 `https://localhost:3001`，`/api/` 同源转发给 API，SSE 不经过响应缓冲。
+Web 默认使用 `https://localhost:3001`（可由 `PLATFORM_LOCAL_WEB_PORT` 调整），
+`/api/` 同源转发给 API，SSE 不经过响应缓冲。
 TLS 文件须可由 Web 镜像中的非 root 用户读取。开发时也可使用 `pnpm dev:web`，通过
 `PLATFORM_WEB_TLS_CERT_FILE`、`PLATFORM_WEB_TLS_KEY_FILE` 和
 `PLATFORM_API_PROXY_TARGET` 配置相同的 HTTPS/同源访问。
@@ -52,45 +67,53 @@ bash deploy/local/platform.sh up
 bash deploy/local/platform.sh status
 ```
 
-Worker 使用 [`createProductionWorkloadWorkerOptionsV1`](../../apps/platform-worker/src/workload-deployment.ts)
-装配，并在最终部署镜像内提供 `platformWorker.deploymentModule`。配置 `kubernetes.mode`
-为 `in-cluster`，复用 [Helm](../README.md#workload-调谐) 的 namespace-scoped RBAC。
-`platformWorker.configurationSecretRef` 可把部署 JSON 挂载到
-`PLATFORM_WORKER_CONFIGURATION_FILE` 指定的文件；数据库和解密 keyring 使用已有独立引用。
-配置文件和私钥不打包进镜像。
+Worker 的模块接口、私有文件挂载和 Runtime 授权以
+[Worker 部署模块说明](../platform-worker/README.md) 为准。本地 values 只引用已经创建的
+`configurationModuleSecretRef`、`runtimeAuthSecretRef` 和 Worker 镜像 Digest；
+Kubernetes 凭证由 Pod ServiceAccount 提供。Worker 与 API 使用同一模板 Digest、
+ModelCatalog revision 和资源政策。挂载或 rollout 成功仍需后续业务验收。
 
-Worker 与 API 使用同一模板 Digest、ModelCatalog revision 和资源政策。Worker 的
-`runtimeProbe` 使用 `createWorkloadReadinessAuthorizationV1`，`workerId` 与
-`policy.runtimeAuth.workerId` 一致；仅把公钥、服务 token 的 Secret 引用和本机 Workload
-绑定注入 Agent。专用就绪授权见
-[工程 Spec](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#93-服务端授权上下文)。
-
-以下变量必须指向明确的本地集群、namespace 和实际部署 values；`workloadTopology.enabled`
-必须为 `false`，不能部署占位 Worker。迁移已经由上述命令完成，因此不重复运行 Helm migration。
+`PLATFORM_LOCAL_KUBECONFIG` 必须为可读绝对路径，context 必须是 `kind-*` 且当前集群
+API 使用与所选 Docker context 的 kind control-plane 一致的 loopback 端口，namespace
+须已创建且与 Compose project 同名。`PLATFORM_LOCAL_WORKER_VALUES` 是可读绝对
+路径，指向最终 Worker 镜像 Digest、`configurationModuleSecretRef` 与
+`runtimeAuthSecretRef`；脚本把部署模块固定为镜像内的
+`file:///app/dist/deployment.mjs`。本地 `build` 不会自动发布
+镜像或生成 manifest Digest。迁移由上面的命令完成，
+`up` 将当前 project 的 PostgreSQL 容器接入所选 Docker context 的 `kind` 网络，
+并在同名 namespace 建立 `<project>-postgres` Service 与 EndpointSlice。Worker 的
+`database.secretRef` 被固定到同名本地 Secret：脚本从 Compose API 的数据库 URL
+派生同一账号、密码和库名，只把主机换成
+`<project>-postgres.<namespace>.svc.cluster.local`。Secret 通过 Kubernetes API 写入，
+不进入 values 文件、源码或脚本输出。重复 `up` 会刷新容器 IP 和 Secret；`status`
+回读路由对象；正常 `stop` 在 Worker 卸载后删除路由与该 Secret，并断开容器的
+`kind` 网络，保留数据库和对象卷。此路由仅供隔离本地 kind 使用。
+脚本给自己建立的 `kind` 网络链路生成一次性 alias，并在 EndpointSlice 注记中记录。
+仅当注记与 Docker alias 精确匹配时才复用或断开链路；同名但不属于当前 project 的
+Kubernetes 对象及预先由其他流程连接的链路均被拒绝。Helm 卸载后若路由清理中断，
+可再次执行 `stop`。若进程恰在连接网络与写入注记之间中断，脚本会拒绝接管无标记的
+链路，须先核对该测试容器的网络归属，再人工处理孤立连接。
+脚本会固定关闭 Helm migration、目录服务及拓扑占位进程；升级前关闭已有 Web/API，
+启动数据服务并等待 Worker Deployment 就绪，再开放 Compose 中的 Web/API。Worker
+启动失败时 Web/API 保持关闭。
 
 ```bash
-helm upgrade --install local-platform deploy/helm/agent-infra \
-  --kubeconfig "$PLATFORM_LOCAL_KUBECONFIG" \
-  --kube-context "$PLATFORM_LOCAL_KUBE_CONTEXT" \
-  --namespace "$PLATFORM_LOCAL_NAMESPACE" \
-  --values "$PLATFORM_LOCAL_WORKER_VALUES" \
-  --set workloadTopology.enabled=false --set migration.enabled=false \
-  --set web.placement=external --set platformApi.placement=external
-kubectl --kubeconfig "$PLATFORM_LOCAL_KUBECONFIG" \
-  --context "$PLATFORM_LOCAL_KUBE_CONTEXT" --namespace "$PLATFORM_LOCAL_NAMESPACE" \
-  rollout status deployment/local-platform-agent-infra-platform-worker
+bash deploy/local/platform.sh up
+bash deploy/local/platform.sh status
 ```
 
 模型出站由 Worker 唯一调谐的 `modelEgress` 与 `dnsEgress` 配置：只允许固定 IP 或指定
 namespace/Pod 标签和端口，缺省拒绝全部出站。不增加另一条 allow-all NetworkPolicy。
 Worker 预检与 Agent 模型调用都必须在真实网络上验证。
 
-停止时先通过 Platform 正常停止 Agent，确认调谐完成，再卸载此本地 Worker release；这不
-删除 Agent PVC、数据库或审计。然后停止 Compose 服务；再次启动复用相同 project 和数据卷。
+停止时先通过 Platform 正常停止 Agent 并确认调谐完成。脚本先关闭 Web/API 写入口，
+把 Worker 缩至零副本并等待退出，再核对 namespace 中的 Agent StatefulSet 已缩至零副本
+且 Agent Pod 已退出；否则先恢复 Worker，待其就绪后恢复 Web/API。Helm 卸载须等待
+完成；失败时也尝试恢复。若 Worker 无法恢复，Web/API 保持关闭，数据库与对象存储
+继续运行并给出诊断。正常停止不删除 Agent PVC、数据卷或审计。
+再次启动复用相同 project 和数据卷。
 
 ```bash
-helm uninstall local-platform --kubeconfig "$PLATFORM_LOCAL_KUBECONFIG" \
-  --kube-context "$PLATFORM_LOCAL_KUBE_CONTEXT" --namespace "$PLATFORM_LOCAL_NAMESPACE"
 bash deploy/local/platform.sh stop
 ```
 

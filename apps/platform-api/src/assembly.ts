@@ -17,6 +17,7 @@ import {
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
 	PostgresPlatformAuditQueryV1,
+	PostgresScopedPlatformAuditQueryV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
 import type { PlatformAppDependencies } from "./app.js";
@@ -87,6 +88,9 @@ export function assemblePlatformApi(
 		databaseUrl: input.databaseUrl,
 	});
 	const auditQuery = new PostgresPlatformAuditQueryV1({
+		databaseUrl: input.databaseUrl,
+	});
+	const scopedAuditQuery = new PostgresScopedPlatformAuditQueryV1({
 		databaseUrl: input.databaseUrl,
 	});
 	const taskAuthorization = new PostgresTaskAuthorizationStoreV1({
@@ -315,6 +319,7 @@ export function assemblePlatformApi(
 			query: conversationQuery,
 		},
 		sessionAudit: { identity: input.identity, audit: auditQuery },
+		scopedAudit: { identity: input.identity, audit: scopedAuditQuery },
 	};
 	const adapters = [
 		...(files ? [files] : []),
@@ -327,6 +332,7 @@ export function assemblePlatformApi(
 		conversationTransaction,
 		conversationQuery,
 		auditQuery,
+		scopedAuditQuery,
 		taskAuthorization,
 	];
 	return {

@@ -117,7 +117,18 @@
       "additionalProperties": false,
       "required": ["replicas"],
       "properties": {
+        "configurationModuleSecretRef": { "$ref": "#/$defs/secretRef" },
         "deploymentModule": { "type": "string", "maxLength": 256, "pattern": "^(?:$|(?:file:///|/)[^\\s]+)$" },
+        "runtimeAuthSecretRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "privateKeyKey", "serviceTokenKey"],
+          "properties": {
+            "name": { "$ref": "#/$defs/kubernetesName" },
+            "privateKeyKey": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9._-]+$" },
+            "serviceTokenKey": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9._-]+$" }
+          }
+        },
         "replicas": {
           "type": "integer",
           "minimum": 1,

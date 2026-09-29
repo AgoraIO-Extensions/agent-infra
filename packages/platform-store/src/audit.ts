@@ -150,12 +150,21 @@ export interface PlatformAuditProjectionV1 {
 	readonly schemaVersion: 1;
 	readonly auditId: string;
 	readonly actor: {
-		readonly kind: "user" | "system";
+		readonly kind: "user" | "application" | "system" | "unknown";
 		readonly actorId: string;
 	};
 	readonly action: PlatformAuditActionV1;
 	readonly subject: {
-		readonly kind: "agent_application" | "agent" | "secret" | "secret_key";
+		readonly kind:
+			| "agent_application"
+			| "agent"
+			| "secret"
+			| "secret_key"
+			| "grant"
+			| "unknown"
+			| "conversation"
+			| "execution"
+			| "configuration";
 		readonly subjectId: string;
 	};
 	readonly result: "succeeded" | "failed";
@@ -316,7 +325,7 @@ function changedFields(
 	return fields as PlatformAuditChangedFieldV1[];
 }
 
-interface AuditRow {
+export interface AuditRow {
 	readonly auditId: string;
 	readonly traceId: string;
 	readonly actorType: string;
@@ -329,7 +338,9 @@ interface AuditRow {
 	readonly details: unknown;
 }
 
-function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
+export function decodePlatformAuditRowV1(
+	row: AuditRow,
+): PlatformAuditProjectionV1 {
 	if (
 		!validText(row.auditId) ||
 		!validText(row.traceId) ||
@@ -344,9 +355,18 @@ function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
 	const metadata = platformAuditActionMetadata[action];
 	const expectedActorType = metadata.actorKind;
 	const expectedTargetType = metadata.subjectKind;
+	const subjectKind: PlatformAuditProjectionV1["subject"]["kind"] =
+		action === "agent.configuration.revised" &&
+		row.targetType === "configuration"
+			? "configuration"
+			: expectedTargetType;
 	if (
 		row.actorType !== expectedActorType ||
-		row.targetType !== expectedTargetType ||
+		(row.targetType !== expectedTargetType &&
+			!(
+				action === "agent.configuration.revised" &&
+				row.targetType === "configuration"
+			)) ||
 		(row.outcome !== "succeeded" &&
 			row.outcome !== "rejected" &&
 			row.outcome !== "failed")
@@ -360,9 +380,8 @@ function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
 		actor: { kind: expectedActorType, actorId: row.actorId },
 		action,
 		subject: {
-			kind: expectedTargetType,
-			subjectId:
-				expectedTargetType === "secret_key" ? "secret-key" : row.targetId,
+			kind: subjectKind,
+			subjectId: subjectKind === "secret_key" ? "secret-key" : row.targetId,
 		},
 		result: row.outcome === "succeeded" ? "succeeded" : "failed",
 		summary: fields.length === 0 ? action : `${action}: ${fields.join(", ")}`,
@@ -457,7 +476,7 @@ export class PostgresPlatformAuditQueryV1 {
 					.limit(page.limit + 1);
 			}
 			const hasNext = rows.length > page.limit;
-			const items = rows.slice(0, page.limit).map(decodeRow);
+			const items = rows.slice(0, page.limit).map(decodePlatformAuditRowV1);
 			return {
 				items,
 				nextCursor: hasNext ? (items.at(-1)?.auditId ?? null) : null,
