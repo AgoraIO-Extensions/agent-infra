@@ -1,6 +1,7 @@
 # Platform API 部署模块
 
-本地 Compose 从镜像内加载 [deployment.mjs](deployment.mjs)，并只读挂载 API 专属
+本地 Compose 从镜像内加载[部署模块](../../apps/platform-api/src/deployment-entry.ts) 编译成的
+`deployment.mjs`，并只读挂载 API 专属
 `configuration.mjs` 到 `/app/deployment`。内置模块创建第一方 LDAP 目录、
 PostgreSQL 浏览器会话和生产 Platform API 装配；私有配置由部署者提供当前受信事实，
 不得放入镜像或 Git。

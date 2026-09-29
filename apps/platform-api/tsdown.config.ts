@@ -3,9 +3,8 @@ import { defineConfig } from "tsdown";
 export default defineConfig({
 	entry: {
 		index: "./src/index.ts",
-		deployment: "../../deploy/platform-api/deployment.mjs",
+		deployment: "./src/deployment-entry.ts",
 	},
-	deps: { neverBundle: ["@agent-infra/platform-api"] },
 	format: "esm",
 	outDir: "./dist",
 	clean: true,

@@ -15,7 +15,7 @@ context、已创建的 namespace 和 Worker values 文件。执行前载入所�
 暴露端口与 kubeconfig 的 loopback API 地址；Helm release 和 namespace 均与 Compose
 project 同名。普通停止保留数据库、对象存储卷和 Agent PVC。
 
-API 镜像内置[部署模块](../platform-api/deployment.mjs)，固定从
+API 镜像内置[部署模块](../../apps/platform-api/src/deployment-entry.ts)，固定从
 `file:///app/dist/deployment.mjs` 加载。API 专属目录只提供受审阅的
 `configuration.mjs` 及其私有导入；所需导出及受信身份、目录、Registry 和模型
 依赖见 [API 部署说明](../platform-api/README.md)。内置模块从
