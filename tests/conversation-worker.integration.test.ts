@@ -32,6 +32,7 @@ import {
 	ExecutionDetailProjectionV2Schema,
 	TaskAcceptedV1Schema,
 } from "@agent-infra/contracts/pilot";
+import type { RuntimeSubmitTurnRequestV3 } from "@agent-infra/contracts/runtime";
 import {
 	createFakeModelCatalogAdapterV1,
 	projectRuntimeModelConfigurationV4,
@@ -67,6 +68,7 @@ import {
 	createKubernetesRuntimeAdapterV1,
 	workloadResourceNameV1,
 } from "../apps/platform-worker/src/kubernetes-runtime-adapter.js";
+import { createWorkerRuntimeGrantSignerV2 } from "../apps/platform-worker/src/runtime-grant-signer.js";
 import { workloadResourceConfigurationHashV1 } from "../apps/platform-worker/src/workload-runtime.js";
 import { catalogFixture } from "../packages/model-catalog/src/catalog.fixture.js";
 import { migratePlatformDatabase } from "../packages/platform-store/src/migrate.js";
@@ -797,6 +799,57 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			throw Error();
 		const kubeUrl = `http://127.0.0.1:${address.port}`;
 		const runtimeUrl = `${realCodexE2e ? "https" : "http"}://127.0.0.1:${runtimeAddress.port}`;
+		if (realCodexE2e) {
+			const legacySigner = createWorkerRuntimeGrantSignerV2({
+				issuer: signing.issuer,
+				workerId: signing.workerId,
+				keyId: signing.keyId,
+				privateKey: keys.privateKey,
+			});
+			const legacyUnsigned: Omit<RuntimeSubmitTurnRequestV3, "grant"> = {
+				schemaVersion: 3,
+				requestId: "legacy-static-key-request",
+				traceId: "legacy-static-key-trace",
+				principal: { kind: "user", id: "user-cli" },
+				channelId: "web",
+				agentId: desired.agentId,
+				conversationId: "legacy-static-key-conversation",
+				executionId: "legacy-static-key-execution",
+				turnId: "legacy-static-key-turn",
+				sessionGeneration: 1,
+				hostSessionRef: null,
+				operation: {
+					kind: "execution",
+					id: "legacy-static-key-execution",
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+				},
+				input: { text: "must be rejected", attachments: [] },
+			};
+			const legacyRequest = {
+				...legacyUnsigned,
+				grant: legacySigner(
+					legacyUnsigned,
+					{
+						purpose: "business",
+						authorizationRecordId: "legacy-static-key-authorization",
+					},
+					"turn.submit",
+				),
+			};
+			const legacyResponse = await app.request("/internal/runtime/v3/turns", {
+				method: "POST",
+				headers: {
+					authorization: "Bearer synthetic-runtime-token",
+					"content-type": "application/json",
+				},
+				body: JSON.stringify(legacyRequest),
+			});
+			expect(legacyResponse.status).toBe(403);
+			expect(await legacyResponse.json()).toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+		}
 		const config = new KubeConfig();
 		config.loadFromOptions({
 			clusters: [{ name: "test", server: kubeUrl, skipTLSVerify: true }],
