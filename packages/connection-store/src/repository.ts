@@ -3442,7 +3442,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			forbidden();
 		if (
 			!Array.isArray(target.scope_json) ||
-			target.scope_json.some((scope) => typeof scope !== "string")
+			target.scope_json.some(
+				(scope) => typeof scope !== "string" || !scope || /\s/u.test(scope),
+			)
 		)
 			forbidden();
 		return {

@@ -61,7 +61,9 @@ export async function lookupApprovedConnectPermit(
 	if (!row) forbidden();
 	if (
 		!Array.isArray(row.required_scopes) ||
-		row.required_scopes.some((scope) => typeof scope !== "string")
+		row.required_scopes.some(
+			(scope) => typeof scope !== "string" || !scope || /\s/u.test(scope),
+		)
 	)
 		forbidden();
 	return {

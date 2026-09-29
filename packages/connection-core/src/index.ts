@@ -1786,7 +1786,7 @@ export class ConnectionApplicationService {
 		if (
 			providerId === "github" &&
 			(!requestedScopes?.length ||
-				requestedScopes.some((scope) => !scope.trim()) ||
+				requestedScopes.some((scope) => !scope || /\s/u.test(scope)) ||
 				new Set(requestedScopes).size !== requestedScopes.length)
 		)
 			throw new ConnectionError(

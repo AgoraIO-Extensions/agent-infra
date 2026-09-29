@@ -178,6 +178,7 @@ class MemoryRepository implements ConnectionRepository {
 	credentialAccessToken = "test-secret";
 	connectValidationError?: ConnectionError;
 	readonly approvedScopes = new Map<string, readonly string[]>();
+	reconnectScopes: readonly string[] = ["read:user", "repo"];
 	readonly connectValidations: Array<{
 		principalId: string;
 		providerId: string;
@@ -355,7 +356,7 @@ class MemoryRepository implements ConnectionRepository {
 			input.principalId !== "alice"
 		)
 			throw new ConnectionError("FORBIDDEN", "Reconnect target is unavailable");
-		return { providerId: "github", requiredScopes: ["read:user", "repo"] };
+		return { providerId: "github", requiredScopes: this.reconnectScopes };
 	}
 	async storeProviderCredential(input: {
 		accessRequestId?: string;
@@ -1302,8 +1303,13 @@ describe("Connection application service", () => {
 		repository.approvedScopes.set("alice:request-read", ["read:user"]);
 		repository.approvedScopes.set("bob:request-write", ["read:user", "repo"]);
 		repository.approvedScopes.set("bob:request-empty", []);
+		repository.approvedScopes.set("bob:request-malformed", [
+			"repo delete_repo",
+		]);
+		let authorizationUrls = 0;
 		const oauth: GitHubOAuthProvider = {
 			getAuthorizationUrl: ({ requestedScopes, state }) => {
+				authorizationUrls += 1;
 				const url = new URL("https://github.test/authorize");
 				url.searchParams.set("state", state);
 				url.searchParams.set(
@@ -1347,6 +1353,10 @@ describe("Connection application service", () => {
 		await expect(
 			service.startGithubOAuth("bob", redirectUri, "request-empty"),
 		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		await expect(
+			service.startGithubOAuth("bob", redirectUri, "request-malformed"),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		expect(authorizationUrls).toBe(2);
 		const reconnect = await service.startGithubOAuth(
 			"alice",
 			redirectUri,
@@ -1356,6 +1366,16 @@ describe("Connection application service", () => {
 		expect(new URL(reconnect.authorizationUrl).searchParams.get("scope")).toBe(
 			"read:user repo",
 		);
+		repository.reconnectScopes = ["repo\tdelete_repo"];
+		await expect(
+			service.startGithubOAuth(
+				"alice",
+				redirectUri,
+				undefined,
+				"connection-oauth",
+			),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		expect(authorizationUrls).toBe(3);
 		const shared = await service.startSharedGithubOAuth(
 			"admin",
 			"shared-scope-company",
