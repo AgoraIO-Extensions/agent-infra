@@ -41,6 +41,26 @@ import {
 	type WorkerRuntimeHostClientOptionsV4,
 } from "./runtime-host-client.js";
 
+function hasKeyedV4Selection(
+	claim: ConversationDispatchClaimV1,
+): claim is ConversationDispatchClaimV1 & {
+	readonly executionSource: NonNullable<
+		ConversationDispatchClaimV1["executionSource"]
+	>;
+	readonly relayKeyBinding: NonNullable<
+		ConversationDispatchClaimV1["relayKeyBinding"]
+	>;
+	readonly modelOptionId: string;
+	readonly reasoningLevel: string;
+} {
+	return Boolean(
+		claim.executionSource &&
+			claim.relayKeyBinding &&
+			claim.modelOptionId &&
+			claim.reasoningLevel,
+	);
+}
+
 export type ConversationRuntimeStateV2 = TaskRuntimeRecoveryStateV1 & {
 	/** The Store's immutable submit protocol pin, when supplied by recovery. */
 	readonly runtimeSubmitProtocol?: "v2" | "v4";
@@ -246,7 +266,7 @@ export function createConversationRuntimeV2(
 			bounded(
 				options.dispatchStore.readRuntimeState({
 					claim,
-					...(claim.relayKeyBinding
+					...(hasKeyedV4Selection(claim)
 						? {
 								runtimeSubmitProtocol: "v4" as const,
 								allowPinnedV2Recovery: true,
@@ -474,11 +494,8 @@ export function createConversationRuntimeV2(
 		signal: AbortSignal,
 	) {
 		const { context, state, target, authority } = prepared;
-		if (!context.claim.executionSource && !context.claim.relayKeyBinding)
-			return null;
+		if (!hasKeyedV4Selection(context.claim)) return null;
 		if (
-			!context.claim.executionSource ||
-			!context.claim.relayKeyBinding ||
 			!state.hostSessionRef ||
 			!options.executionKeys ||
 			!options.relayKeyDecryptor
@@ -549,15 +566,13 @@ export function createConversationRuntimeV2(
 		let businessTarget = target;
 		let businessRoute = route;
 		if (
-			context.claim.executionSource &&
-			context.claim.relayKeyBinding &&
+			hasKeyedV4Selection(context.claim) &&
 			authority.purpose === "business"
 		) {
 			businessAuthorizationRecordId = authority.authorizationRecordId;
 		} else if (
 			context.kind === "business" &&
-			context.claim.executionSource &&
-			context.claim.relayKeyBinding &&
+			hasKeyedV4Selection(context.claim) &&
 			authority.purpose === "control" &&
 			authority.reason === "recovery" &&
 			(state.executionStatus === "unknown" ||
@@ -599,15 +614,9 @@ export function createConversationRuntimeV2(
 				businessRoute = latest.record;
 			}
 		}
-		if (
-			businessAuthorizationRecordId &&
-			context.claim.executionSource &&
-			context.claim.relayKeyBinding
-		) {
+		if (businessAuthorizationRecordId && hasKeyedV4Selection(context.claim)) {
 			if (
 				!context.claim.input ||
-				!context.claim.modelOptionId ||
-				!context.claim.reasoningLevel ||
 				!options.executionKeys ||
 				!options.relayKeyDecryptor
 			)
@@ -790,12 +799,8 @@ export function createConversationRuntimeV2(
 			}
 			if (request.operation === "turn.submit") {
 				if (!context.claim.input) unavailable("RUNTIME_REQUEST_INVALID");
-				if (context.claim.executionSource || context.claim.relayKeyBinding) {
+				if (hasKeyedV4Selection(context.claim)) {
 					if (
-						!context.claim.executionSource ||
-						!context.claim.relayKeyBinding ||
-						!context.claim.modelOptionId ||
-						!context.claim.reasoningLevel ||
 						authority.purpose !== "business" ||
 						!options.executionKeys ||
 						!options.relayKeyDecryptor
@@ -866,10 +871,8 @@ export function createConversationRuntimeV2(
 					request.messageId !== context.claim.messageId
 				)
 					unavailable("RUNTIME_REQUEST_INVALID");
-				if (context.claim.executionSource || context.claim.relayKeyBinding) {
+				if (hasKeyedV4Selection(context.claim)) {
 					if (
-						!context.claim.executionSource ||
-						!context.claim.relayKeyBinding ||
 						authority.purpose !== "business" ||
 						!options.executionKeys ||
 						!options.relayKeyDecryptor

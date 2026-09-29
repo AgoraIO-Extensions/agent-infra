@@ -501,6 +501,28 @@ describe("Trusted conversation Runtime adapter", () => {
 			h.runtime.close();
 		}
 	});
+	it("keeps a custom task without model selection on the V2 route", async () => {
+		const h = harness(1, undefined, true);
+		Object.assign(h.claim, { modelOptionId: null, reasoningLevel: null });
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.dispatch(h.request(reference)),
+			).resolves.toMatchObject({ schemaVersion: 1 });
+			expect(h.store.readRuntimeState.mock.calls[0]?.[0]).not.toHaveProperty(
+				"runtimeSubmitProtocol",
+			);
+			const [url, init] = h.fetcher.mock.calls[0] ?? [];
+			expect(String(url)).toBe(
+				"https://runtime.test/internal/runtime/v3/turns",
+			);
+			const body = JSON.parse(String(init?.body));
+			expect(body).not.toHaveProperty("keyBinding");
+			expect(body).not.toHaveProperty("privateKeyField");
+		} finally {
+			h.runtime.close();
+		}
+	});
 	it("keeps a V2-to-V4 bootstrap submit pinned to its nullable original scope", async () => {
 		const h = harness(1, undefined, true);
 		Object.assign(h.state, { runtimeSubmitProtocol: "v2" });
