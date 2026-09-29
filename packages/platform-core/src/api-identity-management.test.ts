@@ -128,6 +128,12 @@ describe("API identity management authorization", () => {
 			useCase.authorizeCredentialScope(apiActor, []),
 		).rejects.toMatchObject({ code: "not_authorized" });
 		expect(await useCase.resolveAgentQueryGrantType(apiActor)).toBe("any");
+		expect(
+			await useCase.resolveAgentQueryGrantType({
+				...apiActor,
+				credential: { ...apiActor.credential, scopes: ["agent:read"] },
+			}),
+		).toBe("use");
 		await expect(
 			useCase.authorizeCredentialScope(
 				{

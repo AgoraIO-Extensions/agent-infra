@@ -26,6 +26,27 @@ describe("PostgreSQL API identity store", () => {
 	let testDatabase: PostgresTestDatabase | undefined;
 	let store: PostgresApiIdentityStoreV1;
 
+	async function waitForBlockedQuery(
+		includes: readonly string[],
+	): Promise<void> {
+		for (let attempt = 0; attempt < 100; attempt += 1) {
+			const rows = await adminClient<{ query: string }[]>`
+				select query from pg_stat_activity
+				where datname = current_database() and wait_event_type = 'Lock'
+			`;
+			if (
+				rows.some(({ query }) =>
+					includes.every((fragment) => query.toLowerCase().includes(fragment)),
+				)
+			)
+				return;
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		throw new Error(
+			`Timed out waiting for blocked query: ${includes.join(", ")}`,
+		);
+	}
+
 	beforeAll(async () => {
 		testDatabase = await startPostgresTestDatabase("platform-api-identity");
 		databaseUrl = testDatabase.databaseUrl;
@@ -166,7 +187,6 @@ describe("PostgreSQL API identity store", () => {
 				{ ...userAudit, action: "api.credential.revoked" },
 			),
 		).toBe(true);
-
 		const audits = await adminClient`
 			select action
 			from platform.audit_events
@@ -183,6 +203,72 @@ describe("PostgreSQL API identity store", () => {
 			"api.application.created",
 		]);
 		expect(userCredential.metadata).not.toHaveProperty("credential");
+	});
+
+	it("locks the delivery grant before persisting an application credential", async () => {
+		await adminClient`truncate platform.audit_events, platform.api_credential_delivery_grants,
+			platform.platform_api_credentials, platform.platform_applications cascade`;
+		await store.createApplication({
+			applicationId: "application_delivery_lock",
+			name: "Delivery lock application",
+			responsibleUserId: "user_owner",
+			authorizationRevision: "application_revision_1",
+			audit: userAudit,
+		});
+		await store.grantCredentialDelivery({
+			applicationId: "application_delivery_lock",
+			principal: { kind: "user", id: "user_recipient" },
+			authorizationRevision: "application_revision_1",
+			audit: { ...userAudit, action: "api.credential.delivery.granted" },
+		});
+		const blocker = postgres(databaseUrl, { max: 1 });
+		let release: (() => void) | undefined;
+		let markLocked: (() => void) | undefined;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const locked = new Promise<void>((resolve) => {
+			markLocked = resolve;
+		});
+		const revoke = blocker.begin(async (transaction) => {
+			await transaction`
+				select application_id from platform.api_credential_delivery_grants
+				where application_id = 'application_delivery_lock' for update
+			`;
+			markLocked?.();
+			await held;
+			await transaction`
+				update platform.api_credential_delivery_grants set revoked_at = now()
+				where application_id = 'application_delivery_lock'
+			`;
+		});
+		let issue: Promise<unknown> | undefined;
+		try {
+			await locked;
+			issue = store.issueCredential({
+				principal: { kind: "application", id: "application_delivery_lock" },
+				recipient: { kind: "user", id: "user_recipient" },
+				credential: "concurrent-delivery-secret",
+				scopes: ["agent:read"],
+				expiresAt: null,
+				audit: { ...userAudit, action: "api.credential.issued" },
+			});
+			await waitForBlockedQuery(["api_credential_delivery_grants"]);
+			release?.();
+			await revoke;
+			await expect(issue).rejects.toThrow(
+				"Credential delivery is not authorized",
+			);
+			expect(
+				await store.listCredentials({
+					applicationId: "application_delivery_lock",
+				}),
+			).toEqual([]);
+		} finally {
+			release?.();
+			await Promise.allSettled([revoke, ...(issue ? [issue] : [])]);
+			await blocker.end();
+		}
 	});
 
 	it("rejects a duplicate credential hash across principals, including revoked rows", async () => {
@@ -480,6 +566,56 @@ describe("PostgreSQL API identity store", () => {
 			{ principal_id: "actor_race", revoked_at: null },
 			{ principal_id: "target_race", revoked_at: null },
 		]);
+	});
+
+	it("rejects grant writes after an application is disabled", async () => {
+		await adminClient`truncate platform.audit_events,
+			platform.agent_principal_grants, platform.platform_api_credentials,
+			platform.platform_applications, platform.agents cascade`;
+		await adminClient`insert into platform.agents (id, authorization_revision)
+			values ('agent_disabled_application', 'revision_disabled_1')`;
+		await adminClient`insert into platform.platform_applications
+			(id, name, responsible_user_id, status, authorization_revision)
+			values ('disabled-application', 'Disabled', 'user_before', 'disabled', 'app-disabled-1')`;
+		await adminClient`insert into platform.platform_api_credentials
+			(id, principal_type, principal_id, credential_hash, scopes)
+			values ('credential-disabled-application', 'application', 'disabled-application',
+				repeat('c', 64), '["agent:manage"]'::jsonb)`;
+		await adminClient`insert into platform.agent_principal_grants
+			(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_disabled_application', 'application', 'disabled-application',
+				'manage', 'revision_disabled_1')`;
+		const principal = {
+			kind: "application" as const,
+			id: "disabled-application",
+		};
+		await expect(
+			store.grantAgent({
+				actor: {
+					schemaVersion: 1,
+					userId: "user_before",
+					accountStatus: "active",
+					principal,
+					isAdministrator: false,
+					credential: {
+						credentialId: "credential-disabled-application",
+						principal,
+						scopes: ["agent:manage"],
+						expiresAt: null,
+						revokedAt: null,
+					},
+				},
+				agentId: "agent_disabled_application",
+				principal: { kind: "application", id: "recipient-disabled" },
+				grantType: "use",
+				authorizationRevision: "revision_disabled_2",
+			}),
+		).rejects.toMatchObject({ code: "resource_unavailable" });
+		const [agent] = await adminClient`
+			select authorization_revision from platform.agents
+			where id = 'agent_disabled_application'
+		`;
+		expect(agent?.authorization_revision).toBe("revision_disabled_1");
 	});
 
 	it("rejects application credential transport at the Store boundary", async () => {

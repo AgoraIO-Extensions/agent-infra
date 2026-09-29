@@ -340,7 +340,8 @@ export class PostgresApiIdentityStoreV1 {
 							isNull(apiCredentialDeliveryGrants.revokedAt),
 						),
 					)
-					.limit(1);
+					.limit(1)
+					.for("update");
 				if (
 					!delivery ||
 					delivery.authorizationRevision !== application.authorizationRevision
