@@ -31,6 +31,15 @@ it("fences competing replicas and invalidates an owner after expiry or unbinding
 		expect(await store.current(first)).toBe(false);
 		expect(await store.status(first, "connected")).toBe(false);
 		expect(await store.status(second, "auth_failed")).toBe(true);
+		expect(
+			await sql`select action,outcome,details from platform.audit_events where action='wecom.connection_auth_failed'`,
+		).toMatchObject([
+			{
+				action: "wecom.connection_auth_failed",
+				outcome: "failed",
+				details: null,
+			},
+		]);
 		await store.release(second);
 		expect(
 			(

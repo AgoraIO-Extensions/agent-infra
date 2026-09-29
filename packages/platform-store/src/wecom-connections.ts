@@ -83,7 +83,7 @@ export class PostgresWecomConnectionsV1 {
 			if (!rows.length) return false;
 			const eventId = randomUUID();
 			await sql`insert into platform.audit_events (id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details)
-    values (${eventId},${eventId},'system','platform-worker',${`wecom.connection_${status}`},'agent',${claim.agentId},'succeeded',${eventId},${claim.agentId},NULL)`;
+    values (${eventId},${eventId},'system','platform-worker',${`wecom.connection_${status}`},'agent',${claim.agentId},${status === "auth_failed" ? "failed" : "succeeded"},${eventId},${claim.agentId},NULL)`;
 			return true;
 		});
 	}
