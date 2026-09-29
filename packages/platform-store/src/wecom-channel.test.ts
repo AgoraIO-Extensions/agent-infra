@@ -198,6 +198,11 @@ it("does not resend a reply after a worker crashes in the external send window",
 			},
 		}),
 	).toBe(true);
+	const [botLease] = await sql<
+		{ seconds: string }[]
+	>`select extract(epoch from lease_until - clock_timestamp()) as seconds from platform.wecom_receipts where id=${claim.receiptId}`;
+	expect(Number(botLease?.seconds)).toBeGreaterThan(0);
+	expect(Number(botLease?.seconds)).toBeLessThan(30);
 	await sql`update platform.wecom_receipts set lease_until=now()-interval '1 second' where id=${claim.receiptId}`;
 	const restarted = new PostgresWecomChannelV1(db);
 	try {
@@ -212,6 +217,61 @@ it("does not resend a reply after a worker crashes in the external send window",
 		expect(await restarted.abandon(claim.receiptId, "sender_crash")).toBe(true);
 	} finally {
 		await restarted.close();
+	}
+});
+it("keeps an application reply sending through the bounded multipart window", async () => {
+	await sql`update platform.agent_configuration_revisions set configuration=${sql.json(
+		{
+			...configuration,
+			channels: [
+				...configuration.channels,
+				{ kind: "wecom_app", bindingReference: message.bindingReference },
+			],
+		},
+	)} where agent_id=${message.agentId} and revision=1`;
+	try {
+		const appMessage: WecomMessageV1 = {
+			...message,
+			kind: "wecom_app",
+			providerId: '["corp-1","42"]',
+			senderId: "slow_app_sender",
+			peerId: "slow_app_sender",
+			conversationType: "single",
+			eventId: "slow_app_event",
+		};
+		const accepted = await channel().receive(appMessage);
+		if (accepted.outcome !== "accepted") throw new Error("Expected receipt");
+		await sql`update platform.conversation_executions set status='completed' where execution_id=${accepted.receipt.executionId}`;
+		const claim = await store.claim();
+		expect(claim?.receiptId).toBe(accepted.receipt.receiptId);
+		if (!claim) throw new Error("Expected claim");
+		expect(
+			await store.prepare(claim, {
+				managementRevision: 1,
+				channelRevision: "channels_1",
+				actor: {
+					schemaVersion: 1,
+					agentId: appMessage.agentId,
+					actorId: appMessage.senderId,
+					taskBoundary: claim.taskBoundary,
+					channelId: wecomChannelIdV1(appMessage),
+					authorizationRevision: "authorization_1",
+					supportsSupplementaryInstruction: false,
+				},
+			}),
+		).toBe(true);
+		const [appLease] = await sql<
+			{ seconds: string; delivery_status: string }[]
+		>`select extract(epoch from lease_until - clock_timestamp()) as seconds,delivery_status from platform.wecom_receipts where id=${claim.receiptId}`;
+		expect(appLease?.delivery_status).toBe("sending");
+		expect(Number(appLease?.seconds)).toBeGreaterThan(150);
+		expect(Number(appLease?.seconds)).toBeLessThan(180);
+		await store.finish(claim, "sent");
+		expect(
+			await store.read(claim.receiptId, appMessage.senderId),
+		).toMatchObject({ deliveryStatus: "sent" });
+	} finally {
+		await sql`update platform.agent_configuration_revisions set configuration=${sql.json(configuration)} where agent_id=${message.agentId} and revision=1`;
 	}
 });
 it("rejects a stale binding or management snapshot before creating a new sender conversation", async () => {

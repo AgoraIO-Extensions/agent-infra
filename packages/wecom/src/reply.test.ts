@@ -172,6 +172,25 @@ describe("reply protection and external send", () => {
 		).toBe("sent");
 		expect(calls).toBe(1);
 	});
+	it("keeps every part within the provider limit at the Core byte ceiling", async () => {
+		const parts: string[] = [];
+		const adapter = sender(async (_url, init) => {
+			parts.push(JSON.parse(String(init?.body)).text.content);
+			return Response.json({ errcode: 0 });
+		});
+		const text = "界".repeat(6826);
+		expect(Buffer.byteLength(text)).toBe(20_478);
+		expect(
+			await adapter.send({
+				scope: applicationScope,
+				replyHandle: await protect(applicationRoute),
+				text,
+			}),
+		).toBe("sent");
+		expect(parts).toHaveLength(11);
+		expect(parts.join("")).toBe(text);
+		expect(parts.every((part) => Buffer.byteLength(part) <= 2048)).toBe(true);
+	});
 	it.each([
 		["first", 1, "failed"],
 		["later", 2, "unknown"],

@@ -326,8 +326,9 @@ export class PostgresWecomChannelV1
 		authority: WecomAuthorityV1,
 	): Promise<boolean> {
 		return this.#sql.begin(async (sql) => {
+			// 20,480 bytes can need eleven UTF-8 parts with 10-second sends.
 			const rows =
-				await sql`update platform.wecom_receipts set delivery_status='sending',updated_at=now() where id=${claim.receiptId} and fence=${claim.fence} and delivery_status='claimed' and lease_until>now() and expires_at>now() and (connection_bot_id is null or exists (select 1 from platform.wecom_connections w where w.bot_id=connection_bot_id and w.fence=connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and exists (
+				await sql`update platform.wecom_receipts set delivery_status='sending',lease_until=now()+(case when scope->>'kind'='wecom_app' then interval '3 minutes' else interval '30 seconds' end),updated_at=now() where id=${claim.receiptId} and fence=${claim.fence} and delivery_status='claimed' and lease_until>now() and expires_at>now() and (connection_bot_id is null or exists (select 1 from platform.wecom_connections w where w.bot_id=connection_bot_id and w.fence=connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and exists (
     select 1 from platform.agents a join platform.agent_applications m on m.agent_id=a.id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
     where a.id=${claim.scope.agentId} and a.authorization_revision=${authority.actor.authorizationRevision} and m.management_revision=${authority.managementRevision} and m.status='available' and m.service_availability='ready' and c.configuration->>'channelRevision'=${claim.channelRevision}
    ) returning id`;
