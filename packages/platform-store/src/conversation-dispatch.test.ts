@@ -942,14 +942,23 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					expect(restarted.decision.claim.relayKeyBinding).toEqual(
 						decision.claim.relayKeyBinding,
 					);
-					expect(
-						(
-							await restarted.store.readRuntimeState({
-								claim: restarted.decision.claim,
-								runtimeSubmitProtocol,
-							})
-						)?.originalOperationDigest,
-					).toBe(expected);
+					const preferred = await restarted.store.readRuntimeState({
+						claim: restarted.decision.claim,
+						runtimeSubmitProtocol: "v4",
+					});
+					const recovered = preferred
+						? { protocol: "v4", state: preferred }
+						: {
+								protocol: "v2",
+								state: await restarted.store.readRuntimeState({
+									claim: restarted.decision.claim,
+									runtimeSubmitProtocol: "v2",
+								}),
+							};
+					expect(recovered).toMatchObject({
+						protocol: runtimeSubmitProtocol,
+						state: { originalOperationDigest: expected },
+					});
 				} finally {
 					await restarted.store.close();
 				}

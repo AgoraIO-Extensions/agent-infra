@@ -156,9 +156,9 @@ export class PostgresConversationDispatchStoreV1
 						and record->>'status' = 'available'
 					order by file_id
 				`;
-				const keyed = runtimeSubmitProtocol === "v4";
+				const v4Submit = runtimeSubmitProtocol === "v4";
 				if (
-					keyed &&
+					v4Submit &&
 					(!state.execution.relay_key_purpose ||
 						!state.execution.relay_key_subject_id ||
 						!state.execution.relay_key_id ||
@@ -170,7 +170,7 @@ export class PostgresConversationDispatchStoreV1
 				const original = {
 					...base,
 					kind: "submit-turn",
-					...(keyed
+					...(v4Submit
 						? {
 								operation: {
 									kind: "execution",
