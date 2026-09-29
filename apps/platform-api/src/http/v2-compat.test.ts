@@ -223,4 +223,17 @@ describe("V2 compatibility routes", () => {
 		);
 		expect(response.status).toBe(400);
 	});
+
+	it("does not downgrade V2 conversation details through the V1 proxy", async () => {
+		const app = new Hono();
+		app.get("/api/v1/conversations/conversation-1", () =>
+			Response.json({ schemaVersion: 1 }),
+		);
+		registerV2CompatibilityRoutes(app);
+
+		const response = await app.request(
+			"http://localhost/api/v2/conversations/conversation-1",
+		);
+		expect(response.status).toBe(404);
+	});
 });

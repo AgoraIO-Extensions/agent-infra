@@ -116,6 +116,14 @@ export class RuntimeHostV4 {
 						request,
 						submit ? original.scope.hostSessionRef : original.hostSessionRef,
 					);
+				const privateField = validateRuntimePrivateRelayKeyFieldV1(
+					transport.privateKeyField,
+					{
+						request,
+						grantId: claims.grantId,
+						requestDigest: claims.requestDigest,
+					},
+				);
 				const digest = operationDigest(request);
 				const pinned = original?.scope ?? scope(request);
 				const authority = businessAuthority(claims);
@@ -164,14 +172,6 @@ export class RuntimeHostV4 {
 					},
 				});
 				this.options.assertOpen();
-				const privateField = validateRuntimePrivateRelayKeyFieldV1(
-					transport.privateKeyField,
-					{
-						request,
-						grantId: claims.grantId,
-						requestDigest: claims.requestDigest,
-					},
-				);
 				if (prepared.operation.state === "resolved") {
 					const replayed = response(
 						prepared.session.hostSessionRef,

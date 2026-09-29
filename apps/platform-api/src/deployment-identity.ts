@@ -47,7 +47,8 @@ export function withApiIdentityResolverV1<T extends IdentityAdapter>(
 			apiIdentity.resolveApiCredential(
 				credential,
 				identity.resolveUser
-					? async (userId) => (await identity.resolveUser?.(userId)) ?? null
+					? async (userId) =>
+							(await identity.resolveUser?.call(identity, userId)) ?? null
 					: undefined,
 			),
 	});

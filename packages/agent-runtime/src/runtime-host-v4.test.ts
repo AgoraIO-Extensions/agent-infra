@@ -436,6 +436,47 @@ it("does not reinstall a Key when replaying a terminal submit receipt", async ()
 	await store.close();
 });
 
+it("rejects an invalid private Key field before reserving a V4 operation", async () => {
+	const directory = await mkdtemp(
+		join(tmpdir(), "runtime-host-v4-private-field-"),
+	);
+	directories.push(directory);
+	const store = await FileRuntimeStore.open(join(directory, "host.json"));
+	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+	const { request, claims, transport } = fixture();
+	const host = await RuntimeHost.open({
+		store,
+		driver,
+		grantValidation: { expectedIssuer: "agent-platform" },
+		grantValidationV2: {
+			expectedIssuer: "platform-worker",
+			expectedWorkerId: "worker-1",
+		},
+		allowLegacyBusiness: false,
+		validateGrantV4: async (value: unknown) => {
+			const parsed = value as RuntimeBusinessRequestV4;
+			await validateRuntimeBusinessBindingV4(parsed, claims);
+			return { request: parsed, claims };
+		},
+	});
+	await expect(
+		host.submitTurnV4({
+			...transport,
+			privateKeyField: {
+				...transport.privateKeyField,
+				context: {
+					...transport.privateKeyField.context,
+					executionId: "other-execution",
+				},
+			},
+		}),
+	).rejects.toThrow("RuntimeHostV4 private Key field is invalid");
+	expect(store.readOriginalExecutionKeyScopeV4(request)).toBeNull();
+	expect(await driver.sideEffectCount()).toBe(0);
+	await host.close();
+	await store.close();
+});
+
 it("does not dispatch V4 business after Host closes during Grant validation", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-close-"));
 	directories.push(directory);

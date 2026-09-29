@@ -833,6 +833,26 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				"insert into platform.agents(id,current_configuration_revision,authorization_revision) values($1,7,'agent-authorization')",
 				[agentId],
 			);
+			for (const userId of ["alice", "bob"]) {
+				await reader.unsafe(
+					"insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('personal',$1,1,1)",
+					[userId],
+				);
+				await reader.unsafe(
+					"insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('personal',$1,1,$2,$3::text::jsonb)",
+					[
+						userId,
+						`relay-${userId}-1`,
+						JSON.stringify({
+							schemaVersion: 1,
+							purpose: "personal",
+							subjectId: userId,
+							keyId: `relay-${userId}-1`,
+							keyVersion: 1,
+						}),
+					],
+				);
+			}
 			await reader.unsafe(
 				"insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values('production-task-application',$1,'administrator','Agent','Controlled production task prerequisite','available','trace-seed','request-seed',now(),11,1,'ready','running',1,1)",
 				[agentId],
