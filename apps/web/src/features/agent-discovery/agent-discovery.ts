@@ -37,9 +37,7 @@ export function isRetryableAgentDiscoveryError(
 	error: unknown,
 ): error is RetryableAgentDiscoveryError {
 	return (
-		error instanceof Error &&
-		"retryable" in error &&
-		error.retryable === true
+		error instanceof Error && "retryable" in error && error.retryable === true
 	);
 }
 const maximumAgentDiscoveryPages = 100;
