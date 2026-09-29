@@ -445,7 +445,7 @@ function command(label = "alpha"): SubmitCommand {
 }
 
 async function setup(
-	authorize: Authorize = async () => {},
+	authorize: Authorize = async () => undefined,
 	endpoint?: string,
 	connectionClient?: CodexRuntimeDriverOptions["connectionClient"],
 	hooks: ConstructorParameters<typeof ScriptedTransport>[2] = {},
@@ -925,7 +925,7 @@ describe("Codex native Driver callbacks with production Conversation binding", (
 	);
 
 	it("rejects foreign Conversation identities, foreign or missing parents, and foreign permits without appending facts", async () => {
-		const authorize = vi.fn<Authorize>(async () => {});
+		const authorize = vi.fn<Authorize>(async () => undefined);
 		const env = await setup(authorize);
 		const alpha = await env.start("alpha");
 		const beta = await env.start("beta");
@@ -1184,7 +1184,7 @@ describe("Codex native Driver callbacks with production Conversation binding", (
 	it.each(["intent", "started", "unknown"] as const)(
 		"does not admit a native retry while the original attempt is %s",
 		async (phase) => {
-			const authorize = vi.fn<Authorize>(async () => {});
+			const authorize = vi.fn<Authorize>(async () => undefined);
 			const env = await setup(authorize);
 			const execution = await env.start();
 			const first = await permit(execution.bridge);
@@ -1355,7 +1355,7 @@ describe("Codex native Driver callbacks with production Conversation binding", (
 	);
 
 	it("reauthorizes a retry and records revocation against only the new attempt", async () => {
-		const authorize = vi.fn<Authorize>(async () => {});
+		const authorize = vi.fn<Authorize>(async () => undefined);
 		const env = await setup(authorize);
 		const execution = await env.start();
 		const first = await permit(execution.bridge);
@@ -1433,7 +1433,7 @@ describe("Codex native Driver callbacks with production Conversation binding", (
 	});
 
 	it("revalidates an unused permit without extending it and never replays a consumed permit", async () => {
-		const authorize = vi.fn<Authorize>(async () => {});
+		const authorize = vi.fn<Authorize>(async () => undefined);
 		const env = await setup(authorize);
 		const execution = await env.start();
 		const allowed = await permit(execution.bridge);
@@ -1490,7 +1490,7 @@ describe("Codex native Driver callbacks with production Conversation binding", (
 	it.each(["intent", "started"] as const)(
 		"recovers an unconfirmed %s as the original unknown attempt without resubmitting",
 		async (phase) => {
-			const authorize = vi.fn<Authorize>(async () => {});
+			const authorize = vi.fn<Authorize>(async () => undefined);
 			const env = await setup(authorize);
 			const execution = await env.start();
 			const allowed = await permit(execution.bridge);
@@ -1630,7 +1630,7 @@ describe("Codex native Driver callbacks with production Conversation binding", (
 	});
 
 	it("accepts the original first known outcome after restart without starting another attempt or Turn", async () => {
-		const authorize = vi.fn<Authorize>(async () => {});
+		const authorize = vi.fn<Authorize>(async () => undefined);
 		const env = await setup(authorize);
 		const execution = await env.start();
 		const allowed = await permit(execution.bridge);
@@ -2136,7 +2136,7 @@ describe("Codex native source lifecycle", () => {
 	});
 
 	it("keeps child actions on the original Execution after root inference has completed", async () => {
-		const authorize = vi.fn<Authorize>(async () => {});
+		const authorize = vi.fn<Authorize>(async () => undefined);
 		const env = await setup(authorize);
 		const execution = await env.start();
 		const other = await env.start("other");
@@ -2353,7 +2353,7 @@ describe("Codex native source lifecycle", () => {
 	});
 
 	it("rechecks matching reserve receipts without adding new facts", async () => {
-		const authorize = vi.fn<Authorize>(async () => {});
+		const authorize = vi.fn<Authorize>(async () => undefined);
 		const env = await setup(authorize);
 		const execution = await env.start();
 		const child = await startChild(execution);
@@ -2515,7 +2515,7 @@ describe("Codex native source lifecycle", () => {
 describe("Codex native source HTTP model requests", () => {
 	it("records child HTTP model work under the original parent after root completion and rejects foreign tokens and terminal sources", async () => {
 		const upstream = await sourceModelEndpoint();
-		const authorize = vi.fn<Authorize>(async () => {});
+		const authorize = vi.fn<Authorize>(async () => undefined);
 		const env = await setup(authorize, upstream.endpoint);
 		const execution = await env.start();
 		const other = await env.start("other");
@@ -3053,7 +3053,7 @@ describe("Codex Driver Connection journal and admission", () => {
 	])(
 		"rejects legacy V1 Connection %s without Host authorization",
 		async (tool) => {
-			const authorize = vi.fn<Authorize>(async () => {});
+			const authorize = vi.fn<Authorize>(async () => undefined);
 			const env = await setup(authorize);
 			const execution = await env.start();
 			await expect(
@@ -3374,7 +3374,7 @@ describe("Codex Driver Connection leaf negative boundaries", () => {
 		"rejects native callbacks and Connection bootstrap with %s Session runtime requirements",
 		async (mismatch) => {
 			const opened = vi.spyOn(DurableJsonFile, "open");
-			const authorize = vi.fn<Authorize>(async () => {});
+			const authorize = vi.fn<Authorize>(async () => undefined);
 			const { options } = connectionOptions();
 			const env = await setup(authorize, undefined, options);
 			const file = (await opened.mock.results[0]?.value) as
@@ -3460,7 +3460,7 @@ describe("Codex Driver Connection leaf negative boundaries", () => {
 	);
 
 	it("rejects V2 Connection dispatch when independent client input is absent", async () => {
-		const authorize = vi.fn<Authorize>(async () => {});
+		const authorize = vi.fn<Authorize>(async () => undefined);
 		const env = await setup(authorize);
 		const execution = await env.start();
 		const template = connectionFrame<CodexConnectionOperationRequest>(

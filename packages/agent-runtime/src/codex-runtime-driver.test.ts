@@ -1191,6 +1191,7 @@ describe("Codex Runtime Driver", () => {
 		let loopback: CodexModelAccess | undefined;
 		const guard = vi.fn(async () => {
 			expect((await readFacts()).map((fact) => fact.phase)).toEqual(["intent"]);
+			return undefined;
 		});
 		const driver = await openDriverWithModelEndpoint(
 			path,
@@ -1484,7 +1485,7 @@ describe("Codex Runtime Driver", () => {
 		const path = join(directory, "driver.json");
 		const opened: CodexAppServerBridgeOptions[] = [];
 		const bridges: TestCodexBridge[] = [];
-		const authorize = vi.fn(async () => {});
+		const authorize = vi.fn(async () => undefined);
 		const driver = await ProbeDriver.openProbe(
 			{ ...driverOptions(path), authorizeExternalAction: authorize },
 			async (options) => {
@@ -1536,7 +1537,7 @@ describe("Codex Runtime Driver", () => {
 			let probeDirectory = "";
 			const bridge = new TestCodexBridge();
 			const closed = vi.spyOn(bridge, "close");
-			const authorize = vi.fn(async () => {});
+			const authorize = vi.fn(async () => undefined);
 			if (failure === "config")
 				bridge.setConfigReadResult(
 					configReadResult({ config: { model: "forbidden" } }),
@@ -7948,7 +7949,7 @@ it.each([false, true])(
 			}),
 		);
 		const opened: { bridge: TestCodexBridge; access: CodexModelAccess }[] = [];
-		const guard = vi.fn(async () => {});
+		const guard = vi.fn(async () => undefined);
 		const driver = await BoundDriver.openBound(
 			{
 				...driverOptions(path),
@@ -8183,6 +8184,7 @@ it.each(["missing", "pending"] as const)(
 							authorizeExternalAction: async () => {
 								entered.resolve();
 								await release.promise;
+								return undefined;
 							},
 						}
 					: {}),
@@ -8526,7 +8528,7 @@ describe("durable required runtime binding", () => {
 			expect(state.sessions[ref]?.requiredRuntime).toEqual(
 				expectedRuntimeRequirements(),
 			);
-			const authorize = vi.fn(async () => {});
+			const authorize = vi.fn(async () => undefined);
 			const factory = vi.fn(async () => new TestCodexBridge());
 			const recovered = await RuntimeBindingDriver.openBound(
 				{
@@ -8586,7 +8588,7 @@ describe("durable required runtime binding", () => {
 					response.end(completedEvent());
 				}),
 			);
-			const authorize = vi.fn(async () => {});
+			const authorize = vi.fn(async () => undefined);
 			const options = {
 				...driverOptions(path),
 				authorizeExternalAction: authorize,
@@ -8843,7 +8845,10 @@ describe("durable required runtime binding", () => {
 			return new TestCodexBridge();
 		};
 		const driver = await RuntimeBindingDriver.openBound(
-			{ ...driverOptions(path), authorizeExternalAction: async () => {} },
+			{
+				...driverOptions(path),
+				authorizeExternalAction: async () => undefined,
+			},
 			factory,
 		);
 		drivers.push(driver);
@@ -8895,7 +8900,7 @@ describe("durable required runtime binding", () => {
 			);
 			const options = {
 				...driverOptions(path),
-				authorizeExternalAction: async () => {},
+				authorizeExternalAction: async () => undefined,
 				modelOptions: driverOptions(path).modelOptions.map((option) => ({
 					...option,
 					endpoint,
@@ -9106,7 +9111,7 @@ describe("durable required runtime binding", () => {
 			);
 			const options = {
 				...driverOptions(path),
-				authorizeExternalAction: async () => {},
+				authorizeExternalAction: async () => undefined,
 				modelOptions: driverOptions(path).modelOptions.map((option) => ({
 					...option,
 					endpoint,

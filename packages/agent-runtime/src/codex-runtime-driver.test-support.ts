@@ -339,7 +339,7 @@ class CodexRuntimeDriverTestAccess extends CodexRuntimeDriver {
 				nativeLane: "private-callback",
 				...options,
 				authorizeExternalAction:
-					options.authorizeExternalAction ?? (async () => {}),
+					options.authorizeExternalAction ?? (async () => undefined),
 			},
 			openBridge,
 		)) as CodexRuntimeDriverTestAccess;

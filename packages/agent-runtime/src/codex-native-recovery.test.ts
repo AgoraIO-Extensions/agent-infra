@@ -374,7 +374,7 @@ function driverOptions(path: string) {
 	return {
 		path,
 		launchPath: provider.launchPath,
-		authorizeExternalAction: async () => {},
+		authorizeExternalAction: async () => undefined,
 		configVersion: "synthetic-config-1",
 		defaultModelOptionId: "synthetic",
 		defaultReasoningLevel: "low",
