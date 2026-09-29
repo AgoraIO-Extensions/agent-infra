@@ -43,7 +43,20 @@ function mixedHistoryDetail() {
 			createdAt: "2026-09-29T00:00:00.000Z",
 			updatedAt: "2026-09-29T00:00:00.000Z",
 		},
-		messages: [],
+		messages: [
+			{
+				messageId: "conversation-message",
+				role: "user",
+				text: "synthetic history message",
+				executionId: null,
+				replyToMessageId: null,
+				answerVersion: null,
+				isCurrentAnswer: null,
+				createdAt: "2026-09-29T00:00:00.000Z",
+				status: "completed",
+				error: null,
+			},
+		],
 		events: [
 			persistedEvent("earlier-event", "execution-old"),
 			persistedEvent("current-event", "execution-1"),
@@ -59,7 +72,25 @@ test("conversation detail keeps earlier execution events outside the submitted e
 		currentExecutionEvents(detail, "conversation-1", "execution-1"),
 		[detail.events[1]],
 	);
+	assert.equal(detail.messages[0].executionId, null);
 	assert.equal(detail.events.length, 2);
+});
+
+test("conversation messages may have no execution while persisted events may not", () => {
+	const detail = mixedHistoryDetail();
+	assert.equal(ConversationDetailProjectionV2Schema.safeParse(detail).success, true);
+	const invalidEvent = {
+		...detail,
+		events: [{ ...detail.events[0], executionId: null }, detail.events[1]],
+	};
+	assert.equal(
+		ConversationDetailProjectionV2Schema.safeParse(invalidEvent).success,
+		false,
+	);
+	assert.equal(
+		currentExecutionEvents(invalidEvent, "conversation-1", "execution-1"),
+		null,
+	);
 });
 
 test("persisted event validation rejects missing execution IDs in either history subset", () => {
