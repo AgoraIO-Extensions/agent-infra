@@ -1,4 +1,9 @@
 import { pathToFileURL } from "node:url";
+import {
+	type ObservabilityOptions,
+	startObservability,
+	startPlatformResourceSampler,
+} from "@agent-infra/observability";
 import { serve } from "@hono/node-server";
 
 import {
@@ -15,6 +20,7 @@ import {
 interface StartOptions {
 	dependencies: PlatformAppDependencies;
 	browserAuth?: BrowserAuthHandler;
+	observability?: ReturnType<typeof startObservability>;
 	log?: (message: string) => void;
 	port?: number;
 }
@@ -27,6 +33,7 @@ interface BrowserAuthHandler {
 interface DeploymentStartOptions {
 	log?: (message: string) => void;
 	moduleSpecifier?: string;
+	observabilityOptions?: Omit<ObservabilityOptions, "service">;
 	port?: number;
 }
 
@@ -59,7 +66,7 @@ function authUnavailable(): Response {
 export function startPlatformApi(options: StartOptions) {
 	const port = options.port ?? runtimePort(process.env.PORT, 3000);
 	const log = options.log ?? console.info;
-	const app = createPlatformApp(options.dependencies);
+	const app = createPlatformApp(options.dependencies, options.observability);
 	const browserAuth = options.browserAuth;
 	const server = serve(
 		{
@@ -155,6 +162,7 @@ export async function loadPlatformApiAssembly(
 	const assembly = assemblePlatformApi(input);
 	return {
 		dependencies: assembly.dependencies,
+		readQueue: assembly.readQueue,
 		browserAuth: deployment.browserAuth,
 		async close() {
 			try {
@@ -171,10 +179,29 @@ export async function startPlatformApiFromDeployment(
 ) {
 	const assembly = await loadPlatformApiAssembly(options.moduleSpecifier);
 	let server: ReturnType<typeof startPlatformApi> | undefined;
+	let observability: ReturnType<typeof startObservability> | undefined;
+	let sampler: ReturnType<typeof startPlatformResourceSampler> | undefined;
 	try {
+		observability = startObservability({
+			service: platformApiService,
+			...(process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT
+				? {
+						otlpEndpoint: process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT,
+					}
+				: {}),
+			...options.observabilityOptions,
+		});
+		sampler = startPlatformResourceSampler({
+			telemetry: observability,
+			readQueue: assembly.readQueue,
+			...(options.observabilityOptions?.metricIntervalMs === undefined
+				? {}
+				: { intervalMs: options.observabilityOptions.metricIntervalMs }),
+		});
 		server = startPlatformApi({
 			dependencies: assembly.dependencies,
 			browserAuth: assembly.browserAuth,
+			observability,
 			log: options.log,
 			port: options.port,
 		});
@@ -195,24 +222,57 @@ export async function startPlatformApiFromDeployment(
 			server?.once("error", onError);
 			if (server?.listening) onListening();
 		});
-		return { assembly, server };
+		return { assembly, server, observability, sampler };
 	} catch (error) {
+		sampler?.stop();
 		if (server?.listening) {
 			await new Promise<void>((resolve) => server?.close(() => resolve()));
 		}
-		await assembly.close();
+		try {
+			await assembly.close();
+		} finally {
+			await observability?.close();
+		}
 		throw error;
 	}
 }
 
 export function createPlatformApiShutdown(
-	running: Awaited<ReturnType<typeof startPlatformApiFromDeployment>>,
+	running: Pick<
+		Awaited<ReturnType<typeof startPlatformApiFromDeployment>>,
+		"assembly" | "server"
+	> & {
+		readonly observability?: ReturnType<typeof startObservability>;
+		readonly sampler?: ReturnType<typeof startPlatformResourceSampler>;
+	},
 ) {
 	let shutdown: Promise<void> | undefined;
 	return () => {
-		shutdown ??= new Promise<void>((resolve, reject) =>
-			running.server.close((error) => (error ? reject(error) : resolve())),
-		).finally(() => running.assembly.close());
+		shutdown ??= (async () => {
+			running.sampler?.stop();
+			const failures: unknown[] = [];
+			try {
+				await new Promise<void>((resolve, reject) =>
+					running.server.close((error) => (error ? reject(error) : resolve())),
+				);
+			} catch (error) {
+				failures.push(error);
+			}
+			try {
+				await running.assembly.close();
+			} catch (error) {
+				failures.push(error);
+			} finally {
+				try {
+					await running.observability?.close();
+				} catch (error) {
+					failures.push(error);
+				}
+			}
+			if (failures.length === 1) throw failures[0];
+			if (failures.length > 1)
+				throw new AggregateError(failures, "Platform API shutdown failed");
+		})();
 		return shutdown;
 	};
 }

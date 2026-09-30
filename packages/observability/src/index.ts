@@ -83,6 +83,13 @@ export interface ResourceSnapshot {
 	readonly value: number;
 }
 
+export {
+	type PlatformPoolResourceSnapshot,
+	type PlatformQueueResourceSnapshot,
+	type PlatformResourceSamplerOptions,
+	startPlatformResourceSampler,
+} from "./resource-sampler.js";
+
 const services = [
 	"platform-api",
 	"platform-worker",

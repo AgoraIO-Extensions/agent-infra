@@ -1,8 +1,10 @@
 import { once } from "node:events";
 import { createServer } from "node:net";
+import { PassThrough } from "node:stream";
 
 import {
 	PostgresAgentManagementQueryV1,
+	PostgresConversationQueryV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
 
@@ -66,6 +68,9 @@ describe("Platform API production assembly", () => {
 			PostgresAgentManagementQueryV1.prototype,
 			"getAgent",
 		);
+		const readResourceSnapshot = vi
+			.spyOn(PostgresConversationQueryV1.prototype, "readResourceSnapshot")
+			.mockResolvedValue({ taskWaiting: 2, outboxPending: 1 });
 		const closeTaskAuthorization = vi.spyOn(
 			PostgresTaskAuthorizationStoreV1.prototype,
 			"close",
@@ -98,6 +103,12 @@ describe("Platform API production assembly", () => {
 		const browserAuth = {
 			handleRequest: vi.fn(async () => new Response(null, { status: 204 })),
 		};
+		const resourceSignal = new AbortController().signal;
+		await expect(assembly.readQueue(resourceSignal)).resolves.toEqual({
+			taskWaiting: 2,
+			outboxPending: 1,
+		});
+		expect(readResourceSnapshot).toHaveBeenCalledWith(resourceSignal);
 		const server = startPlatformApi({
 			dependencies: assembly.dependencies,
 			browserAuth,
@@ -216,6 +227,7 @@ describe("Platform API production assembly", () => {
 			).href,
 			port: 0,
 		});
+		expect(running.sampler).toBeDefined();
 		const address = running.server.address();
 		if (!address || typeof address === "string") {
 			throw new Error("Platform API did not bind a TCP port");
@@ -229,6 +241,36 @@ describe("Platform API production assembly", () => {
 		} finally {
 			await createPlatformApiShutdown(running)();
 		}
+	});
+
+	it("owns observability for the deployed API process", async () => {
+		const output = new PassThrough();
+		const lines: string[] = [];
+		output.on("data", (chunk) => lines.push(String(chunk)));
+		const running = await startPlatformApiFromDeployment({
+			log: () => {},
+			moduleSpecifier: new URL(
+				"../../../tests/fixtures/platform-api-deployment.mjs",
+				import.meta.url,
+			).href,
+			observabilityOptions: { output },
+			port: 0,
+		});
+		const address = running.server.address();
+		if (!address || typeof address === "string")
+			throw new Error("Platform API did not bind a TCP port");
+		try {
+			const response = await fetch(`http://127.0.0.1:${address.port}/healthz`);
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({
+				status: "ok",
+				observability: { enabled: false, state: "active" },
+			});
+		} finally {
+			await createPlatformApiShutdown(running)();
+		}
+		expect(running.observability.status().state).toBe("closed");
+		expect(lines.some((line) => line.includes('"stage":"http"'))).toBe(true);
 	});
 
 	it("closes deployment resources once in server-first order", async () => {
@@ -252,5 +294,39 @@ describe("Platform API production assembly", () => {
 
 		expect(calls).toEqual(["server", "assembly"]);
 		expect(assembly.close).toHaveBeenCalledOnce();
+	});
+
+	it("cleans assembly and telemetry when server close fails", async () => {
+		const calls: string[] = [];
+		const assembly = {
+			close: vi.fn(async () => {
+				calls.push("assembly");
+			}),
+		} as unknown as Awaited<
+			ReturnType<typeof startPlatformApiFromDeployment>
+		>["assembly"];
+		const server = {
+			close(callback: (error?: Error) => void) {
+				calls.push("server");
+				callback(new Error("synthetic server close failure"));
+			},
+		} as ReturnType<typeof startPlatformApi>;
+		const observability = {
+			close: vi.fn(async () => {
+				calls.push("observability");
+			}),
+		} as unknown as Awaited<
+			ReturnType<typeof startPlatformApiFromDeployment>
+		>["observability"];
+		const shutdown = createPlatformApiShutdown({
+			assembly,
+			server,
+			observability,
+		});
+
+		await expect(shutdown()).rejects.toThrow("synthetic server close failure");
+		expect(calls).toEqual(["server", "assembly", "observability"]);
+		expect(assembly.close).toHaveBeenCalledOnce();
+		expect(observability.close).toHaveBeenCalledOnce();
 	});
 });

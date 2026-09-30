@@ -183,6 +183,8 @@ export function createPlatformConversationWorkerV2(
 			}, interval);
 	}
 	return {
+		readQueue: (resourceSignal: AbortSignal) =>
+			transaction.readResourceSnapshot(resourceSignal),
 		tick,
 		start() {
 			if (started || stopped) return;
@@ -223,6 +225,7 @@ export function createPlatformConversationWorkerV2(
 export async function startPlatformConversationWorkerFromDeploymentV2(
 	moduleSpecifier = process.env.PLATFORM_WORKER_DEPLOYMENT_MODULE,
 	signal?: AbortSignal,
+	telemetry?: ReturnType<typeof startObservability>,
 ) {
 	if (!moduleSpecifier)
 		throw new Error("PLATFORM_WORKER_DEPLOYMENT_MODULE is required");
@@ -249,6 +252,7 @@ export async function startPlatformConversationWorkerFromDeploymentV2(
 	}
 	const worker = createPlatformConversationWorkerV2({
 		...options,
+		...(telemetry ? { telemetry } : {}),
 		signal: assemblySignal,
 	});
 	if (assemblySignal.aborted) await worker.stop();

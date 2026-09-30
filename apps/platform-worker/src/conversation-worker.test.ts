@@ -13,6 +13,10 @@ const mocks = vi.hoisted(() => ({
 	dispatchAssemblyThrows: false,
 	signal: undefined as AbortSignal | undefined,
 	channelAuthorizationCurrent: undefined as unknown,
+	readResourceSnapshot: vi.fn(async () => ({
+		taskWaiting: 2,
+		outboxPending: 1,
+	})),
 }));
 vi.mock("@agent-infra/platform-store", () => ({
 	openPostgresConversationDispatchStoreV1: () => ({
@@ -21,6 +25,7 @@ vi.mock("@agent-infra/platform-store", () => ({
 	}),
 	PostgresConversationEventTransactionV1: class {
 		close = mocks.eventsClose;
+		readResourceSnapshot = mocks.readResourceSnapshot;
 	},
 	PostgresTaskAuthorizationStoreV1: class {
 		close = mocks.authorizationClose;
@@ -78,6 +83,17 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.signal = undefined;
 	mocks.dispatchAssemblyThrows = false;
+});
+
+it("reads queue resources through the original transaction", async () => {
+	const worker = createPlatformConversationWorkerV2(options);
+	const signal = new AbortController().signal;
+	await expect(worker.readQueue(signal)).resolves.toEqual({
+		taskWaiting: 2,
+		outboxPending: 1,
+	});
+	expect(mocks.readResourceSnapshot).toHaveBeenCalledWith(signal);
+	await worker.stop();
 });
 
 describe("Conversation Worker discovery and shutdown", () => {

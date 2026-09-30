@@ -228,6 +228,9 @@ importers:
       '@agent-infra/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
+      '@agent-infra/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       '@agent-infra/object-storage':
         specifier: workspace:*
         version: link:../../packages/object-storage

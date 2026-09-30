@@ -93,6 +93,10 @@ export {
 	platformDatabaseUrlFromEnvironment,
 } from "./migrate.ts";
 export {
+	type PlatformQueueResourceSnapshot,
+	readPlatformQueueResourceSnapshot,
+} from "./observability-snapshot.js";
+export {
 	type ClaimedOutboxItem,
 	type ClaimOutboxItemInput,
 	type CompleteOutboxItemInput,

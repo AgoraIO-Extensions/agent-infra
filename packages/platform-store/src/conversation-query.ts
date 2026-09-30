@@ -4,6 +4,10 @@ import { parseConversationOperationEventV2 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
+import {
+	type PlatformQueueResourceSnapshot,
+	readPlatformQueueResourceSnapshot,
+} from "./observability-snapshot.js";
 
 type Database = ReturnType<typeof postgres> | postgres.TransactionSql;
 
@@ -549,6 +553,12 @@ export class PostgresConversationQueryV1 {
 			if (error instanceof ConversationQueryError) throw error;
 			unavailable();
 		}
+	}
+
+	readResourceSnapshot(
+		signal: AbortSignal,
+	): Promise<PlatformQueueResourceSnapshot> {
+		return readPlatformQueueResourceSnapshot(this.#client, signal);
 	}
 
 	async getAuthorizationTarget(

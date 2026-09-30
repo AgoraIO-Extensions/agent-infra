@@ -1,3 +1,5 @@
+import type { startObservability } from "@agent-infra/observability";
+import { createHttpObservability } from "@agent-infra/observability/http";
 import { Hono } from "hono";
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
@@ -43,6 +45,11 @@ import { registerWecomSetupRoutesV1 } from "./http/wecom-setup-routes.js";
 
 export const platformApiService = "platform-api";
 
+type ApiObservability = Pick<
+	ReturnType<typeof startObservability>,
+	"record" | "status"
+>;
+
 export interface PlatformAppDependencies {
 	readonly requestScope?: (
 		request: Request,
@@ -64,8 +71,9 @@ export interface PlatformAppDependencies {
 	readonly scopedAudit?: ScopedAuditRoutesDependencies;
 }
 
-export function createPlatformHealthApp() {
+export function createPlatformHealthApp(observability?: ApiObservability) {
 	const app = new Hono();
+	if (observability) app.use("*", createHttpObservability(observability));
 	app.onError((error, context) => {
 		const protocol =
 			error instanceof HttpProtocolError
@@ -81,13 +89,17 @@ export function createPlatformHealthApp() {
 		context.json({
 			service: platformApiService,
 			status: "ok",
+			...(observability ? { observability: observability.status() } : {}),
 		}),
 	);
 	return app;
 }
 
-export function createPlatformApp(dependencies: PlatformAppDependencies) {
-	const app = createPlatformHealthApp();
+export function createPlatformApp(
+	dependencies: PlatformAppDependencies,
+	observability?: ApiObservability,
+) {
+	const app = createPlatformHealthApp(observability);
 	const requestScope = dependencies.requestScope;
 	if (requestScope)
 		app.use("*", (context, next) => requestScope(context.req.raw, next));

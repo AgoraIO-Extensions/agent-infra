@@ -546,6 +546,41 @@ describe("platform worker lifecycle", () => {
 });
 
 describe("Platform Worker production V2 lifecycle", () => {
+	it("leaves no CLI heartbeat when telemetry configuration rejects startup", async () => {
+		const originalArgv = process.argv[1];
+		const originalExitCode = process.exitCode;
+		const originalEndpoint =
+			process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT;
+		const on = vi.spyOn(process, "on");
+		const info = vi.spyOn(console, "info").mockImplementation(() => {});
+		vi.useFakeTimers();
+		try {
+			vi.resetModules();
+			process.argv[1] = fileURLToPath(new URL("./index.ts", import.meta.url));
+			process.exitCode = undefined;
+			process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT = "invalid-endpoint";
+			await import("./index.js");
+			await vi.advanceTimersByTimeAsync(0);
+			expect(process.exitCode).toBe(1);
+			expect(vi.getTimerCount()).toBe(0);
+			expect(info).not.toHaveBeenCalled();
+		} finally {
+			for (const [signal, listener] of on.mock.calls)
+				if (signal === "SIGINT" || signal === "SIGTERM")
+					process.off(signal, listener);
+			if (originalArgv === undefined) process.argv.splice(1, 1);
+			else process.argv[1] = originalArgv;
+			process.exitCode = originalExitCode;
+			if (originalEndpoint === undefined)
+				delete process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT;
+			else
+				process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT = originalEndpoint;
+			on.mockRestore();
+			info.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
 	it("starts and stops workload and trusted conversation workers with the primary process", async () => {
 		const stopOrder: string[] = [];
 		const primary = {

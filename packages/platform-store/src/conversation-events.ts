@@ -21,6 +21,11 @@ import {
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 
+import {
+	type PlatformQueueResourceSnapshot,
+	readPlatformQueueResourceSnapshot,
+} from "./observability-snapshot.js";
+
 type Transaction = postgres.TransactionSql;
 type JsonValue = Parameters<ReturnType<typeof postgres>["json"]>[0];
 type PersistRequest = Parameters<
@@ -777,6 +782,12 @@ export class PostgresConversationEventTransactionV1
 
 	constructor(options: PostgresConversationEventOptionsV1) {
 		this.#client = postgres(options.databaseUrl, { max: 10 });
+	}
+
+	readResourceSnapshot(
+		signal: AbortSignal,
+	): Promise<PlatformQueueResourceSnapshot> {
+		return readPlatformQueueResourceSnapshot(this.#client, signal);
 	}
 
 	async persistEvent(

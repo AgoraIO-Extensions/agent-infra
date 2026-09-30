@@ -1,5 +1,10 @@
 import { pathToFileURL } from "node:url";
-import { startObservability } from "@agent-infra/observability";
+import {
+	type ObservabilityOptions,
+	type PlatformQueueResourceSnapshot,
+	startObservability,
+	startPlatformResourceSampler,
+} from "@agent-infra/observability";
 import { createObservedConversationEvents } from "@agent-infra/observability/worker";
 import { startPlatformConversationWorkerFromDeploymentV2 } from "./conversation-worker.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
@@ -232,33 +237,82 @@ export async function startPlatformWorkerFromDeploymentV2(
 	options: {
 		readonly startPrimary?: () => { stop(): void | Promise<void> };
 		readonly startWorkload?: () => Promise<{ stop(): Promise<void> }>;
-		readonly startConversation?: () => Promise<{ stop(): Promise<void> }>;
+		readonly startConversation?: (
+			observability: ReturnType<typeof startObservability>,
+		) => Promise<{
+			stop(): Promise<void>;
+			readQueue?: (
+				signal: AbortSignal,
+			) => Promise<PlatformQueueResourceSnapshot>;
+		}>;
+		readonly observabilityOptions?: Omit<ObservabilityOptions, "service">;
 	} = {},
 ) {
-	const primary = (options.startPrimary ?? startPlatformWorker)();
+	type StartedConversation = {
+		stop(): Promise<void>;
+		readQueue?: (signal: AbortSignal) => Promise<PlatformQueueResourceSnapshot>;
+	};
+	const observability = startObservability({
+		service: platformWorkerService,
+		...(process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT
+			? {
+					otlpEndpoint: process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT,
+				}
+			: {}),
+		...options.observabilityOptions,
+	});
+	let primary: { stop(): void | Promise<void> };
+	try {
+		primary = (options.startPrimary ?? startPlatformWorker)();
+	} catch (error) {
+		await observability.close();
+		throw error;
+	}
 	let workload: { stop(): Promise<void> } | undefined;
-	let conversation: { stop(): Promise<void> } | undefined;
+	let conversation: StartedConversation | undefined;
+	let sampler: ReturnType<typeof startPlatformResourceSampler> | undefined;
 	try {
 		workload = await (
 			options.startWorkload ?? startPlatformWorkloadWorkerFromDeploymentV1
 		)();
 		conversation = await (
 			options.startConversation ??
-			startPlatformConversationWorkerFromDeploymentV2
-		)();
+			((telemetry) =>
+				startPlatformConversationWorkerFromDeploymentV2(
+					undefined,
+					undefined,
+					telemetry,
+				))
+		)(observability);
+		if (conversation.readQueue) {
+			sampler = startPlatformResourceSampler({
+				telemetry: observability,
+				readQueue: conversation.readQueue,
+				...(options.observabilityOptions?.metricIntervalMs === undefined
+					? {}
+					: { intervalMs: options.observabilityOptions.metricIntervalMs }),
+			});
+		}
 		let stopping: Promise<void> | undefined;
 		return {
+			observabilityStatus: observability.status,
+			sampler,
 			stop() {
 				stopping ??= (async () => {
+					sampler?.stop();
 					const results: PromiseSettledResult<void>[] = [];
-					for (const stop of [
-						() => conversation?.stop(),
-						() => workload?.stop(),
-						() => primary.stop(),
-					]) {
-						results.push(
-							...(await Promise.allSettled([Promise.resolve().then(stop)])),
-						);
+					try {
+						for (const stop of [
+							() => conversation?.stop(),
+							() => workload?.stop(),
+							() => primary.stop(),
+						]) {
+							results.push(
+								...(await Promise.allSettled([Promise.resolve().then(stop)])),
+							);
+						}
+					} finally {
+						await observability.close();
 					}
 					const failure = results.find(
 						(result): result is PromiseRejectedResult =>
@@ -270,11 +324,13 @@ export async function startPlatformWorkerFromDeploymentV2(
 			},
 		};
 	} catch (error) {
+		sampler?.stop();
 		await Promise.allSettled([
 			Promise.resolve().then(() => primary.stop()),
 			Promise.resolve().then(() => workload?.stop()),
 			Promise.resolve().then(() => conversation?.stop()),
 		]);
+		await observability.close();
 		throw error;
 	}
 }
@@ -283,13 +339,17 @@ const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	const shutdownDeadlineMs = 10_000;
 	const termination = new AbortController();
-	const primary = startPlatformWorker();
+	let primary: ReturnType<typeof startPlatformWorker> | undefined;
 	const workerPromise = startPlatformWorkerFromDeploymentV2({
-		startPrimary: () => primary,
-		startConversation: () =>
+		startPrimary: () => {
+			primary = startPlatformWorker();
+			return primary;
+		},
+		startConversation: (telemetry) =>
 			startPlatformConversationWorkerFromDeploymentV2(
 				undefined,
 				termination.signal,
+				telemetry,
 			),
 		startWorkload: () =>
 			startPlatformWorkloadWorkerFromDeploymentV1(
@@ -306,7 +366,7 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 		termination.abort();
 		let primaryStop: Promise<void>;
 		try {
-			primaryStop = Promise.resolve(primary.stop());
+			primaryStop = Promise.resolve(primary?.stop());
 		} catch {
 			primaryStop = Promise.reject();
 		}

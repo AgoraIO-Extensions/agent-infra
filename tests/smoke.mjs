@@ -7,7 +7,10 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { startConnectionApi } from "../apps/connection-api/dist/index.mjs";
-import { startPlatformApiFromDeployment } from "../apps/platform-api/dist/index.mjs";
+import {
+	createPlatformApiShutdown,
+	startPlatformApiFromDeployment,
+} from "../apps/platform-api/dist/index.mjs";
 import { startPlatformWorker } from "../apps/platform-worker/dist/index.mjs";
 
 async function verifyApi(start, expectedService) {
@@ -30,7 +33,7 @@ async function verifyApi(start, expectedService) {
 }
 
 async function verifyPlatformApi() {
-	const { assembly, server } = await startPlatformApiFromDeployment({
+	const running = await startPlatformApiFromDeployment({
 		log: () => undefined,
 		moduleSpecifier: new URL(
 			"./fixtures/platform-api-deployment.mjs",
@@ -38,6 +41,7 @@ async function verifyPlatformApi() {
 		).href,
 		port: 0,
 	});
+	const { server } = running;
 	const address = server.address();
 	assert(address && typeof address === "object");
 
@@ -48,14 +52,21 @@ async function verifyPlatformApi() {
 		assert.deepEqual(await health.json(), {
 			service: "platform-api",
 			status: "ok",
+			observability: {
+				enabled: false,
+				state: "active",
+				captureFailures: 0,
+				exportFailures: 0,
+				droppedLogs: 0,
+				invalidRecords: 0,
+			},
 		});
 		const session = await fetch(`${baseUrl}/api/v1/session`);
 		assert.equal(session.status, 200);
 		assert.equal((await session.json()).user.userId, "smoke-user");
 	} finally {
-		server.close();
-		await once(server, "close");
-		await assembly.close();
+		await createPlatformApiShutdown(running)();
+		assert.equal(running.observability.status().state, "closed");
 	}
 }
 

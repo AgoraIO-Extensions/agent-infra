@@ -13,6 +13,7 @@ import {
 	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
 import {
+	type PlatformQueueResourceSnapshot,
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
 	PostgresAgentManagementQueryV1,
@@ -95,6 +96,9 @@ export interface PlatformApiAssemblyInput {
 
 export interface PlatformApiAssembly {
 	readonly dependencies: PlatformAppDependencies;
+	readonly readQueue: (
+		signal: AbortSignal,
+	) => Promise<PlatformQueueResourceSnapshot>;
 	close(): Promise<void>;
 }
 
@@ -619,6 +623,8 @@ export function assemblePlatformApi(
 	];
 	return {
 		dependencies,
+		readQueue: (signal: AbortSignal) =>
+			conversationQuery.readResourceSnapshot(signal),
 		async close() {
 			let failed = false;
 			for (const adapter of adapters.toReversed()) {
