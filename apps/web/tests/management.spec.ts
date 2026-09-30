@@ -983,9 +983,16 @@ test("conversation navigation opens an Agent chooser and the existing chat route
 		await page.getByRole("button", { name: "打开导航" }).click();
 	await navigation.getByRole("link", { name: "对话", exact: true }).click();
 	await expect(page).toHaveURL(/\/agents\?mode=conversation$/);
+	if (info.project.name === "mobile")
+		await page.getByRole("button", { name: "打开导航" }).click();
 	await expect(
-		page.locator(".platform-sidebar").getByRole("link", { name: "对话" }),
+		(info.project.name === "mobile"
+			? page.getByRole("dialog", { name: "主导航" })
+			: page.locator(".platform-sidebar")
+		).getByRole("link", { name: "对话" }),
 	).toHaveAttribute("aria-current", "page");
+	if (info.project.name === "mobile")
+		await page.getByRole("button", { name: "关闭导航" }).click();
 	await expect(
 		page.getByRole("heading", { name: "选择 Agent 开始对话" }),
 	).toBeVisible();
@@ -998,11 +1005,18 @@ test("conversation navigation opens an Agent chooser and the existing chat route
 	);
 	await page.getByRole("link", { name: "开始对话" }).click();
 	await expect(page).toHaveURL(/\/agents\/agent-pilot-1\/conversations$/);
+	if (info.project.name === "mobile")
+		await page.getByRole("button", { name: "打开导航" }).click();
 	await expect(
-		page.locator(".platform-sidebar").getByRole("link", { name: "对话" }),
+		(info.project.name === "mobile"
+			? page.getByRole("dialog", { name: "主导航" })
+			: page.locator(".platform-sidebar")
+		).getByRole("link", { name: "对话" }),
 	).toHaveAttribute("aria-current", "true");
+	if (info.project.name === "mobile")
+		await page.getByRole("button", { name: "关闭导航" }).click();
 	await expect(
-		page.getByRole("heading", { name: "对话", level: 1 }),
+		page.getByRole("heading", { name: "Release assistant", level: 1 }),
 	).toBeVisible();
 });
 
