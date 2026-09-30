@@ -1046,6 +1046,33 @@ function isConversationSseV2NotFoundAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1052 publishes the exact #1027 recent read; every prior document field stays exact.
+function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/me/conversations/recent";
+	const scheme = current.components?.securitySchemes?.PlatformSession;
+	const addition = { path: current.paths?.[path], securityScheme: scheme };
+	if (
+		previous.paths?.[path] !== undefined ||
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+			"4d30e31df6c7267739b9ebc4b224f07cb384e3147ad2181a9aeba4cdabc75006"
+	)
+		return false;
+	const previousScheme = previous.components?.securitySchemes?.PlatformSession;
+	if (previousScheme !== undefined && !sameValue(previousScheme, scheme))
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	if (previousScheme === undefined) {
+		delete normalized.components.securitySchemes.PlatformSession;
+		if (
+			previous.components?.securitySchemes === undefined &&
+			Object.keys(normalized.components.securitySchemes).length === 0
+		)
+			delete normalized.components.securitySchemes;
+	}
+	return sameValue(previous, normalized);
+}
+
 // #440 adds bounded receipt management and Owner-scoped bot setup.
 function isWecomReceiptOpenApiAddition(previous, current) {
 	const paths = [
@@ -1147,6 +1174,7 @@ function findBreakingChanges(previous, current) {
 			!isAdministratorAgentReadV2OpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isConversationSseV2NotFoundAddition(previous, current) &&
+			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
