@@ -1397,6 +1397,31 @@ describe("management routes", () => {
 		);
 	});
 
+	it.each(["retry_creation", "disable", "upgrade_custom_image"] as const)(
+		"audits API lifecycle rejection for %s",
+		async (command) => {
+			const input = createApp({ api: true });
+			const response = await input.app.request(
+				"/api/v1/agents/agent-1/lifecycle",
+				{
+					method: "POST",
+					headers: { ...headers, Authorization: "Bearer secret" },
+					body: JSON.stringify({
+						schemaVersion: 1,
+						command,
+						...(command === "upgrade_custom_image"
+							? { imageReference: "registry.example/agent:v2" }
+							: {}),
+					}),
+				},
+			);
+			expect(response.status).toBe(403);
+			expect(input.recordAccessRejection).toHaveBeenCalledOnce();
+			expect(input.executeManagementCommand).not.toHaveBeenCalled();
+			expect(input.upgradeCustomImage).not.toHaveBeenCalled();
+		},
+	);
+
 	it("upgrades a custom image through the configuration use case", async () => {
 		const upgraded = createApp();
 		upgraded.readAgentProjection.mockResolvedValue({

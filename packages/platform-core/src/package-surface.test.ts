@@ -89,6 +89,7 @@ describe("platform-core package surface", () => {
 			"isAgentConfigurationQueryAllowedV1",
 			"isAgentOwnerV1",
 			"isAgentRuntimePresentationVisibleV1",
+			"isApiAgentLifecycleCommandAllowedV1",
 			"isApiCredentialScopeV1",
 			"isConfirmedResultFileV1",
 			"isConversationGenerationBarrierConfirmedV1",

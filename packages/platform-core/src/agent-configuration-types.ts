@@ -2,6 +2,7 @@ import type {
 	AgentManagementActorContextV1,
 	AgentManagementStateV1,
 } from "./agent-management.js";
+import type { ApiPrincipalV1 } from "./api-identity.js";
 import type {
 	PendingSecretRecordAttachmentResolverV1,
 	PendingSecretRecordAttachmentsV1,
@@ -271,6 +272,7 @@ export interface AgentConfigurationActorContextV1 {
 	readonly schemaVersion: 1;
 	readonly actorId: string;
 	readonly rawRequestDigest: string;
+	readonly principal?: ApiPrincipalV1;
 }
 
 export type AgentConfigurationChangedFieldV1 =

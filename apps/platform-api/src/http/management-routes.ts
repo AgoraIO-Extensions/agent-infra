@@ -40,6 +40,7 @@ import type {
 import {
 	ApiIdentityError,
 	generateApiCredentialV1,
+	isApiAgentLifecycleCommandAllowedV1,
 	isSameApiCreationAuthorityV1,
 } from "@agent-infra/platform-core";
 import type {
@@ -1738,23 +1739,23 @@ function registerManagementRoutesInternal(
 						),
 					);
 				}
+				if (api && !isApiAgentLifecycleCommandAllowedV1(body.command)) {
+					const management = apiIdentityOrUnavailable(
+						dependencies.apiIdentity,
+						metadata.traceId,
+					);
+					await management.recordAccessRejection(
+						apiActor(api),
+						apiAccessAudit(
+							apiIdentityContext(api),
+							metadata,
+							agentId,
+							"operation_forbidden",
+						),
+					);
+					fail("FORBIDDEN", metadata.traceId);
+				}
 				if (body.command === "upgrade_custom_image") {
-					if (api) {
-						const management = apiIdentityOrUnavailable(
-							dependencies.apiIdentity,
-							metadata.traceId,
-						);
-						await management.recordAccessRejection(
-							apiActor(api),
-							apiAccessAudit(
-								apiIdentityContext(api),
-								metadata,
-								agentId,
-								"operation_forbidden",
-							),
-						);
-						fail("FORBIDDEN", metadata.traceId);
-					}
 					await dependencies.configuration.upgradeCustomImage(
 						{
 							schemaVersion: 1,
@@ -1768,6 +1769,7 @@ function registerManagementRoutesInternal(
 							schemaVersion: 1,
 							actorId: identity.userId,
 							rawRequestDigest,
+							...(api ? { principal: api.principal } : {}),
 						},
 					);
 					const projectionScope = identity.roles.includes("system_admin")
@@ -1815,22 +1817,6 @@ function registerManagementRoutesInternal(
 								)
 						: undefined,
 				);
-				if (api && body.command === "disable") {
-					const management = apiIdentityOrUnavailable(
-						dependencies.apiIdentity,
-						metadata.traceId,
-					);
-					await management.recordAccessRejection(
-						apiActor(api),
-						apiAccessAudit(
-							apiIdentityContext(api),
-							metadata,
-							agentId,
-							"operation_forbidden",
-						),
-					);
-					fail("FORBIDDEN", metadata.traceId);
-				}
 				const commands = {
 					stop: "stop_agent",
 					restart: "restart_agent",

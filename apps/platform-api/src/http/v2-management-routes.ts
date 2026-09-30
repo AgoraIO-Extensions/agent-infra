@@ -23,7 +23,10 @@ import type {
 	ApplicationRevisionUseCaseV1,
 	PendingSecretRecordAttachmentResolverV1,
 } from "@agent-infra/platform-core";
-import { isSameApiCreationAuthorityV1 } from "@agent-infra/platform-core";
+import {
+	isApiAgentLifecycleCommandAllowedV1,
+	isSameApiCreationAuthorityV1,
+} from "@agent-infra/platform-core";
 import type {
 	AgentManagementAgentProjectionV1,
 	AgentManagementAgentScopeV1,
@@ -1165,11 +1168,7 @@ export function registerV2ManagementRoutes(
 						["agent:manage"],
 					),
 				);
-				if (
-					body.command !== "start" &&
-					body.command !== "stop" &&
-					body.command !== "restart"
-				) {
+				if (!isApiAgentLifecycleCommandAllowedV1(body.command)) {
 					await management.recordAccessRejection(
 						apiActor(api),
 						apiAccessAudit(
@@ -1183,7 +1182,6 @@ export function registerV2ManagementRoutes(
 				}
 			}
 			if (body.command === "upgrade_custom_image") {
-				if (api) fail("FORBIDDEN", metadata.traceId);
 				await dependencies.configuration.upgradeCustomImage(
 					{
 						schemaVersion: 1,
@@ -1197,6 +1195,7 @@ export function registerV2ManagementRoutes(
 						schemaVersion: 1,
 						actorId: identity.userId,
 						rawRequestDigest,
+						...(api ? { principal: api.principal } : {}),
 					},
 				);
 				const projectionScope = identity.roles.includes("system_admin")

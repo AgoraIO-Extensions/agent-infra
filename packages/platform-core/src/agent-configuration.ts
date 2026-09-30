@@ -779,6 +779,8 @@ function createAgentConfigurationUseCaseV1Internal(
 		async upgradeCustomImage(commandInput, actorContextInput) {
 			const command = parseUpgradeCustomImageCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
+			if (actorContext.principal)
+				throw new AgentConfigurationError("not_admitted");
 			return await execute(
 				command,
 				actorContext,

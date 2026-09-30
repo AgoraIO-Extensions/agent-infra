@@ -415,6 +415,27 @@ describe("V2 management routes", () => {
 		);
 	});
 
+	it.each(["retry_creation", "disable", "upgrade_custom_image"] as const)(
+		"audits V2 API lifecycle rejection for %s",
+		async (command) => {
+			const { app, apiIdentity, executeManagementCommand } = createApp();
+			const response = await app.request("/api/v2/agents/agent-1/lifecycle", {
+				method: "POST",
+				headers: { ...headers, Authorization: "Bearer application-token" },
+				body: JSON.stringify({
+					schemaVersion: 1,
+					command,
+					...(command === "upgrade_custom_image"
+						? { imageReference: "registry.example/agent:v2" }
+						: {}),
+				}),
+			});
+			expect(response.status).toBe(403);
+			expect(apiIdentity.recordAccessRejection).toHaveBeenCalledOnce();
+			expect(executeManagementCommand).not.toHaveBeenCalled();
+		},
+	);
+
 	it("passes browser start to Core and returns its transition decision", async () => {
 		const { app, getAgent, executeManagementCommand } = createApp();
 		executeManagementCommand.mockResolvedValueOnce({

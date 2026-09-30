@@ -50,6 +50,47 @@ it("denies an API-principal management command without credential authority", as
 	expect(transactions).toBe(0);
 });
 
+it("denies unsupported API lifecycle commands before opening a transaction", async () => {
+	let transactions = 0;
+	const management = createAgentManagementV1({
+		async executeAgentManagementTransaction() {
+			transactions += 1;
+			return { outcome: "denied", writePlan: null };
+		},
+		async resolveAgentAccessState() {
+			return undefined;
+		},
+	});
+	for (const command of ["retry_agent_creation", "disable_agent"] as const) {
+		await expect(
+			management.executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command,
+					agentId: "agent-api",
+					expectedRevision: 1,
+					idempotencyKey: command,
+					requestId: command,
+					traceId: command,
+				},
+				{
+					schemaVersion: 1,
+					userId: "api-user",
+					accountStatus: "active",
+					organizationIds: [],
+					isAdministrator: false,
+					principal: { kind: "user", id: "api-user" },
+					apiAuthority: {
+						credentialId: "credential-api",
+						identityRevision: "identity-1",
+					},
+				},
+			),
+		).resolves.toEqual({ outcome: "denied", writePlan: null });
+	}
+	expect(transactions).toBe(0);
+});
+
 it("denies API principals from disabling an Agent", async () => {
 	const principal = { kind: "user" as const, id: "api-user" };
 	const state: AgentManagementStateV1 = {

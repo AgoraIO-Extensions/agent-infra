@@ -355,6 +355,24 @@ it("snapshots custom image upgrade commands and rejects hostile accessors", asyn
 	expect(harness.transaction.snapshot()).toMatchObject({ commitCount: 1 });
 });
 
+it("rejects API-principal custom image upgrades in Core", async () => {
+	const harness = createHarness();
+	await expect(
+		harness.useCase.upgradeCustomImage(
+			{
+				schemaVersion: 1,
+				agentId: "agent_01",
+				imageReference: "registry.example/agent:v2",
+				idempotencyKey: "api-upgrade",
+				requestId: "api-upgrade",
+				traceId: "api-upgrade",
+			},
+			{ ...actor, principal: { kind: "application", id: "application-api" } },
+		),
+	).rejects.toMatchObject({ code: "not_admitted" });
+	expect(harness.transaction.snapshot()).toMatchObject({ commitCount: 0 });
+});
+
 it("snapshots configuration plans without reading hostile accessors or Proxy traps", async () => {
 	const harness = createHarness();
 	await harness.useCase.update(

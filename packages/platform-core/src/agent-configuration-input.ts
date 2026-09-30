@@ -748,16 +748,23 @@ export function parseInitialCommand(
 export function parseActorContext(
 	actorContext: unknown,
 ): AgentConfigurationActorContextV1 {
-	const values = exactObject(actorContext, [
-		"schemaVersion",
-		"actorId",
-		"rawRequestDigest",
-	]);
+	const values = exactObject(
+		actorContext,
+		["schemaVersion", "actorId", "rawRequestDigest"],
+		["principal"],
+	);
+	const principal =
+		values.principal === undefined
+			? undefined
+			: exactObject(values.principal, ["kind", "id"]);
 	if (
 		values.schemaVersion !== 1 ||
 		!isText(values.actorId, idMaxBytes) ||
 		typeof values.rawRequestDigest !== "string" ||
-		!/^[a-f0-9]{64}$/.test(values.rawRequestDigest)
+		!/^[a-f0-9]{64}$/.test(values.rawRequestDigest) ||
+		(principal !== undefined &&
+			((principal.kind !== "user" && principal.kind !== "application") ||
+				!isText(principal.id, idMaxBytes)))
 	) {
 		invalidCommand();
 	}
@@ -765,5 +772,13 @@ export function parseActorContext(
 		schemaVersion: 1,
 		actorId: values.actorId,
 		rawRequestDigest: values.rawRequestDigest,
+		...(principal === undefined
+			? {}
+			: {
+					principal: {
+						kind: principal.kind as "user" | "application",
+						id: principal.id as string,
+					},
+				}),
 	};
 }

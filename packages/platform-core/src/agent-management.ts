@@ -24,6 +24,17 @@ export type AgentManagementStatusV1 =
 	| "creation_failed"
 	| "disabled";
 
+export function isApiAgentLifecycleCommandAllowedV1(command: string): boolean {
+	return (
+		command === "start" ||
+		command === "stop" ||
+		command === "restart" ||
+		command === "start_agent" ||
+		command === "stop_agent" ||
+		command === "restart_agent"
+	);
+}
+
 export type AgentServiceAvailabilityV1 =
 	| "ready"
 	| "starting"
@@ -874,7 +885,11 @@ export function createAgentManagementV1(
 		async executeManagementCommand(commandInput, actorContextInput) {
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
-			if (actorContext.principal && !actorContext.apiAuthority)
+			if (
+				actorContext.principal &&
+				(!actorContext.apiAuthority ||
+					!isApiAgentLifecycleCommandAllowedV1(command.command))
+			)
 				return { outcome: "denied", writePlan: null };
 			const applicationCommand = "applicationId" in command;
 			const subjectType = applicationCommand ? "agent_application" : "agent";
