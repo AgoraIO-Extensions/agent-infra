@@ -166,10 +166,16 @@ it.each(["claude", "shared"] as const)(
 						effort: "high",
 						admit: callbacks.admit,
 						beforeSend: callbacks.modelRequestIntent,
-						started: callbacks.modelRequestStarted,
-						receipt: async (state, _endTurn, usage) => {
+						started: async (_request, operationRef) => {
+							await callbacks.modelRequestStarted?.(operationRef);
+						},
+						receipt: async (state, _endTurn, usage, _request, operationRef) => {
 							if (state !== "sent")
-								await callbacks.modelRequestFinished?.(state, usage);
+								await callbacks.modelRequestFinished?.(
+									state,
+									usage,
+									operationRef,
+								);
 						},
 					});
 					return {
@@ -583,10 +589,16 @@ async function withCountDriver(
 					effort: "high",
 					admit: callbacks.admit,
 					beforeSend: callbacks.modelRequestIntent,
-					started: callbacks.modelRequestStarted,
-					receipt: async (state, _endTurn, usage) => {
+					started: async (_request, operationRef) => {
+						await callbacks.modelRequestStarted?.(operationRef);
+					},
+					receipt: async (state, _endTurn, usage, _request, operationRef) => {
 						if (state !== "sent")
-							await callbacks.modelRequestFinished?.(state, usage);
+							await callbacks.modelRequestFinished?.(
+								state,
+								usage,
+								operationRef,
+							);
 					},
 				});
 				return {
@@ -960,8 +972,10 @@ it.each([
 	async (kind, receiptFailure) => {
 		let responseStatus = 0;
 		let responseReceived = () => {};
-		const responseGate = new Promise<void>((resolve) => {
+		let responseFailed = (_error: unknown) => {};
+		const responseGate = new Promise<void>((resolve, reject) => {
 			responseReceived = resolve;
+			responseFailed = reject;
 		});
 		let allowTerminal = false;
 		let releaseNative = () => {};
@@ -985,16 +999,21 @@ it.each([
 			await withCountDriver(
 				kind,
 				async (request) => {
-					const generated = await request(false);
-					expect(generated.ok).toBe(true);
-					await generated.text();
-					const denied = await request();
-					responseStatus = denied.status;
-					responseReceived();
-					await denied.text();
-					await nativeGate;
-					// On a red verdict, leave through the source error path so cleanup cannot hang.
-					if (!allowTerminal) throw new Error("Synthetic test cleanup");
+					try {
+						const generated = await request(false);
+						expect(generated.ok).toBe(true);
+						await generated.text();
+						const denied = await request();
+						responseStatus = denied.status;
+						responseReceived();
+						await denied.text();
+						await nativeGate;
+						// On a red verdict, leave through the source error path so cleanup cannot hang.
+						if (!allowTerminal) throw new Error("Synthetic test cleanup");
+					} catch (error) {
+						responseFailed(error);
+						throw error;
+					}
 				},
 				async ({
 					driver,

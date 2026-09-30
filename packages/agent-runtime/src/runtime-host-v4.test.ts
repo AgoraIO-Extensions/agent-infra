@@ -423,6 +423,10 @@ it("does not reinstall a Key when replaying a terminal submit receipt", async ()
 	};
 	const host = await RuntimeHost.open(options);
 	const accepted = await host.submitTurnV4(transport);
+	const executionKeys = (
+		host as unknown as { executionKeys: Map<string, unknown> }
+	).executionKeys;
+	expect(executionKeys.has(request.executionId)).toBe(true);
 	await driver.setOperationStatus(request.operation.id, "completed");
 	await store.resolveOperation(
 		accepted.hostSessionRef,
@@ -430,6 +434,11 @@ it("does not reinstall a Key when replaying a terminal submit receipt", async ()
 		{ outcome: "accepted", status: "completed" },
 		store.nativeSessionRef(accepted.hostSessionRef),
 	);
+	await expect(host.submitTurnV4(transport)).resolves.toMatchObject({
+		operationId: request.operation.id,
+		result: { outcome: "accepted", status: "completed" },
+	});
+	expect(executionKeys.has(request.executionId)).toBe(false);
 	await host.close();
 	const reopened = await RuntimeHost.open(options);
 	await expect(reopened.submitTurnV4(transport)).resolves.toMatchObject({

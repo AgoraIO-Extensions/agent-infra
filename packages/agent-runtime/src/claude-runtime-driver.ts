@@ -960,7 +960,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			pendingToolResults.delete(toolCallId);
 			for (const wake of this.waiters.get(ref) ?? []) wake();
 		};
-		let currentModelOperationRef: string | undefined;
 		const transport = await openRuntimeMessagesTransport({
 			...option,
 			effort: selection.reasoningLevel,
@@ -1020,15 +1019,13 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					command.executionId,
 					request,
 				);
-				currentModelOperationRef = authorization.operationRef;
-				return authorization.delivery;
+				return {
+					...authorization.delivery,
+					operationRef: authorization.operationRef,
+				};
 			},
-			started: async (request) => {
-				await this.modelRequestStarted(
-					file,
-					command.executionId,
-					currentModelOperationRef,
-				);
+			started: async (request, operationRef) => {
+				await this.modelRequestStarted(file, command.executionId, operationRef);
 				if (request !== "count_tokens")
 					await file.update((state) => {
 						const turn =
@@ -1038,7 +1035,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						turn.modelResponse = { state: "sent", endTurn: false };
 					});
 			},
-			receipt: async (response, endTurn, usage, request) => {
+			receipt: async (response, endTurn, usage, request, operationRef) => {
 				// Transport invokes sent before fetch. Never wait on a durable write
 				// between the final Host gate and the actual outbound request.
 				if (response === "sent") return;
@@ -1049,7 +1046,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						"completed",
 						undefined,
 						usage,
-						currentModelOperationRef,
+						operationRef,
 					);
 				else if (response === "failed" || response === "unknown")
 					await this.modelPhase(
@@ -1058,7 +1055,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						response,
 						undefined,
 						undefined,
-						currentModelOperationRef,
+						operationRef,
 					);
 				if (request === "count_tokens") return;
 				await file.update((state) => {
@@ -1962,6 +1959,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				}
 				const counts = auxiliaryRequestState(turn);
 				if (counts === "pending") {
+					if (this.closed || this.handles.get(ref)?.retiring) {
+						await this.status(file, executionId, "unknown");
+						return;
+					}
 					await changed;
 					continue;
 				}

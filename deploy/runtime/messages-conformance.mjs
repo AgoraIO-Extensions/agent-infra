@@ -37,9 +37,11 @@ const environment = settings.env ?? {};
 const credential = environment.ANTHROPIC_AUTH_TOKEN ?? environment.ANTHROPIC_API_KEY;
 const endpoint = environment.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com";
 if (typeof credential !== "string" || !credential) throw Error("Model credential configuration is missing");
+// Keep configuration validation active, but make any accidental static-key fallback unusable.
+const configuredCredential = `static-disabled-${randomUUID()}`;
 const path = await realpath(await mkdtemp(join(tmpdir(), "messages-conformance-")));
 const configVersion = `conformance-${randomUUID()}`;
-const options = { path, executable, configVersion, defaultModelOptionId: "primary", defaultReasoningLevel: "medium", modelOptions: [{ modelOptionId: "primary", model: values.model, reasoningLevels: ["medium"], endpoint, credential, authentication: environment.ANTHROPIC_AUTH_TOKEN ? "bearer" : "api-key" }] };
+const options = { path, executable, configVersion, defaultModelOptionId: "primary", defaultReasoningLevel: "medium", modelOptions: [{ modelOptionId: "primary", model: values.model, reasoningLevels: ["medium"], endpoint, credential: configuredCredential, authentication: environment.ANTHROPIC_AUTH_TOKEN ? "bearer" : "api-key" }] };
 const modelFactId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(values.model) ? values.model : `model:${createHash("sha256").update(values.model).digest("hex")}`;
 let driver, host, hostStore;
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -523,7 +525,8 @@ async function turn(user, text) {
  if (replay.events.length > 0) afterCursor = replay.events.at(-1).cursor;
   if (!terminal && replay.events.length === 0)
    await new Promise(resolve => setTimeout(resolve, 100));
-  if (terminal && afterCursor) {
+  if (terminal && replay.events.length > 0) continue;
+  if (terminal && replay.events.length === 0 && afterCursor) {
    operation = "ack-events-v4";
    const ackRequest = RuntimeEventAckRequestV4Schema.parse({ ...current, requestId: randomUUID(), grant: { schemaVersion: 2, format: "runtime-execution-jws", token: "pending.pending.pending" }, consumer: "platform_worker_persistence", confirmedCursor: afterCursor });
    const ack = await signedV4EventRequest(ackRequest, "events.ack");

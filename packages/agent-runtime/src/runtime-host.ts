@@ -378,6 +378,9 @@ export class RuntimeHost {
 						relayKey,
 					});
 				},
+				clearKey: (executionId) => {
+					this.executionKeys.delete(executionId);
+				},
 				now: options.grantValidationV2?.now,
 			});
 	}

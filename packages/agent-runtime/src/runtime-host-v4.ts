@@ -41,6 +41,7 @@ interface Options {
 		hostSessionRef: string,
 		relayKey: string,
 	) => void;
+	readonly clearKey?: (executionId: string) => void;
 	readonly now?: () => number;
 }
 
@@ -197,6 +198,7 @@ export class RuntimeHostV4 {
 							prepared.session.hostSessionRef,
 							privateField.keyDelivery.relayKey,
 						);
+					else this.options.clearKey?.(request.executionId);
 					return replayed;
 				}
 				this.options.installKey(
@@ -204,17 +206,28 @@ export class RuntimeHostV4 {
 					prepared.session.hostSessionRef,
 					privateField.keyDelivery.relayKey,
 				);
-				this.options.assertOpen();
-				const dispatched = await this.options.dispatch(
-					prepared.session.hostSessionRef,
-					prepared.operation,
-				);
-				return RuntimeOperationResponseV4Schema.parse({
-					schemaVersion: 4,
-					hostSessionRef: prepared.session.hostSessionRef,
-					operationId: prepared.operation.operationId,
-					result: dispatched.result,
-				});
+				try {
+					this.options.assertOpen();
+					const dispatched = await this.options.dispatch(
+						prepared.session.hostSessionRef,
+						prepared.operation,
+					);
+					const result = RuntimeOperationResponseV4Schema.parse({
+						schemaVersion: 4,
+						hostSessionRef: prepared.session.hostSessionRef,
+						operationId: prepared.operation.operationId,
+						result: dispatched.result,
+					});
+					if (
+						result.result.outcome !== "accepted" ||
+						result.result.status !== "running"
+					)
+						this.options.clearKey?.(request.executionId);
+					return result;
+				} catch (error) {
+					this.options.clearKey?.(request.executionId);
+					throw error;
+				}
 			},
 		);
 	}
