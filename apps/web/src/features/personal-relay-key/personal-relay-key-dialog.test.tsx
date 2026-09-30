@@ -67,7 +67,8 @@ describe("PersonalRelayKeyEntry", () => {
 		await screen.findByText("已配置 · 版本 2");
 		const input = screen.getByLabelText("替换个人 Relay Key");
 		expect(input.getAttribute("type")).toBe("password");
-		fireEvent.change(input, { target: { value: "synthetic-secret" } });
+		const secret = " synthetic-secret ";
+		fireEvent.change(input, { target: { value: secret } });
 		fireEvent.click(screen.getByRole("button", { name: "替换 Key" }));
 
 		await screen.findByText("个人 Relay Key 已更新；从下一条任务生效。");
@@ -75,7 +76,7 @@ describe("PersonalRelayKeyEntry", () => {
 			expect.objectContaining({
 				body: {
 					expectedVersion: 2,
-					keyValue: "synthetic-secret",
+					keyValue: secret,
 					schemaVersion: 1,
 				},
 			}),

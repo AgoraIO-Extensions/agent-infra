@@ -39,7 +39,7 @@ async function routeShell(page: Page) {
 	};
 	let nextWriteStatus: 409 | 503 | undefined;
 	let readStatus: 200 | 401 | 403 = 200;
-	const writes: unknown[] = [];
+	const writes: Array<{ method: string; body: unknown }> = [];
 
 	await page.route(
 		"**/api/v1/session",
@@ -71,21 +71,33 @@ async function routeShell(page: Page) {
 			await route.fulfill({ status: 200, json: relayState });
 			return;
 		}
-		writes.push(request.postDataJSON());
-		if (nextWriteStatus) {
-			const status = nextWriteStatus;
-			nextWriteStatus = undefined;
-			await route.fulfill({
-				status,
-				json: protocolError(
-					status === 409 ? "RESOURCE_CONFLICT" : "DEPENDENCY_UNAVAILABLE",
-					status === 503,
-				),
-			});
+		if (request.method() === "PUT") {
+			writes.push({ method: "PUT", body: request.postDataJSON() });
+			if (nextWriteStatus) {
+				const status = nextWriteStatus;
+				nextWriteStatus = undefined;
+				await route.fulfill({
+					status,
+					json: protocolError(
+						status === 409 ? "RESOURCE_CONFLICT" : "DEPENDENCY_UNAVAILABLE",
+						status === 503,
+					),
+				});
+				return;
+			}
+			await route.fulfill({ status: 200, json: relayState });
 			return;
 		}
-		relayState = { schemaVersion: 1, isSet: false, keyVersion: null };
-		await route.fulfill({ status: 200, json: relayState });
+		if (request.method() === "DELETE") {
+			writes.push({ method: "DELETE", body: request.postDataJSON() });
+			relayState = { schemaVersion: 1, isSet: false, keyVersion: null };
+			await route.fulfill({ status: 200, json: relayState });
+			return;
+		}
+		await route.fulfill({
+			status: 405,
+			json: protocolError("METHOD_NOT_ALLOWED", false),
+		});
 	});
 
 	return {
@@ -136,7 +148,24 @@ test("covers CAS conflicts, unavailable writes, and cross-user state clearing", 
 	);
 	await expect(page.getByText("已配置 · 版本 4")).toHaveCount(0);
 	await expect(page.getByTestId("personal-key-status")).toHaveText("尚未读取");
-	await expect(fixture.writes).toHaveLength(2);
+	await expect(fixture.writes).toEqual([
+		{
+			method: "PUT",
+			body: {
+				expectedVersion: 4,
+				keyValue: "synthetic-browser-secret",
+				schemaVersion: 1,
+			},
+		},
+		{
+			method: "PUT",
+			body: {
+				expectedVersion: 4,
+				keyValue: "synthetic-browser-secret",
+				schemaVersion: 1,
+			},
+		},
+	]);
 });
 
 test("shows an expired-session read as actionable without a fallback", async ({
@@ -153,4 +182,23 @@ test("shows an expired-session read as actionable without a fallback", async ({
 		page.getByRole("button", { name: "重新检查登录" }),
 	).toBeVisible();
 	await expect(page.getByTestId("personal-key-status")).toHaveText("尚未读取");
+});
+
+test("sends the configured version in the revoke request", async ({ page }) => {
+	const fixture = await routeShell(page);
+	await page.goto("/agents");
+	await page.getByRole("button", { name: "个人 Key 设置" }).click();
+	await expect(page.getByText("已配置 · 版本 4")).toBeVisible();
+
+	await page.getByRole("button", { name: "移除 Key" }).click();
+	await expect(page.getByText("未配置")).toBeVisible();
+	await expect(page.getByRole("status")).toHaveText(
+		"个人 Relay Key 已移除；从下一条任务生效。",
+	);
+	await expect(fixture.writes).toEqual([
+		{
+			method: "DELETE",
+			body: { expectedVersion: 4, schemaVersion: 1 },
+		},
+	]);
 });

@@ -1,6 +1,7 @@
 import { KeyRound, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -12,6 +13,7 @@ import {
 	DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import type { PersonalRelayKeyStateV1 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -54,8 +56,14 @@ export function PersonalRelayKeyEntry({
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogTrigger
-				className={cn("shrink-0", "personal-relay-key-trigger")}
-				aria-label="个人 Key 设置"
+				render={
+					<Button
+						variant="outline"
+						size="sm"
+						className="personal-relay-key-trigger shrink-0"
+						aria-label="个人 Key 设置"
+					/>
+				}
 			>
 				<KeyRound aria-hidden="true" />
 				个人 Key 设置
@@ -84,7 +92,6 @@ function PersonalRelayKeyForm({
 	const [state, setState] = useState<FormState>("idle");
 	const [operation, setOperation] = useState<"replace" | "revoke">();
 	const requestNumber = useRef(0);
-	const previousUserId = useRef(userId);
 	const inputRef = useRef<HTMLInputElement>(null);
 
 	const refresh = useCallback(async () => {
@@ -105,7 +112,6 @@ function PersonalRelayKeyForm({
 	}, []);
 
 	useEffect(() => {
-		if (previousUserId.current !== userId) previousUserId.current = userId;
 		requestNumber.current += 1;
 		setProjection(undefined);
 		setValue("");
@@ -114,14 +120,14 @@ function PersonalRelayKeyForm({
 		setNotice("");
 		setOperation(undefined);
 		setState("idle");
-		if (!open) return;
+		if (!open || !userId) return;
 		void refresh();
 	}, [open, refresh, userId]);
 
 	const submit = async () => {
 		if (state === "saving" || !projection) return;
-		const nextValue = value.trim();
-		if (!nextValue) {
+		const nextValue = value;
+		if (!nextValue.trim()) {
 			setFieldError("请输入个人 Relay Key。");
 			inputRef.current?.focus();
 			return;
@@ -180,8 +186,8 @@ function PersonalRelayKeyForm({
 				? operation === "revoke"
 					? "正在移除个人 Key…"
 					: "正在保存个人 Key…"
-					: hasFailure
-						? errorMessage(failure)
+				: hasFailure
+					? errorMessage(failure)
 					: notice;
 
 	return (
@@ -207,9 +213,9 @@ function PersonalRelayKeyForm({
 					<p
 						className={cn(
 							"text-sm",
-								hasFailure ? "text-destructive" : "text-muted-foreground",
-							)}
-							role={hasFailure ? "alert" : "status"}
+							hasFailure ? "text-destructive" : "text-muted-foreground",
+						)}
+						role={hasFailure ? "alert" : "status"}
 					>
 						{statusText}
 					</p>
@@ -238,9 +244,9 @@ function PersonalRelayKeyForm({
 					</div>
 				)}
 				<div className="space-y-2">
-					<label htmlFor="personal-relay-key" className="font-medium text-sm">
+					<Label htmlFor="personal-relay-key">
 						{projection?.isSet ? "替换个人 Relay Key" : "设置个人 Relay Key"}
-					</label>
+					</Label>
 					<Input
 						ref={inputRef}
 						id="personal-relay-key"
@@ -264,13 +270,13 @@ function PersonalRelayKeyForm({
 						提交或关闭后清空输入，不存入浏览器存储；不会回退到 Agent 默认 Key。
 					</p>
 					{fieldError && (
-						<p
+						<Alert
 							id="personal-relay-key-error"
-							className="text-destructive text-sm"
-							role="alert"
+							variant="destructive"
+							className="border-0 bg-transparent p-0 text-sm"
 						>
 							{fieldError}
-						</p>
+						</Alert>
 					)}
 				</div>
 			</div>
