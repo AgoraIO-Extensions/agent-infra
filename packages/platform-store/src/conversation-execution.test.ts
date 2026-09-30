@@ -79,6 +79,10 @@ beforeAll(async () => {
 	databaseUrl = testDatabase.databaseUrl;
 	await migratePlatformDatabase({ databaseUrl });
 	client = postgres(databaseUrl, { max: 1 });
+	await persistConformanceModelConfiguration(
+		conformanceModelConfiguration,
+		authority,
+	);
 	for (const [subjectId, keyId] of [
 		["actor_fixture", "relay-key-actor-fixture-1"],
 		["user_01", "relay-key-user-01-1"],
@@ -115,11 +119,12 @@ afterEach(async () => {
 
 async function persistConformanceModelConfiguration(
 	modelConfiguration: ConversationModelConfigurationV1 | undefined,
+	resolvedAuthority: ConversationExecutionAuthorityV1 = postgresConformanceAuthority,
 ): Promise<void> {
 	const revision = modelConfiguration?.configurationRevision ?? 1;
 	const record = {
 		schemaVersion: 1,
-		agentId: conversationConformanceAuthorityV1.agentId,
+		agentId: resolvedAuthority.agentId,
 		revision,
 		source: modelConfiguration
 			? {
@@ -170,8 +175,8 @@ async function persistConformanceModelConfiguration(
 		insert into platform.agents
 			(id, current_configuration_revision, authorization_revision)
 		values
-			(${conversationConformanceAuthorityV1.agentId}, ${revision},
-			 ${conversationConformanceAuthorityV1.authorizationRevision})
+			(${resolvedAuthority.agentId}, ${revision},
+			 ${resolvedAuthority.authorizationRevision})
 		on conflict (id) do update
 		set authorization_revision = excluded.authorization_revision
 	`;
@@ -179,7 +184,7 @@ async function persistConformanceModelConfiguration(
 		insert into platform.agent_configuration_revisions
 			(agent_id, revision, source_reference, created_at, configuration)
 		values
-			(${conversationConformanceAuthorityV1.agentId}, ${revision},
+			(${resolvedAuthority.agentId}, ${revision},
 			 ${`source_fixture_${revision}`}, now(), ${client.json(record)})
 		on conflict (agent_id, revision) do update
 		set configuration = excluded.configuration
@@ -187,7 +192,7 @@ async function persistConformanceModelConfiguration(
 	await client`
 		update platform.agents
 		set current_configuration_revision = ${revision}
-		where id = ${conversationConformanceAuthorityV1.agentId}
+		where id = ${resolvedAuthority.agentId}
 	`;
 }
 
@@ -1101,9 +1106,9 @@ describe("PostgreSQL Conversation command transaction", () => {
 							messageId: "conversation_id_2",
 							turnId: "conversation_id_6",
 							sessionGeneration: 1,
-							modelConfigurationRevision: null,
-							modelOptionId: null,
-							reasoningLevel: null,
+							modelConfigurationRevision: 1,
+							modelOptionId: "model_primary",
+							reasoningLevel: "low",
 						},
 					},
 				]);
