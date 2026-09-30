@@ -509,6 +509,127 @@ describe("PostgreSQL API identity store", () => {
 		await expect(store.hasAgentGrant(input)).resolves.toBe(false);
 	});
 
+	it("rejects old manage grants at a null Agent revision without blocking owner or administrator initialization", async () => {
+		await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
+			platform.platform_api_credentials, platform.agents cascade`;
+		await adminClient`
+			insert into platform.agents (id, authorization_revision)
+			values ('agent_null_grant', null), ('agent_null_admin', null)
+		`;
+		await adminClient`
+			insert into platform.platform_api_credentials
+				(id, principal_type, principal_id, credential_hash, scopes)
+			values ('credential_null_manager', 'user', 'user_null_manager',
+				repeat('a', 64), '["agent:manage"]'::jsonb)
+		`;
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_null_grant', 'user', 'user_null_manager', 'manage',
+				'old_revision'),
+				('agent_null_grant', 'user', 'user_target', 'use', 'old_revision')
+		`;
+		const principal = { kind: "user" as const, id: "user_null_manager" };
+		const actor = {
+			schemaVersion: 1 as const,
+			userId: principal.id,
+			accountStatus: "active" as const,
+			principal,
+			identityRevision: "directory_revision_1",
+			isAdministrator: false,
+			credential: {
+				credentialId: "credential_null_manager",
+				principal,
+				scopes: ["agent:manage"] as const,
+				expiresAt: null,
+				revokedAt: null,
+			},
+		};
+		const currentStore = new PostgresApiIdentityStoreV1({
+			databaseUrl,
+			resolveUser: async (userId) => ({
+				schemaVersion: 1,
+				userId,
+				accountStatus: "active",
+				organizationIds: [],
+				authorizationRevision: "directory_revision_1",
+			}),
+		});
+		try {
+			await expect(
+				currentStore.grantAgent({
+					actor,
+					agentId: "agent_null_grant",
+					principal: { kind: "user", id: "user_new_target" },
+					grantType: "use",
+					authorizationRevision: "new_revision",
+				}),
+			).resolves.toBe(false);
+			await expect(
+				currentStore.revokeAgentGrant({
+					actor,
+					agentId: "agent_null_grant",
+					principal: { kind: "user", id: "user_target" },
+					grantType: "use",
+				}),
+			).resolves.toBe(false);
+			const [agent] = await adminClient`
+				select authorization_revision from platform.agents
+				where id = 'agent_null_grant'
+			`;
+			const grants = await adminClient`
+				select principal_id, authorization_revision, revoked_at
+				from platform.agent_principal_grants
+				where agent_id = 'agent_null_grant' order by principal_id
+			`;
+			expect(agent?.authorization_revision).toBeNull();
+			expect(grants).toEqual([
+				{
+					principal_id: "user_null_manager",
+					authorization_revision: "old_revision",
+					revoked_at: null,
+				},
+				{
+					principal_id: "user_target",
+					authorization_revision: "old_revision",
+					revoked_at: null,
+				},
+			]);
+			await adminClient`
+				insert into platform.agent_owners (agent_id, owner_id, created_at)
+				values ('agent_null_grant', 'user_owner', now())
+			`;
+			await expect(
+				store.grantAgent({
+					actor: { ...administratorActor, isAdministrator: false },
+					agentId: "agent_null_grant",
+					principal: { kind: "user", id: "user_owner_target" },
+					grantType: "use",
+					authorizationRevision: "owner_revision",
+				}),
+			).resolves.toBe(true);
+			await expect(
+				store.grantAgent({
+					actor: administratorActor,
+					agentId: "agent_null_admin",
+					principal: { kind: "user", id: "user_admin_target" },
+					grantType: "use",
+					authorizationRevision: "admin_revision",
+				}),
+			).resolves.toBe(true);
+			const initialized = await adminClient`
+				select id, authorization_revision from platform.agents
+				where id in ('agent_null_grant', 'agent_null_admin') order by id
+			`;
+			expect(initialized).toEqual([
+				{ id: "agent_null_admin", authorization_revision: "admin_revision" },
+				{ id: "agent_null_grant", authorization_revision: "owner_revision" },
+			]);
+		} finally {
+			await currentStore.close();
+		}
+	});
+
 	it("rechecks a user API actor's current directory revision before grant writes", async () => {
 		await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
 			platform.platform_api_credentials, platform.agents cascade`;
