@@ -121,3 +121,46 @@ it("does not query resources when OTLP metrics are disabled", () => {
 	expect(readQueue).not.toHaveBeenCalled();
 	expect(observeResource).not.toHaveBeenCalled();
 });
+
+it("bounds an unresponsive reader, continues pool observations and discards late results", async () => {
+	const { telemetry, observeResource, record } = capture();
+	let resolve: (value: { taskWaiting: number; outboxPending: number }) => void =
+		() => {};
+	const readQueue = vi.fn(
+		() =>
+			new Promise<{ taskWaiting: number; outboxPending: number }>((done) => {
+				resolve = done;
+			}),
+	);
+	const readPool = vi.fn(async () => ({ active: 1, idle: 2, waiting: 0 }));
+	const sampler = startPlatformResourceSampler({
+		telemetry,
+		intervalMs: 1000,
+		readQueue,
+		readPool,
+	});
+	try {
+		await vi.waitFor(() => expect(readPool).toHaveBeenCalledTimes(2), {
+			timeout: 4000,
+		});
+		expect(readQueue).toHaveBeenCalledOnce();
+		expect(record).toHaveBeenCalledWith({
+			stage: "dependency",
+			outcome: "failed",
+			code: "DEPENDENCY_UNAVAILABLE",
+		});
+		sampler.stop();
+		resolve({ taskWaiting: 99, outboxPending: 99 });
+		await new Promise((done) => setImmediate(done));
+		expect(observeResource.mock.calls.map(([value]) => value.kind)).toEqual([
+			"postgres_pool_active",
+			"postgres_pool_idle",
+			"postgres_pool_waiting",
+			"postgres_pool_active",
+			"postgres_pool_idle",
+			"postgres_pool_waiting",
+		]);
+	} finally {
+		sampler.stop();
+	}
+});

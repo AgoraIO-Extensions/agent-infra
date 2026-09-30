@@ -45,6 +45,7 @@ export function startPlatformResourceSampler(
 	if (!telemetry.status().enabled) return { stop() {} };
 
 	const stopped = new AbortController();
+	const pending = new Set<(signal: AbortSignal) => Promise<unknown>>();
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const unavailable = () => {
 		if (stopped.signal.aborted) return;
@@ -59,10 +60,33 @@ export function startPlatformResourceSampler(
 		}
 	};
 	const read = async <T>(reader: (signal: AbortSignal) => Promise<T>) => {
+		if (pending.has(reader))
+			throw new Error("Platform resource snapshot is unavailable");
 		const signal = AbortSignal.any([stopped.signal, AbortSignal.timeout(2000)]);
-		const result = await reader(signal);
-		signal.throwIfAborted();
-		return result;
+		pending.add(reader);
+		const work = Promise.resolve().then(() => {
+			signal.throwIfAborted();
+			return reader(signal);
+		});
+		// Keep a timed-out read registered until it settles; never build a read backlog.
+		void work.then(
+			() => pending.delete(reader),
+			() => pending.delete(reader),
+		);
+		let onAbort = () => {};
+		try {
+			const unavailable = new Promise<never>((_, reject) => {
+				onAbort = () =>
+					reject(new Error("Platform resource snapshot is unavailable"));
+				signal.addEventListener("abort", onAbort, { once: true });
+				if (signal.aborted) onAbort();
+			});
+			const result = await Promise.race([work, unavailable]);
+			signal.throwIfAborted();
+			return result;
+		} finally {
+			signal.removeEventListener("abort", onAbort);
+		}
 	};
 	const sample = async () => {
 		if (stopped.signal.aborted) return;

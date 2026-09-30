@@ -2,22 +2,27 @@ import type postgres from "postgres";
 import { expect, it, vi } from "vitest";
 import { readPlatformQueueResourceSnapshot } from "./observability-snapshot.js";
 
-function client(rows: unknown[]) {
-	const query = Object.assign(Promise.resolve(rows), { cancel: vi.fn() });
-	const sql = vi.fn(() => query) as unknown as postgres.Sql;
-	return { sql, query };
+function client(query: Promise<unknown[]>) {
+	const transaction = vi.fn((statement: TemplateStringsArray) =>
+		statement.join("").includes("set local") ? Promise.resolve([]) : query,
+	);
+	const begin = vi.fn(async (_mode, read) => read(transaction));
+	const sql = Object.assign(vi.fn(), { begin }) as unknown as postgres.Sql;
+	return { sql, transaction, begin };
 }
 
 it("returns one bounded durable snapshot without inspecting business payloads", async () => {
-	const { sql } = client([{ task_waiting: "2", outbox_pending: "3" }]);
+	const { sql, transaction, begin } = client(
+		Promise.resolve([{ task_waiting: "2", outbox_pending: "3" }]),
+	);
 	await expect(
 		readPlatformQueueResourceSnapshot(sql, new AbortController().signal),
 	).resolves.toEqual({ taskWaiting: 2, outboxPending: 3 });
-	const statement = (sql as unknown as ReturnType<typeof vi.fn>).mock
-		.calls[0]?.[0];
-	expect(statement.join("")).toContain("platform.conversation_executions");
-	expect(statement.join("")).toContain("platform.outbox_items");
-	expect(statement.join("")).not.toContain("payload");
+	expect(begin.mock.calls[0]?.[0]).toBe("read only");
+	const statement = transaction.mock.calls[1]?.[0];
+	expect(statement?.join("")).toContain("platform.conversation_executions");
+	expect(statement?.join("")).toContain("platform.outbox_items");
+	expect(statement?.join("")).not.toContain("payload");
 });
 
 it.each([
@@ -28,7 +33,7 @@ it.each([
 ])(
 	"rejects incomplete or unsafe counts instead of fabricating zero",
 	async ({ rows }) => {
-		const { sql } = client(rows);
+		const { sql } = client(Promise.resolve(rows));
 		await expect(
 			readPlatformQueueResourceSnapshot(sql, new AbortController().signal),
 		).rejects.toThrow("Platform resource snapshot is unavailable");
@@ -36,39 +41,41 @@ it.each([
 );
 
 it("does not issue a query after cancellation", async () => {
-	const { sql } = client([{ task_waiting: "1", outbox_pending: "1" }]);
+	const { sql, begin } = client(
+		Promise.resolve([{ task_waiting: "1", outbox_pending: "1" }]),
+	);
 	const controller = new AbortController();
 	controller.abort();
 	await expect(
 		readPlatformQueueResourceSnapshot(sql, controller.signal),
 	).rejects.toBeDefined();
 	expect(sql).not.toHaveBeenCalled();
+	expect(begin).not.toHaveBeenCalled();
 });
 
 it("redacts a synchronous client failure before query creation", async () => {
-	const sql = vi.fn(() => {
-		throw new Error("PRIVATE_DATABASE_SENTINEL");
+	const sql = Object.assign(vi.fn(), {
+		begin: vi.fn(() => {
+			throw new Error("PRIVATE_DATABASE_SENTINEL");
+		}),
 	}) as unknown as postgres.Sql;
 	await expect(
 		readPlatformQueueResourceSnapshot(sql, new AbortController().signal),
 	).rejects.toThrow(/^Platform resource snapshot is unavailable$/);
 });
 
-it("cancels an active query and reports a bounded unavailable error", async () => {
-	let reject: (error: Error) => void = () => {};
-	const cancel = vi.fn(() => reject(new Error("PRIVATE_DATABASE_SENTINEL")));
-	const query = Object.assign(
-		new Promise((_, fail) => {
-			reject = fail;
-		}),
-		{ cancel },
-	);
-	const sql = vi.fn(() => query) as unknown as postgres.Sql;
+it("rejects late query results after cancellation without cancelling a shared connection", async () => {
+	let resolve: (rows: unknown[]) => void = () => {};
+	const query = new Promise<unknown[]>((done) => {
+		resolve = done;
+	});
+	const { sql, transaction } = client(query);
 	const controller = new AbortController();
 	const pending = readPlatformQueueResourceSnapshot(sql, controller.signal);
+	await vi.waitFor(() => expect(transaction).toHaveBeenCalledTimes(2));
 	controller.abort();
+	resolve([{ task_waiting: "1", outbox_pending: "1" }]);
 	await expect(pending).rejects.toThrow(
 		"Platform resource snapshot is unavailable",
 	);
-	expect(cancel).toHaveBeenCalledOnce();
 });

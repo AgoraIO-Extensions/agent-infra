@@ -52,6 +52,7 @@ it("counts durable waiting Executions and queued outbox rows across Platform sco
 		select id, status, attempt_count, delivery_fence from platform.outbox_items
 		order by id
 	`;
+	const timeoutBefore = await client`show statement_timeout`;
 
 	await expect(
 		readPlatformQueueResourceSnapshot(client, AbortSignal.timeout(5000)),
@@ -62,6 +63,7 @@ it("counts durable waiting Executions and queued outbox rows across Platform sco
 			order by id
 		`,
 	).toEqual(before);
+	expect(await client`show statement_timeout`).toEqual(timeoutBefore);
 
 	await client`
 		update platform.conversation_executions set status = 'processing'
