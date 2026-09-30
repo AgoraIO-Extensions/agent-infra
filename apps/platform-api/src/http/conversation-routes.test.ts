@@ -1114,3 +1114,203 @@ describe("task boundary HTTP authorization", () => {
 		expect(deps.query.list).not.toHaveBeenCalled();
 	});
 });
+
+function sseObserver() {
+	return {
+		record: vi.fn(),
+		observeResource: vi.fn(),
+	};
+}
+
+describe("Conversation SSE observations", () => {
+	it("observes reconnection and closure from the actual stream without payload or cursor", async () => {
+		const observeSse = sseObserver();
+		const input = dependencies({ observeSse });
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1/events",
+			{ headers: { "Last-Event-ID": "original-private-event-id" } },
+		);
+		const body = await response.text();
+		expect(body).toContain("Hello");
+		expect(body).toContain("timeline.reload");
+		expect(input.query.replay).toHaveBeenNthCalledWith(
+			1,
+			{ actorId: identity.userId, channelId: "web" },
+			conversation.conversationId,
+			{ kind: "last-event-id", value: "original-private-event-id" },
+		);
+		expect(observeSse.record.mock.calls.map(([event]) => event.phase)).toEqual([
+			"reconnected",
+			"closed",
+		]);
+		expect(observeSse.record).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				outcome: "completed",
+				durationMs: expect.any(Number),
+			}),
+		);
+		expect(observeSse.observeResource).toHaveBeenCalledWith({
+			kind: "sse_pending_events",
+			value: 1,
+		});
+		expect(observeSse.observeResource).toHaveBeenCalledWith({
+			kind: "sse_connections",
+			value: 1,
+		});
+		expect(observeSse.observeResource).toHaveBeenLastCalledWith({
+			kind: "sse_pending_events",
+			value: 0,
+		});
+		const captured = JSON.stringify(observeSse.record.mock.calls);
+		expect(captured).not.toContain("Hello");
+		expect(captured).not.toContain("original-private-event-id");
+		expect(captured).not.toContain("cursor-1");
+	});
+
+	it("observes real blocked writes and releases backlog once when the reader cancels", async () => {
+		const observeSse = sseObserver();
+		const input = dependencies({
+			observeSse,
+			streamSlowConsumerThresholdMs: 5,
+		});
+		input.query.replay = vi.fn().mockResolvedValue({
+			outcome: "events",
+			events: [1, 2, 3].map((sequence) => ({
+				...persistedEvent,
+				sequence,
+				eventId: `event-${sequence}`,
+				conversationCursor: `cursor-${sequence}`,
+			})),
+			resumeCursor: "cursor-3",
+		});
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1/events",
+		);
+		await vi.waitFor(() =>
+			expect(observeSse.record).toHaveBeenCalledWith(
+				expect.objectContaining({ phase: "slow_consumer", outcome: "unknown" }),
+			),
+		);
+		expect(input.query.replay).toHaveBeenCalledTimes(1);
+		expect(observeSse.observeResource).toHaveBeenCalledWith({
+			kind: "sse_pending_events",
+			value: 3,
+		});
+		await response.body?.cancel();
+		await vi.waitFor(() =>
+			expect(observeSse.observeResource).toHaveBeenLastCalledWith({
+				kind: "sse_pending_events",
+				value: 0,
+			}),
+		);
+		expect(
+			observeSse.record.mock.calls.filter(
+				([event]) => event.phase === "closed",
+			),
+		).toHaveLength(1);
+		expect(observeSse.observeResource).toHaveBeenCalledWith({
+			kind: "sse_connections",
+			value: 0,
+		});
+	});
+
+	it("preserves output when both telemetry sinks throw", async () => {
+		const response = await testApp(
+			dependencies({
+				observeSse: {
+					record() {
+						throw new Error("collector unavailable");
+					},
+					observeResource() {
+						throw new Error("collector unavailable");
+					},
+				},
+			}),
+		).app.request("/api/v2/conversations/conversation-1/events");
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain("Hello");
+		expect(body).toContain("timeline.reload");
+		expect(body).not.toContain("collector unavailable");
+	});
+
+	it("records query failure after headers and clears live resource counts", async () => {
+		const observeSse = sseObserver();
+		const input = dependencies({ observeSse });
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [persistedEvent],
+				resumeCursor: "cursor-1",
+			})
+			.mockRejectedValueOnce(new Error("private database detail"));
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1/events",
+		);
+		await response.text();
+		expect(observeSse.record).toHaveBeenLastCalledWith(
+			expect.objectContaining({ phase: "closed", outcome: "failed" }),
+		);
+		expect(observeSse.observeResource).toHaveBeenCalledWith({
+			kind: "sse_connections",
+			value: 0,
+		});
+		expect(JSON.stringify(observeSse.record.mock.calls)).not.toContain(
+			"private database detail",
+		);
+	});
+
+	it.each(["events", "reload"] as const)(
+		"records authorization dependency failure before %s without protected output",
+		async (replayOutcome) => {
+			const observeSse = sseObserver();
+			const input = dependencies({ observeSse });
+			input.authorization.authorize = vi
+				.fn()
+				.mockResolvedValueOnce({ outcome: "allowed", authority })
+				.mockRejectedValue(new Error("private identity dependency detail"));
+			if (replayOutcome === "reload") {
+				input.query.replay = vi.fn().mockResolvedValue({
+					outcome: "reload",
+					reason: "cursor_expired",
+					resumeCursor: "cursor-1",
+				});
+			}
+			const response = await testApp(input).app.request(
+				"/api/v2/conversations/conversation-1/events",
+			);
+			expect(await response.text()).toBe("");
+			expect(observeSse.record).toHaveBeenLastCalledWith(
+				expect.objectContaining({ phase: "closed", outcome: "failed" }),
+			);
+			expect(observeSse.observeResource).toHaveBeenLastCalledWith({
+				kind: "sse_pending_events",
+				value: 0,
+			});
+			expect(JSON.stringify(observeSse.record.mock.calls)).not.toContain(
+				"private identity dependency detail",
+			);
+		},
+	);
+
+	it("keeps current authorization rejection authoritative and emits no protected event", async () => {
+		const observeSse = sseObserver();
+		const input = dependencies({ observeSse });
+		input.authorization.authorize = vi
+			.fn()
+			.mockResolvedValueOnce({ outcome: "allowed", authority })
+			.mockResolvedValue({ outcome: "denied" });
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1/events",
+		);
+		expect(await response.text()).not.toContain("Hello");
+		expect(observeSse.record).toHaveBeenLastCalledWith(
+			expect.objectContaining({ phase: "closed", outcome: "rejected" }),
+		);
+		expect(observeSse.observeResource).toHaveBeenLastCalledWith({
+			kind: "sse_pending_events",
+			value: 0,
+		});
+	});
+});

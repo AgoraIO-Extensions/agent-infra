@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import {
 	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
@@ -110,6 +111,15 @@ export interface ConversationQuery {
 	): Promise<ConversationReplayResultV1 | undefined>;
 }
 
+export interface ConversationSseObservation {
+	readonly phase: "connected" | "reconnected" | "closed" | "slow_consumer";
+	readonly outcome: "completed" | "rejected" | "failed" | "unknown";
+	readonly durationMs: number;
+	readonly requestId: string;
+	readonly traceId: string;
+	readonly conversationId: string;
+}
+
 export interface ConversationRoutesDependencies {
 	readonly files?: FileRoutesDependenciesV1;
 	readonly identity: IdentityAdapter;
@@ -127,6 +137,14 @@ export interface ConversationRoutesDependencies {
 	>;
 	readonly query: ConversationQuery;
 	readonly streamPollIntervalMs?: number;
+	readonly streamSlowConsumerThresholdMs?: number;
+	readonly observeSse?: {
+		record(event: ConversationSseObservation): void;
+		observeResource(snapshot: {
+			readonly kind: "sse_connections" | "sse_pending_events";
+			readonly value: number;
+		}): void;
+	};
 }
 
 type ConversationProjection = ReturnType<
@@ -599,6 +617,21 @@ export function registerConversationRoutes(
 	app: Hono,
 	dependencies: ConversationRoutesDependencies,
 ): void {
+	let connections = 0;
+	let pendingEvents = 0;
+	const observeSse = dependencies.observeSse;
+	const observeResources = () => {
+		for (const snapshot of [
+			{ kind: "sse_connections" as const, value: connections },
+			{ kind: "sse_pending_events" as const, value: pendingEvents },
+		]) {
+			try {
+				observeSse?.observeResource(snapshot);
+			} catch {
+				// Observability must not alter the authorized stream.
+			}
+		}
+	};
 	app.get("/api/v1/agents/:agentId/conversations", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
@@ -1003,12 +1036,13 @@ export function registerConversationRoutes(
 						metadata.traceId,
 						v2 ? "http" : "sse",
 					);
+					const selector = replaySelector(context.req.raw, metadata.traceId);
 					const initialReplay = await query(
 						() =>
 							dependencies.query.replay(
 								scope(identity),
 								conversationId,
-								replaySelector(context.req.raw, metadata.traceId),
+								selector,
 							),
 						metadata.traceId,
 					);
@@ -1028,79 +1062,175 @@ export function registerConversationRoutes(
 					return streamSSE(
 						context,
 						async (stream) => {
-							let replay: ConversationReplayResultV1 = initialReplay;
-							let cursor = replay.resumeCursor;
-							while (!request.signal.aborted && !stream.aborted) {
-								const batch = replay;
-								if (batch.outcome === "reload") {
-									const authorization = await stillAuthorized(
-										dependencies,
-										request,
-										identity.userId,
+							const began = performance.now();
+							let pending = 0;
+							let finished = false;
+							let outcome: ConversationSseObservation["outcome"] = "completed";
+							const record = (
+								phase: ConversationSseObservation["phase"],
+								result: ConversationSseObservation["outcome"],
+								durationMs: number,
+							) => {
+								try {
+									observeSse?.record({
+										phase,
+										outcome: result,
+										durationMs,
+										requestId: metadata.requestId,
+										traceId: metadata.traceId,
 										conversationId,
-										metadata.traceId,
-									);
-									if (authorization !== "allowed") {
-										if (authorization === "revoked") {
-											await writeAuthorizationRevoked(stream, metadata.traceId);
-										}
-										return;
-									}
-									await writeSseMessage(
-										stream,
-										ConversationSseMessageV1Schema.parse({
-											schemaVersion: 1,
-											kind: "control",
-											type: "timeline.reload",
-											reason: batch.reason,
-											resumeCursor: batch.resumeCursor,
-										}),
-									);
-									return;
+									});
+								} catch {
+									// Capture failure cannot change stream control or payloads.
 								}
-								for (const persisted of batch.events) {
-									const authorization = await stillAuthorized(
-										dependencies,
-										request,
-										identity.userId,
-										conversationId,
-										metadata.traceId,
-									);
-									if (authorization !== "allowed") {
-										if (authorization === "revoked") {
-											await writeAuthorizationRevoked(stream, metadata.traceId);
+							};
+							const setPending = (value: number) => {
+								if (finished) return;
+								pendingEvents += value - pending;
+								pending = value;
+								observeResources();
+							};
+							const finish = () => {
+								if (finished) return;
+								finished = true;
+								connections -= 1;
+								pendingEvents -= pending;
+								pending = 0;
+								observeResources();
+								record("closed", outcome, performance.now() - began);
+							};
+							const observedStream = {
+								async writeSSE(message: { id?: string; data: string }) {
+									if (!observeSse) return stream.writeSSE(message);
+									const writeBegan = performance.now();
+									let slowRecorded = false;
+									const timer = setInterval(() => {
+										if (finished) return;
+										observeResources();
+										if (!slowRecorded) {
+											slowRecorded = true;
+											record(
+												"slow_consumer",
+												"unknown",
+												performance.now() - writeBegan,
+											);
 										}
-										return;
+									}, dependencies.streamSlowConsumerThresholdMs ?? 5000);
+									timer.unref();
+									try {
+										await stream.writeSSE(message);
+									} finally {
+										clearInterval(timer);
 									}
-									const message = eventProjection(persisted);
-									if (v2) {
-										await writeSseMessageV2(stream, message);
-										cursor = persisted.conversationCursor;
-										continue;
-									}
-									// V1 clients retain their original wire types; V2 facts stay durable.
-									if (message.schemaVersion === 1)
-										await writeSseMessage(stream, message);
-									else if (message.type === "task.status")
+								},
+							};
+							connections += 1;
+							observeResources();
+							record(selector ? "reconnected" : "connected", "completed", 0);
+							stream.onAbort(finish);
+							request.signal.addEventListener("abort", finish, { once: true });
+							try {
+								let replay: ConversationReplayResultV1 = initialReplay;
+								let cursor = replay.resumeCursor;
+								setPending(
+									replay.outcome === "events" ? replay.events.length : 0,
+								);
+								while (!request.signal.aborted && !stream.aborted) {
+									const batch = replay;
+									if (batch.outcome === "reload") {
+										const authorization = await stillAuthorized(
+											dependencies,
+											request,
+											identity.userId,
+											conversationId,
+											metadata.traceId,
+										);
+										if (authorization !== "allowed") {
+											outcome =
+												authorization === "revoked" ? "rejected" : "failed";
+											if (authorization === "revoked") {
+												await writeAuthorizationRevoked(
+													observedStream,
+													metadata.traceId,
+												);
+											}
+											return;
+										}
 										await writeSseMessage(
-											stream,
+											observedStream,
 											ConversationSseMessageV1Schema.parse({
-												...message,
 												schemaVersion: 1,
-												payload: { status: message.payload.status },
+												kind: "control",
+												type: "timeline.reload",
+												reason: batch.reason,
+												resumeCursor: batch.resumeCursor,
 											}),
 										);
-									cursor = persisted.conversationCursor;
+										return;
+									}
+									for (const persisted of batch.events) {
+										const authorization = await stillAuthorized(
+											dependencies,
+											request,
+											identity.userId,
+											conversationId,
+											metadata.traceId,
+										);
+										if (authorization !== "allowed") {
+											outcome =
+												authorization === "revoked" ? "rejected" : "failed";
+											if (authorization === "revoked") {
+												await writeAuthorizationRevoked(
+													observedStream,
+													metadata.traceId,
+												);
+											}
+											return;
+										}
+										const message = eventProjection(persisted);
+										if (v2) {
+											await writeSseMessageV2(observedStream, message);
+											cursor = persisted.conversationCursor;
+											setPending(pending - 1);
+											continue;
+										}
+										// V1 clients retain their original wire types; V2 facts stay durable.
+										if (message.schemaVersion === 1)
+											await writeSseMessage(observedStream, message);
+										else if (message.type === "task.status")
+											await writeSseMessage(
+												observedStream,
+												ConversationSseMessageV1Schema.parse({
+													...message,
+													schemaVersion: 1,
+													payload: { status: message.payload.status },
+												}),
+											);
+										cursor = persisted.conversationCursor;
+										setPending(pending - 1);
+									}
+									await stream.sleep(dependencies.streamPollIntervalMs ?? 1000);
+									if (request.signal.aborted || stream.aborted) return;
+									const next = await dependencies.query.replay(
+										scope(identity),
+										conversationId,
+										{ kind: "cursor", value: cursor },
+									);
+									if (!next) {
+										outcome = "rejected";
+										return;
+									}
+									replay = next;
+									setPending(
+										next.outcome === "events" ? next.events.length : 0,
+									);
 								}
-								await stream.sleep(dependencies.streamPollIntervalMs ?? 1000);
-								if (request.signal.aborted || stream.aborted) return;
-								const next = await dependencies.query.replay(
-									scope(identity),
-									conversationId,
-									{ kind: "cursor", value: cursor },
-								);
-								if (!next) return;
-								replay = next;
+							} catch (error) {
+								outcome = "failed";
+								throw error;
+							} finally {
+								request.signal.removeEventListener("abort", finish);
+								finish();
 							}
 						},
 						async (_error, stream) => stream.close(),
