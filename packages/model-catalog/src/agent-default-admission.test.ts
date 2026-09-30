@@ -235,6 +235,34 @@ describe("Agent default Key model admission", () => {
 		);
 	});
 
+	it("uses the same configuration version for reordered options and reasoning levels", async () => {
+		const firstOption = {
+			...admissionInput().requested.options[0],
+			reasoningLevels: ["medium", "high"],
+		};
+		const secondOption = { ...firstOption, optionId: "option-B" };
+		const first = await admitAgentDefaultModelsV1(
+			admissionInput({
+				requested: {
+					...admissionInput().requested,
+					options: [firstOption, secondOption],
+				},
+			}),
+		);
+		const reordered = await admitAgentDefaultModelsV1(
+			admissionInput({
+				requested: {
+					...admissionInput().requested,
+					options: [
+						{ ...secondOption, reasoningLevels: ["high", "medium"] },
+						{ ...firstOption, reasoningLevels: ["high", "medium"] },
+					],
+				},
+			}),
+		);
+		expect(reordered.runtime).toEqual(first.runtime);
+	});
+
 	it("redacts Relay visibility failures", async () => {
 		await expect(
 			admitAgentDefaultModelsV1(

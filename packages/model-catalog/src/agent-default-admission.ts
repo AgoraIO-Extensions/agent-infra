@@ -140,7 +140,11 @@ export async function admitAgentDefaultModelsV1(input: {
 				};
 			})
 			.toSorted((left, right) =>
-				left.modelOptionId.localeCompare(right.modelOptionId),
+				left.modelOptionId < right.modelOptionId
+					? -1
+					: left.modelOptionId > right.modelOptionId
+						? 1
+						: 0,
 			);
 		const content = {
 			defaultModelOptionId: requested.defaultOptionId,
