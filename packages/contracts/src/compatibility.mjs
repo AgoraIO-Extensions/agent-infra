@@ -812,8 +812,8 @@ function isPlatformApiBearerOpenApiAddition(previous, current) {
 	) {
 		if (
 			!sameValue(schemes.platformApiCredential, {
-				type: "http",
 				scheme: "bearer",
+				type: "http",
 			})
 		)
 			return false;
@@ -1131,6 +1131,22 @@ function isAgentApiIdentityOpenApiAddition(previous, current) {
 		if (options.length === 1)
 			normalized.components.schemas[name].properties.actor = options[0];
 		else actor.anyOf = options;
+	}
+	const schemes = normalized.components?.securitySchemes;
+	if (
+		previous.components?.securitySchemes?.platformApiCredential === undefined &&
+		schemes?.platformApiCredential !== undefined
+	) {
+		if (
+			!sameValue(schemes.platformApiCredential, {
+				scheme: "bearer",
+				type: "http",
+			})
+		)
+			return false;
+		delete schemes.platformApiCredential;
+		if (Object.keys(schemes).length === 0)
+			delete normalized.components.securitySchemes;
 	}
 	return sameValue(previous, normalized);
 }

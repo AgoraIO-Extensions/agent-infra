@@ -143,6 +143,51 @@ describe("contract compatibility command", () => {
 				await writeFile(previousPath, JSON.stringify(previous));
 				await writeFile(currentPath, JSON.stringify(current));
 				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				if (artifactPath === pilotBrowserArtifactPath) {
+					const identityOnlyCurrent = structuredClone(current);
+					const identityOnlyPrevious = structuredClone(previous);
+					for (const document of [identityOnlyCurrent, identityOnlyPrevious]) {
+						for (const path of [
+							"/api/v1/agents/{agentId}/tasks",
+							"/api/v1/conversations/{conversationId}/tasks/{executionId}",
+							"/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel",
+							"/api/v1/conversations/{conversationId}/tasks/{executionId}/events",
+						])
+							delete document.paths[path];
+						for (const name of [
+							"CancelTaskRequestV1",
+							"SubmitTaskRequestV1",
+							"TaskAcceptedV1",
+							"TaskCancellationV1",
+							"TaskProjectionV1",
+							"TaskSseMessageV1",
+							"TaskStreamErrorV1",
+						])
+							delete document.components.schemas[name];
+					}
+					delete identityOnlyPrevious.components.securitySchemes
+						.platformApiCredential;
+					if (
+						Object.keys(identityOnlyPrevious.components.securitySchemes)
+							.length === 0
+					)
+						delete identityOnlyPrevious.components.securitySchemes;
+					await writeFile(previousPath, JSON.stringify(identityOnlyPrevious));
+					await writeFile(currentPath, JSON.stringify(identityOnlyCurrent));
+					expect(comparePaths(currentPath, previousPath).status).toBe(0);
+					identityOnlyCurrent.components.securitySchemes.platformApiCredential.scheme =
+						"basic";
+					await writeFile(currentPath, JSON.stringify(identityOnlyCurrent));
+					expect(comparePaths(currentPath, previousPath).status).toBe(1);
+					identityOnlyCurrent.components.securitySchemes.platformApiCredential =
+						{
+							...current.components.securitySchemes.platformApiCredential,
+							extra: true,
+						};
+					await writeFile(currentPath, JSON.stringify(identityOnlyCurrent));
+					expect(comparePaths(currentPath, previousPath).status).toBe(1);
+					await writeFile(previousPath, JSON.stringify(previous));
+				}
 				const auditName =
 					artifactPath === pilotBrowserArtifactPath
 						? "PlatformAuditProjectionV1"
