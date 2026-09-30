@@ -21,7 +21,6 @@ import {
 } from "@agent-infra/connection-store";
 import {
 	BitbucketServerAdapter,
-	bitbucketServerConnectionCatalog,
 	bitbucketServerLegacyProviderReleaseIds,
 	githubConnectionCatalog,
 	JenkinsAdapter,
@@ -32,6 +31,7 @@ import {
 	OpenConnectorGitHubAdapter,
 	OpenConnectorGitHubOAuthAdapter,
 } from "@agent-infra/openconnector-adapter";
+import { bitbucketServerConnectionCatalog } from "@agent-infra/openconnector-adapter/authorization-compatibility";
 import {
 	ConfluenceServerAdapter,
 	confluenceServerConnectionCatalog,

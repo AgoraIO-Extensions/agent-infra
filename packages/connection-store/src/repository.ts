@@ -36,11 +36,15 @@ import {
 	consumeConnectPermitInTransaction,
 	lookupApprovedConnectPermit,
 } from "./access-request-repository";
-import { migrateCompatibleApproval } from "./approval-upgrade";
+import {
+	type AuthorizationCompatibility,
+	migrateCompatibleApproval,
+} from "./approval-upgrade";
 
 const githubProvider = "github";
 
 export type PublishedProviderCatalog = {
+	authorizationCompatibility?: readonly AuthorizationCompatibility[];
 	actions: readonly ActionDefinition[];
 	authProfile: Readonly<Record<string, unknown>>;
 	deploymentProfile: Readonly<Record<string, unknown>>;
@@ -339,6 +343,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	private readonly authorizationPreviewTtlMs: number;
 	private readonly protector: CredentialProtector;
 	private readonly publishedProviderReleaseIds = new Map<string, string>();
+	private readonly authorizationCompatibility = new Map<
+		string,
+		readonly AuthorizationCompatibility[]
+	>();
 	private readonly sql;
 
 	constructor(
@@ -688,6 +696,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		this.publishedProviderReleaseIds.set(
 			catalog.provider,
 			catalog.providerReleaseId,
+		);
+		this.authorizationCompatibility.set(
+			catalog.providerReleaseId,
+			(catalog.authorizationCompatibility ?? []).map((item) => ({ ...item })),
 		);
 	}
 
@@ -3751,6 +3763,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						externalAccount: input.externalAccount,
 						fromReleaseId: existing.provider_release_id,
 						toReleaseId: input.providerReleaseId,
+						authorizationCompatibility: this.authorizationCompatibility.get(
+							input.providerReleaseId,
+						),
 					});
 					existing.provider_release_id = input.providerReleaseId;
 				}
