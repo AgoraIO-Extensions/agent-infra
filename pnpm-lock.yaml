@@ -207,12 +207,12 @@ importers:
       '@agent-infra/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
-      '@agent-infra/observability':
-        specifier: workspace:*
-        version: link:../../packages/observability
       '@agent-infra/object-storage':
         specifier: workspace:*
         version: link:../../packages/object-storage
+      '@agent-infra/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       '@agent-infra/platform-core':
         specifier: workspace:*
         version: link:../../packages/platform-core
@@ -238,6 +238,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.3
+      postgres:
+        specifier: 'catalog:'
+        version: 3.4.9
       tsdown:
         specifier: ^0.22.14
         version: 0.22.14(tsx@4.23.5)(typescript@6.0.3)

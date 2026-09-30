@@ -4,6 +4,8 @@ import { agentManagementV1Conformance } from "./agent-management.conformance.ts"
 import {
 	AgentManagementError,
 	type AgentManagementStateV1,
+	isAdministratorAgentReadAllowedV1,
+	isAgentAccessAllowedV1,
 	snapshotAgentManagementWritePlanV1,
 } from "./agent-management.ts";
 import { FakeAgentManagementV1 } from "./fake-agent-management.ts";
@@ -12,6 +14,49 @@ describe("Fake Agent management Interface", () => {
 	agentManagementV1Conformance(async (options) =>
 		Promise.resolve(new FakeAgentManagementV1(options)),
 	);
+});
+
+it("keeps administrator listing separate from ordinary Agent access", () => {
+	const administrator = {
+		schemaVersion: 1 as const,
+		userId: "administrator",
+		accountStatus: "active" as const,
+		organizationIds: [],
+		isAdministrator: true,
+	};
+	expect(isAdministratorAgentReadAllowedV1(administrator)).toBe(true);
+	expect(
+		isAdministratorAgentReadAllowedV1({
+			...administrator,
+			accountStatus: "disabled",
+		}),
+	).toBe(false);
+	expect(
+		isAdministratorAgentReadAllowedV1({
+			...administrator,
+			isAdministrator: false,
+		}),
+	).toBe(false);
+	const state: AgentManagementStateV1 = {
+		schemaVersion: 1,
+		applicationId: "other-application",
+		agentId: "other-agent",
+		applicantId: "other-owner",
+		status: "available",
+		revision: 2,
+		approvalRevision: 1,
+		decisionReason: null,
+		serviceAvailability: "ready",
+		desiredState: "running",
+		workloadRevision: 1,
+		fence: 1,
+		ownerIds: ["other-owner"],
+		availability: [],
+		failureCode: null,
+	};
+	for (const intent of ["discover", "manage", "use"] as const) {
+		expect(isAgentAccessAllowedV1(state, administrator, intent)).toBe(false);
+	}
 });
 
 it("snapshots management plans without reading hostile accessors or Proxy traps", async () => {

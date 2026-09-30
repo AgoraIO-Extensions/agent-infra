@@ -818,6 +818,22 @@ function isAgentOwnerScopeOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1023 adds one browser administrator read; all prior guards still apply.
+function isAdministratorAgentReadV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/admin/agents";
+	if (
+		previous.paths?.[path] !== undefined ||
+		createHash("sha256")
+			.update(JSON.stringify(current.paths?.[path] ?? null))
+			.digest("hex") !==
+			"eaf53701db321fee9e8323d85d6b77d68043e95d12c6f1f36fe3c10dd0c7bfb8"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v2/admin/agent-applications",
@@ -1108,6 +1124,7 @@ function findBreakingChanges(previous, current) {
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
+			!isAdministratorAgentReadV2OpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
