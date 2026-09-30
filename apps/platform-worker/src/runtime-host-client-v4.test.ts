@@ -86,7 +86,7 @@ const claims = RuntimeBusinessGrantClaimsV4Schema.parse({
 	attachments: [],
 });
 
-function fixture() {
+function fixture(value = request) {
 	const readAcceptedExecution = vi.fn(async () => ({
 		scope: {
 			principal: request.principal,
@@ -97,10 +97,10 @@ function fixture() {
 			executionId: request.executionId,
 			turnId: request.turnId,
 			sessionGeneration: request.sessionGeneration,
-			hostSessionRef: request.hostSessionRef,
+			hostSessionRef: value.hostSessionRef,
 			keyBinding: request.keyBinding,
 		},
-		trustedHostSessionRef: null,
+		trustedHostSessionRef: value.hostSessionRef,
 	}));
 	const readCiphertext = vi.fn(async () => ({ encrypted: true }));
 	const plaintext = new TextEncoder().encode("synthetic-relay-key-k1");
@@ -121,7 +121,13 @@ function fixture() {
 	const client = createWorkerRuntimeHostClientV4({
 		baseUrl: "https://runtime.example.test",
 		serviceToken: "synthetic-service-token",
-		verifyGrant: async () => claims,
+		verifyGrant: async () => ({
+			...claims,
+			hostSessionRef: value.hostSessionRef,
+			requestDigest: createHash("sha256")
+				.update(runtimeRequestSigningPayloadV4(value))
+				.digest("hex"),
+		}),
 		executionKeys: { readAcceptedExecution, readCiphertext },
 		decryptor: { decrypt },
 		assertCurrentAuthorization: async () => {},
@@ -162,6 +168,41 @@ it("delivers only the pinned version in the private V4 transport", async () => {
 	expect(body.privateKeyField).toMatchObject({
 		context: { grantId: "grant-1", keyBinding: request.keyBinding },
 		keyDelivery: { relayKey: "synthetic-relay-key-k1" },
+	});
+});
+
+it.each([
+	{ pin: null, operationId: "another-execution", hostSessionRef: "host-1" },
+	{ pin: "host-1", operationId: "execution-1", hostSessionRef: "another-host" },
+])(
+	"rejects a V4 response with an unrelated operation or pinned session: %j",
+	async ({ pin, operationId, hostSessionRef }) => {
+		const value = { ...request, hostSessionRef: pin };
+		const f = fixture(value);
+		f.fetcher.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					schemaVersion: 4,
+					operationId,
+					hostSessionRef,
+					result: { outcome: "accepted", status: "running" },
+				}),
+			),
+		);
+		await expect(f.client.submitTurn(value)).rejects.toMatchObject({
+			code: "RUNTIME_RESPONSE_INVALID",
+			retryable: true,
+		});
+		expect(f.fetcher).toHaveBeenCalledTimes(1);
+	},
+);
+
+it("accepts the original V4 response for its pinned session", async () => {
+	const value = { ...request, hostSessionRef: "host-1" };
+	const f = fixture(value);
+	await expect(f.client.submitTurn(value)).resolves.toMatchObject({
+		operationId: value.operation.id,
+		hostSessionRef: value.hostSessionRef,
 	});
 });
 

@@ -837,9 +837,16 @@ export function createWorkerRuntimeHostClientV4(
 				signal,
 			);
 			try {
-				return RuntimeOperationResponseV4Schema.parse(
+				const result = RuntimeOperationResponseV4Schema.parse(
 					JSON.parse(await boundedResponseText(response)),
 				);
+				if (
+					result.operationId !== request.operation.id ||
+					(request.hostSessionRef !== null &&
+						result.hostSessionRef !== request.hostSessionRef)
+				)
+					return failure("RUNTIME_RESPONSE_INVALID", true);
+				return result;
 			} catch {
 				return failure("RUNTIME_RESPONSE_INVALID", true);
 			}
