@@ -62,6 +62,52 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toBe("");
 	});
 
+	it("admits V3 application creation independently and rejects changed or unrelated schemas", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserV2ArtifactPath, "utf8"),
+		);
+		delete current.paths["/api/v2/agents"].post;
+		delete current.paths["/api/v2/agents/{agentId}/default-relay-key"];
+		for (const name of [
+			"AgentDirectCreationProjectionV2",
+			"AgentDefaultRelayKeyStateV1",
+			"AgentDefaultRelayKeyReplaceRequestV1",
+		])
+			delete current.components.schemas[name];
+		const previous = structuredClone(current);
+		delete previous.paths["/api/v2/agent-applications/default-key"];
+		delete previous.components.schemas.AgentDefaultModelSelectionV1;
+		delete previous.components.schemas.AgentApplicationCreateRequestV3;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-v3-application-"),
+		);
+		try {
+			const before = resolve(directory, "previous.json");
+			const after = resolve(directory, "current.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				(value: typeof current) => {
+					value.components.schemas.AgentApplicationCreateRequestV3.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentDefaultModelSelectionV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.PilotProtocolErrorV1.additionalProperties = true;
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits the fixed Task API while retaining published Key and session contracts", async () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),

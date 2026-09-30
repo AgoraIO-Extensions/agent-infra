@@ -261,6 +261,56 @@ describe("task authorization boundary", () => {
 		).toBe(false);
 	});
 
+	it.each(["owner", "availability"] as const)(
+		"rejects revoked API user use authority despite retained %s access",
+		(access) => {
+			const grant = {
+				principal: { kind: "user" as const, id: user.userId },
+				grantType: "use" as const,
+				authorizationRevision: "agent-access-4",
+				revokedAt: null,
+			};
+			const grantedAgent = {
+				...agent,
+				ownerIds: access === "owner" ? [user.userId] : [...agent.ownerIds],
+				principalGrants: [grant],
+			};
+			const boundary = requiredBoundary({
+				agent: grantedAgent,
+				channelId: "api",
+			});
+			const current = {
+				boundary,
+				user,
+				agent: grantedAgent,
+				currentAgentAuthorizationRevision: "agent-access-4",
+			};
+			expect(isTaskAuthorizationCurrentV1(current)).toBe(true);
+			for (const changed of [
+				{ agent: { ...grantedAgent, principalGrants: [] } },
+				{
+					agent: {
+						...grantedAgent,
+						principalGrants: [{ ...grant, revokedAt: new Date() }],
+					},
+				},
+				{ currentAgentAuthorizationRevision: "agent-access-5" },
+				{ currentAgentAuthorizationRevision: null },
+			])
+				expect(isTaskAuthorizationCurrentV1({ ...current, ...changed })).toBe(
+					false,
+				);
+			const browserBoundary = requiredBoundary({ agent: grantedAgent });
+			expect(
+				isTaskAuthorizationCurrentV1({
+					...current,
+					boundary: browserBoundary,
+					agent: { ...grantedAgent, principalGrants: [] },
+				}),
+			).toBe(true);
+		},
+	);
+
 	it("rejects stale application grants without cancelling an unrelated active grant", () => {
 		const application: CurrentTaskApplicationV1 = {
 			schemaVersion: 1,

@@ -222,6 +222,69 @@ describe("task Runtime authorization Core use case", () => {
 			expect.any(AbortSignal),
 		);
 	});
+	it.each(["owner", "availability"] as const)(
+		"uses control authority after an API user's use grant is revoked despite retained %s",
+		async (access) => {
+			const h = harness();
+			const original = h.record;
+			if (!original) throw new Error("Missing test record");
+			const grant = {
+				principal: h.boundary.principal,
+				grantType: "use" as const,
+				authorizationRevision: "agent-7",
+				revokedAt: null,
+			};
+			const agent = {
+				...h.agent,
+				ownerIds: access === "owner" ? [h.claim.actorId] : h.agent.ownerIds,
+				principalGrants: [grant],
+			};
+			const boundary: TaskAuthorizationBoundaryV1 = {
+				...h.boundary,
+				channelId: "api",
+				accessSources:
+					access === "owner"
+						? [{ kind: "owner", userId: h.claim.actorId }]
+						: h.boundary.accessSources,
+			};
+			const context = {
+				...h.context,
+				claim: { ...h.claim, channelId: "api" },
+			};
+			h.setRecord({
+				...original,
+				boundary,
+				agent,
+				currentAgentAuthorizationRevision: "agent-7",
+			});
+			expect(
+				(await h.useCase.current(context, h.state, "turn.submit", signal()))
+					.authority.purpose,
+			).toBe("business");
+			h.setRecord({
+				...original,
+				boundary,
+				agent: {
+					...agent,
+					principalGrants: [{ ...grant, revokedAt: new Date(1) }],
+				},
+				currentAgentAuthorizationRevision: "agent-7",
+			});
+			expect(
+				(await h.useCase.current(context, h.state, "turn.submit", signal()))
+					.authority,
+			).toMatchObject({ purpose: "control", reason: "authorization_revoked" });
+			expect(h.ports.recordControl).toHaveBeenCalledWith(
+				expect.objectContaining({
+					executionId: h.claim.executionId,
+					authorizationRecordId: original.authorizationRecordId,
+					reason: "authorization_revoked",
+				}),
+				expect.any(AbortSignal),
+			);
+		},
+	);
+
 	it("rechecks an application against current identity and use grant without a user lookup", async () => {
 		const h = harness();
 		const principal = { kind: "application" as const, id: "caller-app" };

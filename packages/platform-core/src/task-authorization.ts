@@ -315,6 +315,21 @@ export function isTaskAuthorizationCurrentV1(input: {
 	const boundary = parseTaskAuthorizationBoundaryV1(input.boundary);
 	const agent = parseAgentManagementPortState(input.agent);
 	if (boundary.agentId !== agent.agentId) return false;
+	if (
+		boundary.channelId === "api" &&
+		boundary.principal.kind === "user" &&
+		(input.currentAgentAuthorizationRevision == null ||
+			!agent.principalGrants?.some(
+				(grant) =>
+					grant.principal.kind === "user" &&
+					grant.principal.id === boundary.principal.id &&
+					grant.grantType === "use" &&
+					grant.authorizationRevision ===
+						input.currentAgentAuthorizationRevision &&
+					grant.revokedAt === null,
+			))
+	)
+		return false;
 	let user: CurrentTaskUserV1 | undefined;
 	if (boundary.principal.kind === "user") {
 		if (!input.user) return false;

@@ -1237,6 +1237,10 @@ function normalizeAgentManagementAlignment(previous, current) {
 		)
 			return undefined;
 		delete normalized.paths[v3ApplicationPath];
+		for (const name of Object.keys(addition.schemas)) {
+			if (previous.components?.schemas?.[name] === undefined)
+				delete normalized.components.schemas[name];
+		}
 	}
 	const retired = [
 		["/api/v1/agent-applications", "get"],
