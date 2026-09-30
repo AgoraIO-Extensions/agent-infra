@@ -57,6 +57,7 @@ platformApi:
 platformWorker:
   deploymentModule: ""
   replicas: 1
+  wecomEnabled: false
 
 enterpriseDirectorySync:
   enabled: false

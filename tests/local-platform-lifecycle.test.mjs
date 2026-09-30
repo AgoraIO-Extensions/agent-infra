@@ -198,8 +198,16 @@ elif [[ "$*" == *"get pods -l app.kubernetes.io/instance=agent-infra-verify,app.
   printf '%s' "$FAKE_WORKER_PODS"
 elif [[ "$*" == *"get statefulsets -l agent-infra.agora.io/agent"* ]]; then
   printf '%s' "$FAKE_AGENT_WORKLOADS"
+  if [[ -n "$FAKE_AGENT_WORKLOADS_READ_EXIT" ]]; then
+    printf 'private-inventory-error-fixture\\n' >&2
+    exit "$FAKE_AGENT_WORKLOADS_READ_EXIT"
+  fi
 elif [[ "$*" == *"get pods -l agent-infra.agora.io/agent"* ]]; then
   printf '%s' "$FAKE_AGENT_PODS"
+  if [[ -n "$FAKE_AGENT_PODS_READ_EXIT" ]]; then
+    printf 'private-inventory-error-fixture\\n' >&2
+    exit "$FAKE_AGENT_PODS_READ_EXIT"
+  fi
 else
   printf 'kubectl %s\\n' "$*" >> "$COMMAND_LOG"
   if [[ "$*" == *"apply -f -"* ]]; then
@@ -231,7 +239,9 @@ fi`,
 		FAKE_KIND_LABEL: "isolated",
 		FAKE_KIND_PORT: "127.0.0.1:6443",
 		FAKE_AGENT_WORKLOADS: "",
+		FAKE_AGENT_WORKLOADS_READ_EXIT: "",
 		FAKE_AGENT_PODS: "",
+		FAKE_AGENT_PODS_READ_EXIT: "",
 		FAKE_WORKER_REPLICAS: "1",
 		FAKE_WORKER_PODS: "",
 		FAKE_FOREIGN_RESOURCE: "",
@@ -794,6 +804,78 @@ test("local stop refuses active Agent Workloads and Pods before uninstall", asyn
 		await f.close();
 	}
 });
+
+for (const inventory of [
+	{
+		resource: "Workload",
+		exitField: "FAKE_AGENT_WORKLOADS_READ_EXIT",
+		outputField: "FAKE_AGENT_WORKLOADS",
+		partialOutput: "agent-1 0\n",
+		diagnostic: /Agent Workloads could not be read/,
+	},
+	{
+		resource: "Pod",
+		exitField: "FAKE_AGENT_PODS_READ_EXIT",
+		outputField: "FAKE_AGENT_PODS",
+		partialOutput: "pod/agent-1-0\n",
+		diagnostic: /Agent Pods could not be read/,
+	},
+]) {
+	for (const [outputName, output] of [
+		["empty", ""],
+		["partial", inventory.partialOutput],
+	]) {
+		test(`local stop restores services after a failed Agent ${inventory.resource} read with ${outputName} output`, async () => {
+			const f = await fixture();
+			try {
+				const result = run("stop", {
+					...f.env,
+					[inventory.exitField]: "1",
+					[inventory.outputField]: output,
+				});
+				const log = await readFile(f.log, "utf8");
+				assert.equal(result.status, 1, log);
+				assert.match(result.stderr, inventory.diagnostic);
+				assert.doesNotMatch(
+					result.stdout + result.stderr,
+					/private-inventory-error-fixture/,
+				);
+				assert.match(log, /scale deployment\/.* --replicas=1/);
+				assert.match(log, /rollout status deployment\/.* --timeout=5m/);
+				assert.match(log, /compose .* up --detach --wait platform-api web/);
+				assert.doesNotMatch(
+					log,
+					/helm .* uninstall|network disconnect|delete service|delete endpointslice|stop object-storage postgres/,
+				);
+			} finally {
+				await f.close();
+			}
+		});
+	}
+
+	test(`local stop refuses a failed Agent ${inventory.resource} read without a Worker Deployment`, async () => {
+		const f = await fixture();
+		try {
+			const result = run("stop", {
+				...f.env,
+				FAKE_WORKER_REPLICAS: "",
+				[inventory.exitField]: "1",
+			});
+			assert.equal(result.status, 1);
+			assert.match(result.stderr, inventory.diagnostic);
+			assert.doesNotMatch(
+				result.stdout + result.stderr,
+				/private-inventory-error-fixture/,
+			);
+			assert.doesNotMatch(
+				await readFile(f.log, "utf8"),
+				/compose .* (stop|up)|scale deployment|helm .* uninstall|network disconnect|delete service|delete endpointslice/,
+			);
+		} finally {
+			await f.close();
+		}
+	});
+}
 
 test("local up validates private API and Worker material before stopping services", async () => {
 	const f = await fixture();

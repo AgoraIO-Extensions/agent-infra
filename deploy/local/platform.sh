@@ -80,7 +80,10 @@ worker_context() {
 
 ensure_agents_stopped() {
   local active_workloads active_pods
-  active_workloads=$("${kube_target[@]}" get statefulsets -l agent-infra.agora.io/agent -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.spec.replicas}{"\n"}{end}')
+  if ! active_workloads=$("${kube_target[@]}" get statefulsets -l agent-infra.agora.io/agent -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.spec.replicas}{"\n"}{end}' 2>/dev/null); then
+    echo "Agent Workloads could not be read; Platform stop refused" >&2
+    return 1
+  fi
   while read -r name replicas; do
     [[ -z "$name" ]] && continue
     [[ "$replicas" == 0 ]] || {
@@ -88,7 +91,10 @@ ensure_agents_stopped() {
       return 1
     }
   done <<< "$active_workloads"
-  active_pods=$("${kube_target[@]}" get pods -l agent-infra.agora.io/agent -o name)
+  if ! active_pods=$("${kube_target[@]}" get pods -l agent-infra.agora.io/agent -o name 2>/dev/null); then
+    echo "Agent Pods could not be read; Platform stop refused" >&2
+    return 1
+  fi
   [[ -z "$active_pods" ]] || {
     echo "Wait for Agent Pods to terminate before stopping Platform" >&2
     return 1

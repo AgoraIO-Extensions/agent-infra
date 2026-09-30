@@ -66,6 +66,7 @@
 	flex-direction: column;
 	padding: 25px 16px 16px;
 	z-index: 20;
+	overflow-y: auto;
 }
 .platform-brand {
 	display: flex;
@@ -95,6 +96,9 @@
 	color: var(--muted-foreground);
 	padding: 0 12px;
 	margin-bottom: 8px;
+}
+.platform-nav-group + .platform-nav-group {
+	margin-top: 20px;
 }
 .platform-nav-item {
 	display: flex;
@@ -887,5 +891,80 @@ body {
 	.ia-agent-directory .directory-section-head {
 		align-items: start;
 		flex-direction: column;
+	}
+}
+
+.ia-admin-agents {
+	max-width: 1440px;
+	padding: clamp(28px, 4vw, 52px) clamp(16px, 3vw, 40px) 72px;
+}
+.ia-admin-agents .page-heading h1 {
+	font-family: "Iowan Old Style", Charter, Georgia, "Times New Roman", serif;
+	font-size: clamp(32px, 3.2vw, 48px);
+	line-height: 1.05;
+	letter-spacing: -0.02em;
+	text-wrap: balance;
+}
+.admin-agent-filters {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 20px;
+	margin: 32px 0 20px;
+}
+.admin-agent-filters > div {
+	min-width: 0;
+}
+.ia-admin-agents [data-slot="button"],
+.ia-admin-agents [data-slot="input"],
+.ia-admin-agents select {
+	min-height: 44px;
+}
+.admin-agent-summary,
+.admin-agent-pagination {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 12px;
+	margin: 20px 0;
+	font-size: 14px;
+}
+.admin-agent-table {
+	table-layout: fixed;
+	font-size: 14px;
+}
+.admin-agent-table [data-slot="table-cell"] {
+	white-space: normal;
+	overflow-wrap: anywhere;
+	vertical-align: top;
+	padding-block: 16px;
+}
+.admin-agent-table [data-slot="table-head"]:first-child {
+	width: 28%;
+}
+@media (max-width: 600px) {
+	.admin-agent-filters {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.admin-agent-table [data-slot="table-header"] {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+	}
+	.admin-agent-table [data-slot="table-row"] {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		padding: 12px 0;
+	}
+	.admin-agent-table [data-slot="table-cell"] {
+		display: grid;
+		grid-template-columns: 64px minmax(0, 1fr);
+		padding: 6px 0;
+	}
+	.admin-agent-table [data-slot="table-cell"]::before {
+		content: attr(data-label);
+		color: var(--muted-foreground);
 	}
 }

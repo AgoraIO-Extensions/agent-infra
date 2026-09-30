@@ -1542,6 +1542,10 @@ export type StreamConversationEventsV2Errors = {
      */
     403: PilotProtocolErrorV1;
     /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
      * Internal error
      */
     500: PilotInternalErrorV1;
@@ -1662,3 +1666,69 @@ export type GetDeploymentConfigurationV2Responses = {
 };
 
 export type GetDeploymentConfigurationV2Response = GetDeploymentConfigurationV2Responses[keyof GetDeploymentConfigurationV2Responses];
+
+export type ListRecentPersonalConversationsV2Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/me/conversations/recent';
+};
+
+export type ListRecentPersonalConversationsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListRecentPersonalConversationsV2Error = ListRecentPersonalConversationsV2Errors[keyof ListRecentPersonalConversationsV2Errors];
+
+export type ListRecentPersonalConversationsV2Responses = {
+    /**
+     * Conversation history
+     */
+    200: {
+        items: Array<{
+            agentId: string;
+            conversationId: string;
+            createdAt: string;
+            lastConversationCursor: string | null;
+            schemaVersion: 1;
+            selectedModelOptionId: string | null;
+            selectedReasoningLevel: string | null;
+            status: 'ready' | 'active' | 'unavailable';
+            title: string | null;
+            updatedAt: string;
+        }>;
+        nextCursor: string | null;
+    };
+};
+
+export type ListRecentPersonalConversationsV2Response = ListRecentPersonalConversationsV2Responses[keyof ListRecentPersonalConversationsV2Responses];

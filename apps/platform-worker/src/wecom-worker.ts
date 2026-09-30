@@ -117,7 +117,7 @@ export function createPlatformWecomWorkerV1(
 		async channelAuthorizationCurrent(
 			record: TaskRuntimeAuthorizationRecordV1,
 		) {
-			if (!/^wecom_(bot|app):/.test(record.boundary.channelId)) return true;
+			if (!/^wecom_(bot|app):/.test(record.boundary.channelId)) return false;
 			const receipt = await store.scopeForExecution(
 				record.executionId,
 				record.boundary.principal.id,

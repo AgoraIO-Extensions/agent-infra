@@ -95,6 +95,13 @@ export interface PostgresConversationQueryOptionsV1 {
 	readonly replayWindowMs?: number;
 }
 
+export interface PlatformQueueResourceSnapshot {
+	/** Existing submitted Turns still awaiting dispatch reservation; not the full Task waiting contract. */
+	readonly taskWaiting: number;
+	/** All pending or retry-scheduled outbox rows, including non-task control work. */
+	readonly outboxPending: number;
+}
+
 interface ConversationRow {
 	readonly id: string;
 	readonly agent_id: string;
@@ -517,6 +524,164 @@ async function repeatableRead<T>(
 	})) as T;
 }
 
+function countResource(value: unknown): number {
+	if (typeof value !== "string" || !/^\d+$/.test(value))
+		throw new Error("Platform resource snapshot is unavailable");
+	const parsed = Number(value);
+	if (!Number.isSafeInteger(parsed))
+		throw new Error("Platform resource snapshot is unavailable");
+	return parsed;
+}
+
+const activeResourceSnapshots = new WeakSet<postgres.Sql>();
+
+/** Read one bounded, read-only resource snapshot for the observability consumer. */
+export async function readPlatformQueueResourceSnapshot(
+	client: postgres.Sql,
+	signal: AbortSignal,
+): Promise<PlatformQueueResourceSnapshot> {
+	const unavailable = () =>
+		new Error("Platform resource snapshot is unavailable");
+	if (signal.aborted) throw unavailable();
+	if (activeResourceSnapshots.has(client)) throw unavailable();
+	activeResourceSnapshots.add(client);
+	const controller = new AbortController();
+	const operationSignal = controller.signal;
+	const onAbort = () => controller.abort();
+	signal.addEventListener("abort", onAbort, { once: true });
+	if (signal.aborted) onAbort();
+	const timer = setTimeout(onAbort, 2000);
+	let rejectOnAbort: () => void = () => {};
+	let removeOperationAbortListener = () => {};
+	let began = false;
+	try {
+		const cancelled = new Promise<never>((_, reject) => {
+			rejectOnAbort = () => reject(unavailable());
+			operationSignal.addEventListener("abort", rejectOnAbort, {
+				once: true,
+			});
+			if (operationSignal.aborted) rejectOnAbort();
+		});
+		let currentQuery: { cancel(): void } | undefined;
+		const onOperationAbort = () => currentQuery?.cancel();
+		operationSignal.addEventListener("abort", onOperationAbort);
+		removeOperationAbortListener = () =>
+			operationSignal.removeEventListener("abort", onOperationAbort);
+		const runQuery = async <T>(
+			query: Promise<T> & { cancel(): void },
+		): Promise<T> => {
+			currentQuery = query;
+			try {
+				if (operationSignal.aborted) query.cancel();
+				return await query;
+			} finally {
+				if (currentQuery === query) currentQuery = undefined;
+			}
+		};
+		const snapshot = client.begin("read only", async (transaction) => {
+			if (operationSignal.aborted) throw unavailable();
+			await runQuery(transaction`set local statement_timeout = '2000ms'`);
+			if (operationSignal.aborted) throw unavailable();
+			const rows = await runQuery(transaction<
+				{ task_waiting: string; outbox_pending: string }[]
+			>`
+		select
+			(select count(distinct e.execution_id)::text
+				from platform.conversation_executions e
+				join platform.conversations c
+					on c.id = e.conversation_id
+					and c.agent_id = e.agent_id
+					and c.actor_id = e.actor_id
+					and c.channel_id = e.channel_id
+					and c.session_generation = e.session_generation
+					and c.authorization_revision = e.authorization_revision
+				where e.status = 'submitted'
+					and c.status <> 'unavailable'
+					and exists (
+						select 1
+						from platform.outbox_items o
+						where o.scope_type = 'conversation'
+							and o.scope_id = c.id
+							and o.operation in (
+								'conversation.turn.submit.v1',
+								'conversation.turn.regenerate.v1'
+							)
+							and o.status in ('pending', 'retry_scheduled', 'processing')
+							and o.payload->>'schemaVersion' = '1'
+							and o.payload->>'conversationId' = e.conversation_id
+							and o.payload->>'executionId' = e.execution_id
+							and o.payload->>'sessionGeneration' = e.session_generation::text
+							and o.payload->>'turnId' = e.turn_id
+							and not (o.payload ? 'metadataRecovery')
+							and exists (
+								select 1
+								from platform.conversation_messages m
+								where m.message_id = o.payload->>'messageId'
+									and m.conversation_id = e.conversation_id
+									and m.actor_id = e.actor_id
+									and m.role = 'user'
+									and m.status = 'submitted'
+									and (
+										o.operation = 'conversation.turn.regenerate.v1'
+										or m.execution_id = e.execution_id
+									)
+							)
+					)
+					and not exists (
+						select 1
+						from platform.conversation_stops s
+						where s.execution_id = e.execution_id
+					)
+					and not exists (
+						select 1
+						from platform.task_authorization_records a
+						where a.execution_id = e.execution_id
+							and a.revoked_at is not null
+					)
+					and not exists (
+						select 1
+						from platform.conversation_generation_tombstones t
+						where t.execution_id = e.execution_id
+							and t.conversation_id = e.conversation_id
+							and t.session_generation = e.session_generation
+							and t.status = 'pending'
+					)) as task_waiting,
+			(select count(*)::text from platform.outbox_items
+				where status in ('pending', 'retry_scheduled')) as outbox_pending
+	`);
+			if (operationSignal.aborted) throw unavailable();
+			if (rows.length !== 1) throw unavailable();
+			return {
+				taskWaiting: countResource(rows[0]?.task_waiting),
+				outboxPending: countResource(rows[0]?.outbox_pending),
+			};
+		});
+		began = true;
+		void snapshot.then(
+			() => {
+				removeOperationAbortListener();
+				activeResourceSnapshots.delete(client);
+			},
+			() => {
+				removeOperationAbortListener();
+				activeResourceSnapshots.delete(client);
+			},
+		);
+		return await Promise.race([snapshot, cancelled]);
+	} catch {
+		if (!began) {
+			removeOperationAbortListener();
+			activeResourceSnapshots.delete(client);
+		}
+		// Sampling errors never expose driver messages, connection details or raw data.
+		throw unavailable();
+	} finally {
+		clearTimeout(timer);
+		signal.removeEventListener("abort", onAbort);
+		operationSignal.removeEventListener("abort", rejectOnAbort);
+	}
+}
+
 export class PostgresConversationQueryV1 {
 	readonly #client: ReturnType<typeof postgres>;
 	readonly #replayWindow: number;
@@ -549,6 +714,12 @@ export class PostgresConversationQueryV1 {
 			if (error instanceof ConversationQueryError) throw error;
 			unavailable();
 		}
+	}
+
+	readResourceSnapshot(
+		signal: AbortSignal,
+	): Promise<PlatformQueueResourceSnapshot> {
+		return readPlatformQueueResourceSnapshot(this.#client, signal);
 	}
 
 	async getAuthorizationTarget(

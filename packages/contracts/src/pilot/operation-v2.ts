@@ -75,6 +75,12 @@ export const ExecutionDetailProjectionV2Schema = z.discriminatedUnion(
 	],
 );
 
+const conversationList =
+	pilotBrowserOpenApiPathsV1["/api/v1/agents/{agentId}/conversations"].get;
+const personalConversationSecurity: Record<string, never[]>[] = [
+	{ PlatformSession: [] },
+];
+
 const conversationRead =
 	pilotBrowserOpenApiPathsV1["/api/v1/conversations/{conversationId}"].get;
 const executionRead =
@@ -86,6 +92,20 @@ const streamRead =
 		.get;
 
 export const pilotOperationOpenApiPathsV2 = {
+	"/api/v2/me/conversations/recent": {
+		get: {
+			...conversationList,
+			operationId: "listRecentPersonalConversationsV2",
+			description:
+				"Current personal Web conversation metadata ordered by updatedAt DESC, id DESC after authorization filtering",
+			security: personalConversationSecurity,
+			requestParams: {
+				query: conversationList.requestParams.query.extend({
+					limit: conversationList.requestParams.query.shape.limit.default(50),
+				}),
+			},
+		},
+	},
 	"/api/v2/conversations/{conversationId}": {
 		get: {
 			...conversationRead,
@@ -126,6 +146,7 @@ export const pilotOperationOpenApiPathsV2 = {
 			operationId: "streamConversationEventsV2",
 			responses: {
 				...streamRead.responses,
+				"404": conversationRead.responses["404"],
 				"200": {
 					description:
 						"Original V1 events, V2 operation facts and bounded V1 controls",
