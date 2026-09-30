@@ -71,8 +71,10 @@ export {
 	type ConversationQueryProjectionV1,
 	type ConversationQueryScopeV1,
 	type ConversationReplayResultV1,
+	type PlatformQueueResourceSnapshot,
 	type PostgresConversationQueryOptionsV1,
 	PostgresConversationQueryV1,
+	readPlatformQueueResourceSnapshot,
 } from "./conversation-query.ts";
 export { PostgresFileStoreV1 } from "./files.js";
 export {
