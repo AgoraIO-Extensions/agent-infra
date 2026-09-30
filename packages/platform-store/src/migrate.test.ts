@@ -5,6 +5,7 @@ import { getTableConfig } from "drizzle-orm/pg-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
 import {
 	type PostgresTestDatabase,
@@ -183,6 +184,96 @@ describe("Platform PostgreSQL migration foundation", () => {
 						order by id
 					`,
 			).toEqual(after);
+		} finally {
+			await client.end();
+			await database.stop();
+		}
+	}, 120_000);
+
+	it("retains Agent, owner, configuration, and audit data from 0020 through 0027", async () => {
+		const database = await startPostgresTestDatabase(
+			"migration-0020-retained-agent",
+		);
+		const client = postgres(database.databaseUrl, { max: 1 });
+		try {
+			await client.unsafe(`CREATE SCHEMA platform_migrations;
+				CREATE TABLE platform_migrations.history
+				(id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
+			for (const migration of migrations.slice(0, 21)) {
+				for (const statement of migration.sql) await client.unsafe(statement);
+				await client`insert into platform_migrations.history (hash, created_at)
+					values (${migration.hash}, ${migration.folderMillis})`;
+			}
+			await client`insert into platform.agents (id)
+				values ('retained_agent')`;
+			await client`insert into platform.agent_applications
+				(id, agent_id, applicant_id, name, description, trace_id,
+					request_id, submitted_at)
+				values ('retained_application', 'retained_agent', 'retained_owner',
+					'Retained Agent', 'Existing application', 'retained_trace',
+					'retained_request', now())`;
+			await client`insert into platform.agent_owners
+				(agent_id, owner_id, created_at)
+				values ('retained_agent', 'retained_owner', now())`;
+			await client`insert into platform.agent_configuration_revisions
+				(agent_id, revision, source_reference, configuration, created_at)
+				values ('retained_agent', 1, 'retained_source',
+					${client.json({
+						...agentConfigurationConformanceRecordV1,
+						agentId: "retained_agent",
+						revision: 1,
+					} as postgres.JSONValue)},
+					now())`;
+			await client`insert into platform.audit_events
+				(id, trace_id, request_id, agent_id, actor_type, actor_id,
+					action, target_type, target_id, outcome)
+				values ('retained_audit', 'retained_trace', 'retained_request',
+					'retained_agent', 'user', 'retained_owner', 'agent.created',
+					'agent', 'retained_agent', 'succeeded')`;
+
+			const readRetained = async () => ({
+				agents: await client`select id, current_configuration_revision
+					from platform.agents where id = 'retained_agent'`,
+				applications: await client`select id, agent_id, applicant_id, status
+					from platform.agent_applications where id = 'retained_application'`,
+				owners: await client`select agent_id, owner_id, created_at
+					from platform.agent_owners where agent_id = 'retained_agent'`,
+				configurations:
+					await client`select agent_id, revision, source_reference,
+						configuration, created_at from platform.agent_configuration_revisions
+					where agent_id = 'retained_agent'`,
+				audits: await client`select id, trace_id, request_id, agent_id,
+						actor_type, actor_id, action, target_type, target_id, outcome
+					from platform.audit_events where id = 'retained_audit'`,
+			});
+			const before = await readRetained();
+			const previousHistory = await client`
+				select id, hash, created_at from platform_migrations.history order by id`;
+			expect(previousHistory).toHaveLength(21);
+
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+			const upgradedHistory = await client`
+				select id, hash, created_at from platform_migrations.history order by id`;
+			expect(upgradedHistory.slice(0, previousHistory.length)).toEqual(
+				previousHistory,
+			);
+			expect(upgradedHistory).toHaveLength(migrations.length);
+			expect(await readRetained()).toEqual(before);
+			expect(
+				await client`select purpose, subject_id
+				from platform.relay_key_subjects`,
+			).toEqual([]);
+
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+			expect(
+				await client`select id, hash, created_at
+				from platform_migrations.history order by id`,
+			).toEqual(upgradedHistory);
+			expect(await readRetained()).toEqual(before);
 		} finally {
 			await client.end();
 			await database.stop();
