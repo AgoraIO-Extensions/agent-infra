@@ -35,7 +35,10 @@ import {
 	type UserGovernanceRoutesDependencies,
 } from "./http/user-governance-routes.js";
 import { registerV2ConfigurationRoutes } from "./http/v2-configuration-routes.js";
-import { registerV2ManagementRoutes } from "./http/v2-management-routes.js";
+import {
+	registerV2ManagementRoutes,
+	type ManagementRouteDependencies as V2ManagementRouteDependencies,
+} from "./http/v2-management-routes.js";
 import {
 	registerWecomReceiptRoutesV1,
 	registerWecomRoutesV1,
@@ -55,7 +58,8 @@ export interface PlatformAppDependencies {
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
-	readonly management: ManagementRouteDependencies;
+	readonly management: ManagementRouteDependencies &
+		V2ManagementRouteDependencies;
 	readonly sessionAudit: SessionAuditRoutesDependencies;
 	readonly wecom?: WecomRoutesDependenciesV1;
 	readonly wecomReceipts?: WecomReceiptRoutesDependenciesV1;

@@ -1,5 +1,7 @@
 import { Buffer } from "node:buffer";
 
+import { RuntimeModelConfigurationV4Schema } from "@agent-infra/contracts/runtime";
+
 import type {
 	AgentConfigurationActionV1,
 	AgentConfigurationChangedFieldV1,
@@ -334,6 +336,7 @@ export function decodeAgentConfigurationRecord(
 	if (!input || typeof input !== "object" || Array.isArray(input)) invalid();
 	const legacy =
 		Object.getOwnPropertyDescriptor(input, "schemaVersion")?.value === 1;
+	const keyless = Object.hasOwn(input, "runtimeModelConfigurationV4");
 	const value = object(input, [
 		"schemaVersion",
 		"agentId",
@@ -345,10 +348,18 @@ export function decodeAgentConfigurationRecord(
 		"secrets",
 		"channels",
 		"channelRevision",
+		...(keyless ? ["runtimeModelConfigurationV4", "modelCatalogRevision"] : []),
 	]);
 	if (value.schemaVersion !== 1 && value.schemaVersion !== 2) invalid();
 	const parsedSource = source(value.source);
 	const parsedModel = modelConfiguration(value.modelConfiguration);
+	if (keyless && (value.schemaVersion !== 2 || parsedModel !== null)) invalid();
+	const runtimeModelConfigurationV4 = keyless
+		? RuntimeModelConfigurationV4Schema.parse(value.runtimeModelConfigurationV4)
+		: undefined;
+	const modelCatalogRevision = keyless
+		? text(value.modelCatalogRevision)
+		: undefined;
 	const parsedActions = legacy ? actions(value.actions) : [];
 	if (legacy) text(value.actionSetRevision);
 	const parsedEnvironment = environment(value.environment);
@@ -356,7 +367,7 @@ export function decodeAgentConfigurationRecord(
 	const parsedChannels = channels(value.channels);
 	if (
 		(parsedSource.kind === "standard" &&
-			(parsedModel === null ||
+			((parsedModel === null) === (runtimeModelConfigurationV4 === undefined) ||
 				parsedEnvironment.some(
 					({ name }) =>
 						!parsedSource.allowedEnvironmentKeys.includes(name) ||
@@ -367,7 +378,8 @@ export function decodeAgentConfigurationRecord(
 						!parsedSource.allowedSecretKeys.includes(name) ||
 						parsedSource.platformManagedKeys.includes(name),
 				))) ||
-		(parsedSource.kind === "custom" && parsedModel !== null) ||
+		(parsedSource.kind === "custom" &&
+			(parsedModel !== null || runtimeModelConfigurationV4 !== undefined)) ||
 		(!parsedSource.connectionEnabled && parsedActions.length > 0) ||
 		(parsedSource.kind === "custom" &&
 			parsedSource.interactionMode === "self-managed" &&
@@ -381,6 +393,7 @@ export function decodeAgentConfigurationRecord(
 		revision: positiveInteger(value.revision),
 		source: parsedSource,
 		modelConfiguration: parsedModel,
+		...(keyless ? { runtimeModelConfigurationV4, modelCatalogRevision } : {}),
 		environment: parsedEnvironment,
 		secrets: parsedSecrets,
 		channels: parsedChannels,

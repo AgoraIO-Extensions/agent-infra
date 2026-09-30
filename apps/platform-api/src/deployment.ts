@@ -41,6 +41,7 @@ export interface ProductionPlatformApiInputV1
 		readonly profile: "sub2api-key-billing-v1";
 		readonly billingUrl: string;
 	};
+	readonly admitAgentDefaultModels?: PlatformApiAssemblyInput["admitAgentDefaultModels"];
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	/** Public wrapping keys only. Worker private keys belong to the Worker deployment. */
 	readonly encryptionKeys: unknown;
@@ -116,6 +117,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 					...input.personalRelayKeyValidation,
 				})
 			: undefined,
+		admitAgentDefaultModels: input.admitAgentDefaultModels,
 		apiIdentity,
 		requestScope: identityScope.requestScope,
 		conversationReplayWindow: input.conversationReplayWindow,

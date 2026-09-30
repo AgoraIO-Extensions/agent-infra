@@ -210,6 +210,47 @@ function createHarness(options: HarnessOptions = {}) {
 	};
 }
 
+it("updates non-model settings of a keyless V4 standard Agent", async () => {
+	const runtimeModelConfigurationV4 = {
+		schemaVersion: 4 as const,
+		configVersion: "runtime-v4",
+		defaultModelOptionId: "model_primary",
+		defaultReasoningLevel: "low",
+		modelOptions: [
+			{
+				modelOptionId: "model_primary",
+				endpoint: "https://relay.example/v1",
+				model: "gpt-5",
+				reasoningLevels: ["low"],
+				protocol: "openai-responses-v1" as const,
+				authentication: "bearer" as const,
+			},
+		],
+	};
+	const harness = createHarness({
+		record: {
+			...agentConfigurationConformanceRecordV1,
+			modelConfiguration: null,
+			runtimeModelConfigurationV4,
+			modelCatalogRevision: "catalog-v4",
+		},
+	});
+	await expect(
+		harness.useCase.update(
+			{
+				...command,
+				changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+			},
+			actor,
+		),
+	).resolves.toMatchObject({ changedFields: ["environment"] });
+	expect(harness.transaction.snapshot().configuration).toMatchObject({
+		runtimeModelConfigurationV4,
+		modelConfiguration: null,
+		environment: [{ name: "LOG_LEVEL", value: "debug" }],
+	});
+});
+
 describe("Agent configuration conformance", () => {
 	agentConfigurationUseCaseConformance(async () => {
 		const harness = createHarness();

@@ -1,5 +1,6 @@
 import {
 	AgentConfigurationError,
+	AgentDefaultRelayKeyErrorV1,
 	AgentManagementError,
 	ApiIdentityError,
 	ApplicationFoundationError,
@@ -14,6 +15,17 @@ export function mapCoreError(
 	traceId: string,
 ): HttpProtocolError {
 	if (error instanceof HttpProtocolError) return error;
+	if (error instanceof AgentDefaultRelayKeyErrorV1)
+		return new HttpProtocolError(
+			error.code === "not_authorized"
+				? "RESOURCE_UNAVAILABLE"
+				: error.code === "invalid_model"
+					? "INVALID_REQUEST"
+					: error.code === "conflict"
+						? "CONFLICT"
+						: "DEPENDENCY_UNAVAILABLE",
+			traceId,
+		);
 	if (error instanceof PersonalRelayKeyErrorV1) {
 		if (error.code === "invalid_key")
 			return new HttpProtocolError(

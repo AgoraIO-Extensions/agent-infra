@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { ModelConfigurationErrorV1 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationUseCaseDependenciesV1,
+	AgentDefaultRelayKeyErrorV1,
 	createAgentConfigurationUseCaseV1,
+	createAgentDefaultRelayKeyUseCaseV1,
 	createAgentManagementV1,
 	createApiIdentityManagementV1,
 	createApplicationFoundationUseCaseV1,
@@ -15,6 +18,7 @@ import {
 import {
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
+	PostgresAgentDefaultRelayKeyStoreV1,
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
 	PostgresApiIdentityStoreV1,
@@ -46,6 +50,7 @@ import {
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/management-routes.js";
+import type { ManagementRouteDependencies as V2ManagementRouteDependencies } from "./http/v2-management-routes.js";
 import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
@@ -73,6 +78,7 @@ export interface PlatformApiAssemblyInput {
 	readonly apiIdentity?: PostgresApiIdentityStoreV1;
 	readonly userGovernance?: PlatformUserGovernanceStoreV1;
 	readonly personalRelayKeyEncryptor?: RelayKeyEncryptorV1;
+	readonly admitAgentDefaultModels?: V2ManagementRouteDependencies["admitAgentDefaultModels"];
 	readonly personalRelayKeyValidation?: (
 		keyValue: string,
 	) => Promise<"valid" | "invalid" | "unavailable">;
@@ -138,6 +144,53 @@ export function assemblePlatformApi(
 				store: personalRelayKeyStore,
 				validate:
 					input.personalRelayKeyValidation ?? (async () => "unavailable"),
+			})
+		: undefined;
+	const agentDefaultRelayKeyStore = input.personalRelayKeyEncryptor
+		? new PostgresAgentDefaultRelayKeyStoreV1(
+				input.databaseUrl,
+				async (userId) => {
+					const current = await resolveCurrentTaskUser(
+						identityAdapter,
+						userId,
+						randomUUID(),
+					);
+					return current
+						? {
+								userId: current.userId,
+								accountStatus: current.accountStatus,
+								authorizationRevision: current.authorizationRevision,
+							}
+						: null;
+				},
+				input.personalRelayKeyEncryptor,
+			)
+		: undefined;
+	const agentDefaultRelayKey = agentDefaultRelayKeyStore
+		? createAgentDefaultRelayKeyUseCaseV1({
+				store: agentDefaultRelayKeyStore,
+				admit: async (request) => {
+					if (!input.admitAgentDefaultModels)
+						throw new AgentDefaultRelayKeyErrorV1("dependency_unavailable");
+					try {
+						return await input.admitAgentDefaultModels({
+							...request,
+							requested: {
+								...request.requested,
+								options: request.requested.options.map((option) => ({
+									...option,
+									reasoningLevels: [...option.reasoningLevels],
+								})),
+							},
+						});
+					} catch (error) {
+						if (error instanceof ModelConfigurationErrorV1)
+							throw new AgentDefaultRelayKeyErrorV1(
+								error.retryable ? "dependency_unavailable" : "invalid_model",
+							);
+						throw error;
+					}
+				},
 			})
 		: undefined;
 	if (input.wecomApplicationSetup && !input.wecomCredentialEncryptionKeys)
@@ -500,6 +553,9 @@ export function assemblePlatformApi(
 			configuration,
 			query: managementQuery,
 			apiIdentity: apiIdentityManagement,
+			agentDefaultRelayKeyEncryptor: input.personalRelayKeyEncryptor,
+			agentDefaultRelayKey,
+			admitAgentDefaultModels: input.admitAgentDefaultModels,
 			allocateApplicationIds: input.allocateApplicationIds,
 			prepareSecretReplacements: input.prepareApplicationSecrets,
 			readApplicationProjection: projections.readApplicationProjection,
@@ -541,6 +597,7 @@ export function assemblePlatformApi(
 	};
 	const adapters = [
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
+		...(agentDefaultRelayKeyStore ? [agentDefaultRelayKeyStore] : []),
 		...(wecomReceipts ? [wecomReceipts] : []),
 		...(wecomSetup ? [wecomSetup] : []),
 		...(wecom ? [wecom] : []),

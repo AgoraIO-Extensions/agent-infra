@@ -55,6 +55,22 @@ export interface AgentConfigurationRecordV2 {
 	readonly revision: number;
 	readonly source: AgentConfigurationSourceV1;
 	readonly modelConfiguration: AgentConfigurationModelV1 | null;
+	/** Keyless Runtime V4 is admitted separately from historical model credentials. */
+	readonly runtimeModelConfigurationV4?: {
+		readonly schemaVersion: 4;
+		readonly configVersion: string;
+		readonly defaultModelOptionId: string;
+		readonly defaultReasoningLevel: string;
+		readonly modelOptions: readonly {
+			readonly modelOptionId: string;
+			readonly endpoint: string;
+			readonly model: string;
+			readonly reasoningLevels: readonly string[];
+			readonly protocol: "openai-responses-v1" | "anthropic-messages-v1";
+			readonly authentication: "bearer" | "api-key";
+		}[];
+	};
+	readonly modelCatalogRevision?: string;
 	readonly environment: readonly {
 		readonly name: string;
 		readonly value: string;
@@ -176,6 +192,15 @@ export interface AdmittedInitialAgentConfigurationV1 {
 	readonly configuration: AgentConfigurationRecordV2;
 	readonly ownerIds: readonly string[];
 	readonly availability: readonly AgentConfigurationAccessTargetV1[];
+}
+
+export interface AgentDefaultModelAdmissionV1 {
+	admitModels(input: {
+		readonly agentId: string;
+		readonly requestId: string;
+		readonly traceId: string;
+		readonly source: Extract<AgentConfigurationSourceV1, { kind: "standard" }>;
+	}): Promise<{ readonly catalogRevision: string; readonly runtime: unknown }>;
 }
 
 export interface InitialAgentConfigurationAdmissionHandleV1 {

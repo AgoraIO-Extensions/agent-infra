@@ -1,8 +1,10 @@
+import { createHash, generateKeyPairSync } from "node:crypto";
 import type {
 	ApplicationFoundationTransactionPortV1,
 	ApplicationFoundationWritePlanV1,
 } from "@agent-infra/platform-core";
 import { createApplicationFoundationUseCaseV1 } from "@agent-infra/platform-core";
+import { createRelayKeyEncryptorV1 } from "@agent-infra/secret-store";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -17,6 +19,7 @@ import {
 	captureApplicationFoundationWritePlan,
 	emptyApplicationFoundationSnapshot,
 } from "../../platform-core/src/application-foundation.conformance.ts";
+import { PostgresAgentDefaultRelayKeyStoreV1 } from "./agent-default-relay-key.ts";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
@@ -208,7 +211,8 @@ async function snapshot() {
 }
 
 async function resetDatabase(): Promise<void> {
-	await adminClient`truncate platform.audit_events, platform.outbox_items,
+	await adminClient`truncate platform.relay_key_versions,
+		platform.relay_key_subjects, platform.audit_events, platform.outbox_items,
 		platform.idempotency_records, platform.agent_availability,
 		platform.agent_owners, platform.agent_configuration_revisions,
 		platform.agent_applications, platform.agents,
@@ -549,6 +553,374 @@ describe("PostgreSQL application foundation transaction", () => {
 		}
 	});
 
+	it.each(["user", "application"] as const)(
+		"accepts a current non-LDAP %s API principal without an LDAP mapping",
+		async (kind) => {
+			await resetDatabase();
+			await seedApiCreationAuthority();
+			await adminClient`
+				delete from platform.ldap_identity_ids
+				where user_id = ${apiRecipientUserId}
+			`;
+			if (kind === "user")
+				await adminClient`
+					insert into platform.platform_api_credentials
+						(id, principal_type, principal_id, credential_hash, scopes)
+					values ('credential-user-caller', 'user', ${apiRecipientUserId},
+						${"b".repeat(64)}, ${adminClient.json(["agent:create"])})
+				`;
+			const submission =
+				new builtStore.PostgresApplicationFoundationTransactionV1({
+					databaseUrl,
+					resolveUser: resolveApiCreationRecipient,
+				});
+			const actor = {
+				...applicationFoundationActorContextV1,
+				userId: apiRecipientUserId,
+				principal:
+					kind === "user"
+						? { kind, id: apiRecipientUserId }
+						: { kind, id: "application-caller" },
+				creationMode: "api" as const,
+				apiAuthority: {
+					credentialId:
+						kind === "user" ? "credential-user-caller" : "credential-caller",
+					identityRevision: kind === "user" ? "user-revision-1" : "app-7",
+				},
+			};
+			try {
+				const foundation = createApplicationFoundationUseCaseV1({
+					transaction: submission,
+					...applicationFoundationAdmissionDependenciesV1(),
+				});
+				await expect(
+					foundation.submit(
+						applicationFoundationCommandV1,
+						actor,
+						createSecretRecordFixtureResolver(),
+					),
+				).resolves.toMatchObject({ status: "creating" });
+				await expect(
+					adminClient`
+						select id from platform.agents
+						where id = ${applicationFoundationCommandV1.agentId}
+					`,
+				).resolves.toHaveLength(1);
+			} finally {
+				await submission.close();
+			}
+		},
+	);
+
+	it("commits the Agent default Relay Key with API creation and rolls it back on audit failure", async () => {
+		await resetDatabase();
+		await seedApiCreationAuthority();
+		const { modelConfiguration: _legacyModel, ...keylessCommand } =
+			applicationFoundationCommandV1;
+		const runtime = {
+			schemaVersion: 4,
+			configVersion: "synthetic-keyless-v4",
+			defaultModelOptionId: "model_primary",
+			defaultReasoningLevel: "low",
+			modelOptions: [
+				{
+					modelOptionId: "model_primary",
+					endpoint: "https://relay.example/v1",
+					model: "gpt-5",
+					reasoningLevels: ["low"],
+					protocol: "openai-responses-v1",
+					authentication: "bearer",
+				},
+			],
+		};
+		const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
+		const publicKeyDer = publicKey.export({ format: "der", type: "spki" });
+		const encryptor = createRelayKeyEncryptorV1({
+			encryptionKeys: {
+				schemaVersion: 1,
+				activeWrappingKeyVersion: "test-wrapping-key",
+				keys: [
+					{
+						schemaVersion: 1,
+						keyVersion: "test-wrapping-key",
+						wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+						publicKeySpkiDerBase64: publicKeyDer.toString("base64"),
+						publicKeyFingerprint: createHash("sha256")
+							.update(publicKeyDer)
+							.digest("hex"),
+						rsaModulusBits: 3072,
+						status: "active",
+					},
+				],
+			},
+		});
+		const keyValue = "synthetic-agent-default-key";
+		let encryptions = 0;
+		const keyAttachment = {
+			admitModels: async () => ({
+				catalogRevision: "catalog_1",
+				runtime,
+			}),
+			encrypt: (binding: {
+				readonly purpose: "agent-default";
+				readonly subjectId: string;
+				readonly keyId: string;
+				readonly keyVersion: 1;
+			}) => {
+				encryptions += 1;
+				return encryptor.encrypt({ ...binding, plaintext: keyValue });
+			},
+		};
+		const submission =
+			new builtStore.PostgresApplicationFoundationTransactionV1({
+				databaseUrl,
+				resolveUser: resolveApiCreationRecipient,
+			});
+		const foundation = createApplicationFoundationUseCaseV1({
+			transaction: submission,
+			...applicationFoundationAdmissionDependenciesV1(),
+		});
+		const actor = {
+			...applicationFoundationActorContextV1,
+			userId: apiRecipientUserId,
+			principal: { kind: "application" as const, id: "application-caller" },
+			creationMode: "api" as const,
+			apiAuthority: {
+				credentialId: "credential-caller",
+				identityRevision: "app-7",
+			},
+		};
+		try {
+			const first = await foundation.submit(
+				keylessCommand,
+				actor,
+				createSecretRecordFixtureResolver(),
+				keyAttachment,
+			);
+			expect(first.status).toBe("creating");
+			const [key] = await adminClient`
+				select s.purpose, s.subject_id, s.last_version, s.current_version,
+					v.key_id, v.key_version, v.ciphertext
+				from platform.relay_key_subjects s
+				join platform.relay_key_versions v
+					on v.purpose = s.purpose and v.subject_id = s.subject_id
+				where s.subject_id = ${first.agentId}
+			`;
+			expect(key).toMatchObject({
+				purpose: "agent-default",
+				subject_id: first.agentId,
+				last_version: "1",
+				current_version: "1",
+				key_version: "1",
+				ciphertext: {
+					purpose: "agent-default",
+					subjectId: first.agentId,
+					keyVersion: 1,
+					keyId: key?.key_id,
+				},
+			});
+			expect(JSON.stringify(key)).not.toContain(keyValue);
+			const [storedConfiguration] = await adminClient`
+				select configuration from platform.agent_configuration_revisions
+				where agent_id = ${first.agentId} and revision = 1
+			`;
+			expect(storedConfiguration?.configuration).toMatchObject({
+				modelConfiguration: null,
+				modelCatalogRevision: "catalog_1",
+				runtimeModelConfigurationV4: runtime,
+			});
+			expect(
+				await adminClient`select name from platform.secret_records
+				where agent_id = ${first.agentId} and name like 'model:%'`,
+			).toEqual([]);
+			expect(
+				await adminClient`select action, actor_type, actor_id, details
+				from platform.audit_events
+				where action = 'relay_key.agent_default.created'`,
+			).toEqual([
+				{
+					action: "relay_key.agent_default.created",
+					actor_type: "application",
+					actor_id: "application-caller",
+					details: { keyVersion: 1 },
+				},
+			]);
+			const keys = new PostgresAgentDefaultRelayKeyStoreV1(
+				databaseUrl,
+				async (userId) => ({
+					userId,
+					accountStatus: "active",
+					authorizationRevision: "user-revision-1",
+				}),
+				encryptor,
+			);
+			try {
+				const metadata = {
+					traceId: "replacement-trace",
+					requestId: "replacement-request",
+				};
+				expect(
+					await keys.current({
+						agentId: first.agentId,
+						actorUserId: apiRecipientUserId,
+						...metadata,
+					}),
+				).toMatchObject({ keyVersion: 1, configurationRevision: 1 });
+				expect(
+					await keys.current({
+						agentId: first.agentId,
+						actorUserId: "other-user",
+						...metadata,
+					}),
+				).toBeNull();
+				expect(
+					await keys.replace({
+						agentId: first.agentId,
+						actorUserId: apiRecipientUserId,
+						expectedVersion: 1,
+						expectedConfigurationRevision: 1,
+						keyValue: "synthetic-replacement-key",
+						...metadata,
+					}),
+				).toBe(2);
+				expect(
+					await keys.replace({
+						agentId: first.agentId,
+						actorUserId: apiRecipientUserId,
+						expectedVersion: 1,
+						expectedConfigurationRevision: 1,
+						keyValue: "stale-replacement-key",
+						...metadata,
+					}),
+				).toBeNull();
+				const [agentAuthorization] = await adminClient<
+					{ authorization_revision: string }[]
+				>`select authorization_revision from platform.agents
+					where id = ${first.agentId}`;
+				if (!agentAuthorization?.authorization_revision)
+					throw new Error("Agent authorization revision is missing");
+				await adminClient`
+					insert into platform.platform_api_credentials
+						(id, principal_type, principal_id, credential_hash, scopes)
+					values ('credential-owner', 'user', ${apiRecipientUserId},
+						${"b".repeat(64)}, ${adminClient.json(["agent:manage"])})
+				`;
+				await adminClient`
+					insert into platform.agent_principal_grants
+						(agent_id, principal_type, principal_id, grant_type,
+						 authorization_revision)
+					values (${first.agentId}, 'user', ${apiRecipientUserId}, 'manage',
+						${agentAuthorization.authorization_revision})
+				`;
+				const api = {
+					credentialId: "credential-owner",
+					identityRevision: "user-revision-1",
+				};
+				expect(
+					await keys.current({
+						agentId: first.agentId,
+						actorUserId: apiRecipientUserId,
+						api,
+						...metadata,
+					}),
+				).toMatchObject({ keyVersion: 2 });
+				await adminClient`
+					update platform.agent_principal_grants set revoked_at = now()
+					where agent_id = ${first.agentId} and principal_type = 'user'
+						and principal_id = ${apiRecipientUserId} and grant_type = 'manage'
+				`;
+				expect(
+					await keys.current({
+						agentId: first.agentId,
+						actorUserId: apiRecipientUserId,
+						api,
+						...metadata,
+					}),
+				).toBeNull();
+				await expect(
+					keys.replace({
+						agentId: first.agentId,
+						actorUserId: apiRecipientUserId,
+						api,
+						expectedVersion: 2,
+						expectedConfigurationRevision: 1,
+						keyValue: "revoked-owner-key",
+						...metadata,
+					}),
+				).rejects.toMatchObject({ code: "resource_unavailable" });
+				const versions = await adminClient`
+					select key_version, ciphertext from platform.relay_key_versions
+					where purpose = 'agent-default' and subject_id = ${first.agentId}
+					order by key_version
+				`;
+				expect(versions.map((version) => version.key_version)).toEqual([
+					"1",
+					"2",
+				]);
+				expect(JSON.stringify(versions)).not.toContain(
+					"synthetic-replacement-key",
+				);
+				const replacementAudits = await adminClient`
+						select action, outcome from platform.audit_events
+						where target_id = ${first.agentId}
+						and action in ('relay_key.agent_default.replaced', 'relay_key.agent_default.rejected')
+					`;
+				expect(replacementAudits).toHaveLength(2);
+				expect(replacementAudits).toContainEqual({
+					action: "relay_key.agent_default.replaced",
+					outcome: "succeeded",
+				});
+				expect(replacementAudits).toContainEqual({
+					action: "relay_key.agent_default.rejected",
+					outcome: "rejected",
+				});
+			} finally {
+				await keys.close();
+			}
+			await expect(
+				foundation.submit(
+					keylessCommand,
+					actor,
+					createSecretRecordFixtureResolver(),
+					{
+						admitModels: () => {
+							throw new Error("replay admitted twice");
+						},
+						encrypt: () => {
+							throw new Error("replay encrypted twice");
+						},
+					},
+				),
+			).resolves.toEqual(first);
+			expect(encryptions).toBe(1);
+
+			await resetDatabase();
+			await seedApiCreationAuthority();
+			await armFailure("audit");
+			await expect(
+				foundation.submit(
+					keylessCommand,
+					actor,
+					createSecretRecordFixtureResolver(),
+					keyAttachment,
+				),
+			).rejects.toMatchObject({ code: "persistence_failed" });
+			for (const table of [
+				"agents",
+				"relay_key_subjects",
+				"relay_key_versions",
+				"idempotency_records",
+			]) {
+				expect(
+					await adminClient.unsafe(`select * from platform.${table}`),
+				).toEqual([]);
+			}
+		} finally {
+			await disarmFailure("audit");
+			await submission.close();
+		}
+	});
+
 	it.each([
 		["disabled", { accountStatus: "disabled" as const }],
 		["stale directory revision", { authorizationRevision: "user-revision-2" }],
@@ -739,6 +1111,11 @@ describe("PostgreSQL application foundation transaction", () => {
 				new builtStore.PostgresApplicationFoundationTransactionV1({
 					databaseUrl,
 					resolveUser: async (userId) => {
+						const [mapping] = await adminClient`
+							select user_id from platform.ldap_identity_ids
+							where user_id = ${userId}
+						`;
+						if (!mapping) return null;
 						const recipient = await resolveApiCreationRecipient(userId);
 						return (
 							recipient && { ...recipient, accountStatus: recipientStatus }

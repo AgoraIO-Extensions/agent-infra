@@ -8,6 +8,7 @@ import {
 	type AgentConfigurationModelInputV1,
 	type AgentConfigurationRecordV2,
 	type AgentConfigurationSecretReplacementInputV1,
+	type AgentDefaultModelAdmissionV1,
 	beginInitialAgentConfigurationAdmissionV1,
 	decodeAgentConfigurationRecordV2,
 	type InitialAgentConfigurationAdmissionDependenciesV1,
@@ -174,6 +175,19 @@ export interface ApplicationFoundationWritePlanV1 {
 		readonly outcome: "succeeded";
 		readonly occurredAt: Date;
 	};
+	readonly agentDefaultRelayKeyAuditEvent?: {
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly agentId: string;
+		readonly actorType: "user" | "application";
+		readonly actorId: string;
+		readonly action: "relay_key.agent_default.created";
+		readonly targetType: "agent";
+		readonly targetId: string;
+		readonly outcome: "succeeded";
+		readonly details: { readonly keyVersion: 1 };
+		readonly occurredAt: Date;
+	};
 }
 
 export type ApplicationFoundationCommitDecisionV1 =
@@ -207,6 +221,16 @@ export interface ApplicationCreationPreparedInputV1 {
 	readonly attachment?: PendingSecretRecordAttachmentResolverV1;
 }
 
+export interface AgentDefaultRelayKeyAttachmentV1
+	extends AgentDefaultModelAdmissionV1 {
+	readonly encrypt: (binding: {
+		readonly purpose: "agent-default";
+		readonly subjectId: string;
+		readonly keyId: string;
+		readonly keyVersion: 1;
+	}) => unknown | Promise<unknown>;
+}
+
 export interface ApplicationFoundationTransactionPortV1 {
 	read(input: {
 		readonly schemaVersion: 1;
@@ -222,10 +246,25 @@ export interface ApplicationFoundationTransactionPortV1 {
 	commit(
 		plan: ApplicationFoundationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
+		agentDefaultRelayKey?: AgentDefaultRelayKeyAttachmentV1,
 	): Promise<ApplicationFoundationCommitDecisionV1>;
 }
 
 export interface ApplicationFoundationUseCaseV1 {
+	prepareWebCreation(
+		query: ApplicationFoundationReplayQueryV1,
+		actorContext: ApplicationFoundationActorContextV1,
+		prepare: () => Promise<ApplicationCreationPreparedInputV1>,
+	): Promise<
+		| {
+				readonly outcome: "replayed";
+				readonly result: CommitApplicationFoundationResultV1;
+		  }
+		| {
+				readonly outcome: "prepared";
+				readonly prepared: ApplicationCreationPreparedInputV1;
+		  }
+	>;
 	prepareApiCreation(
 		query: ApplicationFoundationReplayQueryV1,
 		actorContext: ApplicationFoundationActorContextV1,
@@ -250,6 +289,7 @@ export interface ApplicationFoundationUseCaseV1 {
 		command: CommitApplicationFoundationCommandV2,
 		actorContext: ApplicationFoundationActorContextV1,
 		attachment?: PendingSecretRecordAttachmentResolverV1,
+		agentDefaultRelayKey?: AgentDefaultRelayKeyAttachmentV1,
 	): Promise<CommitApplicationFoundationResultV1>;
 }
 
@@ -671,7 +711,7 @@ export function snapshotApplicationFoundationWritePlanV1(
 				"outboxIntent",
 				"auditEvent",
 			],
-			["principal", "apiAuthority"],
+			["principal", "apiAuthority", "agentDefaultRelayKeyAuditEvent"],
 		);
 		if (!plan) throw new ApplicationFoundationError("persistence_failed");
 		const agent = requiredPlanObject(plan.agent, [
@@ -747,6 +787,32 @@ export function snapshotApplicationFoundationWritePlanV1(
 			"outcome",
 			"occurredAt",
 		]);
+		const keyAuditEvent = Object.hasOwn(plan, "agentDefaultRelayKeyAuditEvent")
+			? requiredPlanObject(plan.agentDefaultRelayKeyAuditEvent, [
+					"traceId",
+					"requestId",
+					"agentId",
+					"actorType",
+					"actorId",
+					"action",
+					"targetType",
+					"targetId",
+					"outcome",
+					"details",
+					"occurredAt",
+				])
+			: undefined;
+		const keyAuditDetails = keyAuditEvent
+			? requiredPlanObject(keyAuditEvent.details, ["keyVersion"])
+			: undefined;
+		if (
+			keyAuditEvent &&
+			(keyAuditEvent.action !== "relay_key.agent_default.created" ||
+				keyAuditEvent.targetType !== "agent" ||
+				keyAuditEvent.outcome !== "succeeded" ||
+				keyAuditDetails?.keyVersion !== 1)
+		)
+			throw new ApplicationFoundationError("persistence_failed");
 		let principal: ApiPrincipalV1 | undefined;
 		if (Object.hasOwn(plan, "principal")) {
 			const value = snapshotExactDataValues(plan.principal, ["kind", "id"]);
@@ -850,6 +916,23 @@ export function snapshotApplicationFoundationWritePlanV1(
 				outcome: auditEvent.outcome as "succeeded",
 				occurredAt: snapshotPlanDate(auditEvent.occurredAt),
 			},
+			...(keyAuditEvent && keyAuditDetails
+				? {
+						agentDefaultRelayKeyAuditEvent: {
+							traceId: keyAuditEvent.traceId as string,
+							requestId: keyAuditEvent.requestId as string,
+							agentId: keyAuditEvent.agentId as string,
+							actorType: keyAuditEvent.actorType as "user" | "application",
+							actorId: keyAuditEvent.actorId as string,
+							action: "relay_key.agent_default.created" as const,
+							targetType: "agent" as const,
+							targetId: keyAuditEvent.targetId as string,
+							outcome: "succeeded" as const,
+							details: { keyVersion: 1 as const },
+							occurredAt: snapshotPlanDate(keyAuditEvent.occurredAt),
+						},
+					}
+				: {}),
 		};
 	} catch {
 		throw new ApplicationFoundationError("persistence_failed");
@@ -1019,6 +1102,7 @@ export function createApplicationFoundationUseCaseV1(
 		commandInput: unknown,
 		actorContextInput: ApplicationFoundationActorContextV1,
 		attachment?: PendingSecretRecordAttachmentResolverV1,
+		agentDefaultRelayKey?: AgentDefaultRelayKeyAttachmentV1,
 		legacy = false,
 	): Promise<CommitApplicationFoundationResultV1> => {
 		const actorContext =
@@ -1029,6 +1113,13 @@ export function createApplicationFoundationUseCaseV1(
 			id: actorContext.userId,
 		};
 		const creationMode = actorContext.creationMode ?? "web";
+		if (
+			agentDefaultRelayKey &&
+			(command.source.kind !== "standard" ||
+				command.modelConfiguration !== undefined ||
+				typeof agentDefaultRelayKey.admitModels !== "function")
+		)
+			throw new ApplicationFoundationError("invalid_command");
 		const beginAdmission = () =>
 			beginInitialAgentConfigurationAdmissionV1(
 				{
@@ -1052,6 +1143,7 @@ export function createApplicationFoundationUseCaseV1(
 					rawRequestDigest: actorContext.rawRequestDigest,
 				} satisfies AgentConfigurationActorContextV1,
 				dependencies,
+				agentDefaultRelayKey,
 			);
 		let admission: Awaited<ReturnType<typeof beginAdmission>> | undefined;
 		if (creationMode === "web") {
@@ -1173,6 +1265,23 @@ export function createApplicationFoundationUseCaseV1(
 				outcome: "succeeded",
 				occurredAt: submittedAt,
 			},
+			...(agentDefaultRelayKey
+				? {
+						agentDefaultRelayKeyAuditEvent: {
+							traceId: command.traceId,
+							requestId: command.requestId,
+							agentId: command.agentId,
+							actorType: principal.kind,
+							actorId: principal.id,
+							action: "relay_key.agent_default.created" as const,
+							targetType: "agent" as const,
+							targetId: command.agentId,
+							outcome: "succeeded" as const,
+							details: { keyVersion: 1 as const },
+							occurredAt: submittedAt,
+						},
+					}
+				: {}),
 		};
 		let attachments: PendingSecretRecordAttachmentsV1 | undefined;
 		try {
@@ -1188,7 +1297,11 @@ export function createApplicationFoundationUseCaseV1(
 		let decision: ApplicationFoundationCommitDecisionV1;
 		try {
 			decision = parseCommitDecision(
-				await dependencies.transaction.commit(plan, attachments),
+				await dependencies.transaction.commit(
+					plan,
+					attachments,
+					agentDefaultRelayKey,
+				),
 				result,
 			);
 		} catch (error) {
@@ -1210,31 +1323,44 @@ export function createApplicationFoundationUseCaseV1(
 		}
 		return decision.result;
 	};
+	const prepareCreation = async (
+		queryInput: ApplicationFoundationReplayQueryV1,
+		actorInput: ApplicationFoundationActorContextV1,
+		creationMode: "web" | "api",
+		prepare: () => Promise<ApplicationCreationPreparedInputV1>,
+	) => {
+		const query = parseApplicationFoundationReplayQueryV1(queryInput);
+		const actor = parseApplicationFoundationActorContextV1(actorInput);
+		if (
+			(actor.creationMode ?? "web") !== creationMode ||
+			typeof prepare !== "function"
+		)
+			invalidApplicationFoundationInput();
+		const readReplay = async () => {
+			const decision = await readDecision(query, actor, creationMode);
+			if (decision.outcome === "idempotency_conflict")
+				throw new ApplicationFoundationError("idempotency_conflict");
+			return decision.outcome === "replayed" ? decision.result : null;
+		};
+		const replayed = await readReplay();
+		if (replayed) return { outcome: "replayed" as const, result: replayed };
+		try {
+			return { outcome: "prepared" as const, prepared: await prepare() };
+		} catch (error) {
+			const concurrentReplay = await readReplay();
+			if (concurrentReplay)
+				return { outcome: "replayed" as const, result: concurrentReplay };
+			throw error;
+		}
+	};
 	return {
-		prepareApiCreation: async (queryInput, actorInput, prepare) => {
-			const query = parseApplicationFoundationReplayQueryV1(queryInput);
-			const actor = parseApplicationFoundationActorContextV1(actorInput);
-			if (actor.creationMode !== "api" || typeof prepare !== "function")
-				invalidApplicationFoundationInput();
-			const readReplay = async () => {
-				const decision = await readDecision(query, actor, "api");
-				if (decision.outcome === "idempotency_conflict")
-					throw new ApplicationFoundationError("idempotency_conflict");
-				return decision.outcome === "replayed" ? decision.result : null;
-			};
-			const replayed = await readReplay();
-			if (replayed) return { outcome: "replayed", result: replayed };
-			try {
-				return { outcome: "prepared", prepared: await prepare() };
-			} catch (error) {
-				const concurrentReplay = await readReplay();
-				if (concurrentReplay)
-					return { outcome: "replayed", result: concurrentReplay };
-				throw error;
-			}
-		},
-		submit: (command, actor, attachment) => execute(command, actor, attachment),
+		prepareWebCreation: (query, actor, prepare) =>
+			prepareCreation(query, actor, "web", prepare),
+		prepareApiCreation: (query, actor, prepare) =>
+			prepareCreation(query, actor, "api", prepare),
+		submit: (command, actor, attachment, agentDefaultRelayKey) =>
+			execute(command, actor, attachment, agentDefaultRelayKey),
 		replayLegacyV1: (command, actor) =>
-			execute(command, actor, undefined, true),
+			execute(command, actor, undefined, undefined, true),
 	};
 }

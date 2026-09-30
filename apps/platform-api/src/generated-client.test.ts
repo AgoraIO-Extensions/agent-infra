@@ -36,13 +36,17 @@ const {
 const {
 	commandAgentLifecycleV2,
 	createAgentApplicationV2,
+	createAgentApplicationV3,
 	decideAgentApplicationV2,
 	getAgentV2,
 	getAgentApplicationV2,
+	getAgentDefaultRelayKeyV2,
+	listAdminAgentsV2,
 	listAgentApplicationsV2,
 	listAgentsV2,
 	listPendingAgentApplicationsV2,
 	listPlatformAuditV2,
+	replaceAgentDefaultRelayKeyV2,
 	updateAgentApplicationV2,
 	updateAgentConfigurationV2,
 	withdrawAgentApplicationV2,
@@ -157,6 +161,19 @@ const applicationBody = {
 	environment: [],
 	secrets: [],
 };
+const modelSelection = {
+	catalogRevision: "catalog-1",
+	options: [
+		{
+			optionId: "option-1",
+			endpointId: "relay-1",
+			modelId: "model-1",
+			reasoningLevels: ["medium"],
+		},
+	],
+	defaultOptionId: "option-1",
+	defaultReasoningLevel: "medium",
+};
 
 function testApp() {
 	const resolve = vi.fn().mockResolvedValue(identity);
@@ -189,7 +206,24 @@ function testApp() {
 	const app = createPlatformApp({
 		management: {
 			identity: identityAdapter,
+			agentDefaultRelayKey: {
+				current: vi.fn().mockResolvedValue({
+					schemaVersion: 1,
+					isSet: true,
+					keyVersion: 1,
+				}),
+				replace: vi.fn().mockResolvedValue({
+					schemaVersion: 1,
+					isSet: true,
+					keyVersion: 2,
+				}),
+				recordRejected: vi.fn().mockResolvedValue(undefined),
+			},
 			foundation: {
+				prepareWebCreation: async (_query, _actor, prepare) => ({
+					outcome: "prepared",
+					prepared: await prepare(),
+				}),
 				prepareApiCreation: async (_query, _actor, prepare) => ({
 					outcome: "prepared",
 					prepared: await prepare(),
@@ -378,7 +412,23 @@ describe("generated Pilot browser client", () => {
 		expect(resolve).not.toHaveBeenCalled();
 	});
 
-	it("consumes every V2 management operation through the Hono Adapter", async () => {
+	it("rejects the retired V2 standard creation payload through the generated client", async () => {
+		const { app } = testApp();
+		const client = createClientV2({
+			baseUrl: "https://platform.example.test",
+			fetch: async (input: string | URL | Request, init?: RequestInit) =>
+				app.fetch(input instanceof Request ? input : new Request(input, init)),
+		});
+		const result = await createAgentApplicationV2({
+			client,
+			body: applicationBody,
+			headers: { "Idempotency-Key": "generated-client-retired" },
+		});
+		expect(result.response.status).toBe(400);
+		expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
+	});
+
+	it("consumes current management operations through the Hono Adapter", async () => {
 		const { app, resolve } = testApp();
 		const client = createClient({
 			baseUrl: "https://platform.example.test",
@@ -394,9 +444,14 @@ describe("generated Pilot browser client", () => {
 		const results = await Promise.all([
 			getCurrentSession({ client }),
 			listAgentApplicationsV2({ client: clientV2 }),
-			createAgentApplicationV2({
+			createAgentApplicationV3({
 				client: clientV2,
-				body: applicationBody,
+				body: {
+					...applicationBody,
+					schemaVersion: 3,
+					agentDefaultRelayKey: "candidate-relay-key",
+					modelSelection,
+				},
 				headers: idempotency,
 			}),
 			getAgentApplicationV2({
@@ -422,7 +477,22 @@ describe("generated Pilot browser client", () => {
 				headers: idempotency,
 			}),
 			listAgentsV2({ client: clientV2 }),
+			listAdminAgentsV2({ client: clientV2 }),
 			getAgentV2({ client: clientV2, path: { agentId: "agent-1" } }),
+			getAgentDefaultRelayKeyV2({
+				client: clientV2,
+				path: { agentId: "agent-1" },
+			}),
+			replaceAgentDefaultRelayKeyV2({
+				client: clientV2,
+				path: { agentId: "agent-1" },
+				body: {
+					schemaVersion: 1,
+					expectedVersion: 1,
+					keyValue: "candidate-relay-key",
+					modelSelection,
+				},
+			}),
 			updateAgentConfigurationV2({
 				client: clientV2,
 				path: { agentId: "agent-1" },
@@ -440,7 +510,8 @@ describe("generated Pilot browser client", () => {
 		]);
 
 		expect(results.map(({ response }) => response?.status)).toEqual([
-			200, 200, 201, 200, 200, 200, 200, 200, 200, 200, 200, 202, 200, 200,
+			200, 200, 201, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 202,
+			200, 200,
 		]);
 		expect(results.every(({ error }) => error === undefined)).toBe(true);
 		expect(resolve).toHaveBeenCalledTimes(results.length);

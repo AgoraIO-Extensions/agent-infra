@@ -4,6 +4,7 @@ import {
 	createPersonalRelayKeyUseCaseV1,
 	PersonalRelayKeyErrorV1,
 	type PersonalRelayKeyStorePortV1,
+	personalRelayKeyAuditIntentV1,
 } from "./personal-relay-key.js";
 
 const userId = "b3590249-c256-4c81-82f7-baf1ec9c34da";
@@ -28,6 +29,44 @@ function fixture() {
 }
 
 describe("personal Relay Key Core", () => {
+	it("chooses read, write, stale, and early-rejection audit outcomes", () => {
+		expect(personalRelayKeyAuditIntentV1({ operation: "current" })).toEqual({
+			action: "relay_key.personal.read",
+			outcome: "succeeded",
+		});
+		expect(
+			personalRelayKeyAuditIntentV1({
+				operation: "replace",
+				result: "replaced",
+			}),
+		).toEqual({ action: "relay_key.personal.replaced", outcome: "succeeded" });
+		expect(
+			personalRelayKeyAuditIntentV1({
+				operation: "revoke",
+				result: "revoked",
+			}),
+		).toEqual({ action: "relay_key.personal.revoked", outcome: "succeeded" });
+		for (const operation of ["replace", "revoke"] as const)
+			expect(
+				personalRelayKeyAuditIntentV1({ operation, result: "stale" }),
+			).toEqual({
+				action: "relay_key.personal.rejected",
+				outcome: "rejected",
+				reason: "STALE_VERSION",
+			});
+		expect(
+			personalRelayKeyAuditIntentV1({
+				operation: "rejected",
+				outcome: "failed",
+				reason: "VALIDATION_UNAVAILABLE",
+			}),
+		).toEqual({
+			action: "relay_key.personal.rejected",
+			outcome: "failed",
+			reason: "VALIDATION_UNAVAILABLE",
+		});
+	});
+
 	it("returns only the current version and derives the subject from the trusted actor", async () => {
 		const { keys, store } = fixture();
 		expect(await keys.current(actor, "trace", "request")).toEqual({

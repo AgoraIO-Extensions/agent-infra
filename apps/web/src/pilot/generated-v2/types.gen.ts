@@ -51,6 +51,44 @@ export type AgentApplicationCreateRequestV2 = {
     };
 };
 
+export type AgentApplicationCreateRequestV3 = {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
+    }>;
+    coOwnerIds: Array<string>;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelSelection?: AgentDefaultModelSelectionV1;
+    name: string;
+    schemaVersion: 3;
+    secrets: Array<{
+        name: string;
+    }>;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+};
+
 export type AgentApplicationProjectionV2 = {
     agentId: string | null;
     applicationId: string;
@@ -212,6 +250,34 @@ export type AgentConfigurationUpdateRequestV2 = {
     secrets?: Array<{
         name: string;
     }>;
+};
+
+export type AgentDefaultModelSelectionV1 = {
+    catalogRevision: string;
+    defaultOptionId: string;
+    defaultReasoningLevel: string;
+    options: Array<{
+        endpointId: string;
+        modelId: string;
+        optionId: string;
+        reasoningLevels: Array<string>;
+    }>;
+};
+
+export type AgentDefaultRelayKeyReplaceRequestV1 = {
+    expectedVersion: number | null;
+    modelSelection: AgentDefaultModelSelectionV1;
+    schemaVersion: 1;
+};
+
+export type AgentDefaultRelayKeyStateV1 = {
+    isSet: false;
+    keyVersion: null;
+    schemaVersion: 1;
+} | {
+    isSet: true;
+    keyVersion: number;
+    schemaVersion: 1;
 };
 
 export type AgentDirectCreationProjectionV2 = {
@@ -728,6 +794,46 @@ export type AgentApplicationCreateRequestV2Writable = {
     };
 };
 
+export type AgentApplicationCreateRequestV3Writable = {
+    agentDefaultRelayKey?: string;
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
+    }>;
+    coOwnerIds: Array<string>;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelSelection?: AgentDefaultModelSelectionV1;
+    name: string;
+    schemaVersion: 3;
+    secrets: Array<{
+        name: string;
+        value: string;
+    }>;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+};
+
 export type AgentApplicationUpdateRequestV2Writable = {
     availability: Array<{
         kind: 'user';
@@ -817,6 +923,13 @@ export type AgentConfigurationUpdateRequestV2Writable = {
         name: string;
         value: string;
     }>;
+};
+
+export type AgentDefaultRelayKeyReplaceRequestV1Writable = {
+    expectedVersion: number | null;
+    keyValue: string;
+    modelSelection: AgentDefaultModelSelectionV1;
+    schemaVersion: 1;
 };
 
 export type PersonalRelayKeyReplaceRequestV1Writable = {
@@ -933,6 +1046,61 @@ export type DecideAgentApplicationV2Responses = {
 };
 
 export type DecideAgentApplicationV2Response = DecideAgentApplicationV2Responses[keyof DecideAgentApplicationV2Responses];
+
+export type ListAdminAgentsV2Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/admin/agents';
+};
+
+export type ListAdminAgentsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListAdminAgentsV2Error = ListAdminAgentsV2Errors[keyof ListAdminAgentsV2Errors];
+
+export type ListAdminAgentsV2Responses = {
+    /**
+     * Administrator Agent list
+     */
+    200: {
+        items: Array<AgentProjectionV2>;
+        nextCursor: string | null;
+    };
+};
+
+export type ListAdminAgentsV2Response = ListAdminAgentsV2Responses[keyof ListAdminAgentsV2Responses];
 
 export type ListPlatformAuditV2Data = {
     body?: never;
@@ -1146,6 +1314,58 @@ export type CreateAgentApplicationV2Responses = {
 };
 
 export type CreateAgentApplicationV2Response = CreateAgentApplicationV2Responses[keyof CreateAgentApplicationV2Responses];
+
+export type CreateAgentApplicationV3Data = {
+    body: AgentApplicationCreateRequestV3Writable;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/agent-applications/default-key';
+};
+
+export type CreateAgentApplicationV3Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CreateAgentApplicationV3Error = CreateAgentApplicationV3Errors[keyof CreateAgentApplicationV3Errors];
+
+export type CreateAgentApplicationV3Responses = {
+    /**
+     * Application submitted
+     */
+    201: AgentApplicationProjectionV2;
+};
+
+export type CreateAgentApplicationV3Response = CreateAgentApplicationV3Responses[keyof CreateAgentApplicationV3Responses];
 
 export type GetAgentApplicationV2Data = {
     body?: never;
@@ -1363,7 +1583,7 @@ export type ListAgentsV2Responses = {
 export type ListAgentsV2Response = ListAgentsV2Responses[keyof ListAgentsV2Responses];
 
 export type CreateAgentDirectlyV2Data = {
-    body: AgentApplicationCreateRequestV2Writable;
+    body: AgentApplicationCreateRequestV3Writable;
     headers: {
         'Idempotency-Key': string;
     };
@@ -1518,6 +1738,108 @@ export type UpdateAgentConfigurationV2Responses = {
 };
 
 export type UpdateAgentConfigurationV2Response = UpdateAgentConfigurationV2Responses[keyof UpdateAgentConfigurationV2Responses];
+
+export type GetAgentDefaultRelayKeyV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/default-relay-key';
+};
+
+export type GetAgentDefaultRelayKeyV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentDefaultRelayKeyV2Error = GetAgentDefaultRelayKeyV2Errors[keyof GetAgentDefaultRelayKeyV2Errors];
+
+export type GetAgentDefaultRelayKeyV2Responses = {
+    /**
+     * Agent default Relay Key status
+     */
+    200: PersonalRelayKeyStateV1;
+};
+
+export type GetAgentDefaultRelayKeyV2Response = GetAgentDefaultRelayKeyV2Responses[keyof GetAgentDefaultRelayKeyV2Responses];
+
+export type ReplaceAgentDefaultRelayKeyV2Data = {
+    body: AgentDefaultRelayKeyReplaceRequestV1Writable;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/default-relay-key';
+};
+
+export type ReplaceAgentDefaultRelayKeyV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReplaceAgentDefaultRelayKeyV2Error = ReplaceAgentDefaultRelayKeyV2Errors[keyof ReplaceAgentDefaultRelayKeyV2Errors];
+
+export type ReplaceAgentDefaultRelayKeyV2Responses = {
+    /**
+     * Agent default Relay Key replaced
+     */
+    200: PersonalRelayKeyStateV1;
+};
+
+export type ReplaceAgentDefaultRelayKeyV2Response = ReplaceAgentDefaultRelayKeyV2Responses[keyof ReplaceAgentDefaultRelayKeyV2Responses];
 
 export type CommandAgentLifecycleV2Data = {
     body: AgentLifecycleCommandRequestV1;

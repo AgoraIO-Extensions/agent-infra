@@ -1989,6 +1989,56 @@ describe("PostgreSQL Agent configuration query", () => {
 		expect(missing).toEqual(forbidden);
 	});
 
+	it("projects keyless V4 model choices without the Relay endpoint", async () => {
+		await clearDatabase();
+		const record: AgentConfigurationRecordV2 = {
+			...agentConfigurationConformanceRecordV1,
+			modelConfiguration: null,
+			modelCatalogRevision: "catalog_4",
+			runtimeModelConfigurationV4: {
+				schemaVersion: 4,
+				configVersion: "catalog_4",
+				defaultModelOptionId: "model_primary",
+				defaultReasoningLevel: "low",
+				modelOptions: [
+					{
+						modelOptionId: "model_primary",
+						endpoint: "https://relay.example/v1",
+						model: "gpt-5",
+						reasoningLevels: ["low", "medium"],
+						protocol: "openai-responses-v1",
+						authentication: "bearer",
+					},
+				],
+			},
+		};
+		await seed("agent_01", record);
+		const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+		adapters.push(query);
+		const found = await query.read({
+			agentId: "agent_01",
+			actorId: "owner_01",
+			organizationIds: [],
+			isAdministrator: false,
+			intent: "manage",
+		});
+		expect(found).toMatchObject({
+			outcome: "found",
+			configuration: {
+				modelOptions: [
+					{
+						optionId: "model_primary",
+						modelId: "gpt-5",
+						reasoningLevels: ["low", "medium"],
+					},
+				],
+				defaultModelOptionId: "model_primary",
+				defaultReasoningLevel: "low",
+			},
+		});
+		expect(JSON.stringify(found)).not.toContain("relay.example");
+	});
+
 	it("allows a current management grant to read the configuration projection", async () => {
 		await clearDatabase();
 		await seed();

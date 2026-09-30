@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { PersonalRelayKeyStorePortV1 } from "@agent-infra/platform-core";
-import { ApiIdentityError } from "@agent-infra/platform-core";
+import {
+	ApiIdentityError,
+	type PersonalRelayKeyStorePortV1,
+	personalRelayKeyAuditIntentV1,
+} from "@agent-infra/platform-core";
 import type { RelayKeyEncryptorV1 } from "@agent-infra/secret-store";
 import postgres from "postgres";
 
@@ -99,7 +102,7 @@ export class PostgresPersonalRelayKeyStoreV1
 			readonly traceId: string;
 			readonly requestId: string;
 			readonly action: string;
-			readonly outcome: "succeeded" | "rejected";
+			readonly outcome: "succeeded" | "rejected" | "failed";
 			readonly reason?: string;
 		},
 	): Promise<void> {
@@ -129,8 +132,7 @@ export class PostgresPersonalRelayKeyStoreV1
 			});
 			await this.audit(sql, {
 				...input,
-				action: "relay_key.personal.read",
-				outcome: "succeeded",
+				...personalRelayKeyAuditIntentV1({ operation: "current" }),
 			});
 			return binding?.keyVersion ?? null;
 		});
@@ -156,12 +158,10 @@ export class PostgresPersonalRelayKeyStoreV1
 			});
 			await this.audit(sql, {
 				...input,
-				action:
-					result.outcome === "stale"
-						? "relay_key.personal.rejected"
-						: "relay_key.personal.replaced",
-				outcome: result.outcome === "stale" ? "rejected" : "succeeded",
-				...(result.outcome === "stale" ? { reason: "STALE_VERSION" } : {}),
+				...personalRelayKeyAuditIntentV1({
+					operation: "replace",
+					result: result.outcome,
+				}),
 			});
 			return result.outcome === "replaced" ? result.binding.keyVersion : null;
 		});
@@ -184,12 +184,10 @@ export class PostgresPersonalRelayKeyStoreV1
 			});
 			await this.audit(sql, {
 				...input,
-				action:
-					result === "stale"
-						? "relay_key.personal.rejected"
-						: "relay_key.personal.revoked",
-				outcome: result === "stale" ? "rejected" : "succeeded",
-				...(result === "stale" ? { reason: "STALE_VERSION" } : {}),
+				...personalRelayKeyAuditIntentV1({
+					operation: "revoke",
+					result,
+				}),
 			});
 			return result === "revoked";
 		});
@@ -206,6 +204,11 @@ export class PostgresPersonalRelayKeyStoreV1
 		bounded(input.traceId, 256);
 		bounded(input.requestId, 256);
 		bounded(input.reason, 64);
+		const audit = personalRelayKeyAuditIntentV1({
+			operation: "rejected",
+			outcome: input.outcome,
+			reason: input.reason,
+		});
 		await this.sql`
 			insert into platform.audit_events
 				(id, trace_id, request_id, actor_type, actor_id, action,
@@ -213,9 +216,9 @@ export class PostgresPersonalRelayKeyStoreV1
 			values (${randomUUID()}, ${input.traceId}, ${input.requestId},
 				${input.actorUserId === null ? "unknown" : "user"},
 				${input.actorUserId ?? "unresolved"},
-				'relay_key.personal.rejected', 'user',
-				${input.actorUserId ?? "unresolved"}, ${input.outcome},
-				${this.sql.json({ reason: input.reason })})
+				${audit.action}, 'user',
+				${input.actorUserId ?? "unresolved"}, ${audit.outcome},
+				${this.sql.json({ reason: audit.reason })})
 		`;
 	}
 

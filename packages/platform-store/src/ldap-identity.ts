@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { ApiIdentityError } from "@agent-infra/platform-core";
+import {
+	ApiIdentityError,
+	type PlatformUserGovernanceUserV1,
+	requireCurrentPlatformUserGovernanceV1,
+} from "@agent-infra/platform-core";
 import postgres from "postgres";
 
-export interface CurrentLdapUserV1 {
-	readonly userId: string;
-	readonly accountStatus: "active" | "disabled";
-	readonly roles: readonly ("employee" | "system_admin")[];
-}
+export type CurrentLdapUserV1 = PlatformUserGovernanceUserV1;
 
 function assertText(value: string, maximum: number): void {
 	if (
@@ -166,19 +166,24 @@ export class PostgresPlatformUserDisablesV1 {
 				select user_id from platform.platform_user_disables
 				where user_id = ${input.actorUserId}
 			`;
-			if (disabledActor) throw new ApiIdentityError("not_authorized");
-			let actor: CurrentLdapUserV1 | null;
+			let actor: CurrentLdapUserV1 | null = null;
 			try {
-				actor = await currentLdapUser(input.actorUserId);
+				if (!disabledActor) actor = await currentLdapUser(input.actorUserId);
 			} catch {
 				throw new ApiIdentityError("dependency_unavailable");
 			}
-			if (
-				actor?.userId !== input.actorUserId ||
-				actor.accountStatus !== "active" ||
-				!actor.roles.includes("system_admin")
-			)
-				throw new ApiIdentityError("not_authorized");
+			const authority = {
+				actorUserId: input.actorUserId,
+				targetUserId: input.targetUserId,
+				actorPlatformDisabled: disabledActor !== undefined,
+				actor,
+			};
+			// Check the actor before resolving an enable target.
+			requireCurrentPlatformUserGovernanceV1({
+				...authority,
+				disabled: true,
+				target: null,
+			});
 			if (!input.disabled) {
 				let target: CurrentLdapUserV1 | null;
 				try {
@@ -186,11 +191,11 @@ export class PostgresPlatformUserDisablesV1 {
 				} catch {
 					throw new ApiIdentityError("dependency_unavailable");
 				}
-				if (
-					target?.userId !== input.targetUserId ||
-					target.accountStatus !== "active"
-				)
-					throw new ApiIdentityError("resource_unavailable");
+				requireCurrentPlatformUserGovernanceV1({
+					...authority,
+					disabled: false,
+					target,
+				});
 			}
 			const rows = input.disabled
 				? await sql`

@@ -10,7 +10,10 @@ import {
 	parseActorContext,
 	parseInitialCommand,
 } from "./agent-configuration-input.js";
-import { requireAdmittedConfigurationPolicy } from "./agent-configuration-record.js";
+import {
+	parseStoredKeylessRuntimeV4,
+	requireAdmittedConfigurationPolicy,
+} from "./agent-configuration-record.js";
 import {
 	type AdmittedInitialAgentConfigurationV1,
 	type AgentConfigurationActorContextV1,
@@ -22,11 +25,18 @@ import {
 	type AgentConfigurationModelV1,
 	type AgentConfigurationRecordV2,
 	type AgentConfigurationSecretAdmissionPortV1,
+	type AgentDefaultModelAdmissionV1,
 	type InitialAgentConfigurationAdmissionDependenciesV1,
 	type InitialAgentConfigurationAdmissionHandleV1,
 	type InitialAgentConfigurationCommandV2,
 } from "./agent-configuration-types.js";
-import { compareText, sameValue } from "./agent-configuration-values.js";
+import {
+	compareText,
+	exactObject,
+	idMaxBytes,
+	isText,
+	sameValue,
+} from "./agent-configuration-values.js";
 
 function admittedInitialAccess(
 	command: InitialAgentConfigurationCommandV2,
@@ -80,6 +90,7 @@ async function completeInitialAgentConfigurationAdmissionV1(
 		{ readonly status: "admitted" }
 	>,
 	dependencies: InitialAgentConfigurationAdmissionDependenciesV1,
+	agentDefaultModels?: AgentDefaultModelAdmissionV1,
 ): Promise<AdmittedInitialAgentConfigurationV1> {
 	admittedInitialAccess(command, actorContext, firstAuthorization);
 
@@ -124,8 +135,12 @@ async function completeInitialAgentConfigurationAdmissionV1(
 	}
 
 	if (
-		(source.kind === "standard" && command.modelConfiguration === undefined) ||
-		(source.kind === "custom" && command.modelConfiguration !== undefined) ||
+		(source.kind === "standard" &&
+			(command.modelConfiguration === undefined) ===
+				(agentDefaultModels === undefined)) ||
+		(source.kind === "custom" &&
+			(command.modelConfiguration !== undefined ||
+				agentDefaultModels !== undefined)) ||
 		(source.kind === "standard" &&
 			(command.environment.some(
 				({ name }) =>
@@ -145,6 +160,36 @@ async function completeInitialAgentConfigurationAdmissionV1(
 	}
 
 	let modelConfiguration: AgentConfigurationModelV1 | null = null;
+	let keylessModel:
+		| {
+				readonly catalogRevision: string;
+				readonly runtime: NonNullable<
+					AgentConfigurationRecordV2["runtimeModelConfigurationV4"]
+				>;
+		  }
+		| undefined;
+	if (agentDefaultModels && source.kind === "standard") {
+		try {
+			const admitted = exactObject(
+				await agentDefaultModels.admitModels({
+					agentId: command.agentId,
+					requestId: command.requestId,
+					traceId: command.traceId,
+					source,
+				}),
+				["catalogRevision", "runtime"],
+			);
+			if (!isText(admitted.catalogRevision, idMaxBytes))
+				throw new AgentConfigurationError("not_admitted");
+			keylessModel = {
+				catalogRevision: admitted.catalogRevision,
+				runtime: parseStoredKeylessRuntimeV4(admitted.runtime),
+			};
+		} catch (error) {
+			if (error instanceof AgentConfigurationError) throw error;
+			throw new AgentConfigurationError("dependency_unavailable");
+		}
+	}
 	if (command.modelConfiguration) {
 		let admission: Awaited<
 			ReturnType<AgentConfigurationModelAdmissionPortV1["admitModels"]>
@@ -248,6 +293,12 @@ async function completeInitialAgentConfigurationAdmissionV1(
 		revision: 1,
 		source,
 		modelConfiguration,
+		...(keylessModel === undefined
+			? {}
+			: {
+					runtimeModelConfigurationV4: keylessModel.runtime,
+					modelCatalogRevision: keylessModel.catalogRevision,
+				}),
 		environment: command.environment,
 		secrets: secretAdmission.secrets,
 		channels: channelAdmission.channels,
@@ -278,6 +329,7 @@ export async function beginInitialAgentConfigurationAdmissionV1(
 	commandInput: InitialAgentConfigurationCommandV2,
 	actorContextInput: AgentConfigurationActorContextV1,
 	dependencies: InitialAgentConfigurationAdmissionDependenciesV1,
+	agentDefaultModels?: AgentDefaultModelAdmissionV1,
 ): Promise<InitialAgentConfigurationAdmissionHandleV1> {
 	const command = parseInitialCommand(commandInput);
 	const actorContext = parseActorContext(actorContextInput);
@@ -305,6 +357,7 @@ export async function beginInitialAgentConfigurationAdmissionV1(
 				actorContext,
 				firstAuthorization,
 				capturedDependencies,
+				agentDefaultModels,
 			);
 			return completion;
 		},

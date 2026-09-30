@@ -1,5 +1,34 @@
 import { ApiIdentityError } from "./api-identity-management.js";
 
+export interface PlatformUserGovernanceUserV1 {
+	readonly userId: string;
+	readonly accountStatus: "active" | "disabled";
+	readonly roles: readonly ("employee" | "system_admin")[];
+}
+
+export function requireCurrentPlatformUserGovernanceV1(input: {
+	readonly actorUserId: string;
+	readonly targetUserId: string;
+	readonly disabled: boolean;
+	readonly actorPlatformDisabled: boolean;
+	readonly actor: PlatformUserGovernanceUserV1 | null;
+	readonly target: PlatformUserGovernanceUserV1 | null;
+}): void {
+	if (
+		input.actorPlatformDisabled ||
+		input.actor?.userId !== input.actorUserId ||
+		input.actor.accountStatus !== "active" ||
+		!input.actor.roles.includes("system_admin")
+	)
+		throw new ApiIdentityError("not_authorized");
+	if (
+		!input.disabled &&
+		(input.target?.userId !== input.targetUserId ||
+			input.target.accountStatus !== "active")
+	)
+		throw new ApiIdentityError("resource_unavailable");
+}
+
 export interface PlatformUserGovernanceStoreV1 {
 	setPlatformDisabled(input: {
 		readonly actorUserId: string;

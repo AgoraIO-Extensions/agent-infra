@@ -79,6 +79,11 @@ describe("Pilot standard artifacts", () => {
 			operationId: "createAgentApplicationV2",
 		});
 		expect(
+			document.paths?.["/api/v2/agent-applications/default-key"]?.post,
+		).toMatchObject({
+			operationId: "createAgentApplicationV3",
+		});
+		expect(
 			document.paths?.["/api/v2/agents/{agentId}/configuration"]?.put,
 		).toMatchObject({
 			operationId: "updateAgentConfigurationV2",

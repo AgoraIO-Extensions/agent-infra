@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CommandAgentLifecycleV2Data, CommandAgentLifecycleV2Errors, CommandAgentLifecycleV2Responses, CreateAgentApplicationV2Data, CreateAgentApplicationV2Errors, CreateAgentApplicationV2Responses, CreateAgentDirectlyV2Data, CreateAgentDirectlyV2Errors, CreateAgentDirectlyV2Responses, DecideAgentApplicationV2Data, DecideAgentApplicationV2Errors, DecideAgentApplicationV2Responses, GetAgentApplicationV2Data, GetAgentApplicationV2Errors, GetAgentApplicationV2Responses, GetAgentV2Data, GetAgentV2Errors, GetAgentV2Responses, GetConversationV2Data, GetConversationV2Errors, GetConversationV2Responses, GetDeploymentConfigurationV2Data, GetDeploymentConfigurationV2Errors, GetDeploymentConfigurationV2Responses, GetExecutionDetailV2Data, GetExecutionDetailV2Errors, GetExecutionDetailV2Responses, GetPersonalRelayKeyV2Data, GetPersonalRelayKeyV2Errors, GetPersonalRelayKeyV2Responses, ListAgentApplicationsV2Data, ListAgentApplicationsV2Errors, ListAgentApplicationsV2Responses, ListAgentsV2Data, ListAgentsV2Errors, ListAgentsV2Responses, ListPendingAgentApplicationsV2Data, ListPendingAgentApplicationsV2Errors, ListPendingAgentApplicationsV2Responses, ListPlatformAuditV2Data, ListPlatformAuditV2Errors, ListPlatformAuditV2Responses, ReplacePersonalRelayKeyV2Data, ReplacePersonalRelayKeyV2Errors, ReplacePersonalRelayKeyV2Responses, RevokePersonalRelayKeyV2Data, RevokePersonalRelayKeyV2Errors, RevokePersonalRelayKeyV2Responses, SetPlatformUserDisabledV2Data, SetPlatformUserDisabledV2Errors, SetPlatformUserDisabledV2Responses, StreamConversationEventsV2Data, StreamConversationEventsV2Errors, StreamConversationEventsV2Response, StreamConversationEventsV2Responses, UpdateAgentApplicationV2Data, UpdateAgentApplicationV2Errors, UpdateAgentApplicationV2Responses, UpdateAgentConfigurationV2Data, UpdateAgentConfigurationV2Errors, UpdateAgentConfigurationV2Responses, WithdrawAgentApplicationV2Data, WithdrawAgentApplicationV2Errors, WithdrawAgentApplicationV2Responses } from './types.gen';
+import type { CommandAgentLifecycleV2Data, CommandAgentLifecycleV2Errors, CommandAgentLifecycleV2Responses, CreateAgentApplicationV2Data, CreateAgentApplicationV2Errors, CreateAgentApplicationV2Responses, CreateAgentApplicationV3Data, CreateAgentApplicationV3Errors, CreateAgentApplicationV3Responses, CreateAgentDirectlyV2Data, CreateAgentDirectlyV2Errors, CreateAgentDirectlyV2Responses, DecideAgentApplicationV2Data, DecideAgentApplicationV2Errors, DecideAgentApplicationV2Responses, GetAgentApplicationV2Data, GetAgentApplicationV2Errors, GetAgentApplicationV2Responses, GetAgentDefaultRelayKeyV2Data, GetAgentDefaultRelayKeyV2Errors, GetAgentDefaultRelayKeyV2Responses, GetAgentV2Data, GetAgentV2Errors, GetAgentV2Responses, GetConversationV2Data, GetConversationV2Errors, GetConversationV2Responses, GetDeploymentConfigurationV2Data, GetDeploymentConfigurationV2Errors, GetDeploymentConfigurationV2Responses, GetExecutionDetailV2Data, GetExecutionDetailV2Errors, GetExecutionDetailV2Responses, GetPersonalRelayKeyV2Data, GetPersonalRelayKeyV2Errors, GetPersonalRelayKeyV2Responses, ListAdminAgentsV2Data, ListAdminAgentsV2Errors, ListAdminAgentsV2Responses, ListAgentApplicationsV2Data, ListAgentApplicationsV2Errors, ListAgentApplicationsV2Responses, ListAgentsV2Data, ListAgentsV2Errors, ListAgentsV2Responses, ListPendingAgentApplicationsV2Data, ListPendingAgentApplicationsV2Errors, ListPendingAgentApplicationsV2Responses, ListPlatformAuditV2Data, ListPlatformAuditV2Errors, ListPlatformAuditV2Responses, ReplaceAgentDefaultRelayKeyV2Data, ReplaceAgentDefaultRelayKeyV2Errors, ReplaceAgentDefaultRelayKeyV2Responses, ReplacePersonalRelayKeyV2Data, ReplacePersonalRelayKeyV2Errors, ReplacePersonalRelayKeyV2Responses, RevokePersonalRelayKeyV2Data, RevokePersonalRelayKeyV2Errors, RevokePersonalRelayKeyV2Responses, SetPlatformUserDisabledV2Data, SetPlatformUserDisabledV2Errors, SetPlatformUserDisabledV2Responses, StreamConversationEventsV2Data, StreamConversationEventsV2Errors, StreamConversationEventsV2Response, StreamConversationEventsV2Responses, UpdateAgentApplicationV2Data, UpdateAgentApplicationV2Errors, UpdateAgentApplicationV2Responses, UpdateAgentConfigurationV2Data, UpdateAgentConfigurationV2Errors, UpdateAgentConfigurationV2Responses, WithdrawAgentApplicationV2Data, WithdrawAgentApplicationV2Errors, WithdrawAgentApplicationV2Responses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -29,6 +29,8 @@ export const decideAgentApplicationV2 = <ThrowOnError extends boolean = false>(o
     }
 });
 
+export const listAdminAgentsV2 = <ThrowOnError extends boolean = false>(options?: Options<ListAdminAgentsV2Data, ThrowOnError>): RequestResult<ListAdminAgentsV2Responses, ListAdminAgentsV2Errors, ThrowOnError> => (options?.client ?? client).get<ListAdminAgentsV2Responses, ListAdminAgentsV2Errors, ThrowOnError>({ url: '/api/v2/admin/agents', ...options });
+
 export const listPlatformAuditV2 = <ThrowOnError extends boolean = false>(options?: Options<ListPlatformAuditV2Data, ThrowOnError>): RequestResult<ListPlatformAuditV2Responses, ListPlatformAuditV2Errors, ThrowOnError> => (options?.client ?? client).get<ListPlatformAuditV2Responses, ListPlatformAuditV2Errors, ThrowOnError>({ url: '/api/v2/admin/audit', ...options });
 
 export const setPlatformUserDisabledV2 = <ThrowOnError extends boolean = false>(options: Options<SetPlatformUserDisabledV2Data, ThrowOnError>): RequestResult<SetPlatformUserDisabledV2Responses, SetPlatformUserDisabledV2Errors, ThrowOnError> => (options.client ?? client).put<SetPlatformUserDisabledV2Responses, SetPlatformUserDisabledV2Errors, ThrowOnError>({
@@ -44,6 +46,15 @@ export const listAgentApplicationsV2 = <ThrowOnError extends boolean = false>(op
 
 export const createAgentApplicationV2 = <ThrowOnError extends boolean = false>(options: Options<CreateAgentApplicationV2Data, ThrowOnError>): RequestResult<CreateAgentApplicationV2Responses, CreateAgentApplicationV2Errors, ThrowOnError> => (options.client ?? client).post<CreateAgentApplicationV2Responses, CreateAgentApplicationV2Errors, ThrowOnError>({
     url: '/api/v2/agent-applications',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const createAgentApplicationV3 = <ThrowOnError extends boolean = false>(options: Options<CreateAgentApplicationV3Data, ThrowOnError>): RequestResult<CreateAgentApplicationV3Responses, CreateAgentApplicationV3Errors, ThrowOnError> => (options.client ?? client).post<CreateAgentApplicationV3Responses, CreateAgentApplicationV3Errors, ThrowOnError>({
+    url: '/api/v2/agent-applications/default-key',
     ...options,
     headers: {
         'Content-Type': 'application/json',
@@ -79,6 +90,17 @@ export const getAgentV2 = <ThrowOnError extends boolean = false>(options: Option
 
 export const updateAgentConfigurationV2 = <ThrowOnError extends boolean = false>(options: Options<UpdateAgentConfigurationV2Data, ThrowOnError>): RequestResult<UpdateAgentConfigurationV2Responses, UpdateAgentConfigurationV2Errors, ThrowOnError> => (options.client ?? client).put<UpdateAgentConfigurationV2Responses, UpdateAgentConfigurationV2Errors, ThrowOnError>({
     url: '/api/v2/agents/{agentId}/configuration',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const getAgentDefaultRelayKeyV2 = <ThrowOnError extends boolean = false>(options: Options<GetAgentDefaultRelayKeyV2Data, ThrowOnError>): RequestResult<GetAgentDefaultRelayKeyV2Responses, GetAgentDefaultRelayKeyV2Errors, ThrowOnError> => (options.client ?? client).get<GetAgentDefaultRelayKeyV2Responses, GetAgentDefaultRelayKeyV2Errors, ThrowOnError>({ url: '/api/v2/agents/{agentId}/default-relay-key', ...options });
+
+export const replaceAgentDefaultRelayKeyV2 = <ThrowOnError extends boolean = false>(options: Options<ReplaceAgentDefaultRelayKeyV2Data, ThrowOnError>): RequestResult<ReplaceAgentDefaultRelayKeyV2Responses, ReplaceAgentDefaultRelayKeyV2Errors, ThrowOnError> => (options.client ?? client).put<ReplaceAgentDefaultRelayKeyV2Responses, ReplaceAgentDefaultRelayKeyV2Errors, ThrowOnError>({
+    url: '/api/v2/agents/{agentId}/default-relay-key',
     ...options,
     headers: {
         'Content-Type': 'application/json',

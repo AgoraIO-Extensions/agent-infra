@@ -59,6 +59,48 @@ export class PersonalRelayKeyErrorV1 extends Error {
 	}
 }
 
+export function personalRelayKeyAuditIntentV1(
+	input:
+		| { readonly operation: "current" }
+		| { readonly operation: "replace"; readonly result: "replaced" | "stale" }
+		| { readonly operation: "revoke"; readonly result: "revoked" | "stale" }
+		| {
+				readonly operation: "rejected";
+				readonly outcome: "rejected" | "failed";
+				readonly reason: string;
+		  },
+): {
+	readonly action:
+		| "relay_key.personal.read"
+		| "relay_key.personal.replaced"
+		| "relay_key.personal.revoked"
+		| "relay_key.personal.rejected";
+	readonly outcome: "succeeded" | "rejected" | "failed";
+	readonly reason?: string;
+} {
+	if (input.operation === "current")
+		return { action: "relay_key.personal.read", outcome: "succeeded" };
+	if (input.operation === "rejected")
+		return {
+			action: "relay_key.personal.rejected",
+			outcome: input.outcome,
+			reason: input.reason,
+		};
+	if (input.result === "stale")
+		return {
+			action: "relay_key.personal.rejected",
+			outcome: "rejected",
+			reason: "STALE_VERSION",
+		};
+	return {
+		action:
+			input.operation === "replace"
+				? "relay_key.personal.replaced"
+				: "relay_key.personal.revoked",
+		outcome: "succeeded",
+	};
+}
+
 function subject(actor: PersonalRelayKeyActorV1): string {
 	if (actor.accountStatus !== "active" || actor.principal !== undefined)
 		throw new PersonalRelayKeyErrorV1("not_authorized");

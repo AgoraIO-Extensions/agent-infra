@@ -1,29 +1,38 @@
 import {
 	AgentApplicationCreateRequestV2Schema,
+	AgentApplicationCreateRequestV3Schema,
 	AgentApplicationProjectionV1Schema,
 	AgentApplicationProjectionV2Schema,
 	AgentApplicationUpdateRequestV2Schema,
+	AgentDefaultRelayKeyReplaceRequestV1Schema,
 	AgentDirectCreationProjectionV2Schema,
 	AgentLifecycleCommandRequestV1Schema,
 	AgentProjectionV1Schema,
 	AgentProjectionV2Schema,
 	ApprovalDecisionRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
+import { ModelConfigurationErrorV1 } from "@agent-infra/model-catalog";
 import type {
 	AgentConfigurationModelInputV1,
 	AgentConfigurationUseCaseV1,
+	AgentDefaultModelAdmissionV1,
+	AgentDefaultRelayKeyActorV1,
+	AgentDefaultRelayKeyAttachmentV1,
 	AgentManagementActorContextV1,
 	AgentManagementInterfaceV1,
 	ApiCredentialScopeV1,
 	ApiIdentityAccessAuditContextV1,
-	ApiIdentityActorV1,
 	ApiIdentityManagementInterfaceV1,
 	ApplicationCreationPreparedInputV1,
 	ApplicationFoundationUseCaseV1,
 	ApplicationRevisionUseCaseV1,
+	createAgentDefaultRelayKeyUseCaseV1,
 	PendingSecretRecordAttachmentResolverV1,
 } from "@agent-infra/platform-core";
 import {
+	AgentConfigurationError,
+	AgentDefaultRelayKeyErrorV1,
+	isAgentAdministratorListAllowedV1,
 	isApiAgentLifecycleCommandAllowedV1,
 	isSameApiCreationAuthorityV1,
 } from "@agent-infra/platform-core";
@@ -35,11 +44,13 @@ import type {
 	AgentManagementPageInputV1,
 	AgentManagementPageV1,
 } from "@agent-infra/platform-store";
+import type { RelayKeyEncryptorV1 } from "@agent-infra/secret-store";
 import type { Context, Hono } from "hono";
 import { allocateDeploymentDirectApplicationIds } from "../deployment-identity.js";
 import { parsePendingSecretRecordAttachmentResolverV1 } from "../secret-preparation.js";
 import {
 	HttpProtocolError,
+	type JsonSchema,
 	parseIdempotencyKey,
 	parseJson,
 	parsePageQuery,
@@ -48,6 +59,8 @@ import {
 } from "./common.js";
 import { mapCoreError } from "./core-errors.js";
 import {
+	projectApiIdentityActor as apiActor,
+	projectApiIdentityContext as apiIdentityContext,
 	type IdentityAdapter,
 	type IdentityContext,
 	resolveApiIdentity,
@@ -60,6 +73,9 @@ type ApplicationProjection = ReturnType<
 type AgentProjection = ReturnType<typeof AgentProjectionV2Schema.parse>;
 type ApplicationCreateInput = ReturnType<
 	typeof AgentApplicationCreateRequestV2Schema.parse
+>;
+type ApplicationCreateInputV3 = ReturnType<
+	typeof AgentApplicationCreateRequestV3Schema.parse
 >;
 type ApplicationUpdateInput = ReturnType<
 	typeof AgentApplicationUpdateRequestV2Schema.parse
@@ -107,7 +123,7 @@ export interface ManagementRouteDependencies {
 	readonly identity: IdentityAdapter;
 	readonly foundation: Pick<
 		ApplicationFoundationUseCaseV1,
-		"submit" | "prepareApiCreation"
+		"submit" | "prepareApiCreation" | "prepareWebCreation"
 	>;
 	readonly revision: Pick<ApplicationRevisionUseCaseV1, "revise">;
 	readonly management: Pick<
@@ -115,6 +131,18 @@ export interface ManagementRouteDependencies {
 		"executeManagementCommand"
 	>;
 	readonly apiIdentity?: ApiIdentityManagementInterfaceV1;
+	readonly agentDefaultRelayKeyEncryptor?: RelayKeyEncryptorV1;
+	readonly agentDefaultRelayKey?: ReturnType<
+		typeof createAgentDefaultRelayKeyUseCaseV1
+	>;
+	readonly admitAgentDefaultModels?: (
+		input: Parameters<AgentDefaultModelAdmissionV1["admitModels"]>[0] & {
+			readonly requested: NonNullable<
+				ApplicationCreateInputV3["modelSelection"]
+			>;
+			readonly candidateRelayKey: string;
+		},
+	) => ReturnType<AgentDefaultModelAdmissionV1["admitModels"]>;
 	readonly configuration: Pick<
 		AgentConfigurationUseCaseV1,
 		"upgradeCustomImage"
@@ -157,34 +185,6 @@ function actor(
 
 function hasAuthorizationHeader(request: Request): boolean {
 	return request.headers.has("authorization");
-}
-
-function apiIdentityContext(
-	identity: Awaited<ReturnType<typeof resolveApiIdentity>>,
-): IdentityContext {
-	return {
-		schemaVersion: 1,
-		userId: identity.ownerId,
-		displayName: identity.principal.id,
-		accountStatus: "active",
-		organizationIds: identity.organizationIds,
-		roles: [],
-		authorizationRevision: identity.authorizationRevision,
-		principal: identity.principal,
-	};
-}
-
-function apiActor(
-	identity: Awaited<ReturnType<typeof resolveApiIdentity>>,
-): ApiIdentityActorV1 {
-	return {
-		schemaVersion: 1,
-		userId: identity.ownerId,
-		accountStatus: identity.accountStatus,
-		principal: identity.principal,
-		isAdministrator: false,
-		credential: identity.credential,
-	};
 }
 
 function apiManagementOrUnavailable(
@@ -570,58 +570,109 @@ async function requireManagementAccepted(
 	if (decision.outcome === "conflict") fail("CONFLICT", traceId);
 }
 
-export function registerV2ManagementRoutes(
-	app: Hono,
+function legacyPreparationBody(
+	body: ApplicationCreateInputV3,
+): ApplicationCreateInput {
+	const {
+		agentDefaultRelayKey: _key,
+		modelSelection: _selection,
+		...fields
+	} = body;
+	return { ...fields, schemaVersion: 2 };
+}
+
+function agentDefaultKeyAttachment(
 	dependencies: ManagementRouteDependencies,
-): void {
-	app.post("/api/v2/agent-applications", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const { value: body, rawRequestDigest } = await parseJson(
-				context.req.raw,
-				AgentApplicationCreateRequestV2Schema,
-				metadata.traceId,
-			);
-			const idempotencyKey = parseIdempotencyKey(
-				context.req.raw,
-				metadata.traceId,
-			);
-			let ids: Awaited<
-				ReturnType<ManagementRouteDependencies["allocateApplicationIds"]>
-			>;
+	body: ApplicationCreateInputV3,
+	traceId: string,
+): AgentDefaultRelayKeyAttachmentV1 | undefined {
+	if (body.source.kind !== "standard") return undefined;
+	const candidateRelayKey = body.agentDefaultRelayKey;
+	const requested = body.modelSelection;
+	if (!candidateRelayKey || !requested) fail("INVALID_REQUEST", traceId);
+	return {
+		async admitModels(input) {
+			const admit = dependencies.admitAgentDefaultModels;
+			if (!admit) throw new AgentConfigurationError("dependency_unavailable");
 			try {
-				ids = await dependencies.allocateApplicationIds({
-					identity,
-					idempotencyKey,
-				});
-			} catch {
-				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+				return await admit({ ...input, requested, candidateRelayKey });
+			} catch (error) {
+				if (error instanceof ModelConfigurationErrorV1)
+					throw new AgentConfigurationError(
+						error.retryable ? "dependency_unavailable" : "not_admitted",
+					);
+				throw error;
 			}
-			const prepared = await prepareApplicationInput(
-				dependencies,
-				body,
+		},
+		encrypt(binding) {
+			const encryptor = dependencies.agentDefaultRelayKeyEncryptor;
+			if (!encryptor)
+				throw new AgentConfigurationError("dependency_unavailable");
+			return encryptor.encrypt({ ...binding, plaintext: candidateRelayKey });
+		},
+	};
+}
+
+function createApplication(
+	context: Context,
+	dependencies: ManagementRouteDependencies,
+	schema: JsonSchema<ApplicationCreateInput | ApplicationCreateInputV3>,
+): Promise<Response> {
+	return boundary(context, async (metadata) => {
+		const identity = await resolveIdentity(
+			dependencies.identity,
+			context.req.raw,
+			metadata.traceId,
+		);
+		const { value: body, rawRequestDigest } = await parseJson(
+			context.req.raw,
+			schema,
+			metadata.traceId,
+		);
+		if (body.schemaVersion === 2 && body.source.kind === "standard")
+			fail("INVALID_REQUEST", metadata.traceId);
+		const preparationBody =
+			body.schemaVersion === 3 ? legacyPreparationBody(body) : body;
+		const idempotencyKey = parseIdempotencyKey(
+			context.req.raw,
+			metadata.traceId,
+		);
+		let ids: Awaited<
+			ReturnType<ManagementRouteDependencies["allocateApplicationIds"]>
+		>;
+		try {
+			ids = await dependencies.allocateApplicationIds({
 				identity,
-				metadata,
-				ids,
-			);
-			await dependencies.foundation.submit(
-				{
-					schemaVersion: 2,
-					...ids,
-					idempotencyKey,
-					requestId: metadata.requestId,
-					traceId: metadata.traceId,
-					...applicationCommandFields(body, prepared, metadata.traceId),
-					secrets: prepared.secrets,
-					channels: [],
-				},
-				{ schemaVersion: 1, userId: identity.userId, rawRequestDigest },
-				prepared.attachment,
-			);
+				idempotencyKey,
+			});
+		} catch {
+			fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+		}
+		const applicant = {
+			schemaVersion: 1 as const,
+			userId: identity.userId,
+			rawRequestDigest,
+		};
+		const preparation = await dependencies.foundation.prepareWebCreation(
+			{ schemaVersion: 1, ...ids, idempotencyKey },
+			applicant,
+			() =>
+				prepareApplicationInput(
+					dependencies,
+					preparationBody,
+					identity,
+					metadata,
+					ids,
+				),
+		);
+		if (preparation.outcome === "replayed") {
+			const replayed = preparation.result;
+			if (
+				replayed.applicationId !== ids.applicationId ||
+				replayed.agentId !== ids.agentId ||
+				replayed.status !== "pending_approval"
+			)
+				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			const application = await applicationOrUnavailable(
 				dependencies,
 				applicantScope(identity),
@@ -632,7 +683,141 @@ export function registerV2ManagementRoutes(
 				await projectApplication(dependencies, application, identity, metadata),
 				201,
 			);
-		}),
+		}
+		const prepared = preparation.prepared;
+		const attachment =
+			body.schemaVersion === 3
+				? agentDefaultKeyAttachment(dependencies, body, metadata.traceId)
+				: undefined;
+		await dependencies.foundation.submit(
+			{
+				schemaVersion: 2,
+				...ids,
+				idempotencyKey,
+				requestId: metadata.requestId,
+				traceId: metadata.traceId,
+				...applicationCommandFields(
+					preparationBody,
+					prepared,
+					metadata.traceId,
+				),
+				secrets: prepared.secrets,
+				channels: [],
+			},
+			applicant,
+			prepared.attachment,
+			attachment,
+		);
+		const application = await applicationOrUnavailable(
+			dependencies,
+			applicantScope(identity),
+			ids.applicationId,
+			metadata.traceId,
+		);
+		return context.json(
+			await projectApplication(dependencies, application, identity, metadata),
+			201,
+		);
+	});
+}
+
+export function registerV2ManagementRoutes(
+	app: Hono,
+	dependencies: ManagementRouteDependencies,
+): void {
+	async function defaultKeyResponse(
+		context: Context,
+		work: (
+			actor: AgentDefaultRelayKeyActorV1,
+			agentId: string,
+			metadata: RequestMetadata,
+			keys: NonNullable<ManagementRouteDependencies["agentDefaultRelayKey"]>,
+		) => Promise<unknown>,
+	): Promise<Response> {
+		const metadata = requestMetadata(context.req.raw);
+		const agentId = context.req.param("agentId");
+		if (!agentId) fail("INVALID_REQUEST", metadata.traceId);
+		let actorUserId: string | null = null;
+		try {
+			const { identity, api } = await resolveRequestIdentity(
+				dependencies,
+				context.req.raw,
+				metadata.traceId,
+			);
+			actorUserId = identity.userId;
+			if (api)
+				await apiManagementOrUnavailable(
+					dependencies.apiIdentity,
+					metadata.traceId,
+				).authorizeCredentialScope(
+					apiActor(api),
+					["agent:manage"],
+					apiAccessAudit(identity, metadata, agentId, "missing_scope", [
+						"agent:manage",
+					]),
+				);
+			const keys = dependencies.agentDefaultRelayKey;
+			if (!keys) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			return context.json(
+				await work(
+					{
+						userId: identity.userId,
+						accountStatus: identity.accountStatus,
+						...(api
+							? {
+									principal: api.principal,
+									credential: api.credential,
+									identityRevision: api.authorizationRevision,
+								}
+							: {}),
+					},
+					agentId,
+					metadata,
+					keys,
+				),
+			);
+		} catch (error) {
+			const protocol = mapCoreError(error, metadata.traceId);
+			try {
+				if (
+					error instanceof AgentDefaultRelayKeyErrorV1 &&
+					error.code === "conflict"
+				)
+					return context.json(protocol.body, protocol.status);
+				if (!dependencies.agentDefaultRelayKey)
+					throw new Error("Agent default Relay Key audit is unavailable");
+				await dependencies.agentDefaultRelayKey.recordRejected({
+					agentId,
+					actorUserId,
+					traceId: metadata.traceId,
+					requestId: metadata.requestId,
+					reason: protocol.body.code,
+					outcome: protocol.status < 500 ? "rejected" : "failed",
+				});
+			} catch {
+				const unavailable = new HttpProtocolError(
+					"DEPENDENCY_UNAVAILABLE",
+					metadata.traceId,
+				);
+				return context.json(unavailable.body, unavailable.status);
+			}
+			return context.json(protocol.body, protocol.status);
+		}
+	}
+
+	app.post("/api/v2/agent-applications", (context) =>
+		createApplication(
+			context,
+			dependencies,
+			AgentApplicationCreateRequestV2Schema,
+		),
+	);
+	app.post("/api/v2/agent-applications/default-key", (context) =>
+		createApplication(
+			context,
+			dependencies,
+			AgentApplicationCreateRequestV3Schema,
+		),
 	);
 
 	app.get("/api/v2/agent-applications", (context) =>
@@ -913,9 +1098,10 @@ export function registerV2ManagementRoutes(
 			);
 			const { value: body, rawRequestDigest } = await parseJson(
 				context.req.raw,
-				AgentApplicationCreateRequestV2Schema,
+				AgentApplicationCreateRequestV3Schema,
 				metadata.traceId,
 			);
+			const preparationBody = legacyPreparationBody(body);
 			const idempotencyKey = parseIdempotencyKey(
 				context.req.raw,
 				metadata.traceId,
@@ -941,7 +1127,7 @@ export function registerV2ManagementRoutes(
 				() =>
 					prepareApplicationInput(
 						dependencies,
-						body,
+						preparationBody,
 						initialIdentity,
 						metadata,
 						ids,
@@ -984,6 +1170,11 @@ export function registerV2ManagementRoutes(
 					["agent:create"],
 				),
 			);
+			const agentDefaultRelayKey = agentDefaultKeyAttachment(
+				dependencies,
+				body,
+				metadata.traceId,
+			);
 			const result = await dependencies.foundation.submit(
 				{
 					schemaVersion: 2,
@@ -991,7 +1182,11 @@ export function registerV2ManagementRoutes(
 					idempotencyKey,
 					requestId: metadata.requestId,
 					traceId: metadata.traceId,
-					...applicationCommandFields(body, prepared, metadata.traceId),
+					...applicationCommandFields(
+						preparationBody,
+						prepared,
+						metadata.traceId,
+					),
 					secrets: prepared.secrets,
 					channels: [],
 				},
@@ -1007,6 +1202,7 @@ export function registerV2ManagementRoutes(
 					},
 				},
 				prepared.attachment,
+				agentDefaultRelayKey,
 			);
 			if (
 				result.applicationId !== ids.applicationId ||
@@ -1085,6 +1281,36 @@ export function registerV2ManagementRoutes(
 		}),
 	);
 
+	app.get("/api/v2/admin/agents", (context) =>
+		boundary(context, async (metadata) => {
+			if (hasAuthorizationHeader(context.req.raw))
+				fail("AUTHENTICATION_REQUIRED", metadata.traceId);
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			if (!isAgentAdministratorListAllowedV1(identity))
+				fail("FORBIDDEN", metadata.traceId);
+			const page = await queryOrUnavailable(
+				() =>
+					dependencies.query.listAgents(
+						{ kind: "administrator" },
+						pageInput(context.req.raw, metadata.traceId),
+					),
+				metadata.traceId,
+			);
+			return context.json({
+				items: await Promise.all(
+					page.items.map((item) =>
+						projectAgent(dependencies, item, identity, metadata),
+					),
+				),
+				nextCursor: page.nextAfterId,
+			});
+		}),
+	);
+
 	app.get("/api/v2/agents/:agentId", (context) =>
 		boundary(context, async (metadata) => {
 			const { identity, api } = await resolveRequestIdentity(
@@ -1131,6 +1357,28 @@ export function registerV2ManagementRoutes(
 			);
 			return context.json(
 				await projectAgent(dependencies, agent, identity, metadata),
+			);
+		}),
+	);
+
+	app.get("/api/v2/agents/:agentId/default-relay-key", (context) =>
+		defaultKeyResponse(context, (identity, agentId, metadata, keys) =>
+			keys.current(identity, agentId, metadata.traceId, metadata.requestId),
+		),
+	);
+	app.put("/api/v2/agents/:agentId/default-relay-key", (context) =>
+		defaultKeyResponse(context, async (identity, agentId, metadata, keys) => {
+			const { value } = await parseJson(
+				context.req.raw,
+				AgentDefaultRelayKeyReplaceRequestV1Schema,
+				metadata.traceId,
+			);
+			return keys.replace(
+				identity,
+				agentId,
+				value,
+				metadata.traceId,
+				metadata.requestId,
 			);
 		}),
 	);

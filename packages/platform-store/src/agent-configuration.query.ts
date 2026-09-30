@@ -576,6 +576,7 @@ export class PostgresAgentConfigurationQueryV1 {
 										: {}),
 									connectionEnabled: configuration.source.connectionEnabled,
 								};
+					const runtimeModels = configuration.runtimeModelConfigurationV4;
 					return {
 						outcome: "found",
 						configuration: {
@@ -584,16 +585,25 @@ export class PostgresAgentConfigurationQueryV1 {
 							source: projectedSource,
 							ownerIds,
 							availability,
-							modelOptions:
-								configuration.modelConfiguration?.options.map((option) => ({
-									optionId: option.optionId,
-									modelId: option.modelId,
-									reasoningLevels: option.reasoningLevels,
-								})) ?? [],
+							modelOptions: runtimeModels
+								? runtimeModels.modelOptions.map((option) => ({
+										optionId: option.modelOptionId,
+										modelId: option.model,
+										reasoningLevels: option.reasoningLevels,
+									}))
+								: (configuration.modelConfiguration?.options.map((option) => ({
+										optionId: option.optionId,
+										modelId: option.modelId,
+										reasoningLevels: option.reasoningLevels,
+									})) ?? []),
 							defaultModelOptionId:
-								configuration.modelConfiguration?.defaultOptionId ?? null,
+								runtimeModels?.defaultModelOptionId ??
+								configuration.modelConfiguration?.defaultOptionId ??
+								null,
 							defaultReasoningLevel:
-								configuration.modelConfiguration?.defaultReasoningLevel ?? null,
+								runtimeModels?.defaultReasoningLevel ??
+								configuration.modelConfiguration?.defaultReasoningLevel ??
+								null,
 							environment: configuration.environment,
 							channelKinds: configuration.channels.map(({ kind }) => kind),
 							secrets: configuration.secrets.map(({ name, version }) => ({

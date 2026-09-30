@@ -50,31 +50,36 @@ describe("deployment authorization admission", () => {
 			identity,
 			idempotencyKey: "create_01",
 		});
-		await scope.requestScope(
-			new Request("https://platform.test/api/v2/agent-applications", {
-				method: "POST",
-				headers: { "Idempotency-Key": "create_01" },
-			}),
-			async () => {
-				expect(
-					await admission.authorize({ ...request, agentId: ids.agentId }),
-				).toMatchObject({
-					status: "admitted",
-					authorizationRevision: "identity_01",
-					authorityContext,
-				});
-				expect(await admission.authorize(request)).toMatchObject({
-					status: "rejected",
-				});
-				expect(
-					await admission.authorize({
-						...request,
-						agentId: ids.agentId,
-						actorId: "bob",
-					}),
-				).toMatchObject({ status: "rejected" });
-			},
-		);
+		for (const path of [
+			"/api/v2/agent-applications",
+			"/api/v2/agent-applications/default-key",
+		]) {
+			await scope.requestScope(
+				new Request(`https://platform.test${path}`, {
+					method: "POST",
+					headers: { "Idempotency-Key": "create_01" },
+				}),
+				async () => {
+					expect(
+						await admission.authorize({ ...request, agentId: ids.agentId }),
+					).toMatchObject({
+						status: "admitted",
+						authorizationRevision: "identity_01",
+						authorityContext,
+					});
+					expect(await admission.authorize(request)).toMatchObject({
+						status: "rejected",
+					});
+					expect(
+						await admission.authorize({
+							...request,
+							agentId: ids.agentId,
+							actorId: "bob",
+						}),
+					).toMatchObject({ status: "rejected" });
+				},
+			);
+		}
 		expect(readAuthority).not.toHaveBeenCalled();
 		await scope.requestScope(
 			new Request("https://platform.test/api/v1/agent-applications", {

@@ -123,14 +123,17 @@ describe("standard contract artifacts", () => {
 		expect(Object.keys(artifacts.pilotBrowserOpenapiV2.paths)).toEqual([
 			"/api/v2/admin/agent-applications",
 			"/api/v2/admin/agent-applications/{applicationId}/decision",
+			"/api/v2/admin/agents",
 			"/api/v2/admin/audit",
 			"/api/v2/admin/users/{userId}/disable",
 			"/api/v2/agent-applications",
+			"/api/v2/agent-applications/default-key",
 			"/api/v2/agent-applications/{applicationId}",
 			"/api/v2/agent-applications/{applicationId}/withdraw",
 			"/api/v2/agents",
 			"/api/v2/agents/{agentId}",
 			"/api/v2/agents/{agentId}/configuration",
+			"/api/v2/agents/{agentId}/default-relay-key",
 			"/api/v2/agents/{agentId}/lifecycle",
 			"/api/v2/conversations/{conversationId}",
 			"/api/v2/conversations/{conversationId}/events",
@@ -141,6 +144,15 @@ describe("standard contract artifacts", () => {
 		expect(
 			artifacts.pilotBrowserOpenapiV2.components.schemas
 				.PersonalRelayKeyReplaceRequestV1.properties.keyValue.writeOnly,
+		).toBe(true);
+		expect(
+			artifacts.pilotBrowserOpenapiV2.components.schemas
+				.AgentApplicationCreateRequestV3.properties.agentDefaultRelayKey
+				.writeOnly,
+		).toBe(true);
+		expect(
+			artifacts.pilotBrowserOpenapiV2.components.schemas
+				.AgentDefaultRelayKeyReplaceRequestV1.properties.keyValue.writeOnly,
 		).toBe(true);
 		expect(artifacts.pilotBrowserOpenapiV2.components.schemas).toHaveProperty(
 			"PlatformAuditProjectionV2",

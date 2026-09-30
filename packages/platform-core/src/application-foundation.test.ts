@@ -12,6 +12,7 @@ import {
 	type ApplicationFoundationWritePlanV1,
 	createApplicationFoundationUseCaseV1,
 	isCurrentApiCreationAuthorizedV1,
+	snapshotApplicationFoundationWritePlanV1,
 } from "./application-foundation.ts";
 import { FakeApplicationFoundationTransactionV1 } from "./fake-application-foundation.ts";
 import { pendingSecretRecordAttachmentFixtureV1 } from "./secret-record-attachment.fixture.ts";
@@ -176,6 +177,153 @@ describe("current API creation authority", () => {
 });
 
 describe("Application foundation use case", () => {
+	it.each(["api", "web"] as const)(
+		"stores keyless V4 models and skips candidate admission on %s replay",
+		async (creationMode) => {
+			const fake = new FakeApplicationFoundationTransactionV1();
+			let writePlan: ApplicationFoundationWritePlanV1 | undefined;
+			let committed:
+				| Awaited<ReturnType<ApplicationFoundationTransactionPortV1["commit"]>>
+				| undefined;
+			const transaction: ApplicationFoundationTransactionPortV1 = {
+				async read() {
+					return committed?.outcome === "committed"
+						? { outcome: "replayed", result: committed.result }
+						: { outcome: "ready" };
+				},
+				async commit(plan) {
+					writePlan = plan;
+					committed = await fake.commit(plan);
+					return committed;
+				},
+			};
+			const useCase = createApplicationFoundationUseCaseV1({
+				transaction,
+				...applicationFoundationAdmissionDependenciesV1(),
+			});
+			const { modelConfiguration: _legacyModel, ...keylessCommand } =
+				applicationFoundationCommandV1;
+			const actor =
+				creationMode === "api"
+					? {
+							...applicationFoundationActorContextV1,
+							principal: {
+								kind: "application" as const,
+								id: "application-caller",
+							},
+							creationMode,
+							apiAuthority: {
+								credentialId: "credential-caller",
+								identityRevision: "app-7",
+							},
+						}
+					: applicationFoundationActorContextV1;
+			const runtime = {
+				schemaVersion: 4,
+				configVersion: "keyless-v4",
+				defaultModelOptionId: "model_primary",
+				defaultReasoningLevel: "low",
+				modelOptions: [
+					{
+						modelOptionId: "model_primary",
+						endpoint: "https://relay.example/v1",
+						model: "gpt-5",
+						reasoningLevels: ["low"],
+						protocol: "openai-responses-v1",
+						authentication: "bearer",
+					},
+				],
+			};
+			const admitModels = vi.fn(async () => ({
+				catalogRevision: "catalog_1",
+				runtime,
+			}));
+			const first = await useCase.submit(
+				keylessCommand,
+				actor,
+				pendingSecretRecordAttachmentFixtureV1(),
+				{ admitModels, encrypt: vi.fn() },
+			);
+			expect(first.status).toBe(
+				creationMode === "api" ? "creating" : "pending_approval",
+			);
+			expect(admitModels).toHaveBeenCalledOnce();
+			expect(writePlan?.agentDefaultRelayKeyAuditEvent).toMatchObject({
+				action: "relay_key.agent_default.created",
+				actorType: creationMode === "api" ? "application" : "user",
+				actorId:
+					creationMode === "api"
+						? "application-caller"
+						: applicationFoundationActorContextV1.userId,
+				targetId: keylessCommand.agentId,
+				details: { keyVersion: 1 },
+			});
+			expect(
+				snapshotApplicationFoundationWritePlanV1(writePlan)
+					.agentDefaultRelayKeyAuditEvent,
+			).toEqual(writePlan?.agentDefaultRelayKeyAuditEvent);
+			expect(() =>
+				snapshotApplicationFoundationWritePlanV1({
+					...writePlan,
+					agentDefaultRelayKeyAuditEvent: {
+						...writePlan?.agentDefaultRelayKeyAuditEvent,
+						action: "unexpected",
+					},
+				}),
+			).toThrowError(ApplicationFoundationError);
+			expect(
+				fake.snapshot().configurationRevisions[0]?.configuration,
+			).toMatchObject({
+				modelConfiguration: null,
+				modelCatalogRevision: "catalog_1",
+				runtimeModelConfigurationV4: runtime,
+			});
+			await expect(
+				useCase.submit(keylessCommand, actor, undefined, {
+					admitModels: () => {
+						throw new Error("replay admitted twice");
+					},
+					encrypt: vi.fn(),
+				}),
+			).resolves.toEqual(first);
+		},
+	);
+
+	it("rejects Agent default Key attachment outside keyless standard-template creation", async () => {
+		const transaction = new FakeApplicationFoundationTransactionV1();
+		const useCase = createApplicationFoundationUseCaseV1({
+			transaction,
+			...applicationFoundationAdmissionDependenciesV1(),
+		});
+		const attachment = { encrypt: vi.fn(), admitModels: vi.fn() };
+		const apiActor = {
+			...applicationFoundationActorContextV1,
+			creationMode: "api" as const,
+		};
+		for (const [command, actor] of [
+			[applicationFoundationCommandV1, applicationFoundationActorContextV1],
+			[applicationFoundationCommandV1, apiActor],
+			[
+				{
+					...applicationFoundationCommandV1,
+					source: {
+						kind: "custom" as const,
+						imageReference: "registry.example/agent:test",
+						interactionMode: "platform-adapter" as const,
+					},
+				},
+				apiActor,
+			],
+		] as const) {
+			await expect(
+				useCase.submit(command, actor, undefined, attachment),
+			).rejects.toMatchObject({ code: "invalid_command" });
+		}
+		expect(transaction.snapshot().applications).toEqual([]);
+		expect(attachment.encrypt).not.toHaveBeenCalled();
+		expect(attachment.admitModels).not.toHaveBeenCalled();
+	});
+
 	it("accepts API creation without creating a pending approval state", async () => {
 		const transaction = new FakeApplicationFoundationTransactionV1();
 		const useCase = createUseCase(transaction);
@@ -297,6 +445,41 @@ describe("Application foundation use case", () => {
 		).resolves.toEqual({ outcome: "replayed", result: replayed });
 		expect(reads).toBe(2);
 		expect(prepare).toHaveBeenCalledOnce();
+	});
+
+	it("returns a saved Web application before mutable preparation", async () => {
+		const replayed = {
+			schemaVersion: 1 as const,
+			applicationId: applicationFoundationCommandV1.applicationId,
+			agentId: applicationFoundationCommandV1.agentId,
+			configurationRevision: 1 as const,
+			status: "pending_approval" as const,
+		};
+		const useCase = createApplicationFoundationUseCaseV1({
+			...applicationFoundationAdmissionDependenciesV1(),
+			transaction: {
+				async read() {
+					return { outcome: "replayed", result: replayed };
+				},
+				async commit() {
+					throw new Error("replay must not commit");
+				},
+			},
+		});
+		const prepare = vi.fn().mockRejectedValue(new Error("preparation failed"));
+		await expect(
+			useCase.prepareWebCreation(
+				{
+					schemaVersion: 1,
+					applicationId: replayed.applicationId,
+					agentId: replayed.agentId,
+					idempotencyKey: applicationFoundationCommandV1.idempotencyKey,
+				},
+				applicationFoundationActorContextV1,
+				prepare,
+			),
+		).resolves.toEqual({ outcome: "replayed", result: replayed });
+		expect(prepare).not.toHaveBeenCalled();
 	});
 
 	it("keeps application availability separate from its initial grants at the 256-target limit", async () => {

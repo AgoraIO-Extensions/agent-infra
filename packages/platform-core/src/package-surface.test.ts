@@ -35,6 +35,7 @@ describe("platform-core package surface", () => {
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
 			"AgentConfigurationError",
+			"AgentDefaultRelayKeyErrorV1",
 			"AgentManagementError",
 			"ApiIdentityError",
 			"ApplicationFoundationError",
@@ -51,12 +52,14 @@ describe("platform-core package surface", () => {
 			"SecretKeyRotationError",
 			"WecomSetupError",
 			"WorkloadPreflightRejectedErrorV1",
+			"agentDefaultRelayKeyAuditIntentV1",
 			"apiCredentialScopesV1",
 			"bindInputFileV1",
 			"captureApplicationTaskAuthorizationBoundaryV1",
 			"captureTaskAuthorizationBoundaryV1",
 			"cleanupUnactivatedSecretCandidateV1",
 			"createAgentConfigurationUseCaseV1",
+			"createAgentDefaultRelayKeyUseCaseV1",
 			"createAgentManagementV1",
 			"createApiIdentityManagementV1",
 			"createApplicationFoundationUseCaseV1",
@@ -86,7 +89,9 @@ describe("platform-core package surface", () => {
 			"hashApiCredentialV1",
 			"immutableSecretNameV1",
 			"isAgentAccessAllowedV1",
+			"isAgentAdministratorListAllowedV1",
 			"isAgentConfigurationQueryAllowedV1",
+			"isAgentDefaultRelayKeyAuthorizedV1",
 			"isAgentOwnerV1",
 			"isAgentRuntimePresentationVisibleV1",
 			"isApiAgentLifecycleCommandAllowedV1",
@@ -94,6 +99,7 @@ describe("platform-core package surface", () => {
 			"isConfirmedResultFileV1",
 			"isConversationGenerationBarrierConfirmedV1",
 			"isCurrentAgentGrantManageAllowedV1",
+			"isCurrentApiAgentManagementAuthorizedV1",
 			"isCurrentApiCreationAuthorizedV1",
 			"isCurrentCredentialDeliveryManagerV1",
 			"isPlatformConversationChannelCurrentV1",
@@ -113,6 +119,7 @@ describe("platform-core package surface", () => {
 			"parseTaskAuthorizationBoundaryV1",
 			"parseWorkloadExecutionCapacityV1",
 			"parseWorkloadSecretRecoveriesV1",
+			"personalRelayKeyAuditIntentV1",
 			"planConversationGenerationConfirmationV1",
 			"planConversationGenerationIsolationV1",
 			"planTaskSystemControlV1",
@@ -128,6 +135,7 @@ describe("platform-core package surface", () => {
 			"projectPlatformOperationAuditV1",
 			"projectPlatformTaskAuditSummaryV1",
 			"requireConversationOperationSuccessorV2",
+			"requireCurrentPlatformUserGovernanceV1",
 			"requirePlatformExecutionAuditBindingV1",
 			"resolveFileLimitsV1",
 			"sameApiPrincipalV1",
@@ -175,7 +183,12 @@ describe("platform-core package surface", () => {
 		expect(surface).not.toHaveProperty("decideAgentAccessUpdatePolicy");
 		expect(
 			Object.keys(surface.createApplicationFoundationUseCaseV1({})),
-		).toEqual(["prepareApiCreation", "submit", "replayLegacyV1"]);
+		).toEqual([
+			"prepareWebCreation",
+			"prepareApiCreation",
+			"submit",
+			"replayLegacyV1",
+		]);
 		expect(Object.keys(surface.createApplicationRevisionUseCaseV1({}))).toEqual(
 			["revise", "replayLegacyV1"],
 		);

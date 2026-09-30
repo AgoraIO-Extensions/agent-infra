@@ -1024,6 +1024,66 @@ function isAgentLifecycleV2OpenApiAddition(previous, current) {
 // existing additive checks compare the rest of the document.
 function normalizeAgentManagementAlignment(previous, current) {
 	const normalized = structuredClone(current);
+	const adminAgentsPath = "/api/v2/admin/agents";
+	if (
+		previous.paths?.[adminAgentsPath] === undefined &&
+		current.paths?.[adminAgentsPath] !== undefined
+	) {
+		if (
+			createHash("sha256")
+				.update(JSON.stringify(current.paths[adminAgentsPath]))
+				.digest("hex") !==
+			"48bacc2c7deab8778e3a85b11b201aae27f12a578e275f027bf5c4e5e003ba08"
+		)
+			return undefined;
+		delete normalized.paths[adminAgentsPath];
+	}
+	const agentKeyPath = "/api/v2/agents/{agentId}/default-relay-key";
+	if (
+		previous.paths?.[agentKeyPath] === undefined &&
+		current.paths?.[agentKeyPath] !== undefined
+	) {
+		const addition = {
+			path: current.paths[agentKeyPath],
+			schemas: {
+				AgentDefaultRelayKeyStateV1:
+					current.components?.schemas?.AgentDefaultRelayKeyStateV1,
+				AgentDefaultRelayKeyReplaceRequestV1:
+					current.components?.schemas?.AgentDefaultRelayKeyReplaceRequestV1,
+			},
+		};
+		if (
+			createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+			"b51a450ed4d44890f57fad579a96361cb9b1a35be5941e3fe369a4e60f735243"
+		)
+			return undefined;
+		delete normalized.paths[agentKeyPath];
+		for (const name of Object.keys(addition.schemas)) {
+			if (previous.components?.schemas?.[name] === undefined)
+				delete normalized.components.schemas[name];
+		}
+	}
+	const v3ApplicationPath = "/api/v2/agent-applications/default-key";
+	if (
+		previous.paths?.[v3ApplicationPath] === undefined &&
+		current.paths?.[v3ApplicationPath] !== undefined
+	) {
+		const addition = {
+			path: current.paths[v3ApplicationPath],
+			schemas: {
+				AgentDefaultModelSelectionV1:
+					current.components?.schemas?.AgentDefaultModelSelectionV1,
+				AgentApplicationCreateRequestV3:
+					current.components?.schemas?.AgentApplicationCreateRequestV3,
+			},
+		};
+		if (
+			createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+			"a0fc3c5da4ae079ad6727fc221ba01855d6b9c13ea5e46d0790c448d46e812d3"
+		)
+			return undefined;
+		delete normalized.paths[v3ApplicationPath];
+	}
 	const retired = [
 		["/api/v1/agent-applications", "get"],
 		["/api/v1/agent-applications", "post"],
@@ -1058,15 +1118,40 @@ function normalizeAgentManagementAlignment(previous, current) {
 	const directPath = "/api/v2/agents";
 	const directOperation = current.paths?.[directPath]?.post;
 	if (previous.paths?.[directPath]?.post === undefined && directOperation) {
+		const requestRef =
+			directOperation.requestBody?.content?.["application/json"]?.schema?.$ref;
+		const v3Addition = {
+			operation: directOperation,
+			schemas: {
+				AgentDefaultModelSelectionV1:
+					current.components?.schemas?.AgentDefaultModelSelectionV1,
+				AgentApplicationCreateRequestV3:
+					current.components?.schemas?.AgentApplicationCreateRequestV3,
+			},
+		};
 		if (
 			directOperation.operationId !== "createAgentDirectlyV2" ||
-			directOperation.requestBody?.content?.["application/json"]?.schema
-				?.$ref !== "#/components/schemas/AgentApplicationCreateRequestV2" ||
+			(requestRef !== "#/components/schemas/AgentApplicationCreateRequestV2" &&
+				(requestRef !==
+					"#/components/schemas/AgentApplicationCreateRequestV3" ||
+					createHash("sha256")
+						.update(JSON.stringify(v3Addition))
+						.digest("hex") !==
+						"3d79371a1284e3c43a6a4598de1803117638ef3aec280f5e29241d64cda042e4")) ||
 			directOperation.responses?.["201"]?.content?.["application/json"]?.schema
 				?.$ref !== "#/components/schemas/AgentDirectCreationProjectionV2"
 		)
 			return undefined;
 		delete normalized.paths[directPath].post;
+		if (requestRef === "#/components/schemas/AgentApplicationCreateRequestV3") {
+			for (const name of [
+				"AgentDefaultModelSelectionV1",
+				"AgentApplicationCreateRequestV3",
+			]) {
+				if (previous.components?.schemas?.[name] === undefined)
+					delete normalized.components.schemas[name];
+			}
+		}
 		if (
 			previous.components?.schemas?.AgentDirectCreationProjectionV2 ===
 			undefined

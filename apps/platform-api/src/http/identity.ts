@@ -6,6 +6,7 @@ import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import type {
 	ApiCredentialMetadataV1,
 	ApiCredentialScopeV1,
+	ApiIdentityActorV1,
 	ApiPrincipalV1,
 	CurrentApiPrincipalV1,
 	CurrentTaskUserV1,
@@ -41,6 +42,35 @@ export interface IdentityAdapter {
 export interface ApiIdentityContext extends CurrentApiPrincipalV1 {
 	readonly ownerId: string;
 	readonly credential: ApiCredentialMetadataV1;
+}
+
+export function projectApiIdentityContext(
+	identity: ApiIdentityContext,
+): IdentityContext {
+	return {
+		schemaVersion: 1,
+		userId: identity.ownerId,
+		displayName: identity.principal.id,
+		accountStatus: "active",
+		organizationIds: identity.organizationIds,
+		roles: [],
+		authorizationRevision: identity.authorizationRevision,
+		principal: identity.principal,
+	};
+}
+
+export function projectApiIdentityActor(
+	identity: ApiIdentityContext,
+): ApiIdentityActorV1 {
+	return {
+		schemaVersion: 1,
+		userId: identity.ownerId,
+		accountStatus: identity.accountStatus,
+		principal: identity.principal,
+		identityRevision: identity.authorizationRevision,
+		isAdministrator: false,
+		credential: identity.credential,
+	};
 }
 
 function parseApiIdentity(value: unknown): ApiIdentityContext {

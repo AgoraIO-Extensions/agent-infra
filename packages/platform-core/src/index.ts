@@ -45,7 +45,10 @@ export {
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.js";
 export * from "./agent-configuration-query-access.js";
+export type { AgentDefaultModelAdmissionV1 } from "./agent-configuration-types.js";
+export * from "./agent-default-relay-key.js";
 export * from "./agent-management.js";
+export { isAgentAdministratorListAllowedV1 } from "./agent-management-access-policy.js";
 export * from "./agent-runtime-presentation.js";
 export type {
 	ApiCredentialMetadataV1,

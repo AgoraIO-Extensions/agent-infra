@@ -18,6 +18,21 @@ import {
 
 type AccessTargetV1 = AgentManagementStateV1["availability"][number];
 
+export function isAgentAdministratorListAllowedV1(input: {
+	readonly accountStatus: "active" | "disabled";
+	readonly roles: readonly string[];
+	readonly principal?: {
+		readonly kind: "user" | "application";
+		readonly id: string;
+	};
+}): boolean {
+	return (
+		input.accountStatus === "active" &&
+		input.principal === undefined &&
+		input.roles.includes("system_admin")
+	);
+}
+
 export interface AgentAccessUpdatePolicyCommandV1 {
 	readonly schemaVersion: 1;
 	readonly agentId: string;

@@ -5,6 +5,7 @@ import {
 	AgentManagementError,
 	type AgentManagementStateV1,
 	createAgentManagementV1,
+	isCurrentApiAgentManagementAuthorizedV1,
 	snapshotAgentManagementWritePlanV1,
 } from "./agent-management.ts";
 import { FakeAgentManagementV1 } from "./fake-agent-management.ts";
@@ -13,6 +14,82 @@ describe("Fake Agent management Interface", () => {
 	agentManagementV1Conformance(async (options) =>
 		Promise.resolve(new FakeAgentManagementV1(options)),
 	);
+});
+
+it("rejects changed credential and principal authority at management commit", () => {
+	const current = {
+		actorId: "api-user",
+		apiAuthority: {
+			credentialId: "credential-1",
+			identityRevision: "identity-1",
+			principal: { kind: "user" as const, id: "api-user" },
+		},
+		credential: {
+			principalType: "user",
+			principalId: "api-user",
+			scopes: ["agent:manage"],
+			expiresAt: new Date(2000),
+			revokedAt: null,
+		},
+		nowMs: 1000,
+		currentUser: {
+			userId: "api-user",
+			accountStatus: "active" as const,
+			authorizationRevision: "identity-1",
+		},
+	};
+	expect(isCurrentApiAgentManagementAuthorizedV1(current)).toBe(true);
+	for (const changed of [
+		{ actorId: "another-user" },
+		{ credential: null },
+		{ credential: { ...current.credential, scopes: ["agent:read"] } },
+		{ credential: { ...current.credential, principalId: "another-user" } },
+		{ credential: { ...current.credential, revokedAt: new Date(500) } },
+		{ nowMs: 2000 },
+		{ nowMs: Number.NaN },
+		{ currentUser: null },
+		{
+			currentUser: {
+				...current.currentUser,
+				accountStatus: "disabled" as const,
+			},
+		},
+		{
+			currentUser: { ...current.currentUser, authorizationRevision: "changed" },
+		},
+	])
+		expect(
+			isCurrentApiAgentManagementAuthorizedV1({ ...current, ...changed }),
+		).toBe(false);
+	const application = {
+		...current,
+		actorId: "application-1",
+		apiAuthority: {
+			...current.apiAuthority,
+			principal: { kind: "application" as const, id: "application-1" },
+		},
+		credential: {
+			...current.credential,
+			principalType: "application",
+			principalId: "application-1",
+		},
+		currentApplication: {
+			status: "active",
+			authorizationRevision: "identity-1",
+		},
+	};
+	expect(isCurrentApiAgentManagementAuthorizedV1(application)).toBe(true);
+	for (const currentApplication of [
+		null,
+		{ status: "disabled", authorizationRevision: "identity-1" },
+		{ status: "active", authorizationRevision: "changed" },
+	])
+		expect(
+			isCurrentApiAgentManagementAuthorizedV1({
+				...application,
+				currentApplication,
+			}),
+		).toBe(false);
 });
 
 it("denies an API-principal management command without credential authority", async () => {

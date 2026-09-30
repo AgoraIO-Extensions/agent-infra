@@ -27,7 +27,6 @@ import type {
 	ApiCredentialMetadataV1,
 	ApiCredentialScopeV1,
 	ApiIdentityAccessAuditContextV1,
-	ApiIdentityActorV1,
 	ApiIdentityAuditActionV1,
 	ApiIdentityAuditInputV1,
 	ApiIdentityAuditReasonV1,
@@ -64,6 +63,8 @@ import {
 } from "./common.js";
 import { mapCoreError } from "./core-errors.js";
 import {
+	projectApiIdentityActor as apiActor,
+	projectApiIdentityContext as apiIdentityContext,
 	type IdentityAdapter,
 	type IdentityContext,
 	resolveApiIdentity,
@@ -193,35 +194,6 @@ function resolveIdentity(
 ): Promise<IdentityContext> {
 	if (hasAuthorizationHeader(request)) fail("AUTHENTICATION_REQUIRED", traceId);
 	return resolveBrowserIdentity(adapter, request, traceId);
-}
-
-function apiIdentityContext(
-	identity: Awaited<ReturnType<typeof resolveApiIdentity>>,
-): IdentityContext {
-	return {
-		schemaVersion: 1,
-		userId: identity.ownerId,
-		displayName: identity.principal.id,
-		accountStatus: "active",
-		organizationIds: identity.organizationIds,
-		roles: [],
-		authorizationRevision: identity.authorizationRevision,
-		principal: identity.principal,
-	};
-}
-
-function apiActor(
-	identity: Awaited<ReturnType<typeof resolveApiIdentity>>,
-): ApiIdentityActorV1 {
-	return {
-		schemaVersion: 1,
-		userId: identity.ownerId,
-		accountStatus: identity.accountStatus,
-		principal: identity.principal,
-		identityRevision: identity.authorizationRevision,
-		isAdministrator: false,
-		credential: identity.credential,
-	};
 }
 
 function applicantScope(

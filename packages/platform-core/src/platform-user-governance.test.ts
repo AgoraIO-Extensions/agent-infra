@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { ApiIdentityError } from "./api-identity-management.js";
-import { createPlatformUserGovernanceUseCaseV1 } from "./platform-user-governance.js";
+import {
+	createPlatformUserGovernanceUseCaseV1,
+	requireCurrentPlatformUserGovernanceV1,
+} from "./platform-user-governance.js";
 
 const command = {
 	actorUserId: "administrator",
@@ -13,6 +16,46 @@ const command = {
 };
 
 describe("Platform user governance", () => {
+	it("rechecks current administrator authority and LDAP enable-target status", () => {
+		const current = {
+			actorUserId: "administrator",
+			targetUserId: "target",
+			disabled: true,
+			actorPlatformDisabled: false,
+			actor: {
+				userId: "administrator",
+				accountStatus: "active" as const,
+				roles: ["system_admin" as const],
+			},
+			target: null,
+		};
+		expect(() => requireCurrentPlatformUserGovernanceV1(current)).not.toThrow();
+		for (const changed of [
+			{ actorPlatformDisabled: true },
+			{ actor: null },
+			{ actor: { ...current.actor, userId: "another-user" } },
+			{ actor: { ...current.actor, accountStatus: "disabled" as const } },
+			{ actor: { ...current.actor, roles: ["employee" as const] } },
+		])
+			expect(() =>
+				requireCurrentPlatformUserGovernanceV1({ ...current, ...changed }),
+			).toThrow(expect.objectContaining({ code: "not_authorized" }));
+		const enabling = { ...current, disabled: false };
+		for (const target of [
+			null,
+			{ userId: "target", accountStatus: "disabled" as const, roles: [] },
+			{ userId: "another-user", accountStatus: "active" as const, roles: [] },
+		])
+			expect(() =>
+				requireCurrentPlatformUserGovernanceV1({ ...enabling, target }),
+			).toThrow(expect.objectContaining({ code: "resource_unavailable" }));
+		expect(() =>
+			requireCurrentPlatformUserGovernanceV1({
+				...enabling,
+				target: { userId: "target", accountStatus: "active", roles: [] },
+			}),
+		).not.toThrow();
+	});
 	it("requires administrator authority before reaching the Store", async () => {
 		const setPlatformDisabled = vi.fn(async () => true);
 		const governance = createPlatformUserGovernanceUseCaseV1({

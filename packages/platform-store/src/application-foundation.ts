@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 
 import {
+	type AgentDefaultRelayKeyAttachmentV1,
 	ApplicationFoundationError,
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
@@ -17,6 +18,7 @@ import postgres from "postgres";
 
 import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { isPostgresError } from "./postgres-error.js";
+import { snapshotRelayKeyCiphertextV1 } from "./relay-key-versions.js";
 import {
 	agentApplications,
 	agentAvailability,
@@ -32,6 +34,8 @@ import {
 	platformApiCredentials,
 	platformApplications,
 	platformUserDisables,
+	relayKeySubjects,
+	relayKeyVersions,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
 
@@ -124,6 +128,7 @@ function validatedPlan(input: ApplicationFoundationWritePlanV1) {
 	const ownerIds = [...plan.access.ownerIds];
 	const targetKeys = plan.access.availability.map(accessTargetKey);
 	const principal = plan.principal;
+	const keyAudit = plan.agentDefaultRelayKeyAuditEvent;
 	const timestamp = plan.agent.createdAt;
 	const expectedResult: CommitApplicationFoundationResultV1 = {
 		schemaVersion: 1,
@@ -204,6 +209,20 @@ function validatedPlan(input: ApplicationFoundationWritePlanV1) {
 		plan.auditEvent.targetType !== "agent_application" ||
 		plan.auditEvent.targetId !== plan.application.applicationId ||
 		plan.auditEvent.outcome !== "succeeded" ||
+		(keyAudit !== undefined &&
+			(keyAudit.traceId !== plan.auditEvent.traceId ||
+				keyAudit.requestId !== plan.auditEvent.requestId ||
+				keyAudit.agentId !== plan.agent.agentId ||
+				keyAudit.actorType !== plan.auditEvent.actorType ||
+				keyAudit.actorId !== plan.auditEvent.actorId ||
+				keyAudit.action !== "relay_key.agent_default.created" ||
+				keyAudit.targetType !== "agent" ||
+				keyAudit.targetId !== plan.agent.agentId ||
+				keyAudit.outcome !== "succeeded" ||
+				keyAudit.details.keyVersion !== 1 ||
+				!validDate(keyAudit.occurredAt) ||
+				Date.prototype.getTime.call(keyAudit.occurredAt) !==
+					Date.prototype.getTime.call(timestamp))) ||
 		!validDate(timestamp) ||
 		[
 			plan.application.submittedAt,
@@ -347,14 +366,13 @@ async function requireCurrentApiCreationAuthority(
 	let currentUser: ReturnType<typeof parseCurrentTaskUserV1> | null = null;
 	let platformDisabled = true;
 	if (currentUserId) {
-		// Platform disable locks the mapped identity row before writing its state.
-		const [mapped] = await database
+		// LDAP disable serializes against this row when the deployment uses LDAP.
+		await database
 			.select({ userId: ldapIdentityIds.userId })
 			.from(ldapIdentityIds)
 			.where(eq(ldapIdentityIds.userId, currentUserId))
 			.limit(1)
 			.for("share");
-		if (!mapped) throw new ApplicationFoundationError("not_authorized");
 		const [disabled] = await database
 			.select({ userId: platformUserDisables.userId })
 			.from(platformUserDisables)
@@ -514,9 +532,24 @@ export class PostgresApplicationFoundationTransactionV1
 	async commit(
 		input: ApplicationFoundationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
+		agentDefaultRelayKey?: AgentDefaultRelayKeyAttachmentV1,
 	): ReturnType<ApplicationFoundationTransactionPortV1["commit"]> {
 		try {
 			const { plan, configuration, result } = validatedPlan(input);
+			if (
+				(configuration.runtimeModelConfigurationV4 !== undefined) !==
+					(agentDefaultRelayKey !== undefined) ||
+				(agentDefaultRelayKey !== undefined) !==
+					(plan.agentDefaultRelayKeyAuditEvent !== undefined) ||
+				(agentDefaultRelayKey &&
+					((plan.result.status !== "creating" &&
+						plan.result.status !== "pending_approval") ||
+						configuration.source.kind !== "standard" ||
+						configuration.modelConfiguration !== null ||
+						configuration.runtimeModelConfigurationV4 === undefined ||
+						typeof agentDefaultRelayKey.encrypt !== "function"))
+			)
+				throw new ApplicationFoundationError("persistence_failed");
 			return await this.#database.transaction(async (transaction) => {
 				if (plan.application.status === "creating") {
 					if (!plan.principal || !plan.apiAuthority)
@@ -610,6 +643,30 @@ export class PostgresApplicationFoundationTransactionV1
 					configuration,
 					createdAt: plan.configurationRevision.createdAt,
 				});
+				if (agentDefaultRelayKey) {
+					const binding = {
+						purpose: "agent-default" as const,
+						subjectId: plan.agent.agentId,
+						keyId: randomUUID(),
+						keyVersion: 1 as const,
+					};
+					const ciphertext = snapshotRelayKeyCiphertextV1(
+						await agentDefaultRelayKey.encrypt(binding),
+						binding,
+					);
+					await transaction.insert(relayKeySubjects).values({
+						purpose: binding.purpose,
+						subjectId: binding.subjectId,
+						lastVersion: 1,
+						currentVersion: 1,
+						updatedAt: plan.agent.createdAt,
+					});
+					await transaction.insert(relayKeyVersions).values({
+						...binding,
+						ciphertext: ciphertext as unknown as Record<string, unknown>,
+						createdAt: plan.agent.createdAt,
+					});
+				}
 				await insertPendingSecretRecordAttachments(
 					transaction,
 					attachments,
@@ -673,6 +730,23 @@ export class PostgresApplicationFoundationTransactionV1
 					outcome: plan.auditEvent.outcome,
 					occurredAt: plan.auditEvent.occurredAt,
 				});
+				if (plan.agentDefaultRelayKeyAuditEvent) {
+					const audit = plan.agentDefaultRelayKeyAuditEvent;
+					await transaction.insert(auditEvents).values({
+						id: randomUUID(),
+						traceId: audit.traceId,
+						requestId: audit.requestId,
+						agentId: audit.agentId,
+						actorType: audit.actorType,
+						actorId: audit.actorId,
+						action: audit.action,
+						targetType: audit.targetType,
+						targetId: audit.targetId,
+						outcome: audit.outcome,
+						details: audit.details,
+						occurredAt: audit.occurredAt,
+					});
+				}
 				if (plan.result.status === "creating") {
 					await transaction.insert(auditEvents).values(
 						(["manage", "use"] as const).map((grantType) => ({

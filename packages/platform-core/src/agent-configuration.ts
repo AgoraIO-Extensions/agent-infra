@@ -107,6 +107,7 @@ export {
 	type AgentConfigurationUseCaseOptionsV1,
 	type AgentConfigurationUseCaseV1,
 	type AgentConfigurationWritePlanV1,
+	type AgentDefaultModelAdmissionV1,
 	type InitialAgentConfigurationAdmissionDependenciesV1,
 	type InitialAgentConfigurationAdmissionHandleV1,
 	type InitialAgentConfigurationCommandV2,
@@ -369,7 +370,7 @@ function createAgentConfigurationUseCaseV1Internal(
 
 		let modelConfiguration = current.modelConfiguration;
 		if (changes.modelConfiguration) {
-			if (source.kind !== "standard") {
+			if (source.kind !== "standard" || current.runtimeModelConfigurationV4) {
 				throw new AgentConfigurationError("not_admitted");
 			}
 			let admission: Awaited<
@@ -573,6 +574,7 @@ function createAgentConfigurationUseCaseV1Internal(
 		requireAdmittedConfigurationPolicy({
 			source,
 			modelConfiguration,
+			runtimeModelConfigurationV4: current.runtimeModelConfigurationV4,
 			environment,
 			secrets,
 			channels,

@@ -9,6 +9,7 @@ import {
 	type AgentManagementTransactionPortV1,
 	type AgentManagementTransactionRequestV1,
 	type ApiPrincipalV1,
+	isCurrentApiAgentManagementAuthorizedV1,
 	parseCurrentTaskUserV1,
 	snapshotAgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
@@ -166,7 +167,10 @@ async function currentApiCredentialAllowsManagement(
 	request: AgentManagementTransactionRequestV1,
 	resolveUser?: (userId: string) => Promise<unknown | null>,
 ): Promise<boolean> {
-	if (!request.apiAuthority) return true;
+	if (!request.apiAuthority)
+		return isCurrentApiAgentManagementAuthorizedV1({
+			actorId: request.actorId,
+		});
 	const [credential] = await transaction
 		.select({
 			principalType: platformApiCredentials.principalType,
@@ -179,7 +183,12 @@ async function currentApiCredentialAllowsManagement(
 		.where(eq(platformApiCredentials.id, request.apiAuthority.credentialId))
 		.limit(1)
 		.for("share");
-	if (!credential) return false;
+	if (!credential)
+		return isCurrentApiAgentManagementAuthorizedV1({
+			actorId: request.actorId,
+			apiAuthority: request.apiAuthority,
+			credential: null,
+		});
 	const [clock] = await transaction
 		.select({
 			nowMs: sql<number>`(extract(epoch from clock_timestamp()) * 1000)::float8`,
@@ -187,34 +196,21 @@ async function currentApiCredentialAllowsManagement(
 		.from(platformApiCredentials)
 		.where(eq(platformApiCredentials.id, request.apiAuthority.credentialId))
 		.limit(1);
-	const validCredential =
-		clock !== undefined &&
-		request.apiAuthority.principal.id === request.actorId &&
-		credential.principalType === request.apiAuthority.principal.kind &&
-		credential.principalId === request.apiAuthority.principal.id &&
-		Array.isArray(credential.scopes) &&
-		credential.scopes.includes("agent:manage") &&
-		credential.revokedAt === null &&
-		(credential.expiresAt === null ||
-			credential.expiresAt.getTime() > clock.nowMs);
-	if (!validCredential) return false;
+	let currentUser: ReturnType<typeof parseCurrentTaskUserV1> | null = null;
 	if (request.apiAuthority.principal.kind === "user") {
 		try {
-			if (!resolveUser) return false;
-			const currentUser = parseCurrentTaskUserV1(
-				await resolveUser(request.apiAuthority.principal.id),
-			);
-			if (
-				currentUser.userId !== request.apiAuthority.principal.id ||
-				currentUser.accountStatus !== "active" ||
-				currentUser.authorizationRevision !==
-					request.apiAuthority.identityRevision
-			)
-				return false;
+			if (resolveUser)
+				currentUser = parseCurrentTaskUserV1(
+					await resolveUser(request.apiAuthority.principal.id),
+				);
 		} catch {
-			return false;
+			currentUser = null;
 		}
 	}
+	let currentApplication: {
+		readonly status: string;
+		readonly authorizationRevision: string;
+	} | null = null;
 	if (request.apiAuthority.principal.kind === "application") {
 		const [application] = await transaction
 			.select({
@@ -225,13 +221,16 @@ async function currentApiCredentialAllowsManagement(
 			.where(eq(platformApplications.id, request.apiAuthority.principal.id))
 			.limit(1)
 			.for("share");
-		return (
-			application?.status === "active" &&
-			application.authorizationRevision ===
-				request.apiAuthority.identityRevision
-		);
+		currentApplication = application ?? null;
 	}
-	return true;
+	return isCurrentApiAgentManagementAuthorizedV1({
+		actorId: request.actorId,
+		apiAuthority: request.apiAuthority,
+		credential,
+		nowMs: clock?.nowMs,
+		currentUser,
+		currentApplication,
+	});
 }
 
 export async function readAgentManagementState(

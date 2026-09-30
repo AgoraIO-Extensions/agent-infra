@@ -373,6 +373,46 @@ export const AgentApplicationCreateRequestV2Schema =
 	AgentApplicationCreateRequestV1Schema.omit({ actions: true }).extend({
 		schemaVersion: z.literal(2),
 	});
+export const AgentDefaultModelSelectionV1Schema = z.strictObject({
+	catalogRevision: OpaqueIdV1Schema,
+	options: z
+		.array(
+			z.strictObject({
+				optionId: OpaqueIdV1Schema,
+				endpointId: OpaqueIdV1Schema,
+				modelId: OpaqueIdV1Schema,
+				reasoningLevels: z.array(nonEmptyString()).min(1).max(32),
+			}),
+		)
+		.min(1)
+		.max(128),
+	defaultOptionId: OpaqueIdV1Schema,
+	defaultReasoningLevel: nonEmptyString(),
+});
+export const AgentApplicationCreateRequestV3Schema =
+	AgentApplicationCreateRequestV2Schema.omit({ modelConfiguration: true })
+		.extend({
+			schemaVersion: z.literal(3),
+			agentDefaultRelayKey: nonEmptyString()
+				.meta({ writeOnly: true })
+				.optional(),
+			modelSelection: AgentDefaultModelSelectionV1Schema.optional(),
+		})
+		.superRefine((value, context) => {
+			const needsDefaultModel = value.source.kind === "standard";
+			if (needsDefaultModel !== (value.agentDefaultRelayKey !== undefined))
+				context.addIssue({
+					code: "custom",
+					path: ["agentDefaultRelayKey"],
+					message: "Invalid Agent default Relay Key",
+				});
+			if (needsDefaultModel !== (value.modelSelection !== undefined))
+				context.addIssue({
+					code: "custom",
+					path: ["modelSelection"],
+					message: "Invalid model selection",
+				});
+		});
 export const AgentApplicationUpdateRequestV2Schema =
 	AgentApplicationUpdateRequestV1Schema.omit({ actions: true }).extend({
 		schemaVersion: z.literal(2),
@@ -632,6 +672,12 @@ export const PersonalRelayKeyRevokeRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	expectedVersion: z.number().int().positive(),
 });
+
+export const AgentDefaultRelayKeyStateV1Schema = PersonalRelayKeyStateV1Schema;
+export const AgentDefaultRelayKeyReplaceRequestV1Schema =
+	PersonalRelayKeyReplaceRequestV1Schema.extend({
+		modelSelection: AgentDefaultModelSelectionV1Schema,
+	});
 
 export const PlatformAuditProjectionV2Schema =
 	PlatformAuditProjectionV1Schema.extend({
@@ -1407,6 +1453,22 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+	"/api/v2/agent-applications/default-key": {
+		post: {
+			operationId: "createAgentApplicationV3",
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationCreateRequestV3Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Application submitted",
+					AgentApplicationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agent-applications/{applicationId}": {
 		get: {
 			operationId: "getAgentApplicationV2",
@@ -1471,6 +1533,16 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+	"/api/v2/admin/agents": {
+		get: {
+			operationId: "listAdminAgentsV2",
+			requestParams: { query: pageQuery },
+			responses: {
+				"200": jsonResponse("Administrator Agent list", agentPageV2),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agents": {
 		get: {
 			operationId: "listAgentsV2",
@@ -1484,7 +1556,7 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			operationId: "createAgentDirectlyV2",
 			requestParams: { header: idempotencyHeader },
 			requestBody: requiredJsonRequestBody(
-				AgentApplicationCreateRequestV2Schema,
+				AgentApplicationCreateRequestV3Schema,
 			),
 			responses: {
 				"201": jsonResponse(
@@ -1501,6 +1573,33 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			requestParams: { path: agentPath },
 			responses: {
 				"200": jsonResponse("Agent detail", AgentProjectionV2Schema),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/default-relay-key": {
+		get: {
+			operationId: "getAgentDefaultRelayKeyV2",
+			requestParams: { path: agentPath },
+			responses: {
+				"200": jsonResponse(
+					"Agent default Relay Key status",
+					AgentDefaultRelayKeyStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		put: {
+			operationId: "replaceAgentDefaultRelayKeyV2",
+			requestParams: { path: agentPath },
+			requestBody: requiredJsonRequestBody(
+				AgentDefaultRelayKeyReplaceRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Agent default Relay Key replaced",
+					AgentDefaultRelayKeyStateV1Schema,
+				),
 				...errorResponses,
 			},
 		},
@@ -1594,6 +1693,9 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	AgentDefaultRelayKeyStateV1: AgentDefaultRelayKeyStateV1Schema,
+	AgentDefaultRelayKeyReplaceRequestV1:
+		AgentDefaultRelayKeyReplaceRequestV1Schema,
 	PersonalRelayKeyStateV1: PersonalRelayKeyStateV1Schema,
 	PersonalRelayKeyReplaceRequestV1: PersonalRelayKeyReplaceRequestV1Schema,
 	PersonalRelayKeyRevokeRequestV1: PersonalRelayKeyRevokeRequestV1Schema,
@@ -1601,6 +1703,8 @@ export const pilotBrowserSchemasV2 = {
 	AgentLifecycleCommandRequestV1: AgentLifecycleCommandRequestV1Schema,
 	ApprovalDecisionRequestV1: ApprovalDecisionRequestV1Schema,
 	AgentApplicationCreateRequestV2: AgentApplicationCreateRequestV2Schema,
+	AgentDefaultModelSelectionV1: AgentDefaultModelSelectionV1Schema,
+	AgentApplicationCreateRequestV3: AgentApplicationCreateRequestV3Schema,
 	AgentApplicationUpdateRequestV2: AgentApplicationUpdateRequestV2Schema,
 	AgentConfigurationUpdateRequestV2: AgentConfigurationUpdateRequestV2Schema,
 	AgentApplicationProjectionV2: AgentApplicationProjectionV2Schema,

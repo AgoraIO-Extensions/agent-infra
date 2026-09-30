@@ -3,7 +3,9 @@ import {
 	AgentProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
+import { ModelConfigurationErrorV1 } from "@agent-infra/model-catalog";
 import {
+	type AgentDefaultRelayKeyAttachmentV1,
 	ApiIdentityError,
 	type ApplicationFoundationUseCaseV1,
 } from "@agent-infra/platform-core";
@@ -129,6 +131,12 @@ function createApp(
 		outcome: "prepared",
 		prepared: await prepare(),
 	}));
+	const prepareWebCreation = vi.fn<
+		ApplicationFoundationUseCaseV1["prepareWebCreation"]
+	>(async (_query, _actor, prepare) => ({
+		outcome: "prepared",
+		prepared: await prepare(),
+	}));
 	const prepareSecretReplacements = vi.fn().mockResolvedValue({ secrets: [] });
 	const executeManagementCommand = vi.fn().mockResolvedValue({
 		outcome: "accepted",
@@ -173,6 +181,24 @@ function createApp(
 			createdAt: new Date("2026-09-01T00:00:00Z"),
 		},
 	};
+	const admitAgentDefaultModels = vi.fn().mockResolvedValue({
+		catalogRevision: "catalog-1",
+		runtime: {},
+	});
+	const encryptAgentDefaultRelayKey = vi.fn().mockReturnValue({});
+	const currentAgentDefaultRelayKey = vi.fn().mockResolvedValue({
+		schemaVersion: 1,
+		isSet: true,
+		keyVersion: 1,
+	});
+	const replaceAgentDefaultRelayKey = vi.fn().mockResolvedValue({
+		schemaVersion: 1,
+		isSet: true,
+		keyVersion: 2,
+	});
+	const recordAgentDefaultRelayKeyRejection = vi
+		.fn()
+		.mockResolvedValue(undefined);
 
 	registerV2ManagementRoutes(app, {
 		identity: {
@@ -189,11 +215,21 @@ function createApp(
 		},
 		foundation: {
 			prepareApiCreation,
+			prepareWebCreation,
 			submit,
 		},
 		revision: { revise: vi.fn().mockResolvedValue({}) },
 		management: { executeManagementCommand },
 		apiIdentity: apiIdentity as never,
+		agentDefaultRelayKeyEncryptor: {
+			encrypt: encryptAgentDefaultRelayKey,
+		},
+		agentDefaultRelayKey: {
+			current: currentAgentDefaultRelayKey,
+			replace: replaceAgentDefaultRelayKey,
+			recordRejected: recordAgentDefaultRelayKeyRejection,
+		},
+		admitAgentDefaultModels,
 		configuration: { upgradeCustomImage: vi.fn().mockResolvedValue({}) },
 		query: { listApplications, getApplication, listAgents, getAgent },
 		allocateApplicationIds,
@@ -206,12 +242,18 @@ function createApp(
 		app,
 		submit,
 		prepareApiCreation,
+		prepareWebCreation,
 		prepareSecretReplacements,
 		executeManagementCommand,
 		listAgents,
 		getAgent,
 		apiIdentity,
 		apiContext,
+		admitAgentDefaultModels,
+		encryptAgentDefaultRelayKey,
+		currentAgentDefaultRelayKey,
+		replaceAgentDefaultRelayKey,
+		recordAgentDefaultRelayKeyRejection,
 	};
 }
 
@@ -230,8 +272,129 @@ const applicationBody = {
 	environment: [],
 	secrets: [],
 };
+const directCreationBody = {
+	...applicationBody,
+	schemaVersion: 3,
+	agentDefaultRelayKey: "candidate-relay-key",
+	modelSelection: {
+		catalogRevision: "catalog-1",
+		options: [
+			{
+				optionId: "option-1",
+				endpointId: "relay-1",
+				modelId: "model-1",
+				reasoningLevels: ["medium"],
+			},
+		],
+		defaultOptionId: "option-1",
+		defaultReasoningLevel: "medium",
+	},
+};
 
 describe("V2 management routes", () => {
+	it("reads and replaces an Agent default Key without returning its value", async () => {
+		const { app, currentAgentDefaultRelayKey, replaceAgentDefaultRelayKey } =
+			createApp();
+		const read = await app.request("/api/v2/agents/agent-1/default-relay-key");
+		expect(read.status).toBe(200);
+		expect(await read.json()).toEqual({
+			schemaVersion: 1,
+			isSet: true,
+			keyVersion: 1,
+		});
+		expect(currentAgentDefaultRelayKey).toHaveBeenCalledWith(
+			expect.objectContaining({ userId: "user-1" }),
+			"agent-1",
+			expect.any(String),
+			expect.any(String),
+		);
+		const write = await app.request(
+			"/api/v2/agents/agent-1/default-relay-key",
+			{
+				method: "PUT",
+				headers,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					expectedVersion: 1,
+					keyValue: "replacement-relay-key",
+					modelSelection: directCreationBody.modelSelection,
+				}),
+			},
+		);
+		expect(write.status).toBe(200);
+		expect(await write.json()).toEqual({
+			schemaVersion: 1,
+			isSet: true,
+			keyVersion: 2,
+		});
+		expect(replaceAgentDefaultRelayKey).toHaveBeenCalledWith(
+			expect.objectContaining({ userId: "user-1" }),
+			"agent-1",
+			expect.objectContaining({
+				expectedVersion: 1,
+				keyValue: "replacement-relay-key",
+				modelSelection: directCreationBody.modelSelection,
+			}),
+			expect.any(String),
+			expect.any(String),
+		);
+	});
+
+	it("passes user API credential authority to the default Key boundary", async () => {
+		const {
+			app,
+			apiContext,
+			currentAgentDefaultRelayKey,
+			replaceAgentDefaultRelayKey,
+		} = createApp();
+		Object.assign(apiContext, {
+			principal: { kind: "user", id: "user-1" },
+			ownerId: "user-1",
+			authorizationRevision: "user-revision-1",
+			credential: {
+				...apiContext.credential,
+				principal: { kind: "user", id: "user-1" },
+			},
+		});
+		const authority = {
+			userId: "user-1",
+			principal: { kind: "user", id: "user-1" },
+			credential: expect.objectContaining({ credentialId: "credential-api" }),
+			identityRevision: "user-revision-1",
+		};
+		const read = await app.request("/api/v2/agents/agent-1/default-relay-key", {
+			headers: { Authorization: "Bearer user-token" },
+		});
+		expect(read.status).toBe(200);
+		expect(currentAgentDefaultRelayKey).toHaveBeenCalledWith(
+			expect.objectContaining(authority),
+			"agent-1",
+			expect.any(String),
+			expect.any(String),
+		);
+		const write = await app.request(
+			"/api/v2/agents/agent-1/default-relay-key",
+			{
+				method: "PUT",
+				headers: { ...headers, Authorization: "Bearer user-token" },
+				body: JSON.stringify({
+					schemaVersion: 1,
+					expectedVersion: 1,
+					keyValue: "replacement-relay-key",
+					modelSelection: directCreationBody.modelSelection,
+				}),
+			},
+		);
+		expect(write.status).toBe(200);
+		expect(replaceAgentDefaultRelayKey).toHaveBeenCalledWith(
+			expect.objectContaining(authority),
+			"agent-1",
+			expect.any(Object),
+			expect.any(String),
+			expect.any(String),
+		);
+	});
+
 	it("uses owner scope and returns an action-free V2 agent projection", async () => {
 		const { app, listAgents } = createApp();
 		const response = await app.request("/api/v2/agents?scope=owner&limit=10");
@@ -247,13 +410,46 @@ describe("V2 management routes", () => {
 		expect(projection.configuration).not.toHaveProperty("actions");
 	});
 
-	it("submits V2 application input to the real Core seam and projects V2 output", async () => {
-		const { app, submit } = createApp();
-		const response = await app.request("/api/v2/agent-applications", {
-			method: "POST",
-			headers,
-			body: JSON.stringify(applicationBody),
+	it("lists all Agents only for a current browser administrator", async () => {
+		const administrator = createApp({ administrator: true });
+		const response = await administrator.app.request(
+			"/api/v2/admin/agents?limit=10",
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			items: [{ schemaVersion: 2, agentId: "agent-1" }],
+			nextCursor: null,
 		});
+		expect(administrator.listAgents).toHaveBeenCalledWith(
+			{ kind: "administrator" },
+			{ limit: 10 },
+		);
+		for (const [request, status] of [
+			[new Request("http://localhost/api/v2/admin/agents"), 403],
+			[
+				new Request("http://localhost/api/v2/admin/agents", {
+					headers: { Authorization: "Bearer application-token" },
+				}),
+				401,
+			],
+		] as const) {
+			const candidate = createApp();
+			const denied = await candidate.app.request(request);
+			expect(denied.status).toBe(status);
+			expect(candidate.listAgents).not.toHaveBeenCalled();
+		}
+	});
+
+	it("submits V3 application input with a default Key and projects V2 output", async () => {
+		const { app, submit } = createApp();
+		const response = await app.request(
+			"/api/v2/agent-applications/default-key",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify(directCreationBody),
+			},
+		);
 
 		expect(response.status).toBe(201);
 		const projection = AgentApplicationProjectionV2Schema.parse(
@@ -268,7 +464,105 @@ describe("V2 management routes", () => {
 			}),
 			expect.objectContaining({ userId: "user-1" }),
 			undefined,
+			expect.objectContaining({
+				admitModels: expect.any(Function),
+				encrypt: expect.any(Function),
+			}),
 		);
+	});
+
+	it("preserves V2 custom-Agent application creation", async () => {
+		const { app, submit } = createApp();
+		const response = await app.request("/api/v2/agent-applications", {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				...applicationBody,
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/agent:1",
+					interactionMode: "platform-adapter",
+				},
+			}),
+		});
+		expect(response.status).toBe(201);
+		expect(submit).toHaveBeenCalledWith(
+			expect.objectContaining({ applicationId: "application-1" }),
+			expect.objectContaining({ userId: "user-1" }),
+			undefined,
+			undefined,
+		);
+	});
+
+	it("rejects legacy per-model creation for a new standard Agent", async () => {
+		const { app, submit, prepareWebCreation } = createApp();
+		const response = await app.request("/api/v2/agent-applications", {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				...applicationBody,
+				modelConfiguration: {
+					options: [
+						{
+							optionId: "model_primary",
+							endpointId: "relay-1",
+							modelId: "model-1",
+							reasoningLevels: ["low"],
+							credentialValue: "legacy-per-model-key",
+						},
+					],
+					defaultOptionId: "model_primary",
+					defaultReasoningLevel: "low",
+				},
+			}),
+		});
+		expect(response.status).toBe(400);
+		expect(prepareWebCreation).not.toHaveBeenCalled();
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("returns a saved default-Key application before secret preparation", async () => {
+		const {
+			app,
+			submit,
+			prepareWebCreation,
+			prepareSecretReplacements,
+			admitAgentDefaultModels,
+			encryptAgentDefaultRelayKey,
+		} = createApp();
+		prepareWebCreation.mockImplementation(async (query) => ({
+			outcome: "replayed" as const,
+			result: {
+				schemaVersion: 1 as const,
+				applicationId: query.applicationId,
+				agentId: query.agentId,
+				configurationRevision: 1 as const,
+				status: "pending_approval" as const,
+			},
+		}));
+		prepareSecretReplacements.mockRejectedValue(
+			new Error("preparation is unavailable"),
+		);
+		const response = await app.request(
+			"/api/v2/agent-applications/default-key",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					...directCreationBody,
+					secrets: [{ name: "BOT_TOKEN", value: "candidate-secret" }],
+				}),
+			},
+		);
+		expect(response.status).toBe(201);
+		expect(await response.json()).toMatchObject({
+			schemaVersion: 2,
+			applicationId: "application-1",
+		});
+		expect(prepareSecretReplacements).not.toHaveBeenCalled();
+		expect(submit).not.toHaveBeenCalled();
+		expect(admitAgentDefaultModels).not.toHaveBeenCalled();
+		expect(encryptAgentDefaultRelayKey).not.toHaveBeenCalled();
 	});
 
 	it("runs administrator approval through the management command and rejects invalid scope", async () => {
@@ -329,8 +623,14 @@ describe("V2 management routes", () => {
 	});
 
 	it("returns a saved direct creation before mutable preparation", async () => {
-		const { app, submit, prepareApiCreation, prepareSecretReplacements } =
-			createApp();
+		const {
+			app,
+			submit,
+			prepareApiCreation,
+			prepareSecretReplacements,
+			admitAgentDefaultModels,
+			encryptAgentDefaultRelayKey,
+		} = createApp();
 		prepareApiCreation.mockImplementation(async (query) => ({
 			outcome: "replayed" as const,
 			result: {
@@ -347,7 +647,7 @@ describe("V2 management routes", () => {
 		const response = await app.request("/api/v2/agents", {
 			method: "POST",
 			headers: { ...headers, Authorization: "Bearer application-token" },
-			body: JSON.stringify(applicationBody),
+			body: JSON.stringify(directCreationBody),
 		});
 		expect(response.status).toBe(201);
 		expect(await response.json()).toEqual({
@@ -358,10 +658,19 @@ describe("V2 management routes", () => {
 		});
 		expect(prepareSecretReplacements).not.toHaveBeenCalled();
 		expect(submit).not.toHaveBeenCalled();
+		expect(admitAgentDefaultModels).not.toHaveBeenCalled();
+		expect(encryptAgentDefaultRelayKey).not.toHaveBeenCalled();
 	});
 
 	it("supports API direct creation and lifecycle with current credential authority", async () => {
-		const { app, submit, executeManagementCommand } = createApp();
+		const {
+			app,
+			apiIdentity,
+			submit,
+			executeManagementCommand,
+			admitAgentDefaultModels,
+			encryptAgentDefaultRelayKey,
+		} = createApp();
 		submit.mockImplementation(
 			async (request: { applicationId: string; agentId: string }) => ({
 				applicationId: request.applicationId,
@@ -375,9 +684,17 @@ describe("V2 management routes", () => {
 				...headers,
 				Authorization: "Bearer application-token",
 			},
-			body: JSON.stringify(applicationBody),
+			body: JSON.stringify(directCreationBody),
 		});
 		expect(create.status).toBe(201);
+		expect(apiIdentity.authorizeCredentialScope).toHaveBeenCalledWith(
+			expect.objectContaining({
+				principal: { kind: "application", id: "application-api" },
+				identityRevision: "application-revision-1",
+			}),
+			["agent:create"],
+			expect.anything(),
+		);
 		expect(
 			((await create.json()) as { schemaVersion: number }).schemaVersion,
 		).toBe(2);
@@ -392,7 +709,45 @@ describe("V2 management routes", () => {
 				},
 			}),
 			undefined,
+			expect.objectContaining({
+				admitModels: expect.any(Function),
+				encrypt: expect.any(Function),
+			}),
 		);
+		const attachment = submit.mock
+			.calls[0]?.[3] as AgentDefaultRelayKeyAttachmentV1;
+		const admissionInput = {
+			agentId: "agent-1",
+			requestId: "request-1",
+			traceId: "trace-1",
+			source: {
+				kind: "standard" as const,
+				templateId: "template-1",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				admissionRevision: "admission-1",
+				connectionEnabled: false,
+				allowedEnvironmentKeys: [],
+				allowedSecretKeys: [],
+				platformManagedKeys: [],
+			},
+		};
+		await attachment.admitModels(admissionInput);
+		expect(admitAgentDefaultModels).toHaveBeenCalledWith({
+			...admissionInput,
+			requested: directCreationBody.modelSelection,
+			candidateRelayKey: directCreationBody.agentDefaultRelayKey,
+		});
+		const binding = {
+			purpose: "agent-default" as const,
+			subjectId: "agent-1",
+			keyId: "key-1",
+			keyVersion: 1 as const,
+		};
+		attachment.encrypt(binding);
+		expect(encryptAgentDefaultRelayKey).toHaveBeenCalledWith({
+			...binding,
+			plaintext: directCreationBody.agentDefaultRelayKey,
+		});
 
 		const lifecycle = await app.request("/api/v2/agents/agent-1/lifecycle", {
 			method: "POST",
@@ -414,6 +769,67 @@ describe("V2 management routes", () => {
 			}),
 		);
 	});
+
+	it.each([
+		{ ...directCreationBody, agentDefaultRelayKey: undefined },
+		{ ...directCreationBody, modelSelection: undefined },
+		{ ...directCreationBody, schemaVersion: 2 },
+		{
+			...directCreationBody,
+			source: { kind: "custom", imageReference: "image-1" },
+		},
+	])("rejects invalid V3 direct creation input", async (body) => {
+		const { app, submit } = createApp();
+		const response = await app.request("/api/v2/agents", {
+			method: "POST",
+			headers: { ...headers, Authorization: "Bearer application-token" },
+			body: JSON.stringify(body),
+		});
+		expect(response.status).toBe(400);
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ retryable: false, status: 409 },
+		{ retryable: true, status: 503 },
+	])(
+		"maps model admission failure to $status",
+		async ({ retryable, status }) => {
+			const { app, submit, admitAgentDefaultModels } = createApp();
+			admitAgentDefaultModels.mockRejectedValueOnce(
+				new ModelConfigurationErrorV1(retryable),
+			);
+			submit.mockImplementation(
+				async (
+					_command: unknown,
+					_actor: unknown,
+					_attachment: unknown,
+					agentDefaultRelayKey: AgentDefaultRelayKeyAttachmentV1,
+				) =>
+					agentDefaultRelayKey.admitModels({
+						agentId: "agent-1",
+						requestId: "request-1",
+						traceId: "trace-1",
+						source: {
+							kind: "standard",
+							templateId: "template-1",
+							imageDigest: `sha256:${"a".repeat(64)}`,
+							admissionRevision: "admission-1",
+							connectionEnabled: false,
+							allowedEnvironmentKeys: [],
+							allowedSecretKeys: [],
+							platformManagedKeys: [],
+						},
+					}),
+			);
+			const response = await app.request("/api/v2/agents", {
+				method: "POST",
+				headers: { ...headers, Authorization: "Bearer application-token" },
+				body: JSON.stringify(directCreationBody),
+			});
+			expect(response.status).toBe(status);
+		},
+	);
 
 	it.each(["retry_creation", "disable", "upgrade_custom_image"] as const)(
 		"audits V2 API lifecycle rejection for %s",

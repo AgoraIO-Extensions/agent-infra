@@ -46,6 +46,7 @@ export function createDeploymentAuthorizationAdmission(input: {
 			if (
 				currentRequest.method === "POST" &&
 				(creationPath === "/api/v2/agent-applications" ||
+					creationPath === "/api/v2/agent-applications/default-key" ||
 					creationPath === "/api/v2/agents")
 			) {
 				if (creationPath === "/api/v2/agents" && !identity.principal)
