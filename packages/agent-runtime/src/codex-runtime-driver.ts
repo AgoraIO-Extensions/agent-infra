@@ -86,6 +86,7 @@ import type {
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeExternalActionAuthorization,
+	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
 	RuntimeOriginalEvidenceRecoveryRef,
 } from "./driver.js";
@@ -105,6 +106,25 @@ interface CodexAppServerTransport {
 type OpenCodexBridge = (
 	options: CodexAppServerBridgeOptions,
 ) => Promise<CodexAppServerTransport>;
+
+/** Host-owned current read authority, never a wire command or business permit. */
+export type CodexNativeCommandReadContext = Pick<
+	RuntimeOriginalEvidenceReadContext,
+	"signal" | "expiresAt" | "assertCurrent"
+> & { readonly nativeSessionRef: string };
+
+export interface CodexNativeStatusSelection {
+	readonly capabilityId: string;
+	readonly directoryRevision: string;
+	readonly parameters: Readonly<Record<string, never>>;
+}
+
+interface NativeCommandBinding {
+	readonly authority: RuntimeOriginalEvidenceBinding;
+	readonly nativeSessionRef: string;
+	readonly threadId: string;
+	readonly configVersion: string;
+}
 
 export interface CodexRuntimeDriverOptions {
 	/** Deployment-owned. Private execution still requires a verified native barrier. */
@@ -364,6 +384,8 @@ interface CodexDriverState {
 
 interface PendingRequest {
 	method: string;
+	readOnly: boolean;
+	abandonedRead?: true;
 	resolve: (value: unknown) => void;
 	reject: (error: Error) => void;
 	nativeSelectionRejection: boolean;
@@ -1751,6 +1773,20 @@ class CodexSessionUnavailableError extends RuntimeHostError {
 	}
 }
 
+class CodexReadRejectedError extends RuntimeHostError {
+	constructor(unsupported: boolean) {
+		super(
+			unsupported
+				? "RUNTIME_CODEX_COMMAND_UNSUPPORTED"
+				: "RUNTIME_CODEX_UNAVAILABLE",
+			unsupported
+				? "Native command is unsupported"
+				: "Codex Runtime is unavailable",
+			503,
+		);
+	}
+}
+
 function protocolInvalidError() {
 	return new RuntimeHostError(
 		"RUNTIME_CODEX_PROTOCOL_INVALID",
@@ -2210,6 +2246,34 @@ function turnCompletedNotification(frame: CodexAppServerFrame) {
 	return { threadId: params.threadId, nativeTurnId: params.turn.id, status };
 }
 
+/** Project the pinned thread/read metadata; never return native thread contents. */
+function parseNativeCommandStatus(value: unknown, threadId: string) {
+	const thread = isPlainRecord(value) ? value.thread : undefined;
+	if (
+		!isPlainRecord(thread) ||
+		thread.id !== threadId ||
+		!Array.isArray(thread.turns) ||
+		thread.turns.length !== 0 ||
+		!isPlainRecord(thread.status)
+	)
+		protocolInvalid();
+	const status = thread.status;
+	if (status.type === "active") {
+		if (
+			!Array.isArray(status.activeFlags) ||
+			!status.activeFlags.every(
+				(flag) => flag === "waitingOnApproval" || flag === "waitingOnUserInput",
+			)
+		)
+			protocolInvalid();
+		return "active" as const;
+	}
+	if (status.type === "notLoaded") return "not_loaded" as const;
+	if (status.type === "idle") return "idle" as const;
+	if (status.type === "systemError") return "system_error" as const;
+	protocolInvalid();
+}
+
 class CodexRpc {
 	private readonly pending = new Map<number, PendingRequest>();
 	private readonly consuming: Promise<void>;
@@ -2231,12 +2295,23 @@ class CodexRpc {
 		nativeSelectionRejection = false,
 		allowHistoryMaterializationRetry = false,
 		deadlineAt = Date.now() + rpcRequestTimeoutMs,
+		signal?: AbortSignal,
 	) {
 		if (this.failed) unavailable();
+		const readOnly = method === "thread/read" && signal !== undefined;
+		if (
+			readOnly &&
+			(signal?.aborted ||
+				deadlineAt <= Date.now() ||
+				[...this.pending.values()].filter((entry) => entry.readOnly).length >=
+					16)
+		)
+			unavailable();
 		const id = this.nextRequestId++;
 		const response = new Promise<T>((resolve, reject) => {
 			this.pending.set(id, {
 				method,
+				readOnly,
 				resolve: (value) => resolve(parse(value)),
 				reject,
 				nativeSelectionRejection,
@@ -2246,20 +2321,49 @@ class CodexRpc {
 		void response.catch(() => {});
 		const timeoutError = unavailableError();
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		let interruptedRead = false;
+		let sent = false;
+		let onAbort: (() => void) | undefined;
 		const deadline = new Promise<never>((_, reject) => {
-			timer = setTimeout(
-				() => {
-					this.fail(timeoutError);
-					reject(timeoutError);
-				},
-				Math.max(0, deadlineAt - Date.now()),
-			);
+			const interrupt = () => {
+				if (readOnly) {
+					const pending = this.pending.get(id);
+					if (!pending || pending.abandonedRead) return;
+					interruptedRead = true;
+					if (pending && sent) pending.abandonedRead = true;
+					else this.pending.delete(id);
+					pending?.reject(timeoutError);
+				} else this.fail(timeoutError);
+				reject(timeoutError);
+			};
+			timer = setTimeout(interrupt, Math.max(0, deadlineAt - Date.now()));
+			if (readOnly && signal) {
+				onAbort = interrupt;
+				if (signal.aborted) interrupt();
+				else signal.addEventListener("abort", onAbort, { once: true });
+			}
 		});
+		void deadline.catch(() => {});
 		try {
-			await Promise.race([this.bridge.send({ id, method, params }), deadline]);
+			if (interruptedRead) throw timeoutError;
+			sent = true;
+			let send: Promise<void>;
+			try {
+				send = this.bridge.send({ id, method, params });
+			} catch (error) {
+				if (readOnly) this.fail(unavailableError());
+				throw error;
+			}
+			if (readOnly) {
+				// A response can arrive before the write callback. It completes the
+				// read, but a later genuine send failure must still retire this RPC.
+				void send.catch(() => this.fail(unavailableError()));
+			} else await Promise.race([send, deadline]);
 			return await Promise.race([response, deadline]);
 		} catch (error) {
+			if (readOnly && interruptedRead) throw timeoutError;
 			this.pending.delete(id);
+			if (error instanceof CodexReadRejectedError) throw error;
 			if (error instanceof CodexModelSelectionRejectedError) throw error;
 			if (error instanceof CodexSessionUnavailableError) throw error;
 			if (error instanceof CodexHistoryNotMaterializedError) throw error;
@@ -2269,6 +2373,7 @@ class CodexRpc {
 			throw failure;
 		} finally {
 			if (timer !== undefined) clearTimeout(timer);
+			if (onAbort) signal?.removeEventListener("abort", onAbort);
 		}
 	}
 
@@ -2315,6 +2420,8 @@ class CodexRpc {
 		}
 		if ("method" in frame) {
 			if (
+				"result" in frame ||
+				"error" in frame ||
 				typeof frame.method !== "string" ||
 				!isJsonRpcRequestId(frame.id) ||
 				!containedServerRequestMethods.has(frame.method)
@@ -2333,6 +2440,31 @@ class CodexRpc {
 		if (!pending) {
 			this.fail(protocolInvalidError());
 			return;
+		}
+		if (pending.readOnly) {
+			const error = frame.error;
+			if (
+				!hasOnlyKeys(frame, ["id", "jsonrpc", "result", "error"]) ||
+				(frame.jsonrpc !== undefined && frame.jsonrpc !== "2.0") ||
+				"result" in frame === "error" in frame ||
+				("error" in frame &&
+					(!isPlainRecord(error) ||
+						!hasOnlyKeys(error, ["code", "message", "data"]) ||
+						!Number.isSafeInteger(error.code) ||
+						!nonEmptyString(error.message)))
+			) {
+				this.fail(protocolInvalidError());
+				return;
+			}
+			if (pending.abandonedRead) {
+				this.pending.delete(frame.id);
+				return;
+			}
+			if (isPlainRecord(error)) {
+				pending.reject(new CodexReadRejectedError(error.code === -32601));
+				this.pending.delete(frame.id);
+				return;
+			}
 		}
 		if ("error" in frame) {
 			if (
@@ -3642,6 +3774,175 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				this.inFlightOperations.delete(key);
 			}
 		}
+	}
+
+	private nativeCommandBinding(read: CodexNativeCommandReadContext) {
+		let authority: RuntimeOriginalEvidenceBinding;
+		try {
+			if (
+				read.signal.aborted ||
+				!Number.isFinite(read.expiresAt) ||
+				read.expiresAt <= Date.now()
+			)
+				runtimeAuthorizationDenied();
+			authority = structuredClone(read.assertCurrent());
+		} catch {
+			runtimeAuthorizationDenied();
+		}
+		if (!isPlainRecord(authority)) runtimeAuthorizationDenied();
+		const scope = authority.scope;
+		if (
+			!isPlainRecord(authority.principal) ||
+			(authority.principal.kind !== "user" &&
+				authority.principal.kind !== "application") ||
+			!nonEmptyString(authority.principal.id) ||
+			!isPlainRecord(scope) ||
+			!nonEmptyString(scope.agentId) ||
+			!nonEmptyString(scope.conversationId) ||
+			!nonEmptyString(scope.executionId) ||
+			!Number.isSafeInteger(scope.sessionGeneration) ||
+			scope.sessionGeneration < 1
+		)
+			runtimeAuthorizationDenied();
+		const session = ownRecordValue(
+			this.readState().sessions,
+			read.nativeSessionRef,
+		);
+		if (
+			!session ||
+			session.agentId !== scope.agentId ||
+			session.conversationId !== scope.conversationId ||
+			session.sessionGeneration !== scope.sessionGeneration ||
+			!ownRecordValue(session.executions, scope.executionId)
+		)
+			runtimeAuthorizationDenied();
+		if (this.closed || !session.threadId) unavailable();
+		if (
+			this.requiredRuntime.lane !== "official-model-only" ||
+			!this.runtimeRequirementsMatch(session)
+		)
+			unavailable();
+		return {
+			authority,
+			nativeSessionRef: read.nativeSessionRef,
+			threadId: session.threadId,
+			configVersion: this.configVersion,
+		} satisfies NativeCommandBinding;
+	}
+
+	private assertNativeCommandBinding(
+		read: CodexNativeCommandReadContext,
+		binding: NativeCommandBinding,
+	) {
+		if (!isDeepStrictEqual(this.nativeCommandBinding(read), binding))
+			runtimeAuthorizationDenied();
+	}
+
+	private nativeCommandDirectory(binding: NativeCommandBinding) {
+		const revision = createHash("sha256")
+			.update(
+				JSON.stringify([
+					"codex-thread-read-v1",
+					binding.authority.principal.kind,
+					binding.authority.principal.id,
+					binding.authority.scope.agentId,
+					binding.authority.scope.conversationId,
+					binding.authority.scope.executionId,
+					binding.authority.scope.sessionGeneration,
+					binding.nativeSessionRef,
+					binding.threadId,
+					binding.configVersion,
+					this.requiredRuntime,
+				]),
+			)
+			.digest("hex");
+		return {
+			revision,
+			capabilities: [
+				{
+					id: createHash("sha256")
+						.update(`thread/read:${revision}`)
+						.digest("hex"),
+					kind: "command" as const,
+					name: "查看原生会话状态",
+					description: "读取当前原生会话状态，不恢复会话或执行任务",
+					source: {
+						name: "Codex",
+						version: CODEX_APP_SERVER_V2_PROVENANCE.codexVersion,
+					},
+					parameters: [] as readonly never[],
+					effect: "read_only" as const,
+					availability: "available" as const,
+				},
+			],
+		};
+	}
+
+	private async readBoundNativeStatus(
+		read: CodexNativeCommandReadContext,
+		binding: NativeCommandBinding,
+	) {
+		this.assertNativeCommandBinding(read, binding);
+		const rpc = await this.rpc(binding.nativeSessionRef).finally(() =>
+			this.assertNativeCommandBinding(read, binding),
+		);
+		const metadata = await rpc
+			.request(
+				"thread/read",
+				{ threadId: binding.threadId, includeTurns: false },
+				(value) => value,
+				false,
+				false,
+				Math.min(read.expiresAt, Date.now() + rpcRequestTimeoutMs),
+				read.signal,
+			)
+			.finally(() => this.assertNativeCommandBinding(read, binding));
+		return {
+			status: parseNativeCommandStatus(metadata, binding.threadId),
+			readAt: new Date().toISOString(),
+		};
+	}
+
+	async discoverNativeCommands(read: CodexNativeCommandReadContext) {
+		const binding = this.nativeCommandBinding(read);
+		await this.readBoundNativeStatus(read, binding);
+		this.assertNativeCommandBinding(read, binding);
+		return this.nativeCommandDirectory(binding);
+	}
+
+	async readNativeStatus(
+		selection: CodexNativeStatusSelection,
+		read: CodexNativeCommandReadContext,
+	) {
+		const binding = this.nativeCommandBinding(read);
+		const directory = this.nativeCommandDirectory(binding);
+		if (
+			!isPlainRecord(selection) ||
+			!hasOnlyKeys(selection, [
+				"capabilityId",
+				"directoryRevision",
+				"parameters",
+			]) ||
+			!isEmptyRecord(selection.parameters)
+		)
+			throw new RuntimeHostError(
+				"RUNTIME_CODEX_COMMAND_PARAMETERS_INVALID",
+				"Native command parameters are invalid",
+				400,
+			);
+		if (selection.directoryRevision !== directory.revision)
+			throw new RuntimeHostError(
+				"RUNTIME_CODEX_COMMAND_DIRECTORY_STALE",
+				"Native command directory is no longer current",
+				409,
+			);
+		if (selection.capabilityId !== directory.capabilities[0]?.id)
+			throw new RuntimeHostError(
+				"RUNTIME_CODEX_COMMAND_UNKNOWN",
+				"Native command is unavailable",
+				404,
+			);
+		return this.readBoundNativeStatus(read, binding);
 	}
 
 	async validateExternalAction(action: RuntimeExternalActionAuthorization) {
