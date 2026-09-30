@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { createServer } from "node:net";
 import { PassThrough } from "node:stream";
 
+import * as telemetryModule from "@agent-infra/observability";
 import {
 	PostgresAgentManagementQueryV1,
 	PostgresConversationQueryV1,
@@ -222,6 +223,55 @@ describe("Platform API production assembly", () => {
 	});
 
 	it("closes deployment assembly when the Node server cannot bind", async () => {
+		const calls: string[] = [];
+		const queryClose = PostgresConversationQueryV1.prototype.close;
+		const closeQuery = vi
+			.spyOn(PostgresConversationQueryV1.prototype, "close")
+			.mockImplementation(async function (this: PostgresConversationQueryV1) {
+				await queryClose.call(this);
+				calls.push("query");
+			});
+		const closeAuthorization = vi.spyOn(
+			PostgresTaskAuthorizationStoreV1.prototype,
+			"close",
+		);
+		const readSnapshot = vi.spyOn(
+			PostgresConversationQueryV1.prototype,
+			"readResourceSnapshot",
+		);
+		const startObserver = telemetryModule.startObservability;
+		const observers: ReturnType<typeof startObserver>[] = [];
+		vi.spyOn(telemetryModule, "startObservability").mockImplementation(
+			(options) => {
+				const observer = startObserver(options);
+				observers.push(observer);
+				const close = observer.close;
+				vi.spyOn(observer, "close").mockImplementation(async () => {
+					await close();
+					calls.push("observer");
+				});
+				return observer;
+			},
+		);
+		const fixture = new URL(
+			"../../../tests/fixtures/platform-api-deployment.mjs",
+			import.meta.url,
+		).href;
+		const moduleSpecifier = `data:text/javascript,${encodeURIComponent(`
+			import { createPlatformApiAssemblyInput } from ${JSON.stringify(fixture)};
+			export { createPlatformApiAssemblyInput };
+			export const browserAuth = {
+				handleRequest() { return null; },
+				async close() {}
+			};
+		`)}`;
+		const deployment = await import(moduleSpecifier);
+		const closeBrowser = vi
+			.spyOn(deployment.browserAuth, "close")
+			.mockImplementation(async () => {
+				calls.push("browser");
+			});
+		const output = new PassThrough();
 		const blocker = createServer();
 		blocker.listen(0);
 		await once(blocker, "listening");
@@ -234,13 +284,21 @@ describe("Platform API production assembly", () => {
 			await expect(
 				startPlatformApiFromDeployment({
 					log: () => {},
-					moduleSpecifier: new URL(
-						"../../../tests/fixtures/platform-api-deployment.mjs",
-						import.meta.url,
-					).href,
+					moduleSpecifier,
+					observabilityOptions: { output },
 					port: address.port,
 				}),
 			).rejects.toMatchObject({ code: "EADDRINUSE" });
+			expect(closeQuery).toHaveBeenCalledOnce();
+			expect(closeAuthorization).toHaveBeenCalledOnce();
+			expect(closeBrowser).toHaveBeenCalledOnce();
+			expect(observers).toHaveLength(1);
+			expect(observers[0]?.close).toHaveBeenCalledOnce();
+			expect(observers[0]?.status().state).toBe("closed");
+			expect(calls).toEqual(["query", "browser", "observer"]);
+			expect(readSnapshot).not.toHaveBeenCalled();
+			expect(output.listenerCount("drain")).toBe(0);
+			expect(output.listenerCount("error")).toBe(0);
 		} finally {
 			blocker.close();
 			await once(blocker, "close");
@@ -388,6 +446,32 @@ describe("Platform API production assembly", () => {
 			expect(response.status).toBe(200);
 			expect(await response.json()).toMatchObject({
 				user: { userId: "smoke-user" },
+			});
+			const listAgents = vi.spyOn(
+				PostgresAgentManagementQueryV1.prototype,
+				"listAgents",
+			);
+			const administratorRead = await fetch(
+				`http://127.0.0.1:${address.port}/api/v2/admin/agents`,
+				{ headers: { "X-User-Id": "administrator", "X-Role": "system_admin" } },
+			);
+			expect(administratorRead.status).toBe(403);
+			expect(await administratorRead.json()).toMatchObject({
+				code: "RESOURCE_UNAVAILABLE",
+				retryable: false,
+			});
+			expect(listAgents).not.toHaveBeenCalled();
+			vi.spyOn(
+				running.assembly.dependencies.management.identity,
+				"resolve",
+			).mockResolvedValueOnce(null);
+			const anonymousSession = await fetch(
+				`http://127.0.0.1:${address.port}/api/v1/session`,
+			);
+			expect(anonymousSession.status).toBe(401);
+			expect(await anonymousSession.json()).toMatchObject({
+				code: "AUTHENTICATION_REQUIRED",
+				retryable: false,
 			});
 		} finally {
 			await createPlatformApiShutdown(running)();

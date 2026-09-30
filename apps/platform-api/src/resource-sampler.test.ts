@@ -73,6 +73,31 @@ describe("Platform API resource sampling lifecycle", () => {
 		await telemetry.close();
 	});
 
+	it("rejects missing snapshots without partial values and recovers on the next complete read", async () => {
+		const { telemetry, observe, logs } = observer();
+		const read = vi
+			.fn()
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce({ taskWaiting: 3 })
+			.mockResolvedValue({ taskWaiting: 2, outboxPending: 4 });
+		const sampling = startPlatformResourceSampling(read, telemetry, 1000);
+		try {
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(read).toHaveBeenCalledTimes(2);
+			expect(observe).not.toHaveBeenCalled();
+			expect(logs()).toContain('"code":"DEPENDENCY_UNAVAILABLE"');
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(read).toHaveBeenCalledTimes(3);
+			expect(observe.mock.calls).toEqual([
+				[{ kind: "task_waiting", value: 2 }],
+				[{ kind: "outbox_pending", value: 4 }],
+			]);
+		} finally {
+			await sampling.stop();
+			await telemetry.close();
+		}
+	});
+
 	it("aborts a timed out read and rejects its late sample without overlapping", async () => {
 		const { telemetry, observe } = observer();
 		let signal: AbortSignal | undefined;
