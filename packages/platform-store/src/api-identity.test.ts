@@ -367,12 +367,17 @@ describe("PostgreSQL API identity store", () => {
 		},
 	);
 
-	it.each(["grant", "revoke"] as const)(
-		"serializes a browser %s with concurrent Platform disablement",
-		async (operation) => {
+	it.each([
+		{ operation: "grant", channel: "browser" },
+		{ operation: "revoke", channel: "browser" },
+		{ operation: "grant", channel: "API" },
+		{ operation: "revoke", channel: "API" },
+	] as const)(
+		"serializes a $channel $operation with concurrent Platform disablement",
+		async ({ operation, channel }) => {
 			const userId = "93f3c8f2-3c73-4332-99a7-d3abc8f8ddc6";
 			await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
-				platform.agent_owners, platform.platform_user_disables,
+				platform.agent_owners, platform.platform_api_credentials, platform.platform_user_disables,
 				platform.ldap_identity_ids, platform.agents cascade`;
 			await adminClient`insert into platform.agents (id, authorization_revision)
 				values ('browser_grant_agent', 'agent-revision-1')`;
@@ -383,6 +388,15 @@ describe("PostgreSQL API identity store", () => {
 			await adminClient`insert into platform.agent_principal_grants
 				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
 				values ('browser_grant_agent', 'user', 'user_target', 'use', 'agent-revision-1')`;
+			const principal = { kind: "user" as const, id: userId };
+			if (channel === "API") {
+				await adminClient`insert into platform.platform_api_credentials
+					(id, principal_type, principal_id, credential_hash, scopes)
+					values ('api-grant-credential', 'user', ${userId}, repeat('a', 64), '["agent:manage"]'::jsonb)`;
+				await adminClient`insert into platform.agent_principal_grants
+					(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+					values ('browser_grant_agent', 'user', ${userId}, 'manage', 'agent-revision-1')`;
+			}
 			const disabler = postgres(databaseUrl, { max: 1 });
 			let release: (() => void) | undefined;
 			const held = new Promise<void>((resolve) => {
@@ -405,7 +419,23 @@ describe("PostgreSQL API identity store", () => {
 			try {
 				await locked;
 				const input = {
-					actor: { ...administratorActor, userId, isAdministrator: false },
+					actor: {
+						...administratorActor,
+						userId,
+						isAdministrator: false,
+						...(channel === "API"
+							? {
+									principal,
+									credential: {
+										credentialId: "api-grant-credential",
+										principal,
+										scopes: ["agent:manage"] as const,
+										expiresAt: null,
+										revokedAt: null,
+									},
+								}
+							: {}),
+					},
 					agentId: "browser_grant_agent",
 					principal: { kind: "user" as const, id: "user_target" },
 					grantType: "use" as const,
@@ -434,7 +464,8 @@ describe("PostgreSQL API identity store", () => {
 				expect(agent?.authorization_revision).toBe("agent-revision-1");
 				const [grant] =
 					await adminClient`select revoked_at, authorization_revision
-					from platform.agent_principal_grants where agent_id = 'browser_grant_agent'`;
+						from platform.agent_principal_grants where agent_id = 'browser_grant_agent'
+						and principal_id = 'user_target'`;
 				expect(grant).toEqual({
 					revoked_at: null,
 					authorization_revision: "agent-revision-1",
@@ -737,6 +768,112 @@ describe("PostgreSQL API identity store", () => {
 		]);
 		expect(userCredential.metadata).not.toHaveProperty("credential");
 	});
+
+	it("rejects an issued application credential when its active directory recipient is Platform-disabled", async () => {
+		await adminClient`truncate platform.audit_events,
+			platform.api_credential_delivery_grants, platform.platform_api_credentials,
+			platform.platform_applications, platform.platform_user_disables cascade`;
+		const applicationId = "application_disabled_recipient";
+		const recipient = { kind: "user" as const, id: "user_recipient" };
+		await store.createApplication({
+			actor: administratorActor,
+			applicationId,
+			name: "Disabled recipient application",
+			responsibleUserId: "user_owner",
+			authorizationRevision: "application_revision_1",
+			audit: userAudit,
+		});
+		await store.grantCredentialDelivery({
+			actor: administratorActor,
+			applicationId,
+			principal: recipient,
+			scopes: ["agent:read"],
+			expiresAt: null,
+			authorizationRevision: "application_revision_1",
+			audit: { ...userAudit, action: "api.credential.delivery.granted" },
+		});
+		await store.issueCredential({
+			actor: {
+				...administratorActor,
+				userId: recipient.id,
+				isAdministrator: false,
+			},
+			principal: { kind: "application", id: applicationId },
+			recipient,
+			credential: "disabled-recipient-application-secret",
+			scopes: ["agent:read"],
+			expiresAt: null,
+			audit: { ...userAudit, action: "api.credential.issued" },
+		});
+		expect(
+			await store.resolveApplicationCredential(
+				"disabled-recipient-application-secret",
+			),
+		).toMatchObject({ accountStatus: "active" });
+		await adminClient`insert into platform.platform_user_disables (user_id, disabled_by)
+			values (${recipient.id}, 'administrator')`;
+		try {
+			expect(
+				await store.resolveApplicationCredential(
+					"disabled-recipient-application-secret",
+				),
+			).toMatchObject({ accountStatus: "disabled" });
+		} finally {
+			await adminClient`delete from platform.platform_user_disables where user_id = ${recipient.id}`;
+		}
+	});
+
+	it.each([true, false])(
+		"rejects direct Store self-approval with administrator=%s",
+		async (isAdministrator) => {
+			await adminClient`truncate platform.audit_events,
+			platform.api_credential_delivery_grants, platform.platform_api_credentials,
+			platform.platform_applications cascade`;
+			const applicationId = "application_self_approval";
+			const principal = {
+				kind: "user" as const,
+				id: administratorActor.userId,
+			};
+			await store.createApplication({
+				actor: administratorActor,
+				applicationId,
+				name: "Self approval application",
+				responsibleUserId: principal.id,
+				authorizationRevision: "application_revision_1",
+				audit: userAudit,
+			});
+			await expect(
+				store.grantCredentialDelivery({
+					actor: { ...administratorActor, isAdministrator },
+					applicationId,
+					principal,
+					scopes: ["agent:read"],
+					expiresAt: null,
+					authorizationRevision: "application_revision_1",
+					audit: { ...userAudit, action: "api.credential.delivery.granted" },
+				}),
+			).rejects.toThrow("Application delivery authorization is stale");
+			expect(
+				await adminClient`select application_id from platform.api_credential_delivery_grants`,
+			).toEqual([]);
+			await expect(
+				store.issueCredential({
+					actor: administratorActor,
+					principal: { kind: "application", id: applicationId },
+					recipient: principal,
+					credential: "self-approved-application-secret",
+					scopes: ["agent:read"],
+					expiresAt: null,
+					audit: { ...userAudit, action: "api.credential.issued" },
+				}),
+			).rejects.toMatchObject({ code: "resource_unavailable" });
+			expect(await store.listCredentials({ applicationId })).toEqual([]);
+			expect(
+				await adminClient`select action from platform.audit_events
+			where action in ('api.credential.delivery.granted', 'api.credential.issued')`,
+			).toEqual([]);
+		},
+	);
 
 	it("rechecks the responsible user before delivery grant changes", async () => {
 		await adminClient`truncate platform.audit_events, platform.api_credential_delivery_grants,

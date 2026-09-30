@@ -60,6 +60,16 @@ export function isCurrentCredentialDeliveryManagerV1(input: {
 	);
 }
 
+export function isIndependentApiCredentialDeliveryRecipientV1(
+	actor: ApiIdentityActorV1,
+	recipient: ApiPrincipalV1,
+): boolean {
+	return (
+		recipient.kind === "user" &&
+		!sameApiPrincipalV1(actorPrincipal(actor), recipient)
+	);
+}
+
 export function isCurrentApiIdentityUserWriteAllowedV1(input: {
 	readonly actor: ApiIdentityActorV1;
 	readonly currentUser: CurrentTaskUserV1 | null;
@@ -876,8 +886,12 @@ export function createApiIdentityManagementV1(input: {
 				await rejectWithAudit(audit, application.id, value.principal);
 				throw new ApiIdentityError("resource_unavailable");
 			}
-			const actor = actorPrincipal(value.actor);
-			if (sameApiPrincipalV1(actor, value.principal)) {
+			if (
+				!isIndependentApiCredentialDeliveryRecipientV1(
+					value.actor,
+					value.principal,
+				)
+			) {
 				await rejectWithAudit(audit, application.id, value.principal);
 				throw new ApiIdentityError("not_authorized");
 			}

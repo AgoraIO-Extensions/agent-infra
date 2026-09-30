@@ -105,6 +105,7 @@ describe("platform-core package surface", () => {
 			"isCurrentApiIdentityUserWriteAllowedV1",
 			"isCurrentCredentialDeliveryManagerV1",
 			"isCurrentTaskApiAccessAllowedV1",
+			"isIndependentApiCredentialDeliveryRecipientV1",
 			"isPlatformConversationChannelCurrentV1",
 			"isSameApiCreationAuthorityV1",
 			"isTaskAuthorizationCurrentV1",

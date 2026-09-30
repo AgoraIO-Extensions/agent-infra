@@ -14,6 +14,7 @@ import {
 	isCurrentApiIdentityBrowserActorV1,
 	isCurrentApiIdentityUserWriteAllowedV1,
 	isCurrentCredentialDeliveryManagerV1,
+	isIndependentApiCredentialDeliveryRecipientV1,
 	parseCurrentTaskUserV1,
 } from "@agent-infra/platform-core";
 import { and, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
@@ -669,11 +670,11 @@ export class PostgresApiIdentityStoreV1 {
 					.limit(1)
 			: [];
 		const recipient = credentialRow?.recipientUserId
-			? this.#resolveUser
-				? parseCurrentTaskUserV1(
-						await this.#resolveUser(credentialRow.recipientUserId),
-					)
-				: null
+			? await currentUserAtWrite(
+					this.#database,
+					credentialRow.recipientUserId,
+					this.#resolveUser,
+				)
 			: null;
 		return {
 			schemaVersion: 1,
@@ -795,6 +796,10 @@ export class PostgresApiIdentityStoreV1 {
 				.limit(1)
 				.for("update");
 			if (
+				!isIndependentApiCredentialDeliveryRecipientV1(
+					input.actor,
+					input.principal,
+				) ||
 				application?.status !== "active" ||
 				application?.authorizationRevision !== input.authorizationRevision ||
 				!(await hasCurrentDeliveryManager(
