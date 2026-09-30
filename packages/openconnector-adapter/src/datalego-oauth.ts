@@ -130,12 +130,11 @@ export class DataLegoOAuthAdapter
 		const proof = await this.send(new URL(proofPath, apiOrigin), {
 			headers: { accessToken },
 		});
-		const body = await responseText(proof);
 		if (proof.status === 401 || proof.status === 403) throw invalidCredential();
-		if (
-			proof.status !== 400 ||
-			!body.toLowerCase().includes("record not found")
-		)
+		if (proof.status !== 400)
+			throw failure("DataLego OAuth access proof failed");
+		const body = await responseJson(proof);
+		if (body.message !== "record not found")
 			throw failure("DataLego OAuth access proof failed");
 		return {
 			accessToken,

@@ -117,6 +117,13 @@ test("DataLego rejects unproven tokens without returning upstream content", asyn
 			headers: { location: "https://oauth.agoralab.co/" },
 		}),
 		Response.json({ message: "unexpected" }, { status: 400 }),
+		Response.json(
+			{ message: "authorization failed", detail: "expected record not found" },
+			{ status: 400 },
+		),
+		Response.json({ message: "not record not found" }, { status: 400 }),
+		Response.json({ detail: "record not found" }, { status: 400 }),
+		new Response("record not found", { status: 400 }),
 	]) {
 		const adapter = new DataLegoOAuthAdapter(async (input) => {
 			if (String(input) === userInfoUrl)

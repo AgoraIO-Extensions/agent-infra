@@ -237,7 +237,7 @@ DataLego authorization-code 采用独立的 `datalego-oauth-pilot` Provider 受�
 不能接受任意 redirect URI。OAuth 端点采用与 Manhattan 相同的 legacy confidential-client Basic
 认证，不宣称该端点支持 PKCE。Connection 使用一次性 state 与服务端 code exchange，只有 OAuth
 `/api/v2/userInfo` 返回稳定 email、且相同个人 access token 对 DataLego 固定不存在 job 的 status READ
-探针返回精确 `400 record not found` 时，才建立加密的个人 OAuth Credential。只发布
+探针返回 HTTP 400 且 JSON `message` 精确为 `record not found` 时，才建立加密的个人 OAuth Credential。只发布
 `datalego-oauth-pilot.get_current_user@v1` READ Action；不发布查询、提交、取消或任意请求 Action。
 refresh token 使用现有 Connection CredentialVersion CAS 与失效处理，不回退 Grafana 或机器人身份；
 机器 client secret 仅从部署 Secret 注入。DataLego 正式 v4 的动作集合、旧 Grant 迁移与页面入口须待

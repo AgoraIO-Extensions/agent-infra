@@ -1,2 +1,2 @@
 export const datalegoOAuthExecutorDigest =
-	"sha256:12f308fcb336cbc111ddb52344de5d98588b35f75a215c762d15f25f545d0d2e";
+	"sha256:2840193a1a90d8db6b29a824e0f43c9b47a40cf6e665c92696dd51c578085e7c";
