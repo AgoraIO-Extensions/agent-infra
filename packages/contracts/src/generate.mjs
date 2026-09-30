@@ -651,6 +651,13 @@ function buildArtifacts() {
 		},
 		paths: { ...pilotBrowserOpenApiPathsV2, ...pilotOperationOpenApiPathsV2 },
 		components: {
+			securitySchemes: {
+				PlatformSession: {
+					type: "apiKey",
+					in: "cookie",
+					name: "__Host-platform-session",
+				},
+			},
 			schemas: { ...pilotBrowserSchemasV2, ...pilotOperationSchemasV2 },
 		},
 	});

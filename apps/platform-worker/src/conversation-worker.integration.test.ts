@@ -558,6 +558,60 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		for (const child of children) child.kill("SIGKILL");
 		await Promise.all(children.map((child) => once(child, "exit")));
 		await snapshotDispatch("old_workers_exited");
+		if (
+			children.length !== 2 ||
+			children.some((child) => child.signalCode !== "SIGKILL")
+		)
+			throw Error("Old Worker cohort has not exited");
+		const deferredAdmissions = admissions.filter(
+			(admission) => admission.executionId !== active.execution_id,
+		);
+		if (
+			admissions.length !== 2 ||
+			deferredAdmissions.length !== 1 ||
+			!deferredAdmissions[0]
+		)
+			throw Error("Deferred admission is ambiguous");
+		const deferred = deferredAdmissions[0];
+		const [deferredItem] = await sql`
+			select o.id, o.status, o.lease_owner, o.delivery_fence::int as fence, o.attempt_count,
+				e.status as execution_status
+			from platform.outbox_items o join platform.conversation_executions e
+				on e.execution_id = o.payload->>'executionId'
+			where o.id=${`conversation:turn:${deferred.executionId}`} and o.scope_type='conversation'
+				and o.scope_id=${deferred.conversationId} and o.operation='conversation.turn.submit.v1'
+				and e.execution_id=${deferred.executionId} and e.conversation_id=${deferred.conversationId}
+				and o.payload->>'conversationId'=${deferred.conversationId}`;
+		if (!deferredItem || deferredItem.execution_status !== "submitted")
+			throw Error("Deferred recovery identity or Execution status changed");
+		if (deferredItem.status === "processing") {
+			if (!deferredItem.lease_owner) throw Error("Dead claim has no owner");
+			const expired = await sql`
+				update platform.outbox_items set lease_expires_at=now()-interval '1 second'
+				where id=${deferredItem.id} and scope_type='conversation' and scope_id=${deferred.conversationId}
+					and operation='conversation.turn.submit.v1' and payload->>'executionId'=${deferred.executionId}
+					and payload->>'conversationId'=${deferred.conversationId} and status='processing'
+					and lease_owner=${deferredItem.lease_owner} and delivery_fence=${deferredItem.fence}
+					and attempt_count=${deferredItem.attempt_count}
+					and exists (select 1 from platform.conversation_executions e
+						where e.execution_id=${deferred.executionId} and e.conversation_id=${deferred.conversationId}
+							and e.status='submitted')
+				returning id, lease_owner, delivery_fence::int as fence, attempt_count,
+					lease_expires_at < now() as expired`;
+			if (expired.length !== 1 || expired[0]?.expired !== true)
+				throw Error("Dead deferred claim changed before expiry");
+			console.info(
+				JSON.stringify({
+					component: "worker-dispatch-test",
+					deadCohortExpiry: expired[0],
+				}),
+			);
+		} else if (
+			deferredItem.status !== "pending" &&
+			deferredItem.status !== "retry_scheduled"
+		) {
+			throw Error("Deferred outbox status is unexpected");
+		}
 		await sql`update platform.outbox_items set lease_expires_at=now()-interval '1 second' where payload->>'executionId'=${active.execution_id} and status='processing'`;
 		start();
 		start();
