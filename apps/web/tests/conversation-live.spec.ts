@@ -565,8 +565,12 @@ test("clears a loaded execution after 404 and recovers without resending", async
 	await page
 		.getByRole("button", { name: "核实原执行状态", exact: true })
 		.click();
+	const details = page.getByRole("region", { name: "执行详情" });
 	await expect(
-		page.getByRole("button", { name: "重新连接", exact: true }),
+		details.getByText("执行记录暂时无法读取。", { exact: true }),
+	).toBeVisible();
+	await expect(
+		details.getByRole("button", { name: "重新读取详情", exact: true }),
 	).toBeVisible();
 	await expect(page.getByText(oldSummary, { exact: true })).toHaveCount(0);
 	await expect(
@@ -579,7 +583,9 @@ test("clears a loaded execution after 404 and recovers without resending", async
 	const readsBeforeReconnect = historyReads;
 	missing = false;
 	restored = true;
-	await page.getByRole("button", { name: "重新连接", exact: true }).click();
+	await details
+		.getByRole("button", { name: "重新读取详情", exact: true })
+		.click();
 	await expect(page.getByText(newSummary, { exact: true })).toBeVisible();
 	await expect(page.getByText(oldSummary, { exact: true })).toHaveCount(0);
 	await expect.poll(() => historyReads).toBe(readsBeforeReconnect + 1);
