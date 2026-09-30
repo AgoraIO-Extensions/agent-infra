@@ -156,7 +156,9 @@ docker --context "$PLATFORM_LOCAL_DOCKER_CONTEXT" compose \
 推荐使用带精确项目名确认的入口，它会先执行完整 stop，再删除该 Compose project 的
 数据卷；不会删除 Agent PVC：
 
-    bash deploy/local/platform.sh reset "$PLATFORM_LOCAL_PROJECT"
+```bash
+bash deploy/local/platform.sh reset "$PLATFORM_LOCAL_PROJECT"
+```
 
 只有在已经核对当前 kind 集群、namespace 和 PVC 名称确实属于本地测试 Agent 时，才设置
 PLATFORM_LOCAL_AGENT_PVC_NAMES 为逗号分隔的 PVC 名称。每个名称必须带
