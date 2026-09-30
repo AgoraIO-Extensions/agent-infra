@@ -29,6 +29,7 @@ import {
 	conversationExecutions,
 	platformApplications,
 	taskAuthorizationRecords,
+	taskControlRecords,
 	workloadReconciliations,
 } from "./schema.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
@@ -267,6 +268,24 @@ export class PostgresTaskAuthorizationStoreV1 {
 							execution.authorizationRevision
 					)
 						throw new TaskAuthorizationStoreError();
+					const recoveryControls = await transaction
+						.select({
+							id: taskControlRecords.id,
+							authorizationRecordId: taskControlRecords.authorizationRecordId,
+							reason: taskControlRecords.reason,
+						})
+						.from(taskControlRecords)
+						.where(eq(taskControlRecords.executionId, record.executionId));
+					if (
+						recoveryControls.some(
+							(control) => control.authorizationRecordId !== record.id,
+						)
+					)
+						throw new TaskAuthorizationStoreError();
+					const recovery = recoveryControls.filter(
+						(control) => control.reason === "recovery",
+					);
+					if (recovery.length > 1) throw new TaskAuthorizationStoreError();
 					if (!agent) return null;
 					const [deployment] = await transaction
 						.select({
@@ -295,6 +314,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 								}
 							: {}),
 						authorizationRecordId: record.id,
+						...(recovery[0] ? { recoveryControlRecordId: recovery[0].id } : {}),
 						executionId: record.executionId,
 						boundary,
 						revokedAt: record.revokedAt,

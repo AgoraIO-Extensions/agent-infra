@@ -1047,6 +1047,104 @@ it("captures current application independently from its responsible user and rec
 	expect(revoked && isTaskAuthorizationCurrentV1(revoked)).toBe(false);
 });
 
+it("reads only the original matching recovery control and omits absent control", async () => {
+	const accepted = await taskUseCase().submitTask(command("read-recovery"));
+	if (accepted.outcome !== "accepted") throw Error();
+	const target = await authorizationStore.readExecution(
+		accepted.result.executionId,
+	);
+	if (!target) throw Error();
+	expect(target).not.toHaveProperty("recoveryControlRecordId");
+	const otherAccepted = await taskUseCase().submitTask(
+		command("other-read-recovery"),
+	);
+	if (otherAccepted.outcome !== "accepted") throw Error();
+	const other = await authorizationStore.readExecution(
+		otherAccepted.result.executionId,
+	);
+	if (!other) throw Error();
+	await sql`update platform.conversation_executions set status='unknown'
+		where execution_id=${target.executionId}`;
+	const recovery = await authorizationStore.recordControl({
+		executionId: target.executionId,
+		authorizationRecordId: target.authorizationRecordId,
+		reason: "recovery",
+		workerId: "worker-recovery",
+		traceId: "trace-read-recovery",
+		requestId: "request-read-recovery",
+	});
+	expect(await authorizationStore.readExecution(target.executionId)).toEqual({
+		...target,
+		recoveryControlRecordId: recovery.controlRecordId,
+	});
+	expect(await authorizationStore.readExecution(other.executionId)).toEqual(
+		other,
+	);
+	await expect(
+		sql`insert into platform.task_control_records
+			(id, execution_id, authorization_record_id, reason)
+			values ('wrong-recovery-binding', ${other.executionId}, ${target.authorizationRecordId}, 'recovery')`,
+	).rejects.toMatchObject({
+		code: "23503",
+		constraint_name: "task_control_authorization_execution_fk",
+	});
+	expect(await authorizationStore.readExecution(other.executionId)).toEqual(
+		other,
+	);
+});
+
+it.each(["mismatched", "duplicate"] as const)(
+	"fails closed for a corrupt %s recovery control",
+	async (corruption) => {
+		const accepted = await taskUseCase().submitTask(
+			command("corrupt-recovery"),
+		);
+		if (accepted.outcome !== "accepted") throw Error();
+		const target = await authorizationStore.readExecution(
+			accepted.result.executionId,
+		);
+		if (!target) throw Error();
+		const otherAccepted = await taskUseCase().submitTask(
+			command("other-corrupt-recovery"),
+		);
+		if (otherAccepted.outcome !== "accepted") throw Error();
+		const other = await authorizationStore.readExecution(
+			otherAccepted.result.executionId,
+		);
+		if (!other) throw Error();
+		// Corrupt only this disposable database to exercise the read guard after
+		// historical constraints are absent; restore them before the next case.
+		if (corruption === "mismatched")
+			await sql`alter table platform.task_control_records
+				drop constraint task_control_authorization_execution_fk`;
+		else await sql`drop index platform.task_control_execution_reason_unique`;
+		try {
+			await sql`insert into platform.task_control_records
+				(id, execution_id, authorization_record_id, reason)
+				values ('corrupt-recovery', ${target.executionId},
+					${corruption === "mismatched" ? other.authorizationRecordId : target.authorizationRecordId}, 'recovery')`;
+			if (corruption === "duplicate")
+				await sql`insert into platform.task_control_records
+					(id, execution_id, authorization_record_id, reason)
+					values ('duplicate-recovery', ${target.executionId}, ${target.authorizationRecordId}, 'recovery')`;
+			await expect(
+				authorizationStore.readExecution(target.executionId),
+			).rejects.toThrow("Task authorization persistence is unavailable");
+		} finally {
+			await sql`delete from platform.task_control_records
+				where id in ('corrupt-recovery', 'duplicate-recovery')`;
+			if (corruption === "mismatched")
+				await sql`alter table platform.task_control_records
+					add constraint task_control_authorization_execution_fk
+					foreign key (authorization_record_id, execution_id)
+					references platform.task_authorization_records (id, execution_id)`;
+			else
+				await sql`create unique index task_control_execution_reason_unique
+					on platform.task_control_records (execution_id, reason)`;
+		}
+	},
+);
+
 it.each(["stop-first", "revoked-first"] as const)(
 	"creates one terminal recovery control after historical %s controls and ignores another execution",
 	async (order) => {
