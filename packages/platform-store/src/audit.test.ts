@@ -483,6 +483,72 @@ describe("PostgreSQL Platform audit query", () => {
 		}
 	});
 
+	it("reads WeCom lifecycle and delivery metadata without exposing details", async () => {
+		await seedAudit({
+			auditId: "audit_wecom_callback",
+			occurredAt: new Date("2026-09-02T07:00:00.000Z"),
+			actorType: "system",
+			actorId: "platform-api",
+			action: "wecom.callback_verified",
+			targetType: "agent",
+			targetId: "agent_wecom",
+		});
+		await seedAudit({
+			auditId: "audit_wecom_delivery",
+			occurredAt: new Date("2026-09-02T07:00:01.000Z"),
+			actorType: "system",
+			actorId: "platform-api",
+			action: "wecom.accepted",
+			targetType: "agent",
+			targetId: "agent_wecom",
+			details: {
+				originalPrincipal: { kind: "user", id: "user_owner" },
+				component: "platform-api",
+				receiptId: "receipt-a",
+				status: "accepted",
+			},
+		});
+		await seedAudit({
+			auditId: "audit_wecom_unknown",
+			occurredAt: new Date("2026-09-02T07:00:02.000Z"),
+			actorType: "system",
+			actorId: "platform-worker",
+			action: "wecom.unknown",
+			targetType: "agent",
+			targetId: "agent_wecom",
+			details: {
+				originalPrincipal: { kind: "unknown", id: "unknown" },
+				component: "platform-worker",
+				receiptId: "receipt-b",
+				status: "unknown",
+			},
+		});
+		const page = await openAdapter().listAudit(administrator, {
+			schemaVersion: 1,
+			limit: 10,
+		});
+		expect(page.items).toEqual([
+			expect.objectContaining({
+				auditId: "audit_wecom_unknown",
+				action: "wecom.unknown",
+				actor: { kind: "system", actorId: "platform-worker" },
+				subject: { kind: "agent", subjectId: "agent_wecom" },
+				summary: "wecom.unknown",
+			}),
+			expect.objectContaining({
+				auditId: "audit_wecom_delivery",
+				action: "wecom.accepted",
+				summary: "wecom.accepted",
+			}),
+			expect.objectContaining({
+				auditId: "audit_wecom_callback",
+				action: "wecom.callback_verified",
+				summary: "wecom.callback_verified",
+			}),
+		]);
+		expect(JSON.stringify(page)).not.toMatch(/user_owner|receipt-a|receipt-b/);
+	});
+
 	it("returns only whitelisted metadata and normalizes rejected outcomes", async () => {
 		await seedAudit({
 			auditId: "audit_configuration",

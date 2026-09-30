@@ -159,15 +159,15 @@
     {
       "idx": 22,
       "version": "7",
-      "when": 1790688869131,
-      "tag": "0022_application_targets",
+      "when": 1790686705954,
+      "tag": "0022_wecom_application_setup",
       "breakpoints": true
     },
     {
       "idx": 23,
       "version": "7",
-      "when": 1790688870131,
-      "tag": "0023_durable_task_api",
+      "when": 1790699393053,
+      "tag": "0023_wecom_replacement_probe",
       "breakpoints": true
     }
   ]

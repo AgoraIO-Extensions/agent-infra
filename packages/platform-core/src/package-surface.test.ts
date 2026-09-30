@@ -49,6 +49,7 @@ describe("platform-core package surface", () => {
 			"SecretActivationError",
 			"SecretKeyRotationError",
 			"TaskApiAuditError",
+			"WecomSetupError",
 			"WorkloadPreflightRejectedErrorV1",
 			"apiCredentialScopesV1",
 			"bindInputFileV1",
@@ -72,6 +73,12 @@ describe("platform-core package surface", () => {
 			"createSecretKeyRotationUseCaseV1",
 			"createTaskApiAuditV1",
 			"createTaskRuntimeAuthorizationUseCaseV1",
+			"createWecomAuthorizationV1",
+			"createWecomChannelV1",
+			"createWecomDeliveryV1",
+			"createWecomReceiptAccessV1",
+			"createWecomSetupActivationV1",
+			"createWecomSetupV1",
 			"createWorkloadReconciliationV1",
 			"decideAgentRuntimePresentationV1",
 			"decideConversationDispatchCapacityV1",
@@ -136,6 +143,7 @@ describe("platform-core package surface", () => {
 			"snapshotApplicationRevisionWritePlanV1",
 			"taskApiChannelIdV1",
 			"taskApiSubscriptionEndAuditIdV1",
+			"wecomChannelIdV1",
 			"workloadManagementObservationV1",
 		]);
 		const testingSurface = await import(

@@ -2,6 +2,7 @@
 {{- $bindings := include "agent-infra.componentName" (dict "root" . "suffix" "adapter-bindings") -}}
 {{- $moduleRef := .Values.platformWorker.configurationModuleSecretRef | default dict -}}
 {{- $authRef := .Values.platformWorker.runtimeAuthSecretRef | default dict -}}
+{{- $caRef := .Values.platformWorker.trustedCaSecretRef | default dict -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -100,6 +101,10 @@ spec:
               value: /var/run/agent-infra/keyring/keyring.pem
             - name: AGENT_INFRA_WORKER_KEY_VERSIONS
               value: {{ join "," .Values.keys.workerDecryptionKeyring.versions | quote }}
+            {{- if and (not .Values.workloadTopology.enabled) $caRef.name }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/agent-infra/trusted-ca/ca.crt
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ $bindings }}
@@ -115,6 +120,11 @@ spec:
             - name: runtime-auth
               mountPath: /var/run/agent-infra/runtime-auth
               readOnly: true
+            {{- if $caRef.name }}
+            - name: trusted-ca
+              mountPath: /var/run/agent-infra/trusted-ca
+              readOnly: true
+            {{- end }}
             {{- end }}
             - name: decryption-keyring
               mountPath: /var/run/agent-infra/keyring
@@ -134,6 +144,15 @@ spec:
                 path: runtime-grant.pem
               - key: {{ required "platformWorker.runtimeAuthSecretRef.serviceTokenKey is required" $authRef.serviceTokenKey }}
                 path: service-token
+        {{- if $caRef.name }}
+        - name: trusted-ca
+          secret:
+            secretName: {{ $caRef.name }}
+            defaultMode: 288
+            items:
+              - key: {{ $caRef.key }}
+                path: ca.crt
+        {{- end }}
         {{- end }}
         - name: decryption-keyring
           secret:

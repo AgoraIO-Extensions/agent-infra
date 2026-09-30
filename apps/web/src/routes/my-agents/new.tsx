@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { AgentApplicationSubmissionScreen } from "../../features/my-agents/agent-application-submission-screen.js";
-import { unavailableDeploymentConfiguration } from "../../features/my-agents/deployment-configuration.js";
+import { projectDeploymentConfiguration } from "../../features/my-agents/deployment-configuration.js";
 import { useAgentApplicationSubmission } from "../../features/my-agents/use-agent-application-submission.js";
 import { useDeploymentConfiguration } from "../../features/my-agents/use-deployment-configuration.js";
 
@@ -19,10 +19,14 @@ function NewAgentApplicationRoute() {
 			</main>
 		);
 	}
-	const deploymentConfiguration =
-		deployment.data?.kind === "ready"
-			? deployment.data.configuration
-			: unavailableDeploymentConfiguration;
+	const {
+		configuration: deploymentConfiguration,
+		retryable: deploymentConfigurationRetryable,
+	} = projectDeploymentConfiguration(
+		deployment.data,
+		deployment.error,
+		deployment.isError,
+	);
 	const error =
 		submission.isError && submission.error instanceof Error
 			? submission.error
@@ -37,6 +41,7 @@ function NewAgentApplicationRoute() {
 				result={submission.data}
 				submitting={submission.isPending}
 				deploymentConfiguration={deploymentConfiguration}
+				deploymentConfigurationRetryable={deploymentConfigurationRetryable}
 				onRefreshDeploymentConfiguration={() => void deployment.refetch()}
 				refreshingDeploymentConfiguration={deployment.isFetching}
 			/>

@@ -68,6 +68,9 @@ describe("platform-store package surface", () => {
 			"PostgresSecretKeyRotationStoreV1",
 			"PostgresTaskApiAuditStoreV1",
 			"PostgresTaskAuthorizationStoreV1",
+			"PostgresWecomChannelV1",
+			"PostgresWecomConnectionsV1",
+			"PostgresWecomSetupV1",
 			"SecretActivationStoreError",
 			"SecretKeyRotationStoreError",
 			"TaskAuthorizationStoreError",
@@ -80,6 +83,7 @@ describe("platform-store package surface", () => {
 			"openPostgresSecretKeyRotationStoreV1",
 			"openPostgresWorkloadReconciliationStoreV1",
 			"platformDatabaseUrlFromEnvironment",
+			"validateWecomSetupCredentialRecordV1",
 		]);
 
 		const pack = JSON.parse(

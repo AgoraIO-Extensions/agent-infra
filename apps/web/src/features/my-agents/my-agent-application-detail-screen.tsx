@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -23,7 +24,9 @@ import {
 } from "./my-agent-applications.js";
 
 type MyAgentApplicationDetailScreenProps = {
+	onRetry?: () => void;
 	onWithdraw: () => void;
+	retrying?: boolean;
 	state: MyAgentApplicationState | { kind: "loading" };
 	withdrawalError?: boolean;
 	withdrawalResult?: AgentApplicationProjectionV2;
@@ -31,7 +34,9 @@ type MyAgentApplicationDetailScreenProps = {
 };
 
 export function MyAgentApplicationDetailScreen({
+	onRetry,
 	onWithdraw,
+	retrying = false,
 	state,
 	withdrawalError = false,
 	withdrawalResult,
@@ -77,6 +82,18 @@ export function MyAgentApplicationDetailScreen({
 							? "暂时无法读取申请，请稍后重试。"
 							: "当前无法查看此申请。"}
 					</AlertDescription>
+					{state.retryable && onRetry ? (
+						<Button
+							className="mt-4"
+							variant="outline"
+							disabled={retrying}
+							onClick={onRetry}
+							type="button"
+						>
+							<RefreshCw aria-hidden="true" data-icon="inline-start" />
+							{retrying ? "正在重新加载…" : "重新加载申请"}
+						</Button>
+					) : null}
 				</Alert>
 				<Link
 					className={buttonVariants({ variant: "outline" })}

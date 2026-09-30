@@ -127,6 +127,26 @@ describe("scoped public audit contract", () => {
 		);
 	});
 
+	it("publishes WeCom lifecycle and delivery actions without private details", () => {
+		for (const action of [
+			"wecom.setup_started",
+			"wecom.callback_verified",
+			"wecom.connection_connected",
+			"wecom.accepted",
+			"wecom.unknown",
+		] as const) {
+			expect(
+				ScopedPlatformAuditProjectionV1Schema.shape.action.safeParse(action)
+					.success,
+			).toBe(true);
+		}
+		expect(
+			ScopedPlatformAuditProjectionV1Schema.shape.action.safeParse(
+				"wecom.not_registered",
+			).success,
+		).toBe(false);
+	});
+
 	it.each([
 		{ limit: "101" },
 		{ limit: "2.5" },

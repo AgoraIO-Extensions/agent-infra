@@ -1389,6 +1389,67 @@ function isStopConfirmationReasonOpenApiAddition(previous, current) {
 	return removed > 0 && findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #440 publishes Owner-managed application setup on the existing browser API.
+function isWecomApplicationOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v1/agents/{agentId}/wecom-app",
+		"/api/v1/agents/{agentId}/wecom-app-setup",
+		"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}",
+		"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials",
+		"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel",
+	];
+	if (paths.some((path) => previous.paths?.[path] !== undefined)) return false;
+	const addition = Object.fromEntries(
+		paths.map((path) => [path, current.paths?.[path]]),
+	);
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"d06bab756ce486299973d81c082e0b88ea18962fba541d10479ed5e428c1b0ef"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #481 publishes the scoped Platform audit surface and its bounded action set.
+function isScopedAuditOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v1/audit",
+		"/api/v1/audit/{auditId}",
+		"/api/v3/admin/audit",
+		"/api/v3/admin/audit/{auditId}",
+	];
+	const schemas = [
+		"ScopedPlatformAuditActionV1",
+		"ScopedPlatformAuditPageV1",
+		"ScopedPlatformAuditProjectionV1",
+		"ScopedPlatformAuditResultV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"bf0c18ff1e607bd2049d2b2e764a88aeb01416bb15da8dbd635feac02ad33d42"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -1408,6 +1469,8 @@ function findBreakingChanges(previous, current) {
 			!isAgentApiIdentityOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
+			!isWecomApplicationOpenApiAddition(previous, current) &&
+			!isScopedAuditOpenApiAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
