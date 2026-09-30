@@ -172,6 +172,8 @@ export const GenericAcpRuntimeDriver = {
 										: event.status === "in_progress"
 											? "started"
 											: undefined;
+							if (phase === "completed" || phase === "failed")
+								toolKinds.delete(event.toolCallId);
 							if (
 								phase &&
 								!pendingPermissions.has(event.toolCallId) &&
@@ -188,8 +190,6 @@ export const GenericAcpRuntimeDriver = {
 										phase,
 									},
 								});
-								if (phase === "completed" || phase === "failed")
-									toolKinds.delete(event.toolCallId);
 							}
 						} else await update();
 					},
