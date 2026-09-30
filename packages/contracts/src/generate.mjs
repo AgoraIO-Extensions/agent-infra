@@ -40,6 +40,8 @@ import {
 	pilotScopedAuditOpenApiPathsV1,
 	pilotScopedAuditSchemasV1,
 	pilotSseSchemasV1,
+	pilotTaskOpenApiPathsV1,
+	pilotTaskSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
 } from "./pilot/index.ts";
 import { platformAuthOpenApiPathsV1 } from "./platform-auth.ts";
@@ -632,13 +634,18 @@ function buildArtifacts() {
 			...pilotBrowserOpenApiPathsV1,
 			...fileOpenApiPathsV1,
 			...pilotBrowserSseOpenApiPathsV1,
+			...pilotTaskOpenApiPathsV1,
 			...pilotScopedAuditOpenApiPathsV1,
 		},
 		components: {
+			securitySchemes: {
+				platformApiCredential: { type: "http", scheme: "bearer" },
+			},
 			schemas: {
 				...pilotBrowserSchemasV1,
 				...pilotSseSchemasV1,
 				...fileSchemasV1,
+				...pilotTaskSchemasV1,
 				...pilotScopedAuditSchemasV1,
 			},
 		},

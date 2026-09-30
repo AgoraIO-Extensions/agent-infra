@@ -682,6 +682,160 @@ function isModelSelectionFallbackOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+function isTaskStatusOpenApiAddition(previous, current) {
+	const name = "TaskStatusEventV1";
+	const persisted = "PersistedConversationEventV1";
+	const ref = { $ref: `#/components/schemas/${name}` };
+	const previousSchemas = previous.components?.schemas ?? {};
+	const currentSchemas = current.components?.schemas ?? {};
+	if (previousSchemas[name] !== undefined || currentSchemas[name] === undefined)
+		return false;
+	if (
+		createHash("sha256")
+			.update(JSON.stringify(currentSchemas[name]))
+			.digest("hex") !==
+		"1908af0e06eaba9b8b3ddb7f13b03cfbf8be91dc2524ad777a03975faba380e1"
+	)
+		return false;
+	const before = previousSchemas[persisted]?.oneOf;
+	const after = currentSchemas[persisted]?.oneOf;
+	if (
+		!Array.isArray(before) ||
+		!Array.isArray(after) ||
+		unmatchedOptions(before, after).length !== 0 ||
+		!sameValue(unmatchedOptions(after, before), [ref])
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas[name];
+	const options = normalized.components.schemas[persisted].oneOf;
+	options.splice(
+		options.findIndex((option) => sameValue(option, ref)),
+		1,
+	);
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+function isTaskApiOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v1/agents/{agentId}/tasks",
+		"/api/v1/conversations/{conversationId}/tasks/{executionId}",
+		"/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel",
+		"/api/v1/conversations/{conversationId}/tasks/{executionId}/events",
+	];
+	const schemas = [
+		"CancelTaskRequestV1",
+		"SubmitTaskRequestV1",
+		"TaskAcceptedV1",
+		"TaskCancellationV1",
+		"TaskProjectionV1",
+		"TaskSseMessageV1",
+		"TaskStreamErrorV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some(
+			(name) => previous.components?.schemas?.[name] !== undefined,
+		) ||
+		previous.components?.securitySchemes?.platformApiCredential !== undefined
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+		securitySchemes: {
+			platformApiCredential:
+				current.components?.securitySchemes?.platformApiCredential,
+		},
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"d977db5619f02145d901f8108827ac9ee7368fe7b20fdfcc88ce1b39993d4e0f"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	delete normalized.components.securitySchemes.platformApiCredential;
+	if (Object.keys(normalized.components.securitySchemes).length === 0)
+		delete normalized.components.securitySchemes;
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+function isStopConfirmationReasonOpenApiAddition(previous, current) {
+	const name = "TaskStatusEventV2";
+	const expectedHash =
+		"254973f01eda3b03114b95c522771aa09d37dcd3028b5b49e603051d3c3f2ca0";
+	if (previous.components?.schemas?.[name] !== undefined) return false;
+	const schema = current.components?.schemas?.[name];
+	const matchesReason = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex") ===
+		expectedHash;
+	if (schema && !matchesReason(schema)) return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas[name];
+	let removed = 0;
+	// Only the generated persisted-history unions may gain this event branch.
+	const historyUnions = [
+		[
+			previous.components?.schemas?.PersistedConversationEventV2,
+			normalized.components.schemas.PersistedConversationEventV2,
+		],
+		[
+			previous.components?.schemas?.TaskProjectionV1?.properties?.events?.items,
+			normalized.components.schemas.TaskProjectionV1?.properties?.events?.items,
+		],
+		[
+			previous.components?.schemas?.TaskSseMessageV1?.anyOf?.[0]?.anyOf?.[0],
+			normalized.components.schemas.TaskSseMessageV1?.anyOf?.[0]?.anyOf?.[0],
+		],
+	];
+	for (const [before, value] of historyUnions) {
+		if (!value) continue;
+		for (const keyword of ["oneOf", "anyOf"]) {
+			if (Array.isArray(value[keyword]))
+				value[keyword] = value[keyword].filter((branch) => {
+					if (
+						!before?.[keyword]?.some((entry) => sameValue(entry, branch)) &&
+						((schema &&
+							sameValue(branch, { $ref: `#/components/schemas/${name}` })) ||
+							matchesReason(branch))
+					) {
+						removed += 1;
+						return false;
+					}
+					return true;
+				});
+		}
+	}
+	return removed > 0 && findBreakingChanges(previous, normalized).length === 0;
+}
+
+function isConversationV2SseNotFoundOpenApiAddition(previous, current) {
+	const path = "/api/v2/conversations/{conversationId}/events";
+	const previousResponses = previous.paths?.[path]?.get?.responses;
+	const currentResponses = current.paths?.[path]?.get?.responses;
+	const detailNotFound =
+		current.paths?.["/api/v2/conversations/{conversationId}"]?.get?.responses?.[
+			"404"
+		];
+	if (
+		!previousResponses ||
+		previousResponses["404"] !== undefined ||
+		!currentResponses ||
+		!detailNotFound ||
+		!sameValue(currentResponses["404"], detailNotFound)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].get.responses["404"];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function isAgentSummaryOpenApiAddition(previous, current) {
 	const componentName = "ExecutionProcessSummaryV1";
 	const previousOptions = previous.components?.schemas?.[componentName]?.oneOf;
@@ -1262,6 +1416,7 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		"ConversationSseMessageV2",
 		"ExecutionDetailProjectionV2",
 		"ExecutionOperationEventV2",
+		"TaskStatusEventV2",
 		"HeartbeatSignalV1",
 		"ModelSelectionFallbackEventV1",
 		"PersistedConversationEventV1",
@@ -1287,7 +1442,7 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	};
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"cd5b8fc76501e7f9e3dafaa0e1d6b4282d5222c86b8a4d5269a0c11d0fa4af1e"
+		"4746adf34b966db3290e70c5e5ebbc4b0dcba7356d643627cba26e535fbabf5a"
 	)
 		return false;
 	const normalized = structuredClone(current);
@@ -1442,6 +1597,10 @@ function findBreakingChanges(previous, current) {
 		if (
 			!sameValue(previous, comparable) &&
 			!isModelSelectionFallbackOpenApiAddition(previous, comparable) &&
+			!isTaskStatusOpenApiAddition(previous, comparable) &&
+			!isTaskApiOpenApiAddition(previous, comparable) &&
+			!isStopConfirmationReasonOpenApiAddition(previous, comparable) &&
+			!isConversationV2SseNotFoundOpenApiAddition(previous, comparable) &&
 			!isAgentSummaryOpenApiAddition(previous, comparable) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, comparable) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, comparable) &&

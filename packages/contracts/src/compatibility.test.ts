@@ -15,6 +15,12 @@ const pilotBrowserArtifactPath = fileURLToPath(
 		import.meta.url,
 	),
 );
+const pilotBrowserV2ArtifactPath = fileURLToPath(
+	new URL(
+		"../artifacts/openapi/pilot-browser.v2.openapi.json",
+		import.meta.url,
+	),
+);
 const runtimeHostV2ArtifactPath = fileURLToPath(
 	new URL("../artifacts/openapi/runtime-host.v2.openapi.json", import.meta.url),
 );
@@ -54,6 +60,164 @@ describe("contract compatibility command", () => {
 		const result = compare("additive");
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");
+	});
+
+	it("admits the fixed Task API while retaining published Key and session contracts", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		for (const path of [
+			"/api/v1/agents/{agentId}/tasks",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/events",
+		])
+			delete previous.paths[path];
+		for (const name of [
+			"CancelTaskRequestV1",
+			"SubmitTaskRequestV1",
+			"TaskAcceptedV1",
+			"TaskCancellationV1",
+			"TaskProjectionV1",
+			"TaskSseMessageV1",
+			"TaskStreamErrorV1",
+		])
+			delete previous.components.schemas[name];
+		delete previous.components.securitySchemes.platformApiCredential;
+		if (Object.keys(previous.components.securitySchemes).length === 0)
+			delete previous.components.securitySchemes;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-combined-task-"),
+		);
+		try {
+			const before = resolve(directory, "previous.json");
+			const after = resolve(directory, "current.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				(value: typeof current) => {
+					delete value.paths["/api/v1/agents/{agentId}/tasks"].post.security;
+				},
+				(value: typeof current) => {
+					value.components.schemas.SubmitTaskRequestV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v1/session"].get.responses["200"].description =
+						"changed";
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts the reviewed task-status event without widening its payload", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		delete previous.components.schemas.TaskStatusEventV1;
+		previous.components.schemas.PersistedConversationEventV1.oneOf =
+			previous.components.schemas.PersistedConversationEventV1.oneOf.filter(
+				(option: { $ref?: string }) =>
+					option.$ref !== "#/components/schemas/TaskStatusEventV1",
+			);
+		const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-task-sse-"));
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const widened = structuredClone(current);
+			widened.components.schemas.TaskStatusEventV1.properties.payload.additionalProperties = true;
+			await writeFile(currentPath, JSON.stringify(widened));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only the bounded V2 stop-timeout addition and rejects reason or route expansion", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		delete previous.components.schemas.TaskStatusEventV2;
+		previous.components.schemas.PersistedConversationEventV2.anyOf =
+			previous.components.schemas.PersistedConversationEventV2.anyOf.filter(
+				(option: { $ref?: string }) =>
+					option.$ref !== "#/components/schemas/TaskStatusEventV2",
+			);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-stop-reason-"),
+		);
+		try {
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const widened = structuredClone(current);
+			widened.components.schemas.TaskStatusEventV2.properties.payload.anyOf[0].additionalProperties = true;
+			await writeFile(currentPath, JSON.stringify(widened));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			const changedRoute = structuredClone(current);
+			changedRoute.paths[
+				"/api/v2/conversations/{conversationId}"
+			].get.security = [];
+			await writeFile(currentPath, JSON.stringify(changedRoute));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			const changedRuntime = structuredClone(current);
+			changedRuntime.components.schemas.ExecutionOperationEventV2.properties.payload.additionalProperties = true;
+			await writeFile(currentPath, JSON.stringify(changedRuntime));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			const unrelated = structuredClone(current);
+			unrelated.components.schemas.ExecutionDetailProjectionV2.oneOf.push({
+				$ref: "#/components/schemas/TaskStatusEventV2",
+			});
+			await writeFile(currentPath, JSON.stringify(unrelated));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only the V2 SSE non-enumerating 404 response", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserV2ArtifactPath, "utf8"),
+		);
+		const path = "/api/v2/conversations/{conversationId}/events";
+		const previous = structuredClone(current);
+		delete previous.paths[path].get.responses["404"];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-v2-sse-404-"),
+		);
+		try {
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			current.paths[path].get.responses["404"].description = "Changed";
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	it("accepts only the model-selection fallback OpenAPI addition", () => {
@@ -385,6 +549,7 @@ describe("contract compatibility command", () => {
 			"ConversationSseMessageV2",
 			"ExecutionDetailProjectionV2",
 			"ExecutionOperationEventV2",
+			"TaskStatusEventV2",
 			"HeartbeatSignalV1",
 			"ModelSelectionFallbackEventV1",
 			"PersistedConversationEventV1",
