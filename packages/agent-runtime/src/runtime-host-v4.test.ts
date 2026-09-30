@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +11,7 @@ import {
 	RuntimeExecutionGrantClaimsV2Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	runtimeEventRequestDigestV4,
+	runtimeOperationDigestInputV4,
 	runtimeRequestSigningPayloadV4,
 	VerifiedRuntimeExecutionGrantV2Schema,
 	validateRuntimeBusinessBindingV4,
@@ -18,7 +19,11 @@ import {
 import { afterEach, expect, it } from "vitest";
 
 import { FakeRuntimeDriver } from "./fake-runtime-driver.js";
-import { FileRuntimeStore } from "./file-runtime-store.js";
+import { FileRuntimeStore, requestDigest } from "./file-runtime-store.js";
+import {
+	signV3Fixture,
+	verifyRuntimeV2Fixture,
+} from "./grant-v2-fixture.test-support.js";
 import { RuntimeHost } from "./runtime-host.js";
 
 const directories: string[] = [];
@@ -27,6 +32,232 @@ afterEach(async () => {
 	await Promise.all(
 		directories.splice(0).map((path) => rm(path, { recursive: true })),
 	);
+});
+
+it("recovers an accepted V4 binding without mutating Host state", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-binding-"));
+	directories.push(directory);
+	const storePath = join(directory, "host.json");
+	const store = await FileRuntimeStore.open(storePath);
+	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+	const { request, claims, transport } = fixture();
+	const now = Date.now();
+	const hostOptions = {
+		store,
+		driver,
+		grantValidation: { expectedIssuer: "agent-platform" },
+		grantValidationV2: {
+			expectedIssuer: "platform-fixture",
+			expectedWorkerId: "worker-1",
+			now: () => now,
+		},
+		allowLegacyBusiness: false,
+		validateGrantV4: async (value: unknown) => {
+			const parsed = value as RuntimeBusinessRequestV4;
+			await validateRuntimeBusinessBindingV4(parsed, claims);
+			return { request: parsed, claims };
+		},
+	};
+	const host = await RuntimeHost.open(hostOptions);
+	const accepted = await host.submitTurnV4(transport);
+	const before = await readFile(storePath);
+	const originalOperationDigest = requestDigest(
+		runtimeOperationDigestInputV4(request),
+	);
+	const query = signV3Fixture(
+		{
+			schemaVersion: 3,
+			requestId: "control-request-1",
+			traceId: request.traceId,
+			principal: request.principal,
+			channelId: request.channelId,
+			agentId: request.agentId,
+			conversationId: request.conversationId,
+			executionId: request.executionId,
+			turnId: request.turnId,
+			sessionGeneration: request.sessionGeneration,
+			hostSessionRef: null,
+			operation: {
+				...request.operation,
+				deliveryFence: 3,
+				executionDeliveryFence: 3,
+			},
+			originalOperationDigest,
+		},
+		"session.status",
+		{
+			purpose: "control",
+			reason: "stop",
+			now,
+			claims: { workerId: "worker-1" },
+		},
+	);
+	await expect(
+		host.readOriginalBinding(query, verifyRuntimeV2Fixture(query.grant)),
+	).resolves.toEqual({
+		schemaVersion: 3,
+		outcome: "binding_found",
+		executionId: request.executionId,
+		hostSessionRef: accepted.hostSessionRef,
+	});
+	expect(await readFile(storePath)).toEqual(before);
+	expect(await driver.sideEffectCount()).toBe(1);
+	await host.close();
+	await store.close();
+});
+
+it.each(["wrong digest", "cross principal", "cross execution"] as const)(
+	"keeps a V4 binding unknown for a %s",
+	async (negativeCase) => {
+		const directory = await mkdtemp(
+			join(tmpdir(), "runtime-host-v4-binding-negative-"),
+		);
+		directories.push(directory);
+		const store = await FileRuntimeStore.open(join(directory, "host.json"));
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const { request, claims, transport } = fixture();
+		const now = Date.now();
+		const host = await RuntimeHost.open({
+			store,
+			driver,
+			grantValidation: { expectedIssuer: "agent-platform" },
+			grantValidationV2: {
+				expectedIssuer: "platform-fixture",
+				expectedWorkerId: "worker-1",
+				now: () => now,
+			},
+			allowLegacyBusiness: false,
+			validateGrantV4: async (value: unknown) => {
+				const parsed = value as RuntimeBusinessRequestV4;
+				await validateRuntimeBusinessBindingV4(parsed, claims);
+				return { request: parsed, claims };
+			},
+		});
+		await host.submitTurnV4(transport);
+		const query = signV3Fixture(
+			{
+				schemaVersion: 3,
+				requestId: "control-request-negative",
+				traceId: request.traceId,
+				principal:
+					negativeCase === "cross principal"
+						? { kind: "user" as const, id: "bob" }
+						: request.principal,
+				channelId: request.channelId,
+				agentId: request.agentId,
+				conversationId: request.conversationId,
+				executionId:
+					negativeCase === "cross execution"
+						? "execution-other"
+						: request.executionId,
+				turnId:
+					negativeCase === "cross execution" ? "turn-other" : request.turnId,
+				sessionGeneration: request.sessionGeneration,
+				hostSessionRef: null,
+				operation:
+					negativeCase === "cross execution"
+						? { ...request.operation, id: "execution-other" }
+						: request.operation,
+				originalOperationDigest:
+					negativeCase === "wrong digest"
+						? "a".repeat(43)
+						: requestDigest(runtimeOperationDigestInputV4(request)),
+			},
+			"session.status",
+			{
+				purpose: "control",
+				reason: "stop",
+				now,
+				claims: { workerId: "worker-1" },
+			},
+		);
+		await expect(
+			host.readOriginalBinding(query, verifyRuntimeV2Fixture(query.grant)),
+		).rejects.toMatchObject({ code: "RUNTIME_ACCEPTANCE_UNKNOWN" });
+		await host.close();
+		await store.close();
+	},
+);
+
+it("keeps a missing V4 scope unknown", async () => {
+	const directory = await mkdtemp(
+		join(tmpdir(), "runtime-host-v4-binding-missing-"),
+	);
+	directories.push(directory);
+	const storePath = join(directory, "host.json");
+	const store = await FileRuntimeStore.open(storePath);
+	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+	const { request, claims, transport } = fixture();
+	const now = Date.now();
+	const hostOptions = {
+		store,
+		driver,
+		grantValidation: { expectedIssuer: "agent-platform" },
+		grantValidationV2: {
+			expectedIssuer: "platform-fixture",
+			expectedWorkerId: "worker-1",
+			now: () => now,
+		},
+		allowLegacyBusiness: false,
+		validateGrantV4: async (value: unknown) => {
+			const parsed = value as RuntimeBusinessRequestV4;
+			await validateRuntimeBusinessBindingV4(parsed, claims);
+			return { request: parsed, claims };
+		},
+	};
+	const host = await RuntimeHost.open(hostOptions);
+	await host.submitTurnV4(transport);
+	const saved = JSON.parse(await readFile(storePath, "utf8")) as {
+		sessions: Record<
+			string,
+			{ operations: Record<string, Record<string, unknown>> }
+		>;
+	};
+	const session = Object.values(saved.sessions)[0];
+	if (!session) throw new Error("missing V4 session fixture");
+	delete session.operations[request.executionId]?.keyScopeV4;
+	await writeFile(storePath, JSON.stringify(saved));
+	await host.close();
+	await store.close();
+	const reopenedStore = await FileRuntimeStore.open(storePath);
+	const reopenedHost = await RuntimeHost.open({
+		...hostOptions,
+		store: reopenedStore,
+	});
+	const query = signV3Fixture(
+		{
+			schemaVersion: 3,
+			requestId: "control-request-missing",
+			traceId: request.traceId,
+			principal: request.principal,
+			channelId: request.channelId,
+			agentId: request.agentId,
+			conversationId: request.conversationId,
+			executionId: request.executionId,
+			turnId: request.turnId,
+			sessionGeneration: request.sessionGeneration,
+			hostSessionRef: null,
+			operation: request.operation,
+			originalOperationDigest: requestDigest(
+				runtimeOperationDigestInputV4(request),
+			),
+		},
+		"session.status",
+		{
+			purpose: "control",
+			reason: "stop",
+			now,
+			claims: { workerId: "worker-1" },
+		},
+	);
+	await expect(
+		reopenedHost.readOriginalBinding(
+			query,
+			verifyRuntimeV2Fixture(query.grant),
+		),
+	).rejects.toMatchObject({ code: "RUNTIME_ACCEPTANCE_UNKNOWN" });
+	await reopenedHost.close();
+	await reopenedStore.close();
 });
 
 function fixture() {

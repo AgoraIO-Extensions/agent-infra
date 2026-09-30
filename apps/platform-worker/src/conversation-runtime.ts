@@ -559,6 +559,48 @@ export function createConversationRuntimeV2(
 			signal,
 		);
 	}
+	async function readOriginalControlBinding(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		signal: AbortSignal,
+	) {
+		if (
+			prepared.state.hostSessionRef !== null ||
+			prepared.authority.purpose !== "control" ||
+			!hasKeyedV4Selection(prepared.context.claim) ||
+			prepared.state.runtimeSubmitProtocol !== "v4"
+		)
+			unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+		const body = {
+			...prepared.base,
+			hostSessionRef: null,
+			originalOperationDigest: prepared.state.originalOperationDigest,
+		};
+		const result = await prepared.client.readOriginalBinding(
+			{
+				...body,
+				grant: signRequest(body, prepared.authority, "session.status"),
+			},
+			signal,
+		);
+		if (result.executionId !== prepared.context.claim.executionId)
+			unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+		const latestState = await stateFor(prepared.context, signal);
+		const latestRoute = await current(
+			prepared.context,
+			latestState,
+			"session.status",
+			signal,
+		);
+		if (
+			!isDeepStrictEqual(latestRoute.authority, prepared.authority) ||
+			latestState.originalOperationDigest !==
+				prepared.state.originalOperationDigest ||
+			(latestState.hostSessionRef !== null &&
+				latestState.hostSessionRef !== result.hostSessionRef)
+		)
+			unavailable("RUNTIME_FENCE_STALE");
+		return result;
+	}
 	async function recover(
 		request: OriginalStatusRequest | ConversationRuntimeStatusRequestV2,
 		signal?: AbortSignal,
@@ -566,6 +608,10 @@ export function createConversationRuntimeV2(
 		const active = combined(signal);
 		const prepared = await prepare(request, "session.status", active);
 		const { context, state, authority, client, base, target, route } = prepared;
+		if (state.hostSessionRef === null && authority.purpose === "control") {
+			const binding = await readOriginalControlBinding(prepared, active);
+			return { ...binding, schemaVersion: 2 as const };
+		}
 		let businessAuthorizationRecordId: string | undefined;
 		let businessTarget = target;
 		let businessRoute = route;
@@ -694,6 +740,7 @@ export function createConversationRuntimeV2(
 		}
 		const body = {
 			...base,
+			hostSessionRef: state.hostSessionRef,
 			originalOperationDigest: state.originalOperationDigest,
 		};
 		const response = await client.recoverStatus(
@@ -867,7 +914,11 @@ export function createConversationRuntimeV2(
 				);
 				return { ...response, schemaVersion: body.selection ? 2 : 1 };
 			}
-			if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+			const resolvedHostSessionRef =
+				request.operation === "turn.stop" && !state.hostSessionRef
+					? (await readOriginalControlBinding(prepared, active)).hostSessionRef
+					: state.hostSessionRef;
+			if (!resolvedHostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
 			if (request.operation === "turn.supplement") {
 				if (
 					!context.claim.input ||
@@ -892,7 +943,7 @@ export function createConversationRuntimeV2(
 							ciphertextRef: context.claim.relayKeyBinding.keyId,
 							version: context.claim.relayKeyBinding.keyVersion,
 						},
-						hostSessionRef: state.hostSessionRef,
+						hostSessionRef: resolvedHostSessionRef,
 						operation: {
 							kind: "message" as const,
 							id: context.claim.messageId,
@@ -928,7 +979,7 @@ export function createConversationRuntimeV2(
 				}
 				const body = {
 					...base,
-					hostSessionRef: state.hostSessionRef,
+					hostSessionRef: resolvedHostSessionRef,
 					operation: {
 						kind: "message" as const,
 						id: context.claim.messageId,
@@ -955,7 +1006,7 @@ export function createConversationRuntimeV2(
 				unavailable("RUNTIME_REQUEST_INVALID");
 			const body = {
 				...base,
-				hostSessionRef: state.hostSessionRef,
+				hostSessionRef: resolvedHostSessionRef,
 				operation: {
 					kind: "stop" as const,
 					id: context.claim.stopRequestId,

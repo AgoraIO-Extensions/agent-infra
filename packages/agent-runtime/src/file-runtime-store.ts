@@ -14,6 +14,7 @@ import {
 	type RuntimePinnedExecutionKeyScopeV4,
 	RuntimePinnedExecutionKeyScopeV4Schema,
 	type RuntimePrincipalV1,
+	type RuntimeStatusRequestV3,
 } from "@agent-infra/contracts/runtime";
 import type {
 	RuntimeExternalActionAuthorization,
@@ -419,6 +420,15 @@ function assertExecutionBinding(
 	}
 }
 
+function originalBindingUnknown(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_ACCEPTANCE_UNKNOWN",
+		"Runtime command acceptance could not be confirmed",
+		503,
+		true,
+	);
+}
+
 export class FileRuntimeStore {
 	private constructor(
 		private readonly file: DurableJsonFile<RuntimeStoreState>,
@@ -528,6 +538,99 @@ export class FileRuntimeStore {
 			scope: original.keyScopeV4 ? structuredClone(original.keyScopeV4) : null,
 			operation: structuredClone(original),
 		};
+	}
+
+	/**
+	 * Read the already accepted original execution without applying a grant or
+	 * changing the durable Session. A missing Host ref is recoverable only when
+	 * the original submit, native Session, fence and complete V4 key scope match.
+	 */
+	readAcceptedOriginalBindingV4(
+		request: RuntimeStatusRequestV3,
+		claims: RuntimeExecutionGrantClaimsV2,
+	): string {
+		const state = this.file.read();
+		assertStoreState(state);
+		const indexedHostSessionRef =
+			state.sessionBindings[sessionBindingKey(request)];
+		if (
+			!indexedHostSessionRef ||
+			(request.hostSessionRef !== null &&
+				request.hostSessionRef !== indexedHostSessionRef) ||
+			claims.purpose !== "control" ||
+			claims.allowedCommands.length !== 1 ||
+			claims.allowedCommands[0] !== "session.status" ||
+			request.operation.kind !== "execution" ||
+			request.operation.id !== request.executionId ||
+			request.operation.deliveryFence !==
+				request.operation.executionDeliveryFence
+		)
+			originalBindingUnknown();
+		let session: StoredSession;
+		try {
+			session = sessionFor(state, indexedHostSessionRef, request);
+		} catch (error) {
+			if (
+				error instanceof RuntimeHostError &&
+				[
+					"RUNTIME_GRANT_INVALID",
+					"RUNTIME_GENERATION_CANCELLED",
+					"RUNTIME_SESSION_BINDING_MISMATCH",
+					"RUNTIME_SESSION_NOT_FOUND",
+					"RUNTIME_SESSION_QUARANTINED",
+				].includes(error.code)
+			)
+				originalBindingUnknown();
+			throw error;
+		}
+		const operation = session.operations[request.executionId];
+		const authority = session.executionAuthorities?.[request.executionId];
+		const currentFence =
+			session.highestFences[`execution:${request.executionId}`] ?? 0;
+		const scope = RuntimePinnedExecutionKeyScopeV4Schema.safeParse(
+			operation?.keyScopeV4,
+		);
+		if (!scope.success) originalBindingUnknown();
+		const pinned = scope.data;
+		const expectedPurpose =
+			pinned.executionSource === "web" || pinned.executionSource === "wecom"
+				? "personal"
+				: "agent-default";
+		const expectedSubject =
+			expectedPurpose === "personal" && pinned.principal.kind === "user"
+				? pinned.principal.id
+				: pinned.agentId;
+		if (
+			!session.nativeSessionRef ||
+			!authority ||
+			authority.workerId !== claims.workerId ||
+			!operation ||
+			operation.kind !== "submit-turn" ||
+			operation.turnId !== request.turnId ||
+			operation.requestDigest !== request.originalOperationDigest ||
+			operation.state !== "resolved" ||
+			operation.result?.outcome !== "accepted" ||
+			pinned.principal.kind !== request.principal.kind ||
+			pinned.principal.id !== request.principal.id ||
+			pinned.channelId !== request.channelId ||
+			pinned.agentId !== request.agentId ||
+			pinned.conversationId !== request.conversationId ||
+			pinned.executionId !== request.executionId ||
+			pinned.turnId !== request.turnId ||
+			pinned.sessionGeneration !== request.sessionGeneration ||
+			(pinned.hostSessionRef !== null &&
+				pinned.hostSessionRef !== indexedHostSessionRef) ||
+			pinned.keyBinding.purpose !== expectedPurpose ||
+			pinned.keyBinding.subjectId !== expectedSubject ||
+			request.operation.executionDeliveryFence < currentFence ||
+			request.operation.executionDeliveryFence <
+				authority.executionDeliveryFence ||
+			(authority?.control !== undefined &&
+				(authority.control.controlRecordId !== claims.controlRecordId ||
+					authority.control.reason !== claims.reason))
+		)
+			originalBindingUnknown();
+		return indexedHostSessionRef;
 	}
 
 	nativeSessionRef(hostSessionRef: string) {

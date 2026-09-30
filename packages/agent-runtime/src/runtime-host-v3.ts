@@ -11,6 +11,7 @@ import {
 	RuntimeGenerationCancelRequestV3Schema,
 	type RuntimeOperationResponseV1,
 	type RuntimeOperationResponseV2,
+	type RuntimeOriginalBindingResponseV3,
 	type RuntimeStatusRequestV3,
 	RuntimeStatusRequestV3Schema,
 	type RuntimeStatusResponseV3,
@@ -619,6 +620,32 @@ export class RuntimeHostV3 {
 			outcome: "found",
 			status,
 		};
+	}
+
+	async readOriginalBinding(
+		value: RuntimeStatusRequestV3,
+		verification: unknown,
+	): Promise<RuntimeOriginalBindingResponseV3> {
+		this.assertOpen();
+		const request = parseRequest(RuntimeStatusRequestV3Schema, value);
+		const claims = this.validate(request, "session.status", verification);
+		return this.options.serialize(
+			this.options.store.sessionQueueKey(request),
+			async () => {
+				this.assertOpen();
+				this.validate(request, "session.status", verification);
+				const hostSessionRef = this.options.store.readAcceptedOriginalBindingV4(
+					request,
+					claims,
+				);
+				return {
+					schemaVersion: 3,
+					executionId: request.executionId,
+					outcome: "binding_found",
+					hostSessionRef,
+				};
+			},
+		);
 	}
 
 	async cancelGeneration(

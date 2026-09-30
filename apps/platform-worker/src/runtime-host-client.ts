@@ -28,6 +28,7 @@ import {
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV3Schema,
 	RuntimeOperationResponseV4Schema,
+	RuntimeOriginalBindingResponseV3Schema,
 	type RuntimePinnedExecutionKeyScopeV4,
 	RuntimePrivateRelayKeyFieldV1Schema,
 	RuntimeRelayKeyDeliveryV1Schema,
@@ -647,6 +648,17 @@ export function createWorkerRuntimeHostClientV3(
 				value,
 				RuntimeStatusRequestV3Schema,
 				RuntimeStatusResponseV3Schema,
+				signal,
+			),
+		readOriginalBinding: (
+			value: RuntimeStatusRequestV3,
+			signal?: AbortSignal,
+		) =>
+			request(
+				"original-binding",
+				value,
+				RuntimeStatusRequestV3Schema,
+				RuntimeOriginalBindingResponseV3Schema,
 				signal,
 			),
 		cancelGeneration: (

@@ -348,6 +348,12 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			options.host.recoverStatusV3(request, verification, signal),
 	);
 	v3Route(
+		"original-binding",
+		RuntimeStatusRequestV3Schema,
+		(request, verification) =>
+			options.host.readOriginalBinding(request, verification),
+	);
+	v3Route(
 		"generations/cancel",
 		RuntimeGenerationCancelRequestV3Schema,
 		(request, verification) =>

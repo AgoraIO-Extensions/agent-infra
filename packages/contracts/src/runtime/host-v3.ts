@@ -100,6 +100,12 @@ export const RuntimeStatusResponseV3Schema = z.discriminatedUnion("outcome", [
 		outcome: z.literal("not_found"),
 	}),
 ]);
+export const RuntimeOriginalBindingResponseV3Schema = z.strictObject({
+	schemaVersion: z.literal(3),
+	executionId: OpaqueIdV1Schema,
+	outcome: z.literal("binding_found"),
+	hostSessionRef: OpaqueIdV1Schema,
+});
 export const RuntimeAuthorizationRenewResponseV3Schema = z.strictObject({
 	schemaVersion: z.literal(3),
 	executionId: OpaqueIdV1Schema,
@@ -138,6 +144,9 @@ export type RuntimeOperationResponseV3 = z.infer<
 >;
 export type RuntimeStatusResponseV3 = z.infer<
 	typeof RuntimeStatusResponseV3Schema
+>;
+export type RuntimeOriginalBindingResponseV3 = z.infer<
+	typeof RuntimeOriginalBindingResponseV3Schema
 >;
 export type RuntimeAuthorizationRenewResponseV3 = z.infer<
 	typeof RuntimeAuthorizationRenewResponseV3Schema

@@ -205,6 +205,33 @@ describe("Worker V3 Runtime Client", () => {
 		expect(payload).not.toHaveProperty("recovery");
 		expect(payload.hostSessionRef).toBeNull();
 	});
+	it("reads a lost Host ref through the original-binding route", async () => {
+		const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					schemaVersion: 3,
+					outcome: "binding_found",
+					executionId: "execution",
+					hostSessionRef: "recovered-host",
+				}),
+				{ status: 200 },
+			),
+		);
+		const result = await client(fetcher).readOriginalBinding({
+			...base,
+			hostSessionRef: null,
+			originalOperationDigest: "a".repeat(43),
+		});
+		expect(result).toEqual({
+			schemaVersion: 3,
+			outcome: "binding_found",
+			executionId: "execution",
+			hostSessionRef: "recovered-host",
+		});
+		expect(String(fetcher.mock.calls[0]?.[0])).toBe(
+			"http://runtime.local/internal/runtime/v3/original-binding",
+		);
+	});
 	it("never downgrades a rejected V3 request", async () => {
 		const fetcher = vi
 			.fn<typeof fetch>()

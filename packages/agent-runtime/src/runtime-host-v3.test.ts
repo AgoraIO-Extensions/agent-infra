@@ -111,6 +111,25 @@ function guard(hostSessionRef: string, store: FileRuntimeStore) {
 }
 
 describe("Runtime V3 durable authorization", () => {
+	it("keeps a legacy V3 accepted binding unavailable to original V4 recovery", async () => {
+		const env = await setup();
+		const fixture = submitV3Fixture();
+		await submit(env.host);
+		const { input: _input, ...baseRequest } = fixture;
+		const query = signV3Fixture(
+			{
+				...baseRequest,
+				hostSessionRef: null,
+				originalOperationDigest: originalDigest(fixture),
+			},
+			"session.status",
+			{ purpose: "control", reason: "stop" },
+		);
+		await expect(
+			env.host.readOriginalBinding(query, verifyRuntimeV2Fixture(query.grant)),
+		).rejects.toMatchObject({ code: "RUNTIME_ACCEPTANCE_UNKNOWN" });
+	});
+
 	it("rejects V3 requests after close and keeps close idempotent", async () => {
 		const env = await setup();
 

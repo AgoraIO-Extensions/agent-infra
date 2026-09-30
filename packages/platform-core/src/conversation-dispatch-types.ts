@@ -349,6 +349,7 @@ export type ConversationRuntimeStatusResponseV2 = {
 			readonly status: ConversationRuntimeStatusV1;
 	  }
 	| { readonly outcome: "not_found" }
+	| { readonly outcome: "binding_found"; readonly hostSessionRef: string }
 	| {
 			readonly outcome: "recovery_failed";
 			readonly hostSessionRef: string;

@@ -173,6 +173,7 @@ import {
 	RuntimeEventPersistRequestV3Schema,
 	RuntimeGenerationCancelRequestV3Schema,
 	RuntimeOperationResponseV3Schema,
+	RuntimeOriginalBindingResponseV3Schema,
 	RuntimeStatusRequestV3Schema,
 	RuntimeStatusResponseV3Schema,
 	RuntimeStopRequestV3Schema,
@@ -190,6 +191,7 @@ export const RuntimeHostV3SchemaDefinitions = {
 	RuntimeEventPersistRequestV3: RuntimeEventPersistRequestV3Schema,
 	RuntimeEventAckRequestV3: RuntimeEventAckRequestV3Schema,
 	RuntimeOperationResponseV3: RuntimeOperationResponseV3Schema,
+	RuntimeOriginalBindingResponseV3: RuntimeOriginalBindingResponseV3Schema,
 	RuntimeStatusResponseV3: RuntimeStatusResponseV3Schema,
 	RuntimeAuthorizationRenewResponseV3:
 		RuntimeAuthorizationRenewResponseV3Schema,

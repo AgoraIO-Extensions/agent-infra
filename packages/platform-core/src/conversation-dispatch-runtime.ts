@@ -222,6 +222,17 @@ export function parseRuntimeStatusResponse(
 		return unavailable();
 	}
 	if (
+		input.outcome === "binding_found" &&
+		input.code === undefined &&
+		input.status === undefined
+	)
+		return {
+			schemaVersion: 2,
+			hostSessionRef: text(input.hostSessionRef),
+			executionId: claim.executionId,
+			outcome: "binding_found",
+		};
+	if (
 		input.outcome === "recovery_failed" &&
 		input.code === "RUNTIME_SESSION_RECOVERY_FAILED" &&
 		input.status === undefined

@@ -695,11 +695,10 @@ export function createConversationDispatchUseCaseV1(
 			}
 			const recoveringStop =
 				claim.operation === "conversation.turn.stop.v1" &&
-				dependencies.runtimeHost.recoverOriginalStatus !== undefined &&
-				claim.hostSessionRef !== null;
+				dependencies.runtimeHost.recoverOriginalStatus !== undefined;
 			if (claim.metadataRecovery) {
 				const recover = dependencies.runtimeHost.recoverOriginalStatus;
-				if (!recover || !claim.hostSessionRef)
+				if (!recover)
 					return retry(
 						dependencies.store,
 						claim,
@@ -735,6 +734,26 @@ export function createConversationDispatchUseCaseV1(
 						),
 						claim,
 					);
+					if (result.outcome === "binding_found") {
+						if (!(await recoveryHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						if (
+							!(await dependencies.store.recordRuntimeResponse({
+								claim,
+								hostSessionRef: result.hostSessionRef,
+								transition: {},
+							}))
+						)
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"RUNTIME_ACCEPTANCE_UNKNOWN",
+							"unknown",
+							{},
+						);
+					}
 					if (result.outcome !== "found")
 						throw new ConversationRuntimeHostError(
 							"RUNTIME_ACCEPTANCE_UNKNOWN",
@@ -779,6 +798,15 @@ export function createConversationDispatchUseCaseV1(
 				} finally {
 					await recoveryHeartbeat.stop();
 				}
+				if (!claim.hostSessionRef)
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						"RUNTIME_ACCEPTANCE_UNKNOWN",
+						"retry",
+						{},
+					);
 				return persistRuntimeEvents(
 					claim,
 					authority,
@@ -918,6 +946,26 @@ export function createConversationDispatchUseCaseV1(
 								),
 						claim,
 					);
+					if (status.outcome === "binding_found") {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						if (
+							!(await dependencies.store.recordRuntimeResponse({
+								claim,
+								hostSessionRef: status.hostSessionRef,
+								transition: {},
+							}))
+						)
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"RUNTIME_ACCEPTANCE_UNKNOWN",
+							"unknown",
+							{},
+						);
+					}
 					if (status.outcome === "recovery_failed" && recoveringStop) {
 						if (!(await dispatchHeartbeat.stop()))
 							return { schemaVersion: 1, outcome: "stale" };

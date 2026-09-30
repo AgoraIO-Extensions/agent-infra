@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseClaim } from "./conversation-dispatch-input.js";
+import { parseRuntimeStatusResponse } from "./conversation-dispatch-runtime.js";
 import { planConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 import { FakeConversationRuntimeHostV1 } from "./fake-conversation-runtime-host.js";
@@ -1342,6 +1343,94 @@ describe("Conversation Worker dispatch", () => {
 			);
 		},
 	);
+
+	it("backfills a lost V4 Host ref and keeps a stop uncertain", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				operation: "conversation.turn.stop.v1",
+				messageId: null,
+				stopRequestId: "stop-request-1",
+				executionStatus: "unknown",
+				hostSessionRef: null,
+				input: null,
+				stopPending: true,
+			}),
+		);
+		const stop = vi.fn(
+			async (request: ConversationRuntimeDispatchRequestV1) => {
+				expect(request).toMatchObject({
+					operation: "turn.stop",
+					executionId: "execution-1",
+					stopRequestId: "stop-request-1",
+					hostSessionRef: "host-original",
+				});
+				return {
+					schemaVersion: 1 as const,
+					hostSessionRef: "host-original",
+					operationId: "stop-request-1",
+					result: { outcome: "accepted" as const, status: "running" as const },
+				};
+			},
+		);
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			dispatch: stop,
+			async recoverStatus() {
+				throw new Error("binding recovery must not use normal status");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					hostSessionRef: "host-original",
+					executionId: request.executionId,
+					...(request.hostSessionRef === null
+						? { outcome: "binding_found" as const }
+						: { outcome: "found" as const, status: "running" as const }),
+				};
+			},
+			async *events() {
+				yield* [];
+			},
+		};
+		const h = setup({
+			store,
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+		});
+		expect(await dispatch(h.useCase)).toEqual({
+			schemaVersion: 1,
+			outcome: "unknown",
+			retryScheduled: true,
+		});
+		expect(store.current).toMatchObject({
+			hostSessionRef: "host-original",
+			executionStatus: "unknown",
+			stopPending: true,
+		});
+		expect(store.outboxStatus).toBe("retry_scheduled");
+		expect(store.errorCode).toBe("RUNTIME_ACCEPTANCE_UNKNOWN");
+		expect(stop).not.toHaveBeenCalled();
+		expect(await dispatch(h.useCase)).toEqual({
+			schemaVersion: 1,
+			outcome: "retry",
+			retryScheduled: true,
+		});
+		expect(stop).toHaveBeenCalledOnce();
+		expect(store.current.stopPending).toBe(true);
+	});
+
+	it("rejects malformed original-binding status results", () => {
+		expect(() =>
+			parseRuntimeStatusResponse(
+				{
+					schemaVersion: 2,
+					hostSessionRef: null,
+					executionId: "execution-1",
+					outcome: "binding_found",
+				},
+				claim(),
+			),
+		).toThrow();
+	});
 
 	it("does not dispatch a never-started historical task on principal-only evidence", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
