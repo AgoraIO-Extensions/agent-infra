@@ -1,11 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 
 import { createPersonalRelayKeyUseCaseV1 } from "@agent-infra/platform-core";
 import {
 	migratePlatformDatabase,
 	PostgresPersonalRelayKeyStoreV1,
 } from "@agent-infra/platform-store";
-import type { RelayKeyEncryptorV1 } from "@agent-infra/secret-store";
+import { createRelayKeyEncryptorV1 } from "@agent-infra/secret-store";
+import { createRelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { Hono } from "hono";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -21,26 +22,40 @@ vi.setConfig({ testTimeout: 30_000 });
 const first = `external:user:${randomUUID()}`;
 const second = `external:user:${randomUUID()}`;
 const keyValue = "relay-personal-integration-key";
-const encryptor: RelayKeyEncryptorV1 = {
-	encrypt({ plaintext: _plaintext, ...binding }) {
-		return {
-			schemaVersion: 1,
-			...binding,
-			crypto: {
+const { publicKey, privateKey } = generateKeyPairSync("rsa", {
+	modulusLength: 3072,
+});
+const publicKeyDer = publicKey.export({ format: "der", type: "spki" });
+const wrappingKeyVersion = "test-wrapping-key";
+const encryptor = createRelayKeyEncryptorV1({
+	encryptionKeys: {
+		schemaVersion: 1,
+		activeWrappingKeyVersion: wrappingKeyVersion,
+		keys: [
+			{
 				schemaVersion: 1,
-				algorithmVersion: "aes-256-gcm:v1",
+				keyVersion: wrappingKeyVersion,
 				wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
-				wrappingKeyVersion: "test-wrapping-key",
-				aadVersion: "relay-key-aad:v1",
-				dekFingerprint: "a".repeat(64),
-				nonce: Buffer.alloc(12).toString("base64"),
-				ciphertext: Buffer.alloc(32).toString("base64"),
-				authenticationTag: Buffer.alloc(16).toString("base64"),
-				wrappedDek: Buffer.alloc(384).toString("base64"),
+				publicKeySpkiDerBase64: publicKeyDer.toString("base64"),
+				publicKeyFingerprint: createHash("sha256")
+					.update(publicKeyDer)
+					.digest("hex"),
+				rsaModulusBits: 3072,
+				status: "active",
 			},
-		};
+		],
 	},
-};
+});
+const decryptor = createRelayKeyWorkerDecryptorV1({
+	keys: [
+		{
+			keyVersion: wrappingKeyVersion,
+			privateKeyPkcs8DerBase64: privateKey
+				.export({ format: "der", type: "pkcs8" })
+				.toString("base64"),
+		},
+	],
+});
 
 let database: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
@@ -161,14 +176,40 @@ describe("personal Relay Key HTTP with PostgreSQL", () => {
 			expectedVersion: 1,
 		});
 		expect(disabled.status).toBe(403);
-		const [version] = await sql`
-			select count(*)::integer as count,
-				max(ciphertext::text) as ciphertext
+		const versions = await sql`
+			select key_id as "keyId", key_version as "keyVersion", ciphertext
 			from platform.relay_key_versions
 			where purpose = 'personal' and subject_id = ${first}
 		`;
-		expect(version?.count).toBe(1);
-		expect(version?.ciphertext).not.toContain(keyValue);
+		expect(versions).toHaveLength(1);
+		const version = versions[0];
+		expect(JSON.stringify(version?.ciphertext)).not.toContain(keyValue);
+		const decrypted = await decryptor.decrypt({
+			encryptedRecord: version?.ciphertext,
+			expectedBinding: {
+				purpose: "personal",
+				subjectId: first,
+				keyId: version?.keyId,
+				keyVersion: Number(version?.keyVersion),
+			},
+		});
+		expect(decrypted.outcome).toBe("decrypted");
+		if (decrypted.outcome === "decrypted") {
+			const plaintext = new TextDecoder().decode(decrypted.plaintext);
+			decrypted.plaintext.fill(0);
+			expect(plaintext).toBe(keyValue);
+		}
+		expect(
+			await decryptor.decrypt({
+				encryptedRecord: version?.ciphertext,
+				expectedBinding: {
+					purpose: "personal",
+					subjectId: second,
+					keyId: version?.keyId,
+					keyVersion: Number(version?.keyVersion),
+				},
+			}),
+		).toEqual({ outcome: "failed", code: "RELAY_KEY_METADATA_INVALID" });
 		const audits = await sql`
 			select action, outcome, details from platform.audit_events
 			where target_id = ${first}
