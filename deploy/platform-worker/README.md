@@ -6,6 +6,8 @@
 每个进程生成独立的数据库 lease owner；Runtime 服务身份仍使用部署提供的稳定 Worker ID。
 Helm 的 `platformWorker.wecomEnabled=true` 还会在同一进程启动 WeCom 连接调谐和回复
 派发。未提供受信 WeCom 配置时启动失败；关闭该开关时不受理 WeCom Runtime 授权。
+启用该开关须使用 `workloadTopology.enabled=false` 的正式 Worker 部署；受控 topology
+模式不运行渠道，组合启用会拒绝渲染。
 
 ## 打包与启动
 

@@ -1,3 +1,6 @@
+{{- if and .Values.workloadTopology.enabled .Values.platformWorker.wecomEnabled -}}
+{{- fail "platformWorker.wecomEnabled requires production Worker deployment (workloadTopology.enabled=false)" -}}
+{{- end -}}
 {{- $name := include "agent-infra.componentName" (dict "root" . "suffix" "platform-worker") -}}
 {{- $bindings := include "agent-infra.componentName" (dict "root" . "suffix" "adapter-bindings") -}}
 {{- $moduleRef := .Values.platformWorker.configurationModuleSecretRef | default dict -}}
