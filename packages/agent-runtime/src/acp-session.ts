@@ -78,6 +78,8 @@ export async function openAcpSession(options: {
 	let activeSessionId: string | undefined;
 	let currentToolRequestStarted = options.toolRequestStarted;
 	let currentToolReceipt = options.toolReceipt;
+	let shuttingDown = false;
+	const pendingPermissions = new Set<Promise<void>>();
 	const connection = client({ name: "agent-infra" })
 		.onNotification("session/update", async ({ params }) => {
 			if (loading || params.sessionId !== activeSessionId) return;
@@ -100,49 +102,65 @@ export async function openAcpSession(options: {
 			updates = updates.then(() => options.update(params));
 			await updates.catch(() => {});
 		})
-		.onRequest("session/request_permission", async ({ params }) => {
-			await updates.catch(() => {});
-			const tool = tools.get(params.toolCall.toolCallId);
-			const once = params.options.find(
-				(option) => option.kind === "allow_once",
-			);
-			const activeTool = () =>
-				!loading &&
-				params.sessionId === activeSessionId &&
-				tools.has(params.toolCall.toolCallId);
-			const allowed =
-				activeTool() &&
-				tool &&
-				once &&
-				(await options.launch.authorize?.(tool).catch(() => false));
-			const admitted =
-				activeTool() && currentToolRequestStarted
-					? await currentToolRequestStarted({
-							toolCallId: params.toolCall.toolCallId,
-							name: tool?.kind ?? params.toolCall.kind ?? "unknown",
-							permitted: Boolean(allowed),
-							executionBoundary: true,
-						}).then(
-							() => Boolean(allowed),
-							() => false,
-						)
-					: false;
-			if (admitted && once)
-				unconfirmedTools.set(
-					params.toolCall.toolCallId,
-					tool?.kind ?? params.toolCall.kind ?? "unknown",
-				);
+		.onRequest("session/request_permission", ({ params }) => {
 			const rejected = params.options.find(
 				(option) => option.kind === "reject_once",
 			);
-			return {
-				outcome:
-					admitted && once
-						? { outcome: "selected" as const, optionId: once.optionId }
-						: rejected
-							? { outcome: "selected" as const, optionId: rejected.optionId }
-							: { outcome: "cancelled" as const },
-			};
+			const deny = () => ({
+				outcome: rejected
+					? { outcome: "selected" as const, optionId: rejected.optionId }
+					: { outcome: "cancelled" as const },
+			});
+			if (shuttingDown) return deny();
+			const permission = (async () => {
+				await updates.catch(() => {});
+				const tool = tools.get(params.toolCall.toolCallId);
+				const once = params.options.find(
+					(option) => option.kind === "allow_once",
+				);
+				const activeTool = () =>
+					!loading &&
+					params.sessionId === activeSessionId &&
+					tools.has(params.toolCall.toolCallId);
+				const authorized =
+					activeTool() &&
+					tool &&
+					once &&
+					(await options.launch.authorize?.(tool).catch(() => false));
+				const allowed = authorized;
+				const admitted =
+					activeTool() && currentToolRequestStarted
+						? await currentToolRequestStarted({
+								toolCallId: params.toolCall.toolCallId,
+								name: tool?.kind ?? params.toolCall.kind ?? "unknown",
+								permitted: Boolean(allowed),
+								executionBoundary: true,
+							}).then(
+								() => Boolean(allowed),
+								() => false,
+							)
+						: false;
+				if (admitted && once)
+					unconfirmedTools.set(
+						params.toolCall.toolCallId,
+						tool?.kind ?? params.toolCall.kind ?? "unknown",
+					);
+				return admitted && once
+					? {
+							outcome: {
+								outcome: "selected" as const,
+								optionId: once.optionId,
+							},
+						}
+					: deny();
+			})();
+			const settled = permission.then(
+				() => {},
+				() => {},
+			);
+			pendingPermissions.add(settled);
+			void settled.then(() => pendingPermissions.delete(settled));
+			return permission;
 		})
 		.connect(
 			acpStream(Writable.toWeb(child.stdin), Readable.toWeb(child.stdout)),
@@ -150,11 +168,16 @@ export async function openAcpSession(options: {
 
 	let closing: Promise<void> | undefined;
 	const close = () => {
+		shuttingDown = true;
 		closing ??= (async () => {
 			connection.close();
-			await native.close();
-			await options.launch.close?.();
-			await updates.catch(() => {});
+			try {
+				await native.close();
+				await options.launch.close?.();
+			} finally {
+				await Promise.all(pendingPermissions);
+				await updates.catch(() => {});
+			}
 		})();
 		return closing;
 	};

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,6 +100,60 @@ it("rejects a foreign-session permission request without recording a tool intent
 		expect(authorize).not.toHaveBeenCalled();
 		expect(toolRequestStarted).not.toHaveBeenCalled();
 	} finally {
+		await session.close();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+it("waits for an in-flight permission fact before close returns", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "acp-permission-close-"));
+	await mkdir(join(cwd, "workspace"));
+	let enterPermission: () => void = () => {};
+	const permissionEntered = new Promise<void>((resolve) => {
+		enterPermission = resolve;
+	});
+	let releaseFact: () => void = () => {};
+	const factRelease = new Promise<void>((resolve) => {
+		releaseFact = resolve;
+	});
+	let closeLaunch: () => void = () => {};
+	const launchClosed = new Promise<void>((resolve) => {
+		closeLaunch = resolve;
+	});
+	const order: string[] = [];
+	const session = await openAcpSession({
+		directory: cwd,
+		cwd: join(cwd, "workspace"),
+		launch: {
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "tool-permission-hold" },
+			authorize: async () => true,
+			close: async () => closeLaunch(),
+		},
+		update: async () => {},
+		toolRequestStarted: async () => {
+			enterPermission();
+			await factRelease;
+			await writeFile(join(cwd, "permission-fact"), "recorded");
+			order.push("fact");
+		},
+	});
+	try {
+		const prompt = session.prompt("synthetic input").catch(() => {});
+		await permissionEntered;
+		const closing = session.close().then(() => order.push("closed"));
+		await launchClosed;
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(order).toEqual([]);
+		releaseFact();
+		await closing;
+		await prompt;
+		expect(order).toEqual(["fact", "closed"]);
+	} finally {
+		releaseFact();
 		await session.close();
 		await rm(cwd, { recursive: true, force: true });
 	}
