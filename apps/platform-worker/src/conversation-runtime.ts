@@ -608,7 +608,12 @@ export function createConversationRuntimeV2(
 		const active = combined(signal);
 		const prepared = await prepare(request, "session.status", active);
 		const { context, state, authority, client, base, target, route } = prepared;
-		if (state.hostSessionRef === null && authority.purpose === "control") {
+		if (
+			state.hostSessionRef === null &&
+			authority.purpose === "control" &&
+			hasKeyedV4Selection(context.claim) &&
+			state.runtimeSubmitProtocol === "v4"
+		) {
 			const binding = await readOriginalControlBinding(prepared, active);
 			return { ...binding, schemaVersion: 2 as const };
 		}

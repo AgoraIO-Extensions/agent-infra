@@ -626,6 +626,66 @@ describe("Trusted conversation Runtime adapter", () => {
 			h.runtime.close();
 		}
 	});
+	it("reads a lost V4 Session binding under persisted recovery control", async () => {
+		const h = harness(1, undefined, true);
+		Object.assign(h.claim, {
+			executionStatus: "unknown",
+			hostSessionRef: null,
+			stopPending: true,
+		});
+		Object.assign(h.state, {
+			executionStatus: "unknown",
+			hostSessionRef: null,
+			stopPending: true,
+		});
+		h.fetcher.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					schemaVersion: 3,
+					outcome: "binding_found",
+					executionId: "execution",
+					hostSessionRef: "host",
+				}),
+			),
+		);
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.recoverOriginalStatus?.({
+					...h.events(reference),
+					schemaVersion: 2,
+					hostSessionRef: null,
+				}),
+			).resolves.toEqual({
+				schemaVersion: 2,
+				outcome: "binding_found",
+				executionId: "execution",
+				hostSessionRef: "host",
+			});
+			const sent = h.sent();
+			expect(sent.url).toBe(
+				"https://runtime.test/internal/runtime/v3/original-binding",
+			);
+			expect(sent.claims).toMatchObject({
+				purpose: "control",
+				reason: "recovery",
+				allowedCommands: ["session.status"],
+			});
+			expect(sent.body).toMatchObject({
+				originalOperationDigest: h.state.originalOperationDigest,
+				hostSessionRef: null,
+				operation: {
+					kind: "execution",
+					id: "execution",
+				},
+			});
+			expect(sent.body).not.toHaveProperty("input");
+			expect(sent.body).not.toHaveProperty("keyBinding");
+			expect(h.fetcher).toHaveBeenCalledOnce();
+		} finally {
+			h.runtime.close();
+		}
+	});
 	it("keeps an explicitly pinned non-null submit Session compatible", async () => {
 		const h = harness(1, undefined, true);
 		Object.assign(h.claim, { executionStatus: "unknown" });
