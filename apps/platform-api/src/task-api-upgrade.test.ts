@@ -4,6 +4,10 @@ import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import {
+	ConversationDetailProjectionV2Schema,
+	ExecutionDetailProjectionV2Schema,
+} from "@agent-infra/contracts/pilot";
+import {
 	type AgentConfigurationRecordV2,
 	hashApiCredentialV1,
 	platformIdempotencyV1,
@@ -61,7 +65,7 @@ const journal = JSON.parse(
 	readFileSync(resolve(migrationsFolder, "meta/_journal.json"), "utf8"),
 ) as { entries: { tag: string }[] };
 const taskMigrationIndex = journal.entries.findIndex(
-	(entry) => entry.tag === "0023_durable_task_api",
+	(entry) => entry.tag === "0028_durable_task_api",
 );
 const migrations = readMigrationFiles({ migrationsFolder });
 const configuration = agentConfigurationConformanceRecordV1;
@@ -85,11 +89,12 @@ function request(
 		key?: string;
 		api?: boolean;
 		other?: boolean;
+		version?: 1 | 2;
 		signal?: AbortSignal;
 		lastEventId?: string;
 	} = {},
 ) {
-	return fetch(`${origin}/api/v1${path}`, {
+	return fetch(`${origin}/api/v${options.version ?? 1}${path}`, {
 		method: options.body === undefined ? "GET" : "POST",
 		headers: {
 			"content-type": "application/json",
@@ -537,6 +542,35 @@ describe("durable task upgrade over real PostgreSQL and formal HTTP", () => {
 		expect(JSON.stringify(await detail.json())).toContain(
 			"historical complete output",
 		);
+		const v2Detail = await request(`/conversations/${old.conversationId}`, {
+			version: 2,
+		});
+		expect(v2Detail.status).toBe(200);
+		const v2Conversation = ConversationDetailProjectionV2Schema.parse(
+			await v2Detail.json(),
+		);
+		expect(v2Conversation.conversation.conversationId).toBe(old.conversationId);
+		expect(v2Conversation.events.map((event) => event.eventId)).toEqual([
+			"legacy_event_complete_1",
+			"legacy_event_complete_2",
+		]);
+		const v2Execution = await request(
+			`/conversations/${old.conversationId}/executions/${old.executionId}`,
+			{ version: 2 },
+		);
+		expect(v2Execution.status).toBe(200);
+		expect(
+			ExecutionDetailProjectionV2Schema.parse(await v2Execution.json()).events,
+		).toEqual(v2Conversation.events);
+		for (const path of [
+			`/conversations/${old.conversationId}`,
+			`/conversations/${old.conversationId}/executions/${old.executionId}`,
+			`/conversations/${old.conversationId}/events`,
+		]) {
+			expect((await request(path, { version: 2, other: true })).status).toBe(
+				404,
+			);
+		}
 		const counts = await businessCounts();
 		const replay = await request(
 			`/conversations/${old.conversationId}/messages`,
@@ -563,6 +597,27 @@ describe("durable task upgrade over real PostgreSQL and formal HTTP", () => {
 			expect(frames).not.toContain("historical complete output");
 		} finally {
 			controller.abort();
+		}
+		const firstEvent = v2Conversation.events[0];
+		if (!firstEvent) throw new Error("Historical cursor missing");
+		const v2Controller = new AbortController();
+		try {
+			const response = await request(
+				`/conversations/${old.conversationId}/events?cursor=${encodeURIComponent(firstEvent.conversationCursor)}`,
+				{ version: 2, signal: v2Controller.signal },
+			);
+			expect(response.status).toBe(200);
+			const reader = response.body?.getReader();
+			let frames = "";
+			while (!frames.includes("legacy_event_complete_2")) {
+				const chunk = await reader?.read();
+				if (!chunk || chunk.done) break;
+				frames += new TextDecoder().decode(chunk.value);
+			}
+			expect(frames).toContain("legacy_event_complete_2");
+			expect(frames).not.toContain("legacy_event_complete_1");
+		} finally {
+			v2Controller.abort();
 		}
 		const continued = await request(
 			`/conversations/${old.conversationId}/messages`,
