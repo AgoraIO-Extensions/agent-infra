@@ -48,6 +48,14 @@ async function verifyPlatformApi() {
 		assert.deepEqual(await health.json(), {
 			service: "platform-api",
 			status: "ok",
+			observability: {
+				enabled: false,
+				state: "active",
+				captureFailures: 0,
+				exportFailures: 0,
+				droppedLogs: 0,
+				invalidRecords: 0,
+			},
 		});
 		const session = await fetch(`${baseUrl}/api/v1/session`);
 		assert.equal(session.status, 200);
