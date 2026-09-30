@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
+	createWecomDeploymentCoordinatorV1,
 	startPlatformWecomPollingWorkerV1,
 	startPlatformWecomWorkerFromDeploymentV1,
 } from "./wecom-deployment.js";
@@ -84,4 +85,29 @@ it("loads a deployment worker and closes it through the process lifecycle", asyn
 	} finally {
 		vi.unstubAllGlobals();
 	}
+});
+
+it("fails closed for a bot deployment without authenticated connection inputs", async () => {
+	const coordinator = createWecomDeploymentCoordinatorV1({
+		databaseUrl: "postgres://fixture",
+		configuration: {
+			mode: "bot",
+			identity: {
+				resolveSender: async () => null,
+				activeUsers: async () => [],
+			},
+			observe: () => {},
+			sender: { send: async () => "failed" },
+		},
+	});
+	const signal = new AbortController().signal;
+	expect(() => coordinator.start(signal)).toThrow(
+		"WeCom Worker deployment dependencies are unavailable",
+	);
+	const record = {
+		boundary: { channelId: "wecom_bot:pending" },
+	} as Parameters<typeof coordinator.channelAuthorizationCurrent>[0];
+	expect(await coordinator.channelAuthorizationCurrent(record, signal)).toBe(
+		false,
+	);
 });

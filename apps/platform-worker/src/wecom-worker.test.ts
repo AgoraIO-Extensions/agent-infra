@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	dispatch: vi.fn(),
 	storeOpen: vi.fn(),
+	scopeForExecution: vi.fn(),
 	sender: undefined as WecomSendPortV1 | undefined,
 	close: vi.fn(async () => {}),
 	connectionsTick: vi.fn(async () => {}),
@@ -26,6 +27,7 @@ vi.mock("@agent-infra/platform-store", () => ({
 			mocks.storeOpen();
 		}
 		close = mocks.close;
+		scopeForExecution = mocks.scopeForExecution;
 	},
 }));
 vi.mock("@agent-infra/platform-core", () => ({
@@ -59,6 +61,24 @@ vi.mock("./wecom-setup.js", () => ({
 import { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 
 afterEach(() => vi.resetAllMocks());
+
+it("rejects unknown channels before querying WeCom execution state", async () => {
+	const worker = createPlatformWecomWorkerV1({
+		databaseUrl: "postgres://fixture",
+		identity: { resolveSender: async () => null, activeUsers: async () => [] },
+		observe: () => {},
+		sender: { send: async () => "failed" },
+	});
+	try {
+		const record = {
+			boundary: { channelId: "partner:channel" },
+		} as Parameters<typeof worker.channelAuthorizationCurrent>[0];
+		expect(await worker.channelAuthorizationCurrent(record)).toBe(false);
+		expect(mocks.scopeForExecution).not.toHaveBeenCalled();
+	} finally {
+		await worker.close();
+	}
+});
 
 it("rejects duplicate deployment and setup bindings by botId", async () => {
 	const deployment = [

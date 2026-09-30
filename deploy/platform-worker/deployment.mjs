@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { isPlatformConversationChannelCurrentV1 } from "@agent-infra/platform-core";
 import {
  createProductionConversationRuntimeResolverV2,
  createProductionWorkloadWorkerOptionsV1,
  createWorkloadReadinessAuthorizationV1,
- createPlatformWecomWorkerV1,
+ createWecomDeploymentCoordinatorV1,
 } from "@agent-infra/platform-worker";
 
 // Deployment-owned code supplies current IdentityAdapter facts and Worker-only material.
@@ -15,7 +14,6 @@ const { workloadInput, signing, serviceToken, directory, wecom } = await import(
 
 const instanceId = randomUUID();
 let prepared;
-let wecomWorker;
 async function prepare(signal) {
  prepared ??= (async () => {
   const workload = await createProductionWorkloadWorkerOptionsV1({
@@ -23,6 +21,10 @@ async function prepare(signal) {
    workerId: signing.workerId,
    runtimeProbe: createWorkloadReadinessAuthorizationV1({ ...signing, serviceToken }),
   }, signal);
+  const wecomDeployment = createWecomDeploymentCoordinatorV1({
+   databaseUrl: workload.databaseUrl,
+   configuration: wecom,
+  });
   return {
    // Database lease ownership is per process; Runtime service identity is deployment-bound.
    workload: { ...workload, workerId: instanceId },
@@ -31,15 +33,11 @@ async function prepare(signal) {
     workerId: instanceId,
     signing,
     directory,
-    channelAuthorizationCurrent: async (record, signal) => {
-     signal.throwIfAborted();
-     if (/^wecom_(bot|app):/.test(record.boundary.channelId))
-      return wecomWorker?.channelAuthorizationCurrent(record) ?? false;
-     return isPlatformConversationChannelCurrentV1(record);
-    },
+    channelAuthorizationCurrent: wecomDeployment.channelAuthorizationCurrent,
     resolveRuntimeHost: createProductionConversationRuntimeResolverV2({ workload, signing, serviceToken }),
     fetch: workload.fetch,
    },
+   wecom: wecomDeployment,
   };
  })();
  return prepared;
@@ -51,23 +49,5 @@ export async function createPlatformConversationWorkerOptionsV2(signal) {
  return (await prepare(signal)).conversation;
 }
 export async function createPlatformWecomWorkerInstanceV1(signal) {
- const { workload } = await prepare(signal);
- signal.throwIfAborted();
- if (!wecom || wecomWorker) throw new Error("WeCom deployment is unavailable");
- const worker = createPlatformWecomWorkerV1({
-  ...wecom,
-  databaseUrl: workload.databaseUrl,
- });
- wecomWorker = worker;
- return {
-  reconcile: worker.reconcile,
-  dispatch: worker.dispatch,
-  async close() {
-   try {
-    await worker.close();
-   } finally {
-    if (wecomWorker === worker) wecomWorker = undefined;
-   }
-  },
- };
+ return (await prepare(signal)).wecom.start(signal);
 }

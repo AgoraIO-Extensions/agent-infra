@@ -1,7 +1,85 @@
-import type { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
+import {
+	isPlatformConversationChannelCurrentV1,
+	type TaskRuntimeAuthorizationRecordV1,
+} from "@agent-infra/platform-core";
+import {
+	createPlatformWecomWorkerV1,
+	type WecomWorkerDeploymentV1,
+} from "./wecom-worker.js";
 
 type WecomWorker = ReturnType<typeof createPlatformWecomWorkerV1>;
 type WecomLoop = Pick<WecomWorker, "reconcile" | "dispatch" | "close">;
+type WecomConfiguration = WecomWorkerDeploymentV1 & {
+	readonly mode: "bot" | "application";
+};
+
+function requireWecomConfiguration(value: unknown): WecomConfiguration {
+	try {
+		const configuration = value as WecomConfiguration;
+		if (
+			!configuration ||
+			!["bot", "application"].includes(configuration.mode) ||
+			typeof configuration.identity?.resolveSender !== "function" ||
+			typeof configuration.identity.activeUsers !== "function" ||
+			typeof configuration.observe !== "function" ||
+			typeof configuration.sender?.send !== "function" ||
+			(configuration.mode === "bot" && !configuration.connections) ||
+			(configuration.connections &&
+				(typeof configuration.connections.bindings !== "function" ||
+					typeof configuration.connections.protectReply !== "function" ||
+					typeof configuration.connections.revealReply !== "function"))
+		)
+			throw new Error();
+		return configuration;
+	} catch {
+		throw new Error("WeCom Worker deployment dependencies are unavailable");
+	}
+}
+
+/** Shares one channel authority instance with the Conversation Worker. */
+export function createWecomDeploymentCoordinatorV1(options: {
+	readonly databaseUrl: string;
+	readonly configuration: unknown;
+}) {
+	let worker: WecomWorker | undefined;
+	return {
+		async channelAuthorizationCurrent(
+			record: TaskRuntimeAuthorizationRecordV1,
+			signal: AbortSignal,
+		) {
+			signal.throwIfAborted();
+			if (record.boundary.channelId === "web")
+				return isPlatformConversationChannelCurrentV1(record);
+			return (await worker?.channelAuthorizationCurrent(record)) ?? false;
+		},
+		start(signal: AbortSignal): WecomLoop {
+			signal.throwIfAborted();
+			if (worker)
+				throw new Error("WeCom Worker deployment dependencies are unavailable");
+			const configuration = requireWecomConfiguration(options.configuration);
+			try {
+				const started = createPlatformWecomWorkerV1({
+					...configuration,
+					databaseUrl: options.databaseUrl,
+				});
+				worker = started;
+				return {
+					reconcile: started.reconcile,
+					dispatch: started.dispatch,
+					async close() {
+						try {
+							await started.close();
+						} finally {
+							if (worker === started) worker = undefined;
+						}
+					},
+				};
+			} catch {
+				throw new Error("WeCom Worker deployment dependencies are unavailable");
+			}
+		},
+	};
+}
 
 export function startPlatformWecomPollingWorkerV1(
 	worker: WecomLoop,

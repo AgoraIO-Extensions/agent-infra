@@ -233,19 +233,19 @@ export async function startPlatformWorkerFromDeploymentV2(
 		workload = await (
 			options.startWorkload ?? startPlatformWorkloadWorkerFromDeploymentV1
 		)();
+		wecom = await options.startWecom?.();
 		conversation = await (
 			options.startConversation ??
 			startPlatformConversationWorkerFromDeploymentV2
 		)();
-		wecom = await options.startWecom?.();
 		let stopping: Promise<void> | undefined;
 		return {
 			stop() {
 				stopping ??= (async () => {
 					const results: PromiseSettledResult<void>[] = [];
 					for (const stop of [
-						() => wecom?.stop(),
 						() => conversation?.stop(),
+						() => wecom?.stop(),
 						() => workload?.stop(),
 						() => primary.stop(),
 					]) {

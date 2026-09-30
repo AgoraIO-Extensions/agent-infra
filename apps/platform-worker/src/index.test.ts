@@ -576,7 +576,7 @@ describe("Platform Worker production V2 lifecycle", () => {
 		expect(conversation.stop).toHaveBeenCalledOnce();
 		expect(stopOrder).toEqual(["conversation", "workload", "primary"]);
 	});
-	it("starts WeCom after conversation and drains it before shared execution", async () => {
+	it("starts WeCom authorization before conversation and drains conversation first", async () => {
 		const startOrder: string[] = [];
 		const stopOrder: string[] = [];
 		const worker = await startPlatformWorkerFromDeploymentV2({
@@ -610,21 +610,39 @@ describe("Platform Worker production V2 lifecycle", () => {
 				};
 			},
 		});
-		expect(startOrder).toEqual(["workload", "conversation", "wecom"]);
+		expect(startOrder).toEqual(["workload", "wecom", "conversation"]);
 		await worker.stop();
-		expect(stopOrder).toEqual(["wecom", "conversation", "workload", "primary"]);
+		expect(stopOrder).toEqual(["conversation", "wecom", "workload", "primary"]);
 	});
-	it("drains shared workers when required WeCom assembly fails", async () => {
+	it("holds conversation polling while WeCom authorization is assembling", async () => {
+		const ready = Promise.withResolvers<{ stop(): Promise<void> }>();
+		const startWecom = vi.fn(() => ready.promise);
+		const startConversation = vi.fn(async () => ({ stop: async () => {} }));
+		const starting = startPlatformWorkerFromDeploymentV2({
+			startPrimary: () => ({ stop: () => {} }),
+			startWorkload: async () => ({ stop: async () => {} }),
+			startWecom,
+			startConversation,
+		});
+		await vi.waitFor(() => expect(startWecom).toHaveBeenCalledOnce());
+		expect(startConversation).not.toHaveBeenCalled();
+		ready.resolve({ stop: async () => {} });
+		const worker = await starting;
+		expect(startConversation).toHaveBeenCalledOnce();
+		await worker.stop();
+	});
+	it("drains workload before conversation starts when required WeCom assembly fails", async () => {
 		const stops = {
 			primary: vi.fn(),
 			workload: vi.fn(async () => {}),
 			conversation: vi.fn(async () => {}),
 		};
+		const startConversation = vi.fn(async () => ({ stop: stops.conversation }));
 		await expect(
 			startPlatformWorkerFromDeploymentV2({
 				startPrimary: () => ({ stop: stops.primary }),
 				startWorkload: async () => ({ stop: stops.workload }),
-				startConversation: async () => ({ stop: stops.conversation }),
+				startConversation,
 				startWecom: async () => {
 					throw new Error("missing trusted WeCom deployment");
 				},
@@ -632,7 +650,8 @@ describe("Platform Worker production V2 lifecycle", () => {
 		).rejects.toThrow("missing trusted WeCom deployment");
 		expect(stops.primary).toHaveBeenCalledOnce();
 		expect(stops.workload).toHaveBeenCalledOnce();
-		expect(stops.conversation).toHaveBeenCalledOnce();
+		expect(startConversation).not.toHaveBeenCalled();
+		expect(stops.conversation).not.toHaveBeenCalled();
 	});
 	it("drains already-started loops when conversation assembly fails", async () => {
 		const primary = { stop: vi.fn(async () => {}) };

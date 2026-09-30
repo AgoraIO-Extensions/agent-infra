@@ -82,8 +82,9 @@ export const workloadInput = {
   executionCapacityProfiles: [],
 };
 
-// 启用 WeCom 时还须导出 wecom：可信发送者身份、连接凭证解析、回复加密及
-// Worker-only 解密等 createPlatformWecomWorkerV1 所需输入。
+// 启用 WeCom 时还须导出 wecom，明确 mode: "bot" 或 "application"。
+// bot 模式需提供 connections 的绑定、回复保护和解析；两种模式都需提供
+// 可信发送者身份、发送端和观察端。应用回调的 API 接入仍须独立配置。
 ```
 
 - `directory.resolveUser(userId)` 必须查询部署的当前身份事实；依赖失败应抛错，不能返回一个
