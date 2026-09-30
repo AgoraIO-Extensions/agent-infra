@@ -336,6 +336,8 @@ describe("Conversation generated-client data consumer", () => {
 				expect(reader.getSnapshot().status).toBe("unavailable"),
 			);
 			expect(reader.getSnapshot()).toMatchObject({
+				history: null,
+				events: [],
 				failure: { kind: "http", status: 404 },
 			});
 		});

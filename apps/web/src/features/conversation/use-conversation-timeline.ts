@@ -56,6 +56,7 @@ export function useConversationTimeline({
 			if (
 				state.status === "denied" ||
 				state.status === "idle" ||
+				state.failure?.kind === "http" ||
 				state.failure?.kind === "invalid"
 			)
 				clearDetails();
