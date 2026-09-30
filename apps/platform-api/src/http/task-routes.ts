@@ -10,13 +10,13 @@ import {
 	TaskProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
+	assertTaskApiAuthorityV1,
 	type ConversationExecutionAuthorityV1,
 	ConversationExecutionError,
 	type ConversationExecutionUseCaseV1,
 	type ConversationTaskSubmitCommandV1,
 	type ConversationTaskSubmitDecisionV1,
 	hasApiCredentialScopeV1,
-	parseTaskAuthorizationBoundaryV1,
 	sameApiPrincipalV1,
 	type TaskApiAuditInputV1,
 	taskApiChannelIdV1,
@@ -189,20 +189,12 @@ async function authorize(
 	let authority: ConversationExecutionAuthorityV1 | null;
 	try {
 		authority = await dependencies.authorize(identity, input);
-		if (authority) {
-			const task = parseTaskAuthorizationBoundaryV1(authority.taskBoundary);
-			if (
-				authority.schemaVersion !== 1 ||
-				authority.actorId !== identity.principal.id ||
-				authority.channelId !== taskApiChannelIdV1(identity.principal) ||
-				!sameApiPrincipalV1(task.principal, identity.principal) ||
-				task.agentId !== authority.agentId ||
-				task.channelId !== authority.channelId ||
-				task.agentAuthorizationRevision !== authority.authorizationRevision ||
-				(input.agentId !== undefined && input.agentId !== authority.agentId)
-			)
-				throw new Error("Task authority does not match its principal");
-		}
+		if (authority)
+			assertTaskApiAuthorityV1({
+				authority,
+				principal: identity.principal,
+				agentId: input.agentId,
+			});
 	} catch {
 		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}

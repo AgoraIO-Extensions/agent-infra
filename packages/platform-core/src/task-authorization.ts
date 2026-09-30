@@ -7,7 +7,9 @@ import {
 	parseAgentManagementStringArray,
 	isAgentManagementText as text,
 } from "./agent-management-input.js";
+import { sameApiPrincipalV1 } from "./api-identity.js";
 import type { ConversationDispatchExecutionStatusV1 } from "./conversation-dispatch.js";
+import type { ConversationExecutionAuthorityV1 } from "./conversation-execution-types.js";
 
 export interface TaskPrincipalV1 {
 	readonly kind: "user" | "application";
@@ -268,6 +270,26 @@ export function parseTaskAuthorizationBoundaryV1(
 		agentAuthorizationRevision: value.agentAuthorizationRevision as string,
 		accessSources: sources,
 	};
+}
+
+export function assertTaskApiAuthorityV1(input: {
+	readonly authority: ConversationExecutionAuthorityV1;
+	readonly principal: TaskPrincipalV1;
+	readonly agentId?: string;
+}): void {
+	const { authority, principal: subject, agentId } = input;
+	const task = parseTaskAuthorizationBoundaryV1(authority.taskBoundary);
+	if (
+		authority.schemaVersion !== 1 ||
+		authority.actorId !== subject.id ||
+		authority.channelId !== taskApiChannelIdV1(subject) ||
+		!sameApiPrincipalV1(task.principal, subject) ||
+		task.agentId !== authority.agentId ||
+		task.channelId !== authority.channelId ||
+		task.agentAuthorizationRevision !== authority.authorizationRevision ||
+		(agentId !== undefined && agentId !== authority.agentId)
+	)
+		throw new TypeError("Task authority does not match its principal");
 }
 
 export function captureTaskAuthorizationBoundaryV1(input: {

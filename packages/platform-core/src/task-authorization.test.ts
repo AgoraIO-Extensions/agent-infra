@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentManagementStateV1 } from "./agent-management.js";
 import {
+	assertTaskApiAuthorityV1,
 	type CurrentTaskApplicationV1,
 	type CurrentTaskUserV1,
 	captureApplicationTaskAuthorizationBoundaryV1,
@@ -59,6 +60,53 @@ function requiredBoundary(overrides: Parameters<typeof capture>[0] = {}) {
 }
 
 describe("task authorization boundary", () => {
+	it("rejects an API authority whose subject or task binding changes", () => {
+		const principal = { kind: "user" as const, id: "user-a" };
+		const authority = {
+			schemaVersion: 1 as const,
+			actorId: principal.id,
+			agentId: agent.agentId,
+			channelId: "api:user",
+			authorizationRevision: "agent-access-4",
+			supportsSupplementaryInstruction: false,
+			taskBoundary: requiredBoundary({
+				channelId: "api:user",
+				agent: {
+					...agent,
+					principalGrants: [
+						{
+							principal,
+							grantType: "use" as const,
+							authorizationRevision: "agent-access-4",
+							revokedAt: null,
+						},
+					],
+				},
+			}),
+		};
+		expect(() =>
+			assertTaskApiAuthorityV1({
+				authority,
+				principal,
+				agentId: agent.agentId,
+			}),
+		).not.toThrow();
+		for (const changed of [
+			{ ...authority, actorId: "other" },
+			{ ...authority, channelId: "api:application" },
+			{ ...authority, agentId: "other" },
+			{ ...authority, authorizationRevision: "other" },
+			{ ...authority, taskBoundary: undefined },
+		]) {
+			expect(() =>
+				assertTaskApiAuthorityV1({ authority: changed, principal }),
+			).toThrow();
+		}
+		expect(() =>
+			assertTaskApiAuthorityV1({ authority, principal, agentId: "other" }),
+		).toThrow();
+	});
+
 	it("keeps directory and Agent revisions distinct while accepting current unchanged scope", () => {
 		const boundary = requiredBoundary();
 		expect(boundary).toMatchObject({
