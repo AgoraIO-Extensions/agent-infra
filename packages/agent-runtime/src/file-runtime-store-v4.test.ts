@@ -171,6 +171,62 @@ it("keeps the stored scope independent from the caller's mutable input", async (
 	).toEqual(original);
 });
 
+it.each([
+	"principalId",
+	"principalKind",
+	"channelId",
+	"agentId",
+	"conversationId",
+	"executionId",
+	"turnId",
+	"sessionGeneration",
+] as const)(
+	"rejects an initial V4 scope with another %s without changing durable bytes",
+	async (field) => {
+		const f = await fixture();
+		const request = input();
+		if (!request.keyScopeV4) throw new Error("Missing fixture scope");
+		const keyScopeV4 = structuredClone(request.keyScopeV4);
+		if (field === "principalId") keyScopeV4.principal.id = "bob";
+		else if (field === "principalKind")
+			keyScopeV4.principal.kind = "application";
+		else if (field === "sessionGeneration") keyScopeV4.sessionGeneration = 2;
+		else keyScopeV4[field] = "other-object";
+		RuntimePinnedExecutionKeyScopeV4Schema.parse(keyScopeV4);
+		const bytes = await readFile(f.path, "utf8");
+		await expect(
+			f.store.prepareOperation({ ...request, keyScopeV4 }),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		expect(await readFile(f.path, "utf8")).toBe(bytes);
+		await f.reopen();
+		expect(f.store.readOriginalExecutionKeyScopeV4(request.binding)).toBeNull();
+		expect(await readFile(f.path, "utf8")).toBe(bytes);
+	},
+);
+
+it("rejects an initial V4 scope without original authority while retaining legacy admission", async () => {
+	const f = await fixture();
+	const request = input();
+	const bytes = await readFile(f.path, "utf8");
+	await expect(
+		f.store.prepareOperation({ ...request, authorization: undefined }),
+	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+	expect(await readFile(f.path, "utf8")).toBe(bytes);
+	const legacy = input(false);
+	const {
+		principal: _principal,
+		channelId: _channel,
+		...binding
+	} = legacy.binding;
+	await f.store.prepareOperation({
+		...legacy,
+		binding,
+		authorization: undefined,
+	});
+	await f.reopen();
+	expect(f.store.readOriginalExecutionKeyScopeV4(binding)?.scope).toBeNull();
+});
+
 it("rejects a retry with another pinned Key or removed scope without changing durable bytes", async () => {
 	const f = await fixture();
 	const request = input();
@@ -420,6 +476,10 @@ it("preserves a legacy journal without inventing a V4 Key binding", async () => 
 });
 
 it.each([
+	"principalId",
+	"principalKind",
+	"channelId",
+	"authority",
 	"agentId",
 	"conversationId",
 	"executionId",
@@ -433,9 +493,15 @@ it.each([
 		const prepared = await f.store.prepareOperation(request);
 		await f.store.close();
 		const journal = JSON.parse(await readFile(f.path, "utf8"));
-		journal.sessions[prepared.session.hostSessionRef].operations[
-			request.operationId
-		].keyScopeV4[field] = field === "sessionGeneration" ? 2 : "other-object";
+		const session = journal.sessions[prepared.session.hostSessionRef];
+		const scope = session.operations[request.operationId].keyScopeV4;
+		if (field === "principalId") scope.principal.id = "bob";
+		else if (field === "principalKind") scope.principal.kind = "application";
+		else if (field === "authority") {
+			delete session.authority;
+			delete session.executionAuthorities;
+		} else scope[field] = field === "sessionGeneration" ? 2 : "other-object";
+		RuntimePinnedExecutionKeyScopeV4Schema.parse(scope);
 		await writeFile(f.path, `${JSON.stringify(journal)}\n`);
 		await f.reopen();
 		expect(() =>

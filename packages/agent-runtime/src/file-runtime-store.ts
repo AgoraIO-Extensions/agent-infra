@@ -281,6 +281,12 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 			(operation.keyScopeV4 !== undefined &&
 				(!RuntimePinnedExecutionKeyScopeV4Schema.safeParse(operation.keyScopeV4)
 					.success ||
+					!session.authority ||
+					operation.keyScopeV4.principal.kind !==
+						session.authority.principal.kind ||
+					operation.keyScopeV4.principal.id !==
+						session.authority.principal.id ||
+					operation.keyScopeV4.channelId !== session.authority.channelId ||
 					(operation.kind !== "submit-turn" &&
 						operation.kind !== "supplement") ||
 					operation.keyScopeV4.agentId !== session.agentId ||
@@ -547,6 +553,17 @@ export class FileRuntimeStore {
 					? input.now()
 					: (input.now ?? Date.now());
 			assertStoreState(state);
+			if (keyScopeV4) {
+				assertSessionAuthority(input.authorization, keyScopeV4);
+				if (
+					keyScopeV4.agentId !== input.binding.agentId ||
+					keyScopeV4.conversationId !== input.binding.conversationId ||
+					keyScopeV4.executionId !== input.binding.executionId ||
+					keyScopeV4.turnId !== input.binding.turnId ||
+					keyScopeV4.sessionGeneration !== input.binding.sessionGeneration
+				)
+					runtimeAuthorizationDenied();
+			}
 			const indexedHostSessionRef =
 				state.sessionBindings[sessionBindingKey(input.binding)];
 			const hostSessionRef =
