@@ -1,7 +1,7 @@
 # Platform Worker 部署模块
 
 正式 CLI 通过 `PLATFORM_WORKER_DEPLOYMENT_MODULE` 同时启动 Workload 与 Conversation
-循环。[deployment.mjs](deployment.mjs) 装配两个现有工厂及可选的 WeCom 渠道实例，共享一次经过
+循环。[deployment-entry.ts](../../apps/platform-worker/src/deployment-entry.ts) 装配两个现有工厂及可选的 WeCom 渠道实例，共享一次经过
 验证的 Kubernetes、Registry、模型目录、keyring、Runtime readiness 与路由配置。
 每个进程生成独立的数据库 lease owner；Runtime 服务身份仍使用部署提供的稳定 Worker ID。
 Helm 的 `platformWorker.wecomEnabled=true` 还会在同一进程启动 WeCom 连接调谐和回复
