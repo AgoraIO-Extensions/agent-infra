@@ -159,22 +159,36 @@
     {
       "idx": 22,
       "version": "7",
-      "when": 1790688869131,
-      "tag": "0022_application_targets",
+      "when": 1790686705954,
+      "tag": "0022_wecom_application_setup",
       "breakpoints": true
     },
     {
       "idx": 23,
       "version": "7",
-      "when": 1790719330689,
-      "tag": "0023_credential_delivery_approval",
+      "when": 1790699393053,
+      "tag": "0023_wecom_replacement_probe",
       "breakpoints": true
     },
     {
       "idx": 24,
       "version": "7",
-      "when": 1790722093615,
-      "tag": "0024_ldap_identity_authority",
+      "when": 1790724093107,
+      "tag": "0024_application_targets",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790724094107,
+      "tag": "0025_credential_delivery_approval",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790724095107,
+      "tag": "0026_ldap_identity_authority",
       "breakpoints": true
     }
   ]

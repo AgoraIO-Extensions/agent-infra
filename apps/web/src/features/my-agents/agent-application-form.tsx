@@ -39,6 +39,7 @@ type AgentApplicationFormProps = { cancelAction?: ReactNode } & (
 	| {
 			mode: "create";
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
+			deploymentConfigurationRetryable?: boolean;
 			onSubmit: (body: AgentApplicationCreateRequestV2Writable) => void;
 			serverError?: AgentApplicationServerError | null;
 			submitting: boolean;
@@ -47,6 +48,7 @@ type AgentApplicationFormProps = { cancelAction?: ReactNode } & (
 			action: AgentApplicationEditAction;
 			application: AgentApplicationProjectionV2;
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
+			deploymentConfigurationRetryable?: boolean;
 			mode: "update";
 			onSubmit: (body: AgentApplicationUpdateRequestV2Writable) => void;
 			serverError?: AgentApplicationServerError | null;
@@ -635,6 +637,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const configuration = application?.configuration;
 	const persistedModelOptions = configuration?.modelOptions;
 	const deployment = props.deploymentConfiguration;
+	const deploymentRetryable = props.deploymentConfigurationRetryable ?? false;
 	const modelEndpoints = deployment.modelCatalog.endpoints;
 	const [name, setName] = useState(application?.name ?? "");
 	const [description, setDescription] = useState(
@@ -933,7 +936,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			? "部署选项已过期，请重新加载后再提交。"
 			: deployment.status === "unavailable" ||
 					deployment.modelCatalog.status === "unavailable"
-				? "部署选项暂不可用，请重新加载；标准模板申请暂不能提交。"
+				? deploymentRetryable
+					? "部署选项暂不可用，请重新加载；标准模板申请暂不能提交。"
+					: "部署选项暂不可用，请联系管理员。"
 				: deployment.status === "empty" ||
 						(deployment.templates.length === 0 && sourceKind === "standard") ||
 						(deployment.modelCatalog.status === "empty" &&

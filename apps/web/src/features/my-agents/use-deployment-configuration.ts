@@ -6,5 +6,6 @@ export function useDeploymentConfiguration() {
 	return useQuery({
 		queryKey: ["deployment-configuration"],
 		queryFn: () => loadDeploymentConfiguration(),
+		retry: false,
 	});
 }

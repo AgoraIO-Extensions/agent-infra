@@ -30,6 +30,7 @@ type AgentApplicationSubmissionScreenProps =
 			result?: AgentApplicationProjectionV2;
 			submitting: boolean;
 			onRefreshDeploymentConfiguration?: () => void;
+			deploymentConfigurationRetryable?: boolean;
 			refreshingDeploymentConfiguration?: boolean;
 	  }
 	| {
@@ -42,6 +43,7 @@ type AgentApplicationSubmissionScreenProps =
 			result?: AgentApplicationProjectionV2;
 			submitting: boolean;
 			onRefreshDeploymentConfiguration?: () => void;
+			deploymentConfigurationRetryable?: boolean;
 			refreshingDeploymentConfiguration?: boolean;
 	  };
 
@@ -76,6 +78,10 @@ export function AgentApplicationSubmissionScreen(
 	const validationError =
 		props.error?.code === "INVALID_REQUEST" ||
 		props.error?.code === "MODEL_SELECTION_INVALID";
+	const deploymentUnavailable =
+		props.deploymentConfiguration.status !== "populated" ||
+		props.deploymentConfiguration.modelCatalog.status !== "populated";
+	const deploymentRetryable = props.deploymentConfigurationRetryable ?? false;
 
 	return (
 		<section aria-labelledby="agent-application-submission-heading">
@@ -87,22 +93,25 @@ export function AgentApplicationSubmissionScreen(
 			</header>
 			<div className="form-layout">
 				<div className="min-w-0">
-					{props.deploymentConfiguration.status !== "populated" ||
-					props.deploymentConfiguration.modelCatalog.status !== "populated" ? (
+					{deploymentUnavailable ? (
 						<div className="mb-4 flex items-center gap-3" role="status">
 							<p className="text-muted-foreground text-sm">
-								部署选项需要刷新后才能提交标准模板申请。
+								{deploymentRetryable
+									? "部署选项需要刷新后才能提交标准模板申请。"
+									: "部署选项暂不可用，请联系管理员。"}
 							</p>
-							<Button
-								variant="outline"
-								disabled={props.refreshingDeploymentConfiguration}
-								onClick={props.onRefreshDeploymentConfiguration}
-								type="button"
-							>
-								{props.refreshingDeploymentConfiguration
-									? "正在刷新…"
-									: "重新加载部署选项"}
-							</Button>
+							{deploymentRetryable && props.onRefreshDeploymentConfiguration ? (
+								<Button
+									variant="outline"
+									disabled={props.refreshingDeploymentConfiguration}
+									onClick={props.onRefreshDeploymentConfiguration}
+									type="button"
+								>
+									{props.refreshingDeploymentConfiguration
+										? "正在刷新…"
+										: "重新加载部署选项"}
+								</Button>
+							) : null}
 						</div>
 					) : null}
 					{props.error ? (

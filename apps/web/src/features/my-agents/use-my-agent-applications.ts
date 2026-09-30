@@ -6,5 +6,6 @@ export function useMyAgentApplications() {
 	return useQuery({
 		queryKey: ["my-agents"],
 		queryFn: () => loadMyAgentApplications(),
+		retry: false,
 	});
 }

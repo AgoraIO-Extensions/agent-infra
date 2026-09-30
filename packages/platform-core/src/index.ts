@@ -115,5 +115,8 @@ export type {
 } from "./secret-record-attachments.js";
 export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";
+export * from "./wecom-channel.js";
+export * from "./wecom-setup.js";
+export * from "./wecom-setup-activation.js";
 export * from "./workload-reconciliation.js";
 export { parseWorkloadSecretRecoveriesV1 } from "./workload-secret-recovery.js";

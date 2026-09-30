@@ -118,6 +118,7 @@
       "required": ["replicas"],
       "properties": {
         "configurationModuleSecretRef": { "$ref": "#/$defs/secretRef" },
+        "trustedCaSecretRef": { "$ref": "#/$defs/secretRef" },
         "deploymentModule": { "type": "string", "maxLength": 256, "pattern": "^(?:$|(?:file:///|/)[^\\s]+)$" },
         "runtimeAuthSecretRef": {
           "type": "object",

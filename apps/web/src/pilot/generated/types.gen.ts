@@ -1537,6 +1537,305 @@ export type CommandAgentLifecycleErrors = {
 
 export type CommandAgentLifecycleError = CommandAgentLifecycleErrors[keyof CommandAgentLifecycleErrors];
 
+export type GetWecomAppConnectionData = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v1/agents/{agentId}/wecom-app';
+};
+
+export type GetWecomAppConnectionErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetWecomAppConnectionError = GetWecomAppConnectionErrors[keyof GetWecomAppConnectionErrors];
+
+export type GetWecomAppConnectionResponses = {
+    /**
+     * Owner application connection status
+     */
+    200: {
+        callbackUrl?: string;
+        sessionId?: string;
+        status: 'not_configured' | 'callback' | 'verifying' | 'connected' | 'disconnected' | 'auth_failed';
+    };
+};
+
+export type GetWecomAppConnectionResponse = GetWecomAppConnectionResponses[keyof GetWecomAppConnectionResponses];
+
+export type BeginWecomAppSetupData = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v1/agents/{agentId}/wecom-app-setup';
+};
+
+export type BeginWecomAppSetupErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type BeginWecomAppSetupError = BeginWecomAppSetupErrors[keyof BeginWecomAppSetupErrors];
+
+export type BeginWecomAppSetupResponses = {
+    /**
+     * Owner application setup session
+     */
+    200: {
+        agentId: string;
+        callbackUrl: string;
+        configurationRevision: number;
+        expiresAt: string;
+        sessionId: string;
+        state: string;
+        status: 'awaiting_input' | 'verifying' | 'active' | 'auth_failed' | 'conflict' | 'cancelled' | 'expired';
+    };
+};
+
+export type BeginWecomAppSetupResponse = BeginWecomAppSetupResponses[keyof BeginWecomAppSetupResponses];
+
+export type GetWecomAppSetupData = {
+    body?: never;
+    path: {
+        agentId: string;
+        sessionId: string;
+    };
+    query?: never;
+    url: '/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}';
+};
+
+export type GetWecomAppSetupErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetWecomAppSetupError = GetWecomAppSetupErrors[keyof GetWecomAppSetupErrors];
+
+export type GetWecomAppSetupResponses = {
+    /**
+     * Owner application setup status
+     */
+    200: {
+        agentId: string;
+        callbackUrl: string;
+        configurationRevision: number;
+        expiresAt: string;
+        sessionId: string;
+        status: 'awaiting_input' | 'verifying' | 'active' | 'auth_failed' | 'conflict' | 'cancelled' | 'expired';
+    };
+};
+
+export type GetWecomAppSetupResponse = GetWecomAppSetupResponses[keyof GetWecomAppSetupResponses];
+
+export type CancelWecomAppSetupData = {
+    body?: never;
+    path: {
+        agentId: string;
+        sessionId: string;
+    };
+    query?: never;
+    url: '/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel';
+};
+
+export type CancelWecomAppSetupErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CancelWecomAppSetupError = CancelWecomAppSetupErrors[keyof CancelWecomAppSetupErrors];
+
+export type CancelWecomAppSetupResponses = {
+    /**
+     * Cancelled application setup session
+     */
+    200: {
+        agentId: string;
+        callbackUrl: string;
+        configurationRevision: number;
+        expiresAt: string;
+        sessionId: string;
+        status: 'awaiting_input' | 'verifying' | 'active' | 'auth_failed' | 'conflict' | 'cancelled' | 'expired';
+    };
+};
+
+export type CancelWecomAppSetupResponse = CancelWecomAppSetupResponses[keyof CancelWecomAppSetupResponses];
+
+export type SubmitWecomAppCredentialsData = {
+    body: {
+        applicationId: string;
+        corporationId: string;
+        encodingAesKey: string;
+        secret: string;
+        state: string;
+        takeoverConfirmed: boolean;
+        token: string;
+    };
+    path: {
+        agentId: string;
+        sessionId: string;
+    };
+    query?: never;
+    url: '/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials';
+};
+
+export type SubmitWecomAppCredentialsErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type SubmitWecomAppCredentialsError = SubmitWecomAppCredentialsErrors[keyof SubmitWecomAppCredentialsErrors];
+
+export type SubmitWecomAppCredentialsResponses = {
+    /**
+     * Candidate pending Worker validation
+     */
+    200: {
+        agentId: string;
+        callbackUrl: string;
+        configurationRevision: number;
+        expiresAt: string;
+        sessionId: string;
+        status: 'awaiting_input' | 'verifying' | 'active' | 'auth_failed' | 'conflict' | 'cancelled' | 'expired';
+    };
+};
+
+export type SubmitWecomAppCredentialsResponse = SubmitWecomAppCredentialsResponses[keyof SubmitWecomAppCredentialsResponses];
+
 export type GetWecomBotConnectionData = {
     body?: never;
     path: {

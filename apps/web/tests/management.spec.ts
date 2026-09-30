@@ -61,6 +61,25 @@ async function fixture(
 	);
 	let deployment = deploymentConfiguration;
 	let pendingQueueUnavailable = false;
+	let pendingQueueUnauthorized = false;
+	let agentListUnavailable = false;
+	let agentListUnauthorized = false;
+	let ownedAgentListUnauthorized = false;
+	let agentDetailUnavailable = false;
+	let agentDetailUnauthorized = false;
+	let applicationsUnavailable = false;
+	let applicationsUnauthorized = false;
+	let applicationDetailUnavailable = false;
+	let applicationDetailUnauthorized = false;
+	let deploymentUnavailable = false;
+	let deploymentUnauthorized = false;
+	const retryableReadFailure = {
+		schemaVersion: 1 as const,
+		code: "DEPENDENCY_UNAVAILABLE" as const,
+		message: "Controlled list failure",
+		retryable: true,
+		traceId: "trace-list-retry",
+	};
 	const session = {
 		schemaVersion: 1,
 		user: {
@@ -71,13 +90,39 @@ async function fixture(
 	};
 	const server = createPilotAgentMockServerV2({
 		getCurrentSession: { status: 200, body: session },
-		getDeploymentConfiguration: () => ({
-			status: 200,
-			body: deployment,
-		}),
+		getDeploymentConfiguration: () =>
+			deploymentUnauthorized
+				? {
+						status: 403,
+						body: pilotFakeScenariosV2.unauthorized.response.body,
+					}
+				: deploymentUnavailable
+					? { status: 503, body: retryableReadFailure }
+					: {
+							status: 200,
+							body: deployment,
+						},
 		listAgents: (request) => {
 			const ownerScope =
 				new URL(request.url).searchParams.get("scope") === "owner";
+			if (!ownerScope && agentListUnauthorized) {
+				return {
+					status: 403,
+					body: pilotFakeScenariosV2.unauthorized.response.body,
+				};
+			}
+			if (ownerScope && ownedAgentListUnauthorized) {
+				return {
+					status: 403,
+					body: pilotFakeScenariosV2.unauthorized.response.body,
+				};
+			}
+			if (agentListUnavailable) {
+				return {
+					status: 503,
+					body: retryableReadFailure,
+				};
+			}
 			return {
 				status: 200,
 				body: {
@@ -86,16 +131,52 @@ async function fixture(
 				},
 			};
 		},
-		getAgent: () => ({ status: 200, body: agent }),
-		listAgentApplications: () => ({
-			status: 200,
-			body: { items: [application], nextCursor: null },
-		}),
-		getAgentApplication: () => ({ status: 200, body: application }),
+		getAgent: () =>
+			agentDetailUnauthorized
+				? {
+						status: 403,
+						body: pilotFakeScenariosV2.unauthorized.response.body,
+					}
+				: agentDetailUnavailable
+					? {
+							status: 503,
+							body: retryableReadFailure,
+						}
+					: { status: 200, body: agent },
+		listAgentApplications: () =>
+			applicationsUnauthorized
+				? {
+						status: 403,
+						body: pilotFakeScenariosV2.unauthorized.response.body,
+					}
+				: applicationsUnavailable
+					? {
+							status: 503,
+							body: retryableReadFailure,
+						}
+					: {
+							status: 200,
+							body: { items: [application], nextCursor: null },
+						},
+		getAgentApplication: () =>
+			applicationDetailUnauthorized
+				? {
+						status: 403,
+						body: pilotFakeScenariosV2.unauthorized.response.body,
+					}
+				: applicationDetailUnavailable
+					? { status: 503, body: retryableReadFailure }
+					: { status: 200, body: application },
 		createAgentApplication: () => ({ status: 201, body: application }),
 		updateAgentApplication: () => ({ status: 200, body: application }),
 		withdrawAgentApplication: () => ({ status: 200, body: application }),
 		listPendingAgentApplications: () => {
+			if (pendingQueueUnauthorized) {
+				return {
+					status: 403,
+					body: pilotFakeScenariosV2.unauthorized.response.body,
+				};
+			}
 			if (pendingQueueUnavailable) {
 				return {
 					status: 503,
@@ -234,6 +315,15 @@ async function fixture(
 		freshDeployment() {
 			deployment = deploymentConfiguration;
 		},
+		unavailableDeployment() {
+			deploymentUnavailable = true;
+		},
+		recoverDeployment() {
+			deploymentUnavailable = false;
+		},
+		unauthorizedDeployment() {
+			deploymentUnauthorized = true;
+		},
 		holdNextCommand() {
 			nextGate = new Promise<void>((resolve) => {
 				release = resolve;
@@ -262,8 +352,50 @@ async function fixture(
 		unavailablePendingQueue() {
 			pendingQueueUnavailable = true;
 		},
+		unauthorizedPendingQueue() {
+			pendingQueueUnauthorized = true;
+		},
 		recoverPendingQueue() {
 			pendingQueueUnavailable = false;
+		},
+		unavailableAgentList() {
+			agentListUnavailable = true;
+		},
+		unauthorizedAgentList() {
+			agentListUnauthorized = true;
+		},
+		recoverAgentList() {
+			agentListUnavailable = false;
+		},
+		unauthorizedOwnedAgentList() {
+			ownedAgentListUnauthorized = true;
+		},
+		unavailableAgentDetail() {
+			agentDetailUnavailable = true;
+		},
+		unauthorizedAgentDetail() {
+			agentDetailUnauthorized = true;
+		},
+		unauthorizedApplications() {
+			applicationsUnauthorized = true;
+		},
+		recoverAgentDetail() {
+			agentDetailUnavailable = false;
+		},
+		unavailableApplications() {
+			applicationsUnavailable = true;
+		},
+		recoverApplications() {
+			applicationsUnavailable = false;
+		},
+		unavailableApplicationDetail() {
+			applicationDetailUnavailable = true;
+		},
+		unauthorizedApplicationDetail() {
+			applicationDetailUnauthorized = true;
+		},
+		recoverApplicationDetail() {
+			applicationDetailUnavailable = false;
 		},
 		rejectNextWithdrawal() {
 			rejectNextWithdrawal = true;
@@ -575,6 +707,20 @@ test("administrator can recover a temporarily unavailable pending queue", async 
 	await capture(page, info, "approvals-recovered");
 });
 
+test("administrator authorization failure does not offer a pending-queue retry", async ({
+	page,
+}) => {
+	const api = await fixture(page, "admin");
+	api.unauthorizedPendingQueue();
+	await page.goto("/admin/approvals");
+	await expect(page.getByRole("alert")).toHaveText(
+		"审批列表不可用，请联系管理员。",
+	);
+	await expect(page.getByRole("button", { name: "重新加载审批" })).toHaveCount(
+		0,
+	);
+});
+
 test("Owner configuration checkbox, Secret clearing, lifecycle and custom image upgrade", async ({
 	page,
 }, info) => {
@@ -869,6 +1015,212 @@ test("employee collection is not presented as owned Agents", async ({
 		page.getByRole("heading", { name: "暂无你管理的 Agent" }),
 	).toBeVisible();
 	await expect(page.getByRole("link", { name: "配置与管理" })).toHaveCount(0);
+});
+
+test("retryable management reads recover through explicit browser actions", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unavailableAgentList();
+	await page.goto("/agents");
+	await expect(page.getByRole("alert")).toContainText(
+		"Agent 列表暂时无法读取，请稍后重试。",
+	);
+	const agentRetry = page.getByRole("button", { name: "重新加载 Agent" });
+	api.recoverAgentList();
+	await agentRetry.click();
+	await expect(
+		page.getByRole("heading", { name: "Release assistant" }),
+	).toBeVisible();
+
+	api.unavailableApplications();
+	await page.goto("/my-agents");
+	await expect(page.getByRole("alert")).toContainText(
+		"暂时无法读取申请，请稍后重试。",
+	);
+	api.recoverApplications();
+	await page.getByRole("button", { name: "重新加载申请" }).click();
+	await expect(page.getByRole("link", { name: "申请详情" })).toBeVisible();
+	api.unavailableAgentList();
+	await page.reload();
+	await page.getByRole("tab", { name: "已创建 Agent" }).click();
+	await expect(page.getByRole("alert")).toContainText(
+		"暂时无法读取你管理的 Agent，请稍后重试。",
+	);
+	api.recoverAgentList();
+	await page.getByRole("button", { name: "重新加载已创建 Agent" }).click();
+	await expect(
+		page.getByRole("list", { name: "我管理的 Agent" }),
+	).toContainText("Release assistant");
+
+	api.unavailableAgentDetail();
+	await page.goto("/agents/agent-pilot-1");
+	await expect(page.getByRole("alert")).toContainText(
+		"暂时无法读取 Agent 信息，请稍后重试。",
+	);
+	api.recoverAgentDetail();
+	await page.getByRole("button", { name: "重新加载 Agent" }).click();
+	await expect(
+		page.getByRole("heading", { name: "Release assistant" }),
+	).toBeVisible();
+});
+
+test("authorization failures do not offer retry actions for Agent reads", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unauthorizedAgentList();
+	await page.goto("/agents");
+	await expect(page.getByRole("alert")).toHaveText(
+		"Agent 列表暂时无法访问，请联系管理员。",
+	);
+	await expect(
+		page.getByRole("button", { name: "重新加载 Agent" }),
+	).toHaveCount(0);
+
+	api.unauthorizedAgentDetail();
+	await page.goto("/agents/agent-pilot-1");
+	await expect(page.getByRole("alert")).toHaveText("此 Agent 暂时无法访问。");
+	await expect(
+		page.getByRole("button", { name: "重新加载 Agent" }),
+	).toHaveCount(0);
+
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(
+		page.getByRole("heading", { name: "配置暂不可用" }),
+	).toBeVisible();
+	await expect(page.getByRole("alert")).toHaveText("请联系管理员。");
+	await expect(page.getByRole("button", { name: "重新加载配置" })).toHaveCount(
+		0,
+	);
+
+	api.unauthorizedApplicationDetail();
+	await page.goto("/my-agents/application-browser-1/edit");
+	await expect(
+		page.getByRole("heading", { name: "申请暂不可用" }),
+	).toBeVisible();
+	await expect(page.getByRole("alert")).toHaveText("请联系管理员。");
+	await expect(page.getByRole("button", { name: "重新加载申请" })).toHaveCount(
+		0,
+	);
+
+	api.unauthorizedApplications();
+	await page.goto("/my-agents");
+	await expect(page.getByRole("alert")).toHaveText(
+		"当前无法查看申请，请联系管理员。",
+	);
+	await expect(page.getByRole("button", { name: "重新加载申请" })).toHaveCount(
+		0,
+	);
+});
+
+test("configuration reads recover through the explicit browser action", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unavailableAgentDetail();
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(
+		page.getByRole("heading", { name: "配置暂不可用" }),
+	).toBeVisible();
+	await expect(page.getByRole("alert")).toHaveText("请稍后重试。");
+	api.recoverAgentDetail();
+	await page.getByRole("button", { name: "重新加载配置" }).click();
+	await expect(
+		page.getByRole("heading", { name: "配置与生命周期" }),
+	).toBeVisible();
+});
+
+test("application detail reads recover through the explicit browser action", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unavailableApplicationDetail();
+	await page.goto("/my-agents/application-browser-1");
+	await expect(
+		page.getByRole("heading", { name: "申请详情暂不可用" }),
+	).toBeVisible();
+	await expect(page.getByRole("alert")).toContainText(
+		"暂时无法读取申请，请稍后重试。",
+	);
+	api.recoverApplicationDetail();
+	await page.getByRole("button", { name: "重新加载申请" }).click();
+	await expect(page.getByRole("heading", { name: "申请详情" })).toBeVisible();
+});
+
+test("editable application reads recover through the explicit browser action", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unavailableApplicationDetail();
+	await page.goto("/my-agents/application-browser-1/edit");
+	await expect(
+		page.getByRole("heading", { name: "申请暂不可用" }),
+	).toBeVisible();
+	await expect(page.getByRole("alert")).toContainText("请稍后重试。");
+	api.recoverApplicationDetail();
+	await page.getByRole("button", { name: "重新加载申请" }).click();
+	await expect(page.getByRole("heading", { name: "修改申请" })).toBeVisible();
+});
+
+test("deployment option reads recover before submitting an application", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unavailableDeployment();
+	await page.goto("/my-agents/new");
+	await expect(
+		page.getByText("部署选项需要刷新后才能提交标准模板申请。", {
+			exact: true,
+		}),
+	).toBeVisible();
+	api.recoverDeployment();
+	await page.getByRole("button", { name: "重新加载部署选项" }).click();
+	await expect(page.locator("#application-deployment-status")).toHaveCount(0);
+	await expect(
+		page.getByRole("combobox", { name: "标准模板 ID" }),
+	).toBeVisible();
+});
+
+test("deployment option authorization failures do not offer a retry action", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unauthorizedDeployment();
+	await page.goto("/my-agents/new");
+	await expect(
+		page.locator('div[role="status"]').filter({
+			hasText: "部署选项暂不可用，请联系管理员。",
+		}),
+	).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "重新加载部署选项" }),
+	).toHaveCount(0);
+
+	await page.goto("/my-agents/application-browser-1/edit");
+	await expect(
+		page.locator('div[role="status"]').filter({
+			hasText: "部署选项暂不可用，请联系管理员。",
+		}),
+	).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "重新加载部署选项" }),
+	).toHaveCount(0);
+});
+
+test("owned Agent authorization failures do not offer a retry action", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.unauthorizedOwnedAgentList();
+	await page.goto("/my-agents");
+	await page.getByRole("tab", { name: "已创建 Agent" }).click();
+	await expect(page.getByRole("alert")).toContainText(
+		"当前无法查看你管理的 Agent，请联系管理员。",
+	);
+	await expect(
+		page.getByRole("button", { name: "重新加载已创建 Agent" }),
+	).toHaveCount(0);
 });
 
 test("withdraw confirmation traps focus and cancellation sends no request", async ({

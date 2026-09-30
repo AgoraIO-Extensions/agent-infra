@@ -6,5 +6,6 @@ export function useAgentDetail(agentId: string) {
 	return useQuery({
 		queryKey: ["agents", agentId],
 		queryFn: () => loadAgentDetail(agentId),
+		retry: false,
 	});
 }

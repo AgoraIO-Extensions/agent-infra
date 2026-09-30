@@ -9,6 +9,13 @@ cd "$repository_root"
   echo "PLATFORM_LOCAL_PROJECT must be a hyphenated agent-infra- name of at most 35 characters" >&2
   exit 1
 }
+local_state_root=${PLATFORM_LOCAL_STATE_DIRECTORY:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-infra/local}
+[[ "$local_state_root" = /* ]] || {
+  echo "PLATFORM_LOCAL_STATE_DIRECTORY must be an absolute path" >&2
+  exit 1
+}
+export PLATFORM_LOCAL_NGINX_CONFIG="$local_state_root/$PLATFORM_LOCAL_PROJECT/nginx.conf"
+export PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE="$local_state_root/$PLATFORM_LOCAL_PROJECT/proxy-token"
 docker_target=(docker --context "$PLATFORM_LOCAL_DOCKER_CONTEXT")
 docker_endpoint=$("${docker_target[@]}" context inspect "$PLATFORM_LOCAL_DOCKER_CONTEXT" --format '{{.Endpoints.docker.Host}}')
 [[ "$docker_endpoint" == unix://* ]] || {
@@ -122,6 +129,14 @@ worker_values() {
     --set-string database.secretRef.key=url
     --set-string platformWorker.deploymentModule=file:///app/dist/deployment.mjs
   )
+}
+
+render_proxy_config() {
+  [[ "${PLATFORM_LOCAL_PROXY_TOKEN_FILE:?Set the private local proxy token file}" = /* && -r "$PLATFORM_LOCAL_PROXY_TOKEN_FILE" ]] || {
+    echo "PLATFORM_LOCAL_PROXY_TOKEN_FILE must be an absolute readable file" >&2
+    return 1
+  }
+  node deploy/local/render-nginx.ts "$PLATFORM_LOCAL_PROXY_TOKEN_FILE" "$PLATFORM_LOCAL_NGINX_CONFIG"
 }
 
 check_database_resource_ownership() {
@@ -300,16 +315,18 @@ case "${1:-}" in
     "${compose[@]}" up --detach --wait postgres object-storage
     ;;
   migrate)
+    render_proxy_config
     "${compose[@]}" run --rm --no-deps platform-api node node_modules/@agent-infra/platform-store/dist/migrate-cli.mjs
     ;;
   up)
-    [[ -f "${PLATFORM_LOCAL_API_DIRECTORY:?}/platform-api.mjs" ]] || { echo "API deployment module platform-api.mjs is missing" >&2; exit 1; }
+    [[ -r "${PLATFORM_LOCAL_API_DIRECTORY:?}/configuration.mjs" ]] || { echo "API configuration module configuration.mjs is missing" >&2; exit 1; }
     [[ -r "${PLATFORM_WEB_TLS_CERT_FILE:?}" && -r "${PLATFORM_WEB_TLS_KEY_FILE:?}" ]] || { echo "Local Web TLS files are missing" >&2; exit 1; }
     worker_context
     worker_values
     check_database_resource_ownership
     check_database_network_ownership
     "${helm_target[@]}" template "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" >/dev/null
+    render_proxy_config
     "${compose[@]}" stop web platform-api
     "${compose[@]}" up --detach --wait postgres object-storage
     connect_worker_database
@@ -326,7 +343,13 @@ case "${1:-}" in
     ')
     "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas="$worker_replicas"
     "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
-    "${compose[@]}" up --detach --wait platform-api web
+    "${compose[@]}" up --detach --wait --force-recreate --no-deps platform-api
+    if ! node deploy/local/check-api-auth.ts "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "${PLATFORM_LOCAL_API_PORT:-3000}" "${PLATFORM_LOCAL_WEB_PORT:-3001}"; then
+      "${compose[@]}" stop platform-api
+      echo "Local API login boundary is unavailable; Web remains stopped" >&2
+      exit 1
+    fi
+    "${compose[@]}" up --detach --wait --force-recreate --no-deps web
     ;;
   status)
     worker_context
@@ -350,6 +373,7 @@ case "${1:-}" in
       "${compose[@]}" stop web platform-api
       disconnect_worker_database
       "${compose[@]}" stop object-storage postgres
+      rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE"
       exit 0
     fi
     [[ "$worker_replicas" =~ ^[0-9]+$ ]] || { echo "Worker deployment has no valid replica count" >&2; exit 1; }
@@ -371,6 +395,7 @@ case "${1:-}" in
     fi
     disconnect_worker_database
     "${compose[@]}" stop object-storage postgres
+    rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE"
     ;;
   *)
     echo "Usage: bash deploy/local/platform.sh build|data|migrate|up|status|stop" >&2
