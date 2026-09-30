@@ -248,6 +248,42 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toBe("");
 	});
 
+	it("admits only the original-binding control read and preserves prior V3 routes", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/runtime-host.v3.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		delete previous.paths["/internal/runtime/v3/original-binding"];
+		delete previous.components.schemas.RuntimeOriginalBindingResponseV3;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-original-binding-"),
+		);
+		try {
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const widened = structuredClone(current);
+			widened.components.schemas.RuntimeOriginalBindingResponseV3.properties.hostSessionRef.minLength = 0;
+			await writeFile(currentPath, JSON.stringify(widened));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			const changedStatus = structuredClone(current);
+			changedStatus.paths["/internal/runtime/v3/status"].post.operationId =
+				"changed";
+			await writeFile(currentPath, JSON.stringify(changedStatus));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("accepts the reviewed task-status event without widening its payload", async () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),

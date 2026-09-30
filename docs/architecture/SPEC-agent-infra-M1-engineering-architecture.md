@@ -679,6 +679,16 @@ ACK、模型连接中断或进程退出不能合成原 Turn 终态。状态收�
 [Runtime HLD 7–8](HLD-agent-runtime-M1.md#7-sessionturn-与恢复)，缺少可靠结果时保持
 unknown 和原占用。控制续传只交给平台持久化处理器，不向已撤权用户回放正文。
 
+V4 原执行已被 Host 接受而 Platform 丢失 Host Session Ref 时，Worker 可持原执行的
+`session.status` 控制 Grant 和原请求摘要调用 V3 私有控制接口的只读
+`original-binding` 操作，查询
+FileRuntimeStore 已持久的原接受绑定。Host 须重新校验服务身份、控制授权、原
+Execution/Turn/代次/fence 与请求摘要；仅返回已保存的真实 Host Session Ref，
+不得创建或猜测引用、恢复业务准入或重装 Key。Core 在原 claim 的租约/fence 下
+CAS 回填该引用，失败或来源不明时保留 unknown 占用；成功后继续原 stop、终态、
+事件游标与 ACK 路径，不晋升后继执行。该只读控制响应以版本化 Schema 和生成
+OpenAPI 发布，旧 V3 操作与响应保持原义。
+
 RuntimeHost wire contract、Execution 模型选择、Platform/Connection 权威边界和 #403 的原生
 持久数据保持；多用户隔离仍由独立验收证明。正式镜像验收必须包含成功 Turn，以及 HTTP 与
 流内失败、取消、异常流的合成负向场景，递归检查原生持久历史、日志与 HTTP/SSE 的脱敏结果。
