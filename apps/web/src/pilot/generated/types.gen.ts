@@ -633,6 +633,96 @@ export type RegenerateCommandRequestV1 = {
     schemaVersion: 1;
 };
 
+export type ScopedPlatformAuditActionV1 = 'agent.application.submitted' | 'agent.application.updated' | 'agent.application.resubmitted' | 'agent.application.withdrawn' | 'agent.application.approved' | 'agent.application.rejected' | 'agent.lifecycle.stopped' | 'agent.lifecycle.restarted' | 'agent.lifecycle.creation_retried' | 'agent.lifecycle.disabled' | 'agent.workload.creation_succeeded' | 'agent.workload.creation_failed' | 'agent.workload.service_starting' | 'agent.workload.service_ready' | 'agent.workload.service_updating' | 'agent.workload.service_unavailable' | 'agent.configuration.revised' | 'agent.access.updated' | 'api.access.rejected' | 'api.application.created' | 'api.credential.issued' | 'api.credential.revoked' | 'api.credential.delivery.granted' | 'api.credential.delivery.revoked' | 'api.agent.grant.granted' | 'api.agent.grant.revoked' | 'task.api.access' | 'task.api.subscription.started' | 'task.api.subscription.ended' | 'task.authorization.accepted' | 'task.status.changed' | 'task.control.created' | 'execution.operation.observed' | 'conversation.task.accepted' | 'conversation.message.accepted' | 'conversation.regeneration.accepted' | 'conversation.stop.accepted' | 'conversation.model_selection.updated' | 'conversation.model_selection.fell_back' | 'conversation.task.status' | 'secret.decrypt' | 'secret.activate' | 'secret.rewrap' | 'secret.retire-key' | 'audit.query.completed' | 'audit.query.failed' | 'wecom.setup_started' | 'wecom.credentials_submitted' | 'wecom.setup_cancelled' | 'wecom.setup_expired' | 'wecom.setup_failed' | 'wecom.callback_verified' | 'wecom.setup_activated' | 'wecom.connection_verifying' | 'wecom.connection_connected' | 'wecom.connection_disconnected' | 'wecom.connection_auth_failed' | 'wecom.denied' | 'wecom.unavailable' | 'wecom.conflict' | 'wecom.accepted' | 'wecom.unknown' | 'wecom.sending' | 'wecom.sent' | 'wecom.failed' | 'wecom.cancelled' | 'wecom.expired' | 'wecom.abandoned';
+
+export type ScopedPlatformAuditPageV1 = {
+    items: Array<ScopedPlatformAuditProjectionV1>;
+    nextCursor: string | null;
+};
+
+export type ScopedPlatformAuditProjectionV1 = {
+    action: ScopedPlatformAuditActionV1;
+    actor: {
+        actorId: string;
+        kind: 'user' | 'application' | 'system' | 'unknown';
+    };
+    agentId: string | null;
+    auditId: string;
+    authorizationRecordId: string | null;
+    conversationId: string | null;
+    executionId: string | null;
+    executor: 'platform_worker' | null;
+    occurredAt: string;
+    operation: {
+        eventId: string;
+        fact: {
+            attemptRef: string;
+            durationMs?: number;
+            failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
+            finishedAt?: string;
+            kind: 'model';
+            model: {
+                configVersion: string;
+                modelId: string;
+                modelOptionId: string;
+                reasoningLevel?: string;
+            };
+            operationRef: string;
+            parentOperationRef?: string;
+            phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+            startedAt?: string;
+            usage?: {
+                cachedInputTokens?: number;
+                inputTokens?: number;
+                outputTokens?: number;
+            };
+        } | {
+            attemptRef: string;
+            connection?: {
+                callRef: string;
+                serviceRef: string;
+                verification: 'verified';
+            } | {
+                callRef?: string;
+                reason: 'receipt_missing' | 'record_unavailable' | 'authorization_unavailable' | 'binding_mismatch' | 'response_unconfirmed';
+                serviceRef: string;
+                verification: 'unverified';
+            };
+            durationMs?: number;
+            failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
+            finishedAt?: string;
+            kind: 'tool';
+            operationRef: string;
+            parentOperationRef?: string;
+            phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+            resultRef?: string;
+            startedAt?: string;
+            toolId: string;
+        };
+    } | null;
+    originalPrincipal: {
+        id: string;
+        kind: 'user' | 'application';
+    } | null;
+    requestId: string | null;
+    result: ScopedPlatformAuditResultV1;
+    schemaVersion: 1;
+    subject: {
+        kind: 'agent_application' | 'agent' | 'secret' | 'secret_key' | 'grant' | 'unknown' | 'conversation' | 'execution' | 'configuration';
+        subjectId: string;
+    };
+    summary: string;
+    taskApi: {
+        operation: 'submit' | 'read' | 'cancel' | 'subscribe';
+        phase: 'access' | 'subscription.started' | 'subscription.ended';
+        reason: 'request_accepted' | 'invalid_request' | 'authentication_required' | 'authorization_revoked' | 'missing_scope' | 'resource_unavailable' | 'capacity_full' | 'conflict' | 'dependency_unavailable' | 'client_disconnected' | 'stream_ended' | 'subscription_unconfirmed';
+        subscriptionId?: string;
+    } | null;
+    traceId: string;
+};
+
+export type ScopedPlatformAuditResultV1 = 'succeeded' | 'rejected' | 'failed' | 'accepted' | 'intent' | 'started' | 'submitted' | 'waiting' | 'processing' | 'completed' | 'cancelled' | 'unknown';
+
 export type SseEventIdV1 = string;
 
 export type StopCommandRequestV1 = {
@@ -1532,6 +1622,305 @@ export type CommandAgentLifecycleResponses = {
 
 export type CommandAgentLifecycleResponse = CommandAgentLifecycleResponses[keyof CommandAgentLifecycleResponses];
 
+export type GetWecomAppConnectionData = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v1/agents/{agentId}/wecom-app';
+};
+
+export type GetWecomAppConnectionErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetWecomAppConnectionError = GetWecomAppConnectionErrors[keyof GetWecomAppConnectionErrors];
+
+export type GetWecomAppConnectionResponses = {
+    /**
+     * Owner application connection status
+     */
+    200: {
+        callbackUrl?: string;
+        sessionId?: string;
+        status: 'not_configured' | 'callback' | 'verifying' | 'connected' | 'disconnected' | 'auth_failed';
+    };
+};
+
+export type GetWecomAppConnectionResponse = GetWecomAppConnectionResponses[keyof GetWecomAppConnectionResponses];
+
+export type BeginWecomAppSetupData = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v1/agents/{agentId}/wecom-app-setup';
+};
+
+export type BeginWecomAppSetupErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type BeginWecomAppSetupError = BeginWecomAppSetupErrors[keyof BeginWecomAppSetupErrors];
+
+export type BeginWecomAppSetupResponses = {
+    /**
+     * Owner application setup session
+     */
+    200: {
+        agentId: string;
+        callbackUrl: string;
+        configurationRevision: number;
+        expiresAt: string;
+        sessionId: string;
+        state: string;
+        status: 'awaiting_input' | 'verifying' | 'active' | 'auth_failed' | 'conflict' | 'cancelled' | 'expired';
+    };
+};
+
+export type BeginWecomAppSetupResponse = BeginWecomAppSetupResponses[keyof BeginWecomAppSetupResponses];
+
+export type GetWecomAppSetupData = {
+    body?: never;
+    path: {
+        agentId: string;
+        sessionId: string;
+    };
+    query?: never;
+    url: '/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}';
+};
+
+export type GetWecomAppSetupErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetWecomAppSetupError = GetWecomAppSetupErrors[keyof GetWecomAppSetupErrors];
+
+export type GetWecomAppSetupResponses = {
+    /**
+     * Owner application setup status
+     */
+    200: {
+        agentId: string;
+        callbackUrl: string;
+        configurationRevision: number;
+        expiresAt: string;
+        sessionId: string;
+        status: 'awaiting_input' | 'verifying' | 'active' | 'auth_failed' | 'conflict' | 'cancelled' | 'expired';
+    };
+};
+
+export type GetWecomAppSetupResponse = GetWecomAppSetupResponses[keyof GetWecomAppSetupResponses];
+
+export type CancelWecomAppSetupData = {
+    body?: never;
+    path: {
+        agentId: string;
+        sessionId: string;
+    };
+    query?: never;
+    url: '/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel';
+};
+
+export type CancelWecomAppSetupErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CancelWecomAppSetupError = CancelWecomAppSetupErrors[keyof CancelWecomAppSetupErrors];
+
+export type CancelWecomAppSetupResponses = {
+    /**
+     * Cancelled application setup session
+     */
+    200: {
+        agentId: string;
+        callbackUrl: string;
+        configurationRevision: number;
+        expiresAt: string;
+        sessionId: string;
+        status: 'awaiting_input' | 'verifying' | 'active' | 'auth_failed' | 'conflict' | 'cancelled' | 'expired';
+    };
+};
+
+export type CancelWecomAppSetupResponse = CancelWecomAppSetupResponses[keyof CancelWecomAppSetupResponses];
+
+export type SubmitWecomAppCredentialsData = {
+    body: {
+        applicationId: string;
+        corporationId: string;
+        encodingAesKey: string;
+        secret: string;
+        state: string;
+        takeoverConfirmed: boolean;
+        token: string;
+    };
+    path: {
+        agentId: string;
+        sessionId: string;
+    };
+    query?: never;
+    url: '/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials';
+};
+
+export type SubmitWecomAppCredentialsErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type SubmitWecomAppCredentialsError = SubmitWecomAppCredentialsErrors[keyof SubmitWecomAppCredentialsErrors];
+
+export type SubmitWecomAppCredentialsResponses = {
+    /**
+     * Candidate pending Worker validation
+     */
+    200: {
+        agentId: string;
+        callbackUrl: string;
+        configurationRevision: number;
+        expiresAt: string;
+        sessionId: string;
+        status: 'awaiting_input' | 'verifying' | 'active' | 'auth_failed' | 'conflict' | 'cancelled' | 'expired';
+    };
+};
+
+export type SubmitWecomAppCredentialsResponse = SubmitWecomAppCredentialsResponses[keyof SubmitWecomAppCredentialsResponses];
+
 export type GetWecomBotConnectionData = {
     body?: never;
     path: {
@@ -1823,6 +2212,112 @@ export type SubmitWecomCredentialsResponses = {
 };
 
 export type SubmitWecomCredentialsResponse = SubmitWecomCredentialsResponses[keyof SubmitWecomCredentialsResponses];
+
+export type ListOwnExecutionAuditData = {
+    body?: never;
+    path?: never;
+    query?: {
+        limit?: number;
+        cursor?: string;
+        from?: string;
+        until?: string;
+        principalKind?: 'user' | 'application';
+        principalId?: string;
+        agentId?: string;
+        action?: ScopedPlatformAuditActionV1;
+        result?: ScopedPlatformAuditResultV1;
+        executionId?: string;
+    };
+    url: '/api/v1/audit';
+};
+
+export type ListOwnExecutionAuditErrors = {
+    /**
+     * Audit query failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListOwnExecutionAuditError = ListOwnExecutionAuditErrors[keyof ListOwnExecutionAuditErrors];
+
+export type ListOwnExecutionAuditResponses = {
+    /**
+     * Authorized audit metadata
+     */
+    200: ScopedPlatformAuditPageV1;
+};
+
+export type ListOwnExecutionAuditResponse = ListOwnExecutionAuditResponses[keyof ListOwnExecutionAuditResponses];
+
+export type GetOwnExecutionAuditData = {
+    body?: never;
+    path: {
+        auditId: string;
+    };
+    query?: {
+        limit?: number;
+        cursor?: string;
+        from?: string;
+        until?: string;
+        principalKind?: 'user' | 'application';
+        principalId?: string;
+        agentId?: string;
+        action?: ScopedPlatformAuditActionV1;
+        result?: ScopedPlatformAuditResultV1;
+        executionId?: string;
+    };
+    url: '/api/v1/audit/{auditId}';
+};
+
+export type GetOwnExecutionAuditErrors = {
+    /**
+     * Audit query failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetOwnExecutionAuditError = GetOwnExecutionAuditErrors[keyof GetOwnExecutionAuditErrors];
+
+export type GetOwnExecutionAuditResponses = {
+    /**
+     * Authorized audit detail
+     */
+    200: ScopedPlatformAuditProjectionV1;
+};
+
+export type GetOwnExecutionAuditResponse = GetOwnExecutionAuditResponses[keyof GetOwnExecutionAuditResponses];
 
 export type GetConversationData = {
     body?: never;
@@ -2539,3 +3034,109 @@ export type AbandonUnknownWecomDeliveryResponses = {
 };
 
 export type AbandonUnknownWecomDeliveryResponse = AbandonUnknownWecomDeliveryResponses[keyof AbandonUnknownWecomDeliveryResponses];
+
+export type ListScopedAdministratorAuditData = {
+    body?: never;
+    path?: never;
+    query?: {
+        limit?: number;
+        cursor?: string;
+        from?: string;
+        until?: string;
+        principalKind?: 'user' | 'application';
+        principalId?: string;
+        agentId?: string;
+        action?: ScopedPlatformAuditActionV1;
+        result?: ScopedPlatformAuditResultV1;
+        executionId?: string;
+    };
+    url: '/api/v3/admin/audit';
+};
+
+export type ListScopedAdministratorAuditErrors = {
+    /**
+     * Audit query failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListScopedAdministratorAuditError = ListScopedAdministratorAuditErrors[keyof ListScopedAdministratorAuditErrors];
+
+export type ListScopedAdministratorAuditResponses = {
+    /**
+     * Authorized audit metadata
+     */
+    200: ScopedPlatformAuditPageV1;
+};
+
+export type ListScopedAdministratorAuditResponse = ListScopedAdministratorAuditResponses[keyof ListScopedAdministratorAuditResponses];
+
+export type GetScopedAdministratorAuditData = {
+    body?: never;
+    path: {
+        auditId: string;
+    };
+    query?: {
+        limit?: number;
+        cursor?: string;
+        from?: string;
+        until?: string;
+        principalKind?: 'user' | 'application';
+        principalId?: string;
+        agentId?: string;
+        action?: ScopedPlatformAuditActionV1;
+        result?: ScopedPlatformAuditResultV1;
+        executionId?: string;
+    };
+    url: '/api/v3/admin/audit/{auditId}';
+};
+
+export type GetScopedAdministratorAuditErrors = {
+    /**
+     * Audit query failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetScopedAdministratorAuditError = GetScopedAdministratorAuditErrors[keyof GetScopedAdministratorAuditErrors];
+
+export type GetScopedAdministratorAuditResponses = {
+    /**
+     * Authorized audit detail
+     */
+    200: ScopedPlatformAuditProjectionV1;
+};
+
+export type GetScopedAdministratorAuditResponse = GetScopedAdministratorAuditResponses[keyof GetScopedAdministratorAuditResponses];

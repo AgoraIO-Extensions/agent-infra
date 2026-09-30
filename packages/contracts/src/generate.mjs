@@ -37,6 +37,8 @@ import {
 	pilotOperationOpenApiPathsV2,
 	pilotOperationSchemasV2,
 	pilotOperationSseSchemasV2,
+	pilotScopedAuditOpenApiPathsV1,
+	pilotScopedAuditSchemasV1,
 	pilotSseSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
 } from "./pilot/index.ts";
@@ -630,12 +632,14 @@ function buildArtifacts() {
 			...pilotBrowserOpenApiPathsV1,
 			...fileOpenApiPathsV1,
 			...pilotBrowserSseOpenApiPathsV1,
+			...pilotScopedAuditOpenApiPathsV1,
 		},
 		components: {
 			schemas: {
 				...pilotBrowserSchemasV1,
 				...pilotSseSchemasV1,
 				...fileSchemasV1,
+				...pilotScopedAuditSchemasV1,
 			},
 		},
 	});

@@ -20,6 +20,10 @@ import type { IdentityAdapter } from "./http/identity.js";
 
 export interface ProductionPlatformApiInputV1
 	extends Omit<DeploymentAdmissionInputV1, "currentIdentity"> {
+	readonly wecom?: PlatformApiAssemblyInput["wecom"];
+	readonly wecomIdentity?: PlatformApiAssemblyInput["wecomIdentity"];
+	readonly wecomCredentialEncryptionKeys?: PlatformApiAssemblyInput["wecomCredentialEncryptionKeys"];
+	readonly wecomApplicationSetup?: PlatformApiAssemblyInput["wecomApplicationSetup"];
 	readonly databaseUrl: string;
 	/** Same immutable image repository used by the Worker's resource policy. */
 	readonly imageRepository: string;
@@ -69,6 +73,14 @@ export function createProductionPlatformApiAssemblyInputV1(
 		createSecretEncryptorV1({ encryptionKeys: input.encryptionKeys }),
 	);
 	return {
+		...(input.wecom ? { wecom: input.wecom } : {}),
+		...(input.wecomIdentity ? { wecomIdentity: input.wecomIdentity } : {}),
+		...(input.wecomCredentialEncryptionKeys
+			? { wecomCredentialEncryptionKeys: input.wecomCredentialEncryptionKeys }
+			: {}),
+		...(input.wecomApplicationSetup
+			? { wecomApplicationSetup: input.wecomApplicationSetup }
+			: {}),
 		databaseUrl: input.databaseUrl,
 		identity: input.identity,
 		requestScope: identityScope.requestScope,
