@@ -1063,6 +1063,35 @@ export function createConversationDispatchUseCaseV1(
 							? { schemaVersion: 1, outcome: "already_completed" }
 							: { schemaVersion: 1, outcome: "stale" };
 					}
+					if (recoveringStop && !claim.hostSessionRef) {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						if (!status.hostSessionRef)
+							return retry(
+								dependencies.store,
+								claim,
+								retryDelayMs,
+								"RUNTIME_ACCEPTANCE_UNKNOWN",
+								"unknown",
+								{},
+							);
+						if (
+							!(await dependencies.store.recordRuntimeResponse({
+								claim,
+								hostSessionRef: status.hostSessionRef,
+								transition: {},
+							}))
+						)
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"RUNTIME_ACCEPTANCE_UNKNOWN",
+							"unknown",
+							{},
+						);
+					}
 					if (status.status === "unavailable") {
 						throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
 					}
