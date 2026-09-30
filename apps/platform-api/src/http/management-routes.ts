@@ -214,6 +214,7 @@ function apiActor(
 		userId: identity.ownerId,
 		accountStatus: identity.accountStatus,
 		principal: identity.principal,
+		identityRevision: identity.authorizationRevision,
 		isAdministrator: false,
 		credential: identity.credential,
 	};
@@ -589,7 +590,12 @@ async function resolveAgentGrantContext(
 	return {
 		identity,
 		management: apiIdentityOrUnavailable(dependencies.apiIdentity, traceId),
-		managementActor: api ? apiActor(api) : actor(identity),
+		managementActor: api
+			? apiActor(api)
+			: {
+					...actor(identity),
+					identityRevision: identity.authorizationRevision,
+				},
 	};
 }
 

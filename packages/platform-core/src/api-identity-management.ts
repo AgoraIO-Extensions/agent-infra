@@ -1,3 +1,4 @@
+import { isCurrentApiAgentManagementAuthorizedV1 } from "./agent-management.js";
 import {
 	type ApiCredentialMetadataV1,
 	type ApiCredentialScopeV1,
@@ -32,6 +33,21 @@ export interface ApiIdentityActorV1 {
 	>;
 }
 
+export function isCurrentApiIdentityBrowserActorV1(input: {
+	readonly actor: ApiIdentityActorV1;
+	readonly currentUser: CurrentTaskUserV1 | null;
+}): boolean {
+	const { actor, currentUser } = input;
+	return (
+		actor.accountStatus === "active" &&
+		actor.principal === undefined &&
+		!!actor.identityRevision &&
+		currentUser?.userId === actor.userId &&
+		currentUser.accountStatus === "active" &&
+		currentUser.authorizationRevision === actor.identityRevision
+	);
+}
+
 export function isCurrentCredentialDeliveryManagerV1(input: {
 	readonly actor: ApiIdentityActorV1;
 	readonly responsibleUserId: string;
@@ -46,6 +62,79 @@ export function isCurrentCredentialDeliveryManagerV1(input: {
 		currentUser.accountStatus === "active" &&
 		currentUser.authorizationRevision === actor.identityRevision &&
 		(actor.isAdministrator || responsibleUserId === actor.userId)
+	);
+}
+
+/** Decide grant management from current, locked credential and Agent facts. */
+export function isCurrentAgentGrantManageAllowedV1(input: {
+	readonly actor: ApiIdentityActorV1;
+	readonly credential: null | {
+		readonly principalType: string;
+		readonly principalId: string;
+		readonly scopes: readonly string[];
+		readonly expiresAt: Date | null;
+		readonly revokedAt: Date | null;
+		readonly recipientUserId: string | null;
+	};
+	readonly currentUser: CurrentTaskUserV1 | null;
+	readonly application: {
+		readonly status: string;
+		readonly responsibleUserId: string;
+		readonly authorizationRevision: string;
+	} | null;
+	readonly recipient: CurrentTaskUserV1 | null;
+	readonly delivery: {
+		readonly authorizationRevision: string;
+		readonly revokedAt: Date | null;
+	} | null;
+	readonly nowMs: number;
+	readonly isOwner: boolean;
+	readonly authorizationRevision: string | null;
+	readonly grants: readonly {
+		readonly grantType: string;
+		readonly authorizationRevision: string;
+		readonly revokedAt: Date | null;
+	}[];
+}): boolean {
+	const { actor } = input;
+	if (actor.accountStatus !== "active") return false;
+	if (actor.principal) {
+		if (
+			!actor.credential?.credentialId ||
+			!actor.identityRevision ||
+			!actor.credential.scopes.includes("agent:manage") ||
+			!isCurrentApiAgentManagementAuthorizedV1({
+				actorId: actor.principal.id,
+				apiAuthority: {
+					principal: actor.principal,
+					credentialId: actor.credential.credentialId,
+					identityRevision: actor.identityRevision,
+				},
+				credential: input.credential,
+				nowMs: input.nowMs,
+				currentUser: input.currentUser,
+				currentApplication: input.application,
+				currentRecipient: input.recipient,
+				currentDelivery: input.delivery,
+			}) ||
+			(actor.principal.kind === "application" &&
+				input.application?.responsibleUserId !== actor.userId)
+		)
+			return false;
+	} else {
+		if (!isCurrentApiIdentityBrowserActorV1(input)) return false;
+		return actor.isAdministrator || input.isOwner;
+	}
+	if (actor.principal?.kind === "user" && actor.principal.id !== actor.userId)
+		return false;
+	return (
+		input.authorizationRevision !== null &&
+		input.grants.some(
+			(grant) =>
+				grant.grantType === "manage" &&
+				grant.authorizationRevision === input.authorizationRevision &&
+				grant.revokedAt === null,
+		)
 	);
 }
 

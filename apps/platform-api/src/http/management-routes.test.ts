@@ -7,8 +7,10 @@ import {
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
+	type ApiIdentityActorV1,
 	ApiIdentityError,
 	ApplicationFoundationError,
+	isCurrentAgentGrantManageAllowedV1,
 } from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
@@ -916,87 +918,165 @@ describe("management routes", () => {
 		expect(issueCredential).toHaveBeenCalledOnce();
 	});
 
-	it("grants and revokes an application principal through the owner boundary", async () => {
-		const app = new Hono();
-		const grantAgent = vi.fn().mockResolvedValue("authorization-revision-2");
-		const revokeAgentGrant = vi.fn().mockResolvedValue(true);
-		const getAgent = vi.fn().mockResolvedValue(agentRecord);
-		registerManagementRoutes(app, {
-			identity: {
-				resolve: vi.fn().mockResolvedValue(identity),
-				hydrateUsers: vi.fn().mockResolvedValue([]),
-			},
-			apiIdentity: {
-				authorizeCredentialScope: vi.fn(),
-				resolveAgentQueryGrantType: vi.fn(),
-				listUserCredentials: vi.fn(),
-				issueUserCredential: vi.fn(),
-				revokeUserCredential: vi.fn(),
-				listApplications: vi.fn(),
-				createApplication: vi.fn(),
-				listApplicationCredentials: vi.fn(),
-				issueApplicationCredential: vi.fn(),
-				revokeApplicationCredential: vi.fn(),
-				grantCredentialDelivery: vi.fn(),
-				revokeCredentialDelivery: vi.fn(),
-				grantAgent,
-				revokeAgentGrant,
-				recordAccessRejection: vi.fn(),
-			},
-			foundation: { submit: vi.fn() },
-			revision: { revise: vi.fn() },
-			management: { executeManagementCommand: vi.fn() },
-			configuration: { upgradeCustomImage: vi.fn() },
-			query: {
-				listApplications: vi.fn(),
-				getApplication: vi.fn(),
-				listAgents: vi.fn(),
-				getAgent,
-			},
-			allocateApplicationIds: vi.fn(),
-			prepareSecretReplacements: vi.fn(),
-			readApplicationProjection: vi.fn(),
-			readAgentProjection: vi.fn(),
-		});
-		const body = JSON.stringify({
-			schemaVersion: 1,
-			principal: { kind: "application", id: "application-caller" },
-			grantType: "use",
-		});
-		const granted = await app.request("/api/v1/agents/agent-1/grants", {
-			method: "POST",
-			headers,
-			body,
-		});
-		expect(granted.status).toBe(200);
-		expect(await granted.json()).toMatchObject({
-			agentId: "agent-1",
-			principal: { kind: "application", id: "application-caller" },
-			grantType: "use",
-			revokedAt: null,
-		});
-		expect(grantAgent).toHaveBeenCalledWith(
-			expect.objectContaining({
+	it.each(["browser", "api"] as const)(
+		"grants and revokes an application principal through the current %s authority",
+		async (channel) => {
+			const app = new Hono();
+			const principal = { kind: "user" as const, id: identity.userId };
+			const apiRevision = "different-current-api-revision";
+			const credential = {
+				schemaVersion: 1 as const,
+				credentialId: "trusted-credential",
+				principal,
+				scopes: ["agent:manage"] as const,
+				expiresAt: null,
+				revokedAt: null,
+				createdAt: new Date("2026-09-01T00:00:00Z"),
+			};
+			const api = {
+				schemaVersion: 1 as const,
+				principal,
+				ownerId: identity.userId,
+				accountStatus: "active" as const,
+				organizationIds: identity.organizationIds,
+				authorizationRevision: apiRevision,
+				credential,
+			};
+			const requireCurrentPolicy = (actor: ApiIdentityActorV1) => {
+				// Retained HTTP compatibility caller must supply authority consumed by
+				// the actual Core policy, not merely succeed against a permissive mock.
+				const allowed = isCurrentAgentGrantManageAllowedV1({
+					actor,
+					currentUser: {
+						schemaVersion: 1,
+						userId: identity.userId,
+						accountStatus: "active",
+						organizationIds: identity.organizationIds,
+						authorizationRevision:
+							channel === "api" ? apiRevision : identity.authorizationRevision,
+					},
+					credential:
+						channel === "api"
+							? {
+									principalType: "user",
+									principalId: principal.id,
+									scopes: credential.scopes,
+									expiresAt: null,
+									revokedAt: null,
+									recipientUserId: null,
+								}
+							: null,
+					application: null,
+					recipient: null,
+					delivery: null,
+					nowMs: Date.now(),
+					isOwner: true,
+					authorizationRevision: "agent-revision-current",
+					grants: [
+						{
+							grantType: "manage",
+							authorizationRevision: "agent-revision-current",
+							revokedAt: null,
+						},
+					],
+				});
+				if (!allowed) throw new ApiIdentityError("resource_unavailable");
+			};
+			const grantAgent = vi
+				.fn()
+				.mockImplementation(async (input: { actor: ApiIdentityActorV1 }) => {
+					requireCurrentPolicy(input.actor);
+					return "authorization-revision-2";
+				});
+			const revokeAgentGrant = vi
+				.fn()
+				.mockImplementation(async (input: { actor: ApiIdentityActorV1 }) => {
+					requireCurrentPolicy(input.actor);
+					return true;
+				});
+			const getAgent = vi.fn().mockResolvedValue(agentRecord);
+			registerManagementRoutes(app, {
+				identity: {
+					resolve: vi.fn().mockResolvedValue(identity),
+					resolveApiCredential: vi.fn().mockResolvedValue(api),
+					hydrateUsers: vi.fn().mockResolvedValue([]),
+				},
+				apiIdentity: {
+					authorizeCredentialScope: vi.fn(),
+					resolveAgentQueryGrantType: vi.fn(),
+					listUserCredentials: vi.fn(),
+					issueUserCredential: vi.fn(),
+					revokeUserCredential: vi.fn(),
+					listApplications: vi.fn(),
+					createApplication: vi.fn(),
+					listApplicationCredentials: vi.fn(),
+					issueApplicationCredential: vi.fn(),
+					revokeApplicationCredential: vi.fn(),
+					grantCredentialDelivery: vi.fn(),
+					revokeCredentialDelivery: vi.fn(),
+					grantAgent,
+					revokeAgentGrant,
+					recordAccessRejection: vi.fn(),
+				},
+				foundation: { submit: vi.fn() },
+				revision: { revise: vi.fn() },
+				management: { executeManagementCommand: vi.fn() },
+				configuration: { upgradeCustomImage: vi.fn() },
+				query: {
+					listApplications: vi.fn(),
+					getApplication: vi.fn(),
+					listAgents: vi.fn(),
+					getAgent,
+				},
+				allocateApplicationIds: vi.fn(),
+				prepareSecretReplacements: vi.fn(),
+				readApplicationProjection: vi.fn(),
+				readAgentProjection: vi.fn(),
+			});
+			const grantHeaders =
+				channel === "api"
+					? { ...headers, Authorization: "Bearer synthetic-credential" }
+					: headers;
+			const body = JSON.stringify({
+				schemaVersion: 1,
+				principal: { kind: "application", id: "application-caller" },
+				grantType: "use",
+			});
+			const granted = await app.request("/api/v1/agents/agent-1/grants", {
+				method: "POST",
+				headers: grantHeaders,
+				body,
+			});
+			expect(granted.status).toBe(200);
+			expect(await granted.json()).toMatchObject({
 				agentId: "agent-1",
 				principal: { kind: "application", id: "application-caller" },
 				grantType: "use",
-			}),
-		);
+				revokedAt: null,
+			});
+			expect(grantAgent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					agentId: "agent-1",
+					principal: { kind: "application", id: "application-caller" },
+					grantType: "use",
+				}),
+			);
 
-		const revoked = await app.request("/api/v1/agents/agent-1/grants", {
-			method: "DELETE",
-			headers,
-			body,
-		});
-		expect(revoked.status).toBe(204);
-		expect(revokeAgentGrant).toHaveBeenCalledWith(
-			expect.objectContaining({
-				agentId: "agent-1",
-				principal: { kind: "application", id: "application-caller" },
-				grantType: "use",
-			}),
-		);
-	});
+			const revoked = await app.request("/api/v1/agents/agent-1/grants", {
+				method: "DELETE",
+				headers: grantHeaders,
+				body,
+			});
+			expect(revoked.status).toBe(204);
+			expect(revokeAgentGrant).toHaveBeenCalledWith(
+				expect.objectContaining({
+					agentId: "agent-1",
+					principal: { kind: "application", id: "application-caller" },
+					grantType: "use",
+				}),
+			);
+		},
+	);
 
 	it("submits a credential-free application without preparing an attachment", async () => {
 		const { app, submit, prepareSecretReplacements } = createApp();

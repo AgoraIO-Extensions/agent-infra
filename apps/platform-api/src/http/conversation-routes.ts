@@ -1258,7 +1258,7 @@ export function registerConversationRoutes(
 				identity,
 				{ schemaVersion: 1, operation: "conversation.read", conversationId },
 				metadata.traceId,
-				"sse",
+				"http",
 			);
 			const initialReplay = await query(
 				() =>
@@ -1269,7 +1269,7 @@ export function registerConversationRoutes(
 					),
 				metadata.traceId,
 			);
-			if (!initialReplay) return fail("FORBIDDEN", metadata.traceId);
+			if (!initialReplay) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
 			if (initialReplay.outcome === "events") {
 				try {
 					initialReplay.events.forEach(eventProjectionV2);

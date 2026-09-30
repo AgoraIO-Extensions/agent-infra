@@ -5,6 +5,7 @@ import {
 	ApiIdentityError,
 	type ApiIdentityStorePortV1,
 	createApiIdentityManagementV1,
+	isCurrentAgentGrantManageAllowedV1,
 	isCurrentCredentialDeliveryManagerV1,
 } from "./api-identity-management.js";
 
@@ -110,6 +111,64 @@ function management(store: ApiIdentityStorePortV1) {
 }
 
 describe("API identity management authorization", () => {
+	it("requires current browser authority for both Owner and administrator grants", () => {
+		const browser = {
+			schemaVersion: 1 as const,
+			userId: "owner-1",
+			accountStatus: "active" as const,
+			identityRevision: "current-1",
+			isAdministrator: false,
+		};
+		const currentUser = {
+			schemaVersion: 1 as const,
+			userId: "owner-1",
+			accountStatus: "active" as const,
+			authorizationRevision: "current-1",
+			organizationIds: [],
+		};
+		const facts = {
+			actor: browser,
+			currentUser,
+			credential: null,
+			application: null,
+			recipient: null,
+			delivery: null,
+			nowMs: Date.now(),
+			isOwner: true,
+			authorizationRevision: "agent-1",
+			grants: [],
+		};
+		expect(isCurrentAgentGrantManageAllowedV1(facts)).toBe(true);
+		for (const isAdministrator of [false, true]) {
+			const actor = { ...browser, isAdministrator };
+			for (const currentUser of [
+				null,
+				{ ...facts.currentUser, accountStatus: "disabled" as const },
+				{ ...facts.currentUser, userId: "different-user" },
+				{ ...facts.currentUser, authorizationRevision: "demoted-revision" },
+			])
+				expect(
+					isCurrentAgentGrantManageAllowedV1({ ...facts, actor, currentUser }),
+				).toBe(false);
+			expect(
+				isCurrentAgentGrantManageAllowedV1({
+					...facts,
+					actor: { ...actor, identityRevision: undefined },
+				}),
+			).toBe(false);
+		}
+		expect(
+			isCurrentAgentGrantManageAllowedV1({
+				...facts,
+				isOwner: false,
+				actor: { ...browser, isAdministrator: true },
+			}),
+		).toBe(true);
+		expect(
+			isCurrentAgentGrantManageAllowedV1({ ...facts, isOwner: false }),
+		).toBe(false);
+	});
+
 	it("allows delivery changes only for a current administrator or responsible user", () => {
 		const browserActor = {
 			schemaVersion: 1 as const,

@@ -7,12 +7,14 @@ import {
 	type ApiIdentityAuditInputV1,
 	ApiIdentityError,
 	type ApiPrincipalV1,
+	type CurrentTaskUserV1,
 	hashApiCredentialV1,
 	isApiCredentialScopeV1,
+	isCurrentAgentGrantManageAllowedV1,
 	isCurrentCredentialDeliveryManagerV1,
 	parseCurrentTaskUserV1,
 } from "@agent-infra/platform-core";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
@@ -22,8 +24,10 @@ import {
 	agents,
 	apiCredentialDeliveryGrants,
 	auditEvents,
+	ldapIdentityIds,
 	platformApiCredentials,
 	platformApplications,
+	platformUserDisables,
 } from "./schema.js";
 
 export interface PostgresApiIdentityStoreOptionsV1 {
@@ -38,14 +42,36 @@ export type {
 } from "@agent-infra/platform-core";
 
 type ApiIdentityDatabase = ReturnType<typeof drizzle>;
-type ApiIdentityTransaction = Parameters<
-	Parameters<ApiIdentityDatabase["transaction"]>[0]
->[0];
 type ApiIdentityAuditDatabase = Pick<ApiIdentityDatabase, "insert">;
 
 type ApiIdentityAuditTargetV1 = ApiIdentityAuditInputV1 & {
 	readonly targetId: string;
 };
+
+async function currentUserAtWrite(
+	database: Pick<ApiIdentityDatabase, "select">,
+	userId: string,
+	resolveUser?: (userId: string) => Promise<unknown | null>,
+): Promise<ReturnType<typeof parseCurrentTaskUserV1> | null> {
+	// A deployment without LDAP mappings still resolves its own user authority.
+	await database
+		.select({ userId: ldapIdentityIds.userId })
+		.from(ldapIdentityIds)
+		.where(eq(ldapIdentityIds.userId, userId))
+		.limit(1)
+		.for("share");
+	const [disabled] = await database
+		.select({ userId: platformUserDisables.userId })
+		.from(platformUserDisables)
+		.where(eq(platformUserDisables.userId, userId))
+		.limit(1);
+	if (disabled || !resolveUser) return null;
+	try {
+		return parseCurrentTaskUserV1(await resolveUser(userId));
+	} catch {
+		return null;
+	}
+}
 
 async function writeApiIdentityAudit(
 	database: ApiIdentityAuditDatabase,
@@ -81,13 +107,18 @@ function principalType(principal: ApiPrincipalV1): "user" | "application" {
 }
 
 async function hasCurrentDeliveryManager(
+	database: Pick<ApiIdentityDatabase, "select">,
 	actor: ApiIdentityActorV1,
 	responsibleUserId: string,
 	resolveUser?: (userId: string) => Promise<unknown | null>,
 ): Promise<boolean> {
 	if (!resolveUser) return false;
 	try {
-		const current = parseCurrentTaskUserV1(await resolveUser(actor.userId));
+		const current = await currentUserAtWrite(
+			database,
+			actor.userId,
+			resolveUser,
+		);
 		return isCurrentCredentialDeliveryManagerV1({
 			actor,
 			responsibleUserId,
@@ -98,97 +129,129 @@ async function hasCurrentDeliveryManager(
 	}
 }
 
-async function hasCurrentAgentManageAuthority(
-	transaction: ApiIdentityTransaction,
+async function hasCurrentManageAuthority(
+	database: Pick<ApiIdentityDatabase, "select" | "execute">,
+	actor: ApiIdentityActorV1,
 	agentId: string,
 	authorizationRevision: string | null,
-	actor: ApiIdentityActorV1,
+	resolveUser?: (userId: string) => Promise<unknown | null>,
 ): Promise<boolean> {
-	if (actor.accountStatus !== "active") return false;
-	if (actor.principal) {
-		const credentialId = actor.credential?.credentialId;
-		if (!credentialId) return false;
-		const [credential] = await transaction
+	let application: {
+		status: string;
+		responsibleUserId: string;
+		authorizationRevision: string;
+	} | null = null;
+	if (actor.principal?.kind === "application") {
+		const [row] = await database
 			.select({
-				principalType: platformApiCredentials.principalType,
-				principalId: platformApiCredentials.principalId,
-				scopes: platformApiCredentials.scopes,
-				expiresAt: platformApiCredentials.expiresAt,
-				revokedAt: platformApiCredentials.revokedAt,
+				status: platformApplications.status,
+				responsibleUserId: platformApplications.responsibleUserId,
+				authorizationRevision: platformApplications.authorizationRevision,
 			})
-			.from(platformApiCredentials)
-			.where(eq(platformApiCredentials.id, credentialId))
+			.from(platformApplications)
+			.where(eq(platformApplications.id, actor.principal.id))
 			.limit(1)
 			.for("share");
-		if (
-			!credential ||
-			credential.principalType !== actor.principal.kind ||
-			credential.principalId !== actor.principal.id ||
-			credential.revokedAt !== null ||
-			(credential.expiresAt !== null &&
-				credential.expiresAt.getTime() <= Date.now()) ||
-			!credential.scopes.includes("agent:manage")
-		)
-			return false;
-		if (actor.principal.kind === "application") {
-			const [application] = await transaction
-				.select({
-					status: platformApplications.status,
-					responsibleUserId: platformApplications.responsibleUserId,
-				})
-				.from(platformApplications)
-				.where(eq(platformApplications.id, actor.principal.id))
-				.limit(1)
-				.for("share");
-			if (
-				application?.status !== "active" ||
-				application.responsibleUserId !== actor.userId
-			)
-				return false;
-		}
+		application = row ?? null;
 	}
-	if (actor.isAdministrator) return true;
-	if (actor.principal?.kind === "user" && actor.principal.id !== actor.userId)
-		return false;
-	if (actor.principal === undefined) {
-		const [owner] = await transaction
-			.select({ agentId: agentOwners.agentId })
-			.from(agentOwners)
+	const [credential] =
+		actor.principal && actor.credential
+			? await database
+					.select({
+						principalType: platformApiCredentials.principalType,
+						principalId: platformApiCredentials.principalId,
+						scopes: platformApiCredentials.scopes,
+						expiresAt: platformApiCredentials.expiresAt,
+						revokedAt: platformApiCredentials.revokedAt,
+						recipientUserId: platformApiCredentials.recipientUserId,
+					})
+					.from(platformApiCredentials)
+					.where(eq(platformApiCredentials.id, actor.credential.credentialId))
+					.limit(1)
+					.for("share")
+			: [];
+	const currentUser =
+		actor.principal?.kind === "application"
+			? null
+			: await currentUserAtWrite(database, actor.userId, resolveUser);
+	let recipient: CurrentTaskUserV1 | null = null;
+	let delivery: {
+		authorizationRevision: string;
+		revokedAt: Date | null;
+	} | null = null;
+	if (actor.principal?.kind === "application" && credential?.recipientUserId) {
+		recipient = await currentUserAtWrite(
+			database,
+			credential.recipientUserId,
+			resolveUser,
+		);
+		const [row] = await database
+			.select({
+				authorizationRevision:
+					apiCredentialDeliveryGrants.authorizationRevision,
+				revokedAt: apiCredentialDeliveryGrants.revokedAt,
+			})
+			.from(apiCredentialDeliveryGrants)
 			.where(
 				and(
-					eq(agentOwners.agentId, agentId),
-					eq(agentOwners.ownerId, actor.userId),
+					eq(apiCredentialDeliveryGrants.applicationId, actor.principal.id),
+					eq(apiCredentialDeliveryGrants.principalType, "user"),
+					eq(
+						apiCredentialDeliveryGrants.principalId,
+						credential.recipientUserId,
+					),
 				),
 			)
 			.limit(1)
 			.for("share");
-		if (owner) return true;
+		delivery = row ?? null;
 	}
-	const principal = actor.principal ?? {
-		kind: "user" as const,
-		id: actor.userId,
-	};
-	const [grant] = await transaction
-		.select({ agentId: agentPrincipalGrants.agentId })
-		.from(agentPrincipalGrants)
-		.where(
-			and(
-				eq(agentPrincipalGrants.agentId, agentId),
-				eq(agentPrincipalGrants.principalType, principal.kind),
-				eq(agentPrincipalGrants.principalId, principal.id),
-				eq(agentPrincipalGrants.grantType, "manage"),
-				isNull(agentPrincipalGrants.revokedAt),
-				authorizationRevision === null
-					? undefined
-					: eq(
-							agentPrincipalGrants.authorizationRevision,
-							authorizationRevision,
+	const [owner] =
+		actor.principal === undefined
+			? await database
+					.select({ agentId: agentOwners.agentId })
+					.from(agentOwners)
+					.where(
+						and(
+							eq(agentOwners.agentId, agentId),
+							eq(agentOwners.ownerId, actor.userId),
 						),
-			),
-		)
-		.limit(1)
-		.for("share");
-	return grant !== undefined;
+					)
+					.limit(1)
+					.for("share")
+			: [];
+	const grants = actor.principal
+		? await database
+				.select({
+					grantType: agentPrincipalGrants.grantType,
+					authorizationRevision: agentPrincipalGrants.authorizationRevision,
+					revokedAt: agentPrincipalGrants.revokedAt,
+				})
+				.from(agentPrincipalGrants)
+				.where(
+					and(
+						eq(agentPrincipalGrants.agentId, agentId),
+						eq(agentPrincipalGrants.principalType, actor.principal.kind),
+						eq(agentPrincipalGrants.principalId, actor.principal.id),
+					),
+				)
+				.for("share")
+		: [];
+	const clock = await database.execute<{ now_ms: string }>(
+		sql`select (extract(epoch from clock_timestamp()) * 1000)::text as now_ms`,
+	);
+	return isCurrentAgentGrantManageAllowedV1({
+		actor,
+		credential: credential ?? null,
+		currentUser,
+		application,
+		recipient,
+		delivery,
+		nowMs: Number(clock[0]?.now_ms),
+		isOwner: owner !== undefined,
+		authorizationRevision,
+		grants,
+	});
 }
 
 function metadata(
@@ -538,6 +601,7 @@ export class PostgresApiIdentityStoreV1 {
 				application?.status !== "active" ||
 				application?.authorizationRevision !== input.authorizationRevision ||
 				!(await hasCurrentDeliveryManager(
+					transaction,
 					input.actor,
 					application.responsibleUserId,
 					this.#resolveUser,
@@ -597,6 +661,7 @@ export class PostgresApiIdentityStoreV1 {
 			if (
 				!application ||
 				!(await hasCurrentDeliveryManager(
+					transaction,
 					input.actor,
 					application.responsibleUserId,
 					this.#resolveUser,
@@ -698,11 +763,12 @@ export class PostgresApiIdentityStoreV1 {
 				.for("update");
 			if (
 				!agent ||
-				!(await hasCurrentAgentManageAuthority(
+				!(await hasCurrentManageAuthority(
 					transaction,
+					input.actor,
 					input.agentId,
 					agent.authorizationRevision,
-					input.actor,
+					this.#resolveUser,
 				))
 			)
 				throw new ApiIdentityError("resource_unavailable");
@@ -710,15 +776,21 @@ export class PostgresApiIdentityStoreV1 {
 				.update(agents)
 				.set({ authorizationRevision: input.authorizationRevision })
 				.where(eq(agents.id, input.agentId));
-			await transaction
-				.update(agentPrincipalGrants)
-				.set({ authorizationRevision: input.authorizationRevision })
-				.where(
-					and(
-						eq(agentPrincipalGrants.agentId, input.agentId),
-						isNull(agentPrincipalGrants.revokedAt),
-					),
-				);
+			if (agent.authorizationRevision !== null) {
+				await transaction
+					.update(agentPrincipalGrants)
+					.set({ authorizationRevision: input.authorizationRevision })
+					.where(
+						and(
+							eq(agentPrincipalGrants.agentId, input.agentId),
+							eq(
+								agentPrincipalGrants.authorizationRevision,
+								agent.authorizationRevision,
+							),
+							isNull(agentPrincipalGrants.revokedAt),
+						),
+					);
+			}
 			await transaction
 				.insert(agentPrincipalGrants)
 				.values({
@@ -767,14 +839,16 @@ export class PostgresApiIdentityStoreV1 {
 				.for("update");
 			if (
 				!agent ||
-				!(await hasCurrentAgentManageAuthority(
+				!(await hasCurrentManageAuthority(
 					transaction,
+					input.actor,
 					input.agentId,
 					agent.authorizationRevision,
-					input.actor,
+					this.#resolveUser,
 				))
 			)
 				throw new ApiIdentityError("resource_unavailable");
+			if (agent.authorizationRevision === null) return false;
 			const rows = await transaction
 				.update(agentPrincipalGrants)
 				.set({ revokedAt: input.revokedAt ?? new Date() })
@@ -787,6 +861,10 @@ export class PostgresApiIdentityStoreV1 {
 						),
 						eq(agentPrincipalGrants.principalId, input.principal.id),
 						eq(agentPrincipalGrants.grantType, input.grantType),
+						eq(
+							agentPrincipalGrants.authorizationRevision,
+							agent.authorizationRevision,
+						),
 						isNull(agentPrincipalGrants.revokedAt),
 					),
 				)
@@ -803,6 +881,10 @@ export class PostgresApiIdentityStoreV1 {
 				.where(
 					and(
 						eq(agentPrincipalGrants.agentId, input.agentId),
+						eq(
+							agentPrincipalGrants.authorizationRevision,
+							agent.authorizationRevision,
+						),
 						isNull(agentPrincipalGrants.revokedAt),
 					),
 				);

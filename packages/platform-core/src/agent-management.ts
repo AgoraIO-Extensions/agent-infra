@@ -24,6 +24,70 @@ export type AgentManagementStatusV1 =
 	| "creation_failed"
 	| "disabled";
 
+export function isCurrentApiAgentManagementAuthorizedV1(input: {
+	readonly actorId: string;
+	readonly apiAuthority?: AgentManagementTransactionRequestV1["apiAuthority"];
+	readonly credential?: {
+		readonly principalType: string;
+		readonly principalId: string;
+		readonly scopes: unknown;
+		readonly expiresAt: Date | null;
+		readonly revokedAt: Date | null;
+		readonly recipientUserId: string | null;
+	} | null;
+	readonly nowMs?: number;
+	readonly currentUser?: {
+		readonly userId: string;
+		readonly accountStatus: "active" | "disabled";
+		readonly authorizationRevision: string;
+	} | null;
+	readonly currentApplication?: {
+		readonly status: string;
+		readonly authorizationRevision: string;
+	} | null;
+	readonly currentRecipient?: {
+		readonly userId: string;
+		readonly accountStatus: "active" | "disabled";
+	} | null;
+	readonly currentDelivery?: {
+		readonly authorizationRevision: string;
+		readonly revokedAt: Date | null;
+	} | null;
+}): boolean {
+	const { apiAuthority, credential, nowMs } = input;
+	if (!apiAuthority) return true;
+	if (
+		!credential ||
+		nowMs === undefined ||
+		!Number.isFinite(nowMs) ||
+		apiAuthority.principal.id !== input.actorId ||
+		credential.principalType !== apiAuthority.principal.kind ||
+		credential.principalId !== apiAuthority.principal.id ||
+		!Array.isArray(credential.scopes) ||
+		!credential.scopes.includes("agent:manage") ||
+		credential.revokedAt !== null ||
+		(credential.expiresAt !== null && !(credential.expiresAt.getTime() > nowMs))
+	)
+		return false;
+	if (apiAuthority.principal.kind === "user")
+		return (
+			input.currentUser?.userId === apiAuthority.principal.id &&
+			input.currentUser.accountStatus === "active" &&
+			input.currentUser.authorizationRevision === apiAuthority.identityRevision
+		);
+	return (
+		input.currentApplication?.status === "active" &&
+		input.currentApplication.authorizationRevision ===
+			apiAuthority.identityRevision &&
+		credential.recipientUserId !== null &&
+		input.currentRecipient?.userId === credential.recipientUserId &&
+		input.currentRecipient.accountStatus === "active" &&
+		input.currentDelivery?.revokedAt === null &&
+		input.currentDelivery.authorizationRevision ===
+			apiAuthority.identityRevision
+	);
+}
+
 export type AgentServiceAvailabilityV1 =
 	| "ready"
 	| "starting"
@@ -303,6 +367,11 @@ export interface AgentManagementTransactionRequestV1 {
 	readonly actorId: string;
 	readonly idempotencyKey: string;
 	readonly requestDigest: string;
+	readonly apiAuthority?: {
+		readonly credentialId: string;
+		readonly identityRevision: string;
+		readonly principal: ApiPrincipalV1;
+	};
 }
 
 export interface AgentManagementTransactionPortV1 {
