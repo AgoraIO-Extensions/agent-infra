@@ -56,6 +56,76 @@ jobs:
           docker build --target builder -f apps/agent-runtime-host/Dockerfile
           --tag agent-infra-codex-native-test .
 
+      - name: Verify native Codex metadata command
+        id: codex_native_command
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          evidence=.codex-native-command-evidence
+          mkdir -p "$evidence"
+          printf 'not_started\n' > "$evidence/result.txt"
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          printf '%s\n' "$SOURCE_COMMIT" > "$evidence/source.txt"
+          sha256sum packages/agent-runtime/src/codex-native-command{.native.test.ts,.test-support.ts,.test.ts} \
+            packages/agent-runtime/src/codex-runtime-driver.ts \
+            apps/agent-runtime-host/Dockerfile pnpm-lock.yaml > "$evidence/source.sha256"
+          docker info --format '{{json .}}' | jq '{ID, DockerRootDir, Architecture}' > "$evidence/daemon.json"
+          docker image inspect agent-infra-codex-native-test \
+            --format '{{json .}}' | jq '{Id, RepoDigests, Os, Architecture}' > "$evidence/image.json"
+          docker_root=$(docker info --format '{{.DockerRootDir}}')
+          df -Pk "$docker_root" > "$evidence/capacity-before.txt"
+          available_kib=$(awk 'NR==2 {print $4}' "$evidence/capacity-before.txt")
+          if (( available_kib < 5242880 )); then
+            printf 'capacity_blocked\n' > "$evidence/result.txt"
+            cat "$evidence/capacity-before.txt"
+            exit 1
+          fi
+          container="codex-native-command-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          set +e
+          timeout --signal=TERM --kill-after=5s 175s \
+            docker run --rm --pull=never --name "$container" \
+            --network=none --read-only --user 1000:1000 \
+            --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,exec,size=256m,mode=1777 \
+            --env AGENT_INFRA_CODEX_NATIVE_TEST=1 \
+            --env PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin \
+            agent-infra-codex-native-test sh -ec '
+              cat /opt/codex/share/release.json >&2
+              sha256sum /opt/codex/bin/codex /opt/codex/share/release.json >&2
+              exec pnpm --filter @agent-infra/agent-runtime exec vitest run \
+                src/codex-native-command.native.test.ts --cache=false \
+                --maxWorkers=1 --no-file-parallelism --reporter=json
+            ' > "$evidence/test.json" 2> "$evidence/native.stderr.log"
+          status=$?
+          set -e
+          printf '%s\n' "$status" > "$evidence/exit-code.txt"
+          if docker container inspect "$container" >/dev/null 2>&1; then
+            docker stop --time 5 "$container"
+          fi
+          df -Pk "$docker_root" > "$evidence/capacity-after.txt"
+          cat "$evidence/native.stderr.log" "$evidence/test.json"
+          if (( status != 0 )); then
+            printf 'failed_or_timed_out\n' > "$evidence/result.txt"
+            exit "$status"
+          fi
+          if ! jq -e '.success == true and .numTotalTests == 1 and .numPassedTests == 1 and .numPendingTests == 0' \
+            "$evidence/test.json"; then
+            printf 'skipped_or_invalid_report\n' > "$evidence/result.txt"
+            exit 1
+          fi
+          printf 'passed_one_native_test\n' > "$evidence/result.txt"
+
+      - name: Upload Codex metadata command evidence
+        if: ${{ !cancelled() && steps.codex_native_command.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-native-command-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .codex-native-command-evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Verify native Codex recovery
         run: |
           docker run --rm --pull=never --network=none --read-only \
