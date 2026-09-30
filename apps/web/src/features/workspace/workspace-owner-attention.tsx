@@ -125,7 +125,10 @@ export function WorkspaceOwnerAttention({
 			) : null}
 
 			{rejectedApplications.length > 0 || failedAgents.length > 0 ? (
-				<ul className="grid gap-4 md:grid-cols-2" aria-label="Owner 待办">
+				<ul
+					className="grid gap-4 min-[821px]:grid-cols-2"
+					aria-label="Owner 待办"
+				>
 					{rejectedApplications.map((application) => (
 						<li
 							key={`application:${application.applicationId}`}

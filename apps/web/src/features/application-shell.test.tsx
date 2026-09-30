@@ -22,17 +22,26 @@ import { useBrowserSession } from "./use-browser-session";
 
 let locationPathname = "/agents";
 vi.mock("@tanstack/react-router", () => ({
-	useLocation: () => locationPathname,
+	useLocation: ({
+		select,
+	}: {
+		select: (location: {
+			pathname: string;
+			search: { mode?: string };
+		}) => unknown;
+	}) => select({ pathname: locationPathname, search: {} }),
 	Link: ({
 		children,
 		className,
 		to,
+		"aria-current": ariaCurrent,
 	}: {
 		children: ReactNode;
 		className?: string;
 		to: string;
+		"aria-current"?: "page" | "true";
 	}) => (
-		<a className={className} href={to}>
+		<a className={className} href={to} aria-current={ariaCurrent}>
 			{children}
 		</a>
 	),
@@ -281,8 +290,12 @@ describe("IA navigation", () => {
 		).toBe("/admin/agents");
 	});
 
-	it("does not expose system management to a non-administrator", () => {
-		locationPathname = "/my-agents/new";
+	it.each([
+		"/my-agents/new",
+		"/my-agents/application-1/edit",
+		"/agents/agent-1/configuration",
+	])("keeps %s under my management without system access", (pathname) => {
+		locationPathname = pathname;
 		setup(identity("owner"));
 
 		expect(screen.queryByRole("navigation", { name: "系统管理" })).toBeNull();
@@ -297,5 +310,15 @@ describe("IA navigation", () => {
 				.getByRole("link", { name: "我的 Agent" })
 				.classList.contains("selected"),
 		).toBe(false);
+		expect(
+			screen
+				.getByRole("link", { name: "Agent", exact: true })
+				.classList.contains("selected"),
+		).toBe(false);
+		expect(
+			screen
+				.getByRole("link", { name: "创建与配置" })
+				.getAttribute("aria-current"),
+		).toBe(pathname === "/my-agents/new" ? "page" : "true");
 	});
 });

@@ -65,6 +65,7 @@ async function fixture(
 	let agent = AgentProjectionV2Schema.parse(
 		pilotFakeScenariosV2.starting.response.body,
 	);
+	let additionalAgents: (typeof agent)[] = [];
 	let deployment = deploymentConfiguration;
 	let pendingQueueUnavailable = false;
 	let pendingQueueUnauthorized = false;
@@ -140,7 +141,8 @@ async function fixture(
 			return {
 				status: 200,
 				body: {
-					items: ownerScope && role !== "owner" ? [] : [agent],
+					items:
+						ownerScope && role !== "owner" ? [] : [agent, ...additionalAgents],
 					nextCursor: null,
 				},
 			};
@@ -325,6 +327,15 @@ async function fixture(
 		commands,
 		visibleAgentListRequests: () => visibleAgentListRequests,
 		ownedAgentListRequests: () => ownedAgentListRequests,
+		threeAgents() {
+			additionalAgents = [2, 3].map((index) =>
+				AgentProjectionV2Schema.parse({
+					...agent,
+					agentId: `agent-visible-${index}`,
+					name: `Visible Agent ${index}`,
+				}),
+			);
+		},
 		failedCreationAgent() {
 			agent = AgentProjectionV2Schema.parse({
 				...agent,
@@ -493,7 +504,7 @@ async function capture(page: Page, info: TestInfo, name: string) {
 	expect(overflow).toEqual([]);
 	const workspaceLayout = await page
 		.locator(
-			".ia-workspace h1, .ia-workspace h2, .ia-workspace .workspace-card",
+			".ia-workspace, .ia-workspace h1, .ia-workspace h2, .ia-workspace .workspace-card",
 		)
 		.evaluateAll((elements) =>
 			elements.map((element) => {
@@ -1194,6 +1205,7 @@ test("workbench Owner attention uses scoped facts and returns through formal det
 	page,
 }, info) => {
 	const api = await fixture(page);
+	api.threeAgents();
 	api.failedCreationAgent();
 	api.rejectApplication();
 	await page.goto("/");
@@ -1214,6 +1226,45 @@ test("workbench Owner attention uses scoped facts and returns through formal det
 	expect(api.ownedAgentListRequests()).toBeGreaterThan(0);
 	expect(api.commands).toHaveLength(0);
 	await capture(page, info, "workspace-owner-attention");
+	const viewport = page.viewportSize();
+	for (const width of [800, 820, 821]) {
+		await page.setViewportSize({ width, height: 844 });
+		await expect
+			.poll(async () => {
+				const ownerCards = await attention
+					.getByRole("listitem")
+					.evaluateAll((cards) =>
+						cards.map((card) => ({
+							top: card.getBoundingClientRect().top,
+							left: card.getBoundingClientRect().left,
+						})),
+					);
+				const agentCards = await page
+					.getByRole("list", { name: "可用 Agent", exact: true })
+					.getByRole("listitem")
+					.evaluateAll((cards) =>
+						cards.map((card) => ({
+							top: card.getBoundingClientRect().top,
+							left: card.getBoundingClientRect().left,
+						})),
+					);
+				if (ownerCards.length !== 2 || agentCards.length !== 3) return false;
+				return [ownerCards, agentCards].every((cards) =>
+					cards.every((card, index) => {
+						if (index === 0) return true;
+						const first = cards[0];
+						const previous = cards[index - 1];
+						if (!first || !previous) return false;
+						return width <= 820
+							? Math.abs(card.left - first.left) < 1 && card.top > previous.top
+							: Math.abs(card.top - first.top) < 1 && card.left > previous.left;
+					}),
+				);
+			})
+			.toBe(true);
+		await capture(page, info, `workspace-cards-${width}px`);
+	}
+	if (viewport) await page.setViewportSize(viewport);
 	await attention.getByRole("link", { name: "查看原因并修改" }).click();
 	await expect(page).toHaveURL(/\/my-agents\/application-browser-1$/);
 	await expect(
@@ -1227,6 +1278,20 @@ test("workbench Owner attention uses scoped facts and returns through formal det
 	await attention.getByRole("link", { name: "查看状态并重试" }).click();
 	await expect(page).toHaveURL(/\/agents\/agent-pilot-1\/configuration$/);
 	await page.reload();
+	const mobileNavigation = page.getByRole("button", { name: "打开导航" });
+	if (info.project.name === "mobile") await mobileNavigation.click();
+	const navigation =
+		info.project.name === "mobile"
+			? page.getByRole("dialog", { name: "主导航" })
+			: page.locator(".platform-sidebar");
+	await expect(
+		navigation.getByRole("link", { name: "创建与配置", exact: true }),
+	).toHaveAttribute("aria-current", "true");
+	await expect(
+		navigation.getByRole("link", { name: "Agent", exact: true }),
+	).not.toHaveClass(/\bselected\b/);
+	if (info.project.name === "mobile")
+		await navigation.getByRole("button", { name: "关闭导航" }).click();
 	await expect(
 		page.getByRole("link", { name: "返回 Agent 详情" }),
 	).toBeVisible();

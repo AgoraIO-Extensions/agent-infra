@@ -135,7 +135,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const isMyAgentIndex =
 		pathname === "/my-agents" || pathname === "/my-agents/";
 	const isMyAgentConfiguration =
-		pathname === "/my-agents/new" || pathname.endsWith("/edit");
+		pathname === "/my-agents/new" ||
+		(myAgentPath && pathname.endsWith("/edit")) ||
+		(pathname.startsWith("/agents/") && pathname.endsWith("/configuration"));
 	const development =
 		import.meta.env.DEV &&
 		import.meta.env.VITE_PLATFORM_DEVELOPMENT_MODE === "controlled";
@@ -187,7 +189,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					工作台
 				</Link>
 				<Link
-					className={`platform-nav-item ${pathname.startsWith("/agents") && !pathname.includes("/conversations") && !conversationSelection ? "selected" : ""}`}
+					className={`platform-nav-item ${pathname.startsWith("/agents") && !pathname.includes("/conversations") && !conversationSelection && !isMyAgentConfiguration ? "selected" : ""}`}
 					aria-current={
 						(pathname === "/agents" || pathname === "/agents/") &&
 						!conversationSelection
@@ -230,7 +232,13 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				</Link>
 				<Link
 					className={`platform-nav-item ${isMyAgentConfiguration ? "selected" : ""}`}
-					aria-current={pathname === "/my-agents/new" ? "page" : undefined}
+					aria-current={
+						pathname === "/my-agents/new"
+							? "page"
+							: isMyAgentConfiguration
+								? "true"
+								: undefined
+					}
 					to="/my-agents/new"
 					onClick={() => setSheet(false)}
 				>

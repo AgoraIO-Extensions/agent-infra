@@ -42,10 +42,7 @@ function AgentState({ state }: { state: WorkspaceState<AgentDiscoveryState> }) {
 			</Empty>
 		);
 	return (
-		<ul
-			className="grid gap-4 md:grid-cols-2 xl:grid-cols-3"
-			aria-label="可用 Agent"
-		>
+		<ul className="grid gap-4 min-[821px]:grid-cols-3" aria-label="可用 Agent">
 			{state.agents.slice(0, 3).map((agent) => {
 				const ready = canStartPlatformConversation(agent);
 				return (
@@ -307,7 +304,7 @@ export function WorkspaceScreen({
 								需要管理员处理
 							</h2>
 						</div>
-						<div className="grid gap-4 md:grid-cols-2">
+						<div className="grid gap-4 min-[821px]:grid-cols-2">
 							<Link
 								className="workspace-card group flex min-h-28 items-start gap-4 border border-border bg-background p-5 hover:border-foreground"
 								to="/admin/approvals"
