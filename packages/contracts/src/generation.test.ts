@@ -123,6 +123,7 @@ describe("standard contract artifacts", () => {
 		expect(Object.keys(artifacts.pilotBrowserOpenapiV2.paths)).toEqual([
 			"/api/v2/admin/agent-applications",
 			"/api/v2/admin/agent-applications/{applicationId}/decision",
+			"/api/v2/admin/agents",
 			"/api/v2/admin/audit",
 			"/api/v2/agent-applications",
 			"/api/v2/agent-applications/{applicationId}",
