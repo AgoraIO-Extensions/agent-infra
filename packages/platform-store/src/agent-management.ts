@@ -248,6 +248,7 @@ export async function readAgentManagementState(
 		workloadRevision: application.workloadRevision,
 		fence: application.fence,
 		failureCode: application.failureCode,
+		authorizationRevision: application.authorizationRevision,
 		ownerIds: owners.map(({ ownerId }) => ownerId),
 		availability: availability.map(({ targetType, targetId }) =>
 			targetType === "user"
@@ -738,6 +739,7 @@ function agentScopeCondition(scope: AgentManagementAgentScopeV1) {
 }
 
 const projectionAccessSelection = {
+	authorizationRevision: agents.authorizationRevision,
 	ownerIds: sql<string[]>`coalesce((
 		select jsonb_agg(${agentOwners.ownerId} order by ${agentOwners.ownerId})
 		from ${agentOwners}
@@ -851,6 +853,7 @@ interface ManagementProjectionRow {
 	readonly applicantId: string;
 	readonly status: AgentManagementStateV1["status"];
 	readonly revision: number;
+	readonly authorizationRevision: string | null;
 	readonly approvalRevision: number | null;
 	readonly decisionReason: string | null;
 	readonly serviceAvailability: AgentManagementStateV1["serviceAvailability"];
@@ -908,6 +911,7 @@ function managementState(row: ManagementProjectionRow): AgentManagementStateV1 {
 		applicantId: row.applicantId,
 		status: row.status,
 		revision: row.revision,
+		authorizationRevision: row.authorizationRevision,
 		approvalRevision: row.approvalRevision,
 		decisionReason: row.decisionReason,
 		serviceAvailability: row.serviceAvailability,

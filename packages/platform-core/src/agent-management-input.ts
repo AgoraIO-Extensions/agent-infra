@@ -263,13 +263,16 @@ export function parseAgentManagementPortState(
 			"availability",
 			"failureCode",
 		];
+		requireAgentManagementExactKeys(values, [
+			...requiredKeys,
+			...["principalGrants", "authorizationRevision"].filter((key) =>
+				Object.hasOwn(values, key),
+			),
+		]);
 		if (
-			Object.keys(values).length < requiredKeys.length ||
-			Object.keys(values).some(
-				(key) => !requiredKeys.includes(key) && key !== "principalGrants",
-			) ||
-			(Object.hasOwn(values, "principalGrants") &&
-				Object.keys(values).length !== 16)
+			Object.hasOwn(values, "authorizationRevision") &&
+			values.authorizationRevision !== null &&
+			!isAgentManagementText(values.authorizationRevision)
 		)
 			invalidAgentManagementInput();
 		const statuses: readonly AgentManagementStatusV1[] = [
@@ -416,6 +419,13 @@ export function parseAgentManagementPortState(
 			ownerIds,
 			availability,
 			failureCode: values.failureCode as AgentFailureCodeV1 | null,
+			...(Object.hasOwn(values, "authorizationRevision")
+				? {
+						authorizationRevision: values.authorizationRevision as
+							| string
+							| null,
+					}
+				: {}),
 			...(principalGrants === undefined ? {} : { principalGrants }),
 		};
 	} catch {

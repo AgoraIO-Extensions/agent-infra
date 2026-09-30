@@ -1115,6 +1115,21 @@ describe("PostgreSQL Agent-management Adapter", () => {
 		expect((await query.listAgents(scope, { limit: 10 })).items).toHaveLength(
 			1,
 		);
+		expect(await query.getAgent(scope, state.agentId)).toMatchObject({
+			management: { authorizationRevision: "revision-1" },
+		});
+		const transaction = new PostgresAgentManagementTransactionV1({
+			databaseUrl,
+		});
+		adapters.push(transaction);
+		expect(
+			await transaction.resolveAgentAccessState(state.agentId),
+		).toMatchObject({
+			authorizationRevision: "revision-1",
+			principalGrants: expect.arrayContaining([
+				expect.objectContaining({ authorizationRevision: "revision-1" }),
+			]),
+		});
 		await adminClient`
 			update platform.agents set authorization_revision = 'revision-2'
 			where id = ${state.agentId}
@@ -1127,7 +1142,15 @@ describe("PostgreSQL Agent-management Adapter", () => {
 		expect((await query.listAgents(scope, { limit: 10 })).items).toEqual([]);
 		expect(
 			await query.getAgent({ kind: "administrator" }, state.agentId),
-		).toMatchObject({ management: { principalGrants: [] } });
+		).toMatchObject({
+			management: { authorizationRevision: null, principalGrants: [] },
+		});
+		expect(
+			await transaction.resolveAgentAccessState(state.agentId),
+		).toMatchObject({
+			authorizationRevision: null,
+			principalGrants: [],
+		});
 		await adminClient`
 			update platform.agents set authorization_revision = 'revision-1'
 			where id = ${state.agentId}

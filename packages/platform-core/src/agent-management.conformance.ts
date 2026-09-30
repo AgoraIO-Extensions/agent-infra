@@ -812,6 +812,7 @@ export function agentManagementV1Conformance(
 		const state = stateFixture({
 			applicationId: "application_api_disable",
 			agentId: "agent_api_disable",
+			authorizationRevision: "grant_1",
 			principalGrants: [
 				{
 					principal: { kind: "application", id: "application_caller" },

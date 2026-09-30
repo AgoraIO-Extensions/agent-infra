@@ -200,6 +200,8 @@ export interface AgentManagementStateV1 {
 		| { readonly kind: "application"; readonly applicationId: string }
 	)[];
 	readonly failureCode: AgentFailureCodeV1 | null;
+	/** Current Agent authority from the trusted Store; required for API principal grants. */
+	readonly authorizationRevision?: string | null;
 	readonly principalGrants?: readonly {
 		readonly principal: ApiPrincipalV1;
 		readonly grantType: "manage" | "use";
@@ -223,6 +225,7 @@ export function isAgentAccessAllowedV1(
 ): boolean {
 	if (actor.accountStatus !== "active") return false;
 	if (actor.principal !== undefined) {
+		if (!state.authorizationRevision) return false;
 		return (state.principalGrants ?? []).some(
 			(grant) =>
 				grant.principal.kind === actor.principal?.kind &&
@@ -230,6 +233,7 @@ export function isAgentAccessAllowedV1(
 				(intent === "discover"
 					? grant.grantType === "manage" || grant.grantType === "use"
 					: grant.grantType === intent) &&
+				grant.authorizationRevision === state.authorizationRevision &&
 				grant.revokedAt === null,
 		);
 	}
@@ -960,13 +964,7 @@ export function createAgentManagementV1(
 							command.command === "reject_application";
 						const owner = state.ownerIds.includes(actorContext.userId);
 						const principalGrant = actorContext.principal
-							? (state.principalGrants ?? []).some(
-									(grant) =>
-										grant.principal.kind === actorContext.principal?.kind &&
-										grant.principal.id === actorContext.principal?.id &&
-										grant.grantType === "manage" &&
-										grant.revokedAt === null,
-								)
+							? isAgentAccessAllowedV1(state, actorContext, "manage")
 							: false;
 						const authorized = actorContext.principal
 							? !administratorApplicationCommand &&
