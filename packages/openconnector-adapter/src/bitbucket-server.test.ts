@@ -5,6 +5,7 @@ import { setDefaultGuardedFetchDnsLookup } from "@agent-infra/openconnector-kern
 import {
 	BitbucketServerAdapter,
 	bitbucketServerConnectionCatalog,
+	bitbucketServerLegacyProviderReleaseIds,
 } from "./bitbucket-server.ts";
 
 setDefaultGuardedFetchDnsLookup(null);
@@ -52,10 +53,13 @@ test("Bitbucket Server catalog exposes the reviewed OpenConnector-compatible act
 		[...expectedActions].sort(),
 	);
 	for (const action of bitbucketServerConnectionCatalog.actions) {
-		assert.match(action.id, /^bitbucket\.[a-z_]+@v6$/);
+		assert.match(action.id, /^bitbucket\.[a-z_]+@v7$/);
 		assert.equal("endpoint" in action.inputSchema.properties, false);
 		assert.deepEqual(action.requiredScopes, ["bitbucket.server.pat"]);
 	}
+	assert.deepEqual(bitbucketServerLegacyProviderReleaseIds, [
+		bitbucketServerConnectionCatalog.providerReleaseId.replace(/-v7$/, "-v6"),
+	]);
 });
 
 test("Bitbucket PAT validation uses fixed Server identity endpoints", async () => {
@@ -614,4 +618,43 @@ test("Bitbucket write actions issue one reviewed Server request each", async () 
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
+});
+
+test("Bitbucket decline preserves HTTP rejection status without exposing the body", async () => {
+	let status = 409;
+	const adapter = new BitbucketServerAdapter(async (input, init) => {
+		assert.equal(init?.method, "POST");
+		assert.match(String(input), /\/pull-requests\/7\/decline\?version=3$/);
+		return status === 204
+			? new Response(null, { status })
+			: Response.json({ error: "private Provider details" }, { status });
+	});
+	const input = {
+		action: "bitbucket.decline_pull_request",
+		credential: { accessToken: "test-personal-access-token" },
+		input: {
+			project: "PROJ",
+			pullRequestId: 7,
+			repository: "repo",
+			version: 3,
+		},
+	};
+	for (const rejection of [409, 503]) {
+		status = rejection;
+		await assert.rejects(adapter.execute(input), (error: unknown) => {
+			assert.ok(error instanceof Error);
+			assert.equal(
+				error.message,
+				`Bitbucket Server request failed (${rejection})`,
+			);
+			assert.equal(
+				(error as Error & { providerStatus?: number }).providerStatus,
+				rejection,
+			);
+			assert.doesNotMatch(error.message, /private Provider details/);
+			return true;
+		});
+	}
+	status = 204;
+	assert.deepEqual(await adapter.execute(input), { ok: true });
 });

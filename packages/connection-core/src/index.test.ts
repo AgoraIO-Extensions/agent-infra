@@ -1081,6 +1081,35 @@ describe("Connection application service", () => {
 		expect(repository.reconciliationJobs).toHaveLength(0);
 	});
 
+	it("distinguishes a Provider 409 rejection from an ambiguous 503 write", async () => {
+		for (const [providerStatus, expectedStatus, expectedCode] of [
+			[409, "FAILED", "INVALID_REQUEST"],
+			[503, "UNCERTAIN", "PROVIDER_UNCERTAIN"],
+		] as const) {
+			const repository = new MemoryRepository();
+			const service = new ConnectionApplicationService(repository, {
+				execute: async () => {
+					throw Object.assign(new Error("Bitbucket Server request failed"), {
+						providerStatus,
+					});
+				},
+			});
+			await expect(
+				service.invokeDirect("direct", "github.createPullRequest", {
+					base: "main",
+					head: "feature/rejected",
+					idempotencyKey: `bitbucket-${providerStatus}`,
+					repository: "acme/widgets",
+					title: "Rejected",
+				}),
+			).rejects.toMatchObject({ code: expectedCode });
+			expect(repository.calls[0]?.status).toBe(expectedStatus);
+			expect(repository.reconciliationJobs).toHaveLength(
+				expectedStatus === "UNCERTAIN" ? 1 : 0,
+			);
+		}
+	});
+
 	it("preserves Provider-owned details for deterministic write rejection", async () => {
 		const repository = new MemoryRepository();
 		const service = new ConnectionApplicationService(repository, {
