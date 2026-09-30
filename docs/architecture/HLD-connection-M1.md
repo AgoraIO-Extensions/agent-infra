@@ -203,6 +203,14 @@ Secret Manager 治理另由 [#907](https://github.com/AgoraIO-Extensions/agent-i
 逐次校验专门的 crash profile 读取 RBAC，403 不降级为开放访问。Crash 堆栈是非可信数据，仅作为
 AI 分析输入；Connection 不生成、存储或写回分析结论，现有 v4 连接继续按原版本路由。
 
+`manhattan-connection-v6` 在不接收解析文件的前提下，新增按 native/JVM 类型及真实线程名分页查找、
+按线程索引分页读取带有限 unwind 来源的帧证据两个 READ Actions。Manhattan 从既有 Symbol Profile
+结果投影 JVM 线程状态及 `CONTEXT`、`CALL_FRAME_INFO`、`INLINE`、`STACK_SCAN`、`UNKNOWN` 或
+`JVM_THREAD_INFO`，不把扫描帧视作已证实调用链；模块计数止于映射区，不包含后续 OS/JVM 段。
+两条固定 `/api/connection/crash/*` 路由仍须逐次验证 Kong key、个人 Bearer 及 crash-profile RBAC，
+响应保持 64 KiB 上限，不返回寄存器、设备/会话或原始解析文本。v4/v5 已授权 Action 仍可执行，
+新 Action 不自动进入已有 Grant，升级时需明确确认选择。
+
 DataLego 的首个 **[设计决策]** Provider profile 固定为
 `https://datalego.agoralab.co`，只发布当前用户、提交 SQL 查询、查询任务状态和取消任务四个有界动作。
 浏览器连接请求不得提交 LDAP 密码或 Token；Connection API 仅从同站请求携带的 HttpOnly
