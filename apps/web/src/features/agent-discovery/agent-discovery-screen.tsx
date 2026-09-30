@@ -64,11 +64,14 @@ export function AgentDiscoveryScreen({
 		`${agent.name}\n${agent.description}`.toLocaleLowerCase().includes(search),
 	);
 	return (
-		<section aria-labelledby="agents-heading" className="space-y-6">
+		<section aria-labelledby="agents-heading">
 			<header className="page-heading">
 				<div>
+					<p className="directory-eyebrow">当前用户可用范围</p>
 					<h1 id="agents-heading" className="font-semibold text-[28px]">
-						{conversationSelection ? "选择 Agent 开始对话" : "Agent"}
+						{conversationSelection
+							? "选择 Agent 开始对话"
+							: "选择一个 Agent 开始工作。"}
 					</h1>
 					<p className="mt-2 text-muted-foreground">
 						{conversationSelection
@@ -76,6 +79,32 @@ export function AgentDiscoveryScreen({
 							: "发现并使用你有权访问的 Agent。"}
 					</p>
 				</div>
+				{state.kind === "ready" ? (
+					<div className="directory-search w-full space-y-2">
+						<Label className="sr-only" htmlFor={searchId}>
+							搜索 Agent
+						</Label>
+						<div className="search relative">
+							<Search
+								aria-hidden="true"
+								className="pointer-events-none absolute top-3 left-3 size-5 text-muted-foreground"
+							/>
+							<Input
+								id={searchId}
+								className="pl-10"
+								type="search"
+								placeholder="按名称或用途搜索"
+								maxLength={agentDiscoveryQueryMaxLength}
+								value={query}
+								onChange={(event) => {
+									const nextQuery = event.target.value;
+									if (!isControlled) setLocalQuery(nextQuery);
+									onQueryChange?.(nextQuery);
+								}}
+							/>
+						</div>
+					</div>
+				) : null}
 			</header>
 			{state.kind === "loading" ? (
 				<p aria-live="polite">正在加载 Agent…</p>
@@ -101,28 +130,10 @@ export function AgentDiscoveryScreen({
 				</Alert>
 			) : (
 				<>
-					<div className="flex list-tools flex-wrap items-end justify-between gap-4 border-border border-b pb-6">
-						<div className="field w-full space-y-2 sm:max-w-sm">
-							<Label htmlFor={searchId}>搜索 Agent</Label>
-							<div className="search relative">
-								<Search
-									aria-hidden="true"
-									className="pointer-events-none absolute top-3 left-3 size-5 text-muted-foreground"
-								/>
-								<Input
-									id={searchId}
-									className="pl-10"
-									type="search"
-									placeholder="按名称或用途搜索"
-									maxLength={agentDiscoveryQueryMaxLength}
-									value={query}
-									onChange={(event) => {
-										const nextQuery = event.target.value;
-										if (!isControlled) setLocalQuery(nextQuery);
-										onQueryChange?.(nextQuery);
-									}}
-								/>
-							</div>
+					<div className="directory-section-head">
+						<div>
+							<p className="directory-eyebrow">可发现</p>
+							<h2 id="agent-catalog-heading">我的可用 Agent</h2>
 						</div>
 						<p className="hint text-muted-foreground text-sm" role="status">
 							{agents.length} 个获授权 Agent
@@ -138,20 +149,20 @@ export function AgentDiscoveryScreen({
 							<EmptyDescription>未找到匹配的 Agent。</EmptyDescription>
 						</Empty>
 					) : (
-						<ul className="agent-list divide-y divide-border">
+						<ul
+							aria-labelledby="agent-catalog-heading"
+							className="agent-list grid grid-cols-1 gap-4 min-[821px]:grid-cols-3"
+						>
 							{visible.map((agent) => (
 								<li
-									className="agent-row flex flex-wrap items-start gap-5 py-7 sm:items-center"
+									className="directory-card flex min-w-0 flex-col gap-4 border border-border bg-background p-5"
 									key={agent.agentId}
 								>
-									<div className="agent-symbol flex size-12 shrink-0 items-center justify-center rounded border border-border bg-muted">
-										<Bot aria-hidden="true" className="size-6" />
-									</div>
-									<div className="agent-summary min-w-0 flex-1 space-y-2">
-										<div className="line-title flex flex-wrap items-center gap-3">
-											<h2 className="break-words font-semibold text-lg">
-												{agent.name}
-											</h2>
+									<div className="flex items-start justify-between gap-3">
+										<span className="directory-symbol flex shrink-0 items-center justify-center border border-foreground bg-background">
+											<Bot aria-hidden="true" className="size-5" />
+										</span>
+										<div className="flex flex-wrap justify-end gap-2">
 											<Badge variant="outline">
 												{agentManagementStatusLabels[agent.managementStatus]}
 											</Badge>
@@ -163,62 +174,67 @@ export function AgentDiscoveryScreen({
 												</Badge>
 											)}
 										</div>
+									</div>
+									<div className="min-w-0 space-y-1">
+										<h3 className="break-words font-semibold text-lg">
+											{agent.name}
+										</h3>
 										<p className="break-words text-muted-foreground">
 											{agent.description}
 										</p>
-										<div className="metadata flex flex-wrap gap-x-5 gap-y-1 text-muted-foreground text-sm">
-											<span>
-												{agent.source.kind === "standard"
-													? `标准模板 · ${agent.source.templateId}`
-													: "自定义 Agent"}
-											</span>
-											<span>
-												Owner ·{" "}
-												{agent.configuration.owners
-													.map((owner) => owner.displayName)
-													.join("、") || "未提供"}
-											</span>
-											<span>
-												{agent.configuration.channels
-													.filter((channel) =>
-														["available", "bound"].includes(channel.status),
-													)
-													.map(
-														(channel) => agentChannelKindLabels[channel.kind],
-													)
-													.join("、") ||
-													(agent.source.kind === "custom" &&
-													agent.source.interactionMode === "self-managed"
-														? "自有交互入口"
-														: "暂无可用渠道")}
-											</span>
-										</div>
 									</div>
-									{conversationSelection &&
-									canStartPlatformConversation(agent) ? (
-										<Link
-											className={buttonVariants({ className: "min-w-0" })}
-											params={{ agentId: agent.agentId }}
-											search={{ conversation: undefined, view: undefined }}
-											to="/agents/$agentId/conversations"
-										>
-											开始对话
-											<ArrowRight aria-hidden="true" />
-										</Link>
-									) : (
-										<Link
-											className={buttonVariants({
-												variant: "outline",
-												className: "min-w-0",
-											})}
-											params={{ agentId: agent.agentId }}
-											to="/agents/$agentId"
-											aria-label={`查看 ${agent.name} 详情`}
-										>
-											查看详情
-											<ArrowRight aria-hidden="true" />
-										</Link>
-									)}
+									<div className="directory-tags flex flex-wrap gap-2">
+										<Badge variant="outline">
+											{agent.source.kind === "standard"
+												? `标准模板 · ${agent.source.templateId}`
+												: "自定义 Agent"}
+										</Badge>
+										<Badge variant="outline">
+											{agent.configuration.channels
+												.filter((channel) =>
+													["available", "bound"].includes(channel.status),
+												)
+												.map((channel) => agentChannelKindLabels[channel.kind])
+												.join("、") ||
+												(agent.source.kind === "custom" &&
+												agent.source.interactionMode === "self-managed"
+													? "自有交互入口"
+													: "暂无可用渠道")}
+										</Badge>
+									</div>
+									<div className="directory-card-foot mt-auto flex flex-wrap items-center gap-3 border-border border-t pt-3">
+										<span className="min-w-0 break-words text-muted-foreground text-xs">
+											Owner ·{" "}
+											{agent.configuration.owners
+												.map((owner) => owner.displayName)
+												.join("、") || "未提供"}
+										</span>
+										{conversationSelection &&
+										canStartPlatformConversation(agent) ? (
+											<Link
+												className={buttonVariants({ className: "min-w-0" })}
+												params={{ agentId: agent.agentId }}
+												search={{ conversation: undefined, view: undefined }}
+												to="/agents/$agentId/conversations"
+											>
+												开始对话
+												<ArrowRight aria-hidden="true" />
+											</Link>
+										) : (
+											<Link
+												className={buttonVariants({
+													variant: "outline",
+													className: "min-w-0",
+												})}
+												params={{ agentId: agent.agentId }}
+												to="/agents/$agentId"
+												aria-label={`查看 ${agent.name} 详情`}
+											>
+												查看详情
+												<ArrowRight aria-hidden="true" />
+											</Link>
+										)}
+									</div>
 								</li>
 							))}
 						</ul>

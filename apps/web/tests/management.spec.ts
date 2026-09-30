@@ -336,6 +336,13 @@ async function fixture(
 				}),
 			);
 		},
+		longAgentFields() {
+			agent = AgentProjectionV2Schema.parse({
+				...agent,
+				name: `中文 Agent 𠮷 👩🏽‍💻 e\u0301 ${"release_task".repeat(16)}`,
+				description: `无空格说明：${"longtoken".repeat(32)}`,
+			});
+		},
 		failedCreationAgent() {
 			agent = AgentProjectionV2Schema.parse({
 				...agent,
@@ -504,7 +511,7 @@ async function capture(page: Page, info: TestInfo, name: string) {
 	expect(overflow).toEqual([]);
 	const workspaceLayout = await page
 		.locator(
-			".ia-workspace, .ia-workspace h1, .ia-workspace h2, .ia-workspace .workspace-card",
+			".ia-workspace, .ia-workspace h1, .ia-workspace h2, .ia-workspace .workspace-card, .ia-agent-directory, .ia-agent-directory h1, .ia-agent-directory h2, .ia-agent-directory .directory-card",
 		)
 		.evaluateAll((elements) =>
 			elements.map((element) => {
@@ -1795,4 +1802,48 @@ test("Agent search survives reload and browser back without adding typing histor
 	).toHaveCount(0);
 	await page.reload();
 	await expect(search).toHaveValue("没有匹配的中文");
+});
+
+test("Agent catalog follows original IA card columns and keeps keyboard detail navigation", async ({
+	page,
+}, info) => {
+	const api = await fixture(page, "employee");
+	api.threeAgents();
+	await page.goto("/agents");
+	const cards = page.locator(".agent-list > li");
+	await expect(cards).toHaveCount(3);
+	await capture(page, info, "agent-catalog");
+	for (const width of [390, 820, 821, 1440]) {
+		await page.setViewportSize({ width, height: 1000 });
+		const boxes = await cards.evaluateAll((elements) =>
+			elements.map((element) => {
+				const box = element.getBoundingClientRect();
+				return { left: box.left, top: box.top, width: box.width };
+			}),
+		);
+		if (width <= 820) {
+			expect(boxes[0]?.left).toBe(boxes[1]?.left);
+			expect(boxes[1]?.top).toBeGreaterThan(boxes[0]?.top ?? 0);
+		} else {
+			expect(boxes[0]?.top).toBe(boxes[1]?.top);
+			expect(boxes[1]?.top).toBe(boxes[2]?.top);
+			expect(boxes[1]?.left).toBeGreaterThan(boxes[0]?.left ?? 0);
+		}
+		await capture(page, info, `agent-catalog-${width}px`);
+	}
+	const search = page.getByRole("searchbox", { name: "搜索 Agent" });
+	await search.fill("Visible Agent 2");
+	await expect(cards).toHaveCount(1);
+	await search.press("Tab");
+	const detail = page.getByRole("link", { name: "查看 Visible Agent 2 详情" });
+	await expect(detail).toBeFocused();
+	await detail.press("Enter");
+	await expect(page).toHaveURL(/\/agents\/agent-visible-2$/);
+	api.longAgentFields();
+	await page.goto("/agents");
+	await expect(cards).toHaveCount(3);
+	for (const width of [1440, 390, 160]) {
+		await page.setViewportSize({ width, height: 844 });
+		await capture(page, info, `agent-catalog-long-${width}px`);
+	}
 });

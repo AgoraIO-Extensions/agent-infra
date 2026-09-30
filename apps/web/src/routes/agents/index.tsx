@@ -28,7 +28,7 @@ function AgentsRoute() {
 		? isRetryableAgentDiscoveryError(query.error)
 		: query.data?.kind === "unavailable" && query.data.retryable;
 	return (
-		<main className="platform-content management-content">
+		<main className="platform-content management-content ia-agent-directory">
 			<div className="space-y-6">
 				<AgentDiscoveryScreen
 					conversationSelection={mode === "conversation"}
