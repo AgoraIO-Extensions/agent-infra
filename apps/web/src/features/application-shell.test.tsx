@@ -312,7 +312,7 @@ describe("IA navigation", () => {
 		).toBe(false);
 		expect(
 			screen
-				.getByRole("link", { name: "Agent", exact: true })
+				.getByRole("link", { name: "Agent" })
 				.classList.contains("selected"),
 		).toBe(false);
 		expect(
