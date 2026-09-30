@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import {
 	RuntimeBusinessGrantClaimsV2Schema,
+	RuntimeControlGrantClaimsV2Schema,
 	RuntimePinnedExecutionKeyScopeV4Schema,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it } from "vitest";
@@ -197,6 +198,76 @@ it.each(["key-version", "removed-scope", "added-scope"] as const)(
 		expect(quarantined.quarantinedSessions).toEqual({
 			[f.hostSessionRef]: session,
 		});
+	},
+);
+
+it.each(["stop", "generation-cancel"] as const)(
+	"rejects a V4 scope on %s before changing a valid original journal",
+	async (kind) => {
+		const f = await fixture();
+		const request = input();
+		const prepared = await f.store.prepareOperation(request);
+		await f.store.resolveOperation(
+			prepared.session.hostSessionRef,
+			request.operationId,
+			{ outcome: "accepted", status: "running" },
+			"native-session-1",
+		);
+		const {
+			authorizationRecordId: _businessRecord,
+			attachments: _attachments,
+			...claims
+		} = request.authorization;
+		const authorization = RuntimeControlGrantClaimsV2Schema.parse({
+			...claims,
+			purpose: "control",
+			controlRecordId: "control-1",
+			reason: kind === "stop" ? "stop" : "generation_isolation",
+			allowedCommands: [kind === "stop" ? "turn.stop" : "generation.cancel"],
+			hostSessionRef: prepared.session.hostSessionRef,
+			operation: {
+				...claims.operation,
+				kind: kind === "stop" ? "stop" : "generation",
+				id: "control-operation-1",
+			},
+		});
+		const control = {
+			...request,
+			authorization,
+			requestedHostSessionRef: prepared.session.hostSessionRef,
+			operationId: "control-operation-1",
+			kind,
+			scope: kind === "stop" ? "stop:control-operation-1" : "generation:1",
+			command: () => ({
+				schemaVersion: 1 as const,
+				kind,
+				operationId: "control-operation-1",
+				agentId: request.binding.agentId,
+				conversationId: request.binding.conversationId,
+				executionId: request.binding.executionId,
+				turnId: request.binding.turnId,
+				sessionGeneration: request.binding.sessionGeneration,
+				nativeSessionRef: "native-session-1",
+			}),
+		};
+		const original = f.store.readOriginalExecutionKeyScopeV4(request.binding);
+		const bytes = await readFile(f.path, "utf8");
+		await expect(f.store.prepareOperation(control)).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		expect(await readFile(f.path, "utf8")).toBe(bytes);
+		await f.reopen();
+		expect(f.store.readOriginalExecutionKeyScopeV4(request.binding)).toEqual(
+			original,
+		);
+		const { keyScopeV4: _scope, ...validControl } = control;
+		await f.store.prepareOperation(validControl);
+		const validBytes = await readFile(f.path, "utf8");
+		await f.reopen();
+		expect(await readFile(f.path, "utf8")).toBe(validBytes);
+		expect(f.store.readOriginalExecutionKeyScopeV4(request.binding)).toEqual(
+			original,
+		);
 	},
 );
 

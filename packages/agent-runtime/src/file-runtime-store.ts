@@ -559,6 +559,8 @@ export class FileRuntimeStore {
 					: (input.now ?? Date.now());
 			assertStoreState(state);
 			if (keyScopeV4) {
+				if (input.kind !== "submit-turn" && input.kind !== "supplement")
+					runtimeAuthorizationDenied();
 				assertSessionAuthority(input.authorization, keyScopeV4);
 				if (
 					keyScopeV4.agentId !== input.binding.agentId ||
