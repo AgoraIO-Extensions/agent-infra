@@ -4,6 +4,7 @@ import { PassThrough } from "node:stream";
 
 import {
 	PostgresAgentManagementQueryV1,
+	PostgresConversationQueryV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
 
@@ -271,6 +272,10 @@ describe("Platform API production assembly", () => {
 	});
 
 	it("owns observability for the deployed API process", async () => {
+		const readSnapshot = vi.spyOn(
+			PostgresConversationQueryV1.prototype,
+			"readResourceSnapshot",
+		);
 		const output = new PassThrough();
 		const lines: string[] = [];
 		output.on("data", (chunk) => lines.push(String(chunk)));
@@ -297,7 +302,131 @@ describe("Platform API production assembly", () => {
 			await createPlatformApiShutdown(running)();
 		}
 		expect(running.observability.status().state).toBe("closed");
+		expect(readSnapshot).not.toHaveBeenCalled();
 		expect(lines.some((line) => line.includes('"stage":"http"'))).toBe(true);
+	});
+
+	it("automatically publishes fresh snapshots from each deployed query after an API assembly restart", async () => {
+		let complete: (snapshot: {
+			taskWaiting: number;
+			outboxPending: number;
+		}) => void = () => {};
+		const read = vi
+			.spyOn(PostgresConversationQueryV1.prototype, "readResourceSnapshot")
+			.mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						complete = resolve;
+					}),
+			);
+		for (const snapshot of [
+			{ taskWaiting: 4, outboxPending: 9 },
+			{ taskWaiting: 1, outboxPending: 2 },
+		]) {
+			read.mockClear();
+			const running = await startPlatformApiFromDeployment({
+				moduleSpecifier: new URL(
+					"../../../tests/fixtures/platform-api-deployment.mjs",
+					import.meta.url,
+				).href,
+				port: 0,
+				log: () => {},
+				observabilityOptions: {
+					output: new PassThrough(),
+					otlpEndpoint: "http://127.0.0.1:1",
+					metricIntervalMs: 1000,
+				},
+			});
+			try {
+				const observe = vi.spyOn(running.observability, "observeResource");
+				complete(snapshot);
+				await Promise.resolve();
+				expect(read).toHaveBeenCalledOnce();
+				expect(read.mock.instances[0]).toBe(
+					running.assembly.dependencies.conversation?.query,
+				);
+				expect(observe.mock.calls).toEqual([
+					[{ kind: "task_waiting", value: snapshot.taskWaiting }],
+					[{ kind: "outbox_pending", value: snapshot.outboxPending }],
+				]);
+			} finally {
+				await createPlatformApiShutdown(running)();
+			}
+			expect(running.observability.status().state).toBe("closed");
+		}
+	});
+
+	it("automatically samples the existing deployed query and contains snapshot failures", async () => {
+		const read = vi
+			.spyOn(PostgresConversationQueryV1.prototype, "readResourceSnapshot")
+			.mockRejectedValue(new Error("private DB sentinel"));
+		const output = new PassThrough();
+		const running = await startPlatformApiFromDeployment({
+			moduleSpecifier: new URL(
+				"../../../tests/fixtures/platform-api-deployment.mjs",
+				import.meta.url,
+			).href,
+			port: 0,
+			log: () => {},
+			observabilityOptions: {
+				output,
+				otlpEndpoint: "http://127.0.0.1:1",
+				metricIntervalMs: 1000,
+			},
+		});
+		try {
+			expect(read).toHaveBeenCalledOnce();
+			expect(read.mock.instances[0]).toBe(
+				running.assembly.dependencies.conversation?.query,
+			);
+			const address = running.server.address();
+			if (!address || typeof address === "string")
+				throw new Error("Missing server address");
+			const response = await fetch(
+				`http://127.0.0.1:${address.port}/api/v1/session`,
+			);
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({
+				user: { userId: "smoke-user" },
+			});
+		} finally {
+			await createPlatformApiShutdown(running)();
+		}
+		expect(read.mock.calls[0]?.[0].aborted).toBe(false);
+		expect(running.observability.status().state).toBe("closed");
+	});
+
+	it("settles the aborted sampler before closing the pool even when server close fails", async () => {
+		const calls: string[] = [];
+		let finish: () => void = () => {};
+		const close = vi.fn(async () => {
+			calls.push("assembly");
+		});
+		const shutdown = createPlatformApiShutdown({
+			assembly: { close } as unknown as Awaited<
+				ReturnType<typeof startPlatformApiFromDeployment>
+			>["assembly"],
+			server: {
+				close(callback: (error: Error) => void) {
+					calls.push("server");
+					callback(new Error("server close failed"));
+				},
+			} as ReturnType<typeof startPlatformApi>,
+			stopResourceSampling: () => {
+				calls.push("abort");
+				return new Promise<void>((resolve) => {
+					finish = () => {
+						calls.push("settled");
+						resolve();
+					};
+				});
+			},
+		});
+		const stopped = shutdown();
+		expect(close).not.toHaveBeenCalled();
+		finish();
+		await expect(stopped).rejects.toThrow("server close failed");
+		expect(calls).toEqual(["server", "abort", "settled", "assembly"]);
 	});
 
 	it("closes deployment resources once in server-first order", async () => {

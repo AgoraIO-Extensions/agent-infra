@@ -82,6 +82,7 @@ export interface PlatformApiAssemblyInput {
 
 export interface PlatformApiAssembly {
 	readonly dependencies: PlatformAppDependencies;
+	readResourceSnapshot: PostgresConversationQueryV1["readResourceSnapshot"];
 	close(): Promise<void>;
 }
 
@@ -450,6 +451,8 @@ export function assemblePlatformApi(
 	];
 	return {
 		dependencies,
+		readResourceSnapshot: (signal) =>
+			conversationQuery.readResourceSnapshot(signal),
 		async close() {
 			let failed = false;
 			for (const adapter of adapters.toReversed()) {
