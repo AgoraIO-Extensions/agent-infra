@@ -11,13 +11,14 @@ import { bitbucketServerExecutorDigest } from "./bitbucket-server-integrity.ts";
 const sourceCommit = "0618e8cdaeaaaa77e2eb23938ac639867d4f03d7";
 const providerId = "bitbucket";
 const apiOrigin = "https://bitbucket-api.agoralab.co";
-const providerReleaseId = `bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v7`;
+const providerReleaseId = `bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v8`;
 const credentialScope = "bitbucket.server.pat";
 const maxResponseBytes = 5 * 1024 * 1024;
 const requestTimeoutMs = 8_000;
 
 export const bitbucketServerLegacyProviderReleaseIds = [
 	`bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v6`,
+	`bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v7`,
 ] as const;
 
 type JsonObject = Record<string, unknown>;
@@ -329,7 +330,7 @@ export const bitbucketServerConnectionCatalog = {
 	actions: actionSpecs.map((action) => ({
 		description: action.description,
 		effect: action.effect,
-		id: `${providerId}.${action.name}@v7`,
+		id: `${providerId}.${action.name}@v8`,
 		inputSchema: {
 			additionalProperties: false,
 			properties: action.properties ?? {},
@@ -548,6 +549,7 @@ export class BitbucketServerAdapter
 				});
 			case "decline_pull_request":
 				return this.requestJson(token, `${pullRequestPath()}/decline`, {
+					allowEmptyResponse: true,
 					method: "POST",
 					query: { version: value.version },
 				});
@@ -1061,6 +1063,7 @@ function isResponseTooLarge(error: unknown) {
 }
 
 type RequestOptions = {
+	allowEmptyResponse?: boolean;
 	body?: JsonObject;
 	credentialProbe?: boolean;
 	method?: "DELETE" | "GET" | "POST" | "PUT";
@@ -1089,6 +1092,7 @@ async function requestJson(
 		options.responseLimitBytes ?? maxResponseBytes,
 		remainingTimeoutMs,
 	);
+	if (text === "" && options.allowEmptyResponse) return { ok: true };
 	try {
 		const value: unknown = JSON.parse(text);
 		if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -1142,6 +1146,12 @@ async function request(
 			headers: {
 				accept: "application/json, text/plain;q=0.9",
 				authorization: `Bearer ${accessToken}`,
+				...(options.method === "POST" && options.body === undefined
+					? {
+							"content-type": "application/json",
+							"x-atlassian-token": "no-check",
+						}
+					: {}),
 				...(options.body === undefined
 					? {}
 					: { "content-type": "application/json" }),
