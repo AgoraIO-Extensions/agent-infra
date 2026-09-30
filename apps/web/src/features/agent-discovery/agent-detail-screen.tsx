@@ -12,7 +12,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
-import type { AgentDetailState } from "./agent-discovery.js";
+import {
+	type AgentDetailState,
+	canStartPlatformConversation,
+} from "./agent-discovery.js";
 import {
 	agentChannelKindLabels,
 	agentServiceAvailabilityLabel,
@@ -104,9 +107,7 @@ export function AgentDetailScreen({
 		agent.source.identityResponsibility === "self-managed"
 			? safeInteractionUrl(agent.interactionUrl)
 			: undefined;
-	const ready =
-		agent.managementStatus === "available" &&
-		agent.serviceAvailability === "ready";
+	const ready = canStartPlatformConversation(agent);
 	const defaultModel = agent.configuration.modelOptions.find(
 		(option) => option.optionId === agent.configuration.defaultModelOptionId,
 	);

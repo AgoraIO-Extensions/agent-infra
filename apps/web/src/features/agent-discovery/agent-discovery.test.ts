@@ -31,6 +31,74 @@ function createAgentClient(
 }
 
 describe("Agent discovery generated-client consumer", () => {
+	it.each(["visible", "owner"] as const)(
+		"discards prior pages when the %s response contains an invalid projection",
+		async (scope) => {
+			let requests = 0;
+			const client = createClient({
+				baseUrl: "https://platform.example.test",
+				fetch: async () => {
+					requests += 1;
+					return Response.json({
+						items:
+							requests === 1
+								? [startingAgent]
+								: [
+										{
+											...secondAgent,
+											serviceAvailability: "private-invalid-state",
+										},
+									],
+						nextCursor: requests === 1 ? "agent-pilot-1" : null,
+					});
+				},
+			});
+			await expect(loadAgentDiscovery(client, scope)).resolves.toEqual({
+				kind: "unavailable",
+				retryable: false,
+			});
+			expect(requests).toBe(2);
+		},
+	);
+
+	it.each([
+		null,
+		{ items: [], nextCursor: 42 },
+		{ items: [], nextCursor: null, privateField: "rejected" },
+	])(
+		"fails closed for a malformed successful collection response %j",
+		async (body) => {
+			const client = createClient({
+				baseUrl: "https://platform.example.test",
+				fetch: async () => Response.json(body),
+			});
+			await expect(loadAgentDiscovery(client)).resolves.toEqual({
+				kind: "unavailable",
+				retryable: false,
+			});
+		},
+	);
+
+	it.each([
+		null,
+		{ ...startingAgent, serviceAvailability: "private-invalid-state" },
+		secondAgent,
+	])(
+		"rejects invalid or mismatched successful detail without returning its data",
+		async (body) => {
+			const client = createClient({
+				baseUrl: "https://platform.example.test",
+				fetch: async () => Response.json(body),
+			});
+			await expect(
+				loadAgentDetail(startingAgent.agentId, client),
+			).resolves.toEqual({
+				kind: "unavailable",
+				retryable: false,
+			});
+		},
+	);
+
 	it("treats unclassified transport errors as retryable", () => {
 		expect(isRetryableAgentDiscoveryError(new Error("network failure"))).toBe(
 			true,
