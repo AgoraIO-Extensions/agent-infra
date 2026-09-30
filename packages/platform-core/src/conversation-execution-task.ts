@@ -14,7 +14,7 @@ import type {
 	ConversationModelConfigurationV1,
 	ConversationModelSelectionFallbackWriteV1,
 } from "./conversation-execution-types.js";
-import { conversationExecutionSourceV1 } from "./conversation-execution-types.js";
+import { conversationExecutionKeySubjectV1 } from "./conversation-execution-types.js";
 import {
 	digest,
 	invalidInput,
@@ -430,9 +430,8 @@ export function createConversationTaskAdmissionUseCaseV1(
 							modelOptionId,
 							reasoningLevel,
 							executionSource:
-								state.sourceKind === "standard"
-									? conversationExecutionSourceV1(authority.channelId)
-									: null,
+								conversationExecutionKeySubjectV1(authority, state.sourceKind)
+									?.executionSource ?? null,
 							relayKeyBinding: null,
 							acceptedAt,
 							waitDeadline: new Date(deadlineMs),

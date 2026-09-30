@@ -66,6 +66,7 @@ import {
 	isModelSelectionPlan,
 	isRegenerationPlan,
 	isStopPlan,
+	lockAgentConfiguration,
 	lockConversation,
 	lockConversationForRead,
 	outboxId,
@@ -125,8 +126,13 @@ export class PostgresConversationExecutionTransactionV1
 		transaction: Transaction,
 		authority: ConversationExecutionAuthorityV1,
 	) {
-		const { executionSource, purpose, subjectId } =
-			conversationExecutionKeySubjectV1(authority);
+		const agent = await lockAgentConfiguration(transaction, authority.agentId);
+		const subject = conversationExecutionKeySubjectV1(
+			authority,
+			agent?.sourceKind,
+		);
+		if (!subject) return { executionSource: null, relayKeyBinding: null };
+		const { executionSource, purpose, subjectId } = subject;
 		const relayKeyBinding = await currentRelayKeyVersionInTransaction(
 			transaction,
 			{ purpose, subjectId },
@@ -457,10 +463,10 @@ export class PostgresConversationExecutionTransactionV1
 						${plan.execution.modelConfigurationRevision},
 						${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
 						${executionBinding?.executionSource ?? null},
-						${executionBinding?.relayKeyBinding.purpose ?? null},
-						${executionBinding?.relayKeyBinding.subjectId ?? null},
-						${executionBinding?.relayKeyBinding.keyId ?? null},
-						${executionBinding?.relayKeyBinding.keyVersion ?? null},
+						${executionBinding?.relayKeyBinding?.purpose ?? null},
+						${executionBinding?.relayKeyBinding?.subjectId ?? null},
+						${executionBinding?.relayKeyBinding?.keyId ?? null},
+						${executionBinding?.relayKeyBinding?.keyVersion ?? null},
 						${plan.execution.createdAt},
 						 ${plan.execution.createdAt})
 				`;
@@ -722,10 +728,10 @@ export class PostgresConversationExecutionTransactionV1
 					${plan.execution.modelConfigurationRevision},
 					${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
 					${executionBinding.executionSource},
-					${executionBinding.relayKeyBinding.purpose},
-					${executionBinding.relayKeyBinding.subjectId},
-					${executionBinding.relayKeyBinding.keyId},
-					${executionBinding.relayKeyBinding.keyVersion},
+					${executionBinding.relayKeyBinding?.purpose ?? null},
+					${executionBinding.relayKeyBinding?.subjectId ?? null},
+					${executionBinding.relayKeyBinding?.keyId ?? null},
+					${executionBinding.relayKeyBinding?.keyVersion ?? null},
 					${plan.execution.createdAt},
 					 ${plan.execution.createdAt})
 			`;

@@ -242,8 +242,12 @@ export async function submitConversationTask(
 	const statusEvent = plan.statusEvent;
 	if (plan.relayKeyBinding !== null) unavailable();
 	if (plan.executionSource !== null) {
-		const { executionSource, purpose, subjectId } =
-			conversationExecutionKeySubjectV1(authority);
+		const subject = conversationExecutionKeySubjectV1(
+			authority,
+			state.sourceKind,
+		);
+		if (!subject) unavailable();
+		const { executionSource, purpose, subjectId } = subject;
 		if (executionSource !== plan.executionSource) unavailable();
 		const relayKeyBinding = await currentRelayKeyVersionInTransaction(
 			transaction,

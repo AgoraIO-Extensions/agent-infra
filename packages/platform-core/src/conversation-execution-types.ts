@@ -38,8 +38,12 @@ export function conversationExecutionKeySubjectV1(
 		ConversationExecutionAuthorityV1,
 		"actorId" | "agentId" | "channelId"
 	>,
+	sourceKind: "standard" | "custom" | null | undefined,
 ) {
 	const executionSource = conversationExecutionSourceV1(authority.channelId);
+	if (sourceKind === "custom") return null;
+	if (sourceKind !== "standard")
+		throw new TypeError("Conversation execution Agent source is invalid");
 	return executionSource === "web" || executionSource === "wecom"
 		? {
 				executionSource,

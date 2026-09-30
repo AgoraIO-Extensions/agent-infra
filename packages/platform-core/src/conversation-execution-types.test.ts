@@ -11,22 +11,52 @@ describe("conversation execution Key subject", () => {
 		"binds %s to the %s source and its Key subject",
 		(channelId, executionSource, purpose, subjectId) => {
 			expect(
-				conversationExecutionKeySubjectV1({
-					actorId: "user-1",
-					agentId: "agent-1",
-					channelId,
-				}),
+				conversationExecutionKeySubjectV1(
+					{
+						actorId: "user-1",
+						agentId: "agent-1",
+						channelId,
+					},
+					"standard",
+				),
 			).toEqual({ executionSource, purpose, subjectId });
 		},
 	);
 
 	it("rejects an unknown source before selecting a Key", () => {
 		expect(() =>
-			conversationExecutionKeySubjectV1({
-				actorId: "user-1",
-				agentId: "agent-1",
-				channelId: "unknown",
-			}),
+			conversationExecutionKeySubjectV1(
+				{
+					actorId: "user-1",
+					agentId: "agent-1",
+					channelId: "unknown",
+				},
+				"standard",
+			),
 		).toThrow(TypeError);
 	});
+
+	it.each(["web", "wecom_app:service-1", "api:client-1", "eval"])(
+		"does not assign a Platform Key to a custom %s execution",
+		(channelId) => {
+			expect(
+				conversationExecutionKeySubjectV1(
+					{ actorId: "user-1", agentId: "agent-1", channelId },
+					"custom",
+				),
+			).toBeNull();
+		},
+	);
+
+	it.each([null, undefined])(
+		"rejects an absent Agent source kind %s",
+		(sourceKind) => {
+			expect(() =>
+				conversationExecutionKeySubjectV1(
+					{ actorId: "user-1", agentId: "agent-1", channelId: "web" },
+					sourceKind,
+				),
+			).toThrow(TypeError);
+		},
+	);
 });
