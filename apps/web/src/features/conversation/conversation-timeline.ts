@@ -93,8 +93,20 @@ export function createConversationTimeline({
 
 	function fail(session: ReadingSession, failure: ConversationReadFailure) {
 		if (current !== session) return;
-		if (failure.kind === "authorization" || failure.kind === "invalid") {
+		if (
+			failure.kind === "authorization" ||
+			failure.kind === "http" ||
+			failure.kind === "invalid"
+		) {
 			stop();
+			if (failure.kind === "http") {
+				current = {
+					conversationId: session.conversationId,
+					cursor: null,
+					seenCursors: new Set(),
+					needsHistory: true,
+				};
+			}
 			publish({
 				...emptyState(),
 				conversationId: session.conversationId,

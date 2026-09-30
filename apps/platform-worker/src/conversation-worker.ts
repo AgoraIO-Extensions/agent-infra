@@ -1,3 +1,5 @@
+import type { startObservability } from "@agent-infra/observability";
+import { createObservedConversationEvents } from "@agent-infra/observability/worker";
 import {
 	createConversationDispatchUseCaseV1,
 	createConversationEventUseCaseV1,
@@ -24,6 +26,10 @@ export interface PlatformConversationWorkerOptionsV2
 	readonly leaseDurationMs?: number;
 	readonly retryDelayMs?: number;
 	readonly log?: (message: string) => void;
+	readonly observability?: Pick<
+		ReturnType<typeof startObservability>,
+		"record"
+	>;
 }
 
 export function createPlatformConversationWorkerV2(
@@ -71,7 +77,12 @@ export function createPlatformConversationWorkerV2(
 				store,
 				authorization: runtime.authorization,
 				runtimeHost: runtime.runtimeHost,
-				events: createConversationEventUseCaseV1({ transaction }),
+				events: options.observability
+					? createObservedConversationEvents({
+							transaction,
+							telemetry: options.observability,
+						})
+					: createConversationEventUseCaseV1({ transaction }),
 			},
 			{
 				leaseDurationMs: options.leaseDurationMs,
@@ -212,6 +223,7 @@ export function createPlatformConversationWorkerV2(
 export async function startPlatformConversationWorkerFromDeploymentV2(
 	moduleSpecifier = process.env.PLATFORM_WORKER_DEPLOYMENT_MODULE,
 	signal?: AbortSignal,
+	observability?: Pick<ReturnType<typeof startObservability>, "record">,
 ) {
 	if (!moduleSpecifier)
 		throw new Error("PLATFORM_WORKER_DEPLOYMENT_MODULE is required");
@@ -239,6 +251,7 @@ export async function startPlatformConversationWorkerFromDeploymentV2(
 	const worker = createPlatformConversationWorkerV2({
 		...options,
 		signal: assemblySignal,
+		observability,
 	});
 	if (assemblySignal.aborted) await worker.stop();
 	else worker.start();

@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { createServer } from "node:net";
+import { PassThrough } from "node:stream";
 
 import {
 	PostgresAgentManagementQueryV1,
@@ -229,6 +230,36 @@ describe("Platform API production assembly", () => {
 		} finally {
 			await createPlatformApiShutdown(running)();
 		}
+	});
+
+	it("owns observability for the deployed API process", async () => {
+		const output = new PassThrough();
+		const lines: string[] = [];
+		output.on("data", (chunk) => lines.push(String(chunk)));
+		const running = await startPlatformApiFromDeployment({
+			log: () => {},
+			moduleSpecifier: new URL(
+				"../../../tests/fixtures/platform-api-deployment.mjs",
+				import.meta.url,
+			).href,
+			observabilityOptions: { output },
+			port: 0,
+		});
+		const address = running.server.address();
+		if (!address || typeof address === "string")
+			throw new Error("Platform API did not bind a TCP port");
+		try {
+			const response = await fetch(`http://127.0.0.1:${address.port}/healthz`);
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({
+				status: "ok",
+				observability: { enabled: false, state: "active" },
+			});
+		} finally {
+			await createPlatformApiShutdown(running)();
+		}
+		expect(running.observability.status().state).toBe("closed");
+		expect(lines.some((line) => line.includes('"stage":"http"'))).toBe(true);
 	});
 
 	it("closes deployment resources once in server-first order", async () => {

@@ -320,7 +320,7 @@ describe("Personal conversation history session and pagination ownership", () =>
 		).toEqual([null, "cursor-a", "cursor-b", null, "cursor-x", "cursor-y"]);
 	});
 
-	it.each([401, 403, 404])(
+	it.each([401, 403])(
 		"purges all loaded pages on HTTP %s and blocks further reads",
 		async (status) => {
 			const { result, requests, queryClient } = setup((request) =>
@@ -343,6 +343,16 @@ describe("Personal conversation history session and pagination ownership", () =>
 			expect(queryClient.getQueryData(["unrelated"])).toBe("preserve");
 		},
 	);
+
+	it("keeps an ordinary 404 out of the authorization boundary", async () => {
+		const { result } = setup(
+			() => new Response("Route missing", { status: 404 }),
+		);
+		await waitFor(() => expect(result.current.status).toBe("error"));
+		expect(result.current.failure).toEqual({ kind: "http", status: 404 });
+		expect(result.current.items).toEqual([]);
+		expect(result.current.canRetry).toBe(false);
+	});
 
 	it.each(["agent", "cycle"] as const)(
 		"clears prior pages and terminates an invalid %s response",

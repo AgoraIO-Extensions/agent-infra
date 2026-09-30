@@ -460,8 +460,11 @@ export function ActiveConversation({
 				<ConversationExecutionDetails
 					data={reader.execution.data}
 					loading={reader.execution.isFetching}
-					failed={reader.execution.isError}
-					onRetry={() => void reader.execution.refetch()}
+					failed={reader.execution.isError || timeline.failure?.kind === "http"}
+					onRetry={() => {
+						if (timeline.failure?.kind === "http") void reader.reconnect();
+						else void reader.execution.refetch();
+					}}
 					onClose={() => {
 						returnExecutionFocus.current = true;
 						setSelectedExecution(undefined);

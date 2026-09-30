@@ -1,0 +1,35 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 96
+    spike_limit_mib: 24
+exporters:
+  file:
+    path: /output/observations.json
+    flush_interval: 100ms
+    rotation:
+      max_megabytes: 2
+      max_backups: 1
+  prometheus:
+    endpoint: 0.0.0.0:9464
+    metric_expiration: 5s
+    translation_strategy: UnderscoreEscapingWithoutSuffixes
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter]
+      exporters: [file]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter]
+      exporters: [file, prometheus]

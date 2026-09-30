@@ -156,6 +156,60 @@ Claude 的持久请求、accepted/unknown、状态和恢复继续遵循 §§7–
 
 标准模板的有效补充指令能力取 Registry 声明与 Adapter Conformance 结果；`platform-adapter` 自定义 Agent 取 Manifest 声明与实际探测结果的交集。缺失、声明为 `false`、探测失败或不能保证 `messageId` 持久去重时都按不支持处理，只影响补充指令分支并返回繁忙，不使 Agent 创建失败。
 
+### 5.1 命令与 Skill 目录及调用
+
+本节细化 [工程 Spec §11.4](SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界)。固定 Driver 的能力目录是受控装配与原生实际发现的交集，不动态发现 Driver。平台控制保持既有入口，命令目录不能注册第二个停止、补充指令或重新生成实现。
+
+| 契约 | 最小语义 |
+| --- | --- |
+| 发现 | 按当前主体、Agent、Conversation、Runtime/配置修订及受控 Skill 包摘要绑定目录修订；返回不透明能力 ID、类别、说明、显示来源/版本、参数描述、只读/产生 Turn/改变状态类别和可用性。原生路径及会话 ID 只留 Host。读取失败不返回伪造空目录 |
+| 参数 | 固定命令使用逐项类型、必填与长度约束；仅有原生 argument hint 的 Skill 使用有界文本参数并标明其不是类型 Schema。参数不作为 shell/argv、路径或身份字段拼接，不允许选择运行目录或任意原生方法 |
+| 选择与提交 | 调用方只提交能力 ID、目录修订、参数和幂等键；业务作用域由当前认证及目标资源服务端解析。服务端重验来源、版本、当前权限与能力可用性，Driver 再按固定绑定核验。未知、失效、越界、参数错误、繁忙和协议不支持分别返回稳定脱敏原因，不回退普通文本 |
+| 目录变化 | 原生变化通知只使缓存失效，重新读取后生成新修订；无通知的模板在提交前重新核对。过期选择要求重新确认，不追随同名新包。已受理调用保留原版本，版本不可用时失败或待核实，不改用新版本重放 |
+| 结果 | 只读命令返回获准字段及读取时间；其他调用沿同一 Execution/规范化事件报告受理、运行和终态。命令/Skill 标识与版本关联到原执行；内部路径、供应商错误、Skill 全文和普通参数不进入审计或遥测 |
+
+目录不可枚举其他主体的 Session、路径或内容；使用权、读取权与执行权分别检查。受控来源记录由部署可信配置产生，不接受模型、Skill frontmatter 或浏览器自报。Skill 参数、说明和内容都不是授权；嵌套资源、脚本、符号链接及原生自动发现须受既有文件与装配边界约束。只读发现不执行 Skill 脚本、模型请求或业务工具。
+
+### 5.2 调用生命周期与兼容
+
+- 只读能力沿原 Session 的受限查询返回投影，不创建 Session/Turn、不恢复业务、不改变平台任务状态。未装载、不可用或无法核实分别返回，不能把 `notLoaded` 当作原任务已停止；当前读取权限失效时不返回结果。
+- 产生 Turn 的 Skill/命令复用现有 Message/Execution/outbox；不产生回答但改变原生状态的命令也绑定一个持久 Execution 与命令输入，复用同一调度及事件链，不伪造用户聊天消息或模型回答。活跃、等待或 unknown 占用下返回 busy，不插队、不转成补充指令。
+- 受理时冻结能力/目录/包修订、参数摘要、原主体/Agent/Conversation、模型选择及 Key 引用版本；幂等键沿既有作用域使用。同键同输入回读原结果，同键不同内容冲突；业务原文按普通消息权限保存，审计只保留必要元数据。
+- 调用前按 §§7–9 校验当前业务授权、原执行范围、Session/generation/fence 和操作绑定。目录修订不替代 Grant，Skill 不增加工具权限；当前权限扩大不能扩大旧执行，权限缺失或依赖不可确认时拒绝新副作用。
+- RPC ACK 只证明该接口接收；按原生终态及已持久事实判定完成。Skill 加载证据绑定所选包及真实加载机制，工具效果另按 §8.5 核对。参数合法但原生拒绝、模型/工具失败、无加载证据及结果不确定分别保留，不能以文本中的“完成”补证。
+- 停止、撤权、响应丢失、Worker/Host 重启和 SSE 重连只沿 §§7–8 的原执行、原操作、journal、游标与 ACK 恢复；不因重新获取目录而重发。停止 ACK 不释放未核实占用，外部效果不自动撤销。缺少原生幂等/状态证据时保持 unknown，不能用新 Session、Turn、Key 或同名 Skill 重试掩盖不确定性。
+- 旧版本不理解新增输入时显式拒绝；升级只在原生占用排空且兼容验证通过后生效。历史结果仍按原主体读取，原执行恢复继续使用已冻结版本及既有控制授权；本节不更改原控制绑定恢复契约。
+
+### 5.3 固定官方能力矩阵
+
+以下是公开接口/固定源码核查基线，**不是运行验收通过表**。每行均须由实施票补齐实际部署版本、装配摘要及正负向运行证据，才可在目录启用。版本升级重新核查，不能以最新网页替代固定版本源码；官方接口存在也不证明本仓现有 Driver 已适配。
+
+| Runtime 与固定版本 | 公开发现及真实调用路径 | 当前接入差额与验收边界 |
+| --- | --- | --- |
+| Codex `0.153.0`，官方 commit `41e22fee981a63b3698df7ed36bad393cda24715` | [app-server](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/app-server/README.md)：`skills/extraRoots/set`、`skills/list`、`skills/changed`；`turn/start` 的结构化 `skill` 输入；`thread/read` 只读查询；`thread/compact/start` 原生压缩 | 优先路径见下文。没有把 CLI 斜杠清单当作通用命令 API。压缩参数只有 threadId，须证明原 Session 模型/Key 与本次冻结选择一致及现有屏障有效；否则拒绝压缩，交公共执行 owner 保留具体缺口 |
+| Claude 官方 `@anthropic-ai/claude-agent-sdk@0.3.246` | [固定发行类型](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.246/sdk.d.ts) 的 `supportedCommands()`/`SlashCommand`；[官方 SDK 说明](https://code.claude.com/docs/en/agent-sdk/skills) 的命令提示及 `.claude/skills/<name>/SKILL.md` 原生加载 | 当前 Driver `settingSources: []` 且 `disable-slash-commands`。后续仅开放受控来源及实际列表中的入口，逐项验证 `/compact`/Skill 与终态，不直接移除禁用项继承个人配置；`argumentHint` 不是参数 Schema，文档新行为须对照固定 SDK |
+| OpenCode 官方 `1.18.30`，commit `3104c1428ec91f809e5ab86631300de41eb6952e`；ACP SDK `1.4.0` | [固定 ACP service](https://github.com/anomalyco/opencode/blob/3104c1428ec91f809e5ab86631300de41eb6952e/packages/opencode/src/acp/service.ts) 的 `available_commands_update` 合并命令/Skill；`session/prompt` 解析已知名称后调用原生 `session.command`，`compact` 使用原生 summarize | 原生目录含 Skill，但 ACP 展示未必携带完整来源/版本，须由受控装配核对。未知名称必须在平台拒绝；命令、Skill 真实 I/O 仍受 [Spec §10.13](SPEC-agent-infra-M1-engineering-architecture.md#1013-opencode-原生工具回执与来源) 约束，目录通知不证明工具事实/执行屏障通过 |
+| Pi 官方 `@earendil-works/pi-coding-agent@0.86.0`，commit `ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc` | [固定 RPC 文档](https://github.com/earendil-works/pi/blob/ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc/packages/coding-agent/docs/rpc.md)：`get_commands` 返回来源；`prompt` 展开 `/skill:name`；`compact` 是独立 RPC。TUI-only 命令不在此目录 | 当前装配 `enableSkillCommands: false`、`--no-skills`、`--no-prompt-templates`。后续验证受控 Skill 根及实际展开；不开放任意 extension/包安装，不以 RPC response 或低层 `agent_end` 代替完整终态 |
+
+Codex 的首个只读原生命令定义为“查看原生会话状态”：目录显式绑定 `thread/read`，不假称 CLI `/status`。Driver 只用当前 Conversation 已持久绑定的 threadId，禁用历史正文投影，只返回映射后的状态及读取时间；原生未装载不触发 resume。它证明真实原生查询闭环，不代替产生 Turn 的命令验收。原生 `/compact` 作为独立有状态命令交付，返回空 ACK 后必须跟踪原 `contextCompaction` item 与 Turn 终态；不伪造普通 prompt 代跑，不绕过 §8.5.2 的当前模型和事实约束。
+
+Codex 已安装 Skill 的首条路径：部署提供固定来源/内容摘要的 Skill 包，作为只读资源装配在已获文件准入的固定 Runtime 资源根 `/opt/codex/agent-infra-skills/workspace-summary/SKILL.md` 及配套资源中，不放进可被模型工具改写的 Conversation 工作区或原生 HOME。该名称是实施验收包，不声称官方内置。每个 Conversation 独立 app-server 进程仅把获准的 `/opt/codex/agent-infra-skills` 交给固定版本公开的 `skills/extraRoots/set`；调用前以 `skills/list` 实际返回且 enabled、来源路径及内容摘要匹配作为目录准入，出现额外的个人或项目 Skill 时拒绝该次调用。Host 将能力 ID 解析为本机获准路径，向原 `turn/start` 传递 `skill {name,path}` 与有界任务文本，保持本次模型/reasoning/Key。路径不由 Web 提供；用受控工作区样本验证原生加载该确定内容、只读挂载和跨 Conversation 文件隔离，以及实际工具读取/摘要结果。官方[输入类型](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/protocol/src/user_input.rs)证明结构化入口存在，不能证明既有部署已允许该目录或工具屏障已经通过；缺少这些前置时保持未验证，由原 owner 补齐，禁止以派生二进制或普通提示绕过。
+
+本节源码与官方 SDK 声明属于静态证据；上游测试属于上游证据。运行证据须另列原生版本及发行摘要、受控 Skill 摘要、实际发现/调用、加载及工具事实、平台持久结果与浏览器回读。没有这些证据不得写“支持已验收”；本节不授权新增隔离探针或修改上游实现。
+
+### 5.4 独立验收与实施交接
+
+| 场景 | 通过条件 |
+| --- | --- |
+| 发现与 UI | 固定四模板逐项核对目录、说明、来源/版本、搜索/键盘/输入法/参数/清除与移动布局；目录读取失败区别空目录。真实浏览器使用唯一会话输入框及时间线 |
+| Codex 正向 | 真实 `thread/read` 状态命令、原生压缩及一个确定版本 Skill 各有真实调用与结果；Skill 必含实际工具操作及加载证据。压缩模型/Key/屏障缺口单列未完成，不以只读命令通过抹去 |
+| 参数与变化 | 未知命令、缺参、旧目录、禁用/删除/同名替换包、协议不支持均明确拒绝且零新副作用；普通消息回归，不能静默降级 |
+| 授权与来源 | 两个独立主体、跨 Agent/Conversation/能力 ID 替换、撤权、依赖不可确认、Owner 越权、来源越界均拒绝；个人 HOME 不参与装配，目录/错误/遥测不泄露内容或凭据 |
+| 串行与恢复 | 活跃/等待/unknown 时不发新 Turn；同键重投/异参冲突、受理响应丢失、原生 ACK 后失败、停止竞态、重启和 SSE 重连保持原操作及结果；不重复模型/工具副作用，不提前释放占用 |
+| 其余模板 | Claude/OpenCode/Pi 各按上表真实 SDK/ACP/RPC 路径核对发现、调用、加载/工具及终态；缺口绑定版本、原因、原 owner 与实施 AC，不能以四行 unsupported 结案 |
+
+[#992](https://github.com/AgoraIO-Extensions/agent-infra/issues/992) 以 [#991](https://github.com/AgoraIO-Extensions/agent-infra/issues/991) 契约评审合入为 native blocker；仅文档完成不签收功能或原票 AC。实施前逐 hunk 交接：Web owner 在 [#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192) 唯一输入框/时间线消费生成 Client，遵循 [#400](https://github.com/AgoraIO-Extensions/agent-infra/issues/400) 固定 `agent-infra/index.html`、`screens/chat.html` IA，旧 Pilot 及按当前实现生成的变体不作依据；[#482](https://github.com/AgoraIO-Extensions/agent-infra/issues/482) 拥有任务 API/Store；[#508](https://github.com/AgoraIO-Extensions/agent-infra/issues/508) 拥有公共执行/Host/控制恢复；Runtime 原 owner 拥有各 Driver；正式装配归 [#504](https://github.com/AgoraIO-Extensions/agent-infra/issues/504)。本新增能力不反向阻塞这些票，不接管其未完成验收，也不重定义 OpenCode 工具来源或原控制恢复条款。
+
 ## 6. 数据归属与标识
 
 | 数据 | 权威位置 | 约束 |
@@ -401,28 +455,41 @@ Driver 仍只准入本次 Execution 冻结的 B；压缩与后续普通采样都
 
 OpenCode 的来源、维护和启用前置以
 [工程 Spec 10.13](SPEC-agent-infra-M1-engineering-architecture.md#1013-opencode-原生工具回执与来源)为准。
-Generic ACP 保留权限、进度与未知结果的协议语义；接缝能力只由经过验证的原生执行回执提供。
+Generic ACP 保留权限、进度与未知结果的协议语义；可信开始与结果只由经过验证的实际执行端提供。
 公开 Plugin 接缝的可用性须在固定源码和 artifact 中核对，不假定 before hook 位于工具内部
 权限检查之后，也不假定成功后的 after hook 覆盖抛错、取消或内部新尝试。
+
+官方公开扩展的替代边界由固定工具扩展请求现有 Driver 信任域中的执行叶子完成实际 I/O。
+扩展请求与模型/ACP 进度不能写入可信回执；只有执行叶子沿原 journal 记录实际开始和结果。
+模型可用的每项工具须先验证与原承诺行为等价，原 built-in 及其他可绕过该叶子的入口须实际
+阻断。固定扩展、工具和配置受版本/hash 与只读装配控制，不加载 Owner 或工作区可写的替代
+实现；提示词、默认配置或一条自有工具成功不能证明完整覆盖或隔离。
+
+公开入口须把每个真实执行请求无歧义地绑定到 Driver 已冻结的原 Session/Execution、代次
+和 fence，并持久保存 request 与 operation/attempt 的映射。固定 V1 ToolContext 未公开
+callID，不能依赖未声明字段、当前 Execution、参数相等、队列次序或模型自报 ID 补足绑定。
+before hook 提供 callID 本身不证明其与实际请求的关联；同参数并发、跨 Execution、旧请求
+重放及原 Session 重启均须实证。不能建立可信映射时拒绝执行，不补造原生调用事实。
 
 - 原生接缝将可信 session/Turn/callId 和每次内部尝试绑定到原 Execution、代次/fence
   与稳定 operationRef/attemptRef。重复控制请求复用已保存决定，真实新尝试独立标识；
   模型参数、ACP 任意进度帧与另一 Execution 的相同 tool ID 不能建立该绑定。
 - 每次实际文件操作、process/client dispatch 前，Driver 沿现有 journal 确认 intent，
-  释放持久队列后等待当前 Host 授权。Native 校验该 attempt 的许可、代次和本地取消状态；
+  释放持久队列后等待当前 Host 授权。实际执行端校验该 attempt 的许可、代次和本地取消状态；
   拒绝、过期、错配、断连或持久确认失败不开始动作。工具内部权限与普通 hook 保留原职责，
   许可缓存不跳过每次屏障；最终操作内容变化须重新核对，不能使用变更前的许可。
 - Permit 是准入确认。started 只来自实际 I/O 或 dispatch 已开始的回执；前置验证、
   权限等待和拒绝均不记录虚构开始或耗时。结果、抛错、取消和可能发生后的 unknown 沿原
   attempt 保存并确认，确认完成前不向原生推理循环交付该结果或开始后续动作。
-- 控制通道复用原 Native 进程生命周期，ACP stdio 继续承担业务协议，不增加公开 RPC、
+- 控制通道复用现有 Driver/Native 生命周期，ACP stdio 继续承担业务协议，不增加公开 RPC、
   capability 协商或调度循环。接管的控制端必须隔离于工具子进程并在 spawn 前封闭继承，
   模型/Owner 不能关闭、改写或伪造许可；同 UID 可读取的 env Token 或普通 socket 路径
   不能作为隔离证明。确认等待可取消且不占用状态/stop 消费所需的持久锁。
 - stop、撤权和 generation barrier 封闭新准入并排空在途控制请求及实际执行源；未确认
   停止不释放占用。任何一侧在许可、实际开始或结果确认附近崩溃，只核实原 attempt，
   保留已保存结果和未确认交付；未知不自动重发，也不借新 attempt 或 Session 补证。
-- 工具覆盖清单绑定真实 artifact：当前允许的 read/edit 及其内部动作逐项验证，声明的
+- 工具覆盖清单绑定真实 artifact 及扩展：原 built-in 与替代叶子分别记录，read/write/edit
+  及其内部动作逐项验证，声明的
   其他 built-in、委托调用、后台动作和内部 retry 都独立覆盖。能力缺口保持未通过，
   不从另一工具的结果推定；正文、文件内容、参数、凭证和原生错误留在受控业务路径，
   不进入操作事实或遥测。公共事实、必要审计和游标继续使用 8.2/8.5 的唯一事务边界。
@@ -524,11 +591,16 @@ Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每
   与持久事实，证明未知不重放、不转为 A 或提前回答、不伪造未创建 Turn、不提前释放占用；
   既有普通当前模型压缩、取消和已保存历史读取仍按原契约通过。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- OpenCode 工具接缝使用真实固定 Native 与受控 read/edit，逐项核对许可前零动作、实际
+- OpenCode 工具接缝使用真实固定 Native 与受控 read/write/edit，逐项核对许可前零动作、实际
   开始和结果/失败/取消；覆盖内部新尝试、重用 tool ID、跨主体/Execution、回执丢失与结果
   保存失败、原 Session 重启和控制端隔离。验证源码/target/artifact 与覆盖清单、旧终态
   读取和 active/unknown 兼容；合成敏感哨兵不进入事实、错误或遥测。Fixture 只证明其受控
   路径，四模板真实模型/Connection、V4 Key 和 Worker 事务验收继续逐项完成。
+- 官方扩展替代边界另外验证同参数并发请求的原 Execution/attempt 绑定、旧 slot/请求重放、
+  伪造回执、可写配置替换及原工具绕过。intent 保存或授权失败时真实 I/O 为零；实际 I/O
+  完成但 terminal ACK 扣留时，后续模型请求为零，释放 ACK 后才能继续；结果已保存后断连
+  重启只读取原 attempt，实际 I/O 计数不增加。停止须排空实际执行源，控制 ACK 不证明退出。
+  该纵向验证从 read 开始不缩小 write/edit、委托、后台或其他已承诺工具的完整矩阵。
 - 负向测试覆盖未知协议、无交互入口、Manifest Label 缺失或超过 64 KiB、JSON 嵌套超过 8 层、未知或重复字段、非 `1` 的 Schema 版本、`self-managed` 声明 `protocol`、非法 capability 结构、Registry 从 capability 外重复声明 `supplementaryInstruction`、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Service/健康检查、`health.path` 使用 `//`、`.` 或 `..` 路径段、反斜杠、`%` 编码、非允许字符、外部 URL、查询参数、片段、控制字符或凭证，以及健康探针返回 HTTP 重定向、调用方伪造或覆盖 `actorId`、使用另一发送者的 Conversation 查询消息、历史、SSE、附件或结果文件、群内公开事件暴露其他发送者的 Conversation 或 Runtime 上下文、不同发送者向活跃 Turn 追加指令或停止回复、缺失或非法 `Idempotency-Key`、同一 Key 跨命令类型复用时误命中其他操作、普通消息响应丢失后因活跃状态变化把重试误判为补充指令或繁忙、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、使用者停止投递前失去权限后转换为平台撤权停止、没有使用者停止请求时平台主动中止撤权用户的活跃 Execution、身份依赖暂时不可用时不误判撤权或调用 Adapter、检查 stop 后到调用 Runtime 前的并发停止、Turn lease 到期后旧 Worker 迟到提交或回写、接管 Worker 未完成高 fence 取消标记、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、stop 认领后已接受 Turn 的在途事件或真实终态被拒绝、Session 恢复失败后旧代次调用、事件或终态迟到、generation tombstone 重试、繁忙拒绝后创建记录、重复消息、旧 fence 重放已保存事件时重复写入、旧 fence 产生未保存的新事件、双 Worker 并发保存同一 Conversation 事件、Runtime 事件已转发但事务未提交时断线、事务提交后上游确认前崩溃、Worker/Pod 重启后按已确认游标重放、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
 - generation fencing 故障注入覆盖隔离意图提交后 tombstone 尚未激活、Agent Service 激活后 Platform DB 尚未提升代次、两个阶段之间 Worker 重启、tombstone 重复投递和 Agent Service 暂时不可用；任何路径都不能接受新命令、丢弃已接受旧调用的可见结果、在 barrier 确认后产生旧代次副作用，或在确认前提升平台代次。
 - RuntimeHost Conformance 故障注入覆盖 Host Session Ref 泄露、跨 Conversation 重放或与 Grant 绑定不一致，Grant 签名、签发方、audience、有效期、附件引用或操作范围不匹配，缺失或非法模型选择、同一 Execution 选择重放与冲突、相邻 Execution 选择隔离、Driver 不支持的模型或 reasoning，两个 Worker 对同一 Session 和 operation scope 并发提交相同或不同 fence，以及请求记录提交前、提交后但 Driver 调用前、Driver 接受后但 Host 持久化或响应前崩溃。测试必须模拟 durable store 确认前掉电和不完整记录；恢复查询、重复请求和 fence 接管都不能创建第二个 Turn、重复补充指令或重复停止。无法确认时保持 `unknown`，损坏记录使对应 Session fail closed，不能把引用、请求字段、模型 endpoint/credential、原生协议帧或日志文本当作授权或恢复依据。

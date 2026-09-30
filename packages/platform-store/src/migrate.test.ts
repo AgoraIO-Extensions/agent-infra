@@ -1,10 +1,12 @@
 import { resolve } from "node:path";
 
+import { createAgentManagementV1 } from "@agent-infra/platform-core";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
 import {
 	type PostgresTestDatabase,
@@ -113,6 +115,346 @@ describe("Platform PostgreSQL migration foundation", () => {
 			}),
 		).toThrow("PLATFORM_DATABASE_URL must be a PostgreSQL URL");
 	});
+
+	it("upgrades the main 0023 history to application targets without rewriting it", async () => {
+		const database = await startPostgresTestDatabase(
+			"migration-0023-application-targets",
+		);
+		const client = postgres(database.databaseUrl, { max: 1 });
+		try {
+			await client.unsafe(`CREATE SCHEMA platform_migrations;
+					CREATE TABLE platform_migrations.history
+					(id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
+			for (const migration of migrations.slice(0, 24)) {
+				for (const statement of migration.sql) await client.unsafe(statement);
+				await client`insert into platform_migrations.history (hash, created_at)
+						values (${migration.hash}, ${migration.folderMillis})`;
+			}
+			const before = await client`
+					select id, hash, created_at
+					from platform_migrations.history
+					order by id
+				`;
+			expect(before).toHaveLength(24);
+			expect(
+				(
+					await client`
+							select table_name from information_schema.tables
+							where table_schema = 'platform' and table_name = 'browser_sessions'
+						`
+				).map((row) => row.table_name),
+			).toEqual(["browser_sessions"]);
+
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+
+			const catalog = await readPlatformCatalog(client);
+			expect(
+				catalog.columns
+					.filter((column) =>
+						[
+							"browser_sessions",
+							"agent_principal_grants",
+							"platform_applications",
+						].includes(column.table_name),
+					)
+					.map((column) => column.table_name),
+			).toEqual(
+				expect.arrayContaining([
+					"browser_sessions",
+					"agent_principal_grants",
+					"platform_applications",
+				]),
+			);
+			const after = await client`
+					select id, hash, created_at
+					from platform_migrations.history
+					order by id
+				`;
+			expect(after).toHaveLength(migrations.length);
+			expect(after.slice(0, before.length)).toEqual(before);
+
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+			expect(
+				await client`
+						select id, hash, created_at
+						from platform_migrations.history
+						order by id
+					`,
+			).toEqual(after);
+		} finally {
+			await client.end();
+			await database.stop();
+		}
+	}, 120_000);
+
+	it("retains an approved Agent and its durable retry history from 0020 through 0024", async () => {
+		const database = await startPostgresTestDatabase(
+			"migration-0020-retained-agent",
+		);
+		const client = postgres(database.databaseUrl, { max: 1 });
+		try {
+			await client.unsafe(`CREATE SCHEMA platform_migrations;
+				CREATE TABLE platform_migrations.history
+				(id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
+			for (const migration of migrations.slice(0, 21)) {
+				for (const statement of migration.sql) await client.unsafe(statement);
+				await client`insert into platform_migrations.history (hash, created_at)
+					values (${migration.hash}, ${migration.folderMillis})`;
+			}
+			await client`insert into platform.agents (id)
+				values ('retained_agent')`;
+			await client`insert into platform.agent_applications
+				(id, agent_id, applicant_id, name, description, trace_id,
+					request_id, submitted_at)
+				values ('retained_application', 'retained_agent', 'retained_owner',
+					'Retained Agent', 'Existing application', 'retained_trace',
+					'retained_request', now())`;
+			await client`insert into platform.agent_owners
+				(agent_id, owner_id, created_at)
+				values ('retained_agent', 'retained_owner', now())`;
+			await client`insert into platform.agent_configuration_revisions
+				(agent_id, revision, source_reference, configuration, created_at)
+				values ('retained_agent', 1, 'retained_source',
+					${client.json({
+						...agentConfigurationConformanceRecordV1,
+						agentId: "retained_agent",
+						revision: 1,
+					} as postgres.JSONValue)},
+					now())`;
+			await client`insert into platform.audit_events
+				(id, trace_id, request_id, agent_id, actor_type, actor_id,
+					action, target_type, target_id, outcome)
+				values ('retained_audit', 'retained_trace', 'retained_request',
+					'retained_agent', 'user', 'retained_owner', 'agent.created',
+					'agent', 'retained_agent', 'succeeded')`;
+			const approvalCommand = {
+				schemaVersion: 1 as const,
+				command: "approve_application" as const,
+				applicationId: "retained_application",
+				expectedRevision: 0,
+				idempotencyKey: "retained-approval",
+				traceId: "retained_approval_trace",
+				requestId: "retained_approval_request",
+			};
+			const administrator = {
+				schemaVersion: 1 as const,
+				userId: "retained_administrator",
+				accountStatus: "active" as const,
+				organizationIds: [],
+				isAdministrator: true,
+			};
+			const transaction = new builtStore.PostgresAgentManagementTransactionV1({
+				databaseUrl: database.databaseUrl,
+			});
+			let approvalResult: unknown;
+			try {
+				const decision = await createAgentManagementV1(
+					transaction,
+				).executeManagementCommand(approvalCommand, administrator);
+				expect(decision.outcome).toBe("accepted");
+				if (decision.outcome !== "accepted")
+					throw new Error("Expected the legacy Web approval to be accepted");
+				approvalResult = decision.result;
+			} finally {
+				await transaction.close();
+			}
+
+			const readRetained = async () => ({
+				agents: await client`select id, current_configuration_revision
+					from platform.agents where id = 'retained_agent'`,
+				applications: await client`select id, agent_id, applicant_id, status,
+					management_revision, approval_revision, desired_state, workload_revision,
+					fence, submitted_at
+					from platform.agent_applications where id = 'retained_application'`,
+				owners: await client`select agent_id, owner_id, created_at
+					from platform.agent_owners where agent_id = 'retained_agent'`,
+				configurations:
+					await client`select agent_id, revision, source_reference,
+						configuration, created_at from platform.agent_configuration_revisions
+					where agent_id = 'retained_agent'`,
+				audits: await client`select * from platform.audit_events
+					where agent_id = 'retained_agent' order by id`,
+				managementHistory:
+					await client`select * from platform.agent_management_history
+					where agent_id = 'retained_agent' order by revision`,
+				idempotency: await client`select * from platform.idempotency_records
+					where scope_id = 'retained_application' order by id`,
+				outbox: await client`select * from platform.outbox_items
+					where scope_id = 'retained_agent' order by id`,
+			});
+			const before = await readRetained();
+			expect(before.applications[0]).toMatchObject({
+				status: "creating",
+				management_revision: "1",
+				approval_revision: "1",
+			});
+			expect(before.managementHistory).toHaveLength(1);
+			expect(before.idempotency).toHaveLength(1);
+			expect(before.outbox).toHaveLength(1);
+			expect(before.audits).toHaveLength(2);
+			const query = new builtStore.PostgresAgentManagementQueryV1({
+				databaseUrl: database.databaseUrl,
+			});
+			let visibleBefore: Awaited<ReturnType<typeof query.getApplication>>;
+			try {
+				visibleBefore = await query.getApplication(
+					{ kind: "applicant", applicantId: "retained_owner" },
+					"retained_application",
+				);
+			} finally {
+				await query.close();
+			}
+			expect(visibleBefore).toBeDefined();
+			const previousHistory = await client`
+				select id, hash, created_at from platform_migrations.history order by id`;
+			expect(previousHistory).toHaveLength(21);
+
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+			const upgradedHistory = await client`
+				select id, hash, created_at from platform_migrations.history order by id`;
+			expect(upgradedHistory.slice(0, previousHistory.length)).toEqual(
+				previousHistory,
+			);
+			expect(upgradedHistory).toHaveLength(migrations.length);
+			expect(await readRetained()).toEqual(before);
+			const upgradedQuery = new builtStore.PostgresAgentManagementQueryV1({
+				databaseUrl: database.databaseUrl,
+			});
+			try {
+				expect(
+					await upgradedQuery.getApplication(
+						{ kind: "applicant", applicantId: "retained_owner" },
+						"retained_application",
+					),
+				).toEqual(visibleBefore);
+				expect(
+					await upgradedQuery.getApplication(
+						{ kind: "applicant", applicantId: "other_user" },
+						"retained_application",
+					),
+				).toBeUndefined();
+			} finally {
+				await upgradedQuery.close();
+			}
+			const upgradedTransaction =
+				new builtStore.PostgresAgentManagementTransactionV1({
+					databaseUrl: database.databaseUrl,
+				});
+			try {
+				await expect(
+					createAgentManagementV1(upgradedTransaction).executeManagementCommand(
+						approvalCommand,
+						administrator,
+					),
+				).resolves.toEqual({
+					outcome: "replayed",
+					result: approvalResult,
+					writePlan: null,
+				});
+				expect(await readRetained()).toEqual(before);
+			} finally {
+				await upgradedTransaction.close();
+			}
+			expect(
+				await client`select principal_type, principal_id, grant_type,
+					authorization_revision from platform.agent_principal_grants
+					where agent_id = 'retained_agent' order by grant_type`,
+			).toEqual(
+				["manage", "use"].map((grant_type) => ({
+					principal_type: "user",
+					principal_id: "retained_owner",
+					grant_type,
+					authorization_revision: "legacy:retained_agent",
+				})),
+			);
+			expect(
+				await client`select id from platform.platform_applications`,
+			).toEqual([]);
+
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+			expect(
+				await client`select id, hash, created_at
+				from platform_migrations.history order by id`,
+			).toEqual(upgradedHistory);
+			expect(await readRetained()).toEqual(before);
+		} finally {
+			await client.end();
+			await database.stop();
+		}
+	}, 120_000);
+
+	it("preserves an applied 0024 creating/null row without approving or scheduling it", async () => {
+		const database = await startPostgresTestDatabase(
+			"migration-0024-creating-null",
+		);
+		const client = postgres(database.databaseUrl, { max: 1 });
+		const workload = builtStore.openPostgresWorkloadReconciliationStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		try {
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+			await client`insert into platform.agents (id)
+				values ('historical_creating')`;
+			await client`insert into platform.agent_applications
+				(id, agent_id, applicant_id, name, description, trace_id, request_id,
+					submitted_at, status, management_revision, approval_revision,
+					desired_state, workload_revision, fence)
+				values ('historical_application', 'historical_creating',
+					'historical_owner', 'Historical Agent', 'Controlled historical state',
+					'historical_trace', 'historical_request', now(), 'creating', 1,
+					null, 'running', 1, 1)`;
+			await client`insert into platform.agent_owners (agent_id, owner_id, created_at)
+				values ('historical_creating', 'historical_owner', now())`;
+			const readState = () => client`
+				select status, management_revision, approval_revision, desired_state,
+					workload_revision, fence from platform.agent_applications
+				where id = 'historical_application'`;
+			const before = await readState();
+			const history = await client`
+				select id, hash, created_at from platform_migrations.history order by id`;
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+			expect(await readState()).toEqual(before);
+			expect(before[0]?.approval_revision).toBeNull();
+			expect(
+				await client`select id, hash, created_at
+					from platform_migrations.history order by id`,
+			).toEqual(history);
+			await expect(
+				workload.runNext("historical-worker", async () => {
+					throw new Error("Historical row must not be scheduled");
+				}),
+			).resolves.toBe("idle");
+			expect(await readState()).toEqual(before);
+			expect(
+				await client`select revision from platform.agent_management_history
+					where agent_id = 'historical_creating'`,
+			).toEqual([]);
+			expect(
+				await client`select id from platform.audit_events
+					where agent_id = 'historical_creating'`,
+			).toEqual([]);
+			expect(
+				await client`select id from platform.outbox_items
+					where scope_id = 'historical_creating'`,
+			).toEqual([]);
+		} finally {
+			await workload.close();
+			await client.end();
+			await database.stop();
+		}
+	}, 120_000);
 
 	it.each(["file-authority", "configuration-v2", "task-integrity"] as const)(
 		"upgrades the existing %s migration history without losing either schema",
@@ -358,6 +700,9 @@ describe("Platform PostgreSQL migration foundation", () => {
 				`;
 			// Platform-owned WeCom transport leases and channel ciphertext are not Connection Provider credentials.
 			expect(forbiddenObjects.map((row) => row.object_name).sort()).toEqual([
+				"api_credential_delivery_grants",
+				"platform_api_credentials",
+				"platform_api_credentials.credential_hash",
 				"wecom_connections",
 				"wecom_receipts.connection_bot_id",
 				"wecom_receipts.connection_fence",

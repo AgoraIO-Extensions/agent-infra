@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	chmod,
 	mkdir,
@@ -44,9 +45,19 @@ async function fixture() {
 		writeFile(kubeconfig, "fixture"),
 		writeFile(
 			values,
-			"platformWorker:\n  deploymentModule: file:///app/dist/deployment.mjs\n",
+			"platformWorker:\n  configurationModuleSecretRef:\n    name: fixture-worker-configuration\n    key: configuration.mjs\n  runtimeAuthSecretRef:\n    name: fixture-worker-auth\n    privateKeyKey: runtime-grant.pem\n    serviceTokenKey: service-token\n  deploymentModule: file:///app/dist/deployment.mjs\n",
 		),
-		writeFile(join(api, "configuration.mjs"), ""),
+		writeFile(
+			join(api, "configuration.mjs"),
+			[
+				'export const ldap = { url: "ldaps://directory.example.invalid", issuer: "fixture", baseDn: "dc=example,dc=invalid", serviceBindDn: "cn=service", serviceBindPassword: "fixture", loginAttribute: "uid", uidAttribute: "uid", emailAttribute: "mail", displayNameAttribute: "displayName", verifyCurrentStatus: async () => "active", identityIds: { findByUid: async () => null, findUidByUserId: async () => null, getOrCreate: async () => "00000000-0000-4000-8000-000000000000" } };',
+				"export const isPlatformDisabled = async () => false;",
+				"export const organizationIds = async () => [];",
+				'export const publicOrigin = "https://localhost:3001";',
+				'export const apiInput = { imageRepository: "registry.example/agent", loadAuthorityContext: async () => ({}), modelCatalog: { revision: "catalog-v1", load: async () => ({}) }, encryptionKeys: {}, resourceProfile: {} };',
+				"",
+			].join("\n"),
+		),
 		writeFile(cert, ""),
 		writeFile(key, ""),
 		writeFile(proxyToken, proxyTokenValue, { mode: 0o600 }),
@@ -102,7 +113,47 @@ fi`,
 		"helm",
 		`
 printf 'helm %s\\n' "$*" >> "$COMMAND_LOG"
-if [[ "$*" == *"uninstall"* && -n "$FAKE_HELM_UNINSTALL_EXIT" ]]; then
+if [[ "$*" == *" template "* ]]; then
+  cat <<'YAML'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fixture-worker
+spec:
+  template:
+    spec:
+      containers:
+        - name: platform-worker
+          env:
+            - name: PLATFORM_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: agent-infra-verify-postgres
+                  key: url
+          volumeMounts:
+            - name: deployment-module
+              mountPath: /app/dist/configuration.mjs
+              subPath: configuration.mjs
+      volumes:
+        - name: deployment-module
+          secret:
+            secretName: fixture-worker-configuration
+            items:
+              - key: worker-config
+                path: configuration.mjs
+        - name: runtime-auth
+          secret:
+            secretName: fixture-worker-auth
+            items:
+              - key: runtime-grant.pem
+              - key: service-token
+        - name: decryption-keyring
+          secret:
+            secretName: agent-infra-worker-decryption-keyring
+            items:
+              - key: keyring.pem
+YAML
+elif [[ "$*" == *"uninstall"* && -n "$FAKE_HELM_UNINSTALL_EXIT" ]]; then
   exit "$FAKE_HELM_UNINSTALL_EXIT"
 elif [[ "$*" == *"upgrade --install"* && -n "$FAKE_HELM_UPGRADE_EXIT" ]]; then
   exit "$FAKE_HELM_UPGRADE_EXIT"
@@ -119,8 +170,25 @@ fi`,
 if [[ "$*" == *"config view"* ]]; then
   printf '%s' "$FAKE_KUBE_SERVER"
 elif [[ "$*" == *"--ignore-not-found -o json" ]]; then
-  if [[ -n "$FAKE_FOREIGN_RESOURCE" && "$*" == *"get $FAKE_FOREIGN_RESOURCE "* ]]; then
+  if [[ "$*" == *"get pvc/"* ]]; then
+    printf '%s\\n' "$FAKE_AGENT_PVC_JSON"
+  elif [[ "$*" == *"get statefulset/"* ]]; then
+    printf '%s\\n' "$FAKE_AGENT_STATEFULSET_JSON"
+  elif [[ -n "$FAKE_FOREIGN_RESOURCE" && "$*" == *"get $FAKE_FOREIGN_RESOURCE "* ]]; then
     printf '%s\\n' '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"another-owner"}}}'
+  elif [[ "$*" == *"get secret/"* && "$FAKE_SECRET_MATERIAL" == 1 ]]; then
+    command="$*"
+    secret_name="\${command#*get secret/}"
+    secret_name="\${secret_name%% *}"
+    if [[ "$secret_name" == agent-infra-verify-postgres ]]; then
+      printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify","labels":{"app.kubernetes.io/managed-by":"agent-infra-local","agent-infra.agora.io/local-project":"agent-infra-verify"}},"data":{"url":"eA==","configuration.mjs":"eA==","runtime-grant.pem":"eA==","service-token":"eA==","keyring.pem":"eA=="}}\\n' "$secret_name"
+    elif [[ "$secret_name" == fixture-worker-configuration && "$FAKE_SECRET_MISSING_KEY" == 1 ]]; then
+      printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify"},"data":{"other":"eA=="}}\\n' "$secret_name"
+    elif [[ "$secret_name" == fixture-worker-configuration ]]; then
+      printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify"},"data":{"worker-config":"eA=="}}\\n' "$secret_name"
+    else
+      printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify"},"data":{"url":"eA==","configuration.mjs":"eA==","runtime-grant.pem":"eA==","service-token":"eA==","keyring.pem":"eA=="}}\\n' "$secret_name"
+    fi
   elif [[ "$*" == *"get endpointslice/agent-infra-verify-postgres-docker "* && -f "$FAKE_ROUTE_STATE" ]]; then
     cat "$FAKE_ROUTE_STATE"
   fi
@@ -175,6 +243,10 @@ fi`,
 		FAKE_CONFIGURED_WORKER_REPLICAS: "1",
 		FAKE_HELM_LIST_RESULT: "",
 		FAKE_AUTH_PROBE_EXIT: "",
+		FAKE_AGENT_PVC_JSON: "",
+		FAKE_AGENT_STATEFULSET_JSON: "",
+		FAKE_SECRET_MATERIAL: "1",
+		FAKE_SECRET_MISSING_KEY: "0",
 		FAKE_DATABASE_URL: "postgresql://fixture:fixture@postgres:5432/fixture",
 		PLATFORM_LOCAL_DOCKER_CONTEXT: "isolated",
 		PLATFORM_LOCAL_PROJECT: "agent-infra-verify",
@@ -198,8 +270,8 @@ fi`,
 	};
 }
 
-function run(command, env) {
-	return spawnSync("bash", [script, command], {
+function run(command, env, args = []) {
+	return spawnSync("bash", [script, command, ...args], {
 		cwd: process.cwd(),
 		env,
 		encoding: "utf8",
@@ -717,6 +789,200 @@ test("local stop refuses active Agent Workloads and Pods before uninstall", asyn
 		assert.match(
 			await readFile(f.log, "utf8"),
 			/compose .* up --detach --wait platform-api web/,
+		);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up validates private API and Worker material before stopping services", async () => {
+	const f = await fixture();
+	try {
+		await writeFile(
+			join(f.env.PLATFORM_LOCAL_API_DIRECTORY, "configuration.mjs"),
+			"export const ldap = ;",
+		);
+		const result = run("up", f.env);
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/Local API configuration.mjs has invalid syntax/,
+		);
+		assert.equal(await readFile(f.log, "utf8"), "");
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up reports missing Worker Secret material before Helm rollout", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", { ...f.env, FAKE_SECRET_MATERIAL: "0" });
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /Local Worker Secret/);
+		const log = await readFile(f.log, "utf8");
+		assert.doesNotMatch(log, /helm .* upgrade --install/);
+		assert.doesNotMatch(log, /compose .* up .* platform-api/);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up names a missing mapped Worker configuration key without exposing data", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", { ...f.env, FAKE_SECRET_MISSING_KEY: "1" });
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/Local Worker Secret is missing key worker-config: fixture-worker-configuration/,
+		);
+		assert.doesNotMatch(result.stderr, /eA==|fixture:fixture/);
+		assert.doesNotMatch(
+			await readFile(f.log, "utf8"),
+			/helm .* upgrade --install/,
+		);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local reset requires the exact project and removes only the isolated Compose volumes", async () => {
+	const f = await fixture();
+	try {
+		const unconfirmed = run("reset", f.env);
+		assert.notEqual(unconfirmed.status, 0);
+		assert.match(unconfirmed.stderr, /exact isolated project name/);
+		assert.equal(await readFile(f.log, "utf8"), "");
+
+		const confirmed = run("reset", f.env, ["agent-infra-verify"]);
+		assert.equal(confirmed.status, 0, confirmed.stderr);
+		const log = await readFile(f.log, "utf8");
+		assert.match(log, /compose .* down --volumes --remove-orphans/);
+		assert.doesNotMatch(log, /delete persistentvolumeclaim|delete pvc/);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local reset deletes an explicitly selected canonical Agent PVC", async () => {
+	const f = await fixture();
+	try {
+		const agentId = "local-reset-agent";
+		const agentName = `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`;
+		const env = {
+			...f.env,
+			PLATFORM_LOCAL_AGENT_PVC_NAMES: `${agentName}-data`,
+			FAKE_AGENT_PVC_JSON: JSON.stringify({
+				kind: "PersistentVolumeClaim",
+				metadata: {
+					name: `${agentName}-data`,
+					namespace: "agent-infra-verify",
+					labels: { "agent-infra.agora.io/agent": agentName },
+					annotations: { "agent-infra.agora.io/agent-id": agentId },
+				},
+			}),
+			FAKE_AGENT_STATEFULSET_JSON: JSON.stringify({
+				kind: "StatefulSet",
+				metadata: {
+					name: agentName,
+					namespace: "agent-infra-verify",
+					labels: { "agent-infra.agora.io/agent": agentName },
+					annotations: { "agent-infra.agora.io/agent-id": agentId },
+				},
+			}),
+		};
+		const result = run("reset", env, ["agent-infra-verify"]);
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(
+			await readFile(f.log, "utf8"),
+			new RegExp(`delete pvc/${agentName}-data`),
+		);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local reset refuses a canonical Agent PVC with an owner reference", async () => {
+	const f = await fixture();
+	try {
+		const agentId = "local-reset-owned-agent";
+		const agentName = `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`;
+		const env = {
+			...f.env,
+			PLATFORM_LOCAL_AGENT_PVC_NAMES: `${agentName}-data`,
+			FAKE_AGENT_PVC_JSON: JSON.stringify({
+				kind: "PersistentVolumeClaim",
+				metadata: {
+					name: `${agentName}-data`,
+					namespace: "agent-infra-verify",
+					labels: { "agent-infra.agora.io/agent": agentName },
+					annotations: { "agent-infra.agora.io/agent-id": agentId },
+					ownerReferences: [
+						{
+							apiVersion: "apps/v1",
+							kind: "StatefulSet",
+							name: "foreign-owner",
+							controller: true,
+						},
+					],
+				},
+			}),
+			FAKE_AGENT_STATEFULSET_JSON: JSON.stringify({
+				kind: "StatefulSet",
+				metadata: {
+					name: agentName,
+					namespace: "agent-infra-verify",
+					labels: { "agent-infra.agora.io/agent": agentName },
+					annotations: { "agent-infra.agora.io/agent-id": agentId },
+				},
+			}),
+		};
+		const result = run("reset", env, ["agent-infra-verify"]);
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/Refusing to delete an unowned Agent PVC: .*data/,
+		);
+		assert.doesNotMatch(await readFile(f.log, "utf8"), /delete pvc\//);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local reset refuses a same-namespace PVC with foreign or mismatched Agent ownership", async () => {
+	const f = await fixture();
+	try {
+		const env = {
+			...f.env,
+			PLATFORM_LOCAL_AGENT_PVC_NAMES: "foreign-data",
+			FAKE_AGENT_PVC_JSON: JSON.stringify({
+				kind: "PersistentVolumeClaim",
+				metadata: {
+					name: "foreign-data",
+					namespace: "agent-infra-verify",
+					labels: { "agent-infra.agora.io/agent": "foreign" },
+					annotations: { "agent-infra.agora.io/agent-id": "another-agent" },
+					ownerReferences: [
+						{
+							apiVersion: "apps/v1",
+							kind: "StatefulSet",
+							name: "foreign",
+							controller: true,
+						},
+					],
+				},
+			}),
+		};
+		const result = run("reset", env, ["agent-infra-verify"]);
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/Refusing to delete an unowned Agent PVC: foreign-data/,
+		);
+		assert.doesNotMatch(
+			await readFile(f.log, "utf8"),
+			/delete pvc\/foreign-data/,
 		);
 	} finally {
 		await f.close();

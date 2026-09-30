@@ -141,11 +141,35 @@ bash deploy/local/platform.sh stop
 project 执行下面的命令；它删除 PostgreSQL 和对象存储的数据卷。Agent PVC 的删除也必须
 单独确认具体本地集群和 PVC 名称，不能通过普通停止命令隐式完成。
 
+启动前 up 会检查 API configuration.mjs 的语法并用 Helm 渲染校验 Worker values 和固定部署
+模块；在本地数据库 Secret 建好后，还会通过显式 kubeconfig/context/namespace 逐项读取渲染出的
+Worker Secret 引用，确认 Secret 存在且包含所需 key，再开始 Helm rollout。正式容器启动时还会
+校验可信 LDAP 状态验证器、持久身份映射、组织解析、Registry/ModelCatalog、加密公钥和资源
+Profile 的导出形状；失败只返回固定诊断，不输出私有模块异常或 Secret 内容。可单独运行
+bash deploy/local/platform.sh validate 做 API syntax 与静态 Helm render 检查；它不替代 live
+Secret/key readback。
+
 ```bash
 docker --context "$PLATFORM_LOCAL_DOCKER_CONTEXT" compose \
   --project-name "$PLATFORM_LOCAL_PROJECT" \
   -f docker-compose.yml -f deploy/local/compose.yaml down --volumes
 ```
+
+推荐使用带精确项目名确认的入口，它会先执行完整 stop，再删除该 Compose project 的
+数据卷；不会删除 Agent PVC：
+
+```bash
+bash deploy/local/platform.sh reset "$PLATFORM_LOCAL_PROJECT"
+```
+
+只有在已经核对当前 kind 集群、namespace 和 PVC 名称确实属于本地测试 Agent 时，才设置
+PLATFORM_LOCAL_AGENT_PVC_NAMES 为逗号分隔的 PVC 名称。每个 PVC 必须符合 Runtime 的
+canonical `agent-${sha256(agentId)[0:32]}-data` 命名、owner label/agent-id annotation
+关系，并在当前 namespace 中存在同名且 metadata 仍匹配的 Agent StatefulSet；脚本逐个删除
+并等待完成。Runtime producer 不给 PVC 添加 ownerReference，因此 reset 读取 StatefulSet
+作为实际 workload 归属证明；缺失或删除中的 StatefulSet 会 fail closed。
+未设置时所有 Agent PVC 保留。Reset 仍不会删除其它 namespace、业务卷或未通过完整 owner
+校验的 PVC。
 
 ## 验证边界
 

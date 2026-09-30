@@ -835,13 +835,48 @@ ACP 权限请求和进度通知只按各自协议含义消费。实际工具能�
 持久 intent、当前授权、可信开始及结果或 unknown；权限通过、Plugin before/after hook
 或某个工具通过不能补足未观察到的实际尝试与失败终态。
 
+Issue #957 的固定源码回读记录了 v1.18.30 (`3104c1428ec91f809e5ab86631300de41eb6952`)
+与官方 v1.18.33 (`51ef4be1d3c122f18fefb510dca8d778571f4f18`) 的五个接缝文件字节相同；
+该局部比较不等同于整版相同或升级批准。当前仓库 release 清单的 target 是
+`darwin-arm64`、`linux-arm64-musl` 和 `linux-x64-baseline-musl`，其 artifact/hash 仍以
+上方 release 声明为准。源码观察点和边界如下：
+
+| 接缝/观察点 | 固定源码证据 | 结论 |
+| --- | --- | --- |
+| 权限与实际写入 | `packages/opencode/src/tool/edit.ts:102-111`；内部先 `ctx.ask` 再写入 | before hook 不能证明权限通过或实际 I/O 开始 |
+| 调用与成功 | `packages/opencode/src/session/tools.ts:106-133` | `execute`/after hook 只表示外层调用返回，不是逐 attempt receipt |
+| running、错误与取消 | `packages/opencode/src/session/processor.ts:164-206,331-352,585-606` | 原生状态/中断清理不证明实际 I/O 已开始或执行源已退出 |
+| Plugin 接缝 | `packages/plugin/src/index.ts:266-285`；`packages/plugin/src/tool.ts` 的 V1 `ToolContext` | 公开契约没有覆盖每次内部尝试和失败终态的强制 receipt barrier |
+| 内部新尝试 | `packages/opencode/src/session/processor.ts:674-688` | provider retry 不是每个工具内部动作的回执 |
+
+因此固定版本、target 和已有 artifact/hash 可以回读；公开扩展的来源/hash、无歧义调用绑定
+及逐 attempt receipt 仍是启用前置，未证明时保持 fail closed。上述源码观察只证明文档决策，
+不证明四模板真实 Provider/Connection 或 Runtime 验收。
+
+本决策与既有产品和功能票的映射保持如下边界：
+
+| 权威/义务 | 本决策保留的边界 | 状态 |
+| --- | --- | --- |
+| Platform PRD §2/§13.3/§14、#483 | 实际 I/O 与唯一事实仍由受控 Driver 执行叶子和既有 journal/Worker 事务产生 | 设计约束；#483 真实 Provider/Connection 仍开放 |
+| #929 AC-2 | permit 是准入，`started` 只来自实际 I/O/dispatch；未观察到的开始不填造 | 文案已澄清；#929 仍未验收 |
+| #930 | ACP progress、before/after 和自有工具不能替代原生 effect receipt；原 built-in 缺口保留 | #930 Draft/能力缺口保留 |
+| 四模板、恢复、取消、隔离与 P1 工具义务 | 不因本决策或受控扩展通过而缩减原产品矩阵 | 由后续实现票逐项验证 |
+
 优先通过 upstream contribution 提供可等待、不可由模型或 Owner 关闭的原生接缝。
 官方 artifact 缺少可靠接缝时，记录对应能力未通过；不把完整 M1 义务改成模型子集或永久
-unsupported 清单。受控 derived/private artifact 另需明确的来源批准：固定 upstream
-tag/commit、最小补丁及协议、构建与依赖锁、每个 target 的 hash、许可/NOTICE、维护者与
-退出条件。平台 Runtime 维护者承担补丁、升级回归与上游跟进，来源决策由仓库 CODEOWNER
-按正式架构流程评审。没有具体来源批准与实际产物验证时，不构建、发布或启用该路径；运行时
-不下载依赖或编译源码，不另建 vendor 服务、插件平台或推理循环。
+unsupported 清单。当前 M1 不维护、准备、应用或构建 OpenCode 上游补丁、derived/private
+artifact、vendor builder 或修改版发行物，也不把 source-review packet 当作实现交付。若官方
+artifact 缺少可靠接缝，运行时必须拒绝对应能力并保留能力缺口；不能通过本 Issue、架构评审、
+fixture、环境变量或部署说明授权例外。Upstream contribution 可以由上游项目另行接收和维护，
+但不属于本仓实现、运行 pin 或验收证据；不能因此在本仓下载依赖、编译源码、发布或启用修改版，
+也不能另建 vendor 服务、插件平台或推理循环。
+
+官方公开工具扩展可以作为受控执行请求入口，实际 I/O 位于现有 Driver 信任域的执行叶子；
+扩展只能请求执行并等待结果，不能提交可信开始或结果事实。该路径复用既有 journal、Host
+当前授权和 Worker 事务，不新增部署单元或事实权威。启用前须证明工具行为、每次实际尝试、
+取消与恢复等价，并阻断所有绕过屏障的原工具入口；固定扩展及配置不可由模型或 Owner
+改写。受控工具的证明与官方原 built-in 分别记录，不能因替代路径通过而声称原 built-in 已通过，
+也不能缩减完整 M1 工具义务。调用绑定、控制隔离或等价能力尚未证明时，对应能力保持未通过。
 
 原生工具接缝留在 Driver 与原生进程边界，复用唯一公共实际操作事实、现有 journal、Host
 授权和 Worker 事务/游标。控制通道不得被工具子进程继承或由模型配置改写；具体确认顺序、
@@ -851,7 +886,7 @@ OpenCode 模型传输与 Execution Key 版本、原 Session 和 Connection 独�
 
 候选与回滚 artifact 均须验证原数据、终态读取及 active/unknown 的兼容恢复，复用原 PVC
 并核实原 attempt；缺少原执行要求的接缝时保留未确认状态，不能重建 Session、降级协议或
-重发副作用。退出私有路径以官方 artifact 实际满足相同工具覆盖、隔离与故障矩阵为准，
+重发副作用。官方 artifact 与扩展升级须满足原执行所需的工具覆盖、隔离与故障矩阵，
 升级和回滚继续执行 10.4 的恢复流程。[Runtime HLD 11.1](HLD-agent-runtime-M1.md#111-通用-runtime-与-driver-验证)
 记录原生矩阵；文档决策、Fixture 或共享 Host 通过均不证明四模板真实模型/工具验收完成。
 
@@ -876,6 +911,16 @@ Agent Pod 的 `/tmp` 挂载部署控制、具有显式容量上限的内存临�
 Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源，只保存 worker 侧 Client Adapter 使用的不透明 RuntimeHost Session Ref。RuntimeHost 在 Agent PVC 上保存该引用与 `agentId`、`conversationId`、`sessionGeneration` 及 Native Session ID 的绑定；Native Session ID 和原生事件细节不能跨出 RuntimeHost。Host Session Ref 和 Native Session ID 都不能成为浏览器、API、渠道或 Agent 请求中的身份与授权依据。API 与 Eval 复用这套权威关系，不新增 Session 或调度服务。
 
 Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的完整契约见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)，本文不重复定义协议字段。
+
+### 11.4 原生命令与已安装 Skill 边界
+
+产品范围见 [平台 PRD §11.3](../prd/PRD-agent-platform-M1.md#113-原生命令与已安装-skill)；目录、调用、固定官方版本及验证矩阵只在 [Runtime HLD §5.1–5.4](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用) 维护。该能力扩展现有 Platform Conversation Contract，复用公共 Schema、生成 Client、HTTP/SSE 和固定 Driver，不创建插件框架、第二任务调度器或独立聊天应用。
+
+- 部署维护者负责审核并固定命令映射、Skill 包来源、版本及内容摘要，与 Runtime 镜像和配置修订共同验证、升级和回滚。部署只装配获准的目录及资源，排除个人 HOME、祖先目录、全局配置和未经批准的自动发现来源；不把放开一个禁用开关视为完成装配。Skill 包不得夹带凭据、自动安装依赖或扩大工具/网络权限，运行时不能改写已选择版本。
+- Platform Core 解析当前主体、Agent 与 Conversation 归属，校验参数、能力修订及调用权限；Store 继续保存权威受理和结果，Worker 仍是唯一投递方。Host 只在已认证的内部接口上消费当前授权及冻结绑定，Driver 将获准能力映射到该固定版本真实公开接口；原生 ID、文件路径、配置和协议帧不透传 Web。
+- 能力目录不是授权凭据。新业务调用取当前权限与原受理范围的交集，并保持原模型选择、Key 版本、文件授权和 Connection 独立身份边界；目录读取不获得执行权限。只读命令不创建业务 Turn；产生 Turn 或改变原生状态的操作必须先持久受理，复用原 outbox、串行占用、操作事实和恢复路径。
+- 原生 CLI 支持不等于 SDK/API 支持。公开接口缺少所需绑定、事实或恢复接缝时，按具体能力拒绝并记录差额；不能用普通提示、模型自报、私有协议或修改上游产物补齐。尤其不能以 Skill 作为绕过 §10.8–10.13 或文件、隔离、授权门禁的入口。
+- 新契约采用显式版本协商；旧 Driver/Host 缺少命令或 Skill 语义时返回不支持，不把新输入降级为旧文本 submit。旧消息、控制、任务与恢复语义保持；新增能力不能迫使旧任务重建或重放。
 
 ## 12. 对话与长任务
 
@@ -1314,8 +1359,11 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
   存储后端的不可变 SHA-256）及 rootfs layers 绑定 OS 与应用扫描；此 CI 扫描步骤不发布镜像。
   镜像发布使用独立的 [release 入口](../../deploy/README.md#不可变镜像与-release-检查)。新增
   Dockerfile 必须同步覆盖清单。Connection 此项仅提供 HLD §14/§16 的镜像证据，不替代其 Pilot 门禁。
-- 使用 Trivy 输出的 `Severity` 阻断所有 High/Critical，包括无修复版本；中低等级及
-  Unknown 保留报告。severity 来源采用 Trivy 的 vendor 优先策略：OS 使用发行版
+- 使用 Trivy 输出的 `Severity` 识别所有 High/Critical，包括无修复版本。仅
+  `pull_request` CI 将这些发现作为警告，不因发现本身阻塞 PR；`main` push、默认本地
+  调用和发布入口仍阻断未获有效例外的 High/Critical。中低等级及 Unknown 保留报告。
+  报告保留严格漏洞判定及数量，并单独记录本次 CI 门禁结果；PR 警告不表示漏洞已修复。
+  severity 来源采用 Trivy 的 vendor 优先策略：OS 使用发行版
   advisory，应用包使用其生态数据源（npm 使用 GitHub Advisory Database）；报告保留
   `SeveritySource`、`VendorSeverity` 和 `DataSource`，不改用仅新增或仅有补丁策略。
   Trivy 未输出可选 `SeveritySource` 时，摘要注明 `Trivy auto (source unspecified)`，
@@ -1340,8 +1388,9 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
   无效/到期记录、通配范围、版本/Digest 不匹配、审批撤销或回查失败不能豁免。
   普通基础设施 waiver 不参与漏洞判定，例外不改变其他人工门禁。
 
-首次真实扫描命中阻断项时保留失败证据，由维护者批准精确例外或另开修复 Issue；不得自动
-升级、修复或降低阈值。此检查是 readiness 的前置，不代表生产或完整人工安全审计完成。
+真实扫描命中 High/Critical 时保留完整证据，并跟踪修复 Issue；严格门禁下也可由维护者批准
+精确例外。不得自动升级、修复或降低严重性。PR 仍须通过扫描执行与证据完整性检查；报告性
+发现不阻塞 PR readiness，不代表生产或完整人工安全审计完成。
 
 ### 21.2 发布
 

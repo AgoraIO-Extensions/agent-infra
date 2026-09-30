@@ -568,6 +568,7 @@ describe("Platform Worker production V2 lifecycle", () => {
 			startWorkload: async () => workload,
 			startConversation: async () => conversation,
 		});
+		expect(worker.observabilityStatus().state).toBe("active");
 		const stopping = worker.stop();
 		expect(worker.stop()).toBe(stopping);
 		await stopping;
@@ -575,6 +576,7 @@ describe("Platform Worker production V2 lifecycle", () => {
 		expect(workload.stop).toHaveBeenCalledOnce();
 		expect(conversation.stop).toHaveBeenCalledOnce();
 		expect(stopOrder).toEqual(["conversation", "workload", "primary"]);
+		expect(worker.observabilityStatus().state).toBe("closed");
 	});
 	it("starts WeCom authorization before conversation and drains conversation first", async () => {
 		const startOrder: string[] = [];

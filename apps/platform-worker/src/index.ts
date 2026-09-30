@@ -1,4 +1,8 @@
 import { pathToFileURL } from "node:url";
+import {
+	type ObservabilityOptions,
+	startObservability,
+} from "@agent-infra/observability";
 import { startPlatformConversationWorkerFromDeploymentV2 } from "./conversation-worker.js";
 import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
@@ -221,11 +225,29 @@ export async function startPlatformWorkerFromDeploymentV2(
 	options: {
 		readonly startPrimary?: () => { stop(): void | Promise<void> };
 		readonly startWorkload?: () => Promise<{ stop(): Promise<void> }>;
-		readonly startConversation?: () => Promise<{ stop(): Promise<void> }>;
+		readonly startConversation?: (
+			observability: ReturnType<typeof startObservability>,
+		) => Promise<{ stop(): Promise<void> }>;
 		readonly startWecom?: () => Promise<{ stop(): Promise<void> }>;
+		readonly observabilityOptions?: Omit<ObservabilityOptions, "service">;
 	} = {},
 ) {
-	const primary = (options.startPrimary ?? startPlatformWorker)();
+	const observability = startObservability({
+		service: platformWorkerService,
+		...(process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT
+			? {
+					otlpEndpoint: process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT,
+				}
+			: {}),
+		...options.observabilityOptions,
+	});
+	let primary: { stop(): void | Promise<void> };
+	try {
+		primary = (options.startPrimary ?? startPlatformWorker)();
+	} catch (error) {
+		await observability.close();
+		throw error;
+	}
 	let workload: { stop(): Promise<void> } | undefined;
 	let conversation: { stop(): Promise<void> } | undefined;
 	let wecom: { stop(): Promise<void> } | undefined;
@@ -236,22 +258,32 @@ export async function startPlatformWorkerFromDeploymentV2(
 		wecom = await options.startWecom?.();
 		conversation = await (
 			options.startConversation ??
-			startPlatformConversationWorkerFromDeploymentV2
-		)();
+			((telemetry) =>
+				startPlatformConversationWorkerFromDeploymentV2(
+					undefined,
+					undefined,
+					telemetry,
+				))
+		)(observability);
 		let stopping: Promise<void> | undefined;
 		return {
+			observabilityStatus: observability.status,
 			stop() {
 				stopping ??= (async () => {
 					const results: PromiseSettledResult<void>[] = [];
-					for (const stop of [
-						() => conversation?.stop(),
-						() => wecom?.stop(),
-						() => workload?.stop(),
-						() => primary.stop(),
-					]) {
-						results.push(
-							...(await Promise.allSettled([Promise.resolve().then(stop)])),
-						);
+					try {
+						for (const stop of [
+							() => conversation?.stop(),
+							() => wecom?.stop(),
+							() => workload?.stop(),
+							() => primary.stop(),
+						]) {
+							results.push(
+								...(await Promise.allSettled([Promise.resolve().then(stop)])),
+							);
+						}
+					} finally {
+						await observability.close();
 					}
 					const failure = results.find(
 						(result): result is PromiseRejectedResult =>
@@ -269,6 +301,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 			Promise.resolve().then(() => conversation?.stop()),
 			Promise.resolve().then(() => wecom?.stop()),
 		]);
+		await observability.close();
 		throw error;
 	}
 }
@@ -280,14 +313,18 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	const wecomSetting = process.env.PLATFORM_WORKER_WECOM_ENABLED;
 	if (wecomSetting !== undefined && !["true", "false"].includes(wecomSetting))
 		throw new Error("PLATFORM_WORKER_WECOM_ENABLED must be true or false");
-	const primary = startPlatformWorker();
 	const wecomEnabled = wecomSetting === "true";
+	let primary: ReturnType<typeof startPlatformWorker> | undefined;
 	const workerPromise = startPlatformWorkerFromDeploymentV2({
-		startPrimary: () => primary,
-		startConversation: () =>
+		startPrimary: () => {
+			primary = startPlatformWorker();
+			return primary;
+		},
+		startConversation: (observability) =>
 			startPlatformConversationWorkerFromDeploymentV2(
 				undefined,
 				termination.signal,
+				observability,
 			),
 		startWorkload: () =>
 			startPlatformWorkloadWorkerFromDeploymentV1(
@@ -313,7 +350,7 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 		termination.abort();
 		let primaryStop: Promise<void>;
 		try {
-			primaryStop = Promise.resolve(primary.stop());
+			primaryStop = Promise.resolve(primary?.stop());
 		} catch {
 			primaryStop = Promise.reject();
 		}
