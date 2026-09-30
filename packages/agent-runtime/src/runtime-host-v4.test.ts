@@ -106,62 +106,93 @@ it("recovers an accepted V4 binding without mutating Host state", async () => {
 	await store.close();
 });
 
-it.each(["wrong digest", "cross principal", "cross execution"] as const)(
-	"keeps a V4 binding unknown for a %s",
-	async (negativeCase) => {
-		const directory = await mkdtemp(
-			join(tmpdir(), "runtime-host-v4-binding-negative-"),
-		);
-		directories.push(directory);
-		const store = await FileRuntimeStore.open(join(directory, "host.json"));
-		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
-		const { request, claims, transport } = fixture();
-		const now = Date.now();
-		const host = await RuntimeHost.open({
-			store,
-			driver,
-			grantValidation: { expectedIssuer: "agent-platform" },
-			grantValidationV2: {
-				expectedIssuer: "platform-fixture",
-				expectedWorkerId: "worker-1",
-				now: () => now,
-			},
-			allowLegacyBusiness: false,
-			validateGrantV4: async (value: unknown) => {
-				const parsed = value as RuntimeBusinessRequestV4;
-				await validateRuntimeBusinessBindingV4(parsed, claims);
-				return { request: parsed, claims };
-			},
-		});
-		await host.submitTurnV4(transport);
-		const query = signV3Fixture(
+it.each([
+	"wrong digest",
+	"cross principal",
+	"cross execution",
+	"wrong Turn",
+	"wrong generation",
+	"wrong ref",
+	"stale fence",
+	"business scope",
+	"extra control scope",
+] as const)("keeps a V4 binding unknown for a %s", async (negativeCase) => {
+	const directory = await mkdtemp(
+		join(tmpdir(), "runtime-host-v4-binding-negative-"),
+	);
+	directories.push(directory);
+	const store = await FileRuntimeStore.open(join(directory, "host.json"));
+	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+	const { request, claims, transport } = fixture();
+	const now = Date.now();
+	const host = await RuntimeHost.open({
+		store,
+		driver,
+		grantValidation: { expectedIssuer: "agent-platform" },
+		grantValidationV2: {
+			expectedIssuer: "platform-fixture",
+			expectedWorkerId: "worker-1",
+			now: () => now,
+		},
+		allowLegacyBusiness: false,
+		validateGrantV4: async (value: unknown) => {
+			const parsed = value as RuntimeBusinessRequestV4;
+			await validateRuntimeBusinessBindingV4(parsed, claims);
+			return { request: parsed, claims };
+		},
+	});
+	const accepted = await host.submitTurnV4(transport);
+	const query = signV3Fixture(
+		{
+			schemaVersion: 3,
+			requestId: "control-request-negative",
+			traceId: request.traceId,
+			principal:
+				negativeCase === "cross principal"
+					? { kind: "user" as const, id: "bob" }
+					: request.principal,
+			channelId: request.channelId,
+			agentId: request.agentId,
+			conversationId: request.conversationId,
+			executionId:
+				negativeCase === "cross execution"
+					? "execution-other"
+					: request.executionId,
+			turnId: ["cross execution", "wrong Turn"].includes(negativeCase)
+				? "turn-other"
+				: request.turnId,
+			sessionGeneration:
+				negativeCase === "wrong generation"
+					? request.sessionGeneration + 1
+					: request.sessionGeneration,
+			hostSessionRef: negativeCase === "wrong ref" ? "foreign-ref" : null,
+			operation:
+				negativeCase === "cross execution"
+					? { ...request.operation, id: "execution-other" }
+					: request.operation,
+			originalOperationDigest:
+				negativeCase === "wrong digest"
+					? "a".repeat(43)
+					: requestDigest(runtimeOperationDigestInputV4(request)),
+		},
+		"session.status",
+		{
+			purpose: negativeCase === "business scope" ? "business" : "control",
+			reason: "stop",
+			now,
+			claims: { workerId: "worker-1" },
+		},
+	);
+	if (negativeCase === "stale fence") {
+		const advance = signV3Fixture(
 			{
-				schemaVersion: 3,
-				requestId: "control-request-negative",
-				traceId: request.traceId,
-				principal:
-					negativeCase === "cross principal"
-						? { kind: "user" as const, id: "bob" }
-						: request.principal,
-				channelId: request.channelId,
-				agentId: request.agentId,
-				conversationId: request.conversationId,
-				executionId:
-					negativeCase === "cross execution"
-						? "execution-other"
-						: request.executionId,
-				turnId:
-					negativeCase === "cross execution" ? "turn-other" : request.turnId,
-				sessionGeneration: request.sessionGeneration,
-				hostSessionRef: null,
-				operation:
-					negativeCase === "cross execution"
-						? { ...request.operation, id: "execution-other" }
-						: request.operation,
-				originalOperationDigest:
-					negativeCase === "wrong digest"
-						? "a".repeat(43)
-						: requestDigest(runtimeOperationDigestInputV4(request)),
+				...query,
+				hostSessionRef: accepted.hostSessionRef,
+				operation: {
+					...query.operation,
+					deliveryFence: 3,
+					executionDeliveryFence: 3,
+				},
 			},
 			"session.status",
 			{
@@ -171,13 +202,33 @@ it.each(["wrong digest", "cross principal", "cross execution"] as const)(
 				claims: { workerId: "worker-1" },
 			},
 		);
-		await expect(
-			host.readOriginalBinding(query, verifyRuntimeV2Fixture(query.grant)),
-		).rejects.toMatchObject({ code: "RUNTIME_ACCEPTANCE_UNKNOWN" });
-		await host.close();
-		await store.close();
-	},
-);
+		await host.recoverStatusV3(advance, verifyRuntimeV2Fixture(advance.grant));
+	}
+	const before = await readFile(join(directory, "host.json"));
+	const verification = verifyRuntimeV2Fixture(query.grant);
+	const checkedClaims =
+		negativeCase === "extra control scope"
+			? {
+					...verification,
+					claims: {
+						...verification.claims,
+						allowedCommands: ["session.status", "turn.stop"],
+					},
+				}
+			: verification;
+	await expect(
+		host.readOriginalBinding(query, checkedClaims),
+	).rejects.toMatchObject({
+		code:
+			negativeCase === "extra control scope"
+				? "RUNTIME_GRANT_INVALID"
+				: "RUNTIME_ACCEPTANCE_UNKNOWN",
+	});
+	expect(await readFile(join(directory, "host.json"))).toEqual(before);
+	expect(await driver.sideEffectCount()).toBe(1);
+	await host.close();
+	await store.close();
+});
 
 it("keeps a missing V4 scope unknown", async () => {
 	const directory = await mkdtemp(

@@ -38,6 +38,8 @@ export interface TaskRuntimeAuthorizationRecordV1 {
 	readonly executionId: string;
 	readonly boundary: TaskAuthorizationBoundaryV1;
 	readonly revokedAt: Date | null;
+	/** Existing durable recovery control for this exact authorization record. */
+	readonly recoveryControlRecordId?: string;
 	readonly application?: CurrentTaskApplicationV1;
 	readonly agent: AgentManagementStateV1;
 	/** Current Agent grant revision read beside the management projection. */
@@ -337,7 +339,10 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 		state: TaskRuntimeRecoveryStateV1,
 		command: Command,
 		signal: AbortSignal,
+		recoveryOnly = false,
 	) {
+		if (recoveryOnly && command !== "session.status")
+			denied("TASK_AUTHORIZATION_CONTROL_ONLY");
 		if (
 			context.claim.metadataRecovery &&
 			!["session.status", "events.persist", "events.ack"].includes(command)
@@ -390,7 +395,9 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 				denied("TASK_AUTHORIZATION_CONTROL_ONLY");
 			return { authority: await control(context, "recovery", signal), record };
 		}
-		const currentControl = async (reason: "stop" | "authorization_revoked") => {
+		const currentControl = async (
+			reason: "stop" | "authorization_revoked" | "recovery",
+		) => {
 			const authority = await control(context, reason, signal);
 			// A lost acceptance response needs authenticated original-operation lookup
 			// before stop/revocation control can address the recovered Host Session.
@@ -436,6 +443,21 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 		if (state.stopPending || command === "turn.stop")
 			return {
 				authority: await currentControl("stop"),
+				record: latest,
+			};
+		// Key failure permits only body-free status recovery over the same binding.
+		if (recoveryOnly)
+			return { authority: await currentControl("recovery"), record: latest };
+		if (
+			latest.recoveryControlRecordId &&
+			["session.status", "events.persist", "events.ack"].includes(command)
+		)
+			return {
+				authority: {
+					purpose: "control" as const,
+					controlRecordId: latest.recoveryControlRecordId,
+					reason: "recovery" as const,
+				},
 				record: latest,
 			};
 		if (

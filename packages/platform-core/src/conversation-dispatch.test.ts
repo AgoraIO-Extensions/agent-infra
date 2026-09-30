@@ -1424,6 +1424,72 @@ describe("Conversation Worker dispatch", () => {
 			expect(store.current.stopPending).toBe(true);
 		},
 	);
+	it.each(["lease", "fence", "existing ref"] as const)(
+		"does not write a recovered binding after a concurrent %s change",
+		async (race) => {
+			const store = new MemoryDispatchStore(
+				claim({
+					operation: "conversation.turn.stop.v1",
+					messageId: null,
+					stopRequestId: "stop-request-1",
+					executionStatus: "unknown",
+					hostSessionRef: null,
+					input: null,
+					stopPending: true,
+				}),
+			);
+			const stop = vi.fn();
+			const events = vi.fn();
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				dispatch: stop,
+				async recoverStatus() {
+					throw new Error("Original binding recovery expected");
+				},
+				async recoverOriginalStatus(request) {
+					store.current = {
+						...store.current,
+						...(race === "lease" ? { leaseOwner: "worker-successor" } : {}),
+						...(race === "fence"
+							? { deliveryFence: store.current.deliveryFence + 1 }
+							: {}),
+						...(race === "existing ref"
+							? { hostSessionRef: "host-current" }
+							: {}),
+					};
+					return {
+						schemaVersion: 2,
+						executionId: request.executionId,
+						hostSessionRef: "host-original",
+						outcome: "binding_found",
+					};
+				},
+				async *events() {
+					events();
+					yield* [];
+				},
+			};
+			const h = setup({
+				store,
+				runtimeHost,
+				authorization: authorization({ controlOnly: true }),
+			});
+			expect(await dispatch(h.useCase)).toEqual({
+				schemaVersion: 1,
+				outcome: "stale",
+			});
+			expect(store.current).toMatchObject({
+				executionId: "execution-1",
+				turnId: "turn-1",
+				executionStatus: "unknown",
+				stopPending: true,
+				hostSessionRef: race === "existing ref" ? "host-current" : null,
+			});
+			expect(store.outboxStatus).toBe("processing");
+			expect(stop).not.toHaveBeenCalled();
+			expect(events).not.toHaveBeenCalled();
+			expect(h.events.persisted).toHaveLength(0);
+		},
+	);
 	it("keeps a stop uncertain when original status has no Host ref", async () => {
 		const store = new MemoryDispatchStore(
 			claim({

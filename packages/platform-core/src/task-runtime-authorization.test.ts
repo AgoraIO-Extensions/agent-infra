@@ -162,6 +162,63 @@ function harness() {
 const signal = () => new AbortController().signal;
 
 describe("task Runtime authorization Core use case", () => {
+	it("limits keyless recovery to original body-free status control", async () => {
+		const h = harness();
+		expect(
+			await h.useCase.current(
+				h.context,
+				h.state,
+				"session.status",
+				signal(),
+				true,
+			),
+		).toMatchObject({
+			authority: {
+				purpose: "control",
+				controlRecordId: "control-recovery",
+				reason: "recovery",
+			},
+		});
+		expect(h.ports.resolveCurrentUser).toHaveBeenCalledOnce();
+		for (const command of [
+			"turn.submit",
+			"turn.supplement",
+			"execution.renew",
+			"events.ack",
+		] as const)
+			await expect(
+				h.useCase.current(h.context, h.state, command, signal(), true),
+			).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_CONTROL_ONLY" });
+		h.setRecord({
+			...h.record,
+			boundary: {
+				...h.boundary,
+				principal: { kind: "user", id: "other-user" },
+			},
+		});
+		await expect(
+			h.useCase.current(h.context, h.state, "session.status", signal(), true),
+		).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_BINDING_INVALID" });
+	});
+	it.each(["stop", "authorization_revoked"] as const)(
+		"preserves %s authority during keyless recovery",
+		async (reason) => {
+			const h = harness();
+			if (reason === "stop") Object.assign(h.state, { stopPending: true });
+			else h.setRecord({ ...h.record, revokedAt: new Date() });
+			expect(
+				(
+					await h.useCase.current(
+						h.context,
+						h.state,
+						"session.status",
+						signal(),
+						true,
+					)
+				).authority,
+			).toMatchObject({ purpose: "control", reason });
+		},
+	);
 	it("uses recovery control from the first unknown API task query even when ready", async () => {
 		const h = harness();
 		Object.assign(h.state, { taskWaitOrder: 1, executionStatus: "unknown" });

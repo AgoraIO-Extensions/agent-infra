@@ -3,11 +3,13 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	RuntimeHost,
 } from "@agent-infra/agent-runtime";
+import { runtimeOperationDigestInputV4 } from "@agent-infra/contracts/runtime";
 import type {
 	AgentConfigurationRecordV2,
 	AgentManagementStateV1,
@@ -15,6 +17,7 @@ import type {
 	ConversationDispatchStorePortV1,
 	CurrentTaskUserV1,
 	TaskAuthorizationBoundaryV1,
+	TaskRuntimeAuthorizationRecordV1,
 	WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import {
@@ -22,8 +25,10 @@ import {
 	PostgresConversationEventTransactionV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
+import type { RelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 import postgres from "postgres";
 import { describe, expect, it, vi } from "vitest";
+import { requestDigest } from "../../../packages/agent-runtime/src/file-runtime-store.js";
 import { createConversationDispatchUseCaseV1 } from "../../../packages/platform-core/src/conversation-dispatch.js";
 import { normalizedEvent } from "../../../packages/platform-core/src/conversation-dispatch-transition.js";
 import { createConversationEventUseCaseV1 } from "../../../packages/platform-core/src/conversation-events.js";
@@ -42,6 +47,15 @@ const verify = createRuntimeExecutionGrantVerifierV2(
 	new Map([["signing", keys.publicKey]]),
 );
 const now = 1_800_000_000_000;
+type AcceptedExecutionKey = NonNullable<
+	Awaited<
+		ReturnType<
+			NonNullable<
+				ConversationRuntimeOptionsV2["executionKeys"]
+			>["readAcceptedExecution"]
+		>
+	>
+>;
 function harness(
 	reconnectDelayMs = 1,
 	channelAuthorizationCurrent:
@@ -151,15 +165,7 @@ function harness(
 		failureCode: null,
 		attempts: 0,
 	};
-	let record: {
-		authorizationRecordId: string;
-		executionId: string;
-		boundary: TaskAuthorizationBoundaryV1;
-		revokedAt: Date | null;
-		agent: AgentManagementStateV1;
-		configurationRevision: number;
-		workload: WorkloadReconciliationStateV1 | null;
-	} | null = {
+	let record: TaskRuntimeAuthorizationRecordV1 | null = {
 		authorizationRecordId: "original-authorization",
 		executionId: "execution",
 		boundary,
@@ -186,8 +192,10 @@ function harness(
 					ConversationRuntimeOptionsV2["taskAuthorizationStore"]["recordControl"]
 				>[0],
 			) => {
+				if (input.reason === "recovery" && record)
+					record = { ...record, recoveryControlRecordId: "control-recovery" };
 				if (input.reason === "authorization_revoked" && record) {
-					record.revokedAt = new Date(now);
+					record = { ...record, revokedAt: new Date(now) };
 					Object.assign(state, { stopPending: true });
 				}
 				return {
@@ -202,30 +210,34 @@ function harness(
 		readLegacyControlRecovery: vi.fn(async () => legacyRecord),
 	};
 	const executionKeys = {
-		readAcceptedExecution: vi.fn(async () => ({
-			scope: {
-				principal: { kind: "user" as const, id: "user" },
-				executionSource: "web" as const,
-				channelId: "web",
-				agentId: "agent",
-				conversationId: "conversation",
-				executionId: "execution",
-				turnId: "turn",
-				sessionGeneration: 1,
-				hostSessionRef: "host",
-				keyBinding: {
-					purpose: "personal" as const,
-					subjectId: "user",
-					ciphertextRef: "key-1",
-					version: 1,
+		readAcceptedExecution: vi.fn(
+			async (): Promise<AcceptedExecutionKey> => ({
+				scope: {
+					principal: { kind: "user" as const, id: "user" },
+					executionSource: "web" as const,
+					channelId: "web",
+					agentId: "agent",
+					conversationId: "conversation",
+					executionId: "execution",
+					turnId: "turn",
+					sessionGeneration: 1,
+					hostSessionRef: "host",
+					keyBinding: {
+						purpose: "personal" as const,
+						subjectId: "user",
+						ciphertextRef: "key-1",
+						version: 1,
+					},
 				},
-			},
-			trustedHostSessionRef: "host",
-		})),
-		readCiphertext: vi.fn(async () => ({ ciphertext: "synthetic" })),
+				trustedHostSessionRef: "host",
+			}),
+		),
+		readCiphertext: vi.fn(
+			async (): Promise<unknown | null> => ({ ciphertext: "synthetic" }),
+		),
 	};
 	const relayKeyDecryptor = {
-		decrypt: vi.fn(async () => ({
+		decrypt: vi.fn<RelayKeyWorkerDecryptorV1["decrypt"]>(async () => ({
 			outcome: "decrypted" as const,
 			plaintext: new TextEncoder().encode("synthetic-relay-key-k1"),
 		})),
@@ -326,11 +338,15 @@ function harness(
 			});
 		throw new Error(`Unexpected runtime request: ${path}`);
 	});
-	const resolver = vi.fn(async () => ({
-		baseUrl: keyed ? "https://runtime.test" : "http://runtime.test",
-		serviceToken: "synthetic-transport-proof",
-		workerId: "transport",
-	}));
+	const resolver = vi.fn(
+		async (
+			_input: Parameters<ConversationRuntimeOptionsV2["resolveRuntimeHost"]>[0],
+		) => ({
+			baseUrl: keyed ? "https://runtime.test" : "http://runtime.test",
+			serviceToken: "synthetic-transport-proof",
+			workerId: "transport",
+		}),
+	);
 	const runtime = createConversationRuntimeV2({
 		...(channelAuthorizationCurrent ? { channelAuthorizationCurrent } : {}),
 		workerId: "instance",
@@ -418,6 +434,215 @@ function harness(
 }
 
 describe("Trusted conversation Runtime adapter", () => {
+	it("continues original V4 event read and ACK after a real Host recovery control latch", async () => {
+		const h = harness(1, undefined, true);
+		const directory = await mkdtemp(join(tmpdir(), "keyless-host-control-"));
+		const driver = await FakeRuntimeDriver.open(
+			join(directory, "driver.json"),
+			[{ schemaVersion: 1, modelOptionId: "option", reasoningLevel: "high" }],
+		);
+		const store = await FileRuntimeStore.open(join(directory, "host.json"));
+		const host = await RuntimeHost.open({
+			driver,
+			store,
+			grantValidation: { expectedIssuer: "unused" },
+			grantValidationV2: {
+				expectedIssuer: "platform",
+				expectedWorkerId: "transport",
+				now: () => now,
+			},
+			validateGrantV4: createRuntimeExecutionGrantValidatorV4(
+				new Map([["signing", keys.publicKey]]),
+				{
+					expectedIssuer: "platform",
+					expectedWorkerId: "transport",
+					now: () => now,
+				},
+			),
+		});
+		const app = createRuntimeHostApp({
+			host,
+			runtimeWorkerId: "transport",
+			serviceToken: "synthetic-transport-proof",
+			verifyGrant: () => {
+				throw new Error("V1 disabled");
+			},
+			verifyGrantV2: verify,
+		});
+		h.fetcher.mockImplementation(async (url, init) =>
+			app.request(String(url), init),
+		);
+		Object.assign(h.claim, { hostSessionRef: null });
+		Object.assign(h.state, { hostSessionRef: null });
+		const keyScope = await h.executionKeys.readAcceptedExecution();
+		h.executionKeys.readAcceptedExecution.mockImplementation(async () => ({
+			...keyScope,
+			scope: { ...keyScope.scope, hostSessionRef: null },
+			trustedHostSessionRef: h.state.hostSessionRef,
+		}));
+		try {
+			const reference = await h.authorize();
+			const accepted = await h.runtime.runtimeHost.dispatch({
+				...h.request(reference),
+				hostSessionRef: undefined,
+			});
+			Object.assign(h.state, {
+				hostSessionRef: accepted.hostSessionRef,
+				originalOperationDigest: requestDigest(
+					runtimeOperationDigestInputV4(
+						JSON.parse(String(h.fetcher.mock.calls[0]?.[1]?.body))
+							.businessRequest,
+					),
+				),
+			});
+			const action = {
+				nativeSessionRef: store.nativeSessionRef(
+					accepted.hostSessionRef,
+				) as string,
+				executionId: "execution",
+				runtimeOperationId: "execution",
+				operationRef: "model-operation",
+				attemptRef: "model-attempt",
+				kind: "model" as const,
+			};
+			await expect(host.authorizeExternalAction(action)).resolves.toEqual({
+				relayKey: "synthetic-relay-key-k1",
+			});
+			const originalCiphertext = await h.executionKeys.readCiphertext();
+			h.executionKeys.readCiphertext.mockResolvedValue(null);
+			const request = {
+				...h.events(reference),
+				hostSessionRef: accepted.hostSessionRef,
+			};
+			await expect(
+				h.runtime.runtimeHost.recoverOriginalStatus?.({
+					...request,
+					schemaVersion: 2,
+				}),
+			).resolves.toMatchObject({
+				outcome: "found",
+				hostSessionRef: accepted.hostSessionRef,
+			});
+			expect(h.record()?.recoveryControlRecordId).toBe("control-recovery");
+			await expect(
+				h.runtime.runtimeHost.renewAuthorization?.(request),
+			).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_CONTROL_ONLY" });
+			expect(
+				h.fetcher.mock.calls.some(([url]) =>
+					String(url).endsWith("/authorizations/renew"),
+				),
+			).toBe(false);
+			expect(
+				JSON.parse(await readFile(join(directory, "host.json"), "utf8"))
+					.sessions[accepted.hostSessionRef].executionAuthorities.execution
+					.control,
+			).toEqual({ controlRecordId: "control-recovery", reason: "recovery" });
+			await expect(host.authorizeExternalAction(action)).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+			// A transient read failure must not prevent renewal once the same
+			// original pinned Key is available; renewal never carries a new Key.
+			h.executionKeys.readCiphertext.mockResolvedValue(originalCiphertext);
+			await h.runtime.runtimeHost.renewAuthorization?.(request);
+			await expect(host.authorizeExternalAction(action)).resolves.toEqual({
+				relayKey: "synthetic-relay-key-k1",
+			});
+			const renewal = h.fetcher.mock.calls.find(([url]) =>
+				String(url).endsWith("/authorizations/renew"),
+			);
+			expect(JSON.parse(String(renewal?.[1]?.body))).not.toHaveProperty(
+				"privateKeyField",
+			);
+			h.executionKeys.readCiphertext.mockResolvedValue(null);
+			await h.runtime.runtimeHost.recoverOriginalStatus?.({
+				...request,
+				schemaVersion: 2,
+			});
+			await expect(host.authorizeExternalAction(action)).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+			const iterator = h.runtime.runtimeHost
+				.events(request)
+				[Symbol.asyncIterator]();
+			const event = await iterator.next();
+			if (event.done) throw new Error("Missing original event");
+			await iterator.return?.();
+			Object.assign(h.state, { runtimeCursor: event.value.cursor });
+			await h.runtime.runtimeHost.acknowledge?.({
+				...request,
+				confirmedCursor: event.value.cursor,
+			});
+			for (const [url, init] of h.fetcher.mock.calls.filter(([url]) =>
+				String(url).includes("/events/"),
+			)) {
+				expect(
+					verify(JSON.parse(String(init?.body)).grant).claims,
+				).toMatchObject({
+					purpose: "control",
+					reason: "recovery",
+					controlRecordId: "control-recovery",
+				});
+				expect(String(url)).toContain("/v4/events/");
+			}
+			expect(await driver.sideEffectCount()).toBe(1);
+		} finally {
+			h.runtime.close();
+			await host.close();
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it.each(["missing", "metadata", "authentication"] as const)(
+		"does not renew cached business authority after original Key %s failure",
+		async (failure) => {
+			const h = harness(1, undefined, true);
+			if (failure === "missing")
+				h.executionKeys.readCiphertext.mockResolvedValue(null);
+			else
+				h.relayKeyDecryptor.decrypt.mockResolvedValue({
+					outcome: "failed",
+					code:
+						failure === "metadata"
+							? "RELAY_KEY_METADATA_INVALID"
+							: "RELAY_KEY_AUTHENTICATION_FAILED",
+				});
+			try {
+				const reference = await h.authorize();
+				await expect(
+					h.runtime.runtimeHost.renewAuthorization?.(h.events(reference)),
+				).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_CONTROL_ONLY" });
+				expect(h.fetcher).toHaveBeenCalledOnce();
+				expect(h.sent().url).toBe(
+					"https://runtime.test/internal/runtime/v3/status",
+				);
+				expect(h.sent().claims).toMatchObject({
+					purpose: "control",
+					reason: "recovery",
+					allowedCommands: ["session.status"],
+				});
+				expect(h.sent().body).not.toHaveProperty("input");
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
+	it("does not renew if the original lease is lost while checking its Key", async () => {
+		const h = harness(1, undefined, true);
+		const plaintext = new TextEncoder().encode("synthetic-relay-key-k1");
+		h.relayKeyDecryptor.decrypt.mockImplementationOnce(async () => {
+			h.store.readRuntimeState.mockResolvedValue(null);
+			return { outcome: "decrypted", plaintext };
+		});
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.renewAuthorization?.(h.events(reference)),
+			).rejects.toMatchObject({ code: "RUNTIME_FENCE_STALE" });
+			expect(h.fetcher).not.toHaveBeenCalled();
+			expect(plaintext.every((byte) => byte === 0)).toBe(true);
+		} finally {
+			h.runtime.close();
+		}
+	});
 	it("marks keyed recovery reads as V4", async () => {
 		const h = harness(1, undefined, true);
 		await h.authorize();
@@ -618,6 +843,237 @@ describe("Trusted conversation Runtime adapter", () => {
 			h.runtime.close();
 		}
 	});
+	it.each([
+		["missing", "unknown"],
+		["metadata", "processing"],
+		["authentication", "unknown"],
+	] as const)(
+		"reads body-free original V4 status with %s Key and %s occupancy",
+		async (failure, status) => {
+			const h = harness(1, undefined, true);
+			Object.assign(h.claim, { executionStatus: status });
+			Object.assign(h.state, { executionStatus: status });
+			if (failure === "missing")
+				h.executionKeys.readCiphertext.mockResolvedValue(null);
+			else
+				h.relayKeyDecryptor.decrypt.mockResolvedValue({
+					outcome: "failed",
+					code:
+						failure === "metadata"
+							? "RELAY_KEY_METADATA_INVALID"
+							: "RELAY_KEY_AUTHENTICATION_FAILED",
+				});
+			const original = structuredClone({ claim: h.claim, state: h.state });
+			try {
+				const reference = await h.authorize();
+				await expect(
+					h.runtime.runtimeHost.recoverOriginalStatus?.({
+						...h.events(reference),
+						schemaVersion: 2,
+					}),
+				).resolves.toMatchObject({
+					outcome: "found",
+					executionId: "execution",
+					hostSessionRef: "host",
+					status: "running",
+				});
+				expect(h.fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+					"https://runtime.test/internal/runtime/v3/status",
+				]);
+				const { body, claims } = h.sent();
+				expect(claims).toMatchObject({
+					purpose: "control",
+					reason: "recovery",
+					allowedCommands: ["session.status"],
+				});
+				expect(body).toMatchObject({
+					hostSessionRef: "host",
+					executionId: "execution",
+					turnId: "turn",
+					originalOperationDigest: original.state.originalOperationDigest,
+					operation: { deliveryFence: 2, executionDeliveryFence: 2 },
+				});
+				expect(body).not.toHaveProperty("input");
+				expect(body).not.toHaveProperty("privateKeyField");
+				expect({ claim: h.claim, state: h.state }).toEqual(original);
+				expect(h.record()?.revokedAt).toBeNull();
+				// Event persistence and ACK do not need to reinstall or decrypt a Key.
+				const decryptions = h.relayKeyDecryptor.decrypt.mock.calls.length;
+				const stream = h.runtime.runtimeHost
+					.events(h.events(reference))
+					[Symbol.asyncIterator]();
+				expect(await stream.next()).toMatchObject({
+					value: { cursor: "cursor-1" },
+				});
+				await stream.return?.();
+				Object.assign(h.state, { runtimeCursor: "cursor-1" });
+				await h.runtime.runtimeHost.acknowledge?.({
+					...h.events(reference),
+					confirmedCursor: "cursor-1",
+				});
+				expect(
+					h.fetcher.mock.calls.slice(1).map(([url]) => String(url)),
+				).toEqual([
+					"https://runtime.test/internal/runtime/v4/events/read",
+					"https://runtime.test/internal/runtime/v4/events/ack",
+				]);
+				expect(h.relayKeyDecryptor.decrypt).toHaveBeenCalledTimes(decryptions);
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
+	it("reads the original binding when its V4 Key and Core ref are both missing", async () => {
+		const h = harness(1, undefined, true);
+		Object.assign(h.claim, {
+			executionStatus: "unknown",
+			hostSessionRef: null,
+		});
+		Object.assign(h.state, {
+			executionStatus: "unknown",
+			hostSessionRef: null,
+		});
+		const accepted = await h.executionKeys.readAcceptedExecution();
+		h.executionKeys.readAcceptedExecution.mockResolvedValue({
+			...accepted,
+			scope: { ...accepted.scope, hostSessionRef: null },
+			trustedHostSessionRef: null,
+		});
+		h.executionKeys.readCiphertext.mockResolvedValue(null);
+		h.fetcher.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					schemaVersion: 3,
+					outcome: "binding_found",
+					executionId: "execution",
+					hostSessionRef: "host",
+				}),
+			),
+		);
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.recoverOriginalStatus?.({
+					...h.events(reference),
+					schemaVersion: 2,
+					hostSessionRef: null,
+				}),
+			).resolves.toMatchObject({
+				outcome: "binding_found",
+				hostSessionRef: "host",
+			});
+			expect(h.sent().url).toBe(
+				"https://runtime.test/internal/runtime/v3/original-binding",
+			);
+			expect(h.sent().claims).toMatchObject({
+				purpose: "control",
+				reason: "recovery",
+				allowedCommands: ["session.status"],
+			});
+			expect(h.state).toMatchObject({
+				hostSessionRef: null,
+				executionStatus: "unknown",
+			});
+			expect(h.fetcher).toHaveBeenCalledOnce();
+		} finally {
+			h.runtime.close();
+		}
+	});
+	it("rechecks the original binding and route after the Key disappears immediately before delivery", async () => {
+		const h = harness(1, undefined, true);
+		const accepted = await h.executionKeys.readAcceptedExecution();
+		h.executionKeys.readAcceptedExecution.mockImplementationOnce(async () => {
+			h.executionKeys.readCiphertext.mockResolvedValue(null);
+			return accepted;
+		});
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.recoverOriginalStatus?.({
+					...h.events(reference),
+					schemaVersion: 2,
+				}),
+			).resolves.toMatchObject({ outcome: "found", hostSessionRef: "host" });
+			expect(h.sent().url).toBe(
+				"https://runtime.test/internal/runtime/v3/status",
+			);
+			expect(h.sent().claims).toMatchObject({
+				purpose: "control",
+				reason: "recovery",
+			});
+			expect(
+				h.resolver.mock.calls.some(([input]) => input.purpose === "control"),
+			).toBe(true);
+			expect(h.fetcher).toHaveBeenCalledOnce();
+		} finally {
+			h.runtime.close();
+		}
+	});
+	it.each(["RELAY_KEY_UNAVAILABLE", "RUNTIME_GRANT_INVALID"])(
+		"does not treat remote %s as local Key failure",
+		async (code) => {
+			const h = harness(1, undefined, true);
+			h.fetcher.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						code,
+						message: "Synthetic remote error",
+						retryable: false,
+						traceId: "trace",
+					}),
+					{ status: 503 },
+				),
+			);
+			try {
+				const reference = await h.authorize();
+				await expect(
+					h.runtime.runtimeHost.recoverOriginalStatus?.({
+						...h.events(reference),
+						schemaVersion: 2,
+					}),
+				).rejects.toMatchObject({ code });
+				expect(h.fetcher).toHaveBeenCalledOnce();
+				expect(h.authorizationStore.recordControl).not.toHaveBeenCalled();
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
+	it.each(["lease", "revoked", "stop"] as const)(
+		"rechecks %s during local Key failure before control recovery",
+		async (race) => {
+			const h = harness(1, undefined, true);
+			h.executionKeys.readCiphertext.mockImplementationOnce(async () => {
+				if (race === "lease") h.store.readRuntimeState.mockResolvedValue(null);
+				else if (race === "revoked") h.setUser(null);
+				else Object.assign(h.state, { stopPending: true });
+				return null;
+			});
+			try {
+				const reference = await h.authorize();
+				const recovery = h.runtime.runtimeHost.recoverOriginalStatus?.({
+					...h.events(reference),
+					schemaVersion: 2,
+				});
+				if (race === "lease") {
+					await expect(recovery).rejects.toMatchObject({
+						code: "RUNTIME_FENCE_STALE",
+					});
+					expect(h.fetcher).not.toHaveBeenCalled();
+				} else {
+					await expect(recovery).resolves.toMatchObject({ outcome: "found" });
+					expect(h.sent().claims).toMatchObject({
+						purpose: "control",
+						reason: race === "stop" ? "stop" : "authorization_revoked",
+					});
+					expect(h.fetcher).toHaveBeenCalledOnce();
+				}
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
 	it("reads a V2-pinned original status without V4 business replay", async () => {
 		const h = harness(1, undefined, true);
 		Object.assign(h.claim, { executionStatus: "unknown" });

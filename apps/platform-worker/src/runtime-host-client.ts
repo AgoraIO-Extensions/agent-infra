@@ -119,6 +119,18 @@ function failure(code: string, retryable: boolean): never {
 	throw new ConversationRuntimeHostError(code, retryable);
 }
 
+/** Local failure before the original Key can be delivered to RuntimeHost. */
+export class RuntimeRelayKeyDeliveryError extends ConversationRuntimeHostError {
+	constructor(
+		code:
+			| "RELAY_KEY_UNAVAILABLE"
+			| "RELAY_KEY_METADATA_INVALID"
+			| "RELAY_KEY_AUTHENTICATION_FAILED",
+	) {
+		super(code, false);
+	}
+}
+
 async function responseFailure(response: Response): Promise<never> {
 	let text: string;
 	try {
@@ -763,13 +775,14 @@ export function createWorkerRuntimeHostClientV4(
 			};
 			const encryptedRecord =
 				await options.executionKeys.readCiphertext(binding);
-			if (!encryptedRecord) return failure("RELAY_KEY_UNAVAILABLE", false);
+			if (!encryptedRecord)
+				throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
 			const decrypted = await options.decryptor.decrypt({
 				encryptedRecord,
 				expectedBinding: binding,
 			});
 			if (decrypted.outcome !== "decrypted")
-				return failure(decrypted.code, false);
+				throw new RuntimeRelayKeyDeliveryError(decrypted.code);
 			let relayKey: string;
 			try {
 				relayKey = new TextDecoder("utf-8", { fatal: true }).decode(

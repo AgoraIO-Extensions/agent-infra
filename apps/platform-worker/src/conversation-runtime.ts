@@ -12,6 +12,7 @@ import type {
 import {
 	RuntimeEventAckRequestV4Schema,
 	RuntimeEventReadRequestV4Schema,
+	RuntimeRelayKeyDeliveryV1Schema,
 } from "@agent-infra/contracts/runtime";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import {
@@ -38,6 +39,7 @@ import { createWorkerRuntimeGrantSignerV4 } from "./runtime-grant-signer-v4.js";
 import {
 	createWorkerRuntimeHostClientV3,
 	createWorkerRuntimeHostClientV4,
+	RuntimeRelayKeyDeliveryError,
 	type WorkerRuntimeHostClientOptionsV4,
 } from "./runtime-host-client.js";
 
@@ -330,10 +332,17 @@ export function createConversationRuntimeV2(
 		request: Request,
 		command: Command,
 		signal: AbortSignal,
+		recoveryOnly = false,
 	) {
 		const context = contextFor(request);
 		let state: ConversationRuntimeStateV2 = await stateFor(context, signal);
-		const beforeRoute = await current(context, state, command, signal);
+		const beforeRoute = await current(
+			context,
+			state,
+			command,
+			signal,
+			recoveryOnly,
+		);
 		let authority = beforeRoute.authority;
 		const target = await bounded(
 			options.resolveRuntimeHost({
@@ -348,7 +357,13 @@ export function createConversationRuntimeV2(
 		if (target.workerId !== options.signing.workerId)
 			denied("RUNTIME_WORKER_BINDING_INVALID");
 		state = await stateFor(context, signal);
-		const afterRoute = await current(context, state, command, signal);
+		const afterRoute = await current(
+			context,
+			state,
+			command,
+			signal,
+			recoveryOnly,
+		);
 		if (
 			beforeRoute.authority.purpose !== afterRoute.authority.purpose ||
 			beforeRoute.record.configurationRevision !==
@@ -364,7 +379,13 @@ export function createConversationRuntimeV2(
 		// Directory, route and control persistence all cross asynchronous boundaries.
 		// Recheck the authorization and route immediately before minting any wire grant.
 		state = await stateFor(context, signal);
-		const finalRoute = await current(context, state, command, signal);
+		const finalRoute = await current(
+			context,
+			state,
+			command,
+			signal,
+			recoveryOnly,
+		);
 		if (finalRoute.authority.purpose !== authority.purpose) {
 			if (finalRoute.authority.purpose === "control")
 				await control(context, finalRoute.authority.reason, signal);
@@ -391,7 +412,13 @@ export function createConversationRuntimeV2(
 		if (finalTarget.workerId !== options.signing.workerId)
 			denied("RUNTIME_WORKER_BINDING_INVALID");
 		state = await stateFor(context, signal);
-		const postTargetRoute = await current(context, state, command, signal);
+		const postTargetRoute = await current(
+			context,
+			state,
+			command,
+			signal,
+			recoveryOnly,
+		);
 		if (postTargetRoute.authority.purpose !== finalRoute.authority.purpose) {
 			if (postTargetRoute.authority.purpose === "control")
 				await control(context, postTargetRoute.authority.reason, signal);
@@ -432,7 +459,13 @@ export function createConversationRuntimeV2(
 		)
 			unavailable("RUNTIME_ROUTE_STALE");
 		state = await stateFor(context, signal);
-		const afterTargetRoute = await current(context, state, command, signal);
+		const afterTargetRoute = await current(
+			context,
+			state,
+			command,
+			signal,
+			recoveryOnly,
+		);
 		if (
 			afterTargetRoute.authority.purpose !== postTargetRoute.authority.purpose
 		) {
@@ -480,6 +513,7 @@ export function createConversationRuntimeV2(
 		return {
 			context,
 			state,
+			recoveryOnly,
 			authority,
 			client,
 			base,
@@ -590,6 +624,7 @@ export function createConversationRuntimeV2(
 			latestState,
 			"session.status",
 			signal,
+			prepared.recoveryOnly,
 		);
 		if (
 			!isDeepStrictEqual(latestRoute.authority, prepared.authority) ||
@@ -601,21 +636,45 @@ export function createConversationRuntimeV2(
 			unavailable("RUNTIME_FENCE_STALE");
 		return result;
 	}
-	async function recover(
-		request: OriginalStatusRequest | ConversationRuntimeStatusRequestV2,
-		signal?: AbortSignal,
+	async function readRecoveredStatus(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		signal: AbortSignal,
 	) {
-		const active = combined(signal);
-		const prepared = await prepare(request, "session.status", active);
-		const { context, state, authority, client, base, target, route } = prepared;
+		const { context, state, authority, client, base } = prepared;
 		if (
 			state.hostSessionRef === null &&
 			authority.purpose === "control" &&
 			hasKeyedV4Selection(context.claim) &&
 			state.runtimeSubmitProtocol === "v4"
 		) {
-			const binding = await readOriginalControlBinding(prepared, active);
+			const binding = await readOriginalControlBinding(prepared, signal);
 			return { ...binding, schemaVersion: 2 as const };
+		}
+		const body = {
+			...base,
+			hostSessionRef: state.hostSessionRef,
+			originalOperationDigest: state.originalOperationDigest,
+		};
+		const response = await client.recoverStatus(
+			{ ...body, grant: signRequest(body, authority, "session.status") },
+			signal,
+		);
+		return { ...response, schemaVersion: 2 as const };
+	}
+	async function recover(
+		request: OriginalStatusRequest | ConversationRuntimeStatusRequestV2,
+		signal?: AbortSignal,
+	) {
+		const active = combined(signal);
+		const prepared = await prepare(request, "session.status", active);
+		const { context, state, authority, base, target, route } = prepared;
+		if (
+			state.hostSessionRef === null &&
+			authority.purpose === "control" &&
+			hasKeyedV4Selection(context.claim) &&
+			state.runtimeSubmitProtocol === "v4"
+		) {
+			return readRecoveredStatus(prepared, active);
 		}
 		let businessAuthorizationRecordId: string | undefined;
 		let businessTarget = target;
@@ -727,13 +786,21 @@ export function createConversationRuntimeV2(
 					token: "a.b.c",
 				},
 			} satisfies RuntimeBusinessRequestV4;
-			const response = await submitKeyedV4({
-				target: businessTarget,
-				unsigned,
-				authorizationRecordId: businessAuthorizationRecordId,
-				assertCurrentAuthorization,
-				signal: active,
-			});
+			let response: Awaited<ReturnType<typeof submitKeyedV4>>;
+			try {
+				response = await submitKeyedV4({
+					target: businessTarget,
+					unsigned,
+					authorizationRecordId: businessAuthorizationRecordId,
+					assertCurrentAuthorization,
+					signal: active,
+				});
+			} catch (error) {
+				if (!(error instanceof RuntimeRelayKeyDeliveryError)) throw error;
+				const keyless = await prepare(request, "session.status", active, true);
+				if (keyless.authority.purpose !== "control") throw error;
+				return readRecoveredStatus(keyless, active);
+			}
 			if (response.result.outcome !== "accepted")
 				throw new ConversationRuntimeHostError(
 					"RUNTIME_ACCEPTANCE_UNKNOWN",
@@ -747,19 +814,7 @@ export function createConversationRuntimeV2(
 				status: response.result.status,
 			};
 		}
-		const body = {
-			...base,
-			hostSessionRef: state.hostSessionRef,
-			originalOperationDigest: state.originalOperationDigest,
-		};
-		const response = await client.recoverStatus(
-			{ ...body, grant: signRequest(body, authority, "session.status") },
-			active,
-		);
-		return {
-			...response,
-			schemaVersion: 2 as const,
-		};
+		return readRecoveredStatus(prepared, active);
 	}
 
 	const authorization: ConversationDispatchAuthorizationPortV1 = {
@@ -1098,10 +1153,72 @@ export function createConversationRuntimeV2(
 		recoverStatus: recover,
 		async renewAuthorization(request, signal) {
 			const active = combined(signal);
-			const prepared = await prepare(request, "execution.renew", active);
+			let prepared = await prepare(request, "execution.renew", active);
 			if (prepared.authority.purpose === "control") {
 				await latch(prepared, active);
 				denied();
+			}
+			if (
+				hasKeyedV4Selection(prepared.context.claim) &&
+				prepared.state.runtimeSubmitProtocol !== "v2"
+			) {
+				const key = prepared.context.claim.relayKeyBinding;
+				const binding = {
+					purpose: key.purpose,
+					subjectId: key.subjectId,
+					keyId: key.keyId,
+					keyVersion: key.keyVersion,
+				};
+				try {
+					if (!options.executionKeys || !options.relayKeyDecryptor)
+						throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
+					const encryptedRecord = await bounded(
+						options.executionKeys.readCiphertext(binding),
+						active,
+					);
+					if (!encryptedRecord)
+						throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
+					// Renewal can clear a Host recovery latch while its original Key is
+					// still cached. Verify that exact Key without sending or reinstalling it.
+					await bounded(
+						options.relayKeyDecryptor
+							.decrypt({ encryptedRecord, expectedBinding: binding })
+							.then((decrypted) => {
+								if (decrypted.outcome !== "decrypted")
+									throw new RuntimeRelayKeyDeliveryError(decrypted.code);
+								try {
+									RuntimeRelayKeyDeliveryV1Schema.parse({
+										relayKey: new TextDecoder("utf-8", { fatal: true }).decode(
+											decrypted.plaintext,
+										),
+									});
+								} finally {
+									decrypted.plaintext.fill(0);
+								}
+							}),
+						active,
+					);
+				} catch (error) {
+					if (!(error instanceof RuntimeRelayKeyDeliveryError)) throw error;
+					await latch(
+						await prepare(request, "session.status", active, true),
+						active,
+					);
+					denied("TASK_AUTHORIZATION_CONTROL_ONLY");
+				}
+				const checked = await prepare(request, "execution.renew", active);
+				if (checked.authority.purpose === "control") {
+					await latch(checked, active);
+					denied();
+				}
+				if (
+					!isDeepStrictEqual(checked.authority, prepared.authority) ||
+					!isDeepStrictEqual(checked.state, prepared.state) ||
+					!isDeepStrictEqual(checked.route, prepared.route) ||
+					!isDeepStrictEqual(checked.target, prepared.target)
+				)
+					unavailable("RUNTIME_ROUTE_STALE");
+				prepared = checked;
 			}
 			if (!prepared.state.hostSessionRef)
 				unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
