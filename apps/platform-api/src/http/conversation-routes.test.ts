@@ -13,7 +13,6 @@ import {
 	type ConversationRoutesDependencies,
 	registerConversationRoutes,
 } from "./conversation-routes.js";
-import { registerV2CompatibilityRoutes } from "./v2-compat.js";
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -202,7 +201,6 @@ function dependencies(
 function testApp(input = dependencies()) {
 	const app = new Hono();
 	registerConversationRoutes(app, input);
-	registerV2CompatibilityRoutes(app);
 	return { app, dependencies: input };
 }
 
@@ -228,6 +226,25 @@ describe("Conversation HTTP routes", () => {
 		);
 		expect(detailBody.events).toHaveLength(1);
 		expect(executionBody.events).toHaveLength(1);
+	});
+
+	it("keeps V2 conversation and execution reads actor-scoped", async () => {
+		const input = dependencies();
+		input.commands(identity).readConversation = vi
+			.fn()
+			.mockResolvedValue({ outcome: "denied" });
+		for (const path of [
+			"/api/v2/conversations/conversation-1",
+			"/api/v2/conversations/conversation-1/executions/execution-1",
+		]) {
+			const response = await testApp(input).app.request(path);
+			expect(response.status).toBe(404);
+			expect(await response.json()).toMatchObject({
+				code: "RESOURCE_UNAVAILABLE",
+			});
+		}
+		expect(input.query.get).not.toHaveBeenCalled();
+		expect(input.query.getExecution).not.toHaveBeenCalled();
 	});
 
 	it("maps generated command requests to the Core seam without caller identity", async () => {
@@ -752,15 +769,11 @@ describe("Conversation persisted SSE", () => {
 	});
 
 	it.each([
-		{ header: {}, schemaVersion: 1, reason: false },
-		{
-			header: { "x-agent-infra-v2": "1" },
-			schemaVersion: 2,
-			reason: true,
-		},
+		{ version: 1, reason: false },
+		{ version: 2, reason: true },
 	])(
 		"projects bounded task reasons for the requested SSE version: %j",
-		async ({ header, schemaVersion, reason }) => {
+		async ({ version, reason }) => {
 			const input = dependencies();
 			input.query.replay = vi
 				.fn()
@@ -785,12 +798,11 @@ describe("Conversation persisted SSE", () => {
 					resumeCursor: "cursor-1",
 				});
 			const response = await testApp(input).app.request(
-				"/api/v1/conversations/conversation-1/events",
-				{ headers: header },
+				`/api/v${version}/conversations/conversation-1/events`,
 			);
 			expect(response.status).toBe(200);
 			const body = await response.text();
-			expect(body).toContain(`"schemaVersion":${schemaVersion}`);
+			expect(body).toContain(`"schemaVersion":${version}`);
 			expect(body).toContain('"type":"task.status"');
 			expect(body.includes('"reason":"STOP_CONFIRMATION_TIMEOUT"')).toBe(
 				reason,

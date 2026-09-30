@@ -45,6 +45,7 @@ const {
 	listAgentsV2,
 	listPendingAgentApplicationsV2,
 	listPlatformAuditV2,
+	streamConversationEventsV2,
 	updateAgentApplicationV2,
 	updateAgentConfigurationV2,
 	withdrawAgentApplicationV2,
@@ -549,5 +550,18 @@ describe("generated V2 compatibility client", () => {
 			200, 200, 200, 200,
 		]);
 		expect(responses.every(({ error }) => error === undefined)).toBe(true);
+
+		const abort = new AbortController();
+		const { stream } = await streamConversationEventsV2({
+			client,
+			path: { conversationId: "conversation-1" },
+			signal: abort.signal,
+		});
+		const first = await stream.next();
+		abort.abort();
+		expect(first.value).toMatchObject({
+			kind: "control",
+			type: "timeline.reload",
+		});
 	});
 });

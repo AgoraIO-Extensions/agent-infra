@@ -17,16 +17,8 @@ const v2ManagementPaths = [
 	/^\/api\/v2\/admin\/agent-applications\/[^/]+\/decision$/,
 ];
 
-const v2ConversationPaths = [
-	/^\/api\/v2\/conversations\/[^/]+$/,
-	/^\/api\/v2\/conversations\/[^/]+\/events$/,
-	/^\/api\/v2\/conversations\/[^/]+\/executions\/[^/]+$/,
-];
-
 function isSupportedV2Path(pathname: string): boolean {
-	return [...v2ManagementPaths, ...v2ConversationPaths].some((pattern) =>
-		pattern.test(pathname),
-	);
+	return v2ManagementPaths.some((pattern) => pattern.test(pathname));
 }
 
 function v2RequestBody(
