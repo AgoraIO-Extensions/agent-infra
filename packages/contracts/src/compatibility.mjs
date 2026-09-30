@@ -854,6 +854,7 @@ function isAgentDirectCreationOpenApiAddition(previous, current) {
 // paths and the application/start variants are additive to the existing V1/V2
 // contracts, so normalize them before running the generic breaking check.
 function isAgentApiIdentityOpenApiAddition(previous, current) {
+	if (!current.paths || !current.components?.schemas) return false;
 	const normalized = structuredClone(current);
 	const addedPaths = [
 		"/api/v2/admin/users/{userId}/disable",
@@ -1250,6 +1251,54 @@ function isScopedAuditOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #481 adds personal Relay Key management to V2 and four bounded audit actions.
+function isPersonalRelayKeyOpenApiAddition(previous, current) {
+	const normalized = structuredClone(current);
+	const path = "/api/v2/me/relay-key";
+	const schemas = [
+		"PersonalRelayKeyStateV1",
+		"PersonalRelayKeyReplaceRequestV1",
+		"PersonalRelayKeyRevokeRequestV1",
+	];
+	const actions = [
+		"relay_key.personal.read",
+		"relay_key.personal.replaced",
+		"relay_key.personal.revoked",
+		"relay_key.personal.rejected",
+	];
+	let changed = false;
+	if (previous.paths?.[path] === undefined && normalized.paths?.[path]) {
+		delete normalized.paths[path];
+		changed = true;
+	}
+	for (const name of schemas) {
+		if (
+			previous.components?.schemas?.[name] === undefined &&
+			normalized.components?.schemas?.[name] !== undefined
+		) {
+			delete normalized.components.schemas[name];
+			changed = true;
+		}
+	}
+	const previousActions =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	const currentActions =
+		normalized.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	if (
+		Array.isArray(currentActions) &&
+		actions.every(
+			(action) =>
+				currentActions.includes(action) &&
+				(!Array.isArray(previousActions) || !previousActions.includes(action)),
+		)
+	) {
+		normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+			currentActions.filter((action) => !actions.includes(action));
+		changed = true;
+	}
+	return changed && findBreakingChanges(previous, normalized).length === 0;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -1268,6 +1317,7 @@ function findBreakingChanges(previous, current) {
 			!isConversationFactsV2OpenApiAddition(previous, comparable) &&
 			!isWecomReceiptOpenApiAddition(previous, comparable) &&
 			!isScopedAuditOpenApiAddition(previous, comparable) &&
+			!isPersonalRelayKeyOpenApiAddition(previous, comparable) &&
 			!isFileAuthorityOpenApiAddition(previous, comparable)
 		) {
 			changes.push("changed OpenAPI contract");

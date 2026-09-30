@@ -2,7 +2,10 @@ import { AgentResourceProfileProjectionV1Schema } from "@agent-infra/contracts/p
 import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
 import type { AgentConfigurationAuthorityContextV1 } from "@agent-infra/platform-core";
 import { PostgresApiIdentityStoreV1 } from "@agent-infra/platform-store";
-import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
+import {
+	createRelayKeyEncryptorV1,
+	createSecretEncryptorV1,
+} from "@agent-infra/secret-store";
 
 import type { PlatformApiAssemblyInput } from "./assembly.js";
 import {
@@ -28,6 +31,7 @@ export interface ProductionPlatformApiInputV1
 	/** An actual deployment identity boundary; no browser-provided identity headers. */
 	readonly identity: IdentityAdapter;
 	readonly userGovernance?: PlatformApiAssemblyInput["userGovernance"];
+	readonly validatePersonalRelayKey?: PlatformApiAssemblyInput["personalRelayKeyValidation"];
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	/** Public wrapping keys only. Worker private keys belong to the Worker deployment. */
 	readonly encryptionKeys: unknown;
@@ -85,6 +89,10 @@ export function createProductionPlatformApiAssemblyInputV1(
 		databaseUrl: input.databaseUrl,
 		identity,
 		userGovernance: input.userGovernance,
+		personalRelayKeyEncryptor: createRelayKeyEncryptorV1({
+			encryptionKeys: input.encryptionKeys,
+		}),
+		personalRelayKeyValidation: input.validatePersonalRelayKey,
 		apiIdentity,
 		requestScope: identityScope.requestScope,
 		conversationReplayWindow: input.conversationReplayWindow,

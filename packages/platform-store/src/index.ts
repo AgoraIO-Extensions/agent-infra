@@ -109,6 +109,7 @@ export {
 	type ScheduleOutboxRetryInput,
 	type SucceededOutboxItem,
 } from "./outbox.ts";
+export { PostgresPersonalRelayKeyStoreV1 } from "./personal-relay-key.ts";
 export {
 	PostgresScopedPlatformAuditQueryV1,
 	type ScopedPlatformAuditPageV1,

@@ -17,6 +17,10 @@ import {
 	type ManagementRouteDependencies,
 	registerApiIdentityRoutes,
 } from "./http/management-routes.js";
+import {
+	type PersonalRelayKeyRoutesDependencies,
+	registerPersonalRelayKeyRoutes,
+} from "./http/personal-relay-key-routes.js";
 import { registerRetiredManagementRoutes } from "./http/retired-management-routes.js";
 import {
 	registerScopedAuditRoutes,
@@ -48,6 +52,7 @@ export interface PlatformAppDependencies {
 	readonly sessionAudit: SessionAuditRoutesDependencies;
 	readonly scopedAudit?: ScopedAuditRoutesDependencies;
 	readonly userGovernance?: UserGovernanceRoutesDependencies;
+	readonly personalRelayKey?: PersonalRelayKeyRoutesDependencies;
 }
 
 export function createPlatformHealthApp() {
@@ -83,6 +88,12 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	registerUserGovernanceRoutes(
 		app,
 		dependencies.userGovernance ?? {
+			identity: dependencies.management.identity,
+		},
+	);
+	registerPersonalRelayKeyRoutes(
+		app,
+		dependencies.personalRelayKey ?? {
 			identity: dependencies.management.identity,
 		},
 	);

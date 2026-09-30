@@ -78,15 +78,20 @@ export class HttpProtocolError extends Error {
 	readonly body: PilotProtocolErrorV1;
 	readonly status: HttpErrorStatus;
 
-	constructor(code: keyof typeof protocolErrors, traceId: string) {
+	constructor(
+		code: keyof typeof protocolErrors,
+		traceId: string,
+		messageOverride?: string,
+	) {
 		const [status, wireCode, message, retryable] = protocolErrors[code];
-		super(message);
+		const safeMessage = messageOverride ?? message;
+		super(safeMessage);
 		this.name = "HttpProtocolError";
 		this.status = status;
 		this.body = {
 			schemaVersion: 1,
 			code: wireCode,
-			message,
+			message: safeMessage,
 			retryable,
 			traceId,
 		} as PilotProtocolErrorV1;

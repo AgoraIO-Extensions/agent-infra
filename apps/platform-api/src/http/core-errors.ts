@@ -4,6 +4,7 @@ import {
 	ApiIdentityError,
 	ApplicationFoundationError,
 	ApplicationRevisionError,
+	PersonalRelayKeyErrorV1,
 } from "@agent-infra/platform-core";
 
 import { HttpProtocolError } from "./common.js";
@@ -13,6 +14,22 @@ export function mapCoreError(
 	traceId: string,
 ): HttpProtocolError {
 	if (error instanceof HttpProtocolError) return error;
+	if (error instanceof PersonalRelayKeyErrorV1) {
+		if (error.code === "invalid_key")
+			return new HttpProtocolError(
+				"INVALID_REQUEST",
+				traceId,
+				"Relay Key was rejected. Check it and try again.",
+			);
+		return new HttpProtocolError(
+			error.code === "not_authorized"
+				? "FORBIDDEN"
+				: error.code === "conflict"
+					? "CONFLICT"
+					: "DEPENDENCY_UNAVAILABLE",
+			traceId,
+		);
+	}
 	if (error instanceof ApplicationFoundationError) {
 		if (error.code === "invalid_command")
 			return new HttpProtocolError("INVALID_REQUEST", traceId);

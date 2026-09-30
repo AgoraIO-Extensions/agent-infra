@@ -603,6 +603,35 @@ export const PlatformUserDisableCommandV1Schema = z.strictObject({
 	disabled: z.boolean(),
 });
 
+export const PersonalRelayKeyStateV1Schema = z.discriminatedUnion("isSet", [
+	z.strictObject({
+		schemaVersion: SchemaVersionV1Schema,
+		isSet: z.literal(false),
+		keyVersion: z.null(),
+	}),
+	z.strictObject({
+		schemaVersion: SchemaVersionV1Schema,
+		isSet: z.literal(true),
+		keyVersion: z.number().int().positive(),
+	}),
+]);
+
+export const PersonalRelayKeyReplaceRequestV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	expectedVersion: z.number().int().positive().nullable(),
+	keyValue: z
+		.string()
+		.min(16)
+		.max(8192)
+		.regex(/^[\x21-\x7e]+$/u)
+		.meta({ writeOnly: true }),
+});
+
+export const PersonalRelayKeyRevokeRequestV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	expectedVersion: z.number().int().positive(),
+});
+
 export const PlatformAuditProjectionV2Schema =
 	PlatformAuditProjectionV1Schema.extend({
 		schemaVersion: z.literal(2),
@@ -1211,6 +1240,44 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/me/relay-key": {
+		get: {
+			operationId: "getPersonalRelayKeyV2",
+			responses: {
+				"200": jsonResponse(
+					"Personal Relay Key status",
+					PersonalRelayKeyStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		put: {
+			operationId: "replacePersonalRelayKeyV2",
+			requestBody: requiredJsonRequestBody(
+				PersonalRelayKeyReplaceRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Personal Relay Key replaced",
+					PersonalRelayKeyStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		delete: {
+			operationId: "revokePersonalRelayKeyV2",
+			requestBody: requiredJsonRequestBody(
+				PersonalRelayKeyRevokeRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Personal Relay Key revoked",
+					PersonalRelayKeyStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/admin/users/{userId}/disable": {
 		put: {
 			operationId: "setPlatformUserDisabledV2",
@@ -1445,6 +1512,9 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	PersonalRelayKeyStateV1: PersonalRelayKeyStateV1Schema,
+	PersonalRelayKeyReplaceRequestV1: PersonalRelayKeyReplaceRequestV1Schema,
+	PersonalRelayKeyRevokeRequestV1: PersonalRelayKeyRevokeRequestV1Schema,
 	PlatformUserDisableCommandV1: PlatformUserDisableCommandV1Schema,
 	AgentLifecycleCommandRequestV1: AgentLifecycleCommandRequestV1Schema,
 	ApprovalDecisionRequestV1: ApprovalDecisionRequestV1Schema,

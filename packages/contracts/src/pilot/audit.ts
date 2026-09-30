@@ -30,6 +30,10 @@ export const ScopedPlatformAuditResultV1Schema = z.enum([
 ]);
 
 export const ScopedPlatformAuditActionV1Schema = z.enum([
+	"relay_key.personal.read",
+	"relay_key.personal.replaced",
+	"relay_key.personal.revoked",
+	"relay_key.personal.rejected",
 	"agent.application.submitted",
 	"agent.application.updated",
 	"agent.application.resubmitted",

@@ -29,6 +29,27 @@ const platformAuditActionMetadata = {
 		subjectKind: "user",
 		details: "governance_rejection",
 	},
+	"relay_key.personal.read": {
+		actorKind: "user",
+		subjectKind: "user",
+		details: false,
+	},
+	"relay_key.personal.replaced": {
+		actorKind: "user",
+		subjectKind: "user",
+		details: false,
+	},
+	"relay_key.personal.revoked": {
+		actorKind: "user",
+		subjectKind: "user",
+		details: false,
+	},
+	"relay_key.personal.rejected": {
+		actorKind: "user",
+		actorKinds: ["user", "unknown"],
+		subjectKind: "user",
+		details: "governance_rejection",
+	},
 	"api.access.rejected": {
 		actorKind: "user",
 		actorKinds: ["user", "application"],

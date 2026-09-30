@@ -136,7 +136,12 @@ describe("standard contract artifacts", () => {
 			"/api/v2/conversations/{conversationId}/events",
 			"/api/v2/conversations/{conversationId}/executions/{executionId}",
 			"/api/v2/deployment/configuration",
+			"/api/v2/me/relay-key",
 		]);
+		expect(
+			artifacts.pilotBrowserOpenapiV2.components.schemas
+				.PersonalRelayKeyReplaceRequestV1.properties.keyValue.writeOnly,
+		).toBe(true);
 		expect(artifacts.pilotBrowserOpenapiV2.components.schemas).toHaveProperty(
 			"PlatformAuditProjectionV2",
 		);

@@ -7,6 +7,7 @@ import {
 	createApplicationFoundationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
+	createPersonalRelayKeyUseCaseV1,
 } from "@agent-infra/platform-core";
 import {
 	PostgresAgentConfigurationQueryV1,
@@ -18,10 +19,12 @@ import {
 	PostgresApplicationRevisionTransactionV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
+	PostgresPersonalRelayKeyStoreV1,
 	PostgresPlatformAuditQueryV1,
 	PostgresScopedPlatformAuditQueryV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
+import type { RelayKeyEncryptorV1 } from "@agent-infra/secret-store";
 import type { PlatformAppDependencies } from "./app.js";
 import { withApiIdentityResolverV1 } from "./deployment-identity.js";
 import {
@@ -57,6 +60,10 @@ export interface PlatformApiAssemblyInput {
 	readonly identity: IdentityAdapter;
 	readonly apiIdentity?: PostgresApiIdentityStoreV1;
 	readonly userGovernance?: UserGovernanceRoutesDependencies["users"];
+	readonly personalRelayKeyEncryptor?: RelayKeyEncryptorV1;
+	readonly personalRelayKeyValidation?: (
+		keyValue: string,
+	) => Promise<"valid" | "invalid" | "unavailable">;
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly allocateApplicationIds: ManagementRouteDependencies["allocateApplicationIds"];
@@ -88,6 +95,29 @@ export function assemblePlatformApi(
 		apiIdentity,
 	);
 	const identityAdapter = identity;
+	const personalRelayKeyStore = input.personalRelayKeyEncryptor
+		? new PostgresPersonalRelayKeyStoreV1(
+				input.databaseUrl,
+				async (userId) => {
+					const current = await resolveCurrentTaskUser(
+						identityAdapter,
+						userId,
+						randomUUID(),
+					);
+					return current
+						? { userId: current.userId, accountStatus: current.accountStatus }
+						: null;
+				},
+				input.personalRelayKeyEncryptor,
+			)
+		: undefined;
+	const personalRelayKey = personalRelayKeyStore
+		? createPersonalRelayKeyUseCaseV1({
+				store: personalRelayKeyStore,
+				validate:
+					input.personalRelayKeyValidation ?? (async () => "unavailable"),
+			})
+		: undefined;
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl: input.databaseUrl,
 		resolveUser: identityAdapter.resolveUser,
@@ -342,6 +372,7 @@ export function assemblePlatformApi(
 	const dependencies: PlatformAppDependencies = {
 		requestScope: input.requestScope,
 		userGovernance: { identity: input.identity, users: input.userGovernance },
+		personalRelayKey: { identity: input.identity, keys: personalRelayKey },
 		...(files ? { files: files.dependencies } : {}),
 		management: {
 			identity: identityAdapter,
@@ -391,6 +422,7 @@ export function assemblePlatformApi(
 		scopedAudit: { identity: input.identity, audit: scopedAuditQuery },
 	};
 	const adapters = [
+		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
 		...(files ? [files] : []),
 		foundationTransaction,
 		revisionTransaction,

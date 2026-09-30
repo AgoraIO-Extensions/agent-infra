@@ -1,6 +1,10 @@
 import type { AuditRecord } from "./audit-query.js";
 
 export const auditActionLabels: Record<AuditRecord["action"], string> = {
+	"relay_key.personal.read": "查看个人 Relay Key 状态",
+	"relay_key.personal.replaced": "设置个人 Relay Key",
+	"relay_key.personal.revoked": "撤销个人 Relay Key",
+	"relay_key.personal.rejected": "拒绝个人 Relay Key 操作",
 	"agent.application.submitted": "提交创建申请",
 	"agent.application.updated": "修改创建申请",
 	"agent.application.resubmitted": "重新提交申请",
