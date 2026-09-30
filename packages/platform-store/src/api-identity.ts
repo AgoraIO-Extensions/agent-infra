@@ -704,10 +704,12 @@ export class PostgresApiIdentityStoreV1 {
 			return this.resolveApplicationCredential(credential);
 		}
 		if (!resolveUser) return null;
-		const user = await resolveUser(resolved.principal.id);
-		if (user === null) return null;
-		const currentUser = parseCurrentTaskUserV1(user);
-		if (currentUser.userId !== resolved.principal.id) return null;
+		const currentUser = await currentUserAtWrite(
+			this.#database,
+			resolved.principal.id,
+			resolveUser,
+		);
+		if (currentUser?.userId !== resolved.principal.id) return null;
 		return {
 			schemaVersion: 1,
 			principal: resolved.principal,

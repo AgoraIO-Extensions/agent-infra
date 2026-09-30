@@ -769,6 +769,47 @@ describe("PostgreSQL API identity store", () => {
 		expect(userCredential.metadata).not.toHaveProperty("credential");
 	});
 
+	it("rejects a user API credential when its active directory principal is Platform-disabled", async () => {
+		await adminClient`truncate platform.audit_events,
+			platform.platform_api_credentials, platform.platform_user_disables cascade`;
+		const resolveUser = async (userId: string) => ({
+			schemaVersion: 1,
+			userId,
+			accountStatus: "active",
+			organizationIds: [],
+			authorizationRevision: "user_revision_1",
+		});
+		await store.issueCredential({
+			actor: administratorActor,
+			principal: { kind: "user", id: administratorActor.userId },
+			credential: "disabled-user-api-secret",
+			scopes: ["agent:read"],
+			expiresAt: null,
+			audit: { ...userAudit, action: "api.credential.issued" },
+		});
+		expect(
+			await store.resolveApiCredential("disabled-user-api-secret", resolveUser),
+		).toMatchObject({ accountStatus: "active" });
+		await adminClient`insert into platform.platform_user_disables (user_id, disabled_by)
+			values (${administratorActor.userId}, 'administrator')`;
+		try {
+			expect(
+				await store.resolveApiCredential(
+					"disabled-user-api-secret",
+					resolveUser,
+				),
+			).toBeNull();
+			expect(
+				await store.resolveCredential("disabled-user-api-secret"),
+			).toMatchObject({ revokedAt: null });
+		} finally {
+			await adminClient`delete from platform.platform_user_disables where user_id = ${administratorActor.userId}`;
+		}
+		expect(
+			await store.resolveApiCredential("disabled-user-api-secret", resolveUser),
+		).toMatchObject({ accountStatus: "active" });
+	});
+
 	it("rejects an issued application credential when its active directory recipient is Platform-disabled", async () => {
 		await adminClient`truncate platform.audit_events,
 			platform.api_credential_delivery_grants, platform.platform_api_credentials,
