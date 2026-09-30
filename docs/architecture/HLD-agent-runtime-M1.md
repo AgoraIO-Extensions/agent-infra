@@ -455,28 +455,41 @@ Driver 仍只准入本次 Execution 冻结的 B；压缩与后续普通采样都
 
 OpenCode 的来源、维护和启用前置以
 [工程 Spec 10.13](SPEC-agent-infra-M1-engineering-architecture.md#1013-opencode-原生工具回执与来源)为准。
-Generic ACP 保留权限、进度与未知结果的协议语义；接缝能力只由经过验证的原生执行回执提供。
+Generic ACP 保留权限、进度与未知结果的协议语义；可信开始与结果只由经过验证的实际执行端提供。
 公开 Plugin 接缝的可用性须在固定源码和 artifact 中核对，不假定 before hook 位于工具内部
 权限检查之后，也不假定成功后的 after hook 覆盖抛错、取消或内部新尝试。
+
+官方公开扩展的替代边界由固定工具扩展请求现有 Driver 信任域中的执行叶子完成实际 I/O。
+扩展请求与模型/ACP 进度不能写入可信回执；只有执行叶子沿原 journal 记录实际开始和结果。
+模型可用的每项工具须先验证与原承诺行为等价，原 built-in 及其他可绕过该叶子的入口须实际
+阻断。固定扩展、工具和配置受版本/hash 与只读装配控制，不加载 Owner 或工作区可写的替代
+实现；提示词、默认配置或一条自有工具成功不能证明完整覆盖或隔离。
+
+公开入口须把每个真实执行请求无歧义地绑定到 Driver 已冻结的原 Session/Execution、代次
+和 fence，并持久保存 request 与 operation/attempt 的映射。固定 V1 ToolContext 未公开
+callID，不能依赖未声明字段、当前 Execution、参数相等、队列次序或模型自报 ID 补足绑定。
+before hook 提供 callID 本身不证明其与实际请求的关联；同参数并发、跨 Execution、旧请求
+重放及原 Session 重启均须实证。不能建立可信映射时拒绝执行，不补造原生调用事实。
 
 - 原生接缝将可信 session/Turn/callId 和每次内部尝试绑定到原 Execution、代次/fence
   与稳定 operationRef/attemptRef。重复控制请求复用已保存决定，真实新尝试独立标识；
   模型参数、ACP 任意进度帧与另一 Execution 的相同 tool ID 不能建立该绑定。
 - 每次实际文件操作、process/client dispatch 前，Driver 沿现有 journal 确认 intent，
-  释放持久队列后等待当前 Host 授权。Native 校验该 attempt 的许可、代次和本地取消状态；
+  释放持久队列后等待当前 Host 授权。实际执行端校验该 attempt 的许可、代次和本地取消状态；
   拒绝、过期、错配、断连或持久确认失败不开始动作。工具内部权限与普通 hook 保留原职责，
   许可缓存不跳过每次屏障；最终操作内容变化须重新核对，不能使用变更前的许可。
 - Permit 是准入确认。started 只来自实际 I/O 或 dispatch 已开始的回执；前置验证、
   权限等待和拒绝均不记录虚构开始或耗时。结果、抛错、取消和可能发生后的 unknown 沿原
   attempt 保存并确认，确认完成前不向原生推理循环交付该结果或开始后续动作。
-- 控制通道复用原 Native 进程生命周期，ACP stdio 继续承担业务协议，不增加公开 RPC、
+- 控制通道复用现有 Driver/Native 生命周期，ACP stdio 继续承担业务协议，不增加公开 RPC、
   capability 协商或调度循环。接管的控制端必须隔离于工具子进程并在 spawn 前封闭继承，
   模型/Owner 不能关闭、改写或伪造许可；同 UID 可读取的 env Token 或普通 socket 路径
   不能作为隔离证明。确认等待可取消且不占用状态/stop 消费所需的持久锁。
 - stop、撤权和 generation barrier 封闭新准入并排空在途控制请求及实际执行源；未确认
   停止不释放占用。任何一侧在许可、实际开始或结果确认附近崩溃，只核实原 attempt，
   保留已保存结果和未确认交付；未知不自动重发，也不借新 attempt 或 Session 补证。
-- 工具覆盖清单绑定真实 artifact：当前允许的 read/edit 及其内部动作逐项验证，声明的
+- 工具覆盖清单绑定真实 artifact 及扩展：原 built-in 与替代叶子分别记录，read/write/edit
+  及其内部动作逐项验证，声明的
   其他 built-in、委托调用、后台动作和内部 retry 都独立覆盖。能力缺口保持未通过，
   不从另一工具的结果推定；正文、文件内容、参数、凭证和原生错误留在受控业务路径，
   不进入操作事实或遥测。公共事实、必要审计和游标继续使用 8.2/8.5 的唯一事务边界。
@@ -578,11 +591,16 @@ Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每
   与持久事实，证明未知不重放、不转为 A 或提前回答、不伪造未创建 Turn、不提前释放占用；
   既有普通当前模型压缩、取消和已保存历史读取仍按原契约通过。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- OpenCode 工具接缝使用真实固定 Native 与受控 read/edit，逐项核对许可前零动作、实际
+- OpenCode 工具接缝使用真实固定 Native 与受控 read/write/edit，逐项核对许可前零动作、实际
   开始和结果/失败/取消；覆盖内部新尝试、重用 tool ID、跨主体/Execution、回执丢失与结果
   保存失败、原 Session 重启和控制端隔离。验证源码/target/artifact 与覆盖清单、旧终态
   读取和 active/unknown 兼容；合成敏感哨兵不进入事实、错误或遥测。Fixture 只证明其受控
   路径，四模板真实模型/Connection、V4 Key 和 Worker 事务验收继续逐项完成。
+- 官方扩展替代边界另外验证同参数并发请求的原 Execution/attempt 绑定、旧 slot/请求重放、
+  伪造回执、可写配置替换及原工具绕过。intent 保存或授权失败时真实 I/O 为零；实际 I/O
+  完成但 terminal ACK 扣留时，后续模型请求为零，释放 ACK 后才能继续；结果已保存后断连
+  重启只读取原 attempt，实际 I/O 计数不增加。停止须排空实际执行源，控制 ACK 不证明退出。
+  该纵向验证从 read 开始不缩小 write/edit、委托、后台或其他已承诺工具的完整矩阵。
 - 负向测试覆盖未知协议、无交互入口、Manifest Label 缺失或超过 64 KiB、JSON 嵌套超过 8 层、未知或重复字段、非 `1` 的 Schema 版本、`self-managed` 声明 `protocol`、非法 capability 结构、Registry 从 capability 外重复声明 `supplementaryInstruction`、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Service/健康检查、`health.path` 使用 `//`、`.` 或 `..` 路径段、反斜杠、`%` 编码、非允许字符、外部 URL、查询参数、片段、控制字符或凭证，以及健康探针返回 HTTP 重定向、调用方伪造或覆盖 `actorId`、使用另一发送者的 Conversation 查询消息、历史、SSE、附件或结果文件、群内公开事件暴露其他发送者的 Conversation 或 Runtime 上下文、不同发送者向活跃 Turn 追加指令或停止回复、缺失或非法 `Idempotency-Key`、同一 Key 跨命令类型复用时误命中其他操作、普通消息响应丢失后因活跃状态变化把重试误判为补充指令或繁忙、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、使用者停止投递前失去权限后转换为平台撤权停止、没有使用者停止请求时平台主动中止撤权用户的活跃 Execution、身份依赖暂时不可用时不误判撤权或调用 Adapter、检查 stop 后到调用 Runtime 前的并发停止、Turn lease 到期后旧 Worker 迟到提交或回写、接管 Worker 未完成高 fence 取消标记、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、stop 认领后已接受 Turn 的在途事件或真实终态被拒绝、Session 恢复失败后旧代次调用、事件或终态迟到、generation tombstone 重试、繁忙拒绝后创建记录、重复消息、旧 fence 重放已保存事件时重复写入、旧 fence 产生未保存的新事件、双 Worker 并发保存同一 Conversation 事件、Runtime 事件已转发但事务未提交时断线、事务提交后上游确认前崩溃、Worker/Pod 重启后按已确认游标重放、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
 - generation fencing 故障注入覆盖隔离意图提交后 tombstone 尚未激活、Agent Service 激活后 Platform DB 尚未提升代次、两个阶段之间 Worker 重启、tombstone 重复投递和 Agent Service 暂时不可用；任何路径都不能接受新命令、丢弃已接受旧调用的可见结果、在 barrier 确认后产生旧代次副作用，或在确认前提升平台代次。
 - RuntimeHost Conformance 故障注入覆盖 Host Session Ref 泄露、跨 Conversation 重放或与 Grant 绑定不一致，Grant 签名、签发方、audience、有效期、附件引用或操作范围不匹配，缺失或非法模型选择、同一 Execution 选择重放与冲突、相邻 Execution 选择隔离、Driver 不支持的模型或 reasoning，两个 Worker 对同一 Session 和 operation scope 并发提交相同或不同 fence，以及请求记录提交前、提交后但 Driver 调用前、Driver 接受后但 Host 持久化或响应前崩溃。测试必须模拟 durable store 确认前掉电和不完整记录；恢复查询、重复请求和 fence 接管都不能创建第二个 Turn、重复补充指令或重复停止。无法确认时保持 `unknown`，损坏记录使对应 Session fail closed，不能把引用、请求字段、模型 endpoint/credential、原生协议帧或日志文本当作授权或恢复依据。
