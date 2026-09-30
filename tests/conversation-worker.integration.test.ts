@@ -40,6 +40,10 @@ import type {
 	RuntimeSubmitTurnRequestV3,
 } from "@agent-infra/contracts/runtime";
 import {
+	RuntimeStatusRequestV3Schema,
+	RuntimeStatusResponseV3Schema,
+} from "@agent-infra/contracts/runtime";
+import {
 	createDeploymentModelCatalogAdapterV1,
 	projectRuntimeModelConfigurationV4,
 	runtimeModelInjectionV4,
@@ -302,6 +306,13 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		transportTls?: boolean;
 		keyId?: string;
 		keyVersion?: number;
+		hostSessionRef?: string | null;
+		originalOperationDigest?: string;
+		controlPurpose?: "business" | "control";
+		controlReason?: string;
+		controlCommand?: string;
+		statusOutcome?: string;
+		statusHostSessionRef?: string | null;
 		privateKeyMatches?: boolean;
 		keyInBusinessRequest?: boolean;
 	}[] = [];
@@ -900,6 +911,9 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 					}
 				: {}),
 		});
+		const verifyControlGrant = createRuntimeExecutionGrantVerifierV2(
+			new Map([[signing.keyId, keys.publicKey]]),
+		);
 		const app = createRuntimeHostApp({
 			host,
 			runtimeWorkerId: signing.workerId,
@@ -908,9 +922,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			verifyGrant: createExecutionGrantVerifier(
 				new Map([[signing.keyId, keys.publicKey]]),
 			),
-			verifyGrantV2: createRuntimeExecutionGrantVerifierV2(
-				new Map([[signing.keyId, keys.publicKey]]),
-			),
+			verifyGrantV2: verifyControlGrant,
 		});
 		let ackCount = 0;
 		const runtimeHandler: RequestListener = async (req, res) => {
@@ -993,6 +1005,27 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				...(body ? { body } : {}),
 			});
 			observedRequest.responseStatus = response.status;
+			if (
+				response.ok &&
+				req.url === "/internal/runtime/v3/status" &&
+				parsed.schemaVersion === 3
+			) {
+				const statusRequest = RuntimeStatusRequestV3Schema.parse(parsed);
+				const { claims } = verifyControlGrant(statusRequest.grant);
+				const statusResponse = RuntimeStatusResponseV3Schema.parse(
+					await response.clone().json(),
+				);
+				Object.assign(observedRequest, {
+					hostSessionRef: statusRequest.hostSessionRef,
+					originalOperationDigest: statusRequest.originalOperationDigest,
+					controlPurpose: claims.purpose,
+					controlReason:
+						claims.purpose === "control" ? claims.reason : undefined,
+					controlCommand: claims.allowedCommands[0],
+					statusOutcome: statusResponse.outcome,
+					statusHostSessionRef: statusResponse.hostSessionRef,
+				});
+			}
 			if (req.url?.endsWith("/ack") && response.ok) ackCount++;
 			traces.push(`response:${req.url}:${response.status}`);
 			if (
@@ -1879,7 +1912,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 			).toBe(confirmed?.cursor);
 		}
 		const [before] =
-			await sql`select delivery_fence::int as fence, host_session_ref, turn_id from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
+			await sql`select delivery_fence::int as fence, host_session_ref, turn_id, original_operation_digest from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
 		const readPersistedRows = async () => {
 			const events = await sql<
 				{
@@ -2029,47 +2062,57 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 					where id=${queued.id}
 				`;
 		}
+		const isTakeoverRequest = (request: (typeof requests)[number]) =>
+			keyedRuntime
+				? request.path === "/internal/runtime/v3/status" &&
+					request.executionId === active.execution_id &&
+					request.operationId === active.execution_id &&
+					request.deliveryFence === target.fence + 1 &&
+					request.hostSessionRef === before?.host_session_ref &&
+					request.originalOperationDigest ===
+						before?.original_operation_digest &&
+					request.controlPurpose === "control" &&
+					request.controlReason === "recovery" &&
+					request.controlCommand === "session.status" &&
+					request.statusOutcome === "found" &&
+					request.statusHostSessionRef === before?.host_session_ref &&
+					request.responseStatus === 200
+				: request.path.endsWith("/status") &&
+					request.executionId === active.execution_id;
 		await waitUntil(
-			async () =>
-				requests
-					.slice(priorRequests)
-					.some((request) =>
-						keyedRuntime
-							? request.path === "/internal/runtime/v4/turns" &&
-								request.executionId === active.execution_id &&
-								request.operationId === active.execution_id &&
-								request.responseStatus === 200
-							: request.path.endsWith("/status") &&
-								request.executionId === active.execution_id,
-					),
+			async () => requests.slice(priorRequests).some(isTakeoverRequest),
 			"takeover queries original Runtime execution",
 		);
 		const takeoverRequest = requests
 			.slice(priorRequests)
-			.find((request) =>
-				keyedRuntime
-					? request.path === "/internal/runtime/v4/turns" &&
-						request.executionId === active.execution_id &&
-						request.operationId === active.execution_id &&
-						request.responseStatus === 200
-					: request.path.endsWith("/status") &&
-						request.executionId === active.execution_id,
-			);
+			.find(isTakeoverRequest);
 		if (!takeoverRequest)
 			throw Error("Takeover Runtime request was not observed");
 		if (keyedRuntime) {
 			expect(takeoverRequest).toMatchObject({
-				path: "/internal/runtime/v4/turns",
+				path: "/internal/runtime/v3/status",
 				executionId: active.execution_id,
 				operationId: active.execution_id,
 				sessionGeneration: 1,
 				deliveryFence: target.fence + 1,
-				keyId: "relay-agent-k1",
-				keyVersion: 1,
-				privateKeyMatches: true,
-				keyInBusinessRequest: false,
+				hostSessionRef: before?.host_session_ref,
+				originalOperationDigest: before?.original_operation_digest,
+				controlPurpose: "control",
+				controlReason: "recovery",
+				controlCommand: "session.status",
+				statusOutcome: "found",
+				statusHostSessionRef: before?.host_session_ref,
 				responseStatus: 200,
 			});
+			expect(takeoverRequest.keyId).toBeUndefined();
+			expect(takeoverRequest.keyVersion).toBeUndefined();
+			expect(takeoverRequest.privateKeyMatches).toBeUndefined();
+			expect(
+				requests
+					.slice(priorRequests)
+					.filter((request) => request.executionId === active.execution_id)
+					.some((request) => request.path.endsWith("/turns")),
+			).toBe(false);
 		}
 		await waitUntil(
 			async () =>
@@ -2116,7 +2159,7 @@ modelCatalog:{load:async()=>(${JSON.stringify(keyedRuntime ? controlledCatalog :
 				request.path.endsWith("/turns") &&
 				request.executionId === active.execution_id,
 		);
-		expect(activeTurnRequests).toHaveLength(keyedRuntime ? 2 : 1);
+		expect(activeTurnRequests).toHaveLength(1);
 		if (keyedRuntime)
 			expect(
 				activeTurnRequests.every(
