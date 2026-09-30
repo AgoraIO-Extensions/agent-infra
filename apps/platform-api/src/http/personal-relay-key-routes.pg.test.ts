@@ -66,31 +66,6 @@ beforeAll(async () => {
 	database = await startPostgresTestDatabase("personal-relay-key-http");
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 	sql = postgres(database.databaseUrl, { max: 1 });
-	// #482 owns the shared Relay Key migration. This exercises the HTTP path
-	// against its current two-table contract until the ordered SQL is published.
-	await sql`
-		create table platform.relay_key_subjects (
-			purpose text not null,
-			subject_id text not null,
-			last_version bigint not null default 0,
-			current_version bigint,
-			updated_at timestamptz not null default now(),
-			primary key (purpose, subject_id),
-			check (current_version is null or current_version between 1 and last_version)
-		)
-	`;
-	await sql`
-		create table platform.relay_key_versions (
-			purpose text not null,
-			subject_id text not null,
-			key_version bigint not null,
-			key_id text not null unique,
-			ciphertext jsonb not null,
-			primary key (purpose, subject_id, key_version),
-			foreign key (purpose, subject_id)
-				references platform.relay_key_subjects (purpose, subject_id)
-		)
-	`;
 	store = new PostgresPersonalRelayKeyStoreV1(
 		database.databaseUrl,
 		async (userId) =>

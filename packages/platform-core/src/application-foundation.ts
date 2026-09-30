@@ -135,6 +135,13 @@ export type ApplicationFoundationReadDecisionV1 =
 	  }
 	| { readonly outcome: "idempotency_conflict" };
 
+export interface ApplicationFoundationReplayQueryV1 {
+	readonly schemaVersion: 1;
+	readonly applicationId: string;
+	readonly agentId: string;
+	readonly idempotencyKey: string;
+}
+
 export interface ApplicationFoundationTransactionPortV1 {
 	read(input: {
 		readonly schemaVersion: 1;
@@ -143,6 +150,9 @@ export interface ApplicationFoundationTransactionPortV1 {
 		readonly actorId: string;
 		readonly idempotencyKey: string;
 		readonly requestDigest: string;
+		readonly principal?: ApiPrincipalV1;
+		readonly applicantId?: string;
+		readonly apiAuthority?: ApplicationFoundationActorContextV1["apiAuthority"];
 	}): Promise<ApplicationFoundationReadDecisionV1>;
 	commit(
 		plan: ApplicationFoundationWritePlanV1,
@@ -151,6 +161,11 @@ export interface ApplicationFoundationTransactionPortV1 {
 }
 
 export interface ApplicationFoundationUseCaseV1 {
+	readApiCreationReplay(
+		query: ApplicationFoundationReplayQueryV1,
+		actorContext: ApplicationFoundationActorContextV1,
+	): Promise<CommitApplicationFoundationResultV1 | null>;
+
 	replayLegacyV1(
 		command: unknown,
 		actorContext: ApplicationFoundationActorContextV1,
@@ -405,6 +420,32 @@ function parseApplicationFoundationCommandV1(
 	} catch {
 		invalidApplicationFoundationInput();
 	}
+}
+
+function parseApplicationFoundationReplayQueryV1(
+	query: unknown,
+): ApplicationFoundationReplayQueryV1 {
+	const values = snapshotExactDataValues(query, [
+		"schemaVersion",
+		"applicationId",
+		"agentId",
+		"idempotencyKey",
+	]);
+	if (!values) invalidApplicationFoundationInput();
+	if (
+		values.schemaVersion !== 1 ||
+		!isCapturedText(values.applicationId) ||
+		!isCapturedText(values.agentId) ||
+		!isCapturedText(values.idempotencyKey, 128) ||
+		!/^[A-Za-z0-9._~-]{1,128}$/.test(values.idempotencyKey)
+	)
+		invalidApplicationFoundationInput();
+	return {
+		schemaVersion: 1,
+		applicationId: values.applicationId,
+		agentId: values.agentId,
+		idempotencyKey: values.idempotencyKey,
+	};
 }
 
 function parseApplicationFoundationActorContextV1(
@@ -856,6 +897,49 @@ export function createApplicationFoundationUseCaseV1(
 	options: ApplicationFoundationUseCaseOptionsV1 = {},
 ): ApplicationFoundationUseCaseV1 {
 	const now = options.now ?? systemNow;
+	const readDecision = async (
+		query: ApplicationFoundationReplayQueryV1,
+		actorContext: ApplicationFoundationActorContextV1,
+		creationMode: "web" | "api",
+	): Promise<ApplicationFoundationReadDecisionV1> => {
+		const principal: ApiPrincipalV1 = actorContext.principal ?? {
+			kind: "user",
+			id: actorContext.userId,
+		};
+		const expected: CommitApplicationFoundationResultV1 = {
+			schemaVersion: 1,
+			applicationId: query.applicationId,
+			agentId: query.agentId,
+			configurationRevision: initialConfigurationRevision,
+			status: creationMode === "api" ? "creating" : "pending_approval",
+		};
+		try {
+			return parseReadDecision(
+				await dependencies.transaction.read({
+					schemaVersion: 1,
+					applicationId: query.applicationId,
+					agentId: query.agentId,
+					actorId: principal.id,
+					idempotencyKey: query.idempotencyKey,
+					requestDigest: actorContext.rawRequestDigest,
+					...(creationMode === "api"
+						? {
+								principal,
+								applicantId: actorContext.userId,
+								apiAuthority: actorContext.apiAuthority,
+							}
+						: {}),
+				}),
+				expected,
+			);
+		} catch (error) {
+			throw new ApplicationFoundationError(
+				recognizedApplicationFoundationErrorCode(error) === "not_authorized"
+					? "not_authorized"
+					: "persistence_failed",
+			);
+		}
+	};
 	const execute = async (
 		commandInput: unknown,
 		actorContextInput: ApplicationFoundationActorContextV1,
@@ -870,11 +954,8 @@ export function createApplicationFoundationUseCaseV1(
 			id: actorContext.userId,
 		};
 		const creationMode = actorContext.creationMode ?? "web";
-		let admission: Awaited<
-			ReturnType<typeof beginInitialAgentConfigurationAdmissionV1>
-		>;
-		try {
-			admission = await beginInitialAgentConfigurationAdmissionV1(
+		const beginAdmission = () =>
+			beginInitialAgentConfigurationAdmissionV1(
 				{
 					schemaVersion: 2,
 					agentId: command.agentId,
@@ -897,8 +978,13 @@ export function createApplicationFoundationUseCaseV1(
 				} satisfies AgentConfigurationActorContextV1,
 				dependencies,
 			);
-		} catch (error) {
-			throw normalizeInitialAdmissionError(error);
+		let admission: Awaited<ReturnType<typeof beginAdmission>> | undefined;
+		if (creationMode === "web") {
+			try {
+				admission = await beginAdmission();
+			} catch (error) {
+				throw normalizeInitialAdmissionError(error);
+			}
 		}
 		const result: CommitApplicationFoundationResultV1 = {
 			schemaVersion: 1,
@@ -907,34 +993,33 @@ export function createApplicationFoundationUseCaseV1(
 			configurationRevision: initialConfigurationRevision,
 			status: creationMode === "api" ? "creating" : "pending_approval",
 		};
-		let readDecision: ApplicationFoundationReadDecisionV1;
-		try {
-			readDecision = parseReadDecision(
-				await dependencies.transaction.read({
-					schemaVersion: 1,
-					applicationId: command.applicationId,
-					agentId: command.agentId,
-					actorId: principal.id,
-					idempotencyKey: command.idempotencyKey,
-					requestDigest: actorContext.rawRequestDigest,
-				}),
-				result,
-			);
-		} catch {
-			throw new ApplicationFoundationError("persistence_failed");
-		}
-		// API retries must reach the Store commit transaction so its current
-		// credential and application authority check runs before replaying.
-		if (readDecision.outcome === "replayed" && creationMode !== "api")
-			return readDecision.result;
-		if (readDecision.outcome === "idempotency_conflict") {
+		const query: ApplicationFoundationReplayQueryV1 = {
+			schemaVersion: 1,
+			applicationId: command.applicationId,
+			agentId: command.agentId,
+			idempotencyKey: command.idempotencyKey,
+		};
+		const initialRead = await readDecision(query, actorContext, creationMode);
+		if (initialRead.outcome === "replayed") return initialRead.result;
+		if (initialRead.outcome === "idempotency_conflict") {
 			throw new ApplicationFoundationError("idempotency_conflict");
 		}
 		if (legacy) throw new ApplicationFoundationError("invalid_command");
 		let admitted: AdmittedInitialAgentConfigurationV1;
 		try {
+			admission ??= await beginAdmission();
 			admitted = await admission.complete();
 		} catch (error) {
+			if (creationMode === "api") {
+				const concurrentRead = await readDecision(
+					query,
+					actorContext,
+					creationMode,
+				);
+				if (concurrentRead.outcome === "replayed") return concurrentRead.result;
+				if (concurrentRead.outcome === "idempotency_conflict")
+					throw new ApplicationFoundationError("idempotency_conflict");
+			}
 			throw normalizeInitialAdmissionError(error);
 		}
 		let submittedAt: Date;
@@ -1051,6 +1136,15 @@ export function createApplicationFoundationUseCaseV1(
 		return decision.result;
 	};
 	return {
+		readApiCreationReplay: async (queryInput, actorInput) => {
+			const query = parseApplicationFoundationReplayQueryV1(queryInput);
+			const actor = parseApplicationFoundationActorContextV1(actorInput);
+			if (actor.creationMode !== "api") invalidApplicationFoundationInput();
+			const decision = await readDecision(query, actor, "api");
+			if (decision.outcome === "idempotency_conflict")
+				throw new ApplicationFoundationError("idempotency_conflict");
+			return decision.outcome === "replayed" ? decision.result : null;
+		},
 		submit: (command, actor, attachment) => execute(command, actor, attachment),
 		replayLegacyV1: (command, actor) =>
 			execute(command, actor, undefined, true),

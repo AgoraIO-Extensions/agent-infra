@@ -189,7 +189,10 @@ function testApp() {
 	const app = createPlatformApp({
 		management: {
 			identity: identityAdapter,
-			foundation: { submit: vi.fn().mockResolvedValue({}) },
+			foundation: {
+				readApiCreationReplay: vi.fn().mockResolvedValue(null),
+				submit: vi.fn().mockResolvedValue({}),
+			},
 			revision: { revise: vi.fn().mockResolvedValue({}) },
 			management: {
 				executeManagementCommand: vi.fn().mockResolvedValue({

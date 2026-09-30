@@ -173,7 +173,7 @@ describe("platform-core package surface", () => {
 		expect(surface).not.toHaveProperty("decideAgentAccessUpdatePolicy");
 		expect(
 			Object.keys(surface.createApplicationFoundationUseCaseV1({})),
-		).toEqual(["submit", "replayLegacyV1"]);
+		).toEqual(["readApiCreationReplay", "submit", "replayLegacyV1"]);
 		expect(Object.keys(surface.createApplicationRevisionUseCaseV1({}))).toEqual(
 			["revise", "replayLegacyV1"],
 		);

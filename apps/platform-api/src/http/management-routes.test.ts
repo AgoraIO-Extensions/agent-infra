@@ -185,6 +185,7 @@ function createApp(
 		modelConfiguration: undefined,
 		attachment: { resolve: vi.fn() },
 	});
+	const readApiCreationReplay = vi.fn().mockResolvedValue(null);
 	const allocateApplicationIds = vi
 		.fn()
 		.mockResolvedValue({ applicationId: "application-1", agentId: "agent-1" });
@@ -254,7 +255,10 @@ function createApp(
 					},
 				}
 			: {}),
-		foundation: { submit },
+		foundation: {
+			readApiCreationReplay,
+			submit,
+		},
 		revision: { revise },
 		management: { executeManagementCommand },
 		configuration: { upgradeCustomImage },
@@ -278,6 +282,7 @@ function createApp(
 		readApplicationProjection,
 		readAgentProjection,
 		prepareSecretReplacements,
+		readApiCreationReplay,
 		allocateApplicationIds,
 		apiIdentity,
 		resolveApiCredential,
@@ -575,6 +580,77 @@ describe("management routes", () => {
 		);
 	});
 
+	it("returns a saved direct creation before mutable preparation", async () => {
+		const direct = createApp({ api: true });
+		direct.readApiCreationReplay.mockImplementation(async (query) => ({
+			schemaVersion: 1,
+			applicationId: query.applicationId,
+			agentId: query.agentId,
+			configurationRevision: 1,
+			status: "creating",
+		}));
+		direct.prepareSecretReplacements.mockRejectedValue(
+			new Error("preparation is unavailable"),
+		);
+		const response = await direct.app.request("/api/v1/agents", {
+			method: "POST",
+			headers: { ...headers, Authorization: "Bearer secret" },
+			body: JSON.stringify({
+				schemaVersion: 2,
+				name: "Direct agent",
+				description: "Created through the API",
+				source: { kind: "standard", templateId: "template-1" },
+				coOwnerIds: [],
+				availability: [],
+				environment: [],
+				secrets: [],
+			}),
+		});
+		expect(response.status).toBe(201);
+		expect(await response.json()).toEqual({
+			schemaVersion: 1,
+			applicationId: expect.any(String),
+			agentId: expect.any(String),
+			status: "creating",
+		});
+		expect(direct.prepareSecretReplacements).not.toHaveBeenCalled();
+		expect(direct.submit).not.toHaveBeenCalled();
+	});
+
+	it("recovers a concurrent direct creation after preparation fails", async () => {
+		const direct = createApp({ api: true });
+		direct.readApiCreationReplay
+			.mockResolvedValueOnce(null)
+			.mockImplementation(async (query) => ({
+				schemaVersion: 1,
+				applicationId: query.applicationId,
+				agentId: query.agentId,
+				configurationRevision: 1,
+				status: "creating",
+			}));
+		direct.prepareSecretReplacements.mockRejectedValue(
+			new Error("preparation is unavailable"),
+		);
+		const response = await direct.app.request("/api/v1/agents", {
+			method: "POST",
+			headers: { ...headers, Authorization: "Bearer secret" },
+			body: JSON.stringify({
+				schemaVersion: 2,
+				name: "Direct agent",
+				description: "Created through the API",
+				source: { kind: "standard", templateId: "template-1" },
+				coOwnerIds: [],
+				availability: [],
+				environment: [],
+				secrets: [{ name: "TOKEN", value: "test-secret" }],
+			}),
+		});
+		expect(response.status).toBe(201);
+		expect(direct.readApiCreationReplay).toHaveBeenCalledTimes(2);
+		expect(direct.prepareSecretReplacements).toHaveBeenCalledOnce();
+		expect(direct.submit).not.toHaveBeenCalled();
+	});
+
 	it("accepts direct creation only through an active scoped API principal", async () => {
 		const direct = createApp();
 		direct.submit.mockImplementation(async (command) => ({
@@ -637,7 +713,10 @@ describe("management routes", () => {
 				revokeAgentGrant: vi.fn(),
 				recordAccessRejection: vi.fn(),
 			},
-			foundation: { submit: direct.submit },
+			foundation: {
+				readApiCreationReplay: direct.readApiCreationReplay,
+				submit: direct.submit,
+			},
 			revision: { revise: vi.fn() },
 			management: { executeManagementCommand: vi.fn() },
 			configuration: { upgradeCustomImage: vi.fn() },
@@ -890,7 +969,10 @@ describe("management routes", () => {
 				revokeAgentGrant: vi.fn(),
 				recordAccessRejection: vi.fn(),
 			},
-			foundation: { submit: vi.fn() },
+			foundation: {
+				readApiCreationReplay: vi.fn().mockResolvedValue(null),
+				submit: vi.fn(),
+			},
 			revision: { revise: vi.fn() },
 			management: { executeManagementCommand: vi.fn() },
 			configuration: { upgradeCustomImage: vi.fn() },
@@ -1044,7 +1126,10 @@ describe("management routes", () => {
 				revokeAgentGrant,
 				recordAccessRejection: vi.fn(),
 			},
-			foundation: { submit: vi.fn() },
+			foundation: {
+				readApiCreationReplay: vi.fn().mockResolvedValue(null),
+				submit: vi.fn(),
+			},
 			revision: { revise: vi.fn() },
 			management: { executeManagementCommand: vi.fn() },
 			configuration: { upgradeCustomImage: vi.fn() },

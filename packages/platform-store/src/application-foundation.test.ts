@@ -462,19 +462,44 @@ describe("PostgreSQL application foundation transaction", () => {
 				transaction: submission,
 				...applicationFoundationAdmissionDependenciesV1(),
 			});
-			await foundation.submit(
-				applicationFoundationCommandV1,
-				{
-					...applicationFoundationActorContextV1,
-					principal: { kind: "application", id: "application-caller" },
-					creationMode: "api",
-					apiAuthority: {
-						credentialId: "credential-caller",
-						identityRevision: "app-7",
-					},
+			const actor = {
+				...applicationFoundationActorContextV1,
+				principal: { kind: "application" as const, id: "application-caller" },
+				creationMode: "api" as const,
+				apiAuthority: {
+					credentialId: "credential-caller",
+					identityRevision: "app-7",
 				},
+			};
+			const first = await foundation.submit(
+				applicationFoundationCommandV1,
+				actor,
 				createSecretRecordFixtureResolver(),
 			);
+			const replayQuery = {
+				schemaVersion: 1 as const,
+				applicationId: applicationFoundationCommandV1.applicationId,
+				agentId: applicationFoundationCommandV1.agentId,
+				idempotencyKey: applicationFoundationCommandV1.idempotencyKey,
+			};
+			const replay = createApplicationFoundationUseCaseV1({
+				transaction: submission,
+				...applicationFoundationAdmissionDependenciesV1(),
+				imageAdmission: {
+					async admitImage() {
+						throw new Error("mutable admission is unavailable");
+					},
+				},
+			});
+			await expect(
+				replay.readApiCreationReplay(replayQuery, actor),
+			).resolves.toEqual(first);
+			await expect(
+				replay.readApiCreationReplay(replayQuery, {
+					...actor,
+					rawRequestDigest: "c".repeat(64),
+				}),
+			).rejects.toMatchObject({ code: "idempotency_conflict" });
 			const [application] = await adminClient`
 				select status, management_revision, approval_revision
 				from platform.agent_applications
@@ -585,6 +610,17 @@ describe("PostgreSQL application foundation transaction", () => {
 				set revoked_at = clock_timestamp()
 				where id = 'credential-caller'
 			`;
+			await expect(
+				foundation.readApiCreationReplay(
+					{
+						schemaVersion: 1,
+						applicationId: applicationFoundationCommandV1.applicationId,
+						agentId: applicationFoundationCommandV1.agentId,
+						idempotencyKey: applicationFoundationCommandV1.idempotencyKey,
+					},
+					actor,
+				),
+			).rejects.toMatchObject({ code: "not_authorized" });
 			await expect(
 				foundation.submit(
 					applicationFoundationCommandV1,

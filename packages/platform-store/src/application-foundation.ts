@@ -307,14 +307,17 @@ async function requirePersistedReplayIntegrity(
 
 async function requireCurrentApiCreationAuthority(
 	database: Pick<ReturnType<typeof drizzle>, "select">,
-	plan: ReturnType<typeof validatedPlan>["plan"],
+	input: {
+		readonly principal: NonNullable<
+			ApplicationFoundationWritePlanV1["principal"]
+		>;
+		readonly apiAuthority: NonNullable<
+			ApplicationFoundationWritePlanV1["apiAuthority"]
+		>;
+		readonly applicantId: string;
+	},
 	resolveUser?: (userId: string) => Promise<unknown | null>,
 ): Promise<void> {
-	if (!plan.apiAuthority || !plan.principal) {
-		if (plan.application.status === "creating")
-			throw new ApplicationFoundationError("not_authorized");
-		return;
-	}
 	const [credential] = await database
 		.select({
 			principalType: platformApiCredentials.principalType,
@@ -324,19 +327,19 @@ async function requireCurrentApiCreationAuthority(
 			revokedAt: platformApiCredentials.revokedAt,
 		})
 		.from(platformApiCredentials)
-		.where(eq(platformApiCredentials.id, plan.apiAuthority.credentialId))
+		.where(eq(platformApiCredentials.id, input.apiAuthority.credentialId))
 		.limit(1)
 		.for("share");
 	const [clock] = await database
 		.select({ now: sql<Date>`clock_timestamp()` })
 		.from(platformApiCredentials)
-		.where(eq(platformApiCredentials.id, plan.apiAuthority.credentialId))
+		.where(eq(platformApiCredentials.id, input.apiAuthority.credentialId))
 		.limit(1);
 	if (
 		!credential ||
 		!clock ||
-		credential.principalType !== plan.principal.kind ||
-		credential.principalId !== plan.principal.id ||
+		credential.principalType !== input.principal.kind ||
+		credential.principalId !== input.principal.id ||
 		!Array.isArray(credential.scopes) ||
 		!credential.scopes.includes("agent:create") ||
 		credential.revokedAt !== null ||
@@ -344,24 +347,24 @@ async function requireCurrentApiCreationAuthority(
 			credential.expiresAt.getTime() <= clock.now.getTime())
 	)
 		throw new ApplicationFoundationError("not_authorized");
-	if (plan.principal.kind === "user") {
+	if (input.principal.kind === "user") {
 		let currentUser: ReturnType<typeof parseCurrentTaskUserV1>;
 		try {
 			if (!resolveUser) throw new Error("Current user resolver is unavailable");
 			currentUser = parseCurrentTaskUserV1(
-				await resolveUser(plan.principal.id),
+				await resolveUser(input.principal.id),
 			);
 		} catch {
 			throw new ApplicationFoundationError("not_authorized");
 		}
 		if (
-			currentUser.userId !== plan.principal.id ||
+			currentUser.userId !== input.principal.id ||
 			currentUser.accountStatus !== "active" ||
-			currentUser.authorizationRevision !== plan.apiAuthority.identityRevision
+			currentUser.authorizationRevision !== input.apiAuthority.identityRevision
 		)
 			throw new ApplicationFoundationError("not_authorized");
 	}
-	if (plan.principal.kind === "application") {
+	if (input.principal.kind === "application") {
 		const [application] = await database
 			.select({
 				status: platformApplications.status,
@@ -369,13 +372,13 @@ async function requireCurrentApiCreationAuthority(
 				authorizationRevision: platformApplications.authorizationRevision,
 			})
 			.from(platformApplications)
-			.where(eq(platformApplications.id, plan.principal.id))
+			.where(eq(platformApplications.id, input.principal.id))
 			.limit(1)
 			.for("share");
 		if (
 			application?.status !== "active" ||
-			application.responsibleUserId !== plan.application.applicantId ||
-			application.authorizationRevision !== plan.apiAuthority.identityRevision
+			application.responsibleUserId !== input.applicantId ||
+			application.authorizationRevision !== input.apiAuthority.identityRevision
 		)
 			throw new ApplicationFoundationError("not_authorized");
 	}
@@ -398,8 +401,9 @@ export class PostgresApplicationFoundationTransactionV1
 		input: Parameters<ApplicationFoundationTransactionPortV1["read"]>[0],
 	): ReturnType<ApplicationFoundationTransactionPortV1["read"]> {
 		try {
+			const apiRequest = Object.hasOwn(input, "apiAuthority");
 			if (
-				Object.keys(input).length !== 6 ||
+				Object.keys(input).length !== (apiRequest ? 9 : 6) ||
 				input.schemaVersion !== 1 ||
 				!validText(input.applicationId) ||
 				!validText(input.agentId) ||
@@ -410,24 +414,56 @@ export class PostgresApplicationFoundationTransactionV1
 			) {
 				throw new ApplicationFoundationError("persistence_failed");
 			}
-			const [existing] = await this.#database
-				.select({
-					requestDigest: idempotencyRecords.requestDigest,
-					status: idempotencyRecords.status,
-					result: idempotencyRecords.result,
-				})
-				.from(idempotencyRecords)
-				.where(
-					idempotencyWhere(input.agentId, input.actorId, input.idempotencyKey),
+			if (
+				apiRequest &&
+				(!input.principal ||
+					(input.principal.kind !== "user" &&
+						input.principal.kind !== "application") ||
+					!validText(input.principal.id) ||
+					!validText(input.applicantId) ||
+					!input.apiAuthority ||
+					!validText(input.apiAuthority.credentialId) ||
+					!validText(input.apiAuthority.identityRevision))
+			)
+				throw new ApplicationFoundationError("persistence_failed");
+			return await this.#database.transaction(async (transaction) => {
+				if (
+					apiRequest &&
+					input.principal &&
+					input.apiAuthority &&
+					input.applicantId
 				)
-				.limit(1);
-			if (!existing) return { outcome: "ready" };
-			const replay = replayDecision(existing, input);
-			if (replay.outcome === "conflict") {
-				return { outcome: "idempotency_conflict" };
-			}
-			await requirePersistedReplayIntegrity(this.#database, replay.result);
-			return replay;
+					await requireCurrentApiCreationAuthority(
+						transaction,
+						{
+							principal: input.principal,
+							apiAuthority: input.apiAuthority,
+							applicantId: input.applicantId,
+						},
+						this.#resolveUser,
+					);
+				const [existing] = await transaction
+					.select({
+						requestDigest: idempotencyRecords.requestDigest,
+						status: idempotencyRecords.status,
+						result: idempotencyRecords.result,
+					})
+					.from(idempotencyRecords)
+					.where(
+						idempotencyWhere(
+							input.agentId,
+							input.actorId,
+							input.idempotencyKey,
+						),
+					)
+					.limit(1);
+				if (!existing) return { outcome: "ready" };
+				const replay = replayDecision(existing, input);
+				if (replay.outcome === "conflict")
+					return { outcome: "idempotency_conflict" };
+				await requirePersistedReplayIntegrity(transaction, replay.result);
+				return replay;
+			});
 		} catch (error) {
 			if (error instanceof ApplicationFoundationError) throw error;
 			throw new ApplicationFoundationError("persistence_failed");
@@ -441,11 +477,19 @@ export class PostgresApplicationFoundationTransactionV1
 		try {
 			const { plan, configuration, result } = validatedPlan(input);
 			return await this.#database.transaction(async (transaction) => {
-				await requireCurrentApiCreationAuthority(
-					transaction,
-					plan,
-					this.#resolveUser,
-				);
+				if (plan.application.status === "creating") {
+					if (!plan.principal || !plan.apiAuthority)
+						throw new ApplicationFoundationError("not_authorized");
+					await requireCurrentApiCreationAuthority(
+						transaction,
+						{
+							principal: plan.principal,
+							apiAuthority: plan.apiAuthority,
+							applicantId: plan.application.applicantId,
+						},
+						this.#resolveUser,
+					);
+				}
 				const [reservation] = await transaction
 					.insert(idempotencyRecords)
 					.values({

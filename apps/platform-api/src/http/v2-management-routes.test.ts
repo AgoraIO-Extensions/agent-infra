@@ -120,6 +120,8 @@ function createApp(
 ) {
 	const app = new Hono();
 	const submit = vi.fn().mockResolvedValue({});
+	const readApiCreationReplay = vi.fn().mockResolvedValue(null);
+	const prepareSecretReplacements = vi.fn().mockResolvedValue({ secrets: [] });
 	const executeManagementCommand = vi.fn().mockResolvedValue({
 		outcome: "accepted",
 		result: {},
@@ -177,14 +179,17 @@ function createApp(
 			hydrateUsers: vi.fn().mockResolvedValue([]),
 			resolveApiCredential: vi.fn().mockResolvedValue(apiContext),
 		},
-		foundation: { submit },
+		foundation: {
+			readApiCreationReplay,
+			submit,
+		},
 		revision: { revise: vi.fn().mockResolvedValue({}) },
 		management: { executeManagementCommand },
 		apiIdentity: apiIdentity as never,
 		configuration: { upgradeCustomImage: vi.fn().mockResolvedValue({}) },
 		query: { listApplications, getApplication, listAgents, getAgent },
 		allocateApplicationIds,
-		prepareSecretReplacements: vi.fn().mockResolvedValue({ secrets: [] }),
+		prepareSecretReplacements,
 		readApplicationProjection,
 		readAgentProjection,
 	});
@@ -192,6 +197,8 @@ function createApp(
 	return {
 		app,
 		submit,
+		readApiCreationReplay,
+		prepareSecretReplacements,
 		executeManagementCommand,
 		listAgents,
 		getAgent,
@@ -311,6 +318,64 @@ describe("V2 management routes", () => {
 			headers: { Authorization: "Bearer application-token" },
 		});
 		expect(missingScope.status).toBe(403);
+	});
+
+	it("returns a saved direct creation before mutable preparation", async () => {
+		const { app, submit, readApiCreationReplay, prepareSecretReplacements } =
+			createApp();
+		readApiCreationReplay.mockImplementation(async (query) => ({
+			schemaVersion: 1,
+			applicationId: query.applicationId,
+			agentId: query.agentId,
+			configurationRevision: 1,
+			status: "creating",
+		}));
+		prepareSecretReplacements.mockRejectedValue(
+			new Error("preparation is unavailable"),
+		);
+		const response = await app.request("/api/v2/agents", {
+			method: "POST",
+			headers: { ...headers, Authorization: "Bearer application-token" },
+			body: JSON.stringify(applicationBody),
+		});
+		expect(response.status).toBe(201);
+		expect(await response.json()).toEqual({
+			schemaVersion: 1,
+			applicationId: expect.any(String),
+			agentId: expect.any(String),
+			status: "creating",
+		});
+		expect(prepareSecretReplacements).not.toHaveBeenCalled();
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("recovers a concurrent direct creation after preparation fails", async () => {
+		const { app, submit, readApiCreationReplay, prepareSecretReplacements } =
+			createApp();
+		readApiCreationReplay
+			.mockResolvedValueOnce(null)
+			.mockImplementation(async (query) => ({
+				schemaVersion: 1,
+				applicationId: query.applicationId,
+				agentId: query.agentId,
+				configurationRevision: 1,
+				status: "creating",
+			}));
+		prepareSecretReplacements.mockRejectedValue(
+			new Error("preparation is unavailable"),
+		);
+		const response = await app.request("/api/v2/agents", {
+			method: "POST",
+			headers: { ...headers, Authorization: "Bearer application-token" },
+			body: JSON.stringify({
+				...applicationBody,
+				secrets: [{ name: "TOKEN", value: "test-secret" }],
+			}),
+		});
+		expect(response.status).toBe(201);
+		expect(readApiCreationReplay).toHaveBeenCalledTimes(2);
+		expect(prepareSecretReplacements).toHaveBeenCalledOnce();
+		expect(submit).not.toHaveBeenCalled();
 	});
 
 	it("supports API direct creation and lifecycle with current credential authority", async () => {

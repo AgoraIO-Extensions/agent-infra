@@ -112,8 +112,8 @@ describe("Application foundation use case", () => {
 		);
 	});
 
-	it("rechecks API authority through commit before replaying", async () => {
-		let commitCalls = 0;
+	it("reads API replay with current authority before mutable admission", async () => {
+		let readCalls = 0;
 		const replayed = {
 			schemaVersion: 1 as const,
 			applicationId: applicationFoundationCommandV1.applicationId,
@@ -121,20 +121,30 @@ describe("Application foundation use case", () => {
 			configurationRevision: 1 as const,
 			status: "creating" as const,
 		};
+		const admissions = applicationFoundationAdmissionDependenciesV1();
 		const useCase = createApplicationFoundationUseCaseV1(
 			{
-				...applicationFoundationAdmissionDependenciesV1(),
+				...admissions,
+				imageAdmission: {
+					async admitImage() {
+						throw new Error("mutable image admission is unavailable");
+					},
+				},
 				transaction: {
-					async read() {
+					async read(input) {
+						readCalls += 1;
+						expect(input).toMatchObject({
+							principal: { kind: "application", id: "application-caller" },
+							applicantId: "owner_01",
+							apiAuthority: {
+								credentialId: "credential-caller",
+								identityRevision: "app-7",
+							},
+						});
 						return { outcome: "replayed", result: replayed };
 					},
-					async commit(plan) {
-						commitCalls += 1;
-						expect(plan.apiAuthority).toEqual({
-							credentialId: "credential-caller",
-							identityRevision: "app-7",
-						});
-						return { outcome: "replayed", result: plan.result };
+					async commit() {
+						throw new Error("replay must not commit");
 					},
 				},
 			},
@@ -155,7 +165,7 @@ describe("Application foundation use case", () => {
 				pendingSecretRecordAttachmentFixtureV1(),
 			),
 		).resolves.toEqual(replayed);
-		expect(commitCalls).toBe(1);
+		expect(readCalls).toBe(1);
 	});
 
 	it("keeps application availability separate from its initial grants at the 256-target limit", async () => {

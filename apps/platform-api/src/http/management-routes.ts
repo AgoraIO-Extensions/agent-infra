@@ -135,7 +135,10 @@ export interface SecretPreparationResult {
 
 export interface ManagementRouteDependencies {
 	readonly identity: IdentityAdapter;
-	readonly foundation: Pick<ApplicationFoundationUseCaseV1, "submit">;
+	readonly foundation: Pick<
+		ApplicationFoundationUseCaseV1,
+		"submit" | "readApiCreationReplay"
+	>;
 	readonly revision: Pick<ApplicationRevisionUseCaseV1, "revise">;
 	readonly management: Pick<
 		AgentManagementInterfaceV1,
@@ -1144,13 +1147,54 @@ function registerManagementRoutesInternal(
 					authorizationRevision: apiIdentity.authorizationRevision,
 					principal: apiIdentity.principal,
 				};
-				const prepared = await prepareApplicationInput(
-					dependencies,
-					body,
-					identity,
-					metadata,
-					ids,
-				);
+				const readReplayResponse = async () => {
+					const replayed = await dependencies.foundation.readApiCreationReplay(
+						{ schemaVersion: 1, ...ids, idempotencyKey },
+						{
+							schemaVersion: 1,
+							userId: apiIdentity.ownerId,
+							rawRequestDigest,
+							principal: apiIdentity.principal,
+							creationMode: "api",
+							apiAuthority: {
+								credentialId: apiIdentity.credential.credentialId,
+								identityRevision: apiIdentity.authorizationRevision,
+							},
+						},
+					);
+					if (!replayed) return null;
+					if (
+						replayed.applicationId !== ids.applicationId ||
+						replayed.agentId !== ids.agentId ||
+						replayed.status !== "creating"
+					)
+						fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+					return context.json(
+						{
+							schemaVersion: 1,
+							applicationId: replayed.applicationId,
+							agentId: replayed.agentId,
+							status: replayed.status,
+						},
+						201,
+					);
+				};
+				const replayed = await readReplayResponse();
+				if (replayed) return replayed;
+				let prepared: SecretPreparationResult;
+				try {
+					prepared = await prepareApplicationInput(
+						dependencies,
+						body,
+						identity,
+						metadata,
+						ids,
+					);
+				} catch (error) {
+					const concurrentReplay = await readReplayResponse();
+					if (concurrentReplay) return concurrentReplay;
+					throw error;
+				}
 				const currentApiIdentity = await resolveApiIdentity(
 					dependencies.identity,
 					context.req.raw,
