@@ -85,6 +85,7 @@ export {
 	type CreateConversationCommandV1,
 	type CreateConversationDecisionV1,
 	type CreateConversationWritePlanV1,
+	conversationExecutionSourceV1,
 } from "./conversation-execution-types.js";
 
 /** Platform stop acknowledgement budget; callers cannot configure task runtime limits. */

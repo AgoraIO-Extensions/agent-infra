@@ -55,6 +55,7 @@ describe("platform-core package surface", () => {
 			"captureApplicationTaskAuthorizationBoundaryV1",
 			"captureTaskAuthorizationBoundaryV1",
 			"cleanupUnactivatedSecretCandidateV1",
+			"conversationExecutionSourceV1",
 			"conversationStopConfirmationTimeoutMsV1",
 			"createAgentConfigurationUseCaseV1",
 			"createAgentManagementV1",

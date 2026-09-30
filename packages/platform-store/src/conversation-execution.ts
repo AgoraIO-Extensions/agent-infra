@@ -1,15 +1,17 @@
 import { randomUUID } from "node:crypto";
-import type { ConversationTaskAdmissionTransactionPortV1 } from "@agent-infra/platform-core";
 import {
 	bindInputFileV1,
 	type ConversationCommandDecisionV1,
+	type ConversationExecutionAuthorityV1,
 	ConversationExecutionError,
 	type ConversationExecutionTransactionPortV1,
 	type ConversationMetadataRecoveryStateV1,
 	type ConversationModelSelectionDecisionV1,
 	type ConversationStateDecisionV1,
 	type ConversationStopDecisionV1,
+	type ConversationTaskAdmissionTransactionPortV1,
 	type CreateConversationDecisionV1,
+	conversationExecutionSourceV1,
 	type FileRecordV1,
 	parseConversationOperationEventV2,
 } from "@agent-infra/platform-core";
@@ -80,6 +82,7 @@ import {
 } from "./conversation-execution-sql.js";
 import { submitConversationTask } from "./conversation-execution-task.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
+import { currentRelayKeyVersionInTransaction } from "./relay-key-versions.js";
 import {
 	insertTaskAuthorization,
 	requireCurrentTaskApiAccess,
@@ -116,6 +119,20 @@ export class PostgresConversationExecutionTransactionV1
 		} catch {
 			unavailable();
 		}
+	}
+
+	async #currentExecutionBinding(
+		transaction: Transaction,
+		authority: ConversationExecutionAuthorityV1,
+	) {
+		const executionSource = conversationExecutionSourceV1(authority.channelId);
+		const relayKeyBinding = await currentRelayKeyVersionInTransaction(
+			transaction,
+			executionSource === "web" || executionSource === "wecom"
+				? { purpose: "personal", subjectId: authority.actorId }
+				: { purpose: "agent-default", subjectId: authority.agentId },
+		);
+		return relayKeyBinding ? { executionSource, relayKeyBinding } : null;
 	}
 
 	async submitTask(
@@ -400,6 +417,10 @@ export class PostgresConversationExecutionTransactionV1
 				return decision;
 			}
 			const plan = validateMessagePlan(decision, request, state);
+			const executionBinding = plan.execution
+				? await this.#currentExecutionBinding(transaction, authority)
+				: null;
+			if (plan.execution && !executionBinding) return { outcome: "denied" };
 			const reservationId = await reserveIdempotency(transaction, {
 				...scope,
 				requestDigest: request.requestDigest,
@@ -422,19 +443,26 @@ export class PostgresConversationExecutionTransactionV1
 				await transaction`
 					insert into platform.conversation_executions
 						(execution_id, conversation_id, agent_id, actor_id, channel_id,
-						 turn_id, status, session_generation, delivery_fence,
-						 authorization_revision, model_configuration_revision,
-						 model_option_id, reasoning_level, created_at, updated_at)
+						turn_id, status, session_generation, delivery_fence,
+						authorization_revision, model_configuration_revision,
+						model_option_id, reasoning_level, execution_source,
+						relay_key_purpose, relay_key_subject_id, relay_key_id,
+						relay_key_version, created_at, updated_at)
 					values
 						(${plan.execution.executionId}, ${plan.execution.conversationId},
 						 ${plan.execution.agentId}, ${plan.execution.actorId},
 						 ${plan.execution.channelId}, ${plan.execution.turnId},
 						 ${plan.execution.status}, ${plan.execution.sessionGeneration},
 						 ${plan.execution.deliveryFence},
-						 ${plan.execution.authorizationRevision},
-						 ${plan.execution.modelConfigurationRevision},
-						 ${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
-						 ${plan.execution.createdAt},
+						${plan.execution.authorizationRevision},
+						${plan.execution.modelConfigurationRevision},
+						${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
+						${executionBinding?.executionSource ?? null},
+						${executionBinding?.relayKeyBinding.purpose ?? null},
+						${executionBinding?.relayKeyBinding.subjectId ?? null},
+						${executionBinding?.relayKeyBinding.keyId ?? null},
+						${executionBinding?.relayKeyBinding.keyVersion ?? null},
+						${plan.execution.createdAt},
 						 ${plan.execution.createdAt})
 				`;
 				await insertTaskAuthorization(transaction, {
@@ -654,6 +682,11 @@ export class PostgresConversationExecutionTransactionV1
 			const decision = decide(state);
 			if (!isRegenerationPlan(decision)) return decision;
 			const plan = validateRegenerationPlan(decision, request, state);
+			const executionBinding = await this.#currentExecutionBinding(
+				transaction,
+				authority,
+			);
+			if (!executionBinding) return { outcome: "denied" };
 			const reservationId = await reserveIdempotency(transaction, {
 				...scope,
 				requestDigest: request.requestDigest,
@@ -675,19 +708,26 @@ export class PostgresConversationExecutionTransactionV1
 			await transaction`
 				insert into platform.conversation_executions
 					(execution_id, conversation_id, agent_id, actor_id, channel_id,
-					 turn_id, status, session_generation, delivery_fence,
-					 authorization_revision, model_configuration_revision,
-					 model_option_id, reasoning_level, created_at, updated_at)
+					turn_id, status, session_generation, delivery_fence,
+					authorization_revision, model_configuration_revision,
+					model_option_id, reasoning_level, execution_source,
+					relay_key_purpose, relay_key_subject_id, relay_key_id,
+					relay_key_version, created_at, updated_at)
 				values
 					(${plan.execution.executionId}, ${plan.execution.conversationId},
 					 ${plan.execution.agentId}, ${plan.execution.actorId},
 					 ${plan.execution.channelId}, ${plan.execution.turnId},
 					 ${plan.execution.status}, ${plan.execution.sessionGeneration},
 					 ${plan.execution.deliveryFence},
-					 ${plan.execution.authorizationRevision},
-					 ${plan.execution.modelConfigurationRevision},
-					 ${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
-					 ${plan.execution.createdAt},
+					${plan.execution.authorizationRevision},
+					${plan.execution.modelConfigurationRevision},
+					${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
+					${executionBinding.executionSource},
+					${executionBinding.relayKeyBinding.purpose},
+					${executionBinding.relayKeyBinding.subjectId},
+					${executionBinding.relayKeyBinding.keyId},
+					${executionBinding.relayKeyBinding.keyVersion},
+					${plan.execution.createdAt},
 					 ${plan.execution.createdAt})
 			`;
 			await insertTaskAuthorization(transaction, {
