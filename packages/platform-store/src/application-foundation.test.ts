@@ -492,13 +492,18 @@ describe("PostgreSQL application foundation transaction", () => {
 				},
 			});
 			await expect(
-				replay.readApiCreationReplay(replayQuery, actor),
-			).resolves.toEqual(first);
-			await expect(
-				replay.readApiCreationReplay(replayQuery, {
-					...actor,
-					rawRequestDigest: "c".repeat(64),
+				replay.prepareApiCreation(replayQuery, actor, async () => {
+					throw new Error("replay must not prepare");
 				}),
+			).resolves.toEqual({ outcome: "replayed", result: first });
+			await expect(
+				replay.prepareApiCreation(
+					replayQuery,
+					{ ...actor, rawRequestDigest: "c".repeat(64) },
+					async () => {
+						throw new Error("conflict must not prepare");
+					},
+				),
 			).rejects.toMatchObject({ code: "idempotency_conflict" });
 			const [application] = await adminClient`
 				select status, management_revision, approval_revision
@@ -611,7 +616,7 @@ describe("PostgreSQL application foundation transaction", () => {
 				where id = 'credential-caller'
 			`;
 			await expect(
-				foundation.readApiCreationReplay(
+				foundation.prepareApiCreation(
 					{
 						schemaVersion: 1,
 						applicationId: applicationFoundationCommandV1.applicationId,
@@ -619,6 +624,9 @@ describe("PostgreSQL application foundation transaction", () => {
 						idempotencyKey: applicationFoundationCommandV1.idempotencyKey,
 					},
 					actor,
+					async () => {
+						throw new Error("revoked authority must not prepare");
+					},
 				),
 			).rejects.toMatchObject({ code: "not_authorized" });
 			await expect(

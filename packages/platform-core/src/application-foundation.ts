@@ -5,7 +5,9 @@ import {
 	type AgentConfigurationAccessTargetV1,
 	type AgentConfigurationActorContextV1,
 	AgentConfigurationError,
+	type AgentConfigurationModelInputV1,
 	type AgentConfigurationRecordV2,
+	type AgentConfigurationSecretReplacementInputV1,
 	beginInitialAgentConfigurationAdmissionV1,
 	decodeAgentConfigurationRecordV2,
 	type InitialAgentConfigurationAdmissionDependenciesV1,
@@ -18,6 +20,7 @@ import {
 	type PendingSecretRecordAttachmentsV1,
 	resolvePendingSecretRecordAttachmentsV1,
 } from "./secret-record-attachments.js";
+import type { CurrentTaskUserV1 } from "./task-authorization.js";
 
 export interface CommitApplicationFoundationCommandV2
 	extends InitialAgentConfigurationCommandV2 {
@@ -38,6 +41,54 @@ export interface ApplicationFoundationActorContextV1 {
 		readonly credentialId: string;
 		readonly identityRevision: string;
 	};
+}
+
+export function isCurrentApiCreationAuthorizedV1(input: {
+	readonly principal: ApiPrincipalV1;
+	readonly applicantId: string;
+	readonly identityRevision: string;
+	readonly credential: null | {
+		readonly principalType: string;
+		readonly principalId: string;
+		readonly scopes: unknown;
+		readonly expiresAt: Date | null;
+		readonly revokedAt: Date | null;
+	};
+	readonly now: Date | null;
+	readonly user: Pick<
+		CurrentTaskUserV1,
+		"userId" | "accountStatus" | "authorizationRevision"
+	> | null;
+	readonly application: null | {
+		readonly status: string;
+		readonly responsibleUserId: string;
+		readonly authorizationRevision: string;
+	};
+}): boolean {
+	const { credential, principal } = input;
+	if (
+		!credential ||
+		!input.now ||
+		credential.principalType !== principal.kind ||
+		credential.principalId !== principal.id ||
+		!Array.isArray(credential.scopes) ||
+		!credential.scopes.includes("agent:create") ||
+		credential.revokedAt !== null ||
+		(credential.expiresAt !== null &&
+			credential.expiresAt.getTime() <= input.now.getTime())
+	)
+		return false;
+	if (principal.kind === "user")
+		return (
+			input.user?.userId === principal.id &&
+			input.user.accountStatus === "active" &&
+			input.user.authorizationRevision === input.identityRevision
+		);
+	return (
+		input.application?.status === "active" &&
+		input.application.responsibleUserId === input.applicantId &&
+		input.application.authorizationRevision === input.identityRevision
+	);
 }
 
 export interface CommitApplicationFoundationResultV1 {
@@ -142,6 +193,12 @@ export interface ApplicationFoundationReplayQueryV1 {
 	readonly idempotencyKey: string;
 }
 
+export interface ApplicationCreationPreparedInputV1 {
+	readonly secrets: readonly AgentConfigurationSecretReplacementInputV1[];
+	readonly modelConfiguration?: AgentConfigurationModelInputV1;
+	readonly attachment?: PendingSecretRecordAttachmentResolverV1;
+}
+
 export interface ApplicationFoundationTransactionPortV1 {
 	read(input: {
 		readonly schemaVersion: 1;
@@ -161,10 +218,20 @@ export interface ApplicationFoundationTransactionPortV1 {
 }
 
 export interface ApplicationFoundationUseCaseV1 {
-	readApiCreationReplay(
+	prepareApiCreation(
 		query: ApplicationFoundationReplayQueryV1,
 		actorContext: ApplicationFoundationActorContextV1,
-	): Promise<CommitApplicationFoundationResultV1 | null>;
+		prepare: () => Promise<ApplicationCreationPreparedInputV1>,
+	): Promise<
+		| {
+				readonly outcome: "replayed";
+				readonly result: CommitApplicationFoundationResultV1;
+		  }
+		| {
+				readonly outcome: "prepared";
+				readonly prepared: ApplicationCreationPreparedInputV1;
+		  }
+	>;
 
 	replayLegacyV1(
 		command: unknown,
@@ -1136,14 +1203,27 @@ export function createApplicationFoundationUseCaseV1(
 		return decision.result;
 	};
 	return {
-		readApiCreationReplay: async (queryInput, actorInput) => {
+		prepareApiCreation: async (queryInput, actorInput, prepare) => {
 			const query = parseApplicationFoundationReplayQueryV1(queryInput);
 			const actor = parseApplicationFoundationActorContextV1(actorInput);
-			if (actor.creationMode !== "api") invalidApplicationFoundationInput();
-			const decision = await readDecision(query, actor, "api");
-			if (decision.outcome === "idempotency_conflict")
-				throw new ApplicationFoundationError("idempotency_conflict");
-			return decision.outcome === "replayed" ? decision.result : null;
+			if (actor.creationMode !== "api" || typeof prepare !== "function")
+				invalidApplicationFoundationInput();
+			const readReplay = async () => {
+				const decision = await readDecision(query, actor, "api");
+				if (decision.outcome === "idempotency_conflict")
+					throw new ApplicationFoundationError("idempotency_conflict");
+				return decision.outcome === "replayed" ? decision.result : null;
+			};
+			const replayed = await readReplay();
+			if (replayed) return { outcome: "replayed", result: replayed };
+			try {
+				return { outcome: "prepared", prepared: await prepare() };
+			} catch (error) {
+				const concurrentReplay = await readReplay();
+				if (concurrentReplay)
+					return { outcome: "replayed", result: concurrentReplay };
+				throw error;
+			}
 		},
 		submit: (command, actor, attachment) => execute(command, actor, attachment),
 		replayLegacyV1: (command, actor) =>

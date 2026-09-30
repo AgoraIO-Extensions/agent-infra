@@ -21,7 +21,6 @@ import {
 } from "@agent-infra/contracts/pilot";
 import type {
 	AgentConfigurationModelInputV1,
-	AgentConfigurationSecretReplacementInputV1,
 	AgentConfigurationUseCaseV1,
 	AgentManagementActorContextV1,
 	AgentManagementInterfaceV1,
@@ -33,6 +32,7 @@ import type {
 	ApiIdentityAuditInputV1,
 	ApiIdentityAuditReasonV1,
 	ApiIdentityManagementInterfaceV1,
+	ApplicationCreationPreparedInputV1,
 	ApplicationFoundationUseCaseV1,
 	ApplicationRevisionUseCaseV1,
 	PendingSecretRecordAttachmentResolverV1,
@@ -127,17 +127,13 @@ export interface SecretPreparationInput extends RequestMetadata {
 	readonly modelConfiguration: ApplicationCreateInput["modelConfiguration"];
 }
 
-export interface SecretPreparationResult {
-	readonly secrets: readonly AgentConfigurationSecretReplacementInputV1[];
-	readonly modelConfiguration?: AgentConfigurationModelInputV1;
-	readonly attachment?: PendingSecretRecordAttachmentResolverV1;
-}
+export type SecretPreparationResult = ApplicationCreationPreparedInputV1;
 
 export interface ManagementRouteDependencies {
 	readonly identity: IdentityAdapter;
 	readonly foundation: Pick<
 		ApplicationFoundationUseCaseV1,
-		"submit" | "readApiCreationReplay"
+		"submit" | "prepareApiCreation"
 	>;
 	readonly revision: Pick<ApplicationRevisionUseCaseV1, "revise">;
 	readonly management: Pick<
@@ -1147,22 +1143,30 @@ function registerManagementRoutesInternal(
 					authorizationRevision: apiIdentity.authorizationRevision,
 					principal: apiIdentity.principal,
 				};
-				const readReplayResponse = async () => {
-					const replayed = await dependencies.foundation.readApiCreationReplay(
-						{ schemaVersion: 1, ...ids, idempotencyKey },
-						{
-							schemaVersion: 1,
-							userId: apiIdentity.ownerId,
-							rawRequestDigest,
-							principal: apiIdentity.principal,
-							creationMode: "api",
-							apiAuthority: {
-								credentialId: apiIdentity.credential.credentialId,
-								identityRevision: apiIdentity.authorizationRevision,
-							},
+				const preparation = await dependencies.foundation.prepareApiCreation(
+					{ schemaVersion: 1, ...ids, idempotencyKey },
+					{
+						schemaVersion: 1,
+						userId: apiIdentity.ownerId,
+						rawRequestDigest,
+						principal: apiIdentity.principal,
+						creationMode: "api",
+						apiAuthority: {
+							credentialId: apiIdentity.credential.credentialId,
+							identityRevision: apiIdentity.authorizationRevision,
 						},
-					);
-					if (!replayed) return null;
+					},
+					() =>
+						prepareApplicationInput(
+							dependencies,
+							body,
+							identity,
+							metadata,
+							ids,
+						),
+				);
+				if (preparation.outcome === "replayed") {
+					const replayed = preparation.result;
 					if (
 						replayed.applicationId !== ids.applicationId ||
 						replayed.agentId !== ids.agentId ||
@@ -1178,23 +1182,8 @@ function registerManagementRoutesInternal(
 						},
 						201,
 					);
-				};
-				const replayed = await readReplayResponse();
-				if (replayed) return replayed;
-				let prepared: SecretPreparationResult;
-				try {
-					prepared = await prepareApplicationInput(
-						dependencies,
-						body,
-						identity,
-						metadata,
-						ids,
-					);
-				} catch (error) {
-					const concurrentReplay = await readReplayResponse();
-					if (concurrentReplay) return concurrentReplay;
-					throw error;
 				}
+				const prepared = preparation.prepared;
 				const currentApiIdentity = await resolveApiIdentity(
 					dependencies.identity,
 					context.req.raw,

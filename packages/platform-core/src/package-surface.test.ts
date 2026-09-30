@@ -93,6 +93,7 @@ describe("platform-core package surface", () => {
 			"isConfirmedResultFileV1",
 			"isConversationGenerationBarrierConfirmedV1",
 			"isCurrentAgentGrantManageAllowedV1",
+			"isCurrentApiCreationAuthorizedV1",
 			"isCurrentCredentialDeliveryManagerV1",
 			"isPlatformConversationChannelCurrentV1",
 			"isSameApiCreationAuthorityV1",
@@ -173,7 +174,7 @@ describe("platform-core package surface", () => {
 		expect(surface).not.toHaveProperty("decideAgentAccessUpdatePolicy");
 		expect(
 			Object.keys(surface.createApplicationFoundationUseCaseV1({})),
-		).toEqual(["readApiCreationReplay", "submit", "replayLegacyV1"]);
+		).toEqual(["prepareApiCreation", "submit", "replayLegacyV1"]);
 		expect(Object.keys(surface.createApplicationRevisionUseCaseV1({}))).toEqual(
 			["revise", "replayLegacyV1"],
 		);

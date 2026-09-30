@@ -6,6 +6,7 @@ import {
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
 	type CommitApplicationFoundationResultV1,
+	isCurrentApiCreationAuthorizedV1,
 	type PendingSecretRecordAttachmentsV1,
 	parseCurrentTaskUserV1,
 	snapshotApplicationFoundationWritePlanV1,
@@ -335,20 +336,8 @@ async function requireCurrentApiCreationAuthority(
 		.from(platformApiCredentials)
 		.where(eq(platformApiCredentials.id, input.apiAuthority.credentialId))
 		.limit(1);
-	if (
-		!credential ||
-		!clock ||
-		credential.principalType !== input.principal.kind ||
-		credential.principalId !== input.principal.id ||
-		!Array.isArray(credential.scopes) ||
-		!credential.scopes.includes("agent:create") ||
-		credential.revokedAt !== null ||
-		(credential.expiresAt !== null &&
-			credential.expiresAt.getTime() <= clock.now.getTime())
-	)
-		throw new ApplicationFoundationError("not_authorized");
+	let currentUser: ReturnType<typeof parseCurrentTaskUserV1> | null = null;
 	if (input.principal.kind === "user") {
-		let currentUser: ReturnType<typeof parseCurrentTaskUserV1>;
 		try {
 			if (!resolveUser) throw new Error("Current user resolver is unavailable");
 			currentUser = parseCurrentTaskUserV1(
@@ -357,15 +346,14 @@ async function requireCurrentApiCreationAuthority(
 		} catch {
 			throw new ApplicationFoundationError("not_authorized");
 		}
-		if (
-			currentUser.userId !== input.principal.id ||
-			currentUser.accountStatus !== "active" ||
-			currentUser.authorizationRevision !== input.apiAuthority.identityRevision
-		)
-			throw new ApplicationFoundationError("not_authorized");
 	}
+	let application: {
+		status: string;
+		responsibleUserId: string;
+		authorizationRevision: string;
+	} | null = null;
 	if (input.principal.kind === "application") {
-		const [application] = await database
+		const [currentApplication] = await database
 			.select({
 				status: platformApplications.status,
 				responsibleUserId: platformApplications.responsibleUserId,
@@ -375,13 +363,20 @@ async function requireCurrentApiCreationAuthority(
 			.where(eq(platformApplications.id, input.principal.id))
 			.limit(1)
 			.for("share");
-		if (
-			application?.status !== "active" ||
-			application.responsibleUserId !== input.applicantId ||
-			application.authorizationRevision !== input.apiAuthority.identityRevision
-		)
-			throw new ApplicationFoundationError("not_authorized");
+		application = currentApplication ?? null;
 	}
+	if (
+		!isCurrentApiCreationAuthorizedV1({
+			principal: input.principal,
+			applicantId: input.applicantId,
+			identityRevision: input.apiAuthority.identityRevision,
+			credential: credential ?? null,
+			now: clock?.now ?? null,
+			user: currentUser,
+			application,
+		})
+	)
+		throw new ApplicationFoundationError("not_authorized");
 }
 
 export class PostgresApplicationFoundationTransactionV1

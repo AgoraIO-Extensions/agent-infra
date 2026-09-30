@@ -3,7 +3,10 @@ import {
 	AgentProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
-import { ApiIdentityError } from "@agent-infra/platform-core";
+import {
+	ApiIdentityError,
+	type ApplicationFoundationUseCaseV1,
+} from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
@@ -120,7 +123,12 @@ function createApp(
 ) {
 	const app = new Hono();
 	const submit = vi.fn().mockResolvedValue({});
-	const readApiCreationReplay = vi.fn().mockResolvedValue(null);
+	const prepareApiCreation = vi.fn<
+		ApplicationFoundationUseCaseV1["prepareApiCreation"]
+	>(async (_query, _actor, prepare) => ({
+		outcome: "prepared",
+		prepared: await prepare(),
+	}));
 	const prepareSecretReplacements = vi.fn().mockResolvedValue({ secrets: [] });
 	const executeManagementCommand = vi.fn().mockResolvedValue({
 		outcome: "accepted",
@@ -180,7 +188,7 @@ function createApp(
 			resolveApiCredential: vi.fn().mockResolvedValue(apiContext),
 		},
 		foundation: {
-			readApiCreationReplay,
+			prepareApiCreation,
 			submit,
 		},
 		revision: { revise: vi.fn().mockResolvedValue({}) },
@@ -197,7 +205,7 @@ function createApp(
 	return {
 		app,
 		submit,
-		readApiCreationReplay,
+		prepareApiCreation,
 		prepareSecretReplacements,
 		executeManagementCommand,
 		listAgents,
@@ -321,14 +329,17 @@ describe("V2 management routes", () => {
 	});
 
 	it("returns a saved direct creation before mutable preparation", async () => {
-		const { app, submit, readApiCreationReplay, prepareSecretReplacements } =
+		const { app, submit, prepareApiCreation, prepareSecretReplacements } =
 			createApp();
-		readApiCreationReplay.mockImplementation(async (query) => ({
-			schemaVersion: 1,
-			applicationId: query.applicationId,
-			agentId: query.agentId,
-			configurationRevision: 1,
-			status: "creating",
+		prepareApiCreation.mockImplementation(async (query) => ({
+			outcome: "replayed" as const,
+			result: {
+				schemaVersion: 1 as const,
+				applicationId: query.applicationId,
+				agentId: query.agentId,
+				configurationRevision: 1 as const,
+				status: "creating" as const,
+			},
 		}));
 		prepareSecretReplacements.mockRejectedValue(
 			new Error("preparation is unavailable"),
@@ -340,41 +351,12 @@ describe("V2 management routes", () => {
 		});
 		expect(response.status).toBe(201);
 		expect(await response.json()).toEqual({
-			schemaVersion: 1,
+			schemaVersion: 2,
 			applicationId: expect.any(String),
 			agentId: expect.any(String),
 			status: "creating",
 		});
 		expect(prepareSecretReplacements).not.toHaveBeenCalled();
-		expect(submit).not.toHaveBeenCalled();
-	});
-
-	it("recovers a concurrent direct creation after preparation fails", async () => {
-		const { app, submit, readApiCreationReplay, prepareSecretReplacements } =
-			createApp();
-		readApiCreationReplay
-			.mockResolvedValueOnce(null)
-			.mockImplementation(async (query) => ({
-				schemaVersion: 1,
-				applicationId: query.applicationId,
-				agentId: query.agentId,
-				configurationRevision: 1,
-				status: "creating",
-			}));
-		prepareSecretReplacements.mockRejectedValue(
-			new Error("preparation is unavailable"),
-		);
-		const response = await app.request("/api/v2/agents", {
-			method: "POST",
-			headers: { ...headers, Authorization: "Bearer application-token" },
-			body: JSON.stringify({
-				...applicationBody,
-				secrets: [{ name: "TOKEN", value: "test-secret" }],
-			}),
-		});
-		expect(response.status).toBe(201);
-		expect(readApiCreationReplay).toHaveBeenCalledTimes(2);
-		expect(prepareSecretReplacements).toHaveBeenCalledOnce();
 		expect(submit).not.toHaveBeenCalled();
 	});
 

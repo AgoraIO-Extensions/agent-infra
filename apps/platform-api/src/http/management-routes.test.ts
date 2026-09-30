@@ -8,6 +8,7 @@ import {
 import {
 	ApiIdentityError,
 	ApplicationFoundationError,
+	type ApplicationFoundationUseCaseV1,
 } from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
@@ -185,7 +186,12 @@ function createApp(
 		modelConfiguration: undefined,
 		attachment: { resolve: vi.fn() },
 	});
-	const readApiCreationReplay = vi.fn().mockResolvedValue(null);
+	const prepareApiCreation = vi.fn<
+		ApplicationFoundationUseCaseV1["prepareApiCreation"]
+	>(async (_query, _actor, prepare) => ({
+		outcome: "prepared",
+		prepared: await prepare(),
+	}));
 	const allocateApplicationIds = vi
 		.fn()
 		.mockResolvedValue({ applicationId: "application-1", agentId: "agent-1" });
@@ -256,7 +262,7 @@ function createApp(
 				}
 			: {}),
 		foundation: {
-			readApiCreationReplay,
+			prepareApiCreation,
 			submit,
 		},
 		revision: { revise },
@@ -282,7 +288,7 @@ function createApp(
 		readApplicationProjection,
 		readAgentProjection,
 		prepareSecretReplacements,
-		readApiCreationReplay,
+		prepareApiCreation,
 		allocateApplicationIds,
 		apiIdentity,
 		resolveApiCredential,
@@ -582,12 +588,15 @@ describe("management routes", () => {
 
 	it("returns a saved direct creation before mutable preparation", async () => {
 		const direct = createApp({ api: true });
-		direct.readApiCreationReplay.mockImplementation(async (query) => ({
-			schemaVersion: 1,
-			applicationId: query.applicationId,
-			agentId: query.agentId,
-			configurationRevision: 1,
-			status: "creating",
+		direct.prepareApiCreation.mockImplementation(async (query) => ({
+			outcome: "replayed" as const,
+			result: {
+				schemaVersion: 1 as const,
+				applicationId: query.applicationId,
+				agentId: query.agentId,
+				configurationRevision: 1 as const,
+				status: "creating" as const,
+			},
 		}));
 		direct.prepareSecretReplacements.mockRejectedValue(
 			new Error("preparation is unavailable"),
@@ -614,40 +623,6 @@ describe("management routes", () => {
 			status: "creating",
 		});
 		expect(direct.prepareSecretReplacements).not.toHaveBeenCalled();
-		expect(direct.submit).not.toHaveBeenCalled();
-	});
-
-	it("recovers a concurrent direct creation after preparation fails", async () => {
-		const direct = createApp({ api: true });
-		direct.readApiCreationReplay
-			.mockResolvedValueOnce(null)
-			.mockImplementation(async (query) => ({
-				schemaVersion: 1,
-				applicationId: query.applicationId,
-				agentId: query.agentId,
-				configurationRevision: 1,
-				status: "creating",
-			}));
-		direct.prepareSecretReplacements.mockRejectedValue(
-			new Error("preparation is unavailable"),
-		);
-		const response = await direct.app.request("/api/v1/agents", {
-			method: "POST",
-			headers: { ...headers, Authorization: "Bearer secret" },
-			body: JSON.stringify({
-				schemaVersion: 2,
-				name: "Direct agent",
-				description: "Created through the API",
-				source: { kind: "standard", templateId: "template-1" },
-				coOwnerIds: [],
-				availability: [],
-				environment: [],
-				secrets: [{ name: "TOKEN", value: "test-secret" }],
-			}),
-		});
-		expect(response.status).toBe(201);
-		expect(direct.readApiCreationReplay).toHaveBeenCalledTimes(2);
-		expect(direct.prepareSecretReplacements).toHaveBeenCalledOnce();
 		expect(direct.submit).not.toHaveBeenCalled();
 	});
 
@@ -714,7 +689,7 @@ describe("management routes", () => {
 				recordAccessRejection: vi.fn(),
 			},
 			foundation: {
-				readApiCreationReplay: direct.readApiCreationReplay,
+				prepareApiCreation: direct.prepareApiCreation,
 				submit: direct.submit,
 			},
 			revision: { revise: vi.fn() },
@@ -970,7 +945,7 @@ describe("management routes", () => {
 				recordAccessRejection: vi.fn(),
 			},
 			foundation: {
-				readApiCreationReplay: vi.fn().mockResolvedValue(null),
+				prepareApiCreation: vi.fn(),
 				submit: vi.fn(),
 			},
 			revision: { revise: vi.fn() },
@@ -1127,7 +1102,7 @@ describe("management routes", () => {
 				recordAccessRejection: vi.fn(),
 			},
 			foundation: {
-				readApiCreationReplay: vi.fn().mockResolvedValue(null),
+				prepareApiCreation: vi.fn(),
 				submit: vi.fn(),
 			},
 			revision: { revise: vi.fn() },

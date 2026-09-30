@@ -11,6 +11,7 @@ import {
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
 	createApplicationFoundationUseCaseV1,
+	isCurrentApiCreationAuthorizedV1,
 } from "./application-foundation.ts";
 import { FakeApplicationFoundationTransactionV1 } from "./fake-application-foundation.ts";
 import { pendingSecretRecordAttachmentFixtureV1 } from "./secret-record-attachment.fixture.ts";
@@ -92,6 +93,74 @@ async function rejectedBeforePersistence(
 	return { error, clockCalls, commitCalls };
 }
 
+describe("current API creation authority", () => {
+	it("requires the current user, credential scope, and identity revision", () => {
+		const now = new Date(serverInstant);
+		const input = {
+			principal: { kind: "user" as const, id: "user-1" },
+			applicantId: "user-1",
+			identityRevision: "revision-1",
+			credential: {
+				principalType: "user",
+				principalId: "user-1",
+				scopes: ["agent:create"],
+				expiresAt: null,
+				revokedAt: null,
+			},
+			now,
+			user: {
+				userId: "user-1",
+				accountStatus: "active" as const,
+				authorizationRevision: "revision-1",
+			},
+			application: null,
+		};
+		expect(isCurrentApiCreationAuthorizedV1(input)).toBe(true);
+		for (const denied of [
+			{ credential: { ...input.credential, scopes: [] } },
+			{ credential: { ...input.credential, revokedAt: now } },
+			{ credential: { ...input.credential, expiresAt: now } },
+			{ user: { ...input.user, accountStatus: "disabled" as const } },
+			{ identityRevision: "stale-revision" },
+		])
+			expect(isCurrentApiCreationAuthorizedV1({ ...input, ...denied })).toBe(
+				false,
+			);
+	});
+
+	it("requires the current application and responsible user", () => {
+		const input = {
+			principal: { kind: "application" as const, id: "application-1" },
+			applicantId: "user-1",
+			identityRevision: "revision-1",
+			credential: {
+				principalType: "application",
+				principalId: "application-1",
+				scopes: ["agent:create"],
+				expiresAt: null,
+				revokedAt: null,
+			},
+			now: new Date(serverInstant),
+			user: null,
+			application: {
+				status: "active",
+				responsibleUserId: "user-1",
+				authorizationRevision: "revision-1",
+			},
+		};
+		expect(isCurrentApiCreationAuthorizedV1(input)).toBe(true);
+		for (const denied of [
+			{ application: { ...input.application, status: "disabled" } },
+			{ application: { ...input.application, responsibleUserId: "user-2" } },
+			{ application: { ...input.application, authorizationRevision: "old" } },
+			{ credential: { ...input.credential, principalId: "application-2" } },
+		])
+			expect(isCurrentApiCreationAuthorizedV1({ ...input, ...denied })).toBe(
+				false,
+			);
+	});
+});
+
 describe("Application foundation use case", () => {
 	it("accepts API creation without creating a pending approval state", async () => {
 		const transaction = new FakeApplicationFoundationTransactionV1();
@@ -166,6 +235,54 @@ describe("Application foundation use case", () => {
 			),
 		).resolves.toEqual(replayed);
 		expect(readCalls).toBe(1);
+	});
+
+	it("rechecks API replay after mutable preparation fails", async () => {
+		const replayed = {
+			schemaVersion: 1 as const,
+			applicationId: applicationFoundationCommandV1.applicationId,
+			agentId: applicationFoundationCommandV1.agentId,
+			configurationRevision: 1 as const,
+			status: "creating" as const,
+		};
+		let reads = 0;
+		const useCase = createApplicationFoundationUseCaseV1({
+			...applicationFoundationAdmissionDependenciesV1(),
+			transaction: {
+				async read() {
+					reads += 1;
+					return reads === 1
+						? { outcome: "ready" }
+						: { outcome: "replayed", result: replayed };
+				},
+				async commit() {
+					throw new Error("preparation must not commit");
+				},
+			},
+		});
+		const prepare = vi.fn().mockRejectedValue(new Error("preparation failed"));
+		await expect(
+			useCase.prepareApiCreation(
+				{
+					schemaVersion: 1,
+					applicationId: replayed.applicationId,
+					agentId: replayed.agentId,
+					idempotencyKey: applicationFoundationCommandV1.idempotencyKey,
+				},
+				{
+					...applicationFoundationActorContextV1,
+					principal: { kind: "application", id: "application-caller" },
+					creationMode: "api",
+					apiAuthority: {
+						credentialId: "credential-caller",
+						identityRevision: "app-7",
+					},
+				},
+				prepare,
+			),
+		).resolves.toEqual({ outcome: "replayed", result: replayed });
+		expect(reads).toBe(2);
+		expect(prepare).toHaveBeenCalledOnce();
 	});
 
 	it("keeps application availability separate from its initial grants at the 256-target limit", async () => {

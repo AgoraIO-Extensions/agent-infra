@@ -190,7 +190,10 @@ function testApp() {
 		management: {
 			identity: identityAdapter,
 			foundation: {
-				readApiCreationReplay: vi.fn().mockResolvedValue(null),
+				prepareApiCreation: async (_query, _actor, prepare) => ({
+					outcome: "prepared",
+					prepared: await prepare(),
+				}),
 				submit: vi.fn().mockResolvedValue({}),
 			},
 			revision: { revise: vi.fn().mockResolvedValue({}) },
