@@ -1061,6 +1061,85 @@ describe("PostgreSQL application foundation transaction", () => {
 		}
 	});
 
+	it("orders creation locks before concurrent delivery and credential revocation", async () => {
+		await resetDatabase();
+		await seedApiCreationAuthority();
+		const submission =
+			new builtStore.PostgresApplicationFoundationTransactionV1({
+				databaseUrl,
+				resolveUser: resolveApiCreationRecipient,
+			});
+		const revoker = postgres(databaseUrl, { max: 1 });
+		let markLocked: (() => void) | undefined;
+		const locked = new Promise<void>((resolve) => {
+			markLocked = resolve;
+		});
+		let allowRevocation: (() => void) | undefined;
+		const revokeNow = new Promise<void>((resolve) => {
+			allowRevocation = resolve;
+		});
+		const revocation = Promise.resolve(
+			revoker.begin(async (transaction) => {
+				await transaction`set local lock_timeout = '3s'`;
+				await transaction`select id from platform.platform_applications where id = 'application-caller' for update`;
+				markLocked?.();
+				await revokeNow;
+				// Both delivery mutations serialize via the application before credentials.
+				await transaction`update platform.platform_api_credentials set revoked_at = clock_timestamp() where id = 'credential-caller'`;
+				await transaction`update platform.api_credential_delivery_grants set revoked_at = clock_timestamp() where application_id = 'application-caller'`;
+			}),
+		);
+		let pending:
+			| ReturnType<ApplicationFoundationTransactionPortV1["read"]>
+			| undefined;
+		try {
+			await locked;
+			pending = submission.read({
+				schemaVersion: 1,
+				applicationId: applicationFoundationCommandV1.applicationId,
+				agentId: applicationFoundationCommandV1.agentId,
+				actorId: "application-caller",
+				principal: { kind: "application", id: "application-caller" },
+				applicantId: apiRecipientUserId,
+				apiAuthority: {
+					credentialId: "credential-caller",
+					identityRevision: "app-7",
+				},
+				idempotencyKey: "creation-delivery-race",
+				requestDigest: "a".repeat(64),
+			});
+			// Observe the actual blocked application lock before the revoker touches credentials.
+			let creationBlocked = false;
+			for (let attempt = 0; attempt < 100; attempt += 1) {
+				const rows = await adminClient<
+					{ query: string }[]
+				>`select query from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`;
+				if (
+					rows.some(
+						({ query }) =>
+							query.includes('"platform_applications"') &&
+							query.includes("for share"),
+					)
+				) {
+					creationBlocked = true;
+					break;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			expect(creationBlocked).toBe(true);
+			allowRevocation?.();
+			await revocation;
+			await expect(pending).rejects.toMatchObject({ code: "not_authorized" });
+			expect(await adminClient`select id from platform.agents`).toEqual([]);
+		} finally {
+			allowRevocation?.();
+			await revocation.catch(() => undefined);
+			await pending?.catch(() => undefined);
+			await revoker.end();
+			await submission.close();
+		}
+	});
+
 	it("rejects a creating plan without a proven principal", async () => {
 		await resetDatabase();
 		const adapter = new builtStore.PostgresApplicationFoundationTransactionV1({

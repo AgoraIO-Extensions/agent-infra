@@ -10,6 +10,8 @@ import {
 	hashApiCredentialV1,
 	isApiCredentialScopeV1,
 	isCurrentAgentGrantManageAllowedV1,
+	isCurrentApiIdentityBrowserActorV1,
+	isCurrentApiIdentityUserWriteAllowedV1,
 	isCurrentCredentialDeliveryManagerV1,
 	parseCurrentTaskUserV1,
 } from "@agent-infra/platform-core";
@@ -24,8 +26,10 @@ import {
 	apiCredentialDeliveryGrants,
 	auditEvents,
 	idempotencyRecords,
+	ldapIdentityIds,
 	platformApiCredentials,
 	platformApplications,
+	platformUserDisables,
 } from "./schema.js";
 
 export interface PostgresApiIdentityStoreOptionsV1 {
@@ -45,6 +49,31 @@ type ApiIdentityAuditDatabase = Pick<ApiIdentityDatabase, "insert">;
 type ApiIdentityAuditTargetV1 = ApiIdentityAuditInputV1 & {
 	readonly targetId: string;
 };
+
+async function currentUserAtWrite(
+	database: Pick<ApiIdentityDatabase, "select">,
+	userId: string,
+	resolveUser?: (userId: string) => Promise<unknown | null>,
+): Promise<ReturnType<typeof parseCurrentTaskUserV1> | null> {
+	// A deployment without LDAP mappings still resolves its own user authority.
+	await database
+		.select({ userId: ldapIdentityIds.userId })
+		.from(ldapIdentityIds)
+		.where(eq(ldapIdentityIds.userId, userId))
+		.limit(1)
+		.for("share");
+	const [disabled] = await database
+		.select({ userId: platformUserDisables.userId })
+		.from(platformUserDisables)
+		.where(eq(platformUserDisables.userId, userId))
+		.limit(1);
+	if (disabled || !resolveUser) return null;
+	try {
+		return parseCurrentTaskUserV1(await resolveUser(userId));
+	} catch {
+		return null;
+	}
+}
 
 async function writeApiIdentityAudit(
 	database: ApiIdentityAuditDatabase,
@@ -307,6 +336,7 @@ export class PostgresApiIdentityStoreV1 {
 	}
 
 	async createApplication(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly applicationId: string;
 		readonly name: string;
 		readonly responsibleUserId: string;
@@ -325,6 +355,18 @@ export class PostgresApiIdentityStoreV1 {
 		)
 			throw new TypeError("Invalid application idempotency input");
 		return this.#database.transaction(async (transaction) => {
+			if (
+				!isCurrentApiIdentityUserWriteAllowedV1({
+					actor: input.actor,
+					userId: input.responsibleUserId,
+					currentUser: await currentUserAtWrite(
+						transaction,
+						input.actor.userId,
+						this.#resolveUser,
+					),
+				})
+			)
+				throw new ApiIdentityError("not_authorized");
 			if (
 				input.idempotencyKey !== undefined &&
 				input.requestDigest !== undefined
@@ -453,6 +495,7 @@ export class PostgresApiIdentityStoreV1 {
 	}
 
 	async issueCredential(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly credentialId?: string;
 		readonly principal: ApiPrincipalV1;
 		readonly credential: string;
@@ -485,6 +528,19 @@ export class PostgresApiIdentityStoreV1 {
 		}
 		const id = input.credentialId ?? randomUUID();
 		const row = await this.#database.transaction(async (transaction) => {
+			if (
+				input.principal.kind === "user" &&
+				!isCurrentApiIdentityUserWriteAllowedV1({
+					actor: input.actor,
+					userId: input.principal.id,
+					currentUser: await currentUserAtWrite(
+						transaction,
+						input.actor.userId,
+						this.#resolveUser,
+					),
+				})
+			)
+				throw new ApiIdentityError("not_authorized");
 			if (input.principal.kind === "application" && input.recipient) {
 				const [application] = await transaction
 					.select({
@@ -497,18 +553,17 @@ export class PostgresApiIdentityStoreV1 {
 					.for("update");
 				if (application?.status !== "active")
 					throw new Error("Application is not active");
-				let recipientActive = false;
-				try {
-					const currentRecipient = parseCurrentTaskUserV1(
-						await this.#resolveUser?.(input.recipient.id),
-					);
-					recipientActive =
-						currentRecipient.userId === input.recipient.id &&
-						currentRecipient.accountStatus === "active";
-				} catch {
-					// An unresolved recipient has no credential delivery authority.
-				}
-				if (!recipientActive)
+				if (
+					!isCurrentApiIdentityUserWriteAllowedV1({
+						actor: input.actor,
+						userId: input.recipient.id,
+						currentUser: await currentUserAtWrite(
+							transaction,
+							input.recipient.id,
+							this.#resolveUser,
+						),
+					})
+				)
 					throw new ApiIdentityError("resource_unavailable");
 				const [delivery] = await transaction
 					.select({
@@ -922,29 +977,67 @@ export class PostgresApiIdentityStoreV1 {
 		return row !== undefined;
 	}
 
-	async revokeCredential(
-		credentialId: string,
-		revokedAt = new Date(),
-		audit?: ApiIdentityAuditInputV1,
-	): Promise<boolean> {
+	async revokeCredential(input: {
+		readonly actor: ApiIdentityActorV1;
+		readonly principal: ApiPrincipalV1;
+		readonly credentialId: string;
+		readonly revokedAt: Date;
+		readonly audit: ApiIdentityAuditInputV1;
+	}): Promise<boolean> {
 		return this.#database.transaction(async (transaction) => {
+			const currentUser = await currentUserAtWrite(
+				transaction,
+				input.actor.userId,
+				this.#resolveUser,
+			);
+			if (
+				!isCurrentApiIdentityBrowserActorV1({
+					actor: input.actor,
+					currentUser,
+				})
+			)
+				return false;
+			if (input.principal.kind === "application") {
+				const [application] = await transaction
+					.select({ responsibleUserId: platformApplications.responsibleUserId })
+					.from(platformApplications)
+					.where(eq(platformApplications.id, input.principal.id))
+					.limit(1)
+					.for("share");
+				if (
+					!application ||
+					!isCurrentCredentialDeliveryManagerV1({
+						actor: input.actor,
+						currentUser,
+						responsibleUserId: application.responsibleUserId,
+					})
+				)
+					return false;
+			} else if (
+				!isCurrentApiIdentityUserWriteAllowedV1({
+					actor: input.actor,
+					currentUser,
+					userId: input.principal.id,
+				})
+			)
+				return false;
 			const rows = await transaction
 				.update(platformApiCredentials)
-				.set({ revokedAt })
+				.set({ revokedAt: input.revokedAt })
 				.where(
 					and(
-						eq(platformApiCredentials.id, credentialId),
+						eq(platformApiCredentials.id, input.credentialId),
+						eq(platformApiCredentials.principalType, input.principal.kind),
+						eq(platformApiCredentials.principalId, input.principal.id),
 						isNull(platformApiCredentials.revokedAt),
 					),
 				)
 				.returning({ id: platformApiCredentials.id });
 			if (rows.length !== 1) return false;
-			if (audit) {
-				await writeApiIdentityAudit(transaction, {
-					...audit,
-					targetId: credentialId,
-				});
-			}
+			await writeApiIdentityAudit(transaction, {
+				...input.audit,
+				targetId: input.credentialId,
+			});
 			return true;
 		});
 	}

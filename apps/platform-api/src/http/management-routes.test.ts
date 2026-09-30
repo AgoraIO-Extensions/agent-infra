@@ -9,6 +9,7 @@ import {
 	ApiIdentityError,
 	ApplicationFoundationError,
 	type ApplicationFoundationUseCaseV1,
+	isCurrentApiIdentityBrowserActorV1,
 } from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
@@ -232,6 +233,7 @@ function createApp(
 	const listUserCredentials = vi.fn();
 	const listApiApplications = vi.fn();
 	const createApiApplication = vi.fn();
+	const issueUserCredential = vi.fn();
 	const listApplicationCredentials = vi.fn();
 
 	registerManagementRoutes(app, {
@@ -246,7 +248,7 @@ function createApp(
 						authorizeCredentialScope,
 						resolveAgentQueryGrantType,
 						listUserCredentials,
-						issueUserCredential: vi.fn(),
+						issueUserCredential,
 						revokeUserCredential: vi.fn(),
 						listApplications: listApiApplications,
 						createApplication: createApiApplication,
@@ -296,6 +298,7 @@ function createApp(
 		listUserCredentials,
 		listApiApplications,
 		createApiApplication,
+		issueUserCredential,
 		listApplicationCredentials,
 		resolveAgentQueryGrantType,
 		authorizeCredentialScope,
@@ -512,6 +515,99 @@ describe("management routes", () => {
 			"INVALID_REQUEST",
 		);
 	});
+
+	it.each(["application", "personal credential"])(
+		"carries current browser authority to the %s write after reading the request body",
+		async (operation) => {
+			const { app, resolveBrowser, createApiApplication, issueUserCredential } =
+				createApp({ api: true });
+			let currentUser = {
+				schemaVersion: 1 as const,
+				userId: identity.userId,
+				accountStatus: "active" as "active" | "disabled",
+				authorizationRevision: identity.authorizationRevision,
+				organizationIds: identity.organizationIds,
+			};
+			const checkActor = (
+				actor: Parameters<
+					typeof isCurrentApiIdentityBrowserActorV1
+				>[0]["actor"],
+			) => {
+				if (!isCurrentApiIdentityBrowserActorV1({ actor, currentUser }))
+					throw new ApiIdentityError("not_authorized");
+			};
+			createApiApplication.mockImplementation(async ({ actor }) => {
+				checkActor(actor);
+				return {
+					id: "application-body-race",
+					name: "Body race",
+					responsibleUserId: identity.userId,
+					status: "active",
+					authorizationRevision: "app-1",
+				};
+			});
+			issueUserCredential.mockImplementation(async (actor) => {
+				checkActor(actor);
+				return {
+					credentialId: "credential-body-race",
+					metadata: {
+						schemaVersion: 1,
+						credentialId: "credential-body-race",
+						principal: { kind: "user", id: identity.userId },
+						scopes: ["agent:read"],
+						expiresAt: null,
+						revokedAt: null,
+						createdAt: new Date("2026-09-01T00:00:00Z"),
+					},
+				};
+			});
+			const path =
+				operation === "application"
+					? "/api/v1/applications"
+					: "/api/v1/api-credentials";
+			const body = JSON.stringify(
+				operation === "application"
+					? { schemaVersion: 1, name: "Body race" }
+					: { schemaVersion: 1, scopes: ["agent:read"], expiresAt: null },
+			);
+			expect(
+				(await app.request(path, { method: "POST", headers, body })).status,
+			).toBe(201);
+			let identityResolved: (() => void) | undefined;
+			const resolved = new Promise<void>((resolve) => {
+				identityResolved = resolve;
+			});
+			resolveBrowser.mockImplementationOnce(async () => {
+				identityResolved?.();
+				return identity;
+			});
+			let finishBody: (() => void) | undefined;
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					finishBody = () => {
+						controller.enqueue(new TextEncoder().encode(body));
+						controller.close();
+					};
+				},
+			});
+			const pending = app.request(path, {
+				method: "POST",
+				headers,
+				body: stream,
+				duplex: "half",
+			} as RequestInit);
+			await resolved;
+			currentUser = { ...currentUser, accountStatus: "disabled" };
+			finishBody?.();
+			const denied = await pending;
+			expect(denied.status).toBe(403);
+			const write =
+				operation === "application"
+					? createApiApplication
+					: issueUserCredential;
+			expect(write).toHaveBeenCalledTimes(2);
+		},
+	);
 
 	it("submits a validated application once and returns an authoritative projection", async () => {
 		const {

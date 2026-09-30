@@ -29,9 +29,12 @@ import {
 	agentOwners,
 	agentPrincipalGrants,
 	agents,
+	apiCredentialDeliveryGrants,
 	idempotencyRecords,
+	ldapIdentityIds,
 	platformApiCredentials,
 	platformApplications,
+	platformUserDisables,
 } from "./schema.js";
 
 export interface PostgresAgentManagementOptionsV1 {
@@ -171,47 +174,12 @@ async function currentApiCredentialAllowsManagement(
 		return isCurrentApiAgentManagementAuthorizedV1({
 			actorId: request.actorId,
 		});
-	const [credential] = await transaction
-		.select({
-			principalType: platformApiCredentials.principalType,
-			principalId: platformApiCredentials.principalId,
-			scopes: platformApiCredentials.scopes,
-			expiresAt: platformApiCredentials.expiresAt,
-			revokedAt: platformApiCredentials.revokedAt,
-		})
-		.from(platformApiCredentials)
-		.where(eq(platformApiCredentials.id, request.apiAuthority.credentialId))
-		.limit(1)
-		.for("share");
-	if (!credential)
-		return isCurrentApiAgentManagementAuthorizedV1({
-			actorId: request.actorId,
-			apiAuthority: request.apiAuthority,
-			credential: null,
-		});
-	const [clock] = await transaction
-		.select({
-			nowMs: sql<number>`(extract(epoch from clock_timestamp()) * 1000)::float8`,
-		})
-		.from(platformApiCredentials)
-		.where(eq(platformApiCredentials.id, request.apiAuthority.credentialId))
-		.limit(1);
-	let currentUser: ReturnType<typeof parseCurrentTaskUserV1> | null = null;
-	if (request.apiAuthority.principal.kind === "user") {
-		try {
-			if (resolveUser)
-				currentUser = parseCurrentTaskUserV1(
-					await resolveUser(request.apiAuthority.principal.id),
-				);
-		} catch {
-			currentUser = null;
-		}
-	}
 	let currentApplication: {
 		readonly status: string;
 		readonly authorizationRevision: string;
 	} | null = null;
 	if (request.apiAuthority.principal.kind === "application") {
+		// Delivery writes lock the application before its credentials.
 		const [application] = await transaction
 			.select({
 				status: platformApplications.status,
@@ -223,6 +191,89 @@ async function currentApiCredentialAllowsManagement(
 			.for("share");
 		currentApplication = application ?? null;
 	}
+	const [credential] = await transaction
+		.select({
+			principalType: platformApiCredentials.principalType,
+			principalId: platformApiCredentials.principalId,
+			scopes: platformApiCredentials.scopes,
+			expiresAt: platformApiCredentials.expiresAt,
+			revokedAt: platformApiCredentials.revokedAt,
+			recipientUserId: platformApiCredentials.recipientUserId,
+		})
+		.from(platformApiCredentials)
+		.where(eq(platformApiCredentials.id, request.apiAuthority.credentialId))
+		.limit(1)
+		.for("share");
+	if (!credential)
+		return isCurrentApiAgentManagementAuthorizedV1({
+			actorId: request.actorId,
+			apiAuthority: request.apiAuthority,
+			credential: null,
+		});
+	let currentUser: ReturnType<typeof parseCurrentTaskUserV1> | null = null;
+	const userId =
+		request.apiAuthority.principal.kind === "user"
+			? request.apiAuthority.principal.id
+			: credential.recipientUserId;
+	if (userId) {
+		// Serialize with Platform manual disable where an LDAP mapping exists.
+		await transaction
+			.select({ userId: ldapIdentityIds.userId })
+			.from(ldapIdentityIds)
+			.where(eq(ldapIdentityIds.userId, userId))
+			.limit(1)
+			.for("share");
+		const [disabled] = await transaction
+			.select({ userId: platformUserDisables.userId })
+			.from(platformUserDisables)
+			.where(eq(platformUserDisables.userId, userId))
+			.limit(1);
+		try {
+			if (!disabled && resolveUser)
+				currentUser = parseCurrentTaskUserV1(await resolveUser(userId));
+		} catch {
+			currentUser = null;
+		}
+	}
+	let currentDelivery: {
+		readonly authorizationRevision: string;
+		readonly revokedAt: Date | null;
+	} | null = null;
+	if (
+		request.apiAuthority.principal.kind === "application" &&
+		credential.recipientUserId
+	) {
+		const [delivery] = await transaction
+			.select({
+				authorizationRevision:
+					apiCredentialDeliveryGrants.authorizationRevision,
+				revokedAt: apiCredentialDeliveryGrants.revokedAt,
+			})
+			.from(apiCredentialDeliveryGrants)
+			.where(
+				and(
+					eq(
+						apiCredentialDeliveryGrants.applicationId,
+						request.apiAuthority.principal.id,
+					),
+					eq(apiCredentialDeliveryGrants.principalType, "user"),
+					eq(
+						apiCredentialDeliveryGrants.principalId,
+						credential.recipientUserId,
+					),
+				),
+			)
+			.limit(1)
+			.for("share");
+		currentDelivery = delivery ?? null;
+	}
+	const [clock] = await transaction
+		.select({
+			nowMs: sql<number>`(extract(epoch from clock_timestamp()) * 1000)::float8`,
+		})
+		.from(platformApiCredentials)
+		.where(eq(platformApiCredentials.id, request.apiAuthority.credentialId))
+		.limit(1);
 	return isCurrentApiAgentManagementAuthorizedV1({
 		actorId: request.actorId,
 		apiAuthority: request.apiAuthority,
@@ -230,6 +281,8 @@ async function currentApiCredentialAllowsManagement(
 		nowMs: clock?.nowMs,
 		currentUser,
 		currentApplication,
+		currentRecipient: currentUser,
+		currentDelivery,
 	});
 }
 

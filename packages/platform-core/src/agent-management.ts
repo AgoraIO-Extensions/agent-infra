@@ -44,6 +44,7 @@ export function isCurrentApiAgentManagementAuthorizedV1(input: {
 		readonly scopes: unknown;
 		readonly expiresAt: Date | null;
 		readonly revokedAt: Date | null;
+		readonly recipientUserId: string | null;
 	} | null;
 	readonly nowMs?: number;
 	readonly currentUser?: {
@@ -54,6 +55,14 @@ export function isCurrentApiAgentManagementAuthorizedV1(input: {
 	readonly currentApplication?: {
 		readonly status: string;
 		readonly authorizationRevision: string;
+	} | null;
+	readonly currentRecipient?: {
+		readonly userId: string;
+		readonly accountStatus: "active" | "disabled";
+	} | null;
+	readonly currentDelivery?: {
+		readonly authorizationRevision: string;
+		readonly revokedAt: Date | null;
 	} | null;
 }): boolean {
 	const { apiAuthority, credential, nowMs } = input;
@@ -80,6 +89,12 @@ export function isCurrentApiAgentManagementAuthorizedV1(input: {
 	return (
 		input.currentApplication?.status === "active" &&
 		input.currentApplication.authorizationRevision ===
+			apiAuthority.identityRevision &&
+		credential.recipientUserId !== null &&
+		input.currentRecipient?.userId === credential.recipientUserId &&
+		input.currentRecipient.accountStatus === "active" &&
+		input.currentDelivery?.revokedAt === null &&
+		input.currentDelivery.authorizationRevision ===
 			apiAuthority.identityRevision
 	);
 }

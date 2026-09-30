@@ -620,10 +620,22 @@ describe("PostgreSQL Agent-management Adapter", () => {
 		`;
 		await adminClient`
 			insert into platform.platform_api_credentials
-				(id, principal_type, principal_id, credential_hash, scopes)
+				(id, principal_type, principal_id, credential_hash, scopes, recipient_user_id)
 			values ('credential_app_lifecycle', 'application', 'caller-app-lifecycle',
-				repeat('c', 64), '["agent:manage"]'::jsonb)
+				repeat('c', 64), '["agent:manage"]'::jsonb, 'recipient-lifecycle')
 		`;
+		await adminClient`
+			insert into platform.api_credential_delivery_grants
+				(application_id, principal_type, principal_id, authorization_revision)
+			values ('caller-app-lifecycle', 'user', 'recipient-lifecycle', 'app-revision-1')
+		`;
+		let currentRecipient: Record<string, unknown> | null = {
+			schemaVersion: 1,
+			userId: "recipient-lifecycle",
+			accountStatus: "active",
+			organizationIds: [],
+			authorizationRevision: "recipient-revision-1",
+		};
 		const appActor: AgentManagementActorContextV1 = {
 			...applicant,
 			userId: "user-owner",
@@ -633,7 +645,10 @@ describe("PostgreSQL Agent-management Adapter", () => {
 				identityRevision: "app-revision-1",
 			},
 		};
-		const adapter = new PostgresAgentManagementTransactionV1({ databaseUrl });
+		const adapter = new PostgresAgentManagementTransactionV1({
+			databaseUrl,
+			resolveUser: async () => currentRecipient,
+		});
 		adapters.push(adapter);
 		const management = createAgentManagementV1(adapter);
 		expect(
@@ -643,6 +658,86 @@ describe("PostgreSQL Agent-management Adapter", () => {
 			),
 		).toMatchObject({ outcome: "accepted" });
 		const beforeDisable = await databaseSnapshot();
+		for (const recipient of [
+			null,
+			{ ...currentRecipient, userId: "other-recipient" },
+			{ ...currentRecipient, accountStatus: "disabled" },
+		]) {
+			currentRecipient = recipient;
+			expect(
+				await management.executeManagementCommand(
+					command("stop_agent", disabled, "app-invalid-recipient"),
+					appActor,
+				),
+			).toMatchObject({ outcome: "denied" });
+		}
+		currentRecipient = {
+			schemaVersion: 1,
+			userId: "recipient-lifecycle",
+			accountStatus: "active",
+			organizationIds: [],
+			authorizationRevision: "recipient-revision-1",
+		};
+		await adminClient`update platform.platform_api_credentials set recipient_user_id = null where id = 'credential_app_lifecycle'`;
+		expect(
+			await management.executeManagementCommand(
+				command("stop_agent", disabled, "app-missing-recipient"),
+				appActor,
+			),
+		).toMatchObject({ outcome: "denied" });
+		await adminClient`update platform.platform_api_credentials set recipient_user_id = 'recipient-lifecycle' where id = 'credential_app_lifecycle'`;
+		await adminClient`update platform.api_credential_delivery_grants set authorization_revision = 'stale' where application_id = 'caller-app-lifecycle'`;
+		expect(
+			await management.executeManagementCommand(
+				command("stop_agent", disabled, "app-stale-delivery"),
+				appActor,
+			),
+		).toMatchObject({ outcome: "denied" });
+		await adminClient`update platform.api_credential_delivery_grants set authorization_revision = 'app-revision-1' where application_id = 'caller-app-lifecycle'`;
+		const revoker = postgres(databaseUrl, { max: 1 });
+		let release: (() => void) | undefined;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let markLocked: (() => void) | undefined;
+		const locked = new Promise<void>((resolve) => {
+			markLocked = resolve;
+		});
+		const revocation = Promise.resolve(
+			revoker.begin(async (transaction) => {
+				await transaction`update platform.api_credential_delivery_grants set revoked_at = clock_timestamp() where application_id = 'caller-app-lifecycle'`;
+				markLocked?.();
+				await held;
+			}),
+		);
+		let pending:
+			| ReturnType<typeof management.executeManagementCommand>
+			| undefined;
+		try {
+			await locked;
+			pending = management.executeManagementCommand(
+				command("stop_agent", disabled, "app-racing-delivery"),
+				appActor,
+			);
+			await waitForBlockedQuery(["api_credential_delivery_grants"]);
+			release?.();
+			await revocation;
+			expect(await pending).toMatchObject({ outcome: "denied" });
+			expect(
+				await management.executeManagementCommand(
+					command("stop_agent", active, "app-active"),
+					appActor,
+				),
+			).toMatchObject({ outcome: "denied" });
+			expect(await databaseSnapshot()).toEqual(beforeDisable);
+		} finally {
+			release?.();
+			await revocation.catch(() => undefined);
+			await pending?.catch(() => undefined);
+			await revoker.end();
+		}
+		await adminClient`update platform.api_credential_delivery_grants set revoked_at = null where application_id = 'caller-app-lifecycle'`;
+
 		await adminClient`
 			update platform.platform_applications set status = 'disabled'
 			where id = 'caller-app-lifecycle'

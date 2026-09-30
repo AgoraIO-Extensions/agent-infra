@@ -27,6 +27,7 @@ import type {
 	ApiCredentialMetadataV1,
 	ApiCredentialScopeV1,
 	ApiIdentityAccessAuditContextV1,
+	ApiIdentityActorV1,
 	ApiIdentityAuditActionV1,
 	ApiIdentityAuditInputV1,
 	ApiIdentityAuditReasonV1,
@@ -180,6 +181,13 @@ function actor(
 			? {}
 			: { principal: identity.principal }),
 		...(apiAuthority === undefined ? {} : { apiAuthority }),
+	};
+}
+
+function apiIdentityActor(identity: IdentityContext): ApiIdentityActorV1 {
+	return {
+		...actor(identity),
+		identityRevision: identity.authorizationRevision,
 	};
 }
 
@@ -645,7 +653,11 @@ function registerManagementRoutesInternal(
 				);
 				const queryPage = pageInput(context.req.raw, metadata.traceId);
 				const items = await queryOrUnavailable(
-					() => management.listUserCredentials(actor(identity), queryPage),
+					() =>
+						management.listUserCredentials(
+							apiIdentityActor(identity),
+							queryPage,
+						),
 					metadata.traceId,
 				);
 				const page = pageById(items, queryPage, (item) => item.credentialId);
@@ -678,7 +690,7 @@ function registerManagementRoutesInternal(
 				const credential = generateApiCredentialV1(randomBytes);
 				const issued = await queryOrUnavailable(
 					() =>
-						management.issueUserCredential(actor(identity), {
+						management.issueUserCredential(apiIdentityActor(identity), {
 							credential,
 							scopes: body.scopes as ApiCredentialScopeV1[],
 							expiresAt:
@@ -712,7 +724,7 @@ function registerManagementRoutesInternal(
 				await queryOrUnavailable(
 					() =>
 						management.revokeUserCredential(
-							actor(identity),
+							apiIdentityActor(identity),
 							context.req.param("credentialId"),
 							new Date(),
 							apiAudit(identity, metadata, "api.credential.revoked"),
@@ -736,7 +748,8 @@ function registerManagementRoutesInternal(
 				);
 				const queryPage = pageInput(context.req.raw, metadata.traceId);
 				const items = await queryOrUnavailable(
-					() => management.listApplications(actor(identity), queryPage),
+					() =>
+						management.listApplications(apiIdentityActor(identity), queryPage),
 					metadata.traceId,
 				);
 				const page = pageById(items, queryPage, (item) => item.id);
@@ -780,7 +793,7 @@ function registerManagementRoutesInternal(
 				const application = await queryOrUnavailable(
 					() =>
 						management.createApplication({
-							actor: actor(identity),
+							actor: apiIdentityActor(identity),
 							applicationId,
 							name: body.name,
 							authorizationRevision: randomUUID(),
@@ -825,10 +838,7 @@ function registerManagementRoutesInternal(
 					await queryOrUnavailable(
 						() =>
 							management.grantCredentialDelivery({
-								actor: {
-									...actor(identity),
-									identityRevision: identity.authorizationRevision,
-								},
+								actor: apiIdentityActor(identity),
 								applicationId: context.req.param("applicationId"),
 								principal: body.principal,
 								scopes: body.scopes,
@@ -867,10 +877,7 @@ function registerManagementRoutesInternal(
 					await queryOrUnavailable(
 						() =>
 							management.revokeCredentialDelivery({
-								actor: {
-									...actor(identity),
-									identityRevision: identity.authorizationRevision,
-								},
+								actor: apiIdentityActor(identity),
 								applicationId: context.req.param("applicationId"),
 								principal,
 								audit: apiAudit(
@@ -900,7 +907,7 @@ function registerManagementRoutesInternal(
 				const items = await queryOrUnavailable(
 					() =>
 						management.listApplicationCredentials(
-							actor(identity),
+							apiIdentityActor(identity),
 							context.req.param("applicationId"),
 							queryPage,
 						),
@@ -938,7 +945,7 @@ function registerManagementRoutesInternal(
 				const issued = await queryOrUnavailable(
 					() =>
 						management.issueApplicationCredential(
-							actor(identity),
+							apiIdentityActor(identity),
 							context.req.param("applicationId"),
 							{
 								credential,
@@ -989,7 +996,7 @@ function registerManagementRoutesInternal(
 					await queryOrUnavailable(
 						() =>
 							management.revokeApplicationCredential(
-								actor(identity),
+								apiIdentityActor(identity),
 								context.req.param("applicationId"),
 								context.req.param("credentialId"),
 								new Date(),

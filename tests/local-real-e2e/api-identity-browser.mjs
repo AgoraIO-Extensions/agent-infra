@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { isAbsolute, join } from "node:path";
@@ -230,7 +230,7 @@ async function request(
 	secrets,
 	options = {},
 ) {
-	const headers = {};
+	const headers = { ...options.headers };
 	if (body !== undefined) headers["content-type"] = "application/json";
 	if (options.authorization)
 		headers.authorization = `Bearer ${options.authorization}`;
@@ -349,6 +349,7 @@ async function session(context, input, label) {
 }
 
 async function run(input) {
+	const applicationOperationId = randomUUID();
 	await privateDirectory(input.outputDirectory);
 	for (const [label, value] of Object.entries(input.subjects))
 		await validateState(value.stateFile, `${label}.stateFile`);
@@ -416,8 +417,13 @@ async function run(input) {
 				input.origin,
 				"POST",
 				"/api/v1/applications",
-				{ schemaVersion: 1, name: `#481 acceptance ${Date.now()}` },
+				{ schemaVersion: 1, name: `#481 acceptance ${applicationOperationId}` },
 				secrets,
+				{
+					headers: {
+						"Idempotency-Key": `481-application-${applicationOperationId}`,
+					},
+				},
 			);
 			expectStatus(result, 201, "application creation");
 			const id = applicationId(result, "application creation");

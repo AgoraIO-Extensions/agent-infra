@@ -341,6 +341,24 @@ async function requireCurrentApiCreationAuthority(
 	},
 	resolveUser?: (userId: string) => Promise<unknown | null>,
 ): Promise<void> {
+	let application: {
+		status: string;
+		responsibleUserId: string;
+		authorizationRevision: string;
+	} | null = null;
+	if (input.principal.kind === "application") {
+		const [currentApplication] = await database
+			.select({
+				status: platformApplications.status,
+				responsibleUserId: platformApplications.responsibleUserId,
+				authorizationRevision: platformApplications.authorizationRevision,
+			})
+			.from(platformApplications)
+			.where(eq(platformApplications.id, input.principal.id))
+			.limit(1)
+			.for("share");
+		application = currentApplication ?? null;
+	}
 	const [credential] = await database
 		.select({
 			principalType: platformApiCredentials.principalType,
@@ -354,11 +372,6 @@ async function requireCurrentApiCreationAuthority(
 		.where(eq(platformApiCredentials.id, input.apiAuthority.credentialId))
 		.limit(1)
 		.for("share");
-	const [clock] = await database
-		.select({ now: sql<Date>`clock_timestamp()` })
-		.from(platformApiCredentials)
-		.where(eq(platformApiCredentials.id, input.apiAuthority.credentialId))
-		.limit(1);
 	const currentUserId =
 		input.principal.kind === "user"
 			? input.principal.id
@@ -386,24 +399,8 @@ async function requireCurrentApiCreationAuthority(
 			throw new ApplicationFoundationError("not_authorized");
 		}
 	}
-	let application: {
-		status: string;
-		responsibleUserId: string;
-		authorizationRevision: string;
-	} | null = null;
 	let deliveryRevision: string | null = null;
 	if (input.principal.kind === "application") {
-		const [currentApplication] = await database
-			.select({
-				status: platformApplications.status,
-				responsibleUserId: platformApplications.responsibleUserId,
-				authorizationRevision: platformApplications.authorizationRevision,
-			})
-			.from(platformApplications)
-			.where(eq(platformApplications.id, input.principal.id))
-			.limit(1)
-			.for("share");
-		application = currentApplication ?? null;
 		if (credential?.recipientUserId) {
 			const [delivery] = await database
 				.select({
@@ -427,6 +424,11 @@ async function requireCurrentApiCreationAuthority(
 			deliveryRevision = delivery?.authorizationRevision ?? null;
 		}
 	}
+	const [clock] = await database
+		.select({ now: sql<Date>`clock_timestamp()` })
+		.from(platformApiCredentials)
+		.where(eq(platformApiCredentials.id, input.apiAuthority.credentialId))
+		.limit(1);
 	if (
 		!isCurrentApiCreationAuthorizedV1({
 			principal: input.principal,

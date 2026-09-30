@@ -101,6 +101,8 @@ describe("platform-core package surface", () => {
 			"isCurrentAgentGrantManageAllowedV1",
 			"isCurrentApiAgentManagementAuthorizedV1",
 			"isCurrentApiCreationAuthorizedV1",
+			"isCurrentApiIdentityBrowserActorV1",
+			"isCurrentApiIdentityUserWriteAllowedV1",
 			"isCurrentCredentialDeliveryManagerV1",
 			"isPlatformConversationChannelCurrentV1",
 			"isSameApiCreationAuthorityV1",

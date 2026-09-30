@@ -30,6 +30,7 @@ it("rejects changed credential and principal authority at management commit", ()
 			scopes: ["agent:manage"],
 			expiresAt: new Date(2000),
 			revokedAt: null,
+			recipientUserId: null,
 		},
 		nowMs: 1000,
 		currentUser: {
@@ -72,10 +73,19 @@ it("rejects changed credential and principal authority at management commit", ()
 			...current.credential,
 			principalType: "application",
 			principalId: "application-1",
+			recipientUserId: "recipient-1",
 		},
 		currentApplication: {
 			status: "active",
 			authorizationRevision: "identity-1",
+		},
+		currentRecipient: {
+			userId: "recipient-1",
+			accountStatus: "active" as const,
+		},
+		currentDelivery: {
+			authorizationRevision: "identity-1",
+			revokedAt: null,
 		},
 	};
 	expect(isCurrentApiAgentManagementAuthorizedV1(application)).toBe(true);
@@ -89,6 +99,33 @@ it("rejects changed credential and principal authority at management commit", ()
 				...application,
 				currentApplication,
 			}),
+		).toBe(false);
+	for (const changed of [
+		{ credential: { ...application.credential, recipientUserId: null } },
+		{ currentRecipient: null },
+		{
+			currentRecipient: {
+				userId: "another-recipient",
+				accountStatus: "active" as const,
+			},
+		},
+		{
+			currentRecipient: {
+				userId: "recipient-1",
+				accountStatus: "disabled" as const,
+			},
+		},
+		{ currentDelivery: null },
+		{
+			currentDelivery: {
+				authorizationRevision: "identity-1",
+				revokedAt: new Date(500),
+			},
+		},
+		{ currentDelivery: { authorizationRevision: "stale", revokedAt: null } },
+	])
+		expect(
+			isCurrentApiAgentManagementAuthorizedV1({ ...application, ...changed }),
 		).toBe(false);
 });
 

@@ -5,6 +5,8 @@ import {
 	ApiIdentityError,
 	type ApiIdentityStorePortV1,
 	createApiIdentityManagementV1,
+	isCurrentApiIdentityBrowserActorV1,
+	isCurrentApiIdentityUserWriteAllowedV1,
 	isCurrentCredentialDeliveryManagerV1,
 } from "./api-identity-management.js";
 
@@ -104,6 +106,115 @@ function management(store: ApiIdentityStorePortV1) {
 }
 
 describe("API identity management authorization", () => {
+	it("requires the same current browser authority for sensitive identity writes", () => {
+		const browser = {
+			schemaVersion: 1 as const,
+			userId: "owner-1",
+			accountStatus: "active" as const,
+			identityRevision: "current-1",
+			isAdministrator: false,
+		};
+		const current = {
+			schemaVersion: 1 as const,
+			userId: "owner-1",
+			accountStatus: "active" as const,
+			authorizationRevision: "current-1",
+			organizationIds: [],
+		};
+		expect(
+			isCurrentApiIdentityBrowserActorV1({
+				actor: browser,
+				currentUser: current,
+			}),
+		).toBe(true);
+		expect(
+			isCurrentApiIdentityUserWriteAllowedV1({
+				actor: browser,
+				currentUser: current,
+				userId: browser.userId,
+			}),
+		).toBe(true);
+		expect(
+			isCurrentApiIdentityUserWriteAllowedV1({
+				actor: browser,
+				currentUser: current,
+				userId: "other-user",
+			}),
+		).toBe(false);
+		for (const currentUser of [
+			null,
+			{ ...current, accountStatus: "disabled" as const },
+			{ ...current, userId: "other-user" },
+			{ ...current, authorizationRevision: "changed" },
+		])
+			expect(
+				isCurrentApiIdentityBrowserActorV1({ actor: browser, currentUser }),
+			).toBe(false);
+		for (const changed of [
+			{ identityRevision: undefined },
+			{ accountStatus: "disabled" as const },
+			{ principal: { kind: "user" as const, id: "owner-1" } },
+		])
+			expect(
+				isCurrentApiIdentityBrowserActorV1({
+					actor: { ...browser, ...changed },
+					currentUser: current,
+				}),
+			).toBe(false);
+	});
+
+	it("passes browser authority to the write boundary and audits a stale-write rejection", async () => {
+		const browser = {
+			schemaVersion: 1 as const,
+			userId: "owner-1",
+			accountStatus: "active" as const,
+			identityRevision: "current-1",
+			isAdministrator: false,
+		};
+		const writeAudit = vi.fn();
+		const store = storeFixture({
+			writeAudit,
+			createApplication: vi
+				.fn()
+				.mockRejectedValue(new ApiIdentityError("not_authorized")),
+			issueCredential: vi
+				.fn()
+				.mockRejectedValue(new ApiIdentityError("not_authorized")),
+		});
+		const useCase = management(store);
+		await expect(
+			useCase.createApplication({
+				actor: browser,
+				applicationId: "stale-application",
+				name: "Application",
+				authorizationRevision: "revision",
+				idempotencyKey: "create-stale",
+				rawRequestDigest: "a".repeat(64),
+				audit: { ...audit, action: "api.application.created" },
+			}),
+		).rejects.toMatchObject({ code: "not_authorized" });
+		await expect(
+			useCase.issueUserCredential(browser, {
+				credential: "synthetic-secret",
+				scopes: ["agent:read"],
+				expiresAt: null,
+				audit: { ...audit, action: "api.credential.issued" },
+			}),
+		).rejects.toMatchObject({ code: "not_authorized" });
+		expect(store.createApplication).toHaveBeenCalledWith(
+			expect.objectContaining({ actor: browser }),
+		);
+		expect(store.issueCredential).toHaveBeenCalledWith(
+			expect.objectContaining({
+				actor: browser,
+				principal: { kind: "user", id: "owner-1" },
+			}),
+		);
+		expect(store.writeAudit).toHaveBeenCalledTimes(2);
+		for (const [entry] of writeAudit.mock.calls)
+			expect(entry.outcome).toBe("rejected");
+	});
+
 	it("allows delivery changes only for a current administrator or responsible user", () => {
 		const browserActor = {
 			schemaVersion: 1 as const,

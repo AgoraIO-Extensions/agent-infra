@@ -32,20 +32,41 @@ export interface ApiIdentityActorV1 {
 	>;
 }
 
-export function isCurrentCredentialDeliveryManagerV1(input: {
+export function isCurrentApiIdentityBrowserActorV1(input: {
 	readonly actor: ApiIdentityActorV1;
-	readonly responsibleUserId: string;
 	readonly currentUser: CurrentTaskUserV1 | null;
 }): boolean {
-	const { actor, responsibleUserId, currentUser } = input;
+	const { actor, currentUser } = input;
 	return (
 		actor.accountStatus === "active" &&
 		actor.principal === undefined &&
 		!!actor.identityRevision &&
 		currentUser?.userId === actor.userId &&
 		currentUser.accountStatus === "active" &&
-		currentUser.authorizationRevision === actor.identityRevision &&
+		currentUser.authorizationRevision === actor.identityRevision
+	);
+}
+
+export function isCurrentCredentialDeliveryManagerV1(input: {
+	readonly actor: ApiIdentityActorV1;
+	readonly responsibleUserId: string;
+	readonly currentUser: CurrentTaskUserV1 | null;
+}): boolean {
+	const { actor, responsibleUserId } = input;
+	return (
+		isCurrentApiIdentityBrowserActorV1(input) &&
 		(actor.isAdministrator || responsibleUserId === actor.userId)
+	);
+}
+
+export function isCurrentApiIdentityUserWriteAllowedV1(input: {
+	readonly actor: ApiIdentityActorV1;
+	readonly currentUser: CurrentTaskUserV1 | null;
+	readonly userId: string;
+}): boolean {
+	return (
+		isCurrentApiIdentityBrowserActorV1(input) &&
+		input.userId === input.actor.userId
 	);
 }
 
@@ -126,6 +147,7 @@ export function isCurrentAgentGrantManageAllowedV1(input: {
 }
 
 export interface ApiIdentityCredentialIssueInputV1 {
+	readonly actor: ApiIdentityActorV1;
 	readonly principal: ApiPrincipalV1;
 	readonly credential: string;
 	readonly scopes: readonly ApiCredentialScopeV1[];
@@ -144,6 +166,7 @@ export interface ApiIdentityStorePortV1 {
 		input: ApiIdentityAuditInputV1 & { readonly targetId: string },
 	) => Promise<void>;
 	createApplication(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly applicationId: string;
 		readonly name: string;
 		readonly responsibleUserId: string;
@@ -194,11 +217,13 @@ export interface ApiIdentityStorePortV1 {
 		readonly revokedAt?: Date;
 		readonly audit: ApiIdentityAuditInputV1;
 	}): Promise<boolean>;
-	revokeCredential(
-		credentialId: string,
-		revokedAt: Date,
-		audit: ApiIdentityAuditInputV1,
-	): Promise<boolean>;
+	revokeCredential(input: {
+		readonly actor: ApiIdentityActorV1;
+		readonly principal: ApiPrincipalV1;
+		readonly credentialId: string;
+		readonly revokedAt: Date;
+		readonly audit: ApiIdentityAuditInputV1;
+	}): Promise<boolean>;
 	grantAgent(input: {
 		readonly actor: ApiIdentityActorV1;
 		readonly agentId: string;
@@ -252,7 +277,10 @@ export interface ApiIdentityManagementInterfaceV1 {
 	): Promise<readonly ApiCredentialMetadataV1[]>;
 	issueUserCredential(
 		actor: ApiIdentityActorV1,
-		input: Omit<ApiIdentityCredentialIssueInputV1, "principal" | "recipient">,
+		input: Omit<
+			ApiIdentityCredentialIssueInputV1,
+			"actor" | "principal" | "recipient"
+		>,
 	): Promise<ApiIdentityCredentialIssueResultV1>;
 	revokeUserCredential(
 		actor: ApiIdentityActorV1,
@@ -281,7 +309,7 @@ export interface ApiIdentityManagementInterfaceV1 {
 	issueApplicationCredential(
 		actor: ApiIdentityActorV1,
 		applicationId: string,
-		input: Omit<ApiIdentityCredentialIssueInputV1, "principal">,
+		input: Omit<ApiIdentityCredentialIssueInputV1, "actor" | "principal">,
 	): Promise<ApiIdentityCredentialIssueResultV1>;
 	revokeApplicationCredential(
 		actor: ApiIdentityActorV1,
@@ -614,11 +642,17 @@ export function createApiIdentityManagementV1(input: {
 				await rejectWithAudit(audit, audit.actor.id);
 				throw error;
 			}
-			return input.store.issueCredential({
-				...value,
-				principal: { kind: "user", id: userId },
-				audit,
-			});
+			try {
+				return await input.store.issueCredential({
+					...value,
+					actor,
+					principal: { kind: "user", id: userId },
+					audit,
+				});
+			} catch (error) {
+				await rejectWithAudit(audit, userId);
+				throw error;
+			}
 		},
 		async revokeUserCredential(actor, credentialId, revokedAt, audit) {
 			const checked = checkedAudit(actor, audit);
@@ -638,7 +672,13 @@ export function createApiIdentityManagementV1(input: {
 				throw new ApiIdentityError("resource_unavailable");
 			}
 			if (
-				!(await input.store.revokeCredential(credentialId, revokedAt, checked))
+				!(await input.store.revokeCredential({
+					actor,
+					principal: { kind: "user", id: userId },
+					credentialId,
+					revokedAt,
+					audit: checked,
+				}))
 			) {
 				await rejectWithAudit(checked, credentialId);
 				throw new ApiIdentityError("resource_unavailable");
@@ -660,15 +700,22 @@ export function createApiIdentityManagementV1(input: {
 				await rejectWithAudit(audit, value.applicationId);
 				throw error;
 			}
-			const applicationId = await input.store.createApplication({
-				applicationId: value.applicationId,
-				name: value.name,
-				responsibleUserId: userId,
-				authorizationRevision: value.authorizationRevision,
-				idempotencyKey: value.idempotencyKey,
-				requestDigest: value.rawRequestDigest,
-				audit,
-			});
+			let applicationId: string;
+			try {
+				applicationId = await input.store.createApplication({
+					actor: value.actor,
+					applicationId: value.applicationId,
+					name: value.name,
+					responsibleUserId: userId,
+					authorizationRevision: value.authorizationRevision,
+					idempotencyKey: value.idempotencyKey,
+					requestDigest: value.rawRequestDigest,
+					audit,
+				});
+			} catch (error) {
+				await rejectWithAudit(audit, value.applicationId);
+				throw error;
+			}
 			const application = await input.store.getApplication(applicationId);
 			if (!application) throw new ApiIdentityError("dependency_unavailable");
 			if (application.responsibleUserId !== userId)
@@ -713,6 +760,7 @@ export function createApiIdentityManagementV1(input: {
 			try {
 				return await input.store.issueCredential({
 					...value,
+					actor,
 					recipient,
 					principal: { kind: "application", id: application.id },
 					audit,
@@ -756,7 +804,13 @@ export function createApiIdentityManagementV1(input: {
 				throw new ApiIdentityError("resource_unavailable");
 			}
 			if (
-				!(await input.store.revokeCredential(credentialId, revokedAt, checked))
+				!(await input.store.revokeCredential({
+					actor,
+					principal: { kind: "application", id: application.id },
+					credentialId,
+					revokedAt,
+					audit: checked,
+				}))
 			) {
 				await rejectWithAudit(checked, credentialId);
 				throw new ApiIdentityError("resource_unavailable");
