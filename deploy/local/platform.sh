@@ -341,16 +341,32 @@ delete_owned_agent_pvcs() {
     }
     if ! "${kube_target[@]}" get "pvc/$name" --ignore-not-found -o json |
       node -e '
+        const { createHash } = require("node:crypto");
         let input = "";
         process.stdin.on("data", (chunk) => { input += chunk; });
         process.stdin.on("end", () => {
           try {
             const pvc = JSON.parse(input);
+            const metadata = pvc.metadata ?? {};
+            const labels = metadata.labels ?? {};
+            const annotations = metadata.annotations ?? {};
+            const agentId = annotations["agent-infra.agora.io/agent-id"];
+            const agentName = typeof agentId === "string"
+              ? `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`
+              : "";
+            const ownerReferences = Array.isArray(metadata.ownerReferences)
+              ? metadata.ownerReferences
+              : [];
             if (pvc.kind !== "PersistentVolumeClaim" ||
-                pvc.metadata?.name !== process.argv[1] ||
-                pvc.metadata?.namespace !== process.argv[2] ||
-                !pvc.metadata?.labels?.["agent-infra.agora.io/agent"] ||
-                !pvc.metadata?.annotations?.["agent-infra.agora.io/agent-id"]) process.exitCode = 1;
+                metadata.name !== process.argv[1] ||
+                metadata.namespace !== process.argv[2] ||
+                metadata.name !== `${agentName}-data` ||
+                labels["agent-infra.agora.io/agent"] !== agentName ||
+                !ownerReferences.some((owner) =>
+                  owner?.apiVersion?.startsWith("apps/") &&
+                  owner.kind === "StatefulSet" &&
+                  owner.name === agentName &&
+                  owner.controller === true)) process.exitCode = 1;
           } catch {
             process.exitCode = 1;
           }

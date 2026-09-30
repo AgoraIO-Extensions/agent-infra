@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	chmod,
 	mkdir,
@@ -129,7 +130,9 @@ fi`,
 if [[ "$*" == *"config view"* ]]; then
   printf '%s' "$FAKE_KUBE_SERVER"
 elif [[ "$*" == *"--ignore-not-found -o json" ]]; then
-  if [[ -n "$FAKE_FOREIGN_RESOURCE" && "$*" == *"get $FAKE_FOREIGN_RESOURCE "* ]]; then
+  if [[ "$*" == *"get pvc/"* ]]; then
+    printf '%s\\n' "$FAKE_AGENT_PVC_JSON"
+  elif [[ -n "$FAKE_FOREIGN_RESOURCE" && "$*" == *"get $FAKE_FOREIGN_RESOURCE "* ]]; then
     printf '%s\\n' '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"another-owner"}}}'
   elif [[ "$*" == *"get endpointslice/agent-infra-verify-postgres-docker "* && -f "$FAKE_ROUTE_STATE" ]]; then
     cat "$FAKE_ROUTE_STATE"
@@ -185,6 +188,7 @@ fi`,
 		FAKE_CONFIGURED_WORKER_REPLICAS: "1",
 		FAKE_HELM_LIST_RESULT: "",
 		FAKE_AUTH_PROBE_EXIT: "",
+		FAKE_AGENT_PVC_JSON: "",
 		FAKE_DATABASE_URL: "postgresql://fixture:fixture@postgres:5432/fixture",
 		PLATFORM_LOCAL_DOCKER_CONTEXT: "isolated",
 		PLATFORM_LOCAL_PROJECT: "agent-infra-verify",
@@ -765,6 +769,82 @@ test("local reset requires the exact project and removes only the isolated Compo
 		const log = await readFile(f.log, "utf8");
 		assert.match(log, /compose .* down --volumes --remove-orphans/);
 		assert.doesNotMatch(log, /delete persistentvolumeclaim|delete pvc/);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local reset deletes an explicitly selected canonical Agent PVC", async () => {
+	const f = await fixture();
+	try {
+		const agentId = "local-reset-agent";
+		const agentName = `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`;
+		const env = {
+			...f.env,
+			PLATFORM_LOCAL_AGENT_PVC_NAMES: `${agentName}-data`,
+			FAKE_AGENT_PVC_JSON: JSON.stringify({
+				kind: "PersistentVolumeClaim",
+				metadata: {
+					name: `${agentName}-data`,
+					namespace: "agent-infra-verify",
+					labels: { "agent-infra.agora.io/agent": agentName },
+					annotations: { "agent-infra.agora.io/agent-id": agentId },
+					ownerReferences: [
+						{
+							apiVersion: "apps/v1",
+							kind: "StatefulSet",
+							name: agentName,
+							controller: true,
+						},
+					],
+				},
+			}),
+		};
+		const result = run("reset", env, ["agent-infra-verify"]);
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(
+			await readFile(f.log, "utf8"),
+			new RegExp(`delete pvc/${agentName}-data`),
+		);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local reset refuses a same-namespace PVC with foreign or mismatched Agent ownership", async () => {
+	const f = await fixture();
+	try {
+		const env = {
+			...f.env,
+			PLATFORM_LOCAL_AGENT_PVC_NAMES: "foreign-data",
+			FAKE_AGENT_PVC_JSON: JSON.stringify({
+				kind: "PersistentVolumeClaim",
+				metadata: {
+					name: "foreign-data",
+					namespace: "agent-infra-verify",
+					labels: { "agent-infra.agora.io/agent": "foreign" },
+					annotations: { "agent-infra.agora.io/agent-id": "another-agent" },
+					ownerReferences: [
+						{
+							apiVersion: "apps/v1",
+							kind: "StatefulSet",
+							name: "foreign",
+							controller: true,
+						},
+					],
+				},
+			}),
+		};
+		const result = run("reset", env, ["agent-infra-verify"]);
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/Refusing to delete an unowned Agent PVC: foreign-data/,
+		);
+		assert.doesNotMatch(
+			await readFile(f.log, "utf8"),
+			/delete pvc\/foreign-data/,
+		);
 	} finally {
 		await f.close();
 	}

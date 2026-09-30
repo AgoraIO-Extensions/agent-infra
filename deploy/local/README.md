@@ -161,9 +161,11 @@ bash deploy/local/platform.sh reset "$PLATFORM_LOCAL_PROJECT"
 ```
 
 只有在已经核对当前 kind 集群、namespace 和 PVC 名称确实属于本地测试 Agent 时，才设置
-PLATFORM_LOCAL_AGENT_PVC_NAMES 为逗号分隔的 PVC 名称。每个名称必须带
-agent-infra.agora.io/agent owner label，脚本逐个删除并等待完成；未设置时所有 Agent
-PVC 保留。Reset 仍不会删除其它 namespace、业务卷或未通过 owner 校验的 PVC。
+PLATFORM_LOCAL_AGENT_PVC_NAMES 为逗号分隔的 PVC 名称。每个 PVC 必须符合 Runtime 的
+canonical `agent-${sha256(agentId)[0:32]}-data` 命名、owner label/agent-id annotation
+关系，并由同名 Agent StatefulSet controller ownerReference 绑定；脚本逐个删除并等待完成。
+未设置时所有 Agent PVC 保留。Reset 仍不会删除其它 namespace、业务卷或未通过完整 owner
+校验的 PVC。
 
 ## 验证边界
 
