@@ -87,27 +87,46 @@ it("loads a deployment worker and closes it through the process lifecycle", asyn
 	}
 });
 
-it("fails closed for a bot deployment without authenticated connection inputs", async () => {
-	const coordinator = createWecomDeploymentCoordinatorV1({
-		databaseUrl: "postgres://fixture",
-		configuration: {
-			mode: "bot",
-			identity: {
-				resolveSender: async () => null,
-				activeUsers: async () => [],
+it.each(["connections", "setup"])(
+	"fails closed without %s required for Owner candidate activation",
+	async (missing) => {
+		const coordinator = createWecomDeploymentCoordinatorV1({
+			databaseUrl: "postgres://fixture",
+			configuration: {
+				identity: {
+					resolveSender: async () => null,
+					activeUsers: async () => [],
+				},
+				observe: () => {},
+				sender: { send: async () => "failed" },
+				...(missing === "connections"
+					? {}
+					: {
+							connections: {
+								bindings: async () => [],
+								protectReply: async () => "fixture",
+								revealReply: async () => null,
+							},
+						}),
+				...(missing === "setup"
+					? {}
+					: {
+							setup: {
+								decryptor: { decrypt: async () => null },
+								directory: { resolveUser: async () => null },
+							},
+						}),
 			},
-			observe: () => {},
-			sender: { send: async () => "failed" },
-		},
-	});
-	const signal = new AbortController().signal;
-	expect(() => coordinator.start(signal)).toThrow(
-		"WeCom Worker deployment dependencies are unavailable",
-	);
-	const record = {
-		boundary: { channelId: "wecom_bot:pending" },
-	} as Parameters<typeof coordinator.channelAuthorizationCurrent>[0];
-	expect(await coordinator.channelAuthorizationCurrent(record, signal)).toBe(
-		false,
-	);
-});
+		});
+		const signal = new AbortController().signal;
+		expect(() => coordinator.start(signal)).toThrow(
+			"WeCom Worker deployment dependencies are unavailable",
+		);
+		const record = {
+			boundary: { channelId: "wecom_bot:pending" },
+		} as Parameters<typeof coordinator.channelAuthorizationCurrent>[0];
+		expect(await coordinator.channelAuthorizationCurrent(record, signal)).toBe(
+			false,
+		);
+	},
+);

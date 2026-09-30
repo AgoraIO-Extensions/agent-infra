@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 	sender: undefined as WecomSendPortV1 | undefined,
 	close: vi.fn(async () => {}),
 	connectionsTick: vi.fn(async () => {}),
+	setupTick: vi.fn(async () => {}),
 	connectionsClose: vi.fn(async () => {}),
 	setupClose: vi.fn(async () => {}),
 	connectionBindings: undefined as
@@ -52,7 +53,7 @@ vi.mock("./wecom-connections.js", () => ({
 }));
 vi.mock("./wecom-setup.js", () => ({
 	createWecomSetupWorkerV1: () => ({
-		tick: async () => {},
+		tick: mocks.setupTick,
 		close: mocks.setupClose,
 		bindings: mocks.setupBindings,
 	}),
@@ -75,6 +76,37 @@ it("rejects unknown channels before querying WeCom execution state", async () =>
 		} as Parameters<typeof worker.channelAuthorizationCurrent>[0];
 		expect(await worker.channelAuthorizationCurrent(record)).toBe(false);
 		expect(mocks.scopeForExecution).not.toHaveBeenCalled();
+	} finally {
+		await worker.close();
+	}
+});
+
+it("polls Owner setup alongside live connections", async () => {
+	const worker = createPlatformWecomWorkerV1({
+		databaseUrl: "postgres://fixture",
+		identity: { resolveSender: async () => null, activeUsers: async () => [] },
+		observe: () => {},
+		sender: { send: async () => "failed" },
+		connections: {
+			bindings: async () => [],
+			protectReply: async () => "fixture",
+			revealReply: async () => {
+				throw new Error("unused");
+			},
+		},
+		setup: {
+			decryptor: {
+				decrypt: async () => {
+					throw new Error("unused");
+				},
+			},
+			directory: { resolveUser: async () => null },
+		},
+	});
+	try {
+		await worker.reconcile();
+		expect(mocks.setupTick).toHaveBeenCalledOnce();
+		expect(mocks.connectionsTick).toHaveBeenCalledOnce();
 	} finally {
 		await worker.close();
 	}

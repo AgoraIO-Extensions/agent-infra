@@ -10,7 +10,8 @@ import {
 type WecomWorker = ReturnType<typeof createPlatformWecomWorkerV1>;
 type WecomLoop = Pick<WecomWorker, "reconcile" | "dispatch" | "close">;
 type WecomConfiguration = WecomWorkerDeploymentV1 & {
-	readonly mode: "bot" | "application";
+	readonly connections: NonNullable<WecomWorkerDeploymentV1["connections"]>;
+	readonly setup: NonNullable<WecomWorkerDeploymentV1["setup"]>;
 };
 
 function requireWecomConfiguration(value: unknown): WecomConfiguration {
@@ -18,16 +19,15 @@ function requireWecomConfiguration(value: unknown): WecomConfiguration {
 		const configuration = value as WecomConfiguration;
 		if (
 			!configuration ||
-			!["bot", "application"].includes(configuration.mode) ||
 			typeof configuration.identity?.resolveSender !== "function" ||
 			typeof configuration.identity.activeUsers !== "function" ||
 			typeof configuration.observe !== "function" ||
 			typeof configuration.sender?.send !== "function" ||
-			(configuration.mode === "bot" && !configuration.connections) ||
-			(configuration.connections &&
-				(typeof configuration.connections.bindings !== "function" ||
-					typeof configuration.connections.protectReply !== "function" ||
-					typeof configuration.connections.revealReply !== "function"))
+			typeof configuration.connections?.bindings !== "function" ||
+			typeof configuration.connections.protectReply !== "function" ||
+			typeof configuration.connections.revealReply !== "function" ||
+			typeof configuration.setup?.decryptor?.decrypt !== "function" ||
+			typeof configuration.setup.directory?.resolveUser !== "function"
 		)
 			throw new Error();
 		return configuration;
