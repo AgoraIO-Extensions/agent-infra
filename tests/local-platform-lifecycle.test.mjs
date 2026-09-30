@@ -13,6 +13,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 const script = "deploy/local/platform.sh";
+const proxyTokenValue = Buffer.from("a".repeat(32)).toString("base64url");
 
 async function executable(directory, name, body) {
 	const path = join(directory, name);
@@ -36,6 +37,8 @@ async function fixture() {
 	const values = join(directory, "worker.values.yaml");
 	const cert = join(directory, "tls.crt");
 	const key = join(directory, "tls.key");
+	const proxyToken = join(directory, "proxy-token");
+	const localState = join(directory, "state");
 	await Promise.all([
 		writeFile(log, ""),
 		writeFile(kubeconfig, "fixture"),
@@ -43,10 +46,21 @@ async function fixture() {
 			values,
 			"platformWorker:\n  deploymentModule: file:///app/dist/deployment.mjs\n",
 		),
-		writeFile(join(api, "platform-api.mjs"), ""),
+		writeFile(join(api, "configuration.mjs"), ""),
 		writeFile(cert, ""),
 		writeFile(key, ""),
+		writeFile(proxyToken, proxyTokenValue, { mode: 0o600 }),
 	]);
+	await executable(
+		bin,
+		"node",
+		`
+if [[ "$1" == "deploy/local/check-api-auth.ts" ]]; then
+  printf 'node %s\\n' "$*" >> "$COMMAND_LOG"
+  exit "\${FAKE_AUTH_PROBE_EXIT:-0}"
+fi
+exec "$REAL_NODE" "$@"`,
+	);
 	await executable(
 		bin,
 		"docker",
@@ -63,6 +77,9 @@ elif [[ "$*" == *"compose"*"ps -q postgres"* ]]; then
   [[ "$FAKE_CONTAINER_RUNNING" == 1 ]] && printf 'fixture-postgres\\n'
 elif [[ "$*" == *"compose"*"config --format json"* ]]; then
   printf '{"services":{"platform-api":{"environment":{"PLATFORM_DATABASE_URL":"%s"}}}}\\n' "$FAKE_DATABASE_URL"
+elif [[ "$*" == *"compose"*"run --rm --no-deps platform-api"* ]]; then
+  [[ -r "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" ]] || exit 9
+  printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
 elif [[ "$*" == *"container inspect fixture-postgres"*"IPAddress"* ]]; then
   printf '172.18.0.42\\n'
 elif [[ "$*" == *"container inspect fixture-postgres"* ]]; then
@@ -137,6 +154,7 @@ fi`,
 	const env = {
 		...process.env,
 		PATH: `${bin}:${process.env.PATH}`,
+		REAL_NODE: process.execPath,
 		COMMAND_LOG: log,
 		MANIFEST_LOG: manifest,
 		FAKE_NETWORK_STATE: networkState,
@@ -156,12 +174,15 @@ fi`,
 		FAKE_HELM_UPGRADE_EXIT: "",
 		FAKE_CONFIGURED_WORKER_REPLICAS: "1",
 		FAKE_HELM_LIST_RESULT: "",
+		FAKE_AUTH_PROBE_EXIT: "",
 		FAKE_DATABASE_URL: "postgresql://fixture:fixture@postgres:5432/fixture",
 		PLATFORM_LOCAL_DOCKER_CONTEXT: "isolated",
 		PLATFORM_LOCAL_PROJECT: "agent-infra-verify",
 		PLATFORM_LOCAL_API_DIRECTORY: api,
 		PLATFORM_WEB_TLS_CERT_FILE: cert,
 		PLATFORM_WEB_TLS_KEY_FILE: key,
+		PLATFORM_LOCAL_PROXY_TOKEN_FILE: proxyToken,
+		PLATFORM_LOCAL_STATE_DIRECTORY: localState,
 		PLATFORM_LOCAL_KUBECONFIG: kubeconfig,
 		PLATFORM_LOCAL_KUBE_CONTEXT: "kind-isolated",
 		PLATFORM_LOCAL_NAMESPACE: "agent-infra-verify",
@@ -188,7 +209,26 @@ function run(command, env) {
 test("local up, status and stop bind one Worker release to the private kind context", async () => {
 	const f = await fixture();
 	try {
+		assert.equal(run("migrate", f.env).status, 0);
+		assert.match(
+			await readFile(f.log, "utf8"),
+			/compose .* run --rm --no-deps platform-api node node_modules\/@agent-infra\/platform-store\/dist\/migrate-cli\.mjs/,
+		);
+		await writeFile(f.log, "");
 		assert.equal(run("up", f.env).status, 0);
+		const nginxConfig = join(
+			f.env.PLATFORM_LOCAL_STATE_DIRECTORY,
+			"agent-infra-verify/nginx.conf",
+		);
+		assert.match(
+			await readFile(nginxConfig, "utf8"),
+			new RegExp(`proxy_set_header X-Platform-Proxy-Token ${proxyTokenValue};`),
+		);
+		const runtimeToken = join(
+			f.env.PLATFORM_LOCAL_STATE_DIRECTORY,
+			"agent-infra-verify/proxy-token",
+		);
+		assert.equal(await readFile(runtimeToken, "utf8"), proxyTokenValue);
 		const up = (await readFile(f.log, "utf8")).trim().split("\n");
 		assert.match(
 			up[0],
@@ -233,7 +273,12 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		);
 		assert.match(
 			up[10],
-			/^docker .* compose .* up --detach --wait platform-api web$/,
+			/^docker .* compose .* up --detach --wait --force-recreate --no-deps platform-api$/,
+		);
+		assert.match(up[11], /^node deploy\/local\/check-api-auth\.ts /);
+		assert.match(
+			up[12],
+			/^docker .* compose .* up --detach --wait --force-recreate --no-deps web$/,
 		);
 		assert.match(
 			up[5],
@@ -245,7 +290,7 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			/^helm .* get values agent-infra-verify --all --output json$/,
 		);
 		assert.match(up[8], /kubectl .* scale .* --replicas=1$/);
-		assert.equal(up.length, 11);
+		assert.equal(up.length, 13);
 
 		await writeFile(f.log, "");
 		assert.equal(run("up", f.env).status, 0);
@@ -274,7 +319,9 @@ test("local up, status and stop bind one Worker release to the private kind cont
 				.annotations["agent-infra.agora.io/local-network-alias"],
 			await readFile(f.env.FAKE_NETWORK_STATE, "utf8"),
 		);
-		const stopped = run("stop", f.env);
+		const stopEnv = { ...f.env };
+		delete stopEnv.PLATFORM_LOCAL_PROXY_TOKEN_FILE;
+		const stopped = run("stop", stopEnv);
 		assert.equal(stopped.status, 0, stopped.stderr);
 		const stop = await readFile(f.log, "utf8");
 		assert.match(
@@ -301,6 +348,57 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		assert.doesNotMatch(
 			stop,
 			/--volumes|compose .* down|delete (persistentvolumeclaim|pvc|namespace)/,
+		);
+		await assert.rejects(readFile(nginxConfig, "utf8"), { code: "ENOENT" });
+		await assert.rejects(readFile(runtimeToken, "utf8"), { code: "ENOENT" });
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up rejects an invalid proxy token before stopping services", async () => {
+	const f = await fixture();
+	try {
+		await writeFile(f.env.PLATFORM_LOCAL_PROXY_TOKEN_FILE, "a".repeat(45));
+		const result = run("up", f.env);
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /Local proxy token must be a Base64URL value/);
+		assert.doesNotMatch(
+			await readFile(f.log, "utf8"),
+			/compose .* stop web platform-api/,
+		);
+		assert.doesNotMatch(result.stderr, new RegExp(proxyTokenValue));
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up keeps Web and API closed when proxy token wiring fails", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", { ...f.env, FAKE_AUTH_PROBE_EXIT: "7" });
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /Local API login boundary is unavailable/);
+		const log = await readFile(f.log, "utf8");
+		assert.match(log, /node deploy\/local\/check-api-auth\.ts /);
+		assert.match(log, /compose .* stop platform-api/);
+		assert.doesNotMatch(log, /compose .* up .* web/);
+		assert.doesNotMatch(result.stderr, new RegExp(proxyTokenValue));
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up rejects a world-readable proxy token before stopping services", async () => {
+	const f = await fixture();
+	try {
+		await chmod(f.env.PLATFORM_LOCAL_PROXY_TOKEN_FILE, 0o644);
+		const result = run("up", f.env);
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /owned private regular file/);
+		assert.doesNotMatch(
+			await readFile(f.log, "utf8"),
+			/compose .* stop web platform-api/,
 		);
 	} finally {
 		await f.close();
@@ -349,7 +447,7 @@ test("local up refuses to reopen API when the installed Worker has no configured
 			/helm .* get values agent-infra-verify --all --output json/,
 		);
 		assert.doesNotMatch(log, /kubectl .* scale .* --replicas=0/);
-		assert.doesNotMatch(log, /compose .* up --detach --wait platform-api web/);
+		assert.doesNotMatch(log, /compose .* up --detach --wait --force-recreate/);
 	} finally {
 		await f.close();
 	}
