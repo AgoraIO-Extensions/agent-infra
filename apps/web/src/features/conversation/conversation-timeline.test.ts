@@ -319,14 +319,16 @@ describe("Conversation generated-client data consumer", () => {
 			},
 		);
 
-		it(`keeps an ordinary ${endpoint} HTTP 404 unavailable`, async () => {
-			const stream = sse();
+		it(`purges an ordinary ${endpoint} HTTP 404 and reconnects with fresh history`, async () => {
+			let stream = sse();
 			let missing = false;
-			const { reader } = setup((request) => {
+			let restored = false;
+			const updated = history("conversation-1", [event(2)]);
+			const { reader, requests } = setup((request) => {
 				if (missing && route(request) === endpoint)
 					return new Response("Route missing", { status: 404 });
 				if (route(request) === "stream") return stream.response;
-				return Response.json(history());
+				return Response.json(restored ? updated : history());
 			});
 			await reader.open("conversation-1");
 			missing = true;
@@ -340,6 +342,26 @@ describe("Conversation generated-client data consumer", () => {
 				events: [],
 				failure: { kind: "http", status: 404 },
 			});
+			const requestCount = requests.length;
+			missing = false;
+			restored = true;
+			stream = sse();
+			await reader.reconnect();
+			await vi.waitFor(() => expect(requests).toHaveLength(requestCount + 2));
+			expect(requests.slice(requestCount).map(route)).toEqual([
+				"history",
+				"stream",
+			]);
+			expect(reader.getSnapshot()).toMatchObject({
+				status: "ready",
+				history: updated,
+				events: [event(2)],
+				failure: null,
+			});
+			expect(
+				new URL(requests[requests.length - 1].url).searchParams.get("cursor"),
+			).toBe(event(2).conversationCursor);
+			expect(requests.every((request) => request.method === "GET")).toBe(true);
 		});
 
 		it.each(["network", "service"] as const)(

@@ -423,7 +423,7 @@ test("renders an authorization failure without retaining another subject's conve
 	).toHaveCount(0);
 });
 
-test("does not present an ordinary conversation 404 as an authorization failure", async ({
+test("recovers an ordinary conversation 404 through read-only reconnect", async ({
 	page,
 }) => {
 	const agent = AgentProjectionV2Schema.parse({
@@ -432,7 +432,13 @@ test("does not present an ordinary conversation 404 as an authorization failure"
 		managementStatus: "available",
 		serviceAvailability: "ready",
 	});
+	let missing = true;
+	let historyReads = 0;
+	let streamReads = 0;
+	let writes = 0;
+	await keepConversationStreamOpen(page);
 	await page.route(/\/api\/v[12]\//, async (route) => {
+		if (route.request().method() !== "GET") writes += 1;
 		const path = new URL(route.request().url()).pathname;
 		if (path.endsWith("/session")) {
 			await route.fulfill({ json: ownerSession() });
@@ -443,9 +449,22 @@ test("does not present an ordinary conversation 404 as an authorization failure"
 			return;
 		}
 		if (path === `/api/v2/conversations/${conversationId}`) {
+			historyReads += 1;
+			if (missing) {
+				await route.fulfill({
+					status: 404,
+					json: { message: "Synthetic route missing" },
+				});
+			} else {
+				await route.fulfill({ json: history(conversationId, []) });
+			}
+			return;
+		}
+		if (path === `/api/v2/conversations/${conversationId}/events`) {
+			streamReads += 1;
 			await route.fulfill({
-				status: 404,
-				json: { message: "Synthetic route missing" },
+				contentType: "text/event-stream",
+				body: ": heartbeat\n\n",
 			});
 			return;
 		}
@@ -463,6 +482,24 @@ test("does not present an ordinary conversation 404 as an authorization failure"
 		page.getByText("当前登录或访问权限已失效，请重新登录或返回 Agent 列表。"),
 	).toHaveCount(0);
 	await expect(page.getByRole("button", { name: "重新连接" })).toBeVisible();
+	await test.info().attach("fake-404-unavailable", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+	const readsBeforeReconnect = historyReads;
+	missing = false;
+	await page.getByRole("button", { name: "重新连接" }).click();
+	await expect(
+		page.getByRole("heading", { name: "Test conversation" }),
+	).toBeVisible();
+	await expect(page.getByRole("button", { name: "重新连接" })).toHaveCount(0);
+	await expect.poll(() => historyReads).toBe(readsBeforeReconnect + 1);
+	await expect.poll(() => streamReads).toBe(1);
+	expect(writes).toBe(0);
+	await test.info().attach("fake-404-read-only-recovery", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
 });
 
 test("saves the next-message model and stops the bound execution", async ({

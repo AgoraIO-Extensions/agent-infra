@@ -99,6 +99,14 @@ export function createConversationTimeline({
 			failure.kind === "invalid"
 		) {
 			stop();
+			if (failure.kind === "http") {
+				current = {
+					conversationId: session.conversationId,
+					cursor: null,
+					seenCursors: new Set(),
+					needsHistory: true,
+				};
+			}
 			publish({
 				...emptyState(),
 				conversationId: session.conversationId,
