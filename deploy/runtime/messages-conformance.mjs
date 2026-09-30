@@ -14,7 +14,7 @@ const { values } = parseArgs({ options: {
 } });
 if (!values.settings || !values.model || !values.output) throw Error("Supply --settings, --model and --output");
 const runtimeEntry = await realpath(resolve("node_modules/@agent-infra/agent-runtime/dist/index.mjs"));
-const { ClaudeRuntimeDriver, verifyClaudeInstallation, openOpenCodeRuntime, verifyOpenCodeInstallation, openPiRuntime, verifyPiInstallation, FileRuntimeStore, RuntimeHost, createRuntimeExecutionGrantValidatorV4, createRuntimeExecutionGrantVerifierV2, requestDigest } = await import(pathToFileURL(runtimeEntry).href);
+const { ClaudeRuntimeDriver, verifyClaudeInstallation, openOpenCodeRuntime, verifyOpenCodeInstallation, openPiRuntime, verifyPiInstallation, FakeRuntimeDriver, FileRuntimeStore, RuntimeHost, createExecutionGrantVerifier, createRuntimeExecutionGrantValidatorV4, createRuntimeExecutionGrantVerifierV2, requestDigest } = await import(pathToFileURL(runtimeEntry).href);
 const contractsEntry = await realpath(resolve("node_modules/@agent-infra/contracts/dist/runtime/index.mjs"));
 const { RuntimeEventV2Schema, RuntimeEventAckRequestV4Schema, RuntimeEventReadRequestV4Schema, RuntimeExecutionGrantClaimsV2Schema, RuntimeBusinessGrantClaimsV4Schema, RuntimeExecutionGrantMaximumLifetimeMsV2, RuntimeExecutionGrantMaximumLifetimeMsV4, runtimeEventRequestDigestV4, runtimeOperationDigestInputV4, runtimeRequestDigestV4, runtimeRequestSigningPayloadV3 } = await import(pathToFileURL(contractsEntry).href);
 if (!["claude", "opencode", "pi"].includes(values.runtime)) throw Error("Unsupported conformance runtime");
@@ -43,12 +43,14 @@ const options = { path, executable, configVersion, defaultModelOptionId: "primar
 const modelFactId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(values.model) ? values.model : `model:${createHash("sha256").update(values.model).digest("hex")}`;
 let driver, host, hostStore;
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+const { privateKey: legacyPrivateKey, publicKey: legacyPublicKey } = generateKeyPairSync("ed25519");
 const publicKeys = new Map([["synthetic-key", publicKey]]);
 const verifyLegacyGrant = createRuntimeExecutionGrantVerifierV2(publicKeys);
+const verifyLegacyV1Grant = createExecutionGrantVerifier(new Map([["legacy-key", legacyPublicKey]]));
 const validateV4Grant = createRuntimeExecutionGrantValidatorV4(publicKeys, { expectedIssuer: "synthetic-platform", expectedWorkerId: "synthetic-worker" });
 const users = ["a", "b"].map(id => ({ id, canary: randomUUID(), contextCanary: randomUUID(), ref: undefined, hostRef: null, turn: 0 }));
 const keyByExecution = new Map();
-const report = { schemaVersion: 1, runtime: values.runtime, sourceCommit, dirty, imageDigest: values["image-digest"] ?? null, configVersion, sdkVersion: provenance.sdkVersion, nativeVersion: provenance.nativeVersion, ...(isPi ? { bundleSha256: provenance.bundleSha256, upstreamCommit: provenance.upstreamCommit } : { executableSha256: provenance.executableSha256 }), model: values.model, authority: "synthetic-runtime-host-v4", v4ExecutionKeyChecks: 0, privateKeyDeliveryChecks: 0, legacyStaticKeyRejections: 0, replayFenceChecks: 0, modelAuthorizationChecks: 0, toolAuthorizationChecks: 0, negativeVector: "symlink-escape", negativeTargets: separateNegative ? [values["negative-target"]] : ["workspace", "memory"], checks: [], passed: false };
+const report = { schemaVersion: 1, runtime: values.runtime, sourceCommit, dirty, imageDigest: values["image-digest"] ?? null, configVersion, sdkVersion: provenance.sdkVersion, nativeVersion: provenance.nativeVersion, ...(isPi ? { bundleSha256: provenance.bundleSha256, upstreamCommit: provenance.upstreamCommit } : { executableSha256: provenance.executableSha256 }), model: values.model, authority: "synthetic-runtime-host-v4", v4ExecutionKeyChecks: 0, privateKeyDeliveryChecks: 0, legacyStaticKeyRejections: 0, legacyVersionChecks: { v2: { disabledRejected: 0, enabledAccepted: 0 }, v3: { disabledRejected: 0, enabledAccepted: 0 } }, legacyPolicyChecks: { v2: { disabled: null, enabled: null }, v3: { disabled: null, enabled: null } }, replayFenceChecks: 0, modelAuthorizationChecks: 0, toolAuthorizationChecks: 0, negativeVector: "symlink-escape", negativeTargets: separateNegative ? [values["negative-target"]] : ["workspace", "memory"], checks: [], passed: false };
 const originalFetch = globalThis.fetch;
 if (process.env.AGENT_INFRA_INSPECT_MESSAGES_SHAPE === "1") {
  report.messageShapes = [];
@@ -145,6 +147,123 @@ function signedV3Request(request, command) {
   ...(command === "events.persist" ? { eventAccess: { command, consumer: request.consumer, afterCursor: request.afterCursor } } : {}),
  });
  return { ...request, grant: signedToken(claims, 2) };
+}
+function legacyV2Request(userId) {
+ const executionId = `legacy-v2-${userId}`;
+ return {
+  schemaVersion: 2,
+  requestId: randomUUID(),
+  traceId: randomUUID(),
+  actorId: `synthetic-legacy-user-${userId}`,
+  channelId: "web",
+  agentId: "synthetic-legacy-agent",
+  conversationId: `legacy-v2-conversation-${userId}`,
+  executionId,
+  turnId: `legacy-v2-turn-${userId}`,
+  sessionGeneration: 1,
+  deliveryFence: 1,
+  input: { text: "synthetic legacy V2 input", attachments: [] },
+  selection: { schemaVersion: 1, modelOptionId: "model-option-primary", reasoningLevel: "high" },
+ };
+}
+function signedLegacyV2Request(request) {
+ const now = Date.now();
+ const claims = {
+  schemaVersion: 1,
+  issuer: "legacy-platform",
+  audience: ["runtime_host"],
+  issuedAt: new Date(now - 1_000).toISOString(),
+  expiresAt: new Date(now + 30_000).toISOString(),
+  grantId: `legacy-grant-${request.executionId}`,
+  agentId: request.agentId,
+  actorId: request.actorId,
+  channelId: request.channelId,
+  conversationId: request.conversationId,
+  turnId: request.turnId,
+  executionId: request.executionId,
+  sessionGeneration: request.sessionGeneration,
+  allowedCommands: ["turn.submit"],
+  attachments: [],
+  actionSetVersion: "messages-conformance-legacy",
+  actionIds: [],
+  traceId: request.traceId,
+ };
+ const header = Buffer.from(JSON.stringify({ alg: "EdDSA", kid: "legacy-key" })).toString("base64url");
+ const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
+ const input = `${header}.${payload}`;
+ return { ...request, grant: { schemaVersion: 1, format: "compact-jws", token: `${input}.${sign(null, Buffer.from(input), legacyPrivateKey).toString("base64url")}` } };
+}
+function legacyV3Request(userId) {
+ const executionId = `legacy-v3-${userId}`;
+ return {
+  schemaVersion: 3,
+  requestId: randomUUID(),
+  traceId: randomUUID(),
+  principal: { kind: "user", id: `synthetic-legacy-user-${userId}` },
+  channelId: "web",
+  agentId: "synthetic-legacy-agent",
+  conversationId: `legacy-v3-conversation-${userId}`,
+  executionId,
+  turnId: `legacy-v3-turn-${userId}`,
+  sessionGeneration: 1,
+  hostSessionRef: null,
+  operation: { kind: "execution", id: executionId, deliveryFence: 1, executionDeliveryFence: 1 },
+  input: { text: "synthetic legacy V3 input", attachments: [] },
+  selection: { schemaVersion: 1, modelOptionId: "model-option-primary", reasoningLevel: "high" },
+ };
+}
+async function legacyPolicyEvidence() {
+ const root = await realpath(await mkdtemp(join(tmpdir(), "messages-legacy-policy-")));
+ const close = [];
+ try {
+  const disabledStore = await FileRuntimeStore.open(join(root, "disabled-host.json"));
+  const disabledDriver = await FakeRuntimeDriver.open(join(root, "disabled-driver.json"));
+  const disabled = await RuntimeHost.open({
+   store: disabledStore,
+   driver: disabledDriver,
+   grantValidation: { expectedIssuer: "legacy-platform" },
+   allowLegacyBusiness: false,
+  });
+  close.push(async () => { await disabled.close(); await disabledStore.close(); });
+  const v2 = signedLegacyV2Request(legacyV2Request("policy"));
+  const v3 = signedV3Request(legacyV3Request("policy"), "turn.submit");
+  const verifiedV2 = verifyLegacyV1Grant(v2.grant);
+  const verifiedV3 = verifyLegacyGrant(v3.grant);
+  const before = await readFile(join(root, "disabled-host.json"), "utf8");
+  const reject = async (version, request, verification, invoke) => {
+   let error;
+   try { await invoke(request, verification); } catch (value) { error = value; }
+   const after = await readFile(join(root, "disabled-host.json"), "utf8");
+   const sideEffects = await disabledDriver.sideEffectCount();
+   const check = { requestSchemaVersion: request.schemaVersion, signatureVerified: true, policy: "allowLegacyBusiness=false", errorCode: error?.code ?? null, rejected: error?.code === "RUNTIME_GRANT_INVALID", zeroSideEffects: sideEffects === 0, stateUnchanged: after === before };
+   if (!check.rejected || !check.zeroSideEffects || !check.stateUnchanged) throw Error(`Legacy ${version} policy check failed`);
+   report.legacyVersionChecks[version].disabledRejected++;
+   report.legacyPolicyChecks[version].disabled = check;
+  };
+  await reject("v2", v2, verifiedV2, (request, verification) => disabled.submitTurnV2(request, verification));
+  await reject("v3", v3, verifiedV3, (request, verification) => disabled.submitTurnV3(request, verification));
+  const enabledV2Store = await FileRuntimeStore.open(join(root, "enabled-v2-host.json"));
+  const enabledV2Driver = await FakeRuntimeDriver.open(join(root, "enabled-v2-driver.json"));
+  const enabledV2 = await RuntimeHost.open({ store: enabledV2Store, driver: enabledV2Driver, grantValidation: { expectedIssuer: "legacy-platform" }, allowLegacyBusiness: true });
+  close.push(async () => { await enabledV2.close(); await enabledV2Store.close(); });
+  const acceptedV2 = await enabledV2.submitTurnV2(v2, verifiedV2);
+  const v2SideEffects = await enabledV2Driver.sideEffectCount();
+  if (acceptedV2.schemaVersion !== 2 || acceptedV2.result.outcome !== "accepted" || v2SideEffects !== 1) throw Error("Legacy V2 enabled comparison failed");
+  report.legacyVersionChecks.v2.enabledAccepted++;
+  report.legacyPolicyChecks.v2.enabled = { requestSchemaVersion: v2.schemaVersion, signatureVerified: true, policy: "allowLegacyBusiness=true", accepted: true, responseSchemaVersion: acceptedV2.schemaVersion, sideEffects: v2SideEffects };
+  const enabledV3Store = await FileRuntimeStore.open(join(root, "enabled-v3-host.json"));
+  const enabledV3Driver = await FakeRuntimeDriver.open(join(root, "enabled-v3-driver.json"));
+  const enabledV3 = await RuntimeHost.open({ store: enabledV3Store, driver: enabledV3Driver, grantValidation: { expectedIssuer: "legacy-platform" }, grantValidationV2: { expectedIssuer: "synthetic-platform", expectedWorkerId: "synthetic-worker" }, allowLegacyBusiness: true });
+  close.push(async () => { await enabledV3.close(); await enabledV3Store.close(); });
+  const acceptedV3 = await enabledV3.submitTurnV3(v3, verifiedV3);
+  const v3SideEffects = await enabledV3Driver.sideEffectCount();
+  if (acceptedV3.schemaVersion !== 3 || acceptedV3.result.outcome !== "accepted" || v3SideEffects !== 1) throw Error("Legacy V3 enabled comparison failed");
+  report.legacyVersionChecks.v3.enabledAccepted++;
+  report.legacyPolicyChecks.v3.enabled = { requestSchemaVersion: v3.schemaVersion, signatureVerified: true, policy: "allowLegacyBusiness=true", accepted: true, responseSchemaVersion: acceptedV3.schemaVersion, sideEffects: v3SideEffects };
+ } finally {
+  await Promise.allSettled(close.reverse().map(work => work()));
+  await rm(root, { recursive: true, force: true });
+ }
 }
 async function signedV4Request(request, command) {
  const unsigned = { ...request, grant: { schemaVersion: 4, format: "runtime-execution-jws", token: "pending.pending.pending" } };
@@ -418,8 +537,10 @@ async function turn(user, text) {
   throw error;
  }
 }
-let stage = "positive-turns";
+let stage = "legacy-policy";
 try {
+ await legacyPolicyEvidence();
+ stage = "positive-turns";
  await openRuntime();
  for (const user of users) {
   const pathInstruction = separateNegative
@@ -490,7 +611,8 @@ try {
   }
  }
  stage = "result";
- report.passed = report.v4ExecutionKeyChecks === (separateNegative ? 6 : 4) && report.privateKeyDeliveryChecks > 0 && report.legacyStaticKeyRejections === 2 && report.replayFenceChecks >= report.v4ExecutionKeyChecks && report.modelAuthorizationChecks > 0 && report.toolAuthorizationChecks > 0 && report.checks.length === (separateNegative ? 6 : 4) && report.checks.every(check => check.passed);
+ const legacyVersionsPassed = Object.values(report.legacyVersionChecks).every(check => check.disabledRejected === 1 && check.enabledAccepted === 1);
+ report.passed = legacyVersionsPassed && report.v4ExecutionKeyChecks === (separateNegative ? 6 : 4) && report.privateKeyDeliveryChecks > 0 && report.legacyStaticKeyRejections === 2 && report.replayFenceChecks >= report.v4ExecutionKeyChecks && report.modelAuthorizationChecks > 0 && report.toolAuthorizationChecks > 0 && report.checks.length === (separateNegative ? 6 : 4) && report.checks.every(check => check.passed);
 } catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_FAILED"; report.failureStage = stage; }
 finally {
  clearTimeout(keepAlive);
