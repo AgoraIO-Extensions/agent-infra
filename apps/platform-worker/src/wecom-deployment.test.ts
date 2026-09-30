@@ -92,7 +92,9 @@ it("uses structured redacted default diagnostics and keeps polling if logging fa
 			.mockResolvedValue(false),
 		close: vi.fn(async () => {}),
 	};
-	const running = startPlatformWecomPollingWorkerV1(worker, { intervalMs: 100 });
+	const running = startPlatformWecomPollingWorkerV1(worker, {
+		intervalMs: 100,
+	});
 	try {
 		await vi.advanceTimersByTimeAsync(100);
 		expect(output.mock.calls.map(([line]) => JSON.parse(line))).toEqual([
