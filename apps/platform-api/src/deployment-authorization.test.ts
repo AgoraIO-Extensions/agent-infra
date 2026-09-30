@@ -1,5 +1,14 @@
+import {
+	type AgentManagementStateV1,
+	createAgentConfigurationUseCaseV1,
+} from "@agent-infra/platform-core";
+import {
+	FakeAgentConfigurationAdmissionsV1,
+	FakeAgentConfigurationTransactionV1,
+} from "@agent-infra/platform-core/testing";
 import { describe, expect, it, vi } from "vitest";
 
+import { agentConfigurationConformanceRecordV1 } from "../../../packages/platform-core/src/agent-configuration.conformance.ts";
 import { createDeploymentAuthorizationAdmission } from "./deployment-authorization.js";
 import {
 	allocateDeploymentApplicationIds,
@@ -240,6 +249,109 @@ describe("deployment authorization admission", () => {
 			},
 		);
 		expect(loadApplicationIds).toHaveBeenCalledOnce();
+	});
+
+	it("uses current application authority for existing Agent access updates", async () => {
+		const management: AgentManagementStateV1 = {
+			schemaVersion: 1,
+			applicationId: "application_01",
+			agentId: request.agentId,
+			applicantId: identity.userId,
+			status: "available",
+			revision: 1,
+			approvalRevision: 1,
+			decisionReason: null,
+			serviceAvailability: "ready",
+			desiredState: "running",
+			workloadRevision: 1,
+			fence: 1,
+			ownerIds: [identity.userId],
+			availability: [],
+			failureCode: null,
+		};
+		await scope.requestScope(
+			new Request(
+				"https://platform.test/api/v2/agents/agent_01/configuration",
+				{ method: "PUT" },
+			),
+			async () => {
+				for (const removedDuringAdmission of [false, true]) {
+					const loadApplicationIds = vi
+						.fn<() => Promise<readonly string[]>>()
+						.mockResolvedValue(["application-active"]);
+					if (removedDuringAdmission)
+						loadApplicationIds
+							.mockResolvedValueOnce(["application-active"])
+							.mockResolvedValue([]);
+					const admission = createDeploymentAuthorizationAdmission({
+						identityScope: scope,
+						configurationQuery: {
+							readAuthority: vi.fn().mockResolvedValue({
+								outcome: "found",
+								authorizationRevision: "agent_authority_01",
+								management,
+							}),
+						},
+						loadAuthorityContext: async () => authorityContext,
+						loadApplicationIds,
+					});
+					const transaction = new FakeAgentConfigurationTransactionV1(
+						agentConfigurationConformanceRecordV1,
+						{
+							managementState: management,
+							authorizationRevision: "agent_authority_01",
+						},
+					);
+					const admissions = new FakeAgentConfigurationAdmissionsV1({
+						authorizations: [],
+						models: [],
+						modelCredentials: [],
+					});
+					const configuration = createAgentConfigurationUseCaseV1({
+						transaction,
+						authorizationAdmission: admission,
+						imageAdmission: admissions,
+						modelAdmission: admissions,
+						secretAdmission: admissions,
+						channelAdmission: admissions,
+					});
+					const update = configuration.update(
+						{
+							schemaVersion: 2,
+							agentId: request.agentId,
+							idempotencyKey: "update-application-target",
+							requestId: request.requestId,
+							traceId: request.traceId,
+							changes: {
+								availability: [
+									{ kind: "application", applicationId: "application-active" },
+								],
+							},
+						},
+						{
+							schemaVersion: 1,
+							actorId: identity.userId,
+							rawRequestDigest: "a".repeat(64),
+						},
+					);
+					if (removedDuringAdmission) {
+						await expect(update).rejects.toMatchObject({
+							code: "not_admitted",
+						});
+						expect(transaction.snapshot().commitCount).toBe(0);
+					} else {
+						await expect(update).resolves.toMatchObject({
+							changedFields: ["availability"],
+						});
+						expect(
+							transaction.snapshot().managementState?.availability,
+						).toEqual([
+							{ kind: "application", applicationId: "application-active" },
+						]);
+					}
+				}
+			},
+		);
 	});
 
 	it("fails closed when the current directory cannot be loaded", async () => {

@@ -95,7 +95,7 @@ export function createDeploymentAuthorizationAdmission(input: {
 						organizationIds: identity.organizationIds,
 						isAdministrator: identity.roles.includes("system_admin"),
 					},
-					authorityContext,
+					authorityContext: currentAuthorityContext,
 				},
 			};
 		},
