@@ -53,8 +53,11 @@ export function isCurrentApiCreationAuthorizedV1(input: {
 		readonly scopes: unknown;
 		readonly expiresAt: Date | null;
 		readonly revokedAt: Date | null;
+		readonly recipientUserId: string | null;
 	};
 	readonly now: Date | null;
+	readonly platformDisabled: boolean;
+	readonly deliveryRevision: string | null;
 	readonly user: Pick<
 		CurrentTaskUserV1,
 		"userId" | "accountStatus" | "authorizationRevision"
@@ -69,6 +72,7 @@ export function isCurrentApiCreationAuthorizedV1(input: {
 	if (
 		!credential ||
 		!input.now ||
+		input.platformDisabled ||
 		credential.principalType !== principal.kind ||
 		credential.principalId !== principal.id ||
 		!Array.isArray(credential.scopes) ||
@@ -87,7 +91,11 @@ export function isCurrentApiCreationAuthorizedV1(input: {
 	return (
 		input.application?.status === "active" &&
 		input.application.responsibleUserId === input.applicantId &&
-		input.application.authorizationRevision === input.identityRevision
+		input.application.authorizationRevision === input.identityRevision &&
+		input.deliveryRevision === input.identityRevision &&
+		credential.recipientUserId !== null &&
+		input.user?.userId === credential.recipientUserId &&
+		input.user.accountStatus === "active"
 	);
 }
 

@@ -189,10 +189,15 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			const account = await input.directory.currentByUserId(id);
 			if (!account) return null;
 			const identity = await current(account);
+			const platformDisabled = await input.isPlatformDisabled(id);
+			if (typeof platformDisabled !== "boolean")
+				throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
 			return {
 				schemaVersion: 1 as const,
 				userId: identity.userId,
-				accountStatus: identity.accountStatus,
+				accountStatus: platformDisabled
+					? ("disabled" as const)
+					: identity.accountStatus,
 				organizationIds: identity.organizationIds,
 				authorizationRevision: identity.authorizationRevision,
 			};

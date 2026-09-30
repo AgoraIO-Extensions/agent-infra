@@ -11,7 +11,7 @@ import {
 	parseCurrentTaskUserV1,
 	snapshotApplicationFoundationWritePlanV1,
 } from "@agent-infra/platform-core";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
@@ -24,11 +24,14 @@ import {
 	agentOwners,
 	agentPrincipalGrants,
 	agents,
+	apiCredentialDeliveryGrants,
 	auditEvents,
 	idempotencyRecords,
+	ldapIdentityIds,
 	outboxItems,
 	platformApiCredentials,
 	platformApplications,
+	platformUserDisables,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
 
@@ -326,6 +329,7 @@ async function requireCurrentApiCreationAuthority(
 			scopes: platformApiCredentials.scopes,
 			expiresAt: platformApiCredentials.expiresAt,
 			revokedAt: platformApiCredentials.revokedAt,
+			recipientUserId: platformApiCredentials.recipientUserId,
 		})
 		.from(platformApiCredentials)
 		.where(eq(platformApiCredentials.id, input.apiAuthority.credentialId))
@@ -336,13 +340,30 @@ async function requireCurrentApiCreationAuthority(
 		.from(platformApiCredentials)
 		.where(eq(platformApiCredentials.id, input.apiAuthority.credentialId))
 		.limit(1);
+	const currentUserId =
+		input.principal.kind === "user"
+			? input.principal.id
+			: credential?.recipientUserId;
 	let currentUser: ReturnType<typeof parseCurrentTaskUserV1> | null = null;
-	if (input.principal.kind === "user") {
+	let platformDisabled = true;
+	if (currentUserId) {
+		// Platform disable locks the mapped identity row before writing its state.
+		const [mapped] = await database
+			.select({ userId: ldapIdentityIds.userId })
+			.from(ldapIdentityIds)
+			.where(eq(ldapIdentityIds.userId, currentUserId))
+			.limit(1)
+			.for("share");
+		if (!mapped) throw new ApplicationFoundationError("not_authorized");
+		const [disabled] = await database
+			.select({ userId: platformUserDisables.userId })
+			.from(platformUserDisables)
+			.where(eq(platformUserDisables.userId, currentUserId))
+			.limit(1);
+		platformDisabled = disabled !== undefined;
 		try {
 			if (!resolveUser) throw new Error("Current user resolver is unavailable");
-			currentUser = parseCurrentTaskUserV1(
-				await resolveUser(input.principal.id),
-			);
+			currentUser = parseCurrentTaskUserV1(await resolveUser(currentUserId));
 		} catch {
 			throw new ApplicationFoundationError("not_authorized");
 		}
@@ -352,6 +373,7 @@ async function requireCurrentApiCreationAuthority(
 		responsibleUserId: string;
 		authorizationRevision: string;
 	} | null = null;
+	let deliveryRevision: string | null = null;
 	if (input.principal.kind === "application") {
 		const [currentApplication] = await database
 			.select({
@@ -364,6 +386,28 @@ async function requireCurrentApiCreationAuthority(
 			.limit(1)
 			.for("share");
 		application = currentApplication ?? null;
+		if (credential?.recipientUserId) {
+			const [delivery] = await database
+				.select({
+					authorizationRevision:
+						apiCredentialDeliveryGrants.authorizationRevision,
+				})
+				.from(apiCredentialDeliveryGrants)
+				.where(
+					and(
+						eq(apiCredentialDeliveryGrants.applicationId, input.principal.id),
+						eq(apiCredentialDeliveryGrants.principalType, "user"),
+						eq(
+							apiCredentialDeliveryGrants.principalId,
+							credential.recipientUserId,
+						),
+						isNull(apiCredentialDeliveryGrants.revokedAt),
+					),
+				)
+				.limit(1)
+				.for("share");
+			deliveryRevision = delivery?.authorizationRevision ?? null;
+		}
 	}
 	if (
 		!isCurrentApiCreationAuthorizedV1({
@@ -372,6 +416,8 @@ async function requireCurrentApiCreationAuthority(
 			identityRevision: input.apiAuthority.identityRevision,
 			credential: credential ?? null,
 			now: clock?.now ?? null,
+			platformDisabled,
+			deliveryRevision,
 			user: currentUser,
 			application,
 		})

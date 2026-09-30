@@ -107,6 +107,21 @@ function fixture(sessions = memorySessions()) {
 }
 
 describe("LDAP browser adapter", () => {
+	it("reports Platform disable in current API user resolution", async () => {
+		const state = fixture();
+		await expect(
+			state.adapter.identityAdapter.resolveUser?.(account.userId),
+		).resolves.toMatchObject({ accountStatus: "active" });
+		state.setDisabled(true);
+		await expect(
+			state.adapter.identityAdapter.resolveUser?.(account.userId),
+		).resolves.toMatchObject({ accountStatus: "disabled" });
+		state.isPlatformDisabled.mockRejectedValueOnce(new Error("unavailable"));
+		await expect(
+			state.adapter.identityAdapter.resolveUser?.(account.userId),
+		).rejects.toThrow("unavailable");
+	});
+
 	it("hydrates roles only for a current active LDAP and Platform user", async () => {
 		const state = fixture();
 		await expect(

@@ -106,8 +106,11 @@ describe("current API creation authority", () => {
 				scopes: ["agent:create"],
 				expiresAt: null,
 				revokedAt: null,
+				recipientUserId: null,
 			},
 			now,
+			platformDisabled: false,
+			deliveryRevision: null,
 			user: {
 				userId: "user-1",
 				accountStatus: "active" as const,
@@ -121,6 +124,7 @@ describe("current API creation authority", () => {
 			{ credential: { ...input.credential, revokedAt: now } },
 			{ credential: { ...input.credential, expiresAt: now } },
 			{ user: { ...input.user, accountStatus: "disabled" as const } },
+			{ platformDisabled: true },
 			{ identityRevision: "stale-revision" },
 		])
 			expect(isCurrentApiCreationAuthorizedV1({ ...input, ...denied })).toBe(
@@ -139,9 +143,16 @@ describe("current API creation authority", () => {
 				scopes: ["agent:create"],
 				expiresAt: null,
 				revokedAt: null,
+				recipientUserId: "recipient-1",
 			},
 			now: new Date(serverInstant),
-			user: null,
+			platformDisabled: false,
+			deliveryRevision: "revision-1",
+			user: {
+				userId: "recipient-1",
+				accountStatus: "active" as const,
+				authorizationRevision: "recipient-revision-1",
+			},
 			application: {
 				status: "active",
 				responsibleUserId: "user-1",
@@ -154,6 +165,9 @@ describe("current API creation authority", () => {
 			{ application: { ...input.application, responsibleUserId: "user-2" } },
 			{ application: { ...input.application, authorizationRevision: "old" } },
 			{ credential: { ...input.credential, principalId: "application-2" } },
+			{ deliveryRevision: null },
+			{ user: { ...input.user, accountStatus: "disabled" as const } },
+			{ platformDisabled: true },
 		])
 			expect(isCurrentApiCreationAuthorizedV1({ ...input, ...denied })).toBe(
 				false,

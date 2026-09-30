@@ -28,6 +28,7 @@ import {
 
 const triggerName = "application_foundation_injected_failure";
 const functionName = "platform.application_foundation_injected_failure";
+const apiRecipientUserId = "3f183a1b-a865-452b-88c9-a47159072b68";
 type PostgresClient = ReturnType<typeof postgres>;
 const builtStore: typeof import("./index.ts") = await import(
 	new URL("../dist/index.mjs", import.meta.url).href
@@ -211,20 +212,46 @@ async function resetDatabase(): Promise<void> {
 		platform.idempotency_records, platform.agent_availability,
 		platform.agent_owners, platform.agent_configuration_revisions,
 		platform.agent_applications, platform.agents,
+		platform.platform_user_disables,
+		platform.ldap_identity_ids,
 		platform.platform_api_credentials, platform.platform_applications cascade`;
 }
 
 async function seedApiCreationAuthority() {
 	await adminClient`
+		insert into platform.ldap_identity_ids (issuer, uid, user_id)
+		values ('fixture', 'api-recipient', ${apiRecipientUserId})
+	`;
+	await adminClient`
 		insert into platform.platform_applications
 			(id, name, responsible_user_id, status, authorization_revision)
-		values ('application-caller', 'Caller', ${applicationFoundationActorContextV1.userId}, 'active', 'app-7')
+		values ('application-caller', 'Caller', ${apiRecipientUserId}, 'active', 'app-7')
 	`;
 	await adminClient`
 		insert into platform.platform_api_credentials
-			(id, principal_type, principal_id, credential_hash, scopes)
-		values ('credential-caller', 'application', 'application-caller', ${"a".repeat(64)}, ${adminClient.json(["agent:create"])})
+			(id, principal_type, principal_id, recipient_user_id, credential_hash, scopes)
+		values ('credential-caller', 'application', 'application-caller',
+			${apiRecipientUserId}, ${"a".repeat(64)},
+			${adminClient.json(["agent:create"])})
 	`;
+	await adminClient`
+		insert into platform.api_credential_delivery_grants
+			(application_id, principal_type, principal_id, authorization_revision)
+		values ('application-caller', 'user',
+			${apiRecipientUserId}, 'app-7')
+	`;
+}
+
+async function resolveApiCreationRecipient(userId: string) {
+	return userId === apiRecipientUserId
+		? {
+				schemaVersion: 1 as const,
+				userId,
+				accountStatus: "active" as const,
+				organizationIds: [],
+				authorizationRevision: "user-revision-1",
+			}
+		: null;
 }
 
 beforeAll(async () => {
@@ -456,6 +483,7 @@ describe("PostgreSQL application foundation transaction", () => {
 		const submission =
 			new builtStore.PostgresApplicationFoundationTransactionV1({
 				databaseUrl,
+				resolveUser: resolveApiCreationRecipient,
 			});
 		try {
 			const foundation = createApplicationFoundationUseCaseV1({
@@ -464,6 +492,7 @@ describe("PostgreSQL application foundation transaction", () => {
 			});
 			const actor = {
 				...applicationFoundationActorContextV1,
+				userId: apiRecipientUserId,
 				principal: { kind: "application" as const, id: "application-caller" },
 				creationMode: "api" as const,
 				apiAuthority: {
@@ -528,13 +557,17 @@ describe("PostgreSQL application foundation transaction", () => {
 		async (_label, change) => {
 			await resetDatabase();
 			await adminClient`
+				insert into platform.ldap_identity_ids (issuer, uid, user_id)
+				values ('fixture', 'api-recipient', ${apiRecipientUserId})
+			`;
+			await adminClient`
 				insert into platform.platform_api_credentials
 					(id, principal_type, principal_id, credential_hash, scopes)
-				values ('credential-user-caller', 'user', 'owner_01', ${"b".repeat(64)}, ${adminClient.json(["agent:create"])})
+				values ('credential-user-caller', 'user', ${apiRecipientUserId}, ${"b".repeat(64)}, ${adminClient.json(["agent:create"])})
 			`;
 			let currentUser: Record<string, unknown> = {
 				schemaVersion: 1,
-				userId: "owner_01",
+				userId: apiRecipientUserId,
 				accountStatus: "active",
 				organizationIds: [],
 				authorizationRevision: "user-revision-1",
@@ -565,7 +598,8 @@ describe("PostgreSQL application foundation transaction", () => {
 						},
 						{
 							...applicationFoundationActorContextV1,
-							principal: { kind: "user", id: "owner_01" },
+							userId: apiRecipientUserId,
+							principal: { kind: "user", id: apiRecipientUserId },
 							creationMode: "api",
 							apiAuthority: {
 								credentialId: "credential-user-caller",
@@ -590,9 +624,11 @@ describe("PostgreSQL application foundation transaction", () => {
 		const submission =
 			new builtStore.PostgresApplicationFoundationTransactionV1({
 				databaseUrl,
+				resolveUser: resolveApiCreationRecipient,
 			});
 		const actor = {
 			...applicationFoundationActorContextV1,
+			userId: apiRecipientUserId,
 			principal: { kind: "application" as const, id: "application-caller" },
 			creationMode: "api" as const,
 			apiAuthority: {
@@ -689,14 +725,25 @@ describe("PostgreSQL application foundation transaction", () => {
 		"credential principal mismatch",
 		"scope narrowed",
 		"application disabled",
+		"recipient disabled",
+		"delivery revoked",
+		"platform disabled",
+		"recipient unmapped",
 	])(
 		"rejects API creation when %s after admission but before commit",
 		async (change) => {
 			await resetDatabase();
 			await seedApiCreationAuthority();
+			let recipientStatus: "active" | "disabled" = "active";
 			const submission =
 				new builtStore.PostgresApplicationFoundationTransactionV1({
 					databaseUrl,
+					resolveUser: async (userId) => {
+						const recipient = await resolveApiCreationRecipient(userId);
+						return (
+							recipient && { ...recipient, accountStatus: recipientStatus }
+						);
+					},
 				});
 			try {
 				const foundation = createApplicationFoundationUseCaseV1({
@@ -722,6 +769,24 @@ describe("PostgreSQL application foundation transaction", () => {
 								set scopes = ${adminClient.json(["agent:read"])}
 								where id = 'credential-caller'
 							`;
+							else if (change === "recipient disabled")
+								recipientStatus = "disabled";
+							else if (change === "delivery revoked")
+								await adminClient`
+								update platform.api_credential_delivery_grants
+								set revoked_at = clock_timestamp()
+								where application_id = 'application-caller'
+								`;
+							else if (change === "platform disabled")
+								await adminClient`
+								insert into platform.platform_user_disables (user_id, disabled_by)
+								values (${apiRecipientUserId}, 'administrator')
+								`;
+							else if (change === "recipient unmapped")
+								await adminClient`
+								delete from platform.ldap_identity_ids
+								where user_id = ${apiRecipientUserId}
+								`;
 							else
 								await adminClient`
 								update platform.platform_applications
@@ -737,6 +802,7 @@ describe("PostgreSQL application foundation transaction", () => {
 						applicationFoundationCommandV1,
 						{
 							...applicationFoundationActorContextV1,
+							userId: apiRecipientUserId,
 							principal: { kind: "application", id: "application-caller" },
 							creationMode: "api",
 							apiAuthority: {
