@@ -48,6 +48,12 @@ interface LoadedPlatformApiAssembly extends PlatformApiAssembly {
 	browserAuth?: BrowserAuthHandler;
 }
 
+const backgroundTaskWaiters = new WeakMap<object, () => Promise<void>>();
+
+async function waitForPlatformApiBackgroundTasks(server: object) {
+	await backgroundTaskWaiters.get(server)?.();
+}
+
 function runtimePort(value: string | undefined, fallback: number) {
 	const port = Number(value ?? fallback);
 	if (!Number.isInteger(port) || port < 1 || port > 65_535) {
@@ -100,30 +106,47 @@ export function startPlatformApi(options: StartOptions) {
 	const audit = options.dependencies.tasks?.audit;
 	if (audit) {
 		server.once("listening", () => {
-			let recovering = false;
-			const recover = async () => {
-				if (recovering) return;
-				recovering = true;
-				try {
-					await audit.recoverSubscriptions();
-				} catch {
-					log(
-						JSON.stringify({
-							service: platformApiService,
-							status: "task_audit_recovery_failed",
-						}),
-					);
-				} finally {
-					recovering = false;
-				}
+			let recovery: Promise<void> | undefined;
+			let stopped = false;
+			const startRecovery = () => {
+				if (stopped || recovery) return;
+				const current = (async () => {
+					try {
+						await audit.recoverSubscriptions();
+					} catch {
+						log(
+							JSON.stringify({
+								service: platformApiService,
+								status: "task_audit_recovery_failed",
+							}),
+						);
+					}
+				})();
+				recovery = current;
+				void current.then(
+					() => {
+						if (recovery === current) recovery = undefined;
+					},
+					() => {
+						if (recovery === current) recovery = undefined;
+					},
+				);
 			};
 			const timer = setInterval(() => {
-				void recover();
+				startRecovery();
 			}, 5000);
 			timer.unref();
-			server.once("close", () => clearInterval(timer));
-			server.once("error", () => clearInterval(timer));
-			void recover();
+			const stopRecovery = () => {
+				stopped = true;
+				clearInterval(timer);
+			};
+			server.once("close", stopRecovery);
+			server.once("error", stopRecovery);
+			backgroundTaskWaiters.set(server, async () => {
+				stopRecovery();
+				await recovery;
+			});
+			startRecovery();
 		});
 	}
 	return server;
@@ -229,6 +252,11 @@ export async function startPlatformApiFromDeployment(
 			await new Promise<void>((resolve) => server?.close(() => resolve()));
 		}
 		try {
+			if (server) await waitForPlatformApiBackgroundTasks(server);
+		} catch {
+			// Continue closing the deployment after a background recovery failure.
+		}
+		try {
 			await assembly.close();
 		} finally {
 			await observability?.close();
@@ -255,6 +283,11 @@ export function createPlatformApiShutdown(
 				await new Promise<void>((resolve, reject) =>
 					running.server.close((error) => (error ? reject(error) : resolve())),
 				);
+			} catch (error) {
+				failures.push(error);
+			}
+			try {
+				await waitForPlatformApiBackgroundTasks(running.server);
 			} catch (error) {
 				failures.push(error);
 			}

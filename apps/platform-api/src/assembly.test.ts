@@ -273,6 +273,75 @@ describe("Platform API production assembly", () => {
 		expect(lines.some((line) => line.includes('"stage":"http"'))).toBe(true);
 	});
 
+	it("waits for audit recovery before closing deployment assembly", async () => {
+		const loaded = await loadPlatformApiAssembly(
+			new URL(
+				"../../../tests/fixtures/platform-api-deployment.mjs",
+				import.meta.url,
+			).href,
+		);
+		const audit = loaded.dependencies.tasks?.audit;
+		if (!audit) throw new Error("Platform API task audit is unavailable");
+		let releaseRecovery!: () => void;
+		let markRecoveryStarted!: () => void;
+		const recoveryStarted = new Promise<void>((resolve) => {
+			markRecoveryStarted = resolve;
+		});
+		const recoveryRelease = new Promise<void>((resolve) => {
+			releaseRecovery = resolve;
+		});
+		vi.spyOn(audit, "recoverSubscriptions").mockImplementation(async () => {
+			markRecoveryStarted();
+			await recoveryRelease;
+			return 0;
+		});
+		const server = startPlatformApi({
+			dependencies: loaded.dependencies,
+			browserAuth: loaded.browserAuth,
+			log: () => {},
+			port: 0,
+		});
+		const calls: string[] = [];
+		const close = vi.fn(async () => {
+			calls.push("assembly");
+		});
+		const assembly = {
+			close,
+		} as unknown as Awaited<
+			ReturnType<typeof startPlatformApiFromDeployment>
+		>["assembly"];
+		const observability = {
+			close: vi.fn(async () => {
+				calls.push("observability");
+			}),
+		} as unknown as Awaited<
+			ReturnType<typeof startPlatformApiFromDeployment>
+		>["observability"];
+		let stopping: Promise<void> | undefined;
+		try {
+			if (!server.listening) await once(server, "listening");
+			await recoveryStarted;
+			const shutdown = createPlatformApiShutdown({
+				assembly,
+				server,
+				observability,
+			});
+			stopping = shutdown();
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(close).not.toHaveBeenCalled();
+			releaseRecovery();
+			await stopping;
+			expect(close).toHaveBeenCalledOnce();
+			expect(calls).toEqual(["assembly", "observability"]);
+		} finally {
+			releaseRecovery();
+			await stopping?.catch(() => undefined);
+			if (server.listening)
+				await new Promise<void>((resolve) => server.close(() => resolve()));
+			await loaded.close();
+		}
+	});
+
 	it("closes deployment resources once in server-first order", async () => {
 		const calls: string[] = [];
 		const assembly = {
