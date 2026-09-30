@@ -143,6 +143,13 @@ export function isAgentOwnerV1(
 	return state.ownerIds.includes(userId);
 }
 
+export function isAdministratorAgentReadAllowedV1(
+	actorInput: AgentManagementActorContextV1,
+): boolean {
+	const actor = parseActorContext(actorInput);
+	return actor.accountStatus === "active" && actor.isAdministrator;
+}
+
 export function isAgentAccessAllowedV1(
 	state: AgentManagementStateV1,
 	actor: AgentManagementActorContextV1,
