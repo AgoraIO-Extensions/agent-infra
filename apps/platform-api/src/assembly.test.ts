@@ -50,6 +50,44 @@ describe("Platform API production assembly", () => {
 		).rejects.toThrow("Platform API deployment module is invalid");
 	});
 
+	it.each([
+		["factory", false],
+		["factory", true],
+		["assembly", false],
+		["assembly", true],
+	] as const)(
+		"closes browser resources on %s failure when cleanup rejects=%s",
+		async (stage, cleanupRejects) => {
+			const source = `
+				export let closeCalls = 0;
+				export const browserAuth = {
+					handleRequest() { return null; },
+					async close() {
+						closeCalls++;
+						${cleanupRejects ? 'throw new Error("private cleanup sentinel");' : ""}
+					}
+				};
+				export function createPlatformApiAssemblyInput() {
+					${stage === "factory" ? 'throw new Error("private dependency sentinel");' : "return { wecomApplicationSetup: {} };"}
+				}
+			`;
+			const moduleSpecifier = `data:text/javascript,${encodeURIComponent(source)}`;
+			const deployment = await import(moduleSpecifier);
+			const log = vi.fn();
+
+			await expect(
+				startPlatformApiFromDeployment({ moduleSpecifier, port: 0, log }),
+			).rejects.toMatchObject({
+				message:
+					stage === "factory"
+						? "Platform API deployment dependencies are unavailable"
+						: "WeCom application setup requires encryption keys",
+			});
+			expect(deployment.closeCalls).toBe(1);
+			expect(log).not.toHaveBeenCalled();
+		},
+	);
+
 	it("registers the complete app before starting the Node server", async () => {
 		const identity = {
 			schemaVersion: 1 as const,

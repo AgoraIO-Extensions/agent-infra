@@ -122,13 +122,23 @@ export async function loadPlatformApiAssembly(
 	} catch {
 		throw new Error("Platform API deployment module is invalid");
 	}
-	let input: PlatformApiAssemblyInput;
+	let assembly: PlatformApiAssembly;
 	try {
-		input = await deployment.createPlatformApiAssemblyInput();
-	} catch {
-		throw new Error("Platform API deployment dependencies are unavailable");
+		let input: PlatformApiAssemblyInput;
+		try {
+			input = await deployment.createPlatformApiAssemblyInput();
+		} catch {
+			throw new Error("Platform API deployment dependencies are unavailable");
+		}
+		assembly = assemblePlatformApi(input);
+	} catch (error) {
+		try {
+			await deployment.browserAuth?.close?.();
+		} catch {
+			// Keep the startup failure; cleanup errors may contain private material.
+		}
+		throw error;
 	}
-	const assembly = assemblePlatformApi(input);
 	return {
 		dependencies: assembly.dependencies,
 		browserAuth: deployment.browserAuth,
