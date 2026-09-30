@@ -136,6 +136,8 @@ describe("standard contract artifacts", () => {
 			"/api/v2/conversations/{conversationId}/events",
 			"/api/v2/conversations/{conversationId}/executions/{executionId}",
 			"/api/v2/deployment/configuration",
+			"/api/v2/me/api-credentials",
+			"/api/v2/me/api-credentials/{credentialId}",
 			"/api/v2/me/conversations/recent",
 		]);
 		const recent =

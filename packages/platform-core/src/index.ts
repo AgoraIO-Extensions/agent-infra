@@ -86,6 +86,7 @@ export {
 } from "./file-limits.js";
 export * from "./file-reconciliation.js";
 export * from "./idempotency.js";
+export * from "./personal-api-credentials.js";
 export * from "./secret-activation.js";
 export * from "./secret-key-rotation.js";
 export type {

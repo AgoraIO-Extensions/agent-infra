@@ -32,6 +32,131 @@ function compare(current: string, previous = "base") {
 }
 
 describe("contract compatibility command", () => {
+	it("admits only the pinned personal credential contract and rejects security/material regressions", async () => {
+		const artifact = fileURLToPath(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v2.openapi.json",
+				import.meta.url,
+			),
+		);
+		const current = JSON.parse(await readFile(artifact, "utf8"));
+		const previous = structuredClone(current);
+		for (const path of [
+			"/api/v2/me/api-credentials",
+			"/api/v2/me/api-credentials/{credentialId}",
+		])
+			delete previous.paths[path];
+		for (const name of [
+			"PersonalApiCredentialIssueRequestV1",
+			"PersonalApiCredentialIssueResponseV1",
+			"PersonalApiCredentialMetadataV1",
+			"PersonalApiCredentialRevokeResponseV1",
+		])
+			delete previous.components.schemas[name];
+		delete previous.components.securitySchemes;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-personal-credential-compat-"),
+		);
+		const baseline = resolve(directory, "previous.json");
+		try {
+			await writeFile(baseline, JSON.stringify(previous));
+			expect(comparePaths(artifact, baseline).status).toBe(0);
+			const mutations: Record<string, (value: typeof current) => void> = {
+				anonymous: (value) => {
+					value.paths["/api/v2/me/api-credentials"].post.security = [];
+				},
+				bearerGovernance: (value) => {
+					value.paths[
+						"/api/v2/me/api-credentials/{credentialId}"
+					].delete.security = [{ PersonalApiCredential: [] }];
+				},
+				hashReadback: (value) => {
+					value.components.schemas.PersonalApiCredentialMetadataV1.properties.credentialHash =
+						{ type: "string" };
+				},
+				emptyScopes: (value) => {
+					value.components.schemas.PersonalApiCredentialIssueRequestV1.properties.scopes.minItems = 0;
+				},
+				materialReplay: (value) => {
+					value.paths["/api/v2/me/api-credentials"].post.responses["200"] =
+						value.paths["/api/v2/me/api-credentials"].post.responses["201"];
+				},
+				unexpectedPatch: (value) => {
+					value.paths["/api/v2/me/api-credentials/{credentialId}"].patch =
+						value.paths["/api/v2/me/api-credentials/{credentialId}"].delete;
+				},
+				differentCookie: (value) => {
+					value.components.securitySchemes.PlatformSession.name =
+						"caller_session";
+				},
+				unrelatedOperation: (value) => {
+					value.paths["/unexpected"] =
+						value.paths["/api/v2/me/api-credentials"];
+				},
+				oldAdministratorSecurity: (value) => {
+					value.paths["/api/v2/admin/agents"].get.security = [];
+				},
+				oldMetadataResponse: (value) => {
+					value.components.schemas.AgentProjectionV2.properties.rawCredential =
+						{ type: "string" };
+				},
+				globalSecurity: (value) => {
+					value.security = [{ PlatformSession: [] }];
+				},
+				anonymousAgentRead: (value) => {
+					value.paths["/api/v2/agents"].get.security = [{}];
+				},
+				bearerOwnerOverride: (value) => {
+					value.paths["/api/v2/agents"].get.parameters.find(
+						({ name }: { name: string }) => name === "scope",
+					).schema = { type: "string" };
+				},
+				bearerSchemeChanged: (value) => {
+					value.components.securitySchemes.platformApiCredential = {
+						type: "http",
+						scheme: "basic",
+					};
+				},
+				unrelatedBearerOperation: (value) => {
+					value.paths["/api/v2/admin/agents"].get.security = [
+						{ platformApiCredential: [] },
+					];
+				},
+			};
+			for (const [name, mutate] of Object.entries(mutations)) {
+				const candidate = structuredClone(current);
+				mutate(candidate);
+				const path = resolve(directory, `${name}.json`);
+				await writeFile(path, JSON.stringify(candidate));
+				const result = comparePaths(path, baseline);
+				expect(result.status, name).toBe(1);
+				expect(result.stderr, name).toContain("changed OpenAPI contract");
+			}
+			for (const baselineKind of ["empty", "existingCookie"]) {
+				const existing = structuredClone(previous);
+				existing.components.securitySchemes = {};
+				if (baselineKind !== "empty")
+					existing.components.securitySchemes.PlatformSession = structuredClone(
+						current.components.securitySchemes.PlatformSession,
+					);
+				const path = resolve(directory, `${baselineKind}-previous.json`);
+				await writeFile(path, JSON.stringify(existing));
+				expect(comparePaths(artifact, path).status, baselineKind).toBe(0);
+				for (const [name, mutate] of Object.entries(mutations)) {
+					const candidate = structuredClone(current);
+					mutate(candidate);
+					const mutated = resolve(directory, `${baselineKind}-${name}.json`);
+					await writeFile(mutated, JSON.stringify(candidate));
+					expect(
+						comparePaths(mutated, path).status,
+						`${baselineKind}-${name}`,
+					).toBe(1);
+				}
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("tracks published browser, file, readiness and template-release contracts", async () => {
 		const source = await readFile(cliPath, "utf8");
 		for (const path of [
@@ -400,6 +525,8 @@ describe("contract compatibility command", () => {
 			if (
 				path !== "/api/v2/admin/audit" &&
 				path !== "/api/v2/me/conversations/recent" &&
+				path !== "/api/v2/me/api-credentials" &&
+				path !== "/api/v2/me/api-credentials/{credentialId}" &&
 				!path.startsWith("/api/v2/conversations/")
 			)
 				delete previous.paths[path];

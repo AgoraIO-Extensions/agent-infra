@@ -531,6 +531,38 @@ export type PersistedConversationEventV1 = {
 
 export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2;
 
+export type PersonalApiCredentialIssueRequestV1 = {
+    expiresAt: string | null;
+    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+};
+
+export type PersonalApiCredentialIssueResponseV1 = {
+    /**
+     * First committed delivery only; never persisted or replayed.
+     */
+    credential: string;
+    metadata: PersonalApiCredentialMetadataV1;
+    replayed: false;
+} | {
+    credential: null;
+    metadata: PersonalApiCredentialMetadataV1;
+    replayed: true;
+};
+
+export type PersonalApiCredentialMetadataV1 = {
+    createdAt: string;
+    credentialId: string;
+    expiresAt: string | null;
+    lastUsedAt: string | null;
+    revokedAt: string | null;
+    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+};
+
+export type PersonalApiCredentialRevokeResponseV1 = {
+    metadata: PersonalApiCredentialMetadataV1;
+    replayed: boolean;
+};
+
 export type PilotInternalErrorV1 = {
     code: 'INTERNAL_ERROR';
     message: string;
@@ -1666,6 +1698,127 @@ export type GetDeploymentConfigurationV2Responses = {
 };
 
 export type GetDeploymentConfigurationV2Response = GetDeploymentConfigurationV2Responses[keyof GetDeploymentConfigurationV2Responses];
+
+export type IssuePersonalApiCredentialV2Data = {
+    body: PersonalApiCredentialIssueRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/me/api-credentials';
+};
+
+export type IssuePersonalApiCredentialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type IssuePersonalApiCredentialV2Error = IssuePersonalApiCredentialV2Errors[keyof IssuePersonalApiCredentialV2Errors];
+
+export type IssuePersonalApiCredentialV2Responses = {
+    /**
+     * Original credential metadata; material is not replayed
+     */
+    200: {
+        credential: null;
+        metadata: PersonalApiCredentialMetadataV1;
+        replayed: true;
+    };
+    /**
+     * Credential committed with first-delivery material
+     */
+    201: {
+        /**
+         * First committed delivery only; never persisted or replayed.
+         */
+        credential: string;
+        metadata: PersonalApiCredentialMetadataV1;
+        replayed: false;
+    };
+};
+
+export type IssuePersonalApiCredentialV2Response = IssuePersonalApiCredentialV2Responses[keyof IssuePersonalApiCredentialV2Responses];
+
+export type RevokePersonalApiCredentialV2Data = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        credentialId: string;
+    };
+    query?: never;
+    url: '/api/v2/me/api-credentials/{credentialId}';
+};
+
+export type RevokePersonalApiCredentialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokePersonalApiCredentialV2Error = RevokePersonalApiCredentialV2Errors[keyof RevokePersonalApiCredentialV2Errors];
+
+export type RevokePersonalApiCredentialV2Responses = {
+    /**
+     * Current revoked credential metadata
+     */
+    200: PersonalApiCredentialRevokeResponseV1;
+};
+
+export type RevokePersonalApiCredentialV2Response = RevokePersonalApiCredentialV2Responses[keyof RevokePersonalApiCredentialV2Responses];
 
 export type ListRecentPersonalConversationsV2Data = {
     body?: never;

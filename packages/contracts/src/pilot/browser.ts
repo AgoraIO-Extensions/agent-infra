@@ -12,6 +12,12 @@ import {
 	PilotInternalErrorV1Schema,
 	PilotProtocolErrorV1Schema,
 } from "./errors.ts";
+import {
+	PersonalApiCredentialIssueRequestV1Schema,
+	PersonalApiCredentialIssueResponseV1Schema,
+	PersonalApiCredentialMetadataV1Schema,
+	PersonalApiCredentialRevokeResponseV1Schema,
+} from "./personal-api-credentials.ts";
 import { WecomApplicationCredentialsV1Schema } from "./wecom-application.ts";
 
 const nonEmptyString = () => z.string().min(1);
@@ -20,6 +26,9 @@ const pathId = () => OpaqueIdV1Schema;
 const idempotencyHeader = z.strictObject({
 	"Idempotency-Key": IdempotencyKeyV1Schema,
 });
+const personalCredentialSecurity: Record<string, never[]>[] = [
+	{ PlatformSession: [] },
+];
 const pageQuery = z.strictObject({
 	cursor: OpaqueCursorV1Schema.optional(),
 	limit: z.coerce.number().int().min(1).max(100).optional(),
@@ -1084,6 +1093,50 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/me/api-credentials": {
+		post: {
+			operationId: "issuePersonalApiCredentialV2",
+			summary: "Issue a personal credential with one-time material delivery",
+			description:
+				"Active browser user only. Any Authorization header is rejected. Same-key replay returns the original current metadata and null material. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				PersonalApiCredentialIssueRequestV1Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Credential committed with first-delivery material",
+					PersonalApiCredentialIssueResponseV1Schema.options[0],
+				),
+				"200": jsonResponse(
+					"Original credential metadata; material is not replayed",
+					PersonalApiCredentialIssueResponseV1Schema.options[1],
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/me/api-credentials/{credentialId}": {
+		delete: {
+			operationId: "revokePersonalApiCredentialV2",
+			summary: "Revoke one credential owned by the current browser user",
+			description:
+				"Any Authorization header is rejected. Cross-person and missing credentials both return 404. No request body or identity overrides are accepted. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				header: idempotencyHeader,
+				path: z.strictObject({ credentialId: OpaqueIdV1Schema }),
+			},
+			responses: {
+				"200": jsonResponse(
+					"Current revoked credential metadata",
+					PersonalApiCredentialRevokeResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/deployment/configuration": {
 		get: {
 			operationId: "getDeploymentConfigurationV2",
@@ -1288,6 +1341,13 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	PersonalApiCredentialIssueRequestV1:
+		PersonalApiCredentialIssueRequestV1Schema,
+	PersonalApiCredentialIssueResponseV1:
+		PersonalApiCredentialIssueResponseV1Schema,
+	PersonalApiCredentialMetadataV1: PersonalApiCredentialMetadataV1Schema,
+	PersonalApiCredentialRevokeResponseV1:
+		PersonalApiCredentialRevokeResponseV1Schema,
 	AgentLifecycleCommandRequestV1: AgentLifecycleCommandRequestV1Schema,
 	ApprovalDecisionRequestV1: ApprovalDecisionRequestV1Schema,
 	AgentApplicationCreateRequestV2: AgentApplicationCreateRequestV2Schema,
