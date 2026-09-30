@@ -116,12 +116,17 @@ describe("application session boundary", () => {
 				.every((entry) => entry.cached === undefined && entry.client !== old),
 		).toBe(true);
 		expect(old?.getQueryData(["private"])).toBeUndefined();
-		expect(screen.getByRole("link", { name: "审批" })).toBeTruthy();
+		expect(screen.getByRole("link", { name: "创建审批" })).toBeTruthy();
+		expect(
+			screen.getByRole("link", { name: "Agent 管理" }).getAttribute("href"),
+		).toBe("/admin/agents");
+		for (const name of ["工作区", "我的管理", "系统管理"])
+			expect(screen.getByRole("navigation", { name })).toBeTruthy();
 		await act(async () => {
 			client.setQueryData(["browser-session"], identity("admin", false));
 		});
 		await waitFor(() =>
-			expect(screen.queryByRole("link", { name: "审批" })).toBeNull(),
+			expect(screen.queryByRole("link", { name: "创建审批" })).toBeNull(),
 		);
 	});
 	it("recreates the feature cache when the same user gets a new session", async () => {
@@ -222,7 +227,7 @@ describe("application session boundary", () => {
 				);
 			});
 			await waitFor(() => {
-				expect(Boolean(screen.queryByRole("link", { name: "审批" }))).toBe(
+				expect(Boolean(screen.queryByRole("link", { name: "创建审批" }))).toBe(
 					toAdmin,
 				);
 			});

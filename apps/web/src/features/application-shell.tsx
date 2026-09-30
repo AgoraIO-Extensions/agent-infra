@@ -10,6 +10,7 @@ import {
 	ClipboardList,
 	Grid2X2,
 	Layers,
+	List,
 	Menu,
 	X,
 } from "lucide-react";
@@ -133,15 +134,17 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				? "平台审计"
 				: pathname === "/audit"
 					? "我的执行审计"
-					: pathname.startsWith("/admin")
-						? "审批"
-						: pathname === "/my-agents/new"
-							? "创建申请"
-							: pathname.startsWith("/my-agents")
-								? "我的 Agent"
-								: pathname === "/agents" || pathname === "/agents/"
-									? "Agent"
-									: "Agent 详情";
+					: pathname === "/admin/agents"
+						? "Agent 管理"
+						: pathname.startsWith("/admin")
+							? "创建审批"
+							: pathname === "/my-agents/new"
+								? "创建申请"
+								: pathname.startsWith("/my-agents")
+									? "我的 Agent"
+									: pathname === "/agents" || pathname === "/agents/"
+										? "Agent"
+										: "Agent 详情";
 	const navigation = (
 		<>
 			<div className="platform-brand">
@@ -152,67 +155,90 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					Agent Platform<small>工作空间</small>
 				</div>
 			</div>
-			<p className="platform-nav-label">工作台</p>
 			<nav aria-label="主导航">
-				<Link
-					className={`platform-nav-item ${pathname.startsWith("/agents") ? "selected" : ""}`}
-					to="/agents"
-					onClick={() => setSheet(false)}
-				>
-					<Grid2X2 size={19} aria-hidden="true" />
-					Agent
-				</Link>
-				<Link
-					className={`platform-nav-item ${pathname.startsWith("/my-agents") ? "selected" : ""}`}
-					to="/my-agents"
-					onClick={() => setSheet(false)}
-				>
-					<Layers size={19} aria-hidden="true" />
-					我的 Agent
-				</Link>
-				<Link
-					className={`platform-nav-item ${pathname === "/audit" ? "selected" : ""}`}
-					to="/audit"
-					onClick={() => setSheet(false)}
-				>
-					<ClipboardList size={19} aria-hidden="true" />
-					我的执行审计
-				</Link>
-				{admin && (
+				<nav aria-label="工作区" className="platform-nav-group">
+					<p className="platform-nav-label">工作区</p>
 					<Link
-						className={`platform-nav-item ${pathname.startsWith("/admin/approvals") ? "selected" : ""}`}
-						to="/admin/approvals"
+						className={`platform-nav-item ${pathname.startsWith("/agents") ? "selected" : ""}`}
+						to="/agents"
 						onClick={() => setSheet(false)}
 					>
-						<CheckCheck size={19} aria-hidden="true" />
-						审批
+						<Grid2X2 size={19} aria-hidden="true" />
+						Agent
 					</Link>
-				)}
-				{admin && (
+				</nav>
+				<nav aria-label="我的管理" className="platform-nav-group">
+					<p className="platform-nav-label">我的管理</p>
 					<Link
-						className={`platform-nav-item ${pathname === "/admin/audit" ? "selected" : ""}`}
-						to="/admin/audit"
+						className={`platform-nav-item ${pathname.startsWith("/my-agents") && pathname !== "/my-agents/new" ? "selected" : ""}`}
+						to="/my-agents"
+						onClick={() => setSheet(false)}
+					>
+						<Layers size={19} aria-hidden="true" />
+						我的 Agent
+					</Link>
+					<Link
+						className={`platform-nav-item ${pathname === "/my-agents/new" ? "selected" : ""}`}
+						to="/my-agents/new"
+						onClick={() => setSheet(false)}
+					>
+						<Layers size={19} aria-hidden="true" />
+						创建与配置
+					</Link>
+					<Link
+						className={`platform-nav-item ${pathname === "/audit" ? "selected" : ""}`}
+						to="/audit"
 						onClick={() => setSheet(false)}
 					>
 						<ClipboardList size={19} aria-hidden="true" />
-						平台审计
+						我的执行审计
 					</Link>
+					{connectionUrl ? (
+						<a
+							className="platform-nav-item"
+							href={connectionUrl}
+							target="_blank"
+							rel="noopener noreferrer"
+						>
+							我的 Connection
+							<ArrowUpRight size={16} aria-hidden="true" />
+						</a>
+					) : (
+						<p className="platform-nav-label">Connection 尚未接入</p>
+					)}
+				</nav>
+				{admin && (
+					<nav aria-label="系统管理" className="platform-nav-group">
+						<p className="platform-nav-label">系统管理</p>
+						<Link
+							className={`platform-nav-item ${pathname.startsWith("/admin/approvals") ? "selected" : ""}`}
+							to="/admin/approvals"
+							onClick={() => setSheet(false)}
+						>
+							<CheckCheck size={19} aria-hidden="true" />
+							创建审批
+						</Link>
+						<Link
+							aria-current={pathname === "/admin/agents" ? "page" : undefined}
+							className={`platform-nav-item ${pathname === "/admin/agents" ? "selected" : ""}`}
+							to="/admin/agents"
+							onClick={() => setSheet(false)}
+						>
+							<List size={19} aria-hidden="true" />
+							Agent 管理
+						</Link>
+						<Link
+							className={`platform-nav-item ${pathname === "/admin/audit" ? "selected" : ""}`}
+							to="/admin/audit"
+							onClick={() => setSheet(false)}
+						>
+							<ClipboardList size={19} aria-hidden="true" />
+							平台审计
+						</Link>
+					</nav>
 				)}
 			</nav>
 			<div className="platform-nav-bottom">
-				{connectionUrl ? (
-					<a
-						className="platform-nav-item"
-						href={connectionUrl}
-						target="_blank"
-						rel="noopener noreferrer"
-					>
-						我的 Connection
-						<ArrowUpRight size={16} aria-hidden="true" />
-					</a>
-				) : (
-					<p className="platform-nav-label">Connection 尚未接入</p>
-				)}
 				<div className="platform-identity">
 					<Avatar className="platform-avatar" aria-hidden="true">
 						<AvatarFallback>
@@ -282,7 +308,13 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					</Sheet>
 					<Breadcrumb className="platform-breadcrumb">
 						<BreadcrumbList>
-							<BreadcrumbItem>工作台</BreadcrumbItem>
+							<BreadcrumbItem>
+								{pathname.startsWith("/admin")
+									? "系统管理"
+									: pathname.startsWith("/my-agents") || pathname === "/audit"
+										? "我的管理"
+										: "工作区"}
+							</BreadcrumbItem>
 							<BreadcrumbSeparator />
 							<BreadcrumbItem>
 								<BreadcrumbPage>{title}</BreadcrumbPage>
