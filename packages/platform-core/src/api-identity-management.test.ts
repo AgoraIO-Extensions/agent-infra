@@ -25,7 +25,7 @@ const audit: ApiIdentityAuditInputV1 = {
 function storeFixture(overrides: Partial<ApiIdentityStorePortV1> = {}) {
 	const store: ApiIdentityStorePortV1 = {
 		writeAudit: vi.fn(),
-		createApplication: vi.fn(),
+		createApplication: vi.fn().mockResolvedValue(application.id),
 		getApplication: vi.fn().mockResolvedValue(application),
 		listApplications: vi.fn().mockResolvedValue([]),
 		issueCredential: vi.fn().mockResolvedValue({
@@ -103,6 +103,28 @@ function management(store: ApiIdentityStorePortV1) {
 }
 
 describe("API identity management authorization", () => {
+	it("returns the application committed for an idempotent request", async () => {
+		const store = storeFixture();
+		const useCase = management(store);
+		const submitted = await useCase.createApplication({
+			actor: actor(),
+			applicationId: "application-attempt",
+			name: "Application",
+			authorizationRevision: "revision-attempt",
+			idempotencyKey: "application-command-1",
+			rawRequestDigest: "a".repeat(64),
+			audit: { ...audit, action: "api.application.created" },
+		});
+		expect(submitted).toEqual(application);
+		expect(store.createApplication).toHaveBeenCalledWith(
+			expect.objectContaining({
+				idempotencyKey: "application-command-1",
+				requestDigest: "a".repeat(64),
+			}),
+		);
+		expect(store.getApplication).toHaveBeenCalledWith(application.id);
+	});
+
 	it("checks API scopes in Core and resolves query visibility", async () => {
 		const useCase = management(storeFixture());
 		const apiActor = actor({ kind: "application", id: "application-caller" });

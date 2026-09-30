@@ -86,9 +86,11 @@ export function mapCoreError(
 		return new HttpProtocolError(
 			error.code === "not_authorized"
 				? "FORBIDDEN"
-				: error.code === "resource_unavailable"
-					? "RESOURCE_UNAVAILABLE"
-					: "DEPENDENCY_UNAVAILABLE",
+				: error.code === "idempotency_conflict"
+					? "CONFLICT"
+					: error.code === "resource_unavailable"
+						? "RESOURCE_UNAVAILABLE"
+						: "DEPENDENCY_UNAVAILABLE",
 			traceId,
 		);
 	}

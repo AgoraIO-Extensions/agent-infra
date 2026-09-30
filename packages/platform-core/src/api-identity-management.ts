@@ -130,8 +130,10 @@ export interface ApiIdentityStorePortV1 {
 		readonly name: string;
 		readonly responsibleUserId: string;
 		readonly authorizationRevision: string;
+		readonly idempotencyKey?: string;
+		readonly requestDigest?: string;
 		readonly audit: ApiIdentityAuditInputV1;
-	}): Promise<void>;
+	}): Promise<string>;
 	getApplication(
 		applicationId: string,
 	): Promise<ApiIdentityApplicationV1 | null>;
@@ -249,6 +251,8 @@ export interface ApiIdentityManagementInterfaceV1 {
 		readonly applicationId: string;
 		readonly name: string;
 		readonly authorizationRevision: string;
+		readonly idempotencyKey: string;
+		readonly rawRequestDigest: string;
 		readonly audit: ApiIdentityAuditInputV1;
 	}): Promise<ApiIdentityApplicationV1>;
 	listApplicationCredentials(
@@ -308,6 +312,7 @@ export interface ApiIdentityAccessAuditContextV1 {
 export type ApiIdentityErrorCode =
 	| "not_authorized"
 	| "resource_unavailable"
+	| "idempotency_conflict"
 	| "dependency_unavailable";
 
 const apiIdentityErrorBrand = Symbol.for(
@@ -637,15 +642,19 @@ export function createApiIdentityManagementV1(input: {
 				await rejectWithAudit(audit, value.applicationId);
 				throw error;
 			}
-			await input.store.createApplication({
+			const applicationId = await input.store.createApplication({
 				applicationId: value.applicationId,
 				name: value.name,
 				responsibleUserId: userId,
 				authorizationRevision: value.authorizationRevision,
+				idempotencyKey: value.idempotencyKey,
+				requestDigest: value.rawRequestDigest,
 				audit,
 			});
-			const application = await input.store.getApplication(value.applicationId);
+			const application = await input.store.getApplication(applicationId);
 			if (!application) throw new ApiIdentityError("dependency_unavailable");
+			if (application.responsibleUserId !== userId)
+				throw new ApiIdentityError("dependency_unavailable");
 			return application;
 		},
 		async listApplicationCredentials(actor, applicationId, page) {

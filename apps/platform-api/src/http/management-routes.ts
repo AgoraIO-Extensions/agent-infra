@@ -791,9 +791,13 @@ function registerManagementRoutesInternal(
 					context.req.raw,
 					metadata.traceId,
 				);
-				const { value: body } = await parseJson(
+				const { value: body, rawRequestDigest } = await parseJson(
 					context.req.raw,
 					ApiApplicationCreateRequestV1Schema,
+					metadata.traceId,
+				);
+				const idempotencyKey = parseIdempotencyKey(
+					context.req.raw,
 					metadata.traceId,
 				);
 				const management = apiIdentityOrUnavailable(
@@ -808,6 +812,8 @@ function registerManagementRoutesInternal(
 							applicationId,
 							name: body.name,
 							authorizationRevision: randomUUID(),
+							idempotencyKey,
+							rawRequestDigest,
 							audit: apiAudit(identity, metadata, "api.application.created"),
 						}),
 					metadata.traceId,

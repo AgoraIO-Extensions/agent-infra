@@ -850,9 +850,9 @@ function isAgentDirectCreationOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
-// #481 adds the Platform API identity and grant management surface. The new
-// paths and the application/start variants are additive to the existing V1/V2
-// contracts, so normalize them before running the generic breaking check.
+// #481 adds the Platform API identity and grant management surface, including
+// the required application-creation idempotency header. Normalize these
+// reviewed paths before running the generic breaking check.
 function isAgentApiIdentityOpenApiAddition(previous, current) {
 	if (!current.paths || !current.components?.schemas) return false;
 	const normalized = structuredClone(current);
@@ -917,7 +917,7 @@ function isAgentApiIdentityOpenApiAddition(previous, current) {
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
 		(v1
-			? "869becc12f08447214cd499992eec75a05cabd18849c623b29abf3859755e649"
+			? "c8d799efdfbb7b2f038472f390dc453becb6c180ae654092f7506c46abbc29fe"
 			: "b3029ad5847b08f684ebe9276ce17b2edec92149bff1b4f07d0964b16301f723")
 	)
 		return false;

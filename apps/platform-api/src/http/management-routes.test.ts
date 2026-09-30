@@ -224,6 +224,7 @@ function createApp(
 	const recordAccessRejection = vi.fn().mockResolvedValue(undefined);
 	const listUserCredentials = vi.fn();
 	const listApiApplications = vi.fn();
+	const createApiApplication = vi.fn();
 	const listApplicationCredentials = vi.fn();
 
 	registerManagementRoutes(app, {
@@ -241,7 +242,7 @@ function createApp(
 						issueUserCredential: vi.fn(),
 						revokeUserCredential: vi.fn(),
 						listApplications: listApiApplications,
-						createApplication: vi.fn(),
+						createApplication: createApiApplication,
 						listApplicationCredentials,
 						issueApplicationCredential: vi.fn(),
 						revokeApplicationCredential: vi.fn(),
@@ -283,6 +284,7 @@ function createApp(
 		resolveBrowser,
 		listUserCredentials,
 		listApiApplications,
+		createApiApplication,
 		listApplicationCredentials,
 		resolveAgentQueryGrantType,
 		authorizeCredentialScope,
@@ -455,6 +457,48 @@ describe("management routes", () => {
 		}
 		expect((await app.request("/api/v1/api-credentials?limit=0")).status).toBe(
 			400,
+		);
+	});
+
+	it("requires an idempotency key and rejects conflicting application retries", async () => {
+		const { app, createApiApplication } = createApp({ api: true });
+		const body = JSON.stringify({ schemaVersion: 1, name: "Automation" });
+		const request = (idempotencyKey?: string) =>
+			app.request("/api/v1/applications", {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+				},
+				body,
+			});
+		expect((await request()).status).toBe(400);
+		expect(createApiApplication).not.toHaveBeenCalled();
+		createApiApplication.mockResolvedValue({
+			id: "application-stable",
+			name: "Automation",
+			responsibleUserId: "user-1",
+			status: "active",
+			authorizationRevision: "revision-1",
+		});
+		const response = await request("application-command-1");
+		expect(response.status).toBe(201);
+		expect(await response.json()).toMatchObject({
+			applicationId: "application-stable",
+		});
+		expect(createApiApplication).toHaveBeenCalledWith(
+			expect.objectContaining({
+				idempotencyKey: "application-command-1",
+				rawRequestDigest: createHash("sha256").update(body).digest("hex"),
+			}),
+		);
+		createApiApplication.mockRejectedValueOnce(
+			new ApiIdentityError("idempotency_conflict"),
+		);
+		const conflict = await request("application-command-1");
+		expect(conflict.status).toBe(409);
+		expect(PilotProtocolErrorV1Schema.parse(await conflict.json()).code).toBe(
+			"INVALID_REQUEST",
 		);
 	});
 

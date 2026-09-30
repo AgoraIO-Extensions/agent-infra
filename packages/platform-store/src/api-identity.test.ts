@@ -77,6 +77,58 @@ describe("PostgreSQL API identity store", () => {
 		await testDatabase?.stop();
 	});
 
+	it("commits application creation once across concurrent retries", async () => {
+		await adminClient`truncate platform.audit_events, platform.idempotency_records,
+			platform.platform_applications cascade`;
+		const input = {
+			name: "Idempotent application",
+			responsibleUserId: "user_owner",
+			authorizationRevision: "application_revision_1",
+			idempotencyKey: "application-create-1",
+			requestDigest: "a".repeat(64),
+			audit: userAudit,
+		};
+		const results = await Promise.all([
+			store.createApplication({
+				...input,
+				applicationId: "application_idem_a",
+			}),
+			store.createApplication({
+				...input,
+				applicationId: "application_idem_b",
+			}),
+		]);
+		expect(results[0]).toBe(results[1]);
+		const applications = await adminClient<{ id: string }[]>`
+			select id from platform.platform_applications
+			where id in ('application_idem_a', 'application_idem_b')
+		`;
+		expect(applications).toEqual([{ id: results[0] }]);
+		const audits = await adminClient<{ target_id: string }[]>`
+			select target_id from platform.audit_events
+			where action = 'api.application.created'
+		`;
+		expect(audits).toEqual([{ target_id: results[0] }]);
+		await expect(
+			store.createApplication({
+				...input,
+				applicationId: "application_idem_conflict",
+				requestDigest: "b".repeat(64),
+			}),
+		).rejects.toMatchObject({ code: "idempotency_conflict" });
+		await expect(
+			store.createApplication({
+				...input,
+				applicationId: "application_idem_other",
+				responsibleUserId: "user_other",
+				audit: {
+					...userAudit,
+					actor: { kind: "user", id: "user_other" },
+				},
+			}),
+		).resolves.toBe("application_idem_other");
+	});
+
 	it("isolates credential principals, enforces delivery revocation, and audits writes", async () => {
 		await adminClient`truncate platform.audit_events, platform.api_credential_delivery_grants,
 			platform.platform_api_credentials, platform.platform_applications cascade`;

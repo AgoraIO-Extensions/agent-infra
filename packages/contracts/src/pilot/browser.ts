@@ -821,6 +821,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		},
 		post: {
 			operationId: "createApiApplication",
+			requestParams: { header: idempotencyHeader },
 			requestBody: requiredJsonRequestBody(ApiApplicationCreateRequestV1Schema),
 			responses: {
 				"201": jsonResponse(

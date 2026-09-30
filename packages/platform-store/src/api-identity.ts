@@ -22,6 +22,7 @@ import {
 	agents,
 	apiCredentialDeliveryGrants,
 	auditEvents,
+	idempotencyRecords,
 	platformApiCredentials,
 	platformApplications,
 } from "./schema.js";
@@ -316,9 +317,82 @@ export class PostgresApiIdentityStoreV1 {
 		readonly name: string;
 		readonly responsibleUserId: string;
 		readonly authorizationRevision: string;
+		readonly idempotencyKey?: string;
+		readonly requestDigest?: string;
 		readonly audit: ApiIdentityAuditInputV1;
-	}): Promise<void> {
-		await this.#database.transaction(async (transaction) => {
+	}): Promise<string> {
+		if (
+			(input.idempotencyKey === undefined) !==
+				(input.requestDigest === undefined) ||
+			(input.idempotencyKey !== undefined &&
+				!/^[A-Za-z0-9._~-]{1,128}$/.test(input.idempotencyKey)) ||
+			(input.requestDigest !== undefined &&
+				!/^[a-f0-9]{64}$/.test(input.requestDigest))
+		)
+			throw new TypeError("Invalid application idempotency input");
+		return this.#database.transaction(async (transaction) => {
+			if (
+				input.idempotencyKey !== undefined &&
+				input.requestDigest !== undefined
+			) {
+				const [reservation] = await transaction
+					.insert(idempotencyRecords)
+					.values({
+						id: randomUUID(),
+						scopeType: "user",
+						scopeId: input.responsibleUserId,
+						actorId: input.responsibleUserId,
+						commandType: "api.application.create.v1",
+						idempotencyKey: input.idempotencyKey,
+						requestDigest: input.requestDigest,
+						status: "completed",
+						result: { schemaVersion: 1, applicationId: input.applicationId },
+					})
+					.onConflictDoNothing()
+					.returning({ id: idempotencyRecords.id });
+				if (!reservation) {
+					const [existing] = await transaction
+						.select({
+							requestDigest: idempotencyRecords.requestDigest,
+							status: idempotencyRecords.status,
+							result: idempotencyRecords.result,
+						})
+						.from(idempotencyRecords)
+						.where(
+							and(
+								eq(idempotencyRecords.scopeType, "user"),
+								eq(idempotencyRecords.scopeId, input.responsibleUserId),
+								eq(idempotencyRecords.actorId, input.responsibleUserId),
+								eq(idempotencyRecords.commandType, "api.application.create.v1"),
+								eq(idempotencyRecords.idempotencyKey, input.idempotencyKey),
+							),
+						)
+						.limit(1)
+						.for("update");
+					if (!existing) throw new ApiIdentityError("dependency_unavailable");
+					if (existing.requestDigest !== input.requestDigest)
+						throw new ApiIdentityError("idempotency_conflict");
+					const result = existing.result;
+					if (
+						existing.status !== "completed" ||
+						!result ||
+						Object.keys(result).length !== 2 ||
+						result.schemaVersion !== 1 ||
+						typeof result.applicationId !== "string"
+					)
+						throw new ApiIdentityError("dependency_unavailable");
+					const [application] = await transaction
+						.select({
+							responsibleUserId: platformApplications.responsibleUserId,
+						})
+						.from(platformApplications)
+						.where(eq(platformApplications.id, result.applicationId))
+						.limit(1);
+					if (application?.responsibleUserId !== input.responsibleUserId)
+						throw new ApiIdentityError("dependency_unavailable");
+					return result.applicationId;
+				}
+			}
 			await transaction.insert(platformApplications).values({
 				id: input.applicationId,
 				name: input.name,
@@ -329,6 +403,7 @@ export class PostgresApiIdentityStoreV1 {
 				...input.audit,
 				targetId: input.applicationId,
 			});
+			return input.applicationId;
 		});
 	}
 

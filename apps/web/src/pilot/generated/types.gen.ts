@@ -2340,6 +2340,9 @@ export type ListApiApplicationsResponse = ListApiApplicationsResponses[keyof Lis
 
 export type CreateApiApplicationData = {
     body: ApiApplicationCreateRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
     path?: never;
     query?: never;
     url: '/api/v1/applications';
