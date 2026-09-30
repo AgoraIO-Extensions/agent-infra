@@ -194,6 +194,63 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 	}
 });
 
+it("reuses a tool kind when the terminal ACP update omits it", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-tool-kind-fallback-"));
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "tool-kind-omitted" },
+		}),
+	});
+	try {
+		const accepted = await driver.execute({
+			schemaVersion: 2,
+			kind: "submit-turn",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-a",
+			turnId: "turn-a",
+			operationId: "operation-a",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		});
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
+			).toBe("completed"),
+		);
+		const tools = (
+			await driver.replayEvents(accepted.nativeSessionRef, "execution-a")
+		).flatMap((event) => (event.type === "tool" ? [event.payload] : []));
+		expect(tools.map(({ name, phase }) => ({ name, phase }))).toEqual([
+			{ name: "read", phase: "started" },
+			{ name: "read", phase: "completed" },
+		]);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it.each([
 	{ permitted: true, mode: "tool-permission" },
 	{ permitted: false, mode: "tool-permission" },

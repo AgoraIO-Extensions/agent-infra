@@ -252,7 +252,9 @@ const connection = new AgentSideConnection(
 					content: { type: "text", text: `synthetic result ${count}` },
 				},
 			});
-			if (process.env.ACP_TEST_MODE === "tool") {
+			if (["tool", "tool-kind-omitted"].includes(process.env.ACP_TEST_MODE)) {
+				const omitCompletedKind =
+					process.env.ACP_TEST_MODE === "tool-kind-omitted";
 				await connection.sessionUpdate({
 					sessionId,
 					update: {
@@ -276,7 +278,7 @@ const connection = new AgentSideConnection(
 					update: {
 						sessionUpdate: "tool_call_update",
 						toolCallId: "tool-1",
-						kind: "read",
+						...(omitCompletedKind ? {} : { kind: "read" }),
 						status: "completed",
 					},
 				});

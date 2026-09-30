@@ -74,6 +74,7 @@ export const GenericAcpRuntimeDriver = {
 				...session
 			}) => {
 				const phases = new Map<string, string>();
+				const toolKinds = new Map<string, string>();
 				const pendingPermissions = new Map<string, number>();
 				const normalizeToolRequestStarted = (
 					callback: typeof toolRequestStarted | undefined,
@@ -157,6 +158,12 @@ export const GenericAcpRuntimeDriver = {
 							event.sessionUpdate === "tool_call" ||
 							event.sessionUpdate === "tool_call_update"
 						) {
+							const kind =
+								typeof event.kind === "string" && event.kind
+									? event.kind
+									: toolKinds.get(event.toolCallId);
+							if (typeof event.kind === "string" && event.kind)
+								toolKinds.set(event.toolCallId, event.kind);
 							const phase =
 								event.status === "completed"
 									? "completed"
@@ -177,13 +184,12 @@ export const GenericAcpRuntimeDriver = {
 										toolCallId: createHash("sha256")
 											.update(event.toolCallId)
 											.digest("hex"),
-										name:
-											typeof event.kind === "string" && event.kind
-												? event.kind
-												: "unknown",
+										name: kind ?? "unknown",
 										phase,
 									},
 								});
+								if (phase === "completed" || phase === "failed")
+									toolKinds.delete(event.toolCallId);
 							}
 						} else await update();
 					},
