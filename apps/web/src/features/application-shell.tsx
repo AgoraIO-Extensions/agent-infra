@@ -42,6 +42,7 @@ import { Sidebar } from "@/components/ui/sidebar";
 import type { BrowserSessionProjectionV1 } from "../pilot/generated/types.gen";
 import { LoginAction } from "./login-action";
 import { LogoutAction } from "./logout-action";
+import { PersonalRelayKeyEntry } from "./personal-relay-key/personal-relay-key-dialog";
 import {
 	BrowserSessionQueryContext,
 	useBrowserSession,
@@ -289,6 +290,13 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							</BreadcrumbItem>
 						</BreadcrumbList>
 					</Breadcrumb>
+					{user && (
+						<PersonalRelayKeyEntry
+							key={sessionBoundaryKey}
+							userId={user.userId}
+							onSessionExpired={() => session.refetch()}
+						/>
+					)}
 					{development && (
 						<span className="text-muted-foreground text-xs">
 							本地开发 · 测试身份
