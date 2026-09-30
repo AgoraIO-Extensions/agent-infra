@@ -43,6 +43,11 @@ const conformanceModelConfiguration = {
 	defaultReasoningLevel: "low",
 } as const satisfies ConversationModelConfigurationV1;
 
+const postgresConformanceAuthority: ConversationExecutionAuthorityV1 = {
+	...conversationConformanceAuthorityV1,
+	channelId: "web",
+};
+
 let databaseUrl = "";
 let client: ReturnType<typeof postgres>;
 let testDatabase: PostgresTestDatabase | undefined;
@@ -74,6 +79,27 @@ beforeAll(async () => {
 	databaseUrl = testDatabase.databaseUrl;
 	await migratePlatformDatabase({ databaseUrl });
 	client = postgres(databaseUrl, { max: 1 });
+	for (const [subjectId, keyId] of [
+		["actor_fixture", "relay-key-actor-fixture-1"],
+		["user_01", "relay-key-user-01-1"],
+	] as const) {
+		await client`
+			insert into platform.relay_key_subjects
+				(purpose, subject_id, last_version, current_version)
+			values ('personal', ${subjectId}, 1, 1)
+		`;
+		await client`
+			insert into platform.relay_key_versions
+				(purpose, subject_id, key_version, key_id, ciphertext)
+			values ('personal', ${subjectId}, 1, ${keyId}, ${client.json({
+				schemaVersion: 1,
+				purpose: "personal",
+				subjectId,
+				keyId,
+				keyVersion: 1,
+			})})
+		`;
+	}
 }, 120_000);
 
 afterEach(async () => {
@@ -168,7 +194,7 @@ async function persistConformanceModelConfiguration(
 conversationCommandConformanceV1("PostgreSQL", async () => {
 	await persistConformanceModelConfiguration(conformanceModelConfiguration);
 	let effectiveAuthority: ConversationExecutionAuthorityV1 | undefined =
-		conversationConformanceAuthorityV1;
+		postgresConformanceAuthority;
 	let nextId = 1;
 	let failureCleanupRequired = false;
 	let fallbackFailureCleanupRequired = false;
@@ -263,7 +289,10 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 	return {
 		useCase,
 		setAuthority(next) {
-			effectiveAuthority = next;
+			effectiveAuthority =
+				next?.channelId === conversationConformanceAuthorityV1.channelId
+					? { ...next, channelId: postgresConformanceAuthority.channelId }
+					: next;
 		},
 		async failNextCommit() {
 			failureCleanupRequired = true;
@@ -831,7 +860,7 @@ describe("PostgreSQL Conversation command transaction", () => {
 				},
 			});
 
-			const [counts, audit, auditRecord, outbox] = await Promise.all([
+			const [counts, binding, audit, auditRecord, outbox] = await Promise.all([
 				client`
 					select
 						(select count(*)::int from platform.conversations) as conversations,
@@ -841,6 +870,12 @@ describe("PostgreSQL Conversation command transaction", () => {
 						(select count(*)::int from platform.idempotency_records) as idempotency,
 						(select count(*)::int from platform.conversation_audit_events) as audit,
 						(select count(*)::int from platform.audit_events) as platform_audit
+				`,
+				client`
+					select execution_source, relay_key_purpose, relay_key_subject_id,
+						relay_key_id, relay_key_version
+					from platform.conversation_executions
+					where execution_id = 'conversation_id_3'
 				`,
 				client`
 					select action, conversation_id, execution_id
@@ -866,6 +901,15 @@ describe("PostgreSQL Conversation command transaction", () => {
 				audit: 1,
 				platform_audit: 0,
 			});
+			expect(binding).toEqual([
+				{
+					execution_source: "web",
+					relay_key_purpose: "personal",
+					relay_key_subject_id: "user_01",
+					relay_key_id: "relay-key-user-01-1",
+					relay_key_version: "1",
+				},
+			]);
 			expect(audit).toEqual([
 				{
 					action: "conversation.message.accepted",
@@ -970,7 +1014,7 @@ describe("PostgreSQL Conversation command transaction", () => {
 					await client`select status from platform.conversations where id = 'conversation_id_1'`,
 				).toEqual([{ status: "active" }]);
 
-				const [counts, outbox, audit] = await Promise.all([
+				const [counts, binding, outbox, audit] = await Promise.all([
 					client`
 					select
 						(select count(*)::int from platform.conversation_messages) as messages,
@@ -979,6 +1023,12 @@ describe("PostgreSQL Conversation command transaction", () => {
 						(select count(*)::int from platform.idempotency_records) as idempotency,
 						(select count(*)::int from platform.conversation_audit_events) as audit
 				`,
+					client`
+					select execution_source, relay_key_purpose, relay_key_subject_id,
+						relay_key_id, relay_key_version
+					from platform.conversation_executions
+					where execution_id = 'conversation_id_5'
+					`,
 					client`
 					select operation, payload from platform.outbox_items
 					where operation = 'conversation.turn.regenerate.v1'
@@ -996,6 +1046,15 @@ describe("PostgreSQL Conversation command transaction", () => {
 					idempotency: 3,
 					audit: 2,
 				});
+				expect(binding).toEqual([
+					{
+						execution_source: "web",
+						relay_key_purpose: "personal",
+						relay_key_subject_id: "user_01",
+						relay_key_id: "relay-key-user-01-1",
+						relay_key_version: "1",
+					},
+				]);
 				expect(outbox).toEqual([
 					{
 						operation: "conversation.turn.regenerate.v1",

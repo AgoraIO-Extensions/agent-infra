@@ -1,6 +1,6 @@
 {
-  "id": "396811b8-075a-492b-a38c-a945977ddc89",
-  "prevId": "c6c94d10-cbaa-4296-a907-238dc7e3d01e",
+  "id": "dd3ae283-7d13-4e6b-9196-6d2a84b52cbe",
+  "prevId": "6b9ab9f9-ab7c-4a03-bccc-fa85ba47e971",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -897,6 +897,18 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "pending_scopes": {
+          "name": "pending_scopes",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pending_expires_at": {
+          "name": "pending_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -968,6 +980,10 @@
         "api_credential_delivery_revision_non_empty": {
           "name": "api_credential_delivery_revision_non_empty",
           "value": "char_length(\"platform\".\"api_credential_delivery_grants\".\"authorization_revision\") > 0"
+        },
+        "api_credential_delivery_pending_scopes_array": {
+          "name": "api_credential_delivery_pending_scopes_array",
+          "value": "\"platform\".\"api_credential_delivery_grants\".\"pending_scopes\" is null or (jsonb_typeof(\"platform\".\"api_credential_delivery_grants\".\"pending_scopes\") = 'array' and jsonb_array_length(\"platform\".\"api_credential_delivery_grants\".\"pending_scopes\") > 0)"
         }
       },
       "isRLSEnabled": false
@@ -2620,6 +2636,74 @@
       },
       "isRLSEnabled": false
     },
+    "platform.ldap_identity_ids": {
+      "name": "ldap_identity_ids",
+      "schema": "platform",
+      "columns": {
+        "issuer": {
+          "name": "issuer",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "uid": {
+          "name": "uid",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ldap_identity_user_id_unique": {
+          "name": "ldap_identity_user_id_unique",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "ldap_identity_ids_issuer_uid_pk": {
+          "name": "ldap_identity_ids_issuer_uid_pk",
+          "columns": [
+            "issuer",
+            "uid"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ldap_identity_issuer_non_empty": {
+          "name": "ldap_identity_issuer_non_empty",
+          "value": "char_length(\"platform\".\"ldap_identity_ids\".\"issuer\") > 0"
+        },
+        "ldap_identity_uid_non_empty": {
+          "name": "ldap_identity_uid_non_empty",
+          "value": "char_length(\"platform\".\"ldap_identity_ids\".\"uid\") > 0"
+        },
+        "ldap_identity_user_id_uuid_v4": {
+          "name": "ldap_identity_user_id_uuid_v4",
+          "value": "\"platform\".\"ldap_identity_ids\".\"user_id\" ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "platform.outbox_items": {
       "name": "outbox_items",
       "schema": "platform",
@@ -2985,6 +3069,12 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "recipient_user_id": {
+          "name": "recipient_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -3061,6 +3151,10 @@
         "platform_api_credential_scopes_array": {
           "name": "platform_api_credential_scopes_array",
           "value": "jsonb_typeof(\"platform\".\"platform_api_credentials\".\"scopes\") = 'array'"
+        },
+        "platform_api_credential_recipient_user_non_empty": {
+          "name": "platform_api_credential_recipient_user_non_empty",
+          "value": "\"platform\".\"platform_api_credentials\".\"recipient_user_id\" is null or char_length(\"platform\".\"platform_api_credentials\".\"recipient_user_id\") > 0"
         }
       },
       "isRLSEnabled": false
@@ -3672,6 +3766,241 @@
         "secret_record_identity_matches": {
           "name": "secret_record_identity_matches",
           "value": "jsonb_typeof(\"platform\".\"secret_records\".\"record\") = 'object' and \"platform\".\"secret_records\".\"record\" @> jsonb_build_object(\n\t\t\t\t'schemaVersion', 1,\n\t\t\t\t'agentId', \"platform\".\"secret_records\".\"agent_id\",\n\t\t\t\t'secretId', \"platform\".\"secret_records\".\"secret_id\",\n\t\t\t\t'secretVersion', \"platform\".\"secret_records\".\"secret_version\",\n\t\t\t\t'configRevision', \"platform\".\"secret_records\".\"configuration_revision\",\n\t\t\t\t'ownerType', \"platform\".\"secret_records\".\"owner_type\",\n\t\t\t\t'ownerId', \"platform\".\"secret_records\".\"owner_id\",\n\t\t\t\t'name', \"platform\".\"secret_records\".\"name\",\n\t\t\t\t'lifecycleState', \"platform\".\"secret_records\".\"lifecycle_state\",\n\t\t\t\t'crypto', jsonb_build_object(\n\t\t\t\t\t'dekFingerprint', \"platform\".\"secret_records\".\"dek_fingerprint\",\n\t\t\t\t\t'wrappingKeyVersion', \"platform\".\"secret_records\".\"wrapping_key_version\"\n\t\t\t\t)\n\t\t\t)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.platform_user_disables": {
+      "name": "platform_user_disables",
+      "schema": "platform",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "disabled_by": {
+          "name": "disabled_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "disabled_at": {
+          "name": "disabled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "platform_user_disable_user_id_non_empty": {
+          "name": "platform_user_disable_user_id_non_empty",
+          "value": "char_length(\"platform\".\"platform_user_disables\".\"user_id\") > 0"
+        },
+        "platform_user_disable_actor_non_empty": {
+          "name": "platform_user_disable_actor_non_empty",
+          "value": "char_length(\"platform\".\"platform_user_disables\".\"disabled_by\") > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.relay_key_subjects": {
+      "name": "relay_key_subjects",
+      "schema": "platform",
+      "columns": {
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject_id": {
+          "name": "subject_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_version": {
+          "name": "last_version",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "current_version": {
+          "name": "current_version",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "relay_key_subjects_purpose_subject_id_pk": {
+          "name": "relay_key_subjects_purpose_subject_id_pk",
+          "columns": [
+            "purpose",
+            "subject_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "relay_key_subject_purpose": {
+          "name": "relay_key_subject_purpose",
+          "value": "\"platform\".\"relay_key_subjects\".\"purpose\" in ('personal', 'agent-default')"
+        },
+        "relay_key_subject_id": {
+          "name": "relay_key_subject_id",
+          "value": "char_length(\"platform\".\"relay_key_subjects\".\"subject_id\") between 1 and 1024"
+        },
+        "relay_key_subject_last_version": {
+          "name": "relay_key_subject_last_version",
+          "value": "\"platform\".\"relay_key_subjects\".\"last_version\" between 0 and 9007199254740991"
+        },
+        "relay_key_subject_current_version": {
+          "name": "relay_key_subject_current_version",
+          "value": "\"platform\".\"relay_key_subjects\".\"current_version\" is null or \"platform\".\"relay_key_subjects\".\"current_version\" between 1 and \"platform\".\"relay_key_subjects\".\"last_version\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.relay_key_versions": {
+      "name": "relay_key_versions",
+      "schema": "platform",
+      "columns": {
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject_id": {
+          "name": "subject_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key_version": {
+          "name": "key_version",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key_id": {
+          "name": "key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ciphertext": {
+          "name": "ciphertext",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "relay_key_version_key_id_unique": {
+          "name": "relay_key_version_key_id_unique",
+          "columns": [
+            {
+              "expression": "key_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "relay_key_version_subject_fk": {
+          "name": "relay_key_version_subject_fk",
+          "tableFrom": "relay_key_versions",
+          "tableTo": "relay_key_subjects",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "purpose",
+            "subject_id"
+          ],
+          "columnsTo": [
+            "purpose",
+            "subject_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "relay_key_versions_purpose_subject_id_key_version_pk": {
+          "name": "relay_key_versions_purpose_subject_id_key_version_pk",
+          "columns": [
+            "purpose",
+            "subject_id",
+            "key_version"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "relay_key_version_identity_unique": {
+          "name": "relay_key_version_identity_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "purpose",
+            "subject_id",
+            "key_version",
+            "key_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "relay_key_version_purpose": {
+          "name": "relay_key_version_purpose",
+          "value": "\"platform\".\"relay_key_versions\".\"purpose\" in ('personal', 'agent-default')"
+        },
+        "relay_key_version_subject_id": {
+          "name": "relay_key_version_subject_id",
+          "value": "char_length(\"platform\".\"relay_key_versions\".\"subject_id\") between 1 and 1024"
+        },
+        "relay_key_version_key_id": {
+          "name": "relay_key_version_key_id",
+          "value": "char_length(\"platform\".\"relay_key_versions\".\"key_id\") between 1 and 1024"
+        },
+        "relay_key_version_safe": {
+          "name": "relay_key_version_safe",
+          "value": "\"platform\".\"relay_key_versions\".\"key_version\" between 1 and 9007199254740991"
+        },
+        "relay_key_version_ciphertext_binding": {
+          "name": "relay_key_version_ciphertext_binding",
+          "value": "(\"platform\".\"relay_key_versions\".\"ciphertext\"->>'purpose' = \"platform\".\"relay_key_versions\".\"purpose\"\n\t\t\t\tand \"platform\".\"relay_key_versions\".\"ciphertext\"->>'subjectId' = \"platform\".\"relay_key_versions\".\"subject_id\"\n\t\t\t\tand \"platform\".\"relay_key_versions\".\"ciphertext\"->>'keyId' = \"platform\".\"relay_key_versions\".\"key_id\"\n\t\t\t\tand \"platform\".\"relay_key_versions\".\"ciphertext\"->>'keyVersion' = \"platform\".\"relay_key_versions\".\"key_version\"::text) is true"
         }
       },
       "isRLSEnabled": false

@@ -108,6 +108,24 @@ beforeAll(async () => {
 	await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values (${message.agentId},1,'authorization_1')`;
 	await sql`insert into platform.agent_applications (id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values ('app_1',${message.agentId},'owner_1','Fixture','Fixture','available','trace_1','request_1',now(),1,1,'ready','running',1,1)`;
 	await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${message.agentId},1,'fixture',${sql.json(configuration)},now())`;
+	for (const senderId of [
+		message.senderId,
+		"sender_crash",
+		"slow_app_sender",
+		"default_sender",
+		"websocket-sender",
+		"stale-connection-sender",
+		"claimed-replay-sender",
+	]) {
+		const keyId = `personal-key-${senderId}`;
+		await sql`insert into platform.relay_key_subjects
+			(purpose, subject_id, last_version, current_version)
+			values ('personal', ${senderId}, 1, 1)`;
+		await sql`insert into platform.relay_key_versions
+			(purpose, subject_id, key_version, key_id, ciphertext)
+			values ('personal', ${senderId}, 1, ${keyId},
+				${sql.json({ schemaVersion: 1, purpose: "personal", subjectId: senderId, keyId, keyVersion: 1 })})`;
+	}
 }, 120_000);
 afterAll(async () => {
 	await store?.close();
@@ -142,6 +160,13 @@ it("commits one receipt with one execution under concurrent callbacks and replay
 		await sql`select * from platform.conversation_executions where conversation_id=${accepted.receipt.conversationId}`;
 	expect(rows).toHaveLength(1);
 	expect(rows[0]?.model_option_id).toBe("model_1");
+	expect(rows[0]).toMatchObject({
+		execution_source: "wecom",
+		relay_key_purpose: "personal",
+		relay_key_subject_id: message.senderId,
+		relay_key_id: `personal-key-${message.senderId}`,
+		relay_key_version: "1",
+	});
 	const records =
 		await sql`select boundary from platform.task_authorization_records where execution_id=${accepted.receipt.executionId}`;
 	expect(records).toHaveLength(1);

@@ -29,8 +29,10 @@ import {
 import {
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,
+	ldapIdentityIds,
 	platformApiCredentials,
 	platformApplications,
+	platformUserDisables,
 } from "./schema-identities";
 import {
 	auditEvents,
@@ -94,8 +96,10 @@ export {
 export {
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,
+	ldapIdentityIds,
 	platformApiCredentials,
 	platformApplications,
+	platformUserDisables,
 } from "./schema-identities";
 export {
 	auditEvents,
@@ -144,6 +148,8 @@ export const platformInfrastructureTables = [
 	platformApiCredentials,
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,
+	ldapIdentityIds,
+	platformUserDisables,
 	relayKeySubjects,
 	relayKeyVersions,
 ] as const;

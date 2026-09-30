@@ -2,8 +2,11 @@ import {
 	AgentApplicationProjectionV2Schema,
 	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
+	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
+	ConversationDetailProjectionV2Schema,
 	ConversationProjectionV1Schema,
+	ExecutionDetailProjectionV2Schema,
 	PlatformAuditProjectionV1Schema,
 	PlatformAuditProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
@@ -12,6 +15,7 @@ import {
 	createAgentManagementV1,
 	createApplicationFoundationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
+	createConversationEventUseCaseV1,
 	createConversationExecutionUseCaseV1,
 } from "@agent-infra/platform-core";
 import { FakeAgentConfigurationAdmissionsV1 } from "@agent-infra/platform-core/testing";
@@ -23,6 +27,7 @@ import {
 	PostgresAgentManagementTransactionV1,
 	PostgresApplicationFoundationTransactionV1,
 	PostgresApplicationRevisionTransactionV1,
+	PostgresConversationEventTransactionV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
 	PostgresPlatformAuditQueryV1,
@@ -33,6 +38,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
+import { PostgresRelayKeyVersionStoreV1 } from "../../../packages/platform-store/src/relay-key-versions.js";
 import { createPlatformApp } from "./app.js";
 import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
 import { createPlatformProjectionReaders } from "./projection.js";
@@ -110,6 +116,33 @@ beforeAll(async () => {
 	testDatabase = await startPostgresTestDatabase("platform-http-routes");
 	await migratePlatformDatabase({ databaseUrl: testDatabase.databaseUrl });
 	const databaseUrl = testDatabase.databaseUrl;
+	const relayKeys = new PostgresRelayKeyVersionStoreV1({ databaseUrl });
+	try {
+		const result = await relayKeys.replace({
+			purpose: "personal",
+			subjectId: identities.owner.userId,
+			expectedCurrentVersion: null,
+			encrypt: (binding) => ({
+				schemaVersion: 1,
+				...binding,
+				crypto: {
+					schemaVersion: 1,
+					algorithmVersion: "aes-256-gcm:v1",
+					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+					wrappingKeyVersion: "test-wrapping-key",
+					aadVersion: "relay-key-aad:v1",
+					dekFingerprint: "a".repeat(64),
+					nonce: Buffer.alloc(12).toString("base64"),
+					ciphertext: Buffer.alloc(16).toString("base64"),
+					authenticationTag: Buffer.alloc(16).toString("base64"),
+					wrappedDek: Buffer.alloc(384).toString("base64"),
+				},
+			}),
+		});
+		expect(result.outcome).toBe("replaced");
+	} finally {
+		await relayKeys.close();
+	}
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl,
 	});
@@ -659,21 +692,22 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		const conversation = ConversationProjectionV1Schema.parse(
 			await createdConversation.json(),
 		);
-		expect(
-			(
-				await app.request(
-					`/api/v1/conversations/${conversation.conversationId}/messages`,
-					{
-						method: "POST",
-						headers: {
-							...requestHeaders("owner", "conversation-message-1"),
-							"content-type": "application/json",
-						},
-						body: JSON.stringify({ schemaVersion: 1, text: "Run it" }),
-					},
-				)
-			).status,
-		).toBe(202);
+		const sentMessage = await app.request(
+			`/api/v1/conversations/${conversation.conversationId}/messages`,
+			{
+				method: "POST",
+				headers: {
+					...requestHeaders("owner", "conversation-message-1"),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ schemaVersion: 1, text: "Run it" }),
+			},
+		);
+		expect(sentMessage.status).toBe(202);
+		const accepted = CommandAcceptedProjectionV1Schema.parse(
+			await sentMessage.json(),
+		);
+		if (!accepted.executionId) throw new Error("Expected execution ID");
 		const conversationList = await app.request(
 			"/api/v1/agents/agent-run/conversations",
 			{ headers: requestHeaders("owner") },
@@ -692,8 +726,80 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				await conversationDetail.json(),
 			).messages,
 		).toEqual([expect.objectContaining({ role: "user", text: "Run it" })]);
+		if (!testDatabase) throw new Error("Expected PostgreSQL test database");
+		const eventTransaction = new PostgresConversationEventTransactionV1({
+			databaseUrl: testDatabase.databaseUrl,
+		});
+		try {
+			const events = createConversationEventUseCaseV1({
+				transaction: eventTransaction,
+			});
+			for (const [index, text] of ["First", "Second"].entries()) {
+				const result = await events.persist({
+					schemaVersion: 1,
+					conversationId: conversation.conversationId,
+					executionId: accepted.executionId,
+					sessionGeneration: 1,
+					deliveryFence: 0,
+					adapterEventKey: `http-event-${index}`,
+					runtimeCursor: `http-runtime-${index}`,
+					occurredAt: new Date().toISOString(),
+					event: { type: "text.delta", text },
+				});
+				expect(result.outcome).toBe("accepted");
+			}
+		} finally {
+			await eventTransaction.close();
+		}
+		const v2Detail = await app.request(
+			`/api/v2/conversations/${conversation.conversationId}`,
+			{ headers: requestHeaders("owner") },
+		);
+		expect(v2Detail.status).toBe(200);
+		const v2Conversation = ConversationDetailProjectionV2Schema.parse(
+			await v2Detail.json(),
+		);
+		expect(v2Conversation.messages).toEqual([
+			expect.objectContaining({ role: "user", text: "Run it" }),
+			expect.objectContaining({ role: "assistant", text: "FirstSecond" }),
+		]);
+		expect(v2Conversation.events).toHaveLength(2);
+		const firstEvent = v2Conversation.events[0];
+		if (!firstEvent) throw new Error("Expected persisted event");
+		expect(firstEvent).toMatchObject({
+			schemaVersion: 1,
+			type: "text.delta",
+		});
+		const v2Execution = await app.request(
+			`/api/v2/conversations/${conversation.conversationId}/executions/${accepted.executionId}`,
+			{ headers: requestHeaders("owner") },
+		);
+		expect(v2Execution.status).toBe(200);
+		expect(
+			ExecutionDetailProjectionV2Schema.parse(await v2Execution.json()).events,
+		).toEqual(v2Conversation.events);
+		const abort = new AbortController();
+		const stream = await app.request(
+			`/api/v2/conversations/${conversation.conversationId}/events?cursor=${encodeURIComponent(firstEvent.conversationCursor)}`,
+			{ headers: requestHeaders("owner"), signal: abort.signal },
+		);
+		expect(stream.status).toBe(200);
+		const reader = stream.body?.getReader();
+		expect(reader).toBeDefined();
+		try {
+			const firstChunk = await reader?.read();
+			const frame = new TextDecoder().decode(firstChunk?.value);
+			expect(frame).toContain('"type":"text.delta"');
+			expect(frame).toContain('"schemaVersion":1');
+			expect(frame).not.toContain(firstEvent.eventId);
+		} finally {
+			abort.abort();
+			await reader?.cancel();
+		}
 		for (const path of [
 			`/api/v1/conversations/${conversation.conversationId}`,
+			`/api/v2/conversations/${conversation.conversationId}`,
+			`/api/v2/conversations/${conversation.conversationId}/executions/${accepted.executionId}`,
 			`/api/v1/conversations/missing-${conversation.conversationId}`,
 		]) {
 			const denied = await app.request(path, {

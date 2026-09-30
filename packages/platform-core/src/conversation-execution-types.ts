@@ -33,6 +33,30 @@ export function conversationExecutionSourceV1(
 	throw new TypeError("Conversation execution channel is invalid");
 }
 
+export function conversationExecutionKeySubjectV1(
+	authority: Pick<
+		ConversationExecutionAuthorityV1,
+		"actorId" | "agentId" | "channelId"
+	>,
+	sourceKind: "standard" | "custom" | null | undefined,
+) {
+	const executionSource = conversationExecutionSourceV1(authority.channelId);
+	if (sourceKind === "custom") return null;
+	if (sourceKind !== "standard")
+		throw new TypeError("Conversation execution Agent source is invalid");
+	return executionSource === "web" || executionSource === "wecom"
+		? {
+				executionSource,
+				purpose: "personal" as const,
+				subjectId: authority.actorId,
+			}
+		: {
+				executionSource,
+				purpose: "agent-default" as const,
+				subjectId: authority.agentId,
+			};
+}
+
 export interface ConversationExecutionAuthorityV1 {
 	readonly schemaVersion: 1;
 	readonly actorId: string;

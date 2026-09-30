@@ -171,17 +171,38 @@
       "breakpoints": true
     },
     {
-      "idx": 22,
+      "idx": 24,
       "version": "7",
-      "when": 1790699394053,
+      "when": 1790724093107,
       "tag": "0024_application_targets",
       "breakpoints": true
     },
     {
-      "idx": 23,
+      "idx": 25,
       "version": "7",
-      "when": 1790699395053,
-      "tag": "0025_durable_task_api",
+      "when": 1790724094107,
+      "tag": "0025_credential_delivery_approval",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790724095107,
+      "tag": "0026_ldap_identity_authority",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1790738152673,
+      "tag": "0027_relay_key_authority",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1790746349762,
+      "tag": "0028_durable_task_api",
       "breakpoints": true
     }
   ]

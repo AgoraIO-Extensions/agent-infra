@@ -5,7 +5,10 @@ import type {
 	ConversationTaskAdmissionTransactionPortV1,
 	ConversationTaskSubmitResultV1,
 } from "@agent-infra/platform-core";
-import { isTaskPrincipalChannelV1 } from "@agent-infra/platform-core";
+import {
+	conversationExecutionKeySubjectV1,
+	isTaskPrincipalChannelV1,
+} from "@agent-infra/platform-core";
 import {
 	safeInteger,
 	type Transaction,
@@ -37,20 +40,6 @@ type SubmitRequest = Parameters<
 type SubmitDecide = Parameters<
 	ConversationTaskAdmissionTransactionPortV1["submitTask"]
 >[1];
-
-function executionSource(channelId: string) {
-	if (channelId === "web") return "web" as const;
-	if (
-		channelId === "wecom" ||
-		channelId.startsWith("wecom_bot:") ||
-		channelId.startsWith("wecom_app:")
-	)
-		return "wecom" as const;
-	if (channelId === "eval") return "eval" as const;
-	if (channelId === "api" || channelId.startsWith("api:"))
-		return "platform-api" as const;
-	throw new TypeError("Conversation execution channel is invalid");
-}
 
 function replayResult(value: unknown): ConversationTaskSubmitResultV1 {
 	if (
@@ -251,15 +240,16 @@ export async function submitConversationTask(
 	const statusEvent = plan.statusEvent;
 	if (plan.relayKeyBinding !== null) unavailable();
 	if (plan.executionSource !== null) {
-		if (executionSource(authority.channelId) !== plan.executionSource)
-			unavailable();
-		const keySubject =
-			plan.executionSource === "web" || plan.executionSource === "wecom"
-				? { purpose: "personal" as const, subjectId: authority.actorId }
-				: { purpose: "agent-default" as const, subjectId: authority.agentId };
+		const subject = conversationExecutionKeySubjectV1(
+			authority,
+			state.sourceKind,
+		);
+		if (!subject) unavailable();
+		const { executionSource, purpose, subjectId } = subject;
+		if (executionSource !== plan.executionSource) unavailable();
 		const relayKeyBinding = await currentRelayKeyVersionInTransaction(
 			transaction,
-			keySubject,
+			{ purpose, subjectId },
 		);
 		if (!relayKeyBinding)
 			return { outcome: "denied", reason: "relay_key_unavailable" };

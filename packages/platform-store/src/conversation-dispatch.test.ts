@@ -449,7 +449,19 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				modelOptionId: null,
 				reasoningLevel: null,
 			});
+			expect(decision.claim.executionSource).toBeUndefined();
 			expect(decision.claim.relayKeyBinding).toBeUndefined();
+			const [keyBinding] = await client`
+				select execution_source, relay_key_purpose, relay_key_subject_id,
+					relay_key_id, relay_key_version from platform.conversation_executions
+				where execution_id = ${accepted.result.executionId}`;
+			expect(keyBinding).toEqual({
+				execution_source: null,
+				relay_key_purpose: null,
+				relay_key_subject_id: null,
+				relay_key_id: null,
+				relay_key_version: null,
+			});
 			expect(
 				await store.prepareRuntimeDispatch({
 					claim: decision.claim,
@@ -461,6 +473,27 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			).toMatchObject({
 				executionStatus: "unknown",
 			});
+			await client`update platform.conversation_executions set status='completed'
+				where execution_id=${accepted.result.executionId}`;
+			await client`update platform.conversations set status='ready'
+				where id=${created.result.conversationId}`;
+			const regenerated = await api.regenerate({
+				schemaVersion: 1,
+				command: "regenerate",
+				conversationId: created.result.conversationId,
+				sourceMessageId: accepted.result.messageId ?? "",
+				idempotencyKey: "custom-regenerate",
+				requestId: "custom-regenerate",
+				traceId: "custom-trace",
+			});
+			expect(regenerated.outcome).toBe("accepted");
+			if (regenerated.outcome !== "accepted")
+				throw new Error("Expected custom regeneration acceptance");
+			const [regeneratedBinding] = await client`
+				select execution_source, relay_key_purpose, relay_key_subject_id,
+					relay_key_id, relay_key_version from platform.conversation_executions
+				where execution_id = ${regenerated.result.executionId}`;
+			expect(regeneratedBinding).toEqual(keyBinding);
 		} finally {
 			await Promise.all([transaction.close(), store.close()]);
 		}

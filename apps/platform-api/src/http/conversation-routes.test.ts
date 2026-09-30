@@ -14,7 +14,6 @@ import {
 	type ConversationRoutesDependencies,
 	registerConversationRoutes,
 } from "./conversation-routes.js";
-import { registerV2CompatibilityRoutes } from "./v2-compat.js";
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -230,7 +229,6 @@ function dependencies(
 function testApp(input = dependencies()) {
 	const app = new Hono();
 	registerConversationRoutes(app, input);
-	registerV2CompatibilityRoutes(app);
 	return { app, dependencies: input };
 }
 
@@ -256,6 +254,49 @@ describe("Conversation HTTP routes", () => {
 		);
 		expect(detailBody.events).toHaveLength(1);
 		expect(executionBody.events).toHaveLength(1);
+	});
+
+	it("keeps V1 projections fixed by URL despite a V2 header", async () => {
+		const { app } = testApp();
+		const detail = await app.request("/api/v1/conversations/conversation-1", {
+			headers: { "x-agent-infra-v2": "1" },
+		});
+		const execution = await app.request(
+			"/api/v1/conversations/conversation-1/executions/execution-1",
+			{ headers: { "x-agent-infra-v2": "1" } },
+		);
+		expect(detail.status).toBe(200);
+		expect(execution.status).toBe(200);
+		const detailBody = await detail.json();
+		const executionBody = await execution.json();
+		expect(
+			ConversationDetailProjectionV1Schema.parse(detailBody),
+		).toHaveProperty("messages");
+		expect(
+			ExecutionDetailProjectionV1Schema.parse(executionBody),
+		).toHaveProperty("processSummary");
+		expect(detailBody).not.toHaveProperty("events");
+		expect(executionBody).not.toHaveProperty("events");
+		expect(executionBody).toHaveProperty("schemaVersion", 1);
+	});
+
+	it("keeps direct V2 conversation and execution reads actor-scoped", async () => {
+		const input = dependencies();
+		input.commands(identity).readConversation = vi
+			.fn()
+			.mockResolvedValue({ outcome: "denied" });
+		for (const path of [
+			"/api/v2/conversations/conversation-1",
+			"/api/v2/conversations/conversation-1/executions/execution-1",
+		]) {
+			const response = await testApp(input).app.request(path);
+			expect(response.status).toBe(404);
+			expect(await response.json()).toMatchObject({
+				code: "RESOURCE_UNAVAILABLE",
+			});
+		}
+		expect(input.query.get).not.toHaveBeenCalled();
+		expect(input.query.getExecution).not.toHaveBeenCalled();
 	});
 
 	it("maps generated command requests to the Core seam without caller identity", async () => {

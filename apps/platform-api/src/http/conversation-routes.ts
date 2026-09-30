@@ -915,24 +915,6 @@ export function registerConversationRoutes(
 				metadata.traceId,
 			);
 			if (!detail) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
-			const v2 = context.req.header("x-agent-infra-v2") === "1";
-			if (v2) {
-				return context.json(
-					project(
-						() =>
-							ConversationDetailProjectionV2Schema.parse({
-								schemaVersion: 2,
-								conversation: conversationProjection(
-									detail.conversation,
-									effective,
-								),
-								messages: messageProjections(detail),
-								events: detail.events.map(eventProjection),
-							}),
-						metadata.traceId,
-					),
-				);
-			}
 			return context.json(
 				project(
 					() =>
@@ -1151,23 +1133,6 @@ export function registerConversationRoutes(
 					metadata.traceId,
 				);
 				if (!result) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
-				if (context.req.header("x-agent-infra-v2") === "1") {
-					const projection = project(
-						() => executionProjection(result),
-						metadata.traceId,
-					);
-					return context.json(
-						project(
-							() =>
-								ExecutionDetailProjectionV2Schema.parse({
-									...projection,
-									schemaVersion: 2,
-									events: result.events.map(eventProjection),
-								}),
-							metadata.traceId,
-						),
-					);
-				}
 				return context.json(
 					project(() => executionProjection(result), metadata.traceId),
 				);
