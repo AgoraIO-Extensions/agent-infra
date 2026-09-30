@@ -423,6 +423,48 @@ test("renders an authorization failure without retaining another subject's conve
 	).toHaveCount(0);
 });
 
+test("does not present an ordinary conversation 404 as an authorization failure", async ({
+	page,
+}) => {
+	const agent = AgentProjectionV2Schema.parse({
+		...pilotFakeScenariosV2.starting.response.body,
+		agentId,
+		managementStatus: "available",
+		serviceAvailability: "ready",
+	});
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (path.endsWith("/session")) {
+			await route.fulfill({ json: ownerSession() });
+			return;
+		}
+		if (path === `/api/v2/agents/${agentId}`) {
+			await route.fulfill({ json: agent });
+			return;
+		}
+		if (path === `/api/v2/conversations/${conversationId}`) {
+			await route.fulfill({
+				status: 404,
+				json: { message: "Synthetic route missing" },
+			});
+			return;
+		}
+		await route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	await expect(
+		page.getByText(
+			"会话连接暂时中断，草稿已保留。重新连接只恢复读取，不重新发送任务。",
+		),
+	).toBeVisible();
+	await expect(
+		page.getByText("当前登录或访问权限已失效，请重新登录或返回 Agent 列表。"),
+	).toHaveCount(0);
+	await expect(page.getByRole("button", { name: "重新连接" })).toBeVisible();
+});
+
 test("saves the next-message model and stops the bound execution", async ({
 	page,
 }) => {

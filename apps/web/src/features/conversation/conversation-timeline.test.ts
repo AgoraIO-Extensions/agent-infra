@@ -290,7 +290,7 @@ describe("Conversation generated-client data consumer", () => {
 	});
 
 	for (const endpoint of ["history", "stream"] as const) {
-		it.each([401, 403, 404])(
+		it.each([401, 403])(
 			`clears data and stops on ${endpoint} HTTP %s`,
 			async (status) => {
 				const stream = sse();
@@ -318,6 +318,27 @@ describe("Conversation generated-client data consumer", () => {
 				});
 			},
 		);
+
+		it(`keeps an ordinary ${endpoint} HTTP 404 unavailable`, async () => {
+			const stream = sse();
+			let missing = false;
+			const { reader } = setup((request) => {
+				if (missing && route(request) === endpoint)
+					return new Response("Route missing", { status: 404 });
+				if (route(request) === "stream") return stream.response;
+				return Response.json(history());
+			});
+			await reader.open("conversation-1");
+			missing = true;
+			if (endpoint === "history") stream.send(reload());
+			else await reader.reconnect();
+			await vi.waitFor(() =>
+				expect(reader.getSnapshot().status).toBe("unavailable"),
+			);
+			expect(reader.getSnapshot()).toMatchObject({
+				failure: { kind: "http", status: 404 },
+			});
+		});
 
 		it.each(["network", "service"] as const)(
 			`distinguishes ${endpoint} %s failure from empty or denied data`,

@@ -299,7 +299,7 @@ describe("Conversation execution detail Query ownership", () => {
 	);
 
 	for (const endpoint of ["history", "execution", "stream"] as const) {
-		it.each([401, 403, 404])(
+		it.each([401, 403])(
 			`purges cached details and stops on ${endpoint} HTTP %s`,
 			async (status) => {
 				const stream = sse();
@@ -342,6 +342,20 @@ describe("Conversation execution detail Query ownership", () => {
 			},
 		);
 	}
+
+	it("keeps an ordinary conversation 404 unavailable instead of denied", async () => {
+		const { result } = setup(
+			() => new Response("Route missing", { status: 404 }),
+		);
+		await waitFor(() =>
+			expect(result.current.timeline.status).toBe("unavailable"),
+		);
+		expect(result.current.timeline).toMatchObject({
+			history: null,
+			events: [],
+			failure: { kind: "http", status: 404 },
+		});
+	});
 
 	it("purges cached data and cancels a pending refetch on stream revocation", async () => {
 		const stream = sse();
