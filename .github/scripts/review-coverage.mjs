@@ -22,7 +22,7 @@ const PRUNED_DIFF_PATTERN =
 const JOB_LOG_TIMESTAMP_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
-function result(provider, headSha, conclusion, reasonCode, omittedFileCount = 0) {
+function result(provider, headSha, conclusion, reasonCode, omittedFileCount = conclusion === "success" ? 0 : null) {
   return { conclusion, headSha, omittedFileCount, provider, reasonCode };
 }
 
@@ -132,14 +132,53 @@ function evaluateClaude({ expectedHead, runResult, claudeReview }) {
 }
 
 export function evaluateReviewCoverage(input) {
-  if (input?.provider === "pr-agent") return evaluatePrAgent(input);
-  if (input?.provider === "claude") return evaluateClaude(input);
+  if (["pr-agent", "claude"].includes(input?.provider)) {
+    const coverage = input.provider === "pr-agent" ? evaluatePrAgent(input) : evaluateClaude(input);
+    if (input.collectionFailures?.length) {
+      if (coverage.conclusion === "success") {
+        Object.assign(coverage, { conclusion: "failure", reasonCode: "review-output-invalid", omittedFileCount: null });
+      }
+      coverage.collectionFailures = input.collectionFailures;
+    }
+    return coverage;
+  }
   return result(
     String(input?.provider ?? "unknown"),
     input?.expectedHead,
     "failure",
     "provider-mismatch",
   );
+}
+
+const COLLECTION_STAGES = new Set([
+  "analysis-job-list", "publication-receipt-parse", "publication-verify",
+  "analysis-log-fetch", "analysis-log-read", "unknown",
+]);
+const COLLECTION_FAILURES = new Set([
+  "api-denied", "api-unavailable", "job-count-mismatch", "job-identity-mismatch",
+  "missing-body", "size-limit", "invalid-receipt", "receipt-mismatch", "unknown",
+]);
+
+function collectionFailure(stage, error, metadata = {}) {
+  const failure = {
+    stage: COLLECTION_STAGES.has(stage) ? stage : "unknown",
+    failure: COLLECTION_FAILURES.has(error?.code) ? error.code
+      : [401, 403].includes(error?.status) ? "api-denied"
+      : Number.isInteger(error?.status) || error instanceof TypeError ? "api-unavailable" : "unknown",
+  };
+  if (Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599) failure.apiStatus = error.status;
+  for (const key of ["runId", "attempt", "analysisJobId", "analysisJobCount"]) {
+    const value = metadata[key];
+    if (Number.isSafeInteger(value) && value >= 0) failure[key] = value;
+  }
+  return failure;
+}
+
+function collectionSummaryLines(coverage) {
+  return (coverage.collectionFailures ?? []).slice(0, 4).flatMap((entry) => {
+    const safe = collectionFailure(entry.stage, { code: entry.failure, status: entry.apiStatus }, entry);
+    return Object.entries(safe).map(([key, value]) => `collection_${key}: ${value}`);
+  });
 }
 
 export function buildCoverageCheckOutput(coverage) {
@@ -154,6 +193,7 @@ export function buildCoverageCheckOutput(coverage) {
       `head_sha: ${coverage.headSha}`,
       `reason_code: ${coverage.reasonCode}`,
       `omitted_file_count: ${omittedFileCount}`,
+      ...collectionSummaryLines(coverage),
       "",
       complete
         ? "Coverage Gate accepted complete current-head Review evidence."
@@ -212,6 +252,7 @@ export function buildCoverageJobSummary(coverage, prNumber) {
     `- Conclusion: \`${coverage.conclusion}\``,
     `- Reason: \`${coverage.reasonCode}\``,
     `- Omitted files: \`${omittedFileCount}\``,
+    ...collectionSummaryLines(coverage).map((line) => `- ${line}`),
     `- Next owner: \`${coverage.conclusion === "success" ? "none" : "repository-maintainer"}\``,
     "",
   ].join("\n");
@@ -295,7 +336,7 @@ async function githubRequest(path, options = {}) {
     },
   });
   if (!response.ok) {
-    throw new Error(`GitHub API ${options.method ?? "GET"} ${path}: ${response.status}`);
+    throw Object.assign(new Error("GitHub API request failed"), { status: response.status });
   }
   return response.status === 204 ? null : response.json();
 }
@@ -305,7 +346,7 @@ export async function readBoundedTextResponse(
   maxBytes = MAX_EVIDENCE_BYTES,
 ) {
   const reader = response.body?.getReader();
-  if (!reader) return "";
+  if (!reader) throw Object.assign(new Error("GitHub job log body is missing"), { code: "missing-body" });
   const decoder = new TextDecoder();
   const chunks = [];
   let size = 0;
@@ -315,7 +356,7 @@ export async function readBoundedTextResponse(
     size += value.byteLength;
     if (size > maxBytes) {
       await reader.cancel();
-      throw new Error("GitHub job log exceeds the evidence size limit");
+      throw Object.assign(new Error("GitHub job log exceeds the evidence size limit"), { code: "size-limit" });
     }
     chunks.push(decoder.decode(value, { stream: true }));
   }
@@ -323,7 +364,7 @@ export async function readBoundedTextResponse(
   return chunks.join("");
 }
 
-async function githubTextRequest(path) {
+async function githubLogResponse(path) {
   const response = await fetch(`https://api.github.com${path}`, {
     headers: {
       Accept: "application/vnd.github+json",
@@ -332,33 +373,73 @@ async function githubTextRequest(path) {
     },
   });
   if (!response.ok) {
-    throw new Error(`GitHub API GET ${path}: ${response.status}`);
+    throw Object.assign(new Error("GitHub job log request failed"), { status: response.status });
   }
-  return readBoundedTextResponse(response);
+  return response;
+}
+
+export async function collectPrAgentEvidence({
+  repository, prNumber, expectedHead, runId, attempt, receipt,
+  request = githubRequest, logResponse = githubLogResponse,
+}) {
+  const evidence = { collectionFailures: [] };
+  const metadata = { runId: Number(runId), attempt: Number(attempt) };
+  const collect = async (stage, action) => {
+    try { return await action(); }
+    catch (error) { evidence.collectionFailures.push(collectionFailure(stage, error, metadata)); }
+  };
+  const jobs = await collect("analysis-job-list", async () => {
+    const response = await request(`/repos/${repository}/actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100`);
+    const jobs = (response.jobs ?? []).filter((job) => job.name === "PR-Agent Analysis");
+    metadata.analysisJobCount = jobs.length;
+    // Do not accept a partial page as proof that the Analysis job is unique.
+    if (jobs.length !== 1 || response.total_count > response.jobs.length) {
+      throw { code: "job-count-mismatch" };
+    }
+    const selected = jobs[0];
+    if (!Number.isSafeInteger(selected.id) || selected.id < 1 ||
+        selected.run_id !== Number(runId) || selected.run_attempt !== Number(attempt) ||
+        selected.head_sha !== expectedHead || selected.status !== "completed") {
+      throw { code: "job-identity-mismatch" };
+    }
+    metadata.analysisJobId = selected.id;
+    evidence.analysisJobConclusion = selected.conclusion;
+    return jobs;
+  });
+  const parsedReceipt = await collect("publication-receipt-parse", async () => {
+    try { return JSON.parse(receipt); }
+    catch { throw { code: "invalid-receipt" }; }
+  });
+  if (parsedReceipt !== undefined) {
+    await collect("publication-verify", async () => {
+      evidence.publicationVerified = await verifyPrAgentPublication({
+        repository, prNumber, expectedHead, runId, attempt, receipt: parsedReceipt, request,
+      });
+      if (!evidence.publicationVerified) throw { code: "receipt-mismatch" };
+    });
+  }
+  if (jobs) {
+    const response = await collect("analysis-log-fetch", () =>
+      logResponse(`/repos/${repository}/actions/jobs/${jobs[0].id}/logs`));
+    if (response) {
+      evidence.analysisLog = await collect("analysis-log-read", async () => {
+        const log = await readBoundedTextResponse(response);
+        if (!log) throw { code: "missing-body" };
+        return log;
+      });
+    }
+  }
+  return evidence;
 }
 
 async function collectEvidence({ repository, prNumber, expectedHead, provider }) {
   if (provider === "pr-agent") {
-    const runId = requiredEnvironment("GITHUB_RUN_ID");
-    const response = await githubRequest(
-      `/repos/${repository}/actions/runs/${runId}/jobs?filter=latest&per_page=100`,
-    );
-    const jobs = (response.jobs ?? []).filter(
-      (job) => job.name === "PR-Agent Analysis",
-    );
-    if (jobs.length !== 1) return {};
-    return {
-      publicationVerified: await verifyPrAgentPublication({
-        repository, prNumber, expectedHead, runId,
-        attempt: requiredEnvironment("GITHUB_RUN_ATTEMPT"),
-        receipt: JSON.parse(requiredEnvironment("PR_AGENT_REVIEW_RECEIPT")),
-        request: githubRequest,
-      }),
-      analysisJobConclusion: jobs[0].conclusion,
-      analysisLog: await githubTextRequest(
-        `/repos/${repository}/actions/jobs/${jobs[0].id}/logs`,
-      ),
-    };
+    return collectPrAgentEvidence({
+      repository, prNumber, expectedHead,
+      runId: requiredEnvironment("GITHUB_RUN_ID"),
+      attempt: requiredEnvironment("GITHUB_RUN_ATTEMPT"),
+      receipt: process.env.PR_AGENT_REVIEW_RECEIPT,
+    });
   }
   if (provider === "claude") {
     const encodedName = encodeURIComponent("Claude Review Gate");
@@ -380,8 +461,8 @@ export async function collectReviewEvidence(runResult, collector) {
   if (runResult !== "success") return {};
   try {
     return await collector();
-  } catch {
-    return {};
+  } catch (error) {
+    return { collectionFailures: [collectionFailure("unknown", error)] };
   }
 }
 
