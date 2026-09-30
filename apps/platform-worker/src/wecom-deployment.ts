@@ -148,6 +148,7 @@ export async function startPlatformWecomWorkerFromDeploymentV1(
 	signal: AbortSignal = new AbortController().signal,
 ) {
 	let worker: WecomLoop;
+	let candidate: Partial<WecomLoop> | undefined;
 	try {
 		if (!moduleSpecifier) throw new Error();
 		signal.throwIfAborted();
@@ -159,14 +160,20 @@ export async function startPlatformWecomWorkerFromDeploymentV1(
 		if (typeof deployment.createPlatformWecomWorkerInstanceV1 !== "function")
 			throw new Error();
 		signal.throwIfAborted();
-		worker = await deployment.createPlatformWecomWorkerInstanceV1(signal);
+		candidate = await deployment.createPlatformWecomWorkerInstanceV1(signal);
 		if (
-			typeof worker?.reconcile !== "function" ||
-			typeof worker.dispatch !== "function" ||
-			typeof worker.close !== "function"
+			typeof candidate?.reconcile !== "function" ||
+			typeof candidate.dispatch !== "function" ||
+			typeof candidate.close !== "function"
 		)
 			throw new Error();
+		worker = candidate as WecomLoop;
 	} catch {
+		try {
+			await candidate?.close?.();
+		} catch {
+			// Preserve the startup failure after draining any created resources.
+		}
 		throw new Error("WeCom Worker deployment dependencies are unavailable");
 	}
 	if (signal.aborted) {

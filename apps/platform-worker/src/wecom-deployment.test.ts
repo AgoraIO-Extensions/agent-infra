@@ -73,6 +73,21 @@ it("rejects missing deployment factories without exposing imported errors", asyn
 	).rejects.toThrow("WeCom Worker deployment dependencies are unavailable");
 });
 
+it("closes resources returned by a malformed deployment factory", async () => {
+	const closed = vi.fn();
+	vi.stubGlobal("wecomDeploymentClosed", closed);
+	try {
+		await expect(
+			startPlatformWecomWorkerFromDeploymentV1(
+				"data:text/javascript,export function createPlatformWecomWorkerInstanceV1() { return { reconcile: async () => {}, close: async () => globalThis.wecomDeploymentClosed() }; }",
+			),
+		).rejects.toThrow("WeCom Worker deployment dependencies are unavailable");
+		expect(closed).toHaveBeenCalledOnce();
+	} finally {
+		vi.unstubAllGlobals();
+	}
+});
+
 it("loads a deployment worker and closes it through the process lifecycle", async () => {
 	const closed = vi.fn();
 	vi.stubGlobal("wecomDeploymentClosed", closed);
