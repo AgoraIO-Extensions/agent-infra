@@ -331,6 +331,17 @@ export const connectionApi = {
 				headers: commandHeaders(),
 			}),
 		),
+	archiveApprovalNotifications: (notificationIds: string[]) =>
+		unwrap<void>(
+			archiveConnectionNotifications({
+				body: parseClientInput(
+					notificationBatchSchema,
+					{ notificationIds },
+					"通知标识无效",
+				),
+				headers: commandHeaders(),
+			}),
+		),
 	getConnectionAccessOptions: () =>
 		unwrap<AccessOptionsResponse>(listConnectionAccessOptions()),
 	listConnectionAccessRequests: () =>

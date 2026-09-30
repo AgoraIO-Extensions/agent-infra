@@ -10,6 +10,7 @@ import {
 	ListChecks,
 	LogOut,
 	ShieldCheck,
+	Trash2,
 	UsersRound,
 	X,
 } from "lucide-react";
@@ -44,6 +45,25 @@ export function ConsoleShell(props: { children: ReactNode }) {
 	const updateNotification = useMutation({
 		mutationFn: connectionApi.updateApprovalNotification,
 		onSuccess: () =>
+			queryClient.invalidateQueries({
+				queryKey: ["connection-approval-notifications"],
+			}),
+	});
+	const clearNotifications = useMutation({
+		mutationFn: async () => {
+			let previousFirstId: string | undefined;
+			for (;;) {
+				const current = await connectionApi.listConnectionNotifications();
+				if (!current.items.length) return;
+				if (current.items[0]?.id === previousFirstId)
+					throw new Error("通知列表未更新，请稍后重试");
+				previousFirstId = current.items[0]?.id;
+				await connectionApi.archiveApprovalNotifications(
+					current.items.map((item) => item.id),
+				);
+			}
+		},
+		onSettled: () =>
 			queryClient.invalidateQueries({
 				queryKey: ["connection-approval-notifications"],
 			}),
@@ -172,6 +192,22 @@ export function ConsoleShell(props: { children: ReactNode }) {
 							{updateNotification.isError ? (
 								<PageError error={updateNotification.error} />
 							) : null}
+							{clearNotifications.isError ? (
+								<PageError error={clearNotifications.error} />
+							) : null}
+							{notifications.data?.items.length ? (
+								<button
+									className="notification-clear"
+									type="button"
+									disabled={
+										clearNotifications.isPending || updateNotification.isPending
+									}
+									onClick={() => clearNotifications.mutate()}
+								>
+									<Trash2 aria-hidden="true" size={15} />
+									{clearNotifications.isPending ? "清除中..." : "清除全部"}
+								</button>
+							) : null}
 							<Link
 								to="/connection/approvals"
 								onClick={() => setNotificationsOpen(false)}
@@ -255,7 +291,10 @@ export function ConsoleShell(props: { children: ReactNode }) {
 												type="button"
 												title={item.readAt ? "归档通知" : "标记已读"}
 												aria-label={item.readAt ? "归档通知" : "标记已读"}
-												disabled={updateNotification.isPending}
+												disabled={
+													updateNotification.isPending ||
+													clearNotifications.isPending
+												}
 												onClick={() =>
 													updateNotification.mutate({
 														notificationId: item.id,

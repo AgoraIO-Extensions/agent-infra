@@ -393,10 +393,53 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		`;
 	}
 
+	private async expireDisconnectedUpgradeTasks(
+		sql: postgres.TransactionSql,
+		principalId?: string,
+		connectionId?: string,
+	) {
+		await sql`
+			WITH expired AS (
+				UPDATE connection_provider_upgrade_tasks task
+				SET status = 'EXPIRED', updated_at = now()
+				FROM connection_accounts account
+				WHERE task.connection_id = account.id
+					AND account.owner_type = 'PERSONAL'
+					AND account.status = 'DISCONNECTED'
+					AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
+					AND (${principalId ?? null}::text IS NULL OR task.principal_id = ${principalId ?? null})
+					AND (${connectionId ?? null}::text IS NULL OR task.connection_id = ${connectionId ?? null})
+				RETURNING task.id, task.campaign_id, task.principal_id
+			), audited AS (
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				SELECT principal_id, 'PROVIDER_UPGRADE_TASK_EXPIRED',
+					jsonb_build_object('taskId', id, 'campaignId', campaign_id,
+						'reason', 'CONNECTION_DISCONNECTED')
+				FROM expired
+			), settled AS (
+				UPDATE connection_work_items item
+				SET status = 'EXPIRED', completed_at = now(), updated_at = now()
+				FROM expired
+				WHERE item.business_type = 'PROVIDER_UPGRADE_TASK'
+					AND item.business_id = expired.id
+					AND item.recipient_principal_id = expired.principal_id
+					AND item.status = 'OPEN'
+			)
+			INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+			SELECT 'outbox-disconnected-' || id,
+				'connection.provider-upgrade.expired', id,
+				jsonb_build_object('campaignId', campaign_id,
+					'principalId', principal_id, 'reason', 'CONNECTION_DISCONNECTED')
+			FROM expired
+			ON CONFLICT (topic, aggregate_id) DO NOTHING
+		`;
+	}
+
 	private async reconcileProviderUpgradeTasks(
 		sql: postgres.TransactionSql,
 		principalId?: string,
 	) {
+		await this.expireDisconnectedUpgradeTasks(sql, principalId);
 		await sql`
 			WITH superseded AS (
 				UPDATE connection_provider_upgrade_tasks task
@@ -437,6 +480,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			JOIN connection_accounts account
 				ON account.provider_id = campaign.provider_id
 				AND account.provider_release_id = campaign.source_provider_release_id
+				AND account.status = 'ACTIVE'
 			JOIN connection_authorization_roots root ON root.provider_id = account.provider_id
 			JOIN connection_grants active_grant
 				ON active_grant.id = root.current_grant_id
@@ -4365,6 +4409,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					WHERE id = ${grant.root_id} AND current_grant_id = ${grant.id}
 				`;
 			}
+			await this.expireDisconnectedUpgradeTasks(
+				sql,
+				input.principalId,
+				input.connectionId,
+			);
 			await sql`
 				INSERT INTO connection_audit_records (principal_id, event, detail)
 				VALUES (

@@ -321,6 +321,23 @@ p {
 	display: block;
 	font-weight: normal;
 }
+.notification-panel .notification-clear {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 6px;
+	width: 100%;
+	padding: 9px 14px;
+	border: 0;
+	border-bottom: 1px solid var(--border);
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+.notification-panel .notification-clear:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
 .notification-panel p {
 	padding: 16px;
 }

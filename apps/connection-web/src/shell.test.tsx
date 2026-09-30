@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => ({
 			body: { action: "READ" | "ARCHIVE" };
 		}) => undefined,
 	),
+	archiveApprovalNotifications: vi.fn(async (_ids: string[]) => undefined),
 	navigate: vi.fn(async () => undefined),
 	redirect: vi.fn(),
 }));
@@ -56,6 +57,7 @@ vi.mock("./api", () => ({
 		logout: mocks.logout,
 		listConnectionNotifications: mocks.listConnectionNotifications,
 		updateApprovalNotification: mocks.updateApprovalNotification,
+		archiveApprovalNotifications: mocks.archiveApprovalNotifications,
 	},
 }));
 
@@ -90,6 +92,104 @@ afterEach(() => {
 });
 
 describe("Connection 控制台 Session", () => {
+	it("清除全部通知跨页归档但保留待办", async () => {
+		const initial = await mocks.listConnectionNotifications();
+		const notice = initial.items[0];
+		if (!notice) throw new Error("Notification fixture is missing");
+		const firstPage = Array.from({ length: 50 }, (_, index) => ({
+			...notice,
+			id: `notice-${index}`,
+		}));
+		const secondPage = [{ ...notice, id: "notice-50" }];
+		mocks.listConnectionNotifications
+			.mockResolvedValueOnce({ ...initial, items: firstPage, unreadCount: 51 })
+			.mockResolvedValueOnce({ ...initial, items: firstPage, unreadCount: 51 })
+			.mockResolvedValueOnce({ ...initial, items: secondPage, unreadCount: 1 })
+			.mockResolvedValueOnce({ ...initial, items: [], unreadCount: 0 })
+			.mockResolvedValueOnce({ ...initial, items: [], unreadCount: 0 });
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		render(
+			<QueryClientProvider client={client}>
+				<ConsoleShell>内容</ConsoleShell>
+			</QueryClientProvider>,
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /通知与待办 52 项/ }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "清除全部" }));
+		await waitFor(() =>
+			expect(mocks.archiveApprovalNotifications).toHaveBeenCalledTimes(2),
+		);
+		expect(mocks.archiveApprovalNotifications.mock.calls[0]?.[0]).toHaveLength(
+			50,
+		);
+		expect(mocks.archiveApprovalNotifications.mock.calls[1]?.[0]).toEqual([
+			"notice-50",
+		]);
+		expect(await screen.findByText("暂无通知")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /通知与待办 1 项/ }),
+		).toBeTruthy();
+	});
+
+	it("清除全部可以处理超过二十批通知", async () => {
+		const initial = await mocks.listConnectionNotifications();
+		const notice = initial.items[0];
+		if (!notice) throw new Error("Notification fixture is missing");
+		const pages = Array.from({ length: 21 }, (_, index) => [
+			{ ...notice, id: `batch-${index}` },
+		]);
+		for (const items of [pages[0], ...pages, [], []])
+			mocks.listConnectionNotifications.mockResolvedValueOnce({
+				...initial,
+				items: items ?? [],
+			});
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		render(
+			<QueryClientProvider client={client}>
+				<ConsoleShell>内容</ConsoleShell>
+			</QueryClientProvider>,
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /通知与待办 1 项/ }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "清除全部" }));
+		await waitFor(() =>
+			expect(mocks.archiveApprovalNotifications).toHaveBeenCalledTimes(21),
+		);
+		expect(await screen.findByText("暂无通知")).toBeTruthy();
+	});
+
+	it("批量归档失败时刷新状态并展示错误", async () => {
+		mocks.archiveApprovalNotifications.mockRejectedValueOnce(
+			new Error("归档暂时失败"),
+		);
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		render(
+			<QueryClientProvider client={client}>
+				<ConsoleShell>内容</ConsoleShell>
+			</QueryClientProvider>,
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /通知与待办 1 项/ }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "清除全部" }));
+		expect(await screen.findByRole("alert")).toHaveProperty(
+			"textContent",
+			"归档暂时失败",
+		);
+		await waitFor(() =>
+			expect(mocks.listConnectionNotifications).toHaveBeenCalledTimes(3),
+		);
+		expect(screen.getByRole("button", { name: "清除全部" })).toBeTruthy();
+	});
+
 	it("归档已读通知不消除未完成待办", async () => {
 		const initial = await mocks.listConnectionNotifications();
 		mocks.listConnectionNotifications
