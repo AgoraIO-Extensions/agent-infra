@@ -771,8 +771,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			this.closed ||
 			state.cancelled ||
 			turn?.status !== "running" ||
-			(action.kind === "model" &&
-				(turn.nativeResult || state.turns.at(-1) !== turn)) ||
+			turn.nativeResult ||
+			state.turns.at(-1) !== turn ||
 			!record ||
 			record.operationId !== action.runtimeOperationId ||
 			fact?.type !== "operation" ||

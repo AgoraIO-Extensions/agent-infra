@@ -222,6 +222,7 @@ async function legacyPolicyEvidence() {
    store: disabledStore,
    driver: disabledDriver,
    grantValidation: { expectedIssuer: "legacy-platform" },
+   grantValidationV2: { expectedIssuer: "synthetic-platform", expectedWorkerId: "synthetic-worker" },
    allowLegacyBusiness: false,
   });
   close.push(async () => { await disabled.close(); await disabledStore.close(); });

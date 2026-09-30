@@ -1,7 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
+import { DurableJsonFile } from "./durable-json.js";
 import { SessionRuntimeDriver } from "./session-runtime-driver.js";
 
 it.each(["completed", "unknown"] as const)(
@@ -135,6 +136,134 @@ it.each(["completed", "unknown"] as const)(
 		}
 	},
 );
+
+it("rejects a new tool permit after a durable native result before terminal status", async () => {
+	const path = await mkdtemp(join(tmpdir(), "native-result-tool-permit-"));
+	let driver!: SessionRuntimeDriver;
+	let stateFile = "";
+	let toolRequestStarted:
+		| ((tool: {
+				readonly toolCallId: string;
+				readonly name: string;
+				readonly permitted?: boolean;
+				readonly executionBoundary?: true;
+		  }) => Promise<void>)
+		| undefined;
+	let toolAuthorizations = 0;
+	let pauseTerminal = true;
+	let terminalPaused = false;
+	let releaseTerminal = () => {};
+	const terminalGate = new Promise<void>((resolve) => {
+		releaseTerminal = resolve;
+	});
+	const update = DurableJsonFile.prototype.update;
+	const updateSpy = vi.spyOn(DurableJsonFile.prototype, "update");
+	updateSpy.mockImplementation(function (
+		this: DurableJsonFile<unknown>,
+		change,
+	) {
+		const state = this.read() as {
+			turns?: Array<{ nativeResult?: unknown }>;
+		};
+		if (
+			pauseTerminal &&
+			new Error().stack?.includes(".status") &&
+			state.turns?.some((turn) => turn.nativeResult !== undefined)
+		) {
+			pauseTerminal = false;
+			terminalPaused = true;
+			return terminalGate.then(() => update.call(this, change));
+		}
+		return update.call(this, change);
+	});
+	driver = await SessionRuntimeDriver.open({
+		path,
+		configVersion: "config-one",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		cursorPrefix: "native-result-tool",
+		modelLifecycleAtTransport: true,
+		toolLifecycleAtBoundary: true,
+		retireSession: async () => {},
+		completionStatus: () => "completed",
+		authorizeExternalAction: async (action) => {
+			await driver.validateExternalAction(action);
+			if (action.kind === "tool") toolAuthorizations++;
+			return { relayKey: "synthetic-model-credential" };
+		},
+		openSession: async (callbacks) => {
+			stateFile = join(callbacks.directory, "state.json");
+			toolRequestStarted = callbacks.toolRequestStarted;
+			return {
+				nativeId: "native-result-tool",
+				select: async () => {},
+				prompt: async () => {
+					await callbacks.admit();
+					await callbacks.modelRequestIntent?.("messages");
+					await callbacks.modelRequestStarted?.();
+					await callbacks.modelRequestFinished?.("completed");
+					return { stopReason: "end_turn" };
+				},
+				cancel: async () => {},
+				close: async () => {},
+			};
+		},
+	});
+	try {
+		const command = {
+			schemaVersion: 2 as const,
+			kind: "submit-turn" as const,
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-a",
+			turnId: "turn-a",
+			operationId: "operation-a",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		};
+		const accepted = await driver.execute(command);
+		await vi.waitFor(async () => {
+			const state = JSON.parse(await readFile(stateFile, "utf8"));
+			expect(state.turns[0].nativeResult).toMatchObject({
+				status: "completed",
+			});
+		});
+		await vi.waitFor(() => expect(terminalPaused).toBe(true));
+		if (!toolRequestStarted) throw new Error("tool callback unavailable");
+		await expect(
+			toolRequestStarted({
+				toolCallId: "tool-after-result",
+				name: "read",
+				permitted: true,
+				executionBoundary: true,
+			}),
+		).rejects.toThrow();
+		expect(toolAuthorizations).toBe(0);
+		releaseTerminal();
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+			).toBe("completed"),
+		);
+	} finally {
+		releaseTerminal();
+		updateSpy.mockRestore();
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
 
 it("rejects an ACP continuation when an admitted tool has no native receipt", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-model-tool-race-"));
