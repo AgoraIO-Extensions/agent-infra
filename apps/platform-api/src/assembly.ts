@@ -8,6 +8,8 @@ import {
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
 	createPersonalRelayKeyUseCaseV1,
+	createPlatformUserGovernanceUseCaseV1,
+	type PlatformUserGovernanceStoreV1,
 	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
 import {
@@ -44,7 +46,6 @@ import {
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/management-routes.js";
-import type { UserGovernanceRoutesDependencies } from "./http/user-governance-routes.js";
 import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
@@ -70,7 +71,7 @@ export interface PlatformApiAssemblyInput {
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
 	readonly apiIdentity?: PostgresApiIdentityStoreV1;
-	readonly userGovernance?: UserGovernanceRoutesDependencies["users"];
+	readonly userGovernance?: PlatformUserGovernanceStoreV1;
 	readonly personalRelayKeyEncryptor?: RelayKeyEncryptorV1;
 	readonly personalRelayKeyValidation?: (
 		keyValue: string,
@@ -483,7 +484,12 @@ export function assemblePlatformApi(
 			? { wecom: { ...wecom.dependencies, identity: input.identity } }
 			: {}),
 		requestScope: input.requestScope,
-		userGovernance: { identity: input.identity, users: input.userGovernance },
+		userGovernance: {
+			identity: input.identity,
+			governance: input.userGovernance
+				? createPlatformUserGovernanceUseCaseV1(input.userGovernance)
+				: undefined,
+		},
 		personalRelayKey: { identity: input.identity, keys: personalRelayKey },
 		...(files ? { files: files.dependencies } : {}),
 		management: {

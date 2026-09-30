@@ -1,4 +1,7 @@
-import { ApiIdentityError } from "@agent-infra/platform-core";
+import {
+	ApiIdentityError,
+	createPlatformUserGovernanceUseCaseV1,
+} from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
@@ -31,7 +34,10 @@ function fixture(role: "system_admin" | "employee" = "system_admin") {
 				return [];
 			},
 		},
-		users: { setPlatformDisabled, recordRejected },
+		governance: createPlatformUserGovernanceUseCaseV1({
+			setPlatformDisabled,
+			recordRejected,
+		}),
 	});
 	return { app, setPlatformDisabled, recordRejected };
 }

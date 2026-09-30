@@ -106,6 +106,7 @@ export {
 export * from "./file-reconciliation.js";
 export * from "./idempotency.js";
 export * from "./personal-relay-key.js";
+export * from "./platform-user-governance.js";
 export * from "./secret-activation.js";
 export * from "./secret-key-rotation.js";
 export type {

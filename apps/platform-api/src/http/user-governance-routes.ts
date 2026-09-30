@@ -1,6 +1,8 @@
 import { PlatformUserDisableCommandV1Schema } from "@agent-infra/contracts/pilot";
-import { ApiIdentityError } from "@agent-infra/platform-core";
-import type { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
+import {
+	ApiIdentityError,
+	type PlatformUserGovernanceUseCaseV1,
+} from "@agent-infra/platform-core";
 import type { Hono } from "hono";
 
 import { HttpProtocolError, parseJson, requestMetadata } from "./common.js";
@@ -9,10 +11,7 @@ import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 
 export interface UserGovernanceRoutesDependencies {
 	readonly identity: IdentityAdapter;
-	readonly users?: Pick<
-		PostgresPlatformUserDisablesV1,
-		"setPlatformDisabled" | "recordRejected"
-	>;
+	readonly governance?: PlatformUserGovernanceUseCaseV1;
 }
 
 /** Platform user status is a browser administrator operation. */
@@ -36,6 +35,8 @@ export function registerUserGovernanceRoutes(
 				metadata.traceId,
 			);
 			actorUserId = identity.userId;
+			if (!dependencies.governance)
+				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			const requestedUserId = context.req.param("userId");
 			targetUserId =
 				/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
@@ -43,8 +44,7 @@ export function registerUserGovernanceRoutes(
 				)
 					? requestedUserId
 					: null;
-			if (!identity.roles.includes("system_admin"))
-				throw new HttpProtocolError("FORBIDDEN", metadata.traceId);
+			dependencies.governance.assertAdministrator(identity.roles);
 			if (targetUserId === null)
 				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
 			const { value } = await parseJson(
@@ -52,11 +52,10 @@ export function registerUserGovernanceRoutes(
 				PlatformUserDisableCommandV1Schema,
 				metadata.traceId,
 			);
-			if (!dependencies.users)
-				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			try {
-				await dependencies.users.setPlatformDisabled({
+				await dependencies.governance.setPlatformDisabled({
 					actorUserId: identity.userId,
+					actorRoles: identity.roles,
 					targetUserId,
 					disabled: value.disabled,
 					traceId: metadata.traceId,
@@ -70,9 +69,9 @@ export function registerUserGovernanceRoutes(
 		} catch (error) {
 			const protocol = mapCoreError(error, metadata.traceId);
 			try {
-				if (!dependencies.users)
+				if (!dependencies.governance)
 					throw new Error("Governance audit is unavailable");
-				await dependencies.users.recordRejected({
+				await dependencies.governance.recordRejected({
 					actorUserId,
 					targetUserId,
 					traceId: metadata.traceId,

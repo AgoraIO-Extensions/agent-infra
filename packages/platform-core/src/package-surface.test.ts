@@ -67,6 +67,7 @@ describe("platform-core package surface", () => {
 			"createFileAuthorityV1",
 			"createFileReconciliationV1",
 			"createPersonalRelayKeyUseCaseV1",
+			"createPlatformUserGovernanceUseCaseV1",
 			"createSecretActivationUseCaseV1",
 			"createSecretKeyRotationUseCaseV1",
 			"createTaskRuntimeAuthorizationUseCaseV1",
