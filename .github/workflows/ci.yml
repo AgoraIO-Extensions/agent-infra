@@ -62,7 +62,7 @@ jobs:
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          evidence=.codex-native-command-evidence
+          evidence="$RUNNER_TEMP/codex-native-command-evidence"
           mkdir -p "$evidence"
           printf 'not_started\n' > "$evidence/result.txt"
           test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
@@ -121,7 +121,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: codex-native-command-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .codex-native-command-evidence/
+          path: ${{ runner.temp }}/codex-native-command-evidence/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
