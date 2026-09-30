@@ -78,8 +78,8 @@ export const PiRuntimeDriver = {
 					async (request) => {
 						return callbacks.modelRequestIntent?.(request);
 					},
-					async () => {
-						await callbacks.modelRequestStarted?.();
+					async (operationRef) => {
+						await callbacks.modelRequestStarted?.(operationRef);
 					},
 					async (usage) => {
 						await callbacks.modelUsage?.(usage);
@@ -87,8 +87,8 @@ export const PiRuntimeDriver = {
 					async (tool) => {
 						await callbacks.toolRequestStarted?.(tool);
 					},
-					async (state, usage) => {
-						await callbacks.modelRequestFinished?.(state, usage);
+					async (state, usage, operationRef) => {
+						await callbacks.modelRequestFinished?.(state, usage, operationRef);
 					},
 					async (receipt) => {
 						if (!callbacks.toolReceipt)

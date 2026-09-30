@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { PiRuntimeDriver } from "./pi-runtime-driver.js";
+import type { NativeSessionOptions } from "./session-runtime-driver.js";
 
 const command = {
 	schemaVersion: 2 as const,
@@ -59,6 +60,81 @@ async function fixture(mode = "normal") {
 		},
 	};
 }
+
+it("forwards the Pi transport operationRef for a separate count request", async () => {
+	const path = await mkdtemp(join(tmpdir(), "pi-model-ref-"));
+	let driver!: Awaited<ReturnType<typeof PiRuntimeDriver.open>>;
+	let intent: NativeSessionOptions["modelRequestIntent"];
+	let started: NativeSessionOptions["modelRequestStarted"];
+	let finished: NativeSessionOptions["modelRequestFinished"];
+	driver = await PiRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "configured/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		modelLifecycleAtTransport: true,
+		authorizeExternalAction: async (action) => {
+			await driver.validateExternalAction(action);
+			return { relayKey: "synthetic-model-key-123" };
+		},
+		launch: async (
+			_directory,
+			_selection,
+			_admit,
+			modelRequestIntent,
+			modelRequestStarted,
+			_modelUsage,
+			_toolRequestStarted,
+			modelRequestFinished,
+		) => {
+			intent = modelRequestIntent;
+			started = modelRequestStarted;
+			finished = modelRequestFinished;
+			return {
+				command: process.execPath,
+				args: [
+					fileURLToPath(new URL("./pi-peer.test-support.mjs", import.meta.url)),
+				],
+				env: { PI_PEER_MODE: "abort-only" },
+			};
+		},
+	});
+	try {
+		const accepted = await driver.execute(command);
+		expect(accepted.result).toEqual({ outcome: "accepted", status: "running" });
+		const generation = await intent?.("messages");
+		if (!generation) throw new Error("Generation authorization missing");
+		await started?.(generation.operationRef);
+		await finished?.("completed", undefined, generation.operationRef);
+		const count = await intent?.("count_tokens");
+		if (!count) throw new Error("Count authorization missing");
+		expect(count.operationRef).not.toBe(generation.operationRef);
+		await started?.(count.operationRef);
+		await finished?.("completed", undefined, count.operationRef);
+		const facts = (
+			await driver.replayEvents(accepted.nativeSessionRef, command.executionId)
+		).flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "model"
+				? [event.payload]
+				: [],
+		);
+		expect(
+			facts
+				.filter((fact) => fact.operationRef === count.operationRef)
+				.map((fact) => fact.phase),
+		).toEqual(["intent", "started", "completed"]);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
 
 it.each([false, true])(
 	"keeps ACK separate from completion and resumes the exact session (native exit: %s)",

@@ -473,3 +473,140 @@ it("releases a pending model continuation when its generation is cancelled", asy
 		await rm(path, { recursive: true, force: true });
 	}
 });
+
+it.each(["close", "cancel"] as const)(
+	"retires a native-result wait with an unconfirmed auxiliary receipt (%s)",
+	async (mode) => {
+		const path = await mkdtemp(join(tmpdir(), "native-result-close-"));
+		let driver!: SessionRuntimeDriver;
+		let stateFile = "";
+		driver = await SessionRuntimeDriver.open({
+			path,
+			configVersion: "config-one",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					nativeModelId: "provider/model",
+					reasoningLevels: ["high"],
+				},
+			],
+			cursorPrefix: "native-result-close",
+			modelLifecycleAtTransport: true,
+			retireSession: async () => {},
+			completionStatus: () => "completed",
+			authorizeExternalAction: async (action) => {
+				await driver.validateExternalAction(action);
+				return { relayKey: "synthetic-model-credential" };
+			},
+			openSession: async (callbacks) => {
+				stateFile = join(callbacks.directory, "state.json");
+				return {
+					nativeId: "synthetic-native",
+					select: async () => {},
+					prompt: async () => {
+						await callbacks.admit();
+						const model = await callbacks.modelRequestIntent?.("messages");
+						if (!model) throw new Error("Model authorization missing");
+						await callbacks.modelRequestStarted?.(model.operationRef);
+						await callbacks.modelRequestFinished?.(
+							"completed",
+							undefined,
+							model.operationRef,
+						);
+						await callbacks.toolRequestStarted?.({
+							toolCallId: "tool-one",
+							name: "read",
+							permitted: true,
+						});
+						return { stopReason: "end_turn" };
+					},
+					cancel: async () => {},
+					close: async () => {},
+				};
+			},
+		});
+		try {
+			const accepted = await driver.execute({
+				schemaVersion: 2,
+				kind: "submit-turn",
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-a",
+				turnId: "turn-a",
+				operationId: "operation-a",
+				input: { text: "synthetic input", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "primary",
+					reasoningLevel: "high",
+				},
+			});
+			await vi.waitFor(async () => {
+				const state = JSON.parse(await readFile(stateFile, "utf8"));
+				expect(state.turns[0]?.nativeResult).toMatchObject({
+					status: "completed",
+					stopReason: "end_turn",
+				});
+			});
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const retirement =
+				mode === "close"
+					? driver.close()
+					: driver.execute({
+							schemaVersion: 1,
+							kind: "generation-cancel",
+							agentId: "agent-a",
+							conversationId: "conversation-a",
+							sessionGeneration: 1,
+							executionId: "execution-a",
+							turnId: "turn-a",
+							operationId: "cancel-a",
+							nativeSessionRef: accepted.nativeSessionRef,
+						});
+			const closed = await Promise.race([
+				retirement.then(() => true),
+				new Promise<boolean>((resolve) => {
+					timer = setTimeout(() => resolve(false), 1000);
+				}),
+			]);
+			clearTimeout(timer);
+			expect(closed).toBe(true);
+			const state = JSON.parse(await readFile(stateFile, "utf8"));
+			expect(state.turns[0]?.status).toBe("unknown");
+			const toolFacts = state.turns[0]?.events.flatMap(
+				(event: {
+					type: string;
+					payload: {
+						kind?: string;
+						phase?: string;
+						operationRef?: string;
+						attemptRef?: string;
+					};
+				}) =>
+					event.type === "operation" && event.payload.kind === "tool"
+						? [event.payload]
+						: [],
+			);
+			expect(toolFacts.map((fact: { phase?: string }) => fact.phase)).toEqual([
+				"intent",
+				"unknown",
+			]);
+			expect(toolFacts[1]).toMatchObject({
+				operationRef: toolFacts[0]?.operationRef,
+				attemptRef: toolFacts[0]?.attemptRef,
+				failureCode: "recovery_unconfirmed",
+			});
+			expect(
+				state.turns[0]?.events.filter(
+					(event: { type: string }) => event.type === "completed",
+				),
+			).toHaveLength(0);
+		} finally {
+			void driver.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);

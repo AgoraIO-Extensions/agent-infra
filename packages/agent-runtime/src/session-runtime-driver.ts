@@ -1746,6 +1746,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				if (!turn || terminal(turn.status)) return;
 				const counts = auxiliaryRequestState(turn);
 				if (counts === "pending") {
+					if (this.closed || this.cancelled(ref)) {
+						await this.recoverUnknownOperationFacts(file, executionId);
+						await this.status(file, executionId, "unknown");
+						return;
+					}
 					await changed;
 					continue;
 				}
