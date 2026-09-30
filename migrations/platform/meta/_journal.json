@@ -169,6 +169,13 @@
       "when": 1790699393053,
       "tag": "0023_wecom_replacement_probe",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790724093107,
+      "tag": "0024_application_targets",
+      "breakpoints": true
     }
   ]
 }
