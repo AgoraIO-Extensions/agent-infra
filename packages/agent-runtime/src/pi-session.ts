@@ -430,21 +430,7 @@ export async function openPiSession(
 			async prompt(text: string) {
 				if (active || exited) throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 				if (!currentCheckpoint) throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
-				const binding = await open(promptBindingFile, "w", 0o600);
-				try {
-					await binding.writeFile(
-						promptBinding(nativeId, currentCheckpoint, text),
-					);
-					await binding.sync();
-				} finally {
-					await binding.close();
-				}
-				const parent = await open(directory, "r");
-				try {
-					await parent.sync();
-				} finally {
-					await parent.close();
-				}
+				const checkpoint = currentCheckpoint;
 				started = false;
 				phases.clear();
 				const terminal = Promise.withResolvers<{
@@ -457,6 +443,28 @@ export async function openPiSession(
 					reject: terminal.reject,
 				};
 				active = target;
+				// Exit may reject the reservation while persistence is still pending.
+				void terminal.promise.catch(() => {});
+				try {
+					const binding = await open(promptBindingFile, "w", 0o600);
+					try {
+						await binding.writeFile(promptBinding(nativeId, checkpoint, text));
+						await binding.sync();
+					} finally {
+						await binding.close();
+					}
+					const parent = await open(directory, "r");
+					try {
+						await parent.sync();
+					} finally {
+						await parent.close();
+					}
+					if (exited || active !== target)
+						throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+				} catch (error) {
+					if (active === target) active = undefined;
+					throw error;
+				}
 				void rpc
 					.request("prompt", { message: text })
 					.then(() => (active === target ? options.update() : undefined))
