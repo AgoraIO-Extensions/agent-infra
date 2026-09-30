@@ -669,7 +669,11 @@ export function createConversationRuntimeV2(
 				businessRoute = latest.record;
 			}
 		}
-		if (businessAuthorizationRecordId && hasKeyedV4Selection(context.claim)) {
+		if (
+			businessAuthorizationRecordId &&
+			hasKeyedV4Selection(context.claim) &&
+			state.runtimeSubmitProtocol === "v4"
+		) {
 			if (
 				!context.claim.input ||
 				!options.executionKeys ||
@@ -853,6 +857,12 @@ export function createConversationRuntimeV2(
 				await latch(prepared, active);
 				denied();
 			}
+			if (
+				hasKeyedV4Selection(context.claim) &&
+				state.runtimeSubmitProtocol === "v2" &&
+				request.operation !== "turn.stop"
+			)
+				unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
 			if (request.operation === "turn.submit") {
 				if (!context.claim.input) unavailable("RUNTIME_REQUEST_INVALID");
 				if (hasKeyedV4Selection(context.claim)) {

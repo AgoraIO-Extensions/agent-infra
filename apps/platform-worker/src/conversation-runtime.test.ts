@@ -524,23 +524,15 @@ describe("Trusted conversation Runtime adapter", () => {
 			h.runtime.close();
 		}
 	});
-	it("keeps a V2-to-V4 bootstrap submit pinned to its nullable original scope", async () => {
+	it("does not re-submit a V2-pinned Execution through V4 after Key upgrade", async () => {
 		const h = harness(1, undefined, true);
 		Object.assign(h.state, { runtimeSubmitProtocol: "v2" });
 		try {
 			const reference = await h.authorize();
 			await expect(
 				h.runtime.runtimeHost.dispatch(h.request(reference)),
-			).resolves.toMatchObject({
-				schemaVersion: 2,
-			});
-			const [url, init] = h.fetcher.mock.calls[0] ?? [];
-			expect(String(url)).toBe(
-				"https://runtime.test/internal/runtime/v4/turns",
-			);
-			const transport = JSON.parse(String(init?.body));
-			expect(transport.businessRequest.hostSessionRef).toBeNull();
-			expect(transport.privateKeyField.context.hostSessionRef).toBeNull();
+			).rejects.toMatchObject({ code: "RUNTIME_ACCEPTANCE_UNKNOWN" });
+			expect(h.fetcher).not.toHaveBeenCalled();
 		} finally {
 			h.runtime.close();
 		}
@@ -622,6 +614,33 @@ describe("Trusted conversation Runtime adapter", () => {
 					reasoningLevel: "high",
 				},
 			});
+		} finally {
+			h.runtime.close();
+		}
+	});
+	it("reads a V2-pinned original status without V4 business replay", async () => {
+		const h = harness(1, undefined, true);
+		Object.assign(h.claim, { executionStatus: "unknown" });
+		Object.assign(h.state, {
+			executionStatus: "unknown",
+			runtimeSubmitProtocol: "v2",
+		});
+		try {
+			const reference = await h.authorize();
+			await expect(
+				h.runtime.runtimeHost.recoverOriginalStatus?.({
+					...h.events(reference),
+					schemaVersion: 2,
+				}),
+			).resolves.toMatchObject({
+				schemaVersion: 2,
+				outcome: "found",
+				executionId: "execution",
+				hostSessionRef: "host",
+			});
+			expect(h.fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+				"https://runtime.test/internal/runtime/v3/status",
+			]);
 		} finally {
 			h.runtime.close();
 		}
