@@ -120,6 +120,7 @@ export function AccessRequestPanel(props: {
 	const selectedOption = providerOptions.find(
 		(item) => item.policyVersionId === optionPolicyId,
 	);
+	const compactProgress = selectedRequest?.state === "CONSUMED";
 	const durations = props.renewalTarget
 		? selectedOption?.durations.filter((item) => item.kind === "FINITE")
 		: selectedOption?.durations;
@@ -199,100 +200,127 @@ export function AccessRequestPanel(props: {
 			{props.requestsError ? <PageError error={props.requestsError} /> : null}
 			{submit.isError ? <PageError error={submit.error} /> : null}
 			{cancel.isError ? <PageError error={cancel.error} /> : null}
-			<div className="connection-subheading">
-				<div>
-					<strong>审批与连接进度</strong>
-					<p>
-						{selectedRequest?.capabilityProfileName ??
-							(props.renewalTarget ? "续期申请" : "连接申请")}
-					</p>
-				</div>
-				{selectedRequest ? (
-					<span className="status">
-						{requestLabels[selectedRequest.state] ?? selectedRequest.state}
-					</span>
-				) : null}
-			</div>
-			{selectedRequest ? (
-				<>
-					{providerRequests.length > 1 ? (
-						<label className="approval-history-select">
-							申请记录
-							<select
-								value={selectedRequest.id}
-								onChange={(event) => setSelectedRequestId(event.target.value)}
-							>
-								{providerRequests.map((item) => (
-									<option key={item.id} value={item.id}>
-										{item.capabilityProfileName} ·{" "}
-										{new Date(item.createdAt).toLocaleDateString()} ·{" "}
-										{requestLabels[item.state] ?? item.state}
-									</option>
-								))}
-							</select>
-						</label>
+			{!compactProgress ? (
+				<div className="connection-subheading">
+					<div>
+						<strong>审批与连接进度</strong>
+						<p>
+							{selectedRequest?.capabilityProfileName ??
+								(props.renewalTarget ? "续期申请" : "连接申请")}
+						</p>
+					</div>
+					{selectedRequest ? (
+						<span className="status">
+							{requestLabels[selectedRequest.state] ?? selectedRequest.state}
+						</span>
 					) : null}
-					<div className="approval-request-meta">
-						<div>
-							<span>能力包</span>
+				</div>
+			) : null}
+			{selectedRequest ? (
+				<div
+					className={
+						compactProgress ? "approval-progress-connected" : undefined
+					}
+				>
+					<details
+						key={selectedRequest.id}
+						className="approval-progress-details"
+						open={!compactProgress}
+					>
+						<summary hidden={!compactProgress}>
+							<span className="status">
+								{selectedRequest.renewal ? "已续期" : "已连接"}
+							</span>
 							<strong>{selectedRequest.capabilityProfileName}</strong>
-						</div>
-						<div>
-							<span>申请时长</span>
-							<strong>
+							<span>
 								{selectedRequest.duration.kind === "PERMANENT"
 									? "永久"
 									: `${selectedRequest.duration.days} 天`}
-							</strong>
-						</div>
-						<div>
-							<span>申请截止</span>
-							<strong>
-								{new Date(selectedRequest.expiresAt).toLocaleString()}
-							</strong>
-						</div>
-					</div>
-					<ol className="approval-timeline">
-						{selectedRequest.stages.map((stage) => (
-							<li
-								key={stage.ordinal}
-								className={
-									stage.ordinal === selectedRequest.currentStageOrdinal
-										? "current"
-										: ""
-								}
-							>
-								<div className="approval-stage-detail">
-									<strong>{stage.name}</strong>
-									{stage.decisions?.map((decision) => (
-										<small
-											key={`${decision.approverName}-${decision.decidedAt}`}
-										>
-											{decision.approverName}
-											{decision.actorName !== decision.approverName
-												? `（${decision.actorName} 代审）`
-												: ""}{" "}
-											· {decision.decision === "APPROVE" ? "通过" : "拒绝"} ·{" "}
-											{new Date(decision.decidedAt).toLocaleString()}
-											{decision.comment ? ` · ${decision.comment}` : ""}
-										</small>
+							</span>
+							<span className="approval-progress-toggle">
+								<ChevronRight size={15} />
+								查看审批详情
+							</span>
+						</summary>
+						{providerRequests.length > 1 ? (
+							<label className="approval-history-select">
+								申请记录
+								<select
+									value={selectedRequest.id}
+									onChange={(event) => setSelectedRequestId(event.target.value)}
+								>
+									{providerRequests.map((item) => (
+										<option key={item.id} value={item.id}>
+											{item.capabilityProfileName} ·{" "}
+											{new Date(item.createdAt).toLocaleDateString()} ·{" "}
+											{requestLabels[item.state] ?? item.state}
+										</option>
 									))}
-								</div>
-								<span>
-									{stage.state === "SKIPPED_BY_CANCEL" &&
-									selectedRequest.state === "EXPIRED"
-										? "未完成"
-										: (stageLabels[stage.state] ?? stage.state)}
-								</span>
+								</select>
+							</label>
+						) : null}
+						<div className="approval-request-meta">
+							<div>
+								<span>能力包</span>
+								<strong>{selectedRequest.capabilityProfileName}</strong>
+							</div>
+							<div>
+								<span>申请时长</span>
+								<strong>
+									{selectedRequest.duration.kind === "PERMANENT"
+										? "永久"
+										: `${selectedRequest.duration.days} 天`}
+								</strong>
+							</div>
+							<div>
+								<span>申请截止</span>
+								<strong>
+									{new Date(selectedRequest.expiresAt).toLocaleString()}
+								</strong>
+							</div>
+						</div>
+						<ol className="approval-timeline">
+							{selectedRequest.stages.map((stage) => (
+								<li
+									key={stage.ordinal}
+									className={
+										stage.ordinal === selectedRequest.currentStageOrdinal
+											? "current"
+											: ""
+									}
+								>
+									<div className="approval-stage-detail">
+										<strong>{stage.name}</strong>
+										{stage.decisions?.map((decision) => (
+											<small
+												key={`${decision.approverName}-${decision.decidedAt}`}
+											>
+												{decision.approverName}
+												{decision.actorName !== decision.approverName
+													? `（${decision.actorName} 代审）`
+													: ""}{" "}
+												· {decision.decision === "APPROVE" ? "通过" : "拒绝"} ·{" "}
+												{new Date(decision.decidedAt).toLocaleString()}
+												{decision.comment ? ` · ${decision.comment}` : ""}
+											</small>
+										))}
+									</div>
+									<span>
+										{stage.state === "SKIPPED_BY_CANCEL" &&
+										selectedRequest.state === "EXPIRED"
+											? "未完成"
+											: (stageLabels[stage.state] ?? stage.state)}
+									</span>
+								</li>
+							))}
+							<li>
+								<strong>
+									{selectedRequest.renewal ? "续期资格" : "连接账号"}
+								</strong>
+								<span>{finalStepStatus}</span>
 							</li>
-						))}
-						<li>
-							<strong>
-								{selectedRequest.renewal ? "续期资格" : "连接账号"}
-							</strong>
-							<span>{finalStepStatus}</span>
-						</li>
-					</ol>
+						</ol>
+					</details>
 					<div className="approval-panel-actions">
 						{canConnect ? (
 							<a
@@ -322,7 +350,7 @@ export function AccessRequestPanel(props: {
 							</Button>
 						) : null}
 					</div>
-				</>
+				</div>
 			) : selectedOption ? (
 				<>
 					<div className="approval-request-meta">
