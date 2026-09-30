@@ -252,7 +252,11 @@ const connection = new AgentSideConnection(
 					content: { type: "text", text: `synthetic result ${count}` },
 				},
 			});
-			if (["tool", "tool-kind-omitted"].includes(process.env.ACP_TEST_MODE)) {
+			if (
+				["tool", "tool-kind-omitted", "tool-kind-reused"].includes(
+					process.env.ACP_TEST_MODE,
+				)
+			) {
 				const omitCompletedKind =
 					process.env.ACP_TEST_MODE === "tool-kind-omitted";
 				await connection.sessionUpdate({
@@ -282,6 +286,27 @@ const connection = new AgentSideConnection(
 						status: "completed",
 					},
 				});
+				if (process.env.ACP_TEST_MODE === "tool-kind-reused") {
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate: "tool_call_update",
+							toolCallId: "tool-1",
+							kind: "edit",
+							status: "completed",
+						},
+					});
+					for (const status of ["in_progress", "completed"]) {
+						await connection.sessionUpdate({
+							sessionId,
+							update: {
+								sessionUpdate: "tool_call_update",
+								toolCallId: "tool-1",
+								status,
+							},
+						});
+					}
+				}
 			}
 			if (
 				["hold", "ignore-cancel", "delayed-cancel"].includes(
