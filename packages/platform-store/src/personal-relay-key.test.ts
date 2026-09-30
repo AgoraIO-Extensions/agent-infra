@@ -36,36 +36,6 @@ let database: Awaited<ReturnType<typeof startPostgresTestDatabase>>;
 beforeAll(async () => {
 	database = await startPostgresTestDatabase("personal-relay-key");
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
-	const sql = postgres(database.databaseUrl, { max: 1 });
-	try {
-		// The shared Relay Key migration is owned by #482. This fixture tests the
-		// personal Store against its current version-table contract in isolation.
-		await sql`
-			create table platform.relay_key_subjects (
-				purpose text not null,
-				subject_id text not null,
-				last_version bigint not null default 0,
-				current_version bigint,
-				updated_at timestamptz not null default now(),
-				primary key (purpose, subject_id),
-				check (current_version is null or current_version between 1 and last_version)
-			)
-		`;
-		await sql`
-			create table platform.relay_key_versions (
-				purpose text not null,
-				subject_id text not null,
-				key_version bigint not null,
-				key_id text not null unique,
-				ciphertext jsonb not null,
-				primary key (purpose, subject_id, key_version),
-				foreign key (purpose, subject_id)
-					references platform.relay_key_subjects (purpose, subject_id)
-			)
-		`;
-	} finally {
-		await sql.end();
-	}
 }, 120_000);
 
 afterAll(async () => database?.stop());

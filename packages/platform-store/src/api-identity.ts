@@ -10,6 +10,7 @@ import {
 	hashApiCredentialV1,
 	isApiCredentialScopeV1,
 	isCurrentAgentGrantManageAllowedV1,
+	isCurrentCredentialDeliveryManagerV1,
 	parseCurrentTaskUserV1,
 } from "@agent-infra/platform-core";
 import { and, eq, gt, isNotNull, isNull } from "drizzle-orm";
@@ -83,21 +84,14 @@ async function hasCurrentDeliveryManager(
 	responsibleUserId: string,
 	resolveUser?: (userId: string) => Promise<unknown | null>,
 ): Promise<boolean> {
-	if (
-		actor.accountStatus !== "active" ||
-		actor.principal !== undefined ||
-		!actor.identityRevision ||
-		!resolveUser
-	)
-		return false;
+	if (!resolveUser) return false;
 	try {
 		const current = parseCurrentTaskUserV1(await resolveUser(actor.userId));
-		return (
-			current.userId === actor.userId &&
-			current.accountStatus === "active" &&
-			current.authorizationRevision === actor.identityRevision &&
-			(actor.isAdministrator || responsibleUserId === actor.userId)
-		);
+		return isCurrentCredentialDeliveryManagerV1({
+			actor,
+			responsibleUserId,
+			currentUser: current,
+		});
 	} catch {
 		return false;
 	}

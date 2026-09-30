@@ -78,6 +78,7 @@ export type AgentManagementCommandV1 =
 	| (AgentManagementCommandBaseV1 & {
 			readonly command:
 				| "stop_agent"
+				| "start_agent"
 				| "restart_agent"
 				| "retry_agent_creation"
 				| "disable_agent";
@@ -113,6 +114,11 @@ export type AgentManagementWorkloadObservationV1 =
 export type AgentManagementOperationV1 =
 	| AgentManagementCommandV1["command"]
 	| `observe_${AgentManagementWorkloadObservationV1["observation"]}`;
+
+type PersistedAgentManagementOperationV1 = Exclude<
+	AgentManagementOperationV1,
+	"start_agent"
+>;
 
 export interface AgentAccessQueryV1 {
 	readonly schemaVersion: 1;
@@ -185,7 +191,7 @@ export function isAgentAccessAllowedV1(
 
 export interface AgentManagementWritePlanV1 {
 	readonly schemaVersion: 1;
-	readonly operation: AgentManagementOperationV1;
+	readonly operation: PersistedAgentManagementOperationV1;
 	readonly subjectType: "agent_application" | "agent";
 	readonly subjectId: string;
 	readonly expectedRevision: number;
@@ -299,7 +305,7 @@ export interface AgentManagementInterfaceV1 {
 }
 
 export interface AgentManagementTransactionRequestV1 {
-	readonly operation: AgentManagementOperationV1;
+	readonly operation: PersistedAgentManagementOperationV1;
 	readonly subjectType: "agent_application" | "agent";
 	readonly subjectId: string;
 	readonly actorId: string;
@@ -334,6 +340,7 @@ const managementActionByOperation = {
 	approve_application: "agent.application.approved",
 	reject_application: "agent.application.rejected",
 	stop_agent: "agent.lifecycle.stopped",
+	start_agent: "agent.lifecycle.restarted",
 	restart_agent: "agent.lifecycle.restarted",
 	retry_agent_creation: "agent.lifecycle.creation_retried",
 	disable_agent: "agent.lifecycle.disabled",
@@ -360,6 +367,7 @@ const managementTransitions: Record<
 	approve_application: [["pending_approval", "creating"]],
 	reject_application: [["pending_approval", "rejected"]],
 	stop_agent: [["available", "stopped"]],
+	start_agent: [["stopped", "available"]],
 	restart_agent: [
 		["stopped", "available"],
 		["available", "available"],
@@ -457,6 +465,7 @@ export function snapshotAgentManagementWritePlanV1(
 	);
 	const idempotency = planObject(values.idempotency, ["key", "requestDigest"]);
 	const operation = values.operation as AgentManagementOperationV1;
+	if (operation === "start_agent") unavailablePlan();
 	const expectedSubjectType =
 		operation === "update_application" ||
 		operation === "withdraw_application" ||
@@ -611,6 +620,7 @@ function parseCommand(input: unknown): AgentManagementCommandV1 {
 	] as const;
 	const agentCommands = [
 		"stop_agent",
+		"start_agent",
 		"restart_agent",
 		"retry_agent_creation",
 		"disable_agent",
@@ -763,7 +773,8 @@ function accepted(
 		result,
 		writePlan: {
 			schemaVersion: 1,
-			operation: command.command,
+			operation:
+				command.command === "start_agent" ? "restart_agent" : command.command,
 			subjectType,
 			subjectId,
 			expectedRevision: command.expectedRevision,
@@ -876,7 +887,10 @@ export function createAgentManagementV1(
 			return adapterResult(() =>
 				transaction.executeAgentManagementTransaction(
 					{
-						operation: command.command,
+						operation:
+							command.command === "start_agent"
+								? "restart_agent"
+								: command.command,
 						subjectType,
 						subjectId,
 						actorId: actorContext.principal?.id ?? actorContext.userId,
@@ -1038,6 +1052,7 @@ export function createAgentManagementV1(
 						}
 						if (
 							command.command === "stop_agent" ||
+							command.command === "start_agent" ||
 							command.command === "restart_agent" ||
 							command.command === "retry_agent_creation" ||
 							command.command === "disable_agent"
@@ -1045,6 +1060,8 @@ export function createAgentManagementV1(
 							const validTransition =
 								(command.command === "stop_agent" &&
 									state.status === "available") ||
+								(command.command === "start_agent" &&
+									state.status === "stopped") ||
 								(command.command === "restart_agent" &&
 									(state.status === "stopped" ||
 										state.status === "available")) ||
@@ -1068,6 +1085,12 @@ export function createAgentManagementV1(
 									serviceAvailability: null,
 									desiredState: "stopped",
 									action: "agent.lifecycle.stopped",
+								},
+								start_agent: {
+									status: "available",
+									serviceAvailability: "starting",
+									desiredState: "running",
+									action: "agent.lifecycle.restarted",
 								},
 								restart_agent: {
 									status: "available",

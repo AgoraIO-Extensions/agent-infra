@@ -120,7 +120,10 @@ describe("platform API production assembly routes", () => {
 
 		const application = await app.request("/api/v1/applications", {
 			method: "POST",
-			headers: { "content-type": "application/json" },
+			headers: {
+				"content-type": "application/json",
+				"Idempotency-Key": "create-native-application",
+			},
 			body: JSON.stringify({ schemaVersion: 1, name: "Native application" }),
 		});
 		expect(application.status).toBe(201);

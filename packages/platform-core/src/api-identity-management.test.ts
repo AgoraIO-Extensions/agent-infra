@@ -5,6 +5,7 @@ import {
 	ApiIdentityError,
 	type ApiIdentityStorePortV1,
 	createApiIdentityManagementV1,
+	isCurrentCredentialDeliveryManagerV1,
 } from "./api-identity-management.js";
 
 const application: ApiIdentityApplicationV1 = {
@@ -103,6 +104,58 @@ function management(store: ApiIdentityStorePortV1) {
 }
 
 describe("API identity management authorization", () => {
+	it("allows delivery changes only for a current administrator or responsible user", () => {
+		const browserActor = {
+			schemaVersion: 1 as const,
+			userId: "owner-1",
+			accountStatus: "active" as const,
+			identityRevision: "user-revision-1",
+			isAdministrator: false,
+		};
+		const currentUser = {
+			schemaVersion: 1 as const,
+			userId: "owner-1",
+			accountStatus: "active" as const,
+			organizationIds: [],
+			authorizationRevision: "user-revision-1",
+		};
+		const facts = {
+			actor: browserActor,
+			currentUser,
+			responsibleUserId: "owner-1",
+		};
+		expect(isCurrentCredentialDeliveryManagerV1(facts)).toBe(true);
+		expect(
+			isCurrentCredentialDeliveryManagerV1({
+				...facts,
+				actor: { ...browserActor, isAdministrator: true },
+				responsibleUserId: "another-user",
+			}),
+		).toBe(true);
+		for (const denied of [
+			{ ...facts, responsibleUserId: "another-user" },
+			{
+				...facts,
+				actor: { ...browserActor, accountStatus: "disabled" as const },
+			},
+			{ ...facts, actor: { ...browserActor, identityRevision: "stale" } },
+			{
+				...facts,
+				actor: {
+					...browserActor,
+					principal: { kind: "user" as const, id: "owner-1" },
+				},
+			},
+			{
+				...facts,
+				currentUser: { ...currentUser, accountStatus: "disabled" as const },
+			},
+			{ ...facts, currentUser: { ...currentUser, userId: "another-user" } },
+		]) {
+			expect(isCurrentCredentialDeliveryManagerV1(denied)).toBe(false);
+		}
+	});
+
 	it("returns the application committed for an idempotent request", async () => {
 		const store = storeFixture();
 		const useCase = management(store);

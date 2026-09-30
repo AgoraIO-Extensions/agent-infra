@@ -1324,7 +1324,7 @@ describe("management routes", () => {
 		expect(response.status).toBe(202);
 		expect(input.executeManagementCommand).toHaveBeenCalledWith(
 			expect.objectContaining({
-				command: "restart_agent",
+				command: "start_agent",
 				expectedRevision: management.revision,
 			}),
 			expect.objectContaining({

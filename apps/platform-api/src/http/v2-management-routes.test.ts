@@ -368,8 +368,13 @@ describe("V2 management routes", () => {
 		);
 	});
 
-	it("allows browser start only for a stopped Agent", async () => {
+	it("passes browser start to Core and returns its transition decision", async () => {
 		const { app, getAgent, executeManagementCommand } = createApp();
+		executeManagementCommand.mockResolvedValueOnce({
+			outcome: "conflict",
+			reason: "invalid_transition",
+			writePlan: null,
+		});
 		getAgent.mockResolvedValue({
 			...agentRecord,
 			management: { ...management, status: "available" },
@@ -383,7 +388,10 @@ describe("V2 management routes", () => {
 
 		const conflict = await request();
 		expect(conflict.status).toBe(409);
-		expect(executeManagementCommand).not.toHaveBeenCalled();
+		expect(executeManagementCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ command: "start_agent" }),
+			expect.objectContaining({ userId: "user-1" }),
+		);
 
 		getAgent.mockResolvedValue({
 			...agentRecord,
@@ -392,7 +400,7 @@ describe("V2 management routes", () => {
 		const accepted = await request();
 		expect(accepted.status).toBe(202);
 		expect(executeManagementCommand).toHaveBeenCalledWith(
-			expect.objectContaining({ command: "restart_agent" }),
+			expect.objectContaining({ command: "start_agent" }),
 			expect.objectContaining({ userId: "user-1" }),
 		);
 	});

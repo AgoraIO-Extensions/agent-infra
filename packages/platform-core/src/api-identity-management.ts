@@ -7,6 +7,7 @@ import {
 	hasApiCredentialScopeV1,
 	sameApiPrincipalV1,
 } from "./api-identity.js";
+import type { CurrentTaskUserV1 } from "./task-authorization.js";
 
 export interface ApiIdentityApplicationV1 {
 	readonly id: string;
@@ -29,6 +30,23 @@ export interface ApiIdentityActorV1 {
 		ApiCredentialMetadataV1,
 		"credentialId" | "principal" | "scopes" | "expiresAt" | "revokedAt"
 	>;
+}
+
+export function isCurrentCredentialDeliveryManagerV1(input: {
+	readonly actor: ApiIdentityActorV1;
+	readonly responsibleUserId: string;
+	readonly currentUser: CurrentTaskUserV1 | null;
+}): boolean {
+	const { actor, responsibleUserId, currentUser } = input;
+	return (
+		actor.accountStatus === "active" &&
+		actor.principal === undefined &&
+		!!actor.identityRevision &&
+		currentUser?.userId === actor.userId &&
+		currentUser.accountStatus === "active" &&
+		currentUser.authorizationRevision === actor.identityRevision &&
+		(actor.isAdministrator || responsibleUserId === actor.userId)
+	);
 }
 
 /** An async API preparation may continue only under the same current creation authority. */

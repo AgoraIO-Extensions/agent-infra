@@ -43,6 +43,7 @@ import {
 	taskAuthorizationRecords,
 	taskControlRecords,
 } from "./schema-operations";
+import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 import { browserSessions } from "./schema-sessions";
 
 export {
@@ -109,6 +110,7 @@ export {
 	taskAuthorizationRecords,
 	taskControlRecords,
 } from "./schema-operations";
+export { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 export { browserSessions } from "./schema-sessions";
 
 export const platformInfrastructureTables = [
@@ -148,4 +150,6 @@ export const platformInfrastructureTables = [
 	apiCredentialDeliveryGrants,
 	ldapIdentityIds,
 	platformUserDisables,
+	relayKeySubjects,
+	relayKeyVersions,
 ] as const;

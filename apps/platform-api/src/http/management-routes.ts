@@ -1798,16 +1798,10 @@ function registerManagementRoutesInternal(
 					);
 					fail("FORBIDDEN", metadata.traceId);
 				}
-				if (
-					api &&
-					body.command === "start" &&
-					current.management.status !== "stopped"
-				)
-					fail("CONFLICT", metadata.traceId);
 				const commands = {
 					stop: "stop_agent",
 					restart: "restart_agent",
-					start: "restart_agent",
+					start: "start_agent",
 					retry_creation: "retry_agent_creation",
 					disable: "disable_agent",
 				} as const;

@@ -190,6 +190,13 @@
       "when": 1790724095107,
       "tag": "0026_ldap_identity_authority",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1790738152673,
+      "tag": "0027_relay_key_authority",
+      "breakpoints": true
     }
   ]
 }

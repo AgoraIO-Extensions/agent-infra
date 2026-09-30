@@ -825,6 +825,7 @@ export function agentManagementV1Conformance(
 			"approve_application",
 			"reject_application",
 			"stop_agent",
+			"start_agent",
 			"restart_agent",
 			"retry_agent_creation",
 			"disable_agent",
@@ -835,6 +836,7 @@ export function agentManagementV1Conformance(
 			approve_application: ["pending_approval"],
 			reject_application: ["pending_approval"],
 			stop_agent: ["available"],
+			start_agent: ["stopped"],
 			restart_agent: ["available", "stopped"],
 			retry_agent_creation: ["creation_failed"],
 			disable_agent: ["creating", "available", "stopped", "creation_failed"],
@@ -859,6 +861,14 @@ export function agentManagementV1Conformance(
 				);
 				if ((allowed[command] as readonly string[]).includes(status)) {
 					expect(decision).toMatchObject({ outcome: "accepted" });
+					if (command === "start_agent") {
+						expect(decision).toMatchObject({
+							writePlan: {
+								operation: "restart_agent",
+								auditEvent: { action: "agent.lifecycle.restarted" },
+							},
+						});
+					}
 				} else {
 					expect(decision).toEqual(conflict("invalid_transition"));
 					expect(
