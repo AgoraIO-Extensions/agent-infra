@@ -83,6 +83,7 @@ describe("platform-store package surface", () => {
 			"openPostgresSecretKeyRotationStoreV1",
 			"openPostgresWorkloadReconciliationStoreV1",
 			"platformDatabaseUrlFromEnvironment",
+			"readPlatformQueueResourceSnapshot",
 			"validateWecomSetupCredentialRecordV1",
 		]);
 
