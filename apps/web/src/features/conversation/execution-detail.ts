@@ -18,8 +18,7 @@ export class ConversationReadError extends Error {
 
 export function httpFailure(status?: number): ConversationReadFailure {
 	if (status === undefined) return { kind: "network" };
-	if ([401, 403, 404].includes(status))
-		return { kind: "authorization", status };
+	if ([401, 403].includes(status)) return { kind: "authorization", status };
 	if (status >= 500) return { kind: "service", status };
 	return { kind: status >= 400 ? "http" : "invalid", status };
 }
