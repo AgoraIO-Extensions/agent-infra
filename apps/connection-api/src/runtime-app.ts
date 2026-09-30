@@ -343,7 +343,6 @@ export async function createConnectionRuntime(
 		},
 		providerServiceHostAliases: {
 			"argus.agoralab.co": argusConnectionCatalog.provider,
-			"da.la3d.agoralab.co": argusConnectionCatalog.provider,
 			"10.80.1.129": jenkinsReleaseConnectionCatalog.provider,
 			"114.94.148.35": jenkinsReleaseConnectionCatalog.provider,
 			"github.com": githubConnectionCatalog.provider,

@@ -154,7 +154,7 @@ URL、路径、Header、用户身份或任意 Rehoboam
 Grant 或凭证。
 
 Argus 的首个 **[设计决策，待 OAuth client 与真实 READ 验收]** Provider profile 固定为
-`https://da.la3d.agoralab.co/argus-service`。个人员工通过公司 OAuth
+`https://argus.agoralab.co/argus-service`。个人员工通过公司 OAuth
 `authorization_code` 授权，Connection 的 callback 固定为
 `/oauth/callback?provider=argus`；连接前必须持有获批 Connect Permit，callback 再次核验并消费
 Permit。Connection 使用服务端 Argus 专属 OAuth client 交换和刷新个人 access token，通过公司
@@ -164,8 +164,9 @@ Permit。Connection 使用服务端 Argus 专属 OAuth client 交换和刷新个
 八个 READ Action；两项底层 POST 仅执行查询。所有 Action 固定 origin/path，禁止用户提交 URL、
 Header 或 Credential；普通响应不超过 256 KiB，counter 元数据上游读取不超过 2 MiB 且单页
 最多返回 50 项；时间范围不超过 7 天，列表上限由 Action schema
-限定。由于 Argus 原 MCP 只提供 Cookie 调用证据，正式发布还需确认专属 OAuth client 的
-callback、Bearer 下游响应及身份权限，并完成 GZ3 真实 Provider READ，不能仅以 code exchange
+限定。现有 [Argus Call Search API](https://confluence.agoralab.co/pages/viewpage.action?spaceKey=EN&title=Data-App+Argus+Call+Search+API)
+文档仅列出 `HCIAuthToken` Cookie 和 `apikey` Header 鉴权；个人 Bearer 是待实测的目标合同。
+正式发布还需确认专属 OAuth client 的 callback、Bearer 下游响应及身份权限，并完成 GZ3 真实 Provider READ，不能仅以 code exchange
 或 catalog 发布验收。
 
 Rehoboam Release workflow 作为后续 immutable `rehoboam-connection-v4` 发布：旧 Release 保留

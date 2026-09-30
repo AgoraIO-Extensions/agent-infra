@@ -72,6 +72,10 @@ test("Argus personal OAuth exchanges and refreshes without a cookie or robot acc
 	assert.match(calls[0]?.body ?? "", /grant_type=authorization_code/);
 	assert.equal(calls[1]?.headers.get("authorization"), "Bearer personal-token");
 	assert.equal(calls[2]?.headers.get("authorization"), "Bearer personal-token");
+	assert.match(
+		calls[2]?.url ?? "",
+		/^https:\/\/argus\.agoralab\.co\/argus-service\/api\/v1\/call-sessions\?fromTs=/,
+	);
 	assert.equal(calls[2]?.headers.get("cookie"), null);
 	await oauth.refresh("refresh-token");
 	assert.match(calls[3]?.body ?? "", /grant_type=refresh_token/);
@@ -98,7 +102,7 @@ test("Argus reads only fixed paths with personal Bearer and bounded input", asyn
 		await adapter.execute({
 			action: "argus.search_calls",
 			credential,
-			input: { fromTs: 100, toTs: 200, size: 2 },
+			input: { fromTs: 100, toTs: 200, size: 2, channelId: 42, accounts: "alice" },
 		}),
 		{ items: [{ id: 1 }] },
 	);
@@ -121,11 +125,11 @@ test("Argus reads only fixed paths with personal Bearer and bounded input", asyn
 	});
 	assert.equal(
 		calls[0]?.url,
-		"https://da.la3d.agoralab.co/argus-service/api/v1/call-sessions?fromTs=100&toTs=200&from=0&size=2",
+		"https://argus.agoralab.co/argus-service/api/v1/call-sessions?fromTs=100&toTs=200&channelId=42&accounts=alice&from=0&size=2",
 	);
 	assert.equal(
 		calls[1]?.url,
-		"https://da.la3d.agoralab.co/argus-service/api/v1/call-sessions/a%2Fb?source=normal",
+		"https://argus.agoralab.co/argus-service/api/v1/call-sessions/a%2Fb?source=normal",
 	);
 	assert.equal(calls[2]?.method, "POST");
 	assert.deepEqual(JSON.parse(calls[2]?.body ?? "{}"), {

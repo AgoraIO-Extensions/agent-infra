@@ -8,7 +8,7 @@ import type {
 } from "@agent-infra/connection-core";
 import { argusExecutorDigest } from "./argus-integrity.ts";
 
-const origin = "https://da.la3d.agoralab.co";
+const origin = "https://argus.agoralab.co";
 const basePath = "/argus-service/api/v1";
 const providerId = "argus";
 const providerReleaseId = "argus-connection-v1";
@@ -37,8 +37,10 @@ const actionSpecs = [
 			size: integer(1, 50),
 			from: integer(0, 10000),
 			vid: integer(1),
+			channelId: integer(1),
 			channelName: string,
 			uids: string,
+			accounts: string,
 			sids: string,
 		},
 		required: ["fromTs", "toTs"],
@@ -301,8 +303,9 @@ export class ArgusAdapter
 			typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
 		if (!email || !/^[^@\s]+@[^@\s]+$/.test(email))
 			throw failure("Argus OAuth identity is incomplete", true);
+		const now = Math.floor(Date.now() / 1000);
 		const probe = await this.fetcher(
-			`${origin}${basePath}/metric-configs/counter-meta`,
+			`${origin}${basePath}/call-sessions?${new URLSearchParams({ fromTs: String(now - 60), toTs: String(now), from: "0", size: "1" })}`,
 			{
 				headers: {
 					accept: "application/json",
@@ -349,8 +352,10 @@ export class ArgusAdapter
 					"fromTs",
 					"toTs",
 					"vid",
+					"channelId",
 					"channelName",
 					"uids",
+					"accounts",
 					"sids",
 				]);
 				params.set(

@@ -4597,7 +4597,7 @@ describe("Connection API", () => {
 
 	it.each([
 		"https://argus.agoralab.co/call/123",
-		"https://da.la3d.agoralab.co/argus-service/",
+		"https://argus.agoralab.co/argus-service/",
 	])("resolves an Argus service URL by exact hostname: %s", async (service) => {
 		const app = createTestApp({
 			actions: [
@@ -4612,7 +4612,6 @@ describe("Connection API", () => {
 			],
 			providerServiceHostAliases: {
 				"argus.agoralab.co": "argus",
-				"da.la3d.agoralab.co": "argus",
 			},
 			supportedProviders: ["argus"],
 		});
