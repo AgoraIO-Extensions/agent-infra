@@ -13,6 +13,7 @@ import {
 	FileProjectionV1Schema,
 } from "../packages/contracts/src/files.ts";
 import { startMinioFileFixtureV1 } from "../packages/object-storage/src/minio.test-support.ts";
+import type { AgentConfigurationRecordV2 } from "../packages/platform-core/src/agent-configuration.ts";
 import { createConversationExecutionUseCaseV1 } from "../packages/platform-core/src/conversation-execution.ts";
 import { PostgresConversationExecutionTransactionV1 } from "../packages/platform-store/src/conversation-execution.ts";
 import { migratePlatformDatabase } from "../packages/platform-store/src/migrate.ts";
@@ -42,6 +43,25 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 	});
 	try {
 		await migratePlatformDatabase(db);
+		const configuration: AgentConfigurationRecordV2 = {
+			schemaVersion: 2,
+			agentId: "agent",
+			revision: 1,
+			source: {
+				kind: "custom",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				admissionRevision: "file-fixture-admitted",
+				interactionMode: "platform-adapter",
+				connectionEnabled: false,
+			},
+			modelConfiguration: null,
+			environment: [],
+			secrets: [],
+			channels: [],
+			channelRevision: "file-fixture-channels",
+		};
+		await sql`insert into platform.agents (id, current_configuration_revision, authorization_revision) values (${configuration.agentId}, ${configuration.revision}, 'auth')`;
+		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${configuration.agentId}, ${configuration.revision}, ${configuration.source.imageDigest}, now(), ${sql.json(JSON.parse(JSON.stringify(configuration)))})`;
 		await sql`insert into platform.conversations (id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision) values ('conversation','agent','alice','web','active',1,'auth')`;
 		await sql`insert into platform.conversation_executions (execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,created_at,updated_at) values ('execution','conversation','agent','alice','web','turn','processing',1,1,'auth',now(),now())`;
 		const keys = generateKeyPairSync("ed25519");
