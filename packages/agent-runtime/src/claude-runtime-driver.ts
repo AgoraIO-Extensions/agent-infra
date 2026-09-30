@@ -661,7 +661,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						else unavailable();
 					}
 					for (const event of recovered.slice(offset))
-						await this.event(file, turn.executionId, event);
+						await this.event(file, turn.executionId, event, true);
 					await this.status(file, turn.executionId, "completed");
 				}
 				// Preserve native history backfill before reconciling a retained result.
@@ -1858,8 +1858,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		file: DurableJsonFile<Session>,
 		executionId: string,
 		value: RuntimeEventInput,
+		legacyHistory = false,
 	) {
-		if (value.type === "tool")
+		// Legacy Claude journals predate durable tool operation facts. Replaying
+		// their already-recorded tool events must preserve the event stream without
+		// inventing an operation fact or rerunning the native tool boundary.
+		if (value.type === "tool" && !legacyHistory)
 			await this.toolPhase(file, executionId, value.payload);
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);

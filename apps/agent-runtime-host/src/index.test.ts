@@ -643,10 +643,14 @@ describe("RuntimeHost environment assembly", () => {
 						openedWith?.authorizeExternalAction?.(unboundAction),
 					).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
 					expect(authorization).toHaveBeenCalledWith(unboundAction);
-					authorization.mockResolvedValueOnce({ relayKey: "relay-key" });
+					const delivery = {
+						relayKey: "relay-key",
+						revalidate: vi.fn().mockResolvedValue(undefined),
+					};
+					authorization.mockResolvedValueOnce(delivery);
 					await expect(
 						openedWith?.authorizeExternalAction?.(unboundAction),
-					).resolves.toEqual({ relayKey: "relay-key" });
+					).resolves.toBe(delivery);
 				}
 				expect(process.env.PATH).toBe(originalPath);
 				expect(openedWith).toMatchObject({

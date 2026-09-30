@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,24 @@ const source = vi.hoisted(() => ({
 	run: undefined as
 		| ((options: Options) => Promise<void> | AsyncGenerator<SDKMessage, void>)
 		| undefined,
+}));
+const historySource = vi.hoisted(() => ({
+	read: undefined as
+		| (() => Promise<{
+				users: string[];
+				completed: boolean;
+				events: {
+					type: "text" | "tool";
+					payload: {
+						delta?: string;
+						id?: string;
+						name?: string;
+						phase?: "started" | "completed" | "failed";
+					};
+				}[];
+		  }>)
+		| undefined,
+	calls: 0,
 }));
 vi.mock("./claude-query.js", async (importOriginal) => {
 	const original = await importOriginal<typeof import("./claude-query.js")>();
@@ -46,8 +64,25 @@ vi.mock("./claude-query.js", async (importOriginal) => {
 		},
 	};
 });
+vi.mock("./claude-session-history.js", async (importOriginal) => {
+	const original =
+		await importOriginal<typeof import("./claude-session-history.js")>();
+	return {
+		...original,
+		readClaudeSessionHistory: (
+			...args: Parameters<typeof original.readClaudeSessionHistory>
+		) => {
+			historySource.calls++;
+			return historySource.read
+				? historySource.read()
+				: original.readClaudeSessionHistory(...args);
+		},
+	};
+});
 afterEach(() => {
 	source.run = undefined;
+	historySource.read = undefined;
+	historySource.calls = 0;
 });
 
 type ClaudeSourceRequest = (counting?: boolean) => Promise<Response>;
@@ -61,6 +96,7 @@ async function withClaudeSource(
 		| ((
 				action: RuntimeExternalActionAuthorization,
 				driver: ClaudeRuntimeDriver,
+				// biome-ignore lint/suspicious/noConfusingVoidType: validation callbacks may intentionally return no delivery value
 		  ) => Promise<RuntimeExternalActionAuthorizationResult | void>),
 	verify: (context: {
 		driver: ClaudeRuntimeDriver;
@@ -159,6 +195,146 @@ async function withClaudeSource(
 		await rm(path, { recursive: true, force: true });
 	}
 }
+
+it("replays legacy Claude tool history without fabricating operation facts", async () => {
+	await withClaudeSource(
+		async (request) => {
+			const response = await request();
+			expect(response.ok).toBe(true);
+			await response.text();
+		},
+		(action, driver) => driver.validateExternalAction(action),
+		async ({ driver, ref, command, requests, path }) => {
+			await driver.close();
+			const statePath = join(path, ref, "state.json");
+			type LegacyEvent = {
+				type: string;
+				cursor: string;
+				payload?: { delta?: string };
+			};
+			type LegacyState = {
+				sequence: number;
+				turns: Array<{
+					executionId: string;
+					userMessageId: string;
+					status: string;
+					events: LegacyEvent[];
+					modelResponse?: { state: string; endTurn: boolean };
+					nativeResult?: unknown;
+					toolOperations?: unknown;
+				}>;
+			};
+			const state = JSON.parse(
+				await readFile(statePath, "utf8"),
+			) as LegacyState;
+			const turn = state.turns.find(
+				(entry) => entry.executionId === command.executionId,
+			);
+			if (!turn) throw Error("Synthetic turn missing");
+			turn.events = turn.events.filter((event) => event.type !== "completed");
+			turn.status = "running";
+			turn.modelResponse = { state: "completed", endTurn: true };
+			delete turn.nativeResult;
+			delete turn.toolOperations;
+			state.sequence = state.turns.reduce(
+				(total, entry) => total + entry.events.length,
+				0,
+			);
+			await writeFile(statePath, JSON.stringify(state));
+
+			historySource.read = async () => ({
+				users: [turn.userMessageId],
+				completed: true,
+				events: [
+					{ type: "text", payload: { delta: "OK" } },
+					{
+						type: "tool",
+						payload: { id: "legacy-completed", name: "Read", phase: "started" },
+					},
+					{
+						type: "tool",
+						payload: { id: "legacy-completed", phase: "completed" },
+					},
+					{
+						type: "tool",
+						payload: { id: "legacy-failed", name: "Read", phase: "started" },
+					},
+					{
+						type: "tool",
+						payload: { id: "legacy-failed", phase: "failed" },
+					},
+				],
+			});
+			const reopened = await ClaudeRuntimeDriver.open({
+				path,
+				configVersion: "configuration-a",
+				defaultModelOptionId: "option-one",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "option-one",
+						model: "claude-opus-5",
+						reasoningLevels: ["high"],
+						authentication: "bearer",
+						endpoint: "http://127.0.0.1:1",
+						credential: "synthetic-credential",
+					},
+				],
+			});
+			try {
+				expect(await reopened.getStatus(ref, command.executionId)).toBe(
+					"completed",
+				);
+				const events = await reopened.replayEvents(ref, command.executionId);
+				const toolEvents = events.filter((event) => event.type === "tool");
+				expect(toolEvents).toHaveLength(4);
+				expect(
+					toolEvents.map((event) =>
+						event.type === "tool" ? event.payload.phase : undefined,
+					),
+				).toEqual(["started", "completed", "started", "failed"]);
+				expect(
+					events.filter(
+						(event) =>
+							event.type === "operation" && event.payload.kind === "tool",
+					),
+				).toHaveLength(0);
+				expect(historySource.calls).toBe(1);
+				const requestsBeforeReplay = requests();
+				const eventCount = events.length;
+				await reopened.close();
+
+				const reopenedAgain = await ClaudeRuntimeDriver.open({
+					path,
+					configVersion: "configuration-a",
+					defaultModelOptionId: "option-one",
+					defaultReasoningLevel: "high",
+					modelOptions: [
+						{
+							modelOptionId: "option-one",
+							model: "claude-opus-5",
+							reasoningLevels: ["high"],
+							authentication: "bearer",
+							endpoint: "http://127.0.0.1:1",
+							credential: "synthetic-credential",
+						},
+					],
+				});
+				try {
+					expect(
+						(await reopenedAgain.replayEvents(ref, command.executionId)).length,
+					).toBe(eventCount);
+					expect(historySource.calls).toBe(1);
+					expect(requests()).toBe(requestsBeforeReplay);
+				} finally {
+					await reopenedAgain.close();
+				}
+			} finally {
+				await reopened.close();
+			}
+		},
+	);
+});
 
 it.each([
 	["first", "revoked"],
