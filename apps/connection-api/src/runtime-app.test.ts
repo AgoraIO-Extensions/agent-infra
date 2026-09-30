@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { observeProviderFetch } from "@agent-infra/connection-core";
+import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -10,6 +13,35 @@ import {
 
 const tokenUrl = "https://github.com/login/oauth/access_token";
 const profileUrl = "https://api.github.com/user";
+
+it("production assembly uses registered diagnostic service names", () => {
+	const source = ts.createSourceFile(
+		"runtime-app.ts",
+		readFileSync(new URL("./runtime-app.ts", import.meta.url), "utf8"),
+		ts.ScriptTarget.Latest,
+		true,
+	);
+	const services: string[] = [];
+	const visit = (node: ts.Node) => {
+		if (
+			ts.isCallExpression(node) &&
+			ts.isIdentifier(node.expression) &&
+			node.expression.text === "observeProviderFetch"
+		) {
+			const service = node.arguments[0];
+			if (!service || !ts.isStringLiteral(service))
+				throw new Error("Runtime diagnostic service must be fixed");
+			services.push(service.text);
+			expect(() => observeProviderFetch(service.text, vi.fn())).not.toThrow();
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(source);
+	expect(services).toContain("datalego");
+	expect(() => observeProviderFetch("unregistered-service", vi.fn())).toThrow(
+		"Unknown diagnostic service",
+	);
+});
 
 describe("GitHub OAuth pre-submit egress", () => {
 	it("uses the approved request scopes instead of catalog-wide defaults", () => {
