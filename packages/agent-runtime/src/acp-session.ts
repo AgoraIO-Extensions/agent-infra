@@ -140,19 +140,19 @@ export async function openAcpSession(options: {
 								() => false,
 							)
 						: false;
-				if (admitted && once)
+				if (!shuttingDown && activeTool() && admitted && once) {
 					unconfirmedTools.set(
 						params.toolCall.toolCallId,
 						tool?.kind ?? params.toolCall.kind ?? "unknown",
 					);
-				return admitted && once
-					? {
-							outcome: {
-								outcome: "selected" as const,
-								optionId: once.optionId,
-							},
-						}
-					: deny();
+					return {
+						outcome: {
+							outcome: "selected" as const,
+							optionId: once.optionId,
+						},
+					};
+				}
+				return deny();
 			})();
 			const settled = permission.then(
 				() => {},

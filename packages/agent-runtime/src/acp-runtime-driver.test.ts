@@ -9,6 +9,88 @@ import {
 } from "./acp-runtime-driver.js";
 import type { RuntimeExternalActionAuthorization } from "./driver.js";
 
+it("rejects model continuation when ACP only reported a tool completion notification", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-unconfirmed-continuation-"));
+	let modelIntent: Parameters<GenericAcpRuntimeDriverOptions["launch"]>[3];
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		authorizeExternalAction: async (action) => {
+			await driver.validateExternalAction(action);
+			return { relayKey: "synthetic-runtime-key" };
+		},
+		launch: async (_directory, _selection, admit, intent) => {
+			modelIntent = intent;
+			return {
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL("./acp-peer.test-support.mjs", import.meta.url),
+					),
+				],
+				env: { ACP_TEST_MODE: "tool-permission-completed-hold" },
+				authorize: async () => {
+					await admit();
+					return true;
+				},
+			};
+		},
+	});
+	try {
+		const accepted = await driver.execute({
+			schemaVersion: 2,
+			kind: "submit-turn",
+			agentId: "agent",
+			conversationId: "conversation",
+			sessionGeneration: 1,
+			executionId: "execution",
+			turnId: "turn",
+			operationId: "operation",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		});
+		await vi.waitFor(async () =>
+			expect(
+				(
+					await driver.replayEvents(accepted.nativeSessionRef, "execution")
+				).some(
+					(event) =>
+						event.type === "tool" && event.payload.phase === "completed",
+				),
+			).toBe(true),
+		);
+		if (!modelIntent) throw new Error("Missing model intent callback");
+		await expect(modelIntent("messages")).rejects.toMatchObject({
+			code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE",
+		});
+		const facts = (
+			await driver.replayEvents(accepted.nativeSessionRef, "execution")
+		).flatMap((event) => (event.type === "operation" ? [event.payload] : []));
+		expect(
+			facts.filter((fact) => fact.kind === "model" && fact.phase === "intent"),
+		).toHaveLength(1);
+		expect(
+			facts.some((fact) => fact.kind === "tool" && fact.phase === "completed"),
+		).toBe(false);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it.each(["prompt-reject", "prompt-no-model"])(
 	"does not record a model start when ACP %s sends no model request",
 	async (mode) => {
