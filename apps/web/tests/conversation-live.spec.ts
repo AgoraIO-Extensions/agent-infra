@@ -502,6 +502,95 @@ test("recovers an ordinary conversation 404 through read-only reconnect", async 
 	});
 });
 
+test("clears a loaded execution after 404 and recovers without resending", async ({
+	page,
+}) => {
+	let missing = false;
+	let restored = false;
+	let historyReads = 0;
+	let writes = 0;
+	const streamCursors: (string | null)[] = [];
+	const oldSummary = "已读取的历史执行摘要";
+	const newSummary = "重新读取的执行摘要";
+	await keepConversationStreamOpen(page);
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		if (request.method() !== "GET") writes += 1;
+		const url = new URL(request.url());
+		if (url.pathname.endsWith("/session")) {
+			await route.fulfill({ json: ownerSession() });
+		} else if (url.pathname === `/api/v2/agents/${agentId}`) {
+			await route.fulfill({ json: activeAgent() });
+		} else if (url.pathname === `/api/v2/conversations/${conversationId}`) {
+			historyReads += 1;
+			await route.fulfill({
+				json: history(conversationId, [
+					event("execution.status", restored ? 2 : 1, { status: "completed" }),
+				]),
+			});
+		} else if (url.pathname.endsWith(`/executions/${executionId}`)) {
+			await route.fulfill(
+				missing
+					? { status: 404, json: { message: "Synthetic route missing" } }
+					: {
+							json: {
+								...execution(conversationId, executionId),
+								processSummary: [
+									{
+										kind: "agent_summary",
+										category: "model_call",
+										occurredAt: timestamp,
+										summary: restored ? newSummary : oldSummary,
+									},
+								],
+							},
+						},
+			);
+		} else if (url.pathname.endsWith("/events")) {
+			streamCursors.push(url.searchParams.get("cursor"));
+			await route.fulfill({
+				contentType: "text/event-stream",
+				body: ": heartbeat\n\n",
+			});
+		} else {
+			await route.fulfill({ json: { items: [], nextCursor: null } });
+		}
+	});
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	await page.getByRole("button", { name: "执行详情", exact: true }).click();
+	await expect(page.getByText(oldSummary, { exact: true })).toBeVisible();
+	missing = true;
+	await page
+		.getByRole("button", { name: "核实原执行状态", exact: true })
+		.click();
+	await expect(
+		page.getByRole("button", { name: "重新连接", exact: true }),
+	).toBeVisible();
+	await expect(page.getByText(oldSummary, { exact: true })).toHaveCount(0);
+	await expect(
+		page.getByText("当前登录或访问权限已失效，请重新登录或返回 Agent 列表。"),
+	).toHaveCount(0);
+	await test.info().attach("fake-execution-404-cleared", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+	const readsBeforeReconnect = historyReads;
+	missing = false;
+	restored = true;
+	await page.getByRole("button", { name: "重新连接", exact: true }).click();
+	await expect(page.getByText(newSummary, { exact: true })).toBeVisible();
+	await expect(page.getByText(oldSummary, { exact: true })).toHaveCount(0);
+	await expect.poll(() => historyReads).toBe(readsBeforeReconnect + 1);
+	expect(streamCursors).toEqual(["live-cursor-1", "live-cursor-2"]);
+	expect(writes).toBe(0);
+	await test.info().attach("fake-execution-404-read-only-recovery", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+});
+
 test("saves the next-message model and stops the bound execution", async ({
 	page,
 }) => {

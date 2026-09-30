@@ -343,6 +343,75 @@ describe("Conversation execution detail Query ownership", () => {
 		);
 	}
 
+	it.each(["history", "execution", "stream"] as const)(
+		"purges loaded details on ordinary %s 404 and reconnects with fresh reads",
+		async (endpoint) => {
+			let stream = sse();
+			let missing = false;
+			let restored = false;
+			const updated = history("conversation-1", [event(2)]);
+			const { result, queryClient, requests } = setup((request) => {
+				if (route(request) === endpoint && missing)
+					return new Response("Route missing", { status: 404 });
+				if (route(request) === "stream") return stream.response;
+				return Response.json(
+					route(request) === "execution"
+						? execution()
+						: restored
+							? updated
+							: history(),
+				);
+			});
+			queryClient.setQueryData(["unrelated"], "preserve");
+			await waitFor(() =>
+				expect(result.current.execution.isSuccess).toBe(true),
+			);
+			expect(cachedDetails(queryClient)).toEqual([execution()]);
+			missing = true;
+			await act(async () => {
+				if (endpoint === "history") stream.send(reload());
+				else if (endpoint === "execution")
+					await result.current.execution.refetch();
+				else await result.current.reconnect();
+			});
+			await waitFor(() =>
+				expect(result.current.timeline.status).toBe("unavailable"),
+			);
+			expect(result.current.timeline).toMatchObject({
+				history: null,
+				events: [],
+				failure: { kind: "http", status: 404 },
+			});
+			expect(result.current.execution.data).toBeUndefined();
+			expect(cachedDetails(queryClient)).toEqual([]);
+			expect(queryClient.getQueryData(["unrelated"])).toBe("preserve");
+			const count = requests.length;
+			missing = false;
+			restored = true;
+			stream = sse();
+			await act(async () => {
+				await result.current.reconnect();
+			});
+			await waitFor(() =>
+				expect(result.current.execution.isSuccess).toBe(true),
+			);
+			expect(result.current.timeline.history).toEqual(updated);
+			expect(result.current.timeline.events).toEqual([event(2)]);
+			expect(requests.slice(count).map(route).sort()).toEqual([
+				"execution",
+				"history",
+				"stream",
+			]);
+			expect(
+				new URL(
+					requests.slice(count).find((request) => route(request) === "stream")
+						?.url ?? "",
+				).searchParams.get("cursor"),
+			).toBe("conversation-1-cursor-2");
+			expect(requests.every((request) => request.method === "GET")).toBe(true);
+		},
+	);
+
 	it("keeps an ordinary conversation 404 unavailable instead of denied", async () => {
 		const { result } = setup(
 			() => new Response("Route missing", { status: 404 }),
