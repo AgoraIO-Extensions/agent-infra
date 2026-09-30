@@ -67,7 +67,7 @@ export class PostgresAgentDefaultRelayKeyStoreV1
 		await sql`select pg_advisory_xact_lock(hashtextextended(${actorUserId}, 0))`;
 		await sql`
 			select user_id from platform.ldap_identity_ids
-			where user_id = ${actorUserId} for update
+			where user_id = ${actorUserId} for share
 		`;
 		const [disabled] = await sql`
 			select user_id from platform.platform_user_disables

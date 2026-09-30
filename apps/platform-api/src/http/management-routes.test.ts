@@ -235,6 +235,8 @@ function createApp(
 	const createApiApplication = vi.fn();
 	const issueUserCredential = vi.fn();
 	const listApplicationCredentials = vi.fn();
+	const grantAgent = vi.fn();
+	const revokeAgentGrant = vi.fn();
 
 	registerManagementRoutes(app, {
 		identity: {
@@ -257,8 +259,8 @@ function createApp(
 						revokeApplicationCredential: vi.fn(),
 						grantCredentialDelivery: vi.fn(),
 						revokeCredentialDelivery: vi.fn(),
-						grantAgent: vi.fn(),
-						revokeAgentGrant: vi.fn(),
+						grantAgent,
+						revokeAgentGrant,
 						recordAccessRejection,
 					},
 				}
@@ -300,6 +302,8 @@ function createApp(
 		createApiApplication,
 		issueUserCredential,
 		listApplicationCredentials,
+		grantAgent,
+		revokeAgentGrant,
 		resolveAgentQueryGrantType,
 		authorizeCredentialScope,
 		recordAccessRejection,
@@ -516,11 +520,17 @@ describe("management routes", () => {
 		);
 	});
 
-	it.each(["application", "personal credential"])(
+	it.each(["application", "personal credential", "grant", "revoke"])(
 		"carries current browser authority to the %s write after reading the request body",
 		async (operation) => {
-			const { app, resolveBrowser, createApiApplication, issueUserCredential } =
-				createApp({ api: true });
+			const {
+				app,
+				resolveBrowser,
+				createApiApplication,
+				issueUserCredential,
+				grantAgent,
+				revokeAgentGrant,
+			} = createApp({ api: true });
 			let currentUser = {
 				schemaVersion: 1 as const,
 				userId: identity.userId,
@@ -561,18 +571,34 @@ describe("management routes", () => {
 					},
 				};
 			});
+			grantAgent.mockImplementation(async ({ actor }) => {
+				checkActor(actor);
+				return "agent-grant-revision";
+			});
+			revokeAgentGrant.mockImplementation(async ({ actor }) => {
+				checkActor(actor);
+			});
 			const path =
 				operation === "application"
 					? "/api/v1/applications"
-					: "/api/v1/api-credentials";
+					: operation === "personal credential"
+						? "/api/v1/api-credentials"
+						: "/api/v1/agents/agent-1/grants";
+			const method = operation === "revoke" ? "DELETE" : "POST";
 			const body = JSON.stringify(
 				operation === "application"
 					? { schemaVersion: 1, name: "Body race" }
-					: { schemaVersion: 1, scopes: ["agent:read"], expiresAt: null },
+					: operation === "personal credential"
+						? { schemaVersion: 1, scopes: ["agent:read"], expiresAt: null }
+						: {
+								schemaVersion: 1,
+								principal: { kind: "user", id: "user-other" },
+								grantType: "use",
+							},
 			);
-			expect(
-				(await app.request(path, { method: "POST", headers, body })).status,
-			).toBe(201);
+			expect((await app.request(path, { method, headers, body })).status).toBe(
+				operation === "revoke" ? 204 : operation === "grant" ? 200 : 201,
+			);
 			let identityResolved: (() => void) | undefined;
 			const resolved = new Promise<void>((resolve) => {
 				identityResolved = resolve;
@@ -591,7 +617,7 @@ describe("management routes", () => {
 				},
 			});
 			const pending = app.request(path, {
-				method: "POST",
+				method,
 				headers,
 				body: stream,
 				duplex: "half",
@@ -604,7 +630,11 @@ describe("management routes", () => {
 			const write =
 				operation === "application"
 					? createApiApplication
-					: issueUserCredential;
+					: operation === "personal credential"
+						? issueUserCredential
+						: operation === "grant"
+							? grantAgent
+							: revokeAgentGrant;
 			expect(write).toHaveBeenCalledTimes(2);
 		},
 	);

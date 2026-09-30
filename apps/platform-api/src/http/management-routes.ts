@@ -566,7 +566,7 @@ async function resolveAgentGrantContext(
 	return {
 		identity,
 		management: apiIdentityOrUnavailable(dependencies.apiIdentity, traceId),
-		managementActor: api ? apiActor(api) : actor(identity),
+		managementActor: api ? apiActor(api) : apiIdentityActor(identity),
 	};
 }
 

@@ -5,6 +5,8 @@ import {
 	type CurrentTaskUserV1,
 	captureApplicationTaskAuthorizationBoundaryV1,
 	captureTaskAuthorizationBoundaryV1,
+	isCurrentTaskApiAccessAllowedV1,
+	isTaskPrincipalChannelAllowedV1,
 	parseCurrentTaskApplicationV1,
 	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
@@ -56,12 +58,6 @@ async function readCurrentApplication(
 	});
 }
 
-function isSupportedTaskPrincipalChannel(
-	boundary: TaskAuthorizationBoundaryV1,
-): boolean {
-	return boundary.principal.kind === "user" || boundary.channelId === "api";
-}
-
 /** Recheck API use authority while the acceptance transaction owns its Agent snapshot. */
 export async function requireCurrentTaskApiAccess(
 	transaction: postgres.TransactionSql,
@@ -79,19 +75,24 @@ export async function requireCurrentTaskApiAccess(
 			and authorization_revision = ${agentAuthorizationRevision}
 		for share
 	`;
-	if (!grant) throw new TaskAuthorizationStoreError();
-	if (boundary.principal.kind !== "application") return;
-	const [application] = await transaction<
-		{ status: string; authorization_revision: string }[]
-	>`
-		select status, authorization_revision
-		from platform.platform_applications
-		where id = ${boundary.principal.id}
-		for share
-	`;
+	const [application] =
+		boundary.principal.kind === "application"
+			? await transaction<{ status: string; authorization_revision: string }[]>`
+				select status, authorization_revision
+				from platform.platform_applications
+				where id = ${boundary.principal.id}
+				for share
+			`
+			: [];
 	if (
-		application?.status !== "active" ||
-		application.authorization_revision !== boundary.identityRevision
+		!isCurrentTaskApiAccessAllowedV1({
+			boundary,
+			hasCurrentUseGrant: grant !== undefined,
+			application: application && {
+				status: application.status,
+				authorizationRevision: application.authorization_revision,
+			},
+		})
 	)
 		throw new TaskAuthorizationStoreError();
 }
@@ -128,7 +129,7 @@ export async function insertTaskAuthorization(
 	`;
 	if (
 		!binding ||
-		!isSupportedTaskPrincipalChannel(boundary) ||
+		!isTaskPrincipalChannelAllowedV1(boundary) ||
 		boundary.principal.id !== binding.actor_id ||
 		boundary.agentId !== binding.agent_id ||
 		boundary.channelId !== binding.channel_id ||
@@ -259,7 +260,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 						.where(eq(conversationExecutions.executionId, record.executionId));
 					if (
 						!execution ||
-						!isSupportedTaskPrincipalChannel(boundary) ||
+						!isTaskPrincipalChannelAllowedV1(boundary) ||
 						boundary.principal.id !== execution.actorId ||
 						boundary.agentId !== execution.agentId ||
 						boundary.channelId !== execution.channelId ||

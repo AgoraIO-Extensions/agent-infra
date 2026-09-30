@@ -5,6 +5,7 @@ import {
 	ApiIdentityError,
 	type ApiIdentityStorePortV1,
 	createApiIdentityManagementV1,
+	isCurrentAgentGrantManageAllowedV1,
 	isCurrentApiIdentityBrowserActorV1,
 	isCurrentApiIdentityUserWriteAllowedV1,
 	isCurrentCredentialDeliveryManagerV1,
@@ -100,12 +101,70 @@ function management(store: ApiIdentityStorePortV1) {
 				accountStatus: "active",
 			}),
 		},
-		agentAccess: { canManage: async () => true },
+		agentAccess: { hasAgent: async () => true },
 		idFactory: () => "authorization-revision-2",
 	});
 }
 
 describe("API identity management authorization", () => {
+	it("requires current browser authority for both Owner and administrator grants", () => {
+		const browser = {
+			schemaVersion: 1 as const,
+			userId: "owner-1",
+			accountStatus: "active" as const,
+			identityRevision: "current-1",
+			isAdministrator: false,
+		};
+		const currentUser = {
+			schemaVersion: 1 as const,
+			userId: "owner-1",
+			accountStatus: "active" as const,
+			authorizationRevision: "current-1",
+			organizationIds: [],
+		};
+		const facts = {
+			actor: browser,
+			currentUser,
+			credential: null,
+			application: null,
+			recipient: null,
+			delivery: null,
+			nowMs: Date.now(),
+			isOwner: true,
+			authorizationRevision: "agent-1",
+			grants: [],
+		};
+		expect(isCurrentAgentGrantManageAllowedV1(facts)).toBe(true);
+		for (const isAdministrator of [false, true]) {
+			const actor = { ...browser, isAdministrator };
+			for (const currentUser of [
+				null,
+				{ ...facts.currentUser, accountStatus: "disabled" as const },
+				{ ...facts.currentUser, userId: "different-user" },
+				{ ...facts.currentUser, authorizationRevision: "demoted-revision" },
+			])
+				expect(
+					isCurrentAgentGrantManageAllowedV1({ ...facts, actor, currentUser }),
+				).toBe(false);
+			expect(
+				isCurrentAgentGrantManageAllowedV1({
+					...facts,
+					actor: { ...actor, identityRevision: undefined },
+				}),
+			).toBe(false);
+		}
+		expect(
+			isCurrentAgentGrantManageAllowedV1({
+				...facts,
+				isOwner: false,
+				actor: { ...browser, isAdministrator: true },
+			}),
+		).toBe(true);
+		expect(
+			isCurrentAgentGrantManageAllowedV1({ ...facts, isOwner: false }),
+		).toBe(false);
+	});
+
 	it("requires the same current browser authority for sensitive identity writes", () => {
 		const browser = {
 			schemaVersion: 1 as const,
@@ -509,7 +568,7 @@ describe("API identity management authorization", () => {
 		const useCase = createApiIdentityManagementV1({
 			store,
 			directory: { resolveUser },
-			agentAccess: { canManage: async () => true },
+			agentAccess: { hasAgent: async () => true },
 			idFactory: () => "revision",
 		});
 

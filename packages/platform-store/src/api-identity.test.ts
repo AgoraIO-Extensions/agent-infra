@@ -233,8 +233,37 @@ describe("PostgreSQL API identity store", () => {
 				const [count] =
 					await adminClient`select count(*)::int count from platform.audit_events`;
 				expect(count?.count).toBe(2);
+				await adminClient`insert into platform.agents (id, authorization_revision)
+					values ('stale_browser_agent', 'agent-revision-1')`;
+				await adminClient`insert into platform.agent_principal_grants
+					(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+					values ('stale_browser_agent', 'user', 'user_target', 'use', 'agent-revision-1')`;
+				const grantInput = {
+					actor: administratorActor,
+					agentId: "stale_browser_agent",
+					principal: { kind: "user" as const, id: "user_target" },
+					grantType: "use" as const,
+				};
+				await expect(
+					guardedStore.grantAgent({
+						...grantInput,
+						authorizationRevision: "agent-revision-2",
+					}),
+				).resolves.toBe(false);
+				await expect(guardedStore.revokeAgentGrant(grantInput)).resolves.toBe(
+					false,
+				);
+				const [grant] =
+					await adminClient`select revoked_at, authorization_revision
+					from platform.agent_principal_grants where agent_id = 'stale_browser_agent'`;
+				expect(grant).toEqual({
+					revoked_at: null,
+					authorization_revision: "agent-revision-1",
+				});
 			} finally {
 				await guardedStore.close();
+				await adminClient`delete from platform.agent_principal_grants where agent_id = 'stale_browser_agent'`;
+				await adminClient`delete from platform.agents where id = 'stale_browser_agent'`;
 				await adminClient`delete from platform.platform_user_disables where user_id = 'user_owner'`;
 			}
 		},
@@ -327,6 +356,92 @@ describe("PostgreSQL API identity store", () => {
 				expect(
 					await adminClient`select id from platform.platform_api_credentials where credential_hash = repeat('0', 64) or recipient_user_id = ${userId}`,
 				).toEqual([]);
+			} finally {
+				release?.();
+				await disable.catch(() => undefined);
+				await pending?.catch(() => undefined);
+				await disabler.end();
+				await adminClient`delete from platform.platform_user_disables where user_id = ${userId}`;
+				await adminClient`delete from platform.ldap_identity_ids where user_id = ${userId}`;
+			}
+		},
+	);
+
+	it.each(["grant", "revoke"] as const)(
+		"serializes a browser %s with concurrent Platform disablement",
+		async (operation) => {
+			const userId = "93f3c8f2-3c73-4332-99a7-d3abc8f8ddc6";
+			await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
+				platform.agent_owners, platform.platform_user_disables,
+				platform.ldap_identity_ids, platform.agents cascade`;
+			await adminClient`insert into platform.agents (id, authorization_revision)
+				values ('browser_grant_agent', 'agent-revision-1')`;
+			await adminClient`insert into platform.agent_owners (agent_id, owner_id, created_at)
+				values ('browser_grant_agent', ${userId}, now())`;
+			await adminClient`insert into platform.ldap_identity_ids (issuer, uid, user_id)
+				values ('fixture', 'browser-grant-owner', ${userId})`;
+			await adminClient`insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+				values ('browser_grant_agent', 'user', 'user_target', 'use', 'agent-revision-1')`;
+			const disabler = postgres(databaseUrl, { max: 1 });
+			let release: (() => void) | undefined;
+			const held = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			let markLocked: (() => void) | undefined;
+			const locked = new Promise<void>((resolve) => {
+				markLocked = resolve;
+			});
+			const disable = Promise.resolve(
+				disabler.begin(async (transaction) => {
+					await transaction`select user_id from platform.ldap_identity_ids where user_id = ${userId} for update`;
+					await transaction`insert into platform.platform_user_disables (user_id, disabled_by)
+					values (${userId}, 'administrator')`;
+					markLocked?.();
+					await held;
+				}),
+			);
+			let pending: Promise<boolean> | undefined;
+			try {
+				await locked;
+				const input = {
+					actor: { ...administratorActor, userId, isAdministrator: false },
+					agentId: "browser_grant_agent",
+					principal: { kind: "user" as const, id: "user_target" },
+					grantType: "use" as const,
+					audit: {
+						...userAudit,
+						action:
+							operation === "grant"
+								? ("api.agent.grant.granted" as const)
+								: ("api.agent.grant.revoked" as const),
+					},
+				};
+				pending =
+					operation === "grant"
+						? store.grantAgent({
+								...input,
+								authorizationRevision: "agent-revision-2",
+							})
+						: store.revokeAgentGrant(input);
+				await waitForBlockedQuery(["ldap_identity_ids"]);
+				release?.();
+				await disable;
+				await expect(pending).resolves.toBe(false);
+				const [agent] =
+					await adminClient`select authorization_revision from platform.agents
+					where id = 'browser_grant_agent'`;
+				expect(agent?.authorization_revision).toBe("agent-revision-1");
+				const [grant] =
+					await adminClient`select revoked_at, authorization_revision
+					from platform.agent_principal_grants where agent_id = 'browser_grant_agent'`;
+				expect(grant).toEqual({
+					revoked_at: null,
+					authorization_revision: "agent-revision-1",
+				});
+				expect(await adminClient`select id from platform.audit_events`).toEqual(
+					[],
+				);
 			} finally {
 				release?.();
 				await disable.catch(() => undefined);

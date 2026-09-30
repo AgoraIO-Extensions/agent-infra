@@ -7,6 +7,7 @@ import {
 	type ApiIdentityAuditInputV1,
 	ApiIdentityError,
 	type ApiPrincipalV1,
+	type CurrentTaskUserV1,
 	hashApiCredentialV1,
 	isApiCredentialScopeV1,
 	isCurrentAgentGrantManageAllowedV1,
@@ -15,7 +16,7 @@ import {
 	isCurrentCredentialDeliveryManagerV1,
 	parseCurrentTaskUserV1,
 } from "@agent-infra/platform-core";
-import { and, eq, gt, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
@@ -109,13 +110,18 @@ function principalType(principal: ApiPrincipalV1): "user" | "application" {
 }
 
 async function hasCurrentDeliveryManager(
+	database: Pick<ApiIdentityDatabase, "select">,
 	actor: ApiIdentityActorV1,
 	responsibleUserId: string,
 	resolveUser?: (userId: string) => Promise<unknown | null>,
 ): Promise<boolean> {
 	if (!resolveUser) return false;
 	try {
-		const current = parseCurrentTaskUserV1(await resolveUser(actor.userId));
+		const current = await currentUserAtWrite(
+			database,
+			actor.userId,
+			resolveUser,
+		);
 		return isCurrentCredentialDeliveryManagerV1({
 			actor,
 			responsibleUserId,
@@ -127,166 +133,125 @@ async function hasCurrentDeliveryManager(
 }
 
 async function hasCurrentManageAuthority(
-	database: Pick<ApiIdentityDatabase, "select">,
+	database: Pick<ApiIdentityDatabase, "select" | "execute">,
 	actor: ApiIdentityActorV1,
 	agentId: string,
 	authorizationRevision: string | null,
 	resolveUser?: (userId: string) => Promise<unknown | null>,
 ): Promise<boolean> {
-	let credential: null | {
-		principalType: string;
-		principalId: string;
-		scopes: readonly string[];
-		expiresAt: Date | null;
-		revokedAt: Date | null;
-	} = null;
-	let applicationStatus: string | null = null;
-	let applicationResponsibleUserId: string | null = null;
-	let applicationRevision: string | null = null;
-	let recipientUserId: string | null = null;
-	let isOwner = false;
-	let grants: {
-		grantType: string;
+	let application: {
+		status: string;
+		responsibleUserId: string;
+		authorizationRevision: string;
+	} | null = null;
+	if (actor.principal?.kind === "application") {
+		const [row] = await database
+			.select({
+				status: platformApplications.status,
+				responsibleUserId: platformApplications.responsibleUserId,
+				authorizationRevision: platformApplications.authorizationRevision,
+			})
+			.from(platformApplications)
+			.where(eq(platformApplications.id, actor.principal.id))
+			.limit(1)
+			.for("share");
+		application = row ?? null;
+	}
+	const [credential] =
+		actor.principal && actor.credential
+			? await database
+					.select({
+						principalType: platformApiCredentials.principalType,
+						principalId: platformApiCredentials.principalId,
+						scopes: platformApiCredentials.scopes,
+						expiresAt: platformApiCredentials.expiresAt,
+						revokedAt: platformApiCredentials.revokedAt,
+						recipientUserId: platformApiCredentials.recipientUserId,
+					})
+					.from(platformApiCredentials)
+					.where(eq(platformApiCredentials.id, actor.credential.credentialId))
+					.limit(1)
+					.for("share")
+			: [];
+	const currentUser =
+		actor.principal?.kind === "application"
+			? null
+			: await currentUserAtWrite(database, actor.userId, resolveUser);
+	let recipient: CurrentTaskUserV1 | null = null;
+	let delivery: {
 		authorizationRevision: string;
 		revokedAt: Date | null;
-	}[] = [];
-	if (actor.principal !== undefined) {
-		const credentialId = actor.credential?.credentialId;
-		if (!credentialId || !actor.credential?.scopes.includes("agent:manage"))
-			return false;
-		if (actor.principal.kind === "user") {
-			if (!resolveUser || !actor.identityRevision) return false;
-			try {
-				const currentUser = parseCurrentTaskUserV1(
-					await resolveUser(actor.principal.id),
-				);
-				if (
-					currentUser.userId !== actor.principal.id ||
-					currentUser.accountStatus !== "active" ||
-					currentUser.authorizationRevision !== actor.identityRevision
-				)
-					return false;
-			} catch {
-				return false;
-			}
-		}
-		if (actor.principal.kind === "application") {
-			const [application] = await database
-				.select({
-					status: platformApplications.status,
-					responsibleUserId: platformApplications.responsibleUserId,
-					authorizationRevision: platformApplications.authorizationRevision,
-				})
-				.from(platformApplications)
-				.where(eq(platformApplications.id, actor.principal.id))
-				.limit(1)
-				.for("share");
-			applicationStatus = application?.status ?? null;
-			applicationResponsibleUserId = application?.responsibleUserId ?? null;
-			applicationRevision = application?.authorizationRevision ?? null;
-			if (
-				applicationStatus !== "active" ||
-				!actor.identityRevision ||
-				applicationRevision !== actor.identityRevision
+	} | null = null;
+	if (actor.principal?.kind === "application" && credential?.recipientUserId) {
+		recipient = await currentUserAtWrite(
+			database,
+			credential.recipientUserId,
+			resolveUser,
+		);
+		const [row] = await database
+			.select({
+				authorizationRevision:
+					apiCredentialDeliveryGrants.authorizationRevision,
+				revokedAt: apiCredentialDeliveryGrants.revokedAt,
+			})
+			.from(apiCredentialDeliveryGrants)
+			.where(
+				and(
+					eq(apiCredentialDeliveryGrants.applicationId, actor.principal.id),
+					eq(apiCredentialDeliveryGrants.principalType, "user"),
+					eq(
+						apiCredentialDeliveryGrants.principalId,
+						credential.recipientUserId,
+					),
+				),
 			)
-				return false;
-			const [recipient] = await database
-				.select({ recipientUserId: platformApiCredentials.recipientUserId })
-				.from(platformApiCredentials)
-				.where(eq(platformApiCredentials.id, credentialId))
-				.limit(1);
-			if (!recipient?.recipientUserId) return false;
-			recipientUserId = recipient.recipientUserId;
-			const [delivery] = await database
+			.limit(1)
+			.for("share");
+		delivery = row ?? null;
+	}
+	const [owner] =
+		actor.principal === undefined
+			? await database
+					.select({ agentId: agentOwners.agentId })
+					.from(agentOwners)
+					.where(
+						and(
+							eq(agentOwners.agentId, agentId),
+							eq(agentOwners.ownerId, actor.userId),
+						),
+					)
+					.limit(1)
+					.for("share")
+			: [];
+	const grants = actor.principal
+		? await database
 				.select({
-					authorizationRevision:
-						apiCredentialDeliveryGrants.authorizationRevision,
+					grantType: agentPrincipalGrants.grantType,
+					authorizationRevision: agentPrincipalGrants.authorizationRevision,
+					revokedAt: agentPrincipalGrants.revokedAt,
 				})
-				.from(apiCredentialDeliveryGrants)
+				.from(agentPrincipalGrants)
 				.where(
 					and(
-						eq(apiCredentialDeliveryGrants.applicationId, actor.principal.id),
-						eq(apiCredentialDeliveryGrants.principalType, "user"),
-						eq(
-							apiCredentialDeliveryGrants.principalId,
-							recipient.recipientUserId,
-						),
-						isNull(apiCredentialDeliveryGrants.revokedAt),
+						eq(agentPrincipalGrants.agentId, agentId),
+						eq(agentPrincipalGrants.principalType, actor.principal.kind),
+						eq(agentPrincipalGrants.principalId, actor.principal.id),
 					),
 				)
-				.limit(1)
-				.for("share");
-			if (delivery?.authorizationRevision !== applicationRevision) return false;
-			if (!resolveUser) return false;
-			try {
-				const currentRecipient = parseCurrentTaskUserV1(
-					await resolveUser(recipient.recipientUserId),
-				);
-				if (
-					currentRecipient.userId !== recipient.recipientUserId ||
-					currentRecipient.accountStatus !== "active"
-				)
-					return false;
-			} catch {
-				return false;
-			}
-		}
-		const [currentCredential] = await database
-			.select({
-				principalType: platformApiCredentials.principalType,
-				principalId: platformApiCredentials.principalId,
-				scopes: platformApiCredentials.scopes,
-				expiresAt: platformApiCredentials.expiresAt,
-				revokedAt: platformApiCredentials.revokedAt,
-				recipientUserId: platformApiCredentials.recipientUserId,
-			})
-			.from(platformApiCredentials)
-			.where(eq(platformApiCredentials.id, credentialId))
-			.limit(1)
-			.for("share");
-		if (
-			actor.principal.kind === "application" &&
-			currentCredential?.recipientUserId !== recipientUserId
-		)
-			return false;
-		credential = currentCredential ?? null;
-	}
-	if (actor.principal === undefined) {
-		const [owner] = await database
-			.select({ agentId: agentOwners.agentId })
-			.from(agentOwners)
-			.where(
-				and(
-					eq(agentOwners.agentId, agentId),
-					eq(agentOwners.ownerId, actor.userId),
-				),
-			)
-			.limit(1)
-			.for("share");
-		isOwner = owner !== undefined;
-	} else if (authorizationRevision !== null) {
-		grants = await database
-			.select({
-				grantType: agentPrincipalGrants.grantType,
-				authorizationRevision: agentPrincipalGrants.authorizationRevision,
-				revokedAt: agentPrincipalGrants.revokedAt,
-			})
-			.from(agentPrincipalGrants)
-			.where(
-				and(
-					eq(agentPrincipalGrants.agentId, agentId),
-					eq(agentPrincipalGrants.principalType, actor.principal.kind),
-					eq(agentPrincipalGrants.principalId, actor.principal.id),
-				),
-			)
-			.for("share");
-	}
+				.for("share")
+		: [];
+	const clock = await database.execute<{ now_ms: string }>(
+		sql`select (extract(epoch from clock_timestamp()) * 1000)::text as now_ms`,
+	);
 	return isCurrentAgentGrantManageAllowedV1({
 		actor,
-		credential,
-		applicationStatus,
-		applicationResponsibleUserId,
-		isOwner,
+		credential: credential ?? null,
+		currentUser,
+		application,
+		recipient,
+		delivery,
+		nowMs: Number(clock[0]?.now_ms),
+		isOwner: owner !== undefined,
 		authorizationRevision,
 		grants,
 	});
@@ -833,6 +798,7 @@ export class PostgresApiIdentityStoreV1 {
 				application?.status !== "active" ||
 				application?.authorizationRevision !== input.authorizationRevision ||
 				!(await hasCurrentDeliveryManager(
+					transaction,
 					input.actor,
 					application.responsibleUserId,
 					this.#resolveUser,
@@ -907,6 +873,7 @@ export class PostgresApiIdentityStoreV1 {
 			if (
 				!application ||
 				!(await hasCurrentDeliveryManager(
+					transaction,
 					input.actor,
 					application.responsibleUserId,
 					this.#resolveUser,

@@ -5,7 +5,9 @@ import {
 	type CurrentTaskUserV1,
 	captureApplicationTaskAuthorizationBoundaryV1,
 	captureTaskAuthorizationBoundaryV1,
+	isCurrentTaskApiAccessAllowedV1,
 	isTaskAuthorizationCurrentV1,
+	isTaskPrincipalChannelAllowedV1,
 	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
 	planTaskSystemControlV1,
@@ -58,6 +60,65 @@ function requiredBoundary(overrides: Parameters<typeof capture>[0] = {}) {
 }
 
 describe("task authorization boundary", () => {
+	it("requires a current application and use grant for API acceptance", () => {
+		const boundary = captureApplicationTaskAuthorizationBoundaryV1({
+			application: {
+				schemaVersion: 1,
+				applicationId: "application-a",
+				accountStatus: "active",
+				authorizationRevision: "application-1",
+			},
+			agent: {
+				...agent,
+				principalGrants: [
+					{
+						principal: { kind: "application", id: "application-a" },
+						grantType: "use",
+						authorizationRevision: "agent-1",
+						revokedAt: null,
+					},
+				],
+			},
+			channelId: "api",
+			agentAuthorizationRevision: "agent-1",
+		});
+		if (!boundary) throw new Error("Expected active application boundary");
+		const application = {
+			status: "active",
+			authorizationRevision: "application-1",
+		};
+		expect(isTaskPrincipalChannelAllowedV1(boundary)).toBe(true);
+		expect(
+			isTaskPrincipalChannelAllowedV1({ ...boundary, channelId: "web" }),
+		).toBe(false);
+		expect(
+			isCurrentTaskApiAccessAllowedV1({
+				boundary,
+				hasCurrentUseGrant: true,
+				application,
+			}),
+		).toBe(true);
+		expect(
+			isCurrentTaskApiAccessAllowedV1({
+				boundary,
+				hasCurrentUseGrant: false,
+				application,
+			}),
+		).toBe(false);
+		for (const current of [
+			undefined,
+			{ ...application, status: "disabled" },
+			{ ...application, authorizationRevision: "changed" },
+		])
+			expect(
+				isCurrentTaskApiAccessAllowedV1({
+					boundary,
+					hasCurrentUseGrant: true,
+					application: current,
+				}),
+			).toBe(false);
+	});
+
 	it("keeps directory and Agent revisions distinct while accepting current unchanged scope", () => {
 		const boundary = requiredBoundary();
 		expect(boundary).toMatchObject({

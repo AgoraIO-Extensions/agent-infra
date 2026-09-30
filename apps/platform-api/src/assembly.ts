@@ -332,33 +332,8 @@ export function assemblePlatformApi(
 			},
 		},
 		agentAccess: {
-			async canManage({ actor, agentId }) {
-				const principal = actor.principal ?? {
-					kind: "user" as const,
-					id: actor.userId,
-				};
-				if (actor.isAdministrator)
-					return (
-						(await managementQuery.getAgent(
-							{ kind: "administrator" },
-							agentId,
-						)) !== undefined
-					);
-				if (
-					actor.principal === undefined &&
-					principal.kind === "user" &&
-					(await managementQuery.getAgent(
-						{ kind: "owner", ownerId: principal.id },
-						agentId,
-					))
-				)
-					return true;
-				return (
-					(await managementQuery.getAgent(
-						{ kind: "principal", principal, grantType: "manage" },
-						agentId,
-					)) !== undefined
-				);
+			async hasAgent(scope, agentId) {
+				return (await managementQuery.getAgent(scope, agentId)) !== undefined;
 			},
 		},
 		idFactory: randomUUID,

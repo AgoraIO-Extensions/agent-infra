@@ -343,6 +343,30 @@ export function isTaskAuthorizationCurrentV1(input: {
 	);
 }
 
+export function isTaskPrincipalChannelAllowedV1(
+	boundary: TaskAuthorizationBoundaryV1,
+): boolean {
+	return boundary.principal.kind === "user" || boundary.channelId === "api";
+}
+
+export function isCurrentTaskApiAccessAllowedV1(input: {
+	readonly boundary: TaskAuthorizationBoundaryV1;
+	readonly hasCurrentUseGrant: boolean;
+	readonly application?: {
+		readonly status: string;
+		readonly authorizationRevision: string;
+	};
+}): boolean {
+	if (input.boundary.channelId !== "api") return true;
+	if (!input.hasCurrentUseGrant) return false;
+	return (
+		input.boundary.principal.kind === "user" ||
+		(input.application?.status === "active" &&
+			input.application.authorizationRevision ===
+				input.boundary.identityRevision)
+	);
+}
+
 export type TaskSystemControlReasonV1 =
 	| "stop"
 	| "authorization_revoked"

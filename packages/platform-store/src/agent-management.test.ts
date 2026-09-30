@@ -24,6 +24,8 @@ import {
 	type AgentManagementConformanceOptionsV1,
 	agentManagementV1Conformance,
 } from "../../platform-core/src/agent-management.conformance.ts";
+import { applicationFoundationConfigurationV1 } from "../../platform-core/src/application-foundation.conformance.ts";
+import { PostgresAgentDefaultRelayKeyStoreV1 } from "./agent-default-relay-key.ts";
 import {
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
@@ -423,6 +425,133 @@ describe("PostgreSQL Agent-management Adapter", () => {
 				(select count(*)::int from platform.idempotency_records) idempotency
 		`;
 		expect(counts).toEqual({ history: 1, outbox: 1, audit: 1, idempotency: 1 });
+	});
+
+	it("lets API lifecycle finish while a default-Key read holds the same LDAP mapping", async () => {
+		const userId = "7b3f195f-1727-4b2c-a9ad-b2e752cc08bf";
+		const state = stateFixture({ applicantId: userId, ownerIds: [userId] });
+		await seedStates([state]);
+		const runtime = {
+			schemaVersion: 4,
+			configVersion: "key-lock-runtime",
+			defaultModelOptionId: "model_primary",
+			defaultReasoningLevel: "low",
+			modelOptions: [
+				{
+					modelOptionId: "model_primary",
+					endpoint: "https://relay.example/v1",
+					model: "gpt-5",
+					reasoningLevels: ["low"],
+					protocol: "openai-responses-v1",
+					authentication: "bearer",
+				},
+			],
+		};
+		const configuration = {
+			...applicationFoundationConfigurationV1,
+			agentId: state.agentId,
+			modelConfiguration: null,
+			modelCatalogRevision: "catalog-key-lock",
+			runtimeModelConfigurationV4: runtime,
+		};
+		await adminClient`update platform.agent_configuration_revisions
+			set configuration = ${adminClient.json(configuration)} where agent_id = ${state.agentId}`;
+		await adminClient`update platform.agents set authorization_revision = 'grant-1' where id = ${state.agentId}`;
+		await adminClient`insert into platform.agent_principal_grants
+			(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values (${state.agentId}, 'user', ${userId}, 'manage', 'grant-1')`;
+		await adminClient`insert into platform.platform_api_credentials
+			(id, principal_type, principal_id, credential_hash, scopes)
+			values ('credential_key_lock', 'user', ${userId}, repeat('b', 64), '["agent:manage"]'::jsonb)`;
+		await adminClient`insert into platform.ldap_identity_ids (issuer, uid, user_id)
+			values ('fixture', 'key-lock-user', ${userId})`;
+		const currentUser = {
+			schemaVersion: 1 as const,
+			userId,
+			accountStatus: "active" as const,
+			organizationIds: [],
+			authorizationRevision: "identity-1",
+		};
+		let release: (() => void) | undefined;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let markMappingLocked: (() => void) | undefined;
+		const mappingLocked = new Promise<void>((resolve) => {
+			markMappingLocked = resolve;
+		});
+		const keys = new PostgresAgentDefaultRelayKeyStoreV1(
+			databaseUrl,
+			async () => {
+				markMappingLocked?.();
+				await held;
+				return currentUser;
+			},
+			{
+				encrypt: () => {
+					throw new Error("READ_ONLY_KEY_TEST");
+				},
+			},
+		);
+		adapters.push(keys);
+		const lifecycle = new PostgresAgentManagementTransactionV1({
+			databaseUrl,
+			resolveUser: async () => currentUser,
+		});
+		adapters.push(lifecycle);
+		const keyRead = keys.current({
+			agentId: state.agentId,
+			actorUserId: userId,
+			traceId: "key-lock-trace",
+			requestId: "key-lock-request",
+		});
+		let commandResult:
+			| ReturnType<AgentManagementInterfaceV1["executeManagementCommand"]>
+			| undefined;
+		let deadline: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await mappingLocked;
+			commandResult = createAgentManagementV1(
+				lifecycle,
+			).executeManagementCommand(
+				command("stop_agent", state, "key-lock-stop"),
+				{
+					...applicant,
+					userId,
+					principal: { kind: "user", id: userId },
+					apiAuthority: {
+						credentialId: "credential_key_lock",
+						identityRevision: "identity-1",
+					},
+				},
+			);
+			const result = await Promise.race([
+				commandResult,
+				new Promise<never>((_resolve, reject) => {
+					deadline = setTimeout(
+						() =>
+							reject(new Error("Lifecycle blocked on a concurrent Key read")),
+						3000,
+					);
+				}),
+			]);
+			expect(result).toMatchObject({
+				outcome: "accepted",
+				result: { status: "stopped" },
+			});
+			release?.();
+			await expect(keyRead).resolves.toMatchObject({
+				configurationRevision: 1,
+				keyVersion: null,
+			});
+		} finally {
+			if (deadline) clearTimeout(deadline);
+			release?.();
+			await commandResult?.catch(() => undefined);
+			await keyRead.catch(() => undefined);
+			await adminClient`delete from platform.ldap_identity_ids where user_id = ${userId}`;
+			await adminClient`delete from platform.platform_api_credentials where id = 'credential_key_lock'`;
+		}
 	});
 
 	it("denies lifecycle after concurrent credential revocation", async () => {

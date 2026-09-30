@@ -87,6 +87,24 @@ const identity: IdentityAdapter = {
 			?.match(/(?:^|;\s*)session=([^;]+)/)?.[1];
 		return sessions.get(session ?? "") ?? null;
 	},
+	async resolveUser(userId) {
+		const current = [...sessions.values()].find(
+			(value) =>
+				typeof value === "object" &&
+				value !== null &&
+				"userId" in value &&
+				value.userId === userId,
+		) as IdentityContext | undefined;
+		return current
+			? {
+					schemaVersion: 1,
+					userId: current.userId,
+					accountStatus: current.accountStatus,
+					organizationIds: current.organizationIds,
+					authorizationRevision: current.authorizationRevision,
+				}
+			: null;
+	},
 	async hydrateUsers(userIds) {
 		return userIds.map((userId) => {
 			const user = Object.values(identities).find((u) => u.userId === userId);
@@ -96,32 +114,33 @@ const identity: IdentityAdapter = {
 	},
 };
 const plaintext = {
-	model: "synthetic-initial-model-credential",
+	agentDefault: "synthetic-initial-agent-default-key",
 	secret: "synthetic-initial-bot-secret",
-	replacementModel: "synthetic-replacement-model-credential",
+	replacementAgentDefault: "synthetic-replacement-agent-default-key",
 	replacementSecret: "synthetic-replacement-bot-secret",
 };
-const modelConfiguration = (credentialValue: string) => ({
+const modelSelection = () => ({
+	catalogRevision: "catalog-a",
 	options: [
 		{
 			optionId: "option-a",
 			endpointId: "endpoint-a",
 			modelId: "model-a",
 			reasoningLevels: ["medium", "high"],
-			credentialValue,
 		},
 	],
 	defaultOptionId: "option-a",
 	defaultReasoningLevel: "medium",
 });
 const applicationBody = {
-	schemaVersion: 2,
+	schemaVersion: 3,
 	name: "Production assembly test",
 	description: "Synthetic persistent lifecycle",
 	source: { kind: "standard", templateId: "codex" },
 	coOwnerIds: [],
 	availability: [{ kind: "organization", organizationId: "org-a" }],
-	modelConfiguration: modelConfiguration(plaintext.model),
+	agentDefaultRelayKey: plaintext.agentDefault,
+	modelSelection: modelSelection(),
 	environment: [{ name: "LANG", value: "en_US.UTF-8" }],
 	secrets: [{ name: "BOT_TOKEN", value: plaintext.secret }],
 };
@@ -249,6 +268,30 @@ function deploymentInput(
 				],
 			}),
 		},
+		admitAgentDefaultModels: async ({ candidateRelayKey, requested }) => {
+			expect([
+				plaintext.agentDefault,
+				plaintext.replacementAgentDefault,
+			]).toContain(candidateRelayKey);
+			expect(requested).toEqual(modelSelection());
+			return {
+				catalogRevision: "catalog-a",
+				runtime: {
+					schemaVersion: 4,
+					configVersion: "synthetic-catalog-a",
+					defaultModelOptionId: requested.defaultOptionId,
+					defaultReasoningLevel: requested.defaultReasoningLevel,
+					modelOptions: requested.options.map((option) => ({
+						modelOptionId: option.optionId,
+						endpoint: "https://models.example.test/v1",
+						model: option.modelId,
+						reasoningLevels: option.reasoningLevels,
+						protocol: "openai-responses-v1" as const,
+						authentication: "bearer" as const,
+					})),
+				},
+			};
+		},
 		channelPolicy: { revision: "channels-a", bindings: [] },
 		encryptionKeys: {
 			schemaVersion: 1,
@@ -300,7 +343,9 @@ function request(path: string, user: User, body?: unknown, key?: string) {
 		method:
 			body === undefined
 				? "GET"
-				: path === "/api/v2/agent-applications" || path.endsWith("/decision")
+				: path === "/api/v2/agent-applications" ||
+						path === "/api/v2/agent-applications/default-key" ||
+						path.endsWith("/decision")
 					? "POST"
 					: "PUT",
 		headers: {
@@ -318,6 +363,8 @@ async function snapshot() {
 		"agent_applications",
 		"agent_configuration_revisions",
 		"secret_records",
+		"relay_key_subjects",
+		"relay_key_versions",
 		"outbox_items",
 		"audit_events",
 		"idempotency_records",
@@ -362,10 +409,51 @@ afterAll(async () => {
 });
 // Identity/registry/catalog are controlled deployment inputs. Core, Store, loader and HTTP are real.
 describe("production API lifecycle over HTTP and PostgreSQL", () => {
+	it("rejects retired per-model creation and missing default Key before persistence", async () => {
+		const before = await snapshot();
+		const {
+			agentDefaultRelayKey: _key,
+			modelSelection: selection,
+			...fields
+		} = applicationBody;
+		await json(
+			await request(
+				"/api/v2/agent-applications",
+				"alice",
+				{
+					...fields,
+					schemaVersion: 2,
+					modelConfiguration: {
+						...selection,
+						options: selection.options.map((option) => ({
+							...option,
+							credentialValue: "synthetic-retired-model-key",
+						})),
+					},
+				},
+				"retired-creation",
+			),
+			400,
+		);
+		await json(
+			await request(
+				"/api/v2/agent-applications/default-key",
+				"alice",
+				{
+					...fields,
+					modelSelection: selection,
+				},
+				"missing-default-key",
+			),
+			400,
+		);
+		expect(await snapshot()).toEqual(before);
+	});
+
 	it("creates, approves and configures an Agent without pretending its Workload is ready", async () => {
 		const empty = await snapshot();
 		expect(empty.agents).toEqual([]);
-		const path = "/api/v2/agent-applications";
+		const path = "/api/v2/agent-applications/default-key";
 		const created = AgentApplicationProjectionV2Schema.parse(
 			await json(
 				await request(path, "alice", applicationBody, "create-a"),
@@ -381,7 +469,13 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			},
 		});
 		const submitted = await snapshot();
-		expect(submitted.secret_records).toHaveLength(2);
+		expect(submitted.secret_records).toHaveLength(1);
+		expect(submitted.relay_key_versions).toHaveLength(1);
+		expect(submitted.relay_key_versions?.[0]).toMatchObject({
+			purpose: "agent-default",
+			subject_id: created.agentId,
+			key_version: "1",
+		});
 		expectNoPlaintext(submitted);
 		for (const row of submitted.secret_records ?? [])
 			expect(validatePlatformSecretRecordV1(row.record)).toMatchObject({
@@ -395,7 +489,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			),
 		).toEqual(created);
 		expect(await snapshot()).toEqual(submitted);
-		const applicationPath = `${path}/${created.applicationId}`;
+		const applicationPath = `/api/v2/agent-applications/${created.applicationId}`;
 		await json(await request(applicationPath, "bob"), 404);
 		const decisionPath = `/api/v2/admin/agent-applications/${created.applicationId}/decision`;
 		await json(
@@ -438,7 +532,6 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		const update = {
 			schemaVersion: 2,
 			environment: [{ name: "LANG", value: "zh_CN.UTF-8" }],
-			modelConfiguration: modelConfiguration(plaintext.replacementModel),
 			secrets: [{ name: "BOT_TOKEN", value: plaintext.replacementSecret }],
 		};
 		const configurationPath = `${agentPath}/configuration`;
@@ -462,7 +555,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		});
 		const configured = await snapshot();
 		expect(configured.agent_configuration_revisions).toHaveLength(2);
-		expect(configured.secret_records).toHaveLength(4);
+		expect(configured.secret_records).toHaveLength(2);
 		expectNoPlaintext(configured);
 		expect(
 			await json(
@@ -480,6 +573,41 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			),
 		).toEqual(updated);
 		expect(await snapshot()).toEqual(configured);
+		const keyPath = `/api/v2/agents/${created.agentId}/default-relay-key`;
+		expect(await json(await request(keyPath, "alice"), 200)).toEqual({
+			schemaVersion: 1,
+			isSet: true,
+			keyVersion: 1,
+		});
+		await json(await request(keyPath, "bob"), 404);
+		await json(await request(keyPath, "admin"), 404);
+		const replacement = {
+			schemaVersion: 1,
+			expectedVersion: 1,
+			keyValue: plaintext.replacementAgentDefault,
+			modelSelection: modelSelection(),
+		};
+		expect(
+			await json(await request(keyPath, "alice", replacement), 200),
+		).toEqual({ schemaVersion: 1, isSet: true, keyVersion: 2 });
+		const replacedKey = await snapshot();
+		expect(replacedKey.relay_key_versions).toHaveLength(2);
+		expectNoPlaintext(replacedKey);
+		await json(await request(keyPath, "alice", replacement), 409);
+		const rejectedKey = await snapshot();
+		for (const [table, rows] of Object.entries(replacedKey)) {
+			if (table !== "audit_events") expect(rejectedKey[table]).toEqual(rows);
+		}
+		expect(rejectedKey.audit_events).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					action: "relay_key.agent_default.rejected",
+					target_id: created.agentId,
+					outcome: "rejected",
+					details: { reason: "STALE_VERSION" },
+				}),
+			]),
+		);
 		await json(
 			await request(
 				`/api/v2/agents/${created.agentId}/configuration`,
@@ -532,7 +660,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		const created = AgentApplicationProjectionV2Schema.parse(
 			await json(
 				await request(
-					"/api/v2/agent-applications",
+					"/api/v2/agent-applications/default-key",
 					"alice",
 					body,
 					"create-application-target",
@@ -567,7 +695,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		});
 		try {
 			const alice = request(
-				"/api/v2/agent-applications",
+				"/api/v2/agent-applications/default-key",
 				"alice",
 				applicationBody,
 				"concurrent",
@@ -576,7 +704,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			const bob = AgentApplicationProjectionV2Schema.parse(
 				await json(
 					await request(
-						"/api/v2/agent-applications",
+						"/api/v2/agent-applications/default-key",
 						"bob",
 						applicationBody,
 						"concurrent",
@@ -599,9 +727,34 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				"select agent_id,owner_id from platform.secret_records where agent_id in ($1,$2)",
 				[a.agentId, bob.agentId],
 			);
-			expect(rows).toHaveLength(4);
+			expect(rows).toHaveLength(2);
+			expect(rows.map((row) => row.agent_id).sort()).toEqual(
+				[a.agentId, bob.agentId].sort(),
+			);
 			for (const row of rows)
 				expect(row.owner_id).toBe(row.agent_id === a.agentId ? "alice" : "bob");
+			const defaultKeys = await reader.unsafe(
+				`select key.subject_id, key.key_version, owner.owner_id, key.ciphertext
+				from platform.relay_key_versions key
+				join platform.agent_owners owner on owner.agent_id = key.subject_id
+				where key.purpose = 'agent-default' and key.subject_id in ($1,$2)`,
+				[a.agentId, bob.agentId],
+			);
+			expect(defaultKeys).toHaveLength(2);
+			expect(defaultKeys.map((row) => row.subject_id).sort()).toEqual(
+				[a.agentId, bob.agentId].sort(),
+			);
+			for (const row of defaultKeys) {
+				expect(row.owner_id).toBe(
+					row.subject_id === a.agentId ? "alice" : "bob",
+				);
+				expect(row.key_version).toBe("1");
+				expect(row.ciphertext).toMatchObject({
+					purpose: "agent-default",
+					subjectId: row.subject_id,
+				});
+			}
+			expectNoPlaintext(defaultKeys);
 		} finally {
 			release();
 			if (original) fixture.authorize.mockImplementation(original);
@@ -622,19 +775,22 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 					identity.resolve = async () => {
 						throw new Error("private directory sentinel");
 					};
-				const response = await fetch(`${origin}/api/v2/agent-applications`, {
-					method: "POST",
-					headers: {
-						"content-type": "application/json",
-						"Idempotency-Key": `rejected-${mode}`,
-						...(mode === "anonymous" || mode === "forged"
-							? {}
-							: { cookie: `session=${sessionKeys.alice}` }),
-						"X-User-Id": "administrator",
-						"X-Role": "system_admin",
+				const response = await fetch(
+					`${origin}/api/v2/agent-applications/default-key`,
+					{
+						method: "POST",
+						headers: {
+							"content-type": "application/json",
+							"Idempotency-Key": `rejected-${mode}`,
+							...(mode === "anonymous" || mode === "forged"
+								? {}
+								: { cookie: `session=${sessionKeys.alice}` }),
+							"X-User-Id": "administrator",
+							"X-Role": "system_admin",
+						},
+						body: JSON.stringify(applicationBody),
 					},
-					body: JSON.stringify(applicationBody),
-				});
+				);
 				const body = await json(
 					response,
 					mode === "directory_failure" ? 503 : mode === "disabled" ? 403 : 401,
@@ -659,7 +815,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				: { ...identities.alice, accountStatus: "disabled" };
 		try {
 			const response = await request(
-				"/api/v2/agent-applications",
+				"/api/v2/agent-applications/default-key",
 				"alice",
 				applicationBody,
 				"mid-admission-revoked",
@@ -684,7 +840,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			try {
 				await json(
 					await request(
-						"/api/v2/agent-applications",
+						"/api/v2/agent-applications/default-key",
 						"alice",
 						applicationBody,
 						`rollback-${table}`,
@@ -706,7 +862,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		const created = AgentApplicationProjectionV2Schema.parse(
 			await json(
 				await request(
-					"/api/v2/agent-applications",
+					"/api/v2/agent-applications/default-key",
 					"alice",
 					applicationBody,
 					"stale-projection",
@@ -828,12 +984,12 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			}
 		},
 	);
-	it("revises the original pending application and encrypts replacement credentials", async () => {
+	it("revises the original pending application and encrypts replacement secrets", async () => {
 		const before = await snapshot();
 		const created = AgentApplicationProjectionV2Schema.parse(
 			await json(
 				await request(
-					"/api/v2/agent-applications",
+					"/api/v2/agent-applications/default-key",
 					"alice",
 					applicationBody,
 					"revise-application",
@@ -841,10 +997,15 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				201,
 			),
 		);
+		const {
+			agentDefaultRelayKey: _key,
+			modelSelection: _selection,
+			...updateFields
+		} = applicationBody;
 		const changed = {
-			...applicationBody,
+			...updateFields,
+			schemaVersion: 2,
 			name: "Revised application",
-			modelConfiguration: modelConfiguration(plaintext.replacementModel),
 			secrets: [{ name: "BOT_TOKEN", value: plaintext.replacementSecret }],
 		};
 		const revised = AgentApplicationProjectionV2Schema.parse(
@@ -868,7 +1029,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		const after = await snapshot();
 		expect(after.agents?.length).toBe((before.agents?.length ?? 0) + 1);
 		expect(after.secret_records?.length).toBe(
-			(before.secret_records?.length ?? 0) + 4,
+			(before.secret_records?.length ?? 0) + 2,
 		);
 		expectNoPlaintext(after);
 		await json(
@@ -898,7 +1059,9 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 							"alice",
 							{
 								...applicationBody,
-								modelConfiguration: undefined,
+								schemaVersion: 2,
+								agentDefaultRelayKey: undefined,
+								modelSelection: undefined,
 								secrets: [],
 								source: {
 									kind: "custom",

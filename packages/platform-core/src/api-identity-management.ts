@@ -1,3 +1,4 @@
+import { isCurrentApiAgentManagementAuthorizedV1 } from "./agent-management.js";
 import {
 	type ApiCredentialMetadataV1,
 	type ApiCredentialScopeV1,
@@ -102,9 +103,20 @@ export function isCurrentAgentGrantManageAllowedV1(input: {
 		readonly scopes: readonly string[];
 		readonly expiresAt: Date | null;
 		readonly revokedAt: Date | null;
+		readonly recipientUserId: string | null;
 	};
-	readonly applicationStatus: string | null;
-	readonly applicationResponsibleUserId: string | null;
+	readonly currentUser: CurrentTaskUserV1 | null;
+	readonly application: {
+		readonly status: string;
+		readonly responsibleUserId: string;
+		readonly authorizationRevision: string;
+	} | null;
+	readonly recipient: CurrentTaskUserV1 | null;
+	readonly delivery: {
+		readonly authorizationRevision: string;
+		readonly revokedAt: Date | null;
+	} | null;
+	readonly nowMs: number;
 	readonly isOwner: boolean;
 	readonly authorizationRevision: string | null;
 	readonly grants: readonly {
@@ -113,28 +125,37 @@ export function isCurrentAgentGrantManageAllowedV1(input: {
 		readonly revokedAt: Date | null;
 	}[];
 }): boolean {
-	const { actor, credential } = input;
+	const { actor } = input;
 	if (actor.accountStatus !== "active") return false;
 	if (actor.principal) {
 		if (
 			!actor.credential?.credentialId ||
-			!credential ||
-			credential.principalType !== actor.principal.kind ||
-			credential.principalId !== actor.principal.id ||
-			credential.revokedAt !== null ||
-			(credential.expiresAt !== null &&
-				credential.expiresAt.getTime() <= Date.now()) ||
-			!credential.scopes.includes("agent:manage") ||
+			!actor.identityRevision ||
+			!actor.credential.scopes.includes("agent:manage") ||
+			!isCurrentApiAgentManagementAuthorizedV1({
+				actorId: actor.principal.id,
+				apiAuthority: {
+					principal: actor.principal,
+					credentialId: actor.credential.credentialId,
+					identityRevision: actor.identityRevision,
+				},
+				credential: input.credential,
+				nowMs: input.nowMs,
+				currentUser: input.currentUser,
+				currentApplication: input.application,
+				currentRecipient: input.recipient,
+				currentDelivery: input.delivery,
+			}) ||
 			(actor.principal.kind === "application" &&
-				(input.applicationStatus !== "active" ||
-					input.applicationResponsibleUserId !== actor.userId))
+				input.application?.responsibleUserId !== actor.userId)
 		)
 			return false;
+	} else {
+		if (!isCurrentApiIdentityBrowserActorV1(input)) return false;
+		return actor.isAdministrator || input.isOwner;
 	}
-	if (actor.isAdministrator) return true;
 	if (actor.principal?.kind === "user" && actor.principal.id !== actor.userId)
 		return false;
-	if (!actor.principal) return input.isOwner;
 	return (
 		input.authorizationRevision !== null &&
 		input.grants.some(
@@ -250,10 +271,17 @@ export interface ApiIdentityDirectoryPortV1 {
 }
 
 export interface ApiIdentityAgentAccessPortV1 {
-	canManage(input: {
-		readonly actor: ApiIdentityActorV1;
-		readonly agentId: string;
-	}): Promise<boolean>;
+	hasAgent(
+		scope:
+			| { readonly kind: "administrator" }
+			| { readonly kind: "owner"; readonly ownerId: string }
+			| {
+					readonly kind: "principal";
+					readonly principal: ApiPrincipalV1;
+					readonly grantType: "manage";
+			  },
+		agentId: string,
+	): Promise<boolean>;
 }
 
 export interface ApiIdentityManagementInterfaceV1 {
@@ -577,7 +605,16 @@ export function createApiIdentityManagementV1(input: {
 		requireActiveActor(actor);
 		if (actor.principal !== undefined)
 			await requireCredentialScope(actor, ["agent:manage"]);
-		if (!(await input.agentAccess.canManage({ actor, agentId })))
+		const scope = actor.principal
+			? {
+					kind: "principal" as const,
+					principal: actor.principal,
+					grantType: "manage" as const,
+				}
+			: actor.isAdministrator
+				? { kind: "administrator" as const }
+				: { kind: "owner" as const, ownerId: actor.userId };
+		if (!(await input.agentAccess.hasAgent(scope, agentId)))
 			throw new ApiIdentityError("resource_unavailable");
 	};
 	return {
