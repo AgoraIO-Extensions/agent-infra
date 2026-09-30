@@ -2,7 +2,10 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { AccessOptionsResponse } from "@agent-infra/connection-contracts";
+import type {
+	AccessOptionsResponse,
+	AccessRequestsResponse,
+} from "@agent-infra/connection-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	act,
@@ -33,6 +36,82 @@ afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
 });
+
+it.each(["CONSUMED", "IN_REVIEW", "APPROVED_PENDING_CONNECTION"] as const)(
+	"only collapses completed progress (%s), retaining details and actions",
+	async (state) => {
+		const client = new QueryClient();
+		client.setQueryData(["connection-access-options"], { options: [] });
+		const requests: AccessRequestsResponse["requests"] = [
+			{
+				id: "request-compact",
+				providerId: "bitbucket",
+				providerReleaseId: "bitbucket-v8",
+				capabilityProfileName: "bitbucket full",
+				connectExpiresAt: "2099-10-08T00:00:00Z",
+				revision: "1",
+				state,
+				renewal: false,
+				purpose: "协作",
+				createdAt: "2026-09-30T00:00:00Z",
+				expiresAt: "2099-10-08T00:00:00Z",
+				duration: { kind: "PERMANENT" },
+				currentStageOrdinal: 1,
+				stages: [
+					{
+						ordinal: 1,
+						name: "主管审批",
+						state: "APPROVED",
+						revision: "1",
+						routingRevision: "1",
+						openedAt: "2026-09-30T00:00:00Z",
+						completedAt: "2026-09-30T00:01:00Z",
+						decisions: [],
+					},
+				],
+			},
+		];
+		const { container } = render(
+			<QueryClientProvider client={client}>
+				<AccessRequestPanel
+					onSubmitted={vi.fn()}
+					providerId="bitbucket"
+					renewalTarget={null}
+					requests={requests}
+					requestsError={null}
+					requestsPending={false}
+					startProviderId=""
+					startSignal={0}
+				/>
+			</QueryClientProvider>,
+		);
+		const details = container.querySelector("details");
+		const summary = container.querySelector("summary");
+		expect(details?.open).toBe(state !== "CONSUMED");
+		expect(summary?.hidden).toBe(state !== "CONSUMED");
+		if (state === "CONSUMED") {
+			if (!summary) throw new Error("Progress summary missing");
+			expect(summary.textContent).toContain("bitbucket full");
+			expect(summary.textContent).toContain("永久");
+			fireEvent.click(summary);
+			expect(details?.open).toBe(true);
+			expect(screen.getByText("主管审批")).toBeTruthy();
+			fireEvent.click(summary);
+			expect(details?.open).toBe(false);
+			fireEvent.click(screen.getByRole("button", { name: /重新申请/ }));
+			await waitFor(() =>
+				expect(screen.getByText("当前没有可申请的连接能力。")).toBeTruthy(),
+			);
+		} else {
+			expect(
+				screen.getByRole(state === "IN_REVIEW" ? "button" : "link", {
+					name: state === "IN_REVIEW" ? "取消申请" : "连接账号",
+				}),
+			).toBeTruthy();
+		}
+		client.clear();
+	},
+);
 
 it("keeps disclaimer consent beside its text despite global input sizing", () => {
 	const style = document.createElement("style");

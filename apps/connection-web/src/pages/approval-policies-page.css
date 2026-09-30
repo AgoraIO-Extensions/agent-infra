@@ -840,6 +840,44 @@
 .connection-access-panel > p {
 	padding: 12px 0;
 }
+.approval-progress-connected {
+	display: flex;
+	align-items: flex-start;
+	flex-wrap: wrap;
+	gap: 12px;
+}
+.approval-progress-connected .approval-progress-details {
+	flex: 1 1 320px;
+	min-width: 0;
+}
+.approval-progress-details summary:not([hidden]) {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+	min-height: 36px;
+	cursor: pointer;
+	list-style: none;
+}
+.approval-progress-details summary::-webkit-details-marker {
+	display: none;
+}
+.approval-progress-details summary strong {
+	overflow-wrap: anywhere;
+}
+.approval-progress-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--text-muted);
+	font-size: 13px;
+}
+.approval-progress-details[open] .approval-progress-toggle svg {
+	transform: rotate(90deg);
+}
+.approval-progress-connected .approval-panel-actions {
+	padding-top: 0;
+}
 .approval-request-meta {
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
