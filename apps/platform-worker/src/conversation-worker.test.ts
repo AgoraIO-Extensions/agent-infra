@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
 	dispatchAssemblyThrows: false,
 	signal: undefined as AbortSignal | undefined,
 	channelAuthorizationCurrent: undefined as unknown,
+	transaction: undefined as unknown,
+	observedEvents: { persist: vi.fn() },
+	observedFactory: vi.fn(),
+	dispatchEvents: undefined as unknown,
 }));
 vi.mock("@agent-infra/platform-store", () => ({
 	openPostgresConversationDispatchStoreV1: () => ({
@@ -19,6 +23,9 @@ vi.mock("@agent-infra/platform-store", () => ({
 		close: mocks.storeClose,
 	}),
 	PostgresConversationEventTransactionV1: class {
+		constructor() {
+			mocks.transaction = this;
+		}
 		close = mocks.eventsClose;
 	},
 	PostgresTaskAuthorizationStoreV1: class {
@@ -29,12 +36,19 @@ vi.mock("@agent-infra/platform-store", () => ({
 	},
 }));
 vi.mock("@agent-infra/platform-core", () => ({
-	createConversationDispatchUseCaseV1: () => {
+	createConversationDispatchUseCaseV1: (dependencies: { events: unknown }) => {
 		if (mocks.dispatchAssemblyThrows)
 			throw new Error("synthetic dispatch assembly failure");
+		mocks.dispatchEvents = dependencies.events;
 		return { dispatch: mocks.dispatch };
 	},
 	createConversationEventUseCaseV1: () => ({}),
+}));
+vi.mock("@agent-infra/observability/worker", () => ({
+	createObservedConversationEvents: (dependencies: unknown) => {
+		mocks.observedFactory(dependencies);
+		return mocks.observedEvents;
+	},
 }));
 vi.mock("./conversation-runtime.js", () => ({
 	createConversationRuntimeV2: (options: {
@@ -74,6 +88,8 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.signal = undefined;
 	mocks.dispatchAssemblyThrows = false;
+	mocks.transaction = undefined;
+	mocks.dispatchEvents = undefined;
 });
 
 describe("Conversation Worker discovery and shutdown", () => {
@@ -296,4 +312,18 @@ it("does not invent channel authority when deployment omits it", async () => {
 	});
 	expect(mocks.channelAuthorizationCurrent).toBe(current);
 	await configured.stop();
+});
+
+it("observes persisted conversation events through the original transaction", async () => {
+	const telemetry = { record: vi.fn() };
+	const worker = createPlatformConversationWorkerV2({
+		...options,
+		observability: telemetry,
+	});
+	expect(mocks.observedFactory).toHaveBeenCalledWith({
+		transaction: mocks.transaction,
+		telemetry,
+	});
+	expect(mocks.dispatchEvents).toBe(mocks.observedEvents);
+	await worker.stop();
 });

@@ -4,6 +4,7 @@ import {
 	OpaqueCursorV1Schema,
 } from "@agent-infra/contracts";
 import type { PilotProtocolErrorV1 } from "@agent-infra/contracts/pilot";
+import { currentRequestMetadata } from "@agent-infra/observability/http";
 
 export type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 500 | 503;
 
@@ -99,10 +100,12 @@ export interface RequestMetadata {
 }
 
 export function requestMetadata(_request: Request): RequestMetadata {
-	return {
-		requestId: randomUUID(),
-		traceId: randomUUID(),
-	};
+	return (
+		currentRequestMetadata() ?? {
+			requestId: randomUUID(),
+			traceId: randomUUID(),
+		}
+	);
 }
 
 export function parseIdempotencyKey(request: Request, traceId: string): string {

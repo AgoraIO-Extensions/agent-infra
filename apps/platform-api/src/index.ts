@@ -1,4 +1,8 @@
 import { pathToFileURL } from "node:url";
+import {
+	type ObservabilityOptions,
+	startObservability,
+} from "@agent-infra/observability";
 import { serve } from "@hono/node-server";
 
 import {
@@ -15,6 +19,7 @@ import {
 interface StartOptions {
 	dependencies: PlatformAppDependencies;
 	browserAuth?: BrowserAuthHandler;
+	observability?: ReturnType<typeof startObservability>;
 	log?: (message: string) => void;
 	port?: number;
 }
@@ -27,6 +32,7 @@ interface BrowserAuthHandler {
 interface DeploymentStartOptions {
 	log?: (message: string) => void;
 	moduleSpecifier?: string;
+	observabilityOptions?: Omit<ObservabilityOptions, "service">;
 	port?: number;
 }
 
@@ -59,7 +65,7 @@ function authUnavailable(): Response {
 export function startPlatformApi(options: StartOptions) {
 	const port = options.port ?? runtimePort(process.env.PORT, 3000);
 	const log = options.log ?? console.info;
-	const app = createPlatformApp(options.dependencies);
+	const app = createPlatformApp(options.dependencies, options.observability);
 	const browserAuth = options.browserAuth;
 	return serve(
 		{
@@ -141,10 +147,21 @@ export async function startPlatformApiFromDeployment(
 ) {
 	const assembly = await loadPlatformApiAssembly(options.moduleSpecifier);
 	let server: ReturnType<typeof startPlatformApi> | undefined;
+	let observability: ReturnType<typeof startObservability> | undefined;
 	try {
+		observability = startObservability({
+			service: platformApiService,
+			...(process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT
+				? {
+						otlpEndpoint: process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT,
+					}
+				: {}),
+			...options.observabilityOptions,
+		});
 		server = startPlatformApi({
 			dependencies: assembly.dependencies,
 			browserAuth: assembly.browserAuth,
+			observability,
 			log: options.log,
 			port: options.port,
 		});
@@ -165,24 +182,39 @@ export async function startPlatformApiFromDeployment(
 			server?.once("error", onError);
 			if (server?.listening) onListening();
 		});
-		return { assembly, server };
+		return { assembly, server, observability };
 	} catch (error) {
 		if (server?.listening) {
 			await new Promise<void>((resolve) => server?.close(() => resolve()));
 		}
-		await assembly.close();
+		try {
+			await assembly.close();
+		} finally {
+			await observability?.close();
+		}
 		throw error;
 	}
 }
 
 export function createPlatformApiShutdown(
-	running: Awaited<ReturnType<typeof startPlatformApiFromDeployment>>,
+	running: Pick<
+		Awaited<ReturnType<typeof startPlatformApiFromDeployment>>,
+		"assembly" | "server"
+	> & {
+		readonly observability?: ReturnType<typeof startObservability>;
+	},
 ) {
 	let shutdown: Promise<void> | undefined;
 	return () => {
 		shutdown ??= new Promise<void>((resolve, reject) =>
 			running.server.close((error) => (error ? reject(error) : resolve())),
-		).finally(() => running.assembly.close());
+		).finally(async () => {
+			try {
+				await running.assembly.close();
+			} finally {
+				await running.observability?.close();
+			}
+		});
 		return shutdown;
 	};
 }
