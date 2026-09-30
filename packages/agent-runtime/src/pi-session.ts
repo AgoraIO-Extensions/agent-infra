@@ -5,7 +5,7 @@ import { lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import type { NativeProcessLaunch } from "./native-process.js";
-import { openPiRpc, piRecord } from "./pi-rpc.js";
+import { openPiRpc, type PiFrame, piRecord } from "./pi-rpc.js";
 import type { NativeSessionOptions } from "./session-runtime-driver.js";
 
 function historyCheckpoint(messages: unknown[]) {
@@ -13,6 +13,61 @@ function historyCheckpoint(messages: unknown[]) {
 		count: messages.length,
 		digest: createHash("sha256").update(JSON.stringify(messages)).digest("hex"),
 	});
+}
+
+function promptBinding(nativeId: string, checkpoint: string, text: string) {
+	return createHash("sha256")
+		.update(JSON.stringify([nativeId, checkpoint, text]))
+		.digest("hex");
+}
+
+/** Pi 0.86 may precede one text Turn with a structured system-prompt patch. */
+function piSystemPrefix(
+	message: PiFrame | undefined,
+	firstTurn: boolean,
+	cwd: string,
+) {
+	const sections = piRecord(message?.sections);
+	if (
+		message?.role !== "system" ||
+		message.content !== "" ||
+		typeof message.timestamp !== "number" ||
+		!Number.isFinite(message.timestamp) ||
+		!sections ||
+		Object.keys(sections).length === 0 ||
+		!Object.entries(sections).every(
+			([name, value]) =>
+				[
+					"preamble",
+					"tools",
+					"rules",
+					"docs",
+					"cwd",
+					"addendum",
+					"project_context",
+					"skills",
+				].includes(name) &&
+				(value === null || typeof value === "string"),
+		)
+	)
+		return false;
+	const expectedCwd = `<cwd>\n${cwd.replace(/\\/g, "/")}\n</cwd>`;
+	if (sections.cwd !== undefined && sections.cwd !== expectedCwd) return false;
+	return (
+		!firstTurn ||
+		(typeof sections.preamble === "string" &&
+			sections.preamble.length > 0 &&
+			sections.cwd === expectedCwd)
+	);
+}
+
+function piTextUser(message: PiFrame | undefined) {
+	const content = message?.content;
+	if (!Array.isArray(content) || content.length !== 1) return;
+	const part = piRecord(content[0]);
+	return part?.type === "text" && typeof part.text === "string"
+		? part.text
+		: undefined;
 }
 
 export async function openPiSession(
@@ -28,6 +83,7 @@ export async function openPiSession(
 		throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 	}
 	const sessionFile = join(directory, "session.jsonl");
+	const promptBindingFile = join(directory, "prompt-binding.sha256");
 	async function readHistory(nativeId: string | undefined) {
 		if (!(await lstat(sessionFile)).isFile())
 			throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
@@ -103,6 +159,7 @@ export async function openPiSession(
 	let updates = Promise.resolve();
 	let active:
 		| {
+				input: string;
 				resolve: (result: { stopReason: string; checkpoint: string }) => void;
 				reject: (error: Error) => void;
 		  }
@@ -193,7 +250,7 @@ export async function openPiSession(
 					}
 					if (frame.type === "agent_end") {
 						const confirmed = currentCheckpoint
-							? await confirmedTerminal(currentCheckpoint)
+							? await confirmedTerminal(currentCheckpoint, target.input)
 							: undefined;
 						if (!confirmed) throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 						const { stopReason, checkpoint } = confirmed;
@@ -239,7 +296,7 @@ export async function openPiSession(
 			throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 		return state;
 	}
-	async function confirmedTerminal(checkpoint: string) {
+	async function confirmedTerminal(checkpoint: string, expectedInput?: string) {
 		const before = piRecord(JSON.parse(checkpoint));
 		if (
 			!before ||
@@ -266,9 +323,35 @@ export async function openPiSession(
 		)
 			return;
 		const current = messages.slice(count).map(piRecord);
+		const hasSystemPrefix = current[0]?.role === "system";
+		const userIndex = hasSystemPrefix ? 1 : 0;
+		const input = piTextUser(current[userIndex]);
+		let inputMatches = expectedInput !== undefined && input === expectedInput;
+		if (expectedInput === undefined && input !== undefined) {
+			try {
+				if ((await lstat(promptBindingFile)).isFile()) {
+					const binding = (await readFile(promptBindingFile, "utf8")).trim();
+					inputMatches =
+						binding ===
+						promptBinding(String(state.sessionId), checkpoint, input);
+				}
+			} catch {
+				// A missing or damaged binding leaves the original Turn unknown.
+			}
+		}
 		if (
-			current[0]?.role !== "user" ||
-			current.filter((message) => message?.role === "user").length !== 1
+			(hasSystemPrefix &&
+				!piSystemPrefix(current[0], count === 0, options.cwd)) ||
+			current[userIndex]?.role !== "user" ||
+			input === undefined ||
+			current.filter((message) => message?.role === "user").length !== 1 ||
+			current
+				.slice(userIndex + 1)
+				.some(
+					(message) =>
+						message?.role !== "assistant" && message?.role !== "toolResult",
+				) ||
+			!inputMatches
 		)
 			return;
 		const last = current.at(-1);
@@ -346,13 +429,33 @@ export async function openPiSession(
 			},
 			async prompt(text: string) {
 				if (active || exited) throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+				if (!currentCheckpoint) throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+				const binding = await open(promptBindingFile, "w", 0o600);
+				try {
+					await binding.writeFile(
+						promptBinding(nativeId, currentCheckpoint, text),
+					);
+					await binding.sync();
+				} finally {
+					await binding.close();
+				}
+				const parent = await open(directory, "r");
+				try {
+					await parent.sync();
+				} finally {
+					await parent.close();
+				}
 				started = false;
 				phases.clear();
 				const terminal = Promise.withResolvers<{
 					stopReason: string;
 					checkpoint: string;
 				}>();
-				const target = { resolve: terminal.resolve, reject: terminal.reject };
+				const target = {
+					input: text,
+					resolve: terminal.resolve,
+					reject: terminal.reject,
+				};
 				active = target;
 				void rpc
 					.request("prompt", { message: text })
