@@ -998,7 +998,7 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	};
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"cd5b8fc76501e7f9e3dafaa0e1d6b4282d5222c86b8a4d5269a0c11d0fa4af1e"
+		"097d6b3631a284fd8faf916f2c35a70d7c721c8bc832f3b97a96389fecfc541f"
 	)
 		return false;
 	const normalized = structuredClone(current);
@@ -1008,6 +1008,26 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		sameValue(previous, normalized) ||
 		isAgentLifecycleV2OpenApiAddition(previous, normalized)
 	);
+}
+
+// #1010 publishes the existing resource-unavailable error for V2 SSE reads.
+function isConversationSseV2NotFoundAddition(previous, current) {
+	const path = "/api/v2/conversations/{conversationId}/events";
+	const previousResponses = previous.paths?.[path]?.get?.responses;
+	const currentResponses = current.paths?.[path]?.get?.responses;
+	const expected =
+		previous.paths?.["/api/v2/conversations/{conversationId}"]?.get
+			?.responses?.["404"];
+	if (
+		!previousResponses ||
+		previousResponses["404"] !== undefined ||
+		expected === undefined ||
+		!sameValue(currentResponses?.["404"], expected)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].get.responses["404"];
+	return sameValue(previous, normalized);
 }
 
 // #440 adds bounded receipt management and Owner-scoped bot setup.
@@ -1109,6 +1129,7 @@ function findBreakingChanges(previous, current) {
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
+			!isConversationSseV2NotFoundAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
