@@ -20,10 +20,21 @@ import {
 } from "./application-shell";
 import { useBrowserSession } from "./use-browser-session";
 
+let locationPathname = "/agents";
 vi.mock("@tanstack/react-router", () => ({
-	useLocation: () => "/agents",
-	Link: ({ children, to }: { children: ReactNode; to: string }) => (
-		<a href={to}>{children}</a>
+	useLocation: () => locationPathname,
+	Link: ({
+		children,
+		className,
+		to,
+	}: {
+		children: ReactNode;
+		className?: string;
+		to: string;
+	}) => (
+		<a className={className} href={to}>
+			{children}
+		</a>
 	),
 }));
 const clients: QueryClient[] = [];
@@ -45,6 +56,7 @@ const identity = (
 });
 afterEach(() => {
 	cleanup();
+	locationPathname = "/agents";
 	for (const client of clients) client.clear();
 	clients.length = 0;
 });
@@ -250,5 +262,40 @@ describe("deployment links", () => {
 			"/\\evil.test",
 		])
 			expect(safeDeploymentUrl(value)).toBeUndefined();
+	});
+});
+
+describe("IA navigation", () => {
+	it("exposes the three original groups and the administrator entry points", () => {
+		locationPathname = "/";
+		setup(identity("admin", true));
+
+		expect(screen.getByRole("navigation", { name: "工作区" })).toBeTruthy();
+		expect(screen.getByRole("navigation", { name: "我的管理" })).toBeTruthy();
+		expect(screen.getByRole("navigation", { name: "系统管理" })).toBeTruthy();
+		expect(
+			screen.getByRole("link", { name: "工作台" }).getAttribute("href"),
+		).toBe("/");
+		expect(
+			screen.getByRole("link", { name: "Agent 管理" }).getAttribute("href"),
+		).toBe("/admin/agents");
+	});
+
+	it("does not expose system management to a non-administrator", () => {
+		locationPathname = "/my-agents/new";
+		setup(identity("owner"));
+
+		expect(screen.queryByRole("navigation", { name: "系统管理" })).toBeNull();
+		expect(screen.queryByRole("link", { name: "Agent 管理" })).toBeNull();
+		expect(
+			screen
+				.getByRole("link", { name: "创建与配置" })
+				.classList.contains("selected"),
+		).toBe(true);
+		expect(
+			screen
+				.getByRole("link", { name: "我的 Agent" })
+				.classList.contains("selected"),
+		).toBe(false);
 	});
 });

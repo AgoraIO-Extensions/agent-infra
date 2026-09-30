@@ -6,11 +6,14 @@ import {
 import { Link, useLocation } from "@tanstack/react-router";
 import {
 	ArrowUpRight,
+	Bot,
 	CheckCheck,
 	ClipboardList,
 	Grid2X2,
+	Home,
 	Layers,
 	Menu,
+	Settings2,
 	X,
 } from "lucide-react";
 import {
@@ -122,26 +125,38 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const loginUrl = safeDeploymentUrl(import.meta.env.VITE_PLATFORM_LOGIN_URL);
 	const logoutUrl = safeDeploymentUrl(import.meta.env.VITE_PLATFORM_LOGOUT_URL);
 	const connectionUrl = safeDeploymentUrl(import.meta.env.VITE_CONNECTION_URL);
+	const myAgentPath = pathname.startsWith("/my-agents");
+	const isMyAgentIndex =
+		pathname === "/my-agents" || pathname === "/my-agents/";
+	const isMyAgentConfiguration =
+		pathname === "/my-agents/new" || pathname.endsWith("/edit");
 	const development =
 		import.meta.env.DEV &&
 		import.meta.env.VITE_PLATFORM_DEVELOPMENT_MODE === "controlled";
-	const title = pathname.includes("/conversations")
-		? "文本对话与个人历史"
-		: pathname.includes("/configuration")
-			? "配置与生命周期"
-			: pathname === "/admin/audit"
-				? "平台审计"
-				: pathname === "/audit"
-					? "我的执行审计"
-					: pathname.startsWith("/admin")
-						? "审批"
-						: pathname === "/my-agents/new"
-							? "创建申请"
-							: pathname.startsWith("/my-agents")
-								? "我的 Agent"
-								: pathname === "/agents" || pathname === "/agents/"
-									? "Agent"
-									: "Agent 详情";
+	const title =
+		pathname === "/"
+			? "工作台"
+			: pathname.includes("/conversations")
+				? "文本对话与个人历史"
+				: pathname.includes("/configuration")
+					? "配置与生命周期"
+					: pathname === "/admin/audit"
+						? "平台审计"
+						: pathname === "/audit"
+							? "我的执行审计"
+							: pathname === "/admin/agents"
+								? "Agent 管理"
+								: pathname === "/admin/approvals"
+									? "创建审批"
+									: pathname.startsWith("/admin")
+										? "系统管理"
+										: pathname === "/my-agents/new"
+											? "创建申请"
+											: pathname.startsWith("/my-agents")
+												? "我的 Agent"
+												: pathname === "/agents" || pathname === "/agents/"
+													? "Agent"
+													: "Agent 详情";
 	const navigation = (
 		<>
 			<div className="platform-brand">
@@ -152,18 +167,39 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					Agent Platform<small>工作空间</small>
 				</div>
 			</div>
-			<p className="platform-nav-label">工作台</p>
-			<nav aria-label="主导航">
+			<p className="platform-nav-label">工作区</p>
+			<nav aria-label="工作区">
+				<Link
+					className={`platform-nav-item ${pathname === "/" ? "selected" : ""}`}
+					aria-current={pathname === "/" ? "page" : undefined}
+					to="/"
+					onClick={() => setSheet(false)}
+				>
+					<Home size={19} aria-hidden="true" />
+					工作台
+				</Link>
 				<Link
 					className={`platform-nav-item ${pathname.startsWith("/agents") ? "selected" : ""}`}
+					aria-current={pathname.startsWith("/agents") ? "page" : undefined}
 					to="/agents"
 					onClick={() => setSheet(false)}
 				>
 					<Grid2X2 size={19} aria-hidden="true" />
 					Agent
 				</Link>
+			</nav>
+			<p className="platform-nav-label">我的管理</p>
+			<nav aria-label="我的管理">
 				<Link
-					className={`platform-nav-item ${pathname.startsWith("/my-agents") ? "selected" : ""}`}
+					className={`platform-nav-item ${isMyAgentIndex || (myAgentPath && !isMyAgentConfiguration && pathname.includes("/my-agents/")) ? "selected" : ""}`}
+					aria-current={
+						isMyAgentIndex ||
+						(myAgentPath &&
+							!isMyAgentConfiguration &&
+							pathname.includes("/my-agents/"))
+							? "page"
+							: undefined
+					}
 					to="/my-agents"
 					onClick={() => setSheet(false)}
 				>
@@ -171,35 +207,14 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					我的 Agent
 				</Link>
 				<Link
-					className={`platform-nav-item ${pathname === "/audit" ? "selected" : ""}`}
-					to="/audit"
+					className={`platform-nav-item ${isMyAgentConfiguration ? "selected" : ""}`}
+					aria-current={isMyAgentConfiguration ? "page" : undefined}
+					to="/my-agents/new"
 					onClick={() => setSheet(false)}
 				>
-					<ClipboardList size={19} aria-hidden="true" />
-					我的执行审计
+					<Settings2 size={19} aria-hidden="true" />
+					创建与配置
 				</Link>
-				{admin && (
-					<Link
-						className={`platform-nav-item ${pathname.startsWith("/admin/approvals") ? "selected" : ""}`}
-						to="/admin/approvals"
-						onClick={() => setSheet(false)}
-					>
-						<CheckCheck size={19} aria-hidden="true" />
-						审批
-					</Link>
-				)}
-				{admin && (
-					<Link
-						className={`platform-nav-item ${pathname === "/admin/audit" ? "selected" : ""}`}
-						to="/admin/audit"
-						onClick={() => setSheet(false)}
-					>
-						<ClipboardList size={19} aria-hidden="true" />
-						平台审计
-					</Link>
-				)}
-			</nav>
-			<div className="platform-nav-bottom">
 				{connectionUrl ? (
 					<a
 						className="platform-nav-item"
@@ -207,12 +222,66 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						target="_blank"
 						rel="noopener noreferrer"
 					>
+						<ArrowUpRight size={19} aria-hidden="true" />
 						我的 Connection
-						<ArrowUpRight size={16} aria-hidden="true" />
 					</a>
 				) : (
-					<p className="platform-nav-label">Connection 尚未接入</p>
+					<span
+						className="platform-nav-item platform-nav-item-disabled"
+						aria-disabled="true"
+					>
+						<ArrowUpRight size={19} aria-hidden="true" />
+						我的 Connection
+						<small>尚未接入</small>
+					</span>
 				)}
+				<Link
+					className={`platform-nav-item ${pathname === "/audit" ? "selected" : ""}`}
+					aria-current={pathname === "/audit" ? "page" : undefined}
+					to="/audit"
+					onClick={() => setSheet(false)}
+				>
+					<ClipboardList size={19} aria-hidden="true" />
+					我的执行审计
+				</Link>
+			</nav>
+			{admin && (
+				<>
+					<p className="platform-nav-label">系统管理</p>
+					<nav aria-label="系统管理">
+						<Link
+							className={`platform-nav-item ${pathname.startsWith("/admin/approvals") ? "selected" : ""}`}
+							aria-current={
+								pathname.startsWith("/admin/approvals") ? "page" : undefined
+							}
+							to="/admin/approvals"
+							onClick={() => setSheet(false)}
+						>
+							<CheckCheck size={19} aria-hidden="true" />
+							审批
+						</Link>
+						<Link
+							className={`platform-nav-item ${pathname === "/admin/agents" ? "selected" : ""}`}
+							aria-current={pathname === "/admin/agents" ? "page" : undefined}
+							to="/admin/agents"
+							onClick={() => setSheet(false)}
+						>
+							<Bot size={19} aria-hidden="true" />
+							Agent 管理
+						</Link>
+						<Link
+							className={`platform-nav-item ${pathname === "/admin/audit" ? "selected" : ""}`}
+							aria-current={pathname === "/admin/audit" ? "page" : undefined}
+							to="/admin/audit"
+							onClick={() => setSheet(false)}
+						>
+							<ClipboardList size={19} aria-hidden="true" />
+							平台审计
+						</Link>
+					</nav>
+				</>
+			)}
+			<div className="platform-nav-bottom">
 				<div className="platform-identity">
 					<Avatar className="platform-avatar" aria-hidden="true">
 						<AvatarFallback>

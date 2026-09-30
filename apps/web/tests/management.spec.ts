@@ -6,7 +6,13 @@ import {
 	createPilotAgentMockServerV2,
 	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
-import { expect, type Page, type TestInfo, test } from "@playwright/test";
+import {
+	expect,
+	type Locator,
+	type Page,
+	type TestInfo,
+	test,
+} from "@playwright/test";
 
 import { pendingApplication } from "../src/features/my-agents/test-fixtures";
 import type {
@@ -64,6 +70,7 @@ async function fixture(
 	let pendingQueueUnauthorized = false;
 	let agentListUnavailable = false;
 	let agentListUnauthorized = false;
+	let visibleAgentListRequests = 0;
 	let ownedAgentListUnauthorized = false;
 	let agentDetailUnavailable = false;
 	let agentDetailUnauthorized = false;
@@ -105,6 +112,7 @@ async function fixture(
 		listAgents: (request) => {
 			const ownerScope =
 				new URL(request.url).searchParams.get("scope") === "owner";
+			if (!ownerScope) visibleAgentListRequests += 1;
 			if (!ownerScope && agentListUnauthorized) {
 				return {
 					status: 403,
@@ -309,6 +317,7 @@ async function fixture(
 	});
 	return {
 		commands,
+		visibleAgentListRequests: () => visibleAgentListRequests,
 		staleDeployment() {
 			deployment = { ...deployment, status: "stale" };
 		},
@@ -836,6 +845,154 @@ test("employee has no Owner or administrator controls, with loading and error st
 		"Agent 列表暂时无法访问，请联系管理员。",
 	);
 	await capture(page, info, "agents-unavailable");
+});
+
+test("original IA workbench and administrator Agent entry stay reachable on the same browser shell", async ({
+	page,
+}, info) => {
+	const api = await fixture(page, "admin");
+	await page.goto("/");
+	await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
+	let navigation: Page | Locator = page;
+	if (info.project.name === "mobile") {
+		await page.getByRole("button", { name: "打开导航" }).click();
+		navigation = page.getByRole("dialog", { name: "主导航" });
+	}
+	await expect(
+		navigation.getByRole("navigation", { name: "工作区" }),
+	).toBeVisible();
+	await expect(
+		navigation.getByRole("navigation", { name: "我的管理" }),
+	).toBeVisible();
+	await expect(
+		navigation.getByRole("navigation", { name: "系统管理" }),
+	).toBeVisible();
+	await expect(
+		navigation.getByRole("link", { name: "Agent 管理", exact: true }),
+	).toHaveAttribute("href", "/admin/agents");
+	if (info.project.name === "mobile") {
+		await navigation.getByRole("button", { name: "关闭导航" }).click();
+		await expect(
+			page.getByRole("dialog", { name: "主导航" }),
+		).not.toBeVisible();
+		await expect(
+			page.getByRole("heading", { name: "Release assistant" }),
+		).toBeVisible();
+	} else {
+		await expect(
+			page.getByRole("heading", { name: "Release assistant" }),
+		).toBeVisible();
+	}
+	await expect(page.getByRole("link", { name: "查看详情" })).toHaveAttribute(
+		"href",
+		"/agents/agent-pilot-1",
+	);
+	await capture(page, info, "workbench");
+	if (info.project.name === "mobile") {
+		await page.getByRole("button", { name: "打开导航" }).click();
+		navigation = page.getByRole("dialog", { name: "主导航" });
+	}
+
+	await navigation
+		.getByRole("link", { name: "Agent 管理", exact: true })
+		.click();
+	await expect(page).toHaveURL(/\/admin\/agents$/);
+	if (info.project.name === "mobile") {
+		await expect(
+			page.getByRole("dialog", { name: "主导航" }),
+		).not.toBeVisible();
+	}
+	await expect(
+		page.getByRole("heading", { name: "Agent 管理", exact: true }),
+	).toBeVisible();
+	await expect(page.getByRole("alert")).toContainText(
+		"管理员 Agent 暂时无法查看，请稍后重试",
+	);
+	await expect(page.getByRole("link", { name: "返回工作台" })).toHaveAttribute(
+		"href",
+		"/",
+	);
+	await capture(page, info, "admin-agents");
+	await page.goto("/admin/agents");
+	await page.reload();
+	await expect(
+		page.getByRole("heading", { name: "Agent 管理", exact: true }),
+	).toBeVisible();
+	await expect(page.getByRole("alert")).toContainText(
+		"管理员 Agent 暂时无法查看，请稍后重试",
+	);
+	await expect(page.getByRole("link", { name: "返回工作台" })).toHaveAttribute(
+		"href",
+		"/",
+	);
+	await page.getByRole("link", { name: "返回工作台" }).click();
+	await expect(page).toHaveURL(/\/$/);
+	await expect(api.commands).toHaveLength(0);
+});
+
+test("administrator Agent management does not consume the ordinary discovery list", async ({
+	page,
+}) => {
+	const api = await fixture(page, "admin");
+	await page.goto("/admin/agents");
+	await expect(page.getByRole("heading", { name: "Agent 管理" })).toBeVisible();
+	await expect(page.getByRole("alert")).toContainText(
+		"管理员 Agent 暂时无法查看，请稍后重试",
+	);
+	expect(api.visibleAgentListRequests()).toBe(0);
+});
+
+test("employee workbench keeps system management out of the shared navigation", async ({
+	page,
+}, info) => {
+	await fixture(page, "employee");
+	await page.goto("/");
+	await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
+	const navigation = page.getByRole("button", { name: "打开导航" });
+	if (info.project.name === "mobile") await navigation.click();
+	const navigationRoot =
+		info.project.name === "mobile"
+			? page.getByRole("dialog", { name: "主导航" })
+			: page;
+	await expect(
+		navigationRoot.getByRole("navigation", { name: "工作区" }),
+	).toBeVisible();
+	await expect(
+		navigationRoot.getByRole("navigation", { name: "我的管理" }),
+	).toBeVisible();
+	await expect(
+		navigationRoot.getByRole("navigation", { name: "系统管理" }),
+	).toHaveCount(0);
+	await expect(
+		navigationRoot.getByRole("link", { name: "Agent 管理", exact: true }),
+	).toHaveCount(0);
+	await page.goto("/admin/agents");
+	await expect(
+		page.getByRole("heading", { name: "无权访问 Agent 管理", exact: true }),
+	).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: "Agent 管理", exact: true }),
+	).toHaveCount(0);
+	await expect(page.getByRole("link", { name: "返回工作台" })).toHaveAttribute(
+		"href",
+		"/",
+	);
+	await page.reload();
+	await expect(
+		page.getByRole("heading", { name: "无权访问 Agent 管理", exact: true }),
+	).toBeVisible();
+});
+
+test("workbench preserves a non-retryable Agent read failure", async ({
+	page,
+}) => {
+	const api = await fixture(page, "employee");
+	api.unauthorizedAgentList();
+	await page.goto("/");
+	await expect(page.getByText("暂时无法读取可用 Agent。")).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "重新加载 Agent" }),
+	).toHaveCount(0);
 });
 
 test("mobile navigation traps focus and returns it on Escape", async ({
