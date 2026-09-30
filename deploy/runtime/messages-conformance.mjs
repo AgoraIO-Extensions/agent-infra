@@ -519,8 +519,10 @@ async function turn(user, text) {
     if (event.type === "text") answer += event.payload.delta;
     if (event.type === "tool" && event.payload.phase === "completed") tools++;
     if (event.type === "tool" && event.payload.phase === "failed") denied++;
-   }
-  if (replay.events.length > 0) afterCursor = replay.events.at(-1).cursor;
+  }
+ if (replay.events.length > 0) afterCursor = replay.events.at(-1).cursor;
+  if (!terminal && replay.events.length === 0)
+   await new Promise(resolve => setTimeout(resolve, 100));
   if (terminal && afterCursor) {
    operation = "ack-events-v4";
    const ackRequest = RuntimeEventAckRequestV4Schema.parse({ ...current, requestId: randomUUID(), grant: { schemaVersion: 2, format: "runtime-execution-jws", token: "pending.pending.pending" }, consumer: "platform_worker_persistence", confirmedCursor: afterCursor });

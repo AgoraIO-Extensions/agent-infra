@@ -26,7 +26,9 @@ export interface AcpLaunch {
 		modelRequestIntent?: NonNullable<
 			NativeSessionOptions["modelRequestIntent"]
 		>;
-		modelRequestStarted?: () => Promise<void>;
+		modelRequestStarted?: NonNullable<
+			NativeSessionOptions["modelRequestStarted"]
+		>;
 		modelRequestFinished?: (
 			state: "completed" | "failed" | "unknown",
 			usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],

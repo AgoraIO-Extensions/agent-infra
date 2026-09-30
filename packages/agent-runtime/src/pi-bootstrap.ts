@@ -86,9 +86,11 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 				admit,
 				client: "pi",
 				beforeSend: modelRequestIntent,
-				started: modelRequestStarted,
-				receipt: async (state, _endTurn, usage) => {
-					if (state !== "sent") await modelRequestFinished?.(state, usage);
+				started: async (_request, operationRef) =>
+					modelRequestStarted?.(operationRef),
+				receipt: async (state, _endTurn, usage, _request, operationRef) => {
+					if (state !== "sent")
+						await modelRequestFinished?.(state, usage, operationRef);
 					if (state === "completed" && usage) await currentModelUsage?.(usage);
 				},
 				toolRequestStarted: async (tool) =>

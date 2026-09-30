@@ -78,13 +78,14 @@ export interface NativeSessionOptions {
 	modelRequestIntent?: (
 		request?: "messages" | "count_tokens",
 	) => Promise<RuntimeExternalActionAuthorizationResult | void>;
-	modelRequestStarted?: () => Promise<void>;
+	modelRequestStarted?: (operationRef?: string) => Promise<void>;
 	modelUsage?: (
 		usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
 	) => Promise<void>;
 	modelRequestFinished?: (
 		state: "completed" | "failed" | "unknown",
 		usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
+		operationRef?: string,
 	) => Promise<void>;
 	/** Persist a tool intent before the native adapter is allowed to execute it. */
 	toolRequestStarted?: (tool: {
@@ -970,7 +971,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		});
 		let dispatched = false;
 		let modelUsage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"];
-		let currentModelOperationRef: string | undefined;
 		let native: NativeSession;
 		try {
 			const sessionOptions: NativeSessionOptions = {
@@ -999,23 +999,21 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						command.executionId,
 						request,
 					);
-					currentModelOperationRef = authorization.operationRef;
-					return authorization.delivery;
+					return {
+						...authorization.delivery,
+						operationRef: authorization.operationRef,
+					};
 				},
-				modelRequestStarted: () =>
-					this.modelRequestStarted(
-						file,
-						command.executionId,
-						currentModelOperationRef,
-					),
-				modelRequestFinished: (state, usage) =>
+				modelRequestStarted: (operationRef) =>
+					this.modelRequestStarted(file, command.executionId, operationRef),
+				modelRequestFinished: (state, usage, operationRef) =>
 					this.modelPhase(
 						file,
 						command.executionId,
 						state,
 						undefined,
 						usage,
-						currentModelOperationRef,
+						operationRef,
 					),
 				modelUsage: async (usage) => {
 					modelUsage = usage;

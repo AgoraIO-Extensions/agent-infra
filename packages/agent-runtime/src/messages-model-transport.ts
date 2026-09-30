@@ -25,7 +25,10 @@ export interface RuntimeMessagesTransportOptions {
 	readonly beforeSend?: (
 		request: RuntimeMessagesRequest,
 	) => Promise<RuntimeExternalActionAuthorizationResult | void>;
-	readonly started?: (request: RuntimeMessagesRequest) => Promise<void>;
+	readonly started?: (
+		request: RuntimeMessagesRequest,
+		operationRef?: string,
+	) => Promise<void>;
 	readonly toolRequestStarted?: (tool: {
 		readonly toolCallId: string;
 		readonly name: string;
@@ -39,6 +42,7 @@ export interface RuntimeMessagesTransportOptions {
 		endTurn?: boolean,
 		usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
 		request?: RuntimeMessagesRequest,
+		operationRef?: string,
 	) => Promise<void>;
 }
 
@@ -285,6 +289,7 @@ export async function openRuntimeMessagesTransport(
 			});
 			let sent = false;
 			let intentPrepared = false;
+			let operationRef: string | undefined;
 			let requestFailure: "failed" | "unknown" | undefined;
 			try {
 				const chunks: Buffer[] = [];
@@ -325,8 +330,12 @@ export async function openRuntimeMessagesTransport(
 				if (closed || controller.signal.aborted) throw new Error();
 				// Authorization is the last Host gate. The returned key is scoped to
 				// this Execution/attempt and must be consumed by this request only.
+				const authorization = options.beforeSend
+					? await options.beforeSend(requestKind)
+					: undefined;
+				operationRef = authorization?.operationRef;
 				const requestCredential = options.beforeSend
-					? deliveredCredential(await options.beforeSend(requestKind))
+					? deliveredCredential(authorization)
 					: access.credential;
 				const headers: Record<string, string> = {
 					"content-type": "application/json",
@@ -345,7 +354,13 @@ export async function openRuntimeMessagesTransport(
 				else headers.authorization = `Bearer ${requestCredential}`;
 				intentPrepared = true;
 				sent = true;
-				await options.receipt?.("sent", undefined, undefined, requestKind);
+				await options.receipt?.(
+					"sent",
+					undefined,
+					undefined,
+					requestKind,
+					operationRef,
+				);
 				const upstreamPromise = (options.fetch ?? fetch)(
 					`${access.endpoint.replace(/\/$/, "")}${request.url}`,
 					{
@@ -360,7 +375,7 @@ export async function openRuntimeMessagesTransport(
 				// awaited. Attach an eager rejection handler so closing the transport
 				// during that window cannot create an unhandled abort rejection.
 				void upstreamPromise.catch(() => {});
-				await options.started?.(requestKind);
+				await options.started?.(requestKind, operationRef);
 				const upstream = await upstreamPromise;
 
 				if (!upstream.ok) {
@@ -373,6 +388,7 @@ export async function openRuntimeMessagesTransport(
 						undefined,
 						undefined,
 						requestKind,
+						operationRef,
 					);
 					reject(response);
 					return;
@@ -404,6 +420,7 @@ export async function openRuntimeMessagesTransport(
 						undefined,
 						undefined,
 						requestKind,
+						operationRef,
 					);
 					response.writeHead(200, { "content-type": "application/json" });
 					response.end(JSON.stringify({ input_tokens: value.input_tokens }));
@@ -430,6 +447,7 @@ export async function openRuntimeMessagesTransport(
 							reason === "end_turn",
 							usage,
 							requestKind,
+							operationRef,
 						);
 					},
 				);
@@ -447,6 +465,7 @@ export async function openRuntimeMessagesTransport(
 							undefined,
 							undefined,
 							requestKind,
+							operationRef,
 						);
 					} catch {
 						if (counting) countUnconfirmed = true;

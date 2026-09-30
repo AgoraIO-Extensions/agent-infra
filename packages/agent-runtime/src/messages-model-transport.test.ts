@@ -169,6 +169,53 @@ it.each([
 	},
 );
 
+it("keeps the authorized operation reference through transport callbacks", async () => {
+	const callbacks: string[] = [];
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		credential: "synthetic-model-credential",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		beforeSend: async () => ({
+			relayKey: "synthetic-delivery-key",
+			operationRef: "operation-1",
+		}),
+		started: async (_request, operationRef) => {
+			callbacks.push(`started:${operationRef}`);
+		},
+		receipt: async (state, _endTurn, _usage, _request, operationRef) => {
+			if (state !== "sent") callbacks.push(`${state}:${operationRef}`);
+		},
+		fetch: async () =>
+			new Response('{"input_tokens":1}', {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			}),
+	});
+	try {
+		const response = await fetch(
+			`${transport.modelAccess.endpoint}/v1/messages/count_tokens`,
+			{
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${transport.modelAccess.credential}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					model: "claude-opus-5",
+					messages: [],
+				}),
+			},
+		);
+		expect(response.status).toBe(200);
+		expect(callbacks).toEqual(["started:operation-1", "completed:operation-1"]);
+	} finally {
+		await transport.close();
+	}
+});
+
 function messages(text: string[]) {
 	return [
 		{

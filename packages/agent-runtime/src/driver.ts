@@ -38,6 +38,8 @@ export interface RuntimeExternalActionAuthorization {
  */
 export interface RuntimeExternalActionAuthorizationResult {
 	readonly relayKey?: string;
+	/** Correlates transport lifecycle callbacks with the durable operation. */
+	readonly operationRef?: string;
 }
 
 export type RuntimeExternalActionAuthorizer = (

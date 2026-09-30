@@ -33,7 +33,7 @@ export interface PiRuntimeDriverOptions {
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
 		modelRequestIntent?: NativeSessionOptions["modelRequestIntent"],
-		modelRequestStarted?: () => Promise<void>,
+		modelRequestStarted?: NativeSessionOptions["modelRequestStarted"],
 		modelUsage?: NativeSessionOptions["modelUsage"],
 		toolRequestStarted?: (tool: {
 			readonly toolCallId: string;

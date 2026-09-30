@@ -29,7 +29,7 @@ export interface GenericAcpRuntimeDriverOptions {
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
 		modelRequestIntent?: NativeSessionOptions["modelRequestIntent"],
-		modelRequestStarted?: () => Promise<void>,
+		modelRequestStarted?: NativeSessionOptions["modelRequestStarted"],
 		modelUsage?: (
 			usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
 		) => Promise<void>,

@@ -77,12 +77,12 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 				admit,
 				client: "opencode",
 				beforeSend: async (request) => currentModelRequestIntent?.(request),
-				started: async () => {
-					await currentModelRequestStarted?.();
+				started: async (_request, operationRef) => {
+					await currentModelRequestStarted?.(operationRef);
 				},
-				receipt: async (state, _endTurn, usage) => {
+				receipt: async (state, _endTurn, usage, _request, operationRef) => {
 					if (state !== "sent")
-						await currentModelRequestFinished?.(state, usage);
+						await currentModelRequestFinished?.(state, usage, operationRef);
 					if (state === "completed" && usage) await currentModelUsage?.(usage);
 				},
 			});
