@@ -50,7 +50,7 @@ async function privateFile(path, label) {
 	assert(isAbsolute(path), `${label} must be an absolute path`);
 	const file = await stat(path);
 	assert(file.isFile(), `${label} must be a regular file`);
-	assert((file.mode & 0o077) === 0, `${label} must have mode 0600`);
+	assert((file.mode & 0o777) === 0o600, `${label} must have mode 0600`);
 	if (process.getuid !== undefined) {
 		assert(file.uid === process.getuid(), `${label} must belong to this user`);
 	}
@@ -380,6 +380,9 @@ async function run(input) {
 		evidence.steps.push({ name, ...result });
 		return result;
 	};
+	let applicationIdValue;
+	let journeyError;
+	const cleanupFailures = [];
 	try {
 		for (const [label, value] of Object.entries(input.subjects)) {
 			contexts[label] = await browser.newContext({
@@ -407,7 +410,6 @@ async function run(input) {
 			return { status: result.status, code: result.code };
 		});
 
-		let applicationIdValue;
 		await step("owner-creates-application", async () => {
 			const result = await request(
 				contexts.owner,
@@ -950,19 +952,61 @@ async function run(input) {
 			});
 		}
 		evidence.logs = { checked: input.logFiles.length > 0, files: logEvidence };
-
-		const evidencePath = join(input.outputDirectory, "evidence.json");
-		const serialized = JSON.stringify(evidence, null, 2);
-		assertNoSecrets(serialized, secrets, "evidence");
-		await writeFile(evidencePath, `${serialized}\n`, { mode: 0o600 });
-		await chmod(evidencePath, 0o600);
-		process.stdout.write(
-			`${JSON.stringify({ schemaVersion: 1, mode: input.mode, endpointChecked: true, evidencePath, subjectHashes: evidence.subjectHashes })}\n`,
-		);
+	} catch (error) {
+		journeyError = error;
 	} finally {
-		for (const context of Object.values(contexts)) await context.close();
-		await browser.close();
+		if (applicationIdValue && contexts.owner) {
+			for (const grantType of ["manage", "use"]) {
+				try {
+					const result = await request(
+						contexts.owner,
+						input.origin,
+						"DELETE",
+						`/api/v1/agents/${encodeURIComponent(input.agentId)}/grants`,
+						{
+							schemaVersion: 1,
+							principal: { kind: "application", id: applicationIdValue },
+							grantType,
+						},
+						secrets,
+					);
+					assert(
+						[204, 404].includes(result.status),
+						`Failed to remove ${grantType} Agent grant`,
+					);
+				} catch (error) {
+					cleanupFailures.push(error);
+				}
+			}
+		}
+		for (const context of Object.values(contexts)) {
+			try {
+				await context.close();
+			} catch (error) {
+				cleanupFailures.push(error);
+			}
+		}
+		try {
+			await browser.close();
+		} catch (error) {
+			cleanupFailures.push(error);
+		}
 	}
+	if (journeyError || cleanupFailures.length > 0) {
+		if (journeyError && cleanupFailures.length === 0) throw journeyError;
+		throw new AggregateError(
+			journeyError ? [journeyError, ...cleanupFailures] : cleanupFailures,
+			"API identity journey or cleanup failed",
+		);
+	}
+	const evidencePath = join(input.outputDirectory, "evidence.json");
+	const serialized = JSON.stringify(evidence, null, 2);
+	assertNoSecrets(serialized, secrets, "evidence");
+	await writeFile(evidencePath, `${serialized}\n`, { mode: 0o600 });
+	await chmod(evidencePath, 0o600);
+	process.stdout.write(
+		`${JSON.stringify({ schemaVersion: 1, mode: input.mode, endpointChecked: true, evidencePath, subjectHashes: evidence.subjectHashes })}\n`,
+	);
 }
 
 const checkConfig = process.argv[2] === "--check-config";
