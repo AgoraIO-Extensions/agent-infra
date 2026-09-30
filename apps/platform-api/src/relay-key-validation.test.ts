@@ -1,54 +1,15 @@
-import { createFakeModelCatalogAdapterV1 } from "@agent-infra/model-catalog";
 import { describe, expect, it, vi } from "vitest";
 
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 
 const key = "synthetic-personal-relay-key";
-const url = "https://relay.example.test/v1/models";
-
-function catalog(
-	options: {
-		readonly loopback?: boolean;
-		readonly revision?: string;
-		readonly messages?: boolean;
-		readonly apiKey?: boolean;
-	} = {},
-) {
-	const loopback = options.loopback ?? false;
-	return createFakeModelCatalogAdapterV1({
-		schemaVersion: 1,
-		revision: options.revision ?? "catalog-a",
-		validUntil: Date.now() + 60_000,
-		endpoints: [
-			{
-				endpointId: "relay-a",
-				baseUrl: loopback
-					? "http://127.0.0.1:8080/v1"
-					: "https://relay.example.test/v1",
-				origin: loopback
-					? "http://127.0.0.1:8080"
-					: "https://relay.example.test",
-				protocol: options.messages
-					? "anthropic-messages-v1"
-					: "openai-responses-v1",
-				...(options.messages
-					? { authentication: options.apiKey ? "api-key" : "bearer" }
-					: {}),
-				security: {
-					tls: loopback ? "loopback-http" : "verify-peer",
-					redirects: "reject",
-				},
-				capabilities: {
-					streaming: true,
-					tools: true,
-					reasoningLevels: ["medium"],
-				},
-				allowedModels: ["model-a"],
-				available: true,
-			},
-		],
-	});
-}
+const url = "https://sub2api.la3.agoralab.co/v1/sub2api/billing";
+const billing = {
+	object: "sub2api.key_billing",
+	schema_version: 1,
+	billing_scope: "token",
+	group_rate_multiplier: 1,
+};
 
 function json(data: unknown, status = 200): Response {
 	return new Response(JSON.stringify(data), {
@@ -60,30 +21,23 @@ function json(data: unknown, status = 200): Response {
 function validator(
 	fetcher: typeof fetch,
 	options: {
-		readonly loopback?: boolean;
-		readonly revision?: string;
-		readonly messages?: boolean;
-		readonly apiKey?: boolean;
-		readonly modelsUrl?: string;
+		readonly billingUrl?: string;
+		readonly profile?: string;
 		readonly timeoutMs?: number;
 	} = {},
 ) {
 	return createPersonalRelayKeyValidatorV1({
-		catalog: catalog(options),
-		endpointId: "relay-a",
-		catalogRevision: "catalog-a",
-		profile: "sub2api-v1-model-list",
-		modelsUrl: options.modelsUrl ?? url,
+		profile: (options.profile ??
+			"sub2api-key-billing-v1") as "sub2api-key-billing-v1",
+		billingUrl: options.billingUrl ?? url,
 		fetch: fetcher,
 		...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
 	});
 }
 
-describe("personal Relay Key read-only validation", () => {
-	it("requires a protected model-list response from the fixed TLS endpoint", async () => {
-		const fetcher = vi.fn<typeof fetch>(async () =>
-			json({ object: "list", data: [{ id: "model-a", object: "model" }] }),
-		);
+describe("personal Relay Key read-only authentication", () => {
+	it("requires the billing profile from the fixed TLS route", async () => {
+		const fetcher = vi.fn<typeof fetch>(async () => json(billing));
 		await expect(validator(fetcher)(key)).resolves.toBe("valid");
 		expect(fetcher).toHaveBeenCalledOnce();
 		expect(fetcher).toHaveBeenCalledWith(
@@ -100,7 +54,7 @@ describe("personal Relay Key read-only validation", () => {
 	});
 
 	it.each([401, 403])(
-		"classifies Relay authentication status %i as invalid",
+		"classifies billing authentication or permission status %i as invalid",
 		async (status) => {
 			const fetcher = vi.fn<typeof fetch>(async () =>
 				json({ error: "denied" }, status),
@@ -110,7 +64,7 @@ describe("personal Relay Key read-only validation", () => {
 	);
 
 	it.each([201, 302, 404, 429, 500, 503])(
-		"treats non-authentication status %i as unavailable",
+		"treats other billing status %i as unavailable",
 		async (status) => {
 			const fetcher = vi.fn<typeof fetch>(
 				async () => new Response(null, { status }),
@@ -120,53 +74,42 @@ describe("personal Relay Key read-only validation", () => {
 	);
 
 	it.each([
+		json({ ...billing, object: "list" }),
+		json({ ...billing, schema_version: 2 }),
+		json({ ...billing, billing_scope: "user" }),
+		json({ object: "sub2api.key_billing", schema_version: 1 }),
 		json({ data: [{ id: "model-a" }] }),
-		json({ object: "list", data: [{ name: "model-a" }] }),
-		json({ object: "list", data: "model-a" }),
 		new Response("not json", {
 			headers: { "content-type": "application/json" },
 		}),
 		new Response("<html>ok</html>", {
 			headers: { "content-type": "text/html" },
 		}),
-		new Response("x".repeat(262_145), {
+		new Response("x".repeat(16_385), {
 			headers: { "content-type": "application/json" },
 		}),
-	])(
-		"does not accept a malformed or oversized success body",
-		async (response) => {
-			const fetcher = vi.fn<typeof fetch>(async () => response);
-			await expect(validator(fetcher)(key)).resolves.toBe("unavailable");
-		},
-	);
-
-	it("does not call an empty model list an invalid credential", async () => {
-		const fetcher = vi.fn<typeof fetch>(async () =>
-			json({ object: "list", data: [] }),
-		);
+	])("rejects an unknown or malformed billing response", async (response) => {
+		const fetcher = vi.fn<typeof fetch>(async () => response);
 		await expect(validator(fetcher)(key)).resolves.toBe("unavailable");
 	});
 
-	it("does not call an unapproved, stale, non-TLS, or unsupported profile", async () => {
-		const fetcher = vi.fn<typeof fetch>(async () =>
-			json({ object: "list", data: [{ id: "model-a" }] }),
-		);
+	it("never sends the Key to an unapproved profile or URL", async () => {
+		const fetcher = vi.fn<typeof fetch>(async () => json(billing));
 		await expect(
-			validator(fetcher, { revision: "catalog-b" })(key),
-		).resolves.toBe("unavailable");
-		await expect(validator(fetcher, { loopback: true })(key)).resolves.toBe(
-			"unavailable",
-		);
-		await expect(validator(fetcher, { messages: true })(key)).resolves.toBe(
-			"unavailable",
-		);
-		await expect(
-			validator(fetcher, { messages: true, apiKey: true })(key),
+			validator(fetcher, { profile: "sub2api-v1-model-list" })(key),
 		).resolves.toBe("unavailable");
 		await expect(
 			validator(fetcher, {
-				modelsUrl: "https://relay.example.test/v1/responses",
+				billingUrl: "https://relay.example.test/v1/sub2api/billing",
 			})(key),
+		).resolves.toBe("unavailable");
+		await expect(
+			validator(fetcher, {
+				billingUrl: "http://sub2api.la3.agoralab.co/v1/sub2api/billing",
+			})(key),
+		).resolves.toBe("unavailable");
+		await expect(
+			validator(fetcher, { billingUrl: `${url}?key=${key}` })(key),
 		).resolves.toBe("unavailable");
 		expect(fetcher).not.toHaveBeenCalled();
 	});
@@ -179,7 +122,7 @@ describe("personal Relay Key read-only validation", () => {
 		expect(result).toBe("unavailable");
 		expect(JSON.stringify(result)).not.toContain(key);
 		const redirected = vi.fn<typeof fetch>(async () =>
-			Response.redirect("https://other.example.test/models", 302),
+			Response.redirect("https://other.example.test/billing", 302),
 		);
 		await expect(validator(redirected)(key)).resolves.toBe("unavailable");
 		const hanging = vi.fn<typeof fetch>(
@@ -188,9 +131,7 @@ describe("personal Relay Key read-only validation", () => {
 					init?.signal?.addEventListener(
 						"abort",
 						() => reject(new Error(key)),
-						{
-							once: true,
-						},
+						{ once: true },
 					);
 				}),
 		);

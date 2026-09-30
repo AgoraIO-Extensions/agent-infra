@@ -1,6 +1,5 @@
 import { AgentResourceProfileProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
-import { createDeploymentModelCatalogAdapterV1 } from "@agent-infra/model-catalog";
 import type { AgentConfigurationAuthorityContextV1 } from "@agent-infra/platform-core";
 import { PostgresApiIdentityStoreV1 } from "@agent-infra/platform-store";
 import {
@@ -37,11 +36,10 @@ export interface ProductionPlatformApiInputV1
 	/** An actual deployment identity boundary; no browser-provided identity headers. */
 	readonly identity: IdentityAdapter;
 	readonly userGovernance?: PlatformApiAssemblyInput["userGovernance"];
-	/** Deployment-attested, read-only Relay route bound to a ModelCatalog endpoint. */
+	/** Deployment-attested, read-only Sub2API billing route. */
 	readonly personalRelayKeyValidation?: {
-		readonly profile: "sub2api-v1-model-list";
-		readonly endpointId: string;
-		readonly modelsUrl: string;
+		readonly profile: "sub2api-key-billing-v1";
+		readonly billingUrl: string;
 	};
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	/** Public wrapping keys only. Worker private keys belong to the Worker deployment. */
@@ -115,11 +113,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		}),
 		personalRelayKeyValidation: input.personalRelayKeyValidation
 			? createPersonalRelayKeyValidatorV1({
-					catalog: createDeploymentModelCatalogAdapterV1({
-						load: input.modelCatalog.load,
-					}),
 					...input.personalRelayKeyValidation,
-					catalogRevision: input.modelCatalog.revision,
 				})
 			: undefined,
 		apiIdentity,

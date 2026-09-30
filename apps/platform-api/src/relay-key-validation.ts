@@ -1,23 +1,19 @@
-import {
-	type ModelCatalogAdapterV1,
-	ModelEndpointV1Schema,
-	modelIdentifier,
-	modelOperationV1,
-} from "@agent-infra/model-catalog";
+import { modelOperationV1 } from "@agent-infra/model-catalog";
 
 type ValidationResult = "valid" | "invalid" | "unavailable";
+const approvedBillingUrl = "https://sub2api.la3.agoralab.co/v1/sub2api/billing";
 
-async function readModelList(
+async function readBillingResponse(
 	response: Response,
 	signal: AbortSignal,
-): Promise<boolean> {
+): Promise<void> {
 	if (
 		!/^application\/json(?:\s*;|$)/i.test(
 			response.headers.get("content-type") ?? "",
 		) ||
 		!response.body
 	)
-		throw new Error("MODEL_LIST_UNAVAILABLE");
+		throw new Error("BILLING_UNAVAILABLE");
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder("utf-8", { fatal: true });
 	let body = "";
@@ -27,7 +23,7 @@ async function readModelList(
 			const chunk = await modelOperationV1(signal, () => reader.read());
 			if (chunk.done) break;
 			bytes += chunk.value.byteLength;
-			if (bytes > 262_144) throw new Error("MODEL_LIST_UNAVAILABLE");
+			if (bytes > 16_384) throw new Error("BILLING_UNAVAILABLE");
 			body += decoder.decode(chunk.value, { stream: true });
 		}
 		body += decoder.decode();
@@ -36,32 +32,20 @@ async function readModelList(
 	}
 	const parsed: unknown = JSON.parse(body);
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-		throw new Error("MODEL_LIST_UNAVAILABLE");
-	const list = parsed as Record<string, unknown>;
+		throw new Error("BILLING_UNAVAILABLE");
+	const billing = parsed as Record<string, unknown>;
 	if (
-		list.object !== "list" ||
-		!Array.isArray(list.data) ||
-		list.data.length > 1024 ||
-		list.data.some(
-			(item: unknown) =>
-				!item ||
-				typeof item !== "object" ||
-				Array.isArray(item) ||
-				!modelIdentifier.safeParse((item as Record<string, unknown>).id)
-					.success,
-		)
+		billing.object !== "sub2api.key_billing" ||
+		billing.schema_version !== 1 ||
+		billing.billing_scope !== "token"
 	)
-		throw new Error("MODEL_LIST_UNAVAILABLE");
-	return list.data.length > 0;
+		throw new Error("BILLING_UNAVAILABLE");
 }
 
-/** A read-only Key check against one deployment-approved, authenticated Relay route. */
+/** This route proves authentication only; it skips quota and expiry enforcement. */
 export function createPersonalRelayKeyValidatorV1(input: {
-	readonly catalog: ModelCatalogAdapterV1;
-	readonly endpointId: string;
-	readonly catalogRevision: string;
-	readonly profile: "sub2api-v1-model-list";
-	readonly modelsUrl: string;
+	readonly profile: "sub2api-key-billing-v1";
+	readonly billingUrl: string;
 	readonly fetch?: typeof fetch;
 	readonly timeoutMs?: number;
 }): (keyValue: string) => Promise<ValidationResult> {
@@ -70,34 +54,12 @@ export function createPersonalRelayKeyValidatorV1(input: {
 		if (!/^[\x21-\x7e]{16,8192}$/.test(keyValue)) return "invalid";
 		const signal = AbortSignal.timeout(input.timeoutMs ?? 10_000);
 		try {
-			if (input.profile !== "sub2api-v1-model-list") return "unavailable";
-			const endpoint = ModelEndpointV1Schema.parse(
-				await modelOperationV1(signal, () =>
-					input.catalog.resolve(
-						{
-							endpointId: input.endpointId,
-							catalogRevision: input.catalogRevision,
-						},
-						{ signal },
-					),
-				),
-			);
-			const base = new URL(endpoint.baseUrl);
-			const modelsUrl = new URL(input.modelsUrl);
 			if (
-				endpoint.endpointId !== input.endpointId ||
-				!endpoint.available ||
-				endpoint.protocol !== "openai-responses-v1" ||
-				(endpoint.authentication !== undefined &&
-					endpoint.authentication !== "bearer") ||
-				endpoint.security.tls !== "verify-peer" ||
-				endpoint.security.redirects !== "reject" ||
-				base.protocol !== "https:" ||
-				!base.pathname.replace(/\/$/, "").endsWith("/v1") ||
-				modelsUrl.href !== `${endpoint.baseUrl.replace(/\/$/, "")}/models`
+				input.profile !== "sub2api-key-billing-v1" ||
+				input.billingUrl !== approvedBillingUrl
 			)
 				return "unavailable";
-			const url = modelsUrl.href;
+			const url = approvedBillingUrl;
 			const response = await modelOperationV1(signal, () =>
 				fetcher(url, {
 					method: "GET",
@@ -119,7 +81,8 @@ export function createPersonalRelayKeyValidatorV1(input: {
 					? "invalid"
 					: "unavailable";
 			}
-			return (await readModelList(response, signal)) ? "valid" : "unavailable";
+			await readBillingResponse(response, signal);
+			return "valid";
 		} catch {
 			return "unavailable";
 		}
