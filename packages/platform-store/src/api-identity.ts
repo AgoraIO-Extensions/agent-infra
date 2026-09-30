@@ -9,6 +9,7 @@ import {
 	type ApiPrincipalV1,
 	hashApiCredentialV1,
 	isApiCredentialScopeV1,
+	isCurrentCredentialDeliveryManagerV1,
 	parseCurrentTaskUserV1,
 } from "@agent-infra/platform-core";
 import { and, eq, isNull } from "drizzle-orm";
@@ -27,6 +28,7 @@ import {
 
 export interface PostgresApiIdentityStoreOptionsV1 {
 	readonly databaseUrl: string;
+	readonly resolveUser?: (userId: string) => Promise<unknown | null>;
 }
 
 export type {
@@ -76,6 +78,24 @@ async function writeApiIdentityAudit(
 
 function principalType(principal: ApiPrincipalV1): "user" | "application" {
 	return principal.kind;
+}
+
+async function hasCurrentDeliveryManager(
+	actor: ApiIdentityActorV1,
+	responsibleUserId: string,
+	resolveUser?: (userId: string) => Promise<unknown | null>,
+): Promise<boolean> {
+	if (!resolveUser) return false;
+	try {
+		const current = parseCurrentTaskUserV1(await resolveUser(actor.userId));
+		return isCurrentCredentialDeliveryManagerV1({
+			actor,
+			responsibleUserId,
+			currentUser: current,
+		});
+	} catch {
+		return false;
+	}
 }
 
 async function hasCurrentAgentManageAuthority(
@@ -196,10 +216,12 @@ function metadata(
 export class PostgresApiIdentityStoreV1 {
 	readonly #client;
 	readonly #database;
+	readonly #resolveUser;
 
 	constructor(options: PostgresApiIdentityStoreOptionsV1) {
 		this.#client = postgres(options.databaseUrl, { max: 4 });
 		this.#database = drizzle(this.#client);
+		this.#resolveUser = options.resolveUser;
 	}
 
 	async close(): Promise<void> {
@@ -486,6 +508,7 @@ export class PostgresApiIdentityStoreV1 {
 	}
 
 	async grantCredentialDelivery(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly applicationId: string;
 		readonly principal: ApiPrincipalV1;
 		readonly authorizationRevision: string;
@@ -504,6 +527,7 @@ export class PostgresApiIdentityStoreV1 {
 			const [application] = await transaction
 				.select({
 					status: platformApplications.status,
+					responsibleUserId: platformApplications.responsibleUserId,
 					authorizationRevision: platformApplications.authorizationRevision,
 				})
 				.from(platformApplications)
@@ -512,7 +536,12 @@ export class PostgresApiIdentityStoreV1 {
 				.for("update");
 			if (
 				application?.status !== "active" ||
-				application?.authorizationRevision !== input.authorizationRevision
+				application?.authorizationRevision !== input.authorizationRevision ||
+				!(await hasCurrentDeliveryManager(
+					input.actor,
+					application.responsibleUserId,
+					this.#resolveUser,
+				))
 			)
 				throw new Error("Application delivery authorization is stale");
 			await transaction
@@ -543,6 +572,7 @@ export class PostgresApiIdentityStoreV1 {
 	}
 
 	async revokeCredentialDelivery(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly applicationId: string;
 		readonly principal: ApiPrincipalV1;
 		readonly revokedAt?: Date;
@@ -559,12 +589,20 @@ export class PostgresApiIdentityStoreV1 {
 		}
 		return this.#database.transaction(async (transaction) => {
 			const [application] = await transaction
-				.select({ id: platformApplications.id })
+				.select({ responsibleUserId: platformApplications.responsibleUserId })
 				.from(platformApplications)
 				.where(eq(platformApplications.id, input.applicationId))
 				.limit(1)
 				.for("update");
-			if (!application) return false;
+			if (
+				!application ||
+				!(await hasCurrentDeliveryManager(
+					input.actor,
+					application.responsibleUserId,
+					this.#resolveUser,
+				))
+			)
+				return false;
 			const rows = await transaction
 				.update(apiCredentialDeliveryGrants)
 				.set({ revokedAt: input.revokedAt ?? new Date() })

@@ -98,6 +98,7 @@ describe("platform-core package surface", () => {
 			"isApiCredentialScopeV1",
 			"isConfirmedResultFileV1",
 			"isConversationGenerationBarrierConfirmedV1",
+			"isCurrentCredentialDeliveryManagerV1",
 			"isPlatformConversationChannelCurrentV1",
 			"isTaskAuthorizationCurrentV1",
 			"isTaskPrincipalChannelV1",

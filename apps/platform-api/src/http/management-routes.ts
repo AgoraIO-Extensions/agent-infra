@@ -66,7 +66,7 @@ import {
 	type IdentityAdapter,
 	type IdentityContext,
 	resolveApiIdentity,
-	resolveIdentity,
+	resolveIdentity as resolveBrowserIdentity,
 } from "./identity.js";
 
 type ApplicationProjection = ReturnType<
@@ -180,6 +180,15 @@ function actor(identity: IdentityContext): AgentManagementActorContextV1 {
 
 function hasAuthorizationHeader(request: Request): boolean {
 	return request.headers.has("authorization");
+}
+
+function resolveIdentity(
+	adapter: IdentityAdapter,
+	request: Request,
+	traceId: string,
+): Promise<IdentityContext> {
+	if (hasAuthorizationHeader(request)) fail("AUTHENTICATION_REQUIRED", traceId);
+	return resolveBrowserIdentity(adapter, request, traceId);
 }
 
 function apiIdentityContext(
@@ -830,7 +839,10 @@ export function registerManagementRoutes(
 				await queryOrUnavailable(
 					() =>
 						management.grantCredentialDelivery({
-							actor: actor(identity),
+							actor: {
+								...actor(identity),
+								identityRevision: identity.authorizationRevision,
+							},
 							applicationId: context.req.param("applicationId"),
 							principal,
 							audit: apiAudit(
@@ -866,7 +878,10 @@ export function registerManagementRoutes(
 				await queryOrUnavailable(
 					() =>
 						management.revokeCredentialDelivery({
-							actor: actor(identity),
+							actor: {
+								...actor(identity),
+								identityRevision: identity.authorizationRevision,
+							},
 							applicationId: context.req.param("applicationId"),
 							principal,
 							audit: apiAudit(

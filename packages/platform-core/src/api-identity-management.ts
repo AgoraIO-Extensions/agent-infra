@@ -7,6 +7,7 @@ import {
 	hasApiCredentialScopeV1,
 	sameApiPrincipalV1,
 } from "./api-identity.js";
+import type { CurrentTaskUserV1 } from "./task-authorization.js";
 
 export interface ApiIdentityApplicationV1 {
 	readonly id: string;
@@ -21,12 +22,31 @@ export interface ApiIdentityActorV1 {
 	readonly userId: string;
 	readonly accountStatus?: "active" | "disabled";
 	readonly principal?: ApiPrincipalV1;
+	/** Directory revision observed when the browser identity was resolved. */
+	readonly identityRevision?: string;
 	readonly isAdministrator: boolean;
 	/** Present when this actor was authenticated with an API credential. */
 	readonly credential?: Pick<
 		ApiCredentialMetadataV1,
 		"credentialId" | "principal" | "scopes" | "expiresAt" | "revokedAt"
 	>;
+}
+
+export function isCurrentCredentialDeliveryManagerV1(input: {
+	readonly actor: ApiIdentityActorV1;
+	readonly responsibleUserId: string;
+	readonly currentUser: CurrentTaskUserV1 | null;
+}): boolean {
+	const { actor, responsibleUserId, currentUser } = input;
+	return (
+		actor.accountStatus === "active" &&
+		actor.principal === undefined &&
+		!!actor.identityRevision &&
+		currentUser?.userId === actor.userId &&
+		currentUser.accountStatus === "active" &&
+		currentUser.authorizationRevision === actor.identityRevision &&
+		(actor.isAdministrator || responsibleUserId === actor.userId)
+	);
 }
 
 export interface ApiIdentityCredentialIssueInputV1 {
@@ -71,6 +91,7 @@ export interface ApiIdentityStorePortV1 {
 		credentialId: string,
 	): Promise<ApiCredentialMetadataV1 | null>;
 	grantCredentialDelivery(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly applicationId: string;
 		readonly principal: ApiPrincipalV1;
 		readonly authorizationRevision: string;
@@ -86,6 +107,7 @@ export interface ApiIdentityStorePortV1 {
 		readonly principal: ApiPrincipalV1;
 	}): Promise<boolean>;
 	revokeCredentialDelivery(input: {
+		readonly actor: ApiIdentityActorV1;
 		readonly applicationId: string;
 		readonly principal: ApiPrincipalV1;
 		readonly revokedAt?: Date;
@@ -672,6 +694,7 @@ export function createApiIdentityManagementV1(input: {
 			await requireActiveRecipient(value.principal, audit, application.id);
 			try {
 				await input.store.grantCredentialDelivery({
+					actor: value.actor,
 					applicationId: application.id,
 					principal: value.principal,
 					authorizationRevision: application.authorizationRevision,
@@ -709,6 +732,7 @@ export function createApiIdentityManagementV1(input: {
 			}
 			if (
 				!(await input.store.revokeCredentialDelivery({
+					actor: value.actor,
 					applicationId: application.id,
 					principal: value.principal,
 					audit,
