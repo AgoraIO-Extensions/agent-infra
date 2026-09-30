@@ -11,7 +11,7 @@ import {
 	type ConversationStopDecisionV1,
 	type ConversationTaskAdmissionTransactionPortV1,
 	type CreateConversationDecisionV1,
-	conversationExecutionSourceV1,
+	conversationExecutionKeySubjectV1,
 	type FileRecordV1,
 	parseConversationOperationEventV2,
 } from "@agent-infra/platform-core";
@@ -125,12 +125,11 @@ export class PostgresConversationExecutionTransactionV1
 		transaction: Transaction,
 		authority: ConversationExecutionAuthorityV1,
 	) {
-		const executionSource = conversationExecutionSourceV1(authority.channelId);
+		const { executionSource, purpose, subjectId } =
+			conversationExecutionKeySubjectV1(authority);
 		const relayKeyBinding = await currentRelayKeyVersionInTransaction(
 			transaction,
-			executionSource === "web" || executionSource === "wecom"
-				? { purpose: "personal", subjectId: authority.actorId }
-				: { purpose: "agent-default", subjectId: authority.agentId },
+			{ purpose, subjectId },
 		);
 		return relayKeyBinding ? { executionSource, relayKeyBinding } : null;
 	}

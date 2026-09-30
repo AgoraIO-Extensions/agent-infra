@@ -33,6 +33,26 @@ export function conversationExecutionSourceV1(
 	throw new TypeError("Conversation execution channel is invalid");
 }
 
+export function conversationExecutionKeySubjectV1(
+	authority: Pick<
+		ConversationExecutionAuthorityV1,
+		"actorId" | "agentId" | "channelId"
+	>,
+) {
+	const executionSource = conversationExecutionSourceV1(authority.channelId);
+	return executionSource === "web" || executionSource === "wecom"
+		? {
+				executionSource,
+				purpose: "personal" as const,
+				subjectId: authority.actorId,
+			}
+		: {
+				executionSource,
+				purpose: "agent-default" as const,
+				subjectId: authority.agentId,
+			};
+}
+
 export interface ConversationExecutionAuthorityV1 {
 	readonly schemaVersion: 1;
 	readonly actorId: string;
