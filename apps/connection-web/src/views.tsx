@@ -330,6 +330,7 @@ export function ConnectionsView(props: {
 }
 
 export type ConnectorProviderId =
+	| "argus"
 	| "bitbucket"
 	| "confluence"
 	| "datalego"
@@ -347,6 +348,13 @@ export const connectorDefinitions: Array<{
 	name: string;
 	providerId: ConnectorProviderId;
 }> = [
+	{
+		category: "数据平台",
+		description: "通话、质量指标与事件分析",
+		icon: Boxes,
+		name: "Argus",
+		providerId: "argus",
+	},
 	{
 		category: "代码托管",
 		description: "仓库、Issue 与 Pull Request",
@@ -568,6 +576,7 @@ function statusLabel(value: string) {
 export function providerLabel(value: string) {
 	return (
 		{
+			argus: "Argus",
 			bitbucket: "Bitbucket",
 			confluence: "Confluence",
 			datalego: "DataLego",

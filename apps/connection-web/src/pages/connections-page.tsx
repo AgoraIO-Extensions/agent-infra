@@ -165,11 +165,14 @@ export function ConnectionsPage() {
 		new URLSearchParams(window.location.search).get("oauth") ===
 		"permission_denied";
 	const callbackProvider =
-		new URLSearchParams(window.location.search).get("provider") === "manhattan"
-			? "manhattan"
-			: "github";
+		new URLSearchParams(window.location.search).get("provider") ?? "github";
 	const manhattanOAuth = useMutation({
 		mutationFn: connectionApi.startManhattanOAuth,
+		onSuccess: ({ authorizationUrl }) =>
+			window.location.assign(authorizationUrl),
+	});
+	const argusOAuth = useMutation({
+		mutationFn: connectionApi.startArgusOAuth,
 		onSuccess: ({ authorizationUrl }) =>
 			window.location.assign(authorizationUrl),
 	});
@@ -201,10 +204,16 @@ export function ConnectionsPage() {
 			approvedAccessRequestId &&
 			startedOAuthRequest.current !== approvedAccessRequestId
 		) {
-			if (provider === "manhattan" || provider === "github") {
+			if (
+				provider === "manhattan" ||
+				provider === "argus" ||
+				provider === "github"
+			) {
 				startedOAuthRequest.current = approvedAccessRequestId;
 				if (provider === "github")
 					oauth.begin(undefined, approvedAccessRequestId);
+				else if (provider === "argus")
+					argusOAuth.mutate({ accessRequestId: approvedAccessRequestId });
 				else
 					manhattanOAuth.mutate({ accessRequestId: approvedAccessRequestId });
 			}
@@ -229,6 +238,7 @@ export function ConnectionsPage() {
 		newCredentialRequestId,
 		completedAccessRequestId,
 		manhattanOAuth.mutate,
+		argusOAuth.mutate,
 		oauth.begin,
 	]);
 	const accessRequests = useQuery({
@@ -468,6 +478,12 @@ export function ConnectionsPage() {
 					? { reconnectConnectionId: targetId }
 					: { accessRequestId: approvedAccessRequestId },
 			);
+		else if (providerId === "argus")
+			argusOAuth.mutate(
+				targetId
+					? { reconnectConnectionId: targetId }
+					: { accessRequestId: approvedAccessRequestId },
+			);
 		else if (providerId === "jira") setJiraOpen(true);
 		else if (providerId === "confluence") setConfluenceOpen(true);
 		else if (providerId === "jenkins-ci" || providerId === "jenkins-release") {
@@ -680,6 +696,7 @@ export function ConnectionsPage() {
 			{manhattanOAuth.isError ? (
 				<PageError error={manhattanOAuth.error} />
 			) : null}
+			{argusOAuth.isError ? <PageError error={argusOAuth.error} /> : null}
 			{jiraError ? <PageError error={jiraError} /> : null}
 			{confluenceError ? <PageError error={confluenceError} /> : null}
 			{datalegoError ? <PageError error={datalegoError} /> : null}

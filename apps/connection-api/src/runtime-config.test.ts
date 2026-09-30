@@ -43,6 +43,8 @@ const accountBase = {
 	MANHATTAN_KONG_API_KEY: "manhattan-machine-key",
 	MANHATTAN_OAUTH_CLIENT_ID: "manhattan-oauth-client",
 	MANHATTAN_OAUTH_CLIENT_SECRET: "manhattan-oauth-secret",
+	ARGUS_OAUTH_CLIENT_ID: "argus-oauth-client",
+	ARGUS_OAUTH_CLIENT_SECRET: "argus-oauth-secret",
 	REHOBOAM_KONG_API_KEY: "rehoboam-machine-key",
 };
 
@@ -162,6 +164,11 @@ describe("Connection runtime configuration", () => {
 			clientSecret: "manhattan-oauth-secret",
 			redirectUri:
 				"https://connection.example/oauth/callback?provider=manhattan",
+		});
+		expect(config.argusOAuth).toEqual({
+			clientId: "argus-oauth-client",
+			clientSecret: "argus-oauth-secret",
+			redirectUri: "https://connection.example/oauth/callback?provider=argus",
 		});
 		const { MANHATTAN_OAUTH_CLIENT_SECRET: _, ...withoutSecret } = accountBase;
 		expect(() => fullConnectionRuntimeConfig(withoutSecret)).toThrow(

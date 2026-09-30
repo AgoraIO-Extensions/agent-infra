@@ -46,6 +46,7 @@ test("runtime publication, consumer grants and approval management share every P
 	}
 	visit(file);
 	assert.deepEqual(names, [
+		"argusConnectionCatalog",
 		"githubConnectionCatalog",
 		"bitbucketServerConnectionCatalog",
 		"jiraServerConnectionCatalog",
@@ -215,6 +216,7 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 	assert.equal(apiManifest.scripts.local, undefined);
 	assert.deepEqual(adapterManifest.exports, {
 		".": "./src/index.ts",
+		"./argus": "./src/argus.ts",
 		"./confluence-server": "./src/confluence-server.ts",
 		"./datalego": "./src/datalego.ts",
 		"./jira-server": "./src/jira-server.ts",
