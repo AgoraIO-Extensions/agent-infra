@@ -48,6 +48,7 @@ describe("platform-store package surface", () => {
 			"PlatformAuditQueryError",
 			"PostgresAgentConfigurationQueryV1",
 			"PostgresAgentConfigurationTransactionV1",
+			"PostgresAgentDefaultRelayKeyStoreV1",
 			"PostgresAgentManagementQueryV1",
 			"PostgresAgentManagementTransactionV1",
 			"PostgresApiIdentityStoreV1",
