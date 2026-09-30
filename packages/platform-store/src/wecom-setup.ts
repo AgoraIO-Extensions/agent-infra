@@ -56,6 +56,23 @@ function record(row: Row): WecomSetupRecordV1 {
 			: {}),
 	};
 }
+export function validateWecomSetupCredentialRecordV1(
+	session: WecomSetupRecordV1,
+	encryptedCredential: unknown = session.encryptedCredential,
+) {
+	const credential = validatePlatformSecretRecordV1(encryptedCredential);
+	if (
+		credential.agentId !== session.agentId ||
+		credential.ownerId !== session.actorId ||
+		credential.ownerType !== "agent-owner" ||
+		credential.secretId !== session.sessionId ||
+		credential.name !== (session.kind ?? "wecom_bot") ||
+		credential.configRevision !== session.configurationRevision ||
+		credential.secretVersion !== 1
+	)
+		throw new Error("WeCom credential unavailable");
+	return credential;
+}
 async function audit(
 	sql: postgres.Sql | postgres.TransactionSql,
 	session: WecomSetupRecordV1,
@@ -118,6 +135,26 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 			.#sql`select 1 from platform.wecom_setup_sessions s join platform.agents a on a.id=s.agent_id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where s.session_id=${reference} and s.agent_id=${agentId} and s.status='active' and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind',s.kind,'bindingReference',s.session_id)) and not exists(select 1 from jsonb_array_elements(c.configuration->'channels') channel where channel->>'kind'=s.kind and channel->>'bindingReference'=s.session_id and channel->>'enabled'='false') limit 1`;
 		return rows.length === 1;
 	}
+	async managedBotAdmission(reference: string) {
+		const session = await this.read(reference);
+		if (
+			session?.kind !== "wecom_bot" ||
+			session.status !== "active" ||
+			!(await this.activeBinding(session.agentId, reference))
+		)
+			return null;
+		try {
+			validateWecomSetupCredentialRecordV1(session);
+		} catch {
+			return null;
+		}
+		return {
+			agentId: session.agentId,
+			kind: "wecom_bot" as const,
+			bindingReference: reference,
+			credentialVersion: session.sessionId,
+		};
+	}
 	async consume(input: Parameters<WecomSetupStoreV1["consume"]>[0]) {
 		const { session } = input;
 		if (
@@ -125,19 +162,10 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 			input.expectedAuthorizationRevision !== session.authorizationRevision
 		)
 			return false;
-		const credential = validatePlatformSecretRecordV1(
+		const credential = validateWecomSetupCredentialRecordV1(
+			session,
 			input.encryptedCredential,
 		);
-		if (
-			credential.agentId !== session.agentId ||
-			credential.ownerId !== session.actorId ||
-			credential.ownerType !== "agent-owner" ||
-			credential.secretId !== session.sessionId ||
-			credential.name !== (session.kind ?? "wecom_bot") ||
-			credential.configRevision !== session.configurationRevision ||
-			credential.secretVersion !== 1
-		)
-			throw new Error("WeCom credential binding invalid");
 		return this.#sql.begin(async (sql) => {
 			// Use the same key lock as retirement so a retired key cannot gain references.
 			await sql`select pg_advisory_xact_lock(hashtextextended(${secretKeyAdvisoryLockName(credential.crypto.wrappingKeyVersion)},0))`;

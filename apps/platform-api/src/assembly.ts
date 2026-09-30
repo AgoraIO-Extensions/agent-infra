@@ -186,14 +186,15 @@ export function assemblePlatformApi(
 		typeof input.admissions === "function"
 			? input.admissions({ configurationQuery })
 			: input.admissions;
-	const channelAdmission = resolveWecomBinding
-		? {
-				channelAdmission: createWecomChannelAdmissionV1(
-					resolveWecomBinding,
-					wecomSetup?.resolveManagedBotAdmission,
-				),
-			}
-		: {};
+	const channelAdmission =
+		resolveWecomBinding || wecomSetup
+			? {
+					channelAdmission: createWecomChannelAdmissionV1(
+						resolveWecomBinding ?? (async () => null),
+						wecomSetup?.resolveManagedBotAdmission,
+					),
+				}
+			: {};
 	const presentAgent =
 		typeof input.presentAgent === "function"
 			? input.presentAgent

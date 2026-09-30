@@ -1,4 +1,3 @@
-import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import { createWecomSetupV1 } from "@agent-infra/platform-core";
 import {
 	PostgresAgentConfigurationQueryV1,
@@ -129,39 +128,8 @@ export function assembleWecomSetupApiV1(options: {
 				? resolveBot(reference)
 				: null;
 		},
-		async resolveManagedBotAdmission(reference: string) {
-			const session = await store.read(reference);
-			if (
-				session?.kind !== "wecom_bot" ||
-				session.status !== "active" ||
-				!(await store.activeBinding(session.agentId, reference))
-			)
-				return null;
-			let credential: ReturnType<typeof validatePlatformSecretRecordV1>;
-			try {
-				credential = validatePlatformSecretRecordV1(
-					session.encryptedCredential,
-				);
-			} catch {
-				return null;
-			}
-			if (
-				credential.secretId !== session.sessionId ||
-				credential.agentId !== session.agentId ||
-				credential.ownerId !== session.actorId ||
-				credential.ownerType !== "agent-owner" ||
-				credential.name !== "wecom_bot" ||
-				credential.configRevision !== session.configurationRevision ||
-				credential.secretVersion !== 1
-			)
-				return null;
-			return {
-				agentId: session.agentId,
-				kind: "wecom_bot" as const,
-				bindingReference: reference,
-				credentialVersion: session.sessionId,
-			};
-		},
+		resolveManagedBotAdmission: (reference: string) =>
+			store.managedBotAdmission(reference),
 		callbackUrl: (sessionId: string) => {
 			if (!callbackOrigin) throw new Error("WeCom callback origin unavailable");
 			return new URL(

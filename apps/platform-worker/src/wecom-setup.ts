@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import {
 	createWecomSetupActivationV1,
@@ -11,6 +10,7 @@ import {
 	PostgresAgentConfigurationTransactionV1,
 	PostgresWecomConnectionsV1,
 	PostgresWecomSetupV1,
+	validateWecomSetupCredentialRecordV1,
 } from "@agent-infra/platform-store";
 import type { SecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
 import {
@@ -57,17 +57,7 @@ export function createWecomSetupWorkerV1(
 				secret: string;
 		  }
 	> {
-		const record = validatePlatformSecretRecordV1(session.encryptedCredential);
-		if (
-			record.secretId !== session.sessionId ||
-			record.agentId !== session.agentId ||
-			record.ownerId !== session.actorId ||
-			record.ownerType !== "agent-owner" ||
-			record.name !== (session.kind ?? "wecom_bot") ||
-			record.configRevision !== session.configurationRevision ||
-			record.secretVersion !== 1
-		)
-			throw new Error("WeCom credential unavailable");
+		const record = validateWecomSetupCredentialRecordV1(session);
 		const decrypted = await options.decryptor.decrypt({
 			encryptedRecord: record,
 			traceId: session.sessionId,

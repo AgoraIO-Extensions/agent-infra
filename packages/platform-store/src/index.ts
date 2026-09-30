@@ -131,5 +131,8 @@ export {
 export { PostgresWecomChannelV1 } from "./wecom-channel.ts";
 export type { WecomConnectionClaimV1 } from "./wecom-connections.ts";
 export { PostgresWecomConnectionsV1 } from "./wecom-connections.ts";
-export { PostgresWecomSetupV1 } from "./wecom-setup.ts";
+export {
+	PostgresWecomSetupV1,
+	validateWecomSetupCredentialRecordV1,
+} from "./wecom-setup.ts";
 export { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.js";
