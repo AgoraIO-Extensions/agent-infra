@@ -2565,7 +2565,7 @@ attributes 使用低基数 enum/opaque ID；不记录 args、token、external ac
 
 ProviderRelease 发布必须先分类为静默兼容或需要使用者操作。只有 stable account proof、Credential scope、已确认 ActionVersion 集合、effect 与 authorization digest 均保持等价时才允许静默迁移；任一条件无法证明时创建 `ProviderUpgradeCampaign`。
 
-Campaign 绑定 source/target ProviderRelease、原因、可选截止时间和创建时间。每个受影响 AuthorizationRoot 创建唯一 `ProviderUpgradeTask`，状态只允许按 `PENDING_CONNECTION -> PENDING_AUTHORIZATION -> COMPLETED` 收敛；截止后未完成或个人 Connection 主动断开时转为终态 `EXPIRED`，不随重连恢复。断开连接与其待升级任务终结、对应待办关闭在同一事务完成，记录脱敏 audit/outbox；任务对账还须收敛此前已断开账号的遗留待办，投影与重建不得纳入已断开的账号。发布事务同时写入 task 和 `connection.provider-upgrade.required` outbox event；重复发布按 source/target release 与 AuthorizationRoot 幂等。连接升级后若原 Consent 可复用则直接完成，否则进入待重新确认，新的 Grant 提交后完成。状态变化写 audit/outbox，外部通知投递失败不得伪造完成状态。
+Campaign 绑定 source/target ProviderRelease、原因、可选截止时间和创建时间。每个受影响 AuthorizationRoot 创建唯一 `ProviderUpgradeTask`，状态只允许按 `PENDING_CONNECTION -> PENDING_AUTHORIZATION -> COMPLETED` 收敛；截止后未完成或个人 Connection 主动断开时转为终态 `EXPIRED`，不随重连恢复。断开连接与其待升级任务终结、对应待办关闭在同一事务完成，记录脱敏 audit/outbox；任务对账还须收敛此前已断开账号的遗留待办，投影与重建不得纳入已断开的账号。发布事务同时写入 task 和 `connection.provider-upgrade.required` outbox event；重复发布按 source/target release 与 AuthorizationRoot 幂等。同一 Connection 已切至目标 ProviderRelease，且同一 Principal 在该连接上具有有效目标版本 Access Authorization 时，对账可将遗留的 `PENDING_CONNECTION` 推进至 `PENDING_AUTHORIZATION`；其他账号的审批不能代替旧账号升级，也不得据此自动创建 Consumer Grant。连接升级后若原 Consent 可复用则直接完成，否则进入待重新确认，新的 Grant 提交后完成。状态变化写 audit/outbox，外部通知投递失败不得伪造完成状态。
 
 普通使用者只能读取自己的未完成 task 和精确 Connection 操作入口。Connection 管理员只读取 Provider、source/target release、原因、截止时间及聚合计数，不读取 Credential、授权快照正文或无关外部账号。M1 的 Connection Web 提供站内待办；邮件、企微等通道可后续消费 outbox，但不属于 Campaign 的完成条件。
 

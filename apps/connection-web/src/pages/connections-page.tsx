@@ -791,6 +791,7 @@ export function ConnectionsPage() {
 									<thead>
 										<tr>
 											<th>平台</th>
+											<th>账号</th>
 											<th>客户端</th>
 											<th>目标版本</th>
 											<th>状态</th>
@@ -803,13 +804,18 @@ export function ConnectionsPage() {
 												<td className="primary-cell">
 													{providerLabel(task.providerId)}
 												</td>
+												<td>
+													{data.connections.find(
+														(connection) => connection.id === task.connectionId,
+													)?.externalAccount ?? task.connectionId}
+												</td>
 												<td>{task.consumerName}</td>
 												<td>{task.targetProviderReleaseId}</td>
 												<td>
 													{task.status === "PENDING_CONNECTION"
 														? "升级连接"
 														: task.status === "PENDING_AUTHORIZATION"
-															? "重新确认授权"
+															? "待确认客户端授权"
 															: "已过期"}
 												</td>
 												<td className="table-action">
