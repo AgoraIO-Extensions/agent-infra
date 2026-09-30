@@ -218,6 +218,7 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 	assert.equal(apiManifest.scripts.local, undefined);
 	assert.deepEqual(adapterManifest.exports, {
 		".": "./src/index.ts",
+		"./authorization-compatibility": "./src/authorization-compatibility.ts",
 		"./confluence-server": "./src/confluence-server.ts",
 		"./datalego": "./src/datalego.ts",
 		"./datalego-oauth": "./src/datalego-oauth.ts",

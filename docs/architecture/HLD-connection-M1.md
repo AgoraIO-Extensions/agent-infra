@@ -1239,7 +1239,7 @@ Provider 兼容升级是版本绑定的受控迁移，不是新的公司批准�
 
 存储保留 Authorization 原 `provider_release_id` / `capability_profile_id` 与 source Request 的复合外键，通过成对的 `upgraded_provider_release_id` / `upgraded_capability_profile_id` 保存当前映射；统一 effective view 用于执行资格与能力范围校验，审批来源字段用于原策略撤销、重审和续期。迁移审计记录每次源/目标版本、能力包与逐项映射。兼容升级后的续期仍按原批准来源申请和审核，并校验当前映射账号与凭证；升级本身不续期，升级期间已提交的续期申请仍可正常完成。
 
-首期自动兼容证明采用保守的充分条件：源/目标 PUBLISHED Release 的认证配置、部署配置和有效执行器摘要相同，获批 Action 的名称、效果、输入 Schema、所需 scopes 与描述逐项相同且一一对应。不因目录额外增加其他 Action 拒绝迁移；执行器摘要变化时不能只根据 Action 名称或 Schema 猜测等价，走重新审批及存储凭证复用入口。
+自动兼容证明要求源/目标 PUBLISHED Release 的认证配置、部署配置相同，获批 Action 的名称、效果、输入 Schema、所需 scopes 与描述逐项相同且一一对应。不因目录额外增加其他 Action 拒绝迁移。执行器摘要标识实现，不单独代表扩权：摘要相同，或受信发布代码提供经过代码评审的权限兼容声明时，才允许继承原审批。声明必须绑定 Provider、确切源/目标 Release 和各自 SHA-256 摘要，记录修复依据与评审引用；不能由 Browser、Consumer 或请求参数提供，不能跨版本或传递复用。声明只证明执行器修复未改变能力的授权语义，不能替代上述逐项检查、原审批有效期、账号及凭证检查，也不自动扩大 Consumer Grant。缺少声明或任一绑定不匹配时，仍走重新审批及存储凭证复用入口。兼容迁移审计记录声明及实际版本/摘要，历史 Release 不原地改写。
 
 兼容性判断覆盖整个获批 Capability Profile，而非只检查某个 Consumer 当前勾选的子集；Consumer Grant 仍是独立且不大于公司批准上限的授权。目标仅包含原获批能力的一一映射，Provider 目录新增加的其他能力不纳入批准。既有 Consumer 选择按该映射保留，不得以默认 READ 集合或目标目录全集替代。获批范围之外的能力必须先经新公司审批，Consumer 尚未确认的能力仍需独立预览与确认。
 

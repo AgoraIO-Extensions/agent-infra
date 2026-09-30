@@ -2,6 +2,16 @@ import { randomUUID } from "node:crypto";
 import { ConnectionError, canonicalHash } from "@agent-infra/connection-core";
 import type postgres from "postgres";
 
+export type AuthorizationCompatibility = {
+	provider: string;
+	fromReleaseId: string;
+	toReleaseId: string;
+	fromExecutorDigest: string;
+	toExecutorDigest: string;
+	rationale: string;
+	reviewReference: string;
+};
+
 // The caller holds the account/current-credential locks and verifies credential CAS.
 export async function migrateCompatibleApproval(
 	sql: postgres.TransactionSql,
@@ -11,6 +21,7 @@ export async function migrateCompatibleApproval(
 		externalAccount: string;
 		fromReleaseId: string;
 		toReleaseId: string;
+		authorizationCompatibility?: readonly AuthorizationCompatibility[];
 	},
 ) {
 	const denied = () => {
@@ -41,19 +52,38 @@ export async function migrateCompatibleApproval(
 		FOR UPDATE OF access
 	`;
 	if (!access) return denied();
-	const [release] = await sql<{ id: string }[]>`
-		SELECT target.id FROM connection_provider_releases source
+	const [release] = await sql<
+		{
+			provider: string;
+			from_executor_digest: string;
+			to_executor_digest: string;
+		}[]
+	>`
+		SELECT target.provider, source.executor_digest AS from_executor_digest,
+			target.executor_digest AS to_executor_digest FROM connection_provider_releases source
 		JOIN connection_provider_releases target ON target.id = ${input.toReleaseId}
 		WHERE source.id = ${input.fromReleaseId}
 			AND source.provider = target.provider
 			AND source.status = 'PUBLISHED' AND target.status = 'PUBLISHED'
 			AND source.auth_profile = target.auth_profile
 			AND source.deployment_profile = target.deployment_profile
-			AND source.executor_digest = target.executor_digest
 			AND source.executor_digest ~ '^sha256:[a-f0-9]{64}$'
+			AND target.executor_digest ~ '^sha256:[a-f0-9]{64}$'
 		FOR SHARE OF source, target
 	`;
 	if (!release) return denied();
+	const evidence = input.authorizationCompatibility?.find(
+		(item) =>
+			item.provider === release.provider &&
+			item.fromReleaseId === input.fromReleaseId &&
+			item.toReleaseId === input.toReleaseId &&
+			item.fromExecutorDigest === release.from_executor_digest &&
+			item.toExecutorDigest === release.to_executor_digest &&
+			item.rationale.trim() &&
+			item.reviewReference.trim(),
+	);
+	if (release.from_executor_digest !== release.to_executor_digest && !evidence)
+		return denied();
 	const [profile] = await sql<
 		{
 			effect_ceiling: string;
@@ -141,7 +171,11 @@ export async function migrateCompatibleApproval(
 				toReleaseId: input.toReleaseId,
 				fromProfileId: access.capability_profile_id,
 				toProfileId: profileId,
-				proof: "IDENTICAL_EXECUTOR_AUTH_DEPLOYMENT_AND_APPROVED_ACTIONS",
+				proof:
+					release.from_executor_digest === release.to_executor_digest
+						? "IDENTICAL_EXECUTOR_AUTH_DEPLOYMENT_AND_APPROVED_ACTIONS"
+						: "REVIEWED_EXECUTOR_COMPATIBILITY_AND_IDENTICAL_AUTH_DEPLOYMENT_APPROVED_ACTIONS",
+				executorCompatibility: evidence ?? null,
 				mapping,
 			},
 		)})
