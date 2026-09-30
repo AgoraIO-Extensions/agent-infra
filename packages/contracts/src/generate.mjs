@@ -37,6 +37,8 @@ import {
 	pilotOperationOpenApiPathsV2,
 	pilotOperationSchemasV2,
 	pilotOperationSseSchemasV2,
+	pilotScopedAuditOpenApiPathsV1,
+	pilotScopedAuditSchemasV1,
 	pilotSseSchemasV1,
 	pilotTaskOpenApiPathsV1,
 	pilotTaskSchemasV1,
@@ -633,6 +635,7 @@ function buildArtifacts() {
 			...fileOpenApiPathsV1,
 			...pilotBrowserSseOpenApiPathsV1,
 			...pilotTaskOpenApiPathsV1,
+			...pilotScopedAuditOpenApiPathsV1,
 		},
 		components: {
 			securitySchemes: {
@@ -643,6 +646,7 @@ function buildArtifacts() {
 				...pilotSseSchemasV1,
 				...fileSchemasV1,
 				...pilotTaskSchemasV1,
+				...pilotScopedAuditSchemasV1,
 			},
 		},
 	});

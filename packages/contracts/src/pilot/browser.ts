@@ -12,6 +12,7 @@ import {
 	PilotInternalErrorV1Schema,
 	PilotProtocolErrorV1Schema,
 } from "./errors.ts";
+import { WecomApplicationCredentialsV1Schema } from "./wecom-application.ts";
 
 const nonEmptyString = () => z.string().min(1);
 const idArray = () => z.array(OpaqueIdV1Schema);
@@ -719,6 +720,9 @@ const wecomSetupPath = z.strictObject({
 const platformApiCredentialSecurity = [{ platformApiCredential: [] }] as {
 	platformApiCredential: string[];
 }[];
+const wecomAppSetupProjection = WecomSetupProjectionV1Schema.extend({
+	callbackUrl: z.url(),
+});
 export const pilotBrowserHttpOpenApiPathsV1 = {
 	"/api/v1/api-credentials": {
 		get: {
@@ -913,6 +917,83 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 				"200": jsonResponse(
 					"Cancelled configuration session",
 					WecomSetupProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-app": {
+		get: {
+			operationId: "getWecomAppConnection",
+			requestParams: { path: z.strictObject({ agentId: pathId() }) },
+			responses: {
+				"200": jsonResponse(
+					"Owner application connection status",
+					z.strictObject({
+						status: z.enum([
+							"not_configured",
+							"callback",
+							"verifying",
+							"connected",
+							"disconnected",
+							"auth_failed",
+						]),
+						sessionId: OpaqueIdV1Schema.optional(),
+						callbackUrl: z.url().optional(),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-app-setup": {
+		post: {
+			operationId: "beginWecomAppSetup",
+			requestParams: { path: z.strictObject({ agentId: pathId() }) },
+			responses: {
+				"200": jsonResponse(
+					"Owner application setup session",
+					wecomAppSetupProjection.extend({ state: wecomSetupState }),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}": {
+		get: {
+			operationId: "getWecomAppSetup",
+			requestParams: { path: wecomSetupPath },
+			responses: {
+				"200": jsonResponse(
+					"Owner application setup status",
+					wecomAppSetupProjection,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials": {
+		post: {
+			operationId: "submitWecomAppCredentials",
+			requestParams: { path: wecomSetupPath },
+			requestBody: requiredJsonRequestBody(WecomApplicationCredentialsV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Candidate pending Worker validation",
+					wecomAppSetupProjection,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel": {
+		post: {
+			operationId: "cancelWecomAppSetup",
+			requestParams: { path: wecomSetupPath },
+			responses: {
+				"200": jsonResponse(
+					"Cancelled application setup session",
+					wecomAppSetupProjection,
 				),
 				...errorResponses,
 			},

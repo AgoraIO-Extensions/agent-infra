@@ -264,6 +264,44 @@ afterAll(async () => {
 });
 
 describe("PostgreSQL Agent configuration transaction", () => {
+	it("removes a bot binding and its encrypted setup credential in one revision", async () => {
+		await clearDatabase();
+		await seed("agent_01", {
+			...agentConfigurationConformanceRecordV1,
+			channels: [
+				{ kind: "wecom_app", bindingReference: "application-binding" },
+				{ kind: "wecom_bot", bindingReference: "bot-session" },
+			],
+			channelRevision: "channels_before_unbind",
+		});
+		await adminClient`insert into platform.wecom_setup_sessions
+			(session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id,encrypted_credential)
+			values ('bot-session','agent_01','owner_01',7,'authorization_9','digest',now()+interval '1 hour','active','bot-id',${adminClient.json({ crypto: { wrappingKeyVersion: "fixture-key" } })})`;
+		const result = await useCase(openTransaction()).update(
+			{
+				schemaVersion: 2,
+				agentId: "agent_01",
+				idempotencyKey: "unbind-bot",
+				requestId: "request_unbind_bot",
+				traceId: "trace_unbind_bot",
+				changes: { channels: [{ kind: "wecom_bot", enabled: false }] },
+			},
+			actor,
+		);
+		expect(result.changedFields).toContain("channels");
+		expect((await snapshot()).configuration.channels).toEqual([
+			{ kind: "wecom_app", bindingReference: "application-binding" },
+		]);
+		const [session] = await adminClient`
+			select status, encrypted_credential from platform.wecom_setup_sessions
+			where session_id = 'bot-session'
+		`;
+		expect(session).toEqual({
+			status: "cancelled",
+			encrypted_credential: null,
+		});
+	});
+
 	it("replays original V1 Action results without rewriting configuration, digest, history or effects", async () => {
 		await clearDatabase();
 		await seed();

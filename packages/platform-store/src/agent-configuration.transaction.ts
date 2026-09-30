@@ -5,7 +5,7 @@ import type {
 	AgentConfigurationWritePlanV1,
 	PendingSecretRecordAttachmentsV1,
 } from "@agent-infra/platform-core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, notInArray, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { default as postgres } from "postgres";
 import {
@@ -28,8 +28,12 @@ import {
 import {
 	agentApplications,
 	agentConfigurationRevisions,
+	agentOwners,
 	agents,
+	auditEvents,
 	idempotencyRecords,
+	wecomConnections,
+	wecomSetupSessions,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
 
@@ -134,8 +138,51 @@ export class PostgresAgentConfigurationTransactionV1
 		input: AgentConfigurationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
+		return this.#commit(input, attachments);
+	}
+
+	async commitWecomSetup(
+		input: AgentConfigurationWritePlanV1,
+		claim: {
+			readonly sessionId: string;
+			readonly holderId: string;
+			readonly fence: number;
+		},
+	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
+		return this.#commit(input, undefined, { ...claim, kind: "connection" });
+	}
+
+	async commitWecomReplacementProbe(
+		input: AgentConfigurationWritePlanV1,
+		probe: {
+			readonly sessionId: string;
+			readonly holderId: string;
+			readonly fence: number;
+		},
+	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
+		return this.#commit(input, undefined, { ...probe, kind: "replacement" });
+	}
+
+	async #commit(
+		input: AgentConfigurationWritePlanV1,
+		attachments?: PendingSecretRecordAttachmentsV1,
+		wecom?: {
+			readonly kind: "connection" | "replacement";
+			readonly sessionId: string;
+			readonly holderId: string;
+			readonly fence: number;
+		},
+	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
 		try {
 			const plan = validatedPlan(input);
+			if (
+				wecom &&
+				(!validateText(wecom.sessionId) ||
+					!validateText(wecom.holderId) ||
+					!Number.isSafeInteger(wecom.fence) ||
+					wecom.fence < 1)
+			)
+				throw new AgentConfigurationStoreError();
 			const { configuration, result } = plan;
 			return await this.#database.transaction(async (transaction) => {
 				const [agent] = await transaction
@@ -179,6 +226,103 @@ export class PostgresAgentConfigurationTransactionV1
 				) {
 					return { outcome: "stale" as const };
 				}
+				let setup: { readonly botId: string } | undefined;
+				if (wecom) {
+					const [candidate] = await transaction
+						.select({ botId: wecomSetupSessions.botId })
+						.from(wecomSetupSessions)
+						.where(eq(wecomSetupSessions.sessionId, wecom.sessionId))
+						.limit(1);
+					if (!candidate?.botId) return { outcome: "stale" as const };
+					await transaction.execute(
+						sql`select pg_advisory_xact_lock(hashtextextended(${`wecom-setup:${candidate.botId}`},0))`,
+					);
+					const foreignBinding = await transaction.execute(sql`
+						select 1 from ${wecomConnections} w join ${agents} a on a.id=w.agent_id
+						join ${agentConfigurationRevisions} c on c.agent_id=a.id and c.revision=a.current_configuration_revision
+						where w.bot_id=${candidate.botId} and w.agent_id<>${plan.agentId}
+						and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference',w.binding_reference))
+						and not exists(select 1 from jsonb_array_elements(c.configuration->'channels') channel where channel->>'kind'='wecom_bot' and channel->>'bindingReference'=w.binding_reference and channel->>'enabled'='false')
+						for share of a
+					`);
+					if (foreignBinding.length) return { outcome: "stale" as const };
+					if (wecom.kind === "connection") {
+						const [connection] = await transaction
+							.select({ botId: wecomConnections.botId })
+							.from(wecomConnections)
+							.where(
+								and(
+									eq(wecomConnections.botId, candidate.botId),
+									eq(wecomConnections.agentId, plan.agentId),
+									eq(wecomConnections.bindingReference, wecom.sessionId),
+									eq(wecomConnections.holderId, wecom.holderId),
+									eq(wecomConnections.fence, wecom.fence),
+									sql`${wecomConnections.leaseUntil} > clock_timestamp()`,
+									sql`${wecomConnections.status} in ('verifying','connected')`,
+								),
+							)
+							.for("update")
+							.limit(1);
+						if (!connection) return { outcome: "stale" as const };
+					}
+					const [session] = await transaction
+						.select({
+							botId: wecomSetupSessions.botId,
+							kind: wecomSetupSessions.kind,
+							callbackVerifiedAt: wecomSetupSessions.callbackVerifiedAt,
+						})
+						.from(wecomSetupSessions)
+						.where(
+							and(
+								eq(wecomSetupSessions.sessionId, wecom.sessionId),
+								eq(wecomSetupSessions.agentId, plan.agentId),
+								eq(wecomSetupSessions.actorId, plan.auditEvent.actorId),
+								eq(wecomSetupSessions.configurationRevision, plan.baseRevision),
+								eq(
+									wecomSetupSessions.authorizationRevision,
+									plan.expectedAuthorizationRevision,
+								),
+								eq(wecomSetupSessions.status, "verifying"),
+								sql`${wecomSetupSessions.expiresAt} > clock_timestamp()`,
+								...(wecom.kind === "replacement"
+									? [
+											eq(wecomSetupSessions.probeHolderId, wecom.holderId),
+											eq(wecomSetupSessions.probeFence, wecom.fence),
+											sql`${wecomSetupSessions.probeLeaseUntil} > clock_timestamp()`,
+											sql`${wecomSetupSessions.botVerifiedAt} > clock_timestamp() - interval '30 seconds'`,
+										]
+									: []),
+							),
+						)
+						.for("update")
+						.limit(1);
+					if (
+						!session ||
+						session.botId !== candidate.botId ||
+						(wecom.kind === "replacement" && session.kind !== "wecom_bot") ||
+						(session.kind === "wecom_app" && !session.callbackVerifiedAt) ||
+						configuration.channelRevision !== wecom.sessionId ||
+						!configuration.channels.some(
+							(channel) =>
+								channel.kind === session.kind &&
+								channel.bindingReference === wecom.sessionId,
+						)
+					)
+						return { outcome: "stale" as const };
+					const [owner] = await transaction
+						.select({ ownerId: agentOwners.ownerId })
+						.from(agentOwners)
+						.where(
+							and(
+								eq(agentOwners.agentId, plan.agentId),
+								eq(agentOwners.ownerId, plan.auditEvent.actorId),
+							),
+						)
+						.for("share")
+						.limit(1);
+					if (!owner) return { outcome: "stale" as const };
+					setup = { botId: candidate.botId };
+				}
 				let applicationId: string | undefined;
 				if (plan.expectedManagementRevision !== null) {
 					const [application] = await transaction
@@ -214,6 +358,30 @@ export class PostgresAgentConfigurationTransactionV1
 				const previousConfiguration = decodeAgentConfigurationRecord(
 					previous.configuration,
 				);
+				if (wecom?.kind === "replacement" && setup) {
+					const [old] = await transaction
+						.select({ sessionId: wecomSetupSessions.sessionId })
+						.from(wecomSetupSessions)
+						.where(
+							and(
+								eq(wecomSetupSessions.agentId, plan.agentId),
+								eq(wecomSetupSessions.botId, setup.botId),
+								eq(wecomSetupSessions.kind, "wecom_bot"),
+								eq(wecomSetupSessions.status, "active"),
+								sql`${wecomSetupSessions.sessionId} != ${wecom.sessionId}`,
+							),
+						)
+						.limit(1);
+					if (
+						!old ||
+						!previousConfiguration.channels.some(
+							(channel) =>
+								channel.kind === "wecom_bot" &&
+								channel.bindingReference === old.sessionId,
+						)
+					)
+						return { outcome: "stale" as const };
+				}
 				if (
 					previousConfiguration.agentId !== plan.agentId ||
 					previousConfiguration.revision !== plan.baseRevision ||
@@ -277,6 +445,62 @@ export class PostgresAgentConfigurationTransactionV1
 					updatedAt: plan.auditEvent.occurredAt,
 				});
 				await insertAgentConfigurationEffects(transaction, plan);
+				if (wecom && setup) {
+					const activated = await transaction
+						.update(wecomSetupSessions)
+						.set({ status: "active" })
+						.where(
+							and(
+								eq(wecomSetupSessions.sessionId, wecom.sessionId),
+								eq(wecomSetupSessions.status, "verifying"),
+								sql`${wecomSetupSessions.expiresAt} > clock_timestamp()`,
+								wecom.kind === "connection"
+									? sql`exists (select 1 from ${wecomConnections} where ${wecomConnections.botId} = ${setup.botId} and ${wecomConnections.holderId} = ${wecom.holderId} and ${wecomConnections.fence} = ${wecom.fence} and ${wecomConnections.leaseUntil} > clock_timestamp())`
+									: sql`${wecomSetupSessions.probeHolderId} = ${wecom.holderId} and ${wecomSetupSessions.probeFence} = ${wecom.fence} and ${wecomSetupSessions.probeLeaseUntil} > clock_timestamp() and ${wecomSetupSessions.botVerifiedAt} > clock_timestamp() - interval '30 seconds'`,
+							),
+						)
+						.returning({ sessionId: wecomSetupSessions.sessionId });
+					if (activated.length !== 1) throw new StaleAgentConfigurationCommit();
+					await transaction.insert(auditEvents).values({
+						id: randomUUID(),
+						traceId: wecom.sessionId,
+						actorType: "system",
+						actorId: "platform-worker",
+						action: "wecom.setup_activated",
+						targetType: "agent",
+						targetId: plan.agentId,
+						outcome: "succeeded",
+						requestId: wecom.sessionId,
+						agentId: plan.agentId,
+					});
+				}
+				const retainedWecomReferences = configuration.channels
+					.filter(
+						(channel) =>
+							channel.kind === "wecom_bot" || channel.kind === "wecom_app",
+					)
+					.map((channel) => channel.bindingReference);
+				await transaction
+					.update(wecomSetupSessions)
+					.set({
+						status: "cancelled",
+						encryptedCredential: null,
+						encryptedCallback: null,
+					})
+					.where(
+						and(
+							eq(wecomSetupSessions.agentId, plan.agentId),
+							eq(wecomSetupSessions.status, "active"),
+							...(retainedWecomReferences.length
+								? [
+										notInArray(
+											wecomSetupSessions.sessionId,
+											retainedWecomReferences,
+										),
+									]
+								: []),
+						),
+					);
 				return { outcome: "committed" as const, result };
 			});
 		} catch (error) {

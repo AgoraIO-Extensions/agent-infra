@@ -61,7 +61,7 @@ const journal = JSON.parse(
 	readFileSync(resolve(migrationsFolder, "meta/_journal.json"), "utf8"),
 ) as { entries: { tag: string }[] };
 const taskMigrationIndex = journal.entries.findIndex(
-	(entry) => entry.tag === "0023_durable_task_api",
+	(entry) => entry.tag === "0025_durable_task_api",
 );
 const migrations = readMigrationFiles({ migrationsFolder });
 const configuration = agentConfigurationConformanceRecordV1;

@@ -533,6 +533,11 @@ describe("contract compatibility command", () => {
 			"/api/v1/agents/{agentId}/wecom-setup/{sessionId}",
 			"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/credentials",
 			"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/cancel",
+			"/api/v1/agents/{agentId}/wecom-app",
+			"/api/v1/agents/{agentId}/wecom-app-setup",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel",
 		] as const;
 		const previous = structuredClone(current);
 		for (const path of paths) delete previous.paths[path];

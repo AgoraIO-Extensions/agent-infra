@@ -1794,7 +1794,7 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 				await readFile(join(migrationsFolder, "meta/_journal.json"), "utf8"),
 			) as { entries: { tag: string }[] };
 			const taskMigrationIndex = journal.entries.findIndex(
-				(entry) => entry.tag === "0023_durable_task_api",
+				(entry) => entry.tag === "0025_durable_task_api",
 			);
 			if (taskMigrationIndex < 1)
 				throw new Error("TASK_NATIVE_UPGRADE_CHECKPOINT_REQUIRED");

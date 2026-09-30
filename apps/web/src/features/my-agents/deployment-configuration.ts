@@ -19,6 +19,15 @@ export type DeploymentConfigurationState =
 			retryable: boolean;
 	  };
 
+export function isRetryableDeploymentConfigurationError(
+	error: unknown,
+): boolean {
+	return (
+		error instanceof Error &&
+		(!("retryable" in error) || error.retryable === true)
+	);
+}
+
 function unavailable(error: { retryable?: boolean } | undefined) {
 	return {
 		kind: "unavailable" as const,
@@ -37,6 +46,25 @@ export const unavailableDeploymentConfiguration: DeploymentConfigurationProjecti
 		status: "unavailable",
 		templates: [],
 	};
+
+export function projectDeploymentConfiguration(
+	state: DeploymentConfigurationState | undefined,
+	error: unknown,
+	isError: boolean,
+) {
+	return {
+		configuration:
+			!isError && state?.kind === "ready"
+				? state.configuration
+				: unavailableDeploymentConfiguration,
+		retryable: isError
+			? isRetryableDeploymentConfigurationError(error)
+			: state?.kind === "ready"
+				? state.configuration.status !== "unavailable" &&
+					state.configuration.modelCatalog.status !== "unavailable"
+				: state?.kind === "unavailable" && state.retryable,
+	};
+}
 
 export async function loadDeploymentConfiguration(
 	client?: Client,
