@@ -134,6 +134,36 @@ describe("Connection 控制台 Session", () => {
 		).toBeTruthy();
 	});
 
+	it("清除全部可以处理超过二十批通知", async () => {
+		const initial = await mocks.listConnectionNotifications();
+		const notice = initial.items[0];
+		if (!notice) throw new Error("Notification fixture is missing");
+		const pages = Array.from({ length: 21 }, (_, index) => [
+			{ ...notice, id: `batch-${index}` },
+		]);
+		for (const items of [pages[0], ...pages, [], []])
+			mocks.listConnectionNotifications.mockResolvedValueOnce({
+				...initial,
+				items: items ?? [],
+			});
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		render(
+			<QueryClientProvider client={client}>
+				<ConsoleShell>内容</ConsoleShell>
+			</QueryClientProvider>,
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /通知与待办 1 项/ }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "清除全部" }));
+		await waitFor(() =>
+			expect(mocks.archiveApprovalNotifications).toHaveBeenCalledTimes(21),
+		);
+		expect(await screen.findByText("暂无通知")).toBeTruthy();
+	});
+
 	it("批量归档失败时刷新状态并展示错误", async () => {
 		mocks.archiveApprovalNotifications.mockRejectedValueOnce(
 			new Error("归档暂时失败"),

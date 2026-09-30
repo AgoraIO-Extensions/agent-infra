@@ -51,14 +51,17 @@ export function ConsoleShell(props: { children: ReactNode }) {
 	});
 	const clearNotifications = useMutation({
 		mutationFn: async () => {
-			for (let batch = 0; batch < 20; batch++) {
+			let previousFirstId: string | undefined;
+			for (;;) {
 				const current = await connectionApi.listConnectionNotifications();
 				if (!current.items.length) return;
+				if (current.items[0]?.id === previousFirstId)
+					throw new Error("通知列表未更新，请稍后重试");
+				previousFirstId = current.items[0]?.id;
 				await connectionApi.archiveApprovalNotifications(
 					current.items.map((item) => item.id),
 				);
 			}
-			throw new Error("已清除部分通知，请再次清除剩余通知");
 		},
 		onSettled: () =>
 			queryClient.invalidateQueries({
