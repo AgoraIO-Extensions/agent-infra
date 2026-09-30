@@ -9,16 +9,20 @@ import {
 	FileRuntimeStore,
 	RuntimeHost,
 } from "@agent-infra/agent-runtime";
-import { runtimeOperationDigestInputV4 } from "@agent-infra/contracts/runtime";
-import type {
-	AgentConfigurationRecordV2,
-	AgentManagementStateV1,
-	ConversationDispatchClaimV1,
-	ConversationDispatchStorePortV1,
-	CurrentTaskUserV1,
-	TaskAuthorizationBoundaryV1,
-	TaskRuntimeAuthorizationRecordV1,
-	WorkloadReconciliationStateV1,
+import {
+	RuntimeOperationResponseV4Schema,
+	runtimeOperationDigestInputV4,
+} from "@agent-infra/contracts/runtime";
+import {
+	type AgentConfigurationRecordV2,
+	type AgentManagementStateV1,
+	type ConversationDispatchClaimV1,
+	type ConversationDispatchStorePortV1,
+	type CurrentTaskUserV1,
+	createConversationDispatchUseCaseV1 as createPublishedConversationDispatchUseCaseV1,
+	type TaskAuthorizationBoundaryV1,
+	type TaskRuntimeAuthorizationRecordV1,
+	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import {
 	migratePlatformDatabase,
@@ -434,6 +438,211 @@ function harness(
 }
 
 describe("Trusted conversation Runtime adapter", () => {
+	it.each([
+		"event response lost",
+		"status not delivered",
+		"ACK response lost",
+	] as const)(
+		"reaches original V4 journal after lost submit/status with %s through actual Host",
+		async (loss) => {
+			const h = harness(1, undefined, true);
+			const directory = await mkdtemp(join(tmpdir(), "original-control-loss-"));
+			const driver = await FakeRuntimeDriver.open(
+				join(directory, "driver.json"),
+				[{ schemaVersion: 1, modelOptionId: "option", reasoningLevel: "high" }],
+			);
+			const hostStore = await FileRuntimeStore.open(
+				join(directory, "host.json"),
+			);
+			const host = await RuntimeHost.open({
+				driver,
+				store: hostStore,
+				grantValidation: { expectedIssuer: "unused" },
+				grantValidationV2: {
+					expectedIssuer: "platform",
+					expectedWorkerId: "transport",
+					now: () => now,
+				},
+				validateGrantV4: createRuntimeExecutionGrantValidatorV4(
+					new Map([["signing", keys.publicKey]]),
+					{
+						expectedIssuer: "platform",
+						expectedWorkerId: "transport",
+						now: () => now,
+					},
+				),
+			});
+			const app = createRuntimeHostApp({
+				host,
+				runtimeWorkerId: "transport",
+				serviceToken: "synthetic-transport-proof",
+				verifyGrant: () => {
+					throw new Error("V1 disabled");
+				},
+				verifyGrantV2: verify,
+			});
+			Object.assign(h.claim, { hostSessionRef: null });
+			Object.assign(h.state, { hostSessionRef: null });
+			const keyScope = await h.executionKeys.readAcceptedExecution();
+			h.executionKeys.readAcceptedExecution.mockImplementation(async () => ({
+				...keyScope,
+				scope: { ...keyScope.scope, hostSessionRef: null },
+				trustedHostSessionRef: h.state.hostSessionRef,
+			}));
+			let trueRef: string | undefined;
+			let owned = true;
+			let commits = 0;
+			h.fetcher.mockImplementation(async (url, init) => {
+				const path = String(url);
+				if (path.endsWith("/status") && loss === "status not delivered")
+					throw new Error("Status never reached Host");
+				const response = await app.request(path, init);
+				if (path.endsWith("/turns")) {
+					trueRef = RuntimeOperationResponseV4Schema.parse(
+						await response.clone().json(),
+					).hostSessionRef;
+					Object.assign(h.state, {
+						originalOperationDigest: requestDigest(
+							runtimeOperationDigestInputV4(
+								JSON.parse(String(init?.body)).businessRequest,
+							),
+						),
+					});
+					throw new Error("Accepted submit response lost");
+				}
+				if (
+					path.endsWith("/status") ||
+					(path.endsWith("/events/read") && loss === "event response lost") ||
+					(path.endsWith("/events/ack") && loss === "ACK response lost")
+				)
+					throw new Error("Control response lost");
+				return response;
+			});
+			const dispatchStore: ConversationDispatchStorePortV1 = {
+				async claim() {
+					owned = true;
+					Object.assign(h.claim, {
+						deliveryFence: h.claim.deliveryFence + 1,
+						executionDeliveryFence: h.claim.deliveryFence + 1,
+					});
+					return {
+						outcome: "claimed",
+						claim: {
+							...h.claim,
+							hostSessionRef: h.state.hostSessionRef,
+							runtimeCursor: h.state.runtimeCursor,
+						},
+					};
+				},
+				async renew() {
+					return owned;
+				},
+				async prepareRuntimeDispatch() {
+					return owned;
+				},
+				async terminalizeStoppedUnsentTurn() {
+					throw new Error("Already uncertain");
+				},
+				async cancelUnaccepted() {
+					throw new Error("Accepted original must remain occupied");
+				},
+				async recordRuntimeResponse(input) {
+					if (
+						!owned ||
+						(h.state.hostSessionRef !== null &&
+							h.state.hostSessionRef !== input.hostSessionRef)
+					)
+						return false;
+					Object.assign(h.state, { hostSessionRef: input.hostSessionRef });
+					return true;
+				},
+				async retry() {
+					owned = false;
+					return true;
+				},
+				async finish() {
+					throw new Error("No reliable terminal event");
+				},
+			};
+			try {
+				const reference = await h.authorize();
+				await expect(
+					h.runtime.runtimeHost.dispatch({
+						...h.request(reference),
+						hostSessionRef: undefined,
+					}),
+				).rejects.toMatchObject({ code: "RUNTIME_UNAVAILABLE" });
+				expect(trueRef).toBeTruthy();
+				Object.assign(h.claim, {
+					executionStatus: "unknown",
+					taskWaitOrder: 1,
+				});
+				Object.assign(h.state, {
+					executionStatus: "unknown",
+					taskWaitOrder: 1,
+				});
+				const useCase = createPublishedConversationDispatchUseCaseV1(
+					{
+						store: dispatchStore,
+						authorization: h.runtime.authorization,
+						runtimeHost: h.runtime.runtimeHost,
+						events: {
+							async persist(command) {
+								commits += 1;
+								expect(command).not.toHaveProperty("transition");
+								Object.assign(h.state, {
+									runtimeCursor: command.runtimeCursor,
+								});
+								return {
+									outcome: "accepted",
+									event: {
+										schemaVersion: 1,
+										eventId: command.adapterEventKey,
+										conversationId: command.conversationId,
+										executionId: command.executionId,
+										sequence: 1,
+										conversationCursor: 1,
+										occurredAt: command.occurredAt,
+										event: command.event,
+									},
+								};
+							},
+						},
+					},
+					{ retryDelayMs: 0 },
+				);
+				const command = {
+					schemaVersion: 1 as const,
+					itemId: "item",
+					workerId: "instance",
+				};
+				await expect(useCase.dispatch(command)).resolves.toMatchObject({
+					outcome: "unknown",
+				});
+				expect(h.state.hostSessionRef).toBe(trueRef);
+				await expect(useCase.dispatch(command)).resolves.toMatchObject({
+					outcome: "retry",
+				});
+				const paths = h.fetcher.mock.calls.map(([url]) => String(url));
+				expect(paths.filter((path) => path.endsWith("/turns"))).toHaveLength(1);
+				expect(paths.some((path) => path.endsWith("/original-binding"))).toBe(
+					true,
+				);
+				expect(paths).toContain(
+					"https://runtime.test/internal/runtime/v4/events/read",
+				);
+				expect(commits).toBe(loss === "ACK response lost" ? 1 : 0);
+				expect(h.state.executionStatus).toBe("unknown");
+				expect(await driver.sideEffectCount()).toBe(1);
+				if (loss === "ACK response lost")
+					expect(h.state.runtimeCursor).not.toBeNull();
+			} finally {
+				h.runtime.close();
+				await host.close();
+				await rm(directory, { recursive: true, force: true });
+			}
+		},
+	);
 	it("continues original V4 event read and ACK after a real Host recovery control latch", async () => {
 		const h = harness(1, undefined, true);
 		const directory = await mkdtemp(join(tmpdir(), "keyless-host-control-"));
@@ -805,6 +1014,40 @@ describe("Trusted conversation Runtime adapter", () => {
 			h.runtime.close();
 		}
 	});
+	it.each(["unknown", "processing"] as const)(
+		"keeps keyed %s recovery control on original status without business submit",
+		async (executionStatus) => {
+			const h = harness(1, undefined, true);
+			Object.assign(h.claim, { executionStatus });
+			Object.assign(h.state, { executionStatus });
+			h.setRecord({
+				...h.record()!,
+				recoveryControlRecordId: "control-recovery",
+			});
+			try {
+				const reference = await h.authorize();
+				await expect(
+					h.runtime.runtimeHost.recoverOriginalStatus?.({
+						...h.events(reference),
+						schemaVersion: 2,
+					}),
+				).resolves.toMatchObject({ outcome: "found", hostSessionRef: "host" });
+				expect(h.fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+					"https://runtime.test/internal/runtime/v3/status",
+				]);
+				expect(h.sent().body).toMatchObject({
+					hostSessionRef: "host",
+					originalOperationDigest: h.state.originalOperationDigest,
+				});
+				expect(h.sent().body).not.toHaveProperty("input");
+				expect(h.sent().body).not.toHaveProperty("selection");
+				expect(h.executionKeys.readCiphertext).not.toHaveBeenCalled();
+				expect(h.relayKeyDecryptor.decrypt).not.toHaveBeenCalled();
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
 	it("recovers a keyed Execution through the idempotent V4 submit", async () => {
 		const h = harness(1, undefined, true);
 		Object.assign(h.claim, { executionStatus: "unknown" });

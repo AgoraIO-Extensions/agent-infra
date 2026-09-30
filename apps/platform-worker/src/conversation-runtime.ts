@@ -676,58 +676,12 @@ export function createConversationRuntimeV2(
 		) {
 			return readRecoveredStatus(prepared, active);
 		}
-		let businessAuthorizationRecordId: string | undefined;
-		let businessTarget = target;
-		let businessRoute = route;
-		if (
-			hasKeyedV4Selection(context.claim) &&
-			authority.purpose === "business"
-		) {
-			businessAuthorizationRecordId = authority.authorizationRecordId;
-		} else if (
-			context.kind === "business" &&
-			hasKeyedV4Selection(context.claim) &&
-			authority.purpose === "control" &&
-			authority.reason === "recovery" &&
-			(state.executionStatus === "unknown" ||
-				state.executionStatus === "processing") &&
-			!state.stopPending
-		) {
-			const business = await current(
-				context,
-				await stateFor(context, active),
-				"turn.submit",
-				active,
-			);
-			if (business.authority.purpose === "business") {
-				businessTarget = await bounded(
-					options.resolveRuntimeHost({
-						agentId: context.claim.agentId,
-						signal: active,
-						workload: business.record.workload,
-						purpose: "business",
-						command: "turn.submit",
-					}),
-					active,
-				);
-				if (businessTarget.workerId !== options.signing.workerId)
-					denied("RUNTIME_WORKER_BINDING_INVALID");
-				const latest = await current(
-					context,
-					await stateFor(context, active),
-					"turn.submit",
-					active,
-				);
-				if (
-					latest.authority.purpose !== "business" ||
-					latest.authority.authorizationRecordId !==
-						business.authority.authorizationRecordId
-				)
-					denied();
-				businessAuthorizationRecordId = latest.authority.authorizationRecordId;
-				businessRoute = latest.record;
-			}
-		}
+		// Recovery control only queries the original binding; it cannot reopen
+		// business authority or redeliver the pinned Key through turn.submit.
+		const businessAuthorizationRecordId =
+			hasKeyedV4Selection(context.claim) && authority.purpose === "business"
+				? authority.authorizationRecordId
+				: undefined;
 		if (
 			businessAuthorizationRecordId &&
 			hasKeyedV4Selection(context.claim) &&
@@ -753,10 +707,9 @@ export function createConversationRuntimeV2(
 				)
 					denied();
 				if (
-					latest.record.configurationRevision !==
-						businessRoute.configurationRevision ||
-					!isDeepStrictEqual(latest.record.agent, businessRoute.agent) ||
-					!isDeepStrictEqual(latest.record.workload, businessRoute.workload)
+					latest.record.configurationRevision !== route.configurationRevision ||
+					!isDeepStrictEqual(latest.record.agent, route.agent) ||
+					!isDeepStrictEqual(latest.record.workload, route.workload)
 				)
 					unavailable("RUNTIME_ROUTE_STALE");
 			};
@@ -789,7 +742,7 @@ export function createConversationRuntimeV2(
 			let response: Awaited<ReturnType<typeof submitKeyedV4>>;
 			try {
 				response = await submitKeyedV4({
-					target: businessTarget,
+					target,
 					unsigned,
 					authorizationRecordId: businessAuthorizationRecordId,
 					assertCurrentAuthorization,

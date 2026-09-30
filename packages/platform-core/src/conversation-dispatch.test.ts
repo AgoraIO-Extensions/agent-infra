@@ -206,8 +206,12 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		};
 	}
 
-	async renew() {
-		return this.renewable && this.outboxStatus === "processing";
+	async renew(input?: { claim: ConversationDispatchClaimV1 }) {
+		return (
+			this.renewable &&
+			this.outboxStatus === "processing" &&
+			(!input || this.#owned(input.claim))
+		);
 	}
 
 	async terminalizeStoppedUnsentTurn(input: {
@@ -474,6 +478,268 @@ function dispatch(
 }
 
 describe("Conversation Worker dispatch", () => {
+	it.each(["heartbeat", "expired ACK"] as const)(
+		"does not renew business during an unconfirmed original Web journal drain with %s",
+		async (cause) => {
+			vi.useFakeTimers();
+			try {
+				const renew = vi.fn(async () => {});
+				const f = setup({
+					store: new MemoryDispatchStore(
+						claim({
+							executionStatus: "unknown",
+							hostSessionRef: "host-original",
+							runtimeCursor: cause === "expired ACK" ? "cursor-prior" : null,
+						}),
+					),
+					runtimeHost: {
+						async dispatch() {
+							throw new Error("No business dispatch");
+						},
+						async recoverStatus() {
+							throw new Error("No legacy recovery");
+						},
+						async recoverOriginalStatus() {
+							throw new ConversationRuntimeHostError(
+								"RUNTIME_UNAVAILABLE",
+								true,
+							);
+						},
+						renewAuthorization: renew,
+						...(cause === "expired ACK"
+							? {
+									async acknowledge() {
+										throw new ConversationRuntimeHostError(
+											"RUNTIME_GRANT_INVALID",
+											false,
+										);
+									},
+								}
+							: {}),
+						async *events() {
+							await vi.advanceTimersByTimeAsync(1100);
+							yield runtimeEvent(1);
+						},
+					},
+				});
+				expect(await dispatch(f.useCase)).toMatchObject({
+					outcome: cause === "expired ACK" ? "retry" : "accepted",
+				});
+				expect(renew).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+	it.each(
+		(["api", "web", "wecom"] as const).flatMap((channel) =>
+			(["running", "completed", "read lost", "read denied"] as const).map(
+				(evidence) => ({ channel, evidence }),
+			),
+		),
+	)(
+		"drains original $channel $evidence journal after status response loss without claiming running",
+		async ({ channel, evidence }) => {
+			const store = new MemoryDispatchStore(
+				claim({
+					executionStatus: "unknown",
+					...(channel === "api" ? { taskWaitOrder: 1 } : {}),
+					channelId: channel,
+					hostSessionRef: "host-original",
+				}),
+			);
+			const calls: string[] = [];
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				async dispatch() {
+					throw new Error("Business dispatch forbidden");
+				},
+				async recoverStatus() {
+					throw new Error("Legacy recovery forbidden");
+				},
+				async recoverOriginalStatus(request) {
+					calls.push("status");
+					expect(request.hostSessionRef).toBe("host-original");
+					throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
+				},
+				async renewAuthorization() {
+					throw new Error("Unknown cannot renew business");
+				},
+				async *events(request) {
+					calls.push("events");
+					expect(request).toMatchObject({
+						hostSessionRef: "host-original",
+						executionId: "execution-1",
+						turnId: "turn-1",
+						deliveryFence: store.current.executionDeliveryFence,
+					});
+					if (evidence === "read denied")
+						throw new ConversationRuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							false,
+						);
+					if (evidence === "read lost")
+						throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
+					yield runtimeEvent(1, evidence);
+				},
+				async acknowledge(request) {
+					calls.push("ack");
+					expect(store.current.runtimeCursor).toBe(request.confirmedCursor);
+				},
+			};
+			const f = setup({
+				store,
+				runtimeHost,
+				authorization: authorization(),
+			});
+			expect(await dispatch(f.useCase)).toMatchObject({
+				outcome: evidence === "completed" ? "accepted" : "retry",
+			});
+			expect(calls).toEqual(
+				evidence.startsWith("read ")
+					? ["status", "events"]
+					: ["status", "events", "ack"],
+			);
+			expect(store.current.executionStatus).toBe(
+				evidence === "completed" ? "completed" : "unknown",
+			);
+			expect(store.current.hostSessionRef).toBe("host-original");
+			expect(f.events.persisted).toHaveLength(
+				evidence.startsWith("read ") ? 0 : 1,
+			);
+			if (evidence === "running")
+				expect(f.events.persisted[0]).not.toHaveProperty("transition");
+		},
+	);
+	it.each([
+		"missing ref",
+		"lost lease",
+		"lost fence",
+		"changed lease",
+		"grant",
+		"fence",
+		"binding",
+		"stop",
+	] as const)(
+		"does not continue the journal after status loss with %s",
+		async (boundary) => {
+			const store = new MemoryDispatchStore(
+				claim({
+					executionStatus: "unknown",
+					taskWaitOrder: 1,
+					hostSessionRef: boundary === "missing ref" ? null : "host-original",
+					...(boundary === "stop"
+						? {
+								operation: "conversation.turn.stop.v1" as const,
+								messageId: null,
+								stopRequestId: "stop-request",
+								input: null,
+								stopPending: true,
+							}
+						: {}),
+				}),
+			);
+			const read = vi.fn();
+			const f = setup({
+				store,
+				authorization: authorization({ controlOnly: true }),
+				runtimeHost: {
+					async dispatch() {
+						throw new Error("No new operation");
+					},
+					async recoverStatus() {
+						throw new Error("No legacy recovery");
+					},
+					async recoverOriginalStatus() {
+						if (boundary === "lost lease") store.renewable = false;
+						if (boundary === "lost fence")
+							store.current = {
+								...store.current,
+								deliveryFence: store.current.deliveryFence + 1,
+							};
+						if (boundary === "changed lease")
+							store.current = { ...store.current, leaseOwner: "successor" };
+						throw new ConversationRuntimeHostError(
+							boundary === "grant"
+								? "RUNTIME_GRANT_INVALID"
+								: boundary === "fence"
+									? "RUNTIME_FENCE_STALE"
+									: boundary === "binding"
+										? "RUNTIME_REQUEST_INVALID"
+										: "RUNTIME_UNAVAILABLE",
+							!["grant", "fence", "binding"].includes(boundary),
+						);
+					},
+					async *events() {
+						read();
+						yield runtimeEvent(1);
+					},
+				},
+			});
+			await dispatch(f.useCase);
+			expect(read).not.toHaveBeenCalled();
+			expect(f.events.persisted).toHaveLength(0);
+			expect(store.current.executionStatus).toBe("unknown");
+		},
+	);
+	it("retries a committed original cursor ACK after lost status and ACK responses", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "unknown",
+				taskWaitOrder: 1,
+				hostSessionRef: "host-original",
+			}),
+		);
+		const calls: string[] = [];
+		let loseAck = true;
+		const f = setup({
+			store,
+			authorization: authorization({ controlOnly: true }),
+			runtimeHost: {
+				async dispatch() {
+					throw new Error("No new business effect");
+				},
+				async recoverStatus() {
+					throw new Error("No legacy recovery");
+				},
+				async recoverOriginalStatus() {
+					throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
+				},
+				async *events(request) {
+					calls.push(`read:${request.afterCursor ?? "start"}`);
+					yield runtimeEvent(
+						request.afterCursor ? 2 : 1,
+						request.afterCursor ? "completed" : "running",
+					);
+				},
+				async acknowledge(request) {
+					expect(store.current.runtimeCursor).toBe(request.confirmedCursor);
+					calls.push(`ack:${request.confirmedCursor}`);
+					if (loseAck) {
+						loseAck = false;
+						throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
+					}
+				},
+			},
+		});
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "retry" });
+		expect(store.current).toMatchObject({
+			executionStatus: "unknown",
+			runtimeCursor: "cursor-1",
+		});
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "accepted" });
+		expect(calls).toEqual([
+			"read:start",
+			"ack:cursor-1",
+			"ack:cursor-1",
+			"read:cursor-1",
+			"ack:cursor-2",
+		]);
+		expect(f.events.persisted.map((event) => event.adapterEventKey)).toEqual([
+			"event-1",
+			"event-2",
+		]);
+		expect(store.current.executionStatus).toBe("completed");
+	});
 	it.each([
 		["unknown", false],
 		["unknown", true],

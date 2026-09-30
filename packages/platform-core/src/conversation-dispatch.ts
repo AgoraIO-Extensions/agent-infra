@@ -137,6 +137,9 @@ export function createConversationDispatchUseCaseV1(
 		const recoveringApiTask =
 			claim.taskWaitOrder !== undefined &&
 			["processing", "unknown"].includes(claim.executionStatus);
+		const unconfirmedRecovery =
+			recoveringApiTask ||
+			(recoveredOriginalTurn && responseStatus === "unknown");
 		const runningConfirmed = responseStatus === "running";
 		let businessResumed = false;
 		const eventRequest: ConversationRuntimeEventRequestV1 = {
@@ -165,7 +168,7 @@ export function createConversationDispatchUseCaseV1(
 				? async (signal) => {
 						if (
 							!terminalCommitPossible &&
-							(!recoveringApiTask || businessResumed)
+							(!unconfirmedRecovery || businessResumed)
 						)
 							await dependencies.runtimeHost.renewAuthorization?.(
 								eventRequest,
@@ -222,6 +225,7 @@ export function createConversationDispatchUseCaseV1(
 				} catch (error) {
 					if (
 						!recoveredOriginalTurn ||
+						responseStatus === "unknown" ||
 						terminalCommitPossible ||
 						claim.metadataRecovery ||
 						authority.controlOnly ||
@@ -251,7 +255,7 @@ export function createConversationDispatchUseCaseV1(
 				// Replayed running frames cannot override the latest unknown lookup.
 				// Keep the real event while retaining the current occupied projection.
 				const transition =
-					recoveringApiTask &&
+					unconfirmedRecovery &&
 					responseStatus === "unknown" &&
 					event.type === "execution.status" &&
 					event.status === "processing"
@@ -326,7 +330,7 @@ export function createConversationDispatchUseCaseV1(
 			const current = await eventHeartbeat.stop();
 			if (!current) return retryInterruptedDrain();
 			const failure = runtimeFailure(error);
-			if (recoveringApiTask && !businessResumed)
+			if (unconfirmedRecovery && !businessResumed)
 				return retry(
 					dependencies.store,
 					claim,
@@ -1170,6 +1174,35 @@ export function createConversationDispatchUseCaseV1(
 					}
 				}
 				const failure = runtimeFailure(error);
+				if (
+					recoveringOriginalTurn &&
+					claim.hostSessionRef &&
+					["unknown", "processing"].includes(claim.executionStatus) &&
+					error instanceof ConversationRuntimeHostError &&
+					error.retryable &&
+					error.code === "RUNTIME_UNAVAILABLE"
+				) {
+					try {
+						if (!(await dependencies.store.renew({ claim, leaseDurationMs })))
+							return { schemaVersion: 1, outcome: "stale" };
+					} catch {
+						return {
+							schemaVersion: 1,
+							outcome: "retry",
+							retryScheduled: false,
+						};
+					}
+					// A lost status response proves no current running/terminal state.
+					// Independently authorized original journal reads can still recover
+					// durable facts, then cursor/ACK, under this renewed claim and fence.
+					return persistRuntimeEvents(
+						claim,
+						authority,
+						claim.hostSessionRef,
+						"unknown",
+						true,
+					);
+				}
 				// A rejected lookup cannot prove the original Turn had no side effects.
 				if ((recoveringOriginalTurn || recoveringStop) && !failure.retryable)
 					return retry(
