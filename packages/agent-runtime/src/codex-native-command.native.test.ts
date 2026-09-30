@@ -33,7 +33,7 @@ class ObservedNativeDriver extends CodexRuntimeDriver {
 				modelOptions: [
 					{
 						modelOptionId: "primary",
-						model: "gpt-5.3-codex",
+						model: "gpt-5.6-sol",
 						reasoningLevels: ["high"],
 						endpoint,
 						credential: "synthetic-native-read-credential",
