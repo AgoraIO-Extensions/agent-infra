@@ -206,11 +206,14 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 					expect(await readFile(path)).toEqual(driverBefore);
 					expect(await readFile(rollout)).toEqual(rolloutBefore);
 				} finally {
-					await driver?.close();
-					httpChannel.unsubscribe(observer);
-					await new Promise<void>((resolve, reject) =>
-						provider.close((error) => (error ? reject(error) : resolve())),
-					);
+					try {
+						await driver?.close();
+					} finally {
+						httpChannel.unsubscribe(observer);
+						await new Promise<void>((resolve, reject) =>
+							provider.close((error) => (error ? reject(error) : resolve())),
+						);
+					}
 				}
 			} finally {
 				await rm(directory, { recursive: true, force: true });
