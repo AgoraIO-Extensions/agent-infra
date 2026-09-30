@@ -278,6 +278,11 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 			!operation.turnId ||
 			!operation.scope ||
 			!operation.requestDigest ||
+			(operation.kind === "supplement" &&
+				!isDeepStrictEqual(
+					session.operations[operation.executionId]?.keyScopeV4,
+					operation.keyScopeV4,
+				)) ||
 			(operation.keyScopeV4 !== undefined &&
 				(!RuntimePinnedExecutionKeyScopeV4Schema.safeParse(operation.keyScopeV4)
 					.success ||

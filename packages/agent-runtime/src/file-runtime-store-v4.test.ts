@@ -111,6 +111,95 @@ async function fixture() {
 	};
 }
 
+async function supplementFixture(v4 = true) {
+	const f = await fixture();
+	const request = input(v4);
+	const prepared = await f.store.prepareOperation(request);
+	const hostSessionRef = prepared.session.hostSessionRef;
+	await f.store.resolveOperation(
+		hostSessionRef,
+		request.operationId,
+		{ outcome: "accepted", status: "running" },
+		"native-session-1",
+	);
+	await f.store.prepareOperation({
+		...request,
+		requestedHostSessionRef: hostSessionRef,
+		operationId: "message-1",
+		kind: "supplement",
+		scope: "message:message-1",
+		requestDigest: requestDigest({ messageId: "message-1" }),
+		authorization: {
+			...request.authorization,
+			operation: {
+				...request.authorization.operation,
+				kind: "message",
+				id: "message-1",
+			},
+			allowedCommands: ["turn.supplement"],
+		},
+		command: () => ({
+			schemaVersion: 1,
+			kind: "supplement",
+			operationId: "message-1",
+			agentId: request.binding.agentId,
+			conversationId: request.binding.conversationId,
+			executionId: request.binding.executionId,
+			turnId: request.binding.turnId,
+			sessionGeneration: request.binding.sessionGeneration,
+			nativeSessionRef: "native-session-1",
+			input: { text: "synthetic-instruction", attachments: [] },
+		}),
+	});
+	await f.store.resolveOperation(hostSessionRef, "message-1", {
+		outcome: "accepted",
+		status: "running",
+	});
+	return Object.assign(f, { request, hostSessionRef });
+}
+
+it.each([false, true])(
+	"reopens a matching supplement journal without changing bytes for original V4=%s",
+	async (v4) => {
+		const f = await supplementFixture(v4);
+		const original = f.store.readOriginalExecutionKeyScopeV4(f.request.binding);
+		const bytes = await readFile(f.path, "utf8");
+		await f.reopen();
+		expect(await readFile(f.path, "utf8")).toBe(bytes);
+		expect(
+			f.store.readOriginalExecutionKeyScopeV4(f.request.binding),
+		).toStrictEqual(original);
+	},
+);
+
+it.each(["key-version", "removed-scope", "added-scope"] as const)(
+	"quarantines a persisted supplement with %s instead of repairing its original scope",
+	async (corruption) => {
+		const f = await supplementFixture(corruption !== "added-scope");
+		await f.store.close();
+		const journal = JSON.parse(await readFile(f.path, "utf8"));
+		const session = journal.sessions[f.hostSessionRef];
+		const supplement = session.operations["message-1"];
+		if (corruption === "key-version")
+			supplement.keyScopeV4.keyBinding.version = 2;
+		else if (corruption === "removed-scope") delete supplement.keyScopeV4;
+		else supplement.keyScopeV4 = input().keyScopeV4;
+		if (supplement.keyScopeV4)
+			RuntimePinnedExecutionKeyScopeV4Schema.parse(supplement.keyScopeV4);
+		await writeFile(f.path, `${JSON.stringify(journal)}\n`);
+		await f.reopen();
+		expect(() =>
+			f.store.readOriginalExecutionKeyScopeV4(f.request.binding),
+		).toThrow("Runtime session state is quarantined");
+		const quarantined = JSON.parse(await readFile(f.path, "utf8"));
+		expect(quarantined.sessions).toEqual({});
+		expect(quarantined.sessionBindings).toEqual(journal.sessionBindings);
+		expect(quarantined.quarantinedSessions).toEqual({
+			[f.hostSessionRef]: session,
+		});
+	},
+);
+
 it.each(["running", "unknown", "completed", "failed", "cancelled"] as const)(
 	"reads the same original V4 scope and %s receipt after reopening real durable storage",
 	async (status) => {
