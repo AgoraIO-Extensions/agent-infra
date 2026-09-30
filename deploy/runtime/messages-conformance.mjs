@@ -316,10 +316,15 @@ async function openRuntime() {
  host = await RuntimeHost.open({ driver, store: hostStore, grantValidation: { expectedIssuer: "synthetic-platform" }, grantValidationV2: { expectedIssuer: "synthetic-platform", expectedWorkerId: "synthetic-worker" }, allowLegacyBusiness: false, validateGrantV4: validateV4Grant });
 }
 async function closeRuntime() {
- const currentHost = host, currentDriver = driver;
+ const currentHost = host, currentDriver = driver, currentStore = hostStore;
  host = undefined;
  driver = undefined;
- try { await currentHost?.close(); } finally { await currentDriver?.close(); }
+ hostStore = undefined;
+ try { await currentHost?.close(); }
+ finally {
+  try { await currentDriver?.close(); }
+  finally { await currentStore?.close(); }
+ }
 }
 async function piReadEvidence(user, other, negative) {
  const directory = join(path, user.ref), workspace = join(directory, "workspace");
@@ -440,7 +445,10 @@ async function turn(user, text) {
   const signedLegacyRequest = await signedV3Request(legacyRequest, "turn.submit");
   let rejected = false;
   try { await host.submitTurnV3(signedLegacyRequest, verifyLegacyGrant(signedLegacyRequest.grant)); }
-  catch { rejected = true; }
+  catch (error) {
+   if (error?.code !== "RUNTIME_GRANT_INVALID") throw error;
+   rejected = true;
+  }
    if (!rejected) throw Error("Valid V3 legacy business request was accepted");
    report.legacyStaticKeyRejections++;
  }
@@ -448,7 +456,7 @@ async function turn(user, text) {
  const binding = { schemaVersion: 4, requestId: randomUUID(), traceId: randomUUID(), principal: { kind: "user", id: `synthetic-user-${user.id}` }, executionSource: "web", channelId: "web", agentId: "synthetic-agent", conversationId: `conversation-${user.id}`, sessionGeneration: 1, executionId, turnId: `turn-${user.id}-${user.turn}`, hostSessionRef: user.hostRef, operation: { kind: "execution", id: executionId, deliveryFence: 1, executionDeliveryFence: 1 }, keyBinding: { purpose: "personal", subjectId: `synthetic-user-${user.id}`, ciphertextRef: `synthetic-key-${user.id}`, version: 1 } };
  const submission = { ...binding, selection: { schemaVersion: 1, modelOptionId: "primary", reasoningLevel: "medium" }, input: { text, attachments: [] } };
  const request = await signedV4Request(submission, "turn.submit");
- const expectedRelayKey = `synthetic-relay-key-${user.id}-v4`;
+ const expectedRelayKey = credential;
  keyByExecution.set(executionId, expectedRelayKey);
  const transport = { businessRequest: request, privateKeyField: { schemaVersion: 1, context: { requestId: request.requestId, grantId: request.grant.token.split(".")[1], requestDigest: request.grant.token.split(".")[1].padEnd(64, "0").slice(0, 64), traceId: request.traceId, principal: request.principal, executionSource: request.executionSource, channelId: request.channelId, agentId: request.agentId, conversationId: request.conversationId, executionId: request.executionId, turnId: request.turnId, sessionGeneration: request.sessionGeneration, hostSessionRef: request.hostSessionRef, operation: request.operation, keyBinding: request.keyBinding }, keyDelivery: { relayKey: expectedRelayKey } } };
  const validated = await validateV4Grant(request);
