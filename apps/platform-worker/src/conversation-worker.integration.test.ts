@@ -5,7 +5,7 @@ import {
 } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
-import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -334,10 +334,14 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		moduleDirectory = await mkdtemp(
 			join(resolve(import.meta.dirname, "../dist"), "cli-test-"),
 		);
-		await copyFile(
-			resolve(import.meta.dirname, "../dist/deployment.mjs"),
-			join(moduleDirectory, "deployment.mjs"),
-		);
+		const packagedDirectory = resolve(import.meta.dirname, "../dist");
+		for (const entry of await readdir(packagedDirectory)) {
+			if (entry.endsWith(".mjs"))
+				await copyFile(
+					join(packagedDirectory, entry),
+					join(moduleDirectory, entry),
+				);
+		}
 		const configSource = `import { readFile } from 'node:fs/promises'; import { createPrivateKey } from 'node:crypto';
 export const signing = { ...${JSON.stringify(signing)}, privateKey: createPrivateKey(await readFile(${JSON.stringify(join(directory, "signing.pem"))})) };
 export const serviceToken = 'synthetic-runtime-token';

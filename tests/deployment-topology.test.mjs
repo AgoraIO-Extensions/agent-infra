@@ -146,6 +146,12 @@ test("kind values render the reviewable Kubernetes workload-plane topology", () 
 });
 
 test("production Worker requires a private module and runtime authorization mounts", () => {
+	const topologyWecom = render("--set", "platformWorker.wecomEnabled=true");
+	assert.notEqual(topologyWecom.status, 0);
+	assert.match(
+		topologyWecom.stderr,
+		/platformWorker.wecomEnabled requires production Worker deployment/,
+	);
 	const production = [
 		"--set",
 		"workloadTopology.enabled=false",
@@ -158,6 +164,8 @@ test("production Worker requires a private module and runtime authorization moun
 
 	const result = render(
 		...production,
+		"--set",
+		"platformWorker.wecomEnabled=true",
 		"--set-string",
 		"platformWorker.configurationModuleSecretRef.name=worker-module",
 		"--set-string",
@@ -184,6 +192,12 @@ test("production Worker requires a private module and runtime authorization moun
 		"Deployment",
 		"topology-agent-infra-platform-worker",
 	).spec.template.spec;
+	assert.equal(
+		worker.containers[0].env.find(
+			(entry) => entry.name === "PLATFORM_WORKER_WECOM_ENABLED",
+		)?.value,
+		"true",
+	);
 	assert.equal(worker.securityContext.fsGroup, 1000);
 	assert.deepEqual(
 		worker.volumes.find((volume) => volume.name === "deployment-module")
