@@ -101,9 +101,19 @@ export function startPlatformWecomPollingWorkerV1(
 	let dispatchTimer: ReturnType<typeof setTimeout> | undefined;
 	let reconciling = Promise.resolve();
 	let dispatching = Promise.resolve();
+	const writeDiagnostic =
+		options.log ??
+		((code: string) =>
+			console.info(
+				JSON.stringify({
+					service: "platform-worker",
+					status: "dependency_unavailable",
+					code,
+				}),
+			));
 	const log = (code: string) => {
 		try {
-			(options.log ?? console.info)(code);
+			writeDiagnostic(code);
 		} catch {
 			// Observation cannot interrupt the channel loop.
 		}

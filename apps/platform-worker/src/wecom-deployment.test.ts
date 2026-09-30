@@ -73,6 +73,48 @@ it("rejects missing deployment factories without exposing imported errors", asyn
 	).rejects.toThrow("WeCom Worker deployment dependencies are unavailable");
 });
 
+it("uses structured redacted default diagnostics and keeps polling if logging fails", async () => {
+	vi.useFakeTimers();
+	const output = vi
+		.spyOn(console, "info")
+		.mockImplementationOnce(() => {
+			throw new Error("log sink unavailable");
+		})
+		.mockImplementation(() => {});
+	const worker = {
+		reconcile: vi
+			.fn()
+			.mockRejectedValueOnce(new Error("private configuration"))
+			.mockResolvedValue(undefined),
+		dispatch: vi
+			.fn()
+			.mockRejectedValueOnce(new Error("message body"))
+			.mockResolvedValue(false),
+		close: vi.fn(async () => {}),
+	};
+	const running = startPlatformWecomPollingWorkerV1(worker, { intervalMs: 100 });
+	try {
+		await vi.advanceTimersByTimeAsync(100);
+		expect(output.mock.calls.map(([line]) => JSON.parse(line))).toEqual([
+			{
+				service: "platform-worker",
+				status: "dependency_unavailable",
+				code: "WECOM_RECONCILE_UNAVAILABLE",
+			},
+			{
+				service: "platform-worker",
+				status: "dependency_unavailable",
+				code: "WECOM_DELIVERY_UNAVAILABLE",
+			},
+		]);
+		expect(worker.reconcile).toHaveBeenCalledTimes(2);
+		expect(worker.dispatch).toHaveBeenCalledTimes(2);
+	} finally {
+		await running.stop();
+		output.mockRestore();
+	}
+});
+
 it("closes resources returned by a malformed deployment factory", async () => {
 	const closed = vi.fn();
 	vi.stubGlobal("wecomDeploymentClosed", closed);
