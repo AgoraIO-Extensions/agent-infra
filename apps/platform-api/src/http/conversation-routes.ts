@@ -985,6 +985,7 @@ export function registerConversationRoutes(
 			`/api/v${version}/conversations/:conversationId/events`,
 			(context) =>
 				boundary(context, async (metadata) => {
+					const v2 = version === 2;
 					const identity = await resolveIdentity(
 						dependencies.identity,
 						context.req.raw,
@@ -1000,7 +1001,7 @@ export function registerConversationRoutes(
 							conversationId,
 						},
 						metadata.traceId,
-						"sse",
+						v2 ? "http" : "sse",
 					);
 					const initialReplay = await query(
 						() =>
@@ -1011,7 +1012,11 @@ export function registerConversationRoutes(
 							),
 						metadata.traceId,
 					);
-					if (!initialReplay) return fail("FORBIDDEN", metadata.traceId);
+					if (!initialReplay)
+						return fail(
+							v2 ? "RESOURCE_UNAVAILABLE" : "FORBIDDEN",
+							metadata.traceId,
+						);
 					if (initialReplay.outcome === "events") {
 						try {
 							initialReplay.events.forEach(eventProjection);
@@ -1020,7 +1025,6 @@ export function registerConversationRoutes(
 						}
 					}
 					const request = context.req.raw;
-					const v2 = version === 2;
 					return streamSSE(
 						context,
 						async (stream) => {

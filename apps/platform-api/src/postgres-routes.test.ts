@@ -43,6 +43,17 @@ import { createPlatformApp } from "./app.js";
 import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
 import { createPlatformProjectionReaders } from "./projection.js";
 
+const generatedClientV2 = await import(
+	new URL("../../web/src/pilot/generated-v2/client/index.ts", import.meta.url)
+		.href
+);
+const generatedSdkV2 = await import(
+	new URL("../../web/src/pilot/generated-v2/index.ts", import.meta.url).href
+);
+const { createClient: createClientV2 } = generatedClientV2;
+const { getConversationV2, getExecutionDetailV2, streamConversationEventsV2 } =
+	generatedSdkV2;
+
 const source = {
 	kind: "custom" as const,
 	imageDigest: `sha256:${"a".repeat(64)}`,
@@ -751,13 +762,19 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		} finally {
 			await eventTransaction.close();
 		}
-		const v2Detail = await app.request(
-			`/api/v2/conversations/${conversation.conversationId}`,
-			{ headers: requestHeaders("owner") },
-		);
-		expect(v2Detail.status).toBe(200);
+		const clientV2 = createClientV2({
+			baseUrl: "https://platform.example.test",
+			fetch: async (input: string | URL | Request, init?: RequestInit) =>
+				app.fetch(input instanceof Request ? input : new Request(input, init)),
+		});
+		const v2Detail = await getConversationV2({
+			client: clientV2,
+			path: { conversationId: conversation.conversationId },
+			headers: requestHeaders("owner"),
+		});
+		expect(v2Detail.response.status).toBe(200);
 		const v2Conversation = ConversationDetailProjectionV2Schema.parse(
-			await v2Detail.json(),
+			v2Detail.data,
 		);
 		expect(v2Conversation.messages).toEqual([
 			expect.objectContaining({ role: "user", text: "Run it" }),
@@ -770,36 +787,97 @@ describe("PostgreSQL Platform HTTP integration", () => {
 			schemaVersion: 1,
 			type: "text.delta",
 		});
-		const v2Execution = await app.request(
-			`/api/v2/conversations/${conversation.conversationId}/executions/${accepted.executionId}`,
-			{ headers: requestHeaders("owner") },
-		);
-		expect(v2Execution.status).toBe(200);
+		const v2Execution = await getExecutionDetailV2({
+			client: clientV2,
+			path: {
+				conversationId: conversation.conversationId,
+				executionId: accepted.executionId,
+			},
+			headers: requestHeaders("owner"),
+		});
+		expect(v2Execution.response.status).toBe(200);
 		expect(
-			ExecutionDetailProjectionV2Schema.parse(await v2Execution.json()).events,
+			ExecutionDetailProjectionV2Schema.parse(v2Execution.data).events,
 		).toEqual(v2Conversation.events);
+		const secondEvent = v2Conversation.events[1];
+		if (!secondEvent) throw new Error("Expected second persisted event");
 		const abort = new AbortController();
-		const stream = await app.request(
-			`/api/v2/conversations/${conversation.conversationId}/events?cursor=${encodeURIComponent(firstEvent.conversationCursor)}`,
-			{ headers: requestHeaders("owner"), signal: abort.signal },
-		);
-		expect(stream.status).toBe(200);
-		const reader = stream.body?.getReader();
-		expect(reader).toBeDefined();
+		const { stream } = await streamConversationEventsV2({
+			client: clientV2,
+			path: { conversationId: conversation.conversationId },
+			query: { cursor: firstEvent.conversationCursor },
+			headers: requestHeaders("owner"),
+			signal: abort.signal,
+		});
 		try {
-			const firstChunk = await reader?.read();
-			const frame = new TextDecoder().decode(firstChunk?.value);
-			expect(frame).toContain('"type":"text.delta"');
-			expect(frame).toContain('"schemaVersion":1');
-			expect(frame).not.toContain(firstEvent.eventId);
+			expect((await stream.next()).value).toMatchObject({
+				eventId: secondEvent.eventId,
+				schemaVersion: 1,
+				type: "text.delta",
+				payload: { text: "Second" },
+			});
 		} finally {
 			abort.abort();
-			await reader?.cancel();
 		}
+		const continuedTransaction = new PostgresConversationEventTransactionV1({
+			databaseUrl: testDatabase.databaseUrl,
+		});
+		try {
+			const result = await createConversationEventUseCaseV1({
+				transaction: continuedTransaction,
+			}).persist({
+				schemaVersion: 1,
+				conversationId: conversation.conversationId,
+				executionId: accepted.executionId,
+				sessionGeneration: 1,
+				deliveryFence: 0,
+				adapterEventKey: "http-event-2",
+				runtimeCursor: "http-runtime-2",
+				occurredAt: new Date().toISOString(),
+				event: { type: "text.delta", text: "Third" },
+			});
+			expect(result.outcome).toBe("accepted");
+		} finally {
+			await continuedTransaction.close();
+		}
+		const reconnectAbort = new AbortController();
+		const { stream: resumed } = await streamConversationEventsV2({
+			client: clientV2,
+			path: { conversationId: conversation.conversationId },
+			headers: {
+				...requestHeaders("owner"),
+				"Last-Event-ID": secondEvent.eventId,
+			},
+			signal: reconnectAbort.signal,
+		});
+		try {
+			expect((await resumed.next()).value).toMatchObject({
+				schemaVersion: 1,
+				type: "text.delta",
+				payload: { text: "Third" },
+			});
+		} finally {
+			reconnectAbort.abort();
+		}
+		const refreshed = await getConversationV2({
+			client: clientV2,
+			path: { conversationId: conversation.conversationId },
+			headers: requestHeaders("owner"),
+		});
+		expect(refreshed.response.status).toBe(200);
+		expect(
+			ConversationDetailProjectionV2Schema.parse(refreshed.data),
+		).toMatchObject({
+			messages: [
+				{ role: "user", text: "Run it" },
+				{ role: "assistant", text: "FirstSecondThird" },
+			],
+		});
 		for (const path of [
 			`/api/v1/conversations/${conversation.conversationId}`,
 			`/api/v2/conversations/${conversation.conversationId}`,
 			`/api/v2/conversations/${conversation.conversationId}/executions/${accepted.executionId}`,
+			`/api/v2/conversations/${conversation.conversationId}/events?cursor=${encodeURIComponent(firstEvent.conversationCursor)}`,
 			`/api/v1/conversations/missing-${conversation.conversationId}`,
 		]) {
 			const denied = await app.request(path, {

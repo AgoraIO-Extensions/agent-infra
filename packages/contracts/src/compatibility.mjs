@@ -1276,7 +1276,7 @@ function isFileAuthorityOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
-// #508 adds V2 operation history/SSE without altering published management/audit.
+// #508/#482 add V2 operation history/SSE without altering published management/audit.
 function isConversationFactsV2OpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v2/conversations/{conversationId}",
@@ -1290,6 +1290,7 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		"ConversationSseMessageV2",
 		"ExecutionDetailProjectionV2",
 		"ExecutionOperationEventV2",
+		"TaskStatusEventV2",
 		"HeartbeatSignalV1",
 		"ModelSelectionFallbackEventV1",
 		"PersistedConversationEventV1",
@@ -1315,7 +1316,7 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	};
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"ad28e6695e311d41ec6556f032a87786cedb816a81b5c18b6ddb5e72586f544f"
+		"4746adf34b966db3290e70c5e5ebbc4b0dcba7356d643627cba26e535fbabf5a"
 	)
 		return false;
 	const normalized = structuredClone(current);
@@ -1325,6 +1326,27 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		sameValue(previous, normalized) ||
 		isAgentLifecycleV2OpenApiAddition(previous, normalized)
 	);
+}
+
+function isConversationV2SseNotFoundOpenApiAddition(previous, current) {
+	const path = "/api/v2/conversations/{conversationId}/events";
+	const previousResponses = previous.paths?.[path]?.get?.responses;
+	const currentResponses = current.paths?.[path]?.get?.responses;
+	const detailNotFound =
+		current.paths?.["/api/v2/conversations/{conversationId}"]?.get?.responses?.[
+			"404"
+		];
+	if (
+		!previousResponses ||
+		previousResponses["404"] !== undefined ||
+		!currentResponses ||
+		!detailNotFound ||
+		!sameValue(currentResponses["404"], detailNotFound)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].get.responses["404"];
+	return findBreakingChanges(previous, normalized).length === 0;
 }
 
 // #440 adds bounded receipt management and Owner-scoped bot setup.
@@ -1468,6 +1490,7 @@ function findBreakingChanges(previous, current) {
 			!isAgentDirectCreationOpenApiAddition(previous, current) &&
 			!isAgentApiIdentityOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
+			!isConversationV2SseNotFoundOpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&

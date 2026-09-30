@@ -961,6 +961,19 @@ describe("Conversation persisted SSE", () => {
 		expect(await forbidden.json()).toMatchObject({
 			code: "RESOURCE_UNAVAILABLE",
 		});
+		const unavailableV2 = await testApp(denied).app.request(
+			"/api/v2/conversations/conversation-private/events",
+		);
+		expect(unavailableV2.status).toBe(404);
+		expect(await unavailableV2.json()).toMatchObject({
+			code: "RESOURCE_UNAVAILABLE",
+		});
+		const missing = dependencies();
+		missing.query.replay = vi.fn().mockResolvedValue(undefined);
+		const missingV2 = await testApp(missing).app.request(
+			"/api/v2/conversations/conversation-private/events",
+		);
+		expect(missingV2.status).toBe(404);
 	});
 
 	it("never accepts malformed persisted data as an SSE event", async () => {

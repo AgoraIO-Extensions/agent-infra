@@ -147,6 +147,7 @@ export const pilotOperationOpenApiPathsV2 = {
 			operationId: "streamConversationEventsV2",
 			responses: {
 				...streamRead.responses,
+				"404": conversationRead.responses["404"],
 				"200": {
 					description:
 						"Original V1 events, V2 operation facts and bounded V1 controls",

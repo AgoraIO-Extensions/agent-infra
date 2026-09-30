@@ -784,6 +784,30 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the V2 SSE non-enumerating 404 response", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserV2ArtifactPath, "utf8"),
+		);
+		const path = "/api/v2/conversations/{conversationId}/events";
+		const previous = structuredClone(current);
+		delete previous.paths[path].get.responses["404"];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-v2-sse-404-"),
+		);
+		try {
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			current.paths[path].get.responses["404"].description = "Changed";
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it.each([
 		["removed", "removed"],
 		["narrowed", "narrowed"],

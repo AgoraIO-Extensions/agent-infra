@@ -1545,6 +1545,10 @@ export type StreamConversationEventsV2Errors = {
      */
     403: PilotProtocolErrorV1;
     /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
      * Internal error
      */
     500: PilotInternalErrorV1;
