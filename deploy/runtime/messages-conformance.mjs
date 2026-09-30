@@ -52,11 +52,22 @@ const verifyLegacyV1Grant = createExecutionGrantVerifier(new Map([["legacy-key",
 const validateV4Grant = createRuntimeExecutionGrantValidatorV4(publicKeys, { expectedIssuer: "synthetic-platform", expectedWorkerId: "synthetic-worker" });
 const users = ["a", "b"].map(id => ({ id, canary: randomUUID(), contextCanary: randomUUID(), ref: undefined, hostRef: null, turn: 0 }));
 const keyByExecution = new Map();
-const report = { schemaVersion: 1, runtime: values.runtime, sourceCommit, dirty, imageDigest: values["image-digest"] ?? null, configVersion, sdkVersion: provenance.sdkVersion, nativeVersion: provenance.nativeVersion, ...(isPi ? { bundleSha256: provenance.bundleSha256, upstreamCommit: provenance.upstreamCommit } : { executableSha256: provenance.executableSha256 }), model: values.model, authority: "synthetic-runtime-host-v4", v4ExecutionKeyChecks: 0, privateKeyDeliveryChecks: 0, legacyStaticKeyRejections: 0, legacyVersionChecks: { v2: { disabledRejected: 0, enabledAccepted: 0 }, v3: { disabledRejected: 0, enabledAccepted: 0 } }, legacyPolicyChecks: { v2: { disabled: null, enabled: null }, v3: { disabled: null, enabled: null } }, replayFenceChecks: 0, modelAuthorizationChecks: 0, toolAuthorizationChecks: 0, negativeVector: "symlink-escape", negativeTargets: separateNegative ? [values["negative-target"]] : ["workspace", "memory"], checks: [], passed: false };
+const report = { schemaVersion: 1, runtime: values.runtime, sourceCommit, dirty, imageDigest: values["image-digest"] ?? null, configVersion, sdkVersion: provenance.sdkVersion, nativeVersion: provenance.nativeVersion, ...(isPi ? { bundleSha256: provenance.bundleSha256, upstreamCommit: provenance.upstreamCommit } : { executableSha256: provenance.executableSha256 }), model: values.model, authority: "synthetic-runtime-host-v4", v4ExecutionKeyChecks: 0, privateKeyDeliveryChecks: 0, outboundKeyChecks: 0, outboundKeyMismatch: false, legacyStaticKeyRejections: 0, legacyVersionChecks: { v2: { disabledRejected: 0, enabledAccepted: 0 }, v3: { disabledRejected: 0, enabledAccepted: 0 } }, legacyPolicyChecks: { v2: { disabled: null, enabled: null }, v3: { disabled: null, enabled: null } }, replayFenceChecks: 0, modelAuthorizationChecks: 0, toolAuthorizationChecks: 0, negativeVector: "symlink-escape", negativeTargets: separateNegative ? [values["negative-target"]] : ["workspace", "memory"], checks: [], passed: false };
 const originalFetch = globalThis.fetch;
-if (process.env.AGENT_INFRA_INSPECT_MESSAGES_SHAPE === "1") {
- report.messageShapes = [];
- globalThis.fetch = (input, init) => {
+if (process.env.AGENT_INFRA_INSPECT_MESSAGES_SHAPE === "1") report.messageShapes = [];
+globalThis.fetch = (input, init) => {
+ const url = typeof input === "string" ? input : input instanceof URL ? input.href : input instanceof Request ? input.url : "";
+ if (url.startsWith(`${endpoint.replace(/\/$/, "")}/v1/messages`)) {
+  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+  const outboundKey = environment.ANTHROPIC_AUTH_TOKEN ? headers.get("authorization") : headers.get("x-api-key");
+  const expectedKey = environment.ANTHROPIC_AUTH_TOKEN ? `Bearer ${credential}` : credential;
+  if (outboundKey !== expectedKey) {
+   report.outboundKeyMismatch = true;
+   throw Error("V4 outbound request did not use the delivered Key");
+  }
+  report.outboundKeyChecks++;
+ }
+ if (report.messageShapes) {
   try {
    if (typeof input === "string" && input.startsWith(`${endpoint.replace(/\/$/, "")}/v1/messages`) && typeof init?.body === "string" && report.messageShapes.length < 32) {
     const messages = JSON.parse(init.body).messages;
@@ -72,9 +83,9 @@ if (process.env.AGENT_INFRA_INSPECT_MESSAGES_SHAPE === "1") {
     });
    }
   } catch { report.messageShapeInspectionFailed = true; }
-  return originalFetch(input, init);
- };
-}
+ }
+ return originalFetch(input, init);
+};
 async function settleTurns(turns) {
  const results = await Promise.allSettled(turns);
  const failed = results.find(result => result.status === "rejected");
@@ -626,7 +637,7 @@ try {
  }
  stage = "result";
  const legacyVersionsPassed = Object.values(report.legacyVersionChecks).every(check => check.disabledRejected === 1 && check.enabledAccepted === 1);
- report.passed = legacyVersionsPassed && report.v4ExecutionKeyChecks === (separateNegative ? 6 : 4) && report.privateKeyDeliveryChecks > 0 && report.legacyStaticKeyRejections === 2 && report.replayFenceChecks >= report.v4ExecutionKeyChecks && report.modelAuthorizationChecks > 0 && report.toolAuthorizationChecks > 0 && report.checks.length === (separateNegative ? 6 : 4) && report.checks.every(check => check.passed);
+ report.passed = legacyVersionsPassed && report.v4ExecutionKeyChecks === (separateNegative ? 6 : 4) && report.privateKeyDeliveryChecks > 0 && report.outboundKeyChecks > 0 && !report.outboundKeyMismatch && report.legacyStaticKeyRejections === 2 && report.replayFenceChecks >= report.v4ExecutionKeyChecks && report.modelAuthorizationChecks > 0 && report.toolAuthorizationChecks > 0 && report.checks.length === (separateNegative ? 6 : 4) && report.checks.every(check => check.passed);
 } catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_FAILED"; report.failureStage = stage; }
 finally {
  clearTimeout(keepAlive);
