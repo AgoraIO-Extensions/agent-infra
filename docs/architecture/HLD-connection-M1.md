@@ -230,6 +230,19 @@ LDAP 密码或客户端 Token 输入。
 身份校验发生一次受控 refresh 时，Adapter 必须把实际验证成功的新 session 写入 Credential envelope，
 并以 `datalego-connection-v3` 与 `@v3` ActionVersion 发布；不得修改已发布的 v2 catalog。
 
+DataLego authorization-code 采用独立的 `datalego-oauth-pilot` Provider 受监督验证，不修改或自动迁移
+`datalego-connection-v3`、现有 Credential 与 Grant。其 confidential client 固定使用已登记的
+`https://agent-connector.gz3.agoralab.co/oauth/callback?provider=datalego`；callback 的 `datalego`
+仅作为固定入口别名映射到 `datalego-oauth-pilot` transaction，state 必须与该 Provider 精确匹配，
+不能接受任意 redirect URI。OAuth 端点采用与 Manhattan 相同的 legacy confidential-client Basic
+认证，不宣称该端点支持 PKCE。Connection 使用一次性 state 与服务端 code exchange，只有 OAuth
+`/api/v2/userInfo` 返回稳定 email、且相同个人 access token 对 DataLego 固定不存在 job 的 status READ
+探针返回精确 `400 record not found` 时，才建立加密的个人 OAuth Credential。只发布
+`datalego-oauth-pilot.get_current_user@v1` READ Action；不发布查询、提交、取消或任意请求 Action。
+refresh token 使用现有 Connection CredentialVersion CAS 与失效处理，不回退 Grafana 或机器人身份；
+机器 client secret 仅从部署 Secret 注入。DataLego 正式 v4 的动作集合、旧 Grant 迁移与页面入口须待
+真实授权码和 Provider READ 验收后另行批准。
+
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
 Bearer 认证。账号 identity proof 使用 `whoami` 后精确匹配唯一 active user，并以稳定 user ID

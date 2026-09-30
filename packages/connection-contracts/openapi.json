@@ -2711,7 +2711,7 @@
 					"accessRequestId": { "type": "string" },
 					"providerId": {
 						"type": "string",
-						"enum": ["github", "manhattan"],
+						"enum": ["github", "manhattan", "datalego-oauth-pilot"],
 						"default": "github"
 					},
 					"reconnectConnectionId": { "type": "string" },

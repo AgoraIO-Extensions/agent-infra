@@ -150,6 +150,7 @@ export function ConnectionsPage() {
 			connection.providerId === approvedProvider &&
 			connection.providerId !== "github" &&
 			connection.providerId !== "manhattan" &&
+			connection.providerId !== "datalego-oauth-pilot" &&
 			connection.status === "ACTIVE",
 	);
 	const [bulkUpgrade, setBulkUpgrade] = useState<{
@@ -164,12 +165,21 @@ export function ConnectionsPage() {
 	const permissionDenied =
 		new URLSearchParams(window.location.search).get("oauth") ===
 		"permission_denied";
+	const callbackProviderId = new URLSearchParams(window.location.search).get(
+		"provider",
+	);
 	const callbackProvider =
-		new URLSearchParams(window.location.search).get("provider") === "manhattan"
-			? "manhattan"
+		callbackProviderId === "manhattan" ||
+		callbackProviderId === "datalego-oauth-pilot"
+			? callbackProviderId
 			: "github";
 	const manhattanOAuth = useMutation({
 		mutationFn: connectionApi.startManhattanOAuth,
+		onSuccess: ({ authorizationUrl }) =>
+			window.location.assign(authorizationUrl),
+	});
+	const datalegoOAuth = useMutation({
+		mutationFn: connectionApi.startDatalegoOAuth,
 		onSuccess: ({ authorizationUrl }) =>
 			window.location.assign(authorizationUrl),
 	});
@@ -201,12 +211,17 @@ export function ConnectionsPage() {
 			approvedAccessRequestId &&
 			startedOAuthRequest.current !== approvedAccessRequestId
 		) {
-			if (provider === "manhattan" || provider === "github") {
+			if (
+				provider === "manhattan" ||
+				provider === "github" ||
+				provider === "datalego-oauth-pilot"
+			) {
 				startedOAuthRequest.current = approvedAccessRequestId;
 				if (provider === "github")
 					oauth.begin(undefined, approvedAccessRequestId);
-				else
+				else if (provider === "manhattan")
 					manhattanOAuth.mutate({ accessRequestId: approvedAccessRequestId });
+				else datalegoOAuth.mutate({ accessRequestId: approvedAccessRequestId });
 			}
 		}
 		if (provider === "bitbucket") setBitbucketOpen(true);
@@ -229,6 +244,7 @@ export function ConnectionsPage() {
 		newCredentialRequestId,
 		completedAccessRequestId,
 		manhattanOAuth.mutate,
+		datalegoOAuth.mutate,
 		oauth.begin,
 	]);
 	const accessRequests = useQuery({
@@ -468,6 +484,12 @@ export function ConnectionsPage() {
 					? { reconnectConnectionId: targetId }
 					: { accessRequestId: approvedAccessRequestId },
 			);
+		else if (providerId === "datalego-oauth-pilot")
+			datalegoOAuth.mutate(
+				targetId
+					? { reconnectConnectionId: targetId }
+					: { accessRequestId: approvedAccessRequestId },
+			);
 		else if (providerId === "jira") setJiraOpen(true);
 		else if (providerId === "confluence") setConfluenceOpen(true);
 		else if (providerId === "jenkins-ci" || providerId === "jenkins-release") {
@@ -680,6 +702,7 @@ export function ConnectionsPage() {
 			{manhattanOAuth.isError ? (
 				<PageError error={manhattanOAuth.error} />
 			) : null}
+			{datalegoOAuth.isError ? <PageError error={datalegoOAuth.error} /> : null}
 			{jiraError ? <PageError error={jiraError} /> : null}
 			{confluenceError ? <PageError error={confluenceError} /> : null}
 			{datalegoError ? <PageError error={datalegoError} /> : null}

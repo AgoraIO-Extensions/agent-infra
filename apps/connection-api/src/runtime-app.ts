@@ -41,6 +41,10 @@ import {
 	datalegoConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/datalego";
 import {
+	DataLegoOAuthAdapter,
+	datalegoOAuthConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/datalego-oauth";
+import {
 	JiraServerAdapter,
 	JiraServerOAuthTokenProvider,
 	jiraServerConnectionCatalog,
@@ -106,6 +110,7 @@ export async function createConnectionRuntime(
 		jiraServerConnectionCatalog,
 		confluenceServerConnectionCatalog,
 		datalegoConnectionCatalog,
+		datalegoOAuthConnectionCatalog,
 		jenkinsCiConnectionCatalog,
 		jenkinsReleaseConnectionCatalog,
 		manhattanConnectionCatalog,
@@ -257,6 +262,14 @@ export async function createConnectionRuntime(
 			fetch: observeProviderFetch("datalego", fetch),
 		}),
 	);
+	const datalegoOAuth = new DataLegoOAuthAdapter(
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: observeProviderFetch("datalego-oauth-pilot", fetch),
+		}),
+		config.datalegoOAuth,
+	);
 	const executors = new ProviderExecutorRouter({
 		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
 		...Object.fromEntries(
@@ -266,6 +279,7 @@ export async function createConnectionRuntime(
 		[jiraServerConnectionCatalog.providerReleaseId]: jira,
 		[confluenceServerConnectionCatalog.providerReleaseId]: confluence,
 		[datalegoConnectionCatalog.providerReleaseId]: datalego,
+		[datalegoOAuthConnectionCatalog.providerReleaseId]: datalegoOAuth,
 		[jenkinsCiConnectionCatalog.providerReleaseId]: jenkinsCi,
 		[jenkinsReleaseConnectionCatalog.providerReleaseId]: jenkins,
 		[manhattanConnectionCatalog.providerReleaseId]: manhattan,
@@ -285,13 +299,17 @@ export async function createConnectionRuntime(
 			bitbucket,
 			confluence,
 			datalego,
+			[datalegoOAuth.providerId]: datalegoOAuth,
 			[jenkins.providerId]: jenkins,
 			[jenkinsCi.providerId]: jenkinsCi,
 			[manhattan.providerId]: manhattan,
 			[rehoboam.providerId]: rehoboam,
 			jira,
 		},
-		{ manhattan: manhattanOAuth },
+		{
+			manhattan: manhattanOAuth,
+			[datalegoOAuth.providerId]: datalegoOAuth,
+		},
 	);
 	const app = createConnectionApp({
 		accessTokens: oauth,
@@ -313,6 +331,7 @@ export async function createConnectionRuntime(
 				githubRedirectUri: config.github.redirectUri,
 				providerRedirectUris: {
 					manhattan: config.manhattanOAuth.redirectUri,
+					[datalegoOAuth.providerId]: config.datalegoOAuth.redirectUri,
 				},
 				service,
 			},
@@ -337,6 +356,7 @@ export async function createConnectionRuntime(
 			jiraServerConnectionCatalog.provider,
 			confluenceServerConnectionCatalog.provider,
 			datalegoConnectionCatalog.provider,
+			datalegoOAuthConnectionCatalog.provider,
 			jenkinsCiConnectionCatalog.provider,
 			jenkinsReleaseConnectionCatalog.provider,
 			rehoboamConnectionCatalog.provider,

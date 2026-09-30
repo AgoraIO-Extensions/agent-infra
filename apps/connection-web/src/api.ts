@@ -706,6 +706,19 @@ export const connectionApi = {
 				headers: commandHeaders(),
 			}),
 		),
+	startDatalegoOAuth: (
+		input: { accessRequestId?: string; reconnectConnectionId?: string } = {},
+	) =>
+		unwrap<OAuthTransaction>(
+			startGithubOAuth({
+				body: parseClientInput(
+					oauthTransactionRequestSchema,
+					{ providerId: "datalego-oauth-pilot", ...input },
+					"DataLego 授权请求无效",
+				),
+				headers: commandHeaders(),
+			}),
+		),
 	connectProviderCredential: (body: ProviderCredentialRequest) =>
 		unwrap<ConnectionCreated>(
 			connectProviderCredential({

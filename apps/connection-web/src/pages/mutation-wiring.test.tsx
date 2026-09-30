@@ -287,6 +287,9 @@ const api = vi.hoisted(() => ({
 	startManhattanOAuth: vi.fn(async () => ({
 		authorizationUrl: "https://oauth.agoralab.co/oauth/authorize",
 	})),
+	startDatalegoOAuth: vi.fn(async () => ({
+		authorizationUrl: "https://oauth.agoralab.co/oauth/authorize",
+	})),
 }));
 
 vi.mock("../api", async (importOriginal) => ({
@@ -1145,6 +1148,21 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 		expect(api.upgradeApprovedConnection).not.toHaveBeenCalled();
 		expect(screen.queryByRole("button", { name: "使用现有凭证" })).toBeNull();
+	});
+
+	it("DataLego OAuth 试验获批后走 SSO，不复用旧 Cookie 凭证", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=datalego-oauth-pilot&intent=connect&accessRequestId=request-approved",
+		);
+		renderPage(<ConnectionsPage />);
+		await waitFor(() => expect(api.startDatalegoOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startDatalegoOAuth)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
+		});
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
+		expect(api.upgradeApprovedConnection).not.toHaveBeenCalled();
 	});
 
 	it("新凭证连接完成后不因账号列表刷新重新打开窗口或复用已消费申请", async () => {

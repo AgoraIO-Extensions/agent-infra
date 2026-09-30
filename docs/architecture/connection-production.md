@@ -96,6 +96,15 @@ SDK dump 和 Symbol Action 在实际调用时由 Manhattan 逐路由检查 RBAC�
 此发布包含 `0035_provider_oauth_transactions.sql`，必须先执行经评审的生产 migration 路径；
 普通 GZ3 `--no-hooks` 发布脚本会按设计阻止直接部署。
 
+DataLego OAuth 只读试验的批准边界见 [HLD DataLego profile](HLD-connection-M1.md#321-初期-provider-实现范围)。
+`DATALEGO_OAUTH_CLIENT_ID` 和 `DATALEGO_OAUTH_CLIENT_SECRET` 必须先存在于 `connection-config`，并在
+Helm 的 `secretEnv` 中仅登记空值键名，使 API 通过 `secretKeyRef` 注入；使用 `--reuse-values` 时须显式
+补齐这两项，不能只更新 Secret 后假定 Pod 已读取。注册回调固定为
+`https://agent-connector.gz3.agoralab.co/oauth/callback?provider=datalego`，对应独立的
+`datalego-oauth-pilot` Provider；旧 DataLego 不自动迁移。发布前应完成 chart 渲染和当前 release 的
+安全检查；发布后仅在独立只读能力档案与审批策略通过后，由测试用户完成 SSO 和真实 READ。
+未取得真实 DataLego token 接受证据前，不能宣称正式 DataLego v4 可用或删除 v3。
+
 ## 验收边界
 
 本机 type check、unit test、临时 PostgreSQL 集成测试和 Docker build 只能证明源码接线。HCI pilot 验收

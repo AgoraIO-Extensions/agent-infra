@@ -333,6 +333,7 @@ export type ConnectorProviderId =
 	| "bitbucket"
 	| "confluence"
 	| "datalego"
+	| "datalego-oauth-pilot"
 	| "github"
 	| "jenkins-ci"
 	| "jenkins-release"
@@ -381,6 +382,13 @@ export const connectorDefinitions: Array<{
 		icon: Boxes,
 		name: "DataLego",
 		providerId: "datalego",
+	},
+	{
+		category: "数据平台",
+		description: "验证个人授权与只读访问",
+		icon: Boxes,
+		name: "DataLego OAuth 试验",
+		providerId: "datalego-oauth-pilot",
 	},
 	{
 		category: "研发协作",
@@ -571,6 +579,7 @@ export function providerLabel(value: string) {
 			bitbucket: "Bitbucket",
 			confluence: "Confluence",
 			datalego: "DataLego",
+			"datalego-oauth-pilot": "DataLego OAuth 试验",
 			github: "GitHub",
 			"jenkins-ci": "Jenkins CI",
 			"jenkins-release": "Jenkins Release",

@@ -2801,6 +2801,8 @@ describe("Connection API", () => {
 				providerRedirectUris: {
 					manhattan:
 						"https://connection.example/oauth/callback?provider=manhattan",
+					"datalego-oauth-pilot":
+						"https://connection.example/oauth/callback?provider=datalego",
 				},
 				service: management,
 			},
@@ -3130,6 +3132,61 @@ describe("Connection API", () => {
 			name: "provider-callback",
 			value: {
 				providerId: "manhattan",
+				code: "one-time-code",
+				state: "opaque-state",
+			},
+		});
+		const datalegoStart = await app.request(
+			"/api/v1/connection/oauth-transactions",
+			{
+				method: "POST",
+				headers: {
+					cookie,
+					origin: "https://connection.example",
+					"content-type": "application/json",
+					"idempotency-key": "datalego-oauth-start",
+				},
+				body: JSON.stringify({
+					providerId: "datalego-oauth-pilot",
+					accessRequestId: "approved-request",
+				}),
+			},
+		);
+		expect(datalegoStart.status).toBe(200);
+		const datalegoCookie =
+			(datalegoStart.headers.get("set-cookie") ?? "").split(";", 1)[0] ?? "";
+		expect(datalegoCookie).toBe("connection_datalego_oauth_state=opaque-state");
+		expect(calls.at(-1)).toMatchObject({
+			value: {
+				providerId: "datalego-oauth-pilot",
+				redirectUri:
+					"https://connection.example/oauth/callback?provider=datalego",
+			},
+		});
+		const rejectedDatalegoCallback = await app.request(
+			"/oauth/callback?provider=datalego&code=one-time-code&state=opaque-state",
+			{
+				headers: { cookie: oauthCookie },
+				redirect: "manual",
+			},
+		);
+		expect(rejectedDatalegoCallback.headers.get("location")).toContain(
+			"callback_failed&provider=datalego-oauth-pilot",
+		);
+		const datalegoCallback = await app.request(
+			"/oauth/callback?provider=datalego&code=one-time-code&state=opaque-state",
+			{
+				headers: { cookie: datalegoCookie },
+				redirect: "manual",
+			},
+		);
+		expect(datalegoCallback.headers.get("location")).toBe(
+			"/connection/connections",
+		);
+		expect(calls.at(-1)).toEqual({
+			name: "provider-callback",
+			value: {
+				providerId: "datalego-oauth-pilot",
 				code: "one-time-code",
 				state: "opaque-state",
 			},
