@@ -39,10 +39,13 @@ const {
 	decideAgentApplicationV2,
 	getAgentV2,
 	getAgentApplicationV2,
+	getConversationV2,
+	getExecutionDetailV2,
 	listAgentApplicationsV2,
 	listAgentsV2,
 	listPendingAgentApplicationsV2,
 	listPlatformAuditV2,
+	streamConversationEventsV2,
 	updateAgentApplicationV2,
 	updateAgentConfigurationV2,
 	withdrawAgentApplicationV2,
@@ -442,6 +445,43 @@ describe("generated Pilot browser client", () => {
 });
 
 describe("generated Conversation client", () => {
+	it("reads the production V2 projections and SSE without a compatibility router", async () => {
+		const { app } = testApp();
+		const client = createClientV2({
+			baseUrl: "https://platform.example.test",
+			fetch: async (input: string | URL | Request, init?: RequestInit) =>
+				app.fetch(input instanceof Request ? input : new Request(input, init)),
+		});
+		const detail = await getConversationV2({
+			client,
+			path: { conversationId: "conversation-1" },
+		});
+		const execution = await getExecutionDetailV2({
+			client,
+			path: { conversationId: "conversation-1", executionId: "execution-1" },
+		});
+		expect([detail.response.status, execution.response.status]).toEqual([
+			200, 200,
+		]);
+		expect(detail.data).toMatchObject({ schemaVersion: 2, events: [] });
+		expect(execution.data).toMatchObject({ schemaVersion: 2, events: [] });
+		const abort = new AbortController();
+		try {
+			const { stream } = await streamConversationEventsV2({
+				client,
+				path: { conversationId: "conversation-1" },
+				signal: abort.signal,
+				sseMaxRetryAttempts: 1,
+			});
+			expect((await stream.next()).value).toMatchObject({
+				kind: "control",
+				type: "timeline.reload",
+			});
+		} finally {
+			abort.abort();
+		}
+	});
+
 	it("consumes HTTP commands, queries, and persisted SSE through Hono", async () => {
 		const { app } = testApp();
 		const client = createClient({

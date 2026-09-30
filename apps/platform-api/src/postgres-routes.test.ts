@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 
 import {
@@ -5,7 +6,10 @@ import {
 	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
+	ConversationDetailProjectionV2Schema,
 	ConversationProjectionV1Schema,
+	ConversationSseMessageV2Schema,
+	ExecutionDetailProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 	PlatformAuditProjectionV1Schema,
 	PlatformAuditProjectionV2Schema,
@@ -98,6 +102,15 @@ type Closable = { close(): Promise<void> };
 let testDatabase: PostgresTestDatabase | undefined;
 const adapters: Closable[] = [];
 let app: ReturnType<typeof createPlatformApp>;
+let database: ReturnType<typeof postgres>;
+const generatedClientV2 = await import(
+	new URL("../../web/src/pilot/generated-v2/client/index.ts", import.meta.url)
+		.href
+);
+const generatedSdkV2 = await import(
+	new URL("../../web/src/pilot/generated-v2/sdk.gen.ts", import.meta.url).href
+);
+
 let managementUseCase: ReturnType<typeof createAgentManagementV1>;
 let managementQuery: PostgresAgentManagementQueryV1;
 let currentBrowserAdmin: IdentityContext = identities.admin;
@@ -137,6 +150,8 @@ beforeAll(async () => {
 	testDatabase = await startPostgresTestDatabase("platform-http-routes");
 	await migratePlatformDatabase({ databaseUrl: testDatabase.databaseUrl });
 	const databaseUrl = testDatabase.databaseUrl;
+	database = postgres(databaseUrl);
+	adapters.push({ close: () => database.end() });
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl,
 	});
@@ -709,21 +724,20 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		const conversation = ConversationProjectionV1Schema.parse(
 			await createdConversation.json(),
 		);
-		expect(
-			(
-				await app.request(
-					`/api/v1/conversations/${conversation.conversationId}/messages`,
-					{
-						method: "POST",
-						headers: {
-							...requestHeaders("owner", "conversation-message-1"),
-							"content-type": "application/json",
-						},
-						body: JSON.stringify({ schemaVersion: 1, text: "Run it" }),
-					},
-				)
-			).status,
-		).toBe(202);
+		const sentMessage = await app.request(
+			`/api/v1/conversations/${conversation.conversationId}/messages`,
+			{
+				method: "POST",
+				headers: {
+					...requestHeaders("owner", "conversation-message-1"),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ schemaVersion: 1, text: "Run it" }),
+			},
+		);
+		expect(sentMessage.status).toBe(202);
+		const accepted = (await sentMessage.json()) as { executionId: string };
+
 		const conversationList = await app.request(
 			"/api/v1/agents/agent-run/conversations",
 			{ headers: requestHeaders("owner") },
@@ -742,6 +756,142 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				await conversationDetail.json(),
 			).messages,
 		).toEqual([expect.objectContaining({ role: "user", text: "Run it" })]);
+		// Controlled persisted Runtime facts prove this HTTP/Store slice, not Driver execution.
+		const events = [
+			{ type: "text.delta", text: "synthetic MAIN-01 output" },
+			{
+				schemaVersion: 2,
+				type: "execution.operation",
+				fact: {
+					kind: "model",
+					operationRef: "main01-operation",
+					attemptRef: "main01-attempt",
+					phase: "intent",
+					model: {
+						configVersion: "revision-1",
+						modelOptionId: "option-1",
+						modelId: "model-1",
+						reasoningLevel: "medium",
+					},
+				},
+			},
+		];
+		for (const [offset, event] of events.entries()) {
+			const eventId = `main01-event-${offset + 1}`;
+			await database.unsafe(
+				`insert into platform.conversation_events
+				(event_id,conversation_id,execution_id,adapter_event_key,sequence,conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,source,occurred_at)
+				values($1,$2,$3,$1,$4,$4,$5,$6::text::jsonb,$7,$1,'runtime',now())`,
+				[
+					eventId,
+					conversation.conversationId,
+					accepted.executionId,
+					offset + 1,
+					event.type,
+					JSON.stringify(event),
+					createHash("sha256").update(JSON.stringify(event)).digest("hex"),
+				],
+			);
+		}
+		await database.unsafe(
+			"update platform.conversations set last_conversation_cursor=2 where id=$1",
+			[conversation.conversationId],
+		);
+		await database.unsafe(
+			"update platform.conversation_executions set last_event_sequence=2,last_runtime_cursor='main01-event-2' where execution_id=$1",
+			[accepted.executionId],
+		);
+		const clientV2 = generatedClientV2.createClient({
+			baseUrl: "https://platform.example.test",
+			headers: requestHeaders("owner"),
+			fetch: async (input: string | URL | Request, init?: RequestInit) =>
+				app.fetch(input instanceof Request ? input : new Request(input, init)),
+		});
+		const v2 = await generatedSdkV2.getConversationV2({
+			client: clientV2,
+			path: { conversationId: conversation.conversationId },
+		});
+		expect(v2.response.status).toBe(200);
+		const history = ConversationDetailProjectionV2Schema.parse(v2.data);
+		expect(
+			history.events.map((event) => [event.schemaVersion, event.eventId]),
+		).toEqual([
+			[1, "main01-event-1"],
+			[2, "main01-event-2"],
+		]);
+		const executionV2 = await generatedSdkV2.getExecutionDetailV2({
+			client: clientV2,
+			path: {
+				conversationId: conversation.conversationId,
+				executionId: accepted.executionId,
+			},
+		});
+		expect(executionV2.response.status).toBe(200);
+		expect(
+			ExecutionDetailProjectionV2Schema.parse(executionV2.data).events,
+		).toEqual(history.events);
+		expect(
+			(
+				await generatedSdkV2.getConversationV2({
+					client: clientV2,
+					path: { conversationId: conversation.conversationId },
+				})
+			).data,
+		).toEqual(v2.data);
+		const firstEvent = history.events[0];
+		if (!firstEvent) throw new Error("Missing persisted MAIN-01 event");
+		for (const [selector, expected] of [
+			[{}, history.events],
+			[
+				{ query: { cursor: firstEvent.conversationCursor } },
+				history.events.slice(1),
+			],
+			[
+				{ headers: { "Last-Event-ID": firstEvent.eventId } },
+				history.events.slice(1),
+			],
+		] as const) {
+			const abort = new AbortController();
+			const timeout = setTimeout(() => abort.abort(), 5000);
+			try {
+				const { stream } = await generatedSdkV2.streamConversationEventsV2({
+					client: clientV2,
+					path: { conversationId: conversation.conversationId },
+					...selector,
+					signal: abort.signal,
+					sseMaxRetryAttempts: 1,
+				});
+				const received = [];
+				for await (const data of stream) {
+					const event = ConversationSseMessageV2Schema.parse(data);
+					if (event.kind !== "event") continue;
+					received.push(event);
+					if (received.length === expected.length) break;
+				}
+				expect(received).toEqual(expected);
+			} finally {
+				abort.abort();
+				clearTimeout(timeout);
+			}
+		}
+		for (const target of [
+			conversation.conversationId,
+			`missing-${conversation.conversationId}`,
+		]) {
+			for (const path of [
+				`/api/v2/conversations/${target}`,
+				`/api/v2/conversations/${target}/executions/${accepted.executionId}`,
+				`/api/v2/conversations/${target}/events`,
+			]) {
+				const denied = await app.request(path, {
+					headers: requestHeaders("attacker"),
+				});
+				expect(denied.status).toBe(404);
+				expect(await denied.json()).toMatchObject({
+					code: "RESOURCE_UNAVAILABLE",
+				});
+			}
+		}
 		for (const path of [
 			`/api/v1/conversations/${conversation.conversationId}`,
 			`/api/v1/conversations/missing-${conversation.conversationId}`,

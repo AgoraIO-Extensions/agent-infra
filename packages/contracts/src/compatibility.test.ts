@@ -460,6 +460,47 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the existing resource-unavailable response added to V2 SSE", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/conversations/{conversationId}/events";
+		const previous = structuredClone(current);
+		delete previous.paths[path].get.responses["404"];
+		const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-sse404-"));
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					document.paths[path].get.responses["404"].description = "changed";
+				},
+				(document: typeof current) => {
+					document.paths[path].get.responses["200"].description = "changed";
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/agents"].get.operationId = "changed";
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits reviewed V2 operation reads while preserving lifecycle and audit", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -503,6 +544,15 @@ describe("contract compatibility command", () => {
 			await writeFile(currentPath, JSON.stringify(current));
 			expect(comparePaths(currentPath, previousPath).status).toBe(0);
 			for (const mutate of [
+				(document: typeof current) => {
+					delete document.paths["/api/v2/conversations/{conversationId}/events"]
+						.get.responses["404"];
+				},
+				(document: typeof current) => {
+					document.paths[
+						"/api/v2/conversations/{conversationId}/events"
+					].get.responses["404"].description = "changed";
+				},
 				(document: typeof current) => {
 					delete document.paths[
 						"/api/v2/conversations/{conversationId}/events"
