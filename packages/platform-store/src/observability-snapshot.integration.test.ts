@@ -10,6 +10,14 @@ import {
 let database: PostgresTestDatabase | undefined;
 let client: ReturnType<typeof postgres>;
 
+async function waitFor(check: () => boolean, attempts = 100) {
+	for (let attempt = 0; attempt < attempts; attempt += 1) {
+		if (check()) return;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+	throw new Error("Timed out waiting for PostgreSQL observation");
+}
+
 beforeAll(async () => {
 	database = await startPostgresTestDatabase("observability-snapshot");
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
@@ -165,3 +173,197 @@ it("counts the current-generation unreserved Turn backlog once per Execution", a
 		readPlatformQueueResourceSnapshot(client, AbortSignal.timeout(5000)),
 	).resolves.toEqual({ taskWaiting: 0, outboxPending: 4 });
 });
+
+it("bounds a saturated max:1 pool and cancels a running count query", async () => {
+	if (!database) throw new Error("PostgreSQL fixture is unavailable");
+	const observedQueries: string[] = [];
+	const pool = postgres(database.databaseUrl, {
+		max: 1,
+		debug: (_connection, query) => observedQueries.push(query),
+	});
+	const beginPromises: Promise<unknown>[] = [];
+	const originalBegin = pool.begin.bind(pool);
+	pool.begin = ((...args: unknown[]) => {
+		const promise = (
+			originalBegin as (...values: unknown[]) => Promise<unknown>
+		)(...args);
+		beginPromises.push(promise);
+		return promise;
+	}) as typeof pool.begin;
+	let reserved: postgres.ReservedSql | undefined;
+	try {
+		reserved = await pool.reserve();
+		const callerAbortBegin = beginPromises.length;
+		const first = readPlatformQueueResourceSnapshot(
+			pool,
+			AbortSignal.timeout(100),
+		);
+		const firstFailure = expect(first).rejects.toThrow(
+			"Platform resource snapshot is unavailable",
+		);
+		await expect(
+			readPlatformQueueResourceSnapshot(pool, AbortSignal.timeout(100)),
+		).rejects.toThrow("Platform resource snapshot is unavailable");
+		await expect(
+			readPlatformQueueResourceSnapshot(pool, AbortSignal.timeout(100)),
+		).rejects.toThrow("Platform resource snapshot is unavailable");
+		await firstFailure;
+		expect(
+			observedQueries.filter((query) => /^\s*begin read only\s*$/i.test(query)),
+		).toHaveLength(0);
+
+		reserved.release();
+		reserved = undefined;
+		await waitFor(() =>
+			observedQueries.some((query) => /^\s*begin read only\s*$/i.test(query)),
+		);
+		await waitFor(() =>
+			observedQueries.some((query) => /^\s*rollback\s*$/i.test(query)),
+		);
+		await expect(beginPromises[callerAbortBegin]).rejects.toThrow(
+			"Platform resource snapshot is unavailable",
+		);
+		const delayedQueries = observedQueries.map((query) => query.toLowerCase());
+		expect(
+			delayedQueries.filter((query) => /^\s*begin read only\s*$/.test(query)),
+		).toHaveLength(1);
+		expect(
+			delayedQueries.filter((query) =>
+				query.includes("set local statement_timeout"),
+			),
+		).toHaveLength(0);
+		expect(
+			delayedQueries.filter((query) =>
+				query.includes("from platform.conversation_executions"),
+			),
+		).toHaveLength(0);
+
+		await pool`select 1`;
+
+		reserved = await pool.reserve();
+		const deadlineSignal = new AbortController();
+		const deadlineBegin = beginPromises.length;
+		const deadlineQueries = observedQueries.length;
+		const deadlineStartedAt = Date.now();
+		const deadlineSnapshot = readPlatformQueueResourceSnapshot(
+			pool,
+			deadlineSignal.signal,
+		);
+		let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const watchdog = new Promise<never>((_, reject) => {
+				watchdogTimer = setTimeout(
+					() => reject(new Error("PostgreSQL deadline watchdog expired")),
+					5_000,
+				);
+			});
+			await expect(Promise.race([deadlineSnapshot, watchdog])).rejects.toThrow(
+				"Platform resource snapshot is unavailable",
+			);
+		} finally {
+			if (watchdogTimer) clearTimeout(watchdogTimer);
+		}
+		expect(deadlineSignal.signal.aborted).toBe(false);
+		expect(Date.now() - deadlineStartedAt).toBeGreaterThanOrEqual(1_800);
+		reserved.release();
+		reserved = undefined;
+		await waitFor(() =>
+			observedQueries
+				.slice(deadlineQueries)
+				.some((query) => /^\s*begin read only\s*$/i.test(query)),
+		);
+		await expect(beginPromises[deadlineBegin]).rejects.toThrow(
+			"Platform resource snapshot is unavailable",
+		);
+		await pool`select 1`;
+		const expected = await readPlatformQueueResourceSnapshot(
+			pool,
+			AbortSignal.timeout(5000),
+		);
+
+		const targetPidRows = await pool<{ pid: string }[]>`
+			select pg_backend_pid()::text as pid
+		`;
+		const targetPid = targetPidRows[0]?.pid;
+		if (!targetPid) throw new Error("PostgreSQL target PID was not observed");
+		const lockConnection = postgres(database.databaseUrl, { max: 1 });
+		try {
+			await lockConnection.begin(async (transaction) => {
+				const pidRows = await transaction<{ pid: string }[]>`
+					select pg_backend_pid()::text as pid
+				`;
+				const lockPid = pidRows[0]?.pid;
+				if (!lockPid) throw new Error("PostgreSQL lock PID was not observed");
+				await transaction`lock table platform.outbox_items in access exclusive mode`;
+				const controller = new AbortController();
+				const cancellationBegin = beginPromises.length;
+				const pending = readPlatformQueueResourceSnapshot(
+					pool,
+					controller.signal,
+				);
+				let blocked = false;
+				for (let attempt = 0; attempt < 40; attempt += 1) {
+					await transaction`select pg_stat_clear_snapshot()`;
+					const activities = await transaction<
+						{
+							pid: string;
+							state: string;
+							wait_event_type: string | null;
+							wait_event: string | null;
+						}[]
+					>`
+						select s.pid::text, s.state, s.wait_event_type, s.wait_event
+						from pg_stat_activity s
+						where s.pid = ${Number(targetPid)}
+							and s.state = 'active'
+							and s.wait_event_type = 'Lock'
+							and ${Number(lockPid)} = any(pg_blocking_pids(s.pid))
+					`;
+					blocked = activities.length === 1;
+					if (blocked) break;
+					await new Promise((resolve) => setTimeout(resolve, 20));
+				}
+				expect(blocked).toBe(true);
+				// The public helper redacts the driver error; the original transaction
+				// Promise settles with PostgreSQL's cancellation error while the lock
+				// is still held.
+				const cancellationPromise = beginPromises[cancellationBegin];
+				if (!cancellationPromise)
+					throw new Error("PostgreSQL transaction Promise was not observed");
+				let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
+				try {
+					const watchdog = new Promise<never>((_, reject) => {
+						watchdogTimer = setTimeout(
+							() =>
+								reject(new Error("PostgreSQL cancellation watchdog expired")),
+							1_000,
+						);
+					});
+					controller.abort();
+					await expect(pending).rejects.toThrow(
+						"Platform resource snapshot is unavailable",
+					);
+					await expect(
+						Promise.race([cancellationPromise, watchdog]),
+					).rejects.toMatchObject({
+						code: "57014",
+						message: expect.stringContaining(
+							"canceling statement due to user request",
+						),
+					});
+				} finally {
+					if (watchdogTimer) clearTimeout(watchdogTimer);
+				}
+			});
+		} finally {
+			await lockConnection.end();
+		}
+		await pool`select 1`;
+		await expect(
+			readPlatformQueueResourceSnapshot(pool, AbortSignal.timeout(5000)),
+		).resolves.toEqual(expected);
+	} finally {
+		reserved?.release();
+		await pool.end();
+	}
+}, 30_000);

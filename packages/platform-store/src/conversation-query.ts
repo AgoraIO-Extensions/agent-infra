@@ -533,21 +533,56 @@ function countResource(value: unknown): number {
 	return parsed;
 }
 
+const activeResourceSnapshots = new WeakSet<postgres.Sql>();
+
 /** Read one bounded, read-only resource snapshot for the observability consumer. */
 export async function readPlatformQueueResourceSnapshot(
 	client: postgres.Sql,
 	signal: AbortSignal,
 ): Promise<PlatformQueueResourceSnapshot> {
-	if (signal.aborted)
-		throw new Error("Platform resource snapshot is unavailable");
+	const unavailable = () =>
+		new Error("Platform resource snapshot is unavailable");
+	if (signal.aborted) throw unavailable();
+	if (activeResourceSnapshots.has(client)) throw unavailable();
+	activeResourceSnapshots.add(client);
+	const controller = new AbortController();
+	const operationSignal = controller.signal;
+	const onAbort = () => controller.abort();
+	signal.addEventListener("abort", onAbort, { once: true });
+	if (signal.aborted) onAbort();
+	const timer = setTimeout(onAbort, 2000);
+	let rejectOnAbort: () => void = () => {};
+	let removeOperationAbortListener = () => {};
+	let began = false;
 	try {
-		return await client.begin("read only", async (transaction) => {
-			if (signal.aborted)
-				throw new Error("Platform resource snapshot is unavailable");
-			await transaction`set local statement_timeout = '2000ms'`;
-			if (signal.aborted)
-				throw new Error("Platform resource snapshot is unavailable");
-			const rows = await transaction<
+		const cancelled = new Promise<never>((_, reject) => {
+			rejectOnAbort = () => reject(unavailable());
+			operationSignal.addEventListener("abort", rejectOnAbort, {
+				once: true,
+			});
+			if (operationSignal.aborted) rejectOnAbort();
+		});
+		let currentQuery: { cancel(): void } | undefined;
+		const onOperationAbort = () => currentQuery?.cancel();
+		operationSignal.addEventListener("abort", onOperationAbort);
+		removeOperationAbortListener = () =>
+			operationSignal.removeEventListener("abort", onOperationAbort);
+		const runQuery = async <T>(
+			query: Promise<T> & { cancel(): void },
+		): Promise<T> => {
+			currentQuery = query;
+			try {
+				if (operationSignal.aborted) query.cancel();
+				return await query;
+			} finally {
+				if (currentQuery === query) currentQuery = undefined;
+			}
+		};
+		const snapshot = client.begin("read only", async (transaction) => {
+			if (operationSignal.aborted) throw unavailable();
+			await runQuery(transaction`set local statement_timeout = '2000ms'`);
+			if (operationSignal.aborted) throw unavailable();
+			const rows = await runQuery(transaction<
 				{ task_waiting: string; outbox_pending: string }[]
 			>`
 		select
@@ -613,19 +648,37 @@ export async function readPlatformQueueResourceSnapshot(
 					)) as task_waiting,
 			(select count(*)::text from platform.outbox_items
 				where status in ('pending', 'retry_scheduled')) as outbox_pending
-	`;
-			if (signal.aborted)
-				throw new Error("Platform resource snapshot is unavailable");
-			if (rows.length !== 1)
-				throw new Error("Platform resource snapshot is unavailable");
+	`);
+			if (operationSignal.aborted) throw unavailable();
+			if (rows.length !== 1) throw unavailable();
 			return {
 				taskWaiting: countResource(rows[0]?.task_waiting),
 				outboxPending: countResource(rows[0]?.outbox_pending),
 			};
 		});
+		began = true;
+		void snapshot.then(
+			() => {
+				removeOperationAbortListener();
+				activeResourceSnapshots.delete(client);
+			},
+			() => {
+				removeOperationAbortListener();
+				activeResourceSnapshots.delete(client);
+			},
+		);
+		return await Promise.race([snapshot, cancelled]);
 	} catch {
+		if (!began) {
+			removeOperationAbortListener();
+			activeResourceSnapshots.delete(client);
+		}
 		// Sampling errors never expose driver messages, connection details or raw data.
-		throw new Error("Platform resource snapshot is unavailable");
+		throw unavailable();
+	} finally {
+		clearTimeout(timer);
+		signal.removeEventListener("abort", onAbort);
+		operationSignal.removeEventListener("abort", rejectOnAbort);
 	}
 }
 
