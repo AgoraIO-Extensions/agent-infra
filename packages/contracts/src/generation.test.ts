@@ -136,7 +136,20 @@ describe("standard contract artifacts", () => {
 			"/api/v2/conversations/{conversationId}/events",
 			"/api/v2/conversations/{conversationId}/executions/{executionId}",
 			"/api/v2/deployment/configuration",
+			"/api/v2/me/conversations/recent",
 		]);
+		const recent =
+			artifacts.pilotBrowserOpenapiV2.paths["/api/v2/me/conversations/recent"]
+				.get;
+		expect(recent.operationId).toBe("listRecentPersonalConversationsV2");
+		expect(recent.security).toEqual([{ PlatformSession: [] }]);
+		expect(artifacts.pilotBrowserOpenapiV2.components.securitySchemes).toEqual(
+			artifacts.platformAuthOpenapi.components.securitySchemes,
+		);
+		expect(
+			recent.responses[200].content["application/json"].schema.properties.items
+				.items.properties.schemaVersion.const,
+		).toBe(1);
 		expect(artifacts.pilotBrowserOpenapiV2.components.schemas).toHaveProperty(
 			"PlatformAuditProjectionV2",
 		);
