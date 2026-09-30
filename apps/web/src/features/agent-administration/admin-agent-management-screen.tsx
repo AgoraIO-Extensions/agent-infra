@@ -27,15 +27,15 @@ export function AdminAgentManagementScreen({
 		<section className="space-y-6" aria-labelledby="admin-agents-heading">
 			<header className="page-heading flex flex-wrap items-end justify-between gap-5">
 				<div className="min-w-0">
+					<p className="mb-2 text-muted-foreground text-sm">系统管理员</p>
 					<h1
 						id="admin-agents-heading"
 						className="break-words font-semibold text-[28px]"
 					>
-						Agent 管理
+						管理 Agent 的系统状态。
 					</h1>
 					<p className="mt-2 max-w-2xl text-muted-foreground">
-						处理 Agent
-						运行状态和系统级生命周期操作。每项操作仍由服务端按当前管理员身份授权。
+						处理创建失败与系统级停用。Owner 的停止和重启在“我的 Agent”中完成。
 					</p>
 				</div>
 				<Link
@@ -49,7 +49,7 @@ export function AdminAgentManagementScreen({
 			{state.kind === "contract-pending" ? (
 				<Alert>
 					<AlertDescription>
-						管理员 Agent 暂时无法查看，请稍后重试。
+						Agent 列表暂不可用。请在创建审批页处理待办。
 					</AlertDescription>
 				</Alert>
 			) : state.kind === "loading" ? (

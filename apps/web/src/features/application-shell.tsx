@@ -13,6 +13,7 @@ import {
 	Home,
 	Layers,
 	Menu,
+	MessageSquare,
 	Settings2,
 	X,
 } from "lucide-react";
@@ -118,6 +119,11 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		sessionProjection,
 	]);
 	const pathname = useLocation({ select: (location) => location.pathname });
+	const conversationSelection = useLocation({
+		select: (location) =>
+			(location.pathname === "/agents" || location.pathname === "/agents/") &&
+			location.search.mode === "conversation",
+	});
 	const [sheet, setSheet] = useState(false);
 	const user =
 		session.state.kind === "ready" ? session.state.session.user : undefined;
@@ -155,7 +161,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 											: pathname.startsWith("/my-agents")
 												? "我的 Agent"
 												: pathname === "/agents" || pathname === "/agents/"
-													? "Agent"
+													? conversationSelection
+														? "选择 Agent"
+														: "Agent"
 													: "Agent 详情";
 	const navigation = (
 		<>
@@ -164,7 +172,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					<Layers size={21} aria-hidden="true" />
 				</span>
 				<div>
-					Agent Platform<small>工作空间</small>
+					Agora Agent<small>公司内部工作区</small>
 				</div>
 			</div>
 			<p className="platform-nav-label">工作区</p>
@@ -179,27 +187,41 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					工作台
 				</Link>
 				<Link
-					className={`platform-nav-item ${pathname.startsWith("/agents") ? "selected" : ""}`}
-					aria-current={pathname.startsWith("/agents") ? "page" : undefined}
+					className={`platform-nav-item ${pathname.startsWith("/agents") && !pathname.includes("/conversations") && !conversationSelection ? "selected" : ""}`}
+					aria-current={
+						(pathname === "/agents" || pathname === "/agents/") &&
+						!conversationSelection
+							? "page"
+							: undefined
+					}
 					to="/agents"
 					onClick={() => setSheet(false)}
 				>
 					<Grid2X2 size={19} aria-hidden="true" />
 					Agent
 				</Link>
+				<Link
+					className={`platform-nav-item ${pathname.includes("/conversations") || conversationSelection ? "selected" : ""}`}
+					aria-current={
+						conversationSelection
+							? "page"
+							: pathname.includes("/conversations")
+								? "true"
+								: undefined
+					}
+					to="/agents"
+					search={{ mode: "conversation", q: undefined }}
+					onClick={() => setSheet(false)}
+				>
+					<MessageSquare size={19} aria-hidden="true" />
+					对话
+				</Link>
 			</nav>
 			<p className="platform-nav-label">我的管理</p>
 			<nav aria-label="我的管理">
 				<Link
 					className={`platform-nav-item ${isMyAgentIndex || (myAgentPath && !isMyAgentConfiguration && pathname.includes("/my-agents/")) ? "selected" : ""}`}
-					aria-current={
-						isMyAgentIndex ||
-						(myAgentPath &&
-							!isMyAgentConfiguration &&
-							pathname.includes("/my-agents/"))
-							? "page"
-							: undefined
-					}
+					aria-current={isMyAgentIndex ? "page" : undefined}
 					to="/my-agents"
 					onClick={() => setSheet(false)}
 				>
@@ -208,7 +230,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				</Link>
 				<Link
 					className={`platform-nav-item ${isMyAgentConfiguration ? "selected" : ""}`}
-					aria-current={isMyAgentConfiguration ? "page" : undefined}
+					aria-current={pathname === "/my-agents/new" ? "page" : undefined}
 					to="/my-agents/new"
 					onClick={() => setSheet(false)}
 				>
@@ -232,7 +254,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					>
 						<ArrowUpRight size={19} aria-hidden="true" />
 						我的 Connection
-						<small>尚未接入</small>
+						<small>暂不可用</small>
 					</span>
 				)}
 				<Link
@@ -252,13 +274,13 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						<Link
 							className={`platform-nav-item ${pathname.startsWith("/admin/approvals") ? "selected" : ""}`}
 							aria-current={
-								pathname.startsWith("/admin/approvals") ? "page" : undefined
+								pathname === "/admin/approvals" ? "page" : undefined
 							}
 							to="/admin/approvals"
 							onClick={() => setSheet(false)}
 						>
 							<CheckCheck size={19} aria-hidden="true" />
-							审批
+							创建审批
 						</Link>
 						<Link
 							className={`platform-nav-item ${pathname === "/admin/agents" ? "selected" : ""}`}
@@ -276,7 +298,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							onClick={() => setSheet(false)}
 						>
 							<ClipboardList size={19} aria-hidden="true" />
-							平台审计
+							审计日志
 						</Link>
 					</nav>
 				</>
@@ -351,8 +373,14 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					</Sheet>
 					<Breadcrumb className="platform-breadcrumb">
 						<BreadcrumbList>
-							<BreadcrumbItem>工作台</BreadcrumbItem>
-							<BreadcrumbSeparator />
+							{pathname !== "/" && (
+								<>
+									<BreadcrumbItem>
+										<Link to="/">工作台</Link>
+									</BreadcrumbItem>
+									<BreadcrumbSeparator />
+								</>
+							)}
 							<BreadcrumbItem>
 								<BreadcrumbPage>{title}</BreadcrumbPage>
 							</BreadcrumbItem>

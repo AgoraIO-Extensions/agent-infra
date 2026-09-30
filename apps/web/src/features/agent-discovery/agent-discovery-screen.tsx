@@ -9,9 +9,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
-import type { AgentDiscoveryState } from "./agent-discovery.js";
+import {
+	type AgentDiscoveryState,
+	canStartPlatformConversation,
+} from "./agent-discovery.js";
 
 type AgentDiscoveryScreenProps = {
+	conversationSelection?: boolean;
 	query?: string;
 	onQueryChange?: (query: string) => void;
 	onRetry?: () => void;
@@ -40,6 +44,7 @@ export const agentChannelKindLabels = {
 >;
 
 export function AgentDiscoveryScreen({
+	conversationSelection = false,
 	query: controlledQuery,
 	onQueryChange,
 	onRetry,
@@ -63,10 +68,12 @@ export function AgentDiscoveryScreen({
 			<header className="page-heading">
 				<div>
 					<h1 id="agents-heading" className="font-semibold text-[28px]">
-						Agent
+						{conversationSelection ? "选择 Agent 开始对话" : "Agent"}
 					</h1>
 					<p className="mt-2 text-muted-foreground">
-						发现并使用你有权访问的 Agent。
+						{conversationSelection
+							? "选择当前可用的 Agent，继续文本对话。"
+							: "发现并使用你有权访问的 Agent。"}
 					</p>
 				</div>
 			</header>
@@ -187,18 +194,31 @@ export function AgentDiscoveryScreen({
 											</span>
 										</div>
 									</div>
-									<Link
-										className={buttonVariants({
-											variant: "outline",
-											className: "min-w-0",
-										})}
-										params={{ agentId: agent.agentId }}
-										to="/agents/$agentId"
-										aria-label={`查看 ${agent.name} 详情`}
-									>
-										查看详情
-										<ArrowRight aria-hidden="true" />
-									</Link>
+									{conversationSelection &&
+									canStartPlatformConversation(agent) ? (
+										<Link
+											className={buttonVariants({ className: "min-w-0" })}
+											params={{ agentId: agent.agentId }}
+											search={{ conversation: undefined, view: undefined }}
+											to="/agents/$agentId/conversations"
+										>
+											开始对话
+											<ArrowRight aria-hidden="true" />
+										</Link>
+									) : (
+										<Link
+											className={buttonVariants({
+												variant: "outline",
+												className: "min-w-0",
+											})}
+											params={{ agentId: agent.agentId }}
+											to="/agents/$agentId"
+											aria-label={`查看 ${agent.name} 详情`}
+										>
+											查看详情
+											<ArrowRight aria-hidden="true" />
+										</Link>
+									)}
 								</li>
 							))}
 						</ul>

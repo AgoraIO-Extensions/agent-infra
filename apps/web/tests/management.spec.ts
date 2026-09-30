@@ -318,6 +318,26 @@ async function fixture(
 	return {
 		commands,
 		visibleAgentListRequests: () => visibleAgentListRequests,
+		readyAgent() {
+			agent = {
+				...agent,
+				managementStatus: "available",
+				serviceAvailability: "ready",
+			};
+		},
+		selfManagedReadyAgent() {
+			agent = AgentProjectionV2Schema.parse({
+				...agent,
+				managementStatus: "available",
+				serviceAvailability: "ready",
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/agents/pilot@sha256:abc",
+					interactionMode: "self-managed",
+					identityResponsibility: "self-managed",
+				},
+			});
+		},
 		staleDeployment() {
 			deployment = { ...deployment, status: "stale" };
 		},
@@ -852,7 +872,9 @@ test("original IA workbench and administrator Agent entry stay reachable on the 
 }, info) => {
 	const api = await fixture(page, "admin");
 	await page.goto("/");
-	await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: "从可用 Agent 开始今天的工作。" }),
+	).toBeVisible();
 	let navigation: Page | Locator = page;
 	if (info.project.name === "mobile") {
 		await page.getByRole("button", { name: "打开导航" }).click();
@@ -867,6 +889,9 @@ test("original IA workbench and administrator Agent entry stay reachable on the 
 	await expect(
 		navigation.getByRole("navigation", { name: "系统管理" }),
 	).toBeVisible();
+	await expect(
+		navigation.getByRole("link", { name: "对话", exact: true }),
+	).toHaveAttribute("href", /\/agents\?mode=conversation$/);
 	await expect(
 		navigation.getByRole("link", { name: "Agent 管理", exact: true }),
 	).toHaveAttribute("href", "/admin/agents");
@@ -903,10 +928,11 @@ test("original IA workbench and administrator Agent entry stay reachable on the 
 		).not.toBeVisible();
 	}
 	await expect(
-		page.getByRole("heading", { name: "Agent 管理", exact: true }),
+		page.getByRole("heading", { name: "管理 Agent 的系统状态。" }),
 	).toBeVisible();
+	await expect(page.getByText("处理创建失败与系统级停用。")).toBeVisible();
 	await expect(page.getByRole("alert")).toContainText(
-		"管理员 Agent 暂时无法查看，请稍后重试",
+		"Agent 列表暂不可用。请在创建审批页处理待办。",
 	);
 	await expect(page.getByRole("link", { name: "返回工作台" })).toHaveAttribute(
 		"href",
@@ -916,10 +942,10 @@ test("original IA workbench and administrator Agent entry stay reachable on the 
 	await page.goto("/admin/agents");
 	await page.reload();
 	await expect(
-		page.getByRole("heading", { name: "Agent 管理", exact: true }),
+		page.getByRole("heading", { name: "管理 Agent 的系统状态。" }),
 	).toBeVisible();
 	await expect(page.getByRole("alert")).toContainText(
-		"管理员 Agent 暂时无法查看，请稍后重试",
+		"Agent 列表暂不可用。请在创建审批页处理待办。",
 	);
 	await expect(page.getByRole("link", { name: "返回工作台" })).toHaveAttribute(
 		"href",
@@ -935,11 +961,109 @@ test("administrator Agent management does not consume the ordinary discovery lis
 }) => {
 	const api = await fixture(page, "admin");
 	await page.goto("/admin/agents");
-	await expect(page.getByRole("heading", { name: "Agent 管理" })).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: "管理 Agent 的系统状态。" }),
+	).toBeVisible();
 	await expect(page.getByRole("alert")).toContainText(
-		"管理员 Agent 暂时无法查看，请稍后重试",
+		"Agent 列表暂不可用。请在创建审批页处理待办。",
 	);
 	expect(api.visibleAgentListRequests()).toBe(0);
+});
+
+test("conversation navigation opens an Agent chooser and the existing chat route", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	await page.goto("/");
+	const navigation =
+		info.project.name === "mobile"
+			? page.getByRole("dialog", { name: "主导航" })
+			: page;
+	if (info.project.name === "mobile")
+		await page.getByRole("button", { name: "打开导航" }).click();
+	await navigation.getByRole("link", { name: "对话", exact: true }).click();
+	await expect(page).toHaveURL(/\/agents\?mode=conversation$/);
+	await expect(
+		page.locator(".platform-sidebar").getByRole("link", { name: "对话" }),
+	).toHaveAttribute("aria-current", "page");
+	await expect(
+		page.getByRole("heading", { name: "选择 Agent 开始对话" }),
+	).toBeVisible();
+	await expect(page.getByRole("link", { name: "开始对话" })).toHaveCount(0);
+	api.readyAgent();
+	await page.reload();
+	await expect(page.getByRole("link", { name: "开始对话" })).toHaveAttribute(
+		"href",
+		"/agents/agent-pilot-1/conversations",
+	);
+	await page.getByRole("link", { name: "开始对话" }).click();
+	await expect(page).toHaveURL(/\/agents\/agent-pilot-1\/conversations$/);
+	await expect(
+		page.locator(".platform-sidebar").getByRole("link", { name: "对话" }),
+	).toHaveAttribute("aria-current", "true");
+	await expect(
+		page.getByRole("heading", { name: "对话", level: 1 }),
+	).toBeVisible();
+});
+
+test("ready self-managed Agent has no native conversation entry", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.selfManagedReadyAgent();
+	await page.goto("/agents?mode=conversation");
+	await expect(page.getByRole("link", { name: "开始对话" })).toHaveCount(0);
+	await expect(
+		page.getByRole("link", { name: "查看 Release assistant 详情" }),
+	).toBeVisible();
+	await page.goto("/");
+	await expect(page.getByRole("link", { name: "开始对话" })).toHaveCount(0);
+});
+
+test("shared navigation switches at the original IA breakpoint and fits narrow drawers", async ({
+	page,
+}, info) => {
+	test.skip(info.project.name !== "mobile", "Responsive navigation acceptance");
+	await fixture(page, "admin");
+	await page.goto("/");
+	const trigger = page.getByRole("button", { name: "打开导航" });
+	for (const width of [160, 200, 900, 1023]) {
+		await page.setViewportSize({ width, height: 844 });
+		await expect(trigger).toBeVisible();
+		await trigger.click();
+		const dialog = page.getByRole("dialog", { name: "主导航" });
+		await expect(dialog).toBeVisible();
+		await expect(dialog.getByRole("link", { name: "创建审批" })).toBeVisible();
+		await expect
+			.poll(() =>
+				dialog.evaluate((element) => {
+					const bounds = element.getBoundingClientRect();
+					const entries = element.querySelectorAll(
+						"nav a, nav [aria-disabled]",
+					);
+					return (
+						bounds.right <= innerWidth &&
+						element.scrollWidth <= element.clientWidth &&
+						[...element.querySelectorAll("nav")].every(
+							(nav) => nav.scrollWidth <= nav.clientWidth,
+						) &&
+						[...entries].every((entry) => {
+							const rect = entry.getBoundingClientRect();
+							return rect.left >= bounds.left && rect.right <= bounds.right;
+						})
+					);
+				}),
+			)
+			.toBe(true);
+		await dialog.getByRole("button", { name: "关闭导航" }).click();
+	}
+	await page.setViewportSize({ width: 1024, height: 844 });
+	await expect(trigger).not.toBeVisible();
+	await expect(
+		page.locator(".platform-sidebar").getByRole("navigation", {
+			name: "系统管理",
+		}),
+	).toBeVisible();
 });
 
 test("employee workbench keeps system management out of the shared navigation", async ({
@@ -947,7 +1071,9 @@ test("employee workbench keeps system management out of the shared navigation", 
 }, info) => {
 	await fixture(page, "employee");
 	await page.goto("/");
-	await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: "从可用 Agent 开始今天的工作。" }),
+	).toBeVisible();
 	const navigation = page.getByRole("button", { name: "打开导航" });
 	if (info.project.name === "mobile") await navigation.click();
 	const navigationRoot =
@@ -971,7 +1097,7 @@ test("employee workbench keeps system management out of the shared navigation", 
 		page.getByRole("heading", { name: "无权访问 Agent 管理", exact: true }),
 	).toBeVisible();
 	await expect(
-		page.getByRole("heading", { name: "Agent 管理", exact: true }),
+		page.getByRole("heading", { name: "管理 Agent 的系统状态。" }),
 	).toHaveCount(0);
 	await expect(page.getByRole("link", { name: "返回工作台" })).toHaveAttribute(
 		"href",
@@ -1028,6 +1154,7 @@ test("management pages remain reachable at 200% zoom equivalent widths", async (
 	test.skip(info.project.name !== "mobile", "Narrow viewport acceptance");
 	await fixture(page, "owner");
 	for (const path of [
+		"/",
 		"/agents",
 		"/agents/agent-pilot-1",
 		"/my-agents",
@@ -1059,27 +1186,30 @@ test("management pages remain reachable at 200% zoom equivalent widths", async (
 		await capture(page, info, `short-${path.replaceAll("/", "-")}`);
 	}
 	await fixture(page, "admin");
-	await page.goto("/admin/approvals");
-	await expect(page.getByRole("heading", { name: "审批" })).toBeVisible();
-	for (const width of [160, 200, 215, 320, 390, 430, 768, 1024, 1440]) {
-		await page.setViewportSize({ width, height: width <= 430 ? 844 : 1000 });
-		await expect
-			.poll(
-				() =>
-					page.evaluate(
-						() =>
-							Math.max(
-								document.documentElement.scrollWidth,
-								document.body.scrollWidth,
-							) <= innerWidth,
-					),
-				{ message: `approvals at ${width}px` },
-			)
-			.toBe(true);
-		if (width === 160) await capture(page, info, "narrow-approvals");
+	for (const path of ["/admin/approvals", "/admin/agents"]) {
+		await page.goto(path);
+		await expect(page.locator(".management-content h1").first()).toBeVisible();
+		for (const width of [160, 200, 215, 320, 390, 430, 768, 1024, 1440]) {
+			await page.setViewportSize({ width, height: width <= 430 ? 844 : 1000 });
+			await expect
+				.poll(
+					() =>
+						page.evaluate(
+							() =>
+								Math.max(
+									document.documentElement.scrollWidth,
+									document.body.scrollWidth,
+								) <= innerWidth,
+						),
+					{ message: `${path} at ${width}px` },
+				)
+				.toBe(true);
+			if (width === 160)
+				await capture(page, info, `narrow-${path.replaceAll("/", "-")}`);
+		}
+		await page.setViewportSize({ width: 160, height: 320 });
+		await capture(page, info, `short-${path.replaceAll("/", "-")}`);
 	}
-	await page.setViewportSize({ width: 160, height: 320 });
-	await capture(page, info, "short-approvals");
 });
 
 test("Owner manually configures a bot without exposing its Secret or an internal reference", async ({

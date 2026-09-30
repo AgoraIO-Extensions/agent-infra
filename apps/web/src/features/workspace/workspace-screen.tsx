@@ -4,7 +4,10 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
-import type { AgentDiscoveryState } from "../agent-discovery/agent-discovery.js";
+import {
+	type AgentDiscoveryState,
+	canStartPlatformConversation,
+} from "../agent-discovery/agent-discovery.js";
 import { agentServiceAvailabilityLabel } from "../agent-discovery/agent-discovery-screen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import type { MyAgentApplicationsState } from "../my-agents/my-agent-applications.js";
@@ -40,9 +43,7 @@ function AgentState({ state }: { state: WorkspaceState<AgentDiscoveryState> }) {
 			aria-label="可用 Agent"
 		>
 			{state.agents.slice(0, 3).map((agent) => {
-				const ready =
-					agent.managementStatus === "available" &&
-					agent.serviceAvailability === "ready";
+				const ready = canStartPlatformConversation(agent);
 				return (
 					<li
 						key={agent.agentId}
@@ -175,11 +176,16 @@ export function WorkspaceScreen({
 	retryingApplications = false,
 }: WorkspaceScreenProps) {
 	return (
-		<main className="platform-content management-content">
+		<main className="platform-content management-content ia-workspace">
 			<div className="space-y-10">
 				<header className="page-heading flex flex-wrap items-end justify-between gap-5">
 					<div className="min-w-0">
-						<h1 className="break-words font-semibold text-[28px]">工作台</h1>
+						<p className="mb-2 text-muted-foreground text-sm">
+							公司 Agent 平台 · M1
+						</p>
+						<h1 className="break-words font-semibold text-[28px]">
+							从可用 Agent 开始今天的工作。
+						</h1>
 						<p className="mt-2 max-w-2xl text-muted-foreground">
 							发现和使用 Agent，跟进自己的创建申请；Owner
 							维护配置，系统管理员处理资源审批与系统状态。
@@ -303,7 +309,7 @@ export function WorkspaceScreen({
 								<span className="min-w-0">
 									<strong className="block">Agent 管理</strong>
 									<span className="mt-1 block text-muted-foreground text-sm">
-										查看状态并处理停止、重启、停用和创建失败。
+										Agent 管理暂不可用，请先在创建审批处理待办。
 									</span>
 								</span>
 							</Link>

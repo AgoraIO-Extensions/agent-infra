@@ -26,6 +26,19 @@ export type AgentDetailState =
 	| { kind: "ready"; agent: AgentProjectionV2 }
 	| UnavailableState;
 
+export function canStartPlatformConversation(
+	agent: AgentProjectionV2,
+): boolean {
+	return (
+		agent.managementStatus === "available" &&
+		agent.serviceAvailability === "ready" &&
+		!(
+			agent.source.kind === "custom" &&
+			agent.source.interactionMode === "self-managed"
+		)
+	);
+}
+
 const retryableError = (): Error & { readonly retryable: true } =>
 	Object.assign(new Error("Agent data is temporarily unavailable"), {
 		retryable: true as const,

@@ -22,6 +22,8 @@ export default defineConfig({
 	use: {
 		baseURL: `http://127.0.0.1:${port}`,
 		browserName: "chromium",
+		channel:
+			process.env.WEB_TEST_BROWSER_CHANNEL === "chrome" ? "chrome" : undefined,
 		// Request assertions use synthetic fixtures; do not persist request bodies.
 		trace: "off",
 	},

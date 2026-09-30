@@ -63,7 +63,11 @@ describe("WorkspaceScreen", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("heading", { name: "工作台" })).toBeTruthy();
+		expect(
+			screen.getByRole("heading", {
+				name: "从可用 Agent 开始今天的工作。",
+			}),
+		).toBeTruthy();
 		expect(screen.getByRole("heading", { name: "编程助手" })).toBeTruthy();
 		expect(
 			screen.getByRole("link", { name: "开始对话" }).getAttribute("href"),
@@ -97,5 +101,26 @@ describe("WorkspaceScreen", () => {
 			screen.queryByRole("heading", { name: "需要管理员处理" }),
 		).toBeNull();
 		expect(screen.queryByRole("link", { name: "Agent 管理" })).toBeNull();
+	});
+
+	it("does not offer a platform conversation for a ready self-managed Agent", () => {
+		const selfManaged = AgentProjectionV2Schema.parse({
+			...agent,
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/pilot@sha256:abc",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+			},
+		});
+		render(
+			<WorkspaceScreen
+				agents={{ kind: "ready", agents: [selfManaged] }}
+				applications={{ kind: "ready", applications: [] }}
+				isAdmin={false}
+			/>,
+		);
+		expect(screen.queryByRole("link", { name: "开始对话" })).toBeNull();
+		expect(screen.getByRole("link", { name: "查看详情" })).toBeTruthy();
 	});
 });

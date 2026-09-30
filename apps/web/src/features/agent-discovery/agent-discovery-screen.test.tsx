@@ -156,6 +156,30 @@ describe("AgentDiscoveryScreen", () => {
 		expect(link.className).toContain("min-w-0");
 	});
 
+	it("keeps a ready self-managed Agent out of the platform conversation chooser", async () => {
+		const agent = AgentProjectionV2Schema.parse({
+			...startingAgent,
+			managementStatus: "available",
+			serviceAvailability: "ready",
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/pilot@sha256:abc",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+			},
+		});
+		await renderWithAgentRouter(
+			<AgentDiscoveryScreen
+				conversationSelection
+				state={{ kind: "ready", agents: [agent] }}
+			/>,
+		);
+		expect(screen.queryByRole("link", { name: "开始对话" })).toBeNull();
+		expect(
+			screen.getByRole("link", { name: /查看 Release assistant 详情/ }),
+		).toBeTruthy();
+	});
+
 	it.each([
 		["starting", "启动中"],
 		["updating", "更新中"],

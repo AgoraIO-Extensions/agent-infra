@@ -120,15 +120,19 @@ test("own audit page filters, paginates, opens detail, and fits mobile", async (
 
 test("administrator audit route is available only in the administrator session", async ({
 	page,
-}) => {
+}, info) => {
 	await fixture(page, "admin");
 	await page.goto("/admin/audit");
 	await expect(
 		page.getByRole("heading", { name: "平台审计", exact: true }),
 	).toBeVisible();
+	if (info.project.name === "mobile")
+		await page.getByRole("button", { name: "打开导航" }).click();
 	await expect(
-		page.getByRole("link", { name: "平台审计", exact: true }).first(),
+		page.getByRole("link", { name: "审计日志", exact: true }).first(),
 	).toBeVisible();
+	if (info.project.name === "mobile")
+		await page.getByRole("button", { name: "关闭导航" }).click();
 	await page.getByLabel("主体类型", { exact: true }).selectOption("user");
 	await page.getByLabel("主体 ID", { exact: true }).fill("audit-user-a");
 	await page.getByRole("button", { name: "查询", exact: true }).click();

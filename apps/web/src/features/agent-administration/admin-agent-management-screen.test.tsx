@@ -48,7 +48,9 @@ describe("AdminAgentManagementScreen", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("heading", { name: "Agent 管理" })).toBeTruthy();
+		expect(
+			screen.getByRole("heading", { name: "管理 Agent 的系统状态。" }),
+		).toBeTruthy();
 		expect(screen.getByText("生命周期操作：编程助手")).toBeTruthy();
 		expect(
 			screen.getByRole("link", { name: "查看详情" }).getAttribute("href"),

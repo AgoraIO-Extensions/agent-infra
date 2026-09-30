@@ -37,7 +37,7 @@ function AdminAgentsRoute() {
 		);
 	}
 	return (
-		<main className="platform-content management-content">
+		<main className="platform-content management-content ia-admin-agents">
 			<AdminAgentManagementScreen state={{ kind: "contract-pending" }} />
 		</main>
 	);
