@@ -17,11 +17,13 @@ type CurrentUser = {
 	readonly accountStatus: "active" | "disabled";
 };
 
-function userId(value: string): void {
+function stableUserId(value: string): void {
 	if (
-		!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
-			value,
-		)
+		typeof value !== "string" ||
+		value.length === 0 ||
+		value.includes("\0") ||
+		!value.isWellFormed() ||
+		Buffer.byteLength(value, "utf8") > 1024
 	)
 		throw new Error("PERSONAL_RELAY_KEY_INPUT_INVALID");
 }
@@ -66,12 +68,15 @@ export class PostgresPersonalRelayKeyStoreV1
 		sql: Transaction,
 		actorUserId: string,
 	): Promise<void> {
-		userId(actorUserId);
-		const [mapped] = await sql`
+		stableUserId(actorUserId);
+		// LDAP deployments also lock their stable mapping row during disable.
+		// Other IdentityAdapters have no LDAP mapping; their current user remains
+		// the authority, with this transaction lock serializing Key operations.
+		await sql`select pg_advisory_xact_lock(hashtextextended(${actorUserId}, 0))`;
+		await sql`
 			select user_id from platform.ldap_identity_ids
 			where user_id = ${actorUserId} for update
 		`;
-		if (!mapped) throw new ApiIdentityError("resource_unavailable");
 		const [disabled] = await sql`
 			select user_id from platform.platform_user_disables
 			where user_id = ${actorUserId}
@@ -197,7 +202,7 @@ export class PostgresPersonalRelayKeyStoreV1
 		readonly reason: string;
 		readonly outcome: "rejected" | "failed";
 	}): Promise<void> {
-		if (input.actorUserId !== null) userId(input.actorUserId);
+		if (input.actorUserId !== null) stableUserId(input.actorUserId);
 		bounded(input.traceId, 256);
 		bounded(input.requestId, 256);
 		bounded(input.reason, 64);

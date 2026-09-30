@@ -82,6 +82,42 @@ async function mappedUser() {
 }
 
 describe("personal Relay Key PostgreSQL authority", () => {
+	it("uses a current non-LDAP identity without requiring an LDAP mapping", async () => {
+		const actorUserId = `external:user:${"x".repeat(300)}:${randomUUID()}`;
+		const store = new PostgresPersonalRelayKeyStoreV1(
+			database.databaseUrl,
+			async (userId) => ({ userId, accountStatus: "active" }),
+			encryptor,
+		);
+		const sql = postgres(database.databaseUrl, { max: 1 });
+		const metadata = { traceId: randomUUID(), requestId: randomUUID() };
+		try {
+			const [mapping] = await sql`
+				select user_id from platform.ldap_identity_ids
+				where user_id = ${actorUserId}
+			`;
+			expect(mapping).toBeUndefined();
+			expect(
+				await store.replace({
+					actorUserId,
+					expectedVersion: null,
+					keyValue,
+					...metadata,
+				}),
+			).toBe(1);
+			expect(await store.current({ actorUserId, ...metadata })).toBe(1);
+			await sql`
+				insert into platform.platform_user_disables (user_id, disabled_by)
+				values (${actorUserId}, 'administrator')
+			`;
+			await expect(
+				store.revoke({ actorUserId, expectedVersion: 1, ...metadata }),
+			).rejects.toMatchObject({ code: "not_authorized" });
+		} finally {
+			await Promise.all([store.close(), sql.end()]);
+		}
+	});
+
 	it("isolates subjects, keeps ciphertext only, and audits every successful operation", async () => {
 		const first = await mappedUser();
 		const second = await mappedUser();
@@ -118,7 +154,8 @@ describe("personal Relay Key PostgreSQL authority", () => {
 			).toBeNull();
 			const versions = await sql`
 				select subject_id, key_version, ciphertext::text as ciphertext
-				from platform.relay_key_versions where purpose = 'personal'
+				from platform.relay_key_versions
+				where purpose = 'personal' and subject_id = ${first}
 			`;
 			expect(versions).toHaveLength(1);
 			expect(versions[0]?.subject_id).toBe(first);
