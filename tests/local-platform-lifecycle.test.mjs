@@ -138,6 +138,9 @@ spec:
         - name: deployment-module
           secret:
             secretName: fixture-worker-configuration
+            items:
+              - key: worker-config
+                path: configuration.mjs
         - name: runtime-auth
           secret:
             secretName: fixture-worker-auth
@@ -181,6 +184,8 @@ elif [[ "$*" == *"--ignore-not-found -o json" ]]; then
       printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify","labels":{"app.kubernetes.io/managed-by":"agent-infra-local","agent-infra.agora.io/local-project":"agent-infra-verify"}},"data":{"url":"eA==","configuration.mjs":"eA==","runtime-grant.pem":"eA==","service-token":"eA==","keyring.pem":"eA=="}}\\n' "$secret_name"
     elif [[ "$secret_name" == fixture-worker-configuration && "$FAKE_SECRET_MISSING_KEY" == 1 ]]; then
       printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify"},"data":{"other":"eA=="}}\\n' "$secret_name"
+    elif [[ "$secret_name" == fixture-worker-configuration ]]; then
+      printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify"},"data":{"worker-config":"eA=="}}\\n' "$secret_name"
     else
       printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify"},"data":{"url":"eA==","configuration.mjs":"eA==","runtime-grant.pem":"eA==","service-token":"eA==","keyring.pem":"eA=="}}\\n' "$secret_name"
     fi
@@ -823,14 +828,14 @@ test("local up reports missing Worker Secret material before Helm rollout", asyn
 	}
 });
 
-test("local up names a missing Worker configuration key without exposing data", async () => {
+test("local up names a missing mapped Worker configuration key without exposing data", async () => {
 	const f = await fixture();
 	try {
 		const result = run("up", { ...f.env, FAKE_SECRET_MISSING_KEY: "1" });
 		assert.notEqual(result.status, 0);
 		assert.match(
 			result.stderr,
-			/Local Worker Secret is missing key configuration\.mjs: fixture-worker-configuration/,
+			/Local Worker Secret is missing key worker-config: fixture-worker-configuration/,
 		);
 		assert.doesNotMatch(result.stderr, /eA==|fixture:fixture/);
 		assert.doesNotMatch(

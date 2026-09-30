@@ -183,7 +183,12 @@ check_worker_secret_material() {
           for (const container of Array.isArray(podSpec.containers) ? podSpec.containers : []) {
             for (const mount of Array.isArray(container?.volumeMounts) ? container.volumeMounts : []) {
               const secretName = volumes.get(mount?.name);
-              if (secretName && typeof mount.subPath === "string") add(secretName, mount.subPath);
+              if (secretName && typeof mount.subPath === "string") {
+                const volume = podSpec.volumes.find((candidate) => candidate?.name === mount.name);
+                const items = Array.isArray(volume?.secret?.items) ? volume.secret.items : [];
+                // Explicit items were already checked by their Secret keys above.
+                if (items.length === 0) add(secretName, mount.subPath);
+              }
             }
           }
         };
