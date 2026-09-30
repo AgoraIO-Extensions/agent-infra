@@ -1,5 +1,6 @@
 import { AgentResourceProfileProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
+import { createDeploymentModelCatalogAdapterV1 } from "@agent-infra/model-catalog";
 import type { AgentConfigurationAuthorityContextV1 } from "@agent-infra/platform-core";
 import { PostgresApiIdentityStoreV1 } from "@agent-infra/platform-store";
 import {
@@ -22,6 +23,7 @@ import {
 import { createDeploymentPresentation } from "./deployment-presentation.js";
 import { createDeploymentSecretPreparation } from "./deployment-secrets.js";
 import type { IdentityAdapter } from "./http/identity.js";
+import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 
 export interface ProductionPlatformApiInputV1
 	extends Omit<DeploymentAdmissionInputV1, "currentIdentity"> {
@@ -35,7 +37,12 @@ export interface ProductionPlatformApiInputV1
 	/** An actual deployment identity boundary; no browser-provided identity headers. */
 	readonly identity: IdentityAdapter;
 	readonly userGovernance?: PlatformApiAssemblyInput["userGovernance"];
-	readonly validatePersonalRelayKey?: PlatformApiAssemblyInput["personalRelayKeyValidation"];
+	/** Deployment-attested, read-only Relay route bound to a ModelCatalog endpoint. */
+	readonly personalRelayKeyValidation?: {
+		readonly profile: "sub2api-v1-model-list";
+		readonly endpointId: string;
+		readonly modelsUrl: string;
+	};
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	/** Public wrapping keys only. Worker private keys belong to the Worker deployment. */
 	readonly encryptionKeys: unknown;
@@ -106,7 +113,15 @@ export function createProductionPlatformApiAssemblyInputV1(
 		personalRelayKeyEncryptor: createRelayKeyEncryptorV1({
 			encryptionKeys: input.encryptionKeys,
 		}),
-		personalRelayKeyValidation: input.validatePersonalRelayKey,
+		personalRelayKeyValidation: input.personalRelayKeyValidation
+			? createPersonalRelayKeyValidatorV1({
+					catalog: createDeploymentModelCatalogAdapterV1({
+						load: input.modelCatalog.load,
+					}),
+					...input.personalRelayKeyValidation,
+					catalogRevision: input.modelCatalog.revision,
+				})
+			: undefined,
 		apiIdentity,
 		requestScope: identityScope.requestScope,
 		conversationReplayWindow: input.conversationReplayWindow,
