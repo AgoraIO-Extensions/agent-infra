@@ -469,6 +469,44 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			ON CONFLICT (topic, aggregate_id) DO NOTHING
 		`;
 		await sql`
+			WITH advanced AS (
+				UPDATE connection_provider_upgrade_tasks task
+				SET status = 'PENDING_AUTHORIZATION', updated_at = now()
+				FROM connection_provider_upgrade_campaigns campaign,
+					connection_accounts account
+				WHERE task.campaign_id = campaign.id
+					AND task.connection_id = account.id
+					AND task.principal_id = account.owner_principal_id
+					AND account.owner_type = 'PERSONAL'
+					AND account.status = 'ACTIVE'
+					AND account.provider_release_id = campaign.target_provider_release_id
+					AND task.status = 'PENDING_CONNECTION'
+					AND (campaign.deadline_at IS NULL OR campaign.deadline_at > now())
+					AND (${principalId ?? null}::text IS NULL OR task.principal_id = ${principalId ?? null})
+					AND EXISTS (
+						SELECT 1 FROM connection_effective_access_authorizations access
+						WHERE access.connection_id = task.connection_id
+							AND access.principal_id = task.principal_id
+							AND access.provider_release_id = campaign.target_provider_release_id
+							AND access.state = 'ACTIVE'
+							AND (access.valid_until IS NULL OR access.valid_until > now())
+					)
+				RETURNING task.id, task.campaign_id, task.principal_id, task.connection_id
+			), audited AS (
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				SELECT principal_id, 'PROVIDER_UPGRADE_AUTHORIZATION_REQUIRED',
+					jsonb_build_object('taskId', id, 'campaignId', campaign_id)
+				FROM advanced
+			)
+			INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+			SELECT 'outbox-authorization-required-' || id,
+				'connection.provider-upgrade.authorization-required', id,
+				jsonb_build_object('campaignId', campaign_id,
+					'principalId', principal_id, 'connectionId', connection_id)
+			FROM advanced
+			ON CONFLICT (topic, aggregate_id) DO NOTHING
+		`;
+		await sql`
 			INSERT INTO connection_provider_upgrade_tasks (
 				id, campaign_id, principal_id, connection_id,
 				authorization_root_id, consumer_id, provider_id, actor_key, status

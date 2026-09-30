@@ -751,6 +751,40 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(screen.queryByRole("heading", { name: "连接 Rehoboam" })).toBeNull();
 	});
 
+	it("已连接目标版本后展示对应账号及待确认的客户端授权", async () => {
+		const initial = await api.getConnections();
+		const existing = initial.overview.connections[0];
+		if (!existing) throw new Error("Connection fixture is missing");
+		initial.overview.connections.push({
+			...existing,
+			id: "connection-manhattan",
+			providerId: "manhattan",
+			displayName: "Manhattan user",
+			externalAccount: "manhattan-user@agora.io",
+			actionVersionIds: [],
+		});
+		initial.overview.upgradeTasks = [
+			{
+				campaignId: "campaign-manhattan",
+				connectionId: "connection-manhattan",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "manhattan",
+				reason: "Provider upgraded",
+				status: "PENDING_AUTHORIZATION",
+				targetProviderReleaseId: "manhattan-connection-v5",
+				taskId: "task-manhattan",
+			},
+		];
+		api.getConnections.mockResolvedValueOnce(initial);
+		renderPage(<ConnectionsPage />);
+		expect(await screen.findByText("manhattan-user@agora.io")).toBeTruthy();
+		expect(screen.getByText("待确认客户端授权")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "确认授权" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "申请新版能力" })).toBeNull();
+	});
+
 	it("Manhattan 升级即使带旧版批准链接也只开放目标版本申请", async () => {
 		window.history.replaceState(
 			{},

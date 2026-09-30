@@ -1082,6 +1082,41 @@ describe("PostgreSQL Connection business authority", () => {
 						action: `github.undeclared_${suffix}`,
 					}),
 				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await sql`UPDATE connection_accounts SET provider_release_id = ${v2.providerReleaseId}
+				WHERE id = ${connection.connectionId}`;
+				expect(
+					(await repository.getOverview(principalId)).upgradeTasks,
+				).toEqual([expect.objectContaining({ status: "PENDING_CONNECTION" })]);
+				await sql`UPDATE connection_accounts SET provider_release_id = ${v1.providerReleaseId}
+				WHERE id = ${connection.connectionId}`;
+				await repository.storeGithubOAuthCredential({
+					accessToken: `other-account-secret-${suffix}`,
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId,
+						providerReleaseId: v2.providerReleaseId,
+						scopes: ["repo"],
+					}),
+					displayName: "Different GitHub account",
+					externalAccount: `other-${suffix}`,
+					grantedScopes: ["repo"],
+					principalId,
+				});
+				expect(
+					(await repository.getOverview(principalId)).upgradeTasks,
+				).toEqual([
+					expect.objectContaining({
+						connectionId: connection.connectionId,
+						status: "PENDING_CONNECTION",
+					}),
+				]);
+				await sql`UPDATE connection_grants SET status = 'PAUSED_CREDENTIAL'
+				WHERE connection_id = ${connection.connectionId} AND status = 'ACTIVE'`;
+				await sql`UPDATE connection_authorization_roots root
+				SET current_grant_id = NULL, fence = fence + 1
+				WHERE current_grant_id IN (
+					SELECT id FROM connection_grants
+					WHERE connection_id = ${connection.connectionId} AND status = 'PAUSED_CREDENTIAL'
+				)`;
 
 				await repository.storeGithubOAuthCredential({
 					accessToken: `replacement-provider-secret-${suffix}`,
@@ -1100,13 +1135,27 @@ describe("PostgreSQL Connection business authority", () => {
 					consumer: { id: consumerId, name: "Catalog test consumer" },
 					providerReleaseId: v2.providerReleaseId,
 				});
-				const reconnected = (
-					await repository.getOverview(principalId)
-				).connections.find((entry) => entry.id === connection.connectionId);
+				const upgradedOverview = await repository.getOverview(principalId);
+				const reconnected = upgradedOverview.connections.find(
+					(entry) => entry.id === connection.connectionId,
+				);
 				expect(reconnected).toMatchObject({
 					actionVersionIds: [v2ActionId],
 					requiresReconnect: false,
 				});
+				expect(upgradedOverview.upgradeTasks).toEqual([
+					expect.objectContaining({
+						connectionId: connection.connectionId,
+						status: "PENDING_AUTHORIZATION",
+					}),
+				]);
+				const [unconfirmedRoot] = await sql<
+					{ current_grant_id: string | null }[]
+				>`
+				SELECT current_grant_id FROM connection_authorization_roots
+				WHERE principal_id = ${principalId} AND consumer_id = ${consumerId}
+			`;
+				expect(unconfirmedRoot?.current_grant_id).toBeNull();
 				await expect(
 					repository.resolveDirectIdentity(directIdentity),
 				).rejects.toMatchObject({ code: "FORBIDDEN" });
