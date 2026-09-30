@@ -928,6 +928,42 @@ describe("PostgreSQL Conversation command transaction", () => {
 		}
 	});
 
+	it("denies an initial message without a relay key before writing effects", async () => {
+		const missingKeyAuthority = {
+			...authority,
+			actorId: "user_without_relay_key",
+		};
+		const { transaction, useCase } = createConversation(missingKeyAuthority);
+		try {
+			await expect(
+				useCase.createConversation({
+					schemaVersion: 1,
+					agentId: authority.agentId,
+					idempotencyKey: "create_missing_key",
+					requestId: "request_create_missing_key",
+					traceId: "trace_create_missing_key",
+				}),
+			).resolves.toMatchObject({ outcome: "accepted" });
+			const before = await commandEffectCounts();
+
+			await expect(
+				useCase.accept({
+					schemaVersion: 1,
+					command: "message",
+					conversationId: "conversation_id_1",
+					text: "must not be persisted",
+					idempotencyKey: "message_missing_key",
+					requestId: "request_message_missing_key",
+					traceId: "trace_message_missing_key",
+				}),
+			).resolves.toEqual({ outcome: "denied" });
+
+			expect(await commandEffectCounts()).toEqual(before);
+		} finally {
+			await transaction.close();
+		}
+	});
+
 	it.each(["ready", "active"] as const)(
 		"regenerates a %s conversation from its existing user message",
 		async (status) => {
