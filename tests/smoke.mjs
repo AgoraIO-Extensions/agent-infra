@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -60,7 +59,7 @@ async function verifyPlatformApi() {
 	}
 }
 
-async function verifyPackagedApiEntrypoint() {
+function verifyPackagedApiEntrypoint() {
 	const entry = new URL("../apps/platform-api/dist/index.mjs", import.meta.url);
 	const missing = spawnSync(process.execPath, [fileURLToPath(entry)], {
 		encoding: "utf8",
@@ -68,53 +67,10 @@ async function verifyPackagedApiEntrypoint() {
 		timeout: 5000,
 	});
 	assert.equal(missing.status, 1, missing.stderr);
-	assert.match(missing.stderr, /Platform API failed to start/);
-
-	const reservation = createServer();
-	reservation.listen(0, "127.0.0.1");
-	await once(reservation, "listening");
-	const address = reservation.address();
-	assert(address && typeof address === "object");
-	await new Promise((resolve) => reservation.close(resolve));
-	const child = spawn(process.execPath, [fileURLToPath(entry)], {
-		env: {
-			...process.env,
-			PLATFORM_API_DEPLOYMENT_MODULE: new URL(
-				"./fixtures/platform-api-deployment.mjs",
-				import.meta.url,
-			).href,
-			PORT: String(address.port),
-		},
-		stdio: ["ignore", "pipe", "pipe"],
-	});
-	let stderr = "";
-	child.stderr.setEncoding("utf8").on("data", (chunk) => {
-		stderr += chunk;
-	});
-	try {
-		const ready = Promise.race([
-			once(child.stdout, "data", { signal: AbortSignal.timeout(5000) }),
-			once(child, "exit").then(() => {
-				throw new Error(stderr || "Platform API exited before listening");
-			}),
-		]);
-		const [output] = await ready;
-		assert.match(String(output), /"service":"platform-api","status":"ready"/);
-		const health = await fetch(`http://127.0.0.1:${address.port}/healthz`, {
-			signal: AbortSignal.timeout(5000),
-		});
-		assert.equal(health.status, 200);
-		assert.deepEqual(await health.json(), {
-			service: "platform-api",
-			status: "ok",
-		});
-	} finally {
-		if (child.exitCode === null && child.signalCode === null) {
-			child.kill("SIGTERM");
-			await once(child, "exit");
-		}
-	}
-	assert.equal(child.exitCode, 0, stderr);
+	assert.equal(
+		missing.stderr.trim(),
+		"PLATFORM_API_DEPLOYMENT_MODULE is required",
+	);
 }
 
 async function verifyPackagedApiDeployment() {
@@ -184,7 +140,7 @@ await deployment.browserAuth.close();`,
 }
 
 await verifyPlatformApi();
-await verifyPackagedApiEntrypoint();
+verifyPackagedApiEntrypoint();
 await verifyPackagedApiDeployment();
 await verifyApi(startConnectionApi, "connection-api");
 

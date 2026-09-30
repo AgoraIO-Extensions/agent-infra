@@ -232,8 +232,13 @@ if (
 			process.once("SIGTERM", handleShutdown);
 			process.once("SIGINT", handleShutdown);
 		})
-		.catch(() => {
-			console.error("Platform API failed to start");
+		.catch((error: unknown) => {
+			console.error(
+				error instanceof Error &&
+					error.message === "PLATFORM_API_DEPLOYMENT_MODULE is required"
+					? error.message
+					: "Platform API failed to start",
+			);
 			process.exitCode = 1;
 		});
 }
