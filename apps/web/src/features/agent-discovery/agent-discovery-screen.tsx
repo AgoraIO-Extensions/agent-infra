@@ -7,6 +7,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import {
@@ -15,6 +16,7 @@ import {
 } from "./agent-discovery.js";
 
 type AgentDiscoveryScreenProps = {
+	connectionUrl?: string;
 	conversationSelection?: boolean;
 	query?: string;
 	onQueryChange?: (query: string) => void;
@@ -44,6 +46,7 @@ export const agentChannelKindLabels = {
 >;
 
 export function AgentDiscoveryScreen({
+	connectionUrl,
 	conversationSelection = false,
 	query: controlledQuery,
 	onQueryChange,
@@ -222,10 +225,12 @@ export function AgentDiscoveryScreen({
 											</Link>
 										) : (
 											<Link
-												className={buttonVariants({
-													variant: "outline",
-													className: "min-w-0",
-												})}
+												className={cn(
+													buttonVariants({
+														variant: "outline",
+														className: "min-w-0",
+													}),
+												)}
 												params={{ agentId: agent.agentId }}
 												to="/agents/$agentId"
 												aria-label={`查看 ${agent.name} 详情`}
@@ -239,6 +244,54 @@ export function AgentDiscoveryScreen({
 							))}
 						</ul>
 					)}
+					<section aria-label="使用引导" className="directory-guidance">
+						<article className="directory-guidance-card">
+							<p className="directory-eyebrow">使用前</p>
+							<h3>确认你的 Connection 授权</h3>
+							<p className="text-muted-foreground">
+								外部账号及授权在独立的 Connection 系统中管理。使用前请到
+								Connection 确认你的授权。
+							</p>
+							{connectionUrl ? (
+								<a
+									className={cn(
+										buttonVariants({
+											variant: "outline",
+											className: "min-w-0 max-w-full break-words",
+										}),
+									)}
+									href={connectionUrl}
+									target="_blank"
+									rel="noreferrer"
+								>
+									查看我的 Connection
+								</a>
+							) : (
+								<p className="text-muted-foreground">
+									暂时无法打开 Connection，请联系管理员确认访问入口。
+								</p>
+							)}
+						</article>
+						<article className="directory-guidance-card">
+							<p className="directory-eyebrow">没有找到</p>
+							<h3>可见范围由 Owner 维护</h3>
+							<p className="text-muted-foreground">
+								联系 Agent Owner，确认你的员工账号或所属组织是否在该 Agent
+								的可用范围内。
+							</p>
+							<Link
+								className={cn(
+									buttonVariants({
+										variant: "outline",
+										className: "min-w-0 max-w-full break-words",
+									}),
+								)}
+								to="/my-agents"
+							>
+								查看我的申请
+							</Link>
+						</article>
+					</section>
 					<p className="quiet-note text-muted-foreground text-sm">
 						仅显示当前身份获授权的 Agent。
 					</p>

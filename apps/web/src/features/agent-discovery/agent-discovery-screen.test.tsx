@@ -4,6 +4,7 @@ import { fireEvent, screen } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import { safeDeploymentUrl } from "../application-shell.js";
 import { AgentDiscoveryScreen } from "./agent-discovery-screen.js";
 import { renderWithAgentRouter } from "./test-router.js";
 
@@ -116,8 +117,51 @@ describe("AgentDiscoveryScreen", () => {
 			target: { value: "not-in-authorized-response" },
 		});
 		expect(screen.getByText("未找到匹配的 Agent。")).toBeTruthy();
-		expect(screen.queryAllByRole("link")).toHaveLength(0);
+		expect(
+			screen.queryAllByRole("link", { name: /^查看 .+ 详情$/ }),
+		).toHaveLength(0);
 	});
+
+	it("renders controlled Connection and application guidance without projecting authorization", async () => {
+		await renderWithAgentRouter(
+			<AgentDiscoveryScreen
+				connectionUrl={safeDeploymentUrl("https://connection.example/portal")}
+				state={{ kind: "ready", agents: [] }}
+			/>,
+		);
+		const connectionLink = screen.getByRole("link", {
+			name: "查看我的 Connection",
+		});
+		expect(connectionLink.getAttribute("href")).toBe(
+			"https://connection.example/portal",
+		);
+		expect(connectionLink.getAttribute("target")).toBe("_blank");
+		expect(connectionLink.getAttribute("rel")).toBe("noreferrer");
+		expect(
+			screen.getByRole("link", { name: "查看我的申请" }).getAttribute("href"),
+		).toBe("/my-agents");
+		expect(
+			screen.queryByText(/已授权|未授权|Owner 已配置的 Provider/),
+		).toBeNull();
+	});
+
+	it.each([undefined, "http://connection.example", "//connection.example"])(
+		"does not synthesize a Connection entry for missing or rejected deployment URL %s",
+		async (connectionUrl) => {
+			await renderWithAgentRouter(
+				<AgentDiscoveryScreen
+					connectionUrl={safeDeploymentUrl(connectionUrl)}
+					state={{ kind: "ready", agents: [] }}
+				/>,
+			);
+			expect(
+				screen.queryByRole("link", { name: "查看我的 Connection" }),
+			).toBeNull();
+			expect(
+				screen.getByText("暂时无法打开 Connection，请联系管理员确认访问入口。"),
+			).toBeTruthy();
+		},
+	);
 	it("drops previously visible Agents when the authorized collection changes", async () => {
 		function Collection() {
 			const [agents, setAgents] = useState([startingAgent]);

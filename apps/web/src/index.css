@@ -765,6 +765,8 @@ body {
 .ia-agent-directory {
 	max-width: 1440px;
 	padding: clamp(28px, 4vw, 52px) clamp(16px, 3vw, 40px) 72px;
+	font-family:
+		-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 	font-size: 14px;
 	line-height: 1.5;
 }
@@ -802,12 +804,14 @@ body {
 	letter-spacing: 0.08em;
 }
 .ia-workspace .workspace-card,
-.ia-agent-directory .directory-card {
+.ia-agent-directory .directory-card,
+.ia-agent-directory .directory-guidance-card {
 	border-radius: 14px;
 	background: var(--background);
 }
 .ia-workspace .workspace-card h3,
-.ia-agent-directory .directory-card h3 {
+.ia-agent-directory .directory-card h3,
+.ia-agent-directory .directory-guidance-card h3 {
 	font-weight: 700;
 	line-height: 1.3;
 }
@@ -900,6 +904,25 @@ body {
 .ia-agent-directory .directory-section-head > p {
 	font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
+.ia-agent-directory .directory-guidance {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 16px;
+	margin-top: 28px;
+	padding-top: 28px;
+	border-top: 1px solid var(--border);
+}
+.ia-agent-directory .directory-guidance-card {
+	min-width: 0;
+	padding: 20px;
+	border: 1px solid var(--border);
+}
+.ia-agent-directory .directory-guidance-card h3 {
+	font-size: 18px;
+}
+.ia-agent-directory .directory-guidance-card p:not(.directory-eyebrow) {
+	margin-block: 14px;
+}
 .ia-agent-directory .quiet-note {
 	margin-top: 28px;
 	padding-top: 28px;
@@ -911,6 +934,9 @@ body {
 		align-items: start;
 		flex-direction: column;
 	}
+	.ia-agent-directory .directory-guidance {
+		grid-template-columns: 1fr;
+	}
 }
 @media (max-width: 600px) {
 	.ia-workspace,
@@ -919,7 +945,8 @@ body {
 		padding-inline: 16px;
 	}
 	.ia-workspace .workspace-card,
-	.ia-agent-directory .directory-card {
+	.ia-agent-directory .directory-card,
+	.ia-agent-directory .directory-guidance-card {
 		padding: 16px;
 	}
 	.ia-agent-directory .directory-section-head {
