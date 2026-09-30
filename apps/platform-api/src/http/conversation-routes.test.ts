@@ -625,9 +625,10 @@ describe("Conversation persisted SSE", () => {
 			},
 		},
 	};
-	it("keeps V1 details readable when V2 operation facts are persisted", async () => {
+	it("keeps V1 detail fixed by URL and V2 event history versioned", async () => {
 		const timeoutEvent = {
 			...operationEvent,
+			eventSchemaVersion: undefined,
 			eventId: "timeout-event-3",
 			sequence: 3,
 			conversationCursor: "cursor-3",
@@ -656,18 +657,50 @@ describe("Conversation persisted SSE", () => {
 			events: [...execution.events, operationEvent],
 		});
 		const { app } = testApp(input);
-		const v1Detail = await app.request("/api/v1/conversations/conversation-1");
+		const v1Detail = await app.request("/api/v1/conversations/conversation-1", {
+			headers: { "x-agent-infra-v2": "1" },
+		});
 		const v1Execution = await app.request(
 			"/api/v1/conversations/conversation-1/executions/execution-1",
+			{ headers: { "x-agent-infra-v2": "1" } },
 		);
 		expect(v1Detail.status).toBe(200);
 		expect(v1Execution.status).toBe(200);
+		const v1DetailBody = await v1Detail.json();
+		const v1ExecutionBody = await v1Execution.json();
 		expect(
-			ConversationDetailProjectionV1Schema.parse(await v1Detail.json()),
+			ConversationDetailProjectionV1Schema.parse(v1DetailBody),
 		).toHaveProperty("messages");
 		expect(
-			ExecutionDetailProjectionV1Schema.parse(await v1Execution.json()),
+			ExecutionDetailProjectionV1Schema.parse(v1ExecutionBody),
 		).toHaveProperty("processSummary");
+		expect(v1DetailBody).not.toHaveProperty("events");
+		expect(v1ExecutionBody).not.toHaveProperty("events");
+		expect(v1ExecutionBody).toHaveProperty("schemaVersion", 1);
+
+		const v2Detail = await app.request("/api/v2/conversations/conversation-1");
+		const v2Execution = await app.request(
+			"/api/v2/conversations/conversation-1/executions/execution-1",
+		);
+		expect(v2Detail.status).toBe(200);
+		expect(v2Execution.status).toBe(200);
+		expect(
+			ConversationDetailProjectionV2Schema.parse(
+				await v2Detail.json(),
+			).events.map((event) => [event.schemaVersion, event.type]),
+		).toEqual([
+			[1, "text.delta"],
+			[2, "execution.operation"],
+			[2, "task.status"],
+		]);
+		expect(
+			ExecutionDetailProjectionV2Schema.parse(
+				await v2Execution.json(),
+			).events.map((event) => [event.schemaVersion, event.type]),
+		).toEqual([
+			[1, "execution.status"],
+			[2, "execution.operation"],
+		]);
 	});
 	it("keeps V1 streaming after validated V2 facts using the original cursor", async () => {
 		const query = dependencies().query;
