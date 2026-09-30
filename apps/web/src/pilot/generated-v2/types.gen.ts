@@ -872,6 +872,61 @@ export type DecideAgentApplicationV2Responses = {
 
 export type DecideAgentApplicationV2Response = DecideAgentApplicationV2Responses[keyof DecideAgentApplicationV2Responses];
 
+export type ListAdminAgentsV2Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/admin/agents';
+};
+
+export type ListAdminAgentsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListAdminAgentsV2Error = ListAdminAgentsV2Errors[keyof ListAdminAgentsV2Errors];
+
+export type ListAdminAgentsV2Responses = {
+    /**
+     * Administrator agents
+     */
+    200: {
+        items: Array<AgentProjectionV2>;
+        nextCursor: string | null;
+    };
+};
+
+export type ListAdminAgentsV2Response = ListAdminAgentsV2Responses[keyof ListAdminAgentsV2Responses];
+
 export type ListPlatformAuditV2Data = {
     body?: never;
     path?: never;

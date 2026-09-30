@@ -835,13 +835,48 @@ ACP 权限请求和进度通知只按各自协议含义消费。实际工具能�
 持久 intent、当前授权、可信开始及结果或 unknown；权限通过、Plugin before/after hook
 或某个工具通过不能补足未观察到的实际尝试与失败终态。
 
+Issue #957 的固定源码回读记录了 v1.18.30 (`3104c1428ec91f809e5ab86631300de41eb6952`)
+与官方 v1.18.33 (`51ef4be1d3c122f18fefb510dca8d778571f4f18`) 的五个接缝文件字节相同；
+该局部比较不等同于整版相同或升级批准。当前仓库 release 清单的 target 是
+`darwin-arm64`、`linux-arm64-musl` 和 `linux-x64-baseline-musl`，其 artifact/hash 仍以
+上方 release 声明为准。源码观察点和边界如下：
+
+| 接缝/观察点 | 固定源码证据 | 结论 |
+| --- | --- | --- |
+| 权限与实际写入 | `packages/opencode/src/tool/edit.ts:102-111`；内部先 `ctx.ask` 再写入 | before hook 不能证明权限通过或实际 I/O 开始 |
+| 调用与成功 | `packages/opencode/src/session/tools.ts:106-133` | `execute`/after hook 只表示外层调用返回，不是逐 attempt receipt |
+| running、错误与取消 | `packages/opencode/src/session/processor.ts:164-206,331-352,585-606` | 原生状态/中断清理不证明实际 I/O 已开始或执行源已退出 |
+| Plugin 接缝 | `packages/plugin/src/index.ts:266-285`；`packages/plugin/src/tool.ts` 的 V1 `ToolContext` | 公开契约没有覆盖每次内部尝试和失败终态的强制 receipt barrier |
+| 内部新尝试 | `packages/opencode/src/session/processor.ts:674-688` | provider retry 不是每个工具内部动作的回执 |
+
+因此固定版本、target 和已有 artifact/hash 可以回读；公开扩展的来源/hash、无歧义调用绑定
+及逐 attempt receipt 仍是启用前置，未证明时保持 fail closed。上述源码观察只证明文档决策，
+不证明四模板真实 Provider/Connection 或 Runtime 验收。
+
+本决策与既有产品和功能票的映射保持如下边界：
+
+| 权威/义务 | 本决策保留的边界 | 状态 |
+| --- | --- | --- |
+| Platform PRD §2/§13.3/§14、#483 | 实际 I/O 与唯一事实仍由受控 Driver 执行叶子和既有 journal/Worker 事务产生 | 设计约束；#483 真实 Provider/Connection 仍开放 |
+| #929 AC-2 | permit 是准入，`started` 只来自实际 I/O/dispatch；未观察到的开始不填造 | 文案已澄清；#929 仍未验收 |
+| #930 | ACP progress、before/after 和自有工具不能替代原生 effect receipt；原 built-in 缺口保留 | #930 Draft/能力缺口保留 |
+| 四模板、恢复、取消、隔离与 P1 工具义务 | 不因本决策或受控扩展通过而缩减原产品矩阵 | 由后续实现票逐项验证 |
+
 优先通过 upstream contribution 提供可等待、不可由模型或 Owner 关闭的原生接缝。
 官方 artifact 缺少可靠接缝时，记录对应能力未通过；不把完整 M1 义务改成模型子集或永久
-unsupported 清单。受控 derived/private artifact 另需明确的来源批准：固定 upstream
-tag/commit、最小补丁及协议、构建与依赖锁、每个 target 的 hash、许可/NOTICE、维护者与
-退出条件。平台 Runtime 维护者承担补丁、升级回归与上游跟进，来源决策由仓库 CODEOWNER
-按正式架构流程评审。没有具体来源批准与实际产物验证时，不构建、发布或启用该路径；运行时
-不下载依赖或编译源码，不另建 vendor 服务、插件平台或推理循环。
+unsupported 清单。当前 M1 不维护、准备、应用或构建 OpenCode 上游补丁、derived/private
+artifact、vendor builder 或修改版发行物，也不把 source-review packet 当作实现交付。若官方
+artifact 缺少可靠接缝，运行时必须拒绝对应能力并保留能力缺口；不能通过本 Issue、架构评审、
+fixture、环境变量或部署说明授权例外。Upstream contribution 可以由上游项目另行接收和维护，
+但不属于本仓实现、运行 pin 或验收证据；不能因此在本仓下载依赖、编译源码、发布或启用修改版，
+也不能另建 vendor 服务、插件平台或推理循环。
+
+官方公开工具扩展可以作为受控执行请求入口，实际 I/O 位于现有 Driver 信任域的执行叶子；
+扩展只能请求执行并等待结果，不能提交可信开始或结果事实。该路径复用既有 journal、Host
+当前授权和 Worker 事务，不新增部署单元或事实权威。启用前须证明工具行为、每次实际尝试、
+取消与恢复等价，并阻断所有绕过屏障的原工具入口；固定扩展及配置不可由模型或 Owner
+改写。受控工具的证明与官方原 built-in 分别记录，不能因替代路径通过而声称原 built-in 已通过，
+也不能缩减完整 M1 工具义务。调用绑定、控制隔离或等价能力尚未证明时，对应能力保持未通过。
 
 原生工具接缝留在 Driver 与原生进程边界，复用唯一公共实际操作事实、现有 journal、Host
 授权和 Worker 事务/游标。控制通道不得被工具子进程继承或由模型配置改写；具体确认顺序、
@@ -851,7 +886,7 @@ OpenCode 模型传输与 Execution Key 版本、原 Session 和 Connection 独�
 
 候选与回滚 artifact 均须验证原数据、终态读取及 active/unknown 的兼容恢复，复用原 PVC
 并核实原 attempt；缺少原执行要求的接缝时保留未确认状态，不能重建 Session、降级协议或
-重发副作用。退出私有路径以官方 artifact 实际满足相同工具覆盖、隔离与故障矩阵为准，
+重发副作用。官方 artifact 与扩展升级须满足原执行所需的工具覆盖、隔离与故障矩阵，
 升级和回滚继续执行 10.4 的恢复流程。[Runtime HLD 11.1](HLD-agent-runtime-M1.md#111-通用-runtime-与-driver-验证)
 记录原生矩阵；文档决策、Fixture 或共享 Host 通过均不证明四模板真实模型/工具验收完成。
 

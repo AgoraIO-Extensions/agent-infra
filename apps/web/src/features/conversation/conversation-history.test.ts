@@ -70,9 +70,13 @@ describe("Personal conversation history generated-client transport", () => {
 		expect(await read()).toEqual(empty);
 	});
 
-	it.each([401, 403, 404])(
+	it.each([
+		[401, "authorization"],
+		[403, "authorization"],
+		[404, "http"],
+	] as const)(
 		"rejects HTTP %s without revealing response text",
-		async (status) => {
+		async (status, kind) => {
 			const { read } = setup(() =>
 				Response.json(
 					{ message: "Synthetic foreign conversation title" },
@@ -81,7 +85,7 @@ describe("Personal conversation history generated-client transport", () => {
 			);
 			await expect(read()).rejects.toMatchObject({
 				message: "Conversation data is unavailable",
-				failure: { kind: "authorization", status },
+				failure: { kind, status },
 			});
 		},
 	);

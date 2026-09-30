@@ -45,7 +45,7 @@ describe("Agent persistence schema contract", () => {
 				"workload_unavailable",
 				"reconciliation_failed",
 			],
-			agentAvailabilityTargetType: ["user", "organization"],
+			agentAvailabilityTargetType: ["user", "organization", "application"],
 			agentManagementSubjectType: ["agent_application", "agent"],
 			secretKeyRotationState: [
 				"pending",

@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { startConnectionApi } from "../apps/connection-api/dist/index.mjs";
 import { startPlatformApiFromDeployment } from "../apps/platform-api/dist/index.mjs";
@@ -48,6 +48,14 @@ async function verifyPlatformApi() {
 		assert.deepEqual(await health.json(), {
 			service: "platform-api",
 			status: "ok",
+			observability: {
+				enabled: false,
+				state: "active",
+				captureFailures: 0,
+				exportFailures: 0,
+				droppedLogs: 0,
+				invalidRecords: 0,
+			},
 		});
 		const session = await fetch(`${baseUrl}/api/v1/session`);
 		assert.equal(session.status, 200);
@@ -57,6 +65,20 @@ async function verifyPlatformApi() {
 		await once(server, "close");
 		await assembly.close();
 	}
+}
+
+function verifyPackagedApiEntrypoint() {
+	const entry = new URL("../apps/platform-api/dist/index.mjs", import.meta.url);
+	const missing = spawnSync(process.execPath, [fileURLToPath(entry)], {
+		encoding: "utf8",
+		env: { ...process.env, PLATFORM_API_DEPLOYMENT_MODULE: "" },
+		timeout: 5000,
+	});
+	assert.equal(missing.status, 1, missing.stderr);
+	assert.equal(
+		missing.stderr.trim(),
+		"PLATFORM_API_DEPLOYMENT_MODULE is required",
+	);
 }
 
 async function verifyPackagedApiDeployment() {
@@ -126,6 +148,7 @@ await deployment.browserAuth.close();`,
 }
 
 await verifyPlatformApi();
+verifyPackagedApiEntrypoint();
 await verifyPackagedApiDeployment();
 await verifyApi(startConnectionApi, "connection-api");
 

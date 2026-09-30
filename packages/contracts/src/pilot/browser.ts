@@ -1184,6 +1184,16 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+	"/api/v2/admin/agents": {
+		get: {
+			operationId: "listAdminAgentsV2",
+			requestParams: { query: pageQuery },
+			responses: {
+				"200": jsonResponse("Administrator agents", agentPageV2),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agents": {
 		get: {
 			operationId: "listAgentsV2",

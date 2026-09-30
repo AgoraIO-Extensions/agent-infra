@@ -135,7 +135,7 @@ export async function openRuntimeMessagesTransport(
 					"anthropic-version": "2023-06-01",
 					"user-agent":
 						options.client === "pi"
-							? "agent-infra-pi/0.85.1"
+							? "agent-infra-pi/0.86.0"
 							: options.client === "opencode"
 								? "agent-infra-opencode/1.18.30"
 								: "claude-cli/2.1.246 (external, sdk-ts, agent-sdk/0.3.246)",

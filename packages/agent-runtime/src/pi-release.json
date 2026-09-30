@@ -1,7 +1,7 @@
 {
-	"nativeVersion": "0.85.1",
+	"nativeVersion": "0.86.0",
 	"package": "@earendil-works/pi-coding-agent",
-	"upstreamCommit": "d981de1229ef899957bbe968bc8dcda02a21f477",
-	"bundleFileCount": 51,
-	"bundleSha256": "b194886d45c18a192af5b281a31dabc2513bc0a9c6773592049a7a49b55b773c"
+	"upstreamCommit": "ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc",
+	"bundleFileCount": 54,
+	"bundleSha256": "01e2d340926e625c0886ee3c360a369a68b483c1414e79595741aab9ceef0b8a"
 }

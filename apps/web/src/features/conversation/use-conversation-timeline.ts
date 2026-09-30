@@ -56,6 +56,7 @@ export function useConversationTimeline({
 			if (
 				state.status === "denied" ||
 				state.status === "idle" ||
+				state.failure?.kind === "http" ||
 				state.failure?.kind === "invalid"
 			)
 				clearDetails();
@@ -101,6 +102,7 @@ export function useConversationTimeline({
 								!signal.aborted &&
 								error instanceof ConversationReadError &&
 								(error.failure.kind === "authorization" ||
+									error.failure.kind === "http" ||
 									error.failure.kind === "invalid")
 							) {
 								session.reader.rejectRead(error.failure);

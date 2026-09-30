@@ -18,6 +18,7 @@ import type {
 	ApplicationRevisionUseCaseV1,
 	PendingSecretRecordAttachmentResolverV1,
 } from "@agent-infra/platform-core";
+import { isAdministratorAgentReadAllowedV1 } from "@agent-infra/platform-core";
 import type {
 	AgentManagementAgentProjectionV1,
 	AgentManagementAgentScopeV1,
@@ -788,6 +789,36 @@ export function registerV2ManagementRoutes(
 					),
 				);
 			}),
+	);
+
+	app.get("/api/v2/admin/agents", (context) =>
+		boundary(context, async (metadata) => {
+			if (context.req.raw.headers.has("authorization")) {
+				fail("AUTHENTICATION_REQUIRED", metadata.traceId);
+			}
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			if (!isAdministratorAgentReadAllowedV1(actor(identity))) {
+				fail("FORBIDDEN", metadata.traceId);
+			}
+			const queryPage = pageInput(context.req.raw, metadata.traceId);
+			const page = await queryOrUnavailable(
+				() =>
+					dependencies.query.listAgents({ kind: "administrator" }, queryPage),
+				metadata.traceId,
+			);
+			return context.json({
+				items: await Promise.all(
+					page.items.map((item) =>
+						projectAgent(dependencies, item, identity, metadata),
+					),
+				),
+				nextCursor: page.nextAfterId,
+			});
+		}),
 	);
 
 	app.get("/api/v2/agents", (context) =>
