@@ -716,6 +716,17 @@ export class PostgresApiIdentityStoreV1 {
 			)
 				throw new Error("Application delivery authorization is stale");
 			await transaction
+				.update(platformApiCredentials)
+				.set({ revokedAt: new Date() })
+				.where(
+					and(
+						eq(platformApiCredentials.principalType, "application"),
+						eq(platformApiCredentials.principalId, input.applicationId),
+						eq(platformApiCredentials.recipientUserId, input.principal.id),
+						isNull(platformApiCredentials.revokedAt),
+					),
+				);
+			await transaction
 				.insert(apiCredentialDeliveryGrants)
 				.values({
 					applicationId: input.applicationId,

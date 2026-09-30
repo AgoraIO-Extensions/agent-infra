@@ -6,6 +6,7 @@ import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-st
 
 import {
 	allocateDeploymentApplicationIds,
+	allocateDeploymentDirectApplicationIds,
 	type createDeploymentIdentityScope,
 } from "./deployment-identity.js";
 import { parseIdempotencyKey } from "./http/common.js";
@@ -41,14 +42,29 @@ export function createDeploymentAuthorizationAdmission(input: {
 						applicationIds: await input.loadApplicationIds(),
 					}
 				: authorityContext;
+			const creationPath = new URL(currentRequest.url).pathname;
 			if (
 				currentRequest.method === "POST" &&
-				new URL(currentRequest.url).pathname === "/api/v2/agent-applications"
+				(creationPath === "/api/v2/agent-applications" ||
+					creationPath === "/api/v2/agents")
 			) {
-				const ids = await allocateDeploymentApplicationIds({
-					identity,
-					idempotencyKey: parseIdempotencyKey(currentRequest, request.traceId),
-				});
+				if (creationPath === "/api/v2/agents" && !identity.principal)
+					return rejected;
+				const idempotencyKey = parseIdempotencyKey(
+					currentRequest,
+					request.traceId,
+				);
+				const ids =
+					identity.principal && creationPath === "/api/v2/agents"
+						? allocateDeploymentDirectApplicationIds(
+								identity.principal.kind,
+								identity.principal.id,
+								idempotencyKey,
+							)
+						: await allocateDeploymentApplicationIds({
+								identity,
+								idempotencyKey,
+							});
 				if (ids.agentId !== request.agentId) return rejected;
 				return {
 					...rejected,

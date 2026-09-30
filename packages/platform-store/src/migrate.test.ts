@@ -189,16 +189,16 @@ describe("Platform PostgreSQL migration foundation", () => {
 		}
 	}, 120_000);
 
-	it("revokes pre-0023 application credentials without a recipient", async () => {
+	it("revokes pre-0025 application credentials without a recipient", async () => {
 		const database = await startPostgresTestDatabase(
-			"migration-0022-credential-delivery",
+			"migration-0024-credential-delivery",
 		);
 		const client = postgres(database.databaseUrl, { max: 1 });
 		try {
 			await client.unsafe(`CREATE SCHEMA platform_migrations;
 				CREATE TABLE platform_migrations.history
 				(id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
-			for (const migration of migrations.slice(0, 23)) {
+			for (const migration of migrations.slice(0, 25)) {
 				for (const statement of migration.sql) await client.unsafe(statement);
 				await client`insert into platform_migrations.history (hash, created_at)
 					values (${migration.hash}, ${migration.folderMillis})`;

@@ -353,6 +353,69 @@ describe("PostgreSQL API identity store", () => {
 		).toBe(true);
 	});
 
+	it("revokes issued recipient credentials when replacing a delivery grant", async () => {
+		await adminClient`truncate platform.audit_events, platform.api_credential_delivery_grants,
+			platform.platform_api_credentials, platform.platform_applications cascade`;
+		await store.createApplication({
+			applicationId: "application_regrant",
+			name: "Regrant application",
+			responsibleUserId: "user_owner",
+			authorizationRevision: "application_revision_1",
+			audit: userAudit,
+		});
+		const delivery = {
+			actor: administratorActor,
+			applicationId: "application_regrant",
+			principal: { kind: "user" as const, id: "user_recipient" },
+			expiresAt: null,
+			authorizationRevision: "application_revision_1",
+			audit: {
+				...userAudit,
+				action: "api.credential.delivery.granted" as const,
+			},
+		};
+		await store.grantCredentialDelivery({
+			...delivery,
+			scopes: ["agent:read", "agent:manage"],
+		});
+		await store.issueCredential({
+			principal: { kind: "application", id: "application_regrant" },
+			recipient: delivery.principal,
+			credential: "old-regrant-secret",
+			scopes: ["agent:read", "agent:manage"],
+			expiresAt: null,
+			audit: { ...userAudit, action: "api.credential.issued" },
+		});
+		await store.grantCredentialDelivery({
+			...delivery,
+			scopes: ["agent:read"],
+		});
+		expect(
+			await store.resolveApplicationCredential("old-regrant-secret"),
+		).toMatchObject({ accountStatus: "disabled" });
+		await expect(
+			store.issueCredential({
+				principal: { kind: "application", id: "application_regrant" },
+				recipient: delivery.principal,
+				credential: "over-scoped-regrant-secret",
+				scopes: ["agent:read", "agent:manage"],
+				expiresAt: null,
+				audit: { ...userAudit, action: "api.credential.issued" },
+			}),
+		).rejects.toMatchObject({ code: "resource_unavailable" });
+		await store.issueCredential({
+			principal: { kind: "application", id: "application_regrant" },
+			recipient: delivery.principal,
+			credential: "new-regrant-secret",
+			scopes: ["agent:read"],
+			expiresAt: null,
+			audit: { ...userAudit, action: "api.credential.issued" },
+		});
+		expect(
+			await store.resolveApplicationCredential("new-regrant-secret"),
+		).toMatchObject({ accountStatus: "active" });
+	});
+
 	it("locks the delivery grant before persisting an application credential", async () => {
 		await adminClient`truncate platform.audit_events, platform.api_credential_delivery_grants,
 			platform.platform_api_credentials, platform.platform_applications cascade`;

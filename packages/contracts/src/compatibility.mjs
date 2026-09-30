@@ -885,13 +885,40 @@ function isAgentApiIdentityOpenApiAddition(previous, current) {
 		"AgentApplicationCreateRequestV2",
 		"AgentDirectCreationProjectionV1",
 	];
+	const version = current.info?.version;
+	if (version !== "1.0.0" && version !== "2.0.0") return false;
+	const v1 = version === "1.0.0";
+	const expectedPaths = v1 ? addedPaths.slice(1) : addedPaths.slice(0, 1);
+	const expectedSchemas = v1 ? addedSchemas.slice(1) : addedSchemas.slice(0, 1);
 	if (
-		addedPaths.some((path) => previous.paths?.[path] !== undefined) ||
+		addedPaths.some(
+			(path, index) =>
+				previous.paths?.[path] !== undefined ||
+				(current.paths[path] !== undefined) !== (v1 ? index > 0 : index === 0),
+		) ||
 		addedSchemas.some(
-			(name) => previous.components?.schemas?.[name] !== undefined,
+			(name, index) =>
+				previous.components?.schemas?.[name] !== undefined ||
+				(current.components.schemas[name] !== undefined) !==
+					(v1 ? index > 0 : index === 0),
 		) ||
 		(normalized.paths?.[directPath]?.post !== undefined &&
 			previous.paths?.[directPath]?.post !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			expectedPaths.map((path) => [path, current.paths[path]]),
+		),
+		schemas: Object.fromEntries(
+			expectedSchemas.map((name) => [name, current.components.schemas[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		(v1
+			? "869becc12f08447214cd499992eec75a05cabd18849c623b29abf3859755e649"
+			: "b3029ad5847b08f684ebe9276ce17b2edec92149bff1b4f07d0964b16301f723")
 	)
 		return false;
 	for (const path of addedPaths) delete normalized.paths[path];
