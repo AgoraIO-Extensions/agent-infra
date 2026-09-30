@@ -102,7 +102,13 @@ test("Argus reads only fixed paths with personal Bearer and bounded input", asyn
 		await adapter.execute({
 			action: "argus.search_calls",
 			credential,
-			input: { fromTs: 100, toTs: 200, size: 2, channelId: 42, accounts: "alice" },
+			input: {
+				fromTs: 100,
+				toTs: 200,
+				size: 2,
+				channelId: 42,
+				accounts: "alice",
+			},
 		}),
 		{ items: [{ id: 1 }] },
 	);
