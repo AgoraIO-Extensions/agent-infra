@@ -27,6 +27,7 @@ worker_release="$PLATFORM_LOCAL_PROJECT"
 worker_deployment="$worker_release-agent-infra-platform-worker"
 database_service="$worker_release-postgres"
 database_endpoint="$database_service-docker"
+helm_target=(helm)
 
 worker_context() {
   : "${PLATFORM_LOCAL_KUBECONFIG:?Set an explicit local kubeconfig}"
@@ -129,6 +130,28 @@ worker_values() {
     --set-string database.secretRef.key=url
     --set-string platformWorker.deploymentModule=file:///app/dist/deployment.mjs
   )
+}
+
+validate_deployment_material() {
+  : "${PLATFORM_LOCAL_API_DIRECTORY:?Set the API-only deployment directory}"
+  : "${PLATFORM_LOCAL_WORKER_VALUES:?Set an absolute local Worker values file}"
+  [[ "$PLATFORM_LOCAL_API_DIRECTORY" = /* && -r "$PLATFORM_LOCAL_API_DIRECTORY/configuration.mjs" ]] || {
+    echo "API configuration.mjs is missing or unreadable" >&2
+    return 1
+  }
+  [[ "$PLATFORM_LOCAL_WORKER_VALUES" = /* && -r "$PLATFORM_LOCAL_WORKER_VALUES" ]] || {
+    echo "PLATFORM_LOCAL_WORKER_VALUES must be an absolute readable file" >&2
+    return 1
+  }
+  if ! node --check "$PLATFORM_LOCAL_API_DIRECTORY/configuration.mjs" >/dev/null 2>&1; then
+    echo "Local API configuration.mjs has invalid syntax" >&2
+    return 1
+  fi
+  worker_values
+  if ! "${helm_target[@]}" template "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" >/dev/null 2>&1; then
+    echo "Local Worker values are missing or invalid" >&2
+    return 1
+  fi
 }
 
 render_proxy_config() {
@@ -307,6 +330,41 @@ disconnect_worker_database() {
   "${kube_target[@]}" delete "endpointslice/$database_endpoint" "service/$database_service" "secret/$database_service" --ignore-not-found
 }
 
+delete_owned_agent_pvcs() {
+  local names name
+  [[ -n "${PLATFORM_LOCAL_AGENT_PVC_NAMES:-}" ]] || return 0
+  IFS=',' read -r -a names <<< "$PLATFORM_LOCAL_AGENT_PVC_NAMES"
+  for name in "${names[@]}"; do
+    [[ "$name" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#name} -le 63 ]] || {
+      echo "PLATFORM_LOCAL_AGENT_PVC_NAMES contains an invalid PVC name" >&2
+      return 1
+    }
+    if ! "${kube_target[@]}" get "pvc/$name" --ignore-not-found -o json |
+      node -e '
+        let input = "";
+        process.stdin.on("data", (chunk) => { input += chunk; });
+        process.stdin.on("end", () => {
+          try {
+            const pvc = JSON.parse(input);
+            if (pvc.kind !== "PersistentVolumeClaim" ||
+                pvc.metadata?.name !== process.argv[1] ||
+                pvc.metadata?.namespace !== process.argv[2] ||
+                !pvc.metadata?.labels?.["agent-infra.agora.io/agent"] ||
+                !pvc.metadata?.annotations?.["agent-infra.agora.io/agent-id"]) process.exitCode = 1;
+          } catch {
+            process.exitCode = 1;
+          }
+        });
+      ' "$name" "$PLATFORM_LOCAL_NAMESPACE"; then
+      echo "Refusing to delete an unowned Agent PVC: $name" >&2
+      return 1
+    fi
+  done
+  for name in "${names[@]}"; do
+    "${kube_target[@]}" delete "pvc/$name" --wait --timeout=5m
+  done
+}
+
 case "${1:-}" in
   build)
     "${compose[@]}" --profile runtime build web platform-api platform-worker agent-runtime-host
@@ -319,13 +377,11 @@ case "${1:-}" in
     "${compose[@]}" run --rm --no-deps platform-api node node_modules/@agent-infra/platform-store/dist/migrate-cli.mjs
     ;;
   up)
-    [[ -r "${PLATFORM_LOCAL_API_DIRECTORY:?}/configuration.mjs" ]] || { echo "API configuration module configuration.mjs is missing" >&2; exit 1; }
     [[ -r "${PLATFORM_WEB_TLS_CERT_FILE:?}" && -r "${PLATFORM_WEB_TLS_KEY_FILE:?}" ]] || { echo "Local Web TLS files are missing" >&2; exit 1; }
     worker_context
-    worker_values
     check_database_resource_ownership
     check_database_network_ownership
-    "${helm_target[@]}" template "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" >/dev/null
+    validate_deployment_material
     render_proxy_config
     "${compose[@]}" stop web platform-api
     "${compose[@]}" up --detach --wait postgres object-storage
@@ -397,8 +453,23 @@ case "${1:-}" in
     "${compose[@]}" stop object-storage postgres
     rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE"
     ;;
+  reset)
+    [[ "${2:-}" == "$PLATFORM_LOCAL_PROJECT" ]] || {
+      echo "Reset requires the exact isolated project name as confirmation" >&2
+      exit 1
+    }
+    worker_context
+    check_database_resource_ownership
+    check_database_network_ownership
+    bash "$0" stop
+    delete_owned_agent_pvcs
+    "${compose[@]}" down --volumes --remove-orphans
+    ;;
+  validate)
+    validate_deployment_material
+    ;;
   *)
-    echo "Usage: bash deploy/local/platform.sh build|data|migrate|up|status|stop" >&2
+    echo "Usage: bash deploy/local/platform.sh build|data|migrate|up|status|stop|reset <exact-project>|validate" >&2
     exit 1
     ;;
 esac

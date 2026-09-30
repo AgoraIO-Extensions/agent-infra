@@ -44,9 +44,19 @@ async function fixture() {
 		writeFile(kubeconfig, "fixture"),
 		writeFile(
 			values,
-			"platformWorker:\n  deploymentModule: file:///app/dist/deployment.mjs\n",
+			"platformWorker:\n  configurationModuleSecretRef:\n    name: fixture-worker-configuration\n    key: configuration.mjs\n  runtimeAuthSecretRef:\n    name: fixture-worker-auth\n    privateKeyKey: runtime-grant.pem\n    serviceTokenKey: service-token\n  deploymentModule: file:///app/dist/deployment.mjs\n",
 		),
-		writeFile(join(api, "configuration.mjs"), ""),
+		writeFile(
+			join(api, "configuration.mjs"),
+			[
+				'export const ldap = { url: "ldaps://directory.example.invalid", issuer: "fixture", baseDn: "dc=example,dc=invalid", serviceBindDn: "cn=service", serviceBindPassword: "fixture", loginAttribute: "uid", uidAttribute: "uid", emailAttribute: "mail", displayNameAttribute: "displayName", verifyCurrentStatus: async () => "active", identityIds: { findByUid: async () => null, findUidByUserId: async () => null, getOrCreate: async () => "00000000-0000-4000-8000-000000000000" } };',
+				"export const isPlatformDisabled = async () => false;",
+				"export const organizationIds = async () => [];",
+				'export const publicOrigin = "https://localhost:3001";',
+				'export const apiInput = { imageRepository: "registry.example/agent", loadAuthorityContext: async () => ({}), modelCatalog: { revision: "catalog-v1", load: async () => ({}) }, encryptionKeys: {}, resourceProfile: {} };',
+				"",
+			].join("\n"),
+		),
 		writeFile(cert, ""),
 		writeFile(key, ""),
 		writeFile(proxyToken, proxyTokenValue, { mode: 0o600 }),
@@ -198,8 +208,8 @@ fi`,
 	};
 }
 
-function run(command, env) {
-	return spawnSync("bash", [script, command], {
+function run(command, env, args = []) {
+	return spawnSync("bash", [script, command, ...args], {
 		cwd: process.cwd(),
 		env,
 		encoding: "utf8",
@@ -718,6 +728,43 @@ test("local stop refuses active Agent Workloads and Pods before uninstall", asyn
 			await readFile(f.log, "utf8"),
 			/compose .* up --detach --wait platform-api web/,
 		);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up validates private API and Worker material before stopping services", async () => {
+	const f = await fixture();
+	try {
+		await writeFile(
+			join(f.env.PLATFORM_LOCAL_API_DIRECTORY, "configuration.mjs"),
+			"export const ldap = ;",
+		);
+		const result = run("up", f.env);
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/Local API configuration.mjs has invalid syntax/,
+		);
+		assert.equal(await readFile(f.log, "utf8"), "");
+	} finally {
+		await f.close();
+	}
+});
+
+test("local reset requires the exact project and removes only the isolated Compose volumes", async () => {
+	const f = await fixture();
+	try {
+		const unconfirmed = run("reset", f.env);
+		assert.notEqual(unconfirmed.status, 0);
+		assert.match(unconfirmed.stderr, /exact isolated project name/);
+		assert.equal(await readFile(f.log, "utf8"), "");
+
+		const confirmed = run("reset", f.env, ["agent-infra-verify"]);
+		assert.equal(confirmed.status, 0, confirmed.stderr);
+		const log = await readFile(f.log, "utf8");
+		assert.match(log, /compose .* down --volumes --remove-orphans/);
+		assert.doesNotMatch(log, /delete persistentvolumeclaim|delete pvc/);
 	} finally {
 		await f.close();
 	}

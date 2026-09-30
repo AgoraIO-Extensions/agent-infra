@@ -141,11 +141,27 @@ bash deploy/local/platform.sh stop
 project 执行下面的命令；它删除 PostgreSQL 和对象存储的数据卷。Agent PVC 的删除也必须
 单独确认具体本地集群和 PVC 名称，不能通过普通停止命令隐式完成。
 
+启动前 up 会检查 API configuration.mjs 的语法，并用 Helm 渲染校验 Worker values 中的代码
+Secret、Runtime auth Secret 和固定部署模块。正式容器启动时还会校验可信 LDAP 状态验证器、
+持久身份映射、组织解析、Registry/ModelCatalog、加密公钥和资源 Profile 的导出形状；失败
+只返回固定诊断，不输出私有模块异常或 Secret 内容。可单独运行
+bash deploy/local/platform.sh validate 做同样检查。
+
 ```bash
 docker --context "$PLATFORM_LOCAL_DOCKER_CONTEXT" compose \
   --project-name "$PLATFORM_LOCAL_PROJECT" \
   -f docker-compose.yml -f deploy/local/compose.yaml down --volumes
 ```
+
+推荐使用带精确项目名确认的入口，它会先执行完整 stop，再删除该 Compose project 的
+数据卷；不会删除 Agent PVC：
+
+    bash deploy/local/platform.sh reset "$PLATFORM_LOCAL_PROJECT"
+
+只有在已经核对当前 kind 集群、namespace 和 PVC 名称确实属于本地测试 Agent 时，才设置
+PLATFORM_LOCAL_AGENT_PVC_NAMES 为逗号分隔的 PVC 名称。每个名称必须带
+agent-infra.agora.io/agent owner label，脚本逐个删除并等待完成；未设置时所有 Agent
+PVC 保留。Reset 仍不会删除其它 namespace、业务卷或未通过 owner 校验的 PVC。
 
 ## 验证边界
 
