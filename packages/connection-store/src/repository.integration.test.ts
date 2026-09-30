@@ -1136,6 +1136,114 @@ describe("PostgreSQL Connection business authority", () => {
 					WHERE id = ${v1.providerReleaseId}
 				`;
 				expect(release?.status).toBe("PUBLISHED");
+				const v2Action = v2.actions[0];
+				if (!v2Action) throw new Error("V2 Action is missing");
+				const v3 = {
+					...v2,
+					actions: [
+						{
+							...v2Action,
+							id: `github.catalog_v3_${suffix}@v1`,
+							name: `github.catalog_v3_${suffix}`,
+						},
+					],
+					providerReleaseId: `github-release-v3-${suffix}`,
+					sourceCommit: "3".repeat(40),
+				};
+				await repository.publishGithubCatalog(v3, {
+					mode: "USER_ACTION_REQUIRED",
+					reason: "Disconnect must settle pending upgrades",
+				});
+				const [pendingTask] = await sql<
+					{ campaign_id: string; id: string; status: string }[]
+				>`
+				SELECT id, campaign_id, status FROM connection_provider_upgrade_tasks
+				WHERE connection_id = ${connection.connectionId}
+					AND status = 'PENDING_CONNECTION'
+			`;
+				if (!pendingTask) throw new Error("Upgrade task is missing");
+				const secondConsumerId = `upgrade-consumer-${suffix}`;
+				const secondRootId = `upgrade-root-${suffix}`;
+				const secondTaskId = `upgrade-task-${suffix}`;
+				await sql`INSERT INTO connection_consumers (id, display_name, status)
+				VALUES (${secondConsumerId}, 'Second upgrade consumer', 'ACTIVE')`;
+				await sql`INSERT INTO connection_authorization_roots
+				(id, principal_id, consumer_id, actor_key, provider_id, status)
+				VALUES (${secondRootId}, ${principalId}, ${secondConsumerId},
+					'', 'github', 'ACTIVE')`;
+				await sql`INSERT INTO connection_provider_upgrade_tasks
+				(id, campaign_id, principal_id, connection_id,
+					authorization_root_id, consumer_id, provider_id, actor_key, status)
+				VALUES (${secondTaskId}, ${pendingTask.campaign_id}, ${principalId},
+					${connection.connectionId}, ${secondRootId}, ${secondConsumerId},
+					'github', '', 'PENDING_CONNECTION')`;
+				await sql`
+				INSERT INTO connection_work_items (
+					id, recipient_principal_id, business_type, business_id,
+					business_revision, action_type, status
+				) VALUES (
+					${`upgrade-work-${pendingTask.id}`}, ${principalId},
+					'PROVIDER_UPGRADE_TASK', ${pendingTask.id}, 1, 'UPGRADE', 'OPEN'),
+					(${`upgrade-work-${secondTaskId}`}, ${principalId},
+					'PROVIDER_UPGRADE_TASK', ${secondTaskId}, 1, 'UPGRADE', 'OPEN')
+			`;
+				await repository.disconnectConnection({
+					connectionId: connection.connectionId,
+					principalId,
+				});
+				expect(
+					(await repository.getOverview(principalId)).upgradeTasks,
+				).toEqual([]);
+				const [settled] = await sql<
+					{
+						audit_count: number;
+						outbox_count: number;
+						status: string;
+						work_status: string;
+					}[]
+				>`
+				SELECT task.status,
+					(SELECT status FROM connection_work_items WHERE business_id = task.id AND action_type = 'UPGRADE') AS work_status,
+					(SELECT count(*)::int FROM connection_audit_records WHERE event = 'PROVIDER_UPGRADE_TASK_EXPIRED' AND detail->>'taskId' = task.id) AS audit_count,
+					(SELECT count(*)::int FROM connection_outbox_events WHERE topic = 'connection.provider-upgrade.expired' AND aggregate_id = task.id) AS outbox_count
+				FROM connection_provider_upgrade_tasks task WHERE task.id = ${pendingTask.id}
+			`;
+				expect(settled).toEqual({
+					status: "EXPIRED",
+					work_status: "EXPIRED",
+					audit_count: 1,
+					outbox_count: 1,
+				});
+				const [secondSettled] = await sql<
+					{ status: string; work_status: string }[]
+				>`
+				SELECT task.status,
+					(SELECT status FROM connection_work_items WHERE business_id = task.id AND action_type = 'UPGRADE') AS work_status
+				FROM connection_provider_upgrade_tasks task WHERE task.id = ${secondTaskId}
+			`;
+				expect(secondSettled).toEqual({
+					status: "EXPIRED",
+					work_status: "EXPIRED",
+				});
+				// Reproduce a task left pending by the pre-fix disconnect path.
+				await sql`UPDATE connection_provider_upgrade_tasks SET status = 'PENDING_CONNECTION'
+				WHERE id = ${pendingTask.id}`;
+				await sql`UPDATE connection_work_items SET status = 'OPEN', completed_at = NULL
+				WHERE business_id = ${pendingTask.id}`;
+				expect(
+					(await repository.getOverview(principalId)).upgradeTasks,
+				).toEqual([]);
+				const [reconciled] = await sql<
+					{ status: string; work_status: string }[]
+				>`
+				SELECT task.status,
+					(SELECT status FROM connection_work_items WHERE business_id = task.id AND action_type = 'UPGRADE') AS work_status
+				FROM connection_provider_upgrade_tasks task WHERE task.id = ${pendingTask.id}
+			`;
+				expect(reconciled).toEqual({
+					status: "EXPIRED",
+					work_status: "EXPIRED",
+				});
 			} finally {
 				await sql.end();
 				await repository.close();

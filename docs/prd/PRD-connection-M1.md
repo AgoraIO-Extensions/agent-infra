@@ -224,7 +224,7 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 - 一个 Connection 在任一时刻只能有一个 current Credential 版本。
 - 新调用只能使用授权时解析出的 Connection 的 current Credential，不能自动回退到历史版本。
 - Consumer、模型上下文、Sandbox、页面、日志、错误和审计导出都不能获得原始 Credential。
-- 断开 Connection 后，后续调用立即停止；已提交给 Provider 的操作保留实际结果。
+- 断开 Connection 后，后续调用立即停止；该连接尚未完成的 Provider 升级待办同时终止，不因之后重新连接而恢复。已提交给 Provider 的操作保留实际结果。
 
 ### 8.3 个人 Connection 前置审批
 
@@ -245,7 +245,7 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 - 到期、撤销或重审逾期立即阻止新调用并暂停相关 Consumer Grant；已经提交给 Provider 的操作保留真实结果或未知状态。
 - 管理员紧急撤销已发布审批策略时，立即终止该 Provider 版本和能力包下未完成的申请及未消费 Permit，暂停其既有个人 Connection 资格与新调用；已提交的 Provider 操作仍按真实结果收敛。
 - 发布替代策略不自动中断既有资格。管理员将换版标记为重大变更时必须指定重审截止时间和原因；发布与受影响资格进入限期重审同时生效，逾期未通过才暂停。重大免责声明变更不能按普通换版绕过重审。
-- 页面在现有 Provider 详情中展示完整审批时间线，并通过右上角铃铛提供待办和通知。铃铛数量包含未完成待办与未读通知；已读或归档通知不等于完成待办，通知操作失败须明确提示。首期使用轮询，不增加长连接。
+- 页面在现有 Provider 详情中展示完整审批时间线，并通过右上角铃铛提供待办和通知。铃铛数量包含未完成待办与未读通知；用户可批量清除自己的通知，但已读或归档通知不等于完成待办，通知操作失败须明确提示。首期使用轮询，不增加长连接。
 - 无匹配 Policy、匹配冲突、免责声明缺失、审批人无效、目录不可用或 Permit 失效时均 fail closed，不能进入 Credential 流程。
 
 ## 9. Consumer 授权
