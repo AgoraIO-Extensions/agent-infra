@@ -53,12 +53,13 @@ test("Bitbucket Server catalog exposes the reviewed OpenConnector-compatible act
 		[...expectedActions].sort(),
 	);
 	for (const action of bitbucketServerConnectionCatalog.actions) {
-		assert.match(action.id, /^bitbucket\.[a-z_]+@v7$/);
+		assert.match(action.id, /^bitbucket\.[a-z_]+@v8$/);
 		assert.equal("endpoint" in action.inputSchema.properties, false);
 		assert.deepEqual(action.requiredScopes, ["bitbucket.server.pat"]);
 	}
 	assert.deepEqual(bitbucketServerLegacyProviderReleaseIds, [
-		bitbucketServerConnectionCatalog.providerReleaseId.replace(/-v7$/, "-v6"),
+		bitbucketServerConnectionCatalog.providerReleaseId.replace(/-v8$/, "-v6"),
+		bitbucketServerConnectionCatalog.providerReleaseId.replace(/-v8$/, "-v7"),
 	]);
 });
 
@@ -624,8 +625,17 @@ test("Bitbucket decline preserves HTTP rejection status without exposing the bod
 	let status = 409;
 	const adapter = new BitbucketServerAdapter(async (input, init) => {
 		assert.equal(init?.method, "POST");
+		assert.equal(init?.body, undefined);
+		assert.equal(
+			new Headers(init?.headers).get("content-type"),
+			"application/json",
+		);
+		assert.equal(
+			new Headers(init?.headers).get("x-atlassian-token"),
+			"no-check",
+		);
 		assert.match(String(input), /\/pull-requests\/7\/decline\?version=3$/);
-		return status === 204
+		return status === 200 || status === 204
 			? new Response(null, { status })
 			: Response.json({ error: "private Provider details" }, { status });
 	});
@@ -639,7 +649,7 @@ test("Bitbucket decline preserves HTTP rejection status without exposing the bod
 			version: 3,
 		},
 	};
-	for (const rejection of [409, 503]) {
+	for (const rejection of [403, 409, 503]) {
 		status = rejection;
 		await assert.rejects(adapter.execute(input), (error: unknown) => {
 			assert.ok(error instanceof Error);
@@ -657,4 +667,25 @@ test("Bitbucket decline preserves HTTP rejection status without exposing the bod
 	}
 	status = 204;
 	assert.deepEqual(await adapter.execute(input), { ok: true });
+	status = 200;
+	assert.deepEqual(await adapter.execute(input), { ok: true });
+});
+
+test("Bitbucket decline rejects a nonempty malformed success response", async () => {
+	const adapter = new BitbucketServerAdapter(
+		async () => new Response("not JSON", { status: 200 }),
+	);
+	await assert.rejects(
+		adapter.execute({
+			action: "bitbucket.decline_pull_request",
+			credential: { accessToken: "test-personal-access-token" },
+			input: {
+				project: "PROJ",
+				pullRequestId: 7,
+				repository: "repo",
+				version: 3,
+			},
+		}),
+		/invalid JSON response/,
+	);
 });
