@@ -898,6 +898,53 @@ test("local reset deletes an explicitly selected canonical Agent PVC", async () 
 	}
 });
 
+test("local reset refuses a canonical Agent PVC with an owner reference", async () => {
+	const f = await fixture();
+	try {
+		const agentId = "local-reset-owned-agent";
+		const agentName = `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`;
+		const env = {
+			...f.env,
+			PLATFORM_LOCAL_AGENT_PVC_NAMES: `${agentName}-data`,
+			FAKE_AGENT_PVC_JSON: JSON.stringify({
+				kind: "PersistentVolumeClaim",
+				metadata: {
+					name: `${agentName}-data`,
+					namespace: "agent-infra-verify",
+					labels: { "agent-infra.agora.io/agent": agentName },
+					annotations: { "agent-infra.agora.io/agent-id": agentId },
+					ownerReferences: [
+						{
+							apiVersion: "apps/v1",
+							kind: "StatefulSet",
+							name: "foreign-owner",
+							controller: true,
+						},
+					],
+				},
+			}),
+			FAKE_AGENT_STATEFULSET_JSON: JSON.stringify({
+				kind: "StatefulSet",
+				metadata: {
+					name: agentName,
+					namespace: "agent-infra-verify",
+					labels: { "agent-infra.agora.io/agent": agentName },
+					annotations: { "agent-infra.agora.io/agent-id": agentId },
+				},
+			}),
+		};
+		const result = run("reset", env, ["agent-infra-verify"]);
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/Refusing to delete an unowned Agent PVC: .*data/,
+		);
+		assert.doesNotMatch(await readFile(f.log, "utf8"), /delete pvc\//);
+	} finally {
+		await f.close();
+	}
+});
+
 test("local reset refuses a same-namespace PVC with foreign or mismatched Agent ownership", async () => {
 	const f = await fixture();
 	try {

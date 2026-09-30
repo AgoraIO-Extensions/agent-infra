@@ -464,7 +464,8 @@ delete_owned_agent_pvcs() {
                 metadata.name !== process.argv[1] ||
                 metadata.namespace !== process.argv[2] ||
                 metadata.name !== `${agentName}-data` ||
-                labels["agent-infra.agora.io/agent"] !== agentName) process.exitCode = 1;
+                labels["agent-infra.agora.io/agent"] !== agentName ||
+                (Array.isArray(metadata.ownerReferences) && metadata.ownerReferences.length > 0)) process.exitCode = 1;
             else process.stdout.write(`${agentName}\t${agentId}`);
           } catch {
             process.exitCode = 1;
