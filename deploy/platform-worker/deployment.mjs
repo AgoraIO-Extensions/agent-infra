@@ -4,16 +4,18 @@ import {
  createProductionConversationRuntimeResolverV2,
  createProductionWorkloadWorkerOptionsV1,
  createWorkloadReadinessAuthorizationV1,
+ createPlatformWecomWorkerV1,
 } from "@agent-infra/platform-worker";
 
 // Deployment-owned code supplies current IdentityAdapter facts and Worker-only material.
 // The adjacent configuration.mjs is mounted by the deployment, never bundled into the image.
-const { workloadInput, signing, serviceToken, directory } = await import(
+const { workloadInput, signing, serviceToken, directory, wecom } = await import(
  new URL("./configuration.mjs", import.meta.url).href
 );
 
 const instanceId = randomUUID();
 let prepared;
+let wecomWorker;
 async function prepare(signal) {
  prepared ??= (async () => {
   const workload = await createProductionWorkloadWorkerOptionsV1({
@@ -31,6 +33,8 @@ async function prepare(signal) {
     directory,
     channelAuthorizationCurrent: async (record, signal) => {
      signal.throwIfAborted();
+     if (/^wecom_(bot|app):/.test(record.boundary.channelId))
+      return wecomWorker?.channelAuthorizationCurrent(record) ?? false;
      return isPlatformConversationChannelCurrentV1(record);
     },
     resolveRuntimeHost: createProductionConversationRuntimeResolverV2({ workload, signing, serviceToken }),
@@ -45,4 +49,25 @@ export async function createPlatformWorkloadWorkerOptionsV1(signal) {
 }
 export async function createPlatformConversationWorkerOptionsV2(signal) {
  return (await prepare(signal)).conversation;
+}
+export async function createPlatformWecomWorkerInstanceV1(signal) {
+ const { workload } = await prepare(signal);
+ signal.throwIfAborted();
+ if (!wecom || wecomWorker) throw new Error("WeCom deployment is unavailable");
+ const worker = createPlatformWecomWorkerV1({
+  ...wecom,
+  databaseUrl: workload.databaseUrl,
+ });
+ wecomWorker = worker;
+ return {
+  reconcile: worker.reconcile,
+  dispatch: worker.dispatch,
+  async close() {
+   try {
+    await worker.close();
+   } finally {
+    if (wecomWorker === worker) wecomWorker = undefined;
+   }
+  },
+ };
 }

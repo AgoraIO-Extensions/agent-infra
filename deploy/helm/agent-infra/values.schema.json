@@ -115,11 +115,12 @@
     "platformWorker": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["replicas"],
+      "required": ["replicas", "wecomEnabled"],
       "properties": {
         "configurationModuleSecretRef": { "$ref": "#/$defs/secretRef" },
         "trustedCaSecretRef": { "$ref": "#/$defs/secretRef" },
         "deploymentModule": { "type": "string", "maxLength": 256, "pattern": "^(?:$|(?:file:///|/)[^\\s]+)$" },
+        "wecomEnabled": { "type": "boolean" },
         "runtimeAuthSecretRef": {
           "type": "object",
           "additionalProperties": false,

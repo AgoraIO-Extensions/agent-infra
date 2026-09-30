@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { startPlatformConversationWorkerFromDeploymentV2 } from "./conversation-worker.js";
+import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
 export * from "./conversation-deployment.js";
@@ -8,6 +9,8 @@ export * from "./conversation-worker.js";
 export * from "./kubernetes-client.js";
 export * from "./kubernetes-runtime-adapter.js";
 export * from "./runtime-grant-signer.js";
+export * from "./wecom-deployment.js";
+export { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 export * from "./workload-deployment.js";
 export * from "./workload-runtime.js";
 export * from "./workload-worker.js";
@@ -219,11 +222,13 @@ export async function startPlatformWorkerFromDeploymentV2(
 		readonly startPrimary?: () => { stop(): void | Promise<void> };
 		readonly startWorkload?: () => Promise<{ stop(): Promise<void> }>;
 		readonly startConversation?: () => Promise<{ stop(): Promise<void> }>;
+		readonly startWecom?: () => Promise<{ stop(): Promise<void> }>;
 	} = {},
 ) {
 	const primary = (options.startPrimary ?? startPlatformWorker)();
 	let workload: { stop(): Promise<void> } | undefined;
 	let conversation: { stop(): Promise<void> } | undefined;
+	let wecom: { stop(): Promise<void> } | undefined;
 	try {
 		workload = await (
 			options.startWorkload ?? startPlatformWorkloadWorkerFromDeploymentV1
@@ -232,12 +237,14 @@ export async function startPlatformWorkerFromDeploymentV2(
 			options.startConversation ??
 			startPlatformConversationWorkerFromDeploymentV2
 		)();
+		wecom = await options.startWecom?.();
 		let stopping: Promise<void> | undefined;
 		return {
 			stop() {
 				stopping ??= (async () => {
 					const results: PromiseSettledResult<void>[] = [];
 					for (const stop of [
+						() => wecom?.stop(),
 						() => conversation?.stop(),
 						() => workload?.stop(),
 						() => primary.stop(),
@@ -260,6 +267,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 			Promise.resolve().then(() => primary.stop()),
 			Promise.resolve().then(() => workload?.stop()),
 			Promise.resolve().then(() => conversation?.stop()),
+			Promise.resolve().then(() => wecom?.stop()),
 		]);
 		throw error;
 	}
@@ -269,7 +277,11 @@ const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	const shutdownDeadlineMs = 10_000;
 	const termination = new AbortController();
+	const wecomSetting = process.env.PLATFORM_WORKER_WECOM_ENABLED;
+	if (wecomSetting !== undefined && !["true", "false"].includes(wecomSetting))
+		throw new Error("PLATFORM_WORKER_WECOM_ENABLED must be true or false");
 	const primary = startPlatformWorker();
+	const wecomEnabled = wecomSetting === "true";
 	const workerPromise = startPlatformWorkerFromDeploymentV2({
 		startPrimary: () => primary,
 		startConversation: () =>
@@ -282,6 +294,15 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 				undefined,
 				termination.signal,
 			),
+		...(wecomEnabled
+			? {
+					startWecom: () =>
+						startPlatformWecomWorkerFromDeploymentV1(
+							undefined,
+							termination.signal,
+						),
+				}
+			: {}),
 	});
 	let stopping = false;
 	const stop = () => {

@@ -1,9 +1,11 @@
 # Platform Worker 部署模块
 
 正式 CLI 通过 `PLATFORM_WORKER_DEPLOYMENT_MODULE` 同时启动 Workload 与 Conversation
-循环。[deployment.mjs](deployment.mjs) 是两个现有工厂的具体部署消费者：两者共享一次经过
+循环。[deployment.mjs](deployment.mjs) 装配两个现有工厂及可选的 WeCom 渠道实例，共享一次经过
 验证的 Kubernetes、Registry、模型目录、keyring、Runtime readiness 与路由配置。
 每个进程生成独立的数据库 lease owner；Runtime 服务身份仍使用部署提供的稳定 Worker ID。
+Helm 的 `platformWorker.wecomEnabled=true` 还会在同一进程启动 WeCom 连接调谐和回复
+派发。未提供受信 WeCom 配置时启动失败；关闭该开关时不受理 WeCom Runtime 授权。
 
 ## 打包与启动
 
@@ -79,6 +81,9 @@ export const workloadInput = {
   templateModelBindings: [],
   executionCapacityProfiles: [],
 };
+
+// 启用 WeCom 时还须导出 wecom：可信发送者身份、连接凭证解析、回复加密及
+// Worker-only 解密等 createPlatformWecomWorkerV1 所需输入。
 ```
 
 - `directory.resolveUser(userId)` 必须查询部署的当前身份事实；依赖失败应抛错，不能返回一个
@@ -96,8 +101,10 @@ export const workloadInput = {
   不能验证标准模板；自定义 Agent 可使用空数组。
 - `executionCapacityProfiles` 必须由真实负载/conformance 证据产生，绑定精确 image digest、
   resource profile 与资源配置 hash。空数组不允许新 Turn。撤回容量证明仍保留原执行控制。
-- 内置消费者只接通平台 Web 渠道的当前 Core 权威判断。未知渠道返回 unavailable；企微仍需
-  其独立装配与验收。标准模板的渠道资格不取决于暂时 Ready 状态；自定义平台入口须有已验证
+- 内置消费者对 Web 使用当前 Core 权威判断；启用 WeCom 时同一 Worker 的渠道实例
+  复核当前发送者、绑定与配置版本。未知渠道返回 unavailable。`wecom.identity` 须以
+  #889 当前完整快照和 LDAP/Platform 当前状态映射可信发送者，不能采信请求字段或固定用户。
+  标准模板的渠道资格不取决于暂时 Ready 状态；自定义平台入口须有已验证
   兼容事实。新业务仍需通过当前身份、Agent 使用权、配置、Workload 与容量终审。
 - Worker-only 文件不得挂载到 API、Agent 或 Web，也不得进入日志、任务正文或 Git。目录
   Adapter 的具体接入与 API taskBoundary 接线由各自后继完成。

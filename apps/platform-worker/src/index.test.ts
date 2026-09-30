@@ -576,6 +576,64 @@ describe("Platform Worker production V2 lifecycle", () => {
 		expect(conversation.stop).toHaveBeenCalledOnce();
 		expect(stopOrder).toEqual(["conversation", "workload", "primary"]);
 	});
+	it("starts WeCom after conversation and drains it before shared execution", async () => {
+		const startOrder: string[] = [];
+		const stopOrder: string[] = [];
+		const worker = await startPlatformWorkerFromDeploymentV2({
+			startPrimary: () => ({
+				stop: () => {
+					stopOrder.push("primary");
+				},
+			}),
+			startWorkload: async () => {
+				startOrder.push("workload");
+				return {
+					stop: async () => {
+						stopOrder.push("workload");
+					},
+				};
+			},
+			startConversation: async () => {
+				startOrder.push("conversation");
+				return {
+					stop: async () => {
+						stopOrder.push("conversation");
+					},
+				};
+			},
+			startWecom: async () => {
+				startOrder.push("wecom");
+				return {
+					stop: async () => {
+						stopOrder.push("wecom");
+					},
+				};
+			},
+		});
+		expect(startOrder).toEqual(["workload", "conversation", "wecom"]);
+		await worker.stop();
+		expect(stopOrder).toEqual(["wecom", "conversation", "workload", "primary"]);
+	});
+	it("drains shared workers when required WeCom assembly fails", async () => {
+		const stops = {
+			primary: vi.fn(),
+			workload: vi.fn(async () => {}),
+			conversation: vi.fn(async () => {}),
+		};
+		await expect(
+			startPlatformWorkerFromDeploymentV2({
+				startPrimary: () => ({ stop: stops.primary }),
+				startWorkload: async () => ({ stop: stops.workload }),
+				startConversation: async () => ({ stop: stops.conversation }),
+				startWecom: async () => {
+					throw new Error("missing trusted WeCom deployment");
+				},
+			}),
+		).rejects.toThrow("missing trusted WeCom deployment");
+		expect(stops.primary).toHaveBeenCalledOnce();
+		expect(stops.workload).toHaveBeenCalledOnce();
+		expect(stops.conversation).toHaveBeenCalledOnce();
+	});
 	it("drains already-started loops when conversation assembly fails", async () => {
 		const primary = { stop: vi.fn(async () => {}) };
 		const workload = { stop: vi.fn(async () => {}) };

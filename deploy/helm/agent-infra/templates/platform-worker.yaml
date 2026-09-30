@@ -91,6 +91,8 @@ spec:
             {{- if not .Values.workloadTopology.enabled }}
             - name: PLATFORM_WORKER_DEPLOYMENT_MODULE
               value: {{ required "platformWorker.deploymentModule must name a module packaged in the deployment image" .Values.platformWorker.deploymentModule | quote }}
+            - name: PLATFORM_WORKER_WECOM_ENABLED
+              value: {{ .Values.platformWorker.wecomEnabled | quote }}
             {{- end }}
             - name: PLATFORM_DATABASE_URL
               valueFrom:
