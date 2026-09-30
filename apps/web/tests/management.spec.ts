@@ -1862,13 +1862,21 @@ test("Agent directory guidance preserves independent Connection and application 
 		name: "查看我的 Connection",
 	});
 	if (await connection.count()) {
-		const navigation = page.getByRole("navigation", { name: "主导航" });
+		const connectionHref = await connection.getAttribute("href");
+		await expect(connection).toHaveAttribute("target", "_blank");
+		await expect(connection).toHaveAttribute("rel", "noreferrer");
+		if (info.project.name === "mobile")
+			await page.getByRole("button", { name: "打开导航" }).click();
+		const navigation =
+			info.project.name === "mobile"
+				? page.getByRole("dialog", { name: "主导航" })
+				: page.locator(".platform-sidebar");
 		const sharedConnection = navigation.getByRole("link", {
 			name: "我的 Connection",
 		});
-		expect(await connection.getAttribute("href")).toBe(
-			await sharedConnection.getAttribute("href"),
-		);
+		expect(connectionHref).toBe(await sharedConnection.getAttribute("href"));
+		if (info.project.name === "mobile")
+			await navigation.getByRole("button", { name: "关闭导航" }).click();
 	} else {
 		await expect(guidance).toContainText("请联系管理员");
 	}
