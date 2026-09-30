@@ -884,13 +884,13 @@ export function ApprovalPoliciesPage() {
 			</div>
 			<section
 				className="approval-routing"
-				aria-label="审批异常处理"
+				aria-label="审批路由处理"
 				hidden={area === "catalog"}
 			>
 				<div className="section-heading">
 					<div>
 						<h2>需要管理员处理</h2>
-						<p>仅处理当前无法完成审批的申请。</p>
+						<p>处理路由异常和遗漏的管理员审批人。</p>
 					</div>
 					<span className="status">{blocked.data?.requests.length ?? 0}</span>
 				</div>

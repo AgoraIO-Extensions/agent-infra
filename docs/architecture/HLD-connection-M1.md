@@ -1201,6 +1201,8 @@ type ConnectionAccessAuthorizationState =
 
 ApprovalDecision 只接受 current Stage 的合格审批人，以 Request、Stage 和 routing revision 做事务内 CAS；Decision 不可修改。全部 Stage 满足 quorum 后产生服务端一次性 Connect Permit。OAuth/PAT/API Key validation 成功、稳定外部账号已证明、Connection 与 Access Authorization 已持久化时，Permit 才在同一事务消费。
 
+申请人自审仅对提交时及决定时均有效的 `CONNECTION_ADMIN` 开放，且本人必须在已发布 Policy 的当前 Stage 审批人名单中。创建 Request 时按当时管理员状态纳入原始路由；查询待办、生成通知及提交 Decision 时复核有效角色及角色授予时间不晚于 Request 创建时间。代理审批不能用于申请人自审。旧 Request 因该排除规则进入 `ROUTING_BLOCKED`，或仍为 `IN_REVIEW` 但当前路由漏掉该管理员且本阶段尚无 Decision 时，仅当原 Policy 当前 Stage 已包含该管理员，才可显式补回本人。对 `IN_REVIEW` 只增补本人，保留其他当前审批人；不降低 quorum、改变阶段顺序或绕过 revision CAS 与审计。普通申请人、提交后才取得管理员角色者、失去管理员角色者及不在原 Policy 名单中的管理员均不能自审。
+
 阶段处理时限 `timeoutSeconds` 用于提醒当前审批人与管理员，不是 Decision 的硬截止，不跳级也不自动批准。
 Request 总有效期到达才进入 EXPIRED；阶段仍为 current PENDING 且 Request 未过期时，合格审批人仍可提交决定。
 
