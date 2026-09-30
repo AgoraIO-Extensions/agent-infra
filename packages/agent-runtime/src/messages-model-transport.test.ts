@@ -216,6 +216,116 @@ it("keeps the authorized operation reference through transport callbacks", async
 	}
 });
 
+it.each(["revoked", "expired"] as const)(
+	"does not fetch when authorization becomes %s while the sent receipt is deferred",
+	async (invalidated) => {
+		let upstreamRequests = 0;
+		let authority: "valid" | "revoked" | "expired" = "valid";
+		const sent = deferred<void>();
+		const releaseSent = deferred<void>();
+		const receipts: { state: string; operationRef?: string }[] = [];
+		const transport = await openRuntimeMessagesTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-configured-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {},
+			beforeSend: async () => ({
+				relayKey: "synthetic-relay-key-race",
+				operationRef: "operation-race",
+				revalidate: async () => {
+					if (authority !== "valid") throw new Error(invalidated);
+				},
+			}),
+			receipt: async (state, _endTurn, _usage, _request, operationRef) => {
+				receipts.push({ state, operationRef });
+				if (state === "sent") {
+					sent.resolve();
+					await releaseSent.promise;
+				}
+			},
+			fetch: async () => {
+				upstreamRequests++;
+				return new Response('{"input_tokens":1}');
+			},
+		});
+		try {
+			const request = fetch(
+				`${transport.modelAccess.endpoint}/v1/messages/count_tokens`,
+				{
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${transport.modelAccess.credential}`,
+					},
+					body: JSON.stringify({ model: "claude-opus-5", messages: [] }),
+				},
+			);
+			await sent.promise;
+			authority = invalidated;
+			releaseSent.resolve();
+			const response = await request;
+			expect(response.ok).toBe(false);
+			expect(upstreamRequests).toBe(0);
+			expect(receipts).toEqual([
+				{ state: "sent", operationRef: "operation-race" },
+				{ state: "unknown", operationRef: "operation-race" },
+			]);
+		} finally {
+			releaseSent.resolve();
+			await transport.close();
+		}
+	},
+);
+
+it("does not fetch after close wins during the sent receipt callback", async () => {
+	let upstreamRequests = 0;
+	const sent = deferred<void>();
+	const releaseSent = deferred<void>();
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		credential: "synthetic-configured-credential",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		beforeSend: async () => ({
+			relayKey: "synthetic-relay-key-close",
+			operationRef: "operation-close",
+		}),
+		receipt: async (state) => {
+			if (state === "sent") {
+				sent.resolve();
+				await releaseSent.promise;
+			}
+		},
+		fetch: async () => {
+			upstreamRequests++;
+			return new Response('{"input_tokens":1}');
+		},
+	});
+	try {
+		const request = fetch(
+			`${transport.modelAccess.endpoint}/v1/messages/count_tokens`,
+			{
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${transport.modelAccess.credential}`,
+				},
+				body: JSON.stringify({ model: "claude-opus-5", messages: [] }),
+			},
+		);
+		await sent.promise;
+		const closing = transport.close();
+		releaseSent.resolve();
+		await Promise.allSettled([request, closing]);
+		expect(upstreamRequests).toBe(0);
+	} finally {
+		releaseSent.resolve();
+		await transport.close();
+	}
+});
+
 function messages(text: string[]) {
 	return [
 		{
@@ -251,6 +361,16 @@ function messages(text: string[]) {
 	]
 		.map((value) => `event: ${value.type}\ndata: ${JSON.stringify(value)}\n\n`)
 		.join("");
+}
+
+function deferred<T>() {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
 }
 
 it.each(["completed", "failed", "unknown"])(

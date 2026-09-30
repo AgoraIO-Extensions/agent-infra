@@ -60,7 +60,10 @@ import {
 	WorkloadReadinessRequestV1Schema,
 	WorkloadReadinessResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
-import type { RuntimeDriver } from "./driver.js";
+import type {
+	RuntimeDriver,
+	RuntimeExternalActionAuthorization,
+} from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
 import {
 	type FileRuntimeStore,
@@ -605,19 +608,32 @@ export class RuntimeHost {
 	acknowledgeEventsV3(value: RuntimeEventAckRequestV3, verification: unknown) {
 		return this.trustedHost().acknowledgeEvents(value, verification);
 	}
-	async authorizeExternalAction(action: {
-		nativeSessionRef: string;
-		executionId: string;
-		operationRef: string;
-		attemptRef: string;
-		runtimeOperationId: string;
-		kind: "model" | "tool";
-		purpose?: "source-reserve" | "source-bind";
-	}) {
+	async authorizeExternalAction(action: RuntimeExternalActionAuthorization) {
 		this.trustedHost();
 		if (!this.options.driver.validateExternalAction)
 			runtimeAuthorizationDenied();
-		await this.bindOriginalNativeSession(action);
+		const originalAction = { ...action };
+		await this.bindOriginalNativeSession(originalAction);
+		const delivery =
+			await this.currentExternalActionAuthorization(originalAction);
+		if (!delivery) return;
+		return {
+			...delivery,
+			revalidate: async () => {
+				const current =
+					await this.currentExternalActionAuthorization(originalAction);
+				if (!current || current.relayKey !== delivery.relayKey)
+					runtimeAuthorizationDenied();
+			},
+		};
+	}
+
+	private async currentExternalActionAuthorization(
+		action: RuntimeExternalActionAuthorization,
+	) {
+		this.trustedHost();
+		if (!this.options.driver.validateExternalAction)
+			runtimeAuthorizationDenied();
 		await this.options.store.authorizeExternalAction(
 			action,
 			this.options.grantValidationV2?.now ?? Date.now,

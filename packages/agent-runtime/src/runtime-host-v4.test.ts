@@ -18,13 +18,16 @@ import {
 } from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it } from "vitest";
 
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
 import { FakeRuntimeDriver } from "./fake-runtime-driver.js";
 import { FileRuntimeStore, requestDigest } from "./file-runtime-store.js";
 import {
 	signV3Fixture,
 	verifyRuntimeV2Fixture,
 } from "./grant-v2-fixture.test-support.js";
+import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { RuntimeHost } from "./runtime-host.js";
+import { SessionRuntimeDriver } from "./session-runtime-driver.js";
 
 const directories: string[] = [];
 
@@ -519,6 +522,7 @@ it("reinstalls the pinned Key on a running submit replay after Host restart", as
 	};
 	await expect(host.authorizeExternalAction(action)).resolves.toEqual({
 		relayKey: "synthetic-relay-key-k1",
+		revalidate: expect.any(Function),
 	});
 	await host.close();
 	const reopened = await RuntimeHost.open(options);
@@ -544,6 +548,7 @@ it("reinstalls the pinned Key on a running submit replay after Host restart", as
 	expect(await driver.sideEffectCount()).toBe(1);
 	await expect(reopened.authorizeExternalAction(action)).resolves.toEqual({
 		relayKey: "synthetic-relay-key-k1",
+		revalidate: expect.any(Function),
 	});
 	const supplement = {
 		...request,
@@ -590,6 +595,7 @@ it("reinstalls the pinned Key on a running submit replay after Host restart", as
 	).rejects.toThrow("RuntimeHostV4 private Key field is invalid");
 	await expect(reopened.authorizeExternalAction(action)).resolves.toEqual({
 		relayKey: "synthetic-relay-key-k1",
+		revalidate: expect.any(Function),
 	});
 	await expect(
 		reopened.supplementV4({
@@ -603,6 +609,7 @@ it("reinstalls the pinned Key on a running submit replay after Host restart", as
 	});
 	await expect(reopened.authorizeExternalAction(action)).resolves.toEqual({
 		relayKey: "synthetic-relay-key-k1",
+		revalidate: expect.any(Function),
 	});
 	await reopened.close();
 	await store.close();
@@ -818,3 +825,205 @@ it("does not dispatch V4 business after Host closes during Grant validation", as
 	expect(store.readOriginalExecutionKeyScopeV4(request)).toBeNull();
 	await store.close();
 });
+
+// Component regression for the production Host/Store/Driver authorization seam;
+// the in-process native source below is not a native conformance claim.
+it.each(["current", "expired", "revoked", "closed"] as const)(
+	"revalidates the original V4 Messages action after a deferred sent receipt (%s)",
+	async (change) => {
+		const directory = await mkdtemp(join(tmpdir(), "host-v4-messages-"));
+		directories.push(directory);
+		const storePath = join(directory, "host.json");
+		const store = await FileRuntimeStore.open(storePath);
+		const { request, claims, transport: submission } = fixture();
+		let now = claims.issuedAt + 1_000;
+		let host: RuntimeHost;
+		let statePath = "";
+		let operationRef: string | undefined;
+		let upstreamRequests = 0;
+		let admissions = 0;
+		const actions: RuntimeExternalActionAuthorization[] = [];
+		const sent = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const finished = Promise.withResolvers<void>();
+		const driver = await SessionRuntimeDriver.open({
+			path: join(directory, "driver"),
+			configVersion: "config-one",
+			defaultModelOptionId: request.selection.modelOptionId,
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: request.selection.modelOptionId,
+					nativeModelId: "claude-opus-5",
+					reasoningLevels: ["high"],
+				},
+			],
+			cursorPrefix: "host-messages-test",
+			modelLifecycleAtTransport: true,
+			retireSession: async () => {},
+			completionStatus: () => "completed",
+			authorizeExternalAction: async (action) => {
+				actions.push({ ...action });
+				const callerAction = { ...action };
+				const delivery = await host.authorizeExternalAction(callerAction);
+				// A caller cannot retarget the captured authorization after delivery.
+				callerAction.attemptRef = "changed-after-delivery";
+				return delivery;
+			},
+			openSession: async (callbacks) => {
+				statePath = join(callbacks.directory, "state.json");
+				const transport = await openRuntimeMessagesTransport({
+					endpoint: "https://model.example.test",
+					credential: "synthetic-static-key-must-not-be-used",
+					authentication: "bearer",
+					model: "claude-opus-5",
+					effort: "high",
+					admit: async () => {
+						admissions++;
+						await callbacks.admit();
+					},
+					beforeSend: callbacks.modelRequestIntent,
+					started: async (_request, ref) =>
+						callbacks.modelRequestStarted?.(ref),
+					receipt: async (state, _endTurn, usage, _request, ref) => {
+						if (state === "sent") {
+							operationRef = ref;
+							sent.resolve();
+							await release.promise;
+						} else await callbacks.modelRequestFinished?.(state, usage, ref);
+					},
+					fetch: async (_url, init) => {
+						upstreamRequests++;
+						expect(new Headers(init?.headers).get("authorization")).toBe(
+							"Bearer synthetic-relay-key-k1",
+						);
+						return new Response('{"input_tokens":1}');
+					},
+				});
+				return {
+					nativeId: "original-native-session",
+					select: async () => {},
+					prompt: async () => {
+						try {
+							const response = await fetch(
+								`${transport.modelAccess.endpoint}/v1/messages/count_tokens`,
+								{
+									method: "POST",
+									headers: {
+										authorization: `Bearer ${transport.modelAccess.credential}`,
+									},
+									body: JSON.stringify({
+										model: "claude-opus-5",
+										messages: [],
+									}),
+								},
+							);
+							expect(response.ok).toBe(change === "current");
+							return { stopReason: "end_turn" };
+						} finally {
+							finished.resolve();
+						}
+					},
+					cancel: async () => {},
+					close: () => transport.close(),
+				};
+			},
+		});
+		host = await RuntimeHost.open({
+			store,
+			driver,
+			grantValidation: { expectedIssuer: "agent-platform" },
+			grantValidationV2: {
+				expectedIssuer: "platform-fixture",
+				expectedWorkerId: "worker-1",
+				now: () => now,
+			},
+			allowLegacyBusiness: false,
+			validateGrantV4: async (value) => {
+				const parsed = value as RuntimeBusinessRequestV4;
+				await validateRuntimeBusinessBindingV4(parsed, claims);
+				return { request: parsed, claims };
+			},
+		});
+		try {
+			const accepted = await host.submitTurnV4(submission);
+			await sent.promise;
+			const originalScope = store.readOriginalExecutionKeyScopeV4(request);
+			const nativeRef = store.nativeSessionRef(accepted.hostSessionRef);
+			if (change === "expired") now = claims.expiresAt;
+			if (change === "revoked") {
+				const control = signV3Fixture(
+					{
+						schemaVersion: 3,
+						requestId: "revoke-during-sent",
+						traceId: request.traceId,
+						principal: request.principal,
+						channelId: request.channelId,
+						agentId: request.agentId,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+						turnId: request.turnId,
+						sessionGeneration: request.sessionGeneration,
+						hostSessionRef: accepted.hostSessionRef,
+						operation: request.operation,
+					},
+					"session.status",
+					{
+						purpose: "control",
+						reason: "authorization_revoked",
+						now,
+						claims: { workerId: "worker-1" },
+					},
+				);
+				const verified = VerifiedRuntimeExecutionGrantV2Schema.parse(
+					await verifyRuntimeV2Fixture(control.grant),
+				);
+				await store.authorizeRequestV3(verified.claims, "query", () => now);
+			}
+			const hostBefore = await readFile(storePath);
+			const closing = change === "closed" ? host.close() : undefined;
+			release.resolve();
+			await finished.promise;
+			await closing;
+			expect(upstreamRequests).toBe(change === "current" ? 1 : 0);
+			expect(admissions).toBe(1);
+			expect(actions).toHaveLength(1);
+			expect(actions[0]).toMatchObject({
+				nativeSessionRef: nativeRef,
+				executionId: request.executionId,
+				runtimeOperationId: request.executionId,
+				operationRef,
+			});
+			const state = JSON.parse(await readFile(statePath, "utf8"));
+			const facts = state.turns[0].events
+				.filter(
+					(event: { type: string; payload: { operationRef: string } }) =>
+						event.type === "operation" &&
+						event.payload.operationRef === operationRef,
+				)
+				.map(
+					(event: { payload: { phase: string; attemptRef: string } }) =>
+						event.payload,
+				);
+			expect(facts.map((fact: { phase: string }) => fact.phase)).toEqual(
+				change === "current"
+					? ["intent", "started", "completed"]
+					: ["intent", "unknown"],
+			);
+			expect(
+				new Set(facts.map((fact: { attemptRef: string }) => fact.attemptRef)),
+			).toEqual(new Set([actions[0]?.attemptRef]));
+			expect(state.operations).toHaveLength(1);
+			expect(store.nativeSessionRef(accepted.hostSessionRef)).toBe(nativeRef);
+			expect(store.readOriginalExecutionKeyScopeV4(request)).toEqual(
+				originalScope,
+			);
+			expect(await readFile(storePath)).toEqual(hostBefore);
+		} finally {
+			release.resolve();
+			await host.close();
+			await driver.close();
+			await store.close();
+		}
+	},
+);

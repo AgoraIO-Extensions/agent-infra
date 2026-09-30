@@ -22,9 +22,13 @@ export interface RuntimeMessagesTransportOptions {
 	 * fail-closed and the configured model credential is never an upstream
 	 * fallback. Direct transport fixtures may omit the callback.
 	 */
-	readonly beforeSend?: (
-		request: RuntimeMessagesRequest,
-	) => Promise<RuntimeExternalActionAuthorizationResult | void>;
+	readonly beforeSend?: (request: RuntimeMessagesRequest) => Promise<
+		| (RuntimeExternalActionAuthorizationResult & {
+				/** Recheck the same durable action immediately before upstream I/O. */
+				readonly revalidate?: () => Promise<void>;
+		  })
+		| void
+	>;
 	readonly started?: (
 		request: RuntimeMessagesRequest,
 		operationRef?: string,
@@ -361,6 +365,12 @@ export async function openRuntimeMessagesTransport(
 					requestKind,
 					operationRef,
 				);
+				// `receipt("sent")` is durable bookkeeping, so it must remain before
+				// external I/O. Recheck closure and the same authorized action after
+				// that await; do not obtain a new intent or operation reference.
+				if (closed || controller.signal.aborted) throw new Error();
+				await authorization?.revalidate?.();
+				if (closed || controller.signal.aborted) throw new Error();
 				const upstreamPromise = (options.fetch ?? fetch)(
 					`${access.endpoint.replace(/\/$/, "")}${request.url}`,
 					{
