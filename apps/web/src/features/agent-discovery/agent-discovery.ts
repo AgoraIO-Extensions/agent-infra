@@ -26,6 +26,19 @@ export type AgentDetailState =
 	| { kind: "ready"; agent: AgentProjectionV2 }
 	| UnavailableState;
 
+export function canStartPlatformConversation(
+	agent: AgentProjectionV2,
+): boolean {
+	return (
+		agent.managementStatus === "available" &&
+		agent.serviceAvailability === "ready" &&
+		!(
+			agent.source.kind === "custom" &&
+			agent.source.interactionMode === "self-managed"
+		)
+	);
+}
+
 const retryableError = (): Error & { readonly retryable: true } =>
 	Object.assign(new Error("Agent data is temporarily unavailable"), {
 		retryable: true as const,
@@ -40,6 +53,12 @@ export function isRetryableAgentDiscoveryError(error: unknown): boolean {
 const maximumAgentDiscoveryPages = 100;
 
 export type AgentDiscoveryScope = "visible" | "owner";
+
+// Reuse the response schema that generates this endpoint's client contract.
+const agentPageSchema =
+	pilotBrowserHttpOpenApiPathsV2["/api/v2/agents"].get.responses["200"].content[
+		"application/json"
+	].schema;
 
 function unavailable(error: { retryable?: boolean } | undefined) {
 	if (error?.retryable !== false) throw retryableError();
@@ -74,7 +93,9 @@ export async function loadAgentDiscovery(
 			responseStyle: "fields",
 			throwOnError: false,
 		});
-		if (!result.data) return unavailable(result.error);
+		if (result.response?.status !== 200) return unavailable(result.error);
+		if (!result.data || !agentPageSchema.safeParse(result.data).success)
+			return unavailable({ retryable: false });
 
 		agents.push(...result.data.items);
 		cursor = result.data.nextCursor;
@@ -95,7 +116,14 @@ export async function loadAgentDetail(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	return result.data
-		? { kind: "ready", agent: result.data }
-		: unavailable(result.error);
+	if (result.response?.status !== 200) return unavailable(result.error);
+	const parsed = AgentProjectionV2Schema.safeParse(result.data);
+	if (!parsed.success || parsed.data.agentId !== agentId)
+		return unavailable({ retryable: false });
+	return { kind: "ready", agent: parsed.data };
 }
+
+import {
+	AgentProjectionV2Schema,
+	pilotBrowserHttpOpenApiPathsV2,
+} from "@agent-infra/contracts/pilot";

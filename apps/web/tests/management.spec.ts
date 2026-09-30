@@ -59,6 +59,7 @@ async function fixture(
 	let agent = AgentProjectionV2Schema.parse(
 		pilotFakeScenariosV2.starting.response.body,
 	);
+	let additionalAgents: (typeof agent)[] = [];
 	let deployment = deploymentConfiguration;
 	let pendingQueueUnavailable = false;
 	let pendingQueueUnauthorized = false;
@@ -67,6 +68,8 @@ async function fixture(
 	let ownedAgentListUnauthorized = false;
 	let agentDetailUnavailable = false;
 	let agentDetailUnauthorized = false;
+	let agentDetailMismatched = false;
+	let agentListMalformed = false;
 	let applicationsUnavailable = false;
 	let applicationsUnauthorized = false;
 	let applicationDetailUnavailable = false;
@@ -126,13 +129,20 @@ async function fixture(
 			return {
 				status: 200,
 				body: {
-					items: ownerScope && role !== "owner" ? [] : [agent],
+					items:
+						ownerScope && role !== "owner" ? [] : [agent, ...additionalAgents],
 					nextCursor: null,
 				},
 			};
 		},
-		getAgent: () =>
-			agentDetailUnauthorized
+		getAgent: (request) => {
+			const agentId = decodeURIComponent(
+				new URL(request.url).pathname.split("/").at(-1) ?? "",
+			);
+			const selected = [agent, ...additionalAgents].find(
+				(item) => item.agentId === agentId,
+			);
+			return agentDetailUnauthorized
 				? {
 						status: 403,
 						body: pilotFakeScenariosV2.unauthorized.response.body,
@@ -142,7 +152,19 @@ async function fixture(
 							status: 503,
 							body: retryableReadFailure,
 						}
-					: { status: 200, body: agent },
+					: selected
+						? { status: 200, body: selected }
+						: {
+								status: 404,
+								body: {
+									schemaVersion: 1,
+									code: "RESOURCE_UNAVAILABLE",
+									message: "Controlled unavailable Agent",
+									retryable: false,
+									traceId: "trace-agent-unavailable",
+								},
+							};
+		},
 		listAgentApplications: () =>
 			applicationsUnauthorized
 				? {
@@ -214,6 +236,25 @@ async function fixture(
 		const request = route.request();
 		const pathname = new URL(request.url()).pathname;
 		const body = request.postData() ? request.postDataJSON() : undefined;
+		// Deliberately bypass the schema-valid mock server for protocol negatives.
+		if (
+			request.method() === "GET" &&
+			pathname === "/api/v2/agents" &&
+			agentListMalformed
+		) {
+			await route.fulfill({ json: { items: [agent], nextCursor: 42 } });
+			return;
+		}
+		if (
+			request.method() === "GET" &&
+			/^\/api\/v2\/agents\/[^/]+$/.test(pathname) &&
+			agentDetailMismatched
+		) {
+			await route.fulfill({
+				json: { ...agent, agentId: "agent-unrelated", name: "Unrelated Agent" },
+			});
+			return;
+		}
 		if (pathname.endsWith("/wecom-bot")) {
 			await route.fulfill({ json: { status: "not_configured" } });
 			return;
@@ -309,6 +350,70 @@ async function fixture(
 	});
 	return {
 		commands,
+		misbindAgentDetail() {
+			agentDetailMismatched = true;
+		},
+		recoverDetailBinding() {
+			agentDetailMismatched = false;
+		},
+		malformAgentList() {
+			agentListMalformed = true;
+		},
+		recoverListSchema() {
+			agentListMalformed = false;
+		},
+		threeAgents() {
+			additionalAgents = [2, 3].map((index) =>
+				AgentProjectionV2Schema.parse({
+					...agent,
+					agentId: `agent-visible-${index}`,
+					name: `Visible Agent ${index}`,
+				}),
+			);
+		},
+		conversationChoices() {
+			agent = AgentProjectionV2Schema.parse({
+				...agent,
+				serviceAvailability: "ready",
+			});
+			additionalAgents = [
+				AgentProjectionV2Schema.parse({
+					...agent,
+					agentId: "agent-platform-adapter",
+					name: "Platform adapter",
+					source: {
+						kind: "custom",
+						imageReference: "registry.example/agent:v1",
+						interactionMode: "platform-adapter",
+					},
+				}),
+				AgentProjectionV2Schema.parse({
+					...agent,
+					agentId: "agent-self-managed",
+					name: "Self managed",
+					source: {
+						kind: "custom",
+						imageReference: "registry.example/agent:v1",
+						interactionMode: "self-managed",
+						identityResponsibility: "self-managed",
+					},
+				}),
+				AgentProjectionV2Schema.parse({
+					...agent,
+					agentId: "agent-starting",
+					name: "Starting Agent",
+					serviceAvailability: "starting",
+				}),
+			];
+		},
+		longAgentFields() {
+			agent = AgentProjectionV2Schema.parse({
+				...agent,
+				name: `中文 Agent 𠮷 👩🏽‍💻 e\u0301 ${"release_task".repeat(16)}`,
+				description: `无空格说明：${"longtoken".repeat(32)}`,
+			});
+		},
+
 		staleDeployment() {
 			deployment = { ...deployment, status: "stale" };
 		},
@@ -1264,4 +1369,335 @@ test("Agent search survives reload and browser back without adding typing histor
 	).toHaveCount(0);
 	await page.reload();
 	await expect(search).toHaveValue("没有匹配的中文");
+});
+
+test("Agent catalog follows original IA card columns and keeps keyboard detail navigation", async ({
+	page,
+}, info) => {
+	const api = await fixture(page, "employee");
+	api.threeAgents();
+	await page.goto("/agents");
+	const cards = page.locator(".agent-list > li");
+	await expect(cards).toHaveCount(3);
+	await capture(page, info, "agent-catalog");
+	for (const width of [390, 820, 821, 1440]) {
+		await page.setViewportSize({ width, height: 1000 });
+		const boxes = await cards.evaluateAll((elements) =>
+			elements.map((element) => {
+				const box = element.getBoundingClientRect();
+				return { left: box.left, top: box.top, width: box.width };
+			}),
+		);
+		if (width <= 820) {
+			expect(boxes[0]?.left).toBe(boxes[1]?.left);
+			expect(boxes[1]?.top).toBeGreaterThan(boxes[0]?.top ?? 0);
+		} else {
+			expect(boxes[0]?.top).toBe(boxes[1]?.top);
+			expect(boxes[1]?.top).toBe(boxes[2]?.top);
+			expect(boxes[1]?.left).toBeGreaterThan(boxes[0]?.left ?? 0);
+		}
+		await capture(page, info, `agent-catalog-${width}px`);
+	}
+	const search = page.getByRole("searchbox", { name: "搜索 Agent" });
+	await search.fill("Visible Agent 2");
+	await expect(cards).toHaveCount(1);
+	await search.press("Tab");
+	const detail = page.getByRole("link", { name: "查看 Visible Agent 2 详情" });
+	await expect(detail).toBeFocused();
+	await detail.press("Enter");
+	await expect(page).toHaveURL(/\/agents\/agent-visible-2$/);
+	api.longAgentFields();
+	await page.goto("/agents");
+	await expect(cards).toHaveCount(3);
+	for (const width of [1440, 390, 160]) {
+		await page.setViewportSize({ width, height: 844 });
+		await capture(page, info, `agent-catalog-long-${width}px`);
+	}
+});
+
+test("Agent directory guidance preserves independent Connection and application navigation", async ({
+	page,
+}, info) => {
+	await fixture(page, "employee");
+	await page.goto("/agents");
+	const guidance = page.locator(".directory-guidance");
+	await expect(
+		guidance.getByRole("heading", { name: "确认你的 Connection 授权" }),
+	).toBeVisible();
+	await expect(guidance).not.toContainText("Provider/Action");
+	const connection = guidance.getByRole("link", {
+		name: "查看我的 Connection",
+	});
+	if (await connection.count()) {
+		const connectionHref = await connection.getAttribute("href");
+		await expect(connection).toHaveAttribute("target", "_blank");
+		await expect(connection).toHaveAttribute("rel", "noreferrer");
+		if (info.project.name === "mobile")
+			await page.getByRole("button", { name: "打开导航" }).click();
+		const navigation =
+			info.project.name === "mobile"
+				? page.getByRole("dialog", { name: "主导航" })
+				: page.locator(".platform-sidebar");
+		const sharedConnection = navigation.getByRole("link", {
+			name: "我的 Connection",
+		});
+		expect(connectionHref).toBe(await sharedConnection.getAttribute("href"));
+		if (info.project.name === "mobile")
+			await navigation.getByRole("button", { name: "关闭导航" }).click();
+	} else {
+		await expect(guidance).toContainText("请联系管理员");
+	}
+	for (const width of [160, 390, 820, 821, 1440]) {
+		await page.setViewportSize({ width, height: 844 });
+		const boxes = await guidance.locator("article").evaluateAll((elements) =>
+			elements.map((element) => {
+				const box = element.getBoundingClientRect();
+				return { left: box.left, top: box.top };
+			}),
+		);
+		expect(boxes).toHaveLength(2);
+		if (width <= 820) {
+			expect(boxes[0]?.left).toBe(boxes[1]?.left);
+			expect(boxes[1]?.top).toBeGreaterThan(boxes[0]?.top ?? 0);
+		} else {
+			expect(boxes[0]?.top).toBe(boxes[1]?.top);
+			expect(boxes[1]?.left).toBeGreaterThan(boxes[0]?.left ?? 0);
+		}
+		const actions = await guidance.getByRole("link").evaluateAll((elements) =>
+			elements.map((element) => {
+				const style = getComputedStyle(element);
+				return {
+					height: element.getBoundingClientRect().height,
+					borderWidth: Number.parseFloat(style.borderTopWidth),
+					borderColor: style.borderTopColor,
+				};
+			}),
+		);
+		for (const action of actions) {
+			expect(action.height).toBeGreaterThanOrEqual(44);
+			expect(action.borderWidth).toBeGreaterThan(0);
+			expect(action.borderColor).not.toBe("rgba(0, 0, 0, 0)");
+		}
+		await capture(page, info, `agent-guidance-${width}px`);
+	}
+	await guidance.getByRole("link", { name: "查看我的申请" }).focus();
+	await page.keyboard.press("Enter");
+	await expect(page).toHaveURL(/\/my-agents\/?$/);
+	await page.reload();
+	await expect(page.getByRole("heading", { name: "我的 Agent" })).toBeVisible();
+});
+
+test("directory detail binds the selected Agent and hides a previously visible resource on opaque denial", async ({
+	page,
+}, info) => {
+	const api = await fixture(page, "employee");
+	api.threeAgents();
+	await page.goto("/agents");
+	await page.getByRole("link", { name: "查看 Visible Agent 2 详情" }).click();
+	await expect(
+		page.getByRole("heading", { name: "Visible Agent 2", exact: true }),
+	).toBeVisible();
+	await page.reload();
+	await expect(
+		page.getByRole("heading", { name: "Visible Agent 2", exact: true }),
+	).toBeVisible();
+	api.misbindAgentDetail();
+	await page.reload();
+	await expect(
+		page.getByRole("heading", { name: "暂时无法访问 Agent" }),
+	).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: "Visible Agent 2", exact: true }),
+	).toHaveCount(0);
+	await expect(page.getByText("Unrelated Agent", { exact: true })).toHaveCount(
+		0,
+	);
+	await capture(page, info, "directory-detail-mismatched-response");
+	api.recoverDetailBinding();
+	await page.reload();
+	await expect(
+		page.getByRole("heading", { name: "Visible Agent 2", exact: true }),
+	).toBeVisible();
+	await page.goto("/agents/agent-outside-authorized-collection");
+	await expect(
+		page.getByRole("heading", { name: "暂时无法访问 Agent" }),
+	).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: "Visible Agent 2", exact: true }),
+	).toHaveCount(0);
+	await capture(page, info, "directory-detail-opaque-denial");
+	await page.getByRole("link", { name: "返回 Agent 列表" }).click();
+	await expect(page.locator(".agent-list > li")).toHaveCount(3);
+	expect(api.commands).toHaveLength(0);
+});
+
+test("directory rejects a malformed successful collection and reloads after recovery", async ({
+	page,
+}, info) => {
+	const api = await fixture(page, "employee");
+	await page.goto("/agents");
+	await expect(
+		page.getByRole("link", { name: "查看 Release assistant 详情" }),
+	).toBeVisible();
+	api.malformAgentList();
+	await page.reload();
+	await expect(
+		page.getByText("Agent 列表暂时无法访问，请联系管理员。"),
+	).toBeVisible();
+	await expect(
+		page.getByRole("link", { name: "查看 Release assistant 详情" }),
+	).toHaveCount(0);
+	await expect(
+		page.getByRole("button", { name: "重新加载 Agent" }),
+	).toHaveCount(0);
+	await capture(page, info, "directory-malformed-success-denial");
+	api.recoverListSchema();
+	await page.reload();
+	await expect(
+		page.getByRole("link", { name: "查看 Release assistant 详情" }),
+	).toBeVisible();
+	expect(api.commands).toHaveLength(0);
+});
+
+test("directory search and keyboard detail activation remain unobscured in short viewports", async ({
+	page,
+}, info) => {
+	const api = await fixture(page, "employee");
+	api.threeAgents();
+	for (const width of [160, 390]) {
+		await page.setViewportSize({ width, height: 370 });
+		await page.goto("/agents");
+		const search = page.getByRole("searchbox", { name: "搜索 Agent" });
+		await search.click();
+		await expect(search).toBeFocused();
+		await search.fill("Visible Agent 2");
+		await expect(page.locator(".agent-list > li")).toHaveCount(1);
+		for (const control of [
+			search,
+			page.getByRole("link", { name: "查看 Visible Agent 2 详情" }),
+		]) {
+			if (control !== search) {
+				await search.press("Tab");
+				await expect(control).toBeFocused();
+			}
+			const hitTargets = await control.evaluate((element) => {
+				const box = element.getBoundingClientRect();
+				return [
+					[box.left + box.width / 2, box.top + 3],
+					[box.left + box.width / 2, box.bottom - 3],
+					[box.left + 3, box.top + box.height / 2],
+					[box.right - 3, box.top + box.height / 2],
+					[box.left + box.width / 2, box.top + box.height / 2],
+				].map(([x, y]) => {
+					const hit = document.elementFromPoint(x ?? 0, y ?? 0);
+					return {
+						x,
+						y,
+						hit: hit?.tagName,
+						hitClass: hit?.getAttribute("class"),
+						unobscured: hit !== null && element.contains(hit),
+					};
+				});
+			});
+			await info.attach(`short-viewport-hits-${width}px`, {
+				body: JSON.stringify(hitTargets),
+				contentType: "application/json",
+			});
+			expect(
+				hitTargets.every((point) => point.unobscured),
+				JSON.stringify(hitTargets),
+			).toBe(true);
+		}
+		await capture(page, info, `directory-short-${width}px`);
+		await page.keyboard.press("Enter");
+		await expect(page).toHaveURL(/\/agents\/agent-visible-2$/);
+		await expect(
+			page.getByRole("heading", { name: "Visible Agent 2", exact: true }),
+		).toBeVisible();
+	}
+	expect(api.commands).toHaveLength(0);
+});
+
+test("directory conversation mode restores URL search and chooses only existing eligible routes", async ({
+	page,
+}, info) => {
+	const api = await fixture(page, "employee");
+	api.conversationChoices();
+	await page.goto("/my-agents");
+	await page.goto("/agents?mode=conversation");
+	const search = page.getByRole("searchbox", { name: "搜索 Agent" });
+	await expect(
+		page.getByRole("heading", { name: "选择 Agent 开始对话" }),
+	).toBeVisible();
+	const historyLength = await page.evaluate(() => window.history.length);
+	await search.pressSequentially("Release");
+	await expect(search).toHaveValue("Release");
+	await expect
+		.poll(() => new URL(page.url()).searchParams.get("q"))
+		.toBe("Release");
+	expect(new URL(page.url()).searchParams.get("mode")).toBe("conversation");
+	expect(await page.evaluate(() => window.history.length)).toBe(historyLength);
+	await page.reload();
+	await expect(search).toHaveValue("Release");
+	await expect(
+		page.getByRole("heading", { name: "选择 Agent 开始对话" }),
+	).toBeVisible();
+	await page
+		.locator(".agent-list > li")
+		.filter({
+			has: page.getByRole("heading", {
+				name: "Release assistant",
+				exact: true,
+			}),
+		})
+		.getByRole("link", { name: "开始对话" })
+		.click();
+	await expect(page).toHaveURL(/\/agents\/agent-pilot-1\/conversations$/);
+	await page.goBack();
+	await expect(search).toHaveValue("Release");
+	expect(new URL(page.url()).searchParams.get("mode")).toBe("conversation");
+	await search.fill("");
+	await expect(page.locator(".agent-list > li")).toHaveCount(4);
+	const adapter = page.locator(".agent-list > li").filter({
+		has: page.getByRole("heading", { name: "Platform adapter", exact: true }),
+	});
+	await adapter.getByRole("link", { name: "开始对话" }).click();
+	await expect(page).toHaveURL(
+		/\/agents\/agent-platform-adapter\/conversations$/,
+	);
+	await page.goBack();
+	await expect(search).toHaveValue("");
+	for (const [name, id] of [
+		["Self managed", "agent-self-managed"],
+		["Starting Agent", "agent-starting"],
+	]) {
+		const card = page.locator(".agent-list > li").filter({
+			has: page.getByRole("heading", { name, exact: true }),
+		});
+		await expect(card.getByRole("link", { name: "开始对话" })).toHaveCount(0);
+		await card.getByRole("link", { name: `查看 ${name} 详情` }).click();
+		expect(new URL(page.url()).pathname).toBe(`/agents/${id}`);
+		await expect(page.getByRole("link", { name: "开始对话" })).toHaveCount(0);
+		if (id === "agent-self-managed") {
+			await expect(page.getByRole("link", { name: "个人历史" })).toHaveCount(0);
+		} else {
+			await expect(
+				page.getByRole("button", { name: "开始对话" }),
+			).toBeDisabled();
+			await expect(
+				page.getByRole("link", { name: "个人历史" }),
+			).toHaveAttribute(
+				"href",
+				"/agents/agent-starting/conversations?view=history",
+			);
+		}
+		await page.goBack();
+		await expect(
+			page.getByRole("heading", { name: "选择 Agent 开始对话" }),
+		).toBeVisible();
+	}
+	await capture(page, info, "directory-conversation-mode");
+	await page.goBack();
+	await expect(page).toHaveURL(/\/my-agents\/?$/);
+	expect(api.commands).toHaveLength(0);
 });
