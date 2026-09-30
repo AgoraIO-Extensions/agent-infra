@@ -223,6 +223,7 @@ it("denies API principals from disabling an Agent", async () => {
 		ownerIds: ["owner_api_disable"],
 		availability: [],
 		failureCode: null,
+		authorizationRevision: "agent-auth-1",
 		principalGrants: [
 			{
 				principal,
@@ -266,6 +267,142 @@ it("denies API principals from disabling an Agent", async () => {
 		),
 	).toEqual({ outcome: "denied", writePlan: null });
 });
+
+it.each(["user", "application"] as const)(
+	"requires a current Agent revision for %s API access and lifecycle commands",
+	async (kind) => {
+		const principal = { kind, id: "api-caller" };
+		const current: AgentManagementStateV1 = {
+			schemaVersion: 1,
+			applicationId: "application_current_grant",
+			agentId: "agent_current_grant",
+			applicantId: "api-caller",
+			status: "available",
+			revision: 1,
+			approvalRevision: 1,
+			decisionReason: null,
+			serviceAvailability: "ready",
+			desiredState: "running",
+			workloadRevision: 1,
+			fence: 1,
+			ownerIds: ["api-caller"],
+			availability: [{ kind: "user", userId: "api-caller" }],
+			failureCode: null,
+			authorizationRevision: "current-agent-revision",
+			principalGrants: [
+				{
+					principal,
+					grantType: "manage",
+					authorizationRevision: "current-agent-revision",
+					revokedAt: null,
+				},
+			],
+		};
+		let state = current;
+		const management = createAgentManagementV1({
+			async executeAgentManagementTransaction(_request, decide) {
+				return decide(state);
+			},
+			async resolveAgentAccessState() {
+				return state;
+			},
+		});
+		const actor = {
+			schemaVersion: 1 as const,
+			userId: "api-caller",
+			accountStatus: "active" as const,
+			organizationIds: [],
+			isAdministrator: false,
+			principal,
+			apiAuthority: {
+				credentialId: "api-credential",
+				identityRevision: "current-identity-revision",
+			},
+		};
+		for (const intent of ["discover", "manage", "use"] as const) {
+			const grant = {
+				principal,
+				grantType: intent === "use" ? ("use" as const) : ("manage" as const),
+				authorizationRevision: "current-agent-revision",
+				revokedAt: null,
+			};
+			state = { ...current, principalGrants: [grant] };
+			const query = {
+				schemaVersion: 1 as const,
+				agentId: state.agentId,
+				intent,
+			};
+			await expect(
+				management.resolveAgentAccess(query, actor),
+			).resolves.toMatchObject({
+				outcome: "allowed",
+			});
+			for (const invalid of [
+				{
+					...state,
+					principalGrants: [
+						{ ...grant, authorizationRevision: "old-agent-revision" },
+					],
+				},
+				{ ...state, authorizationRevision: null },
+				{ ...state, principalGrants: [{ ...grant, revokedAt: new Date(1) }] },
+			]) {
+				state = invalid;
+				await expect(
+					management.resolveAgentAccess(query, actor),
+				).resolves.toEqual({ outcome: "denied" });
+			}
+			const { authorizationRevision: _revision, ...legacy } = current;
+			state = { ...legacy, principalGrants: [grant] };
+			await expect(
+				management.resolveAgentAccess(query, actor),
+			).resolves.toEqual({ outcome: "denied" });
+		}
+		state = { ...current, authorizationRevision: "new-agent-revision" };
+		await expect(
+			management.executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command: "stop_agent",
+					agentId: state.agentId,
+					expectedRevision: state.revision,
+					idempotencyKey: "stale-grant-stop",
+					requestId: "stale-grant-stop",
+					traceId: "stale-grant-stop",
+				},
+				actor,
+			),
+		).resolves.toEqual({ outcome: "denied", writePlan: null });
+		const {
+			authorizationRevision: _revision,
+			principalGrants: _grants,
+			...legacy
+		} = current;
+		state = legacy;
+		const {
+			principal: _principal,
+			apiAuthority: _authority,
+			...browserActor
+		} = actor;
+		await expect(
+			management.resolveAgentAccess(
+				{
+					schemaVersion: 1,
+					agentId: state.agentId,
+					intent: "manage",
+				},
+				browserActor,
+			),
+		).resolves.toMatchObject({ outcome: "allowed" });
+		state = { ...current, authorizationRevision: "" };
+		await expect(
+			management.resolveAgentAccess(
+				{ schemaVersion: 1, agentId: state.agentId, intent: "manage" },
+				actor,
+			),
+		).rejects.toMatchObject({ code: "unavailable" });
+	},
+);
 
 it("snapshots management plans without reading hostile accessors or Proxy traps", async () => {
 	const state: AgentManagementStateV1 = {

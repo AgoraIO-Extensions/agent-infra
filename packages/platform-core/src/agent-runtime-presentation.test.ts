@@ -27,6 +27,7 @@ const management: AgentManagementStateV1 = {
 	ownerIds: ["owner_01"],
 	availability: [],
 	failureCode: null,
+	authorizationRevision: "revision_1",
 };
 const actor = {
 	schemaVersion: 1 as const,
