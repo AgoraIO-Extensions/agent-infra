@@ -266,7 +266,7 @@ export async function createConnectionRuntime(
 		createGuardedFetch({
 			allowPrivateNetwork: false,
 			maxRedirects: 0,
-			fetch: observeProviderFetch("datalego-oauth-pilot", fetch),
+			fetch: observeProviderFetch("datalego", fetch),
 		}),
 		config.datalegoOAuth,
 	);
