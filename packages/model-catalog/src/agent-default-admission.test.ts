@@ -14,7 +14,6 @@ function admissionInput(overrides: Record<string, unknown> = {}) {
 	return {
 		requested: {
 			catalogRevision: "catalog-a",
-			configVersion: "config-a",
 			defaultOptionId: "option-a",
 			defaultReasoningLevel: "medium",
 			options: [
@@ -26,6 +25,7 @@ function admissionInput(overrides: Record<string, unknown> = {}) {
 				},
 			],
 		},
+		keyBinding: { agentId: "agent-a", keyVersion: 2 },
 		admittedSource: {
 			kind: "standard" as const,
 			templateId: "template-a",
@@ -35,6 +35,7 @@ function admissionInput(overrides: Record<string, unknown> = {}) {
 			templateId: "template-a",
 			imageDigest: "sha256:a",
 			protocol: "openai-responses-v1" as const,
+			reasoningLevels: ["medium", "high"],
 		},
 		relayEndpointId: "endpoint-a",
 		relayBaseUrl: catalog.endpoints[0]?.baseUrl ?? "",
@@ -52,7 +53,7 @@ describe("Agent default Key model admission", () => {
 			catalogRevision: "catalog-a",
 			runtime: {
 				schemaVersion: 4,
-				configVersion: "config-a",
+				configVersion: expect.stringMatching(/^[a-f0-9]{64}$/),
 				defaultModelOptionId: "option-a",
 				defaultReasoningLevel: "medium",
 				modelOptions: [
@@ -69,6 +70,10 @@ describe("Agent default Key model admission", () => {
 		});
 		expect(input.ports.loadCatalog).toHaveBeenCalledOnce();
 		expect(input.ports.listVisibleModelIds).toHaveBeenCalledOnce();
+		expect(input.ports.listVisibleModelIds).toHaveBeenCalledWith(
+			{ agentId: "agent-a", keyVersion: 2 },
+			input.signal,
+		);
 		expect(JSON.stringify(result)).not.toMatch(/credential|secret|keyId/i);
 	});
 
@@ -128,6 +133,15 @@ describe("Agent default Key model admission", () => {
 							reasoningLevels: ["low"],
 						},
 					],
+				},
+			},
+		],
+		[
+			"unsupported template reasoning",
+			{
+				template: {
+					...admissionInput().template,
+					reasoningLevels: ["high"],
 				},
 			},
 		],
@@ -192,6 +206,33 @@ describe("Agent default Key model admission", () => {
 				}),
 			),
 		).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+	});
+
+	it("changes the configuration version with admitted content, not Key replacement", async () => {
+		const original = await admitAgentDefaultModelsV1(admissionInput());
+		const newKey = await admitAgentDefaultModelsV1(
+			admissionInput({
+				keyBinding: { agentId: "agent-a", keyVersion: 3 },
+			}),
+		);
+		const changedDefault = await admitAgentDefaultModelsV1(
+			admissionInput({
+				requested: {
+					...admissionInput().requested,
+					defaultReasoningLevel: "high",
+					options: [
+						{
+							...admissionInput().requested.options[0],
+							reasoningLevels: ["medium", "high"],
+						},
+					],
+				},
+			}),
+		);
+		expect(newKey.runtime.configVersion).toBe(original.runtime.configVersion);
+		expect(changedDefault.runtime.configVersion).not.toBe(
+			original.runtime.configVersion,
+		);
 	});
 
 	it("redacts Relay visibility failures", async () => {

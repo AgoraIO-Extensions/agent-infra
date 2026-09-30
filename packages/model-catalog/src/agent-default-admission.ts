@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	type RuntimeModelConfigurationV4,
 	RuntimeModelConfigurationV4Schema,
@@ -14,7 +15,6 @@ import type { StandardTemplateModelBindingV1 } from "./projection.js";
 
 const requestSchema = z.strictObject({
 	catalogRevision: modelIdentifier,
-	configVersion: modelIdentifier,
 	defaultOptionId: modelIdentifier,
 	defaultReasoningLevel: reasoningLevel,
 	options: z
@@ -32,21 +32,33 @@ const requestSchema = z.strictObject({
 
 export type AgentDefaultModelRequestV1 = z.input<typeof requestSchema>;
 
-/** The deployment binds listVisibleModelIds to the exact submitted Key version and fixed Relay profile. */
+export interface AgentDefaultKeyBindingV1 {
+	readonly agentId: string;
+	readonly keyVersion: number;
+}
+
+/** The deployment verifies visibility with the exact submitted Key version and fixed Relay profile. */
 export interface AgentDefaultModelAdmissionPortsV1 {
 	loadCatalog(signal: AbortSignal): Promise<unknown>;
-	listVisibleModelIds(signal: AbortSignal): Promise<readonly string[]>;
+	listVisibleModelIds(
+		binding: AgentDefaultKeyBindingV1,
+		signal: AbortSignal,
+	): Promise<readonly string[]>;
 }
 
 /** Admits a keyless V4 configuration against one current catalog and Key visibility. */
 export async function admitAgentDefaultModelsV1(input: {
 	readonly requested: AgentDefaultModelRequestV1;
+	/** Server-resolved Agent and persisted Key version, never an Owner request field. */
+	readonly keyBinding: AgentDefaultKeyBindingV1;
 	readonly admittedSource: {
 		readonly kind: "standard";
 		readonly templateId: string;
 		readonly imageDigest: string;
 	};
-	readonly template: StandardTemplateModelBindingV1;
+	readonly template: StandardTemplateModelBindingV1 & {
+		readonly reasoningLevels: readonly string[];
+	};
 	/** Deployment-owned Relay route; it must never come from the request body. */
 	readonly relayEndpointId: string;
 	readonly relayBaseUrl: string;
@@ -57,15 +69,22 @@ export async function admitAgentDefaultModelsV1(input: {
 	readonly runtime: RuntimeModelConfigurationV4;
 }> {
 	let requested: z.infer<typeof requestSchema>;
+	let keyBinding: AgentDefaultKeyBindingV1;
 	try {
 		requested = requestSchema.parse(input.requested);
+		keyBinding = z
+			.strictObject({
+				agentId: modelIdentifier,
+				keyVersion: z.number().int().positive(),
+			})
+			.parse(input.keyBinding);
 	} catch {
 		throw new ModelConfigurationErrorV1();
 	}
 	const [rawCatalog, rawVisibleModels] = await Promise.all([
 		modelOperationV1(input.signal, () => input.ports.loadCatalog(input.signal)),
 		modelOperationV1(input.signal, () =>
-			input.ports.listVisibleModelIds(input.signal),
+			input.ports.listVisibleModelIds(keyBinding, input.signal),
 		),
 	]);
 	try {
@@ -75,6 +94,11 @@ export async function admitAgentDefaultModelsV1(input: {
 			.array(modelIdentifier)
 			.max(1024)
 			.parse(rawVisibleModels);
+		const templateReasoning = z
+			.array(reasoningLevel)
+			.min(1)
+			.max(32)
+			.parse(input.template.reasoningLevels);
 		if (
 			input.template.templateId !== input.admittedSource.templateId ||
 			input.template.imageDigest !== input.admittedSource.imageDigest ||
@@ -86,38 +110,56 @@ export async function admitAgentDefaultModelsV1(input: {
 		)
 			throw new ModelConfigurationErrorV1();
 		const visible = new Set(visibleModels);
-		const modelOptions = requested.options.map((option) => {
-			const endpoint = catalog.endpoints.find(
-				(candidate) => candidate.endpointId === option.endpointId,
-			);
-			if (
-				!endpoint?.available ||
-				endpoint.endpointId !== input.relayEndpointId ||
-				endpoint.baseUrl !== input.relayBaseUrl ||
-				endpoint.protocol !== input.template.protocol ||
-				!visible.has(option.modelId) ||
-				(endpoint.allowedModels !== null &&
-					!endpoint.allowedModels.includes(option.modelId)) ||
-				option.reasoningLevels.some(
-					(level) => !endpoint.capabilities.reasoningLevels.includes(level),
+		const modelOptions = requested.options
+			.map((option) => {
+				const endpoint = catalog.endpoints.find(
+					(candidate) => candidate.endpointId === option.endpointId,
+				);
+				if (
+					!endpoint?.available ||
+					endpoint.endpointId !== input.relayEndpointId ||
+					endpoint.baseUrl !== input.relayBaseUrl ||
+					endpoint.protocol !== input.template.protocol ||
+					!visible.has(option.modelId) ||
+					(endpoint.allowedModels !== null &&
+						!endpoint.allowedModels.includes(option.modelId)) ||
+					option.reasoningLevels.some(
+						(level) =>
+							!endpoint.capabilities.reasoningLevels.includes(level) ||
+							!templateReasoning.includes(level),
+					)
 				)
-			)
-				throw new ModelConfigurationErrorV1();
-			return {
-				modelOptionId: option.optionId,
-				endpoint: endpoint.baseUrl,
-				model: option.modelId,
-				reasoningLevels: option.reasoningLevels,
-				protocol: endpoint.protocol,
-				authentication: endpoint.authentication ?? "bearer",
-			};
-		});
-		const runtime = RuntimeModelConfigurationV4Schema.parse({
-			schemaVersion: 4,
-			configVersion: requested.configVersion,
+					throw new ModelConfigurationErrorV1();
+				return {
+					modelOptionId: option.optionId,
+					endpoint: endpoint.baseUrl,
+					model: option.modelId,
+					reasoningLevels: option.reasoningLevels.toSorted(),
+					protocol: endpoint.protocol,
+					authentication: endpoint.authentication ?? "bearer",
+				};
+			})
+			.toSorted((left, right) =>
+				left.modelOptionId.localeCompare(right.modelOptionId),
+			);
+		const content = {
 			defaultModelOptionId: requested.defaultOptionId,
 			defaultReasoningLevel: requested.defaultReasoningLevel,
 			modelOptions,
+		};
+		const configVersion = createHash("sha256")
+			.update(
+				JSON.stringify({
+					agentId: keyBinding.agentId,
+					imageDigest: input.template.imageDigest,
+					...content,
+				}),
+			)
+			.digest("hex");
+		const runtime = RuntimeModelConfigurationV4Schema.parse({
+			schemaVersion: 4,
+			configVersion,
+			...content,
 		});
 		input.signal.throwIfAborted();
 		return { catalogRevision: catalog.revision, runtime };

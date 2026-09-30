@@ -24,6 +24,7 @@ export {
 	type ModelAccessValidatorV1,
 } from "./access.js";
 export {
+	type AgentDefaultKeyBindingV1,
 	type AgentDefaultModelAdmissionPortsV1,
 	type AgentDefaultModelRequestV1,
 	admitAgentDefaultModelsV1,
