@@ -331,7 +331,7 @@ disconnect_worker_database() {
 }
 
 delete_owned_agent_pvcs() {
-  local names name
+  local names name pvc_json agent_identity agent_name agent_id
   [[ -n "${PLATFORM_LOCAL_AGENT_PVC_NAMES:-}" ]] || return 0
   IFS=',' read -r -a names <<< "$PLATFORM_LOCAL_AGENT_PVC_NAMES"
   for name in "${names[@]}"; do
@@ -339,7 +339,11 @@ delete_owned_agent_pvcs() {
       echo "PLATFORM_LOCAL_AGENT_PVC_NAMES contains an invalid PVC name" >&2
       return 1
     }
-    if ! "${kube_target[@]}" get "pvc/$name" --ignore-not-found -o json |
+    if ! pvc_json=$("${kube_target[@]}" get "pvc/$name" --ignore-not-found -o json); then
+      echo "Refusing to delete an unowned Agent PVC: $name" >&2
+      return 1
+    fi
+    if ! agent_identity=$(printf '%s' "$pvc_json" |
       node -e '
         const { createHash } = require("node:crypto");
         let input = "";
@@ -354,25 +358,44 @@ delete_owned_agent_pvcs() {
             const agentName = typeof agentId === "string"
               ? `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`
               : "";
-            const ownerReferences = Array.isArray(metadata.ownerReferences)
-              ? metadata.ownerReferences
-              : [];
             if (pvc.kind !== "PersistentVolumeClaim" ||
                 metadata.name !== process.argv[1] ||
                 metadata.namespace !== process.argv[2] ||
                 metadata.name !== `${agentName}-data` ||
-                labels["agent-infra.agora.io/agent"] !== agentName ||
-                !ownerReferences.some((owner) =>
-                  owner?.apiVersion?.startsWith("apps/") &&
-                  owner.kind === "StatefulSet" &&
-                  owner.name === agentName &&
-                  owner.controller === true)) process.exitCode = 1;
+                labels["agent-infra.agora.io/agent"] !== agentName) process.exitCode = 1;
+            else process.stdout.write(`${agentName}\t${agentId}`);
           } catch {
             process.exitCode = 1;
           }
         });
-      ' "$name" "$PLATFORM_LOCAL_NAMESPACE"; then
+      ' "$name" "$PLATFORM_LOCAL_NAMESPACE"); then
       echo "Refusing to delete an unowned Agent PVC: $name" >&2
+      return 1
+    fi
+    agent_name=${agent_identity%%$'\t'*}
+    agent_id=${agent_identity#*$'\t'}
+    if ! "${kube_target[@]}" get "statefulset/$agent_name" --ignore-not-found -o json |
+      node -e '
+        let input = "";
+        process.stdin.on("data", (chunk) => { input += chunk; });
+        process.stdin.on("end", () => {
+          try {
+            const workload = JSON.parse(input);
+            const metadata = workload.metadata ?? {};
+            const labels = metadata.labels ?? {};
+            const annotations = metadata.annotations ?? {};
+            if (workload.kind !== "StatefulSet" ||
+                metadata.name !== process.argv[1] ||
+                metadata.namespace !== process.argv[2] ||
+                labels["agent-infra.agora.io/agent"] !== process.argv[1] ||
+                annotations["agent-infra.agora.io/agent-id"] !== process.argv[3] ||
+                metadata.deletionTimestamp) process.exitCode = 1;
+          } catch {
+            process.exitCode = 1;
+          }
+        });
+      ' "$agent_name" "$PLATFORM_LOCAL_NAMESPACE" "$agent_id"; then
+      echo "Refusing to delete an Agent PVC without its canonical StatefulSet: $name" >&2
       return 1
     fi
   done

@@ -130,8 +130,10 @@ fi`,
 if [[ "$*" == *"config view"* ]]; then
   printf '%s' "$FAKE_KUBE_SERVER"
 elif [[ "$*" == *"--ignore-not-found -o json" ]]; then
-  if [[ "$*" == *"get pvc/"* ]]; then
-    printf '%s\\n' "$FAKE_AGENT_PVC_JSON"
+			if [[ "$*" == *"get pvc/"* ]]; then
+			printf '%s\\n' "$FAKE_AGENT_PVC_JSON"
+		elif [[ "$*" == *"get statefulset/"* ]]; then
+			printf '%s\\n' "$FAKE_AGENT_STATEFULSET_JSON"
   elif [[ -n "$FAKE_FOREIGN_RESOURCE" && "$*" == *"get $FAKE_FOREIGN_RESOURCE "* ]]; then
     printf '%s\\n' '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"another-owner"}}}'
   elif [[ "$*" == *"get endpointslice/agent-infra-verify-postgres-docker "* && -f "$FAKE_ROUTE_STATE" ]]; then
@@ -189,6 +191,7 @@ fi`,
 		FAKE_HELM_LIST_RESULT: "",
 		FAKE_AUTH_PROBE_EXIT: "",
 		FAKE_AGENT_PVC_JSON: "",
+		FAKE_AGENT_STATEFULSET_JSON: "",
 		FAKE_DATABASE_URL: "postgresql://fixture:fixture@postgres:5432/fixture",
 		PLATFORM_LOCAL_DOCKER_CONTEXT: "isolated",
 		PLATFORM_LOCAL_PROJECT: "agent-infra-verify",
@@ -789,14 +792,15 @@ test("local reset deletes an explicitly selected canonical Agent PVC", async () 
 					namespace: "agent-infra-verify",
 					labels: { "agent-infra.agora.io/agent": agentName },
 					annotations: { "agent-infra.agora.io/agent-id": agentId },
-					ownerReferences: [
-						{
-							apiVersion: "apps/v1",
-							kind: "StatefulSet",
-							name: agentName,
-							controller: true,
-						},
-					],
+				},
+			}),
+			FAKE_AGENT_STATEFULSET_JSON: JSON.stringify({
+				kind: "StatefulSet",
+				metadata: {
+					name: agentName,
+					namespace: "agent-infra-verify",
+					labels: { "agent-infra.agora.io/agent": agentName },
+					annotations: { "agent-infra.agora.io/agent-id": agentId },
 				},
 			}),
 		};
