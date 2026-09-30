@@ -56,6 +56,68 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	const children: ChildProcess[] = [];
 	const output: string[] = [];
 	const traces: string[] = [];
+	const admissions: { executionId: string; conversationId: string }[] = [];
+	const dispatchSnapshots: unknown[] = [];
+	async function snapshotDispatch(
+		stage:
+			| "initial_workers"
+			| "old_workers_exited"
+			| "stop_cancelled"
+			| "failed",
+	) {
+		const observedAtMs = performance.now();
+		if (admissions.length !== 2) {
+			dispatchSnapshots.push({
+				stage,
+				observedAtMs,
+				code: "ADMISSIONS_INCOMPLETE",
+			});
+			return;
+		}
+		try {
+			const executionIds = admissions.map((admission) => admission.executionId);
+			const conversationIds = admissions.map(
+				(admission) => admission.conversationId,
+			);
+			const state = await sql.begin(
+				"isolation level repeatable read read only",
+				async (transaction) => ({
+					databaseAt: (await transaction`select clock_timestamp() as at`)[0]
+						?.at,
+					outbox: await transaction`
+						select o.id, o.operation, o.status, o.lease_owner, o.lease_expires_at,
+							o.available_at, o.attempt_count, o.delivery_fence, o.updated_at,
+							e.execution_id, e.conversation_id
+						from platform.outbox_items o
+						join platform.conversation_executions e on e.execution_id = o.payload->>'executionId'
+						where e.execution_id = any(${transaction.array(executionIds)}::text[])
+							and e.conversation_id = any(${transaction.array(conversationIds)}::text[])
+							and o.scope_type = 'conversation' and o.scope_id = e.conversation_id
+						order by o.id`,
+					execution: await transaction`
+						select execution_id, conversation_id, status, session_generation, delivery_fence
+						from platform.conversation_executions
+						where execution_id = any(${transaction.array(executionIds)}::text[])
+							and conversation_id = any(${transaction.array(conversationIds)}::text[])
+						order by execution_id`,
+					pendingTombstones: await transaction`
+						select item_id, execution_id, status
+						from platform.conversation_generation_tombstones
+						where execution_id = any(${transaction.array(executionIds)}::text[])
+							and conversation_id = any(${transaction.array(conversationIds)}::text[])
+							and status = 'pending'
+						order by item_id`,
+				}),
+			);
+			dispatchSnapshots.push({ stage, observedAtMs, ...state });
+		} catch {
+			dispatchSnapshots.push({
+				stage,
+				observedAtMs,
+				code: "SNAPSHOT_UNAVAILABLE",
+			});
+		}
+	}
 	const requests: {
 		path: string;
 		executionId?: string;
@@ -434,6 +496,10 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			});
 			if (accepted.outcome !== "accepted")
 				throw Error(`Accept: ${accepted.outcome}`);
+			admissions.push({
+				executionId: accepted.result.executionId,
+				conversationId: created.result.conversationId,
+			});
 			return {
 				...accepted.result,
 				conversationId: created.result.conversationId,
@@ -488,8 +554,10 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		const [before] =
 			await sql`select delivery_fence::int as fence, host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
 		const priorRequests = requests.length;
+		await snapshotDispatch("initial_workers");
 		for (const child of children) child.kill("SIGKILL");
 		await Promise.all(children.map((child) => once(child, "exit")));
+		await snapshotDispatch("old_workers_exited");
 		await sql`update platform.outbox_items set lease_expires_at=now()-interval '1 second' where payload->>'executionId'=${active.execution_id} and status='processing'`;
 		start();
 		start();
@@ -571,6 +639,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				).length === 1,
 			"durable stop completion",
 		);
+		await snapshotDispatch("stop_cancelled");
 		await waitUntil(
 			async () =>
 				(
@@ -594,8 +663,10 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		]);
 		expect(output.join("")).not.toContain("PRIVATE KEY");
 	} catch (error) {
+		await snapshotDispatch("failed");
 		throw new Error(
 			JSON.stringify({
+				dispatchSnapshots,
 				traces: traces.slice(-30),
 				processes: children.map((child) => ({
 					exitCode: child.exitCode,
@@ -609,6 +680,16 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			{ cause: error },
 		);
 	} finally {
+		try {
+			console.info(
+				JSON.stringify({
+					component: "worker-dispatch-test",
+					dispatchSnapshots,
+				}),
+			);
+		} catch {
+			/* observational only */
+		}
 		for (const child of children)
 			if (child.exitCode === null) child.kill("SIGKILL");
 		await Promise.all(
