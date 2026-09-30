@@ -105,6 +105,7 @@ export type ConnectionOAuthServerOptions = {
 const browserSessionCookie = "connection_session";
 const browserSessionCookiePath = "/";
 const manhattanOAuthStateCookie = "connection_manhattan_oauth_state";
+const datalegoOAuthStateCookie = "connection_datalego_oauth_state";
 
 const dynamicRegistrationFields = new Set([
 	"application_type",
@@ -2673,10 +2674,12 @@ export function createConnectionOAuthApp(
 				),
 			);
 			if (authorization instanceof Response) return authorization;
-			if (providerId === "manhattan")
+			if (providerId === "manhattan" || providerId === "datalego-oauth-pilot")
 				setCookie(
 					context,
-					manhattanOAuthStateCookie,
+					providerId === "manhattan"
+						? manhattanOAuthStateCookie
+						: datalegoOAuthStateCookie,
 					new URL(authorization.authorizationUrl).searchParams.get("state") ??
 						"",
 					{
@@ -3374,20 +3377,31 @@ export function createConnectionOAuthApp(
 			context.header("referrer-policy", "no-referrer");
 			let stage: ProviderOAuthCallbackStage = "callback_input";
 			try {
-				const providerId = context.req.query("provider") ?? "github";
-				if (providerId !== "github" && providerId !== "manhattan")
+				const callbackProvider = context.req.query("provider") ?? "github";
+				if (!["github", "manhattan", "datalego"].includes(callbackProvider))
 					throw new ConnectionError(
 						"INVALID_REQUEST",
 						"Unsupported OAuth provider",
 					);
-				if (providerId === "manhattan") {
+				const providerId =
+					callbackProvider === "datalego"
+						? "datalego-oauth-pilot"
+						: callbackProvider;
+				if (
+					providerId === "manhattan" ||
+					providerId === "datalego-oauth-pilot"
+				) {
+					const stateCookie =
+						providerId === "manhattan"
+							? manhattanOAuthStateCookie
+							: datalegoOAuthStateCookie;
 					const state = context.req.query("state") ?? "";
-					if (!state || getCookie(context, manhattanOAuthStateCookie) !== state)
+					if (!state || getCookie(context, stateCookie) !== state)
 						throw new ConnectionError(
 							"INVALID_REQUEST",
-							"Manhattan OAuth browser state does not match",
+							"Provider OAuth browser state does not match",
 						);
-					deleteCookie(context, manhattanOAuthStateCookie, {
+					deleteCookie(context, stateCookie, {
 						path: "/oauth/callback",
 					});
 				}
@@ -3423,7 +3437,9 @@ export function createConnectionOAuthApp(
 								.providerAuthorizationDenied === true
 							? "/connection/connections?oauth=permission_denied&provider=manhattan"
 							: "/connection/connections?oauth=callback_failed&provider=manhattan"
-						: "/connection/connections?oauth=callback_failed",
+						: context.req.query("provider") === "datalego"
+							? "/connection/connections?oauth=callback_failed&provider=datalego-oauth-pilot"
+							: "/connection/connections?oauth=callback_failed",
 					303,
 				);
 			}

@@ -43,6 +43,8 @@ const accountBase = {
 	MANHATTAN_KONG_API_KEY: "manhattan-machine-key",
 	MANHATTAN_OAUTH_CLIENT_ID: "manhattan-oauth-client",
 	MANHATTAN_OAUTH_CLIENT_SECRET: "manhattan-oauth-secret",
+	DATALEGO_OAUTH_CLIENT_ID: "datalego-oauth-client",
+	DATALEGO_OAUTH_CLIENT_SECRET: "datalego-oauth-secret",
 	REHOBOAM_KONG_API_KEY: "rehoboam-machine-key",
 };
 
@@ -157,6 +159,19 @@ describe("Connection runtime configuration", () => {
 		});
 		expect(config.rehoboamApiKey).toBe("rehoboam-machine-key");
 		expect(config.manhattanApiKey).toBe("manhattan-machine-key");
+		expect(config.datalegoOAuth).toEqual({
+			clientId: "datalego-oauth-client",
+			clientSecret: "datalego-oauth-secret",
+			redirectUri:
+				"https://connection.example/oauth/callback?provider=datalego",
+		});
+		const {
+			DATALEGO_OAUTH_CLIENT_SECRET: _datalegoSecret,
+			...withoutDatalegoSecret
+		} = accountBase;
+		expect(() => fullConnectionRuntimeConfig(withoutDatalegoSecret)).toThrow(
+			"DATALEGO_OAUTH_CLIENT_SECRET is required",
+		);
 		expect(config.manhattanOAuth).toEqual({
 			clientId: "manhattan-oauth-client",
 			clientSecret: "manhattan-oauth-secret",
