@@ -50,6 +50,59 @@ type ApiObservability = Pick<
 	"record" | "status"
 >;
 
+type ApiSseObservability = Pick<
+	ReturnType<typeof startObservability>,
+	"record" | "observeResource"
+>;
+
+type ConversationSseObserver = NonNullable<
+	ConversationRoutesDependencies["observeSse"]
+>;
+
+export function bindConversationSseTelemetry(
+	conversation: ConversationRoutesDependencies,
+	observability: ApiSseObservability | undefined,
+): ConversationRoutesDependencies {
+	if (!observability) return conversation;
+	return {
+		...conversation,
+		observeSse: {
+			record(event: Parameters<ConversationSseObserver["record"]>[0]) {
+				try {
+					conversation.observeSse?.record(event);
+				} catch {
+					// A secondary observer cannot change stream behavior.
+				}
+				try {
+					observability.record({
+						stage: "sse",
+						ssePhase: event.phase,
+						outcome: event.outcome,
+						durationMs: event.durationMs,
+						requestId: event.requestId,
+						traceId: event.traceId,
+						conversationId: event.conversationId,
+					} satisfies Parameters<ApiSseObservability["record"]>[0]);
+				} catch {
+					// Telemetry failure cannot change stream behavior.
+				}
+			},
+			observeResource(snapshot) {
+				try {
+					conversation.observeSse?.observeResource(snapshot);
+				} catch {
+					// A secondary observer cannot change stream behavior.
+				}
+				try {
+					observability.observeResource(snapshot);
+				} catch {
+					// Telemetry failure cannot change stream behavior.
+				}
+			},
+		},
+	};
+}
+
 export interface PlatformAppDependencies {
 	readonly requestScope?: (
 		request: Request,
@@ -97,7 +150,7 @@ export function createPlatformHealthApp(observability?: ApiObservability) {
 
 export function createPlatformApp(
 	dependencies: PlatformAppDependencies,
-	observability?: ApiObservability,
+	observability?: ApiObservability & ApiSseObservability,
 ) {
 	const app = createPlatformHealthApp(observability);
 	const requestScope = dependencies.requestScope;
@@ -123,7 +176,7 @@ export function createPlatformApp(
 			dependencies.deploymentConfiguration,
 		);
 	registerConversationRoutes(app, {
-		...dependencies.conversation,
+		...bindConversationSseTelemetry(dependencies.conversation, observability),
 		files: dependencies.files,
 	});
 	registerSessionAuditRoutes(app, dependencies.sessionAudit);

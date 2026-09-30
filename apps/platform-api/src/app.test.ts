@@ -1,7 +1,11 @@
 import { PilotProtocolErrorV1Schema } from "@agent-infra/contracts/pilot";
 import { describe, expect, it, vi } from "vitest";
 
-import { createPlatformApp, createPlatformHealthApp } from "./app";
+import {
+	bindConversationSseTelemetry,
+	createPlatformApp,
+	createPlatformHealthApp,
+} from "./app";
 import { requestMetadata } from "./http/common.js";
 
 describe("platform API health", () => {
@@ -74,6 +78,64 @@ describe("platform API health", () => {
 			status: "ok",
 			observability: status,
 		});
+	});
+});
+
+describe("platform API SSE observability assembly", () => {
+	it("maps route events and gauges to process telemetry independently", () => {
+		const records: unknown[] = [];
+		const resources: unknown[] = [];
+		const observability = {
+			record(event: unknown) {
+				records.push(event);
+			},
+			observeResource(snapshot: unknown) {
+				resources.push(snapshot);
+			},
+			status: () => ({
+				enabled: false,
+				state: "active" as const,
+				captureFailures: 0,
+				exportFailures: 0,
+				droppedLogs: 0,
+				invalidRecords: 0,
+			}),
+		} as unknown as Parameters<typeof bindConversationSseTelemetry>[1];
+		const conversation = {
+			observeSse: {
+				record() {
+					throw new Error("secondary observer unavailable");
+				},
+				observeResource() {
+					throw new Error("secondary observer unavailable");
+				},
+			},
+		} as unknown as Parameters<typeof bindConversationSseTelemetry>[0];
+		const bound = bindConversationSseTelemetry(conversation, observability);
+		bound.observeSse?.record({
+			phase: "connected",
+			outcome: "completed",
+			durationMs: 3,
+			requestId: "123e4567-e89b-42d3-a456-426614174000",
+			traceId: "123e4567-e89b-42d3-a456-426614174001",
+			conversationId: "123e4567-e89b-42d3-a456-426614174002",
+		});
+		bound.observeSse?.observeResource({
+			kind: "sse_connections",
+			value: 1,
+		});
+		expect(records).toEqual([
+			{
+				stage: "sse",
+				ssePhase: "connected",
+				outcome: "completed",
+				durationMs: 3,
+				requestId: "123e4567-e89b-42d3-a456-426614174000",
+				traceId: "123e4567-e89b-42d3-a456-426614174001",
+				conversationId: "123e4567-e89b-42d3-a456-426614174002",
+			},
+		]);
+		expect(resources).toEqual([{ kind: "sse_connections", value: 1 }]);
 	});
 });
 

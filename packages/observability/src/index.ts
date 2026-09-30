@@ -36,6 +36,14 @@ export const operationalStages = [
 ] as const;
 
 export type OperationalStage = (typeof operationalStages)[number];
+export const operationalSsePhases = [
+	"connected",
+	"reconnected",
+	"closed",
+	"slow_consumer",
+] as const;
+
+export type OperationalSsePhase = (typeof operationalSsePhases)[number];
 export type OperationalOutcome =
 	| "completed"
 	| "rejected"
@@ -57,6 +65,7 @@ export type OperationalCode = (typeof operationalCodes)[number];
 export interface OperationalEvent {
 	readonly stage: OperationalStage;
 	readonly outcome: OperationalOutcome;
+	readonly ssePhase?: OperationalSsePhase;
 	readonly durationMs?: number;
 	readonly code?: OperationalCode;
 	readonly requestId?: string;
@@ -110,6 +119,7 @@ const outcomes = new Set<OperationalOutcome>([
 	"unknown",
 ]);
 const stages = new Set<string>(operationalStages);
+const ssePhases = new Set<string>(operationalSsePhases);
 const codes = new Set<string>(operationalCodes);
 const knownResourceKinds = new Set<string>(resourceKinds);
 const identifier =
@@ -389,6 +399,7 @@ export function startObservability(options: ObservabilityOptions) {
 				const {
 					stage,
 					outcome,
+					ssePhase,
 					durationMs,
 					code,
 					requestId,
@@ -400,6 +411,13 @@ export function startObservability(options: ObservabilityOptions) {
 					attemptRef,
 				} = event;
 				if (!stages.has(stage) || !outcomes.has(outcome)) {
+					invalidRecords++;
+					return;
+				}
+				if (
+					ssePhase !== undefined &&
+					(stage !== "sse" || !ssePhases.has(ssePhase))
+				) {
 					invalidRecords++;
 					return;
 				}
@@ -416,6 +434,7 @@ export function startObservability(options: ObservabilityOptions) {
 					service,
 					stage,
 					outcome,
+					...(ssePhase === undefined ? {} : { ssePhase }),
 				};
 				const details = {
 					...labels,
@@ -427,6 +446,7 @@ export function startObservability(options: ObservabilityOptions) {
 					...(safeId(executionId) ? { executionId } : {}),
 					...(safeOperationRef(operationRef) ? { operationRef } : {}),
 					...(safeOperationRef(attemptRef) ? { attemptRef } : {}),
+					...(ssePhase === undefined ? {} : { ssePhase }),
 				};
 				operations?.add(1, labels);
 				if (durationMs !== undefined) duration?.record(durationMs, labels);

@@ -47,6 +47,33 @@ it("emits only bounded metadata and drops logs under backpressure", () => {
 	});
 });
 
+it("keeps the bounded SSE phase in logs and rejects it outside SSE", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-api",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	telemetry.record({
+		stage: "sse",
+		outcome: "completed",
+		ssePhase: "slow_consumer",
+	});
+	expect(lines[0]).toContain('"ssePhase":"slow_consumer"');
+	telemetry.record({
+		stage: "http",
+		outcome: "completed",
+		ssePhase: "connected",
+	});
+	expect(telemetry.status().invalidRecords).toBe(1);
+	expect(lines).toHaveLength(1);
+});
+
 it("keeps the validated service label after caller options change", () => {
 	const lines: string[] = [];
 	const options = {
