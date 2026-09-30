@@ -17,24 +17,27 @@ test("Manhattan executor digest pins its reviewed source", () => {
 	assert.equal(manhattanExecutorDigest, `sha256:${digest}`);
 });
 
-test("Manhattan catalog adds only explicit crash READ Actions", () => {
+test("Manhattan v6 catalog adds only explicit crash evidence READ Actions", () => {
 	assert.equal(
 		manhattanConnectionCatalog.providerReleaseId,
-		"manhattan-connection-v5",
+		"manhattan-connection-v6",
 	);
 	assert.deepEqual(manhattanLegacyProviderReleaseIds, [
 		"manhattan-connection-v4",
+		"manhattan-connection-v5",
 	]);
-	assert.equal(manhattanConnectionCatalog.actions.length, 6);
+	assert.equal(manhattanConnectionCatalog.actions.length, 8);
 	assert.deepEqual(
 		manhattanConnectionCatalog.actions.map((action) => action.id),
 		[
-			"manhattan.get_current_user@v5",
-			"manhattan.list_sdk_dumps@v5",
-			"manhattan.get_sdk_dump@v5",
-			"manhattan.list_symbols@v5",
-			"manhattan.get_crash_profile@v1",
-			"manhattan.get_crash_thread@v1",
+			"manhattan.get_current_user@v6",
+			"manhattan.list_sdk_dumps@v6",
+			"manhattan.get_sdk_dump@v6",
+			"manhattan.list_symbols@v6",
+			"manhattan.get_crash_profile@v6",
+			"manhattan.get_crash_thread@v6",
+			"manhattan.find_crash_threads@v1",
+			"manhattan.get_crash_thread_evidence@v1",
 		],
 	);
 	assert.ok(
@@ -64,11 +67,23 @@ test("Manhattan parses a crash profile URL but only requests fixed bounded endpo
 		credential: { accessToken: "personal-token" },
 		input: { url, index: 7, offset: 10, limit: 5 },
 	});
+	await adapter.execute({
+		action: "manhattan.find_crash_threads",
+		credential: { accessToken: "personal-token" },
+		input: { url, kind: "JVM", name: "main", offset: 2, limit: 3 },
+	});
+	await adapter.execute({
+		action: "manhattan.get_crash_thread_evidence",
+		credential: { accessToken: "personal-token" },
+		input: { url, index: 203, offset: 5, limit: 8 },
+	});
 	assert.deepEqual(
 		requests.map((request) => request.url),
 		[
 			"https://manhattan-api.agoralab.co/api/connection/crash/profile?id=0123456789ABCDEF0123456789ABCDEF&threadOffset=20&threadLimit=2&moduleLimit=1",
 			"https://manhattan-api.agoralab.co/api/connection/crash/thread?id=0123456789ABCDEF0123456789ABCDEF&index=7&offset=10&limit=5",
+			"https://manhattan-api.agoralab.co/api/connection/crash/threads?id=0123456789ABCDEF0123456789ABCDEF&kind=JVM&name=main&offset=2&limit=3",
+			"https://manhattan-api.agoralab.co/api/connection/crash/thread/evidence?id=0123456789ABCDEF0123456789ABCDEF&index=203&offset=5&limit=8",
 		],
 	);
 	assert.ok(
@@ -106,7 +121,20 @@ test("Manhattan parses a crash profile URL but only requests fixed bounded endpo
 		}),
 		/limit is out of range/,
 	);
-	assert.equal(requests.length, 2);
+	for (const input of [
+		{ url, kind: "JAVA" },
+		{ url, name: "\nmain" },
+		{ url, limit: 21 },
+	]) {
+		await assert.rejects(
+			adapter.execute({
+				action: "manhattan.find_crash_threads",
+				credential: { accessToken: "personal-token" },
+				input,
+			}),
+		);
+	}
+	assert.equal(requests.length, 4);
 });
 
 test("Manhattan validates only an OAuth token through its fixed identity endpoint", async () => {
