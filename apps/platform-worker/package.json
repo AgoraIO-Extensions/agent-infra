@@ -11,6 +11,7 @@
 		"@agent-infra/identity": "workspace:*",
 		"@agent-infra/image-registry": "workspace:*",
 		"@agent-infra/model-catalog": "workspace:*",
+		"@agent-infra/observability": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
 		"@agent-infra/platform-store": "workspace:*",
 		"@agent-infra/secret-store": "workspace:*",

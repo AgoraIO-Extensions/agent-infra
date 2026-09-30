@@ -23,6 +23,12 @@ export {
 	createResponsesModelAccessValidatorV1,
 	type ModelAccessValidatorV1,
 } from "./access.js";
+export {
+	type AgentDefaultKeyBindingV1,
+	type AgentDefaultModelAdmissionPortsV1,
+	type AgentDefaultModelRequestV1,
+	admitAgentDefaultModelsV1,
+} from "./agent-default-admission.js";
 export * from "./catalog.js";
 export { createMessagesModelAccessValidatorV1 } from "./messages-access.js";
 export {
