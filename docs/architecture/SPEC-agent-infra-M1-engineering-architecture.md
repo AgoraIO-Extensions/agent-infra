@@ -1322,8 +1322,11 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
   存储后端的不可变 SHA-256）及 rootfs layers 绑定 OS 与应用扫描；此 CI 扫描步骤不发布镜像。
   镜像发布使用独立的 [release 入口](../../deploy/README.md#不可变镜像与-release-检查)。新增
   Dockerfile 必须同步覆盖清单。Connection 此项仅提供 HLD §14/§16 的镜像证据，不替代其 Pilot 门禁。
-- 使用 Trivy 输出的 `Severity` 阻断所有 High/Critical，包括无修复版本；中低等级及
-  Unknown 保留报告。severity 来源采用 Trivy 的 vendor 优先策略：OS 使用发行版
+- 使用 Trivy 输出的 `Severity` 识别所有 High/Critical，包括无修复版本。仅
+  `pull_request` CI 将这些发现作为警告，不因发现本身阻塞 PR；`main` push、默认本地
+  调用和发布入口仍阻断未获有效例外的 High/Critical。中低等级及 Unknown 保留报告。
+  报告保留严格漏洞判定及数量，并单独记录本次 CI 门禁结果；PR 警告不表示漏洞已修复。
+  severity 来源采用 Trivy 的 vendor 优先策略：OS 使用发行版
   advisory，应用包使用其生态数据源（npm 使用 GitHub Advisory Database）；报告保留
   `SeveritySource`、`VendorSeverity` 和 `DataSource`，不改用仅新增或仅有补丁策略。
   Trivy 未输出可选 `SeveritySource` 时，摘要注明 `Trivy auto (source unspecified)`，
@@ -1348,8 +1351,9 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
   无效/到期记录、通配范围、版本/Digest 不匹配、审批撤销或回查失败不能豁免。
   普通基础设施 waiver 不参与漏洞判定，例外不改变其他人工门禁。
 
-首次真实扫描命中阻断项时保留失败证据，由维护者批准精确例外或另开修复 Issue；不得自动
-升级、修复或降低阈值。此检查是 readiness 的前置，不代表生产或完整人工安全审计完成。
+真实扫描命中 High/Critical 时保留完整证据，并跟踪修复 Issue；严格门禁下也可由维护者批准
+精确例外。不得自动升级、修复或降低严重性。PR 仍须通过扫描执行与证据完整性检查；报告性
+发现不阻塞 PR readiness，不代表生产或完整人工安全审计完成。
 
 ### 21.2 发布
 
