@@ -52,6 +52,7 @@ describe("platform-core package surface", () => {
 			"WecomSetupError",
 			"WorkloadPreflightRejectedErrorV1",
 			"apiCredentialScopesV1",
+			"assertTaskApiAuthorityV1",
 			"bindInputFileV1",
 			"captureApplicationTaskAuthorizationBoundaryV1",
 			"captureTaskAuthorizationBoundaryV1",
