@@ -95,6 +95,13 @@ export interface PostgresConversationQueryOptionsV1 {
 	readonly replayWindowMs?: number;
 }
 
+export interface PlatformQueueResourceSnapshot {
+	/** Existing submitted Turns still awaiting dispatch reservation; not the full Task waiting contract. */
+	readonly taskWaiting: number;
+	/** All pending or retry-scheduled outbox rows, including non-task control work. */
+	readonly outboxPending: number;
+}
+
 interface ConversationRow {
 	readonly id: string;
 	readonly agent_id: string;
@@ -517,6 +524,111 @@ async function repeatableRead<T>(
 	})) as T;
 }
 
+function countResource(value: unknown): number {
+	if (typeof value !== "string" || !/^\d+$/.test(value))
+		throw new Error("Platform resource snapshot is unavailable");
+	const parsed = Number(value);
+	if (!Number.isSafeInteger(parsed))
+		throw new Error("Platform resource snapshot is unavailable");
+	return parsed;
+}
+
+/** Read one bounded, read-only resource snapshot for the observability consumer. */
+export async function readPlatformQueueResourceSnapshot(
+	client: postgres.Sql,
+	signal: AbortSignal,
+): Promise<PlatformQueueResourceSnapshot> {
+	if (signal.aborted)
+		throw new Error("Platform resource snapshot is unavailable");
+	try {
+		return await client.begin("read only", async (transaction) => {
+			if (signal.aborted)
+				throw new Error("Platform resource snapshot is unavailable");
+			await transaction`set local statement_timeout = '2000ms'`;
+			if (signal.aborted)
+				throw new Error("Platform resource snapshot is unavailable");
+			const rows = await transaction<
+				{ task_waiting: string; outbox_pending: string }[]
+			>`
+		select
+			(select count(distinct e.execution_id)::text
+				from platform.conversation_executions e
+				join platform.conversations c
+					on c.id = e.conversation_id
+					and c.agent_id = e.agent_id
+					and c.actor_id = e.actor_id
+					and c.channel_id = e.channel_id
+					and c.session_generation = e.session_generation
+					and c.authorization_revision = e.authorization_revision
+				where e.status = 'submitted'
+					and c.status <> 'unavailable'
+					and exists (
+						select 1
+						from platform.outbox_items o
+						where o.scope_type = 'conversation'
+							and o.scope_id = c.id
+							and o.operation in (
+								'conversation.turn.submit.v1',
+								'conversation.turn.regenerate.v1'
+							)
+							and o.status in ('pending', 'retry_scheduled', 'processing')
+							and o.payload->>'schemaVersion' = '1'
+							and o.payload->>'conversationId' = e.conversation_id
+							and o.payload->>'executionId' = e.execution_id
+							and o.payload->>'sessionGeneration' = e.session_generation::text
+							and o.payload->>'turnId' = e.turn_id
+							and not (o.payload ? 'metadataRecovery')
+							and exists (
+								select 1
+								from platform.conversation_messages m
+								where m.message_id = o.payload->>'messageId'
+									and m.conversation_id = e.conversation_id
+									and m.actor_id = e.actor_id
+									and m.role = 'user'
+									and m.status = 'submitted'
+									and (
+										o.operation = 'conversation.turn.regenerate.v1'
+										or m.execution_id = e.execution_id
+									)
+							)
+					)
+					and not exists (
+						select 1
+						from platform.conversation_stops s
+						where s.execution_id = e.execution_id
+					)
+					and not exists (
+						select 1
+						from platform.task_authorization_records a
+						where a.execution_id = e.execution_id
+							and a.revoked_at is not null
+					)
+					and not exists (
+						select 1
+						from platform.conversation_generation_tombstones t
+						where t.execution_id = e.execution_id
+							and t.conversation_id = e.conversation_id
+							and t.session_generation = e.session_generation
+							and t.status = 'pending'
+					)) as task_waiting,
+			(select count(*)::text from platform.outbox_items
+				where status in ('pending', 'retry_scheduled')) as outbox_pending
+	`;
+			if (signal.aborted)
+				throw new Error("Platform resource snapshot is unavailable");
+			if (rows.length !== 1)
+				throw new Error("Platform resource snapshot is unavailable");
+			return {
+				taskWaiting: countResource(rows[0]?.task_waiting),
+				outboxPending: countResource(rows[0]?.outbox_pending),
+			};
+		});
+	} catch {
+		// Sampling errors never expose driver messages, connection details or raw data.
+		throw new Error("Platform resource snapshot is unavailable");
+	}
+}
+
 export class PostgresConversationQueryV1 {
 	readonly #client: ReturnType<typeof postgres>;
 	readonly #replayWindow: number;
@@ -549,6 +661,12 @@ export class PostgresConversationQueryV1 {
 			if (error instanceof ConversationQueryError) throw error;
 			unavailable();
 		}
+	}
+
+	readResourceSnapshot(
+		signal: AbortSignal,
+	): Promise<PlatformQueueResourceSnapshot> {
+		return readPlatformQueueResourceSnapshot(this.#client, signal);
 	}
 
 	async getAuthorizationTarget(
