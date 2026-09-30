@@ -13,6 +13,7 @@ export const Route = createFileRoute("/")({
 function WorkspaceRoute() {
 	const session = useApplicationSession();
 	const agents = useAgentDiscovery();
+	const ownedAgents = useAgentDiscovery("owner");
 	const applications = useMyAgentApplications();
 	const agentState = agents.isPending
 		? ({ kind: "loading" } as const)
@@ -22,6 +23,17 @@ function WorkspaceRoute() {
 					retryable: isRetryableAgentDiscoveryError(agents.error),
 				}
 			: (agents.data ?? { kind: "unavailable", retryable: true as const });
+	const ownedAgentState = ownedAgents.isPending
+		? ({ kind: "loading" } as const)
+		: ownedAgents.isError
+			? {
+					kind: "unavailable" as const,
+					retryable: isRetryableAgentDiscoveryError(ownedAgents.error),
+				}
+			: (ownedAgents.data ?? {
+					kind: "unavailable",
+					retryable: true as const,
+				});
 	const applicationState = applications.isPending
 		? ({ kind: "loading" } as const)
 		: applications.isError
@@ -36,11 +48,14 @@ function WorkspaceRoute() {
 	return (
 		<WorkspaceScreen
 			agents={agentState}
+			ownedAgents={ownedAgentState}
 			applications={applicationState}
 			isAdmin={session.session.user.roles.includes("system_admin")}
 			onRetryAgents={() => void agents.refetch()}
+			onRetryOwnedAgents={() => void ownedAgents.refetch()}
 			onRetryApplications={() => void applications.refetch()}
 			retryingAgents={agents.isFetching}
+			retryingOwnedAgents={ownedAgents.isFetching}
 			retryingApplications={applications.isFetching}
 		/>
 	);

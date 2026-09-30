@@ -54,6 +54,7 @@ describe("WorkspaceScreen", () => {
 		render(
 			<WorkspaceScreen
 				agents={{ kind: "ready", agents: [agent] }}
+				ownedAgents={{ kind: "ready", agents: [agent] }}
 				applications={{ kind: "ready", applications: [application] }}
 				isAdmin
 				onRetryAgents={vi.fn()}
@@ -86,6 +87,7 @@ describe("WorkspaceScreen", () => {
 		render(
 			<WorkspaceScreen
 				agents={{ kind: "unavailable", retryable: true }}
+				ownedAgents={{ kind: "ready", agents: [] }}
 				applications={{ kind: "unavailable", retryable: true }}
 				isAdmin={false}
 				onRetryAgents={retryAgents}
@@ -116,6 +118,7 @@ describe("WorkspaceScreen", () => {
 		render(
 			<WorkspaceScreen
 				agents={{ kind: "ready", agents: [selfManaged] }}
+				ownedAgents={{ kind: "ready", agents: [] }}
 				applications={{ kind: "ready", applications: [] }}
 				isAdmin={false}
 			/>,

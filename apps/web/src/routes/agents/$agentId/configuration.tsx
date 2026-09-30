@@ -63,6 +63,13 @@ function AgentConfigurationRoute() {
 
 	return (
 		<main className="platform-content management-content">
+			<Link
+				className={buttonVariants({ variant: "link", className: "mb-4 px-0" })}
+				params={{ agentId }}
+				to="/agents/$agentId"
+			>
+				返回 Agent 详情
+			</Link>
 			<AgentConfigurationWorkflow agent={query.data.agent} />
 		</main>
 	);

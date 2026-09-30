@@ -11,16 +11,20 @@ import {
 import { agentServiceAvailabilityLabel } from "../agent-discovery/agent-discovery-screen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import type { MyAgentApplicationsState } from "../my-agents/my-agent-applications.js";
+import { WorkspaceOwnerAttention } from "./workspace-owner-attention.js";
 
 type WorkspaceState<T> = T | { kind: "loading" };
 
 type WorkspaceScreenProps = {
 	agents: WorkspaceState<AgentDiscoveryState>;
+	ownedAgents: WorkspaceState<AgentDiscoveryState>;
 	applications: WorkspaceState<MyAgentApplicationsState>;
 	isAdmin: boolean;
 	onRetryAgents?: () => void;
+	onRetryOwnedAgents?: () => void;
 	onRetryApplications?: () => void;
 	retryingAgents?: boolean;
+	retryingOwnedAgents?: boolean;
 	retryingApplications?: boolean;
 };
 
@@ -47,7 +51,7 @@ function AgentState({ state }: { state: WorkspaceState<AgentDiscoveryState> }) {
 				return (
 					<li
 						key={agent.agentId}
-						className="flex min-w-0 flex-col gap-4 border border-border bg-background p-5"
+						className="workspace-card flex min-w-0 flex-col gap-4 border border-border bg-background p-5"
 					>
 						<div className="flex items-start justify-between gap-3">
 							<span className="flex size-10 shrink-0 items-center justify-center border border-border bg-muted">
@@ -136,14 +140,11 @@ function ApplicationState({
 			</Empty>
 		);
 	return (
-		<ul
-			className="divide-y divide-border border-border border-y"
-			aria-label="我的申请"
-		>
+		<ul className="space-y-4" aria-label="我的申请">
 			{state.applications.slice(0, 3).map((application) => (
 				<li
 					key={application.applicationId}
-					className="flex flex-wrap items-center justify-between gap-4 py-4"
+					className="workspace-card flex flex-wrap items-center justify-between gap-4 border border-border bg-background p-5"
 				>
 					<div className="min-w-0">
 						<Link
@@ -168,18 +169,21 @@ function ApplicationState({
 
 export function WorkspaceScreen({
 	agents,
+	ownedAgents,
 	applications,
 	isAdmin,
 	onRetryAgents,
+	onRetryOwnedAgents,
 	onRetryApplications,
 	retryingAgents = false,
+	retryingOwnedAgents = false,
 	retryingApplications = false,
 }: WorkspaceScreenProps) {
 	return (
 		<main className="platform-content management-content ia-workspace">
-			<div className="space-y-10">
+			<div className="grid min-w-0 grid-cols-1 gap-7">
 				<header className="page-heading flex flex-wrap items-end justify-between gap-5">
-					<div className="min-w-0">
+					<div className="min-w-0 max-w-[760px]">
 						<p className="mb-2 text-muted-foreground text-sm">
 							公司 Agent 平台 · M1
 						</p>
@@ -212,7 +216,9 @@ export function WorkspaceScreen({
 				>
 					<div className="flex flex-wrap items-end justify-between gap-3">
 						<div>
-							<p className="text-muted-foreground text-sm">当前可用范围</p>
+							<p className="workspace-eyebrow text-muted-foreground text-sm">
+								当前可用范围
+							</p>
 							<h2
 								id="workspace-agents-heading"
 								className="font-semibold text-xl"
@@ -247,12 +253,14 @@ export function WorkspaceScreen({
 				</section>
 
 				<section
-					className="space-y-4 border-border border-t pt-8"
+					className="space-y-4 border-border border-t pt-7"
 					aria-labelledby="workspace-applications-heading"
 				>
 					<div className="flex flex-wrap items-end justify-between gap-3">
 						<div>
-							<p className="text-muted-foreground text-sm">我的申请</p>
+							<p className="workspace-eyebrow text-muted-foreground text-sm">
+								我的申请
+							</p>
 							<h2
 								id="workspace-applications-heading"
 								className="font-semibold text-xl"
@@ -274,13 +282,24 @@ export function WorkspaceScreen({
 					/>
 				</section>
 
+				<WorkspaceOwnerAttention
+					applications={applications}
+					ownedAgents={ownedAgents}
+					onRetryApplications={onRetryApplications}
+					onRetryOwnedAgents={onRetryOwnedAgents}
+					retryingApplications={retryingApplications}
+					retryingOwnedAgents={retryingOwnedAgents}
+				/>
+
 				{isAdmin ? (
 					<section
-						className="space-y-4 border-border border-t pt-8"
+						className="space-y-4 border-border border-t pt-7"
 						aria-labelledby="workspace-admin-heading"
 					>
 						<div>
-							<p className="text-muted-foreground text-sm">系统管理</p>
+							<p className="workspace-eyebrow text-muted-foreground text-sm">
+								系统管理
+							</p>
 							<h2
 								id="workspace-admin-heading"
 								className="font-semibold text-xl"
@@ -290,7 +309,7 @@ export function WorkspaceScreen({
 						</div>
 						<div className="grid gap-4 md:grid-cols-2">
 							<Link
-								className="group flex min-h-28 items-start gap-4 border border-border bg-background p-5 hover:border-foreground"
+								className="workspace-card group flex min-h-28 items-start gap-4 border border-border bg-background p-5 hover:border-foreground"
 								to="/admin/approvals"
 							>
 								<CheckCheck aria-hidden="true" className="mt-1 size-5" />
@@ -302,7 +321,7 @@ export function WorkspaceScreen({
 								</span>
 							</Link>
 							<Link
-								className="group flex min-h-28 items-start gap-4 border border-border bg-background p-5 hover:border-foreground"
+								className="workspace-card group flex min-h-28 items-start gap-4 border border-border bg-background p-5 hover:border-foreground"
 								to="/admin/agents"
 							>
 								<Settings2 aria-hidden="true" className="mt-1 size-5" />

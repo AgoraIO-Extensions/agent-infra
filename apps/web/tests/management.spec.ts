@@ -71,6 +71,8 @@ async function fixture(
 	let agentListUnavailable = false;
 	let agentListUnauthorized = false;
 	let visibleAgentListRequests = 0;
+	let ownedAgentListRequests = 0;
+	let ownedAgentListUnavailable = false;
 	let ownedAgentListUnauthorized = false;
 	let agentDetailUnavailable = false;
 	let agentDetailUnauthorized = false;
@@ -113,6 +115,7 @@ async function fixture(
 			const ownerScope =
 				new URL(request.url).searchParams.get("scope") === "owner";
 			if (!ownerScope) visibleAgentListRequests += 1;
+			else ownedAgentListRequests += 1;
 			if (!ownerScope && agentListUnauthorized) {
 				return {
 					status: 403,
@@ -124,6 +127,9 @@ async function fixture(
 					status: 403,
 					body: pilotFakeScenariosV2.unauthorized.response.body,
 				};
+			}
+			if (ownerScope && ownedAgentListUnavailable) {
+				return { status: 503, body: retryableReadFailure };
 			}
 			if (agentListUnavailable) {
 				return {
@@ -318,6 +324,14 @@ async function fixture(
 	return {
 		commands,
 		visibleAgentListRequests: () => visibleAgentListRequests,
+		ownedAgentListRequests: () => ownedAgentListRequests,
+		failedCreationAgent() {
+			agent = AgentProjectionV2Schema.parse({
+				...agent,
+				managementStatus: "creation_failed",
+				serviceAvailability: null,
+			});
+		},
 		readyAgent() {
 			agent = {
 				...agent,
@@ -399,6 +413,12 @@ async function fixture(
 		unauthorizedOwnedAgentList() {
 			ownedAgentListUnauthorized = true;
 		},
+		unavailableOwnedAgentList() {
+			ownedAgentListUnavailable = true;
+		},
+		recoverOwnedAgentList() {
+			ownedAgentListUnavailable = false;
+		},
 		unavailableAgentDetail() {
 			agentDetailUnavailable = true;
 		},
@@ -471,6 +491,33 @@ async function capture(page: Page, info: TestInfo, name: string) {
 				.map((element) => element.tagName),
 		);
 	expect(overflow).toEqual([]);
+	const workspaceLayout = await page
+		.locator(
+			".ia-workspace h1, .ia-workspace h2, .ia-workspace .workspace-card",
+		)
+		.evaluateAll((elements) =>
+			elements.map((element) => {
+				const box = element.getBoundingClientRect();
+				const style = getComputedStyle(element);
+				return {
+					tag: element.tagName,
+					id: element.id || element.getAttribute("data-od-id"),
+					width: box.width,
+					height: box.height,
+					fontFamily: style.fontFamily,
+					fontSize: style.fontSize,
+					lineHeight: style.lineHeight,
+					borderRadius: style.borderRadius,
+					padding: style.padding,
+				};
+			}),
+		);
+	if (workspaceLayout.length > 0) {
+		await info.attach(`${name}-layout (${info.config.metadata.head})`, {
+			body: Buffer.from(JSON.stringify(workspaceLayout, null, 2)),
+			contentType: "application/json",
+		});
+	}
 	const path = info.outputPath(`${name}-${info.project.name}.png`);
 	await page.screenshot({ path, fullPage: true });
 	await info.attach(`${name} (${info.config.metadata.head})`, {
@@ -575,16 +622,24 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await expect(page.getByRole("button", { name: "撤回申请" })).toHaveCount(0);
 });
 
-test("field errors and transient submission recover on desktop and mobile", async ({
+test("field errors and long Unicode application fields recover on desktop and mobile", async ({
 	page,
 }, info) => {
 	const api = await fixture(page);
 	await page.goto("/my-agents/new");
 	const name = page.getByLabel("Agent 名称");
+	const description = page.getByLabel("用途说明", { exact: true });
+	// Stress samples, not contract limits. insertText supplies committed Unicode
+	// text; this controlled test does not exercise a real OS input method.
+	const longName = `  中文发布𠮷 Agent 👩🏽‍💻 e\u0301 ${"release_task".repeat(18)}  `;
+	const longDescription = `\n用于中文发布验收 👩🏽‍💻\n${"https://example.invalid/"}${"longtoken".repeat(32)}\n保留组合字符 e\u0301 和内部换行。\n`;
 	const ownerIds = page.getByLabel("共同 Owner 用户 ID");
 	const submit = page.getByRole("button", { name: "提交申请", exact: true });
-	await name.fill("中文发布 Agent");
-	await page.getByLabel("用途说明", { exact: true }).fill("用于中文发布验收");
+	await name.click();
+	await page.keyboard.insertText(longName);
+	await page.keyboard.press("Tab");
+	await expect(description).toBeFocused();
+	await page.keyboard.insertText(longDescription);
 	await page.getByRole("combobox", { name: "Agent 来源" }).click();
 	await page
 		.getByRole("option", { name: "自定义 Agent · 平台交互入口" })
@@ -607,7 +662,8 @@ test("field errors and transient submission recover on desktop and mobile", asyn
 	await submit.focus();
 	await page.keyboard.press("Enter");
 	await expect(page.getByRole("alert")).toContainText("申请提交失败");
-	await expect(name).toHaveValue("中文发布 Agent");
+	await expect(name).toHaveValue(longName);
+	await expect(description).toHaveValue(longDescription);
 	await expect(ownerIds).toHaveValue("user-2");
 	await expect(page.getByLabel("替换值")).toHaveCount(0);
 	expect(api.commands).toHaveLength(1);
@@ -621,10 +677,21 @@ test("field errors and transient submission recover on desktop and mobile", asyn
 	await expect(page.getByRole("status")).toBeFocused();
 	expect(api.commands).toHaveLength(2);
 	expect(api.commands[1]?.body).toMatchObject({
-		name: "中文发布 Agent",
+		name: longName.trim(),
+		description: longDescription.trim(),
 		coOwnerIds: ["user-2"],
 		secrets: [{ name: "TEST_SECRET", value: "synthetic-retry-value" }],
 	});
+	await page.getByRole("link", { name: "查看申请" }).click();
+	await page.getByRole("link", { name: "修改申请" }).click();
+	await expect(name).toHaveValue(longName.trim());
+	await expect(description).toHaveValue(longDescription.trim());
+	await capture(page, info, "application-long-unicode-roundtrip");
+	await page.goto("/");
+	await expect(
+		page.getByRole("link", { name: longName.trim(), exact: true }),
+	).toBeVisible();
+	await capture(page, info, "workspace-long-application");
 });
 
 test("stale deployment options block submission in the browser", async ({
@@ -1121,6 +1188,104 @@ test("employee workbench keeps system management out of the shared navigation", 
 	await expect(
 		page.getByRole("heading", { name: "无权访问 Agent 管理", exact: true }),
 	).toBeVisible();
+});
+
+test("workbench Owner attention uses scoped facts and returns through formal detail routes", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	api.failedCreationAgent();
+	api.rejectApplication();
+	await page.goto("/");
+	const attention = page.getByRole("region", {
+		name: "需要你处理",
+		exact: true,
+	});
+	await expect(attention).toBeVisible();
+	await expect(
+		attention.getByText("Capacity is unavailable", { exact: true }),
+	).toBeVisible();
+	await expect(
+		attention.getByRole("link", { name: "查看原因并修改" }),
+	).toHaveAttribute("href", "/my-agents/application-browser-1");
+	await expect(
+		attention.getByRole("link", { name: "查看状态并重试" }),
+	).toHaveAttribute("href", "/agents/agent-pilot-1/configuration");
+	expect(api.ownedAgentListRequests()).toBeGreaterThan(0);
+	expect(api.commands).toHaveLength(0);
+	await capture(page, info, "workspace-owner-attention");
+	await attention.getByRole("link", { name: "查看原因并修改" }).click();
+	await expect(page).toHaveURL(/\/my-agents\/application-browser-1$/);
+	await expect(
+		page.getByRole("link", { name: "修改并重新提交" }),
+	).toBeVisible();
+	await page.reload();
+	await expect(
+		page.getByRole("heading", { name: "申请详情", exact: true }),
+	).toBeVisible();
+	await page.goto("/");
+	await attention.getByRole("link", { name: "查看状态并重试" }).click();
+	await expect(page).toHaveURL(/\/agents\/agent-pilot-1\/configuration$/);
+	await page.reload();
+	await expect(
+		page.getByRole("link", { name: "返回 Agent 详情" }),
+	).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "重试创建", exact: true }),
+	).toBeVisible();
+	await capture(page, info, "owner-attention-configuration-deep-link");
+	await page.getByRole("link", { name: "返回 Agent 详情" }).click();
+	await expect(page).toHaveURL(/\/agents\/agent-pilot-1$/);
+	expect(api.commands).toHaveLength(0);
+});
+
+test("workbench does not infer Owner work from a visible failed Agent", async ({
+	page,
+}) => {
+	const api = await fixture(page, "employee");
+	api.failedCreationAgent();
+	await page.goto("/");
+	await expect(
+		page.getByRole("heading", { name: "Release assistant", exact: true }),
+	).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: "需要你处理", exact: true }),
+	).toHaveCount(0);
+	await expect(page.getByRole("link", { name: "查看状态并重试" })).toHaveCount(
+		0,
+	);
+	expect(api.ownedAgentListRequests()).toBeGreaterThan(0);
+});
+
+test("workbench Owner facts recover independently and disappear after authorization denial", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.failedCreationAgent();
+	api.unavailableOwnedAgentList();
+	await page.goto("/");
+	const attention = page.getByRole("region", {
+		name: "需要你处理",
+		exact: true,
+	});
+	const retry = attention.getByRole("button", { name: "重新加载待办 Agent" });
+	await expect(retry).toBeVisible();
+	await expect(
+		attention.getByRole("link", { name: "查看状态并重试" }),
+	).toHaveCount(0);
+	api.recoverOwnedAgentList();
+	await retry.click();
+	await expect(
+		attention.getByRole("link", { name: "查看状态并重试" }),
+	).toBeVisible();
+	api.unauthorizedOwnedAgentList();
+	await page.reload();
+	await expect(attention.getByRole("alert")).toBeVisible();
+	await expect(
+		attention.getByRole("link", { name: "查看状态并重试" }),
+	).toHaveCount(0);
+	await expect(retry).toHaveCount(0);
+	expect(api.commands).toHaveLength(0);
 });
 
 test("workbench preserves a non-retryable Agent read failure", async ({
