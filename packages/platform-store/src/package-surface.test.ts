@@ -80,6 +80,7 @@ describe("platform-store package surface", () => {
 			"openPostgresSecretKeyRotationStoreV1",
 			"openPostgresWorkloadReconciliationStoreV1",
 			"platformDatabaseUrlFromEnvironment",
+			"validateWecomSetupCredentialRecordV1",
 		]);
 
 		const pack = JSON.parse(
