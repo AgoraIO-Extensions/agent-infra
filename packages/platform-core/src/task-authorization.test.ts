@@ -261,6 +261,170 @@ describe("task authorization boundary", () => {
 		).toBe(false);
 	});
 
+	it("captures and retains a current API user use grant without Owner or availability access", () => {
+		const grantedAgent: AgentManagementStateV1 = {
+			...agent,
+			availability: [],
+			principalGrants: [
+				{
+					principal: { kind: "user", id: user.userId },
+					grantType: "use",
+					authorizationRevision: "agent-access-4",
+					revokedAt: null,
+				},
+			],
+		};
+		const boundary = requiredBoundary({
+			agent: grantedAgent,
+			channelId: "api",
+		});
+		expect(boundary.accessSources).toEqual([
+			{ kind: "api_user", userId: user.userId },
+		]);
+		expect(
+			isTaskAuthorizationCurrentV1({
+				boundary,
+				user,
+				agent: grantedAgent,
+				currentAgentAuthorizationRevision: "agent-access-4",
+			}),
+		).toBe(true);
+		expect(capture({ agent: grantedAgent })).toBeNull();
+		for (const currentAgentAuthorizationRevision of [
+			undefined,
+			null,
+			"agent-access-5",
+		])
+			expect(
+				isTaskAuthorizationCurrentV1({
+					boundary,
+					user,
+					agent: grantedAgent,
+					currentAgentAuthorizationRevision,
+				}),
+			).toBe(false);
+	});
+
+	it.each(["missing", "revoked", "stale", "manage only", "another user"])(
+		"rejects API boundary capture with a %s use grant",
+		(change) => {
+			const grantedAgent: AgentManagementStateV1 = {
+				...agent,
+				ownerIds: [user.userId],
+				principalGrants:
+					change === "missing"
+						? []
+						: [
+								{
+									principal: {
+										kind: "user",
+										id: change === "another user" ? "user-b" : user.userId,
+									},
+									grantType: change === "manage only" ? "manage" : "use",
+									authorizationRevision:
+										change === "stale" ? "agent-access-3" : "agent-access-4",
+									revokedAt: change === "revoked" ? new Date() : null,
+								},
+							],
+			};
+			expect(capture({ agent: grantedAgent, channelId: "api" })).toBeNull();
+			expect(capture({ agent: grantedAgent })).not.toBeNull();
+		},
+	);
+
+	it("keeps direct user availability and API use authority as distinct sources", () => {
+		const boundary = requiredBoundary({
+			channelId: "api",
+			agent: {
+				...agent,
+				availability: [{ kind: "user", userId: user.userId }],
+				principalGrants: [
+					{
+						principal: { kind: "user", id: user.userId },
+						grantType: "use",
+						authorizationRevision: "agent-access-4",
+						revokedAt: null,
+					},
+				],
+			},
+		});
+		expect(boundary.accessSources).toEqual([
+			{ kind: "user", userId: user.userId },
+			{ kind: "api_user", userId: user.userId },
+		]);
+	});
+
+	it.each(["owner", "direct user", "organization"])(
+		"retains an older API boundary's %s source only while that source and its explicit use grant remain current",
+		(source) => {
+			const originalAgent: AgentManagementStateV1 = {
+				...agent,
+				ownerIds: source === "owner" ? [user.userId] : agent.ownerIds,
+				availability:
+					source === "direct user"
+						? [{ kind: "user", userId: user.userId }]
+						: source === "organization"
+							? agent.availability
+							: [],
+			};
+			const grantedAgent: AgentManagementStateV1 = {
+				...originalAgent,
+				principalGrants: [
+					{
+						principal: { kind: "user", id: user.userId },
+						grantType: "use",
+						authorizationRevision: "agent-access-4",
+						revokedAt: null,
+					},
+				],
+			};
+			const oldBoundary = {
+				...requiredBoundary({ agent: originalAgent }),
+				channelId: "api",
+			};
+			const current = {
+				boundary: oldBoundary,
+				user,
+				agent: grantedAgent,
+				currentAgentAuthorizationRevision: "agent-access-4",
+			};
+			expect(isTaskAuthorizationCurrentV1(current)).toBe(true);
+			expect(
+				isTaskAuthorizationCurrentV1({
+					...current,
+					agent: {
+						...grantedAgent,
+						ownerIds: agent.ownerIds,
+						availability: [],
+					},
+				}),
+			).toBe(false);
+			expect(
+				isTaskAuthorizationCurrentV1({
+					...current,
+					agent: { ...grantedAgent, principalGrants: [] },
+				}),
+			).toBe(false);
+		},
+	);
+
+	it("rejects API user sources bound to a browser channel, application or different user", () => {
+		const boundary = {
+			...requiredBoundary(),
+			channelId: "api",
+			accessSources: [{ kind: "api_user", userId: user.userId }],
+		};
+		expect(parseTaskAuthorizationBoundaryV1(boundary)).toEqual(boundary);
+		for (const changes of [
+			{ channelId: "web" },
+			{ principal: { kind: "application", id: user.userId } },
+			{ accessSources: [{ kind: "api_user", userId: "user-b" }] },
+		])
+			expect(() =>
+				parseTaskAuthorizationBoundaryV1({ ...boundary, ...changes }),
+			).toThrow("Task access source is invalid");
+	});
+
 	it.each(["owner", "availability"] as const)(
 		"rejects revoked API user use authority despite retained %s access",
 		(access) => {

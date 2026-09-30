@@ -42,7 +42,7 @@ export interface TaskUserDirectoryV1 {
 }
 
 type TaskAccessSourceV1 =
-	| { readonly kind: "owner" | "user"; readonly userId: string }
+	| { readonly kind: "owner" | "user" | "api_user"; readonly userId: string }
 	| { readonly kind: "organization"; readonly organizationId: string }
 	| { readonly kind: "application"; readonly applicationId: string };
 
@@ -123,25 +123,51 @@ function principal(input: unknown): TaskPrincipalV1 {
 	return { kind: value.kind, id: value.id };
 }
 
-function accessSources(
+function hasCurrentUseGrant(
 	principalValue: TaskPrincipalV1,
-	user: CurrentTaskUserV1 | undefined,
 	agent: AgentManagementStateV1,
 	currentAgentAuthorizationRevision?: string | null,
-): readonly TaskAccessSourceV1[] {
-	if (principalValue.kind === "application") {
-		return agent.principalGrants?.some(
+): boolean {
+	return (
+		text(currentAgentAuthorizationRevision) &&
+		(agent.principalGrants?.some(
 			(grant) =>
-				grant.principal.kind === "application" &&
+				grant.principal.kind === principalValue.kind &&
 				grant.principal.id === principalValue.id &&
 				grant.grantType === "use" &&
 				grant.authorizationRevision === currentAgentAuthorizationRevision &&
 				grant.revokedAt === null,
+		) ??
+			false)
+	);
+}
+
+function accessSources(
+	principalValue: TaskPrincipalV1,
+	user: CurrentTaskUserV1 | undefined,
+	agent: AgentManagementStateV1,
+	channelId: string,
+	currentAgentAuthorizationRevision?: string | null,
+): readonly TaskAccessSourceV1[] {
+	if (principalValue.kind === "application") {
+		return hasCurrentUseGrant(
+			principalValue,
+			agent,
+			currentAgentAuthorizationRevision,
 		)
 			? [{ kind: "application", applicationId: principalValue.id }]
 			: [];
 	}
 	if (user?.accountStatus !== "active") return [];
+	if (
+		channelId === "api" &&
+		!hasCurrentUseGrant(
+			principalValue,
+			agent,
+			currentAgentAuthorizationRevision,
+		)
+	)
+		return [];
 	const sources: TaskAccessSourceV1[] = [];
 	if (agent.ownerIds.includes(user.userId)) {
 		sources.push({ kind: "owner", userId: user.userId });
@@ -156,6 +182,8 @@ function accessSources(
 			sources.push({ ...target });
 		}
 	}
+	if (channelId === "api")
+		sources.push({ kind: "api_user", userId: user.userId });
 	return sources;
 }
 
@@ -216,9 +244,13 @@ export function parseTaskAuthorizationBoundaryV1(
 			}
 			exact(source, ["kind", "userId"]);
 			if (
-				(source.kind !== "owner" && source.kind !== "user") ||
+				(source.kind !== "owner" &&
+					source.kind !== "user" &&
+					source.kind !== "api_user") ||
 				!text(source.userId) ||
-				source.userId !== subject.id
+				source.userId !== subject.id ||
+				(source.kind === "api_user" &&
+					(subject.kind !== "user" || value.channelId !== "api"))
 			) {
 				throw new TypeError("Task access source is invalid");
 			}
@@ -253,7 +285,13 @@ export function captureTaskAuthorizationBoundaryV1(input: {
 	const user = parseCurrentTaskUserV1(input.user);
 	const agent = parseAgentManagementPortState(input.agent);
 	if (subject.id !== user.userId) return null;
-	const sources = accessSources(subject, user, agent);
+	const sources = accessSources(
+		subject,
+		user,
+		agent,
+		input.channelId,
+		input.agentAuthorizationRevision,
+	);
 	if (sources.length === 0) return null;
 	return parseTaskAuthorizationBoundaryV1({
 		schemaVersion: 1,
@@ -284,6 +322,7 @@ export function captureApplicationTaskAuthorizationBoundaryV1(input: {
 		subject,
 		undefined,
 		agent,
+		input.channelId,
 		input.agentAuthorizationRevision,
 	);
 	if (sources.length === 0) return null;
@@ -318,16 +357,11 @@ export function isTaskAuthorizationCurrentV1(input: {
 	if (
 		boundary.channelId === "api" &&
 		boundary.principal.kind === "user" &&
-		(input.currentAgentAuthorizationRevision == null ||
-			!agent.principalGrants?.some(
-				(grant) =>
-					grant.principal.kind === "user" &&
-					grant.principal.id === boundary.principal.id &&
-					grant.grantType === "use" &&
-					grant.authorizationRevision ===
-						input.currentAgentAuthorizationRevision &&
-					grant.revokedAt === null,
-			))
+		!hasCurrentUseGrant(
+			boundary.principal,
+			agent,
+			input.currentAgentAuthorizationRevision,
+		)
 	)
 		return false;
 	let user: CurrentTaskUserV1 | undefined;
@@ -350,6 +384,7 @@ export function isTaskAuthorizationCurrentV1(input: {
 			boundary.principal,
 			user,
 			agent,
+			boundary.channelId,
 			input.currentAgentAuthorizationRevision,
 		).map(sourceKey),
 	);
