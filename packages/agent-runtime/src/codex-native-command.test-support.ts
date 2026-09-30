@@ -20,7 +20,7 @@ export async function seedNativeCommandState(
 	};
 	await writeFile(
 		path,
-		JSON.stringify({
+		`${JSON.stringify({
 			schemaVersion: 1,
 			sessions: {
 				[nativeSessionRef]: {
@@ -69,7 +69,7 @@ export async function seedNativeCommandState(
 					},
 				},
 			},
-		}),
+		})}\n`,
 	);
 	return { path, nativeSessionRef, binding };
 }
