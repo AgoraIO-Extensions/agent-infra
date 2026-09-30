@@ -388,6 +388,8 @@ it("returns all current active bindings beyond the former 100-row limit", async 
 		expect(new Set(bindings.map((binding) => binding.agentId)).size).toBe(101);
 		await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}','[]'::jsonb) where agent_id='agent-101'`;
 		expect(await store.bindings()).toHaveLength(100);
+		await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}',${sql.json([{ kind: "wecom_bot", bindingReference: "session-101", enabled: false }])}::jsonb) where agent_id='agent-101'`;
+		expect(await store.bindings()).toHaveLength(100);
 	} finally {
 		await store.close();
 		await sql.end();
