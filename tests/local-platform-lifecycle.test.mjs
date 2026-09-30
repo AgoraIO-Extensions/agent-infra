@@ -113,7 +113,44 @@ fi`,
 		"helm",
 		`
 printf 'helm %s\\n' "$*" >> "$COMMAND_LOG"
-if [[ "$*" == *"uninstall"* && -n "$FAKE_HELM_UNINSTALL_EXIT" ]]; then
+if [[ "$*" == *" template "* ]]; then
+  cat <<'YAML'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fixture-worker
+spec:
+  template:
+    spec:
+      containers:
+        - name: platform-worker
+          env:
+            - name: PLATFORM_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: agent-infra-verify-postgres
+                  key: url
+          volumeMounts:
+            - name: deployment-module
+              mountPath: /app/dist/configuration.mjs
+              subPath: configuration.mjs
+      volumes:
+        - name: deployment-module
+          secret:
+            secretName: fixture-worker-configuration
+        - name: runtime-auth
+          secret:
+            secretName: fixture-worker-auth
+            items:
+              - key: runtime-grant.pem
+              - key: service-token
+        - name: decryption-keyring
+          secret:
+            secretName: agent-infra-worker-decryption-keyring
+            items:
+              - key: keyring.pem
+YAML
+elif [[ "$*" == *"uninstall"* && -n "$FAKE_HELM_UNINSTALL_EXIT" ]]; then
   exit "$FAKE_HELM_UNINSTALL_EXIT"
 elif [[ "$*" == *"upgrade --install"* && -n "$FAKE_HELM_UPGRADE_EXIT" ]]; then
   exit "$FAKE_HELM_UPGRADE_EXIT"
@@ -130,12 +167,23 @@ fi`,
 if [[ "$*" == *"config view"* ]]; then
   printf '%s' "$FAKE_KUBE_SERVER"
 elif [[ "$*" == *"--ignore-not-found -o json" ]]; then
-			if [[ "$*" == *"get pvc/"* ]]; then
-			printf '%s\\n' "$FAKE_AGENT_PVC_JSON"
-		elif [[ "$*" == *"get statefulset/"* ]]; then
-			printf '%s\\n' "$FAKE_AGENT_STATEFULSET_JSON"
+  if [[ "$*" == *"get pvc/"* ]]; then
+    printf '%s\\n' "$FAKE_AGENT_PVC_JSON"
+  elif [[ "$*" == *"get statefulset/"* ]]; then
+    printf '%s\\n' "$FAKE_AGENT_STATEFULSET_JSON"
   elif [[ -n "$FAKE_FOREIGN_RESOURCE" && "$*" == *"get $FAKE_FOREIGN_RESOURCE "* ]]; then
     printf '%s\\n' '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"another-owner"}}}'
+  elif [[ "$*" == *"get secret/"* && "$FAKE_SECRET_MATERIAL" == 1 ]]; then
+    command="$*"
+    secret_name="\${command#*get secret/}"
+    secret_name="\${secret_name%% *}"
+    if [[ "$secret_name" == agent-infra-verify-postgres ]]; then
+      printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify","labels":{"app.kubernetes.io/managed-by":"agent-infra-local","agent-infra.agora.io/local-project":"agent-infra-verify"}},"data":{"url":"eA==","configuration.mjs":"eA==","runtime-grant.pem":"eA==","service-token":"eA==","keyring.pem":"eA=="}}\\n' "$secret_name"
+    elif [[ "$secret_name" == fixture-worker-configuration && "$FAKE_SECRET_MISSING_KEY" == 1 ]]; then
+      printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify"},"data":{"other":"eA=="}}\\n' "$secret_name"
+    else
+      printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify"},"data":{"url":"eA==","configuration.mjs":"eA==","runtime-grant.pem":"eA==","service-token":"eA==","keyring.pem":"eA=="}}\\n' "$secret_name"
+    fi
   elif [[ "$*" == *"get endpointslice/agent-infra-verify-postgres-docker "* && -f "$FAKE_ROUTE_STATE" ]]; then
     cat "$FAKE_ROUTE_STATE"
   fi
@@ -192,6 +240,8 @@ fi`,
 		FAKE_AUTH_PROBE_EXIT: "",
 		FAKE_AGENT_PVC_JSON: "",
 		FAKE_AGENT_STATEFULSET_JSON: "",
+		FAKE_SECRET_MATERIAL: "1",
+		FAKE_SECRET_MISSING_KEY: "0",
 		FAKE_DATABASE_URL: "postgresql://fixture:fixture@postgres:5432/fixture",
 		PLATFORM_LOCAL_DOCKER_CONTEXT: "isolated",
 		PLATFORM_LOCAL_PROJECT: "agent-infra-verify",
@@ -754,6 +804,39 @@ test("local up validates private API and Worker material before stopping service
 			/Local API configuration.mjs has invalid syntax/,
 		);
 		assert.equal(await readFile(f.log, "utf8"), "");
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up reports missing Worker Secret material before Helm rollout", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", { ...f.env, FAKE_SECRET_MATERIAL: "0" });
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /Local Worker Secret/);
+		const log = await readFile(f.log, "utf8");
+		assert.doesNotMatch(log, /helm .* upgrade --install/);
+		assert.doesNotMatch(log, /compose .* up .* platform-api/);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up names a missing Worker configuration key without exposing data", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", { ...f.env, FAKE_SECRET_MISSING_KEY: "1" });
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/Local Worker Secret is missing key configuration\.mjs: fixture-worker-configuration/,
+		);
+		assert.doesNotMatch(result.stderr, /eA==|fixture:fixture/);
+		assert.doesNotMatch(
+			await readFile(f.log, "utf8"),
+			/helm .* upgrade --install/,
+		);
 	} finally {
 		await f.close();
 	}

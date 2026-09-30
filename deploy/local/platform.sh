@@ -148,10 +148,112 @@ validate_deployment_material() {
     return 1
   fi
   worker_values
-  if ! "${helm_target[@]}" template "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" >/dev/null 2>&1; then
+  if ! worker_manifest=$("${helm_target[@]}" template "$worker_release" deploy/helm/agent-infra "${worker_options[@]}"); then
     echo "Local Worker values are missing or invalid" >&2
     return 1
   fi
+}
+
+check_worker_secret_material() {
+  local secret_refs secret key secret_json
+  secret_refs=$(printf '%s' "$worker_manifest" | node --input-type=module -e '
+    import { parseAllDocuments } from "yaml";
+    let input = "";
+    process.stdin.on("data", (chunk) => { input += chunk; });
+    process.stdin.on("end", () => {
+      try {
+        const refs = new Map();
+        const add = (name, key = "") => {
+          if (typeof name !== "string" || name.length === 0) return;
+          const values = refs.get(name) ?? new Set();
+          if (typeof key === "string") values.add(key);
+          refs.set(name, values);
+        };
+        const collectPodSecrets = (podSpec) => {
+          if (!podSpec || typeof podSpec !== "object") return;
+          const volumes = new Map();
+          for (const volume of Array.isArray(podSpec.volumes) ? podSpec.volumes : []) {
+            const secret = volume?.secret;
+            if (!secret || typeof secret.secretName !== "string") continue;
+            volumes.set(volume.name, secret.secretName);
+            const items = Array.isArray(secret.items) ? secret.items : [];
+            if (items.length === 0) add(secret.secretName);
+            for (const item of items) add(secret.secretName, item?.key);
+          }
+          for (const container of Array.isArray(podSpec.containers) ? podSpec.containers : []) {
+            for (const mount of Array.isArray(container?.volumeMounts) ? container.volumeMounts : []) {
+              const secretName = volumes.get(mount?.name);
+              if (secretName && typeof mount.subPath === "string") add(secretName, mount.subPath);
+            }
+          }
+        };
+        const visit = (value) => {
+          if (Array.isArray(value)) {
+            for (const entry of value) visit(entry);
+            return;
+          }
+          if (!value || typeof value !== "object") return;
+          if (value.kind && value.spec?.template?.spec) collectPodSecrets(value.spec.template.spec);
+          if (value.containers) collectPodSecrets(value);
+          if (typeof value.secretName === "string") {
+            const items = Array.isArray(value.items) ? value.items : [];
+            if (items.length === 0) add(value.secretName);
+            for (const item of items) add(value.secretName, item?.key);
+          }
+          const keyRef = value.secretKeyRef;
+          if (keyRef && typeof keyRef === "object") add(keyRef.name, keyRef.key);
+          for (const child of Object.values(value)) visit(child);
+        };
+        for (const document of parseAllDocuments(input)) visit(document.toJS());
+        const lines = [];
+        for (const [name, keys] of refs) {
+          for (const key of keys) lines.push(`${name}\t${key}`);
+        }
+        process.stdout.write(lines.sort().join("\n"));
+      } catch {
+        process.exitCode = 1;
+      }
+    });
+  ') || {
+    echo "Local Worker manifest could not be inspected for Secret references" >&2
+    return 1
+  }
+  [[ -n "$secret_refs" ]] || {
+    echo "Local Worker manifest contains no verifiable Secret references" >&2
+    return 1
+  }
+  while IFS=$'\t' read -r secret key; do
+    [[ -n "$secret" ]] || continue
+    if ! secret_json=$("${kube_target[@]}" get "secret/$secret" --ignore-not-found -o json); then
+      echo "Local Worker Secret could not be read: $secret" >&2
+      return 1
+    fi
+    if ! printf '%s' "$secret_json" | node -e '
+      let input = "";
+      process.stdin.on("data", (chunk) => { input += chunk; });
+      process.stdin.on("end", () => {
+        try {
+          const secret = JSON.parse(input);
+          const metadata = secret.metadata ?? {};
+          const data = secret.data ?? {};
+          if (secret.kind !== "Secret" ||
+              metadata.name !== process.argv[1] ||
+              metadata.namespace !== process.argv[2] ||
+              (process.argv[3] &&
+                (typeof data[process.argv[3]] !== "string" || data[process.argv[3]].length === 0))) process.exitCode = 1;
+        } catch {
+          process.exitCode = 1;
+        }
+      });
+    ' "$secret" "$PLATFORM_LOCAL_NAMESPACE" "$key"; then
+      if [[ -n "$key" ]]; then
+        echo "Local Worker Secret is missing key $key: $secret" >&2
+      else
+        echo "Local Worker Secret is missing: $secret" >&2
+      fi
+      return 1
+    fi
+  done <<< "$secret_refs"
 }
 
 render_proxy_config() {
@@ -425,6 +527,7 @@ case "${1:-}" in
     "${compose[@]}" stop web platform-api
     "${compose[@]}" up --detach --wait postgres object-storage
     connect_worker_database
+    check_worker_secret_material
     "${helm_target[@]}" upgrade --install "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" --wait --timeout 5m
     worker_replicas=$("${helm_target[@]}" get values "$worker_release" --all --output json | node -e '
       try {

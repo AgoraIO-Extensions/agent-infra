@@ -141,11 +141,13 @@ bash deploy/local/platform.sh stop
 project 执行下面的命令；它删除 PostgreSQL 和对象存储的数据卷。Agent PVC 的删除也必须
 单独确认具体本地集群和 PVC 名称，不能通过普通停止命令隐式完成。
 
-启动前 up 会检查 API configuration.mjs 的语法，并用 Helm 渲染校验 Worker values 中的代码
-Secret、Runtime auth Secret 和固定部署模块。正式容器启动时还会校验可信 LDAP 状态验证器、
-持久身份映射、组织解析、Registry/ModelCatalog、加密公钥和资源 Profile 的导出形状；失败
-只返回固定诊断，不输出私有模块异常或 Secret 内容。可单独运行
-bash deploy/local/platform.sh validate 做同样检查。
+启动前 up 会检查 API configuration.mjs 的语法并用 Helm 渲染校验 Worker values 和固定部署
+模块；在本地数据库 Secret 建好后，还会通过显式 kubeconfig/context/namespace 逐项读取渲染出的
+Worker Secret 引用，确认 Secret 存在且包含所需 key，再开始 Helm rollout。正式容器启动时还会
+校验可信 LDAP 状态验证器、持久身份映射、组织解析、Registry/ModelCatalog、加密公钥和资源
+Profile 的导出形状；失败只返回固定诊断，不输出私有模块异常或 Secret 内容。可单独运行
+bash deploy/local/platform.sh validate 做 API syntax 与静态 Helm render 检查；它不替代 live
+Secret/key readback。
 
 ```bash
 docker --context "$PLATFORM_LOCAL_DOCKER_CONTEXT" compose \
