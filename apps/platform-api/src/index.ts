@@ -213,7 +213,13 @@ export {
 };
 
 const entrypoint = process.argv[1];
-if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
+const entrypointUrl = entrypoint && pathToFileURL(entrypoint).href;
+// Multi-entry builds can move this guard into a sibling shared chunk.
+if (
+	entrypointUrl &&
+	(entrypointUrl === import.meta.url ||
+		entrypointUrl === new URL("./index.mjs", import.meta.url).href)
+) {
 	void startPlatformApiFromDeployment()
 		.then((running) => {
 			const shutdown = createPlatformApiShutdown(running);
