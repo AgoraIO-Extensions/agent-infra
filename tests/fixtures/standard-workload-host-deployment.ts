@@ -14,7 +14,7 @@ const postgres = createRequire(
 	new URL("../../packages/platform-store/package.json", import.meta.url),
 )(
 	"postgres",
-) as typeof import("../../packages/platform-store/node_modules/postgres").default;
+) as typeof import("../../packages/platform-store/node_modules/postgres");
 
 /** Controlled approved seed and catalog inputs; not application or Registry acceptance. */
 export async function seedStandardWorkloadHostV1(

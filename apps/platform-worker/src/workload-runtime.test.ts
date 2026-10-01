@@ -673,7 +673,7 @@ describe("assembled Workload Runtime contracts", () => {
 				});
 				candidate = { ...candidate, modelProjection };
 				const original = runtimeModelInjectionV1(
-					f.state.candidate.modelProjection,
+					validateRuntimeModelProjectionV1(f.state.candidate.modelProjection),
 				);
 				const historical = runtimeModelInjectionV1(modelProjection);
 				const secret = f.resources.get(
@@ -681,7 +681,7 @@ describe("assembled Workload Runtime contracts", () => {
 				) as V1Secret;
 				assert(secret?.metadata);
 				f.resources.delete(`Secret/${original.secretName}`);
-				f.resources.set(`Secret/${historical.secretName}`, {
+				const historicalSecret: V1Secret = {
 					...secret,
 					metadata: { ...secret.metadata, name: historical.secretName },
 					data: {
@@ -689,7 +689,8 @@ describe("assembled Workload Runtime contracts", () => {
 							"base64",
 						),
 					},
-				});
+				};
+				f.resources.set(`Secret/${historical.secretName}`, historicalSecret);
 				const workload = f.resources.get(
 					`StatefulSet/${workloadResourceNameV1("agent-a")}`,
 				) as V1StatefulSet;
@@ -807,6 +808,7 @@ describe("assembled Workload Runtime contracts", () => {
 			state.candidate = await runtime.preflight(input, state);
 			const identity = await runtime.apply(state, false, input);
 			assert(identity !== "pending");
+			assert(identity && "uid" in identity);
 			const workload = await f.client.read<V1StatefulSet>(
 				"StatefulSet",
 				workloadResourceNameV1(agentId),
