@@ -72,6 +72,31 @@ export async function createConnectionRuntimeApp(
 	return (await createConnectionRuntime(environment)).app;
 }
 
+async function startupPhase<T>(
+	phase: "provider_catalog" | "consumer_declaration",
+	provider: string,
+	operation: () => Promise<T>,
+) {
+	const startedAt = performance.now();
+	let outcome = "failure";
+	try {
+		const result = await operation();
+		outcome = "success";
+		return result;
+	} finally {
+		console.info(
+			JSON.stringify({
+				service: "connection-api",
+				event: "startup_phase",
+				phase,
+				provider,
+				outcome,
+				durationMs: Math.round(performance.now() - startedAt),
+			}),
+		);
+	}
+}
+
 export async function createConnectionRuntime(
 	environment: Record<string, string | undefined> = process.env,
 ) {
@@ -117,10 +142,12 @@ export async function createConnectionRuntime(
 		rehoboamConnectionCatalog,
 	] as const;
 	for (const catalog of catalogs) {
-		await repository.publishProviderCatalog(catalog, {
-			mode: "USER_ACTION_REQUIRED",
-			reason: `${catalog.provider} Provider authorization contract changed`,
-		});
+		await startupPhase("provider_catalog", catalog.provider, () =>
+			repository.publishProviderCatalog(catalog, {
+				mode: "USER_ACTION_REQUIRED",
+				reason: `${catalog.provider} Provider authorization contract changed`,
+			}),
+		);
 	}
 	for (const consumer of [
 		config.directConsumer,
@@ -128,11 +155,13 @@ export async function createConnectionRuntime(
 		rehoboamAiConsumer,
 	]) {
 		for (const catalog of catalogs) {
-			await repository.publishConsumerDeclaration({
-				actionVersionIds: catalog.actions.map((action) => action.id),
-				consumer,
-				providerReleaseId: catalog.providerReleaseId,
-			});
+			await startupPhase("consumer_declaration", catalog.provider, () =>
+				repository.publishConsumerDeclaration({
+					actionVersionIds: catalog.actions.map((action) => action.id),
+					consumer,
+					providerReleaseId: catalog.providerReleaseId,
+				}),
+			);
 		}
 	}
 	const directory = new LdapDirectoryAuthenticator(config.ldap);

@@ -607,36 +607,53 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			) {
 				throw new Error("Pinned ProviderRelease does not match the catalog");
 			}
-			for (const action of catalog.actions) {
+			if (catalog.actions.length > 0) {
 				await sql`
-						INSERT INTO connection_action_versions (
-							id, provider_release_id, name, description, effect, input_schema,
-							required_scopes, status
-						)
-						VALUES (
-							${action.id}, ${catalog.providerReleaseId}, ${action.name},
-							${action.description}, ${action.effect},
-							${sql.json(action.inputSchema as postgres.JSONValue)},
-							${sql.json([...action.requiredScopes])},
-							'PUBLISHED'
-						)
-						ON CONFLICT (id) DO NOTHING
-					`;
-				const [stored] = await sql<
-					{
-						description: string;
-						effect: string;
-						input_schema: unknown;
-						name: string;
-						provider_release_id: string;
-						required_scopes: unknown;
-						status: string;
-					}[]
-				>`
-							SELECT provider_release_id, name, description, effect, input_schema,
-								required_scopes, status
-					FROM connection_action_versions WHERE id = ${action.id}
+					INSERT INTO connection_action_versions (
+						id, provider_release_id, name, description, effect, input_schema,
+						required_scopes, status
+					)
+					SELECT action.id, ${catalog.providerReleaseId}, action.name,
+						action.description, action.effect, action.input_schema,
+						action.required_scopes, 'PUBLISHED'
+					FROM jsonb_to_recordset(${sql.json(
+						catalog.actions.map((action) => ({
+							id: action.id,
+							name: action.name,
+							description: action.description,
+							effect: action.effect,
+							input_schema: action.inputSchema as postgres.JSONValue,
+							required_scopes: [...action.requiredScopes],
+						})),
+					)}) AS action(
+						id text, name text, description text, effect text,
+						input_schema jsonb, required_scopes jsonb
+					)
+					ON CONFLICT (id) DO NOTHING
 				`;
+			}
+			const storedActions = await sql<
+				{
+					id: string;
+					description: string;
+					effect: string;
+					input_schema: unknown;
+					name: string;
+					provider_release_id: string;
+					required_scopes: unknown;
+					status: string;
+				}[]
+			>`
+				SELECT id, provider_release_id, name, description, effect, input_schema,
+					required_scopes, status
+				FROM connection_action_versions
+				WHERE id = ANY(${catalog.actions.map((action) => action.id)}::text[])
+			`;
+			const storedById = new Map(
+				storedActions.map((action) => [action.id, action]),
+			);
+			for (const action of catalog.actions) {
+				const stored = storedById.get(action.id);
 				if (
 					stored?.provider_release_id !== catalog.providerReleaseId ||
 					stored.name !== action.name ||
@@ -760,6 +777,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				INSERT INTO connection_consumers (id, display_name, status)
 				VALUES (${input.consumer.id}, ${input.consumer.name}, 'ACTIVE')
 				ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name
+				WHERE connection_consumers.display_name IS DISTINCT FROM EXCLUDED.display_name
 			`;
 			const [consumer] = await sql<
 				{
@@ -810,14 +828,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					${nextRevision}, ${declarationDigest}, 'PUBLISHED'
 				)
 			`;
-			for (const actionVersionId of actionVersionIds) {
-				await sql`
-					INSERT INTO connection_consumer_declared_actions (
-						declaration_id, action_version_id
-					)
-					VALUES (${declarationId}, ${actionVersionId})
-				`;
-			}
+			await sql`
+				INSERT INTO connection_consumer_declared_actions (
+					declaration_id, action_version_id
+				)
+				SELECT ${declarationId}, action_id
+				FROM unnest(${actionVersionIds}::text[]) AS action_id
+			`;
 			await sql`
 				UPDATE connection_consumers
 				SET revision = ${nextRevision},

@@ -48,6 +48,105 @@ async function authorizeCurrentConsumer(
 
 describe("PostgreSQL Connection business authority", () => {
 	integrationTest(
+		"validates every batched Action and preserves declaration idempotency",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 23),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			const catalog = {
+				...githubConnectionCatalog,
+				providerReleaseId: `batch-release-${suffix}`,
+				actions: Array.from({ length: 250 }, (_, index) => ({
+					description: `Batch action ${index}`,
+					effect: "READ" as const,
+					id: `github.batch_${suffix}_${index}@v1`,
+					inputSchema: {
+						required: [],
+						type: "object",
+						properties: { value: { type: "string" } },
+					},
+					name: `github.batch_${index}`,
+					requiredScopes: ["repo"],
+				})),
+			};
+			const input = {
+				consumer: { id: `batch-consumer-${suffix}`, name: "Batch consumer" },
+				providerReleaseId: catalog.providerReleaseId,
+				actionVersionIds: catalog.actions.map((action) => action.id),
+			};
+			try {
+				await repository.publishProviderCatalog(catalog);
+				await repository.publishProviderCatalog(catalog);
+				const first = await repository.publishConsumerDeclaration(input);
+				const [before] =
+					await sql`SELECT revision FROM connection_consumers WHERE id = ${input.consumer.id}`;
+				expect(await repository.publishConsumerDeclaration(input)).toEqual(
+					first,
+				);
+				const [after] =
+					await sql`SELECT revision FROM connection_consumers WHERE id = ${input.consumer.id}`;
+				expect(after).toEqual(before);
+				const declared =
+					await sql`SELECT action_version_id FROM connection_consumer_declared_actions WHERE declaration_id = ${first.declarationId}`;
+				expect(declared.map((row) => row.action_version_id).sort()).toEqual(
+					[...input.actionVersionIds].sort(),
+				);
+				const action = catalog.actions[249];
+				if (!action) throw new Error("Missing batch fixture");
+				await sql`UPDATE connection_action_versions SET input_schema = '{}'::jsonb WHERE id = ${action.id}`;
+				await expect(
+					repository.publishProviderCatalog(catalog),
+				).rejects.toThrow(
+					`Published ActionVersion does not match ${action.id}`,
+				);
+				await sql`UPDATE connection_action_versions SET input_schema = ${sql.json(action.inputSchema)}, status = 'DISABLED' WHERE id = ${action.id}`;
+				await expect(
+					repository.publishProviderCatalog(catalog),
+				).rejects.toThrow(
+					`Published ActionVersion does not match ${action.id}`,
+				);
+				await expect(
+					repository.publishConsumerDeclaration(input),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				await sql`UPDATE connection_action_versions SET status = 'PUBLISHED' WHERE id = ${action.id}`;
+				await sql`UPDATE connection_consumers SET status = 'DISABLED' WHERE id = ${input.consumer.id}`;
+				await expect(
+					repository.publishConsumerDeclaration(input),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				// A conflicting Action must roll back the entire new release, including other batch rows.
+				const conflicting = {
+					...catalog,
+					providerReleaseId: `batch-conflict-${suffix}`,
+					actions: [{ ...action, id: `github.batch_new_${suffix}@v1` }, action],
+				};
+				await expect(
+					repository.publishProviderCatalog(conflicting),
+				).rejects.toThrow(
+					`Published ActionVersion does not match ${action.id}`,
+				);
+				expect(
+					await sql`SELECT id FROM connection_provider_releases WHERE id = ${conflicting.providerReleaseId}`,
+				).toHaveLength(0);
+				expect(
+					await sql`SELECT id FROM connection_action_versions WHERE id = ${`github.batch_new_${suffix}@v1`}`,
+				).toHaveLength(0);
+			} finally {
+				await sql.end();
+				await repository.close();
+			}
+		},
+		30_000,
+	);
+
+	integrationTest(
 		"orders grant history by consent decisions rather than Grant IDs",
 		async () => {
 			if (!databaseUrl) return;
