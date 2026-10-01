@@ -67,6 +67,17 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	}
 	function workloadEnvironment(value: AgentWorkloadDesiredV1) {
 		const injection = modelBindings(value);
+		const binding = modelProjection?.standardTemplateBinding;
+		if (
+			injection &&
+			(!binding ||
+				binding.imageDigest !== value.imageDigest ||
+				value.runtimeManifest.interactionMode !== "platform-adapter" ||
+				modelProjection?.options.some(
+					(option) => option.endpoint.protocol !== binding.protocol,
+				))
+		)
+			throw new WorkloadKubernetesError("policy");
 		const runtimeAuth =
 			value.runtimeManifest.interactionMode === "platform-adapter" &&
 			policy.runtimeAuth
@@ -80,6 +91,9 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		return [
 			...Object.entries(value.env).map(([name, value]) => ({ name, value })),
 			...(injection?.env ?? []),
+			...(injection && binding
+				? [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: binding.driver }]
+				: []),
 			...runtimeAuth,
 		];
 	}

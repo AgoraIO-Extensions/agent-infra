@@ -19,6 +19,7 @@ import {
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
+	runtimeModelInjectionV1,
 	validateRuntimeModelProjectionV1,
 } from "@agent-infra/model-catalog";
 import {
@@ -653,13 +654,12 @@ describe("assembled Workload Runtime contracts", () => {
 				},
 				{ configuration: standardModelConfiguration(), secrets },
 			);
-			await f.tick(legacy ? 2 : 4);
+			await f.tick(4);
 			assert(f.state);
 			let candidate = f.state.candidate;
-			let identity = f.state.identity;
+			const identity = f.state.identity;
 			if (legacy) {
-				// Reconstruct a historical tuple-free projection before its first apply.
-				// The original Adapter materializes its original hash and absent expectation.
+				// Controlled historical bytes are cleanup input, never new apply authority.
 				const {
 					standardTemplateBinding: _,
 					fingerprint: _fingerprint,
@@ -672,14 +672,29 @@ describe("assembled Workload Runtime contracts", () => {
 						.digest("hex"),
 				});
 				candidate = { ...candidate, modelProjection };
-				const applied = await createKubernetesRuntimeAdapterV1({
-					client: f.client,
-					policy: f.options.policy,
-					probe: async () => true,
-					modelProjection,
-				}).apply(candidate.deployment);
-				assert(applied && applied !== "pending");
-				identity = applied;
+				const original = runtimeModelInjectionV1(
+					f.state.candidate.modelProjection,
+				);
+				const historical = runtimeModelInjectionV1(modelProjection);
+				const secret = f.resources.get(
+					`Secret/${original.secretName}`,
+				) as V1Secret;
+				assert(secret?.metadata);
+				f.resources.delete(`Secret/${original.secretName}`);
+				f.resources.set(`Secret/${historical.secretName}`, {
+					...secret,
+					metadata: { ...secret.metadata, name: historical.secretName },
+					data: {
+						configuration: Buffer.from(historical.configuration).toString(
+							"base64",
+						),
+					},
+				});
+				const workload = f.resources.get(
+					`StatefulSet/${workloadResourceNameV1("agent-a")}`,
+				) as V1StatefulSet;
+				assert(workload.spec?.template.spec?.containers[0]);
+				workload.spec.template.spec.containers[0].env = historical.env;
 			}
 			const state = {
 				...f.state,
@@ -719,6 +734,153 @@ describe("assembled Workload Runtime contracts", () => {
 			);
 		},
 	);
+	it("retains one Runtime while rendering different Messages Drivers and rejects existing selector drift before Secret I/O", async () => {
+		const catalog = catalogFixture();
+		catalog.endpoints = catalog.endpoints.map((endpoint) => ({
+			...endpoint,
+			protocol: "anthropic-messages-v1",
+			authentication: "bearer",
+		}));
+		const decrypt = vi.fn(async () => ({
+			outcome: "decrypted" as const,
+			plaintext: new TextEncoder().encode("synthetic-primary-credential"),
+		}));
+		const bindings = (["claude", "pi"] as const).map((driver, index) => ({
+			templateId: `template-${index}`,
+			imageDigest: `sha256:${String(index + 1).repeat(64)}`,
+			driver,
+			protocol: "anthropic-messages-v1" as const,
+		}));
+		const f = fixture({
+			templateModelBindings: bindings,
+			modelCatalog: createFakeModelCatalogAdapterV1(catalog),
+			modelAccess: createFakeModelAccessValidatorV1([
+				{
+					endpointId: "endpoint-a",
+					modelId: "model-a",
+					reasoningLevels: ["medium"],
+					credential: "synthetic-primary-credential",
+				},
+			]),
+			decryptor: { decrypt },
+		});
+		await f.tick(1);
+		assert(f.state);
+		const runtime = createWorkloadRuntimeV1(f.options);
+		for (const binding of bindings) {
+			const agentId = `agent-${binding.driver}`;
+			const originalConfiguration = standardModelConfiguration({ agentId });
+			assert(originalConfiguration.source.kind === "standard");
+			const configuration = {
+				...originalConfiguration,
+				source: {
+					...originalConfiguration.source,
+					templateId: binding.templateId,
+					imageDigest: binding.imageDigest,
+				},
+			};
+			const original = pendingSecretRecord({
+				name: "model:primary",
+				secretId: "model-secret-a",
+			});
+			const record = validatePlatformSecretRecordV1({
+				...original,
+				agentId,
+				crypto: {
+					...original.crypto,
+					aadBinding: { ...original.crypto.aadBinding, agentId },
+				},
+			});
+			const state = {
+				...f.state,
+				agentId,
+				candidate: { ...f.state.candidate, configuration },
+			};
+			const input = {
+				configuration,
+				state,
+				management: { ...f.management, agentId },
+				secrets: cleanupSecrets(secretCleanupStore(record)),
+				requestId: "request-a",
+				traceId: "trace-a",
+			};
+			state.candidate = await runtime.preflight(input, state);
+			const identity = await runtime.apply(state, false, input);
+			assert(identity !== "pending");
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				workloadResourceNameV1(agentId),
+			);
+			assert(workload?.spec?.template.spec?.containers[0]);
+			const container = workload.spec.template.spec.containers[0];
+			const environment = structuredClone(container.env ?? []);
+			expect(container.image).toBe(
+				`${f.options.policy.imageRepository}@${binding.imageDigest}`,
+			);
+			expect(
+				environment.filter(
+					(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
+				),
+			).toEqual([
+				{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: binding.driver },
+			]);
+			const selector = environment.find(
+				(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
+			);
+			assert(selector);
+			const remainder = environment.filter((entry) => entry !== selector);
+			const mutations = [
+				remainder,
+				[...environment, selector],
+				[
+					...remainder,
+					{
+						name: selector.name,
+						valueFrom: { fieldRef: { fieldPath: "metadata.name" } },
+					},
+				],
+				[
+					...remainder,
+					{
+						name: selector.name,
+						value: binding.driver === "pi" ? "claude" : "pi",
+					},
+				],
+			];
+			const originalImage = container.image;
+			assert(originalImage);
+			for (const image of [
+				originalImage,
+				`old-registry.example.test/agent@${binding.imageDigest}`,
+			]) {
+				container.image = image;
+				for (const env of mutations) {
+					container.env = env;
+					f.resources.set(
+						`StatefulSet/${workloadResourceNameV1(agentId)}`,
+						workload,
+					);
+					decrypt.mockClear();
+					const writes = f.writes.length;
+					await expect(
+						runtime.apply(state, false, input),
+					).rejects.toBeInstanceOf(WorkloadKubernetesError);
+					expect(decrypt).not.toHaveBeenCalled();
+					expect(f.writes).toHaveLength(writes);
+					expect(workload.metadata?.uid).toBe(identity.uid);
+				}
+			}
+			container.image = originalImage;
+			container.env = environment;
+			f.resources.set(
+				`StatefulSet/${workloadResourceNameV1(agentId)}`,
+				workload,
+			);
+			await expect(runtime.apply(state, false, input)).resolves.toEqual(
+				identity,
+			);
+		}
+	});
 	it.each(["codex", "claude", "acp", "pi"] as const)(
 		"projects two options with the same model into isolated endpoint and credential bindings consumed by %s Runtime",
 		async (driver) => {
@@ -851,6 +1013,12 @@ describe("assembled Workload Runtime contracts", () => {
 				driver !== "codex"
 					? readRuntimeModelConfigurationV3(environment, driver)
 					: readCodexPilotConfiguration(environment);
+			expect(environment.AGENT_INFRA_RUNTIME_DRIVER).toBe(driver);
+			expect(
+				workload.spec.template.spec.containers[0].env?.filter(
+					(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
+				),
+			).toEqual([{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: driver }]);
 			expect(
 				JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? "")
 					.schemaVersion,

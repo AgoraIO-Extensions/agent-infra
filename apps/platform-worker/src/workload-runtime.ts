@@ -830,6 +830,7 @@ export function createWorkloadRuntimeV1(
 			const adapter = createAdapter(undefined, state);
 			await revalidateCandidateCatalog(state);
 			const workload = desired(state);
+			await adapter.assertStandardTemplateSelector(workload);
 			const activeBindingsToRepair: {
 				readonly reference: SecretActivationReferenceV1;
 				readonly activationFence: NonNullable<

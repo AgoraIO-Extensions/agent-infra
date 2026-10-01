@@ -1,4 +1,8 @@
+import assert from "node:assert/strict";
 import { execFile as execFileCallback, spawnSync } from "node:child_process";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
@@ -6,27 +10,52 @@ import {
 	validateAgentWorkloadDesiredV1,
 } from "@agent-infra/contracts/workload";
 import {
+	runtimeModelInjectionV1,
+	validateRuntimeModelProjectionV1,
+} from "@agent-infra/model-catalog";
+import type { WorkloadReconciliationStateV1 } from "@agent-infra/platform-core";
+import { migratePlatformDatabase } from "@agent-infra/platform-store";
+import {
 	KubeConfig,
 	type V1PersistentVolumeClaim,
 	type V1Pod,
+	type V1Secret,
 	type V1StatefulSet,
 } from "@kubernetes/client-node";
+import postgres from "postgres";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parseAllDocuments } from "yaml";
+import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
+import { seedStandardWorkloadHostV1 } from "../../../tests/fixtures/standard-workload-host-deployment.js";
 import {
 	workloadDesiredFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
+import { createPlatformWorkloadWorkerV1 } from "./workload-worker.js";
 
 const execFile = promisify(execFileCallback);
 const namespace = workloadTestPolicy.namespace;
+function kubeArguments() {
+	if (!process.env.KUBECONFIG || !process.env.WORKLOAD_KIND_CONTEXT)
+		throw new Error("Explicit isolated kubeconfig/context are required");
+	return [
+		"--kubeconfig",
+		process.env.KUBECONFIG,
+		"--context",
+		process.env.WORKLOAD_KIND_CONTEXT,
+	];
+}
 async function kubectl(...args: string[]) {
 	return (
-		await execFile("kubectl", ["--namespace", namespace, ...args], {
-			timeout: 30_000,
-		})
+		await execFile(
+			"kubectl",
+			[...kubeArguments(), "--namespace", namespace, ...args],
+			{
+				timeout: 30_000,
+			},
+		)
 	).stdout.trim();
 }
 async function waitForReadyPods() {
@@ -55,11 +84,15 @@ async function waitForReadyPods() {
 	}
 }
 function apply(object: unknown) {
-	const result = spawnSync("kubectl", ["apply", "-f", "-"], {
-		input: JSON.stringify(object),
-		encoding: "utf8",
-		timeout: 30_000,
-	});
+	const result = spawnSync(
+		"kubectl",
+		[...kubeArguments(), "apply", "-f", "-"],
+		{
+			input: JSON.stringify(object),
+			encoding: "utf8",
+			timeout: 30_000,
+		},
+	);
 	if (result.status !== 0)
 		throw new Error(`Fixture apply failed: ${result.stderr}`);
 }
@@ -176,6 +209,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 			}
 			const admin = new KubeConfig();
 			admin.loadFromFile(process.env.KUBECONFIG);
+			admin.setCurrentContext(process.env.WORKLOAD_KIND_CONTEXT ?? "");
 			const config = new KubeConfig();
 			config.loadFromOptions({
 				clusters: admin.getClusters(),
@@ -272,6 +306,224 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				},
 			});
 		}, 240_000);
+
+		it("consumes the durable trusted selector through real PG, production Worker and the default Host", async () => {
+			const sourceCommit = process.env.WORKLOAD_SOURCE_COMMIT;
+			const imageDigest = process.env.WORKLOAD_KIND_HOST_IMAGE;
+			const evidenceDirectory = process.env.WORKLOAD_KIND_EVIDENCE_DIR;
+			assert(sourceCommit && imageDigest && evidenceDirectory);
+			const database = await startPostgresTestDatabase("selector-host");
+			const sql = postgres(database.databaseUrl, { onnotice: () => undefined });
+			let worker: ReturnType<typeof createPlatformWorkloadWorkerV1> | undefined;
+			try {
+				await migratePlatformDatabase(database);
+				const seed = await seedStandardWorkloadHostV1(
+					database.databaseUrl,
+					imageDigest,
+				);
+				const publicKey = generateKeyPairSync("ed25519")
+					.publicKey.export({ type: "spki", format: "pem" })
+					.toString();
+				const tokenName = "selector-host-service-token";
+				apply({
+					apiVersion: "v1",
+					kind: "Secret",
+					metadata: { name: tokenName, namespace },
+					immutable: true,
+					type: "Opaque",
+					data: { token: randomBytes(32).toString("base64") },
+				});
+				let probeCalls = 0;
+				const rejectProbe = async () => {
+					probeCalls++;
+					throw new Error("Runtime probes are outside this configuration case");
+				};
+				worker = createPlatformWorkloadWorkerV1({
+					...seed.workerOptions,
+					databaseUrl: database.databaseUrl,
+					client,
+					workerId: "selector-host-worker",
+					pollIntervalMs: 1,
+					policy: {
+						...workloadTestPolicy,
+						imageRepository: process.env.WORKLOAD_KIND_REPOSITORY ?? "",
+						routeNamespace: namespace,
+						resources: {
+							requests: { cpu: "100m", memory: "128Mi" },
+							limits: { cpu: "1000m", memory: "512Mi" },
+						},
+						runtimeAuth: {
+							workerId: "selector-host-worker",
+							grantKeyId: "selector-host",
+							grantIssuer: "selector-host-issuer",
+							grantPublicKey: publicKey,
+							serviceTokenSecret: { name: tokenName, key: "token" },
+						},
+					},
+					fetch: rejectProbe,
+					probeRuntime: rejectProbe,
+				});
+				let state: WorkloadReconciliationStateV1 | undefined;
+				for (let attempt = 0; attempt < 12; attempt++) {
+					await worker.tick();
+					state = (
+						await sql`select state from platform.workload_reconciliations where agent_id = ${seed.agentId}`
+					)[0]?.state as WorkloadReconciliationStateV1 | undefined;
+					if (state?.phase === "observing") break;
+					expect(["preflight", "closing", "applying"]).toContain(state?.phase);
+					await setTimeout(25);
+				}
+				assert(state?.phase === "observing" && state.identity);
+				await worker.stop();
+				expect(probeCalls).toBe(0);
+				expect(state.verified).toBeNull();
+				expect(state.candidate.configuration).toEqual(seed.configuration);
+				const projection = validateRuntimeModelProjectionV1(
+					state.candidate.modelProjection,
+					state.candidate.configuration,
+				);
+				expect(projection.standardTemplateBinding).toEqual({
+					templateId:
+						seed.configuration.source.kind === "standard"
+							? seed.configuration.source.templateId
+							: "",
+					imageDigest,
+					driver: "pi",
+					protocol: "anthropic-messages-v1",
+				});
+				const injection = runtimeModelInjectionV1(projection);
+				const name = state.candidate.deployment.service.name;
+				const workload = await client.read<V1StatefulSet>("StatefulSet", name);
+				assert(workload?.spec?.template.spec?.containers[0]);
+				const container = workload.spec.template.spec.containers[0];
+				expect(workload.metadata?.uid).toBe(state.identity.uid);
+				expect(workload.metadata?.generation).toBe(state.identity.generation);
+				expect(container.image).toBe(
+					`${process.env.WORKLOAD_KIND_REPOSITORY}@${imageDigest}`,
+				);
+				expect(container.command).toBeUndefined();
+				expect(container.args).toBeUndefined();
+				const selector = container.env?.filter(
+					(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
+				);
+				expect(selector).toEqual([
+					{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: "pi" },
+				]);
+				const modelSecret = await client.read<V1Secret>(
+					"Secret",
+					injection.secretName,
+				);
+				assert(modelSecret?.metadata?.uid && modelSecret.data?.configuration);
+				expect(modelSecret.immutable).toBe(true);
+				const modelBytes = Buffer.from(
+					modelSecret.data.configuration,
+					"base64",
+				);
+				expect(modelBytes.toString()).toBe(injection.configuration);
+				const configVersion = JSON.parse(injection.configuration).configVersion;
+				await eventually(
+					() => client.read<V1Pod>("Pod", `${name}-0`),
+					(pod) =>
+						pod?.status?.conditions?.some(
+							(condition) =>
+								condition.type === "Ready" && condition.status === "True",
+						) ?? false,
+				);
+				const pod = await client.read<V1Pod>("Pod", `${name}-0`);
+				const pvc = await client.read<V1PersistentVolumeClaim>(
+					"PersistentVolumeClaim",
+					state.candidate.deployment.persistentVolume.name,
+				);
+				assert(pod?.metadata?.uid && pvc?.metadata?.uid);
+				expect(pvc.status?.phase).toBe("Bound");
+				expect(
+					pod.metadata.ownerReferences?.some(
+						(owner) => owner.uid === workload.metadata?.uid && owner.controller,
+					),
+				).toBe(true);
+				expect(pod.spec?.containers[0]?.command).toBeUndefined();
+				expect(pod.spec?.containers[0]?.args).toBeUndefined();
+				const imageId = pod.status?.containerStatuses?.find(
+					(status) => status.name === "agent",
+				)?.imageID;
+				expect(imageId?.endsWith(imageDigest)).toBe(true);
+				const argv = (
+					await kubectl("exec", `${name}-0`, "--", "cat", "/proc/1/cmdline")
+				)
+					.split("\0")
+					.filter(Boolean);
+				expect(argv).toEqual([
+					"/usr/local/bin/node",
+					"--disable-sigusr1",
+					"dist/index.mjs",
+				]);
+				const readyLine = (await kubectl("logs", `${name}-0`))
+					.split("\n")
+					.find((line) => line.includes('"status":"ready"'));
+				assert(readyLine);
+				expect(JSON.parse(readyLine)).toMatchObject({
+					service: "agent-runtime-host",
+					status: "ready",
+					configVersion,
+				});
+				const application = (
+					await sql`select approval_revision::text from platform.agent_applications where agent_id = ${seed.agentId}`
+				)[0];
+				expect(application?.approval_revision).toBe("1");
+				const outbox = (
+					await sql`select id::text, operation from platform.outbox_items where scope_id = ${seed.agentId}`
+				)[0];
+				expect(outbox?.operation).toBe("agent.workload.reconcile.v1");
+				assert(application && outbox);
+				await writeFile(
+					join(evidenceDirectory, "configuration-chain.json"),
+					`${JSON.stringify(
+						{
+							schemaVersion: 1,
+							sourceCommit,
+							imageDigest,
+							imageId,
+							configVersion,
+							kubeconfigExplicit: true,
+							kubeContext: process.env.WORKLOAD_KIND_CONTEXT,
+							namespace,
+							agentId: seed.agentId,
+							approvedRevision: application.approval_revision,
+							outboxId: outbox.id,
+							workerPhase: state.phase,
+							verified: false,
+							tuple: projection.standardTemplateBinding,
+							fingerprint: projection.fingerprint,
+							statefulSetUid: workload.metadata?.uid,
+							podUid: pod.metadata.uid,
+							pvcUid: pvc.metadata.uid,
+							modelSecretUid: modelSecret.metadata.uid,
+							modelSecretSha256: createHash("sha256")
+								.update(modelBytes)
+								.digest("hex"),
+							argv,
+							registryAdmissionAccepted: false,
+							nativeDiscoveryExecuted: false,
+							businessAcceptance: false,
+							deploymentModuleExecuted: false,
+							runtimeProbeCalls: probeCalls,
+						},
+						null,
+						2,
+					)}\n`,
+				);
+			} finally {
+				try {
+					await worker?.stop();
+				} finally {
+					try {
+						await sql.end();
+					} finally {
+						await database.stop();
+					}
+				}
+			}
+		}, 180_000);
 
 		it("proves GA RBAC, candidate routing, NetworkPolicy, immutable Secrets, PVC reuse, rollback and cleanup", async () => {
 			expect(

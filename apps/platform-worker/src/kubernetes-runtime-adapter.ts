@@ -507,7 +507,35 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			return "unhealthy";
 		}
 	}
+	async function assertStandardTemplateSelector(input: unknown) {
+		if (!modelProjection) return;
+		const value = desired(input);
+		const expected = workloadEnvironment(value).find(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
+		);
+		const current = await statefulSet(value);
+		const containers = current?.spec?.template.spec?.containers ?? [];
+		if (
+			!containers.some((container) =>
+				container.image?.endsWith(`@${value.imageDigest}`),
+			)
+		)
+			return;
+		const entries =
+			containers[0]?.env?.filter(
+				(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
+			) ?? [];
+		if (
+			containers.length !== 1 ||
+			containers[0]?.name !== "agent" ||
+			entries.length !== 1 ||
+			entries[0]?.value !== expected?.value ||
+			entries[0]?.valueFrom !== undefined
+		)
+			throw new WorkloadKubernetesError("policy");
+	}
 	const adapter = {
+		assertStandardTemplateSelector,
 		capabilities: () =>
 			({
 				schemaVersion: 1,
@@ -1044,6 +1072,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			input: unknown,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const value = desired(input);
+			if (value.replicas !== 0) await assertStandardTemplateSelector(value);
 			const name = workloadResourceNameV1(value.agentId);
 			const current = await statefulSet(value);
 			// Reject stale work before any partial creation or scale-down. Per-write
