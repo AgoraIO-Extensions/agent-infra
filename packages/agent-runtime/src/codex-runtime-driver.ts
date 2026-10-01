@@ -3682,11 +3682,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		let bridge: CodexAppServerTransport;
 		let resolvedBridge: CodexAppServerTransport | undefined;
 		let abandonedOpen = false;
+		let ownedOpening: Promise<CodexRpc> | undefined;
 		const retireProvisional = async (transport: CodexAppServerTransport) => {
 			// A bounded metadata query must never retire an already admitted shared RPC.
 			if (this.rpcsByTransport.has(transport)) return;
 			await transport.close?.().catch(() => {});
-			if (this.conversationRpcs.has(conversationKey)) return;
+			const currentOpening = this.inFlightConversationRpcs.get(conversationKey);
+			if (
+				this.conversationRpcs.has(conversationKey) ||
+				(currentOpening && currentOpening !== ownedOpening)
+			)
+				return;
 			this.revokeConnectionClient(conversationKey);
 			this.revokeModelConversation?.(
 				this.modelConversationKey(conversationKey),
@@ -3694,6 +3700,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		try {
 			if (metadataRead) await metadataRead.revalidate();
+			ownedOpening = this.inFlightConversationRpcs.get(conversationKey);
 			const pending = this.openConversationBridge(conversationKey);
 			void pending.then(
 				(transport) => {

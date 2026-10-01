@@ -28,6 +28,7 @@ class MetadataTransport {
 	closeCount = 0;
 	openCount = 0;
 	openDelay?: Promise<void>;
+	successor?: MetadataTransport;
 	beforeSend?: (frame: CodexAppServerFrame) => Promise<void>;
 	modelPages = ["gpt-5.3-codex"];
 	readSendFailure?: () => Promise<void>;
@@ -163,6 +164,7 @@ class MetadataTransport {
 
 class MetadataDriver extends CodexRuntimeDriver {
 	static openFixture(path: string, transport: MetadataTransport) {
+		let opened = false;
 		return MetadataDriver.openWithBridge(
 			{
 				path,
@@ -184,10 +186,12 @@ class MetadataDriver extends CodexRuntimeDriver {
 				],
 			},
 			async (options: CodexAppServerBridgeOptions) => {
-				transport.openCount++;
-				transport.options = options;
-				if (transport.openDelay) await transport.openDelay;
-				return transport;
+				const current = opened ? (transport.successor ?? transport) : transport;
+				opened = true;
+				current.openCount++;
+				current.options = options;
+				if (current.openDelay) await current.openDelay;
+				return current;
 			},
 		);
 	}
@@ -489,6 +493,54 @@ describe("Codex metadata async current confirmation (controlled behavior only)",
 		opening.resolve();
 		await vi.waitFor(() => expect(f.transport.closeCount).toBe(1));
 		expect(f.transport.requests).toEqual([]);
+	});
+
+	it("does not revoke a successor ordinary opening credential when its abandoned predecessor Bridge arrives late", async () => {
+		const f = await fixture();
+		const before = await readFile(f.path, "utf8");
+		const predecessorOpen = Promise.withResolvers<void>();
+		f.transport.openDelay = predecessorOpen.promise;
+		const successor = new MetadataTransport();
+		f.transport.successor = successor;
+		const successorInitialize = Promise.withResolvers<void>();
+		successor.beforeSend = async (frame) => {
+			if (frame.method === "initialize") await successorInitialize.promise;
+		};
+		const query = f.driver.discoverNativeCommands(f.read);
+		const rejected = expect(query).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		await vi.waitFor(() => expect(f.transport.openCount).toBe(1));
+		f.abort.abort();
+		await rejected;
+		const ordinary = fixtureRpc(f);
+		await vi.waitFor(() =>
+			expect(successor.requests.at(-1)?.method).toBe("initialize"),
+		);
+		const access = successor.options?.modelAccess;
+		if (!access) throw new Error("Missing controlled process access");
+		// Unknown GET checks only the existing local credential holder's authentication.
+		// It never submits model input, admits a Turn or invokes the provider/authorizer.
+		const assertCredentialRetained = async () => {
+			const response = await fetch(`${access.endpoint}/metadata-cleanup-test`, {
+				headers: { authorization: `Bearer ${access.credential}` },
+			});
+			expect(response.status).toBe(404);
+			await response.text();
+		};
+		await assertCredentialRetained();
+		predecessorOpen.resolve();
+		await vi.waitFor(() => expect(f.transport.closeCount).toBe(1));
+		await assertCredentialRetained();
+		successorInitialize.resolve();
+		const rpc = await ordinary;
+		await expect(
+			rpc.request("model/list", {}, (value) => value),
+		).resolves.toBeDefined();
+		await assertCredentialRetained();
+		expect(successor.closeCount).toBe(0);
+		expect(f.transport.requests).toEqual([]);
+		expect(await readFile(f.path, "utf8")).toBe(before);
 	});
 
 	it.each(["cached", "in flight"])(
