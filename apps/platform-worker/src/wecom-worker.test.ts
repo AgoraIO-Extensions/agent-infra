@@ -313,3 +313,67 @@ it("rejects invalid setup deployment before opening a database store", () => {
 	).toThrow("requires a connection deployment");
 	expect(mocks.storeOpen).not.toHaveBeenCalled();
 });
+
+it.each(["success", "setup", "connections", "store"] as const)(
+	"keeps the business pool open until ingress shutdown settles, failure=%s",
+	async (mode) => {
+		const setup = Promise.withResolvers<void>();
+		const connections = Promise.withResolvers<void>();
+		const store = Promise.withResolvers<void>();
+		const failure = new Error("controlled close failure");
+		mocks.setupClose.mockImplementation(() => setup.promise);
+		mocks.connectionsClose.mockImplementation(() => connections.promise);
+		mocks.close.mockImplementation(() => store.promise);
+		const worker = createPlatformWecomWorkerV1({
+			databaseUrl: "postgres://fixture",
+			identity: {
+				resolveSender: async () => null,
+				activeUsers: async () => [],
+			},
+			observe: () => {},
+			sender: { send: async () => "failed" },
+			connections: {
+				bindings: async () => [],
+				protectReply: async () => "fixture",
+				revealReply: async () => {
+					throw new Error("unused");
+				},
+			},
+			setup: {
+				decryptor: {
+					decrypt: async () => {
+						throw new Error("unused");
+					},
+				},
+				directory: { resolveUser: async () => null },
+			},
+		});
+		const closing = worker.close();
+		const settled = vi.fn();
+		void closing.then(settled, settled);
+		try {
+			await vi.waitFor(() => {
+				expect(mocks.setupClose).toHaveBeenCalledOnce();
+				expect(mocks.connectionsClose).toHaveBeenCalledOnce();
+			});
+			expect(mocks.close).not.toHaveBeenCalled();
+			if (mode === "setup") setup.reject(failure);
+			else setup.resolve();
+			await Promise.resolve();
+			expect(mocks.close).not.toHaveBeenCalled();
+			if (mode === "connections") connections.reject(failure);
+			else connections.resolve();
+			await vi.waitFor(() => expect(mocks.close).toHaveBeenCalledOnce());
+			expect(settled).not.toHaveBeenCalled();
+			if (mode === "store") store.reject(failure);
+			else store.resolve();
+			if (mode === "success") await expect(closing).resolves.toBeUndefined();
+			else await expect(closing).rejects.toBe(failure);
+		} finally {
+			setup.resolve();
+			connections.resolve();
+			store.resolve();
+			await closing.catch(() => {});
+		}
+	},
+);
