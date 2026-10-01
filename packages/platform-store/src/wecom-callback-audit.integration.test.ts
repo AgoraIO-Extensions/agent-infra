@@ -58,4 +58,4 @@ it("records callback verification once and rolls back the timestamp when audit f
 		await sql.end();
 		await db.stop();
 	}
-});
+}, 30_000);
