@@ -208,10 +208,9 @@ thread/read、skills/list 等等待边界同样受当前读取确认约束，不
 等待当前确认也受同一 signal/deadline 约束，不续期、不序列化函数，不返回结果后补验。
 
 原生请求失败、撤权/账号或所用凭证失效、期限/abort、等待期间原范围/config/process/epoch
-变化、当前确认依赖失败、返回前拒绝及迟到响应均须有真实入口负向测试。API 在发送任何
-HTTP bytes 前仍重验原请求、当前政策、DB 原范围及返回的原 binding；失败丢弃结果。
-issuer、Worker 或 Host 重启后不恢复 request-local closure，新请求重新认证，仅重复读取，
-不重新执行业务。受控测试、实际原绑定/native 验证与完整浏览器旅程分别记录。
+变化、当前确认依赖失败、返回前拒绝及迟到响应均须有真实入口负向测试。API 结果交付与
+请求关联失效统一遵循 [Spec §9.3.1](SPEC-agent-infra-M1-engineering-architecture.md#931-原生元数据读取授权)，
+不另设恢复路径。受控、原 native 与浏览器证据按 [§5.4](#54-独立验收与实施交接) 分别验收。
 
 - 产生 Turn 的 Skill/命令复用现有 Message/Execution/outbox；不产生回答但改变原生状态的命令也绑定一个持久 Execution 与命令输入，复用同一调度及事件链，不伪造用户聊天消息或模型回答。活跃、等待或 unknown 占用下返回 busy，不插队、不转成补充指令。
 - 受理时冻结能力/目录/包修订、参数摘要、原主体/Agent/Conversation、模型选择及 Key 引用版本；幂等键沿既有作用域使用。同键同输入回读原结果，同键不同内容冲突；业务原文按普通消息权限保存，审计只保留必要元数据。
