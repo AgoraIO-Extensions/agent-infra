@@ -223,9 +223,16 @@ describe("PostgreSQL same-transaction personal Task policy", () => {
 		async (isolation) => {
 			const credential = await issue();
 			await expect(
-				client.begin(isolation, (transaction) =>
-					resolve(transaction, credential.credential),
-				),
+				client.begin(`isolation level ${isolation}`, async (transaction) => {
+					const [before] = await transaction`show transaction_isolation`;
+					expect(before?.transaction_isolation).toBe(isolation);
+					try {
+						return await resolve(transaction, credential.credential);
+					} finally {
+						const [after] = await transaction`show transaction_isolation`;
+						expect(after?.transaction_isolation).toBe(isolation);
+					}
+				}),
 			).rejects.toMatchObject({ code: "unavailable" });
 		},
 	);
