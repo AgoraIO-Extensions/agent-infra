@@ -311,6 +311,27 @@ test("redirects the legacy no-conversation entry without creating a conversation
 	await expect(page.locator('[data-slot="breadcrumb-page"]')).toHaveText(
 		"文本对话与个人历史",
 	);
+	const menu = page.getByRole("button", { name: "打开导航", exact: true });
+	if (await menu.isVisible()) await menu.click();
+	await page
+		.getByRole("navigation", { name: "工作区", exact: true })
+		.getByRole("link", { name: "对话", exact: true })
+		.click();
+	await expect(page).toHaveURL(/\/agents\?mode=conversation$/);
+	await expect(page.locator('[data-slot="breadcrumb-page"]')).toHaveText(
+		"选择 Agent 开始对话",
+	);
+	if (await menu.isVisible()) await menu.click();
+	const workspace = page.getByRole("navigation", {
+		name: "工作区",
+		exact: true,
+	});
+	await expect(
+		workspace.getByRole("link", { name: "对话", exact: true }),
+	).toHaveAttribute("aria-current", "page");
+	await expect(
+		workspace.getByRole("link", { name: "Agent", exact: true }),
+	).not.toHaveAttribute("aria-current", "page");
 	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
 		true,
 	);

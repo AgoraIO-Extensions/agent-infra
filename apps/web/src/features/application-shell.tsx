@@ -9,9 +9,11 @@ import {
 	CheckCheck,
 	ClipboardList,
 	Grid2X2,
+	House,
 	Layers,
 	List,
 	Menu,
+	MessageSquare,
 	X,
 } from "lucide-react";
 import {
@@ -116,6 +118,13 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		sessionProjection,
 	]);
 	const pathname = useLocation({ select: (location) => location.pathname });
+	const conversationSelection = useLocation({
+		select: (location) => location.search.mode === "conversation",
+	});
+	const selectingConversation =
+		(pathname === "/agents" || pathname === "/agents/") &&
+		conversationSelection;
+	const chatContext = pathname.startsWith("/chat/") || selectingConversation;
 	const [sheet, setSheet] = useState(false);
 	const user =
 		session.state.kind === "ready" ? session.state.session.user : undefined;
@@ -127,45 +136,76 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		import.meta.env.DEV &&
 		import.meta.env.VITE_PLATFORM_DEVELOPMENT_MODE === "controlled";
 	const title =
-		pathname.startsWith("/chat/") || pathname.includes("/conversations")
-			? "文本对话与个人历史"
-			: pathname.includes("/configuration")
-				? "配置与生命周期"
-				: pathname === "/admin/audit"
-					? "平台审计"
-					: pathname === "/audit"
-						? "我的执行审计"
-						: pathname === "/admin/agents"
-							? "Agent 管理"
-							: pathname.startsWith("/admin")
-								? "创建审批"
-								: pathname === "/my-agents/new"
-									? "创建申请"
-									: pathname.startsWith("/my-agents")
-										? "我的 Agent"
-										: pathname === "/agents" || pathname === "/agents/"
-											? "Agent"
-											: "Agent 详情";
+		pathname === "/"
+			? "工作台"
+			: selectingConversation
+				? "选择 Agent 开始对话"
+				: chatContext || pathname.includes("/conversations")
+					? "文本对话与个人历史"
+					: pathname.includes("/configuration")
+						? "配置与生命周期"
+						: pathname === "/admin/audit"
+							? "平台审计"
+							: pathname === "/audit"
+								? "我的执行审计"
+								: pathname === "/admin/agents"
+									? "Agent 管理"
+									: pathname.startsWith("/admin")
+										? "创建审批"
+										: pathname === "/my-agents/new"
+											? "创建申请"
+											: pathname.startsWith("/my-agents")
+												? "我的 Agent"
+												: pathname === "/agents" || pathname === "/agents/"
+													? "Agent"
+													: "Agent 详情";
 	const navigation = (
 		<>
-			<div className="platform-brand">
-				<span className="platform-brand-mark">
-					<Layers size={21} aria-hidden="true" />
+			<Link className="platform-brand" to="/" onClick={() => setSheet(false)}>
+				<span className="platform-brand-mark" aria-hidden="true">
+					A
 				</span>
 				<div>
-					Agent Platform<small>工作空间</small>
+					<strong>Agora Agent</strong>
+					<small>公司内部工作区</small>
 				</div>
-			</div>
+			</Link>
 			<nav aria-label="主导航">
 				<nav aria-label="工作区" className="platform-nav-group">
 					<p className="platform-nav-label">工作区</p>
 					<Link
-						className={`platform-nav-item ${pathname.startsWith("/agents") ? "selected" : ""}`}
+						aria-current={pathname === "/" ? "page" : undefined}
+						className={`platform-nav-item ${pathname === "/" ? "selected" : ""}`}
+						to="/"
+						onClick={() => setSheet(false)}
+					>
+						<House size={19} aria-hidden="true" />
+						工作台
+					</Link>
+					<Link
+						aria-current={
+							pathname.startsWith("/agents") && !selectingConversation
+								? "page"
+								: undefined
+						}
+						className={`platform-nav-item ${pathname.startsWith("/agents") && !selectingConversation ? "selected" : ""}`}
 						to="/agents"
+						search={{ mode: undefined }}
+						activeOptions={{ explicitUndefined: true }}
 						onClick={() => setSheet(false)}
 					>
 						<Grid2X2 size={19} aria-hidden="true" />
 						Agent
+					</Link>
+					<Link
+						aria-current={chatContext ? "page" : undefined}
+						className={`platform-nav-item ${chatContext ? "selected" : ""}`}
+						to="/agents"
+						search={{ mode: "conversation" }}
+						onClick={() => setSheet(false)}
+					>
+						<MessageSquare size={19} aria-hidden="true" />
+						对话
 					</Link>
 				</nav>
 				<nav aria-label="我的管理" className="platform-nav-group">

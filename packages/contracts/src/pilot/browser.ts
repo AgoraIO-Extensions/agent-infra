@@ -18,6 +18,11 @@ import {
 	PersonalApiCredentialMetadataV1Schema,
 	PersonalApiCredentialRevokeResponseV1Schema,
 } from "./personal-api-credentials.ts";
+import {
+	PersonalRelayKeyReplaceRequestV1Schema,
+	PersonalRelayKeyRevokeRequestV1Schema,
+	PersonalRelayKeyStateV1Schema,
+} from "./personal-relay-key.ts";
 import { WecomApplicationCredentialsV1Schema } from "./wecom-application.ts";
 
 const nonEmptyString = () => z.string().min(1);
@@ -1097,6 +1102,56 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/me/relay-key": {
+		get: {
+			operationId: "getPersonalRelayKeyV2",
+			summary: "Read the current browser user's personal Relay Key state",
+			description:
+				"Active browser session only; no Authorization header, query or request body. No Key material is returned. Responses are no-store.",
+			security: personalCredentialSecurity,
+			responses: {
+				"200": jsonResponse(
+					"Personal Key state only",
+					PersonalRelayKeyStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		put: {
+			operationId: "replacePersonalRelayKeyV2",
+			summary: "Set or replace the current browser user's personal Relay Key",
+			description:
+				"Active browser session only; no Authorization header or query. expectedVersion is a compare-and-swap guard. The approved read-only validation proves authentication only. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestBody: requiredJsonRequestBody(
+				PersonalRelayKeyReplaceRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Committed personal Key state",
+					PersonalRelayKeyStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		delete: {
+			operationId: "revokePersonalRelayKeyV2",
+			summary: "Revoke the current browser user's personal Relay Key pointer",
+			description:
+				"Active browser session only; no Authorization header or query. Already accepted Executions retain their exact original encrypted version. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestBody: requiredJsonRequestBody(
+				PersonalRelayKeyRevokeRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Committed unset personal Key state",
+					PersonalRelayKeyStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/me/api-credentials": {
 		post: {
 			operationId: "issuePersonalApiCredentialV2",
@@ -1348,6 +1403,9 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	PersonalRelayKeyStateV1: PersonalRelayKeyStateV1Schema,
+	PersonalRelayKeyReplaceRequestV1: PersonalRelayKeyReplaceRequestV1Schema,
+	PersonalRelayKeyRevokeRequestV1: PersonalRelayKeyRevokeRequestV1Schema,
 	PersonalApiCredentialIssueRequestV1:
 		PersonalApiCredentialIssueRequestV1Schema,
 	PersonalApiCredentialIssueResponseV1:

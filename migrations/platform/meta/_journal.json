@@ -183,6 +183,13 @@
       "when": 1790792430787,
       "tag": "0029_platform_user_disables",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1790844089732,
+      "tag": "0030_relay_key_authority_compatibility",
+      "breakpoints": true
     }
   ]
 }
