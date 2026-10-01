@@ -1,7 +1,7 @@
 import type postgres from "postgres";
 import { TaskAuthorizationStoreError } from "./task-authorization.js";
 
-/** Abort cancels the real SQL; callers await this and then their original begin rollback. */
+/** The original runner owns backend cancellation; await its SQL outcome and rollback. */
 export async function awaitTaskAuthorizationQueryV1<
 	T extends readonly (object | undefined)[],
 >(
@@ -9,17 +9,12 @@ export async function awaitTaskAuthorizationQueryV1<
 	signal: AbortSignal,
 ): Promise<postgres.RowList<T>> {
 	if (signal.aborted) throw new TaskAuthorizationStoreError();
-	const cancel = () => query.cancel();
-	signal.addEventListener("abort", cancel, { once: true });
-	if (signal.aborted) cancel();
 	try {
 		const rows = await query;
 		if (signal.aborted) throw new TaskAuthorizationStoreError();
 		return rows;
 	} catch {
 		throw new TaskAuthorizationStoreError();
-	} finally {
-		signal.removeEventListener("abort", cancel);
 	}
 }
 

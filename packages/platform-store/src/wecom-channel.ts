@@ -94,6 +94,7 @@ export class PostgresWecomChannelV1
 		this.#cancelSql = postgres(options.databaseUrl, {
 			max: 1,
 			connect_timeout: 1,
+			connection: { statement_timeout: "1000" },
 		});
 		this.#management = new PostgresAgentManagementTransactionV1(options);
 	}
@@ -156,23 +157,22 @@ export class PostgresWecomChannelV1
 		let transactionStartedAt: string | undefined;
 		let cancellation: Promise<void> | undefined;
 		let transactionSettled = false;
-		// The driver may queue COMMIT before it becomes active. Follow only this
-		// original transaction until begin settles; each native probe is bounded.
-		const cancelCommit = () => {
+		// Follow only this original transaction through active SQL and queued COMMIT.
+		// Never cancel rollback; await its native settlement. Each probe is server bounded.
+		const cancelOriginalTransaction = () => {
 			cancellation = (async () => {
 				while (!transactionSettled) {
 					if (backendPid !== undefined && transactionStartedAt !== undefined)
-						await awaitTaskAuthorizationQueryV1(
-							this
-								.#cancelSql`select pg_cancel_backend(pid) from pg_stat_activity where pid=${backendPid} and xact_start::text=${transactionStartedAt} and lower(query)='commit' and state='active'`,
-							AbortSignal.timeout(1_000),
-						).catch(() => undefined);
+						await this
+							.#cancelSql`select pg_cancel_backend(pid) from pg_stat_activity where pid=${backendPid} and xact_start::text=${transactionStartedAt} and state='active' and lower(query) not like 'rollback%'`.catch(
+							() => undefined,
+						);
 					if (!transactionSettled)
 						await new Promise((resolve) => setTimeout(resolve, 10));
 				}
 			})();
 		};
-		signal.addEventListener("abort", cancelCommit, { once: true });
+		signal.addEventListener("abort", cancelOriginalTransaction, { once: true });
 		const committed = this.#sql.begin(async (sql) => {
 			const run = <T extends readonly (object | undefined)[]>(
 				query: postgres.PendingQuery<T>,
@@ -342,7 +342,7 @@ export class PostgresWecomChannelV1
 			throw error;
 		} finally {
 			transactionSettled = true;
-			signal.removeEventListener("abort", cancelCommit);
+			signal.removeEventListener("abort", cancelOriginalTransaction);
 			await cancellation;
 		}
 	}

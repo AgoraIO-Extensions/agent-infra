@@ -628,10 +628,16 @@ async function waitForCancellation(
 
 // A transparent real PostgreSQL transport gate: hold the driver's COMMIT frame,
 // not a query result or clock, so cancellation first sees the original idle Tx.
-async function pendingCommitTransport(databaseUrl: string) {
+async function pendingCommitTransport(
+	databaseUrl: string,
+	holdCancelReply = false,
+) {
 	const target = new URL(databaseUrl);
 	const sockets = new Set<Socket>();
 	const reached = cancellationGate();
+	let cancelDispatched = false;
+	const cancelReleases = new Set<() => void>();
+	const cancelClients = new Map<Socket, Socket>();
 	let armed = false;
 	let release = () => {};
 	const server = createServer((client) => {
@@ -647,7 +653,24 @@ async function pendingCommitTransport(databaseUrl: string) {
 		upstream.on("error", () => client.destroy());
 		client.on("end", () => upstream.end());
 		upstream.on("end", () => client.end());
-		upstream.on("data", (chunk) => client.write(chunk));
+		let cancelConnection = false;
+		let cancelParsed = false;
+		let cancelSent = false;
+		let cancelHeld: Buffer[] = [];
+		const releaseCancelReply = () => {
+			cancelSent = false;
+			if (cancelHeld.length) client.write(Buffer.concat(cancelHeld));
+			cancelHeld = [];
+		};
+		cancelReleases.add(releaseCancelReply);
+		client.on("close", () => {
+			cancelClients.delete(client);
+			cancelReleases.delete(releaseCancelReply);
+		});
+		upstream.on("data", (chunk) => {
+			if (cancelSent) cancelHeld.push(chunk);
+			else client.write(chunk);
+		});
 		let startup = true;
 		let buffer: Buffer = Buffer.alloc(0);
 		let held: Buffer[] | undefined;
@@ -666,7 +689,13 @@ async function pendingCommitTransport(databaseUrl: string) {
 				buffer = buffer.subarray(size);
 				if (startup) {
 					// Pass SSL negotiation too; this controlled PG uses its original plaintext startup.
-					if (frame.readUInt32BE(4) === 196608) startup = false;
+					if (frame.readUInt32BE(4) === 196608) {
+						startup = false;
+						const fields = frame.subarray(8).toString().split("\0");
+						for (let i = 0; i + 1 < fields.length; i += 2)
+							if (fields[i] === "statement_timeout" && fields[i + 1] === "1000")
+								cancelConnection = true;
+					}
 				} else {
 					const payload = frame.subarray(5);
 					const statement =
@@ -675,6 +704,21 @@ async function pendingCommitTransport(databaseUrl: string) {
 							: frame[0] === 81
 								? payload
 								: undefined; // Simple Query.
+					if (holdCancelReply && cancelConnection) {
+						if (
+							statement
+								?.subarray(0, statement.indexOf(0))
+								.toString()
+								.startsWith("select pg_cancel_backend(pid)")
+						)
+							cancelParsed = true;
+						if (cancelParsed && (frame[0] === 69 || frame[0] === 81)) {
+							// Forward the actual Execute/Query; hold only its replies.
+							cancelSent = true;
+							cancelClients.set(client, upstream);
+							cancelDispatched = true;
+						}
+					}
 					if (
 						armed &&
 						statement
@@ -715,6 +759,16 @@ async function pendingCommitTransport(databaseUrl: string) {
 			armed = true;
 		},
 		pending: reached.waiting,
+		cancelDispatched: () => cancelDispatched,
+		releaseCancelReply: () => {
+			for (const unblock of cancelReleases) unblock();
+		},
+		disconnectCancel: () => {
+			for (const [client, upstream] of cancelClients) {
+				client.destroy();
+				upstream.destroy();
+			}
+		},
 		release: () => release(),
 		close: async () => {
 			release();
@@ -1041,6 +1095,173 @@ describe("existing WeCom transaction cancellation", () => {
 			await observer.end();
 		}
 	}, 20_000);
+
+	it.each(["hold-reply", "reset-after-rollback"] as const)(
+		"cancel transport reply %s preserves original rollback and the independent 2s producer bound",
+		async (kind) => {
+			const input = await scope(`cancel-reply-${kind}`);
+			const role = `controlled_cancel_${sequence}`;
+			const url = new URL(db.databaseUrl);
+			url.username = role;
+			url.password = "controlled_test_only";
+			const held = cancellationGate();
+			const reached = cancellationGate();
+			const controller = new AbortController();
+			let controlled: ReturnType<typeof postgres> | undefined;
+			let transport:
+				| Awaited<ReturnType<typeof pendingCommitTransport>>
+				| undefined;
+			let target: PostgresWecomChannelV1 | undefined;
+			let blocker: Promise<unknown> | undefined;
+			let observed: Promise<void> | undefined;
+			let pending:
+				| ReturnType<ReturnType<typeof producer>["receive"]>
+				| undefined;
+			let failed: Promise<void> | undefined;
+			let settled: Promise<void> | undefined;
+			let supplied: Supplied | undefined;
+			let key = "";
+			let roleCreated = false;
+			let blockerReleased = false;
+			try {
+				await sql`create role ${sql(role)} login nosuperuser noinherit nocreatedb nocreaterole noreplication password 'controlled_test_only'`;
+				roleCreated = true;
+				await sql`grant usage on schema platform to ${sql(role)}`;
+				await sql`grant select,insert,update,delete on all tables in schema platform to ${sql(role)}`;
+				await sql`grant usage,select on all sequences in schema platform to ${sql(role)}`;
+				controlled = postgres(url.toString(), { max: 1, connect_timeout: 1 });
+				const [permission] = await controlled<
+					{
+						username: string;
+						superuser: boolean;
+						may_cancel: boolean;
+						signal_all: boolean;
+						read_all: boolean;
+						server_version: string;
+					}[]
+				>`
+ select current_user as username,r.rolsuper as superuser,
+ has_function_privilege(current_user,'pg_catalog.pg_cancel_backend(integer)','execute') as may_cancel,
+ pg_has_role(current_user,'pg_signal_backend','member') as signal_all,
+ pg_has_role(current_user,'pg_read_all_stats','member') as read_all,
+ current_setting('server_version') as server_version from pg_roles r where r.rolname=current_user`;
+				expect(permission).toMatchObject({
+					username: role,
+					superuser: false,
+					may_cancel: true,
+					signal_all: false,
+					read_all: false,
+				});
+				console.info("controlled-cancel-role", { kind, ...permission });
+				const [observer] = await sql<
+					{ pid: number }[]
+				>`select pg_backend_pid() as pid`;
+				if (!observer)
+					throw new Error("Missing controlled independent observer");
+				await expect(
+					controlled`select pg_cancel_backend(${observer.pid})`,
+				).rejects.toMatchObject({ code: "42501" });
+				await sql`select 1`;
+				transport = await pendingCommitTransport(url.toString(), true);
+				target = new PostgresWecomChannelV1({
+					databaseUrl: transport.databaseUrl,
+				});
+				await sql`create function platform.block_cancel_reply() returns trigger language plpgsql as $$ begin if new.agent_id=TG_ARGV[0] then perform pg_advisory_xact_lock(11380002); end if; return new; end $$`;
+				await sql`create trigger block_cancel_reply before insert on platform.conversations for each row execute function platform.block_cancel_reply(${argument(input.agentId)})`;
+				blocker = sql.begin(async (transaction) => {
+					await transaction`select pg_advisory_xact_lock(11380002)`;
+					reached.open();
+					await held.waiting;
+					blockerReleased = true;
+				});
+				await reached.waiting;
+				const activeTarget = target;
+				pending = producer((plan, execute, signal) => {
+					key = plan.eventKey;
+					return activeTarget.accept(
+						plan,
+						(conversation) => {
+							supplied = conversation;
+							return execute(conversation);
+						},
+						signal,
+					);
+				}).receive(input, undefined, controller.signal);
+				failed = expect(pending).rejects.toThrow();
+				const backend = await originalBackend(
+					"%insert into platform.conversations%",
+					"advisory",
+				);
+				expect(Date.now() - Date.parse(backend.query_started_at)).toBeLessThan(
+					2_500,
+				);
+				const activeTransport = transport;
+				const abortedAt = Date.now();
+				settled = failed.then(async () => {
+					// Verify at producer settlement without polling for a later rollback.
+					expect(Date.now() - abortedAt).toBeLessThan(2_000);
+					await gone(backend);
+					expect(blockerReleased).toBe(false);
+					await released(input, key);
+					await zero(input, key);
+				});
+				controller.abort();
+				observed = (async () => {
+					await waitForCancellation(
+						async () => (activeTransport.cancelDispatched() ? [true] : []),
+						2_000,
+					);
+					await waitForCancellation(async () =>
+						(
+							await sql`select pid from pg_stat_activity where pid=${backend.pid} and xact_start::text=${backend.started_at}`
+						).length === 0
+							? [true]
+							: [],
+					);
+					await gone(backend);
+					expect(blockerReleased).toBe(false);
+					if (kind === "reset-after-rollback")
+						activeTransport.disconnectCancel();
+					// Only the settlement callback probes NOWAIT locks; observers must not compete.
+					await settled;
+					if (!supplied)
+						throw new Error(
+							"Missing original supplied Conversation transaction",
+						);
+					await late(supplied, input, key);
+					console.info("controlled-cancel-rollback", {
+						kind,
+						pid: backend.pid,
+						startedAt: backend.started_at,
+						afterAbortMs: Date.now() - abortedAt,
+						blockerReleased,
+						locksReleased: true,
+						factsZero: true,
+						lateRejected: true,
+					});
+				})();
+				await Promise.all([cancellationReturn(settled), observed]);
+			} finally {
+				transport?.releaseCancelReply();
+				held.open();
+				await Promise.allSettled([pending, failed, settled, blocker, observed]);
+				await target?.close();
+				await transport?.close();
+				await controlled?.end();
+				await sql`drop trigger if exists block_cancel_reply on platform.conversations`;
+				await sql`drop function if exists platform.block_cancel_reply()`;
+				if (roleCreated) {
+					await sql`revoke all privileges on all tables in schema platform from ${sql(role)}`;
+					await sql`revoke all privileges on all sequences in schema platform from ${sql(role)}`;
+					await sql`revoke usage on schema platform from ${sql(role)}`;
+					await sql`drop role ${sql(role)}`;
+				}
+			}
+			await released(input, key);
+			await zero(input, key);
+		},
+		20_000,
+	);
 
 	it.each(["caller-abort", "runner-deadline"] as const)(
 		"awaits original rollback and rejects late execute SQL after %s",
