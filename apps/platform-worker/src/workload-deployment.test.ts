@@ -291,7 +291,9 @@ describe("production Worker deployment", () => {
 			registry: { ...deployment.registry, fetch: registryFetch },
 			modelFetch,
 		});
-		Object.assign(bindings[0], { driver: "fake" });
+		const binding = bindings[0];
+		if (!binding) throw new Error("Expected trusted binding fixture");
+		Object.assign(binding, { driver: "fake" });
 		bindings.length = 0;
 		expect(options.templateModelBindings[0]?.driver).toBe("codex");
 		expect(Object.isFrozen(options.templateModelBindings)).toBe(true);
