@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseRuntimeStatusResponse } from "./conversation-dispatch-runtime.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 import { FakeConversationRuntimeHostV1 } from "./fake-conversation-runtime-host.js";
 import {
@@ -424,6 +425,205 @@ function dispatch(
 }
 
 describe("Conversation Worker dispatch", () => {
+	it.each([
+		"conversation.turn.submit.v1",
+		"conversation.turn.regenerate.v1",
+		"conversation.turn.stop.v1",
+	] as const)(
+		"writes only the original ref for a missing-binding %s recovery and keeps occupancy",
+		async (operation) => {
+			const stop = operation === "conversation.turn.stop.v1";
+			const store = new MemoryDispatchStore(
+				claim({
+					operation,
+					executionStatus: "unknown",
+					stopPending: true,
+					...(stop
+						? {
+								messageId: null,
+								input: null,
+								stopRequestId: "stop-original",
+								itemId: "conversation:stop:stop-original",
+							}
+						: {}),
+					runtimeCursor: "committed-original-cursor",
+				}),
+			);
+			let dispatched = 0;
+			let reads = 0;
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				async dispatch() {
+					dispatched++;
+					throw new Error("Business dispatch forbidden");
+				},
+				async recoverStatus() {
+					throw new Error("Only original recovery allowed");
+				},
+				async recoverOriginalStatus(request) {
+					reads++;
+					expect(request).toMatchObject({
+						hostSessionRef: null,
+						executionId: "execution-1",
+						turnId: "turn-1",
+						deliveryFence: store.current.executionDeliveryFence,
+					});
+					return {
+						schemaVersion: 2,
+						outcome: "binding_found",
+						hostSessionRef: "durable-original",
+						executionId: "execution-1",
+					};
+				},
+				events() {
+					throw new Error("Binding-only is not a status/event receipt");
+				},
+			};
+			const h = setup({
+				store,
+				runtimeHost,
+				authorization: authorization({ controlOnly: true }),
+			});
+			await expect(
+				dispatch(h.useCase, store.current.itemId),
+			).resolves.toMatchObject({ outcome: "unknown", retryScheduled: true });
+			expect(store.current).toMatchObject({
+				hostSessionRef: "durable-original",
+				executionStatus: "unknown",
+				stopPending: true,
+				runtimeCursor: "committed-original-cursor",
+				executionId: "execution-1",
+				turnId: "turn-1",
+				sessionGeneration: 1,
+				authorizationRevision: "authorization-1",
+			});
+			expect(h.events.persisted).toEqual([]);
+			expect(dispatched).toBe(0);
+			expect(reads).toBe(1);
+		},
+	);
+
+	it.each(["takeover", "CAS"] as const)(
+		"does not write or accept a binding after %s becomes stale",
+		async (failure) => {
+			const store = new MemoryDispatchStore(
+				claim({ executionStatus: "unknown", stopPending: true }),
+			);
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				async dispatch() {
+					throw new Error("Business dispatch forbidden");
+				},
+				async recoverStatus() {
+					throw new Error("Only original recovery allowed");
+				},
+				async recoverOriginalStatus() {
+					if (failure === "takeover")
+						store.current = {
+							...store.current,
+							leaseOwner: "other-worker",
+							deliveryFence: store.current.deliveryFence + 1,
+						};
+					else store.recordable = false;
+					return {
+						schemaVersion: 2,
+						outcome: "binding_found",
+						hostSessionRef: "durable-original",
+						executionId: "execution-1",
+					};
+				},
+				events() {
+					throw new Error("Events forbidden");
+				},
+			};
+			const h = setup({
+				store,
+				runtimeHost,
+				authorization: authorization({ controlOnly: true }),
+			});
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "stale",
+			});
+			expect(store.current).toMatchObject({
+				hostSessionRef: null,
+				executionStatus: "unknown",
+				stopPending: true,
+			});
+		},
+	);
+
+	it("rejects malformed binding-only responses and ordinary status introducing a missing ref", () => {
+		const original = claim({ executionStatus: "unknown", stopPending: true });
+		const binding = {
+			schemaVersion: 2,
+			outcome: "binding_found",
+			hostSessionRef: "durable-original",
+			executionId: original.executionId,
+		};
+		expect(parseRuntimeStatusResponse(binding, original)).toEqual(binding);
+		for (const invalid of [
+			{ ...binding, executionId: "other" },
+			{ ...binding, hostSessionRef: "" },
+			{ ...binding, hostSessionRef: null },
+			{ ...binding, schemaVersion: 3 },
+			{ ...binding, status: "running" },
+			{ ...binding, status: undefined },
+			{ ...binding, code: undefined },
+			{ ...binding, code: "RUNTIME_ACCEPTANCE_UNKNOWN" },
+			{ ...binding, unexpected: true },
+			{ ...binding, outcome: "found", status: "running" },
+		])
+			expect(() => parseRuntimeStatusResponse(invalid, original)).toThrow();
+		expect(() =>
+			parseRuntimeStatusResponse(binding, claim({ hostSessionRef: "other" })),
+		).toThrow();
+	});
+
+	it("keeps a missing-ref unknown stop pending when the Host has no reliable binding", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				operation: "conversation.turn.stop.v1",
+				itemId: "conversation:stop:stop-original",
+				stopRequestId: "stop-original",
+				messageId: null,
+				input: null,
+				executionStatus: "unknown",
+				stopPending: true,
+			}),
+		);
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				throw new Error("Stop needs a durable ref");
+			},
+			async recoverStatus() {
+				throw new Error("Only original recovery allowed");
+			},
+			async recoverOriginalStatus() {
+				return {
+					schemaVersion: 2,
+					outcome: "not_found",
+					hostSessionRef: null,
+					executionId: "execution-1",
+				};
+			},
+			events() {
+				throw new Error("Events forbidden");
+			},
+		};
+		const h = setup({
+			store,
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+		});
+		await expect(
+			dispatch(h.useCase, store.current.itemId),
+		).resolves.toMatchObject({ outcome: "unknown" });
+		expect(store.current).toMatchObject({
+			hostSessionRef: null,
+			executionStatus: "unknown",
+			stopPending: true,
+		});
+		expect(store.outboxStatus).toBe("retry_scheduled");
+	});
+
 	it("retains an occupied original execution when recovery finds no accepted Turn without resubmitting", async () => {
 		let dispatches = 0;
 		let recoveries = 0;
