@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
+	type PersonalApiAgentReadAuditV1,
+	type PersonalApiAgentReadTransactionPortV1,
+	type PersonalApiAgentReadTransactionV1,
 	type PersonalApiCredentialAuditV1,
 	PersonalApiCredentialErrorV1,
 	type PersonalApiCredentialMetadataV1,
@@ -58,7 +61,7 @@ function idempotencyCondition(
 
 async function writeAudit(
 	writer: Pick<Transaction, "insert">,
-	event: PersonalApiCredentialAuditV1,
+	event: PersonalApiCredentialAuditV1 | PersonalApiAgentReadAuditV1,
 ): Promise<void> {
 	try {
 		await writer.insert(auditEvents).values({
@@ -193,7 +196,9 @@ function transactionOperations(
 
 /** Transaction Adapter for the Core personal credential use case. */
 export class PostgresPersonalApiCredentialStoreV1
-	implements PersonalApiCredentialTransactionPortV1
+	implements
+		PersonalApiCredentialTransactionPortV1,
+		PersonalApiAgentReadTransactionPortV1
 {
 	readonly #client;
 	readonly #database;
@@ -212,6 +217,63 @@ export class PostgresPersonalApiCredentialStoreV1
 	}
 
 	async recordAudit(event: PersonalApiCredentialAuditV1): Promise<void> {
+		await writeAudit(this.#database, event);
+	}
+
+	async executeAgentRead<T>(
+		work: (transaction: PersonalApiAgentReadTransactionV1) => Promise<T>,
+	): Promise<T> {
+		return this.#database.transaction(async (transaction) => {
+			const operations = transactionOperations(transaction);
+			return work({
+				lockUserDisabled: operations.lockUserDisabled,
+				databaseTime: operations.databaseTime,
+				async lockUsedCredential(credentialHash) {
+					const rows = await transaction
+						.select()
+						.from(platformApiCredentials)
+						.where(eq(platformApiCredentials.credentialHash, credentialHash))
+						.for("update")
+						.limit(2);
+					if (rows.length > 1)
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					const row = rows[0];
+					if (!row) return null;
+					if (
+						row.principalType !== "user" &&
+						row.principalType !== "application"
+					) {
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					}
+					return {
+						...metadata(row),
+						principalType: row.principalType,
+						principalId: row.principalId,
+					};
+				},
+				async lockAgentGrants() {
+					// Covers missing rows as well as existing grants during projection and audit.
+					await transaction.execute(
+						sql`lock table platform.agent_principal_grants in share mode`,
+					);
+				},
+				async markCredentialUsed(credentialId, usedAt) {
+					const rows = await transaction
+						.update(platformApiCredentials)
+						.set({ lastUsedAt: usedAt })
+						.where(eq(platformApiCredentials.id, credentialId))
+						.returning({ id: platformApiCredentials.id });
+					if (rows.length !== 1)
+						throw new PersonalApiCredentialErrorV1("unavailable");
+				},
+				recordAudit: (event) => writeAudit(transaction, event),
+			});
+		});
+	}
+
+	async recordAgentReadAudit(
+		event: PersonalApiAgentReadAuditV1,
+	): Promise<void> {
 		await writeAudit(this.#database, event);
 	}
 

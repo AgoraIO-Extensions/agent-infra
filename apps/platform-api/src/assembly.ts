@@ -6,6 +6,7 @@ import {
 	createApplicationFoundationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
+	createPersonalApiAgentReadUseCaseV1,
 	createPersonalApiCredentialUseCaseV1,
 	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
@@ -180,6 +181,10 @@ export function assemblePlatformApi(
 			resolveCurrentTaskUser(input.identity, userId, randomUUID()),
 	};
 	const personalApiCredentials = createPersonalApiCredentialUseCaseV1({
+		transaction: personalApiCredentialStore,
+		userDirectory,
+	});
+	const personalApiAgentRead = createPersonalApiAgentReadUseCaseV1({
 		transaction: personalApiCredentialStore,
 		userDirectory,
 	});
@@ -410,6 +415,8 @@ export function assemblePlatformApi(
 			prepareSecretReplacements: input.prepareApplicationSecrets,
 			readApplicationProjection: projections.readApplicationProjection,
 			readAgentProjection: projections.readManagementAgentProjection,
+			personalApiAgentRead,
+			readApiAgentProjection: projections.readApiAgentProjection,
 		},
 		configuration: {
 			identity: input.identity,

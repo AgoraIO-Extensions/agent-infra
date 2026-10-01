@@ -1216,6 +1216,80 @@ function isScopedAuditOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #1060 extends only the canonical audit action at its existing schema locations.
+function withoutPersonalApiAgentReadAudit(previous, current) {
+	const normalized = structuredClone(current);
+	let additions = 0;
+	const digest = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	function normalize(oldValue, newValue) {
+		if (
+			!oldValue ||
+			!newValue ||
+			typeof oldValue !== "object" ||
+			typeof newValue !== "object"
+		)
+			return;
+		if (
+			Array.isArray(oldValue.enum) &&
+			Array.isArray(newValue.enum) &&
+			digest(oldValue.enum) ===
+				"a6aecc0649885bcee5c2a40342a9b6a4adff5c4f66e7022e5d6f2233bed8dc85" &&
+			digest(newValue.enum) ===
+				"f5a1dca74b127815a080d4c3f30e16fd897ad6be5b31fae6f811353778081b5e"
+		) {
+			newValue.enum = structuredClone(oldValue.enum);
+			additions += 1;
+		}
+		for (const key of Object.keys(oldValue))
+			normalize(oldValue[key], newValue[key]);
+	}
+	normalize(previous, normalized);
+	return additions > 0 ? normalized : undefined;
+}
+
+function isPersonalApiAgentReadAuditOpenApiAddition(previous, current) {
+	const normalized = withoutPersonalApiAgentReadAudit(previous, current);
+	return normalized !== undefined && sameValue(previous, normalized);
+}
+
+// Preserve the #1059 guard and compose its exact addition with this read slice.
+function isPersonalApiAgentReadV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/agents";
+	const previousRead = previous.paths?.[path]?.get;
+	const currentRead = current.paths?.[path]?.get;
+	if (
+		!previousRead ||
+		!currentRead ||
+		previousRead.security !== undefined ||
+		previousRead.description !== undefined ||
+		previous.components?.securitySchemes?.platformApiCredential !== undefined
+	)
+		return false;
+	const addition = {
+		security: current.components?.securitySchemes?.platformApiCredential,
+		agentRead: {
+			security: currentRead.security,
+			description: currentRead.description,
+		},
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"32fc47a11f0ef7eabc2b68b4c50d2c8965ac10d7e674b681fb0ecc8f1df17954"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].get.security;
+	delete normalized.paths[path].get.description;
+	delete normalized.components.securitySchemes.platformApiCredential;
+	const baseline =
+		withoutPersonalApiAgentReadAudit(previous, normalized) ?? normalized;
+	return (
+		sameValue(previous, baseline) ||
+		isPersonalApiCredentialV2OpenApiAddition(previous, baseline)
+	);
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -1229,6 +1303,8 @@ function findBreakingChanges(previous, current) {
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
 			!isAdministratorAgentReadV2OpenApiAddition(previous, current) &&
 			!isPersonalApiCredentialV2OpenApiAddition(previous, current) &&
+			!isPersonalApiAgentReadV2OpenApiAddition(previous, current) &&
+			!isPersonalApiAgentReadAuditOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isConversationSseV2NotFoundAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&

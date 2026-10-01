@@ -56,6 +56,7 @@ export const ScopedPlatformAuditActionV1Schema = z.enum([
 	"api.credential.delivery.revoked",
 	"api.agent.grant.granted",
 	"api.agent.grant.revoked",
+	"api.agent.metadata.read",
 	"task.api.access",
 	"task.api.subscription.started",
 	"task.api.subscription.ended",
