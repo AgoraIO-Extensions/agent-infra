@@ -91,6 +91,27 @@ export interface WecomChannelStorePortV1 {
 		) => Promise<Omit<WecomReceiptV1, "receiptId">>,
 	): Promise<WecomAcceptanceV1>;
 }
+async function authorizeAdmission(
+	authorization: WecomAuthorizationPortV1,
+	message: WecomMessageV1,
+	signal: AbortSignal | undefined,
+): ReturnType<WecomAuthorizationPortV1["authorize"]> {
+	if (!signal) return authorization.authorize(message);
+	if (signal.aborted) return { outcome: "unavailable" };
+	let abort: (() => void) | undefined;
+	try {
+		const cancelled = new Promise<{ readonly outcome: "unavailable" }>(
+			(resolve) => {
+				abort = () => resolve({ outcome: "unavailable" });
+				signal.addEventListener("abort", abort, { once: true });
+				if (signal.aborted) abort();
+			},
+		);
+		return await Promise.race([authorization.authorize(message), cancelled]);
+	} finally {
+		if (abort) signal.removeEventListener("abort", abort);
+	}
+}
 function digest(values: readonly unknown[]) {
 	return createHash("sha256").update(JSON.stringify(values)).digest("hex");
 }
@@ -109,7 +130,9 @@ export function createWecomChannelV1(dependencies: {
 		async receive(
 			input: WecomMessageV1,
 			connectionFence?: WecomConnectionFenceV1,
+			signal?: AbortSignal,
 		): Promise<WecomAcceptanceV1> {
+			if (signal?.aborted) return { outcome: "unavailable" };
 			const value = snapshotAgentManagementDataObject(input);
 			requireAgentManagementExactKeys(value, [
 				"agentId",
@@ -145,7 +168,12 @@ export function createWecomChannelV1(dependencies: {
 			)
 				throw new Error("Invalid WeCom message");
 			const message = { ...value } as unknown as WecomMessageV1;
-			const identity = await dependencies.authorization.authorize(message);
+			const identity = await authorizeAdmission(
+				dependencies.authorization,
+				message,
+				signal,
+			);
+			if (signal?.aborted) return { outcome: "unavailable" };
 			if (identity.outcome !== "allowed") {
 				await dependencies.store.reject(
 					digest([message.kind, message.providerId, message.eventId]),
