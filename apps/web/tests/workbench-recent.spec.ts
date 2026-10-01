@@ -221,9 +221,7 @@ async function workbenchFixture(
 						observed.sessionReads.push({
 							userId: data.user.userId,
 							roles: data.user.roles,
-							generation: response.headers.get(
-								"X-Platform-Session-Generation",
-							),
+							generation: response.headers.get("X-Platform-Session-Generation"),
 						});
 						return body;
 					};
@@ -303,8 +301,7 @@ async function workbenchFixture(
 											? "PROVIDER_RATE_LIMITED"
 											: "RESOURCE_UNAVAILABLE",
 						message: "Controlled recent failure",
-						retryable:
-							continuationStatus === 429 || continuationStatus >= 500,
+						retryable: continuationStatus === 429 || continuationStatus >= 500,
 						traceId: "controlled-recent-failure",
 					}),
 				});
@@ -791,11 +788,12 @@ for (const boundary of [
 								window as unknown as {
 									controlledWorkbenchTransport: ControlledTransport;
 								}
-							).controlledWorkbenchTransport.started.flatMap((request, index) =>
-								request.path.startsWith("/api/v2/admin/") &&
-								request.status === null
-									? [{ index, path: request.path }]
-									: [],
+							).controlledWorkbenchTransport.started.flatMap(
+								(request, index) =>
+									request.path.startsWith("/api/v2/admin/") &&
+									request.status === null
+										? [{ index, path: request.path }]
+										: [],
 							),
 						)
 					: [];
@@ -834,13 +832,12 @@ for (const boundary of [
 				).toHaveCount(0);
 			}
 			expect(
-				await page.evaluate(
-					() =>
-						(
-							window as unknown as {
-								controlledWorkbenchTransport: ControlledTransport;
-							}
-						).controlledWorkbenchTransport.sessionReads.at(-1),
+				await page.evaluate(() =>
+					(
+						window as unknown as {
+							controlledWorkbenchTransport: ControlledTransport;
+						}
+					).controlledWorkbenchTransport.sessionReads.at(-1),
 				),
 			).toEqual(fixture.sessionReceipt());
 			// ACK follows the observed new-session UI, rather than the server
@@ -948,23 +945,21 @@ for (const boundary of [
 					.map((request) => request.cursor),
 			).toEqual([null]);
 			if (boundary !== "login generation") {
-				const administratorReads = await page.evaluate(
-					() =>
-						(
-							window as unknown as {
-								controlledWorkbenchTransport: ControlledTransport;
-							}
-						).controlledWorkbenchTransport.started.filter((request) =>
-							request.path.startsWith("/api/v2/admin/"),
-						),
+				const administratorReads = await page.evaluate(() =>
+					(
+						window as unknown as {
+							controlledWorkbenchTransport: ControlledTransport;
+						}
+					).controlledWorkbenchTransport.started.filter((request) =>
+						request.path.startsWith("/api/v2/admin/"),
+					),
 				);
 				expect(
 					administratorReads.filter((request) => request.acknowledged),
 				).toEqual([]);
 				const revalidationReads = fixture.requests.filter(
 					(request) =>
-						request.tag === "new" &&
-						request.path.startsWith("/api/v2/admin/"),
+						request.tag === "new" && request.path.startsWith("/api/v2/admin/"),
 				);
 				if (holdRecent === "continuation")
 					expect(revalidationReads.length).toBeGreaterThan(0);
