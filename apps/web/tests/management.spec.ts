@@ -1658,7 +1658,9 @@ for (const identityResponsibility of [
 				for (const level of option.reasoningLevels)
 					await expect(main.getByText(level, { exact: false })).toHaveCount(0);
 			}
-			await expect(main.getByText("Owner", { exact: true })).toBeVisible();
+			await expect(
+				main.getByRole("term").filter({ hasText: /^Owner$/ }),
+			).toBeVisible();
 			await expect(main.getByText("可用范围", { exact: true })).toBeVisible();
 			await expect(main.getByRole("link", { name: "开始对话" })).toHaveCount(0);
 			await expect(main.getByRole("button", { name: "开始对话" })).toHaveCount(
