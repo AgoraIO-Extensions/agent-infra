@@ -289,7 +289,7 @@ it("rejects rehashed tuples inconsistent with the persisted source or endpoint p
 				credential: {
 					secretId: option.secretRef.secretId,
 					version: option.secretRef.secretVersion,
-					isSet: true,
+					isSet: true as const,
 				},
 			})),
 		},
