@@ -203,12 +203,14 @@ describe("production application HTTP/Core/PostgreSQL chain", () => {
 			await stop(second);
 		}
 		expect(pair.map((response) => response.status).sort()).toEqual([200, 201]);
-		const results = await Promise.all(
-			pair.map(async (response) =>
-				ApplicationRegistrationResponseV1Schema.parse(await response.json()),
-			),
+		const results = await Promise.all(pair.map((response) => response.json()));
+		const firstResult = ApplicationRegistrationResponseV1Schema.parse(
+			results[0],
 		);
-		expect(results[0].metadata).toEqual(results[1].metadata);
+		const secondResult = ApplicationRegistrationResponseV1Schema.parse(
+			results[1],
+		);
+		expect(firstResult.metadata).toEqual(secondResult.metadata);
 		expect(await counts()).toEqual({
 			applications: 1,
 			idempotency: 1,
@@ -222,7 +224,7 @@ describe("production application HTTP/Core/PostgreSQL chain", () => {
 		expect(
 			ApplicationRegistrationResponseV1Schema.parse(await bob.json()).metadata
 				.applicationId,
-		).not.toBe(results[0].metadata.applicationId);
+		).not.toBe(firstResult.metadata.applicationId);
 	});
 	it("rejects application or Bearer identities before registration", async () => {
 		expect((await post("register_1", "application")).status).toBe(401);
