@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
 	RuntimeModelConfigurationV3Schema,
 	type RuntimeModelProtocolV1,
+	RuntimeModelProtocolV1Schema,
 } from "@agent-infra/contracts/runtime";
 import type {
 	AgentConfigurationModelOptionV1,
@@ -61,7 +62,50 @@ export const runtimeModelConfigurationVariableV1 =
 export interface StandardTemplateModelBindingV1 {
 	readonly templateId: string;
 	readonly imageDigest: string;
+	readonly driver: "codex" | "claude" | "acp" | "pi";
 	readonly protocol: RuntimeModelProtocolV1;
+}
+
+const templateBindingSchema = z
+	.strictObject({
+		templateId: z
+			.string()
+			.min(1)
+			.max(256)
+			.refine((value) =>
+				[...value].every(
+					(character) =>
+						character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127,
+				),
+			),
+		imageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+		driver: z.enum(["codex", "claude", "acp", "pi"]),
+		protocol: RuntimeModelProtocolV1Schema,
+	})
+	.refine(
+		(binding) =>
+			binding.protocol ===
+			(binding.driver === "codex"
+				? "openai-responses-v1"
+				: "anthropic-messages-v1"),
+	);
+
+/** Snapshot the trusted deployment tuples before any Store or Kubernetes operation. */
+export function validateStandardTemplateModelBindingsV1(
+	value: unknown,
+): readonly StandardTemplateModelBindingV1[] {
+	try {
+		const bindings = z.array(templateBindingSchema).parse(value);
+		const pairs = new Set(
+			bindings.map(({ templateId, imageDigest }) =>
+				JSON.stringify([templateId, imageDigest]),
+			),
+		);
+		if (pairs.size !== bindings.length) throw new Error();
+		return Object.freeze(bindings.map((binding) => Object.freeze(binding)));
+	} catch {
+		throw new ModelConfigurationErrorV1();
+	}
 }
 
 // Projection reads admitted model fields, not the configuration write schema.
@@ -80,7 +124,7 @@ export function standardTemplateModelProtocolV1(
 	source: AgentConfigurationSourceV1,
 	bindings: readonly StandardTemplateModelBindingV1[],
 ) {
-	const matches = bindings.filter(
+	const matches = validateStandardTemplateModelBindingsV1(bindings).filter(
 		(binding) =>
 			source.kind === "standard" &&
 			binding.templateId === source.templateId &&

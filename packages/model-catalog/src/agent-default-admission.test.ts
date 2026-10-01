@@ -34,6 +34,7 @@ function admissionInput(overrides: Record<string, unknown> = {}) {
 		template: {
 			templateId: "template-a",
 			imageDigest: "sha256:a",
+			driver: "codex" as const,
 			protocol: "openai-responses-v1" as const,
 			reasoningLevels: ["medium", "high"],
 		},
