@@ -48,6 +48,10 @@ const standardBinding = {
 };
 
 it("resolves distinct Drivers from exact trusted pairs sharing the same model protocol", () => {
+	const standardSource = configurationV2.source;
+	if (standardSource.kind !== "standard") {
+		throw new Error("Expected the admitted standard source fixture");
+	}
 	const bindings = [
 		{ ...standardBinding },
 		{
@@ -59,8 +63,7 @@ it("resolves distinct Drivers from exact trusted pairs sharing the same model pr
 	];
 	for (const binding of bindings) {
 		const source = {
-			...configurationV2.source,
-			kind: "standard" as const,
+			...standardSource,
 			templateId: binding.templateId,
 			imageDigest: binding.imageDigest,
 		};
@@ -76,7 +79,9 @@ it("resolves distinct Drivers from exact trusted pairs sharing the same model pr
 		).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
 	}
 	const snapshot = validateStandardTemplateModelBindingsV1(bindings);
-	Object.assign(bindings[0], { driver: "pi" });
+	const originalBinding = bindings[0];
+	if (!originalBinding) throw new Error("Expected the first trusted binding");
+	Object.assign(originalBinding, { driver: "pi" });
 	expect(snapshot[0]?.driver).toBe("claude");
 	expect(Object.isFrozen(snapshot)).toBe(true);
 	expect(Object.isFrozen(snapshot[0])).toBe(true);
