@@ -49,7 +49,7 @@ export function PersonalHistory({
 						key={item.conversationId}
 					>
 						<a
-							href={`/agents/${encodeURIComponent(agentId)}/conversations?conversation=${encodeURIComponent(item.conversationId)}`}
+							href={`/chat/${encodeURIComponent(agentId)}/${encodeURIComponent(item.conversationId)}`}
 							aria-current={
 								current === item.conversationId ? "page" : undefined
 							}
