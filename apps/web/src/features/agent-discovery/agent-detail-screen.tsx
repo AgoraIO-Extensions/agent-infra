@@ -130,9 +130,9 @@ export function AgentDetailScreen({
 						(ready ? (
 							<Link
 								className={buttonVariants()}
-								to="/agents/$agentId/conversations"
-								params={{ agentId: agent.agentId }}
-								search={{ conversation: undefined, view: undefined }}
+								to="/chat/$agentId/{-$conversationId}"
+								params={{ agentId: agent.agentId, conversationId: undefined }}
+								search={{ view: undefined }}
 							>
 								<MessageSquare aria-hidden="true" />
 								开始对话
@@ -174,9 +174,9 @@ export function AgentDetailScreen({
 						</span>
 						<Link
 							className={buttonVariants({ variant: "ghost" })}
-							to="/agents/$agentId/conversations"
-							params={{ agentId: agent.agentId }}
-							search={{ conversation: undefined, view: "history" }}
+							to="/chat/$agentId/{-$conversationId}"
+							params={{ agentId: agent.agentId, conversationId: undefined }}
+							search={{ view: "history" }}
 						>
 							<History aria-hidden="true" />
 							个人历史

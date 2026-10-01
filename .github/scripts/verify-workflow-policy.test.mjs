@@ -981,6 +981,7 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   ]);
   assert.deepEqual(workflow.jobs.analyze.permissions, {
     contents: "read",
+    issues: "read",
     "pull-requests": "read",
   });
   assert.deepEqual(workflow.jobs.suggestions.permissions, {
@@ -1096,6 +1097,43 @@ test("uses pinned PR-Agent official inline publishing", async () => {
       error.includes("official inline publishing"),
     ),
   );
+});
+
+test("requires trusted complete primary Issue preparation and safe Analysis logs", async () => {
+  const workflows = await actualWorkflows();
+  const analyze = workflows["pr-agent-review.yml"].jobs.analyze;
+  const prepare = analyze.steps.find((step) => step.id === "primary-issue");
+  const review = analyze.steps.find((step) => step.id === "pr-agent");
+  assert.equal(prepare.run, "node .github/scripts/pr-agent-primary-issue.mjs");
+  assert.equal(review.env.related_tickets, "${{ steps.primary-issue.outputs.related_tickets }}");
+  assert.equal(review.env["config.log_level"], "INFO");
+  assert.equal(review.env["config.verbosity_level"], "0");
+  const rejected = () => assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("official inline publishing")));
+  for (const permission of [undefined, "write"]) {
+    if (permission === undefined) delete analyze.permissions.issues;
+    else analyze.permissions.issues = permission;
+    rejected();
+  }
+  analyze.permissions.issues = "read";
+  for (const key of ["related_tickets", "config.log_level", "config.verbosity_level"]) {
+    const value = review.env[key];
+    review.env[key] = "unsafe";
+    rejected();
+    review.env[key] = value;
+  }
+  prepare["continue-on-error"] = true;
+  rejected();
+  delete prepare["continue-on-error"];
+  prepare.env.ISSUE_BODY = "${{ github.event.pull_request.body }}";
+  rejected();
+  delete prepare.env.ISSUE_BODY;
+  const index = analyze.steps.indexOf(prepare);
+  analyze.steps.splice(index, 1);
+  analyze.steps.push(prepare);
+  rejected();
+  analyze.steps.pop();
+  analyze.steps.splice(index, 0, prepare);
+  assert.deepEqual(validateWorkflowDocuments(workflows), []);
 });
 
 test("requires bounded PR-Agent review chunking and matching immutable versions", async () => {

@@ -33,6 +33,11 @@ export async function renderWithAgentRouter(content: ReactNode) {
 		path: "/agents/$agentId/configuration",
 		component: () => null,
 	});
+	const chatRoute = createRoute({
+		getParentRoute: () => rootRoute,
+		path: "/chat/$agentId/{-$conversationId}",
+		component: () => null,
+	});
 	const router = createRouter({
 		history: createMemoryHistory({ initialEntries: ["/"] }),
 		routeTree: rootRoute.addChildren([
@@ -40,6 +45,7 @@ export async function renderWithAgentRouter(content: ReactNode) {
 			agentsRoute,
 			agentDetailRoute,
 			agentConfigurationRoute,
+			chatRoute,
 		]),
 	});
 	await router.load();

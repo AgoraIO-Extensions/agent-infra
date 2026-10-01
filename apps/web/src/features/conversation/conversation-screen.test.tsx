@@ -581,7 +581,7 @@ describe("functional conversation screen", () => {
 			name: /Test conversation/,
 		});
 		expect(historyLink.getAttribute("href")).toBe(
-			"/agents/agent-1/conversations?conversation=conversation-1",
+			"/chat/agent-1/conversation-1",
 		);
 		fireEvent.click(historyLink, { ctrlKey: true });
 		expect(props.onConversationChange).not.toHaveBeenCalled();

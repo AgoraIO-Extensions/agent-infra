@@ -39,8 +39,8 @@ function runFailure(provider, headSha, runResult) {
   return null;
 }
 
-function jobLogMessages(log) {
-  const messages = [];
+function jobLogRecords(log) {
+  const records = [];
   for (const line of log.split(/\r?\n/)) {
     const separator = line.indexOf(" ");
     if (
@@ -50,13 +50,13 @@ function jobLogMessages(log) {
       continue;
     }
     try {
-      const message = JSON.parse(line.slice(separator + 1))?.record?.message;
-      if (typeof message === "string") messages.push(message);
+      const record = JSON.parse(line.slice(separator + 1))?.record;
+      if (typeof record?.message === "string") records.push(record);
     } catch {
       continue;
     }
   }
-  return messages;
+  return records;
 }
 
 function evaluatePrAgent({
@@ -78,7 +78,18 @@ function evaluatePrAgent({
     return result("pr-agent", expectedHead, "failure", "review-output-invalid");
   }
 
-  const messages = jobLogMessages(analysisLog);
+  const records = jobLogRecords(analysisLog);
+  // A native input omission is independent of the existing diff coverage test.
+  // Match the logger call site so the same text in PR/Issue data cannot reject it.
+  if (records.some((record) =>
+    record.message === "Clipped related tickets to preserve the prompt token budget" &&
+    record.name === "pr_agent.tools.ticket_pr_compliance_check" &&
+    record.function === "fit_related_tickets_to_prompt_budget" &&
+    record.level?.name === "INFO",
+  )) {
+    return result("pr-agent", expectedHead, "failure", "review-input-incomplete");
+  }
+  const messages = records.map((record) => record.message);
   const completeMatches = messages.filter((message) =>
     FULL_DIFF_PATTERN.test(message),
   );
