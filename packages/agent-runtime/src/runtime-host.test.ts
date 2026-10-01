@@ -10,6 +10,7 @@ import type {
 	RuntimeSubmitTurnRequestV2,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeDriver } from "./driver.js";
 import {
 	ingressVerifiedRuntimeHost,
 	runtimeGrantFixture,
@@ -151,6 +152,7 @@ describe("RuntimeHost durable Session", () => {
 			const driver = await FakeRuntimeDriver.open(
 				join(directory, "driver.json"),
 			);
+			const eventDriver: RuntimeDriver = driver;
 			const store = await FileRuntimeStore.open(join(directory, "host.json"));
 			const runtimeHost = await host(store, driver);
 			const submittedRequest = submitRequest();
@@ -211,17 +213,21 @@ describe("RuntimeHost durable Session", () => {
 			if (text?.type !== "text") throw new Error("Missing fixture text");
 			if (scenario === "invalid V1") text.payload.delta = "";
 			if (scenario === "foreign V1") text.executionId = "other-execution";
-			const replay = vi.spyOn(driver, "replayEvents").mockResolvedValue(events);
+			const replay = vi
+				.spyOn(eventDriver, "replayEvents")
+				.mockResolvedValue(events);
 			let streamClosed = false;
-			const subscribe = vi.spyOn(driver, "subscribeEvents").mockResolvedValue(
-				(async function* () {
-					try {
-						yield* events;
-					} finally {
-						streamClosed = true;
-					}
-				})(),
-			);
+			const subscribe = vi
+				.spyOn(eventDriver, "subscribeEvents")
+				.mockResolvedValue(
+					(async function* () {
+						try {
+							yield* events;
+						} finally {
+							streamClosed = true;
+						}
+					})(),
+				);
 			if (scenario === "mixed") {
 				await expect(runtimeHost.replay(request)).resolves.toEqual({
 					schemaVersion: 1,
