@@ -330,7 +330,7 @@ it("recovers only the original control ref through production Worker/Core and Po
 					success ? "unknown" : scenario === "takeover" ? "stale" : "retry",
 				);
 				const [conversation] =
-					await sql`select host_session_ref, status, session_generation, authorization_revision from platform.conversations where id = ${conversationId}`;
+					await sql`select host_session_ref, status, session_generation::integer as session_generation, authorization_revision from platform.conversations where id = ${conversationId}`;
 				expect(conversation).toEqual({
 					host_session_ref: success ? hostSessionRef : null,
 					status: "active",
@@ -418,7 +418,7 @@ it("recovers only the original control ref through production Worker/Core and Po
 							"events/ack",
 						]);
 						const [finished] =
-							await sql`select execution_id, turn_id, session_generation, authorization_revision, last_runtime_cursor, status from platform.conversation_executions where execution_id = ${executionId}`;
+							await sql`select execution_id, turn_id, session_generation::integer as session_generation, authorization_revision, last_runtime_cursor, status from platform.conversation_executions where execution_id = ${executionId}`;
 						expect(finished).toEqual({
 							execution_id: executionId,
 							turn_id: turnId,
