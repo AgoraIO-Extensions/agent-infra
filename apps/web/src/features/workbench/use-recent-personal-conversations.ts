@@ -72,10 +72,7 @@ export function useRecentPersonalConversations({
 			}
 		},
 		getNextPageParam: (page, _pages, _pageParam, pageParams) => {
-			if (
-				page.nextCursor !== null &&
-				(pageParams.includes(page.nextCursor) || pageParams.length >= 100)
-			) {
+			if (page.nextCursor !== null && pageParams.includes(page.nextCursor)) {
 				queueMicrotask(() => block(invalidRecentPage().state));
 				return null;
 			}

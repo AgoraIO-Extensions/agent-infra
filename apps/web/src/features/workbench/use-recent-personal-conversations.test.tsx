@@ -121,6 +121,35 @@ describe("Personal recent login and continuation lifetime", () => {
 		).toBe(true);
 	});
 
+	it("keeps valid history beyond 100 user-requested pages without clearing rows or blocking continuation", async () => {
+		const hook = setup((request) => {
+			const cursor = new URL(request.url).searchParams.get("cursor");
+			const index = cursor === null ? 0 : Number(cursor.slice("page-".length));
+			return Response.json(page([`history-${index}`], `page-${index + 1}`));
+		});
+		await waitFor(() => expect(hook.result.current.state.kind).toBe("ready"));
+		const initialReads = hook.requests.length;
+		for (let index = 0; index < 101; index++)
+			await act(async () => hook.result.current.loadMore());
+		expect(hook.requests).toHaveLength(initialReads + 101);
+		await waitFor(() =>
+			expect(hook.result.current.state).toMatchObject({
+				kind: "ready",
+				conversations: Array.from({ length: 102 }, (_, index) => ({
+					conversationId: `history-${index}`,
+				})),
+				nextCursor: "page-102",
+			}),
+		);
+		expect(
+			hook.requests.every(
+				(request) =>
+					request.method === "GET" &&
+					new URL(request.url).searchParams.get("limit") === "50",
+			),
+		).toBe(true);
+	});
+
 	it("removes prior rows after a continuation failure; retained load-more cannot revive them and retry starts fresh", async () => {
 		let recover = false;
 		const hook = setup((request) =>
