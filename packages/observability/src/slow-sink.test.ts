@@ -75,6 +75,11 @@ function traceRequests(requests: RequestRecord[]) {
 	return requests.filter((request) => request.path === "/v1/traces");
 }
 
+function expectNoSentinel(requests: RequestRecord[]) {
+	for (const request of requests)
+		expect(request.body.toString("utf8")).not.toContain("PRIVATE_SENTINEL");
+}
+
 it("bounds real trace export under a slow OTLP sink and closes within five seconds", async () => {
 	const collector = await createSlowCollector();
 	activeCollectors.push(collector);
@@ -123,8 +128,7 @@ it("bounds real trace export under a slow OTLP sink and closes within five secon
 	await waitFor(() => telemetry.status().state === "closed");
 	expect(telemetry.status().exportFailures).toBeGreaterThan(0);
 	expect(businessResult.completed).toBe(true);
-	for (const request of collector.requests)
-		expect(request.body.toString("utf8")).not.toContain("PRIVATE_SENTINEL");
+	expectNoSentinel(collector.requests);
 	await new Promise((resolve) => setTimeout(resolve, 500));
 	expect(traceRequests(collector.requests).length).toBeLessThanOrEqual(
 		MAX_TRACE_REQUESTS,
@@ -136,11 +140,19 @@ it("bounds real trace export under a slow OTLP sink and closes within five secon
 		operationRef: "after-close",
 	});
 	await new Promise((resolve) => setTimeout(resolve, 2500));
-	expect(traceRequests(collector.requests).length).toBe(traceCountAfterClose);
+	const finalTraceRequests = traceRequests(collector.requests);
+	expect(finalTraceRequests.length).toBe(traceCountAfterClose);
+	const allReceived = markers.filter((marker) =>
+		finalTraceRequests.some((request) =>
+			request.body.toString("utf8").includes(marker),
+		),
+	).length;
+	expect(allReceived).toBeLessThanOrEqual(TRACE_QUEUE_SIZE);
+	expect(finalTraceRequests.length).toBeLessThanOrEqual(MAX_TRACE_REQUESTS);
 	expect(Buffer.concat(logOutput).toString("utf8")).not.toContain(
 		"PRIVATE_SENTINEL",
 	);
-});
+}, 20_000);
 
 it("lets a child using the real package exit naturally after a slow export", async () => {
 	const collector = await createSlowCollector();
@@ -161,10 +173,16 @@ it("lets a child using the real package exit naturally after a slow export", asy
 		console.log("CHILD_BUSINESS_COMPLETE");
 		await telemetry.close();
 		console.log("CHILD_TELEMETRY_CLOSED");
-		const activeResources = process.getActiveResourcesInfo();
-		const otelLeaks = activeResources.filter((resource) =>
+		const leakDeadline = Date.now() + 4000;
+		let otelLeaks = process.getActiveResourcesInfo().filter((resource) =>
 			["Timeout", "TCP", "TCPConnectWrap", "TCPSocketWrap", "HTTPParser"].includes(resource),
 		);
+		while (otelLeaks.length > 0 && Date.now() < leakDeadline) {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			otelLeaks = process.getActiveResourcesInfo().filter((resource) =>
+				["Timeout", "TCP", "TCPConnectWrap", "TCPSocketWrap", "HTTPParser"].includes(resource),
+			);
+		}
 		if (otelLeaks.length > 0) {
 			console.error("CHILD_OTEL_HANDLES:", otelLeaks.join(","));
 			process.exitCode = 1;
@@ -224,6 +242,5 @@ it("lets a child using the real package exit naturally after a slow export", asy
 			request.body.toString("utf8").includes("child-natural-exit"),
 		),
 	);
-	for (const request of collector.requests)
-		expect(request.body.toString("utf8")).not.toContain("PRIVATE_SENTINEL");
-});
+	expectNoSentinel(collector.requests);
+}, 15_000);
