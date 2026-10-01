@@ -13,7 +13,7 @@ export function createDeploymentIdentityScope(identity: IdentityAdapter) {
 				throw new Error("Authenticated request scope is unavailable");
 			return request;
 		},
-		requestScope(request: Request, work: () => Promise<void>): Promise<void> {
+		requestScope<T>(request: Request, work: () => Promise<T>): Promise<T> {
 			return requests.run(request, work);
 		},
 		async currentIdentity(traceId: string) {

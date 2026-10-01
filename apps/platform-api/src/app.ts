@@ -55,8 +55,8 @@ type ApiObservability = Pick<
 export interface PlatformAppDependencies {
 	readonly requestScope?: (
 		request: Request,
-		work: () => Promise<void>,
-	) => Promise<void>;
+		work: () => Promise<Response>,
+	) => Promise<Response>;
 	readonly files?: FileRoutesDependenciesV1;
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
@@ -105,7 +105,14 @@ export function createPlatformApp(
 	const app = createPlatformHealthApp(observability);
 	const requestScope = dependencies.requestScope;
 	if (requestScope)
-		app.use("*", (context, next) => requestScope(context.req.raw, next));
+		app.use("*", async (context, next) => {
+			context.res = await requestScope(context.req.raw, async () => {
+				await next();
+				if (context.error && context.res.status >= 500) throw context.error;
+				return context.res;
+			});
+			return context.res;
+		});
 	if (dependencies.wecomSetup)
 		registerWecomSetupRoutesV1(app, dependencies.wecomSetup);
 	if (dependencies.wecomApplicationSetup)
