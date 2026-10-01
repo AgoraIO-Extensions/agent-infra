@@ -16,7 +16,8 @@ jobs:
   analyze:
     name: PR-Agent Analysis
     outputs:
-      review: ${{ steps.pr-agent.outputs.review }}
+      # Transfer only Publisher-consumed findings; runner secret filtering still applies.
+      review: ${{ steps.review-output.outputs.review }}
     if: >-
       vars.PR_REVIEW_PROVIDER != 'claude' &&
       github.event.sender.type != 'Bot' &&
@@ -102,6 +103,12 @@ jobs:
           github_action_config.auto_improve: "false"
           github_action_config.pr_actions: >-
             ["opened", "reopened", "ready_for_review", "review_requested", "edited"]
+
+      - name: Prepare review findings output
+        id: review-output
+        env:
+          PR_AGENT_REVIEW: ${{ steps.pr-agent.outputs.review }}
+        run: node .github/scripts/pr-agent-review-output.mjs
 
   publish:
     name: PR-Agent Publish Review

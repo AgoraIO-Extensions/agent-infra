@@ -1641,7 +1641,7 @@ export function validateWorkflowDocuments(workflows) {
     prAgentCoverage?.["continue-on-error"] !== true ||
     Object.keys(prAgent?.jobs ?? {}).sort().join("\0") !==
       ["analyze", "coverage", "outcome", "publish", "suggestions"].join("\0") ||
-    prAgentAnalyze?.steps?.length !== 4 ||
+    prAgentAnalyze?.steps?.length !== 5 ||
     !sameObject(prAgentAnalyze?.steps?.[1], {
       name: "Set up Node.js", uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
       with: { "node-version": 24 },
@@ -1653,7 +1653,12 @@ export function validateWorkflowDocuments(workflows) {
     }) ||
     prAgentAnalyze?.steps?.[0] !== prAgentAnalyzeCheckout ||
     prAgentAnalyze?.steps?.[3] !== prAgentAction ||
-    !sameObject(prAgentAnalyze?.outputs, { review: "${{ steps.pr-agent.outputs.review }}" }) ||
+    !sameObject(prAgentAnalyze?.steps?.[4], {
+      name: "Prepare review findings output", id: "review-output",
+      env: { PR_AGENT_REVIEW: "${{ steps.pr-agent.outputs.review }}" },
+      run: "node .github/scripts/pr-agent-review-output.mjs",
+    }) ||
+    !sameObject(prAgentAnalyze?.outputs, { review: "${{ steps.review-output.outputs.review }}" }) ||
     !sameObject(prAgentPublish, {
       name: "PR-Agent Publish Review", needs: "analyze", "runs-on": "ubuntu-24.04", "timeout-minutes": 5,
       permissions: { contents: "read", "pull-requests": "write" },
