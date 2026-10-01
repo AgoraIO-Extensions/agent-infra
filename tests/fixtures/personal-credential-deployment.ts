@@ -20,8 +20,8 @@ const unused = async (): Promise<never> => {
 	throw new Error("Unused personal credential test dependency");
 };
 
-// Only current identity facts are controlled; all business and persistence
-// adapters are created by the production deployment loader and assembly.
+// Current identity and standard-Agent presentation are controlled; business
+// and persistence adapters use the production deployment loader and assembly.
 export function createPlatformApiAssemblyInput(): PlatformApiAssemblyInput {
 	if (!state.databaseUrl) throw new Error("Test database is not configured");
 	return {
@@ -87,6 +87,43 @@ export function createPlatformApiAssemblyInput(): PlatformApiAssemblyInput {
 		allocateApplicationIds: unused,
 		prepareApplicationSecrets: unused,
 		prepareConfigurationSecrets: unused,
-		presentAgent: unused,
+		async presentAgent({ configuration }) {
+			if (configuration.source.kind !== "standard") return unused();
+			return {
+				source: {
+					kind: "standard",
+					templateId: configuration.source.templateId,
+				},
+				resourceProfile: {
+					profileId: "controlled-standard",
+					displayName: "Controlled standard",
+					estimatedResources: {
+						cpuMillicores: 1000,
+						memoryMiB: 1024,
+						storageGiB: 1,
+					},
+				},
+				modelOptions: configuration.modelOptions.map((option) => ({
+					...option,
+					reasoningLevels: [...option.reasoningLevels],
+					displayName: option.modelId,
+				})),
+				channels: [
+					{ kind: "web", status: "available" },
+					...configuration.channelKinds.map((kind) => ({
+						kind,
+						status: "binding" as const,
+					})),
+				],
+				capabilities: {
+					modelSelection: false,
+					attachments: false,
+					resultFiles: false,
+					connection: false,
+					supplementaryInstruction: false,
+				},
+				interactionUrl: null,
+			};
+		},
 	};
 }

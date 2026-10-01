@@ -1,0 +1,805 @@
+{
+	"classification": "source-derived synthetic postTask28 schema/data/history; not original1935 database export",
+	"sourceRevision": "5155cd188fbbce8aa4fc72f5f59d35443a5b5c21",
+	"sourceTest": "apps/platform-api/src/task-api-upgrade.test.ts",
+	"sourceTestSHA256": "47499ed0fb765cd190cb9ff79d71887cf898186372093b725a2a4640ef311901",
+	"sourceJournalSHA256": "b23c477b61723aca3f61ad5431c6f2e0c10035bc84c41c9096d8a12ccf0481c9",
+	"sourceSnapshotSHA256": "25807f911d18ee995114ae217c081413b67ac3efab3096a338f85b42f79077c4",
+	"sourceTail": [
+		{
+			"idx": 25,
+			"tag": "0025_credential_delivery_approval",
+			"when": 1790724094107,
+			"sqlSHA256": "8d80ac3030f300f0ed93ba3692a74c67f337921c0d4d95447e13fd4f535b82b0",
+			"sourcePath": "migrations/platform/0025_credential_delivery_approval.sql",
+			"postStateDDLSourceOrdinals": [0, 1, 2, 3, 4],
+			"omittedHistoricalDataTransformationOrdinals": [5]
+		},
+		{
+			"idx": 26,
+			"tag": "0026_ldap_identity_authority",
+			"when": 1790724095107,
+			"sqlSHA256": "714286ee36c08852ec532462e180ab83539af6b7619eed38c8f37e0d0ee665f7",
+			"sourcePath": "migrations/platform/0026_ldap_identity_authority.sql",
+			"postStateDDLSourceOrdinals": [0, 1, 2],
+			"omittedHistoricalDataTransformationOrdinals": []
+		},
+		{
+			"idx": 27,
+			"tag": "0027_relay_key_authority",
+			"when": 1790738152673,
+			"sqlSHA256": "c8c44572a4a2d9a659b302646612d6d885a320fff5ed7b8f0cd38752405c8863",
+			"sourcePath": "migrations/platform/0027_relay_key_authority.sql",
+			"postStateDDLSourceOrdinals": [0, 1, 2, 3],
+			"omittedHistoricalDataTransformationOrdinals": []
+		},
+		{
+			"idx": 28,
+			"tag": "0028_durable_task_api",
+			"when": 1790746349762,
+			"sqlSHA256": "cbf753db9b8040f111e0599682aef0150bc20eb84225d4ad95b335dfb3417644",
+			"sourcePath": "migrations/platform/0028_durable_task_api.sql",
+			"postStateDDLSourceOrdinals": [
+				0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 17, 18, 19, 20, 21, 22,
+				23, 24, 25, 26, 27, 28
+			],
+			"omittedHistoricalDataTransformationOrdinals": [12, 15, 16]
+		}
+	],
+	"postStateSQLSHA256": "a5a8a2a8b80752128277ffe2502baa7a98ad019b914f53f1e92ef12e1bf59004",
+	"expectedHistory": [
+		{
+			"idx": 0,
+			"tag": "0000_platform_infrastructure",
+			"when": 1788086787945,
+			"sha256": "f0c9bdaa4e8157cbc63d5c1a2eed78ee8ac04df8539503f4a082c5a168ec5f44"
+		},
+		{
+			"idx": 1,
+			"tag": "0001_application_foundation",
+			"when": 1788092286715,
+			"sha256": "450f5ad82a5312a449a781ae5b612f0907160e7ceeb728cdafbcf6ba568a7f29"
+		},
+		{
+			"idx": 2,
+			"tag": "0002_agent_persistence",
+			"when": 1788247137478,
+			"sha256": "74fc97032742dcd94b150f3646d65cf9c2a615d5135008565e62ce9046062791"
+		},
+		{
+			"idx": 3,
+			"tag": "0003_secret_records",
+			"when": 1788435756848,
+			"sha256": "22e5389c9a2c71f63c3f97ca24a760fcf90d7a845454a980cd86b94a894ae8b7"
+		},
+		{
+			"idx": 4,
+			"tag": "0004_conversation_execution",
+			"when": 1788509799806,
+			"sha256": "09d32aefced0352f21d410a4d1e9be2fc21208604e03260d43b821f7aff9bf64"
+		},
+		{
+			"idx": 5,
+			"tag": "0005_conversation_events",
+			"when": 1788522609767,
+			"sha256": "ba4a6e2ab4fd3b4e818fd420d2f5b64fd294e6d4f72267de5d3e325119ff78e8"
+		},
+		{
+			"idx": 6,
+			"tag": "0006_secret_candidate_activation",
+			"when": 1788603181370,
+			"sha256": "1e96e507eed335ebab862f9247df942b6c1d63848ee2837d2dbf19c636df0948"
+		},
+		{
+			"idx": 7,
+			"tag": "0007_secret_key_rotation",
+			"when": 1788624140845,
+			"sha256": "e318c5601b1ad6ef556f907c47c76735af921ef1a1a541d0b4572a83c2b0ab3b"
+		},
+		{
+			"idx": 8,
+			"tag": "0008_conversation_model_selection",
+			"when": 1788671305002,
+			"sha256": "99b1e2194e510708b82e75b1ad55255cd071258f380da965bf69552ad556c10f"
+		},
+		{
+			"idx": 9,
+			"tag": "0009_conversation_event_sources",
+			"when": 1788702289211,
+			"sha256": "5f2d272be6725de042ed65790cdf56a222bc8edd62c236d573c7b1b5b6760778"
+		},
+		{
+			"idx": 10,
+			"tag": "0010_conversation_event_persistence_time",
+			"when": 1788757593205,
+			"sha256": "fad7b36232af638b71181266a356cf2ac8d6cd185ef0f24fcc5c2094263af1aa"
+		},
+		{
+			"idx": 11,
+			"tag": "0011_conversation_message_delivery_failure",
+			"when": 1788765830613,
+			"sha256": "38cdbbf661a8449a4a524d3ba40e1298a7a6804d82318713d669363c954a9885"
+		},
+		{
+			"idx": 12,
+			"tag": "0012_workload_reconciliation",
+			"when": 1788786782153,
+			"sha256": "8b47092d7b2dba2493f7748cd1917c86aaaaf6d01bbe7b828fc61327020ce3e2"
+		},
+		{
+			"idx": 13,
+			"tag": "0013_file_authority",
+			"when": 1789460914953,
+			"sha256": "c8fe540be1f1825ef9ae21af027976354d03c4fca4ade22ccf160a7779039b0a"
+		},
+		{
+			"idx": 14,
+			"tag": "0014_configuration_v2",
+			"when": 1789460914954,
+			"sha256": "f998c77664222a6f0f3e7f39a703c12e4587ee21fd354a64f2214cb0d49c8307"
+		},
+		{
+			"idx": 15,
+			"tag": "0015_trusted_task_authorization",
+			"when": 1789460914955,
+			"sha256": "50dd35f5635ce544d65e760c67ddfe4235b13d576ebba694701644a5ea430a0a"
+		},
+		{
+			"idx": 16,
+			"tag": "0016_conversation_generation_tombstones",
+			"when": 1789460914956,
+			"sha256": "4604db1ec23c894eb1fee5a09fb31b75c467a79a32acc05cb3cde337b3094905"
+		},
+		{
+			"idx": 17,
+			"tag": "0017_wecom_text",
+			"when": 1789460914957,
+			"sha256": "192445334cd7f5c99359edc47e012ed4517bb3f22c9b80a21912f4914cb4ffa5"
+		},
+		{
+			"idx": 18,
+			"tag": "0018_wecom_setup",
+			"when": 1789460914958,
+			"sha256": "0bcb98ce84bf212f82a54e1553c6f31cb1e5dc9bbd708c7993966ec1bb4761b6"
+		},
+		{
+			"idx": 19,
+			"tag": "0019_trusted_task_authorization_integrity",
+			"when": 1789819160039,
+			"sha256": "bdb662d33fb824ba2c05a7fb5082b5982e62c0f3bc27aa73fbef76b58a01deb8"
+		},
+		{
+			"idx": 20,
+			"tag": "0020_task_boundary_generation_binding",
+			"when": 1790158201320,
+			"sha256": "732663b051cf2302d0baf4b893106a88a9575d1d78a8b474d856d4f58e5ab833"
+		},
+		{
+			"idx": 21,
+			"tag": "0021_browser_sessions",
+			"when": 1790663754117,
+			"sha256": "b8ec58cb6a4638c97c032c997709dac63b28fdb71878cec1a610ab051e4ac7b1"
+		},
+		{
+			"idx": 22,
+			"tag": "0022_wecom_application_setup",
+			"when": 1790686705954,
+			"sha256": "94557c2e21042afb5277628bcbc3f1baf6f21d8de56a9829c564a85078746ac2"
+		},
+		{
+			"idx": 23,
+			"tag": "0023_wecom_replacement_probe",
+			"when": 1790699393053,
+			"sha256": "1afa69a3c5edbf23cd0085897d086ce3bffbd617243f1e1f7afa1855a126e112"
+		},
+		{
+			"idx": 24,
+			"tag": "0024_application_targets",
+			"when": 1790724093107,
+			"sha256": "e2ed6c2535c1f8c4dbb62ecfd93f52e81cb4d018a9527a2c3ca367898d4746d1"
+		},
+		{
+			"idx": 25,
+			"tag": "0025_credential_delivery_approval",
+			"when": 1790724094107,
+			"sha256": "8d80ac3030f300f0ed93ba3692a74c67f337921c0d4d95447e13fd4f535b82b0"
+		},
+		{
+			"idx": 26,
+			"tag": "0026_ldap_identity_authority",
+			"when": 1790724095107,
+			"sha256": "714286ee36c08852ec532462e180ab83539af6b7619eed38c8f37e0d0ee665f7"
+		},
+		{
+			"idx": 27,
+			"tag": "0027_relay_key_authority",
+			"when": 1790738152673,
+			"sha256": "c8c44572a4a2d9a659b302646612d6d885a320fff5ed7b8f0cd38752405c8863"
+		},
+		{
+			"idx": 28,
+			"tag": "0028_durable_task_api",
+			"when": 1790746349762,
+			"sha256": "cbf753db9b8040f111e0599682aef0150bc20eb84225d4ad95b335dfb3417644"
+		}
+	],
+	"expectedSchemaDelta": {
+		"platform.api_credential_delivery_grants": {
+			"columns": {
+				"pending_scopes": {
+					"type": "jsonb",
+					"notNull": false
+				},
+				"pending_expires_at": {
+					"type": "timestamp with time zone",
+					"notNull": false
+				}
+			},
+			"constraints": {
+				"compositePrimaryKeys": {},
+				"foreignKeys": {},
+				"uniqueConstraints": {},
+				"checkConstraints": {
+					"api_credential_delivery_pending_scopes_array": {
+						"name": "api_credential_delivery_pending_scopes_array",
+						"value": "\"platform\".\"api_credential_delivery_grants\".\"pending_scopes\" is null or (jsonb_typeof(\"platform\".\"api_credential_delivery_grants\".\"pending_scopes\") = 'array' and jsonb_array_length(\"platform\".\"api_credential_delivery_grants\".\"pending_scopes\") > 0)"
+					}
+				},
+				"indexes": {}
+			}
+		},
+		"platform.conversation_events": {
+			"columns": {},
+			"constraints": {
+				"compositePrimaryKeys": {},
+				"foreignKeys": {},
+				"uniqueConstraints": {},
+				"checkConstraints": {
+					"conversation_event_source_binding": {
+						"name": "conversation_event_source_binding",
+						"value": "(\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'runtime'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NOT NULL\n\t\t\t\t\tAND char_length(\"platform\".\"conversation_events\".\"runtime_cursor\") > 0\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" NOT IN ('model.selection.fell_back', 'task.status')\n\t\t\t\t) OR (\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'platform'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NULL\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" IN ('model.selection.fell_back', 'task.status')\n\t\t\t\t)"
+					}
+				},
+				"indexes": {}
+			}
+		},
+		"platform.conversation_executions": {
+			"columns": {
+				"task_wait_order": {
+					"type": "bigint",
+					"notNull": false
+				},
+				"task_wait_deadline": {
+					"type": "timestamp with time zone",
+					"notNull": false
+				},
+				"execution_source": {
+					"type": "text",
+					"notNull": false
+				},
+				"relay_key_purpose": {
+					"type": "text",
+					"notNull": false
+				},
+				"relay_key_subject_id": {
+					"type": "text",
+					"notNull": false
+				},
+				"relay_key_id": {
+					"type": "text",
+					"notNull": false
+				},
+				"relay_key_version": {
+					"type": "bigint",
+					"notNull": false
+				},
+				"runtime_submit_protocol": {
+					"type": "text",
+					"notNull": false
+				},
+				"original_operation_digest": {
+					"type": "text",
+					"notNull": false
+				},
+				"original_submit_host_session_ref": {
+					"type": "text",
+					"notNull": false
+				}
+			},
+			"constraints": {
+				"compositePrimaryKeys": {},
+				"foreignKeys": {
+					"conversation_execution_key_version_fk": {
+						"name": "conversation_execution_key_version_fk",
+						"tableFrom": "conversation_executions",
+						"tableTo": "relay_key_versions",
+						"schemaTo": "platform",
+						"columnsFrom": [
+							"relay_key_purpose",
+							"relay_key_subject_id",
+							"relay_key_version",
+							"relay_key_id"
+						],
+						"columnsTo": ["purpose", "subject_id", "key_version", "key_id"],
+						"onDelete": "no action",
+						"onUpdate": "no action"
+					}
+				},
+				"uniqueConstraints": {},
+				"checkConstraints": {
+					"conversation_execution_task_wait_binding": {
+						"name": "conversation_execution_task_wait_binding",
+						"value": "(\"platform\".\"conversation_executions\".\"task_wait_order\" IS NULL AND \"platform\".\"conversation_executions\".\"task_wait_deadline\" IS NULL AND \"platform\".\"conversation_executions\".\"status\"::text <> 'waiting') OR (\"platform\".\"conversation_executions\".\"task_wait_order\" IS NOT NULL AND \"platform\".\"conversation_executions\".\"task_wait_order\" between 1 and 9007199254740991 AND \"platform\".\"conversation_executions\".\"task_wait_deadline\" IS NOT NULL)"
+					},
+					"conversation_execution_original_digest_binding": {
+						"name": "conversation_execution_original_digest_binding",
+						"value": "(\"platform\".\"conversation_executions\".\"runtime_submit_protocol\" IS NULL AND \"platform\".\"conversation_executions\".\"original_operation_digest\" IS NULL AND \"platform\".\"conversation_executions\".\"original_submit_host_session_ref\" IS NULL) OR (\"platform\".\"conversation_executions\".\"runtime_submit_protocol\" IS NOT NULL AND \"platform\".\"conversation_executions\".\"original_operation_digest\" IS NOT NULL AND \"platform\".\"conversation_executions\".\"runtime_submit_protocol\" in ('v2', 'v4') AND \"platform\".\"conversation_executions\".\"original_operation_digest\" ~ '^[A-Za-z0-9_-]{43}$' AND (\"platform\".\"conversation_executions\".\"runtime_submit_protocol\" <> 'v4' OR \"platform\".\"conversation_executions\".\"execution_source\" IS NOT NULL) AND (\"platform\".\"conversation_executions\".\"runtime_submit_protocol\" <> 'v2' OR \"platform\".\"conversation_executions\".\"original_submit_host_session_ref\" IS NULL))"
+					},
+					"conversation_execution_key_binding": {
+						"name": "conversation_execution_key_binding",
+						"value": "(\n\t\t\t\t\"platform\".\"conversation_executions\".\"execution_source\" IS NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_purpose\" IS NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_subject_id\" IS NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_id\" IS NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_version\" IS NULL\n\t\t\t) OR (\n\t\t\t\t\"platform\".\"conversation_executions\".\"execution_source\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_purpose\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_subject_id\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_id\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_version\" IS NOT NULL\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"execution_source\" in ('web', 'wecom', 'platform-api', 'eval')\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_purpose\" in ('personal', 'agent-default')\n\t\t\t\tAND char_length(\"platform\".\"conversation_executions\".\"relay_key_subject_id\") > 0\n\t\t\t\tAND char_length(\"platform\".\"conversation_executions\".\"relay_key_id\") > 0\n\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_version\" between 1 and 9007199254740991\n\t\t\t\tAND ((\"platform\".\"conversation_executions\".\"execution_source\" = 'web' AND \"platform\".\"conversation_executions\".\"channel_id\" = 'web')\n\t\t\t\t\tOR (\"platform\".\"conversation_executions\".\"execution_source\" = 'wecom' AND (\"platform\".\"conversation_executions\".\"channel_id\" = 'wecom'\n\t\t\t\t\t\tOR left(\"platform\".\"conversation_executions\".\"channel_id\", 10) = 'wecom_bot:'\n\t\t\t\t\t\tOR left(\"platform\".\"conversation_executions\".\"channel_id\", 10) = 'wecom_app:'))\n\t\t\t\t\tOR (\"platform\".\"conversation_executions\".\"execution_source\" = 'platform-api' AND (\"platform\".\"conversation_executions\".\"channel_id\" = 'api'\n\t\t\t\t\t\tOR \"platform\".\"conversation_executions\".\"channel_id\" LIKE 'api:%'))\n\t\t\t\t\tOR (\"platform\".\"conversation_executions\".\"execution_source\" = 'eval' AND \"platform\".\"conversation_executions\".\"channel_id\" = 'eval'))\n\t\t\t\tAND ((\"platform\".\"conversation_executions\".\"execution_source\" in ('web', 'wecom')\n\t\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_purpose\" = 'personal'\n\t\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_subject_id\" = \"platform\".\"conversation_executions\".\"actor_id\")\n\t\t\t\t\tOR (\"platform\".\"conversation_executions\".\"execution_source\" in ('platform-api', 'eval')\n\t\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_purpose\" = 'agent-default'\n\t\t\t\t\tAND \"platform\".\"conversation_executions\".\"relay_key_subject_id\" = \"platform\".\"conversation_executions\".\"agent_id\"))\n\t\t\t)"
+					}
+				},
+				"indexes": {
+					"conversation_execution_task_wait_order_unique": {
+						"name": "conversation_execution_task_wait_order_unique",
+						"columns": [
+							{
+								"expression": "agent_id",
+								"isExpression": false,
+								"asc": true,
+								"nulls": "last"
+							},
+							{
+								"expression": "task_wait_order",
+								"isExpression": false,
+								"asc": true,
+								"nulls": "last"
+							}
+						],
+						"isUnique": true,
+						"where": "\"platform\".\"conversation_executions\".\"task_wait_order\" IS NOT NULL",
+						"concurrently": false,
+						"method": "btree",
+						"with": {}
+					},
+					"conversation_execution_agent_wait_idx": {
+						"name": "conversation_execution_agent_wait_idx",
+						"columns": [
+							{
+								"expression": "agent_id",
+								"isExpression": false,
+								"asc": true,
+								"nulls": "last"
+							},
+							{
+								"expression": "task_wait_order",
+								"isExpression": false,
+								"asc": true,
+								"nulls": "last"
+							}
+						],
+						"isUnique": false,
+						"concurrently": false,
+						"method": "btree",
+						"with": {}
+					}
+				}
+			}
+		},
+		"platform.conversation_generation_tombstones": {
+			"columns": {},
+			"constraints": {
+				"compositePrimaryKeys": {},
+				"foreignKeys": {},
+				"uniqueConstraints": {},
+				"checkConstraints": {
+					"conversation_generation_tombstone_principal_valid": {
+						"name": "conversation_generation_tombstone_principal_valid",
+						"value": "jsonb_typeof(\"platform\".\"conversation_generation_tombstones\".\"original_principal\") = 'object'\n\t\t\t\tand coalesce(jsonb_typeof(\"platform\".\"conversation_generation_tombstones\".\"original_principal\"->'kind') = 'string', false)\n\t\t\t\tand coalesce(\"platform\".\"conversation_generation_tombstones\".\"original_principal\"->>'kind' in ('user', 'application'), false)\n\t\t\t\tand coalesce(jsonb_typeof(\"platform\".\"conversation_generation_tombstones\".\"original_principal\"->'id') = 'string', false)\n\t\t\t\tand char_length(coalesce(\"platform\".\"conversation_generation_tombstones\".\"original_principal\"->>'id', '')) > 0"
+					}
+				},
+				"indexes": {}
+			}
+		},
+		"platform.conversation_stops": {
+			"columns": {
+				"confirmation_deadline": {
+					"type": "timestamp with time zone",
+					"notNull": true
+				},
+				"confirmation_timed_out_at": {
+					"type": "timestamp with time zone",
+					"notNull": false
+				}
+			},
+			"constraints": {
+				"compositePrimaryKeys": {},
+				"foreignKeys": {},
+				"uniqueConstraints": {},
+				"checkConstraints": {},
+				"indexes": {}
+			}
+		},
+		"platform.ldap_identity_ids": {
+			"columns": {
+				"issuer": {
+					"type": "varchar(256)",
+					"notNull": true
+				},
+				"uid": {
+					"type": "varchar(256)",
+					"notNull": true
+				},
+				"user_id": {
+					"type": "text",
+					"notNull": true
+				}
+			},
+			"constraints": {
+				"compositePrimaryKeys": {
+					"ldap_identity_ids_issuer_uid_pk": {
+						"name": "ldap_identity_ids_issuer_uid_pk",
+						"columns": ["issuer", "uid"]
+					}
+				},
+				"foreignKeys": {},
+				"uniqueConstraints": {},
+				"checkConstraints": {
+					"ldap_identity_issuer_non_empty": {
+						"name": "ldap_identity_issuer_non_empty",
+						"value": "char_length(\"platform\".\"ldap_identity_ids\".\"issuer\") > 0"
+					},
+					"ldap_identity_uid_non_empty": {
+						"name": "ldap_identity_uid_non_empty",
+						"value": "char_length(\"platform\".\"ldap_identity_ids\".\"uid\") > 0"
+					},
+					"ldap_identity_user_id_uuid_v4": {
+						"name": "ldap_identity_user_id_uuid_v4",
+						"value": "\"platform\".\"ldap_identity_ids\".\"user_id\" ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'"
+					}
+				},
+				"indexes": {
+					"ldap_identity_user_id_unique": {
+						"name": "ldap_identity_user_id_unique",
+						"columns": [
+							{
+								"expression": "user_id",
+								"isExpression": false,
+								"asc": true,
+								"nulls": "last"
+							}
+						],
+						"isUnique": true,
+						"concurrently": false,
+						"method": "btree",
+						"with": {}
+					}
+				}
+			}
+		},
+		"platform.platform_api_credentials": {
+			"columns": {
+				"recipient_user_id": {
+					"type": "text",
+					"notNull": false
+				}
+			},
+			"constraints": {
+				"compositePrimaryKeys": {},
+				"foreignKeys": {},
+				"uniqueConstraints": {
+					"platform_api_credential_hash_unique": {
+						"name": "platform_api_credential_hash_unique",
+						"nullsNotDistinct": false,
+						"columns": ["credential_hash"]
+					}
+				},
+				"checkConstraints": {
+					"platform_api_credential_recipient_user_non_empty": {
+						"name": "platform_api_credential_recipient_user_non_empty",
+						"value": "\"platform\".\"platform_api_credentials\".\"recipient_user_id\" is null or char_length(\"platform\".\"platform_api_credentials\".\"recipient_user_id\") > 0"
+					}
+				},
+				"indexes": {}
+			}
+		},
+		"platform.platform_user_disables": {
+			"columns": {
+				"user_id": {
+					"type": "text",
+					"notNull": true
+				},
+				"disabled_by": {
+					"type": "text",
+					"notNull": true
+				},
+				"disabled_at": {
+					"type": "timestamp with time zone",
+					"notNull": true
+				}
+			},
+			"constraints": {
+				"compositePrimaryKeys": {},
+				"foreignKeys": {},
+				"uniqueConstraints": {},
+				"checkConstraints": {
+					"platform_user_disable_user_id_non_empty": {
+						"name": "platform_user_disable_user_id_non_empty",
+						"value": "char_length(\"platform\".\"platform_user_disables\".\"user_id\") > 0"
+					},
+					"platform_user_disable_actor_non_empty": {
+						"name": "platform_user_disable_actor_non_empty",
+						"value": "char_length(\"platform\".\"platform_user_disables\".\"disabled_by\") > 0"
+					}
+				},
+				"indexes": {}
+			}
+		},
+		"platform.relay_key_subjects": {
+			"columns": {
+				"purpose": {
+					"type": "text",
+					"notNull": true
+				},
+				"subject_id": {
+					"type": "text",
+					"notNull": true
+				},
+				"last_version": {
+					"type": "bigint",
+					"notNull": true
+				},
+				"current_version": {
+					"type": "bigint",
+					"notNull": false
+				},
+				"updated_at": {
+					"type": "timestamp with time zone",
+					"notNull": true
+				}
+			},
+			"constraints": {
+				"compositePrimaryKeys": {
+					"relay_key_subjects_purpose_subject_id_pk": {
+						"name": "relay_key_subjects_purpose_subject_id_pk",
+						"columns": ["purpose", "subject_id"]
+					}
+				},
+				"foreignKeys": {},
+				"uniqueConstraints": {},
+				"checkConstraints": {
+					"relay_key_subject_purpose": {
+						"name": "relay_key_subject_purpose",
+						"value": "\"platform\".\"relay_key_subjects\".\"purpose\" in ('personal', 'agent-default')"
+					},
+					"relay_key_subject_id": {
+						"name": "relay_key_subject_id",
+						"value": "char_length(\"platform\".\"relay_key_subjects\".\"subject_id\") between 1 and 1024"
+					},
+					"relay_key_subject_last_version": {
+						"name": "relay_key_subject_last_version",
+						"value": "\"platform\".\"relay_key_subjects\".\"last_version\" between 0 and 9007199254740991"
+					},
+					"relay_key_subject_current_version": {
+						"name": "relay_key_subject_current_version",
+						"value": "\"platform\".\"relay_key_subjects\".\"current_version\" is null or \"platform\".\"relay_key_subjects\".\"current_version\" between 1 and \"platform\".\"relay_key_subjects\".\"last_version\""
+					}
+				},
+				"indexes": {}
+			}
+		},
+		"platform.relay_key_versions": {
+			"columns": {
+				"purpose": {
+					"type": "text",
+					"notNull": true
+				},
+				"subject_id": {
+					"type": "text",
+					"notNull": true
+				},
+				"key_version": {
+					"type": "bigint",
+					"notNull": true
+				},
+				"key_id": {
+					"type": "text",
+					"notNull": true
+				},
+				"ciphertext": {
+					"type": "jsonb",
+					"notNull": true
+				},
+				"created_at": {
+					"type": "timestamp with time zone",
+					"notNull": true
+				}
+			},
+			"constraints": {
+				"compositePrimaryKeys": {
+					"relay_key_versions_purpose_subject_id_key_version_pk": {
+						"name": "relay_key_versions_purpose_subject_id_key_version_pk",
+						"columns": ["purpose", "subject_id", "key_version"]
+					}
+				},
+				"foreignKeys": {
+					"relay_key_version_subject_fk": {
+						"name": "relay_key_version_subject_fk",
+						"tableFrom": "relay_key_versions",
+						"tableTo": "relay_key_subjects",
+						"schemaTo": "platform",
+						"columnsFrom": ["purpose", "subject_id"],
+						"columnsTo": ["purpose", "subject_id"],
+						"onDelete": "no action",
+						"onUpdate": "no action"
+					}
+				},
+				"uniqueConstraints": {
+					"relay_key_version_identity_unique": {
+						"name": "relay_key_version_identity_unique",
+						"nullsNotDistinct": false,
+						"columns": ["purpose", "subject_id", "key_version", "key_id"]
+					}
+				},
+				"checkConstraints": {
+					"relay_key_version_purpose": {
+						"name": "relay_key_version_purpose",
+						"value": "\"platform\".\"relay_key_versions\".\"purpose\" in ('personal', 'agent-default')"
+					},
+					"relay_key_version_subject_id": {
+						"name": "relay_key_version_subject_id",
+						"value": "char_length(\"platform\".\"relay_key_versions\".\"subject_id\") between 1 and 1024"
+					},
+					"relay_key_version_key_id": {
+						"name": "relay_key_version_key_id",
+						"value": "char_length(\"platform\".\"relay_key_versions\".\"key_id\") between 1 and 1024"
+					},
+					"relay_key_version_safe": {
+						"name": "relay_key_version_safe",
+						"value": "\"platform\".\"relay_key_versions\".\"key_version\" between 1 and 9007199254740991"
+					},
+					"relay_key_version_ciphertext_binding": {
+						"name": "relay_key_version_ciphertext_binding",
+						"value": "(\"platform\".\"relay_key_versions\".\"ciphertext\"->>'purpose' = \"platform\".\"relay_key_versions\".\"purpose\"\n\t\t\t\tand \"platform\".\"relay_key_versions\".\"ciphertext\"->>'subjectId' = \"platform\".\"relay_key_versions\".\"subject_id\"\n\t\t\t\tand \"platform\".\"relay_key_versions\".\"ciphertext\"->>'keyId' = \"platform\".\"relay_key_versions\".\"key_id\"\n\t\t\t\tand \"platform\".\"relay_key_versions\".\"ciphertext\"->>'keyVersion' = \"platform\".\"relay_key_versions\".\"key_version\"::text) is true"
+					}
+				},
+				"indexes": {
+					"relay_key_version_key_id_unique": {
+						"name": "relay_key_version_key_id_unique",
+						"columns": [
+							{
+								"expression": "key_id",
+								"isExpression": false,
+								"asc": true,
+								"nulls": "last"
+							}
+						],
+						"isUnique": true,
+						"concurrently": false,
+						"method": "btree",
+						"with": {}
+					}
+				}
+			}
+		}
+	},
+	"executionStatusEnum": [
+		"waiting",
+		"submitted",
+		"processing",
+		"unknown",
+		"completed",
+		"failed",
+		"cancelled"
+	],
+	"newMigration": {
+		"idx": 29,
+		"tag": "0029_platform_user_disables",
+		"when": 1790792430787,
+		"sqlSHA256": "74db9bfa82acf50299a2a88de0f95191cf3d2a7b53fa01736be156f9309bfd9b"
+	},
+	"seedRowCounts": {
+		"agents": 1,
+		"agent_applications": 1,
+		"agent_configuration_revisions": 1,
+		"agent_owners": 1,
+		"platform_applications": 1,
+		"platform_api_credentials": 1,
+		"api_credential_delivery_grants": 1,
+		"ldap_identity_ids": 1,
+		"platform_user_disables": 1,
+		"relay_key_subjects": 1,
+		"relay_key_versions": 1,
+		"conversations": 1,
+		"conversation_messages": 1,
+		"conversation_audit_events": 1,
+		"idempotency_records": 1,
+		"outbox_items": 1,
+		"conversation_stops": 1,
+		"task_authorization_records": 1,
+		"task_control_records": 1,
+		"conversation_generation_tombstones": 1,
+		"audit_events": 1,
+		"conversation_executions": 2,
+		"conversation_events": 2
+	},
+	"seedReferenceIdentities": {
+		"agents": {
+			"id": "checkpoint_agent"
+		},
+		"agent_applications": {
+			"agent_id": "checkpoint_agent"
+		},
+		"agent_configuration_revisions": {
+			"agent_id": "checkpoint_agent"
+		},
+		"agent_owners": {
+			"agent_id": "checkpoint_agent",
+			"owner_id": "checkpoint_user"
+		},
+		"platform_applications": {
+			"id": "checkpoint_api_application"
+		},
+		"platform_api_credentials": {
+			"id": "checkpoint_credential",
+			"principal_id": "checkpoint_api_application",
+			"recipient_user_id": "checkpoint_user"
+		},
+		"api_credential_delivery_grants": {
+			"application_id": "checkpoint_api_application",
+			"principal_id": "checkpoint_user"
+		},
+		"ldap_identity_ids": {
+			"uid": "checkpoint_user",
+			"user_id": "11111111-1111-4111-8111-111111111111"
+		},
+		"platform_user_disables": {
+			"user_id": "checkpoint_user",
+			"disabled_by": "checkpoint_admin"
+		},
+		"relay_key_subjects": {
+			"subject_id": "checkpoint_user"
+		},
+		"relay_key_versions": {
+			"subject_id": "checkpoint_user",
+			"key_id": "checkpoint_relay_key"
+		},
+		"conversations": {
+			"id": "checkpoint_conversation"
+		},
+		"conversation_executions": {
+			"execution_id": "checkpoint_execution"
+		},
+		"conversation_messages": {
+			"message_id": "checkpoint_message"
+		},
+		"conversation_events": {
+			"event_id": "checkpoint_event_1"
+		},
+		"conversation_audit_events": {
+			"id": "checkpoint_acceptance_audit"
+		},
+		"idempotency_records": {
+			"id": "checkpoint_idempotency"
+		},
+		"outbox_items": {
+			"id": "conversation:turn:checkpoint_execution"
+		},
+		"conversation_stops": {
+			"execution_id": "checkpoint_execution"
+		},
+		"task_authorization_records": {
+			"id": "checkpoint_task_authorization"
+		},
+		"task_control_records": {
+			"id": "checkpoint_control"
+		},
+		"conversation_generation_tombstones": {
+			"operation_id": "checkpoint_tombstone"
+		},
+		"audit_events": {
+			"id": "checkpoint_business_audit"
+		}
+	}
+}

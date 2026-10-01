@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { PassThrough } from "node:stream";
 import postgres from "postgres";
 import {
@@ -11,6 +13,7 @@ import {
 	it,
 	vi,
 } from "vitest";
+import { agentConfigurationConformanceRecordV1 } from "../../../packages/platform-core/src/agent-configuration.conformance.ts";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.ts";
 import {
 	type PostgresTestDatabase,
@@ -51,14 +54,14 @@ const logLines: string[] = [];
 const sentHeaders: { cookie: string | null; authorization: string | null }[] =
 	[];
 
-async function start() {
+async function start(otlpEndpoint?: string) {
 	const output = new PassThrough();
 	output.on("data", (chunk) => logLines.push(String(chunk)));
 	const running = await startPlatformApiFromDeployment({
 		moduleSpecifier,
 		port: 0,
 		log: (line) => logLines.push(line),
-		observabilityOptions: { output, otlpEndpoint: undefined },
+		observabilityOptions: { output, otlpEndpoint },
 	});
 	const shutdown = createPlatformApiShutdown(running);
 	shutdowns.push(shutdown);
@@ -162,6 +165,136 @@ afterAll(async () => {
 });
 
 describe("formal deployment personal credential governance over PostgreSQL and generated SDK", () => {
+	it("exports actual correlated governance traces without credential material or hashes", async () => {
+		const exports: { path: string; body: Buffer }[] = [];
+		const collector = createServer(async (request, response) => {
+			const chunks: Buffer[] = [];
+			for await (const chunk of request) chunks.push(Buffer.from(chunk));
+			exports.push({
+				path: request.url ?? "",
+				body: Buffer.concat(chunks),
+			});
+			response.writeHead(200);
+			response.end();
+		});
+		await new Promise<void>((resolve, reject) => {
+			collector.once("error", reject);
+			collector.listen(0, "127.0.0.1", resolve);
+		});
+		let service: Awaited<ReturnType<typeof start>> | undefined;
+		try {
+			const address = collector.address();
+			if (!address || typeof address === "string")
+				throw new Error("Test OTLP receiver did not bind");
+			service = await start(`http://127.0.0.1:${address.port}`);
+			const first = await issue(service.client, "trace.issue");
+			expect(first.response?.status).toBe(201);
+			if (!first.data?.credential)
+				throw new Error("No first-delivery material");
+			const material = first.data.credential;
+			const digest = createHash("sha256").update(material).digest("hex");
+			const credentialId = first.data.metadata.credentialId;
+			const [persisted] = await databaseClient`select credential_hash
+				from platform.platform_api_credentials where id=${credentialId}`;
+			expect(persisted?.credential_hash).toBe(digest);
+			const replay = await issue(service.client, "trace.issue");
+			expect(replay.response?.status).toBe(200);
+			expect(replay.data?.credential).toBeNull();
+			const denied = await issuePersonalApiCredentialV2({
+				client: service.client,
+				auth: "session_alice",
+				body: command,
+				headers: {
+					"Idempotency-Key": "trace.denied",
+					Authorization: `Bearer ${material}`,
+					"X-Request-Id": digest,
+				},
+			});
+			expect(denied.response?.status).toBe(401);
+			await armAuditFailure(false);
+			const failed = await issue(service.client, "trace.audit.failure");
+			expect(failed.response?.status).toBe(503);
+			expect(failed.data).toBeUndefined();
+			await removeAuditFailure();
+			const revoked = await revoke(
+				service.client,
+				"trace.revoke",
+				credentialId,
+			);
+			expect(revoked.response?.status).toBe(200);
+			const audits = await databaseClient`select * from platform.audit_events`;
+			expect(await succeededCounts()).toEqual({
+				credentials: 1,
+				idempotency: 2,
+				succeeded: 2,
+			});
+			// Production shutdown flushes its actual exporter to the loopback receiver.
+			await service.shutdown();
+			const traces = exports.filter((item) => item.path === "/v1/traces");
+			expect(traces.length).toBeGreaterThan(0);
+			const traceBodies = traces.map((item) => item.body.toString()).join("\n");
+			expect(traceBodies).toContain("platform.http");
+			for (const outcome of ["completed", "rejected", "failed"])
+				expect(traceBodies).toContain(outcome);
+			for (const audit of audits) {
+				expect(audit.request_id).toBeTruthy();
+				expect(audit.trace_id).toBeTruthy();
+				expect(traceBodies).toContain(audit.request_id);
+				expect(traceBodies).toContain(audit.trace_id);
+			}
+			const serialized = JSON.stringify({
+				exports: exports.map((item) => ({
+					path: item.path,
+					body: item.body.toString(),
+				})),
+				audits,
+				logLines,
+				errors: [denied.error, failed.error],
+				metadata: [first.data.metadata, replay.data, revoked.data],
+			});
+			for (const secret of [material, digest, "PRIVATE_SQL_SENTINEL"]) {
+				expect(serialized).not.toContain(secret);
+				for (const exported of exports)
+					expect(exported.body.includes(secret)).toBe(false);
+			}
+			// Written only after actual exporter and all redaction assertions pass.
+			const evidencePath = process.env.PERSONAL_CREDENTIAL_TRACE_EVIDENCE;
+			if (evidencePath)
+				await writeFile(
+					evidencePath,
+					JSON.stringify(
+						{
+							classification:
+								"actual production OTLP export from controlled HTTP/SDK governance and real PostgreSQL",
+							statuses: [
+								first.response?.status,
+								replay.response?.status,
+								denied.response?.status,
+								failed.response?.status,
+								revoked.response?.status,
+							],
+							credentialId,
+							materialHashMatchedDatabase: true,
+							materialAndHashAbsent: true,
+							exports: exports.map((item) => ({
+								path: item.path,
+								bodyBase64: item.body.toString("base64"),
+								sha256: createHash("sha256").update(item.body).digest("hex"),
+							})),
+							audits,
+							logLines,
+							metadata: [first.data.metadata, replay.data, revoked.data],
+						},
+						null,
+						2,
+					),
+				);
+		} finally {
+			await service?.shutdown();
+			await new Promise<void>((resolve) => collector.close(() => resolve()));
+		}
+	});
+
 	it("delivers hash-matching material once and recovers lost delivery through restart, original-ID revoke and a new key", async () => {
 		const firstServer = await start();
 		const first = await issue(firstServer.client, "issue.once");
@@ -508,5 +641,199 @@ describe("formal deployment personal credential governance over PostgreSQL and g
 			idempotency: 0,
 			succeeded: 0,
 		});
+	});
+	it("preserves existing accepted Task control and outbox records and current browser Owner access", async () => {
+		const agentId = "agent_governance_preservation";
+		const conversationId = "conversation_governance_preservation";
+		const executionId = "execution_governance_preservation";
+		const authorizationId = "authorization_governance_preservation";
+		const messageId = "message_governance_preservation";
+		const configuration = {
+			...structuredClone(agentConfigurationConformanceRecordV1),
+			agentId,
+			revision: 1,
+		};
+		if (configuration.source.kind !== "standard")
+			throw new Error("Expected standard fixture configuration");
+		const boundary = {
+			schemaVersion: 1,
+			principal: { kind: "user", id: "user_alice" },
+			agentId,
+			channelId: "web",
+			identityRevision: "revision_1",
+			agentAuthorizationRevision: "agent_revision_1",
+			accessSources: [{ kind: "organization", organizationId: "org_1" }],
+		};
+		// Controlled, nonempty previously accepted facts; no Worker or task runtime
+		// is invoked. Governance uses the real loader, app, Core and Store below.
+		await databaseClient`insert into platform.agents (id, authorization_revision)
+			values (${agentId}, 'agent_revision_1')`;
+		await databaseClient`insert into platform.agent_applications
+			(id, agent_id, applicant_id, name, description, status, trace_id, request_id,
+			 submitted_at, management_revision, approval_revision, desired_state, workload_revision, fence)
+			values ('application_governance_preservation', ${agentId}, 'user_alice', 'Existing Agent',
+			 'Existing description', 'stopped', 'original_trace', 'original_request', now(), 1, 1, 'stopped', 1, 1)`;
+		await databaseClient`insert into platform.agent_configuration_revisions
+			(agent_id, revision, source_reference, created_at, configuration)
+			values (${agentId}, 1, ${configuration.source.templateId}, now(), ${databaseClient.json(configuration as unknown as postgres.JSONValue)})`;
+		await databaseClient`insert into platform.agent_owners (agent_id, owner_id, created_at)
+			values (${agentId}, 'user_alice', now())`;
+		await databaseClient`insert into platform.conversations
+			(id, agent_id, actor_id, channel_id, status, session_generation, authorization_revision)
+			values (${conversationId}, ${agentId}, 'user_alice', 'web', 'active', 1, 'agent_revision_1')`;
+		await databaseClient`insert into platform.conversation_executions
+			(execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, status,
+			 session_generation, authorization_revision, created_at, model_configuration_revision, model_option_id, reasoning_level)
+			values (${executionId}, ${conversationId}, ${agentId}, 'user_alice', 'web',
+			 'turn_governance_preservation', 'submitted', 1, 'agent_revision_1', now(), 1, 'model_primary', 'low')`;
+		await databaseClient`insert into platform.conversation_messages
+			(message_id, conversation_id, actor_id, role, text, execution_id, status, created_at)
+			values (${messageId}, ${conversationId}, 'user_alice', 'user', 'Synthetic accepted task', ${executionId}, 'submitted', now())`;
+		await databaseClient`insert into platform.conversation_audit_events
+			(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at)
+			values ('acceptance_governance_preservation', ${conversationId}, ${executionId}, ${agentId}, 'user_alice',
+			 'conversation.message.accepted', 'original_trace', 'original_request', now())`;
+		await databaseClient`insert into platform.task_authorization_records (id, execution_id, boundary)
+			values (${authorizationId}, ${executionId}, ${databaseClient.json(boundary)})`;
+		await databaseClient`insert into platform.task_control_records
+			(id, execution_id, authorization_record_id, reason)
+			values ('control_governance_preservation', ${executionId}, ${authorizationId}, 'recovery')`;
+		await databaseClient`insert into platform.outbox_items
+			(id, scope_type, scope_id, operation, payload, trace_id, request_id)
+			values ('outbox_governance_preservation', 'conversation', ${conversationId},
+			 'conversation.turn.submit.v1', ${databaseClient.json({
+					schemaVersion: 1,
+					executionId,
+					conversationId,
+					messageId,
+					turnId: "turn_governance_preservation",
+					sessionGeneration: 1,
+					modelConfigurationRevision: 1,
+					modelOptionId: "model_primary",
+					reasoningLevel: "low",
+				})}, 'original_trace', 'original_request')`;
+		const snapshot = async () => {
+			const records: Record<string, unknown[]> = {};
+			for (const table of [
+				"agents",
+				"agent_applications",
+				"agent_configuration_revisions",
+				"agent_owners",
+				"conversations",
+				"conversation_executions",
+				"conversation_messages",
+				"conversation_audit_events",
+				"task_authorization_records",
+				"task_control_records",
+				"outbox_items",
+			]) {
+				records[table] = (
+					await databaseClient.unsafe(
+						`select to_jsonb(t) as row from platform.${table} t order by to_jsonb(t)::text`,
+					)
+				).map((row) => row.row);
+			}
+			return records;
+		};
+		const before = await snapshot();
+		for (const rows of Object.values(before)) expect(rows).toHaveLength(1);
+		expect(before.conversation_executions).toEqual([
+			expect.objectContaining({
+				execution_id: executionId,
+				status: "submitted",
+			}),
+		]);
+		expect(before.task_authorization_records).toEqual([
+			expect.objectContaining({
+				id: authorizationId,
+				execution_id: executionId,
+				boundary,
+			}),
+		]);
+		expect(before.task_control_records).toEqual([
+			expect.objectContaining({
+				execution_id: executionId,
+				authorization_record_id: authorizationId,
+			}),
+		]);
+		expect(before.outbox_items).toEqual([
+			expect.objectContaining({
+				scope_id: conversationId,
+				status: "pending",
+				payload: expect.objectContaining({
+					executionId,
+					conversationId,
+					messageId,
+				}),
+			}),
+		]);
+		const { client, origin } = await start();
+		const read = async (path: string, session: string) => {
+			const response = await fetch(`${origin}${path}`, {
+				headers: { Cookie: `__Host-platform-session=${session}` },
+			});
+			expect(response.status).toBe(200);
+			return response.json() as Promise<{ items: { agentId: string }[] }>;
+		};
+		const readViews = async () => ({
+			owner: await read("/api/v2/agents?scope=owner", "session_alice"),
+			nonOwner: await read("/api/v2/agents?scope=owner", "session_bob"),
+			discover: await read("/api/v2/agents", "session_alice"),
+			admin: await read("/api/v2/admin/agents", "session_admin"),
+		});
+		const beforeViews = await readViews();
+		for (const view of [
+			beforeViews.owner,
+			beforeViews.discover,
+			beforeViews.admin,
+		])
+			expect(view.items.map((item) => item.agentId)).toEqual([agentId]);
+		expect(beforeViews.nonOwner.items).toEqual([]);
+		const issued = await issue(client, "preservation.issue");
+		expect(issued.response?.status).toBe(201);
+		if (!issued.data) throw new Error("No issued credential");
+		const afterIssue = await snapshot();
+		expect(afterIssue).toEqual(before);
+		expect(await readViews()).toEqual(beforeViews);
+		const revoked = await revoke(
+			client,
+			"preservation.revoke",
+			issued.data.metadata.credentialId,
+		);
+		expect(revoked.response?.status).toBe(200);
+		expect(revoked.data?.metadata.revokedAt).not.toBeNull();
+		const afterRevoke = await snapshot();
+		expect(afterRevoke).toEqual(before);
+		const afterViews = await readViews();
+		expect(afterViews).toEqual(beforeViews);
+		const evidencePath = process.env.PERSONAL_CREDENTIAL_PRESERVATION_EVIDENCE;
+		if (evidencePath)
+			await writeFile(
+				evidencePath,
+				JSON.stringify(
+					{
+						classification:
+							"controlled previously accepted nonempty Task facts in actual PostgreSQL, formal governance and browser queries",
+						actual: {
+							before,
+							afterIssue,
+							afterRevoke,
+							beforeViews,
+							afterViews,
+						},
+						fingerprints: [before, afterIssue, afterRevoke].map((state) =>
+							createHash("sha256").update(JSON.stringify(state)).digest("hex"),
+						),
+						credentialId: issued.data.metadata.credentialId,
+						statuses: [issued.response?.status, revoked.response?.status],
+					},
+					null,
+					2,
+				),
+			);
+		// Keep later existing empty-page/outbox cases isolated if the full suite
+		// executes these definitions in a different order.
+		await databaseClient`truncate platform.agents, platform.conversations cascade`;
+		await databaseClient`truncate platform.outbox_items`;
 	});
 });
