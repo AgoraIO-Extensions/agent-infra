@@ -7,6 +7,8 @@ import {
 	WorkloadReadinessBindingV1Schema,
 } from "@agent-infra/contracts/runtime";
 
+export { readCodexInstalledSkillDeployment } from "./installed-skill.js";
+
 export function readWorkloadReadinessBindingV1(environment: NodeJS.ProcessEnv) {
 	const raw = environment.AGENT_INFRA_RUNTIME_READINESS_BINDING;
 	if (raw === undefined) return undefined;

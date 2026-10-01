@@ -78,12 +78,20 @@ async function readProtectedFile(
 	binary = false,
 ) {
 	requireValid((await realpath(path)) === path);
-	const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+	const listed = await lstat(path);
+	requireValid(listed.isFile() && listed.nlink === 1);
+	const file = await open(
+		path,
+		constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+	);
 	try {
 		const before = await file.stat();
 		const mode = binary ? 0o555 : 0o444;
 		requireValid(
 			before.isFile() &&
+				before.ino === listed.ino &&
+				before.dev === listed.dev &&
+				before.nlink === 1 &&
 				before.uid === 0 &&
 				(before.mode & 0o7777) === mode &&
 				before.size > 0 &&
@@ -109,12 +117,21 @@ async function readProtectedFile(
 			if (!binary) chunks.push(Buffer.from(chunk));
 		}
 		const after = await file.stat();
+		const current = await lstat(path);
 		requireValid(
 			bytes === before.size &&
-				after.size === before.size &&
-				after.mode === before.mode &&
-				after.mtimeMs === before.mtimeMs &&
-				after.ctimeMs === before.ctimeMs,
+				[after, current].every(
+					(stat) =>
+						stat.ino === before.ino &&
+						stat.dev === before.dev &&
+						stat.nlink === before.nlink &&
+						stat.uid === before.uid &&
+						stat.gid === before.gid &&
+						stat.size === before.size &&
+						stat.mode === before.mode &&
+						stat.mtimeMs === before.mtimeMs &&
+						stat.ctimeMs === before.ctimeMs,
+				),
 		);
 		if (expected !== undefined)
 			requireValid(`sha256:${hash.digest("hex")}` === digest(expected));
@@ -135,8 +152,19 @@ async function readProtectedFile(
 	}
 }
 
-export async function verifyCodexPilotInstallation() {
+export async function verifyCodexPilotInstallation(
+	layout?: "workspace-summary-v1",
+) {
 	try {
+		requireValid(layout === undefined || layout === "workspace-summary-v1");
+		const skillFiles =
+			layout === "workspace-summary-v1"
+				? [
+						"/opt/codex/agent-infra-skills/workspace-summary/SKILL.md",
+						"/opt/codex/agent-infra-skills/workspace-summary.manifest.json",
+						"/opt/codex/share/workspace-summary-build.json",
+					]
+				: [];
 		requireValid(
 			platform === "linux" &&
 				release.provenance.protocolVersion === 2 &&
@@ -163,11 +191,13 @@ export async function verifyCodexPilotInstallation() {
 			CODEX_PILOT_EXECUTABLE,
 			installedPath("release.json"),
 			...legalNames.map(installedPath),
+			...skillFiles,
 		]);
 		const installed = await readProtectedFile(installedPath("release.json"));
 		requireValid(
 			isDeepStrictEqual(JSON.parse(installed.toString("utf8")), release),
 		);
+		for (const path of skillFiles) await readProtectedFile(path);
 		for (const [path, expected] of [
 			[CODEX_PILOT_EXECUTABLE, official.executableSha256],
 			...Object.entries(legal).map(([name, hash]) => [

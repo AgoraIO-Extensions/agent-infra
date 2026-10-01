@@ -1,7 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import type { PathLike } from "node:fs";
 import {
 	chmod,
+	link,
 	lstat,
 	mkdir,
 	mkdtemp,
@@ -23,6 +25,7 @@ const fixture = vi.hoisted(() => ({
 	platform: "linux",
 	ownerUid: 0,
 	runtimeUid: 1000,
+	replaceDuringRead: false,
 }));
 
 vi.mock("./codex-release.json", () => ({
@@ -61,6 +64,24 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 			const stat = file.stat.bind(file);
 			(file as unknown as { stat: () => Promise<unknown> }).stat = async () =>
 				Object.assign(await stat(), { uid: fixture.ownerUid });
+			const read = file.read.bind(file);
+			Object.defineProperty(file, "read", {
+				value: async (...args: unknown[]) => {
+					const result = await Reflect.apply(read, file, args);
+					if (
+						fixture.replaceDuringRead &&
+						typeof path === "string" &&
+						path.endsWith("/SKILL.md")
+					) {
+						fixture.replaceDuringRead = false;
+						const physical = String(map(path));
+						await actual.chmod(dirname(physical), 0o755);
+						await actual.rename(physical, `${physical}.old`);
+						await actual.writeFile(physical, "replacement", { mode: 0o444 });
+					}
+					return result;
+				},
+			});
 			return file;
 		},
 		readFile: (...args: Parameters<typeof actual.readFile>) =>
@@ -124,13 +145,13 @@ async function repin(arch = "arm64") {
 	await put("bin/codex", executable, 0o555);
 	await put("share/release.json", JSON.stringify(fixture.release));
 }
-async function verify() {
+async function verify(layout?: "workspace-summary-v1") {
 	await directoryModes(fixture.sandbox, 0o555);
 	vi.resetModules();
 	const { verifyCodexPilotInstallation } = await import(
 		"./codex-installation.js"
 	);
-	return verifyCodexPilotInstallation();
+	return verifyCodexPilotInstallation(layout);
 }
 beforeEach(async () => {
 	directory = await mkdtemp(join(tmpdir(), "official-installation-"));
@@ -138,12 +159,92 @@ beforeEach(async () => {
 	fixture.platform = "linux";
 	fixture.ownerUid = 0;
 	fixture.runtimeUid = 1000;
+	fixture.replaceDuringRead = false;
 	executable = Buffer.alloc(64);
 	Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1]).copy(executable);
 	executable.writeUInt16LE(2, 16);
 	await repin();
 	await put("share/LICENSE", "upstream license");
 	await put("share/NOTICE", "upstream notice");
+});
+
+const skillPayloads = [
+	"agent-infra-skills/workspace-summary/SKILL.md",
+	"agent-infra-skills/workspace-summary.manifest.json",
+	"share/workspace-summary-build.json",
+];
+async function installSkillLayout() {
+	for (const name of skillPayloads)
+		await put(name, "fixed layout fixture; not content verification");
+}
+describe("fixed Skill layout preserves official provenance", () => {
+	it.each(["arm64", "x64"])(
+		"accepts only the complete fixed group with %s official bytes",
+		async (arch) => {
+			await repin(arch);
+			await installSkillLayout();
+			await expect(verify("workspace-summary-v1")).resolves.toEqual(provenance);
+			await expect(verify()).rejects.toThrow(mismatch);
+		},
+	);
+	it.each(skillPayloads)("rejects missing member %s", async (name) => {
+		await installSkillLayout();
+		await rm(installed(name));
+		await expect(verify("workspace-summary-v1")).rejects.toThrow(mismatch);
+	});
+	it("rejects the old layout when the fixed new group is required", async () => {
+		await expect(verify("workspace-summary-v1")).rejects.toThrow(mismatch);
+	});
+	it.each([null, false, "unknown", {}, { verified: true }])(
+		"rejects unknown layout %j",
+		async (layout) => {
+			await installSkillLayout();
+			await directoryModes(fixture.sandbox, 0o555);
+			vi.resetModules();
+			const { verifyCodexPilotInstallation } = await import(
+				"./codex-installation.js"
+			);
+			await expect(
+				Reflect.apply(verifyCodexPilotInstallation, undefined, [layout]),
+			).rejects.toThrow(mismatch);
+		},
+	);
+	it.each([
+		"file",
+		"empty directory",
+		"symlink",
+		"hardlink",
+		"special file",
+		"writable",
+		"replacement",
+		"owner",
+		"root process",
+	])("rejects fixed group fault %s", async (fault) => {
+		await installSkillLayout();
+		const entry = installed(skillPayloads[0] ?? "missing");
+		if (fault === "file")
+			await put("agent-infra-skills/extra.txt", "unapproved");
+		if (fault === "empty directory")
+			await mkdir(installed("agent-infra-skills/empty"));
+		if (["symlink", "hardlink", "special file"].includes(fault))
+			await rm(entry);
+		if (fault === "symlink") await symlink(installed("share/LICENSE"), entry);
+		if (fault === "hardlink") await link(installed("share/LICENSE"), entry);
+		if (fault === "special file") execFileSync("mkfifo", [entry]);
+		if (fault === "writable") await chmod(entry, 0o644);
+		if (fault === "replacement") fixture.replaceDuringRead = true;
+		if (fault === "owner") fixture.ownerUid = 1000;
+		if (fault === "root process") fixture.runtimeUid = 0;
+		await expect(verify("workspace-summary-v1")).rejects.toThrow(mismatch);
+	});
+	it.each(["bin/codex", "share/LICENSE", "share/NOTICE", "share/release.json"])(
+		"retains official payload rejection with the new group: %s",
+		async (name) => {
+			await installSkillLayout();
+			await put(name, "tampered", name === "bin/codex" ? 0o555 : 0o444);
+			await expect(verify("workspace-summary-v1")).rejects.toThrow(mismatch);
+		},
+	);
 });
 afterEach(async () => {
 	// Fixture owns this tree; restore only its permissions before removal.
