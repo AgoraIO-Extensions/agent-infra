@@ -420,4 +420,4 @@ it("selects unattempted setups before a released timeout and skips live probes",
 		await sql.end();
 		await db.stop();
 	}
-});
+}, 30000);

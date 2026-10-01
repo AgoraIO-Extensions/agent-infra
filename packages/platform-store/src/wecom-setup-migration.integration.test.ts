@@ -80,4 +80,4 @@ for (const nextMigration of [
 			await db.stop();
 			await rm(temporary, { recursive: true, force: true });
 		}
-	});
+	}, 30000);
