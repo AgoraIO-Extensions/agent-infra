@@ -14,6 +14,7 @@ import { createObservedConversationEvents } from "../../packages/observability/s
 import { PostgresConversationEventTransactionV1 } from "../../packages/platform-store/src/conversation-events.js";
 import { migratePlatformDatabase } from "../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../packages/platform-store/src/postgres-test.js";
+import { startAlertBackend } from "./alert-backend.js";
 import { evaluateAlerts } from "./alerts.js";
 import {
 	assertDockerCapacity,
@@ -88,6 +89,7 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 	const alerts: { phase: string; state: ReturnType<typeof evaluateAlerts> }[] =
 		[];
 	const failures: unknown[] = [];
+	let backend: Awaited<ReturnType<typeof startAlertBackend>> | undefined;
 	try {
 		await migratePlatformDatabase(db);
 		configureDatabase(db.databaseUrl);
@@ -185,6 +187,17 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		};
 		const initialPending = await readPending();
 		await waitForApiResources(initialPending);
+		backend = await startAlertBackend(
+			collector.name,
+			thresholds,
+			`${evidencePath}.alerts-cleanup.json`,
+		);
+		const alertBackend = backend;
+		await until(
+			async () =>
+				(await alertBackend.query('max(up{job="platform"})')).data.result[0]
+					?.value[1] === "1",
+		);
 		const record = async (
 			phase: string,
 			serviceAvailable: boolean,
@@ -206,17 +219,37 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 			persistentBacklog: false,
 			abnormalErrors: false,
 		});
+		const backlogMark = await backend.mark();
 		await sql`insert into platform.outbox_items (id,scope_type,scope_id,operation,payload,trace_id) values ('collector-backlog','acceptance','collector','acceptance.no-dispatch','{}',${randomUUID()})`;
 		await record("backlog-start", true, 0);
 		await wait(1100);
 		expect((await record("backlog-firing", true, 0)).persistentBacklog).toBe(
 			true,
 		);
+		const backlogFired = await backend.waitFor(
+			"PlatformPersistentBacklog",
+			"firing",
+			backlogMark,
+		);
+		expect(
+			(
+				await backend.query(
+					'sum(agent_platform_resource_count{service="platform-api",kind="outbox_pending"})',
+				)
+			).data.result[0]?.value[1],
+		).toBe(String(initialPending + 1));
 		await sql`delete from platform.outbox_items where id = 'collector-backlog'`;
 		expect((await record("backlog-recovered", true, 0)).persistentBacklog).toBe(
 			false,
 		);
+		await backend.waitFor(
+			"PlatformPersistentBacklog",
+			"resolved",
+			backlogFired,
+		);
 		// Force an actual HTTP query failure in this disposable database only.
+		const errorsMark = await backend.mark();
+		let errorsFired: number | undefined;
 		await sql`alter table platform.agent_applications rename to collector_applications`;
 		try {
 			expect(
@@ -243,12 +276,30 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 					)
 				).abnormalErrors,
 			).toBe(true);
+			// The actual HTTP failure counter must have two scraped observations.
+			for (let attempt = 0; attempt < 3; attempt++) {
+				await wait(1100);
+				expect(
+					(await fetch(`${origin()}/api/v2/agent-applications`)).status,
+				).toBeGreaterThanOrEqual(500);
+			}
+			errorsFired = await backend.waitFor(
+				"PlatformHttpErrors",
+				"firing",
+				errorsMark,
+			);
+			await backend.query(
+				'sum(increase(agent_platform_operations_total{service="platform-api",stage="http",outcome="failed"}[5s]))',
+			);
 		} finally {
 			await sql`alter table platform.collector_applications rename to agent_applications`;
 		}
 		expect((await fetch(`${origin()}/api/v2/agent-applications`)).status).toBe(
 			200,
 		);
+		if (errorsFired === undefined)
+			throw new Error("No HTTP error firing receipt");
+		await backend.waitFor("PlatformHttpErrors", "resolved", errorsFired);
 		const observedErrors = async () => {
 			const value = metricValue(
 				await collector.query(),
@@ -298,7 +349,16 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		).toBe(false);
 		const failuresBeforeDisconnect =
 			worker.observabilityStatus().exportFailures;
+		const unavailableMark = await backend.mark();
 		await collector.disconnect();
+		const unavailableFired = await backend.waitFor(
+			"PlatformCollectorUnavailable",
+			"firing",
+			unavailableMark,
+		);
+		expect(
+			(await backend.query('max(up{job="platform"})')).data.result[0]?.value[1],
+		).toBe("0");
 		const failedExportResponse = await fetch(
 			`${origin()}/api/v2/agent-applications`,
 		);
@@ -339,6 +399,18 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		});
 		const finalMetrics = await collector.query();
 		const finalTraces = await collector.read();
+		await backend.waitFor(
+			"PlatformCollectorUnavailable",
+			"resolved",
+			unavailableFired,
+		);
+		const alertBackendEvidence = await backend.evidence();
+		for (const sentinel of [
+			"PRIVATE_BODY_SENTINEL",
+			"PRIVATE_CURSOR_SENTINEL",
+		]) {
+			expect(JSON.stringify(alertBackendEvidence)).not.toContain(sentinel);
+		}
 		for (const text of [finalMetrics, finalTraces, logs]) {
 			expect(text).not.toContain("PRIVATE_BODY_SENTINEL");
 			expect(text).not.toContain("PRIVATE_CURSOR_SENTINEL");
@@ -363,13 +435,15 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 					structuredLogEvidence: logs,
 					thresholds,
 					alerts,
+					alertBackend: alertBackendEvidence,
 					exportFailureStatus,
 					persistedEvents: rows[0]?.count,
 					finalMetrics,
 					limitations: [
 						"Controlled identity and admissions",
 						"Worker lifecycle plus real event transaction only; dispatch not exercised",
-						"Backlog seeded in disposable database; production sampler not wired",
+						"Backlog seeded in disposable database; formal API sampler wired; Worker resource sampler not exercised",
+						"Controlled alert backend/webhook only; production capacity and operational destination not accepted",
 						"No Runtime or Connection evidence; AC1-9 not complete",
 					],
 				},
@@ -381,6 +455,7 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		failures.push(error);
 	} finally {
 		for (const close of [
+			async () => backend?.stop(),
 			async () => {
 				if (api) await createPlatformApiShutdown(api)();
 			},
@@ -401,4 +476,4 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 	}
 	if (failures.length)
 		throw new AggregateError(failures, "Acceptance or cleanup failed");
-}, 120_000);
+}, 300_000);

@@ -32,3 +32,11 @@ Collector 固定使用已有官方 `otel/opentelemetry-collector-contrib:0.133.0
 服务关闭/恢复、数据库查询失败/恢复、持续 outbox 积压/清空分别触发并恢复受控告警。错误恢复使用观测计数的窗口差值，不能把累计错误计数永久判为故障。Collector 停止期间验证真实 API 查询和事件事务仍成功，exportFailures 单独增加；恢复后回读采集计数。缺失指标不补成零积压。
 
 生产容量阈值、必要审计失败语义、慢消费者/队列满或完整进程调度路径仍不在此范围。告警投递到真实运维后端仍需部署方明确配置授权与回读。
+
+## 受控告警后端与出口
+
+`alert-backend.ts` 在同一次 Collector 验收中启动未修改的官方 Prometheus v3.15.0、Alertmanager v0.34.1 和仓库固定 Node 24 镜像；内部网络无外部 exporter，查询与 webhook 回读只绑定回环端口。复用已有镜像，仅隔离 hosted Linux runner 可 provision 缺少的固定镜像；本地不自动 pull。镜像 ID/RepoDigest、实际配置、PromQL 结果与通知保存在 `collector.json` 的 `alertBackend`，精确资源清理写入相邻 `.alerts-cleanup.json`。
+
+正式 API 的 outbox gauge 与受控真实 HTTP 查询失败 counter 分别触发持续积压和错误窗口；Collector 停止触发采集服务不可用。三者均由真实规则求值和 Alertmanager 投递 firing/resolved，接收器只保留固定 alertname/kind/status 与 payload hash，输出有界。采集服务告警不能据此判定 API/Runtime/Connection 的业务可用性。测试等待包含初次镜像准备，原业务与脱敏断言仍全部保留。
+
+阈值只来自本次 disposable backlog/error fixture；此后端不是生产部署选择、容量配置或真实运维通知验收。#441 AC1–9、真实 Codex 全链、四模板与其他 owner 的原义务继续开放。
