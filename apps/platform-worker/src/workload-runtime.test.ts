@@ -316,6 +316,7 @@ function fixture(
 			{
 				templateId: "template-a",
 				imageDigest: `sha256:${"a".repeat(64)}`,
+				driver: "codex",
 				protocol: "openai-responses-v1",
 			},
 		],
@@ -474,6 +475,17 @@ function cleanupSecrets(
 }
 
 describe("assembled Workload Runtime contracts", () => {
+	it.each(["fake", "unknown", "claude"])(
+		"rejects an invalid direct Runtime Driver binding %s before resources",
+		(driver) => {
+			const f = fixture();
+			Object.assign(f.options.templateModelBindings[0] ?? {}, { driver });
+			expect(() => createWorkloadRuntimeV1(f.options)).toThrow(
+				"MODEL_CONFIGURATION_UNAVAILABLE",
+			);
+			expect(f.writes).toHaveLength(0);
+		},
+	);
 	it("rejects a Messages candidate bound to a Responses image before decrypting or probing", async () => {
 		const catalog = catalogFixture();
 		catalog.endpoints = catalog.endpoints.map((endpoint) => ({
@@ -528,6 +540,7 @@ describe("assembled Workload Runtime contracts", () => {
 						{
 							templateId: "template-a",
 							imageDigest: `sha256:${"a".repeat(64)}`,
+							driver: protocol === "openai-responses-v1" ? "codex" : "claude",
 							protocol,
 						},
 					],
@@ -558,12 +571,6 @@ describe("assembled Workload Runtime contracts", () => {
 			await f.tick(4);
 			const state = f.state;
 			assert(state?.identity);
-			if (change === "expired") catalog.validUntil = Date.now() - 1;
-			else if (change === "removed") catalog.endpoints = [];
-			else {
-				assert(catalog.endpoints[0]);
-				catalog.endpoints[0].baseUrl = "https://models.example.test/changed/v1";
-			}
 			const runtime = createWorkloadRuntimeV1(f.options);
 			const input = {
 				configuration: state.candidate.configuration,
@@ -573,6 +580,19 @@ describe("assembled Workload Runtime contracts", () => {
 				requestId: "request-a",
 				traceId: "trace-a",
 			};
+			const binding = f.options.templateModelBindings[0];
+			assert(binding);
+			Object.assign(binding, { driver: "fake", protocol: "invalid" });
+			Object.assign(f.options, { templateModelBindings: [] });
+			await expect(runtime.apply(state, false, input)).resolves.toEqual(
+				state.identity,
+			);
+			if (change === "expired") catalog.validUntil = Date.now() - 1;
+			else if (change === "removed") catalog.endpoints = [];
+			else {
+				assert(catalog.endpoints[0]);
+				catalog.endpoints[0].baseUrl = "https://models.example.test/changed/v1";
+			}
 			const writes = f.writes.length;
 			await expect(runtime.apply(state, false, input)).rejects.toThrow(
 				"MODEL_CONFIGURATION_UNAVAILABLE",
@@ -718,6 +738,7 @@ describe("assembled Workload Runtime contracts", () => {
 						{
 							templateId: "template-a",
 							imageDigest: `sha256:${"a".repeat(64)}`,
+							driver,
 							protocol: profile,
 						},
 					],

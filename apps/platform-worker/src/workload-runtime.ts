@@ -18,6 +18,7 @@ import {
 	type StandardTemplateModelBindingV1,
 	standardTemplateModelProtocolV1,
 	validateRuntimeModelProjectionV1,
+	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
 import {
 	cleanupUnactivatedSecretCandidateV1,
@@ -347,6 +348,9 @@ export function createWorkloadRuntimeV1(
 } {
 	if (!Array.isArray(options.templateModelBindings))
 		throw new TypeError("Template model bindings are required");
+	const templateModelBindings = validateStandardTemplateModelBindingsV1(
+		options.templateModelBindings,
+	);
 	const fetcher = options.fetch ?? globalThis.fetch;
 	const observedCapabilities = new WeakMap<
 		WorkloadReconciliationStateV1,
@@ -481,7 +485,7 @@ export function createWorkloadRuntimeV1(
 		if (!options.modelCatalog) throw new ModelConfigurationErrorV1();
 		const protocol = standardTemplateModelProtocolV1(
 			state.candidate.configuration.source,
-			options.templateModelBindings,
+			templateModelBindings,
 		);
 		const projection = validateRuntimeModelProjectionV1(
 			state.candidate.modelProjection,
@@ -660,7 +664,7 @@ export function createWorkloadRuntimeV1(
 						configuration,
 						protocol: standardTemplateModelProtocolV1(
 							configuration.source,
-							options.templateModelBindings,
+							templateModelBindings,
 						),
 						catalog: options.modelCatalog,
 						access: options.modelAccess,
