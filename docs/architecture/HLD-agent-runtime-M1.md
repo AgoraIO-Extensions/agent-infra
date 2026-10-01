@@ -170,9 +170,48 @@ Claude 的持久请求、accepted/unknown、状态和恢复继续遵循 §§7–
 
 目录不可枚举其他主体的 Session、路径或内容；使用权、读取权与执行权分别检查。受控来源记录由部署可信配置产生，不接受模型、Skill frontmatter 或浏览器自报。Skill 参数、说明和内容都不是授权；嵌套资源、脚本、符号链接及原生自动发现须受既有文件与装配边界约束。只读发现不执行 Skill 脚本、模型请求或业务工具。
 
+原生元数据读取的用途、当前政策、证明和期限以
+[工程 Spec §9.3.1](SPEC-agent-infra-M1-engineering-architecture.md#931-原生元数据读取授权)
+为唯一授权合同。API 先按受认证主体/channel 定位 Conversation，再限定其中的原 Execution；
+代次取该 Execution 的持久记录。当前 Conversation 的 Host ref、当前 Agent 配置及模型
+修订不能证明旧执行的 Host/native 配置。Worker/Host 只从唯一原持久绑定解析
+`originalHostScopeRef` 及实际 native ref/thread/config；缺少或矛盾时返回 unavailable，
+不建立新会话或换绑。公开 selector 不允许请求者指定这些字段。
+
 ### 5.2 调用生命周期与兼容
 
 - 只读能力沿原 Session 的受限查询返回投影，不创建 Session/Turn、不恢复业务、不改变平台任务状态。未装载、不可用或无法核实分别返回，不能把 `notLoaded` 当作原任务已停止；当前读取权限失效时不返回结果。
+
+metadata-only concrete context 保留原同步护栏，新增显式异步当前确认：
+
+```ts
+type CodexNativeCommandReadContext = Pick<
+  RuntimeOriginalEvidenceReadContext,
+  "signal" | "expiresAt" | "assertCurrent"
+> & {
+  readonly nativeSessionRef: string;
+  revalidate(): Promise<RuntimeOriginalEvidenceBinding>;
+};
+```
+
+该签名仅用于具体原生 metadata 读取；`RuntimeOriginalEvidenceReadContext` 的同步
+`assertCurrent` 与 recovery 的 commit 保持原义，不用恢复 factory 构造读取权。
+Host factory 先消费当前获准结论和真实原绑定，异步 revalidate 沿可信内部链重验并更新
+本次 request 的局部确认状态；拒绝或不可确认则永久失效并 abort。同步 assertCurrent 只核
+这个局部状态及本机原绑定/配置/进程，不隐藏远程 Promise，不把旧 allowed 当当前授权。
+
+Driver 在开始 native metadata 请求前、每个相关 await 后及最终返回前显式等待 revalidate，
+随后核返回的原主体/范围等于最初绑定，并再次检查 signal、固定期限、原配置、进程和
+Skill epoch。范围不会因当前权限扩大而换成另一原执行。原同步 RPC/config callback 继续
+执行本地护栏；新进程的 initialize、config/read、模型 profile 核验、固定 extraRoots/set 及
+thread/read、skills/list 等等待边界同样受当前读取确认约束，不能只在公开方法尾部补一次。
+等待当前确认也受同一 signal/deadline 约束，不续期、不序列化函数，不返回结果后补验。
+
+原生请求失败、撤权/账号或所用凭证失效、期限/abort、等待期间原范围/config/process/epoch
+变化、当前确认依赖失败、返回前拒绝及迟到响应均须有真实入口负向测试。API 结果交付与
+请求关联失效统一遵循 [Spec §9.3.1](SPEC-agent-infra-M1-engineering-architecture.md#931-原生元数据读取授权)，
+不另设恢复路径。受控、原 native 与浏览器证据按 [§5.4](#54-独立验收与实施交接) 分别验收。
+
 - 产生 Turn 的 Skill/命令复用现有 Message/Execution/outbox；不产生回答但改变原生状态的命令也绑定一个持久 Execution 与命令输入，复用同一调度及事件链，不伪造用户聊天消息或模型回答。活跃、等待或 unknown 占用下返回 busy，不插队、不转成补充指令。
 - 受理时冻结能力/目录/包修订、参数摘要、原主体/Agent/Conversation、模型选择及 Key 引用版本；幂等键沿既有作用域使用。同键同输入回读原结果，同键不同内容冲突；业务原文按普通消息权限保存，审计只保留必要元数据。
 - 调用前按 §§7–9 校验当前业务授权、原执行范围、Session/generation/fence 和操作绑定。目录修订不替代 Grant，Skill 不增加工具权限；当前权限扩大不能扩大旧执行，权限缺失或依赖不可确认时拒绝新副作用。

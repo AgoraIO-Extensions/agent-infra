@@ -19,6 +19,10 @@ import {
 	type PersonalApiCredentialRouteDependencies,
 	registerPersonalApiCredentialRoutes,
 } from "./http/personal-api-credential-routes.js";
+import {
+	type PersonalRelayKeyRoutesDependencies,
+	registerPersonalRelayKeyRoutes,
+} from "./http/personal-relay-key-routes.js";
 import { registerRetiredManagementRoutes } from "./http/retired-management-routes.js";
 import {
 	registerScopedAuditRoutes,
@@ -59,6 +63,7 @@ export interface PlatformAppDependencies {
 	readonly conversation: ConversationRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
 	readonly personalApiCredentials?: PersonalApiCredentialRouteDependencies;
+	readonly personalRelayKeys?: PersonalRelayKeyRoutesDependencies;
 	readonly sessionAudit: SessionAuditRoutesDependencies;
 	readonly wecom?: WecomRoutesDependenciesV1;
 	readonly wecomReceipts?: WecomReceiptRoutesDependenciesV1;
@@ -112,6 +117,8 @@ export function createPlatformApp(
 	else if (dependencies.wecomReceipts)
 		registerWecomReceiptRoutesV1(app, dependencies.wecomReceipts);
 	registerRetiredManagementRoutes(app);
+	if (dependencies.personalRelayKeys)
+		registerPersonalRelayKeyRoutes(app, dependencies.personalRelayKeys);
 	registerV2ManagementRoutes(app, dependencies.management);
 	if (dependencies.personalApiCredentials)
 		registerPersonalApiCredentialRoutes(

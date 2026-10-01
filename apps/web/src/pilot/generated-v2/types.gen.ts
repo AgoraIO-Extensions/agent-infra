@@ -563,6 +563,28 @@ export type PersonalApiCredentialRevokeResponseV1 = {
     replayed: boolean;
 };
 
+export type PersonalRelayKeyReplaceRequestV1 = {
+    expectedVersion: number | null;
+    /**
+     * Write-only personal Relay Key; never returned or persisted as plaintext.
+     */
+    keyValue: string;
+};
+
+export type PersonalRelayKeyRevokeRequestV1 = {
+    expectedVersion: number;
+};
+
+export type PersonalRelayKeyStateV1 = {
+    isSet: false;
+    keyVersion: null;
+    schemaVersion: 1;
+} | {
+    isSet: true;
+    keyVersion: number;
+    schemaVersion: 1;
+};
+
 export type PilotInternalErrorV1 = {
     code: 'INTERNAL_ERROR';
     message: string;
@@ -1885,3 +1907,150 @@ export type ListRecentPersonalConversationsV2Responses = {
 };
 
 export type ListRecentPersonalConversationsV2Response = ListRecentPersonalConversationsV2Responses[keyof ListRecentPersonalConversationsV2Responses];
+
+export type RevokePersonalRelayKeyV2Data = {
+    body: PersonalRelayKeyRevokeRequestV1;
+    path?: never;
+    query?: never;
+    url: '/api/v2/me/relay-key';
+};
+
+export type RevokePersonalRelayKeyV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokePersonalRelayKeyV2Error = RevokePersonalRelayKeyV2Errors[keyof RevokePersonalRelayKeyV2Errors];
+
+export type RevokePersonalRelayKeyV2Responses = {
+    /**
+     * Committed unset personal Key state
+     */
+    200: PersonalRelayKeyStateV1;
+};
+
+export type RevokePersonalRelayKeyV2Response = RevokePersonalRelayKeyV2Responses[keyof RevokePersonalRelayKeyV2Responses];
+
+export type GetPersonalRelayKeyV2Data = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v2/me/relay-key';
+};
+
+export type GetPersonalRelayKeyV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetPersonalRelayKeyV2Error = GetPersonalRelayKeyV2Errors[keyof GetPersonalRelayKeyV2Errors];
+
+export type GetPersonalRelayKeyV2Responses = {
+    /**
+     * Personal Key state only
+     */
+    200: PersonalRelayKeyStateV1;
+};
+
+export type GetPersonalRelayKeyV2Response = GetPersonalRelayKeyV2Responses[keyof GetPersonalRelayKeyV2Responses];
+
+export type ReplacePersonalRelayKeyV2Data = {
+    body: PersonalRelayKeyReplaceRequestV1;
+    path?: never;
+    query?: never;
+    url: '/api/v2/me/relay-key';
+};
+
+export type ReplacePersonalRelayKeyV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReplacePersonalRelayKeyV2Error = ReplacePersonalRelayKeyV2Errors[keyof ReplacePersonalRelayKeyV2Errors];
+
+export type ReplacePersonalRelayKeyV2Responses = {
+    /**
+     * Committed personal Key state
+     */
+    200: PersonalRelayKeyStateV1;
+};
+
+export type ReplacePersonalRelayKeyV2Response = ReplacePersonalRelayKeyV2Responses[keyof ReplacePersonalRelayKeyV2Responses];

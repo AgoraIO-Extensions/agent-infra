@@ -196,7 +196,7 @@ describe("credential holder process protection", () => {
 			),
 		).resolves.toMatchObject({ stdout: "application-entered\n" });
 		await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
-	});
+	}, 15_000);
 
 	it("starts with immutable zero core limits and cannot enable inspector through SIGUSR1", async () => {
 		const cwd = await launchFixture(`

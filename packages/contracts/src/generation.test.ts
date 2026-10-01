@@ -139,6 +139,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/me/api-credentials",
 			"/api/v2/me/api-credentials/{credentialId}",
 			"/api/v2/me/conversations/recent",
+			"/api/v2/me/relay-key",
 		]);
 		const recent =
 			artifacts.pilotBrowserOpenapiV2.paths["/api/v2/me/conversations/recent"]
