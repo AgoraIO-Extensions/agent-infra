@@ -35,6 +35,83 @@ function client(fetcher: typeof fetch) {
 }
 
 describe("Worker V3 Runtime Client", () => {
+	it("reads only the original binding with the service identity and original status request", async () => {
+		const response = {
+			schemaVersion: 3,
+			executionId: "execution",
+			outcome: "binding_found",
+			hostSessionRef: "durable-host",
+		};
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValue(new Response(JSON.stringify(response)));
+		const signal = new AbortController().signal;
+		const request = {
+			...base,
+			hostSessionRef: null,
+			originalOperationDigest: "a".repeat(43),
+		};
+		await expect(
+			client(fetcher).readOriginalBinding(request, signal),
+		).resolves.toEqual(response);
+		const [url, init] = fetcher.mock.calls[0] ?? [];
+		expect(String(url)).toBe(
+			"http://runtime.local/internal/runtime/v3/original-binding",
+		);
+		expect(init?.signal).toBe(signal);
+		expect(init?.headers).toMatchObject({
+			authorization: "Bearer synthetic-service-proof",
+		});
+		expect(JSON.parse(init?.body as string)).toEqual(request);
+	});
+
+	it.each([
+		{ executionId: "other" },
+		{ hostSessionRef: "" },
+		{ hostSessionRef: null },
+		{ schemaVersion: 2 },
+		{ status: "running" },
+		{ code: "RUNTIME_ACCEPTANCE_UNKNOWN" },
+		{ outcome: "found" },
+		{ outcome: "not_found" },
+	])("rejects a conflicting or non-binding response %j", async (invalid) => {
+		const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					schemaVersion: 3,
+					executionId: "execution",
+					hostSessionRef: "durable-host",
+					outcome: "binding_found",
+					...invalid,
+				}),
+			),
+		);
+		await expect(
+			client(fetcher).readOriginalBinding({
+				...base,
+				hostSessionRef: null,
+				originalOperationDigest: "a".repeat(43),
+			}),
+		).rejects.toMatchObject({
+			code: "RUNTIME_RESPONSE_INVALID",
+			retryable: true,
+		});
+	});
+
+	it("rejects a binding query with an existing ref before sending it", async () => {
+		const fetcher = vi.fn<typeof fetch>();
+		await expect(
+			client(fetcher).readOriginalBinding({
+				...base,
+				originalOperationDigest: "a".repeat(43),
+			}),
+		).rejects.toMatchObject({
+			code: "RUNTIME_REQUEST_INVALID",
+			retryable: false,
+		});
+		expect(fetcher).not.toHaveBeenCalled();
+	});
+
 	it("projects unverified and verified evidence into the same terminal domain attempt", async () => {
 		const fact = {
 			kind: "tool",
