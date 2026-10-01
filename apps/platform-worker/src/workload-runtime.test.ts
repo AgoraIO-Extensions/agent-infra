@@ -791,11 +791,11 @@ describe("assembled Workload Runtime contracts", () => {
 					aadBinding: { ...original.crypto.aadBinding, agentId },
 				},
 			});
-			const state = {
-				...f.state,
-				agentId,
-				candidate: { ...f.state.candidate, configuration },
+			const candidate: WorkloadReconciliationStateV1["candidate"] = {
+				...f.state.candidate,
+				configuration,
 			};
+			const state = { ...f.state, agentId, candidate };
 			const input = {
 				configuration,
 				state,

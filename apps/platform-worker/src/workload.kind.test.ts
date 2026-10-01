@@ -382,17 +382,18 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					state.candidate.modelProjection,
 					state.candidate.configuration,
 				);
+				assert(seed.configuration.source.kind === "standard");
 				expect(projection.standardTemplateBinding).toEqual({
-					templateId:
-						seed.configuration.source.kind === "standard"
-							? seed.configuration.source.templateId
-							: "",
+					templateId: seed.configuration.source.templateId,
 					imageDigest,
 					driver: "pi",
 					protocol: "anthropic-messages-v1",
 				});
 				const injection = runtimeModelInjectionV1(projection);
-				const name = state.candidate.deployment.service.name;
+				const deployment = validateAgentWorkloadDesiredV1(
+					state.candidate.deployment,
+				);
+				const name = deployment.service.name;
 				const workload = await client.read<V1StatefulSet>("StatefulSet", name);
 				assert(workload?.spec?.template.spec?.containers[0]);
 				const container = workload.spec.template.spec.containers[0];
@@ -432,7 +433,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				const pod = await client.read<V1Pod>("Pod", `${name}-0`);
 				const pvc = await client.read<V1PersistentVolumeClaim>(
 					"PersistentVolumeClaim",
-					state.candidate.deployment.persistentVolume.name,
+					deployment.persistentVolume.name,
 				);
 				assert(pod?.metadata?.uid && pvc?.metadata?.uid);
 				expect(pvc.status?.phase).toBe("Bound");
@@ -516,11 +517,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				try {
 					await worker?.stop();
 				} finally {
-					try {
-						await sql.end();
-					} finally {
-						await database.stop();
-					}
+					await sql.end().finally(() => database.stop());
 				}
 			}
 		}, 180_000);
