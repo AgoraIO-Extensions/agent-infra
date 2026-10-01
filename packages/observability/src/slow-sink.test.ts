@@ -8,7 +8,9 @@ import { afterEach, expect, it } from "vitest";
 import { startObservability } from "./index.js";
 
 const TRACE_QUEUE_SIZE = 512;
+const TRACE_BATCH_SIZE = 32;
 const TRACE_RECORDS = TRACE_QUEUE_SIZE + 128;
+const MAX_TRACE_REQUESTS = Math.ceil(TRACE_QUEUE_SIZE / TRACE_BATCH_SIZE) + 1;
 const CLOSE_BOUND_MS = 5000;
 const CHILD_EXIT_BOUND_MS = 8000;
 
@@ -101,6 +103,7 @@ it("bounds real trace export under a slow OTLP sink and closes within five secon
 			requestId: "PRIVATE_SENTINEL",
 		});
 	}
+	const businessResult = { completed: true };
 
 	// The test intentionally records beyond BatchSpanProcessor's 512-span queue.
 	expect(markers.length).toBeGreaterThan(TRACE_QUEUE_SIZE);
@@ -116,9 +119,16 @@ it("bounds real trace export under a slow OTLP sink and closes within five secon
 	const startedAt = Date.now();
 	await telemetry.close();
 	const elapsed = Date.now() - startedAt;
-	expect(elapsed).toBeLessThan(CLOSE_BOUND_MS + 500);
+	expect(elapsed).toBeLessThanOrEqual(CLOSE_BOUND_MS);
+	await waitFor(() => telemetry.status().state === "closed");
 	expect(telemetry.status().exportFailures).toBeGreaterThan(0);
-	expect(telemetry.status().state).toMatch(/closed|closing/);
+	expect(businessResult.completed).toBe(true);
+	for (const request of collector.requests)
+		expect(request.body.toString("utf8")).not.toContain("PRIVATE_SENTINEL");
+	await new Promise((resolve) => setTimeout(resolve, 500));
+	expect(traceRequests(collector.requests).length).toBeLessThanOrEqual(
+		MAX_TRACE_REQUESTS,
+	);
 	const traceCountAfterClose = traceRequests(collector.requests).length;
 	telemetry.record({
 		stage: "worker",
@@ -151,6 +161,16 @@ it("lets a child using the real package exit naturally after a slow export", asy
 		console.log("CHILD_BUSINESS_COMPLETE");
 		await telemetry.close();
 		console.log("CHILD_TELEMETRY_CLOSED");
+		const activeResources = process.getActiveResourcesInfo();
+		const otelLeaks = activeResources.filter((resource) =>
+			["Timeout", "TCP", "TCPConnectWrap", "TCPSocketWrap", "HTTPParser"].includes(resource),
+		);
+		if (otelLeaks.length > 0) {
+			console.error("CHILD_OTEL_HANDLES:", otelLeaks.join(","));
+			process.exitCode = 1;
+		} else {
+			console.log("CHILD_NO_OTEL_HANDLES");
+		}
 	`;
 	const child = spawn(
 		process.execPath,
@@ -193,8 +213,17 @@ it("lets a child using the real package exit naturally after a slow export", asy
 	expect(Buffer.concat(stdout).toString("utf8")).toContain(
 		"CHILD_TELEMETRY_CLOSED",
 	);
+	expect(Buffer.concat(stdout).toString("utf8")).toContain(
+		"CHILD_NO_OTEL_HANDLES",
+	);
 	expect(Buffer.concat(stderr).toString("utf8")).not.toContain(
 		"PRIVATE_SENTINEL",
 	);
-	await waitFor(() => traceRequests(collector.requests).length > 0);
+	await waitFor(() =>
+		traceRequests(collector.requests).some((request) =>
+			request.body.toString("utf8").includes("child-natural-exit"),
+		),
+	);
+	for (const request of collector.requests)
+		expect(request.body.toString("utf8")).not.toContain("PRIVATE_SENTINEL");
 });
