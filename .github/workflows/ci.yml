@@ -359,7 +359,6 @@ jobs:
       AO_SESSION_ID: workload-kind-${{ github.run_id }}-${{ github.run_attempt }}
       SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
       WORKLOAD_KIND_FORMAL_CHAIN: "1"
-      WORKLOAD_KIND_EVIDENCE_DIR: ${{ runner.temp }}/workload-kind
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -380,6 +379,7 @@ jobs:
         run: pnpm exec turbo run build --filter=@agent-infra/platform-worker
       - name: Verify Kubernetes lifecycle and isolation
         env:
+          WORKLOAD_KIND_EVIDENCE_DIR: ${{ runner.temp }}/workload-kind
           GITHUB_TOKEN: ${{ github.token }}
           VULNERABILITY_EXCEPTIONS: ${{ vars.VULNERABILITY_EXCEPTIONS }}
         run: bash deploy/kind/workload.sh
