@@ -1,6 +1,6 @@
 # Platform collector 局部验收
 
-本目录消费 #441 的既有遥测接口，仅用于受控本地验收。生产告警规则及完整 AC-1–AC-9 仍待接收方验收，不能据此关闭 Issue。
+本目录消费 #441 的既有遥测接口，仅用于受控本地或 hosted Linux 验收。生产告警规则及完整 AC-1–AC-9 仍待接收方验收，不能据此关闭 Issue。
 
 ## 入口和归属
 
@@ -13,9 +13,9 @@
 
 ## 运行
 
-要求 Node 24、已安装 workspace 依赖、已构建应用，以及现有 Colima Docker 环境。显式设置 `DOCKER_HOST` 指向获准环境、`COLIMA_PROFILE` 为相应 profile、`AO_SESSION_ID` 为本次唯一标识，`OBSERVABILITY_EVIDENCE` 为仓库外证据文件绝对路径。不得指向生产数据库或外部 OTLP。
+要求 Node 24、已安装 workspace 依赖和已构建应用。受控本地运行显式设置 `DOCKER_HOST` 指向获准 Colima、`COLIMA_PROFILE` 为相应 profile；hosted Linux 运行设置 `OBSERVABILITY_DOCKER_MODE=hosted-linux`，由 harness 校验 GitHub Linux runner、`unix:///var/run/docker.sock`、真实 Docker daemon 的 `DockerRootDir` 和文件系统余量。两种路径都要求 `AO_SESSION_ID` 为本次唯一标识，`OBSERVABILITY_EVIDENCE` 为仓库外证据文件绝对路径；不得指向生产数据库或外部 OTLP。
 
-运行前确认所选 Docker 与 Colima profile 匹配，使用 `colima ssh --profile "$COLIMA_PROFILE" -- df -Pk /var/lib/docker` 验证 Available 至少 5242880 KiB；总内存不代表磁盘余量。空间不足时停止容器验证，不自动清理其他资源。
+本地运行前确认所选 Docker 与 Colima profile 匹配，使用 `colima ssh --profile "$COLIMA_PROFILE" -- df -Pk /var/lib/docker` 验证 Available 至少 5242880 KiB；hosted Linux 路径由 harness 对实际 daemon `DockerRootDir` 执行相同阈值检查。总内存不代表磁盘余量。空间不足时停止容器验证，不自动清理其他资源。
 
 ```sh
 pnpm exec tsc -p tests/observability/tsconfig.json --noEmit
