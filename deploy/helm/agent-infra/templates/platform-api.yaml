@@ -27,6 +27,10 @@ metadata:
     app.kubernetes.io/component: platform-api
 spec:
   replicas: 1
+  {{- if .Values.nativeMetadata.enabled }}
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
@@ -43,6 +47,9 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+        {{- if .Values.nativeMetadata.enabled }}
+        fsGroup: 1000
+        {{- end }}
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -58,6 +65,10 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
           env:
+            {{- if .Values.nativeMetadata.enabled }}
+            - name: PLATFORM_API_NATIVE_METADATA_CONFIGURATION_MODULE
+              value: file:///var/run/agent-infra/native-metadata/api-metadata.mjs
+            {{- end }}
             - name: PLATFORM_API_DEPLOYMENT_MODULE
               value: {{ .Values.platformApi.deploymentModule | quote }}
             - name: PLATFORM_DATABASE_URL
@@ -73,10 +84,24 @@ spec:
             - configMapRef:
                 name: {{ $bindings }}
           volumeMounts:
+            {{- if .Values.nativeMetadata.enabled }}
+            - name: native-metadata
+              mountPath: /var/run/agent-infra/native-metadata
+              readOnly: true
+            {{- end }}
             - name: encryption-public-key
               mountPath: /var/run/agent-infra/encryption-public-key
               readOnly: true
       volumes:
+        {{- if .Values.nativeMetadata.enabled }}
+        - name: native-metadata
+          secret:
+            secretName: {{ .Values.nativeMetadata.apiConfigurationSecretRef.name }}
+            defaultMode: 288
+            items:
+              - key: {{ required "nativeMetadata.apiConfigurationSecretRef.key is required" .Values.nativeMetadata.apiConfigurationSecretRef.key }}
+                path: api-metadata.mjs
+        {{- end }}
         - name: encryption-public-key
           secret:
             secretName: {{ .Values.keys.encryptionPublicKey.secretRef.name }}

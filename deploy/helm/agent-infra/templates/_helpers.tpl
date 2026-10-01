@@ -19,10 +19,27 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "agent-infra.validate" -}}
+{{- if .Values.nativeMetadata.enabled -}}
+{{- if or .Values.workloadTopology.enabled (ne (int .Values.platformWorker.replicas) 1) -}}
+{{- fail "native metadata requires one production Worker instance" -}}
+{{- end -}}
+{{- if or (lt (int .Values.nativeMetadata.workerPort) 1024) (gt (int .Values.nativeMetadata.workerPort) 65535) -}}
+{{- fail "native metadata Worker port is invalid" -}}
+{{- end -}}
+{{- $workerSecret := required "nativeMetadata.workerConfigurationSecretRef.name is required" .Values.nativeMetadata.workerConfigurationSecretRef.name -}}
+{{- $apiSecret := required "nativeMetadata.apiConfigurationSecretRef.name is required" .Values.nativeMetadata.apiConfigurationSecretRef.name -}}
+{{- $keyringSecret := .Values.keys.workerDecryptionKeyring.secretRef.name -}}
+{{- $businessConfigurationSecret := get (.Values.platformWorker.configurationModuleSecretRef | default dict) "name" | default "" -}}
+{{- $runtimeSecret := get (.Values.platformWorker.runtimeAuthSecretRef | default dict) "name" | default "" -}}
+{{- if or (eq $workerSecret $apiSecret) (eq $workerSecret $keyringSecret) (eq $apiSecret $keyringSecret) (eq $workerSecret $runtimeSecret) (eq $apiSecret $runtimeSecret) (eq $workerSecret $businessConfigurationSecret) (eq $apiSecret $businessConfigurationSecret) -}}
+{{- fail "native metadata configuration Secrets must be separate from each other and business Worker material" -}}
+{{- end -}}
+{{- end -}}
 {{- $placeholderDigest := "sha256:0000000000000000000000000000000000000000000000000000000000000000" -}}
 {{- if eq .Values.images.platformWorker.digest $placeholderDigest -}}
 {{- fail "platform Worker image digest must be replaced" -}}
 {{- end -}}
+
 {{- if and .Values.enterpriseDirectorySync.enabled (eq .Values.images.enterpriseDirectorySync.digest $placeholderDigest) -}}
 {{- fail "Enterprise Directory Sync image digest must be replaced" -}}
 {{- end -}}
@@ -49,5 +66,22 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- if and .Values.workloadTopology.enabled (eq (int .Values.workloadTopology.service.runtimePort) (int .Values.workloadTopology.service.routePort)) -}}
 {{- fail "workload runtime and route ports must be different" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "agent-infra.nativeMetadataPeer" -}}
+{{- if .ip -}}
+{{- if not (regexMatch "^[0-9a-fA-F:.]+/(32|128)$" .ip) -}}
+{{- fail "native metadata endpoint must use one /32 or /128 address" -}}
+{{- end -}}
+ipBlock:
+  cidr: {{ .ip | quote }}
+{{- else -}}
+namespaceSelector:
+  matchLabels:
+    kubernetes.io/metadata.name: {{ required "native metadata peer namespace is required" .namespace | quote }}
+podSelector:
+  matchLabels:
+    {{- required "native metadata peer podLabels must be nonempty" .podLabels | toYaml | nindent 4 }}
 {{- end -}}
 {{- end -}}

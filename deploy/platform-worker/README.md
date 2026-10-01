@@ -121,3 +121,22 @@ export const workloadInput = {
 其 Kubernetes 与 Runtime HTTP 是受控对端；不代表真实模型、身份服务、Connection 或 Web
 首通。签名 readiness 对真实 RuntimeHost 的独立验证位于 `workload-deployment.test.ts`。
 整体汇合仍遵循 [ADR 0015](../../docs/adr/0015-m1-shared-contract-assembly-convergence.md)。
+## Native metadata 装配
+
+`PLATFORM_WORKER_NATIVE_METADATA_ENABLED=true` 在原 Worker 进程开启独立 listener。
+`PLATFORM_WORKER_NATIVE_METADATA_CONFIGURATION_MODULE` 必须是部署挂载的 file URL，
+模块导出 `nativeMetadata`，结构由 `ProductionNativeMetadataWorkerInputV1` 定义。
+API 的独立模块使用 `PLATFORM_API_NATIVE_METADATA_CONFIGURATION_MODULE`，导出
+`PlatformNativeMetadataApiDeploymentV1` 对应的 `nativeMetadata`；API 不挂载 Worker 私钥。
+
+API→Worker、Worker→API、Worker→Host、Host→Worker 四个方向使用不同 transport token。
+metadata signer 使用与业务 Grant 不同的 Ed25519 key 和 keyVersion。API source 与 Host
+instance origin 由部署配置固定，不能使用多个副本的负载均衡地址冒充原实例。
+Helm 开启 `nativeMetadata.enabled` 后限制单 Worker 副本并使用 Recreate；API 回调与
+Host 回调的 NetworkPolicy peer 必须是具名 Namespace/Pod labels 或单一 IP。
+
+Codex workload 的公开配置与两份 Secret 引用由 `WorkloadRuntimeAuthV1.nativeMetadata`
+定义，并与同一标准模板 binding 传入 Runtime auth renderer。Workload
+`metadataEgress` 显式允许 Host→Worker 回调。
+仅配置或启动不能作为原 Execution/native 读取验收；读取授权和证据边界见
+[工程 Spec](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md)。

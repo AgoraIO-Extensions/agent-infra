@@ -1,6 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createPublicKey, randomUUID } from "node:crypto";
 import { createProductionConversationRuntimeResolverV2 } from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
+import {
+	createProductionNativeMetadataWorkerOptionsV1,
+	type ProductionNativeMetadataWorkerInputV1,
+} from "./native-metadata-production.js";
 import { createWecomDeploymentCoordinatorV1 } from "./wecom-deployment.js";
 import {
 	createProductionWorkloadWorkerOptionsV1,
@@ -24,6 +28,19 @@ const { workloadInput, signing, serviceToken, directory, wecom } =
 	(await import(
 		new URL("./configuration.mjs", import.meta.url).href
 	)) as DeploymentConfiguration;
+
+const metadataModule =
+	process.env.PLATFORM_WORKER_NATIVE_METADATA_CONFIGURATION_MODULE;
+let nativeMetadata: ProductionNativeMetadataWorkerInputV1 | undefined;
+if (metadataModule) {
+	try {
+		if (new URL(metadataModule).protocol !== "file:") throw new Error();
+		nativeMetadata = (await import(metadataModule)).nativeMetadata;
+		if (!nativeMetadata) throw new Error();
+	} catch {
+		throw new Error("Native metadata Worker configuration is unavailable");
+	}
+}
 
 const instanceId = randomUUID();
 let prepared: ReturnType<typeof createPrepared> | undefined;
@@ -83,4 +100,33 @@ export async function createPlatformConversationWorkerOptionsV2(
 
 export async function createPlatformWecomWorkerInstanceV1(signal: AbortSignal) {
 	return (await prepare(signal)).wecom.start(signal);
+}
+
+export function createPlatformNativeMetadataWorkerOptionsV1(
+	signal: AbortSignal,
+) {
+	if (!nativeMetadata)
+		throw new Error("Native metadata Worker deployment is unavailable");
+	const hostConfiguration = workloadInput.policy.runtimeAuth?.nativeMetadata;
+	if (
+		!hostConfiguration ||
+		hostConfiguration.issuer !== nativeMetadata.signing.issuer ||
+		hostConfiguration.keyVersion !== nativeMetadata.signing.keyVersion ||
+		hostConfiguration.publicKeyDerBase64 !==
+			createPublicKey(nativeMetadata.signing.privateKey)
+				.export({ type: "spki", format: "der" })
+				.toString("base64") ||
+		[...nativeMetadata.agents.keys()].some(
+			(id) => !hostConfiguration.agents.has(id),
+		) ||
+		hostConfiguration.agents.size !== nativeMetadata.agents.size
+	)
+		throw new Error(
+			"Native metadata Host configuration does not match the Worker",
+		);
+	return createProductionNativeMetadataWorkerOptionsV1(
+		nativeMetadata,
+		{ signing, serviceToken },
+		signal,
+	);
 }

@@ -12,7 +12,8 @@
     "platformWorker",
     "enterpriseDirectorySync",
     "migration",
-    "workloadTopology"
+    "workloadTopology",
+    "nativeMetadata"
   ],
   "properties": {
     "images": {
@@ -138,6 +139,115 @@
         }
       }
     },
+    "nativeMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "workerPort",
+        "apiConfigurationSecretRef",
+        "workerConfigurationSecretRef",
+        "apiPeer",
+        "hostPeer"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "workerPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "apiConfigurationSecretRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "key"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 253
+            },
+            "key": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253
+            }
+          }
+        },
+        "workerConfigurationSecretRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "key"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 253
+            },
+            "key": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253
+            }
+          }
+        },
+        "apiPeer": {
+          "anyOf": [
+            {
+              "type": "object",
+              "maxProperties": 0
+            },
+            {
+              "$ref": "#/$defs/nativeMetadataPeer"
+            }
+          ]
+        },
+        "hostPeer": {
+          "anyOf": [
+            {
+              "type": "object",
+              "maxProperties": 0
+            },
+            {
+              "$ref": "#/$defs/nativeMetadataPeer"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "apiConfigurationSecretRef": {
+                "$ref": "#/$defs/secretRef"
+              },
+              "workerConfigurationSecretRef": {
+                "$ref": "#/$defs/secretRef"
+              },
+              "apiPeer": {
+                "$ref": "#/$defs/nativeMetadataPeer"
+              },
+              "hostPeer": {
+                "$ref": "#/$defs/nativeMetadataPeer"
+              }
+            }
+          }
+        }
+      ]
+    },
     "enterpriseDirectorySync": {
       "type": "object",
       "additionalProperties": false,
@@ -230,6 +340,50 @@
     }
   },
   "$defs": {
+    "nativeMetadataPeer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ip"
+          ],
+          "properties": {
+            "ip": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F:.]+/(32|128)$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "namespace",
+            "podLabels"
+          ],
+          "properties": {
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$"
+            },
+            "podLabels": {
+              "type": "object",
+              "minProperties": 1,
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 253
+              },
+              "additionalProperties": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+              }
+            }
+          }
+        }
+      ]
+    },
     "binding": {
       "type": "string",
       "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,61}[a-z0-9])?$"

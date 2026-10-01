@@ -15,6 +15,7 @@ export * from "./kubernetes-client.js";
 export * from "./kubernetes-runtime-adapter.js";
 export * from "./native-metadata-app.js";
 export * from "./native-metadata-deployment.js";
+export * from "./native-metadata-production.js";
 export * from "./runtime-grant-signer.js";
 export * from "./wecom-deployment.js";
 export { createPlatformWecomWorkerV1 } from "./wecom-worker.js";

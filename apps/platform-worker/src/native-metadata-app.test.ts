@@ -1,5 +1,6 @@
 import type {
 	NativeMetadataCurrentRequestV1,
+	NativeMetadataCurrentResponseV1,
 	PlatformNativeMetadataReadRequestV1,
 } from "@agent-infra/contracts";
 import { ConversationRuntimeHostError } from "@agent-infra/platform-core";
@@ -47,7 +48,13 @@ function fixture() {
 	};
 	const reads = {
 		read: vi.fn(async () => response),
-		current: vi.fn(async () => ({
+		current: vi.fn<
+			(
+				_request: NativeMetadataCurrentRequestV1,
+				_host: string,
+				_signal: AbortSignal,
+			) => Promise<NativeMetadataCurrentResponseV1>
+		>(async () => ({
 			outcome: "allowed" as const,
 			request: current,
 		})),
@@ -99,11 +106,7 @@ it("passes trusted instance identity and request AbortSignal to the actual produ
 	const { app, request, current, response, reads } = fixture();
 	const read = post(readPath, request, "api-secret");
 	expect(await (await app.request(read)).json()).toEqual(response);
-	expect(reads.read).toHaveBeenCalledWith(
-		request,
-		"api-1",
-		expect.any(AbortSignal),
-	);
+	expect(reads.read).toHaveBeenCalledWith(request, "api-1", read.signal);
 	const confirmation = post(currentPath, current, "host-secret");
 	expect(await (await app.request(confirmation)).json()).toEqual({
 		outcome: "allowed",
@@ -112,7 +115,7 @@ it("passes trusted instance identity and request AbortSignal to the actual produ
 	expect(reads.current).toHaveBeenCalledWith(
 		current,
 		"host-1",
-		expect.any(AbortSignal),
+		confirmation.signal,
 	);
 });
 
@@ -197,5 +200,20 @@ it("withholds late successful bytes after cancellation and redacts producer fail
 		expect(await failed.text()).not.toContain(
 			"private-native-path-and-credential-sentinel",
 		);
+	}
+});
+
+it("maps current confirmation outcomes to exact HTTP states without treating denial as availability", async () => {
+	const { app, current, reads } = fixture();
+	for (const [outcome, status] of [
+		["denied", 403],
+		["unavailable", 503],
+	] as const) {
+		reads.current.mockResolvedValueOnce({ outcome });
+		const response = await app.request(
+			post(currentPath, current, "host-secret"),
+		);
+		expect(response.status).toBe(status);
+		expect(await response.json()).toEqual({ outcome });
 	}
 });

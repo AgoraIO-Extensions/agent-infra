@@ -14,6 +14,10 @@ export type WorkloadEgressDestinationV1 =
 	  };
 
 export interface WorkloadEgressPolicyV1 {
+	readonly metadataEgress?: {
+		readonly destination: WorkloadEgressDestinationV1;
+		readonly port: number;
+	};
 	readonly modelEgress?: readonly {
 		readonly destination: WorkloadEgressDestinationV1;
 		readonly port: number;
@@ -80,7 +84,10 @@ export function workloadEgressRulesV1(
 	)
 		throw new WorkloadKubernetesError("policy");
 	return [
-		...models.map((entry) => {
+		...[
+			...models,
+			...(policy.metadataEgress ? [policy.metadataEgress] : []),
+		].map((entry) => {
 			if (
 				!entry ||
 				Object.keys(entry).sort().join(",") !== "destination,port" ||

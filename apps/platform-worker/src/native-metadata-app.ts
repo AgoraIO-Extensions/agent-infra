@@ -74,7 +74,9 @@ export function createPlatformNativeMetadataAppV1(options: {
 			traceId: randomUUID(),
 		};
 	}
-	const app = new Hono<{ Variables: { serviceIdentity: string } }>();
+	const app = new Hono<{
+		Variables: { serviceIdentity: string; originalSignal: AbortSignal };
+	}>();
 	const limit = bodyLimit({
 		maxSize: 65_536,
 		onError: (context) => context.json(errorBody(400), 400),
@@ -82,6 +84,7 @@ export function createPlatformNativeMetadataAppV1(options: {
 	app.post(
 		"/internal/platform-worker/v1/native-metadata/reads",
 		async (context, next) => {
+			context.set("originalSignal", context.req.raw.signal);
 			context.set(
 				"serviceIdentity",
 				authenticate(context.req.header("authorization"), apiSources),
@@ -91,26 +94,28 @@ export function createPlatformNativeMetadataAppV1(options: {
 		limit,
 		async (context) => {
 			const request = context.req.raw;
+			const signal = context.get("originalSignal");
 			const parsed = PlatformNativeMetadataReadRequestV1Schema.safeParse(
 				await request.json().catch(() => undefined),
 			);
 			if (!parsed.success || new URL(request.url).search)
 				throw new MetadataHttpError(400);
-			request.signal.throwIfAborted();
+			signal.throwIfAborted();
 			const response = RuntimeNativeMetadataReadResponseV1Schema.parse(
 				await options.reads.read(
 					parsed.data,
 					context.get("serviceIdentity"),
-					request.signal,
+					signal,
 				),
 			);
-			request.signal.throwIfAborted();
+			signal.throwIfAborted();
 			return context.json(response);
 		},
 	);
 	app.post(
 		"/internal/platform-worker/v1/native-metadata/reads/:readId/current",
 		async (context, next) => {
+			context.set("originalSignal", context.req.raw.signal);
 			context.set(
 				"serviceIdentity",
 				authenticate(context.req.header("authorization"), hosts),
@@ -120,6 +125,7 @@ export function createPlatformNativeMetadataAppV1(options: {
 		limit,
 		async (context) => {
 			const request = context.req.raw;
+			const signal = context.get("originalSignal");
 			const parsed = NativeMetadataCurrentRequestV1Schema.safeParse(
 				await request.json().catch(() => undefined),
 			);
@@ -129,16 +135,23 @@ export function createPlatformNativeMetadataAppV1(options: {
 				new URL(request.url).search
 			)
 				throw new MetadataHttpError(400);
-			request.signal.throwIfAborted();
+			signal.throwIfAborted();
 			const response = NativeMetadataCurrentResponseV1Schema.parse(
 				await options.reads.current(
 					parsed.data,
 					context.get("serviceIdentity"),
-					request.signal,
+					signal,
 				),
 			);
-			request.signal.throwIfAborted();
-			return context.json(response);
+			signal.throwIfAborted();
+			return context.json(
+				response,
+				response.outcome === "allowed"
+					? 200
+					: response.outcome === "denied"
+						? 403
+						: 503,
+			);
 		},
 	);
 	app.onError((error, context) => {
