@@ -4,6 +4,7 @@ import {
 	startObservability,
 } from "@agent-infra/observability";
 import { startPlatformConversationWorkerFromDeploymentV2 } from "./conversation-worker.js";
+import { startPlatformNativeMetadataWorkerFromDeploymentV1 } from "./native-metadata-deployment.js";
 import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
@@ -12,6 +13,8 @@ export * from "./conversation-runtime.js";
 export * from "./conversation-worker.js";
 export * from "./kubernetes-client.js";
 export * from "./kubernetes-runtime-adapter.js";
+export * from "./native-metadata-app.js";
+export * from "./native-metadata-deployment.js";
 export * from "./runtime-grant-signer.js";
 export * from "./wecom-deployment.js";
 export { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
@@ -229,6 +232,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 			observability: ReturnType<typeof startObservability>,
 		) => Promise<{ stop(): Promise<void> }>;
 		readonly startWecom?: () => Promise<{ stop(): Promise<void> }>;
+		readonly startNativeMetadata?: () => Promise<{ stop(): Promise<void> }>;
 		readonly observabilityOptions?: Omit<ObservabilityOptions, "service">;
 	} = {},
 ) {
@@ -251,6 +255,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 	let workload: { stop(): Promise<void> } | undefined;
 	let conversation: { stop(): Promise<void> } | undefined;
 	let wecom: { stop(): Promise<void> } | undefined;
+	let nativeMetadata: { stop(): Promise<void> } | undefined;
 	try {
 		workload = await (
 			options.startWorkload ?? startPlatformWorkloadWorkerFromDeploymentV1
@@ -265,6 +270,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 					telemetry,
 				))
 		)(observability);
+		nativeMetadata = await options.startNativeMetadata?.();
 		let stopping: Promise<void> | undefined;
 		return {
 			observabilityStatus: observability.status,
@@ -273,6 +279,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 					const results: PromiseSettledResult<void>[] = [];
 					try {
 						for (const stop of [
+							() => nativeMetadata?.stop(),
 							() => conversation?.stop(),
 							() => wecom?.stop(),
 							() => workload?.stop(),
@@ -296,6 +303,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 		};
 	} catch (error) {
 		await Promise.allSettled([
+			Promise.resolve().then(() => nativeMetadata?.stop()),
 			Promise.resolve().then(() => primary.stop()),
 			Promise.resolve().then(() => workload?.stop()),
 			Promise.resolve().then(() => conversation?.stop()),
@@ -314,6 +322,14 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	if (wecomSetting !== undefined && !["true", "false"].includes(wecomSetting))
 		throw new Error("PLATFORM_WORKER_WECOM_ENABLED must be true or false");
 	const wecomEnabled = wecomSetting === "true";
+	const metadataSetting = process.env.PLATFORM_WORKER_NATIVE_METADATA_ENABLED;
+	if (
+		metadataSetting !== undefined &&
+		!["true", "false"].includes(metadataSetting)
+	)
+		throw new Error(
+			"PLATFORM_WORKER_NATIVE_METADATA_ENABLED must be true or false",
+		);
 	let primary: ReturnType<typeof startPlatformWorker> | undefined;
 	const workerPromise = startPlatformWorkerFromDeploymentV2({
 		startPrimary: () => {
@@ -331,6 +347,15 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 				undefined,
 				termination.signal,
 			),
+		...(metadataSetting === "true"
+			? {
+					startNativeMetadata: () =>
+						startPlatformNativeMetadataWorkerFromDeploymentV1(
+							undefined,
+							termination.signal,
+						),
+				}
+			: {}),
 		...(wecomEnabled
 			? {
 					startWecom: () =>
