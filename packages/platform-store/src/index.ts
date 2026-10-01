@@ -101,6 +101,10 @@ export {
 	type SucceededOutboxItem,
 } from "./outbox.ts";
 export {
+	type PostgresPersonalApiCredentialOptionsV1,
+	PostgresPersonalApiCredentialStoreV1,
+} from "./personal-api-credentials.ts";
+export {
 	PostgresScopedPlatformAuditQueryV1,
 	type ScopedPlatformAuditPageV1,
 	type ScopedPlatformAuditProjectionV1,

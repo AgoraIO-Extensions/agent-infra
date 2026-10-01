@@ -834,6 +834,62 @@ function isAdministratorAgentReadV2OpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #1059 admits only browser personal issuance/revocation. Preserve all old bytes.
+function isPersonalApiCredentialV2OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/me/api-credentials",
+		"/api/v2/me/api-credentials/{credentialId}",
+	];
+	const schemas = [
+		"PersonalApiCredentialIssueRequestV1",
+		"PersonalApiCredentialIssueResponseV1",
+		"PersonalApiCredentialMetadataV1",
+		"PersonalApiCredentialRevokeResponseV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const security = {
+		PlatformSession: current.components?.securitySchemes?.PlatformSession,
+	};
+	for (const [name, definition] of Object.entries(security)) {
+		const existing = previous.components?.securitySchemes?.[name];
+		if (existing !== undefined && !sameValue(existing, definition))
+			return false;
+	}
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+		security,
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"fb689d0afa1624783e81bbb18aa1d48d4c8ab4045787f6cb101801e9cefed2c7"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	for (const name of Object.keys(security)) {
+		if (previous.components?.securitySchemes?.[name] === undefined) {
+			delete normalized.components.securitySchemes[name];
+		}
+	}
+	if (
+		Object.keys(normalized.components.securitySchemes).length === 0 &&
+		previous.components?.securitySchemes === undefined
+	) {
+		delete normalized.components.securitySchemes;
+	}
+	return sameValue(previous, normalized);
+}
+
 function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v2/admin/agent-applications",
@@ -1172,6 +1228,7 @@ function findBreakingChanges(previous, current) {
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
 			!isAdministratorAgentReadV2OpenApiAddition(previous, current) &&
+			!isPersonalApiCredentialV2OpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isConversationSseV2NotFoundAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
