@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   changedRightLinesFromTexts,
+  collectScopedChangedLines,
   githubRequest,
   parsePrAgentReview,
   publicationFailure,
+  PrAgentTargetSuperseded,
   publishPrAgentReview,
   runPrAgentPublisher,
   verifyPrAgentPublication,
@@ -55,6 +58,8 @@ function api({
       posted = JSON.parse(options.body);
       return { id: 77 };
     }
+    if (path.endsWith("/reviews?per_page=100&page=1"))
+      return posted ? [{ id: 77, user: actor, commit_id: head, body: posted.body }] : [];
     if (path.endsWith("/files?per_page=100&page=1"))
       return [
         {
@@ -136,6 +141,162 @@ function api({
   };
   return { request, writes, requested, mergeBaseSha };
 }
+
+test("reuses the verified publication when the same run is repeated", async () => {
+  const { request, writes } = api();
+  const first = await publishPrAgentReview({ ...context, raw, request });
+  const second = await publishPrAgentReview({ ...context, raw, request });
+  assert.deepEqual(second, first);
+  assert.equal(writes.length, 1);
+});
+
+test("recovers a POST whose response was lost without submitting it twice", async () => {
+  const remote = api();
+  const request = async (path, options = {}) => {
+    const result = await remote.request(path, options);
+    if (options.method === "POST") throw new TypeError("synthetic lost response");
+    return result;
+  };
+  const receipt = await publishPrAgentReview({ ...context, raw, request });
+  assert.equal(receipt.findingCount, 1);
+  assert.equal(remote.writes.length, 1);
+});
+
+test("keeps the original POST failure when recovery reads also fail", async () => {
+  const remote = api();
+  const originalError = new Error("original POST error");
+  const diagnostic = {};
+  let failedPost = false;
+  const request = async (path, options = {}) => {
+    if (options.method === "POST") { failedPost = true; throw originalError; }
+    if (failedPost) throw new Error("recovery read error");
+    return remote.request(path, options);
+  };
+  await assert.rejects(publishPrAgentReview({ ...context, raw, request, diagnostic }),
+    (error) => error === originalError);
+  assert.equal(diagnostic.stage, "post-review");
+});
+
+test("stops when the target closes, becomes Draft or changes head before publication", async () => {
+  for (const [change, reason] of [
+    [{ state: "closed" }, "pr-closed"],
+    [{ draft: true }, "pr-draft"],
+    [{ head: { sha: "b".repeat(40), repo: { full_name: context.repository } } }, "head-superseded"],
+  ]) {
+    const remote = api();
+    let reads = 0;
+    const request = async (path, options) => {
+      const result = await remote.request(path, options);
+      return path.endsWith("/pulls/42") && ++reads === 1 ? { ...result, ...change } : result;
+    };
+    await assert.rejects(publishPrAgentReview({ ...context, raw: "not-json", request }),
+      (error) => error instanceof PrAgentTargetSuperseded && error.reason === reason);
+    assert.equal(remote.writes.length, 0);
+  }
+});
+
+test("maps verified unified-diff changes to per-file right-side lines", () => {
+  const lines = collectScopedChangedLines(
+    "diff --git a/src/math.ts b/src/math.ts\nindex 111..222 100644\n--- a/src/math.ts\n+++ b/src/math.ts\n@@ -1,2 +1,3 @@\n keep\n+return a - b;\n old\n",
+  );
+  assert.deepEqual([...lines.get("src/math.ts")], [2]);
+});
+
+async function gitQuotedPathDiff() {
+  const directory = await mkdtemp(join(tmpdir(), "pr-agent-quoted-paths-"));
+  const files = [
+    { filename: "src/aaa.ts", line: 2 },
+    { filename: "src/tab\t\"quote\\name.ts", line: 3 },
+    { filename: "src/中文.ts", line: 4 },
+  ];
+  const git = (...args) => execFileSync("git", ["-C", directory,
+    "-c", "core.quotePath=true", ...args], { encoding: "utf8" });
+  try {
+    git("init", "--quiet");
+    await mkdir(join(directory, "src"));
+    const before = "one\ntwo\nthree\nfour\n";
+    for (const file of files) await writeFile(join(directory, file.filename), before);
+    git("add", ".");
+    for (const file of files) {
+      const lines = before.trimEnd().split("\n");
+      lines[file.line - 1] = "regression";
+      await writeFile(join(directory, file.filename), `${lines.join("\n")}\n`);
+      file.patch = git("diff", "--no-ext-diff", "--no-textconv", "--", file.filename);
+    }
+    return { files, diff: git("diff", "--no-ext-diff", "--no-textconv") };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+test("keeps ordinary and Git-quoted Unicode, tab and quote path changes separate", async () => {
+  const { diff, files } = await gitQuotedPathDiff();
+  assert.match(diff, /diff --git a\/src\/aaa\.ts b\/src\/aaa\.ts/);
+  assert.match(diff, /diff --git "a\//);
+  const changed = collectScopedChangedLines(diff);
+  assert.equal(changed.size, files.length);
+  for (const file of files) assert.deepEqual([...changed.get(file.filename)], [file.line]);
+});
+
+test("publishes and reads back nonempty scoped findings for Git-quoted paths", async () => {
+  const { diff, files } = await gitQuotedPathDiff();
+  const remote = api();
+  const issue = { number: 7, state: "open", title: "Quoted-path publication", body: "Preserve the file anchors." };
+  const request = async (path, options = {}) => {
+    if (path.endsWith("/pulls/42")) {
+      const current = await remote.request(path, options);
+      return { ...current, body: "Closes #7", base: { ...current.base, ref: "main", repo: { full_name: context.repository } } };
+    }
+    if (path.endsWith("/issues/7")) return issue;
+    if (path.includes("/compare/")) return options.responseType === "text" ? diff
+      : { status: "ahead", merge_base_commit: { sha: "b".repeat(40) },
+          files: files.map(({ filename }) => ({ filename, additions: 1, deletions: 1 })) };
+    if (path.includes("/files?")) return files;
+    return remote.request(path, options);
+  };
+  const { issueContractHash, prepareReviewScope } = await import("./pr-agent-review-scope.mjs");
+  const { scope } = await prepareReviewScope({ ...context, request }, {
+    headSha: head, issueNumber: 7, contractSha256: issueContractHash(issue),
+  });
+  const receipt = await publishPrAgentReview({ ...context, request, scope,
+    raw: JSON.stringify({ key_issues_to_review: files.map(({ filename, line }) => ({
+      ...finding, relevant_file: filename, start_line: line, end_line: line,
+    })) }),
+  });
+  assert.equal(receipt.findingCount, files.length);
+  assert.equal(remote.writes.length, 1);
+  const comments = (await remote.request("/reviews/77/comments?per_page=100"))
+    .map((comment) => remote.request(`/repos/org/repo/pulls/comments/${comment.id}`));
+  assert.deepEqual((await Promise.all(comments)).map(({ path, line, side }) => ({ path, line, side })),
+    files.map(({ filename, line }) => ({ path: filename, line, side: "RIGHT" })));
+  assert.equal(await verifyPrAgentPublication({ ...context, request, receipt }), true);
+});
+
+test("retries transient reads but never blindly retries a POST", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return calls === 1 ? new Response(null, { status: 503 }) : Response.json({ ok: true });
+  });
+  assert.deepEqual(await githubRequest("/repos/org/repo/pulls/42"), { ok: true });
+  assert.equal(calls, 2);
+  calls = 0;
+  await assert.rejects(githubRequest("/repos/org/repo/pulls/42/reviews", { method: "POST", body: "{}" }));
+  assert.equal(calls, 1);
+});
+
+test("a later network failure does not inherit the previous HTTP response diagnostics", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    if (++calls === 1) return new Response(null, { status: 503, headers: { "x-github-request-id": "AAAA:BBBB:CCCC" } });
+    throw new Error("private network detail");
+  });
+  const error = await githubRequest("/repos/org/repo/pulls/42").catch((error) => error);
+  assert.equal(calls, 3);
+  assert.deepEqual(publicationFailure({ stage: "target-entry" }, error), {
+    stage: "target-entry", category: "network", method: "GET", route: "pulls",
+  });
+});
 
 test("validates the official review output, including explicit zero findings", () => {
   assert.equal(parsePrAgentReview(raw).length, 1);
@@ -434,15 +595,16 @@ test("failed empty publication identifies its actual boundary and returns no rec
     "target-entry",
     "files",
     "target-before-post",
+    "lookup-review",
     "post-review",
     "read-review",
     "read-comments",
     "target-final",
   ];
-  for (const [index, stage] of stages.entries()) {
+  for (const stage of stages) {
     const original = api();
     const diagnostic = {};
-    let calls = 0;
+    let failed = false;
     let receipt;
     await assert.rejects(
       publishPrAgentReview({
@@ -450,7 +612,10 @@ test("failed empty publication identifies its actual boundary and returns no rec
         diagnostic,
         raw: '{"key_issues_to_review":[]}',
         request: async (...args) => {
-          if (calls++ === index) throw new Error("PRIVATE_ERROR_SENTINEL");
+          if (!failed && diagnostic.stage === stage) {
+            failed = true;
+            throw new Error("PRIVATE_ERROR_SENTINEL");
+          }
           return original.request(...args);
         },
       }).then((value) => {

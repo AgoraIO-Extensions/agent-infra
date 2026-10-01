@@ -3,6 +3,7 @@ import { appendFile, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 import { evaluateIssueGate, extractPrimaryIssueNumbers } from "./pr-gates.mjs";
+import { githubRequest, publicationFailure } from "./pr-agent-review.mjs";
 
 export const PRIMARY_ISSUE_MAX_BYTES = 32 * 1024;
 const IMAGE = "sha256:548b760b81ab4b3f729182428695ccc1194bbf87528c2b1e2b2b07e5223af7b6";
@@ -39,18 +40,26 @@ function requireContract(body) {
   return ids;
 }
 
-export async function preparePrimaryIssue({ repository, prNumber, expectedHead, runId, attempt, request }) {
+export async function preparePrimaryIssue({ repository, prNumber, expectedHead, runId, attempt, request, diagnostic = {} }) {
+  diagnostic.stage = "identity";
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? "") ||
       !Number.isSafeInteger(prNumber) || prNumber < 1 || !sha(expectedHead) ||
       !/^[1-9][0-9]*$/.test(runId ?? "") || !/^[1-9][0-9]*$/.test(attempt ?? "")) {
     throw new Error("Primary Issue review identity is invalid");
   }
+  diagnostic.stage = "target-read";
   const pullRequest = await request(`/repos/${repository}/pulls/${prNumber}`);
-  if (pullRequest?.number !== prNumber || pullRequest.state !== "open" ||
+  if (pullRequest?.number !== prNumber ||
       pullRequest.head?.repo?.full_name !== repository || pullRequest.base?.repo?.full_name !== repository ||
-      pullRequest.head.sha !== expectedHead || !sha(pullRequest.base?.sha)) {
-    throw new Error("Primary Issue review target is stale or belongs to another repository");
+      !sha(pullRequest.head?.sha) || !sha(pullRequest.base?.sha)) {
+    throw new Error("Primary Issue review target belongs to another repository or is invalid");
   }
+  const reason = pullRequest.state === "closed" ? "pr-closed"
+    : pullRequest.head.sha !== expectedHead ? "head-superseded"
+    : pullRequest.draft === true ? "pr-draft" : null;
+  if (reason) return { applicable: false, reason };
+  if (pullRequest.state !== "open") throw new Error("Primary Issue review target state is invalid");
+  diagnostic.stage = "primary-reference";
   const body = pullRequest.body ?? "";
   const issueNumbers = extractPrimaryIssueNumbers(body);
   const withoutFences = body.replace(/```[\s\S]*?```/g, "");
@@ -58,7 +67,9 @@ export async function preparePrimaryIssue({ repository, prNumber, expectedHead, 
       /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:https?:\/\/|[\w.-]+\/[\w.-]+#)/i.test(withoutFences)) {
     throw new Error("PR must reference exactly one same-repository primary Issue");
   }
+  diagnostic.stage = "issue-read";
   const issue = await request(`/repos/${repository}/issues/${issueNumbers[0]}`);
+  diagnostic.stage = "issue-identity";
   const gate = evaluateIssueGate({ issueNumbers, issue, headRef: pullRequest.head.ref, pullRequestCreatedAt: pullRequest.created_at });
   if (!gate.ok || !Number.isSafeInteger(issue.id) || issue.id < 1 ||
       issue.html_url !== `https://github.com/${repository}/issues/${issue.number}` ||
@@ -66,6 +77,7 @@ export async function preparePrimaryIssue({ repository, prNumber, expectedHead, 
       !Number.isFinite(Date.parse(issue.updated_at))) {
     throw new Error("Primary Issue identity or state is invalid");
   }
+  diagnostic.stage = "issue-contract";
   const acceptanceCriteriaIds = requireContract(issue.body);
   // The immutable runtime disables Dynaconf @ casts. Its env loader still parses
   // TOML; JSON-quoted string literals preserve the user data inside constant keys.
@@ -74,12 +86,13 @@ export async function preparePrimaryIssue({ repository, prNumber, expectedHead, 
     throw new Error("Primary Issue encoded input exceeds the byte limit");
   }
   return {
+    applicable: true,
     relatedTickets: tickets,
     evidence: {
       repository, prNumber, baseSha: pullRequest.base.sha, headSha: expectedHead,
       runId, attempt, imageDigest: IMAGE, issueNumber: issue.number, issueId: issue.id,
       issueUpdatedAt: issue.updated_at, bodyBytes: Buffer.byteLength(issue.body, "utf8"),
-      bodySha256: digest(issue.body), acceptanceCriteriaIds,
+      bodySha256: digest(issue.body), contractSha256: digest(`${issue.title}\0${issue.body}`), acceptanceCriteriaIds,
       preparation: "complete", delivery: "not_observed", findings: "not_evaluated",
     },
   };
@@ -87,30 +100,33 @@ export async function preparePrimaryIssue({ repository, prNumber, expectedHead, 
 
 const commandData = (value) => value.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 
-async function main() {
-  const event = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, "utf8"));
-  const prepared = await preparePrimaryIssue({
-    repository: process.env.GITHUB_REPOSITORY, prNumber: event.pull_request?.number,
-    expectedHead: event.pull_request?.head?.sha, runId: process.env.GITHUB_RUN_ID,
-    attempt: process.env.GITHUB_RUN_ATTEMPT,
-    request: async (path) => {
-      const response = await fetch(`https://api.github.com${path}`, {
-        signal: AbortSignal.timeout(15_000),
-        headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${process.env.GITHUB_TOKEN}`, "X-GitHub-Api-Version": "2022-11-28" },
-      });
-      if (!response.ok) throw new Error("Primary Issue GitHub API read failed");
-      return response.json();
-    },
-  });
-  // Mask the complete encoded value before GitHub displays the next step's env.
-  console.log(`::add-mask::${commandData(prepared.relatedTickets)}`);
-  await appendFile(process.env.GITHUB_OUTPUT, `related_tickets=${prepared.relatedTickets}\n`);
-  console.log(`Primary Issue input preparation: ${JSON.stringify(prepared.evidence)}`);
+export async function runPrimaryIssuePreparation(request = githubRequest) {
+  const diagnostic = { stage: "event-read" };
+  try {
+    const event = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, "utf8"));
+    const prepared = await preparePrimaryIssue({
+      repository: process.env.GITHUB_REPOSITORY, prNumber: event.pull_request?.number,
+      expectedHead: event.pull_request?.head?.sha, runId: process.env.GITHUB_RUN_ID,
+      attempt: process.env.GITHUB_RUN_ATTEMPT,
+      request, diagnostic,
+    });
+    diagnostic.stage = "output-write";
+    if (!prepared.applicable) {
+      await appendFile(process.env.GITHUB_OUTPUT, `applicable=false\nreason=${prepared.reason}\n`);
+      console.log(`PR-Agent input skipped: ${prepared.reason}`);
+      return;
+    }
+    // Mask the complete encoded value before GitHub displays the next step's env.
+    console.log(`::add-mask::${commandData(prepared.relatedTickets)}`);
+    await appendFile(process.env.GITHUB_OUTPUT, `applicable=true\nrelated_tickets=${prepared.relatedTickets}\nevidence=${JSON.stringify(prepared.evidence)}\n`);
+    console.log(`Primary Issue input preparation: ${JSON.stringify(prepared.evidence)}`);
+  } catch (error) {
+    const { stage: _stage, ...failure } = publicationFailure(diagnostic, error);
+    console.error("PR-Agent primary Issue input preparation failed", JSON.stringify({ stage: diagnostic.stage, ...failure }));
+    process.exitCode = 1;
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(() => {
-    console.error("PR-Agent primary Issue input preparation failed");
-    process.exitCode = 1;
-  });
+  runPrimaryIssuePreparation();
 }

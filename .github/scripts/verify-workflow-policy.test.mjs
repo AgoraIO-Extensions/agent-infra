@@ -978,10 +978,12 @@ test("uses pinned PR-Agent official inline publishing", async () => {
     "ready_for_review",
     "review_requested",
     "edited",
+    "synchronize",
   ]);
   assert.deepEqual(workflow.jobs.analyze.permissions, {
     contents: "read",
     issues: "read",
+    checks: "read",
     "pull-requests": "read",
   });
   assert.deepEqual(workflow.jobs.suggestions.permissions, {
@@ -1030,7 +1032,7 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   );
   assert.equal(
     reviewAction.env["pr_reviewer.extra_instructions"],
-    "Return exactly one YAML object with the top-level key review. Nest key_issues_to_review under review, including when it is an empty list. Never return key_issues_to_review at the top level. Report only verifiable failures of the primary Issue's stable AC-N acceptance criteria or regressions introduced by this pull request. Do not report pre-existing problems or optional improvements as blocking findings.",
+    "Return exactly one YAML object with the top-level key review. Nest key_issues_to_review under review, including when it is an empty list. Never return key_issues_to_review at the top level. Report only verifiable failures of the primary Issue's stable AC-N acceptance criteria or regressions introduced by this pull request. Do not report pre-existing problems or optional improvements as blocking findings. Treat the supplied diff as the review scope; do not infer missing implementation from files absent from this range.",
   );
   assert.equal(
     reviewAction.env["config.max_model_tokens"],
@@ -1140,7 +1142,7 @@ test("requires trusted finding projection without raw transfer or missing-output
   const workflows = await actualWorkflows();
   const analyze = workflows["pr-agent-review.yml"].jobs.analyze;
   const projection = analyze.outputs.review;
-  const step = analyze.steps[4];
+  const step = analyze.steps.find((entry) => entry.id === "review-output");
   for (const unsafe of [
     "${{ steps.pr-agent.outputs.review }}",
     "${{ steps.review-output.outputs.review || '{\"key_issues_to_review\":[]}' }}",
@@ -1196,6 +1198,22 @@ test("requires bounded PR-Agent review chunking and matching immutable versions"
       );
     }
     action.uses = pinned;
+  }
+});
+
+test("locks incremental review to the trusted range and the official patch-only CLI", async () => {
+  const original = await actualWorkflows();
+  for (const change of [
+    (workflow) => { workflow.on.pull_request_target.types.pop(); },
+    (workflow) => { workflow.jobs.analyze.steps.find((step) => step.id === "scope").env.PRIMARY_ISSUE_EVIDENCE = "${{ github.event.pull_request.body }}"; },
+    (workflow) => { workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent").with.args = "review -i"; },
+    (workflow) => { workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent").if = "always()"; },
+    (workflow) => { workflow.jobs.publish.steps.at(-1).env.PR_AGENT_REVIEW_SCOPE_REQUIRED = "false"; },
+    (workflow) => { workflow.jobs.coverage.steps.at(-1).env.PR_AGENT_REVIEW_SCOPE_REQUIRED = "false"; },
+  ]) {
+    const workflows = structuredClone(original);
+    change(workflows["pr-agent-review.yml"]);
+    assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("official inline publishing")));
   }
 });
 
@@ -1301,6 +1319,7 @@ test("publishes provider-aware Automated Review Coverage as a required Gate", as
     actions: "read",
     checks: "read",
     contents: "read",
+    issues: "read",
     "pull-requests": "read",
   });
   assert.equal(coverage.name, "Publish Automated Review Coverage");
@@ -1319,6 +1338,7 @@ test("publishes provider-aware Automated Review Coverage as a required Gate", as
     REVIEW_PROVIDER: "pr-agent",
     REVIEW_RUN_RESULT: "${{ needs.analyze.result != 'success' && needs.analyze.result || needs.publish.result }}",
     PR_AGENT_REVIEW_RECEIPT: "${{ needs.publish.outputs.review_receipt }}",
+    PR_AGENT_REVIEW_SCOPE_REQUIRED: "true",
   });
   assert.equal(
     coverageToken.uses,
