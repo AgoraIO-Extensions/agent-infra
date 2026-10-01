@@ -121,7 +121,11 @@ it("bounds real trace export under a slow OTLP sink and closes within five secon
 			requestId: "PRIVATE_SENTINEL",
 		});
 	}
-	const businessResult = { completed: true };
+	let businessCompletionCount = 0;
+	const completeBusinessOperation = () => {
+		businessCompletionCount += 1;
+	};
+	completeBusinessOperation();
 
 	// The test intentionally records beyond BatchSpanProcessor's 512-span queue.
 	expect(markers.length).toBeGreaterThan(TRACE_QUEUE_SIZE);
@@ -140,7 +144,7 @@ it("bounds real trace export under a slow OTLP sink and closes within five secon
 	expect(elapsed).toBeLessThanOrEqual(CLOSE_BOUND_MS);
 	await waitFor(() => telemetry.status().state === "closed");
 	expect(telemetry.status().exportFailures).toBeGreaterThan(0);
-	expect(businessResult.completed).toBe(true);
+	expect(businessCompletionCount).toBe(1);
 	expectNoSentinel(collector.requests);
 	await new Promise((resolve) => setTimeout(resolve, 500));
 	expect(traceRequests(collector.requests).length).toBeLessThanOrEqual(
@@ -201,7 +205,7 @@ it("shows bounded trace queue pressure when a slow sink eventually responds", as
 			request.body.toString("utf8").includes(marker),
 		),
 	).length;
-	expect(received).toBeGreaterThan(0);
+	expect(received).toBeGreaterThanOrEqual(TRACE_BATCH_SIZE);
 	expect(received).toBeLessThan(markers.length);
 	expect(received).toBeLessThanOrEqual(TRACE_QUEUE_SIZE + TRACE_BATCH_SIZE);
 	expectNoSentinel(collector.requests);
