@@ -85,7 +85,7 @@ async function fixture(userId = `http-user-${++sequence}`) {
 	await sql`insert into platform.agent_applications (id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values (${`${config.agentId}-application`},${config.agentId},'controlled-owner','Controlled','Controlled','available','controlled-trace','controlled-request',now(),1,1,'ready','running',1,1)`;
 	await sql`insert into platform.agent_owners (agent_id,owner_id) values (${config.agentId},'controlled-owner')`;
 	await sql`insert into platform.agent_availability (agent_id,target_type,target_id) values (${config.agentId},'organization','controlled-org')`;
-	await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${config.agentId},1,'controlled',${sql.json(configuration)},now())`;
+	await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${config.agentId},1,'controlled',${sql.json(configuration as unknown as postgres.JSONValue)},now())`;
 	const identity: WecomIdentityPortV1 = {
 		resolveSender: async (scope) => user(scope.senderId),
 		activeUsers: async (ids) => ids,
