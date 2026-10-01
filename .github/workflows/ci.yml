@@ -255,6 +255,75 @@ jobs:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node .github/scripts/vulnerability-scan.mjs build
 
+      - name: Verify installed workspace-summary image
+        id: installed_skill
+        timeout-minutes: 10
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/installed-skill-evidence"
+          context="$RUNNER_TEMP/installed-skill-context-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$evidence" "$context"
+          printf 'failed_or_incomplete\n' > "$evidence/result.txt"
+          trap 'status=$?; printf "%s\n" "$status" > "$evidence/exit-code.txt"; rm -rf "$context"; exit "$status"' EXIT
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test -z "$(git status --porcelain)"
+          printf '%s\n' "$SOURCE_COMMIT" > "$evidence/source.txt"
+          git ls-tree -r HEAD > "$evidence/source-tree.txt"
+          cp .vulnerability-scan/build.json "$evidence/build.json"
+          sha256sum apps/agent-runtime-host/Dockerfile \
+            apps/agent-runtime-host/src/{configuration.ts,installed-skill.ts,index.ts} \
+            packages/agent-runtime/src/{codex-installation.ts,codex-runtime-driver.ts} \
+            deploy/runtime/skills/workspace-summary{.manifest.json,.manifest.schema.json,/SKILL.md} \
+            tests/runtime-installed-skill-image.ts .github/scripts/vulnerability-scan.mjs \
+            .github/workflows/ci.yml pnpm-lock.yaml > "$evidence/source.sha256"
+          runner_id=$(node --input-type=module -e '
+            import {readFile} from "node:fs/promises";
+            import {runtimeImageFromScanBuild} from "./deploy/release/runtime-probe.mjs";
+            console.log(runtimeImageFromScanBuild(JSON.parse(await readFile(".vulnerability-scan/build.json","utf8")),process.argv[1]));
+          ' "$SOURCE_COMMIT")
+          printf '%s\n' "$runner_id" > "$evidence/runner.iid"
+          docker_root=$(docker info --format '{{.DockerRootDir}}')
+          docker info --format '{{json .}}' | jq '{ID,DockerRootDir,Architecture}' > "$evidence/daemon.json"
+          capacity() {
+            df -Pk "$docker_root" > "$evidence/capacity-$1.txt"
+            available_kib=$(awk 'NR==2 {print $4}' "$evidence/capacity-$1.txt")
+            (( available_kib >= 5242880 ))
+          }
+          architecture=$(docker image inspect "$runner_id" --format '{{.Architecture}}')
+          case "$architecture" in amd64|arm64) ;; *) exit 1 ;; esac
+          session="504-1050-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          config_version="1050-ci-$SOURCE_COMMIT-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          printf '%s\n' "$session" > "$evidence/session.txt"
+          printf '%s\n' "$config_version" > "$evidence/config-version.txt"
+          capacity before-build
+          git archive "$SOURCE_COMMIT" | tar -x -C "$context"
+          timeout --signal=TERM --kill-after=5s 300s docker build \
+            --platform "linux/$architecture" --progress=plain --target installed-skill-test \
+            --build-arg "SOURCE_COMMIT=$SOURCE_COMMIT" --label "ao.session=$session" \
+            --tag "agent-infra-ci/installed-skill-test:$SOURCE_COMMIT" \
+            --file "$context/apps/agent-runtime-host/Dockerfile" \
+            --iidfile "$evidence/test.iid" "$context" 2>&1 | tee "$evidence/test-build.log"
+          test_id=$(cat "$evidence/test.iid")
+          docker image inspect "$runner_id" "$test_id" | jq 'map({Id,RepoDigests,Descriptor,Os,Architecture,User:.Config.User,Labels:.Config.Labels})' > "$evidence/images.json"
+          capacity before-cli
+          timeout --signal=TERM --kill-after=5s 180s node tests/runtime-installed-skill-image.ts \
+            "$runner_id" "$test_id" "$SOURCE_COMMIT" "$config_version" \
+            "$evidence/installation.json" "$session" 2>&1 | tee "$evidence/installation.log"
+          capacity after-cli
+          printf 'passed_installation_only\n' > "$evidence/result.txt"
+
+      - name: Preserve installed Skill image evidence
+        if: ${{ !cancelled() && steps.installed_skill.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installed-skill-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installed-skill-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Probe native Codex runtime image
         id: runtime_probe
         run: >-

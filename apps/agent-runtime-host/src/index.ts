@@ -26,6 +26,7 @@ import { serve } from "@hono/node-server";
 
 import { createRuntimeHostApp, runtimeHostService } from "./app.js";
 import {
+	readCodexInstalledSkillDeployment,
 	readCodexPilotConfiguration,
 	readRuntimeModelConfigurationV3,
 	readWorkloadReadinessBindingV1,
@@ -175,7 +176,13 @@ export async function assembleRuntimeHost(
 		dataDirectory,
 		filesystem,
 	});
-	if (configuration) {
+	const installedSkill = configuration
+		? await readCodexInstalledSkillDeployment(
+				environment,
+				configuration.configVersion,
+			)
+		: undefined;
+	if (configuration && !installedSkill) {
 		await verifyCodexPilotInstallation();
 	}
 	let assembledHost: RuntimeHost | undefined;
@@ -234,6 +241,7 @@ export async function assembleRuntimeHost(
 					launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
 					path: join(dataDirectory, "codex-driver.json"),
 					configVersion: configuration.configVersion,
+					...(installedSkill ? { installedSkill } : {}),
 					defaultModelOptionId: configuration.defaultModelOptionId,
 					defaultReasoningLevel: configuration.defaultReasoningLevel,
 					modelOptions: configuration.modelOptions,

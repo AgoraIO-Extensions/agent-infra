@@ -134,9 +134,9 @@ export function commandFailure(code: PilotProtocolErrorV1["code"]): string {
 		case "MODEL_SELECTION_INVALID":
 			return "模型选项已变化，请刷新模型清单后重新选择。";
 		case "PROVIDER_RATE_LIMITED":
-			return "模型服务限流或额度不足，请稍后重试或联系 Owner。";
+			return "模型服务限流或额度不足。使用标准模板时，请检查个人 Relay Key 的额度；可稍后重试，仍失败请联系 Owner 检查模型配置。";
 		case "PROVIDER_REJECTED":
-			return "模型请求被拒绝，请联系 Owner 检查模型配置。";
+			return "模型请求被拒绝。使用标准模板时，请检查个人 Relay Key 是否可用、是否有权调用所选模型；仍失败请联系 Owner 检查模型配置。";
 		case "CONNECTION_AUTHORIZATION_REQUIRED":
 			return "请在独立 Connection 中完成当前账号的授权。";
 		case "CONNECTION_UNAVAILABLE":

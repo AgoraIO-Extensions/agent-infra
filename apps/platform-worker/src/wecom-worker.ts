@@ -135,8 +135,13 @@ export function createPlatformWecomWorkerV1(
 			const results = await Promise.allSettled([
 				setup?.close(),
 				connections?.close(),
-				store.close(),
 			]);
+			// Keep business pools open until setup and connection shutdown settle.
+			try {
+				await store.close();
+			} catch (reason) {
+				results.push({ status: "rejected", reason });
+			}
 			const failure = results.find((result) => result.status === "rejected");
 			if (failure?.status === "rejected") throw failure.reason;
 		},

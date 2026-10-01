@@ -710,10 +710,17 @@ export function createConversationDispatchUseCaseV1(
 					? { schemaVersion: 1, outcome: "already_completed" }
 					: { schemaVersion: 1, outcome: "stale" };
 			}
+			const recoveringMissingStop =
+				claim.operation === "conversation.turn.stop.v1" &&
+				claim.hostSessionRef === null &&
+				(claim.executionStatus === "unknown" ||
+					claim.executionStatus === "processing") &&
+				dependencies.runtimeHost.recoverOriginalStatus !== undefined;
 			if (
 				(claim.operation === "conversation.turn.supplement.v1" ||
 					claim.operation === "conversation.turn.stop.v1") &&
-				claim.executionStatus !== "processing"
+				claim.executionStatus !== "processing" &&
+				!recoveringMissingStop
 			) {
 				return retry(
 					dependencies.store,
@@ -756,7 +763,7 @@ export function createConversationDispatchUseCaseV1(
 				leaseDurationMs,
 			);
 			try {
-				if (recoveringOriginalTurn) {
+				if (recoveringOriginalTurn || recoveringMissingStop) {
 					const status = parseRuntimeStatusResponse(
 						dependencies.runtimeHost.recoverOriginalStatus
 							? await dependencies.runtimeHost.recoverOriginalStatus(
@@ -810,6 +817,38 @@ export function createConversationDispatchUseCaseV1(
 								),
 						claim,
 					);
+					if (status.outcome === "binding_found") {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						if (
+							!(await dependencies.store.recordRuntimeResponse({
+								claim,
+								hostSessionRef: status.hostSessionRef,
+								transition: {},
+							}))
+						)
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"RUNTIME_ACCEPTANCE_UNKNOWN",
+							"unknown",
+							{},
+						);
+					}
+					if (recoveringMissingStop) {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"RUNTIME_ACCEPTANCE_UNKNOWN",
+							"unknown",
+							{},
+						);
+					}
 					if (status.outcome === "recovery_failed") {
 						if (!(await dispatchHeartbeat.stop()))
 							return { schemaVersion: 1, outcome: "stale" };
