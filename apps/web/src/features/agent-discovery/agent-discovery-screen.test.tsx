@@ -251,7 +251,9 @@ describe("AgentDiscoveryScreen", () => {
 				name: canOpenConversation ? "开始对话" : /查看 Release assistant 详情/,
 			});
 			expect(action.getAttribute("href")).toBe(
-				`/agents/${agent.agentId}${canOpenConversation ? "/conversations" : ""}`,
+				canOpenConversation
+					? `/chat/${agent.agentId}`
+					: `/agents/${agent.agentId}`,
 			);
 			if (!canOpenConversation)
 				expect(screen.queryByRole("link", { name: "开始对话" })).toBeNull();

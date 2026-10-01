@@ -216,9 +216,12 @@ export function AgentDiscoveryScreen({
 										canStartPlatformConversation(agent) ? (
 											<Link
 												className={buttonVariants({ className: "min-w-0" })}
-												params={{ agentId: agent.agentId }}
-												search={{ conversation: undefined, view: undefined }}
-												to="/agents/$agentId/conversations"
+												params={{
+													agentId: agent.agentId,
+													conversationId: undefined,
+												}}
+												search={{ view: undefined }}
+												to="/chat/$agentId/{-$conversationId}"
 											>
 												开始对话
 												<ArrowRight aria-hidden="true" />
