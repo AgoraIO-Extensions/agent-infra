@@ -161,11 +161,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 													: "Agent 详情";
 	const navigation = (
 		<>
-			<Link
-				className="platform-brand"
-				to="/"
-				onClick={() => setSheet(false)}
-			>
+			<Link className="platform-brand" to="/" onClick={() => setSheet(false)}>
 				<span className="platform-brand-mark" aria-hidden="true">
 					A
 				</span>
