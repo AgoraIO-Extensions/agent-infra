@@ -67,6 +67,83 @@ function restorePreRelayKeyContract(value: {
 }
 
 describe("contract compatibility command", () => {
+	it("admits only the exact application registration POST and preserves all prior contracts", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/applications";
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		for (const name of [
+			"ApplicationMetadataV1",
+			"ApplicationRegistrationRequestV1",
+			"ApplicationRegistrationResponseV1",
+		])
+			delete previous.components.schemas[name];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-registration-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					delete document.paths[path];
+				},
+				(document: typeof current) => {
+					document.paths[path].get = document.paths[path].post;
+				},
+				(document: typeof current) => {
+					document.paths[path].post.security = [{}];
+				},
+				(document: typeof current) => {
+					document.paths[path].post.parameters = [];
+				},
+				(document: typeof current) => {
+					delete document.paths[path].post.responses["403"];
+				},
+				(document: typeof current) => {
+					document.components.schemas.ApplicationRegistrationRequestV1.additionalProperties = true;
+				},
+				(document: typeof current) => {
+					document.components.schemas.ApplicationMetadataV1.properties.credential =
+						{ type: "string" };
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/unreviewed"] = {};
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/agents"].get.operationId = "changed";
+				},
+				(document: typeof current) => {
+					document.components.schemas.AgentProjectionV2.required = [];
+				},
+				(document: typeof current) => {
+					document.components.securitySchemes.PlatformSession = {};
+				},
+				(document: typeof current) => {
+					document.components.schemas.Unreviewed = { type: "object" };
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the three pinned personal Relay Key audit actions at the existing V1 location", async () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),
@@ -848,8 +925,15 @@ describe("contract compatibility command", () => {
 				"utf8",
 			),
 		);
-		// Isolate the pinned lifecycle addition from later personal API/Relay Key additions.
+		// Isolate lifecycle from later personal API/Relay Key and registration additions.
 		restorePreRelayKeyContract(current);
+		delete current.paths["/api/v2/applications"];
+		for (const name of [
+			"ApplicationMetadataV1",
+			"ApplicationRegistrationRequestV1",
+			"ApplicationRegistrationResponseV1",
+		])
+			delete current.components.schemas[name];
 		delete current.paths["/api/v2/agents"].get.security;
 		delete current.paths["/api/v2/agents"].get.description;
 		const previous = structuredClone(current);
