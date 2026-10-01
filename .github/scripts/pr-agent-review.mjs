@@ -24,6 +24,44 @@ const agentAuthor = (user) =>
   user.login === "github-actions[bot]" &&
   user.type === "Bot";
 
+const stageCategories = {
+  "event-read": "input",
+  "validate-output": "validation",
+  "target-entry": "target",
+  files: "diff",
+  "hydrate-diff": "diff",
+  "anchor-findings": "validation",
+  "target-before-post": "target",
+  "post-review": "publication",
+  "read-review": "readback",
+  "read-comments": "readback",
+  verify: "verification",
+  "target-final": "target",
+  "output-write": "output",
+};
+const markStage = (context, stage) => {
+  if (context.diagnostic) context.diagnostic.stage = stage;
+};
+
+class GitHubRequestFailure extends Error {
+  constructor(category, details) {
+    super("PR-Agent GitHub request failed");
+    this.diagnostic = { category, ...details };
+  }
+}
+
+export function publicationFailure(diagnostic, error) {
+  const stage = Object.hasOwn(stageCategories, diagnostic?.stage)
+    ? diagnostic.stage
+    : "unknown";
+  return {
+    stage,
+    ...(error instanceof GitHubRequestFailure
+      ? error.diagnostic
+      : { category: stageCategories[stage] ?? "unknown" }),
+  };
+}
+
 export function parsePrAgentReview(raw) {
   if (typeof raw !== "string" || !raw || Buffer.byteLength(raw) > 64 * 1024) {
     throw new Error("PR-Agent review output is missing or too large");
@@ -218,6 +256,7 @@ const commentDigest = (comments) =>
   );
 
 export async function verifyPrAgentPublication(context) {
+  markStage(context, "verify");
   const {
     repository,
     prNumber,
@@ -241,9 +280,12 @@ export async function verifyPrAgentPublication(context) {
   )
     return false;
   const path = `/repos/${repository}/pulls/${prNumber}/reviews/${receipt.reviewId}`;
+  markStage(context, "read-review");
   const review = await request(path);
   // The review-scoped list only exposes legacy positions, not line/side.
+  markStage(context, "read-comments");
   const listed = await request(`${path}/comments?per_page=100`);
+  markStage(context, "verify");
   if (
     !Array.isArray(listed) ||
     listed.length !== receipt.findingCount ||
@@ -253,11 +295,13 @@ export async function verifyPrAgentPublication(context) {
     new Set(listed.map((comment) => comment.id)).size !== listed.length
   )
     return false;
+  markStage(context, "read-comments");
   const comments = await Promise.all(
     listed.map((comment) =>
       request(`/repos/${repository}/pulls/comments/${comment.id}`),
     ),
   );
+  markStage(context, "verify");
   if (comments.some((comment, index) => comment.id !== listed[index].id))
     return false;
   return (
@@ -281,8 +325,10 @@ export async function verifyPrAgentPublication(context) {
 export async function publishPrAgentReview(context) {
   const { repository, prNumber, expectedHead, runId, attempt, raw, request } =
     context;
+  markStage(context, "validate-output");
   validateContext(context);
   const findings = parsePrAgentReview(raw);
+  markStage(context, "target-entry");
   const current = await requireCurrentReviewTarget(context);
   if (current.head.repo?.full_name !== repository)
     throw new Error("PR-Agent review target must be in the same repository");
@@ -290,6 +336,7 @@ export async function publishPrAgentReview(context) {
   const fileMetadata = new Map();
   const missingPatches = new Set();
   const addedFiles = new Set();
+  markStage(context, "files");
   // GitHub caps PR files at 3000; reaching the cap is not evidence of a complete list.
   for (let page = 1; page <= 30; page++) {
     const batch = await request(
@@ -312,6 +359,7 @@ export async function publishPrAgentReview(context) {
     if (page === 30) throw new Error("PR-Agent review file list is incomplete");
   }
   if (missingPatches.size > 0) {
+    markStage(context, "hydrate-diff");
     const mergeBaseSha = await resolveMergeBase({
       repository,
       baseSha: current.base?.sha,
@@ -346,6 +394,7 @@ export async function publishPrAgentReview(context) {
       );
     }
   }
+  markStage(context, "anchor-findings");
   const comments = findings.map((finding) => {
     const path = finding.relevant_file.trim();
     const line = findChangedLine(
@@ -364,7 +413,9 @@ export async function publishPrAgentReview(context) {
       body: `**${finding.issue_header.trim()}**\n\n${finding.issue_content.trim()}`,
     };
   });
+  markStage(context, "target-before-post");
   await requireCurrentReviewTarget(context);
+  markStage(context, "post-review");
   const review = await request(
     `/repos/${repository}/pulls/${prNumber}/reviews`,
     {
@@ -387,49 +438,86 @@ export async function publishPrAgentReview(context) {
   };
   if (!(await verifyPrAgentPublication({ ...context, receipt })))
     throw new Error("PR-Agent published review could not be verified");
+  markStage(context, "target-final");
   await requireCurrentReviewTarget(context);
   return receipt;
 }
 
-async function githubRequest(path, options = {}) {
-  const response = await fetch(`https://api.github.com${path}`, {
-    ...options,
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
-  if (!response.ok)
-    throw new Error(`PR-Agent GitHub API failed: ${response.status}`);
-  return response.json();
+export async function githubRequest(path, options = {}) {
+  const route =
+    [
+      "contents",
+      "compare",
+      "git/blobs",
+      "files",
+      "reviews",
+      "comments",
+      "pulls",
+    ].find((part) => path.includes(`/${part}`)) ?? "unknown";
+  const details = {
+    method: ["GET", "POST"].includes(options.method ?? "GET")
+      ? (options.method ?? "GET")
+      : "unknown",
+    route,
+  };
+  let response;
+  try {
+    response = await fetch(`https://api.github.com${path}`, {
+      ...options,
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+  } catch {
+    throw new GitHubRequestFailure("network", details);
+  }
+  details.status = response.status;
+  const requestId = response.headers.get("x-github-request-id");
+  if (/^[a-f0-9]{1,16}(?::[a-f0-9]{1,16}){2,7}$/i.test(requestId ?? ""))
+    details.requestId = requestId;
+  if (!response.ok) throw new GitHubRequestFailure("http", details);
+  try {
+    return await response.json();
+  } catch {
+    throw new GitHubRequestFailure("invalid-json", details);
+  }
 }
 
-async function main() {
-  const event = JSON.parse(
-    await readFile(process.env.GITHUB_EVENT_PATH, "utf8"),
-  );
-  const receipt = await publishPrAgentReview({
-    repository: process.env.GITHUB_REPOSITORY,
-    prNumber: event.pull_request?.number,
-    expectedHead: event.pull_request?.head?.sha,
-    runId: process.env.GITHUB_RUN_ID,
-    attempt: process.env.GITHUB_RUN_ATTEMPT,
-    raw: process.env.PR_AGENT_REVIEW,
-    request: githubRequest,
-  });
-  await appendFile(
-    process.env.GITHUB_OUTPUT,
-    `receipt=${JSON.stringify(receipt)}\n`,
-  );
+export async function runPrAgentPublisher(request = githubRequest) {
+  const diagnostic = { stage: "event-read" };
+  try {
+    const event = JSON.parse(
+      await readFile(process.env.GITHUB_EVENT_PATH, "utf8"),
+    );
+    const receipt = await publishPrAgentReview({
+      repository: process.env.GITHUB_REPOSITORY,
+      prNumber: event.pull_request?.number,
+      expectedHead: event.pull_request?.head?.sha,
+      runId: process.env.GITHUB_RUN_ID,
+      attempt: process.env.GITHUB_RUN_ATTEMPT,
+      raw: process.env.PR_AGENT_REVIEW,
+      request,
+      diagnostic,
+    });
+    diagnostic.stage = "output-write";
+    await appendFile(
+      process.env.GITHUB_OUTPUT,
+      `receipt=${JSON.stringify(receipt)}\n`,
+    );
+  } catch (error) {
+    console.error(
+      "PR-Agent publication failed",
+      JSON.stringify(publicationFailure(diagnostic, error)),
+    );
+    process.exitCode = 1;
+  }
 }
 
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  main().catch(() => {
-    console.error("PR-Agent review output or publication is invalid");
-    process.exitCode = 1;
-  });
+  runPrAgentPublisher();
 }
