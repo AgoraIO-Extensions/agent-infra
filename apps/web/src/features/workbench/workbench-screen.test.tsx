@@ -250,7 +250,86 @@ describe("Original IA workbench presentation", () => {
 		expect(
 			region.querySelector('time[datetime="2026-09-30T21:00:00Z"]'),
 		).toBeTruthy();
+		expect(
+			screen.getAllByText("历史仍可查看，当前不能继续发送消息。"),
+		).toHaveLength(2);
+		expect(
+			screen.getByRole("link", { name: "打开对话" }).getAttribute("href"),
+		).toBe("/chat/unknown-agent/conversation-unknown-agent");
 	});
+
+	it.each([
+		{ kind: "loading" },
+		{ kind: "unavailable", retryable: true },
+		{ kind: "ready", agents: [] },
+	] satisfies WorkbenchScreenProps["agents"][])(
+		"keeps unknown Agent availability distinct from confirmed read-only history ($kind)",
+		async (agents) => {
+			const props: WorkbenchScreenProps = {
+				...empty,
+				agents,
+				recent: {
+					kind: "ready",
+					conversations: [conversation],
+					nextCursor: null,
+				},
+			};
+			const view = await showWorkbench(<WorkbenchScreen {...props} />);
+			expect(screen.getByText("状态暂时无法确认")).toBeTruthy();
+			expect(
+				screen.queryByText("历史仍可查看，当前不能继续发送消息。"),
+			).toBeNull();
+			expect(screen.queryByRole("link", { name: "继续对话" })).toBeNull();
+			expect(screen.queryByRole("link", { name: "查看历史" })).toBeNull();
+			expect(
+				screen.getByRole("link", { name: "打开对话" }).getAttribute("href"),
+			).toBe("/chat/usable-agent/conversation-z");
+			view.rerender(
+				<WorkbenchScreen
+					{...props}
+					agents={{ kind: "ready", agents: [available] }}
+				/>,
+			);
+			expect(screen.getByRole("link", { name: "继续对话" })).toBeTruthy();
+			expect(
+				screen.queryByText("历史仍可查看，当前不能继续发送消息。"),
+			).toBeNull();
+			view.rerender(
+				<WorkbenchScreen
+					{...props}
+					agents={{
+						kind: "ready",
+						agents: [
+							{
+								...available,
+								managementStatus: "stopped",
+								serviceAvailability: null,
+							},
+						],
+					}}
+				/>,
+			);
+			expect(
+				screen.getByText("历史仍可查看，当前不能继续发送消息。"),
+			).toBeTruthy();
+			expect(
+				screen.getByRole("link", { name: "查看历史" }).getAttribute("href"),
+			).toBe("/chat/usable-agent/conversation-z");
+			view.rerender(
+				<WorkbenchScreen
+					{...props}
+					recent={{
+						kind: "ready",
+						conversations: [{ ...conversation, status: "unavailable" }],
+						nextCursor: null,
+					}}
+				/>,
+			);
+			expect(screen.getByText("会话不可用")).toBeTruthy();
+			expect(screen.getByRole("link", { name: "查看历史" })).toBeTruthy();
+			expect(screen.queryByRole("link", { name: "打开对话" })).toBeNull();
+		},
+	);
 
 	it.each([
 		{

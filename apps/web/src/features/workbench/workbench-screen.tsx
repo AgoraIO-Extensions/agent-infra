@@ -189,8 +189,8 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 											)
 										: undefined;
 								const readOnly =
-									!agent ||
-									!canStartPlatformConversation(agent) ||
+									(agent !== undefined &&
+										!canStartPlatformConversation(agent)) ||
 									conversation.status === "unavailable";
 								return (
 									<article
@@ -218,7 +218,9 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 										</p>
 										{readOnly && <p>历史仍可查看，当前不能继续发送消息。</p>}
 										<Link
-											className={readOnly ? linkClass : buttonVariants()}
+											className={
+												agent && !readOnly ? buttonVariants() : linkClass
+											}
 											to="/chat/$agentId/{-$conversationId}"
 											params={{
 												agentId: conversation.agentId,
@@ -228,7 +230,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 												view: undefined,
 											}}
 										>
-											{readOnly ? "查看历史" : "继续对话"}
+											{readOnly ? "查看历史" : agent ? "继续对话" : "打开对话"}
 										</Link>
 									</article>
 								);

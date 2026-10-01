@@ -51,6 +51,7 @@ async function workbenchFixture(
 		attention = false,
 		longNames = false,
 		holdRecent,
+		agentCollection,
 		substitution,
 	}: {
 		managementStatus?: AgentProjectionV2["managementStatus"];
@@ -60,6 +61,7 @@ async function workbenchFixture(
 		attention?: boolean;
 		longNames?: boolean;
 		holdRecent?: "first" | "continuation";
+		agentCollection?: "held" | "unavailable";
 		substitution?:
 			| "agent-id"
 			| "conversation-id"
@@ -364,7 +366,24 @@ async function workbenchFixture(
 					},
 				});
 		}
-		if (url.pathname === "/api/v2/agents")
+		if (url.pathname === "/api/v2/agents") {
+			if (url.searchParams.get("scope") !== "owner") {
+				if (agentCollection === "held") {
+					held.push(url.pathname);
+					await pending;
+				}
+				if (agentCollection === "unavailable")
+					return route.fulfill({
+						status: 503,
+						json: PilotProtocolErrorV1Schema.parse({
+							schemaVersion: 1,
+							code: "DEPENDENCY_UNAVAILABLE",
+							message: "Controlled collection failure",
+							retryable: true,
+							traceId: "controlled-agent-collection-failure",
+						}),
+					});
+			}
 			return route.fulfill({
 				json: {
 					items:
@@ -378,6 +397,7 @@ async function workbenchFixture(
 					nextCursor: null,
 				},
 			});
+		}
 		if (url.pathname === "/api/v2/agent-applications")
 			return route.fulfill({ json: { items: applications, nextCursor: null } });
 		const agent = agents.find(
@@ -456,6 +476,77 @@ async function workbenchFixture(
 
 function recentRegion(page: Page) {
 	return page.getByRole("region", { name: "最近的个人对话", exact: true });
+}
+
+for (const agentCollection of ["held", "unavailable"] as const) {
+	test(`unknown Agent availability (${agentCollection}) opens the original Conversation without asserting read-only`, async ({
+		page,
+	}, info) => {
+		const fixture = await workbenchFixture(page, { agentCollection });
+		try {
+			await page.goto("/");
+			if (agentCollection === "held")
+				await expect.poll(() => fixture.held).toContain("/api/v2/agents");
+			else {
+				const agents = page.getByRole("region", {
+					name: "可用 Agent",
+					exact: true,
+				});
+				await expect(
+					agents.getByText("可用 Agent暂时无法读取。", { exact: true }),
+				).toBeVisible();
+				await expect(
+					agents.getByRole("button", {
+						name: "重新加载可用 Agent",
+						exact: true,
+					}),
+				).toBeEnabled();
+			}
+			const recent = recentRegion(page);
+			await expect(recent.getByRole("heading", { level: 3 })).toHaveCount(2);
+			await expect(
+				recent.getByText("状态暂时无法确认", { exact: true }),
+			).toHaveCount(2);
+			await expect(
+				recent.getByText("历史仍可查看，当前不能继续发送消息。", {
+					exact: true,
+				}),
+			).toHaveCount(0);
+			await expect(
+				recent.getByRole("link", { name: "查看历史", exact: true }),
+			).toHaveCount(0);
+			await expect(
+				recent.getByRole("link", { name: "继续对话", exact: true }),
+			).toHaveCount(0);
+			const original = recent
+				.getByRole("link", { name: "打开对话", exact: true })
+				.first();
+			await expect(original).toHaveAttribute(
+				"href",
+				"/chat/agent-b/conversation-z",
+			);
+			await info.attach(`controlled-unknown-availability-${agentCollection}`, {
+				body: await page.screenshot({ fullPage: true }),
+				contentType: "image/png",
+			});
+			await original.click();
+			await expect(page).toHaveURL(/\/chat\/agent-b\/conversation-z$/);
+			await expect(page.locator("form[data-c02-session-id]")).toHaveAttribute(
+				"data-c02-session-id",
+				"conversation-z",
+			);
+			await expect(
+				page.getByText("受控历史正文 conversation-z", { exact: true }),
+			).toBeVisible();
+			await expect(page.getByLabel("消息", { exact: true })).toBeEnabled();
+			expect(
+				fixture.requests.every((request) => request.method === "GET"),
+			).toBe(true);
+			expect(fixture.unexpected).toEqual([]);
+		} finally {
+			fixture.release();
+		}
+	});
 }
 
 async function returnViaBrand(page: Page) {
