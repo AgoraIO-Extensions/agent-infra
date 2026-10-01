@@ -69,20 +69,28 @@ it("recovers only the original control ref through production Worker/Core and Po
 			await sql`insert into platform.conversations
 				(id, agent_id, actor_id, channel_id, status, session_generation, authorization_revision)
 				values (${conversationId}, 'agent-1070', 'user-1070', 'web', 'active', 1, 'authorization-1070')`;
-			for (const [id, status, fence] of [
-				[executionId, "unknown", 7],
-				[successorId, "submitted", 0],
-			] as const) {
-				await sql`insert into platform.conversation_executions
+			await sql`insert into platform.conversation_executions
 					(execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, status,
 					 session_generation, delivery_fence, authorization_revision, model_configuration_revision,
-					 model_option_id, reasoning_level, last_runtime_cursor)
-					values (${id}, ${conversationId}, 'agent-1070', 'user-1070', 'web', ${id === executionId ? turnId : `successor-turn-${ordinal}`},
-					 ${status}, 1, ${fence}, 'authorization-1070', 1, 'option-1070', 'high', ${id === executionId ? "original-cursor" : null})`;
-			}
+					 model_option_id, reasoning_level, last_runtime_cursor, created_at)
+					values (${executionId}, ${conversationId}, 'agent-1070', 'user-1070', 'web', ${turnId},
+					 'unknown', 1, 7, 'authorization-1070', 1, 'option-1070', 'high', 'original-cursor', now())`;
+			// Unknown owns the active slot. A same-Conversation successor must
+			// be rejected by the real constraint, rather than seeded beside it.
+			await expect(
+				sql`insert into platform.conversation_executions
+					(execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, status,
+					 session_generation, delivery_fence, authorization_revision, model_configuration_revision,
+					 model_option_id, reasoning_level, created_at)
+					values (${successorId}, ${conversationId}, 'agent-1070', 'user-1070', 'web', ${`successor-turn-${ordinal}`},
+					 'submitted', 1, 0, 'authorization-1070', 1, 'option-1070', 'high', now())`,
+			).rejects.toMatchObject({
+				code: "23505",
+				constraint_name: "conversation_active_execution_unique",
+			});
 			await sql`insert into platform.conversation_messages
-				(message_id, conversation_id, actor_id, role, text, execution_id, status)
-				values (${messageId}, ${conversationId}, 'user-1070', 'user', 'controlled retained admission', ${executionId}, 'submitted')`;
+				(message_id, conversation_id, actor_id, role, text, execution_id, status, created_at)
+				values (${messageId}, ${conversationId}, 'user-1070', 'user', 'controlled retained admission', ${executionId}, 'submitted', now())`;
 			const payload = {
 				schemaVersion: 1,
 				conversationId,
@@ -97,8 +105,8 @@ it("recovers only the original control ref through production Worker/Core and Po
 			await sql`insert into platform.outbox_items
 				(id, scope_type, scope_id, operation, payload, trace_id, request_id, delivery_fence)
 				values (${originItem}, 'conversation', ${conversationId}, ${operation}, ${sql.json(payload)}, 'trace-1070', 'request-1070', 7)`;
-			await sql`insert into platform.conversation_stops (execution_id, stop_request_id, status)
-				values (${executionId}, ${stopRequestId}, 'submitted')`;
+			await sql`insert into platform.conversation_stops (execution_id, stop_request_id, status, created_at)
+				values (${executionId}, ${stopRequestId}, 'submitted', now())`;
 			if (scenario === "stop" || scenario === "submit")
 				await sql`insert into platform.outbox_items
 				(id, scope_type, scope_id, operation, payload, trace_id, request_id)
@@ -338,8 +346,9 @@ it("recovers only the original control ref through production Worker/Core and Po
 					await sql`select status from platform.conversation_stops where execution_id = ${executionId}`;
 				expect(stop?.status).toBe("submitted");
 				const [successor] =
-					await sql`select delivery_fence from platform.conversation_executions where execution_id = ${successorId}`;
+					await sql`select coalesce(sum(delivery_fence), 0) as delivery_fence, count(*) as executions from platform.conversation_executions where execution_id = ${successorId}`;
 				expect(Number(successor?.delivery_fence)).toBe(0);
+				expect(Number(successor?.executions)).toBe(0);
 				expect(calls).toBe(1);
 				if (scenario === "submit") {
 					// Re-claim the real outbox after ref-only CAS, then use the original
@@ -419,8 +428,9 @@ it("recovers only the original control ref through production Worker/Core and Po
 							status: "cancelled",
 						});
 						const [unclaimed] =
-							await sql`select delivery_fence from platform.conversation_executions where execution_id = ${successorId}`;
+							await sql`select coalesce(sum(delivery_fence), 0) as delivery_fence, count(*) as executions from platform.conversation_executions where execution_id = ${successorId}`;
 						expect(Number(unclaimed?.delivery_fence)).toBe(0);
+						expect(Number(unclaimed?.executions)).toBe(0);
 					} finally {
 						runtime.close();
 						try {
