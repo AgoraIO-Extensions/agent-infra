@@ -55,12 +55,12 @@ describe("original Hono request-scope response", () => {
 			);
 			let delivered = false;
 			try {
-				const pending = f.app
-					.request("/scope-response", { method: "POST" })
-					.then((response) => {
-						delivered = true;
-						return response;
-					});
+				const pending = Promise.resolve(
+					f.app.request("/scope-response", { method: "POST" }),
+				).then((response) => {
+					delivered = true;
+					return response;
+				});
 				await routePrepared;
 				expect(delivered).toBe(false);
 				settle();
@@ -142,12 +142,12 @@ describe("original Hono request-scope response", () => {
 			context.json({ outcome: "accepted" }, 202),
 		);
 		let delivered = false;
-		const pending = f.app
-			.request("/scope-response", { method: "POST" })
-			.then((response) => {
-				delivered = true;
-				return response;
-			});
+		const pending = Promise.resolve(
+			f.app.request("/scope-response", { method: "POST" }),
+		).then((response) => {
+			delivered = true;
+			return response;
+		});
 		try {
 			await prepared.promise;
 			expect(delivered).toBe(false);
