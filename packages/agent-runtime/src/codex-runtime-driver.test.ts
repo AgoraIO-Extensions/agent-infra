@@ -30,8 +30,10 @@ import type {
 	CodexModelTurnAdmission,
 	CodexNativeTurn,
 } from "./codex-model-transport.js";
+import * as codexModelTransport from "./codex-model-transport.js";
 import codexRelease from "./codex-release.json" with { type: "json" };
 import {
+	type CodexInstalledSkillDescriptorV1,
 	CodexRuntimeDriver,
 	type CodexRuntimeDriverOptions,
 } from "./codex-runtime-driver.js";
@@ -431,6 +433,49 @@ function driverOptions(path: string, configVersion = "synthetic-config-1") {
 			},
 		],
 	};
+}
+
+function installedSkillDescriptor(configVersion = "synthetic-config-1") {
+	return {
+		schemaVersion: 1,
+		manifestSha256:
+			"9bbef33672b700f43a6e700263a51fef1a0d534d44bf9d4940af84006f37c2d0",
+		manifest: {
+			schemaVersion: 1,
+			name: "workspace-summary",
+			version: "0.1.0-candidate.1",
+			source: {
+				repository: "AgoraIO-Extensions/agent-infra",
+				path: "deploy/runtime/skills/workspace-summary",
+			},
+			runtime: {
+				kind: "codex",
+				version: "0.153.0",
+				upstreamCommit: "41e22fee981a63b3698df7ed36bad393cda24715",
+			},
+			extraRoot: "/opt/codex/agent-infra-skills",
+			packageRoot: "/opt/codex/agent-infra-skills/workspace-summary",
+			entryPath: "/opt/codex/agent-infra-skills/workspace-summary/SKILL.md",
+			files: [
+				{
+					path: "SKILL.md",
+					sizeBytes: 1373,
+					sha256:
+						"af9ba615c92dcf53c6d5742b3d6043e4452b4499e0cdb561f4748033881472b2",
+				},
+			],
+			packageDigest: {
+				algorithm: "sha256-json-file-inventory-v1",
+				sha256:
+					"1ab20d81137fec09e015d9eadf953b37f4514c3b2cc02ead0dd879e7c2a86889",
+			},
+		},
+		deployment: {
+			configVersion,
+			// A real main commit is a fixture value, not proof of an installed image.
+			imageSourceRevision: "c3703372198d7b7de5d6d52aec90f7de45507d9e",
+		},
+	} satisfies CodexInstalledSkillDescriptorV1;
 }
 
 function internalModel(modelOptionId: string, model: string) {
@@ -1148,6 +1193,301 @@ afterEach(async () => {
 			.splice(0)
 			.map((directory) => rm(directory, { recursive: true })),
 	);
+});
+
+describe("Codex installed Skill descriptor receipt", () => {
+	it.each([false, true])(
+		"preserves original lazy admission and bridge configuration (installed=%s)",
+		async (installed) => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			const descriptor = installedSkillDescriptor();
+			const bridge = new TestCodexBridge();
+			const factory = vi.fn(async () => bridge);
+			const driver = await RuntimeBindingDriver.openBound(
+				{
+					...driverOptions(path),
+					...(installed ? { installedSkill: descriptor } : {}),
+				},
+				factory,
+			);
+			drivers.push(driver);
+			expect(factory).not.toHaveBeenCalled();
+			expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
+				schemaVersion: 1,
+				sessions: {},
+				operations: {},
+			});
+			// Accepted input is not frozen in place or retained as mutable configuration.
+			descriptor.manifest.files[0].sizeBytes = 8192;
+			descriptor.deployment.configVersion = "caller-after-receipt";
+			await expect(driver.execute(submitCommand())).resolves.toMatchObject({
+				result: { outcome: "accepted" },
+			});
+			expect(factory).toHaveBeenCalledExactlyOnceWith(
+				expect.objectContaining({
+					dataDirectory: `${path}.native`,
+					model: "gpt-5.3-codex",
+					reasoningEffort: "high",
+					provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+					nativeBarrierRequired: true,
+				}),
+			);
+			expect(
+				bridge.requests.some(({ method }) => method.startsWith("skills/")),
+			).toBe(false);
+			const state = await readFile(path, "utf8");
+			expect(state).toContain("synthetic-config-1");
+			expect(state).not.toContain("caller-after-receipt");
+			expect(state).not.toContain("workspace-summary");
+		},
+	);
+
+	it.each([
+		["root schema", ["schemaVersion"], 2],
+		["manifest digest type", ["manifestSha256"], 1],
+		["manifest digest encoding", ["manifestSha256"], "A".repeat(64)],
+		["manifest schema", ["manifest", "schemaVersion"], "1"],
+		["name", ["manifest", "name"], "foreign-skill"],
+		["version", ["manifest", "version"], "unknown"],
+		["repository", ["manifest", "source", "repository"], "foreign/repo"],
+		["source path", ["manifest", "source", "path"], "/private/secret-skill"],
+		["runtime kind", ["manifest", "runtime", "kind"], "pi"],
+		["runtime version", ["manifest", "runtime", "version"], "0.154.0"],
+		[
+			"runtime commit",
+			["manifest", "runtime", "upstreamCommit"],
+			"a".repeat(40),
+		],
+		["extra root", ["manifest", "extraRoot"], "/private/secret-skill"],
+		["package root", ["manifest", "packageRoot"], "/private/secret-skill"],
+		["entry path", ["manifest", "entryPath"], "/private/secret-skill"],
+		["inventory type", ["manifest", "files"], {}],
+		["empty inventory", ["manifest", "files"], []],
+		["extra inventory", ["manifest", "files"], [{}, {}]],
+		["inventory entry type", ["manifest", "files", "0"], null],
+		["file path", ["manifest", "files", "0", "path"], "../SKILL.md"],
+		["size type", ["manifest", "files", "0", "sizeBytes"], "1373"],
+		["empty file", ["manifest", "files", "0", "sizeBytes"], 0],
+		["oversize file", ["manifest", "files", "0", "sizeBytes"], 8193],
+		["fractional size", ["manifest", "files", "0", "sizeBytes"], 1.5],
+		["nonfinite size", ["manifest", "files", "0", "sizeBytes"], Number.NaN],
+		["file digest", ["manifest", "files", "0", "sha256"], "unknown"],
+		["digest algorithm", ["manifest", "packageDigest", "algorithm"], "sha256"],
+		["package digest", ["manifest", "packageDigest", "sha256"], "a".repeat(65)],
+		["config binding", ["deployment", "configVersion"], "another-config"],
+		["source revision type", ["deployment", "imageSourceRevision"], null],
+		[
+			"unknown source revision",
+			["deployment", "imageSourceRevision"],
+			"unknown",
+		],
+		[
+			"source revision case",
+			["deployment", "imageSourceRevision"],
+			"A".repeat(40),
+		],
+		[
+			"source revision placeholder",
+			["deployment", "imageSourceRevision"],
+			"0".repeat(40),
+		],
+	] satisfies [string, string[], unknown][])(
+		"rejects invalid %s before journal, transport or bridge effects",
+		async (_name, keys, value) => {
+			const descriptor = installedSkillDescriptor();
+			let parent: object = descriptor;
+			for (const key of keys.slice(0, -1)) parent = Reflect.get(parent, key);
+			const key = keys.at(-1);
+			if (!key) throw new Error("missing fixture property");
+			Reflect.set(parent, key, value);
+			await rejectsBeforeEffects(descriptor);
+		},
+	);
+
+	it.each([null, 1, "private-secret-body", [], {}])(
+		"rejects malformed root %j before effects",
+		async (value) => rejectsBeforeEffects(value),
+	);
+
+	it.each([
+		[],
+		["manifest"],
+		["manifest", "source"],
+		["manifest", "runtime"],
+		["manifest", "packageDigest"],
+		["manifest", "files", "0"],
+		["deployment"],
+	])("rejects missing or extra fields at %j", async (keys) => {
+		const descriptor = installedSkillDescriptor();
+		let record: object = descriptor;
+		for (const key of keys) record = Reflect.get(record, key);
+		const missing = structuredClone(descriptor);
+		let incomplete: object = missing;
+		for (const key of keys) incomplete = Reflect.get(incomplete, key);
+		Reflect.deleteProperty(incomplete, Object.keys(incomplete)[0] ?? "");
+		await rejectsBeforeEffects(missing);
+		Object.defineProperty(record, "unexpected", {
+			value: "private-secret-body",
+		});
+		await rejectsBeforeEffects(descriptor);
+	});
+
+	it("rejects accessor, symbol and array properties without evaluating input code", async () => {
+		const descriptor = installedSkillDescriptor();
+		const getter = vi.fn(() => "private-secret-body");
+		Object.defineProperty(descriptor.manifest.source, "path", { get: getter });
+		await rejectsBeforeEffects(descriptor);
+		expect(getter).not.toHaveBeenCalled();
+		const symbolInput = installedSkillDescriptor();
+		Reflect.set(symbolInput, Symbol("extra"), true);
+		await rejectsBeforeEffects(symbolInput);
+		const arrayInput = installedSkillDescriptor();
+		Reflect.set(arrayInput.manifest.files, "extra", true);
+		await rejectsBeforeEffects(arrayInput);
+	});
+
+	it.each([
+		"nested value",
+		"nested identity",
+		"root identity",
+		"original config",
+		"matching changed config",
+	])(
+		"rejects %s changed during state open and closes only this open",
+		async (mutation) => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			const descriptor = installedSkillDescriptor();
+			const options = { ...driverOptions(path), installedSkill: descriptor };
+			const factory = vi.fn(async () => new TestCodexBridge());
+			const originalUpdate = DurableJsonFile.prototype.update;
+			let acquired: DurableJsonFile<unknown> | undefined;
+			vi.spyOn(DurableJsonFile.prototype, "update").mockImplementationOnce(
+				function (this: DurableJsonFile<unknown>, change) {
+					acquired = this;
+					return originalUpdate.call(this, change).then((result) => {
+						if (mutation === "nested value")
+							descriptor.manifest.files[0].sizeBytes += 1;
+						if (mutation === "nested identity")
+							descriptor.manifest.files = [...descriptor.manifest.files];
+						if (mutation === "root identity")
+							options.installedSkill = structuredClone(descriptor);
+						if (mutation.includes("config"))
+							options.configVersion = "changed-config";
+						if (mutation === "matching changed config")
+							descriptor.deployment.configVersion = options.configVersion;
+						return result;
+					});
+				},
+			);
+			const close = vi.spyOn(DurableJsonFile.prototype, "close");
+			const transport = vi.spyOn(
+				codexModelTransport,
+				"openCodexModelTransport",
+			);
+			await expect(
+				RuntimeBindingDriver.openBound(options, factory),
+			).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
+			});
+			expect(factory).not.toHaveBeenCalled();
+			expect(transport).not.toHaveBeenCalled();
+			expect(close.mock.contexts).toEqual([acquired]);
+			expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
+				schemaVersion: 1,
+				sessions: {},
+				operations: {},
+			});
+		},
+	);
+
+	it("closes the acquired model transport and journal on post-transport input change", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const descriptor = installedSkillDescriptor();
+		const options = {
+			...driverOptions(path),
+			installedSkill: descriptor,
+			modelOptions: driverOptions(path).modelOptions.map((option) => ({
+				...option,
+				...upstreamModelAccess,
+			})),
+		};
+		const factory = vi.fn(async () => new TestCodexBridge());
+		const originalOpen = codexModelTransport.openCodexModelTransport;
+		let acquiredTransport: Awaited<ReturnType<typeof originalOpen>> | undefined;
+		let transportClosed = 0;
+		vi.spyOn(
+			codexModelTransport,
+			"openCodexModelTransport",
+		).mockImplementationOnce(async (...args) => {
+			const transport = await originalOpen(...args);
+			acquiredTransport = transport;
+			const close = transport.close;
+			transport.close = async () => {
+				transportClosed += 1;
+				await close();
+			};
+			descriptor.manifest.files[0].sha256 = "a".repeat(64);
+			return transport;
+		});
+		const journalClose = vi.spyOn(DurableJsonFile.prototype, "close");
+		await expect(
+			RuntimeBindingDriver.openBound(options, factory),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_CONFIGURATION_INVALID" });
+		expect(factory).not.toHaveBeenCalled();
+		expect(acquiredTransport).toBeDefined();
+		expect(transportClosed).toBe(1);
+		expect(journalClose).toHaveBeenCalledTimes(1);
+		if (!acquiredTransport) throw new Error("missing received transport");
+		await expect(fetch(acquiredTransport.endpoint)).rejects.toThrow();
+	});
+
+	it("rejects input changed while awaiting recovery and closes the constructed Driver", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const descriptor = installedSkillDescriptor();
+		const factory = vi.fn(async () => new TestCodexBridge());
+		const originalRead = DurableJsonFile.prototype.read;
+		vi.spyOn(DurableJsonFile.prototype, "read").mockImplementationOnce(
+			function (this: DurableJsonFile<unknown>) {
+				const state = originalRead.call(this);
+				queueMicrotask(() => {
+					descriptor.deployment.imageSourceRevision = "a".repeat(40);
+				});
+				return state;
+			},
+		);
+		const driverClose = vi.spyOn(CodexRuntimeDriver.prototype, "close");
+		const journalClose = vi.spyOn(DurableJsonFile.prototype, "close");
+		await expect(
+			RuntimeBindingDriver.openBound(
+				{ ...driverOptions(path), installedSkill: descriptor },
+				factory,
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_CONFIGURATION_INVALID" });
+		expect(factory).not.toHaveBeenCalled();
+		expect(driverClose).toHaveBeenCalledTimes(1);
+		expect(journalClose).toHaveBeenCalledTimes(1);
+	});
+
+	async function rejectsBeforeEffects(value: unknown) {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const options = driverOptions(path);
+		Reflect.set(options, "installedSkill", value);
+		const factory = vi.fn(async () => new TestCodexBridge());
+		const update = vi.spyOn(DurableJsonFile.prototype, "update");
+		const transport = vi.spyOn(codexModelTransport, "openCodexModelTransport");
+		await expect(
+			RuntimeBindingDriver.openBound(options, factory),
+		).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
+			message: "Codex Runtime configuration is unavailable",
+		});
+		expect(factory).not.toHaveBeenCalled();
+		expect(update).not.toHaveBeenCalled();
+		expect(transport).not.toHaveBeenCalled();
+		await expect(readFile(path)).rejects.toMatchObject({ code: "ENOENT" });
+		update.mockRestore();
+		transport.mockRestore();
+	}
 });
 
 describe("Codex Runtime Driver", () => {
