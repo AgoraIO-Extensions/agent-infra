@@ -555,6 +555,46 @@ async function capture(page: Page, info: TestInfo, name: string) {
 	});
 }
 
+test("creation header exit supports deep links, refresh, click, keyboard and back", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	await page.goto("/my-agents/new");
+	const headerExit = page
+		.locator("main header.page-heading")
+		.getByRole("link", { name: "退出创建", exact: true });
+	await expect(headerExit).toBeVisible();
+	await expect(headerExit).toHaveAttribute("href", "/my-agents");
+	await expect(page.getByRole("link", { name: "退出创建" })).toHaveCount(2);
+	const bounds = await headerExit.boundingBox();
+	expect(bounds?.height).toBeGreaterThanOrEqual(44);
+	await capture(page, info, "create-header-exit");
+	await headerExit.click();
+	await expect(page).toHaveURL(/\/my-agents$/);
+	await expect(page.getByRole("heading", { name: "我的 Agent" })).toBeVisible();
+	expect(api.commands).toHaveLength(0);
+
+	await page.goBack();
+	await expect(page).toHaveURL(/\/my-agents\/new$/);
+	await expect(headerExit).toBeVisible();
+	await page.reload();
+	await expect(headerExit).toBeVisible();
+	await expect(headerExit).toHaveAttribute("href", "/my-agents");
+	await headerExit.focus();
+	await page.keyboard.press("Tab");
+	await expect(page.getByLabel("Agent 名称")).toBeFocused();
+	await page.keyboard.press("Shift+Tab");
+	await expect(headerExit).toBeFocused();
+	expect(
+		await headerExit.evaluate((element) => getComputedStyle(element).boxShadow),
+	).not.toBe("none");
+	await capture(page, info, "create-header-exit-refreshed-focus");
+	await page.keyboard.press("Enter");
+	await expect(page).toHaveURL(/\/my-agents$/);
+	await expect(page.getByRole("heading", { name: "我的 Agent" })).toBeVisible();
+	expect(api.commands).toHaveLength(0);
+});
+
 test("create, edit, resubmit and withdraw with native form and pending semantics", async ({
 	page,
 }, info) => {
@@ -594,6 +634,18 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await page.keyboard.press("Enter");
 	await expect(page.getByRole("button", { name: "正在提交…" })).toBeDisabled();
 	await expect(page.getByLabel("Agent 名称")).toBeDisabled();
+	await expect(page.getByRole("link", { name: "退出创建" })).toHaveCount(0);
+	const disabledExits = page.getByText("退出创建", { exact: true });
+	await expect(disabledExits).toHaveCount(2);
+	for (const exit of await disabledExits.all()) {
+		await expect(exit).toHaveAttribute("aria-disabled", "true");
+		expect(await exit.evaluate((element) => element.tabIndex)).toBe(-1);
+		await exit.click({ force: true });
+		await exit.evaluate((element) => element.focus());
+		await expect(exit).not.toBeFocused();
+		await page.keyboard.press("Enter");
+		await expect(page).toHaveURL(/\/my-agents\/new$/);
+	}
 	await page.keyboard.press("Enter");
 	await expect.poll(() => api.commands.length).toBe(1);
 	expect(api.commands[0]?.body).toEqual({
@@ -614,7 +666,24 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await capture(page, info, "application-pending");
 	api.release();
 	await expect(page.getByRole("status")).toBeFocused();
-	await page.getByRole("link", { name: "查看申请" }).click();
+	await expect(
+		page.getByRole("link", { name: "查看申请详情", exact: true }),
+	).toHaveAttribute("href", "/my-agents/application-browser-1");
+	await expect(page.getByRole("link", { name: "退出创建" })).toHaveCount(1);
+	await capture(page, info, "create-header-exit-success");
+	await page
+		.locator("main header.page-heading")
+		.getByRole("link", { name: "退出创建", exact: true })
+		.click();
+	await expect(page).toHaveURL(/\/my-agents$/);
+	await page.getByRole("link", { name: "申请详情", exact: true }).click();
+	await page.getByRole("link", { name: "修改申请" }).click();
+	await expect(page.getByText("退出创建", { exact: true })).toHaveCount(0);
+	await expect(
+		page.getByRole("link", { name: "取消", exact: true }),
+	).toHaveAttribute("href", "/my-agents/application-browser-1");
+	await page.getByRole("link", { name: "取消", exact: true }).click();
+	await expect(page).toHaveURL(/\/my-agents\/application-browser-1$/);
 	await page.getByRole("link", { name: "修改申请" }).click();
 	await expect(page.getByLabel("Agent 来源")).toBeDisabled();
 	await page
@@ -624,6 +693,13 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await expect(page.getByRole("status")).toContainText("申请已提交");
 	api.rejectApplication();
 	await page.goto("/my-agents/application-browser-1/edit");
+	await expect(page.getByText("退出创建", { exact: true })).toHaveCount(0);
+	await expect(
+		page.getByRole("link", { name: "取消", exact: true }),
+	).toHaveAttribute("href", "/my-agents/application-browser-1");
+	await page.getByRole("link", { name: "取消", exact: true }).click();
+	await expect(page).toHaveURL(/\/my-agents\/application-browser-1$/);
+	await page.getByRole("link", { name: "修改并重新提交" }).click();
 	await page
 		.getByRole("button", { name: "修改并重新提交", exact: true })
 		.click();
@@ -749,6 +825,15 @@ test("authorization rejection keeps non-sensitive input and clears Secret", asyn
 	await expect(page.getByLabel("替换值")).toHaveCount(0);
 	expect(api.commands).toHaveLength(1);
 	await capture(page, info, "application-authorization-rejected");
+	const headerExit = page
+		.locator("main header.page-heading")
+		.getByRole("link", { name: "退出创建", exact: true });
+	await expect(headerExit).toHaveAttribute("href", "/my-agents");
+	await headerExit.focus();
+	await page.keyboard.press("Enter");
+	await expect(page).toHaveURL(/\/my-agents$/);
+	await expect(page.getByRole("heading", { name: "我的 Agent" })).toBeVisible();
+	expect(api.commands).toHaveLength(1);
 });
 
 test("administrator rejection, approval, empty queue and pending controls", async ({
