@@ -5,10 +5,11 @@ import { join } from "node:path";
 import type {
 	ExecutionGrantCommandV1,
 	ExecutionGrantV1,
+	RuntimeEvent,
 	RuntimeSubmitTurnRequestV1,
 	RuntimeSubmitTurnRequestV2,
 } from "@agent-infra/contracts/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	ingressVerifiedRuntimeHost,
 	runtimeGrantFixture,
@@ -128,6 +129,7 @@ function host(store: FileRuntimeStore, driver: FakeRuntimeDriver) {
 }
 
 afterEach(async () => {
+	vi.restoreAllMocks();
 	await Promise.all(
 		directories
 			.splice(0)
@@ -136,6 +138,148 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost durable Session", () => {
+	it.each([
+		"mixed",
+		"invalid operation",
+		"invalid V1",
+		"foreign operation",
+		"foreign V1",
+	])(
+		"validates %s events before filtering V1 replay and stream",
+		async (scenario) => {
+			const directory = await runtimeDirectory();
+			const driver = await FakeRuntimeDriver.open(
+				join(directory, "driver.json"),
+			);
+			const store = await FileRuntimeStore.open(join(directory, "host.json"));
+			const runtimeHost = await host(store, driver);
+			const submittedRequest = submitRequest();
+			const submitted = await runtimeHost.submitTurn(submittedRequest);
+			const nativeSessionRef = store.nativeSessionRef(submitted.hostSessionRef);
+			const request = {
+				...statusRequest(
+					submittedRequest,
+					submitted.hostSessionRef,
+					"request-events",
+				),
+				afterCursor: "cursor-before",
+				grant: grant(submittedRequest, ["events.replay"]),
+			};
+			const base = {
+				executionId: request.executionId,
+				occurredAt: "2026-08-28T10:00:00Z",
+			};
+			const events: RuntimeEvent[] = [
+				{
+					...base,
+					schemaVersion: 1,
+					adapterEventKey: "event-running",
+					cursor: "cursor-running",
+					type: "status",
+					payload: { status: "running" },
+				},
+				{
+					...base,
+					schemaVersion: 2,
+					adapterEventKey: "event-operation",
+					cursor: "cursor-operation",
+					type: "operation",
+					payload: {
+						kind: "tool",
+						operationRef: "operation-original",
+						attemptRef: "attempt-original",
+						phase: "intent",
+						toolId: "synthetic-tool",
+					},
+				},
+				{
+					...base,
+					schemaVersion: 1,
+					adapterEventKey: "event-text",
+					cursor: "cursor-text",
+					type: "text",
+					payload: { delta: "synthetic-event-after-operation" },
+				},
+			];
+			const operation = events[1];
+			if (operation?.type !== "operation")
+				throw new Error("Missing fixture operation");
+			if (scenario === "invalid operation") operation.payload.operationRef = "";
+			if (scenario === "foreign operation")
+				operation.executionId = "other-execution";
+			const text = events[2];
+			if (text?.type !== "text") throw new Error("Missing fixture text");
+			if (scenario === "invalid V1") text.payload.delta = "";
+			if (scenario === "foreign V1") text.executionId = "other-execution";
+			const replay = vi.spyOn(driver, "replayEvents").mockResolvedValue(events);
+			let streamClosed = false;
+			const subscribe = vi.spyOn(driver, "subscribeEvents").mockResolvedValue(
+				(async function* () {
+					try {
+						yield* events;
+					} finally {
+						streamClosed = true;
+					}
+				})(),
+			);
+			if (scenario === "mixed") {
+				await expect(runtimeHost.replay(request)).resolves.toEqual({
+					schemaVersion: 1,
+					events: [events[0], events[2]],
+				});
+			} else {
+				await expect(runtimeHost.replay(request)).rejects.toMatchObject({
+					code: "RUNTIME_DRIVER_INVALID",
+				});
+			}
+			const signal = new AbortController().signal;
+			const stream = await runtimeHost.streamEvents(request, signal);
+			const iterator = stream[Symbol.asyncIterator]();
+			await expect(iterator.next()).resolves.toEqual({
+				done: false,
+				value: events[0],
+			});
+			if (scenario === "mixed") {
+				await expect(iterator.next()).resolves.toEqual({
+					done: false,
+					value: events[2],
+				});
+				await expect(iterator.next()).resolves.toEqual({
+					done: true,
+					value: undefined,
+				});
+			} else {
+				await expect(iterator.next()).rejects.toMatchObject({
+					code: "RUNTIME_DRIVER_INVALID",
+				});
+			}
+			expect(streamClosed).toBe(true);
+			expect(replay).toHaveBeenCalledExactlyOnceWith(
+				nativeSessionRef,
+				request.executionId,
+				request.afterCursor,
+			);
+			expect(subscribe).toHaveBeenCalledExactlyOnceWith(
+				nativeSessionRef,
+				request.executionId,
+				request.afterCursor,
+				signal,
+			);
+			const denied = {
+				...request,
+				grant: grant(submittedRequest, ["session.status"]),
+			};
+			await expect(runtimeHost.replay(denied)).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+			await expect(runtimeHost.streamEvents(denied)).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+			expect(replay).toHaveBeenCalledTimes(1);
+			expect(subscribe).toHaveBeenCalledTimes(1);
+		},
+	);
+
 	it("rejects legacy requests after close and keeps close idempotent", async () => {
 		const directory = await runtimeDirectory();
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
