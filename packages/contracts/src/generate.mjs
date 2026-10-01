@@ -658,6 +658,7 @@ function buildArtifacts() {
 		paths: { ...pilotBrowserOpenApiPathsV2, ...pilotOperationOpenApiPathsV2 },
 		components: {
 			securitySchemes: {
+				platformApiCredential: { type: "http", scheme: "bearer" },
 				PlatformSession: {
 					type: "apiKey",
 					in: "cookie",

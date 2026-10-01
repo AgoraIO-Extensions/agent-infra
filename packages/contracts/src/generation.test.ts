@@ -145,9 +145,13 @@ describe("standard contract artifacts", () => {
 				.get;
 		expect(recent.operationId).toBe("listRecentPersonalConversationsV2");
 		expect(recent.security).toEqual([{ PlatformSession: [] }]);
-		expect(artifacts.pilotBrowserOpenapiV2.components.securitySchemes).toEqual(
-			artifacts.platformAuthOpenapi.components.securitySchemes,
-		);
+		expect(artifacts.pilotBrowserOpenapiV2.components.securitySchemes).toEqual({
+			...artifacts.platformAuthOpenapi.components.securitySchemes,
+			platformApiCredential: { type: "http", scheme: "bearer" },
+		});
+		expect(
+			artifacts.pilotBrowserOpenapiV2.paths["/api/v2/agents"].get.security,
+		).toEqual([{ PlatformSession: [] }, { platformApiCredential: [] }]);
 		expect(
 			recent.responses[200].content["application/json"].schema.properties.items
 				.items.properties.schemaVersion.const,

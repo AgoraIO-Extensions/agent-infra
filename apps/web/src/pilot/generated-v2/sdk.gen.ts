@@ -57,7 +57,14 @@ export const updateAgentApplicationV2 = <ThrowOnError extends boolean = false>(o
 
 export const withdrawAgentApplicationV2 = <ThrowOnError extends boolean = false>(options: Options<WithdrawAgentApplicationV2Data, ThrowOnError>): RequestResult<WithdrawAgentApplicationV2Responses, WithdrawAgentApplicationV2Errors, ThrowOnError> => (options.client ?? client).post<WithdrawAgentApplicationV2Responses, WithdrawAgentApplicationV2Errors, ThrowOnError>({ url: '/api/v2/agent-applications/{applicationId}/withdraw', ...options });
 
-export const listAgentsV2 = <ThrowOnError extends boolean = false>(options?: Options<ListAgentsV2Data, ThrowOnError>): RequestResult<ListAgentsV2Responses, ListAgentsV2Errors, ThrowOnError> => (options?.client ?? client).get<ListAgentsV2Responses, ListAgentsV2Errors, ThrowOnError>({ url: '/api/v2/agents', ...options });
+/**
+ * Browser discovery/Owner uses PlatformSession. Personal Bearer requires agent:read and current explicit manage or use grants; only limit/cursor, no scope override or mixed Cookie.
+ */
+export const listAgentsV2 = <ThrowOnError extends boolean = false>(options?: Options<ListAgentsV2Data, ThrowOnError>): RequestResult<ListAgentsV2Responses, ListAgentsV2Errors, ThrowOnError> => (options?.client ?? client).get<ListAgentsV2Responses, ListAgentsV2Errors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v2/agents',
+    ...options
+});
 
 export const getAgentV2 = <ThrowOnError extends boolean = false>(options: Options<GetAgentV2Data, ThrowOnError>): RequestResult<GetAgentV2Responses, GetAgentV2Errors, ThrowOnError> => (options.client ?? client).get<GetAgentV2Responses, GetAgentV2Errors, ThrowOnError>({ url: '/api/v2/agents/{agentId}', ...options });
 

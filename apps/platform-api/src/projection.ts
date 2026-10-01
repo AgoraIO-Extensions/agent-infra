@@ -2,7 +2,10 @@ import {
 	AgentApplicationProjectionV1Schema,
 	AgentProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
-import type { AgentManagementStateV1 } from "@agent-infra/platform-core";
+import type {
+	AgentManagementStateV1,
+	CurrentTaskUserV1,
+} from "@agent-infra/platform-core";
 import type {
 	AgentConfigurationProjectionV1,
 	AgentManagementAgentProjectionV1,
@@ -49,6 +52,12 @@ interface ProjectionMetadata {
 	readonly traceId: string;
 }
 
+interface ApiProjectionMetadata {
+	readonly apiUser: CurrentTaskUserV1;
+	readonly requestId: string;
+	readonly traceId: string;
+}
+
 function sourceMatches(
 	configuration: AgentConfigurationProjectionV1,
 	source: AgentProjection["source"],
@@ -75,14 +84,16 @@ export function createPlatformProjectionReaders(
 	async function configurationProjection(
 		agentId: string,
 		management: AgentManagementStateV1,
-		metadata: ProjectionMetadata,
+		metadata: ProjectionMetadata | ApiProjectionMetadata,
 	) {
+		const api = "apiUser" in metadata;
+		const user = api ? metadata.apiUser : metadata.identity;
 		const result = await dependencies.configurationQuery.read({
 			agentId,
-			actorId: metadata.identity.userId,
-			organizationIds: metadata.identity.organizationIds,
-			isAdministrator: metadata.identity.roles.includes("system_admin"),
-			intent: "discover",
+			actorId: user.userId,
+			organizationIds: user.organizationIds,
+			isAdministrator: !api && metadata.identity.roles.includes("system_admin"),
+			intent: api ? "api_metadata" : "discover",
 		});
 		if (result.outcome !== "found") {
 			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
@@ -118,7 +129,7 @@ export function createPlatformProjectionReaders(
 
 	async function projectAgent(
 		agent: AgentManagementAgentProjectionV1,
-		metadata: ProjectionMetadata,
+		metadata: ProjectionMetadata | ApiProjectionMetadata,
 	): Promise<AgentProjection> {
 		const { presentation, wire } = await configurationProjection(
 			agent.agentId,
@@ -140,6 +151,13 @@ export function createPlatformProjectionReaders(
 	}
 
 	return {
+		async readApiAgentProjection(
+			input: ApiProjectionMetadata & {
+				readonly agent: AgentManagementAgentProjectionV1;
+			},
+		): Promise<AgentProjection> {
+			return projectAgent(input.agent, input);
+		},
 		async readApplicationProjection(
 			input: ProjectionMetadata & {
 				readonly application?: AgentManagementApplicationProjectionV1;

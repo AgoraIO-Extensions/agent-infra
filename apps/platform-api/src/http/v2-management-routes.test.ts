@@ -1,8 +1,14 @@
+import { createHash } from "node:crypto";
 import {
 	AgentApplicationProjectionV2Schema,
 	AgentProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
+import {
+	createPersonalApiAgentReadUseCaseV1,
+	type PersonalApiAgentReadAuditV1,
+	type PersonalApiAgentReadUseCaseV1,
+} from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
@@ -121,6 +127,7 @@ function createApp(
 		identityValue?: unknown;
 		queryFailure?: boolean;
 		projectionFailure?: boolean;
+		personalApiAgentRead?: PersonalApiAgentReadUseCaseV1;
 	} = {},
 ) {
 	const app = new Hono();
@@ -145,6 +152,9 @@ function createApp(
 	const readAgentProjection = options.projectionFailure
 		? vi.fn().mockRejectedValue(new Error("private projection detail"))
 		: vi.fn().mockResolvedValue(agentProjection);
+	const readApiAgentProjection = options.projectionFailure
+		? vi.fn().mockRejectedValue(new Error("private API projection detail"))
+		: vi.fn().mockResolvedValue(agentProjection);
 	const allocateApplicationIds = vi
 		.fn()
 		.mockResolvedValue({ applicationId: "application-1", agentId: "agent-1" });
@@ -163,6 +173,8 @@ function createApp(
 			);
 
 	registerV2ManagementRoutes(app, {
+		personalApiAgentRead: options.personalApiAgentRead,
+		readApiAgentProjection,
 		identity: {
 			resolve,
 			hydrateUsers: vi.fn().mockResolvedValue([]),
@@ -188,6 +200,224 @@ function createApp(
 		readAgentProjection,
 	};
 }
+
+function apiReader() {
+	const material = `papi_${"b".repeat(43)}`;
+	const credentialHash = createHash("sha256").update(material).digest("hex");
+	const credential = {
+		credentialId: "credential-used",
+		principalType: "user" as const,
+		principalId: "user-api",
+		scopes: ["agent:read" as const],
+		expiresAt: null,
+		revokedAt: null as string | null,
+		createdAt: "2026-10-01T00:00:00Z",
+		lastUsedAt: null,
+	};
+	const audits: PersonalApiAgentReadAuditV1[] = [];
+	const recordAudit = vi.fn().mockImplementation(async (event) => {
+		audits.push(event);
+	});
+	const {
+		displayName: _displayName,
+		roles: _roles,
+		...browserFacts
+	} = identity;
+	const resolveUser = vi
+		.fn()
+		.mockResolvedValue({ ...browserFacts, userId: "user-api" });
+	const reader = createPersonalApiAgentReadUseCaseV1({
+		userDirectory: { resolveUser },
+		transaction: {
+			async executeAgentRead(work) {
+				return work({
+					async lockUsedCredential(hash) {
+						return hash === credentialHash ? { ...credential } : null;
+					},
+					async lockUserDisabled() {
+						return false;
+					},
+					async lockAgentGrants() {},
+					async databaseTime() {
+						return new Date("2026-10-01T00:00:01Z");
+					},
+					async markCredentialUsed() {},
+					recordAudit,
+				});
+			},
+			recordAgentReadAudit: recordAudit,
+		},
+	});
+	return {
+		reader,
+		material,
+		credentialHash,
+		credential,
+		audits,
+		recordAudit,
+		resolveUser,
+	};
+}
+
+describe("personal Bearer GET Agents boundary", () => {
+	it("uses the actual credential's user and explicit API scope with no browser or Owner projection", async () => {
+		const api = apiReader();
+		const h = createApp({
+			personalApiAgentRead: api.reader,
+			administrator: true,
+		});
+		const response = await h.app.request(
+			"/api/v2/agents?limit=10&cursor=agent-0",
+			{
+				headers: {
+					Authorization: `Bearer ${api.material}`,
+				},
+			},
+		);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		const body = (await response.json()) as { items: unknown[] };
+		const projected = AgentProjectionV2Schema.parse(body.items[0]);
+		expect(projected.schemaVersion).toBe(2);
+		expect(projected.configuration).not.toHaveProperty("actions");
+		expect(h.listAgents).toHaveBeenCalledExactlyOnceWith(
+			{ kind: "api_user", userId: "user-api" },
+			{ limit: 10, afterId: "agent-0" },
+		);
+		expect(h.resolve).not.toHaveBeenCalled();
+		expect(h.readAgentProjection).not.toHaveBeenCalled();
+		expect(api.resolveUser).toHaveBeenCalledWith("user-api");
+		expect(api.audits[0]).toMatchObject({
+			userId: "user-api",
+			credentialId: "credential-used",
+			outcome: "succeeded",
+		});
+		expect(JSON.stringify(body)).not.toContain(api.material);
+		expect(JSON.stringify(body)).not.toContain(api.credentialHash);
+	});
+
+	it("rejects the same material after individual revocation and does not substitute browser authority", async () => {
+		const api = apiReader();
+		const h = createApp({
+			personalApiAgentRead: api.reader,
+			administrator: true,
+		});
+		const headers = { Authorization: `Bearer ${api.material}` };
+		expect((await h.app.request("/api/v2/agents", { headers })).status).toBe(
+			200,
+		);
+		api.credential.revokedAt = "2026-10-01T00:00:01Z";
+		const rejected = await h.app.request("/api/v2/agents", { headers });
+		expect(rejected.status).toBe(401);
+		expect(PilotProtocolErrorV1Schema.parse(await rejected.json()).code).toBe(
+			"AUTHENTICATION_REQUIRED",
+		);
+		expect(h.listAgents).toHaveBeenCalledTimes(1);
+		expect(h.resolve).not.toHaveBeenCalled();
+	});
+
+	it("rejects Owner/admin scopes, mixed Cookie and every unsupported Authorization scheme", async () => {
+		const api = apiReader();
+		const h = createApp({
+			personalApiAgentRead: api.reader,
+			administrator: true,
+		});
+		for (const [url, headers] of [
+			[
+				"/api/v2/agents?scope=owner",
+				{ Authorization: `Bearer ${api.material}` },
+			],
+			["/api/v2/admin/agents", { Authorization: `Bearer ${api.material}` }],
+			[
+				"/api/v2/agents",
+				{
+					Authorization: `Bearer ${api.material}`,
+					Cookie: "__Host-platform-session=admin",
+				},
+			],
+			["/api/v2/agents", { Authorization: "Basic caller-submitted" }],
+			["/api/v2/agents", { Authorization: "Bearer unknown" }],
+		] as const)
+			expect((await h.app.request(url, { headers })).status).toBe(401);
+		expect(h.listAgents).not.toHaveBeenCalled();
+		expect(h.resolve).not.toHaveBeenCalled();
+		expect(api.resolveUser).not.toHaveBeenCalled();
+	});
+
+	it("retains strict API paging and rejects self-reported principal or grant fields", async () => {
+		const api = apiReader();
+		const h = createApp({ personalApiAgentRead: api.reader });
+		for (const query of [
+			"userId=user-other",
+			"applicationId=application-other",
+			"principal=user-other",
+			"recipient=user-other",
+			"role=system_admin",
+			"grant=manage",
+			"limit=101",
+			"limit=2&limit=3",
+			"cursor=first&cursor=second",
+		]) {
+			expect(
+				(
+					await h.app.request(`/api/v2/agents?${query}`, {
+						headers: { Authorization: `Bearer ${api.material}` },
+					})
+				).status,
+			).toBe(400);
+		}
+		expect(h.listAgents).not.toHaveBeenCalled();
+		expect(h.resolve).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		"x-user-id",
+		"x-application-id",
+		"x-principal",
+		"x-principal-id",
+		"x-recipient",
+		"x-recipient-user-id",
+		"x-role",
+		"x-roles",
+		"x-scope",
+		"x-agent-id",
+		"x-identity-context",
+	])("rejects self-reported authority in %s", async (header) => {
+		const api = apiReader();
+		const h = createApp({ personalApiAgentRead: api.reader });
+		const response = await h.app.request("/api/v2/agents", {
+			headers: {
+				Authorization: `Bearer ${api.material}`,
+				[header]: "untrusted-authority",
+			},
+		});
+		expect(response.status).toBe(400);
+		expect(h.listAgents).not.toHaveBeenCalled();
+		expect(api.resolveUser).not.toHaveBeenCalled();
+		expect(api.audits[0]).toMatchObject({
+			userId: null,
+			credentialId: null,
+			outcome: "rejected",
+			details: { reason: "invalid_input" },
+		});
+	});
+
+	it("withholds authorized results on required audit failure and keeps revoked requests rejected", async () => {
+		const api = apiReader();
+		api.recordAudit.mockRejectedValue(
+			new Error(`private audit ${api.material}`),
+		);
+		const h = createApp({ personalApiAgentRead: api.reader });
+		const headers = { Authorization: `Bearer ${api.material}` };
+		const unavailable = await h.app.request("/api/v2/agents", { headers });
+		expect(unavailable.status).toBe(503);
+		expect(await unavailable.text()).not.toContain(api.material);
+		api.credential.revokedAt = "2026-10-01T00:00:01Z";
+		expect((await h.app.request("/api/v2/agents", { headers })).status).toBe(
+			401,
+		);
+	});
+});
 
 const headers = {
 	"content-type": "application/json",

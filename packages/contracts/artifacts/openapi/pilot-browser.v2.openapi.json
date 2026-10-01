@@ -3806,6 +3806,10 @@
         "in": "cookie",
         "name": "__Host-platform-session",
         "type": "apiKey"
+      },
+      "platformApiCredential": {
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
@@ -4888,6 +4892,7 @@
     },
     "/api/v2/agents": {
       "get": {
+        "description": "Browser discovery/Owner uses PlatformSession. Personal Bearer requires agent:read and current explicit manage or use grants; only limit/cursor, no scope override or mixed Cookie.",
         "operationId": "listAgentsV2",
         "parameters": [
           {
@@ -5021,7 +5026,15 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
+        ]
       }
     },
     "/api/v2/agents/{agentId}": {
