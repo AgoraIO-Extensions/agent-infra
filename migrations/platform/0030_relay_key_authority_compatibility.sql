@@ -24,35 +24,35 @@ BEGIN
 
   -- Transaction-local reference catalog uses exactly the generated domain DDL.
   CREATE TEMP TABLE "pg_temp"."relay_key_subjects" (
-  	"purpose" text NOT NULL,
-  	"subject_id" text NOT NULL,
-  	"last_version" bigint DEFAULT 0 NOT NULL,
-  	"current_version" bigint,
-  	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-  	CONSTRAINT "relay_key_subjects_purpose_subject_id_pk" PRIMARY KEY("purpose","subject_id"),
-  	CONSTRAINT "relay_key_subject_purpose" CHECK ("pg_temp"."relay_key_subjects"."purpose" in ('personal', 'agent-default')),
-  	CONSTRAINT "relay_key_subject_id" CHECK (char_length("pg_temp"."relay_key_subjects"."subject_id") between 1 and 1024),
-  	CONSTRAINT "relay_key_subject_last_version" CHECK ("pg_temp"."relay_key_subjects"."last_version" between 0 and 9007199254740991),
-  	CONSTRAINT "relay_key_subject_current_version" CHECK ("pg_temp"."relay_key_subjects"."current_version" is null or "pg_temp"."relay_key_subjects"."current_version" between 1 and "pg_temp"."relay_key_subjects"."last_version")
+    "purpose" text NOT NULL,
+    "subject_id" text NOT NULL,
+    "last_version" bigint DEFAULT 0 NOT NULL,
+    "current_version" bigint,
+    "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT "relay_key_subjects_purpose_subject_id_pk" PRIMARY KEY("purpose","subject_id"),
+    CONSTRAINT "relay_key_subject_purpose" CHECK ("pg_temp"."relay_key_subjects"."purpose" in ('personal', 'agent-default')),
+    CONSTRAINT "relay_key_subject_id" CHECK (char_length("pg_temp"."relay_key_subjects"."subject_id") between 1 and 1024),
+    CONSTRAINT "relay_key_subject_last_version" CHECK ("pg_temp"."relay_key_subjects"."last_version" between 0 and 9007199254740991),
+    CONSTRAINT "relay_key_subject_current_version" CHECK ("pg_temp"."relay_key_subjects"."current_version" is null or "pg_temp"."relay_key_subjects"."current_version" between 1 and "pg_temp"."relay_key_subjects"."last_version")
   ) ON COMMIT DROP;
 
   CREATE TEMP TABLE "pg_temp"."relay_key_versions" (
-  	"purpose" text NOT NULL,
-  	"subject_id" text NOT NULL,
-  	"key_version" bigint NOT NULL,
-  	"key_id" text NOT NULL,
-  	"ciphertext" jsonb NOT NULL,
-  	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-  	CONSTRAINT "relay_key_versions_purpose_subject_id_key_version_pk" PRIMARY KEY("purpose","subject_id","key_version"),
-  	CONSTRAINT "relay_key_version_identity_unique" UNIQUE("purpose","subject_id","key_version","key_id"),
-  	CONSTRAINT "relay_key_version_purpose" CHECK ("pg_temp"."relay_key_versions"."purpose" in ('personal', 'agent-default')),
-  	CONSTRAINT "relay_key_version_subject_id" CHECK (char_length("pg_temp"."relay_key_versions"."subject_id") between 1 and 1024),
-  	CONSTRAINT "relay_key_version_key_id" CHECK (char_length("pg_temp"."relay_key_versions"."key_id") between 1 and 1024),
-  	CONSTRAINT "relay_key_version_safe" CHECK ("pg_temp"."relay_key_versions"."key_version" between 1 and 9007199254740991),
-  	CONSTRAINT "relay_key_version_ciphertext_binding" CHECK (("pg_temp"."relay_key_versions"."ciphertext"->>'purpose' = "pg_temp"."relay_key_versions"."purpose"
-  				and "pg_temp"."relay_key_versions"."ciphertext"->>'subjectId' = "pg_temp"."relay_key_versions"."subject_id"
-  				and "pg_temp"."relay_key_versions"."ciphertext"->>'keyId' = "pg_temp"."relay_key_versions"."key_id"
-  				and "pg_temp"."relay_key_versions"."ciphertext"->>'keyVersion' = "pg_temp"."relay_key_versions"."key_version"::text) is true)
+    "purpose" text NOT NULL,
+    "subject_id" text NOT NULL,
+    "key_version" bigint NOT NULL,
+    "key_id" text NOT NULL,
+    "ciphertext" jsonb NOT NULL,
+    "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT "relay_key_versions_purpose_subject_id_key_version_pk" PRIMARY KEY("purpose","subject_id","key_version"),
+    CONSTRAINT "relay_key_version_identity_unique" UNIQUE("purpose","subject_id","key_version","key_id"),
+    CONSTRAINT "relay_key_version_purpose" CHECK ("pg_temp"."relay_key_versions"."purpose" in ('personal', 'agent-default')),
+    CONSTRAINT "relay_key_version_subject_id" CHECK (char_length("pg_temp"."relay_key_versions"."subject_id") between 1 and 1024),
+    CONSTRAINT "relay_key_version_key_id" CHECK (char_length("pg_temp"."relay_key_versions"."key_id") between 1 and 1024),
+    CONSTRAINT "relay_key_version_safe" CHECK ("pg_temp"."relay_key_versions"."key_version" between 1 and 9007199254740991),
+    CONSTRAINT "relay_key_version_ciphertext_binding" CHECK (("pg_temp"."relay_key_versions"."ciphertext"->>'purpose' = "pg_temp"."relay_key_versions"."purpose"
+          and "pg_temp"."relay_key_versions"."ciphertext"->>'subjectId' = "pg_temp"."relay_key_versions"."subject_id"
+          and "pg_temp"."relay_key_versions"."ciphertext"->>'keyId' = "pg_temp"."relay_key_versions"."key_id"
+          and "pg_temp"."relay_key_versions"."ciphertext"->>'keyVersion' = "pg_temp"."relay_key_versions"."key_version"::text) is true)
   ) ON COMMIT DROP;
 
   ALTER TABLE "pg_temp"."relay_key_versions" ADD CONSTRAINT "relay_key_version_subject_fk" FOREIGN KEY ("purpose","subject_id") REFERENCES "pg_temp"."relay_key_subjects"("purpose","subject_id") ON DELETE no action ON UPDATE no action;
@@ -62,35 +62,35 @@ BEGIN
   expected_version := to_regclass('pg_temp.relay_key_versions');
   IF subject_relation IS NULL THEN
     CREATE TABLE "platform"."relay_key_subjects" (
-    	"purpose" text NOT NULL,
-    	"subject_id" text NOT NULL,
-    	"last_version" bigint DEFAULT 0 NOT NULL,
-    	"current_version" bigint,
-    	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-    	CONSTRAINT "relay_key_subjects_purpose_subject_id_pk" PRIMARY KEY("purpose","subject_id"),
-    	CONSTRAINT "relay_key_subject_purpose" CHECK ("platform"."relay_key_subjects"."purpose" in ('personal', 'agent-default')),
-    	CONSTRAINT "relay_key_subject_id" CHECK (char_length("platform"."relay_key_subjects"."subject_id") between 1 and 1024),
-    	CONSTRAINT "relay_key_subject_last_version" CHECK ("platform"."relay_key_subjects"."last_version" between 0 and 9007199254740991),
-    	CONSTRAINT "relay_key_subject_current_version" CHECK ("platform"."relay_key_subjects"."current_version" is null or "platform"."relay_key_subjects"."current_version" between 1 and "platform"."relay_key_subjects"."last_version")
+      "purpose" text NOT NULL,
+      "subject_id" text NOT NULL,
+      "last_version" bigint DEFAULT 0 NOT NULL,
+      "current_version" bigint,
+      "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+      CONSTRAINT "relay_key_subjects_purpose_subject_id_pk" PRIMARY KEY("purpose","subject_id"),
+      CONSTRAINT "relay_key_subject_purpose" CHECK ("platform"."relay_key_subjects"."purpose" in ('personal', 'agent-default')),
+      CONSTRAINT "relay_key_subject_id" CHECK (char_length("platform"."relay_key_subjects"."subject_id") between 1 and 1024),
+      CONSTRAINT "relay_key_subject_last_version" CHECK ("platform"."relay_key_subjects"."last_version" between 0 and 9007199254740991),
+      CONSTRAINT "relay_key_subject_current_version" CHECK ("platform"."relay_key_subjects"."current_version" is null or "platform"."relay_key_subjects"."current_version" between 1 and "platform"."relay_key_subjects"."last_version")
     );
 
     CREATE TABLE "platform"."relay_key_versions" (
-    	"purpose" text NOT NULL,
-    	"subject_id" text NOT NULL,
-    	"key_version" bigint NOT NULL,
-    	"key_id" text NOT NULL,
-    	"ciphertext" jsonb NOT NULL,
-    	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-    	CONSTRAINT "relay_key_versions_purpose_subject_id_key_version_pk" PRIMARY KEY("purpose","subject_id","key_version"),
-    	CONSTRAINT "relay_key_version_identity_unique" UNIQUE("purpose","subject_id","key_version","key_id"),
-    	CONSTRAINT "relay_key_version_purpose" CHECK ("platform"."relay_key_versions"."purpose" in ('personal', 'agent-default')),
-    	CONSTRAINT "relay_key_version_subject_id" CHECK (char_length("platform"."relay_key_versions"."subject_id") between 1 and 1024),
-    	CONSTRAINT "relay_key_version_key_id" CHECK (char_length("platform"."relay_key_versions"."key_id") between 1 and 1024),
-    	CONSTRAINT "relay_key_version_safe" CHECK ("platform"."relay_key_versions"."key_version" between 1 and 9007199254740991),
-    	CONSTRAINT "relay_key_version_ciphertext_binding" CHECK (("platform"."relay_key_versions"."ciphertext"->>'purpose' = "platform"."relay_key_versions"."purpose"
-    				and "platform"."relay_key_versions"."ciphertext"->>'subjectId' = "platform"."relay_key_versions"."subject_id"
-    				and "platform"."relay_key_versions"."ciphertext"->>'keyId' = "platform"."relay_key_versions"."key_id"
-    				and "platform"."relay_key_versions"."ciphertext"->>'keyVersion' = "platform"."relay_key_versions"."key_version"::text) is true)
+      "purpose" text NOT NULL,
+      "subject_id" text NOT NULL,
+      "key_version" bigint NOT NULL,
+      "key_id" text NOT NULL,
+      "ciphertext" jsonb NOT NULL,
+      "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+      CONSTRAINT "relay_key_versions_purpose_subject_id_key_version_pk" PRIMARY KEY("purpose","subject_id","key_version"),
+      CONSTRAINT "relay_key_version_identity_unique" UNIQUE("purpose","subject_id","key_version","key_id"),
+      CONSTRAINT "relay_key_version_purpose" CHECK ("platform"."relay_key_versions"."purpose" in ('personal', 'agent-default')),
+      CONSTRAINT "relay_key_version_subject_id" CHECK (char_length("platform"."relay_key_versions"."subject_id") between 1 and 1024),
+      CONSTRAINT "relay_key_version_key_id" CHECK (char_length("platform"."relay_key_versions"."key_id") between 1 and 1024),
+      CONSTRAINT "relay_key_version_safe" CHECK ("platform"."relay_key_versions"."key_version" between 1 and 9007199254740991),
+      CONSTRAINT "relay_key_version_ciphertext_binding" CHECK (("platform"."relay_key_versions"."ciphertext"->>'purpose' = "platform"."relay_key_versions"."purpose"
+            and "platform"."relay_key_versions"."ciphertext"->>'subjectId' = "platform"."relay_key_versions"."subject_id"
+            and "platform"."relay_key_versions"."ciphertext"->>'keyId' = "platform"."relay_key_versions"."key_id"
+            and "platform"."relay_key_versions"."ciphertext"->>'keyVersion' = "platform"."relay_key_versions"."key_version"::text) is true)
     );
 
     ALTER TABLE "platform"."relay_key_versions" ADD CONSTRAINT "relay_key_version_subject_fk" FOREIGN KEY ("purpose","subject_id") REFERENCES "platform"."relay_key_subjects"("purpose","subject_id") ON DELETE no action ON UPDATE no action;
