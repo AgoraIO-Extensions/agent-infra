@@ -21,12 +21,19 @@ const document = JSON.parse(
 );
 
 describe("recent personal conversation additive compatibility", () => {
-	it.each(["absent", "empty", "existing"])(
+	it.each(["absent", "empty", "existing", "existingBearer"])(
 		"preserves the entire old document when cookie schemes were %s",
 		async (cookieBaseline) => {
-			const previous = structuredClone(document);
+			const current = structuredClone(document);
+			if (cookieBaseline !== "existingBearer") {
+				// Historical recent-only fixtures precede the later personal Agent read.
+				delete current.paths["/api/v2/agents"].get.security;
+				delete current.paths["/api/v2/agents"].get.description;
+				delete current.components.securitySchemes.platformApiCredential;
+			}
+			const previous = structuredClone(current);
 			delete previous.paths[path];
-			if (cookieBaseline !== "existing")
+			if (cookieBaseline !== "existing" && cookieBaseline !== "existingBearer")
 				delete previous.components.securitySchemes.PlatformSession;
 			if (cookieBaseline === "absent")
 				delete previous.components.securitySchemes;
@@ -41,7 +48,7 @@ describe("recent personal conversation additive compatibility", () => {
 				);
 			try {
 				await writeFile(previousPath, JSON.stringify(previous));
-				await writeFile(currentPath, JSON.stringify(document));
+				await writeFile(currentPath, JSON.stringify(current));
 				expect(compare().status).toBe(0);
 				for (const [name, mutate] of [
 					[
@@ -175,6 +182,15 @@ describe("recent personal conversation additive compatibility", () => {
 						},
 					],
 					[
+						"unrelated-bearer",
+						(d: typeof document) => {
+							d.components.securitySchemes.platformApiCredential = {
+								type: "http",
+								scheme: "basic",
+							};
+						},
+					],
+					[
 						"extra-scheme",
 						(d: typeof document) => {
 							d.components.securitySchemes.Other = {
@@ -184,17 +200,20 @@ describe("recent personal conversation additive compatibility", () => {
 						},
 					],
 				] as const) {
-					const changed = structuredClone(document);
+					const changed = structuredClone(current);
 					mutate(changed);
 					await writeFile(currentPath, JSON.stringify(changed));
 					const result = compare();
 					expect(result.status, name).toBe(1);
 					expect(result.stderr, name).toContain("changed OpenAPI contract");
 				}
-				if (cookieBaseline === "existing") {
+				if (
+					cookieBaseline === "existing" ||
+					cookieBaseline === "existingBearer"
+				) {
 					previous.components.securitySchemes.PlatformSession.name = "old-name";
 					await writeFile(previousPath, JSON.stringify(previous));
-					await writeFile(currentPath, JSON.stringify(document));
+					await writeFile(currentPath, JSON.stringify(current));
 					expect(compare().status).toBe(1);
 				}
 			} finally {
