@@ -53,6 +53,30 @@ const administratorSession = BrowserSessionProjectionV1Schema.parse({
 });
 
 describe("Agent administration generated-client consumer", () => {
+	it("discards pending application pages when a later HTTP page violates the formal response schema", async () => {
+		let requests = 0;
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async () => {
+				requests += 1;
+				return Response.json({
+					items: [
+						requests === 1
+							? pendingApplication
+							: { ...pendingApplication, decision: { reason: "invalid" } },
+					],
+					nextCursor: requests === 1 ? "opaque-pending/+?=" : null,
+				});
+			},
+		});
+		await expect(loadPendingAgentApplications(client)).resolves.toEqual({
+			kind: "unavailable",
+			retryable: false,
+			reason: "invalid-response",
+		});
+		expect(requests).toBe(2);
+	});
+
 	it("uses schema-validated commands for approval and the matching Agent lifecycle", async () => {
 		const scenario: PilotAgentMockServerScenarioV1 = {
 			listAgents: { status: 200, body: { items: [], nextCursor: null } },

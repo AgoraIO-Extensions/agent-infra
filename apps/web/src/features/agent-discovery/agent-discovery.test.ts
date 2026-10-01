@@ -56,6 +56,7 @@ describe("Agent discovery generated-client consumer", () => {
 			await expect(loadAgentDiscovery(client, scope)).resolves.toEqual({
 				kind: "unavailable",
 				retryable: false,
+				reason: "invalid-response",
 			});
 			expect(requests).toBe(2);
 		},
@@ -75,6 +76,7 @@ describe("Agent discovery generated-client consumer", () => {
 			await expect(loadAgentDiscovery(client)).resolves.toEqual({
 				kind: "unavailable",
 				retryable: false,
+				reason: "invalid-response",
 			});
 		},
 	);
@@ -228,6 +230,7 @@ describe("Agent discovery generated-client consumer", () => {
 			).resolves.toEqual({
 				kind: "unavailable",
 				retryable: false,
+				reason: status === 403 ? "denied" : "not-found",
 			});
 		}
 	});
