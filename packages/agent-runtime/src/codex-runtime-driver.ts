@@ -155,6 +155,14 @@ function skillDirectoryInvalid(): never {
 	);
 }
 
+// Fixed 0.1.0-candidate.1 package: its approved SKILL.md bytes bind the display text.
+const approvedWorkspaceSummary = {
+	entrySha256:
+		"af9ba615c92dcf53c6d5742b3d6043e4452b4499e0cdb561f4748033881472b2",
+	description:
+		"显式选择本 Skill 后，读取当前授权工作区中的指定文本文件并给出有来源依据的摘要。",
+} as const;
+
 function approveSkillResponse(
 	value: unknown,
 	cwd: string,
@@ -197,22 +205,26 @@ function approveSkillResponse(
 		skill.scope !== "user" ||
 		skill.enabled !== true ||
 		skill.pluginId !== null ||
-		typeof skill.description !== "string" ||
-		skill.description.length > 4096 ||
+		descriptor.manifest.files[0].sha256 !==
+			approvedWorkspaceSummary.entrySha256 ||
+		skill.description !== approvedWorkspaceSummary.description ||
 		(skill.shortDescription !== undefined &&
+			skill.shortDescription !== null &&
 			(typeof skill.shortDescription !== "string" ||
 				skill.shortDescription.length > 1024))
 	)
 		skillDirectoryInvalid();
 	// This fixed one-file package has no assets, remote interface or tool dependencies.
 	// Do not quietly accept capabilities that the approved package does not contain.
-	if (skill.interface !== undefined) {
+	if (skill.interface !== undefined && skill.interface !== null) {
 		const ui = skill.interface;
 		if (
 			!isPlainRecord(ui) ||
 			!hasOnlyKeys(ui, [
 				"displayName",
 				"shortDescription",
+				"iconSmall",
+				"iconLarge",
 				"iconSmallUrl",
 				"iconLargeUrl",
 				"brandColor",
@@ -220,10 +232,13 @@ function approveSkillResponse(
 			]) ||
 			ui.iconSmallUrl !== null ||
 			ui.iconLargeUrl !== null ||
+			(ui.iconSmall !== undefined && ui.iconSmall !== null) ||
+			(ui.iconLarge !== undefined && ui.iconLarge !== null) ||
 			Object.entries(ui).some(
 				([key, item]) =>
 					key !== "iconSmallUrl" &&
 					key !== "iconLargeUrl" &&
+					item !== null &&
 					(typeof item !== "string" || item.length > 4096),
 			)
 		)
@@ -231,6 +246,7 @@ function approveSkillResponse(
 	}
 	if (
 		skill.dependencies !== undefined &&
+		skill.dependencies !== null &&
 		(!isPlainRecord(skill.dependencies) ||
 			!hasOnlyKeys(skill.dependencies, ["tools"]) ||
 			!Array.isArray(skill.dependencies.tools) ||
@@ -240,7 +256,7 @@ function approveSkillResponse(
 	// Hash the entire approved response, including metadata that is not projected.
 	return {
 		digest: createHash("sha256").update(JSON.stringify(value)).digest("hex"),
-		description: skill.description,
+		description: approvedWorkspaceSummary.description,
 	};
 }
 

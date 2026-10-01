@@ -9457,7 +9457,8 @@ class SkillDiscoveryBridge extends TestCodexBridge {
 	launch?: CodexSkillLaunchProvenance;
 	metadata: Record<string, unknown> = {
 		name: "workspace-summary",
-		description: "Controlled package description",
+		description:
+			"显式选择本 Skill 后，读取当前授权工作区中的指定文本文件并给出有来源依据的摘要。",
 		path: "/opt/codex/agent-infra-skills/workspace-summary/SKILL.md",
 		scope: "user",
 		enabled: true,
@@ -9627,6 +9628,62 @@ async function skillDiscoveryFixture(
 }
 
 describe("installed Codex Skill complete discovery (controlled behavior only)", () => {
+	it.each(["null metadata", "null interface fields"])(
+		"admits the official absent %s shape without accepting assets or dependencies",
+		async (kind) => {
+			const f = await skillDiscoveryFixture();
+			Object.assign(f.bridge.metadata, {
+				shortDescription: null,
+				interface:
+					kind === "null metadata"
+						? null
+						: {
+								displayName: null,
+								shortDescription: null,
+								iconSmall: null,
+								iconLarge: null,
+								iconSmallUrl: null,
+								iconLargeUrl: null,
+								brandColor: null,
+								defaultPrompt: null,
+							},
+				dependencies: null,
+			});
+			await expect(
+				f.driver.discoverNativeSkills(f.read),
+			).resolves.toMatchObject({
+				capabilities: [
+					{
+						availability: "discovered",
+						description:
+							"显式选择本 Skill 后，读取当前授权工作区中的指定文本文件并给出有来源依据的摘要。",
+					},
+				],
+			});
+		},
+	);
+
+	it("rejects a supplier description that does not match the trusted fixed package", async () => {
+		const f = await skillDiscoveryFixture();
+		f.bridge.metadata.description =
+			"private conversation body with correct Skill identity";
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_SKILL_DIRECTORY_INVALID",
+			message: expect.not.stringMatching(/private|conversation|body/),
+		});
+	});
+
+	it("rejects description approval when the trusted package entry digest is a different package", async () => {
+		const descriptor = installedSkillDescriptor("config-1");
+		descriptor.manifest.files[0].sha256 = "b".repeat(64);
+		const f = await skillDiscoveryFixture(undefined, {
+			installedSkill: descriptor,
+		});
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_SKILL_DIRECTORY_INVALID",
+		});
+	});
+
 	it.each([
 		"initialize",
 		"config/read",
@@ -9643,7 +9700,7 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 				enumerable: true,
 				get: () => {
 					projected = true;
-					return "Controlled package description";
+					return "显式选择本 Skill 后，读取当前授权工作区中的指定文本文件并给出有来源依据的摘要。";
 				},
 			});
 			const held = Promise.withResolvers<typeof f.binding>();
@@ -9683,7 +9740,7 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 				enumerable: true,
 				get: () => {
 					projected = true;
-					return "Controlled package description";
+					return "显式选择本 Skill 后，读取当前授权工作区中的指定文本文件并给出有来源依据的摘要。";
 				},
 			});
 			const held = Promise.withResolvers<typeof f.binding>();
