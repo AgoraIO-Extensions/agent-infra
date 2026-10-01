@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
 	CODEX_ISOLATION_PERSISTENCE_EVIDENCE,
 	evaluatePersistenceEvidence,
@@ -240,6 +240,7 @@ it("settles and releases an acquired hold when a synthetic request fails", async
 
 it("retries pre-launch and incomplete native observation reads", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "agent-runtime-observation-"));
+	let restoreRetryTimer: (() => void) | undefined;
 	try {
 		const launcher = await nativeIsolationLauncher(
 			directory,
@@ -250,16 +251,36 @@ it("retries pre-launch and incomplete native observation reads", async () => {
 		await expect(launcher.observations()).rejects.toMatchObject({
 			category: "missing",
 		});
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const schedule = globalThis.setTimeout;
+		let retryRequested: (() => void) | undefined;
+		const retryTimer = vi
+			.spyOn(globalThis, "setTimeout")
+			.mockImplementation((callback, delay, ...args) => {
+				if (delay === 20) retryRequested?.();
+				return schedule(callback, delay, ...args);
+			});
+		restoreRetryTimer = () => retryTimer.mockRestore();
+		const beforeLaunchRetry = new Promise<void>((resolve) => {
+			retryRequested = resolve;
+		});
 		const preLaunch = launcher.observations({ allowEmptyBeforeLaunch: true });
-		await new Promise<void>((resolve) => setTimeout(resolve, 5));
+		await beforeLaunchRetry;
 		await writeFile(observationFile, '{"method":"launch"}\n');
+		await vi.advanceTimersByTimeAsync(20);
 		await expect(preLaunch).resolves.toEqual([{ method: "launch" }]);
 		await writeFile(observationFile, '{"method":"launch"}');
+		const beforeAppendRetry = new Promise<void>((resolve) => {
+			retryRequested = resolve;
+		});
 		const snapshot = launcher.observations();
-		await new Promise<void>((resolve) => setTimeout(resolve, 5));
+		await beforeAppendRetry;
 		await appendFile(observationFile, "\n");
+		await vi.advanceTimersByTimeAsync(20);
 		await expect(snapshot).resolves.toEqual([{ method: "launch" }]);
 	} finally {
+		restoreRetryTimer?.();
+		vi.useRealTimers();
 		await rm(directory, { recursive: true, force: true });
 	}
 });

@@ -61,6 +61,7 @@ describe("platform-store package surface", () => {
 			"PostgresLegacyTaskAuthorizationMigrationV1",
 			"PostgresLegacyTaskRecoveryReaderV1",
 			"PostgresPersonalApiCredentialStoreV1",
+			"PostgresPersonalRelayKeyStoreV1",
 			"PostgresPlatformAuditQueryV1",
 			"PostgresScopedPlatformAuditQueryV1",
 			"PostgresSecretActivationStoreV1",
@@ -86,6 +87,7 @@ describe("platform-store package surface", () => {
 			"resolvePersonalApiTaskAdmissionAuthorityV1",
 			"validateWecomSetupCredentialRecordV1",
 		]);
+		expect(surface.PostgresPersonalRelayKeyStoreV1).toBeTypeOf("function");
 
 		const pack = JSON.parse(
 			execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
