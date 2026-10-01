@@ -180,6 +180,8 @@ Claude 的持久请求、accepted/unknown、状态和恢复继续遵循 §§7–
 
 ### 5.2 调用生命周期与兼容
 
+只读 metadata 的内部 HTTP 例外及原请求/实例边界遵循 [工程 Spec §4.1](SPEC-agent-infra-M1-engineering-architecture.md#41-部署单元)。
+
 - 只读能力沿原 Session 的受限查询返回投影，不创建 Session/Turn、不恢复业务、不改变平台任务状态。未装载、不可用或无法核实分别返回，不能把 `notLoaded` 当作原任务已停止；当前读取权限失效时不返回结果。
 
 metadata-only concrete context 保留原同步护栏，新增显式异步当前确认：
