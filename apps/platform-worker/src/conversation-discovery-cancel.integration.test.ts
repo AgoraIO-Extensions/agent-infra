@@ -1,9 +1,14 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
-import { PostgresConversationDispatchStoreV1 } from "@agent-infra/platform-store";
+import {
+	PostgresConversationDispatchStoreV1,
+	PostgresConversationEventTransactionV1,
+	PostgresLegacyTaskRecoveryReaderV1,
+	PostgresTaskAuthorizationStoreV1,
+} from "@agent-infra/platform-store";
 import postgres from "postgres";
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
 import {
 	type PostgresTestDatabase,
@@ -21,6 +26,8 @@ type Outcome = {
 	code?: string | null;
 	signalAbortedAtObservation?: boolean;
 };
+
+afterEach(() => vi.restoreAllMocks());
 
 async function observe<T>(
 	promise: PromiseLike<T>,
@@ -108,6 +115,19 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 		);
 		cleanup.push({ resource, result });
 		console.info(JSON.stringify({ cleanup: resource, result }));
+	}
+	for (const [name, Store] of [
+		["dispatch_store_close", PostgresConversationDispatchStoreV1],
+		["event_transaction_close", PostgresConversationEventTransactionV1],
+		["task_authorization_store_close", PostgresTaskAuthorizationStoreV1],
+		["legacy_recovery_reader_close", PostgresLegacyTaskRecoveryReaderV1],
+	] as const) {
+		const close = Store.prototype.close;
+		vi.spyOn(Store.prototype, "close").mockImplementation(function (
+			this: InstanceType<typeof Store>,
+		) {
+			return stage(name, () => close.call(this));
+		});
 	}
 
 	async function ownedContainers() {

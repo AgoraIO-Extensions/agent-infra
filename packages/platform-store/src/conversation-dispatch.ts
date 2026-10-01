@@ -262,6 +262,14 @@ export class PostgresConversationDispatchStoreV1
 					itemId: row.id,
 					operation: row.operation,
 				}));
+			} catch (error) {
+				if (
+					input.signal?.aborted &&
+					error instanceof postgres.PostgresError &&
+					error.code === "57014"
+				)
+					return [];
+				throw error;
 			} finally {
 				input.signal?.removeEventListener("abort", onAbort);
 			}
