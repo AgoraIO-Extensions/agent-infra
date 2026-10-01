@@ -376,6 +376,14 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   `synchronize` 不启动 Analysis 或 Suggestions，连续提交不会产生新的 PR-Agent Review/thread。
 - PR-Agent 评审指令只允许报告 primary Issue 的稳定 `AC-N` 验收不符合，或本 PR 引入的可证明
   回归；既有问题和可选改进不作为阻塞 finding。
+- Analysis 的可信准备步骤复用 Issue Gate 的唯一同仓 primary 规则，通过只读 API 取得完整
+  Issue 正文，作为官方 `related_tickets` 用户数据输入，不经过 PR 描述摘要或截断。缺失、歧义、
+  身份无效、读取失败或超过输入长度上限时停止；正文不能成为系统指令或运行配置。关闭正文
+  debug 日志，准备回执只记录当前 head、Issue 版本和正文摘要；准备成功不证明实际模型送达或
+  审查发现，实际输入须另以固定镜像的安全接口核验，未取得该证据时明确标记未验。
+  既有 Analysis 日志读取处独立匹配官方预算适配的整票省略事件；即使 diff 完整且 Review
+  已发布，也返回 `review-input-incomplete`。只接受原生日志调用点，PR 或 Issue 的同名文本
+  不作为事件；原 full-diff 覆盖算法与 publisher 保持不变。
 - 需要阻塞合并的问题必须发布为 Review thread，并通过 GitHub required conversation resolution
   闭环；Review 摘要不阻塞合并。
 - provider-aware 的 `Automated Review Coverage` 是 default branch required Gate。它只接受所选

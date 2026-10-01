@@ -1628,7 +1628,7 @@ export function validateWorkflowDocuments(workflows) {
     ) ||
     !prAgentCoverageCondition.includes("github.event.sender.type != 'Bot'") ||
     !prAgentCoverageCondition.includes("github.event.pull_request.draft == false") ||
-    !sameObject(prAgentAnalyze?.permissions, { contents: "read", "pull-requests": "read" }) ||
+    !sameObject(prAgentAnalyze?.permissions, { contents: "read", issues: "read", "pull-requests": "read" }) ||
     !sameObject(prAgentSuggestions?.permissions, prAgentPermissions) ||
     !sameObject(prAgentCoverage?.permissions, {
       actions: "read",
@@ -1641,7 +1641,18 @@ export function validateWorkflowDocuments(workflows) {
     prAgentCoverage?.["continue-on-error"] !== true ||
     Object.keys(prAgent?.jobs ?? {}).sort().join("\0") !==
       ["analyze", "coverage", "outcome", "publish", "suggestions"].join("\0") ||
-    prAgentAnalyze?.steps?.length !== 2 ||
+    prAgentAnalyze?.steps?.length !== 4 ||
+    !sameObject(prAgentAnalyze?.steps?.[1], {
+      name: "Set up Node.js", uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: { "node-version": 24 },
+    }) ||
+    !sameObject(prAgentAnalyze?.steps?.[2], {
+      name: "Prepare complete primary Issue input", id: "primary-issue",
+      env: { GITHUB_TOKEN: "${{ github.token }}" },
+      run: "node .github/scripts/pr-agent-primary-issue.mjs",
+    }) ||
+    prAgentAnalyze?.steps?.[0] !== prAgentAnalyzeCheckout ||
+    prAgentAnalyze?.steps?.[3] !== prAgentAction ||
     !sameObject(prAgentAnalyze?.outputs, { review: "${{ steps.pr-agent.outputs.review }}" }) ||
     !sameObject(prAgentPublish, {
       name: "PR-Agent Publish Review", needs: "analyze", "runs-on": "ubuntu-24.04", "timeout-minutes": 5,
@@ -1701,6 +1712,9 @@ export function validateWorkflowDocuments(workflows) {
     !sameObject(prAgentAction?.env, {
       ...prAgentCommonEnv,
       "config.publish_output": "false",
+      "config.log_level": "INFO",
+      "config.verbosity_level": "0",
+      related_tickets: "${{ steps.primary-issue.outputs.related_tickets }}",
       "github_action_config.enable_output": "true",
       "pr_reviewer.persistent_comment": "false",
       "pr_reviewer.persistent_finding_state": "false",
