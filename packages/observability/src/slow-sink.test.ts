@@ -142,15 +142,18 @@ it("bounds real trace export under a slow OTLP sink and closes within five secon
 	await telemetry.close();
 	const elapsed = Date.now() - startedAt;
 	expect(elapsed).toBeLessThanOrEqual(CLOSE_BOUND_MS);
+	const traceRequestsAtClose = traceRequests(collector.requests).length;
+	const statusAtClose = telemetry.status();
+	expect(statusAtClose.exportFailures).toBeGreaterThan(0);
 	await waitFor(() => telemetry.status().state === "closed");
-	expect(telemetry.status().exportFailures).toBeGreaterThan(0);
 	expect(businessCompletionCount).toBe(1);
 	expectNoSentinel(collector.requests);
 	await new Promise((resolve) => setTimeout(resolve, 500));
 	expect(traceRequests(collector.requests).length).toBeLessThanOrEqual(
 		MAX_TRACE_REQUESTS,
 	);
-	const traceCountAfterClose = traceRequests(collector.requests).length;
+	expect(traceRequests(collector.requests).length).toBe(traceRequestsAtClose);
+	const traceCountAfterClose = traceRequestsAtClose;
 	telemetry.record({
 		stage: "worker",
 		outcome: "completed",
@@ -198,6 +201,7 @@ it("shows bounded trace queue pressure when a slow sink eventually responds", as
 	await waitFor(() => traceRequests(collector.requests).length > 0, 6000);
 	// Let any scheduled batches settle before checking the bounded upper limit.
 	await new Promise((resolve) => setTimeout(resolve, 3000));
+	await telemetry.close();
 	const finalTraceRequests = traceRequests(collector.requests);
 	expect(finalTraceRequests.length).toBeLessThanOrEqual(maxTraceRequests);
 	const received = markers.filter((marker) =>
@@ -209,7 +213,6 @@ it("shows bounded trace queue pressure when a slow sink eventually responds", as
 	expect(received).toBeLessThan(markers.length);
 	expect(received).toBeLessThanOrEqual(TRACE_QUEUE_SIZE + TRACE_BATCH_SIZE);
 	expectNoSentinel(collector.requests);
-	await telemetry.close();
 }, 15_000);
 
 it("lets a child using the real package exit naturally after a slow export", async () => {
