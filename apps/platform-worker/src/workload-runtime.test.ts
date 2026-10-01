@@ -1152,11 +1152,9 @@ describe("assembled Workload Runtime contracts", () => {
 					else {
 						assert(ref.name);
 						const secret = await f.client.read<V1Secret>("Secret", ref.name);
-						assert(secret?.data?.[ref.key]);
-						environment[entry.name] = Buffer.from(
-							secret.data[ref.key],
-							"base64",
-						).toString();
+						const encoded = secret?.data?.[ref.key];
+						assert(typeof encoded === "string" && encoded.length > 0);
+						environment[entry.name] = Buffer.from(encoded, "base64").toString();
 					}
 				}
 				expect(environment.AGENT_INFRA_RUNTIME_DRIVER).toBe(binding.driver);
