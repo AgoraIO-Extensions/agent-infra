@@ -1626,6 +1626,14 @@ describe("PostgreSQL Workload steps", () => {
 		const name = validateAgentWorkloadDesiredV1(ready.candidate.deployment)
 			.service.name;
 		const projection = ready.candidate.modelProjection;
+		expect(projection).toMatchObject({
+			standardTemplateBinding: options.templateModelBindings[0],
+			fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+		});
+		await advance(1);
+		const reloaded = await state();
+		expect(reloaded.candidate.modelProjection).toEqual(projection);
+		expect(reloaded.verified?.modelProjection).toEqual(projection);
 		const secret = [...api.resources.values()].find(
 			(resource) =>
 				resource.kind === "Secret" &&
