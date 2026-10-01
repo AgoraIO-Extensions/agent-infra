@@ -1,4 +1,11 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rename,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,9 +13,11 @@ import {
 	RuntimeBusinessGrantClaimsV2Schema,
 	RuntimeControlGrantClaimsV2Schema,
 	RuntimePinnedExecutionKeyScopeV4Schema,
+	RuntimeStatusRequestV3Schema,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it } from "vitest";
 
+import { RuntimeHostError } from "./errors.js";
 import { FileRuntimeStore, requestDigest } from "./file-runtime-store.js";
 
 const cleanups: (() => Promise<void>)[] = [];
@@ -361,6 +370,415 @@ it.each([
 		await f.reopen();
 		expect(f.store.readOriginalExecutionKeyScopeV4(request.binding)).toBeNull();
 		expect(await readFile(f.path, "utf8")).toBe(bytes);
+	},
+);
+
+function originalBindingQuery(original = input()) {
+	const {
+		authorizationRecordId: _record,
+		attachments: _attachments,
+		...common
+	} = original.authorization;
+	const claims = RuntimeControlGrantClaimsV2Schema.parse({
+		...common,
+		purpose: "control",
+		controlRecordId: "control-1",
+		reason: "recovery",
+		allowedCommands: ["session.status"],
+	});
+	// This Store fixture does not perform Host signature/service verification.
+	const request = RuntimeStatusRequestV3Schema.parse({
+		...original.binding,
+		schemaVersion: 3,
+		requestId: "request-1",
+		traceId: claims.traceId,
+		hostSessionRef: null,
+		operation: claims.operation,
+		originalOperationDigest: original.requestDigest,
+		grant: {
+			schemaVersion: 2,
+			format: "runtime-execution-jws",
+			token: "header.payload.signature",
+		},
+	});
+	return { request, claims };
+}
+
+async function acceptedBindingFixture(
+	status:
+		| "running"
+		| "unknown"
+		| "completed"
+		| "failed"
+		| "cancelled" = "running",
+) {
+	const f = await fixture();
+	const original = input();
+	const prepared = await f.store.prepareOperation(original);
+	const hostSessionRef = prepared.session.hostSessionRef;
+	await f.store.resolveOperation(
+		hostSessionRef,
+		original.operationId,
+		{ outcome: "accepted", status },
+		"native-session-1",
+	);
+	await f.reopen();
+	return Object.assign(f, { original, hostSessionRef });
+}
+
+function expectBindingUnknown(read: () => string) {
+	expect(read).toThrowError(RuntimeHostError);
+	expect(read).toThrowError(
+		expect.objectContaining({
+			code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+			httpStatus: 503,
+			retryable: true,
+			message: "Runtime command acceptance could not be confirmed",
+		}),
+	);
+}
+
+it.each(["running", "unknown", "completed", "failed", "cancelled"] as const)(
+	"reads only the original accepted %s binding after reopen, retaining every durable byte",
+	async (status) => {
+		const f = await acceptedBindingFixture(status);
+		const before = await readFile(f.path, "utf8");
+		const original = f.store.readOriginalExecutionKeyScopeV4(
+			f.original.binding,
+		);
+		for (const fence of [1, 3]) {
+			for (const ref of [null, f.hostSessionRef]) {
+				const { request, claims } = originalBindingQuery(f.original);
+				request.hostSessionRef = claims.hostSessionRef = ref;
+				request.operation.deliveryFence = claims.operation.deliveryFence =
+					fence;
+				request.operation.executionDeliveryFence =
+					claims.operation.executionDeliveryFence = fence;
+				expect(f.store.readAcceptedOriginalBindingV4(request, claims)).toBe(
+					f.hostSessionRef,
+				);
+			}
+		}
+		expect(f.store.readOriginalExecutionKeyScopeV4(f.original.binding)).toEqual(
+			original,
+		);
+		expect(await readFile(f.path, "utf8")).toBe(before);
+		await f.reopen();
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	},
+);
+
+it.each([
+	"principalId",
+	"principalKind",
+	"channelId",
+	"agentId",
+	"conversationId",
+	"executionId",
+	"turnId",
+	"sessionGeneration",
+	"traceId",
+	"hostSessionRef",
+] as const)(
+	"rejects mismatched request/claims/original %s without writing the journal",
+	async (field) => {
+		const f = await acceptedBindingFixture();
+		const before = await readFile(f.path, "utf8");
+		for (const target of ["request", "claims", "both"]) {
+			const query = originalBindingQuery(f.original);
+			for (const binding of target === "both"
+				? [query.request, query.claims]
+				: [target === "request" ? query.request : query.claims]) {
+				if (field === "principalId") binding.principal.id = "bob";
+				else if (field === "principalKind")
+					binding.principal.kind = "application";
+				else if (field === "sessionGeneration") binding.sessionGeneration = 2;
+				else binding[field] = "other-object";
+			}
+			// A trace is per request, so only a disagreement with claims is invalid.
+			if (field === "traceId" && target === "both") continue;
+			expectBindingUnknown(() =>
+				f.store.readAcceptedOriginalBindingV4(query.request, query.claims),
+			);
+		}
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	},
+);
+
+it.each(["kind", "id", "unequal-fences", "claims-fence", "digest"] as const)(
+	"rejects an invalid original control operation: %s",
+	async (change) => {
+		const f = await acceptedBindingFixture();
+		const { request, claims } = originalBindingQuery(f.original);
+		if (change === "kind")
+			request.operation.kind = claims.operation.kind = "message";
+		else if (change === "id")
+			request.operation.id = claims.operation.id = "other-execution";
+		else if (change === "unequal-fences")
+			request.operation.deliveryFence = claims.operation.deliveryFence = 2;
+		else if (change === "claims-fence")
+			claims.operation.executionDeliveryFence = 2;
+		else request.originalOperationDigest = requestDigest("different-input");
+		const before = await readFile(f.path, "utf8");
+		expectBindingUnknown(() =>
+			f.store.readAcceptedOriginalBindingV4(request, claims),
+		);
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	},
+);
+
+it.each([
+	"business",
+	"readiness",
+	"stop",
+	"multiple-commands",
+	"worker",
+] as const)(
+	"rejects a %s authority as an original status query",
+	async (change) => {
+		const f = await acceptedBindingFixture();
+		const { request, claims } = originalBindingQuery(f.original);
+		let supplied: Parameters<
+			FileRuntimeStore["readAcceptedOriginalBindingV4"]
+		>[1] = claims;
+		if (change === "business") supplied = f.original.authorization;
+		else if (change === "readiness")
+			// Exercise a cross-purpose input at the typed internal boundary.
+			supplied = {
+				...claims,
+				purpose: "readiness",
+			} as unknown as typeof claims;
+		else if (change === "stop") claims.allowedCommands = ["turn.stop"];
+		else if (change === "multiple-commands")
+			claims.allowedCommands.push("events.persist");
+		else claims.workerId = "worker-2";
+		const before = await readFile(f.path, "utf8");
+		expectBindingUnknown(() =>
+			f.store.readAcceptedOriginalBindingV4(request, supplied),
+		);
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	},
+);
+
+it.each(["absent", "prepared", "unknown", "busy", "legacy"] as const)(
+	"keeps %s acceptance unknown without creating or replaying an operation",
+	async (state) => {
+		const f = await fixture();
+		const original = input(state !== "legacy");
+		if (state !== "absent") {
+			const prepared = await f.store.prepareOperation(original);
+			if (state !== "prepared")
+				await f.store.resolveOperation(
+					prepared.session.hostSessionRef,
+					original.operationId,
+					state === "legacy"
+						? { outcome: "accepted", status: "running" }
+						: state === "unknown"
+							? {
+									outcome: "unknown",
+									code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+									message: "Runtime command acceptance could not be confirmed",
+								}
+							: { outcome: "busy" },
+					"native-session-1",
+				);
+		}
+		await f.reopen();
+		const { request, claims } = originalBindingQuery(original);
+		const before = await readFile(f.path, "utf8");
+		expectBindingUnknown(() =>
+			f.store.readAcceptedOriginalBindingV4(request, claims),
+		);
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	},
+);
+
+it.each([
+	"native-session",
+	"native-session-type",
+	"scope",
+	"high-water",
+	"authority",
+	"key-purpose",
+	"key-subject",
+	"application-personal-key",
+	"pinned-ref",
+	"stale-high-water",
+	"stale-authority",
+	"control-record",
+	"control-reason",
+	"quarantined",
+] as const)(
+	"fails closed after reopening an original journal with %s unavailable or mismatched",
+	async (change) => {
+		const f = await acceptedBindingFixture();
+		await f.store.close();
+		const journal = JSON.parse(await readFile(f.path, "utf8"));
+		const session = journal.sessions[f.hostSessionRef];
+		const operation = session.operations[f.original.operationId];
+		const authority = session.executionAuthorities[f.original.operationId];
+		if (change === "native-session") delete session.nativeSessionRef;
+		else if (change === "native-session-type") session.nativeSessionRef = 123;
+		else if (change === "scope") delete operation.keyScopeV4;
+		else if (change === "high-water")
+			delete session.highestFences[operation.scope];
+		else if (change === "authority") delete session.executionAuthorities;
+		else if (change === "key-purpose")
+			operation.keyScopeV4.keyBinding.purpose = "agent-default";
+		else if (change === "key-subject")
+			operation.keyScopeV4.keyBinding.subjectId = "bob";
+		else if (change === "application-personal-key") {
+			session.authority.principal.kind = "application";
+			operation.keyScopeV4.principal.kind = "application";
+			operation.keyScopeV4.keyBinding.subjectId = session.agentId;
+		} else if (change === "pinned-ref")
+			operation.keyScopeV4.hostSessionRef = "other-host";
+		else if (change === "stale-high-water")
+			session.highestFences[operation.scope] = 2;
+		else if (change === "stale-authority") authority.executionDeliveryFence = 2;
+		else if (change === "control-record" || change === "control-reason")
+			authority.control = {
+				controlRecordId:
+					change === "control-record" ? "control-2" : "control-1",
+				reason:
+					change === "control-reason" ? "authorization_revoked" : "recovery",
+			};
+		else {
+			journal.quarantinedSessions[f.hostSessionRef] = session;
+			delete journal.sessions[f.hostSessionRef];
+		}
+		await writeFile(f.path, `${JSON.stringify(journal)}\n`);
+		await f.reopen();
+		// Reopen may quarantine corrupt records; the read itself cannot repair them.
+		const before = await readFile(f.path, "utf8");
+		const { request, claims } = originalBindingQuery(f.original);
+		if (change === "application-personal-key")
+			request.principal.kind = claims.principal.kind = "application";
+		expectBindingUnknown(() =>
+			f.store.readAcceptedOriginalBindingV4(request, claims),
+		);
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	},
+);
+
+it.each(["active", "confirmed"] as const)(
+	"keeps a durable %s generation barrier unknown without relaxing it",
+	async (barrierState) => {
+		const f = await acceptedBindingFixture();
+		const { request, claims } = originalBindingQuery(f.original);
+		const control = {
+			...f.original,
+			keyScopeV4: undefined,
+			requestedHostSessionRef: f.hostSessionRef,
+			operationId: "generation-1",
+			kind: "generation-cancel" as const,
+			scope: "generation:1",
+			authorization: {
+				...claims,
+				hostSessionRef: f.hostSessionRef,
+				reason: "generation_isolation" as const,
+				allowedCommands: ["generation.cancel" as const],
+				operation: {
+					...claims.operation,
+					kind: "generation" as const,
+					id: "generation-1",
+				},
+			},
+			command: () => ({
+				schemaVersion: 1 as const,
+				kind: "generation-cancel" as const,
+				operationId: "generation-1",
+				...f.original.binding,
+				nativeSessionRef: "native-session-1",
+			}),
+		};
+		await f.store.prepareOperation(control);
+		await f.store.activateGenerationBarrier(
+			f.hostSessionRef,
+			f.original.binding,
+			"generation-1",
+		);
+		if (barrierState === "confirmed")
+			await f.store.confirmGenerationBarrier(f.hostSessionRef, "generation-1");
+		await f.reopen();
+		const before = await readFile(f.path, "utf8");
+		expectBindingUnknown(() =>
+			f.store.readAcceptedOriginalBindingV4(request, claims),
+		);
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	},
+);
+
+it("keeps a failed durable write retryable unknown instead of reading uncommitted authority", async () => {
+	const f = await acceptedBindingFixture("unknown");
+	const { request, claims } = originalBindingQuery(f.original);
+	const before = await readFile(f.path, "utf8");
+	const originalPath = `${f.path}.before-failure`;
+	await rename(f.path, originalPath);
+	await mkdir(f.path);
+	// An actual rename-to-directory failure marks DurableJsonFile unavailable.
+	await expect(
+		f.store.authorizeRequestV3(
+			{ ...claims, hostSessionRef: f.hostSessionRef },
+			"query",
+			100,
+		),
+	).rejects.toThrow();
+	expectBindingUnknown(() =>
+		f.store.readAcceptedOriginalBindingV4(request, claims),
+	);
+	expect(await readFile(originalPath, "utf8")).toBe(before);
+});
+
+it.each(["stop", "authorization_revoked", "recovery"] as const)(
+	"reads a binding under its existing %s control authority without renewing it",
+	async (reason) => {
+		const f = await acceptedBindingFixture("unknown");
+		const { request, claims } = originalBindingQuery(f.original);
+		claims.reason = reason;
+		await f.store.authorizeRequestV3(
+			{ ...claims, hostSessionRef: f.hostSessionRef },
+			"query",
+			100,
+		);
+		await f.reopen();
+		const before = await readFile(f.path, "utf8");
+		expect(f.store.readAcceptedOriginalBindingV4(request, claims)).toBe(
+			f.hostSessionRef,
+		);
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	},
+);
+
+it.each(["wecom", "platform-api"] as const)(
+	"reads the original %s binding with its matching pinned Key purpose and subject",
+	async (source) => {
+		const f = await fixture();
+		const original = input();
+		if (!original.keyScopeV4) throw new Error("Missing fixture scope");
+		original.keyScopeV4.executionSource = source;
+		if (source === "platform-api") {
+			original.keyScopeV4.keyBinding.purpose = "agent-default";
+			original.keyScopeV4.keyBinding.subjectId = original.binding.agentId;
+		}
+		original.requestDigest = requestDigest({
+			binding: original.binding,
+			keyScopeV4: original.keyScopeV4,
+		});
+		const prepared = await f.store.prepareOperation(original);
+		await f.store.resolveOperation(
+			prepared.session.hostSessionRef,
+			original.operationId,
+			{ outcome: "accepted", status: "running" },
+			"native-session-1",
+		);
+		await f.reopen();
+		const { request, claims } = originalBindingQuery(original);
+		const before = await readFile(f.path, "utf8");
+		expect(f.store.readAcceptedOriginalBindingV4(request, claims)).toBe(
+			prepared.session.hostSessionRef,
+		);
+		expect(await readFile(f.path, "utf8")).toBe(before);
 	},
 );
 

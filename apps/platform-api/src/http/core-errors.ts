@@ -3,6 +3,7 @@ import {
 	AgentManagementError,
 	ApplicationFoundationError,
 	ApplicationRevisionError,
+	PersonalApiCredentialErrorV1,
 } from "@agent-infra/platform-core";
 
 import { HttpProtocolError } from "./common.js";
@@ -12,6 +13,17 @@ export function mapCoreError(
 	traceId: string,
 ): HttpProtocolError {
 	if (error instanceof HttpProtocolError) return error;
+	if (error instanceof PersonalApiCredentialErrorV1) {
+		const codes = {
+			invalid_input: "INVALID_REQUEST",
+			authentication_required: "AUTHENTICATION_REQUIRED",
+			forbidden: "AUTHORIZATION_REVOKED",
+			not_found: "RESOURCE_UNAVAILABLE",
+			idempotency_conflict: "CONFLICT",
+			unavailable: "DEPENDENCY_UNAVAILABLE",
+		} as const;
+		return new HttpProtocolError(codes[error.code], traceId);
+	}
 	if (error instanceof ApplicationFoundationError) {
 		if (error.code === "invalid_command")
 			return new HttpProtocolError("INVALID_REQUEST", traceId);

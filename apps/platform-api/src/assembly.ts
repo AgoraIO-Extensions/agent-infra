@@ -6,6 +6,7 @@ import {
 	createApplicationFoundationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
+	createPersonalApiCredentialUseCaseV1,
 	createRecentPersonalConversationsUseCaseV1,
 	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
@@ -18,6 +19,7 @@ import {
 	PostgresApplicationRevisionTransactionV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
+	PostgresPersonalApiCredentialStoreV1,
 	PostgresPlatformAuditQueryV1,
 	PostgresScopedPlatformAuditQueryV1,
 	PostgresTaskAuthorizationStoreV1,
@@ -38,7 +40,7 @@ import {
 	type IdentityAdapter,
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
-import type { ManagementRouteDependencies } from "./http/management-routes.js";
+import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
 import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
@@ -83,6 +85,7 @@ export interface PlatformApiAssemblyInput {
 
 export interface PlatformApiAssembly {
 	readonly dependencies: PlatformAppDependencies;
+	readResourceSnapshot: PostgresConversationQueryV1["readResourceSnapshot"];
 	close(): Promise<void>;
 }
 
@@ -169,6 +172,17 @@ export function assemblePlatformApi(
 	});
 	const taskAuthorization = new PostgresTaskAuthorizationStoreV1({
 		databaseUrl: input.databaseUrl,
+	});
+	const personalApiCredentialStore = new PostgresPersonalApiCredentialStoreV1({
+		databaseUrl: input.databaseUrl,
+	});
+	const userDirectory = {
+		resolveUser: (userId: string) =>
+			resolveCurrentTaskUser(input.identity, userId, randomUUID()),
+	};
+	const personalApiCredentials = createPersonalApiCredentialUseCaseV1({
+		transaction: personalApiCredentialStore,
+		userDirectory,
 	});
 	const conversationTransaction =
 		new PostgresConversationExecutionTransactionV1({
@@ -405,6 +419,10 @@ export function assemblePlatformApi(
 			prepareSecretReplacements: input.prepareConfigurationSecrets,
 			readAgentProjection: projections.readConfigurationAgentProjection,
 		},
+		personalApiCredentials: {
+			identity: input.identity,
+			credentials: personalApiCredentials,
+		},
 		...(input.deploymentConfiguration === undefined
 			? {}
 			: { deploymentConfiguration: input.deploymentConfiguration }),
@@ -453,9 +471,12 @@ export function assemblePlatformApi(
 		auditQuery,
 		scopedAuditQuery,
 		taskAuthorization,
+		personalApiCredentialStore,
 	];
 	return {
 		dependencies,
+		readResourceSnapshot: (signal) =>
+			conversationQuery.readResourceSnapshot(signal),
 		async close() {
 			let failed = false;
 			for (const adapter of adapters.toReversed()) {

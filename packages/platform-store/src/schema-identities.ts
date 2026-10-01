@@ -12,6 +12,23 @@ import {
 import { agents } from "./schema-agents";
 import { platformSchema } from "./schema-common";
 
+/** Platform business override; this is not an employee directory or LDAP mapping. */
+export const platformUserDisables = platformSchema.table(
+	"platform_user_disables",
+	{
+		userId: text("user_id").primaryKey(),
+		disabledAt: timestamp("disabled_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		check(
+			"platform_user_disable_user_non_empty",
+			sql`char_length(${table.userId}) > 0`,
+		),
+	],
+);
+
 export const platformApplications = platformSchema.table(
 	"platform_applications",
 	{

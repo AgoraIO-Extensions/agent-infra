@@ -15,7 +15,10 @@ import {
 	type FileRoutesDependenciesV1,
 	registerFileRoutesV1,
 } from "./http/file-routes.js";
-import type { ManagementRouteDependencies } from "./http/management-routes.js";
+import {
+	type PersonalApiCredentialRouteDependencies,
+	registerPersonalApiCredentialRoutes,
+} from "./http/personal-api-credential-routes.js";
 import { registerRetiredManagementRoutes } from "./http/retired-management-routes.js";
 import {
 	registerScopedAuditRoutes,
@@ -26,7 +29,10 @@ import {
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
 import { registerV2ConfigurationRoutes } from "./http/v2-configuration-routes.js";
-import { registerV2ManagementRoutes } from "./http/v2-management-routes.js";
+import {
+	type ManagementRouteDependencies,
+	registerV2ManagementRoutes,
+} from "./http/v2-management-routes.js";
 import {
 	registerWecomReceiptRoutesV1,
 	registerWecomRoutesV1,
@@ -52,6 +58,7 @@ export interface PlatformAppDependencies {
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
+	readonly personalApiCredentials?: PersonalApiCredentialRouteDependencies;
 	readonly sessionAudit: SessionAuditRoutesDependencies;
 	readonly wecom?: WecomRoutesDependenciesV1;
 	readonly wecomReceipts?: WecomReceiptRoutesDependenciesV1;
@@ -106,6 +113,11 @@ export function createPlatformApp(
 		registerWecomReceiptRoutesV1(app, dependencies.wecomReceipts);
 	registerRetiredManagementRoutes(app);
 	registerV2ManagementRoutes(app, dependencies.management);
+	if (dependencies.personalApiCredentials)
+		registerPersonalApiCredentialRoutes(
+			app,
+			dependencies.personalApiCredentials,
+		);
 	registerV2ConfigurationRoutes(app, dependencies.configuration);
 	if (dependencies.deploymentConfiguration)
 		registerDeploymentConfigurationRoutes(

@@ -176,6 +176,13 @@
       "when": 1790724093107,
       "tag": "0024_application_targets",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790792430787,
+      "tag": "0029_platform_user_disables",
+      "breakpoints": true
     }
   ]
 }

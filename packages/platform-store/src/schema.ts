@@ -31,6 +31,7 @@ import {
 	apiCredentialDeliveryGrants,
 	platformApiCredentials,
 	platformApplications,
+	platformUserDisables,
 } from "./schema-identities";
 import {
 	auditEvents,
@@ -95,6 +96,7 @@ export {
 	apiCredentialDeliveryGrants,
 	platformApiCredentials,
 	platformApplications,
+	platformUserDisables,
 } from "./schema-identities";
 export {
 	auditEvents,
@@ -108,6 +110,7 @@ export {
 export { browserSessions } from "./schema-sessions";
 
 export const platformInfrastructureTables = [
+	platformUserDisables,
 	browserSessions,
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,
