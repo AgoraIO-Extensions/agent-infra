@@ -233,7 +233,12 @@ export async function readCodexInstalledSkillDeployment(
 				imageSourceRevision: build.sourceRevision,
 			}),
 		});
-	} catch {
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			error.message === "RUNTIME_CODEX_PROVENANCE_MISMATCH"
+		)
+			throw new Error("RUNTIME_CODEX_PROVENANCE_MISMATCH");
 		throw new Error("RUNTIME_INSTALLED_SKILL_INVALID");
 	}
 }

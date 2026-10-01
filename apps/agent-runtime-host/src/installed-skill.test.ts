@@ -152,6 +152,19 @@ it("binds real fixture bytes/inventory and readonly record to the concrete confi
 	expect(Object.isFrozen(descriptor?.deployment)).toBe(true);
 	expect(fixture.verify).toHaveBeenCalledOnce();
 });
+it.each([
+	["RUNTIME_CODEX_PROVENANCE_MISMATCH", "RUNTIME_CODEX_PROVENANCE_MISMATCH"],
+	["private-verifier-sentinel", "RUNTIME_INSTALLED_SKILL_INVALID"],
+])(
+	"keeps verifier rejection %s fail closed and redacted",
+	async (message, code) => {
+		fixture.verify.mockRejectedValue(new Error(message));
+		await expect(check()).rejects.toThrow(new RegExp(`^${code}$`));
+		expect(fixture.verify).toHaveBeenCalledExactlyOnceWith(
+			"workspace-summary-v1",
+		);
+	},
+);
 it("leaves an old unconfigured deployment unsupported without querying files", async () => {
 	await rm(physical(installedRoot), { recursive: true });
 	await expect(
