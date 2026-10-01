@@ -1084,6 +1084,8 @@ export async function openCodexModelTransport(
 	const boundThreads = new Set<string>();
 	const active = new Set<ActiveTurnRequest>();
 	const activeTurns = new Map<string, Set<ActiveTurnRequest>>();
+	// A failed durable outcome or native response cannot yield a drain receipt.
+	const failedDrains = new Set<string>();
 	const admittedTurns = new Map<string, ModelTurnSelection>();
 	// Explicit cancellation is final for this transport's lifetime; abandoning a
 	// provisional capability alone must not prevent validated running recovery.
@@ -1359,6 +1361,7 @@ export async function openCodexModelTransport(
 		let startedPersistence: Promise<void> | undefined;
 		let upstreamResult: Promise<{ value: Response | undefined }> | undefined;
 		let startedAt: number | undefined;
+		let responseFailed = false;
 		let outcomeReported = false;
 		let outcomeReport: Promise<void> | undefined;
 		const recordOutcome = async (outcome: CodexModelRequestOutcome) => {
@@ -1545,13 +1548,12 @@ export async function openCodexModelTransport(
 				modelOnly,
 			);
 		} catch {
+			responseFailed = outcomeReported || outcomeReport !== undefined;
 			const interrupted = controller.signal.aborted;
 			controller.abort();
-			// started() can fail while fetch is already running. Join its abort and
-			// release any received body before reporting this request drained.
-			const received = upstreamResult
-				? await awaitPersistence(upstreamResult).catch(() => undefined)
-				: undefined;
+			// Actual drain joins the original fetch after abort; a bounded wait is
+			// insufficient evidence that its request and received body have settled.
+			const received = upstreamResult ? await upstreamResult : undefined;
 			await received?.value?.body?.cancel().catch(() => {});
 			await recordOutcome(
 				startedAt === undefined
@@ -1567,6 +1569,11 @@ export async function openCodexModelTransport(
 			if (outcomeReported) await failStream(response);
 			else response.destroy();
 		} finally {
+			// Bounded response waits may time out while the original durable write
+			// still owns this request. Join it before announcing actual drain.
+			await outcomeReport?.catch(() => {});
+			if (journalPromise && (!outcomeReported || responseFailed))
+				failedDrains.add(turnKey);
 			request.off("aborted", terminate);
 			response.off("close", terminate);
 			active.delete(activeTurn);
@@ -1753,12 +1760,22 @@ export async function openCodexModelTransport(
 		revokeTurn: (turn: CodexModelTurn) => {
 			revokeTurn(nativeTurnKey(turn));
 		},
+		// Native terminal is not itself evidence that the provider handler drained.
+		drainTurn: async (turn: CodexModelTurn) => {
+			const key = nativeTurnKey(turn);
+			revokeTurn(key);
+			await Promise.all(
+				[...(activeTurns.get(key) ?? [])].map(({ completion }) => completion),
+			);
+			if (failedDrains.has(key)) throw new Error("RUNTIME_MODEL_DRAIN_FAILED");
+		},
 		cancelTurn: async (turn: CodexModelTurn) => {
 			const key = nativeTurnKey(turn);
 			revokeTurn(key);
 			const requests = [...(activeTurns.get(key) ?? [])];
 			for (const request of requests) request.terminate();
 			await Promise.all(requests.map(({ completion }) => completion));
+			if (failedDrains.has(key)) throw new Error("RUNTIME_MODEL_DRAIN_FAILED");
 		},
 		close: () => {
 			closePromise ??= (async () => {

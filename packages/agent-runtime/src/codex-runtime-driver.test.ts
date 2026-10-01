@@ -9447,3 +9447,148 @@ describe("durable required runtime binding", () => {
 		},
 	);
 });
+
+describe("original Codex terminal request drain", () => {
+	it.each(["completed", "failed"] as const)(
+		"holds ordinary event-only %s until the actual original request drains",
+		async (status) => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			const endpoint = await listen(
+				createServer((_incoming, response) => {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			let access: CodexModelAccess | undefined;
+			const bridge = new TestCodexBridge();
+			const driver = await openDriverWithModelEndpoint(
+				path,
+				bridge,
+				endpoint,
+				(launch) => {
+					access = launch.modelAccess;
+				},
+			);
+			drivers.push(driver);
+			const accepted = await driver.execute(submitCommand());
+			if (!access) throw new Error("missing process model access");
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const original = DurableJsonFile.prototype.update;
+			let held = false;
+			const spy = vi
+				.spyOn(DurableJsonFile.prototype, "update")
+				.mockImplementation(async function <R>(
+					this: DurableJsonFile<unknown>,
+					change: (draft: unknown) => R | Promise<R>,
+				) {
+					const result = (await original.call(this, change)) as R;
+					if (
+						!held &&
+						JSON.stringify(this.read()).includes('"phase":"completed"')
+					) {
+						held = true;
+						entered.resolve();
+						await release.promise;
+					}
+					return result;
+				});
+			const pending = modelRequest(access, bridge).then((response) =>
+				response.text(),
+			);
+			try {
+				await entered.promise;
+				await bridge.emitTurnCompleted(status);
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				const before = JSON.parse(
+					await readFile(path, "utf8"),
+				) as StoredCodexDriverState;
+				expect(
+					before.sessions[accepted.nativeSessionRef]?.executions?.[
+						"execution-codex"
+					]?.status,
+				).toBe("running");
+				expect(
+					Object.values(
+						before.sessions[accepted.nativeSessionRef]?.journals ?? {},
+					)
+						.flatMap((journal) => journal.events)
+						.some((event) => event.type === "completed"),
+				).toBe(false);
+			} finally {
+				release.resolve();
+				spy.mockRestore();
+			}
+			await pending;
+			await vi.waitFor(async () => {
+				const after = JSON.parse(
+					await readFile(path, "utf8"),
+				) as StoredCodexDriverState;
+				expect(
+					after.sessions[accepted.nativeSessionRef]?.executions?.[
+						"execution-codex"
+					]?.status,
+				).toBe(status);
+			});
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, "execution-codex"),
+			).toBe(status);
+		},
+	);
+
+	it("joins actual model cancellation before status recovery publishes terminal", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const endpoint = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.write(
+					`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "safe output" })}\n\n`,
+				);
+			}),
+		);
+		let access: CodexModelAccess | undefined;
+		const bridge = new TestCodexBridge();
+		const driver = await openDriverWithModelEndpoint(
+			path,
+			bridge,
+			endpoint,
+			(launch) => {
+				access = launch.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const accepted = await driver.execute(submitCommand());
+		if (!access) throw new Error("missing process model access");
+		const response = await modelRequest(access, bridge);
+		const reading = response.text().catch(() => "closed");
+		expect(
+			await driver.getStatus(accepted.nativeSessionRef, "execution-codex"),
+		).toBe("running");
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		modelTransportTestHooks.cancelTurn = async (_turn, cancel) => {
+			entered.resolve();
+			await release.promise;
+			await cancel();
+		};
+		bridge.setTurnStatus("completed");
+		const recovering = driver.getStatus(
+			accepted.nativeSessionRef,
+			"execution-codex",
+		);
+		try {
+			await entered.promise;
+			expect(
+				await persistedExecutionStatus(
+					path,
+					accepted.nativeSessionRef,
+					"execution-codex",
+				),
+			).toBe("running");
+		} finally {
+			release.resolve();
+		}
+		expect(await recovering).toBe("completed");
+		await reading;
+	});
+});
