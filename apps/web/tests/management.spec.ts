@@ -371,7 +371,9 @@ async function fixture(
 				}),
 			);
 		},
-		conversationChoices() {
+		conversationChoices(
+			selfManagedIdentity: "self-managed" | "platform-managed" = "self-managed",
+		) {
 			agent = AgentProjectionV2Schema.parse({
 				...agent,
 				serviceAvailability: "ready",
@@ -391,11 +393,12 @@ async function fixture(
 					...agent,
 					agentId: "agent-self-managed",
 					name: "Self managed",
+					interactionUrl: "https://agent.example.test",
 					source: {
 						kind: "custom",
 						imageReference: "registry.example/agent:v1",
 						interactionMode: "self-managed",
-						identityResponsibility: "self-managed",
+						identityResponsibility: selfManagedIdentity,
 					},
 				}),
 				AgentProjectionV2Schema.parse({
@@ -1617,6 +1620,84 @@ test("directory search and keyboard detail activation remain unobscured in short
 	}
 	expect(api.commands).toHaveLength(0);
 });
+
+for (const identityResponsibility of [
+	"self-managed",
+	"platform-managed",
+] as const) {
+	test(`self-managed detail omits Platform models across refresh with ${identityResponsibility} identity`, async ({
+		page,
+	}, info) => {
+		const api = await fixture(page, "employee");
+		api.conversationChoices(identityResponsibility);
+		const detailResponse = page.waitForResponse(
+			(response) =>
+				new URL(response.url()).pathname ===
+					"/api/v2/agents/agent-self-managed" &&
+				response.request().method() === "GET",
+		);
+		await page.goto("/agents/agent-self-managed");
+		const projected = AgentProjectionV2Schema.parse(
+			await (await detailResponse).json(),
+		);
+		expect(projected.configuration.modelOptions.length).toBeGreaterThan(0);
+		expect(projected.configuration.defaultModelOptionId).toBeTruthy();
+		expect(projected.configuration.defaultReasoningLevel).toBeTruthy();
+		const main = page.locator("main");
+		for (const phase of ["deep-link", "refresh"]) {
+			if (phase === "refresh") await page.reload();
+			await expect(
+				main.getByRole("heading", { name: "Self managed", exact: true }),
+			).toBeVisible();
+			await expect(main.getByText("模型范围", { exact: true })).toHaveCount(0);
+			await expect(main.getByText("默认选项", { exact: true })).toHaveCount(0);
+			for (const option of projected.configuration.modelOptions) {
+				await expect(
+					main.getByText(option.displayName, { exact: false }),
+				).toHaveCount(0);
+				for (const level of option.reasoningLevels)
+					await expect(main.getByText(level, { exact: false })).toHaveCount(0);
+			}
+			await expect(main.getByText("Owner", { exact: true })).toBeVisible();
+			await expect(main.getByText("可用范围", { exact: true })).toBeVisible();
+			await expect(main.getByRole("link", { name: "开始对话" })).toHaveCount(0);
+			await expect(main.getByRole("button", { name: "开始对话" })).toHaveCount(
+				0,
+			);
+			await expect(main.getByRole("link", { name: "个人历史" })).toHaveCount(0);
+			if (identityResponsibility === "self-managed") {
+				await expect(
+					main.getByRole("link", { name: "打开 Agent" }),
+				).toHaveAttribute("href", "https://agent.example.test/");
+			} else {
+				await expect(
+					main.getByRole("link", { name: "打开 Agent" }),
+				).toHaveCount(0);
+			}
+			await capture(
+				page,
+				info,
+				`self-managed-models-${identityResponsibility}-${phase}`,
+			);
+		}
+		await main.getByRole("link", { name: "返回 Agent 列表" }).focus();
+		await page.keyboard.press("Enter");
+		await expect(page).toHaveURL(/\/agents\/?$/);
+		for (const [agentId, name] of [
+			["agent-pilot-1", "Release assistant"],
+			["agent-platform-adapter", "Platform adapter"],
+		]) {
+			await page.goto(`/agents/${agentId}`);
+			await expect(
+				main.getByRole("heading", { name, exact: true }),
+			).toBeVisible();
+			await expect(main.getByText("模型范围", { exact: true })).toBeVisible();
+			await expect(main.getByText("默认选项", { exact: true })).toBeVisible();
+			await expect(main.getByText(/Primary model.*medium、high/)).toBeVisible();
+		}
+		expect(api.commands).toHaveLength(0);
+	});
+}
 
 test("directory conversation mode restores URL search and chooses only existing eligible routes", async ({
 	page,
