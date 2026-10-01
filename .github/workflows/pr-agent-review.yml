@@ -66,10 +66,11 @@ jobs:
         # Official PR-Agent runtime observed in run 34196006005; pin the executable image.
         uses: docker://pragent/pr-agent@sha256:548b760b81ab4b3f729182428695ccc1194bbf87528c2b1e2b2b07e5223af7b6
         with:
-          entrypoint: /bin/sh
+          entrypoint: python
+          # A shell would discard dotted configuration keys before Python starts.
           # Keep native JSON coverage evidence in patch-only mode, outside the checkout.
           args: >-
-            -c "cd /tmp && exec python -c 'from pr_agent.cli import run; from pr_agent.log import LoggingFormat, setup_logger; setup_logger(fmt=LoggingFormat.JSON); run()' --diff-file /github/workspace/.pr-agent-review-input.diff review"
+            -c "import os; os.chdir('/tmp'); from pr_agent.cli import run; from pr_agent.log import LoggingFormat, setup_logger; setup_logger(fmt=LoggingFormat.JSON); run()" --diff-file /github/workspace/.pr-agent-review-input.diff review
         env:
           GITHUB_TOKEN: ${{ github.token }}
           LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES: "true"

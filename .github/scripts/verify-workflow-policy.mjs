@@ -1740,8 +1740,8 @@ export function validateWorkflowDocuments(workflows) {
     prAgentAction?.uses !== PR_AGENT_ACTION ||
     prAgentAction?.if !== "steps.scope.outputs.applicable == 'true' && steps.scope.outputs.mode != 'unchanged'" ||
     !sameObject(prAgentAction?.with, {
-      entrypoint: "/bin/sh",
-      args: `-c "cd /tmp && exec python -c 'from pr_agent.cli import run; from pr_agent.log import LoggingFormat, setup_logger; setup_logger(fmt=LoggingFormat.JSON); run()' --diff-file /github/workspace/.pr-agent-review-input.diff review"`,
+      entrypoint: "python",
+      args: `-c "import os; os.chdir('/tmp'); from pr_agent.cli import run; from pr_agent.log import LoggingFormat, setup_logger; setup_logger(fmt=LoggingFormat.JSON); run()" --diff-file /github/workspace/.pr-agent-review-input.diff review`,
     }) ||
     prAgentSuggestionsAction?.uses !== PR_AGENT_ACTION ||
     prAgentSuggestionsAction?.["continue-on-error"] !== true ||
