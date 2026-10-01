@@ -16,6 +16,11 @@ import postgres from "postgres";
 import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { PostgresAgentManagementTransactionV1 } from "./agent-management.js";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";
+import {
+	awaitTaskAuthorizationDependencyV1,
+	awaitTaskAuthorizationQueryV1,
+} from "./personal-api-task-durable-use.js";
+import { TaskAuthorizationStoreError } from "./task-authorization.js";
 
 async function audit(
 	sql: postgres.Sql | postgres.TransactionSql,
@@ -23,6 +28,7 @@ async function audit(
 	action: string,
 	metadata: { agentId: string; actorId?: string },
 	component: "platform-api" | "platform-worker",
+	signal?: AbortSignal,
 ) {
 	const principal = metadata.actorId
 		? { kind: "user", id: metadata.actorId }
@@ -33,7 +39,8 @@ async function audit(
 			: ["failed", "unavailable", "unknown", "expired"].includes(action)
 				? "failed"
 				: "succeeded";
-	await sql`insert into platform.audit_events (id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details) values (${randomUUID()},${eventKey},'system',${component},${`wecom.${action}`},'agent',${metadata.agentId},${outcome},${eventKey},${metadata.agentId},${sql.json({ originalPrincipal: principal, component, receiptId: eventKey, status: action })})`;
+	const query = sql`insert into platform.audit_events (id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details) values (${randomUUID()},${eventKey},'system',${component},${`wecom.${action}`},'agent',${metadata.agentId},${outcome},${eventKey},${metadata.agentId},${sql.json({ originalPrincipal: principal, component, receiptId: eventKey, status: action })})`;
+	await (signal ? awaitTaskAuthorizationQueryV1(query, signal) : query);
 }
 
 interface Row {
@@ -66,6 +73,7 @@ export class PostgresWecomChannelV1
 	implements WecomChannelStorePortV1, WecomDeliveryStorePortV1
 {
 	readonly #sql: ReturnType<typeof postgres>;
+	readonly #cancelSql: ReturnType<typeof postgres>;
 	readonly #management: PostgresAgentManagementTransactionV1;
 	readonly #connectionHolderId: string | null;
 	readonly #observe: (status: WecomDeliveryStatusV1) => void;
@@ -83,10 +91,18 @@ export class PostgresWecomChannelV1
 			}
 		};
 		this.#sql = postgres(options.databaseUrl, { max: 5 });
+		this.#cancelSql = postgres(options.databaseUrl, {
+			max: 1,
+			connect_timeout: 1,
+		});
 		this.#management = new PostgresAgentManagementTransactionV1(options);
 	}
 	async close() {
-		await Promise.all([this.#sql.end(), this.#management.close()]);
+		await Promise.all([
+			this.#sql.end(),
+			this.#cancelSql.end(),
+			this.#management.close(),
+		]);
 	}
 	async readAuthorityState(agentId: string) {
 		const management = await this.#management.resolveAgentAccessState(agentId);
@@ -128,9 +144,56 @@ export class PostgresWecomChannelV1
 	async accept(
 		plan: WecomAcceptancePlanV1,
 		execute: Parameters<WecomChannelStorePortV1["accept"]>[1],
+		callerSignal?: AbortSignal,
 	): Promise<WecomAcceptanceV1> {
-		return await this.#sql.begin(async (sql) => {
-			await sql`select set_config('lock_timeout','5s',true)`;
+		const deadlineAt = Date.now() + 10_000;
+		const deadline = AbortSignal.timeout(10_000);
+		const signal = callerSignal
+			? AbortSignal.any([callerSignal, deadline])
+			: deadline;
+		signal.throwIfAborted();
+		let backendPid: number | undefined;
+		let transactionStartedAt: string | undefined;
+		let cancellation: Promise<void> | undefined;
+		let transactionSettled = false;
+		// The driver may queue COMMIT before it becomes active. Follow only this
+		// original transaction until begin settles; each native probe is bounded.
+		const cancelCommit = () => {
+			cancellation = (async () => {
+				while (!transactionSettled) {
+					if (backendPid !== undefined && transactionStartedAt !== undefined)
+						await awaitTaskAuthorizationQueryV1(
+							this
+								.#cancelSql`select pg_cancel_backend(pid) from pg_stat_activity where pid=${backendPid} and xact_start::text=${transactionStartedAt} and lower(query)='commit' and state='active'`,
+							AbortSignal.timeout(1_000),
+						).catch(() => undefined);
+					if (!transactionSettled)
+						await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+			})();
+		};
+		signal.addEventListener("abort", cancelCommit, { once: true });
+		const committed = this.#sql.begin(async (sql) => {
+			const run = <T extends readonly (object | undefined)[]>(
+				query: postgres.PendingQuery<T>,
+			) => awaitTaskAuthorizationQueryV1(query, signal);
+			const [backend] = await run(
+				sql<
+					{ pid: number; started_at: string }[]
+				>`select pid,xact_start::text as started_at from pg_stat_activity where pid=pg_backend_pid()`,
+			);
+			backendPid = backend?.pid;
+			transactionStartedAt = backend?.started_at;
+			await run(sql`select set_config('statement_timeout','10s',true)`);
+			await run(sql`select set_config('lock_timeout','5s',true)`);
+			// All original accepted/replayed/rejected exits bound the ensuing driver COMMIT.
+			const readyToCommit = async <T>(value: T) => {
+				signal.throwIfAborted();
+				await run(
+					sql`select set_config('statement_timeout', ${`${Math.max(1, deadlineAt - Date.now())}ms`}, true)`,
+				);
+				return { value };
+			};
 			const reject = async (outcome: "denied" | "conflict" | "unavailable") => {
 				await audit(
 					sql,
@@ -141,27 +204,35 @@ export class PostgresWecomChannelV1
 						actorId: plan.authority.actor.actorId,
 					},
 					plan.connectionFence ? "platform-worker" : "platform-api",
+					signal,
 				);
-				return { outcome };
+				return readyToCommit({ outcome });
 			};
 			if (plan.connectionFence) {
 				const fence = plan.connectionFence;
-				const [lease] =
-					await sql`select 1 from platform.wecom_connections where bot_id=${fence.botId} and bot_id=${plan.message.providerId} and agent_id=${plan.message.agentId} and binding_reference=${plan.message.bindingReference} and holder_id=${fence.holderId} and fence=${fence.fence} and lease_until>clock_timestamp() for share`;
+				const [lease] = await run(
+					sql`select 1 from platform.wecom_connections where bot_id=${fence.botId} and bot_id=${plan.message.providerId} and agent_id=${plan.message.agentId} and binding_reference=${plan.message.bindingReference} and holder_id=${fence.holderId} and fence=${fence.fence} and lease_until>clock_timestamp() for share`,
+				);
 				if (!lease) return reject("unavailable");
 			}
-			await sql`select pg_advisory_xact_lock(hashtextextended(${plan.eventKey},0))`;
-			const [agent] = await sql<
-				{ configuration: unknown; authorization_revision: string }[]
-			>`select c.configuration,a.authorization_revision from platform.agents a join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where a.id=${plan.message.agentId} and not exists(select 1 from jsonb_array_elements(c.configuration->'channels') channel where channel->>'kind'=${plan.message.kind} and channel->>'bindingReference'=${plan.message.bindingReference} and channel->>'enabled'='false') for share of a`;
+			await run(
+				sql`select pg_advisory_xact_lock(hashtextextended(${plan.eventKey},0))`,
+			);
+			const [agent] = await run(
+				sql<
+					{ configuration: unknown; authorization_revision: string }[]
+				>`select c.configuration,a.authorization_revision from platform.agents a join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where a.id=${plan.message.agentId} and not exists(select 1 from jsonb_array_elements(c.configuration->'channels') channel where channel->>'kind'=${plan.message.kind} and channel->>'bindingReference'=${plan.message.bindingReference} and channel->>'enabled'='false') for share of a`,
+			);
 			if (!agent) return reject("denied");
-			const [management] = await sql<
-				{
-					management_revision: string;
-					status: string;
-					service_availability: string;
-				}[]
-			>`select management_revision,status,service_availability from platform.agent_applications where agent_id=${plan.message.agentId} for share`;
+			const [management] = await run(
+				sql<
+					{
+						management_revision: string;
+						status: string;
+						service_availability: string;
+					}[]
+				>`select management_revision,status,service_availability from platform.agent_applications where agent_id=${plan.message.agentId} for share`,
+			);
 			if (
 				!management ||
 				Number(management.management_revision) !==
@@ -184,9 +255,11 @@ export class PostgresWecomChannelV1
 					config.source.interactionMode === "self-managed")
 			)
 				return reject("denied");
-			const [old] = await sql<
-				Row[]
-			>`select * from platform.wecom_receipts where id=${plan.eventKey} for update`;
+			const [old] = await run(
+				sql<
+					Row[]
+				>`select * from platform.wecom_receipts where id=${plan.eventKey} for update`,
+			);
 			if (old) {
 				if (old.request_digest !== plan.requestDigest)
 					return reject("conflict");
@@ -197,21 +270,34 @@ export class PostgresWecomChannelV1
 						old.connection_bot_id !== plan.connectionFence?.botId)
 				)
 					return reject("conflict");
-				await sql`update platform.wecom_receipts set reply_handle=${plan.message.replyHandle},expires_at=${new Date(plan.message.replyExpiresAt)},connection_bot_id=${plan.connectionFence?.botId ?? null},connection_fence=${plan.connectionFence?.fence ?? null},updated_at=now() where id=${plan.eventKey} and delivery_status='pending'`;
-				return { outcome: "replayed", receipt: receipt(old) } as const;
+				await run(
+					sql`update platform.wecom_receipts set reply_handle=${plan.message.replyHandle},expires_at=${new Date(plan.message.replyExpiresAt)},connection_bot_id=${plan.connectionFence?.botId ?? null},connection_fence=${plan.connectionFence?.fence ?? null},updated_at=now() where id=${plan.eventKey} and delivery_status='pending'`,
+				);
+				return readyToCommit({
+					outcome: "replayed",
+					receipt: receipt(old),
+				} as const);
 			}
 			const transaction = new PostgresConversationExecutionTransactionV1({
 				transaction: sql,
+				signal,
 			});
-			const result = await execute(
-				createConversationExecutionUseCaseV1({
-					transaction,
-					authorization: {
-						async authorize() {
-							return { outcome: "allowed", authority: plan.authority.actor };
-						},
-					},
-				}),
+			const result = await awaitTaskAuthorizationDependencyV1(
+				() =>
+					execute(
+						createConversationExecutionUseCaseV1({
+							transaction,
+							authorization: {
+								async authorize() {
+									return {
+										outcome: "allowed",
+										authority: plan.authority.actor,
+									};
+								},
+							},
+						}),
+					),
+				signal,
 			);
 			const {
 				agentId,
@@ -231,8 +317,8 @@ export class PostgresWecomChannelV1
 				conversationType,
 				threadId,
 			};
-			await sql`insert into platform.wecom_receipts (id,request_digest,scope,actor_id,task_boundary,channel_revision,authorization_revision,acceptance_status,conversation_id,execution_id,reply_handle,expires_at,created_at,updated_at,connection_bot_id,connection_fence)
-    values (${plan.eventKey},${plan.requestDigest},${sql.json(scope)},${plan.authority.actor.actorId},${sql.json(parseTaskAuthorizationBoundaryV1(plan.authority.actor.taskBoundary) as unknown as postgres.JSONValue)},${plan.authority.channelRevision},${plan.authority.actor.authorizationRevision},${result.status},${result.conversationId},${result.executionId},${plan.message.replyHandle},${new Date(plan.message.replyExpiresAt)},now(),now(),${plan.connectionFence?.botId ?? null},${plan.connectionFence?.fence ?? null})`;
+			await run(sql`insert into platform.wecom_receipts (id,request_digest,scope,actor_id,task_boundary,channel_revision,authorization_revision,acceptance_status,conversation_id,execution_id,reply_handle,expires_at,created_at,updated_at,connection_bot_id,connection_fence)
+    values (${plan.eventKey},${plan.requestDigest},${sql.json(scope)},${plan.authority.actor.actorId},${sql.json(parseTaskAuthorizationBoundaryV1(plan.authority.actor.taskBoundary) as unknown as postgres.JSONValue)},${plan.authority.channelRevision},${plan.authority.actor.authorizationRevision},${result.status},${result.conversationId},${result.executionId},${plan.message.replyHandle},${new Date(plan.message.replyExpiresAt)},now(),now(),${plan.connectionFence?.botId ?? null},${plan.connectionFence?.fence ?? null})`);
 			await audit(
 				sql,
 				plan.eventKey,
@@ -242,12 +328,23 @@ export class PostgresWecomChannelV1
 					actorId: plan.authority.actor.actorId,
 				},
 				plan.connectionFence ? "platform-worker" : "platform-api",
+				signal,
 			);
-			return {
+			return readyToCommit({
 				outcome: "accepted",
 				receipt: { receiptId: plan.eventKey, ...result },
-			} as const;
+			} as const);
 		});
+		try {
+			return (await committed).value;
+		} catch (error) {
+			if (signal.aborted) throw new TaskAuthorizationStoreError();
+			throw error;
+		} finally {
+			transactionSettled = true;
+			signal.removeEventListener("abort", cancelCommit);
+			await cancellation;
+		}
 	}
 	async claim(): Promise<WecomDeliveryClaimV1 | null> {
 		let unknown = 0;

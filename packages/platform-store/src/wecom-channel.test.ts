@@ -1,10 +1,14 @@
+import { createConnection, createServer, type Socket } from "node:net";
 import {
+	createWecomAuthorizationV1,
 	createWecomChannelV1,
+	type WecomChannelStorePortV1,
+	type WecomIdentityPortV1,
 	type WecomMessageV1,
 	wecomChannelIdV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PostgresPlatformAuditQueryV1 } from "./audit.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
@@ -601,4 +605,680 @@ it("replays a claimed receipt after its connection lease expires before prepare"
 		await owner.close();
 		await replacement.close();
 	}
+});
+
+function cancellationGate() {
+	let open = () => {};
+	const waiting = new Promise<void>((resolve) => {
+		open = resolve;
+	});
+	return { waiting, open };
+}
+async function waitForCancellation(
+	query: () => Promise<readonly unknown[]>,
+	timeoutMs = 4_000,
+) {
+	const end = Date.now() + timeoutMs;
+	while (Date.now() < end) {
+		if ((await query()).length) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("Expected original PostgreSQL transaction waiter");
+}
+
+// A transparent real PostgreSQL transport gate: hold the driver's COMMIT frame,
+// not a query result or clock, so cancellation first sees the original idle Tx.
+async function pendingCommitTransport(databaseUrl: string) {
+	const target = new URL(databaseUrl);
+	const sockets = new Set<Socket>();
+	const reached = cancellationGate();
+	let armed = false;
+	let release = () => {};
+	const server = createServer((client) => {
+		const upstream = createConnection({
+			host: target.hostname.replace(/^\[|\]$/g, ""),
+			port: Number(target.port || 5432),
+		});
+		for (const socket of [client, upstream]) {
+			sockets.add(socket);
+			socket.on("close", () => sockets.delete(socket));
+		}
+		client.on("error", () => upstream.destroy());
+		upstream.on("error", () => client.destroy());
+		client.on("end", () => upstream.end());
+		upstream.on("end", () => client.end());
+		upstream.on("data", (chunk) => client.write(chunk));
+		let startup = true;
+		let buffer: Buffer = Buffer.alloc(0);
+		let held: Buffer[] | undefined;
+		client.on("data", (chunk) => {
+			if (held) {
+				held.push(chunk);
+				return;
+			}
+			buffer = Buffer.concat([buffer, chunk]);
+			while (buffer.length >= (startup ? 4 : 5)) {
+				const size = startup
+					? buffer.readUInt32BE(0)
+					: 1 + buffer.readUInt32BE(1);
+				if (buffer.length < size) return;
+				const frame = buffer.subarray(0, size);
+				buffer = buffer.subarray(size);
+				if (startup) {
+					// Pass SSL negotiation too; this controlled PG uses its original plaintext startup.
+					if (frame.readUInt32BE(4) === 196608) startup = false;
+				} else {
+					const payload = frame.subarray(5);
+					const statement =
+						frame[0] === 80 // Parse: statement-name then SQL, both NUL terminated.
+							? payload.subarray(payload.indexOf(0) + 1)
+							: frame[0] === 81
+								? payload
+								: undefined; // Simple Query.
+					if (
+						armed &&
+						statement
+							?.subarray(0, statement.indexOf(0))
+							.toString()
+							.trim()
+							.toLowerCase() === "commit"
+					) {
+						armed = false;
+						held = [frame, buffer];
+						buffer = Buffer.alloc(0);
+						release = () => {
+							if (!held) return;
+							upstream.write(Buffer.concat(held));
+							held = undefined;
+						};
+						reached.open();
+						return;
+					}
+				}
+				upstream.write(frame);
+			}
+		});
+	});
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", resolve);
+	});
+	const address = server.address();
+	if (!address || typeof address === "string")
+		throw new Error("Missing controlled transport address");
+	const forwarded = new URL(databaseUrl);
+	forwarded.hostname = "127.0.0.1";
+	forwarded.port = String(address.port);
+	return {
+		databaseUrl: forwarded.toString(),
+		arm: () => {
+			armed = true;
+		},
+		pending: reached.waiting,
+		release: () => release(),
+		close: async () => {
+			release();
+			for (const socket of sockets) socket.destroy();
+			await new Promise<void>((resolve, reject) =>
+				server.close((error) => (error ? reject(error) : resolve())),
+			);
+		},
+	};
+}
+
+async function cancellationReturn(pending: Promise<unknown>) {
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			pending,
+			new Promise<never>((_, reject) => {
+				timeout = setTimeout(
+					() =>
+						reject(
+							new Error("Producer did not settle after observed cancellation"),
+						),
+					2_000,
+				);
+			}),
+		]);
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+describe("existing WeCom transaction cancellation", () => {
+	let sequence = 0;
+	const identity: WecomIdentityPortV1 = {
+		resolveSender: async (scope) => ({
+			schemaVersion: 1 as const,
+			userId: scope.senderId,
+			accountStatus: "active" as const,
+			organizationIds: ["controlled-org"],
+			authorizationRevision: "identity-1",
+		}),
+		activeUsers: async (ids: readonly string[]) => ids,
+	};
+	async function scope(userId: string) {
+		const suffix = ++sequence;
+		const input = {
+			...message,
+			agentId: `actual-agent-${suffix}`,
+			senderId: userId,
+			eventId: `actual-event-${suffix}`,
+			peerId: `actual-peer-${suffix}`,
+		};
+		await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values (${input.agentId},1,'authorization_1')`;
+		await sql`insert into platform.agent_applications (id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values (${`${input.agentId}-application`},${input.agentId},'owner_1','Controlled','Controlled','available','trace','request',now(),1,1,'ready','running',1,1)`;
+		await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${input.agentId},1,'controlled',${sql.json({ ...configuration, agentId: input.agentId })},now())`;
+		await sql`insert into platform.agent_owners (agent_id,owner_id) values (${input.agentId},'owner_1')`;
+		await sql`insert into platform.agent_availability (agent_id,target_type,target_id) values (${input.agentId},'organization','controlled-org')`;
+		return input;
+	}
+
+	function producer(accept?: WecomChannelStorePortV1["accept"]) {
+		return createWecomChannelV1({
+			authorization: createWecomAuthorizationV1({ identity, state: store }),
+			store: {
+				reject: (...args) => store.reject(...args),
+				accept: accept ?? ((...args) => store.accept(...args)),
+			},
+		});
+	}
+	type Supplied = Parameters<
+		Parameters<WecomChannelStorePortV1["accept"]>[1]
+	>[0];
+	type Backend = {
+		pid: number;
+		started_at: string;
+		query_started_at: string;
+		query_delay_ms: number;
+	};
+	async function originalBackend(query: string, wait: string, observer = sql) {
+		let backend: Backend | undefined;
+		await waitForCancellation(async () => {
+			const rows = await observer<Backend[]>`
+    select pid,xact_start::text as started_at,query_start::text as query_started_at,
+     extract(epoch from (query_start-xact_start))*1000 as query_delay_ms
+    from pg_stat_activity where datname=current_database() and state='active'
+     and query like ${query} and wait_event=${wait}`;
+			expect(rows.length).toBeLessThanOrEqual(1);
+			backend = rows[0];
+			return rows;
+		});
+		if (!backend) throw new Error("Missing exact original transaction");
+		return backend;
+	}
+	async function released(
+		input: WecomMessageV1,
+		key: string,
+		advisory = true,
+		observer = sql,
+	) {
+		await observer.begin(async (transaction) => {
+			const [lock] = await transaction<
+				{ acquired: boolean }[]
+			>`select pg_try_advisory_xact_lock(hashtextextended(${key},0)) as acquired`;
+			expect(lock?.acquired).toBe(advisory);
+			await transaction`select id from platform.agents where id=${input.agentId} for update nowait`;
+			await transaction`select id from platform.agent_applications where agent_id=${input.agentId} for update nowait`;
+			// Includes locks on rolled-back invisible create/message/authority/receipt rows.
+			await transaction`lock table platform.conversations,platform.conversation_messages,platform.conversation_executions,platform.task_authorization_records,platform.wecom_receipts in access exclusive mode nowait`;
+		});
+	}
+	async function gone(backend: Backend, observer = sql) {
+		expect(
+			await observer`select pid from pg_stat_activity where pid=${backend.pid} and xact_start::text=${backend.started_at}`,
+		).toHaveLength(0);
+	}
+	async function facts(input: WecomMessageV1, key: string) {
+		const [row] = await sql`
+   select (select count(*)::int from platform.wecom_receipts where id=${key} or scope->>'agentId'=${input.agentId}) as receipts,
+    (select count(*)::int from platform.conversations where agent_id=${input.agentId}) as conversations,
+    (select count(*)::int from platform.conversation_executions where agent_id=${input.agentId}) as executions,
+    (select count(*)::int from platform.conversation_messages where conversation_id in (select id from platform.conversations where agent_id=${input.agentId})) as messages,
+    (select count(*)::int from platform.task_authorization_records where boundary->>'agentId'=${input.agentId}) as authority,
+    (select count(*)::int from platform.outbox_items where trace_id=${key} or request_id=${key}) as outbox,
+    (select count(*)::int from platform.audit_events where agent_id=${input.agentId} and action='wecom.accepted') as accepted_audit,
+    (select count(*)::int from platform.audit_events where agent_id=${input.agentId} and action='task.authorization.accepted') as authority_audit`;
+		return row;
+	}
+	async function zero(input: WecomMessageV1, key: string) {
+		expect(await facts(input, key)).toEqual({
+			receipts: 0,
+			conversations: 0,
+			executions: 0,
+			messages: 0,
+			authority: 0,
+			outbox: 0,
+			accepted_audit: 0,
+			authority_audit: 0,
+		});
+		expect(
+			await sql`select id from platform.conversation_audit_events where agent_id=${input.agentId}`,
+		).toHaveLength(0);
+	}
+	async function late(supplied: Supplied, input: WecomMessageV1, key: string) {
+		await expect(
+			supplied.createConversation({
+				schemaVersion: 1,
+				agentId: input.agentId,
+				idempotencyKey: `${key}-late-create`,
+				traceId: key,
+				requestId: key,
+			}),
+		).rejects.toBeDefined();
+		await expect(
+			supplied.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: `${key}-rolled-back`,
+				text: "controlled late input",
+				idempotencyKey: `${key}-late-message`,
+				traceId: key,
+				requestId: key,
+			}),
+		).rejects.toBeDefined();
+	}
+	const argument = (agentId: string) =>
+		sql.unsafe(`'${agentId.replaceAll("'", "''")}'`);
+
+	it("retains actual authorization and one transaction for normal receipt/message/authority/audit and replay", async () => {
+		const input = await scope("normal-cancel-scope");
+		let key = "";
+		const channel = producer((plan, execute, signal) => {
+			key = plan.eventKey;
+			return store.accept(plan, execute, signal);
+		});
+		expect((await channel.receive(input)).outcome).toBe("accepted");
+		const rows = await sql<{ transaction_id: string }[]>`
+   select xmin::text as transaction_id from platform.wecom_receipts where id=${key}
+   union all select xmin::text from platform.conversations where agent_id=${input.agentId}
+   union all select xmin::text from platform.conversation_messages where conversation_id in (select id from platform.conversations where agent_id=${input.agentId})
+   union all select xmin::text from platform.conversation_executions where agent_id=${input.agentId}
+   union all select xmin::text from platform.task_authorization_records where boundary->>'agentId'=${input.agentId}
+   union all select xmin::text from platform.outbox_items where trace_id=${key}
+   union all select xmin::text from platform.audit_events where agent_id=${input.agentId} and action in ('wecom.accepted','task.authorization.accepted')`;
+		expect(rows).toHaveLength(8);
+		expect(new Set(rows.map((row) => row.transaction_id)).size).toBe(1);
+		expect((await channel.receive(input)).outcome).toBe("replayed");
+		expect(await facts(input, key)).toEqual({
+			receipts: 1,
+			conversations: 1,
+			executions: 1,
+			messages: 1,
+			authority: 1,
+			outbox: 1,
+			accepted_audit: 1,
+			authority_audit: 1,
+		});
+	});
+
+	it.each(["event", "conversation"] as const)(
+		"caller abort cancels the real %s query before releasing its independent blocker",
+		async (kind) => {
+			const input = await scope(`caller-${kind}`);
+			const controller = new AbortController();
+			const held = cancellationGate();
+			const reached = cancellationGate();
+			let blocker: Promise<unknown> | undefined;
+			let pending:
+				| ReturnType<ReturnType<typeof producer>["receive"]>
+				| undefined;
+			let failed: Promise<void> | undefined;
+			let supplied: Supplied | undefined;
+			let key = "";
+			let blockerReleased = false;
+			try {
+				if (kind === "conversation") {
+					await sql`create function platform.block_cancel_conversation() returns trigger language plpgsql as $$ begin if new.agent_id=TG_ARGV[0] then perform pg_advisory_xact_lock(11380001); end if; return new; end $$`;
+					await sql`create trigger block_cancel_conversation before insert on platform.conversations for each row execute function platform.block_cancel_conversation(${argument(input.agentId)})`;
+				}
+				const channel = producer(async (plan, execute, signal) => {
+					key = plan.eventKey;
+					blocker = sql.begin(async (transaction) => {
+						if (kind === "event")
+							await transaction`select pg_advisory_xact_lock(hashtextextended(${key},0))`;
+						else await transaction`select pg_advisory_xact_lock(11380001)`;
+						reached.open();
+						await held.waiting;
+						blockerReleased = true;
+					});
+					await reached.waiting;
+					return store.accept(
+						plan,
+						(conversation) => {
+							supplied = conversation;
+							return execute(conversation);
+						},
+						signal,
+					);
+				});
+				pending = channel.receive(input, undefined, controller.signal);
+				failed = expect(pending).rejects.toThrow();
+				const backend = await originalBackend(
+					kind === "event"
+						? "select pg_advisory_xact_lock(hashtextextended(%"
+						: "%insert into platform.conversations%",
+					"advisory",
+				);
+				controller.abort();
+				await cancellationReturn(failed);
+				expect(blockerReleased).toBe(false);
+				await gone(backend);
+				await released(input, key, kind !== "event");
+				await zero(input, key);
+				if (supplied) await late(supplied, input, key);
+			} finally {
+				held.open();
+				await Promise.allSettled([pending, failed, blocker]);
+				await sql`drop trigger if exists block_cancel_conversation on platform.conversations`;
+				await sql`drop function if exists platform.block_cancel_conversation()`;
+			}
+			await released(input, key);
+			await zero(input, key);
+		},
+		15_000,
+	);
+
+	it("receipt SQL ends at the runner deadline before its unchanged statement timeout", async () => {
+		const input = await scope("receipt-deadline");
+		const observer = postgres(db.databaseUrl, { max: 1 });
+		let pending: ReturnType<ReturnType<typeof producer>["receive"]> | undefined;
+		let failed: Promise<void> | undefined;
+		let supplied: Supplied | undefined;
+		let key = "";
+		try {
+			await sql`create function platform.block_cancel_receipt() returns trigger language plpgsql as $$ begin if new.scope->>'agentId'=TG_ARGV[0] then perform pg_sleep(30); end if; return new; end $$`;
+			await sql`create trigger block_cancel_receipt before insert on platform.wecom_receipts for each row execute function platform.block_cancel_receipt(${argument(input.agentId)})`;
+			const startedAt = Date.now();
+			// No caller signal. A real delay before receipt SQL separates its statement timeout from the runner deadline.
+			pending = producer((plan, execute, signal) => {
+				key = plan.eventKey;
+				return store.accept(
+					plan,
+					async (conversation) => {
+						supplied = conversation;
+						const result = await execute(conversation);
+						await observer`select pg_sleep(2)`;
+						return result;
+					},
+					signal,
+				);
+			}).receive(input);
+			failed = expect(pending).rejects.toThrow();
+			const backend = await originalBackend(
+				"insert into platform.wecom_receipts %",
+				"PgSleep",
+				observer,
+			);
+			expect(Number(backend.query_delay_ms)).toBeGreaterThanOrEqual(1_900);
+			// Observe the exact receipt SQL exiting at the real runner deadline.
+			// Only then start the independent 2s producer convergence assertion.
+			await waitForCancellation(
+				() =>
+					observer`select 1 where not exists (select 1 from pg_stat_activity where pid=${backend.pid} and xact_start::text=${backend.started_at} and query_start::text=${backend.query_started_at} and state='active')`,
+				12_000,
+			);
+			await cancellationReturn(failed);
+			const [ended] = await observer<
+				{ elapsed_ms: number }[]
+			>`select extract(epoch from(clock_timestamp()-${backend.query_started_at}::timestamptz))*1000 as elapsed_ms`;
+			expect(Number(ended?.elapsed_ms)).toBeLessThan(9_500);
+			expect(Date.now() - startedAt).toBeGreaterThanOrEqual(9_000);
+			expect(Date.now() - startedAt).toBeLessThan(15_000);
+			await gone(backend, observer);
+			await released(input, key, true, observer);
+			await zero(input, key);
+			if (!supplied) throw new Error("Missing original supplied producer");
+			await late(supplied, input, key);
+			await sql`drop trigger block_cancel_receipt on platform.wecom_receipts`;
+			await sql`drop function platform.block_cancel_receipt()`;
+			await zero(input, key);
+		} finally {
+			await Promise.allSettled([pending, failed]);
+			await sql`drop trigger if exists block_cancel_receipt on platform.wecom_receipts`;
+			await sql`drop function if exists platform.block_cancel_receipt()`;
+			await observer.end();
+		}
+	}, 20_000);
+
+	it.each(["caller-abort", "runner-deadline"] as const)(
+		"awaits original rollback and rejects late execute SQL after %s",
+		async (kind) => {
+			const input = await scope(`late-execute-${kind}`);
+			const reached = cancellationGate();
+			const resume = cancellationGate();
+			const finished = cancellationGate();
+			const controller = new AbortController();
+			let key = "";
+			let lateFinished = false;
+			let executeReached = false;
+			let lateChecks: Promise<void> | undefined;
+			let failed: Promise<void> | undefined;
+			let pending:
+				| ReturnType<ReturnType<typeof producer>["receive"]>
+				| undefined;
+			try {
+				const startedAt = Date.now();
+				pending = producer((plan, execute, signal) => {
+					key = plan.eventKey;
+					return store.accept(
+						plan,
+						async (conversation) => {
+							const result = await execute(conversation);
+							executeReached = true;
+							reached.open();
+							await resume.waiting;
+							try {
+								lateChecks = late(conversation, input, key);
+								await lateChecks;
+							} finally {
+								lateFinished = true;
+								finished.open();
+							}
+							return result;
+						},
+						signal,
+					);
+				}).receive(
+					input,
+					undefined,
+					kind === "caller-abort" ? controller.signal : undefined,
+				);
+				failed = expect(pending).rejects.toThrow();
+				await reached.waiting;
+				if (kind === "caller-abort") controller.abort();
+				await failed;
+				expect(lateFinished).toBe(false);
+				if (kind === "runner-deadline")
+					expect(Date.now() - startedAt).toBeGreaterThanOrEqual(9_000);
+				expect(Date.now() - startedAt).toBeLessThan(15_000);
+				await released(input, key);
+				await zero(input, key);
+				resume.open();
+				await finished.waiting;
+				await lateChecks;
+				await zero(input, key);
+			} finally {
+				resume.open();
+				await Promise.allSettled([pending, failed]);
+				if (executeReached) await finished.waiting;
+			}
+		},
+		20_000,
+	);
+
+	it.each(["caller-abort", "runner-deadline"] as const)(
+		"cancels original active driver COMMIT after %s and awaits its lock release",
+		async (kind) => {
+			const input = await scope(`commit-${kind}`);
+			const controller = new AbortController();
+			let key = "";
+			let failed: Promise<void> | undefined;
+			let pending:
+				| ReturnType<ReturnType<typeof producer>["receive"]>
+				| undefined;
+			try {
+				await sql`create function platform.block_cancel_commit() returns trigger language plpgsql as $$ begin if new.action='wecom.accepted' and new.agent_id=TG_ARGV[0] then perform pg_sleep(30); end if; return new; end $$`;
+				await sql`create constraint trigger block_cancel_commit after insert on platform.audit_events deferrable initially deferred for each row execute function platform.block_cancel_commit(${argument(input.agentId)})`;
+				const startedAt = Date.now();
+				pending = producer((plan, execute, signal) => {
+					key = plan.eventKey;
+					return store.accept(plan, execute, signal);
+				}).receive(
+					input,
+					undefined,
+					kind === "caller-abort" ? controller.signal : undefined,
+				);
+				failed = expect(pending).rejects.toThrow();
+				const backend = await originalBackend("commit", "PgSleep");
+				if (kind === "caller-abort") controller.abort();
+				await failed;
+				if (kind === "runner-deadline")
+					expect(Date.now() - startedAt).toBeGreaterThanOrEqual(9_000);
+				expect(Date.now() - startedAt).toBeLessThan(15_000);
+				await gone(backend);
+				await released(input, key);
+				await zero(input, key);
+			} finally {
+				await Promise.allSettled([pending, failed]);
+				await sql`drop trigger if exists block_cancel_commit on platform.audit_events`;
+				await sql`drop function if exists platform.block_cancel_commit()`;
+			}
+		},
+		20_000,
+	);
+
+	it("follows a real queued driver COMMIT from an idle transaction through active cancellation", async () => {
+		const input = await scope("pending-commit-caller");
+		const transport = await pendingCommitTransport(db.databaseUrl);
+		const applicationName = `pending-commit-${input.agentId}`;
+		const databaseUrl = new URL(transport.databaseUrl);
+		databaseUrl.searchParams.set("application_name", applicationName);
+		const target = new PostgresWecomChannelV1({
+			databaseUrl: databaseUrl.toString(),
+		});
+		const controller = new AbortController();
+		let key = "";
+		let supplied: Supplied | undefined;
+		let pending: ReturnType<ReturnType<typeof producer>["receive"]> | undefined;
+		let failed: Promise<void> | undefined;
+		let settled = false;
+		try {
+			await sql`create function platform.block_pending_cancel_commit() returns trigger language plpgsql as $$ begin if new.action='wecom.accepted' and new.agent_id=TG_ARGV[0] then perform pg_sleep(30); end if; return new; end $$`;
+			await sql`create constraint trigger block_pending_cancel_commit after insert on platform.audit_events deferrable initially deferred for each row execute function platform.block_pending_cancel_commit(${argument(input.agentId)})`;
+			const channel = createWecomChannelV1({
+				authorization: createWecomAuthorizationV1({ identity, state: target }),
+				store: {
+					reject: (...args) => target.reject(...args),
+					accept: (plan, execute, signal) => {
+						key = plan.eventKey;
+						return target.accept(
+							plan,
+							async (conversation) => {
+								supplied = conversation;
+								const result = await execute(conversation);
+								transport.arm();
+								return result;
+							},
+							signal,
+						);
+					},
+				},
+			});
+			pending = channel.receive(input, undefined, controller.signal);
+			failed = expect(pending).rejects.toThrow();
+			void pending.then(
+				() => {
+					settled = true;
+				},
+				() => {
+					settled = true;
+				},
+			);
+			await Promise.race([
+				transport.pending,
+				pending.then(
+					() => {
+						throw new Error("Producer committed before the COMMIT gate");
+					},
+					() => {
+						throw new Error("Producer failed before the COMMIT gate");
+					},
+				),
+			]);
+			const [backend] = await sql<
+				Backend[]
+			>`select pid,xact_start::text as started_at,query_start::text as query_started_at,0 as query_delay_ms from pg_stat_activity where application_name=${applicationName} and state='idle in transaction' and query like 'select set_config(''statement_timeout'',%'`;
+			if (!backend)
+				throw new Error("Missing original queued COMMIT transaction");
+			controller.abort();
+			// First native cancel probe has actually finished while COMMIT is still unsent.
+			// Its original transaction is idle, so the active-COMMIT predicate matched zero.
+			await waitForCancellation(
+				() =>
+					sql`select pid from pg_stat_activity where application_name=${applicationName} and state='idle' and query like 'select pg_cancel_backend(pid) from pg_stat_activity%'`,
+			);
+			expect(
+				await sql`select pid from pg_stat_activity where pid=${backend.pid} and xact_start::text=${backend.started_at} and state='idle in transaction'`,
+			).toHaveLength(1);
+			expect(settled).toBe(false);
+			transport.release();
+			await cancellationReturn(failed);
+			await gone(backend);
+			await released(input, key);
+			await zero(input, key);
+			if (!supplied) throw new Error("Missing original supplied transaction");
+			await late(supplied, input, key);
+			await zero(input, key);
+		} finally {
+			transport.release();
+			await Promise.allSettled([pending, failed]);
+			await target.close();
+			await transport.close();
+			await waitForCancellation(
+				() =>
+					sql`select 1 where not exists(select 1 from pg_stat_activity where application_name=${applicationName})`,
+			);
+			await sql`drop trigger if exists block_pending_cancel_commit on platform.audit_events`;
+			await sql`drop function if exists platform.block_pending_cancel_commit()`;
+		}
+	}, 20_000);
+
+	it.each([false, true])(
+		"rolls back %s deferred acceptance audit fault and retries one actual receipt",
+		async (deferred) => {
+			const input = await scope(`audit-${deferred}`);
+			let key = "";
+			const channel = producer((plan, execute, signal) => {
+				key = plan.eventKey;
+				return store.accept(plan, execute, signal);
+			});
+			try {
+				await sql`create function platform.fail_cancel_audit() returns trigger language plpgsql as $$ begin if new.action='wecom.accepted' and new.agent_id=TG_ARGV[0] then raise exception 'Controlled acceptance audit failure'; end if; return new; end $$`;
+				if (deferred)
+					await sql`create constraint trigger fail_cancel_audit after insert on platform.audit_events deferrable initially deferred for each row execute function platform.fail_cancel_audit(${argument(input.agentId)})`;
+				else
+					await sql`create trigger fail_cancel_audit before insert on platform.audit_events for each row execute function platform.fail_cancel_audit(${argument(input.agentId)})`;
+				await expect(channel.receive(input)).rejects.toThrow();
+				await released(input, key);
+				await zero(input, key);
+			} finally {
+				await sql`drop trigger if exists fail_cancel_audit on platform.audit_events`;
+				await sql`drop function if exists platform.fail_cancel_audit()`;
+			}
+			expect((await channel.receive(input)).outcome).toBe("accepted");
+			expect((await channel.receive(input)).outcome).toBe("replayed");
+			expect(await facts(input, key)).toEqual({
+				receipts: 1,
+				conversations: 1,
+				executions: 1,
+				messages: 1,
+				authority: 1,
+				outbox: 1,
+				accepted_audit: 1,
+				authority_audit: 1,
+			});
+		},
+	);
 });
