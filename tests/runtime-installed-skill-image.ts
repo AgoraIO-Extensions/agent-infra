@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
+import { parseRuntimeManifestLabelV1 } from "../packages/contracts/dist/workload/index.mjs";
 
 // Installation-only acceptance: no native process, provider, Turn or Connection.
 const [
@@ -44,6 +45,27 @@ const inspect = (id: string) => {
 	return value;
 };
 const inspection = inspect(imageId);
+const runtimeManifestLabel =
+	inspection.Config.Labels["io.agora.agent.runtime.manifest"];
+assert.equal(typeof runtimeManifestLabel, "string");
+const { runtimeManifest, runtimeManifestParsingEvidence } =
+	parseRuntimeManifestLabelV1(runtimeManifestLabel);
+assert.deepEqual(runtimeManifest, {
+	schemaVersion: 1,
+	interactionMode: "platform-adapter",
+	protocol: "acp",
+	service: { port: 3003 },
+	health: { path: "/healthz" },
+	capabilities: {
+		modelSelection: false,
+		attachments: false,
+		resultFiles: false,
+		connection: false,
+		supplementaryInstruction: false,
+	},
+});
+assert.equal(inspection.Config.WorkingDir, "/app");
+assert.deepEqual(inspection.Config.Cmd, ["/bin/sh", "./start-runtime-host.sh"]);
 const testInspection = inspect(testImageId);
 assert.equal(
 	testInspection.Config.Labels["org.agora.agent-infra.runtime-stage"],
@@ -255,6 +277,10 @@ await writeFile(
 			imageId,
 			imageDigest: inspection.Descriptor?.digest ?? null,
 			repoDigests: inspection.RepoDigests,
+			runtimeManifestLabel,
+			runtimeManifest,
+			runtimeManifestParsingEvidence,
+			registryAdmissionAccepted: false,
 			installation: result,
 			validator: validation,
 			testImageId,
