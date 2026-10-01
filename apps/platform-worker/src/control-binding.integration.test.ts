@@ -180,7 +180,12 @@ it("recovers only the original control ref through production Worker/Core and Po
 					const verified = verify(request.grant).claims;
 					expect(verified).toMatchObject({
 						purpose: "control",
-						reason: "authorization_revoked",
+						reason:
+							phase === "terminal" &&
+							path === "events/ack" &&
+							request.confirmedCursor === "original-terminal-cursor"
+								? "recovery"
+								: "authorization_revoked",
 						executionId,
 						turnId,
 					});
@@ -194,7 +199,7 @@ it("recovers only the original control ref through production Worker/Core and Po
 					expect(request).not.toHaveProperty("executionKey");
 					if (phase !== "binding") {
 						const [execution] =
-							await sql`select delivery_fence, last_runtime_cursor from platform.conversation_executions where execution_id = ${executionId}`;
+							await sql`select delivery_fence, last_runtime_cursor, status from platform.conversation_executions where execution_id = ${executionId}`;
 						expect(request.operation.executionDeliveryFence).toBe(
 							Number(execution?.delivery_fence),
 						);
@@ -228,6 +233,11 @@ it("recovers only the original control ref through production Worker/Core and Po
 								execution?.last_runtime_cursor,
 							);
 							if (request.confirmedCursor === "original-terminal-cursor") {
+								expect(phase).toBe("terminal");
+								expect(execution?.status).toBe("cancelled");
+								const [completedStop] =
+									await sql`select status from platform.conversation_stops where execution_id = ${executionId} and stop_request_id = ${stopRequestId}`;
+								expect(completedStop?.status).toBe("completed");
 								const persisted =
 									await sql`select event_payload from platform.conversation_events where execution_id = ${executionId} and adapter_event_key = 'original-terminal'`;
 								expect(persisted).toHaveLength(1);
