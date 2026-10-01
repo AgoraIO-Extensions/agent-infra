@@ -172,6 +172,8 @@ Claude 的持久请求、accepted/unknown、状态和恢复继续遵循 §§7–
 
 ### 5.2 调用生命周期与兼容
 
+只读 metadata 的内部 HTTP 例外及原请求/实例边界遵循 [工程 Spec §4.1](SPEC-agent-infra-M1-engineering-architecture.md#41-部署单元)。
+
 - 只读能力沿原 Session 的受限查询返回投影，不创建 Session/Turn、不恢复业务、不改变平台任务状态。未装载、不可用或无法核实分别返回，不能把 `notLoaded` 当作原任务已停止；当前读取权限失效时不返回结果。
 - 产生 Turn 的 Skill/命令复用现有 Message/Execution/outbox；不产生回答但改变原生状态的命令也绑定一个持久 Execution 与命令输入，复用同一调度及事件链，不伪造用户聊天消息或模型回答。活跃、等待或 unknown 占用下返回 busy，不插队、不转成补充指令。
 - 受理时冻结能力/目录/包修订、参数摘要、原主体/Agent/Conversation、模型选择及 Key 引用版本；幂等键沿既有作用域使用。同键同输入回读原结果，同键不同内容冲突；业务原文按普通消息权限保存，审计只保留必要元数据。
