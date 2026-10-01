@@ -83,6 +83,8 @@ describe("platform-store package surface", () => {
 			"openPostgresWorkloadReconciliationStoreV1",
 			"platformDatabaseUrlFromEnvironment",
 			"readPlatformQueueResourceSnapshot",
+			"requireCurrentPersonalApiTaskAdmissionV1",
+			"resolvePersonalApiTaskAdmissionAuthorityV1",
 			"validateWecomSetupCredentialRecordV1",
 		]);
 		expect(surface.PostgresPersonalRelayKeyStoreV1).toBeTypeOf("function");
