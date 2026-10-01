@@ -1304,20 +1304,25 @@ describe("Codex installed Skill descriptor receipt", () => {
 		},
 	);
 
-	it.each([null, 1, "private-secret-body", [], {}])(
-		"rejects malformed root %j before effects",
-		async (value) => rejectsBeforeEffects(value),
+	it.each([
+		{ value: null },
+		{ value: 1 },
+		{ value: "private-secret-body" },
+		{ value: [] },
+		{ value: {} },
+	])("rejects malformed root %j before effects", async ({ value }) =>
+		rejectsBeforeEffects(value),
 	);
 
 	it.each([
-		[],
-		["manifest"],
-		["manifest", "source"],
-		["manifest", "runtime"],
-		["manifest", "packageDigest"],
-		["manifest", "files", "0"],
-		["deployment"],
-	])("rejects missing or extra fields at %j", async (keys) => {
+		{ keys: [] },
+		{ keys: ["manifest"] },
+		{ keys: ["manifest", "source"] },
+		{ keys: ["manifest", "runtime"] },
+		{ keys: ["manifest", "packageDigest"] },
+		{ keys: ["manifest", "files", "0"] },
+		{ keys: ["deployment"] },
+	])("rejects missing or extra fields at %j", async ({ keys }) => {
 		const descriptor = installedSkillDescriptor();
 		let record: object = descriptor;
 		for (const key of keys) record = Reflect.get(record, key);
