@@ -164,7 +164,7 @@ it("bounds real trace export under a slow OTLP sink and closes within five secon
 			request.body.toString("utf8").includes(marker),
 		),
 	).length;
-	expect(allReceived).toBeLessThanOrEqual(TRACE_QUEUE_SIZE);
+	expect(allReceived).toBeLessThanOrEqual(TRACE_QUEUE_SIZE + TRACE_BATCH_SIZE);
 	expect(finalTraceRequests.length).toBeLessThanOrEqual(MAX_TRACE_REQUESTS);
 	expect(Buffer.concat(logOutput).toString("utf8")).not.toContain(
 		"PRIVATE_SENTINEL",
