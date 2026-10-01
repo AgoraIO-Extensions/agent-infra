@@ -112,6 +112,21 @@ export function parsePrAgentReview(raw) {
   return findings;
 }
 
+function decodeGitPath(filename) {
+  if (!filename.startsWith('"') || !filename.endsWith('"')) return filename;
+  const encoded = filename.slice(1, -1);
+  const chunks = [];
+  const escapes = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11, "\\": 92, '"': 34 };
+  let offset = 0;
+  for (const match of encoded.matchAll(/\\([0-7]{1,3}|[abfnrtv\\"])/g)) {
+    chunks.push(Buffer.from(encoded.slice(offset, match.index), "utf8"));
+    chunks.push(Buffer.from([/^[0-7]/.test(match[1]) ? Number.parseInt(match[1], 8) : escapes[match[1]]]));
+    offset = match.index + match[0].length;
+  }
+  chunks.push(Buffer.from(encoded.slice(offset), "utf8"));
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 // Keep the verified range's right-side line anchors separate by file. This is
 // used to prove an incremental finding belongs to the supplied delta before
 // mapping it onto GitHub's current PR diff.
@@ -120,10 +135,14 @@ export function collectScopedChangedLines(diff = "") {
   let path;
   let rightLine;
   for (const text of diff.split("\n")) {
-    const header = /^diff --git a\/(.+) b\/(.+)$/.exec(text);
-    if (header) {
-      path = header[2];
+    if (text.startsWith("diff --git ")) {
+      path = undefined;
       rightLine = undefined;
+      continue;
+    }
+    if (rightLine === undefined && text.startsWith("+++ ")) {
+      const filename = decodeGitPath(text.slice(4).split("\t", 1)[0]);
+      path = filename.startsWith("b/") ? filename.slice(2) : undefined;
       continue;
     }
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(text);

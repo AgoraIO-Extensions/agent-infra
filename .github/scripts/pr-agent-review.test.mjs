@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -199,6 +200,76 @@ test("maps verified unified-diff changes to per-file right-side lines", () => {
     "diff --git a/src/math.ts b/src/math.ts\nindex 111..222 100644\n--- a/src/math.ts\n+++ b/src/math.ts\n@@ -1,2 +1,3 @@\n keep\n+return a - b;\n old\n",
   );
   assert.deepEqual([...lines.get("src/math.ts")], [2]);
+});
+
+async function gitQuotedPathDiff() {
+  const directory = await mkdtemp(join(tmpdir(), "pr-agent-quoted-paths-"));
+  const files = [
+    { filename: "src/aaa.ts", line: 2 },
+    { filename: "src/tab\t\"quote\\name.ts", line: 3 },
+    { filename: "src/中文.ts", line: 4 },
+  ];
+  const git = (...args) => execFileSync("git", ["-C", directory,
+    "-c", "core.quotePath=true", ...args], { encoding: "utf8" });
+  try {
+    git("init", "--quiet");
+    await mkdir(join(directory, "src"));
+    const before = "one\ntwo\nthree\nfour\n";
+    for (const file of files) await writeFile(join(directory, file.filename), before);
+    git("add", ".");
+    for (const file of files) {
+      const lines = before.trimEnd().split("\n");
+      lines[file.line - 1] = "regression";
+      await writeFile(join(directory, file.filename), `${lines.join("\n")}\n`);
+      file.patch = git("diff", "--no-ext-diff", "--no-textconv", "--", file.filename);
+    }
+    return { files, diff: git("diff", "--no-ext-diff", "--no-textconv") };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+test("keeps ordinary and Git-quoted Unicode, tab and quote path changes separate", async () => {
+  const { diff, files } = await gitQuotedPathDiff();
+  assert.match(diff, /diff --git a\/src\/aaa\.ts b\/src\/aaa\.ts/);
+  assert.match(diff, /diff --git "a\//);
+  const changed = collectScopedChangedLines(diff);
+  assert.equal(changed.size, files.length);
+  for (const file of files) assert.deepEqual([...changed.get(file.filename)], [file.line]);
+});
+
+test("publishes and reads back nonempty scoped findings for Git-quoted paths", async () => {
+  const { diff, files } = await gitQuotedPathDiff();
+  const remote = api();
+  const issue = { number: 7, state: "open", title: "Quoted-path publication", body: "Preserve the file anchors." };
+  const request = async (path, options = {}) => {
+    if (path.endsWith("/pulls/42")) {
+      const current = await remote.request(path, options);
+      return { ...current, body: "Closes #7", base: { ...current.base, ref: "main", repo: { full_name: context.repository } } };
+    }
+    if (path.endsWith("/issues/7")) return issue;
+    if (path.includes("/compare/")) return options.responseType === "text" ? diff
+      : { status: "ahead", merge_base_commit: { sha: "b".repeat(40) },
+          files: files.map(({ filename }) => ({ filename, additions: 1, deletions: 1 })) };
+    if (path.includes("/files?")) return files;
+    return remote.request(path, options);
+  };
+  const { issueContractHash, prepareReviewScope } = await import("./pr-agent-review-scope.mjs");
+  const { scope } = await prepareReviewScope({ ...context, request }, {
+    headSha: head, issueNumber: 7, contractSha256: issueContractHash(issue),
+  });
+  const receipt = await publishPrAgentReview({ ...context, request, scope,
+    raw: JSON.stringify({ key_issues_to_review: files.map(({ filename, line }) => ({
+      ...finding, relevant_file: filename, start_line: line, end_line: line,
+    })) }),
+  });
+  assert.equal(receipt.findingCount, files.length);
+  assert.equal(remote.writes.length, 1);
+  const comments = (await remote.request("/reviews/77/comments?per_page=100"))
+    .map((comment) => remote.request(`/repos/org/repo/pulls/comments/${comment.id}`));
+  assert.deepEqual((await Promise.all(comments)).map(({ path, line, side }) => ({ path, line, side })),
+    files.map(({ filename, line }) => ({ path: filename, line, side: "RIGHT" })));
+  assert.equal(await verifyPrAgentPublication({ ...context, request, receipt }), true);
 });
 
 test("retries transient reads but never blindly retries a POST", async (t) => {
