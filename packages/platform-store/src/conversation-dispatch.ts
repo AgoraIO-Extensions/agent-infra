@@ -827,7 +827,7 @@ export class PostgresConversationDispatchStoreV1
 	}
 
 	async close(): Promise<void> {
-		await databaseOperation(() => this.#client.end());
+		await databaseOperation(() => this.#client.end({ timeout: 5 }));
 	}
 }
 
