@@ -126,7 +126,46 @@ interface NativeCommandBinding {
 	readonly configVersion: string;
 }
 
+/** Trusted deployment input; shape receipt does not verify installation or image provenance. */
+export interface CodexInstalledSkillDescriptorV1 {
+	readonly schemaVersion: 1;
+	readonly manifestSha256: string;
+	readonly manifest: {
+		readonly schemaVersion: 1;
+		readonly name: "workspace-summary";
+		readonly version: "0.1.0-candidate.1";
+		readonly source: {
+			readonly repository: "AgoraIO-Extensions/agent-infra";
+			readonly path: "deploy/runtime/skills/workspace-summary";
+		};
+		readonly runtime: {
+			readonly kind: "codex";
+			readonly version: "0.153.0";
+			readonly upstreamCommit: "41e22fee981a63b3698df7ed36bad393cda24715";
+		};
+		readonly extraRoot: "/opt/codex/agent-infra-skills";
+		readonly packageRoot: "/opt/codex/agent-infra-skills/workspace-summary";
+		readonly entryPath: "/opt/codex/agent-infra-skills/workspace-summary/SKILL.md";
+		readonly files: readonly [
+			{
+				readonly path: "SKILL.md";
+				readonly sizeBytes: number;
+				readonly sha256: string;
+			},
+		];
+		readonly packageDigest: {
+			readonly algorithm: "sha256-json-file-inventory-v1";
+			readonly sha256: string;
+		};
+	};
+	readonly deployment: {
+		readonly configVersion: string;
+		readonly imageSourceRevision: string;
+	};
+}
+
 export interface CodexRuntimeDriverOptions {
+	readonly installedSkill?: CodexInstalledSkillDescriptorV1;
 	/** Deployment-owned. Private execution still requires a verified native barrier. */
 	readonly nativeLane?: "official-model-only" | "private-callback";
 	readonly path: string;
@@ -1812,6 +1851,150 @@ function configurationInvalid(): never {
 	);
 }
 
+function installedSkillRecord(value: unknown, keys: readonly string[]) {
+	if (
+		!isPlainRecord(value) ||
+		Reflect.ownKeys(value).length !== keys.length ||
+		!keys.every((key) =>
+			Object.hasOwn(Object.getOwnPropertyDescriptor(value, key) ?? {}, "value"),
+		)
+	)
+		configurationInvalid();
+	return value;
+}
+
+function installedSkillSha256(value: unknown): value is string {
+	return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+function receiveInstalledSkill(
+	value: unknown,
+	configVersion: string,
+): CodexInstalledSkillDescriptorV1 {
+	try {
+		const descriptor = installedSkillRecord(value, [
+			"schemaVersion",
+			"manifestSha256",
+			"manifest",
+			"deployment",
+		]);
+		const manifest = installedSkillRecord(descriptor.manifest, [
+			"schemaVersion",
+			"name",
+			"version",
+			"source",
+			"runtime",
+			"extraRoot",
+			"packageRoot",
+			"entryPath",
+			"files",
+			"packageDigest",
+		]);
+		const source = installedSkillRecord(manifest.source, [
+			"repository",
+			"path",
+		]);
+		const runtime = installedSkillRecord(manifest.runtime, [
+			"kind",
+			"version",
+			"upstreamCommit",
+		]);
+		const digest = installedSkillRecord(manifest.packageDigest, [
+			"algorithm",
+			"sha256",
+		]);
+		const deployment = installedSkillRecord(descriptor.deployment, [
+			"configVersion",
+			"imageSourceRevision",
+		]);
+		if (
+			!Array.isArray(manifest.files) ||
+			manifest.files.length !== 1 ||
+			Reflect.ownKeys(manifest.files).length !== 2 ||
+			!Object.hasOwn(
+				Object.getOwnPropertyDescriptor(manifest.files, "0") ?? {},
+				"value",
+			)
+		)
+			configurationInvalid();
+		const file = installedSkillRecord(manifest.files[0], [
+			"path",
+			"sizeBytes",
+			"sha256",
+		]);
+		if (
+			descriptor.schemaVersion !== 1 ||
+			!installedSkillSha256(descriptor.manifestSha256) ||
+			manifest.schemaVersion !== 1 ||
+			manifest.name !== "workspace-summary" ||
+			manifest.version !== "0.1.0-candidate.1" ||
+			source.repository !== "AgoraIO-Extensions/agent-infra" ||
+			source.path !== "deploy/runtime/skills/workspace-summary" ||
+			runtime.kind !== "codex" ||
+			runtime.version !== "0.153.0" ||
+			runtime.upstreamCommit !== "41e22fee981a63b3698df7ed36bad393cda24715" ||
+			manifest.extraRoot !== "/opt/codex/agent-infra-skills" ||
+			manifest.packageRoot !==
+				"/opt/codex/agent-infra-skills/workspace-summary" ||
+			manifest.entryPath !==
+				"/opt/codex/agent-infra-skills/workspace-summary/SKILL.md" ||
+			file.path !== "SKILL.md" ||
+			typeof file.sizeBytes !== "number" ||
+			!Number.isSafeInteger(file.sizeBytes) ||
+			file.sizeBytes < 1 ||
+			file.sizeBytes > 8192 ||
+			!installedSkillSha256(file.sha256) ||
+			digest.algorithm !== "sha256-json-file-inventory-v1" ||
+			!installedSkillSha256(digest.sha256) ||
+			typeof deployment.configVersion !== "string" ||
+			deployment.configVersion.length === 0 ||
+			deployment.configVersion !== configVersion ||
+			typeof deployment.imageSourceRevision !== "string" ||
+			!/^[0-9a-f]{40}$/.test(deployment.imageSourceRevision) ||
+			deployment.imageSourceRevision === "0".repeat(40)
+		)
+			configurationInvalid();
+		return Object.freeze({
+			schemaVersion: 1,
+			manifestSha256: descriptor.manifestSha256,
+			manifest: Object.freeze({
+				schemaVersion: 1,
+				name: manifest.name,
+				version: manifest.version,
+				source: Object.freeze({
+					repository: source.repository,
+					path: source.path,
+				}),
+				runtime: Object.freeze({
+					kind: runtime.kind,
+					version: runtime.version,
+					upstreamCommit: runtime.upstreamCommit,
+				}),
+				extraRoot: manifest.extraRoot,
+				packageRoot: manifest.packageRoot,
+				entryPath: manifest.entryPath,
+				files: Object.freeze([
+					Object.freeze({
+						path: file.path,
+						sizeBytes: file.sizeBytes,
+						sha256: file.sha256,
+					}),
+				] as const),
+				packageDigest: Object.freeze({
+					algorithm: digest.algorithm,
+					sha256: digest.sha256,
+				}),
+			}),
+			deployment: Object.freeze({
+				configVersion: deployment.configVersion,
+				imageSourceRevision: deployment.imageSourceRevision,
+			}),
+		});
+	} catch {
+		configurationInvalid();
+	}
+}
+
 function stateInvalid(): never {
 	throw new RuntimeHostError(
 		"RUNTIME_CODEX_STATE_INVALID",
@@ -3459,6 +3642,40 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		options: CodexRuntimeDriverOptions,
 		openBridge: OpenCodexBridge,
 	) {
+		const installedSkillInput = options.installedSkill;
+		const installedSkill =
+			installedSkillInput === undefined
+				? undefined
+				: receiveInstalledSkill(installedSkillInput, options.configVersion);
+		const installedSkillReferences = () =>
+			installedSkillInput
+				? [
+						installedSkillInput.manifest,
+						installedSkillInput.manifest.source,
+						installedSkillInput.manifest.runtime,
+						installedSkillInput.manifest.files,
+						installedSkillInput.manifest.files[0],
+						installedSkillInput.manifest.packageDigest,
+						installedSkillInput.deployment,
+					]
+				: [];
+		const receivedSkillReferences = installedSkillReferences();
+		const assertInstalledSkillCurrent = () => {
+			if (options.installedSkill !== installedSkillInput)
+				configurationInvalid();
+			if (!installedSkill) return;
+			const current = receiveInstalledSkill(
+				options.installedSkill,
+				options.configVersion,
+			);
+			if (
+				JSON.stringify(current) !== JSON.stringify(installedSkill) ||
+				receivedSkillReferences.some(
+					(reference, index) => reference !== installedSkillReferences()[index],
+				)
+			)
+				configurationInvalid();
+		};
 		if (
 			options.nativeLane !== undefined &&
 			options.nativeLane !== "official-model-only" &&
@@ -3534,16 +3751,27 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			configurationInvalid();
 		const file = await CodexRuntimeDriver.openState(options.path);
 		let driver: CodexRuntimeDriver | undefined;
-		const modelTransport =
-			routes.length > 0
-				? await openCodexModelTransport(routes, {
-						modelOnly: !privateLane,
-						beforeRequest: (context, signal) => {
-							if (!driver) unavailable();
-							return driver.prepareModelRequest(context, signal);
-						},
-					})
-				: undefined;
+		let modelTransport:
+			| Awaited<ReturnType<typeof openCodexModelTransport>>
+			| undefined;
+		try {
+			assertInstalledSkillCurrent();
+			modelTransport =
+				routes.length > 0
+					? await openCodexModelTransport(routes, {
+							modelOnly: !privateLane,
+							beforeRequest: (context, signal) => {
+								if (!driver) unavailable();
+								return driver.prepareModelRequest(context, signal);
+							},
+						})
+					: undefined;
+			assertInstalledSkillCurrent();
+		} catch (error) {
+			await modelTransport?.close().catch(() => {});
+			await file.close().catch(() => {});
+			throw error;
+		}
 		const containedConfiguration = {
 			modelOnly: !privateLane,
 			model: defaultSelection.model,
@@ -3724,6 +3952,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		try {
 			await driver.recoverUnconfirmedModelOperations();
+			assertInstalledSkillCurrent();
 			return driver;
 		} catch (error) {
 			await driver.close().catch(() => {});

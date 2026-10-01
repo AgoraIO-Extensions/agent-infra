@@ -3426,6 +3426,34 @@
       ],
       "type": "object"
     },
+    "RuntimeOriginalBindingResponseV3": {
+      "additionalProperties": false,
+      "properties": {
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "outcome": {
+          "const": "binding_found",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 3,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "executionId",
+        "outcome",
+        "hostSessionRef"
+      ],
+      "type": "object"
+    },
     "RuntimePrincipalV1": {
       "additionalProperties": false,
       "properties": {

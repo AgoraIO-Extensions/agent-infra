@@ -1913,6 +1913,34 @@
         ],
         "type": "object"
       },
+      "RuntimeOriginalBindingResponseV3": {
+        "additionalProperties": false,
+        "properties": {
+          "executionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "hostSessionRef": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "outcome": {
+            "const": "binding_found",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 3,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "executionId",
+          "outcome",
+          "hostSessionRef"
+        ],
+        "type": "object"
+      },
       "RuntimePrincipalV1": {
         "additionalProperties": false,
         "properties": {
@@ -2899,6 +2927,103 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RuntimeOperationResponseV3"
+                }
+              }
+            },
+            "description": "RuntimeHost response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid RuntimeHost request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Execution Grant is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime session or operation is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Generation, fence, or operation conflict"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost operation failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime or Driver is unavailable"
+          }
+        }
+      }
+    },
+    "/internal/runtime/v3/original-binding": {
+      "post": {
+        "operationId": "readOriginalRuntimeBindingV3",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeStatusRequestV3"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeOriginalBindingResponseV3"
                 }
               }
             },

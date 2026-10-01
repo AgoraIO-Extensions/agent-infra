@@ -42,6 +42,61 @@ function restoreOldApiReadActions(input: unknown) {
 }
 
 describe("contract compatibility command", () => {
+	it("admits only the exact original binding addition and preserves every prior V3 operation", async () => {
+		const artifact = fileURLToPath(
+			new URL(
+				"../artifacts/openapi/runtime-host.v3.openapi.json",
+				import.meta.url,
+			),
+		);
+		const current = JSON.parse(await readFile(artifact, "utf8"));
+		const previous = structuredClone(current);
+		delete previous.paths["/internal/runtime/v3/original-binding"];
+		delete previous.components.schemas.RuntimeOriginalBindingResponseV3;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-original-binding-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			expect(comparePaths(artifact, previousPath).status).toBe(0);
+			const mutations: Record<string, (value: typeof current) => void> = {
+				widenedRef: (value) => {
+					value.components.schemas.RuntimeOriginalBindingResponseV3.properties.hostSessionRef.minLength = 0;
+				},
+				statusProjection: (value) => {
+					value.components.schemas.RuntimeOriginalBindingResponseV3.properties.status =
+						{ type: "string" };
+				},
+				changedRequest: (value) => {
+					value.paths[
+						"/internal/runtime/v3/original-binding"
+					].post.requestBody.content["application/json"].schema.$ref =
+						"#/components/schemas/RuntimeStopRequestV3";
+				},
+				anonymous: (value) => {
+					value.paths["/internal/runtime/v3/original-binding"].post.security =
+						[];
+				},
+				changedOldStatus: (value) => {
+					value.paths["/internal/runtime/v3/status"].post.operationId =
+						"changed";
+				},
+				changedOldRequest: (value) => {
+					value.components.schemas.RuntimeStatusRequestV3.additionalProperties = true;
+				},
+			};
+			for (const mutate of Object.values(mutations)) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits the exact durable API Agent read audit action while preserving every old action and field", async () => {
 		const artifact = fileURLToPath(
 			new URL(

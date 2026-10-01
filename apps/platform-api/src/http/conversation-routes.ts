@@ -30,6 +30,8 @@ import {
 	parseTaskAuthorizationBoundaryV1,
 	projectConversationExecutionV1,
 	projectConversationMessagesV1,
+	RecentPersonalConversationsError,
+	type RecentPersonalConversationsUseCaseV1,
 } from "@agent-infra/platform-core";
 import type {
 	ConversationExecutionDetailV1,
@@ -111,6 +113,7 @@ export interface ConversationQuery {
 }
 
 export interface ConversationRoutesDependencies {
+	readonly recent?: RecentPersonalConversationsUseCaseV1;
 	readonly files?: FileRoutesDependenciesV1;
 	readonly identity: IdentityAdapter;
 	readonly authorization: ConversationAuthorization;
@@ -186,6 +189,15 @@ async function boundary(
 				error.code === "invalid_request"
 					? "INVALID_REQUEST"
 					: "DEPENDENCY_UNAVAILABLE",
+				metadata.traceId,
+			);
+		} else if (error instanceof RecentPersonalConversationsError) {
+			protocol = new HttpProtocolError(
+				error.code === "invalid_request"
+					? "INVALID_REQUEST"
+					: error.code === "revoked"
+						? "AUTHORIZATION_REVOKED"
+						: "DEPENDENCY_UNAVAILABLE",
 				metadata.traceId,
 			);
 		} else protocol = new HttpProtocolError("INTERNAL_ERROR", metadata.traceId);
@@ -586,6 +598,42 @@ export function registerConversationRoutes(
 	app: Hono,
 	dependencies: ConversationRoutesDependencies,
 ): void {
+	app.get("/api/v2/me/conversations/recent", (context) =>
+		boundary(context, async (metadata) => {
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			const page = parsePageQuery(context.req.raw, metadata.traceId);
+			if (!dependencies.recent)
+				return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			const result = await dependencies.recent.list(identity.userId, page);
+			return context.json(
+				project(
+					() =>
+						ConversationPageV1Schema.parse({
+							items: result.items.map((item) =>
+								ConversationProjectionV1Schema.parse({
+									schemaVersion: 1,
+									conversationId: item.conversationId,
+									agentId: item.agentId,
+									title: null,
+									status: item.status,
+									selectedModelOptionId: item.selectedModelOptionId,
+									selectedReasoningLevel: item.selectedReasoningLevel,
+									lastConversationCursor: item.lastConversationCursor,
+									createdAt: item.createdAt.toISOString(),
+									updatedAt: item.updatedAt.toISOString(),
+								}),
+							),
+							nextCursor: result.nextCursor,
+						}),
+					metadata.traceId,
+				),
+			);
+		}),
+	);
 	app.get("/api/v1/agents/:agentId/conversations", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
