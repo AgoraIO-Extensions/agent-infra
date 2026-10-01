@@ -58,8 +58,11 @@ const readInstalledInventory = async () => {
     const stat = await lstat(path);
     assert(!stat.isSymbolicLink());
     assert(stat.isFile() || stat.isDirectory());
-    inventory.push({path:name, uid:stat.uid, gid:stat.gid, mode:stat.mode & 0o7777, nlink:stat.nlink,
-      ...(stat.isFile() ? {sizeBytes:stat.size, sha256:hash(await readFile(path))} : {})});
+    // Directory nlink differs across COPY/overlay layers despite identical trees.
+    // Regular-file nlink is security-relevant and must reject every hardlink.
+    if (stat.isFile()) assert.equal(stat.nlink, 1);
+    inventory.push({path:name, kind:stat.isFile() ? "file" : "directory", uid:stat.uid, gid:stat.gid, mode:stat.mode & 0o7777,
+      ...(stat.isFile() ? {nlink:stat.nlink, sizeBytes:stat.size, sha256:hash(await readFile(path))} : {})});
   }
   return inventory;
 };
