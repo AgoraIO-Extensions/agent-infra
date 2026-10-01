@@ -14,10 +14,64 @@ const references = {
 	receiver:
 		"node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81",
 };
-export type BackendAlert =
-	| "PlatformPersistentBacklog"
-	| "PlatformHttpErrors"
-	| "PlatformCollectorUnavailable";
+const kinds = {
+	PlatformPersistentBacklog: "backlog",
+	PlatformHttpErrors: "errors",
+	PlatformCollectorUnavailable: "service",
+} as const;
+export type BackendAlert = keyof typeof kinds;
+type AlertReceipt = {
+	alertname: BackendAlert;
+	status: "firing" | "resolved";
+	kind: (typeof kinds)[BackendAlert];
+	payloadSha256: string;
+};
+type VectorResponse = {
+	status: "success";
+	data: {
+		resultType: "vector";
+		result: { metric: Record<string, string>; value: [number, string] }[];
+	};
+};
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isVectorResponse(value: unknown): value is VectorResponse {
+	return (
+		isRecord(value) &&
+		value.status === "success" &&
+		isRecord(value.data) &&
+		value.data.resultType === "vector" &&
+		Array.isArray(value.data.result) &&
+		value.data.result.every(
+			(sample: unknown) =>
+				isRecord(sample) &&
+				isRecord(sample.metric) &&
+				Object.values(sample.metric).every(
+					(label) => typeof label === "string",
+				) &&
+				Array.isArray(sample.value) &&
+				sample.value.length === 2 &&
+				typeof sample.value[0] === "number" &&
+				Number.isFinite(sample.value[0]) &&
+				typeof sample.value[1] === "string",
+		)
+	);
+}
+function isAlertReceipt(value: unknown): value is AlertReceipt {
+	return (
+		isRecord(value) &&
+		Object.entries(kinds).some(
+			([name, kind]) => value.alertname === name && value.kind === kind,
+		) &&
+		(value.status === "firing" || value.status === "resolved") &&
+		typeof value.payloadSha256 === "string" &&
+		/^[a-f0-9]{64}$/.test(value.payloadSha256) &&
+		Object.keys(value).every((key) =>
+			["alertname", "status", "kind", "payloadSha256"].includes(key),
+		)
+	);
+}
 
 /** Disposable backend; only consumes the existing Collector's metrics. */
 export async function startAlertBackend(
@@ -305,6 +359,16 @@ receivers:
 			if (!response.ok) throw new Error("Alert backend query failed");
 			return response.json();
 		};
+		const readReceipts = async () => {
+			const result: unknown = await read(`${receiver}/receipts`);
+			if (
+				!Array.isArray(result) ||
+				result.length > 128 ||
+				!result.every(isAlertReceipt)
+			)
+				throw new Error("Invalid controlled alert receipts");
+			return result;
+		};
 		const queries: { expression: string; result: unknown }[] = [];
 		return {
 			images,
@@ -315,13 +379,13 @@ receivers:
 				const result = await read(
 					`${prometheus}/api/v1/query?query=${encodeURIComponent(expression)}`,
 				);
-				if (result.status !== "success")
-					throw new Error("Prometheus query failed");
+				if (!isVectorResponse(result))
+					throw new Error("Invalid Prometheus vector response");
 				queries.push({ expression, result });
 				return result;
 			},
 			async mark() {
-				return (await read(`${receiver}/receipts`)).length as number;
+				return (await readReceipts()).length;
 			},
 			async waitFor(
 				alert: BackendAlert,
@@ -329,9 +393,9 @@ receivers:
 				after: number,
 			) {
 				for (let attempt = 0; attempt < 60; attempt++) {
-					const receipts = await read(`${receiver}/receipts`);
+					const receipts = await readReceipts();
 					const matched = receipts.findIndex(
-						(receipt: { alertname: string; status: string }, index: number) =>
+						(receipt, index) =>
 							index >= after &&
 							receipt.alertname === alert &&
 							receipt.status === status,
@@ -347,7 +411,7 @@ receivers:
 					configurations,
 					thresholds,
 					queries,
-					receipts: await read(`${receiver}/receipts`),
+					receipts: await readReceipts(),
 				};
 			},
 		};
