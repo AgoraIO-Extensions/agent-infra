@@ -16,6 +16,19 @@ import {
 	type ReapprovalCampaignInput,
 } from "@agent-infra/connection-core";
 import postgres, { type Sql } from "postgres";
+import {
+	type AuthorizationCompatibility,
+	compatibleApprovalProfile,
+	migrateCompatibleApproval,
+} from "./approval-upgrade";
+
+export type PendingConnectRuntime = {
+	providerReleases: ReadonlyMap<string, string>;
+	authorizationCompatibility: ReadonlyMap<
+		string,
+		readonly AuthorizationCompatibility[]
+	>;
+};
 
 export type ConsumeConnectPermitInput = {
 	accessAuthorizationId: string;
@@ -23,23 +36,26 @@ export type ConsumeConnectPermitInput = {
 	grantedScopes: readonly string[];
 	principalId: string;
 	requestId: string;
+	authorizationCompatibility?: readonly AuthorizationCompatibility[];
 };
 
 export async function lookupApprovedConnectPermit(
 	sql: Sql,
 	principalId: string,
 	requestId: string,
+	runtime?: PendingConnectRuntime,
 ) {
 	const [row] = await sql<
 		{
 			connect_expires_at: Date;
+			capability_profile_id: string;
 			provider_id: string;
 			provider_release_id: string;
 			required_scopes: unknown;
 		}[]
 	>`
 		SELECT request.connect_expires_at, release.provider AS provider_id,
-			request.provider_release_id, profile.required_scopes
+			request.provider_release_id, request.capability_profile_id, profile.required_scopes
 		FROM connection_access_requests request
 		JOIN connection_provider_releases release
 			ON release.id = request.provider_release_id
@@ -66,16 +82,36 @@ export async function lookupApprovedConnectPermit(
 		)
 	)
 		forbidden();
+	const targetReleaseId = runtime
+		? runtime.providerReleases.get(row.provider_id)
+		: row.provider_release_id;
+	if (
+		!targetReleaseId ||
+		(targetReleaseId !== row.provider_release_id &&
+			!(await compatibleApprovalProfile(sql, {
+				capabilityProfileId: row.capability_profile_id,
+				fromReleaseId: row.provider_release_id,
+				toReleaseId: targetReleaseId,
+				authorizationCompatibility:
+					runtime?.authorizationCompatibility.get(targetReleaseId),
+			})))
+	) {
+		throw new ConnectionError(
+			"INVALID_REQUEST",
+			"Connection request requires reapplication",
+		);
+	}
 	return {
 		connectExpiresAt: row.connect_expires_at.toISOString(),
 		providerId: row.provider_id,
-		providerReleaseId: row.provider_release_id,
+		providerReleaseId: targetReleaseId,
 		requiredScopes: [...new Set(row.required_scopes)].sort(),
 		requestId,
 	};
 }
 
 type PolicyRow = {
+	provider?: string;
 	capability_profile_id: string;
 	connect_ttl_seconds: number;
 	provider_release_id: string;
@@ -163,6 +199,7 @@ export class PostgresConnectionAccessRequestRepository
 			sql: postgres.TransactionSql,
 			connectionId: string,
 		) => Promise<void>,
+		private readonly runtime?: PendingConnectRuntime,
 	) {
 		this.sql = postgres(databaseUrl, { max: 10 });
 	}
@@ -428,6 +465,13 @@ export class PostgresConnectionAccessRequestRepository
 				`;
 					return {
 						actions,
+						...(this.runtime
+							? {
+									availableForNewConnections:
+										this.runtime.providerReleases.get(policy.provider_id) ===
+										policy.provider_release_id,
+								}
+							: {}),
 						capabilityProfileId: policy.capability_profile_id,
 						capabilityProfileName: policy.capability_profile_name,
 						disclaimers: disclaimers.map((item) => ({
@@ -460,7 +504,12 @@ export class PostgresConnectionAccessRequestRepository
 
 	async prepareConnect(principalId: string, requestId: string) {
 		const { requiredScopes: _requiredScopes, ...publicPermit } =
-			await lookupApprovedConnectPermit(this.sql, principalId, requestId);
+			await lookupApprovedConnectPermit(
+				this.sql,
+				principalId,
+				requestId,
+				this.runtime,
+			);
 		return publicPermit;
 	}
 
@@ -468,14 +517,16 @@ export class PostgresConnectionAccessRequestRepository
 		principalId: string,
 	): Promise<readonly AccessRequestProjection[]> {
 		const rows = await this.requestRowsForApplicant(principalId);
-		return Promise.all(rows.map((row) => this.projectRequest(row)));
+		return Promise.all(
+			rows.map((row) => this.projectRequest(row, principalId)),
+		);
 	}
 
 	async getRequest(principalId: string, requestId: string) {
 		const rows = await this.requestRowsForApplicant(principalId, requestId);
 		const row = rows[0];
 		if (!row) forbidden();
-		return this.projectRequest(row);
+		return this.projectRequest(row, principalId);
 	}
 
 	async listApprovalQueue(
@@ -1545,7 +1596,7 @@ export class PostgresConnectionAccessRequestRepository
 				FOR SHARE
 			`;
 			const [policy] = await sql<PolicyRow[]>`
-				SELECT policy.provider_release_id, policy.capability_profile_id,
+				SELECT release.provider, policy.provider_release_id, policy.capability_profile_id,
 					policy.request_ttl_seconds, policy.connect_ttl_seconds, policy.renewal_lead_seconds
 				FROM connection_access_policy_versions policy
 				JOIN connection_capability_profiles profile ON profile.id = policy.capability_profile_id
@@ -1558,7 +1609,11 @@ export class PostgresConnectionAccessRequestRepository
 			if (
 				!policy ||
 				policy.provider_release_id !== input.providerReleaseId ||
-				policy.capability_profile_id !== input.capabilityProfileId
+				policy.capability_profile_id !== input.capabilityProfileId ||
+				(!input.renewalAuthorizationId &&
+					this.runtime &&
+					this.runtime.providerReleases.get(policy.provider ?? "") !==
+						input.providerReleaseId)
 			) {
 				invalid("Approval policy does not match the requested capability");
 			}
@@ -2258,6 +2313,7 @@ export class PostgresConnectionAccessRequestRepository
 
 	private async projectRequest(
 		row: RequestRow,
+		principalId?: string,
 	): Promise<AccessRequestProjection> {
 		const stages = await this.sql<
 			{
@@ -2304,7 +2360,41 @@ export class PostgresConnectionAccessRequestRepository
 		`,
 			),
 		);
+		let connectReadiness: AccessRequestProjection["connectReadiness"];
+		if (
+			principalId &&
+			!row.renewal &&
+			row.state === "APPROVED_PENDING_CONNECTION" &&
+			row.connect_expires_at &&
+			row.connect_expires_at > new Date()
+		) {
+			try {
+				const permit = await lookupApprovedConnectPermit(
+					this.sql,
+					principalId,
+					row.id,
+					this.runtime,
+				);
+				connectReadiness = {
+					status: "READY",
+					targetProviderReleaseId: permit.providerReleaseId,
+				};
+			} catch (error) {
+				if (
+					!(error instanceof ConnectionError) ||
+					!["FORBIDDEN", "INVALID_REQUEST"].includes(error.code)
+				)
+					throw error;
+				connectReadiness = {
+					status: "REAPPLY_REQUIRED",
+					targetProviderReleaseId: this.runtime
+						? (this.runtime.providerReleases.get(row.provider_id) ?? null)
+						: row.provider_release_id,
+				};
+			}
+		}
 		return {
+			...(connectReadiness ? { connectReadiness } : {}),
 			capabilityProfileName: row.capability_profile_name,
 			connectExpiresAt: row.connect_expires_at?.toISOString() ?? null,
 			createdAt: row.created_at.toISOString(),
@@ -2493,11 +2583,13 @@ export async function consumeConnectPermitInTransaction(
 			permit_id: string;
 			provider_release_id: string;
 			required_scopes: unknown;
+			connection_provider_release_id: string;
 		}[]
 	>`
 		SELECT permit.id AS permit_id, request.provider_release_id,
 			request.capability_profile_id, request.duration_kind,
-			request.duration_days, account.external_account, profile.required_scopes
+			request.duration_days, account.external_account, profile.required_scopes,
+			account.provider_release_id AS connection_provider_release_id
 		FROM connection_connect_permits permit
 		JOIN connection_access_requests request ON request.id = permit.request_id
 		JOIN connection_provider_releases release ON release.id = request.provider_release_id
@@ -2516,7 +2608,6 @@ export async function consumeConnectPermitInTransaction(
 			AND permit.consumed_at IS NULL AND permit.expires_at > now()
 			AND account.owner_type = 'PERSONAL'
 			AND account.owner_principal_id = request.applicant_principal_id
-			AND account.provider_release_id = request.provider_release_id
 		FOR UPDATE OF permit, request, account
 		FOR SHARE OF release, profile, policy
 	`;
@@ -2551,6 +2642,16 @@ export async function consumeConnectPermitInTransaction(
 			}
 		)
 	`;
+	if (target.connection_provider_release_id !== target.provider_release_id) {
+		await migrateCompatibleApproval(sql, {
+			connectionId: input.connectionId,
+			principalId: input.principalId,
+			externalAccount: target.external_account,
+			fromReleaseId: target.provider_release_id,
+			toReleaseId: target.connection_provider_release_id,
+			authorizationCompatibility: input.authorizationCompatibility,
+		});
+	}
 	const consumed = await sql`
 		UPDATE connection_connect_permits
 		SET consumed_at = now(), connection_id = ${input.connectionId}

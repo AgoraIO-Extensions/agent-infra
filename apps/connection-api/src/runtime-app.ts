@@ -115,20 +115,6 @@ export async function createConnectionRuntime(
 		config.databaseUrl,
 		config.credentialKey,
 	);
-	const approvalRepository = new PostgresConnectionAccessRequestRepository(
-		config.databaseUrl,
-		(sql, connectionId) =>
-			repository.restoreGrantsAfterRenewal(sql, connectionId),
-	);
-	const notificationDispatcher = new PostgresConnectionNotificationDispatcher(
-		config.databaseUrl,
-	);
-	const approvalService = new ConnectionAccessApprovalService(
-		approvalRepository,
-	);
-	const approvalCatalog = new PostgresConnectionApprovalRepository(
-		config.databaseUrl,
-	);
 	const catalogs = [
 		githubConnectionCatalog,
 		bitbucketServerConnectionCatalog,
@@ -140,6 +126,37 @@ export async function createConnectionRuntime(
 		manhattanConnectionCatalog,
 		rehoboamConnectionCatalog,
 	] as const;
+	const approvalRepository = new PostgresConnectionAccessRequestRepository(
+		config.databaseUrl,
+		(sql, connectionId) =>
+			repository.restoreGrantsAfterRenewal(sql, connectionId),
+		{
+			providerReleases: new Map(
+				catalogs.map((catalog) => [
+					catalog.provider,
+					catalog.providerReleaseId,
+				]),
+			),
+			authorizationCompatibility: new Map(
+				catalogs.map((catalog) => [
+					catalog.providerReleaseId,
+					"authorizationCompatibility" in catalog
+						? catalog.authorizationCompatibility
+						: [],
+				]),
+			),
+		},
+	);
+	const notificationDispatcher = new PostgresConnectionNotificationDispatcher(
+		config.databaseUrl,
+	);
+	const approvalService = new ConnectionAccessApprovalService(
+		approvalRepository,
+	);
+	const approvalCatalog = new PostgresConnectionApprovalRepository(
+		config.databaseUrl,
+	);
+
 	for (const catalog of catalogs) {
 		await startupPhase("provider_catalog", catalog.provider, () =>
 			repository.publishProviderCatalog(catalog, {

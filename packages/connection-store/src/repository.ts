@@ -3500,6 +3500,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			this.sql,
 			input.principalId,
 			input.requestId,
+			{
+				providerReleases: this.publishedProviderReleaseIds,
+				authorizationCompatibility: this.authorizationCompatibility,
+			},
 		);
 		if (permit.providerId !== input.providerId) forbidden();
 		return { requiredScopes: permit.requiredScopes };
@@ -3916,6 +3920,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					grantedScopes,
 					principalId: input.principalId,
 					requestId: input.accessRequestId,
+					authorizationCompatibility: this.authorizationCompatibility.get(
+						input.providerReleaseId,
+					),
 				});
 			}
 			await this.restoreGrantsAfterReconnect(sql, connectionId);

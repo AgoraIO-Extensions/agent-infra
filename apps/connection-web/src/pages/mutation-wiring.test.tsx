@@ -1248,6 +1248,58 @@ describe("Connection 管理 mutation wiring", () => {
 		).toBeNull();
 	});
 
+	it.each(["datalego", "manhattan", "confluence"])(
+		"%s 旧申请的直接链接不会启动鉴权，主入口与时间线一致提示等待新版",
+		async (providerId) => {
+			const request: AccessRequestsResponse["requests"][number] = {
+				id: "request-approved",
+				providerId,
+				providerReleaseId: "release-old",
+				capabilityProfileName: "旧能力包",
+				state: "APPROVED_PENDING_CONNECTION",
+				connectExpiresAt: "2030-01-01T00:00:00.000Z",
+				expiresAt: "2030-01-01T00:00:00.000Z",
+				createdAt: "2026-10-01T00:00:00.000Z",
+				renewal: false,
+				purpose: "验证升级",
+				duration: { kind: "PERMANENT" },
+				stages: [],
+				currentStageOrdinal: null,
+				revision: "1",
+				connectReadiness: {
+					status: "REAPPLY_REQUIRED",
+					targetProviderReleaseId: "release-new",
+				},
+			};
+			api.getConnectionAccessRequest.mockResolvedValueOnce({
+				...request,
+				connectExpiresAt: "2030-01-01T00:00:00.000Z",
+			});
+			api.listConnectionAccessRequests.mockResolvedValueOnce({
+				requests: [request],
+			});
+			window.history.replaceState(
+				{},
+				"",
+				`/connection/connections?provider=${providerId}&intent=connect&accessRequestId=request-approved`,
+			);
+			renderPage(<ConnectionsPage />);
+			expect(await screen.findByText(/新版暂未开放申请/)).toBeTruthy();
+			expect(screen.queryByRole("link", { name: "连接账号" })).toBeNull();
+			expect(
+				(
+					screen.getByRole("button", {
+						name: "等待管理员开放新版",
+					}) as HTMLButtonElement
+				).disabled,
+			).toBe(true);
+			expect(api.prepareConnectionAccess).not.toHaveBeenCalled();
+			expect(api.startDatalegoOAuth).not.toHaveBeenCalled();
+			expect(api.startManhattanOAuth).not.toHaveBeenCalled();
+			expect(api.connectProviderCredential).not.toHaveBeenCalled();
+		},
+	);
+
 	it("DataLego OAuth 启动中显示进度，失败后显示错误而非静默", async () => {
 		let rejectStart: ((error: Error) => void) | undefined;
 		api.startDatalegoOAuth.mockImplementationOnce(

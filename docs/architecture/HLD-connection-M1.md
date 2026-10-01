@@ -1238,6 +1238,10 @@ Request 总有效期到达才进入 EXPIRED；阶段仍为 current PENDING 且 R
 
 所有个人 Connection 入口必须解析同一批准事实，包括 OAuth start/callback、PAT/API Key、credential store 和 reconnect。调用方不能提交可信 Principal、Policy、Permit、scope、Connection 或账号 selector。Connect Permit、OAuth state 与 Credential 各自一次性且不能互相替代。
 
+已批准但尚未连接的 Request 增加服务端派生的连接可用性投影，与审批 state 分离。检查使用受信 runtime 的当前 ProviderRelease 目录，不以数据库中仍保留的旧 PUBLISHED Release 推断当前 Adapter 可用；新申请选项和提交也绑定当前 runtime 版本（固定来源的续期除外）。OAuth start、callback 与凭据存储重新检查同一条件，不能只在页面检查。原版本与当前版本不一致时，仅在下述 exact compatibility 证明成立后允许继续连接；第一次绑定的外部身份仍须由 Provider 证明，并在消费 Permit 的事务内复核身份、scope、批准及数据库时间。使用原 Request 的来源复合外键建立 Access Authorization，通过已有 upgraded 字段记录目标能力包、逐项映射及审计，不改写原 Request、Decision 或 Policy，不延长 Permit/申请有效期，也不扩大 Consumer Grant。
+
+未证明兼容时，投影指向当前目标版本并禁止进入 Credential/OAuth；页面结合当前可申请选项，展示重新申请或等待管理员开放。重新申请只预填用途及目标策略允许的匹配时长，不自动提交、批准、取消旧申请或继承免责声明确认。管理员普通发布/修订本身不取消历史申请，显式撤销、自然到期与重大重审规则保持不变。
+
 Access Authorization 冻结 Principal、Connection、稳定外部账号指纹、ProviderRelease、Capability Profile、有效期和 revision。Invocation 建立与 Provider submission admission 都必须验证 current ACTIVE Authorization 及数据库时间；后台 expiry worker 只推进状态和通知，不是唯一门禁。到期、撤销和暂停提升 account/authorization revision 与 execution fence，并暂停相关 Grant；`SUBMISSION_STARTED` 调用仍按 Effect/UNCERTAIN 语义收敛。
 
 Provider 兼容升级是版本绑定的受控迁移，不是新的公司批准。原 Request、Decision、PolicyVersion、Capability Profile 和批准时的版本绑定必须保留为不可变审批来源；迁移记录必须关联原批准与精确目标 ProviderRelease、逐项 ActionVersion 映射及兼容性依据。不得改写历史 Request，也不得只删除 exact-release 检查来放行升级。

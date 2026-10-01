@@ -326,22 +326,27 @@ function browserConnectionError(context: Context, error: ConnectionError) {
 	const directoryGateUnavailable =
 		error.code === "PROVIDER_UNAVAILABLE" &&
 		error.message === "Employee directory approval gate is unavailable";
+	const requestOutdated =
+		error.code === "INVALID_REQUEST" &&
+		error.message === "Connection request requires reapplication";
 	return browserApiError(context, {
 		code: error.code,
-		messageKey: directoryGateUnavailable
-			? "connection.error.approval_directory_unavailable"
-			: error.code === "INVALID_REQUEST" &&
-					error.message === "Provider credential validation failed"
-				? "connection.error.provider_authentication_failed"
-				: error.code === "FORBIDDEN" || error.code === "RESOURCE_NOT_FOUND"
-					? "connection.error.resource_not_found"
-					: error.code === "IDEMPOTENCY_CONFLICT"
-						? "connection.error.idempotency_conflict"
-						: error.code === "RESULT_UNCERTAIN"
-							? "connection.error.result_uncertain"
-							: error.code === "PROVIDER_UNAVAILABLE"
-								? "connection.error.provider_unavailable"
-								: "connection.error.request_failed",
+		messageKey: requestOutdated
+			? "connection.error.connect_request_outdated"
+			: directoryGateUnavailable
+				? "connection.error.approval_directory_unavailable"
+				: error.code === "INVALID_REQUEST" &&
+						error.message === "Provider credential validation failed"
+					? "connection.error.provider_authentication_failed"
+					: error.code === "FORBIDDEN" || error.code === "RESOURCE_NOT_FOUND"
+						? "connection.error.resource_not_found"
+						: error.code === "IDEMPOTENCY_CONFLICT"
+							? "connection.error.idempotency_conflict"
+							: error.code === "RESULT_UNCERTAIN"
+								? "connection.error.result_uncertain"
+								: error.code === "PROVIDER_UNAVAILABLE"
+									? "connection.error.provider_unavailable"
+									: "connection.error.request_failed",
 		retryable:
 			error.code === "PROVIDER_UNAVAILABLE" && !directoryGateUnavailable,
 		status:

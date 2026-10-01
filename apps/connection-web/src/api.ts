@@ -218,6 +218,8 @@ const errorMessages: Record<string, string> = {
 	"connection.error.approval_directory_unavailable":
 		"员工目录尚未启用，暂不能发布审批策略，请联系系统管理员。",
 	"connection.error.request_failed": "请求无法完成",
+	"connection.error.connect_request_outdated":
+		"连接器已更新，请返回连接页面按新版重新申请；若新版尚未开放，请联系管理员",
 	"connection.error.resource_not_found": "无法访问该资源",
 	"connection.error.result_uncertain": "请求结果暂时无法确认，请勿重复操作",
 	"connection.error.server_error": "Connection 服务暂时不可用",
