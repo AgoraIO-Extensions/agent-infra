@@ -25,6 +25,22 @@ type ControlledSession = {
 	generation: string;
 };
 
+type ControlledTransport = {
+	aborted: string[];
+	completed: string[];
+	started: {
+		path: string;
+		acknowledged: boolean;
+		status: number | null;
+	}[];
+	sessionReads: {
+		userId: string;
+		roles: string[];
+		generation: string | null;
+	}[];
+	acknowledged: boolean;
+};
+
 async function workbenchFixture(
 	page: Page,
 	{
@@ -160,12 +176,24 @@ async function workbenchFixture(
 	// after abort. Observe the real consumer signal; do not touch its cache.
 	await page.addInitScript(
 		({ ignoreAbort }) => {
-			const observed = { aborted: [] as string[], completed: [] as string[] };
+			const observed: ControlledTransport = {
+				aborted: [],
+				completed: [],
+				started: [],
+				sessionReads: [],
+				acknowledged: false,
+			};
 			Object.assign(window, { controlledWorkbenchTransport: observed });
 			const fetch = window.fetch.bind(window);
 			window.fetch = async (input, init) => {
 				const request = new Request(input, init);
 				const url = new URL(request.url);
+				const started = {
+					path: url.pathname,
+					acknowledged: observed.acknowledged,
+					status: null as number | null,
+				};
+				observed.started.push(started);
 				if (url.pathname.startsWith("/api/"))
 					request.signal.addEventListener(
 						"abort",
@@ -181,7 +209,25 @@ async function workbenchFixture(
 						? new Request(request, { signal: new AbortController().signal })
 						: request,
 				);
+				started.status = response.status;
 				observed.completed.push(url.pathname + url.search);
+				if (url.pathname === "/api/v1/session") {
+					// The current generated client reads text before JSON.parse.
+					// Observe that read and return its exact bytes to the consumer.
+					const text = response.text.bind(response);
+					response.text = async () => {
+						const body = await text();
+						const data = JSON.parse(body);
+						observed.sessionReads.push({
+							userId: data.user.userId,
+							roles: data.user.roles,
+							generation: response.headers.get(
+								"X-Platform-Session-Generation",
+							),
+						});
+						return body;
+					};
+				}
 				if (!url.pathname.endsWith("/events")) return response;
 				void response.body?.cancel();
 				return new Response(
@@ -251,9 +297,14 @@ async function workbenchFixture(
 								? "AUTHENTICATION_REQUIRED"
 								: continuationStatus === 403
 									? "AUTHORIZATION_REVOKED"
-									: "RESOURCE_UNAVAILABLE",
+									: continuationStatus >= 500
+										? "DEPENDENCY_UNAVAILABLE"
+										: continuationStatus === 429
+											? "PROVIDER_RATE_LIMITED"
+											: "RESOURCE_UNAVAILABLE",
 						message: "Controlled recent failure",
-						retryable: continuationStatus >= 500,
+						retryable:
+							continuationStatus === 429 || continuationStatus >= 500,
 						traceId: "controlled-recent-failure",
 					}),
 				});
@@ -279,13 +330,30 @@ async function workbenchFixture(
 			});
 		}
 		if (url.pathname.startsWith("/api/v2/admin/")) {
+			if (
+				url.pathname !== "/api/v2/admin/agents" &&
+				url.pathname !== "/api/v2/admin/agent-applications"
+			) {
+				unexpected.push(`${request.method()} ${url.pathname}`);
+				return route.abort();
+			}
 			if (holdRecent === "first" && actor.tag === "old") {
 				held.push(url.pathname);
 				await pending;
 			}
 			if (!actor.roles.includes("system_admin")) {
-				unexpected.push(`non-admin ${url.pathname}`);
-				return route.fulfill({ status: 403 });
+				// Focus can revalidate an old mounted administrator query before
+				// the new session reaches the UI. The server still rejects it.
+				return route.fulfill({
+					status: 403,
+					json: PilotProtocolErrorV1Schema.parse({
+						schemaVersion: 1,
+						code: "AUTHORIZATION_REVOKED",
+						message: "Controlled administrator authorization revoked",
+						retryable: false,
+						traceId: "controlled-admin-revalidation-denied",
+					}),
+				});
 			}
 			if (url.pathname === "/api/v2/admin/agents")
 				return route.fulfill({
@@ -381,6 +449,11 @@ async function workbenchFixture(
 		changeSession: (change: Partial<Omit<ControlledSession, "tag">>) => {
 			session = { ...session, ...change, tag: "new" };
 		},
+		sessionReceipt: () => ({
+			userId: session.userId,
+			roles: session.roles,
+			generation: session.generation,
+		}),
 	};
 }
 
@@ -485,8 +558,13 @@ test("formal root route consumes fixture recent, opens the same Conversation and
 	).toBe(true);
 	expect(
 		fixture.requests
-			.filter((request) => request.path.includes("/conversations/"))
-			.every((request) => request.path.includes("/conversation-z")),
+			.filter((request) => request.path.startsWith("/api/v2/conversations/"))
+			.every((request) =>
+				[
+					"/api/v2/conversations/conversation-z",
+					"/api/v2/conversations/conversation-z/events",
+				].includes(request.path),
+			),
 	).toBe(true);
 	expect(fixture.unexpected).toEqual([]);
 });
@@ -706,6 +784,29 @@ for (const boundary of [
 								.length,
 					)
 					.toBe(2);
+			const heldOldAdminStarts =
+				holdRecent === "first"
+					? await page.evaluate(() =>
+							(
+								window as unknown as {
+									controlledWorkbenchTransport: ControlledTransport;
+								}
+							).controlledWorkbenchTransport.started.flatMap((request, index) =>
+								request.path.startsWith("/api/v2/admin/") &&
+								request.status === null
+									? [{ index, path: request.path }]
+									: [],
+							),
+						)
+					: [];
+			if (holdRecent === "first")
+				expect(
+					heldOldAdminStarts.map((request) => request.path).sort(),
+				).toEqual(
+					fixture.held
+						.filter((path) => path.startsWith("/api/v2/admin/"))
+						.sort(),
+				);
 			await expect(
 				page.getByRole("region", { name: "需要管理员处理" }),
 			).toBeVisible();
@@ -732,6 +833,40 @@ for (const boundary of [
 					page.getByRole("navigation", { name: "系统管理", exact: true }),
 				).toHaveCount(0);
 			}
+			expect(
+				await page.evaluate(
+					() =>
+						(
+							window as unknown as {
+								controlledWorkbenchTransport: ControlledTransport;
+							}
+						).controlledWorkbenchTransport.sessionReads.at(-1),
+				),
+			).toEqual(fixture.sessionReceipt());
+			// ACK follows the observed new-session UI, rather than the server
+			// actor change or fetch completion. No query cache is touched.
+			const sessionReadsAtAcknowledgement = await page.evaluate(() => {
+				const transport = (
+					window as unknown as {
+						controlledWorkbenchTransport: ControlledTransport;
+					}
+				).controlledWorkbenchTransport;
+				transport.acknowledged = true;
+				return transport.sessionReads.length;
+			});
+			await refreshVisibleSession(page);
+			await expect
+				.poll(async () =>
+					page.evaluate(
+						() =>
+							(
+								window as unknown as {
+									controlledWorkbenchTransport: ControlledTransport;
+								}
+							).controlledWorkbenchTransport.sessionReads.length,
+					),
+				)
+				.toBe(sessionReadsAtAcknowledgement + 1);
 			await expect
 				.poll(async () =>
 					page.evaluate(
@@ -778,6 +913,23 @@ for (const boundary of [
 					),
 				)
 				.toBe(holdRecent === "first" ? 2 : 3);
+			if (holdRecent === "first")
+				await expect
+					.poll(async () =>
+						page.evaluate(
+							(indices) =>
+								indices.map(
+									(index) =>
+										(
+											window as unknown as {
+												controlledWorkbenchTransport: ControlledTransport;
+											}
+										).controlledWorkbenchTransport.started[index]?.status,
+								),
+							heldOldAdminStarts.map((request) => request.index),
+						),
+					)
+					.toEqual([200, 200]);
 			await expect(recent.getByRole("heading", { level: 3 })).toHaveText([
 				"当前身份的受控对话",
 			]);
@@ -795,14 +947,37 @@ for (const boundary of [
 					)
 					.map((request) => request.cursor),
 			).toEqual([null]);
-			if (boundary !== "login generation")
-				expect(
-					fixture.requests.some(
-						(request) =>
-							request.tag === "new" &&
+			if (boundary !== "login generation") {
+				const administratorReads = await page.evaluate(
+					() =>
+						(
+							window as unknown as {
+								controlledWorkbenchTransport: ControlledTransport;
+							}
+						).controlledWorkbenchTransport.started.filter((request) =>
 							request.path.startsWith("/api/v2/admin/"),
-					),
-				).toBe(false);
+						),
+				);
+				expect(
+					administratorReads.filter((request) => request.acknowledged),
+				).toEqual([]);
+				const revalidationReads = fixture.requests.filter(
+					(request) =>
+						request.tag === "new" &&
+						request.path.startsWith("/api/v2/admin/"),
+				);
+				if (holdRecent === "continuation")
+					expect(revalidationReads.length).toBeGreaterThan(0);
+				expect(
+					administratorReads.filter((request) => request.status === 403),
+				).toHaveLength(revalidationReads.length);
+				await expect(
+					page.getByRole("region", { name: "需要管理员处理" }),
+				).toHaveCount(0);
+				await expect(
+					page.getByRole("navigation", { name: "系统管理", exact: true }),
+				).toHaveCount(0);
+			}
 			expect(
 				fixture.requests.every((request) => request.method === "GET"),
 			).toBe(true);
