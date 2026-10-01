@@ -25,24 +25,40 @@ type Outcome = {
 async function observe<T>(
 	promise: PromiseLike<T>,
 	signal?: AbortSignal,
+	stageName?: string,
 ): Promise<Outcome> {
+	const started = performance.now();
+	if (stageName)
+		console.info(JSON.stringify({ stage: stageName, boundary: "start" }));
+	function settled(result: Outcome) {
+		if (stageName)
+			console.info(
+				JSON.stringify({
+					stage: stageName,
+					boundary: "settled",
+					elapsedMs: Math.round(performance.now() - started),
+					...result,
+				}),
+			);
+		return result;
+	}
 	try {
 		const value = await promise;
-		return {
+		return settled({
 			outcome: "resolved",
 			...(typeof value === "number" || typeof value === "boolean"
 				? { value }
 				: {}),
 			...(Array.isArray(value) ? { rowCount: value.length } : {}),
 			...(signal ? { signalAbortedAtObservation: signal.aborted } : {}),
-		};
+		});
 	} catch (error) {
 		const code = (error as { code?: unknown } | null)?.code;
-		return {
+		return settled({
 			outcome: "rejected",
 			code: typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? code : null,
 			...(signal ? { signalAbortedAtObservation: signal.aborted } : {}),
-		};
+		});
 	}
 }
 
@@ -61,11 +77,37 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 	let containerId: string | undefined;
 	let callbacks = 0;
 	let containerAbsent = false;
+	async function stage<T>(name: string, action: () => T | PromiseLike<T>) {
+		const started = performance.now();
+		let outcome = "rejected";
+		console.info(JSON.stringify({ stage: name, boundary: "start" }));
+		try {
+			const result = await action();
+			outcome = "resolved";
+			return result;
+		} finally {
+			console.info(
+				JSON.stringify({
+					stage: name,
+					boundary: "settled",
+					outcome,
+					elapsedMs: Math.round(performance.now() - started),
+				}),
+			);
+		}
+	}
+	function recordPhase(phase: Record<string, unknown>) {
+		phases.push(phase);
+		console.info(JSON.stringify(phase));
+	}
 	async function clean(resource: string, action: () => unknown) {
-		cleanup.push({
-			resource,
-			result: await observe(Promise.resolve().then(action)),
-		});
+		const result = await observe(
+			Promise.resolve().then(action),
+			undefined,
+			`cleanup_${resource}`,
+		);
+		cleanup.push({ resource, result });
+		console.info(JSON.stringify({ cleanup: resource, result }));
 	}
 
 	async function ownedContainers() {
@@ -115,13 +157,16 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 	try {
 		process.env.AO_SESSION_ID = sessionId;
 		try {
-			database = await startPostgresTestDatabase("discovery-cancel");
+			database = await stage("start_database", () =>
+				startPostgresTestDatabase("discovery-cancel"),
+			);
 		} finally {
 			if (previousSession === undefined) delete process.env.AO_SESSION_ID;
 			else process.env.AO_SESSION_ID = previousSession;
 		}
-		containerId = await identifyContainer();
-		await migratePlatformDatabase(database);
+		containerId = await stage("identify_database", identifyContainer);
+		const ownedDatabase = database;
+		await stage("migration", () => migratePlatformDatabase(ownedDatabase));
 		const sql = postgres(database.databaseUrl, { max: 1 });
 		clients.push(sql);
 		const raw = postgres(database.databaseUrl, { max: 1 });
@@ -129,8 +174,10 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 		const observer = postgres(database.databaseUrl, { max: 1 });
 		clients.push(observer);
 		store = new PostgresConversationDispatchStoreV1(database);
-		await sql.unsafe("alter system set log_error_verbosity = 'verbose'");
-		await sql`select pg_reload_conf()`;
+		await stage("configure_error_logs", () =>
+			sql.unsafe("alter system set log_error_verbosity = 'verbose'"),
+		);
+		await stage("reload_error_logs", () => sql`select pg_reload_conf()`);
 		async function blockedPid() {
 			const deadline = Date.now() + 5000;
 			while (Date.now() < deadline) {
@@ -147,26 +194,37 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 			}
 			throw new Error("Discovery did not reach PostgreSQL lock wait");
 		}
-		lock = await sql.reserve();
-		await lock.unsafe("begin");
-		await lock.unsafe(
-			"lock table platform.outbox_items in access exclusive mode",
+		lock = await stage("reserve_lock_connection", () => sql.reserve());
+		const ownedLock = lock;
+		await stage("begin_lock_transaction", () => ownedLock.unsafe("begin"));
+		await stage("acquire_table_lock", () =>
+			ownedLock.unsafe(
+				"lock table platform.outbox_items in access exclusive mode",
+			),
 		);
 
 		const query = raw`select id, operation from platform.outbox_items`;
-		const rawPending = observe(query);
-		const rawPid = await blockedPid();
+		const rawPending = observe(query, undefined, "raw_query");
+		const rawPid = await stage("raw_blocked_pid", blockedPid);
+		console.info(
+			JSON.stringify({ stage: "raw_cancel_requested", pid: rawPid }),
+		);
 		query.cancel();
 		const rawOutcome = await rawPending;
-		phases.push({ phase: "raw_cancel", pid: rawPid, result: rawOutcome });
+		recordPhase({ phase: "raw_cancel", pid: rawPid, result: rawOutcome });
 
 		const controller = new AbortController();
 		const finding = observe(
 			store.findDispatchable({ limit: 1, signal: controller.signal }),
+			undefined,
+			"store_query",
 		);
-		const storePid = await blockedPid();
+		const storePid = await stage("store_blocked_pid", blockedPid);
+		console.info(
+			JSON.stringify({ stage: "store_abort_requested", pid: storePid }),
+		);
 		controller.abort();
-		phases.push({
+		recordPhase({
 			phase: "store_cancel",
 			pid: storePid,
 			result: await finding,
@@ -174,9 +232,12 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 
 		const existingPids = new Set(
 			(
-				await observer<{ pid: number }[]>`
-				select pid from pg_stat_activity where datname = current_database()
-			`
+				await stage(
+					"existing_connections",
+					() => observer<{ pid: number }[]>`
+					select pid from pg_stat_activity where datname = current_database()
+				`,
+				)
 			).map((row) => row.pid),
 		);
 		const keys = generateKeyPairSync("ed25519");
@@ -203,13 +264,13 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 		};
 		const worker = createPlatformConversationWorkerV2(options);
 		workers.push(worker);
-		const tick = observe(worker.tick());
-		const workerPid = await blockedPid();
-		const stop = observe(worker.stop());
+		const tick = observe(worker.tick(), undefined, "worker_tick");
+		const workerPid = await stage("worker_blocked_pid", blockedPid);
+		const stop = observe(worker.stop(), undefined, "worker_stop");
 		const tickOutcome = await tick;
 		const stopOutcome = await stop;
 		closedWorkers.add(worker);
-		phases.push({
+		recordPhase({
 			phase: "worker_cancel",
 			pid: workerPid,
 			tick: tickOutcome,
@@ -222,22 +283,35 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 			signal: failureController.signal,
 		});
 		workers.push(failingWorker);
-		const failingTick = observe(failingWorker.tick(), failureController.signal);
-		const failurePid = await blockedPid();
+		const failingTick = observe(
+			failingWorker.tick(),
+			failureController.signal,
+			"fault_tick",
+		);
+		const failurePid = await stage("fault_blocked_pid", blockedPid);
 		const terminating = observe(
 			observer`select pg_terminate_backend(${failurePid}) as terminated`.then(
 				(rows) => rows[0]?.terminated === true,
 			),
+			undefined,
+			"backend_termination",
 		);
 		// Start the real query; abort and stop before consuming its failure.
 		await Promise.resolve();
+		console.info(
+			JSON.stringify({ stage: "fault_abort_requested", pid: failurePid }),
+		);
 		failureController.abort();
-		const failingStop = observe(failingWorker.stop(), failureController.signal);
+		const failingStop = observe(
+			failingWorker.stop(),
+			failureController.signal,
+			"fault_stop",
+		);
 		const failureTickOutcome = await failingTick;
 		const failureStopOutcome = await failingStop;
 		const terminationOutcome = await terminating;
 		closedWorkers.add(failingWorker);
-		phases.push({
+		recordPhase({
 			phase: "backend_termination",
 			pid: failurePid,
 			termination: terminationOutcome,
@@ -245,12 +319,15 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 			stop: failureStopOutcome,
 		});
 		const remaining = (
-			await observer<{ pid: number }[]>`
-			select pid from pg_stat_activity where datname = current_database()
-		`
+			await stage(
+				"closed_worker_connections",
+				() => observer<{ pid: number }[]>`
+				select pid from pg_stat_activity where datname = current_database()
+			`,
+			)
 		).filter((row) => !existingPids.has(row.pid)).length;
-		phases.push({ phase: "closed_worker_connections", remaining });
-		await readServerErrors();
+		recordPhase({ phase: "closed_worker_connections", remaining });
+		await stage("server_errors", readServerErrors);
 
 		expect(rawOutcome).toEqual({ outcome: "rejected", code: "57014" });
 		for (const pid of [rawPid, storePid, workerPid])
@@ -272,7 +349,11 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 		// Same contract as the production Worker's existing in-flight stop unit test.
 		expect(stopOutcome).toEqual({ outcome: "resolved" });
 		expect(tickOutcome).toEqual({ outcome: "resolved", value: 0 });
+	} catch (error) {
+		console.info(JSON.stringify({ stage: "body_fault" }));
+		throw error;
 	} finally {
+		console.info(JSON.stringify({ stage: "finally_enter" }));
 		try {
 			if (containerId) await clean("safe_logs", readServerErrors);
 			if (lock) {
@@ -293,19 +374,24 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 				const ownedDatabase = database;
 				await clean("database", () => ownedDatabase.stop());
 			}
-			const remaining = await ownedContainers();
+			const remaining = await stage(
+				"cleanup_container_readback",
+				ownedContainers,
+			);
 			// The existing helper swallows removal errors. Recover only this exact PG.
 			if (remaining.length > 0) {
 				cleanup.push({
 					resource: "helper_container_removal",
 					result: { outcome: "rejected", code: "OWNED_CONTAINER_REMAINS" },
 				});
-				const id = await identifyContainer();
+				const id = await stage("cleanup_container_identity", identifyContainer);
 				await clean("exact_container_removal", () =>
 					execFile("docker", ["rm", "--force", "--volumes", id]),
 				);
 			}
-			containerAbsent = (await ownedContainers()).length === 0;
+			containerAbsent =
+				(await stage("cleanup_container_absence", ownedContainers)).length ===
+				0;
 		} finally {
 			console.info(
 				JSON.stringify({
