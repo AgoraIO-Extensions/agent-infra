@@ -132,7 +132,7 @@ async function capture(page: Page, info: TestInfo, name: string) {
 		),
 	).toBe(true);
 	const path = info.outputPath(`${name}-${info.project.name}.png`);
-	await page.screenshot({ path });
+	await page.screenshot({ path, animations: "disabled" });
 	await info.attach(`${name} (${info.config.metadata.head})`, {
 		path,
 		contentType: "image/png",
@@ -141,6 +141,10 @@ async function capture(page: Page, info: TestInfo, name: string) {
 
 async function expectFocusedAndUnobscured(control: Locator) {
 	await expect(control).toBeFocused();
+	// Inspect the painted focus state after the existing CSS transition settles.
+	await expect
+		.poll(() => control.evaluate((element) => element.getAnimations().length))
+		.toBe(0);
 	const geometry = await control.evaluate((element) => {
 		const box = element.getBoundingClientRect();
 		const style = getComputedStyle(element);
