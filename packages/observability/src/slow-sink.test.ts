@@ -200,7 +200,7 @@ it("lets a child using the real package exit naturally after a slow export", asy
 			clearTimeout(timer);
 			reject(error);
 		});
-		child.once("exit", (code, signal) => {
+		child.once("close", (code, signal) => {
 			clearTimeout(timer);
 			resolve({ code, signal });
 		});
