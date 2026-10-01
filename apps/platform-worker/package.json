@@ -16,7 +16,9 @@
 		"@agent-infra/platform-store": "workspace:*",
 		"@agent-infra/secret-store": "workspace:*",
 		"@agent-infra/wecom": "workspace:*",
-		"@kubernetes/client-node": "2.0.0"
+		"@hono/node-server": "^2.0.12",
+		"@kubernetes/client-node": "2.0.0",
+		"hono": "^4.12.32"
 	},
 	"scripts": {
 		"build": "tsdown",
