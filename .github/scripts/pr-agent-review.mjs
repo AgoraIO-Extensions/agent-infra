@@ -478,6 +478,11 @@ export async function publishPrAgentReview(context) {
   });
   markStage(context, "target-before-post");
   await requirePrAgentTarget(context);
+  if (context.scope) {
+    markStage(context, "validate-scope");
+    const { verifyReviewScope } = await import("./pr-agent-review-scope.mjs");
+    await verifyReviewScope(context, context.scope);
+  }
   const receiptFor = (review) => ({
     headSha: expectedHead,
     runId,
@@ -510,6 +515,11 @@ export async function publishPrAgentReview(context) {
   if (existing) return existing;
   markStage(context, "target-before-post");
   await requirePrAgentTarget(context);
+  if (context.scope) {
+    markStage(context, "validate-scope");
+    const { verifyReviewScope } = await import("./pr-agent-review-scope.mjs");
+    await verifyReviewScope(context, context.scope);
+  }
   markStage(context, "post-review");
   let review;
   try {
