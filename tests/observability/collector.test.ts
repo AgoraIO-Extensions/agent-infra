@@ -157,34 +157,43 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 			expect(text).not.toContain("PRIVATE_BODY_SENTINEL");
 			expect(text).not.toContain("PRIVATE_CURSOR_SENTINEL");
 		}
-		// Sample the authoritative local outbox. No scheduler or alternate fact store.
-		const samplePending = async () => {
+		const apiResourceValue = async (kind: "task_waiting" | "outbox_pending") =>
+			metricValue(await collector.query(), "agent_platform_resource_count", {
+				service: "platform-api",
+				kind,
+			});
+		const readPending = async () => {
 			const rows =
-				await sql`select count(*)::int as count from platform.outbox_items where status = 'pending'`;
-			const value = Number(rows[0]?.count);
-			observation.observeResource({ kind: "outbox_pending", value });
+				await sql`select count(*)::int as count from platform.outbox_items where status in ('pending', 'retry_scheduled')`;
+			return Number(rows[0]?.count);
+		};
+		// The formal API process owns this sampler. Read the same authoritative
+		// Store, then wait for its process-owned gauge; do not inject a fixture.
+		const samplePending = async () => {
+			const value = await readPending();
+			await until(
+				async () => (await apiResourceValue("outbox_pending")) === value,
+			);
+			return apiResourceValue("outbox_pending");
+		};
+		const waitForApiResources = async (pending: number) => {
 			await until(
 				async () =>
-					metricValue(
-						await collector.query(),
-						"agent_platform_resource_count",
-						{ kind: "outbox_pending" },
-					) === value,
-			);
-			return metricValue(
-				await collector.query(),
-				"agent_platform_resource_count",
-				{ kind: "outbox_pending" },
+					(await apiResourceValue("task_waiting")) === 0 &&
+					(await apiResourceValue("outbox_pending")) === pending,
 			);
 		};
+		const initialPending = await readPending();
+		await waitForApiResources(initialPending);
 		const record = async (
 			phase: string,
 			serviceAvailable: boolean,
 			errors: number,
+			pendingOverride?: number,
 		) => {
 			samples.push({
 				at: Date.now(),
-				pending: await samplePending(),
+				pending: pendingOverride ?? (await samplePending()),
 				serviceAvailable,
 				errors,
 			});
@@ -271,9 +280,11 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 			() => false,
 		);
 		expect(
-			(await record("service-firing", available, 0)).serviceUnavailable,
+			(await record("service-firing", available, 0, initialPending))
+				.serviceUnavailable,
 		).toBe(true);
 		api = await startApi();
+		await waitForApiResources(initialPending);
 		expect(
 			(
 				await record(
