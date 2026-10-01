@@ -880,82 +880,88 @@ describe("assembled Workload Runtime contracts", () => {
 			const state = f.state;
 			if (!state) throw new Error();
 			if (driver !== "codex") {
-				const before = structuredClone([...f.resources.entries()]);
-				const changed = createKubernetesRuntimeAdapterV1({
-					client: f.client,
-					policy: f.options.policy,
-					modelProjection: validateRuntimeModelProjectionV1(
-						state.candidate.modelProjection,
-					),
-					standardTemplateBinding: {
-						templateId: configuration.source.templateId,
-						imageDigest: configuration.source.imageDigest,
-						driver: driver === "claude" ? "acp" : "claude",
-						protocol: "anthropic-messages-v1",
-					},
-					probe: async () => true,
-				});
-				assert(state.identity);
-				const desired = validateAgentWorkloadDesiredV1({
-					...validateAgentWorkloadDesiredV1(state.candidate.deployment),
-					expectedWorkload: {
-						state: "present",
-						workloadUid: state.identity.uid,
-						workloadGeneration: state.identity.generation,
-					},
-				});
-				await expect(changed.apply(desired)).rejects.toMatchObject({
-					code: "conflict",
-				});
-				expect([...f.resources.entries()]).toEqual(before);
-				const credentialRef = validateAgentWorkloadDesiredV1(
-					state.candidate.deployment,
-				).secretRefs[0];
-				assert(credentialRef);
-				f.resources.delete(`Secret/${credentialRef.name}`);
-				const beforeMaterialization = structuredClone([
-					...f.resources.entries(),
-				]);
-				const decrypt = vi.fn(f.options.decryptor.decrypt);
-				const source = configuration.source;
-				const changedRuntime = createWorkloadRuntimeV1({
-					...f.options,
-					decryptor: { decrypt },
-					templateModelBindings: f.options.templateModelBindings.map(
-						(binding) =>
-							binding.templateId === source.templateId &&
-							binding.imageDigest === source.imageDigest
-								? {
-										...binding,
-										driver:
-											driver === "claude"
-												? ("acp" as const)
-												: ("claude" as const),
-									}
-								: binding,
-					),
-				});
-				await expect(
-					changedRuntime.apply(state, false, {
-						configuration: state.candidate.configuration,
-						state,
-						management: f.management,
-						requestId: "request-a",
-						traceId: "trace-a",
-						secrets: {
-							bindings: records.map((record) => ({
-								materialization: "current",
-								record,
-							})),
-							store: secretCleanupStore(records[0]).store,
-							async auditDecryption() {},
+				for (const imageRepository of [
+					f.options.policy.imageRepository,
+					"migrated.example.test/agent-runtime",
+				]) {
+					const before = structuredClone([...f.resources.entries()]);
+					const changed = createKubernetesRuntimeAdapterV1({
+						client: f.client,
+						policy: { ...f.options.policy, imageRepository },
+						modelProjection: validateRuntimeModelProjectionV1(
+							state.candidate.modelProjection,
+						),
+						standardTemplateBinding: {
+							templateId: configuration.source.templateId,
+							imageDigest: configuration.source.imageDigest,
+							driver: driver === "claude" ? "acp" : "claude",
+							protocol: "anthropic-messages-v1",
 						},
-					}),
-				).rejects.toMatchObject({ code: "conflict" });
-				expect(decrypt).not.toHaveBeenCalled();
-				expect([...f.resources.entries()]).toEqual(beforeMaterialization);
-				f.resources.clear();
-				for (const [key, resource] of before) f.resources.set(key, resource);
+						probe: async () => true,
+					});
+					assert(state.identity);
+					const desired = validateAgentWorkloadDesiredV1({
+						...validateAgentWorkloadDesiredV1(state.candidate.deployment),
+						expectedWorkload: {
+							state: "present",
+							workloadUid: state.identity.uid,
+							workloadGeneration: state.identity.generation,
+						},
+					});
+					await expect(changed.apply(desired)).rejects.toMatchObject({
+						code: "conflict",
+					});
+					expect([...f.resources.entries()]).toEqual(before);
+					const credentialRef = validateAgentWorkloadDesiredV1(
+						state.candidate.deployment,
+					).secretRefs[0];
+					assert(credentialRef);
+					f.resources.delete(`Secret/${credentialRef.name}`);
+					const beforeMaterialization = structuredClone([
+						...f.resources.entries(),
+					]);
+					const decrypt = vi.fn(f.options.decryptor.decrypt);
+					const source = configuration.source;
+					const changedRuntime = createWorkloadRuntimeV1({
+						...f.options,
+						policy: { ...f.options.policy, imageRepository },
+						decryptor: { decrypt },
+						templateModelBindings: f.options.templateModelBindings.map(
+							(binding) =>
+								binding.templateId === source.templateId &&
+								binding.imageDigest === source.imageDigest
+									? {
+											...binding,
+											driver:
+												driver === "claude"
+													? ("acp" as const)
+													: ("claude" as const),
+										}
+									: binding,
+						),
+					});
+					await expect(
+						changedRuntime.apply(state, false, {
+							configuration: state.candidate.configuration,
+							state,
+							management: f.management,
+							requestId: "request-a",
+							traceId: "trace-a",
+							secrets: {
+								bindings: records.map((record) => ({
+									materialization: "current",
+									record,
+								})),
+								store: secretCleanupStore(records[0]).store,
+								async auditDecryption() {},
+							},
+						}),
+					).rejects.toMatchObject({ code: "conflict" });
+					expect(decrypt).not.toHaveBeenCalled();
+					expect([...f.resources.entries()]).toEqual(beforeMaterialization);
+					f.resources.clear();
+					for (const [key, resource] of before) f.resources.set(key, resource);
+				}
 			}
 			const runtime = createWorkloadRuntimeV1(f.options);
 			for (const name of [

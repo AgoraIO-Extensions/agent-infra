@@ -182,7 +182,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		const previousDriver = previousDrivers[0];
 		// A deployment edit cannot silently retarget the same admitted image.
 		if (
-			container?.image === `${policy.imageRepository}@${value.imageDigest}` &&
+			container?.image?.endsWith(`@${value.imageDigest}`) &&
 			previousDriver &&
 			(previousDrivers.length !== 1 ||
 				previousDriver.valueFrom !== undefined ||

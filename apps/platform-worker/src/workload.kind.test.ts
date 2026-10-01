@@ -13,7 +13,10 @@ import {
 	runtimeModelInjectionV1,
 	validateRuntimeModelProjectionV1,
 } from "@agent-infra/model-catalog";
-import type { WorkloadReconciliationStateV1 } from "@agent-infra/platform-core";
+import type {
+	AgentConfigurationRecordV2,
+	WorkloadReconciliationStateV1,
+} from "@agent-infra/platform-core";
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 import {
 	KubeConfig,
@@ -25,7 +28,6 @@ import {
 import postgres from "postgres";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parseAllDocuments } from "yaml";
-import { agentConfigurationConformanceRecordV1 } from "../../../packages/platform-core/src/agent-configuration.conformance.ts";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
 import {
@@ -835,12 +837,14 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						plaintext: modelCredential,
 						occurredAt: new Date().toISOString(),
 					});
-					const configuration = {
-						...structuredClone(agentConfigurationConformanceRecordV1),
+					const configuration: AgentConfigurationRecordV2 = {
+						schemaVersion: 2,
 						agentId,
 						revision: 1,
 						environment: [],
 						secrets: [],
+						channels: [],
+						channelRevision: "channels_1",
 						source: {
 							kind: "standard",
 							templateId: "formal-pi",
