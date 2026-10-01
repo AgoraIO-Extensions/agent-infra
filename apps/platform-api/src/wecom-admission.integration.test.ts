@@ -164,7 +164,7 @@ async function facts(agentId: string) {
 		conversationAudit:
 			await tx`select to_jsonb(a) as fact from platform.conversation_audit_events a where a.agent_id=${agentId} order by a.id`,
 		idempotency:
-			await tx`select to_jsonb(i) as fact from platform.idempotency_records i join platform.conversations c on c.id=i.result->>'conversationId' where c.agent_id=${agentId} order by i.id`,
+			await tx`select to_jsonb(i) as fact from platform.idempotency_records i join platform.conversations c on (i.scope_type='agent' and i.command_type='conversation.create' and c.id=i.result->>'conversationId') or (i.scope_type='conversation' and i.command_type='message' and c.id=i.scope_id) where c.agent_id=${agentId} and i.actor_id=c.actor_id order by i.id`,
 		audit:
 			await tx`select to_jsonb(a) as fact from platform.audit_events a where a.agent_id=${agentId} and a.action='wecom.accepted' order by a.id`,
 	}));
@@ -262,7 +262,7 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 			union all select 'authority',a.xmin::text from platform.task_authorization_records a join platform.conversation_executions e on e.execution_id=a.execution_id where e.agent_id=${f.config.agentId}
 			union all select 'outbox',o.xmin::text from platform.outbox_items o join platform.conversation_executions e on e.execution_id=o.payload->>'executionId' where e.agent_id=${f.config.agentId}
 			union all select 'conversation-audit',a.xmin::text from platform.conversation_audit_events a where a.agent_id=${f.config.agentId}
-			union all select 'idempotency',i.xmin::text from platform.idempotency_records i join platform.conversations c on c.id=i.result->>'conversationId' where c.agent_id=${f.config.agentId}
+			union all select 'idempotency',i.xmin::text from platform.idempotency_records i join platform.conversations c on (i.scope_type='agent' and i.command_type='conversation.create' and c.id=i.result->>'conversationId') or (i.scope_type='conversation' and i.command_type='message' and c.id=i.scope_id) where c.agent_id=${f.config.agentId} and i.actor_id=c.actor_id
 			union all select 'audit',a.xmin::text from platform.audit_events a where a.agent_id=${f.config.agentId} and a.action='wecom.accepted'`;
 		expect(versions.map((v) => v.kind).sort()).toEqual([
 			"audit",
