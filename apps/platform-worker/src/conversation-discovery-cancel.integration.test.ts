@@ -1,5 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { createConnection, createServer, type Socket } from "node:net";
 import { promisify } from "node:util";
 import {
 	PostgresConversationDispatchStoreV1,
@@ -28,6 +30,96 @@ type Outcome = {
 };
 
 afterEach(() => vi.restoreAllMocks());
+
+// Hold only the real target CancelRequest; query and server bytes stay untouched.
+async function pendingCancelTransport(databaseUrl: string) {
+	const target = new URL(databaseUrl);
+	const sockets = new Set<Socket>();
+	const pending = Promise.withResolvers<void>();
+	void pending.promise.catch(() => {});
+	let targetPid: number | undefined;
+	const held: (() => void)[] = [];
+	function release() {
+		targetPid = undefined;
+		for (const forward of held.splice(0)) forward();
+	}
+	const server = createServer((client) => {
+		const upstream = createConnection({
+			host: target.hostname,
+			port: Number(target.port),
+		});
+		for (const socket of [client, upstream]) {
+			sockets.add(socket);
+			socket.on("close", () => sockets.delete(socket));
+		}
+		client.on("error", () => upstream.destroy());
+		upstream.on("error", () => client.destroy());
+		client.on("end", () => upstream.end());
+		upstream.pipe(client);
+		let initial = true;
+		let buffer: Buffer = Buffer.alloc(0);
+		client.on("data", (chunk) => {
+			if (!initial) {
+				upstream.write(chunk);
+				return;
+			}
+			buffer = Buffer.concat([buffer, chunk]);
+			if (buffer.length < 8) return;
+			const cancel =
+				buffer.readUInt32BE(0) === 16 && buffer.readUInt32BE(4) === 80877102;
+			if (cancel && buffer.length < 16) return;
+			initial = false;
+			if (!cancel || buffer.readUInt32BE(8) !== targetPid) {
+				upstream.write(buffer);
+				return;
+			}
+			client.pause();
+			held.push(() => {
+				upstream.write(buffer);
+				client.resume();
+			});
+			pending.resolve();
+		});
+	});
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", resolve);
+	});
+	const address = server.address();
+	if (!address || typeof address === "string")
+		throw new Error("Missing owned cancellation transport address");
+	const forwarded = new URL(databaseUrl);
+	forwarded.port = String(address.port);
+	return {
+		databaseUrl: forwarded.toString(),
+		arm: (pid: number) => {
+			targetPid = pid;
+		},
+		pending: () => {
+			const timer = setTimeout(
+				() => pending.reject(new Error("Target CancelRequest did not arrive")),
+				5000,
+			);
+			return pending.promise.finally(() => clearTimeout(timer));
+		},
+		release,
+		close: async () => {
+			release();
+			const closing = [...sockets].map((socket) => {
+				const closed = once(socket, "close");
+				socket.destroy();
+				return closed;
+			});
+			try {
+				await Promise.all(closing);
+			} finally {
+				await new Promise<void>((resolve, reject) =>
+					server.close((error) => (error ? reject(error) : resolve())),
+				);
+			}
+		},
+	};
+}
 
 async function observe<T>(
 	promise: PromiseLike<T>,
@@ -82,6 +174,9 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 	let store: PostgresConversationDispatchStoreV1 | undefined;
 	let lock: Awaited<ReturnType<Client["reserve"]>> | undefined;
 	let containerId: string | undefined;
+	let cancelTransport:
+		| Awaited<ReturnType<typeof pendingCancelTransport>>
+		| undefined;
 	let callbacks = 0;
 	let containerAbsent = false;
 	async function stage<T>(name: string, action: () => T | PromiseLike<T>) {
@@ -297,9 +392,22 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 			stop: stopOutcome,
 		});
 
+		const [terminationCapability] = await observer<
+			{ version: number; timeout_supported: boolean }[]
+		>`select current_setting('server_version_num')::integer as version,
+			to_regprocedure('pg_catalog.pg_terminate_backend(integer,bigint)') is not null as timeout_supported`;
+		recordPhase({
+			phase: "backend_termination_capability",
+			version: terminationCapability?.version,
+			timeoutSupported: terminationCapability?.timeout_supported,
+		});
+		expect(terminationCapability?.timeout_supported).toBe(true);
+		cancelTransport = await pendingCancelTransport(database.databaseUrl);
+		const ownedCancelTransport = cancelTransport;
 		const failureController = new AbortController();
 		const failingWorker = createPlatformConversationWorkerV2({
 			...options,
+			databaseUrl: ownedCancelTransport.databaseUrl,
 			signal: failureController.signal,
 		});
 		workers.push(failingWorker);
@@ -309,15 +417,7 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 			"fault_tick",
 		);
 		const failurePid = await stage("fault_blocked_pid", blockedPid);
-		const terminating = observe(
-			observer`select pg_terminate_backend(${failurePid}) as terminated`.then(
-				(rows) => rows[0]?.terminated === true,
-			),
-			undefined,
-			"backend_termination",
-		);
-		// Start the real query; abort and stop before consuming its failure.
-		await Promise.resolve();
+		ownedCancelTransport.arm(failurePid);
 		console.info(
 			JSON.stringify({ stage: "fault_abort_requested", pid: failurePid }),
 		);
@@ -327,14 +427,29 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 			failureController.signal,
 			"fault_stop",
 		);
+		await stage("fault_cancel_held", ownedCancelTransport.pending);
+		const terminationOutcome = await observe(
+			observer`select pg_terminate_backend(${failurePid}, 5000) as terminated`.then(
+				(rows) => rows[0]?.terminated === true,
+			),
+			undefined,
+			"backend_termination",
+		);
+		if (terminationOutcome.outcome !== "resolved" || !terminationOutcome.value)
+			throw new Error("Owned backend termination was not confirmed");
+		const [backend] = await observer<{ absent: boolean }[]>`
+			select not exists(select 1 from pg_stat_activity where pid = ${failurePid}) as absent
+		`;
+		expect(backend?.absent).toBe(true);
+		ownedCancelTransport.release();
 		const failureTickOutcome = await failingTick;
 		const failureStopOutcome = await failingStop;
-		const terminationOutcome = await terminating;
 		closedWorkers.add(failingWorker);
 		recordPhase({
 			phase: "backend_termination",
 			pid: failurePid,
 			termination: terminationOutcome,
+			backendAbsent: backend?.absent,
 			tick: failureTickOutcome,
 			stop: failureStopOutcome,
 		});
@@ -374,6 +489,7 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 		throw error;
 	} finally {
 		console.info(JSON.stringify({ stage: "finally_enter" }));
+		cancelTransport?.release();
 		try {
 			if (containerId) await clean("safe_logs", readServerErrors);
 			if (lock) {
@@ -390,6 +506,10 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 			}
 			for (const client of clients)
 				await clean("client", () => client.end({ timeout: 5 }));
+			if (cancelTransport) {
+				const ownedCancelTransport = cancelTransport;
+				await clean("cancel_transport", () => ownedCancelTransport.close());
+			}
 			if (database) {
 				const ownedDatabase = database;
 				await clean("database", () => ownedDatabase.stop());
