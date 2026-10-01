@@ -94,7 +94,7 @@ export class PostgresWecomChannelV1
 		this.#cancelSql = postgres(options.databaseUrl, {
 			max: 1,
 			connect_timeout: 1,
-			connection: { statement_timeout: "1000" },
+			connection: { statement_timeout: 1000 },
 		});
 		this.#management = new PostgresAgentManagementTransactionV1(options);
 	}
