@@ -394,6 +394,56 @@ Workload revision、fence、镜像 Digest 和 `readiness.read` 用途。Host 同
 提交检查结果，迟到结果不能激活其他候选。该边界见
 [ADR: 独立的 Workload 就绪授权](../adr/0010-separate-workload-readiness-authorization.md)。
 
+#### 9.3.1 原生元数据读取授权
+
+原生命令状态、命令目录和已安装 Skill 目录使用独立版本化读取用途 `native_metadata_read`，
+每次读取固定一个 `status | commands | skills` selector。该用途只授权原已持久会话的获准
+元数据，不授予正文、附件、模型、工具、压缩、Turn、控制、恢复、事件回放或 Connection
+权限；business、control、recovery 和 readiness 的许可不能转换成用户读取许可。
+
+`platform-api` 从本次受认证请求重新解析当前主体和适用凭证，Core 按当前读取政策检查
+主体状态、Platform 禁用、对应 Agent/渠道权限及持久提交归属。Web 沿原用户读取规则；
+API/应用仅在其当前读取与实际所用凭证合同已接入时启用，不能外推 Web 或任务受理结果。
+Owner、管理员或服务身份不替代对应读取权。终态或暂不可执行业务的原执行仍按读取政策
+判断，不借业务租约、readiness 或原控制权限放行。
+
+原范围由服务端持久记录解析，绑定主体、Agent、channel、Conversation、原 Execution、
+该 Execution 的 sessionGeneration 和 authorizationRevision。Worker/Host 再核唯一的
+原持久 Host/Driver/native 与配置绑定，以不透明 `originalHostScopeRef` 关联；当前会话代次、
+当前 Agent 配置和模型配置修订不能替代原执行的 Host 配置。调用方不得提交或覆盖主体、
+代次、Host/native ref、thread、配置、路径或任意 RPC。范围或原映射无法唯一确认时拒绝。
+
+读取证明是独立版本化数据，绑定读取用途与 selector、可信 issuer、专用 RuntimeHost
+metadata audience、keyVersion、issuedAt/expiresAt、唯一 readId、上述原范围和
+originalHostScopeRef。API/Core 先完成当前授权及原范围确认，再由唯一投递方 Worker
+沿受认证内部链生成并投递证明；Host 校验部署服务身份、签名与所有绑定。证明不含原始
+凭证、正文、函数或 native 路径；服务身份、readId、证明未过期和修订相等都不能单独授权。
+实际 wire 的版本及字段由读取 producer/consumer 的实现 primary 固定，不扩用旧 Grant
+用途或兼容回退。
+
+本次 operation 使用可信服务器时钟，固定期限不晚于读取起点后 30 秒、可信上游 deadline
+及适用且已知的会话/凭证绝对到期时间，取最早值；调用方不能指定或续长。浏览器认证源
+未暴露绝对到期时间时，不补造该字段，每次重验原请求的当前会话有效性；API 凭证须逐次
+核真实到期、撤销、范围与主体，缺合同不启用。30 秒是资源上限，不是授权缓存或撤权宽限。
+
+API 在原请求存续且等待此次 Worker 读取期间登记有界 request-local readId 与认证来源；
+该关联只允许受认证 Worker/Host 链按同一 selector 和原范围请求当前确认，引用本身不授权。
+每次确认重新核当前认证、Core 政策与同一持久原范围，不使用 initial allowed 或旧 revision
+闭包。API→Worker→Host→Driver 保持原单向投递；Host 的异步确认沿受认证内部链回到该
+请求关联，不直接查询 Platform DB 或 IdentityAdapter，不向 Runtime 传用户原始凭证。
+
+Host 将原请求取消、固定 deadline、本机生命周期及当前确认失败合并为读取 signal；
+同步护栏只核本机已确认状态、deadline、abort 与原持久绑定，异步重验另显式等待。
+在各相关 await 后和结果返回前重新确认；API 也须在写出任何响应 bytes 前重验原请求及
+同一原范围。明确无权、认证失效、范围/配置/进程变化、期限、abort 或依赖无法确认时，
+丢弃结果并使该 context 永久失效，不返回旧结果或伪空目录。请求结束、issuer/Worker/Host
+重启或关联丢失时不恢复旧 context；新的读取须重新认证。该方案不宣称存在即时撤权 feed。
+
+读取不新建业务 Execution、Session 或 Turn，不恢复业务、不写 recovery latch、fence、Key
+或任务状态，不推进 successor。纯原绑定断言独立于旧业务、控制及 evidence-query latch；
+目录不授权后续执行。内部 ref、正文、路径、原始证明和凭证不进入公开投影、审计或遥测。
+具体 Host/Driver 生命周期见 [Runtime HLD §5.2](HLD-agent-runtime-M1.md#52-调用生命周期与兼容)。
+
 ## 10. Agent Workload 与调谐
 
 ### 10.1 Workload 形态
