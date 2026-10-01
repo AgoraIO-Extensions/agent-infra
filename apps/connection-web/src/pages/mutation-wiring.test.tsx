@@ -1230,11 +1230,11 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(screen.queryByRole("button", { name: "使用现有凭证" })).toBeNull();
 	});
 
-	it("DataLego OAuth 试验获批后走 SSO，不复用旧 Cookie 凭证", async () => {
+	it("DataLego 原始连接链接获批后走 SSO，不复用旧 Cookie 凭证", async () => {
 		window.history.replaceState(
 			{},
 			"",
-			"/connection/connections?provider=datalego-oauth-pilot&intent=connect&accessRequestId=request-approved",
+			"/connection/connections?provider=datalego&intent=connect&accessRequestId=request-approved",
 		);
 		renderPage(<ConnectionsPage />);
 		await waitFor(() => expect(api.startDatalegoOAuth).toHaveBeenCalledOnce());
@@ -1243,6 +1243,32 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 		expect(api.connectProviderCredential).not.toHaveBeenCalled();
 		expect(api.upgradeApprovedConnection).not.toHaveBeenCalled();
+		expect(
+			screen.queryByRole("button", { name: /DataLego OAuth 试验/ }),
+		).toBeNull();
+	});
+
+	it("DataLego OAuth 启动中显示进度，失败后显示错误而非静默", async () => {
+		let rejectStart: ((error: Error) => void) | undefined;
+		api.startDatalegoOAuth.mockImplementationOnce(
+			() =>
+				new Promise((_, reject) => {
+					rejectStart = reject;
+				}),
+		);
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=datalego&intent=connect&accessRequestId=request-approved",
+		);
+		renderPage(<ConnectionsPage />);
+		expect(await screen.findByText("正在前往 DataLego 授权页面…")).toBeTruthy();
+		await act(async () => {
+			rejectStart?.(new Error("OAuth 暂不可用"));
+		});
+		expect(await screen.findByRole("alert")).toBeTruthy();
+		expect(api.startDatalegoOAuth).toHaveBeenCalledOnce();
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
 	});
 
 	it("新凭证连接完成后不因账号列表刷新重新打开窗口或复用已消费申请", async () => {
@@ -1764,30 +1790,25 @@ describe("Connection 管理 mutation wiring", () => {
 			await screen.findByRole("button", { name: "DataLego 未连接" }),
 		);
 		fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
-		await waitFor(() =>
-			expect(api.reauthorizeProviderConnection).toHaveBeenCalledOnce(),
-		);
-		expect(calls(api.reauthorizeProviderConnection)[0]?.[0]).toEqual({
-			connectionId: "connection-datalego-old",
-			body: { providerId: "datalego" },
+		await waitFor(() => expect(api.startDatalegoOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startDatalegoOAuth)[0]?.[0]).toEqual({
+			reconnectConnectionId: "connection-datalego-old",
 		});
 		expect(api.connectProviderCredential).not.toHaveBeenCalled();
 	});
 
-	it("连接页使用浏览器会话调用 DataLego credential API", async () => {
+	it("连接页手动 DataLego 连接也调用 OAuth，不再提交 Cookie 凭证", async () => {
 		approvedFor("datalego");
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("button", { name: "DataLego 未连接" });
 
 		fireEvent.click(screen.getByRole("button", { name: "DataLego 未连接" }));
 		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
-		await waitFor(() =>
-			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
-		);
-		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
-			providerId: "datalego",
+		await waitFor(() => expect(api.startDatalegoOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startDatalegoOAuth)[0]?.[0]).toEqual({
 			accessRequestId: "request-approved",
 		});
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
 	});
 
 	it.each(["datalego", "manhattan"])(

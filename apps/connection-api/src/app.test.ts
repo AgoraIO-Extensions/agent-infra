@@ -2801,7 +2801,7 @@ describe("Connection API", () => {
 				providerRedirectUris: {
 					manhattan:
 						"https://connection.example/oauth/callback?provider=manhattan",
-					"datalego-oauth-pilot":
+					datalego:
 						"https://connection.example/oauth/callback?provider=datalego",
 				},
 				service: management,
@@ -2973,7 +2973,7 @@ describe("Connection API", () => {
 			}),
 		];
 		expect(apiResponses.map(({ status }) => status)).toEqual([
-			200, 201, 201, 201, 201, 201, 200, 201, 204, 204, 201,
+			200, 201, 201, 201, 201, 201, 200, 201, 204, 204, 400,
 		]);
 		expect(await apiResponses[0]?.json()).toEqual({
 			authorizationUrl: "https://github.test/login/oauth/authorize",
@@ -2997,8 +2997,8 @@ describe("Connection API", () => {
 		expect(await apiResponses[6]?.json()).toEqual({
 			connectionId: "connection-old",
 		});
-		expect(await apiResponses[10]?.json()).toEqual({
-			connectionId: "connection-datalego",
+		expect(await apiResponses[10]?.json()).toMatchObject({
+			error: { code: "INVALID_REQUEST" },
 		});
 		expect(calls).toEqual([
 			{
@@ -3072,13 +3072,6 @@ describe("Connection API", () => {
 					principalId: "principal-user",
 				},
 			},
-			{
-				name: "connect-datalego",
-				value: {
-					principalId: "principal-user",
-					providerId: "datalego",
-				},
-			},
 		]);
 		const manhattanStart = await app.request(
 			"/api/v1/connection/oauth-transactions",
@@ -3147,7 +3140,7 @@ describe("Connection API", () => {
 					"idempotency-key": "datalego-oauth-start",
 				},
 				body: JSON.stringify({
-					providerId: "datalego-oauth-pilot",
+					providerId: "datalego",
 					accessRequestId: "approved-request",
 				}),
 			},
@@ -3158,7 +3151,7 @@ describe("Connection API", () => {
 		expect(datalegoCookie).toBe("connection_datalego_oauth_state=opaque-state");
 		expect(calls.at(-1)).toMatchObject({
 			value: {
-				providerId: "datalego-oauth-pilot",
+				providerId: "datalego",
 				redirectUri:
 					"https://connection.example/oauth/callback?provider=datalego",
 			},
@@ -3171,7 +3164,7 @@ describe("Connection API", () => {
 			},
 		);
 		expect(rejectedDatalegoCallback.headers.get("location")).toContain(
-			"callback_failed&provider=datalego-oauth-pilot",
+			"callback_failed&provider=datalego",
 		);
 		const datalegoCallback = await app.request(
 			"/oauth/callback?provider=datalego&code=one-time-code&state=opaque-state",
@@ -3186,7 +3179,7 @@ describe("Connection API", () => {
 		expect(calls.at(-1)).toEqual({
 			name: "provider-callback",
 			value: {
-				providerId: "datalego-oauth-pilot",
+				providerId: "datalego",
 				code: "one-time-code",
 				state: "opaque-state",
 			},

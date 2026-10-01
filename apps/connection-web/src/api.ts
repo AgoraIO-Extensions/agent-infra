@@ -713,7 +713,7 @@ export const connectionApi = {
 			startGithubOAuth({
 				body: parseClientInput(
 					oauthTransactionRequestSchema,
-					{ providerId: "datalego-oauth-pilot", ...input },
+					{ providerId: "datalego", ...input },
 					"DataLego 授权请求无效",
 				),
 				headers: commandHeaders(),

@@ -230,18 +230,23 @@ LDAP 密码或客户端 Token 输入。
 身份校验发生一次受控 refresh 时，Adapter 必须把实际验证成功的新 session 写入 Credential envelope，
 并以 `datalego-connection-v3` 与 `@v3` ActionVersion 发布；不得修改已发布的 v2 catalog。
 
-DataLego authorization-code 采用独立的 `datalego-oauth-pilot` Provider 受监督验证，不修改或自动迁移
-`datalego-connection-v3`、现有 Credential 与 Grant。其 confidential client 固定使用已登记的
-`https://agent-connector.gz3.agoralab.co/oauth/callback?provider=datalego`；callback 的 `datalego`
-仅作为固定入口别名映射到 `datalego-oauth-pilot` transaction，state 必须与该 Provider 精确匹配，
-不能接受任意 redirect URI。OAuth 端点采用与 Manhattan 相同的 legacy confidential-client Basic
-认证，不宣称该端点支持 PKCE。Connection 使用一次性 state 与服务端 code exchange，只有 OAuth
-`/api/v2/userInfo` 返回稳定 email、且相同个人 access token 对 DataLego 固定不存在 job 的 status READ
-探针返回 HTTP 400 且 JSON `message` 精确为 `record not found` 时，才建立加密的个人 OAuth Credential。只发布
-`datalego-oauth-pilot.get_current_user@v1` READ Action；不发布查询、提交、取消或任意请求 Action。
-refresh token 使用现有 Connection CredentialVersion CAS 与失效处理，不回退 Grafana 或机器人身份；
-机器 client secret 仅从部署 Secret 注入。DataLego 正式 v4 的动作集合、旧 Grant 迁移与页面入口须待
-真实授权码和 Provider READ 验收后另行批准。
+DataLego 正式入口统一使用 `datalego` Provider 的 `datalego-connection-v4`，新连接与重连采用
+authorization-code，不再收集 HCI Cookie 或访问 Grafana。v1–v3 是历史 Credential 契约，不修改其
+catalog、Credential 或 Grant；试验 Provider 停用并保留历史记录，不能自动映射其凭据或授权到
+正式 Provider。v4 保留上述四个有界动作的名称与 effect，发布独立 `@v4` ActionVersion；提交和
+取消仍为 WRITE，必须由批准的能力档案和 Consumer Grant 明确授权。版本升级遵循 30.0，旧申请
+或账号的版本、scope、身份或审批不匹配时要求重新申请/连接，不放宽准入门禁。
+
+其 confidential client 使用已登记的
+`https://agent-connector.gz3.agoralab.co/oauth/callback?provider=datalego`，一次性 transaction/state
+与 `datalego` 精确绑定，不能接受任意 redirect URI。OAuth 端点采用与 Manhattan 相同的 legacy
+confidential-client Basic 认证，不宣称支持 PKCE。只有 OAuth `/api/v2/userInfo` 返回稳定 email，
+且同一个人 access token 对固定不存在 job 的 status READ 探针返回 HTTP 400、JSON `message`
+精确为 `record not found` 时，才建立加密 OAuth Credential。执行仍通过 `accessToken` Header 调用
+固定业务路径，查询 creator 仅来自服务端验证的个人身份。refresh token 使用现有 CredentialVersion
+CAS 和失效处理，不回退 Grafana、机器人身份或密码；业务 WRITE 不由 Adapter 自动刷新重放。
+机器 client secret 仅从部署 Secret 注入。正式上线验收仍须完成真实授权码、个人身份与有界 READ，
+代码测试不替代真实 Provider 验收。
 
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
