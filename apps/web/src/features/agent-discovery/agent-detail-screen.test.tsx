@@ -23,10 +23,10 @@ describe("AgentDetailScreen", () => {
 		const chat = screen.getByRole("link", { name: "开始对话" });
 		const history = screen.getByRole("link", { name: "个人历史" });
 		expect(chat.getAttribute("href")).toBe(
-			"/agents/agent%3Atenant%2F01%3Fdraft%23one%25/conversations",
+			"/chat/agent%3Atenant%2F01%3Fdraft%23one%25",
 		);
 		expect(history.getAttribute("href")).toBe(
-			"/agents/agent%3Atenant%2F01%3Fdraft%23one%25/conversations?view=history",
+			"/chat/agent%3Atenant%2F01%3Fdraft%23one%25?view=history",
 		);
 	});
 	it("preserves the history entry but disables new conversations while unavailable", async () => {

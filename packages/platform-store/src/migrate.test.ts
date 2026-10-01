@@ -1,10 +1,21 @@
+import { createHash } from "node:crypto";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
 import { createAgentManagementV1 } from "@agent-infra/platform-core";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+} from "vitest";
 
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
@@ -1280,4 +1291,361 @@ describe("Platform PostgreSQL migration foundation", () => {
 			await upgradeDatabase.stop();
 		}
 	}, 120_000);
+});
+
+const retained = JSON.parse(
+	await readFile(
+		new URL("../test/fixtures/task28-source-checkpoint.json", import.meta.url),
+		"utf8",
+	),
+) as {
+	sourceTail: {
+		idx: number;
+		when: number;
+		tag: string;
+		sqlSHA256: string;
+	}[];
+};
+
+// These SQL files are the immutable frozen migration source, not a deployment
+// export. Publication into a temporary journal is confined to this test DB.
+describe("approved Platform migration gaps", () => {
+	let client: PostgresClient;
+	let folder: string;
+	let journal: {
+		entries: {
+			idx: number;
+			when: number;
+			tag: string;
+			version: string;
+			breakpoints: boolean;
+		}[];
+	};
+	const history = () =>
+		client`select id, hash, created_at from platform_migrations.history order by id`;
+	const records = async () => ({
+		disables: [
+			...(await client`select to_jsonb(t)::text as record from platform.platform_user_disables t order by user_id`),
+		],
+		conversations: [
+			...(await client`select to_jsonb(t)::text as record from platform.conversations t order by id`),
+		],
+		executions: [
+			...(await client`select to_jsonb(t)::text as record from platform.conversation_executions t order by execution_id`),
+		],
+		events: [
+			...(await client`select to_jsonb(t)::text as record from platform.conversation_events t order by event_id`),
+		],
+		idempotency: [
+			...(await client`select to_jsonb(t)::text as record from platform.idempotency_records t order by id`),
+		],
+	});
+
+	async function publish(indices: number[]) {
+		for (const source of retained.sourceTail.filter((row) =>
+			indices.includes(row.idx),
+		)) {
+			const sql = await readFile(
+				new URL(`../test/fixtures/${source.tag}.sql`, import.meta.url),
+				"utf8",
+			);
+			expect(createHash("sha256").update(sql).digest("hex")).toBe(
+				source.sqlSHA256,
+			);
+			await writeFile(resolve(folder, `${source.tag}.sql`), sql);
+			journal.entries.push({
+				idx: source.idx,
+				when: source.when,
+				tag: source.tag,
+				version: "7",
+				breakpoints: true,
+			});
+		}
+		journal.entries.sort((a, b) => a.idx - b.idx);
+		await writeFile(
+			resolve(folder, "meta/_journal.json"),
+			JSON.stringify(journal),
+		);
+	}
+
+	async function seedConversation() {
+		await client`insert into platform.conversations
+			(id, agent_id, actor_id, channel_id, status, session_generation,
+				host_session_ref, authorization_revision, last_conversation_cursor)
+			values ('gap-conversation', 'gap-agent', 'gap-actor', 'web', 'ready', 3,
+				'original-gap-session', 'gap-revision', 1)`;
+		await client`insert into platform.conversation_executions
+			(execution_id, conversation_id, agent_id, actor_id, channel_id,
+				turn_id, status, session_generation, delivery_fence, authorization_revision,
+				last_event_sequence, last_runtime_cursor, created_at)
+			values ('gap-execution', 'gap-conversation', 'gap-agent', 'gap-actor',
+				'web', 'gap-turn', 'completed', 3, 5, 'gap-revision', 1,
+				'original-gap-runtime-cursor', now())`;
+		await client`insert into platform.conversation_events
+			(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+				conversation_cursor, event_type, event_payload, event_digest,
+				source, runtime_cursor, occurred_at, persisted_at)
+			values ('gap-event', 'gap-conversation', 'gap-execution', 'gap-adapter-event',
+				1, 1, 'text.delta', '{"type":"text.delta","text":"controlled-gap-event"}'::jsonb,
+				${"b".repeat(64)}, 'runtime', 'original-gap-runtime-cursor',
+				'2026-09-30T00:00:00.123456Z', '2026-09-30T00:00:00.234567Z')`;
+		await client`insert into platform.idempotency_records
+			(id, scope_type, scope_id, actor_id, command_type, idempotency_key,
+				request_digest, status, result)
+			values ('gap-retry', 'conversation', 'gap-conversation', 'gap-actor',
+				'message', 'gap-key', ${"a".repeat(64)}, 'completed',
+				'{"executionId":"gap-execution"}'::jsonb)`;
+	}
+
+	beforeEach(async () => {
+		client = postgres(databaseUrl, { max: 1 });
+		// This file's isolated test database is never the retained acceptance PG.
+		await client`drop schema if exists platform cascade`;
+		await client`drop schema if exists platform_migrations cascade`;
+		await builtStore.migratePlatformDatabase({ databaseUrl });
+		folder = await mkdtemp(resolve(tmpdir(), "agent-infra-approved-gap-"));
+		await cp(
+			resolve(import.meta.dirname, "../../../migrations/platform"),
+			folder,
+			{
+				recursive: true,
+			},
+		);
+		journal = JSON.parse(
+			await readFile(resolve(folder, "meta/_journal.json"), "utf8"),
+		);
+		expect(journal.entries.at(-1)?.idx).toBe(29);
+		await client`insert into platform.platform_user_disables (user_id, disabled_at)
+			values ('gap-disabled', '2026-09-30T01:00:00Z')`;
+		await seedConversation();
+	});
+
+	afterEach(async () => {
+		await client?.end();
+		if (folder) await rm(folder, { recursive: true, force: true });
+	});
+
+	it("executes published original25/27 below actual29 once and preserves all existing records", async () => {
+		const before = await history();
+		const data = await records();
+		await publish([25, 27]);
+		await builtStore.migratePlatformDatabase({
+			databaseUrl,
+			migrationsFolder: folder,
+		});
+		const after = await history();
+		expect(after.slice(0, before.length)).toEqual(before);
+		expect(after.slice(before.length)).toEqual(
+			retained.sourceTail
+				.filter((row) => [25, 27].includes(row.idx))
+				.map((row) =>
+					expect.objectContaining({
+						hash: row.sqlSHA256,
+						created_at: String(row.when),
+					}),
+				),
+		);
+		expect(
+			await client`select to_regclass('platform.relay_key_versions') as relation`,
+		).toEqual([{ relation: "platform.relay_key_versions" }]);
+		expect(
+			await client`select column_name from information_schema.columns
+			where table_schema='platform' and table_name='platform_api_credentials'
+				and column_name='recipient_user_id'`,
+		).toHaveLength(1);
+		expect(await records()).toEqual(data);
+		await builtStore.migratePlatformDatabase({
+			databaseUrl,
+			migrationsFolder: folder,
+		});
+		expect(await history()).toEqual(after);
+		expect(await records()).toEqual(data);
+	});
+
+	it("serializes two migration runners on the same database", async () => {
+		await publish([25, 27]);
+		const before = await history();
+		const data = await records();
+		await Promise.all([
+			builtStore.migratePlatformDatabase({
+				databaseUrl,
+				migrationsFolder: folder,
+			}),
+			builtStore.migratePlatformDatabase({
+				databaseUrl,
+				migrationsFolder: folder,
+			}),
+		]);
+		expect(await history()).toHaveLength(before.length + 2);
+		expect(await records()).toEqual(data);
+	});
+
+	it("recognizes previously executed historical identities without publishing absent SQL", async () => {
+		const before = await history();
+		const data = await records();
+		await builtStore.migratePlatformDatabase({ databaseUrl });
+		expect(await history()).toEqual(before);
+		expect(await records()).toEqual(data);
+		expect(
+			await client`select to_regclass('platform.relay_key_versions') as relation`,
+		).toEqual([{ relation: null }]);
+		await publish([25, 27]);
+		await builtStore.migratePlatformDatabase({
+			databaseUrl,
+			migrationsFolder: folder,
+		});
+		const applied = await history();
+		await builtStore.migratePlatformDatabase({ databaseUrl });
+		expect(await history()).toEqual(applied);
+		expect(await records()).toEqual(data);
+	});
+
+	it.each(["unknown", "changed", "duplicate", "early_hole"] as const)(
+		"rejects %s history before any missing DDL runs",
+		async (fault) => {
+			await publish([25]);
+			if (fault === "unknown") {
+				await client`insert into platform_migrations.history (hash, created_at)
+					values (${"f".repeat(64)}, 1790792430788)`;
+			} else if (fault === "changed") {
+				await client`update platform_migrations.history set hash=${"f".repeat(64)}
+					where created_at=${migrations[24]?.folderMillis ?? 0}`;
+			} else if (fault === "duplicate") {
+				await client`insert into platform_migrations.history (hash, created_at)
+					select hash, created_at from platform_migrations.history order by id desc limit 1`;
+			} else {
+				await client`delete from platform_migrations.history
+					where created_at=${migrations[20]?.folderMillis ?? 0}`;
+			}
+			const before = await history();
+			const catalog = await readPlatformCatalog(client);
+			const data = await records();
+			await expect(
+				builtStore.migratePlatformDatabase({
+					databaseUrl,
+					migrationsFolder: folder,
+				}),
+			).rejects.toThrow("Platform migration failed");
+			expect(await history()).toEqual(before);
+			expect(await readPlatformCatalog(client)).toEqual(catalog);
+			expect(await records()).toEqual(data);
+		},
+	);
+
+	it.each(["hash", "when"] as const)(
+		"rejects changed historical source %s",
+		async (fault) => {
+			await publish([25]);
+			if (fault === "hash") {
+				await writeFile(
+					resolve(folder, "0025_credential_delivery_approval.sql"),
+					"select 'private-migration-sentinel';",
+				);
+			} else {
+				const entry = journal.entries.find((row) => row.idx === 25);
+				if (!entry) throw new Error("Missing controlled source");
+				entry.when = 1790792430788;
+				await writeFile(
+					resolve(folder, "meta/_journal.json"),
+					JSON.stringify(journal),
+				);
+			}
+			const before = await history();
+			const catalog = await readPlatformCatalog(client);
+			const data = await records();
+			await expect(
+				builtStore.migratePlatformDatabase({
+					databaseUrl,
+					migrationsFolder: folder,
+				}),
+			).rejects.toThrow("Platform migration failed");
+			expect(await history()).toEqual(before);
+			expect(await readPlatformCatalog(client)).toEqual(catalog);
+			expect(await records()).toEqual(data);
+		},
+	);
+
+	it("rolls back all missing DDL when original26 conflicts with actual29", async () => {
+		await publish([25, 26]);
+		const before = await history();
+		const catalog = await readPlatformCatalog(client);
+		const data = await records();
+		await expect(
+			builtStore.migratePlatformDatabase({
+				databaseUrl,
+				migrationsFolder: folder,
+			}),
+		).rejects.toThrow("Platform migration failed");
+		expect(await history()).toEqual(before);
+		expect(await readPlatformCatalog(client)).toEqual(catalog);
+		expect(await records()).toEqual(data);
+	});
+
+	it.each(["sql", "history"] as const)(
+		"rolls back a %s failure after earlier missing DDL",
+		async (fault) => {
+			await publish([25]);
+			if (fault === "sql") {
+				journal.entries.push({
+					idx: 30,
+					when: 1790792430788,
+					tag: "0030_controlled_failure",
+					version: "7",
+					breakpoints: true,
+				});
+				await writeFile(
+					resolve(folder, "0030_controlled_failure.sql"),
+					"select 1 / 0;",
+				);
+				await writeFile(
+					resolve(folder, "meta/_journal.json"),
+					JSON.stringify(journal),
+				);
+			} else {
+				await client.unsafe(`create function platform_migrations.reject_gap_history()
+				returns trigger language plpgsql as $$ begin
+				if NEW.created_at = 1790724094107 then
+					raise exception 'private-migration-sentinel'; end if; return NEW; end $$;
+				create trigger reject_gap_history before insert on platform_migrations.history
+				for each row execute function platform_migrations.reject_gap_history()`);
+			}
+			const before = await history();
+			const catalog = await readPlatformCatalog(client);
+			const data = await records();
+			await expect(
+				builtStore.migratePlatformDatabase({
+					databaseUrl,
+					migrationsFolder: folder,
+				}),
+			).rejects.toThrow(/^Platform migration failed$/);
+			expect(await history()).toEqual(before);
+			expect(await readPlatformCatalog(client)).toEqual(catalog);
+			expect(await records()).toEqual(data);
+		},
+	);
+
+	it("upgrades an actually executed original Task28 source and preserves its history", async () => {
+		await client`drop schema platform cascade`;
+		await client`drop schema platform_migrations cascade`;
+		journal.entries = journal.entries.filter((row) => row.idx < 29);
+		await publish([25, 26, 27, 28]);
+		await builtStore.migratePlatformDatabase({
+			databaseUrl,
+			migrationsFolder: folder,
+		});
+		await client`insert into platform.platform_user_disables (user_id, disabled_by)
+			values ('gap-legacy-disabled', 'gap-legacy-admin')`;
+		await seedConversation();
+		const before = await history();
+		const data = await records();
+		expect(before).toHaveLength(29);
+		await builtStore.migratePlatformDatabase({ databaseUrl });
+		const after = await history();
+		expect(after.slice(0, before.length)).toEqual(before);
+		expect(after).toHaveLength(30);
+		expect(await records()).toEqual(data);
+		await builtStore.migratePlatformDatabase({ databaseUrl });
+		expect(await history()).toEqual(after);
+		expect(await records()).toEqual(data);
+	});
 });

@@ -29,6 +29,10 @@ const idempotencyHeader = z.strictObject({
 const personalCredentialSecurity: Record<string, never[]>[] = [
 	{ PlatformSession: [] },
 ];
+const agentListSecurity: Record<string, never[]>[] = [
+	{ PlatformSession: [] },
+	{ platformApiCredential: [] },
+];
 const pageQuery = z.strictObject({
 	cursor: OpaqueCursorV1Schema.optional(),
 	limit: z.coerce.number().int().min(1).max(100).optional(),
@@ -1250,6 +1254,9 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 	"/api/v2/agents": {
 		get: {
 			operationId: "listAgentsV2",
+			description:
+				"Browser discovery/Owner uses PlatformSession. Personal Bearer requires agent:read and current explicit manage or use grants; only limit/cursor, no scope override or mixed Cookie.",
+			security: agentListSecurity,
 			requestParams: { query: agentListQuery },
 			responses: {
 				"200": jsonResponse("Visible agents", agentPageV2),

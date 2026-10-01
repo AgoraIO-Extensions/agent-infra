@@ -200,9 +200,12 @@ describe("Administrator inventory authorization and login lifetimes", () => {
 		);
 	});
 
-	it.each([401, 403])(
-		"clears refreshed rows and stops background reads/retained callbacks after HTTP %s",
-		async (status) => {
+	it.each([
+		{ status: 401, reason: "authentication-required" },
+		{ status: 403, reason: "denied" },
+	])(
+		"clears refreshed rows and stops background reads/retained callbacks after HTTP $status",
+		async ({ status, reason }) => {
 			let denied = false;
 			const { result, requests, queryClient } = setup((request) =>
 				denied && new URL(request.url).searchParams.has("cursor")
@@ -218,9 +221,9 @@ describe("Administrator inventory authorization and login lifetimes", () => {
 				await result.current.refetch();
 			});
 			await waitFor(() =>
-				expect(result.current.state).toEqual({ kind: "denied" }),
+				expect(result.current.state).toEqual({ kind: "denied", reason }),
 			);
-			expect(cached(queryClient)).toEqual([{ kind: "denied" }]);
+			expect(cached(queryClient)).toEqual([{ kind: "denied", reason }]);
 			const count = requests.length;
 			await act(async () => {
 				await retainedRefetch();
@@ -247,10 +250,13 @@ describe("Administrator inventory authorization and login lifetimes", () => {
 			focusManager.setFocused(true);
 		});
 		await waitFor(() =>
-			expect(result.current.state).toEqual({ kind: "denied" }),
+			expect(result.current.state).toEqual({
+				kind: "denied",
+				reason: "denied",
+			}),
 		);
 		expect(requests).toHaveLength(2);
-		expect(cached(queryClient)).toEqual([{ kind: "denied" }]);
+		expect(cached(queryClient)).toEqual([{ kind: "denied", reason: "denied" }]);
 	});
 
 	it("aborts and removes only its own query on unmount, preserving unrelated data", async () => {

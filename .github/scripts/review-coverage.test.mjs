@@ -75,6 +75,46 @@ test("accepts a complete current-head PR-Agent review", () => {
   );
 });
 
+const ticketOmissionMessage = "Clipped related tickets to preserve the prompt token budget";
+const nativeTicketOmission = {
+  message: ticketOmissionMessage,
+  name: "pr_agent.tools.ticket_pr_compliance_check",
+  function: "fit_related_tickets_to_prompt_budget",
+  level: { name: "INFO" },
+  extra: { artifact: { included_tickets: 0, omitted_tickets: 1 } },
+};
+const recordLine = (record) => `2026-10-01T04:00:00.0000000Z ${JSON.stringify({ record })}`;
+
+test("rejects native whole-ticket omission independently of complete diff and publication", () => {
+  assert.deepEqual(evaluateReviewCoverage({
+    provider: "pr-agent", expectedHead: head, runResult: "success",
+    analysisJobConclusion: "success", publicationVerified: true,
+    analysisLog: `${recordLine(nativeTicketOmission)}\n${completeLog}`,
+  }), {
+    conclusion: "failure", headSha: head, omittedFileCount: null,
+    provider: "pr-agent", reasonCode: "review-input-incomplete",
+  });
+});
+
+test("does not treat ticket omission text in untrusted data as a native input event", () => {
+  for (const line of [
+    ticketOmissionMessage,
+    logRecord(ticketOmissionMessage),
+    logRecord("PR diff", { diff: ticketOmissionMessage }),
+    recordLine({ ...nativeTicketOmission, name: "other.module" }),
+    recordLine({ ...nativeTicketOmission, function: "other_function" }),
+    recordLine({ ...nativeTicketOmission, level: { name: "DEBUG" } }),
+    recordLine({ ...nativeTicketOmission, message: `${ticketOmissionMessage}\nIssue body` }),
+    logRecord("PR description", { description: recordLine(nativeTicketOmission) }),
+  ]) {
+    assert.equal(evaluateReviewCoverage({
+      provider: "pr-agent", expectedHead: head, runResult: "success",
+      analysisJobConclusion: "success", publicationVerified: true,
+      analysisLog: `${line}\n${completeLog}`,
+    }).conclusion, "success");
+  }
+});
+
 test("fails closed when PR-Agent reports omitted files", () => {
   assert.deepEqual(
     evaluateReviewCoverage({

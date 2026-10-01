@@ -126,25 +126,26 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const development =
 		import.meta.env.DEV &&
 		import.meta.env.VITE_PLATFORM_DEVELOPMENT_MODE === "controlled";
-	const title = pathname.includes("/conversations")
-		? "文本对话与个人历史"
-		: pathname.includes("/configuration")
-			? "配置与生命周期"
-			: pathname === "/admin/audit"
-				? "平台审计"
-				: pathname === "/audit"
-					? "我的执行审计"
-					: pathname === "/admin/agents"
-						? "Agent 管理"
-						: pathname.startsWith("/admin")
-							? "创建审批"
-							: pathname === "/my-agents/new"
-								? "创建申请"
-								: pathname.startsWith("/my-agents")
-									? "我的 Agent"
-									: pathname === "/agents" || pathname === "/agents/"
-										? "Agent"
-										: "Agent 详情";
+	const title =
+		pathname.startsWith("/chat/") || pathname.includes("/conversations")
+			? "文本对话与个人历史"
+			: pathname.includes("/configuration")
+				? "配置与生命周期"
+				: pathname === "/admin/audit"
+					? "平台审计"
+					: pathname === "/audit"
+						? "我的执行审计"
+						: pathname === "/admin/agents"
+							? "Agent 管理"
+							: pathname.startsWith("/admin")
+								? "创建审批"
+								: pathname === "/my-agents/new"
+									? "创建申请"
+									: pathname.startsWith("/my-agents")
+										? "我的 Agent"
+										: pathname === "/agents" || pathname === "/agents/"
+											? "Agent"
+											: "Agent 详情";
 	const navigation = (
 		<>
 			<div className="platform-brand">

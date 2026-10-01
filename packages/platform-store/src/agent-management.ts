@@ -8,6 +8,7 @@ import {
 	type AgentManagementStateV1,
 	type AgentManagementTransactionPortV1,
 	type AgentManagementTransactionRequestV1,
+	personalApiAgentMetadataGrantTypesV1,
 	snapshotAgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
 import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
@@ -24,6 +25,7 @@ import {
 	agentConfigurationRevisions,
 	agentManagementHistory,
 	agentOwners,
+	agentPrincipalGrants,
 	agents,
 	idempotencyRecords,
 } from "./schema.js";
@@ -446,6 +448,7 @@ export type AgentManagementApplicationScopeV1 =
 export type AgentManagementAgentScopeV1 =
 	| { readonly kind: "owner"; readonly ownerId: string }
 	| { readonly kind: "administrator" }
+	| { readonly kind: "api_user"; readonly userId: string }
 	| {
 			readonly kind: "user";
 			readonly userId: string;
@@ -536,6 +539,13 @@ function requireAgentScope(
 			return { kind: "administrator" };
 		}
 		if (
+			values.kind === "api_user" &&
+			exact(["kind", "userId"]) &&
+			validText(values.userId)
+		) {
+			return { kind: "api_user", userId: values.userId };
+		}
+		if (
 			values.kind === "owner" &&
 			exact(["kind", "ownerId"]) &&
 			validText(values.ownerId)
@@ -563,6 +573,16 @@ function applicationScopeCondition(scope: AgentManagementApplicationScopeV1) {
 
 function agentScopeCondition(scope: AgentManagementAgentScopeV1) {
 	if (scope.kind === "administrator") return undefined;
+	if (scope.kind === "api_user") {
+		return sql<boolean>`exists (
+			select 1 from ${agentPrincipalGrants}
+			where ${agentPrincipalGrants.agentId} = ${agentApplications.agentId}
+				and ${agentPrincipalGrants.principalType} = 'user'
+				and ${agentPrincipalGrants.principalId} = ${scope.userId}
+				and ${inArray(agentPrincipalGrants.grantType, [...personalApiAgentMetadataGrantTypesV1])}
+				and ${agentPrincipalGrants.revokedAt} is null
+		)`;
+	}
 	const owner = sql<boolean>`exists (
 		select 1 from ${agentOwners}
 		where ${agentOwners.agentId} = ${agentApplications.agentId}

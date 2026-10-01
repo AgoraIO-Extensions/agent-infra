@@ -9,12 +9,16 @@ import type {
 	ListAdminAgentsV2Errors,
 	ListAdminAgentsV2Responses,
 } from "../../pilot/generated-v2/types.gen.js";
+import {
+	type CollectionReadFailureReason,
+	collectionReadFailure,
+} from "../collection-read-failure.js";
 
 export type AdminAgentsState =
 	| { kind: "ready"; agents: AgentProjectionV2[] }
 	| { kind: "loading" }
-	| { kind: "denied" }
-	| { kind: "error"; retryable: boolean };
+	| { kind: "denied"; reason?: CollectionReadFailureReason }
+	| { kind: "error"; retryable: boolean; reason?: CollectionReadFailureReason };
 
 const adminAgentPageSchema =
 	pilotBrowserHttpOpenApiPathsV2["/api/v2/admin/agents"].get.responses["200"]
@@ -44,14 +48,17 @@ export async function loadAdminAgents(
 		// A transport may ignore cancellation and still resolve successfully.
 		signal?.throwIfAborted();
 		const status = result.response?.status;
-		if (status === 401 || status === 403) return { kind: "denied" };
+		const failure = collectionReadFailure(status);
+		if (status === 401 || status === 403)
+			return { kind: "denied", reason: failure.reason };
 		if (status !== 200)
 			return {
 				kind: "error",
-				retryable: status === undefined || status === 429 || status >= 500,
+				retryable: failure.retryable,
+				...(failure.reason ? { reason: failure.reason } : {}),
 			};
 		if (!result.data || !adminAgentPageSchema.safeParse(result.data).success)
-			return { kind: "error", retryable: false };
+			return { kind: "error", retryable: false, reason: "invalid-response" };
 
 		agents.push(...result.data.items);
 		cursor = result.data.nextCursor;

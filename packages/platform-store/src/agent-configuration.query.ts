@@ -9,9 +9,10 @@ import {
 	decideAgentRuntimePresentationV1,
 	isAgentOwnerV1,
 	isAgentRuntimePresentationVisibleV1,
+	isPersonalApiAgentMetadataReadAllowedV1,
 	snapshotAgentRuntimePresentationExpectationV1,
 } from "@agent-infra/platform-core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { default as postgres } from "postgres";
 import {
@@ -27,12 +28,16 @@ import {
 	agentAvailability,
 	agentConfigurationRevisions,
 	agentOwners,
+	agentPrincipalGrants,
 	agents,
 	workloadReconciliations,
 } from "./schema.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
-export type AgentConfigurationQueryIntentV1 = "discover" | "manage";
+export type AgentConfigurationQueryIntentV1 =
+	| "discover"
+	| "manage"
+	| "api_metadata";
 
 export interface AgentConfigurationQueryInputV1 {
 	readonly agentId: string;
@@ -425,7 +430,9 @@ export class PostgresAgentConfigurationQueryV1 {
 				!validateText(input.agentId) ||
 				!validateText(input.actorId) ||
 				typeof input.isAdministrator !== "boolean" ||
-				(input.intent !== "discover" && input.intent !== "manage") ||
+				(input.intent !== "discover" &&
+					input.intent !== "manage" &&
+					input.intent !== "api_metadata") ||
 				!Array.isArray(input.organizationIds) ||
 				input.organizationIds.length > maxAccessTargets ||
 				input.organizationIds.some(
@@ -509,7 +516,26 @@ export class PostgresAgentConfigurationQueryV1 {
 							? target.userId === input.actorId
 							: input.organizationIds.includes(target.organizationId),
 					);
-					if (
+					if (input.intent === "api_metadata") {
+						const grants = await transaction
+							.select({ grantType: agentPrincipalGrants.grantType })
+							.from(agentPrincipalGrants)
+							.where(
+								and(
+									eq(agentPrincipalGrants.agentId, input.agentId),
+									eq(agentPrincipalGrants.principalType, "user"),
+									eq(agentPrincipalGrants.principalId, input.actorId),
+									isNull(agentPrincipalGrants.revokedAt),
+								),
+							);
+						if (
+							!isPersonalApiAgentMetadataReadAllowedV1(
+								grants.map(({ grantType }) => grantType),
+							)
+						) {
+							return { outcome: "unavailable" };
+						}
+					} else if (
 						!input.isAdministrator &&
 						!owner &&
 						(input.intent === "manage" || !available)

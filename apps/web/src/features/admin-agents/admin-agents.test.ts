@@ -80,9 +80,9 @@ describe("Administrator Agent inventory generated-client consumer", () => {
 	});
 
 	it.each([
-		[401, { kind: "denied" }],
-		[403, { kind: "denied" }],
-		[404, { kind: "error", retryable: false }],
+		[401, { kind: "denied", reason: "authentication-required" }],
+		[403, { kind: "denied", reason: "denied" }],
+		[404, { kind: "error", retryable: false, reason: "not-found" }],
 		[429, { kind: "error", retryable: true }],
 		[503, { kind: "error", retryable: true }],
 	] as const)(
@@ -125,6 +125,7 @@ describe("Administrator Agent inventory generated-client consumer", () => {
 		await expect(loadAdminAgents(client)).resolves.toEqual({
 			kind: "error",
 			retryable: false,
+			reason: "invalid-response",
 		});
 		expect(requests).toHaveLength(2);
 	});

@@ -1,3 +1,4 @@
+import { pilotBrowserHttpOpenApiPathsV2 } from "@agent-infra/contracts/pilot";
 import type {
 	Client,
 	RequestResult,
@@ -21,11 +22,12 @@ import type {
 	UpdateAgentApplicationV2Errors,
 	UpdateAgentApplicationV2Responses,
 } from "../../pilot/generated-v2/types.gen.js";
+import {
+	type CollectionReadUnavailable,
+	collectionReadFailure,
+} from "../collection-read-failure.js";
 
-type UnavailableState = {
-	kind: "unavailable";
-	retryable: boolean;
-};
+type UnavailableState = CollectionReadUnavailable;
 
 export type MyAgentApplicationsState =
 	| {
@@ -91,15 +93,28 @@ export function isRetryableMyAgentApplicationError(error: unknown): boolean {
 
 const retryableError = () => requestError();
 const maximumMyAgentApplicationPages = 100;
+const applicationPageSchema =
+	pilotBrowserHttpOpenApiPathsV2["/api/v2/agent-applications"].get.responses[
+		"200"
+	].content["application/json"].schema;
 
-function unavailable(error: { retryable?: boolean } | undefined) {
+function unavailable(
+	error:
+		| { retryable?: boolean; reason?: CollectionReadUnavailable["reason"] }
+		| undefined,
+) {
 	if (error?.retryable !== false) throw retryableError();
 
-	return { kind: "unavailable" as const, retryable: false };
+	return {
+		kind: "unavailable" as const,
+		retryable: false,
+		...(error?.reason ? { reason: error.reason } : {}),
+	};
 }
 
 export async function loadMyAgentApplications(
 	client?: Client,
+	signal?: AbortSignal,
 ): Promise<MyAgentApplicationsState> {
 	const applications: AgentApplicationProjectionV2[] = [];
 	const cursors = new Set<string>();
@@ -107,6 +122,7 @@ export async function loadMyAgentApplications(
 	let pages = 0;
 
 	do {
+		signal?.throwIfAborted();
 		if (pages >= maximumMyAgentApplicationPages) throw retryableError();
 		pages += 1;
 		const query: ListAgentApplicationsV2Data["query"] =
@@ -120,10 +136,15 @@ export async function loadMyAgentApplications(
 		> = await listAgentApplicationsV2<false>({
 			client,
 			query,
+			signal,
 			responseStyle: "fields",
 			throwOnError: false,
 		});
-		if (!result.data) return unavailable(result.error);
+		signal?.throwIfAborted();
+		const status = result.response?.status;
+		if (status !== 200) return unavailable(collectionReadFailure(status));
+		if (!result.data || !applicationPageSchema.safeParse(result.data).success)
+			return unavailable({ retryable: false, reason: "invalid-response" });
 
 		applications.push(...result.data.items);
 		cursor = result.data.nextCursor;

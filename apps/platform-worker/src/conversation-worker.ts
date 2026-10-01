@@ -29,7 +29,10 @@ export interface PlatformConversationWorkerOptionsV2
 	readonly observability?: Pick<
 		ReturnType<typeof startObservability>,
 		"record"
-	>;
+	> &
+		Partial<
+			Pick<ReturnType<typeof startObservability>, "observeResource" | "status">
+		>;
 }
 
 export function createPlatformConversationWorkerV2(
@@ -109,6 +112,8 @@ export function createPlatformConversationWorkerV2(
 	>();
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let polling: Promise<number> | undefined;
+	let resourceTimer: ReturnType<typeof setTimeout> | undefined;
+	let sampling: Promise<void> | undefined;
 	let closing: Promise<void> | undefined;
 	let started = false;
 	let stopped = false;
@@ -125,6 +130,43 @@ export function createPlatformConversationWorkerV2(
 		} catch {
 			/* observational only */
 		}
+	}
+	function canSampleResources() {
+		if (stopped || !started || signal.aborted) return false;
+		const telemetry = options.observability;
+		if (!telemetry?.observeResource || !telemetry.status) return false;
+		try {
+			const status = telemetry.status();
+			return status.enabled && status.state === "active";
+		} catch {
+			return false;
+		}
+	}
+	function sampleResources() {
+		if (sampling || !canSampleResources()) return;
+		sampling = Promise.resolve()
+			.then(async () => {
+				if (!canSampleResources()) return;
+				const snapshot = await store.readResourceSnapshot(signal);
+				if (!canSampleResources()) return;
+				options.observability?.observeResource?.({
+					kind: "task_waiting",
+					value: snapshot.taskWaiting,
+				});
+				options.observability?.observeResource?.({
+					kind: "outbox_pending",
+					value: snapshot.outboxPending,
+				});
+			})
+			.catch(() => {
+				if (!stopped && !signal.aborted)
+					log("CONVERSATION_RESOURCE_SNAPSHOT_UNAVAILABLE");
+			})
+			.finally(() => {
+				sampling = undefined;
+				if (canSampleResources())
+					resourceTimer = setTimeout(sampleResources, 1000);
+			});
 	}
 	async function discover() {
 		if (stopped || signal.aborted) return 0;
@@ -190,17 +232,20 @@ export function createPlatformConversationWorkerV2(
 			if (started || stopped) return;
 			started = true;
 			void poll();
+			sampleResources();
 		},
 		stop() {
 			if (closing) return closing;
 			stopped = true;
 			clearTimeout(timer);
+			clearTimeout(resourceTimer);
 			controller.abort();
 			const runtimeClose = Promise.resolve().then(() => runtime.close());
 			closing = (async () => {
 				const runningResults = await Promise.allSettled([
 					runtimeClose,
 					polling,
+					sampling,
 					...[...running.values()].map((entry) => entry.promise),
 				]);
 				const closeResults = await Promise.allSettled([
@@ -223,7 +268,7 @@ export function createPlatformConversationWorkerV2(
 export async function startPlatformConversationWorkerFromDeploymentV2(
 	moduleSpecifier = process.env.PLATFORM_WORKER_DEPLOYMENT_MODULE,
 	signal?: AbortSignal,
-	observability?: Pick<ReturnType<typeof startObservability>, "record">,
+	observability?: PlatformConversationWorkerOptionsV2["observability"],
 ) {
 	if (!moduleSpecifier)
 		throw new Error("PLATFORM_WORKER_DEPLOYMENT_MODULE is required");

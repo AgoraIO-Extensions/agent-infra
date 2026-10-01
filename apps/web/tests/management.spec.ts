@@ -1652,7 +1652,7 @@ test("directory conversation mode restores URL search and chooses only existing 
 		})
 		.getByRole("link", { name: "开始对话" })
 		.click();
-	await expect(page).toHaveURL(/\/agents\/agent-pilot-1\/conversations$/);
+	await expect(page).toHaveURL(/\/chat\/agent-pilot-1$/);
 	await page.goBack();
 	await expect(search).toHaveValue("Release");
 	expect(new URL(page.url()).searchParams.get("mode")).toBe("conversation");
@@ -1662,9 +1662,7 @@ test("directory conversation mode restores URL search and chooses only existing 
 		has: page.getByRole("heading", { name: "Platform adapter", exact: true }),
 	});
 	await adapter.getByRole("link", { name: "开始对话" }).click();
-	await expect(page).toHaveURL(
-		/\/agents\/agent-platform-adapter\/conversations$/,
-	);
+	await expect(page).toHaveURL(/\/chat\/agent-platform-adapter$/);
 	await page.goBack();
 	await expect(search).toHaveValue("");
 	for (const [name, id] of [
@@ -1686,10 +1684,7 @@ test("directory conversation mode restores URL search and chooses only existing 
 			).toBeDisabled();
 			await expect(
 				page.getByRole("link", { name: "个人历史" }),
-			).toHaveAttribute(
-				"href",
-				"/agents/agent-starting/conversations?view=history",
-			);
+			).toHaveAttribute("href", "/chat/agent-starting?view=history");
 		}
 		await page.goBack();
 		await expect(

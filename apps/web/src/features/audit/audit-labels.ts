@@ -27,6 +27,7 @@ export const auditActionLabels: Record<AuditRecord["action"], string> = {
 	"api.credential.delivery.revoked": "撤销凭证获取权限",
 	"api.agent.grant.granted": "授予 Agent 权限",
 	"api.agent.grant.revoked": "撤销 Agent 权限",
+	"api.agent.metadata.read": "API Agent 元数据读取",
 	"task.api.access": "任务 API 访问",
 	"task.api.subscription.started": "建立结果订阅",
 	"task.api.subscription.ended": "结束结果订阅",
