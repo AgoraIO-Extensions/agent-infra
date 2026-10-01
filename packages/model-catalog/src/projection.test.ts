@@ -124,6 +124,10 @@ it("allows an explicitly empty custom deployment without inventing a standard Dr
 async function projection(
 	protocol: "anthropic-messages-v1" | "openai-responses-v1",
 	templateProtocol = protocol,
+	driver: "codex" | "claude" | "acp" | "pi" = templateProtocol ===
+	"openai-responses-v1"
+		? "codex"
+		: "claude",
 	configuration:
 		| AgentConfigurationRecordV1
 		| AgentConfigurationRecordV2 = configurationV2,
@@ -148,7 +152,15 @@ async function projection(
 				],
 			},
 		},
-		protocol: templateProtocol,
+		standardTemplateBinding: {
+			templateId:
+				configuration.source.kind === "standard"
+					? configuration.source.templateId
+					: "invalid",
+			imageDigest: configuration.source.imageDigest,
+			driver,
+			protocol: templateProtocol,
+		},
 		catalog: createFakeModelCatalogAdapterV1({
 			...catalogFixture(),
 			endpoints: [
@@ -194,6 +206,7 @@ it("preserves model projection while configuration records migrate from V1 to V2
 		await projection(
 			"anthropic-messages-v1",
 			"anthropic-messages-v1",
+			"claude",
 			historical,
 		),
 	).toEqual(await projection("anthropic-messages-v1"));
@@ -220,4 +233,50 @@ it("projects Messages as V3 with its per-option credential and refuses a templat
 	expect(
 		JSON.parse(runtimeModelInjectionV1(legacy).configuration).schemaVersion,
 	).toBe(2);
+});
+
+it("persists the accepted Driver tuple in the hashed projection, preserves legacy reads and rejects retargeted contents", async () => {
+	const claude = await projection("anthropic-messages-v1");
+	const acp = await projection(
+		"anthropic-messages-v1",
+		"anthropic-messages-v1",
+		"acp",
+	);
+	expect(claude.standardTemplateBinding?.driver).toBe("claude");
+	expect(acp.standardTemplateBinding?.driver).toBe("acp");
+	expect(acp.fingerprint).not.toBe(claude.fingerprint);
+	expect(runtimeModelInjectionV1(acp).configuration).not.toBe(
+		runtimeModelInjectionV1(claude).configuration,
+	);
+	const restored = validateRuntimeModelProjectionV1(
+		JSON.parse(JSON.stringify(claude)),
+	);
+	expect(restored).toEqual(claude);
+	const {
+		standardTemplateBinding: _binding,
+		fingerprint: _fingerprint,
+		...legacyContent
+	} = claude;
+	const legacy = {
+		...legacyContent,
+		fingerprint: createHash("sha256")
+			.update(JSON.stringify(legacyContent))
+			.digest("hex"),
+	};
+	const legacyBytes = JSON.stringify(legacy);
+	expect(
+		JSON.stringify(validateRuntimeModelProjectionV1(JSON.parse(legacyBytes))),
+	).toBe(legacyBytes);
+	expect(runtimeModelInjectionV1(legacy).configuration).toContain(
+		legacy.fingerprint,
+	);
+	expect(() =>
+		validateRuntimeModelProjectionV1({
+			...claude,
+			standardTemplateBinding: {
+				...claude.standardTemplateBinding,
+				driver: "acp",
+			},
+		}),
+	).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
 });

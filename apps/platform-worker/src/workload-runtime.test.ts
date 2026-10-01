@@ -963,6 +963,138 @@ describe("assembled Workload Runtime contracts", () => {
 					for (const [key, resource] of before) f.resources.set(key, resource);
 				}
 			}
+			if (driver !== "codex") {
+				const retained = structuredClone([...f.resources.entries()]);
+				const source = configuration.source;
+				const firstRecord = records[0];
+				assert(firstRecord);
+				const applyInput = (
+					snapshot: WorkloadReconciliationStateV1,
+				): WorkloadReconciliationInputV1 => ({
+					configuration: snapshot.candidate.configuration,
+					state: snapshot,
+					management: f.management,
+					requestId: "request-a",
+					traceId: "trace-a",
+					secrets: {
+						bindings: records.map((record) => ({
+							materialization: "current",
+							record,
+						})),
+						store: secretCleanupStore(firstRecord).store,
+						async auditDecryption() {},
+					},
+				});
+				for (const mutation of [
+					"missing-selector",
+					"missing-workload",
+					"missing-workload-before-cas",
+					"legacy-projection",
+				] as const) {
+					if (mutation === "missing-selector") {
+						const existing = await f.client.read<V1StatefulSet>(
+							"StatefulSet",
+							workloadResourceNameV1("agent-a"),
+						);
+						assert(existing?.spec?.template.spec?.containers[0]);
+						existing.spec.template.spec.containers[0].env =
+							existing.spec.template.spec.containers[0].env?.filter(
+								(entry) => entry.name !== "AGENT_INFRA_RUNTIME_DRIVER",
+							);
+						f.resources.set(`StatefulSet/${existing.metadata?.name}`, existing);
+					} else if (mutation !== "legacy-projection") {
+						for (const [key] of f.resources) {
+							if (key.startsWith("StatefulSet/") || key.startsWith("Pod/"))
+								f.resources.delete(key);
+						}
+					}
+					let persisted = JSON.parse(JSON.stringify(state)) as typeof state;
+					if (mutation === "missing-workload-before-cas")
+						persisted = { ...persisted, identity: null };
+					if (mutation === "legacy-projection") {
+						const {
+							standardTemplateBinding: _binding,
+							fingerprint: _fingerprint,
+							...content
+						} = validateRuntimeModelProjectionV1(
+							persisted.candidate.modelProjection,
+						);
+						persisted = {
+							...persisted,
+							candidate: {
+								...persisted.candidate,
+								modelProjection: {
+									...content,
+									fingerprint: createHash("sha256")
+										.update(JSON.stringify(content))
+										.digest("hex"),
+								},
+							},
+						};
+					}
+					const before = structuredClone([...f.resources.entries()]);
+					const decrypt = vi.fn(f.options.decryptor.decrypt);
+					const restarted = createWorkloadRuntimeV1({
+						...f.options,
+						decryptor: { decrypt },
+						templateModelBindings: f.options.templateModelBindings.map(
+							(binding) =>
+								mutation !== "missing-selector" &&
+								mutation !== "legacy-projection" &&
+								binding.templateId === source.templateId &&
+								binding.imageDigest === source.imageDigest
+									? {
+											...binding,
+											driver:
+												driver === "claude"
+													? ("acp" as const)
+													: ("claude" as const),
+										}
+									: binding,
+						),
+					});
+					await expect(
+						restarted.apply(persisted, false, applyInput(persisted)),
+					).rejects.toMatchObject({ code: "conflict" });
+					expect(decrypt).not.toHaveBeenCalled();
+					expect([...f.resources.entries()]).toEqual(before);
+					f.resources.clear();
+					for (const [key, resource] of structuredClone(retained))
+						f.resources.set(key, resource);
+				}
+				// A restart with the accepted tuple still repairs the same retained candidate.
+				for (const [key] of f.resources) {
+					if (key.startsWith("StatefulSet/") || key.startsWith("Pod/"))
+						f.resources.delete(key);
+				}
+				const beforeRecovery = structuredClone([...f.resources.entries()]);
+				const restored = JSON.parse(JSON.stringify(state)) as typeof state;
+				const result = await createWorkloadRuntimeV1(f.options).apply(
+					restored,
+					false,
+					applyInput(restored),
+				);
+				expect(result).toEqual({
+					uid: expect.any(String),
+					generation: expect.any(Number),
+				});
+				for (const [key, resource] of beforeRecovery) {
+					if (
+						key.startsWith("Secret/") ||
+						key.startsWith("PersistentVolumeClaim/")
+					)
+						expect(f.resources.get(key)).toEqual(resource);
+				}
+				const recovered = await f.client.read<V1StatefulSet>(
+					"StatefulSet",
+					workloadResourceNameV1("agent-a"),
+				);
+				expect(
+					recovered?.spec?.template.spec?.containers[0]?.env,
+				).toContainEqual({ name: "AGENT_INFRA_RUNTIME_DRIVER", value: driver });
+				f.resources.clear();
+				for (const [key, resource] of retained) f.resources.set(key, resource);
+			}
 			const runtime = createWorkloadRuntimeV1(f.options);
 			for (const name of [
 				"AGENT_INFRA_RUNTIME_MODEL_CONFIG",

@@ -27,38 +27,6 @@ const secretReferenceSchema = z.strictObject({
 	configRevision: z.number().int().positive(),
 	name: z.string().regex(/^[a-z0-9][a-z0-9.-]{0,251}[a-z0-9]$/),
 });
-const projectionContentSchema = z.strictObject({
-	schemaVersion: z.literal(1),
-	agentId: z.string().min(1).max(256),
-	configurationRevision: z.number().int().positive(),
-	catalogRevision: modelIdentifier,
-	defaultOptionId: modelIdentifier,
-	defaultReasoningLevel: reasoningLevel,
-	options: z
-		.array(
-			z.strictObject({
-				optionId: modelIdentifier,
-				endpoint: ModelEndpointV1Schema,
-				modelId: modelIdentifier,
-				reasoningLevels: z.array(reasoningLevel).min(1).max(32),
-				secretRef: secretReferenceSchema,
-				secretKey: z.string().regex(/^MODEL_CREDENTIAL_[A-F0-9]{64}$/),
-			}),
-		)
-		.min(1)
-		.max(128),
-});
-const projectionSchema = projectionContentSchema.extend({
-	fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-});
-export type RuntimeModelProjectionV1 = z.infer<typeof projectionSchema>;
-const hash = (value: string) =>
-	createHash("sha256").update(value).digest("hex");
-const credentialVariable = (optionId: string) =>
-	`AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_${hash(optionId).toUpperCase()}`;
-export const runtimeModelConfigurationVariableV1 =
-	"AGENT_INFRA_RUNTIME_MODEL_CONFIG";
-
 export interface StandardTemplateModelBindingV1 {
 	readonly templateId: string;
 	readonly imageDigest: string;
@@ -89,6 +57,39 @@ const templateBindingSchema = z
 				? "openai-responses-v1"
 				: "anthropic-messages-v1"),
 	);
+
+const projectionContentSchema = z.strictObject({
+	schemaVersion: z.literal(1),
+	standardTemplateBinding: templateBindingSchema.optional(),
+	agentId: z.string().min(1).max(256),
+	configurationRevision: z.number().int().positive(),
+	catalogRevision: modelIdentifier,
+	defaultOptionId: modelIdentifier,
+	defaultReasoningLevel: reasoningLevel,
+	options: z
+		.array(
+			z.strictObject({
+				optionId: modelIdentifier,
+				endpoint: ModelEndpointV1Schema,
+				modelId: modelIdentifier,
+				reasoningLevels: z.array(reasoningLevel).min(1).max(32),
+				secretRef: secretReferenceSchema,
+				secretKey: z.string().regex(/^MODEL_CREDENTIAL_[A-F0-9]{64}$/),
+			}),
+		)
+		.min(1)
+		.max(128),
+});
+const projectionSchema = projectionContentSchema.extend({
+	fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export type RuntimeModelProjectionV1 = z.infer<typeof projectionSchema>;
+const hash = (value: string) =>
+	createHash("sha256").update(value).digest("hex");
+const credentialVariable = (optionId: string) =>
+	`AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_${hash(optionId).toUpperCase()}`;
+export const runtimeModelConfigurationVariableV1 =
+	"AGENT_INFRA_RUNTIME_MODEL_CONFIG";
 
 /** Snapshot the trusted deployment tuples before any Store or Kubernetes operation. */
 export function validateStandardTemplateModelBindingsV1(
@@ -148,7 +149,7 @@ export async function projectRuntimeModelConfigurationV1(input: {
 	readonly catalog: ModelCatalogAdapterV1;
 	readonly access: ModelAccessValidatorV1;
 	/** Bound to the admitted template image by deployment assembly, never an Owner field. */
-	readonly protocol: RuntimeModelProtocolV1;
+	readonly standardTemplateBinding: StandardTemplateModelBindingV1;
 	readonly signal: AbortSignal;
 	readonly credentialFor: (option: AgentConfigurationModelOptionV1) => Promise<{
 		readonly reference: z.infer<typeof secretReferenceSchema>;
@@ -159,6 +160,9 @@ export async function projectRuntimeModelConfigurationV1(input: {
 	return modelOperationV1(input.signal, async () => {
 		const { configuration } = input;
 		const model = configuration.modelConfiguration;
+		const binding = standardTemplateModelBindingV1(configuration.source, [
+			input.standardTemplateBinding,
+		]);
 		if (
 			configuration.source.kind !== "standard" ||
 			!model ||
@@ -185,7 +189,7 @@ export async function projectRuntimeModelConfigurationV1(input: {
 			if (
 				endpoint.endpointId !== option.endpointId ||
 				!endpoint.available ||
-				endpoint.protocol !== input.protocol
+				endpoint.protocol !== binding.protocol
 			)
 				throw new ModelConfigurationErrorV1();
 			const credential = await input.credentialFor(option);
@@ -221,6 +225,7 @@ export async function projectRuntimeModelConfigurationV1(input: {
 		}
 		const content = projectionContentSchema.parse({
 			schemaVersion: 1,
+			standardTemplateBinding: binding,
 			agentId: configuration.agentId,
 			configurationRevision: configuration.revision,
 			catalogRevision: model.catalogRevision,
@@ -256,6 +261,9 @@ export function validateRuntimeModelProjectionV1(
 			content.options.some(
 				(option) =>
 					!option.endpoint.available ||
+					(content.standardTemplateBinding !== undefined &&
+						option.endpoint.protocol !==
+							content.standardTemplateBinding.protocol) ||
 					option.secretRef.configRevision > content.configurationRevision ||
 					new Set(option.reasoningLevels).size !==
 						option.reasoningLevels.length ||
@@ -274,6 +282,11 @@ export function validateRuntimeModelProjectionV1(
 			const model = configuration.modelConfiguration;
 			if (
 				configuration.source.kind !== "standard" ||
+				(content.standardTemplateBinding !== undefined &&
+					(configuration.source.templateId !==
+						content.standardTemplateBinding.templateId ||
+						configuration.source.imageDigest !==
+							content.standardTemplateBinding.imageDigest)) ||
 				!model ||
 				configuration.agentId !== content.agentId ||
 				configuration.revision !== content.configurationRevision ||

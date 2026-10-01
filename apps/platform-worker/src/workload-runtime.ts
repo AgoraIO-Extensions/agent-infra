@@ -670,7 +670,7 @@ export function createWorkloadRuntimeV1(
 				try {
 					modelProjection = await projectRuntimeModelConfigurationV1({
 						configuration,
-						protocol: standardTemplateModelProtocolV1(
+						standardTemplateBinding: standardTemplateModelBindingV1(
 							configuration.source,
 							templateModelBindings,
 						),

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
 	type AgentWorkloadDesiredV1,
 	type SecretActivationFenceV1,
@@ -171,7 +172,16 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		value: AgentWorkloadDesiredV1,
 		current: V1StatefulSet | null,
 	) {
-		if (!standardTemplateBinding || !current) return;
+		if (!standardTemplateBinding) return;
+		if (
+			!modelProjection ||
+			!isDeepStrictEqual(
+				modelProjection.standardTemplateBinding,
+				standardTemplateBinding,
+			)
+		)
+			throw new WorkloadKubernetesError("conflict");
+		if (!current) return;
 		const container = current.spec?.template.spec?.containers.find(
 			(entry) => entry.name === "agent",
 		);
@@ -183,10 +193,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		// A deployment edit cannot silently retarget the same admitted image.
 		if (
 			container?.image?.endsWith(`@${value.imageDigest}`) &&
-			previousDriver &&
 			(previousDrivers.length !== 1 ||
-				previousDriver.valueFrom !== undefined ||
-				previousDriver.value !== standardTemplateBinding.driver)
+				previousDriver?.valueFrom !== undefined ||
+				previousDriver?.value !== standardTemplateBinding.driver)
 		)
 			throw new WorkloadKubernetesError("conflict");
 	}
