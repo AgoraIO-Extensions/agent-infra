@@ -363,7 +363,14 @@ export function createConversationRuntimeV2(
 				executionDeliveryFence: context.claim.executionDeliveryFence,
 			},
 		};
-		return { context, state, authority, client, base };
+		return {
+			context,
+			state,
+			authority,
+			client,
+			base,
+			route: afterTargetRoute.record,
+		};
 	}
 	async function latch(
 		prepared: Awaited<ReturnType<typeof prepare>>,
@@ -386,7 +393,7 @@ export function createConversationRuntimeV2(
 		signal?: AbortSignal,
 	) {
 		const active = combined(signal);
-		const { state, authority, client, base } = await prepare(
+		const { context, state, authority, client, base, route } = await prepare(
 			request,
 			"session.status",
 			active,
@@ -395,6 +402,36 @@ export function createConversationRuntimeV2(
 			...base,
 			originalOperationDigest: state.originalOperationDigest,
 		};
+		if (state.hostSessionRef === null && authority.purpose === "control") {
+			// Only the Host's durable V4 facts can establish the missing ref.
+			const binding = await client.readOriginalBinding(
+				{ ...body, grant: signRequest(body, authority, "session.status") },
+				active,
+			);
+			if (binding.executionId !== context.claim.executionId)
+				unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+			const latestState = await stateFor(context, active);
+			const latest = await current(
+				context,
+				latestState,
+				"session.status",
+				active,
+			);
+			if (
+				!isDeepStrictEqual(latest.authority, authority) ||
+				latestState.originalOperationDigest !== state.originalOperationDigest ||
+				(latestState.hostSessionRef !== null &&
+					latestState.hostSessionRef !== binding.hostSessionRef)
+			)
+				unavailable("RUNTIME_FENCE_STALE");
+			if (
+				latest.record.configurationRevision !== route.configurationRevision ||
+				!isDeepStrictEqual(latest.record.agent, route.agent) ||
+				!isDeepStrictEqual(latest.record.workload, route.workload)
+			)
+				unavailable("RUNTIME_ROUTE_STALE");
+			return { ...binding, schemaVersion: 2 as const };
+		}
 		const response = await client.recoverStatus(
 			{ ...body, grant: signRequest(body, authority, "session.status") },
 			active,

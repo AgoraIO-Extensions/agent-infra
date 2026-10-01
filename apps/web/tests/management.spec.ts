@@ -1058,19 +1058,21 @@ test("mobile navigation traps focus and returns it on Escape", async ({
 	await expect(dialog).not.toBeVisible();
 });
 
+const zoomOwnerManagementPaths = [
+	"/agents",
+	"/agents/agent-pilot-1",
+	"/my-agents",
+	"/my-agents/new",
+	"/my-agents/application-browser-1",
+	"/agents/agent-pilot-1/configuration",
+] as const;
+
 test("management pages remain reachable at 200% zoom equivalent widths", async ({
 	page,
 }, info) => {
 	test.skip(info.project.name !== "mobile", "Narrow viewport acceptance");
 	await fixture(page, "owner");
-	for (const path of [
-		"/agents",
-		"/agents/agent-pilot-1",
-		"/my-agents",
-		"/my-agents/new",
-		"/my-agents/application-browser-1",
-		"/agents/agent-pilot-1/configuration",
-	]) {
+	for (const path of zoomOwnerManagementPaths) {
 		await page.goto(path);
 		await expect(page.locator(".management-content h1").first()).toBeVisible();
 		for (const width of [160, 200, 215, 320, 390, 430, 768, 1024, 1440]) {
@@ -1091,8 +1093,6 @@ test("management pages remain reachable at 200% zoom equivalent widths", async (
 			if (width === 160)
 				await capture(page, info, `narrow-${path.replaceAll("/", "-")}`);
 		}
-		await page.setViewportSize({ width: 160, height: 320 });
-		await capture(page, info, `short-${path.replaceAll("/", "-")}`);
 	}
 	await fixture(page, "admin");
 	await page.goto("/admin/approvals");
@@ -1114,8 +1114,28 @@ test("management pages remain reachable at 200% zoom equivalent widths", async (
 			.toBe(true);
 		if (width === 160) await capture(page, info, "narrow-approvals");
 	}
-	await page.setViewportSize({ width: 160, height: 320 });
-	await capture(page, info, "short-approvals");
+});
+
+test.describe("short management viewport", () => {
+	// Create the mobile page at its final size instead of resizing a wide live page.
+	test.use({ viewport: { width: 160, height: 320 } });
+	test("management pages remain reachable in a short 160px viewport", async ({
+		page,
+	}, info) => {
+		test.skip(info.project.name !== "mobile", "Narrow viewport acceptance");
+		await fixture(page, "owner");
+		for (const path of zoomOwnerManagementPaths) {
+			await page.goto(path);
+			await expect(
+				page.locator(".management-content h1").first(),
+			).toBeVisible();
+			await capture(page, info, `short-${path.replaceAll("/", "-")}`);
+		}
+		await fixture(page, "admin");
+		await page.goto("/admin/approvals");
+		await expect(page.getByRole("heading", { name: "审批" })).toBeVisible();
+		await capture(page, info, "short-approvals");
+	});
 });
 
 test("Owner manually configures a bot without exposing its Secret or an internal reference", async ({
@@ -1443,7 +1463,7 @@ test("Agent search survives reload and browser back without adding typing histor
 }) => {
 	await fixture(page);
 	await page.goto("/agents");
-	const search = page.getByPlaceholder("按名称或用途搜索");
+	const search = page.getByRole("searchbox", { name: "搜索 Agent" });
 	await search.fill("Release");
 	await expect(page).toHaveURL(/q=Release/);
 	await page.reload();

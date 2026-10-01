@@ -19,6 +19,7 @@ import {
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV3Schema,
+	RuntimeOriginalBindingResponseV3Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
 	type RuntimeStatusRequestV3,
@@ -606,6 +607,23 @@ export function createWorkerRuntimeHostClientV3(
 				RuntimeStatusResponseV3Schema,
 				signal,
 			),
+		async readOriginalBinding(
+			value: RuntimeStatusRequestV3,
+			signal?: AbortSignal,
+		) {
+			if (value?.hostSessionRef !== null)
+				return failure("RUNTIME_REQUEST_INVALID", false);
+			const binding = await request(
+				"original-binding",
+				value,
+				RuntimeStatusRequestV3Schema,
+				RuntimeOriginalBindingResponseV3Schema,
+				signal,
+			);
+			if (binding.executionId !== value.executionId)
+				return failure("RUNTIME_RESPONSE_INVALID", true);
+			return binding;
+		},
 		cancelGeneration: (
 			value: RuntimeGenerationCancelRequestV3,
 			signal?: AbortSignal,
