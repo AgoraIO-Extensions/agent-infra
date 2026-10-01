@@ -14,6 +14,7 @@ import {
 } from "@agent-infra/model-catalog";
 import type {
 	KubernetesObject,
+	V1EnvVar,
 	V1Ingress,
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
@@ -510,7 +511,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	async function assertStandardTemplateSelector(input: unknown) {
 		if (!modelProjection) return;
 		const value = desired(input);
-		const expected = workloadEnvironment(value).find(
+		const expected: V1EnvVar | undefined = workloadEnvironment(value).find(
 			(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
 		);
 		const current = await statefulSet(value);
