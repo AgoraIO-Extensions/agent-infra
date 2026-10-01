@@ -1,9 +1,15 @@
 import { appendFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { parsePrAgentReview } from "./pr-agent-review.mjs";
 
 export function projectPrAgentReviewOutput(raw) {
-  return JSON.stringify({ key_issues_to_review: parsePrAgentReview(raw) });
+  const findings = parsePrAgentReview(raw);
+  const output = JSON.stringify({ key_issues_to_review: findings });
+  if (!isDeepStrictEqual(JSON.parse(output).key_issues_to_review, findings)) {
+    throw new Error("PR-Agent review findings cannot be preserved in JSON");
+  }
+  return output;
 }
 
 async function main() {

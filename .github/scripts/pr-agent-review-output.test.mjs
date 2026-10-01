@@ -56,6 +56,17 @@ test("retains the Publisher's input size and finding schema rejection", () => {
   ]) assert.throws(() => projectPrAgentReviewOutput(JSON.stringify(value)));
 });
 
+test("rejects finding numbers changed by JSON serialization at any depth", () => {
+  for (const number of ["1e400", "-1e400", "-0"]) {
+    for (const value of [number, `{"nested":[${number}]}`]) {
+      const raw = `{"key_issues_to_review":[${JSON.stringify(finding).slice(0, -1)},"numeric":${value}}]}`;
+      assert.throws(() => projectPrAgentReviewOutput(raw), /cannot be preserved in JSON/);
+    }
+  }
+  const findings = [{ ...finding, numeric: { nested: [0, -1.5, Number.MAX_VALUE, Number.MIN_VALUE] } }];
+  assert.deepEqual(JSON.parse(projectPrAgentReviewOutput(JSON.stringify({ key_issues_to_review: findings }))).key_issues_to_review, findings);
+});
+
 test("CLI writes only valid findings and never explicitly logs the raw input", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pr-agent-review-output-"));
   const outputPath = path.join(directory, "output");
@@ -68,13 +79,15 @@ test("CLI writes only valid findings and never explicitly logs the raw input", a
     assert.equal(result.stderr, "");
     assert.equal(await readFile(outputPath, "utf8"), `review=${projectPrAgentReviewOutput(raw)}\n`);
     await writeFile(outputPath, "unchanged\n");
-    await assert.rejects(run(process.execPath, command, { env: { PR_AGENT_REVIEW: "synthetic-invalid-do-not-log", GITHUB_OUTPUT: outputPath } }), (error) => {
-      assert.equal(error.code, 1);
-      assert.equal(error.stdout, "");
-      assert.equal(error.stderr, "PR-Agent review findings output preparation failed\n");
-      return true;
-    });
-    assert.equal(await readFile(outputPath, "utf8"), "unchanged\n");
+    for (const invalid of ["synthetic-invalid-do-not-log", `{"key_issues_to_review":[${JSON.stringify(finding).slice(0, -1)},"numeric":1e400}]}`]) {
+      await assert.rejects(run(process.execPath, command, { env: { PR_AGENT_REVIEW: invalid, GITHUB_OUTPUT: outputPath } }), (error) => {
+        assert.equal(error.code, 1);
+        assert.equal(error.stdout, "");
+        assert.equal(error.stderr, "PR-Agent review findings output preparation failed\n");
+        return true;
+      });
+      assert.equal(await readFile(outputPath, "utf8"), "unchanged\n");
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
