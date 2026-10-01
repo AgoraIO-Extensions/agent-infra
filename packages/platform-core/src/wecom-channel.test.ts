@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FakeConversationExecutionV1 } from "./fake-conversation-execution.ts";
 import {
 	createWecomAuthorizationV1,
 	createWecomChannelV1,
+	type WecomAuthorizationPortV1,
 	type WecomChannelStorePortV1,
 	type WecomMessageV1,
 	type WecomReceiptV1,
@@ -103,6 +104,115 @@ function fixture(now = () => new Date("2026-09-15T00:00:00Z")) {
 	};
 }
 describe("managed WeCom channel", () => {
+	it.each([true, false])(
+		"cancels preauthorization without late Store facts (already aborted: %s)",
+		async (alreadyAborted) => {
+			const controller = new AbortController();
+			const addListener = vi.spyOn(controller.signal, "addEventListener");
+			const removeListener = vi.spyOn(controller.signal, "removeEventListener");
+			let finish!: (value: { readonly outcome: "denied" }) => void;
+			let started!: () => void;
+			const entered = new Promise<void>((resolve) => {
+				started = resolve;
+			});
+			const authorize = vi.fn(
+				() =>
+					new Promise<{ readonly outcome: "denied" }>((resolve) => {
+						finish = resolve;
+						started();
+					}),
+			);
+			const reject = vi.fn(async () => {});
+			const accept = vi.fn(async () => ({ outcome: "unavailable" as const }));
+			const channel = createWecomChannelV1({
+				now: () => new Date("2026-09-15T00:00:00Z"),
+				authorization: { authorize },
+				store: { reject, accept },
+			});
+			if (alreadyAborted) controller.abort();
+			const pending = channel.receive(message, undefined, controller.signal);
+			if (!alreadyAborted) {
+				await entered;
+				controller.abort();
+			}
+			expect(await pending).toEqual({ outcome: "unavailable" });
+			if (!alreadyAborted) {
+				expect(addListener).toHaveBeenCalledTimes(1);
+				expect(removeListener).toHaveBeenCalledWith(
+					"abort",
+					addListener.mock.calls[0]?.[1],
+				);
+				finish({ outcome: "denied" });
+				await Promise.resolve();
+			}
+			expect(authorize).toHaveBeenCalledTimes(alreadyAborted ? 0 : 1);
+			expect(reject).not.toHaveBeenCalled();
+			expect(accept).not.toHaveBeenCalled();
+		},
+	);
+	it.each(["allowed", "error"] as const)(
+		"does not enter Store after cancelled authorization returns late %s",
+		async (lateOutcome) => {
+			const controller = new AbortController();
+			let finish!: (
+				value: Awaited<ReturnType<WecomAuthorizationPortV1["authorize"]>>,
+			) => void;
+			let fail!: (reason: Error) => void;
+			let started!: () => void;
+			const entered = new Promise<void>((resolve) => {
+				started = resolve;
+			});
+			const authorization: WecomAuthorizationPortV1 = {
+				authorize: () =>
+					new Promise((resolve, reject) => {
+						finish = resolve;
+						fail = reject;
+						started();
+					}),
+			};
+			const reject = vi.fn(async () => {});
+			const accept = vi.fn(async () => ({ outcome: "unavailable" as const }));
+			const channel = createWecomChannelV1({
+				now: () => new Date("2026-09-15T00:00:00Z"),
+				authorization,
+				store: { reject, accept },
+			});
+			const pending = channel.receive(message, undefined, controller.signal);
+			await entered;
+			controller.abort();
+			expect(await pending).toEqual({ outcome: "unavailable" });
+			if (lateOutcome === "error") fail(new Error("Late directory failure"));
+			else
+				finish({
+					outcome: "allowed",
+					authority: {
+						actor: {
+							schemaVersion: 1,
+							agentId: message.agentId,
+							actorId: message.senderId,
+							channelId: wecomChannelIdV1(message),
+							authorizationRevision: "v1",
+							supportsSupplementaryInstruction: false,
+							taskBoundary: {
+								schemaVersion: 1,
+								principal: { kind: "user", id: message.senderId },
+								agentId: message.agentId,
+								channelId: wecomChannelIdV1(message),
+								identityRevision: "identity-1",
+								agentAuthorizationRevision: "v1",
+								accessSources: [{ kind: "user", userId: message.senderId }],
+							},
+						},
+						managementRevision: 1,
+						channelRevision: "v1",
+					},
+				});
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(reject).not.toHaveBeenCalled();
+			expect(accept).not.toHaveBeenCalled();
+		},
+	);
 	it("rejects an expired reply before creating a receipt or execution", async () => {
 		const f = fixture();
 		await expect(
