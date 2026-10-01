@@ -111,7 +111,18 @@ type OpenCodexBridge = (
 export type CodexNativeCommandReadContext = Pick<
 	RuntimeOriginalEvidenceReadContext,
 	"signal" | "expiresAt" | "assertCurrent"
-> & { readonly nativeSessionRef: string };
+> & {
+	readonly nativeSessionRef: string;
+	revalidate(): Promise<RuntimeOriginalEvidenceBinding>;
+};
+
+interface NativeMetadataReadBoundary {
+	readonly expiresAt: number;
+	bindRpc(rpc: CodexRpc): void;
+	assertCurrent(): void;
+	revalidate(): Promise<void>;
+	wait<T>(pending: Promise<T>): Promise<T>;
+}
 
 export interface CodexNativeStatusSelection {
 	readonly capabilityId: string;
@@ -124,6 +135,7 @@ interface NativeCommandBinding {
 	readonly nativeSessionRef: string;
 	readonly threadId: string;
 	readonly configVersion: string;
+	readonly requiredRuntime: CodexRuntimeRequirements;
 }
 
 /** Trusted deployment input; shape receipt does not verify installation or image provenance. */
@@ -2296,13 +2308,16 @@ function parsePinnedModelProfiles(value: unknown) {
 async function assertPinnedModelProfiles(
 	rpc: CodexRpc,
 	modelOptions: ReadonlyMap<string, ConfiguredCodexRuntimeModelOption>,
+	assertCurrent?: () => void,
+	metadataRead?: NativeMetadataReadBoundary,
 ) {
 	const profiles: PinnedModelProfile[] = [];
 	const cursors = new Set<string>();
 	const modelNames = new Set<string>();
 	let cursor: string | undefined;
 	for (let page = 0; page < maximumModelsListPages; page += 1) {
-		const result = await rpc.request(
+		if (metadataRead) await metadataRead.revalidate();
+		const pending = rpc.request(
 			"model/list",
 			{
 				includeHidden: true,
@@ -2310,6 +2325,9 @@ async function assertPinnedModelProfiles(
 				...(cursor ? { cursor } : {}),
 			},
 			parsePinnedModelProfiles,
+		);
+		const result = await (metadataRead?.wait(pending) ?? pending).finally(() =>
+			assertCurrent?.(),
 		);
 		for (const profile of result.profiles) {
 			if (modelNames.has(profile.model)) protocolInvalid();
@@ -2777,6 +2795,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		) => Promise<CodexAppServerTransport>,
 		private readonly assertContainedNativeConfiguration: (
 			rpc: CodexRpc,
+			assertCurrent?: () => void,
+			metadataRead?: NativeMetadataReadBoundary,
 		) => Promise<void>,
 		private readonly modelOptions: ReadonlyMap<
 			string,
@@ -3500,18 +3520,27 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		});
 	}
 
-	private async rpc(nativeSessionRef: string) {
+	private async rpc(
+		nativeSessionRef: string,
+		assertCurrent?: () => void,
+		metadataRead?: NativeMetadataReadBoundary,
+	) {
+		if (metadataRead) await metadataRead.revalidate();
+		assertCurrent?.();
 		if (this.closed) unavailable();
 		this.assertRuntimeRequirements(this.session(nativeSessionRef));
 		const key = this.conversationKeyFor(nativeSessionRef);
 		const existing = this.conversationRpcs.get(key);
-		if (existing) return existing;
+		if (existing)
+			return metadataRead
+				? metadataRead.wait(Promise.resolve(existing))
+				: existing;
 		const inFlight = this.inFlightConversationRpcs.get(key);
-		if (inFlight) return inFlight;
-		const opening = this.openConversationRpc(key);
+		if (inFlight) return metadataRead ? metadataRead.wait(inFlight) : inFlight;
+		const opening = this.openConversationRpc(key, assertCurrent, metadataRead);
 		this.inFlightConversationRpcs.set(key, opening);
 		try {
-			return await opening;
+			return await (metadataRead?.wait(opening) ?? opening);
 		} finally {
 			if (this.inFlightConversationRpcs.get(key) === opening) {
 				this.inFlightConversationRpcs.delete(key);
@@ -3519,16 +3548,69 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 	}
 
-	protected async openConversationRpc(conversationKey: string) {
+	protected async openConversationRpc(
+		conversationKey: string,
+		assertCurrent?: () => void,
+		metadataRead?: NativeMetadataReadBoundary,
+	) {
 		let bridge: CodexAppServerTransport;
+		let resolvedBridge: CodexAppServerTransport | undefined;
+		let abandonedOpen = false;
+		let ownedOpening: Promise<CodexRpc> | undefined;
+		const retireProvisional = async (transport: CodexAppServerTransport) => {
+			// A bounded metadata query must never retire an already admitted shared RPC.
+			if (this.rpcsByTransport.has(transport)) return;
+			await transport.close?.().catch(() => {});
+			const currentOpening = this.inFlightConversationRpcs.get(conversationKey);
+			if (
+				this.conversationRpcs.has(conversationKey) ||
+				(currentOpening && currentOpening !== ownedOpening)
+			)
+				return;
+			this.revokeConnectionClient(conversationKey);
+			this.revokeModelConversation?.(
+				this.modelConversationKey(conversationKey),
+			);
+		};
 		try {
-			bridge = await this.openConversationBridge(conversationKey);
-		} catch {
+			if (metadataRead) await metadataRead.revalidate();
+			ownedOpening = this.inFlightConversationRpcs.get(conversationKey);
+			const pending = this.openConversationBridge(conversationKey);
+			void pending.then(
+				(transport) => {
+					resolvedBridge = transport;
+					if (abandonedOpen) void retireProvisional(transport).catch(() => {});
+				},
+				() => {},
+			);
+			bridge = await (metadataRead?.wait(pending) ?? pending);
+		} catch (error) {
+			abandonedOpen = true;
+			if (metadataRead) {
+				if (resolvedBridge)
+					void retireProvisional(resolvedBridge).catch(() => {});
+				if (error instanceof RuntimeHostError) throw error;
+				unavailable();
+			}
 			this.revokeConnectionClient(conversationKey);
 			this.revokeModelConversation?.(
 				this.modelConversationKey(conversationKey),
 			);
 			unavailable();
+		}
+		try {
+			metadataRead?.assertCurrent();
+			assertCurrent?.();
+		} catch (error) {
+			if (metadataRead) await retireProvisional(bridge);
+			else {
+				await bridge.close?.().catch(() => {});
+				this.revokeConnectionClient(conversationKey);
+				this.revokeModelConversation?.(
+					this.modelConversationKey(conversationKey),
+				);
+			}
+			throw error;
 		}
 		const opened = this.rpcsByTransport.get(bridge);
 		if (opened) {
@@ -3578,7 +3660,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		try {
 			// Every native process is admitted on its own; a contained
 			// configuration on one process never vouches for another.
-			await rpc.request(
+			if (metadataRead) await metadataRead.revalidate();
+			const initialize = rpc.request(
 				"initialize",
 				{
 					clientInfo: { name: "agent-infra-runtime", version: "1" },
@@ -3588,7 +3671,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					if (!isPlainRecord(value)) protocolInvalid();
 				},
 			);
-			await this.assertContainedNativeConfiguration(rpc);
+			await (metadataRead?.wait(initialize) ?? initialize).finally(() =>
+				assertCurrent?.(),
+			);
+			await this.assertContainedNativeConfiguration(
+				rpc,
+				assertCurrent,
+				metadataRead,
+			);
+			assertCurrent?.();
 		} catch (error) {
 			await rpc.close().catch(() => {});
 			if (error instanceof RuntimeHostError) throw error;
@@ -3832,12 +3923,28 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const assertContainedConfigurationFor = async (
 			rpc: CodexRpc,
 			expected: Parameters<typeof assertContainedConfiguration>[1],
+			assertCurrent?: () => void,
+			metadataRead?: NativeMetadataReadBoundary,
 		) => {
-			await rpc.request("config/read", { includeLayers: false }, (value) => {
-				assertContainedConfiguration(value, expected);
-			});
+			if (metadataRead) await metadataRead.revalidate();
+			const pending = rpc.request(
+				"config/read",
+				{ includeLayers: false },
+				(value) => {
+					assertContainedConfiguration(value, expected);
+				},
+			);
+			await (metadataRead?.wait(pending) ?? pending).finally(() =>
+				assertCurrent?.(),
+			);
 			if (modelTransport) {
-				await assertPinnedModelProfiles(rpc, modelOptions);
+				await assertPinnedModelProfiles(
+					rpc,
+					modelOptions,
+					assertCurrent,
+					metadataRead,
+				);
+				assertCurrent?.();
 			}
 		};
 		const conversationContainedConfiguration = {
@@ -3846,8 +3953,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				? { connectionProfile: connectionClient.profile }
 				: {}),
 		};
-		const assertContainedNativeConfiguration = (rpc: CodexRpc) =>
-			assertContainedConfigurationFor(rpc, conversationContainedConfiguration);
+		const assertContainedNativeConfiguration = (
+			rpc: CodexRpc,
+			assertCurrent?: () => void,
+			metadataRead?: NativeMetadataReadBoundary,
+		) =>
+			assertContainedConfigurationFor(
+				rpc,
+				conversationContainedConfiguration,
+				assertCurrent,
+				metadataRead,
+			);
 		const probeNative = async (signal: AbortSignal) => {
 			signal.throwIfAborted();
 			// Dedicated temporary native HOME; never pass a real Conversation key or Store.
@@ -4033,10 +4149,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			scope.sessionGeneration < 1
 		)
 			runtimeAuthorizationDenied();
-		const session = ownRecordValue(
-			this.readState().sessions,
-			read.nativeSessionRef,
-		);
+		let state: CodexDriverState;
+		try {
+			state = this.readState();
+		} catch {
+			unavailable();
+		}
+		const session = ownRecordValue(state.sessions, read.nativeSessionRef);
 		if (
 			!session ||
 			session.agentId !== scope.agentId ||
@@ -4046,8 +4165,23 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		)
 			runtimeAuthorizationDenied();
 		if (this.closed || !session.threadId) unavailable();
+		const operation = ownRecordValue(
+			state.operations,
+			operationKey({
+				agentId: session.agentId,
+				conversationId: session.conversationId,
+				sessionGeneration: session.sessionGeneration,
+				kind: "submit-turn",
+				operationId: scope.executionId,
+			}),
+		);
 		if (
-			this.requiredRuntime.lane !== "official-model-only" ||
+			!operation ||
+			operation.nativeSessionRef !== read.nativeSessionRef ||
+			!nonEmptyString(operation.configVersion) ||
+			operation.configVersion !== this.configVersion ||
+			!session.requiredRuntime ||
+			session.requiredRuntime.lane !== "official-model-only" ||
 			!this.runtimeRequirementsMatch(session)
 		)
 			unavailable();
@@ -4055,7 +4189,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			authority,
 			nativeSessionRef: read.nativeSessionRef,
 			threadId: session.threadId,
-			configVersion: this.configVersion,
+			configVersion: operation.configVersion,
+			requiredRuntime: session.requiredRuntime,
 		} satisfies NativeCommandBinding;
 	}
 
@@ -4065,6 +4200,115 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	) {
 		if (!isDeepStrictEqual(this.nativeCommandBinding(read), binding))
 			runtimeAuthorizationDenied();
+	}
+
+	private nativeMetadataRead(
+		read: CodexNativeCommandReadContext,
+		binding: NativeCommandBinding,
+	): NativeMetadataReadBoundary {
+		const signal = read.signal;
+		const expiresAt = read.expiresAt;
+		const conversationKey = codexConversationKey(binding.authority.scope);
+		let originalRpc: CodexRpc | undefined;
+		let failed = false;
+		let failure: unknown;
+		const invalidate = (): never => {
+			try {
+				runtimeAuthorizationDenied();
+			} catch (error) {
+				failed = true;
+				failure = error;
+				throw error;
+			}
+		};
+		const assertCurrent = () => {
+			try {
+				if (failed) throw failure;
+				if (
+					read.signal !== signal ||
+					read.expiresAt !== expiresAt ||
+					signal.aborted ||
+					expiresAt <= Date.now()
+				)
+					runtimeAuthorizationDenied();
+				this.assertNativeCommandBinding(read, binding);
+				if (
+					originalRpc &&
+					this.conversationRpcs.get(conversationKey) !== originalRpc
+				)
+					unavailable();
+			} catch (error) {
+				failed = true;
+				failure = error;
+				throw error;
+			}
+		};
+		const bounded = <T>(pending: Promise<T>) =>
+			new Promise<T>((resolve, reject) => {
+				let settled = false;
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				const finish = (complete: () => void) => {
+					if (settled) return;
+					settled = true;
+					if (timer !== undefined) clearTimeout(timer);
+					signal.removeEventListener("abort", interrupt);
+					complete();
+				};
+				const interrupt = () => {
+					try {
+						invalidate();
+					} catch (error) {
+						finish(() => reject(error));
+					}
+				};
+				// Observe late failures even when the original query has already expired.
+				void pending.then(
+					(value) => finish(() => resolve(value)),
+					(error) => finish(() => reject(error)),
+				);
+				try {
+					assertCurrent();
+					signal.addEventListener("abort", interrupt, { once: true });
+					timer = setTimeout(interrupt, Math.max(0, expiresAt - Date.now()));
+				} catch (error) {
+					finish(() => reject(error));
+				}
+			});
+		const revalidate = async () => {
+			assertCurrent();
+			let authority: RuntimeOriginalEvidenceBinding;
+			try {
+				authority = await bounded(
+					Promise.resolve().then(() => {
+						assertCurrent();
+						return read.revalidate();
+					}),
+				);
+				if (!isDeepStrictEqual(authority, binding.authority))
+					runtimeAuthorizationDenied();
+			} catch {
+				invalidate();
+			}
+			// Local original config/RPC can change while policy is pending.
+			assertCurrent();
+		};
+		return {
+			expiresAt,
+			bindRpc: (rpc) => {
+				if (originalRpc && originalRpc !== rpc) invalidate();
+				originalRpc = rpc;
+				assertCurrent();
+			},
+			assertCurrent,
+			revalidate,
+			async wait<T>(pending: Promise<T>) {
+				try {
+					return await bounded(pending);
+				} finally {
+					await revalidate();
+				}
+			},
+		};
 	}
 
 	private nativeCommandDirectory(binding: NativeCommandBinding) {
@@ -4081,7 +4325,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					binding.nativeSessionRef,
 					binding.threadId,
 					binding.configVersion,
-					this.requiredRuntime,
+					binding.requiredRuntime,
 				]),
 			)
 			.digest("hex");
@@ -4110,33 +4354,41 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async readBoundNativeStatus(
 		read: CodexNativeCommandReadContext,
 		binding: NativeCommandBinding,
+		metadataRead: NativeMetadataReadBoundary,
 	) {
-		this.assertNativeCommandBinding(read, binding);
-		const rpc = await this.rpc(binding.nativeSessionRef).finally(() =>
-			this.assertNativeCommandBinding(read, binding),
+		const rpc = await this.rpc(
+			binding.nativeSessionRef,
+			metadataRead.assertCurrent,
+			metadataRead,
 		);
-		const metadata = await rpc
-			.request(
+		metadataRead.bindRpc(rpc);
+		await metadataRead.revalidate();
+		const metadata = await metadataRead.wait(
+			rpc.request(
 				"thread/read",
 				{ threadId: binding.threadId, includeTurns: false },
 				(value) => value,
 				false,
 				false,
-				Math.min(read.expiresAt, Date.now() + rpcRequestTimeoutMs),
+				Math.min(metadataRead.expiresAt, Date.now() + rpcRequestTimeoutMs),
 				read.signal,
-			)
-			.finally(() => this.assertNativeCommandBinding(read, binding));
-		return {
+			),
+		);
+		const result = {
 			status: parseNativeCommandStatus(metadata, binding.threadId),
 			readAt: new Date().toISOString(),
 		};
+		await metadataRead.revalidate();
+		return result;
 	}
 
 	async discoverNativeCommands(read: CodexNativeCommandReadContext) {
 		const binding = this.nativeCommandBinding(read);
-		await this.readBoundNativeStatus(read, binding);
-		this.assertNativeCommandBinding(read, binding);
-		return this.nativeCommandDirectory(binding);
+		const metadataRead = this.nativeMetadataRead(read, binding);
+		await this.readBoundNativeStatus(read, binding, metadataRead);
+		const directory = this.nativeCommandDirectory(binding);
+		await metadataRead.revalidate();
+		return directory;
 	}
 
 	async readNativeStatus(
@@ -4171,7 +4423,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				"Native command is unavailable",
 				404,
 			);
-		return this.readBoundNativeStatus(read, binding);
+		const metadataRead = this.nativeMetadataRead(read, binding);
+		const status = await this.readBoundNativeStatus(
+			read,
+			binding,
+			metadataRead,
+		);
+		await metadataRead.revalidate();
+		return status;
 	}
 
 	async validateExternalAction(action: RuntimeExternalActionAuthorization) {
