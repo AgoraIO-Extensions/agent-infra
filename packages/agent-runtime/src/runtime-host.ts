@@ -372,6 +372,9 @@ export class RuntimeHost {
 	) {
 		return this.trustedHost().recoverStatus(value, verification, signal);
 	}
+	readOriginalBinding(value: RuntimeStatusRequestV3, verification: unknown) {
+		return this.trustedHost().readOriginalBinding(value, verification);
+	}
 	cancelGenerationV3(
 		value: RuntimeGenerationCancelRequestV3,
 		verification: unknown,

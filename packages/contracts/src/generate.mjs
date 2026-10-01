@@ -514,6 +514,12 @@ function buildArtifacts() {
 			"RuntimeStatusResponseV3",
 		],
 		[
+			"original-binding",
+			"readOriginalRuntimeBindingV3",
+			"RuntimeStatusRequestV3",
+			"RuntimeOriginalBindingResponseV3",
+		],
+		[
 			"generations/cancel",
 			"cancelRuntimeGenerationV3",
 			"RuntimeGenerationCancelRequestV3",
