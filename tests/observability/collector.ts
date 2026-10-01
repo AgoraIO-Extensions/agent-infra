@@ -1,7 +1,7 @@
 import { execFile as callback } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { chmod, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,18 +10,83 @@ import { promisify } from "node:util";
 
 const execFile = promisify(callback);
 export const collectorImage = "otel/opentelemetry-collector-contrib:0.133.0";
+
+const minimumDockerAvailableKiB = 5_242_880;
+
+function availableKiB(disk: string) {
+	return Number(disk.trim().split("\n").at(-1)?.trim().split(/\s+/)[3]);
+}
+
 export async function assertDockerCapacity() {
 	// This standalone acceptance command is not a cached Turbo task.
 	// biome-ignore lint/suspicious/noUndeclaredEnvVars: standalone acceptance resource ownership
 	const session = process.env.AO_SESSION_ID;
+	// biome-ignore lint/suspicious/noUndeclaredEnvVars: explicit hosted acceptance mode
+	const mode = process.env.OBSERVABILITY_DOCKER_MODE;
 	// biome-ignore lint/suspicious/noUndeclaredEnvVars: explicitly selected local Docker VM
 	const profile = process.env.COLIMA_PROFILE;
-	if (!session || !profile)
-		throw new Error("AO_SESSION_ID and COLIMA_PROFILE are required");
+	if (!session) throw new Error("AO_SESSION_ID is required");
 	// biome-ignore lint/suspicious/noUndeclaredEnvVars: standalone Docker environment gate
 	const dockerHost = process.env.DOCKER_HOST;
 	// biome-ignore lint/suspicious/noUndeclaredEnvVars: Docker context overrides DOCKER_HOST
 	const dockerContext = process.env.DOCKER_CONTEXT;
+	if (mode === "hosted-linux") {
+		// biome-ignore lint/suspicious/noUndeclaredEnvVars: GitHub hosted runner identity gate
+		const githubActions = process.env.GITHUB_ACTIONS;
+		// biome-ignore lint/suspicious/noUndeclaredEnvVars: GitHub hosted runner identity gate
+		const runnerOs = process.env.RUNNER_OS;
+		// biome-ignore lint/suspicious/noUndeclaredEnvVars: GitHub hosted runner identity gate
+		const runnerEnvironment = process.env.RUNNER_ENVIRONMENT;
+		if (
+			process.platform !== "linux" ||
+			githubActions !== "true" ||
+			runnerOs !== "Linux" ||
+			runnerEnvironment !== "github-hosted"
+		)
+			throw new Error("hosted-linux mode requires a GitHub Linux runner");
+		if (
+			dockerContext !== undefined ||
+			dockerHost !== "unix:///var/run/docker.sock"
+		)
+			throw new Error(
+				"hosted-linux mode requires the native /var/run/docker.sock and no Docker context",
+			);
+		const socket = await stat("/var/run/docker.sock").catch(() => undefined);
+		if (!socket?.isSocket())
+			throw new Error("hosted-linux mode requires a native Docker socket");
+		const { stdout: daemon } = await execFile("docker", [
+			"info",
+			"--format",
+			"{{json .}}",
+		]);
+		let dockerRootDir: unknown;
+		try {
+			dockerRootDir = (JSON.parse(daemon) as { DockerRootDir?: unknown })
+				.DockerRootDir;
+		} catch (error) {
+			throw new Error("Docker daemon info was not valid JSON", {
+				cause: error,
+			});
+		}
+		if (typeof dockerRootDir !== "string" || !dockerRootDir.startsWith("/"))
+			throw new Error("Docker daemon did not report an absolute DockerRootDir");
+		const { stdout: disk } = await execFile("df", ["-Pk", dockerRootDir]);
+		const available = availableKiB(disk);
+		if (
+			!Number.isSafeInteger(available) ||
+			available < minimumDockerAvailableKiB
+		)
+			throw new Error("Docker disk Available must be at least 5242880 KiB");
+		return {
+			session,
+			availableKiB: available,
+			mode,
+			dockerRootDir,
+		};
+	}
+	if (mode && mode !== "colima")
+		throw new Error(`Unsupported observability Docker mode: ${mode}`);
+	if (!profile) throw new Error("COLIMA_PROFILE is required for local Docker");
 	if (
 		!/^[a-zA-Z0-9_-]+$/.test(profile) ||
 		dockerContext ||
@@ -39,12 +104,10 @@ export async function assertDockerCapacity() {
 		"-Pk",
 		"/var/lib/docker",
 	]);
-	const available = Number(
-		disk.trim().split("\n").at(-1)?.trim().split(/\s+/)[3],
-	);
-	if (!Number.isSafeInteger(available) || available < 5242880)
+	const available = availableKiB(disk);
+	if (!Number.isSafeInteger(available) || available < minimumDockerAvailableKiB)
 		throw new Error("Docker disk Available must be at least 5242880 KiB");
-	return { session, availableKiB: available };
+	return { session, availableKiB: available, mode: "colima" as const };
 }
 
 async function availablePort() {
