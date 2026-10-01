@@ -117,6 +117,11 @@ describe("Host metadata HTTP boundary", () => {
 			nativeMetadata: undefined,
 		});
 		expect(
+			disabled.routes.filter(
+				({ method, path }) => method === "POST" && path.startsWith(`${route}/`),
+			),
+		).toEqual([]);
+		expect(
 			(await disabled.request(request(`${route}/binding`, f.identity))).status,
 		).toBe(401);
 		expect(f.resolve).not.toHaveBeenCalled();

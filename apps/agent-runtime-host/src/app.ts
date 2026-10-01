@@ -136,48 +136,57 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			},
 		}),
 	);
-	app.post("/internal/runtime/native-metadata/v1/binding", async (context) => {
-		const request = context.req.raw;
-		const signal = context.get("metadataSignal");
-		const workerId = options.nativeMetadata?.workerId;
-		if (!workerId || new URL(request.url).search)
-			throw new RuntimeHostError(
-				"RUNTIME_REQUEST_INVALID",
-				"Runtime request is invalid",
-				400,
+	if (options.nativeMetadata) {
+		app.post(
+			"/internal/runtime/native-metadata/v1/binding",
+			async (context) => {
+				const request = context.req.raw;
+				const signal = context.get("metadataSignal");
+				const workerId = options.nativeMetadata?.workerId;
+				if (!workerId || new URL(request.url).search)
+					throw new RuntimeHostError(
+						"RUNTIME_REQUEST_INVALID",
+						"Runtime request is invalid",
+						400,
+					);
+				const body = await parseBody(
+					request,
+					RuntimeNativeMetadataBindingRequestV1Schema,
+				);
+				signal.throwIfAborted();
+				const result = RuntimeNativeMetadataBindingResponseV1Schema.parse(
+					await options.host.resolveNativeMetadataBindingV1(
+						body,
+						workerId,
+						signal,
+					),
+				);
+				signal.throwIfAborted();
+				return context.json(result);
+			},
+		);
+		app.post("/internal/runtime/native-metadata/v1/read", async (context) => {
+			const request = context.req.raw;
+			const signal = context.get("metadataSignal");
+			const workerId = options.nativeMetadata?.workerId;
+			if (!workerId || new URL(request.url).search)
+				throw new RuntimeHostError(
+					"RUNTIME_REQUEST_INVALID",
+					"Runtime request is invalid",
+					400,
+				);
+			const body = await parseBody(
+				request,
+				RuntimeNativeMetadataReadRequestV1Schema,
 			);
-		const body = await parseBody(
-			request,
-			RuntimeNativeMetadataBindingRequestV1Schema,
-		);
-		signal.throwIfAborted();
-		const result = RuntimeNativeMetadataBindingResponseV1Schema.parse(
-			await options.host.resolveNativeMetadataBindingV1(body, workerId, signal),
-		);
-		signal.throwIfAborted();
-		return context.json(result);
-	});
-	app.post("/internal/runtime/native-metadata/v1/read", async (context) => {
-		const request = context.req.raw;
-		const signal = context.get("metadataSignal");
-		const workerId = options.nativeMetadata?.workerId;
-		if (!workerId || new URL(request.url).search)
-			throw new RuntimeHostError(
-				"RUNTIME_REQUEST_INVALID",
-				"Runtime request is invalid",
-				400,
+			signal.throwIfAborted();
+			const result = RuntimeNativeMetadataReadResponseV1Schema.parse(
+				await options.host.readNativeMetadataV1(body, workerId, signal),
 			);
-		const body = await parseBody(
-			request,
-			RuntimeNativeMetadataReadRequestV1Schema,
-		);
-		signal.throwIfAborted();
-		const result = RuntimeNativeMetadataReadResponseV1Schema.parse(
-			await options.host.readNativeMetadataV1(body, workerId, signal),
-		);
-		signal.throwIfAborted();
-		return context.json(result);
-	});
+			signal.throwIfAborted();
+			return context.json(result);
+		});
+	}
 
 	app.post("/internal/runtime/v1/turns", async (context) => {
 		const request = await parseBody(
