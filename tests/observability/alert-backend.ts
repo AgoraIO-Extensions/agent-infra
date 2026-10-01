@@ -260,11 +260,10 @@ receivers:
 			collector,
 		);
 		collectorConnected = true;
-		for (const [kind, port, memory, args] of [
-			["receiver", 9411, "64m", ["node", "/receiver.ts"]],
+		for (const [kind, memory, args] of [
+			["receiver", "64m", ["node", "/receiver.ts"]],
 			[
 				"alertmanager",
-				9093,
 				"96m",
 				[
 					"--config.file=/acceptance.yml",
@@ -274,7 +273,6 @@ receivers:
 			],
 			[
 				"prometheus",
-				9090,
 				"256m",
 				[
 					"--config.file=/acceptance.yml",
@@ -302,8 +300,6 @@ receivers:
 				memory,
 				"--cpus",
 				"0.5",
-				"--publish",
-				`127.0.0.1::${port}`,
 				"--tmpfs",
 				"/prometheus:rw,size=64m,mode=777",
 				"--tmpfs",
@@ -330,23 +326,33 @@ receivers:
 			}
 			await docker("start", name);
 		}
-		const endpoint = async (kind: string, port: number) => {
-			const { stdout } = await docker(
-				"port",
-				`${network}-${kind}`,
-				`${port}/tcp`,
+		// An internal bridge has no external route. Read official HTTP endpoints
+		// from the existing Node container without publishing backend host ports.
+		const read = async (url: string) => {
+			const { stdout } = await execFile(
+				"docker",
+				[
+					"exec",
+					`${network}-receiver`,
+					"node",
+					"--input-type=module",
+					"--eval",
+					`const response = await fetch(process.argv[1], {signal: AbortSignal.timeout(2000)});
+if (!response.ok) throw new Error("Alert backend query failed");
+process.stdout.write(await response.text());`,
+					url,
+				],
+				{ timeout: 3000, maxBuffer: 512 * 1024 },
 			);
-			const match = stdout.trim().match(/^127\.0\.0\.1:(\d+)$/);
-			if (!match) throw new Error("Backend must bind only loopback");
-			return `http://127.0.0.1:${match[1]}`;
+			return stdout;
 		};
-		const prometheus = await endpoint("prometheus", 9090);
-		const receiver = await endpoint("receiver", 9411);
+		const prometheus = "http://prometheus:9090";
+		const receiver = "http://127.0.0.1:9411";
 		for (const url of [`${prometheus}/-/ready`, `${receiver}/receipts`]) {
 			let ready = false;
 			for (let attempt = 0; attempt < 60; attempt++) {
-				ready = await fetch(url, { signal: AbortSignal.timeout(500) }).then(
-					(r) => r.ok,
+				ready = await read(url).then(
+					() => true,
 					() => false,
 				);
 				if (ready) break;
@@ -354,13 +360,8 @@ receivers:
 			}
 			if (!ready) throw new Error("Alert backend startup failed");
 		}
-		const read = async (url: string) => {
-			const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
-			if (!response.ok) throw new Error("Alert backend query failed");
-			return response.json();
-		};
 		const readReceipts = async () => {
-			const result: unknown = await read(`${receiver}/receipts`);
+			const result: unknown = JSON.parse(await read(`${receiver}/receipts`));
 			if (
 				!Array.isArray(result) ||
 				result.length > 128 ||
@@ -376,8 +377,10 @@ receivers:
 			thresholds,
 			stop,
 			async query(expression: string) {
-				const result = await read(
-					`${prometheus}/api/v1/query?query=${encodeURIComponent(expression)}`,
+				const result: unknown = JSON.parse(
+					await read(
+						`${prometheus}/api/v1/query?query=${encodeURIComponent(expression)}`,
+					),
 				);
 				if (!isVectorResponse(result))
 					throw new Error("Invalid Prometheus vector response");
@@ -410,6 +413,11 @@ receivers:
 					images,
 					configurations,
 					thresholds,
+					queryAccess: {
+						prometheus,
+						receiver,
+						transport: "docker-exec-node-http",
+					},
 					queries,
 					receipts: await readReceipts(),
 				};

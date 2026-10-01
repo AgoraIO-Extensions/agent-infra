@@ -35,7 +35,7 @@ Collector 固定使用已有官方 `otel/opentelemetry-collector-contrib:0.133.0
 
 ## 受控告警后端与出口
 
-`alert-backend.ts` 在同一次 Collector 验收中启动未修改的官方 Prometheus v3.15.0、Alertmanager v0.34.1 和仓库固定 Node 24 镜像；内部网络无外部 exporter，查询与 webhook 回读只绑定回环端口。复用已有镜像，仅隔离 hosted Linux runner 可 provision 缺少的固定镜像；本地不自动 pull。镜像 ID/RepoDigest、实际配置、PromQL 结果与通知保存在 `collector.json` 的 `alertBackend`，精确资源清理写入相邻 `.alerts-cleanup.json`。
+`alert-backend.ts` 在同一次 Collector 验收中启动未修改的官方 Prometheus v3.15.0、Alertmanager v0.34.1 和仓库固定 Node 24 镜像；内部网络无外部 exporter，不发布告警后端宿主端口。查询由已有官方 Node 接收容器读取同网 Prometheus HTTP API，通知回读使用该容器内回环 HTTP 地址；单次 HTTP 超时 2 秒、Docker exec 超时 3 秒，stdout 限制 512 KiB。复用已有镜像，仅隔离 hosted Linux runner 可 provision 缺少的固定镜像；本地不自动 pull。镜像 ID/RepoDigest、实际配置、查询路径、PromQL 结果与通知保存在 `collector.json` 的 `alertBackend`，精确资源清理写入相邻 `.alerts-cleanup.json`。
 
 正式 API 的 outbox gauge 与受控真实 HTTP 查询失败 counter 分别触发持续积压和错误窗口；Collector 停止触发采集服务不可用。三者均由真实规则求值和 Alertmanager 投递 firing/resolved，接收器只保留固定 alertname/kind/status 与 payload hash，输出有界。采集服务告警不能据此判定 API/Runtime/Connection 的业务可用性。测试等待包含初次镜像准备，原业务与脱敏断言仍全部保留。
 
