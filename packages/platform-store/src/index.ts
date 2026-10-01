@@ -108,6 +108,7 @@ export {
 	requireCurrentPersonalApiTaskAdmissionV1,
 	resolvePersonalApiTaskAdmissionAuthorityV1,
 } from "./personal-api-task-authorization.ts";
+export { PostgresPersonalRelayKeyStoreV1 } from "./personal-relay-key.ts";
 export {
 	PostgresScopedPlatformAuditQueryV1,
 	type ScopedPlatformAuditPageV1,

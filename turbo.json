@@ -10,6 +10,9 @@
 		"check-types": {
 			"dependsOn": ["^build", "^check-types"]
 		},
+		"@agent-infra/platform-store#check-types": {
+			"dependsOn": ["build", "^build", "^check-types"]
+		},
 		"test": {
 			"dependsOn": ["^test"]
 		},

@@ -18,7 +18,10 @@ import {
 } from "vitest";
 
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
-import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
+import {
+	migratePlatformDatabase,
+	platformDatabaseUrlFromEnvironment,
+} from "./migrate.ts";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
@@ -577,9 +580,13 @@ describe("Platform PostgreSQL migration foundation", () => {
 			);
 
 			const authoredIndexes = platformInfrastructureTables
-				.flatMap((table) =>
-					getTableConfig(table).indexes.map((index) => index.config.name),
-				)
+				.flatMap((table) => {
+					const config = getTableConfig(table);
+					return [
+						...config.indexes.map((index) => index.config.name),
+						...config.uniqueConstraints.map((constraint) => constraint.name),
+					];
+				})
 				.toSorted();
 			const migratedIndexes = await client`
 					select indexes.indexname
@@ -1312,6 +1319,7 @@ const retained = JSON.parse(
 describe("approved Platform migration gaps", () => {
 	let client: PostgresClient;
 	let folder: string;
+	let published29Folder: string;
 	let journal: {
 		entries: {
 			idx: number;
@@ -1402,7 +1410,6 @@ describe("approved Platform migration gaps", () => {
 		// This file's isolated test database is never the retained acceptance PG.
 		await client`drop schema if exists platform cascade`;
 		await client`drop schema if exists platform_migrations cascade`;
-		await builtStore.migratePlatformDatabase({ databaseUrl });
 		folder = await mkdtemp(resolve(tmpdir(), "agent-infra-approved-gap-"));
 		await cp(
 			resolve(import.meta.dirname, "../../../migrations/platform"),
@@ -1414,7 +1421,21 @@ describe("approved Platform migration gaps", () => {
 		journal = JSON.parse(
 			await readFile(resolve(folder, "meta/_journal.json"), "utf8"),
 		);
+		// Preserve this suite's actual29 publication scenario after default adds30.
+		journal.entries = journal.entries.filter((row) => row.idx <= 29);
+		await writeFile(
+			resolve(folder, "meta/_journal.json"),
+			JSON.stringify(journal),
+		);
+		published29Folder = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-published29-"),
+		);
+		await cp(folder, published29Folder, { recursive: true });
 		expect(journal.entries.at(-1)?.idx).toBe(29);
+		await builtStore.migratePlatformDatabase({
+			databaseUrl,
+			migrationsFolder: published29Folder,
+		});
 		await client`insert into platform.platform_user_disables (user_id, disabled_at)
 			values ('gap-disabled', '2026-09-30T01:00:00Z')`;
 		await seedConversation();
@@ -1423,6 +1444,8 @@ describe("approved Platform migration gaps", () => {
 	afterEach(async () => {
 		await client?.end();
 		if (folder) await rm(folder, { recursive: true, force: true });
+		if (published29Folder)
+			await rm(published29Folder, { recursive: true, force: true });
 	});
 
 	it("executes published original25/27 below actual29 once and preserves all existing records", async () => {
@@ -1483,7 +1506,10 @@ describe("approved Platform migration gaps", () => {
 	it("recognizes previously executed historical identities without publishing absent SQL", async () => {
 		const before = await history();
 		const data = await records();
-		await builtStore.migratePlatformDatabase({ databaseUrl });
+		await builtStore.migratePlatformDatabase({
+			databaseUrl,
+			migrationsFolder: published29Folder,
+		});
 		expect(await history()).toEqual(before);
 		expect(await records()).toEqual(data);
 		expect(
@@ -1495,7 +1521,10 @@ describe("approved Platform migration gaps", () => {
 			migrationsFolder: folder,
 		});
 		const applied = await history();
-		await builtStore.migratePlatformDatabase({ databaseUrl });
+		await builtStore.migratePlatformDatabase({
+			databaseUrl,
+			migrationsFolder: published29Folder,
+		});
 		expect(await history()).toEqual(applied);
 		expect(await records()).toEqual(data);
 	});
@@ -1639,13 +1668,413 @@ describe("approved Platform migration gaps", () => {
 		const before = await history();
 		const data = await records();
 		expect(before).toHaveLength(29);
-		await builtStore.migratePlatformDatabase({ databaseUrl });
+		await builtStore.migratePlatformDatabase({
+			databaseUrl,
+			migrationsFolder: published29Folder,
+		});
 		const after = await history();
 		expect(after.slice(0, before.length)).toEqual(before);
 		expect(after).toHaveLength(30);
 		expect(await records()).toEqual(data);
-		await builtStore.migratePlatformDatabase({ databaseUrl });
+		await builtStore.migratePlatformDatabase({
+			databaseUrl,
+			migrationsFolder: published29Folder,
+		});
 		expect(await history()).toEqual(after);
 		expect(await records()).toEqual(data);
 	});
+});
+
+describe("published Relay authority migration", () => {
+	let client: PostgresClient;
+	let folder: string;
+	let journal: {
+		entries: {
+			idx: number;
+			when: number;
+			tag: string;
+			version: string;
+			breakpoints: boolean;
+		}[];
+	};
+	const sourceFolder = resolve(
+		import.meta.dirname,
+		"../../../migrations/platform",
+	);
+	const compiledFolder = resolve(import.meta.dirname, "../dist/migrations");
+	const relayWhen = 1790844089732;
+	const history = () =>
+		client`select id, hash, created_at from platform_migrations.history order by id`;
+
+	async function writeJournal() {
+		journal.entries.sort((a, b) => a.idx - b.idx);
+		await writeFile(
+			resolve(folder, "meta/_journal.json"),
+			JSON.stringify(journal),
+		);
+	}
+
+	// Original SQL is really executed by the production consumer. No manual
+	// history or synthetic post-state DDL establishes a historical checkpoint.
+	async function prepareHistory(kind: "current29" | "original27" | "task28") {
+		journal.entries = journal.entries.filter((row) =>
+			kind === "current29" ? row.idx <= 29 : row.idx <= 24,
+		);
+		if (kind !== "current29") {
+			for (const source of retained.sourceTail.filter(
+				(row) => row.idx <= (kind === "original27" ? 27 : 28),
+			)) {
+				const sql = await readFile(
+					new URL(`../test/fixtures/${source.tag}.sql`, import.meta.url),
+				);
+				expect(createHash("sha256").update(sql).digest("hex")).toBe(
+					source.sqlSHA256,
+				);
+				await writeFile(resolve(folder, `${source.tag}.sql`), sql);
+				journal.entries.push({
+					idx: source.idx,
+					when: source.when,
+					tag: source.tag,
+					version: "7",
+					breakpoints: true,
+				});
+			}
+		}
+		await writeJournal();
+		await builtStore.migratePlatformDatabase({
+			databaseUrl,
+			migrationsFolder: folder,
+		});
+	}
+
+	async function seedOriginalRecords(hasTask28: boolean) {
+		await client`insert into platform.relay_key_subjects
+			(purpose, subject_id, last_version, current_version, updated_at)
+			values ('personal', 'relay-migration-user', 2, 2, '2026-09-30T00:00:00.123456Z')`;
+		for (const version of [1, 2]) {
+			const keyId = `relay-migration-key-${version}`;
+			await client`insert into platform.relay_key_versions
+				(purpose, subject_id, key_version, key_id, ciphertext, created_at)
+				values ('personal', 'relay-migration-user', ${version}, ${keyId},
+					${client.json({ purpose: "personal", subjectId: "relay-migration-user", keyVersion: version, keyId, encryptedPayload: `controlled-ciphertext-${version}` })},
+					'2026-09-30T00:00:00.234567Z')`;
+		}
+		await client`insert into platform.conversations
+			(id, agent_id, actor_id, channel_id, status, session_generation, authorization_revision)
+			values ('relay-migration-conversation', 'relay-migration-agent', 'relay-migration-user', 'web', 'ready', 3, 'original-relay-revision')`;
+		await client`insert into platform.conversation_executions
+			(execution_id, conversation_id, agent_id, actor_id, channel_id,
+				turn_id, status, session_generation, delivery_fence, authorization_revision, created_at)
+			values ('relay-migration-execution', 'relay-migration-conversation', 'relay-migration-agent',
+				'relay-migration-user', 'web', 'relay-migration-turn', 'completed', 3, 7,
+				'original-relay-revision', '2026-09-30T00:00:00.345678Z')`;
+		if (hasTask28) {
+			await client`update platform.conversation_executions set
+				execution_source = 'web', relay_key_purpose = 'personal',
+				relay_key_subject_id = 'relay-migration-user', relay_key_id = 'relay-migration-key-1', relay_key_version = 1
+				where execution_id = 'relay-migration-execution'`;
+		}
+	}
+
+	async function records() {
+		return {
+			subjects: [
+				...(await client`select to_jsonb(t)::text as record from platform.relay_key_subjects t order by purpose, subject_id`),
+			],
+			versions: [
+				...(await client`select to_jsonb(t)::text as record from platform.relay_key_versions t order by purpose, subject_id, key_version`),
+			],
+			conversations: [
+				...(await client`select to_jsonb(t)::text as record from platform.conversations t order by id`),
+			],
+			executions: [
+				...(await client`select to_jsonb(t)::text as record from platform.conversation_executions t order by execution_id`),
+			],
+		};
+	}
+
+	async function relayCatalog() {
+		return {
+			catalog: await readPlatformCatalog(client),
+			relations: [
+				...(await client`select oid, relname, relkind, relpersistence, relrowsecurity, relforcerowsecurity
+				from pg_class where oid in (to_regclass('platform.relay_key_subjects'), to_regclass('platform.relay_key_versions')) order by relname`),
+			],
+			constraints: [
+				...(await client`select t.relname, c.conname, c.convalidated, c.condeferrable, c.condeferred,
+				pg_get_constraintdef(c.oid, true) as definition
+				from pg_constraint c join pg_class t on t.oid = c.conrelid
+				where c.conrelid in (to_regclass('platform.relay_key_subjects'), to_regclass('platform.relay_key_versions'))
+					or c.confrelid in (to_regclass('platform.relay_key_subjects'), to_regclass('platform.relay_key_versions'))
+				order by t.relname, c.conname`),
+			],
+		};
+	}
+
+	beforeEach(async () => {
+		client = postgres(databaseUrl, { max: 1 });
+		await client`drop schema if exists platform cascade`;
+		await client`drop schema if exists platform_migrations cascade`;
+		folder = await mkdtemp(resolve(tmpdir(), "agent-infra-relay-migration-"));
+		await cp(sourceFolder, folder, { recursive: true });
+		journal = JSON.parse(
+			await readFile(resolve(folder, "meta/_journal.json"), "utf8"),
+		);
+	});
+
+	afterEach(async () => {
+		await client?.end();
+		if (folder) await rm(folder, { recursive: true, force: true });
+	});
+
+	it("publishes the same new authority and immutable history in source and compiled artifacts", async () => {
+		expect(journal.entries.map((row) => row.idx)).toEqual([
+			...Array.from({ length: 25 }, (_, idx) => idx),
+			29,
+			30,
+		]);
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 30,
+			when: relayWhen,
+			tag: "0030_relay_key_authority_compatibility",
+		});
+		const sourceJournal = await readFile(
+			resolve(sourceFolder, "meta/_journal.json"),
+		);
+		expect(
+			await readFile(resolve(compiledFolder, "meta/_journal.json")),
+		).toEqual(sourceJournal);
+		for (const entry of journal.entries) {
+			expect(
+				await readFile(resolve(compiledFolder, `${entry.tag}.sql`)),
+			).toEqual(await readFile(resolve(sourceFolder, `${entry.tag}.sql`)));
+		}
+		expect(
+			await readFile(resolve(compiledFolder, "meta/0030_snapshot.json")),
+		).toEqual(await readFile(resolve(sourceFolder, "meta/0030_snapshot.json")));
+		await migratePlatformDatabase({ databaseUrl });
+		const before = await history();
+		const catalog = await relayCatalog();
+		await builtStore.migratePlatformDatabase({ databaseUrl });
+		expect(await history()).toEqual(before);
+		expect(await relayCatalog()).toEqual(catalog);
+		expect(catalog.relations.map((row) => row.relname)).toEqual([
+			"relay_key_subjects",
+			"relay_key_versions",
+		]);
+		expect(before).toHaveLength(migrations.length);
+	});
+
+	it("upgrades actual29 without Relay, then repeats with no history or catalog drift", async () => {
+		await prepareHistory("current29");
+		const before = await history();
+		expect(
+			await client`select to_regclass('platform.relay_key_versions') as relation`,
+		).toEqual([{ relation: null }]);
+		await builtStore.migratePlatformDatabase({ databaseUrl });
+		const after = await history();
+		expect(after.slice(0, before.length)).toEqual(before);
+		expect(after.slice(before.length)).toEqual([
+			expect.objectContaining({
+				created_at: String(relayWhen),
+				hash: migrations.at(-1)?.hash,
+			}),
+		]);
+		const catalog = await relayCatalog();
+		await seedOriginalRecords(false);
+		const data = await records();
+		await builtStore.migratePlatformDatabase({ databaseUrl });
+		expect(await history()).toEqual(after);
+		expect(await relayCatalog()).toEqual(catalog);
+		expect(await records()).toEqual(data);
+	});
+
+	it.each(["original27", "task28"] as const)(
+		"keeps actually executed %s SQL/history, ciphertext, current pointer and original Execution reference",
+		async (kind) => {
+			await prepareHistory(kind);
+			const originalHistory = await history();
+			expect(originalHistory).toHaveLength(kind === "original27" ? 28 : 29);
+			await seedOriginalRecords(kind === "task28");
+			const data = await records();
+			// First consume only the already-published29 compatibility migration.
+			journal = JSON.parse(
+				await readFile(resolve(sourceFolder, "meta/_journal.json"), "utf8"),
+			);
+			journal.entries = journal.entries.filter((row) => row.idx <= 29);
+			await writeJournal();
+			await builtStore.migratePlatformDatabase({
+				databaseUrl,
+				migrationsFolder: folder,
+			});
+			const before = await history();
+			expect(before.slice(0, originalHistory.length)).toEqual(originalHistory);
+			expect(await records()).toEqual(data);
+			const catalog = await relayCatalog();
+			await builtStore.migratePlatformDatabase({ databaseUrl });
+			const after = await history();
+			expect(after.slice(0, before.length)).toEqual(before);
+			expect(after).toHaveLength(before.length + 1);
+			expect(after.at(-1)).toMatchObject({
+				created_at: String(relayWhen),
+				hash: migrations.at(-1)?.hash,
+			});
+			expect(await relayCatalog()).toEqual(catalog);
+			expect(await records()).toEqual(data);
+			await builtStore.migratePlatformDatabase({ databaseUrl });
+			expect(await history()).toEqual(after);
+			expect(await relayCatalog()).toEqual(catalog);
+			expect(await records()).toEqual(data);
+		},
+	);
+
+	it("serializes concurrent default source and compiled consumers into one Relay publication", async () => {
+		await prepareHistory("current29");
+		const before = await history();
+		await Promise.all([
+			migratePlatformDatabase({ databaseUrl }),
+			builtStore.migratePlatformDatabase({ databaseUrl }),
+		]);
+		const after = await history();
+		expect(after.slice(0, before.length)).toEqual(before);
+		expect(after).toHaveLength(before.length + 1);
+		const catalog = await relayCatalog();
+		await builtStore.migratePlatformDatabase({ databaseUrl });
+		expect(await history()).toEqual(after);
+		expect(await relayCatalog()).toEqual(catalog);
+	});
+
+	it.each(["original27", "task28"] as const)(
+		"rejects lost Relay tables after actual %s history instead of recreating authority",
+		async (kind) => {
+			await prepareHistory(kind);
+			await seedOriginalRecords(kind === "task28");
+			await client`drop table platform.relay_key_versions cascade`;
+			await client`drop table platform.relay_key_subjects cascade`;
+			const before = await history();
+			const catalog = await relayCatalog();
+			const execution =
+				await client`select to_jsonb(t)::text as record from platform.conversation_executions t`;
+			await expect(
+				builtStore.migratePlatformDatabase({ databaseUrl }),
+			).rejects.toThrow(/^Platform migration failed$/);
+			expect(await history()).toEqual(before);
+			expect(await relayCatalog()).toEqual(catalog);
+			expect(
+				await client`select to_jsonb(t)::text as record from platform.conversation_executions t`,
+			).toEqual(execution);
+			expect(
+				await client`select to_regclass('platform.relay_key_subjects') as subjects, to_regclass('platform.relay_key_versions') as versions`,
+			).toEqual([{ subjects: null, versions: null }]);
+			expect(
+				await client`select id from platform_migrations.history where created_at = ${relayWhen}`,
+			).toHaveLength(0);
+		},
+	);
+
+	it.each([
+		"partial",
+		"unregistered",
+		"wrong-column",
+		"missing-check",
+		"missing-index",
+		"unvalidated-fk",
+	] as const)(
+		"rejects %s authority without changing history, catalog or original rows",
+		async (fault) => {
+			await prepareHistory(fault === "partial" ? "current29" : "original27");
+			if (fault === "partial") {
+				await client`create table platform.relay_key_subjects (purpose text, subject_id text)`;
+			} else {
+				await seedOriginalRecords(false);
+				if (fault === "unregistered") {
+					await client`delete from platform_migrations.history where created_at = 1790738152673`;
+				} else if (fault === "wrong-column") {
+					await client`alter table platform.relay_key_subjects alter column last_version set default 1`;
+				} else if (fault === "missing-check") {
+					await client`alter table platform.relay_key_versions drop constraint relay_key_version_ciphertext_binding`;
+				} else if (fault === "missing-index") {
+					await client`drop index platform.relay_key_version_key_id_unique`;
+				} else {
+					await client`alter table platform.relay_key_versions drop constraint relay_key_version_subject_fk`;
+					await client`alter table platform.relay_key_versions add constraint relay_key_version_subject_fk
+						foreign key (purpose, subject_id) references platform.relay_key_subjects (purpose, subject_id) not valid`;
+				}
+			}
+			const before = await history();
+			const catalog = await relayCatalog();
+			const data = fault === "partial" ? null : await records();
+			await expect(
+				builtStore.migratePlatformDatabase({ databaseUrl }),
+			).rejects.toThrow(/^Platform migration failed$/);
+			expect(await history()).toEqual(before);
+			expect(await relayCatalog()).toEqual(catalog);
+			if (data) expect(await records()).toEqual(data);
+		},
+	);
+
+	it.each(["unknown", "changed", "duplicate"] as const)(
+		"rejects %s history before creating Relay authority",
+		async (fault) => {
+			await prepareHistory("current29");
+			if (fault === "unknown") {
+				await client`insert into platform_migrations.history (hash, created_at) values (${"f".repeat(64)}, ${relayWhen - 1})`;
+			} else if (fault === "changed") {
+				await client`update platform_migrations.history set hash = ${"f".repeat(64)} where created_at = ${migrations[24]?.folderMillis ?? 0}`;
+			} else {
+				await client`insert into platform_migrations.history (hash, created_at)
+					select hash, created_at from platform_migrations.history order by id desc limit 1`;
+			}
+			const before = await history();
+			const catalog = await relayCatalog();
+			await expect(
+				builtStore.migratePlatformDatabase({ databaseUrl }),
+			).rejects.toThrow(/^Platform migration failed$/);
+			expect(await history()).toEqual(before);
+			expect(await relayCatalog()).toEqual(catalog);
+		},
+	);
+
+	it.each(["immediate-history", "deferred-history", "later-sql"] as const)(
+		"rolls back both new Relay tables and history on %s failure",
+		async (fault) => {
+			await prepareHistory("current29");
+			if (fault === "later-sql") {
+				journal = JSON.parse(
+					await readFile(resolve(sourceFolder, "meta/_journal.json"), "utf8"),
+				);
+				journal.entries.push({
+					idx: 31,
+					when: relayWhen + 1,
+					tag: "0031_controlled_failure",
+					version: "7",
+					breakpoints: true,
+				});
+				await writeFile(
+					resolve(folder, "0031_controlled_failure.sql"),
+					"select 1 / 0;",
+				);
+				await writeJournal();
+			} else {
+				await client.unsafe(`create function platform_migrations.reject_relay_history() returns trigger
+					language plpgsql as $$ begin if NEW.created_at = ${relayWhen} then
+						raise exception 'controlled-relay-history-failure'; end if; return NEW; end $$`);
+				await client.unsafe(
+					fault === "deferred-history"
+						? "create constraint trigger reject_relay_history after insert on platform_migrations.history deferrable initially deferred for each row execute function platform_migrations.reject_relay_history()"
+						: "create trigger reject_relay_history before insert on platform_migrations.history for each row execute function platform_migrations.reject_relay_history()",
+				);
+			}
+			const before = await history();
+			const catalog = await relayCatalog();
+			await expect(
+				builtStore.migratePlatformDatabase({
+					databaseUrl,
+					...(fault === "later-sql" ? { migrationsFolder: folder } : {}),
+				}),
+			).rejects.toThrow(/^Platform migration failed$/);
+			expect(await history()).toEqual(before);
+			expect(await relayCatalog()).toEqual(catalog);
+		},
+	);
 });

@@ -41,7 +41,183 @@ function restoreOldApiReadActions(input: unknown) {
 	for (const child of Object.values(value)) restoreOldApiReadActions(child);
 }
 
+// Keep the historical #1059/#1060 tests bound to their original contracts.
+// The separate #1089 tests below pin and mutate every removed addition.
+function restorePreRelayKeyContract(value: {
+	paths: Record<string, unknown>;
+	components: { schemas: Record<string, { enum?: unknown[] }> };
+}) {
+	delete value.paths["/api/v2/me/relay-key"];
+	for (const name of [
+		"PersonalRelayKeyStateV1",
+		"PersonalRelayKeyReplaceRequestV1",
+		"PersonalRelayKeyRevokeRequestV1",
+	])
+		delete value.components.schemas[name];
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) =>
+				![
+					"relay_key.personal.read",
+					"relay_key.personal.replace",
+					"relay_key.personal.revoke",
+				].includes(String(action)),
+		);
+}
+
 describe("contract compatibility command", () => {
+	it("admits only the three pinned personal Relay Key audit actions at the existing V1 location", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		previous.components.schemas.ScopedPlatformAuditActionV1.enum =
+			previous.components.schemas.ScopedPlatformAuditActionV1.enum.filter(
+				(action: string) =>
+					![
+						"relay_key.personal.read",
+						"relay_key.personal.replace",
+						"relay_key.personal.revoke",
+					].includes(action),
+			);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-relay-audit-compat-"),
+		);
+		const baseline = resolve(directory, "previous.json");
+		try {
+			await writeFile(baseline, JSON.stringify(previous));
+			expect(comparePaths(pilotBrowserArtifactPath, baseline).status).toBe(0);
+			const mutations: Record<string, (value: typeof current) => void> = {
+				inventedAction: (value) => {
+					value.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+						"relay_key.personal.anything",
+					);
+				},
+				removedOldAction: (value) => {
+					value.components.schemas.ScopedPlatformAuditActionV1.enum.shift();
+				},
+				missingNewAction: (value) => {
+					value.components.schemas.ScopedPlatformAuditActionV1.enum =
+						value.components.schemas.ScopedPlatformAuditActionV1.enum.filter(
+							(action: string) => action !== "relay_key.personal.revoke",
+						);
+				},
+				keyReadback: (value) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV1.properties.keyValue =
+						{ type: "string" };
+				},
+				anonymousAudit: (value) => {
+					value.paths["/api/v3/admin/audit"].get.security = [{}];
+				},
+				missingAuthenticationFailure: (value) => {
+					delete value.paths["/api/v3/admin/audit"].get.responses["401"];
+				},
+				missingAuthorizationFailure: (value) => {
+					delete value.paths["/api/v3/admin/audit/{auditId}"].get.responses[
+						"403"
+					];
+				},
+			};
+			for (const baselineKind of ["apiRead", "beforeApiRead"]) {
+				const existing = structuredClone(previous);
+				if (baselineKind === "beforeApiRead")
+					restoreOldApiReadActions(existing);
+				await writeFile(baseline, JSON.stringify(existing));
+				expect(
+					comparePaths(pilotBrowserArtifactPath, baseline).status,
+					baselineKind,
+				).toBe(0);
+				for (const [name, mutate] of Object.entries(mutations)) {
+					const candidate = structuredClone(current);
+					mutate(candidate);
+					expect(candidate, name).not.toEqual(current);
+					const path = resolve(directory, `${name}.json`);
+					await writeFile(path, JSON.stringify(candidate));
+					expect(
+						comparePaths(path, baseline).status,
+						`${baselineKind}-${name}`,
+					).toBe(1);
+				}
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the pinned browser personal Relay Key path and rejects identity/material/security drift", async () => {
+		const artifact = fileURLToPath(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v2.openapi.json",
+				import.meta.url,
+			),
+		);
+		const current = JSON.parse(await readFile(artifact, "utf8"));
+		const previous = structuredClone(current);
+		restorePreRelayKeyContract(previous);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-relay-key-compat-"),
+		);
+		const baseline = resolve(directory, "previous.json");
+		try {
+			await writeFile(baseline, JSON.stringify(previous));
+			expect(comparePaths(artifact, baseline).status).toBe(0);
+			const mutations: Record<string, (value: typeof current) => void> = {
+				anonymous: (value) => {
+					value.paths["/api/v2/me/relay-key"].put.security = [];
+				},
+				bearer: (value) => {
+					value.paths["/api/v2/me/relay-key"].delete.security = [
+						{ platformApiCredential: [] },
+					];
+				},
+				callerIdentity: (value) => {
+					value.components.schemas.PersonalRelayKeyReplaceRequestV1.properties.userId =
+						{ type: "string" };
+				},
+				keyReadback: (value) => {
+					value.components.schemas.PersonalRelayKeyStateV1.oneOf[1].properties.keyValue =
+						{ type: "string" };
+				},
+				keyBounds: (value) => {
+					value.components.schemas.PersonalRelayKeyReplaceRequestV1.properties.keyValue.minLength = 0;
+				},
+				keyPattern: (value) => {
+					delete value.components.schemas.PersonalRelayKeyReplaceRequestV1
+						.properties.keyValue.pattern;
+				},
+				zeroVersion: (value) => {
+					value.components.schemas.PersonalRelayKeyRevokeRequestV1.properties.expectedVersion.minimum = 0;
+				},
+				unknownBodyFields: (value) => {
+					value.components.schemas.PersonalRelayKeyReplaceRequestV1.additionalProperties = true;
+				},
+				inventedPatch: (value) => {
+					value.paths["/api/v2/me/relay-key"].patch =
+						value.paths["/api/v2/me/relay-key"].put;
+				},
+				missingFailureStatus: (value) => {
+					delete value.paths["/api/v2/me/relay-key"].put.responses["503"];
+				},
+				changedCookie: (value) => {
+					value.components.securitySchemes.PlatformSession.name =
+						"caller_session";
+				},
+				unrelatedAnonymousAdmin: (value) => {
+					value.paths["/api/v2/admin/agents"].get.security = [];
+				},
+			};
+			for (const [name, mutate] of Object.entries(mutations)) {
+				const candidate = structuredClone(current);
+				mutate(candidate);
+				const path = resolve(directory, `${name}.json`);
+				await writeFile(path, JSON.stringify(candidate));
+				expect(comparePaths(path, baseline).status, name).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the exact original binding addition and preserves every prior V3 operation", async () => {
 		const artifact = fileURLToPath(
 			new URL(
@@ -105,15 +281,18 @@ describe("contract compatibility command", () => {
 			),
 		);
 		const current = JSON.parse(await readFile(artifact, "utf8"));
+		restorePreRelayKeyContract(current);
 		const previous = structuredClone(current);
 		restoreOldApiReadActions(previous);
 		const directory = await mkdtemp(
 			resolve(tmpdir(), "agent-infra-api-read-audit-compat-"),
 		);
 		const baseline = resolve(directory, "previous.json");
+		const historicalCurrent = resolve(directory, "historical-current.json");
 		try {
 			await writeFile(baseline, JSON.stringify(previous));
-			expect(comparePaths(artifact, baseline).status).toBe(0);
+			await writeFile(historicalCurrent, JSON.stringify(current));
+			expect(comparePaths(historicalCurrent, baseline).status).toBe(0);
 			for (const [name, mutate] of Object.entries({
 				inventedAction: (value: typeof current) => {
 					value.components.schemas.ScopedPlatformAuditActionV1.enum.push(
@@ -149,6 +328,8 @@ describe("contract compatibility command", () => {
 			),
 		);
 		const current = JSON.parse(await readFile(artifact, "utf8"));
+		const latest = structuredClone(current);
+		restorePreRelayKeyContract(current);
 		const previous = structuredClone(current);
 		for (const path of [
 			"/api/v2/me/api-credentials",
@@ -170,9 +351,11 @@ describe("contract compatibility command", () => {
 			resolve(tmpdir(), "agent-infra-personal-credential-compat-"),
 		);
 		const baseline = resolve(directory, "previous.json");
+		const historicalCurrent = resolve(directory, "historical-current.json");
 		try {
 			await writeFile(baseline, JSON.stringify(previous));
-			expect(comparePaths(artifact, baseline).status).toBe(0);
+			await writeFile(historicalCurrent, JSON.stringify(current));
+			expect(comparePaths(historicalCurrent, baseline).status).toBe(0);
 			const mutations: Record<string, (value: typeof current) => void> = {
 				anonymous: (value) => {
 					value.paths["/api/v2/me/api-credentials"].post.security = [];
@@ -275,15 +458,27 @@ describe("contract compatibility command", () => {
 				if (baselineKind === "governance")
 					expect(comparePaths(path, baseline).status).toBe(0);
 				expect(comparePaths(artifact, path).status, baselineKind).toBe(0);
-				for (const [name, mutate] of Object.entries(mutations)) {
-					const candidate = structuredClone(current);
-					mutate(candidate);
-					const mutated = resolve(directory, `${baselineKind}-${name}.json`);
-					await writeFile(mutated, JSON.stringify(candidate));
-					expect(
-						comparePaths(mutated, path).status,
-						`${baselineKind}-${name}`,
-					).toBe(1);
+				expect(
+					comparePaths(historicalCurrent, path).status,
+					`${baselineKind}-historical`,
+				).toBe(0);
+				for (const [version, contract] of Object.entries({
+					historical: current,
+					latest,
+				})) {
+					for (const [name, mutate] of Object.entries(mutations)) {
+						const candidate = structuredClone(contract);
+						mutate(candidate);
+						const mutated = resolve(
+							directory,
+							`${baselineKind}-${version}-${name}.json`,
+						);
+						await writeFile(mutated, JSON.stringify(candidate));
+						expect(
+							comparePaths(mutated, path).status,
+							`${baselineKind}-${version}-${name}`,
+						).toBe(1);
+					}
 				}
 			}
 		} finally {
@@ -653,7 +848,8 @@ describe("contract compatibility command", () => {
 				"utf8",
 			),
 		);
-		// Isolate the pinned lifecycle addition from the later personal API read.
+		// Isolate the pinned lifecycle addition from later personal API/Relay Key additions.
+		restorePreRelayKeyContract(current);
 		delete current.paths["/api/v2/agents"].get.security;
 		delete current.paths["/api/v2/agents"].get.description;
 		const previous = structuredClone(current);

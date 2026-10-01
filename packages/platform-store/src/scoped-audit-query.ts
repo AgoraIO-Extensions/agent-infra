@@ -292,6 +292,9 @@ function executionBinding(row: Row): PlatformExecutionAuditBindingV1 | null {
 }
 
 const executionActions = new Set([
+	"relay_key.personal.read",
+	"relay_key.personal.replace",
+	"relay_key.personal.revoke",
 	"task.authorization.accepted",
 	"task.status.changed",
 	"task.control.created",

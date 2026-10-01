@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CommandAgentLifecycleV2Data, CommandAgentLifecycleV2Errors, CommandAgentLifecycleV2Responses, CreateAgentApplicationV2Data, CreateAgentApplicationV2Errors, CreateAgentApplicationV2Responses, DecideAgentApplicationV2Data, DecideAgentApplicationV2Errors, DecideAgentApplicationV2Responses, GetAgentApplicationV2Data, GetAgentApplicationV2Errors, GetAgentApplicationV2Responses, GetAgentV2Data, GetAgentV2Errors, GetAgentV2Responses, GetConversationV2Data, GetConversationV2Errors, GetConversationV2Responses, GetDeploymentConfigurationV2Data, GetDeploymentConfigurationV2Errors, GetDeploymentConfigurationV2Responses, GetExecutionDetailV2Data, GetExecutionDetailV2Errors, GetExecutionDetailV2Responses, IssuePersonalApiCredentialV2Data, IssuePersonalApiCredentialV2Errors, IssuePersonalApiCredentialV2Responses, ListAdminAgentsV2Data, ListAdminAgentsV2Errors, ListAdminAgentsV2Responses, ListAgentApplicationsV2Data, ListAgentApplicationsV2Errors, ListAgentApplicationsV2Responses, ListAgentsV2Data, ListAgentsV2Errors, ListAgentsV2Responses, ListPendingAgentApplicationsV2Data, ListPendingAgentApplicationsV2Errors, ListPendingAgentApplicationsV2Responses, ListPlatformAuditV2Data, ListPlatformAuditV2Errors, ListPlatformAuditV2Responses, ListRecentPersonalConversationsV2Data, ListRecentPersonalConversationsV2Errors, ListRecentPersonalConversationsV2Responses, RevokePersonalApiCredentialV2Data, RevokePersonalApiCredentialV2Errors, RevokePersonalApiCredentialV2Responses, StreamConversationEventsV2Data, StreamConversationEventsV2Errors, StreamConversationEventsV2Response, StreamConversationEventsV2Responses, UpdateAgentApplicationV2Data, UpdateAgentApplicationV2Errors, UpdateAgentApplicationV2Responses, UpdateAgentConfigurationV2Data, UpdateAgentConfigurationV2Errors, UpdateAgentConfigurationV2Responses, WithdrawAgentApplicationV2Data, WithdrawAgentApplicationV2Errors, WithdrawAgentApplicationV2Responses } from './types.gen';
+import type { CommandAgentLifecycleV2Data, CommandAgentLifecycleV2Errors, CommandAgentLifecycleV2Responses, CreateAgentApplicationV2Data, CreateAgentApplicationV2Errors, CreateAgentApplicationV2Responses, DecideAgentApplicationV2Data, DecideAgentApplicationV2Errors, DecideAgentApplicationV2Responses, GetAgentApplicationV2Data, GetAgentApplicationV2Errors, GetAgentApplicationV2Responses, GetAgentV2Data, GetAgentV2Errors, GetAgentV2Responses, GetConversationV2Data, GetConversationV2Errors, GetConversationV2Responses, GetDeploymentConfigurationV2Data, GetDeploymentConfigurationV2Errors, GetDeploymentConfigurationV2Responses, GetExecutionDetailV2Data, GetExecutionDetailV2Errors, GetExecutionDetailV2Responses, GetPersonalRelayKeyV2Data, GetPersonalRelayKeyV2Errors, GetPersonalRelayKeyV2Responses, IssuePersonalApiCredentialV2Data, IssuePersonalApiCredentialV2Errors, IssuePersonalApiCredentialV2Responses, ListAdminAgentsV2Data, ListAdminAgentsV2Errors, ListAdminAgentsV2Responses, ListAgentApplicationsV2Data, ListAgentApplicationsV2Errors, ListAgentApplicationsV2Responses, ListAgentsV2Data, ListAgentsV2Errors, ListAgentsV2Responses, ListPendingAgentApplicationsV2Data, ListPendingAgentApplicationsV2Errors, ListPendingAgentApplicationsV2Responses, ListPlatformAuditV2Data, ListPlatformAuditV2Errors, ListPlatformAuditV2Responses, ListRecentPersonalConversationsV2Data, ListRecentPersonalConversationsV2Errors, ListRecentPersonalConversationsV2Responses, ReplacePersonalRelayKeyV2Data, ReplacePersonalRelayKeyV2Errors, ReplacePersonalRelayKeyV2Responses, RevokePersonalApiCredentialV2Data, RevokePersonalApiCredentialV2Errors, RevokePersonalApiCredentialV2Responses, RevokePersonalRelayKeyV2Data, RevokePersonalRelayKeyV2Errors, RevokePersonalRelayKeyV2Responses, StreamConversationEventsV2Data, StreamConversationEventsV2Errors, StreamConversationEventsV2Response, StreamConversationEventsV2Responses, UpdateAgentApplicationV2Data, UpdateAgentApplicationV2Errors, UpdateAgentApplicationV2Responses, UpdateAgentConfigurationV2Data, UpdateAgentConfigurationV2Errors, UpdateAgentConfigurationV2Responses, WithdrawAgentApplicationV2Data, WithdrawAgentApplicationV2Errors, WithdrawAgentApplicationV2Responses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -139,4 +139,57 @@ export const listRecentPersonalConversationsV2 = <ThrowOnError extends boolean =
         }],
     url: '/api/v2/me/conversations/recent',
     ...options
+});
+
+/**
+ * Revoke the current browser user's personal Relay Key pointer
+ *
+ * Active browser session only; no Authorization header or query. Already accepted Executions retain their exact original encrypted version. Responses are no-store.
+ */
+export const revokePersonalRelayKeyV2 = <ThrowOnError extends boolean = false>(options: Options<RevokePersonalRelayKeyV2Data, ThrowOnError>): RequestResult<RevokePersonalRelayKeyV2Responses, RevokePersonalRelayKeyV2Errors, ThrowOnError> => (options.client ?? client).delete<RevokePersonalRelayKeyV2Responses, RevokePersonalRelayKeyV2Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/me/relay-key',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Read the current browser user's personal Relay Key state
+ *
+ * Active browser session only; no Authorization header, query or request body. No Key material is returned. Responses are no-store.
+ */
+export const getPersonalRelayKeyV2 = <ThrowOnError extends boolean = false>(options?: Options<GetPersonalRelayKeyV2Data, ThrowOnError>): RequestResult<GetPersonalRelayKeyV2Responses, GetPersonalRelayKeyV2Errors, ThrowOnError> => (options?.client ?? client).get<GetPersonalRelayKeyV2Responses, GetPersonalRelayKeyV2Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/me/relay-key',
+    ...options
+});
+
+/**
+ * Set or replace the current browser user's personal Relay Key
+ *
+ * Active browser session only; no Authorization header or query. expectedVersion is a compare-and-swap guard. The approved read-only validation proves authentication only. Responses are no-store.
+ */
+export const replacePersonalRelayKeyV2 = <ThrowOnError extends boolean = false>(options: Options<ReplacePersonalRelayKeyV2Data, ThrowOnError>): RequestResult<ReplacePersonalRelayKeyV2Responses, ReplacePersonalRelayKeyV2Errors, ThrowOnError> => (options.client ?? client).put<ReplacePersonalRelayKeyV2Responses, ReplacePersonalRelayKeyV2Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/me/relay-key',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });

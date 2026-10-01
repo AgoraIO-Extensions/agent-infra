@@ -1314,6 +1314,78 @@ function isPersonalApiAgentReadV2OpenApiAddition(previous, current) {
 	);
 }
 
+// #1089 extends only the existing canonical V1 audit enum.
+function isPersonalRelayKeyAuditOpenApiAddition(previous, current) {
+	const oldAction = previous.components?.schemas?.ScopedPlatformAuditActionV1;
+	const newAction = current.components?.schemas?.ScopedPlatformAuditActionV1;
+	const digest = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	if (
+		!Array.isArray(oldAction?.enum) ||
+		!Array.isArray(newAction?.enum) ||
+		![
+			"a6aecc0649885bcee5c2a40342a9b6a4adff5c4f66e7022e5d6f2233bed8dc85",
+			"f5a1dca74b127815a080d4c3f30e16fd897ad6be5b31fae6f811353778081b5e",
+		].includes(digest(oldAction.enum)) ||
+		digest(newAction.enum) !==
+			"d946b62e4f34078c1f3569524d09a09ce7a68e108cbeda06d255527e47e71ac9"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+		newAction.enum.filter(
+			(action) =>
+				![
+					"relay_key.personal.read",
+					"relay_key.personal.replace",
+					"relay_key.personal.revoke",
+				].includes(action),
+		);
+	// The remaining #1060 addition must still pass its original exact guard.
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #1089 admits exactly the browser-owned Key path, three closed schemas and session scheme.
+function isPersonalRelayKeyV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/me/relay-key";
+	const names = [
+		"PersonalRelayKeyStateV1",
+		"PersonalRelayKeyReplaceRequestV1",
+		"PersonalRelayKeyRevokeRequestV1",
+	];
+	if (
+		previous.paths?.[path] !== undefined ||
+		names.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const security = {
+		PlatformSession: current.components?.securitySchemes?.PlatformSession,
+	};
+	const previousSession = previous.components?.securitySchemes?.PlatformSession;
+	if (
+		previousSession !== undefined &&
+		!sameValue(previousSession, security.PlatformSession)
+	)
+		return false;
+	const addition = {
+		paths: { [path]: current.paths?.[path] },
+		schemas: Object.fromEntries(
+			names.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+		security,
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"f7c4d58dc9cfdd02792216bb617e4522ca0a8a8fe85ab2f4d2398a25887d6c95"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of names) delete normalized.components.schemas[name];
+	// Keep the session scheme: only existing pinned admissions may introduce it.
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -1330,6 +1402,8 @@ function findBreakingChanges(previous, current) {
 			!isPersonalApiCredentialV2OpenApiAddition(previous, current) &&
 			!isPersonalApiAgentReadV2OpenApiAddition(previous, current) &&
 			!isPersonalApiAgentReadAuditOpenApiAddition(previous, current) &&
+			!isPersonalRelayKeyAuditOpenApiAddition(previous, current) &&
+			!isPersonalRelayKeyV2OpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isConversationSseV2NotFoundAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&

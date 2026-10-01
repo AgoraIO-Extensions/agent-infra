@@ -1,7 +1,13 @@
 import { AgentResourceProfileProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
-import type { AgentConfigurationAuthorityContextV1 } from "@agent-infra/platform-core";
-import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
+import {
+	type AgentConfigurationAuthorityContextV1,
+	PersonalRelayKeyErrorV1,
+} from "@agent-infra/platform-core";
+import {
+	createRelayKeyEncryptorV1,
+	createSecretEncryptorV1,
+} from "@agent-infra/secret-store";
 
 import type { PlatformApiAssemblyInput } from "./assembly.js";
 import {
@@ -16,7 +22,9 @@ import {
 } from "./deployment-identity.js";
 import { createDeploymentPresentation } from "./deployment-presentation.js";
 import { createDeploymentSecretPreparation } from "./deployment-secrets.js";
+import { HttpProtocolError } from "./http/common.js";
 import type { IdentityAdapter } from "./http/identity.js";
+import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 
 export interface ProductionPlatformApiInputV1
 	extends Omit<DeploymentAdmissionInputV1, "currentIdentity"> {
@@ -32,6 +40,10 @@ export interface ProductionPlatformApiInputV1
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	/** Public wrapping keys only. Worker private keys belong to the Worker deployment. */
 	readonly encryptionKeys: unknown;
+	/** Approved fixed billing profile and deployment-owned CA/TLS transport only. */
+	readonly personalRelayKeyValidation?: Parameters<
+		typeof createPersonalRelayKeyValidatorV1
+	>[0];
 	readonly resourceProfile: Parameters<
 		typeof createDeploymentPresentation
 	>[0]["resourceProfile"];
@@ -72,7 +84,40 @@ export function createProductionPlatformApiAssemblyInputV1(
 	const secrets = createDeploymentSecretPreparation(
 		createSecretEncryptorV1({ encryptionKeys: input.encryptionKeys }),
 	);
+	const validatePersonalRelayKey = input.personalRelayKeyValidation
+		? createPersonalRelayKeyValidatorV1(input.personalRelayKeyValidation)
+		: undefined;
+	const relayKeyEncryptor = validatePersonalRelayKey
+		? createRelayKeyEncryptorV1({ encryptionKeys: input.encryptionKeys })
+		: undefined;
+	const personalRelayKeys: PlatformApiAssemblyInput["personalRelayKeys"] =
+		validatePersonalRelayKey && relayKeyEncryptor
+			? {
+					validate: validatePersonalRelayKey,
+					encrypt: (binding, keyValue) =>
+						relayKeyEncryptor.encrypt({ ...binding, plaintext: keyValue }),
+					async currentIdentity(traceId) {
+						try {
+							const current = await identityScope.currentIdentity(traceId);
+							return {
+								userId: current.userId,
+								accountStatus: current.accountStatus,
+								authorizationRevision: current.authorizationRevision,
+							};
+						} catch (error) {
+							throw new PersonalRelayKeyErrorV1(
+								error instanceof HttpProtocolError && error.status === 401
+									? "authentication_required"
+									: error instanceof HttpProtocolError && error.status === 403
+										? "not_authorized"
+										: "unavailable",
+							);
+						}
+					},
+				}
+			: undefined;
 	return {
+		...(personalRelayKeys ? { personalRelayKeys } : {}),
 		...(input.wecom ? { wecom: input.wecom } : {}),
 		...(input.wecomIdentity ? { wecomIdentity: input.wecomIdentity } : {}),
 		...(input.wecomCredentialEncryptionKeys
