@@ -13,6 +13,7 @@ import {
 	type CodexNativeStatusSelection,
 	CodexRuntimeDriver,
 } from "./codex-runtime-driver.js";
+import { DurableJsonFile } from "./durable-json.js";
 
 class MetadataTransport {
 	readonly requests: CodexAppServerFrame[] = [];
@@ -25,6 +26,10 @@ class MetadataTransport {
 	holdReads = false;
 	readonly heldReads: CodexAppServerFrame[] = [];
 	closeCount = 0;
+	openCount = 0;
+	openDelay?: Promise<void>;
+	beforeSend?: (frame: CodexAppServerFrame) => Promise<void>;
+	modelPages = ["gpt-5.3-codex"];
 	readSendFailure?: () => Promise<void>;
 	beforeResponse?: () => void;
 	private readonly queue: CodexAppServerFrame[] = [];
@@ -33,6 +38,7 @@ class MetadataTransport {
 
 	async send(frame: CodexAppServerFrame) {
 		this.requests.push(frame);
+		if (this.beforeSend) await this.beforeSend(frame);
 		if (frame.method === "initialize") this.respond(frame, {});
 		else if (frame.method === "config/read") {
 			const config: Record<string, unknown> = {
@@ -91,14 +97,16 @@ class MetadataTransport {
 			}
 			this.respond(frame, { config, origins });
 		} else if (frame.method === "model/list") {
+			const params = frame.params as { cursor?: string } | undefined;
+			const page = Number(params?.cursor ?? 0);
 			this.respond(frame, {
 				data: [
 					{
-						model: "gpt-5.3-codex",
+						model: this.modelPages[page],
 						supportedReasoningEfforts: [{ reasoningEffort: "high" }],
 					},
 				],
-				nextCursor: null,
+				nextCursor: page + 1 < this.modelPages.length ? String(page + 1) : null,
 			});
 		} else if (frame.method === "thread/read") {
 			if (this.readSendFailure) return this.readSendFailure();
@@ -176,7 +184,9 @@ class MetadataDriver extends CodexRuntimeDriver {
 				],
 			},
 			async (options: CodexAppServerBridgeOptions) => {
+				transport.openCount++;
 				transport.options = options;
+				if (transport.openDelay) await transport.openDelay;
 				return transport;
 			},
 		);
@@ -186,11 +196,27 @@ class MetadataDriver extends CodexRuntimeDriver {
 const fixtures: { directory: string; driver: CodexRuntimeDriver }[] = [];
 afterEach(async () => {
 	vi.useRealTimers();
+	vi.restoreAllMocks();
 	for (const { directory, driver } of fixtures.splice(0)) {
 		await driver.close();
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+interface MetadataState {
+	sessions: Record<
+		string,
+		{ requiredRuntime?: { lane: string; schemaVersion: number } }
+	>;
+	operations: Record<
+		string,
+		{
+			configVersion?: string;
+			nativeSessionRef: string;
+			record?: { nativeSessionRef: string };
+		}
+	>;
+}
 
 async function fixture() {
 	const directory = await mkdtemp(join(tmpdir(), "codex-metadata-unit-"));
@@ -205,6 +231,7 @@ async function fixture() {
 		signal: abort.signal,
 		expiresAt: Date.now() + 10_000,
 		assertCurrent: () => binding,
+		revalidate: async () => binding,
 	};
 	return { path, driver, transport, binding, read, abort };
 }
@@ -251,6 +278,260 @@ function requestRead(
 async function flushFrames() {
 	for (let i = 0; i < 20; i++) await Promise.resolve();
 }
+
+function alterOriginalFacts(change: (state: MetadataState) => void) {
+	const originalRead = DurableJsonFile.prototype.read;
+	vi.spyOn(DurableJsonFile.prototype, "read").mockImplementation(function (
+		this: DurableJsonFile<unknown>,
+	) {
+		const state = originalRead.call(this) as MetadataState;
+		change(state);
+		return state;
+	});
+}
+
+describe("Codex metadata async current confirmation (controlled behavior only)", () => {
+	it.each([
+		"missing config",
+		"wrong config",
+		"missing operation",
+		"wrong native",
+		"missing runtime",
+		"wrong runtime",
+	])(
+		"does not replace original %s with constructor configuration",
+		async (kind) => {
+			const f = await fixture();
+			alterOriginalFacts((state) => {
+				const operation = Object.values(state.operations)[0];
+				const session = Object.values(state.sessions)[0];
+				if (!operation || !session)
+					throw new Error("Missing controlled original facts");
+				if (kind === "missing config") delete operation.configVersion;
+				if (kind === "wrong config") operation.configVersion = "old-config";
+				if (kind === "missing operation") state.operations = {};
+				if (kind === "wrong native") {
+					operation.nativeSessionRef = "other-session";
+					if (operation.record)
+						operation.record.nativeSessionRef = "other-session";
+				}
+				if (kind === "missing runtime") delete session.requiredRuntime;
+				if (kind === "wrong runtime" && session.requiredRuntime)
+					session.requiredRuntime.schemaVersion = 2;
+			});
+			await expect(
+				f.driver.discoverNativeCommands(f.read),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(f.transport.openCount).toBe(0);
+			expect(f.transport.requests).toEqual([]);
+		},
+	);
+
+	it.each([
+		"bridge",
+		"initialize",
+		"config/read",
+		"model page 1",
+		"model page 2",
+		"thread/read",
+		"projection",
+	])(
+		"awaits fresh remote authority after %s and prevents the next dependency on denial",
+		async (stage) => {
+			const f = await fixture();
+			f.transport.modelPages = ["gpt-5.4", "gpt-5.3-codex"];
+			let projected = false;
+			f.transport.status = {
+				get type() {
+					projected = true;
+					return "idle";
+				},
+			};
+			const held = Promise.withResolvers<typeof f.binding>();
+			let reached = false;
+			f.read.revalidate = async () => {
+				const last = f.transport.requests.at(-1)?.method;
+				const pages = f.transport.requests.filter(
+					(request) => request.method === "model/list",
+				).length;
+				const at =
+					stage === "bridge"
+						? f.transport.openCount > 0 && last === undefined
+						: stage === "projection"
+							? projected
+							: stage === "model page 1"
+								? last === "model/list" && pages === 1
+								: stage === "model page 2"
+									? last === "model/list" && pages === 2
+									: last === stage;
+				if (at) {
+					reached = true;
+					return held.promise;
+				}
+				return f.binding;
+			};
+			const query = f.driver.discoverNativeCommands(f.read);
+			const rejected = expect(query).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+			await vi.waitFor(() => expect(reached).toBe(true));
+			const requests = [...f.transport.requests];
+			await flushFrames();
+			expect(f.transport.requests).toEqual(requests);
+			// The synchronous local binding is still valid; only current remote authority changed.
+			held.resolve({
+				...f.binding,
+				principal: { kind: "user", id: "remote-other-reader" },
+			});
+			await rejected;
+			expect(f.transport.requests).toEqual(requests);
+		},
+	);
+
+	it.each(["throw", "scope", "abort", "expiry", "renewal"])(
+		"bounds %s while the first current confirmation is pending and cannot revive it",
+		async (kind) => {
+			const f = await fixture();
+			vi.useFakeTimers();
+			Object.assign(f.read, { expiresAt: Date.now() + 1000 });
+			const held = Promise.withResolvers<typeof f.binding>();
+			let reached = false;
+			f.read.revalidate = async () => {
+				reached = true;
+				return held.promise;
+			};
+			const query = f.driver.discoverNativeCommands(f.read);
+			const rejected = expect(query).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+				message: expect.not.stringMatching(/private|secret/),
+			});
+			await vi.waitFor(() => expect(reached).toBe(true));
+			if (kind === "abort") f.abort.abort();
+			if (kind === "expiry") await vi.advanceTimersByTimeAsync(1000);
+			if (kind === "renewal")
+				Object.assign(f.read, { expiresAt: Date.now() + 60_000 });
+			if (kind === "throw")
+				f.read.assertCurrent = () => {
+					throw new Error("private secret");
+				};
+			held.resolve(
+				kind === "scope"
+					? {
+							...f.binding,
+							scope: { ...f.binding.scope, executionId: "other-execution" },
+						}
+					: f.binding,
+			);
+			await rejected;
+			await flushFrames();
+			expect(f.transport.openCount).toBe(0);
+			expect(f.transport.requests).toEqual([]);
+			expect(vi.getTimerCount()).toBe(0);
+		},
+	);
+
+	it("sanitizes a rejected remote confirmation even while the local assertion remains valid", async () => {
+		const f = await fixture();
+		f.read.revalidate = async () => {
+			throw new Error("private credential body");
+		};
+		await expect(f.driver.discoverNativeCommands(f.read)).rejects.toMatchObject(
+			{
+				code: "RUNTIME_GRANT_INVALID",
+				message: expect.not.stringMatching(/private|credential|body/),
+			},
+		);
+		expect(f.transport.openCount).toBe(0);
+	});
+
+	it.each(["config", "runtime"])(
+		"rechecks original %s after remote confirmation resolves",
+		async (kind) => {
+			const f = await fixture();
+			const held = Promise.withResolvers<typeof f.binding>();
+			let reached = false;
+			f.read.revalidate = async () => {
+				if (f.transport.requests.at(-1)?.method === "thread/read") {
+					reached = true;
+					return held.promise;
+				}
+				return f.binding;
+			};
+			const query = f.driver.discoverNativeCommands(f.read);
+			const rejected = expect(query).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+			await vi.waitFor(() => expect(reached).toBe(true));
+			alterOriginalFacts((state) => {
+				const operation = Object.values(state.operations)[0];
+				const session = Object.values(state.sessions)[0];
+				if (kind === "config" && operation)
+					operation.configVersion = "other-config";
+				if (kind === "runtime" && session?.requiredRuntime)
+					session.requiredRuntime.schemaVersion = 2;
+			});
+			held.resolve(f.binding);
+			await rejected;
+		},
+	);
+
+	it("cleans a late owned Bridge after a bounded open abort without initializing it", async () => {
+		const f = await fixture();
+		const opening = Promise.withResolvers<void>();
+		f.transport.openDelay = opening.promise;
+		const query = f.driver.discoverNativeCommands(f.read);
+		const rejected = expect(query).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		await vi.waitFor(() => expect(f.transport.openCount).toBe(1));
+		f.abort.abort();
+		await rejected;
+		opening.resolve();
+		await vi.waitFor(() => expect(f.transport.closeCount).toBe(1));
+		expect(f.transport.requests).toEqual([]);
+	});
+
+	it.each(["cached", "in flight"])(
+		"preserves a shared %s ordinary RPC when metadata confirmation aborts",
+		async (kind) => {
+			const f = await fixture();
+			const initialization = Promise.withResolvers<void>();
+			if (kind === "in flight")
+				f.transport.beforeSend = async (frame) => {
+					if (frame.method === "initialize") await initialization.promise;
+				};
+			const ordinary = fixtureRpc(f);
+			if (kind === "cached") await ordinary;
+			else
+				await vi.waitFor(() =>
+					expect(f.transport.requests.at(-1)?.method).toBe("initialize"),
+				);
+			const held = Promise.withResolvers<typeof f.binding>();
+			let confirmations = 0;
+			f.read.revalidate = async () => {
+				confirmations++;
+				return confirmations === 1 ? f.binding : held.promise;
+			};
+			const query = f.driver.discoverNativeCommands(f.read);
+			const rejected = expect(query).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+			if (kind === "in flight") initialization.resolve();
+			await vi.waitFor(() => expect(confirmations).toBe(2));
+			f.abort.abort();
+			await rejected;
+			held.resolve(f.binding);
+			const rpc = await ordinary;
+			await expect(
+				rpc.request("model/list", {}, (value) => value),
+			).resolves.toBeDefined();
+			expect(f.transport.closeCount).toBe(0);
+			expect(
+				f.transport.requests.some((frame) => frame.method === "thread/read"),
+			).toBe(false);
+		},
+	);
+});
 
 describe("Codex metadata RPC local failure boundaries (scripted unit fixture)", () => {
 	it("finishes a valid response before the send callback and still fails on its late rejection", async () => {

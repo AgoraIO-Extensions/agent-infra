@@ -9621,11 +9621,134 @@ async function skillDiscoveryFixture(
 		signal: abort.signal,
 		expiresAt: Date.now() + 10_000,
 		assertCurrent: () => seeded.binding,
+		revalidate: async () => seeded.binding,
 	} satisfies CodexNativeCommandReadContext;
 	return { ...seeded, driver, bridge, read, abort, directory };
 }
 
 describe("installed Codex Skill complete discovery (controlled behavior only)", () => {
+	it.each([
+		"initialize",
+		"config/read",
+		"model/list",
+		"skills/extraRoots/set",
+		"skills/list",
+		"projection",
+	])(
+		"awaits async current authority after %s before admitting the next Skill dependency",
+		async (stage) => {
+			const f = await skillDiscoveryFixture();
+			let projected = false;
+			Object.defineProperty(f.bridge.metadata, "description", {
+				enumerable: true,
+				get: () => {
+					projected = true;
+					return "Controlled package description";
+				},
+			});
+			const held = Promise.withResolvers<typeof f.binding>();
+			let reached = false;
+			f.read.revalidate = async () => {
+				if (
+					stage === "projection"
+						? projected
+						: f.bridge.requests.at(-1)?.method === stage
+				) {
+					reached = true;
+					return held.promise;
+				}
+				return f.binding;
+			};
+			const query = f.driver.discoverNativeSkills(f.read);
+			const rejected = expect(query).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+			await vi.waitFor(() => expect(reached).toBe(true));
+			const requests = [...f.bridge.requests];
+			held.resolve({
+				...f.binding,
+				principal: { kind: "user", id: "remote-revoked-reader" },
+			});
+			await rejected;
+			expect(f.bridge.requests).toEqual(requests);
+		},
+	);
+
+	it.each(["epoch", "process"])(
+		"checks the original Skill %s after awaiting current authority at final projection",
+		async (kind) => {
+			const f = await skillDiscoveryFixture();
+			let projected = false;
+			Object.defineProperty(f.bridge.metadata, "description", {
+				enumerable: true,
+				get: () => {
+					projected = true;
+					return "Controlled package description";
+				},
+			});
+			const held = Promise.withResolvers<typeof f.binding>();
+			let reached = false;
+			f.read.revalidate = async () => {
+				if (projected) {
+					reached = true;
+					return held.promise;
+				}
+				return f.binding;
+			};
+			const query = f.driver.discoverNativeSkills(f.read);
+			const rejected = expect(query).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_SKILL_DIRECTORY_STALE",
+			});
+			await vi.waitFor(() => expect(reached).toBe(true));
+			if (kind === "epoch")
+				await f.bridge.emitFrame({ method: "skills/changed", params: {} });
+			else if (f.bridge.launch)
+				f.bridge.launch = Object.freeze({
+					...f.bridge.launch,
+					processId: "foreign-process",
+				});
+			held.resolve(f.binding);
+			await rejected;
+			expect(f.bridge.closedCount).toBe(0);
+		},
+	);
+
+	it("bounds a cached Skill query awaiting current confirmation and preserves its ordinary RPC", async () => {
+		const f = await skillDiscoveryFixture();
+		await f.driver.discoverNativeSkills(f.read);
+		const held = Promise.withResolvers<typeof f.binding>();
+		let reached = false;
+		f.read.revalidate = async () => {
+			if (f.bridge.requests.at(-1)?.method === "skills/list") {
+				reached = true;
+				return held.promise;
+			}
+			return f.binding;
+		};
+		const before = f.bridge.requests.length;
+		const query = f.driver.discoverNativeSkills(f.read);
+		const rejected = expect(query).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		await vi.waitFor(() => expect(reached).toBe(true));
+		f.abort.abort();
+		await rejected;
+		held.resolve(f.binding);
+		f.read.revalidate = async () => f.binding;
+		await expect(
+			f.driver.discoverNativeCommands({
+				...f.read,
+				signal: new AbortController().signal,
+			}),
+		).resolves.toBeDefined();
+		expect(
+			f.bridge.requests
+				.slice(before)
+				.filter((request) => request.method === "skills/list"),
+		).toEqual([]);
+		expect(f.bridge.closedCount).toBe(0);
+	});
+
 	it("consumes actual spawn provenance, admits complete directory and sets roots only once", async () => {
 		const f = await skillDiscoveryFixture();
 		const first = await f.driver.discoverNativeSkills(f.read);

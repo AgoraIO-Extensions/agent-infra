@@ -57,6 +57,7 @@ export async function seedNativeCommandState(
 					schemaVersion: 1,
 					state: "resolved",
 					nativeSessionRef,
+					configVersion: "config-1",
 					record: {
 						schemaVersion: 1,
 						agentId: binding.scope.agentId,
