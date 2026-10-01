@@ -19,6 +19,7 @@ import {
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
+	validateRuntimeModelProjectionV1,
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationRecordV2,
@@ -91,6 +92,7 @@ function configurationFixture(
 
 function pendingSecretRecord(
 	overrides: {
+		readonly agentId?: string;
 		readonly ownerId?: string;
 		readonly configRevision?: number;
 		readonly name?: string;
@@ -98,6 +100,7 @@ function pendingSecretRecord(
 	} = {},
 ): PlatformSecretRecordV1 {
 	const ownerId = overrides.ownerId ?? "owner-a";
+	const agentId = overrides.agentId ?? "agent-a";
 	const configRevision = overrides.configRevision ?? 1;
 	const name = overrides.name ?? "BOT_TOKEN";
 	const secretId = overrides.secretId ?? "secret-a";
@@ -106,7 +109,7 @@ function pendingSecretRecord(
 		secretId,
 		ownerType: "agent-owner",
 		ownerId,
-		agentId: "agent-a",
+		agentId,
 		name,
 		secretVersion: 1,
 		configRevision,
@@ -122,7 +125,7 @@ function pendingSecretRecord(
 				secretId,
 				ownerType: "agent-owner",
 				ownerId,
-				agentId: "agent-a",
+				agentId,
 				name,
 				secretVersion: 1,
 				configRevision,
@@ -316,6 +319,7 @@ function fixture(
 			{
 				templateId: "template-a",
 				imageDigest: `sha256:${"a".repeat(64)}`,
+				driver: "codex",
 				protocol: "openai-responses-v1",
 			},
 		],
@@ -528,6 +532,7 @@ describe("assembled Workload Runtime contracts", () => {
 						{
 							templateId: "template-a",
 							imageDigest: `sha256:${"a".repeat(64)}`,
+							driver: protocol === "openai-responses-v1" ? "codex" : "claude",
 							protocol,
 						},
 					],
@@ -665,10 +670,23 @@ describe("assembled Workload Runtime contracts", () => {
 			);
 		},
 	);
-	it.each(["codex", "claude", "acp"] as const)(
+	it.each(["codex", "claude", "acp", "pi"] as const)(
 		"projects two options with the same model into isolated endpoint and credential bindings consumed by %s Runtime",
 		async (driver) => {
-			const configuration = standardModelConfiguration();
+			const original = standardModelConfiguration();
+			assert(original.source.kind === "standard");
+			const configuration =
+				driver === "acp"
+					? {
+							...original,
+							source: {
+								...original.source,
+								templateId: "template-b",
+								imageDigest: `sha256:${"b".repeat(64)}`,
+							},
+						}
+					: original;
+			assert(configuration.source.kind === "standard");
 			const model = configuration.modelConfiguration;
 			assert(model);
 			const first = model.options[0];
@@ -714,13 +732,30 @@ describe("assembled Workload Runtime contracts", () => {
 			let unavailableOnce = true;
 			const f = fixture(
 				{
-					templateModelBindings: [
-						{
-							templateId: "template-a",
-							imageDigest: `sha256:${"a".repeat(64)}`,
-							protocol: profile,
-						},
-					],
+					templateModelBindings:
+						driver === "claude" || driver === "acp"
+							? [
+									{
+										templateId: "template-a",
+										imageDigest: `sha256:${"a".repeat(64)}`,
+										driver: "claude",
+										protocol: "anthropic-messages-v1",
+									},
+									{
+										templateId: "template-b",
+										imageDigest: `sha256:${"b".repeat(64)}`,
+										driver: "acp",
+										protocol: "anthropic-messages-v1",
+									},
+								]
+							: [
+									{
+										templateId: "template-a",
+										imageDigest: `sha256:${"a".repeat(64)}`,
+										driver,
+										protocol: profile,
+									},
+								],
 					modelCatalog: {
 						async resolve(input, options) {
 							if (unavailableOnce) {
@@ -792,10 +827,19 @@ describe("assembled Workload Runtime contracts", () => {
 					environment[entry.name] = Buffer.from(data, "base64").toString();
 				} else environment[entry.name] = entry.value;
 			}
+			const selectedDriver = environment.AGENT_INFRA_RUNTIME_DRIVER;
+			assert(selectedDriver === driver);
+			expect(workload.spec.template.spec.containers[0].image).toBe(
+				`${workloadTestPolicy.imageRepository}@${configuration.source.imageDigest}`,
+			);
 			const consumed =
-				driver !== "codex"
-					? readRuntimeModelConfigurationV3(environment, driver)
+				selectedDriver !== "codex"
+					? readRuntimeModelConfigurationV3(environment, selectedDriver)
 					: readCodexPilotConfiguration(environment);
+			expect(consumed.configVersion).toBe(
+				JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? "")
+					.configVersion,
+			);
 			expect(
 				JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? "")
 					.schemaVersion,
@@ -835,18 +879,66 @@ describe("assembled Workload Runtime contracts", () => {
 			);
 			const state = f.state;
 			if (!state) throw new Error();
-			const runtime = createWorkloadRuntimeV1(f.options);
-			const reservedConfiguration = {
-				...state.candidate.configuration,
-				environment: [
-					{ name: "AGENT_INFRA_RUNTIME_MODEL_CONFIG", value: "owner-override" },
-				],
-			};
-			await expect(
-				runtime.preflight(
-					{
-						configuration: reservedConfiguration,
-						state: null,
+			if (driver !== "codex") {
+				const before = structuredClone([...f.resources.entries()]);
+				const changed = createKubernetesRuntimeAdapterV1({
+					client: f.client,
+					policy: f.options.policy,
+					modelProjection: validateRuntimeModelProjectionV1(
+						state.candidate.modelProjection,
+					),
+					standardTemplateBinding: {
+						templateId: configuration.source.templateId,
+						imageDigest: configuration.source.imageDigest,
+						driver: driver === "claude" ? "acp" : "claude",
+						protocol: "anthropic-messages-v1",
+					},
+					probe: async () => true,
+				});
+				assert(state.identity);
+				const desired = validateAgentWorkloadDesiredV1({
+					...validateAgentWorkloadDesiredV1(state.candidate.deployment),
+					expectedWorkload: {
+						state: "present",
+						workloadUid: state.identity.uid,
+						workloadGeneration: state.identity.generation,
+					},
+				});
+				await expect(changed.apply(desired)).rejects.toMatchObject({
+					code: "conflict",
+				});
+				expect([...f.resources.entries()]).toEqual(before);
+				const credentialRef = validateAgentWorkloadDesiredV1(
+					state.candidate.deployment,
+				).secretRefs[0];
+				assert(credentialRef);
+				f.resources.delete(`Secret/${credentialRef.name}`);
+				const beforeMaterialization = structuredClone([
+					...f.resources.entries(),
+				]);
+				const decrypt = vi.fn(f.options.decryptor.decrypt);
+				const source = configuration.source;
+				const changedRuntime = createWorkloadRuntimeV1({
+					...f.options,
+					decryptor: { decrypt },
+					templateModelBindings: f.options.templateModelBindings.map(
+						(binding) =>
+							binding.templateId === source.templateId &&
+							binding.imageDigest === source.imageDigest
+								? {
+										...binding,
+										driver:
+											driver === "claude"
+												? ("acp" as const)
+												: ("claude" as const),
+									}
+								: binding,
+					),
+				});
+				await expect(
+					changedRuntime.apply(state, false, {
+						configuration: state.candidate.configuration,
+						state,
 						management: f.management,
 						requestId: "request-a",
 						traceId: "trace-a",
@@ -858,16 +950,49 @@ describe("assembled Workload Runtime contracts", () => {
 							store: secretCleanupStore(records[0]).store,
 							async auditDecryption() {},
 						},
-					},
-					{
-						...state,
-						candidate: {
-							...state.candidate,
+					}),
+				).rejects.toMatchObject({ code: "conflict" });
+				expect(decrypt).not.toHaveBeenCalled();
+				expect([...f.resources.entries()]).toEqual(beforeMaterialization);
+				f.resources.clear();
+				for (const [key, resource] of before) f.resources.set(key, resource);
+			}
+			const runtime = createWorkloadRuntimeV1(f.options);
+			for (const name of [
+				"AGENT_INFRA_RUNTIME_MODEL_CONFIG",
+				"AGENT_INFRA_RUNTIME_DRIVER",
+			]) {
+				const reservedConfiguration = {
+					...state.candidate.configuration,
+					environment: [{ name, value: "owner-override" }],
+				};
+				await expect(
+					runtime.preflight(
+						{
 							configuration: reservedConfiguration,
+							state: null,
+							management: f.management,
+							requestId: "request-a",
+							traceId: "trace-a",
+							secrets: {
+								bindings: records.map((record) => ({
+									materialization: "current",
+									record,
+								})),
+								store: secretCleanupStore(records[0]).store,
+								async auditDecryption() {},
+							},
 						},
-					},
-				),
-			).rejects.toThrow(/^Workload preflight rejected$/);
+						{
+							...state,
+							candidate: {
+								...state.candidate,
+								configuration: reservedConfiguration,
+							},
+						},
+					),
+				).rejects.toThrow(/^Workload preflight rejected$/);
+			}
 			expect(await runtime.observe(JSON.parse(JSON.stringify(state)))).toBe(
 				"healthy",
 			);
@@ -921,6 +1046,132 @@ describe("assembled Workload Runtime contracts", () => {
 			expect(await runtime.observe(state)).toBe("drifted");
 		},
 	);
+	it("alternates two same-protocol templates through one retained Worker and Runtime", async () => {
+		const catalog = catalogFixture();
+		catalog.endpoints = catalog.endpoints.map((endpoint) => ({
+			...endpoint,
+			protocol: "anthropic-messages-v1",
+			authentication: "bearer",
+		}));
+		const templateModelBindings = [
+			{
+				templateId: "template-a",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				driver: "claude" as const,
+				protocol: "anthropic-messages-v1" as const,
+			},
+			{
+				templateId: "template-b",
+				imageDigest: `sha256:${"b".repeat(64)}`,
+				driver: "acp" as const,
+				protocol: "anthropic-messages-v1" as const,
+			},
+		];
+		const f = fixture({
+			templateModelBindings,
+			modelCatalog: createFakeModelCatalogAdapterV1(catalog),
+			modelAccess: createFakeModelAccessValidatorV1([
+				{
+					endpointId: "endpoint-a",
+					modelId: "model-a",
+					reasoningLevels: ["medium"],
+					credential: "synthetic-primary-credential",
+				},
+			]),
+			decryptor: {
+				async decrypt() {
+					return {
+						outcome: "decrypted",
+						plaintext: new TextEncoder().encode("synthetic-primary-credential"),
+					};
+				},
+			},
+		});
+		const candidates = templateModelBindings.map((binding, index) => {
+			const agentId = index === 0 ? "agent-a" : "agent-b";
+			const original = standardModelConfiguration({ agentId });
+			assert(
+				original.source.kind === "standard" && original.modelConfiguration,
+			);
+			const configuration = {
+				...original,
+				source: {
+					...original.source,
+					templateId: binding.templateId,
+					imageDigest: binding.imageDigest,
+				},
+			};
+			const record = pendingSecretRecord({
+				agentId,
+				name: "model:primary",
+				secretId: "model-secret-a",
+			});
+			return {
+				configuration,
+				management: { ...f.management, agentId },
+				secrets: cleanupSecrets(secretCleanupStore(record)),
+				state: null as WorkloadReconciliationStateV1 | null,
+			};
+		});
+		const runtime = createWorkloadRuntimeV1(f.options);
+		let next = 0;
+		const worker = createWorkloadReconciliationV1({
+			runtime,
+			maximumAttempts: 2,
+			store: {
+				async runNext(_workerId, step) {
+					const candidate = candidates[next++ % candidates.length];
+					assert(candidate);
+					candidate.state = await step({
+						...candidate,
+						requestId: "request-a",
+						traceId: "trace-a",
+					});
+					return "advanced";
+				},
+			},
+		});
+		for (let i = 0; i < 8; i++) await worker.tick("worker-a");
+		for (let round = 0; round < 3; round++) {
+			for (const [index, candidate] of candidates.entries()) {
+				const binding = templateModelBindings[index];
+				assert(binding && candidate.state?.phase === "observing");
+				const workload = await f.client.read<V1StatefulSet>(
+					"StatefulSet",
+					workloadResourceNameV1(candidate.configuration.agentId),
+				);
+				const container = workload?.spec?.template.spec?.containers[0];
+				assert(container);
+				expect(container.image).toBe(
+					`${workloadTestPolicy.imageRepository}@${binding.imageDigest}`,
+				);
+				const environment: NodeJS.ProcessEnv = {};
+				for (const entry of container.env ?? []) {
+					const ref = entry.valueFrom?.secretKeyRef;
+					if (!ref) environment[entry.name] = entry.value;
+					else {
+						assert(ref.name);
+						const secret = await f.client.read<V1Secret>("Secret", ref.name);
+						assert(secret?.data?.[ref.key]);
+						environment[entry.name] = Buffer.from(
+							secret.data[ref.key],
+							"base64",
+						).toString();
+					}
+				}
+				expect(environment.AGENT_INFRA_RUNTIME_DRIVER).toBe(binding.driver);
+				const consumed = readRuntimeModelConfigurationV3(
+					environment,
+					binding.driver,
+				);
+				expect(consumed.configVersion).toBe(
+					JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? "")
+						.configVersion,
+				);
+				expect(await runtime.observe(candidate.state)).toBe("healthy");
+			}
+		}
+	});
 	it.each(["current", "active-origin"] as const)(
 		"rejects mismatched persisted active Secret names for %s bindings",
 		async (materialization) => {

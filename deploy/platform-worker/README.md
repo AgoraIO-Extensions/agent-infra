@@ -101,7 +101,8 @@ export const workloadInput = {
   Base64 输入；不能把 PEM 原样传给工厂，也不能以同一把私钥冒充多个版本。
 - `policy.runtimeAuth` 的 Worker ID、issuer、key ID、公钥必须与 `signing` 匹配；其中只保存
   Kubernetes 内预置的 Runtime transport Secret 名称/键，不保存私钥或 Token 值。
-- `templateModelBindings` 使用当前获准标准模板 digest 与协议。上面空数组仅是形状示例，
+- `templateModelBindings` 使用当前获准标准模板 digest、必需 `driver` 与协议，绑定规则见
+  [Runtime HLD §3.1](../../docs/architecture/HLD-agent-runtime-M1.md#31-标准-runtime)。上面空数组仅是形状示例，
   不能验证标准模板；自定义 Agent 可使用空数组。
 - `executionCapacityProfiles` 必须由真实负载/conformance 证据产生，绑定精确 image digest、
   resource profile 与资源配置 hash。空数组不允许新 Turn。撤回容量证明仍保留原执行控制。

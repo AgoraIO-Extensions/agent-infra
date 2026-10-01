@@ -37,6 +37,8 @@ export {
 	revalidateRuntimeModelCatalogV1,
 	runtimeModelInjectionV1,
 	type StandardTemplateModelBindingV1,
+	standardTemplateModelBindingV1,
 	standardTemplateModelProtocolV1,
 	validateRuntimeModelProjectionV1,
+	validateStandardTemplateModelBindingsV1,
 } from "./projection.js";

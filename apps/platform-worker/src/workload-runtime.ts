@@ -16,8 +16,10 @@ import {
 	projectRuntimeModelConfigurationV1,
 	revalidateRuntimeModelCatalogV1,
 	type StandardTemplateModelBindingV1,
+	standardTemplateModelBindingV1,
 	standardTemplateModelProtocolV1,
 	validateRuntimeModelProjectionV1,
+	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
 import {
 	cleanupUnactivatedSecretCandidateV1,
@@ -347,6 +349,9 @@ export function createWorkloadRuntimeV1(
 } {
 	if (!Array.isArray(options.templateModelBindings))
 		throw new TypeError("Template model bindings are required");
+	const templateModelBindings = validateStandardTemplateModelBindingsV1(
+		options.templateModelBindings,
+	);
 	const fetcher = options.fetch ?? globalThis.fetch;
 	const observedCapabilities = new WeakMap<
 		WorkloadReconciliationStateV1,
@@ -359,6 +364,13 @@ export function createWorkloadRuntimeV1(
 		return createKubernetesRuntimeAdapterV1({
 			client: options.client,
 			policy: options.policy,
+			standardTemplateBinding:
+				state?.candidate.configuration.source.kind === "standard"
+					? standardTemplateModelBindingV1(
+							state.candidate.configuration.source,
+							templateModelBindings,
+						)
+					: undefined,
 			modelProjection:
 				state?.candidate.configuration.source.kind === "standard"
 					? validateRuntimeModelProjectionV1(
@@ -481,7 +493,7 @@ export function createWorkloadRuntimeV1(
 		if (!options.modelCatalog) throw new ModelConfigurationErrorV1();
 		const protocol = standardTemplateModelProtocolV1(
 			state.candidate.configuration.source,
-			options.templateModelBindings,
+			templateModelBindings,
 		);
 		const projection = validateRuntimeModelProjectionV1(
 			state.candidate.modelProjection,
@@ -660,7 +672,7 @@ export function createWorkloadRuntimeV1(
 						configuration,
 						protocol: standardTemplateModelProtocolV1(
 							configuration.source,
-							options.templateModelBindings,
+							templateModelBindings,
 						),
 						catalog: options.modelCatalog,
 						access: options.modelAccess,
@@ -824,6 +836,7 @@ export function createWorkloadRuntimeV1(
 			await revalidateCandidateCatalog(state);
 			const workload = desired(state);
 			const adapter = createAdapter(undefined, state);
+			await adapter.assertStandardTemplateBinding(workload);
 			const activeBindingsToRepair: {
 				readonly reference: SecretActivationReferenceV1;
 				readonly activationFence: NonNullable<

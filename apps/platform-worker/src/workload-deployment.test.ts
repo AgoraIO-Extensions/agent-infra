@@ -162,6 +162,48 @@ describe("production Worker deployment", () => {
 			runtimeProbe: authorize(),
 		};
 	}
+	it.each([
+		[
+			{
+				templateId: "template-a",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				protocol: "openai-responses-v1",
+			},
+		],
+		[
+			{
+				templateId: "template-a",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				driver: "fake",
+				protocol: "openai-responses-v1",
+			},
+		],
+		[
+			{
+				templateId: "template-a",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				driver: "claude",
+				protocol: "openai-responses-v1",
+			},
+		],
+	])(
+		"rejects bad trusted Driver bindings before reading Kubernetes credentials (%#)",
+		async (templateModelBindings) => {
+			const deployment = await input();
+			Object.defineProperty(deployment, "templateModelBindings", {
+				value: templateModelBindings,
+			});
+			Object.defineProperty(deployment, "kubernetes", {
+				get() {
+					throw new Error("Kubernetes credentials must not be read");
+				},
+			});
+			await expect(
+				createProductionWorkloadWorkerOptionsV1(deployment),
+			).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
+		},
+	);
+
 	it("uses the explicitly selected namespace client rather than kubeconfig current-context", async () => {
 		const requests: { url?: string; authorization?: string }[] = [];
 		const server = createServer((request, response) => {

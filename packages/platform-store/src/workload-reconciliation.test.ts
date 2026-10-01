@@ -1566,6 +1566,7 @@ describe("PostgreSQL Workload steps", () => {
 				{
 					templateId: "template-a",
 					imageDigest: `sha256:${"a".repeat(64)}`,
+					driver: "codex" as const,
 					protocol: "openai-responses-v1" as const,
 				},
 			],

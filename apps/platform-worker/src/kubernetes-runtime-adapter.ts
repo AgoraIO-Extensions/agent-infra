@@ -10,7 +10,9 @@ import {
 import {
 	type RuntimeModelProjectionV1,
 	runtimeModelInjectionV1,
+	type StandardTemplateModelBindingV1,
 	validateRuntimeModelProjectionV1,
+	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
 import type {
 	KubernetesObject,
@@ -95,6 +97,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	readonly policy: KubernetesWorkloadPolicyV1;
 	/** Supplied from Worker persistent state, never restored from live annotations. */
 	readonly modelProjection?: RuntimeModelProjectionV1;
+	/** The same candidate's trusted template/digest tuple, never a global policy Driver. */
+	readonly standardTemplateBinding?: StandardTemplateModelBindingV1;
 	readonly probe: (input: {
 		readonly desired: AgentWorkloadDesiredV1;
 		readonly serviceOrigin: string;
@@ -110,6 +114,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	const modelInjection = modelProjection
 		? runtimeModelInjectionV1(modelProjection)
 		: undefined;
+	const standardTemplateBinding =
+		options.standardTemplateBinding === undefined
+			? undefined
+			: validateStandardTemplateModelBindingsV1([
+					options.standardTemplateBinding,
+				])[0];
+	if (!!modelProjection !== !!standardTemplateBinding)
+		throw new WorkloadKubernetesError("policy");
 	if (
 		client.namespace !== policy.namespace ||
 		!Object.keys(policy.workerSelector).length ||
@@ -152,8 +164,32 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		policy,
 		modelProjection,
 		modelInjection,
+		standardTemplateBinding,
 		egress,
 	});
+	function assertStandardTemplateBinding(
+		value: AgentWorkloadDesiredV1,
+		current: V1StatefulSet | null,
+	) {
+		if (!standardTemplateBinding || !current) return;
+		const container = current.spec?.template.spec?.containers.find(
+			(entry) => entry.name === "agent",
+		);
+		const previousDrivers =
+			container?.env?.filter(
+				(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
+			) ?? [];
+		const previousDriver = previousDrivers[0];
+		// A deployment edit cannot silently retarget the same admitted image.
+		if (
+			container?.image === `${policy.imageRepository}@${value.imageDigest}` &&
+			previousDriver &&
+			(previousDrivers.length !== 1 ||
+				previousDriver.valueFrom !== undefined ||
+				previousDriver.value !== standardTemplateBinding.driver)
+		)
+			throw new WorkloadKubernetesError("conflict");
+	}
 
 	async function put<T extends KubernetesObject>(
 		object: T,
@@ -161,6 +197,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	): Promise<T> {
 		const kind = object.kind as WorkloadResourceKind;
 		const current = await client.read<T>(kind, object.metadata?.name ?? "");
+		if (kind === "StatefulSet")
+			assertStandardTemplateBinding(value, current as V1StatefulSet | null);
 		if (current) {
 			own(current, value.agentId, value.workloadRevision, value.fence);
 			if (current.metadata?.deletionTimestamp)
@@ -520,6 +558,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		closeRoute,
 		closeAgent,
 		observe,
+		async assertStandardTemplateBinding(input: unknown) {
+			if (!standardTemplateBinding) return;
+			const value = desired(input);
+			assertStandardTemplateBinding(value, await statefulSet(value));
+		},
 		/** Adoption verifies the persisted creation, independently of readiness. */
 		async observeRecoveryWorkload(
 			input: unknown,
@@ -1046,6 +1089,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const value = desired(input);
 			const name = workloadResourceNameV1(value.agentId);
 			const current = await statefulSet(value);
+			assertStandardTemplateBinding(value, current);
 			// Reject stale work before any partial creation or scale-down. Per-write
 			// ownership and resourceVersion checks still protect subsequent races.
 			const existingPvc = await client.read<V1PersistentVolumeClaim>(

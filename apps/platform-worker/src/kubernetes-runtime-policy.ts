@@ -5,6 +5,7 @@ import {
 import type {
 	RuntimeModelProjectionV1,
 	runtimeModelInjectionV1,
+	StandardTemplateModelBindingV1,
 } from "@agent-infra/model-catalog";
 import type {
 	KubernetesObject,
@@ -39,15 +40,29 @@ import { workloadRuntimeAuthEnvironmentV1 } from "./workload-runtime-auth.js";
 export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	readonly policy: KubernetesWorkloadPolicyV1;
 	readonly modelProjection: RuntimeModelProjectionV1 | undefined;
+	readonly standardTemplateBinding: StandardTemplateModelBindingV1 | undefined;
 	readonly modelInjection:
 		| ReturnType<typeof runtimeModelInjectionV1>
 		| undefined;
 	readonly egress: ReturnType<typeof workloadEgressRulesV1>;
 }) {
-	const { policy, modelProjection, modelInjection, egress } = dependencies;
+	const {
+		policy,
+		modelProjection,
+		modelInjection,
+		standardTemplateBinding,
+		egress,
+	} = dependencies;
 	function modelBindings(value: AgentWorkloadDesiredV1) {
 		if (!modelProjection || !modelInjection) return undefined;
 		if (
+			!standardTemplateBinding ||
+			value.imageDigest !== standardTemplateBinding.imageDigest ||
+			value.runtimeManifest.interactionMode !== "platform-adapter" ||
+			modelProjection.options.some(
+				(option) =>
+					option.endpoint.protocol !== standardTemplateBinding.protocol,
+			) ||
 			value.agentId !== modelProjection.agentId ||
 			value.configRevision !== modelProjection.configurationRevision ||
 			Object.keys(value.env).some((name) => name.startsWith("AGENT_INFRA_")) ||
@@ -80,6 +95,14 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		return [
 			...Object.entries(value.env).map(([name, value]) => ({ name, value })),
 			...(injection?.env ?? []),
+			...(injection && standardTemplateBinding
+				? [
+						{
+							name: "AGENT_INFRA_RUNTIME_DRIVER",
+							value: standardTemplateBinding.driver,
+						},
+					]
+				: []),
 			...runtimeAuth,
 		];
 	}

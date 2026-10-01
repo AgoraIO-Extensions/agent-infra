@@ -11,7 +11,10 @@ import {
 	createFakeModelCatalogAdapterV1,
 	projectRuntimeModelConfigurationV1,
 	runtimeModelInjectionV1,
+	standardTemplateModelBindingV1,
+	standardTemplateModelProtocolV1,
 	validateRuntimeModelProjectionV1,
+	validateStandardTemplateModelBindingsV1,
 } from "./index.js";
 
 const hash = (s: string) =>
@@ -36,6 +39,83 @@ const configurationV2: AgentConfigurationRecordV2 = {
 	channels: [],
 	channelRevision: "channels-a",
 };
+
+const standardBinding = {
+	templateId: "arbitrary-template-a",
+	imageDigest: `sha256:${"a".repeat(64)}`,
+	driver: "claude" as const,
+	protocol: "anthropic-messages-v1" as const,
+};
+
+it("resolves distinct Drivers from exact trusted pairs sharing the same model protocol", () => {
+	const bindings = [
+		{ ...standardBinding },
+		{
+			...standardBinding,
+			templateId: "arbitrary-template-b",
+			imageDigest: `sha256:${"b".repeat(64)}`,
+			driver: "acp" as const,
+		},
+	];
+	for (const binding of bindings) {
+		const source = {
+			...configurationV2.source,
+			kind: "standard" as const,
+			templateId: binding.templateId,
+			imageDigest: binding.imageDigest,
+		};
+		expect(standardTemplateModelBindingV1(source, bindings)).toEqual(binding);
+		expect(standardTemplateModelProtocolV1(source, bindings)).toBe(
+			"anthropic-messages-v1",
+		);
+		expect(() =>
+			standardTemplateModelBindingV1(
+				{ ...source, imageDigest: `sha256:${"c".repeat(64)}` },
+				bindings,
+			),
+		).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+	}
+	const snapshot = validateStandardTemplateModelBindingsV1(bindings);
+	Object.assign(bindings[0], { driver: "pi" });
+	expect(snapshot[0]?.driver).toBe("claude");
+	expect(Object.isFrozen(snapshot)).toBe(true);
+	expect(Object.isFrozen(snapshot[0])).toBe(true);
+});
+
+it.each([
+	undefined,
+	{},
+	[
+		{
+			templateId: standardBinding.templateId,
+			imageDigest: standardBinding.imageDigest,
+			protocol: standardBinding.protocol,
+		},
+	],
+	[{ ...standardBinding, driver: "fake" }],
+	[{ ...standardBinding, driver: "unknown" }],
+	[{ ...standardBinding, driver: "codex" }],
+	[{ ...standardBinding, protocol: "openai-responses-v1" }],
+	[{ ...standardBinding, imageDigest: "latest" }],
+	[{ ...standardBinding, ownerDriver: "claude" }],
+	[standardBinding, standardBinding],
+	[standardBinding, { ...standardBinding, driver: "acp" }],
+])(
+	"rejects missing, invalid or ambiguous trusted Driver tuples (%#)",
+	(bindings) => {
+		expect(() => validateStandardTemplateModelBindingsV1(bindings)).toThrow(
+			/^MODEL_CONFIGURATION_UNAVAILABLE$/,
+		);
+	},
+);
+
+it("allows an explicitly empty custom deployment without inventing a standard Driver", () => {
+	expect(validateStandardTemplateModelBindingsV1([])).toEqual([]);
+	expect(() =>
+		standardTemplateModelBindingV1(configurationV2.source, []),
+	).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+});
+
 async function projection(
 	protocol: "anthropic-messages-v1" | "openai-responses-v1",
 	templateProtocol = protocol,
