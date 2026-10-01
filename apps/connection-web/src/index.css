@@ -1303,6 +1303,52 @@ tbody tr:hover {
 	display: flex;
 	justify-content: flex-end;
 }
+.credential-reuse-description {
+	margin: 0 0 16px;
+	color: var(--text-muted);
+}
+.credential-reuse-list {
+	display: grid;
+	gap: 10px;
+	max-height: 42dvh;
+	overflow-y: auto;
+}
+.credential-reuse-account {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+	padding: 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+}
+.credential-reuse-account > div {
+	flex: 1 1 180px;
+	min-width: 0;
+	display: grid;
+	gap: 4px;
+}
+.credential-reuse-account strong,
+.credential-reuse-account span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.credential-reuse-account span {
+	color: var(--text-muted);
+	font-size: 12px;
+}
+.credential-reuse-account > button {
+	margin-left: auto;
+	flex: 0 0 auto;
+}
+.credential-reuse-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 10px;
+	margin-top: 16px;
+}
 .account-switch {
 	display: flex;
 	align-items: center;
