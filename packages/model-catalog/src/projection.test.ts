@@ -11,6 +11,8 @@ import {
 	createFakeModelCatalogAdapterV1,
 	projectRuntimeModelConfigurationV1,
 	runtimeModelInjectionV1,
+	type StandardTemplateModelBindingV1,
+	standardTemplateModelBindingV1,
 	standardTemplateModelProtocolV1,
 	validateRuntimeModelProjectionV1,
 	validateStandardTemplateModelBindingsV1,
@@ -65,6 +67,7 @@ it("selects protocols from exact trusted pairs with distinct Drivers sharing a p
 			templateId: binding.templateId,
 			imageDigest: binding.imageDigest,
 		};
+		expect(standardTemplateModelBindingV1(source, bindings)).toEqual(binding);
 		expect(standardTemplateModelProtocolV1(source, bindings)).toBe(
 			"anthropic-messages-v1",
 		);
@@ -130,7 +133,9 @@ async function projection(
 	configuration:
 		| AgentConfigurationRecordV1
 		| AgentConfigurationRecordV2 = configurationV2,
+	binding?: StandardTemplateModelBindingV1,
 ) {
+	if (configuration.source.kind !== "standard") throw new Error();
 	return projectRuntimeModelConfigurationV1({
 		configuration: {
 			...configuration,
@@ -151,7 +156,12 @@ async function projection(
 				],
 			},
 		},
-		protocol: templateProtocol,
+		standardTemplateBinding: binding ?? {
+			templateId: configuration.source.templateId,
+			imageDigest: configuration.source.imageDigest,
+			driver: templateProtocol === "openai-responses-v1" ? "codex" : "claude",
+			protocol: templateProtocol,
+		},
 		catalog: createFakeModelCatalogAdapterV1({
 			...catalogFixture(),
 			endpoints: [
@@ -223,4 +233,108 @@ it("projects Messages as V3 with its per-option credential and refuses a templat
 	expect(
 		JSON.parse(runtimeModelInjectionV1(legacy).configuration).schemaVersion,
 	).toBe(2);
+});
+
+it("binds the exact same-protocol Driver into the durable fingerprint and runtime version", async () => {
+	if (configurationV2.source.kind !== "standard") throw new Error();
+	const binding = {
+		...standardBinding,
+		templateId: configurationV2.source.templateId,
+	};
+	const claude = await projection(
+		"anthropic-messages-v1",
+		undefined,
+		undefined,
+		binding,
+	);
+	const acp = await projection("anthropic-messages-v1", undefined, undefined, {
+		...binding,
+		driver: "acp",
+	});
+	expect(claude.standardTemplateBinding).toEqual(binding);
+	expect(acp.fingerprint).not.toBe(claude.fingerprint);
+	expect(runtimeModelInjectionV1(acp).secretName).not.toBe(
+		runtimeModelInjectionV1(claude).secretName,
+	);
+	expect(
+		JSON.parse(runtimeModelInjectionV1(acp).configuration).configVersion,
+	).not.toBe(
+		JSON.parse(runtimeModelInjectionV1(claude).configuration).configVersion,
+	);
+	const bytes = JSON.stringify(claude);
+	expect(
+		JSON.stringify(validateRuntimeModelProjectionV1(JSON.parse(bytes))),
+	).toBe(bytes);
+	expect(() =>
+		validateRuntimeModelProjectionV1({
+			...claude,
+			standardTemplateBinding: acp.standardTemplateBinding,
+		}),
+	).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+});
+
+it("rejects rehashed tuples inconsistent with the persisted source or endpoint profile", async () => {
+	const projected = await projection("anthropic-messages-v1");
+	const configuration = {
+		...configurationV2,
+		modelConfiguration: {
+			catalogRevision: projected.catalogRevision,
+			defaultOptionId: projected.defaultOptionId,
+			defaultReasoningLevel: projected.defaultReasoningLevel,
+			options: projected.options.map((option) => ({
+				optionId: option.optionId,
+				endpointId: option.endpoint.endpointId,
+				modelId: option.modelId,
+				reasoningLevels: option.reasoningLevels,
+				credential: {
+					secretId: option.secretRef.secretId,
+					version: option.secretRef.secretVersion,
+					isSet: true,
+				},
+			})),
+		},
+	};
+	expect(projected.standardTemplateBinding).toBeDefined();
+	for (const override of [
+		{ templateId: "different-template" },
+		{ imageDigest: `sha256:${"b".repeat(64)}` },
+		{ driver: "codex", protocol: "openai-responses-v1" },
+	]) {
+		const { fingerprint: _, ...content } = projected;
+		const changed = {
+			...content,
+			standardTemplateBinding: {
+				...projected.standardTemplateBinding,
+				...override,
+			},
+		};
+		expect(() =>
+			validateRuntimeModelProjectionV1(
+				{
+					...changed,
+					fingerprint: hash(JSON.stringify(changed)).toLowerCase(),
+				},
+				configuration,
+			),
+		).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+	}
+	expect(validateRuntimeModelProjectionV1(projected, configuration)).toEqual(
+		projected,
+	);
+});
+
+it("reads historical tuple-free bytes without rebinding or changing their runtime version", async () => {
+	const {
+		standardTemplateBinding: _,
+		fingerprint: _fingerprint,
+		...content
+	} = await projection("openai-responses-v1");
+	const fingerprint = hash(JSON.stringify(content)).toLowerCase();
+	const bytes = JSON.stringify({ ...content, fingerprint });
+	const historical = validateRuntimeModelProjectionV1(JSON.parse(bytes));
+	expect(JSON.stringify(historical)).toBe(bytes);
+	expect(historical.standardTemplateBinding).toBeUndefined();
+	expect(
+		JSON.parse(runtimeModelInjectionV1(historical).configuration).configVersion,
+	).toBe(`configuration-${content.configurationRevision}-${fingerprint}`);
 });

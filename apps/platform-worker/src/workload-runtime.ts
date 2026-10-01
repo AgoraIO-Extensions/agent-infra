@@ -16,7 +16,7 @@ import {
 	projectRuntimeModelConfigurationV1,
 	revalidateRuntimeModelCatalogV1,
 	type StandardTemplateModelBindingV1,
-	standardTemplateModelProtocolV1,
+	standardTemplateModelBindingV1,
 	validateRuntimeModelProjectionV1,
 	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
@@ -359,17 +359,27 @@ export function createWorkloadRuntimeV1(
 	function createAdapter(
 		recordCapabilities: (value: Record<string, boolean>) => void = () => {},
 		state?: Pick<WorkloadReconciliationStateV1, "candidate">,
+		purpose: "authorize" | "cleanup" = "authorize",
 	) {
+		const modelProjection =
+			state?.candidate.configuration.source.kind === "standard"
+				? validateRuntimeModelProjectionV1(
+						state.candidate.modelProjection,
+						state.candidate.configuration,
+					)
+				: undefined;
+		if (modelProjection && state && purpose === "authorize") {
+			const binding = standardTemplateModelBindingV1(
+				state.candidate.configuration.source,
+				templateModelBindings,
+			);
+			if (!isDeepStrictEqual(modelProjection.standardTemplateBinding, binding))
+				throw new ModelConfigurationErrorV1();
+		}
 		return createKubernetesRuntimeAdapterV1({
 			client: options.client,
 			policy: options.policy,
-			modelProjection:
-				state?.candidate.configuration.source.kind === "standard"
-					? validateRuntimeModelProjectionV1(
-							state.candidate.modelProjection,
-							state.candidate.configuration,
-						)
-					: undefined,
+			modelProjection,
 			async probe({ desired, serviceOrigin }) {
 				const baseUrl = serviceOrigin;
 				const response = await fetcher(`${baseUrl}${desired.health.path}`, {
@@ -483,18 +493,10 @@ export function createWorkloadRuntimeV1(
 		)
 			return;
 		if (!options.modelCatalog) throw new ModelConfigurationErrorV1();
-		const protocol = standardTemplateModelProtocolV1(
-			state.candidate.configuration.source,
-			templateModelBindings,
-		);
 		const projection = validateRuntimeModelProjectionV1(
 			state.candidate.modelProjection,
 			state.candidate.configuration,
 		);
-		if (
-			projection.options.some((option) => option.endpoint.protocol !== protocol)
-		)
-			throw new ModelConfigurationErrorV1();
 		await revalidateRuntimeModelCatalogV1(
 			projection,
 			options.modelCatalog,
@@ -511,7 +513,7 @@ export function createWorkloadRuntimeV1(
 				state.verified?.configuration.revision
 		)
 			return true;
-		return createAdapter(undefined, state).removeModelConfiguration(
+		return createAdapter(undefined, state, "cleanup").removeModelConfiguration(
 			desired(state),
 		);
 	}
@@ -662,7 +664,7 @@ export function createWorkloadRuntimeV1(
 				try {
 					modelProjection = await projectRuntimeModelConfigurationV1({
 						configuration,
-						protocol: standardTemplateModelProtocolV1(
+						standardTemplateBinding: standardTemplateModelBindingV1(
 							configuration.source,
 							templateModelBindings,
 						),
@@ -825,9 +827,9 @@ export function createWorkloadRuntimeV1(
 					state.revision,
 					state.fence,
 				);
+			const adapter = createAdapter(undefined, state);
 			await revalidateCandidateCatalog(state);
 			const workload = desired(state);
-			const adapter = createAdapter(undefined, state);
 			const activeBindingsToRepair: {
 				readonly reference: SecretActivationReferenceV1;
 				readonly activationFence: NonNullable<
@@ -969,8 +971,8 @@ export function createWorkloadRuntimeV1(
 			return health;
 		},
 		async activateSecrets(state, input) {
-			await revalidateCandidateCatalog(state);
 			const adapter = createAdapter(undefined, state);
+			await revalidateCandidateCatalog(state);
 			const bindings = bindingsFor(state, input);
 			if (!bindings.length) return "active";
 			if (!input.secrets || !state.identity) return "failed";
@@ -1050,8 +1052,8 @@ export function createWorkloadRuntimeV1(
 			return "active";
 		},
 		async promote(state) {
-			await revalidateCandidateCatalog(state);
 			const adapter = createAdapter(undefined, state);
+			await revalidateCandidateCatalog(state);
 			if (!state.identity) throw new Error();
 			if (
 				state.phase === "promoting" &&

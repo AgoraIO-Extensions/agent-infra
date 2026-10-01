@@ -19,6 +19,7 @@ import {
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
+	validateRuntimeModelProjectionV1,
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationRecordV2,
@@ -615,9 +616,14 @@ describe("assembled Workload Runtime contracts", () => {
 			);
 		},
 	);
-	it.each([false, true])(
-		"cleans the exact failed model config Secret when recorded identity is %s",
-		async (hasIdentity) => {
+	it.each([
+		{ hasIdentity: false, legacy: false },
+		{ hasIdentity: true, legacy: false },
+		{ hasIdentity: false, legacy: true },
+		{ hasIdentity: true, legacy: true },
+	])(
+		"cleans the exact model config with unavailable binding (%j)",
+		async ({ hasIdentity, legacy }) => {
 			const record = pendingSecretRecord({
 				name: "model:primary",
 				secretId: "model-secret-a",
@@ -647,13 +653,41 @@ describe("assembled Workload Runtime contracts", () => {
 				},
 				{ configuration: standardModelConfiguration(), secrets },
 			);
-			await f.tick(4);
+			await f.tick(legacy ? 2 : 4);
 			assert(f.state);
+			let candidate = f.state.candidate;
+			let identity = f.state.identity;
+			if (legacy) {
+				// Reconstruct a historical tuple-free projection before its first apply.
+				// The original Adapter materializes its original hash and absent expectation.
+				const {
+					standardTemplateBinding: _,
+					fingerprint: _fingerprint,
+					...content
+				} = validateRuntimeModelProjectionV1(candidate.modelProjection);
+				const modelProjection = validateRuntimeModelProjectionV1({
+					...content,
+					fingerprint: createHash("sha256")
+						.update(JSON.stringify(content))
+						.digest("hex"),
+				});
+				candidate = { ...candidate, modelProjection };
+				const applied = await createKubernetesRuntimeAdapterV1({
+					client: f.client,
+					policy: f.options.policy,
+					probe: async () => true,
+					modelProjection,
+				}).apply(candidate.deployment);
+				assert(applied && applied !== "pending");
+				identity = applied;
+			}
 			const state = {
 				...f.state,
+				candidate,
 				phase: "cleaning" as const,
-				identity: hasIdentity ? f.state.identity : null,
+				identity: hasIdentity ? identity : null,
 			};
+			Object.assign(f.options, { templateModelBindings: [] });
 			const configSecret = [...f.resources.values()].find(
 				(value) =>
 					value.kind === "Secret" &&
@@ -685,7 +719,7 @@ describe("assembled Workload Runtime contracts", () => {
 			);
 		},
 	);
-	it.each(["codex", "claude", "acp"] as const)(
+	it.each(["codex", "claude", "acp", "pi"] as const)(
 		"projects two options with the same model into isolated endpoint and credential bindings consumed by %s Runtime",
 		async (driver) => {
 			const configuration = standardModelConfiguration();
@@ -892,6 +926,137 @@ describe("assembled Workload Runtime contracts", () => {
 			expect(await runtime.observe(JSON.parse(JSON.stringify(state)))).toBe(
 				"healthy",
 			);
+			const projected = validateRuntimeModelProjectionV1(
+				state.candidate.modelProjection,
+			);
+			const binding = f.options.templateModelBindings[0];
+			assert(binding);
+			expect(projected.standardTemplateBinding).toEqual(binding);
+			const saved = JSON.parse(
+				JSON.stringify(state),
+			) as WorkloadReconciliationStateV1;
+			const verified = {
+				...saved,
+				phase: "ready" as const,
+				verified: saved.candidate,
+				verifiedRevision: saved.revision,
+				rollback: true,
+			};
+			const input = {
+				configuration: saved.candidate.configuration,
+				management: f.management,
+				state: saved,
+				secrets: {
+					bindings: records.map((record) => ({
+						materialization: "current" as const,
+						record,
+					})),
+					store: secretCleanupStore(records[0]).store,
+					async auditDecryption() {},
+				},
+				requestId: "request-a",
+				traceId: "trace-a",
+			};
+			await expect(runtime.apply(saved, false, input)).resolves.toEqual(
+				saved.identity,
+			);
+			const restored = createWorkloadRuntimeV1(f.options);
+			await expect(restored.observe(saved)).resolves.toBe("healthy");
+			const io = ["read", "list", "create", "replace", "delete"] as const;
+			const calls = io.map((method) => vi.spyOn(f.client, method));
+			const decrypt = vi.spyOn(f.options.decryptor, "decrypt");
+			const otherBinding =
+				driver === "codex"
+					? {
+							...binding,
+							driver: "claude" as const,
+							protocol: "anthropic-messages-v1" as const,
+						}
+					: {
+							...binding,
+							driver:
+								driver === "claude" ? ("acp" as const) : ("claude" as const),
+						};
+			const {
+				standardTemplateBinding: _legacyBinding,
+				fingerprint: _fingerprint,
+				...legacyContent
+			} = projected;
+			const legacyProjection = {
+				...legacyContent,
+				fingerprint: createHash("sha256")
+					.update(JSON.stringify(legacyContent))
+					.digest("hex"),
+			};
+			const { fingerprint: _originalFingerprint, ...content } = projected;
+			const changedContent = {
+				...content,
+				standardTemplateBinding: otherBinding,
+			};
+			const changedProjection = {
+				...changedContent,
+				fingerprint: createHash("sha256")
+					.update(JSON.stringify(changedContent))
+					.digest("hex"),
+			};
+			const changedBindings = [
+				[],
+				[otherBinding],
+				[{ ...binding, templateId: "changed-template" }],
+				[{ ...binding, imageDigest: `sha256:${"b".repeat(64)}` }],
+			];
+			for (const scenario of [
+				{ runtime, projection: changedProjection },
+				{ runtime: restored, projection: legacyProjection },
+				...changedBindings.map((templateModelBindings) => ({
+					runtime: createWorkloadRuntimeV1({
+						...f.options,
+						templateModelBindings,
+					}),
+					projection: projected,
+				})),
+			]) {
+				const observeVerifiedControl = scenario.runtime.observeVerifiedControl;
+				assert(observeVerifiedControl);
+
+				for (const original of [saved, verified]) {
+					const version = {
+						...original.candidate,
+						modelProjection: scenario.projection,
+					};
+					const changed = {
+						...original,
+						candidate: version,
+						...(original.verified ? { verified: version } : {}),
+					};
+					for (const operation of [
+						() =>
+							scenario.runtime.apply(changed, false, {
+								...input,
+								state: changed,
+							}),
+						() => scenario.runtime.observe(changed),
+						...(changed.verified
+							? [() => observeVerifiedControl(changed)]
+							: []),
+						() =>
+							scenario.runtime.activateSecrets(changed, {
+								...input,
+								state: changed,
+							}),
+						() => scenario.runtime.promote(changed),
+					])
+						await expect(operation()).rejects.toThrow(
+							/^MODEL_CONFIGURATION_UNAVAILABLE$/,
+						);
+				}
+			}
+			for (const call of calls) {
+				expect(call).not.toHaveBeenCalled();
+				call.mockRestore();
+			}
+			expect(decrypt).not.toHaveBeenCalled();
+			decrypt.mockRestore();
 			const unavailable = structuredClone(state.candidate.modelProjection) as {
 				fingerprint: string;
 				options: { endpoint: { available: boolean } }[];
@@ -940,6 +1105,14 @@ describe("assembled Workload Runtime contracts", () => {
 				credentialEntries[1].valueFrom,
 			);
 			expect(await runtime.observe(state)).toBe("drifted");
+			// Withdrawal cannot prevent the existing workload's stop operation.
+			const withdrawn = createWorkloadRuntimeV1({
+				...f.options,
+				templateModelBindings: [],
+			});
+			await expect(withdrawn.apply(saved, true, input)).resolves.toBe(
+				"pending",
+			);
 		},
 	);
 	it.each(["current", "active-origin"] as const)(
