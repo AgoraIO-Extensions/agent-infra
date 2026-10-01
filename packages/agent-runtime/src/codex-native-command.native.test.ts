@@ -27,7 +27,7 @@ class ObservedNativeDriver extends CodexRuntimeDriver {
 			{
 				path,
 				nativeLane: "official-model-only",
-				configVersion: "native-read-config-1",
+				configVersion: "config-1",
 				defaultModelOptionId: "primary",
 				defaultReasoningLevel: "high",
 				modelOptions: [
