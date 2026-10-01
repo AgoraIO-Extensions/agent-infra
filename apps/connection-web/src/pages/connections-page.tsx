@@ -33,6 +33,7 @@ import {
 	Dialog,
 	DialogClose,
 	DialogContent,
+	DialogDescription,
 	DialogHeader,
 	DialogTitle,
 } from "../components/ui/dialog";
@@ -142,6 +143,8 @@ export function ConnectionsPage() {
 	});
 	const [newCredentialRequestId, setNewCredentialRequestId] =
 		useState<string>();
+	const [dismissedReuseRequestId, setDismissedReuseRequestId] =
+		useState<string>();
 	const [upgradeTargetReleaseId, setUpgradeTargetReleaseId] = useState("");
 	const reusableConnections = (
 		overview.data?.overview.connections ?? []
@@ -152,6 +155,12 @@ export function ConnectionsPage() {
 			connection.providerId !== "manhattan" &&
 			connection.providerId !== "datalego-oauth-pilot" &&
 			connection.status === "ACTIVE",
+	);
+	const credentialReuseAvailable = Boolean(
+		approvedAccessRequestId &&
+			completedAccessRequestId !== approvedAccessRequestId &&
+			newCredentialRequestId !== approvedAccessRequestId &&
+			reusableConnections.length > 0,
 	);
 	const [bulkUpgrade, setBulkUpgrade] = useState<{
 		completed: number;
@@ -510,6 +519,11 @@ export function ConnectionsPage() {
 				?.scrollIntoView?.({ behavior: "smooth", block: "start" });
 			return;
 		}
+		if (credentialReuseAvailable) {
+			approvedUpgrade.reset();
+			setDismissedReuseRequestId(undefined);
+			return;
+		}
 		openProviderCredential(providerId);
 	};
 	const requestManhattanUpgrade = (targetReleaseId: string) => {
@@ -710,41 +724,90 @@ export function ConnectionsPage() {
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}
 			{upgrade.isError ? <PageError error={upgrade.error} /> : null}
-			{approvedUpgrade.isError ? (
-				<PageError error={approvedUpgrade.error} />
-			) : null}
-			{approvedAccessRequestId &&
-			completedAccessRequestId !== approvedAccessRequestId &&
-			newCredentialRequestId !== approvedAccessRequestId &&
-			reusableConnections.length > 0 ? (
-				<section className="content-stack" aria-label="使用已批准的连接">
-					<h2>选择已有连接</h2>
-					{reusableConnections.map((connection) => (
-						<div className="connection-selected-account" key={connection.id}>
-							<div>
-								<p title={connection.displayName}>{connection.displayName}</p>
-							</div>
+			<Dialog
+				open={
+					credentialReuseAvailable &&
+					dismissedReuseRequestId !== approvedAccessRequestId
+				}
+				onOpenChange={(open) => {
+					if (!open && !approvedUpgrade.isPending)
+						setDismissedReuseRequestId(approvedAccessRequestId);
+				}}
+			>
+				{approvedAccessRequestId ? (
+					<DialogContent className="credential-reuse-dialog">
+						<DialogHeader>
+							<DialogTitle>选择已有连接</DialogTitle>
+							<DialogClose asChild>
+								<Button
+									variant="secondary"
+									size="icon"
+									aria-label="关闭账号选择"
+									disabled={approvedUpgrade.isPending}
+								>
+									<X size={16} />
+								</Button>
+							</DialogClose>
+						</DialogHeader>
+						<DialogDescription className="credential-reuse-description">
+							{providerLabel(approvedProvider ?? "")}{" "}
+							申请已批准。选择已有账号，或连接其他账号。
+						</DialogDescription>
+						{approvedUpgrade.isError ? (
+							<PageError error={approvedUpgrade.error} />
+						) : null}
+						<div className="credential-reuse-list">
+							{reusableConnections.map((connection) => (
+								<div className="credential-reuse-account" key={connection.id}>
+									<div>
+										<strong title={connection.displayName}>
+											{connection.displayName}
+										</strong>
+										{connection.externalAccount !== connection.displayName ? (
+											<span title={connection.externalAccount}>
+												{connection.externalAccount}
+											</span>
+										) : null}
+									</div>
+									<Button
+										disabled={approvedUpgrade.isPending}
+										onClick={() =>
+											approvedUpgrade.mutate({
+												connectionId: connection.id,
+												accessRequestId: approvedAccessRequestId,
+											})
+										}
+									>
+										{approvedUpgrade.isPending &&
+										approvedUpgrade.variables?.connectionId === connection.id
+											? "正在连接…"
+											: "使用现有凭证"}
+									</Button>
+								</div>
+							))}
+						</div>
+						<div className="credential-reuse-actions">
+							<DialogClose asChild>
+								<Button
+									variant="secondary"
+									disabled={approvedUpgrade.isPending}
+								>
+									取消
+								</Button>
+							</DialogClose>
 							<Button
+								variant="secondary"
 								disabled={approvedUpgrade.isPending}
 								onClick={() =>
-									approvedUpgrade.mutate({
-										connectionId: connection.id,
-										accessRequestId: approvedAccessRequestId,
-									})
+									setNewCredentialRequestId(approvedAccessRequestId)
 								}
 							>
-								使用现有凭证
+								连接其他账号
 							</Button>
 						</div>
-					))}
-					<Button
-						disabled={approvedUpgrade.isPending}
-						onClick={() => setNewCredentialRequestId(approvedAccessRequestId)}
-					>
-						连接其他账号
-					</Button>
-				</section>
-			) : null}
+					</DialogContent>
+				) : null}
+			</Dialog>
 			{upgradeNotice ? (
 				<p className="alert alert-success" role="status">
 					{upgradeNotice}

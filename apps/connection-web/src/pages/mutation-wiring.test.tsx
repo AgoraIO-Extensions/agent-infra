@@ -13,6 +13,7 @@ import {
 	render,
 	screen,
 	waitFor,
+	within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1100,7 +1101,10 @@ describe("Connection 管理 mutation wiring", () => {
 			"/connection/connections?provider=confluence&intent=connect&accessRequestId=request-approved",
 		);
 		renderPage(<ConnectionsPage />);
-		await screen.findByRole("heading", { name: "选择已有连接" });
+		const choice = await screen.findByRole("dialog", { name: "选择已有连接" });
+		expect(
+			within(choice).getByRole("heading", { name: "选择已有连接" }),
+		).toBeTruthy();
 		expect(
 			screen.queryByRole("heading", { name: "连接公司 Confluence" }),
 		).toBeNull();
@@ -1108,6 +1112,82 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(
 			await screen.findByRole("heading", { name: "连接公司 Confluence" }),
 		).toBeTruthy();
+	});
+
+	it("账号选择可取消并重新打开，不消耗已批准申请", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=confluence&intent=connect&accessRequestId=request-approved",
+		);
+		renderPage(<ConnectionsPage />);
+		const choice = await screen.findByRole("dialog", { name: "选择已有连接" });
+		fireEvent.click(within(choice).getByRole("button", { name: "取消" }));
+		await waitFor(() =>
+			expect(screen.queryByRole("dialog", { name: "选择已有连接" })).toBeNull(),
+		);
+		expect(api.upgradeApprovedConnection).not.toHaveBeenCalled();
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: /Confluence 已连接/ }));
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
+		expect(
+			await screen.findByRole("dialog", { name: "选择已有连接" }),
+		).toBeTruthy();
+	});
+
+	it("复用凭据失败在账号选择弹窗内显示并允许重试", async () => {
+		api.upgradeApprovedConnection.mockRejectedValueOnce(
+			new Error("凭据校验失败"),
+		);
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=confluence&intent=connect&accessRequestId=request-approved",
+		);
+		renderPage(<ConnectionsPage />);
+		const choice = await screen.findByRole("dialog", { name: "选择已有连接" });
+		fireEvent.click(
+			within(choice).getByRole("button", { name: "使用现有凭证" }),
+		);
+		expect(await within(choice).findByRole("alert")).toBeTruthy();
+		expect(
+			(
+				within(choice).getByRole("button", {
+					name: "使用现有凭证",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(false);
+	});
+
+	it("复用凭据进行中禁止关闭和重复提交", async () => {
+		let finish: ((result: { connectionId: string }) => void) | undefined;
+		api.upgradeApprovedConnection.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=confluence&intent=connect&accessRequestId=request-approved",
+		);
+		renderPage(<ConnectionsPage />);
+		const choice = await screen.findByRole("dialog", { name: "选择已有连接" });
+		fireEvent.click(
+			within(choice).getByRole("button", { name: "使用现有凭证" }),
+		);
+		await within(choice).findByRole("button", { name: "正在连接…" });
+		for (const name of ["正在连接…", "取消", "连接其他账号", "关闭账号选择"])
+			expect(
+				(within(choice).getByRole("button", { name }) as HTMLButtonElement)
+					.disabled,
+			).toBe(true);
+		fireEvent.keyDown(choice, { key: "Escape" });
+		expect(screen.getByRole("dialog", { name: "选择已有连接" })).toBeTruthy();
+		await act(async () => {
+			finish?.({ connectionId: "connection-confluence" });
+		});
 	});
 
 	it("批准后复用明确选择的连接凭证，不重复收集 PAT", async () => {
@@ -1610,6 +1690,9 @@ describe("Connection 管理 mutation wiring", () => {
 	it("连接页调用 Jenkins deployment credential API", async () => {
 		approvedFor("jenkins-release");
 		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "连接其他账号" }),
+		);
 		await screen.findByRole("heading", { name: "客户端授权" });
 
 		fireEvent.click(
@@ -1779,6 +1862,9 @@ describe("Connection 管理 mutation wiring", () => {
 	it("连接页调用 Confluence Server credential API", async () => {
 		approvedFor("confluence");
 		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "连接其他账号" }),
+		);
 		await screen.findByRole("heading", { name: "客户端授权" });
 
 		fireEvent.click(screen.getByRole("button", { name: /Confluence 已连接/ }));
