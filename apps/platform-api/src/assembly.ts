@@ -6,6 +6,7 @@ import {
 	createApplicationFoundationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
+	createRecentPersonalConversationsUseCaseV1,
 	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
 import {
@@ -427,6 +428,11 @@ export function assemblePlatformApi(
 					},
 				}),
 			query: conversationQuery,
+			recent: createRecentPersonalConversationsUseCaseV1({
+				query: conversationQuery,
+				resolveCurrentUser: (actorId) =>
+					resolveCurrentTaskUser(input.identity, actorId, randomUUID()),
+			}),
 		},
 		sessionAudit: { identity: input.identity, audit: auditQuery },
 		scopedAudit: { identity: input.identity, audit: scopedAuditQuery },

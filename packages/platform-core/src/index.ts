@@ -61,6 +61,7 @@ export {
 } from "./conversation-generation-isolation.js";
 export * from "./conversation-operation-facts.js";
 export * from "./conversation-read-projection.js";
+export * from "./conversation-recent.js";
 export {
 	bindInputFileV1,
 	createFileAuthorityV1,
