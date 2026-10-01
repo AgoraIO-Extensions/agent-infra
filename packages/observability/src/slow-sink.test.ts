@@ -195,8 +195,11 @@ it("shows bounded trace queue pressure when a slow sink eventually responds", as
 		() => traceRequests(collector.requests).length >= expectedBatches,
 		6000,
 	);
+	await new Promise((resolve) => setTimeout(resolve, 500));
+	const finalTraceRequests = traceRequests(collector.requests);
+	expect(finalTraceRequests.length).toBeLessThanOrEqual(expectedBatches);
 	const received = markers.filter((marker) =>
-		traceRequests(collector.requests).some((request) =>
+		finalTraceRequests.some((request) =>
 			request.body.toString("utf8").includes(marker),
 		),
 	).length;
