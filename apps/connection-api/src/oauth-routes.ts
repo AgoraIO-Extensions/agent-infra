@@ -43,18 +43,12 @@ import type {
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
-function providerCredentialValue(
-	body: ProviderCredentialRequest,
-	email?: string | null,
-	hciSession?: string,
-) {
+function providerCredentialValue(body: ProviderCredentialRequest) {
 	if (body.providerId === "datalego") {
-		if (!hciSession)
-			throw new ConnectionError(
-				"AUTHENTICATION_FAILED",
-				"Company HCI login is required",
-			);
-		return JSON.stringify({ email, sessionToken: hciSession });
+		throw new ConnectionError(
+			"INVALID_REQUEST",
+			"DataLego requires OAuth authorization",
+		);
 	}
 	return "accessToken" in body
 		? body.accessToken
@@ -2674,7 +2668,7 @@ export function createConnectionOAuthApp(
 				),
 			);
 			if (authorization instanceof Response) return authorization;
-			if (providerId === "manhattan" || providerId === "datalego-oauth-pilot")
+			if (providerId === "manhattan" || providerId === "datalego")
 				setCookie(
 					context,
 					providerId === "manhattan"
@@ -2716,11 +2710,7 @@ export function createConnectionOAuthApp(
 						return management.service.connectProviderCredential(
 							session.account.principalId,
 							body.providerId,
-							providerCredentialValue(
-								body,
-								session.account.email,
-								getCookie(context, "HCIAuthToken"),
-							),
+							providerCredentialValue(body),
 							body.accessRequestId,
 						);
 					},
@@ -2781,11 +2771,7 @@ export function createConnectionOAuthApp(
 								session.account.principalId,
 								connectionId,
 								body.providerId,
-								providerCredentialValue(
-									body,
-									session.account.email,
-									getCookie(context, "HCIAuthToken"),
-								),
+								providerCredentialValue(body),
 							),
 					),
 				);
@@ -3383,14 +3369,8 @@ export function createConnectionOAuthApp(
 						"INVALID_REQUEST",
 						"Unsupported OAuth provider",
 					);
-				const providerId =
-					callbackProvider === "datalego"
-						? "datalego-oauth-pilot"
-						: callbackProvider;
-				if (
-					providerId === "manhattan" ||
-					providerId === "datalego-oauth-pilot"
-				) {
+				const providerId = callbackProvider;
+				if (providerId === "manhattan" || providerId === "datalego") {
 					const stateCookie =
 						providerId === "manhattan"
 							? manhattanOAuthStateCookie
@@ -3438,7 +3418,7 @@ export function createConnectionOAuthApp(
 							? "/connection/connections?oauth=permission_denied&provider=manhattan"
 							: "/connection/connections?oauth=callback_failed&provider=manhattan"
 						: context.req.query("provider") === "datalego"
-							? "/connection/connections?oauth=callback_failed&provider=datalego-oauth-pilot"
+							? "/connection/connections?oauth=callback_failed&provider=datalego"
 							: "/connection/connections?oauth=callback_failed",
 					303,
 				);

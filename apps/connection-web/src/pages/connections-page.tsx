@@ -78,7 +78,6 @@ export function ConnectionsPage() {
 	const [confluenceOpen, setConfluenceOpen] = useState(false);
 	const [confluencePending, setConfluencePending] = useState(false);
 	const [confluenceError, setConfluenceError] = useState<Error | null>(null);
-	const [datalegoError, setDatalegoError] = useState<Error | null>(null);
 	const [jenkinsOpen, setJenkinsOpen] = useState(false);
 	const [jenkinsProviderId, setJenkinsProviderId] = useState<
 		"jenkins-ci" | "jenkins-release"
@@ -153,7 +152,7 @@ export function ConnectionsPage() {
 			connection.providerId === approvedProvider &&
 			connection.providerId !== "github" &&
 			connection.providerId !== "manhattan" &&
-			connection.providerId !== "datalego-oauth-pilot" &&
+			connection.providerId !== "datalego" &&
 			connection.status === "ACTIVE",
 	);
 	const credentialReuseAvailable = Boolean(
@@ -178,8 +177,7 @@ export function ConnectionsPage() {
 		"provider",
 	);
 	const callbackProvider =
-		callbackProviderId === "manhattan" ||
-		callbackProviderId === "datalego-oauth-pilot"
+		callbackProviderId === "manhattan" || callbackProviderId === "datalego"
 			? callbackProviderId
 			: "github";
 	const manhattanOAuth = useMutation({
@@ -223,7 +221,7 @@ export function ConnectionsPage() {
 			if (
 				provider === "manhattan" ||
 				provider === "github" ||
-				provider === "datalego-oauth-pilot"
+				provider === "datalego"
 			) {
 				startedOAuthRequest.current = approvedAccessRequestId;
 				if (provider === "github")
@@ -404,18 +402,6 @@ export function ConnectionsPage() {
 			setConfluencePending(false);
 		}
 	};
-	const connectDatalego = async (targetId: string | null = null) => {
-		setDatalegoError(null);
-		try {
-			await connectCredential({ providerId: "datalego" }, targetId);
-			setReconnectTargetId(null);
-			await queryClient.invalidateQueries({ queryKey: ["connections"] });
-		} catch (error) {
-			setDatalegoError(
-				error instanceof Error ? error : new Error("DataLego 连接失败"),
-			);
-		}
-	};
 	const connectJenkins = async (credential: {
 		apiToken: string;
 		username: string;
@@ -485,7 +471,6 @@ export function ConnectionsPage() {
 		targetId: string | null = null,
 	) => {
 		if (providerId === "bitbucket") setBitbucketOpen(true);
-		else if (providerId === "datalego") void connectDatalego(targetId);
 		else if (providerId === "rehoboam") setRehoboamOpen(true);
 		else if (providerId === "manhattan")
 			manhattanOAuth.mutate(
@@ -493,7 +478,7 @@ export function ConnectionsPage() {
 					? { reconnectConnectionId: targetId }
 					: { accessRequestId: approvedAccessRequestId },
 			);
-		else if (providerId === "datalego-oauth-pilot")
+		else if (providerId === "datalego")
 			datalegoOAuth.mutate(
 				targetId
 					? { reconnectConnectionId: targetId }
@@ -701,6 +686,16 @@ export function ConnectionsPage() {
 				</p>
 			) : null}
 			{overview.isError ? <PageError error={overview.error} /> : null}
+			{approvedRequest.isFetching || prepareConnect.isPending ? (
+				<p className="alert" role="status">
+					正在检查连接申请…
+				</p>
+			) : null}
+			{datalegoOAuth.isPending ? (
+				<p className="alert" role="status">
+					正在前往 DataLego 授权页面…
+				</p>
+			) : null}
 			{oauth.isError ? <PageError error={oauth.error} /> : null}
 			{approvedRequest.isError ? (
 				<PageError error={approvedRequest.error} />
@@ -719,7 +714,6 @@ export function ConnectionsPage() {
 			{datalegoOAuth.isError ? <PageError error={datalegoOAuth.error} /> : null}
 			{jiraError ? <PageError error={jiraError} /> : null}
 			{confluenceError ? <PageError error={confluenceError} /> : null}
-			{datalegoError ? <PageError error={datalegoError} /> : null}
 			{jenkinsError ? <PageError error={jenkinsError} /> : null}
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}

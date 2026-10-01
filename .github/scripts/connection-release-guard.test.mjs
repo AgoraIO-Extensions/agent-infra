@@ -102,6 +102,35 @@ test("tracks the Manhattan provider catalog", () => {
 	);
 });
 
+test("DataLego v4 release guard retains legacy catalog comparisons", () => {
+	const temp = mkdtempSync(join(tmpdir(), "connection-datalego-guard-"));
+	const cwd = process.cwd();
+	const git = (...args) => execFileSync("git", args, { cwd: temp, encoding: "utf8" });
+	try {
+		git("init");
+		git("config", "user.email", "fixture@example.invalid");
+		git("config", "user.name", "Catalog Guard Fixture");
+		const source = join(temp, "packages/openconnector-adapter/src");
+		mkdirSync(source, { recursive: true });
+		writeFileSync(join(source, "datalego.ts"), 'const providerId = "datalego"; const id = "datalego.get_current_user@v3"; const release = "datalego-connection-v3";');
+		git("add", "-A");
+		git("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-m", "legacy");
+		const baseline = git("rev-parse", "HEAD").trim();
+		writeFileSync(join(source, "datalego-v4.ts"), 'const providerId = "datalego"; const id = "datalego.get_current_user@v4"; const release = "datalego-connection-v4";');
+		git("add", "-A");
+		git("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-m", "formal OAuth");
+		process.chdir(temp);
+		const before = readCatalog(baseline);
+		const after = readCatalog("HEAD");
+		assert.equal(before.datalego.providerReleaseVersion, 3);
+		assert.equal(after.datalego.providerReleaseVersion, 4);
+		assert.equal(compareCatalogs(before, after).length, 1);
+	} finally {
+		process.chdir(cwd);
+		rmSync(temp, { recursive: true, force: true });
+	}
+});
+
 test("parses action and provider release versions", () => {
 	assert.deepEqual(
 		parseCatalogSource('const id = "bitbucket.get@v6"; const release = "connection-v6";'),

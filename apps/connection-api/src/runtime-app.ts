@@ -41,9 +41,9 @@ import {
 	datalegoConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/datalego";
 import {
-	DataLegoOAuthAdapter,
-	datalegoOAuthConnectionCatalog,
-} from "@agent-infra/openconnector-adapter/datalego-oauth";
+	DataLegoV4Adapter,
+	datalegoV4ConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/datalego-v4";
 import {
 	JiraServerAdapter,
 	JiraServerOAuthTokenProvider,
@@ -134,8 +134,7 @@ export async function createConnectionRuntime(
 		bitbucketServerConnectionCatalog,
 		jiraServerConnectionCatalog,
 		confluenceServerConnectionCatalog,
-		datalegoConnectionCatalog,
-		datalegoOAuthConnectionCatalog,
+		datalegoV4ConnectionCatalog,
 		jenkinsCiConnectionCatalog,
 		jenkinsReleaseConnectionCatalog,
 		manhattanConnectionCatalog,
@@ -291,7 +290,7 @@ export async function createConnectionRuntime(
 			fetch: observeProviderFetch("datalego", fetch),
 		}),
 	);
-	const datalegoOAuth = new DataLegoOAuthAdapter(
+	const datalegoOAuth = new DataLegoV4Adapter(
 		createGuardedFetch({
 			allowPrivateNetwork: false,
 			maxRedirects: 0,
@@ -308,7 +307,7 @@ export async function createConnectionRuntime(
 		[jiraServerConnectionCatalog.providerReleaseId]: jira,
 		[confluenceServerConnectionCatalog.providerReleaseId]: confluence,
 		[datalegoConnectionCatalog.providerReleaseId]: datalego,
-		[datalegoOAuthConnectionCatalog.providerReleaseId]: datalegoOAuth,
+		[datalegoV4ConnectionCatalog.providerReleaseId]: datalegoOAuth,
 		[jenkinsCiConnectionCatalog.providerReleaseId]: jenkinsCi,
 		[jenkinsReleaseConnectionCatalog.providerReleaseId]: jenkins,
 		[manhattanConnectionCatalog.providerReleaseId]: manhattan,
@@ -327,7 +326,6 @@ export async function createConnectionRuntime(
 		{
 			bitbucket,
 			confluence,
-			datalego,
 			[datalegoOAuth.providerId]: datalegoOAuth,
 			[jenkins.providerId]: jenkins,
 			[jenkinsCi.providerId]: jenkinsCi,
@@ -384,8 +382,7 @@ export async function createConnectionRuntime(
 			bitbucketServerConnectionCatalog.provider,
 			jiraServerConnectionCatalog.provider,
 			confluenceServerConnectionCatalog.provider,
-			datalegoConnectionCatalog.provider,
-			datalegoOAuthConnectionCatalog.provider,
+			datalegoV4ConnectionCatalog.provider,
 			jenkinsCiConnectionCatalog.provider,
 			jenkinsReleaseConnectionCatalog.provider,
 			rehoboamConnectionCatalog.provider,

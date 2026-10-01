@@ -101,9 +101,12 @@ DataLego OAuth 只读试验的批准边界见 [HLD DataLego profile](HLD-connect
 Helm 的 `secretEnv` 中仅登记空值键名，使 API 通过 `secretKeyRef` 注入；使用 `--reuse-values` 时须显式
 补齐这两项，不能只更新 Secret 后假定 Pod 已读取。注册回调固定为
 `https://agent-connector.gz3.agoralab.co/oauth/callback?provider=datalego`，对应独立的
-`datalego-oauth-pilot` Provider；旧 DataLego 不自动迁移。发布前应完成 chart 渲染和当前 release 的
-安全检查；发布后仅在独立只读能力档案与审批策略通过后，由测试用户完成 SSO 和真实 READ。
-未取得真实 DataLego token 接受证据前，不能宣称正式 DataLego v4 可用或删除 v3。
+`datalego` Provider 的 v4；页面只保留正式 DataLego 入口。旧 DataLego 不自动迁移，试验 Provider
+由迁移停用但历史记录保留，不能删除或重写 v3 Credential/Grant。发布前应完成 chart 渲染和当前
+release 安全检查；发布后由测试用户完成 SSO、个人身份和真实 READ 验收，才能宣称线上可用。
+旧申请与 v4 不匹配时须按新版本重新申请并连接；新增 Action 不自动进入 Consumer Grant。
+试验 Provider 停用迁移完成后，不可直接回滚至仍发布该 Provider 的旧程序；旧程序会拒绝已停用的
+catalog。恢复应发布修复后的正式版本，不能通过重启或重写 Credential 绕过版本门禁。
 
 ## 验收边界
 

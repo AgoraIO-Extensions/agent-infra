@@ -48,6 +48,60 @@ async function authorizeCurrentConsumer(
 
 describe("PostgreSQL Connection business authority", () => {
 	integrationTest(
+		"retires only the duplicate DataLego Provider without deleting catalog history",
+		async () => {
+			if (!databaseUrl) return;
+			const directory = resolve(
+				import.meta.dirname,
+				"../../../migrations/connection",
+			);
+			await migrateConnectionDatabase(databaseUrl, directory);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 23),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			const pilotId = `retire-pilot-${suffix}`;
+			const formalId = `retire-formal-${suffix}`;
+			try {
+				for (const [provider, providerReleaseId] of [
+					["datalego-oauth-pilot", pilotId],
+					["datalego", formalId],
+				] as const) {
+					await repository.publishProviderCatalog({
+						...githubConnectionCatalog,
+						provider,
+						providerReleaseId,
+						actions: [],
+					});
+				}
+				await sql.unsafe(
+					await readFile(
+						resolve(directory, "0036_retire_datalego_oauth_pilot.sql"),
+						"utf8",
+					),
+				);
+				const rows =
+					await sql`SELECT id, status, executor_digest FROM connection_provider_releases WHERE id IN (${pilotId}, ${formalId}) ORDER BY id`;
+				expect(rows).toHaveLength(2);
+				expect(rows.find((row) => row.id === pilotId)?.status).toBe("DISABLED");
+				expect(rows.find((row) => row.id === formalId)?.status).toBe(
+					"PUBLISHED",
+				);
+				expect(
+					rows.every(
+						(row) =>
+							row.executor_digest === githubConnectionCatalog.executorDigest,
+					),
+				).toBe(true);
+			} finally {
+				await sql`DELETE FROM connection_provider_releases WHERE id IN (${pilotId}, ${formalId})`;
+				await sql.end();
+			}
+		},
+	);
+	integrationTest(
 		"validates every batched Action and preserves declaration idempotency",
 		async () => {
 			if (!databaseUrl) return;
