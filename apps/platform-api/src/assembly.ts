@@ -8,6 +8,7 @@ import {
 	createConversationExecutionUseCaseV1,
 	createPersonalApiAgentReadUseCaseV1,
 	createPersonalApiCredentialUseCaseV1,
+	createPersonalRelayKeyUseCaseV1,
 	createRecentPersonalConversationsUseCaseV1,
 	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
@@ -21,6 +22,7 @@ import {
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
 	PostgresPersonalApiCredentialStoreV1,
+	PostgresPersonalRelayKeyStoreV1,
 	PostgresPlatformAuditQueryV1,
 	PostgresScopedPlatformAuditQueryV1,
 	PostgresTaskAuthorizationStoreV1,
@@ -66,6 +68,10 @@ export interface PlatformApiAssemblyInput {
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
+	readonly personalRelayKeys?: Pick<
+		Parameters<typeof createPersonalRelayKeyUseCaseV1>[0],
+		"currentIdentity" | "validate" | "encrypt"
+	>;
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly allocateApplicationIds: ManagementRouteDependencies["allocateApplicationIds"];
@@ -177,6 +183,18 @@ export function assemblePlatformApi(
 	const personalApiCredentialStore = new PostgresPersonalApiCredentialStoreV1({
 		databaseUrl: input.databaseUrl,
 	});
+	const personalRelayKeyStore = input.personalRelayKeys
+		? new PostgresPersonalRelayKeyStoreV1({ databaseUrl: input.databaseUrl })
+		: undefined;
+	const personalRelayKeys =
+		personalRelayKeyStore && input.personalRelayKeys
+			? createPersonalRelayKeyUseCaseV1({
+					transaction: personalRelayKeyStore,
+					currentIdentity: input.personalRelayKeys.currentIdentity,
+					validate: input.personalRelayKeys.validate,
+					encrypt: input.personalRelayKeys.encrypt,
+				})
+			: undefined;
 	const userDirectory = {
 		resolveUser: (userId: string) =>
 			resolveCurrentTaskUser(input.identity, userId, randomUUID()),
@@ -378,6 +396,14 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		...(personalRelayKeys
+			? {
+					personalRelayKeys: {
+						identity: input.identity,
+						keys: personalRelayKeys,
+					},
+				}
+			: {}),
 		...(wecomReceipts
 			? {
 					wecomReceipts: {
@@ -479,6 +505,7 @@ export function assemblePlatformApi(
 		scopedAuditQuery,
 		taskAuthorization,
 		personalApiCredentialStore,
+		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
 	];
 	return {
 		dependencies,

@@ -225,21 +225,25 @@ export function AgentDetailScreen({
 							)
 							.join("、") || "未提供范围信息"}
 					</dd>
-					<dt className="text-muted-foreground">模型范围</dt>
-					<dd className="break-words">
-						{agent.configuration.modelOptions
-							.map(
-								(option) =>
-									`${option.displayName} · ${option.reasoningLevels.join("、")}`,
-							)
-							.join("；") || "无可选择模型"}
-					</dd>
-					<dt className="text-muted-foreground">默认选项</dt>
-					<dd className="break-words">
-						{defaultModel
-							? `${defaultModel.displayName}${agent.configuration.defaultReasoningLevel ? ` · ${agent.configuration.defaultReasoningLevel}` : ""}`
-							: "未提供"}
-					</dd>
+					{!selfManaged && (
+						<>
+							<dt className="text-muted-foreground">模型范围</dt>
+							<dd className="break-words">
+								{agent.configuration.modelOptions
+									.map(
+										(option) =>
+											`${option.displayName} · ${option.reasoningLevels.join("、")}`,
+									)
+									.join("；") || "无可选择模型"}
+							</dd>
+							<dt className="text-muted-foreground">默认选项</dt>
+							<dd className="break-words">
+								{defaultModel
+									? `${defaultModel.displayName}${agent.configuration.defaultReasoningLevel ? ` · ${agent.configuration.defaultReasoningLevel}` : ""}`
+									: "未提供"}
+							</dd>
+						</>
+					)}
 				</dl>
 			</section>
 			<section

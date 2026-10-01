@@ -37,6 +37,7 @@ let client: ReturnType<typeof postgres>;
 let temporaryRoot: string;
 let prefixFolder: string;
 let prefixLength: number;
+let appendedHistory: { hash: string; created_at: string }[];
 
 interface SourceConstraint {
 	columns?: string[];
@@ -120,11 +121,22 @@ beforeAll(async () => {
 	await cp(migrationsFolder, prefixFolder, { recursive: true });
 	const journal = JSON.parse(
 		await readFile(resolve(prefixFolder, "meta/_journal.json"), "utf8"),
+	) as { entries: { idx: number; tag: string; when: number }[] };
+	const appendEntries = journal.entries.filter((entry) => entry.idx >= 29);
+	expect(appendEntries.map(({ idx, tag }) => ({ idx, tag }))).toEqual([
+		{ idx: 29, tag: "0029_platform_user_disables" },
+		{ idx: 30, tag: "0030_relay_key_authority_compatibility" },
+	]);
+	appendedHistory = await Promise.all(
+		appendEntries.map(async (entry) => ({
+			hash: createHash("sha256")
+				.update(
+					await readFile(resolve(migrationsFolder, `${entry.tag}.sql`), "utf8"),
+				)
+				.digest("hex"),
+			created_at: String(entry.when),
+		})),
 	);
-	expect(journal.entries.at(-1)).toMatchObject({
-		idx: 29,
-		tag: "0029_platform_user_disables",
-	});
 	journal.entries = journal.entries.filter(
 		(entry: { idx: number }) => entry.idx <= 24,
 	);
@@ -339,12 +351,17 @@ describe("personal credential disable authority append", () => {
 		);
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		const after = await snapshot();
-		expect(after.history).toHaveLength(30);
+		expect(after.history).toHaveLength(29 + appendedHistory.length);
 		expect(after.history.slice(0, 29)).toEqual(before.history);
 		expect(after.history[29]).toMatchObject({
 			hash: checkpoint.newMigration.sqlSHA256,
 			created_at: String(checkpoint.newMigration.when),
 		});
+		expect(
+			after.history
+				.slice(29)
+				.map(({ hash, created_at }) => ({ hash, created_at })),
+		).toEqual(appendedHistory);
 		expect(after.schema).toEqual(before.schema);
 		expect(after.data).toEqual(before.data);
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
@@ -382,8 +399,13 @@ describe("personal credential disable authority append", () => {
 		const originalHistory = await history();
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		const upgradedHistory = await history();
-		expect(upgradedHistory).toHaveLength(prefixLength + 1);
+		expect(upgradedHistory).toHaveLength(prefixLength + appendedHistory.length);
 		expect(upgradedHistory.slice(0, prefixLength)).toEqual(originalHistory);
+		expect(
+			upgradedHistory
+				.slice(prefixLength)
+				.map(({ hash, created_at }) => ({ hash, created_at })),
+		).toEqual(appendedHistory);
 		await client`insert into platform.platform_user_disables (user_id) values ('user_alice')`;
 		const disabled =
 			await client`select * from platform.platform_user_disables`;
@@ -419,10 +441,17 @@ describe("personal credential disable authority append", () => {
 			await client`select * from platform.ldap_identity_ids`;
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		const upgradedHistory = await history();
-		expect(upgradedHistory).toHaveLength(originalHistory.length + 1);
+		expect(upgradedHistory).toHaveLength(
+			originalHistory.length + appendedHistory.length,
+		);
 		expect(upgradedHistory.slice(0, originalHistory.length)).toEqual(
 			originalHistory,
 		);
+		expect(
+			upgradedHistory
+				.slice(originalHistory.length)
+				.map(({ hash, created_at }) => ({ hash, created_at })),
+		).toEqual(appendedHistory);
 		expect(await client`select * from platform.platform_user_disables`).toEqual(
 			originalDisables,
 		);

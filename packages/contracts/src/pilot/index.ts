@@ -5,6 +5,7 @@ export * from "./direct.ts";
 export * from "./errors.ts";
 export * from "./operation-v2.ts";
 export * from "./personal-api-credentials.ts";
+export * from "./personal-relay-key.ts";
 export * from "./sse.ts";
 export * from "./template-release.ts";
 export * from "./wecom-application.ts";

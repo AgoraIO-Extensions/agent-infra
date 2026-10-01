@@ -1136,6 +1136,28 @@ test("requires trusted complete primary Issue preparation and safe Analysis logs
   assert.deepEqual(validateWorkflowDocuments(workflows), []);
 });
 
+test("requires trusted finding projection without raw transfer or missing-output defaults", async () => {
+  const workflows = await actualWorkflows();
+  const analyze = workflows["pr-agent-review.yml"].jobs.analyze;
+  const projection = analyze.outputs.review;
+  const step = analyze.steps[4];
+  for (const unsafe of [
+    "${{ steps.pr-agent.outputs.review }}",
+    "${{ steps.review-output.outputs.review || '{\"key_issues_to_review\":[]}' }}",
+  ]) {
+    analyze.outputs.review = unsafe;
+    assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("official inline publishing")));
+  }
+  analyze.outputs.review = projection;
+  step["continue-on-error"] = true;
+  assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("official inline publishing")));
+  delete step["continue-on-error"];
+  step.env.PR_AGENT_REVIEW = "${{ github.event.pull_request.body }}";
+  assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("official inline publishing")));
+  step.env.PR_AGENT_REVIEW = "${{ steps.pr-agent.outputs.review }}";
+  assert.deepEqual(validateWorkflowDocuments(workflows), []);
+});
+
 test("requires bounded PR-Agent review chunking and matching immutable versions", async () => {
   const expected = {
     "pr_reviewer.enable_large_pr_chunking": "true",

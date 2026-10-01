@@ -90,6 +90,7 @@ export * from "./idempotency.js";
 export * from "./personal-api-agent-read.js";
 export * from "./personal-api-credentials.js";
 export * from "./personal-api-task-authorization.js";
+export * from "./personal-relay-key.js";
 export * from "./secret-activation.js";
 export * from "./secret-key-rotation.js";
 export type {

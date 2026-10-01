@@ -55,12 +55,13 @@ export function AgentApplicationSubmissionScreen(
 		props.mode === "create"
 			? "申请 Agent"
 			: agentApplicationEditActionLabels[props.action];
+	const cancelLabel = props.mode === "create" ? "退出创建" : "取消";
 	const cancelAction = props.submitting ? (
 		<span
 			className={buttonVariants({ variant: "outline" })}
 			aria-disabled="true"
 		>
-			取消
+			{cancelLabel}
 		</span>
 	) : props.mode === "update" ? (
 		<Link
@@ -72,7 +73,7 @@ export function AgentApplicationSubmissionScreen(
 		</Link>
 	) : (
 		<Link className={buttonVariants({ variant: "outline" })} to="/my-agents">
-			取消
+			{cancelLabel}
 		</Link>
 	);
 	const validationError =
@@ -90,6 +91,7 @@ export function AgentApplicationSubmissionScreen(
 					<h1 id="agent-application-submission-heading">{heading}</h1>
 					<p>配置用途与使用范围，提交后由管理员审批。</p>
 				</div>
+				{props.mode === "create" ? cancelAction : null}
 			</header>
 			<div className="form-layout">
 				<div className="min-w-0">
