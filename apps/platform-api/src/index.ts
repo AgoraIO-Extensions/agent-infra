@@ -15,6 +15,7 @@ import {
 	type PlatformApiAssembly,
 	type PlatformApiAssemblyInput,
 } from "./assembly.js";
+import { startPlatformResourceSampling } from "./resource-sampler.js";
 
 interface StartOptions {
 	dependencies: PlatformAppDependencies;
@@ -141,6 +142,7 @@ export async function loadPlatformApiAssembly(
 	}
 	return {
 		dependencies: assembly.dependencies,
+		readResourceSnapshot: assembly.readResourceSnapshot,
 		browserAuth: deployment.browserAuth,
 		async close() {
 			try {
@@ -158,6 +160,9 @@ export async function startPlatformApiFromDeployment(
 	const assembly = await loadPlatformApiAssembly(options.moduleSpecifier);
 	let server: ReturnType<typeof startPlatformApi> | undefined;
 	let observability: ReturnType<typeof startObservability> | undefined;
+	let resourceSampling:
+		| ReturnType<typeof startPlatformResourceSampling>
+		| undefined;
 	try {
 		observability = startObservability({
 			service: platformApiService,
@@ -192,13 +197,29 @@ export async function startPlatformApiFromDeployment(
 			server?.once("error", onError);
 			if (server?.listening) onListening();
 		});
-		return { assembly, server, observability };
+		if (observability.status().enabled) {
+			resourceSampling = startPlatformResourceSampling(
+				assembly.readResourceSnapshot,
+				observability,
+				options.observabilityOptions?.metricIntervalMs ?? 5000,
+			);
+		}
+		return {
+			assembly,
+			server,
+			observability,
+			stopResourceSampling: resourceSampling?.stop,
+		};
 	} catch (error) {
 		if (server?.listening) {
 			await new Promise<void>((resolve) => server?.close(() => resolve()));
 		}
 		try {
-			await assembly.close();
+			try {
+				await resourceSampling?.stop();
+			} finally {
+				await assembly.close();
+			}
 		} finally {
 			await observability?.close();
 		}
@@ -212,19 +233,31 @@ export function createPlatformApiShutdown(
 		"assembly" | "server"
 	> & {
 		readonly observability?: ReturnType<typeof startObservability>;
+		readonly stopResourceSampling?: () => Promise<void>;
 	},
 ) {
 	let shutdown: Promise<void> | undefined;
 	return () => {
-		shutdown ??= new Promise<void>((resolve, reject) =>
-			running.server.close((error) => (error ? reject(error) : resolve())),
-		).finally(async () => {
+		shutdown ??= (async () => {
+			const serverClosing = new Promise<void>((resolve, reject) =>
+				running.server.close((error) => (error ? reject(error) : resolve())),
+			);
 			try {
-				await running.assembly.close();
+				const settled = await Promise.allSettled([
+					serverClosing,
+					running.stopResourceSampling?.(),
+				]);
+				for (const result of settled) {
+					if (result.status === "rejected") throw result.reason;
+				}
 			} finally {
-				await running.observability?.close();
+				try {
+					await running.assembly.close();
+				} finally {
+					await running.observability?.close();
+				}
 			}
-		});
+		})();
 		return shutdown;
 	};
 }
