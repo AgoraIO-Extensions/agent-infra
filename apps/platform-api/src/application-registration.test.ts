@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { ApplicationRegistrationResponseV1Schema } from "@agent-infra/contracts/pilot";
 import { migratePlatformDatabase } from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
 import postgres from "postgres";
@@ -202,7 +203,11 @@ describe("production application HTTP/Core/PostgreSQL chain", () => {
 			await stop(second);
 		}
 		expect(pair.map((response) => response.status).sort()).toEqual([200, 201]);
-		const results = await Promise.all(pair.map((response) => response.json()));
+		const results = await Promise.all(
+			pair.map(async (response) =>
+				ApplicationRegistrationResponseV1Schema.parse(await response.json()),
+			),
+		);
 		expect(results[0].metadata).toEqual(results[1].metadata);
 		expect(await counts()).toEqual({
 			applications: 1,
@@ -214,9 +219,10 @@ describe("production application HTTP/Core/PostgreSQL chain", () => {
 		).toBe(409);
 		const bob = await post("register_1", "bob");
 		expect(bob.status).toBe(201);
-		expect((await bob.json()).metadata.applicationId).not.toBe(
-			results[0].metadata.applicationId,
-		);
+		expect(
+			ApplicationRegistrationResponseV1Schema.parse(await bob.json()).metadata
+				.applicationId,
+		).not.toBe(results[0].metadata.applicationId);
 	});
 	it("rejects application or Bearer identities before registration", async () => {
 		expect((await post("register_1", "application")).status).toBe(401);
