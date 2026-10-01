@@ -1,8 +1,9 @@
 import { Buffer } from "node:buffer";
+import type { RecentPersonalConversationsQueryV1 } from "@agent-infra/platform-core";
 import { parseConversationOperationEventV2 } from "@agent-infra/platform-core";
 
 import postgres from "postgres";
-
+import { readRecentPersonalConversations } from "./conversation-recent-query.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 
 type Database = ReturnType<typeof postgres> | postgres.TransactionSql;
@@ -720,6 +721,10 @@ export class PostgresConversationQueryV1 {
 		signal: AbortSignal,
 	): Promise<PlatformQueueResourceSnapshot> {
 		return readPlatformQueueResourceSnapshot(this.#client, signal);
+	}
+
+	readRecentPersonalConversations(input: RecentPersonalConversationsQueryV1) {
+		return readRecentPersonalConversations(this.#client, input, projection);
 	}
 
 	async getAuthorizationTarget(
