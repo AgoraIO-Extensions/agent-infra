@@ -128,8 +128,23 @@ export function startConnectionApi(options: StartOptions) {
 }
 
 async function startConfiguredConnectionApi() {
-	const runtime = await createConnectionRuntime();
-	return startConnectionApi(runtime);
+	const startedAt = performance.now();
+	let outcome = "failure";
+	try {
+		const runtime = await createConnectionRuntime();
+		outcome = "success";
+		return startConnectionApi(runtime);
+	} finally {
+		console.info(
+			JSON.stringify({
+				service: connectionApiService,
+				event: "startup_phase",
+				phase: "runtime",
+				outcome,
+				durationMs: Math.round(performance.now() - startedAt),
+			}),
+		);
+	}
 }
 
 const entrypoint = process.argv[1];

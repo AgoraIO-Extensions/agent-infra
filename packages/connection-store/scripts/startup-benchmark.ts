@@ -1,0 +1,101 @@
+import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import {
+	githubConnectionCatalog,
+	jenkinsCiConnectionCatalog,
+	jenkinsReleaseConnectionCatalog,
+} from "@agent-infra/openconnector-adapter";
+import { bitbucketServerConnectionCatalog } from "@agent-infra/openconnector-adapter/authorization-compatibility";
+import { confluenceServerConnectionCatalog } from "@agent-infra/openconnector-adapter/confluence-server";
+import { datalegoConnectionCatalog } from "@agent-infra/openconnector-adapter/datalego";
+import { datalegoOAuthConnectionCatalog } from "@agent-infra/openconnector-adapter/datalego-oauth";
+import { jiraServerConnectionCatalog } from "@agent-infra/openconnector-adapter/jira-server";
+import { manhattanConnectionCatalog } from "@agent-infra/openconnector-adapter/manhattan";
+import { rehoboamConnectionCatalog } from "@agent-infra/openconnector-adapter/rehoboam";
+import { migrateConnectionDatabase } from "../src/migrations";
+import { assertIsolatedTestDatabaseUrl } from "../src/test-database";
+
+// Local, isolated PostgreSQL only; never benchmark against a runtime database.
+const databaseUrl = process.env.CONNECTION_TEST_DATABASE_URL;
+if (!databaseUrl) throw new Error("CONNECTION_TEST_DATABASE_URL is required");
+assertIsolatedTestDatabaseUrl(databaseUrl, process.env.DATABASE_URL);
+const target = new URL(databaseUrl);
+if (target.hostname !== "127.0.0.1" || !target.pathname.endsWith("_test")) {
+	throw new Error("Benchmark requires a loopback database ending in _test");
+}
+const root =
+	process.env.STARTUP_BENCHMARK_ROOT ??
+	resolve(import.meta.dirname, "../../..");
+const { PostgresConnectionRepository } = await import(
+	pathToFileURL(resolve(root, "packages/connection-store/src/repository.ts"))
+		.href
+);
+await migrateConnectionDatabase(
+	databaseUrl,
+	resolve(root, "migrations/connection"),
+);
+const repository = new PostgresConnectionRepository(
+	databaseUrl,
+	Buffer.alloc(32, 23),
+);
+const suffix = randomUUID();
+const catalogs = [
+	githubConnectionCatalog,
+	bitbucketServerConnectionCatalog,
+	jiraServerConnectionCatalog,
+	confluenceServerConnectionCatalog,
+	datalegoConnectionCatalog,
+	datalegoOAuthConnectionCatalog,
+	jenkinsCiConnectionCatalog,
+	jenkinsReleaseConnectionCatalog,
+	manhattanConnectionCatalog,
+	rehoboamConnectionCatalog,
+].map((catalog) => ({
+	...catalog,
+	providerReleaseId: `${catalog.providerReleaseId}-benchmark-${suffix}`,
+	actions: catalog.actions.map((action) => ({
+		...action,
+		id: `${action.id}-${suffix}`,
+	})),
+}));
+const consumers = Array.from({ length: 3 }, (_, index) => ({
+	id: `benchmark-${suffix}-${index}`,
+	name: "Startup benchmark",
+}));
+try {
+	for (const phase of ["cold", "repeat"] as const) {
+		const startedAt = performance.now();
+		for (const catalog of catalogs) {
+			await repository.publishProviderCatalog(catalog, {
+				mode: "USER_ACTION_REQUIRED",
+				reason: "Benchmark catalog publication",
+			});
+		}
+		const catalogsMs = Math.round(performance.now() - startedAt);
+		for (const consumer of consumers) {
+			for (const catalog of catalogs) {
+				await repository.publishConsumerDeclaration({
+					consumer,
+					providerReleaseId: catalog.providerReleaseId,
+					actionVersionIds: catalog.actions.map((action) => action.id),
+				});
+			}
+		}
+		console.info(
+			JSON.stringify({
+				phase,
+				providers: catalogs.length,
+				actions: catalogs.reduce(
+					(sum, catalog) => sum + catalog.actions.length,
+					0,
+				),
+				declarations: catalogs.length * consumers.length,
+				catalogsMs,
+				totalMs: Math.round(performance.now() - startedAt),
+			}),
+		);
+	}
+} finally {
+	await repository.close();
+}
