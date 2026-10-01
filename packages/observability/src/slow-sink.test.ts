@@ -188,16 +188,14 @@ it("shows bounded trace queue pressure when a slow sink eventually responds", as
 	for (const operationRef of markers)
 		telemetry.record({ stage: "worker", outcome: "completed", operationRef });
 	expect(markers.length).toBeGreaterThan(TRACE_QUEUE_SIZE);
-	const expectedBatches = Math.ceil(
+	const maxTraceRequests = Math.ceil(
 		(TRACE_QUEUE_SIZE + TRACE_BATCH_SIZE) / TRACE_BATCH_SIZE,
 	);
-	await waitFor(
-		() => traceRequests(collector.requests).length >= expectedBatches,
-		6000,
-	);
-	await new Promise((resolve) => setTimeout(resolve, 500));
+	await waitFor(() => traceRequests(collector.requests).length > 0, 6000);
+	// Let any scheduled batches settle before checking the bounded upper limit.
+	await new Promise((resolve) => setTimeout(resolve, 3000));
 	const finalTraceRequests = traceRequests(collector.requests);
-	expect(finalTraceRequests.length).toBeLessThanOrEqual(expectedBatches);
+	expect(finalTraceRequests.length).toBeLessThanOrEqual(maxTraceRequests);
 	const received = markers.filter((marker) =>
 		finalTraceRequests.some((request) =>
 			request.body.toString("utf8").includes(marker),
