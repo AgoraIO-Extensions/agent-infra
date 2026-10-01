@@ -1443,7 +1443,7 @@ test("Agent search survives reload and browser back without adding typing histor
 }) => {
 	await fixture(page);
 	await page.goto("/agents");
-	const search = page.getByPlaceholder("按名称或用途搜索");
+	const search = page.getByRole("searchbox", { name: "搜索 Agent" });
 	await search.fill("Release");
 	await expect(page).toHaveURL(/q=Release/);
 	await page.reload();

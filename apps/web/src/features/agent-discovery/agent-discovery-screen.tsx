@@ -45,6 +45,25 @@ export const agentChannelKindLabels = {
 	string
 >;
 
+function agentSourceLabel(agent: AgentProjectionV2) {
+	return agent.source.kind === "standard"
+		? `标准模板 · ${agent.source.templateId}`
+		: "自定义 Agent";
+}
+
+function agentChannelSummary(agent: AgentProjectionV2) {
+	return (
+		agent.configuration.channels
+			.filter((channel) => ["available", "bound"].includes(channel.status))
+			.map((channel) => agentChannelKindLabels[channel.kind])
+			.join("、") ||
+		(agent.source.kind === "custom" &&
+		agent.source.interactionMode === "self-managed"
+			? "自有交互入口"
+			: "暂无可用渠道")
+	);
+}
+
 export function AgentDiscoveryScreen({
 	connectionUrl,
 	conversationSelection = false,
@@ -64,7 +83,15 @@ export function AgentDiscoveryScreen({
 	// collection or treats a client-side filter as authorization.
 	const agents = state.kind === "ready" ? state.agents : [];
 	const visible = agents.filter((agent) =>
-		`${agent.name}\n${agent.description}`.toLocaleLowerCase().includes(search),
+		[
+			agent.name,
+			agent.description,
+			agentSourceLabel(agent),
+			agentChannelSummary(agent),
+		]
+			.join("\n")
+			.toLocaleLowerCase()
+			.includes(search),
 	);
 	return (
 		<section aria-labelledby="agents-heading">
@@ -96,7 +123,7 @@ export function AgentDiscoveryScreen({
 								id={searchId}
 								className="pl-10"
 								type="search"
-								placeholder="按名称或用途搜索"
+								placeholder="搜索名称、模板或渠道"
 								maxLength={agentDiscoveryQueryMaxLength}
 								value={query}
 								onChange={(event) => {
@@ -187,22 +214,9 @@ export function AgentDiscoveryScreen({
 										</p>
 									</div>
 									<div className="directory-tags flex flex-wrap gap-2">
+										<Badge variant="outline">{agentSourceLabel(agent)}</Badge>
 										<Badge variant="outline">
-											{agent.source.kind === "standard"
-												? `标准模板 · ${agent.source.templateId}`
-												: "自定义 Agent"}
-										</Badge>
-										<Badge variant="outline">
-											{agent.configuration.channels
-												.filter((channel) =>
-													["available", "bound"].includes(channel.status),
-												)
-												.map((channel) => agentChannelKindLabels[channel.kind])
-												.join("、") ||
-												(agent.source.kind === "custom" &&
-												agent.source.interactionMode === "self-managed"
-													? "自有交互入口"
-													: "暂无可用渠道")}
+											{agentChannelSummary(agent)}
 										</Badge>
 									</div>
 									<div className="directory-card-foot mt-auto flex flex-wrap items-center gap-3 border-border border-t pt-3">
