@@ -112,6 +112,37 @@ export function parsePrAgentReview(raw) {
   return findings;
 }
 
+// Keep the verified range's right-side line anchors separate by file. This is
+// used to prove an incremental finding belongs to the supplied delta before
+// mapping it onto GitHub's current PR diff.
+export function collectScopedChangedLines(diff = "") {
+  const files = new Map();
+  let path;
+  let rightLine;
+  for (const text of diff.split("\n")) {
+    const header = /^diff --git a\/(.+) b\/(.+)$/.exec(text);
+    if (header) {
+      path = header[2];
+      rightLine = undefined;
+      continue;
+    }
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(text);
+    if (hunk) {
+      rightLine = Number(hunk[1]);
+      if (path && !files.has(path)) files.set(path, new Set());
+      continue;
+    }
+    if (!path || rightLine === undefined || text.startsWith("\\")) continue;
+    if (text.startsWith("+")) {
+      files.get(path)?.add(rightLine);
+      rightLine += 1;
+    } else if (!text.startsWith("-")) {
+      rightLine += 1;
+    }
+  }
+  return files;
+}
+
 const sha = (value) => typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
 
 const encodedPath = (filename) =>
@@ -348,15 +379,16 @@ export async function verifyPrAgentPublication(context) {
 export async function publishPrAgentReview(context) {
   const { repository, prNumber, expectedHead, runId, attempt, raw, request } =
     context;
-  markStage(context, "validate-output");
   validateContext(context);
-  const findings = context.scope?.mode === "unchanged" ? [] : parsePrAgentReview(raw);
   markStage(context, "target-entry");
   const current = await requirePrAgentTarget(context);
+  markStage(context, "validate-output");
+  const findings = context.scope?.mode === "unchanged" ? [] : parsePrAgentReview(raw);
+  let verifiedRange;
   if (context.scope) {
     markStage(context, "validate-scope");
     const { verifyReviewScope } = await import("./pr-agent-review-scope.mjs");
-    await verifyReviewScope(context, context.scope);
+    verifiedRange = await verifyReviewScope(context, context.scope);
   }
   const files = new Map();
   const fileMetadata = new Map();
@@ -421,8 +453,13 @@ export async function publishPrAgentReview(context) {
     }
   }
   markStage(context, "anchor-findings");
+  const scopedLines = context.scope ? collectScopedChangedLines(verifiedRange.diff) : null;
   const comments = findings.map((finding) => {
     const path = finding.relevant_file.trim();
+    if (scopedLines && !findChangedLine(scopedLines.get(path), finding.start_line, finding.end_line))
+      throw new Error("PR-Agent finding is outside the verified review range");
+    if (scopedLines && !fileMetadata.has(path))
+      throw new Error("PR-Agent incremental finding cannot be anchored in the current PR diff");
     const line = findChangedLine(
       files.get(path),
       finding.start_line,

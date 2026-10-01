@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   changedRightLinesFromTexts,
+  collectScopedChangedLines,
   githubRequest,
   parsePrAgentReview,
   publicationFailure,
@@ -185,12 +186,19 @@ test("stops when the target closes, becomes Draft or changes head before publica
     let reads = 0;
     const request = async (path, options) => {
       const result = await remote.request(path, options);
-      return path.endsWith("/pulls/42") && ++reads > 1 ? { ...result, ...change } : result;
+      return path.endsWith("/pulls/42") && ++reads === 1 ? { ...result, ...change } : result;
     };
-    await assert.rejects(publishPrAgentReview({ ...context, raw, request }),
+    await assert.rejects(publishPrAgentReview({ ...context, raw: "not-json", request }),
       (error) => error instanceof PrAgentTargetSuperseded && error.reason === reason);
     assert.equal(remote.writes.length, 0);
   }
+});
+
+test("maps verified unified-diff changes to per-file right-side lines", () => {
+  const lines = collectScopedChangedLines(
+    "diff --git a/src/math.ts b/src/math.ts\nindex 111..222 100644\n--- a/src/math.ts\n+++ b/src/math.ts\n@@ -1,2 +1,3 @@\n keep\n+return a - b;\n old\n",
+  );
+  assert.deepEqual([...lines.get("src/math.ts")], [2]);
 });
 
 test("retries transient reads but never blindly retries a POST", async (t) => {
