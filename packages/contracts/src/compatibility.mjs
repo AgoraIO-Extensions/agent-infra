@@ -750,6 +750,30 @@ function isAgentSummaryOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #508 exposes only the original accepted V4 binding through a V3 control read.
+function isRuntimeOriginalBindingV3OpenApiAddition(previous, current) {
+	const path = "/internal/runtime/v3/original-binding";
+	const responseName = "RuntimeOriginalBindingResponseV3";
+	if (
+		previous.paths?.[path] !== undefined ||
+		previous.components?.schemas?.[responseName] !== undefined
+	)
+		return false;
+	const addition = {
+		path: current.paths?.[path],
+		response: current.components?.schemas?.[responseName],
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"1347a9c19999f2a62f397fa830faa1d12308c6590dc89f0ce20f668373073325"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	delete normalized.components.schemas[responseName];
+	return sameValue(previous, normalized);
+}
+
 function isRuntimeStatusRecoveryOpenApiAddition(previous, current) {
 	const path = "/internal/runtime/v2/status";
 	const requestName = "RuntimeStatusRequestV2";
@@ -1224,6 +1248,7 @@ function findBreakingChanges(previous, current) {
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
+			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
