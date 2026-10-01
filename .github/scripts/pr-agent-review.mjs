@@ -12,7 +12,6 @@ import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import {
   collectChangedDiffLines,
-  requireCurrentReviewTarget,
 } from "./claude-review.mjs";
 
 const digest = (value) =>
@@ -27,12 +26,14 @@ const agentAuthor = (user) =>
 const stageCategories = {
   "event-read": "input",
   "validate-output": "validation",
+  "validate-scope": "validation",
   "target-entry": "target",
   files: "diff",
   "hydrate-diff": "diff",
   "anchor-findings": "validation",
   "target-before-post": "target",
   "post-review": "publication",
+  "lookup-review": "readback",
   "read-review": "readback",
   "read-comments": "readback",
   verify: "verification",
@@ -48,6 +49,25 @@ class GitHubRequestFailure extends Error {
     super("PR-Agent GitHub request failed");
     this.diagnostic = { category, ...details };
   }
+}
+
+export class PrAgentTargetSuperseded extends Error {
+  constructor(reason) {
+    super(`PR-Agent target skipped: ${reason}`);
+    this.reason = reason;
+  }
+}
+
+export async function requirePrAgentTarget({ repository, prNumber, expectedHead, request }) {
+  const current = await request(`/repos/${repository}/pulls/${prNumber}`);
+  if (current?.head?.repo?.full_name !== repository || !sha(current.head.sha))
+    throw new Error("PR-Agent target identity is invalid");
+  const reason = current.state === "closed" ? "pr-closed"
+    : current.head.sha !== expectedHead ? "head-superseded"
+    : current.draft === true ? "pr-draft" : null;
+  if (reason) throw new PrAgentTargetSuperseded(reason);
+  if (current.state !== "open") throw new Error("PR-Agent target state is invalid");
+  return current;
 }
 
 export function publicationFailure(diagnostic, error) {
@@ -235,8 +255,11 @@ function validateContext({
   }
 }
 
-function reviewBody({ expectedHead, runId, attempt }, count) {
-  return `## PR-Agent Review\n\nCommit: \`${expectedHead}\`\n\n${count ? `${count} finding(s) published as review threads.` : "No major issues detected."}\n\n<!-- agent-infra:pr-agent-review:${runId}:${attempt}:${expectedHead} -->`;
+function reviewBody({ expectedHead, runId, attempt, scope }, count) {
+  const range = scope ? `\n\nScope: ${scope.mode}; \`${scope.fromSha}\` → \`${scope.headSha}\`.` : "";
+  const empty = scope?.mode === "unchanged" ? "No code changes since the certified baseline; no model review was needed."
+    : scope?.mode === "incremental" ? "No major issues detected in the new changes." : "No major issues detected.";
+  return `## PR-Agent Review\n\nCommit: \`${expectedHead}\`${range}\n\n${count ? `${count} finding(s) published as review threads.` : empty}\n\n<!-- agent-infra:pr-agent-review:${runId}:${attempt}:${expectedHead} -->`;
 }
 
 function commentContent(comment) {
@@ -309,7 +332,7 @@ export async function verifyPrAgentPublication(context) {
     agentAuthor(review.user) &&
     review.state === "COMMENTED" &&
     review.commit_id === expectedHead &&
-    review.body === reviewBody(context, receipt.findingCount) &&
+    review.body === reviewBody({ ...context, scope: receipt.scope }, receipt.findingCount) &&
     Array.isArray(comments) &&
     comments.length === receipt.findingCount &&
     comments.every(
@@ -327,11 +350,14 @@ export async function publishPrAgentReview(context) {
     context;
   markStage(context, "validate-output");
   validateContext(context);
-  const findings = parsePrAgentReview(raw);
+  const findings = context.scope?.mode === "unchanged" ? [] : parsePrAgentReview(raw);
   markStage(context, "target-entry");
-  const current = await requireCurrentReviewTarget(context);
-  if (current.head.repo?.full_name !== repository)
-    throw new Error("PR-Agent review target must be in the same repository");
+  const current = await requirePrAgentTarget(context);
+  if (context.scope) {
+    markStage(context, "validate-scope");
+    const { verifyReviewScope } = await import("./pr-agent-review-scope.mjs");
+    await verifyReviewScope(context, context.scope);
+  }
   const files = new Map();
   const fileMetadata = new Map();
   const missingPatches = new Set();
@@ -414,32 +440,70 @@ export async function publishPrAgentReview(context) {
     };
   });
   markStage(context, "target-before-post");
-  await requireCurrentReviewTarget(context);
-  markStage(context, "post-review");
-  const review = await request(
-    `/repos/${repository}/pulls/${prNumber}/reviews`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        commit_id: expectedHead,
-        event: "COMMENT",
-        body: reviewBody(context, findings.length),
-        comments,
-      }),
-    },
-  );
-  const receipt = {
+  await requirePrAgentTarget(context);
+  const receiptFor = (review) => ({
     headSha: expectedHead,
     runId,
     attempt,
     reviewId: review.id,
     findingCount: comments.length,
     commentsSha256: commentDigest(comments),
+    ...(context.scope ? { scope: context.scope } : {}),
+  });
+  const recover = async () => {
+    markStage(context, "lookup-review");
+    for (let page = 1; page <= 10; page++) {
+      const reviews = await request(`/repos/${repository}/pulls/${prNumber}/reviews?per_page=100&page=${page}`);
+      if (!Array.isArray(reviews)) throw new Error("PR-Agent review list is invalid");
+      const matching = reviews.filter((review) => agentAuthor(review.user) &&
+        review.commit_id === expectedHead && review.body === reviewBody(context, findings.length));
+      if (matching.length > 1) throw new Error("PR-Agent publication is ambiguous");
+      if (matching.length === 1) {
+        const receipt = receiptFor(matching[0]);
+        if (!(await verifyPrAgentPublication({ ...context, receipt })))
+          throw new Error("PR-Agent previous publication could not be verified");
+        await requirePrAgentTarget(context);
+        return receipt;
+      }
+      if (reviews.length < 100) return null;
+    }
+    throw new Error("PR-Agent review list is incomplete");
   };
+  const existing = await recover();
+  if (existing) return existing;
+  markStage(context, "target-before-post");
+  await requirePrAgentTarget(context);
+  markStage(context, "post-review");
+  let review;
+  try {
+    review = await request(
+      `/repos/${repository}/pulls/${prNumber}/reviews`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          commit_id: expectedHead,
+          event: "COMMENT",
+          body: reviewBody(context, findings.length),
+          comments,
+        }),
+      },
+    );
+  } catch (error) {
+    // A timed-out POST may already exist. Recover only an exact verified result;
+    // never retry the write and risk creating duplicate review threads.
+    const recovered = await recover().catch((recoveryError) => {
+      if (recoveryError instanceof PrAgentTargetSuperseded) throw recoveryError;
+      return null;
+    });
+    if (recovered) return recovered;
+    markStage(context, "post-review");
+    throw error;
+  }
+  const receipt = receiptFor(review);
   if (!(await verifyPrAgentPublication({ ...context, receipt })))
     throw new Error("PR-Agent published review could not be verified");
   markStage(context, "target-final");
-  await requireCurrentReviewTarget(context);
+  await requirePrAgentTarget(context);
   return receipt;
 }
 
@@ -452,36 +516,58 @@ export async function githubRequest(path, options = {}) {
       "files",
       "reviews",
       "comments",
+      "issues",
       "pulls",
     ].find((part) => path.includes(`/${part}`)) ?? "unknown";
-  const details = {
+  const requestDetails = {
     method: ["GET", "POST"].includes(options.method ?? "GET")
       ? (options.method ?? "GET")
       : "unknown",
     route,
   };
-  let response;
-  try {
-    response = await fetch(`https://api.github.com${path}`, {
-      ...options,
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-    });
-  } catch {
-    throw new GitHubRequestFailure("network", details);
-  }
-  details.status = response.status;
-  const requestId = response.headers.get("x-github-request-id");
-  if (/^[a-f0-9]{1,16}(?::[a-f0-9]{1,16}){2,7}$/i.test(requestId ?? ""))
-    details.requestId = requestId;
-  if (!response.ok) throw new GitHubRequestFailure("http", details);
-  try {
-    return await response.json();
-  } catch {
-    throw new GitHubRequestFailure("invalid-json", details);
+  const { responseType, ...fetchOptions } = options;
+  for (let attempt = 0; ; attempt++) {
+    const details = { ...requestDetails };
+    let response;
+    try {
+      response = await fetch(`https://api.github.com${path}`, {
+        ...fetchOptions,
+        signal: AbortSignal.timeout(15_000),
+        headers: {
+          Accept: "application/vnd.github+json",
+          ...(options.method === "POST" ? { "Content-Type": "application/json" } : {}),
+          ...options.headers,
+          Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      });
+    } catch {
+      if (details.method === "GET" && attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+        continue;
+      }
+      throw new GitHubRequestFailure("network", details);
+    }
+    details.status = response.status;
+    const requestId = response.headers.get("x-github-request-id");
+    if (/^[a-f0-9]{1,16}(?::[a-f0-9]{1,16}){2,7}$/i.test(requestId ?? ""))
+      details.requestId = requestId;
+    if (!response.ok) {
+      const retryAfter = Number(response.headers.get("retry-after") ?? 0);
+      if (details.method === "GET" && attempt < 2 &&
+          [408, 429, 500, 502, 503, 504].includes(response.status) &&
+          Number.isFinite(retryAfter) && retryAfter >= 0 && retryAfter <= 2) {
+        await response.body?.cancel();
+        await new Promise((resolve) => setTimeout(resolve, Math.max(retryAfter * 1000, 250 * (attempt + 1))));
+        continue;
+      }
+      throw new GitHubRequestFailure("http", details);
+    }
+    try {
+      return responseType === "text" ? await response.text() : await response.json();
+    } catch {
+      throw new GitHubRequestFailure("invalid-json", details);
+    }
   }
 }
 
@@ -491,6 +577,8 @@ export async function runPrAgentPublisher(request = githubRequest) {
     const event = JSON.parse(
       await readFile(process.env.GITHUB_EVENT_PATH, "utf8"),
     );
+    if (process.env.PR_AGENT_REVIEW_SCOPE_REQUIRED === "true" && !process.env.PR_AGENT_REVIEW_SCOPE)
+      throw new Error("PR-Agent required review scope is missing");
     const receipt = await publishPrAgentReview({
       repository: process.env.GITHUB_REPOSITORY,
       prNumber: event.pull_request?.number,
@@ -498,15 +586,21 @@ export async function runPrAgentPublisher(request = githubRequest) {
       runId: process.env.GITHUB_RUN_ID,
       attempt: process.env.GITHUB_RUN_ATTEMPT,
       raw: process.env.PR_AGENT_REVIEW,
+      ...(process.env.PR_AGENT_REVIEW_SCOPE ? { scope: JSON.parse(process.env.PR_AGENT_REVIEW_SCOPE) } : {}),
       request,
       diagnostic,
     });
     diagnostic.stage = "output-write";
     await appendFile(
       process.env.GITHUB_OUTPUT,
-      `receipt=${JSON.stringify(receipt)}\n`,
+      `applicable=true\nreceipt=${JSON.stringify(receipt)}\n`,
     );
   } catch (error) {
+    if (error instanceof PrAgentTargetSuperseded) {
+      await appendFile(process.env.GITHUB_OUTPUT, `applicable=false\nreason=${error.reason}\n`);
+      console.log(error.message);
+      return;
+    }
     console.error(
       "PR-Agent publication failed",
       JSON.stringify(publicationFailure(diagnostic, error)),

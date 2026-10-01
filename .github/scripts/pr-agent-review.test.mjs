@@ -8,6 +8,7 @@ import {
   githubRequest,
   parsePrAgentReview,
   publicationFailure,
+  PrAgentTargetSuperseded,
   publishPrAgentReview,
   runPrAgentPublisher,
   verifyPrAgentPublication,
@@ -55,6 +56,8 @@ function api({
       posted = JSON.parse(options.body);
       return { id: 77 };
     }
+    if (path.endsWith("/reviews?per_page=100&page=1"))
+      return posted ? [{ id: 77, user: actor, commit_id: head, body: posted.body }] : [];
     if (path.endsWith("/files?per_page=100&page=1"))
       return [
         {
@@ -136,6 +139,85 @@ function api({
   };
   return { request, writes, requested, mergeBaseSha };
 }
+
+test("reuses the verified publication when the same run is repeated", async () => {
+  const { request, writes } = api();
+  const first = await publishPrAgentReview({ ...context, raw, request });
+  const second = await publishPrAgentReview({ ...context, raw, request });
+  assert.deepEqual(second, first);
+  assert.equal(writes.length, 1);
+});
+
+test("recovers a POST whose response was lost without submitting it twice", async () => {
+  const remote = api();
+  const request = async (path, options = {}) => {
+    const result = await remote.request(path, options);
+    if (options.method === "POST") throw new TypeError("synthetic lost response");
+    return result;
+  };
+  const receipt = await publishPrAgentReview({ ...context, raw, request });
+  assert.equal(receipt.findingCount, 1);
+  assert.equal(remote.writes.length, 1);
+});
+
+test("keeps the original POST failure when recovery reads also fail", async () => {
+  const remote = api();
+  const originalError = new Error("original POST error");
+  const diagnostic = {};
+  let failedPost = false;
+  const request = async (path, options = {}) => {
+    if (options.method === "POST") { failedPost = true; throw originalError; }
+    if (failedPost) throw new Error("recovery read error");
+    return remote.request(path, options);
+  };
+  await assert.rejects(publishPrAgentReview({ ...context, raw, request, diagnostic }),
+    (error) => error === originalError);
+  assert.equal(diagnostic.stage, "post-review");
+});
+
+test("stops when the target closes, becomes Draft or changes head before publication", async () => {
+  for (const [change, reason] of [
+    [{ state: "closed" }, "pr-closed"],
+    [{ draft: true }, "pr-draft"],
+    [{ head: { sha: "b".repeat(40), repo: { full_name: context.repository } } }, "head-superseded"],
+  ]) {
+    const remote = api();
+    let reads = 0;
+    const request = async (path, options) => {
+      const result = await remote.request(path, options);
+      return path.endsWith("/pulls/42") && ++reads > 1 ? { ...result, ...change } : result;
+    };
+    await assert.rejects(publishPrAgentReview({ ...context, raw, request }),
+      (error) => error instanceof PrAgentTargetSuperseded && error.reason === reason);
+    assert.equal(remote.writes.length, 0);
+  }
+});
+
+test("retries transient reads but never blindly retries a POST", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return calls === 1 ? new Response(null, { status: 503 }) : Response.json({ ok: true });
+  });
+  assert.deepEqual(await githubRequest("/repos/org/repo/pulls/42"), { ok: true });
+  assert.equal(calls, 2);
+  calls = 0;
+  await assert.rejects(githubRequest("/repos/org/repo/pulls/42/reviews", { method: "POST", body: "{}" }));
+  assert.equal(calls, 1);
+});
+
+test("a later network failure does not inherit the previous HTTP response diagnostics", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    if (++calls === 1) return new Response(null, { status: 503, headers: { "x-github-request-id": "AAAA:BBBB:CCCC" } });
+    throw new Error("private network detail");
+  });
+  const error = await githubRequest("/repos/org/repo/pulls/42").catch((error) => error);
+  assert.equal(calls, 3);
+  assert.deepEqual(publicationFailure({ stage: "target-entry" }, error), {
+    stage: "target-entry", category: "network", method: "GET", route: "pulls",
+  });
+});
 
 test("validates the official review output, including explicit zero findings", () => {
   assert.equal(parsePrAgentReview(raw).length, 1);
@@ -434,15 +516,16 @@ test("failed empty publication identifies its actual boundary and returns no rec
     "target-entry",
     "files",
     "target-before-post",
+    "lookup-review",
     "post-review",
     "read-review",
     "read-comments",
     "target-final",
   ];
-  for (const [index, stage] of stages.entries()) {
+  for (const stage of stages) {
     const original = api();
     const diagnostic = {};
-    let calls = 0;
+    let failed = false;
     let receipt;
     await assert.rejects(
       publishPrAgentReview({
@@ -450,7 +533,10 @@ test("failed empty publication identifies its actual boundary and returns no rec
         diagnostic,
         raw: '{"key_issues_to_review":[]}',
         request: async (...args) => {
-          if (calls++ === index) throw new Error("PRIVATE_ERROR_SENTINEL");
+          if (!failed && diagnostic.stage === stage) {
+            failed = true;
+            throw new Error("PRIVATE_ERROR_SENTINEL");
+          }
           return original.request(...args);
         },
       }).then((value) => {
