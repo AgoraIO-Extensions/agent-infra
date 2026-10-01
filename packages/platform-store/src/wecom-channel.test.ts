@@ -770,7 +770,7 @@ describe("existing WeCom transaction cancellation", () => {
 		await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values (${input.agentId},1,'authorization_1')`;
 		await sql`insert into platform.agent_applications (id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values (${`${input.agentId}-application`},${input.agentId},'owner_1','Controlled','Controlled','available','trace','request',now(),1,1,'ready','running',1,1)`;
 		await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${input.agentId},1,'controlled',${sql.json({ ...configuration, agentId: input.agentId })},now())`;
-		await sql`insert into platform.agent_owners (agent_id,owner_id) values (${input.agentId},'owner_1')`;
+		await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values (${input.agentId},'owner_1',now())`;
 		await sql`insert into platform.agent_availability (agent_id,target_type,target_id) values (${input.agentId},'organization','controlled-org')`;
 		return input;
 	}
