@@ -17,6 +17,12 @@ const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openCodexRuntimeDriver: vi.fn(),
 	verifyCodexPilotInstallation: vi.fn(),
 	assertRuntimeProcessProtection: vi.fn(),
+	readCodexInstalledSkillDeployment: vi.fn(),
+}));
+
+vi.mock("./installed-skill.js", () => ({
+	readCodexInstalledSkillDeployment:
+		runtimeAssemblyMocks.readCodexInstalledSkillDeployment,
 }));
 
 vi.mock("./process-protection.js", () => ({
@@ -72,6 +78,7 @@ afterEach(async () => {
 	runtimeAssemblyMocks.assertRuntimeProcessProtection.mockReset();
 	runtimeAssemblyMocks.openCodexRuntimeDriver.mockReset();
 	runtimeAssemblyMocks.verifyCodexPilotInstallation.mockReset();
+	runtimeAssemblyMocks.readCodexInstalledSkillDeployment.mockReset();
 	for (const directory of directories.splice(0)) {
 		await rm(directory, { recursive: true, force: true });
 	}
@@ -470,6 +477,96 @@ describe("RuntimeHost environment assembly", () => {
 					process.env.PATH = originalPath;
 				}
 			}
+		},
+	);
+
+	it.each([false, true])(
+		"consumes fixed installed Skill deployment before Driver activation, invalid=%s",
+		async (invalid) => {
+			const values = await environment();
+			const configVersion = "installed-skill-config-7";
+			const manifestBytes = await readFile(
+				new URL(
+					"../../../deploy/runtime/skills/workspace-summary.manifest.json",
+					import.meta.url,
+				),
+			);
+			const descriptor: NonNullable<
+				CodexRuntimeDriverOptions["installedSkill"]
+			> = {
+				schemaVersion: 1,
+				manifestSha256:
+					"9bbef33672b700f43a6e700263a51fef1a0d534d44bf9d4940af84006f37c2d0",
+				manifest: JSON.parse(manifestBytes.toString()),
+				deployment: {
+					configVersion,
+					imageSourceRevision: "e4c78883b38e3c59ae4a696ab60f78afc649759f",
+				},
+			};
+			const env = {
+				...values,
+				AGENT_INFRA_RUNTIME_DRIVER: "codex",
+				AGENT_INFRA_RUNTIME_INSTALLED_SKILL: "workspace-summary-v1",
+				AGENT_INFRA_RUNTIME_WORKER_ID: "fixture-worker",
+				AGENT_INFRA_RUNTIME_AGENT_ID: "fixture-agent",
+				AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY: "fixture-credential",
+				AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+					schemaVersion: 2,
+					configVersion,
+					defaultModelOptionId: "primary",
+					defaultReasoningLevel: "high",
+					modelOptions: [
+						{
+							modelOptionId: "primary",
+							endpoint: "https://models.example.test/v1",
+							model: "fixture-model",
+							reasoningLevels: ["high"],
+							credentialEnvironmentVariable:
+								"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
+						},
+					],
+				}),
+			};
+			if (invalid)
+				runtimeAssemblyMocks.readCodexInstalledSkillDeployment.mockRejectedValue(
+					new Error("RUNTIME_INSTALLED_SKILL_INVALID"),
+				);
+			else
+				runtimeAssemblyMocks.readCodexInstalledSkillDeployment.mockResolvedValue(
+					descriptor,
+				);
+			runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
+				async (options: CodexRuntimeDriverOptions) => {
+					expect(options.installedSkill).toBe(descriptor);
+					expect(options.configVersion).toBe(configVersion);
+					return FakeRuntimeDriver.open(
+						join(values.AGENT_INFRA_RUNTIME_DATA_DIR, "fixture-driver.json"),
+					);
+				},
+			);
+			if (invalid) {
+				await expect(assembleRuntimeHost(env)).rejects.toThrow(
+					/^RUNTIME_INSTALLED_SKILL_INVALID$/,
+				);
+				expect(
+					runtimeAssemblyMocks.openCodexRuntimeDriver,
+				).not.toHaveBeenCalled();
+				await expect(
+					readFile(join(values.AGENT_INFRA_RUNTIME_DATA_DIR, "host.json")),
+				).rejects.toMatchObject({ code: "ENOENT" });
+			} else {
+				const runtime = await assembleRuntimeHost(env);
+				await runtime.close();
+				expect(
+					runtimeAssemblyMocks.openCodexRuntimeDriver,
+				).toHaveBeenCalledOnce();
+			}
+			expect(
+				runtimeAssemblyMocks.readCodexInstalledSkillDeployment,
+			).toHaveBeenCalledWith(env, configVersion);
+			expect(
+				runtimeAssemblyMocks.verifyCodexPilotInstallation,
+			).not.toHaveBeenCalled();
 		},
 	);
 
