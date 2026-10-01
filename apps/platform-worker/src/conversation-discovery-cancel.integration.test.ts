@@ -1,9 +1,9 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
+import { PostgresConversationDispatchStoreV1 } from "@agent-infra/platform-store";
 import postgres from "postgres";
 import { expect, it } from "vitest";
-import { PostgresConversationDispatchStoreV1 } from "../../../packages/platform-store/src/conversation-dispatch.js";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
 import {
 	type PostgresTestDatabase,
