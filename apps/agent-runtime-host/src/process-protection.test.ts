@@ -162,6 +162,7 @@ describe("credential holder process protection", () => {
 			);
 			await chmod(executable, 0o755);
 		}
+		const defaultStartedAt = performance.now();
 		const defaultResult = await execute(
 			"/bin/sh",
 			["./start-runtime-host.sh"],
@@ -171,11 +172,45 @@ describe("credential holder process protection", () => {
 				timeout: 5000,
 			},
 		).catch((error) => error);
+		const defaultElapsedMs = performance.now() - defaultStartedAt;
 		// The production image has the pinned path; a test host may not.
 		// Both must bypass injected executables, including npm_node_execpath.
 		const hasProductionNode = await access("/usr/local/bin/node").then(
 			() => true,
 			() => false,
+		);
+		console.info(
+			JSON.stringify({
+				phase: "default_launcher",
+				elapsedMs: defaultElapsedMs,
+				code:
+					defaultResult.code === undefined
+						? "success"
+						: defaultResult.code === null ||
+								typeof defaultResult.code === "number"
+							? defaultResult.code
+							: "symbolic_error",
+				killed: defaultResult.killed === true,
+				signal:
+					["SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGBUS"].find(
+						(signal) => signal === defaultResult.signal,
+					) ?? null,
+				stdoutMatched: defaultResult.stdout === "application-entered\n",
+				stdoutBytes:
+					typeof defaultResult.stdout === "string"
+						? Buffer.byteLength(defaultResult.stdout)
+						: null,
+				stderrBytes:
+					typeof defaultResult.stderr === "string"
+						? Buffer.byteLength(defaultResult.stderr)
+						: null,
+				hasProductionNode,
+				markerStatus: await access(marker).then(
+					() => "present",
+					(error: NodeJS.ErrnoException) =>
+						error.code === "ENOENT" ? "ENOENT" : "other",
+				),
+			}),
 		);
 		if (hasProductionNode) {
 			expect(defaultResult.code).toBeUndefined();

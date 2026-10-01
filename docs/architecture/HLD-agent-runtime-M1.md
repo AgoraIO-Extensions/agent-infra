@@ -54,14 +54,31 @@ Agent / Client --Connection 独立身份--> Connection MCP/API --> External Prov
 
 M1 Registry 是平台维护的固定配置，不支持运行时插件发现。
 
-| 标准模板 | Platform Adapter | 补充指令 | M1 平台能力 |
-| --- | --- | --- | --- |
-| Codex | Codex Native | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| Claude | Claude Native | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| OpenCode | Generic ACP | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| Pi | Pi RPC | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
+| 标准模板 | Platform Adapter | `driver` | 补充指令 | M1 平台能力 |
+| --- | --- | --- | --- | --- |
+| Codex | Codex Native | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
+| Claude | Claude Native | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
+| OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
+| Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
 
 Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Service/健康检查、capability 和 Owner 可配置的 env/Secret 键。每个模板的 `supplementaryInstruction` 只作为 capability 集合中的一个布尔键维护，不存在独立的第二声明源；缺失时按 `false` 处理，只有对应 Adapter 通过持久幂等 Conformance 后才能设为 `true`，不能按协议名称推断。Owner 不选择或覆盖标准模板的 Adapter，也不能提交 Registry 未声明的 env/Secret。
+
+标准模板的部署维护绑定为 `(templateId, imageDigest, driver, protocol)`。`driver` 必填，
+只接受上表的 `codex | claude | acp | pi`，不接受测试 Driver `fake`。该绑定由平台维护的
+Registry 和经准入的模板发布产生；Worker 按持久 candidate 的标准来源，以模板标识与
+已准入的不可变镜像 Digest 唯一匹配，并同时校验 Driver 与模型协议/profile 一致。
+缺失、未知、重复或歧义、模板/镜像不匹配及 Driver/profile 不符均拒绝，不按模型协议、
+模板名称、镜像内安装包或原生响应推断 Driver。
+
+Worker 将同一候选绑定的 `driver` 交给原标准 Pod renderer，生成平台保留环境变量
+`AGENT_INFRA_RUNTIME_DRIVER`，与原镜像 Digest 和版本化模型配置共同交付。Owner 的请求、
+env/Secret、模型配置或 Skill 不能提供或覆盖 selector；Host 保留缺失/无效 selector 的拒绝，
+不设置默认 Driver。自定义/self-managed 和未配置部署遵循原边界，不从空绑定选择标准 Driver。
+
+同一已接纳模板标识和 Digest 的 Driver 不得静默变化。Driver 变更须经过已有模板/镜像发布、
+配置修订和升级/恢复约束，不得热切 active/unknown Session；升级、回滚与会话控制仍遵循
+[工程 Spec §10.4](SPEC-agent-infra-M1-engineering-architecture.md#104-模板与自定义镜像升级)
+和本文的恢复契约。
 
 标准 Runtime 的 active 配置只包含获准 Relay endpoint、模型、reasoning 和 Driver 能力，不含个人或 Agent 默认 Relay Key。Worker 按 Execution 从其已固化的 Key 版本解密，经受认证的私有接口交付本次 Key；Host/Driver 仅在该执行内存中使用，不能跨用户或执行复用。模板只有真实镜像、Driver 和模型链路各自验证后才标记就绪；未就绪时目录显示原因并拒绝申请。权威配置与迁移边界见工程 Spec 10.7；RuntimeHost 不读取 ModelCatalog、SecretRef、Platform DB 或部署解密 keyring。
 
@@ -179,6 +196,8 @@ Claude 的持久请求、accepted/unknown、状态和恢复继续遵循 §§7–
 不建立新会话或换绑。公开 selector 不允许请求者指定这些字段。
 
 ### 5.2 调用生命周期与兼容
+
+只读 metadata 的内部 HTTP 例外及原请求/实例边界遵循 [工程 Spec §4.1](SPEC-agent-infra-M1-engineering-architecture.md#41-部署单元)。
 
 - 只读能力沿原 Session 的受限查询返回投影，不创建 Session/Turn、不恢复业务、不改变平台任务状态。未装载、不可用或无法核实分别返回，不能把 `notLoaded` 当作原任务已停止；当前读取权限失效时不返回结果。
 

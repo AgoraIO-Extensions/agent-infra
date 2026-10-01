@@ -162,6 +162,48 @@ describe("production Worker deployment", () => {
 			runtimeProbe: authorize(),
 		};
 	}
+	it.each([
+		[
+			{
+				templateId: "template-a",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				protocol: "openai-responses-v1",
+			},
+		],
+		[
+			{
+				templateId: "template-a",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				driver: "fake",
+				protocol: "openai-responses-v1",
+			},
+		],
+		[
+			{
+				templateId: "template-a",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				driver: "claude",
+				protocol: "openai-responses-v1",
+			},
+		],
+	])(
+		"rejects bad trusted Driver bindings before reading Kubernetes credentials (%#)",
+		async (templateModelBindings) => {
+			const deployment = await input();
+			Object.defineProperty(deployment, "templateModelBindings", {
+				value: templateModelBindings,
+			});
+			Object.defineProperty(deployment, "kubernetes", {
+				get() {
+					throw new Error("Kubernetes credentials must not be read");
+				},
+			});
+			await expect(
+				createProductionWorkloadWorkerOptionsV1(deployment),
+			).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
+		},
+	);
+
 	it("uses the explicitly selected namespace client rather than kubeconfig current-context", async () => {
 		const requests: { url?: string; authorization?: string }[] = [];
 		const server = createServer((request, response) => {
@@ -234,12 +276,28 @@ describe("production Worker deployment", () => {
 				);
 			},
 		);
+		const bindings = [
+			{
+				templateId: "template-a",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				driver: "codex" as const,
+				protocol: "openai-responses-v1" as const,
+			},
+		];
 		const registryFetch = vi.fn();
 		const options = await createProductionWorkloadWorkerOptionsV1({
 			...deployment,
+			templateModelBindings: bindings,
 			registry: { ...deployment.registry, fetch: registryFetch },
 			modelFetch,
 		});
+		const binding = bindings[0];
+		if (!binding) throw new Error("Expected trusted binding fixture");
+		Object.assign(binding, { driver: "fake" });
+		bindings.length = 0;
+		expect(options.templateModelBindings[0]?.driver).toBe("codex");
+		expect(Object.isFrozen(options.templateModelBindings)).toBe(true);
+		expect(Object.isFrozen(options.templateModelBindings[0])).toBe(true);
 		const signal = AbortSignal.timeout(1000);
 		if (!options.modelCatalog || !options.modelAccess) throw new Error();
 		const endpoint = await options.modelCatalog.resolve(

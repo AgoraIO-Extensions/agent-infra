@@ -1,7 +1,11 @@
 import {
 	AgentProjectionV2Schema,
+	BrowserSessionProjectionV1Schema,
+	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
+	ExecutionDetailProjectionV2Schema,
 	PersistedConversationEventV2Schema,
+	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, test } from "@playwright/test";
@@ -848,3 +852,229 @@ test("regenerates a terminal answer and opens its execution details", async ({
 		details.getByRole("button", { name: "核实原执行状态" }),
 	).toBeVisible();
 });
+
+for (const source of ["standard", "custom"] as const) {
+	for (const code of ["PROVIDER_RATE_LIMITED", "PROVIDER_REJECTED"] as const) {
+		test(`personal Key recovery for ${code} on ${source} preserves the accepted scope`, async ({
+			page,
+		}, info) => {
+			const agent = AgentProjectionV2Schema.parse({
+				...activeAgent(),
+				...(source === "custom"
+					? {
+							source: {
+								kind: "custom",
+								imageReference: "registry.example/agent:v1",
+								interactionMode: "platform-adapter",
+							},
+						}
+					: {}),
+			});
+			const failure = PilotProtocolErrorV1Schema.parse({
+				schemaVersion: 1,
+				code,
+				message: "Synthetic provider detail must not be rendered",
+				retryable: code === "PROVIDER_RATE_LIMITED",
+				traceId: "trace-personal-key-recovery",
+			});
+			const failedStatus = PersistedConversationEventV2Schema.parse({
+				...event("execution.status", 1, { status: "completed" }),
+				payload: { status: "failed" },
+			});
+			const question = "检查合成任务";
+			const message = {
+				messageId,
+				role: "user",
+				text: question,
+				status: "completed",
+				executionId,
+				replyToMessageId: null,
+				answerVersion: null,
+				isCurrentAnswer: null,
+				error: null,
+				createdAt: timestamp,
+			};
+			let accepted = false;
+			const writes: { path: string; body: unknown }[] = [];
+			const unexpected: string[] = [];
+			await keepConversationStreamOpen(page);
+			await page.route(/\/api\/v[12]\//, async (route) => {
+				const request = route.request();
+				const path = new URL(request.url()).pathname;
+				if (request.method() !== "GET")
+					writes.push({ path, body: request.postDataJSON() });
+				if (request.method() === "GET" && path.endsWith("/session"))
+					await route.fulfill({
+						json: BrowserSessionProjectionV1Schema.parse(ownerSession()),
+					});
+				else if (
+					request.method() === "GET" &&
+					path === `/api/v2/agents/${agentId}`
+				)
+					await route.fulfill({ json: agent });
+				else if (
+					request.method() === "POST" &&
+					path === `/api/v1/conversations/${conversationId}/messages`
+				) {
+					// Acceptance is not a provider result. Errors arrive in later reads.
+					accepted = true;
+					await route.fulfill({
+						status: 202,
+						json: CommandAcceptedProjectionV1Schema.parse({
+							schemaVersion: 1,
+							status: "submitted",
+							messageId,
+							executionId,
+						}),
+					});
+				} else if (
+					request.method() === "GET" &&
+					path === `/api/v2/conversations/${conversationId}`
+				)
+					await route.fulfill({
+						json: ConversationDetailProjectionV2Schema.parse({
+							...history(conversationId, accepted ? [failedStatus] : []),
+							conversation: {
+								...history(conversationId, []).conversation,
+								status: "ready",
+								selectedModelOptionId: "model-secondary",
+								selectedReasoningLevel: "high",
+								lastConversationCursor: accepted
+									? failedStatus.conversationCursor
+									: null,
+							},
+							messages: accepted
+								? [
+										message,
+										{
+											...message,
+											messageId: "answer-provider-failed",
+											role: "assistant",
+											text: "",
+											status: "failed",
+											replyToMessageId: messageId,
+											answerVersion: 1,
+											isCurrentAnswer: true,
+											error: failure,
+										},
+									]
+								: [],
+						}),
+					});
+				else if (
+					request.method() === "GET" &&
+					path === `/api/v2/conversations/${conversationId}/events`
+				)
+					await route.fulfill({
+						contentType: "text/event-stream",
+						body: ": heartbeat\n\n",
+					});
+				else if (
+					request.method() === "GET" &&
+					path ===
+						`/api/v2/conversations/${conversationId}/executions/${executionId}`
+				)
+					await route.fulfill({
+						json: ExecutionDetailProjectionV2Schema.parse({
+							...execution(conversationId, executionId),
+							status: "failed",
+							error: failure,
+							finishedAt: timestamp,
+							events: [failedStatus],
+						}),
+					});
+				else {
+					unexpected.push(`${request.method()} ${path}`);
+					await route.fulfill({ status: 500 });
+				}
+			});
+			await page.goto(`/chat/${agentId}/${conversationId}`);
+			const input = page.getByRole("textbox", { name: "消息", exact: true });
+			await input.fill(question);
+			await page.getByRole("button", { name: "发送", exact: true }).click();
+			const timeline = page.getByRole("region", { name: "会话时间线" });
+			await expect(
+				timeline.getByText("执行失败", { exact: true }),
+			).toBeVisible();
+			await expect(timeline).toContainText(
+				"使用标准模板时，请检查个人 Relay Key",
+			);
+			await input.fill("下一条草稿");
+			await page.getByRole("button", { name: "刷新会话", exact: true }).click();
+			await expect(input).toHaveValue("下一条草稿");
+			await page.getByRole("button", { name: "执行详情", exact: true }).click();
+			const details = page.getByRole("region", { name: "执行详情" });
+			const alert = details.getByRole("alert");
+			await expect(alert).toContainText("使用标准模板时，请检查个人 Relay Key");
+			await expect(alert).toContainText("仍失败请联系 Owner 检查模型配置");
+			await expect(alert.getByRole("link")).toHaveCount(0);
+			await expect(
+				page.getByText(failure.message, { exact: true }),
+			).toHaveCount(0);
+			for (const viewport of [
+				info.project.use.viewport,
+				{ width: 320, height: 370 },
+			]) {
+				if (!viewport) throw new Error("Expected configured browser viewport");
+				await page.setViewportSize(viewport);
+				await alert.scrollIntoViewIfNeeded();
+				await expect(alert).toBeInViewport({ ratio: 1 });
+				await info.attach(
+					`personal-key-recovery-${source}-${code}-${viewport.width}`,
+					{
+						body: await page.screenshot({ animations: "disabled" }),
+						contentType: "image/png",
+					},
+				);
+			}
+			await details
+				.getByRole("button", { name: "返回对话", exact: true })
+				.focus();
+			await page.keyboard.press("Enter");
+			for (
+				let index = 0;
+				index < 12 &&
+				!(await input.evaluate((node) => node === document.activeElement));
+				index += 1
+			)
+				await page.keyboard.press("Tab");
+			await expect(input).toBeFocused();
+			await page.keyboard.type(" / 继续");
+			await expect(input).toHaveValue("下一条草稿 / 继续");
+			await expect(
+				page.getByRole("combobox", { name: "模型", exact: true }),
+			).toContainText("Secondary model");
+			await expect(
+				page.getByRole("combobox", { name: "推理强度", exact: true }),
+			).toContainText("high");
+			await expect(page).toHaveURL(
+				new RegExp(`/chat/${agentId}/${conversationId}$`),
+			);
+			await expect
+				.poll(() =>
+					input.evaluate((node) => {
+						const rect = node.getBoundingClientRect();
+						const hit = document.elementFromPoint(
+							rect.left + rect.width / 2,
+							rect.top + rect.height / 2,
+						);
+						return (
+							rect.left >= 0 &&
+							rect.right <= innerWidth &&
+							rect.top >= 0 &&
+							rect.bottom <= innerHeight &&
+							hit === node
+						);
+					}),
+				)
+				.toBe(true);
+			expect(writes).toEqual([
+				{
+					path: `/api/v1/conversations/${conversationId}/messages`,
+					body: { schemaVersion: 1, text: question },
+				},
+			]);
+			expect(unexpected).toEqual([]);
+		});
+	}
+}

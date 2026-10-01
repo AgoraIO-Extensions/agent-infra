@@ -738,11 +738,13 @@ describe("Trusted conversation Runtime adapter", () => {
 		h.fetcher.mockResolvedValue(
 			new Response(
 				JSON.stringify({
-					schemaVersion: 3,
-					outcome: "not_found",
-					hostSessionRef: null,
-					executionId: "execution",
+					schemaVersion: 1,
+					code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+					message: "Runtime command acceptance could not be confirmed",
+					retryable: true,
+					traceId: "trace",
 				}),
+				{ status: 409 },
 			),
 		);
 		await expect(
@@ -751,12 +753,10 @@ describe("Trusted conversation Runtime adapter", () => {
 				schemaVersion: 2,
 				hostSessionRef: null,
 			}),
-		).resolves.toEqual({
-			schemaVersion: 2,
-			outcome: "not_found",
-			hostSessionRef: null,
-			executionId: "execution",
-		});
+		).rejects.toMatchObject({ code: "RUNTIME_ACCEPTANCE_UNKNOWN" });
+		expect(h.sent().url).toBe(
+			"http://runtime.test/internal/runtime/v3/original-binding",
+		);
 		expect(h.sent().claims).toMatchObject({
 			purpose: "control",
 			reason: "stop",
@@ -764,6 +764,112 @@ describe("Trusted conversation Runtime adapter", () => {
 		expect(h.sent().body).not.toHaveProperty("input");
 		h.runtime.close();
 	});
+	it("recovers the durable ref under original stop authority before using normal status", async () => {
+		const h = harness();
+		Object.assign(h.state, {
+			hostSessionRef: null,
+			stopPending: true,
+			executionStatus: "unknown",
+		});
+		const context = await h.authorize();
+		h.fetcher.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					schemaVersion: 3,
+					executionId: "execution",
+					outcome: "binding_found",
+					hostSessionRef: "host",
+				}),
+			),
+		);
+		const request = {
+			...h.events(context),
+			schemaVersion: 2 as const,
+			hostSessionRef: null,
+		};
+		await expect(
+			h.runtime.runtimeHost.recoverOriginalStatus?.(request),
+		).resolves.toEqual({
+			schemaVersion: 2,
+			executionId: "execution",
+			outcome: "binding_found",
+			hostSessionRef: "host",
+		});
+		expect(h.sent().claims).toMatchObject({
+			purpose: "control",
+			reason: "stop",
+			allowedCommands: ["session.status"],
+			operation: { deliveryFence: h.claim.executionDeliveryFence },
+		});
+		expect(h.sent().body).toMatchObject({
+			hostSessionRef: null,
+			originalOperationDigest: h.state.originalOperationDigest,
+		});
+		expect(h.sent().body).not.toHaveProperty("input");
+		expect(h.sent().body).not.toHaveProperty("executionKey");
+		Object.assign(h.state, { hostSessionRef: "host" });
+		await expect(
+			h.runtime.runtimeHost.recoverOriginalStatus?.({
+				...request,
+				hostSessionRef: "host",
+			}),
+		).resolves.toMatchObject({ outcome: "found", status: "running" });
+		expect(String(h.fetcher.mock.calls[1]?.[0])).toBe(
+			"http://runtime.test/internal/runtime/v3/status",
+		);
+		h.runtime.close();
+	});
+	it.each(["digest", "ref", "authority", "route", "lease"] as const)(
+		"rejects binding recovery when %s changes during the Host read",
+		async (change) => {
+			const h = harness();
+			Object.assign(h.state, { hostSessionRef: null, stopPending: true });
+			h.store.readRuntimeState.mockImplementation(async () =>
+				structuredClone(h.state),
+			);
+			const context = await h.authorize();
+			h.fetcher.mockImplementationOnce(async () => {
+				if (change === "digest")
+					Object.assign(h.state, { originalOperationDigest: "b".repeat(43) });
+				if (change === "ref")
+					Object.assign(h.state, { hostSessionRef: "other" });
+				if (change === "authority")
+					h.authorizationStore.recordControl.mockResolvedValue({
+						controlRecordId: "different-control",
+					});
+				if (change === "route") {
+					const record = h.record();
+					if (!record) throw new Error("missing fixture");
+					h.setRecord({
+						...record,
+						configurationRevision: record.configurationRevision + 1,
+					});
+				}
+				if (change === "lease")
+					h.store.readRuntimeState.mockResolvedValue(null);
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 3,
+						executionId: "execution",
+						outcome: "binding_found",
+						hostSessionRef: "host",
+					}),
+				);
+			});
+			await expect(
+				h.runtime.runtimeHost.recoverOriginalStatus?.({
+					...h.events(context),
+					schemaVersion: 2,
+					hostSessionRef: null,
+				}),
+			).rejects.toMatchObject({
+				code:
+					change === "route" ? "RUNTIME_ROUTE_STALE" : "RUNTIME_FENCE_STALE",
+			});
+			expect(h.fetcher).toHaveBeenCalledTimes(1);
+			h.runtime.close();
+		},
+	);
 	it.each(["error", "eof"] as const)(
 		"recovers the original event cursor immediately after concurrent stop closes the business stream with %s",
 		async (ending) => {

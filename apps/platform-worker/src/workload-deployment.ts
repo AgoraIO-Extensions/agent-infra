@@ -18,6 +18,7 @@ import { createOciImageRegistryAdapterV1 } from "@agent-infra/image-registry";
 import {
 	createDeploymentModelCatalogAdapterV1,
 	createModelAccessValidatorV1,
+	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
 import { createWorkloadSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { KubeConfig } from "@kubernetes/client-node";
@@ -117,6 +118,9 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			input.policy.runtimeAuth.workerId !== input.workerId
 		)
 			throw new Error();
+		const templateModelBindings = validateStandardTemplateModelBindingsV1(
+			input.templateModelBindings,
+		);
 		stage = "WORKER_KUBERNETES_CONFIGURATION_INVALID";
 		const config = new KubeConfig();
 		if (input.kubernetes.mode === "in-cluster") config.loadFromCluster();
@@ -192,7 +196,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			probeRuntime,
 			admissionPolicyRef: input.admissionPolicyRef,
 			registrySubjectRef: input.registrySubjectRef,
-			templateModelBindings: structuredClone(input.templateModelBindings),
+			templateModelBindings,
 			executionCapacityProfiles: structuredClone(
 				input.executionCapacityProfiles,
 			),

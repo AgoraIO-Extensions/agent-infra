@@ -35,6 +35,8 @@ function fixture(
 	const app = createPlatformHealthApp();
 	const seen: unknown[] = [];
 	const observed: string[] = [];
+	const signals: (AbortSignal | undefined)[] = [];
+	const fences: unknown[] = [];
 	const now = new Date();
 	registerWecomRoutesV1(app, {
 		resolveBinding: async () => config,
@@ -44,8 +46,10 @@ function fixture(
 			protectReply,
 		}),
 		channel: {
-			async receive(input) {
+			async receive(input, fence, signal) {
 				seen.push(input);
+				signals.push(signal);
+				fences.push(fence);
 				return outcome === "denied"
 					? { outcome }
 					: {
@@ -76,6 +80,8 @@ function fixture(
 		app,
 		seen,
 		observed,
+		signals,
+		fences,
 		request: () => wecomCallbackFixtureV1(config, message, now),
 	};
 }
@@ -125,4 +131,15 @@ it("returns an encrypted permission denial and rejects unsigned requests without
 	expect(invalid.status).toBe(400);
 	expect(f.seen).toHaveLength(1);
 	expect(f.observed).toEqual(["denied", "invalid"]);
+});
+
+it("forwards the original callback signal to Core without a connection fence", async () => {
+	const f = fixture("accepted");
+	const controller = new AbortController();
+	const request = new Request(f.request(), { signal: controller.signal });
+	expect((await f.app.request(request)).status).toBe(200);
+	expect(f.signals).toEqual([request.signal]);
+	expect(f.fences).toEqual([undefined]);
+	controller.abort();
+	expect(f.signals[0]?.aborted).toBe(true);
 });

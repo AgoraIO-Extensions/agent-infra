@@ -166,7 +166,11 @@ export function registerWecomRoutesV1(
 				return context.text("Invalid callback", 400);
 			}
 			try {
-				const result = await dependencies.channel.receive(message);
+				const result = await dependencies.channel.receive(
+					message,
+					undefined,
+					context.req.raw.signal,
+				);
 				observe(result.outcome);
 				if (result.outcome === "denied")
 					return dependencies.adapter.passiveReply(

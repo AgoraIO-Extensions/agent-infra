@@ -27,7 +27,7 @@ class ObservedNativeDriver extends CodexRuntimeDriver {
 			{
 				path,
 				nativeLane: "official-model-only",
-				configVersion: "native-read-config-1",
+				configVersion: "config-1",
 				defaultModelOptionId: "primary",
 				defaultReasoningLevel: "high",
 				modelOptions: [
@@ -165,6 +165,7 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 						signal: new AbortController().signal,
 						expiresAt: Date.now() + 60_000,
 						assertCurrent: () => binding,
+						revalidate: async () => binding,
 					};
 					const catalog = await driver.discoverNativeCommands(read);
 					const status = await driver.readNativeStatus(

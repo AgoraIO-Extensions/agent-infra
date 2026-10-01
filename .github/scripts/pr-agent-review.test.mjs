@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   changedRightLinesFromTexts,
+  githubRequest,
   parsePrAgentReview,
+  publicationFailure,
   publishPrAgentReview,
+  runPrAgentPublisher,
   verifyPrAgentPublication,
 } from "./pr-agent-review.mjs";
 
@@ -357,4 +363,162 @@ test("rejects a changed head or cross-repository target before publishing", asyn
     );
     assert.equal(writes, 0);
   }
+});
+
+test("retains HTTP status/request ID without reading or logging error bodies", async (t) => {
+  for (const [status, requestId] of [
+    [403, "ABCD:1234:5678"],
+    [422, "ABCD:1234:5678"],
+    [500, "PRIVATE_HEADER_SENTINEL"],
+  ]) {
+    t.mock.method(globalThis, "fetch", async () => ({
+      ok: false,
+      status,
+      headers: new Headers({ "x-github-request-id": requestId }),
+      json: () =>
+        assert.fail("Error body must not be read: PRIVATE_BODY_SENTINEL"),
+    }));
+    const error = await githubRequest("/repos/org/repo/pulls/42/reviews", {
+      method: "POST",
+      body: "PRIVATE_REVIEW_SENTINEL",
+    }).catch((error) => error);
+    assert.deepEqual(publicationFailure({ stage: "post-review" }, error), {
+      stage: "post-review",
+      category: "http",
+      method: "POST",
+      route: "reviews",
+      status,
+      ...(status !== 500 ? { requestId } : {}),
+    });
+  }
+});
+
+test("network/JSON failures and local exceptions cannot log arbitrary messages", async (t) => {
+  for (const category of ["network", "invalid-json"]) {
+    t.mock.method(globalThis, "fetch", async () => {
+      if (category === "network") throw new Error("PRIVATE_TOKEN_SENTINEL");
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: () => {
+          throw new SyntaxError("PRIVATE_BODY_SENTINEL");
+        },
+      };
+    });
+    const error = await githubRequest("/repos/org/repo/pulls/42").catch(
+      (error) => error,
+    );
+    assert.deepEqual(publicationFailure({ stage: "target-entry" }, error), {
+      stage: "target-entry",
+      category,
+      method: "GET",
+      route: "pulls",
+      ...(category === "invalid-json" ? { status: 200 } : {}),
+    });
+  }
+  assert.deepEqual(
+    publicationFailure(
+      { stage: "PRIVATE_STAGE_SENTINEL" },
+      new Error("PRIVATE_TOKEN_SENTINEL"),
+    ),
+    {
+      stage: "unknown",
+      category: "unknown",
+    },
+  );
+});
+
+test("failed empty publication identifies its actual boundary and returns no receipt", async () => {
+  const stages = [
+    "target-entry",
+    "files",
+    "target-before-post",
+    "post-review",
+    "read-review",
+    "read-comments",
+    "target-final",
+  ];
+  for (const [index, stage] of stages.entries()) {
+    const original = api();
+    const diagnostic = {};
+    let calls = 0;
+    let receipt;
+    await assert.rejects(
+      publishPrAgentReview({
+        ...context,
+        diagnostic,
+        raw: '{"key_issues_to_review":[]}',
+        request: async (...args) => {
+          if (calls++ === index) throw new Error("PRIVATE_ERROR_SENTINEL");
+          return original.request(...args);
+        },
+      }).then((value) => {
+        receipt = value;
+      }),
+    );
+    assert.equal(receipt, undefined);
+    assert.equal(diagnostic.stage, stage);
+    assert.doesNotMatch(
+      JSON.stringify(
+        publicationFailure(diagnostic, new Error("PRIVATE_ERROR_SENTINEL")),
+      ),
+      /PRIVATE/,
+    );
+  }
+  const diagnostic = {};
+  await assert.rejects(
+    publishPrAgentReview({
+      ...context,
+      raw,
+      diagnostic,
+      ...api({ wrongHead: true }),
+    }),
+  );
+  assert.deepEqual(
+    publicationFailure(diagnostic, new Error("PRIVATE_ERROR_SENTINEL")),
+    { stage: "verify", category: "verification" },
+  );
+});
+
+test("the CLI reports output-write failure without producing a receipt or leaking its path", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "pr-agent-output-"));
+  const eventPath = join(directory, "event.json");
+  const outputPath = join(directory, "PRIVATE_PATH_SENTINEL", "output");
+  await writeFile(
+    eventPath,
+    JSON.stringify({ pull_request: { number: 42, head: { sha: head } } }),
+  );
+  const env = {
+    GITHUB_EVENT_PATH: eventPath,
+    GITHUB_OUTPUT: outputPath,
+    GITHUB_REPOSITORY: "org/repo",
+    GITHUB_RUN_ID: "123",
+    GITHUB_RUN_ATTEMPT: "1",
+    PR_AGENT_REVIEW: '{"key_issues_to_review":[]}',
+  };
+  const previous = Object.fromEntries(
+    Object.keys(env).map((key) => [key, process.env[key]]),
+  );
+  const exitCode = process.exitCode;
+  t.after(async () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    process.exitCode = exitCode;
+    await rm(directory, { recursive: true, force: true });
+  });
+  Object.assign(process.env, env);
+  const logs = [];
+  t.mock.method(console, "error", (...args) => logs.push(args));
+  await runPrAgentPublisher(api().request);
+  assert.equal(process.exitCode, 1);
+  assert.deepEqual(logs, [
+    [
+      "PR-Agent publication failed",
+      '{"stage":"output-write","category":"output"}',
+    ],
+  ]);
+  await assert.rejects(readFile(outputPath), { code: "ENOENT" });
 });

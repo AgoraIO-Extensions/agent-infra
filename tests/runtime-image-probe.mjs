@@ -587,6 +587,8 @@ function deployment(origin, directory) {
 		OPENAI_API_KEY: "synthetic-personal-credential",
 		OPENAI_BASE_URL: "http://127.0.0.1:1/forbidden",
 		AGENT_INFRA_RUNTIME_DRIVER: "codex",
+		AGENT_INFRA_RUNTIME_INSTALLED_SKILL:
+			process.env.AGENT_INFRA_RUNTIME_INSTALLED_SKILL,
 		AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
 		AGENT_INFRA_RUNTIME_WORKER_ID: runtimeProbeWorkerId,
 		AGENT_INFRA_RUNTIME_DATA_DIR: directory,
