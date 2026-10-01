@@ -294,6 +294,106 @@ function alterOriginalFacts(change: (state: MetadataState) => void) {
 	});
 }
 
+describe("Codex production status selector (controlled behavior only)", () => {
+	it("projects only the original status with one read and no business writes", async () => {
+		const f = await fixture();
+		const before = await readFile(f.path);
+		f.transport.status = { type: "idle" };
+		await expect(
+			f.driver.readNativeMetadataV1("status", f.read),
+		).resolves.toEqual({
+			selector: "status",
+			status: "idle",
+			readAt: expect.any(String),
+		});
+		expect(f.transport.requests.map((request) => request.method)).toEqual([
+			"initialize",
+			"config/read",
+			"model/list",
+			"thread/read",
+		]);
+		expect(f.transport.requests.at(-1)?.params).toEqual({
+			threadId: f.transport.threadId,
+			includeTurns: false,
+		});
+		expect(await readFile(f.path)).toEqual(before);
+	});
+
+	it.each(["commands", "skills"] as const)(
+		"keeps the later %s selector unavailable without native calls",
+		async (selector) => {
+			const f = await fixture();
+			await expect(
+				f.driver.readNativeMetadataV1(selector, f.read),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(f.transport.openCount).toBe(0);
+			expect(f.transport.requests).toEqual([]);
+		},
+	);
+
+	it.each(["remote policy", "original config", "original runtime", "abort"])(
+		"revalidates %s at the concrete return boundary and rejects late results",
+		async (kind) => {
+			const f = await fixture();
+			let projected = false;
+			f.transport.status = {
+				get type() {
+					projected = true;
+					return "idle";
+				},
+			};
+			const held = Promise.withResolvers<typeof f.binding>();
+			let finalChecks = 0;
+			let reached = false;
+			f.read.revalidate = async () => {
+				// The inner status reader has already confirmed its parsed result.
+				if (projected && ++finalChecks === 2) {
+					reached = true;
+					return held.promise;
+				}
+				return f.binding;
+			};
+			const query = f.driver.readNativeMetadataV1("status", f.read);
+			let settled = false;
+			void query.then(
+				() => {
+					settled = true;
+				},
+				() => {
+					settled = true;
+				},
+			);
+			const rejected = expect(query).rejects.toMatchObject({
+				code: kind.startsWith("original")
+					? "RUNTIME_CODEX_UNAVAILABLE"
+					: "RUNTIME_GRANT_INVALID",
+			});
+			await vi.waitFor(() => expect(reached).toBe(true));
+			await flushFrames();
+			expect(settled).toBe(false);
+			const requests = [...f.transport.requests];
+			if (kind.startsWith("original"))
+				alterOriginalFacts((state) => {
+					const operation = Object.values(state.operations)[0];
+					const session = Object.values(state.sessions)[0];
+					if (kind === "original config" && operation)
+						delete operation.configVersion;
+					if (kind === "original runtime" && session)
+						delete session.requiredRuntime;
+				});
+			if (kind === "abort") f.abort.abort();
+			held.resolve(
+				kind === "remote policy"
+					? { ...f.binding, principal: { kind: "user", id: "other-reader" } }
+					: f.binding,
+			);
+			await rejected;
+			await flushFrames();
+			expect(f.transport.requests).toEqual(requests);
+		},
+	);
+});
+
 describe("Codex metadata async current confirmation (controlled behavior only)", () => {
 	it.each([
 		"missing config",

@@ -4,6 +4,10 @@ import { lstat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type {
+	NativeMetadataProjectionV1,
+	NativeMetadataSelectorV1,
+} from "@agent-infra/contracts";
+import type {
 	RuntimeCapabilitiesV1,
 	RuntimeConnectionAssociationV1,
 	RuntimeDriverOperationRecordV1,
@@ -4380,6 +4384,23 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		await metadataRead.revalidate();
 		return result;
+	}
+
+	async readNativeMetadataV1(
+		selector: NativeMetadataSelectorV1,
+		read: CodexNativeCommandReadContext,
+	): Promise<NativeMetadataProjectionV1> {
+		// Commands and Skills join this production chain in their later slices.
+		if (selector !== "status") unavailable();
+		const binding = this.nativeCommandBinding(read);
+		const metadataRead = this.nativeMetadataRead(read, binding);
+		const status = await this.readBoundNativeStatus(
+			read,
+			binding,
+			metadataRead,
+		);
+		await metadataRead.revalidate();
+		return { selector, ...status };
 	}
 
 	async discoverNativeCommands(read: CodexNativeCommandReadContext) {
