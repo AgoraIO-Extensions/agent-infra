@@ -9,11 +9,12 @@ import type {
 	ListAgentsV2Errors,
 	ListAgentsV2Responses,
 } from "../../pilot/generated-v2/types.gen.js";
+import {
+	type CollectionReadUnavailable,
+	collectionReadFailure,
+} from "../collection-read-failure.js";
 
-type UnavailableState = {
-	kind: "unavailable";
-	retryable: boolean;
-};
+type UnavailableState = CollectionReadUnavailable;
 
 export type AgentDiscoveryState =
 	| {
@@ -60,18 +61,24 @@ const agentPageSchema =
 		"application/json"
 	].schema;
 
-function unavailable(error: { retryable?: boolean } | undefined) {
+function unavailable(
+	error:
+		| { retryable?: boolean; reason?: CollectionReadUnavailable["reason"] }
+		| undefined,
+) {
 	if (error?.retryable !== false) throw retryableError();
 
 	return {
 		kind: "unavailable" as const,
 		retryable: false,
+		...(error?.reason ? { reason: error.reason } : {}),
 	};
 }
 
 export async function loadAgentDiscovery(
 	client?: Client,
 	scope: AgentDiscoveryScope = "visible",
+	signal?: AbortSignal,
 ): Promise<AgentDiscoveryState> {
 	const agents: AgentProjectionV2[] = [];
 	const cursors = new Set<string>();
@@ -79,6 +86,7 @@ export async function loadAgentDiscovery(
 	let pages = 0;
 
 	do {
+		signal?.throwIfAborted();
 		if (pages >= maximumAgentDiscoveryPages) throw retryableError();
 		pages += 1;
 		const query: ListAgentsV2Data["query"] = {
@@ -90,12 +98,15 @@ export async function loadAgentDiscovery(
 		> = await listAgentsV2<false>({
 			client,
 			query,
+			signal,
 			responseStyle: "fields",
 			throwOnError: false,
 		});
-		if (result.response?.status !== 200) return unavailable(result.error);
+		signal?.throwIfAborted();
+		const status = result.response?.status;
+		if (status !== 200) return unavailable(collectionReadFailure(status));
 		if (!result.data || !agentPageSchema.safeParse(result.data).success)
-			return unavailable({ retryable: false });
+			return unavailable({ retryable: false, reason: "invalid-response" });
 
 		agents.push(...result.data.items);
 		cursor = result.data.nextCursor;

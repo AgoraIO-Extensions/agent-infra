@@ -1,11 +1,14 @@
-import { useBrowserSession } from "../use-browser-session.js";
+import { useApplicationSession } from "../application-shell.js";
 import { AdminAgentApplicationsScreen } from "./admin-agent-applications-screen.js";
 import { useAgentApplicationDecision } from "./use-agent-application-decision.js";
 import { usePendingAgentApplications } from "./use-pending-agent-applications.js";
 
 export function AdminAgentApplicationsWorkflow() {
-	const session = useBrowserSession();
-	const applications = usePendingAgentApplications();
+	const { identityKey, session } = useApplicationSession();
+	const applications = usePendingAgentApplications({
+		identityKey,
+		enabled: session.user.roles.includes("system_admin"),
+	});
 	const decision = useAgentApplicationDecision();
 
 	return (
@@ -16,7 +19,7 @@ export function AdminAgentApplicationsWorkflow() {
 				decision.mutate(applicationId, nextDecision)
 			}
 			pendingDecision={decision.isPending ? decision.variables : undefined}
-			session={session.state}
+			session={{ kind: "ready", session }}
 			state={applications.state}
 			onRetry={() => void applications.refetch()}
 			retrying={applications.isFetching}

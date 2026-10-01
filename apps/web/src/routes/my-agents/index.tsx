@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { isRetryableAgentDiscoveryError } from "../../features/agent-discovery/agent-discovery.js";
 import { useAgentDiscovery } from "../../features/agent-discovery/use-agent-discovery.js";
+import { useApplicationSession } from "../../features/application-shell.js";
 import { isRetryableMyAgentApplicationError } from "../../features/my-agents/my-agent-applications.js";
 import { MyAgentsScreen } from "../../features/my-agents/my-agents-screen.js";
 import { useMyAgentApplications } from "../../features/my-agents/use-my-agent-applications.js";
@@ -10,8 +11,9 @@ export const Route = createFileRoute("/my-agents/")({
 });
 
 function MyAgentsRoute() {
-	const query = useMyAgentApplications();
-	const owned = useAgentDiscovery("owner");
+	const { identityKey } = useApplicationSession();
+	const query = useMyAgentApplications({ identityKey });
+	const owned = useAgentDiscovery({ identityKey, scope: "owner" });
 	const applicationsRetryable = query.isError
 		? isRetryableMyAgentApplicationError(query.error)
 		: query.data?.kind === "unavailable" && query.data.retryable;

@@ -5,7 +5,10 @@ import {
 	agentDiscoveryQueryMaxLength,
 } from "../../features/agent-discovery/agent-discovery-screen.js";
 import { useAgentDiscovery } from "../../features/agent-discovery/use-agent-discovery.js";
-import { safeDeploymentUrl } from "../../features/application-shell.js";
+import {
+	safeDeploymentUrl,
+	useApplicationSession,
+} from "../../features/application-shell.js";
 
 export const Route = createFileRoute("/agents/")({
 	validateSearch: (
@@ -24,7 +27,8 @@ export const Route = createFileRoute("/agents/")({
 function AgentsRoute() {
 	const { q, mode } = Route.useSearch();
 	const navigate = Route.useNavigate();
-	const query = useAgentDiscovery();
+	const { identityKey } = useApplicationSession();
+	const query = useAgentDiscovery({ identityKey });
 	const retryable = query.isError
 		? isRetryableAgentDiscoveryError(query.error)
 		: query.data?.kind === "unavailable" && query.data.retryable;

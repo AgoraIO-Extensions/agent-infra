@@ -98,6 +98,32 @@ function createApplicationClient(
 }
 
 describe("My Agents generated-client consumer", () => {
+	it("discards the complete applicant collection when a later HTTP page has an invalid projection", async () => {
+		const requests: string[] = [];
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async (request) => {
+				requests.push(new Request(request).url);
+				return Response.json({
+					items:
+						requests.length === 1
+							? [pendingApplication]
+							: [{ ...creatingApplication, status: "private-invalid-state" }],
+					nextCursor: requests.length === 1 ? "opaque-application/+?=" : null,
+				});
+			},
+		});
+		await expect(loadMyAgentApplications(client)).resolves.toEqual({
+			kind: "unavailable",
+			retryable: false,
+			reason: "invalid-response",
+		});
+		expect(requests).toEqual([
+			"https://platform.example.test/api/v2/agent-applications",
+			"https://platform.example.test/api/v2/agent-applications?cursor=opaque-application%2F%2B%3F%3D",
+		]);
+	});
+
 	it("maps only server-projected editable application states to UI actions", () => {
 		expect(getAgentApplicationEditAction(pendingApplication)).toBe("edit");
 		expect(
@@ -391,6 +417,7 @@ describe("My Agents generated-client consumer", () => {
 			).resolves.toEqual({
 				kind: "unavailable",
 				retryable: false,
+				reason: status === 403 ? "denied" : "not-found",
 			});
 		}
 	});
