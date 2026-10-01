@@ -73,7 +73,8 @@ export class PostgresWecomChannelV1
 	implements WecomChannelStorePortV1, WecomDeliveryStorePortV1
 {
 	readonly #sql: ReturnType<typeof postgres>;
-	readonly #cancelSql: ReturnType<typeof postgres>;
+	readonly #databaseUrl: string;
+	readonly #cancelSettlements = new Set<Promise<void>>();
 	readonly #management: PostgresAgentManagementTransactionV1;
 	readonly #connectionHolderId: string | null;
 	readonly #observe: (status: WecomDeliveryStatusV1) => void;
@@ -91,19 +92,17 @@ export class PostgresWecomChannelV1
 			}
 		};
 		this.#sql = postgres(options.databaseUrl, { max: 5 });
-		this.#cancelSql = postgres(options.databaseUrl, {
-			max: 1,
-			connect_timeout: 1,
-			connection: { statement_timeout: 1000 },
-		});
+		this.#databaseUrl = options.databaseUrl;
 		this.#management = new PostgresAgentManagementTransactionV1(options);
 	}
 	async close() {
-		await Promise.all([
+		const pools = await Promise.allSettled([
 			this.#sql.end(),
-			this.#cancelSql.end(),
 			this.#management.close(),
 		]);
+		const cancellations = await Promise.allSettled(this.#cancelSettlements);
+		for (const result of [...pools, ...cancellations])
+			if (result.status === "rejected") throw result.reason;
 	}
 	async readAuthorityState(agentId: string) {
 		const management = await this.#management.resolveAgentAccessState(agentId);
@@ -153,6 +152,11 @@ export class PostgresWecomChannelV1
 			? AbortSignal.any([callerSignal, deadline])
 			: deadline;
 		signal.throwIfAborted();
+		const cancelSql = postgres(this.#databaseUrl, {
+			max: 1,
+			connect_timeout: 1,
+			connection: { statement_timeout: 1000 },
+		});
 		let backendPid: number | undefined;
 		let transactionStartedAt: string | undefined;
 		let cancellation: Promise<void> | undefined;
@@ -163,8 +167,7 @@ export class PostgresWecomChannelV1
 			cancellation = (async () => {
 				while (!transactionSettled) {
 					if (backendPid !== undefined && transactionStartedAt !== undefined)
-						await this
-							.#cancelSql`select pg_cancel_backend(pid) from pg_stat_activity where pid=${backendPid} and xact_start::text=${transactionStartedAt} and state='active' and lower(query) not like 'rollback%'`.catch(
+						await cancelSql`select pg_cancel_backend(pid) from pg_stat_activity where pid=${backendPid} and xact_start::text=${transactionStartedAt} and state='active' and lower(query) not like 'rollback%'`.catch(
 							() => undefined,
 						);
 					if (!transactionSettled)
@@ -335,15 +338,31 @@ export class PostgresWecomChannelV1
 				receipt: { receiptId: plan.eventKey, ...result },
 			} as const);
 		});
+		const finishCancellation = async () => {
+			transactionSettled = true;
+			signal.removeEventListener("abort", cancelOriginalTransaction);
+			try {
+				await cancelSql.end({ timeout: 1 });
+			} finally {
+				await cancellation;
+			}
+		};
+		const cancellationSettled = committed.then(
+			finishCancellation,
+			finishCancellation,
+		);
+		this.#cancelSettlements.add(cancellationSettled);
 		try {
 			return (await committed).value;
 		} catch (error) {
 			if (signal.aborted) throw new TaskAuthorizationStoreError();
 			throw error;
 		} finally {
-			transactionSettled = true;
-			signal.removeEventListener("abort", cancelOriginalTransaction);
-			await cancellation;
+			try {
+				await cancellationSettled;
+			} finally {
+				this.#cancelSettlements.delete(cancellationSettled);
+			}
 		}
 	}
 	async claim(): Promise<WecomDeliveryClaimV1 | null> {
