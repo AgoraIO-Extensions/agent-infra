@@ -105,6 +105,7 @@ export interface CodexModelTurnAdmission {
 interface ActiveTurnRequest {
 	readonly terminate: () => void;
 	readonly completion: Promise<void>;
+	readonly drain: Promise<void>;
 }
 
 interface ModelTurnSelection {
@@ -1084,6 +1085,8 @@ export async function openCodexModelTransport(
 	const boundThreads = new Set<string>();
 	const active = new Set<ActiveTurnRequest>();
 	const activeTurns = new Map<string, Set<ActiveTurnRequest>>();
+	// A failed durable outcome or native response cannot yield a drain receipt.
+	const failedDrains = new Set<string>();
 	const admittedTurns = new Map<string, ModelTurnSelection>();
 	// Explicit cancellation is final for this transport's lifetime; abandoning a
 	// provisional capability alone must not prevent validated running recovery.
@@ -1342,12 +1345,13 @@ export async function openCodexModelTransport(
 		const completion = new Promise<void>((resolve) => {
 			completeRequest = resolve;
 		});
+		const drained = Promise.withResolvers<void>();
 		const terminate = () => {
 			controller.abort();
 			request.destroy();
 			if (!response.destroyed && !response.writableEnded) response.destroy();
 		};
-		const activeTurn = { terminate, completion };
+		const activeTurn = { terminate, completion, drain: drained.promise };
 		active.add(activeTurn);
 		const turnRequests = activeTurns.get(turnKey) ?? new Set();
 		turnRequests.add(activeTurn);
@@ -1359,6 +1363,7 @@ export async function openCodexModelTransport(
 		let startedPersistence: Promise<void> | undefined;
 		let upstreamResult: Promise<{ value: Response | undefined }> | undefined;
 		let startedAt: number | undefined;
+		let responseFailed = false;
 		let outcomeReported = false;
 		let outcomeReport: Promise<void> | undefined;
 		const recordOutcome = async (outcome: CodexModelRequestOutcome) => {
@@ -1545,10 +1550,10 @@ export async function openCodexModelTransport(
 				modelOnly,
 			);
 		} catch {
+			responseFailed = outcomeReported || outcomeReport !== undefined;
 			const interrupted = controller.signal.aborted;
 			controller.abort();
-			// started() can fail while fetch is already running. Join its abort and
-			// release any received body before reporting this request drained.
+			// Cleanup stays bounded; the original fetch remains owned by drain below.
 			const received = upstreamResult
 				? await awaitPersistence(upstreamResult).catch(() => undefined)
 				: undefined;
@@ -1567,12 +1572,22 @@ export async function openCodexModelTransport(
 			if (outcomeReported) await failStream(response);
 			else response.destroy();
 		} finally {
+			// A timed-out cleanup cannot certify drain. Retain the original request
+			// and durable write until they settle, without blocking cancel/close.
+			if (journalPromise && (!outcomeReported || responseFailed))
+				failedDrains.add(turnKey);
 			request.off("aborted", terminate);
 			response.off("close", terminate);
 			active.delete(activeTurn);
-			turnRequests.delete(activeTurn);
-			if (turnRequests.size === 0) activeTurns.delete(turnKey);
 			completeRequest?.();
+			void (async () => {
+				const received = upstreamResult ? await upstreamResult : undefined;
+				await received?.value?.body?.cancel().catch(() => {});
+				await outcomeReport?.catch(() => {});
+				turnRequests.delete(activeTurn);
+				if (turnRequests.size === 0) activeTurns.delete(turnKey);
+				drained.resolve();
+			})();
 		}
 	});
 	server.requestTimeout = requestTimeoutMs;
@@ -1752,6 +1767,15 @@ export async function openCodexModelTransport(
 		},
 		revokeTurn: (turn: CodexModelTurn) => {
 			revokeTurn(nativeTurnKey(turn));
+		},
+		// Native terminal is not itself evidence that the provider handler drained.
+		drainTurn: async (turn: CodexModelTurn) => {
+			const key = nativeTurnKey(turn);
+			revokeTurn(key);
+			const requests = [...(activeTurns.get(key) ?? [])];
+			await Promise.all(requests.map(({ completion }) => completion));
+			if (failedDrains.has(key)) throw new Error("RUNTIME_MODEL_DRAIN_FAILED");
+			await Promise.all(requests.map(({ drain }) => drain));
 		},
 		cancelTurn: async (turn: CodexModelTurn) => {
 			const key = nativeTurnKey(turn);
