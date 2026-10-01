@@ -51,6 +51,75 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      - name: Validate real observability Collector and PostgreSQL
+        id: observability
+        timeout-minutes: 10
+        env:
+          AO_SESSION_ID: observability-${{ github.run_id }}-${{ github.run_attempt }}
+          DOCKER_HOST: unix:///var/run/docker.sock
+          OBSERVABILITY_DOCKER_MODE: hosted-linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset DOCKER_CONTEXT COLIMA_PROFILE
+          evidence="$RUNNER_TEMP/observability"
+          mkdir -p "$evidence"
+          cleanup() {
+            status=$?
+            trap - EXIT
+            docker ps --all --quiet --filter "label=ao.session=$AO_SESSION_ID" > "$evidence/remaining-before.ids" || status=1
+            if [[ -s "$evidence/remaining-before.ids" ]]; then
+              if (( status == 0 )); then status=1; fi
+              xargs -r docker rm --force --volumes < "$evidence/remaining-before.ids" > "$evidence/cleanup.log" 2>&1 || status=1
+            fi
+            docker ps --all --quiet --filter "label=ao.session=$AO_SESSION_ID" > "$evidence/remaining-after.ids" || status=1
+            if [[ -s "$evidence/remaining-after.ids" ]]; then status=1; fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          test "$(git rev-parse HEAD)" = "$SCAN_COMMIT"
+          printf '%s\n' "$SCAN_COMMIT" > "$evidence/source.txt"
+          docker info --format '{{json .}}' > "$evidence/daemon.json"
+          docker_root=$(jq -r '.DockerRootDir // empty' "$evidence/daemon.json")
+          test -n "$docker_root"
+          test -d "$docker_root"
+          df -Pk "$docker_root" > "$evidence/capacity-before.txt"
+          available_kib=$(awk 'NR==2 {print $4}' "$evidence/capacity-before.txt")
+          (( available_kib >= 5242880 ))
+          docker pull otel/opentelemetry-collector-contrib:0.133.0 > "$evidence/collector-pull.log" 2>&1
+          docker pull postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416 > "$evidence/postgres-pull.log" 2>&1
+          docker image inspect otel/opentelemetry-collector-contrib:0.133.0 postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416 > "$evidence/images.json"
+          df -Pk "$docker_root" > "$evidence/capacity-after-provision.txt"
+          available_kib=$(awk 'NR==2 {print $4}' "$evidence/capacity-after-provision.txt")
+          (( available_kib >= 5242880 ))
+          pnpm exec tsc -p tests/observability/tsconfig.json --noEmit
+          OBSERVABILITY_EVIDENCE="$evidence/platform-api-resources.json" pnpm exec vitest run tests/observability/platform-api-resources.test.ts --maxWorkers=1 --no-file-parallelism --cache=false --reporter=json --outputFile="$evidence/platform-api-resources.result.json" > "$evidence/platform-api-resources.log" 2>&1
+          OBSERVABILITY_EVIDENCE="$evidence/collector.json" pnpm exec vitest run tests/observability/collector.test.ts --maxWorkers=1 --no-file-parallelism --cache=false --reporter=json --outputFile="$evidence/collector.result.json" > "$evidence/collector.log" 2>&1
+          node --input-type=module - "$evidence" "$SCAN_COMMIT" <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const [directory, head] = process.argv.slice(2);
+          for (const name of ['platform-api-resources', 'collector']) {
+            const result = JSON.parse(readFileSync(`${directory}/${name}.result.json`, 'utf8'));
+            assert.equal(result.success, true);
+            assert.equal(result.numTotalTests, 1);
+            assert.equal(result.numPassedTests, 1);
+            assert.equal(result.numPendingTests, 0);
+            const receipt = JSON.parse(readFileSync(`${directory}/${name}.json`, 'utf8'));
+            assert.equal(receipt.sourceSha, head);
+            assert.match(receipt.collectorImageId, /^sha256:[a-f0-9]{64}$/);
+          }
+          NODE
+
+      - name: Preserve observability acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: observability-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/observability
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Build pinned Codex native test environment
         run: >-
           docker build --target builder -f apps/agent-runtime-host/Dockerfile
