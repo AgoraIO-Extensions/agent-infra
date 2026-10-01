@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      issues: read
       pull-requests: read
     steps:
       - name: Checkout trusted default branch
@@ -34,6 +35,17 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Prepare complete primary Issue input
+        id: primary-issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/pr-agent-primary-issue.mjs
 
       - name: Review pull request
         id: pr-agent
@@ -47,6 +59,9 @@ jobs:
           config.model: ${{ secrets.PR_AGENT_MODEL }}
           config.propagate_tool_errors: "true"
           config.publish_output: "false"
+          config.log_level: INFO
+          config.verbosity_level: "0"
+          related_tickets: ${{ steps.primary-issue.outputs.related_tickets }}
           github_action_config.enable_output: "true"
           pr_reviewer.persistent_comment: "false"
           pr_reviewer.persistent_finding_state: "false"
