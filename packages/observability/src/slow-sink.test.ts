@@ -224,19 +224,16 @@ it("lets a child using the real package exit naturally after a slow export", asy
 		});
 	});
 	const result = await exit;
-	expect(result).toMatchObject({ code: 0, signal: null });
-	expect(Buffer.concat(stdout).toString("utf8")).toContain(
-		"CHILD_BUSINESS_COMPLETE",
-	);
-	expect(Buffer.concat(stdout).toString("utf8")).toContain(
-		"CHILD_TELEMETRY_CLOSED",
-	);
-	expect(Buffer.concat(stdout).toString("utf8")).toContain(
-		"CHILD_NO_OTEL_HANDLES",
-	);
-	expect(Buffer.concat(stderr).toString("utf8")).not.toContain(
-		"PRIVATE_SENTINEL",
-	);
+	const childStdout = Buffer.concat(stdout).toString("utf8");
+	const childStderr = Buffer.concat(stderr).toString("utf8");
+	expect(
+		result,
+		`child stdout: ${childStdout}\nchild stderr: ${childStderr}`,
+	).toMatchObject({ code: 0, signal: null });
+	expect(childStdout).toContain("CHILD_BUSINESS_COMPLETE");
+	expect(childStdout).toContain("CHILD_TELEMETRY_CLOSED");
+	expect(childStdout).toContain("CHILD_NO_OTEL_HANDLES");
+	expect(childStderr).not.toContain("PRIVATE_SENTINEL");
 	await waitFor(() =>
 		traceRequests(collector.requests).some((request) =>
 			request.body.toString("utf8").includes("child-natural-exit"),
