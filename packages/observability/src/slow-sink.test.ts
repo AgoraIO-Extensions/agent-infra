@@ -27,8 +27,9 @@ afterEach(async () => {
 	);
 });
 
-async function createSlowCollector() {
+async function createSlowCollector(options: { responseDelayMs?: number } = {}) {
 	const requests: RequestRecord[] = [];
+	const responseTimers = new Set<ReturnType<typeof setTimeout>>();
 	const sockets = new Set<Socket>();
 	const pending: Array<{ response: import("node:http").ServerResponse }> = [];
 	const server = createServer((request, response) => {
@@ -40,6 +41,16 @@ async function createSlowCollector() {
 				body: Buffer.concat(chunks),
 			});
 			pending.push({ response });
+			if (options.responseDelayMs !== undefined) {
+				const timer = setTimeout(() => {
+					responseTimers.delete(timer);
+					if (!response.destroyed) {
+						response.writeHead(200);
+						response.end();
+					}
+				}, options.responseDelayMs);
+				responseTimers.add(timer);
+			}
 		});
 	});
 	server.on("connection", (socket) => {
@@ -56,6 +67,8 @@ async function createSlowCollector() {
 		endpoint: `http://127.0.0.1:${address.port}`,
 		requests,
 		async close() {
+			for (const timer of responseTimers) clearTimeout(timer);
+			responseTimers.clear();
 			for (const { response } of pending) response.destroy();
 			for (const socket of sockets) socket.destroy();
 			if (server.listening)
@@ -98,7 +111,7 @@ it("bounds real trace export under a slow OTLP sink and closes within five secon
 	activeTelemetry.push(telemetry);
 	const markers = Array.from(
 		{ length: TRACE_RECORDS },
-		(_, index) => `queue-${index}`,
+		(_, index) => `queue-${String(index).padStart(4, "0")}`,
 	);
 	for (const operationRef of markers) {
 		telemetry.record({
@@ -153,6 +166,46 @@ it("bounds real trace export under a slow OTLP sink and closes within five secon
 		"PRIVATE_SENTINEL",
 	);
 }, 20_000);
+
+it("shows bounded trace queue pressure when a slow sink eventually responds", async () => {
+	const collector = await createSlowCollector({ responseDelayMs: 100 });
+	activeCollectors.push(collector);
+	const telemetry = startObservability({
+		service: "platform-worker",
+		otlpEndpoint: collector.endpoint,
+		metricIntervalMs: 1000,
+		output: new Writable({
+			write(_chunk, _encoding, done) {
+				done();
+			},
+		}),
+	});
+	activeTelemetry.push(telemetry);
+	const markers = Array.from(
+		{ length: TRACE_RECORDS },
+		(_, index) => `queue-${String(index).padStart(4, "0")}`,
+	);
+	for (const operationRef of markers)
+		telemetry.record({ stage: "worker", outcome: "completed", operationRef });
+	expect(markers.length).toBeGreaterThan(TRACE_QUEUE_SIZE);
+	const expectedBatches = Math.ceil(
+		(TRACE_QUEUE_SIZE + TRACE_BATCH_SIZE) / TRACE_BATCH_SIZE,
+	);
+	await waitFor(
+		() => traceRequests(collector.requests).length >= expectedBatches,
+		6000,
+	);
+	const received = markers.filter((marker) =>
+		traceRequests(collector.requests).some((request) =>
+			request.body.toString("utf8").includes(marker),
+		),
+	).length;
+	expect(received).toBeGreaterThan(0);
+	expect(received).toBeLessThan(markers.length);
+	expect(received).toBeLessThanOrEqual(TRACE_QUEUE_SIZE + TRACE_BATCH_SIZE);
+	expectNoSentinel(collector.requests);
+	await telemetry.close();
+}, 15_000);
 
 it("lets a child using the real package exit naturally after a slow export", async () => {
 	const collector = await createSlowCollector();
