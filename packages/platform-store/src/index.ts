@@ -104,6 +104,7 @@ export {
 	type PostgresPersonalApiCredentialOptionsV1,
 	PostgresPersonalApiCredentialStoreV1,
 } from "./personal-api-credentials.ts";
+export { PostgresPersonalRelayKeyStoreV1 } from "./personal-relay-key.ts";
 export {
 	PostgresScopedPlatformAuditQueryV1,
 	type ScopedPlatformAuditPageV1,
