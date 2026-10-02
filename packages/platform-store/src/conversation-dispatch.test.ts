@@ -284,7 +284,7 @@ async function seed(
 				${client.json({ purpose, subjectId, keyId, keyVersion: 1 })})
 			on conflict (purpose, subject_id, key_version) do nothing`;
 		await client`insert into platform.task_authorization_records(id, execution_id, boundary)
-			values (${`authorization:${executionId}`}, ${executionId}, ${client.json({
+			values (${`authorization-${executionId}`}, ${executionId}, ${client.json({
 				schemaVersion: 1,
 				principal: {
 					kind: channel === "api:application" ? "application" : "user",
@@ -298,7 +298,7 @@ async function seed(
 					channel === "web"
 						? [{ kind: "user", userId: "actor-dispatch" }]
 						: [{ kind: "api-use", useGrantRevision: "use-dispatch" }],
-			})})`;
+			})}) on conflict (execution_id) do nothing`;
 		await client`update platform.conversation_executions set
 			execution_source=${channel === "web" ? "web" : "platform-api"},
 			relay_key_purpose=${purpose}, relay_key_subject_id=${subjectId},
@@ -3290,7 +3290,7 @@ async function acceptedKeyWork(
 		execution_source=${source}, relay_key_purpose=${purpose}, relay_key_subject_id=${subjectId},
 		relay_key_id=${persistedKey.key_id}, relay_key_version=1 where execution_id=${work.executionId}`;
 	await client`insert into platform.task_authorization_records(id, execution_id, boundary)
-  values (${`authorization:${work.executionId}`}, ${work.executionId}, ${client.json(
+  values (${`authorization-${work.executionId}`}, ${work.executionId}, ${client.json(
 		{
 			schemaVersion: 1,
 			principal: { kind, id: "actor-dispatch" },
