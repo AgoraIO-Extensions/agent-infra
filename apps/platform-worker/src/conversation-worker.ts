@@ -18,7 +18,11 @@ import {
 export interface PlatformConversationWorkerOptionsV2
 	extends Omit<
 		ConversationRuntimeOptionsV2,
-		"dispatchStore" | "taskAuthorizationStore" | "legacyControlStore"
+		| "dispatchStore"
+		| "taskAuthorizationStore"
+		| "legacyControlStore"
+		| "resolveCurrentApplication"
+		| "resolveCurrentApiUseGrant"
 	> {
 	readonly databaseUrl: string;
 	readonly pollIntervalMs?: number;
@@ -74,6 +78,24 @@ export function createPlatformConversationWorkerV2(
 			dispatchStore: store,
 			taskAuthorizationStore,
 			legacyControlStore,
+			resolveCurrentApplication: async (applicationId, agentId, signal) => {
+				signal.throwIfAborted();
+				const current = await taskAuthorizationStore.readCurrentApplication({
+					applicationId,
+					agentId,
+				});
+				signal.throwIfAborted();
+				return current;
+			},
+			resolveCurrentApiUseGrant: async (principal, agentId, signal) => {
+				signal.throwIfAborted();
+				const current = await taskAuthorizationStore.readCurrentApiUseGrant({
+					principal,
+					agentId,
+				});
+				signal.throwIfAborted();
+				return current;
+			},
 		});
 		dispatch = createConversationDispatchUseCaseV1(
 			{

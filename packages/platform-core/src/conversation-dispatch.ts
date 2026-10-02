@@ -547,6 +547,7 @@ export function createConversationDispatchUseCaseV1(
 			if (
 				authority.controlOnly &&
 				(claim.operation === "conversation.turn.supplement.v1" ||
+					claim.executionStatus === "waiting" ||
 					claim.executionStatus === "submitted" ||
 					(!executionTerminal(claim.executionStatus) &&
 						!dependencies.runtimeHost.recoverOriginalStatus))
@@ -580,7 +581,8 @@ export function createConversationDispatchUseCaseV1(
 					claim.operation === "conversation.turn.regenerate.v1");
 			if (
 				recoveringOriginalTurn &&
-				(claim.executionStatus === "submitted" ||
+				(claim.executionStatus === "waiting" ||
+					claim.executionStatus === "submitted" ||
 					(claim.hostSessionRef === null &&
 						!dependencies.runtimeHost.recoverOriginalStatus))
 			) {
