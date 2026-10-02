@@ -505,7 +505,7 @@ describe("functional conversation screen", () => {
 		);
 	});
 
-	it("clears private draft and timeline before a new identity read completes", async () => {
+	it("clears private roles and draft before a new identity read and rejects the previous private conversation", async () => {
 		let delayed = false;
 		const next = deferred<Response>();
 		const state = setup((request) => {
@@ -514,17 +514,29 @@ describe("functional conversation screen", () => {
 				return delayed
 					? next.promise
 					: Response.json({ ...agent, name: "Private Agent A" });
-			if (path === "/api/v2/conversations/conversation-1")
+			if (path === "/api/v2/conversations/conversation-1") {
+				if (delayed)
+					return Response.json(
+						PilotProtocolErrorV1Schema.parse({
+							schemaVersion: 1,
+							code: "AUTHORIZATION_REVOKED",
+							message: "Controlled current-subject denial",
+							retryable: false,
+							traceId: "controlled-identity-denial",
+						}),
+						{ status: 403 },
+					);
 				return Response.json(
 					history("conversation-1", [
 						{
 							...event(1),
 							payload: {
-								text: delayed ? "Current reply B" : "Private reply A",
+								text: "Private reply A",
 							},
 						},
 					]),
 				);
+			}
 			return undefined;
 		});
 		const input = await composer();
@@ -542,11 +554,11 @@ describe("functional conversation screen", () => {
 		await act(async () =>
 			next.resolve(Response.json({ ...agent, name: "Current Agent B" })),
 		);
-		expect((await composer()).value).toBe("");
-		const current = await screen.findByRole("article", {
-			name: "Current Agent B的消息",
-		});
-		await within(current).findByText("Current reply B");
+		await screen.findByText(/当前登录或访问权限已失效/);
+		expect(screen.queryByRole("textbox")).toBeNull();
+		expect(
+			screen.queryByRole("article", { name: "Current Agent B的消息" }),
+		).toBeNull();
 		expect(
 			screen.queryByRole("article", { name: "Private Agent A的消息" }),
 		).toBeNull();
