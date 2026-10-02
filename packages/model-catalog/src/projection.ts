@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
 	RuntimeModelConfigurationV3Schema,
+	RuntimeModelConfigurationV4Schema,
 	type RuntimeModelProtocolV1,
 	RuntimeModelProtocolV1Schema,
 } from "@agent-infra/contracts/runtime";
@@ -84,6 +85,25 @@ const projectionSchema = projectionContentSchema.extend({
 	fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
 });
 export type RuntimeModelProjectionV1 = z.infer<typeof projectionSchema>;
+const keylessProjectionContentSchema = projectionContentSchema.extend({
+	schemaVersion: z.literal(4),
+	standardTemplateBinding: templateBindingSchema,
+	options: z
+		.array(
+			z.strictObject({
+				optionId: modelIdentifier,
+				endpoint: ModelEndpointV1Schema,
+				modelId: modelIdentifier,
+				reasoningLevels: z.array(reasoningLevel).min(1).max(32),
+			}),
+		)
+		.min(1)
+		.max(128),
+});
+const keylessProjectionSchema = keylessProjectionContentSchema.extend({
+	fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export type RuntimeModelProjectionV4 = z.infer<typeof keylessProjectionSchema>;
 const hash = (value: string) =>
 	createHash("sha256").update(value).digest("hex");
 const credentialVariable = (optionId: string) =>
@@ -397,4 +417,213 @@ export function runtimeModelInjectionV1(value: RuntimeModelProjectionV1) {
 			})),
 		],
 	};
+}
+
+/** V4 admission resolves only catalog and Driver facts; no model Key is read. */
+export async function projectRuntimeModelConfigurationV4(input: {
+	readonly configuration: ModelProjectionConfiguration;
+	readonly catalog: ModelCatalogAdapterV1;
+	readonly standardTemplateBinding: StandardTemplateModelBindingV1;
+	readonly signal: AbortSignal;
+}): Promise<RuntimeModelProjectionV4> {
+	return modelOperationV1(input.signal, async () => {
+		const { configuration } = input;
+		const source = configuration.source;
+		const standardTemplateBinding = standardTemplateModelBindingV1(source, [
+			input.standardTemplateBinding,
+		]);
+		const model = configuration.modelConfiguration;
+		if (
+			source.kind !== "standard" ||
+			standardTemplateBinding.driver !== "codex" ||
+			standardTemplateBinding.protocol !== "openai-responses-v1" ||
+			!model ||
+			[...configuration.environment, ...configuration.secrets].some(
+				({ name }) =>
+					name.startsWith("AGENT_INFRA_") ||
+					source.platformManagedKeys.includes(name),
+			)
+		)
+			throw new ModelConfigurationErrorV1();
+		const options: RuntimeModelProjectionV4["options"] = [];
+		for (const option of model.options) {
+			input.signal.throwIfAborted();
+			const endpoint = ModelEndpointV1Schema.parse(
+				await input.catalog.resolve(
+					{
+						endpointId: option.endpointId,
+						catalogRevision: model.catalogRevision,
+					},
+					{ signal: input.signal },
+				),
+			);
+			if (
+				endpoint.endpointId !== option.endpointId ||
+				!endpoint.available ||
+				endpoint.protocol !== standardTemplateBinding.protocol ||
+				(endpoint.authentication !== undefined &&
+					endpoint.authentication !== "bearer")
+			)
+				throw new ModelConfigurationErrorV1();
+			options.push({
+				optionId: option.optionId,
+				endpoint,
+				modelId: option.modelId,
+				reasoningLevels: [...option.reasoningLevels],
+			});
+		}
+		const content = keylessProjectionContentSchema.parse({
+			schemaVersion: 4,
+			agentId: configuration.agentId,
+			configurationRevision: configuration.revision,
+			catalogRevision: model.catalogRevision,
+			defaultOptionId: model.defaultOptionId,
+			defaultReasoningLevel: model.defaultReasoningLevel,
+			standardTemplateBinding,
+			options,
+		});
+		return validateRuntimeModelProjectionV4(
+			{
+				...content,
+				fingerprint: hash(JSON.stringify(content)),
+			},
+			configuration,
+		);
+	});
+}
+
+export function validateRuntimeModelProjectionV4(
+	value: unknown,
+	configuration?: ModelProjectionConfiguration,
+): RuntimeModelProjectionV4 {
+	try {
+		const projection = keylessProjectionSchema.parse(value);
+		runtimeModelConfigurationV4(projection);
+		const { fingerprint, ...content } = projection;
+		if (
+			fingerprint !== hash(JSON.stringify(content)) ||
+			content.standardTemplateBinding.driver !== "codex" ||
+			content.standardTemplateBinding.protocol !== "openai-responses-v1" ||
+			new Set(content.options.map(({ optionId }) => optionId)).size !==
+				content.options.length ||
+			!content.options.some(
+				({ optionId, reasoningLevels }) =>
+					optionId === content.defaultOptionId &&
+					reasoningLevels.includes(content.defaultReasoningLevel),
+			) ||
+			content.options.some(
+				({ endpoint, modelId, reasoningLevels }) =>
+					!endpoint.available ||
+					endpoint.protocol !== content.standardTemplateBinding.protocol ||
+					(endpoint.authentication !== undefined &&
+						endpoint.authentication !== "bearer") ||
+					new Set(reasoningLevels).size !== reasoningLevels.length ||
+					reasoningLevels.some(
+						(level) => !endpoint.capabilities.reasoningLevels.includes(level),
+					) ||
+					(endpoint.allowedModels !== null &&
+						!endpoint.allowedModels.includes(modelId)),
+			)
+		)
+			throw new ModelConfigurationErrorV1();
+		if (configuration) {
+			const model = configuration.modelConfiguration;
+			if (
+				configuration.source.kind !== "standard" ||
+				!model ||
+				content.standardTemplateBinding.templateId !==
+					configuration.source.templateId ||
+				content.standardTemplateBinding.imageDigest !==
+					configuration.source.imageDigest ||
+				configuration.agentId !== content.agentId ||
+				configuration.revision !== content.configurationRevision ||
+				model.catalogRevision !== content.catalogRevision ||
+				model.defaultOptionId !== content.defaultOptionId ||
+				model.defaultReasoningLevel !== content.defaultReasoningLevel ||
+				!isDeepStrictEqual(
+					model.options.map(
+						({ optionId, endpointId, modelId, reasoningLevels }) => ({
+							optionId,
+							endpointId,
+							modelId,
+							reasoningLevels: [...reasoningLevels],
+						}),
+					),
+					content.options.map(
+						({ optionId, endpoint, modelId, reasoningLevels }) => ({
+							optionId,
+							endpointId: endpoint.endpointId,
+							modelId,
+							reasoningLevels,
+						}),
+					),
+				)
+			)
+				throw new ModelConfigurationErrorV1();
+		}
+		return projection;
+	} catch {
+		throw new ModelConfigurationErrorV1();
+	}
+}
+
+export async function revalidateRuntimeModelCatalogV4(
+	projection: RuntimeModelProjectionV4,
+	catalog: ModelCatalogAdapterV1,
+	signal: AbortSignal,
+): Promise<void> {
+	await modelOperationV1(signal, async () => {
+		for (const option of validateRuntimeModelProjectionV4(projection).options) {
+			const endpoint = await catalog.resolve(
+				{
+					endpointId: option.endpoint.endpointId,
+					catalogRevision: projection.catalogRevision,
+				},
+				{ signal },
+			);
+			if (!isDeepStrictEqual(endpoint, option.endpoint))
+				throw new ModelConfigurationErrorV1();
+		}
+	});
+}
+
+export function runtimeModelInjectionV4(value: RuntimeModelProjectionV4) {
+	const projection = validateRuntimeModelProjectionV4(value);
+	const secretName = `model-config-${projection.fingerprint.slice(0, 48)}`;
+	const configuration = JSON.stringify(runtimeModelConfigurationV4(projection));
+	return {
+		secretName,
+		configuration,
+		env: [
+			{
+				name: runtimeModelConfigurationVariableV1,
+				valueFrom: {
+					secretKeyRef: {
+						name: secretName,
+						key: "configuration",
+						optional: false,
+					},
+				},
+			},
+		],
+	};
+}
+
+function runtimeModelConfigurationV4(projection: RuntimeModelProjectionV4) {
+	return RuntimeModelConfigurationV4Schema.parse({
+		schemaVersion: 4,
+		configVersion: `configuration-${projection.configurationRevision}-${projection.fingerprint}`,
+		defaultModelOptionId: projection.defaultOptionId,
+		defaultReasoningLevel: projection.defaultReasoningLevel,
+		modelOptions: projection.options.map(
+			({ optionId, endpoint, modelId, reasoningLevels }) => ({
+				modelOptionId: optionId,
+				protocol: endpoint.protocol,
+				authentication: endpoint.authentication ?? "bearer",
+				endpoint: endpoint.baseUrl,
+				model: modelId,
+				reasoningLevels,
+			}),
+		),
+	});
 }

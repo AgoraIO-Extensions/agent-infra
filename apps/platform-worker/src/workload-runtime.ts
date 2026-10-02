@@ -14,10 +14,13 @@ import {
 	type ModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
 	projectRuntimeModelConfigurationV1,
+	projectRuntimeModelConfigurationV4,
 	revalidateRuntimeModelCatalogV1,
+	revalidateRuntimeModelCatalogV4,
 	type StandardTemplateModelBindingV1,
 	standardTemplateModelBindingV1,
 	validateRuntimeModelProjectionV1,
+	validateRuntimeModelProjectionV4,
 	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
 import {
@@ -53,6 +56,8 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly decryptor: SecretActivationDecryptorPortV1;
 	readonly modelCatalog?: ModelCatalogAdapterV1;
 	readonly modelAccess?: ModelAccessValidatorV1;
+	/** Explicit trusted deployment rollout for keyless Codex configurations. */
+	readonly runtimeModelVersion?: 4;
 	/** Trusted template/digest profiles; an explicit empty list supports custom Agents only. */
 	readonly templateModelBindings: readonly StandardTemplateModelBindingV1[];
 	readonly executionCapacityProfiles?: readonly WorkloadExecutionCapacityV1[];
@@ -219,7 +224,10 @@ function activeSecretFence(
 	return activationFence;
 }
 
-function expectedSecrets(state: WorkloadReconciliationStateV1): readonly {
+function expectedSecrets(
+	state: WorkloadReconciliationStateV1,
+	keylessModel = false,
+): readonly {
 	readonly secretId: string;
 	readonly version: number;
 	readonly name: string;
@@ -233,13 +241,15 @@ function expectedSecrets(state: WorkloadReconciliationStateV1): readonly {
 				version: secret.version,
 				name: secret.name,
 			})),
-		...(configuration.modelConfiguration?.options
-			.filter((option) => option.credential.isSet)
-			.map((option) => ({
-				secretId: option.credential.secretId,
-				version: option.credential.version,
-				name: `model:${option.optionId}`,
-			})) ?? []),
+		...(keylessModel
+			? []
+			: (configuration.modelConfiguration?.options
+					.filter((option) => option.credential.isSet)
+					.map((option) => ({
+						secretId: option.credential.secretId,
+						version: option.credential.version,
+						name: `model:${option.optionId}`,
+					})) ?? [])),
 	];
 }
 
@@ -298,9 +308,10 @@ function validateSecretDataKeys(
 function bindingsFor(
 	state: WorkloadReconciliationStateV1,
 	input: WorkloadReconciliationInputV1,
+	keylessModel = false,
 ): ResolvedWorkloadSecretBindingV1[] {
 	const configuration = state.candidate.configuration;
-	const expected = expectedSecrets(state);
+	const expected = expectedSecrets(state, keylessModel);
 	const bindings = (input.secrets?.bindings ?? []).map(
 		({ materialization, record }) => ({
 			materialization,
@@ -356,6 +367,31 @@ export function createWorkloadRuntimeV1(
 		WorkloadReconciliationStateV1,
 		Record<string, boolean>
 	>();
+	function candidateKeyless(
+		state: Pick<WorkloadReconciliationStateV1, "candidate">,
+	): boolean {
+		if (state.candidate.configuration.source.kind !== "standard") return false;
+		const projection = state.candidate.modelProjection;
+		if (
+			projection &&
+			typeof projection === "object" &&
+			"schemaVersion" in projection
+		)
+			return projection.schemaVersion === 4;
+		return options.runtimeModelVersion === 4;
+	}
+
+	function assertCandidateMaterializationAllowed(
+		state: WorkloadReconciliationStateV1,
+	) {
+		if (
+			options.runtimeModelVersion === 4 &&
+			state.candidate.configuration.source.kind === "standard" &&
+			!candidateKeyless(state)
+		)
+			throw new ModelConfigurationErrorV1();
+	}
+
 	function createAdapter(
 		recordCapabilities: (value: Record<string, boolean>) => void = () => {},
 		state?: Pick<WorkloadReconciliationStateV1, "candidate">,
@@ -363,10 +399,15 @@ export function createWorkloadRuntimeV1(
 	) {
 		const modelProjection =
 			state?.candidate.configuration.source.kind === "standard"
-				? validateRuntimeModelProjectionV1(
-						state.candidate.modelProjection,
-						state.candidate.configuration,
-					)
+				? candidateKeyless(state)
+					? validateRuntimeModelProjectionV4(
+							state.candidate.modelProjection,
+							state.candidate.configuration,
+						)
+					: validateRuntimeModelProjectionV1(
+							state.candidate.modelProjection,
+							state.candidate.configuration,
+						)
 				: undefined;
 		if (modelProjection && state && purpose === "authorize") {
 			const binding = standardTemplateModelBindingV1(
@@ -485,23 +526,43 @@ export function createWorkloadRuntimeV1(
 	}
 	async function revalidateCandidateCatalog(
 		state: WorkloadReconciliationStateV1,
+		force = false,
 	) {
 		if (
 			state.candidate.configuration.source.kind !== "standard" ||
-			state.candidate.configuration.revision ===
-				state.verified?.configuration.revision
+			(!force &&
+				state.candidate.configuration.revision ===
+					state.verified?.configuration.revision)
 		)
 			return;
 		if (!options.modelCatalog) throw new ModelConfigurationErrorV1();
-		const projection = validateRuntimeModelProjectionV1(
-			state.candidate.modelProjection,
-			state.candidate.configuration,
-		);
-		await revalidateRuntimeModelCatalogV1(
-			projection,
-			options.modelCatalog,
-			AbortSignal.timeout(60_000),
-		);
+		if (candidateKeyless(state)) {
+			const projection = validateRuntimeModelProjectionV4(
+				state.candidate.modelProjection,
+				state.candidate.configuration,
+			);
+			const binding = standardTemplateModelBindingV1(
+				state.candidate.configuration.source,
+				templateModelBindings,
+			);
+			if (!isDeepStrictEqual(projection.standardTemplateBinding, binding))
+				throw new ModelConfigurationErrorV1();
+			await revalidateRuntimeModelCatalogV4(
+				projection,
+				options.modelCatalog,
+				AbortSignal.timeout(60_000),
+			);
+		} else {
+			const projection = validateRuntimeModelProjectionV1(
+				state.candidate.modelProjection,
+				state.candidate.configuration,
+			);
+			await revalidateRuntimeModelCatalogV1(
+				projection,
+				options.modelCatalog,
+				AbortSignal.timeout(60_000),
+			);
+		}
 	}
 	async function cleanupModelConfiguration(
 		state: WorkloadReconciliationStateV1,
@@ -528,7 +589,7 @@ export function createWorkloadRuntimeV1(
 		state: WorkloadReconciliationStateV1,
 		input: WorkloadReconciliationInputV1,
 	): Promise<boolean> {
-		const resolvedBindings = bindingsFor(state, input);
+		const resolvedBindings = bindingsFor(state, input, candidateKeyless(state));
 		if (state.candidate.deployment === null) {
 			// Preflight has not materialized a Kubernetes Secret. Retain the exact
 			// current pending record so retry_agent_creation can activate it later.
@@ -606,7 +667,7 @@ export function createWorkloadRuntimeV1(
 		},
 		async preflight(input, state) {
 			const configuration = state.candidate.configuration;
-			const secretBindings = bindingsFor(state, input);
+			const secretBindings = bindingsFor(state, input, candidateKeyless(state));
 			validateSecretDataKeys(configuration, secretBindings);
 			const request = {
 				schemaVersion: 1 as const,
@@ -659,59 +720,72 @@ export function createWorkloadRuntimeV1(
 				throw new WorkloadPreflightRejectedErrorV1();
 			let modelProjection: unknown;
 			if (configuration.source.kind === "standard") {
-				if (!options.modelCatalog || !options.modelAccess)
-					throw new WorkloadPreflightRejectedErrorV1();
+				if (!options.modelCatalog) throw new WorkloadPreflightRejectedErrorV1();
 				try {
-					modelProjection = await projectRuntimeModelConfigurationV1({
-						configuration,
-						standardTemplateBinding: standardTemplateModelBindingV1(
-							configuration.source,
-							templateModelBindings,
-						),
-						catalog: options.modelCatalog,
-						access: options.modelAccess,
-						signal: AbortSignal.timeout(60_000),
-						async credentialFor(option) {
-							const binding = secretBindings.find(
-								({ record }) => record.name === `model:${option.optionId}`,
-							);
-							if (!binding) throw new WorkloadPreflightRejectedErrorV1();
-							const { record } = binding;
-							const decrypted = await options.decryptor.decrypt({
-								encryptedRecord: record,
-								traceId: input.traceId,
-							});
-							if (decrypted.outcome !== "decrypted") {
-								await input.secrets?.auditDecryption(
-									record.secretId,
-									record.crypto.wrappingKeyVersion,
-									"rejected",
+					if (candidateKeyless(state)) {
+						modelProjection = await projectRuntimeModelConfigurationV4({
+							configuration,
+							standardTemplateBinding: standardTemplateModelBindingV1(
+								configuration.source,
+								templateModelBindings,
+							),
+							catalog: options.modelCatalog,
+							signal: AbortSignal.timeout(60_000),
+						});
+					} else {
+						if (!options.modelAccess)
+							throw new WorkloadPreflightRejectedErrorV1();
+						modelProjection = await projectRuntimeModelConfigurationV1({
+							configuration,
+							standardTemplateBinding: standardTemplateModelBindingV1(
+								configuration.source,
+								templateModelBindings,
+							),
+							catalog: options.modelCatalog,
+							access: options.modelAccess,
+							signal: AbortSignal.timeout(60_000),
+							async credentialFor(option) {
+								const binding = secretBindings.find(
+									({ record }) => record.name === `model:${option.optionId}`,
 								);
-								throw new WorkloadPreflightRejectedErrorV1();
-							}
-							try {
-								await input.secrets?.auditDecryption(
-									record.secretId,
-									record.crypto.wrappingKeyVersion,
-									"succeeded",
-								);
-							} catch {
-								decrypted.plaintext.fill(0);
-								throw new WorkloadPreflightRejectedErrorV1();
-							}
-							const ref = recordReference(record);
-							return {
-								reference: {
-									name: ref.name,
-									secretId: ref.secretId,
-									secretVersion: ref.secretVersion,
-									configRevision: ref.configRevision,
-								},
-								key: secretDataKey(record.name),
-								plaintext: decrypted.plaintext,
-							};
-						},
-					});
+								if (!binding) throw new WorkloadPreflightRejectedErrorV1();
+								const { record } = binding;
+								const decrypted = await options.decryptor.decrypt({
+									encryptedRecord: record,
+									traceId: input.traceId,
+								});
+								if (decrypted.outcome !== "decrypted") {
+									await input.secrets?.auditDecryption(
+										record.secretId,
+										record.crypto.wrappingKeyVersion,
+										"rejected",
+									);
+									throw new WorkloadPreflightRejectedErrorV1();
+								}
+								try {
+									await input.secrets?.auditDecryption(
+										record.secretId,
+										record.crypto.wrappingKeyVersion,
+										"succeeded",
+									);
+								} catch {
+									decrypted.plaintext.fill(0);
+									throw new WorkloadPreflightRejectedErrorV1();
+								}
+								const ref = recordReference(record);
+								return {
+									reference: {
+										name: ref.name,
+										secretId: ref.secretId,
+										secretVersion: ref.secretVersion,
+										configRevision: ref.configRevision,
+									},
+									key: secretDataKey(record.name),
+									plaintext: decrypted.plaintext,
+								};
+							},
+						});
+					}
 				} catch (error) {
 					if (error instanceof ModelConfigurationErrorV1 && error.retryable)
 						throw new Error("Workload model configuration is unavailable");
@@ -827,6 +901,7 @@ export function createWorkloadRuntimeV1(
 					state.revision,
 					state.fence,
 				);
+			assertCandidateMaterializationAllowed(state);
 			const adapter = createAdapter(undefined, state);
 			await revalidateCandidateCatalog(state);
 			const workload = desired(state);
@@ -838,7 +913,11 @@ export function createWorkloadRuntimeV1(
 				>;
 				readonly secretUid: string;
 			}[] = [];
-			for (const { record } of bindingsFor(state, input)) {
+			for (const { record } of bindingsFor(
+				state,
+				input,
+				candidateKeyless(state),
+			)) {
 				const reference = recordReference(record);
 				const activationFence = activeSecretFence(record, reference);
 				if (record.lifecycleState === "active" && !activationFence)
@@ -957,6 +1036,8 @@ export function createWorkloadRuntimeV1(
 		async observe(state) {
 			observedCapabilities.delete(state);
 			if (!state.identity) return "pending";
+			if (state.phase === "ready" && candidateKeyless(state))
+				await revalidateCandidateCatalog(state, true);
 			let capabilities: Record<string, boolean> | undefined;
 			const observation = createAdapter((value) => {
 				capabilities = value;
@@ -972,9 +1053,10 @@ export function createWorkloadRuntimeV1(
 			return health;
 		},
 		async activateSecrets(state, input) {
+			assertCandidateMaterializationAllowed(state);
 			const adapter = createAdapter(undefined, state);
 			await revalidateCandidateCatalog(state);
-			const bindings = bindingsFor(state, input);
+			const bindings = bindingsFor(state, input, candidateKeyless(state));
 			if (!bindings.length) return "active";
 			if (!input.secrets || !state.identity) return "failed";
 			if (state.rollback)
@@ -1053,6 +1135,7 @@ export function createWorkloadRuntimeV1(
 			return "active";
 		},
 		async promote(state) {
+			assertCandidateMaterializationAllowed(state);
 			const adapter = createAdapter(undefined, state);
 			await revalidateCandidateCatalog(state);
 			if (!state.identity) throw new Error();

@@ -19,8 +19,10 @@ import {
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
+	ModelEndpointV1Schema,
 	runtimeModelInjectionV1,
 	validateRuntimeModelProjectionV1,
+	validateRuntimeModelProjectionV4,
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationRecordV2,
@@ -3193,3 +3195,238 @@ it("preserves cancellation and only reopens a closing verified route", async () 
 		}),
 	).rejects.toMatchObject({ name: "AbortError" });
 });
+
+it("renders the original keyless V4 projection without reading static model credentials", async () => {
+	const decrypt = vi.fn();
+	const validate = vi.fn();
+	const f = fixture(
+		{
+			runtimeModelVersion: 4,
+			modelCatalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+			modelAccess: { validate },
+			decryptor: { decrypt },
+		},
+		{ configuration: standardModelConfiguration() },
+	);
+	await f.tick(4);
+	const state = f.state;
+	assert(state?.identity);
+	const projected = validateRuntimeModelProjectionV4(
+		state.candidate.modelProjection,
+		state.candidate.configuration,
+	);
+	expect(projected.standardTemplateBinding).toEqual(
+		f.options.templateModelBindings[0],
+	);
+	expect(
+		validateAgentWorkloadDesiredV1(state.candidate.deployment).secretRefs,
+	).toEqual([]);
+	expect(decrypt).not.toHaveBeenCalled();
+	expect(validate).not.toHaveBeenCalled();
+	const name = workloadResourceNameV1(state.agentId);
+	const sts = await f.client.read<V1StatefulSet>("StatefulSet", name);
+	assert(sts?.spec?.template.spec?.containers[0]);
+	const container = sts.spec.template.spec.containers[0];
+	expect(
+		container.env?.filter(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
+		),
+	).toEqual([{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: "codex" }]);
+	const modelConfig = container.env?.find(
+		(entry) => entry.name === "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
+	)?.valueFrom?.secretKeyRef;
+	assert(modelConfig?.name);
+	expect(modelConfig.key).toBe("configuration");
+	const secret = await f.client.read<V1Secret>("Secret", modelConfig.name);
+	assert(secret?.data?.configuration);
+	const rendered = JSON.parse(
+		Buffer.from(secret.data.configuration, "base64").toString(),
+	);
+	expect(rendered).toMatchObject({
+		schemaVersion: 4,
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				endpoint: "https://models.example.test/team-a/v1",
+			},
+		],
+	});
+	for (const forbidden of [
+		"model-secret-a",
+		"credentialEnvironmentVariable",
+		"secretKey",
+	])
+		expect(JSON.stringify(rendered)).not.toContain(forbidden);
+	expect(
+		container.env?.some((entry) =>
+			entry.name.startsWith("AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_"),
+		),
+	).toBe(false);
+	expect(
+		[...f.resources.keys()].some(
+			(key) => key.startsWith("Secret/") && key.includes("model-secret"),
+		),
+	).toBe(false);
+	expect(await createWorkloadRuntimeV1(f.options).observe(state)).toBe(
+		"healthy",
+	);
+});
+
+it.each(["changed", "removed", "expired"] as const)(
+	"revalidates a ready V4 catalog at the same configuration revision after %s",
+	async (change) => {
+		const catalog = catalogFixture();
+		const f = fixture(
+			{
+				runtimeModelVersion: 4,
+				modelCatalog: createDeploymentModelCatalogAdapterV1({
+					load: async () => catalog,
+				}),
+			},
+			{ configuration: standardModelConfiguration() },
+		);
+		await f.tick(8);
+		const ready = f.state;
+		assert(ready?.identity);
+		expect(ready.phase).toBe("ready");
+		expect(ready.verifiedRevision).toBe(ready.revision);
+		const runtime = createWorkloadRuntimeV1(f.options);
+		expect(await runtime.observe(ready)).toBe("healthy");
+		if (change === "changed") {
+			assert(catalog.endpoints[0]);
+			catalog.endpoints[0].baseUrl = "https://models.example.test/changed/v1";
+		} else if (change === "removed") catalog.endpoints = [];
+		else catalog.validUntil = Date.now() - 1;
+		const writes = f.writes.length;
+		await expect(runtime.observe(ready)).rejects.toThrow(
+			/^MODEL_CONFIGURATION_UNAVAILABLE$/,
+		);
+		expect(f.writes).toHaveLength(writes);
+	},
+);
+it("rejects V4 admission for a non-Codex trusted image before static model access or resources", async () => {
+	const decrypt = vi.fn();
+	const validate = vi.fn();
+	const f = fixture(
+		{
+			runtimeModelVersion: 4,
+			modelCatalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+			modelAccess: { validate },
+			decryptor: { decrypt },
+			templateModelBindings: [
+				{
+					templateId: "template-a",
+					imageDigest: `sha256:${"a".repeat(64)}`,
+					driver: "claude",
+					protocol: "anthropic-messages-v1",
+				},
+			],
+		},
+		{ configuration: standardModelConfiguration() },
+	);
+	await f.tick(2);
+	expect(f.state?.phase).toBe("cleaning");
+	expect(f.resources.size).toBe(0);
+	expect(decrypt).not.toHaveBeenCalled();
+	expect(validate).not.toHaveBeenCalled();
+});
+
+it.each(["https://127.0.0.1/v1", "https://localhost/v1", "https://[::1]/v1"])(
+	"rejects non-DNS V4 endpoints at preflight before workload mutations: %s",
+	async (baseUrl) => {
+		const endpoint = ModelEndpointV1Schema.parse(catalogFixture().endpoints[0]);
+		const f = fixture(
+			{
+				runtimeModelVersion: 4,
+				modelCatalog: {
+					async resolve() {
+						return { ...endpoint, baseUrl, origin: new URL(baseUrl).origin };
+					},
+				},
+			},
+			{ configuration: standardModelConfiguration() },
+		);
+		await f.tick(2);
+		expect(f.state?.phase).toBe("cleaning");
+		expect(f.state?.candidate.modelProjection).toBeUndefined();
+		expect(f.writes).toHaveLength(0);
+		expect(f.resources.size).toBe(0);
+	},
+);
+
+it.each([false, true])(
+	"blocks persisted V1 materialization under trusted V4 (rollback=%s)",
+	async (rollback) => {
+		const record = pendingSecretRecord({
+			name: "model:primary",
+			secretId: "model-secret-a",
+		});
+		const secrets = cleanupSecrets(secretCleanupStore(record));
+		const decrypt = vi.fn(async () => ({
+			outcome: "decrypted" as const,
+			plaintext: new TextEncoder().encode("synthetic-primary-credential"),
+		}));
+		const f = fixture(
+			{
+				modelCatalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+				modelAccess: createFakeModelAccessValidatorV1([
+					{
+						endpointId: "endpoint-a",
+						modelId: "model-a",
+						reasoningLevels: ["medium"],
+						credential: "synthetic-primary-credential",
+					},
+				]),
+				decryptor: { decrypt },
+			},
+			{ configuration: standardModelConfiguration(), secrets },
+		);
+		await f.tick(4);
+		assert(f.state?.identity);
+		const state: WorkloadReconciliationStateV1 = {
+			...f.state,
+			phase: "applying",
+			rollback,
+			verified: f.state.candidate,
+			verifiedRevision: f.state.revision,
+		};
+		const projection = structuredClone(state.candidate.modelProjection);
+		expect(
+			validateRuntimeModelProjectionV1(
+				projection,
+				state.candidate.configuration,
+			).schemaVersion,
+		).toBe(1);
+		// A restart must not repair missing Secrets from an old static-Key projection.
+		for (const key of f.resources.keys())
+			if (key.startsWith("Secret/")) f.resources.delete(key);
+		const resources = structuredClone([...f.resources.entries()]);
+		const writes = f.writes.length;
+		decrypt.mockClear();
+		const runtime = createWorkloadRuntimeV1({
+			...f.options,
+			runtimeModelVersion: 4,
+		});
+		const input = {
+			configuration: state.candidate.configuration,
+			management: f.management,
+			state,
+			secrets,
+			requestId: "request-a",
+			traceId: "trace-a",
+		};
+		await expect(runtime.apply(state, false, input)).rejects.toBeInstanceOf(
+			ModelConfigurationErrorV1,
+		);
+		await expect(runtime.activateSecrets(state, input)).rejects.toBeInstanceOf(
+			ModelConfigurationErrorV1,
+		);
+		await expect(runtime.promote(state)).rejects.toBeInstanceOf(
+			ModelConfigurationErrorV1,
+		);
+		expect(decrypt).not.toHaveBeenCalled();
+		expect(f.writes).toHaveLength(writes);
+		expect([...f.resources.entries()]).toEqual(resources);
+		expect(state.candidate.modelProjection).toEqual(projection);
+	},
+);

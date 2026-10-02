@@ -36,6 +36,7 @@ export function createPlatformWorkloadWorkerV1(
 	const runtime = createWorkloadRuntimeV1({ ...options, workerId });
 	const store = openPostgresWorkloadReconciliationStoreV1({
 		databaseUrl: options.databaseUrl,
+		runtimeModelVersion: options.runtimeModelVersion,
 		retryDelayMs: pollIntervalMs,
 	});
 	let files:

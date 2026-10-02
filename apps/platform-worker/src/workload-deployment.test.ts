@@ -162,6 +162,42 @@ describe("production Worker deployment", () => {
 			runtimeProbe: authorize(),
 		};
 	}
+	it.each([1, 2, 3, 5, "4", null])(
+		"rejects unsupported model rollout %j before reading Kubernetes credentials",
+		async (runtimeModelVersion) => {
+			const deployment = await input();
+			Object.defineProperty(deployment, "runtimeModelVersion", {
+				value: runtimeModelVersion,
+			});
+			const credentials = vi.fn(() => {
+				throw new Error("Kubernetes credentials must not be read");
+			});
+			Object.defineProperty(deployment, "kubernetes", { get: credentials });
+			await expect(
+				createProductionWorkloadWorkerOptionsV1(deployment),
+			).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
+			expect(credentials).not.toHaveBeenCalled();
+		},
+	);
+	it("rejects disabled certificate verification for V4 before reading Kubernetes credentials", async () => {
+		const deployment: ProductionWorkloadWorkerInputV1 = {
+			...(await input()),
+			runtimeModelVersion: 4,
+		};
+		const credentials = vi.fn(() => {
+			throw new Error("Kubernetes credentials must not be read");
+		});
+		Object.defineProperty(deployment, "kubernetes", { get: credentials });
+		vi.stubEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0");
+		try {
+			await expect(
+				createProductionWorkloadWorkerOptionsV1(deployment),
+			).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
+			expect(credentials).not.toHaveBeenCalled();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
 	it.each([
 		[
 			{
