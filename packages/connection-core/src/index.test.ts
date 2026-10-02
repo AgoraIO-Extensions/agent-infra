@@ -112,6 +112,16 @@ const delegated: InvocationContext = {
 };
 
 class MemoryRepository implements ConnectionRepository {
+	upgradeReadiness: import("./index").ProviderUpgradeReadiness = {
+		connectionId: "connection-fixture",
+		providerId: "fixture",
+		targetProviderReleaseId: "fixture-v2",
+		nextAction: "UPGRADE",
+		reason: "COMPATIBLE_APPROVAL",
+	};
+	async getProviderUpgradeReadiness() {
+		return this.upgradeReadiness;
+	}
 	getProviderCredentialForUpgrade(): Promise<{
 		accessToken: string;
 		credentialVersionId: string;
@@ -2184,6 +2194,7 @@ describe("Connection application service", () => {
 
 	it("requires SSO instead of upgrading an unrefreshable Manhattan token", async () => {
 		const repository = new MemoryRepository();
+		repository.upgradeReadiness.nextAction = "REAUTHORIZE";
 		repository.getProviderCredentialForUpgrade = async () => ({
 			accessToken: "old-short-lived-token",
 			credentialVersionId: "credential-v3",
@@ -2198,6 +2209,120 @@ describe("Connection application service", () => {
 			service.upgradeProviderConnection("alice", "connection-manhattan"),
 		).rejects.toMatchObject({ code: "PROVIDER_REAUTHORIZATION_REQUIRED" });
 	});
+
+	it.each(["REQUEST_APPROVAL", "REAUTHORIZE", "NONE"] as const)(
+		"uses the current preparation path %s before reading or replacing credentials",
+		async (nextAction) => {
+			const repository = new MemoryRepository();
+			repository.upgradeReadiness.nextAction = nextAction;
+			const service = new ConnectionApplicationService(repository, {
+				execute: async () => ({}),
+			});
+			if (nextAction === "NONE")
+				await expect(
+					service.upgradeProviderConnection("alice", "connection"),
+				).resolves.toEqual({ connectionId: "connection" });
+			else
+				await expect(
+					service.upgradeProviderConnection("alice", "connection"),
+				).rejects.toMatchObject({
+					code:
+						nextAction === "REQUEST_APPROVAL"
+							? "FORBIDDEN"
+							: "PROVIDER_REAUTHORIZATION_REQUIRED",
+				});
+			expect(repository.storedOAuthCredential).toBeUndefined();
+		},
+	);
+
+	it.each([false, true])(
+		"OAuth upgrade callback honors the sealed Credential binding (stale: %s)",
+		async (stale) => {
+			const repository = new MemoryRepository();
+			const binding = {
+				connectionId: "connection-data",
+				credentialVersionId: "credential-v4",
+				targetProviderReleaseId: "datalego-connection-v5",
+			};
+			repository.consumeOAuthTransaction = async () => ({
+				principalId: "alice",
+				providerId: "datalego",
+				codeVerifier: "verifier-fixture",
+				redirectUri:
+					"https://connection.example/oauth/callback?provider=datalego",
+				reconnectConnectionId: binding.connectionId,
+				upgradeBinding: binding,
+			});
+			repository.validatePersonalReconnect = async () => ({
+				providerId: "datalego",
+				requiredScopes: ["datalego.query"],
+				upgradeBinding: {
+					...binding,
+					credentialVersionId: stale
+						? "newer-credential"
+						: binding.credentialVersionId,
+				},
+			});
+			repository.upgradeReadiness.targetProviderReleaseId =
+				binding.targetProviderReleaseId;
+			let exchanges = 0;
+			const identity = {
+				accessToken: "access-fixture",
+				refreshToken: "refresh-fixture",
+				externalAccount: "alice@example.invalid",
+				displayName: "Alice",
+				grantedScopes: ["datalego.query"],
+				expiresAt: "2030-01-01T00:00:00.000Z",
+			};
+			const service = new ConnectionApplicationService(
+				repository,
+				{ execute: async () => ({}) },
+				undefined,
+				{
+					datalego: {
+						providerId: "datalego",
+						providerReleaseId: binding.targetProviderReleaseId,
+						validateCredential: async () => ({
+							...identity,
+							providerId: "datalego",
+							providerReleaseId: binding.targetProviderReleaseId,
+						}),
+					},
+				},
+				{
+					datalego: {
+						getAuthorizationUrl: () => "https://oauth.example",
+						refresh: async () => identity,
+						exchangeCode: async () => {
+							exchanges++;
+							return identity;
+						},
+					},
+				},
+			);
+			if (stale) {
+				await expect(
+					service.completeProviderOAuth(
+						"datalego",
+						"code-fixture",
+						"state-fixture",
+					),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				expect(exchanges).toBe(0);
+				expect(repository.storedOAuthCredential).toBeUndefined();
+			} else {
+				await service.completeProviderOAuth(
+					"datalego",
+					"code-fixture",
+					"state-fixture",
+				);
+				expect(repository.storedOAuthCredential).toMatchObject({
+					expectedConnectionId: binding.connectionId,
+					expectedCredentialVersionId: binding.credentialVersionId,
+				});
+			}
+		},
+	);
 
 	it("does not retry an uncertain Bitbucket write with the same idempotency key", async () => {
 		const repository = new MemoryRepository();

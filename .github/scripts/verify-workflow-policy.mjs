@@ -138,7 +138,7 @@ const SOURCE_OUTCOME_CONTRACTS = {
     operation: "pr-gates",
   },
   "publish-ghcr.yml": {
-    needs: ["publish"],
+    needs: ["upgrade-validation", "publish"],
     operation: "publish-ghcr",
   },
 };

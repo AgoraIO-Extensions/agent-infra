@@ -276,6 +276,50 @@
 				}
 			}
 		},
+		"/api/v1/connection/connections/{connectionId}/upgrade-readiness": {
+			"get": {
+				"operationId": "getProviderUpgradeReadiness",
+				"parameters": [{ "$ref": "#/components/parameters/ConnectionId" }],
+				"responses": {
+					"200": {
+						"description": "Owned personal connection upgrade preparation",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"additionalProperties": false,
+									"required": [
+										"connectionId",
+										"providerId",
+										"targetProviderReleaseId",
+										"nextAction",
+										"reason"
+									],
+									"properties": {
+										"connectionId": { "type": "string" },
+										"providerId": { "type": "string" },
+										"targetProviderReleaseId": { "type": "string" },
+										"nextAction": {
+											"type": "string",
+											"enum": [
+												"UPGRADE",
+												"REQUEST_APPROVAL",
+												"REAUTHORIZE",
+												"NONE"
+											]
+										},
+										"reason": { "type": "string" }
+									}
+								}
+							}
+						}
+					},
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"503": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
 		"/api/v1/connection/provider-credentials": {
 			"post": {
 				"operationId": "connectProviderCredential",

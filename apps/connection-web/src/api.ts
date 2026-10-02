@@ -61,6 +61,7 @@ import {
 	getConnectionAccessPolicyDraft,
 	getConnectionAccessRequest,
 	getConnections,
+	getProviderUpgradeReadiness,
 	getPublishedConnectionAccessPolicyEditorSource,
 	getSession,
 	getSharedConnections,
@@ -96,9 +97,11 @@ import {
 	type ProviderCredentialRequest,
 	type ProviderReconnectRequest,
 	type ProviderUpgradeCampaignsResponse,
+	type ProviderUpgradeReadiness,
 	prepareConnectionAccess,
 	providerCredentialRequestSchema,
 	providerReconnectRequestSchema,
+	providerUpgradeReadinessSchema,
 	publishApprovalCapabilityProfile,
 	publishApprovalDisclaimer,
 	publishConnectionAccessPolicy,
@@ -793,6 +796,18 @@ export const connectionApi = {
 				path: { connectionId },
 			}),
 		),
+	getProviderUpgradeReadiness: async (
+		connectionId: string,
+	): Promise<ProviderUpgradeReadiness> => {
+		const result = await unwrap(
+			getProviderUpgradeReadiness({ path: { connectionId } }),
+		);
+		return parseClientInput(
+			providerUpgradeReadinessSchema,
+			result,
+			"升级准备信息无效，请刷新后重试",
+		);
+	},
 	upgradeApprovedConnection: (input: {
 		connectionId: string;
 		accessRequestId: string;

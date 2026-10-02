@@ -5,6 +5,7 @@
 	"exports": {
 		".": "./src/index.ts",
 		"./authorization-compatibility": "./src/authorization-compatibility.ts",
+		"./provider-catalogs": "./src/provider-catalogs.ts",
 		"./jira-server": "./src/jira-server.ts",
 		"./confluence-server": "./src/confluence-server.ts",
 		"./datalego": "./src/datalego.ts",

@@ -82,6 +82,17 @@ export const providerUpgradeRequestSchema = z.strictObject({
 	accessRequestId: opaqueId.optional(),
 });
 
+export const providerUpgradeReadinessSchema = z.strictObject({
+	connectionId: opaqueId,
+	providerId: opaqueId,
+	targetProviderReleaseId: opaqueId,
+	nextAction: z.enum(["UPGRADE", "REQUEST_APPROVAL", "REAUTHORIZE", "NONE"]),
+	reason: z.string().min(1).max(256),
+});
+export type ProviderUpgradeReadiness = z.infer<
+	typeof providerUpgradeReadinessSchema
+>;
+
 export const authorizationPreviewRequestSchema = z.strictObject({
 	actionVersionIds: z.array(opaqueId).min(1).max(500).optional(),
 	connectionId: opaqueId,

@@ -1238,6 +1238,47 @@ export type UpgradeProviderConnectionResponses = {
 
 export type UpgradeProviderConnectionResponse = UpgradeProviderConnectionResponses[keyof UpgradeProviderConnectionResponses];
 
+export type GetProviderUpgradeReadinessData = {
+    body?: never;
+    path: {
+        connectionId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/connections/{connectionId}/upgrade-readiness';
+};
+
+export type GetProviderUpgradeReadinessErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type GetProviderUpgradeReadinessError = GetProviderUpgradeReadinessErrors[keyof GetProviderUpgradeReadinessErrors];
+
+export type GetProviderUpgradeReadinessResponses = {
+    /**
+     * Owned personal connection upgrade preparation
+     */
+    200: {
+        connectionId: string;
+        providerId: string;
+        targetProviderReleaseId: string;
+        nextAction: 'UPGRADE' | 'REQUEST_APPROVAL' | 'REAUTHORIZE' | 'NONE';
+        reason: string;
+    };
+};
+
+export type GetProviderUpgradeReadinessResponse = GetProviderUpgradeReadinessResponses[keyof GetProviderUpgradeReadinessResponses];
+
 export type ConnectProviderCredentialData = {
     body: ProviderCredentialRequest;
     headers: {

@@ -61,6 +61,15 @@ const delegated: InvocationContext = {
 };
 
 class TestRepository implements ConnectionRepository {
+	async getProviderUpgradeReadiness() {
+		return {
+			connectionId: "connection-fixture",
+			providerId: "fixture",
+			targetProviderReleaseId: "fixture-v2",
+			nextAction: "UPGRADE" as const,
+			reason: "COMPATIBLE_APPROVAL",
+		};
+	}
 	getProviderCredentialForUpgrade(): Promise<{
 		accessToken: string;
 		credentialVersionId: string;
@@ -2778,6 +2787,21 @@ describe("Connection API", () => {
 				});
 				return { connectionId: "connection-bitbucket" };
 			},
+			getProviderUpgradeReadiness: async (
+				principalId: string,
+				connectionId: string,
+			) => {
+				if (connectionId !== "connection-old")
+					throw new ConnectionError("FORBIDDEN", "Unavailable");
+				expect(principalId).toBe("principal-user");
+				return {
+					connectionId,
+					providerId: "datalego",
+					targetProviderReleaseId: "datalego-connection-v5",
+					nextAction: "UPGRADE",
+					reason: "COMPATIBLE_APPROVAL",
+				};
+			},
 			upgradeProviderConnection: async (
 				principalId: string,
 				connectionId: string,
@@ -3220,6 +3244,31 @@ describe("Connection API", () => {
 			},
 		);
 		expect(approvedUpgrade.status).toBe(200);
+		const readinessResponse = await app.request(
+			"/api/v1/connection/connections/connection-old/upgrade-readiness",
+			{ headers: { cookie } },
+		);
+		expect(readinessResponse.status).toBe(200);
+		expect(readinessResponse.headers.get("cache-control")).toBe("no-store");
+		expect(await readinessResponse.json()).toMatchObject({
+			nextAction: "UPGRADE",
+			providerId: "datalego",
+		});
+		expect(
+			(
+				await app.request(
+					"/api/v1/connection/connections/other-account/upgrade-readiness",
+					{ headers: { cookie } },
+				)
+			).status,
+		).toBe(404);
+		expect(
+			(
+				await app.request(
+					"/api/v1/connection/connections/connection-old/upgrade-readiness",
+				)
+			).status,
+		).toBe(401);
 		for (const [connectionId, messageKey] of [
 			[
 				"connection-upgrade-approval-required",

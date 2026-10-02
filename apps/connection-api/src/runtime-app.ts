@@ -59,6 +59,7 @@ import {
 	manhattanConnectionCatalog,
 	manhattanLegacyProviderReleaseIds,
 } from "@agent-infra/openconnector-adapter/manhattan";
+import { connectionProviderCatalogs } from "@agent-infra/openconnector-adapter/provider-catalogs";
 import {
 	RehoboamAdapter,
 	rehoboamConnectionCatalog,
@@ -154,17 +155,7 @@ export async function createConnectionRuntime(
 		config.databaseUrl,
 		config.credentialKey,
 	);
-	const catalogs = [
-		githubConnectionCatalog,
-		bitbucketServerConnectionCatalog,
-		jiraServerConnectionCatalog,
-		confluenceServerConnectionCatalog,
-		datalegoV5ConnectionCatalog,
-		jenkinsCiConnectionCatalog,
-		jenkinsReleaseConnectionCatalog,
-		manhattanConnectionCatalog,
-		rehoboamConnectionCatalog,
-	] as const;
+	const catalogs = connectionProviderCatalogs;
 	const approvalRepository = new PostgresConnectionAccessRequestRepository(
 		config.databaseUrl,
 		(sql, connectionId) =>
