@@ -345,9 +345,10 @@ describe("personal credential narrowing policy", () => {
 			scopes: ["agent:read"],
 			expiresAt: metadata.expiresAt,
 		});
-		expect(apply({ expiresAt: "2029-06-01T00:00:00Z" }).scopes).toEqual(
-			metadata.scopes,
-		);
+		expect(apply({ expiresAt: "2029-06-01T00:00:00Z" }).scopes).toEqual([
+			"agent:manage",
+			"agent:read",
+		]);
 		for (const input of [
 			{ scopes: ["agent:read", "agent:use"] },
 			{ expiresAt: "2031-01-01T00:00:00Z" },
