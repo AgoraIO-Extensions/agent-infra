@@ -568,6 +568,11 @@ export type PersonalApiCredentialIssueResponseV1 = {
     replayed: true;
 };
 
+export type PersonalApiCredentialListQueryV1 = {
+    cursor?: string;
+    limit?: number;
+};
+
 export type PersonalApiCredentialMetadataV1 = {
     createdAt: string;
     credentialId: string;
@@ -575,6 +580,11 @@ export type PersonalApiCredentialMetadataV1 = {
     lastUsedAt: string | null;
     revokedAt: string | null;
     scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+};
+
+export type PersonalApiCredentialPageV1 = {
+    items: Array<PersonalApiCredentialMetadataV1>;
+    nextCursor: string | null;
 };
 
 export type PersonalApiCredentialRevokeResponseV1 = {
@@ -1846,6 +1856,58 @@ export type GetDeploymentConfigurationV2Responses = {
 };
 
 export type GetDeploymentConfigurationV2Response = GetDeploymentConfigurationV2Responses[keyof GetDeploymentConfigurationV2Responses];
+
+export type ListPersonalApiCredentialsV2Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        limit?: number;
+        cursor?: string;
+    };
+    url: '/api/v2/me/api-credentials';
+};
+
+export type ListPersonalApiCredentialsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListPersonalApiCredentialsV2Error = ListPersonalApiCredentialsV2Errors[keyof ListPersonalApiCredentialsV2Errors];
+
+export type ListPersonalApiCredentialsV2Responses = {
+    /**
+     * Personal credential metadata page
+     */
+    200: PersonalApiCredentialPageV1;
+};
+
+export type ListPersonalApiCredentialsV2Response = ListPersonalApiCredentialsV2Responses[keyof ListPersonalApiCredentialsV2Responses];
 
 export type IssuePersonalApiCredentialV2Data = {
     body: PersonalApiCredentialIssueRequestV1;

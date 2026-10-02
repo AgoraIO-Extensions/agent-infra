@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
 	type ApiPrincipalV1,
 	createConversationEventUseCaseV1,
+	createPersonalApiCredentialUseCaseV1,
 	type PlatformAuditQueryScopeV1,
 	type TaskAuthorizationBoundaryV1,
 } from "@agent-infra/platform-core";
@@ -9,6 +10,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
+import { PostgresPersonalApiCredentialStoreV1 } from "./personal-api-credentials.ts";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
@@ -563,6 +565,152 @@ describe("controlled PostgreSQL audit query", () => {
 		await expect(
 			query.getAudit(admin, corrupt, detail, request()),
 		).rejects.toMatchObject({ code: "unavailable" });
+	});
+
+	it("reads actual credential metadata list audits only as redacted administrator records", async () => {
+		const f = await fixture();
+		const adapter = new PostgresPersonalApiCredentialStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		const credentials = createPersonalApiCredentialUseCaseV1({
+			transaction: adapter,
+			userDirectory: {
+				resolveUser: async () =>
+					f.scope.kind === "execution" ? (f.scope.user ?? null) : null,
+			},
+		});
+		try {
+			for (const seeded of [false, true]) {
+				if (seeded) await credentialQueryFixture(f);
+				const context = request();
+				const metadata = await credentials.list(
+					{ userId: f.principal.id, ...context },
+					{ limit: 100 },
+				);
+				expect(metadata.items).toHaveLength(Number(seeded));
+				const [stored] =
+					await sql`select id, details from platform.audit_events where request_id = ${context.requestId}`;
+				if (!stored) throw new Error("Metadata producer audit is missing");
+				const record = await query.getAudit(
+					admin,
+					stored.id,
+					detail,
+					request(),
+				);
+				expect(record).toMatchObject({
+					action: "api.credential.metadata.read",
+					actor: { kind: "user", actorId: f.principal.id },
+					subject: { kind: "unknown", subjectId: "unknown" },
+					result: "succeeded",
+					summary: "api.credential.metadata.read",
+					agentId: null,
+					executionId: null,
+					authorizationRecordId: null,
+					originalPrincipal: null,
+				});
+				const input = {
+					limit: 100,
+					filters: { action: "api.credential.metadata.read" as const },
+				};
+				const list = await query.listAudit(admin, input, request());
+				expect(list.items.find((item) => item.auditId === stored.id)).toEqual(
+					record,
+				);
+				expect(
+					(await query.listAudit(f.scope, input, request())).items,
+				).toEqual([]);
+				await expect(
+					query.getAudit(f.scope, stored.id, detail, request()),
+				).rejects.toMatchObject({ code: "access_denied" });
+				expect(stored.details).toEqual({
+					returnedCredentialIds: metadata.items.map(
+						(item) => item.credentialId,
+					),
+				});
+				const projected = JSON.stringify(record);
+				expect(projected).not.toContain("details");
+				for (const item of metadata.items)
+					expect(projected).not.toContain(item.credentialId);
+			}
+			for (const [reason, userId] of [
+				["authentication_required", undefined],
+				["forbidden", f.principal.id],
+				["unavailable", undefined],
+			] as const) {
+				const context = request();
+				await credentials.recordRefusal(
+					context,
+					"api.credential.metadata.read",
+					reason,
+					userId,
+				);
+				const [stored] =
+					await sql`select id from platform.audit_events where request_id = ${context.requestId}`;
+				if (!stored) throw new Error("Metadata refusal audit is missing");
+				await expect(
+					query.getAudit(admin, stored.id, detail, request()),
+				).resolves.toMatchObject({
+					actor: {
+						kind: userId ? "user" : "unknown",
+						actorId: userId ?? "unknown",
+					},
+					result: reason === "unavailable" ? "failed" : "rejected",
+					summary: `api.credential.metadata.read: reason=${reason}`,
+				});
+			}
+		} finally {
+			await adapter.close();
+		}
+	});
+
+	it("rejects malformed credential metadata audits without widening the legacy decoder", async () => {
+		const credentialId = randomUUID();
+		for (const change of [
+			{ actorType: "application" },
+			{ actorType: "unknown", actorId: "invented-actor" },
+			{ actorType: "unknown", actorId: "unknown" },
+			{ targetType: "unknown" },
+			{ targetId: credentialId },
+			{ requestId: null },
+			{ details: null },
+			{ details: [] },
+			{ details: { returnedCredentialIds: [credentialId, credentialId] } },
+			{ details: { returnedCredentialIds: [""] } },
+			{
+				details: {
+					returnedCredentialIds: Array.from({ length: 101 }, () =>
+						randomUUID(),
+					),
+				},
+			},
+			{
+				details: { returnedCredentialIds: [], credential: "PRIVATE_SENTINEL" },
+			},
+			{ outcome: "rejected", details: { reason: "unavailable" } },
+			{ outcome: "failed", details: { reason: "forbidden" } },
+			{ outcome: "rejected", details: { reason: "PRIVATE_SENTINEL" } },
+		]) {
+			const id = randomUUID();
+			const row = {
+				actorType: "user",
+				actorId: "metadata-user",
+				targetType: "api_credential",
+				targetId: "unknown",
+				requestId: randomUUID(),
+				outcome: "succeeded",
+				details: { returnedCredentialIds: [credentialId] },
+				...change,
+			};
+			await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+				values (${id}, 'metadata-negative', ${row.requestId}, ${row.actorType}, ${row.actorId}, 'api.credential.metadata.read', ${row.targetType}, ${row.targetId}, ${row.outcome}, ${sql.json(row.details)})`;
+			try {
+				await expect(
+					query.getAudit(admin, id, detail, request()),
+				).rejects.toMatchObject({ code: "unavailable" });
+			} finally {
+				await sql`delete from platform.audit_events where id = ${id}`;
+			}
+		}
 	});
 
 	it("durably records malformed/rebound requests without persisting caller filters, cursors, IDs or secret sentinels", async () => {

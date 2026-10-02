@@ -4,6 +4,7 @@ import {
 	type ApiPrincipalV1,
 	type ConversationOperationFactV2,
 	captureTaskAuthorizationBoundaryV1,
+	type PersonalApiCredentialErrorCodeV1,
 	PersonalApiCredentialErrorV1,
 	type PlatformAuditQueryActionV1,
 	type PlatformAuditQueryDenialReasonV1,
@@ -312,6 +313,61 @@ const executionActions = new Set([
 	"audit.query.failed",
 ]);
 
+function credentialMetadataSummary(
+	row: Row,
+	scope: PlatformAuditQueryScopeV1,
+): string {
+	if (
+		scope.kind !== "administrator" ||
+		row.source !== "platform" ||
+		row.targetType !== "api_credential" ||
+		row.targetId !== "unknown" ||
+		row.agentId !== null ||
+		row.executionId !== null ||
+		row.conversationId !== null ||
+		row.requestId === null ||
+		row.result !== row.outcome ||
+		!(
+			row.actorType === "user" ||
+			(row.actorType === "unknown" && row.actorId === "unknown")
+		) ||
+		typeof row.details !== "object" ||
+		row.details === null ||
+		Array.isArray(row.details)
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	const details = row.details as Record<string, unknown>;
+	if (row.outcome === "succeeded") {
+		const ids = details.returnedCredentialIds;
+		if (
+			row.actorType !== "user" ||
+			Object.keys(details).length !== 1 ||
+			!Array.isArray(ids) ||
+			ids.length > 100 ||
+			!ids.every(boundedText) ||
+			new Set(ids).size !== ids.length
+		)
+			throw new PlatformAuditScopeErrorV1("unavailable");
+		return row.action;
+	}
+	if (
+		Object.keys(details).length !== 1 ||
+		!(
+			[
+				"invalid_input",
+				"authentication_required",
+				"forbidden",
+				"not_found",
+				"idempotency_conflict",
+				"unavailable",
+			] satisfies readonly PersonalApiCredentialErrorCodeV1[]
+		).some((reason) => reason === details.reason) ||
+		row.outcome !== (details.reason === "unavailable" ? "failed" : "rejected")
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	return `${row.action}: reason=${details.reason}`;
+}
+
 function project(
 	row: Row,
 	scope: PlatformAuditQueryScopeV1,
@@ -356,9 +412,14 @@ function project(
 		)
 	)
 		deny();
-	const legacy = executionActions.has(row.action)
-		? null
-		: decodePlatformAuditRowV1(row);
+	const metadataSummary =
+		row.action === "api.credential.metadata.read"
+			? credentialMetadataSummary(row, scope)
+			: null;
+	const legacy =
+		executionActions.has(row.action) || metadataSummary !== null
+			? null
+			: decodePlatformAuditRowV1(row);
 	// The legacy decoder has already validated exact Task API metadata and its
 	// agreement with the trusted actor, target and result columns.
 	const taskDetails =
@@ -434,21 +495,23 @@ function project(
 			row.executionId,
 			binding?.authorizationRecordId ?? null,
 		].every((value) => value === null || boundedText(value)) ||
-		![
-			"agent_application",
-			"agent",
-			"secret",
-			"secret_key",
-			"grant",
-			"unknown",
-			"conversation",
-			"execution",
-			"configuration",
-		].includes(row.targetType)
+		(metadataSummary === null &&
+			![
+				"agent_application",
+				"agent",
+				"secret",
+				"secret_key",
+				"grant",
+				"unknown",
+				"conversation",
+				"execution",
+				"configuration",
+			].includes(row.targetType))
 	)
 		throw new PlatformAuditScopeErrorV1("unavailable");
 	const summary =
 		legacy?.summary ??
+		metadataSummary ??
 		(row.action === "audit.query.completed" ||
 		row.action === "audit.query.failed"
 			? projectPlatformAuditQuerySummaryV1(row.action, row.details)
@@ -467,10 +530,14 @@ function project(
 		auditId: row.auditId,
 		action: row.action as PlatformAuditQueryActionV1,
 		actor,
-		subject: legacy?.subject ?? {
-			kind: row.targetType as PlatformAuditProjectionV1["subject"]["kind"],
-			subjectId: row.targetId,
-		},
+		subject:
+			legacy?.subject ??
+			(metadataSummary !== null
+				? { kind: "unknown", subjectId: "unknown" }
+				: {
+						kind: row.targetType as PlatformAuditProjectionV1["subject"]["kind"],
+						subjectId: row.targetId,
+					}),
 		result,
 		summary,
 		taskApi,

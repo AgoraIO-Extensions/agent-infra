@@ -113,6 +113,7 @@ export const platformAuditQueryActionsV1 = [
 	"api.application.created",
 	"api.credential.issued",
 	"api.credential.revoked",
+	"api.credential.metadata.read",
 	"api.credential.delivery.granted",
 	"api.credential.delivery.revoked",
 	"api.agent.grant.granted",
