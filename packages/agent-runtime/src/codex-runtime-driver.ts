@@ -7087,6 +7087,58 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			});
 			this.notifyEventStream(streamKey);
 		};
+		const assertCurrent = () => {
+			// Re-read original state after each Host or durable-started await.
+			signal.throwIfAborted();
+			const state = this.readState();
+			const session = ownRecordValue(state.sessions, prepared.nativeSessionRef);
+			const execution =
+				session && ownRecordValue(session.executions, prepared.executionId);
+			const journal =
+				session &&
+				ownRecordValue(session.journals ?? {}, prepared.journalTurnId);
+			const currentSource = this.resolveNativeSourceJournal(
+				state,
+				this.sharesOneNativeTransport() ? undefined : context.conversationKey,
+				context.threadId,
+				context.turnId,
+			);
+			const sourceRecord = currentSource?.sourceRecord;
+			if (
+				!currentSource ||
+				currentSource.nativeSessionRef !== prepared.nativeSessionRef ||
+				currentSource.execution !== execution ||
+				currentSource.journal !== journal ||
+				currentSource.journal.nativeTurnId !== prepared.journalTurnId ||
+				this.closed ||
+				!session ||
+				!execution ||
+				!journal ||
+				journal.externalActionsBlocked ||
+				(sourceRecord
+					? sourceRecord.terminal !== undefined
+					: journal.nativeCompletionStatus !== undefined) ||
+				execution.status !== "running" ||
+				session.activeExecutionId !== execution.executionId ||
+				this.hasInterruption(
+					prepared.nativeSessionRef,
+					prepared.executionId,
+					state,
+				)
+			)
+				unavailable();
+			this.assertJournalOpen(journal);
+			this.assertExecutionConfiguration(state, session, execution);
+			const operation = this.executionOperation(state, session, execution);
+			const selection = this.operationSelection(operation);
+			if (
+				operation.admissionPending ||
+				operation.admissionRecoveryPending ||
+				selection?.model !== context.internalModel ||
+				selection.effort !== context.reasoningLevel
+			)
+				unavailable();
+		};
 		try {
 			// Never call Host while holding the Driver durable-file queue. Host may
 			// still be awaiting this Driver's original submit result.
@@ -7113,43 +7165,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			} finally {
 				waiting.abort();
 			}
-			// Authorization may have waited while another original action failed
-			// or stop sealed this Execution. Recheck the committed Driver state.
-			const state = this.readState();
-			const session = ownRecordValue(state.sessions, prepared.nativeSessionRef);
-			const execution =
-				session && ownRecordValue(session.executions, prepared.executionId);
-			const journal =
-				session &&
-				ownRecordValue(session.journals ?? {}, prepared.journalTurnId);
-			const currentSource = this.resolveNativeSourceJournal(
-				state,
-				this.sharesOneNativeTransport() ? undefined : context.conversationKey,
-				context.threadId,
-				context.turnId,
-			);
-			const sourceRecord = currentSource?.sourceRecord;
-			if (
-				!currentSource ||
-				currentSource.journal.nativeTurnId !== prepared.journalTurnId ||
-				this.closed ||
-				!session ||
-				!execution ||
-				!journal ||
-				journal.externalActionsBlocked ||
-				(sourceRecord
-					? sourceRecord.terminal !== undefined
-					: journal.nativeCompletionStatus !== undefined) ||
-				execution.status !== "running" ||
-				session.activeExecutionId !== execution.executionId ||
-				this.hasInterruption(
-					prepared.nativeSessionRef,
-					prepared.executionId,
-					state,
-				)
-			)
-				unavailable();
-			this.assertExecutionConfiguration(state, session, execution);
+			assertCurrent();
 		} catch (error) {
 			if (signal.aborted) {
 				await record("unknown", { failureCode: "interrupted" });
@@ -7164,6 +7180,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		return {
+			assertCurrent,
 			started: (startedAt) => record("started", { startedAt }),
 			finish: (outcome) =>
 				record(outcome.phase === "succeeded" ? "completed" : outcome.phase, {

@@ -3131,3 +3131,101 @@ describe("original model request drain", () => {
 		},
 	);
 });
+
+describe("Codex model started persistence guard", () => {
+	it.each([
+		["before started", "resolved"],
+		["before started", "rejected"],
+		["after started", "resolved"],
+		["after started", "rejected"],
+	] as const)(
+		"rejects an asynchronous Driver guard %s (%s Promise) without invoking the provider",
+		async (boundary, outcome) => {
+			let calls = 0;
+			const endpoint = await listen(
+				createServer((_incoming, response) => {
+					calls++;
+					response.end();
+				}),
+			);
+			let started = false;
+			const finish = vi.fn(async () => {});
+			const value = await transport(endpoint, true, {
+				beforeRequest: async () => ({
+					assertCurrent: () => {
+						if (boundary === "before started" || started)
+							return outcome === "resolved"
+								? Promise.resolve()
+								: Promise.reject(new Error("mistaken async guard"));
+					},
+					started: async () => {
+						started = true;
+					},
+					finish,
+				}),
+			});
+			const response = await request(value.modelAccess);
+			await response.text();
+			expect(response.status).not.toBe(200);
+			expect(calls).toBe(0);
+			expect(finish).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "failed",
+					failureCode: "request_not_started",
+				}),
+			);
+		},
+	);
+	it.each([
+		"Driver guard invalidation",
+		"Turn revoke",
+		"process revoke",
+	] as const)(
+		"rechecks %s after the original durable started await",
+		async (mode) => {
+			let calls = 0;
+			const endpoint = await listen(
+				createServer((_incoming, response) => {
+					calls++;
+					response.end();
+				}),
+			);
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			let revoked = false;
+			const finish = vi.fn(async () => {});
+			const value = await transport(endpoint, true, {
+				beforeRequest: async () => ({
+					assertCurrent: () => {
+						if (revoked) throw new Error("revoked");
+					},
+					started: async () => {
+						entered.resolve();
+						await release.promise;
+					},
+					finish,
+				}),
+			});
+			const pending = request(value.modelAccess).then(
+				async (response) => {
+					await response.text();
+					return response.status;
+				},
+				() => 0,
+			);
+			await entered.promise;
+			if (mode === "Driver guard invalidation") revoked = true;
+			else if (mode === "Turn revoke") value.revokeTurn(defaultNativeTurn);
+			else value.revokeConversationAccess(testConversationKey);
+			release.resolve();
+			expect(await pending).not.toBe(200);
+			expect(calls).toBe(0);
+			expect(finish).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "failed",
+					failureCode: "request_not_started",
+				}),
+			);
+		},
+	);
+});

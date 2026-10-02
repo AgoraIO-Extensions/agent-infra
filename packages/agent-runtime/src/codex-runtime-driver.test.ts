@@ -9766,3 +9766,130 @@ describe("original Codex terminal request drain", () => {
 		await reading;
 	});
 });
+
+describe("Codex model started Driver state guard", () => {
+	it.each([
+		"configuration change",
+		"native terminal",
+		"stop",
+		"close",
+	] as const)(
+		"checks original state after started persistence races %s",
+		async (mode) => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			let calls = 0;
+			const endpoint = await listen(
+				createServer((_incoming, response) => {
+					calls++;
+					response.end();
+				}),
+			);
+			let access: CodexModelAccess | undefined;
+			const bridge = new TestCodexBridge();
+			const driver = await openDriverWithModelEndpoint(
+				path,
+				bridge,
+				endpoint,
+				(launch) => {
+					access = launch.modelAccess;
+				},
+				undefined,
+				upstreamModelAccess.credential,
+				async () => {},
+			);
+			drivers.push(driver);
+			const accepted = await driver.execute(submitCommand());
+			if (!access) throw new Error("missing process model access");
+			const entered = Promise.withResolvers<DurableJsonFile<unknown>>();
+			const release = Promise.withResolvers<void>();
+			const original = DurableJsonFile.prototype.update;
+			let held = false;
+			const spy = vi
+				.spyOn(DurableJsonFile.prototype, "update")
+				.mockImplementation(async function <R>(
+					this: DurableJsonFile<unknown>,
+					change: (draft: unknown) => R | Promise<R>,
+				) {
+					const result = (await original.call(this, change)) as R;
+					const bytes = JSON.stringify(this.read());
+					if (
+						!held &&
+						bytes.includes('"kind":"model"') &&
+						bytes.includes('"phase":"started"')
+					) {
+						held = true;
+						entered.resolve(this);
+						await release.promise;
+					}
+					return result;
+				});
+			const pending = modelRequest(access, bridge).then(
+				async (response) => {
+					await response.text();
+					return response.status;
+				},
+				() => 0,
+			);
+			const file = await entered.promise;
+			let control: Promise<unknown> | undefined;
+			try {
+				if (mode === "stop") {
+					control = driver.execute(stopCommand(accepted.nativeSessionRef));
+					await vi.waitFor(() => {
+						const current = file.read() as StoredCodexDriverState;
+						expect(
+							Object.keys(current.operations).some((key) =>
+								key.includes('"stop"'),
+							),
+						).toBe(true);
+					});
+				} else if (mode === "close") control = driver.close();
+				else
+					await original.call(file, (draft) => {
+						const state = draft as StoredCodexDriverState;
+						if (mode === "configuration change") {
+							for (const operation of Object.values(state.operations)) {
+								if (operation.record?.result?.outcome === "accepted")
+									operation.configVersion = "changed-after-start";
+							}
+						} else {
+							const session = state.sessions[accepted.nativeSessionRef];
+							const journal =
+								session && Object.values(session.journals ?? {})[0];
+							if (!journal) throw new Error("missing original journal");
+							const nativeJournal = journal as StoredEventJournal & {
+								nativeCompletionStatus?: string;
+							};
+							nativeJournal.nativeCompletionStatus = "completed";
+						}
+					});
+			} finally {
+				release.resolve();
+				spy.mockRestore();
+			}
+			expect(await pending).not.toBe(200);
+			await control;
+			expect(calls).toBe(0);
+			if (mode === "configuration change" || mode === "native terminal") {
+				const state = file.read() as StoredCodexDriverState;
+				const journal = Object.values(
+					state.sessions[accepted.nativeSessionRef]?.journals ?? {},
+				)[0];
+				const facts = journal?.events
+					.filter((event) => event.type === "operation")
+					.map((event) => event.payload as RuntimeOperationFactV2);
+				expect(facts?.map((fact) => fact.phase)).toEqual([
+					"intent",
+					"started",
+					"failed",
+				]);
+				// Preserve the existing projection of transport request_not_started.
+				expect(facts?.at(-1)).toMatchObject({
+					failureCode: "request_rejected",
+				});
+				expect(new Set(facts?.map((fact) => fact.operationRef)).size).toBe(1);
+				expect(new Set(facts?.map((fact) => fact.attemptRef)).size).toBe(1);
+			}
+		},
+	);
+});
