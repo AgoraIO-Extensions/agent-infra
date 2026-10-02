@@ -156,6 +156,16 @@ async function persistConformanceModelConfiguration(
 		on conflict (agent_id, revision) do update
 		set configuration = excluded.configuration
 	`;
+	const keyId = "fixture-key:personal:user_01";
+	await client`insert into platform.relay_key_subjects
+		(purpose, subject_id, last_version, current_version)
+		values ('personal', 'user_01', 1, 1)
+		on conflict (purpose, subject_id) do nothing`;
+	await client`insert into platform.relay_key_versions
+		(purpose, subject_id, key_version, key_id, ciphertext)
+		values ('personal', 'user_01', 1, ${keyId},
+			${client.json({ purpose: "personal", subjectId: "user_01", keyId, keyVersion: 1 })})
+		on conflict (purpose, subject_id, key_version) do nothing`;
 	await client`
 		update platform.agents
 		set current_configuration_revision = ${revision}

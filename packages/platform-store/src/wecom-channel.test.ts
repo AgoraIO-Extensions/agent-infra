@@ -68,7 +68,7 @@ const configuration = {
 	channelRevision: "channels_1",
 };
 function channel(target = store) {
-	return createWecomChannelV1({
+	const base = createWecomChannelV1({
 		store: target,
 		authorization: {
 			async authorize(scope) {
@@ -99,6 +99,22 @@ function channel(target = store) {
 			},
 		},
 	});
+	return {
+		...base,
+		async receive(input: WecomMessageV1) {
+			const keyId = `fixture-key:personal:${input.senderId}`;
+			await sql`insert into platform.relay_key_subjects
+				(purpose, subject_id, last_version, current_version)
+				values ('personal', ${input.senderId}, 1, 1)
+				on conflict (purpose, subject_id) do nothing`;
+			await sql`insert into platform.relay_key_versions
+				(purpose, subject_id, key_version, key_id, ciphertext)
+				values ('personal', ${input.senderId}, 1, ${keyId},
+					${sql.json({ purpose: "personal", subjectId: input.senderId, keyId, keyVersion: 1 })})
+				on conflict (purpose, subject_id, key_version) do nothing`;
+			return base.receive(input);
+		},
+	};
 }
 beforeAll(async () => {
 	db = await startPostgresTestDatabase("wecom-channel");

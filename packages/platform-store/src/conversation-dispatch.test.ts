@@ -213,6 +213,23 @@ async function seed(
 			 ${options.legacySelection ? null : "medium"},
 			 now(), now())
 	`;
+	const keyPurpose = channel === "web" ? "personal" : "agent-default";
+	const keySubjectId = channel === "web" ? "actor-dispatch" : agentId;
+	const keyId = `fixture-key:${keyPurpose}:${keySubjectId}`;
+	await client`insert into platform.relay_key_subjects
+		(purpose, subject_id, last_version, current_version)
+		values (${keyPurpose}, ${keySubjectId}, 1, 1)
+		on conflict (purpose, subject_id) do nothing`;
+	await client`insert into platform.relay_key_versions
+		(purpose, subject_id, key_version, key_id, ciphertext)
+		values (${keyPurpose}, ${keySubjectId}, 1, ${keyId},
+			${client.json({ purpose: keyPurpose, subjectId: keySubjectId, keyId, keyVersion: 1 })})
+		on conflict (purpose, subject_id, key_version) do nothing`;
+	await client`update platform.conversation_executions
+		set execution_source = ${channel === "web" ? "web" : "platform-api"},
+			relay_key_purpose = ${keyPurpose}, relay_key_subject_id = ${keySubjectId},
+			relay_key_id = ${keyId}, relay_key_version = 1
+		where execution_id = ${executionId}`;
 	if (operation !== "conversation.turn.stop.v1") {
 		await client`
 			insert into platform.conversation_messages
