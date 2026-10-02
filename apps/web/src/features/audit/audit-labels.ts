@@ -130,6 +130,7 @@ export const auditSubjectLabels: Record<
 	conversation: "Conversation",
 	execution: "Execution",
 	configuration: "配置",
+	api_credential: "API 凭证",
 };
 
 export function auditOutcomeLabel(record: AuditRecord) {

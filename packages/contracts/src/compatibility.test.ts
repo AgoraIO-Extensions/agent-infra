@@ -106,6 +106,83 @@ function restorePreRelayKeyContract(value: {
 }
 
 describe("contract compatibility command", () => {
+	it("admits only the known credential audit subject and preserves privacy and security", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		const subject = (document: typeof current) =>
+			document.components.schemas.ScopedPlatformAuditProjectionV1.properties
+				.subject;
+		subject(previous).properties.kind.enum = subject(
+			previous,
+		).properties.kind.enum.filter((kind: string) => kind !== "api_credential");
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-credential-subject-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const beforeNarrow = structuredClone(previous);
+			restorePreCredentialNarrowContract(beforeNarrow);
+			await writeFile(previousPath, JSON.stringify(beforeNarrow));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			await writeFile(previousPath, JSON.stringify(previous));
+			const mutations: ((document: typeof current) => void)[] = [
+				(document) => {
+					document.components.schemas.ScopedPlatformAuditActionV1.enum =
+						document.components.schemas.ScopedPlatformAuditActionV1.enum.filter(
+							(action: string) => action !== "api.credential.narrowed",
+						);
+				},
+				(document) =>
+					subject(document).properties.kind.enum.push("invented_credential"),
+				(document) => subject(document).properties.kind.enum.shift(),
+				(document) => {
+					subject(document).properties.subjectId.minLength = 0;
+				},
+				(document) => {
+					subject(document).additionalProperties = true;
+				},
+				(document) => {
+					document.components.schemas.ScopedPlatformAuditProjectionV1.additionalProperties = true;
+				},
+				(document) => {
+					document.paths["/api/v3/admin/audit"].get.security = [{}];
+				},
+				(document) => {
+					document.paths["/api/v1/audit"].get.security = [];
+				},
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+						"unreviewed.action",
+					),
+			];
+			for (const field of [
+				"credential",
+				"credentialHash",
+				"scopes",
+				"expiresAt",
+				"details",
+			]) {
+				mutations.push((document) => {
+					subject(document).properties[field] = { type: "string" };
+				});
+			}
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only exact scoped audit cookie/Bearer documentation and rejects authority drift", async () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),
