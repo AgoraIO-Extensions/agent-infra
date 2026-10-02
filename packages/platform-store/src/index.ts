@@ -150,3 +150,4 @@ export {
 	validateWecomSetupCredentialRecordV1,
 } from "./wecom-setup.ts";
 export { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.js";
+export { PostgresApplicationMaterialGrantStoreV1, type PostgresApplicationMaterialGrantOptionsV1 } from "./application-material-grant.ts";

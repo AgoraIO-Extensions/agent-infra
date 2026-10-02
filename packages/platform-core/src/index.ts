@@ -107,3 +107,4 @@ export * from "./wecom-setup.js";
 export * from "./wecom-setup-activation.js";
 export * from "./workload-reconciliation.js";
 export { parseWorkloadSecretRecoveriesV1 } from "./workload-secret-recovery.js";
+export * from "./application-material-grant.js";

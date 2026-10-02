@@ -10,3 +10,4 @@ export * from "./personal-relay-key.ts";
 export * from "./sse.ts";
 export * from "./template-release.ts";
 export * from "./wecom-application.ts";
+export * from "./application-material-grants.ts";
