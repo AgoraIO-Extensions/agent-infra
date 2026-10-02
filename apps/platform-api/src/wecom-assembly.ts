@@ -30,7 +30,11 @@ export function assembleWecomApiV1(
 	const protectReply = createWecomReplyEncryptorV1(
 		deployment.replyEncryptionPublicKeyPem,
 	);
-	const receipts = assembleWecomReceiptApiV1(databaseUrl, deployment.identity);
+	const receipts = assembleWecomReceiptApiV1(
+		databaseUrl,
+		deployment.identity,
+		deployment.userDirectory,
+	);
 	const { store, authorization } = receipts;
 	return {
 		dependencies: {
@@ -54,10 +58,11 @@ export function assembleWecomApiV1(
 export function assembleWecomReceiptApiV1(
 	databaseUrl: string,
 	identity: WecomIdentityPortV1,
+	userDirectory?: TaskUserDirectoryV1,
 ) {
 	const store = new PostgresWecomChannelV1({
 		databaseUrl,
-		userDirectory: deployment.userDirectory,
+		userDirectory,
 	});
 	const authorization = createWecomAuthorizationV1({ identity, state: store });
 	return {
