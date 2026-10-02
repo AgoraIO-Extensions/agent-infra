@@ -620,7 +620,7 @@ test("clears a loaded execution after 404 and recovers without resending", async
 
 test("saves the next-message model and stops the bound execution", async ({
 	page,
-}) => {
+}, info) => {
 	const agent = activeAgent();
 	const processing = event("execution.status", 1, { status: "processing" });
 	const cancelled = event("execution.status", 2, { status: "cancelled" });
@@ -732,8 +732,115 @@ test("saves the next-message model and stops the bound execution", async ({
 		`/agents/${agentId}/conversations?conversation=${conversationId}`,
 	);
 	await expect(page.getByRole("button", { name: "停止回复" })).toBeVisible();
-	await page.getByRole("combobox", { name: "模型" }).click();
-	await page.getByRole("option", { name: "Secondary model" }).click();
+	await page
+		.getByRole("textbox", { name: "消息", exact: true })
+		.fill("保留下一条草稿");
+	const controls = page.getByRole("group", { name: "下一条消息的模型" });
+	await expect(controls).toBeVisible();
+	expect(await controls.evaluate((node) => node.closest("form"))).toBeNull();
+	for (const viewport of [
+		info.project.use.viewport,
+		{ width: 320, height: 370 },
+	]) {
+		if (!viewport) throw new Error("Expected configured viewport");
+		await page.setViewportSize(viewport);
+		const geometry = await controls.evaluate((node) => {
+			const timeline = document.querySelector(".timeline");
+			const title = document.querySelector(".chat-status h2");
+			if (!timeline || !title)
+				throw new Error("Expected conversation title and timeline");
+			return {
+				controls: node.getBoundingClientRect().toJSON(),
+				title: title.getBoundingClientRect().toJSON(),
+				timeline: timeline.getBoundingClientRect().toJSON(),
+				viewport: { width: innerWidth, height: innerHeight },
+				precedesTimeline: Boolean(
+					node.compareDocumentPosition(timeline) &
+						Node.DOCUMENT_POSITION_FOLLOWING,
+				),
+			};
+		});
+		await info.attach(`model-controls-${viewport.width}-geometry`, {
+			body: JSON.stringify(geometry),
+			contentType: "application/json",
+		});
+		expect(geometry.precedesTimeline).toBe(true);
+		expect(geometry.title.bottom).toBeLessThanOrEqual(geometry.controls.top);
+		expect(geometry.timeline).toBeTruthy();
+		expect(geometry.controls.bottom).toBeLessThanOrEqual(geometry.timeline.top);
+		for (const [index, control] of [
+			controls.getByRole("combobox", { name: "模型", exact: true }),
+			controls.getByRole("combobox", { name: "推理强度", exact: true }),
+			controls.getByRole("button", { name: "保存模型选择" }),
+			page.getByText("继续检查当前任务", { exact: true }),
+			page.getByRole("textbox", { name: "消息", exact: true }),
+			page.getByRole("button", { name: "发送补充指令", exact: true }),
+		].entries()) {
+			await control.evaluate((node) =>
+				node.scrollIntoView({
+					block: "center",
+					inline: "nearest",
+					behavior: "instant",
+				}),
+			);
+			await info.attach(
+				`model-controls-and-composer-${viewport.width}-${index}-geometry`,
+				{
+					body: JSON.stringify(
+						await control.evaluate((node) => ({
+							target: node.getBoundingClientRect().toJSON(),
+							viewport: { width: innerWidth, height: innerHeight },
+							scroll: { x: scrollX, y: scrollY },
+							ancestors: [".timeline", ".chat-workspace"].map((selector) => {
+								const ancestor = node.closest(selector);
+								return ancestor
+									? {
+											selector,
+											rect: ancestor.getBoundingClientRect().toJSON(),
+											scrollTop: ancestor.scrollTop,
+											clientHeight: ancestor.clientHeight,
+											scrollHeight: ancestor.scrollHeight,
+										}
+									: null;
+							}),
+						})),
+					),
+					contentType: "application/json",
+				},
+			);
+			await info.attach(
+				`model-controls-and-composer-${viewport.width}-${index}`,
+				{
+					body: await page.screenshot({ animations: "disabled" }),
+					contentType: "image/png",
+				},
+			);
+			await expect(control).toBeInViewport({ ratio: 1 });
+			if (index !== 3) {
+				expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(
+					44,
+				);
+			}
+			await control.click({ trial: true });
+		}
+		expect(
+			await page.evaluate(
+				() =>
+					Math.max(
+						document.documentElement.scrollWidth,
+						document.body.scrollWidth,
+					) <= innerWidth,
+			),
+		).toBe(true);
+	}
+
+	await page
+		.getByRole("combobox", { name: "模型", exact: true })
+		.press("Space");
+	await page.getByRole("option", { name: "Secondary model" }).press("Enter");
+	await expect(
+		page.getByRole("button", { name: "发送补充指令", exact: true }),
+	).toBeDisabled();
 	await page.getByRole("combobox", { name: "推理强度" }).click();
 	await page.getByRole("option", { name: "high" }).click();
 	await page.getByRole("button", { name: "保存模型选择" }).click();
@@ -742,6 +849,9 @@ test("saves the next-message model and stops the bound execution", async ({
 			hasText: "模型选择已保存，从下一条消息开始生效。",
 		}),
 	).toBeVisible();
+	await expect(
+		page.getByRole("textbox", { name: "消息", exact: true }),
+	).toHaveValue("保留下一条草稿");
 	await page.getByRole("button", { name: "停止回复" }).click();
 	await expect(
 		page.getByRole("status").filter({ hasText: "原回复已结束。" }),
