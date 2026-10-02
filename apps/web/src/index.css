@@ -682,6 +682,9 @@ a[class~="group/button"] {
 	padding-bottom: 16px;
 	border-bottom: 1px solid var(--border);
 }
+.chat-thread .model-controls > legend {
+	width: 100%;
+}
 .chat-thread .composer-zone {
 	border-radius: 14px;
 	background: var(--surface);
@@ -789,6 +792,20 @@ a[class~="group/button"] {
 	}
 	.chat-thread .timeline {
 		padding: 18px 4px;
+	}
+}
+/* Short viewports use page scrolling so keyboard focus cannot be clipped. */
+@media (max-height: 600px) {
+	.chat-layout,
+	.conversation-columns > .chat-workspace {
+		height: auto;
+	}
+	.conversation-columns > .chat-workspace {
+		overflow: visible;
+	}
+	.chat-thread:not([hidden]) {
+		flex: none;
+		min-height: auto;
 	}
 }
 @media (prefers-reduced-motion: reduce) {
