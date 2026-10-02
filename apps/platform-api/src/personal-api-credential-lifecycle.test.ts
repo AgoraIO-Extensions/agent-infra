@@ -305,6 +305,10 @@ describe("formal deployment personal credential governance over PostgreSQL and g
 			);
 		} finally {
 			await databaseClient`delete from platform.agent_principal_grants where agent_id=${agentId}`;
+			await databaseClient`delete from platform.agent_applications where agent_id=${agentId}`;
+			await databaseClient`delete from platform.agent_configuration_revisions where agent_id=${agentId}`;
+			await databaseClient`delete from platform.agent_owners where agent_id=${agentId}`;
+			await databaseClient`delete from platform.agent_availability where agent_id=${agentId}`;
 			await databaseClient`delete from platform.agents where id=${agentId}`;
 		}
 	});
