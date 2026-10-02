@@ -340,7 +340,11 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 				[configuration.agentId, JSON.stringify(configured)],
 			);
 			const version = { configuration: configured, deployment };
-			if (mode !== "absent")
+			if (mode !== "absent") {
+				await db.unsafe(
+					"delete from platform.workload_reconciliations where agent_id=$1 and revision=1",
+					[configuration.agentId],
+				);
 				await db.unsafe(
 					"insert into platform.workload_reconciliations(agent_id,revision,state,next_attempt_at) values($1,1,$2::text::jsonb,now())",
 					[
@@ -364,6 +368,7 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 						}),
 					],
 				);
+			}
 			const conversationId = await createConversation();
 			const first = await post(
 				`/conversations/${conversationId}/messages`,
