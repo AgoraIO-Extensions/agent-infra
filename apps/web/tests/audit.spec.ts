@@ -390,21 +390,25 @@ test("administrator audit failure is distinct from successful empty metadata", a
 	page,
 }) => {
 	const api = await fixture(page, "admin");
+	const queryFailure = page
+		.getByRole("alert")
+		.filter({ hasText: "审计查询失败" });
 	await page.goto("/admin/audit");
 	await expect(
 		page.getByText(governance.summary, { exact: true }),
 	).toBeVisible();
 	api.failNext();
 	await page.getByRole("button", { name: "刷新审计记录" }).click();
-	await expect(
-		page.getByRole("alert").filter({ hasText: "审计查询失败" }),
-	).toBeVisible();
+	await expect(queryFailure).toBeVisible();
 	await expect(page.getByText("暂无审计记录", { exact: true })).toHaveCount(0);
 	await expect(page.getByText("private fixture error")).toHaveCount(0);
 	api.emptyNext();
 	await page.getByRole("button", { name: "刷新审计记录" }).click();
 	await expect(page.getByText("暂无审计记录", { exact: true })).toBeVisible();
-	await expect(page.getByText(/审计查询失败/)).toHaveCount(0);
+	await expect(queryFailure).toHaveCount(0);
+	await expect(
+		page.getByRole("option", { name: "审计查询失败", exact: true }),
+	).toHaveCount(1);
 	expect(api.requests.filter((request) => request.method !== "GET")).toEqual(
 		[],
 	);
