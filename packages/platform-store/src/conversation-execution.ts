@@ -100,6 +100,14 @@ import {
 import { writeTaskApiAuditV1 } from "./task-api-audit.js";
 import { insertTaskAuthorization } from "./task-authorization.js";
 
+function legacyWebExecutionBinding(
+	authority: ConversationExecutionAuthorityV1,
+) {
+	return authority.channelId === "web"
+		? { executionSource: null, relayKeyBinding: null }
+		: undefined;
+}
+
 export interface PostgresConversationExecutionOptionsV1 {
 	readonly databaseUrl: string;
 	readonly userDirectory?: TaskUserDirectoryV1;
@@ -429,12 +437,13 @@ export class PostgresConversationExecutionTransactionV1
 			}
 			const plan = validateMessagePlan(decision, request, state);
 			const executionBinding = plan.execution
-				? await currentConversationExecutionRelayKeyBindingV1(transaction, {
+				? (legacyWebExecutionBinding(authority) ??
+					(await currentConversationExecutionRelayKeyBindingV1(transaction, {
 						authority,
 						userDirectory: this.#userDirectory,
 						personalApiAdmissionAuthority:
 							authority.personalApiAdmissionAuthority,
-					})
+					})))
 				: undefined;
 			if (plan.execution && !executionBinding) return { outcome: "denied" };
 			const reservationId = await reserveIdempotency(transaction, {
@@ -702,12 +711,13 @@ export class PostgresConversationExecutionTransactionV1
 			if (!isRegenerationPlan(decision)) return decision;
 			const plan = validateRegenerationPlan(decision, request, state);
 			const executionBinding =
-				await currentConversationExecutionRelayKeyBindingV1(transaction, {
+				legacyWebExecutionBinding(authority) ??
+				(await currentConversationExecutionRelayKeyBindingV1(transaction, {
 					authority,
 					userDirectory: this.#userDirectory,
 					personalApiAdmissionAuthority:
 						authority.personalApiAdmissionAuthority,
-				});
+				}));
 			if (!executionBinding) return { outcome: "denied" };
 			const reservationId = await reserveIdempotency(transaction, {
 				...scope,
