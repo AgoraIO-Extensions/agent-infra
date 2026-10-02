@@ -1,6 +1,7 @@
 import {
 	AgentProjectionV2Schema,
 	ConversationDetailProjectionV2Schema,
+	ConversationPageV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, test } from "@playwright/test";
@@ -70,6 +71,10 @@ test("assistant Markdown stays readable through history reload and version switc
 	});
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const path = new URL(route.request().url()).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
 		if (path.endsWith("/events")) {
 			await route.fulfill({
 				contentType: "text/event-stream",

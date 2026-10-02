@@ -55,6 +55,8 @@ function setup(
 		const custom = await handler?.(request);
 		if (custom) return custom;
 		const path = new URL(request.url).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return Response.json({ items: [], nextCursor: null });
 		if (path === "/api/v2/agents/agent-1") return Response.json(agent);
 		if (path.endsWith("/events")) {
 			const stream = sse();
@@ -567,7 +569,7 @@ describe("functional conversation screen", () => {
 	});
 
 	it("preserves the composer while viewing personal history and binds navigation to server IDs", async () => {
-		const { props } = setup((request) =>
+		const { props, requests, streams } = setup((request) =>
 			new URL(request.url).pathname === "/api/v1/agents/agent-1/conversations"
 				? Response.json({
 						items: [history().conversation],
@@ -576,7 +578,11 @@ describe("functional conversation screen", () => {
 				: undefined,
 		);
 		fireEvent.change(await composer(), { target: { value: "Kept draft" } });
+		await screen.findByRole("heading", { name: "最近对话" });
+		await waitFor(() => expect(streams).toHaveLength(1));
 		fireEvent.click(screen.getByRole("button", { name: "个人历史" }));
+		expect((await composer()).value).toBe("Kept draft");
+		expect(document.activeElement?.getAttribute("aria-label")).toBe("对话历史");
 		const historyLink = await screen.findByRole("link", {
 			name: /Test conversation/,
 		});
@@ -592,6 +598,68 @@ describe("functional conversation screen", () => {
 			await screen.findByRole("link", { name: /Test conversation/ }),
 		);
 		expect(props.onConversationChange).toHaveBeenCalledWith("conversation-1");
+		expect(streams).toHaveLength(1);
+		expect(requests.every((request) => request.method === "GET")).toBe(true);
+	});
+
+	it.each([
+		[401, "最近对话无法读取，请重新登录。"],
+		[403, "当前无权读取最近对话。"],
+		[404, "最近对话读取入口不可用。"],
+		[503, "最近对话暂时无法读取。"],
+	])(
+		"keeps recent read failure %s distinct from an empty list and conversation denial",
+		async (status, message) => {
+			const onAccessDenied = vi.fn();
+			const { requests } = setup(
+				(request) =>
+					new URL(request.url).pathname === "/api/v2/me/conversations/recent"
+						? Response.json(
+								{ message: "Controlled failure" },
+								{ status: Number(status) },
+							)
+						: undefined,
+				{ onAccessDenied },
+			);
+			await screen.findByText(String(message));
+			await composer();
+			expect(screen.queryByText("暂无个人对话。")).toBeNull();
+			expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
+			expect(onAccessDenied).not.toHaveBeenCalled();
+			expect(requests.every((request) => request.method === "GET")).toBe(true);
+		},
+	);
+
+	it("discards a late recent response when the login identity changes", async () => {
+		const old = deferred<Response>();
+		let changed = false;
+		const { rerenderScope } = setup((request) => {
+			if (new URL(request.url).pathname !== "/api/v2/me/conversations/recent")
+				return undefined;
+			return changed
+				? Response.json({
+						items: [
+							{ ...history().conversation, title: "New identity recent" },
+						],
+						nextCursor: null,
+					})
+				: old.promise;
+		});
+		await screen.findByText("正在读取最近对话…");
+		changed = true;
+		rerenderScope({ identityKey: "session-b" });
+		await screen.findByRole("link", { name: /New identity recent/ });
+		await act(async () => {
+			old.resolve(
+				Response.json({
+					items: [
+						{ ...history().conversation, title: "Old identity private recent" },
+					],
+					nextCursor: null,
+				}),
+			);
+		});
+		expect(screen.queryByText("Old identity private recent")).toBeNull();
 	});
 
 	it("restores the history deep link and reports view navigation without replacing the conversation", async () => {
@@ -600,7 +668,7 @@ describe("functional conversation screen", () => {
 			view: "history",
 			onViewChange,
 		});
-		await screen.findByRole("heading", { name: "个人历史", level: 1 });
+		await screen.findByRole("heading", { name: "个人历史", level: 2 });
 		fireEvent.click(screen.getByRole("button", { name: "返回对话" }));
 		expect(onViewChange).toHaveBeenCalledWith("conversation");
 		expect(props.onConversationChange).not.toHaveBeenCalled();
