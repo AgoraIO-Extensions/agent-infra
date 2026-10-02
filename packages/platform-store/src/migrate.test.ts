@@ -2074,7 +2074,6 @@ describe("published Relay authority migration", () => {
 								"conversation_executions:conversation_execution_original_digest_binding",
 								"conversation_executions:conversation_execution_principal_type_valid",
 								"conversation_executions:conversation_execution_task_wait_binding",
-								"conversation_events:conversation_event_source_binding",
 								"conversation_generation_tombstones:conversation_generation_tombstone_principal_valid",
 								"conversations:conversation_principal_type_valid",
 							]
