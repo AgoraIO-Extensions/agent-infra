@@ -2105,7 +2105,7 @@ describe("published Relay authority migration", () => {
 			await builtStore.migratePlatformDatabase({ databaseUrl });
 			expect(await history()).toEqual(after);
 			expect(await relayCatalog()).toEqual(afterCatalog);
-			expect(await records()).toEqual(data);
+			expect(await records(kind !== "original27")).toEqual(data);
 		},
 	);
 
