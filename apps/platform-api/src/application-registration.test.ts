@@ -520,63 +520,73 @@ function disableApplication(
 	});
 }
 describe("application disable production HTTP/PostgreSQL boundary", () => {
-	it("persists one transition across concurrent keys, generated-client replay and assembly restart", async () => {
-		const own = ApplicationRegistrationResponseV1Schema.parse(
-			await (await post()).json(),
-		).metadata;
-		const second = await start();
-		let responses: Response[];
-		try {
-			responses = await Promise.all([
-				disableApplication(own.applicationId),
-				disableApplication(
-					own.applicationId,
-					"alice",
-					"disable_2",
-					{ status: "disabled" },
-					second.baseUrl,
+	it.each(["disable_1", "disable_2"])(
+		"persists one transition with concurrent second key %s, generated-client replay and assembly restart",
+		async (secondKey) => {
+			const own = ApplicationRegistrationResponseV1Schema.parse(
+				await (await post()).json(),
+			).metadata;
+			const second = await start();
+			let responses: Response[];
+			try {
+				responses = await Promise.all([
+					disableApplication(own.applicationId),
+					disableApplication(
+						own.applicationId,
+						"alice",
+						secondKey,
+						{ status: "disabled" },
+						second.baseUrl,
+					),
+				]);
+			} finally {
+				await stop(second);
+			}
+			expect(responses.map((r) => r.status)).toEqual([200, 200]);
+			const results = await Promise.all(
+				responses.map(async (r) =>
+					ApplicationMetadataV1Schema.parse(await r.json()),
 				),
-			]);
-		} finally {
-			await stop(second);
-		}
-		expect(responses.map((r) => r.status)).toEqual([200, 200]);
-		const results = await Promise.all(
-			responses.map(async (r) =>
-				ApplicationMetadataV1Schema.parse(await r.json()),
-			),
-		);
-		const firstResult = results[0];
-		if (!firstResult) throw new Error("Missing first concurrent response");
-		expect(firstResult).toEqual(results[1]);
-		expect(firstResult.status).toBe("disabled");
-		expect(firstResult.authorizationRevision).not.toBe(
-			own.authorizationRevision,
-		);
-		await stop();
-		({ assembly, server, baseUrl } = await start());
-		const { createClient } = await import(
-			new URL(
-				"../../web/src/pilot/generated-v2/client/index.ts",
-				import.meta.url,
-			).href
-		);
-		const { disableOwnApplicationV2 } = await import(
-			new URL("../../web/src/pilot/generated-v2/index.ts", import.meta.url).href
-		);
-		const replay = await disableOwnApplicationV2({
-			client: createClient({ baseUrl }),
-			path: { applicationId: own.applicationId },
-			headers: { Cookie: "browser_test=alice", "Idempotency-Key": "disable_1" },
-			body: { status: "disabled" },
-		});
-		expect(replay.response.status).toBe(200);
-		expect(replay.data).toEqual(firstResult);
-		const [effects] =
-			await sql`select (select count(*)::int from platform.idempotency_records where command_type='application.disabled') as commands,
+			);
+			const firstResult = results[0];
+			if (!firstResult) throw new Error("Missing first concurrent response");
+			expect(firstResult).toEqual(results[1]);
+			expect(firstResult.status).toBe("disabled");
+			expect(firstResult.authorizationRevision).not.toBe(
+				own.authorizationRevision,
+			);
+			await stop();
+			({ assembly, server, baseUrl } = await start());
+			const { createClient } = await import(
+				new URL(
+					"../../web/src/pilot/generated-v2/client/index.ts",
+					import.meta.url,
+				).href
+			);
+			const { disableOwnApplicationV2 } = await import(
+				new URL("../../web/src/pilot/generated-v2/index.ts", import.meta.url)
+					.href
+			);
+			const replay = await disableOwnApplicationV2({
+				client: createClient({ baseUrl }),
+				path: { applicationId: own.applicationId },
+				headers: {
+					Cookie: "browser_test=alice",
+					"Idempotency-Key": "disable_1",
+				},
+				body: { status: "disabled" },
+			});
+			expect(replay.response.status).toBe(200);
+			expect(replay.data).toEqual(firstResult);
+			const [effects] =
+				await sql`select (select count(*)::int from platform.idempotency_records where command_type='application.disabled') as commands,
 		(select count(*)::int from platform.audit_events where action='application.disabled' and outcome='succeeded') as audits`;
-		expect(effects).toEqual({ commands: 2, audits: 3 });
-	});
+			expect(effects).toEqual({
+				commands: secondKey === "disable_1" ? 1 : 2,
+				audits: 3,
+			});
+		},
+	);
 	it("does not disclose foreign applications or accept delegated identity fields", async () => {
 		const own = ApplicationRegistrationResponseV1Schema.parse(
 			await (await post()).json(),
