@@ -628,12 +628,19 @@ export function ConnectionsPage() {
 			total: connectionIds.length,
 		});
 		const failedConnectionIds: string[] = [];
+		let approvalFailureMessage: string | undefined;
 		let completed = 0;
 		for (const connectionId of connectionIds) {
 			try {
 				await connectionApi.upgradeProviderConnection(connectionId);
-			} catch {
+			} catch (error) {
 				failedConnectionIds.push(connectionId);
+				if (
+					error instanceof ConnectionApiError &&
+					error.detail.messageKey ===
+						"connection.error.provider_upgrade_approval_required"
+				)
+					approvalFailureMessage = error.message;
 			}
 			completed += 1;
 			setBulkUpgrade({
@@ -675,7 +682,7 @@ export function ConnectionsPage() {
 			total: connectionIds.length,
 		});
 		setUpgradeNotice(
-			`批量处理完成：${connectionIds.length - retryableFailedConnectionIds.length} 个连接已升级，${retryableFailedConnectionIds.length} 个失败，${needsAuthorization} 条授权待确认。`,
+			`批量处理完成：${connectionIds.length - retryableFailedConnectionIds.length} 个连接已升级，${retryableFailedConnectionIds.length} 个失败，${needsAuthorization} 条授权待确认。${retryableFailedConnectionIds.length && approvalFailureMessage ? ` ${approvalFailureMessage}` : ""}`,
 		);
 	};
 	return (

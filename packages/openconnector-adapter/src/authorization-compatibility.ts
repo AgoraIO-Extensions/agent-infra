@@ -1,4 +1,5 @@
 import { bitbucketServerConnectionCatalog as catalog } from "./bitbucket-server.ts";
+import { datalegoV5ConnectionCatalog as datalegoCatalog } from "./datalego-v5.ts";
 
 // Reviewed release evidence is separate from immutable hashed executors.
 // Exact literals intentionally prevent a later release inheriting this proof.
@@ -23,4 +24,25 @@ export const bitbucketAuthorizationCompatibility = [
 export const bitbucketServerConnectionCatalog = {
 	...catalog,
 	authorizationCompatibility: bitbucketAuthorizationCompatibility,
+} as const;
+
+export const datalegoAuthorizationCompatibility = [
+	{
+		provider: "datalego",
+		fromReleaseId: "datalego-connection-v4",
+		toReleaseId: "datalego-connection-v5",
+		fromExecutorDigest:
+			"sha256:1586729da6ad1b0f26cc8a45d7d3fae4320ab50dd64fdf28df95219fbc0f1c3b",
+		toExecutorDigest:
+			"sha256:f8489f6315d4133969d20c080d8c455e8ae549d12ea9fe4f95123ba4cfe0c9f2",
+		rationale:
+			"v5 guards cancellation and preserves uncertain responses; the four action names, input schemas, effects, scopes, personal OAuth identity and fixed origins are unchanged.",
+		reviewReference:
+			"https://github.com/AgoraIO-Extensions/agent-infra/pull/1228",
+	},
+] as const;
+
+export const datalegoV5ConnectionCatalog = {
+	...datalegoCatalog,
+	authorizationCompatibility: datalegoAuthorizationCompatibility,
 } as const;

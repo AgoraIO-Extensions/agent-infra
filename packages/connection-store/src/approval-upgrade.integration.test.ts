@@ -1,11 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { canonicalHash } from "@agent-infra/connection-core";
+import {
+	ConnectionApplicationService,
+	canonicalHash,
+} from "@agent-infra/connection-core";
 import {
 	bitbucketServerConnectionCatalog,
 	githubConnectionCatalog,
 } from "@agent-infra/openconnector-adapter";
-import { bitbucketAuthorizationCompatibility } from "@agent-infra/openconnector-adapter/authorization-compatibility";
+import {
+	bitbucketAuthorizationCompatibility,
+	datalegoAuthorizationCompatibility,
+	datalegoV5ConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/authorization-compatibility";
+import { datalegoV4ConnectionCatalog } from "@agent-infra/openconnector-adapter/datalego-v4";
+import {
+	DataLegoV5Adapter,
+	datalegoV5ConnectionCatalog as immutableDatalegoV5,
+} from "@agent-infra/openconnector-adapter/datalego-v5";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
 import { PostgresConnectionAccessRequestRepository } from "./access-request-repository";
@@ -24,6 +36,153 @@ if (process.env.CI && !databaseUrl)
 	throw new Error("Upgrade test database required");
 
 describe("compatible approval upgrade", () => {
+	(databaseUrl ? it : it.skip)(
+		"upgrades real DataLego v4 OAuth catalog without expanding approval or losing refresh credentials",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const sql = postgres(databaseUrl);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 23),
+			);
+			const principalId = `datalego-repair-${randomUUID()}`;
+			const identity = {
+				principalId,
+				providerId: "datalego",
+				providerReleaseId: datalegoV4ConnectionCatalog.providerReleaseId,
+				externalAccount: "alice@example.invalid",
+				displayName: "Alice",
+				accessToken: "datalego-access-fixture",
+				refreshToken: "datalego-refresh-fixture",
+				expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+				refreshExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+				grantedScopes: ["datalego.query"],
+			};
+			try {
+				await repository.publishProviderCatalog(datalegoV4ConnectionCatalog);
+				await sql`INSERT INTO connection_principals (id, display_name) VALUES (${principalId}, 'DataLego repair')`;
+				const requestId = await seedApprovedConnectPermit(sql, {
+					principalId,
+					providerReleaseId: identity.providerReleaseId,
+					scopes: identity.grantedScopes,
+					actionVersionIds: [
+						"datalego.get_current_user@v4",
+						"datalego.get_query_status@v4",
+					],
+				});
+				const { connectionId } = await repository.storeProviderCredential({
+					...identity,
+					accessRequestId: requestId,
+				});
+				const [originalAccess] =
+					await sql`SELECT id,valid_until,source_request_id FROM connection_effective_access_authorizations WHERE connection_id=${connectionId}`;
+				const originalCredential =
+					await repository.getProviderCredentialForUpgrade({
+						principalId,
+						connectionId,
+						allowCurrentRelease: true,
+					});
+				await expect(
+					repository.getProviderCredentialForUpgrade({
+						principalId: "other-user",
+						connectionId,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await repository.publishProviderCatalog(immutableDatalegoV5);
+				const adapter = new DataLegoV5Adapter(
+					async (url) =>
+						String(url) === "https://oauth.agoralab.co/api/v2/userInfo"
+							? Response.json({ email: identity.externalAccount })
+							: Response.json({ message: "record not found" }, { status: 400 }),
+					{
+						clientId: "test-client",
+						clientSecret: "test-secret",
+						redirectUri:
+							"https://connection.example/oauth/callback?provider=datalego",
+					},
+				);
+				const service = new ConnectionApplicationService(
+					repository,
+					{ execute: async () => ({}) },
+					undefined,
+					{ datalego: adapter },
+				);
+				await expect(
+					service.upgradeProviderConnection(principalId, connectionId),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await repository.publishProviderCatalog({
+					...datalegoV5ConnectionCatalog,
+					authorizationCompatibility: [
+						{
+							...datalegoAuthorizationCompatibility[0],
+							toExecutorDigest: `sha256:${"0".repeat(64)}`,
+						},
+					],
+				});
+				await expect(
+					service.upgradeProviderConnection(principalId, connectionId),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await repository.publishProviderCatalog(datalegoV5ConnectionCatalog);
+				await expect(
+					service.upgradeProviderConnection(principalId, connectionId),
+				).resolves.toEqual({ connectionId });
+				const current = await repository.getProviderCredentialForUpgrade({
+					principalId,
+					connectionId,
+					allowCurrentRelease: true,
+				});
+				expect(current).toMatchObject({
+					accessToken: identity.accessToken,
+					refreshToken: identity.refreshToken,
+					expiresAt: identity.expiresAt,
+					refreshExpiresAt: identity.refreshExpiresAt,
+				});
+				const [access] =
+					await sql`SELECT * FROM connection_effective_access_authorizations WHERE connection_id=${connectionId}`;
+				expect(access?.id).toBe(originalAccess?.id);
+				expect(access?.provider_release_id).toBe(
+					datalegoV5ConnectionCatalog.providerReleaseId,
+				);
+				expect(access?.approved_provider_release_id).toBe(
+					datalegoV4ConnectionCatalog.providerReleaseId,
+				);
+				expect(access?.source_request_id).toBe(
+					originalAccess?.source_request_id,
+				);
+				expect(access?.valid_until).toEqual(originalAccess?.valid_until);
+				const members =
+					await sql`SELECT action_version_id FROM connection_capability_profile_actions WHERE capability_profile_id=${access?.capability_profile_id} ORDER BY action_version_id`;
+				expect(members.map((row) => row.action_version_id)).toEqual([
+					"datalego.get_current_user@v5",
+					"datalego.get_query_status@v5",
+				]);
+				const [stored] =
+					await sql`SELECT refresh_ciphertext FROM connection_credential_versions WHERE id=${current.credentialVersionId}`;
+				expect(stored?.refresh_ciphertext).toBeTruthy();
+				expect(stored?.refresh_ciphertext).not.toBe(identity.refreshToken);
+				await expect(
+					repository.storeProviderCredential({
+						...identity,
+						providerReleaseId: datalegoV5ConnectionCatalog.providerReleaseId,
+						expectedConnectionId: connectionId,
+						expectedCredentialVersionId: originalCredential.credentialVersionId,
+					}),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				const overview = JSON.stringify(
+					await repository.getOverview(principalId),
+				);
+				expect(overview).not.toContain(identity.accessToken);
+				expect(overview).not.toContain(identity.refreshToken);
+			} finally {
+				await repository.close();
+				await sql.end();
+			}
+		},
+	);
 	(databaseUrl ? it : it.skip)(
 		"upgrades the pinned Bitbucket v7 account to v8 using reviewed repair evidence",
 		async () => {

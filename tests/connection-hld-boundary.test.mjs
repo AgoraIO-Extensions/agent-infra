@@ -58,6 +58,19 @@ test("runtime publication, consumer grants and approval management share every P
 	]);
 	assert.equal(loops, 2);
 	assert.equal(managementBindings, 1);
+	const compatibilityImport = file.statements.find(
+		(statement) =>
+			ts.isImportDeclaration(statement) &&
+			statement.moduleSpecifier.text ===
+				"@agent-infra/openconnector-adapter/authorization-compatibility",
+	);
+	assert.ok(compatibilityImport);
+	assert.ok(
+		compatibilityImport.importClause.namedBindings.elements.some(
+			(binding) => binding.name.text === "datalegoV5ConnectionCatalog",
+		),
+		"DataLego publication and approval must receive the exact reviewed repair evidence",
+	);
 });
 
 test("Turbo forwards every CI Connection integration database", async () => {

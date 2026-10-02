@@ -220,6 +220,10 @@ const errorMessages: Record<string, string> = {
 	"connection.error.request_failed": "请求无法完成",
 	"connection.error.connect_request_outdated":
 		"连接器已更新，请返回连接页面按新版重新申请；若新版尚未开放，请联系管理员",
+	"connection.error.provider_upgrade_approval_required":
+		"当前审批不能直接用于新版连接，请申请新版能力，或联系管理员确认兼容升级已开放。",
+	"connection.error.provider_reauthorization_required":
+		"外部账号需要重新授权，请重新连接后重试。",
 	"connection.error.resource_not_found": "无法访问该资源",
 	"connection.error.result_uncertain": "请求结果暂时无法确认，请勿重复操作",
 	"connection.error.server_error": "Connection 服务暂时不可用",

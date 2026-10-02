@@ -3966,16 +3966,23 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		const [row] = await this.sql<
 			{
 				ciphertext: string;
+				expires_at: Date | null;
 				external_account: string;
 				id: string;
 				nonce: string;
 				provider_id: string;
 				provider_release_id: string;
+				refresh_ciphertext: string | null;
+				refresh_nonce: string | null;
+				refresh_tag: string | null;
+				refresh_expires_at: Date | null;
 				scope_json: unknown;
 				tag: string;
 			}[]
 		>`
 			SELECT credential.id, credential.ciphertext, credential.nonce, credential.tag,
+				credential.expires_at, credential.refresh_expires_at,
+				credential.refresh_ciphertext, credential.refresh_nonce, credential.refresh_tag,
 				account.external_account, account.provider_id, account.provider_release_id,
 				credential.scope_json
 			FROM connection_accounts account
@@ -4008,6 +4015,19 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				row,
 				`credential:${row.id}:${input.connectionId}`,
 			),
+			expiresAt: row.expires_at?.toISOString(),
+			refreshExpiresAt: row.refresh_expires_at?.toISOString(),
+			refreshToken:
+				row.refresh_ciphertext && row.refresh_nonce && row.refresh_tag
+					? this.protector.decrypt(
+							{
+								ciphertext: row.refresh_ciphertext,
+								nonce: row.refresh_nonce,
+								tag: row.refresh_tag,
+							},
+							`credential-refresh:${row.id}:${input.connectionId}`,
+						)
+					: undefined,
 			credentialVersionId: row.id,
 			externalAccount: row.external_account,
 			grantedScopes,

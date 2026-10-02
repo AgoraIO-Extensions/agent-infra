@@ -31,7 +31,10 @@ import {
 	OpenConnectorGitHubAdapter,
 	OpenConnectorGitHubOAuthAdapter,
 } from "@agent-infra/openconnector-adapter";
-import { bitbucketServerConnectionCatalog } from "@agent-infra/openconnector-adapter/authorization-compatibility";
+import {
+	bitbucketServerConnectionCatalog,
+	datalegoV5ConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/authorization-compatibility";
 import {
 	ConfluenceServerAdapter,
 	confluenceServerConnectionCatalog,
@@ -44,10 +47,7 @@ import {
 	DataLegoV4Adapter,
 	datalegoV4ConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/datalego-v4";
-import {
-	DataLegoV5Adapter,
-	datalegoV5ConnectionCatalog,
-} from "@agent-infra/openconnector-adapter/datalego-v5";
+import { DataLegoV5Adapter } from "@agent-infra/openconnector-adapter/datalego-v5";
 import {
 	JiraServerAdapter,
 	JiraServerOAuthTokenProvider,
