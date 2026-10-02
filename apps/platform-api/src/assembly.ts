@@ -127,6 +127,10 @@ export function assemblePlatformApi(
 		(input.wecomApplicationSetup && input.wecomIdentity
 			? {
 					identity: input.wecomIdentity,
+					userDirectory: {
+						resolveUser: (userId: string) =>
+							resolveCurrentTaskUser(input.identity, userId, randomUUID()),
+					},
 					replyEncryptionPublicKeyPem:
 						input.wecomApplicationSetup.replyEncryptionPublicKeyPem,
 					resolveBinding: async () => null,

@@ -17,6 +17,16 @@ import { PostgresWecomChannelV1 } from "./wecom-channel.ts";
 let db: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
 let store: PostgresWecomChannelV1;
+const fixtureUserDirectory = {
+	resolveUser: async (userId: string) => ({
+		schemaVersion: 1 as const,
+		userId,
+		accountStatus: "active" as const,
+		organizationIds: [],
+		authorizationRevision: "identity-1",
+	}),
+};
+
 const message: WecomMessageV1 = {
 	providerId: "provider-1",
 	agentId: "wecom_agent",
@@ -125,7 +135,10 @@ beforeAll(async () => {
 	db = await startPostgresTestDatabase("wecom-channel");
 	await migratePlatformDatabase(db);
 	sql = postgres(db.databaseUrl);
-	store = new PostgresWecomChannelV1(db);
+	store = new PostgresWecomChannelV1({
+		...db,
+		userDirectory: fixtureUserDirectory,
+	});
 	await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values (${message.agentId},1,'authorization_1')`;
 	await sql`insert into platform.agent_applications (id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values ('app_1',${message.agentId},'owner_1','Fixture','Fixture','available','trace_1','request_1',now(),1,1,'ready','running',1,1)`;
 	await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${message.agentId},1,'fixture',${sql.json(configuration)},now())`;
@@ -147,7 +160,10 @@ it("commits one receipt with one execution under concurrent callbacks and replay
 		(accepted.outcome !== "accepted" && accepted.outcome !== "replayed")
 	)
 		throw new Error("Expected receipt");
-	const restarted = new PostgresWecomChannelV1(db);
+	const restarted = new PostgresWecomChannelV1({
+		...db,
+		userDirectory: fixtureUserDirectory,
+	});
 	try {
 		expect(await channel(restarted).receive(message)).toEqual({
 			...accepted,
@@ -251,7 +267,10 @@ it("does not resend a reply after a worker crashes in the external send window",
 	expect(Number(botLease?.seconds)).toBeGreaterThan(0);
 	expect(Number(botLease?.seconds)).toBeLessThan(30);
 	await sql`update platform.wecom_receipts set lease_until=now()-interval '1 second' where id=${claim.receiptId}`;
-	const restarted = new PostgresWecomChannelV1(db);
+	const restarted = new PostgresWecomChannelV1({
+		...db,
+		userDirectory: fixtureUserDirectory,
+	});
 	try {
 		expect(await restarted.claim()).toBeNull();
 		expect(await restarted.read(claim.receiptId, "sender_crash")).toMatchObject(
@@ -429,10 +448,12 @@ it("fences WebSocket ingress inside the transaction and reserves replies for the
 	await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status) values (${message.providerId},${message.agentId},${message.bindingReference},'worker-one',1,now()+interval '30 seconds','connected')`;
 	const owner = new PostgresWecomChannelV1({
 		...db,
+		userDirectory: fixtureUserDirectory,
 		connectionHolderId: "worker-one",
 	});
 	const other = new PostgresWecomChannelV1({
 		...db,
+		userDirectory: fixtureUserDirectory,
 		connectionHolderId: "worker-two",
 	});
 	try {
@@ -544,6 +565,7 @@ it("keeps an unclaimed connection receipt pending after its connection lease exp
     on conflict (bot_id) do update set agent_id=excluded.agent_id,binding_reference=excluded.binding_reference,holder_id=excluded.holder_id,fence=excluded.fence,lease_until=excluded.lease_until,status=excluded.status`;
 	const owner = new PostgresWecomChannelV1({
 		...db,
+		userDirectory: fixtureUserDirectory,
 		connectionHolderId: "worker-stale",
 	});
 	try {
@@ -575,10 +597,12 @@ it("replays a claimed receipt after its connection lease expires before prepare"
     on conflict (bot_id) do update set agent_id=excluded.agent_id,binding_reference=excluded.binding_reference,holder_id=excluded.holder_id,fence=excluded.fence,lease_until=excluded.lease_until,status=excluded.status`;
 	const owner = new PostgresWecomChannelV1({
 		...db,
+		userDirectory: fixtureUserDirectory,
 		connectionHolderId: "worker-stale",
 	});
 	const replacement = new PostgresWecomChannelV1({
 		...db,
+		userDirectory: fixtureUserDirectory,
 		connectionHolderId: "worker-fresh",
 	});
 	try {

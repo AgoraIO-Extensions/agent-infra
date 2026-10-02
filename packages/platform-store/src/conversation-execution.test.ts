@@ -89,11 +89,12 @@ afterEach(async () => {
 
 async function persistConformanceModelConfiguration(
 	modelConfiguration: ConversationModelConfigurationV1 | undefined,
+	executionAuthority = storeConformanceAuthority,
 ): Promise<void> {
 	const revision = modelConfiguration?.configurationRevision ?? 1;
 	const record = {
 		schemaVersion: 1,
-		agentId: storeConformanceAuthority.agentId,
+		agentId: executionAuthority.agentId,
 		revision,
 		source: modelConfiguration
 			? {
@@ -144,8 +145,8 @@ async function persistConformanceModelConfiguration(
 		insert into platform.agents
 			(id, current_configuration_revision, authorization_revision)
 		values
-			(${storeConformanceAuthority.agentId}, ${revision},
-			 ${storeConformanceAuthority.authorizationRevision})
+			(${executionAuthority.agentId}, ${revision},
+			 ${executionAuthority.authorizationRevision})
 		on conflict (id) do update
 		set authorization_revision = excluded.authorization_revision
 	`;
@@ -153,25 +154,26 @@ async function persistConformanceModelConfiguration(
 		insert into platform.agent_configuration_revisions
 			(agent_id, revision, source_reference, created_at, configuration)
 		values
-			(${storeConformanceAuthority.agentId}, ${revision},
+			(${executionAuthority.agentId}, ${revision},
 			 ${`source_fixture_${revision}`}, now(), ${client.json(record)})
 		on conflict (agent_id, revision) do update
 		set configuration = excluded.configuration
 	`;
-	const keyId = "fixture-key:personal:actor_fixture";
+	const subjectId = executionAuthority.actorId;
+	const keyId = `fixture-key:personal:${subjectId}`;
 	await client`insert into platform.relay_key_subjects
 		(purpose, subject_id, last_version, current_version)
-		values ('personal', 'actor_fixture', 1, 1)
+		values ('personal', ${subjectId}, 1, 1)
 		on conflict (purpose, subject_id) do nothing`;
 	await client`insert into platform.relay_key_versions
 		(purpose, subject_id, key_version, key_id, ciphertext)
-		values ('personal', 'actor_fixture', 1, ${keyId},
-			${client.json({ purpose: "personal", subjectId: "actor_fixture", keyId, keyVersion: 1 })})
+		values ('personal', ${subjectId}, 1, ${keyId},
+			${client.json({ purpose: "personal", subjectId, keyId, keyVersion: 1 })})
 		on conflict (purpose, subject_id, key_version) do nothing`;
 	await client`
 		update platform.agents
 		set current_configuration_revision = ${revision}
-		where id = ${storeConformanceAuthority.agentId}
+		where id = ${executionAuthority.agentId}
 	`;
 }
 
@@ -579,7 +581,10 @@ async function commandEffectCounts() {
 
 describe("PostgreSQL Conversation command transaction", () => {
 	it("commits original task authority with acceptance and rolls back control when required audit fails", async () => {
-		await client`insert into platform.agents (id, authorization_revision) values (${authority.agentId}, ${authority.authorizationRevision}) on conflict (id) do update set authorization_revision = excluded.authorization_revision`;
+		await persistConformanceModelConfiguration(
+			conformanceModelConfiguration,
+			authority,
+		);
 		const taskBoundary = {
 			schemaVersion: 1 as const,
 			principal: { kind: "user" as const, id: authority.actorId },
