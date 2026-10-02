@@ -9,6 +9,50 @@ afterEach(async () => {
 	await Promise.all(active.splice(0).map((item) => item.close()));
 });
 
+it("bounds token fields without logging usage metadata or reading it after close", async () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-worker",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	for (const value of [
+		-1,
+		0.5,
+		Number.NaN,
+		Number.POSITIVE_INFINITY,
+		Number.MAX_SAFE_INTEGER + 1,
+	])
+		telemetry.recordModelUsage({ inputTokens: value });
+	telemetry.recordModelUsage({
+		inputTokens: 0,
+		outputTokens: 2,
+		secret: "PRIVATE_SENTINEL",
+	} as Parameters<typeof telemetry.recordModelUsage>[0]);
+	expect(telemetry.status()).toMatchObject({
+		invalidRecords: 5,
+		captureFailures: 0,
+	});
+	expect(lines).toEqual([]);
+	await telemetry.close();
+	telemetry.recordModelUsage(
+		Object.defineProperty({}, "inputTokens", {
+			get() {
+				throw new Error("PRIVATE_SENTINEL");
+			},
+		}),
+	);
+	expect(telemetry.status()).toMatchObject({
+		invalidRecords: 5,
+		captureFailures: 0,
+	});
+});
+
 it("emits only bounded metadata and drops logs under backpressure", () => {
 	const lines: string[] = [];
 	const output = new Writable({

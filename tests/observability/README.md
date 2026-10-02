@@ -29,6 +29,8 @@ Collector 固定使用已有官方 `otel/opentelemetry-collector-contrib:0.133.0
 
 验收查询 `agent_platform_operations_total` 和 `agent_platform_resource_count`，按固定 service/stage/outcome/kind 筛选。Trace 文件核对合成 Execution 关联；正文和 cursor 哨兵不得出现在日志、Trace 或指标中。计数核对持久事件数量，并确认重放不增计数。
 
+同一验收还在 exporter 断线期间通过原真实事件/审计事务提交受控模型事实，恢复后查询 `agent_platform_model_tokens_total`。input/output/cached_input 分别回读为 9/4/1；已知零可查询，缺失字段保持没有样本。重复事件和 unknown 恢复不重计已知字段或原终态，新 attempt 独立统计。模型名哨兵不进入日志/Trace/指标。这些事实由测试输入，未执行 Runtime/native Codex，不替代原 Execution 的真实模型/工具与 ACK 验收；缓存输入是输入子集，不相加作总量。
+
 服务关闭/恢复、数据库查询失败/恢复、持续 outbox 积压/清空分别触发并恢复受控告警。错误恢复使用观测计数的窗口差值，不能把累计错误计数永久判为故障。Collector 停止期间验证真实 API 查询和事件事务仍成功，exportFailures 单独增加；恢复后回读采集计数。缺失指标不补成零积压。
 
 生产容量阈值、必要审计失败语义、慢消费者/队列满或完整进程调度路径仍不在此范围。告警投递到真实运维后端仍需部署方明确配置授权与回读。

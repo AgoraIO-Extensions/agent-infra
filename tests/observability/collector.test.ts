@@ -11,6 +11,7 @@ import {
 import { startPlatformWorkerFromDeploymentV2 } from "../../apps/platform-worker/src/index.js";
 import type { startObservability } from "../../packages/observability/src/index.js";
 import { createObservedConversationEvents } from "../../packages/observability/src/worker.js";
+import type { ConversationOperationFactV2 } from "../../packages/platform-core/src/index.js";
 import { PostgresConversationEventTransactionV1 } from "../../packages/platform-store/src/conversation-events.js";
 import { migratePlatformDatabase } from "../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../packages/platform-store/src/postgres-test.js";
@@ -349,6 +350,15 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		).toBe(false);
 		const failuresBeforeDisconnect =
 			worker.observabilityStatus().exportFailures;
+		const tokenValue = (
+			text: string,
+			kind: "input" | "output" | "cached_input",
+		) =>
+			metricValue(text, "agent_platform_model_tokens_total", {
+				service: "platform-worker",
+				kind,
+			});
+		expect(tokenValue(await collector.query(), "input")).toBeUndefined();
 		const unavailableMark = await backend.mark();
 		await collector.disconnect();
 		const unavailableFired = await backend.waitFor(
@@ -389,14 +399,111 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		const rows =
 			await sql`select count(*)::int as count from platform.conversation_events where execution_id = ${executionId}`;
 		expect(rows[0]?.count).toBe(2);
+		// Controlled canonical facts, not native Runtime evidence. The same real
+		// event/audit transaction confirms them while the exporter is unavailable.
+		const model: ConversationOperationFactV2 = {
+			kind: "model",
+			operationRef: randomUUID(),
+			attemptRef: randomUUID(),
+			phase: "intent",
+			model: {
+				configVersion: "config-1",
+				modelOptionId: "option-1",
+				modelId: "PRIVATE_MODEL_SENTINEL",
+			},
+		};
+		const persistModel = (fact: ConversationOperationFactV2, key: string) =>
+			events.persist({
+				...command,
+				adapterEventKey: key,
+				runtimeCursor: `PRIVATE_CURSOR_SENTINEL-${key}`,
+				event: { schemaVersion: 2, type: "execution.operation", fact },
+			});
+		expect((await persistModel(model, "model-intent")).outcome).toBe(
+			"accepted",
+		);
+		expect(
+			(await persistModel({ ...model, phase: "started" }, "model-started"))
+				.outcome,
+		).toBe("accepted");
+		const unknown: ConversationOperationFactV2 = {
+			...model,
+			phase: "unknown",
+			usage: { inputTokens: 7 },
+		};
+		expect((await persistModel(unknown, "model-unknown")).outcome).toBe(
+			"accepted",
+		);
+		expect((await persistModel(unknown, "model-unknown")).outcome).toBe(
+			"replayed",
+		);
 		await collector.reconnect();
 		await until(async () => {
 			try {
-				return count(await collector.query()) === 2;
+				const text = await collector.query();
+				return count(text) === 5 && tokenValue(text, "input") === 7;
 			} catch {
 				return false;
 			}
 		});
+		expect(tokenValue(await collector.query(), "output")).toBeUndefined();
+		const recovered: ConversationOperationFactV2 = {
+			...model,
+			phase: "completed",
+			usage: { inputTokens: 7, outputTokens: 3, cachedInputTokens: 0 },
+		};
+		expect((await persistModel(recovered, "model-recovered")).outcome).toBe(
+			"accepted",
+		);
+		expect((await persistModel(recovered, "model-recovered")).outcome).toBe(
+			"replayed",
+		);
+		await until(async () => {
+			const text = await collector.query();
+			return (
+				tokenValue(text, "input") === 7 &&
+				tokenValue(text, "output") === 3 &&
+				tokenValue(text, "cached_input") === 0
+			);
+		});
+		const next = { ...model, attemptRef: randomUUID() };
+		expect((await persistModel(next, "model-next-intent")).outcome).toBe(
+			"accepted",
+		);
+		expect(
+			(await persistModel({ ...next, phase: "started" }, "model-next-started"))
+				.outcome,
+		).toBe("accepted");
+		expect(
+			(
+				await persistModel(
+					{
+						...next,
+						phase: "completed",
+						usage: { inputTokens: 2, outputTokens: 1, cachedInputTokens: 1 },
+					},
+					"model-next-completed",
+				)
+			).outcome,
+		).toBe("accepted");
+		await until(async () => {
+			const text = await collector.query();
+			return (
+				count(text) === 9 &&
+				tokenValue(text, "input") === 9 &&
+				tokenValue(text, "output") === 4 &&
+				tokenValue(text, "cached_input") === 1
+			);
+		});
+		const modelOutcomes = metricValue(
+			await collector.query(),
+			"agent_platform_operations_total",
+			{ service: "platform-worker", stage: "model", outcome: "unknown" },
+		);
+		expect(modelOutcomes).toBe(1);
+		const finalRows =
+			await sql`select count(*)::int as count from platform.conversation_events where execution_id = ${executionId}`;
+		expect(finalRows[0]?.count).toBe(9);
 		const finalMetrics = await collector.query();
 		const finalTraces = await collector.read();
 		await backend.waitFor(
@@ -414,6 +521,7 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		for (const text of [finalMetrics, finalTraces, logs]) {
 			expect(text).not.toContain("PRIVATE_BODY_SENTINEL");
 			expect(text).not.toContain("PRIVATE_CURSOR_SENTINEL");
+			expect(text).not.toContain("PRIVATE_MODEL_SENTINEL");
 		}
 		await writeFile(
 			evidencePath,
@@ -437,7 +545,14 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 					alerts,
 					alertBackend: alertBackendEvidence,
 					exportFailureStatus,
-					persistedEvents: rows[0]?.count,
+					persistedEvents: finalRows[0]?.count,
+					modelUsage: {
+						input: tokenValue(finalMetrics, "input"),
+						output: tokenValue(finalMetrics, "output"),
+						cachedInput: tokenValue(finalMetrics, "cached_input"),
+						unknownOutcomes: modelOutcomes,
+						controlledFacts: true,
+					},
 					finalMetrics,
 					limitations: [
 						"Controlled identity and admissions",
