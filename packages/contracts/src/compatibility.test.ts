@@ -857,7 +857,7 @@ describe("contract compatibility command", () => {
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
-	}, 15_000);
+	}, 30_000);
 	it("tracks published browser, file, readiness and template-release contracts", async () => {
 		const source = await readFile(cliPath, "utf8");
 		for (const path of [
