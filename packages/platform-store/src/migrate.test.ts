@@ -2046,23 +2046,30 @@ describe("published Relay authority migration", () => {
 			);
 			const afterCatalog = await relayCatalog();
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
-				columns: [
-					"conversation_executions:execution_source",
-					"conversation_executions:original_operation_digest",
-					"conversation_executions:original_submit_host_session_ref",
-					"conversation_executions:principal_type",
-					"conversation_executions:relay_key_id",
-					"conversation_executions:relay_key_purpose",
-					"conversation_executions:relay_key_subject_id",
-					"conversation_executions:relay_key_version",
-					"conversation_executions:runtime_submit_protocol",
-					"conversation_executions:task_wait_deadline",
-					"conversation_executions:task_wait_order",
-					"conversations:principal_type",
-				],
+				columns:
+					kind === "original27"
+						? [
+								"conversation_executions:execution_source",
+								"conversation_executions:original_operation_digest",
+								"conversation_executions:original_submit_host_session_ref",
+								"conversation_executions:principal_type",
+								"conversation_executions:relay_key_id",
+								"conversation_executions:relay_key_purpose",
+								"conversation_executions:relay_key_subject_id",
+								"conversation_executions:relay_key_version",
+								"conversation_executions:runtime_submit_protocol",
+								"conversation_executions:task_wait_deadline",
+								"conversation_executions:task_wait_order",
+								"conversations:principal_type",
+							]
+						: [
+								"conversation_executions:principal_type",
+								"conversations:principal_type",
+							],
 				checks:
 					kind === "original27"
 						? [
+								"conversation_events:conversation_event_source_binding",
 								"conversation_executions:conversation_execution_key_binding",
 								"conversation_executions:conversation_execution_original_digest_binding",
 								"conversation_executions:conversation_execution_principal_type_valid",
@@ -2072,8 +2079,10 @@ describe("published Relay authority migration", () => {
 								"conversations:conversation_principal_type_valid",
 							]
 						: [
+								"conversation_executions:conversation_execution_original_digest_binding",
 								"conversation_executions:conversation_execution_principal_type_valid",
 								"conversation_executions:conversation_execution_task_wait_binding",
+								"conversation_generation_tombstones:conversation_generation_tombstone_principal_valid",
 								"conversations:conversation_principal_type_valid",
 							],
 				indexes:
