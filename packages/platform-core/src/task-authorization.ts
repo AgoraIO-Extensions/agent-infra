@@ -1,18 +1,56 @@
+import { types } from "node:util";
 import type { AgentManagementStateV1 } from "./agent-management.js";
 import {
 	snapshotAgentManagementDenseArray as array,
 	requireAgentManagementExactKeys as exact,
-	snapshotAgentManagementDataObject as object,
 	parseAgentManagementPortState,
 	parseAgentManagementStringArray,
+	snapshotAgentManagementDataObject,
 	isAgentManagementText as text,
 } from "./agent-management-input.js";
 import type { ConversationDispatchExecutionStatusV1 } from "./conversation-dispatch.js";
 
-export interface TaskPrincipalV1 {
-	/** Application principals are supplied by the #481 application-grant slice. */
-	readonly kind: "user";
+export type TaskPrincipalV1 = {
+	readonly kind: "user" | "application";
 	readonly id: string;
+};
+
+export type TaskApiChannelV1 = "api" | "api:user" | "api:application";
+
+export function isTaskApiChannelV1(
+	channelId: string,
+	principal: TaskPrincipalV1,
+): boolean {
+	return channelId === "api" || channelId === `api:${principal.kind}`;
+}
+
+/** Current explicit API use grant; credential lifetime is not Task lifetime. */
+export interface CurrentTaskApiUseGrantV1 {
+	readonly principal: TaskPrincipalV1;
+	readonly grantType: "use";
+	readonly agentId: string;
+	readonly authorizationRevision: string;
+	readonly revoked: boolean;
+}
+
+export interface CurrentTaskApplicationV1 {
+	readonly schemaVersion: 1;
+	readonly applicationId: string;
+	readonly status: "active" | "disabled";
+	readonly authorizationRevision: string;
+	readonly useGrant: CurrentTaskApiUseGrantV1 | null;
+}
+
+function object(input: unknown): Record<string, unknown> {
+	if (
+		input !== null &&
+		typeof input === "object" &&
+		!types.isProxy(input) &&
+		Object.hasOwn(input, "__proto__")
+	) {
+		throw new TypeError("Task authority is invalid");
+	}
+	return snapshotAgentManagementDataObject(input);
 }
 
 /**
@@ -36,7 +74,8 @@ export interface TaskUserDirectoryV1 {
 
 type TaskAccessSourceV1 =
 	| { readonly kind: "owner" | "user"; readonly userId: string }
-	| { readonly kind: "organization"; readonly organizationId: string };
+	| { readonly kind: "organization"; readonly organizationId: string }
+	| { readonly kind: "api-use"; readonly useGrantRevision: string };
 
 export interface TaskAuthorizationBoundaryV1 {
 	readonly schemaVersion: 1;
@@ -77,13 +116,83 @@ export function parseCurrentTaskUserV1(input: unknown): CurrentTaskUserV1 {
 	};
 }
 
-function principal(input: unknown): TaskPrincipalV1 {
+export function parseTaskPrincipalV1(input: unknown): TaskPrincipalV1 {
 	const value = object(input);
 	exact(value, ["kind", "id"]);
-	if (value.kind !== "user" || !text(value.id)) {
+	if (
+		(value.kind !== "user" && value.kind !== "application") ||
+		!text(value.id)
+	) {
 		throw new TypeError("Task principal is invalid");
 	}
 	return { kind: value.kind, id: value.id };
+}
+
+export function parseCurrentTaskApiUseGrantV1(
+	input: unknown,
+): CurrentTaskApiUseGrantV1 {
+	const value = object(input);
+	exact(value, [
+		"principal",
+		"grantType",
+		"agentId",
+		"authorizationRevision",
+		"revoked",
+	]);
+	if (
+		value.grantType !== "use" ||
+		!text(value.agentId) ||
+		!text(value.authorizationRevision) ||
+		typeof value.revoked !== "boolean"
+	) {
+		throw new TypeError("Task API use grant is invalid");
+	}
+	return {
+		principal: parseTaskPrincipalV1(value.principal),
+		grantType: "use",
+		agentId: value.agentId,
+		authorizationRevision: value.authorizationRevision,
+		revoked: value.revoked,
+	};
+}
+
+export function parseCurrentTaskApplicationV1(
+	input: unknown,
+): CurrentTaskApplicationV1 {
+	const value = object(input);
+	exact(value, [
+		"schemaVersion",
+		"applicationId",
+		"status",
+		"authorizationRevision",
+		"useGrant",
+	]);
+	if (
+		value.schemaVersion !== 1 ||
+		!text(value.applicationId) ||
+		(value.status !== "active" && value.status !== "disabled") ||
+		!text(value.authorizationRevision)
+	) {
+		throw new TypeError("Task application is invalid");
+	}
+	const useGrant =
+		value.useGrant === null
+			? null
+			: parseCurrentTaskApiUseGrantV1(value.useGrant);
+	if (
+		useGrant &&
+		(useGrant.principal.kind !== "application" ||
+			useGrant.principal.id !== value.applicationId)
+	) {
+		throw new TypeError("Task application grant is invalid");
+	}
+	return {
+		schemaVersion: 1,
+		applicationId: value.applicationId,
+		status: value.status,
+		authorizationRevision: value.authorizationRevision,
+		useGrant,
+	};
 }
 
 function accessSources(
@@ -108,6 +217,8 @@ function accessSources(
 }
 
 function sourceKey(source: TaskAccessSourceV1): string {
+	if (source.kind === "api-use")
+		return JSON.stringify([source.kind, source.useGrantRevision]);
 	return JSON.stringify([
 		source.kind,
 		source.kind === "organization" ? source.organizationId : source.userId,
@@ -138,10 +249,27 @@ export function parseTaskAuthorizationBoundaryV1(
 	) {
 		throw new TypeError("Task authorization boundary is invalid");
 	}
-	const subject = principal(value.principal);
+	const subject = parseTaskPrincipalV1(value.principal);
+	if (
+		(value.channelId === "api:user" || value.channelId === "api:application") &&
+		!isTaskApiChannelV1(value.channelId, subject)
+	)
+		throw new TypeError("Task API channel is invalid");
 	const sources = array(value.accessSources).map(
 		(input): TaskAccessSourceV1 => {
 			const source = object(input);
+			if (source.kind === "api-use") {
+				exact(source, ["kind", "useGrantRevision"]);
+				if (
+					!isTaskApiChannelV1(value.channelId as string, subject) ||
+					!text(source.useGrantRevision)
+				) {
+					throw new TypeError("Task API access source is invalid");
+				}
+				return { kind: "api-use", useGrantRevision: source.useGrantRevision };
+			}
+			if (subject.kind !== "user")
+				throw new TypeError("Task access source is invalid");
 			if (source.kind === "organization") {
 				exact(source, ["kind", "organizationId"]);
 				if (!text(source.organizationId))
@@ -161,6 +289,10 @@ export function parseTaskAuthorizationBoundaryV1(
 	);
 	if (
 		sources.length === 0 ||
+		(sources.some((source) => source.kind === "api-use") &&
+			sources.length !== 1) ||
+		(subject.kind === "application" &&
+			!isTaskApiChannelV1(value.channelId as string, subject)) ||
 		new Set(sources.map(sourceKey)).size !== sources.length
 	) {
 		throw new TypeError("Task access sources are invalid");
@@ -183,7 +315,9 @@ export function captureTaskAuthorizationBoundaryV1(input: {
 	readonly channelId: string;
 	readonly agentAuthorizationRevision: string;
 }): TaskAuthorizationBoundaryV1 | null {
-	const subject = principal(input.principal);
+	const subject = parseTaskPrincipalV1(input.principal);
+	if (subject.kind !== "user" || isTaskApiChannelV1(input.channelId, subject))
+		return null;
 	const user = parseCurrentTaskUserV1(input.user);
 	const agent = parseAgentManagementPortState(input.agent);
 	if (subject.id !== user.userId) return null;
@@ -200,6 +334,113 @@ export function captureTaskAuthorizationBoundaryV1(input: {
 	});
 }
 
+function apiUseCurrent(
+	boundary: TaskAuthorizationBoundaryV1,
+	input: CurrentTaskApiUseGrantV1 | null,
+): boolean {
+	if (!input) return false;
+	const grant = parseCurrentTaskApiUseGrantV1(input);
+	return (
+		!grant.revoked &&
+		grant.agentId === boundary.agentId &&
+		grant.principal.kind === boundary.principal.kind &&
+		grant.principal.id === boundary.principal.id &&
+		boundary.accessSources.length === 1 &&
+		boundary.accessSources[0]?.kind === "api-use" &&
+		boundary.accessSources[0].useGrantRevision === grant.authorizationRevision
+	);
+}
+
+export function captureTaskApplicationAuthorizationBoundaryV1(input: {
+	readonly principal: TaskPrincipalV1;
+	readonly application: CurrentTaskApplicationV1;
+	readonly agent: AgentManagementStateV1;
+	readonly channelId: string;
+	readonly agentAuthorizationRevision: string;
+}): TaskAuthorizationBoundaryV1 | null {
+	const subject = parseTaskPrincipalV1(input.principal);
+	const application = parseCurrentTaskApplicationV1(input.application);
+	const agent = parseAgentManagementPortState(input.agent);
+	const grant = application.useGrant;
+	if (
+		subject.kind !== "application" ||
+		subject.id !== application.applicationId ||
+		!isTaskApiChannelV1(input.channelId, subject) ||
+		application.status !== "active" ||
+		!grant ||
+		grant.revoked ||
+		grant.agentId !== agent.agentId
+	)
+		return null;
+	return parseTaskAuthorizationBoundaryV1({
+		schemaVersion: 1,
+		principal: subject,
+		agentId: agent.agentId,
+		channelId: input.channelId,
+		identityRevision: application.authorizationRevision,
+		agentAuthorizationRevision: input.agentAuthorizationRevision,
+		accessSources: [
+			{ kind: "api-use", useGrantRevision: grant.authorizationRevision },
+		],
+	});
+}
+
+/** A personal API task uses the original explicit use grant, never Web Owner scope. */
+export function capturePersonalApiTaskAuthorizationBoundaryV1(input: {
+	readonly user: CurrentTaskUserV1;
+	readonly channelId?: TaskApiChannelV1;
+	readonly useGrant: CurrentTaskApiUseGrantV1 | null;
+	readonly agent: AgentManagementStateV1;
+	readonly agentAuthorizationRevision: string;
+}): TaskAuthorizationBoundaryV1 | null {
+	const user = parseCurrentTaskUserV1(input.user);
+	const agent = parseAgentManagementPortState(input.agent);
+	const grant =
+		input.useGrant === null
+			? null
+			: parseCurrentTaskApiUseGrantV1(input.useGrant);
+	if (
+		user.accountStatus !== "active" ||
+		!grant ||
+		grant.revoked ||
+		grant.agentId !== agent.agentId ||
+		grant.principal.kind !== "user" ||
+		grant.principal.id !== user.userId ||
+		!isTaskApiChannelV1(input.channelId ?? "api", grant.principal)
+	)
+		return null;
+	return parseTaskAuthorizationBoundaryV1({
+		schemaVersion: 1,
+		principal: grant.principal,
+		agentId: agent.agentId,
+		channelId: input.channelId ?? "api",
+		identityRevision: user.authorizationRevision,
+		agentAuthorizationRevision: input.agentAuthorizationRevision,
+		accessSources: [
+			{ kind: "api-use", useGrantRevision: grant.authorizationRevision },
+		],
+	});
+}
+
+export function isTaskApplicationAuthorizationCurrentV1(input: {
+	readonly boundary: TaskAuthorizationBoundaryV1;
+	readonly application: CurrentTaskApplicationV1;
+	readonly agent: AgentManagementStateV1;
+}): boolean {
+	const boundary = parseTaskAuthorizationBoundaryV1(input.boundary);
+	const application = parseCurrentTaskApplicationV1(input.application);
+	const agent = parseAgentManagementPortState(input.agent);
+	return (
+		boundary.principal.kind === "application" &&
+		isTaskApiChannelV1(boundary.channelId, boundary.principal) &&
+		boundary.principal.id === application.applicationId &&
+		boundary.agentId === agent.agentId &&
+		application.status === "active" &&
+		boundary.identityRevision === application.authorizationRevision &&
+		apiUseCurrent(boundary, application.useGrant)
+	);
+}
+
 /**
  * New access sources cannot expand a stored task boundary.
  *
@@ -209,6 +450,7 @@ export function captureTaskAuthorizationBoundaryV1(input: {
  */
 export function isTaskAuthorizationCurrentV1(input: {
 	readonly boundary: TaskAuthorizationBoundaryV1;
+	readonly useGrant?: CurrentTaskApiUseGrantV1 | null;
 	readonly user: CurrentTaskUserV1;
 	readonly agent: AgentManagementStateV1;
 }): boolean {
@@ -221,6 +463,11 @@ export function isTaskAuthorizationCurrentV1(input: {
 		boundary.agentId !== agent.agentId
 	)
 		return false;
+	if (isTaskApiChannelV1(boundary.channelId, boundary.principal))
+		return (
+			user.accountStatus === "active" &&
+			apiUseCurrent(boundary, input.useGrant ?? null)
+		);
 	const current = new Set(accessSources(user, agent).map(sourceKey));
 	return boundary.accessSources.some((source) =>
 		current.has(sourceKey(source)),
@@ -249,10 +496,12 @@ export function planTaskSystemControlV1(input: {
 		readonly conversationId: string;
 		readonly sessionGeneration: number;
 		readonly actorId: string;
+		/** Required for application executions; old user records may omit it. */
+		readonly principal?: TaskPrincipalV1;
 		readonly agentId: string;
 		readonly channelId: string;
 		readonly authorizationRevision: string;
-		readonly status: ConversationDispatchExecutionStatusV1;
+		readonly status: ConversationDispatchExecutionStatusV1 | "waiting";
 	};
 }) {
 	const boundary = parseTaskAuthorizationBoundaryV1(input.boundary);
@@ -269,6 +518,7 @@ export function planTaskSystemControlV1(input: {
 		!Number.isSafeInteger(input.execution.sessionGeneration) ||
 		input.execution.sessionGeneration < 1 ||
 		![
+			"waiting",
 			"submitted",
 			"processing",
 			"unknown",
@@ -276,7 +526,12 @@ export function planTaskSystemControlV1(input: {
 			"failed",
 			"cancelled",
 		].includes(input.execution.status) ||
-		boundary.principal.kind !== "user" ||
+		(boundary.principal.kind === "application" &&
+			input.execution.principal === undefined) ||
+		(input.execution.principal !== undefined &&
+			(parseTaskPrincipalV1(input.execution.principal).kind !==
+				boundary.principal.kind ||
+				input.execution.principal.id !== boundary.principal.id)) ||
 		boundary.principal.id !== input.execution.actorId ||
 		boundary.agentId !== input.execution.agentId ||
 		boundary.channelId !== input.execution.channelId ||

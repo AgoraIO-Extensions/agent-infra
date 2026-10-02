@@ -47,6 +47,23 @@ export {
 export * from "./agent-management.js";
 export * from "./agent-runtime-presentation.js";
 export * from "./api-audit-identity.js";
+export type {
+	ApiCredentialMetadataV1,
+	ApiCredentialScopeV1,
+	ApiIdentityAuditActionV1,
+	ApiIdentityAuditInputV1,
+	ApiIdentityAuditReasonV1,
+	ApiPrincipalV1,
+	CurrentApiPrincipalV1,
+} from "./api-identity.js";
+export {
+	apiCredentialScopesV1,
+	generateApiCredentialV1,
+	hasApiCredentialScopeV1,
+	hashApiCredentialV1,
+	isApiCredentialScopeV1,
+	sameApiPrincipalV1,
+} from "./api-identity.js";
 export * from "./application-foundation.js";
 export * from "./application-registration.js";
 export * from "./application-revision.js";
@@ -100,6 +117,7 @@ export type {
 	PendingSecretRecordAttachmentsV1,
 	PendingSecretRecordExpectationV1,
 } from "./secret-record-attachments.js";
+export * from "./task-api-audit.js";
 export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";
 export * from "./wecom-channel.js";

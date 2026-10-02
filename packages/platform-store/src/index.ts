@@ -131,6 +131,10 @@ export {
 	SecretKeyRotationStoreError,
 } from "./secret-key-rotation.ts";
 export {
+	type PostgresTaskApiAuditOptionsV1,
+	PostgresTaskApiAuditStoreV1,
+} from "./task-api-audit.js";
+export {
 	PostgresTaskAuthorizationStoreV1,
 	TaskAuthorizationStoreError,
 } from "./task-authorization.js";

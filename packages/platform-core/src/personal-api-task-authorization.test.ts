@@ -78,8 +78,8 @@ describe("personal API Task authority", () => {
 	});
 
 	it.each([
-		{ principal: { kind: "application", id: "user_1" } },
-		{ operation: "agent:read" },
+		{ principal: { kind: "service", id: "user_1" } },
+		{ operation: "agent:create" },
 		{ channelId: "web" },
 		{ credentialHash: "raw_credential" },
 		{ principal: { kind: "user", id: "user_1", role: "admin" } },
@@ -226,4 +226,125 @@ describe("personal API Task authority", () => {
 			);
 		}
 	});
+});
+
+const appAuthority: PersonalApiTaskAdmissionAuthorityV1 = {
+	...authority,
+	principal: { kind: "application", id: "user_1" },
+	identityRevision: "app_1",
+};
+const appFacts = {
+	...facts,
+	authority: appAuthority,
+	user: null,
+	credential: { ...facts.credential, principalType: "application" },
+	grant: { ...facts.grant, principalType: "application" },
+	application: {
+		schemaVersion: 1 as const,
+		applicationId: "user_1",
+		status: "active" as const,
+		authorizationRevision: "app_1",
+		useGrant: {
+			principal: appAuthority.principal,
+			grantType: "use" as const,
+			agentId: "agent_1",
+			authorizationRevision: "use_1",
+			revoked: false,
+		},
+	},
+};
+
+describe("typed application API request policy", () => {
+	it("uses the actual application credential/current grant without responsible-user authority", () => {
+		expect(
+			requirePersonalApiTaskUseAuthorizationV1({ ...appFacts, disabled: true }),
+		).toEqual({
+			principal: appAuthority.principal,
+			agentId: "agent_1",
+			channelId: "api",
+			identityRevision: "app_1",
+			useGrantRevision: "use_1",
+		});
+		expect(
+			JSON.stringify(requirePersonalApiTaskUseAuthorizationV1(appFacts)),
+		).not.toMatch(/credentialId|credentialHash/);
+	});
+	it.each([
+		{ application: null },
+		{ application: { ...appFacts.application, status: "disabled" as const } },
+		{ credential: { ...appFacts.credential, principalType: "user" } },
+		{ credential: { ...appFacts.credential, scopes: ["agent:read"] } },
+		{ credential: { ...appFacts.credential, expiresAt: facts.now } },
+		{ credential: { ...appFacts.credential, revokedAt: facts.now } },
+		{ grant: { ...appFacts.grant, grantType: "manage" } },
+		{ grant: { ...appFacts.grant, principalType: "user" } },
+		{ grant: { ...appFacts.grant, revokedAt: facts.now } },
+		{ grant: { ...appFacts.grant, authorizationRevision: "replacement" } },
+	])(
+		"denies stale, invalid or same-ID cross-type request authority",
+		(changed) => {
+			expect(() =>
+				requirePersonalApiTaskUseAuthorizationV1({ ...appFacts, ...changed }),
+			).toThrow();
+		},
+	);
+	it.each(["api:user", "api:application"] as const)(
+		"preserves exact %s namespace and refuses another type/channel",
+		(channelId) => {
+			const kind = channelId === "api:user" ? "user" : "application";
+			const current = parsePersonalApiTaskAdmissionAuthorityV1({
+				...authority,
+				principal: { kind, id: "user_1" },
+				channelId,
+			});
+			requirePersonalApiTaskBindingV1(current, {
+				...binding,
+				principal: current.principal,
+				channelId,
+			});
+			expect(() =>
+				requirePersonalApiTaskBindingV1(current, {
+					...binding,
+					principal: current.principal,
+					channelId: "api",
+				}),
+			).toThrow();
+			expect(() =>
+				parsePersonalApiTaskAdmissionAuthorityV1({
+					...current,
+					principal: {
+						kind: kind === "user" ? "application" : "user",
+						id: "user_1",
+					},
+				}),
+			).toThrow();
+		},
+	);
+});
+
+it("requires agent:read for an access request while refusing to promote it to submit/cancel", () => {
+	const readAuthority = parsePersonalApiTaskAdmissionAuthorityV1({
+		...appAuthority,
+		operation: "agent:read",
+	});
+	expect(
+		requirePersonalApiTaskUseAuthorizationV1({
+			...appFacts,
+			authority: readAuthority,
+			credential: { ...appFacts.credential, scopes: ["agent:read"] },
+		}),
+	).toMatchObject({ principal: appAuthority.principal });
+	expect(() =>
+		requirePersonalApiTaskUseAuthorizationV1({
+			...appFacts,
+			authority: readAuthority,
+		}),
+	).toThrow();
+	expect(() =>
+		requirePersonalApiTaskBindingV1(readAuthority, {
+			...binding,
+			principal: readAuthority.principal,
+			operation: "agent:use",
+		}),
+	).toThrow();
 });

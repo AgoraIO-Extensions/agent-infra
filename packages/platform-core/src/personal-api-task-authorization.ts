@@ -9,35 +9,42 @@ import {
 	parsePersonalApiCredentialScopesV1,
 } from "./personal-api-credentials.js";
 import {
+	type CurrentTaskApplicationV1,
 	type CurrentTaskUserV1,
+	isTaskApiChannelV1,
+	parseCurrentTaskApplicationV1,
 	parseCurrentTaskUserV1,
+	parseTaskPrincipalV1,
+	type TaskApiChannelV1,
+	type TaskPrincipalV1,
 } from "./task-authorization.js";
 
 /** Server-resolved, transient request authority. Never serialize into a Task. */
 export interface PersonalApiTaskAdmissionAuthorityV1 {
 	readonly schemaVersion: 1;
-	readonly principal: { readonly kind: "user"; readonly id: string };
+	readonly principal: TaskPrincipalV1;
 	readonly credentialId: string;
 	readonly credentialHash: string;
 	readonly agentId: string;
-	readonly channelId: "api";
-	readonly operation: "agent:use";
+	readonly channelId: TaskApiChannelV1;
+	readonly operation: "agent:use" | "agent:read";
 	readonly identityRevision: string;
 	readonly useGrantRevision: string;
 }
 
 export interface PersonalApiTaskBindingV1 {
-	readonly principal: { readonly kind: "user"; readonly id: string };
+	readonly principal: TaskPrincipalV1;
 	readonly actorId: string;
 	readonly agentId: string;
-	readonly channelId: "api";
+	readonly channelId: TaskApiChannelV1;
+	readonly operation?: "agent:use" | "agent:read";
 }
 
 /** Facts for the API boundary owner; this is not a Web TaskAuthorizationBoundary. */
 export interface PersonalApiTaskUseAuthorizationV1 {
-	readonly principal: { readonly kind: "user"; readonly id: string };
+	readonly principal: TaskPrincipalV1;
 	readonly agentId: string;
-	readonly channelId: "api";
+	readonly channelId: TaskApiChannelV1;
 	readonly identityRevision: string;
 	readonly useGrantRevision: string;
 }
@@ -72,18 +79,16 @@ export function parsePersonalApiTaskAdmissionAuthorityV1(
 			"identityRevision",
 			"useGrantRevision",
 		]);
-		const principal = object(value.principal);
-		exact(principal, ["kind", "id"]);
+		const principal = parseTaskPrincipalV1(value.principal);
 		if (
 			value.schemaVersion !== 1 ||
-			principal.kind !== "user" ||
-			!text(principal.id) ||
 			!text(value.credentialId) ||
 			typeof value.credentialHash !== "string" ||
 			!/^[a-f0-9]{64}$/.test(value.credentialHash) ||
 			!text(value.agentId) ||
-			value.channelId !== "api" ||
-			value.operation !== "agent:use" ||
+			typeof value.channelId !== "string" ||
+			!isTaskApiChannelV1(value.channelId, principal) ||
+			(value.operation !== "agent:use" && value.operation !== "agent:read") ||
 			!text(value.identityRevision) ||
 			!text(value.useGrantRevision)
 		) {
@@ -91,12 +96,12 @@ export function parsePersonalApiTaskAdmissionAuthorityV1(
 		}
 		return Object.freeze({
 			schemaVersion: 1,
-			principal: Object.freeze({ kind: "user", id: principal.id }),
+			principal: Object.freeze(principal),
 			credentialId: value.credentialId,
 			credentialHash: value.credentialHash,
 			agentId: value.agentId,
-			channelId: "api",
-			operation: "agent:use",
+			channelId: value.channelId as TaskApiChannelV1,
+			operation: value.operation,
 			identityRevision: value.identityRevision,
 			useGrantRevision: value.useGrantRevision,
 		});
@@ -112,15 +117,23 @@ export function requirePersonalApiTaskBindingV1(
 ): void {
 	try {
 		const binding = object(input);
-		exact(binding, ["principal", "actorId", "agentId", "channelId"]);
+		exact(binding, [
+			"principal",
+			"actorId",
+			"agentId",
+			"channelId",
+			...(Object.hasOwn(binding, "operation") ? ["operation"] : []),
+		]);
 		const principal = object(binding.principal);
 		exact(principal, ["kind", "id"]);
 		if (
-			principal.kind !== "user" ||
+			principal.kind !== authority.principal.kind ||
 			principal.id !== authority.principal.id ||
 			binding.actorId !== authority.principal.id ||
 			binding.agentId !== authority.agentId ||
-			binding.channelId !== "api"
+			binding.channelId !== authority.channelId ||
+			(Object.hasOwn(binding, "operation") &&
+				binding.operation !== authority.operation)
 		) {
 			throw new Error();
 		}
@@ -141,7 +154,8 @@ export function requirePersonalApiTaskUseAuthorizationV1(input: {
 		readonly expiresAt: Date | null;
 		readonly revokedAt: Date | null;
 	} | null;
-	readonly user: CurrentTaskUserV1;
+	readonly user: CurrentTaskUserV1 | null;
+	readonly application?: CurrentTaskApplicationV1 | null;
 	readonly disabled: boolean;
 	readonly grant: {
 		readonly agentId: string;
@@ -165,7 +179,7 @@ export function requirePersonalApiTaskUseAuthorizationV1(input: {
 			!credential ||
 			credential.id !== authority.credentialId ||
 			credential.credentialHash !== authority.credentialHash ||
-			credential.principalType !== "user" ||
+			credential.principalType !== authority.principal.kind ||
 			credential.principalId !== authority.principal.id
 		) {
 			throw new PersonalApiCredentialErrorV1("authentication_required");
@@ -189,23 +203,34 @@ export function requirePersonalApiTaskUseAuthorizationV1(input: {
 		} catch {
 			throw new PersonalApiCredentialErrorV1("unavailable");
 		}
-		if (!scopes.includes("agent:use")) {
+		if (!scopes.includes(authority.operation)) {
 			throw new PersonalApiCredentialErrorV1("forbidden");
 		}
-		const user = parseCurrentTaskUserV1(input.user);
-		if (user.userId !== authority.principal.id) {
+		let identityRevision: string;
+		if (authority.principal.kind === "application") {
+			if (!input.application)
+				throw new PersonalApiCredentialErrorV1("forbidden");
+			const application = parseCurrentTaskApplicationV1(input.application);
+			if (application.applicationId !== authority.principal.id)
+				throw new PersonalApiCredentialErrorV1("unavailable");
+			if (application.status !== "active")
+				throw new PersonalApiCredentialErrorV1("forbidden");
+			identityRevision = application.authorizationRevision;
+		} else {
+			const user = parseCurrentTaskUserV1(input.user);
+			if (user.userId !== authority.principal.id)
+				throw new PersonalApiCredentialErrorV1("unavailable");
+			if (input.disabled || user.accountStatus !== "active")
+				throw new PersonalApiCredentialErrorV1("forbidden");
+			identityRevision = user.authorizationRevision;
+		}
+		if (identityRevision !== authority.identityRevision)
 			throw new PersonalApiCredentialErrorV1("unavailable");
-		}
-		if (input.disabled || user.accountStatus !== "active") {
-			throw new PersonalApiCredentialErrorV1("forbidden");
-		}
-		if (user.authorizationRevision !== authority.identityRevision) {
-			throw new PersonalApiCredentialErrorV1("unavailable");
-		}
+
 		if (
 			!input.grant ||
 			input.grant.agentId !== authority.agentId ||
-			input.grant.principalType !== "user" ||
+			input.grant.principalType !== authority.principal.kind ||
 			input.grant.principalId !== authority.principal.id ||
 			input.grant.grantType !== "use" ||
 			input.grant.revokedAt !== null
@@ -221,8 +246,8 @@ export function requirePersonalApiTaskUseAuthorizationV1(input: {
 		return Object.freeze({
 			principal: authority.principal,
 			agentId: authority.agentId,
-			channelId: "api",
-			identityRevision: user.authorizationRevision,
+			channelId: authority.channelId,
+			identityRevision,
 			useGrantRevision: input.grant.authorizationRevision,
 		});
 	} catch (error) {

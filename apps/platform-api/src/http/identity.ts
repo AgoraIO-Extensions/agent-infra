@@ -4,6 +4,10 @@ import { types } from "node:util";
 import { BrowserUserProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import type {
+	ApiCredentialMetadataV1,
+	ApiCredentialScopeV1,
+	ApiPrincipalV1,
+	CurrentApiPrincipalV1,
 	CurrentTaskUserV1,
 	TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
@@ -18,13 +22,167 @@ export interface IdentityContext {
 	readonly organizationIds: readonly string[];
 	readonly roles: readonly ("employee" | "system_admin")[];
 	readonly authorizationRevision: string;
+	/** Present when the request was authenticated with an API credential. */
+	readonly principal?: ApiPrincipalV1;
 }
 
 export interface IdentityAdapter {
 	resolve(request: Request): Promise<unknown | null>;
 	hydrateUsers(userIds: readonly string[]): Promise<unknown>;
+	/** Resolve a bearer credential and current subject facts without returning the secret. */
+	resolveApiCredential?: (
+		credential: string,
+		request: Request,
+	) => Promise<unknown | null>;
 	/** Current task facts must come from the directory, never a saved browser Request. */
 	resolveUser?: TaskUserDirectoryV1["resolveUser"];
+}
+
+export interface ApiIdentityContext extends CurrentApiPrincipalV1 {
+	readonly ownerId: string;
+	readonly credential: ApiCredentialMetadataV1;
+}
+
+function parseApiIdentity(value: unknown): ApiIdentityContext {
+	const input = record(value, [
+		"schemaVersion",
+		"principal",
+		"accountStatus",
+		"organizationIds",
+		"authorizationRevision",
+		"ownerId",
+		"credential",
+	]);
+	if (
+		input.schemaVersion !== 1 ||
+		(input.accountStatus !== "active" && input.accountStatus !== "disabled") ||
+		!text(input.authorizationRevision) ||
+		!text(input.ownerId)
+	) {
+		throw new Error();
+	}
+	const principalValue = record(input.principal, ["kind", "id"]);
+	if (
+		(principalValue.kind !== "user" && principalValue.kind !== "application") ||
+		!text(principalValue.id)
+	) {
+		throw new Error();
+	}
+	if (principalValue.kind === "user" && principalValue.id !== input.ownerId) {
+		throw new Error();
+	}
+	const organizationIds = stringArray(input.organizationIds);
+	const credentialValue = record(input.credential, [
+		"schemaVersion",
+		"credentialId",
+		"principal",
+		"scopes",
+		"expiresAt",
+		"revokedAt",
+		"createdAt",
+	]);
+	const date = (value: unknown): Date | null => {
+		if (value === null) return null;
+		try {
+			const milliseconds = Date.prototype.getTime.call(value);
+			if (!Number.isFinite(milliseconds)) throw new Error();
+			return new Date(milliseconds);
+		} catch {
+			if (typeof value !== "string" || !Number.isFinite(Date.parse(value)))
+				throw new Error();
+			return new Date(value);
+		}
+	};
+	const expiresAt = date(credentialValue.expiresAt);
+	const revokedAt = date(credentialValue.revokedAt);
+	const createdAt = date(credentialValue.createdAt);
+	if (
+		credentialValue.schemaVersion !== 1 ||
+		!text(credentialValue.credentialId) ||
+		!Array.isArray(credentialValue.scopes) ||
+		credentialValue.scopes.length === 0 ||
+		new Set(credentialValue.scopes).size !== credentialValue.scopes.length ||
+		credentialValue.scopes.some(
+			(scope) =>
+				scope !== "agent:create" &&
+				scope !== "agent:manage" &&
+				scope !== "agent:use" &&
+				scope !== "agent:read",
+		) ||
+		(expiresAt === null && credentialValue.expiresAt !== null) ||
+		(revokedAt === null && credentialValue.revokedAt !== null) ||
+		createdAt === null
+	) {
+		throw new Error();
+	}
+	const credentialPrincipal = record(credentialValue.principal, ["kind", "id"]);
+	if (
+		credentialPrincipal.kind !== principalValue.kind ||
+		credentialPrincipal.id !== principalValue.id
+	) {
+		throw new Error();
+	}
+	const principal: ApiPrincipalV1 = {
+		kind: principalValue.kind,
+		id: principalValue.id,
+	};
+	const credential: ApiCredentialMetadataV1 = {
+		schemaVersion: 1,
+		credentialId: credentialValue.credentialId,
+		principal,
+		scopes: credentialValue.scopes as ApiCredentialScopeV1[],
+		expiresAt,
+		revokedAt,
+		createdAt,
+	};
+	return {
+		schemaVersion: 1,
+		principal,
+		accountStatus: input.accountStatus,
+		organizationIds,
+		authorizationRevision: input.authorizationRevision,
+		ownerId: input.ownerId,
+		credential,
+	};
+}
+
+export async function resolveApiIdentity(
+	adapter: IdentityAdapter | undefined,
+	request: Request,
+	traceId: string,
+): Promise<ApiIdentityContext> {
+	const authorization = request.headers.get("authorization");
+	if (
+		!adapter?.resolveApiCredential ||
+		!authorization ||
+		!/^Bearer [^\s]+$/.test(authorization)
+	) {
+		throw new HttpProtocolError("AUTHENTICATION_REQUIRED", traceId);
+	}
+	const credential = authorization.slice("Bearer ".length);
+	let value: unknown | null;
+	try {
+		value = await adapter.resolveApiCredential(credential, request);
+	} catch {
+		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+	}
+	if (value === null)
+		throw new HttpProtocolError("AUTHENTICATION_REQUIRED", traceId);
+	let identity: ApiIdentityContext;
+	try {
+		identity = parseApiIdentity(value);
+	} catch {
+		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+	}
+	if (
+		identity.accountStatus !== "active" ||
+		identity.credential.revokedAt !== null ||
+		(identity.credential.expiresAt !== null &&
+			identity.credential.expiresAt.getTime() <= Date.now())
+	) {
+		throw new HttpProtocolError("AUTHORIZATION_REVOKED", traceId);
+	}
+	return identity;
 }
 
 export async function resolveCurrentTaskUser(
@@ -191,7 +349,10 @@ export async function resolveIdentity(
 	if (identity.accountStatus === "disabled") {
 		throw new HttpProtocolError("AUTHORIZATION_REVOKED", traceId);
 	}
-	return { ...identity, accountStatus: "active" };
+	return {
+		...identity,
+		accountStatus: "active",
+	};
 }
 
 export async function hydrateBrowserUsers(
