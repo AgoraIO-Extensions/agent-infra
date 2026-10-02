@@ -41,11 +41,30 @@ function restoreOldApiReadActions(input: unknown) {
 	for (const child of Object.values(value)) restoreOldApiReadActions(child);
 }
 
+function restorePreCredentialNarrowContract(value: {
+	paths: Record<string, Record<string, unknown>>;
+	components: { schemas: Record<string, { enum?: unknown[] }> };
+}) {
+	if (value.paths["/api/v2/me/api-credentials/{credentialId}"])
+		delete value.paths["/api/v2/me/api-credentials/{credentialId}"].patch;
+	for (const name of [
+		"PersonalApiCredentialNarrowRequestV1",
+		"PersonalApiCredentialNarrowResponseV1",
+	])
+		delete value.components.schemas[name];
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) => action !== "api.credential.narrowed",
+		);
+}
+
 // Preserve every historical guard test while testing the exact list addition separately.
 function restorePreCredentialManagementContract(value: {
 	paths: Record<string, Record<string, unknown>>;
 	components: { schemas: Record<string, { enum?: unknown[] }> };
 }) {
+	restorePreCredentialNarrowContract(value);
 	if (value.paths["/api/v2/me/api-credentials"])
 		delete value.paths["/api/v2/me/api-credentials"].get;
 	for (const name of [
@@ -157,6 +176,101 @@ describe("contract compatibility command", () => {
 	});
 
 	it.each([1, 2])(
+		"admits only the exact personal PATCH addition for browser V%s",
+		async (version) => {
+			const current = JSON.parse(
+				await readFile(
+					new URL(
+						`../artifacts/openapi/pilot-browser.v${version}.openapi.json`,
+						import.meta.url,
+					),
+					"utf8",
+				),
+			);
+			const previous = structuredClone(current);
+			restorePreCredentialNarrowContract(previous);
+			const directory = await mkdtemp(
+				resolve(tmpdir(), "agent-infra-personal-narrow-compat-"),
+			);
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			try {
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				const beforeGet = structuredClone(previous);
+				restorePreCredentialManagementContract(beforeGet);
+				await writeFile(previousPath, JSON.stringify(beforeGet));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				await writeFile(previousPath, JSON.stringify(previous));
+				const mutations: ((document: typeof current) => void)[] =
+					version === 1
+						? [
+								(document) => {
+									document.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+										"unreviewed.action",
+									);
+								},
+								(document) => {
+									document.components.schemas.ScopedPlatformAuditActionV1.enum.splice(
+										0,
+										1,
+									);
+								},
+							]
+						: [
+								(document) => {
+									document.paths["/api/v2/me/api-credentials"].get.security = [
+										{},
+									];
+								},
+								(document) => {
+									document.paths[
+										"/api/v2/me/api-credentials/{credentialId}"
+									].patch.parameters = [];
+								},
+								(document) => {
+									delete document.components.schemas
+										.PersonalApiCredentialNarrowRequestV1.minProperties;
+								},
+								(document) => {
+									document.components.schemas.PersonalApiCredentialNarrowRequestV1.properties.expiresAt.type =
+										["string", "null"];
+								},
+								(document) => {
+									document.components.schemas.PersonalApiCredentialPageV1.properties.credential =
+										{ type: "string" };
+								},
+								(document) => {
+									document.paths["/api/v2/me/api-credentials"].post.security = [
+										{},
+									];
+								},
+								(document) => {
+									document.components.securitySchemes.PlatformSession = {};
+								},
+							];
+				mutations.push(
+					(document) => {
+						document.paths["/unreviewed"] = {};
+					},
+					(document) => {
+						document.components.schemas.Unreviewed = { type: "object" };
+					},
+				);
+				for (const mutate of mutations) {
+					const changed = structuredClone(current);
+					mutate(changed);
+					await writeFile(currentPath, JSON.stringify(changed));
+					expect(comparePaths(currentPath, previousPath).status).toBe(1);
+				}
+			} finally {
+				await rm(directory, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it.each([1, 2])(
 		"admits only the exact personal list addition for browser V%s",
 		async (version) => {
 			const current = JSON.parse(
@@ -168,6 +282,7 @@ describe("contract compatibility command", () => {
 					"utf8",
 				),
 			);
+			restorePreCredentialNarrowContract(current);
 			const previous = structuredClone(current);
 			restorePreCredentialManagementContract(previous);
 			const directory = await mkdtemp(
@@ -811,7 +926,7 @@ describe("contract compatibility command", () => {
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
-	}, 15_000);
+	}, 30_000);
 	it("tracks published browser, file, readiness and template-release contracts", async () => {
 		const source = await readFile(cliPath, "utf8");
 		for (const path of [

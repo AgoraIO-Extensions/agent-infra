@@ -1522,11 +1522,54 @@ function isPersonalCredentialListOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #1037 PATCH slice: only exact narrowing, two schemas and the narrowed audit action.
+function isPersonalCredentialNarrowOpenApiAddition(previous, current) {
+	const path = "/api/v2/me/api-credentials/{credentialId}";
+	const names = [
+		"PersonalApiCredentialNarrowRequestV1",
+		"PersonalApiCredentialNarrowResponseV1",
+	];
+	if (
+		previous.paths?.[path]?.patch !== undefined ||
+		names.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		patch: current.paths?.[path]?.patch,
+		schemas: Object.fromEntries(
+			names
+				.filter((name) => current.components?.schemas?.[name] !== undefined)
+				.map((name) => [name, current.components.schemas[name]]),
+		),
+		audit: current.components?.schemas?.ScopedPlatformAuditActionV1,
+	};
+	const fingerprint = createHash("sha256")
+		.update(JSON.stringify(addition))
+		.digest("hex");
+	if (
+		![
+			"857ae40bc4d5554d93a19ca415ebfda2a8f458ef0f2be854376536809bcc0cf5",
+			"bf36bbcb1a655389800b6629fe243efee02a9aaca6cf46db5be7c8fb9753b195",
+		].includes(fingerprint)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	if (normalized.paths?.[path]) delete normalized.paths[path].patch;
+	for (const name of names) delete normalized.components.schemas[name];
+	const actions = normalized.components.schemas.ScopedPlatformAuditActionV1;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) => action !== "api.credential.narrowed",
+		);
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
 		if (
 			!sameValue(previous, current) &&
+			!isPersonalCredentialNarrowOpenApiAddition(previous, current) &&
 			!isPersonalCredentialListOpenApiAddition(previous, current) &&
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&

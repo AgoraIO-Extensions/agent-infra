@@ -181,6 +181,19 @@ function transactionOperations(
 				.for("share");
 			return rows.map(metadata);
 		},
+		async narrowCredential(credentialId, input) {
+			const [row] = await transaction
+				.update(platformApiCredentials)
+				.set({
+					scopes: [...input.scopes],
+					expiresAt:
+						input.expiresAt === null ? null : new Date(input.expiresAt),
+				})
+				.where(eq(platformApiCredentials.id, credentialId))
+				.returning();
+			if (!row) throw new PersonalApiCredentialErrorV1("unavailable");
+			return metadata(row);
+		},
 		async insertCredential(input) {
 			const [row] = await transaction
 				.insert(platformApiCredentials)

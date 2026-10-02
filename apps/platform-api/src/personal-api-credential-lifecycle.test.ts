@@ -23,6 +23,7 @@ import { createClient } from "../../web/src/pilot/generated-v2/client/index.ts";
 import {
 	issuePersonalApiCredentialV2,
 	listPersonalApiCredentialsV2,
+	narrowPersonalApiCredentialV2,
 	revokePersonalApiCredentialV2,
 } from "../../web/src/pilot/generated-v2/sdk.gen.ts";
 import type { IssuePersonalApiCredentialV2Data } from "../../web/src/pilot/generated-v2/types.gen.ts";
@@ -166,6 +167,152 @@ afterAll(async () => {
 });
 
 describe("formal deployment personal credential governance over PostgreSQL and generated SDK", () => {
+	it("uses generated GET/PATCH and the same real material under current scope restrictions", async () => {
+		const agentId = "agent_personal_narrowing";
+		const record = {
+			...structuredClone(agentConfigurationConformanceRecordV1),
+			agentId,
+		};
+		await databaseClient`insert into platform.agents(id,current_configuration_revision) values (${agentId},${record.revision})`;
+		try {
+			await databaseClient`insert into platform.agent_applications
+				(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence)
+				values ('application_personal_narrowing',${agentId},'user_alice','Agent','Description','available','trace_seed','request_seed',clock_timestamp(),1,1,'ready','running',1,1)`;
+			await databaseClient`insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,configuration,created_at)
+				values (${agentId},${record.revision},${record.source.kind === "standard" ? record.source.templateId : record.source.imageDigest},${databaseClient.json(record as never)},clock_timestamp())`;
+			await databaseClient`insert into platform.agent_owners(agent_id,owner_id,created_at) values (${agentId},'user_alice',clock_timestamp())`;
+			await databaseClient`insert into platform.agent_availability(agent_id,target_type,target_id) values (${agentId},'organization','org_1')`;
+			await databaseClient`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)
+				values (${agentId},'user','user_alice','use','grant_1')`;
+			const { client, origin } = await start();
+			const issued = await issue(client, "management.issue", "session_alice", {
+				scopes: ["agent:read", "agent:manage"],
+				expiresAt: null,
+			});
+			expect(issued.response?.status).toBe(201);
+			if (!issued.data?.credential)
+				throw new Error("No actual issued material");
+			const material = issued.data.credential;
+			const credentialId = issued.data.metadata.credentialId;
+			const hash = createHash("sha256").update(material).digest("hex");
+			const read = () =>
+				fetch(`${origin}/api/v2/agents`, {
+					headers: { Authorization: `Bearer ${material}` },
+				});
+			const before = await read();
+			expect(before.status).toBe(200);
+			expect(await before.json()).toMatchObject({
+				items: expect.arrayContaining([expect.objectContaining({ agentId })]),
+			});
+			const narrowed = await narrowPersonalApiCredentialV2({
+				client,
+				auth: "session_alice",
+				path: { credentialId },
+				headers: { "Idempotency-Key": "management.patch" },
+				body: { scopes: ["agent:read"], expiresAt: "2030-01-01T00:00:00Z" },
+			});
+			expect(narrowed.response?.status).toBe(200);
+			expect((await read()).status).toBe(200);
+			const page = await listPersonalApiCredentialsV2({
+				client,
+				auth: "session_alice",
+				query: { limit: 1 },
+			});
+			expect(page.response?.status).toBe(200);
+			const [used] = await databaseClient<{ last_used_at: Date | null }[]>`
+				select last_used_at from platform.platform_api_credentials where id = ${credentialId}
+			`;
+			if (!used?.last_used_at || !narrowed.data?.metadata.lastUsedAt)
+				throw new Error("No actual credential usage timestamp");
+			expect(used.last_used_at.getTime()).toBeGreaterThanOrEqual(
+				Date.parse(narrowed.data.metadata.lastUsedAt),
+			);
+			expect(page.data?.items).toEqual([
+				{
+					...narrowed.data.metadata,
+					lastUsedAt: used.last_used_at.toISOString(),
+				},
+			]);
+			expect(page.response?.headers.get("Cache-Control")).toBe("no-store");
+			const other = await listPersonalApiCredentialsV2({
+				client,
+				auth: "session_bob",
+			});
+			expect(other.response?.status).toBe(200);
+			expect(other.data?.items).toEqual([]);
+			const replay = await narrowPersonalApiCredentialV2({
+				client,
+				auth: "session_alice",
+				path: { credentialId },
+				headers: { "Idempotency-Key": "management.patch" },
+				body: { scopes: ["agent:read"], expiresAt: "2030-01-01T00:00:00.000Z" },
+			});
+			expect(replay.response?.status).toBe(200);
+			expect(replay.data?.replayed).toBe(true);
+			const expired = await narrowPersonalApiCredentialV2({
+				client,
+				auth: "session_alice",
+				path: { credentialId },
+				headers: { "Idempotency-Key": "management.remove-read" },
+				body: { scopes: ["agent:read"], expiresAt: "2020-01-01T00:00:00Z" },
+			});
+			expect(expired.response?.status).toBe(200);
+			expect((await read()).status).toBe(401);
+			const scoped = await issue(
+				client,
+				"management.scope.issue",
+				"session_alice",
+				{ scopes: ["agent:read", "agent:manage"], expiresAt: null },
+			);
+			if (!scoped.data?.credential)
+				throw new Error("No second actual material");
+			const removedRead = await narrowPersonalApiCredentialV2({
+				client,
+				auth: "session_alice",
+				path: { credentialId: scoped.data.metadata.credentialId },
+				headers: { "Idempotency-Key": "management.scope.patch" },
+				body: { scopes: ["agent:manage"] },
+			});
+			expect(removedRead.response?.status).toBe(200);
+			expect(
+				(
+					await fetch(`${origin}/api/v2/agents`, {
+						headers: { Authorization: `Bearer ${scoped.data.credential}` },
+					})
+				).status,
+			).toBe(403);
+
+			const [persisted] =
+				await databaseClient`select credential_hash from platform.platform_api_credentials where id=${credentialId}`;
+			expect(persisted?.credential_hash).toBe(hash);
+			const audits = await databaseClient`select * from platform.audit_events`;
+			const idempotency =
+				await databaseClient`select result from platform.idempotency_records`;
+			const serialized = JSON.stringify({
+				page: page.data,
+				other: other.data,
+				narrowed: narrowed.data,
+				replay: replay.data,
+				audits,
+				idempotency,
+				logLines,
+			});
+			expect(serialized).not.toContain(material);
+			expect(serialized).not.toContain(hash);
+			expect(serialized).not.toContain(scoped.data.credential);
+			expect(serialized).not.toContain(
+				createHash("sha256").update(scoped.data.credential).digest("hex"),
+			);
+		} finally {
+			await databaseClient`delete from platform.agent_principal_grants where agent_id=${agentId}`;
+			await databaseClient`delete from platform.agent_applications where agent_id=${agentId}`;
+			await databaseClient`delete from platform.agent_configuration_revisions where agent_id=${agentId}`;
+			await databaseClient`delete from platform.agent_owners where agent_id=${agentId}`;
+			await databaseClient`delete from platform.agent_availability where agent_id=${agentId}`;
+			await databaseClient`delete from platform.agents where id=${agentId}`;
+		}
+	});
+
 	it("lists only current personal metadata through the actual process and generated SDK", async () => {
 		const { client } = await start();
 		const issued = await Promise.all(
@@ -234,7 +381,7 @@ describe("formal deployment personal credential governance over PostgreSQL and g
 		"revision_changed",
 		"finally_disabled",
 	] as const)(
-		"GET recheck current identity and roll back on %s",
+		"GET/PATCH recheck current identity and roll back on %s",
 		async (mode) => {
 			const { client } = await start();
 			const issued = await issue(client, "identity.issue");
@@ -250,9 +397,25 @@ describe("formal deployment personal credential governance over PostgreSQL and g
 					? 403
 					: 503,
 			);
+			deployment.state.directoryCalls = 0;
+			const patch = await narrowPersonalApiCredentialV2({
+				client,
+				auth: "session_alice",
+				path: { credentialId: issued.data.metadata.credentialId },
+				headers: { "Idempotency-Key": "identity.patch" },
+				body: { scopes: ["agent:read"] },
+			});
+			expect(patch.response?.status).toBe(
+				mode === "disabled" || mode === "missing" || mode === "finally_disabled"
+					? 403
+					: 503,
+			);
 			const [row] =
 				await databaseClient`select scopes from platform.platform_api_credentials where id=${issued.data.metadata.credentialId}`;
 			expect(row?.scopes).toEqual(issued.data.metadata.scopes);
+			const [idempotency] =
+				await databaseClient`select count(*)::int as count from platform.idempotency_records where command_type='api.credential.narrowed'`;
+			expect(idempotency?.count).toBe(0);
 		},
 	);
 

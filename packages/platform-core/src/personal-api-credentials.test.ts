@@ -5,9 +5,11 @@ import {
 	type PersonalApiCredentialTransactionV1,
 	parsePersonalApiCredentialIdV1,
 	parsePersonalApiCredentialIssuanceV1,
+	parsePersonalApiCredentialNarrowingV1,
 	parsePersonalApiCredentialRequestV1,
 	personalApiCredentialIssuanceDigestV1,
 	requirePersonalApiCredentialFutureExpiryV1,
+	requirePersonalApiCredentialNarrowingV1,
 	requirePersonalApiUserActiveV1,
 	requirePersonalApiUserEnabledV1,
 	resolveCurrentPersonalApiUserV1,
@@ -36,6 +38,9 @@ function useCase() {
 		lockIdempotency: vi.fn(async () => null),
 		lockCredential: vi.fn(async () => null),
 		listCredentials: vi.fn(async () => []),
+		narrowCredential: vi.fn(async () => {
+			throw new Error("Unused test method");
+		}),
 		insertCredential: vi.fn(
 			async (
 				input: Parameters<
@@ -266,5 +271,108 @@ describe("personal API credential policy", () => {
 				user.userId,
 			),
 		).rejects.toMatchObject({ code: "forbidden" });
+	});
+});
+
+// #1037 policy source coverage. HTTP/Store consumption and execution are separate gates.
+describe("personal credential narrowing policy", () => {
+	const metadata = {
+		credentialId: "credential_alice",
+		scopes: ["agent:read", "agent:manage"] as const,
+		expiresAt: "2030-01-01T00:00:00.000Z",
+		revokedAt: null,
+		createdAt: "2029-01-01T00:00:00.000Z",
+		lastUsedAt: null,
+	};
+
+	it("snapshots a nonempty subset and normalizes UTC before any await", () => {
+		const input = {
+			scopes: ["agent:read"],
+			expiresAt: "2029-06-01T00:00:00.1Z",
+		};
+		const command = parsePersonalApiCredentialNarrowingV1(input);
+		input.scopes[0] = "agent:create";
+		input.expiresAt = "2031-01-01T00:00:00Z";
+		expect(Object.isFrozen(command)).toBe(true);
+		expect(Object.isFrozen(command.scopes)).toBe(true);
+		expect(requirePersonalApiCredentialNarrowingV1(metadata, command)).toEqual({
+			scopes: ["agent:read"],
+			expiresAt: "2029-06-01T00:00:00.100Z",
+		});
+	});
+
+	it.each([
+		{},
+		{ scopes: [] },
+		{ scopes: ["agent:read", "agent:read"] },
+		{ scopes: ["system_admin"] },
+		{ expiresAt: null },
+		{ expiresAt: undefined },
+		{ expiresAt: "2030-02-30T00:00:00Z" },
+		{ expiresAt: "2030-01-01T00:00:00+00:00" },
+		{ expiresAt: "2030-01-01T00:00:00.0001Z" },
+		{ scopes: ["agent:read"], userId: "other" },
+		{ scopes: ["agent:read"], recipient: "other" },
+		{ scopes: ["agent:read"], role: "system_admin" },
+	])("rejects malformed, empty or authority-bearing PATCH", (input) => {
+		expect(() => parsePersonalApiCredentialNarrowingV1(input)).toThrow(
+			new PersonalApiCredentialErrorV1("invalid_input"),
+		);
+	});
+
+	it("does not evaluate PATCH accessors or proxy traps", () => {
+		const getter = vi.fn(() => ["agent:read"]);
+		const input = {};
+		Object.defineProperty(input, "scopes", { enumerable: true, get: getter });
+		expect(() => parsePersonalApiCredentialNarrowingV1(input)).toThrow();
+		const trap = vi.fn(() => {
+			throw new Error("PRIVATE_PATCH_SENTINEL");
+		});
+		expect(() =>
+			parsePersonalApiCredentialNarrowingV1(new Proxy({}, { ownKeys: trap })),
+		).toThrow();
+		expect(getter).not.toHaveBeenCalled();
+		expect(trap).not.toHaveBeenCalled();
+	});
+
+	it("keeps omitted fields, rejects new scopes and later deadlines", () => {
+		const apply = (input: unknown) =>
+			requirePersonalApiCredentialNarrowingV1(
+				metadata,
+				parsePersonalApiCredentialNarrowingV1(input),
+			);
+		expect(apply({ scopes: ["agent:read"] })).toEqual({
+			scopes: ["agent:read"],
+			expiresAt: metadata.expiresAt,
+		});
+		expect(apply({ expiresAt: "2029-06-01T00:00:00Z" }).scopes).toEqual([
+			"agent:manage",
+			"agent:read",
+		]);
+		for (const input of [
+			{ scopes: ["agent:read", "agent:use"] },
+			{ expiresAt: "2031-01-01T00:00:00Z" },
+		])
+			expect(() => apply(input)).toThrow(
+				new PersonalApiCredentialErrorV1("invalid_input"),
+			);
+	});
+
+	it("can add a finite deadline to unlimited material and preserves invalid-state refusal", () => {
+		const command = parsePersonalApiCredentialNarrowingV1({
+			expiresAt: "2029-06-01T00:00:00Z",
+		});
+		expect(
+			requirePersonalApiCredentialNarrowingV1(
+				{ ...metadata, expiresAt: null },
+				command,
+			).expiresAt,
+		).toBe("2029-06-01T00:00:00.000Z");
+		expect(() =>
+			requirePersonalApiCredentialNarrowingV1(
+				{ ...metadata, expiresAt: "corrupt" },
+				command,
+			),
+		).toThrow(new PersonalApiCredentialErrorV1("unavailable"));
 	});
 });

@@ -41,6 +41,7 @@ function setup() {
 				replayed: false,
 			})),
 			list: vi.fn(async () => ({ items: [metadata], nextCursor: null })),
+			narrow: vi.fn(async () => ({ metadata, replayed: false })),
 			recordRefusal: vi.fn(async () => {}),
 		},
 	};
@@ -65,6 +66,86 @@ function issue(
 }
 
 describe("personal credential HTTP protocol", () => {
+	it("uses browser current identity for PATCH and returns no-store metadata", async () => {
+		const { app, credentials } = setup();
+		const patch = await app.request(
+			`/api/v2/me/api-credentials/${metadata.credentialId}`,
+			{
+				method: "PATCH",
+				headers: {
+					"Content-Type": "application/json",
+					"Idempotency-Key": "patch.1",
+					Cookie: "browser_fixture",
+				},
+				body: JSON.stringify({ scopes: ["agent:read"] }),
+			},
+		);
+		expect(patch.status).toBe(200);
+		expect(patch.headers.get("Cache-Control")).toBe("no-store");
+		expect(JSON.stringify(await patch.json())).not.toContain(material);
+		expect(credentials.narrow).toHaveBeenCalledWith(
+			expect.objectContaining({
+				userId: identity.userId,
+				idempotencyKey: "patch.1",
+			}),
+			metadata.credentialId,
+			{ scopes: ["agent:read"] },
+		);
+	});
+	it.each([
+		{},
+		{ scopes: [] },
+		{ expiresAt: null },
+		{ scopes: ["agent:read"], userId: "other" },
+	])("rejects malformed PATCH before Store", async (body) => {
+		const { app, credentials } = setup();
+		expect(
+			(
+				await app.request(
+					`/api/v2/me/api-credentials/${metadata.credentialId}`,
+					{
+						method: "PATCH",
+						headers: {
+							"Content-Type": "application/json",
+							"Idempotency-Key": "patch.1",
+						},
+						body: JSON.stringify(body),
+					},
+				)
+			).status,
+		).toBe(400);
+		expect(credentials.narrow).not.toHaveBeenCalled();
+	});
+
+	it.each([`Bearer ${material}`, "Basic fixture", ""])(
+		"rejects PATCH Authorization even with Cookie before identity/Store",
+		async (authorization) => {
+			const { app, credentials, identity: adapter } = setup();
+			const response = await app.request(
+				`/api/v2/me/api-credentials/${metadata.credentialId}`,
+				{
+					method: "PATCH",
+					headers: {
+						Cookie: "browser_fixture",
+						Authorization: authorization,
+						"Content-Type": "application/json",
+						"Idempotency-Key": "patch.authorization",
+					},
+					body: JSON.stringify({ scopes: ["agent:read"] }),
+				},
+			);
+			expect(response.status).toBe(401);
+			expect(adapter.resolve).not.toHaveBeenCalled();
+			expect(credentials.narrow).not.toHaveBeenCalled();
+			expect(credentials.recordRefusal).toHaveBeenCalledWith(
+				expect.anything(),
+				"api.credential.narrowed",
+				"authentication_required",
+				undefined,
+			);
+		},
+	);
+
 	it("uses browser current identity for GET and returns no-store metadata", async () => {
 		const { app, credentials } = setup();
 		const list = await app.request("/api/v2/me/api-credentials?limit=2", {

@@ -3,6 +3,8 @@ import {
 	PersonalApiCredentialIssueRequestV1Schema,
 	PersonalApiCredentialIssueResponseV1Schema,
 	PersonalApiCredentialListQueryV1Schema,
+	PersonalApiCredentialNarrowRequestV1Schema,
+	PersonalApiCredentialNarrowResponseV1Schema,
 	PersonalApiCredentialPageV1Schema,
 	PersonalApiCredentialRevokeResponseV1Schema,
 } from "@agent-infra/contracts/pilot";
@@ -134,6 +136,27 @@ export function registerPersonalApiCredentialRoutes(
 			if (!credentialId.success) {
 				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
 			}
+			if (operation === "api.credential.narrowed") {
+				const { value } = await parseJson(
+					request,
+					PersonalApiCredentialNarrowRequestV1Schema,
+					metadata.traceId,
+				);
+				submitted = true;
+				const result = await dependencies.credentials.narrow(
+					trusted,
+					credentialId.data,
+					value,
+				);
+				const response =
+					PersonalApiCredentialNarrowResponseV1Schema.safeParse(result);
+				if (!response.success)
+					throw new HttpProtocolError(
+						"DEPENDENCY_UNAVAILABLE",
+						metadata.traceId,
+					);
+				return context.json(response.data, 200);
+			}
 			await requireEmptyBody(request, metadata.traceId);
 			submitted = true;
 			const result = await dependencies.credentials.revoke(
@@ -174,6 +197,9 @@ export function registerPersonalApiCredentialRoutes(
 	}
 	app.get("/api/v2/me/api-credentials", (context) =>
 		handle(context, "api.credential.metadata.read"),
+	);
+	app.patch("/api/v2/me/api-credentials/:credentialId", (context) =>
+		handle(context, "api.credential.narrowed"),
 	);
 	app.post("/api/v2/me/api-credentials", (context) =>
 		handle(context, "api.credential.issued"),
