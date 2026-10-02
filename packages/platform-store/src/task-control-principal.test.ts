@@ -165,7 +165,7 @@ describe("System controls use the durable typed Execution principal", () => {
 	);
 	it("rejects a same-ID boundary in the opposite principal namespace", async () => {
 		await seed("application");
-		await client`update platform.task_authorization_records set boundary = ${JSON.stringify(boundary("user"))}::jsonb where execution_id = 'execution'`;
+		await client`update platform.task_authorization_records set boundary = ${client.json(boundary("user"))} where execution_id = 'execution'`;
 		await expect(control()).rejects.toBeInstanceOf(TaskAuthorizationStoreError);
 		await expectNoControlEffects();
 	});
@@ -209,7 +209,7 @@ async function waitingTask(kind: TaskPrincipalV1["kind"]) {
 	await client`insert into platform.agent_applications
 		(id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, service_availability, workload_revision, fence)
 		values ('agent-application', 'agent', 'owner', 'Agent', 'Fixture', 'available', 'trace', 'request', now(), 1, 1, 'running', 'ready', 1, 1)`;
-	await client`insert into platform.agent_owners (agent_id, owner_id) values ('agent', 'owner')`;
+	await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent', 'owner', now())`;
 
 	await client`update platform.conversation_executions set status = 'waiting', task_wait_order = 1,
 		task_wait_deadline = clock_timestamp() + interval '60 seconds' where execution_id = 'execution'`;
@@ -449,7 +449,7 @@ describe("original typed waiting control finisher", () => {
 	);
 	it("refuses the same-ID opposite boundary before changing waiting facts", async () => {
 		await waitingTask("application");
-		await client`update platform.task_authorization_records set boundary = ${JSON.stringify(boundary("user"))}::jsonb where execution_id = 'execution'`;
+		await client`update platform.task_authorization_records set boundary = ${client.json(boundary("user"))} where execution_id = 'execution'`;
 		const before = await waitingSnapshot();
 		await expect(control("stop")).rejects.toBeInstanceOf(
 			TaskAuthorizationStoreError,

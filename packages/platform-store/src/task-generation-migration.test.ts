@@ -138,12 +138,23 @@ describe("0033 typed generation tombstone upgrade", () => {
 			null,
 			[],
 		]) {
-			await expect(
-				sql`update platform.conversation_generation_tombstones set original_principal = ${sql.json(principal)}`,
-				JSON.stringify(principal),
-			).rejects.toMatchObject({
-				constraint_name: "conversation_generation_tombstone_principal_valid",
-			});
+			const rejection = sql`update platform.conversation_generation_tombstones set original_principal = ${sql.json(principal)}`;
+			if (principal === null) {
+				await expect(
+					rejection,
+					JSON.stringify(principal),
+				).rejects.toMatchObject({
+					code: "23502",
+					column_name: "original_principal",
+				});
+			} else {
+				await expect(
+					rejection,
+					JSON.stringify(principal),
+				).rejects.toMatchObject({
+					constraint_name: "conversation_generation_tombstone_principal_valid",
+				});
+			}
 			expect(
 				await sql`select * from platform.conversation_generation_tombstones`,
 			).toEqual(before);

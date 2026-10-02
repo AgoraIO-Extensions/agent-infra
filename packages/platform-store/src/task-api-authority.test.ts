@@ -162,7 +162,7 @@ describe("original Store actual-Bearer Task API supplier", () => {
 				conversationId: "conversation-user",
 			}),
 		).rejects.toMatchObject({ code: "forbidden" });
-		await client`insert into platform.agent_owners(agent_id,owner_id) values('agent','same-id')`;
+		await client`insert into platform.agent_owners(agent_id,owner_id,created_at) values('agent','same-id',now())`;
 		await client`delete from platform.agent_principal_grants where principal_type='user'`;
 		await expect(
 			tx.authorizeTaskApi({

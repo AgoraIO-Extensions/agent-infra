@@ -26,9 +26,6 @@ export const conversations = platformSchema.table(
 		id: text("id").primaryKey(),
 		agentId: text("agent_id").notNull(),
 		actorId: text("actor_id").notNull(),
-		principalType: varchar("principal_type", { length: 16 })
-			.default("user")
-			.notNull(),
 		channelId: text("channel_id").notNull(),
 		status: conversationStatus("status").notNull(),
 		sessionGeneration: bigint("session_generation", {
@@ -49,6 +46,9 @@ export const conversations = platformSchema.table(
 			.notNull(),
 		selectedModelOptionId: text("selected_model_option_id"),
 		selectedReasoningLevel: text("selected_reasoning_level"),
+		principalType: varchar("principal_type", { length: 16 })
+			.default("user")
+			.notNull(),
 	},
 	(table) => [
 		check("conversation_id_non_empty", sql`char_length(${table.id}) > 0`),
@@ -114,14 +114,9 @@ export const conversationExecutions = platformSchema.table(
 		conversationId: text("conversation_id").notNull(),
 		agentId: text("agent_id").notNull(),
 		actorId: text("actor_id").notNull(),
-		principalType: varchar("principal_type", { length: 16 })
-			.default("user")
-			.notNull(),
 		channelId: text("channel_id").notNull(),
 		turnId: text("turn_id").notNull(),
 		status: conversationExecutionStatus("status").notNull(),
-		taskWaitOrder: bigint("task_wait_order", { mode: "number" }),
-		taskWaitDeadline: timestamp("task_wait_deadline", { withTimezone: true }),
 		sessionGeneration: bigint("session_generation", {
 			mode: "number",
 		}).notNull(),
@@ -150,6 +145,11 @@ export const conversationExecutions = platformSchema.table(
 		runtimeSubmitProtocol: text("runtime_submit_protocol"),
 		originalOperationDigest: text("original_operation_digest"),
 		originalSubmitHostSessionRef: text("original_submit_host_session_ref"),
+		principalType: varchar("principal_type", { length: 16 })
+			.default("user")
+			.notNull(),
+		taskWaitOrder: bigint("task_wait_order", { mode: "number" }),
+		taskWaitDeadline: timestamp("task_wait_deadline", { withTimezone: true }),
 	},
 	(table) => [
 		foreignKey({

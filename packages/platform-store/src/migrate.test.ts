@@ -1832,11 +1832,14 @@ describe("published Relay authority migration", () => {
 			...Array.from({ length: 25 }, (_, idx) => idx),
 			29,
 			30,
+			31,
+			32,
+			33,
+			34,
 		]);
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 30,
-			when: relayWhen,
-			tag: "0030_relay_key_authority_compatibility",
+			idx: 34,
+			tag: "0034_task_status_event_source",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -1874,12 +1877,16 @@ describe("published Relay authority migration", () => {
 		await builtStore.migratePlatformDatabase({ databaseUrl });
 		const after = await history();
 		expect(after.slice(0, before.length)).toEqual(before);
-		expect(after.slice(before.length)).toEqual([
-			expect.objectContaining({
-				created_at: String(relayWhen),
-				hash: migrations.at(-1)?.hash,
-			}),
-		]);
+		expect(after.slice(before.length)).toEqual(
+			migrations
+				.filter((migration) => migration.folderMillis >= relayWhen)
+				.map((migration) =>
+					expect.objectContaining({
+						created_at: String(migration.folderMillis),
+						hash: migration.hash,
+					}),
+				),
+		);
 		const catalog = await relayCatalog();
 		await seedOriginalRecords(false);
 		const data = await records();
@@ -1914,11 +1921,17 @@ describe("published Relay authority migration", () => {
 			await builtStore.migratePlatformDatabase({ databaseUrl });
 			const after = await history();
 			expect(after.slice(0, before.length)).toEqual(before);
-			expect(after).toHaveLength(before.length + 1);
-			expect(after.at(-1)).toMatchObject({
-				created_at: String(relayWhen),
-				hash: migrations.at(-1)?.hash,
-			});
+			expect(after).toHaveLength(before.length + 5);
+			expect(after.slice(before.length)).toEqual(
+				migrations
+					.filter((migration) => migration.folderMillis >= relayWhen)
+					.map((migration) =>
+						expect.objectContaining({
+							created_at: String(migration.folderMillis),
+							hash: migration.hash,
+						}),
+					),
+			);
 			expect(await relayCatalog()).toEqual(catalog);
 			expect(await records()).toEqual(data);
 			await builtStore.migratePlatformDatabase({ databaseUrl });
@@ -1937,7 +1950,7 @@ describe("published Relay authority migration", () => {
 		]);
 		const after = await history();
 		expect(after.slice(0, before.length)).toEqual(before);
-		expect(after).toHaveLength(before.length + 1);
+		expect(after).toHaveLength(before.length + 5);
 		const catalog = await relayCatalog();
 		await builtStore.migratePlatformDatabase({ databaseUrl });
 		expect(await history()).toEqual(after);

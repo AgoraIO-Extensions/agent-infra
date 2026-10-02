@@ -3424,7 +3424,7 @@ describe("waiting Task original Store promotion", () => {
 				if (channel === "api:application") {
 					await client`insert into platform.platform_applications (id, name, responsible_user_id, authorization_revision) values ('actor-dispatch', 'Fixture', 'owner-a', 'identity-dispatch')`;
 					await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'application', 'actor-dispatch', 'use', 'use-dispatch')`;
-					await client`insert into platform.agent_owners (agent_id, owner_id) values ('agent-dispatch', 'owner-a') on conflict do nothing`;
+					await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'owner-a', now()) on conflict do nothing`;
 				}
 				if (sourceKind === "custom") {
 					await client`update platform.conversation_executions set execution_source=null, relay_key_purpose=null, relay_key_subject_id=null, relay_key_id=null, relay_key_version=null,

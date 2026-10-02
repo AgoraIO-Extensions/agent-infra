@@ -507,7 +507,15 @@ describe("historical task authorization upgrade", () => {
 				"execution-read-isolation",
 			),
 		).toBeUndefined();
-		await sql`update platform.conversation_executions set actor_id = 'another-user' where execution_id = 'execution-read-isolation'`;
+		await expect(
+			sql`update platform.conversation_executions set actor_id = 'another-user' where execution_id = 'execution-read-isolation'`,
+		).rejects.toMatchObject({
+			code: "23503",
+			constraint_name: "conversation_execution_principal_binding_fk",
+		});
+		expect(
+			await sql`select actor_id from platform.conversation_executions where execution_id = 'execution-read-isolation'`,
+		).toEqual([{ actor_id: "original-user-read-isolation" }]);
 		expect(
 			await migration.readLegacyControlRecovery("execution-read-isolation"),
 		).toBeNull();
