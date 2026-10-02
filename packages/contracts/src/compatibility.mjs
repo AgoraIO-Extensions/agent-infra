@@ -986,6 +986,28 @@ function isOwnApplicationMetadataV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1233 admits only the application credential material grant metadata routes.
+function isApplicationMaterialGrantV2OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/applications/{applicationId}/material-grant",
+		"/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}",
+	];
+	if (paths.some((path) => previous.paths?.[path] !== undefined)) return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"6bf8b1cd3ef226b56b1669dd3b2cc359a8e2384c5fe30aa67f9cc06d91d81aae"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	return sameValue(previous, normalized);
+}
+
 function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v2/admin/agent-applications",
@@ -1630,6 +1652,7 @@ function findBreakingChanges(previous, current) {
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
+			!isApplicationMaterialGrantV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationDisableV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
