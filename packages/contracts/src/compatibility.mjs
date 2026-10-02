@@ -1005,7 +1005,7 @@ function isApplicationMaterialGrantV2OpenApiAddition(previous, current) {
 		return false;
 	const normalized = structuredClone(current);
 	for (const path of paths) delete normalized.paths[path];
-	return sameValue(previous, normalized);
+	return findBreakingChanges(previous, normalized).length === 0;
 }
 
 function isAgentLifecycleV2OpenApiAddition(previous, current) {
