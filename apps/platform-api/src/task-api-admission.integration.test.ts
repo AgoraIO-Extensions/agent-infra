@@ -131,10 +131,14 @@ beforeAll(async () => {
 	);
 }, 120_000);
 beforeEach(async () => {
+	const sourceReference =
+		configuration.source.kind === "standard"
+			? configuration.source.templateId
+			: configuration.source.imageDigest;
 	await sql`truncate platform.agents, platform.conversations, platform.platform_applications, platform.platform_api_credentials, platform.relay_key_subjects cascade`;
 	await sql`truncate platform.outbox_items, platform.idempotency_records, platform.audit_events`;
 	await sql`insert into platform.agents(id,current_configuration_revision,authorization_revision) values(${configuration.agentId},${configuration.revision},'agent-1')`;
-	await sql`insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,created_at,configuration) values(${configuration.agentId},${configuration.revision},${configuration.source.templateId},now(),${sql.json(configuration as unknown as postgres.JSONValue)})`;
+	await sql`insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,created_at,configuration) values(${configuration.agentId},${configuration.revision},${sourceReference},now(),${sql.json(configuration as unknown as postgres.JSONValue)})`;
 	await sql`insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values('agent-application',${configuration.agentId},'owner','Agent','Synthetic fixture','available','seed','seed',now(),1,1,'ready','running',1,1)`;
 	await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('agent-default',${configuration.agentId},1,1)`;
 	await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('agent-default',${configuration.agentId},1,'original-key',${sql.json({ schemaVersion: 1, purpose: "agent-default", subjectId: configuration.agentId, keyId: "original-key", keyVersion: 1 })})`;
