@@ -142,7 +142,9 @@ async function seedCapacityAgent(
 		failureCode: null,
 		attempts: 0,
 	};
-	await client`insert into platform.agents (id, current_configuration_revision) values (${agentId}, 4) on conflict do nothing`;
+	await client`insert into platform.agents (id, current_configuration_revision, authorization_revision)
+		values (${agentId}, 4, 'authorization-dispatch')
+		on conflict (id) do update set authorization_revision = excluded.authorization_revision`;
 	await client`insert into platform.agent_applications
 		(id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at,
 		management_revision, approval_revision, desired_state, service_availability, workload_revision, fence)
@@ -262,6 +264,45 @@ async function seed(
 			 ${client.json(payload)}, 'trace-dispatch', 'request-dispatch',
 			 now(), now(), now())
 	`;
+	if (
+		channel === "web" ||
+		channel === "api:user" ||
+		channel === "api:application"
+	) {
+		const purpose = channel === "web" ? "personal" : "agent-default";
+		const subjectId = channel === "web" ? "actor-dispatch" : agentId;
+		const keyId = `seed-key:${purpose}:${subjectId}`;
+		await client`insert into platform.relay_key_subjects
+			(purpose, subject_id, last_version, current_version)
+			values (${purpose}, ${subjectId}, 1, 1)
+			on conflict (purpose, subject_id) do nothing`;
+		await client`insert into platform.relay_key_versions
+			(purpose, subject_id, key_version, key_id, ciphertext)
+			values (${purpose}, ${subjectId}, 1, ${keyId},
+				${client.json({ purpose, subjectId, keyId, keyVersion: 1 })})
+			on conflict (purpose, subject_id, key_version) do nothing`;
+		await client`insert into platform.task_authorization_records(id, execution_id, boundary)
+			values (${`authorization:${executionId}`}, ${executionId}, ${client.json({
+				schemaVersion: 1,
+				principal: {
+					kind: channel === "api:application" ? "application" : "user",
+					id: "actor-dispatch",
+				},
+				agentId,
+				channelId: channel,
+				identityRevision: "identity-dispatch",
+				agentAuthorizationRevision: "authorization-dispatch",
+				accessSources:
+					channel === "web"
+						? [{ kind: "user", userId: "actor-dispatch" }]
+						: [{ kind: "api-use", useGrantRevision: "use-dispatch" }],
+			})})`;
+		await client`update platform.conversation_executions set
+			execution_source=${channel === "web" ? "web" : "platform-api"},
+			relay_key_purpose=${purpose}, relay_key_subject_id=${subjectId},
+			relay_key_id=${keyId}, relay_key_version=1
+			where execution_id=${executionId}`;
+	}
 	return {
 		conversationId,
 		executionId,
@@ -3260,7 +3301,7 @@ async function acceptedKeyWork(
 					? [{ kind: "user", userId: "actor-dispatch" }]
 					: [{ kind: "api-use", useGrantRevision: "use-dispatch" }],
 		},
-	)})`;
+	)}) on conflict (id) do nothing`;
 	return work;
 }
 
