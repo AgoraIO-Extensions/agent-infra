@@ -268,6 +268,105 @@ async function assertChat(page: Page, agentName = "受控路由助手") {
 }
 
 for (const compact of [false, true]) {
+	test(`keeps the original Agent header in the conversation column${compact ? " at 320 by 370" : ""}`, async ({
+		page,
+	}, info) => {
+		if (compact) await page.setViewportSize({ width: 320, height: 370 });
+		const fixture = await routingFixture(page, {
+			agentName: "受控长名称助手".repeat(4),
+		});
+		await page.goto(canonical(fixture.agentId, fixture.conversationId));
+		await assertChat(page, fixture.agentName);
+		const header = page.locator(".conversation-header");
+		await expect(
+			header.getByText("管理状态：可用", { exact: true }),
+		).toBeVisible();
+		await expect(
+			header.getByText("服务状态：就绪", { exact: true }),
+		).toBeVisible();
+		const geometry = await header.evaluate((node) => {
+			const workspace = node.closest(".chat-workspace");
+			const history = document.querySelector(".conversation-history-panel");
+			if (!workspace || !history)
+				throw new Error("Expected parallel conversation regions");
+			return {
+				header: node.getBoundingClientRect().toJSON(),
+				workspace: workspace.getBoundingClientRect().toJSON(),
+				history: history.getBoundingClientRect().toJSON(),
+				viewport: { width: innerWidth, height: innerHeight },
+			};
+		});
+		await info.attach("conversation-header-geometry", {
+			body: JSON.stringify(geometry),
+			contentType: "application/json",
+		});
+		expect(geometry.header.left).toBeGreaterThanOrEqual(
+			geometry.workspace.left,
+		);
+		expect(geometry.header.right).toBeLessThanOrEqual(geometry.workspace.right);
+		if (geometry.viewport.width > 820) {
+			expect(
+				Math.abs(geometry.workspace.top - geometry.history.top),
+			).toBeLessThan(2);
+			expect(geometry.history.left).toBeGreaterThanOrEqual(
+				geometry.workspace.right,
+			);
+		} else
+			expect(geometry.history.top).toBeGreaterThanOrEqual(
+				geometry.workspace.bottom,
+			);
+		for (const [index, target] of [
+			header.getByRole("heading", { name: fixture.agentName, exact: true }),
+			header.getByRole("link", { name: "切换 Agent" }),
+			header.getByRole("button", { name: "新建会话" }),
+			header.getByRole("button", { name: "个人历史" }),
+		].entries()) {
+			await target.scrollIntoViewIfNeeded();
+			await info.attach(`conversation-header-${index}-geometry`, {
+				body: JSON.stringify(
+					await target.evaluate((node) => ({
+						target: node.getBoundingClientRect().toJSON(),
+						viewport: { width: innerWidth, height: innerHeight },
+						workspace: node
+							.closest(".chat-workspace")
+							?.getBoundingClientRect()
+							.toJSON(),
+						workspaceScrollTop: node.closest(".chat-workspace")?.scrollTop,
+						documentScrollY: scrollY,
+					})),
+				),
+				contentType: "application/json",
+			});
+			await info.attach(`conversation-header-${index}`, {
+				body: await page.screenshot({ animations: "disabled" }),
+				contentType: "image/png",
+			});
+			await expect(target).toBeInViewport({ ratio: 1 });
+			await target.click({ trial: true });
+		}
+		expect(
+			await page.evaluate(
+				() =>
+					Math.max(
+						document.documentElement.scrollWidth,
+						document.body.scrollWidth,
+					) <= innerWidth,
+			),
+		).toBe(true);
+		await header.getByRole("link", { name: "切换 Agent" }).focus();
+		await page.keyboard.press("Enter");
+		await expect(page).toHaveURL(/\/agents\?mode=conversation$/);
+		await expect(page.locator('[data-slot="breadcrumb-page"]')).toHaveText(
+			"选择 Agent 开始对话",
+		);
+		expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+			true,
+		);
+		expect(fixture.unexpected).toEqual([]);
+	});
+}
+
+for (const compact of [false, true]) {
 	test(`renders verified Agent message roles and preserves versions after refresh${compact ? " at 320 by 370" : ""}`, async ({
 		page,
 	}, info) => {
