@@ -240,13 +240,12 @@ const model = createServer(async (request, response) => {
 		if (request.headers["content-encoding"] === "zstd")
 			bytes = zstdDecompressSync(bytes);
 		const body = JSON.parse(bytes.toString("utf8"));
-		const expectedCredential =
-			request.url?.startsWith("/http-401/")
-				? "synthetic-unusable-credential"
-				: request.url?.startsWith("/approved-selected/") ||
-						request.url?.startsWith("/hold-selected/")
-					? credentials.selected
-					: credentials.default;
+		const expectedCredential = request.url?.startsWith("/http-401/")
+			? "synthetic-unusable-credential"
+			: request.url?.startsWith("/approved-selected/") ||
+					request.url?.startsWith("/hold-selected/")
+				? credentials.selected
+				: credentials.default;
 		const authenticated =
 			request.headers.authorization === `Bearer ${expectedCredential}`;
 		let resolveClosed;
