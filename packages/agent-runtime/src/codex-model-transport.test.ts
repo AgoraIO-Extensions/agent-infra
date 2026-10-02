@@ -3229,3 +3229,337 @@ describe("Codex model started persistence guard", () => {
 		},
 	);
 });
+
+describe("Execution Key transport and original request drain", () => {
+	it.each([
+		"http://model.invalid",
+		"http://127.1",
+		"http://2130706433",
+		"https://user:pass@model.invalid",
+		"https://model.invalid?query=1",
+		"https://model.invalid#fragment",
+	])("rejects unsafe endpoint-only Key routes %s", async (endpoint) => {
+		await expect(
+			openCodexModelTransport(
+				[
+					{
+						internalModel: selectedInternalModel,
+						model: "synthetic-selected",
+						endpoint,
+					},
+				],
+				{
+					beforeRequest: async () => {
+						throw new Error("invalid route reached observer");
+					},
+				},
+			),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_CONFIGURATION_INVALID" });
+	});
+
+	async function keyedTransport(
+		endpoint: string,
+		observer: CodexModelTransportObserver,
+	) {
+		const value = await openCodexModelTransport(
+			[
+				{
+					internalModel: selectedInternalModel,
+					model: "synthetic-selected",
+					endpoint,
+				},
+			],
+			observer,
+		);
+		admitTurn(value, defaultNativeTurn);
+		close.push(value.close);
+		return value;
+	}
+
+	it("consumes a fresh guarded Execution Key on every actual request", async () => {
+		const received: string[] = [];
+		const endpoint = await listen(
+			createServer((incoming, response) => {
+				received.push(String(incoming.headers.authorization));
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const keys = ["synthetic-execution-key-a", "synthetic-execution-key-b"];
+		const assertCurrent = vi.fn();
+		const beforeRequest = vi.fn(async () => ({
+			credential: keys[received.length],
+			assertCurrent,
+			started: async () => {},
+			finish: async () => {},
+		}));
+		const value = await keyedTransport(endpoint, { beforeRequest });
+		for (const key of keys) {
+			const response = await request(value.modelAccess);
+			expect(response.status).toBe(200);
+			expect(await response.text()).not.toContain(key);
+		}
+		expect(received).toEqual(keys.map((key) => `Bearer ${key}`));
+		expect(beforeRequest).toHaveBeenCalledTimes(2);
+		expect(assertCurrent).toHaveBeenCalledTimes(4);
+	});
+
+	it.each([
+		"missing key",
+		"missing guard",
+		"async guard",
+		"invalid key",
+	] as const)(
+		"rejects a keyed request with %s before actual fetch",
+		async (mode) => {
+			let calls = 0;
+			const endpoint = await listen(
+				createServer((_incoming, response) => {
+					calls++;
+					response.end();
+				}),
+			);
+			const finish = vi.fn(async () => {});
+			const value = await keyedTransport(endpoint, {
+				beforeRequest: async () => ({
+					...(mode === "missing key"
+						? {}
+						: {
+								credential:
+									mode === "invalid key" ? "short" : "synthetic-execution-key",
+							}),
+					...(mode === "missing guard"
+						? {}
+						: {
+								assertCurrent:
+									mode === "async guard" ? async () => {} : () => {},
+							}),
+					started: async () => {},
+					finish,
+				}),
+			});
+			const response = await request(value.modelAccess);
+			await response.text();
+			expect(response.status).not.toBe(200);
+			expect(calls).toBe(0);
+			expect(finish).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "failed",
+					failureCode: "request_not_started",
+				}),
+			);
+		},
+	);
+
+	it("refuses a Key on a legacy static route instead of falling back", async () => {
+		let calls = 0;
+		const endpoint = await listen(
+			createServer((_incoming, response) => {
+				calls++;
+				response.end();
+			}),
+		);
+		const value = await transport(endpoint, true, {
+			beforeRequest: async () => ({
+				credential: "synthetic-execution-key",
+				assertCurrent: () => {},
+				started: async () => {},
+				finish: async () => {},
+			}),
+		});
+		const response = await request(value.modelAccess);
+		await response.text();
+		expect(response.status).not.toBe(200);
+		expect(calls).toBe(0);
+	});
+
+	it("rejects mixed static and keyed routes", async () => {
+		await expect(
+			openProductionModelTransport(
+				[
+					{
+						internalModel: selectedInternalModel,
+						model: "synthetic-selected",
+						endpoint: "https://model.invalid",
+					},
+					{
+						internalModel: "option_b/synthetic-selected",
+						model: "synthetic-selected",
+						endpoint: "https://model.invalid",
+						credential,
+					},
+				],
+				testObserver,
+			),
+		).rejects.toThrow("RUNTIME_CONFIGURATION_INVALID");
+	});
+
+	it.each(["Host revoke", "Turn revoke", "process revoke"] as const)(
+		"rechecks %s after the original durable started await",
+		async (mode) => {
+			let calls = 0;
+			const endpoint = await listen(
+				createServer((_incoming, response) => {
+					calls++;
+					response.end();
+				}),
+			);
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			let revoked = false;
+			const finish = vi.fn(async () => {});
+			const value = await keyedTransport(endpoint, {
+				beforeRequest: async () => ({
+					credential: "synthetic-execution-key",
+					assertCurrent: () => {
+						if (revoked) throw new Error("revoked");
+					},
+					started: async () => {
+						entered.resolve();
+						await release.promise;
+					},
+					finish,
+				}),
+			});
+			const pending = request(value.modelAccess).then(
+				async (response) => {
+					await response.text();
+					return response.status;
+				},
+				() => 0,
+			);
+			await entered.promise;
+			if (mode === "Host revoke") revoked = true;
+			else if (mode === "Turn revoke") value.revokeTurn(defaultNativeTurn);
+			else value.revokeConversationAccess(testConversationKey);
+			release.resolve();
+			expect(await pending).not.toBe(200);
+			expect(calls).toBe(0);
+			expect(finish).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "failed",
+					failureCode: "request_not_started",
+				}),
+			);
+		},
+	);
+
+	it.each(["Turn revoke", "process revoke"] as const)(
+		"checks transport state after the last Host callback causes %s",
+		async (mode) => {
+			let calls = 0;
+			const endpoint = await listen(
+				createServer((_incoming, response) => {
+					calls++;
+					response.end();
+				}),
+			);
+			let checks = 0;
+			let value: Awaited<ReturnType<typeof keyedTransport>>;
+			value = await keyedTransport(endpoint, {
+				beforeRequest: async () => ({
+					credential: "synthetic-execution-key",
+					assertCurrent: () => {
+						if (++checks !== 2) return;
+						if (mode === "Turn revoke") value.revokeTurn(defaultNativeTurn);
+						else value.revokeConversationAccess(testConversationKey);
+					},
+					started: async () => {},
+					finish: async () => {},
+				}),
+			});
+			const response = await request(value.modelAccess).catch(() => undefined);
+			await response?.text();
+			expect(response?.status).not.toBe(200);
+			expect(checks).toBe(2);
+			expect(calls).toBe(0);
+		},
+	);
+
+	it("redacts the request-local Key from an upstream response", async () => {
+		const key = "synthetic-execution-key-private";
+		const endpoint = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({ type: "response.output_text.delta", delta: key }) +
+						completedEvent(),
+				);
+			}),
+		);
+		const finish = vi.fn(async () => {});
+		const value = await keyedTransport(endpoint, {
+			beforeRequest: async () => ({
+				credential: key,
+				assertCurrent: () => {},
+				started: async () => {},
+				finish,
+			}),
+		});
+		const response = await request(value.modelAccess);
+		expect(await response.text()).not.toContain(key);
+		expect(finish).toHaveBeenCalledWith(
+			expect.objectContaining({
+				phase: "unknown",
+				failureCode: "invalid_response",
+			}),
+		);
+	});
+
+	it.each([false, true])(
+		"joins pending original outcome persistence before drain, failure=%s",
+		async (failure) => {
+			const endpoint = await listen(
+				createServer((_incoming, response) => {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const value = await keyedTransport(endpoint, {
+				beforeRequest: async () => ({
+					credential: "synthetic-execution-key",
+					assertCurrent: () => {},
+					started: async () => {},
+					finish: async () => {
+						entered.resolve();
+						await release.promise;
+						if (failure) throw new Error("store failed");
+					},
+				}),
+			});
+			const pending = request(value.modelAccess).then(
+				(response) => response.text(),
+				() => "closed",
+			);
+			await entered.promise;
+			let drained = false;
+			const draining = value.drainTurn(defaultNativeTurn).then(() => {
+				drained = true;
+			});
+			const checked = failure
+				? expect(draining).rejects.toThrow("RUNTIME_MODEL_DRAIN_FAILED")
+				: expect(draining).resolves.toBeUndefined();
+			try {
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				expect(drained).toBe(false);
+			} finally {
+				release.resolve();
+			}
+			await checked;
+			await pending;
+			const retry = await request(value.modelAccess);
+			expect(retry.status).toBe(409);
+			await retry.text();
+			if (failure) {
+				await expect(
+					value.cancelTurn(defaultNativeTurn),
+				).resolves.toBeUndefined();
+				await expect(value.drainTurn(defaultNativeTurn)).rejects.toThrow(
+					"RUNTIME_MODEL_DRAIN_FAILED",
+				);
+			}
+		},
+	);
+});
