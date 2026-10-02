@@ -6,10 +6,12 @@ import {
 } from "./agent-management-input.js";
 import {
 	type ApplicationMetadataV1,
+	type ApplicationRegistrationAuditV1,
 	type ApplicationRegistrationErrorCodeV1,
 	ApplicationRegistrationErrorV1,
 	type ApplicationRegistrationRequestV1,
 	type ApplicationRegistrationStoreV1,
+	type ApplicationRegistrationTransactionV1,
 } from "./application-registration-contract.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 import {
@@ -71,6 +73,7 @@ export function createApplicationRegistrationUseCaseV1(dependencies: {
 }) {
 	async function recordRefusal(
 		metadata: Pick<ApplicationRegistrationRequestV1, "requestId" | "traceId">,
+		action: ApplicationRegistrationAuditV1["action"],
 		reason: ApplicationRegistrationErrorCodeV1,
 		userId: string | null = null,
 	): Promise<void> {
@@ -79,12 +82,66 @@ export function createApplicationRegistrationUseCaseV1(dependencies: {
 				...metadata,
 				userId,
 				applicationId: null,
-				action: "application.registered",
+				action,
 				outcome: reason === "unavailable" ? "failed" : "rejected",
 				details: { reason },
 			});
 		} catch {
 			/* Refusal remains refusal when the audit dependency is unavailable. */
+		}
+	}
+	async function execute<T>(
+		context: ApplicationRegistrationRequestV1,
+		action: ApplicationRegistrationAuditV1["action"],
+		work: (
+			transaction: ApplicationRegistrationTransactionV1,
+			request: ApplicationRegistrationRequestV1,
+		) => Promise<T>,
+	): Promise<T> {
+		let request: ApplicationRegistrationRequestV1;
+		try {
+			const values = snapshot(context, ["userId", "requestId", "traceId"]);
+			request = {
+				userId: text(values.userId),
+				requestId: text(values.requestId),
+				traceId: text(values.traceId),
+			};
+		} catch {
+			throw new ApplicationRegistrationErrorV1("invalid_input");
+		}
+		try {
+			return await dependencies.store.execute(async (transaction) => {
+				requirePersonalApiUserEnabledV1(
+					await transaction.lockUserDisabled(request.userId),
+				);
+				const first = await resolveCurrentPersonalApiUserV1(
+					dependencies.userDirectory,
+					request.userId,
+				);
+				requirePersonalApiUserActiveV1(first);
+				const result = await work(transaction, request);
+				// Final directory check follows every persistence/audit await. The disable
+				// lock and application row lock remain held through transaction commit.
+				const current = await resolveCurrentPersonalApiUserV1(
+					dependencies.userDirectory,
+					request.userId,
+				);
+				requirePersonalApiUserActiveV1(current);
+				if (current.authorizationRevision !== first.authorizationRevision)
+					throw new ApplicationRegistrationErrorV1("unavailable");
+				return result;
+			});
+		} catch (error) {
+			const failure =
+				error instanceof ApplicationRegistrationErrorV1
+					? error
+					: new ApplicationRegistrationErrorV1(
+							error instanceof PersonalApiCredentialErrorV1
+								? error.code
+								: "unavailable",
+						);
+			await recordRefusal(request, action, failure.code, request.userId);
+			throw failure;
 		}
 	}
 	return {
@@ -106,27 +163,10 @@ export function createApplicationRegistrationUseCaseV1(dependencies: {
 			} catch {
 				/* Report invalid input only after current identity admission. */
 			}
-			let request: ApplicationRegistrationRequestV1;
-			try {
-				const values = snapshot(context, ["userId", "requestId", "traceId"]);
-				request = {
-					userId: text(values.userId),
-					requestId: text(values.requestId),
-					traceId: text(values.traceId),
-				};
-			} catch {
-				throw new ApplicationRegistrationErrorV1("invalid_input");
-			}
-			try {
-				return await dependencies.store.execute(async (transaction) => {
-					requirePersonalApiUserEnabledV1(
-						await transaction.lockUserDisabled(request.userId),
-					);
-					const first = await resolveCurrentPersonalApiUserV1(
-						dependencies.userDirectory,
-						request.userId,
-					);
-					requirePersonalApiUserActiveV1(first);
+			return execute(
+				context,
+				"application.registered",
+				async (transaction, request) => {
 					if (command === null)
 						throw new ApplicationRegistrationErrorV1("invalid_input");
 					const digest = platformIdempotencyV1.canonicalRequestDigest({
@@ -182,29 +222,40 @@ export function createApplicationRegistrationUseCaseV1(dependencies: {
 						outcome: "succeeded",
 						details: { replayed: prior !== null },
 					});
-					// Final directory check follows every persistence/audit await. The disable
-					// lock and application row lock remain held through transaction commit.
-					const current = await resolveCurrentPersonalApiUserV1(
-						dependencies.userDirectory,
-						request.userId,
-					);
-					requirePersonalApiUserActiveV1(current);
-					if (current.authorizationRevision !== first.authorizationRevision)
-						throw new ApplicationRegistrationErrorV1("unavailable");
 					return { metadata, replayed: prior !== null };
-				});
-			} catch (error) {
-				const failure =
-					error instanceof ApplicationRegistrationErrorV1
-						? error
-						: new ApplicationRegistrationErrorV1(
-								error instanceof PersonalApiCredentialErrorV1
-									? error.code
-									: "unavailable",
-							);
-				await recordRefusal(request, failure.code, request.userId);
-				throw failure;
-			}
+				},
+			);
+		},
+		async read(
+			context: ApplicationRegistrationRequestV1,
+			applicationId: string,
+		): Promise<ApplicationMetadataV1> {
+			const id = isAgentManagementText(applicationId) ? applicationId : null;
+			return execute(
+				context,
+				"application.metadata.read",
+				async (transaction, request) => {
+					if (id === null)
+						throw new ApplicationRegistrationErrorV1("invalid_input");
+					const row = await transaction.readOwn(id, request.userId);
+					if (row === null)
+						throw new ApplicationRegistrationErrorV1("not_found");
+					const metadata = parseMetadata(row);
+					if (
+						metadata.applicationId !== id ||
+						metadata.responsibleUserId !== request.userId
+					)
+						throw new ApplicationRegistrationErrorV1("unavailable");
+					await transaction.recordAudit({
+						...request,
+						applicationId: id,
+						action: "application.metadata.read",
+						outcome: "succeeded",
+						details: {},
+					});
+					return metadata;
+				},
+			);
 		},
 	};
 }

@@ -944,6 +944,22 @@ function isApplicationRegistrationV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1166 admits only the reviewed own-application metadata GET.
+function isOwnApplicationMetadataV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/applications/{applicationId}";
+	if (previous.paths?.[path] !== undefined) return false;
+	if (
+		createHash("sha256")
+			.update(JSON.stringify(current.paths?.[path] ?? null))
+			.digest("hex") !==
+		"a555914e670700aad94d9ad8b2c3263a9cd8abe14f342dc93a0a74bf21107275"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	return sameValue(previous, normalized);
+}
+
 function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v2/admin/agent-applications",
@@ -1426,6 +1442,7 @@ function findBreakingChanges(previous, current) {
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
+			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&

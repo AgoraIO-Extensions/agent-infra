@@ -1592,6 +1592,57 @@ export type RegisterApplicationV2Responses = {
 
 export type RegisterApplicationV2Response = RegisterApplicationV2Responses[keyof RegisterApplicationV2Responses];
 
+export type GetOwnApplicationV2Data = {
+    body?: never;
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}';
+};
+
+export type GetOwnApplicationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetOwnApplicationV2Error = GetOwnApplicationV2Errors[keyof GetOwnApplicationV2Errors];
+
+export type GetOwnApplicationV2Responses = {
+    /**
+     * Own application metadata
+     */
+    200: ApplicationMetadataV1;
+};
+
+export type GetOwnApplicationV2Response = GetOwnApplicationV2Responses[keyof GetOwnApplicationV2Responses];
+
 export type GetConversationV2Data = {
     body?: never;
     path: {

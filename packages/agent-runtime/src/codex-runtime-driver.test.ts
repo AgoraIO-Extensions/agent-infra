@@ -685,6 +685,10 @@ class TestCodexBridge {
 	resumeError?: { code: number; message: string };
 
 	private readonly queuedFrames: CodexAppServerFrame[] = [];
+	private readonly processingReceipts = new Map<
+		CodexAppServerFrame,
+		{ resolve: () => void; reject: (error: Error) => void }
+	>();
 	private readonly heldTurnsListRequestIds: number[] = [];
 	private readonly heldTurnStartRequestIds: number[] = [];
 	private wake?: () => void;
@@ -1087,22 +1091,58 @@ class TestCodexBridge {
 		});
 	}
 
-	frames(): AsyncIterable<CodexAppServerFrame> {
+	emitFrameAndWaitForProcessing(frame: CodexAppServerFrame) {
+		return new Promise<void>((resolve, reject) => {
+			if (this.closed) {
+				reject(new Error("Bridge closed before frame processing completed"));
+				return;
+			}
+			this.processingReceipts.set(frame, { resolve, reject });
+			this.push(frame);
+		});
+	}
+
+	frames(): AsyncGenerator<CodexAppServerFrame> {
 		const bridge = this;
-		return (async function* () {
-			while (true) {
-				const frame = await bridge.nextFrame();
-				if (!frame) return;
-				yield frame;
+		const frames = (async function* () {
+			try {
+				while (true) {
+					const frame = await bridge.nextFrame();
+					if (!frame) return;
+					yield frame;
+					// CodexRpc requests another frame only after receive/onNotification.
+					const receipt = bridge.processingReceipts.get(frame);
+					bridge.processingReceipts.delete(frame);
+					receipt?.resolve();
+				}
+			} finally {
+				bridge.rejectProcessingReceipts();
 			}
 		})();
+		const finish = frames.return.bind(frames);
+		frames.return = (value) => {
+			// Returning before the first next() does not enter the generator's finally.
+			bridge.rejectProcessingReceipts();
+			return finish(value);
+		};
+		return frames;
 	}
 
 	async close() {
 		this.closed = true;
+		this.rejectProcessingReceipts();
 		const wake = this.wake;
 		this.wake = undefined;
 		wake?.();
+	}
+
+	private rejectProcessingReceipts() {
+		for (const receipt of this.processingReceipts.values()) {
+			receipt.reject(
+				new Error("Stream ended before frame processing completed"),
+			);
+		}
+		this.processingReceipts.clear();
 	}
 
 	private respond(id: number, result: unknown) {
@@ -1540,6 +1580,62 @@ describe("Codex installed Skill descriptor receipt", () => {
 		update.mockRestore();
 		transport.mockRestore();
 	}
+});
+
+describe("TestCodexBridge processing receipt", () => {
+	it("joins the exact frame only when the consumer advances after processing", async () => {
+		const bridge = new TestCodexBridge();
+		const unrelated = { method: "turn/started" };
+		const terminal = { method: "turn/completed" };
+		const unrelatedRead = bridge.emitFrame(unrelated);
+		let processed = false;
+		const processing = bridge
+			.emitFrameAndWaitForProcessing(terminal)
+			.then(() => {
+				processed = true;
+			});
+		const frames = bridge.frames();
+		try {
+			expect((await frames.next()).value).toBe(unrelated);
+			await unrelatedRead;
+			expect(processed).toBe(false);
+			expect((await frames.next()).value).toBe(terminal);
+			expect(processed).toBe(false);
+			const next = frames.next();
+			await processing;
+			expect(processed).toBe(true);
+			await bridge.close();
+			expect(await next).toEqual({ done: true, value: undefined });
+		} finally {
+			await bridge.close();
+			await frames.return(undefined);
+		}
+	});
+
+	it.each([
+		"return before yield",
+		"return after yield",
+		"close before yield",
+		"close after yield",
+	] as const)("rejects an unprocessed exact frame on %s", async (ending) => {
+		const bridge = new TestCodexBridge();
+		const processing = bridge.emitFrameAndWaitForProcessing({
+			method: "turn/completed",
+		});
+		const rejection = expect(processing).rejects.toThrow(
+			"before frame processing completed",
+		);
+		const frames = bridge.frames();
+		try {
+			if (ending.endsWith("after yield")) await frames.next();
+			if (ending.startsWith("return")) await frames.return(undefined);
+			else await bridge.close();
+			await rejection;
+		} finally {
+			await bridge.close();
+			await frames.return(undefined);
+		}
+	});
 });
 
 describe("Codex Runtime Driver", () => {
@@ -9222,15 +9318,46 @@ describe("durable required runtime binding", () => {
 			} else {
 				const accepted = await first.execute(command);
 				if (phase === "completed") {
-					await firstBridge.emitTurnCompleted("completed");
-					await vi.waitFor(async () =>
-						expect(
-							await persistedExecutionStatus(
-								path,
-								accepted.nativeSessionRef,
-								command.executionId,
-							),
-						).toBe("completed"),
+					await firstBridge.emitFrameAndWaitForProcessing({
+						method: "turn/completed",
+						params: {
+							threadId: firstBridge.nativeThreadId,
+							turn: {
+								id: firstBridge.nativeTurnId,
+								status: "completed",
+								items: [],
+							},
+						},
+					});
+					const completed = JSON.parse(
+						await readFile(path, "utf8"),
+					) as StoredCodexDriverState;
+					const session = completed.sessions[accepted.nativeSessionRef];
+					expect(session?.executions?.[command.executionId]).toMatchObject({
+						status: "completed",
+						nativeTurnId: firstBridge.nativeTurnId,
+					});
+					expect(
+						completed.operations[
+							JSON.stringify([
+								command.agentId,
+								command.conversationId,
+								command.sessionGeneration,
+								command.kind,
+								command.operationId,
+							])
+						],
+					).toMatchObject({
+						nativeSessionRef: accepted.nativeSessionRef,
+						record: { result: { outcome: "accepted", status: "completed" } },
+					});
+					expect(
+						session?.journals?.[firstBridge.nativeTurnId]?.events,
+					).toContainEqual(
+						expect.objectContaining({
+							type: "completed",
+							payload: { status: "completed" },
+						}),
 					);
 				}
 			}
