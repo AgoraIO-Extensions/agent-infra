@@ -124,6 +124,7 @@ export const ScopedPlatformAuditProjectionV1Schema = z.strictObject({
 			"conversation",
 			"execution",
 			"configuration",
+			"api_credential",
 		]),
 		subjectId: OpaqueIdV1Schema,
 	}),

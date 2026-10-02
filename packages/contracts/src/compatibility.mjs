@@ -1522,11 +1522,39 @@ function isPersonalCredentialListOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #484 names the known credential object; every other contract field stays exact.
+function isKnownCredentialAuditSubjectAddition(previous, current) {
+	const kinds = [
+		"agent_application",
+		"agent",
+		"secret",
+		"secret_key",
+		"grant",
+		"unknown",
+		"conversation",
+		"execution",
+		"configuration",
+	];
+	const subject = (document) =>
+		document.components?.schemas?.ScopedPlatformAuditProjectionV1?.properties
+			?.subject?.properties?.kind;
+	const oldKind = subject(previous);
+	if (
+		(oldKind !== undefined && !sameValue(oldKind.enum, kinds)) ||
+		!sameValue(subject(current)?.enum, [...kinds, "api_credential"])
+	)
+		return false;
+	const normalized = structuredClone(current);
+	subject(normalized).enum = kinds;
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
 		if (
 			!sameValue(previous, current) &&
+			!isKnownCredentialAuditSubjectAddition(previous, current) &&
 			!isPersonalCredentialListOpenApiAddition(previous, current) &&
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
