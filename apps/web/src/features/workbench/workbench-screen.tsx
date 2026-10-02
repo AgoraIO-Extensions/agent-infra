@@ -121,13 +121,16 @@ function ReadNotice({
 
 function AgentStatus({ agent }: { agent: AgentProjectionV2 }) {
 	const available = canStartPlatformConversation(agent);
-	const failed =
-		agent.managementStatus === "creation_failed" ||
-		agent.managementStatus === "disabled";
 	return (
 		<Badge
 			variant="outline"
-			className={available ? "pill-live" : failed ? "pill-danger" : "pill-wait"}
+			data-status={
+				available
+					? "ready"
+					: agent.managementStatus === "available"
+						? (agent.serviceAvailability ?? "unavailable")
+						: agent.managementStatus
+			}
 		>
 			{available
 				? "可用"

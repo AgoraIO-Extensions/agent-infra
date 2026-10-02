@@ -426,6 +426,12 @@ async function fixture(
 				description: `无空格说明：${"longtoken".repeat(32)}`,
 			});
 		},
+		longApplicationTemplateId(templateId: string) {
+			application = AgentApplicationProjectionV2Schema.parse({
+				...application,
+				source: { kind: "standard", templateId },
+			});
+		},
 
 		staleDeployment() {
 			deployment = { ...deployment, status: "stale" };
@@ -1896,6 +1902,35 @@ test("directory conversation mode restores URL search and chooses only existing 
 	await capture(page, info, "directory-conversation-mode");
 	await page.goBack();
 	await expect(page).toHaveURL(/\/my-agents\/?$/);
+	expect(api.commands).toHaveLength(0);
+});
+
+test("long application template IDs wrap inside narrow application panels", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	const templateId = `template-${"identifier".repeat(11)}`;
+	api.longApplicationTemplateId(templateId);
+	await page.goto("/my-agents");
+	const badge = page.getByText(templateId, { exact: true });
+	await expect(badge).toBeVisible();
+	for (const width of [360, 390, 820]) {
+		await page.setViewportSize({ width, height: 844 });
+		expect(
+			await badge.evaluate((element) => {
+				const panel = element.closest(".application-row");
+				if (!panel) return false;
+				const box = element.getBoundingClientRect();
+				const bounds = panel.getBoundingClientRect();
+				return (
+					box.left >= bounds.left &&
+					box.right <= bounds.right &&
+					element.scrollWidth <= element.clientWidth + 1
+				);
+			}),
+		).toBe(true);
+		await capture(page, info, `application-long-template-${width}px`);
+	}
 	expect(api.commands).toHaveLength(0);
 });
 

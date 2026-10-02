@@ -117,7 +117,10 @@ export function MyAgentsScreen({
 												>
 													{agentManagementStatusLabels[application.status]}
 												</Badge>
-												<Badge variant="outline">
+												<Badge
+													variant="outline"
+													className="max-w-full whitespace-normal [overflow-wrap:anywhere]"
+												>
 													{application.source.kind === "standard"
 														? application.source.templateId
 														: "自定义 Agent"}
