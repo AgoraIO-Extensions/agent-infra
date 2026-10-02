@@ -582,6 +582,16 @@ export type PersonalApiCredentialMetadataV1 = {
     scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
 };
 
+export type PersonalApiCredentialNarrowRequestV1 = {
+    expiresAt?: string;
+    scopes?: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+};
+
+export type PersonalApiCredentialNarrowResponseV1 = {
+    metadata: PersonalApiCredentialMetadataV1;
+    replayed: boolean;
+};
+
 export type PersonalApiCredentialPageV1 = {
     items: Array<PersonalApiCredentialMetadataV1>;
     nextCursor: string | null;
@@ -2029,6 +2039,60 @@ export type RevokePersonalApiCredentialV2Responses = {
 };
 
 export type RevokePersonalApiCredentialV2Response = RevokePersonalApiCredentialV2Responses[keyof RevokePersonalApiCredentialV2Responses];
+
+export type NarrowPersonalApiCredentialV2Data = {
+    body: PersonalApiCredentialNarrowRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        credentialId: string;
+    };
+    query?: never;
+    url: '/api/v2/me/api-credentials/{credentialId}';
+};
+
+export type NarrowPersonalApiCredentialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type NarrowPersonalApiCredentialV2Error = NarrowPersonalApiCredentialV2Errors[keyof NarrowPersonalApiCredentialV2Errors];
+
+export type NarrowPersonalApiCredentialV2Responses = {
+    /**
+     * Current restricted credential metadata
+     */
+    200: PersonalApiCredentialRevokeResponseV1;
+};
+
+export type NarrowPersonalApiCredentialV2Response = NarrowPersonalApiCredentialV2Responses[keyof NarrowPersonalApiCredentialV2Responses];
 
 export type ListRecentPersonalConversationsV2Data = {
     body?: never;

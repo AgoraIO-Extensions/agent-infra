@@ -23,6 +23,7 @@ export const auditActionLabels: Record<AuditRecord["action"], string> = {
 	"api.application.created": "创建应用",
 	"api.credential.issued": "签发 API 凭证",
 	"api.credential.revoked": "撤销 API 凭证",
+	"api.credential.narrowed": "收窄个人 API 凭证",
 	"api.credential.metadata.read": "查看个人 API 凭证元数据",
 	"api.credential.delivery.granted": "授予凭证获取权限",
 	"api.credential.delivery.revoked": "撤销凭证获取权限",
