@@ -68,13 +68,22 @@ function assertAdmin(request: ApplicationMaterialGrantRequestV1): void {
   if (request.actor.accountStatus !== "active") throw new ApplicationMaterialGrantErrorV1("authentication_required");
   if (!request.actor.isSystemAdmin) throw new ApplicationMaterialGrantErrorV1("forbidden");
 }
-export function createApplicationMaterialGrantUseCaseV1(dependencies: { readonly store: ApplicationMaterialGrantStoreV1 }): ApplicationMaterialGrantUseCaseV1 {
+export function createApplicationMaterialGrantUseCaseV1(dependencies: { readonly store: ApplicationMaterialGrantStoreV1; readonly resolveUser: (userId: string) => Promise<{ readonly accountStatus: "active" | "disabled" } | null> }): ApplicationMaterialGrantUseCaseV1 {
+  const assertRecipient = async (tx: ApplicationMaterialGrantTransactionV1, request: ApplicationMaterialGrantRequestV1): Promise<void> => {
+    if (request.principalType === "application") {
+      if (!(await tx.applicationExists(request.principalId))) throw new ApplicationMaterialGrantErrorV1("not_found");
+      return;
+    }
+    const user = await dependencies.resolveUser(request.principalId);
+    if (!user || user.accountStatus !== "active") throw new ApplicationMaterialGrantErrorV1("not_found");
+  };
   return {
     async grant(request) {
       assertRequest(request); assertAdmin(request);
       return dependencies.store.execute(async (tx) => {
         if (await tx.lockUserDisabled(request.actor.userId)) throw new ApplicationMaterialGrantErrorV1("forbidden");
         if (!(await tx.applicationExists(request.applicationId))) throw new ApplicationMaterialGrantErrorV1("not_found");
+        await assertRecipient(tx, request);
         const current = await tx.lockGrant(request);
         if (request.expectedRevision && current?.authorizationRevision !== request.expectedRevision) throw new ApplicationMaterialGrantErrorV1("idempotency_conflict");
         const metadata = await tx.upsertGrant(request, randomUUID(), new Date());
@@ -87,6 +96,8 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: { readonly
       return dependencies.store.execute(async (tx) => {
         if (await tx.lockUserDisabled(request.actor.userId)) throw new ApplicationMaterialGrantErrorV1("forbidden");
         if (!(await tx.applicationExists(request.applicationId))) throw new ApplicationMaterialGrantErrorV1("not_found");
+        if (!request.expectedRevision) throw new ApplicationMaterialGrantErrorV1("idempotency_conflict");
+        await assertRecipient(tx, request);
         const current = await tx.lockGrant(request);
         if (!current) throw new ApplicationMaterialGrantErrorV1("not_found");
         if (request.expectedRevision && current.authorizationRevision !== request.expectedRevision) throw new ApplicationMaterialGrantErrorV1("idempotency_conflict");

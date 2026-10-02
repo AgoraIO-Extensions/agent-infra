@@ -16,18 +16,18 @@ function fakeStore(): ApplicationMaterialGrantStoreV1 & { row: ApplicationMateri
 }
 describe("application material grant authority", () => {
   it("rejects a manager without system_admin writer authority", async () => {
-    const store = fakeStore(); const useCase = createApplicationMaterialGrantUseCaseV1({ store });
+    const store = fakeStore(); const useCase = createApplicationMaterialGrantUseCaseV1({ store, resolveUser: async () => ({ accountStatus: "active" }) });
     await expect(useCase.grant(request({ actor: { ...request().actor, isSystemAdmin: false } }))).rejects.toMatchObject({ code: "forbidden" });
     expect(store.row).toBeNull(); expect(store.audits).toBe(0);
   });
   it("requires a revision for a concurrent revoke", async () => {
-    const store = fakeStore(); const useCase = createApplicationMaterialGrantUseCaseV1({ store });
+    const store = fakeStore(); const useCase = createApplicationMaterialGrantUseCaseV1({ store, resolveUser: async () => ({ accountStatus: "active" }) });
     await useCase.grant(request());
     await expect(useCase.revoke(request({ expectedRevision: "stale" }))).rejects.toBeInstanceOf(ApplicationMaterialGrantErrorV1);
     expect(store.row?.revokedAt).toBeNull();
   });
   it("keeps material out of the result and records the grant audit", async () => {
-    const store = fakeStore(); const useCase = createApplicationMaterialGrantUseCaseV1({ store });
+    const store = fakeStore(); const useCase = createApplicationMaterialGrantUseCaseV1({ store, resolveUser: async () => ({ accountStatus: "active" }) });
     const result = await useCase.grant(request());
     expect(result.metadata).not.toHaveProperty("credential"); expect(store.audits).toBe(1);
   });

@@ -188,7 +188,7 @@ export function assemblePlatformApi(
 		databaseUrl: input.databaseUrl,
 	});
 	const applicationMaterialGrantStore = new PostgresApplicationMaterialGrantStoreV1({ databaseUrl: input.databaseUrl });
-	const applicationMaterialGrants = createApplicationMaterialGrantUseCaseV1({ store: applicationMaterialGrantStore });
+	const applicationMaterialGrants = createApplicationMaterialGrantUseCaseV1({ store: applicationMaterialGrantStore, resolveUser: async (userId) => { const user = await resolveCurrentTaskUser(input.identity, userId, randomUUID()); return user ? { accountStatus: user.accountStatus } : null; } });
 	const applicationRegistrationStore =
 		new PostgresApplicationRegistrationStoreV1({
 			databaseUrl: input.databaseUrl,
