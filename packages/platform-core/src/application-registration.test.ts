@@ -26,7 +26,9 @@ function setup() {
 		lockIdempotency: vi.fn<
 			ApplicationRegistrationTransactionV1["lockIdempotency"]
 		>(async () => null),
-		readOwn: vi.fn(async () => metadata),
+		readOwn: vi.fn<ApplicationRegistrationTransactionV1["readOwn"]>(
+			async () => metadata,
+		),
 		insert: vi.fn<ApplicationRegistrationTransactionV1["insert"]>(
 			async (input) => ({ ...metadata, ...input }),
 		),
@@ -120,6 +122,61 @@ describe("application self-registration Core boundary", () => {
 		await expect(
 			useCase.register(request, "key_1", { name: "Service" }),
 		).rejects.toMatchObject({
+			code: "unavailable",
+		});
+		expect(transaction.readOwn).not.toHaveBeenCalled();
+	});
+	it("reads only the snapshotted current owner and audits metadata access", async () => {
+		const { useCase, transaction } = setup();
+		const context = { ...request };
+		transaction.lockUserDisabled.mockImplementation(async () => {
+			context.userId = "bob";
+			return false;
+		});
+		expect(await useCase.read(context, "app_1")).toEqual(metadata);
+		expect(transaction.readOwn).toHaveBeenCalledWith("app_1", "alice");
+		expect(transaction.recordAudit).toHaveBeenCalledWith({
+			...request,
+			applicationId: "app_1",
+			action: "application.metadata.read",
+			outcome: "succeeded",
+			details: {},
+		});
+		expect(transaction.insert).not.toHaveBeenCalled();
+		expect(transaction.completeIdempotency).not.toHaveBeenCalled();
+	});
+	it.each([
+		[null, "not_found"],
+		[{ ...metadata, responsibleUserId: "bob" }, "unavailable"],
+		[{ ...metadata, applicationId: "other" }, "unavailable"],
+		[{ ...metadata, credential: "unreviewed" }, "unavailable"],
+	] as const)(
+		"rejects absent or invalid stored read metadata",
+		async (row, code) => {
+			const { useCase, transaction } = setup();
+			transaction.readOwn.mockResolvedValue(row);
+			await expect(useCase.read(request, "app_1")).rejects.toMatchObject({
+				code,
+			});
+		},
+	);
+	it("rechecks the read identity after the final metadata audit await", async () => {
+		const { useCase, transaction, resolveUser } = setup();
+		transaction.recordAudit.mockImplementation(async () => {
+			resolveUser.mockResolvedValue({
+				...user,
+				authorizationRevision: "changed",
+			});
+		});
+		await expect(useCase.read(request, "app_1")).rejects.toMatchObject({
+			code: "unavailable",
+		});
+		expect(resolveUser).toHaveBeenCalledTimes(2);
+	});
+	it("does not treat an application principal as a natural person when reading", async () => {
+		const { useCase, transaction, resolveUser } = setup();
+		resolveUser.mockResolvedValue({ ...user, principalType: "application" });
+		await expect(useCase.read(request, "alice")).rejects.toMatchObject({
 			code: "unavailable",
 		});
 		expect(transaction.readOwn).not.toHaveBeenCalled();

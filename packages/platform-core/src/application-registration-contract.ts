@@ -31,7 +31,7 @@ export interface ApplicationRegistrationAuditV1 {
 	readonly traceId: string;
 	readonly userId: string | null;
 	readonly applicationId: string | null;
-	readonly action: "application.registered";
+	readonly action: "application.registered" | "application.metadata.read";
 	readonly outcome: "succeeded" | "rejected" | "failed";
 	readonly details: {
 		readonly reason?: ApplicationRegistrationErrorCodeV1;

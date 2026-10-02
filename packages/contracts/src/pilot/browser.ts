@@ -1131,6 +1131,25 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+	"/api/v2/applications/{applicationId}": {
+		get: {
+			operationId: "getOwnApplicationV2",
+			summary: "Read an application owned by the current browser user",
+			description:
+				"Active browser session only; no Authorization header, query or request body. Cross-person and missing applications both return 404. Metadata contains no material or grants. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ applicationId: OpaqueIdV1Schema }),
+			},
+			responses: {
+				"200": jsonResponse(
+					"Own application metadata",
+					ApplicationMetadataV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/me/relay-key": {
 		get: {
 			operationId: "getPersonalRelayKeyV2",

@@ -67,6 +67,81 @@ function restorePreRelayKeyContract(value: {
 }
 
 describe("contract compatibility command", () => {
+	it("admits only the exact own-application GET without changing prior contracts", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/applications/{applicationId}";
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-own-application-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					document.paths[path].post = document.paths[path].get;
+				},
+				(document: typeof current) => {
+					document.paths[path].get.security = [{}];
+				},
+				(document: typeof current) => {
+					document.paths[path].get.parameters = [];
+				},
+				(document: typeof current) => {
+					delete document.paths[path].get.responses["200"];
+				},
+				(document: typeof current) => {
+					document.paths[path].get.requestBody = { required: false };
+				},
+				(document: typeof current) => {
+					document.paths[path].get.responses["200"].content[
+						"application/json"
+					].schema = { type: "object", additionalProperties: true };
+				},
+				(document: typeof current) => {
+					document.components.schemas.ApplicationMetadataV1.properties.credential =
+						{ type: "string" };
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/applications"].post.operationId = "changed";
+				},
+				(document: typeof current) => {
+					document.components.securitySchemes.PlatformSession = {};
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/unreviewed"] = {};
+				},
+				(document: typeof current) => {
+					document.components.schemas.Unreviewed = { type: "object" };
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+			const occupied = structuredClone(current);
+			occupied.paths[path].get.description = "Existing contract";
+			await writeFile(previousPath, JSON.stringify(occupied));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the exact application registration POST and preserves all prior contracts", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -77,6 +152,7 @@ describe("contract compatibility command", () => {
 				"utf8",
 			),
 		);
+		delete current.paths["/api/v2/applications/{applicationId}"];
 		const path = "/api/v2/applications";
 		const previous = structuredClone(current);
 		delete previous.paths[path];
@@ -928,6 +1004,7 @@ describe("contract compatibility command", () => {
 		// Isolate lifecycle from later personal API/Relay Key and registration additions.
 		restorePreRelayKeyContract(current);
 		delete current.paths["/api/v2/applications"];
+		delete current.paths["/api/v2/applications/{applicationId}"];
 		for (const name of [
 			"ApplicationMetadataV1",
 			"ApplicationRegistrationRequestV1",
