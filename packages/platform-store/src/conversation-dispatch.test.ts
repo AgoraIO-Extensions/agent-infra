@@ -265,9 +265,11 @@ async function seed(
 			 now(), now(), now())
 	`;
 	if (
-		channel === "web" ||
-		channel === "api:user" ||
-		channel === "api:application"
+		executionStatus === "submitted" &&
+		options.hostSessionRef === undefined &&
+		(channel === "web" ||
+			channel === "api:user" ||
+			channel === "api:application")
 	) {
 		const purpose = channel === "web" ? "personal" : "agent-default";
 		const subjectId = channel === "web" ? "actor-dispatch" : agentId;
