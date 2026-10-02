@@ -735,6 +735,20 @@ a[class~="group/button"] {
 		padding: 18px 4px;
 	}
 }
+/* Short viewports use page scrolling so keyboard focus cannot be clipped. */
+@media (max-height: 600px) {
+	.chat-layout,
+	.conversation-columns > .chat-workspace {
+		height: auto;
+	}
+	.conversation-columns > .chat-workspace {
+		overflow: visible;
+	}
+	.chat-thread:not([hidden]) {
+		flex: none;
+		min-height: auto;
+	}
+}
 @media (prefers-reduced-motion: reduce) {
 	*,
 	*::before,
