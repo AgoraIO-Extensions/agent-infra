@@ -178,6 +178,34 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 			"insert into platform.agent_availability(agent_id,target_type,target_id) values($1,'organization','org_current')",
 			[configuration.agentId],
 		);
+		const deployment = {
+			...workloadDesiredFixture(1, configuration.agentId, "internal-only"),
+			configRevision: configuration.revision,
+		};
+		const runtimeVersion = { configuration, deployment };
+		await db.unsafe(
+			"insert into platform.workload_reconciliations(agent_id,revision,state,next_attempt_at) values($1,1,$2::text::jsonb,now())",
+			[
+				configuration.agentId,
+				JSON.stringify({
+					schemaVersion: 1,
+					agentId: configuration.agentId,
+					sourceConfigurationRevision: configuration.revision,
+					sourceLifecycleRevision: 1,
+					revision: 1,
+					fence: 1,
+					phase: "ready",
+					candidate: runtimeVersion,
+					verified: runtimeVersion,
+					verifiedRevision: 1,
+					identity: { uid: "task-boundary", generation: 1 },
+					rollback: false,
+					failureCode: null,
+					attempts: 0,
+					capabilities: { supplementaryInstruction: true },
+				}),
+			],
+		);
 	});
 	afterEach(() => {
 		vi.restoreAllMocks();

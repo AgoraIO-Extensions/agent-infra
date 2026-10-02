@@ -556,10 +556,10 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 		"keeps %s's Conversation occupancy/session while cancelling waiting work with a different revision",
 		async (kind) => {
 			const task = await submit(kind);
-			await sql`update platform.conversations set authorization_revision='old-conversation',status='unknown',host_session_ref='original-session' where id=${task.conversationId}`;
+			await sql`update platform.conversations set authorization_revision='old-conversation',status='active',host_session_ref='original-session' where id=${task.conversationId}`;
 			expect((await cancel(task, kind)).status).toBe(202);
 			expect((await snapshot(task))?.conversation).toMatchObject({
-				status: "unknown",
+				status: "active",
 				host_session_ref: "original-session",
 				session_generation: 1,
 				authorization_revision: "old-conversation",
