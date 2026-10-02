@@ -13,6 +13,7 @@ import {
 	type PlatformAuditQueryScopeV1,
 	PlatformAuditScopeErrorV1,
 	type PlatformExecutionAuditBindingV1,
+	parsePersonalApiCredentialIssuanceV1,
 	parsePlatformAuditQueryInputV1,
 	parsePlatformAuditQueryScopeV1,
 	platformAuditQueryActionsV1,
@@ -41,7 +42,12 @@ export interface ScopedPlatformAuditProjectionV1 {
 	readonly auditId: string;
 	readonly action: PlatformAuditQueryActionV1;
 	readonly actor: PlatformAuditProjectionV1["actor"];
-	readonly subject: PlatformAuditProjectionV1["subject"];
+	readonly subject: {
+		readonly kind:
+			| PlatformAuditProjectionV1["subject"]["kind"]
+			| "api_credential";
+		readonly subjectId: string;
+	};
 	readonly result: PlatformAuditQueryResultV1;
 	readonly summary: string;
 	readonly taskApi: Pick<
@@ -350,6 +356,13 @@ function credentialMetadataSummary(
 			throw new PlatformAuditScopeErrorV1("unavailable");
 		return row.action;
 	}
+	return credentialRefusalSummary(row, details);
+}
+
+function credentialRefusalSummary(
+	row: Row,
+	details: Record<string, unknown>,
+): string {
 	if (
 		Object.keys(details).length !== 1 ||
 		!(
@@ -366,6 +379,43 @@ function credentialMetadataSummary(
 	)
 		throw new PlatformAuditScopeErrorV1("unavailable");
 	return `${row.action}: reason=${details.reason}`;
+}
+
+function credentialMutationSummary(
+	row: Row,
+	scope: PlatformAuditQueryScopeV1,
+): string {
+	if (
+		scope.kind !== "administrator" ||
+		row.source !== "platform" ||
+		row.targetType !== "api_credential" ||
+		row.requestId === null ||
+		row.agentId !== null ||
+		row.executionId !== null ||
+		row.conversationId !== null ||
+		row.result !== row.outcome ||
+		!(
+			row.actorType === "user" ||
+			(row.actorType === "unknown" &&
+				row.actorId === "unknown" &&
+				row.targetId === "unknown")
+		) ||
+		typeof row.details !== "object" ||
+		row.details === null ||
+		Array.isArray(row.details)
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	const details = row.details as Record<string, unknown>;
+	if (row.outcome !== "succeeded")
+		return credentialRefusalSummary(row, details);
+	if (row.actorType !== "user" || row.targetId === "unknown")
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	try {
+		parsePersonalApiCredentialIssuanceV1(details);
+	} catch {
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	}
+	return row.action;
 }
 
 function project(
@@ -416,8 +466,16 @@ function project(
 		row.action === "api.credential.metadata.read"
 			? credentialMetadataSummary(row, scope)
 			: null;
+	const mutationSummary =
+		row.action === "api.credential.issued" ||
+		row.action === "api.credential.revoked" ||
+		row.action === "api.credential.narrowed"
+			? credentialMutationSummary(row, scope)
+			: null;
 	const legacy =
-		executionActions.has(row.action) || metadataSummary !== null
+		executionActions.has(row.action) ||
+		metadataSummary !== null ||
+		mutationSummary !== null
 			? null
 			: decodePlatformAuditRowV1(row);
 	// The legacy decoder has already validated exact Task API metadata and its
@@ -496,6 +554,7 @@ function project(
 			binding?.authorizationRecordId ?? null,
 		].every((value) => value === null || boundedText(value)) ||
 		(metadataSummary === null &&
+			mutationSummary === null &&
 			![
 				"agent_application",
 				"agent",
@@ -512,6 +571,7 @@ function project(
 	const summary =
 		legacy?.summary ??
 		metadataSummary ??
+		mutationSummary ??
 		(row.action === "audit.query.completed" ||
 		row.action === "audit.query.failed"
 			? projectPlatformAuditQuerySummaryV1(row.action, row.details)
@@ -535,7 +595,10 @@ function project(
 			(metadataSummary !== null
 				? { kind: "unknown", subjectId: "unknown" }
 				: {
-						kind: row.targetType as PlatformAuditProjectionV1["subject"]["kind"],
+						kind:
+							row.targetType === "api_credential" && row.targetId === "unknown"
+								? "unknown"
+								: (row.targetType as ScopedPlatformAuditProjectionV1["subject"]["kind"]),
 						subjectId: row.targetId,
 					}),
 		result,
