@@ -1207,6 +1207,7 @@ test("locks incremental review to the trusted range and the official patch-only 
     (workflow) => { workflow.on.pull_request_target.types.pop(); },
     (workflow) => { workflow.jobs.analyze.steps.find((step) => step.id === "scope").env.PRIMARY_ISSUE_EVIDENCE = "${{ github.event.pull_request.body }}"; },
     (workflow) => { workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent").with.args = "review -i"; },
+    (workflow) => { workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent").with.entrypoint = "/bin/sh"; },
     (workflow) => { workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent").if = "always()"; },
     (workflow) => { workflow.jobs.publish.steps.at(-1).env.PR_AGENT_REVIEW_SCOPE_REQUIRED = "false"; },
     (workflow) => { workflow.jobs.coverage.steps.at(-1).env.PR_AGENT_REVIEW_SCOPE_REQUIRED = "false"; },
@@ -1214,6 +1215,56 @@ test("locks incremental review to the trusted range and the official patch-only 
     const workflows = structuredClone(original);
     change(workflows["pr-agent-review.yml"]);
     assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("official inline publishing")));
+  }
+});
+
+test("preserves dotted Review configuration through the actual CLI entrypoint", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["pr-agent-review.yml"].jobs.analyze.steps.find((step) => step.id === "pr-agent");
+  const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "pr-agent-entrypoint-"));
+  const run = promisify(execFile);
+  const env = {
+    PATH: process.env.PATH,
+    PYTHONPATH: fixture,
+    PYTHONDONTWRITEBYTECODE: "1",
+    "config.model": "sentinel-model",
+    "config.max_model_tokens": "128000",
+    "github_action_config.enable_output": "true",
+  };
+  try {
+    const python = await run("python3", ["-c", "import sys; print(sys.executable)"], { env, timeout: 10_000 });
+    await fs.mkdir(path.join(fixture, "bin"));
+    await fs.symlink(python.stdout.trim(), path.join(fixture, "bin/python"));
+    env.PATH = `${path.join(fixture, "bin")}${path.delimiter}${env.PATH}`;
+    const version = await run("python", ["-c", "import sys; print(sys.version_info.major)"], { env, timeout: 10_000 });
+    assert.equal(version.stdout.trim(), "3");
+    await fs.mkdir(path.join(fixture, "pr_agent/log"), { recursive: true });
+    await fs.writeFile(path.join(fixture, "pr_agent/__init__.py"), "");
+    // These modules observe only the process boundary; no model or Review is produced.
+    await fs.writeFile(path.join(fixture, "pr_agent/cli.py"), [
+      "import json, os, sys",
+      "def run():",
+      "    print(json.dumps({'model': os.getenv('config.model'), 'max_tokens': os.getenv('config.max_model_tokens'), 'enable_output': os.getenv('github_action_config.enable_output'), 'cwd': os.getcwd(), 'argv': sys.argv[1:]}))",
+    ].join("\n"));
+    await fs.writeFile(path.join(fixture, "pr_agent/log/__init__.py"), [
+      "class LoggingFormat:",
+      "    JSON = 'JSON'",
+      "def setup_logger(*, fmt):",
+      "    assert fmt == LoggingFormat.JSON",
+    ].join("\n"));
+    const parsed = await run("python3", ["-c", "import json, shlex, sys; print(json.dumps(shlex.split(sys.argv[1])))", action.with.args], { env, timeout: 10_000 });
+    // The pinned Linux image resolves /bin/sh to dash; use dash for that host boundary.
+    const executable = action.with.entrypoint === "/bin/sh" ? "/bin/dash" : action.with.entrypoint;
+    const executed = await run(executable, JSON.parse(parsed.stdout), { env, timeout: 10_000 });
+    assert.deepEqual(JSON.parse(executed.stdout), {
+      model: "sentinel-model",
+      max_tokens: "128000",
+      enable_output: "true",
+      cwd: await fs.realpath("/tmp"),
+      argv: ["--diff-file", "/github/workspace/.pr-agent-review-input.diff", "review"],
+    });
+  } finally {
+    await fs.rm(fixture, { recursive: true, force: true });
   }
 });
 
