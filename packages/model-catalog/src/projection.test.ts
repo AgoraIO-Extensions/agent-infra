@@ -389,11 +389,10 @@ it("produces V4 model configuration with the trusted image/Driver tuple and no s
 	const { projected, binding } = await keylessProjectionFixture();
 	expect(projected.standardTemplateBinding).toEqual(binding);
 	const injection = runtimeModelInjectionV4(projected);
-	expect(
-		RuntimeModelConfigurationV4Schema.parse(
-			JSON.parse(injection.configuration),
-		),
-	).toMatchObject({
+	const parsedConfiguration = RuntimeModelConfigurationV4Schema.parse(
+		JSON.parse(injection.configuration),
+	);
+	expect(parsedConfiguration).toMatchObject({
 		schemaVersion: 4,
 		modelOptions: [
 			{
@@ -402,17 +401,31 @@ it("produces V4 model configuration with the trusted image/Driver tuple and no s
 			},
 		],
 	});
-	expect(injection.env).toHaveLength(1);
-	expect(injection.env[0]?.name).toBe("AGENT_INFRA_RUNTIME_MODEL_CONFIG");
+	expect(injection.env).toEqual([
+		{
+			name: "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
+			valueFrom: {
+				secretKeyRef: {
+					name: injection.secretName,
+					key: "configuration",
+					optional: false,
+				},
+			},
+		},
+	]);
+	const safeProjection = JSON.stringify({
+		projected,
+		configuration: parsedConfiguration,
+	});
 	for (const forbidden of [
 		"old-model-secret-not-read",
 		"credentialEnvironmentVariable",
-		"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_",
 		"secretRef",
 		"secretKey",
 	]) {
-		expect(JSON.stringify({ projected, injection })).not.toContain(forbidden);
+		expect(safeProjection).not.toContain(forbidden);
 	}
+	expect(safeProjection).not.toContain("AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_");
 });
 it("rejects rehashed V4 projection source/Driver drift and static credentials", async () => {
 	const { configuration, projected } = await keylessProjectionFixture();
