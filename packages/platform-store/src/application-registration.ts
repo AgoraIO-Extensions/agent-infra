@@ -45,6 +45,19 @@ function idempotencyCondition(
 		eq(idempotencyRecords.idempotencyKey, key),
 	);
 }
+function disableIdempotencyCondition(
+	request: ApplicationRegistrationRequestV1,
+	applicationId: string,
+	key: string,
+) {
+	return and(
+		eq(idempotencyRecords.scopeType, "application_disable"),
+		eq(idempotencyRecords.scopeId, applicationId),
+		eq(idempotencyRecords.actorId, request.userId),
+		eq(idempotencyRecords.commandType, "application.disabled"),
+		eq(idempotencyRecords.idempotencyKey, key),
+	);
+}
 async function writeAudit(
 	writer: Pick<Transaction, "insert">,
 	event: ApplicationRegistrationAuditV1,
@@ -147,6 +160,77 @@ export class PostgresApplicationRegistrationStoreV1
 						scopeId: request.userId,
 						actorId: request.userId,
 						commandType: "application.registered",
+						idempotencyKey: key,
+						requestDigest: digest,
+						status: "completed",
+						result: { ...result },
+					});
+				},
+				async lockDisableIdempotency(request, applicationId, key) {
+					await transaction.execute(
+						sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["application_disable", applicationId, request.userId, key])}, 0))`,
+					);
+					const [row] = await transaction
+						.select({
+							requestDigest: idempotencyRecords.requestDigest,
+							status: idempotencyRecords.status,
+							result: idempotencyRecords.result,
+						})
+						.from(idempotencyRecords)
+						.where(disableIdempotencyCondition(request, applicationId, key))
+						.limit(1);
+					return row ?? null;
+				},
+				async readOwnForDisable(applicationId, userId) {
+					const [row] = await transaction
+						.select()
+						.from(platformApplications)
+						.where(
+							and(
+								eq(platformApplications.id, applicationId),
+								eq(platformApplications.responsibleUserId, userId),
+							),
+						)
+						.for("update")
+						.limit(1);
+					return row ? metadata(row) : null;
+				},
+				async disable(input) {
+					const [row] = await transaction
+						.update(platformApplications)
+						.set({
+							status: "disabled",
+							authorizationRevision: input.authorizationRevision,
+							updatedAt: new Date(),
+						})
+						.where(
+							and(
+								eq(platformApplications.id, input.applicationId),
+								eq(platformApplications.responsibleUserId, input.userId),
+								eq(platformApplications.status, "active"),
+								eq(
+									platformApplications.authorizationRevision,
+									input.expectedRevision,
+								),
+							),
+						)
+						.returning();
+					if (!row) throw new Error();
+					return metadata(row);
+				},
+				async completeDisableIdempotency(
+					request,
+					applicationId,
+					key,
+					digest,
+					result,
+				) {
+					await transaction.insert(idempotencyRecords).values({
+						id: randomUUID(),
+						scopeType: "application_disable",
+						scopeId: applicationId,
+						actorId: request.userId,
+						commandType: "application.disabled",
 						idempotencyKey: key,
 						requestDigest: digest,
 						status: "completed",

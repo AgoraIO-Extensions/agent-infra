@@ -945,6 +945,31 @@ function isApplicationRegistrationV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1219 admits the exact disable command while preserving every prior contract.
+function isOwnApplicationDisableV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/applications/{applicationId}";
+	const schema = "ApplicationDisableRequestV1";
+	if (
+		!previous.paths?.[path] ||
+		previous.paths[path].patch !== undefined ||
+		previous.components?.schemas?.[schema] !== undefined
+	)
+		return false;
+	const addition = {
+		patch: current.paths?.[path]?.patch,
+		schema: current.components?.schemas?.[schema],
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"6ef266859d48ccbac5c7ef73c943f8d95bf3e9dea4c58c99922fbc173d17a5ca"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].patch;
+	delete normalized.components.schemas[schema];
+	return sameValue(previous, normalized);
+}
+
 // #1166 admits only the reviewed own-application metadata GET.
 function isOwnApplicationMetadataV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/applications/{applicationId}";
@@ -1577,6 +1602,7 @@ function findBreakingChanges(previous, current) {
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
+			!isOwnApplicationDisableV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&

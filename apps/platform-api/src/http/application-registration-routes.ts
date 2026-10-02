@@ -1,5 +1,6 @@
 import { OpaqueIdV1Schema } from "@agent-infra/contracts";
 import {
+	ApplicationDisableRequestV1Schema,
 	ApplicationMetadataV1Schema,
 	ApplicationRegistrationRequestV1Schema,
 	ApplicationRegistrationResponseV1Schema,
@@ -74,6 +75,30 @@ export function registerApplicationRegistrationRoutes(
 				return context.json(response.data, result.replayed ? 200 : 201);
 			}
 			const id = OpaqueIdV1Schema.safeParse(context.req.param("applicationId"));
+			if (action === "application.disabled") {
+				if (!id.success)
+					throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+				const key = parseIdempotencyKey(request, metadata.traceId);
+				const { value } = await parseJson(
+					request,
+					ApplicationDisableRequestV1Schema,
+					metadata.traceId,
+				);
+				submitted = true;
+				const result = await dependencies.applications.disable(
+					trusted,
+					id.data,
+					key,
+					value,
+				);
+				const response = ApplicationMetadataV1Schema.safeParse(result);
+				if (!response.success)
+					throw new HttpProtocolError(
+						"DEPENDENCY_UNAVAILABLE",
+						metadata.traceId,
+					);
+				return context.json(response.data, 200);
+			}
 			if (
 				!id.success ||
 				request.body !== null ||
@@ -107,6 +132,9 @@ export function registerApplicationRegistrationRoutes(
 	}
 	app.post("/api/v2/applications", (context) =>
 		handle(context, "application.registered"),
+	);
+	app.patch("/api/v2/applications/:applicationId", (context) =>
+		handle(context, "application.disabled"),
 	);
 	app.get("/api/v2/applications/:applicationId", (context) =>
 		handle(context, "application.metadata.read"),

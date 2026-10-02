@@ -226,6 +226,102 @@ export function createApplicationRegistrationUseCaseV1(dependencies: {
 				},
 			);
 		},
+		async disable(
+			context: ApplicationRegistrationRequestV1,
+			applicationId: string,
+			idempotencyKey: string,
+			input: unknown,
+		): Promise<ApplicationMetadataV1> {
+			let command: { applicationId: string; key: string } | null = null;
+			try {
+				const value = snapshot(input, ["status"]);
+				if (
+					value.status !== "disabled" ||
+					typeof idempotencyKey !== "string" ||
+					!/^[A-Za-z0-9._~-]{1,128}$/.test(idempotencyKey)
+				)
+					throw new Error();
+				command = { applicationId: text(applicationId), key: idempotencyKey };
+			} catch {
+				/* Admit the current identity before reporting command errors. */
+			}
+			return execute(
+				context,
+				"application.disabled",
+				async (transaction, request) => {
+					if (command === null)
+						throw new ApplicationRegistrationErrorV1("invalid_input");
+					const id = command.applicationId;
+					const digest = platformIdempotencyV1.canonicalRequestDigest({
+						applicationId: id,
+						status: "disabled",
+					});
+					const prior = await transaction.lockDisableIdempotency(
+						request,
+						id,
+						command.key,
+					);
+					const row = await transaction.readOwnForDisable(id, request.userId);
+					if (row === null)
+						throw new ApplicationRegistrationErrorV1("not_found");
+					let metadata = parseMetadata(row);
+					if (
+						metadata.applicationId !== id ||
+						metadata.responsibleUserId !== request.userId
+					)
+						throw new ApplicationRegistrationErrorV1("unavailable");
+					if (prior !== null) {
+						if (prior.requestDigest !== digest)
+							throw new ApplicationRegistrationErrorV1("idempotency_conflict");
+						if (prior.status !== "completed")
+							throw new ApplicationRegistrationErrorV1("unavailable");
+						const saved = parseMetadata(prior.result);
+						if (
+							saved.applicationId !== id ||
+							saved.responsibleUserId !== request.userId ||
+							saved.status !== "disabled" ||
+							metadata.status !== "disabled" ||
+							saved.authorizationRevision !== metadata.authorizationRevision
+						)
+							throw new ApplicationRegistrationErrorV1("unavailable");
+					} else {
+						if (metadata.status === "active") {
+							const authorizationRevision = randomUUID();
+							metadata = parseMetadata(
+								await transaction.disable({
+									applicationId: id,
+									userId: request.userId,
+									expectedRevision: metadata.authorizationRevision,
+									authorizationRevision,
+								}),
+							);
+							if (
+								metadata.applicationId !== id ||
+								metadata.responsibleUserId !== request.userId ||
+								metadata.status !== "disabled" ||
+								metadata.authorizationRevision !== authorizationRevision
+							)
+								throw new ApplicationRegistrationErrorV1("unavailable");
+						}
+						await transaction.completeDisableIdempotency(
+							request,
+							id,
+							command.key,
+							digest,
+							metadata,
+						);
+					}
+					await transaction.recordAudit({
+						...request,
+						applicationId: id,
+						action: "application.disabled",
+						outcome: "succeeded",
+						details: { replayed: prior !== null },
+					});
+					return metadata;
+				},
+			);
+		},
 		async read(
 			context: ApplicationRegistrationRequestV1,
 			applicationId: string,

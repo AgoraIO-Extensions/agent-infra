@@ -41,7 +41,7 @@ const currentUser = (userId: string) => ({
 const resolveUser = vi.fn(
 	async (id: string): Promise<unknown> => currentUser(id),
 );
-async function start() {
+async function start(options: { adminUserId?: string } = {}) {
 	const unused = async () => {
 		throw new Error("Unrelated adapter must not be called");
 	};
@@ -53,7 +53,11 @@ async function start() {
 					.get("Cookie")
 					?.match(/^browser_test=(alice|bob)$/)?.[1];
 				return id
-					? { ...currentUser(id), displayName: id, roles: ["employee"] }
+					? {
+							...currentUser(id),
+							displayName: id,
+							roles: [id === options.adminUserId ? "system_admin" : "employee"],
+						}
 					: null;
 			},
 			hydrateUsers: unused,
@@ -496,4 +500,290 @@ describe("production application HTTP/Core/PostgreSQL chain", () => {
 			});
 		},
 	);
+});
+
+function disableApplication(
+	id: string,
+	userId = "alice",
+	key = "disable_1",
+	body: unknown = { status: "disabled" },
+	endpoint = baseUrl,
+) {
+	return fetch(`${endpoint}/api/v2/applications/${id}`, {
+		method: "PATCH",
+		headers: {
+			Cookie: `browser_test=${userId}`,
+			"Idempotency-Key": key,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify(body),
+	});
+}
+describe("application disable production HTTP/PostgreSQL boundary", () => {
+	it.each(["disable_1", "disable_2"])(
+		"persists one transition with concurrent second key %s, generated-client replay and assembly restart",
+		async (secondKey) => {
+			const own = ApplicationRegistrationResponseV1Schema.parse(
+				await (await post()).json(),
+			).metadata;
+			const second = await start();
+			let responses: Response[];
+			try {
+				responses = await Promise.all([
+					disableApplication(own.applicationId),
+					disableApplication(
+						own.applicationId,
+						"alice",
+						secondKey,
+						{ status: "disabled" },
+						second.baseUrl,
+					),
+				]);
+			} finally {
+				await stop(second);
+			}
+			expect(responses.map((r) => r.status)).toEqual([200, 200]);
+			const results = await Promise.all(
+				responses.map(async (r) =>
+					ApplicationMetadataV1Schema.parse(await r.json()),
+				),
+			);
+			const firstResult = results[0];
+			if (!firstResult) throw new Error("Missing first concurrent response");
+			expect(firstResult).toEqual(results[1]);
+			expect(firstResult.status).toBe("disabled");
+			expect(firstResult.authorizationRevision).not.toBe(
+				own.authorizationRevision,
+			);
+			await stop();
+			({ assembly, server, baseUrl } = await start());
+			const { createClient } = await import(
+				new URL(
+					"../../web/src/pilot/generated-v2/client/index.ts",
+					import.meta.url,
+				).href
+			);
+			const { disableOwnApplicationV2 } = await import(
+				new URL("../../web/src/pilot/generated-v2/index.ts", import.meta.url)
+					.href
+			);
+			const replay = await disableOwnApplicationV2({
+				client: createClient({ baseUrl }),
+				path: { applicationId: own.applicationId },
+				headers: {
+					Cookie: "browser_test=alice",
+					"Idempotency-Key": "disable_1",
+				},
+				body: { status: "disabled" },
+			});
+			expect(replay.response.status).toBe(200);
+			expect(replay.data).toEqual(firstResult);
+			const [effects] =
+				await sql`select (select count(*)::int from platform.idempotency_records where command_type='application.disabled') as commands,
+		(select count(*)::int from platform.audit_events where action='application.disabled' and outcome='succeeded') as audits`;
+			expect(effects).toEqual({
+				commands: secondKey === "disable_1" ? 1 : 2,
+				audits: 3,
+			});
+		},
+	);
+	it("does not disclose foreign applications or accept delegated identity fields", async () => {
+		const own = ApplicationRegistrationResponseV1Schema.parse(
+			await (await post()).json(),
+		).metadata;
+		const responses = await Promise.all([
+			disableApplication(own.applicationId, "bob"),
+			disableApplication("missing", "bob"),
+		]);
+		const bodies = [];
+		for (const response of responses) {
+			expect(response.status).toBe(404);
+			const { traceId, ...body } = ProtocolErrorV1Schema.parse(
+				await response.json(),
+			);
+			expect(traceId).toEqual(expect.any(String));
+			bodies.push(body);
+		}
+		expect(bodies[0]).toEqual(bodies[1]);
+		expect(
+			(
+				await disableApplication(own.applicationId, "alice", "forged", {
+					status: "disabled",
+					responsibleUserId: "bob",
+				})
+			).status,
+		).toBe(400);
+		await sql`insert into platform.platform_user_disables (user_id) values ('alice')`;
+		expect((await disableApplication(own.applicationId)).status).toBe(403);
+		const [row] =
+			await sql`select status,authorization_revision from platform.platform_applications where id=${own.applicationId}`;
+		expect(row).toEqual({
+			status: "active",
+			authorization_revision: own.authorizationRevision,
+		});
+	});
+	it.each([false, true])(
+		"rolls back status, revision and idempotency with failed audit deferred=%s",
+		async (deferred) => {
+			const own = ApplicationRegistrationResponseV1Schema.parse(
+				await (await post()).json(),
+			).metadata;
+			await sql`create function platform.fail_application_audit() returns trigger language plpgsql as $$ begin raise exception 'PRIVATE_SQL_SENTINEL'; end $$`;
+			await sql.unsafe(
+				deferred
+					? "create constraint trigger fail_application_audit after insert on platform.audit_events deferrable initially deferred for each row execute function platform.fail_application_audit()"
+					: "create trigger fail_application_audit before insert on platform.audit_events for each row execute function platform.fail_application_audit()",
+			);
+			const response = await disableApplication(own.applicationId);
+			expect(response.status).toBe(503);
+			expect(await response.text()).not.toContain("PRIVATE_SQL_SENTINEL");
+			const [row] =
+				await sql`select status,authorization_revision from platform.platform_applications where id=${own.applicationId}`;
+			expect(row).toEqual({
+				status: "active",
+				authorization_revision: own.authorizationRevision,
+			});
+			const commands =
+				await sql`select id from platform.idempotency_records where command_type='application.disabled'`;
+			expect(commands).toHaveLength(0);
+		},
+	);
+});
+
+describe("application disable current identity and ownership regressions", () => {
+	it("rolls back a backend cancelled during the success audit and releases its locks", async () => {
+		const own = ApplicationRegistrationResponseV1Schema.parse(
+			await (await post()).json(),
+		).metadata;
+		const barrier = postgres(database.databaseUrl, { max: 1 });
+		let response: Promise<Response> | undefined;
+		try {
+			await barrier.begin(async (lock) => {
+				const [owner] = await lock<
+					{ pid: number }[]
+				>`select pg_backend_pid() as pid`;
+				if (!owner) throw new Error("Missing test barrier backend");
+				await lock`select pg_advisory_xact_lock(1219, 1221)`;
+				await sql`create function platform.fail_application_audit() returns trigger language plpgsql as $$ begin perform pg_advisory_xact_lock(1219, 1221); return new; end $$`;
+				await sql`create trigger fail_application_audit before insert on platform.audit_events for each row when (new.action = 'application.disabled' and new.outcome = 'succeeded') execute function platform.fail_application_audit()`;
+				response = disableApplication(own.applicationId);
+				let requestPid: number | undefined;
+				await expect
+					.poll(
+						async () => {
+							const waiting = await sql<{ pid: number }[]>`
+						select pid from pg_stat_activity
+						where datname = current_database() and ${owner.pid} = any(pg_blocking_pids(pid))
+					`;
+							requestPid = waiting.length === 1 ? waiting[0]?.pid : undefined;
+							return requestPid ?? 0;
+						},
+						{ timeout: 10_000 },
+					)
+					.toBeGreaterThan(0);
+				if (!requestPid) throw new Error("Missing blocked application request");
+				const cancelledPid = requestPid;
+				const [cancelled] =
+					await sql`select pg_cancel_backend(${cancelledPid}) as cancelled`;
+				expect(cancelled).toEqual({ cancelled: true });
+				expect((await response).status).toBe(503);
+				await expect
+					.poll(
+						async () => {
+							const [locks] =
+								await sql`select count(*)::int as count from pg_locks where pid = ${cancelledPid}`;
+							return locks;
+						},
+						{ timeout: 2_000 },
+					)
+					.toEqual({ count: 0 });
+				const [row] =
+					await sql`select status,authorization_revision from platform.platform_applications where id=${own.applicationId}`;
+				expect(row).toEqual({
+					status: "active",
+					authorization_revision: own.authorizationRevision,
+				});
+				const [effects] =
+					await sql`select (select count(*)::int from platform.idempotency_records where command_type='application.disabled') as commands,
+					(select count(*)::int from platform.audit_events where action='application.disabled' and outcome='succeeded') as audits`;
+				expect(effects).toEqual({ commands: 0, audits: 0 });
+			});
+		} finally {
+			await response?.catch(() => undefined);
+			await barrier.end();
+		}
+	});
+	it("does not confer application management on an administrator who is not responsible", async () => {
+		const own = ApplicationRegistrationResponseV1Schema.parse(
+			await (await post()).json(),
+		).metadata;
+		const administrator = await start({ adminUserId: "bob" });
+		try {
+			const response = await disableApplication(
+				own.applicationId,
+				"bob",
+				"admin_disable",
+				{ status: "disabled" },
+				administrator.baseUrl,
+			);
+			expect(response.status).toBe(404);
+			const [row] =
+				await sql`select status,authorization_revision from platform.platform_applications where id=${own.applicationId}`;
+			expect(row).toEqual({
+				status: "active",
+				authorization_revision: own.authorizationRevision,
+			});
+		} finally {
+			await stop(administrator);
+		}
+	});
+	it("revalidates current ownership on persisted disable replay", async () => {
+		const own = ApplicationRegistrationResponseV1Schema.parse(
+			await (await post()).json(),
+		).metadata;
+		expect((await disableApplication(own.applicationId)).status).toBe(200);
+		await sql`update platform.platform_applications set responsible_user_id='bob' where id=${own.applicationId}`;
+		expect((await disableApplication(own.applicationId)).status).toBe(404);
+		const [audit] =
+			await sql`select count(*)::int as count from platform.audit_events where action='application.disabled' and outcome='succeeded'`;
+		expect(audit).toEqual({ count: 1 });
+	});
+	it("rejects application-typed directory data even when its bare ID matches the browser user", async () => {
+		const own = ApplicationRegistrationResponseV1Schema.parse(
+			await (await post()).json(),
+		).metadata;
+		resolveUser.mockResolvedValue({
+			...currentUser("alice"),
+			principalType: "application",
+		});
+		expect((await disableApplication(own.applicationId)).status).toBe(503);
+		const [row] =
+			await sql`select status,authorization_revision from platform.platform_applications where id=${own.applicationId}`;
+		expect(row).toEqual({
+			status: "active",
+			authorization_revision: own.authorizationRevision,
+		});
+	});
+	it("rolls back the real transaction when final identity revision changes after the write", async () => {
+		const own = ApplicationRegistrationResponseV1Schema.parse(
+			await (await post()).json(),
+		).metadata;
+		resolveUser
+			.mockResolvedValueOnce(currentUser("alice"))
+			.mockResolvedValueOnce({
+				...currentUser("alice"),
+				authorizationRevision: "changed",
+			});
+		expect((await disableApplication(own.applicationId)).status).toBe(503);
+		const [row] =
+			await sql`select status,authorization_revision from platform.platform_applications where id=${own.applicationId}`;
+		expect(row).toEqual({
+			status: "active",
+			authorization_revision: own.authorizationRevision,
+		});
+		const [effects] =
+			await sql`select (select count(*)::int from platform.idempotency_records where command_type='application.disabled') as commands,
+		(select count(*)::int from platform.audit_events where action='application.disabled' and outcome='succeeded') as audits`;
+		expect(effects).toEqual({ commands: 0, audits: 0 });
+	});
 });
