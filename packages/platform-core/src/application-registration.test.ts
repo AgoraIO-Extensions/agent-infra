@@ -33,6 +33,21 @@ function setup() {
 			async (input) => ({ ...metadata, ...input }),
 		),
 		completeIdempotency: vi.fn(async () => {}),
+		lockDisableIdempotency: vi.fn<
+			ApplicationRegistrationTransactionV1["lockDisableIdempotency"]
+		>(async () => null),
+		readOwnForDisable: vi.fn<
+			ApplicationRegistrationTransactionV1["readOwnForDisable"]
+		>(async () => metadata),
+		disable: vi.fn<ApplicationRegistrationTransactionV1["disable"]>(
+			async (input) => ({
+				...metadata,
+				status: "disabled",
+				authorizationRevision: input.authorizationRevision,
+			}),
+		),
+		completeDisableIdempotency: vi.fn(async () => {}),
+
 		recordAudit: vi.fn(async () => {}),
 	};
 	const store = {
@@ -187,6 +202,99 @@ describe("application self-registration Core boundary", () => {
 		store.recordAudit.mockRejectedValue(new Error("PRIVATE_AUDIT_SENTINEL"));
 		await expect(
 			useCase.register(request, "key_1", { name: "Service" }),
+		).rejects.toMatchObject({
+			code: "unavailable",
+			message: "Application governance operation failed",
+		});
+	});
+});
+
+describe("application disable Core boundary", () => {
+	it("changes the application revision and audits before final identity recheck", async () => {
+		const h = setup();
+		const result = await h.useCase.disable(request, "app_1", "disable_1", {
+			status: "disabled",
+		});
+		expect(result.status).toBe("disabled");
+		expect(result.authorizationRevision).not.toBe(
+			metadata.authorizationRevision,
+		);
+		expect(h.transaction.disable).toHaveBeenCalledWith({
+			applicationId: "app_1",
+			userId: "alice",
+			expectedRevision: "app_revision",
+			authorizationRevision: result.authorizationRevision,
+		});
+		expect(h.transaction.recordAudit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				action: "application.disabled",
+				applicationId: "app_1",
+				userId: "alice",
+				outcome: "succeeded",
+			}),
+		);
+		expect(h.resolveUser).toHaveBeenCalledTimes(2);
+	});
+	it.each([
+		null,
+		{},
+		{ status: "active" },
+		{ status: "disabled", userId: "bob" },
+	])("rejects invalid disable commands", async (input) => {
+		const h = setup();
+		await expect(
+			h.useCase.disable(request, "app_1", "key", input),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		expect(h.transaction.disable).not.toHaveBeenCalled();
+	});
+	it("does not create a new revision when already disabled", async () => {
+		const h = setup();
+		h.transaction.readOwnForDisable.mockResolvedValue({
+			...metadata,
+			status: "disabled",
+		});
+		expect(
+			await h.useCase.disable(request, "app_1", "new_key", {
+				status: "disabled",
+			}),
+		).toMatchObject({
+			status: "disabled",
+			authorizationRevision: "app_revision",
+		});
+		expect(h.transaction.disable).not.toHaveBeenCalled();
+	});
+	it("rechecks ownership even for an existing idempotent result", async () => {
+		const h = setup();
+		h.transaction.lockDisableIdempotency.mockResolvedValue({
+			requestDigest: "saved",
+			status: "completed",
+			result: { ...metadata, status: "disabled" },
+		});
+		h.transaction.readOwnForDisable.mockResolvedValue(null);
+		await expect(
+			h.useCase.disable(request, "app_1", "key", { status: "disabled" }),
+		).rejects.toMatchObject({ code: "not_found" });
+		expect(h.transaction.disable).not.toHaveBeenCalled();
+	});
+	it("refuses a changed current identity after the final audit await", async () => {
+		const h = setup();
+		h.transaction.recordAudit.mockImplementation(async () => {
+			h.resolveUser.mockResolvedValue({
+				...user,
+				authorizationRevision: "changed",
+			});
+		});
+		await expect(
+			h.useCase.disable(request, "app_1", "key", { status: "disabled" }),
+		).rejects.toMatchObject({ code: "unavailable" });
+	});
+	it("never turns an audit failure into successful disable", async () => {
+		const h = setup();
+		h.transaction.recordAudit.mockRejectedValue(
+			new Error("PRIVATE_AUDIT_SENTINEL"),
+		);
+		await expect(
+			h.useCase.disable(request, "app_1", "key", { status: "disabled" }),
 		).rejects.toMatchObject({
 			code: "unavailable",
 			message: "Application governance operation failed",

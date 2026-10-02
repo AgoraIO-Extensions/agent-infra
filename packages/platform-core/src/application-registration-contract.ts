@@ -31,7 +31,10 @@ export interface ApplicationRegistrationAuditV1 {
 	readonly traceId: string;
 	readonly userId: string | null;
 	readonly applicationId: string | null;
-	readonly action: "application.registered" | "application.metadata.read";
+	readonly action:
+		| "application.registered"
+		| "application.metadata.read"
+		| "application.disabled";
 	readonly outcome: "succeeded" | "rejected" | "failed";
 	readonly details: {
 		readonly reason?: ApplicationRegistrationErrorCodeV1;
@@ -61,6 +64,30 @@ export interface ApplicationRegistrationTransactionV1 {
 	}): Promise<ApplicationMetadataV1>;
 	completeIdempotency(
 		request: ApplicationRegistrationRequestV1,
+		key: string,
+		digest: string,
+		metadata: ApplicationMetadataV1,
+	): Promise<void>;
+	/** Locks the disable command independently from application registration. */
+	lockDisableIdempotency(
+		request: ApplicationRegistrationRequestV1,
+		applicationId: string,
+		key: string,
+	): ReturnType<ApplicationRegistrationTransactionV1["lockIdempotency"]>;
+	/** Locks the current owner row FOR UPDATE before any state transition. */
+	readOwnForDisable(
+		applicationId: string,
+		userId: string,
+	): Promise<ApplicationMetadataV1 | null>;
+	disable(input: {
+		readonly applicationId: string;
+		readonly userId: string;
+		readonly expectedRevision: string;
+		readonly authorizationRevision: string;
+	}): Promise<ApplicationMetadataV1>;
+	completeDisableIdempotency(
+		request: ApplicationRegistrationRequestV1,
+		applicationId: string,
 		key: string,
 		digest: string,
 		metadata: ApplicationMetadataV1,

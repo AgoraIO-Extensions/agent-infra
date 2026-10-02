@@ -23,3 +23,7 @@ export const ApplicationRegistrationResponseV1Schema = z.strictObject({
 	metadata: ApplicationMetadataV1Schema,
 	replayed: z.boolean(),
 });
+
+export const ApplicationDisableRequestV1Schema = z.strictObject({
+	status: z.literal("disabled"),
+});

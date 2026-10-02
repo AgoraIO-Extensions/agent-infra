@@ -355,6 +355,60 @@ describe("contract compatibility command", () => {
 		},
 	);
 
+	it("admits only the exact own-application disable PATCH preserving old interfaces", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/applications/{applicationId}";
+		const previous = structuredClone(current);
+		delete previous.paths[path].patch;
+		delete previous.components.schemas.ApplicationDisableRequestV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-application-disable-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(value: typeof current) => {
+					delete value.paths[path].patch.security;
+				},
+				(value: typeof current) => {
+					delete value.paths[path].patch.parameters;
+				},
+				(value: typeof current) => {
+					value.components.schemas.ApplicationDisableRequestV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.ApplicationDisableRequestV1.properties.status.const =
+						"active";
+				},
+				(value: typeof current) => {
+					delete value.paths[path].get.security;
+				},
+				(value: typeof current) => {
+					delete value.components.securitySchemes.PlatformSession;
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the exact own-application GET without changing prior contracts", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -366,6 +420,9 @@ describe("contract compatibility command", () => {
 			),
 		);
 		const path = "/api/v2/applications/{applicationId}";
+		// Keep the historical GET admission fixture independent of #1219 PATCH.
+		delete current.paths[path].patch;
+		delete current.components.schemas.ApplicationDisableRequestV1;
 		const previous = structuredClone(current);
 		delete previous.paths[path];
 		const directory = await mkdtemp(

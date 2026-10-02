@@ -497,3 +497,139 @@ describe("production application HTTP/Core/PostgreSQL chain", () => {
 		},
 	);
 });
+
+function disableApplication(
+	id: string,
+	userId = "alice",
+	key = "disable_1",
+	body: unknown = { status: "disabled" },
+	endpoint = baseUrl,
+) {
+	return fetch(`${endpoint}/api/v2/applications/${id}`, {
+		method: "PATCH",
+		headers: {
+			Cookie: `browser_test=${userId}`,
+			"Idempotency-Key": key,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify(body),
+	});
+}
+describe("application disable production HTTP/PostgreSQL boundary", () => {
+	it("persists one transition across concurrent keys, generated-client replay and assembly restart", async () => {
+		const own = ApplicationRegistrationResponseV1Schema.parse(
+			await (await post()).json(),
+		).metadata;
+		const second = await start();
+		let responses: Response[];
+		try {
+			responses = await Promise.all([
+				disableApplication(own.applicationId),
+				disableApplication(
+					own.applicationId,
+					"alice",
+					"disable_2",
+					{ status: "disabled" },
+					second.baseUrl,
+				),
+			]);
+		} finally {
+			await stop(second);
+		}
+		expect(responses.map((r) => r.status)).toEqual([200, 200]);
+		const results = await Promise.all(
+			responses.map(async (r) =>
+				ApplicationMetadataV1Schema.parse(await r.json()),
+			),
+		);
+		expect(results[0]).toEqual(results[1]);
+		expect(results[0].status).toBe("disabled");
+		expect(results[0].authorizationRevision).not.toBe(
+			own.authorizationRevision,
+		);
+		await stop();
+		({ assembly, server, baseUrl } = await start());
+		const { createClient } = await import(
+			new URL(
+				"../../web/src/pilot/generated-v2/client/index.ts",
+				import.meta.url,
+			).href
+		);
+		const { disableOwnApplicationV2 } = await import(
+			new URL("../../web/src/pilot/generated-v2/index.ts", import.meta.url).href
+		);
+		const replay = await disableOwnApplicationV2({
+			client: createClient({ baseUrl }),
+			path: { applicationId: own.applicationId },
+			headers: { Cookie: "browser_test=alice", "Idempotency-Key": "disable_1" },
+			body: { status: "disabled" },
+		});
+		expect(replay.response.status).toBe(200);
+		expect(replay.data).toEqual(results[0]);
+		const [effects] =
+			await sql`select (select count(*)::int from platform.idempotency_records where command_type='application.disabled') as commands,
+		(select count(*)::int from platform.audit_events where action='application.disabled' and outcome='succeeded') as audits`;
+		expect(effects).toEqual({ commands: 2, audits: 3 });
+	});
+	it("does not disclose foreign applications or accept delegated identity fields", async () => {
+		const own = ApplicationRegistrationResponseV1Schema.parse(
+			await (await post()).json(),
+		).metadata;
+		const responses = await Promise.all([
+			disableApplication(own.applicationId, "bob"),
+			disableApplication("missing", "bob"),
+		]);
+		const bodies = [];
+		for (const response of responses) {
+			expect(response.status).toBe(404);
+			const { traceId, ...body } = ProtocolErrorV1Schema.parse(
+				await response.json(),
+			);
+			expect(traceId).toEqual(expect.any(String));
+			bodies.push(body);
+		}
+		expect(bodies[0]).toEqual(bodies[1]);
+		expect(
+			(
+				await disableApplication(own.applicationId, "alice", "forged", {
+					status: "disabled",
+					responsibleUserId: "bob",
+				})
+			).status,
+		).toBe(400);
+		await sql`insert into platform.platform_user_disables (user_id) values ('alice')`;
+		expect((await disableApplication(own.applicationId)).status).toBe(403);
+		const [row] =
+			await sql`select status,authorization_revision from platform.platform_applications where id=${own.applicationId}`;
+		expect(row).toEqual({
+			status: "active",
+			authorization_revision: own.authorizationRevision,
+		});
+	});
+	it.each([false, true])(
+		"rolls back status, revision and idempotency with failed audit deferred=%s",
+		async (deferred) => {
+			const own = ApplicationRegistrationResponseV1Schema.parse(
+				await (await post()).json(),
+			).metadata;
+			await sql`create function platform.fail_application_audit() returns trigger language plpgsql as $$ begin raise exception 'PRIVATE_SQL_SENTINEL'; end $$`;
+			await sql.unsafe(
+				deferred
+					? "create constraint trigger fail_application_audit after insert on platform.audit_events deferrable initially deferred for each row execute function platform.fail_application_audit()"
+					: "create trigger fail_application_audit before insert on platform.audit_events for each row execute function platform.fail_application_audit()",
+			);
+			const response = await disableApplication(own.applicationId);
+			expect(response.status).toBe(503);
+			expect(await response.text()).not.toContain("PRIVATE_SQL_SENTINEL");
+			const [row] =
+				await sql`select status,authorization_revision from platform.platform_applications where id=${own.applicationId}`;
+			expect(row).toEqual({
+				status: "active",
+				authorization_revision: own.authorizationRevision,
+			});
+			const commands =
+				await sql`select id from platform.idempotency_records where command_type='application.disabled'`;
+			expect(commands).toHaveLength(0);
+		},
+	);
+});
