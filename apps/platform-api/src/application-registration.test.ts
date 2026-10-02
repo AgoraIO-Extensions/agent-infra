@@ -651,6 +651,68 @@ describe("application disable production HTTP/PostgreSQL boundary", () => {
 });
 
 describe("application disable current identity and ownership regressions", () => {
+	it("rolls back a backend cancelled during the success audit and releases its locks", async () => {
+		const own = ApplicationRegistrationResponseV1Schema.parse(
+			await (await post()).json(),
+		).metadata;
+		const barrier = postgres(database.databaseUrl, { max: 1 });
+		let response: Promise<Response> | undefined;
+		try {
+			await barrier.begin(async (lock) => {
+				const [owner] = await lock<
+					{ pid: number }[]
+				>`select pg_backend_pid() as pid`;
+				if (!owner) throw new Error("Missing test barrier backend");
+				await lock`select pg_advisory_xact_lock(1219, 1221)`;
+				await sql`create function platform.fail_application_audit() returns trigger language plpgsql as $$ begin perform pg_advisory_xact_lock(1219, 1221); return new; end $$`;
+				await sql`create trigger fail_application_audit before insert on platform.audit_events for each row when (new.action = 'application.disabled' and new.outcome = 'succeeded') execute function platform.fail_application_audit()`;
+				response = disableApplication(own.applicationId);
+				let requestPid: number | undefined;
+				await expect
+					.poll(
+						async () => {
+							const waiting = await sql<{ pid: number }[]>`
+						select pid from pg_stat_activity
+						where datname = current_database() and ${owner.pid} = any(pg_blocking_pids(pid))
+					`;
+							requestPid = waiting.length === 1 ? waiting[0]?.pid : undefined;
+							return requestPid ?? 0;
+						},
+						{ timeout: 10_000 },
+					)
+					.toBeGreaterThan(0);
+				if (!requestPid) throw new Error("Missing blocked application request");
+				const cancelledPid = requestPid;
+				const [cancelled] =
+					await sql`select pg_cancel_backend(${cancelledPid}) as cancelled`;
+				expect(cancelled).toEqual({ cancelled: true });
+				expect((await response).status).toBe(503);
+				await expect
+					.poll(
+						async () => {
+							const [locks] =
+								await sql`select count(*)::int as count from pg_locks where pid = ${cancelledPid}`;
+							return locks;
+						},
+						{ timeout: 2_000 },
+					)
+					.toEqual({ count: 0 });
+				const [row] =
+					await sql`select status,authorization_revision from platform.platform_applications where id=${own.applicationId}`;
+				expect(row).toEqual({
+					status: "active",
+					authorization_revision: own.authorizationRevision,
+				});
+				const [effects] =
+					await sql`select (select count(*)::int from platform.idempotency_records where command_type='application.disabled') as commands,
+					(select count(*)::int from platform.audit_events where action='application.disabled' and outcome='succeeded') as audits`;
+				expect(effects).toEqual({ commands: 0, audits: 0 });
+			});
+		} finally {
+			await response?.catch(() => undefined);
+			await barrier.end();
+		}
+	});
 	it("does not confer application management on an administrator who is not responsible", async () => {
 		const own = ApplicationRegistrationResponseV1Schema.parse(
 			await (await post()).json(),
