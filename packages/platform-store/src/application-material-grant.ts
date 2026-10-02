@@ -88,6 +88,7 @@ function operations(tx: Transaction): ApplicationMaterialGrantTransactionV1 {
 							eq(platformApplications.status, "active"),
 						),
 					)
+					.for("share")
 					.limit(1);
 				return row !== undefined;
 			}
