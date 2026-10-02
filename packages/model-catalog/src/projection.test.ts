@@ -494,7 +494,7 @@ it.each(["https://127.0.0.1/v1", "https://localhost/v1", "https://[::1]/v1"])(
 				configuration,
 				standardTemplateBinding: binding,
 				catalog: {
-					async resolve() {
+					async resolve(_input, _options) {
 						return { ...endpoint, baseUrl, origin: new URL(baseUrl).origin };
 					},
 				},
