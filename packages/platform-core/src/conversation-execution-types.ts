@@ -55,7 +55,12 @@ export function conversationExecutionKeySubjectV1(
 	if (sourceKind === "custom") return null;
 	if (sourceKind !== "standard")
 		throw new TypeError("Execution source cannot be confirmed");
-	const boundary = parseTaskAuthorizationBoundaryV1(authority.taskBoundary);
+	let boundary: TaskAuthorizationBoundaryV1;
+	try {
+		boundary = parseTaskAuthorizationBoundaryV1(authority.taskBoundary);
+	} catch {
+		throw new TypeError("Execution Key authority cannot be confirmed");
+	}
 	if (
 		boundary.principal.id !== authority.actorId ||
 		boundary.agentId !== authority.agentId ||

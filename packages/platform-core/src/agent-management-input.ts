@@ -213,6 +213,7 @@ export function isAgentManagementFailureCode(
 
 export function parseAgentManagementPortState(
 	input: AgentManagementStateV1,
+	options?: { readonly allowEmptyOwnerIds?: boolean },
 ): AgentManagementStateV1 {
 	try {
 		const values = snapshotAgentManagementDataObject(input);
@@ -313,7 +314,8 @@ export function parseAgentManagementPortState(
 			invalidAgentManagementInput();
 		}
 		const ownerIds = parseAgentManagementStringArray(values.ownerIds, true);
-		if (ownerIds.length === 0) invalidAgentManagementInput();
+		if (ownerIds.length === 0 && !options?.allowEmptyOwnerIds)
+			invalidAgentManagementInput();
 		const availability = parseAgentAccessTargets(values.availability);
 		if (
 			new Set(availability.map(agentAccessTargetKey)).size !==

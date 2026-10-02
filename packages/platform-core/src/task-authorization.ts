@@ -429,7 +429,9 @@ export function isTaskApplicationAuthorizationCurrentV1(input: {
 }): boolean {
 	const boundary = parseTaskAuthorizationBoundaryV1(input.boundary);
 	const application = parseCurrentTaskApplicationV1(input.application);
-	const agent = parseAgentManagementPortState(input.agent);
+	const agent = parseAgentManagementPortState(input.agent, {
+		allowEmptyOwnerIds: true,
+	});
 	return (
 		boundary.principal.kind === "application" &&
 		isTaskApiChannelV1(boundary.channelId, boundary.principal) &&
