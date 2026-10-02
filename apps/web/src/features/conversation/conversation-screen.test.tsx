@@ -530,6 +530,8 @@ describe("functional conversation screen", () => {
 					history("conversation-1", [
 						{
 							...event(1),
+							schemaVersion: 1,
+							type: "text.delta",
 							payload: {
 								text: "Private reply A",
 							},

@@ -56,6 +56,8 @@ async function routingFixture(
 				? [
 						{
 							...event(1, id),
+							schemaVersion: 1,
+							type: "text.delta",
 							executionId: "execution-live",
 							payload: { text: "受控流式回答" },
 						},
