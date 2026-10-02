@@ -336,8 +336,14 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 				},
 			};
 			await db.unsafe(
-				"update platform.agent_configuration_revisions set configuration=$2::text::jsonb where agent_id=$1",
-				[configuration.agentId, JSON.stringify(configured)],
+				"update platform.agent_configuration_revisions set source_reference=$2, configuration=$3::text::jsonb where agent_id=$1",
+				[
+					configuration.agentId,
+					configured.source.kind === "standard"
+						? configured.source.templateId
+						: configured.source.imageDigest,
+					JSON.stringify(configured),
+				],
 			);
 			const version = { configuration: configured, deployment };
 			if (mode !== "absent") {
