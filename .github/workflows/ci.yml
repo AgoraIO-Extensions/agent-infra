@@ -255,6 +255,107 @@ jobs:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node .github/scripts/vulnerability-scan.mjs build
 
+      - name: Verify built Web image compatibility
+        timeout-minutes: 3
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          evidence=.vulnerability-scan/web-smoke
+          mkdir -p "$evidence"
+          static_container="web-static-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          tls_container="web-config-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          fixture=""
+          cleanup() {
+            status=$?
+            trap - EXIT
+            for container in "$static_container" "$tls_container"; do
+              if docker container inspect "$container" >/dev/null 2>&1; then
+                docker rm -f "$container" || status=1
+              fi
+            done
+            if [[ -n "$fixture" ]]; then rm -rf "$fixture" || status=1; fi
+            printf '%s\n' "$status" > "$evidence/exit-code.txt"
+            if (( status == 0 )); then
+              printf 'passed_static_http_and_local_config_syntax\n' > "$evidence/result.txt"
+            else
+              printf 'failed_or_incomplete\n' > "$evidence/result.txt"
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          cp .vulnerability-scan/build.json "$evidence/build.json"
+          web_image=$(jq -er --arg head "$SOURCE_COMMIT" '
+            select(.schemaVersion == 1 and .source.commit == $head)
+            | [.images[] | select(.name == "web")]
+            | select(length == 1) | .[0].imageId
+            | select(type == "string" and test("^sha256:[a-f0-9]{64}$"))
+          ' "$evidence/build.json")
+          lock_sha=$(sha256sum pnpm-lock.yaml | cut -d ' ' -f 1)
+          jq -e --arg lock "$lock_sha" '.source.lockfileSha256 == $lock' "$evidence/build.json"
+          docker image inspect "$web_image" | jq 'map({Id,Architecture,Os,User:.Config.User,Entrypoint:.Config.Entrypoint,Cmd:.Config.Cmd,Labels:.Config.Labels})' > "$evidence/image.json"
+          jq -e --arg image "$web_image" --arg head "$SOURCE_COMMIT" --arg lock "$lock_sha" '
+            length == 1 and (.[0] | .Id == $image and .User == "nginx"
+              and .Entrypoint == ["nginx"] and .Cmd == ["-g", "daemon off;"]
+              and .Labels["org.opencontainers.image.revision"] == $head
+              and .Labels["agent-infra.lockfile-sha256"] == $lock)
+          ' "$evidence/image.json"
+          timeout --signal=TERM --kill-after=5s 60s docker run --rm --pull=never \
+            --name "$static_container" --network=none --read-only \
+            --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,size=16m,mode=1777 \
+            --entrypoint /bin/sh "$web_image" -ec '
+              test "$(id -u)" -ne 0
+              printf "effective_uid=%s\n" "$(id -u)"
+              apk info -e -v pcre2=10.49-r0
+              ldd /usr/sbin/nginx > /tmp/nginx.ldd
+              cat /tmp/nginx.ldd
+              grep -F libpcre2-8.so.0 /tmp/nginx.ldd
+              if grep -F "not found" /tmp/nginx.ldd; then exit 1; fi
+              nginx -t
+              nginx -g "daemon off;" &
+              nginx_pid=$!
+              trap "kill $nginx_pid 2>/dev/null || true; wait $nginx_pid 2>/dev/null || true" EXIT
+              ready=false
+              for attempt in 1 2 3 4 5; do
+                if wget -S -O /tmp/root http://127.0.0.1:8080/ 2>/tmp/root.headers; then ready=true; break; fi
+                sleep 1
+              done
+              test "$ready" = true
+              grep -E "HTTP/[0-9.]+ 200" /tmp/root.headers
+              grep -Fi "Content-Type: text/html" /tmp/root.headers
+              if grep -F immutable /tmp/root.headers; then exit 1; fi
+              cmp /tmp/root /usr/share/nginx/html/index.html
+              asset=$(sed -n "s/.*src=\"\(\/assets\/[^\"]*\.js\)\".*/\1/p" /tmp/root | head -n 1)
+              test -n "$asset"
+              wget -S -O /tmp/asset "http://127.0.0.1:8080$asset" 2>/tmp/asset.headers
+              cmp /tmp/asset "/usr/share/nginx/html$asset"
+              grep -E "HTTP/[0-9.]+ 200" /tmp/asset.headers
+              grep -E "Content-Type: (application|text)/javascript" /tmp/asset.headers
+              grep -F "Cache-Control: public, max-age=31536000, immutable" /tmp/asset.headers
+              wget -S -O /tmp/deep http://127.0.0.1:8080/chat/smoke-agent/smoke-conversation 2>/tmp/deep.headers
+              cmp /tmp/deep /usr/share/nginx/html/index.html
+              grep -E "HTTP/[0-9.]+ 200" /tmp/deep.headers
+              grep -Fi "Content-Type: text/html" /tmp/deep.headers
+              if grep -F immutable /tmp/deep.headers; then exit 1; fi
+              if wget -S -O /tmp/missing http://127.0.0.1:8080/assets/1175-missing.js 2>/tmp/missing.headers; then exit 1; fi
+              grep -E "HTTP/[0-9.]+ 404" /tmp/missing.headers
+              echo passed_nonroot_static_asset_and_fallback
+            ' 2>&1 | tee "$evidence/static.log"
+          fixture=$(mktemp -d "$RUNNER_TEMP/web-tls-fixture.XXXXXX")
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
+            -keyout "$fixture/tls.key" -out "$fixture/tls.crt" 2>/dev/null
+          chmod 755 "$fixture"
+          chmod 644 "$fixture/tls.key" "$fixture/tls.crt"
+          timeout --signal=TERM --kill-after=5s 30s docker run --rm --pull=never \
+            --name "$tls_container" --network=none --read-only \
+            --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,size=16m,mode=1777 \
+            --add-host platform-api:127.0.0.1 \
+            --mount "type=bind,src=$PWD/deploy/local/nginx.conf,dst=/etc/nginx/conf.d/default.conf,readonly" \
+            --mount "type=bind,src=$fixture,dst=/var/run/platform-web,readonly" \
+            "$web_image" -t 2>&1 | tee "$evidence/local-config.log"
+
       - name: Verify installed workspace-summary image
         id: installed_skill
         timeout-minutes: 10
