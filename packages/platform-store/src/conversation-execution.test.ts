@@ -723,6 +723,7 @@ describe("PostgreSQL Conversation command transaction", () => {
 			);
 			await transaction.close();
 			await taskStore.close();
+			await client`delete from platform.agent_configuration_revisions where agent_id = ${authority.agentId}`;
 		}
 	});
 

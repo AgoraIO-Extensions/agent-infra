@@ -1137,7 +1137,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				agentAuthorizationRevision: "authorization-dispatch",
 				accessSources: [{ kind: "user", userId: "actor-dispatch" }],
 			},
-		)})`;
+		)}) on conflict (execution_id) do nothing`;
 		await client`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
 			values (${`acceptance-${work.executionId}`}, 'trace-original', 'user', 'actor-dispatch', 'task.authorization.accepted', 'execution', ${work.executionId}, 'succeeded', 'request-original', 'agent-dispatch', ${client.json({ authorizationRecordId })})`;
 		const store = open();
