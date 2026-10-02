@@ -12,7 +12,7 @@ export function PageLoadingState({
 					<h1>{title}</h1>
 				</div>
 			</header>
-			<p className="text-muted-foreground" role="status">
+			<p aria-live="polite" className="text-muted-foreground" role="status">
 				{message}
 			</p>
 		</section>
