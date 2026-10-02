@@ -1506,7 +1506,7 @@ describe("PostgreSQL Workload steps", () => {
 								credential: {
 									secretId: "model-option-a",
 									version: 1,
-									isSet: false,
+									isSet: true,
 								},
 							},
 						],
