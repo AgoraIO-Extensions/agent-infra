@@ -945,6 +945,31 @@ function isApplicationRegistrationV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1219 admits the exact disable command while preserving every prior contract.
+function isOwnApplicationDisableV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/applications/{applicationId}";
+	const schema = "ApplicationDisableRequestV1";
+	if (
+		!previous.paths?.[path] ||
+		previous.paths[path].patch !== undefined ||
+		previous.components?.schemas?.[schema] !== undefined
+	)
+		return false;
+	const addition = {
+		patch: current.paths?.[path]?.patch,
+		schema: current.components?.schemas?.[schema],
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"6ef266859d48ccbac5c7ef73c943f8d95bf3e9dea4c58c99922fbc173d17a5ca"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].patch;
+	delete normalized.components.schemas[schema];
+	return sameValue(previous, normalized);
+}
+
 // #1166 admits only the reviewed own-application metadata GET.
 function isOwnApplicationMetadataV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/applications/{applicationId}";
@@ -1617,12 +1642,39 @@ function isPersonalCredentialNarrowOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #484 names the known credential object; every other contract field stays exact.
+function isKnownCredentialAuditSubjectAddition(previous, current) {
+	const kinds = [
+		"agent_application",
+		"agent",
+		"secret",
+		"secret_key",
+		"grant",
+		"unknown",
+		"conversation",
+		"execution",
+		"configuration",
+	];
+	const subject = (document) =>
+		document.components?.schemas?.ScopedPlatformAuditProjectionV1?.properties
+			?.subject?.properties?.kind;
+	const oldKind = subject(previous);
+	if (
+		(oldKind !== undefined && !sameValue(oldKind.enum, kinds)) ||
+		!sameValue(subject(current)?.enum, [...kinds, "api_credential"])
+	)
+		return false;
+	const normalized = structuredClone(current);
+	subject(normalized).enum = kinds;
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
 		if (
 			!sameValue(previous, current) &&
-			!isTaskHttpV1OpenApiAddition(previous, current) &&
+			!isKnownCredentialAuditSubjectAddition(previous, current) &&
 			!isPersonalCredentialNarrowOpenApiAddition(previous, current) &&
 			!isPersonalCredentialListOpenApiAddition(previous, current) &&
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
@@ -1631,6 +1683,7 @@ function findBreakingChanges(previous, current) {
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
+			!isOwnApplicationDisableV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&

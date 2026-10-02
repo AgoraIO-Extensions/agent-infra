@@ -4065,7 +4065,8 @@
                   "unknown",
                   "conversation",
                   "execution",
-                  "configuration"
+                  "configuration",
+                  "api_credential"
                 ],
                 "type": "string"
               },

@@ -242,6 +242,10 @@ export type AgentProjectionV2 = {
     };
 };
 
+export type ApplicationDisableRequestV1 = {
+    status: 'disabled';
+};
+
 export type ApplicationMetadataV1 = {
     applicationId: string;
     authorizationRevision: string;
@@ -1662,6 +1666,60 @@ export type GetOwnApplicationV2Responses = {
 };
 
 export type GetOwnApplicationV2Response = GetOwnApplicationV2Responses[keyof GetOwnApplicationV2Responses];
+
+export type DisableOwnApplicationV2Data = {
+    body: ApplicationDisableRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}';
+};
+
+export type DisableOwnApplicationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type DisableOwnApplicationV2Error = DisableOwnApplicationV2Errors[keyof DisableOwnApplicationV2Errors];
+
+export type DisableOwnApplicationV2Responses = {
+    /**
+     * Disabled application metadata
+     */
+    200: ApplicationMetadataV1;
+};
+
+export type DisableOwnApplicationV2Response = DisableOwnApplicationV2Responses[keyof DisableOwnApplicationV2Responses];
 
 export type GetConversationV2Data = {
     body?: never;

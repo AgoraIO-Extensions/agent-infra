@@ -9,6 +9,7 @@ import {
 	TraceIdV1Schema,
 } from "../index.ts";
 import {
+	ApplicationDisableRequestV1Schema,
 	ApplicationMetadataV1Schema,
 	ApplicationRegistrationRequestV1Schema,
 	ApplicationRegistrationResponseV1Schema,
@@ -1136,6 +1137,25 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 		},
 	},
 	"/api/v2/applications/{applicationId}": {
+		patch: {
+			operationId: "disableOwnApplicationV2",
+			summary: "Disable an application owned by the current browser user",
+			description:
+				"Active browser session only; no Authorization header or query. Current ownership is rechecked on replay. Cross-person and missing applications both return 404. No credential material is returned. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ applicationId: OpaqueIdV1Schema }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(ApplicationDisableRequestV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Disabled application metadata",
+					ApplicationMetadataV1Schema,
+				),
+				...errorResponses,
+			},
+		},
 		get: {
 			operationId: "getOwnApplicationV2",
 			summary: "Read an application owned by the current browser user",
@@ -1492,6 +1512,7 @@ export const pilotBrowserSchemasV1 = {
 
 export const pilotBrowserSchemasV2 = {
 	ApplicationMetadataV1: ApplicationMetadataV1Schema,
+	ApplicationDisableRequestV1: ApplicationDisableRequestV1Schema,
 	ApplicationRegistrationRequestV1: ApplicationRegistrationRequestV1Schema,
 	ApplicationRegistrationResponseV1: ApplicationRegistrationResponseV1Schema,
 	PersonalRelayKeyStateV1: PersonalRelayKeyStateV1Schema,
