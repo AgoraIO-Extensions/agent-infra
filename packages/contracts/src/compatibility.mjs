@@ -1693,6 +1693,7 @@ function findBreakingChanges(previous, current) {
 			!isPersonalApiAgentReadAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyV2OpenApiAddition(previous, current) &&
+			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isConversationSseV2NotFoundAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
