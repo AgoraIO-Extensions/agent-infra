@@ -237,6 +237,95 @@ export function ActiveConversation({
 						</AlertDescription>
 					</Alert>
 				)}
+				{agent.capabilities.modelSelection && (
+					<fieldset
+						className="model-controls grid min-w-0 gap-3 sm:grid-cols-[1fr_1fr_auto]"
+						disabled={blocked || commandLocked}
+					>
+						<legend className="text-muted-foreground text-sm">
+							下一条消息的模型
+						</legend>
+						<div className="min-w-0 space-y-1">
+							<Label htmlFor={`${composerId}-model`}>模型</Label>
+							<Select
+								disabled={blocked || commandLocked}
+								value={currentModelId || null}
+								itemToStringLabel={(value) =>
+									(!option && value === currentModelId
+										? "当前选项已移除"
+										: options.find((item) => item.optionId === value)
+												?.displayName) ?? String(value)
+								}
+								onValueChange={(value) => {
+									if (!value) return;
+									setModelId(value);
+									setReasoning(
+										options.find((item) => item.optionId === value)
+											?.reasoningLevels[0],
+									);
+								}}
+							>
+								<SelectTrigger
+									id={`${composerId}-model`}
+									className="min-h-11 w-full text-base md:text-sm"
+								>
+									<SelectValue placeholder="请选择模型" />
+								</SelectTrigger>
+								<SelectContent>
+									{!option && currentModelId && (
+										<SelectItem value={currentModelId} disabled>
+											当前选项已移除
+										</SelectItem>
+									)}
+									{options.map((item) => (
+										<SelectItem key={item.optionId} value={item.optionId}>
+											{item.displayName}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+						<div className="min-w-0 space-y-1">
+							<Label htmlFor={`${composerId}-reasoning`}>推理强度</Label>
+							<Select
+								disabled={blocked || commandLocked}
+								value={currentReasoning || null}
+								onValueChange={(value) => setReasoning(value ?? undefined)}
+							>
+								<SelectTrigger
+									id={`${composerId}-reasoning`}
+									className="min-h-11 w-full text-base md:text-sm"
+								>
+									<SelectValue placeholder="请选择推理强度" />
+								</SelectTrigger>
+								<SelectContent>
+									{option?.reasoningLevels.map((value) => (
+										<SelectItem key={value} value={value}>
+											{value}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+						<Button
+							type="button"
+							variant="outline"
+							className="self-end"
+							disabled={!option?.reasoningLevels.includes(currentReasoning)}
+							onClick={() => {
+								if (
+									command.selectModel({
+										modelOptionId: currentModelId,
+										reasoningLevel: currentReasoning,
+									})
+								)
+									action.current = "selection";
+							}}
+						>
+							保存模型选择
+						</Button>
+					</fieldset>
+				)}
 				{timeline.history && (
 					<ConversationMessages
 						agentName={agent.name}
@@ -334,95 +423,7 @@ export function ActiveConversation({
 							}
 						}}
 					/>
-					{agent.capabilities.modelSelection && (
-						<fieldset
-							className="model-controls grid min-w-0 gap-3 sm:grid-cols-[1fr_1fr_auto]"
-							disabled={blocked || commandLocked}
-						>
-							<legend className="text-muted-foreground text-sm">
-								下一条消息的模型
-							</legend>
-							<div className="min-w-0 space-y-1">
-								<Label htmlFor={`${composerId}-model`}>模型</Label>
-								<Select
-									disabled={blocked || commandLocked}
-									value={currentModelId || null}
-									itemToStringLabel={(value) =>
-										(!option && value === currentModelId
-											? "当前选项已移除"
-											: options.find((item) => item.optionId === value)
-													?.displayName) ?? String(value)
-									}
-									onValueChange={(value) => {
-										if (!value) return;
-										setModelId(value);
-										setReasoning(
-											options.find((item) => item.optionId === value)
-												?.reasoningLevels[0],
-										);
-									}}
-								>
-									<SelectTrigger
-										id={`${composerId}-model`}
-										className="h-11 w-full text-base md:text-sm"
-									>
-										<SelectValue placeholder="请选择模型" />
-									</SelectTrigger>
-									<SelectContent>
-										{!option && currentModelId && (
-											<SelectItem value={currentModelId} disabled>
-												当前选项已移除
-											</SelectItem>
-										)}
-										{options.map((item) => (
-											<SelectItem key={item.optionId} value={item.optionId}>
-												{item.displayName}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							</div>
-							<div className="min-w-0 space-y-1">
-								<Label htmlFor={`${composerId}-reasoning`}>推理强度</Label>
-								<Select
-									disabled={blocked || commandLocked}
-									value={currentReasoning || null}
-									onValueChange={(value) => setReasoning(value ?? undefined)}
-								>
-									<SelectTrigger
-										id={`${composerId}-reasoning`}
-										className="h-11 w-full text-base md:text-sm"
-									>
-										<SelectValue placeholder="请选择推理强度" />
-									</SelectTrigger>
-									<SelectContent>
-										{option?.reasoningLevels.map((value) => (
-											<SelectItem key={value} value={value}>
-												{value}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							</div>
-							<Button
-								type="button"
-								variant="outline"
-								className="self-end"
-								disabled={!option?.reasoningLevels.includes(currentReasoning)}
-								onClick={() => {
-									if (
-										command.selectModel({
-											modelOptionId: currentModelId,
-											reasoningLevel: currentReasoning,
-										})
-									)
-										action.current = "selection";
-								}}
-							>
-								保存模型选择
-							</Button>
-						</fieldset>
-					)}
+
 					<div className="composer-controls flex flex-wrap items-center justify-between gap-3">
 						<p className="text-muted-foreground text-xs">
 							Enter 发送 · Shift + Enter 换行
