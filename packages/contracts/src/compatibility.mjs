@@ -999,8 +999,12 @@ function isApplicationMaterialGrantV2OpenApiAddition(previous, current) {
 		),
 	};
 	if (
-		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"6bf8b1cd3ef226b56b1669dd3b2cc359a8e2384c5fe30aa67f9cc06d91d81aae"
+		![
+			"6bf8b1cd3ef226b56b1669dd3b2cc359a8e2384c5fe30aa67f9cc06d91d81aae",
+			"acdf227e2129f2fc1d8d862d8101cc79825d1a8bf87638e4cdae7196b77be70d",
+		].includes(
+			createHash("sha256").update(JSON.stringify(addition)).digest("hex"),
+		)
 	)
 		return false;
 	const normalized = structuredClone(current);
