@@ -8,7 +8,7 @@ import {
 } from "@agent-infra/openconnector-adapter";
 import { bitbucketServerConnectionCatalog } from "@agent-infra/openconnector-adapter/authorization-compatibility";
 import { confluenceServerConnectionCatalog } from "@agent-infra/openconnector-adapter/confluence-server";
-import { datalegoV4ConnectionCatalog } from "@agent-infra/openconnector-adapter/datalego-v4";
+import { datalegoV5ConnectionCatalog } from "@agent-infra/openconnector-adapter/datalego-v5";
 import { jiraServerConnectionCatalog } from "@agent-infra/openconnector-adapter/jira-server";
 import { manhattanConnectionCatalog } from "@agent-infra/openconnector-adapter/manhattan";
 import { rehoboamConnectionCatalog } from "@agent-infra/openconnector-adapter/rehoboam";
@@ -44,7 +44,7 @@ const catalogs = [
 	bitbucketServerConnectionCatalog,
 	jiraServerConnectionCatalog,
 	confluenceServerConnectionCatalog,
-	datalegoV4ConnectionCatalog,
+	datalegoV5ConnectionCatalog,
 	jenkinsCiConnectionCatalog,
 	jenkinsReleaseConnectionCatalog,
 	manhattanConnectionCatalog,

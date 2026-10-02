@@ -102,7 +102,7 @@ test("tracks the Manhattan provider catalog", () => {
 	);
 });
 
-test("DataLego v4 release guard retains legacy catalog comparisons", () => {
+test("DataLego v5 release guard retains v3/v4 catalogs and rejects rollback", () => {
 	const temp = mkdtempSync(join(tmpdir(), "connection-datalego-guard-"));
 	const cwd = process.cwd();
 	const git = (...args) => execFileSync("git", args, { cwd: temp, encoding: "utf8" });
@@ -125,6 +125,13 @@ test("DataLego v4 release guard retains legacy catalog comparisons", () => {
 		assert.equal(before.datalego.providerReleaseVersion, 3);
 		assert.equal(after.datalego.providerReleaseVersion, 4);
 		assert.equal(compareCatalogs(before, after).length, 1);
+		writeFileSync(join(source, "datalego-v5.ts"), 'const providerId = "datalego"; const id = "datalego.get_current_user@v5"; const release = "datalego-connection-v5";');
+		git("add", "-A");
+		git("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-m", "cancellation guard");
+		const current = readCatalog("HEAD");
+		assert.equal(current.datalego.providerReleaseVersion, 5);
+		assert.equal(compareCatalogs(after, current).length, 1);
+		assert.throws(() => compareCatalogs(current, after), /downgrade/);
 	} finally {
 		process.chdir(cwd);
 		rmSync(temp, { recursive: true, force: true });
