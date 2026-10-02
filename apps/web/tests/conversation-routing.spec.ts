@@ -322,18 +322,44 @@ for (const compact of [false, true]) {
 			{ frame: users.first(), name: "controlled-user-message-roles" },
 			{ frame: assistants.first(), name: "controlled-assistant-message-roles" },
 		]) {
-			await frame.evaluate((element) =>
-				element.scrollIntoView({ block: "start", inline: "nearest" }),
-			);
+			await frame.locator(".message-heading").scrollIntoViewIfNeeded();
+			await info.attach(`${name}-geometry`, {
+				body: JSON.stringify(
+					await frame.evaluate((element) => ({
+						avatar: element
+							.querySelector(".chat-message-avatar")
+							?.getBoundingClientRect()
+							.toJSON(),
+						heading: element
+							.querySelector(".message-heading")
+							?.getBoundingClientRect()
+							.toJSON(),
+						viewport: { width: innerWidth, height: innerHeight },
+						scrollBounds: [".timeline", ".chat-workspace"].map((selector) => {
+							const node = element.closest(selector);
+							return (
+								node && {
+									selector,
+									rectangle: node.getBoundingClientRect().toJSON(),
+									scrollTop: node.scrollTop,
+									clientHeight: node.clientHeight,
+									scrollHeight: node.scrollHeight,
+								}
+							);
+						}),
+					})),
+				),
+				contentType: "application/json",
+			});
+			await info.attach(name, {
+				body: await page.screenshot({ animations: "disabled" }),
+				contentType: "image/png",
+			});
 			await expect(frame.locator(".chat-message-avatar")).toBeInViewport({
 				ratio: 1,
 			});
 			await expect(frame.locator(".message-heading")).toBeInViewport({
 				ratio: 1,
-			});
-			await info.attach(name, {
-				body: await page.screenshot({ fullPage: true, animations: "disabled" }),
-				contentType: "image/png",
 			});
 		}
 		await assistants
