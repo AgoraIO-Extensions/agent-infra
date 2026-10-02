@@ -267,6 +267,7 @@ async function seed(
 	if (
 		executionStatus === "submitted" &&
 		options.hostSessionRef === undefined &&
+		!options.legacySelection &&
 		(channel === "web" ||
 			channel === "api:user" ||
 			channel === "api:application")
@@ -3129,8 +3130,8 @@ describe("authorized historical metadata rearm", () => {
 			if (!hostSessionRef) throw new Error("missing original Host");
 			const executionId = "new-execution";
 			const itemId = `conversation:turn:${executionId}`;
-			await client`insert into platform.conversation_executions (execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, status, session_generation, delivery_fence, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, created_at, updated_at)
-				select ${executionId}, conversation_id, agent_id, actor_id, channel_id, 'new-turn', 'submitted', session_generation, 0, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, now(), now() from platform.conversation_executions where execution_id = ${h.work.executionId}`;
+			await client`insert into platform.conversation_executions (execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, status, session_generation, delivery_fence, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version, created_at, updated_at)
+				select ${executionId}, conversation_id, agent_id, actor_id, channel_id, 'new-turn', 'submitted', session_generation, 0, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version, now(), now() from platform.conversation_executions where execution_id = ${h.work.executionId}`;
 			await client`insert into platform.conversation_messages (message_id, conversation_id, actor_id, role, text, execution_id, status, created_at, updated_at)
 				values ('new-message', ${h.work.conversationId}, 'actor-dispatch', 'user', 'new task', ${executionId}, 'submitted', now(), now())`;
 			await client`insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, request_id)
