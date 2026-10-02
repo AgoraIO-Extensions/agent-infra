@@ -8,8 +8,7 @@ import {
 } from "@agent-infra/openconnector-adapter";
 import { bitbucketServerConnectionCatalog } from "@agent-infra/openconnector-adapter/authorization-compatibility";
 import { confluenceServerConnectionCatalog } from "@agent-infra/openconnector-adapter/confluence-server";
-import { datalegoConnectionCatalog } from "@agent-infra/openconnector-adapter/datalego";
-import { datalegoOAuthConnectionCatalog } from "@agent-infra/openconnector-adapter/datalego-oauth";
+import { datalegoV4ConnectionCatalog } from "@agent-infra/openconnector-adapter/datalego-v4";
 import { jiraServerConnectionCatalog } from "@agent-infra/openconnector-adapter/jira-server";
 import { manhattanConnectionCatalog } from "@agent-infra/openconnector-adapter/manhattan";
 import { rehoboamConnectionCatalog } from "@agent-infra/openconnector-adapter/rehoboam";
@@ -45,8 +44,7 @@ const catalogs = [
 	bitbucketServerConnectionCatalog,
 	jiraServerConnectionCatalog,
 	confluenceServerConnectionCatalog,
-	datalegoConnectionCatalog,
-	datalegoOAuthConnectionCatalog,
+	datalegoV4ConnectionCatalog,
 	jenkinsCiConnectionCatalog,
 	jenkinsReleaseConnectionCatalog,
 	manhattanConnectionCatalog,
@@ -73,7 +71,7 @@ try {
 			});
 		}
 		const catalogsMs = Math.round(performance.now() - startedAt);
-		for (const consumer of consumers) {
+		const publishConsumer = async (consumer: (typeof consumers)[number]) => {
 			for (const catalog of catalogs) {
 				await repository.publishConsumerDeclaration({
 					consumer,
@@ -81,6 +79,13 @@ try {
 					actionVersionIds: catalog.actions.map((action) => action.id),
 				});
 			}
+		};
+		if (process.env.STARTUP_BENCHMARK_SERIAL === "true") {
+			for (const consumer of consumers) await publishConsumer(consumer);
+		} else {
+			const results = await Promise.allSettled(consumers.map(publishConsumer));
+			const failure = results.find((result) => result.status === "rejected");
+			if (failure?.status === "rejected") throw failure.reason;
 		}
 		console.info(
 			JSON.stringify({

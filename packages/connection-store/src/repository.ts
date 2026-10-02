@@ -566,20 +566,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			throw new Error("Provider executor digest is invalid");
 		}
 		await this.sql.begin(async (sql) => {
-			await sql`
-				INSERT INTO connection_provider_releases (
-					id, provider, source_commit, deployment_profile, auth_profile,
-					executor_digest, catalog_checksum, status
-				)
-				VALUES (
-					${catalog.providerReleaseId}, ${catalog.provider}, ${catalog.sourceCommit},
-					${sql.json(catalog.deploymentProfile as postgres.JSONValue)},
-					${sql.json(catalog.authProfile as postgres.JSONValue)},
-					${catalog.executorDigest}, ${catalogChecksum}, 'PUBLISHED'
-				)
-				ON CONFLICT (id) DO NOTHING
-			`;
-			const [release] = await sql<
+			const readRelease = () => sql<
 				{
 					auth_profile: unknown;
 					catalog_checksum: string;
@@ -593,7 +580,25 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				SELECT provider, source_commit, deployment_profile, auth_profile,
 					executor_digest, catalog_checksum, status
 				FROM connection_provider_releases WHERE id = ${catalog.providerReleaseId}
+				FOR SHARE
 			`;
+			let [release] = await readRelease();
+			if (!release) {
+				await sql`
+					INSERT INTO connection_provider_releases (
+						id, provider, source_commit, deployment_profile, auth_profile,
+						executor_digest, catalog_checksum, status
+					)
+					VALUES (
+						${catalog.providerReleaseId}, ${catalog.provider}, ${catalog.sourceCommit},
+						${sql.json(catalog.deploymentProfile as postgres.JSONValue)},
+						${sql.json(catalog.authProfile as postgres.JSONValue)},
+						${catalog.executorDigest}, ${catalogChecksum}, 'PUBLISHED'
+					)
+					ON CONFLICT (id) DO NOTHING
+				`;
+				[release] = await readRelease();
+			}
 			if (
 				release?.provider !== catalog.provider ||
 				release.source_commit !== catalog.sourceCommit ||
@@ -607,32 +612,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			) {
 				throw new Error("Pinned ProviderRelease does not match the catalog");
 			}
-			if (catalog.actions.length > 0) {
-				await sql`
-					INSERT INTO connection_action_versions (
-						id, provider_release_id, name, description, effect, input_schema,
-						required_scopes, status
-					)
-					SELECT action.id, ${catalog.providerReleaseId}, action.name,
-						action.description, action.effect, action.input_schema,
-						action.required_scopes, 'PUBLISHED'
-					FROM jsonb_to_recordset(${sql.json(
-						catalog.actions.map((action) => ({
-							id: action.id,
-							name: action.name,
-							description: action.description,
-							effect: action.effect,
-							input_schema: action.inputSchema as postgres.JSONValue,
-							required_scopes: [...action.requiredScopes],
-						})),
-					)}) AS action(
-						id text, name text, description text, effect text,
-						input_schema jsonb, required_scopes jsonb
-					)
-					ON CONFLICT (id) DO NOTHING
-				`;
-			}
-			const storedActions = await sql<
+			const readActions = () => sql<
 				{
 					id: string;
 					description: string;
@@ -648,7 +628,39 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					required_scopes, status
 				FROM connection_action_versions
 				WHERE id = ANY(${catalog.actions.map((action) => action.id)}::text[])
+				ORDER BY id FOR SHARE
 			`;
+			let storedActions = await readActions();
+			const storedIds = new Set(storedActions.map((action) => action.id));
+			const missingActions = catalog.actions.filter(
+				(action) => !storedIds.has(action.id),
+			);
+			if (missingActions.length > 0) {
+				await sql`
+					INSERT INTO connection_action_versions (
+						id, provider_release_id, name, description, effect, input_schema,
+						required_scopes, status
+					)
+					SELECT action.id, ${catalog.providerReleaseId}, action.name,
+						action.description, action.effect, action.input_schema,
+						action.required_scopes, 'PUBLISHED'
+					FROM jsonb_to_recordset(${sql.json(
+						missingActions.map((action) => ({
+							id: action.id,
+							name: action.name,
+							description: action.description,
+							effect: action.effect,
+							input_schema: action.inputSchema as postgres.JSONValue,
+							required_scopes: [...action.requiredScopes],
+						})),
+					)}) AS action(
+						id text, name text, description text, effect text,
+						input_schema jsonb, required_scopes jsonb
+					)
+					ON CONFLICT (id) DO NOTHING
+				`;
+				storedActions = await readActions();
+			}
 			const storedById = new Map(
 				storedActions.map((action) => [action.id, action]),
 			);
@@ -773,22 +785,30 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					"Consumer declaration contains an unpublished ActionVersion",
 				);
 			}
-			await sql`
-				INSERT INTO connection_consumers (id, display_name, status)
-				VALUES (${input.consumer.id}, ${input.consumer.name}, 'ACTIVE')
-				ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name
-				WHERE connection_consumers.display_name IS DISTINCT FROM EXCLUDED.display_name
-			`;
 			const [consumer] = await sql<
 				{
 					revision: string;
 					status: string;
 				}[]
 			>`
-				SELECT revision::text, status
-				FROM connection_consumers
-				WHERE id = ${input.consumer.id}
-				FOR UPDATE
+				WITH locked AS MATERIALIZED (
+					SELECT id, revision, status, display_name FROM connection_consumers
+					WHERE id = ${input.consumer.id} FOR UPDATE
+				), inserted AS (
+					INSERT INTO connection_consumers (id, display_name, status)
+					SELECT ${input.consumer.id}, ${input.consumer.name}, 'ACTIVE'
+					WHERE NOT EXISTS (SELECT 1 FROM locked)
+					ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name
+					RETURNING revision, status
+				), renamed AS (
+					UPDATE connection_consumers consumer
+					SET display_name = ${input.consumer.name}
+					FROM locked
+					WHERE consumer.id = locked.id
+						AND locked.display_name IS DISTINCT FROM ${input.consumer.name}
+				)
+				SELECT revision::text, status FROM locked
+				UNION ALL SELECT revision::text, status FROM inserted
 			`;
 			if (consumer?.status !== "ACTIVE") forbidden();
 			const declarationDigest = canonicalHash({
@@ -796,6 +816,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				providerId,
 				providerReleaseId: input.providerReleaseId,
 			});
+			// Take a fresh snapshot after the Consumer lock, including a competing publisher's commit.
 			const [current] = await sql<{ digest: string; id: string }[]>`
 				SELECT id, digest FROM connection_consumer_action_declarations
 				WHERE consumer_id = ${input.consumer.id}

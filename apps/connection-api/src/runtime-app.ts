@@ -97,6 +97,41 @@ async function startupPhase<T>(
 	}
 }
 
+export async function publishStartupConsumerDeclarations(
+	repository: Pick<PostgresConnectionRepository, "publishConsumerDeclaration">,
+	consumers: readonly { id: string; name: string }[],
+	catalogs: readonly {
+		provider: string;
+		providerReleaseId: string;
+		actions: readonly { id: string }[];
+	}[],
+) {
+	// The runtime supplies three Consumers. Keep duplicate IDs and each revision chain serial.
+	const groups = new Map<string, { id: string; name: string }[]>();
+	for (const consumer of consumers) {
+		const group = groups.get(consumer.id) ?? [];
+		group.push(consumer);
+		groups.set(consumer.id, group);
+	}
+	const results = await Promise.allSettled(
+		[...groups.values()].map(async (group) => {
+			for (const consumer of group) {
+				for (const catalog of catalogs) {
+					await startupPhase("consumer_declaration", catalog.provider, () =>
+						repository.publishConsumerDeclaration({
+							consumer,
+							providerReleaseId: catalog.providerReleaseId,
+							actionVersionIds: catalog.actions.map((action) => action.id),
+						}),
+					);
+				}
+			}
+		}),
+	);
+	const failure = results.find((result) => result.status === "rejected");
+	if (failure?.status === "rejected") throw failure.reason;
+}
+
 export async function createConnectionRuntime(
 	environment: Record<string, string | undefined> = process.env,
 ) {
@@ -157,6 +192,7 @@ export async function createConnectionRuntime(
 		config.databaseUrl,
 	);
 
+	// Reconciliation writes shared upgrade tasks across Providers; keep catalog transactions serial.
 	for (const catalog of catalogs) {
 		await startupPhase("provider_catalog", catalog.provider, () =>
 			repository.publishProviderCatalog(catalog, {
@@ -165,21 +201,15 @@ export async function createConnectionRuntime(
 			}),
 		);
 	}
-	for (const consumer of [
-		config.directConsumer,
-		{ id: portablePatConsumerId, name: "Portable Connection PAT" },
-		rehoboamAiConsumer,
-	]) {
-		for (const catalog of catalogs) {
-			await startupPhase("consumer_declaration", catalog.provider, () =>
-				repository.publishConsumerDeclaration({
-					actionVersionIds: catalog.actions.map((action) => action.id),
-					consumer,
-					providerReleaseId: catalog.providerReleaseId,
-				}),
-			);
-		}
-	}
+	await publishStartupConsumerDeclarations(
+		repository,
+		[
+			config.directConsumer,
+			{ id: portablePatConsumerId, name: "Portable Connection PAT" },
+			rehoboamAiConsumer,
+		],
+		catalogs,
+	);
 	const directory = new LdapDirectoryAuthenticator(config.ldap);
 	const oauth = new ConnectionOAuthService({
 		consumer: config.directConsumer,
