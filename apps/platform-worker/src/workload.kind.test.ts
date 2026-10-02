@@ -331,8 +331,15 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					metadata: { name: tokenName, namespace },
 					immutable: true,
 					type: "Opaque",
-					data: { token: randomBytes(32).toString("base64") },
+					stringData: { token: randomBytes(32).toString("base64") },
 				});
+				const tokenSecret = await client.read<V1Secret>("Secret", tokenName);
+				assert(tokenSecret?.data?.token, "Runtime service token is missing");
+				const tokenBytes = Buffer.from(tokenSecret.data.token, "base64");
+				expect(tokenBytes.byteLength).toBe(44);
+				expect(tokenBytes.every((byte) => byte >= 0x20 && byte <= 0x7e)).toBe(
+					true,
+				);
 				let probeCalls = 0;
 				const rejectProbe = async () => {
 					probeCalls++;
