@@ -294,8 +294,14 @@ for (const compact of [false, true]) {
 		).toBeVisible();
 		const input = page.getByLabel("消息", { exact: true });
 		await input.fill("受控草稿，不自动发送。");
-		await users.first().scrollIntoViewIfNeeded();
-		await expect(users.first()).toBeVisible();
+		expect(
+			await users
+				.first()
+				.locator(".chat-message-body")
+				.evaluate((element) =>
+					Number.parseFloat(getComputedStyle(element).borderTopLeftRadius),
+				),
+		).toBeGreaterThan(0);
 		for (const frame of [users.first(), assistants.first()]) {
 			const avatar = await frame.locator(".chat-message-avatar").boundingBox();
 			const body = await frame.locator(".chat-message-body").boundingBox();
@@ -312,16 +318,24 @@ for (const compact of [false, true]) {
 				() => document.documentElement.scrollWidth <= innerWidth,
 			),
 		).toBe(true);
-		await info.attach("controlled-user-message-roles", {
-			body: await page.screenshot({ fullPage: true, animations: "disabled" }),
-			contentType: "image/png",
-		});
-		await assistants.first().scrollIntoViewIfNeeded();
-		await expect(assistants.first()).toBeVisible();
-		await info.attach("controlled-assistant-message-roles", {
-			body: await page.screenshot({ fullPage: true, animations: "disabled" }),
-			contentType: "image/png",
-		});
+		for (const { frame, name } of [
+			{ frame: users.first(), name: "controlled-user-message-roles" },
+			{ frame: assistants.first(), name: "controlled-assistant-message-roles" },
+		]) {
+			await frame.evaluate((element) =>
+				element.scrollIntoView({ block: "start", inline: "nearest" }),
+			);
+			await expect(frame.locator(".chat-message-avatar")).toBeInViewport({
+				ratio: 1,
+			});
+			await expect(frame.locator(".message-heading")).toBeInViewport({
+				ratio: 1,
+			});
+			await info.attach(name, {
+				body: await page.screenshot({ fullPage: true, animations: "disabled" }),
+				contentType: "image/png",
+			});
+		}
 		await assistants
 			.first()
 			.getByRole("button", { name: "上一个回答版本" })

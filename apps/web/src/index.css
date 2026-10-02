@@ -642,7 +642,7 @@ a[class~="group/button"] {
 .chat-message-user .chat-message-body {
 	padding: 14px 16px;
 	border: 1px solid var(--border);
-	border-radius: calc(var(--radius) + 4px);
+	border-radius: 14px;
 	background: var(--surface);
 }
 .assistant-markdown {
