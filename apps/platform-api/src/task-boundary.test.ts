@@ -171,21 +171,21 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 			[configuration.agentId, JSON.stringify(configuration)],
 		);
 		await db.unsafe(
-			"delete from platform.relay_key_subjects where purpose='agent-default' and subject_id=$1",
-			[configuration.agentId],
+			"delete from platform.relay_key_subjects where purpose='personal' and subject_id=$1",
+			[identity.userId],
 		);
 		await db.unsafe(
-			"insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('agent-default',$1,1,1)",
-			[configuration.agentId],
+			"insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('personal',$1,1,1)",
+			[identity.userId],
 		);
 		await db.unsafe(
-			"insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('agent-default',$1,1,'task-boundary-key',$2::text::jsonb)",
+			"insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('personal',$1,1,'task-boundary-key',$2::text::jsonb)",
 			[
-				configuration.agentId,
+				identity.userId,
 				JSON.stringify({
 					schemaVersion: 1,
-					purpose: "agent-default",
-					subjectId: configuration.agentId,
+					purpose: "personal",
+					subjectId: identity.userId,
 					keyId: "task-boundary-key",
 					keyVersion: 1,
 				}),
