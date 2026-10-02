@@ -11,7 +11,7 @@ export const ApplicationMaterialGrantRequestV1Schema = z.strictObject({
 });
 export const ApplicationMaterialGrantRevokeRequestV1Schema = z.strictObject({
   status: z.literal("revoked"),
-  expectedRevision: OpaqueIdV1Schema.optional(),
+  expectedRevision: OpaqueIdV1Schema,
 });
 export const ApplicationMaterialGrantMetadataV1Schema = z.strictObject({
   applicationId: OpaqueIdV1Schema,

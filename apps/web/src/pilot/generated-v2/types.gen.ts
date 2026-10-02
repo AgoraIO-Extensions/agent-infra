@@ -1850,7 +1850,7 @@ export type ReadApplicationMaterialV2Response = ReadApplicationMaterialV2Respons
 
 export type RevokeApplicationMaterialV2Data = {
     body: {
-        expectedRevision?: string;
+        expectedRevision: string;
         status: 'revoked';
     };
     path: {
