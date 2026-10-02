@@ -406,11 +406,7 @@ function credentialMutationSummary(
 	const details = row.details as Record<string, unknown>;
 	if (row.outcome !== "succeeded")
 		return credentialRefusalSummary(row, details);
-	if (
-		row.actorType !== "user" ||
-		row.actorId === "unknown" ||
-		row.targetId === "unknown"
-	)
+	if (row.actorType !== "user" || row.targetId === "unknown")
 		throw new PlatformAuditScopeErrorV1("unavailable");
 	try {
 		parsePersonalApiCredentialIssuanceV1(details);

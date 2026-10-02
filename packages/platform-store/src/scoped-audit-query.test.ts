@@ -567,115 +567,125 @@ describe("controlled PostgreSQL audit query", () => {
 		).rejects.toMatchObject({ code: "unavailable" });
 	});
 
-	it("projects actual issued/revoked credentials in administrator mixed pages without granting own execution access", async () => {
-		const f = await fixture();
-		const other = await fixture(undefined, f.agentId);
-		const adapter = new PostgresPersonalApiCredentialStoreV1({
-			databaseUrl: database.databaseUrl,
-		});
-		const credentials = createPersonalApiCredentialUseCaseV1({
-			transaction: adapter,
-			userDirectory: {
-				resolveUser: async () =>
-					f.scope.kind === "execution" ? (f.scope.user ?? null) : null,
-			},
-		});
-		try {
-			const issueRequest = {
-				userId: f.principal.id,
-				idempotencyKey: randomUUID(),
-				...request(),
-			};
-			const input = { scopes: ["agent:use"] as const, expiresAt: null };
-			const issued = await credentials.issue(issueRequest, input);
-			expect(issued.credential).toBeTruthy();
-			await credentials.issue({ ...issueRequest, ...request() }, input);
-			await credentials.revoke(
-				{ userId: f.principal.id, idempotencyKey: randomUUID(), ...request() },
-				issued.metadata.credentialId,
-			);
-			const stored =
-				await sql`select id, action, details from platform.audit_events
-				where actor_id = ${f.principal.id} and action in ('api.credential.issued', 'api.credential.revoked')`;
-			expect(stored).toHaveLength(2);
-			const source = await credentialQueryFixture(f);
-			const applicationSource = await credentialQueryFixture(
-				other,
-				"application",
-			);
-			await queryUseGrant(f);
-			for (const row of stored) {
-				const record = await query.getAudit(admin, row.id, detail, request());
-				expect(record).toMatchObject({
-					action: row.action,
-					result: "succeeded",
-					summary: row.action,
-					actor: { kind: "user", actorId: f.principal.id },
-					subject: {
-						kind: "api_credential",
-						subjectId: issued.metadata.credentialId,
+	it.each(["ordinary", "literal-unknown"])(
+		"projects actual issued/revoked credentials for %s users without granting own execution access",
+		async (identity) => {
+			const f = await fixture({
+				kind: "user",
+				id: identity === "literal-unknown" ? "unknown" : randomUUID(),
+			});
+			const other = await fixture(undefined, f.agentId);
+			const adapter = new PostgresPersonalApiCredentialStoreV1({
+				databaseUrl: database.databaseUrl,
+			});
+			const credentials = createPersonalApiCredentialUseCaseV1({
+				transaction: adapter,
+				userDirectory: {
+					resolveUser: async () =>
+						f.scope.kind === "execution" ? (f.scope.user ?? null) : null,
+				},
+			});
+			try {
+				const issueRequest = {
+					userId: f.principal.id,
+					idempotencyKey: randomUUID(),
+					...request(),
+				};
+				const input = { scopes: ["agent:use"] as const, expiresAt: null };
+				const issued = await credentials.issue(issueRequest, input);
+				expect(issued.credential).toBeTruthy();
+				await credentials.issue({ ...issueRequest, ...request() }, input);
+				await credentials.revoke(
+					{
+						userId: f.principal.id,
+						idempotencyKey: randomUUID(),
+						...request(),
 					},
-					executionId: null,
-					originalPrincipal: null,
-					authorizationRecordId: null,
-				});
-				expect(row.details).toEqual(input);
-				const serialized = JSON.stringify(record);
-				for (const privateValue of [
-					issued.credential,
-					"credentialHash",
-					"scopes",
-					"expiresAt",
-					"details",
-				])
-					expect(serialized).not.toContain(privateValue);
-				expect(record.summary).not.toContain(issued.metadata.credentialId);
-				for (const deniedScope of [
-					f.scope,
-					other.scope,
-					source,
-					applicationSource,
-				])
-					await expect(
-						query.getAudit(deniedScope, row.id, detail, request()),
-					).rejects.toMatchObject({ code: "access_denied" });
-				for (const ownSource of [source, applicationSource]) {
-					expect(
-						(
-							await query.listAudit(
-								ownSource,
-								{ ...page, filters: { action: row.action } },
-								request(),
-							)
-						).items,
-					).toEqual([]);
+					issued.metadata.credentialId,
+				);
+				const stored =
+					await sql`select id, action, details from platform.audit_events
+				where actor_id = ${f.principal.id} and action in ('api.credential.issued', 'api.credential.revoked')`;
+				expect(stored).toHaveLength(2);
+				const source = await credentialQueryFixture(f);
+				const applicationSource = await credentialQueryFixture(
+					other,
+					"application",
+				);
+				await queryUseGrant(f);
+				for (const row of stored) {
+					const record = await query.getAudit(admin, row.id, detail, request());
+					expect(record).toMatchObject({
+						action: row.action,
+						result: "succeeded",
+						summary: row.action,
+						actor: { kind: "user", actorId: f.principal.id },
+						subject: {
+							kind: "api_credential",
+							subjectId: issued.metadata.credentialId,
+						},
+						executionId: null,
+						originalPrincipal: null,
+						authorizationRecordId: null,
+					});
+					expect(row.details).toEqual(input);
+					const serialized = JSON.stringify(record);
+					for (const privateValue of [
+						issued.credential,
+						"credentialHash",
+						"scopes",
+						"expiresAt",
+						"details",
+					])
+						expect(serialized).not.toContain(privateValue);
+					expect(record.summary).not.toContain(issued.metadata.credentialId);
+					for (const deniedScope of [
+						f.scope,
+						other.scope,
+						source,
+						applicationSource,
+					])
+						await expect(
+							query.getAudit(deniedScope, row.id, detail, request()),
+						).rejects.toMatchObject({ code: "access_denied" });
+					for (const ownSource of [source, applicationSource]) {
+						expect(
+							(
+								await query.listAudit(
+									ownSource,
+									{ ...page, filters: { action: row.action } },
+									request(),
+								)
+							).items,
+						).toEqual([]);
+					}
 				}
-			}
-			const filters = { principal: f.principal };
-			const expected = await query.listAudit(
-				admin,
-				{ ...page, filters },
-				request(),
-			);
-			expect(expected.items.map((item) => item.auditId)).toEqual(
-				expect.arrayContaining([f.auditId, ...stored.map((row) => row.id)]),
-			);
-			const ids: string[] = [];
-			let cursor: string | undefined;
-			do {
-				const result = await query.listAudit(
+				const filters = { principal: f.principal };
+				const expected = await query.listAudit(
 					admin,
-					{ limit: 1, filters, ...(cursor ? { cursor } : {}) },
+					{ ...page, filters },
 					request(),
 				);
-				ids.push(...result.items.map((item) => item.auditId));
-				cursor = result.nextCursor ?? undefined;
-			} while (cursor);
-			expect(ids).toEqual(expected.items.map((item) => item.auditId));
-		} finally {
-			await adapter.close();
-		}
-	});
+				expect(expected.items.map((item) => item.auditId)).toEqual(
+					expect.arrayContaining([f.auditId, ...stored.map((row) => row.id)]),
+				);
+				const ids: string[] = [];
+				let cursor: string | undefined;
+				do {
+					const result = await query.listAudit(
+						admin,
+						{ limit: 1, filters, ...(cursor ? { cursor } : {}) },
+						request(),
+					);
+					ids.push(...result.items.map((item) => item.auditId));
+					cursor = result.nextCursor ?? undefined;
+				} while (cursor);
+				expect(ids).toEqual(expected.items.map((item) => item.auditId));
+			} finally {
+				await adapter.close();
+			}
+		},
+	);
 
 	it("preserves actual failed/rejected credential facts with known or genuinely unknown subjects", async () => {
 		const f = await fixture();
