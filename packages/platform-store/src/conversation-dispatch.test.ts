@@ -778,7 +778,9 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 	);
 
 	it("derives recovery digest from accepted input and rejects expired or foreign leases", async () => {
-		const work = await seed();
+		const work = await seed("conversation.turn.submit.v1", {
+			legacySelection: true,
+		});
 		const { store, decision } = await claim(work.itemId);
 		try {
 			if (decision.outcome !== "claimed")
@@ -2612,7 +2614,7 @@ describe("PostgreSQL terminal outbox event recovery", () => {
 					identityRevision: "identity-1",
 					agentAuthorizationRevision: "authorization-dispatch",
 					accessSources: [{ kind: "user", userId: "actor-dispatch" }],
-				})})`;
+				})}) on conflict (execution_id) do nothing`;
 			await client`insert into platform.audit_events
 				(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
 				values (${`acceptance-${work.executionId}`}, 'trace-original', 'user', 'actor-dispatch', 'task.authorization.accepted', 'execution',
@@ -2836,7 +2838,7 @@ describe("authorized historical metadata rearm", () => {
 				agentAuthorizationRevision: "authorization-dispatch",
 				accessSources: [{ kind: "user", userId: "actor-dispatch" }],
 			},
-		)})`;
+		)}) on conflict (execution_id) do nothing`;
 		await client`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
 			values (${`acceptance-${work.executionId}`}, 'trace-original', 'user', 'actor-dispatch', 'task.authorization.accepted', 'execution', ${work.executionId}, 'succeeded', 'request-original', 'agent-dispatch', ${client.json({ authorizationRecordId })})`;
 		const eventTransaction = new PostgresConversationEventTransactionV1({
