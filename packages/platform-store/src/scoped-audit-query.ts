@@ -396,7 +396,9 @@ function credentialMutationSummary(
 		row.result !== row.outcome ||
 		!(
 			row.actorType === "user" ||
-			(row.actorType === "unknown" && row.actorId === "unknown")
+			(row.actorType === "unknown" &&
+				row.actorId === "unknown" &&
+				row.targetId === "unknown")
 		) ||
 		typeof row.details !== "object" ||
 		row.details === null ||
