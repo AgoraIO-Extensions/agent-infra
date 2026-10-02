@@ -178,9 +178,23 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 			"insert into platform.agent_availability(agent_id,target_type,target_id) values($1,'organization','org_current')",
 			[configuration.agentId],
 		);
+		const deploymentBase = workloadDesiredFixture(
+			1,
+			configuration.agentId,
+			"internal-only",
+		);
 		const deployment = {
-			...workloadDesiredFixture(1, configuration.agentId, "internal-only"),
+			...deploymentBase,
 			configRevision: configuration.revision,
+			imageDigest: configuration.source.imageDigest,
+			registryAdmission: {
+				...deploymentBase.registryAdmission,
+				immutableDigest: configuration.source.imageDigest,
+				policyEvidence: {
+					...deploymentBase.registryAdmission.policyEvidence,
+					imageDigest: configuration.source.imageDigest,
+				},
+			},
 		};
 		const runtimeVersion = { configuration, deployment };
 		await db.unsafe(
