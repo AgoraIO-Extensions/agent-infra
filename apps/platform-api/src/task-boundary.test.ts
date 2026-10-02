@@ -171,46 +171,6 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 			[configuration.agentId, JSON.stringify(configuration)],
 		);
 		await db.unsafe(
-			"delete from platform.relay_key_versions where (purpose='personal' and subject_id=$1) or (purpose='agent-default' and subject_id=$2)",
-			[identity.userId, configuration.agentId],
-		);
-		await db.unsafe(
-			"delete from platform.relay_key_subjects where (purpose='personal' and subject_id=$1) or (purpose='agent-default' and subject_id=$2)",
-			[identity.userId, configuration.agentId],
-		);
-		for (const key of [
-			{
-				purpose: "personal",
-				subjectId: identity.userId,
-				keyId: "task-boundary-personal-key",
-			},
-			{
-				purpose: "agent-default",
-				subjectId: configuration.agentId,
-				keyId: "task-boundary-agent-key",
-			},
-		] as const) {
-			await db.unsafe(
-				"insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values($1,$2,1,1)",
-				[key.purpose, key.subjectId],
-			);
-			await db.unsafe(
-				"insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values($1,$2,1,$3,$4::text::jsonb)",
-				[
-					key.purpose,
-					key.subjectId,
-					key.keyId,
-					JSON.stringify({
-						schemaVersion: 1,
-						purpose: key.purpose,
-						subjectId: key.subjectId,
-						keyId: key.keyId,
-						keyVersion: 1,
-					}),
-				],
-			);
-		}
-		await db.unsafe(
 			"insert into platform.agent_owners(agent_id,owner_id,created_at) values($1,'owner_01',now())",
 			[configuration.agentId],
 		);

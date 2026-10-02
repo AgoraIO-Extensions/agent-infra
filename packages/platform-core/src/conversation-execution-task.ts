@@ -324,13 +324,19 @@ export function createConversationTaskAdmissionUseCaseV1(
 			} catch {
 				return unavailable();
 			}
-			if (
-				authority.agentId !== command.agentId ||
-				!authority.taskBoundary ||
-				!isTaskApiChannelV1(
+			const apiTaskAuthority =
+				authority.taskBoundary !== undefined &&
+				isTaskApiChannelV1(
 					authority.channelId,
 					authority.taskBoundary.principal,
-				)
+				);
+			const apiChannel =
+				authority.channelId === "api" ||
+				authority.channelId === "api:user" ||
+				authority.channelId === "api:application";
+			if (
+				authority.agentId !== command.agentId ||
+				(apiChannel && !apiTaskAuthority)
 			)
 				return { outcome: "denied", reason: "conversation_unavailable" };
 			const requestDigest = digest({
