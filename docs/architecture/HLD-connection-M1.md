@@ -248,6 +248,16 @@ CAS 和失效处理，不回退 Grafana、机器人身份或密码；业务 WRIT
 机器 client secret 仅从部署 Secret 注入。正式上线验收仍须完成真实授权码、个人身份与有界 READ，
 代码测试不替代真实 Provider 验收。
 
+DataLego 取消防护以不可变 `datalego-connection-v5` 和 `@v5` 发布，保留个人 OAuth、
+四个 Action 的名称、effect、scope 与固定 origins；历史 v4 executor 保持不变。
+取消前先读取原任务状态，已终结的 `success/error/cancel/forbid` 返回
+`cancellation.applied=false, reason=already_finished`，不提交 PUT、不声称取消成功；
+只有 `pending/waiting/running` 才发送一次取消。状态读取失败或未知状态不提交取消，
+Adapter 以 `submissionOutcome=rejected` 明确证明该逻辑操作未提交，不进入对账；
+成功的空取消响应只报告请求已接受，不声称任务已经取消。
+取消 HTTP 非成功响应必须保留 HTTP 状态，但不能只凭 4xx 声称外部效果确定未发生；
+无明确提交结果契约时保留 UNCERTAIN，禁止盲重试。新版本仍遵守 30.0 的审批与授权门禁。
+
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
 Bearer 认证。账号 identity proof 使用 `whoami` 后精确匹配唯一 active user，并以稳定 user ID

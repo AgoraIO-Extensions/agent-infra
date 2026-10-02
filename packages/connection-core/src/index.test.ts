@@ -1505,6 +1505,71 @@ describe("Connection application service", () => {
 		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
 	});
 
+	it("records an adapter-proven pre-submit rejection without reconciliation", async () => {
+		const repository = new MemoryRepository();
+		let executions = 0;
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => {
+				executions++;
+				throw Object.assign(new Error("No mutation submitted"), {
+					providerCode: "cancel_not_submitted",
+					providerMessage: "Cancellation was not submitted",
+					providerSubmissionOutcome: "rejected",
+				});
+			},
+		});
+		const input = {
+			base: "main",
+			head: "feature/not-submitted",
+			idempotencyKey: "no-mutation-submitted",
+			repository: "acme/widgets",
+			title: "Preflight",
+		};
+		await expect(
+			service.invokeDirect("direct", "github.createPullRequest", input),
+		).rejects.toMatchObject({
+			code: "INVALID_REQUEST",
+			data: {
+				submissionOutcome: "rejected",
+				providerCode: "cancel_not_submitted",
+			},
+		});
+		expect(repository.calls[0]?.status).toBe("FAILED");
+		expect(repository.reconciliationJobs).toHaveLength(0);
+		await service.invokeDirect("direct", "github.createPullRequest", input);
+		expect(executions).toBe(1);
+	});
+
+	it("retains safe HTTP evidence for an explicitly uncertain write without retry", async () => {
+		const repository = new MemoryRepository();
+		let executions = 0;
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => {
+				executions++;
+				throw Object.assign(new Error("private upstream body"), {
+					providerStatus: 400,
+					submissionUncertain: true,
+				});
+			},
+		});
+		const input = {
+			base: "main",
+			head: "feature/uncertain",
+			idempotencyKey: "uncertain-http-evidence",
+			repository: "acme/widgets",
+			title: "Uncertain",
+		};
+		await expect(
+			service.invokeDirect("direct", "github.createPullRequest", input),
+		).rejects.toMatchObject({
+			code: "PROVIDER_UNCERTAIN",
+			data: { providerHttpStatus: 400 },
+		});
+		expect(repository.calls[0]?.status).toBe("UNCERTAIN");
+		await service.invokeDirect("direct", "github.createPullRequest", input);
+		expect(executions).toBe(1);
+	});
+
 	it("reconciles an admitted write with missing terminal evidence", async () => {
 		const repository = new MemoryRepository();
 		const service = new ConnectionApplicationService(repository, {
