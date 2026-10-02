@@ -278,8 +278,6 @@ export class DataLegoV5Adapter
 		allowEmpty = false,
 	) {
 		const response = await this.send(new URL(path, apiOrigin), init, 120_000);
-		if (response.status === 401 || response.status === 403)
-			throw invalidCredential();
 		if (!response.ok)
 			throw Object.assign(
 				failure(`DataLego request failed with HTTP ${response.status}`),
@@ -287,12 +285,24 @@ export class DataLegoV5Adapter
 					providerStatus: response.status,
 					// HTTP status alone does not prove a mutation was rejected before effect.
 					submissionUncertain: init.method !== "GET",
+					...(response.status === 401 || response.status === 403
+						? { providerCredentialInvalid: true }
+						: {}),
 				},
 			);
 		const text = await responseText(response, 5 * 1024 * 1024);
 		if (allowEmpty && !text.trim())
 			return { cancellation: { requested: true } };
-		return parseJson(text);
+		const result = parseJson(text);
+		if (allowEmpty && result.status !== "cancel")
+			throw Object.assign(
+				failure("DataLego returned an unknown cancellation response"),
+				{
+					providerStatus: response.status,
+					submissionUncertain: true,
+				},
+			);
+		return result;
 	}
 
 	private requireRedirect(redirectUri: string) {

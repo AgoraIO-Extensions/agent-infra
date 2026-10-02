@@ -255,6 +255,8 @@ DataLego 取消防护以不可变 `datalego-connection-v5` 和 `@v5` 发布，�
 只有 `pending/waiting/running` 才发送一次取消。状态读取失败或未知状态不提交取消，
 Adapter 以 `submissionOutcome=rejected` 明确证明该逻辑操作未提交，不进入对账；
 成功的空取消响应只报告请求已接受，不声称任务已经取消。
+非空取消响应只有明确的 `status=cancel` 可作为已取消结果；未知对象（包括 HTTP 200 的空 JSON
+对象）不能标记成功，必须进入 UNCERTAIN。
 取消 HTTP 非成功响应必须保留 HTTP 状态，但不能只凭 4xx 声称外部效果确定未发生；
 无明确提交结果契约时保留 UNCERTAIN，禁止盲重试。新版本仍遵守 30.0 的审批与授权门禁。
 

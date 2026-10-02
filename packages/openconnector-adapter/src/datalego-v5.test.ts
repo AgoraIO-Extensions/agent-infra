@@ -93,7 +93,7 @@ test("live jobs send cancellation once; unknown states never submit", async () =
 });
 
 test("cancellation errors preserve status without claiming HTTP 400 proves no effect", async () => {
-	for (const status of [400, 429, 500]) {
+	for (const status of [400, 401, 403, 429, 500]) {
 		let writes = 0;
 		const adapter = new DataLegoV5Adapter(async (_url, init) => {
 			if (init?.method === "GET") return Response.json({ status: "running" });
@@ -116,6 +116,12 @@ test("cancellation errors preserve status without claiming HTTP 400 proves no ef
 						.submissionUncertain,
 					true,
 				);
+				if (status === 401 || status === 403)
+					assert.equal(
+						(error as Error & { providerCredentialInvalid: boolean })
+							.providerCredentialInvalid,
+						true,
+					);
 				assert.equal(error.message.includes("private-upstream-content"), false);
 				return true;
 			},
@@ -163,5 +169,29 @@ test("successful empty cancellation response reports requested, not confirmed ca
 			}),
 			{ cancellation: { requested: true } },
 		);
+	}
+});
+
+test("HTTP 200 with an unrecognized cancellation object remains uncertain", async () => {
+	for (const result of [
+		{},
+		{ status: "running" },
+		{ message: "private-upstream-content" },
+	]) {
+		let writes = 0;
+		const adapter = new DataLegoV5Adapter(async (_url, init) => {
+			if (init?.method === "GET") return Response.json({ status: "running" });
+			writes++;
+			return Response.json(result);
+		}, config);
+		await assert.rejects(
+			adapter.execute({
+				action: "datalego.cancel_query",
+				credential,
+				input: { jobId: "job-1" },
+			}),
+			{ providerStatus: 200, submissionUncertain: true },
+		);
+		assert.equal(writes, 1);
 	}
 });
