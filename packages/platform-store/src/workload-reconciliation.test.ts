@@ -1485,6 +1485,279 @@ describe("PostgreSQL Workload steps", () => {
 			await expectResolverRejection();
 		},
 	);
+	it.each(["custom", "standard"] as const)(
+		"retains generic Secret active-origin checks for %s under trusted V4",
+		async (kind) => {
+			if (kind === "standard") {
+				const [row] = await sql<
+					{ configuration: Record<string, unknown> }[]
+				>`select configuration from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
+				const configuration = {
+					...row?.configuration,
+					environment: [],
+					modelConfiguration: {
+						catalogRevision: "catalog-a",
+						options: [
+							{
+								optionId: "option-a",
+								endpointId: "endpoint-a",
+								modelId: "model-a",
+								reasoningLevels: ["medium"],
+								credential: {
+									secretId: "model-option-a",
+									version: 1,
+									isSet: true,
+								},
+							},
+						],
+						defaultOptionId: "option-a",
+						defaultReasoningLevel: "medium",
+					},
+					source: {
+						kind,
+						templateId: "template-a",
+						imageDigest: `sha256:${"a".repeat(64)}`,
+						admissionRevision: "admission-a",
+						allowedEnvironmentKeys: [],
+						allowedSecretKeys: ["API_KEY"],
+						platformManagedKeys: [],
+						connectionEnabled: false,
+					},
+				};
+				await sql`update platform.agent_configuration_revisions set configuration = ${sql.json(configuration)} where agent_id = 'agent-a' and revision = 1`;
+			}
+			const record = secretCryptoFixture().encryptor.encrypt({
+				schemaVersion: 1,
+				secretId: "generic-key",
+				ownerType: "agent-owner",
+				ownerId: "owner-a",
+				agentId: "agent-a",
+				name: "API_KEY",
+				secretVersion: 1,
+				configRevision: 1,
+				plaintext: "synthetic-generic-value",
+				occurredAt: "2026-09-07T00:00:00Z",
+			});
+			await insertSecretRecord(record);
+			await configureSecretReference(2, {
+				secretId: record.secretId,
+				name: record.name,
+				version: 1,
+			});
+			const store = openPostgresWorkloadReconciliationStoreV1({
+				...database,
+				runtimeModelVersion: 4,
+			});
+			const step = vi.fn(
+				async (_input: Parameters<Parameters<typeof store.runNext>[1]>[0]) => {
+					throw new Error("stop after input inspection");
+				},
+			);
+			try {
+				await expect(store.runNext("worker-a", step)).rejects.toThrow(
+					"Workload reconciliation persistence failed",
+				);
+				expect(step).not.toHaveBeenCalled();
+				const active = validatePlatformSecretRecordV1({
+					...materializedRecord(record, "observed"),
+					lifecycleState: "active",
+				});
+				await sql`update platform.secret_records set record = ${sql.json(active)}, lifecycle_state = 'active' where secret_id = 'generic-key'`;
+				await expect(store.runNext("worker-a", step)).rejects.toThrow(
+					"Workload reconciliation persistence failed",
+				);
+				expect(step).toHaveBeenCalledOnce();
+				expect(step.mock.calls[0]?.[0].secrets?.bindings).toMatchObject([
+					{
+						materialization: "active-origin",
+						record: { secretId: "generic-key", lifecycleState: "active" },
+					},
+				]);
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
+	it.each(["ready-upgrade", "rejected-preflight"] as const)(
+		"keeps pending model Keys untouched through V4 %s with the next configuration revision",
+		async (scenario) => {
+			const crypto = secretCryptoFixture();
+			const api = fakeKubernetesApi();
+			const catalog = catalogFixture();
+			const catalogEndpoint = catalog.endpoints[0];
+			if (!catalogEndpoint) throw new Error();
+			catalog.endpoints.push({
+				...catalogEndpoint,
+				endpointId: "endpoint-b",
+				baseUrl: "https://alternate.example.test/private/v1",
+				origin: "https://alternate.example.test",
+			});
+			const modelOptions = ["a", "b"].map((id) => ({
+				optionId: `option-${id}`,
+				endpointId: `endpoint-${id}`,
+				modelId: "model-a",
+				reasoningLevels: ["medium"],
+				credential: { secretId: `credential-${id}`, version: 1, isSet: true },
+			}));
+			const configuration = {
+				...structuredClone(agentConfigurationConformanceRecordV1),
+				agentId: "agent-a",
+				revision: 1,
+				secrets: [],
+				environment: [],
+				source: {
+					kind: "standard",
+					templateId: "template-a",
+					imageDigest: `sha256:${"a".repeat(64)}`,
+					admissionRevision: "admission-a",
+					allowedEnvironmentKeys: [],
+					allowedSecretKeys: [],
+					platformManagedKeys: [],
+					connectionEnabled: false,
+				},
+				modelConfiguration: {
+					catalogRevision: "catalog-a",
+					options: modelOptions,
+					defaultOptionId: "option-a",
+					defaultReasoningLevel: "medium",
+				},
+			};
+			await sql`update platform.agent_configuration_revisions set configuration = ${sql.json(configuration as unknown as postgres.JSONValue)} where agent_id = 'agent-a' and revision = 1`;
+			for (const option of modelOptions)
+				await insertSecretRecord(
+					crypto.encryptor.encrypt({
+						schemaVersion: 1,
+						secretId: option.credential.secretId,
+						ownerType: "agent-owner",
+						ownerId: "owner-a",
+						agentId: "agent-a",
+						name: `model:${option.optionId}`,
+						secretVersion: 1,
+						configRevision: 1,
+						plaintext: `synthetic-${option.optionId}-credential`,
+						occurredAt: "2026-09-07T00:00:00Z",
+					}),
+				);
+			const decrypt = vi.fn();
+			const validate = vi.fn();
+			const options = {
+				runtimeModelVersion: 4 as const,
+				workerId: "worker-a",
+				client: api.client,
+				policy: workloadTestPolicy,
+				registry: workloadRegistryFixture({
+					schemaVersion: 1,
+					interactionMode: "platform-adapter",
+					protocol: "acp",
+					service: { port: 8080 },
+					health: { path: "/healthz" },
+					capabilities: {},
+				}),
+				admissionPolicyRef: "policy-a",
+				registrySubjectRef: "subject-a",
+				modelCatalog: createDeploymentModelCatalogAdapterV1({
+					load: async () => catalog,
+				}),
+				templateModelBindings: [
+					{
+						templateId: "template-a",
+						imageDigest: `sha256:${"a".repeat(64)}`,
+						driver: "codex" as const,
+						protocol: "openai-responses-v1" as const,
+					},
+				],
+				modelAccess: { validate },
+				decryptor: { decrypt },
+				fetch: (async () => new Response("ok")) as typeof fetch,
+				probeRuntime: async () => ({
+					core: "passed" as const,
+					capabilities: {},
+				}),
+			};
+			const store = openPostgresWorkloadReconciliationStoreV1({
+				...database,
+				runtimeModelVersion: 4,
+				retryDelayMs: 0,
+				monitorDelayMs: 0,
+			});
+			const originalRecords =
+				await sql`select record from platform.secret_records order by secret_id`;
+			try {
+				for (const revision of scenario === "ready-upgrade" ? [1, 2] : [2]) {
+					if (revision === 2) {
+						const next = {
+							...configuration,
+							revision,
+							modelConfiguration: {
+								...configuration.modelConfiguration,
+								defaultOptionId: "option-b",
+							},
+						};
+						await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 2, ${configuration.source.imageDigest}, ${sql.json(next as unknown as postgres.JSONValue)}, now())`;
+						await sql`update platform.agents set current_configuration_revision = 2 where id = 'agent-a'`;
+					}
+					for (let step = 0; step < 16; step++)
+						await createWorkloadReconciliationV1({
+							store,
+							runtime: createWorkloadRuntimeV1({
+								...options,
+								...(scenario === "rejected-preflight"
+									? { registry: { admit: rejectRegistryAdmission } }
+									: {}),
+							}),
+						}).tick("worker-a");
+					const [row] =
+						await sql`select state from platform.workload_reconciliations where agent_id = 'agent-a'`;
+					if (scenario === "ready-upgrade") {
+						expect(row?.state).toMatchObject({
+							phase: "ready",
+							rollback: false,
+							verified: {
+								configuration: { revision },
+								modelProjection: { schemaVersion: 4 },
+							},
+						});
+					} else {
+						// The revision-1 record is still pending when revision 2 fails
+						// admission before projection. Cleanup must not require active-origin.
+						expect(row?.state).toMatchObject({
+							phase: "failed",
+							verified: null,
+						});
+						expect(row?.state.candidate.modelProjection).toBeUndefined();
+					}
+					expect(
+						await sql`select record from platform.secret_records order by secret_id`,
+					).toEqual(originalRecords);
+					expect(
+						(
+							await sql`select lifecycle_state from platform.secret_records order by secret_id`
+						).map((row) => row.lifecycle_state),
+					).toEqual(["pending", "pending"]);
+					expect(decrypt).not.toHaveBeenCalled();
+					expect(validate).not.toHaveBeenCalled();
+					expect(
+						await sql`select id from platform.audit_events where action = 'secret.decrypt'`,
+					).toHaveLength(0);
+					const serializedResources = JSON.stringify([
+						...api.resources.values(),
+					]);
+					for (const forbidden of [
+						"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_",
+						"credential-a",
+						"credential-b",
+						"synthetic-option-a-credential",
+						"synthetic-option-b-credential",
+					])
+						expect(serializedResources).not.toContain(forbidden);
+				}
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
 	it("persists model projections across Workers, activates atomically and retains active models after candidate rejection", async () => {
 		const crypto = secretCryptoFixture();
 		const api = fakeKubernetesApi();
