@@ -2,6 +2,8 @@ import { OpaqueIdV1Schema } from "@agent-infra/contracts";
 import {
 	PersonalApiCredentialIssueRequestV1Schema,
 	PersonalApiCredentialIssueResponseV1Schema,
+	PersonalApiCredentialListQueryV1Schema,
+	PersonalApiCredentialPageV1Schema,
 	PersonalApiCredentialRevokeResponseV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
@@ -52,7 +54,7 @@ export function registerPersonalApiCredentialRoutes(
 ): void {
 	async function handle(
 		context: Context,
-		operation: PersonalApiCredentialMutationV1,
+		operation: PersonalApiCredentialMutationV1 | "api.credential.metadata.read",
 	): Promise<Response> {
 		const request = context.req.raw;
 		const metadata = requestMetadata(request);
@@ -67,7 +69,10 @@ export function registerPersonalApiCredentialRoutes(
 					metadata.traceId,
 				);
 			}
-			if (new URL(request.url).search !== "") {
+			if (
+				operation !== "api.credential.metadata.read" &&
+				new URL(request.url).search !== ""
+			) {
 				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
 			}
 			const identity = await resolveIdentity(
@@ -76,6 +81,31 @@ export function registerPersonalApiCredentialRoutes(
 				metadata.traceId,
 			);
 			trustedUserId = identity.userId;
+			if (operation === "api.credential.metadata.read") {
+				const params = new URL(request.url).searchParams;
+				for (const key of params.keys()) {
+					if (params.getAll(key).length !== 1)
+						throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+				}
+				const query = PersonalApiCredentialListQueryV1Schema.safeParse(
+					Object.fromEntries(params),
+				);
+				if (!query.success)
+					throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+				await requireEmptyBody(request, metadata.traceId);
+				submitted = true;
+				const result = await dependencies.credentials.list(
+					{ ...metadata, userId: identity.userId },
+					query.data,
+				);
+				const response = PersonalApiCredentialPageV1Schema.safeParse(result);
+				if (!response.success)
+					throw new HttpProtocolError(
+						"DEPENDENCY_UNAVAILABLE",
+						metadata.traceId,
+					);
+				return context.json(response.data, 200);
+			}
 			const trusted = {
 				...metadata,
 				userId: identity.userId,
@@ -142,6 +172,9 @@ export function registerPersonalApiCredentialRoutes(
 			return context.json(protocol.body, protocol.status);
 		}
 	}
+	app.get("/api/v2/me/api-credentials", (context) =>
+		handle(context, "api.credential.metadata.read"),
+	);
 	app.post("/api/v2/me/api-credentials", (context) =>
 		handle(context, "api.credential.issued"),
 	);

@@ -22,6 +22,7 @@ import {
 import { createClient } from "../../web/src/pilot/generated-v2/client/index.ts";
 import {
 	issuePersonalApiCredentialV2,
+	listPersonalApiCredentialsV2,
 	revokePersonalApiCredentialV2,
 } from "../../web/src/pilot/generated-v2/sdk.gen.ts";
 import type { IssuePersonalApiCredentialV2Data } from "../../web/src/pilot/generated-v2/types.gen.ts";
@@ -165,6 +166,96 @@ afterAll(async () => {
 });
 
 describe("formal deployment personal credential governance over PostgreSQL and generated SDK", () => {
+	it("lists only current personal metadata through the actual process and generated SDK", async () => {
+		const { client } = await start();
+		const issued = await Promise.all(
+			["list.one", "list.two", "list.three"].map((key) => issue(client, key)),
+		);
+		const foreign = await issue(client, "list.foreign", "session_bob");
+		const expected = issued
+			.map((result) => {
+				expect(result.response?.status).toBe(201);
+				if (!result.data || result.data.replayed)
+					throw new Error("No actual first-delivery credential");
+				return result.data.metadata;
+			})
+			.toSorted((left, right) =>
+				left.credentialId.localeCompare(right.credentialId),
+			);
+		const first = await listPersonalApiCredentialsV2({
+			client,
+			auth: "session_alice",
+			query: { limit: 2 },
+		});
+		expect(first.response?.status).toBe(200);
+		expect(first.response?.headers.get("Cache-Control")).toBe("no-store");
+		if (!first.data?.nextCursor) throw new Error("No actual pagination cursor");
+		const second = await listPersonalApiCredentialsV2({
+			client,
+			auth: "session_alice",
+			query: { limit: 2, cursor: first.data.nextCursor },
+		});
+		expect(second.response?.status).toBe(200);
+		expect(second.data?.nextCursor).toBeNull();
+		expect([
+			...(first.data?.items ?? []),
+			...(second.data?.items ?? []),
+		]).toEqual(expected);
+		const bob = await listPersonalApiCredentialsV2({
+			client,
+			auth: "session_bob",
+		});
+		expect(bob.response?.status).toBe(200);
+		expect(bob.data?.items).toEqual([foreign.data?.metadata]);
+		const audits =
+			await databaseClient`select * from platform.audit_events where action='api.credential.metadata.read'`;
+		expect(audits).toHaveLength(3);
+		const serialized = JSON.stringify({
+			first: first.data,
+			second: second.data,
+			bob: bob.data,
+			audits,
+			logLines,
+		});
+		for (const result of [...issued, foreign]) {
+			if (!result.data?.credential)
+				throw new Error("No actual issued material");
+			expect(serialized).not.toContain(result.data.credential);
+			expect(serialized).not.toContain(
+				createHash("sha256").update(result.data.credential).digest("hex"),
+			);
+		}
+	});
+	it.each([
+		"disabled",
+		"missing",
+		"malformed",
+		"error",
+		"revision_changed",
+		"finally_disabled",
+	] as const)(
+		"GET recheck current identity and roll back on %s",
+		async (mode) => {
+			const { client } = await start();
+			const issued = await issue(client, "identity.issue");
+			if (!issued.data) throw new Error("No issued credential");
+			deployment.state.directoryMode = mode;
+			deployment.state.directoryCalls = 0;
+			const list = await listPersonalApiCredentialsV2({
+				client,
+				auth: "session_alice",
+			});
+			expect(list.response?.status).toBe(
+				mode === "disabled" || mode === "missing" || mode === "finally_disabled"
+					? 403
+					: 503,
+			);
+			const [row] =
+				await databaseClient`select scopes from platform.platform_api_credentials where id=${issued.data.metadata.credentialId}`;
+			expect(row?.scopes).toEqual(issued.data.metadata.scopes);
+		},
+	);
+
 	it("exports actual correlated governance traces without credential material or hashes", async () => {
 		const exports: { path: string; body: Buffer }[] = [];
 		const collector = createServer(async (request, response) => {

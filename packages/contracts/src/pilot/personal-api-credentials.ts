@@ -51,3 +51,17 @@ export const PersonalApiCredentialRevokeResponseV1Schema = z.strictObject({
 	metadata: PersonalApiCredentialMetadataV1Schema,
 	replayed: z.boolean(),
 });
+export const PersonalApiCredentialListQueryV1Schema = z.strictObject({
+	limit: z.coerce.number().int().min(1).max(100).optional(),
+	cursor: z
+		.string()
+		.regex(/^[A-Za-z0-9_-]{1,4096}$/)
+		.optional(),
+});
+export const PersonalApiCredentialPageV1Schema = z.strictObject({
+	items: z.array(PersonalApiCredentialMetadataV1Schema).max(100),
+	nextCursor: z
+		.string()
+		.regex(/^[A-Za-z0-9_-]{1,4096}$/)
+		.nullable(),
+});

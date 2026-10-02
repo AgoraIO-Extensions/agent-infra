@@ -1432,11 +1432,54 @@ function isPersonalRelayKeyV2OpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #1037 GET slice: only the exact metadata read, two schemas and read audit action.
+function isPersonalCredentialListOpenApiAddition(previous, current) {
+	const path = "/api/v2/me/api-credentials";
+	const names = [
+		"PersonalApiCredentialListQueryV1",
+		"PersonalApiCredentialPageV1",
+	];
+	if (
+		previous.paths?.[path]?.get !== undefined ||
+		names.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		get: current.paths?.[path]?.get,
+		schemas: Object.fromEntries(
+			names
+				.filter((name) => current.components?.schemas?.[name] !== undefined)
+				.map((name) => [name, current.components.schemas[name]]),
+		),
+		audit: current.components?.schemas?.ScopedPlatformAuditActionV1,
+	};
+	const fingerprint = createHash("sha256")
+		.update(JSON.stringify(addition))
+		.digest("hex");
+	if (
+		![
+			"a0900c9a7aea8b1a7142081b2d733cca4e92030f66d93bf81c76993096503131",
+			"5d170cf871a434be99dff5f43a54c362ab26e25b2d87714041e506c1429d5962",
+		].includes(fingerprint)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	if (normalized.paths?.[path]) delete normalized.paths[path].get;
+	for (const name of names) delete normalized.components.schemas[name];
+	const actions = normalized.components.schemas.ScopedPlatformAuditActionV1;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) => action !== "api.credential.metadata.read",
+		);
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
 		if (
 			!sameValue(previous, current) &&
+			!isPersonalCredentialListOpenApiAddition(previous, current) &&
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
