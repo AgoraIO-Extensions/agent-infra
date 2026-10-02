@@ -33,6 +33,50 @@ const requireStore = createRequire(
 const postgres = requireStore(
 	"postgres",
 ) as typeof import("../../packages/platform-store/node_modules/postgres");
+
+type TracePair = `${string}:${string}`;
+
+function tracePairCounts(text: string, executionId: string) {
+	const counts = new Map<TracePair, number>();
+	for (const line of text.split("\n")) {
+		if (!line.trim()) continue;
+		const record = JSON.parse(line) as {
+			resourceSpans?: Array<{
+				scopeSpans?: Array<{
+					spans?: Array<{
+						attributes?: Array<{
+							key?: string;
+							value?: { stringValue?: string };
+						}>;
+					}>;
+				}>;
+			}>;
+		};
+		for (const resourceSpan of record.resourceSpans ?? [])
+			for (const scopeSpan of resourceSpan.scopeSpans ?? [])
+				for (const span of scopeSpan.spans ?? []) {
+					const attributes = new Map(
+						(span.attributes ?? []).map((attribute) => [
+							attribute.key,
+							attribute.value?.stringValue,
+						]),
+					);
+					if (attributes.get("executionId") !== executionId) continue;
+					const operationRef = attributes.get("operationRef");
+					const attemptRef = attributes.get("attemptRef");
+					if (!operationRef || !attemptRef) continue;
+					const pair = `${operationRef}:${attemptRef}` as TracePair;
+					counts.set(pair, (counts.get(pair) ?? 0) + 1);
+				}
+	}
+	return counts;
+}
+
+function sortedCounts(counts: Map<TracePair, number>) {
+	return [...counts.entries()].sort(([left], [right]) =>
+		left.localeCompare(right),
+	);
+}
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(check: () => Promise<boolean>) {
 	for (let attempt = 0; attempt < 60; attempt++) {
@@ -585,12 +629,22 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		).rejects.toMatchObject({ code: "access_denied" });
 		const finalMetrics = await collector.query();
 		const finalTraces = await collector.read();
+		const queriedPairCounts = new Map<TracePair, number>();
 		for (const item of queriedOperations) {
 			const fact = item.operation?.fact;
 			if (!fact) throw new Error("Queried operation fact missing");
-			expect(finalTraces).toContain(fact.operationRef);
-			expect(finalTraces).toContain(fact.attemptRef);
+			const pair = `${fact.operationRef}:${fact.attemptRef}` as TracePair;
+			queriedPairCounts.set(pair, (queriedPairCounts.get(pair) ?? 0) + 1);
 		}
+		const observedPairCounts = tracePairCounts(finalTraces, executionId);
+		// Compare the pair multiset, not independent substring membership: this
+		// rejects swapped pairs, duplicate query rows, and unrelated extra traces.
+		expect(sortedCounts(observedPairCounts)).toEqual(
+			sortedCounts(queriedPairCounts),
+		);
+		expect(
+			[...observedPairCounts.values()].reduce((sum, count) => sum + count, 0),
+		).toBe(queriedOperations.length);
 		await backend.waitFor(
 			"PlatformCollectorUnavailable",
 			"resolved",
