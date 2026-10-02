@@ -708,7 +708,7 @@ export type ScopedPlatformAuditProjectionV1 = {
     result: ScopedPlatformAuditResultV1;
     schemaVersion: 1;
     subject: {
-        kind: 'agent_application' | 'agent' | 'secret' | 'secret_key' | 'grant' | 'unknown' | 'conversation' | 'execution' | 'configuration';
+        kind: 'agent_application' | 'agent' | 'secret' | 'secret_key' | 'grant' | 'unknown' | 'conversation' | 'execution' | 'configuration' | 'api_credential';
         subjectId: string;
     };
     summary: string;
