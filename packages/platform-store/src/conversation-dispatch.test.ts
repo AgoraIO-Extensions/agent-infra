@@ -283,6 +283,11 @@ async function seed(
 			values (${purpose}, ${subjectId}, 1, ${keyId},
 				${client.json({ purpose, subjectId, keyId, keyVersion: 1 })})
 			on conflict (purpose, subject_id, key_version) do nothing`;
+		const [persistedKey] = await client<{ key_id: string }[]>`
+			select key_id from platform.relay_key_versions
+			where purpose = ${purpose} and subject_id = ${subjectId} and key_version = 1
+		`;
+		if (!persistedKey) throw new Error("Expected dispatch fixture relay key");
 		await client`insert into platform.task_authorization_records(id, execution_id, boundary)
 			values (${`authorization-${executionId}`}, ${executionId}, ${client.json({
 				schemaVersion: 1,
@@ -302,7 +307,7 @@ async function seed(
 		await client`update platform.conversation_executions set
 			execution_source=${channel === "web" ? "web" : "platform-api"},
 			relay_key_purpose=${purpose}, relay_key_subject_id=${subjectId},
-			relay_key_id=${keyId}, relay_key_version=1
+			relay_key_id=${persistedKey.key_id}, relay_key_version=1
 			where execution_id=${executionId}`;
 	}
 	return {
