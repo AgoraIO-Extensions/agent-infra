@@ -1,6 +1,12 @@
 import { ScopedPlatformAuditQueryV1Schema } from "@agent-infra/contracts/pilot";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, Eye, RotateCcw, Search } from "lucide-react";
+import {
+	ArrowLeft,
+	ArrowRight,
+	ChevronRight,
+	RotateCcw,
+	Search,
+} from "lucide-react";
 import {
 	type FormEvent,
 	useId,
@@ -380,7 +386,6 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 										</TableCell>
 										<TableCell data-label="详情">
 											<Button
-												size="icon"
 												variant="ghost"
 												aria-label="查看审计详情"
 												title="查看审计详情"
@@ -391,7 +396,8 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 													setAuditId(record.auditId);
 												}}
 											>
-												<Eye aria-hidden="true" />
+												<ChevronRight strokeWidth={1.8} aria-hidden="true" />
+												详情
 											</Button>
 										</TableCell>
 									</TableRow>

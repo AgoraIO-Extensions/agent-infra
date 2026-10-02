@@ -5,15 +5,16 @@ import {
 } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
-	ArrowUpRight,
-	CheckCheck,
-	ClipboardList,
-	Grid2X2,
+	Bot,
+	Check,
+	ClipboardMinus,
+	ExternalLink,
 	House,
+	KeyRound,
 	Layers,
 	List,
 	Menu,
-	MessageSquare,
+	MessageCircle,
 	Plus,
 	X,
 } from "lucide-react";
@@ -197,7 +198,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						to="/"
 						onClick={() => setSheet(false)}
 					>
-						<House size={19} aria-hidden="true" />
+						<House size={17} strokeWidth={1.8} aria-hidden="true" />
 						工作台
 					</Link>
 					<Link
@@ -212,7 +213,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						activeOptions={{ explicitUndefined: true }}
 						onClick={() => setSheet(false)}
 					>
-						<Grid2X2 size={19} aria-hidden="true" />
+						<Bot size={17} strokeWidth={1.8} aria-hidden="true" />
 						Agent 目录
 					</Link>
 					<Link
@@ -222,7 +223,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						search={{ mode: "conversation" }}
 						onClick={() => setSheet(false)}
 					>
-						<MessageSquare size={19} aria-hidden="true" />
+						<MessageCircle size={17} strokeWidth={1.8} aria-hidden="true" />
 						对话
 					</Link>
 				</nav>
@@ -233,7 +234,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						to="/my-agents"
 						onClick={() => setSheet(false)}
 					>
-						<Layers size={19} aria-hidden="true" />
+						<Layers size={17} strokeWidth={1.8} aria-hidden="true" />
 						我的 Agent
 					</Link>
 					<Link
@@ -241,7 +242,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						to="/my-agents/new"
 						onClick={() => setSheet(false)}
 					>
-						<Plus size={19} aria-hidden="true" />
+						<Plus size={17} strokeWidth={1.8} aria-hidden="true" />
 						创建申请
 					</Link>
 					<Link
@@ -249,18 +250,21 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						to="/audit"
 						onClick={() => setSheet(false)}
 					>
-						<ClipboardList size={19} aria-hidden="true" />
+						<ClipboardMinus size={17} strokeWidth={1.8} aria-hidden="true" />
 						我的执行审计
 					</Link>
 					{connectionUrl ? (
 						<a
-							className="platform-nav-item"
+							className="platform-nav-item platform-nav-external"
 							href={connectionUrl}
 							target="_blank"
 							rel="noopener noreferrer"
 						>
-							我的 Connection
-							<ArrowUpRight size={16} aria-hidden="true" />
+							<span>
+								<KeyRound size={17} strokeWidth={1.8} aria-hidden="true" />
+								我的 Connection
+							</span>
+							<ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
 						</a>
 					) : (
 						<p className="platform-nav-label">Connection 尚未接入</p>
@@ -274,7 +278,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							to="/admin/approvals"
 							onClick={() => setSheet(false)}
 						>
-							<CheckCheck size={19} aria-hidden="true" />
+							<Check size={17} strokeWidth={1.8} aria-hidden="true" />
 							创建审批
 						</Link>
 						<Link
@@ -283,7 +287,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							to="/admin/agents"
 							onClick={() => setSheet(false)}
 						>
-							<List size={19} aria-hidden="true" />
+							<List size={17} strokeWidth={1.8} aria-hidden="true" />
 							Agent 管理
 						</Link>
 						<Link
@@ -291,7 +295,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							to="/admin/audit"
 							onClick={() => setSheet(false)}
 						>
-							<ClipboardList size={19} aria-hidden="true" />
+							<ClipboardMinus size={17} strokeWidth={1.8} aria-hidden="true" />
 							平台审计
 						</Link>
 					</nav>

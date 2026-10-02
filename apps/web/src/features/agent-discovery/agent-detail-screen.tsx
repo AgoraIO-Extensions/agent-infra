@@ -4,7 +4,7 @@ import {
 	Bot,
 	ExternalLink,
 	History,
-	MessageSquare,
+	MessageCircle,
 	RefreshCw,
 	Settings,
 } from "lucide-react";
@@ -155,12 +155,12 @@ export function AgentDetailScreen({
 								params={{ agentId: agent.agentId, conversationId: undefined }}
 								search={{ view: undefined }}
 							>
-								<MessageSquare aria-hidden="true" />
+								<MessageCircle aria-hidden="true" />
 								开始对话
 							</Link>
 						) : (
 							<Button disabled>
-								<MessageSquare aria-hidden="true" />
+								<MessageCircle aria-hidden="true" />
 								开始对话
 							</Button>
 						))}

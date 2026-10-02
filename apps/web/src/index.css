@@ -155,6 +155,17 @@
 		border-color 180ms ease,
 		color 180ms ease;
 }
+.platform-nav-item svg {
+	flex: none;
+}
+.platform-nav-external {
+	justify-content: space-between;
+}
+.platform-nav-external span {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
 .platform-nav-item:hover {
 	background: color-mix(in oklch, var(--foreground) 5%, transparent);
 	color: var(--foreground);
@@ -162,7 +173,7 @@
 }
 .platform-nav-item.selected {
 	background: var(--secondary);
-	border-color: color-mix(in oklch, var(--primary) 18%, var(--border));
+	border-color: color-mix(in oklch, var(--primary) 20%, var(--border));
 	box-shadow: inset 2px 0 var(--primary);
 	color: var(--foreground);
 	font-weight: 650;
@@ -332,7 +343,7 @@ a[class~="group/button"] {
 	vertical-align: top;
 }
 .audit-table [data-slot="table-head"]:last-child {
-	width: 56px;
+	width: 120px;
 }
 .audit-detail {
 	width: min(100%, 680px);
