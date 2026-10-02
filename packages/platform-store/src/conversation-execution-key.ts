@@ -39,6 +39,13 @@ export async function currentConversationExecutionRelayKeyBindingV1(
 > {
 	try {
 		const authority = input.authority;
+		// Existing Web callers without a typed Task boundary retain the legacy
+		// V2 execution path.  There is no trusted principal/key binding to pin
+		// in that path; treating the missing boundary as unavailable would make
+		// the compatibility contract deny every legacy conversation.
+		if (!authority.taskBoundary) {
+			return { executionSource: null, relayKeyBinding: null };
+		}
 		const [isolation] = await transaction<{ transaction_isolation: string }[]>`
 			show transaction_isolation
 		`;
