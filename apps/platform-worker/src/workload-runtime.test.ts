@@ -3301,6 +3301,15 @@ it.each(["changed", "removed", "expired"] as const)(
 		await expect(runtime.observe(ready)).rejects.toThrow(
 			/^MODEL_CONFIGURATION_UNAVAILABLE$/,
 		);
+		await expect(
+			runtime.apply(ready, false, {
+			configuration: ready.candidate.configuration,
+			management: f.management,
+			state: ready,
+			requestId: "request-a",
+			traceId: "trace-a",
+		}),
+		).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
 		expect(f.writes).toHaveLength(writes);
 	},
 );

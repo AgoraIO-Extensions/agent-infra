@@ -531,6 +531,7 @@ export function createWorkloadRuntimeV1(
 		if (
 			state.candidate.configuration.source.kind !== "standard" ||
 			(!force &&
+				!candidateKeyless(state) &&
 				state.candidate.configuration.revision ===
 					state.verified?.configuration.revision)
 		)
