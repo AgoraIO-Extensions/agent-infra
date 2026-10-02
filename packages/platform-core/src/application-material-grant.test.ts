@@ -25,7 +25,9 @@ function request(
 		...overrides,
 	};
 }
-function fakeStore(): ApplicationMaterialGrantStoreV1 & {
+function fakeStore(
+	options: { applicationExists?: boolean; recipientEligible?: boolean } = {},
+): ApplicationMaterialGrantStoreV1 & {
 	row: ApplicationMaterialGrantMetadataV1 | null;
 	audits: number;
 } {
@@ -46,8 +48,8 @@ function fakeStore(): ApplicationMaterialGrantStoreV1 & {
 		async execute(work) {
 			return work({
 				lockUserDisabled: async () => false,
-				applicationExists: async () => true,
-				recipientEligible: async () => true,
+				applicationExists: async () => options.applicationExists ?? true,
+				recipientEligible: async () => options.recipientEligible ?? true,
 				lockGrant: async () => state.row,
 				upsertGrant: async (r, revision, createdAt) => {
 					state.row = {
@@ -134,8 +136,19 @@ describe("application material grant authority", () => {
 		expect(result.replayed).toBe(true);
 		expect(result.metadata.authorizationRevision).toBe("rev-1");
 	});
-	it("allows revocation after the recipient is disabled", async () => {
+	it("rejects an expected revision when no grant exists", async () => {
 		const store = fakeStore();
+		const useCase = createApplicationMaterialGrantUseCaseV1({
+			store,
+			resolveUser: async () => ({ accountStatus: "active" }),
+		});
+		await expect(
+			useCase.grant(request({ expectedRevision: "missing" })),
+		).rejects.toMatchObject({ code: "idempotency_conflict" });
+		expect(store.row).toBeNull();
+	});
+	it("allows revocation after the recipient is disabled", async () => {
+		const store = fakeStore({ recipientEligible: false });
 		store.row = {
 			applicationId: "app-1",
 			principalType: "user",
@@ -150,6 +163,33 @@ describe("application material grant authority", () => {
 		});
 		await expect(
 			useCase.revoke(request({ expectedRevision: "rev-1" })),
+		).resolves.toMatchObject({ metadata: { revokedAt: expect.any(String) } });
+	});
+	it("allows revocation after an application recipient becomes inactive", async () => {
+		const store = fakeStore({
+			applicationExists: false,
+			recipientEligible: false,
+		});
+		store.row = {
+			applicationId: "app-1",
+			principalType: "application",
+			principalId: "app-1",
+			authorizationRevision: "rev-1",
+			createdAt: new Date().toISOString(),
+			revokedAt: null,
+		};
+		const useCase = createApplicationMaterialGrantUseCaseV1({
+			store,
+			resolveUser: async () => ({ accountStatus: "active" }),
+		});
+		await expect(
+			useCase.revoke(
+				request({
+					principalType: "application",
+					principalId: "app-1",
+					expectedRevision: "rev-1",
+				}),
+			),
 		).resolves.toMatchObject({ metadata: { revokedAt: expect.any(String) } });
 	});
 	it("keeps material out of the result and records the grant audit", async () => {

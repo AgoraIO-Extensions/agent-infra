@@ -163,6 +163,8 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 					current.authorizationRevision !== request.expectedRevision
 				)
 					throw new ApplicationMaterialGrantErrorV1("idempotency_conflict");
+				if (request.expectedRevision && !current)
+					throw new ApplicationMaterialGrantErrorV1("idempotency_conflict");
 				await assertRecipient(tx, request);
 				if (current?.revokedAt === null) {
 					await tx.recordAudit({
@@ -203,8 +205,6 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 			return dependencies.store.execute(async (tx) => {
 				if (await tx.lockUserDisabled(request.actor.userId))
 					throw new ApplicationMaterialGrantErrorV1("forbidden");
-				if (!(await tx.applicationExists(request.applicationId)))
-					throw new ApplicationMaterialGrantErrorV1("not_found");
 				if (!request.expectedRevision)
 					throw new ApplicationMaterialGrantErrorV1("idempotency_conflict");
 				const current = await tx.lockGrant(request);
