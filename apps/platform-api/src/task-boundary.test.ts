@@ -39,7 +39,12 @@ const connectDatabase = createRequire(
 	url: string,
 	options: { max: number; onnotice: () => void },
 ) => DatabaseReader;
-const configuration = agentConfigurationConformanceRecordV1;
+const configuration = {
+	...agentConfigurationConformanceRecordV1,
+	schemaVersion: 1 as const,
+	actions: [],
+	actionSetRevision: "actions_1",
+};
 const identity: IdentityContext = {
 	schemaVersion: 1 as const,
 	userId: "user_01",

@@ -17,7 +17,7 @@ import {
 import { Hono } from "hono";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { agentConfigurationConformanceRecordV1 as configuration } from "../../../packages/platform-core/src/agent-configuration.conformance.ts";
+import { agentConfigurationConformanceRecordV1 } from "../../../packages/platform-core/src/agent-configuration.conformance.ts";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
@@ -38,6 +38,12 @@ import {
 const material = {
 	user: `papi_${"U".repeat(43)}`,
 	application: `papi_${"A".repeat(43)}`,
+};
+const configuration = {
+	...agentConfigurationConformanceRecordV1,
+	schemaVersion: 1 as const,
+	actions: [],
+	actionSetRevision: "actions_1",
 };
 type Kind = keyof typeof material;
 interface Accepted {
