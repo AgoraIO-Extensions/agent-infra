@@ -257,14 +257,14 @@ export function ActiveConversation({
 				)}
 				{agent.capabilities.modelSelection && (
 					<fieldset
-						className="model-controls grid min-w-0 gap-3 sm:grid-cols-[1fr_1fr_auto]"
+						className="model-controls"
 						disabled={blocked || commandLocked}
 					>
-						<legend className="text-muted-foreground text-sm">
-							下一条消息的模型
-						</legend>
+						<legend className="sr-only">下一条消息的模型</legend>
 						<div className="min-w-0 space-y-1">
-							<Label htmlFor={`${composerId}-model`}>模型</Label>
+							<Label className="sr-only" htmlFor={`${composerId}-model`}>
+								模型
+							</Label>
 							<Select
 								disabled={blocked || commandLocked}
 								value={currentModelId || null}
@@ -304,7 +304,9 @@ export function ActiveConversation({
 							</Select>
 						</div>
 						<div className="min-w-0 space-y-1">
-							<Label htmlFor={`${composerId}-reasoning`}>推理强度</Label>
+							<Label className="sr-only" htmlFor={`${composerId}-reasoning`}>
+								推理强度
+							</Label>
 							<Select
 								disabled={blocked || commandLocked}
 								value={currentReasoning || null}
@@ -327,8 +329,9 @@ export function ActiveConversation({
 						</div>
 						<Button
 							type="button"
-							variant="outline"
-							className="self-end"
+							variant="default"
+							className="model-save"
+							hidden={!selectionDirty}
 							disabled={!option?.reasoningLevels.includes(currentReasoning)}
 							onClick={() => {
 								if (
@@ -399,7 +402,7 @@ export function ActiveConversation({
 					</p>
 				)}
 				<form
-					className="composer-zone composer space-y-3 rounded border border-border p-4"
+					className="composer-zone composer"
 					data-c02-guard="pending-submit"
 					data-c02-session-id={conversation?.conversationId ?? conversationId}
 					data-c02-message-count={String(
@@ -411,14 +414,23 @@ export function ActiveConversation({
 						send();
 					}}
 				>
-					<Label htmlFor={composerId}>消息</Label>
+					<Label className="sr-only" htmlFor={composerId}>
+						消息
+					</Label>
 					<Textarea
 						ref={composer}
 						id={composerId}
 						rows={3}
 						value={draft}
 						disabled={blocked || commandLocked}
-						placeholder="描述任务和期望结果…"
+						placeholder={`给 ${agent.name} 发一条消息…`}
+						onFocus={(event) => {
+							const input = event.currentTarget;
+							const bounds = input.getBoundingClientRect();
+							// Browsers may reveal only the caret when returning from execution details.
+							if (bounds.top < 0 || bounds.bottom > window.innerHeight)
+								input.scrollIntoView({ block: "nearest" });
+						}}
 						onChange={(event) => setDraft(event.target.value)}
 						onCompositionStart={() => {
 							composing.current = true;
@@ -440,7 +452,7 @@ export function ActiveConversation({
 						}}
 					/>
 
-					<div className="composer-controls flex flex-wrap items-center justify-between gap-3">
+					<div className="composer-controls">
 						<p className="text-muted-foreground text-xs">
 							Enter 发送 · Shift + Enter 换行
 						</p>

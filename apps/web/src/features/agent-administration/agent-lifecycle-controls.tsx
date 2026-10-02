@@ -141,11 +141,14 @@ function LifecycleConfirmation({
 }) {
 	const [open, setOpen] = useState(false);
 	const copy = confirmationCopy[command];
+	const destructive = command === "stop" || command === "disable";
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogTrigger
 				disabled={disabled}
-				className={buttonVariants({ variant: "outline" })}
+				className={buttonVariants({
+					variant: destructive ? "destructive" : "outline",
+				})}
 			>
 				{label}
 			</DialogTrigger>
@@ -158,6 +161,7 @@ function LifecycleConfirmation({
 						取消
 					</DialogClose>
 					<Button
+						variant={destructive ? "destructive" : "default"}
 						disabled={disabled}
 						onClick={() => {
 							if (disabled) return;
@@ -263,22 +267,36 @@ export function AgentLifecycleControls({
 			{commands.length > 0 ? (
 				<div className="actions flex flex-col items-start gap-3">
 					{commands.map((command) => (
-						<LifecycleConfirmation
+						<div
 							key={`${agent.agentId}-${command}`}
-							agentName={agent.name}
-							command={command}
-							disabled={isPending}
-							label={
-								activeCommand === command
-									? commandProgressLabels[command]
-									: commandLabels[command]
+							className={
+								command === "stop" || command === "disable"
+									? "lifecycle-danger-zone"
+									: "lifecycle-action"
 							}
-							onCommand={(nextCommand) => {
-								if (isPending) return;
-								setLocalPendingCommand(nextCommand);
-								onCommand(nextCommand);
-							}}
-						/>
+						>
+							{(command === "stop" || command === "disable") && (
+								<div>
+									<h3>{commandLabels[command]}</h3>
+									<p>{confirmationCopy[command].description}</p>
+								</div>
+							)}
+							<LifecycleConfirmation
+								agentName={agent.name}
+								command={command}
+								disabled={isPending}
+								label={
+									activeCommand === command
+										? commandProgressLabels[command]
+										: commandLabels[command]
+								}
+								onCommand={(nextCommand) => {
+									if (isPending) return;
+									setLocalPendingCommand(nextCommand);
+									onCommand(nextCommand);
+								}}
+							/>
+						</div>
 					))}
 				</div>
 			) : null}

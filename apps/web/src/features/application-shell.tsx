@@ -21,7 +21,9 @@ import {
 	createContext,
 	type ReactNode,
 	useContext,
+	useEffect,
 	useLayoutEffect,
+	useRef,
 	useState,
 } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -30,7 +32,6 @@ import {
 	BreadcrumbItem,
 	BreadcrumbList,
 	BreadcrumbPage,
-	BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -127,6 +128,22 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		conversationSelection;
 	const chatContext = pathname.startsWith("/chat/") || selectingConversation;
 	const [sheet, setSheet] = useState(false);
+	const routeHref = useLocation({ select: (location) => location.href });
+	const previousRoute = useRef(routeHref);
+	useEffect(() => {
+		if (previousRoute.current !== routeHref) {
+			previousRoute.current = routeHref;
+			setSheet(false);
+		}
+	}, [routeHref]);
+	useEffect(() => {
+		const desktop = window.matchMedia("(min-width: 1024px)");
+		const closeOnDesktop = () => {
+			if (desktop.matches) setSheet(false);
+		};
+		desktop.addEventListener("change", closeOnDesktop);
+		return () => desktop.removeEventListener("change", closeOnDesktop);
+	}, []);
 	const user =
 		session.state.kind === "ready" ? session.state.session.user : undefined;
 	const admin = user?.roles.includes("system_admin") ?? false;
@@ -142,7 +159,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 			: selectingConversation
 				? "选择 Agent 开始对话"
 				: chatContext || pathname.includes("/conversations")
-					? "文本对话与个人历史"
+					? "对话"
 					: pathname.includes("/configuration")
 						? "配置与生命周期"
 						: pathname === "/admin/audit"
@@ -158,7 +175,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 											: pathname.startsWith("/my-agents")
 												? "我的 Agent"
 												: pathname === "/agents" || pathname === "/agents/"
-													? "Agent"
+													? "Agent 目录"
 													: "Agent 详情";
 	const navigation = (
 		<>
@@ -168,7 +185,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				</span>
 				<div>
 					<strong>Agora Agent</strong>
-					<small>公司内部工作区</small>
+					<small>Platform workspace</small>
 				</div>
 			</Link>
 			<nav aria-label="主导航">
@@ -196,7 +213,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						onClick={() => setSheet(false)}
 					>
 						<Grid2X2 size={19} aria-hidden="true" />
-						Agent
+						Agent 目录
 					</Link>
 					<Link
 						aria-current={chatContext ? "page" : undefined}
@@ -304,7 +321,13 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		</>
 	);
 	return (
-		<div className="platform-shell">
+		<div
+			className={
+				pathname.startsWith("/chat/")
+					? "platform-shell platform-shell-chat"
+					: "platform-shell"
+			}
+		>
 			<a className="platform-skip-link" href="#main-content">
 				跳至主要内容
 			</a>
@@ -357,7 +380,6 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 										? "我的管理"
 										: "工作区"}
 							</BreadcrumbItem>
-							<BreadcrumbSeparator />
 							<BreadcrumbItem>
 								<BreadcrumbPage>{title}</BreadcrumbPage>
 							</BreadcrumbItem>

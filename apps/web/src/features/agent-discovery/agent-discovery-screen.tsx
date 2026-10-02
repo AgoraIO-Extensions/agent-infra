@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowRight, Bot, RefreshCw, Search } from "lucide-react";
+import { ArrowRight, Bot, Plus, RefreshCw, Search } from "lucide-react";
 import { useId, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +7,10 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+	NativeSelect,
+	NativeSelectOption,
+} from "@/components/ui/native-select";
 import { cn } from "@/lib/utils";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
@@ -16,7 +20,6 @@ import {
 } from "./agent-discovery.js";
 
 type AgentDiscoveryScreenProps = {
-	connectionUrl?: string;
 	conversationSelection?: boolean;
 	query?: string;
 	onQueryChange?: (query: string) => void;
@@ -65,7 +68,6 @@ function agentChannelSummary(agent: AgentProjectionV2) {
 }
 
 export function AgentDiscoveryScreen({
-	connectionUrl,
 	conversationSelection = false,
 	query: controlledQuery,
 	onQueryChange,
@@ -78,38 +80,73 @@ export function AgentDiscoveryScreen({
 		controlledQuery !== undefined && onQueryChange !== undefined;
 	const query = isControlled ? controlledQuery : localQuery;
 	const searchId = useId();
+	const [statusFilter, setStatusFilter] = useState("all");
+	const [templateFilter, setTemplateFilter] = useState("all");
+	const [modelFilter, setModelFilter] = useState("all");
 	const search = query.trim().toLocaleLowerCase();
 	// Search narrows the already authorized response; it never discovers another
 	// collection or treats a client-side filter as authorization.
 	const agents = state.kind === "ready" ? state.agents : [];
-	const visible = agents.filter((agent) =>
-		[
-			agent.name,
-			agent.description,
-			agentSourceLabel(agent),
-			agentChannelSummary(agent),
-		]
-			.join("\n")
-			.toLocaleLowerCase()
-			.includes(search),
+	const templates = [
+		...new Set(
+			agents.map((agent) =>
+				agent.source.kind === "standard" ? agent.source.templateId : "custom",
+			),
+		),
+	];
+	const models = [
+		...new Set(
+			agents.flatMap((agent) =>
+				agent.configuration.modelOptions.map((option) => option.modelId),
+			),
+		),
+	];
+	const visible = agents.filter(
+		(agent) =>
+			(statusFilter === "all" ||
+				agent.serviceAvailability === statusFilter ||
+				agent.managementStatus === statusFilter) &&
+			(templateFilter === "all" ||
+				(agent.source.kind === "standard"
+					? agent.source.templateId
+					: "custom") === templateFilter) &&
+			(modelFilter === "all" ||
+				agent.configuration.modelOptions.some(
+					(option) => option.modelId === modelFilter,
+				)) &&
+			[
+				agent.name,
+				agent.description,
+				agentSourceLabel(agent),
+				agentChannelSummary(agent),
+			]
+				.join("\n")
+				.toLocaleLowerCase()
+				.includes(search),
 	);
 	return (
 		<section aria-labelledby="agents-heading">
 			<header className="page-heading">
 				<div>
-					<p className="directory-eyebrow">当前用户可用范围</p>
+					<p className="directory-eyebrow">工作区 / Agent 目录</p>
 					<h1 id="agents-heading" className="font-semibold text-[28px]">
 						{conversationSelection
 							? "选择 Agent 开始对话"
-							: "选择一个 Agent 开始工作。"}
+							: "找到适合这项工作的 Agent。"}
 					</h1>
 					<p className="mt-2 text-muted-foreground">
 						{conversationSelection
 							? "选择当前可用的 Agent，继续文本对话。"
-							: "发现并使用你有权访问的 Agent。"}
+							: "目录只展示当前账号有权访问的入口。每个 Agent 的会话与权限相互隔离。"}
 					</p>
 				</div>
-				{state.kind === "ready" ? (
+				<Link className={buttonVariants()} to="/my-agents/new">
+					<Plus aria-hidden="true" />
+					创建申请
+				</Link>
+			</header>
+			{state.kind === "ready" ? (
+				<div className="directory-filters">
 					<div className="directory-search w-full space-y-2">
 						<Label className="sr-only" htmlFor={searchId}>
 							搜索 Agent
@@ -134,8 +171,70 @@ export function AgentDiscoveryScreen({
 							/>
 						</div>
 					</div>
-				) : null}
-			</header>
+					<div className="directory-filter">
+						<Label htmlFor={`${searchId}-status`}>状态</Label>
+						<NativeSelect
+							id={`${searchId}-status`}
+							value={statusFilter}
+							onChange={(event) => setStatusFilter(event.target.value)}
+						>
+							<NativeSelectOption value="all">全部状态</NativeSelectOption>
+							{["ready", "starting", "updating", "unavailable"].map(
+								(status) => (
+									<NativeSelectOption key={status} value={status}>
+										{agentServiceAvailabilityLabel(
+											status as NonNullable<
+												AgentProjectionV2["serviceAvailability"]
+											>,
+										)}
+									</NativeSelectOption>
+								),
+							)}
+							{["creating", "creation_failed", "stopped", "disabled"].map(
+								(status) => (
+									<NativeSelectOption key={status} value={status}>
+										{
+											agentManagementStatusLabels[
+												status as AgentProjectionV2["managementStatus"]
+											]
+										}
+									</NativeSelectOption>
+								),
+							)}
+						</NativeSelect>
+					</div>
+					<div className="directory-filter">
+						<Label htmlFor={`${searchId}-template`}>模板</Label>
+						<NativeSelect
+							id={`${searchId}-template`}
+							value={templateFilter}
+							onChange={(event) => setTemplateFilter(event.target.value)}
+						>
+							<NativeSelectOption value="all">全部模板</NativeSelectOption>
+							{templates.map((template) => (
+								<NativeSelectOption key={template} value={template}>
+									{template === "custom" ? "自定义 Agent" : template}
+								</NativeSelectOption>
+							))}
+						</NativeSelect>
+					</div>
+					<div className="directory-filter">
+						<Label htmlFor={`${searchId}-model`}>模型</Label>
+						<NativeSelect
+							id={`${searchId}-model`}
+							value={modelFilter}
+							onChange={(event) => setModelFilter(event.target.value)}
+						>
+							<NativeSelectOption value="all">全部模型</NativeSelectOption>
+							{models.map((model) => (
+								<NativeSelectOption key={model} value={model}>
+									{model}
+								</NativeSelectOption>
+							))}
+						</NativeSelect>
+					</div>
+				</div>
+			) : null}
 			{state.kind === "loading" ? (
 				<p aria-live="polite">正在加载 Agent…</p>
 			) : state.kind === "unavailable" ? (
@@ -167,7 +266,12 @@ export function AgentDiscoveryScreen({
 						</div>
 						<p className="hint text-muted-foreground text-sm" role="status">
 							{agents.length} 个获授权 Agent
-							{search ? `，匹配 ${visible.length} 个` : ""}
+							{search ||
+							statusFilter !== "all" ||
+							templateFilter !== "all" ||
+							modelFilter !== "all"
+								? `，匹配 ${visible.length} 个`
+								: ""}
 						</p>
 					</div>
 					{!agents.length ? (
@@ -177,15 +281,27 @@ export function AgentDiscoveryScreen({
 					) : !visible.length ? (
 						<Empty className="py-8">
 							<EmptyDescription>未找到匹配的 Agent。</EmptyDescription>
+							<Button
+								variant="outline"
+								onClick={() => {
+									setLocalQuery("");
+									onQueryChange?.("");
+									setStatusFilter("all");
+									setTemplateFilter("all");
+									setModelFilter("all");
+								}}
+							>
+								清除筛选
+							</Button>
 						</Empty>
 					) : (
 						<ul
 							aria-labelledby="agent-catalog-heading"
-							className="agent-list grid grid-cols-1 gap-4 min-[821px]:grid-cols-3"
+							className="agent-list grid grid-cols-1 gap-4 min-[768px]:grid-cols-3"
 						>
 							{visible.map((agent) => (
 								<li
-									className="directory-card flex min-w-0 flex-col gap-4 border border-border bg-background p-5"
+									className="directory-card flex min-w-0 flex-col gap-4 border border-border bg-background p-[18px]"
 									key={agent.agentId}
 								>
 									<div className="flex items-start justify-between gap-3">
@@ -267,57 +383,6 @@ export function AgentDiscoveryScreen({
 							))}
 						</ul>
 					)}
-					<section aria-label="使用引导" className="directory-guidance">
-						<article className="directory-guidance-card">
-							<p className="directory-eyebrow">使用前</p>
-							<h3>确认你的 Connection 授权</h3>
-							<p className="text-muted-foreground">
-								外部账号及授权在独立的 Connection 系统中管理。使用前请到
-								Connection 确认你的授权。
-							</p>
-							{connectionUrl ? (
-								<a
-									className={cn(
-										buttonVariants({
-											variant: "outline",
-											className: "min-w-0 max-w-full break-words",
-										}),
-									)}
-									href={connectionUrl}
-									target="_blank"
-									rel="noreferrer"
-								>
-									查看我的 Connection
-								</a>
-							) : (
-								<p className="text-muted-foreground">
-									暂时无法打开 Connection，请联系管理员确认访问入口。
-								</p>
-							)}
-						</article>
-						<article className="directory-guidance-card">
-							<p className="directory-eyebrow">没有找到</p>
-							<h3>可见范围由 Owner 维护</h3>
-							<p className="text-muted-foreground">
-								联系 Agent Owner，确认你的员工账号或所属组织是否在该 Agent
-								的可用范围内。
-							</p>
-							<Link
-								className={cn(
-									buttonVariants({
-										variant: "outline",
-										className: "min-w-0 max-w-full break-words",
-									}),
-								)}
-								to="/my-agents"
-							>
-								查看我的申请
-							</Link>
-						</article>
-					</section>
-					<p className="quiet-note text-muted-foreground text-sm">
-						仅显示当前身份获授权的 Agent。
-					</p>
 				</>
 			)}
 		</section>

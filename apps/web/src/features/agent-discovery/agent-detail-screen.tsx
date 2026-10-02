@@ -129,6 +129,12 @@ export function AgentDetailScreen({
 						<Bot />
 					</span>
 					<div className="min-w-0">
+						<p className="page-eyebrow">
+							Agent 详情 ·{" "}
+							{agent.source.kind === "standard"
+								? agent.source.templateId
+								: "自定义 Agent"}
+						</p>
 						<h1
 							id="agent-detail-heading"
 							className="break-words font-semibold text-[28px]"
@@ -208,6 +214,12 @@ export function AgentDetailScreen({
 							关于此 Agent
 						</h2>
 						<dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-[auto_minmax(0,1fr)]">
+							<dt className="text-muted-foreground">Owner</dt>
+							<dd>
+								{agent.configuration.owners
+									.map((owner) => owner.displayName)
+									.join("、") || "未提供"}
+							</dd>
 							<dt className="text-muted-foreground">模板与入口</dt>
 							<dd className="break-all">
 								{agent.source.kind === "standard"
@@ -247,6 +259,24 @@ export function AgentDetailScreen({
 							)}
 						</dl>
 					</section>
+					{!selfManaged && (
+						<section className="detail-section">
+							<h2>个人历史</h2>
+							<p className="mb-4 text-muted-foreground text-sm">
+								只显示当前账号提交的消息与执行状态，Agent Owner
+								无法替你查看正文。
+							</p>
+							<Link
+								className={buttonVariants({ variant: "ghost" })}
+								to="/chat/$agentId/{-$conversationId}"
+								params={{ agentId: agent.agentId, conversationId: undefined }}
+								search={{ view: "history" }}
+							>
+								<History aria-hidden="true" />
+								个人历史
+							</Link>
+						</section>
+					)}
 					<section
 						className="detail-section space-y-3 border-border border-b py-6"
 						aria-labelledby="agent-capability-heading"
@@ -268,42 +298,59 @@ export function AgentDetailScreen({
 						)}
 					</section>
 				</div>
-				<aside className="agent-detail-panel" aria-label="Owner 与渠道">
-					<h2>Owner 与渠道</h2>
-					<dl className="agent-detail-ownership mt-5 text-sm">
-						<dt className="text-muted-foreground">Owner</dt>
-						<dd className="break-words">
-							{agent.configuration.owners
-								.map((owner) => owner.displayName)
-								.join("、") || "未提供"}
-						</dd>
-						<dt className="text-muted-foreground">渠道</dt>
-						<dd className="break-words">
-							{agent.configuration.channels
-								.map(
-									(channel) =>
-										`${agentChannelKindLabels[channel.kind]}：${channelStatusLabels[channel.status]}`,
-								)
-								.join("、") || "暂无平台渠道"}
-						</dd>
-					</dl>
-					{!selfManaged && (
-						<section className="detail-section mt-6 border-border border-t pt-6">
-							<h2>个人对话</h2>
-							<p className="mb-4 text-muted-foreground text-sm">
-								查看当前账号在此 Agent 中的个人历史。
-							</p>
-							<Link
-								className={buttonVariants({ variant: "ghost" })}
-								to="/chat/$agentId/{-$conversationId}"
-								params={{ agentId: agent.agentId, conversationId: undefined }}
-								search={{ view: "history" }}
-							>
-								<History aria-hidden="true" />
-								个人历史
-							</Link>
-						</section>
-					)}
+				<aside className="agent-detail-aside" aria-label="Owner 与渠道">
+					<section
+						className="agent-detail-panel"
+						aria-labelledby="agent-owner-heading"
+					>
+						<header className="detail-panel-heading">
+							<h2 id="agent-owner-heading">Owner</h2>
+							<p>负责范围与运行状态</p>
+						</header>
+						<ul className="detail-list">
+							{agent.configuration.owners.map((owner) => (
+								<li key={owner.userId}>
+									<strong>{owner.displayName}</strong>
+								</li>
+							))}
+							{agent.configuration.owners.length === 0 && <li>未提供 Owner</li>}
+						</ul>
+					</section>
+					<section
+						className="agent-detail-panel"
+						aria-labelledby="agent-runtime-heading"
+					>
+						<header className="detail-panel-heading">
+							<h2 id="agent-runtime-heading">运行与渠道</h2>
+							<p>平台当前观测</p>
+						</header>
+						<ul className="detail-list">
+							<li>
+								<strong>服务状态</strong>
+								<Badge
+									variant="outline"
+									data-status={
+										agent.serviceAvailability ?? agent.managementStatus
+									}
+								>
+									{agent.serviceAvailability
+										? agentServiceAvailabilityLabel(agent.serviceAvailability)
+										: agentManagementStatusLabels[agent.managementStatus]}
+								</Badge>
+							</li>
+							{agent.configuration.channels.map((channel) => (
+								<li key={channel.kind}>
+									<strong>{agentChannelKindLabels[channel.kind]}</strong>
+									<Badge variant="outline" data-status={channel.status}>
+										{channelStatusLabels[channel.status]}
+									</Badge>
+								</li>
+							))}
+							{agent.configuration.channels.length === 0 && (
+								<li>暂无平台渠道</li>
+							)}
+						</ul>
+					</section>
 				</aside>
 			</div>
 		</section>

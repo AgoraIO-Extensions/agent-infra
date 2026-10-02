@@ -10,6 +10,7 @@ import {
 	event,
 	history,
 } from "../src/features/conversation/conversation-test-fixtures";
+import { captureDesignContract, designViewports } from "./design-contract";
 
 async function routingFixture(
 	page: Page,
@@ -304,7 +305,7 @@ test("keeps the composer in view while a long conversation scrolls", async ({
 });
 
 for (const compact of [false, true]) {
-	test(`keeps the original Agent header in the conversation column${compact ? " at 320 by 370" : ""}`, async ({
+	test(`keeps the Agent header above the exported conversation columns${compact ? " at 320 by 370" : ""}`, async ({
 		page,
 	}, info) => {
 		if (compact) await page.setViewportSize({ width: 320, height: 370 });
@@ -321,7 +322,7 @@ for (const compact of [false, true]) {
 			header.getByText("服务状态：就绪", { exact: true }),
 		).toBeVisible();
 		const geometry = await header.evaluate((node) => {
-			const workspace = node.closest(".chat-workspace");
+			const workspace = document.querySelector(".chat-workspace");
 			const history = document.querySelector(".conversation-history-panel");
 			if (!workspace || !history)
 				throw new Error("Expected parallel conversation regions");
@@ -336,21 +337,20 @@ for (const compact of [false, true]) {
 			body: JSON.stringify(geometry),
 			contentType: "application/json",
 		});
-		expect(geometry.header.left).toBeGreaterThanOrEqual(
-			geometry.workspace.left,
-		);
-		expect(geometry.header.right).toBeLessThanOrEqual(geometry.workspace.right);
-		if (geometry.viewport.width > 820) {
+		expect(geometry.header.left).toBe(geometry.workspace.left);
+		expect(geometry.header.bottom).toBeLessThanOrEqual(geometry.workspace.top);
+		if (geometry.viewport.width >= 1024) {
 			expect(
 				Math.abs(geometry.workspace.top - geometry.history.top),
 			).toBeLessThan(2);
 			expect(geometry.history.left).toBeGreaterThanOrEqual(
 				geometry.workspace.right,
 			);
-		} else
-			expect(geometry.history.top).toBeGreaterThanOrEqual(
-				geometry.workspace.bottom,
-			);
+			expect(geometry.header.right).toBe(geometry.history.right);
+		} else {
+			await expect(page.locator(".conversation-history-panel")).toBeHidden();
+			expect(geometry.header.right).toBe(geometry.workspace.right);
+		}
 		for (const [index, target] of [
 			header.getByRole("heading", { name: fixture.agentName, exact: true }),
 			header.getByRole("link", { name: "切换 Agent" }),
@@ -446,9 +446,17 @@ for (const compact of [false, true]) {
 			if (!avatar || !body)
 				throw new Error("Message avatar and body must be rendered");
 			if (user) {
-				expect(avatar.x).toBeGreaterThanOrEqual(body.x + body.width + 11);
+				expect(avatar.x).toBeGreaterThanOrEqual(
+					body.x +
+						body.width +
+						((page.viewportSize()?.width ?? 0) < 768 ? 8 : 10),
+				);
 			} else {
-				expect(body.x).toBeGreaterThanOrEqual(avatar.x + avatar.width + 11);
+				expect(body.x).toBeGreaterThanOrEqual(
+					avatar.x +
+						avatar.width +
+						((page.viewportSize()?.width ?? 0) < 768 ? 8 : 10),
+				);
 			}
 			await expect(frame.locator(".chat-message-avatar")).toHaveAttribute(
 				"aria-hidden",
@@ -527,7 +535,7 @@ for (const compact of [false, true]) {
 	});
 }
 
-test("keeps conversation and history together, preserves draft and SSE, and opens the original cross-Agent record", async ({
+test("collapses narrow history while preserving the draft, SSE and original cross-Agent record", async ({
 	page,
 }, info) => {
 	const fixture = await routingFixture(page, {
@@ -536,24 +544,9 @@ test("keeps conversation and history together, preserves draft and SSE, and open
 	});
 	await page.goto(canonical(fixture.agentId, fixture.conversationId));
 	await assertChat(page);
-	const panel = page.getByRole("complementary", { name: "对话历史" });
+	const panel = page.locator(".conversation-history-panel");
 	const workspace = page.locator(".chat-workspace");
-	const other = panel.getByRole("link", { name: /受控跨 Agent 历史/ });
-	await expect(other).toHaveAttribute(
-		"href",
-		"/chat/agent-second/conversation-other",
-	);
-	await expect(panel.locator('a[aria-current="page"]')).toHaveCount(1);
-	const chatBox = await workspace.boundingBox();
-	const historyBox = await panel.boundingBox();
-	if (!chatBox || !historyBox)
-		throw new Error("Both conversation regions must be rendered");
-	if ((page.viewportSize()?.width ?? 0) > 820) {
-		expect(historyBox.x).toBeGreaterThanOrEqual(chatBox.x + chatBox.width);
-		expect(Math.abs(chatBox.y - historyBox.y)).toBeLessThan(2);
-	} else {
-		expect(historyBox.y).toBeGreaterThanOrEqual(chatBox.y + chatBox.height);
-	}
+	const narrow = (page.viewportSize()?.width ?? 0) < 1024;
 	const input = page.getByLabel("消息", { exact: true });
 	await input.fill("受控草稿，历史切换不会发送。");
 	await expect
@@ -563,17 +556,44 @@ test("keeps conversation and history together, preserves draft and SSE, and open
 					.length,
 		)
 		.toBe(1);
+	if (narrow) await expect(panel).toBeHidden();
+	else {
+		const chatBox = await workspace.boundingBox();
+		const historyBox = await panel.boundingBox();
+		if (!chatBox || !historyBox)
+			throw new Error("Expected side-by-side conversation regions");
+		expect(historyBox.x).toBeGreaterThanOrEqual(chatBox.x + chatBox.width);
+		expect(Math.abs(chatBox.y - historyBox.y)).toBeLessThan(2);
+	}
 	await page.getByRole("button", { name: "个人历史", exact: true }).click();
 	await expect(panel.getByRole("heading", { name: "个人历史" })).toBeVisible();
-	await expect(input).toBeVisible();
+	if (narrow) await expect(input).toBeHidden();
+	else await expect(input).toBeVisible();
 	await expect(input).toHaveValue("受控草稿，历史切换不会发送。");
 	await expect(panel).toBeFocused();
+	await page.goBack();
+	await expect(input).toBeVisible();
+	await expect(input).toHaveValue("受控草稿，历史切换不会发送。");
+	if (narrow) await expect(panel).toBeHidden();
+	await page.goForward();
+	await expect(panel).toBeVisible();
+	if (narrow) await expect(input).toBeHidden();
 	await page.getByRole("button", { name: "返回对话", exact: true }).click();
-	await expect(panel.getByRole("heading", { name: "最近对话" })).toBeVisible();
+	await expect(input).toBeVisible();
 	await expect(input).toHaveValue("受控草稿，历史切换不会发送。");
 	expect(
 		fixture.requests.filter((request) => request.path[4] === "events"),
 	).toHaveLength(1);
+	if (narrow) {
+		await page.getByRole("button", { name: "个人历史", exact: true }).click();
+		await panel.getByRole("button", { name: "最近对话", exact: true }).click();
+	}
+	const other = panel.getByRole("link", { name: /受控跨 Agent 历史/ });
+	await expect(other).toHaveAttribute(
+		"href",
+		"/chat/agent-second/conversation-other",
+	);
+	await expect(panel.locator('a[aria-current="page"]')).toHaveCount(1);
 	expect(
 		await page.evaluate(
 			() => document.documentElement.scrollWidth <= innerWidth,
@@ -586,6 +606,7 @@ test("keeps conversation and history together, preserves draft and SSE, and open
 	await other.focus();
 	await page.keyboard.press("Enter");
 	await expect(page).toHaveURL(/\/chat\/agent-second\/conversation-other$/);
+	await expect(input).toBeVisible();
 	await expect(input).toBeDisabled();
 	await expect(page.locator("form[data-c02-session-id]")).toHaveAttribute(
 		"data-c02-session-id",
@@ -603,6 +624,10 @@ test("keeps a missing recent endpoint distinct from logout or empty history", as
 	const fixture = await routingFixture(page, { recentFailureStatus: 404 });
 	await page.goto(canonical(fixture.agentId, fixture.conversationId));
 	await assertChat(page);
+	if ((page.viewportSize()?.width ?? 0) < 1024) {
+		await page.getByRole("button", { name: "个人历史", exact: true }).click();
+		await page.getByRole("button", { name: "最近对话", exact: true }).click();
+	}
 	await expect(page.getByText("最近对话读取入口不可用。")).toBeVisible();
 	await expect(page.getByText("暂无个人对话。")).toHaveCount(0);
 	await expect(page.getByText(/当前登录或访问权限已失效/)).toHaveCount(0);
@@ -771,7 +796,7 @@ test("redirects the legacy no-conversation entry without creating a conversation
 		page.getByRole("button", { name: "创建会话", exact: true }),
 	).toBeVisible();
 	await expect(page.locator('[data-slot="breadcrumb-page"]')).toHaveText(
-		"文本对话与个人历史",
+		"对话",
 	);
 	const menu = page.getByRole("button", { name: "打开导航", exact: true });
 	if (await menu.isVisible()) await menu.click();
@@ -792,7 +817,7 @@ test("redirects the legacy no-conversation entry without creating a conversation
 		workspace.getByRole("link", { name: "对话", exact: true }),
 	).toHaveAttribute("aria-current", "page");
 	await expect(
-		workspace.getByRole("link", { name: "Agent", exact: true }),
+		workspace.getByRole("link", { name: "Agent 目录", exact: true }),
 	).not.toHaveAttribute("aria-current", "page");
 	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
 		true,
@@ -836,4 +861,44 @@ test("keeps canonical chat and long personal-history titles usable at 320 by 370
 		body: await page.screenshot({ fullPage: true }),
 		contentType: "image/png",
 	});
+});
+
+test("exported design viewport matrix conversation", async ({ page }, info) => {
+	test.skip(
+		info.project.name !== "desktop",
+		"The exported nine-viewport matrix runs once.",
+	);
+	const fixture = await routingFixture(page, { messageRoles: true });
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	await assertChat(page);
+	const input = page.getByLabel("消息", { exact: true });
+	await input.fill("验收草稿，切换历史不提交。");
+	for (const viewport of designViewports) {
+		await page.setViewportSize(viewport);
+		await expect(input).toBeInViewport({ ratio: 1 });
+		const timeline = page.locator(".timeline");
+		const before = await input.boundingBox();
+		await timeline.evaluate((node) => {
+			node.scrollTop = node.scrollHeight;
+		});
+		expect(await input.boundingBox()).toEqual(before);
+		await captureDesignContract(page, info, "conversation");
+		if (viewport.width < 1024) {
+			await page.getByRole("button", { name: "个人历史", exact: true }).click();
+			await expect(input).toBeHidden();
+			await expect(
+				page.getByRole("complementary", { name: "对话历史" }),
+			).toBeFocused();
+			await page.getByRole("button", { name: "返回对话", exact: true }).click();
+			await expect(input).toBeInViewport({ ratio: 1 });
+			await expect(input).toHaveValue("验收草稿，切换历史不提交。");
+		}
+	}
+	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+		true,
+	);
+	expect(
+		fixture.requests.filter((request) => request.path[4] === "events"),
+	).toHaveLength(1);
+	expect(fixture.unexpected).toEqual([]);
 });

@@ -1,7 +1,8 @@
-import { PlusIcon, Trash2Icon } from "lucide-react";
+import { ArrowLeft, PlusIcon, Trash2Icon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -209,29 +210,38 @@ export function AgentConfigurationScreen({
 			aria-labelledby="agent-configuration-heading"
 			className="space-y-6"
 		>
-			<header className="page-heading flex-col space-y-2">
-				<h1
-					id="agent-configuration-heading"
-					className="font-semibold text-[28px]"
-				>
-					配置与生命周期
-				</h1>
-				<p className="break-words text-muted-foreground">
-					{agent.name} · {agent.description}
-				</p>
-				<p className="text-muted-foreground text-sm">
-					{agentManagementStatusLabels[agent.managementStatus]}
-					{agent.serviceAvailability
-						? ` · ${agentServiceAvailabilityLabel(agent.serviceAvailability)}`
-						: ""}
-				</p>
+			<header className="page-heading">
+				<div>
+					<a
+						className={buttonVariants({ variant: "ghost" })}
+						href={`/agents/${encodeURIComponent(agent.agentId)}`}
+					>
+						<ArrowLeft aria-hidden="true" />
+						返回 Agent 详情
+					</a>
+					<p className="page-eyebrow">Owner 配置 · {agent.name}</p>
+					<h1 id="agent-configuration-heading">
+						让 Agent 在正确的范围内运行。
+					</h1>
+					<p>保存后更新运行实例；Secret 只显示状态和版本，不回显值。</p>
+				</div>
+				<div className="tag-row">
+					<Badge variant="outline" data-status={agent.managementStatus}>
+						{agentManagementStatusLabels[agent.managementStatus]}
+					</Badge>
+					{agent.serviceAvailability && (
+						<Badge variant="outline">
+							{agentServiceAvailabilityLabel(agent.serviceAvailability)}
+						</Badge>
+					)}
+				</div>
 			</header>
 			<p className="text-muted-foreground text-sm">
 				{agent.managementStatus === "disabled"
 					? "运行资格已撤销，Owner 无法恢复。"
 					: "配置变更不需要重新审批。"}
 			</p>
-			<div className="form-layout">
+			<div className="form-layout full-width-form">
 				<div className="min-w-0 space-y-6">
 					{submittedResult ? (
 						<p
@@ -681,7 +691,9 @@ export function AgentConfigurationScreen({
 						</section>
 					) : null}
 				</div>
-				{lifecycle ? <aside className="form-aside">{lifecycle}</aside> : null}
+				{lifecycle ? (
+					<section className="form-aside lifecycle-panel">{lifecycle}</section>
+				) : null}
 			</div>
 		</section>
 	);
