@@ -4,6 +4,7 @@ import {
 	createAgentConfigurationUseCaseV1,
 	createAgentManagementV1,
 	createApplicationFoundationUseCaseV1,
+	createApplicationMaterialGrantUseCaseV1,
 	createApplicationRegistrationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
@@ -19,6 +20,7 @@ import {
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
 	PostgresApplicationFoundationTransactionV1,
+	PostgresApplicationMaterialGrantStoreV1,
 	PostgresApplicationRegistrationStoreV1,
 	PostgresApplicationRevisionTransactionV1,
 	PostgresConversationExecutionTransactionV1,
@@ -184,6 +186,21 @@ export function assemblePlatformApi(
 	});
 	const personalApiCredentialStore = new PostgresPersonalApiCredentialStoreV1({
 		databaseUrl: input.databaseUrl,
+	});
+	const applicationMaterialGrantStore =
+		new PostgresApplicationMaterialGrantStoreV1({
+			databaseUrl: input.databaseUrl,
+		});
+	const applicationMaterialGrants = createApplicationMaterialGrantUseCaseV1({
+		store: applicationMaterialGrantStore,
+		resolveUser: async (userId) => {
+			const user = await resolveCurrentTaskUser(
+				input.identity,
+				userId,
+				randomUUID(),
+			);
+			return user ? { accountStatus: user.accountStatus } : null;
+		},
 	});
 	const applicationRegistrationStore =
 		new PostgresApplicationRegistrationStoreV1({
@@ -463,6 +480,10 @@ export function assemblePlatformApi(
 			readAgentProjection: projections.readConfigurationAgentProjection,
 		},
 		applications: { identity: input.identity, applications },
+		applicationMaterialGrants: {
+			identity: input.identity,
+			grants: applicationMaterialGrants,
+		},
 		personalApiCredentials: {
 			identity: input.identity,
 			credentials: personalApiCredentials,
@@ -517,6 +538,7 @@ export function assemblePlatformApi(
 		taskAuthorization,
 		personalApiCredentialStore,
 		applicationRegistrationStore,
+		applicationMaterialGrantStore,
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
 	];
 	return {

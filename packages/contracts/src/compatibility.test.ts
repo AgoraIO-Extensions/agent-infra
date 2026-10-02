@@ -1443,6 +1443,9 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/me/conversations/recent" &&
 				path !== "/api/v2/me/api-credentials" &&
 				path !== "/api/v2/me/api-credentials/{credentialId}" &&
+				path !== "/api/v2/applications/{applicationId}/material-grant" &&
+				path !==
+					"/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}" &&
 				!path.startsWith("/api/v2/conversations/")
 			)
 				delete previous.paths[path];
