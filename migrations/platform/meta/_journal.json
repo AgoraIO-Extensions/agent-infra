@@ -190,6 +190,34 @@
       "when": 1790844089732,
       "tag": "0030_relay_key_authority_compatibility",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790889832289,
+      "tag": "0031_accepted_execution_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790893402698,
+      "tag": "0032_typed_task_principal",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790895708046,
+      "tag": "0033_typed_generation_principal",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790898575204,
+      "tag": "0034_task_status_event_source",
+      "breakpoints": true
     }
   ]
 }

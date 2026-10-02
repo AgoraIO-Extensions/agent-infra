@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { RuntimeBusinessRequestV4 } from "@agent-infra/contracts/runtime";
 import {
 	bindInputFileV1,
 	type ConversationCommandDecisionV1,
@@ -11,9 +12,14 @@ import {
 	type ConversationStopDecisionV1,
 	type ConversationTaskAdmissionTransactionPortV1,
 	type CreateConversationDecisionV1,
-	conversationExecutionKeySubjectV1,
 	type FileRecordV1,
+	PersonalApiCredentialErrorV1,
 	parseConversationOperationEventV2,
+	parseTaskAuthorizationBoundaryV1,
+	planTaskSystemControlV1,
+	type TaskApiAuditPlanV1,
+	type TaskApiChannelV1,
+	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import {
@@ -22,6 +28,10 @@ import {
 	lockOutbox as lockDispatchOutbox,
 } from "./conversation-dispatch-sql.js";
 import { finishWaitingTask } from "./conversation-dispatch-task.js";
+import {
+	type AcceptedExecutionKeyProjectionV4,
+	readAcceptedExecutionKeyInTransactionV4,
+} from "./conversation-execution-accepted-key.js";
 import {
 	type ConversationQueryProject,
 	type ConversationQueryRequest,
@@ -41,6 +51,7 @@ import {
 	text,
 	unavailable,
 } from "./conversation-execution-common.js";
+import { currentConversationExecutionRelayKeyBindingV1 } from "./conversation-execution-key.js";
 import {
 	validateCreatePlan,
 	validateMessagePlan,
@@ -66,7 +77,6 @@ import {
 	isModelSelectionPlan,
 	isRegenerationPlan,
 	isStopPlan,
-	lockAgentConfiguration,
 	lockConversation,
 	lockConversationForRead,
 	outboxId,
@@ -83,29 +93,38 @@ import {
 } from "./conversation-execution-sql.js";
 import { submitConversationTask } from "./conversation-execution-task.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
-import { currentRelayKeyVersionInTransaction } from "./relay-key-versions.js";
 import {
-	insertTaskAuthorization,
-	requireCurrentTaskApiAccess,
-} from "./task-authorization.js";
+	requireCurrentPersonalApiTaskAdmissionV1,
+	resolvePersonalApiTaskAdmissionAuthorityV1,
+} from "./personal-api-task-authorization.js";
+import { writeTaskApiAuditV1 } from "./task-api-audit.js";
+import { insertTaskAuthorization } from "./task-authorization.js";
 
 export interface PostgresConversationExecutionOptionsV1 {
 	readonly databaseUrl: string;
+	readonly userDirectory?: TaskUserDirectoryV1;
 }
 
 export class PostgresConversationExecutionTransactionV1
-	implements
-		ConversationExecutionTransactionPortV1,
-		ConversationTaskAdmissionTransactionPortV1
+	implements ConversationExecutionTransactionPortV1
 {
 	readonly #client: ReturnType<typeof postgres> | undefined;
 	readonly #existingTransaction: Transaction | undefined;
+	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
+	readonly #acceptedKeyReads = new Set<
+		Promise<AcceptedExecutionKeyProjectionV4 | null>
+	>();
+	#acceptedKeyClosing = false;
 
 	constructor(
 		options:
 			| PostgresConversationExecutionOptionsV1
-			| { readonly transaction: Transaction },
+			| {
+					readonly transaction: Transaction;
+					readonly userDirectory?: TaskUserDirectoryV1;
+			  },
 	) {
+		this.#userDirectory = options.userDirectory;
 		if ("transaction" in options) {
 			this.#existingTransaction = options.transaction;
 			return;
@@ -122,35 +141,20 @@ export class PostgresConversationExecutionTransactionV1
 		}
 	}
 
-	async #currentExecutionBinding(
-		transaction: Transaction,
-		authority: ConversationExecutionAuthorityV1,
-	) {
-		const agent = await lockAgentConfiguration(transaction, authority.agentId);
-		const subject = conversationExecutionKeySubjectV1(
-			authority,
-			agent?.sourceKind,
+	/** Reads the saved operation and Key tuple using this original Store instance. */
+	async readAcceptedExecution(
+		request: RuntimeBusinessRequestV4,
+	): Promise<AcceptedExecutionKeyProjectionV4 | null> {
+		if (this.#acceptedKeyClosing) unavailable();
+		const pending = this.#transaction((transaction) =>
+			readAcceptedExecutionKeyInTransactionV4(transaction, request),
 		);
-		if (!subject) return { executionSource: null, relayKeyBinding: null };
-		const { executionSource, purpose, subjectId } = subject;
-		const relayKeyBinding = await currentRelayKeyVersionInTransaction(
-			transaction,
-			{ purpose, subjectId },
-		);
-		return relayKeyBinding ? { executionSource, relayKeyBinding } : null;
-	}
-
-	async submitTask(
-		request: Parameters<
-			ConversationTaskAdmissionTransactionPortV1["submitTask"]
-		>[0],
-		decide: Parameters<
-			ConversationTaskAdmissionTransactionPortV1["submitTask"]
-		>[1],
-	) {
-		return this.#transaction((transaction) =>
-			submitConversationTask(transaction, request, decide),
-		);
+		this.#acceptedKeyReads.add(pending);
+		try {
+			return await pending;
+		} finally {
+			this.#acceptedKeyReads.delete(pending);
+		}
 	}
 
 	async requestMetadataRecovery(
@@ -284,7 +288,6 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<ConversationStateDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
-			await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
 			const conversation = await lockConversationForRead(
 				transaction,
 				text(request.query.conversationId),
@@ -386,6 +389,8 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<ConversationCommandDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
+			// API governance locks precede Agent; Agent still precedes Conversation.
+			await this.#requireCurrentPersonalApiAdmission(transaction, authority);
 			await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
 			const conversation = await lockConversation(
 				transaction,
@@ -414,6 +419,7 @@ export class PostgresConversationExecutionTransactionV1
 					conversation.conversationId,
 					authority,
 				);
+				await this.#requireCurrentPersonalApiAdmission(transaction, authority);
 				return { outcome: "replayed", result };
 			}
 			const state = await readMessageState(transaction, conversation);
@@ -423,8 +429,13 @@ export class PostgresConversationExecutionTransactionV1
 			}
 			const plan = validateMessagePlan(decision, request, state);
 			const executionBinding = plan.execution
-				? await this.#currentExecutionBinding(transaction, authority)
-				: null;
+				? await currentConversationExecutionRelayKeyBindingV1(transaction, {
+						authority,
+						userDirectory: this.#userDirectory,
+						personalApiAdmissionAuthority:
+							authority.personalApiAdmissionAuthority,
+					})
+				: undefined;
 			if (plan.execution && !executionBinding) return { outcome: "denied" };
 			const reservationId = await reserveIdempotency(transaction, {
 				...scope,
@@ -448,26 +459,26 @@ export class PostgresConversationExecutionTransactionV1
 				await transaction`
 					insert into platform.conversation_executions
 						(execution_id, conversation_id, agent_id, actor_id, channel_id,
-						turn_id, status, session_generation, delivery_fence,
-						authorization_revision, model_configuration_revision,
-						model_option_id, reasoning_level, execution_source,
-						relay_key_purpose, relay_key_subject_id, relay_key_id,
-						relay_key_version, created_at, updated_at)
+						 turn_id, status, session_generation, delivery_fence,
+						 authorization_revision, model_configuration_revision,
+						 model_option_id, reasoning_level, execution_source,
+						relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version,
+						created_at, updated_at)
 					values
 						(${plan.execution.executionId}, ${plan.execution.conversationId},
 						 ${plan.execution.agentId}, ${plan.execution.actorId},
 						 ${plan.execution.channelId}, ${plan.execution.turnId},
 						 ${plan.execution.status}, ${plan.execution.sessionGeneration},
 						 ${plan.execution.deliveryFence},
-						${plan.execution.authorizationRevision},
-						${plan.execution.modelConfigurationRevision},
-						${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
+						 ${plan.execution.authorizationRevision},
+						 ${plan.execution.modelConfigurationRevision},
+						 ${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
 						${executionBinding?.executionSource ?? null},
 						${executionBinding?.relayKeyBinding?.purpose ?? null},
 						${executionBinding?.relayKeyBinding?.subjectId ?? null},
 						${executionBinding?.relayKeyBinding?.keyId ?? null},
 						${executionBinding?.relayKeyBinding?.keyVersion ?? null},
-						${plan.execution.createdAt},
+						 ${plan.execution.createdAt},
 						 ${plan.execution.createdAt})
 				`;
 				await insertTaskAuthorization(transaction, {
@@ -530,7 +541,7 @@ export class PostgresConversationExecutionTransactionV1
 							modelOptionId: plan.outboxIntent.modelOptionId,
 							reasoningLevel: plan.outboxIntent.reasoningLevel,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
-					 ${plan.outboxIntent.requestId}, clock_timestamp(),
+					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt},
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`;
 			await transaction`
@@ -554,6 +565,7 @@ export class PostgresConversationExecutionTransactionV1
 				plan.result,
 				plan.message.createdAt,
 			);
+			await this.#requireCurrentPersonalApiAdmission(transaction, authority);
 			return { outcome: "accepted", result: plan.result };
 		});
 	}
@@ -564,7 +576,6 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<ConversationModelSelectionDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
-			await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
 			const conversation = await lockConversation(
 				transaction,
 				text(request.command.conversationId),
@@ -649,6 +660,8 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<ConversationCommandDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
+			// API governance locks precede Agent; Agent still precedes Conversation.
+			await this.#requireCurrentPersonalApiAdmission(transaction, authority);
 			await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
 			const conversation = await lockConversation(
 				transaction,
@@ -677,6 +690,7 @@ export class PostgresConversationExecutionTransactionV1
 					conversation.conversationId,
 					authority,
 				);
+				await this.#requireCurrentPersonalApiAdmission(transaction, authority);
 				return { outcome: "replayed", result };
 			}
 			const state = await readRegenerationState(
@@ -687,10 +701,13 @@ export class PostgresConversationExecutionTransactionV1
 			const decision = decide(state);
 			if (!isRegenerationPlan(decision)) return decision;
 			const plan = validateRegenerationPlan(decision, request, state);
-			const executionBinding = await this.#currentExecutionBinding(
-				transaction,
-				authority,
-			);
+			const executionBinding =
+				await currentConversationExecutionRelayKeyBindingV1(transaction, {
+					authority,
+					userDirectory: this.#userDirectory,
+					personalApiAdmissionAuthority:
+						authority.personalApiAdmissionAuthority,
+				});
 			if (!executionBinding) return { outcome: "denied" };
 			const reservationId = await reserveIdempotency(transaction, {
 				...scope,
@@ -713,26 +730,26 @@ export class PostgresConversationExecutionTransactionV1
 			await transaction`
 				insert into platform.conversation_executions
 					(execution_id, conversation_id, agent_id, actor_id, channel_id,
-					turn_id, status, session_generation, delivery_fence,
-					authorization_revision, model_configuration_revision,
-					model_option_id, reasoning_level, execution_source,
-					relay_key_purpose, relay_key_subject_id, relay_key_id,
-					relay_key_version, created_at, updated_at)
+					 turn_id, status, session_generation, delivery_fence,
+					 authorization_revision, model_configuration_revision,
+					 model_option_id, reasoning_level, execution_source,
+						relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version,
+						created_at, updated_at)
 				values
 					(${plan.execution.executionId}, ${plan.execution.conversationId},
 					 ${plan.execution.agentId}, ${plan.execution.actorId},
 					 ${plan.execution.channelId}, ${plan.execution.turnId},
 					 ${plan.execution.status}, ${plan.execution.sessionGeneration},
 					 ${plan.execution.deliveryFence},
-					${plan.execution.authorizationRevision},
-					${plan.execution.modelConfigurationRevision},
-					${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
-					${executionBinding.executionSource},
-					${executionBinding.relayKeyBinding?.purpose ?? null},
-					${executionBinding.relayKeyBinding?.subjectId ?? null},
-					${executionBinding.relayKeyBinding?.keyId ?? null},
-					${executionBinding.relayKeyBinding?.keyVersion ?? null},
-					${plan.execution.createdAt},
+					 ${plan.execution.authorizationRevision},
+					 ${plan.execution.modelConfigurationRevision},
+					 ${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
+						${executionBinding?.executionSource ?? null},
+						${executionBinding?.relayKeyBinding?.purpose ?? null},
+						${executionBinding?.relayKeyBinding?.subjectId ?? null},
+						${executionBinding?.relayKeyBinding?.keyId ?? null},
+						${executionBinding?.relayKeyBinding?.keyVersion ?? null},
+					 ${plan.execution.createdAt},
 					 ${plan.execution.createdAt})
 			`;
 			await insertTaskAuthorization(transaction, {
@@ -760,7 +777,7 @@ export class PostgresConversationExecutionTransactionV1
 							modelOptionId: plan.outboxIntent.modelOptionId,
 							reasoningLevel: plan.outboxIntent.reasoningLevel,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
-					 ${plan.outboxIntent.requestId}, clock_timestamp(),
+					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt},
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`;
 			await transaction`
@@ -784,6 +801,7 @@ export class PostgresConversationExecutionTransactionV1
 				plan.result,
 				plan.execution.createdAt,
 			);
+			await this.#requireCurrentPersonalApiAdmission(transaction, authority);
 			return { outcome: "accepted", result: plan.result };
 		});
 	}
@@ -794,23 +812,26 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<ConversationStopDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
-			const [agent] = await transaction<
-				{ authorization_revision: string | null }[]
-			>`select authorization_revision from platform.agents where id = ${authority.agentId} for share`;
-			await requireCurrentTaskApiAccess(
-				transaction,
-				authority.taskBoundary,
-				agent?.authorization_revision ?? null,
-			);
-			// Match Worker lock order: Agent, original outbox, Conversation, Execution.
-			const [original] = await transaction<{ id: string }[]>`
-				select id from platform.outbox_items where scope_type = 'conversation'
-					and scope_id = ${request.command.conversationId} and payload->>'executionId' = ${request.command.targetExecutionId}
-					and operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
+			await this.#requireCurrentPersonalApiAdmission(transaction, authority);
+			await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
+			const executionId = text(request.command.targetExecutionId);
+			const [initialExecution] = await transaction<{ status: string }[]>`
+				select status from platform.conversation_executions where execution_id = ${executionId}
 			`;
-			const originalOutbox = original
-				? await lockDispatchOutbox(transaction, original.id)
-				: undefined;
+			// Waiting transitions share the Worker's original outbox lock. Terminal/replay
+			// paths keep Conversation first, matching historical metadata recovery.
+			let originalOutbox: Awaited<ReturnType<typeof lockDispatchOutbox>>;
+			if (initialExecution?.status === "waiting") {
+				originalOutbox = await lockDispatchOutbox(
+					transaction,
+					`conversation:turn:${executionId}`,
+				);
+				const [currentExecution] = await transaction<{ status: string }[]>`
+					select status from platform.conversation_executions where execution_id = ${executionId}
+				`;
+				// Never carry Outbox -> Conversation into a non-waiting legacy path.
+				if (currentExecution?.status !== "waiting") unavailable();
+			}
 			const conversation = await lockConversation(
 				transaction,
 				text(request.command.conversationId),
@@ -838,7 +859,93 @@ export class PostgresConversationExecutionTransactionV1
 					conversation.conversationId,
 					authority,
 				);
+				await this.#requireCurrentPersonalApiAdmission(transaction, authority);
 				return { outcome: "replayed", result };
+			}
+			const dispatchConversation = await lockDispatchConversation(
+				transaction,
+				conversation.conversationId,
+			);
+			const execution = await lockDispatchExecution(
+				transaction,
+				conversation.conversationId,
+				text(request.command.targetExecutionId),
+			);
+			if (execution?.status === "waiting") {
+				if (!originalOutbox || !dispatchConversation || !authority.taskBoundary)
+					unavailable();
+				if (
+					execution.principal_type !== authority.taskBoundary.principal.kind ||
+					execution.actor_id !== authority.actorId ||
+					execution.agent_id !== authority.agentId ||
+					execution.channel_id !== authority.channelId
+				)
+					unavailable();
+				const [record] = await transaction<{ boundary: unknown }[]>`
+     select boundary from platform.task_authorization_records
+     where execution_id = ${execution.execution_id} for update
+    `;
+				if (!record) unavailable();
+				const control = planTaskSystemControlV1({
+					reason: "stop",
+					workerId: "platform-api",
+					boundary: parseTaskAuthorizationBoundaryV1(record.boundary),
+					execution: {
+						executionId: execution.execution_id,
+						conversationId: execution.conversation_id,
+						sessionGeneration: safeInteger(execution.session_generation, 1),
+						actorId: execution.actor_id,
+						principal: authority.taskBoundary.principal,
+						agentId: execution.agent_id,
+						channelId: execution.channel_id,
+						authorizationRevision: execution.authorization_revision,
+						status: execution.status,
+					},
+				});
+				if (control.ensureStop || control.revokeAuthorization) unavailable();
+				const occurredAt = new Date();
+				const reservationId = await reserveIdempotency(transaction, {
+					...scope,
+					requestDigest: request.requestDigest,
+					occurredAt,
+				});
+				if (!reservationId) unavailable();
+				await finishWaitingTask(
+					transaction,
+					{
+						outbox: originalOutbox,
+						conversation: dispatchConversation,
+						execution,
+					},
+					"cancelled",
+					"TASK_CANCELLED",
+					control.workerId,
+				);
+				await transaction`
+     insert into platform.conversation_stops
+      (execution_id, stop_request_id, status, created_at, updated_at)
+     values (${execution.execution_id}, ${randomUUID()}, 'completed', ${occurredAt}, ${occurredAt})
+    `;
+				await transaction`
+     insert into platform.conversation_audit_events
+      (id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at)
+     values (${randomUUID()}, ${conversation.conversationId}, ${execution.execution_id},
+      ${authority.agentId}, ${authority.actorId}, 'conversation.stop.accepted',
+      ${request.command.traceId}, ${request.command.requestId}, ${occurredAt})
+    `;
+				const result = {
+					schemaVersion: 1 as const,
+					status: "submitted" as const,
+					executionId: execution.execution_id,
+				};
+				await completeIdempotency(
+					transaction,
+					reservationId,
+					result,
+					occurredAt,
+				);
+				await this.#requireCurrentPersonalApiAdmission(transaction, authority);
+				return { outcome: "accepted", result };
 			}
 			const state = await readStopState(
 				transaction,
@@ -862,6 +969,7 @@ export class PostgresConversationExecutionTransactionV1
 					validated.result,
 					occurredAt,
 				);
+				await this.#requireCurrentPersonalApiAdmission(transaction, authority);
 				return validated;
 			}
 			const plan = validateStopPlan(decision, request, state);
@@ -871,40 +979,14 @@ export class PostgresConversationExecutionTransactionV1
 				occurredAt: plan.outboxIntent.occurredAt,
 			});
 			if (!reservationId) unavailable();
-			const waiting = state.targetExecution?.status === "waiting";
-			if (waiting) {
-				const dispatchConversation = await lockDispatchConversation(
-					transaction,
-					conversation.conversationId,
-				);
-				const execution = await lockDispatchExecution(
-					transaction,
-					conversation.conversationId,
-					plan.targetExecution.executionId,
-				);
-				if (!originalOutbox || !dispatchConversation || !execution)
-					unavailable();
-				await finishWaitingTask(
-					transaction,
-					{
-						outbox: originalOutbox,
-						conversation: dispatchConversation,
-						execution,
-					},
-					"cancelled",
-					"TASK_CANCELLED",
-					"platform-api",
-				);
-			}
 			await transaction`
 				insert into platform.conversation_stops
-					(execution_id, stop_request_id, status, confirmation_deadline, created_at, updated_at)
+					(execution_id, stop_request_id, status, created_at, updated_at)
 				values
-					(${plan.targetExecution.executionId}, ${plan.stopRequestId}, ${waiting ? "completed" : "submitted"},
-					 ${plan.confirmationDeadline}, ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
+					(${plan.targetExecution.executionId}, ${plan.stopRequestId}, 'submitted',
+					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`;
-			if (!waiting) {
-				await transaction`
+			await transaction`
 				insert into platform.outbox_items
 					(id, scope_type, scope_id, operation, payload, trace_id, request_id,
 					 available_at, created_at, updated_at)
@@ -918,10 +1000,9 @@ export class PostgresConversationExecutionTransactionV1
 							sessionGeneration: plan.outboxIntent.sessionGeneration,
 							stopRequestId: plan.outboxIntent.stopRequestId,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
-					 ${plan.outboxIntent.requestId}, clock_timestamp(),
+					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt},
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`;
-			}
 			await transaction`
 				insert into platform.conversation_audit_events
 					(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id,
@@ -939,16 +1020,167 @@ export class PostgresConversationExecutionTransactionV1
 				plan.result,
 				plan.outboxIntent.occurredAt,
 			);
+			await this.#requireCurrentPersonalApiAdmission(transaction, authority);
 			return { outcome: "accepted", result: plan.result };
 		});
 	}
 
+	/** Resolve actual request Bearer using the original Store transaction and lock order. */
+	async authorizeTaskApi(input: {
+		readonly material: string;
+		readonly operation: "agent:use" | "agent:read";
+		readonly agentId?: string;
+		readonly conversationId?: string;
+	}): Promise<ConversationExecutionAuthorityV1 | null> {
+		return this.#transaction(async (transaction) => {
+			if (input.operation !== "agent:use" && input.operation !== "agent:read")
+				unavailable();
+			// This unlocked lookup supplies only the target binding. No authority escapes it.
+			const [target] =
+				input.conversationId === undefined
+					? []
+					: await transaction<
+							{
+								agent_id: string;
+								channel_id: string;
+							}[]
+						>`select agent_id, channel_id from platform.conversations where id = ${text(input.conversationId)}`;
+			if (input.conversationId !== undefined && !target) return null;
+			if (
+				target &&
+				input.agentId !== undefined &&
+				target.agent_id !== input.agentId
+			)
+				return null;
+			const agentId = text(input.agentId ?? target?.agent_id);
+			const channelId = target?.channel_id ?? "api";
+			if (!["api", "api:user", "api:application"].includes(channelId))
+				return null;
+			const admission = await resolvePersonalApiTaskAdmissionAuthorityV1(
+				transaction,
+				{
+					material: input.material,
+					agentId,
+					channelId: channelId as TaskApiChannelV1,
+					operation: input.operation,
+				},
+				this.#userDirectory,
+			);
+			const [agent] = await transaction<
+				{ authorization_revision: string | null }[]
+			>`
+				select authorization_revision from platform.agents where id = ${agentId} for share
+			`;
+			if (!agent?.authorization_revision) return null;
+			const authority = parseAuthority({
+				schemaVersion: 1,
+				actorId: admission.principal.id,
+				agentId,
+				channelId,
+				authorizationRevision: agent.authorization_revision,
+				supportsSupplementaryInstruction: false,
+				personalApiAdmissionAuthority: admission,
+				taskBoundary: {
+					schemaVersion: 1,
+					principal: admission.principal,
+					agentId,
+					channelId,
+					identityRevision: admission.identityRevision,
+					agentAuthorizationRevision: agent.authorization_revision,
+					accessSources: [
+						{ kind: "api-use", useGrantRevision: admission.useGrantRevision },
+					],
+				},
+			});
+			if (input.conversationId !== undefined) {
+				const conversation = await lockConversation(
+					transaction,
+					input.conversationId,
+				);
+				if (
+					!conversation ||
+					conversation.agentId !== agentId ||
+					conversation.channelId !== channelId ||
+					conversation.actorId !== admission.principal.id ||
+					conversation.principal?.kind !== admission.principal.kind
+				)
+					return null;
+			}
+			await requireCurrentPersonalApiTaskAdmissionV1(
+				transaction,
+				admission,
+				{
+					principal: admission.principal,
+					actorId: authority.actorId,
+					agentId,
+					channelId: admission.channelId,
+					operation: input.operation,
+				},
+				this.#userDirectory,
+			);
+			return authority;
+		});
+	}
+
+	async submitTask(
+		request: Parameters<
+			ConversationTaskAdmissionTransactionPortV1["submitTask"]
+		>[0],
+		decide: Parameters<
+			ConversationTaskAdmissionTransactionPortV1["submitTask"]
+		>[1],
+	) {
+		return this.#transaction((transaction) =>
+			submitConversationTask(transaction, request, decide, this.#userDirectory),
+		);
+	}
+
+	async writeTaskApiAudit(plan: TaskApiAuditPlanV1): Promise<void> {
+		await this.#transaction((transaction) =>
+			writeTaskApiAuditV1(transaction, plan),
+		);
+	}
+
 	async close(): Promise<void> {
+		this.#acceptedKeyClosing = true;
+		// Caller abort does not settle SQL reads; join them before closing their pool.
+		await Promise.allSettled([...this.#acceptedKeyReads]);
 		try {
 			await this.#client?.end();
 		} catch {
 			unavailable();
 		}
+	}
+
+	/** Entry and both successful exits use the original transaction and fresh policy clock. */
+	async #requireCurrentPersonalApiAdmission(
+		transaction: Transaction,
+		authority: ConversationExecutionAuthorityV1,
+	) {
+		if (!["api", "api:user", "api:application"].includes(authority.channelId))
+			return;
+		if (!authority.personalApiAdmissionAuthority || !authority.taskBoundary)
+			unavailable();
+		const current = await requireCurrentPersonalApiTaskAdmissionV1(
+			transaction,
+			authority.personalApiAdmissionAuthority,
+			{
+				principal: authority.taskBoundary.principal,
+				actorId: authority.actorId,
+				agentId: authority.agentId,
+				channelId: authority.channelId as TaskApiChannelV1,
+				operation: "agent:use",
+			},
+			this.#userDirectory,
+		);
+		const sources = authority.taskBoundary.accessSources;
+		if (
+			current.identityRevision !== authority.taskBoundary.identityRevision ||
+			sources.length !== 1 ||
+			sources[0]?.kind !== "api-use" ||
+			current.useGrantRevision !== sources[0].useGrantRevision
+		)
+			unavailable();
 	}
 
 	async #transaction<T>(
@@ -963,7 +1195,11 @@ export class PostgresConversationExecutionTransactionV1
 				return work(transaction);
 			})) as T;
 		} catch (error) {
-			if (error instanceof ConversationExecutionError) throw error;
+			if (
+				error instanceof ConversationExecutionError ||
+				error instanceof PersonalApiCredentialErrorV1
+			)
+				throw error;
 			return unavailable();
 		}
 	}

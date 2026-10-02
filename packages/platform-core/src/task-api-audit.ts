@@ -39,7 +39,7 @@ export type TaskApiAuditTargetV1 =
 	  };
 
 /** IDs and identity/resource facts must be resolved by the server, never copied from an unverified request. */
-export interface TaskApiAuditInputV1 {
+export interface TaskApiAuditRecordInputV1 {
 	readonly schemaVersion: 1;
 	readonly auditId: string;
 	readonly operation: "submit" | "read" | "cancel" | "subscribe";
@@ -53,14 +53,12 @@ export interface TaskApiAuditInputV1 {
 	readonly subscriptionId?: string;
 	readonly occurredAt?: Date;
 }
-export interface TaskApiAuditPlanV1 extends TaskApiAuditInputV1 {
+export interface TaskApiAuditPlanV1 extends TaskApiAuditRecordInputV1 {
 	readonly action: TaskApiAuditActionV1;
 	readonly occurredAt: Date;
 }
 export interface TaskApiAuditStoreV1 {
 	write(plan: TaskApiAuditPlanV1): Promise<void>;
-	renewSubscription(subscriptionId: string): Promise<void>;
-	recoverSubscriptions(): Promise<number>;
 }
 export class TaskApiAuditError extends Error {
 	constructor(readonly code: "invalid_input" | "unavailable") {
@@ -97,7 +95,7 @@ export function taskApiSubscriptionEndAuditIdV1(
 /** Also used by the persistence reader to reject malformed or private metadata. */
 export function parseTaskApiAuditInputV1(
 	input: unknown,
-): TaskApiAuditInputV1 & { readonly occurredAt: Date } {
+): TaskApiAuditRecordInputV1 & { readonly occurredAt: Date } {
 	try {
 		const value = object(input);
 		exact(value, [
@@ -179,11 +177,11 @@ export function parseTaskApiAuditInputV1(
 		return {
 			schemaVersion: 1,
 			auditId: value.auditId,
-			operation: value.operation as TaskApiAuditInputV1["operation"],
-			phase: value.phase as TaskApiAuditInputV1["phase"],
-			result: value.result as TaskApiAuditInputV1["result"],
+			operation: value.operation as TaskApiAuditRecordInputV1["operation"],
+			phase: value.phase as TaskApiAuditRecordInputV1["phase"],
+			result: value.result as TaskApiAuditRecordInputV1["result"],
 			reason: value.reason as TaskApiAuditReasonV1,
-			principal: principal as unknown as TaskApiAuditInputV1["principal"],
+			principal: principal as unknown as TaskApiAuditRecordInputV1["principal"],
 			target: target as unknown as TaskApiAuditTargetV1,
 			requestId: value.requestId,
 			traceId: value.traceId,
@@ -198,16 +196,9 @@ export function parseTaskApiAuditInputV1(
 }
 
 export function createTaskApiAuditV1(store: TaskApiAuditStoreV1): {
-	record(input: TaskApiAuditInputV1): Promise<void>;
-	renewSubscription(subscriptionId: string): Promise<void>;
-	recoverSubscriptions(): Promise<number>;
+	record(input: TaskApiAuditRecordInputV1): Promise<void>;
 } {
-	if (
-		!store ||
-		typeof store.write !== "function" ||
-		typeof store.renewSubscription !== "function" ||
-		typeof store.recoverSubscriptions !== "function"
-	)
+	if (!store || typeof store.write !== "function")
 		throw new TaskApiAuditError("unavailable");
 	return {
 		async record(input) {
@@ -218,33 +209,10 @@ export function createTaskApiAuditV1(store: TaskApiAuditStoreV1): {
 					parsed.phase === "subscription.ended"
 						? taskApiSubscriptionEndAuditIdV1(parsed.subscriptionId as string)
 						: parsed.auditId,
-				action:
-					parsed.phase === "access"
-						? "task.api.access"
-						: parsed.phase === "subscription.started"
-							? "task.api.subscription.started"
-							: "task.api.subscription.ended",
+				action: `task.api.${parsed.phase}`,
 			};
 			try {
 				await store.write(plan);
-			} catch {
-				throw new TaskApiAuditError("unavailable");
-			}
-		},
-		async renewSubscription(subscriptionId) {
-			if (!text(subscriptionId)) throw new TaskApiAuditError("invalid_input");
-			try {
-				await store.renewSubscription(subscriptionId);
-			} catch {
-				throw new TaskApiAuditError("unavailable");
-			}
-		},
-		async recoverSubscriptions() {
-			try {
-				const count = await store.recoverSubscriptions();
-				if (!Number.isSafeInteger(count) || count < 0)
-					throw new TaskApiAuditError("unavailable");
-				return count;
 			} catch {
 				throw new TaskApiAuditError("unavailable");
 			}

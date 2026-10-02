@@ -1,10 +1,10 @@
 import type {
 	ConversationDispatchClaimDecisionV1,
 	ConversationDispatchClaimV1,
-	ConversationExecutionRelayKeyBindingV1,
-	ConversationExecutionSourceV1,
 } from "@agent-infra/platform-core";
 import {
+	executionKeyProjection,
+	executionPrincipalProjection,
 	maximumSafeCounter,
 	requireSafeCounter,
 	StaleDispatchLease,
@@ -24,7 +24,8 @@ import {
 } from "./conversation-dispatch-sql.js";
 import {
 	finishWaitingTask,
-	observeStopConfirmationTimeout,
+	lockWaitingApplicationAuthority,
+	revalidateWaitingApplication,
 	waitingDecision,
 } from "./conversation-dispatch-task.js";
 import {
@@ -43,7 +44,8 @@ export async function claimWork(
 		readonly leaseDurationMs: number;
 	},
 ): Promise<ConversationDispatchClaimDecisionV1> {
-	// Follow dispatch preparation's Agent -> outbox -> Conversation lock order.
+	// Application/use governance precedes the original Agent -> outbox -> Conversation locks.
+	await lockWaitingApplicationAuthority(transaction, input.itemId);
 	await transaction`
 		select a.id from platform.agents a
 		join platform.conversations c on c.agent_id = a.id
@@ -88,12 +90,6 @@ export async function claimWork(
 		outbox.status !== "processing" &&
 		!outbox.available_now &&
 		!(
-			selectedOperation === "conversation.turn.stop.v1" &&
-			stop &&
-			stop.confirmation_timed_out_at === null &&
-			stop.confirmation_deadline.getTime() <= decisionAt
-		) &&
-		!(
 			execution?.status === "waiting" &&
 			((outbox.status === "pending" && outbox.waiting_available) ||
 				(execution.task_wait_deadline?.getTime() ?? Number.POSITIVE_INFINITY) <=
@@ -104,7 +100,13 @@ export async function claimWork(
 	if (
 		!conversation ||
 		!execution ||
-		!bindingMatches(outbox, payload, conversation, execution)
+		!bindingMatches(
+			outbox,
+			payload,
+			conversation,
+			execution,
+			execution.status === "waiting" ? "waiting-settlement" : "business",
+		)
 	) {
 		return { outcome: "stale" };
 	}
@@ -122,20 +124,10 @@ export async function claimWork(
 			from platform.agent_applications where agent_id = ${execution.agent_id}
 		`;
 		const state = { outbox, conversation, execution };
-		const [authorization] = await transaction<{ revoked: boolean }[]>`
-			select revoked_at is not null as revoked from platform.task_authorization_records
-			where execution_id = ${execution.execution_id}
-		`;
-		if (authorization?.revoked) {
-			await finishWaitingTask(
-				transaction,
-				state,
-				"cancelled",
-				"AUTHORIZATION_REVOKED",
-				input.workerId,
-			);
+		if (
+			!(await revalidateWaitingApplication(transaction, state, input.workerId))
+		)
 			return { outcome: "failed" };
-		}
 		const decision = await waitingDecision(
 			transaction,
 			state,
@@ -211,11 +203,6 @@ export async function claimWork(
 		);
 		return { outcome: "succeeded" };
 	}
-	await observeStopConfirmationTimeout(
-		transaction,
-		{ outbox, conversation, execution },
-		input.workerId,
-	);
 	const previousFence = safeCounter(outbox.delivery_fence);
 	const executionFence = safeCounter(execution.delivery_fence);
 	if (
@@ -282,43 +269,10 @@ export async function claimWork(
         order by file_id
     `
 		: [];
-	const hasRelayKeyBinding = [
-		execution.execution_source,
-		execution.relay_key_purpose,
-		execution.relay_key_subject_id,
-		execution.relay_key_id,
-		execution.relay_key_version,
-	].some((value) => value !== null);
-	let executionSource: ConversationExecutionSourceV1 | undefined;
-	let relayKeyBinding: ConversationExecutionRelayKeyBindingV1 | undefined;
-	if (hasRelayKeyBinding) {
-		const source = execution.execution_source;
-		const purpose = execution.relay_key_purpose;
-		const version = safeCounter(execution.relay_key_version, 1);
-		if (
-			(source !== "web" &&
-				source !== "wecom" &&
-				source !== "platform-api" &&
-				source !== "eval") ||
-			(purpose !== "personal" && purpose !== "agent-default") ||
-			!execution.relay_key_subject_id ||
-			!execution.relay_key_id ||
-			version === undefined ||
-			((source === "web" || source === "wecom") && purpose !== "personal") ||
-			((source === "platform-api" || source === "eval") &&
-				purpose !== "agent-default")
-		)
-			return { outcome: "stale" };
-		executionSource = source;
-		relayKeyBinding = {
-			purpose,
-			subjectId: execution.relay_key_subject_id,
-			keyId: execution.relay_key_id,
-			keyVersion: version,
-		};
-	}
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
+		principal: executionPrincipalProjection(execution),
+		...executionKeyProjection(execution),
 		...(execution.task_wait_order === null
 			? {}
 			: { taskWaitOrder: requireSafeCounter(execution.task_wait_order, 1) }),
@@ -345,8 +299,6 @@ export async function claimWork(
 				: Number(execution.model_configuration_revision),
 		modelOptionId: execution.model_option_id,
 		reasoningLevel: execution.reasoning_level,
-		...(executionSource ? { executionSource } : {}),
-		...(relayKeyBinding ? { relayKeyBinding } : {}),
 		hostSessionRef: conversation.host_session_ref,
 		runtimeCursor: execution.last_runtime_cursor,
 		...(terminalEvent?.seen ? { runtimeTerminalEventSeen: true as const } : {}),

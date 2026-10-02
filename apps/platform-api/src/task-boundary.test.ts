@@ -119,6 +119,10 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		db = connectDatabase(database.databaseUrl, { max: 2, onnotice: () => {} });
 		assembly = assemblePlatformApi({
+			taskAdmissionPolicy: {
+				maximumWaitingTasksPerAgent: 2,
+				waitingTimeoutMs: 60_000,
+			},
 			databaseUrl: database.databaseUrl,
 			identity: adapter,
 			admissions: {

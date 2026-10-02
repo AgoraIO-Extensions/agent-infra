@@ -10,7 +10,6 @@ import type {
 	ConversationStopWritePlanV1,
 	CreateConversationWritePlanV1,
 } from "@agent-infra/platform-core";
-import { conversationStopConfirmationTimeoutMsV1 } from "@agent-infra/platform-core";
 import {
 	type CreateRequest,
 	exactRecord,
@@ -476,7 +475,6 @@ export function validateStopPlan(
 		"schemaVersion",
 		"targetExecution",
 		"stopRequestId",
-		"confirmationDeadline",
 		"outboxIntent",
 		"auditEvent",
 		"result",
@@ -531,10 +529,7 @@ export function validateStopPlan(
 		idempotency.commandType !== "stop" ||
 		idempotency.key !== request.command.idempotencyKey ||
 		idempotency.requestDigest !== request.requestDigest ||
-		!sameDate(outbox.occurredAt, audit.occurredAt) ||
-		!(input.confirmationDeadline instanceof Date) ||
-		input.confirmationDeadline.getTime() - outbox.occurredAt.getTime() !==
-			conversationStopConfirmationTimeoutMsV1
+		!sameDate(outbox.occurredAt, audit.occurredAt)
 	) {
 		return unavailable();
 	}

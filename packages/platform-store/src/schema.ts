@@ -29,7 +29,6 @@ import {
 import {
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,
-	ldapIdentityIds,
 	platformApiCredentials,
 	platformApplications,
 	platformUserDisables,
@@ -96,7 +95,6 @@ export {
 export {
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,
-	ldapIdentityIds,
 	platformApiCredentials,
 	platformApplications,
 	platformUserDisables,
@@ -114,7 +112,14 @@ export { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 export { browserSessions } from "./schema-sessions";
 
 export const platformInfrastructureTables = [
+	platformUserDisables,
 	browserSessions,
+	agentPrincipalGrants,
+	apiCredentialDeliveryGrants,
+	platformApiCredentials,
+	platformApplications,
+	relayKeySubjects,
+	relayKeyVersions,
 	workloadReconciliations,
 	agents,
 	agentApplications,
@@ -144,12 +149,4 @@ export const platformInfrastructureTables = [
 	platformFiles,
 	platformFileAccesses,
 	fileReconciliation,
-	platformApplications,
-	platformApiCredentials,
-	agentPrincipalGrants,
-	apiCredentialDeliveryGrants,
-	ldapIdentityIds,
-	platformUserDisables,
-	relayKeySubjects,
-	relayKeyVersions,
 ] as const;

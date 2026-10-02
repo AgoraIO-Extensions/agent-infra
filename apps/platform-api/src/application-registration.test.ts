@@ -46,6 +46,10 @@ async function start() {
 		throw new Error("Unrelated adapter must not be called");
 	};
 	const assembled = assemblePlatformApi({
+		taskAdmissionPolicy: {
+			maximumWaitingTasksPerAgent: 2,
+			waitingTimeoutMs: 60_000,
+		},
 		databaseUrl: database.databaseUrl,
 		identity: {
 			resolve: async (request) => {

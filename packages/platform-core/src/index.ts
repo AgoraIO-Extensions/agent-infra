@@ -47,23 +47,6 @@ export {
 export * from "./agent-management.js";
 export * from "./agent-runtime-presentation.js";
 export * from "./api-audit-identity.js";
-export type {
-	ApiCredentialMetadataV1,
-	ApiCredentialScopeV1,
-	ApiIdentityAuditActionV1,
-	ApiIdentityAuditInputV1,
-	ApiIdentityAuditReasonV1,
-	ApiPrincipalV1,
-	CurrentApiPrincipalV1,
-} from "./api-identity.js";
-export {
-	apiCredentialScopesV1,
-	generateApiCredentialV1,
-	hasApiCredentialScopeV1,
-	hashApiCredentialV1,
-	isApiCredentialScopeV1,
-	sameApiPrincipalV1,
-} from "./api-identity.js";
 export * from "./application-foundation.js";
 export * from "./application-registration.js";
 export * from "./application-revision.js";
@@ -72,6 +55,12 @@ export * from "./conversation-dispatch.js";
 export { decideConversationDispatchCapacityV1 } from "./conversation-dispatch-capacity.js";
 export * from "./conversation-events.js";
 export * from "./conversation-execution.js";
+export * from "./conversation-execution-task.js";
+export {
+	type ConversationExecutionSourceV1,
+	conversationExecutionKeySubjectV1,
+	conversationExecutionSourceV1,
+} from "./conversation-execution-types.js";
 export type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 export {
 	isConversationGenerationBarrierConfirmedV1,

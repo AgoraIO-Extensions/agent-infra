@@ -9,12 +9,11 @@ import {
 import type {
 	ConversationExecutionAuthorityV1,
 	ConversationExecutionConversationStateV1,
-	ConversationExecutionRelayKeyBindingV1,
 	ConversationExecutionSourceV1,
 	ConversationModelConfigurationV1,
 	ConversationModelSelectionFallbackWriteV1,
 } from "./conversation-execution-types.js";
-import { conversationExecutionKeySubjectV1 } from "./conversation-execution-types.js";
+import { conversationExecutionSourceV1 } from "./conversation-execution-types.js";
 import {
 	digest,
 	invalidInput,
@@ -25,6 +24,7 @@ import {
 	snapshotObject,
 	unavailable,
 } from "./conversation-execution-values.js";
+import { isTaskApiChannelV1 } from "./task-authorization.js";
 import type { WorkloadVersionV1 } from "./workload-reconciliation.js";
 
 export interface ConversationTaskSubmitCommandV1 {
@@ -71,7 +71,12 @@ export interface ConversationTaskAdmissionPlanV1 {
 	readonly modelOptionId: string | null;
 	readonly reasoningLevel: string | null;
 	readonly executionSource: ConversationExecutionSourceV1 | null;
-	readonly relayKeyBinding: ConversationExecutionRelayKeyBindingV1 | null;
+	readonly relayKeyBinding: {
+		readonly purpose: "personal" | "agent-default";
+		readonly subjectId: string;
+		readonly keyId: string;
+		readonly keyVersion: number;
+	} | null;
 	readonly acceptedAt: Date;
 	readonly waitDeadline: Date;
 	readonly waitOrder: number;
@@ -319,7 +324,14 @@ export function createConversationTaskAdmissionUseCaseV1(
 			} catch {
 				return unavailable();
 			}
-			if (authority.agentId !== command.agentId || !authority.taskBoundary)
+			if (
+				authority.agentId !== command.agentId ||
+				!authority.taskBoundary ||
+				!isTaskApiChannelV1(
+					authority.channelId,
+					authority.taskBoundary.principal,
+				)
+			)
 				return { outcome: "denied", reason: "conversation_unavailable" };
 			const requestDigest = digest({
 				schemaVersion: 1,
@@ -338,6 +350,8 @@ export function createConversationTaskAdmissionUseCaseV1(
 							(!conversation ||
 								conversation.conversationId !== command.conversationId ||
 								conversation.actorId !== authority.actorId ||
+								(conversation.principal?.kind ?? "user") !==
+									authority.taskBoundary?.principal.kind ||
 								conversation.agentId !== authority.agentId ||
 								conversation.channelId !== authority.channelId ||
 								conversation.status === "unavailable" ||
@@ -430,8 +444,9 @@ export function createConversationTaskAdmissionUseCaseV1(
 							modelOptionId,
 							reasoningLevel,
 							executionSource:
-								conversationExecutionKeySubjectV1(authority, state.sourceKind)
-									?.executionSource ?? null,
+								state.sourceKind === "custom"
+									? null
+									: conversationExecutionSourceV1(authority.channelId),
 							relayKeyBinding: null,
 							acceptedAt,
 							waitDeadline: new Date(deadlineMs),

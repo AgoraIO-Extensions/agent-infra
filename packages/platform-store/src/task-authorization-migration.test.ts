@@ -153,8 +153,10 @@ async function snapshotHistory() {
 	]) {
 		const record =
 			table === "conversation_executions"
-				? "to_jsonb(record) - 'task_wait_order' - 'task_wait_deadline' - 'execution_source' - 'relay_key_purpose' - 'relay_key_subject_id' - 'relay_key_id' - 'relay_key_version' - 'runtime_submit_protocol' - 'original_operation_digest' - 'original_submit_host_session_ref'"
-				: "to_jsonb(record)";
+				? "to_jsonb(record) - 'principal_type' - 'task_wait_order' - 'task_wait_deadline' - 'execution_source' - 'relay_key_purpose' - 'relay_key_subject_id' - 'relay_key_id' - 'relay_key_version' - 'runtime_submit_protocol' - 'original_operation_digest' - 'original_submit_host_session_ref'"
+				: table === "conversations"
+					? "to_jsonb(record) - 'principal_type'"
+					: "to_jsonb(record)";
 		snapshots.push(
 			await sql.unsafe(
 				`select ${record}::text as value from platform.${table} record order by ${record}::text`,
@@ -215,6 +217,12 @@ beforeAll(async () => {
 			where task_wait_order is not null or task_wait_deadline is not null
 				or runtime_submit_protocol is not null or original_operation_digest is not null
 				or original_submit_host_session_ref is not null`,
+	).toEqual([{ count: 0 }]);
+	expect(
+		await sql`select count(*)::int as count from platform.conversation_executions where principal_type <> 'user'`,
+	).toEqual([{ count: 0 }]);
+	expect(
+		await sql`select count(*)::int as count from platform.conversations where principal_type <> 'user'`,
 	).toEqual([{ count: 0 }]);
 	const history =
 		await sql`select * from platform_migrations.history order by id`;

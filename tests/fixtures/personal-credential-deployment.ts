@@ -25,6 +25,11 @@ const unused = async (): Promise<never> => {
 export function createPlatformApiAssemblyInput(): PlatformApiAssemblyInput {
 	if (!state.databaseUrl) throw new Error("Test database is not configured");
 	return {
+		// Controlled fixture policy; not a production default.
+		taskAdmissionPolicy: {
+			maximumWaitingTasksPerAgent: 2,
+			waitingTimeoutMs: 60_000,
+		},
 		databaseUrl: state.databaseUrl,
 		identity: {
 			async resolve(request) {

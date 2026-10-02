@@ -7,6 +7,7 @@ import {
 	jsonb,
 	text,
 	timestamp,
+	unique,
 	uniqueIndex,
 	varchar,
 } from "drizzle-orm/pg-core";
@@ -25,6 +26,9 @@ export const conversations = platformSchema.table(
 		id: text("id").primaryKey(),
 		agentId: text("agent_id").notNull(),
 		actorId: text("actor_id").notNull(),
+		principalType: varchar("principal_type", { length: 16 })
+			.default("user")
+			.notNull(),
 		channelId: text("channel_id").notNull(),
 		status: conversationStatus("status").notNull(),
 		sessionGeneration: bigint("session_generation", {
@@ -48,6 +52,17 @@ export const conversations = platformSchema.table(
 	},
 	(table) => [
 		check("conversation_id_non_empty", sql`char_length(${table.id}) > 0`),
+		check(
+			"conversation_principal_type_valid",
+			sql`(${table.principalType} = 'user' AND ${table.channelId} <> 'api:application') OR (${table.principalType} = 'application' AND ${table.channelId} in ('api', 'api:application'))`,
+		),
+		unique("conversation_principal_binding_unique").on(
+			table.id,
+			table.agentId,
+			table.actorId,
+			table.channelId,
+			table.principalType,
+		),
 		check(
 			"conversation_agent_id_non_empty",
 			sql`char_length(${table.agentId}) > 0`,
@@ -99,9 +114,14 @@ export const conversationExecutions = platformSchema.table(
 		conversationId: text("conversation_id").notNull(),
 		agentId: text("agent_id").notNull(),
 		actorId: text("actor_id").notNull(),
+		principalType: varchar("principal_type", { length: 16 })
+			.default("user")
+			.notNull(),
 		channelId: text("channel_id").notNull(),
 		turnId: text("turn_id").notNull(),
 		status: conversationExecutionStatus("status").notNull(),
+		taskWaitOrder: bigint("task_wait_order", { mode: "number" }),
+		taskWaitDeadline: timestamp("task_wait_deadline", { withTimezone: true }),
 		sessionGeneration: bigint("session_generation", {
 			mode: "number",
 		}).notNull(),
@@ -122,10 +142,6 @@ export const conversationExecutions = platformSchema.table(
 		}),
 		modelOptionId: text("model_option_id"),
 		reasoningLevel: text("reasoning_level"),
-		taskWaitOrder: bigint("task_wait_order", { mode: "number" }),
-		taskWaitDeadline: timestamp("task_wait_deadline", {
-			withTimezone: true,
-		}),
 		executionSource: text("execution_source"),
 		relayKeyPurpose: text("relay_key_purpose"),
 		relayKeySubjectId: text("relay_key_subject_id"),
@@ -140,6 +156,27 @@ export const conversationExecutions = platformSchema.table(
 			columns: [table.conversationId],
 			foreignColumns: [conversations.id],
 			name: "conversation_execution_conversation_fk",
+		}),
+		check(
+			"conversation_execution_principal_type_valid",
+			sql`(${table.principalType} = 'user' AND ${table.channelId} <> 'api:application') OR (${table.principalType} = 'application' AND ${table.channelId} in ('api', 'api:application'))`,
+		),
+		foreignKey({
+			columns: [
+				table.conversationId,
+				table.agentId,
+				table.actorId,
+				table.channelId,
+				table.principalType,
+			],
+			foreignColumns: [
+				conversations.id,
+				conversations.agentId,
+				conversations.actorId,
+				conversations.channelId,
+				conversations.principalType,
+			],
+			name: "conversation_execution_principal_binding_fk",
 		}),
 		foreignKey({
 			columns: [
@@ -156,6 +193,10 @@ export const conversationExecutions = platformSchema.table(
 			],
 			name: "conversation_execution_key_version_fk",
 		}),
+		check(
+			"conversation_execution_task_wait_binding",
+			sql`(${table.taskWaitOrder} IS NULL AND ${table.taskWaitDeadline} IS NULL AND ${table.status}::text <> 'waiting') OR (${table.taskWaitOrder} IS NOT NULL AND ${table.taskWaitOrder} between 1 and 9007199254740991 AND ${table.taskWaitDeadline} IS NOT NULL AND ${table.taskWaitDeadline} > ${table.createdAt})`,
+		),
 		check(
 			"conversation_execution_id_non_empty",
 			sql`char_length(${table.executionId}) > 0`,
@@ -175,14 +216,6 @@ export const conversationExecutions = platformSchema.table(
 		check(
 			"conversation_execution_turn_id_non_empty",
 			sql`char_length(${table.turnId}) > 0`,
-		),
-		check(
-			"conversation_execution_task_wait_binding",
-			sql`(${table.taskWaitOrder} IS NULL AND ${table.taskWaitDeadline} IS NULL AND ${table.status}::text <> 'waiting') OR (${table.taskWaitOrder} IS NOT NULL AND ${table.taskWaitOrder} between 1 and 9007199254740991 AND ${table.taskWaitDeadline} IS NOT NULL)`,
-		),
-		check(
-			"conversation_execution_original_digest_binding",
-			sql`(${table.runtimeSubmitProtocol} IS NULL AND ${table.originalOperationDigest} IS NULL AND ${table.originalSubmitHostSessionRef} IS NULL) OR (${table.runtimeSubmitProtocol} IS NOT NULL AND ${table.originalOperationDigest} IS NOT NULL AND ${table.runtimeSubmitProtocol} in ('v2', 'v4') AND ${table.originalOperationDigest} ~ '^[A-Za-z0-9_-]{43}$' AND (${table.runtimeSubmitProtocol} <> 'v4' OR ${table.executionSource} IS NOT NULL) AND (${table.runtimeSubmitProtocol} <> 'v2' OR ${table.originalSubmitHostSessionRef} IS NULL))`,
 		),
 		check(
 			"conversation_execution_session_generation_safe",
@@ -218,6 +251,10 @@ export const conversationExecutions = platformSchema.table(
 				AND char_length(${table.modelOptionId}) > 0
 				AND char_length(${table.reasoningLevel}) > 0
 			)`,
+		),
+		check(
+			"conversation_execution_original_digest_binding",
+			sql`(${table.runtimeSubmitProtocol} IS NULL AND ${table.originalOperationDigest} IS NULL AND ${table.originalSubmitHostSessionRef} IS NULL) OR (${table.runtimeSubmitProtocol} IS NOT NULL AND ${table.originalOperationDigest} IS NOT NULL AND ${table.runtimeSubmitProtocol} in ('v2', 'v4') AND ${table.originalOperationDigest} ~ '^[A-Za-z0-9_-]{43}$' AND (${table.runtimeSubmitProtocol} <> 'v4' OR ${table.executionSource} IS NOT NULL) AND (${table.runtimeSubmitProtocol} <> 'v2' OR (${table.executionSource} IS NULL AND ${table.originalSubmitHostSessionRef} IS NULL)))`,
 		),
 		check(
 			"conversation_execution_key_binding",
@@ -268,13 +305,6 @@ export const conversationExecutions = platformSchema.table(
 		index("conversation_execution_conversation_idx").on(
 			table.conversationId,
 			table.createdAt,
-		),
-		uniqueIndex("conversation_execution_task_wait_order_unique")
-			.on(table.agentId, table.taskWaitOrder)
-			.where(sql`${table.taskWaitOrder} IS NOT NULL`),
-		index("conversation_execution_agent_wait_idx").on(
-			table.agentId,
-			table.taskWaitOrder,
 		),
 	],
 );
@@ -344,14 +374,6 @@ export const conversationStops = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
-		confirmationDeadline: timestamp("confirmation_deadline", {
-			withTimezone: true,
-		})
-			.default(sql`clock_timestamp() + interval '60 seconds'`)
-			.notNull(),
-		confirmationTimedOutAt: timestamp("confirmation_timed_out_at", {
-			withTimezone: true,
-		}),
 	},
 	(table) => [
 		foreignKey({
@@ -502,11 +524,11 @@ export const conversationEvents = platformSchema.table(
 					${table.source} = 'runtime'
 					AND ${table.runtimeCursor} IS NOT NULL
 					AND char_length(${table.runtimeCursor}) > 0
-					AND ${table.eventType} NOT IN ('model.selection.fell_back', 'task.status')
+					AND ${table.eventType} not in ('model.selection.fell_back', 'task.status')
 				) OR (
 					${table.source} = 'platform'
 					AND ${table.runtimeCursor} IS NULL
-					AND ${table.eventType} IN ('model.selection.fell_back', 'task.status')
+					AND ${table.eventType} in ('model.selection.fell_back', 'task.status')
 				)`,
 		),
 		uniqueIndex("conversation_event_execution_adapter_key_unique")

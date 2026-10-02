@@ -1,19 +1,127 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+	type AgentManagementStateV1,
 	type ConversationDispatchExecutionStatusV1,
-	decideConversationStopConfirmationTimeoutV1,
 	decideConversationTaskWaitingV1,
+	isTaskApplicationAuthorizationCurrentV1,
 	parseTaskAuthorizationBoundaryV1,
+	planTaskSystemControlV1,
 	publicTaskStatusEventV1,
 } from "@agent-infra/platform-core";
+import { readCurrentTaskApplicationV1 } from "./application-task-authorization.js";
 import {
 	type DispatchState,
+	executionPrincipalProjection,
 	requireSafeCounter,
 	StaleDispatchLease,
 	type Transaction,
 } from "./conversation-dispatch-common.js";
 import { bindingMatches } from "./conversation-dispatch-sql.js";
 import { exactPayload } from "./conversation-dispatch-validation.js";
+import { persistTaskControl } from "./task-control-record.js";
+
+/** Governance rows precede Agent/outbox locks; no credential participates in accepted work. */
+export async function lockWaitingApplicationAuthority(
+	transaction: Transaction,
+	itemId: string,
+) {
+	await transaction`
+		select a.id from platform.platform_applications a
+		join platform.conversation_executions e on e.principal_type = 'application' and e.actor_id = a.id
+		join platform.outbox_items o on o.payload->>'executionId' = e.execution_id and o.scope_id = e.conversation_id
+		where o.id = ${itemId} and o.scope_type = 'conversation' and e.status = 'waiting'
+		for share of a
+	`;
+	await transaction`
+		select g.principal_id from platform.agent_principal_grants g
+		join platform.conversation_executions e on e.principal_type = 'application'
+			and g.principal_type = e.principal_type and g.principal_id = e.actor_id and g.agent_id = e.agent_id
+		join platform.outbox_items o on o.payload->>'executionId' = e.execution_id and o.scope_id = e.conversation_id
+		where o.id = ${itemId} and o.scope_type = 'conversation' and e.status = 'waiting' and g.grant_type = 'use'
+		for share of g
+	`;
+}
+
+/** Recheck before availability/capacity waits and again before first Runtime preparation. */
+export async function revalidateWaitingApplication(
+	transaction: Transaction,
+	state: DispatchState,
+	workerId: string,
+): Promise<boolean> {
+	const [record] = await transaction<
+		{ id: string; boundary: unknown; revoked_at: Date | null }[]
+	>`select id, boundary, revoked_at from platform.task_authorization_records
+		where execution_id = ${state.execution.execution_id} for update`;
+	if (!record) throw new StaleDispatchLease();
+	const boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+	const plan = planTaskSystemControlV1({
+		reason: "authorization_revoked",
+		workerId,
+		boundary,
+		execution: {
+			executionId: state.execution.execution_id,
+			conversationId: state.execution.conversation_id,
+			sessionGeneration: requireSafeCounter(
+				state.execution.session_generation,
+				1,
+			),
+			actorId: state.execution.actor_id,
+			principal: executionPrincipalProjection(state.execution),
+			agentId: state.execution.agent_id,
+			channelId: state.execution.channel_id,
+			authorizationRevision: state.execution.authorization_revision,
+			status: state.execution.status,
+		},
+	});
+	let revoked = record.revoked_at !== null;
+	if (!revoked && boundary.principal.kind === "application") {
+		const application = await readCurrentTaskApplicationV1(transaction, {
+			applicationId: boundary.principal.id,
+			agentId: boundary.agentId,
+		});
+		const [management] = await transaction<{ agent: AgentManagementStateV1 }[]>`
+			select jsonb_build_object(
+				'schemaVersion', 1, 'applicationId', a.id, 'agentId', a.agent_id,
+				'applicantId', a.applicant_id, 'status', a.status, 'revision', a.management_revision,
+				'approvalRevision', a.approval_revision, 'decisionReason', a.decision_reason,
+				'serviceAvailability', a.service_availability, 'desiredState', a.desired_state,
+				'workloadRevision', a.workload_revision, 'fence', a.fence, 'failureCode', a.failure_code,
+				'ownerIds', (select coalesce(jsonb_agg(owner_id order by owner_id), '[]'::jsonb) from platform.agent_owners where agent_id = a.agent_id),
+				'availability', (select coalesce(jsonb_agg(case when target_type = 'user'
+					then jsonb_build_object('kind', 'user', 'userId', target_id)
+					else jsonb_build_object('kind', 'organization', 'organizationId', target_id) end order by target_type, target_id), '[]'::jsonb)
+					from platform.agent_availability where agent_id = a.agent_id)
+			) as agent from platform.agent_applications a where a.agent_id = ${boundary.agentId}
+		`;
+		const agent = management?.agent;
+		revoked =
+			!application ||
+			!agent ||
+			!isTaskApplicationAuthorizationCurrentV1({
+				boundary,
+				application,
+				agent,
+			});
+	}
+	if (!revoked) return true;
+	if (plan.ensureStop || !state.outbox.request_id)
+		throw new StaleDispatchLease();
+	await persistTaskControl(transaction, {
+		plan,
+		authorizationRecordId: record.id,
+		agentId: boundary.agentId,
+		traceId: state.outbox.trace_id,
+		requestId: state.outbox.request_id,
+	});
+	await finishWaitingTask(
+		transaction,
+		state,
+		"cancelled",
+		"AUTHORIZATION_REVOKED",
+		workerId,
+	);
+	return false;
+}
 
 export async function waitingDecision(
 	transaction: Transaction,
@@ -38,7 +146,7 @@ export async function waitingDecision(
 						or exists (select 1 from platform.conversation_stops s
 							where s.execution_id = e.execution_id and s.status = 'submitted'))) as occupied,
 				exists (select 1 from platform.conversation_executions e
-					where e.agent_id = ${state.execution.agent_id} and e.status = 'waiting'
+					where e.conversation_id = ${state.conversation.id} and e.status = 'waiting'
 						and e.task_wait_order < ${requireSafeCounter(state.execution.task_wait_order, 1)}) as earlier_waiting
 	`;
 	if (!snapshot || !state.execution.task_wait_deadline)
@@ -97,7 +205,8 @@ export async function recordTaskStatus(
 		throw new StaleDispatchLease();
 	if (
 		boundary &&
-		(boundary.principal.id !== state.execution.actor_id ||
+		(boundary.principal.kind !== state.execution.principal_type ||
+			boundary.principal.id !== state.execution.actor_id ||
 			boundary.agentId !== state.execution.agent_id ||
 			boundary.channelId !== state.execution.channel_id)
 	)
@@ -158,7 +267,13 @@ export async function finishWaitingTask(
 	if (
 		!payload ||
 		state.outbox.operation !== "conversation.turn.submit.v1" ||
-		!bindingMatches(state.outbox, payload, state.conversation, state.execution)
+		!bindingMatches(
+			state.outbox,
+			payload,
+			state.conversation,
+			state.execution,
+			"waiting-settlement",
+		)
 	)
 		throw new StaleDispatchLease();
 	const rows = await transaction<{ execution_id: string }[]>`
@@ -188,47 +303,4 @@ export async function finishWaitingTask(
 	if (messages.length !== 1) throw new StaleDispatchLease();
 	await recordTaskStatus(transaction, state, status, workerId, reason);
 	state.execution.status = status;
-}
-
-/** Observe a durable deadline under the same locks as cancellation and terminal transitions. */
-export async function observeStopConfirmationTimeout(
-	transaction: Transaction,
-	state: DispatchState,
-	workerId: string,
-) {
-	const [stop] = await transaction<
-		{
-			status: string;
-			confirmation_deadline: Date;
-			confirmation_timed_out_at: Date | null;
-			observed_at: Date;
-		}[]
-	>`select status, confirmation_deadline, confirmation_timed_out_at, clock_timestamp() as observed_at
-		from platform.conversation_stops where execution_id = ${state.execution.execution_id}`;
-	if (stop?.status !== "submitted") return;
-	const decision = decideConversationStopConfirmationTimeoutV1({
-		executionStatus: state.execution.status,
-		confirmationDeadline: stop.confirmation_deadline.getTime(),
-		observedAt: stop.observed_at.getTime(),
-		alreadyTimedOut: stop.confirmation_timed_out_at !== null,
-	});
-	if (!decision) return;
-	const rows = await transaction<{ execution_id: string }[]>`
-		update platform.conversation_stops set confirmation_timed_out_at = clock_timestamp(), updated_at = clock_timestamp()
-		where execution_id = ${state.execution.execution_id}
-			and status = 'submitted' and confirmation_timed_out_at is null
-			and confirmation_deadline <= clock_timestamp()
-		returning execution_id
-	`;
-	if (rows.length === 0) return;
-	await transaction`update platform.conversation_executions set status = ${decision.status}, updated_at = clock_timestamp()
-		where execution_id = ${state.execution.execution_id}`;
-	state.execution.status = decision.status;
-	await recordTaskStatus(
-		transaction,
-		state,
-		decision.status,
-		workerId,
-		decision.reason,
-	);
 }

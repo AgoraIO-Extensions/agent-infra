@@ -1,4 +1,7 @@
-import type { TaskAuthorizationBoundaryV1 } from "@agent-infra/platform-core";
+import type {
+	TaskAuthorizationBoundaryV1,
+	TaskPrincipalV1,
+} from "@agent-infra/platform-core";
 import { sql } from "drizzle-orm";
 import {
 	bigint,
@@ -173,7 +176,7 @@ export const conversationGenerationTombstones = platformSchema.table(
 		controlRecordId: text("control_record_id").notNull(),
 		controlSourceId: text("control_source_id").notNull(),
 		originalPrincipal: jsonb("original_principal")
-			.$type<{ kind: "user" | "application"; id: string }>()
+			.$type<TaskPrincipalV1>()
 			.notNull(),
 		hostSessionRef: text("host_session_ref").notNull(),
 		status: text("status").notNull().default("pending"),
@@ -224,11 +227,7 @@ export const conversationGenerationTombstones = platformSchema.table(
 		),
 		check(
 			"conversation_generation_tombstone_principal_valid",
-			sql`jsonb_typeof(${table.originalPrincipal}) = 'object'
-				and coalesce(jsonb_typeof(${table.originalPrincipal}->'kind') = 'string', false)
-				and coalesce(${table.originalPrincipal}->>'kind' in ('user', 'application'), false)
-				and coalesce(jsonb_typeof(${table.originalPrincipal}->'id') = 'string', false)
-				and char_length(coalesce(${table.originalPrincipal}->>'id', '')) > 0`,
+			sql`(${table.originalPrincipal}->>'kind' in ('user', 'application') and jsonb_typeof(${table.originalPrincipal}->'id') = 'string' and char_length(${table.originalPrincipal}->>'id') > 0) IS TRUE`,
 		),
 	],
 );

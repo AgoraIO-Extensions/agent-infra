@@ -112,6 +112,11 @@ describe("Platform API production assembly", () => {
 			"close",
 		);
 		const assembly = assemblePlatformApi({
+			// Controlled fixture policy; not a production default.
+			taskAdmissionPolicy: {
+				maximumWaitingTasksPerAgent: 2,
+				waitingTimeoutMs: 60_000,
+			},
 			databaseUrl: "postgres://invalid:invalid@127.0.0.1:1/invalid",
 			identity: {
 				resolve: vi.fn().mockResolvedValue(identity),

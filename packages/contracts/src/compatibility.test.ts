@@ -508,6 +508,108 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only frozen Task C HTTP contracts and preserves every old interface", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		// This fixture stays bound to C when the independent D slice arrives.
+		delete current.paths[
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/events"
+		];
+		for (const name of ["TaskStreamErrorV1", "TaskSseMessageV1"])
+			delete current.components.schemas[name];
+		const paths = [
+			"/api/v1/agents/{agentId}/tasks",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel",
+		] as const;
+		const schemas = [
+			"SubmitTaskRequestV1",
+			"TaskAcceptedV1",
+			"TaskProjectionV1",
+			"TaskStatusEventV1",
+			"CancelTaskRequestV1",
+			"TaskCancellationV1",
+		];
+		const previous = structuredClone(current);
+		for (const path of paths) delete previous.paths[path];
+		for (const name of schemas) delete previous.components.schemas[name];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-task-c-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(value: typeof current) => {
+					delete value.paths[paths[0]].post.parameters;
+				},
+				(value: typeof current) => {
+					value.paths[paths[1]].get.security = [{}];
+				},
+				(value: typeof current) => {
+					value.components.securitySchemes.platformApiCredential.scheme =
+						"basic";
+				},
+				(value: typeof current) => {
+					value.components.schemas.SubmitTaskRequestV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.SubmitTaskRequestV1.properties.principal = {
+						type: "string",
+					};
+				},
+				(value: typeof current) => {
+					value.components.schemas.TaskStatusEventV1.properties.sequence.minimum = 0;
+				},
+				(value: typeof current) => {
+					value.components.schemas.TaskStatusEventV1.properties.payload = {};
+				},
+				(value: typeof current) => {
+					delete value.paths[paths[2]].post.responses["403"];
+				},
+				(value: typeof current) => {
+					value.paths["/api/v1/unreviewed"] = {};
+				},
+				(value: typeof current) => {
+					value.components.schemas.UnreviewedTaskV1 = {};
+				},
+				(value: typeof current) => {
+					value.info.title = "changed";
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentProjectionV1.required = [];
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+			await writeFile(currentPath, JSON.stringify(current));
+			for (const mutate of [
+				(value: typeof previous) => {
+					value.paths[paths[0]] = structuredClone(current.paths[paths[0]]);
+				},
+				(value: typeof previous) => {
+					value.components.schemas.TaskAcceptedV1 = structuredClone(
+						current.components.schemas.TaskAcceptedV1,
+					);
+				},
+			]) {
+				const occupied = structuredClone(previous);
+				mutate(occupied);
+				await writeFile(previousPath, JSON.stringify(occupied));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the three pinned personal Relay Key audit actions at the existing V1 location", async () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),

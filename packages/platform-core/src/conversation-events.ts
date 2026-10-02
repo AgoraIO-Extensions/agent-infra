@@ -57,9 +57,65 @@ export interface ConversationModelSelectionFallbackEventV1 {
 	readonly reason: "selection_unavailable";
 }
 
+export interface ConversationTaskStatusEventV1 {
+	readonly type: "task.status";
+	readonly status:
+		| "waiting"
+		| "submitted"
+		| "processing"
+		| "completed"
+		| "failed"
+		| "cancelled"
+		| "unknown";
+	readonly reason?:
+		| "STOP_CONFIRMATION_TIMEOUT"
+		| "TASK_WAIT_TIMEOUT"
+		| "AGENT_UNAVAILABLE"
+		| "CONVERSATION_UNAVAILABLE";
+}
+
+function isTaskFailureReasonV1(
+	reason: unknown,
+): reason is
+	| "TASK_WAIT_TIMEOUT"
+	| "AGENT_UNAVAILABLE"
+	| "CONVERSATION_UNAVAILABLE" {
+	return (
+		reason === "TASK_WAIT_TIMEOUT" ||
+		reason === "AGENT_UNAVAILABLE" ||
+		reason === "CONVERSATION_UNAVAILABLE"
+	);
+}
+
+export function publicTaskStatusEventV1(input: {
+	readonly isTask: boolean;
+	readonly status: ConversationTaskStatusEventV1["status"];
+	readonly reason?: string;
+}): ConversationTaskStatusEventV1 | null {
+	if (
+		!input.isTask &&
+		!(
+			input.status === "unknown" && input.reason === "STOP_CONFIRMATION_TIMEOUT"
+		)
+	)
+		return null;
+	const reason =
+		input.status === "unknown" && input.reason === "STOP_CONFIRMATION_TIMEOUT"
+			? input.reason
+			: input.status === "failed" && isTaskFailureReasonV1(input.reason)
+				? input.reason
+				: undefined;
+	return {
+		type: "task.status",
+		status: input.status,
+		...(reason ? { reason } : {}),
+	};
+}
+
 export type ConversationPersistedEventPayloadV1 =
 	| ConversationNormalizedEventV1
-	| ConversationModelSelectionFallbackEventV1;
+	| ConversationModelSelectionFallbackEventV1
+	| ConversationTaskStatusEventV1;
 
 export interface ConversationEventCommandV1 {
 	readonly schemaVersion: 1;
@@ -394,6 +450,40 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 export function parseConversationPersistedEventPayloadV1(
 	input: unknown,
 ): ConversationPersistedEventPayloadV1 {
+	if (eventType(input) === "task.status") {
+		const values = snapshotObject(input, ["type", "status"], ["reason"]);
+		if (
+			values.reason !== undefined &&
+			!(
+				(values.reason === "STOP_CONFIRMATION_TIMEOUT" &&
+					values.status === "unknown") ||
+				(values.status === "failed" && isTaskFailureReasonV1(values.reason))
+			)
+		)
+			invalidInput();
+		if (
+			![
+				"waiting",
+				"submitted",
+				"processing",
+				"completed",
+				"failed",
+				"cancelled",
+				"unknown",
+			].includes(values.status as string)
+		)
+			invalidInput();
+		const reason =
+			values.reason === "STOP_CONFIRMATION_TIMEOUT" ||
+			isTaskFailureReasonV1(values.reason)
+				? values.reason
+				: undefined;
+		return {
+			type: "task.status",
+			status: values.status as ConversationTaskStatusEventV1["status"],
+			...(reason ? { reason } : {}),
+		};
+	}
 	if (eventType(input) !== "model.selection.fell_back")
 		return parseEvent(input);
 	const values = snapshotObject(input, [
@@ -555,7 +645,11 @@ function parsePersistedRuntimeEvent(
 	input: unknown,
 ): PersistedRuntimeConversationEventV1 {
 	const persisted = parsePersistedEvent(input);
-	if (persisted.event.type === "model.selection.fell_back") invalidInput();
+	if (
+		persisted.event.type === "model.selection.fell_back" ||
+		persisted.event.type === "task.status"
+	)
+		invalidInput();
 	return { ...persisted, event: persisted.event };
 }
 

@@ -2,8 +2,10 @@ import {
 	type ConversationExecutionAuthorityV1,
 	type ConversationExecutionConversationStateV1,
 	type ConversationModelConfigurationV1,
-	isTaskPrincipalChannelV1,
+	isTaskApiChannelV1,
+	parsePersonalApiTaskAdmissionAuthorityV1,
 	parseTaskAuthorizationBoundaryV1,
+	parseTaskPrincipalV1,
 } from "@agent-infra/platform-core";
 import {
 	type ConversationRow,
@@ -31,6 +33,11 @@ export function parseAuthority(
 		Object.hasOwn(value, "taskBoundary")
 			? ["taskBoundary"]
 			: []),
+		...(value !== null &&
+		typeof value === "object" &&
+		Object.hasOwn(value, "personalApiAdmissionAuthority")
+			? ["personalApiAdmissionAuthority"]
+			: []),
 	]);
 	if (
 		input.schemaVersion !== 1 ||
@@ -44,14 +51,32 @@ export function parseAuthority(
 			: parseTaskAuthorizationBoundaryV1(input.taskBoundary);
 	if (
 		taskBoundary &&
-		(!isTaskPrincipalChannelV1(
-			taskBoundary.principal,
-			taskBoundary.channelId,
-		) ||
-			taskBoundary.principal.id !== input.actorId ||
+		(taskBoundary.principal.id !== input.actorId ||
 			taskBoundary.agentId !== input.agentId ||
 			taskBoundary.channelId !== input.channelId ||
 			taskBoundary.agentAuthorizationRevision !== input.authorizationRevision)
+	)
+		unavailable();
+	const channelId = text(input.channelId);
+	if (
+		(channelId === "api" || channelId.startsWith("api:")) &&
+		(!taskBoundary || !isTaskApiChannelV1(channelId, taskBoundary.principal))
+	)
+		unavailable();
+	const personalApiAdmissionAuthority =
+		input.personalApiAdmissionAuthority === undefined
+			? undefined
+			: parsePersonalApiTaskAdmissionAuthorityV1(
+					input.personalApiAdmissionAuthority,
+				);
+	if (
+		personalApiAdmissionAuthority &&
+		(personalApiAdmissionAuthority.principal.id !== input.actorId ||
+			!taskBoundary ||
+			personalApiAdmissionAuthority.principal.kind !==
+				taskBoundary.principal.kind ||
+			personalApiAdmissionAuthority.agentId !== input.agentId ||
+			personalApiAdmissionAuthority.channelId !== input.channelId)
 	)
 		unavailable();
 	return {
@@ -62,6 +87,7 @@ export function parseAuthority(
 		authorizationRevision: text(input.authorizationRevision),
 		supportsSupplementaryInstruction: input.supportsSupplementaryInstruction,
 		...(taskBoundary ? { taskBoundary } : {}),
+		...(personalApiAdmissionAuthority ? { personalApiAdmissionAuthority } : {}),
 	};
 }
 
@@ -86,7 +112,7 @@ export function parseConversation(
 			"createdAt",
 			"updatedAt",
 		],
-		["isolationPending"],
+		["isolationPending", "principal"],
 	);
 	if (
 		input.schemaVersion !== 1 ||
@@ -105,6 +131,18 @@ export function parseConversation(
 	) {
 		return unavailable();
 	}
+	const principal =
+		input.principal === undefined
+			? undefined
+			: parseTaskPrincipalV1(input.principal);
+	const channelId = text(input.channelId);
+	const api = channelId === "api" || channelId.startsWith("api:");
+	if (
+		(api && (!principal || !isTaskApiChannelV1(channelId, principal))) ||
+		(principal &&
+			(principal.id !== input.actorId || (!api && principal.kind !== "user")))
+	)
+		unavailable();
 	const createdAt = date(input.createdAt);
 	const updatedAt = date(input.updatedAt);
 	if (updatedAt.getTime() < createdAt.getTime()) unavailable();
@@ -113,7 +151,8 @@ export function parseConversation(
 		conversationId: text(input.conversationId),
 		agentId: text(input.agentId),
 		actorId: text(input.actorId),
-		channelId: text(input.channelId),
+		channelId,
+		...(principal ? { principal } : {}),
 		...(input.isolationPending === true
 			? { isolationPending: true as const }
 			: {}),
@@ -146,6 +185,7 @@ export function conversationFromRow(
 		agentId: row.agent_id,
 		actorId: row.actor_id,
 		channelId: row.channel_id,
+		principal: { kind: row.principal_type, id: row.actor_id },
 		status: row.status,
 		...(isolationPending ? { isolationPending: true } : {}),
 		sessionGeneration: row.session_generation,
@@ -166,6 +206,8 @@ export function matchesBinding(
 	return (
 		conversation.agentId === authority.agentId &&
 		conversation.actorId === authority.actorId &&
+		(conversation.principal?.kind ?? "user") ===
+			(authority.taskBoundary?.principal.kind ?? "user") &&
 		conversation.channelId === authority.channelId
 	);
 }

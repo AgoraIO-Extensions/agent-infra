@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
 	type AgentConfigurationUseCaseDependenciesV1,
+	type ConversationTaskAdmissionPolicyV1,
 	createAgentConfigurationUseCaseV1,
 	createAgentManagementV1,
 	createApplicationFoundationUseCaseV1,
@@ -45,6 +46,7 @@ import {
 	type IdentityAdapter,
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
+import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
 import {
 	createPlatformProjectionReaders,
@@ -67,6 +69,7 @@ export interface PlatformApiAssemblyInput {
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly files?: PlatformFileDeploymentV1;
 	readonly databaseUrl: string;
+	readonly taskAdmissionPolicy: ConversationTaskAdmissionPolicyV1;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
@@ -220,6 +223,7 @@ export function assemblePlatformApi(
 	const conversationTransaction =
 		new PostgresConversationExecutionTransactionV1({
 			databaseUrl: input.databaseUrl,
+			userDirectory,
 		});
 	const conversationQuery = new PostgresConversationQueryV1({
 		databaseUrl: input.databaseUrl,
@@ -229,6 +233,11 @@ export function assemblePlatformApi(
 		...(input.conversationReplayWindowMs === undefined
 			? {}
 			: { replayWindowMs: input.conversationReplayWindowMs }),
+	});
+	const tasks = createTaskRoutesDependenciesV1({
+		transaction: conversationTransaction,
+		query: conversationQuery,
+		policy: input.taskAdmissionPolicy,
 	});
 	const admissions =
 		typeof input.admissions === "function"
@@ -406,6 +415,7 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		tasks,
 		...(personalRelayKeys
 			? {
 					personalRelayKeys: {

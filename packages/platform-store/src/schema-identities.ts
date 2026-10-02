@@ -7,52 +7,24 @@ import {
 	primaryKey,
 	text,
 	timestamp,
-	unique,
-	uniqueIndex,
 	varchar,
 } from "drizzle-orm/pg-core";
 import { agents } from "./schema-agents";
 import { platformSchema } from "./schema-common";
 
-export const ldapIdentityIds = platformSchema.table(
-	"ldap_identity_ids",
-	{
-		issuer: varchar("issuer", { length: 256 }).notNull(),
-		uid: varchar("uid", { length: 256 }).notNull(),
-		userId: text("user_id").notNull(),
-	},
-	(table) => [
-		primaryKey({ columns: [table.issuer, table.uid] }),
-		check(
-			"ldap_identity_issuer_non_empty",
-			sql`char_length(${table.issuer}) > 0`,
-		),
-		check("ldap_identity_uid_non_empty", sql`char_length(${table.uid}) > 0`),
-		check(
-			"ldap_identity_user_id_uuid_v4",
-			sql`${table.userId} ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'`,
-		),
-		uniqueIndex("ldap_identity_user_id_unique").on(table.userId),
-	],
-);
-
+/** Platform business override; this is not an employee directory or LDAP mapping. */
 export const platformUserDisables = platformSchema.table(
 	"platform_user_disables",
 	{
 		userId: text("user_id").primaryKey(),
-		disabledBy: text("disabled_by").notNull(),
 		disabledAt: timestamp("disabled_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
 	},
 	(table) => [
 		check(
-			"platform_user_disable_user_id_non_empty",
+			"platform_user_disable_user_non_empty",
 			sql`char_length(${table.userId}) > 0`,
-		),
-		check(
-			"platform_user_disable_actor_non_empty",
-			sql`char_length(${table.disabledBy}) > 0`,
 		),
 	],
 );
@@ -111,7 +83,6 @@ export const platformApiCredentials = platformSchema.table(
 			.defaultNow()
 			.notNull(),
 		lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-		recipientUserId: text("recipient_user_id"),
 	},
 	(table) => [
 		check(
@@ -134,11 +105,6 @@ export const platformApiCredentials = platformSchema.table(
 			"platform_api_credential_scopes_array",
 			sql`jsonb_typeof(${table.scopes}) = 'array'`,
 		),
-		check(
-			"platform_api_credential_recipient_user_non_empty",
-			sql`${table.recipientUserId} is null or char_length(${table.recipientUserId}) > 0`,
-		),
-		unique("platform_api_credential_hash_unique").on(table.credentialHash),
 		index("platform_api_credential_principal_idx").on(
 			table.principalType,
 			table.principalId,
@@ -211,8 +177,6 @@ export const apiCredentialDeliveryGrants = platformSchema.table(
 			.defaultNow()
 			.notNull(),
 		revokedAt: timestamp("revoked_at", { withTimezone: true }),
-		pendingScopes: jsonb("pending_scopes").$type<readonly string[]>(),
-		pendingExpiresAt: timestamp("pending_expires_at", { withTimezone: true }),
 	},
 	(table) => [
 		primaryKey({
@@ -229,10 +193,6 @@ export const apiCredentialDeliveryGrants = platformSchema.table(
 		check(
 			"api_credential_delivery_revision_non_empty",
 			sql`char_length(${table.authorizationRevision}) > 0`,
-		),
-		check(
-			"api_credential_delivery_pending_scopes_array",
-			sql`${table.pendingScopes} is null or (jsonb_typeof(${table.pendingScopes}) = 'array' and jsonb_array_length(${table.pendingScopes}) > 0)`,
 		),
 		index("api_credential_delivery_lookup_idx").on(
 			table.principalType,

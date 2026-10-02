@@ -24,44 +24,34 @@ import {
 	unavailable,
 } from "./conversation-execution-values.js";
 import {
-	isTaskPrincipalChannelV1,
+	isTaskApiChannelV1,
 	parseTaskAuthorizationBoundaryV1,
+	parseTaskPrincipalV1,
 } from "./task-authorization.js";
 
 export function parseState(
 	input: ConversationExecutionStateV1,
 ): ConversationExecutionStateV1 {
 	try {
-		const values = snapshotObject(
-			input,
-			[
-				"conversation",
-				"modelConfiguration",
-				"sourceMessage",
-				"targetExecution",
-				"existingStop",
-				"activeExecution",
-			],
-			["hasWaitingTask"],
-		);
-		if (
-			values.hasWaitingTask !== undefined &&
-			typeof values.hasWaitingTask !== "boolean"
-		)
-			unavailable();
+		const values = snapshotObject(input, [
+			"conversation",
+			"modelConfiguration",
+			"sourceMessage",
+			"targetExecution",
+			"existingStop",
+			"activeExecution",
+		]);
 		if (values.conversation === undefined) {
 			if (
 				values.modelConfiguration !== undefined ||
 				values.sourceMessage !== undefined ||
 				values.targetExecution !== undefined ||
 				values.existingStop !== undefined ||
-				values.activeExecution !== undefined ||
-				values.hasWaitingTask === true
+				values.activeExecution !== undefined
 			) {
 				unavailable();
 			}
 			return {
-				hasWaitingTask: false,
 				conversation: undefined,
 				modelConfiguration: undefined,
 				sourceMessage: undefined,
@@ -88,7 +78,7 @@ export function parseState(
 				"createdAt",
 				"updatedAt",
 			],
-			["isolationPending"],
+			["isolationPending", "principal"],
 		);
 		const sessionGenerationInput = conversation.sessionGeneration;
 		const lastConversationCursorInput = conversation.lastConversationCursor;
@@ -117,6 +107,22 @@ export function parseState(
 		) {
 			unavailable();
 		}
+		const principal =
+			conversation.principal === undefined
+				? undefined
+				: parseTaskPrincipalV1(conversation.principal);
+		const api =
+			conversation.channelId === "api" ||
+			conversation.channelId.startsWith("api:");
+		if (
+			(api &&
+				(!principal ||
+					!isTaskApiChannelV1(conversation.channelId, principal))) ||
+			(principal &&
+				(principal.id !== conversation.actorId ||
+					(!api && principal.kind !== "user")))
+		)
+			unavailable();
 		const createdAt = snapshotDate(conversation.createdAt);
 		const updatedAt = snapshotDate(conversation.updatedAt);
 		if (updatedAt.getTime() < createdAt.getTime()) unavailable();
@@ -195,16 +201,20 @@ export function parseState(
 		})();
 		const targetExecution = (() => {
 			if (values.targetExecution === undefined) return undefined;
-			const execution = snapshotObject(values.targetExecution, [
-				"executionId",
-				"conversationId",
-				"actorId",
-				"sessionGeneration",
-				"modelConfigurationRevision",
-				"modelOptionId",
-				"reasoningLevel",
-				"status",
-			]);
+			const execution = snapshotObject(
+				values.targetExecution,
+				[
+					"executionId",
+					"conversationId",
+					"actorId",
+					"sessionGeneration",
+					"modelConfigurationRevision",
+					"modelOptionId",
+					"reasoningLevel",
+					"status",
+				],
+				["principal"],
+			);
 			const status = execution.status;
 			if (
 				!isText(execution.executionId) ||
@@ -222,8 +232,7 @@ export function parseState(
 					execution.modelOptionId === null,
 					execution.reasoningLevel === null,
 				]).size !== 1 ||
-				(status !== "waiting" &&
-					status !== "submitted" &&
+				(status !== "submitted" &&
 					status !== "processing" &&
 					status !== "unknown" &&
 					status !== "completed" &&
@@ -236,6 +245,9 @@ export function parseState(
 				executionId: execution.executionId,
 				conversationId: execution.conversationId,
 				actorId: execution.actorId,
+				...(execution.principal === undefined
+					? {}
+					: { principal: parseTaskPrincipalV1(execution.principal) }),
 				sessionGeneration: execution.sessionGeneration,
 				modelConfigurationRevision: execution.modelConfigurationRevision,
 				modelOptionId: execution.modelOptionId,
@@ -267,19 +279,23 @@ export function parseState(
 		})();
 		const activeExecution = (() => {
 			if (values.activeExecution === undefined) return undefined;
-			const execution = snapshotObject(values.activeExecution, [
-				"executionId",
-				"conversationId",
-				"actorId",
-				"turnId",
-				"sessionGeneration",
-				"modelConfigurationRevision",
-				"modelOptionId",
-				"reasoningLevel",
-				"lastEventSequence",
-				"stopPending",
-				"status",
-			]);
+			const execution = snapshotObject(
+				values.activeExecution,
+				[
+					"executionId",
+					"conversationId",
+					"actorId",
+					"turnId",
+					"sessionGeneration",
+					"modelConfigurationRevision",
+					"modelOptionId",
+					"reasoningLevel",
+					"lastEventSequence",
+					"stopPending",
+					"status",
+				],
+				["principal"],
+			);
 			const executionStatus = execution.status;
 			if (
 				!isText(execution.executionId) ||
@@ -310,6 +326,9 @@ export function parseState(
 				executionId: execution.executionId,
 				conversationId: execution.conversationId,
 				actorId: execution.actorId,
+				...(execution.principal === undefined
+					? {}
+					: { principal: parseTaskPrincipalV1(execution.principal) }),
 				turnId: execution.turnId,
 				sessionGeneration: execution.sessionGeneration,
 				modelConfigurationRevision: execution.modelConfigurationRevision,
@@ -320,6 +339,16 @@ export function parseState(
 				status: executionStatus as "submitted" | "processing" | "unknown",
 			};
 		})();
+		for (const execution of [targetExecution, activeExecution]) {
+			if (!execution) continue;
+			if (
+				execution.actorId !== conversation.actorId ||
+				(api && !execution.principal) ||
+				(execution.principal && execution.principal.id !== execution.actorId) ||
+				(execution.principal?.kind ?? "user") !== (principal?.kind ?? "user")
+			)
+				unavailable();
+		}
 		if (
 			activeExecution &&
 			activeExecution.conversationId !== conversation.conversationId
@@ -351,13 +380,13 @@ export function parseState(
 		const status =
 			conversation.status as ConversationExecutionConversationStateV1["status"];
 		return {
-			hasWaitingTask: values.hasWaitingTask === true,
 			conversation: {
 				schemaVersion: 1,
 				conversationId: conversation.conversationId,
 				agentId: conversation.agentId,
 				actorId: conversation.actorId,
 				channelId: conversation.channelId,
+				...(principal ? { principal } : {}),
 				status,
 				...(conversation.isolationPending === true
 					? { isolationPending: true as const }
@@ -493,6 +522,8 @@ export function planMetadataRecovery(
 		conversation.conversationId !== query.conversationId ||
 		conversation.agentId !== authority.agentId ||
 		conversation.actorId !== authority.actorId ||
+		(conversation.principal?.kind ?? "user") !==
+			(authority.taskBoundary?.principal.kind ?? "user") ||
 		conversation.channelId !== authority.channelId
 	)
 		return { result: { outcome: "denied" }, updates: [] };
@@ -569,7 +600,7 @@ export function planMetadataRecovery(
 			continue;
 		}
 		if (
-			!isTaskPrincipalChannelV1(boundary.principal, boundary.channelId) ||
+			boundary.principal.kind !== "user" ||
 			boundary.principal.id !== execution.actorId ||
 			boundary.agentId !== execution.agentId ||
 			boundary.channelId !== execution.channelId ||

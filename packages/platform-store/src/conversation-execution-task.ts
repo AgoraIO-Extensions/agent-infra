@@ -1,20 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import type {
+	ConversationExecutionAuthorityV1,
 	ConversationTaskAdmissionStateV1,
 	ConversationTaskAdmissionTransactionPortV1,
 	ConversationTaskSubmitResultV1,
+	TaskApiChannelV1,
+	TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
-import {
-	conversationExecutionKeySubjectV1,
-	isTaskPrincipalChannelV1,
-} from "@agent-infra/platform-core";
+import { isTaskApiChannelV1 } from "@agent-infra/platform-core";
 import {
 	safeInteger,
 	type Transaction,
 	text,
 	unavailable,
 } from "./conversation-execution-common.js";
+import { currentConversationExecutionRelayKeyBindingV1 } from "./conversation-execution-key.js";
 import {
 	matchesBinding,
 	parseAuthority,
@@ -27,11 +28,8 @@ import {
 	readIdempotency,
 	reserveIdempotency,
 } from "./conversation-execution-sql.js";
-import { currentRelayKeyVersionInTransaction } from "./relay-key-versions.js";
-import {
-	insertTaskAuthorization,
-	requireCurrentTaskApiAccess,
-} from "./task-authorization.js";
+import { requireCurrentPersonalApiTaskAdmissionV1 } from "./personal-api-task-authorization.js";
+import { insertTaskAuthorization } from "./task-authorization.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
 type SubmitRequest = Parameters<
@@ -40,6 +38,39 @@ type SubmitRequest = Parameters<
 type SubmitDecide = Parameters<
 	ConversationTaskAdmissionTransactionPortV1["submitTask"]
 >[1];
+
+async function requireCurrentApiAdmission(
+	transaction: Transaction,
+	authority: ConversationExecutionAuthorityV1,
+	userDirectory: TaskUserDirectoryV1 | undefined,
+) {
+	const boundary = authority.taskBoundary;
+	if (
+		!boundary ||
+		!authority.personalApiAdmissionAuthority ||
+		!isTaskApiChannelV1(authority.channelId, boundary.principal)
+	)
+		unavailable();
+	const current = await requireCurrentPersonalApiTaskAdmissionV1(
+		transaction,
+		authority.personalApiAdmissionAuthority,
+		{
+			principal: boundary.principal,
+			actorId: authority.actorId,
+			agentId: authority.agentId,
+			channelId: authority.channelId as TaskApiChannelV1,
+			operation: "agent:use",
+		},
+		userDirectory,
+	);
+	if (
+		current.identityRevision !== boundary.identityRevision ||
+		boundary.accessSources.length !== 1 ||
+		boundary.accessSources[0]?.kind !== "api-use" ||
+		current.useGrantRevision !== boundary.accessSources[0].useGrantRevision
+	)
+		unavailable();
+}
 
 function replayResult(value: unknown): ConversationTaskSubmitResultV1 {
 	if (
@@ -124,7 +155,7 @@ async function readAgent(
 				}
 			: null,
 		modelConfiguration: agent.modelConfiguration ?? null,
-		sourceKind: agent.sourceKind ?? null,
+		sourceKind: agent.configuration?.source.kind ?? null,
 		customCapability,
 	};
 }
@@ -139,14 +170,17 @@ async function requireReplay(
 			conversation_agent_id: string;
 			conversation_actor_id: string;
 			conversation_channel_id: string;
+			conversation_principal_type: string;
 			execution_agent_id: string;
 			execution_actor_id: string;
 			execution_channel_id: string;
+			execution_principal_type: string;
 			message_actor_id: string;
 		}[]
 	>`
 		select c.agent_id as conversation_agent_id, c.actor_id as conversation_actor_id,
-			c.channel_id as conversation_channel_id, e.agent_id as execution_agent_id,
+			c.channel_id as conversation_channel_id, c.principal_type as conversation_principal_type,
+			e.principal_type as execution_principal_type, e.agent_id as execution_agent_id,
 			e.actor_id as execution_actor_id, e.channel_id as execution_channel_id,
 			m.actor_id as message_actor_id
 		from platform.conversations c
@@ -163,6 +197,9 @@ async function requireReplay(
 		row.execution_agent_id !== authority.agentId ||
 		row.conversation_actor_id !== authority.actorId ||
 		row.execution_actor_id !== authority.actorId ||
+		row.conversation_principal_type !==
+			authority.taskBoundary?.principal.kind ||
+		row.execution_principal_type !== authority.taskBoundary?.principal.kind ||
 		row.message_actor_id !== authority.actorId ||
 		row.conversation_channel_id !== authority.channelId ||
 		row.execution_channel_id !== authority.channelId
@@ -174,16 +211,19 @@ export async function submitConversationTask(
 	transaction: Transaction,
 	request: SubmitRequest,
 	decide: SubmitDecide,
+	userDirectory: TaskUserDirectoryV1 | undefined,
 ): ReturnType<ConversationTaskAdmissionTransactionPortV1["submitTask"]> {
 	const authority = parseAuthority(request.authority);
 	const principal = authority.taskBoundary?.principal;
 	if (
 		!principal ||
-		!isTaskPrincipalChannelV1(principal, authority.channelId) ||
+		!isTaskApiChannelV1(authority.channelId, principal) ||
 		principal.id !== authority.actorId ||
 		request.command.agentId !== authority.agentId
 	)
 		return { outcome: "denied", reason: "conversation_unavailable" };
+	// Preserve disable -> exact credential -> application/use -> Agent/Conversation locks.
+	await requireCurrentApiAdmission(transaction, authority, userDirectory);
 	const scope = {
 		scopeType: "principal",
 		scopeId: JSON.stringify([principal.kind, principal.id]),
@@ -202,16 +242,12 @@ export async function submitConversationTask(
 		>`select authorization_revision from platform.agents where id = ${authority.agentId} for share`;
 		if (agent?.authorization_revision !== authority.authorizationRevision)
 			return { outcome: "denied", reason: "agent_unavailable" };
-		await requireCurrentTaskApiAccess(
-			transaction,
-			authority.taskBoundary,
-			agent.authorization_revision,
-		);
 		if (existing.request_digest !== request.requestDigest)
 			return { outcome: "conflict", reason: "idempotency_conflict" };
 		if (existing.status !== "completed") unavailable();
 		const result = replayResult(existing.result);
 		await requireReplay(transaction, result, request);
+		await requireCurrentApiAdmission(transaction, authority, userDirectory);
 		return { outcome: "replayed", result };
 	}
 	const agent = await readAgent(transaction, authority.agentId);
@@ -241,22 +277,17 @@ export async function submitConversationTask(
 	let plan = decision;
 	const statusEvent = plan.statusEvent;
 	if (plan.relayKeyBinding !== null) unavailable();
-	if (plan.executionSource !== null) {
-		const subject = conversationExecutionKeySubjectV1(
+	const selected = await currentConversationExecutionRelayKeyBindingV1(
+		transaction,
+		{
 			authority,
-			state.sourceKind,
-		);
-		if (!subject) unavailable();
-		const { executionSource, purpose, subjectId } = subject;
-		if (executionSource !== plan.executionSource) unavailable();
-		const relayKeyBinding = await currentRelayKeyVersionInTransaction(
-			transaction,
-			{ purpose, subjectId },
-		);
-		if (!relayKeyBinding)
-			return { outcome: "denied", reason: "relay_key_unavailable" };
-		plan = { ...plan, relayKeyBinding };
-	}
+			userDirectory,
+			personalApiAdmissionAuthority: authority.personalApiAdmissionAuthority,
+		},
+	);
+	if (!selected) return { outcome: "denied", reason: "relay_key_unavailable" };
+	if (selected.executionSource !== plan.executionSource) unavailable();
+	plan = { ...plan, relayKeyBinding: selected.relayKeyBinding };
 	const finalCursor =
 		plan.modelSelectionFallback?.timelineEvent.conversationCursor ??
 		statusEvent.conversationCursor;
@@ -296,11 +327,11 @@ export async function submitConversationTask(
 	if (plan.createConversation) {
 		await transaction`
 			insert into platform.conversations
-				(id, agent_id, actor_id, channel_id, status, session_generation,
+				(id, agent_id, actor_id, channel_id, principal_type, status, session_generation,
 				 host_session_ref, authorization_revision, last_conversation_cursor,
 				 selected_model_option_id, selected_reasoning_level, created_at, updated_at)
 			values (${plan.conversationId}, ${authority.agentId}, ${authority.actorId},
-				${authority.channelId}, ${plan.conversationStatus}, 1, null, ${authority.authorizationRevision},
+				${authority.channelId}, ${principal.kind}, ${plan.conversationStatus}, 1, null, ${authority.authorizationRevision},
 				${finalCursor}, ${plan.modelOptionId}, ${plan.reasoningLevel},
 				${plan.acceptedAt}, ${plan.acceptedAt})
 		`;
@@ -316,14 +347,14 @@ export async function submitConversationTask(
 	}
 	await transaction`
 		insert into platform.conversation_executions
-			(execution_id, conversation_id, agent_id, actor_id, channel_id,
+			(execution_id, conversation_id, agent_id, actor_id, channel_id, principal_type,
 			 turn_id, status, task_wait_order, task_wait_deadline, session_generation,
 			 delivery_fence, authorization_revision, model_configuration_revision,
 			 model_option_id, reasoning_level, execution_source, relay_key_purpose,
 			 relay_key_subject_id, relay_key_id, relay_key_version, last_event_sequence,
 			 created_at, updated_at)
 		values (${plan.executionId}, ${plan.conversationId}, ${authority.agentId},
-			${authority.actorId}, ${authority.channelId}, ${plan.turnId}, ${plan.executionStatus},
+			${authority.actorId}, ${authority.channelId}, ${principal.kind}, ${plan.turnId}, ${plan.executionStatus},
 			${plan.waitOrder}, ${plan.waitDeadline}, ${plan.outbox.payload.sessionGeneration}, 0,
 			${authority.authorizationRevision}, ${plan.modelConfigurationRevision},
 			${plan.modelOptionId}, ${plan.reasoningLevel}, ${plan.executionSource},
@@ -383,5 +414,6 @@ export async function submitConversationTask(
 		result,
 		plan.acceptedAt,
 	);
+	await requireCurrentApiAdmission(transaction, authority, userDirectory);
 	return { outcome: "accepted", result };
 }

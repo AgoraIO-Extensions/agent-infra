@@ -193,6 +193,11 @@ function deploymentInput(
 	const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
 	const der = publicKey.export({ format: "der", type: "spki" });
 	const input: ProductionPlatformApiInputV1 = {
+		// Controlled fixture policy; not a production default.
+		taskAdmissionPolicy: {
+			maximumWaitingTasksPerAgent: 2,
+			waitingTimeoutMs: 60_000,
+		},
 		databaseUrl,
 		imageRepository: "registry.example.test/agents/codex",
 		identity,
@@ -765,6 +770,46 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		expect(close).toHaveBeenCalledTimes(1);
 		close.mockRestore();
 		await openApi();
+	});
+	it.each([
+		undefined,
+		null,
+		{},
+		{ maximumWaitingTasksPerAgent: 0, waitingTimeoutMs: 60_000 },
+		{ maximumWaitingTasksPerAgent: 2, waitingTimeoutMs: 0 },
+		{ maximumWaitingTasksPerAgent: 1.5, waitingTimeoutMs: 60_000 },
+		{ maximumWaitingTasksPerAgent: 2, waitingTimeoutMs: 1.5 },
+		{
+			maximumWaitingTasksPerAgent: Number.MAX_SAFE_INTEGER + 1,
+			waitingTimeoutMs: 60_000,
+		},
+		{
+			maximumWaitingTasksPerAgent: 2,
+			waitingTimeoutMs: Number.POSITIVE_INFINITY,
+		},
+		{
+			maximumWaitingTasksPerAgent: "private-policy-sentinel",
+			waitingTimeoutMs: 60_000,
+		},
+	])("rejects missing or invalid Task admission policy %#", (policy) => {
+		const invalid = {
+			...fixture.input,
+			taskAdmissionPolicy: policy,
+		} as unknown as ProductionPlatformApiInputV1;
+		expect(() => createProductionPlatformApiAssemblyInputV1(invalid)).toThrow(
+			"PLATFORM_DEPLOYMENT_CONFIGURATION_INVALID",
+		);
+	});
+	it("preserves the explicitly supplied Task admission limits", () => {
+		const taskAdmissionPolicy = {
+			maximumWaitingTasksPerAgent: 3,
+			waitingTimeoutMs: 45_000,
+		};
+		const input = createProductionPlatformApiAssemblyInputV1({
+			...fixture.input,
+			taskAdmissionPolicy,
+		});
+		expect(input.taskAdmissionPolicy).toEqual(taskAdmissionPolicy);
 	});
 	it.each([
 		"databaseUrl",

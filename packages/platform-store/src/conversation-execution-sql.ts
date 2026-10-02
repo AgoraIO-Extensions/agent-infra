@@ -10,6 +10,7 @@ import type {
 	ConversationRegenerationWritePlanV1,
 	ConversationStopWritePlanV1,
 } from "@agent-infra/platform-core";
+import { parseTaskPrincipalV1 } from "@agent-infra/platform-core";
 import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import {
 	type AgentConfigurationRow,
@@ -44,10 +45,9 @@ export async function lockAgentConfiguration(
 ): Promise<
 	| {
 			readonly authorizationRevision: string | null;
-			readonly sourceKind: "standard" | "custom" | undefined;
-			readonly configuration?: ReturnType<
-				typeof decodeAgentConfigurationRecord
-			>;
+			readonly configuration:
+				| ReturnType<typeof decodeAgentConfigurationRecord>
+				| undefined;
 			readonly modelConfiguration: ConversationModelConfigurationV1 | undefined;
 	  }
 	| undefined
@@ -68,7 +68,7 @@ export async function lockAgentConfiguration(
 	if (row.configuration === null) {
 		return {
 			authorizationRevision: row.authorization_revision,
-			sourceKind: undefined,
+			configuration: undefined,
 			modelConfiguration: undefined,
 		};
 	}
@@ -84,7 +84,6 @@ export async function lockAgentConfiguration(
 		const model = configuration.modelConfiguration;
 		return {
 			authorizationRevision: row.authorization_revision,
-			sourceKind: configuration.source.kind,
 			configuration,
 			modelConfiguration: model
 				? {
@@ -216,7 +215,7 @@ export async function lockConversation(
 	conversationId: string,
 ): Promise<ConversationExecutionConversationStateV1 | undefined> {
 	const rows = await transaction<ConversationRow[]>`
-		select id, agent_id, actor_id, channel_id, status, session_generation,
+		select id, agent_id, actor_id, channel_id, principal_type, status, session_generation,
 			host_session_ref, authorization_revision, last_conversation_cursor,
 			selected_model_option_id, selected_reasoning_level, created_at, updated_at
 		from platform.conversations where id = ${conversationId} for update
@@ -233,7 +232,7 @@ export async function lockConversationForRead(
 	conversationId: string,
 ): Promise<ConversationExecutionConversationStateV1 | undefined> {
 	const rows = await transaction<ConversationRow[]>`
-		select id, agent_id, actor_id, channel_id, status, session_generation,
+		select id, agent_id, actor_id, channel_id, principal_type, status, session_generation,
 			host_session_ref, authorization_revision, last_conversation_cursor,
 			selected_model_option_id, selected_reasoning_level, created_at, updated_at
 		from platform.conversations where id = ${conversationId} for share
@@ -251,7 +250,7 @@ export async function readMessageState(
 ): Promise<ConversationExecutionStateV1> {
 	const agent = await lockAgentConfiguration(transaction, conversation.agentId);
 	const activeRows = await transaction<ExecutionRow[]>`
-		select execution_id, conversation_id, actor_id, turn_id, session_generation,
+		select execution_id, conversation_id, actor_id, principal_type, agent_id, channel_id, turn_id, session_generation,
 			model_configuration_revision, model_option_id, reasoning_level,
 			last_event_sequence, status
 		from platform.conversation_executions
@@ -261,16 +260,9 @@ export async function readMessageState(
 		for update
 	`;
 	if (activeRows.length > 1) unavailable();
-	const [waiting] = await transaction<{ present: boolean }[]>`
-		select exists(select 1 from platform.conversation_executions
-			where conversation_id = ${conversation.conversationId}
-				and status = 'waiting') as present
-	`;
-	const hasWaitingTask = waiting?.present === true;
 	const active = activeRows[0];
 	if (!active) {
 		return {
-			hasWaitingTask,
 			conversation,
 			modelConfiguration: agent?.modelConfiguration,
 			sourceMessage: undefined,
@@ -280,7 +272,14 @@ export async function readMessageState(
 		};
 	}
 	const status = text(active.status);
-	if (!activeExecutionStatuses.has(status)) unavailable();
+	if (
+		!activeExecutionStatuses.has(status) ||
+		active.actor_id !== conversation.actorId ||
+		active.agent_id !== conversation.agentId ||
+		active.channel_id !== conversation.channelId ||
+		active.principal_type !== conversation.principal?.kind
+	)
+		unavailable();
 	const stopRows = await transaction<StopRow[]>`
 		select execution_id, stop_request_id, status
 		from platform.conversation_stops
@@ -291,7 +290,6 @@ export async function readMessageState(
 	if (stop && stop.status !== "submitted" && stop.status !== "completed")
 		unavailable();
 	return {
-		hasWaitingTask,
 		conversation,
 		modelConfiguration: agent?.modelConfiguration,
 		sourceMessage: undefined,
@@ -301,6 +299,10 @@ export async function readMessageState(
 			executionId: text(active.execution_id),
 			conversationId: text(active.conversation_id),
 			actorId: text(active.actor_id),
+			principal: parseTaskPrincipalV1({
+				kind: active.principal_type,
+				id: active.actor_id,
+			}),
 			turnId: text(active.turn_id),
 			sessionGeneration: safeInteger(active.session_generation, 1),
 			modelConfigurationRevision:
@@ -383,6 +385,9 @@ export async function readStopState(
 			readonly execution_id: string;
 			readonly conversation_id: string;
 			readonly actor_id: string;
+			readonly principal_type: string;
+			readonly agent_id: string;
+			readonly channel_id: string;
 			readonly session_generation: string | number;
 			readonly model_configuration_revision: string | number | null;
 			readonly model_option_id: string | null;
@@ -390,7 +395,7 @@ export async function readStopState(
 			readonly status: string;
 		}[]
 	>`
-		select execution_id, conversation_id, actor_id, session_generation,
+		select execution_id, conversation_id, actor_id, principal_type, agent_id, channel_id, session_generation,
 			model_configuration_revision, model_option_id, reasoning_level, status
 		from platform.conversation_executions
 		where conversation_id = ${conversation.conversationId}
@@ -400,12 +405,15 @@ export async function readStopState(
 	`;
 	const target = rows[0];
 	if (!target) return state;
-	const status = text(target.status);
 	if (
-		status !== "waiting" &&
-		!activeExecutionStatuses.has(status) &&
-		!executionIsTerminal(status)
-	) {
+		target.actor_id !== conversation.actorId ||
+		target.agent_id !== conversation.agentId ||
+		target.channel_id !== conversation.channelId ||
+		target.principal_type !== conversation.principal?.kind
+	)
+		unavailable();
+	const status = text(target.status);
+	if (!activeExecutionStatuses.has(status) && !executionIsTerminal(status)) {
 		unavailable();
 	}
 	const stops = await transaction<StopRow[]>`
@@ -424,6 +432,10 @@ export async function readStopState(
 			executionId: text(target.execution_id),
 			conversationId: text(target.conversation_id),
 			actorId: text(target.actor_id),
+			principal: parseTaskPrincipalV1({
+				kind: target.principal_type,
+				id: target.actor_id,
+			}),
 			sessionGeneration: safeInteger(target.session_generation, 1),
 			modelConfigurationRevision:
 				target.model_configuration_revision === null
@@ -434,7 +446,6 @@ export async function readStopState(
 			reasoningLevel:
 				target.reasoning_level === null ? null : text(target.reasoning_level),
 			status: status as
-				| "waiting"
 				| "submitted"
 				| "processing"
 				| "unknown"
@@ -458,7 +469,7 @@ export async function requireCreateReplay(
 	authority: ConversationExecutionAuthorityV1,
 ): Promise<void> {
 	const rows = await transaction<ConversationRow[]>`
-		select id, agent_id, actor_id, channel_id, status, session_generation,
+		select id, agent_id, actor_id, channel_id, principal_type, status, session_generation,
 			host_session_ref, authorization_revision, last_conversation_cursor,
 			selected_model_option_id, selected_reasoning_level, created_at, updated_at
 		from platform.conversations where id = ${result.conversationId} limit 1
