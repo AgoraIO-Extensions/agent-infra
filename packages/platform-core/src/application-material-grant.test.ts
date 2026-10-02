@@ -103,6 +103,19 @@ describe("application material grant authority", () => {
 		).rejects.toBeInstanceOf(ApplicationMaterialGrantErrorV1);
 		expect(store.row?.revokedAt).toBeNull();
 	});
+	it("rejects an application recipient from another application", async () => {
+		const store = fakeStore();
+		const useCase = createApplicationMaterialGrantUseCaseV1({
+			store,
+			resolveUser: async () => ({ accountStatus: "active" }),
+		});
+		await expect(
+			useCase.grant(
+				request({ principalType: "application", principalId: "app-2" }),
+			),
+		).rejects.toMatchObject({ code: "not_found" });
+		expect(store.row).toBeNull();
+	});
 	it("keeps material out of the result and records the grant audit", async () => {
 		const store = fakeStore();
 		const useCase = createApplicationMaterialGrantUseCaseV1({

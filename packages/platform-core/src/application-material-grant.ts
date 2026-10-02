@@ -134,6 +134,11 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 		request: ApplicationMaterialGrantRequestV1,
 	): Promise<void> => {
 		if (
+			request.principalType === "application" &&
+			request.principalId !== request.applicationId
+		)
+			throw new ApplicationMaterialGrantErrorV1("not_found");
+		if (
 			!(await tx.recipientEligible(request.principalType, request.principalId))
 		)
 			throw new ApplicationMaterialGrantErrorV1("not_found");
