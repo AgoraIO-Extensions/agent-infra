@@ -176,8 +176,24 @@ export async function recordTaskStatus(
 	workerId: string,
 	reason?: string,
 ) {
+	const [authorization] = await transaction<{ boundary: unknown }[]>`
+		select boundary from platform.task_authorization_records where execution_id = ${state.execution.execution_id}
+	`;
+	const boundary = authorization
+		? parseTaskAuthorizationBoundaryV1(authorization.boundary)
+		: undefined;
+	if (!boundary && state.execution.task_wait_order !== null)
+		throw new StaleDispatchLease();
+	if (
+		boundary &&
+		(boundary.principal.kind !== state.execution.principal_type ||
+			boundary.principal.id !== state.execution.actor_id ||
+			boundary.agentId !== state.execution.agent_id ||
+			boundary.channelId !== state.execution.channel_id)
+	)
+		throw new StaleDispatchLease();
 	const event = publicTaskStatusEventV1({
-		isTask: state.execution.task_wait_order !== null,
+		isTask: state.execution.task_wait_order !== null || boundary !== undefined,
 		status,
 		reason,
 	});
@@ -195,22 +211,6 @@ export async function recordTaskStatus(
 	`;
 	if (!execution || !conversation) throw new StaleDispatchLease();
 	const eventId = randomUUID();
-	const [authorization] = await transaction<{ boundary: unknown }[]>`
-		select boundary from platform.task_authorization_records where execution_id = ${state.execution.execution_id}
-	`;
-	const boundary = authorization
-		? parseTaskAuthorizationBoundaryV1(authorization.boundary)
-		: undefined;
-	if (!boundary && state.execution.task_wait_order !== null)
-		throw new StaleDispatchLease();
-	if (
-		boundary &&
-		(boundary.principal.kind !== state.execution.principal_type ||
-			boundary.principal.id !== state.execution.actor_id ||
-			boundary.agentId !== state.execution.agent_id ||
-			boundary.channelId !== state.execution.channel_id)
-	)
-		throw new StaleDispatchLease();
 	await transaction`
 		insert into platform.conversation_events
 			(event_id, conversation_id, execution_id, adapter_event_key, sequence,
