@@ -22,22 +22,7 @@ import {
 } from "./postgres-test.ts";
 import { PostgresTaskAuthorizationStoreV1 } from "./task-authorization.ts";
 
-const storeConformanceAuthority: ConversationExecutionAuthorityV1 = {
-	...conversationConformanceAuthorityV1,
-	actorId: "actor_fixture",
-	agentId: "agent_fixture",
-	channelId: "web",
-	authorizationRevision: "authorization_fixture_1",
-	taskBoundary: {
-		schemaVersion: 1,
-		principal: { kind: "user", id: "actor_fixture" },
-		agentId: "agent_fixture",
-		channelId: "web",
-		identityRevision: "identity_fixture_1",
-		agentAuthorizationRevision: "authorization_fixture_1",
-		accessSources: [{ kind: "user", userId: "actor_fixture" }],
-	},
-};
+const storeConformanceAuthority = conversationConformanceAuthorityV1;
 
 const authority: ConversationExecutionAuthorityV1 = {
 	schemaVersion: 1,

@@ -481,14 +481,12 @@ export class PostgresConversationExecutionTransactionV1
 						 ${plan.execution.createdAt},
 						 ${plan.execution.createdAt})
 				`;
-				if (authority.taskBoundary) {
-					await insertTaskAuthorization(transaction, {
-						executionId: plan.execution.executionId,
-						boundary: authority.taskBoundary,
-						traceId: request.command.traceId,
-						requestId: request.command.requestId,
-					});
-				}
+				await insertTaskAuthorization(transaction, {
+					executionId: plan.execution.executionId,
+					boundary: authority.taskBoundary,
+					traceId: request.command.traceId,
+					requestId: request.command.requestId,
+				});
 			}
 			for (const fileId of request.command.attachments ?? []) {
 				const [row] = await transaction<{ record: FileRecordV1 }[]>`
@@ -754,14 +752,12 @@ export class PostgresConversationExecutionTransactionV1
 					 ${plan.execution.createdAt},
 					 ${plan.execution.createdAt})
 			`;
-			if (authority.taskBoundary) {
-				await insertTaskAuthorization(transaction, {
-					executionId: plan.execution.executionId,
-					boundary: authority.taskBoundary,
-					traceId: request.command.traceId,
-					requestId: request.command.requestId,
-				});
-			}
+			await insertTaskAuthorization(transaction, {
+				executionId: plan.execution.executionId,
+				boundary: authority.taskBoundary,
+				traceId: request.command.traceId,
+				requestId: request.command.requestId,
+			});
 			await transaction`
 				insert into platform.outbox_items
 					(id, scope_type, scope_id, operation, payload, trace_id, request_id,
