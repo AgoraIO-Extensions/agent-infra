@@ -4230,6 +4230,17 @@
         ],
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "PlatformSession": {
+        "in": "cookie",
+        "name": "__Host-platform-session",
+        "type": "apiKey"
+      },
+      "platformApiCredential": {
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -7596,7 +7607,12 @@
           }
         },
         "security": [
-          {}
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
         ]
       }
     },
@@ -7761,7 +7777,12 @@
           }
         },
         "security": [
-          {}
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
         ]
       }
     },
@@ -9677,7 +9698,11 @@
             "description": "Audit query failed"
           }
         },
-        "security": []
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
       }
     },
     "/api/v3/admin/audit/{auditId}": {
@@ -9840,7 +9865,11 @@
             "description": "Audit query failed"
           }
         },
-        "security": []
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
       }
     }
   }

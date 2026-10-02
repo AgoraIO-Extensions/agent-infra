@@ -1286,6 +1286,52 @@ function isScopedAuditOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #481 documents the actual scoped audit cookie/Bearer entry points only.
+function isScopedAuditCredentialSecurityAddition(previous, current) {
+	const paths = [
+		"/api/v1/audit",
+		"/api/v1/audit/{auditId}",
+		"/api/v3/admin/audit",
+		"/api/v3/admin/audit/{auditId}",
+	];
+	const schemes = {
+		platformApiCredential: { type: "http", scheme: "bearer" },
+		PlatformSession: {
+			type: "apiKey",
+			in: "cookie",
+			name: "__Host-platform-session",
+		},
+	};
+	const normalized = structuredClone(current);
+	for (const [name, scheme] of Object.entries(schemes)) {
+		if (!sameValue(current.components?.securitySchemes?.[name], scheme))
+			return false;
+		const oldScheme = previous.components?.securitySchemes?.[name];
+		if (oldScheme !== undefined && !sameValue(oldScheme, scheme)) return false;
+		if (oldScheme === undefined)
+			delete normalized.components.securitySchemes[name];
+	}
+	if (
+		previous.components?.securitySchemes === undefined &&
+		Object.keys(normalized.components.securitySchemes).length === 0
+	)
+		delete normalized.components.securitySchemes;
+	for (const path of paths) {
+		const own = path.startsWith("/api/v1/");
+		const expected = own
+			? [{ PlatformSession: [] }, { platformApiCredential: [] }]
+			: [{ PlatformSession: [] }];
+		const legacy = own ? [{}] : [];
+		if (!sameValue(current.paths?.[path]?.get?.security, expected))
+			return false;
+		const old = previous.paths?.[path]?.get?.security;
+		if (previous.paths?.[path] !== undefined && !sameValue(old, legacy))
+			return false;
+		normalized.paths[path].get.security = legacy;
+	}
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 // #1060 extends only the canonical audit action at its existing schema locations.
 function withoutPersonalApiAgentReadAudit(previous, current) {
 	const normalized = structuredClone(current);
@@ -1458,6 +1504,7 @@ function findBreakingChanges(previous, current) {
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
+			!isScopedAuditCredentialSecurityAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");

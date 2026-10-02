@@ -122,9 +122,17 @@ export const submitWecomCredentials = <ThrowOnError extends boolean = false>(opt
     }
 });
 
-export const listOwnExecutionAudit = <ThrowOnError extends boolean = false>(options?: Options<ListOwnExecutionAuditData, ThrowOnError>): RequestResult<ListOwnExecutionAuditResponses, ListOwnExecutionAuditErrors, ThrowOnError> => (options?.client ?? client).get<ListOwnExecutionAuditResponses, ListOwnExecutionAuditErrors, ThrowOnError>({ url: '/api/v1/audit', ...options });
+export const listOwnExecutionAudit = <ThrowOnError extends boolean = false>(options?: Options<ListOwnExecutionAuditData, ThrowOnError>): RequestResult<ListOwnExecutionAuditResponses, ListOwnExecutionAuditErrors, ThrowOnError> => (options?.client ?? client).get<ListOwnExecutionAuditResponses, ListOwnExecutionAuditErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/audit',
+    ...options
+});
 
-export const getOwnExecutionAudit = <ThrowOnError extends boolean = false>(options: Options<GetOwnExecutionAuditData, ThrowOnError>): RequestResult<GetOwnExecutionAuditResponses, GetOwnExecutionAuditErrors, ThrowOnError> => (options.client ?? client).get<GetOwnExecutionAuditResponses, GetOwnExecutionAuditErrors, ThrowOnError>({ url: '/api/v1/audit/{auditId}', ...options });
+export const getOwnExecutionAudit = <ThrowOnError extends boolean = false>(options: Options<GetOwnExecutionAuditData, ThrowOnError>): RequestResult<GetOwnExecutionAuditResponses, GetOwnExecutionAuditErrors, ThrowOnError> => (options.client ?? client).get<GetOwnExecutionAuditResponses, GetOwnExecutionAuditErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/audit/{auditId}',
+    ...options
+});
 
 export const getConversation = <ThrowOnError extends boolean = false>(options: Options<GetConversationData, ThrowOnError>): RequestResult<GetConversationResponses, GetConversationErrors, ThrowOnError> => (options.client ?? client).get<GetConversationResponses, GetConversationErrors, ThrowOnError>({ url: '/api/v1/conversations/{conversationId}', ...options });
 
@@ -217,6 +225,22 @@ export const getWecomReceipt = <ThrowOnError extends boolean = false>(options: O
 
 export const abandonUnknownWecomDelivery = <ThrowOnError extends boolean = false>(options: Options<AbandonUnknownWecomDeliveryData, ThrowOnError>): RequestResult<AbandonUnknownWecomDeliveryResponses, AbandonUnknownWecomDeliveryErrors, ThrowOnError> => (options.client ?? client).post<AbandonUnknownWecomDeliveryResponses, AbandonUnknownWecomDeliveryErrors, ThrowOnError>({ url: '/api/v1/wecom/receipts/{receiptId}/abandon', ...options });
 
-export const listScopedAdministratorAudit = <ThrowOnError extends boolean = false>(options?: Options<ListScopedAdministratorAuditData, ThrowOnError>): RequestResult<ListScopedAdministratorAuditResponses, ListScopedAdministratorAuditErrors, ThrowOnError> => (options?.client ?? client).get<ListScopedAdministratorAuditResponses, ListScopedAdministratorAuditErrors, ThrowOnError>({ url: '/api/v3/admin/audit', ...options });
+export const listScopedAdministratorAudit = <ThrowOnError extends boolean = false>(options?: Options<ListScopedAdministratorAuditData, ThrowOnError>): RequestResult<ListScopedAdministratorAuditResponses, ListScopedAdministratorAuditErrors, ThrowOnError> => (options?.client ?? client).get<ListScopedAdministratorAuditResponses, ListScopedAdministratorAuditErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v3/admin/audit',
+    ...options
+});
 
-export const getScopedAdministratorAudit = <ThrowOnError extends boolean = false>(options: Options<GetScopedAdministratorAuditData, ThrowOnError>): RequestResult<GetScopedAdministratorAuditResponses, GetScopedAdministratorAuditErrors, ThrowOnError> => (options.client ?? client).get<GetScopedAdministratorAuditResponses, GetScopedAdministratorAuditErrors, ThrowOnError>({ url: '/api/v3/admin/audit/{auditId}', ...options });
+export const getScopedAdministratorAudit = <ThrowOnError extends boolean = false>(options: Options<GetScopedAdministratorAuditData, ThrowOnError>): RequestResult<GetScopedAdministratorAuditResponses, GetScopedAdministratorAuditErrors, ThrowOnError> => (options.client ?? client).get<GetScopedAdministratorAuditResponses, GetScopedAdministratorAuditErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v3/admin/audit/{auditId}',
+    ...options
+});
