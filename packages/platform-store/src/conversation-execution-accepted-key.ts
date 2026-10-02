@@ -24,7 +24,7 @@ import {
 	readMessage,
 	readStop,
 } from "./conversation-dispatch-sql.js";
-import { exactPayload } from "./conversation-dispatch-validation.js";
+import { exactPayload, operation } from "./conversation-dispatch-validation.js";
 
 export interface AcceptedExecutionKeyProjectionV4 {
 	readonly scope: RuntimePinnedExecutionKeyScopeV4;
@@ -73,7 +73,9 @@ export async function readAcceptedExecutionKeyInTransactionV4(
 		request.executionId,
 	);
 	if (!conversation || !execution) return null;
-	const payload = exactPayload(outbox.payload, outbox.operation);
+	const parsedOperation = operation(outbox.operation);
+	if (!parsedOperation) return null;
+	const payload = exactPayload(outbox.payload, parsedOperation);
 	if (
 		!payload ||
 		!bindingMatches(outbox, payload, conversation, execution) ||
