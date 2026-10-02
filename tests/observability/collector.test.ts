@@ -15,6 +15,7 @@ import type { ConversationOperationFactV2 } from "../../packages/platform-core/s
 import { PostgresConversationEventTransactionV1 } from "../../packages/platform-store/src/conversation-events.js";
 import { migratePlatformDatabase } from "../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../packages/platform-store/src/postgres-test.js";
+import { PostgresScopedPlatformAuditQueryV1 } from "../../packages/platform-store/src/scoped-audit-query.js";
 import { insertTaskAuthorization } from "../../packages/platform-store/src/task-authorization.js";
 import { startAlertBackend } from "./alert-backend.js";
 import { evaluateAlerts } from "./alerts.js";
@@ -86,6 +87,7 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		| Awaited<ReturnType<typeof startPlatformWorkerFromDeploymentV2>>
 		| undefined;
 	let telemetry: ReturnType<typeof startObservability> | undefined;
+	let auditQuery: PostgresScopedPlatformAuditQueryV1 | undefined;
 	const thresholds = { pending: 1, errors: 1, sustainMs: 1000 };
 	const samples: Parameters<typeof evaluateAlerts>[0][number][] = [];
 	const alerts: { phase: string; state: ReturnType<typeof evaluateAlerts> }[] =
@@ -94,6 +96,9 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 	let backend: Awaited<ReturnType<typeof startAlertBackend>> | undefined;
 	try {
 		await migratePlatformDatabase(db);
+		auditQuery = new PostgresScopedPlatformAuditQueryV1({
+			databaseUrl: db.databaseUrl,
+		});
 		configureDatabase(db.databaseUrl);
 		const startApi = () =>
 			startPlatformApiFromDeployment({
@@ -530,8 +535,62 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 				from platform.audit_events where action = 'execution.operation.observed' and target_id = ${executionId}`;
 		expect(operationAudits?.count).toBe(7);
 		expect(operationAudits?.bindings).toBe(1);
+		if (!auditQuery) throw new Error("Audit query missing");
+		const queried = await auditQuery.listAudit(
+			{ kind: "administrator", administratorId: "platform-admin" },
+			{ limit: 100, filters: { executionId } },
+			{ requestId: randomUUID(), traceId: randomUUID() },
+		);
+		const queriedOperations = queried.items.filter(
+			(item) => item.action === "execution.operation.observed",
+		);
+		expect(queriedOperations).toHaveLength(7);
+		expect(
+			queriedOperations.every(
+				(item) =>
+					item.executionId === executionId &&
+					item.operation?.fact.operationRef !== undefined &&
+					item.operation?.fact.attemptRef !== undefined,
+			),
+		).toBe(true);
+		const queriedPairs = new Set(
+			queriedOperations.map(
+				(item) =>
+					`${item.operation?.fact.operationRef}:${item.operation?.fact.attemptRef}`,
+			),
+		);
+		expect(queriedPairs.size).toBe(2);
+		const unrelated = await auditQuery.listAudit(
+			{ kind: "administrator", administratorId: "platform-admin" },
+			{ limit: 100, filters: { executionId: randomUUID() } },
+			{ requestId: randomUUID(), traceId: randomUUID() },
+		);
+		expect(unrelated.items).toHaveLength(0);
+		await expect(
+			auditQuery.listAudit(
+				{
+					kind: "execution",
+					principal: { kind: "user", id: "other-actor" },
+					user: {
+						schemaVersion: 1,
+						userId: "other-actor",
+						accountStatus: "active",
+						organizationIds: [],
+						authorizationRevision: "other-revision",
+					},
+				},
+				{ limit: 100, filters: { executionId } },
+				{ requestId: randomUUID(), traceId: randomUUID() },
+			),
+		).rejects.toMatchObject({ code: "access_denied" });
 		const finalMetrics = await collector.query();
 		const finalTraces = await collector.read();
+		for (const item of queriedOperations) {
+			const fact = item.operation?.fact;
+			if (!fact) throw new Error("Queried operation fact missing");
+			expect(finalTraces).toContain(fact.operationRef);
+			expect(finalTraces).toContain(fact.attemptRef);
+		}
 		await backend.waitFor(
 			"PlatformCollectorUnavailable",
 			"resolved",
@@ -581,6 +640,10 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 						controlledAuthorization: true,
 						operationAudits: operationAudits?.count,
 						authorizationBindings: operationAudits?.bindings,
+						queriedOperationCount: queriedOperations.length,
+						queriedOperationPairs: queriedPairs.size,
+						unrelatedExecutionCount: unrelated.items.length,
+						queryAuthorizationNegative: true,
 					},
 					finalMetrics,
 					limitations: [
@@ -589,6 +652,7 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 						"Backlog seeded in disposable database; formal API sampler wired; Worker resource sampler not exercised",
 						"Controlled alert backend/webhook only; production capacity and operational destination not accepted",
 						"No Runtime or Connection evidence; AC1-9 not complete",
+						"Audit query evidence is limited to the same controlled PG transaction and does not prove external Connection or production audit acceptance",
 					],
 				},
 				null,
@@ -607,6 +671,9 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 				await worker?.stop();
 			},
 			() => transaction.close(),
+			async () => {
+				await auditQuery?.close();
+			},
 			() => sql.end(),
 			() => db.stop(),
 			() => collector.stop(),

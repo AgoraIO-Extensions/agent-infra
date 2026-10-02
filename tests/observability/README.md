@@ -5,7 +5,7 @@
 ## 入口和归属
 
 - `collector.ts:startCollector`：复用本地官方 OTel Collector 镜像，绑定回环端口；提供 Prometheus 文本查询及 OTLP JSON 文件回读。容器限制 192 MiB，采集文件轮转限制 2 MiB / 1 个备份。没有外部 exporter。
-- `collector.test.ts`：调用正式 `startPlatformApiFromDeployment`、`startPlatformWorkerFromDeploymentV2`；API 使用真实 HTTP/PostgreSQL，并从正式进程 sampler 回读 `task_waiting`/`outbox_pending`，Worker 使用既有 `createObservedConversationEvents` 与 `PostgresConversationEventTransactionV1`。事件保存和重放仍由原事务判断。
+- `collector.test.ts`：调用正式 `startPlatformApiFromDeployment`、`startPlatformWorkerFromDeploymentV2`；API 使用真实 HTTP/PostgreSQL，并从正式进程 sampler 回读 `task_waiting`/`outbox_pending`，Worker 使用既有 `createObservedConversationEvents` 与 `PostgresConversationEventTransactionV1`。事件保存和重放仍由原事务判断；同一次事务的 `execution.operation.observed` 记录再由正式 `PostgresScopedPlatformAuditQueryV1` 查询，核对同一 Execution 下的 operationRef/attemptRef，空 Execution 查询与跨主体查询作为负向路径。该查询证据仍是受控本地 PostgreSQL，不是生产审计或 Connection receipt。
 - `deployment.ts`：仅提供受控数据库和合成身份。未使用的 admission 拒绝调用，不证明真实身份系统验收。
 - `alerts.ts:evaluateAlerts`：有限采样的受控告警规则，阈值由调用方传入；没有定时调度或第二套业务事实。输出由验收写入本地证据文件，不是生产通知通道。
 
