@@ -559,6 +559,47 @@ a[class~="group/button"] {
 	min-height: 0;
 	overflow: auto;
 }
+/* Original chat IA keeps conversation and personal history together. */
+.conversation-columns {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 330px;
+	flex: 1;
+	min-height: 0;
+}
+.conversation-history-panel {
+	min-width: 0;
+	padding: 22px 18px;
+	border-left: 1px solid var(--border);
+	background: var(--surface);
+	overflow: auto;
+	overflow-wrap: anywhere;
+}
+.conversation-history-panel:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: -2px;
+}
+@media (max-width: 1180px) {
+	.conversation-columns {
+		grid-template-columns: minmax(0, 1fr) 290px;
+	}
+}
+@media (max-width: 820px) {
+	.chat-layout {
+		height: auto;
+	}
+	.conversation-columns {
+		display: block;
+	}
+	.conversation-columns > .chat-workspace {
+		height: calc(100dvh - var(--platform-topbar-height) - 180px);
+		min-height: 420px;
+	}
+	.conversation-history-panel {
+		border-left: 0;
+		border-top: 1px solid var(--border);
+		overflow: visible;
+	}
+}
 .chat-thread:not([hidden]) {
 	display: flex;
 	flex-direction: column;
@@ -662,9 +703,6 @@ a[class~="group/button"] {
 @media (max-width: 767px) {
 	.platform-content.chat-content {
 		padding: 16px 12px;
-	}
-	.chat-layout {
-		height: calc(100dvh - var(--platform-topbar-height) - 32px);
 	}
 	.chat-layout h1 {
 		font-size: 18px;

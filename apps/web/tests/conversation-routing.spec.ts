@@ -15,11 +15,15 @@ async function routingFixture(
 		conversationId = "conversation-1",
 		stopped = false,
 		longTitles = false,
+		recentAcrossAgents = false,
+		recentFailureStatus,
 	}: {
 		agentId?: string;
 		conversationId?: string;
 		stopped?: boolean;
 		longTitles?: boolean;
+		recentAcrossAgents?: boolean;
+		recentFailureStatus?: number;
 	} = {},
 ) {
 	const requests: { method: string; path: string[]; search: string }[] = [];
@@ -73,6 +77,26 @@ async function routingFixture(
 		const url = new URL(request.url());
 		const path = url.pathname.split("/").slice(1).map(decodeURIComponent);
 		requests.push({ method: request.method(), path, search: url.search });
+		if (url.pathname === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				status: recentFailureStatus ?? 200,
+				json: recentFailureStatus
+					? { message: "Controlled read failure" }
+					: ConversationPageV1Schema.parse({
+							items: recentAcrossAgents
+								? [
+										metadata(conversationId),
+										{
+											...metadata("conversation-other"),
+											agentId: "agent-second",
+											title: "受控跨 Agent 历史",
+											status: "unavailable",
+										},
+									]
+								: [],
+							nextCursor: null,
+						}),
+			});
 		if (url.pathname === "/api/v1/session")
 			return route.fulfill({
 				json: {
@@ -88,10 +112,10 @@ async function routingFixture(
 		if (
 			path[1] === "v2" &&
 			path[2] === "agents" &&
-			path[3] === agentId &&
+			[agentId, "agent-second"].includes(path[3] ?? "") &&
 			path.length === 4
 		)
-			return route.fulfill({ json: agent });
+			return route.fulfill({ json: { ...agent, agentId: path[3] } });
 		if (path[1] === "v2" && path[2] === "agents" && path.length === 3)
 			return route.fulfill({ json: { items: [agent], nextCursor: null } });
 		if (
@@ -125,6 +149,23 @@ async function routingFixture(
 					},
 				});
 			const requestedConversation = path[3];
+			if (requestedConversation === "conversation-other") {
+				if (path[4] === "events")
+					return route.fulfill({
+						contentType: "text/event-stream",
+						body: ": controlled heartbeat\n\n",
+					});
+				return route.fulfill({
+					json: ConversationDetailProjectionV2Schema.parse({
+						...detail(requestedConversation),
+						conversation: {
+							...metadata(requestedConversation),
+							agentId: "agent-second",
+							status: "unavailable",
+						},
+					}),
+				});
+			}
 			if (requestedConversation && ids.includes(requestedConversation)) {
 				if (path[4] === "events")
 					return route.fulfill({
@@ -151,6 +192,91 @@ async function assertChat(page: Page) {
 	).toBeVisible();
 	await expect(page.getByLabel("消息", { exact: true })).toBeVisible();
 }
+
+test("keeps conversation and history together, preserves draft and SSE, and opens the original cross-Agent record", async ({
+	page,
+}, info) => {
+	const fixture = await routingFixture(page, {
+		recentAcrossAgents: true,
+		longTitles: true,
+	});
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	await assertChat(page);
+	const panel = page.getByRole("complementary", { name: "对话历史" });
+	const workspace = page.locator(".chat-workspace");
+	const other = panel.getByRole("link", { name: /受控跨 Agent 历史/ });
+	await expect(other).toHaveAttribute(
+		"href",
+		"/chat/agent-second/conversation-other",
+	);
+	await expect(panel.locator('a[aria-current="page"]')).toHaveCount(1);
+	const chatBox = await workspace.boundingBox();
+	const historyBox = await panel.boundingBox();
+	if (!chatBox || !historyBox)
+		throw new Error("Both conversation regions must be rendered");
+	if ((page.viewportSize()?.width ?? 0) > 820) {
+		expect(historyBox.x).toBeGreaterThanOrEqual(chatBox.x + chatBox.width);
+		expect(Math.abs(chatBox.y - historyBox.y)).toBeLessThan(2);
+	} else {
+		expect(historyBox.y).toBeGreaterThanOrEqual(chatBox.y + chatBox.height);
+	}
+	const input = page.getByLabel("消息", { exact: true });
+	await input.fill("受控草稿，历史切换不会发送。");
+	await expect
+		.poll(
+			() =>
+				fixture.requests.filter((request) => request.path[4] === "events")
+					.length,
+		)
+		.toBe(1);
+	await page.getByRole("button", { name: "个人历史", exact: true }).click();
+	await expect(panel.getByRole("heading", { name: "个人历史" })).toBeVisible();
+	await expect(input).toBeVisible();
+	await expect(input).toHaveValue("受控草稿，历史切换不会发送。");
+	await expect(panel).toBeFocused();
+	await page.getByRole("button", { name: "返回对话", exact: true }).click();
+	await expect(panel.getByRole("heading", { name: "最近对话" })).toBeVisible();
+	await expect(input).toHaveValue("受控草稿，历史切换不会发送。");
+	expect(
+		fixture.requests.filter((request) => request.path[4] === "events"),
+	).toHaveLength(1);
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= innerWidth,
+		),
+	).toBe(true);
+	await info.attach("controlled-conversation-history-layout", {
+		body: await page.screenshot({ fullPage: true, animations: "disabled" }),
+		contentType: "image/png",
+	});
+	await other.focus();
+	await page.keyboard.press("Enter");
+	await expect(page).toHaveURL(/\/chat\/agent-second\/conversation-other$/);
+	await expect(input).toBeDisabled();
+	await expect(page.locator("form[data-c02-session-id]")).toHaveAttribute(
+		"data-c02-session-id",
+		"conversation-other",
+	);
+	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+		true,
+	);
+	expect(fixture.unexpected).toEqual([]);
+});
+
+test("keeps a missing recent endpoint distinct from logout or empty history", async ({
+	page,
+}) => {
+	const fixture = await routingFixture(page, { recentFailureStatus: 404 });
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	await assertChat(page);
+	await expect(page.getByText("最近对话读取入口不可用。")).toBeVisible();
+	await expect(page.getByText("暂无个人对话。")).toHaveCount(0);
+	await expect(page.getByText(/当前登录或访问权限已失效/)).toHaveCount(0);
+	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+		true,
+	);
+	expect(fixture.unexpected).toEqual([]);
+});
 
 for (const legacy of [false, true]) {
 	test(`opens ${legacy ? "legacy" : "canonical"} history with opaque IDs, refresh and browser back without a business write`, async ({
@@ -185,7 +311,7 @@ for (const legacy of [false, true]) {
 		await assertChat(page);
 		await page.goBack();
 		await expect(
-			page.getByRole("heading", { name: "个人历史", exact: true, level: 1 }),
+			page.getByRole("heading", { name: "个人历史", exact: true, level: 2 }),
 		).toBeVisible();
 		await page.getByRole("button", { name: "返回对话", exact: true }).click();
 		await assertChat(page);
@@ -250,11 +376,13 @@ test("opens the original stopped Conversation directly and keeps legacy history 
 		fixture.conversationId,
 	);
 	await expect(
-		page.getByText("受控历史 conversation-1", { exact: true }),
+		page
+			.locator(".chat-workspace")
+			.getByText("受控历史 conversation-1", { exact: true }),
 	).toBeVisible();
 	await expect(page.getByLabel("消息", { exact: true })).toBeDisabled();
 	await expect(
-		page.getByRole("heading", { name: "个人历史", exact: true, level: 1 }),
+		page.getByRole("heading", { name: "个人历史", exact: true, level: 2 }),
 	).toHaveCount(0);
 	await test.info().attach("controlled-direct-stopped-conversation", {
 		body: await page.screenshot({ fullPage: true, animations: "disabled" }),
@@ -267,7 +395,7 @@ test("opens the original stopped Conversation directly and keeps legacy history 
 		/\/chat\/agent-1\/conversation-1\?view=history$/,
 	);
 	await expect(
-		page.getByRole("heading", { name: "个人历史", exact: true, level: 1 }),
+		page.getByRole("heading", { name: "个人历史", exact: true, level: 2 }),
 	).toBeVisible();
 	await expect(
 		page.getByRole("button", { name: "新建会话", exact: true }),
