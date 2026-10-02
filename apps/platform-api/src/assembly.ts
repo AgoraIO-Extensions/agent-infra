@@ -220,6 +220,7 @@ export function assemblePlatformApi(
 	const conversationTransaction =
 		new PostgresConversationExecutionTransactionV1({
 			databaseUrl: input.databaseUrl,
+			userDirectory,
 		});
 	const conversationQuery = new PostgresConversationQueryV1({
 		databaseUrl: input.databaseUrl,

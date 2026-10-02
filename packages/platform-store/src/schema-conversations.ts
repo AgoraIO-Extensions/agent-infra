@@ -17,6 +17,7 @@ import {
 	conversationStopStatus,
 	platformSchema,
 } from "./schema-common";
+import { relayKeyVersions } from "./schema-relay-keys";
 
 export const conversations = platformSchema.table(
 	"conversations",
@@ -121,12 +122,35 @@ export const conversationExecutions = platformSchema.table(
 		}),
 		modelOptionId: text("model_option_id"),
 		reasoningLevel: text("reasoning_level"),
+		executionSource: text("execution_source"),
+		relayKeyPurpose: text("relay_key_purpose"),
+		relayKeySubjectId: text("relay_key_subject_id"),
+		relayKeyId: text("relay_key_id"),
+		relayKeyVersion: bigint("relay_key_version", { mode: "number" }),
+		runtimeSubmitProtocol: text("runtime_submit_protocol"),
+		originalOperationDigest: text("original_operation_digest"),
+		originalSubmitHostSessionRef: text("original_submit_host_session_ref"),
 	},
 	(table) => [
 		foreignKey({
 			columns: [table.conversationId],
 			foreignColumns: [conversations.id],
 			name: "conversation_execution_conversation_fk",
+		}),
+		foreignKey({
+			columns: [
+				table.relayKeyPurpose,
+				table.relayKeySubjectId,
+				table.relayKeyVersion,
+				table.relayKeyId,
+			],
+			foreignColumns: [
+				relayKeyVersions.purpose,
+				relayKeyVersions.subjectId,
+				relayKeyVersions.keyVersion,
+				relayKeyVersions.keyId,
+			],
+			name: "conversation_execution_key_version_fk",
 		}),
 		check(
 			"conversation_execution_id_non_empty",
@@ -181,6 +205,44 @@ export const conversationExecutions = platformSchema.table(
 				AND ${table.modelConfigurationRevision} between 1 and 9007199254740991
 				AND char_length(${table.modelOptionId}) > 0
 				AND char_length(${table.reasoningLevel}) > 0
+			)`,
+		),
+		check(
+			"conversation_execution_original_digest_binding",
+			sql`(${table.runtimeSubmitProtocol} IS NULL AND ${table.originalOperationDigest} IS NULL AND ${table.originalSubmitHostSessionRef} IS NULL) OR (${table.runtimeSubmitProtocol} IS NOT NULL AND ${table.originalOperationDigest} IS NOT NULL AND ${table.runtimeSubmitProtocol} in ('v2', 'v4') AND ${table.originalOperationDigest} ~ '^[A-Za-z0-9_-]{43}$' AND (${table.runtimeSubmitProtocol} <> 'v4' OR ${table.executionSource} IS NOT NULL) AND (${table.runtimeSubmitProtocol} <> 'v2' OR (${table.executionSource} IS NULL AND ${table.originalSubmitHostSessionRef} IS NULL)))`,
+		),
+		check(
+			"conversation_execution_key_binding",
+			sql`(
+				${table.executionSource} IS NULL
+				AND ${table.relayKeyPurpose} IS NULL
+				AND ${table.relayKeySubjectId} IS NULL
+				AND ${table.relayKeyId} IS NULL
+				AND ${table.relayKeyVersion} IS NULL
+			) OR (
+				${table.executionSource} IS NOT NULL
+				AND ${table.relayKeyPurpose} IS NOT NULL
+				AND ${table.relayKeySubjectId} IS NOT NULL
+				AND ${table.relayKeyId} IS NOT NULL
+				AND ${table.relayKeyVersion} IS NOT NULL
+				AND ${table.executionSource} in ('web', 'wecom', 'platform-api', 'eval')
+				AND ${table.relayKeyPurpose} in ('personal', 'agent-default')
+				AND char_length(${table.relayKeySubjectId}) > 0
+				AND char_length(${table.relayKeyId}) > 0
+				AND ${table.relayKeyVersion} between 1 and 9007199254740991
+				AND ((${table.executionSource} = 'web' AND ${table.channelId} = 'web')
+					OR (${table.executionSource} = 'wecom' AND (${table.channelId} = 'wecom'
+						OR left(${table.channelId}, 10) = 'wecom_bot:'
+						OR left(${table.channelId}, 10) = 'wecom_app:'))
+					OR (${table.executionSource} = 'platform-api' AND (${table.channelId} = 'api'
+						OR ${table.channelId} LIKE 'api:%'))
+					OR (${table.executionSource} = 'eval' AND ${table.channelId} = 'eval'))
+				AND ((${table.executionSource} in ('web', 'wecom')
+					AND ${table.relayKeyPurpose} = 'personal'
+					AND ${table.relayKeySubjectId} = ${table.actorId})
+					OR (${table.executionSource} in ('platform-api', 'eval')
+					AND ${table.relayKeyPurpose} = 'agent-default'
+					AND ${table.relayKeySubjectId} = ${table.agentId}))
 			)`,
 		),
 		uniqueIndex("conversation_execution_id_conversation_unique").on(

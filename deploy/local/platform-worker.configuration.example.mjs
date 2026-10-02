@@ -10,3 +10,7 @@ export const directory = missing("directory");
 export const signing = missing("signing");
 export const serviceToken = missing("serviceToken");
 export const workloadInput = missing("workloadInput");
+
+// RuntimeModelV4: versioned wrapping keys; the deployment constructs the
+// accepted Execution/ciphertext Stores and Relay Key decryptor itself.
+export const relayKeyDecryptionKeys = missing("relayKeyDecryptionKeys");

@@ -90,7 +90,10 @@ export async function lockExecution(
 		select execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id,
 			status, session_generation::text, delivery_fence::text,
 			authorization_revision, last_runtime_cursor,
-			model_configuration_revision::text, model_option_id, reasoning_level
+			model_configuration_revision::text, model_option_id, reasoning_level,
+			execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id,
+			relay_key_version::text, runtime_submit_protocol, original_operation_digest,
+			original_submit_host_session_ref
 		from platform.conversation_executions
 		where execution_id = ${executionId} and conversation_id = ${conversationId}
 		for update

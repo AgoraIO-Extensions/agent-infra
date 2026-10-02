@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { parseClaim } from "./conversation-dispatch-input.js";
 import { parseRuntimeStatusResponse } from "./conversation-dispatch-runtime.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 import { FakeConversationRuntimeHostV1 } from "./fake-conversation-runtime-host.js";
@@ -122,6 +123,45 @@ function claim(
 		...overrides,
 	};
 }
+
+describe("accepted Execution Key claim", () => {
+	const relayKeyBinding = {
+		purpose: "personal" as const,
+		subjectId: "actor-1",
+		keyId: "accepted-key-1",
+		keyVersion: 1,
+	};
+
+	it("keeps the accepted version and preserves historical Key-free claims", () => {
+		const accepted = claim({ executionSource: "web", relayKeyBinding });
+		expect(parseClaim(accepted)).toEqual(accepted);
+		expect(parseClaim(claim())).toEqual(claim());
+	});
+
+	it.each([
+		{ executionSource: "web" },
+		{ relayKeyBinding },
+		{ executionSource: "platform-api", relayKeyBinding },
+		{
+			executionSource: "web",
+			relayKeyBinding: { ...relayKeyBinding, subjectId: "other-user" },
+		},
+		{
+			executionSource: "web",
+			relayKeyBinding: { ...relayKeyBinding, purpose: "agent-default" },
+		},
+		{
+			executionSource: "web",
+			relayKeyBinding: { ...relayKeyBinding, keyVersion: 0 },
+		},
+		{
+			executionSource: "web",
+			relayKeyBinding: { ...relayKeyBinding, credential: "untrusted-input" },
+		},
+	])("rejects an incomplete or foreign accepted binding %j", (binding) => {
+		expect(() => parseClaim({ ...claim(), ...binding })).toThrow();
+	});
+});
 
 class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 	current: ConversationDispatchClaimV1;

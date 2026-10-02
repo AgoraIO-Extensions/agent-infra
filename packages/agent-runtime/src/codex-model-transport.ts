@@ -11,7 +11,7 @@ import {
 import { createParser, type EventSourceMessage } from "eventsource-parser";
 import {
 	type CodexModelAccess,
-	validateModelAccess,
+	validateModelEndpoint,
 } from "./codex-app-server-bridge.js";
 import { createCredentialMatcher } from "./model-credential-matcher.js";
 
@@ -36,7 +36,9 @@ const internalModelPattern =
 const realModelPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const nativeTurnIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-export interface CodexModelRoute extends CodexModelAccess {
+export interface CodexModelRoute {
+	readonly endpoint: string;
+	readonly credential?: string;
 	readonly internalModel: string;
 	readonly model: string;
 }
@@ -80,10 +82,23 @@ export type CodexModelRequestOutcome = {
 );
 
 export interface CodexModelRequestJournal {
-	/** Called only after the actual fetch has been invoked. */
+	/** Execution credential stays inside this actual request. */
+	readonly credential?: string;
+	/** Synchronous original Driver state check at the actual fetch boundary. */
+	readonly assertCurrent?: () => void;
+	/** Durable dispatch barrier, awaited before the actual fetch is invoked. */
 	started(startedAt: string): Promise<void>;
 	/** Must commit before a terminal response can be published to native. */
 	finish(outcome: CodexModelRequestOutcome): Promise<void>;
+}
+
+function assertCurrentModelRequest(journal: CodexModelRequestJournal): void {
+	const assertion: unknown = journal.assertCurrent?.();
+	if (assertion !== undefined) {
+		// A mistaken async guard is rejected; consume its rejection without awaiting it.
+		void Promise.resolve(assertion).catch(() => {});
+		throw new Error();
+	}
 }
 
 export interface CodexModelTransportObserver {
@@ -966,35 +981,44 @@ async function forwardValidatedStream(
 	response.end();
 }
 
+type ValidatedRoute = Pick<CodexModelAccess, "endpoint"> & {
+	credential?: string;
+	model: string;
+	target: URL;
+};
+
 function validatedRoutes(input: readonly CodexModelRoute[]) {
 	if (!Array.isArray(input) || input.length === 0 || input.length > 128) {
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	}
-	const routes = new Map<
-		string,
-		CodexModelAccess & { model: string; target: URL }
-	>();
+	const routes = new Map<string, ValidatedRoute>();
+	const keyed = input.every(
+		(route) => isPlainRecord(route) && route.credential === undefined,
+	);
 	for (const inputRoute of input) {
 		if (
 			!isPlainRecord(inputRoute) ||
-			Object.keys(inputRoute).length !== 4 ||
+			Object.keys(inputRoute).length !== (keyed ? 3 : 4) ||
 			typeof inputRoute.internalModel !== "string" ||
 			!internalModelPattern.test(inputRoute.internalModel) ||
 			typeof inputRoute.model !== "string" ||
 			!realModelPattern.test(inputRoute.model) ||
+			keyed !== (inputRoute.credential === undefined) ||
+			(!keyed &&
+				(typeof inputRoute.credential !== "string" ||
+					!/^[\x21-\x7e]{16,8192}$/.test(inputRoute.credential))) ||
 			routes.has(inputRoute.internalModel)
 		) {
 			throw new Error("RUNTIME_CONFIGURATION_INVALID");
 		}
-		const access = validateModelAccess({
-			endpoint: inputRoute.endpoint,
-			credential: inputRoute.credential,
-		});
-		if (!access) throw new Error("RUNTIME_CONFIGURATION_INVALID");
+		const endpoint = validateModelEndpoint(inputRoute.endpoint);
 		routes.set(inputRoute.internalModel, {
-			...access,
+			endpoint,
+			...(inputRoute.credential === undefined
+				? {}
+				: { credential: inputRoute.credential }),
 			model: inputRoute.model,
-			target: new URL(`${access.endpoint.replace(/\/$/, "")}/responses`),
+			target: new URL(`${endpoint.replace(/\/$/, "")}/responses`),
 		});
 	}
 	return routes;
@@ -1021,10 +1045,7 @@ function encodeRequestBody(bytes: Buffer, encoding: string | undefined) {
 function routedRequest(
 	bytes: Buffer,
 	encoding: string | undefined,
-	routes: ReadonlyMap<
-		string,
-		CodexModelAccess & { model: string; target: URL }
-	>,
+	routes: ReadonlyMap<string, ValidatedRoute>,
 	admittedModel: ModelTurnSelection,
 	modelOnly: boolean,
 ) {
@@ -1074,10 +1095,19 @@ export async function openCodexModelTransport(
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	const modelOnly = observer.modelOnly === true;
 	const routes = validatedRoutes(input);
+	const keyed = [...routes.values()].every(
+		({ credential }) => credential === undefined,
+	);
 	const credentials = [
-		...new Set([...routes.values()].map(({ credential }) => credential)),
+		...new Set(
+			[...routes.values()].flatMap(({ credential }) =>
+				credential === undefined ? [] : [credential],
+			),
+		),
 	];
-	const credentialMatcher = createCredentialMatcher(credentials);
+	const staticCredentialMatcher = keyed
+		? undefined
+		: createCredentialMatcher(credentials);
 	const processAccess = new Map<
 		string,
 		{ credential: string; authorization: Buffer }
@@ -1455,8 +1485,19 @@ export async function openCodexModelTransport(
 				controller.signal,
 			);
 			journal = await awaitPersistence(journalPromise, controller.signal);
+			const credential = keyed ? journal.credential : routed.route.credential;
+			if (
+				(keyed && typeof journal.assertCurrent !== "function") ||
+				(!keyed && journal.credential !== undefined) ||
+				typeof credential !== "string" ||
+				!/^[\x21-\x7e]{16,8192}$/.test(credential)
+			)
+				throw new Error();
+			const credentialMatcher =
+				staticCredentialMatcher ?? createCredentialMatcher([credential]);
+			assertCurrentModelRequest(journal);
 			// Stop/revoke may arrive while intent or the Host authorization guard is
-			// awaiting durable storage. No await separates this check from fetch.
+			// awaiting durable storage. Check again after the durable started barrier.
 			if (
 				closing ||
 				controller.signal.aborted ||
@@ -1475,6 +1516,7 @@ export async function openCodexModelTransport(
 				startedPersistence = journal.started(requestStartedAt);
 				await awaitPersistence(startedPersistence, controller.signal);
 			}
+			assertCurrentModelRequest(journal);
 			// The durable started fact is the commit barrier for the external request.
 			// If it cannot be persisted, do not invoke the provider at all.
 			if (
@@ -1494,7 +1536,7 @@ export async function openCodexModelTransport(
 			upstreamResult = fetch(routed.route.target, {
 				method: "POST",
 				headers: {
-					authorization: `Bearer ${routed.route.credential}`,
+					authorization: `Bearer ${credential}`,
 					"content-type": "application/json",
 					...(contentEncoding ? { "content-encoding": contentEncoding } : {}),
 				},

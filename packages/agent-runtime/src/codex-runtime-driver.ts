@@ -31,6 +31,7 @@ import {
 	codexConversationKey,
 	runCodexConnectionRecovery,
 	validateModelAccess,
+	validateModelEndpoint,
 } from "./codex-app-server-bridge.js";
 import {
 	type CodexConnectionEvidence,
@@ -86,6 +87,7 @@ import type {
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizer,
 	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
 	RuntimeOriginalEvidenceRecoveryRef,
@@ -187,9 +189,7 @@ export interface CodexRuntimeDriverOptions {
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly CodexRuntimeModelOption[];
-	readonly authorizeExternalAction?: (
-		action: RuntimeExternalActionAuthorization,
-	) => Promise<void>;
+	readonly authorizeExternalAction?: RuntimeExternalActionAuthorizer;
 	// Independent client delivery is trusted deployment input, never a Runtime command.
 	readonly connectionClient?: {
 		/** Independently configured service allowlist; never derived from the profile. */
@@ -2188,10 +2188,7 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 	const values: unknown = options.modelOptions;
 	if (!Array.isArray(values) || values.length === 0) configurationInvalid();
 	const routed = values.every(
-		(value) =>
-			isPlainRecord(value) &&
-			value.endpoint !== undefined &&
-			value.credential !== undefined,
+		(value) => isPlainRecord(value) && value.endpoint !== undefined,
 	);
 	if (
 		!routed &&
@@ -2203,9 +2200,18 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 	) {
 		configurationInvalid();
 	}
+	const keyed =
+		routed && values.every((value) => value.credential === undefined);
+	if (
+		routed &&
+		!keyed &&
+		values.some((value) => value.credential === undefined)
+	)
+		configurationInvalid();
 	for (const value of values) {
 		const expectedKeys = ["modelOptionId", "model", "reasoningLevels"];
-		if (routed) expectedKeys.push("endpoint", "credential");
+		if (routed) expectedKeys.push("endpoint");
+		if (routed && !keyed) expectedKeys.push("credential");
 		if (
 			!isPlainRecord(value) ||
 			!hasOnlyKeys(value, expectedKeys) ||
@@ -2227,10 +2233,12 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 			? `${createHash("sha256").update(value.modelOptionId).digest("hex")}/${value.model}`
 			: value.model;
 		if (routed) {
-			const access = validateModelAccess({
-				endpoint: value.endpoint,
-				credential: value.credential,
-			});
+			const access = keyed
+				? { endpoint: validateModelEndpoint(value.endpoint) }
+				: validateModelAccess({
+						endpoint: value.endpoint,
+						credential: value.credential,
+					});
 			if (!access) configurationInvalid();
 			routes.push({
 				internalModel,
@@ -2838,9 +2846,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly probeNative?: (
 			signal: AbortSignal,
 		) => Promise<RuntimeCapabilitiesV1>,
-		private readonly authorizeExternalAction?: (
-			action: RuntimeExternalActionAuthorization,
-		) => Promise<void>,
+		private readonly authorizeExternalAction?: RuntimeExternalActionAuthorizer,
 		private readonly connectionClientOptions?: CodexRuntimeDriverOptions["connectionClient"],
 		private readonly recoveryLaunch?: typeof runCodexConnectionRecovery,
 		private readonly recoveryDirectory?: string,
@@ -7087,34 +7093,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			});
 			this.notifyEventStream(streamKey);
 		};
-		try {
-			// Never call Host while holding the Driver durable-file queue. Host may
-			// still be awaiting this Driver's original submit result.
-			// Model and tool actions require the Host authorization seam; fail closed
-			// when this deployment did not supply it.
-			if (!this.authorizeExternalAction) unavailable();
-			const waiting = new AbortController();
-			try {
-				signal.throwIfAborted();
-				await Promise.race([
-					once(signal, "abort", { signal: waiting.signal }).then(() => {
-						throw unavailableError();
-					}),
-					this.authorizeExternalAction({
-						nativeSessionRef: prepared.nativeSessionRef,
-						executionId: prepared.executionId,
-						runtimeOperationId: prepared.executionId,
-						operationRef: prepared.fact.operationRef,
-						attemptRef: prepared.fact.attemptRef,
-						kind: "model",
-					}),
-				]);
-				signal.throwIfAborted();
-			} finally {
-				waiting.abort();
+		let authorization: Awaited<ReturnType<RuntimeExternalActionAuthorizer>>;
+		const assertCurrent = () => {
+			// Re-read original state after each Host or durable-started await.
+			signal.throwIfAborted();
+			if (
+				authorization?.relayKey !== undefined &&
+				typeof authorization.revalidate !== "function"
+			)
+				unavailable();
+			const revalidation: unknown = authorization?.revalidate?.();
+			if (revalidation !== undefined) {
+				void Promise.resolve(revalidation).catch(() => {});
+				unavailable();
 			}
-			// Authorization may have waited while another original action failed
-			// or stop sealed this Execution. Recheck the committed Driver state.
 			const state = this.readState();
 			const session = ownRecordValue(state.sessions, prepared.nativeSessionRef);
 			const execution =
@@ -7131,6 +7123,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const sourceRecord = currentSource?.sourceRecord;
 			if (
 				!currentSource ||
+				currentSource.nativeSessionRef !== prepared.nativeSessionRef ||
+				currentSource.execution !== execution ||
+				currentSource.journal !== journal ||
 				currentSource.journal.nativeTurnId !== prepared.journalTurnId ||
 				this.closed ||
 				!session ||
@@ -7149,7 +7144,45 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				)
 			)
 				unavailable();
+			this.assertJournalOpen(journal);
 			this.assertExecutionConfiguration(state, session, execution);
+			const operation = this.executionOperation(state, session, execution);
+			const selection = this.operationSelection(operation);
+			if (
+				operation.admissionPending ||
+				operation.admissionRecoveryPending ||
+				selection?.model !== context.internalModel ||
+				selection.effort !== context.reasoningLevel
+			)
+				unavailable();
+		};
+		try {
+			// Never call Host while holding the Driver durable-file queue. Host may
+			// still be awaiting this Driver's original submit result.
+			// Model and tool actions require the Host authorization seam; fail closed
+			// when this deployment did not supply it.
+			if (!this.authorizeExternalAction) unavailable();
+			const waiting = new AbortController();
+			try {
+				signal.throwIfAborted();
+				authorization = await Promise.race([
+					once(signal, "abort", { signal: waiting.signal }).then(() => {
+						throw unavailableError();
+					}),
+					this.authorizeExternalAction({
+						nativeSessionRef: prepared.nativeSessionRef,
+						executionId: prepared.executionId,
+						runtimeOperationId: prepared.executionId,
+						operationRef: prepared.fact.operationRef,
+						attemptRef: prepared.fact.attemptRef,
+						kind: "model",
+					}),
+				]);
+				signal.throwIfAborted();
+			} finally {
+				waiting.abort();
+			}
+			assertCurrent();
 		} catch (error) {
 			if (signal.aborted) {
 				await record("unknown", { failureCode: "interrupted" });
@@ -7164,6 +7197,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		return {
+			...(authorization?.relayKey === undefined
+				? {}
+				: { credential: authorization.relayKey }),
+			assertCurrent,
 			started: (startedAt) => record("started", { startedAt }),
 			finish: (outcome) =>
 				record(outcome.phase === "succeeded" ? "completed" : outcome.phase, {

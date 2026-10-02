@@ -273,15 +273,16 @@ export async function startPlatformConversationWorkerFromDeploymentV2(
 	if (!moduleSpecifier)
 		throw new Error("PLATFORM_WORKER_DEPLOYMENT_MODULE is required");
 	const assemblySignal = signal ?? new AbortController().signal;
-	let options: PlatformConversationWorkerOptionsV2;
+	let options: PlatformConversationWorkerOptionsV2 & {
+		/** Only resources created by this deployment; caller-owned dependencies stay open. */
+		readonly closeDeployment?: () => Promise<void>;
+	};
 	try {
 		assemblySignal.throwIfAborted();
 		const deployment = (await import(moduleSpecifier)) as {
 			createPlatformConversationWorkerOptionsV2(
 				signal: AbortSignal,
-			):
-				| PlatformConversationWorkerOptionsV2
-				| Promise<PlatformConversationWorkerOptionsV2>;
+			): typeof options | Promise<typeof options>;
 		};
 		assemblySignal.throwIfAborted();
 		options =
@@ -293,12 +294,43 @@ export async function startPlatformConversationWorkerFromDeploymentV2(
 			"Conversation Worker deployment dependencies are unavailable",
 		);
 	}
-	const worker = createPlatformConversationWorkerV2({
-		...options,
-		signal: assemblySignal,
-		observability,
-	});
-	if (assemblySignal.aborted) await worker.stop();
+	let worker: ReturnType<typeof createPlatformConversationWorkerV2>;
+	try {
+		worker = createPlatformConversationWorkerV2({
+			...options,
+			signal: assemblySignal,
+			observability,
+		});
+	} catch (error) {
+		await Promise.allSettled([
+			Promise.resolve().then(() => options.closeDeployment?.()),
+		]);
+		throw error;
+	}
+	let stopping: Promise<void> | undefined;
+	const ownedWorker = {
+		...worker,
+		stop() {
+			stopping ??= (async () => {
+				// runtime.close joins Key reads/decrypt before the deployment closes pools.
+				const results = await Promise.allSettled([
+					Promise.resolve().then(() => worker.stop()),
+				]);
+				results.push(
+					...(await Promise.allSettled([
+						Promise.resolve().then(() => options.closeDeployment?.()),
+					])),
+				);
+				const failure = results.find(
+					(result): result is PromiseRejectedResult =>
+						result.status === "rejected",
+				);
+				if (failure) throw failure.reason;
+			})();
+			return stopping;
+		},
+	};
+	if (assemblySignal.aborted) await ownedWorker.stop();
 	else worker.start();
-	return worker;
+	return ownedWorker;
 }

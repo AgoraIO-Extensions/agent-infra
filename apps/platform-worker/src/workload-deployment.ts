@@ -67,6 +67,7 @@ export interface ProductionWorkloadWorkerInputV1 {
 	>[0];
 	readonly templateModelBindings: PlatformWorkloadWorkerOptionsV1["templateModelBindings"];
 	readonly executionCapacityProfiles?: PlatformWorkloadWorkerOptionsV1["executionCapacityProfiles"];
+	readonly runtimeModelVersion?: PlatformWorkloadWorkerOptionsV1["runtimeModelVersion"];
 	readonly runtimeProbe: WorkloadRuntimeProbeAuthorizationV1;
 	/** Separate transports keep registry authentication out of model and Runtime requests. */
 	readonly modelFetch?: typeof fetch;
@@ -112,6 +113,10 @@ export async function createProductionWorkloadWorkerOptionsV1(
 				new URL(input.databaseUrl).protocol,
 			) ||
 			!Array.isArray(input.templateModelBindings) ||
+			(input.runtimeModelVersion !== undefined &&
+				input.runtimeModelVersion !== 4) ||
+			(input.runtimeModelVersion === 4 &&
+				process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") ||
 			typeof input.modelCatalog?.load !== "function" ||
 			typeof input.runtimeProbe?.authorize !== "function" ||
 			!input.policy.runtimeAuth ||
@@ -197,6 +202,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			admissionPolicyRef: input.admissionPolicyRef,
 			registrySubjectRef: input.registrySubjectRef,
 			templateModelBindings,
+			runtimeModelVersion: input.runtimeModelVersion,
 			executionCapacityProfiles: structuredClone(
 				input.executionCapacityProfiles,
 			),

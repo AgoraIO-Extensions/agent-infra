@@ -1,9 +1,15 @@
 import { Buffer } from "node:buffer";
+import {
+	RuntimeExecutionSourceV1Schema,
+	RuntimeRelayKeyBindingV1Schema,
+} from "@agent-infra/contracts/runtime";
 import type {
+	ConversationDispatchClaimV1,
 	ConversationDispatchExecutionStatusV1,
 	ConversationDispatchOperationV1,
 	ConversationMetadataRecoveryV1,
 } from "@agent-infra/platform-core";
+import { conversationExecutionSourceV1 } from "@agent-infra/platform-core";
 import type postgres from "postgres";
 import { matchesPostgresErrorCode } from "./postgres-error.ts";
 
@@ -67,6 +73,53 @@ export interface ExecutionRow {
 	model_configuration_revision: string | number | null;
 	model_option_id: string | null;
 	reasoning_level: string | null;
+	execution_source: string | null;
+	relay_key_purpose: string | null;
+	relay_key_subject_id: string | null;
+	relay_key_id: string | null;
+	relay_key_version: string | number | null;
+	runtime_submit_protocol: string | null;
+	original_operation_digest: string | null;
+	original_submit_host_session_ref: string | null;
+}
+
+/** Project only the accepted immutable version, never a current Key alias. */
+export function executionKeyProjection(
+	execution: ExecutionRow,
+): Pick<ConversationDispatchClaimV1, "executionSource" | "relayKeyBinding"> {
+	const fields = [
+		execution.execution_source,
+		execution.relay_key_purpose,
+		execution.relay_key_subject_id,
+		execution.relay_key_id,
+		execution.relay_key_version,
+	];
+	if (fields.every((value) => value === null)) return {};
+	const executionSource = RuntimeExecutionSourceV1Schema.parse(
+		execution.execution_source,
+	);
+	const key = RuntimeRelayKeyBindingV1Schema.parse({
+		purpose: execution.relay_key_purpose,
+		subjectId: execution.relay_key_subject_id,
+		ciphertextRef: execution.relay_key_id,
+		version: requireSafeCounter(execution.relay_key_version, 1),
+	});
+	if (
+		executionSource !== conversationExecutionSourceV1(execution.channel_id) ||
+		(executionSource === "web" || executionSource === "wecom"
+			? key.purpose !== "personal" || key.subjectId !== execution.actor_id
+			: key.purpose !== "agent-default" || key.subjectId !== execution.agent_id)
+	)
+		throw new TypeError("Stored Execution Key binding is invalid");
+	return {
+		executionSource,
+		relayKeyBinding: {
+			purpose: key.purpose,
+			subjectId: key.subjectId,
+			keyId: key.ciphertextRef,
+			keyVersion: key.version,
+		},
+	};
 }
 
 export interface MessageRow {

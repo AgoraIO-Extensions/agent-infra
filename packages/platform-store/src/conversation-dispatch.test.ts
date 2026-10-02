@@ -165,6 +165,8 @@ async function seed(
 		hostSessionRef?: string | null;
 		legacySelection?: boolean;
 		agentId?: string;
+		acceptedKey?: false;
+		taskAuthorization?: false;
 	} = {},
 ) {
 	const agentId = options.agentId ?? "agent-dispatch";
@@ -259,7 +261,7 @@ async function seed(
 			 ${client.json(payload)}, 'trace-dispatch', 'request-dispatch',
 			 now(), now(), now())
 	`;
-	return {
+	const work = {
 		conversationId,
 		executionId,
 		messageId,
@@ -267,6 +269,15 @@ async function seed(
 		turnId,
 		itemId,
 	};
+	if (
+		options.acceptedKey !== false &&
+		!options.legacySelection &&
+		executionStatus === "submitted" &&
+		(operation === "conversation.turn.submit.v1" ||
+			operation === "conversation.turn.regenerate.v1")
+	)
+		await seedExecutionKey(work, agentId, options.taskAuthorization !== false);
+	return work;
 }
 
 async function seedStop(work: Awaited<ReturnType<typeof seed>>) {
@@ -732,7 +743,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 	);
 
 	it("derives recovery digest from accepted input and rejects expired or foreign leases", async () => {
-		const work = await seed();
+		const work = await seed(undefined, { acceptedKey: false });
 		const { store, decision } = await claim(work.itemId);
 		try {
 			if (decision.outcome !== "claimed")
@@ -876,6 +887,13 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					modelOptionId: "model-option-dispatch",
 					reasoningLevel: "medium",
 					input: { text: "bounded dispatch fixture", attachments: [] },
+					executionSource: "web",
+					relayKeyBinding: {
+						purpose: "personal",
+						subjectId: "actor-dispatch",
+						keyId: "accepted-key:personal:actor-dispatch",
+						keyVersion: 1,
+					},
 				},
 			});
 			const second = await claim(work.itemId, "worker-2");
@@ -904,6 +922,10 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				execution_status: "unknown",
 				execution_fence: 1,
 			});
+			const pins = await savedPreparationPins(work.executionId);
+			expect(pins?.runtime_submit_protocol).toBe("v4");
+			expect(pins?.original_operation_digest).toMatch(/^[A-Za-z0-9_-]{43}$/);
+			expect(pins?.original_submit_host_session_ref).toBeNull();
 		} finally {
 			await first.store.close();
 		}
@@ -1079,7 +1101,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 	});
 
 	it("recovers the stopped original Turn facts and ACKs from the committed cursor without another submit", async () => {
-		const work = await seed();
+		const work = await seed(undefined, { taskAuthorization: false });
 		const authorizationRecordId = `authorization-${work.executionId}`;
 		await client`insert into platform.task_authorization_records (id, execution_id, boundary) values (${authorizationRecordId}, ${work.executionId}, ${client.json(
 			{
@@ -2555,7 +2577,7 @@ describe("PostgreSQL terminal outbox event recovery", () => {
 	])(
 		"keeps original terminal state and commits/ACKs metadata once with %s fault",
 		async (fault) => {
-			const work = await seed();
+			const work = await seed(undefined, { taskAuthorization: false });
 			const authorizationRecordId = `authorization-${work.executionId}`;
 			await client`insert into platform.task_authorization_records (id, execution_id, boundary)
 				values (${authorizationRecordId}, ${work.executionId}, ${client.json({
@@ -2778,7 +2800,7 @@ describe("authorized historical metadata rearm", () => {
 	async function terminalHistory(
 		originalStatus: "succeeded" | "failed" = "succeeded",
 	) {
-		const work = await seed();
+		const work = await seed(undefined, { taskAuthorization: false });
 		const authorizationRecordId = `authorization-${work.executionId}`;
 		await client`insert into platform.task_authorization_records (id, execution_id, boundary) values (${authorizationRecordId}, ${work.executionId}, ${client.json(
 			{
@@ -3083,6 +3105,7 @@ describe("authorized historical metadata rearm", () => {
 			await client`insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, request_id)
 				select ${itemId}, scope_type, scope_id, operation, (payload - 'metadataRecovery') || ${client.json({ executionId, messageId: "new-message", turnId: "new-turn" })}, 'new-trace', 'new-request' from platform.outbox_items where id = ${h.work.itemId}`;
 			await client`insert into platform.task_authorization_records (id, execution_id, boundary) select 'new-authorization', ${executionId}, boundary from platform.task_authorization_records where execution_id = ${h.work.executionId}`;
+			await seedExecutionKey({ executionId }, "agent-dispatch", false);
 			await client`update platform.conversations set status = 'active' where id = ${h.work.conversationId}`;
 			const business = await claim(itemId);
 			await business.store.close();
@@ -3217,6 +3240,212 @@ describe("authorized historical metadata rearm", () => {
 			expect(invalid.decision).toEqual({ outcome: "stale" });
 		} finally {
 			await h.close();
+		}
+	});
+});
+
+/** Component fixture starts at the original accepted/claim stage; not HTTP acceptance proof. */
+async function seedExecutionKey(
+	work: {
+		readonly executionId: string;
+	},
+	agentId: string,
+	taskAuthorization: boolean,
+) {
+	const purpose = "personal";
+	const subjectId = "actor-dispatch";
+	const keyId = `accepted-key:${purpose}:${subjectId}`;
+	await client`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version)
+	 values (${purpose},${subjectId},1,1) on conflict do nothing`;
+	await client`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext)
+	 values (${purpose},${subjectId},1,${keyId},${client.json({ purpose, subjectId, keyId, keyVersion: 1 })}) on conflict do nothing`;
+	await client`update platform.conversation_executions set
+  execution_source=${"web"}, relay_key_purpose=${purpose}, relay_key_subject_id=${subjectId},
+  relay_key_id=${keyId}, relay_key_version=1 where execution_id=${work.executionId}`;
+	if (!taskAuthorization) return;
+	await client`insert into platform.task_authorization_records(id, execution_id, boundary)
+  values (${`authorization:${work.executionId}`}, ${work.executionId}, ${client.json(
+		{
+			schemaVersion: 1,
+			principal: { kind: "user", id: "actor-dispatch" },
+			agentId,
+			channelId: "web",
+			identityRevision: "identity-dispatch",
+			agentAuthorizationRevision: "authorization-dispatch",
+			accessSources: [{ kind: "user", userId: "actor-dispatch" }],
+		},
+	)})`;
+}
+
+async function savedPreparationPins(executionId: string) {
+	const [row] =
+		await client`select status, runtime_submit_protocol, original_operation_digest,
+  original_submit_host_session_ref from platform.conversation_executions where execution_id=${executionId}`;
+	return row;
+}
+
+describe("accepted Task V4 preparation pins", () => {
+	it.each([
+		"conversation.turn.submit.v1",
+		"conversation.turn.regenerate.v1",
+	] as const)(
+		"persists the accepted Web %s binding before dispatch and keeps it on recovery",
+		async (operation) => {
+			const work = await seed(operation);
+			await client`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext)
+      values ('personal','actor-dispatch',2,'current-key:personal:actor-dispatch',${client.json({ purpose: "personal", subjectId: "actor-dispatch", keyId: "current-key:personal:actor-dispatch", keyVersion: 2 })}) on conflict do nothing`;
+			await client`update platform.relay_key_subjects set last_version=2, current_version=2
+      where purpose='personal' and subject_id='actor-dispatch'`;
+			const { store, decision } = await claim(work.itemId);
+			try {
+				if (decision.outcome !== "claimed")
+					throw new Error("Expected original claim");
+				expect(decision.claim.executionSource).toBe("web");
+				expect(decision.claim.relayKeyBinding).toEqual({
+					purpose: "personal",
+					subjectId: "actor-dispatch",
+					keyId: "accepted-key:personal:actor-dispatch",
+					keyVersion: 1,
+				});
+				expect(
+					await store.prepareRuntimeDispatch({
+						claim: decision.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				const saved = await savedPreparationPins(work.executionId);
+				expect(saved?.status).toBe("unknown");
+				expect(saved?.runtime_submit_protocol).toBe("v4");
+				expect(saved?.original_operation_digest).toMatch(/^[A-Za-z0-9_-]{43}$/);
+				expect(saved?.original_submit_host_session_ref).toBeNull();
+				const original = await store.readRuntimeState({
+					claim: decision.claim,
+				});
+				expect(original?.runtimeSubmitProtocol).toBe("v4");
+				expect(original?.originalOperationDigest).toBe(
+					saved?.original_operation_digest,
+				);
+				expect(original?.originalSubmitHostSessionRef).toBeNull();
+				await client`update platform.conversation_messages set text='later mutable text' where message_id=${work.messageId}`;
+				await client`update platform.conversations set host_session_ref='current-session' where id=${work.conversationId}`;
+				const recovered = await store.readRuntimeState({
+					claim: decision.claim,
+				});
+				expect(recovered?.hostSessionRef).toBe("current-session");
+				expect(recovered?.originalSubmitHostSessionRef).toBeNull();
+				expect(recovered?.originalOperationDigest).toBe(
+					original?.originalOperationDigest,
+				);
+				expect(
+					await store.prepareRuntimeDispatch({
+						claim: decision.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				expect(await savedPreparationPins(work.executionId)).toEqual(saved);
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
+	it.each([
+		"principal-kind",
+		"principal-id",
+		"missing-key",
+		"expired-lease",
+		"stale-fence",
+		"pending-stop",
+		"duplicate-origin",
+		"partial-pin",
+	] as const)(
+		"does not write pins or occupy new work for %s",
+		async (fault) => {
+			const work = await seed();
+			if (fault === "missing-key")
+				await client`update platform.conversation_executions set execution_source=null, relay_key_purpose=null,
+     relay_key_subject_id=null, relay_key_id=null, relay_key_version=null where execution_id=${work.executionId}`;
+			const { store, decision } = await claim(work.itemId);
+			try {
+				if (decision.outcome !== "claimed")
+					throw new Error("Expected original claim");
+				if (fault === "missing-key") {
+					expect(decision.claim.executionSource).toBeUndefined();
+					expect(decision.claim.relayKeyBinding).toBeUndefined();
+				}
+				if (fault === "principal-kind" || fault === "principal-id")
+					await client`update platform.task_authorization_records set boundary=jsonb_set(boundary,
+      ${fault === "principal-kind" ? "{principal,kind}" : "{principal,id}"}::text[],
+      ${JSON.stringify(fault === "principal-kind" ? "application" : "other-actor")}::jsonb)
+      where execution_id=${work.executionId}`;
+				if (fault === "expired-lease")
+					await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id=${work.itemId}`;
+				if (fault === "stale-fence")
+					await client`update platform.conversation_executions set delivery_fence=delivery_fence+1 where execution_id=${work.executionId}`;
+				if (fault === "pending-stop") await seedStop(work);
+				if (fault === "duplicate-origin")
+					await client`insert into platform.outbox_items(id,scope_type,scope_id,operation,payload,trace_id,request_id)
+      select ${`conversation:regenerate:${work.executionId}`},scope_type,scope_id,'conversation.turn.regenerate.v1',payload,trace_id,request_id
+      from platform.outbox_items where id=${work.itemId}`;
+				if (fault === "partial-pin") {
+					const before = await savedPreparationPins(work.executionId);
+					await expect(
+						client`update platform.conversation_executions set original_operation_digest=${"a".repeat(43)} where execution_id=${work.executionId}`,
+					).rejects.toThrow();
+					expect(await savedPreparationPins(work.executionId)).toEqual(before);
+					return;
+				}
+				const before = await savedPreparationPins(work.executionId);
+				const preparing = store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				});
+				if (fault === "principal-kind")
+					await expect(preparing).rejects.toThrow();
+				else expect(await preparing).not.toBe(true);
+				const after = await savedPreparationPins(work.executionId);
+				expect(after).toEqual(before);
+				expect(after?.status).toBe("submitted");
+				await client.begin(async (sql) => {
+					await sql`select execution_id from platform.conversation_executions where execution_id=${work.executionId} for update nowait`;
+					await sql`select id from platform.outbox_items where id=${work.itemId} for update nowait`;
+				});
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
+	it("rolls back occupied status and all pins when the original prepare CAS fails", async () => {
+		const work = await seed();
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			await client.unsafe(`create function platform.accepted_key_pin_failure() returns trigger language plpgsql as $$
+    begin if new.runtime_submit_protocol is distinct from old.runtime_submit_protocol then raise exception 'PIN_WRITE_FAULT'; end if; return new; end $$`);
+			await client.unsafe(`create trigger accepted_key_pin_failure before update on platform.conversation_executions
+    for each row execute function platform.accepted_key_pin_failure()`);
+			const before = await savedPreparationPins(work.executionId);
+			await expect(
+				store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).rejects.toThrow();
+			expect(await savedPreparationPins(work.executionId)).toEqual(before);
+			await client.begin(async (sql) => {
+				await sql`select execution_id from platform.conversation_executions where execution_id=${work.executionId} for update nowait`;
+				await sql`select id from platform.outbox_items where id=${work.itemId} for update nowait`;
+			});
+		} finally {
+			await client.unsafe(
+				"drop trigger if exists accepted_key_pin_failure on platform.conversation_executions",
+			);
+			await client.unsafe(
+				"drop function if exists platform.accepted_key_pin_failure()",
+			);
+			await store.close();
 		}
 	});
 });

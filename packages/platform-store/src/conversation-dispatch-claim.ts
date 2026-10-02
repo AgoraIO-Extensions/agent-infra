@@ -3,6 +3,7 @@ import type {
 	ConversationDispatchClaimV1,
 } from "@agent-infra/platform-core";
 import {
+	executionKeyProjection,
 	maximumSafeCounter,
 	requireSafeCounter,
 	StaleDispatchLease,
@@ -224,6 +225,7 @@ export async function claimWork(
 				: Number(execution.model_configuration_revision),
 		modelOptionId: execution.model_option_id,
 		reasoningLevel: execution.reasoning_level,
+		...executionKeyProjection(execution),
 		hostSessionRef: conversation.host_session_ref,
 		runtimeCursor: execution.last_runtime_cursor,
 		...(terminalEvent?.seen ? { runtimeTerminalEventSeen: true as const } : {}),

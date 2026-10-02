@@ -56,6 +56,8 @@ describe("platform-core package surface", () => {
 			"bindInputFileV1",
 			"captureTaskAuthorizationBoundaryV1",
 			"cleanupUnactivatedSecretCandidateV1",
+			"conversationExecutionKeySubjectV1",
+			"conversationExecutionSourceV1",
 			"createAgentConfigurationUseCaseV1",
 			"createAgentManagementV1",
 			"createApplicationFoundationUseCaseV1",

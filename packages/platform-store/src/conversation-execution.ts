@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { RuntimeBusinessRequestV4 } from "@agent-infra/contracts/runtime";
 import {
 	bindInputFileV1,
 	type ConversationCommandDecisionV1,
@@ -11,8 +12,13 @@ import {
 	type CreateConversationDecisionV1,
 	type FileRecordV1,
 	parseConversationOperationEventV2,
+	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
+import {
+	type AcceptedExecutionKeyProjectionV4,
+	readAcceptedExecutionKeyInTransactionV4,
+} from "./conversation-execution-accepted-key.js";
 import {
 	type ConversationQueryProject,
 	type ConversationQueryRequest,
@@ -32,6 +38,7 @@ import {
 	text,
 	unavailable,
 } from "./conversation-execution-common.js";
+import { currentConversationExecutionRelayKeyBindingV1 } from "./conversation-execution-key.js";
 import {
 	validateCreatePlan,
 	validateMessagePlan,
@@ -76,6 +83,7 @@ import { insertTaskAuthorization } from "./task-authorization.js";
 
 export interface PostgresConversationExecutionOptionsV1 {
 	readonly databaseUrl: string;
+	readonly userDirectory?: TaskUserDirectoryV1;
 }
 
 export class PostgresConversationExecutionTransactionV1
@@ -83,12 +91,21 @@ export class PostgresConversationExecutionTransactionV1
 {
 	readonly #client: ReturnType<typeof postgres> | undefined;
 	readonly #existingTransaction: Transaction | undefined;
+	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
+	readonly #acceptedKeyReads = new Set<
+		Promise<AcceptedExecutionKeyProjectionV4 | null>
+	>();
+	#acceptedKeyClosing = false;
 
 	constructor(
 		options:
 			| PostgresConversationExecutionOptionsV1
-			| { readonly transaction: Transaction },
+			| {
+					readonly transaction: Transaction;
+					readonly userDirectory?: TaskUserDirectoryV1;
+			  },
 	) {
+		this.#userDirectory = options.userDirectory;
 		if ("transaction" in options) {
 			this.#existingTransaction = options.transaction;
 			return;
@@ -102,6 +119,22 @@ export class PostgresConversationExecutionTransactionV1
 			);
 		} catch {
 			unavailable();
+		}
+	}
+
+	/** Reads the saved operation and Key tuple using this original Store instance. */
+	async readAcceptedExecution(
+		request: RuntimeBusinessRequestV4,
+	): Promise<AcceptedExecutionKeyProjectionV4 | null> {
+		if (this.#acceptedKeyClosing) unavailable();
+		const pending = this.#transaction((transaction) =>
+			readAcceptedExecutionKeyInTransactionV4(transaction, request),
+		);
+		this.#acceptedKeyReads.add(pending);
+		try {
+			return await pending;
+		} finally {
+			this.#acceptedKeyReads.delete(pending);
 		}
 	}
 
@@ -337,6 +370,9 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<ConversationCommandDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
+			// Web Key acceptance keeps Agent before Conversation in the original transaction.
+			if (authority.channelId === "web")
+				await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
 			const conversation = await lockConversation(
 				transaction,
 				text(request.command.conversationId),
@@ -372,6 +408,15 @@ export class PostgresConversationExecutionTransactionV1
 				return decision;
 			}
 			const plan = validateMessagePlan(decision, request, state);
+			const executionBinding =
+				plan.execution && authority.channelId === "web"
+					? await currentConversationExecutionRelayKeyBindingV1(transaction, {
+							authority,
+							userDirectory: this.#userDirectory,
+						})
+					: undefined;
+			if (plan.execution && authority.channelId === "web" && !executionBinding)
+				return { outcome: "denied" };
 			const reservationId = await reserveIdempotency(transaction, {
 				...scope,
 				requestDigest: request.requestDigest,
@@ -396,7 +441,9 @@ export class PostgresConversationExecutionTransactionV1
 						(execution_id, conversation_id, agent_id, actor_id, channel_id,
 						 turn_id, status, session_generation, delivery_fence,
 						 authorization_revision, model_configuration_revision,
-						 model_option_id, reasoning_level, created_at, updated_at)
+						 model_option_id, reasoning_level, execution_source,
+						relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version,
+						created_at, updated_at)
 					values
 						(${plan.execution.executionId}, ${plan.execution.conversationId},
 						 ${plan.execution.agentId}, ${plan.execution.actorId},
@@ -406,6 +453,11 @@ export class PostgresConversationExecutionTransactionV1
 						 ${plan.execution.authorizationRevision},
 						 ${plan.execution.modelConfigurationRevision},
 						 ${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
+						${executionBinding?.executionSource ?? null},
+						${executionBinding?.relayKeyBinding?.purpose ?? null},
+						${executionBinding?.relayKeyBinding?.subjectId ?? null},
+						${executionBinding?.relayKeyBinding?.keyId ?? null},
+						${executionBinding?.relayKeyBinding?.keyVersion ?? null},
 						 ${plan.execution.createdAt},
 						 ${plan.execution.createdAt})
 				`;
@@ -587,6 +639,9 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<ConversationCommandDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
+			// Web Key acceptance keeps Agent before Conversation in the original transaction.
+			if (authority.channelId === "web")
+				await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
 			const conversation = await lockConversation(
 				transaction,
 				text(request.command.conversationId),
@@ -624,6 +679,15 @@ export class PostgresConversationExecutionTransactionV1
 			const decision = decide(state);
 			if (!isRegenerationPlan(decision)) return decision;
 			const plan = validateRegenerationPlan(decision, request, state);
+			const executionBinding =
+				authority.channelId === "web"
+					? await currentConversationExecutionRelayKeyBindingV1(transaction, {
+							authority,
+							userDirectory: this.#userDirectory,
+						})
+					: undefined;
+			if (authority.channelId === "web" && !executionBinding)
+				return { outcome: "denied" };
 			const reservationId = await reserveIdempotency(transaction, {
 				...scope,
 				requestDigest: request.requestDigest,
@@ -647,7 +711,9 @@ export class PostgresConversationExecutionTransactionV1
 					(execution_id, conversation_id, agent_id, actor_id, channel_id,
 					 turn_id, status, session_generation, delivery_fence,
 					 authorization_revision, model_configuration_revision,
-					 model_option_id, reasoning_level, created_at, updated_at)
+					 model_option_id, reasoning_level, execution_source,
+						relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version,
+						created_at, updated_at)
 				values
 					(${plan.execution.executionId}, ${plan.execution.conversationId},
 					 ${plan.execution.agentId}, ${plan.execution.actorId},
@@ -657,6 +723,11 @@ export class PostgresConversationExecutionTransactionV1
 					 ${plan.execution.authorizationRevision},
 					 ${plan.execution.modelConfigurationRevision},
 					 ${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
+						${executionBinding?.executionSource ?? null},
+						${executionBinding?.relayKeyBinding?.purpose ?? null},
+						${executionBinding?.relayKeyBinding?.subjectId ?? null},
+						${executionBinding?.relayKeyBinding?.keyId ?? null},
+						${executionBinding?.relayKeyBinding?.keyVersion ?? null},
 					 ${plan.execution.createdAt},
 					 ${plan.execution.createdAt})
 			`;
@@ -825,6 +896,9 @@ export class PostgresConversationExecutionTransactionV1
 	}
 
 	async close(): Promise<void> {
+		this.#acceptedKeyClosing = true;
+		// Join original SQL reads before closing this same pool.
+		await Promise.allSettled([...this.#acceptedKeyReads]);
 		try {
 			await this.#client?.end();
 		} catch {

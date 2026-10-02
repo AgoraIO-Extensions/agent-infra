@@ -50,6 +50,7 @@ export {
 	type ConversationExecutionAuthorizationPortV1,
 	type ConversationExecutionConversationStateV1,
 	ConversationExecutionError,
+	type ConversationExecutionSourceV1,
 	type ConversationExecutionStateV1,
 	type ConversationExecutionTransactionPortV1,
 	type ConversationExecutionUseCaseDependenciesV1,
@@ -80,6 +81,8 @@ export {
 	type CreateConversationCommandV1,
 	type CreateConversationDecisionV1,
 	type CreateConversationWritePlanV1,
+	conversationExecutionKeySubjectV1,
+	conversationExecutionSourceV1,
 } from "./conversation-execution-types.js";
 
 export function createConversationExecutionUseCaseV1(

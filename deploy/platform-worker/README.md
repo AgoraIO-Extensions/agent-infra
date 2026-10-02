@@ -71,14 +71,17 @@ export const signing = {
 export const serviceToken = (
   await readFile("/var/run/agent-infra/runtime-auth/service-token", "utf8")
 ).trim();
+const keyring = await loadReviewedKeyring();
+export const relayKeyDecryptionKeys = keyring.keys;
 export const workloadInput = {
   databaseUrl: process.env.PLATFORM_DATABASE_URL,
   kubernetes: { mode: "in-cluster" },
+  runtimeModelVersion: 4,
   policy,
   registry,
   admissionPolicyRef: "approved-runtime-images",
   registrySubjectRef: "platform-worker",
-  keyring: await loadReviewedKeyring(),
+  keyring,
   modelCatalog,
   templateModelBindings: [],
   executionCapacityProfiles: [],
@@ -99,6 +102,16 @@ export const workloadInput = {
   `/var/run/agent-infra/keyring/keyring.pem`，按
   `AGENT_INFRA_WORKER_KEY_VERSIONS` 核对每个版本，并转成工厂要求的版本化 PKCS#8 DER
   Base64 输入；不能把 PEM 原样传给工厂，也不能以同一把私钥冒充多个版本。
+- 使用 `runtimeModelVersion: 4` 时，必须导出 `relayKeyDecryptionKeys`，形状为
+  `[{ keyVersion, privateKeyPkcs8DerBase64 }]`。它保存版本化包装私钥，由部署模块调用
+  `createRelayKeyWorkerDecryptorV1`；不是用户提交的 Relay API Key，也不接收任意
+  `executionKeys` 或 `relayKeyDecryptor` 对象。缺失或无效时启动拒绝并返回脱敏错误。
+- 部署模块用经过装配验证的同一数据库 URL 创建原 accepted Execution Store 和
+  ciphertext Store，保留原事务、受理时固定 Key tuple 与历史密文版本。不存在可用投影时
+  拒绝执行；不回退到当前 Key alias。当前授权与双 fence 仍由原生产循环终审。
+- 正常退出先等待原 Worker/Runtime 的 read/decrypt 与运行任务结算，再关闭本部署创建的
+  两个 Store；初始化失败也等待自建资源回收。调用方自有实例没有移交关闭权时保持由
+  调用方管理；重复 stop 复用同一次回收。
 - `policy.runtimeAuth` 的 Worker ID、issuer、key ID、公钥必须与 `signing` 匹配；其中只保存
   Kubernetes 内预置的 Runtime transport Secret 名称/键，不保存私钥或 Token 值。
 - `templateModelBindings` 使用当前获准标准模板 digest、必需 `driver` 与协议，绑定规则见
@@ -121,3 +134,7 @@ export const workloadInput = {
 其 Kubernetes 与 Runtime HTTP 是受控对端；不代表真实模型、身份服务、Connection 或 Web
 首通。签名 readiness 对真实 RuntimeHost 的独立验证位于 `workload-deployment.test.ts`。
 整体汇合仍遵循 [ADR 0015](../../docs/adr/0015-m1-shared-contract-assembly-convergence.md)。
+
+受控 Key 关闭及 deployment 生命周期测试只覆盖 Promise 结算与自建资源回收；真实
+PostgreSQL、默认/个人 Key、官方 Runtime、模型调用、Pod/PVC 与重启验收须绑定同一
+源码、镜像和配置另行执行，不能由这些 fixture 或 Secret 挂载代替。

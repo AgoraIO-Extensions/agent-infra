@@ -6,6 +6,7 @@ import {
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createExecutionGrantVerifier,
+	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
 	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
@@ -18,6 +19,7 @@ import {
 } from "@agent-infra/agent-runtime";
 import type {
 	ExecutionGrantV1,
+	RuntimeBusinessRequestV4,
 	RuntimeExecutionGrantV2,
 	VerifiedExecutionGrantV1,
 	VerifiedRuntimeExecutionGrantV2,
@@ -57,6 +59,10 @@ interface StartOptions {
 	) =>
 		| VerifiedRuntimeExecutionGrantV2
 		| Promise<VerifiedRuntimeExecutionGrantV2>;
+	verifyGrantV4?: (request: unknown) => Promise<{
+		request: RuntimeBusinessRequestV4;
+		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
+	}>;
 	host: RuntimeHost;
 	serviceToken: string;
 	verifyGrant: (
@@ -200,7 +206,7 @@ export async function assembleRuntimeHost(
 		}
 	};
 	try {
-		const storePath = join(dataDirectory, "host.json");
+	const storePath = join(dataDirectory, "host.json");
 		if (legacyMigration) {
 			const { bytes } = await readRuntimeLegacyJournal(storePath);
 			await previewRuntimeLegacyMigration(bytes, legacyMigration);
@@ -236,7 +242,7 @@ export async function assembleRuntimeHost(
 								"Runtime authorization is not ready",
 								403,
 							);
-						await assembledHost.authorizeExternalAction(action);
+						return assembledHost.authorizeExternalAction(action);
 					},
 					launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
 					path: join(dataDirectory, "codex-driver.json"),
@@ -268,6 +274,12 @@ export async function assembleRuntimeHost(
 		closeDriver = async () => {
 			if ("close" in driver) await driver.close();
 		};
+		const validateV4 = runtimeWorkerId
+			? createRuntimeExecutionGrantValidatorV4(
+					new Map([[keyId, publicKey]]),
+					{ expectedIssuer, expectedWorkerId: runtimeWorkerId },
+				)
+			: undefined;
 		const host = await RuntimeHost.open({
 			...(readinessBinding
 				? {
@@ -289,6 +301,7 @@ export async function assembleRuntimeHost(
 						},
 					}
 				: {}),
+			...(validateV4 ? { validateGrantV4 } : {}),
 		});
 		assembledHost = host;
 		const verifyV2 = createRuntimeExecutionGrantVerifierV2(
@@ -317,6 +330,9 @@ export async function assembleRuntimeHost(
 							return verified;
 						},
 					}
+				: {}),
+			...(validateV4
+				? { verifyGrantV4: (request: unknown) => validateV4(request) }
 				: {}),
 			...(activeConfiguration
 				? { configVersion: activeConfiguration.configVersion }

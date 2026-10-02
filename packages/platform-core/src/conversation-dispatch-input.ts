@@ -1,3 +1,7 @@
+import {
+	RuntimeExecutionSourceV1Schema,
+	RuntimeRelayKeyBindingV1Schema,
+} from "@agent-infra/contracts/runtime";
 import { isTurnOperation } from "./conversation-dispatch-runtime.js";
 import type {
 	ConversationDispatchAuthorityV1,
@@ -16,6 +20,7 @@ import {
 	text,
 	unavailable,
 } from "./conversation-dispatch-values.js";
+import { conversationExecutionSourceV1 } from "./conversation-execution-types.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 
 export function parseConversationMetadataRecoveryV1(
@@ -104,7 +109,13 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"executionStatus",
 			"stopPending",
 		],
-		["generationIsolation", "runtimeTerminalEventSeen", "metadataRecovery"],
+		[
+			"generationIsolation",
+			"runtimeTerminalEventSeen",
+			"metadataRecovery",
+			"executionSource",
+			"relayKeyBinding",
+		],
 	);
 	if (
 		input.schemaVersion !== 1 ||
@@ -117,6 +128,48 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 	)
 		return unavailable();
 	const parsedOperation = operation(input.operation);
+	let executionSource: ConversationDispatchClaimV1["executionSource"];
+	let relayKeyBinding: ConversationDispatchClaimV1["relayKeyBinding"];
+	if (
+		(input.executionSource === undefined) !==
+		(input.relayKeyBinding === undefined)
+	)
+		return unavailable();
+	if (input.executionSource !== undefined) {
+		const source = RuntimeExecutionSourceV1Schema.safeParse(
+			input.executionSource,
+		);
+		const key = exactObject(input.relayKeyBinding, [
+			"purpose",
+			"subjectId",
+			"keyId",
+			"keyVersion",
+		]);
+		const binding = RuntimeRelayKeyBindingV1Schema.safeParse({
+			purpose: key.purpose,
+			subjectId: key.subjectId,
+			ciphertextRef: key.keyId,
+			version: key.keyVersion,
+		});
+		if (
+			!source.success ||
+			!binding.success ||
+			source.data !== conversationExecutionSourceV1(text(input.channelId)) ||
+			(source.data === "web" || source.data === "wecom"
+				? binding.data.purpose !== "personal" ||
+					binding.data.subjectId !== input.actorId
+				: binding.data.purpose !== "agent-default" ||
+					binding.data.subjectId !== input.agentId)
+		)
+			return unavailable();
+		executionSource = source.data;
+		relayKeyBinding = {
+			purpose: binding.data.purpose,
+			subjectId: binding.data.subjectId,
+			keyId: binding.data.ciphertextRef,
+			keyVersion: binding.data.version,
+		};
+	}
 	const metadataRecovery =
 		input.metadataRecovery === undefined
 			? undefined
@@ -200,6 +253,9 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		modelConfigurationRevision,
 		modelOptionId,
 		reasoningLevel,
+		...(executionSource && relayKeyBinding
+			? { executionSource, relayKeyBinding }
+			: {}),
 		hostSessionRef: nullableText(input.hostSessionRef),
 		runtimeCursor: nullableText(input.runtimeCursor),
 		...(input.runtimeTerminalEventSeen === true
