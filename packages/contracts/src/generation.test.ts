@@ -114,6 +114,23 @@ describe("standard contract artifacts", () => {
 		expect(Object.keys(artifacts.jsonSchema.$defs).sort()).toEqual(schemaNames);
 		expect(first).not.toMatch(/generatedAt|toolVersion|\/Users\//);
 		expect(artifacts.pilotBrowserOpenapi.openapi).toBe("3.1.0");
+		expect(artifacts.pilotBrowserOpenapi.components.securitySchemes).toEqual(
+			artifacts.pilotBrowserOpenapiV2.components.securitySchemes,
+		);
+		for (const path of ["/api/v1/audit", "/api/v1/audit/{auditId}"]) {
+			expect(artifacts.pilotBrowserOpenapi.paths[path].get.security).toEqual([
+				{ PlatformSession: [] },
+				{ platformApiCredential: [] },
+			]);
+		}
+		for (const path of [
+			"/api/v3/admin/audit",
+			"/api/v3/admin/audit/{auditId}",
+		]) {
+			expect(artifacts.pilotBrowserOpenapi.paths[path].get.security).toEqual([
+				{ PlatformSession: [] },
+			]);
+		}
 		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
 			"/api/v1/conversations/{conversationId}/messages",
 		);

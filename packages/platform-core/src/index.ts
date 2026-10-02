@@ -46,6 +46,7 @@ export {
 } from "./agent-configuration.js";
 export * from "./agent-management.js";
 export * from "./agent-runtime-presentation.js";
+export * from "./api-audit-identity.js";
 export * from "./application-foundation.js";
 export * from "./application-registration.js";
 export * from "./application-revision.js";

@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+	getOwnExecutionAudit,
+	listOwnExecutionAudit,
+} from "./generated/sdk.gen.js";
 import { listAgentsV2 } from "./generated-v2/sdk.gen.js";
 
 const credential = `papi_${"s".repeat(43)}`;
@@ -74,7 +78,7 @@ describe("generated GET Agents authentication selection", () => {
 				fetch: http.fetch,
 				throwOnError: true,
 			}),
-		).rejects.toThrow("Select one Agent read authentication scheme");
+		).rejects.toThrow("Select one read authentication scheme");
 		expect(http.fetch).not.toHaveBeenCalled();
 	});
 
@@ -90,7 +94,7 @@ describe("generated GET Agents authentication selection", () => {
 					fetch: http.fetch,
 					throwOnError: true,
 				}),
-			).rejects.toThrow("Select one Agent read authentication scheme");
+			).rejects.toThrow("Select one read authentication scheme");
 			expect(http.fetch).not.toHaveBeenCalled();
 		},
 	);
@@ -105,4 +109,84 @@ describe("generated GET Agents authentication selection", () => {
 		expect(http.request()?.credentials).toBe("include");
 		expect(http.request()?.headers.has("Authorization")).toBe(false);
 	});
+});
+
+function queryAudit(
+	mode: "list" | "detail",
+	options: NonNullable<Parameters<typeof listOwnExecutionAudit>[0]>,
+) {
+	return mode === "list"
+		? listOwnExecutionAudit(options)
+		: getOwnExecutionAudit({ ...options, path: { auditId: "audit_1" } });
+}
+
+describe("generated own-audit authentication selection", () => {
+	it.each(["list", "detail"] as const)(
+		"uses string Bearer without explicit or ambient Cookies (%s)",
+		async (mode) => {
+			const http = transport();
+			await queryAudit(mode, {
+				baseUrl: "https://platform.example.test",
+				auth: credential,
+				credentials: "include",
+				fetch: http.fetch,
+			});
+			expect(http.request()?.headers.get("Authorization")).toBe(
+				`Bearer ${credential}`,
+			);
+			expect(http.request()?.headers.has("Cookie")).toBe(false);
+			expect(http.request()?.credentials).toBe("omit");
+			expect(new URL(http.request()?.url ?? "").pathname).toBe(
+				mode === "list" ? "/api/v1/audit" : "/api/v1/audit/audit_1",
+			);
+		},
+	);
+	it.each(["list", "detail"] as const)(
+		"retains explicit native Cookie selection without Bearer (%s)",
+		async (mode) => {
+			const http = transport();
+			await queryAudit(mode, {
+				baseUrl: "https://platform.example.test",
+				auth: (scheme) =>
+					scheme.in === "cookie" ? "controlled-session" : undefined,
+				security: [
+					{ type: "apiKey", in: "cookie", name: "__Host-platform-session" },
+				],
+				fetch: http.fetch,
+			});
+			expect(http.request()?.headers.get("Cookie")).toBe(
+				"__Host-platform-session=controlled-session",
+			);
+			expect(http.request()?.headers.has("Authorization")).toBe(false);
+		},
+	);
+	it.each(["list", "detail"] as const)(
+		"retains ambient browser Cookie credentials without selecting Bearer (%s)",
+		async (mode) => {
+			const http = transport();
+			await queryAudit(mode, {
+				baseUrl: "https://platform.example.test",
+				credentials: "include",
+				fetch: http.fetch,
+			});
+			expect(http.request()?.credentials).toBe("include");
+			expect(http.request()?.headers.has("Authorization")).toBe(false);
+		},
+	);
+	it.each(["list", "detail"] as const)(
+		"rejects explicit Cookie plus Bearer before fetch (%s)",
+		async (mode) => {
+			const http = transport();
+			await expect(
+				queryAudit(mode, {
+					baseUrl: "https://platform.example.test",
+					auth: credential,
+					headers: { Cookie: "__Host-platform-session=controlled-session" },
+					fetch: http.fetch,
+					throwOnError: true,
+				}),
+			).rejects.toThrow("Select one read authentication scheme");
+			expect(http.fetch).not.toHaveBeenCalled();
+		},
+	);
 });
