@@ -23,6 +23,15 @@ function operations(tx: Transaction): ApplicationMaterialGrantTransactionV1 {
   return {
     async lockUserDisabled(userId) { await tx.execute(sql`lock table platform.platform_user_disables in share mode`); const [row] = await tx.select({ userId: platformUserDisables.userId }).from(platformUserDisables).where(eq(platformUserDisables.userId, userId)).limit(1); return row !== undefined; },
     async applicationExists(applicationId) { const [row] = await tx.select({ id: platformApplications.id }).from(platformApplications).where(eq(platformApplications.id, applicationId)).limit(1); return row !== undefined; },
+    async recipientEligible(principalType, principalId) {
+      if (principalType === "application") {
+        const [row] = await tx.select({ id: platformApplications.id }).from(platformApplications).where(and(eq(platformApplications.id, principalId), eq(platformApplications.status, "active"))).limit(1);
+        return row !== undefined;
+      }
+      await tx.execute(sql`lock table platform.platform_user_disables in share mode`);
+      const [row] = await tx.select({ userId: platformUserDisables.userId }).from(platformUserDisables).where(eq(platformUserDisables.userId, principalId)).limit(1);
+      return row === undefined;
+    },
     async lockGrant(request) { await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["material-grant", request.applicationId, request.principalType, request.principalId])}, 0))`); const [row] = await tx.select().from(apiCredentialDeliveryGrants).where(and(eq(apiCredentialDeliveryGrants.applicationId, request.applicationId), eq(apiCredentialDeliveryGrants.principalType, request.principalType), eq(apiCredentialDeliveryGrants.principalId, request.principalId))).for("update").limit(1); return row ? metadata(row) : null; },
     async upsertGrant(request, revision, createdAt) { const [row] = await tx.insert(apiCredentialDeliveryGrants).values({ applicationId: request.applicationId, principalType: request.principalType, principalId: request.principalId, authorizationRevision: revision, createdAt, revokedAt: null }).onConflictDoUpdate({ target: [apiCredentialDeliveryGrants.applicationId, apiCredentialDeliveryGrants.principalType, apiCredentialDeliveryGrants.principalId], set: { authorizationRevision: revision, revokedAt: null } }).returning(); if (!row) throw new Error("grant write unavailable"); return metadata(row); },
     async revokeGrant(request, revokedAt, revision) { const [row] = await tx.update(apiCredentialDeliveryGrants).set({ revokedAt, authorizationRevision: revision }).where(and(eq(apiCredentialDeliveryGrants.applicationId, request.applicationId), eq(apiCredentialDeliveryGrants.principalType, request.principalType), eq(apiCredentialDeliveryGrants.principalId, request.principalId))).returning(); return row ? metadata(row) : null; },

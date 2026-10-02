@@ -45,6 +45,7 @@ export interface ApplicationMaterialGrantAuditV1 {
 export interface ApplicationMaterialGrantTransactionV1 {
   lockUserDisabled(userId: string): Promise<boolean>;
   applicationExists(applicationId: string): Promise<boolean>;
+  recipientEligible(principalType: ApplicationMaterialGrantPrincipalTypeV1, principalId: string): Promise<boolean>;
   lockGrant(request: Pick<ApplicationMaterialGrantRequestV1, "applicationId" | "principalType" | "principalId">): Promise<ApplicationMaterialGrantMetadataV1 | null>;
   upsertGrant(request: ApplicationMaterialGrantRequestV1, revision: string, createdAt: Date): Promise<ApplicationMaterialGrantMetadataV1>;
   revokeGrant(request: ApplicationMaterialGrantRequestV1, revokedAt: Date, revision: string): Promise<ApplicationMaterialGrantMetadataV1 | null>;
@@ -70,12 +71,11 @@ function assertAdmin(request: ApplicationMaterialGrantRequestV1): void {
 }
 export function createApplicationMaterialGrantUseCaseV1(dependencies: { readonly store: ApplicationMaterialGrantStoreV1; readonly resolveUser: (userId: string) => Promise<{ readonly accountStatus: "active" | "disabled" } | null> }): ApplicationMaterialGrantUseCaseV1 {
   const assertRecipient = async (tx: ApplicationMaterialGrantTransactionV1, request: ApplicationMaterialGrantRequestV1): Promise<void> => {
-    if (request.principalType === "application") {
-      if (!(await tx.applicationExists(request.principalId))) throw new ApplicationMaterialGrantErrorV1("not_found");
-      return;
+    if (!(await tx.recipientEligible(request.principalType, request.principalId))) throw new ApplicationMaterialGrantErrorV1("not_found");
+    if (request.principalType === "user") {
+      const user = await dependencies.resolveUser(request.principalId);
+      if (!user || user.accountStatus !== "active") throw new ApplicationMaterialGrantErrorV1("not_found");
     }
-    const user = await dependencies.resolveUser(request.principalId);
-    if (!user || user.accountStatus !== "active") throw new ApplicationMaterialGrantErrorV1("not_found");
   };
   return {
     async grant(request) {
