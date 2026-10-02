@@ -201,9 +201,9 @@ describe("formal deployment personal credential governance over PostgreSQL and g
 				});
 			const before = await read();
 			expect(before.status).toBe(200);
-			expect((await before.json()).items).toEqual(
-				expect.arrayContaining([expect.objectContaining({ agentId })]),
-			);
+			expect(await before.json()).toMatchObject({
+				items: expect.arrayContaining([expect.objectContaining({ agentId })]),
+			});
 			const narrowed = await narrowPersonalApiCredentialV2({
 				client,
 				auth: "session_alice",
