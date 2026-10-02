@@ -116,6 +116,21 @@ export const auditPrincipalLabels = {
 	unknown: "未确认主体",
 };
 
+export const auditSubjectLabels: Record<
+	AuditRecord["subject"]["kind"],
+	string
+> = {
+	agent_application: "创建申请",
+	agent: "Agent",
+	secret: "Secret",
+	secret_key: "Secret 键",
+	grant: "授权记录",
+	unknown: "未确认对象",
+	conversation: "Conversation",
+	execution: "Execution",
+	configuration: "配置",
+};
+
 export function auditOutcomeLabel(record: AuditRecord) {
 	if (
 		record.taskApi?.phase === "access" &&
