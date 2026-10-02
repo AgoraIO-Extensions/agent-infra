@@ -4,8 +4,8 @@ import {
 } from "@agent-infra/contracts/pilot";
 import {
 	type ApiPrincipalV1,
+	PersonalApiCredentialErrorV1,
 	type PlatformAuditQueryDenialReasonV1,
-	type PlatformAuditQueryScopeV1,
 	PlatformAuditScopeErrorV1,
 	parsePlatformAuditQueryScopeV1,
 	platformAuditQueryDenialReasonsV1,
@@ -37,11 +37,22 @@ async function queryScope(
 	administrator: boolean,
 	traceId: string,
 	capturePrincipal: (principal: ApiPrincipalV1) => void,
-): Promise<PlatformAuditQueryScopeV1> {
+): Promise<Parameters<PostgresScopedPlatformAuditQueryV1["listAudit"]>[0]> {
 	if (request.headers.has("authorization")) {
-		// API identity resolution is #481-owned. Do not let a bearer value
-		// fall through to a browser session on either audit route.
-		throw new HttpProtocolError("AUTHENTICATION_REQUIRED", traceId);
+		const authorization = request.headers.get("authorization");
+		const bearer = authorization?.match(
+			/^Bearer (papi_[A-Za-z0-9_-]{43})(?![\s\S])/,
+		);
+		if (administrator || !bearer)
+			throw new HttpProtocolError("AUTHENTICATION_REQUIRED", traceId);
+		const resolveUser = identity.resolveUser;
+		return {
+			kind: "api-credential",
+			material: bearer[1] as string,
+			userDirectory: resolveUser
+				? { resolveUser: (id) => resolveUser.call(identity, id) }
+				: undefined,
+		};
 	}
 	if (administrator) {
 		const user = await resolveIdentity(identity, request, traceId);
@@ -134,6 +145,12 @@ function queryInput(request: Request, defaultLimit = 50) {
 
 function protocolError(error: unknown, traceId: string): never {
 	if (error instanceof HttpProtocolError) throw error;
+	if (error instanceof PersonalApiCredentialErrorV1) {
+		if (error.code === "authentication_required")
+			throw new HttpProtocolError("AUTHENTICATION_REQUIRED", traceId);
+		if (error.code === "forbidden")
+			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
+	}
 	if (error instanceof PlatformAuditScopeErrorV1) {
 		if (error.code === "invalid_request")
 			throw new HttpProtocolError("INVALID_REQUEST", traceId);

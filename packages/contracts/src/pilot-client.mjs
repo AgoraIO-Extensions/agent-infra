@@ -14,6 +14,11 @@ const clients = [
 			"artifacts/openapi/pilot-browser.v1.openapi.json",
 		),
 		output: resolve(repositoryRoot, "apps/web/src/pilot/generated"),
+		runtimeConfigPath: resolve(
+			repositoryRoot,
+			"apps/web/src/pilot/generated-client-config",
+		),
+		dualAuthenticationPaths: ["/api/v1/audit", "/api/v1/audit/{auditId}"],
 	},
 	{
 		input: resolve(
@@ -25,24 +30,32 @@ const clients = [
 			repositoryRoot,
 			"apps/web/src/pilot/generated-client-config",
 		),
+		dualAuthenticationPaths: ["/api/v2/agents"],
 	},
 ];
 const command = process.argv[2];
 
-async function generate(input, directory, runtimeConfigPath) {
+async function generate(
+	input,
+	directory,
+	runtimeConfigPath,
+	dualAuthenticationPaths,
+) {
 	let specification = input;
-	if (runtimeConfigPath !== undefined) {
+	if (dualAuthenticationPaths.length > 0) {
 		specification = JSON.parse(await readFile(input, "utf8"));
-		const operation = specification.paths?.["/api/v2/agents"]?.get;
-		if (
-			JSON.stringify(operation?.security) !==
-			JSON.stringify([{ PlatformSession: [] }, { platformApiCredential: [] }])
-		) {
-			throw new Error("Unexpected Agent read authentication alternatives");
+		for (const path of dualAuthenticationPaths) {
+			const operation = specification.paths?.[path]?.get;
+			if (
+				JSON.stringify(operation?.security) !==
+				JSON.stringify([{ PlatformSession: [] }, { platformApiCredential: [] }])
+			) {
+				throw new Error(`Unexpected read authentication alternatives: ${path}`);
+			}
+			// The formal API accepts either scheme. SDK string auth selects Bearer;
+			// Cookie callers select the native Cookie security option explicitly.
+			operation.security = [{ platformApiCredential: [] }];
 		}
-		// The formal API accepts either scheme. SDK string auth selects Bearer;
-		// Cookie callers select the native Cookie security option explicitly.
-		operation.security = [{ platformApiCredential: [] }];
 	}
 	await createClient({
 		input: specification,
@@ -86,6 +99,7 @@ try {
 			client.runtimeConfigPath === undefined
 				? undefined
 				: resolve(generated, relative(client.output, client.runtimeConfigPath)),
+			client.dualAuthenticationPaths,
 		);
 		if (command === "--write") {
 			await rm(client.output, { recursive: true, force: true });
