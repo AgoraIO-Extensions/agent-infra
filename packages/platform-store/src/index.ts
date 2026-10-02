@@ -23,6 +23,7 @@ export {
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
 } from "./agent-management.ts";
+export * from "./api-audit-identity.js";
 export {
 	type PostgresApplicationFoundationOptions,
 	PostgresApplicationFoundationTransactionV1,
@@ -110,6 +111,7 @@ export {
 	resolvePersonalApiTaskAdmissionAuthorityV1,
 } from "./personal-api-task-authorization.ts";
 export { PostgresPersonalRelayKeyStoreV1 } from "./personal-relay-key.ts";
+export { PostgresRelayKeyVersionStoreV1 } from "./relay-key-versions.ts";
 export {
 	PostgresScopedPlatformAuditQueryV1,
 	type ScopedPlatformAuditPageV1,
