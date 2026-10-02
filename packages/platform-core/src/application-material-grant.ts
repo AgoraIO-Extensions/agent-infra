@@ -53,7 +53,6 @@ export interface ApplicationMaterialGrantTransactionV1 {
 }
 export interface ApplicationMaterialGrantStoreV1 {
   execute<T>(work: (tx: ApplicationMaterialGrantTransactionV1) => Promise<T>): Promise<T>;
-  recordAudit(event: ApplicationMaterialGrantAuditV1): Promise<void>;
 }
 export interface ApplicationMaterialGrantUseCaseV1 {
   grant(request: ApplicationMaterialGrantRequestV1): Promise<{ readonly metadata: ApplicationMaterialGrantMetadataV1; readonly replayed: boolean }>;

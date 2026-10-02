@@ -42,6 +42,5 @@ export class PostgresApplicationMaterialGrantStoreV1 implements ApplicationMater
   readonly #client; readonly #database;
   constructor(options: PostgresApplicationMaterialGrantOptionsV1) { this.#client = postgres(options.databaseUrl, { max: 1 }); this.#database = drizzle(this.#client); }
   async execute<T>(work: (tx: ApplicationMaterialGrantTransactionV1) => Promise<T>): Promise<T> { return this.#database.transaction((tx) => work(operations(tx))); }
-  async recordAudit(event: ApplicationMaterialGrantAuditV1): Promise<void> { await writeAudit(this.#database, event); }
   async close(): Promise<void> { await this.#client.end(); }
 }
