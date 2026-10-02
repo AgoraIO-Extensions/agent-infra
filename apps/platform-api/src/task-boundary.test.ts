@@ -311,9 +311,22 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 	it.each(["enabled", "disabled", "absent", "drifted"] as const)(
 		"accepts supplements only with a currently verified capability: %s",
 		async (mode) => {
+			const deploymentBase = workloadDesiredFixture(
+				1,
+				configuration.agentId,
+				"internal-only",
+			);
 			const deployment = {
-				...workloadDesiredFixture(1, configuration.agentId, "internal-only"),
+				...deploymentBase,
 				configRevision: configuration.revision,
+				registryAdmission: {
+					...deploymentBase.registryAdmission,
+					immutableDigest: deploymentBase.imageDigest,
+					policyEvidence: {
+						...deploymentBase.registryAdmission.policyEvidence,
+						imageDigest: deploymentBase.imageDigest,
+					},
+				},
 			};
 			const configured = {
 				...configuration,
