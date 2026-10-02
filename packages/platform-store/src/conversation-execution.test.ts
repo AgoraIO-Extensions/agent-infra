@@ -22,6 +22,22 @@ import {
 } from "./postgres-test.ts";
 import { PostgresTaskAuthorizationStoreV1 } from "./task-authorization.ts";
 
+const storeConformanceAuthority: ConversationExecutionAuthorityV1 = {
+	...conversationConformanceAuthorityV1,
+	actorId: "actor_fixture",
+	agentId: "agent_fixture",
+	channelId: "web",
+	taskBoundary: {
+		schemaVersion: 1,
+		principal: { kind: "user", id: "actor_fixture" },
+		agentId: "agent_fixture",
+		channelId: "web",
+		identityRevision: "identity_fixture_1",
+		agentAuthorizationRevision: "authorization_fixture_1",
+		accessSources: [{ kind: "user", userId: "actor_fixture" }],
+	},
+};
+
 const authority: ConversationExecutionAuthorityV1 = {
 	schemaVersion: 1,
 	actorId: "user_01",
@@ -91,7 +107,7 @@ async function persistConformanceModelConfiguration(
 	const revision = modelConfiguration?.configurationRevision ?? 1;
 	const record = {
 		schemaVersion: 1,
-		agentId: conversationConformanceAuthorityV1.agentId,
+		agentId: storeConformanceAuthority.agentId,
 		revision,
 		source: modelConfiguration
 			? {
@@ -142,8 +158,8 @@ async function persistConformanceModelConfiguration(
 		insert into platform.agents
 			(id, current_configuration_revision, authorization_revision)
 		values
-			(${conversationConformanceAuthorityV1.agentId}, ${revision},
-			 ${conversationConformanceAuthorityV1.authorizationRevision})
+			(${storeConformanceAuthority.agentId}, ${revision},
+			 ${storeConformanceAuthority.authorizationRevision})
 		on conflict (id) do update
 		set authorization_revision = excluded.authorization_revision
 	`;
@@ -151,32 +167,32 @@ async function persistConformanceModelConfiguration(
 		insert into platform.agent_configuration_revisions
 			(agent_id, revision, source_reference, created_at, configuration)
 		values
-			(${conversationConformanceAuthorityV1.agentId}, ${revision},
+			(${storeConformanceAuthority.agentId}, ${revision},
 			 ${`source_fixture_${revision}`}, now(), ${client.json(record)})
 		on conflict (agent_id, revision) do update
 		set configuration = excluded.configuration
 	`;
-	const keyId = "fixture-key:personal:user_01";
+	const keyId = "fixture-key:personal:actor_fixture";
 	await client`insert into platform.relay_key_subjects
 		(purpose, subject_id, last_version, current_version)
-		values ('personal', 'user_01', 1, 1)
+		values ('personal', 'actor_fixture', 1, 1)
 		on conflict (purpose, subject_id) do nothing`;
 	await client`insert into platform.relay_key_versions
 		(purpose, subject_id, key_version, key_id, ciphertext)
-		values ('personal', 'user_01', 1, ${keyId},
-			${client.json({ purpose: "personal", subjectId: "user_01", keyId, keyVersion: 1 })})
+		values ('personal', 'actor_fixture', 1, ${keyId},
+			${client.json({ purpose: "personal", subjectId: "actor_fixture", keyId, keyVersion: 1 })})
 		on conflict (purpose, subject_id, key_version) do nothing`;
 	await client`
 		update platform.agents
 		set current_configuration_revision = ${revision}
-		where id = ${conversationConformanceAuthorityV1.agentId}
+		where id = ${storeConformanceAuthority.agentId}
 	`;
 }
 
 conversationCommandConformanceV1("PostgreSQL", async () => {
 	await persistConformanceModelConfiguration(conformanceModelConfiguration);
 	let effectiveAuthority: ConversationExecutionAuthorityV1 | undefined =
-		conversationConformanceAuthorityV1;
+		storeConformanceAuthority;
 	let nextId = 1;
 	let failureCleanupRequired = false;
 	let fallbackFailureCleanupRequired = false;
@@ -184,6 +200,17 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 	let loseNextResponse = false;
 	const adapter = new PostgresConversationExecutionTransactionV1({
 		databaseUrl,
+		userDirectory: {
+			async resolveUser(userId) {
+				return {
+					schemaVersion: 1,
+					userId,
+					accountStatus: "active",
+					organizationIds: [],
+					authorizationRevision: "identity_fixture_1",
+				};
+			},
+		},
 	});
 	const eventAdapter = new PostgresConversationEventTransactionV1({
 		databaseUrl,
