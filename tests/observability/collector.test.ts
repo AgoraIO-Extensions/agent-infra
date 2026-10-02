@@ -15,6 +15,7 @@ import type { ConversationOperationFactV2 } from "../../packages/platform-core/s
 import { PostgresConversationEventTransactionV1 } from "../../packages/platform-store/src/conversation-events.js";
 import { migratePlatformDatabase } from "../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../packages/platform-store/src/postgres-test.js";
+import { insertTaskAuthorization } from "../../packages/platform-store/src/task-authorization.js";
 import { startAlertBackend } from "./alert-backend.js";
 import { evaluateAlerts } from "./alerts.js";
 import {
@@ -124,8 +125,27 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		const before = await response.json();
 		const conversationId = randomUUID();
 		const executionId = randomUUID();
+		// Controlled admission uses the original authorization/audit writer.
+		// It does not prove a real identity, dispatch or native Execution.
+		await sql`insert into platform.agents (id, authorization_revision) values ('agent','auth')`;
 		await sql`insert into platform.conversations (id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision) values (${conversationId},'agent','actor','web','active',3,'auth')`;
-		await sql`insert into platform.conversation_executions (execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,created_at,updated_at) values (${executionId},${conversationId},'agent','actor','web','turn','unknown',3,5,'auth',now(),now())`;
+		await sql`insert into platform.conversation_executions (execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,model_configuration_revision,model_option_id,reasoning_level,created_at,updated_at) values (${executionId},${conversationId},'agent','actor','web','turn','unknown',3,5,'auth',1,'option-1','medium',now(),now())`;
+		await sql.begin((transaction) =>
+			insertTaskAuthorization(transaction, {
+				executionId,
+				boundary: {
+					schemaVersion: 1,
+					principal: { kind: "user", id: "actor" },
+					agentId: "agent",
+					channelId: "web",
+					identityRevision: "controlled-identity",
+					agentAuthorizationRevision: "auth",
+					accessSources: [{ kind: "user", userId: "actor" }],
+				},
+				traceId: randomUUID(),
+				requestId: randomUUID(),
+			}),
+		);
 		const events = createObservedConversationEvents({
 			transaction,
 			telemetry: observation,
@@ -410,6 +430,7 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 				configVersion: "config-1",
 				modelOptionId: "option-1",
 				modelId: "PRIVATE_MODEL_SENTINEL",
+				reasoningLevel: "medium",
 			},
 		};
 		const persistModel = (fact: ConversationOperationFactV2, key: string) =>
@@ -504,6 +525,11 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		const finalRows =
 			await sql`select count(*)::int as count from platform.conversation_events where execution_id = ${executionId}`;
 		expect(finalRows[0]?.count).toBe(9);
+		const [operationAudits] =
+			await sql`select count(*)::int as count, count(distinct details ->> 'authorizationRecordId')::int as bindings
+				from platform.audit_events where action = 'execution.operation.observed' and target_id = ${executionId}`;
+		expect(operationAudits?.count).toBe(7);
+		expect(operationAudits?.bindings).toBe(1);
 		const finalMetrics = await collector.query();
 		const finalTraces = await collector.read();
 		await backend.waitFor(
@@ -552,6 +578,9 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 						cachedInput: tokenValue(finalMetrics, "cached_input"),
 						unknownOutcomes: modelOutcomes,
 						controlledFacts: true,
+						controlledAuthorization: true,
+						operationAudits: operationAudits?.count,
+						authorizationBindings: operationAudits?.bindings,
 					},
 					finalMetrics,
 					limitations: [
