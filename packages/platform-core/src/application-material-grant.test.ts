@@ -20,13 +20,36 @@ function request(
 			userId: "admin-1",
 			accountStatus: "active",
 			isSystemAdmin: true,
+			ldapStableUid: "ldap-admin-1",
+			ldapAdministratorConfigured: true,
 			authorizationRevision: "auth-1",
 		},
 		...overrides,
 	};
 }
+function makeUseCase(options: {
+	store: ApplicationMaterialGrantStoreV1;
+	resolveUser: (
+		userId: string,
+	) => Promise<{ readonly accountStatus: "active" | "disabled" } | null>;
+}) {
+	return createApplicationMaterialGrantUseCaseV1({
+		...options,
+		resolveCurrentActor: async () => ({
+			accountStatus: "active",
+			isSystemAdmin: true,
+			ldapStableUid: "ldap-admin-1",
+			ldapAdministratorConfigured: true,
+			authorizationRevision: "auth-1",
+		}),
+	});
+}
 function fakeStore(
-	options: { applicationExists?: boolean; recipientEligible?: boolean } = {},
+	options: {
+		applicationExists?: boolean;
+		recipientEligible?: boolean;
+		auditFails?: boolean;
+	} = {},
 ): ApplicationMaterialGrantStoreV1 & {
 	row: ApplicationMaterialGrantMetadataV1 | null;
 	audits: number;
@@ -46,42 +69,124 @@ function fakeStore(
 			return state.audits;
 		},
 		async execute(work) {
-			return work({
-				lockUserDisabled: async () => false,
-				applicationExists: async () => options.applicationExists ?? true,
-				recipientEligible: async () => options.recipientEligible ?? true,
-				lockGrant: async () => state.row,
-				upsertGrant: async (r, revision, createdAt) => {
-					state.row = {
-						applicationId: r.applicationId,
-						principalType: r.principalType,
-						principalId: r.principalId,
-						authorizationRevision: revision,
-						createdAt: createdAt.toISOString(),
-						revokedAt: null,
-					};
-					return state.row;
-				},
-				revokeGrant: async (_r, revokedAt, revision) => {
-					if (!state.row) return null;
-					state.row = {
-						...state.row,
-						authorizationRevision: revision,
-						revokedAt: revokedAt.toISOString(),
-					};
-					return state.row;
-				},
-				recordAudit: async () => {
-					state.audits += 1;
-				},
-			});
+			const before = state.row;
+			try {
+				return await work({
+					lockUserDisabled: async () => false,
+					applicationExists: async () => options.applicationExists ?? true,
+					recipientEligible: async () => options.recipientEligible ?? true,
+					lockGrant: async () => state.row,
+					upsertGrant: async (r, revision, createdAt) => {
+						state.row = {
+							applicationId: r.applicationId,
+							principalType: r.principalType,
+							principalId: r.principalId,
+							authorizationRevision: revision,
+							createdAt: createdAt.toISOString(),
+							revokedAt: null,
+						};
+						return state.row;
+					},
+					revokeGrant: async (_r, revokedAt, revision) => {
+						if (!state.row) return null;
+						state.row = {
+							...state.row,
+							authorizationRevision: revision,
+							revokedAt: revokedAt.toISOString(),
+						};
+						return state.row;
+					},
+					recordAudit: async () => {
+						if (options.auditFails) throw new Error("audit unavailable");
+						state.audits += 1;
+					},
+				});
+			} catch (error) {
+				state.row = before;
+				throw error;
+			}
 		},
 	};
 }
 describe("application material grant authority", () => {
-	it("rejects a manager without system_admin writer authority", async () => {
+	it("fails closed when the actor has no current LDAP administrator proof", async () => {
+		const store = fakeStore();
+		const useCase = makeUseCase({
+			store,
+			resolveUser: async () => ({ accountStatus: "active" }),
+		});
+		await expect(
+			useCase.grant(
+				request({
+					actor: {
+						...request().actor,
+						ldapStableUid: undefined,
+					},
+				}),
+			),
+		).rejects.toMatchObject({ code: "forbidden" });
+	});
+
+	it("rejects a stale disabled actor from the current LDAP resolver", async () => {
 		const store = fakeStore();
 		const useCase = createApplicationMaterialGrantUseCaseV1({
+			store,
+			resolveUser: async () => ({ accountStatus: "active" }),
+			resolveCurrentActor: async () => ({
+				accountStatus: "disabled",
+				isSystemAdmin: true,
+				ldapStableUid: "ldap-admin-1",
+				ldapAdministratorConfigured: true,
+				authorizationRevision: "auth-1",
+			}),
+		});
+		await expect(useCase.grant(request())).rejects.toMatchObject({
+			code: "authentication_required",
+		});
+		expect(store.row).toBeNull();
+	});
+
+	it("requires an explicit complete self grant", async () => {
+		const store = fakeStore();
+		const useCase = makeUseCase({
+			store,
+			resolveUser: async () => ({ accountStatus: "active" }),
+		});
+		await expect(
+			useCase.grant(request({ principalType: "user", principalId: "admin-1" })),
+		).resolves.toMatchObject({
+			metadata: { principalId: "admin-1", revokedAt: null },
+		});
+	});
+
+	it("fails closed when LDAP current resolution is unavailable", async () => {
+		const store = fakeStore();
+		const useCase = createApplicationMaterialGrantUseCaseV1({
+			store,
+			resolveUser: async () => ({ accountStatus: "active" }),
+			resolveCurrentActor: async () => {
+				throw new Error("ldap unavailable");
+			},
+		});
+		await expect(useCase.grant(request())).rejects.toMatchObject({
+			code: "unavailable",
+		});
+		expect(store.row).toBeNull();
+	});
+
+	it("rolls back a grant when audit recording fails", async () => {
+		const store = fakeStore({ auditFails: true });
+		const useCase = makeUseCase({
+			store,
+			resolveUser: async () => ({ accountStatus: "active" }),
+		});
+		await expect(useCase.grant(request())).rejects.toThrow("audit unavailable");
+		expect(store.row).toBeNull();
+	});
+
+	it("rejects a manager without system_admin writer authority", async () => {
+		const store = fakeStore();
+		const useCase = makeUseCase({
 			store,
 			resolveUser: async () => ({ accountStatus: "active" }),
 		});
@@ -95,7 +200,7 @@ describe("application material grant authority", () => {
 	});
 	it("requires a revision for a concurrent revoke", async () => {
 		const store = fakeStore();
-		const useCase = createApplicationMaterialGrantUseCaseV1({
+		const useCase = makeUseCase({
 			store,
 			resolveUser: async () => ({ accountStatus: "active" }),
 		});
@@ -105,9 +210,21 @@ describe("application material grant authority", () => {
 		).rejects.toBeInstanceOf(ApplicationMaterialGrantErrorV1);
 		expect(store.row?.revokedAt).toBeNull();
 	});
+	it("rejects an unknown user recipient", async () => {
+		const store = fakeStore();
+		const useCase = makeUseCase({
+			store,
+			resolveUser: async () => null,
+		});
+		await expect(useCase.grant(request())).rejects.toMatchObject({
+			code: "not_found",
+		});
+		expect(store.row).toBeNull();
+	});
+
 	it("rejects an application recipient from another application", async () => {
 		const store = fakeStore();
-		const useCase = createApplicationMaterialGrantUseCaseV1({
+		const useCase = makeUseCase({
 			store,
 			resolveUser: async () => ({ accountStatus: "active" }),
 		});
@@ -128,7 +245,7 @@ describe("application material grant authority", () => {
 			createdAt: new Date().toISOString(),
 			revokedAt: null,
 		};
-		const useCase = createApplicationMaterialGrantUseCaseV1({
+		const useCase = makeUseCase({
 			store,
 			resolveUser: async () => ({ accountStatus: "active" }),
 		});
@@ -138,7 +255,7 @@ describe("application material grant authority", () => {
 	});
 	it("rejects an expected revision when no grant exists", async () => {
 		const store = fakeStore();
-		const useCase = createApplicationMaterialGrantUseCaseV1({
+		const useCase = makeUseCase({
 			store,
 			resolveUser: async () => ({ accountStatus: "active" }),
 		});
@@ -157,7 +274,7 @@ describe("application material grant authority", () => {
 			createdAt: new Date().toISOString(),
 			revokedAt: null,
 		};
-		const useCase = createApplicationMaterialGrantUseCaseV1({
+		const useCase = makeUseCase({
 			store,
 			resolveUser: async () => ({ accountStatus: "disabled" }),
 		});
@@ -178,7 +295,7 @@ describe("application material grant authority", () => {
 			createdAt: new Date().toISOString(),
 			revokedAt: null,
 		};
-		const useCase = createApplicationMaterialGrantUseCaseV1({
+		const useCase = makeUseCase({
 			store,
 			resolveUser: async () => ({ accountStatus: "active" }),
 		});
@@ -203,7 +320,7 @@ describe("application material grant authority", () => {
 			createdAt: new Date().toISOString(),
 			revokedAt,
 		};
-		const useCase = createApplicationMaterialGrantUseCaseV1({
+		const useCase = makeUseCase({
 			store,
 			resolveUser: async () => ({ accountStatus: "disabled" }),
 		});
@@ -217,9 +334,28 @@ describe("application material grant authority", () => {
 			replayed: true,
 		});
 	});
+	it("rejects current reads for an inactive recipient", async () => {
+		const store = fakeStore({ recipientEligible: false });
+		store.row = {
+			applicationId: "app-1",
+			principalType: "user",
+			principalId: "recipient-1",
+			authorizationRevision: "rev-1",
+			createdAt: new Date().toISOString(),
+			revokedAt: null,
+		};
+		const useCase = makeUseCase({
+			store,
+			resolveUser: async () => ({ accountStatus: "active" }),
+		});
+		await expect(useCase.read(request())).rejects.toMatchObject({
+			code: "not_found",
+		});
+	});
+
 	it("keeps material out of the result and records the grant audit", async () => {
 		const store = fakeStore();
-		const useCase = createApplicationMaterialGrantUseCaseV1({
+		const useCase = makeUseCase({
 			store,
 			resolveUser: async () => ({ accountStatus: "active" }),
 		});

@@ -19,6 +19,10 @@ export interface ApplicationMaterialGrantActorV1 {
 	readonly userId: string;
 	readonly accountStatus: "active" | "disabled";
 	readonly isSystemAdmin: boolean;
+	/** Stable first-party LDAP UID, supplied only after current identity verification. */
+	readonly ldapStableUid?: string;
+	/** True only when the UID is present in the configured system_admin allow-list. */
+	readonly ldapAdministratorConfigured?: boolean;
 	readonly authorizationRevision: string;
 }
 export interface ApplicationMaterialGrantRequestV1 {
@@ -120,7 +124,11 @@ function assertRequest(request: ApplicationMaterialGrantRequestV1): void {
 function assertAdmin(request: ApplicationMaterialGrantRequestV1): void {
 	if (request.actor.accountStatus !== "active")
 		throw new ApplicationMaterialGrantErrorV1("authentication_required");
-	if (!request.actor.isSystemAdmin)
+	if (
+		!request.actor.isSystemAdmin ||
+		!validText(request.actor.ldapStableUid) ||
+		request.actor.ldapAdministratorConfigured !== true
+	)
 		throw new ApplicationMaterialGrantErrorV1("forbidden");
 }
 export function createApplicationMaterialGrantUseCaseV1(dependencies: {
@@ -128,7 +136,37 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 	readonly resolveUser: (
 		userId: string,
 	) => Promise<{ readonly accountStatus: "active" | "disabled" } | null>;
+	/** Current LDAP-backed actor facts. Missing verification fails closed. */
+	readonly resolveCurrentActor?: (userId: string) => Promise<{
+		readonly accountStatus: "active" | "disabled";
+		readonly isSystemAdmin: boolean;
+		readonly ldapStableUid: string;
+		readonly ldapAdministratorConfigured: boolean;
+		readonly authorizationRevision: string;
+	} | null>;
 }): ApplicationMaterialGrantUseCaseV1 {
+	const assertCurrentActor = async (
+		request: ApplicationMaterialGrantRequestV1,
+	): Promise<void> => {
+		const resolveCurrentActor = dependencies.resolveCurrentActor;
+		if (!resolveCurrentActor)
+			throw new ApplicationMaterialGrantErrorV1("unavailable");
+		let current: Awaited<ReturnType<NonNullable<typeof resolveCurrentActor>>>;
+		try {
+			current = await resolveCurrentActor(request.actor.userId);
+		} catch {
+			throw new ApplicationMaterialGrantErrorV1("unavailable");
+		}
+		if (
+			current?.accountStatus !== "active" ||
+			current.isSystemAdmin !== request.actor.isSystemAdmin ||
+			!validText(current.ldapStableUid) ||
+			current.ldapStableUid !== request.actor.ldapStableUid ||
+			current.ldapAdministratorConfigured !== true ||
+			current.authorizationRevision !== request.actor.authorizationRevision
+		)
+			throw new ApplicationMaterialGrantErrorV1("authentication_required");
+	};
 	const assertRecipient = async (
 		tx: ApplicationMaterialGrantTransactionV1,
 		request: ApplicationMaterialGrantRequestV1,
@@ -155,6 +193,7 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 			return dependencies.store.execute(async (tx) => {
 				if (await tx.lockUserDisabled(request.actor.userId))
 					throw new ApplicationMaterialGrantErrorV1("forbidden");
+				await assertCurrentActor(request);
 				if (!(await tx.applicationExists(request.applicationId)))
 					throw new ApplicationMaterialGrantErrorV1("not_found");
 				const current = await tx.lockGrant(request);
@@ -205,6 +244,7 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 			return dependencies.store.execute(async (tx) => {
 				if (await tx.lockUserDisabled(request.actor.userId))
 					throw new ApplicationMaterialGrantErrorV1("forbidden");
+				await assertCurrentActor(request);
 				if (!request.expectedRevision)
 					throw new ApplicationMaterialGrantErrorV1("idempotency_conflict");
 				const current = await tx.lockGrant(request);
@@ -254,6 +294,10 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 			return dependencies.store.execute(async (tx) => {
 				if (await tx.lockUserDisabled(request.actor.userId))
 					throw new ApplicationMaterialGrantErrorV1("forbidden");
+				await assertCurrentActor(request);
+				if (!(await tx.applicationExists(request.applicationId)))
+					throw new ApplicationMaterialGrantErrorV1("not_found");
+				await assertRecipient(tx, request);
 				const current = await tx.lockGrant(request);
 				await tx.recordAudit({
 					requestId: request.requestId,
