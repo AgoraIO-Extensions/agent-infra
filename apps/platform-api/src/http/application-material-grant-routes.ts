@@ -62,11 +62,10 @@ export function registerApplicationMaterialGrantRoutes(
 				);
 				expectedRevision = parsed.value.expectedRevision;
 			}
-			if (
-				!ApplicationMaterialGrantPrincipalTypeV1Schema.safeParse(principalType)
-					.success ||
-				!OpaqueIdV1Schema.safeParse(principalId).success
-			)
+			const principalTypeResult =
+				ApplicationMaterialGrantPrincipalTypeV1Schema.safeParse(principalType);
+			const principalIdResult = OpaqueIdV1Schema.safeParse(principalId);
+			if (!principalTypeResult.success || !principalIdResult.success)
 				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
 			const request = {
 				requestId: metadata.requestId,
@@ -78,8 +77,8 @@ export function registerApplicationMaterialGrantRoutes(
 					authorizationRevision: identity.authorizationRevision,
 				},
 				applicationId,
-				principalType: principalType as "user" | "application",
-				principalId,
+				principalType: principalTypeResult.data,
+				principalId: principalIdResult.data,
 				...(expectedRevision ? { expectedRevision } : {}),
 			};
 			const result =
@@ -92,7 +91,7 @@ export function registerApplicationMaterialGrantRoutes(
 								replayed: false,
 							};
 			if (operation === "read" && !result.metadata)
-				throw new HttpProtocolError("NOT_FOUND", metadata.traceId);
+				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
 			const response = ApplicationMaterialGrantResponseV1Schema.safeParse({
 				metadata: result.metadata,
 				replayed: result.replayed,
