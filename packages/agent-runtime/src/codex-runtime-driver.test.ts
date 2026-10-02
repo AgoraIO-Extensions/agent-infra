@@ -1458,7 +1458,14 @@ describe("Codex installed Skill descriptor receipt", () => {
 		};
 		const factory = vi.fn(async () => new TestCodexBridge());
 		const originalOpen = codexModelTransport.openCodexModelTransport;
+		const listen = vi.spyOn(Server.prototype, "listen");
+		const closed = Promise.withResolvers<void>();
+		const releaseClose = Promise.withResolvers<void>();
 		let acquiredTransport: Awaited<ReturnType<typeof originalOpen>> | undefined;
+		let acquiredServer: Server | undefined;
+		let acquiredClose: (() => Promise<void>) | undefined;
+		let serverClosed = false;
+		let realCloseCompleted = false;
 		let transportClosed = 0;
 		vi.spyOn(
 			codexModelTransport,
@@ -1467,23 +1474,63 @@ describe("Codex installed Skill descriptor receipt", () => {
 			const transport = await originalOpen(...args);
 			acquiredTransport = transport;
 			const close = transport.close;
+			acquiredClose = close;
+			const port = Number(new URL(transport.endpoint).port);
+			acquiredServer = listen.mock.contexts.find((server): server is Server => {
+				if (!(server instanceof Server)) return false;
+				const address = server.address();
+				return (
+					address !== null &&
+					typeof address !== "string" &&
+					address.port === port
+				);
+			});
+			if (!acquiredServer) throw new Error("missing acquired transport Server");
+			acquiredServer.once("close", () => {
+				serverClosed = true;
+			});
 			transport.close = async () => {
 				transportClosed += 1;
 				await close();
+				realCloseCompleted = true;
+				closed.resolve();
+				await releaseClose.promise;
 			};
 			descriptor.manifest.files[0].sha256 = "a".repeat(64);
 			return transport;
 		});
 		const journalClose = vi.spyOn(DurableJsonFile.prototype, "close");
-		await expect(
-			RuntimeBindingDriver.openBound(options, factory),
-		).rejects.toMatchObject({ code: "RUNTIME_CODEX_CONFIGURATION_INVALID" });
+		const opening = RuntimeBindingDriver.openBound(options, factory);
+		let settled = false;
+		const settlement = opening.then(
+			(driver) => {
+				settled = true;
+				drivers.push(driver);
+			},
+			() => {
+				settled = true;
+			},
+		);
+		try {
+			await Promise.race([closed.promise, settlement]);
+			expect(realCloseCompleted).toBe(true);
+			expect(serverClosed).toBe(true);
+			expect(acquiredServer?.listening).toBe(false);
+			expect(acquiredServer?.address()).toBeNull();
+			expect(settled).toBe(false);
+			expect(journalClose).not.toHaveBeenCalled();
+		} finally {
+			releaseClose.resolve();
+			await settlement;
+			await acquiredClose?.();
+		}
+		await expect(opening).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
+		});
 		expect(factory).not.toHaveBeenCalled();
 		expect(acquiredTransport).toBeDefined();
 		expect(transportClosed).toBe(1);
 		expect(journalClose).toHaveBeenCalledTimes(1);
-		if (!acquiredTransport) throw new Error("missing received transport");
-		await expect(fetch(acquiredTransport.endpoint)).rejects.toThrow();
 	});
 
 	it("rejects input changed while awaiting recovery and closes the constructed Driver", async () => {
