@@ -165,7 +165,7 @@ describe("System controls use the durable typed Execution principal", () => {
 	);
 	it("rejects a same-ID boundary in the opposite principal namespace", async () => {
 		await seed("application");
-		await client`update platform.task_authorization_records set boundary = ${client.json(boundary("user"))} where execution_id = 'execution'`;
+		await client`update platform.task_authorization_records set boundary = ${client.json(boundary("user") as unknown as postgres.JSONValue)} where execution_id = 'execution'`;
 		await expect(control()).rejects.toBeInstanceOf(TaskAuthorizationStoreError);
 		await expectNoControlEffects();
 	});
@@ -449,7 +449,7 @@ describe("original typed waiting control finisher", () => {
 	);
 	it("refuses the same-ID opposite boundary before changing waiting facts", async () => {
 		await waitingTask("application");
-		await client`update platform.task_authorization_records set boundary = ${client.json(boundary("user"))} where execution_id = 'execution'`;
+		await client`update platform.task_authorization_records set boundary = ${client.json(boundary("user") as unknown as postgres.JSONValue)} where execution_id = 'execution'`;
 		const before = await waitingSnapshot();
 		await expect(control("stop")).rejects.toBeInstanceOf(
 			TaskAuthorizationStoreError,

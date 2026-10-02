@@ -107,7 +107,7 @@ async function accepted(
 		await sql`insert into platform.conversation_messages(message_id, conversation_id, actor_id, role, text, execution_id, status, created_at)
    values ('original-message', ${request.conversationId}, ${principal.id}, 'user', 'original input', ${request.executionId}, 'submitted', clock_timestamp())`;
 		await sql`insert into platform.task_authorization_records(id, execution_id, boundary)
-   values ('accepted-authorization', ${request.executionId}, ${client.json(boundary)})`;
+   values ('accepted-authorization', ${request.executionId}, ${client.json(boundary as unknown as postgres.JSONValue)})`;
 		await sql`insert into platform.outbox_items(id, scope_type, scope_id, operation, payload, status,
    lease_owner, lease_expires_at, delivery_fence, trace_id, request_id)
    values (${`conversation:turn:${request.executionId}`}, 'conversation', ${request.conversationId}, 'conversation.turn.submit.v1',

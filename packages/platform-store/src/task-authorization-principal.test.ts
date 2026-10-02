@@ -113,7 +113,7 @@ describe("Task authorization trusted C/E principal", () => {
 				0,
 			);
 			await insert(boundary(kind));
-			await client`update platform.task_authorization_records set boundary = ${client.json(other)} where execution_id = 'execution'`;
+			await client`update platform.task_authorization_records set boundary = ${client.json(other as unknown as postgres.JSONValue)} where execution_id = 'execution'`;
 			await expect(store.readExecution("execution")).rejects.toBeInstanceOf(
 				TaskAuthorizationStoreError,
 			);
