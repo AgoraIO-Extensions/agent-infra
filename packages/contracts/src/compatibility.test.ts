@@ -86,6 +86,13 @@ describe("contract compatibility command", () => {
 			await writeFile(before, JSON.stringify(previous));
 			await writeFile(after, JSON.stringify(current));
 			expect(comparePaths(after, before).status).toBe(0);
+			const withExistingSchemes = structuredClone(previous);
+			withExistingSchemes.components.securitySchemes = structuredClone(
+				current.components.securitySchemes,
+			);
+			await writeFile(before, JSON.stringify(withExistingSchemes));
+			expect(comparePaths(after, before).status).toBe(0);
+			await writeFile(before, JSON.stringify(previous));
 			const mutations = [
 				(value: typeof current) => {
 					value.paths["/api/v1/audit"].get.security = [{}];

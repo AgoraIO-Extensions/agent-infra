@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageRoot, "../..");
@@ -1304,10 +1305,11 @@ function isScopedAuditCredentialSecurityAddition(previous, current) {
 	};
 	const normalized = structuredClone(current);
 	for (const [name, scheme] of Object.entries(schemes)) {
-		if (!sameValue(current.components?.securitySchemes?.[name], scheme))
+		if (!isDeepStrictEqual(current.components?.securitySchemes?.[name], scheme))
 			return false;
 		const oldScheme = previous.components?.securitySchemes?.[name];
-		if (oldScheme !== undefined && !sameValue(oldScheme, scheme)) return false;
+		if (oldScheme !== undefined && !isDeepStrictEqual(oldScheme, scheme))
+			return false;
 		if (oldScheme === undefined)
 			delete normalized.components.securitySchemes[name];
 	}
