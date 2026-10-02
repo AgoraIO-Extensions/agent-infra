@@ -157,6 +157,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		input.principal === undefined
 			? ({ kind: "user", id: text(input.actorId) } as const)
 			: principal(input.principal);
+	if (parsedPrincipal.id !== text(input.actorId)) return unavailable();
 	let parsedExecutionSource: ConversationExecutionSourceV1 | undefined;
 	if (input.executionSource !== undefined) {
 		parsedExecutionSource = executionSource(input.executionSource);
@@ -200,6 +201,16 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		(parsedRelayKeyBinding === undefined)
 	)
 		return unavailable();
+	if (parsedExecutionSource && parsedRelayKeyBinding) {
+		const personalSource =
+			parsedExecutionSource === "web" || parsedExecutionSource === "wecom";
+		if (
+			(parsedRelayKeyBinding.purpose === "personal") !== personalSource ||
+			(parsedRelayKeyBinding.purpose === "personal" &&
+				parsedPrincipal.kind !== "user")
+		)
+			return unavailable();
+	}
 	const taskWaitOrder =
 		input.taskWaitOrder === undefined
 			? undefined
