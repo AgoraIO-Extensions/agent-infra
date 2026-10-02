@@ -73,6 +73,8 @@ async function openCodexModelTransport(
 			}),
 		revokeTurn: (turn: CodexNativeTurn) =>
 			value.revokeTurn({ ...turn, conversationKey: testConversationKey }),
+		drainTurn: (turn: CodexNativeTurn) =>
+			value.drainTurn({ ...turn, conversationKey: testConversationKey }),
 		cancelTurn: (turn: CodexNativeTurn) =>
 			value.cancelTurn({ ...turn, conversationKey: testConversationKey }),
 	};
@@ -492,6 +494,9 @@ describe("Codex model transport", () => {
 				expect(upstreamRequests).toBe(0);
 				expect(started).toBe(0);
 				expect(outcomes).toEqual([]);
+				await expect(value.drainTurn(defaultNativeTurn)).rejects.toThrow(
+					"RUNTIME_MODEL_DRAIN_FAILED",
+				);
 				release.resolve();
 				await delay(0);
 				expect(outcomes).toEqual([
@@ -3069,3 +3074,60 @@ it.each(["explicit access revoke", "LRU eviction"] as const)(
 		expect(upstreamCalls).toBe(1);
 	},
 );
+
+describe("original model request drain", () => {
+	it.each([false, true])(
+		"joins pending original outcome persistence before drain, failure=%s",
+		async (failure) => {
+			const endpoint = await listen(
+				createServer((_incoming, response) => {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const value = await transport(endpoint, true, {
+				beforeRequest: async () => ({
+					started: async () => {},
+					finish: async () => {
+						entered.resolve();
+						await release.promise;
+						if (failure) throw new Error("store failed");
+					},
+				}),
+			});
+			const pending = request(value.modelAccess).then(
+				(response) => response.text(),
+				() => "closed",
+			);
+			await entered.promise;
+			let drained = false;
+			const draining = value.drainTurn(defaultNativeTurn).then(() => {
+				drained = true;
+			});
+			const checked = failure
+				? expect(draining).rejects.toThrow("RUNTIME_MODEL_DRAIN_FAILED")
+				: expect(draining).resolves.toBeUndefined();
+			try {
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				expect(drained).toBe(false);
+			} finally {
+				release.resolve();
+			}
+			await checked;
+			await pending;
+			const retry = await request(value.modelAccess);
+			expect(retry.status).toBe(409);
+			await retry.text();
+			if (failure) {
+				await expect(
+					value.cancelTurn(defaultNativeTurn),
+				).resolves.toBeUndefined();
+				await expect(value.drainTurn(defaultNativeTurn)).rejects.toThrow(
+					"RUNTIME_MODEL_DRAIN_FAILED",
+				);
+			}
+		},
+	);
+});

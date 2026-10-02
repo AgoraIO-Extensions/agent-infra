@@ -2833,6 +2833,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			admission: CodexModelTurnAdmission,
 		) => void,
 		private readonly cancelModelTurn?: (turn: CodexModelTurn) => Promise<void>,
+		private readonly drainModelTurn?: (turn: CodexModelTurn) => Promise<void>,
 		private readonly revokeModelTurn?: (turn: CodexModelTurn) => void,
 		private readonly probeNative?: (
 			signal: AbortSignal,
@@ -4052,7 +4053,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				modelTransport?.registerTurn,
 				modelTransport?.waitForModelRequest,
 				modelTransport?.abandonTurnAdmission,
-				modelTransport?.cancelTurn,
+				modelTransport
+					? async (turn) => {
+							await modelTransport.cancelTurn(turn);
+							await modelTransport.drainTurn(turn);
+						}
+					: undefined,
+				modelTransport?.drainTurn,
 				modelTransport?.revokeTurn,
 				probeNative,
 				options.authorizeExternalAction,
@@ -5006,6 +5013,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			executionId,
 		);
 		if (status !== "running") {
+			const terminalExecution = ownRecordValue(
+				this.session(nativeSessionRef).executions,
+				executionId,
+			);
+			if (!terminalExecution) unavailable();
+			await Promise.all(
+				this.executionNativeTurns(
+					nativeSessionRef,
+					terminalExecution.nativeTurnId,
+				).map((turn) => this.cancelModelTurn?.(turn)),
+			);
 			const state = this.readState();
 			const hasRunningCancellation = Object.values(state.operations).some(
 				(operation) =>
@@ -5016,15 +5034,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					operation.record.result.status === "running",
 			);
 			if (hasRunningCancellation) {
-				const session = this.session(nativeSessionRef);
-				const execution = ownRecordValue(session.executions, executionId);
-				if (!execution) unavailable();
-				await Promise.all(
-					this.executionNativeTurns(
-						nativeSessionRef,
-						execution.nativeTurnId,
-					).map((turn) => this.cancelModelTurn?.(turn)),
-				);
 				await this.update((current) => {
 					for (const operation of Object.values(current.operations)) {
 						const record = operation.record;
@@ -5104,8 +5113,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				threadId: session.threadId,
 				turnId: execution.nativeTurnId,
 			};
-			if (this.cancelModelTurn)
-				await this.cancelModelTurn(nativeTurn).catch(() => undefined);
+			if (this.cancelModelTurn) await this.cancelModelTurn(nativeTurn);
 			return this.updateExecutionStatus(
 				nativeSessionRef,
 				executionId,
@@ -5210,6 +5218,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					executionId,
 					execution.nativeTurnId,
 					items,
+				);
+			}
+			if (status !== "running") {
+				await Promise.all(
+					this.executionNativeTurns(
+						nativeSessionRef,
+						execution.nativeTurnId,
+					).map((turn) => this.cancelModelTurn?.(turn)),
 				);
 			}
 			const persistedStatus = await this.updateExecutionStatus(
@@ -6687,12 +6703,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 		}
 		if (!prepared.replay && request.phase === "source-terminal") {
-			try {
-				await this.cancelModelTurn?.({ ...request.source, conversationKey });
-			} catch {
-				// The native terminal receipt remains authoritative even if model cleanup
-				// is already closed or otherwise unavailable.
-			}
+			// A native receipt cannot close the Execution before this source's actual
+			// model request and original outcome write have drained successfully.
+			await this.cancelModelTurn?.({ ...request.source, conversationKey });
 		}
 		signal.throwIfAborted();
 		let saved = await this.update((state) => {
@@ -7294,10 +7307,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 		const completed = turnCompletedNotification(frame);
 		if (completed) {
-			// A cancelled native Turn may still have an in-flight provider request;
-			// drain it before publishing the terminal event. Normal completion and
-			// failure already represent a settled provider request and must not cancel
-			// a transport that may be finishing its final response.
+			// Every native terminal must join the actual provider handler and its
+			// durable outcome before publishing the original terminal event. Ordinary
+			// completion drains without aborting the native final response.
 			const completedState = this.readState();
 			const resolvedCompleted = this.resolveNotificationJournal(
 				completedState,
@@ -7314,17 +7326,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const admissionPending =
 				resolvedCompleted?.pendingOperationKey !== undefined &&
 				this.modelTurnAdmissions.has(resolvedCompleted.pendingOperationKey);
-			if (
-				owningSession &&
-				(completed.status === "cancelled" || admissionPending)
-			)
-				await this.cancelModelTurn?.({
+			if (owningSession) {
+				const turn = {
 					conversationKey: this.modelConversationKey(
 						codexConversationKey(owningSession),
 					),
 					threadId: completed.threadId,
 					turnId: completed.nativeTurnId,
-				});
+				};
+				if (completed.status === "cancelled" || admissionPending)
+					await this.cancelModelTurn?.(turn);
+				else await this.drainModelTurn?.(turn);
+			}
 			const streamKey = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
@@ -8648,6 +8661,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeTurnId?: string,
 		admissionPending = false,
 	) {
+		if (
+			result.outcome === "accepted" &&
+			result.status !== "running" &&
+			nativeTurnId
+		) {
+			await Promise.all(
+				this.executionNativeTurns(nativeSessionRef, nativeTurnId).map((turn) =>
+					this.cancelModelTurn?.(turn),
+				),
+			);
+		}
 		let record = driverRecord(command, {
 			schemaVersion: command.schemaVersion,
 			agentId: command.agentId,

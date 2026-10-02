@@ -4355,3 +4355,62 @@ it("cancels a blocked credential resolver without waiting for it or admitting it
 	await Promise.resolve();
 	expect(await env.saved()).toEqual(saved);
 });
+
+it("retains original source occupancy when actual model outcome cannot drain durably", async () => {
+	const upstream = await sourceModelEndpoint();
+	const env = await setup(async () => {}, upstream.endpoint);
+	const execution = await env.start();
+	const child = await startChild(execution);
+	await execution.bridge.callback(completed(child.parentStarted));
+	await execution.bridge.completeInferenceTurn();
+	const original = DurableJsonFile.prototype.update;
+	const writes = vi
+		.spyOn(DurableJsonFile.prototype, "update")
+		.mockImplementation(function <R>(
+			this: DurableJsonFile<unknown>,
+			change: (draft: unknown) => R | Promise<R>,
+		) {
+			return original.call(this, async (draft) => {
+				const result = await change(draft);
+				const attempt = facts(draft as SavedState, execution).at(-1);
+				if (
+					attempt?.kind === "model" &&
+					(attempt.phase === "completed" || attempt.phase === "unknown")
+				)
+					throw new Error("synthetic model outcome persistence failure");
+				return result;
+			}) as Promise<R>;
+		});
+	try {
+		await sourceModelRequest(execution.bridge, child.bind.source).catch(
+			() => 0,
+		);
+	} finally {
+		writes.mockRestore();
+	}
+	expect(upstream.calls).toEqual(["/v1/responses"]);
+	execution.bridge.completeSource(child.bind.source);
+	await expect(
+		execution.bridge.callback(terminalSource(child.bind)),
+	).rejects.toThrow("RUNTIME_MODEL_DRAIN_FAILED");
+	const saved = await env.saved();
+	expect(
+		saved.sessions[execution.nativeSessionRef]?.executions[
+			execution.command.executionId
+		]?.status,
+	).toBe("running");
+	expect(
+		journal(saved, execution).events.some(
+			(event) => event.type === "completed",
+		),
+	).toBe(false);
+	expect(
+		journal(saved, execution).nativeSources?.[
+			child.reserve.reservation.reservationId
+		],
+	).not.toHaveProperty("terminal");
+	expect(facts(saved, execution).at(-1)).toMatchObject({
+		kind: "model",
+		phase: "started",
+	});
+});
