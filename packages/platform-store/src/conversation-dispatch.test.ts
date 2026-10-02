@@ -799,11 +799,6 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						executionId: work.executionId,
 						input: { attachments: [], text: "bounded dispatch fixture" },
 						kind: "submit-turn",
-						selection: {
-							modelOptionId: "model-option-dispatch",
-							reasoningLevel: "medium",
-							schemaVersion: 1,
-						},
 						sessionGeneration: 1,
 						turnId: work.turnId,
 					}),
