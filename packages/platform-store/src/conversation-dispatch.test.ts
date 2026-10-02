@@ -3258,11 +3258,16 @@ async function acceptedKeyWork(
 	await client`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version)
 	 values (${purpose},${subjectId},1,1) on conflict do nothing`;
 	await client`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext)
-	 values (${purpose},${subjectId},1,${keyId},${client.json({ purpose, subjectId, keyId, keyVersion: 1 })}) on conflict do nothing`;
+		values (${purpose},${subjectId},1,${keyId},${client.json({ purpose, subjectId, keyId, keyVersion: 1 })}) on conflict do nothing`;
+	const [persistedKey] = await client<{ key_id: string }[]>`
+		select key_id from platform.relay_key_versions
+		where purpose = ${purpose} and subject_id = ${subjectId} and key_version = 1
+	`;
+	if (!persistedKey) throw new Error("Expected accepted fixture relay key");
 	const work = await seed("conversation.turn.submit.v1", { channel });
 	await client`update platform.conversation_executions set
-  execution_source=${source}, relay_key_purpose=${purpose}, relay_key_subject_id=${subjectId},
-  relay_key_id=${keyId}, relay_key_version=1 where execution_id=${work.executionId}`;
+		execution_source=${source}, relay_key_purpose=${purpose}, relay_key_subject_id=${subjectId},
+		relay_key_id=${persistedKey.key_id}, relay_key_version=1 where execution_id=${work.executionId}`;
 	await client`insert into platform.task_authorization_records(id, execution_id, boundary)
   values (${`authorization:${work.executionId}`}, ${work.executionId}, ${client.json(
 		{
