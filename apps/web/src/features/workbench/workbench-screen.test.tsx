@@ -121,11 +121,11 @@ const conversation = ConversationProjectionV1Schema.parse({
 	updatedAt: "2026-09-30T21:00:00Z",
 });
 
-describe("Original IA workbench presentation", () => {
-	it("keeps the original six regions and safe empty-state navigation", async () => {
+describe("OpenDesign workbench presentation", () => {
+	it("keeps all responsibility regions and safe empty-state navigation", async () => {
 		await showWorkbench(<WorkbenchScreen {...empty} />);
 		expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
-			"从可用 Agent 开始今天的工作。",
+			"把下一步工作交给合适的 Agent。",
 		);
 		expect(
 			screen
@@ -133,10 +133,10 @@ describe("Original IA workbench presentation", () => {
 				.map((heading) => heading.textContent),
 		).toEqual([
 			"最近的个人对话",
-			"可用 Agent",
-			"创建状态",
 			"需要你处理",
 			"需要管理员处理",
+			"可用 Agent",
+			"创建状态",
 		]);
 		expect(screen.getByText("暂无个人对话。")).toBeTruthy();
 		expect(screen.getByText("暂无需要你处理的事项。")).toBeTruthy();

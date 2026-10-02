@@ -14,6 +14,7 @@ import {
 	List,
 	Menu,
 	MessageSquare,
+	Plus,
 	X,
 } from "lucide-react";
 import {
@@ -223,8 +224,8 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						to="/my-agents/new"
 						onClick={() => setSheet(false)}
 					>
-						<Layers size={19} aria-hidden="true" />
-						创建与配置
+						<Plus size={19} aria-hidden="true" />
+						创建申请
 					</Link>
 					<Link
 						className={`platform-nav-item ${pathname === "/audit" ? "selected" : ""}`}
@@ -362,6 +363,14 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							</BreadcrumbItem>
 						</BreadcrumbList>
 					</Breadcrumb>
+					{user && (
+						<Avatar
+							className="platform-user"
+							aria-label={`当前用户：${user.displayName}`}
+						>
+							<AvatarFallback>{user.displayName.slice(0, 1)}</AvatarFallback>
+						</Avatar>
+					)}
 					{development && (
 						<span className="text-muted-foreground text-xs">
 							本地开发 · 测试身份

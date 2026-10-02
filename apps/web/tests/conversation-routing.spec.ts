@@ -267,6 +267,42 @@ async function assertChat(page: Page, agentName = "受控路由助手") {
 	await expect(page.getByLabel("消息", { exact: true })).toBeVisible();
 }
 
+test("keeps the composer in view while a long conversation scrolls", async ({
+	page,
+}, info) => {
+	const fixture = await routingFixture(page, { messageRoles: true });
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	await assertChat(page);
+	const composer = page.getByLabel("消息", { exact: true });
+	const send = page.locator('[data-c02-send-button="send"]');
+	await info.attach("composer-viewport", {
+		body: await page.screenshot({ animations: "disabled" }),
+		contentType: "image/png",
+	});
+	await expect(composer).toBeInViewport({ ratio: 1 });
+	await expect(send).toBeInViewport({ ratio: 1 });
+	const before = await composer.boundingBox();
+	const timeline = page.getByRole("region", { name: "会话时间线" });
+	expect(
+		await timeline.evaluate(
+			(element) => element.scrollHeight > element.clientHeight,
+		),
+	).toBe(true);
+	await timeline.evaluate((element) => {
+		element.scrollTop = element.scrollHeight;
+	});
+	expect(
+		await timeline.evaluate((element) => element.scrollTop),
+	).toBeGreaterThan(0);
+	await expect(composer).toBeInViewport({ ratio: 1 });
+	await expect(send).toBeInViewport({ ratio: 1 });
+	expect(await composer.boundingBox()).toEqual(before);
+	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+		true,
+	);
+	expect(fixture.unexpected).toEqual([]);
+});
+
 for (const compact of [false, true]) {
 	test(`keeps the original Agent header in the conversation column${compact ? " at 320 by 370" : ""}`, async ({
 		page,
@@ -401,12 +437,19 @@ for (const compact of [false, true]) {
 					Number.parseFloat(getComputedStyle(element).borderTopLeftRadius),
 				),
 		).toBeGreaterThan(0);
-		for (const frame of [users.first(), assistants.first()]) {
+		for (const [frame, user] of [
+			[users.first(), true],
+			[assistants.first(), false],
+		] as const) {
 			const avatar = await frame.locator(".chat-message-avatar").boundingBox();
 			const body = await frame.locator(".chat-message-body").boundingBox();
 			if (!avatar || !body)
 				throw new Error("Message avatar and body must be rendered");
-			expect(body.x).toBeGreaterThanOrEqual(avatar.x + avatar.width + 11);
+			if (user) {
+				expect(avatar.x).toBeGreaterThanOrEqual(body.x + body.width + 11);
+			} else {
+				expect(body.x).toBeGreaterThanOrEqual(avatar.x + avatar.width + 11);
+			}
 			await expect(frame.locator(".chat-message-avatar")).toHaveAttribute(
 				"aria-hidden",
 				"true",

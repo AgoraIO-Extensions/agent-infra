@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Square } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -37,6 +38,7 @@ export function ActiveConversation({
 	onDenied: () => void;
 	refreshAgent: () => void;
 }) {
+	const queryClient = useQueryClient();
 	const [selectedExecution, setSelectedExecution] = useState<string>();
 	const executionTrigger = useRef<HTMLButtonElement>(null);
 	const returnExecutionFocus = useRef(false);
@@ -82,6 +84,15 @@ export function ActiveConversation({
 		acceptedExecution,
 	);
 	const active = Boolean(latestExecution && !isTerminal(status));
+	const visibleNotice =
+		notice ||
+		(stopping && stopping === latestExecution
+			? isTerminal(status)
+				? "原回复已结束。"
+				: "停止请求已受理，正在等待停止确认。已发生的外部操作不会自动撤回。"
+			: active && acceptedExecution === latestExecution
+				? "消息已受理，等待处理结果。"
+				: "");
 	const uncertainExecution = active && status === "unknown";
 	const command = useConversationCommands({
 		agentId,
@@ -119,23 +130,30 @@ export function ActiveConversation({
 		// require a fresh message/version projection.
 		if (
 			!timeline.history?.events.some((item) => item.eventId === event.eventId)
-		)
+		) {
 			void reader.refresh();
-	}, [timeline.events, timeline.history, reader.refresh]);
+		}
+		void queryClient.resetQueries({
+			queryKey: ["personal-recent", identityKey],
+		});
+	}, [
+		timeline.events,
+		timeline.history,
+		reader.refresh,
+		identityKey,
+		queryClient,
+	]);
 	useEffect(() => {
 		const result = command.result;
 		if (!result || result === handled.current) return;
 		handled.current = result;
 		if (result.kind === "accepted") {
+			setNotice("");
 			if (action.current === "stop") {
 				setStopping(result.receipt.executionId ?? undefined);
-				setNotice(
-					"停止请求已受理，正在等待停止确认。已发生的外部操作不会自动撤回。",
-				);
 			} else {
 				if (action.current === "message") setDraft("");
 				setAcceptedExecution(result.receipt.executionId ?? undefined);
-				setNotice("消息已受理，等待处理结果。");
 			}
 			void reader.refresh();
 		} else if (result.kind === "selection-updated") {
@@ -270,11 +288,9 @@ export function ActiveConversation({
 				{active && !agent.capabilities.supplementaryInstruction && (
 					<p role="status">当前回复仍在处理，不支持补充指令。草稿会保留。</p>
 				)}
-				{notice && (
+				{visibleNotice && (
 					<p role="status" className="text-sm">
-						{stopping === latestExecution && isTerminal(status)
-							? "原回复已结束。"
-							: notice}
+						{visibleNotice}
 					</p>
 				)}
 				<CommandNotice

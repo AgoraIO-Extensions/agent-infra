@@ -578,7 +578,7 @@ test("formal root route consumes fixture recent, opens the same Conversation and
 	await page.goto("/");
 	await expect(page).toHaveURL(/\/$/);
 	await expect(
-		page.getByRole("heading", { name: "从可用 Agent 开始今天的工作。" }),
+		page.getByRole("heading", { name: "把下一步工作交给合适的 Agent。" }),
 	).toBeVisible();
 	await expect(
 		page
@@ -712,7 +712,7 @@ for (const [status, message] of [
 		).toHaveCount(0);
 		await expect(recent.getByRole("button")).toHaveCount(0);
 		await expect(
-			page.getByRole("heading", { name: "从可用 Agent 开始今天的工作。" }),
+			page.getByRole("heading", { name: "把下一步工作交给合适的 Agent。" }),
 		).toBeVisible();
 		await refreshVisibleSession(page);
 		await expect
@@ -1132,14 +1132,14 @@ test("administrator root exposes the six original blocks and legitimate Owner an
 	});
 	await page.goto("/");
 	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-		"从可用 Agent 开始今天的工作。",
+		"把下一步工作交给合适的 Agent。",
 	);
 	await expect(page.getByRole("heading", { level: 2 })).toHaveText([
 		"最近的个人对话",
-		"可用 Agent",
-		"创建状态",
 		"需要你处理",
 		"需要管理员处理",
+		"可用 Agent",
+		"创建状态",
 	]);
 	const owner = page.getByRole("region", { name: "需要你处理", exact: true });
 	await expect(

@@ -193,11 +193,17 @@ export function AgentDiscoveryScreen({
 											<Bot aria-hidden="true" className="size-5" />
 										</span>
 										<div className="flex flex-wrap justify-end gap-2">
-											<Badge variant="outline">
+											<Badge
+												variant="outline"
+												data-status={agent.managementStatus}
+											>
 												{agentManagementStatusLabels[agent.managementStatus]}
 											</Badge>
 											{agent.serviceAvailability && (
-												<Badge variant="secondary">
+												<Badge
+													variant="secondary"
+													data-status={agent.serviceAvailability}
+												>
 													{agentServiceAvailabilityLabel(
 														agent.serviceAvailability,
 													)}
