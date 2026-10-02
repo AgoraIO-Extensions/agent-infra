@@ -443,7 +443,17 @@ jobs:
       - name: Build Workload dependencies
         run: pnpm exec turbo run build --filter=@agent-infra/platform-worker
       - name: Verify Kubernetes lifecycle and isolation
+        env:
+          WORKLOAD_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          WORKLOAD_KIND_EVIDENCE_DIR: ${{ runner.temp }}/workload-host-evidence
         run: bash deploy/kind/workload.sh
+      - name: Upload default Host configuration evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workload-host-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/workload-host-evidence
+          if-no-files-found: warn
 
   outcome:
     name: Publish terminal outcome
