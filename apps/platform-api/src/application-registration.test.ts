@@ -41,7 +41,7 @@ const currentUser = (userId: string) => ({
 const resolveUser = vi.fn(
 	async (id: string): Promise<unknown> => currentUser(id),
 );
-async function start() {
+async function start(options: { adminUserId?: string } = {}) {
 	const unused = async () => {
 		throw new Error("Unrelated adapter must not be called");
 	};
@@ -53,7 +53,11 @@ async function start() {
 					.get("Cookie")
 					?.match(/^browser_test=(alice|bob)$/)?.[1];
 				return id
-					? { ...currentUser(id), displayName: id, roles: ["employee"] }
+					? {
+							...currentUser(id),
+							displayName: id,
+							roles: [id === options.adminUserId ? "system_admin" : "employee"],
+						}
 					: null;
 			},
 			hydrateUsers: unused,
@@ -634,4 +638,80 @@ describe("application disable production HTTP/PostgreSQL boundary", () => {
 			expect(commands).toHaveLength(0);
 		},
 	);
+});
+
+describe("application disable current identity and ownership regressions", () => {
+	it("does not confer application management on an administrator who is not responsible", async () => {
+		const own = ApplicationRegistrationResponseV1Schema.parse(
+			await (await post()).json(),
+		).metadata;
+		const administrator = await start({ adminUserId: "bob" });
+		try {
+			const response = await disableApplication(
+				own.applicationId,
+				"bob",
+				"admin_disable",
+				{ status: "disabled" },
+				administrator.baseUrl,
+			);
+			expect(response.status).toBe(404);
+			const [row] =
+				await sql`select status,authorization_revision from platform.platform_applications where id=${own.applicationId}`;
+			expect(row).toEqual({
+				status: "active",
+				authorization_revision: own.authorizationRevision,
+			});
+		} finally {
+			await stop(administrator);
+		}
+	});
+	it("revalidates current ownership on persisted disable replay", async () => {
+		const own = ApplicationRegistrationResponseV1Schema.parse(
+			await (await post()).json(),
+		).metadata;
+		expect((await disableApplication(own.applicationId)).status).toBe(200);
+		await sql`update platform.platform_applications set responsible_user_id='bob' where id=${own.applicationId}`;
+		expect((await disableApplication(own.applicationId)).status).toBe(404);
+		const [audit] =
+			await sql`select count(*)::int as count from platform.audit_events where action='application.disabled' and outcome='succeeded'`;
+		expect(audit).toEqual({ count: 1 });
+	});
+	it("rejects application-typed directory data even when its bare ID matches the browser user", async () => {
+		const own = ApplicationRegistrationResponseV1Schema.parse(
+			await (await post()).json(),
+		).metadata;
+		resolveUser.mockResolvedValue({
+			...currentUser("alice"),
+			principalType: "application",
+		});
+		expect((await disableApplication(own.applicationId)).status).toBe(503);
+		const [row] =
+			await sql`select status,authorization_revision from platform.platform_applications where id=${own.applicationId}`;
+		expect(row).toEqual({
+			status: "active",
+			authorization_revision: own.authorizationRevision,
+		});
+	});
+	it("rolls back the real transaction when final identity revision changes after the write", async () => {
+		const own = ApplicationRegistrationResponseV1Schema.parse(
+			await (await post()).json(),
+		).metadata;
+		resolveUser
+			.mockResolvedValueOnce(currentUser("alice"))
+			.mockResolvedValueOnce({
+				...currentUser("alice"),
+				authorizationRevision: "changed",
+			});
+		expect((await disableApplication(own.applicationId)).status).toBe(503);
+		const [row] =
+			await sql`select status,authorization_revision from platform.platform_applications where id=${own.applicationId}`;
+		expect(row).toEqual({
+			status: "active",
+			authorization_revision: own.authorizationRevision,
+		});
+		const [effects] =
+			await sql`select (select count(*)::int from platform.idempotency_records where command_type='application.disabled') as commands,
+		(select count(*)::int from platform.audit_events where action='application.disabled' and outcome='succeeded') as audits`;
+		expect(effects).toEqual({ commands: 0, audits: 0 });
+	});
 });
