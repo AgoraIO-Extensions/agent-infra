@@ -1,3 +1,4 @@
+export * from "./application-material-grants.ts";
 export * from "./application-registration.ts";
 export * from "./audit.ts";
 export * from "./browser.ts";
@@ -10,4 +11,3 @@ export * from "./personal-relay-key.ts";
 export * from "./sse.ts";
 export * from "./template-release.ts";
 export * from "./wecom-application.ts";
-export * from "./application-material-grants.ts";

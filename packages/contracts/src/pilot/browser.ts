@@ -9,17 +9,16 @@ import {
 	TraceIdV1Schema,
 } from "../index.ts";
 import {
+	ApplicationMaterialGrantRequestV1Schema,
+	ApplicationMaterialGrantResponseV1Schema,
+	ApplicationMaterialGrantRevokeRequestV1Schema,
+} from "./application-material-grants.ts";
+import {
 	ApplicationDisableRequestV1Schema,
 	ApplicationMetadataV1Schema,
 	ApplicationRegistrationRequestV1Schema,
 	ApplicationRegistrationResponseV1Schema,
 } from "./application-registration.ts";
-import {
-	ApplicationMaterialGrantMetadataV1Schema,
-	ApplicationMaterialGrantRequestV1Schema,
-	ApplicationMaterialGrantResponseV1Schema,
-	ApplicationMaterialGrantRevokeRequestV1Schema,
-} from "./application-material-grants.ts";
 import {
 	PilotInternalErrorV1Schema,
 	PilotProtocolErrorV1Schema,
@@ -1145,33 +1144,74 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 	"/api/v2/applications/{applicationId}/material-grant": {
 		post: {
 			operationId: "grantApplicationMaterialV2",
-			summary: "Grant application credential material access to a typed recipient",
-			description: "Current system_admin only. The response contains grant metadata and never credential material; responsibility and administrator roles alone do not return material.",
+			summary:
+				"Grant application credential material access to a typed recipient",
+			description:
+				"Current system_admin only. The response contains grant metadata and never credential material; responsibility and administrator roles alone do not return material.",
 			security: personalCredentialSecurity,
-			requestParams: { path: z.strictObject({ applicationId: OpaqueIdV1Schema }) },
-			requestBody: requiredJsonRequestBody(ApplicationMaterialGrantRequestV1Schema),
-			responses: { "201": jsonResponse("Material grant metadata", ApplicationMaterialGrantResponseV1Schema), ...errorResponses },
+			requestParams: {
+				path: z.strictObject({ applicationId: OpaqueIdV1Schema }),
+			},
+			requestBody: requiredJsonRequestBody(
+				ApplicationMaterialGrantRequestV1Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Material grant metadata",
+					ApplicationMaterialGrantResponseV1Schema,
+				),
+				...errorResponses,
+			},
 		},
 	},
-	"/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}": {
-		patch: {
-			operationId: "revokeApplicationMaterialV2",
-			summary: "Revoke a typed application credential material grant",
-			description: "Current system_admin only. expectedRevision is required to prevent a stale revoke from changing a newer grant.",
-			security: personalCredentialSecurity,
-			requestParams: { path: z.strictObject({ applicationId: OpaqueIdV1Schema, principalType: z.enum(["user", "application"]), principalId: OpaqueIdV1Schema }) },
-			requestBody: requiredJsonRequestBody(ApplicationMaterialGrantRevokeRequestV1Schema),
-			responses: { "200": jsonResponse("Revoked material grant metadata", ApplicationMaterialGrantResponseV1Schema), ...errorResponses },
+	"/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}":
+		{
+			patch: {
+				operationId: "revokeApplicationMaterialV2",
+				summary: "Revoke a typed application credential material grant",
+				description:
+					"Current system_admin only. expectedRevision is required to prevent a stale revoke from changing a newer grant.",
+				security: personalCredentialSecurity,
+				requestParams: {
+					path: z.strictObject({
+						applicationId: OpaqueIdV1Schema,
+						principalType: z.enum(["user", "application"]),
+						principalId: OpaqueIdV1Schema,
+					}),
+				},
+				requestBody: requiredJsonRequestBody(
+					ApplicationMaterialGrantRevokeRequestV1Schema,
+				),
+				responses: {
+					"200": jsonResponse(
+						"Revoked material grant metadata",
+						ApplicationMaterialGrantResponseV1Schema,
+					),
+					...errorResponses,
+				},
+			},
+			get: {
+				operationId: "readApplicationMaterialV2",
+				summary: "Read typed application credential material grant metadata",
+				description:
+					"Current system_admin only. Grant metadata is returned; credential material is never returned.",
+				security: personalCredentialSecurity,
+				requestParams: {
+					path: z.strictObject({
+						applicationId: OpaqueIdV1Schema,
+						principalType: z.enum(["user", "application"]),
+						principalId: OpaqueIdV1Schema,
+					}),
+				},
+				responses: {
+					"200": jsonResponse(
+						"Material grant metadata",
+						ApplicationMaterialGrantResponseV1Schema,
+					),
+					...errorResponses,
+				},
+			},
 		},
-		get: {
-			operationId: "readApplicationMaterialV2",
-			summary: "Read typed application credential material grant metadata",
-			description: "Current system_admin only. Grant metadata is returned; credential material is never returned.",
-			security: personalCredentialSecurity,
-			requestParams: { path: z.strictObject({ applicationId: OpaqueIdV1Schema, principalType: z.enum(["user", "application"]), principalId: OpaqueIdV1Schema }) },
-			responses: { "200": jsonResponse("Material grant metadata", ApplicationMaterialGrantResponseV1Schema), ...errorResponses },
-		},
-	},
 	"/api/v2/applications/{applicationId}": {
 		patch: {
 			operationId: "disableOwnApplicationV2",

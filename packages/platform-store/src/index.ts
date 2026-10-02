@@ -28,6 +28,10 @@ export {
 	type PostgresApplicationFoundationOptions,
 	PostgresApplicationFoundationTransactionV1,
 } from "./application-foundation.ts";
+export {
+	type PostgresApplicationMaterialGrantOptionsV1,
+	PostgresApplicationMaterialGrantStoreV1,
+} from "./application-material-grant.ts";
 export { PostgresApplicationRegistrationStoreV1 } from "./application-registration.ts";
 export {
 	ApplicationRevisionStoreError,
@@ -150,4 +154,3 @@ export {
 	validateWecomSetupCredentialRecordV1,
 } from "./wecom-setup.ts";
 export { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.js";
-export { PostgresApplicationMaterialGrantStoreV1, type PostgresApplicationMaterialGrantOptionsV1 } from "./application-material-grant.ts";

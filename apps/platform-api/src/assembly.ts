@@ -187,8 +187,21 @@ export function assemblePlatformApi(
 	const personalApiCredentialStore = new PostgresPersonalApiCredentialStoreV1({
 		databaseUrl: input.databaseUrl,
 	});
-	const applicationMaterialGrantStore = new PostgresApplicationMaterialGrantStoreV1({ databaseUrl: input.databaseUrl });
-	const applicationMaterialGrants = createApplicationMaterialGrantUseCaseV1({ store: applicationMaterialGrantStore, resolveUser: async (userId) => { const user = await resolveCurrentTaskUser(input.identity, userId, randomUUID()); return user ? { accountStatus: user.accountStatus } : null; } });
+	const applicationMaterialGrantStore =
+		new PostgresApplicationMaterialGrantStoreV1({
+			databaseUrl: input.databaseUrl,
+		});
+	const applicationMaterialGrants = createApplicationMaterialGrantUseCaseV1({
+		store: applicationMaterialGrantStore,
+		resolveUser: async (userId) => {
+			const user = await resolveCurrentTaskUser(
+				input.identity,
+				userId,
+				randomUUID(),
+			);
+			return user ? { accountStatus: user.accountStatus } : null;
+		},
+	});
 	const applicationRegistrationStore =
 		new PostgresApplicationRegistrationStoreV1({
 			databaseUrl: input.databaseUrl,
@@ -467,7 +480,10 @@ export function assemblePlatformApi(
 			readAgentProjection: projections.readConfigurationAgentProjection,
 		},
 		applications: { identity: input.identity, applications },
-		applicationMaterialGrants: { identity: input.identity, grants: applicationMaterialGrants },
+		applicationMaterialGrants: {
+			identity: input.identity,
+			grants: applicationMaterialGrants,
+		},
 		personalApiCredentials: {
 			identity: input.identity,
 			credentials: personalApiCredentials,

@@ -140,7 +140,10 @@ export function createPlatformApp(
 	if (dependencies.applications)
 		registerApplicationRegistrationRoutes(app, dependencies.applications);
 	if (dependencies.applicationMaterialGrants)
-		registerApplicationMaterialGrantRoutes(app, dependencies.applicationMaterialGrants);
+		registerApplicationMaterialGrantRoutes(
+			app,
+			dependencies.applicationMaterialGrants,
+		);
 	if (dependencies.personalApiCredentials)
 		registerPersonalApiCredentialRoutes(
 			app,
