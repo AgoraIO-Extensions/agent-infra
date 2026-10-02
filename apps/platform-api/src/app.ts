@@ -1,6 +1,10 @@
 import type { startObservability } from "@agent-infra/observability";
 import { createHttpObservability } from "@agent-infra/observability/http";
 import { Hono } from "hono";
+import {
+	type ApplicationRegistrationRouteDependencies,
+	registerApplicationRegistrationRoutes,
+} from "./http/application-registration-routes.js";
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import {
@@ -58,6 +62,7 @@ export interface PlatformAppDependencies {
 		work: () => Promise<Response>,
 	) => Promise<Response>;
 	readonly files?: FileRoutesDependenciesV1;
+	readonly applications?: ApplicationRegistrationRouteDependencies;
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
@@ -127,6 +132,8 @@ export function createPlatformApp(
 	if (dependencies.personalRelayKeys)
 		registerPersonalRelayKeyRoutes(app, dependencies.personalRelayKeys);
 	registerV2ManagementRoutes(app, dependencies.management);
+	if (dependencies.applications)
+		registerApplicationRegistrationRoutes(app, dependencies.applications);
 	if (dependencies.personalApiCredentials)
 		registerPersonalApiCredentialRoutes(
 			app,

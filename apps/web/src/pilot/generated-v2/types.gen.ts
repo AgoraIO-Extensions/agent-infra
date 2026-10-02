@@ -242,6 +242,25 @@ export type AgentProjectionV2 = {
     };
 };
 
+export type ApplicationMetadataV1 = {
+    applicationId: string;
+    authorizationRevision: string;
+    createdAt: string;
+    name: string;
+    responsibleUserId: string;
+    status: 'active' | 'disabled';
+    updatedAt: string;
+};
+
+export type ApplicationRegistrationRequestV1 = {
+    name: string;
+};
+
+export type ApplicationRegistrationResponseV1 = {
+    metadata: ApplicationMetadataV1;
+    replayed: boolean;
+};
+
 export type ApprovalDecisionRequestV1 = {
     decision: 'approve';
     schemaVersion: 1;
@@ -1516,6 +1535,62 @@ export type CommandAgentLifecycleV2Responses = {
 };
 
 export type CommandAgentLifecycleV2Response = CommandAgentLifecycleV2Responses[keyof CommandAgentLifecycleV2Responses];
+
+export type RegisterApplicationV2Data = {
+    body: ApplicationRegistrationRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/applications';
+};
+
+export type RegisterApplicationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RegisterApplicationV2Error = RegisterApplicationV2Errors[keyof RegisterApplicationV2Errors];
+
+export type RegisterApplicationV2Responses = {
+    /**
+     * Original application metadata replayed
+     */
+    200: ApplicationRegistrationResponseV1;
+    /**
+     * Application committed
+     */
+    201: ApplicationRegistrationResponseV1;
+};
+
+export type RegisterApplicationV2Response = RegisterApplicationV2Responses[keyof RegisterApplicationV2Responses];
 
 export type GetConversationV2Data = {
     body?: never;

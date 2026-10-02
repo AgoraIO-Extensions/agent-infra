@@ -914,6 +914,36 @@ function isPersonalApiCredentialV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1167 admits only the reviewed self-registration POST and metadata schemas.
+function isApplicationRegistrationV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/applications";
+	const schemas = [
+		"ApplicationMetadataV1",
+		"ApplicationRegistrationRequestV1",
+		"ApplicationRegistrationResponseV1",
+	];
+	if (
+		previous.paths?.[path] !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		path: current.paths?.[path],
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"b691f8eaca8307dda272c5bc772f4614dae62b54f16dcc3e08b661a98db5b720"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v2/admin/agent-applications",
@@ -1395,6 +1425,7 @@ function findBreakingChanges(previous, current) {
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
+			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&

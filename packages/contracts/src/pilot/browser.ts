@@ -9,6 +9,11 @@ import {
 	TraceIdV1Schema,
 } from "../index.ts";
 import {
+	ApplicationMetadataV1Schema,
+	ApplicationRegistrationRequestV1Schema,
+	ApplicationRegistrationResponseV1Schema,
+} from "./application-registration.ts";
+import {
 	PilotInternalErrorV1Schema,
 	PilotProtocolErrorV1Schema,
 } from "./errors.ts";
@@ -1102,6 +1107,30 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/applications": {
+		post: {
+			operationId: "registerApplicationV2",
+			summary: "Register an application owned by the current browser user",
+			description:
+				"Active browser session only; no Authorization header or query. Responsibility is bound by the server. Same-key replay returns the original metadata. No credential or grant is issued. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				ApplicationRegistrationRequestV1Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Application committed",
+					ApplicationRegistrationResponseV1Schema,
+				),
+				"200": jsonResponse(
+					"Original application metadata replayed",
+					ApplicationRegistrationResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/me/relay-key": {
 		get: {
 			operationId: "getPersonalRelayKeyV2",
@@ -1403,6 +1432,9 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	ApplicationMetadataV1: ApplicationMetadataV1Schema,
+	ApplicationRegistrationRequestV1: ApplicationRegistrationRequestV1Schema,
+	ApplicationRegistrationResponseV1: ApplicationRegistrationResponseV1Schema,
 	PersonalRelayKeyStateV1: PersonalRelayKeyStateV1Schema,
 	PersonalRelayKeyReplaceRequestV1: PersonalRelayKeyReplaceRequestV1Schema,
 	PersonalRelayKeyRevokeRequestV1: PersonalRelayKeyRevokeRequestV1Schema,

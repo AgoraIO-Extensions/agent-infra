@@ -132,6 +132,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/agents/{agentId}",
 			"/api/v2/agents/{agentId}/configuration",
 			"/api/v2/agents/{agentId}/lifecycle",
+			"/api/v2/applications",
 			"/api/v2/conversations/{conversationId}",
 			"/api/v2/conversations/{conversationId}/events",
 			"/api/v2/conversations/{conversationId}/executions/{executionId}",

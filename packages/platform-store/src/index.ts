@@ -27,6 +27,7 @@ export {
 	type PostgresApplicationFoundationOptions,
 	PostgresApplicationFoundationTransactionV1,
 } from "./application-foundation.ts";
+export { PostgresApplicationRegistrationStoreV1 } from "./application-registration.ts";
 export {
 	ApplicationRevisionStoreError,
 	type PostgresApplicationRevisionOptionsV1,
