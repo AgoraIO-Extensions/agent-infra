@@ -241,10 +241,12 @@ const model = createServer(async (request, response) => {
 			bytes = zstdDecompressSync(bytes);
 		const body = JSON.parse(bytes.toString("utf8"));
 		const expectedCredential =
-			request.url?.startsWith("/approved-selected/") ||
-			request.url?.startsWith("/hold-selected/")
-				? credentials.selected
-				: credentials.default;
+			request.url?.startsWith("/http-401/")
+				? "synthetic-unusable-credential"
+				: request.url?.startsWith("/approved-selected/") ||
+						request.url?.startsWith("/hold-selected/")
+					? credentials.selected
+					: credentials.default;
 		const authenticated =
 			request.headers.authorization === `Bearer ${expectedCredential}`;
 		let resolveClosed;
@@ -1061,7 +1063,13 @@ async function runImageProbe() {
 		for (const patch of [
 			{ AGENT_INFRA_RUNTIME_DRIVER: "arbitrary-driver" },
 			{ AGENT_INFRA_RUNTIME_MODEL_CONFIG: "{}" },
-			{ AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT: "" },
+			{
+				AGENT_INFRA_RUNTIME_MODEL_CONFIG:
+					env.AGENT_INFRA_RUNTIME_MODEL_CONFIG.replace(
+						'"authentication":"bearer"',
+						'"authentication":"api-key"',
+					),
+			},
 		])
 			await launch({ ...env, ...patch }, "RUNTIME_CONFIGURATION_INVALID");
 		checks.push("configuration-fail-closed");
@@ -1194,8 +1202,11 @@ async function runImageProbe() {
 			[
 				"http-401",
 				{
-					AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT:
-						"synthetic-unusable-credential",
+					AGENT_INFRA_RUNTIME_MODEL_CONFIG:
+						env.AGENT_INFRA_RUNTIME_MODEL_CONFIG.replace(
+							"/approved-default/v1",
+							"/http-401/v1",
+						),
 				},
 			],
 			...["http-403", "http-503", "redirect", "wrong-content-type"].map(
