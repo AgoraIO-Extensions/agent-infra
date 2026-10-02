@@ -214,6 +214,20 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 					current.authorizationRevision !== request.expectedRevision
 				)
 					throw new ApplicationMaterialGrantErrorV1("idempotency_conflict");
+				if (current.revokedAt !== null) {
+					await tx.recordAudit({
+						requestId: request.requestId,
+						traceId: request.traceId,
+						userId: request.actor.userId,
+						applicationId: request.applicationId,
+						principalType: request.principalType,
+						principalId: request.principalId,
+						action: "api.credential.material.revoke",
+						outcome: "succeeded",
+						details: { returnedMaterial: false },
+					});
+					return { metadata: current, replayed: true };
+				}
 				const metadata = await tx.revokeGrant(
 					request,
 					new Date(),
@@ -231,7 +245,7 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 					outcome: "succeeded",
 					details: { returnedMaterial: false },
 				});
-				return { metadata, replayed: current.revokedAt !== null };
+				return { metadata, replayed: false };
 			});
 		},
 		async read(request) {

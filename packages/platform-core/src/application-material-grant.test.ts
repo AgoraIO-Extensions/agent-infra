@@ -192,6 +192,31 @@ describe("application material grant authority", () => {
 			),
 		).resolves.toMatchObject({ metadata: { revokedAt: expect.any(String) } });
 	});
+	it("preserves a revoked grant on an idempotent revoke replay", async () => {
+		const store = fakeStore();
+		const revokedAt = new Date().toISOString();
+		store.row = {
+			applicationId: "app-1",
+			principalType: "user",
+			principalId: "recipient-1",
+			authorizationRevision: "revoked-revision",
+			createdAt: new Date().toISOString(),
+			revokedAt,
+		};
+		const useCase = createApplicationMaterialGrantUseCaseV1({
+			store,
+			resolveUser: async () => ({ accountStatus: "disabled" }),
+		});
+		await expect(
+			useCase.revoke(request({ expectedRevision: "revoked-revision" })),
+		).resolves.toEqual({
+			metadata: expect.objectContaining({
+				authorizationRevision: "revoked-revision",
+				revokedAt,
+			}),
+			replayed: true,
+		});
+	});
 	it("keeps material out of the result and records the grant audit", async () => {
 		const store = fakeStore();
 		const useCase = createApplicationMaterialGrantUseCaseV1({
