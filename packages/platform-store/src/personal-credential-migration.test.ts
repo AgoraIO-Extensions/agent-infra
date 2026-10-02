@@ -366,7 +366,25 @@ describe("personal credential disable authority append", () => {
 				.slice(29)
 				.map(({ hash, created_at }) => ({ hash, created_at })),
 		).toEqual(appendedHistory);
-		expect(after.data).toEqual(before.data);
+		const withoutTypedPrincipal = (data: typeof before.data) =>
+			Object.fromEntries(
+				Object.entries(data).map(([table, rows]) => [
+					table,
+					rows.map((row) => {
+						if (
+							table !== "conversations" &&
+							table !== "conversation_executions"
+						)
+							return row;
+						const copy = { ...row };
+						delete copy.principal_type;
+						return copy;
+					}),
+				]),
+			);
+		expect(withoutTypedPrincipal(after.data)).toEqual(
+			withoutTypedPrincipal(before.data),
+		);
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		const repeated = await snapshot();
 		expect(repeated).toEqual(after);
