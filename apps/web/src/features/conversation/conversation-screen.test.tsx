@@ -7,6 +7,12 @@ import {
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+	createMemoryHistory,
+	createRootRoute,
+	createRouter,
+	RouterContextProvider,
+} from "@tanstack/react-router";
+import {
 	act,
 	cleanup,
 	fireEvent,
@@ -84,10 +90,16 @@ function setup(
 		onConversationChange: vi.fn(),
 		...changes,
 	};
+	const router = createRouter({
+		routeTree: createRootRoute(),
+		history: createMemoryHistory({ initialEntries: ["/"] }),
+	});
 	const view = (value: ConversationScreenProps) => (
-		<QueryClientProvider client={queryClient}>
-			<ConversationScreen {...value} />
-		</QueryClientProvider>
+		<RouterContextProvider router={router}>
+			<QueryClientProvider client={queryClient}>
+				<ConversationScreen {...value} />
+			</QueryClientProvider>
+		</RouterContextProvider>
 	);
 	const result = render(view(props));
 	return {
@@ -741,6 +753,68 @@ describe("functional conversation screen", () => {
 		expect(
 			requests.filter((request) => request.method === "POST"),
 		).toHaveLength(1);
+	});
+
+	it.each([
+		["starting", "启动中"],
+		["updating", "更新中"],
+		["unavailable", "暂时不可用"],
+		[null, null],
+	] as const)(
+		"keeps service %s distinct from management availability",
+		async (serviceAvailability, label) => {
+			setup((request) =>
+				new URL(request.url).pathname === "/api/v2/agents/agent-1"
+					? Response.json({ ...agent, serviceAvailability })
+					: undefined,
+			);
+			await screen.findByRole("heading", { name: agent.name, exact: true });
+			const header = screen
+				.getByRole("heading", { name: agent.name, exact: true })
+				.closest("header");
+			if (!header) throw new Error("Expected conversation header");
+			expect(within(header).getByText("管理状态：可用")).toBeTruthy();
+			if (label)
+				expect(within(header).getByText(`服务状态：${label}`)).toBeTruthy();
+			else expect(within(header).queryByText(/^服务状态：/)).toBeNull();
+			expect(within(header).queryByText("服务状态：就绪")).toBeNull();
+			expect(
+				within(header)
+					.getByRole("link", { name: "切换 Agent" })
+					.getAttribute("href"),
+			).toBe("/agents?mode=conversation");
+			expect((await composer()).disabled).toBe(true);
+		},
+	);
+
+	it("keeps self-managed header navigation without platform composer or creation", async () => {
+		const custom = AgentProjectionV2Schema.parse({
+			...agent,
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/pilot@sha256:abc",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+			},
+		});
+		const { requests } = setup((request) =>
+			new URL(request.url).pathname === "/api/v2/agents/agent-1"
+				? Response.json(custom)
+				: undefined,
+		);
+		await screen.findByText("自定义 Agent · 自有交互入口");
+		expect(
+			screen.queryByText("个人 Web 对话 · 离开页面不会取消已提交的任务"),
+		).toBeNull();
+		expect(
+			screen.getByRole("link", { name: "切换 Agent" }).getAttribute("href"),
+		).toBe("/agents?mode=conversation");
+		expect(screen.queryByRole("textbox", { name: "消息" })).toBeNull();
+		expect(
+			(screen.getByRole("button", { name: "新建会话" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(true);
+		expect(requests.every((request) => request.method === "GET")).toBe(true);
 	});
 
 	it("keeps stopped Agents read-only while showing retained messages", async () => {
