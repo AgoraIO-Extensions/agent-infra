@@ -380,7 +380,7 @@ describe("original application API Task authority", () => {
 			isTaskApplicationAuthorizationCurrentV1({
 				boundary,
 				application,
-				agent: { ...agent, ownerIds: [], availability: [] },
+				agent: { ...agent, availability: [] },
 			}),
 		).toBe(true);
 		expect(isTaskAuthorizationCurrentV1({ boundary, user, agent })).toBe(false);
@@ -544,7 +544,7 @@ describe("original application API Task authority", () => {
 				boundary,
 				user,
 				useGrant: grant,
-				agent: { ...agent, ownerIds: [], availability: [] },
+				agent: { ...agent, availability: [] },
 			}),
 		).toBe(true);
 		expect(
