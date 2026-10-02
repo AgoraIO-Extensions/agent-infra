@@ -816,6 +816,11 @@ test("saves the next-message model and stops the bound execution", async ({
 				},
 			);
 			await expect(control).toBeInViewport({ ratio: 1 });
+			if (index !== 3) {
+				expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(
+					44,
+				);
+			}
 			await control.click({ trial: true });
 		}
 		expect(

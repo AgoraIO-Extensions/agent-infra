@@ -267,7 +267,7 @@ export function ActiveConversation({
 							>
 								<SelectTrigger
 									id={`${composerId}-model`}
-									className="h-11 w-full text-base md:text-sm"
+									className="min-h-11 w-full text-base md:text-sm"
 								>
 									<SelectValue placeholder="请选择模型" />
 								</SelectTrigger>
@@ -294,7 +294,7 @@ export function ActiveConversation({
 							>
 								<SelectTrigger
 									id={`${composerId}-reasoning`}
-									className="h-11 w-full text-base md:text-sm"
+									className="min-h-11 w-full text-base md:text-sm"
 								>
 									<SelectValue placeholder="请选择推理强度" />
 								</SelectTrigger>
