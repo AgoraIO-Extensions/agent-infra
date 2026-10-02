@@ -542,9 +542,11 @@ describe("application disable production HTTP/PostgreSQL boundary", () => {
 				ApplicationMetadataV1Schema.parse(await r.json()),
 			),
 		);
-		expect(results[0]).toEqual(results[1]);
-		expect(results[0].status).toBe("disabled");
-		expect(results[0].authorizationRevision).not.toBe(
+		const firstResult = results[0];
+		if (!firstResult) throw new Error("Missing first concurrent response");
+		expect(firstResult).toEqual(results[1]);
+		expect(firstResult.status).toBe("disabled");
+		expect(firstResult.authorizationRevision).not.toBe(
 			own.authorizationRevision,
 		);
 		await stop();
@@ -565,7 +567,7 @@ describe("application disable production HTTP/PostgreSQL boundary", () => {
 			body: { status: "disabled" },
 		});
 		expect(replay.response.status).toBe(200);
-		expect(replay.data).toEqual(results[0]);
+		expect(replay.data).toEqual(firstResult);
 		const [effects] =
 			await sql`select (select count(*)::int from platform.idempotency_records where command_type='application.disabled') as commands,
 		(select count(*)::int from platform.audit_events where action='application.disabled' and outcome='succeeded') as audits`;
