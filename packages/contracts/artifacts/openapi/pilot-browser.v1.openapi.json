@@ -3539,6 +3539,7 @@
           "api.application.created",
           "api.credential.issued",
           "api.credential.revoked",
+          "api.credential.metadata.read",
           "api.credential.delivery.granted",
           "api.credential.delivery.revoked",
           "api.agent.grant.granted",
@@ -4229,6 +4230,17 @@
           "resumeCursor"
         ],
         "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "PlatformSession": {
+        "in": "cookie",
+        "name": "__Host-platform-session",
+        "type": "apiKey"
+      },
+      "platformApiCredential": {
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
@@ -7596,7 +7608,12 @@
           }
         },
         "security": [
-          {}
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
         ]
       }
     },
@@ -7761,7 +7778,12 @@
           }
         },
         "security": [
-          {}
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
         ]
       }
     },
@@ -9677,7 +9699,11 @@
             "description": "Audit query failed"
           }
         },
-        "security": []
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
       }
     },
     "/api/v3/admin/audit/{auditId}": {
@@ -9840,7 +9866,11 @@
             "description": "Audit query failed"
           }
         },
-        "security": []
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
       }
     }
   }

@@ -1,12 +1,17 @@
 import {
-	type PlatformAuditQueryScopeV1,
+	PersonalApiCredentialErrorV1,
 	PlatformAuditScopeErrorV1,
 	parsePlatformAuditQueryInputV1,
 } from "@agent-infra/platform-core";
+import type { PostgresScopedPlatformAuditQueryV1 } from "@agent-infra/platform-store";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { HttpProtocolError } from "./common.js";
 import { registerScopedAuditRoutes } from "./scoped-audit-routes.js";
+
+type QueryIdentity = Parameters<
+	PostgresScopedPlatformAuditQueryV1["listAudit"]
+>[0];
 
 const currentUser = {
 	schemaVersion: 1 as const,
@@ -69,17 +74,21 @@ function fixture() {
 		recordDeniedQuery: vi.fn(async (_input: unknown, _metadata: unknown) => {}),
 		listAudit: vi.fn(
 			async (
-				scope: PlatformAuditQueryScopeV1,
+				scope: QueryIdentity,
 				input: unknown,
 				_metadata: unknown,
-			) => {
+			): Promise<
+				Awaited<ReturnType<PostgresScopedPlatformAuditQueryV1["listAudit"]>>
+			> => {
+				if (scope.kind === "api-credential")
+					throw new PersonalApiCredentialErrorV1("authentication_required");
 				parsePlatformAuditQueryInputV1(input, scope);
 				return { items: [item], nextCursor: "next-cursor" };
 			},
 		),
 		getAudit: vi.fn(
 			async (
-				_scope: PlatformAuditQueryScopeV1,
+				_scope: QueryIdentity,
 				_id: string,
 				_input: unknown,
 				_metadata: unknown,
@@ -97,6 +106,52 @@ function fixture() {
 }
 
 describe("scoped audit HTTP adapter", () => {
+	it("passes one own-audit Bearer to the Store without resolving a browser or trusting filters", async () => {
+		const { app, identity, audit } = fixture();
+		const material = `papi_${"a".repeat(43)}`;
+		audit.listAudit.mockResolvedValueOnce({ items: [], nextCursor: null });
+		const response = await app.request(
+			"/api/v1/audit?principalKind=user&principalId=forged",
+			{
+				headers: { authorization: `Bearer ${material}` },
+			},
+		);
+		expect(response.status).toBe(200);
+		const source = audit.listAudit.mock.calls[0]?.[0];
+		expect(source).toMatchObject({ kind: "api-credential", material });
+		expect(source).not.toHaveProperty("principal");
+		if (source?.kind !== "api-credential")
+			throw new Error("Missing transient source");
+		await source.userDirectory?.resolveUser("resolved-subject");
+		expect(identity.resolveUser).toHaveBeenCalledExactlyOnceWith(
+			"resolved-subject",
+		);
+		expect(identity.resolve).not.toHaveBeenCalled();
+		expect(identity.resolveApiCredential).not.toHaveBeenCalled();
+		expect(JSON.stringify(await response.json())).not.toContain(material);
+	});
+
+	it("rejects a valid-format Bearer on the administrator route without browser fallback", async () => {
+		const { app, identity, audit } = fixture();
+		const response = await app.request("/api/v3/admin/audit", {
+			headers: { authorization: `Bearer papi_${"a".repeat(43)}` },
+		});
+		expect(response.status).toBe(401);
+		expect(identity.resolve).not.toHaveBeenCalled();
+		expect(audit.listAudit).not.toHaveBeenCalled();
+	});
+
+	it("maps Store credential rejection without accepting a browser identity", async () => {
+		const { app, identity, audit } = fixture();
+		audit.listAudit.mockRejectedValueOnce(
+			new PersonalApiCredentialErrorV1("forbidden"),
+		);
+		const response = await app.request("/api/v1/audit", {
+			headers: { authorization: `Bearer papi_${"a".repeat(43)}` },
+		});
+		expect(response.status).toBe(404);
+		expect(identity.resolve).not.toHaveBeenCalled();
+	});
 	it("audits a trusted non-administrator rejection without recording request fields", async () => {
 		const { app, audit } = fixture();
 		const response = await app.request(

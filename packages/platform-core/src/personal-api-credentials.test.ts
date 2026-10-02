@@ -35,6 +35,7 @@ function useCase() {
 		databaseTime: vi.fn(async () => new Date("2029-01-01T00:00:00.000Z")),
 		lockIdempotency: vi.fn(async () => null),
 		lockCredential: vi.fn(async () => null),
+		listCredentials: vi.fn(async () => []),
 		insertCredential: vi.fn(
 			async (
 				input: Parameters<

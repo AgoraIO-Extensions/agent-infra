@@ -20,7 +20,9 @@ import {
 import {
 	PersonalApiCredentialIssueRequestV1Schema,
 	PersonalApiCredentialIssueResponseV1Schema,
+	PersonalApiCredentialListQueryV1Schema,
 	PersonalApiCredentialMetadataV1Schema,
+	PersonalApiCredentialPageV1Schema,
 	PersonalApiCredentialRevokeResponseV1Schema,
 } from "./personal-api-credentials.ts";
 import {
@@ -1201,6 +1203,21 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 		},
 	},
 	"/api/v2/me/api-credentials": {
+		get: {
+			operationId: "listPersonalApiCredentialsV2",
+			summary: "List only the current browser user's credential metadata",
+			description:
+				"Any Authorization header is rejected. Limit defaults to 20; cursor is bound to this user and limit. Credential material and hashes are never returned. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: { query: PersonalApiCredentialListQueryV1Schema },
+			responses: {
+				"200": jsonResponse(
+					"Personal credential metadata page",
+					PersonalApiCredentialPageV1Schema,
+				),
+				...errorResponses,
+			},
+		},
 		post: {
 			operationId: "issuePersonalApiCredentialV2",
 			summary: "Issue a personal credential with one-time material delivery",
@@ -1462,6 +1479,8 @@ export const pilotBrowserSchemasV2 = {
 	PersonalApiCredentialIssueResponseV1:
 		PersonalApiCredentialIssueResponseV1Schema,
 	PersonalApiCredentialMetadataV1: PersonalApiCredentialMetadataV1Schema,
+	PersonalApiCredentialListQueryV1: PersonalApiCredentialListQueryV1Schema,
+	PersonalApiCredentialPageV1: PersonalApiCredentialPageV1Schema,
 	PersonalApiCredentialRevokeResponseV1:
 		PersonalApiCredentialRevokeResponseV1Schema,
 	AgentLifecycleCommandRequestV1: AgentLifecycleCommandRequestV1Schema,

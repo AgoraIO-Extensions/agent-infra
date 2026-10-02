@@ -12,7 +12,7 @@ import {
 	type PersonalApiCredentialTransactionV1,
 	parsePersonalApiCredentialScopesV1,
 } from "@agent-infra/platform-core";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, gt, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -31,7 +31,12 @@ export interface PostgresPersonalApiCredentialOptionsV1 {
 	readonly databaseUrl: string;
 }
 
-function metadata(row: CredentialRow): PersonalApiCredentialMetadataV1 {
+function metadata(
+	row: Pick<
+		CredentialRow,
+		"id" | "scopes" | "expiresAt" | "revokedAt" | "createdAt" | "lastUsedAt"
+	>,
+): PersonalApiCredentialMetadataV1 {
 	try {
 		return {
 			credentialId: row.id,
@@ -150,6 +155,31 @@ function transactionOperations(
 				.for("update")
 				.limit(1);
 			return row ? metadata(row) : null;
+		},
+		async listCredentials(userId, limit, afterId) {
+			const rows = await transaction
+				.select({
+					id: platformApiCredentials.id,
+					scopes: platformApiCredentials.scopes,
+					expiresAt: platformApiCredentials.expiresAt,
+					revokedAt: platformApiCredentials.revokedAt,
+					createdAt: platformApiCredentials.createdAt,
+					lastUsedAt: platformApiCredentials.lastUsedAt,
+				})
+				.from(platformApiCredentials)
+				.where(
+					and(
+						eq(platformApiCredentials.principalType, "user"),
+						eq(platformApiCredentials.principalId, userId),
+						afterId === null
+							? undefined
+							: gt(platformApiCredentials.id, afterId),
+					),
+				)
+				.orderBy(asc(platformApiCredentials.id))
+				.limit(limit)
+				.for("share");
+			return rows.map(metadata);
 		},
 		async insertCredential(input) {
 			const [row] = await transaction

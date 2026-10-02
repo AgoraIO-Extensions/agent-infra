@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageRoot, "../..");
@@ -1286,6 +1287,53 @@ function isScopedAuditOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #481 documents the actual scoped audit cookie/Bearer entry points only.
+function isScopedAuditCredentialSecurityAddition(previous, current) {
+	const paths = [
+		"/api/v1/audit",
+		"/api/v1/audit/{auditId}",
+		"/api/v3/admin/audit",
+		"/api/v3/admin/audit/{auditId}",
+	];
+	const schemes = {
+		platformApiCredential: { type: "http", scheme: "bearer" },
+		PlatformSession: {
+			type: "apiKey",
+			in: "cookie",
+			name: "__Host-platform-session",
+		},
+	};
+	const normalized = structuredClone(current);
+	for (const [name, scheme] of Object.entries(schemes)) {
+		if (!isDeepStrictEqual(current.components?.securitySchemes?.[name], scheme))
+			return false;
+		const oldScheme = previous.components?.securitySchemes?.[name];
+		if (oldScheme !== undefined && !isDeepStrictEqual(oldScheme, scheme))
+			return false;
+		if (oldScheme === undefined)
+			delete normalized.components.securitySchemes[name];
+	}
+	if (
+		previous.components?.securitySchemes === undefined &&
+		Object.keys(normalized.components.securitySchemes).length === 0
+	)
+		delete normalized.components.securitySchemes;
+	for (const path of paths) {
+		const own = path.startsWith("/api/v1/");
+		const expected = own
+			? [{ PlatformSession: [] }, { platformApiCredential: [] }]
+			: [{ PlatformSession: [] }];
+		const legacy = own ? [{}] : [];
+		if (!sameValue(current.paths?.[path]?.get?.security, expected))
+			return false;
+		const old = previous.paths?.[path]?.get?.security;
+		if (previous.paths?.[path] !== undefined && !sameValue(old, legacy))
+			return false;
+		normalized.paths[path].get.security = legacy;
+	}
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 // #1060 extends only the canonical audit action at its existing schema locations.
 function withoutPersonalApiAgentReadAudit(previous, current) {
 	const normalized = structuredClone(current);
@@ -1432,11 +1480,54 @@ function isPersonalRelayKeyV2OpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #1037 GET slice: only the exact metadata read, two schemas and read audit action.
+function isPersonalCredentialListOpenApiAddition(previous, current) {
+	const path = "/api/v2/me/api-credentials";
+	const names = [
+		"PersonalApiCredentialListQueryV1",
+		"PersonalApiCredentialPageV1",
+	];
+	if (
+		previous.paths?.[path]?.get !== undefined ||
+		names.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		get: current.paths?.[path]?.get,
+		schemas: Object.fromEntries(
+			names
+				.filter((name) => current.components?.schemas?.[name] !== undefined)
+				.map((name) => [name, current.components.schemas[name]]),
+		),
+		audit: current.components?.schemas?.ScopedPlatformAuditActionV1,
+	};
+	const fingerprint = createHash("sha256")
+		.update(JSON.stringify(addition))
+		.digest("hex");
+	if (
+		![
+			"a0900c9a7aea8b1a7142081b2d733cca4e92030f66d93bf81c76993096503131",
+			"5d170cf871a434be99dff5f43a54c362ab26e25b2d87714041e506c1429d5962",
+		].includes(fingerprint)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	if (normalized.paths?.[path]) delete normalized.paths[path].get;
+	for (const name of names) delete normalized.components.schemas[name];
+	const actions = normalized.components.schemas.ScopedPlatformAuditActionV1;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) => action !== "api.credential.metadata.read",
+		);
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
 		if (
 			!sameValue(previous, current) &&
+			!isPersonalCredentialListOpenApiAddition(previous, current) &&
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
@@ -1458,6 +1549,7 @@ function findBreakingChanges(previous, current) {
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
+			!isScopedAuditCredentialSecurityAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
