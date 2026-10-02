@@ -206,7 +206,7 @@ export async function assembleRuntimeHost(
 		}
 	};
 	try {
-	const storePath = join(dataDirectory, "host.json");
+		const storePath = join(dataDirectory, "host.json");
 		if (legacyMigration) {
 			const { bytes } = await readRuntimeLegacyJournal(storePath);
 			await previewRuntimeLegacyMigration(bytes, legacyMigration);
@@ -275,10 +275,10 @@ export async function assembleRuntimeHost(
 			if ("close" in driver) await driver.close();
 		};
 		const validateV4 = runtimeWorkerId
-			? createRuntimeExecutionGrantValidatorV4(
-					new Map([[keyId, publicKey]]),
-					{ expectedIssuer, expectedWorkerId: runtimeWorkerId },
-				)
+			? createRuntimeExecutionGrantValidatorV4(new Map([[keyId, publicKey]]), {
+					expectedIssuer,
+					expectedWorkerId: runtimeWorkerId,
+				})
 			: undefined;
 		const host = await RuntimeHost.open({
 			...(readinessBinding
@@ -292,6 +292,8 @@ export async function assembleRuntimeHost(
 				: {}),
 			store,
 			driver,
+			// Retained Codex configurations are readable, but new business uses V4.
+			allowLegacyBusiness: binding !== "codex",
 			grantValidation: { expectedIssuer },
 			...(runtimeWorkerId
 				? {
@@ -301,7 +303,7 @@ export async function assembleRuntimeHost(
 						},
 					}
 				: {}),
-			...(validateV4 ? { validateGrantV4 } : {}),
+			...(validateV4 ? { validateGrantV4: validateV4 } : {}),
 		});
 		assembledHost = host;
 		const verifyV2 = createRuntimeExecutionGrantVerifierV2(

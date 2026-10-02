@@ -41,7 +41,9 @@ export interface RuntimeExternalActionAuthorizationResult {
 
 export type RuntimeExternalActionAuthorizer = (
 	action: RuntimeExternalActionAuthorization,
-) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
+) =>
+	| Promise<void>
+	| Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 
 export interface RuntimeOriginalEvidenceBinding {
 	readonly principal: RuntimePrincipalV1;

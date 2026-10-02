@@ -232,7 +232,8 @@ describe("V4 authenticated confidential private Key client", () => {
 			if (field === "request") next.requestId = "other-request";
 			if (field === "fence") next.operation.deliveryFence = 3;
 			if (field === "selection") next.selection.modelOptionId = "other-option";
-			if (field === "input") next.input.text = "other-input";
+			if (field === "input")
+				next.input = { ...next.input, text: "other-input" };
 			if (field === "key-version") next.keyBinding.version = 2;
 			await expect(client.submitTurn(next)).rejects.toThrow();
 			expect(h.executionKeys.readCiphertext).not.toHaveBeenCalled();

@@ -764,7 +764,6 @@ export class RuntimeHost {
 			operation.operationId,
 			lookup.record.result,
 			lookup.record.nativeSessionRef,
-			true,
 		);
 		this.trustedHost();
 		if (

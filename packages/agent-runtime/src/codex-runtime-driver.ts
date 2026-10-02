@@ -87,6 +87,7 @@ import type {
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
 	RuntimeExternalActionAuthorizer,
 	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
@@ -7093,7 +7094,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			});
 			this.notifyEventStream(streamKey);
 		};
-		let authorization: Awaited<ReturnType<RuntimeExternalActionAuthorizer>>;
+		let authorization: RuntimeExternalActionAuthorizationResult | undefined;
 		const assertCurrent = () => {
 			// Re-read original state after each Host or durable-started await.
 			signal.throwIfAborted();
@@ -7165,19 +7166,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const waiting = new AbortController();
 			try {
 				signal.throwIfAborted();
-				authorization = await Promise.race([
-					once(signal, "abort", { signal: waiting.signal }).then(() => {
-						throw unavailableError();
-					}),
-					this.authorizeExternalAction({
-						nativeSessionRef: prepared.nativeSessionRef,
-						executionId: prepared.executionId,
-						runtimeOperationId: prepared.executionId,
-						operationRef: prepared.fact.operationRef,
-						attemptRef: prepared.fact.attemptRef,
-						kind: "model",
-					}),
-				]);
+				authorization =
+					(await Promise.race([
+						once(signal, "abort", { signal: waiting.signal }).then(() => {
+							throw unavailableError();
+						}),
+						this.authorizeExternalAction({
+							nativeSessionRef: prepared.nativeSessionRef,
+							executionId: prepared.executionId,
+							runtimeOperationId: prepared.executionId,
+							operationRef: prepared.fact.operationRef,
+							attemptRef: prepared.fact.attemptRef,
+							kind: "model",
+						}),
+					])) || undefined;
 				signal.throwIfAborted();
 			} finally {
 				waiting.abort();

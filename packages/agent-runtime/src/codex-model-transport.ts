@@ -1014,9 +1014,9 @@ function validatedRoutes(input: readonly CodexModelRoute[]) {
 		const endpoint = validateModelEndpoint(inputRoute.endpoint);
 		routes.set(inputRoute.internalModel, {
 			endpoint,
-			...(inputRoute.credential === undefined
-				? {}
-				: { credential: inputRoute.credential }),
+			...(typeof inputRoute.credential === "string"
+				? { credential: inputRoute.credential }
+				: {}),
 			model: inputRoute.model,
 			target: new URL(`${endpoint.replace(/\/$/, "")}/responses`),
 		});

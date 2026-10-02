@@ -3254,7 +3254,7 @@ describe("Execution Key transport and original request drain", () => {
 					},
 				},
 			),
-		).rejects.toThrow("RUNTIME_CONFIGURATION_INVALID");
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_CONFIGURATION_INVALID" });
 	});
 
 	async function keyedTransport(

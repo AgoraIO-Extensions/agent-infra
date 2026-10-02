@@ -291,8 +291,8 @@ it("binds the first durable native receipt and returns the original Key before s
 			expect(key?.revalidate()).toBeUndefined();
 			expect(
 				f.store.nativeSessionRef(
-					f.store.readOriginalExecutionKeyScopeV4(command)?.hostSessionRef ??
-						"",
+					f.store.readOriginalExecutionKeyScopeV4(f.transport.businessRequest)
+						?.hostSessionRef ?? "",
 				),
 			).toBe(receipt.nativeSessionRef);
 			await expect(

@@ -516,7 +516,7 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			});
 			const store: ConversationDispatchStorePortV1 = {
 				claim: vi.fn(async () => ({
-					outcome: "claimed",
+					outcome: "claimed" as const,
 					claim: structuredClone(h.claim),
 				})),
 				renew: vi.fn(async () => true),
@@ -605,7 +605,7 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		const h = runtimeV4Harness();
 		const store: ConversationDispatchStorePortV1 = {
 			claim: vi.fn(async () => ({
-				outcome: "claimed",
+				outcome: "claimed" as const,
 				claim: structuredClone(h.claim),
 			})),
 			renew: vi.fn(async () => true),
