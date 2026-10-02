@@ -6,20 +6,27 @@ import {
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, test } from "@playwright/test";
-import { history } from "../src/features/conversation/conversation-test-fixtures";
+import {
+	event,
+	history,
+} from "../src/features/conversation/conversation-test-fixtures";
 
 async function routingFixture(
 	page: Page,
 	{
 		agentId = "agent-1",
+		agentName = "受控路由助手",
 		conversationId = "conversation-1",
+		messageRoles = false,
 		stopped = false,
 		longTitles = false,
 		recentAcrossAgents = false,
 		recentFailureStatus,
 	}: {
 		agentId?: string;
+		agentName?: string;
 		conversationId?: string;
+		messageRoles?: boolean;
 		stopped?: boolean;
 		longTitles?: boolean;
 		recentAcrossAgents?: boolean;
@@ -31,7 +38,7 @@ async function routingFixture(
 	const agent = AgentProjectionV2Schema.parse({
 		...pilotFakeScenariosV2.starting.response.body,
 		agentId,
-		name: "受控路由助手",
+		name: agentName,
 		managementStatus: stopped ? "stopped" : "available",
 		serviceAvailability: stopped ? null : "ready",
 	});
@@ -42,11 +49,70 @@ async function routingFixture(
 			agentId,
 			title: `受控历史 ${id}${longTitles ? " 中文长标题".repeat(30) : ""}`,
 		});
-	const detail = (id: string) =>
-		ConversationDetailProjectionV2Schema.parse({
-			...history(id, []),
-			conversation: metadata(id),
+	const detail = (id: string) => {
+		const snapshot = history(
+			id,
+			messageRoles
+				? [
+						{
+							...event(1, id),
+							executionId: "execution-live",
+							payload: { text: "受控流式回答" },
+						},
+					]
+				: [],
+		);
+		const userMessage = {
+			messageId: "controlled-question",
+			role: "user",
+			text: "受控长消息".repeat(50),
+			status: "completed",
+			executionId: "execution-old",
+			replyToMessageId: null,
+			answerVersion: null,
+			isCurrentAnswer: null,
+			error: null,
+			createdAt: metadata(id).createdAt,
+		};
+		return ConversationDetailProjectionV2Schema.parse({
+			...snapshot,
+			conversation: {
+				...metadata(id),
+				lastConversationCursor: snapshot.conversation.lastConversationCursor,
+			},
+			messages: messageRoles
+				? [
+						userMessage,
+						{
+							...userMessage,
+							role: "assistant",
+							messageId: "controlled-answer-old",
+							replyToMessageId: userMessage.messageId,
+							text: "受控旧版回答",
+							answerVersion: 1,
+							isCurrentAnswer: false,
+						},
+						{
+							...userMessage,
+							role: "assistant",
+							messageId: "controlled-answer-current",
+							executionId: "execution-current",
+							replyToMessageId: userMessage.messageId,
+							text: `## 受控新版回答\n\n模型自称别的身份不会改变正式消息标题。\n\n\`\`\`text\n${"controlled-wide-code-".repeat(15)}\n\`\`\``,
+							answerVersion: 2,
+							isCurrentAnswer: true,
+						},
+						{
+							...userMessage,
+							messageId: "controlled-followup",
+							text: "受控后续问题",
+							executionId: "execution-live",
+							status: "submitted",
+						},
+					]
+				: [],
 		});
+	};
 	await page.addInitScript(() => {
 		const realFetch = window.fetch.bind(window);
 		window.fetch = async (input, init) => {
@@ -179,18 +245,102 @@ async function routingFixture(
 		unexpected.push(`${request.method()} ${url.pathname}`);
 		return route.abort();
 	});
-	return { agentId, conversationId, requests, unexpected };
+	return {
+		agentId,
+		agentName: agent.name,
+		conversationId,
+		requests,
+		unexpected,
+	};
 }
 
 function canonical(agentId: string, conversationId?: string) {
 	return `/chat/${encodeURIComponent(agentId)}${conversationId === undefined ? "" : `/${encodeURIComponent(conversationId)}`}`;
 }
 
-async function assertChat(page: Page) {
+async function assertChat(page: Page, agentName = "受控路由助手") {
 	await expect(
-		page.getByRole("heading", { name: "受控路由助手", exact: true }),
+		page.getByRole("heading", { name: agentName, exact: true }),
 	).toBeVisible();
 	await expect(page.getByLabel("消息", { exact: true })).toBeVisible();
+}
+
+for (const compact of [false, true]) {
+	test(`renders verified Agent message roles and preserves versions after refresh${compact ? " at 320 by 370" : ""}`, async ({
+		page,
+	}, info) => {
+		if (compact) await page.setViewportSize({ width: 320, height: 370 });
+		const fixture = await routingFixture(page, {
+			agentName: "受控授权工程助手".repeat(7),
+			messageRoles: true,
+			recentAcrossAgents: true,
+		});
+		await page.goto(canonical(fixture.agentId, fixture.conversationId));
+		await assertChat(page, fixture.agentName);
+		const users = page.getByRole("article", { name: "你的消息", exact: true });
+		const assistants = page.getByRole("article", {
+			name: `${fixture.agentName}的消息`,
+			exact: true,
+		});
+		await expect(users).toHaveCount(2);
+		await expect(assistants).toHaveCount(2);
+		await expect(
+			assistants.first().getByRole("heading", { name: "受控新版回答" }),
+		).toBeVisible();
+		await expect(
+			assistants.last().getByText("受控流式回答", { exact: true }),
+		).toBeVisible();
+		const input = page.getByLabel("消息", { exact: true });
+		await input.fill("受控草稿，不自动发送。");
+		await users.first().scrollIntoViewIfNeeded();
+		await expect(users.first()).toBeVisible();
+		for (const frame of [users.first(), assistants.first()]) {
+			const avatar = await frame.locator(".chat-message-avatar").boundingBox();
+			const body = await frame.locator(".chat-message-body").boundingBox();
+			if (!avatar || !body)
+				throw new Error("Message avatar and body must be rendered");
+			expect(body.x).toBeGreaterThanOrEqual(avatar.x + avatar.width + 11);
+			await expect(frame.locator(".chat-message-avatar")).toHaveAttribute(
+				"aria-hidden",
+				"true",
+			);
+		}
+		expect(
+			await page.evaluate(
+				() => document.documentElement.scrollWidth <= innerWidth,
+			),
+		).toBe(true);
+		await info.attach("controlled-user-message-roles", {
+			body: await page.screenshot({ fullPage: true, animations: "disabled" }),
+			contentType: "image/png",
+		});
+		await assistants.first().scrollIntoViewIfNeeded();
+		await expect(assistants.first()).toBeVisible();
+		await info.attach("controlled-assistant-message-roles", {
+			body: await page.screenshot({ fullPage: true, animations: "disabled" }),
+			contentType: "image/png",
+		});
+		await assistants
+			.first()
+			.getByRole("button", { name: "上一个回答版本" })
+			.click();
+		await expect(
+			assistants.first().getByText("受控旧版回答", { exact: true }),
+		).toBeVisible();
+		await expect(input).toHaveValue("受控草稿，不自动发送。");
+		await page.reload();
+		await assertChat(page, fixture.agentName);
+		await expect(
+			assistants.first().getByRole("heading", { name: "受控新版回答" }),
+		).toBeVisible();
+		await expect(
+			assistants.last().getByText("受控流式回答", { exact: true }),
+		).toHaveCount(1);
+		expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+			true,
+		);
+		expect(fixture.unexpected).toEqual([]);
+	});
 }
 
 test("keeps conversation and history together, preserves draft and SSE, and opens the original cross-Agent record", async ({

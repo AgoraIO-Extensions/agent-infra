@@ -621,6 +621,30 @@ a[class~="group/button"] {
 	max-width: 780px;
 	margin: 0 auto 30px;
 }
+.chat-message {
+	display: grid;
+	grid-template-columns: 34px minmax(0, 1fr);
+	gap: 12px;
+}
+.chat-message-avatar {
+	display: grid;
+	place-items: center;
+	width: 34px;
+	height: 34px;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	background: var(--surface);
+}
+.chat-message-body {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.chat-message-user .chat-message-body {
+	padding: 14px 16px;
+	border: 1px solid var(--border);
+	border-radius: calc(var(--radius) + 4px);
+	background: var(--surface);
+}
 .assistant-markdown {
 	line-height: 1.8;
 	overflow-wrap: anywhere;

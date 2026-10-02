@@ -239,6 +239,7 @@ export function ActiveConversation({
 				)}
 				{timeline.history && (
 					<ConversationMessages
+						agentName={agent.name}
 						history={timeline.history}
 						events={timeline.events}
 						onExecution={openExecution}
