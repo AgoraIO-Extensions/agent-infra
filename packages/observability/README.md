@@ -24,8 +24,12 @@ HTTP 只记录一次响应头建立阶段的结果与实测耗时：2xx/3xx 为 
 
 `@agent-infra/observability/worker` 的 `createObservedConversationEvents({ transaction, telemetry }, options)` 保持 Core `ConversationEventUseCaseV1` 的输入、决定和错误契约。它复用原事务 Port，由 Core 校验输入、既有事实及持久返回值后才观测。每个 `accepted` 记录一次 `result_persist/completed`，只表示事件保存已确认，不表示任务业务成功；`replayed`、`stale` 不重复记录。保存或持久返回值确认失败记录受限 `PERSISTENCE_UNAVAILABLE`，再抛出原 Core 错误；采集失败不改变原决定、事务或 cursor ACK。
 
-模型/工具只记录同一事务历史中该 operation/attempt 的首个持久 `completed`、`failed` 或 `unknown`，不在内存中新增去重权威。恢复确认未知结果、Connection 元数据修订及同事件重放不再计数；合法新 attempt 单独计数。`intent`、`started` 不冒充终态，耗时只使用事实中已提供的值；模型用量、未获得的时间、原始故障、工具/模型名与 Connection 内容均不补值或进入观测输出。
+模型/工具只记录同一事务历史中该 operation/attempt 的首个持久 `completed`、`failed` 或 `unknown`，不在内存中新增去重权威。恢复确认未知结果、Connection 元数据修订及同事件重放不再计数；合法新 attempt 单独计数。`intent`、`started` 不冒充终态，耗时只使用事实中已提供的值；未获得的时间、原始故障、工具/模型名与 Connection 内容均不补值或进入观测输出；模型用量仅按下列指标约定消费。
 
-Issue #962 提供这些消费者 Adapter 及本地 fake 接入证据。实际进程装配、collector、四模板及 Connection 验收、跨进程 Span link、完整 Token 指标、SSE/资源采样、查询与告警仍属于 #441 的后续交付。
+`recordModelUsage` 导出 `agent_platform_model_tokens_total`，仅使用 `service` 和固定 `kind=input/output/cached_input` label；缓存输入是输入的子集，不能将三种值相加为总 Token。模型/工具名、主体、操作引用与正文不进入该指标或新增日志/Trace。只读取提供的非负安全整数，缺失字段不补零，已知零可观测。
+
+原事件消费者在同一锁定事实历史中按 operation/attempt/usage 字段判断首次出现，事务确认后才调用该方法。重放、stale 和持久失败不新增；未知恢复可补首次获得的字段，已观测字段和原终态不重计。新 attempt 单独统计，消费者重建仍从原历史去重，不维护额外缓存。指标表示首次持久确认的已知字段观测，不作账单权威；进程退出与 exporter 故障可能丢失遥测，不能宣称跨进程 exactly-once 导出。旧仅提供 `record` 的调用方保持兼容，完整正式进程 telemetry 对象直接支持用量消费。
+
+Issue #962 提供基础消费者 Adapter。实际进程装配、collector、四模板及 Connection 验收、跨进程 Span link、SSE/资源采样、查询与告警继续按 #441 各自实际证据验收；用量消费不证明真实 Codex 或 Connection 全链通过。
 
 Trace 队列最多保留 512 个 Span，每批最多导出 32 个；Trace 和 Metric 各最多并发一个 OTLP 请求，导出超时为两秒，`close()` 最多等待五秒。关闭超时后不再发起新的导出，状态保持 `closing`，直到 SDK shutdown 真正结束才变为 `closed`；此前已发出的请求仍受各自的导出超时约束。日志目的地阻塞或报错时，后续日志会丢弃并计入 `status().droppedLogs`。同步采集异常计入 `status().captureFailures`，导出回调只记录失败次数和时间，不记录原始错误。故障计数需要独立的进程健康入口；故障中的 exporter 无法可靠导出自己的故障指标。
