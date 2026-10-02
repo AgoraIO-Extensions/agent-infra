@@ -517,6 +517,18 @@ function createConversation(
 	let nextId = 1;
 	const transaction = new PostgresConversationExecutionTransactionV1({
 		databaseUrl,
+		userDirectory: {
+			async resolveUser(userId) {
+				return {
+					schemaVersion: 1,
+					userId,
+					accountStatus: "active",
+					organizationIds: [],
+					authorizationRevision:
+						resolvedAuthority.taskBoundary?.identityRevision ?? "identity-01",
+				};
+			},
+		},
 	});
 	return {
 		transaction,
