@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
+import { PageLoadingState } from "../page-loading-state.js";
 import {
 	type AgentDetailState,
 	canStartPlatformConversation,
@@ -62,7 +63,9 @@ export function AgentDetailScreen({
 	state,
 }: AgentDetailScreenProps) {
 	if (state.kind === "loading")
-		return <p aria-live="polite">正在加载 Agent 详情…</p>;
+		return (
+			<PageLoadingState title="Agent 详情" message="正在加载 Agent 详情…" />
+		);
 	if (state.kind === "unavailable")
 		return (
 			<section aria-labelledby="agent-detail-heading" className="space-y-4">

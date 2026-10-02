@@ -16,6 +16,7 @@ import { useResultFocus } from "@/hooks/use-result-focus";
 
 import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
+import { PageLoadingState } from "../page-loading-state.js";
 import {
 	agentApplicationEditActionLabels,
 	getAgentApplicationEditAction,
@@ -69,7 +70,8 @@ export function MyAgentApplicationDetailScreen({
 	useEffect(() => {
 		if (applicationId !== null) setWithdrawalLatched(false);
 	}, [applicationId]);
-	if (state.kind === "loading") return <p role="status">正在读取申请…</p>;
+	if (state.kind === "loading")
+		return <PageLoadingState title="申请详情" message="正在读取申请…" />;
 	if (state.kind === "unavailable")
 		return (
 			<section aria-labelledby="my-agent-application-detail-heading">
