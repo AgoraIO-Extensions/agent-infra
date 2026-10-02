@@ -429,14 +429,24 @@ export function createRuntimeProbeProtocol({
 	now = Date.now,
 }) {
 	const schemas = {
-		"turn.submit": contracts.RuntimeSubmitTurnRequestV3Schema,
 		"turn.stop": contracts.RuntimeStopRequestV3Schema,
 		"generation.cancel": contracts.RuntimeGenerationCancelRequestV3Schema,
 		"session.status": contracts.RuntimeStatusRequestV3Schema,
 		"events.persist": contracts.RuntimeEventPersistRequestV3Schema,
 		"events.ack": contracts.RuntimeEventAckRequestV3Schema,
 	};
-	function signRequest(value, command, reason) {
+	const defaultSelection = {
+		schemaVersion: 1,
+		modelOptionId: "default-option",
+		reasoningLevel: "medium",
+	};
+	const defaultKeyBinding = {
+		purpose: "personal",
+		subjectId: "synthetic-actor",
+		ciphertextRef: "synthetic-relay-key",
+		version: 1,
+	};
+	function signV3Request(value, command, reason) {
 		const request = {
 			...value,
 			requestId: `request-${randomBytes(12).toString("hex")}`,
@@ -512,6 +522,100 @@ export function createRuntimeProbeProtocol({
 			},
 		});
 	}
+	function signV4Submit(value) {
+		const source = value?.businessRequest ?? value;
+		const { grant: _grant, ...requestSource } = source;
+		const request = contracts.RuntimeSubmitTurnRequestV4Schema.parse({
+			...requestSource,
+			schemaVersion: 4,
+			requestId: `request-${randomBytes(12).toString("hex")}`,
+			executionSource: source.executionSource ?? "web",
+			keyBinding: source.keyBinding ?? defaultKeyBinding,
+			selection: source.selection ?? defaultSelection,
+			grant: {
+				schemaVersion: 4,
+				format: "runtime-execution-jws",
+				token: "a.b.c",
+			},
+		});
+		const issuedAt = now();
+		const requestDigestHex = createHash("sha256")
+			.update(contracts.runtimeRequestSigningPayloadV4(request))
+			.digest("hex");
+		const claims = contracts.RuntimeBusinessGrantClaimsV4Schema.parse({
+			schemaVersion: 4,
+			issuer: "synthetic-platform",
+			audience: "runtime_host",
+			workerId: runtimeProbeWorkerId,
+			issuedAt,
+			expiresAt: issuedAt + contracts.RuntimeExecutionGrantMaximumLifetimeMsV4,
+			grantId: `grant-${randomBytes(12).toString("hex")}`,
+			principal: request.principal,
+			executionSource: request.executionSource,
+			agentId: request.agentId,
+			channelId: request.channelId,
+			conversationId: request.conversationId,
+			executionId: request.executionId,
+			turnId: request.turnId,
+			sessionGeneration: request.sessionGeneration,
+			traceId: request.traceId,
+			hostSessionRef: request.hostSessionRef,
+			operation: request.operation,
+			relayKeyBinding: request.keyBinding,
+			allowedCommands: ["turn.submit"],
+			requestDigest: requestDigestHex,
+			purpose: "business",
+			authorizationRecordId: `authorization-${request.executionId}`,
+			attachments: (request.input.attachments ?? []).map((attachmentId) => ({
+				attachmentId,
+				operations: ["read"],
+			})),
+		});
+		const header = Buffer.from(
+			JSON.stringify({
+				alg: "EdDSA",
+				kid: "synthetic-key",
+				typ: "runtime-execution+jws",
+			}),
+		).toString("base64url");
+		const input = `${header}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}`;
+		const businessRequest = {
+			...request,
+			grant: {
+				schemaVersion: 4,
+				format: "runtime-execution-jws",
+				token: `${input}.${sign(null, Buffer.from(input), privateKey).toString("base64url")}`,
+			},
+		};
+		return {
+			businessRequest,
+			privateKeyField: {
+				schemaVersion: 1,
+				context: {
+					requestId: businessRequest.requestId,
+					grantId: claims.grantId,
+					requestDigest: claims.requestDigest,
+					traceId: businessRequest.traceId,
+					principal: businessRequest.principal,
+					executionSource: businessRequest.executionSource,
+					channelId: businessRequest.channelId,
+					agentId: businessRequest.agentId,
+					conversationId: businessRequest.conversationId,
+					executionId: businessRequest.executionId,
+					turnId: businessRequest.turnId,
+					sessionGeneration: businessRequest.sessionGeneration,
+					hostSessionRef: businessRequest.hostSessionRef,
+					operation: businessRequest.operation,
+					keyBinding: businessRequest.keyBinding,
+				},
+				keyDelivery: { relayKey: "synthetic-pinned-key-k1" },
+			},
+		};
+	}
+	function signRequest(value, command, reason) {
+		if (command === "turn.submit" && !reason) return signV4Submit(value);
+		return signV3Request(value, command, reason);
+	}
 	function binding(name, overrides = {}) {
 		const value = {
 			schemaVersion: 3,
@@ -538,16 +642,7 @@ export function createRuntimeProbeProtocol({
 		};
 	}
 	function originalOperationDigest(submit) {
-		return requestDigest({
-			kind: "submit-turn",
-			agentId: submit.agentId,
-			conversationId: submit.conversationId,
-			executionId: submit.executionId,
-			turnId: submit.turnId,
-			sessionGeneration: submit.sessionGeneration,
-			input: submit.input,
-			...(submit.selection ? { selection: submit.selection } : {}),
-		});
+		return requestDigest(contracts.runtimeOperationDigestInputV4(submit));
 	}
 	return {
 		binding,
@@ -786,7 +881,7 @@ async function submitTurn(name, selection, session = undefined) {
 		},
 		"turn.submit",
 	);
-	const path = "v3/turns";
+	const path = "v4/turns";
 	let accepted;
 	return probeStep(
 		`${name}-submit`,
@@ -796,12 +891,14 @@ async function submitTurn(name, selection, session = undefined) {
 			assert.equal(accepted.status, 200);
 			assert.equal(result.result.outcome, "accepted");
 			const lookup = { ...base, hostSessionRef: result.hostSessionRef };
+			const businessRequest = submit.businessRequest;
 			return {
 				lookup,
-				submit,
+				submit: businessRequest,
 				path,
 				accepted: result,
-				originalOperationDigest: protocol.originalOperationDigest(submit),
+				originalOperationDigest:
+					protocol.originalOperationDigest(businessRequest),
 			};
 		},
 		() => ({
@@ -1034,14 +1131,17 @@ async function runImageProbe() {
 		);
 		const invalid = await request(selected.path, {
 			...freshSubmission,
-			grant: {
-				...freshSubmission.grant,
-				token: `${freshSubmission.grant.token.split(".").slice(0, 2).join(".")}.${randomBytes(64).toString("base64url")}`,
+			businessRequest: {
+				...freshSubmission.businessRequest,
+				grant: {
+					...freshSubmission.businessRequest.grant,
+					token: `${freshSubmission.businessRequest.grant.token.split(".").slice(0, 2).join(".")}.${randomBytes(64).toString("base64url")}`,
+				},
 			},
 		});
 		const other = protocol.binding("other", { agentId: "other-agent" });
 		const wrongAgent = await request(
-			"v3/turns",
+			"v4/turns",
 			protocol.signRequest(
 				{
 					...other,
