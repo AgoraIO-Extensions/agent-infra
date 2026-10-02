@@ -986,6 +986,32 @@ function isOwnApplicationMetadataV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1233 admits only the application credential material grant metadata routes.
+function isApplicationMaterialGrantV2OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/applications/{applicationId}/material-grant",
+		"/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}",
+	];
+	if (paths.some((path) => previous.paths?.[path] !== undefined)) return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+	};
+	if (
+		![
+			"6bf8b1cd3ef226b56b1669dd3b2cc359a8e2384c5fe30aa67f9cc06d91d81aae",
+			"acdf227e2129f2fc1d8d862d8101cc79825d1a8bf87638e4cdae7196b77be70d",
+		].includes(
+			createHash("sha256").update(JSON.stringify(addition)).digest("hex"),
+		)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 // #482 C admits only the frozen three Task HTTP paths and six closed schemas.
 function isTaskHttpV1OpenApiAddition(previous, current) {
 	const paths = [
@@ -1683,6 +1709,7 @@ function findBreakingChanges(previous, current) {
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
+			!isApplicationMaterialGrantV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationDisableV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
