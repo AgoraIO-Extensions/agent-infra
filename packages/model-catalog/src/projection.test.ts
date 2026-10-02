@@ -487,15 +487,22 @@ it.each(["https://127.0.0.1/v1", "https://localhost/v1", "https://[::1]/v1"])(
 	"rejects V4 non-DNS endpoint in the producer before injection: %s",
 	async (baseUrl) => {
 		const { configuration, binding } = await keylessProjectionFixture();
-		const endpoint = catalogFixture().endpoints[0];
+		const catalog = catalogFixture();
+		const endpoint = catalog.endpoints[0];
 		if (!endpoint) throw new Error("Missing endpoint fixture");
+		const fakeCatalog = createFakeModelCatalogAdapterV1(catalog);
 		await expect(
 			projectRuntimeModelConfigurationV4({
 				configuration,
 				standardTemplateBinding: binding,
 				catalog: {
-					async resolve(_input, _options) {
-						return { ...endpoint, baseUrl, origin: new URL(baseUrl).origin };
+					async resolve(input, options) {
+						const typedEndpoint = await fakeCatalog.resolve(input, options);
+						return {
+							...typedEndpoint,
+							baseUrl,
+							origin: new URL(baseUrl).origin,
+						};
 					},
 				},
 				signal: new AbortController().signal,
