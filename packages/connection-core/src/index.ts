@@ -2104,6 +2104,7 @@ export class ConnectionApplicationService {
 				throw new ConnectionError(
 					"PROVIDER_UNCERTAIN",
 					"Provider write submission outcome is unknown; reconciliation is pending",
+					providerFailureData(error),
 				);
 			}
 			if (error instanceof ConnectionError) {
@@ -2284,6 +2285,10 @@ function isSubmissionUncertain(error: unknown) {
 function isDeterministicProviderRejection(error: unknown) {
 	return (
 		isProviderReauthorizationFailure(error) ||
+		(typeof error === "object" &&
+			error !== null &&
+			(error as { providerSubmissionOutcome?: unknown })
+				.providerSubmissionOutcome === "rejected") ||
 		(typeof error === "object" &&
 			error !== null &&
 			((error as { providerStatus?: number }).providerStatus ?? 0) >= 400 &&

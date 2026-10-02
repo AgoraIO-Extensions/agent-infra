@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 export const providerSources = {
 	bitbucket: "packages/openconnector-adapter/src/bitbucket-server.ts",
 	confluence: "packages/openconnector-adapter/src/confluence-server.ts",
-	datalego: "packages/openconnector-adapter/src/datalego-v4.ts",
+	datalego: "packages/openconnector-adapter/src/datalego-v5.ts",
 	"datalego-oauth-pilot": "packages/openconnector-adapter/src/datalego-oauth.ts",
 	github: "packages/openconnector-adapter/src/verification/github-v8.ts",
 	jenkins: "packages/openconnector-adapter/src/jenkins.ts",
@@ -116,8 +116,9 @@ export function compareCatalogs(baseline, candidate) {
 export function readCatalog(ref) {
 	const catalog = {};
 	for (const [provider, file] of Object.entries(providerSources)) {
-		const sourceFile = provider === "datalego" && !gitFileExists(ref, file)
-			? "packages/openconnector-adapter/src/datalego.ts"
+		const sourceFile = provider === "datalego"
+			? [file, "packages/openconnector-adapter/src/datalego-v4.ts", "packages/openconnector-adapter/src/datalego.ts"]
+				.find((path) => gitFileExists(ref, path)) ?? file
 			: file;
 		if (!git("ls-tree", "--name-only", ref, "--", sourceFile)) continue;
 		catalog[provider] = parseCatalogSource(git("show", `${ref}:${sourceFile}`), provider);
