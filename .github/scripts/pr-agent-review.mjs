@@ -594,11 +594,12 @@ export async function githubRequest(path, options = {}) {
   const { responseType, ...fetchOptions } = options;
   for (let attempt = 0; ; attempt++) {
     const details = { ...requestDetails };
+    const signal = AbortSignal.timeout(15_000);
     let response;
     try {
       response = await fetch(`https://api.github.com${path}`, {
         ...fetchOptions,
-        signal: AbortSignal.timeout(15_000),
+        signal,
         headers: {
           Accept: "application/vnd.github+json",
           ...(options.method === "POST" ? { "Content-Type": "application/json" } : {}),
@@ -626,6 +627,82 @@ export async function githubRequest(path, options = {}) {
         await response.body?.cancel();
         await new Promise((resolve) => setTimeout(resolve, Math.max(retryAfter * 1000, 250 * (attempt + 1))));
         continue;
+      }
+      // Only terminal failures collect advisory metadata; request/retry policy is unchanged.
+      for (const [header, field, maximum] of [
+        ["retry-after", "retryAfterSeconds", 86_400],
+        ["x-ratelimit-remaining", "rateLimitRemaining", 1_000_000],
+        ["x-ratelimit-reset", "rateLimitReset", 4_102_444_800],
+      ]) {
+        const value = response.headers.get(header);
+        if (/^(0|[1-9]\d{0,9})(?![\s\S])/.test(value ?? "") && Number(value) <= maximum)
+          details[field] = Number(value);
+      }
+      const resource = response.headers.get("x-ratelimit-resource");
+      if (["core", "search", "code_search", "graphql", "integration_manifest"].includes(resource))
+        details.rateLimitResource = resource;
+      const permissions = response.headers.get("x-accepted-github-permissions");
+      const permission = "(?:pull_requests|contents|issues|checks|metadata)=(?:read|write|admin)";
+      if (permissions?.length <= 256 && new RegExp(`^${permission}(?:[,;] *${permission})*(?![\\s\\S])`).test(permissions))
+        details.acceptedPermissions = permissions.replaceAll(" ", "");
+      let reader;
+      let timer;
+      let abort;
+      try {
+        reader = response.body?.getReader();
+        if (reader) {
+          const raw = await Promise.race([
+            (async () => {
+              const chunks = [];
+              let size = 0;
+              for (let count = 0; count < 64; count++) {
+                const { done, value } = await reader.read();
+                if (done) return Buffer.concat(chunks).toString("utf8");
+                if (!(value instanceof Uint8Array) || (size += value.byteLength) > 4096)
+                  throw new Error("Diagnostic body exceeds limit");
+                chunks.push(Buffer.from(value));
+              }
+              throw new Error("Diagnostic body exceeds chunk limit");
+            })(),
+            new Promise((_, reject) => {
+              abort = () => reject(new Error("Diagnostic body deadline exceeded"));
+              timer = setTimeout(abort, 1000);
+              signal.addEventListener("abort", abort, { once: true });
+              if (signal.aborted) abort();
+            }),
+          ]);
+          const body = JSON.parse(raw);
+          if (typeof body?.message === "string" && !/[\u0000-\u001f\u007f]/.test(body.message)) {
+            for (const [phrase, category] of [
+              ["Resource not accessible by integration", "integration-permission"],
+              ["Resource not accessible by personal access token", "token-permission"],
+              ["API rate limit exceeded", "primary-rate-limit"],
+              ["You have exceeded a secondary rate limit", "secondary-rate-limit"],
+            ]) {
+              if (body.message === phrase || body.message.startsWith(`${phrase}.`) || body.message.startsWith(`${phrase} `))
+                details.messageCategory = category;
+            }
+          }
+          if (text(body?.documentation_url, 512) && !/[\u0000-\u0020\u007f]/.test(body.documentation_url)) {
+            const url = new URL(body.documentation_url);
+            const path = url.pathname.replace(/^\/en\//, "/");
+            const documents = {
+              "/rest/using-the-rest-api/troubleshooting-the-rest-api": "/en/rest/using-the-rest-api/troubleshooting-the-rest-api",
+              "/rest/using-the-rest-api/rate-limits-for-the-rest-api": "/en/rest/using-the-rest-api/rate-limits-for-the-rest-api",
+              "/rest/overview/resources-in-the-rest-api": "/en/rest/using-the-rest-api/rate-limits-for-the-rest-api",
+              "/rest/pulls/reviews": "/en/rest/pulls/reviews",
+            };
+            if (url.protocol === "https:" && url.hostname === "docs.github.com" && !url.port && !url.username && !url.password && Object.hasOwn(documents, path))
+              details.documentationUrl = `https://docs.github.com${documents[path]}`;
+          }
+        }
+      } catch {
+        // Malformed/unreadable bodies must never replace the original HTTP failure.
+      } finally {
+        clearTimeout(timer);
+        if (abort) signal.removeEventListener("abort", abort);
+        // Cancellation is best effort and cannot extend the diagnostic deadline.
+        try { void reader?.cancel().catch(() => {}); } catch {}
       }
       throw new GitHubRequestFailure("http", details);
     }
