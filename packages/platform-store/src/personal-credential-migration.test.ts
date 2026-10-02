@@ -376,7 +376,8 @@ describe("personal credential disable authority append", () => {
 							table !== "conversation_executions"
 						)
 							return row;
-						const copy = { ...row };
+						if (!row || typeof row !== "object") return row;
+						const copy = { ...(row as Record<string, unknown>) };
 						delete copy.principal_type;
 						return copy;
 					}),
