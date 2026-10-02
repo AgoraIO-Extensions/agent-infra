@@ -1494,6 +1494,25 @@ describe("PostgreSQL Workload steps", () => {
 				>`select configuration from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
 				const configuration = {
 					...row?.configuration,
+					environment: [],
+					modelConfiguration: {
+						catalogRevision: "catalog-a",
+						options: [
+							{
+								optionId: "option-a",
+								endpointId: "endpoint-a",
+								modelId: "model-a",
+								reasoningLevels: ["medium"],
+								credential: {
+									secretId: "model-option-a",
+									version: 1,
+									isSet: false,
+								},
+							},
+						],
+						defaultOptionId: "option-a",
+						defaultReasoningLevel: "medium",
+					},
 					source: {
 						kind,
 						templateId: "template-a",
