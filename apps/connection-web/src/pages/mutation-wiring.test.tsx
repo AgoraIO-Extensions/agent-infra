@@ -1248,6 +1248,87 @@ describe("Connection 管理 mutation wiring", () => {
 		).toBeNull();
 	});
 
+	it.each([
+		"connection-datalego-old",
+		"unavailable-account",
+		"connection-confluence",
+	])(
+		"OAuth success feedback verifies the owned provider/account (%s)",
+		async (connectionId) => {
+			const initial = await api.getConnections();
+			api.getConnections.mockResolvedValueOnce({
+				...initial,
+				overview: {
+					...initial.overview,
+					connections: initial.overview.connections.map((connection) =>
+						connection.id === "connection-datalego-old"
+							? {
+									...connection,
+									status: "ACTIVE" as const,
+									requiresReconnect: false,
+								}
+							: connection,
+					),
+				},
+			});
+			const old: AccessRequestsResponse["requests"][number] = {
+				id: "request-old",
+				providerId: "datalego",
+				providerReleaseId: "datalego-v3",
+				capabilityProfileName: "旧申请",
+				purpose: "只读分析",
+				renewal: false,
+				state: "APPROVED_PENDING_CONNECTION",
+				connectExpiresAt: "2030-01-01T00:00:00Z",
+				expiresAt: "2030-01-01T00:00:00Z",
+				createdAt: "2026-10-01T00:00:00Z",
+				currentStageOrdinal: null,
+				revision: "1",
+				duration: { kind: "PERMANENT" },
+				stages: [],
+				connectReadiness: {
+					status: "REAPPLY_REQUIRED",
+					targetProviderReleaseId: "datalego-v4",
+				},
+			};
+			const connected = {
+				...old,
+				id: "request-connected",
+				providerReleaseId: "datalego-v4",
+				createdAt: "2026-10-02T00:00:00Z",
+				state: "CONSUMED",
+				connectReadiness: undefined,
+			};
+			api.listConnectionAccessRequests.mockResolvedValueOnce({
+				requests: [old, connected],
+			});
+			window.history.replaceState(
+				{},
+				"",
+				`/connection/connections?oauth=connected&provider=datalego&connectionId=${connectionId}`,
+			);
+			renderPage(<ConnectionsPage />);
+			await screen.findByRole("button", { name: "DataLego 已连接 1 个账号" });
+			await screen.findAllByText("已连接");
+			expect(
+				screen.queryByRole("button", { name: "按新版重新申请" }),
+			).toBeNull();
+			expect(
+				screen.queryByRole("button", { name: "等待管理员开放新版" }),
+			).toBeNull();
+			if (connectionId === "connection-datalego-old")
+				expect(
+					await screen.findByText("DataLego 已连接成功，可在下方授权客户端。"),
+				).toBeTruthy();
+			else
+				expect(
+					screen.queryByText("DataLego 已连接成功，可在下方授权客户端。"),
+				).toBeNull();
+			expect(api.startDatalegoOAuth).not.toHaveBeenCalled();
+			expect(api.cancelConnectionAccessRequest).not.toHaveBeenCalled();
+		},
+	);
+
 	it.each(["datalego", "manhattan", "confluence"])(
 		"%s 旧申请的直接链接不会启动鉴权，主入口与时间线一致提示等待新版",
 		async (providerId) => {

@@ -2649,7 +2649,7 @@ describe("Connection API", () => {
 					name: "provider-callback",
 					value: { providerId, code, state },
 				});
-				return { connectionId: "connection-manhattan" };
+				return { connectionId: `connection-${providerId}` };
 			},
 			disconnectConnection: async (
 				principalId: string,
@@ -3118,7 +3118,9 @@ describe("Connection API", () => {
 			{ headers: { cookie: oauthCookie }, redirect: "manual" },
 		);
 		expect(callback.status).toBe(303);
-		expect(callback.headers.get("location")).toBe("/connection/connections");
+		expect(callback.headers.get("location")).toBe(
+			"/connection/connections?oauth=connected&provider=manhattan&connectionId=connection-manhattan",
+		);
 		expect(callback.headers.get("cache-control")).toBe("no-store");
 		expect(callback.headers.get("referrer-policy")).toBe("no-referrer");
 		expect(calls.at(-1)).toEqual({
@@ -3174,7 +3176,7 @@ describe("Connection API", () => {
 			},
 		);
 		expect(datalegoCallback.headers.get("location")).toBe(
-			"/connection/connections",
+			"/connection/connections?oauth=connected&provider=datalego&connectionId=connection-datalego",
 		);
 		expect(calls.at(-1)).toEqual({
 			name: "provider-callback",
@@ -3184,6 +3186,19 @@ describe("Connection API", () => {
 				state: "opaque-state",
 			},
 		});
+		const githubCallback = await app.request(
+			"/oauth/callback?code=github-one-time-code&state=github-opaque-state",
+			{ redirect: "manual" },
+		);
+		expect(githubCallback.headers.get("location")).toBe(
+			"/connection/connections?oauth=connected&provider=github&connectionId=connection-github",
+		);
+		expect(githubCallback.headers.get("location")).not.toContain(
+			"one-time-code",
+		);
+		expect(githubCallback.headers.get("location")).not.toContain(
+			"opaque-state",
+		);
 		const approvedUpgrade = await app.request(
 			"/api/v1/connection/connections/connection-old/upgrade",
 			{

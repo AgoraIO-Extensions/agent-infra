@@ -7,6 +7,7 @@ import { ChevronRight, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
 	canConnectRequest,
+	latestProviderRequest,
 	reapplicationOptions,
 } from "../access-request-state";
 import { connectionApi } from "../api";
@@ -66,13 +67,11 @@ export function AccessRequestPanel(props: {
 	const options = useQuery({
 		queryKey: ["connection-access-options"],
 		queryFn: connectionApi.getConnectionAccessOptions,
-		refetchInterval: props.requests.some(
-			(request) =>
-				request.providerId === props.providerId &&
-				request.connectReadiness?.status === "REAPPLY_REQUIRED",
-		)
-			? 30_000
-			: false,
+		refetchInterval:
+			latestProviderRequest(props.requests, props.providerId)?.connectReadiness
+				?.status === "REAPPLY_REQUIRED"
+				? 30_000
+				: false,
 	});
 	const [showNew, setShowNew] = useState(false);
 	const handledStartSignal = useRef(0);
@@ -108,8 +107,7 @@ export function AccessRequestPanel(props: {
 	const selectedRequest = showNew
 		? null
 		: (providerRequests.find((item) => item.id === selectedRequestId) ??
-			openRequest ??
-			providerRequests[0]);
+			latestProviderRequest(providerRequests, props.providerId));
 	const canConnect = canConnectRequest(selectedRequest);
 	const outdated =
 		selectedRequest?.connectReadiness?.status === "REAPPLY_REQUIRED";
@@ -186,12 +184,11 @@ export function AccessRequestPanel(props: {
 		handledStartSignal.current = props.startSignal;
 		setShowNew(true);
 		setOptionPolicyId(null);
-		const request = props.requests.find(
-			(item) =>
-				item.providerId === props.providerId &&
-				item.state === "APPROVED_PENDING_CONNECTION" &&
-				item.connectReadiness?.status === "REAPPLY_REQUIRED",
-		);
+		const latest = latestProviderRequest(props.requests, props.providerId);
+		const request =
+			latest?.connectReadiness?.status === "REAPPLY_REQUIRED"
+				? latest
+				: undefined;
 		setReapplySource(request ?? null);
 		if (request) setPurpose(request.purpose);
 		setConfirmed([]);

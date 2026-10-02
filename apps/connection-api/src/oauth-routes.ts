@@ -3390,7 +3390,7 @@ export function createConnectionOAuthApp(
 						path: "/oauth/callback",
 					});
 				}
-				await (providerId === "github"
+				const connected = await (providerId === "github"
 					? management.service.completeGithubOAuth(
 							context.req.query("code") ?? "",
 							context.req.query("state") ?? "",
@@ -3406,7 +3406,12 @@ export function createConnectionOAuthApp(
 								stage = value;
 							},
 						));
-				return context.redirect("/connection/connections", 303);
+				const success = new URLSearchParams({
+					oauth: "connected",
+					provider: providerId,
+					connectionId: connected.connectionId,
+				});
+				return context.redirect(`/connection/connections?${success}`, 303);
 			} catch (error) {
 				console.error(
 					JSON.stringify({
