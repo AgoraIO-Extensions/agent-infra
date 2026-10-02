@@ -1723,6 +1723,7 @@ export type DisableOwnApplicationV2Response = DisableOwnApplicationV2Responses[k
 
 export type GrantApplicationMaterialV2Data = {
     body: {
+        expectedRevision?: string;
         principalId: string;
         principalType: 'user' | 'application';
     };

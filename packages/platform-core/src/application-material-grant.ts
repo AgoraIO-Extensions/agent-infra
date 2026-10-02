@@ -157,13 +157,27 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 					throw new ApplicationMaterialGrantErrorV1("forbidden");
 				if (!(await tx.applicationExists(request.applicationId)))
 					throw new ApplicationMaterialGrantErrorV1("not_found");
-				await assertRecipient(tx, request);
 				const current = await tx.lockGrant(request);
 				if (
-					request.expectedRevision &&
-					current?.authorizationRevision !== request.expectedRevision
+					current &&
+					current.authorizationRevision !== request.expectedRevision
 				)
 					throw new ApplicationMaterialGrantErrorV1("idempotency_conflict");
+				await assertRecipient(tx, request);
+				if (current?.revokedAt === null) {
+					await tx.recordAudit({
+						requestId: request.requestId,
+						traceId: request.traceId,
+						userId: request.actor.userId,
+						applicationId: request.applicationId,
+						principalType: request.principalType,
+						principalId: request.principalId,
+						action: "api.credential.material.grant",
+						outcome: "succeeded",
+						details: { returnedMaterial: false },
+					});
+					return { metadata: current, replayed: true };
+				}
 				const metadata = await tx.upsertGrant(
 					request,
 					randomUUID(),
@@ -193,7 +207,6 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 					throw new ApplicationMaterialGrantErrorV1("not_found");
 				if (!request.expectedRevision)
 					throw new ApplicationMaterialGrantErrorV1("idempotency_conflict");
-				await assertRecipient(tx, request);
 				const current = await tx.lockGrant(request);
 				if (!current) throw new ApplicationMaterialGrantErrorV1("not_found");
 				if (

@@ -53,6 +53,7 @@ export function registerApplicationMaterialGrantRoutes(
 				);
 				principalType = parsed.value.principalType;
 				principalId = parsed.value.principalId;
+				expectedRevision = parsed.value.expectedRevision;
 			}
 			if (operation === "revoke") {
 				const parsed = await parseJson(

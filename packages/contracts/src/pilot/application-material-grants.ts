@@ -8,6 +8,7 @@ export const ApplicationMaterialGrantPrincipalTypeV1Schema = z.enum([
 export const ApplicationMaterialGrantRequestV1Schema = z.strictObject({
 	principalType: ApplicationMaterialGrantPrincipalTypeV1Schema,
 	principalId: OpaqueIdV1Schema,
+	expectedRevision: OpaqueIdV1Schema.optional(),
 });
 export const ApplicationMaterialGrantRevokeRequestV1Schema = z.strictObject({
 	status: z.literal("revoked"),

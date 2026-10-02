@@ -6023,6 +6023,10 @@
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "expectedRevision": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "principalId": {
                     "minLength": 1,
                     "type": "string"
