@@ -1780,7 +1780,7 @@ describe("published Relay authority migration", () => {
 		}
 	}
 
-	async function records() {
+	async function records(includeExecutionDeltaFields = true) {
 		const project = async (
 			table: string,
 			order: string,
@@ -1846,11 +1846,15 @@ describe("published Relay authority migration", () => {
 					"delivery_fence",
 					"authorization_revision",
 					"created_at",
-					"execution_source",
-					"relay_key_purpose",
-					"relay_key_subject_id",
-					"relay_key_id",
-					"relay_key_version",
+					...(includeExecutionDeltaFields
+						? [
+								"execution_source",
+								"relay_key_purpose",
+								"relay_key_subject_id",
+								"relay_key_id",
+								"relay_key_version",
+							]
+						: []),
 				],
 			),
 		};
@@ -2015,7 +2019,7 @@ describe("published Relay authority migration", () => {
 			const originalHistory = await history();
 			expect(originalHistory).toHaveLength(kind === "original27" ? 28 : 29);
 			await seedOriginalRecords(kind === "task28");
-			const data = await records();
+			const data = await records(kind !== "original27");
 			// First consume only the already-published29 compatibility migration.
 			journal = JSON.parse(
 				await readFile(resolve(sourceFolder, "meta/_journal.json"), "utf8"),
@@ -2028,7 +2032,7 @@ describe("published Relay authority migration", () => {
 			});
 			const before = await history();
 			expect(before.slice(0, originalHistory.length)).toEqual(originalHistory);
-			expect(await records()).toEqual(data);
+			expect(await records(kind !== "original27")).toEqual(data);
 			const catalog = await relayCatalog();
 			await builtStore.migratePlatformDatabase({ databaseUrl });
 			const after = await history();
@@ -2097,7 +2101,7 @@ describe("published Relay authority migration", () => {
 						? ["conversation_execution_status:waiting"]
 						: [],
 			});
-			expect(await records()).toEqual(data);
+			expect(await records(kind !== "original27")).toEqual(data);
 			await builtStore.migratePlatformDatabase({ databaseUrl });
 			expect(await history()).toEqual(after);
 			expect(await relayCatalog()).toEqual(afterCatalog);
