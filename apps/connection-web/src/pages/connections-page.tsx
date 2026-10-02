@@ -28,6 +28,7 @@ import {
 } from "react";
 import {
 	canConnectRequest,
+	latestProviderRequest,
 	reapplicationOptions,
 } from "../access-request-state";
 import { ConnectionApiError, connectionApi } from "../api";
@@ -174,6 +175,11 @@ export function ConnectionsPage() {
 	const callbackFailed =
 		new URLSearchParams(window.location.search).get("oauth") ===
 		"callback_failed";
+	const callbackConnected =
+		new URLSearchParams(window.location.search).get("oauth") === "connected";
+	const callbackConnectionId = new URLSearchParams(window.location.search).get(
+		"connectionId",
+	);
 	const permissionDenied =
 		new URLSearchParams(window.location.search).get("oauth") ===
 		"permission_denied";
@@ -555,6 +561,20 @@ export function ConnectionsPage() {
 			connection.status === "ACTIVE" &&
 			!connection.requiresReconnect,
 	);
+	const connectedCallbackAccount =
+		callbackConnected &&
+		data?.connections.find(
+			(connection) =>
+				connection.id === callbackConnectionId &&
+				connection.providerId === callbackProviderId &&
+				connection.status === "ACTIVE" &&
+				!connection.requiresReconnect &&
+				(!connection.accessAuthorization ||
+					(connection.accessAuthorization.state === "ACTIVE" &&
+						(!connection.accessAuthorization.validUntil ||
+							Date.parse(connection.accessAuthorization.validUntil) >
+								Date.now()))),
+		);
 	useEffect(() => {
 		if (!callbackFailed || !callbackConnectionHealthy) return;
 		const url = new URL(window.location.href);
@@ -693,6 +713,12 @@ export function ConnectionsPage() {
 				</p>
 			) : null}
 			{overview.isError ? <PageError error={overview.error} /> : null}
+			{connectedCallbackAccount ? (
+				<p className="alert alert-success" role="status">
+					{providerLabel(connectedCallbackAccount.providerId)}{" "}
+					已连接成功，可在下方授权客户端。
+				</p>
+			) : null}
 			{approvedRequest.isFetching || prepareConnect.isPending ? (
 				<p className="alert" role="status">
 					正在检查连接申请…
@@ -1537,7 +1563,9 @@ function ConnectorManagementWorkspace(props: {
 		if (props.requestTargetProvider && props.requestTrigger)
 			setProviderId(props.requestTargetProvider);
 	}, [props.requestTargetProvider, props.requestTrigger]);
-	const [connectionId, setConnectionId] = useState<string | null>(null);
+	const [connectionId, setConnectionId] = useState<string | null>(() =>
+		new URLSearchParams(window.location.search).get("connectionId"),
+	);
 	const [query, setQuery] = useState("");
 	const visibleConnectors = connectorDefinitions.filter((connector) =>
 		`${connector.name} ${connector.category} ${connector.description}`
@@ -1547,15 +1575,9 @@ function ConnectorManagementWorkspace(props: {
 	const connector =
 		connectorDefinitions.find((item) => item.providerId === providerId) ??
 		connectorDefinitions[0];
-	const currentRequest = props.accessRequests.find(
-		(item) =>
-			item.providerId === connector?.providerId &&
-			[
-				"SUBMITTED",
-				"IN_REVIEW",
-				"ROUTING_BLOCKED",
-				"APPROVED_PENDING_CONNECTION",
-			].includes(item.state),
+	const currentRequest = latestProviderRequest(
+		props.accessRequests,
+		connector?.providerId,
 	);
 	const outdatedRequest =
 		currentRequest?.connectReadiness?.status === "REAPPLY_REQUIRED";

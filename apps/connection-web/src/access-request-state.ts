@@ -5,6 +5,21 @@ import type {
 
 type Request = AccessRequestsResponse["requests"][number];
 
+export function latestProviderRequest(
+	requests: readonly Request[],
+	providerId: string | undefined,
+) {
+	return requests
+		.filter((request) => request.providerId === providerId)
+		.reduce<Request | undefined>(
+			(latest, request) =>
+				!latest || Date.parse(request.createdAt) > Date.parse(latest.createdAt)
+					? request
+					: latest,
+			undefined,
+		);
+}
+
 export function canConnectRequest(request: Request | null | undefined) {
 	return Boolean(
 		request &&

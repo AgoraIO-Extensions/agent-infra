@@ -96,6 +96,7 @@ function currentUpgradeOption(): AccessOptionsResponse["options"][number] {
 function renderPendingUpgrade(
 	request: AccessRequestsResponse["requests"][number],
 	choices: AccessOptionsResponse["options"],
+	history: AccessRequestsResponse["requests"] = [request],
 ) {
 	const client = new QueryClient({
 		defaultOptions: {
@@ -109,7 +110,7 @@ function renderPendingUpgrade(
 				onSubmitted={vi.fn()}
 				providerId={request.providerId}
 				renewalTarget={null}
-				requests={[request]}
+				requests={history}
 				requestsError={null}
 				requestsPending={false}
 				startProviderId=""
@@ -119,6 +120,58 @@ function renderPendingUpgrade(
 	);
 	return client;
 }
+
+it("new completed approval wins over older open approval, preserving explicit history selection", () => {
+	const old = pendingUpgradeRequest();
+	const connected = {
+		...old,
+		id: "request-new",
+		providerReleaseId: "datalego-v4",
+		capabilityProfileName: "当前能力包",
+		createdAt: "2026-10-02T00:00:00Z",
+		state: "CONSUMED",
+		connectReadiness: undefined,
+	};
+	const client = renderPendingUpgrade(
+		old,
+		[currentUpgradeOption()],
+		[old, connected],
+	);
+	expect(screen.getAllByText("已连接").length).toBeGreaterThan(0);
+	expect(screen.queryByRole("button", { name: "按新版重新申请" })).toBeNull();
+	const summary = screen.getByText("查看审批详情").closest("summary");
+	if (!summary) throw new Error("Missing progress summary");
+	fireEvent.click(summary);
+	const history = screen.getByLabelText("申请记录");
+	expect((history as HTMLSelectElement).value).toBe("request-new");
+	fireEvent.change(history, { target: { value: old.id } });
+	expect(screen.getByRole("button", { name: "按新版重新申请" })).toBeTruthy();
+	expect(api.cancelConnectionAccessRequest).not.toHaveBeenCalled();
+	client.clear();
+});
+
+it("a genuinely newer pending request remains visible after an earlier completed request", () => {
+	const old = pendingUpgradeRequest();
+	const connected = {
+		...old,
+		id: "request-connected",
+		state: "CONSUMED",
+		connectReadiness: undefined,
+	};
+	const pending = {
+		...old,
+		id: "request-pending",
+		createdAt: "2026-10-03T00:00:00Z",
+		state: "IN_REVIEW",
+		connectReadiness: undefined,
+	};
+	const client = renderPendingUpgrade(old, [], [connected, pending]);
+	expect((screen.getByLabelText("申请记录") as HTMLSelectElement).value).toBe(
+		pending.id,
+	);
+	expect(screen.getByText("审批中")).toBeTruthy();
+	client.clear();
+});
 
 it("valid historical approval waits for administrator when no current option exists", () => {
 	const request = pendingUpgradeRequest();
