@@ -19,6 +19,7 @@ import {
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
+	ModelEndpointV1Schema,
 	runtimeModelInjectionV1,
 	validateRuntimeModelProjectionV1,
 	validateRuntimeModelProjectionV4,
@@ -3217,7 +3218,9 @@ it("renders the original keyless V4 projection without reading static model cred
 	expect(projected.standardTemplateBinding).toEqual(
 		f.options.templateModelBindings[0],
 	);
-	expect(state.candidate.deployment?.secretRefs).toEqual([]);
+	expect(
+		validateAgentWorkloadDesiredV1(state.candidate.deployment).secretRefs,
+	).toEqual([]);
 	expect(decrypt).not.toHaveBeenCalled();
 	expect(validate).not.toHaveBeenCalled();
 	const name = workloadResourceNameV1(state.agentId);
@@ -3331,8 +3334,7 @@ it("rejects V4 admission for a non-Codex trusted image before static model acces
 it.each(["https://127.0.0.1/v1", "https://localhost/v1", "https://[::1]/v1"])(
 	"rejects non-DNS V4 endpoints at preflight before workload mutations: %s",
 	async (baseUrl) => {
-		const endpoint = catalogFixture().endpoints[0];
-		assert(endpoint);
+		const endpoint = ModelEndpointV1Schema.parse(catalogFixture().endpoints[0]);
 		const f = fixture(
 			{
 				runtimeModelVersion: 4,

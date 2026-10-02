@@ -43,7 +43,11 @@ export async function originalOperationBinding(
 	transaction: Transaction,
 	state: DispatchState,
 	claim: ConversationDispatchClaimV1,
-) {
+): Promise<{
+	runtimeSubmitProtocol: "v2" | "v4";
+	originalOperationDigest: string;
+	originalSubmitHostSessionRef: string | null;
+} | null> {
 	const key = executionKeyProjection(state.execution);
 	if (
 		key.executionSource !== undefined &&

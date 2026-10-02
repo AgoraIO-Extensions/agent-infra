@@ -697,6 +697,10 @@ importers:
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))
 
   packages/platform-core:
+    dependencies:
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../contracts
     devDependencies:
       '@agent-infra/config':
         specifier: workspace:*
