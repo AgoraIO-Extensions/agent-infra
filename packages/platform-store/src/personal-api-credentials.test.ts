@@ -99,6 +99,84 @@ afterAll(async () => {
 });
 
 describe("PostgreSQL personal API credential governance", () => {
+	it("pages only personal metadata, binds cursors, and persists necessary read audit", async () => {
+		const adapter = store();
+		const issued = await Promise.all(
+			["page.1", "page.2", "page.3"].map((key) =>
+				adapter.issue(nextContext(key), command),
+			),
+		);
+		const foreign = await adapter.issue(
+			nextContext("foreign", "user_bob"),
+			command,
+		);
+		const readContext = {
+			userId: context.userId,
+			requestId: "read.page",
+			traceId: "trace.page",
+		};
+		const first = await adapter.list(readContext, { limit: 2 });
+		const second = await adapter.list(readContext, {
+			limit: 2,
+			cursor: first.nextCursor,
+		});
+		expect(first.items).toHaveLength(2);
+		expect(second.items).toHaveLength(1);
+		expect(second.nextCursor).toBeNull();
+		expect(
+			[...first.items, ...second.items].map((item) => item.credentialId),
+		).toEqual(issued.map((item) => item.metadata.credentialId).sort());
+		for (const result of [...issued, foreign])
+			expect(JSON.stringify([first, second])).not.toContain(result.credential);
+		await expect(
+			adapter.list(
+				{ ...readContext, userId: "user_bob" },
+				{ limit: 2, cursor: first.nextCursor },
+			),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			adapter.list(readContext, { limit: 1, cursor: first.nextCursor }),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		const reads =
+			await client`select * from platform.audit_events where action='api.credential.metadata.read' and outcome='succeeded'`;
+		expect(reads).toHaveLength(2);
+		expect(reads.every((row) => row.actor_id === context.userId)).toBe(true);
+		await adapter.close();
+		expect((await store().list(readContext, { limit: 100 })).items).toEqual([
+			...first.items,
+			...second.items,
+		]);
+	});
+	it.each([false, true])(
+		"withholds metadata when required audit or commit fails (deferred=%s)",
+		async (deferred) => {
+			const adapter = store();
+			const issued = await adapter.issue(context, command);
+			await armAuditFailure(deferred);
+			await expect(
+				adapter.list(
+					{
+						userId: context.userId,
+						requestId: "list.fault",
+						traceId: context.traceId,
+					},
+					{},
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+			const [row] =
+				await client`select credential_hash, scopes from platform.platform_api_credentials where id=${issued.metadata.credentialId}`;
+			expect(row?.credential_hash).toBe(
+				createHash("sha256")
+					.update(issued.credential ?? "")
+					.digest("hex"),
+			);
+			expect(row?.scopes).toEqual(issued.metadata.scopes);
+			const [audits] =
+				await client`select count(*)::int as count from platform.audit_events where action='api.credential.metadata.read' and outcome='succeeded'`;
+			expect(audits?.count).toBe(0);
+		},
+	);
+
 	it("commits matching hash-only material once, survives restart, and never revives a revocation", async () => {
 		const firstStore = store();
 		const first = await firstStore.issue(context, command);

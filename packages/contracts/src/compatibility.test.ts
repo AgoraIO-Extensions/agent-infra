@@ -41,12 +41,32 @@ function restoreOldApiReadActions(input: unknown) {
 	for (const child of Object.values(value)) restoreOldApiReadActions(child);
 }
 
+// Preserve every historical guard test while testing the exact list addition separately.
+function restorePreCredentialManagementContract(value: {
+	paths: Record<string, Record<string, unknown>>;
+	components: { schemas: Record<string, { enum?: unknown[] }> };
+}) {
+	if (value.paths["/api/v2/me/api-credentials"])
+		delete value.paths["/api/v2/me/api-credentials"].get;
+	for (const name of [
+		"PersonalApiCredentialListQueryV1",
+		"PersonalApiCredentialPageV1",
+	])
+		delete value.components.schemas[name];
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) => action !== "api.credential.metadata.read",
+		);
+}
+
 // Keep the historical #1059/#1060 tests bound to their original contracts.
 // The separate #1089 tests below pin and mutate every removed addition.
 function restorePreRelayKeyContract(value: {
-	paths: Record<string, unknown>;
+	paths: Record<string, Record<string, unknown>>;
 	components: { schemas: Record<string, { enum?: unknown[] }> };
 }) {
+	restorePreCredentialManagementContract(value);
 	delete value.paths["/api/v2/me/relay-key"];
 	for (const name of [
 		"PersonalRelayKeyStateV1",
@@ -67,6 +87,90 @@ function restorePreRelayKeyContract(value: {
 }
 
 describe("contract compatibility command", () => {
+	it.each([1, 2])(
+		"admits only the exact personal list addition for browser V%s",
+		async (version) => {
+			const current = JSON.parse(
+				await readFile(
+					new URL(
+						`../artifacts/openapi/pilot-browser.v${version}.openapi.json`,
+						import.meta.url,
+					),
+					"utf8",
+				),
+			);
+			const previous = structuredClone(current);
+			restorePreCredentialManagementContract(previous);
+			const directory = await mkdtemp(
+				resolve(tmpdir(), "agent-infra-personal-list-compat-"),
+			);
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			try {
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				const mutations: ((document: typeof current) => void)[] =
+					version === 1
+						? [
+								(document) => {
+									document.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+										"unreviewed.action",
+									);
+								},
+								(document) => {
+									document.components.schemas.ScopedPlatformAuditActionV1.enum.splice(
+										0,
+										1,
+									);
+								},
+							]
+						: [
+								(document) => {
+									document.paths["/api/v2/me/api-credentials"].get.security = [
+										{},
+									];
+								},
+								(document) => {
+									document.paths["/api/v2/me/api-credentials"].get.parameters =
+										[];
+								},
+								(document) => {
+									document.components.schemas.PersonalApiCredentialPageV1.properties.items.maxItems = 200;
+								},
+								(document) => {
+									document.components.schemas.PersonalApiCredentialPageV1.properties.credential =
+										{ type: "string" };
+								},
+								(document) => {
+									document.paths["/api/v2/me/api-credentials"].post.security = [
+										{},
+									];
+								},
+								(document) => {
+									document.components.securitySchemes.PlatformSession = {};
+								},
+							];
+				mutations.push(
+					(document) => {
+						document.paths["/unreviewed"] = {};
+					},
+					(document) => {
+						document.components.schemas.Unreviewed = { type: "object" };
+					},
+				);
+				for (const mutate of mutations) {
+					const changed = structuredClone(current);
+					mutate(changed);
+					await writeFile(currentPath, JSON.stringify(changed));
+					expect(comparePaths(currentPath, previousPath).status).toBe(1);
+				}
+			} finally {
+				await rm(directory, { recursive: true, force: true });
+			}
+		},
+	);
+
 	it("admits only the exact own-application GET without changing prior contracts", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -224,6 +328,7 @@ describe("contract compatibility command", () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),
 		);
+		restorePreCredentialManagementContract(current);
 		const previous = structuredClone(current);
 		previous.components.schemas.ScopedPlatformAuditActionV1.enum =
 			previous.components.schemas.ScopedPlatformAuditActionV1.enum.filter(

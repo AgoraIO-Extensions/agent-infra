@@ -12,7 +12,7 @@ import {
 	type PersonalApiCredentialTransactionV1,
 	parsePersonalApiCredentialScopesV1,
 } from "@agent-infra/platform-core";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, gt, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -150,6 +150,24 @@ function transactionOperations(
 				.for("update")
 				.limit(1);
 			return row ? metadata(row) : null;
+		},
+		async listCredentials(userId, limit, afterId) {
+			const rows = await transaction
+				.select()
+				.from(platformApiCredentials)
+				.where(
+					and(
+						eq(platformApiCredentials.principalType, "user"),
+						eq(platformApiCredentials.principalId, userId),
+						afterId === null
+							? undefined
+							: gt(platformApiCredentials.id, afterId),
+					),
+				)
+				.orderBy(asc(platformApiCredentials.id))
+				.limit(limit)
+				.for("share");
+			return rows.map(metadata);
 		},
 		async insertCredential(input) {
 			const [row] = await transaction

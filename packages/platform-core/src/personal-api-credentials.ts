@@ -74,16 +74,29 @@ export interface PersonalApiCredentialAuditV1 {
 	readonly traceId: string;
 	readonly userId: string | null;
 	readonly credentialId: string | null;
-	readonly action: PersonalApiCredentialMutationV1;
+	readonly action:
+		| PersonalApiCredentialMutationV1
+		| "api.credential.metadata.read";
 	readonly outcome: "succeeded" | "failed" | "rejected";
 	readonly details: {
 		readonly reason?: PersonalApiCredentialErrorCodeV1;
 		readonly scopes?: readonly PersonalApiCredentialScopeV1[];
 		readonly expiresAt?: string | null;
+		readonly returnedCredentialIds?: readonly string[];
 	};
 }
 
-/** Operations available only inside one issuance/revocation transaction. */
+export interface PersonalApiCredentialListV1 {
+	readonly limit: number;
+	readonly cursor?: string;
+}
+
+export interface PersonalApiCredentialPageV1 {
+	readonly items: readonly PersonalApiCredentialMetadataV1[];
+	readonly nextCursor: string | null;
+}
+
+/** Operations available only inside one personal credential transaction. */
 export interface PersonalApiCredentialTransactionV1 {
 	lockUserDisabled(userId: string): Promise<boolean>;
 	databaseTime(): Promise<Date>;
@@ -100,6 +113,12 @@ export interface PersonalApiCredentialTransactionV1 {
 		credentialId: string,
 		userId: string,
 	): Promise<PersonalApiCredentialMetadataV1 | null>;
+	/** Personal owner predicate and deterministic ID ordering apply before projection. */
+	listCredentials(
+		userId: string,
+		limit: number,
+		afterId: string | null,
+	): Promise<readonly PersonalApiCredentialMetadataV1[]>;
 	insertCredential(input: {
 		readonly credentialId: string;
 		readonly userId: string;
@@ -140,10 +159,17 @@ export interface PersonalApiCredentialUseCaseV1 {
 		readonly metadata: PersonalApiCredentialMetadataV1;
 		readonly replayed: boolean;
 	}>;
+	list(
+		request: Pick<
+			PersonalApiCredentialRequestV1,
+			"userId" | "requestId" | "traceId"
+		>,
+		input: unknown,
+	): Promise<PersonalApiCredentialPageV1>;
 	/** The optional actor is supplied only after the HTTP identity boundary succeeds. */
 	recordRefusal(
 		metadata: Pick<PersonalApiCredentialRequestV1, "requestId" | "traceId">,
-		action: PersonalApiCredentialMutationV1,
+		action: PersonalApiCredentialMutationV1 | "api.credential.metadata.read",
 		reason: PersonalApiCredentialErrorCodeV1,
 		trustedUserId?: string,
 	): Promise<void>;
@@ -203,6 +229,71 @@ export function parsePersonalApiCredentialIssuanceV1(
 			scopes: parsePersonalApiCredentialScopesV1(value.scopes),
 			expiresAt: expiresAt === null ? null : new Date(expiresAt).toISOString(),
 		});
+	} catch {
+		throw new PersonalApiCredentialErrorV1("invalid_input");
+	}
+}
+
+function parsePersonalApiCredentialListV1(
+	input: unknown,
+): PersonalApiCredentialListV1 {
+	try {
+		const values = snapshotAgentManagementDataObject(input);
+		if (Object.keys(values).some((key) => key !== "limit" && key !== "cursor"))
+			throw new Error();
+		const limit = Object.hasOwn(values, "limit") ? values.limit : 20;
+		if (
+			typeof limit !== "number" ||
+			!Number.isInteger(limit) ||
+			limit < 1 ||
+			limit > 100
+		)
+			throw new Error();
+		if (
+			Object.hasOwn(values, "cursor") &&
+			(typeof values.cursor !== "string" ||
+				!/^[A-Za-z0-9_-]{1,4096}$/.test(values.cursor))
+		)
+			throw new Error();
+		return Object.freeze({
+			limit,
+			...(Object.hasOwn(values, "cursor")
+				? { cursor: values.cursor as string }
+				: {}),
+		});
+	} catch {
+		throw new PersonalApiCredentialErrorV1("invalid_input");
+	}
+}
+
+function cursorFingerprint(userId: string, limit: number): string {
+	return createHash("sha256")
+		.update(JSON.stringify(["personal_api_credential", userId, limit]))
+		.digest("hex");
+}
+
+function decodePersonalCredentialCursor(
+	input: PersonalApiCredentialListV1,
+	userId: string,
+): string | null {
+	if (input.cursor === undefined) return null;
+	try {
+		const bytes = Buffer.from(input.cursor, "base64url");
+		if (bytes.toString("base64url") !== input.cursor) throw new Error();
+		const cursor = snapshotAgentManagementDataObject(
+			JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+		);
+		requireAgentManagementExactKeys(cursor, [
+			"version",
+			"fingerprint",
+			"credentialId",
+		]);
+		if (
+			cursor.version !== 1 ||
+			cursor.fingerprint !== cursorFingerprint(userId, input.limit)
+		)
+			throw new Error();
+		return parsePersonalApiCredentialIdV1(cursor.credentialId);
 	} catch {
 		throw new PersonalApiCredentialErrorV1("invalid_input");
 	}
@@ -332,7 +423,7 @@ export function createPersonalApiCredentialUseCaseV1(dependencies: {
 	const port = dependencies.transaction;
 	async function refusal(
 		request: Pick<PersonalApiCredentialRequestV1, "requestId" | "traceId">,
-		action: PersonalApiCredentialMutationV1,
+		action: PersonalApiCredentialMutationV1 | "api.credential.metadata.read",
 		reason: PersonalApiCredentialErrorCodeV1,
 		evidence: { userId: string | null; credentialId: string | null },
 	): Promise<void> {
@@ -351,7 +442,7 @@ export function createPersonalApiCredentialUseCaseV1(dependencies: {
 	}
 	async function execute<T>(
 		request: PersonalApiCredentialRequestV1,
-		action: PersonalApiCredentialMutationV1,
+		action: PersonalApiCredentialMutationV1 | "api.credential.metadata.read",
 		work: (
 			transaction: PersonalApiCredentialTransactionV1,
 			ownCredential: (id: string) => Promise<PersonalApiCredentialMetadataV1>,
@@ -529,6 +620,60 @@ export function createPersonalApiCredentialUseCaseV1(dependencies: {
 						metadata,
 					);
 					return { result: { metadata, replayed: false } };
+				},
+			);
+		},
+		async list(context, input) {
+			const values = snapshotAgentManagementDataObject(context);
+			requireAgentManagementExactKeys(values, [
+				"userId",
+				"requestId",
+				"traceId",
+			]);
+			const request = parsePersonalApiCredentialRequestV1({
+				...values,
+				idempotencyKey: "unkeyed",
+			});
+			const snapshot = snapshotCommand(() =>
+				parsePersonalApiCredentialListV1(input),
+			);
+			return execute(
+				request,
+				"api.credential.metadata.read",
+				async (transaction) => {
+					if (snapshot instanceof PersonalApiCredentialErrorV1) throw snapshot;
+					const rows = await transaction.listCredentials(
+						request.userId,
+						snapshot.limit + 1,
+						decodePersonalCredentialCursor(snapshot, request.userId),
+					);
+					const items = rows.slice(0, snapshot.limit);
+					const last = items.at(-1);
+					const nextCursor =
+						rows.length > snapshot.limit && last
+							? Buffer.from(
+									JSON.stringify({
+										version: 1,
+										fingerprint: cursorFingerprint(
+											request.userId,
+											snapshot.limit,
+										),
+										credentialId: last.credentialId,
+									}),
+								).toString("base64url")
+							: null;
+					await transaction.recordAudit({
+						requestId: request.requestId,
+						traceId: request.traceId,
+						userId: request.userId,
+						credentialId: null,
+						action: "api.credential.metadata.read",
+						outcome: "succeeded",
+						details: {
+							returnedCredentialIds: items.map((item) => item.credentialId),
+						},
+					});
+					return { result: { items, nextCursor } };
 				},
 			);
 		},
