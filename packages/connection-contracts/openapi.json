@@ -2807,6 +2807,7 @@
 					"disclaimers"
 				],
 				"properties": {
+					"availableForNewConnections": { "type": "boolean" },
 					"providerId": { "type": "string" },
 					"providerReleaseId": { "type": "string" },
 					"actions": {
@@ -2929,6 +2930,18 @@
 					"stages"
 				],
 				"properties": {
+					"connectReadiness": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["status", "targetProviderReleaseId"],
+						"properties": {
+							"status": {
+								"type": "string",
+								"enum": ["READY", "REAPPLY_REQUIRED"]
+							},
+							"targetProviderReleaseId": { "type": ["string", "null"] }
+						}
+					},
 					"id": { "type": "string" },
 					"providerId": { "type": "string" },
 					"providerReleaseId": { "type": "string" },

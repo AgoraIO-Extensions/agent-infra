@@ -37,6 +37,236 @@ afterEach(() => {
 	vi.clearAllMocks();
 });
 
+function pendingUpgradeRequest(): AccessRequestsResponse["requests"][number] {
+	return {
+		id: "request-old",
+		providerId: "datalego",
+		providerReleaseId: "datalego-v3",
+		capabilityProfileName: "旧能力包",
+		state: "APPROVED_PENDING_CONNECTION",
+		renewal: false,
+		connectExpiresAt: "2099-10-08T00:00:00Z",
+		expiresAt: "2099-10-08T00:00:00Z",
+		createdAt: "2026-10-01T00:00:00Z",
+		currentStageOrdinal: null,
+		revision: "1",
+		purpose: "调查发布失败",
+		duration: { kind: "FINITE", days: 30 },
+		stages: [],
+		connectReadiness: {
+			status: "REAPPLY_REQUIRED",
+			targetProviderReleaseId: "datalego-v4",
+		},
+	};
+}
+
+function currentUpgradeOption(): AccessOptionsResponse["options"][number] {
+	return {
+		providerId: "datalego",
+		providerReleaseId: "datalego-v4",
+		capabilityProfileId: "profile-v4",
+		capabilityProfileName: "新版只读能力包",
+		effectCeiling: "READ",
+		policyVersionId: "policy-v4",
+		presentationId: "presentation-v4",
+		actions: [
+			{
+				id: "datalego.get_current_user@v4",
+				name: "datalego.get_current_user",
+				description: "读取身份",
+				effect: "READ",
+			},
+		],
+		requiredScopes: ["read"],
+		durations: [
+			{ kind: "FINITE", days: 7 },
+			{ kind: "FINITE", days: 30 },
+		],
+		disclaimers: [
+			{
+				id: "disclaimer-v4",
+				content: "我已阅读新版范围",
+				contentSha256: "a".repeat(64),
+				locale: "zh-CN",
+			},
+		],
+	};
+}
+
+function renderPendingUpgrade(
+	request: AccessRequestsResponse["requests"][number],
+	choices: AccessOptionsResponse["options"],
+) {
+	const client = new QueryClient({
+		defaultOptions: {
+			queries: { retry: false, staleTime: Number.POSITIVE_INFINITY },
+		},
+	});
+	client.setQueryData(["connection-access-options"], { options: choices });
+	render(
+		<QueryClientProvider client={client}>
+			<AccessRequestPanel
+				onSubmitted={vi.fn()}
+				providerId={request.providerId}
+				renewalTarget={null}
+				requests={[request]}
+				requestsError={null}
+				requestsPending={false}
+				startProviderId=""
+				startSignal={0}
+			/>
+		</QueryClientProvider>,
+	);
+	return client;
+}
+
+it("valid historical approval waits for administrator when no current option exists", () => {
+	const request = pendingUpgradeRequest();
+	const oldOption = {
+		...currentUpgradeOption(),
+		providerReleaseId: "datalego-v3",
+	};
+	const client = renderPendingUpgrade(request, [oldOption]);
+	expect(screen.getByText(/新版暂未开放申请/)).toBeTruthy();
+	expect(screen.getByText("待连接")).toBeTruthy();
+	expect(screen.queryByRole("link", { name: "连接账号" })).toBeNull();
+	expect(screen.queryByRole("button", { name: "按新版重新申请" })).toBeNull();
+	expect(api.cancelConnectionAccessRequest).not.toHaveBeenCalled();
+	expect(request.state).toBe("APPROVED_PENDING_CONNECTION");
+	client.clear();
+});
+
+it("administrator publishing current options restores reapply without invalidating approval", async () => {
+	const request = pendingUpgradeRequest();
+	const client = renderPendingUpgrade(request, []);
+	expect(screen.getByText(/新版暂未开放申请/)).toBeTruthy();
+	await act(async () => {
+		client.setQueryData(["connection-access-options"], {
+			options: [currentUpgradeOption()],
+		});
+	});
+	expect(
+		await screen.findByRole("button", { name: "按新版重新申请" }),
+	).toBeTruthy();
+	expect(request.state).toBe("APPROVED_PENDING_CONNECTION");
+	expect(api.cancelConnectionAccessRequest).not.toHaveBeenCalled();
+	client.clear();
+});
+
+it("reapply keeps purpose and matching duration but requires current scope and disclaimer confirmation", async () => {
+	const client = renderPendingUpgrade(pendingUpgradeRequest(), [
+		currentUpgradeOption(),
+	]);
+	fireEvent.click(screen.getByRole("button", { name: "按新版重新申请" }));
+	expect(api.submitConnectionAccessRequest).not.toHaveBeenCalled();
+	fireEvent.click(screen.getByRole("button", { name: /新版只读能力包/ }));
+	expect((screen.getByLabelText("用途") as HTMLTextAreaElement).value).toBe(
+		"调查发布失败",
+	);
+	expect((screen.getByLabelText("申请时长") as HTMLSelectElement).value).toBe(
+		"1",
+	);
+	expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(
+		false,
+	);
+	expect(
+		(screen.getByRole("button", { name: "提交申请" }) as HTMLButtonElement)
+			.disabled,
+	).toBe(true);
+	fireEvent.click(screen.getByRole("checkbox"));
+	fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+	await waitFor(() =>
+		expect(api.submitConnectionAccessRequest).toHaveBeenCalledOnce(),
+	);
+	expect(api.submitConnectionAccessRequest.mock.calls[0]?.[0]).toMatchObject({
+		providerReleaseId: "datalego-v4",
+		purpose: "调查发布失败",
+		duration: { kind: "FINITE", days: 30 },
+		disclaimerConfirmations: [{ disclaimerVersionId: "disclaimer-v4" }],
+	});
+	expect(api.cancelConnectionAccessRequest).not.toHaveBeenCalled();
+	client.clear();
+});
+
+it("reapply does not substitute a duration that the applicant never selected", () => {
+	const option = {
+		...currentUpgradeOption(),
+		durations: [{ kind: "FINITE" as const, days: 7 }],
+	};
+	const client = renderPendingUpgrade(pendingUpgradeRequest(), [option]);
+	fireEvent.click(screen.getByRole("button", { name: "按新版重新申请" }));
+	fireEvent.click(screen.getByRole("button", { name: /新版只读能力包/ }));
+	expect((screen.getByLabelText("申请时长") as HTMLSelectElement).value).toBe(
+		"-1",
+	);
+	fireEvent.click(screen.getByRole("checkbox"));
+	expect(
+		(screen.getByRole("button", { name: "提交申请" }) as HTMLButtonElement)
+			.disabled,
+	).toBe(true);
+	client.clear();
+});
+
+it("a compatible request continues to connect under the original approval", () => {
+	const request = pendingUpgradeRequest();
+	request.connectReadiness = {
+		status: "READY",
+		targetProviderReleaseId: "datalego-v4",
+	};
+	const client = renderPendingUpgrade(request, []);
+	expect(
+		screen.getByRole("link", { name: "连接账号" }).getAttribute("href"),
+	).toContain("accessRequestId=request-old");
+	expect(screen.getByText("可连接")).toBeTruthy();
+	expect(screen.queryByRole("button", { name: "按新版重新申请" })).toBeNull();
+	client.clear();
+});
+
+it.each([false, true])(
+	"old policy is hidden for new connections but retained for renewal (%s)",
+	(renewal) => {
+		const option = {
+			...currentUpgradeOption(),
+			providerReleaseId: "datalego-v3",
+			availableForNewConnections: false,
+		};
+		const client = new QueryClient({
+			defaultOptions: {
+				queries: { retry: false, staleTime: Number.POSITIVE_INFINITY },
+			},
+		});
+		client.setQueryData(["connection-access-options"], { options: [option] });
+		render(
+			<QueryClientProvider client={client}>
+				<AccessRequestPanel
+					onSubmitted={vi.fn()}
+					providerId="datalego"
+					renewalTarget={
+						renewal
+							? {
+									id: "existing-access",
+									capabilityProfileId: option.capabilityProfileId,
+									providerReleaseId: option.providerReleaseId,
+								}
+							: null
+					}
+					requests={[]}
+					requestsError={null}
+					requestsPending={false}
+					startProviderId="datalego"
+					startSignal={1}
+				/>
+			</QueryClientProvider>,
+		);
+		if (renewal)
+			expect(
+				screen.getByRole("button", { name: /新版只读能力包/ }),
+			).toBeTruthy();
+		else expect(screen.getByText("当前没有可申请的连接能力。")).toBeTruthy();
+		client.clear();
+	},
+);
+
 it.each(["CONSUMED", "IN_REVIEW", "APPROVED_PENDING_CONNECTION"] as const)(
 	"only collapses completed progress (%s), retaining details and actions",
 	async (state) => {

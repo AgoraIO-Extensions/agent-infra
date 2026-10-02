@@ -266,6 +266,7 @@ export type AccessConnectReady = {
 };
 
 export type AccessOption = {
+    availableForNewConnections?: boolean;
     providerId: string;
     providerReleaseId: string;
     actions: Array<{
@@ -313,6 +314,10 @@ export type AccessRequestStage = {
 export type AccessRequest = AccessRequestFields;
 
 export type AccessRequestFields = {
+    connectReadiness?: {
+        status: 'READY' | 'REAPPLY_REQUIRED';
+        targetProviderReleaseId: string | null;
+    };
     id: string;
     providerId: string;
     providerReleaseId: string;

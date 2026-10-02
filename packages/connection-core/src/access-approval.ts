@@ -65,6 +65,7 @@ export type ApprovalRerouteInput = {
 };
 
 export type AccessOption = {
+	availableForNewConnections?: boolean;
 	actions: readonly {
 		id: string;
 		name: string;
@@ -96,6 +97,10 @@ export type AccessConnectReady = {
 };
 
 export type AccessRequestProjection = {
+	connectReadiness?: {
+		status: "READY" | "REAPPLY_REQUIRED";
+		targetProviderReleaseId: string | null;
+	};
 	capabilityProfileName: string;
 	connectExpiresAt: string | null;
 	createdAt: string;

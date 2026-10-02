@@ -26,7 +26,10 @@ import {
 	useRef,
 	useState,
 } from "react";
-
+import {
+	canConnectRequest,
+	reapplicationOptions,
+} from "../access-request-state";
 import { ConnectionApiError, connectionApi } from "../api";
 import { Button } from "../components/ui/button";
 import {
@@ -112,6 +115,7 @@ export function ConnectionsPage() {
 	const requestReady = Boolean(
 		approvedRequest.data?.id === accessRequestId &&
 			approvedRequest.data?.state === "APPROVED_PENDING_CONNECTION" &&
+			approvedRequest.data?.connectReadiness?.status !== "REAPPLY_REQUIRED" &&
 			approvedRequest.data?.connectExpiresAt &&
 			Date.parse(approvedRequest.data.connectExpiresAt) > Date.now() &&
 			approvedRequest.data?.providerId === approvedProvider,
@@ -197,6 +201,8 @@ export function ConnectionsPage() {
 		if (!["connect", "reauthorize"].includes(search.get("intent") ?? ""))
 			return;
 		const provider = search.get("provider");
+		if (approvedRequest.data?.connectReadiness?.status === "REAPPLY_REQUIRED")
+			return;
 		if (
 			accessRequestId &&
 			(approvedRequest.isPending ||
@@ -243,6 +249,7 @@ export function ConnectionsPage() {
 		accessRequestId,
 		approvedAccessRequestId,
 		approvedRequest.isPending,
+		approvedRequest.data?.connectReadiness?.status,
 		requestReady,
 		prepareConnect.isSuccess,
 		prepareConnect.isError,
@@ -979,6 +986,10 @@ export function ConnectionsPage() {
 						onRequestSubmitted={() => {
 							setRenewalTarget(null);
 							setRenewalProviderId("");
+							const url = new URL(window.location.href);
+							url.searchParams.delete("accessRequestId");
+							url.searchParams.delete("intent");
+							window.history.replaceState(null, "", url);
 						}}
 						onDisconnect={(connectionId) => {
 							const connection = data.connections.find(
@@ -1503,6 +1514,10 @@ function ConnectorManagementWorkspace(props: {
 	showHistory: boolean;
 	upgradingConnectionId: string | null;
 }) {
+	const accessOptions = useQuery({
+		queryKey: ["connection-access-options"],
+		queryFn: connectionApi.getConnectionAccessOptions,
+	});
 	const activeConnections = props.connections.filter(
 		(connection) => connection.status === "ACTIVE",
 	);
@@ -1542,6 +1557,11 @@ function ConnectorManagementWorkspace(props: {
 				"APPROVED_PENDING_CONNECTION",
 			].includes(item.state),
 	);
+	const outdatedRequest =
+		currentRequest?.connectReadiness?.status === "REAPPLY_REQUIRED";
+	const canReapply =
+		reapplicationOptions(currentRequest, accessOptions.data?.options ?? [])
+			.length > 0;
 	const accounts = props.connections
 		.filter(
 			(connection) =>
@@ -1625,9 +1645,20 @@ function ConnectorManagementWorkspace(props: {
 						<h2>{connector?.name}</h2>
 						<p>{connector?.description}</p>
 					</div>
-					{currentRequest?.state === "APPROVED_PENDING_CONNECTION" &&
-					currentRequest.connectExpiresAt &&
-					Date.parse(currentRequest.connectExpiresAt) > Date.now() ? (
+					{outdatedRequest ? (
+						<Button
+							disabled={accessOptions.isPending || !canReapply}
+							onClick={() => connector && props.onConnect(connector.providerId)}
+						>
+							{accessOptions.isPending
+								? "正在检查新版申请…"
+								: accessOptions.isError
+									? "申请选项暂不可用"
+									: canReapply
+										? "按新版重新申请"
+										: "等待管理员开放新版"}
+						</Button>
+					) : currentRequest && canConnectRequest(currentRequest) ? (
 						<a
 							className="button button-primary"
 							href={`/connection/connections?provider=${encodeURIComponent(providerId)}&intent=connect&accessRequestId=${encodeURIComponent(currentRequest.id)}`}

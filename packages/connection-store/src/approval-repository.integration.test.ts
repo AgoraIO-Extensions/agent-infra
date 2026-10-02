@@ -1162,38 +1162,32 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						principal_id, role, status, grant_source
 					) VALUES (${adminId}, 'CONNECTION_ADMIN', 'ACTIVE', 'BOOTSTRAP')
 				`;
-				await sql`
-					INSERT INTO connection_provider_releases (
-						id, provider, source_commit, deployment_profile, auth_profile,
-						executor_digest, catalog_checksum, status
-					) VALUES (
-						${releaseId}, ${`approval-provider-${suffix}`}, ${suffix},
-						'{}'::jsonb, '{}'::jsonb, ${`sha256:${"a".repeat(64)}`},
-						${`connection-json-v1:${"b".repeat(64)}`}, 'PUBLISHED'
-					)
-				`;
-				await sql`
-					INSERT INTO connection_action_versions (
-						id, provider_release_id, name, description, effect,
-						input_schema, required_scopes, status
-					) VALUES (
-						${actionId}, ${releaseId}, 'approval-provider.read',
-						'Approval integration read', 'READ',
-						'{"type":"object","required":[]}'::jsonb,
-						'["approval.read"]'::jsonb, 'PUBLISHED'
-					)
-				`;
-				await sql`
-					INSERT INTO connection_action_versions (
-						id, provider_release_id, name, description, effect,
-						input_schema, required_scopes, status
-					) VALUES (
-						${writeActionId}, ${releaseId}, 'approval-provider.write',
-						'Approval integration write', 'WRITE',
-						'{"type":"object","required":[]}'::jsonb,
-						'["approval.read"]'::jsonb, 'PUBLISHED'
-					)
-				`;
+				await connections.publishProviderCatalog({
+					provider: `approval-provider-${suffix}`,
+					providerReleaseId: releaseId,
+					sourceCommit: suffix,
+					deploymentProfile: {},
+					authProfile: {},
+					executorDigest: `sha256:${"a".repeat(64)}`,
+					actions: [
+						{
+							id: actionId,
+							name: "approval-provider.read",
+							description: "Approval integration read",
+							effect: "READ",
+							inputSchema: { type: "object", required: [] },
+							requiredScopes: ["approval.read"],
+						},
+						{
+							id: writeActionId,
+							name: "approval-provider.write",
+							description: "Approval integration write",
+							effect: "WRITE",
+							inputSchema: { type: "object", required: [] },
+							requiredScopes: ["approval.read"],
+						},
+					],
+				});
 				await repository.createCapabilityProfileDraft({
 					actionVersionIds: [actionId],
 					id: profileId,

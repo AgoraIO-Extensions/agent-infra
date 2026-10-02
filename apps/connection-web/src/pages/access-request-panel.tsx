@@ -4,8 +4,11 @@ import type {
 } from "@agent-infra/connection-contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Plus, X } from "lucide-react";
-import { useEffect, useState } from "react";
-
+import { useEffect, useRef, useState } from "react";
+import {
+	canConnectRequest,
+	reapplicationOptions,
+} from "../access-request-state";
 import { connectionApi } from "../api";
 import { Button } from "../components/ui/button";
 import { PageError } from "../shell";
@@ -63,17 +66,32 @@ export function AccessRequestPanel(props: {
 	const options = useQuery({
 		queryKey: ["connection-access-options"],
 		queryFn: connectionApi.getConnectionAccessOptions,
+		refetchInterval: props.requests.some(
+			(request) =>
+				request.providerId === props.providerId &&
+				request.connectReadiness?.status === "REAPPLY_REQUIRED",
+		)
+			? 30_000
+			: false,
 	});
 	const [showNew, setShowNew] = useState(false);
+	const handledStartSignal = useRef(0);
 	const [selectedRequestId, setSelectedRequestId] = useState("");
 	const [optionPolicyId, setOptionPolicyId] = useState<string | null>(null);
 	const [purpose, setPurpose] = useState("");
 	const [durationIndex, setDurationIndex] = useState(0);
 	const [confirmed, setConfirmed] = useState<string[]>([]);
+	const [reapplySource, setReapplySource] = useState<
+		AccessRequestsResponse["requests"][number] | null
+	>(null);
 	const providerOptions =
 		options.data?.options.filter(
 			(item) =>
 				item.providerId === props.providerId &&
+				(props.renewalTarget || item.availableForNewConnections !== false) &&
+				(!reapplySource ||
+					item.providerReleaseId ===
+						reapplySource.connectReadiness?.targetProviderReleaseId) &&
 				(!props.targetProviderReleaseId ||
 					item.providerReleaseId === props.targetProviderReleaseId) &&
 				(!props.renewalTarget ||
@@ -92,13 +110,12 @@ export function AccessRequestPanel(props: {
 		: (providerRequests.find((item) => item.id === selectedRequestId) ??
 			openRequest ??
 			providerRequests[0]);
-	const canConnect =
-		!selectedRequest?.renewal &&
-		selectedRequest?.state === "APPROVED_PENDING_CONNECTION" &&
-		Boolean(
-			selectedRequest.connectExpiresAt &&
-				Date.parse(selectedRequest.connectExpiresAt) > Date.now(),
-		);
+	const canConnect = canConnectRequest(selectedRequest);
+	const outdated =
+		selectedRequest?.connectReadiness?.status === "REAPPLY_REQUIRED";
+	const canReapply =
+		reapplicationOptions(selectedRequest, options.data?.options ?? []).length >
+		0;
 	const finalStepStatus = selectedRequest
 		? ({
 				CANCELED: "已取消",
@@ -109,13 +126,21 @@ export function AccessRequestPanel(props: {
 				? selectedRequest.state === "CONSUMED"
 					? "已续期"
 					: "等待审批"
-				: canConnect
-					? "可连接"
-					: selectedRequest.state === "APPROVED_PENDING_CONNECTION"
-						? "连接窗口已过期"
-						: selectedRequest.state === "CONSUMED"
-							? "已连接"
-							: "等待审批"))
+				: outdated
+					? options.isPending
+						? "正在检查新版申请…"
+						: options.isError
+							? "申请选项暂不可用"
+							: canReapply
+								? "需要重新申请"
+								: "等待管理员开放新版"
+					: canConnect
+						? "可连接"
+						: selectedRequest.state === "APPROVED_PENDING_CONNECTION"
+							? "连接窗口已过期"
+							: selectedRequest.state === "CONSUMED"
+								? "已连接"
+								: "等待审批"))
 		: "";
 	const selectedOption = providerOptions.find(
 		(item) => item.policyVersionId === optionPolicyId,
@@ -133,6 +158,7 @@ export function AccessRequestPanel(props: {
 					})
 				: connectionApi.submitConnectionAccessRequest(body),
 		onSuccess: async (created) => {
+			setReapplySource(null);
 			setShowNew(false);
 			setSelectedRequestId(created.requestId);
 			setOptionPolicyId(null);
@@ -151,17 +177,47 @@ export function AccessRequestPanel(props: {
 			client.invalidateQueries({ queryKey: ["connection-access-requests"] }),
 	});
 	useEffect(() => {
-		if (!props.startSignal || props.startProviderId !== props.providerId)
+		if (
+			!props.startSignal ||
+			props.startProviderId !== props.providerId ||
+			handledStartSignal.current === props.startSignal
+		)
 			return;
+		handledStartSignal.current = props.startSignal;
 		setShowNew(true);
 		setOptionPolicyId(null);
-	}, [props.providerId, props.startProviderId, props.startSignal]);
+		const request = props.requests.find(
+			(item) =>
+				item.providerId === props.providerId &&
+				item.state === "APPROVED_PENDING_CONNECTION" &&
+				item.connectReadiness?.status === "REAPPLY_REQUIRED",
+		);
+		setReapplySource(request ?? null);
+		if (request) setPurpose(request.purpose);
+		setConfirmed([]);
+	}, [
+		props.providerId,
+		props.requests,
+		props.startProviderId,
+		props.startSignal,
+	]);
 
 	function start(index: number) {
 		setShowNew(true);
 		setOptionPolicyId(providerOptions[index]?.policyVersionId ?? null);
-		setDurationIndex(0);
-		setPurpose("");
+		const option = providerOptions[index];
+		const previousDuration = reapplySource?.duration;
+		setDurationIndex(
+			previousDuration
+				? (option?.durations.findIndex((duration) =>
+						duration.kind === "PERMANENT"
+							? previousDuration.kind === "PERMANENT"
+							: previousDuration.kind === "FINITE" &&
+								duration.days === previousDuration.days,
+					) ?? -1)
+				: 0,
+		);
+		setPurpose(reapplySource?.purpose ?? "");
 		setConfirmed([]);
 	}
 
@@ -322,7 +378,33 @@ export function AccessRequestPanel(props: {
 						</ol>
 					</details>
 					<div className="approval-panel-actions">
-						{canConnect ? (
+						{outdated ? (
+							<>
+								<p role="status">
+									{options.isPending
+										? "正在检查新版申请…"
+										: options.isError
+											? "新版申请选项暂不可用，请稍后重试。"
+											: canReapply
+												? "连接器已更新，原申请与审批记录保留，请按新版重新申请。"
+												: "新版暂未开放申请，请联系管理员发布能力包和审批策略。原申请与审批记录保留。"}
+								</p>
+								{canReapply ? (
+									<Button
+										variant="secondary"
+										onClick={() => {
+											setReapplySource(selectedRequest);
+											setPurpose(selectedRequest.purpose);
+											setConfirmed([]);
+											setOptionPolicyId(null);
+											setShowNew(true);
+										}}
+									>
+										按新版重新申请
+									</Button>
+								) : null}
+							</>
+						) : canConnect ? (
 							<a
 								className="button button-primary"
 								href={`/connection/connections?provider=${encodeURIComponent(props.providerId)}&intent=connect&accessRequestId=${encodeURIComponent(selectedRequest.id)}`}
@@ -411,6 +493,9 @@ export function AccessRequestPanel(props: {
 									setDurationIndex(Number(event.target.value))
 								}
 							>
+								{durationIndex < 0 ? (
+									<option value={-1}>请选择新版允许的申请时长</option>
+								) : null}
 								{durations?.map((duration, index) => (
 									<option key={index} value={index}>
 										{duration.kind === "PERMANENT"
@@ -450,6 +535,7 @@ export function AccessRequestPanel(props: {
 							<Button
 								disabled={
 									submit.isPending ||
+									!durations?.[durationIndex] ||
 									!selectedOption.actions?.length ||
 									!purpose.trim() ||
 									!selectedOption.disclaimers.every((item) =>
