@@ -302,10 +302,10 @@ jobs:
               and .Labels["org.opencontainers.image.revision"] == $head
               and .Labels["agent-infra.lockfile-sha256"] == $lock)
           ' "$evidence/image.json"
-          timeout --signal=TERM --kill-after=5s 60s docker run --rm --pull=never \
+          timeout --signal=TERM --kill-after=5s 60s docker run --rm --pull=never --interactive \
             --name "$static_container" --network=none --read-only \
             --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,size=16m,mode=1777 \
-            --entrypoint /bin/sh "$web_image" -ec '
+            --entrypoint /bin/sh "$web_image" -se <<'WEB_SMOKE' 2>&1 | tee "$evidence/static.log"
               test "$(id -u)" -ne 0
               printf "effective_uid=%s\n" "$(id -u)"
               apk info -e -v pcre2=10.49-r0
@@ -342,7 +342,7 @@ jobs:
               if wget -S -O /tmp/missing http://127.0.0.1:8080/assets/1175-missing.js 2>/tmp/missing.headers; then exit 1; fi
               grep -E "HTTP/[0-9.]+ 404" /tmp/missing.headers
               echo passed_nonroot_static_asset_and_fallback
-            ' 2>&1 | tee "$evidence/static.log"
+          WEB_SMOKE
           fixture=$(mktemp -d "$RUNNER_TEMP/web-tls-fixture.XXXXXX")
           openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
             -keyout "$fixture/tls.key" -out "$fixture/tls.crt" 2>/dev/null
