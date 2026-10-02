@@ -128,6 +128,7 @@ describe("platform-core package surface", () => {
 			"projectPlatformAuditQuerySummaryV1",
 			"projectPlatformOperationAuditV1",
 			"projectPlatformTaskAuditSummaryV1",
+			"requireApiAuditCredentialIdentityV1",
 			"requireConversationOperationSuccessorV2",
 			"requirePersonalApiCredentialFutureExpiryV1",
 			"requirePersonalApiTaskBindingV1",

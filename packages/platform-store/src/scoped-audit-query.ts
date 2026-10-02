@@ -4,6 +4,8 @@ import {
 	type ApiPrincipalV1,
 	type ConversationOperationFactV2,
 	captureTaskAuthorizationBoundaryV1,
+	type PersonalApiCredentialErrorCodeV1,
+	PersonalApiCredentialErrorV1,
 	type PlatformAuditQueryActionV1,
 	type PlatformAuditQueryDenialReasonV1,
 	type PlatformAuditQueryInputV1,
@@ -22,11 +24,12 @@ import {
 	projectPlatformTaskAuditSummaryV1,
 	requirePlatformExecutionAuditBindingV1,
 	type TaskApiAuditInputV1,
-	type TaskAuthorizationBoundaryV1,
+	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { readAgentManagementState } from "./agent-management.js";
+import { resolveApiAuditCredentialIdentityV1 } from "./api-audit-identity.js";
 import {
 	type AuditRow,
 	decodePlatformAuditRowV1,
@@ -310,6 +313,61 @@ const executionActions = new Set([
 	"audit.query.failed",
 ]);
 
+function credentialMetadataSummary(
+	row: Row,
+	scope: PlatformAuditQueryScopeV1,
+): string {
+	if (
+		scope.kind !== "administrator" ||
+		row.source !== "platform" ||
+		row.targetType !== "api_credential" ||
+		row.targetId !== "unknown" ||
+		row.agentId !== null ||
+		row.executionId !== null ||
+		row.conversationId !== null ||
+		row.requestId === null ||
+		row.result !== row.outcome ||
+		!(
+			row.actorType === "user" ||
+			(row.actorType === "unknown" && row.actorId === "unknown")
+		) ||
+		typeof row.details !== "object" ||
+		row.details === null ||
+		Array.isArray(row.details)
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	const details = row.details as Record<string, unknown>;
+	if (row.outcome === "succeeded") {
+		const ids = details.returnedCredentialIds;
+		if (
+			row.actorType !== "user" ||
+			Object.keys(details).length !== 1 ||
+			!Array.isArray(ids) ||
+			ids.length > 100 ||
+			!ids.every(boundedText) ||
+			new Set(ids).size !== ids.length
+		)
+			throw new PlatformAuditScopeErrorV1("unavailable");
+		return row.action;
+	}
+	if (
+		Object.keys(details).length !== 1 ||
+		!(
+			[
+				"invalid_input",
+				"authentication_required",
+				"forbidden",
+				"not_found",
+				"idempotency_conflict",
+				"unavailable",
+			] satisfies readonly PersonalApiCredentialErrorCodeV1[]
+		).some((reason) => reason === details.reason) ||
+		row.outcome !== (details.reason === "unavailable" ? "failed" : "rejected")
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	return `${row.action}: reason=${details.reason}`;
+}
+
 function project(
 	row: Row,
 	scope: PlatformAuditQueryScopeV1,
@@ -354,9 +412,14 @@ function project(
 		)
 	)
 		deny();
-	const legacy = executionActions.has(row.action)
-		? null
-		: decodePlatformAuditRowV1(row);
+	const metadataSummary =
+		row.action === "api.credential.metadata.read"
+			? credentialMetadataSummary(row, scope)
+			: null;
+	const legacy =
+		executionActions.has(row.action) || metadataSummary !== null
+			? null
+			: decodePlatformAuditRowV1(row);
 	// The legacy decoder has already validated exact Task API metadata and its
 	// agreement with the trusted actor, target and result columns.
 	const taskDetails =
@@ -432,21 +495,23 @@ function project(
 			row.executionId,
 			binding?.authorizationRecordId ?? null,
 		].every((value) => value === null || boundedText(value)) ||
-		![
-			"agent_application",
-			"agent",
-			"secret",
-			"secret_key",
-			"grant",
-			"unknown",
-			"conversation",
-			"execution",
-			"configuration",
-		].includes(row.targetType)
+		(metadataSummary === null &&
+			![
+				"agent_application",
+				"agent",
+				"secret",
+				"secret_key",
+				"grant",
+				"unknown",
+				"conversation",
+				"execution",
+				"configuration",
+			].includes(row.targetType))
 	)
 		throw new PlatformAuditScopeErrorV1("unavailable");
 	const summary =
 		legacy?.summary ??
+		metadataSummary ??
 		(row.action === "audit.query.completed" ||
 		row.action === "audit.query.failed"
 			? projectPlatformAuditQuerySummaryV1(row.action, row.details)
@@ -465,10 +530,14 @@ function project(
 		auditId: row.auditId,
 		action: row.action as PlatformAuditQueryActionV1,
 		actor,
-		subject: legacy?.subject ?? {
-			kind: row.targetType as PlatformAuditProjectionV1["subject"]["kind"],
-			subjectId: row.targetId,
-		},
+		subject:
+			legacy?.subject ??
+			(metadataSummary !== null
+				? { kind: "unknown", subjectId: "unknown" }
+				: {
+						kind: row.targetType as PlatformAuditProjectionV1["subject"]["kind"],
+						subjectId: row.targetId,
+					}),
 		result,
 		summary,
 		taskApi,
@@ -484,6 +553,15 @@ function project(
 		operation,
 	};
 }
+
+/** API material is transient and never enters Core scope, cursor or audit data. */
+type ScopedAuditQueryIdentityV1 =
+	| PlatformAuditQueryScopeV1
+	| {
+			readonly kind: "api-credential";
+			readonly material: string;
+			readonly userDirectory: TaskUserDirectoryV1 | undefined;
+	  };
 
 export class PostgresScopedPlatformAuditQueryV1 {
 	readonly #client;
@@ -503,28 +581,6 @@ export class PostgresScopedPlatformAuditQueryV1 {
 		this.#managementDatabase = drizzle(this.#managementClient);
 	}
 
-	async #requireIdentity(
-		transaction: Transaction,
-		scope: PlatformAuditQueryScopeV1,
-	): Promise<void> {
-		if (scope.kind !== "execution") return;
-		if (scope.credential) {
-			const [credential] = await transaction`
-				select id from platform.platform_api_credentials where id = ${scope.credential.credentialId}
-					and principal_type = ${scope.principal.kind} and principal_id = ${scope.principal.id}
-					and revoked_at is null and (expires_at is null or expires_at > clock_timestamp())
-					and scopes @> '["agent:use"]'::jsonb for share
-			`;
-			if (!credential) deny();
-		}
-		if (scope.principal.kind === "application") {
-			const [application] =
-				await transaction`select id from platform.platform_applications
-				where id = ${scope.principal.id} and status = 'active' for share`;
-			if (!application) deny();
-		}
-	}
-
 	async #requireAgent(
 		transaction: Transaction,
 		scope: PlatformAuditQueryScopeV1,
@@ -541,29 +597,26 @@ export class PostgresScopedPlatformAuditQueryV1 {
 			agentId,
 		);
 		if (!management) deny();
-		const channelId =
-			scope.credential || scope.principal.kind === "application"
-				? `api:${scope.principal.kind}`
-				: "audit:web";
-		let boundary: TaskAuthorizationBoundaryV1 | null;
-		if (scope.principal.kind === "application") {
-			// Application identity and task authorization are delivered by #481/#482.
-			// Keep this main-based audit patch fail-closed until those symbols land.
-			deny();
-		} else {
-			if (!scope.user) deny();
-			boundary = captureTaskAuthorizationBoundaryV1({
-				principal: scope.principal,
-				user: scope.user,
-				agent: management,
-				channelId,
-				agentAuthorizationRevision: agent.authorization_revision,
-			});
+		if (scope.credential || scope.principal.kind === "application") {
+			// This is current audit read access, not live Task execution eligibility.
+			const [grant] = await transaction`
+				select agent_id from platform.agent_principal_grants
+				where agent_id = ${agentId} and principal_type = ${scope.principal.kind}
+					and principal_id = ${scope.principal.id} and grant_type = 'use'
+					and revoked_at is null and authorization_revision = ${agent.authorization_revision}
+				for share`;
+			if (!grant) deny();
+			return;
 		}
+		if (!scope.user) deny();
+		const boundary = captureTaskAuthorizationBoundaryV1({
+			principal: scope.principal,
+			user: scope.user,
+			agent: management,
+			channelId: "audit:web",
+			agentAuthorizationRevision: agent.authorization_revision,
+		});
 		if (!boundary) deny();
-		// Current task API access recheck is an owner-owned #482 seam. The
-		// existing grant and authorization revision predicates remain enforced
-		// by the candidate CTE above.
 	}
 
 	async #audit(
@@ -593,30 +646,51 @@ export class PostgresScopedPlatformAuditQueryV1 {
 	}
 
 	async #run(
-		scopeInput: PlatformAuditQueryScopeV1,
+		scopeInput: ScopedAuditQueryIdentityV1,
 		input: unknown,
 		request: ScopedPlatformAuditRequestMetadataV1,
 		auditId?: string,
 	): Promise<ScopedPlatformAuditPageV1> {
-		const scope = parsePlatformAuditQueryScopeV1(scopeInput);
+		let resolvedScope: PlatformAuditQueryScopeV1 | undefined;
+		const credentialQuery = scopeInput.kind === "api-credential";
 		if (!boundedText(request.requestId) || !boundedText(request.traceId))
 			throw new PlatformAuditScopeErrorV1("invalid_request");
 		let query: PlatformAuditQueryInputV1 = { limit: 1, filters: {} };
 		const operation = auditId === undefined ? "list" : "detail";
 		try {
-			query = parsePlatformAuditQueryInputV1(input, scope);
-			if (
-				operation === "detail" &&
-				(query.limit !== 1 ||
-					query.cursor !== undefined ||
-					!boundedText(auditId))
-			)
-				throw new PlatformAuditScopeErrorV1("invalid_request");
-			const key = fingerprint(scope, query);
-			const cursor =
-				query.cursor === undefined ? null : decodeCursor(query.cursor, key);
 			return await this.#client.begin(async (transaction) => {
-				await this.#requireIdentity(transaction, scope);
+				const resolution = credentialQuery
+					? await resolveApiAuditCredentialIdentityV1(
+							transaction,
+							scopeInput.material,
+							scopeInput.userDirectory,
+						)
+					: undefined;
+				const scope = resolution
+					? parsePlatformAuditQueryScopeV1({
+							kind: "execution",
+							principal: resolution.identity.principal,
+							credential: resolution.identity.credential,
+							...(resolution.identity.user
+								? { user: resolution.identity.user }
+								: {}),
+						})
+					: parsePlatformAuditQueryScopeV1(scopeInput);
+				resolvedScope = scope;
+				// Credential metadata alone is never authentication.
+				if (!resolution && scope.kind === "execution" && scope.credential)
+					deny();
+				query = parsePlatformAuditQueryInputV1(input, scope);
+				if (
+					operation === "detail" &&
+					(query.limit !== 1 ||
+						query.cursor !== undefined ||
+						!boundedText(auditId))
+				)
+					throw new PlatformAuditScopeErrorV1("invalid_request");
+				const key = fingerprint(scope, query);
+				const cursor =
+					query.cursor === undefined ? null : decodeCursor(query.cursor, key);
 				if (query.filters.agentId)
 					await this.#requireAgent(transaction, scope, query.filters.agentId);
 				if (scope.kind === "execution" && query.filters.executionId) {
@@ -672,6 +746,7 @@ export class PostgresScopedPlatformAuditQueryV1 {
 					items.length,
 					request,
 				);
+				await resolution?.revalidate();
 				const last = visible.at(-1);
 				return {
 					items,
@@ -681,29 +756,55 @@ export class PostgresScopedPlatformAuditQueryV1 {
 			});
 		} catch (error) {
 			const code =
-				error instanceof PlatformAuditScopeErrorV1 ? error.code : "unavailable";
+				error instanceof PlatformAuditScopeErrorV1
+					? error.code
+					: error instanceof PersonalApiCredentialErrorV1 &&
+							error.code !== "unavailable"
+						? "access_denied"
+						: "unavailable";
 			try {
-				await this.#client.begin((transaction) =>
-					this.#audit(
-						transaction,
-						scope,
-						query,
-						operation,
-						code === "unavailable" ? "failed" : "rejected",
-						0,
+				if (credentialQuery || !resolvedScope) {
+					await this.recordDeniedQuery(
+						{
+							principal:
+								resolvedScope?.kind === "execution"
+									? resolvedScope.principal
+									: null,
+							requestedScope:
+								scopeInput.kind === "administrator"
+									? "administrator"
+									: "execution",
+							operation,
+							result: code === "unavailable" ? "failed" : "rejected",
+							reason: code,
+						},
 						request,
-						code,
-					),
-				);
+					);
+				} else {
+					const rejectedScope = resolvedScope;
+					await this.#client.begin((transaction) =>
+						this.#audit(
+							transaction,
+							rejectedScope,
+							query,
+							operation,
+							code === "unavailable" ? "failed" : "rejected",
+							0,
+							request,
+							code,
+						),
+					);
+				}
 			} catch {
 				throw new PlatformAuditScopeErrorV1("unavailable");
 			}
+			if (error instanceof PersonalApiCredentialErrorV1) throw error;
 			throw new PlatformAuditScopeErrorV1(code);
 		}
 	}
 
 	listAudit(
-		scope: PlatformAuditQueryScopeV1,
+		scope: ScopedAuditQueryIdentityV1,
 		input: unknown,
 		request: ScopedPlatformAuditRequestMetadataV1,
 	): Promise<ScopedPlatformAuditPageV1> {
@@ -729,7 +830,7 @@ export class PostgresScopedPlatformAuditQueryV1 {
 	}
 
 	async getAudit(
-		scope: PlatformAuditQueryScopeV1,
+		scope: ScopedAuditQueryIdentityV1,
 		auditId: string,
 		input: unknown,
 		request: ScopedPlatformAuditRequestMetadataV1,

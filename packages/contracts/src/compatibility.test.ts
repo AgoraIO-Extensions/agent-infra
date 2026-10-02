@@ -87,6 +87,75 @@ function restorePreRelayKeyContract(value: {
 }
 
 describe("contract compatibility command", () => {
+	it("admits only exact scoped audit cookie/Bearer documentation and rejects authority drift", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		for (const path of ["/api/v1/audit", "/api/v1/audit/{auditId}"])
+			previous.paths[path].get.security = [{}];
+		for (const path of ["/api/v3/admin/audit", "/api/v3/admin/audit/{auditId}"])
+			previous.paths[path].get.security = [];
+		delete previous.components.securitySchemes;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-audit-auth-compat-"),
+		);
+		const before = resolve(directory, "previous.json");
+		const after = resolve(directory, "current.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const withExistingSchemes = structuredClone(previous);
+			withExistingSchemes.components.securitySchemes = structuredClone(
+				current.components.securitySchemes,
+			);
+			await writeFile(before, JSON.stringify(withExistingSchemes));
+			expect(comparePaths(after, before).status).toBe(0);
+			await writeFile(before, JSON.stringify(previous));
+			const mutations = [
+				(value: typeof current) => {
+					value.paths["/api/v1/audit"].get.security = [{}];
+				},
+				(value: typeof current) => {
+					value.paths["/api/v1/audit/{auditId}"].get.security = [
+						{ PlatformSession: [], platformApiCredential: [] },
+					];
+				},
+				(value: typeof current) => {
+					value.paths["/api/v3/admin/audit"].get.security = [
+						{ platformApiCredential: [] },
+					];
+				},
+				(value: typeof current) => {
+					value.paths["/api/v3/admin/audit/{auditId}"].get.security = [];
+				},
+				(value: typeof current) => {
+					value.components.securitySchemes.PlatformSession.name =
+						"untrusted-cookie";
+				},
+				(value: typeof current) => {
+					value.components.securitySchemes.platformApiCredential.scheme =
+						"basic";
+				},
+				(value: typeof current) => {
+					delete value.paths["/api/v1/audit"].get.responses["401"];
+				},
+				(value: typeof current) => {
+					value.paths["/api/v1/admin/audit"].get.security = [];
+				},
+			];
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).not.toBe(0);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it.each([1, 2])(
 		"admits only the exact personal list addition for browser V%s",
 		async (version) => {

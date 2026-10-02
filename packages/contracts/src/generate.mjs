@@ -641,6 +641,14 @@ function buildArtifacts() {
 			...pilotScopedAuditOpenApiPathsV1,
 		},
 		components: {
+			securitySchemes: {
+				platformApiCredential: { type: "http", scheme: "bearer" },
+				PlatformSession: {
+					type: "apiKey",
+					in: "cookie",
+					name: "__Host-platform-session",
+				},
+			},
 			schemas: {
 				...pilotBrowserSchemasV1,
 				...pilotSseSchemasV1,
