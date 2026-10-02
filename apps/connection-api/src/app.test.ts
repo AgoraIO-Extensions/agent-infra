@@ -2783,6 +2783,13 @@ describe("Connection API", () => {
 				connectionId: string,
 				accessRequestId?: string,
 			) => {
+				if (connectionId === "connection-upgrade-approval-required")
+					throw new ConnectionError(
+						"FORBIDDEN",
+						"Provider upgrade requires approval: authorization equivalence is not proven",
+					);
+				if (connectionId === "connection-upgrade-forbidden")
+					throw new ConnectionError("FORBIDDEN", "Connection is unavailable");
 				calls.push({
 					name: "upgrade",
 					value: {
@@ -3213,6 +3220,29 @@ describe("Connection API", () => {
 			},
 		);
 		expect(approvedUpgrade.status).toBe(200);
+		for (const [connectionId, messageKey] of [
+			[
+				"connection-upgrade-approval-required",
+				"connection.error.provider_upgrade_approval_required",
+			],
+			["connection-upgrade-forbidden", "connection.error.resource_not_found"],
+		] as const) {
+			const response = await app.request(
+				`/api/v1/connection/connections/${connectionId}/upgrade`,
+				{
+					method: "POST",
+					headers: {
+						cookie,
+						origin: "https://connection.example",
+						"idempotency-key": connectionId,
+					},
+				},
+			);
+			expect(response.status).toBe(404);
+			expect(await response.json()).toMatchObject({
+				error: { code: "FORBIDDEN", messageKey },
+			});
+		}
 		expect(calls.at(-1)).toEqual({
 			name: "upgrade",
 			value: {

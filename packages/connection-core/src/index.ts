@@ -759,9 +759,12 @@ export interface ConnectionRepository {
 	}): Promise<
 		CredentialForExecution & {
 			credentialVersionId: string;
+			expiresAt?: string;
 			externalAccount: string;
 			grantedScopes: readonly string[];
 			providerId: string;
+			refreshExpiresAt?: string;
+			refreshToken?: string;
 		}
 	>;
 	storeSharedGithubOAuthCredential(input: {
@@ -1258,7 +1261,15 @@ export class ConnectionApplicationService {
 				"Provider identity changed during upgrade",
 			);
 		}
+		if (current.refreshToken && identity.accessToken !== current.accessToken)
+			throw new ConnectionError(
+				"PROVIDER_REAUTHORIZATION_REQUIRED",
+				"Provider OAuth credential changed during upgrade",
+			);
 		return this.repository.storeProviderCredential({
+			expiresAt: current.expiresAt,
+			refreshExpiresAt: current.refreshExpiresAt,
+			refreshToken: current.refreshToken,
 			...identity,
 			...(accessRequestId ? { accessRequestId } : {}),
 			expectedConnectionId: connectionId,

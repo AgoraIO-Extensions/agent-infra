@@ -6,9 +6,11 @@ import {
 	jenkinsCiConnectionCatalog,
 	jenkinsReleaseConnectionCatalog,
 } from "@agent-infra/openconnector-adapter";
-import { bitbucketServerConnectionCatalog } from "@agent-infra/openconnector-adapter/authorization-compatibility";
+import {
+	bitbucketServerConnectionCatalog,
+	datalegoV5ConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/authorization-compatibility";
 import { confluenceServerConnectionCatalog } from "@agent-infra/openconnector-adapter/confluence-server";
-import { datalegoV5ConnectionCatalog } from "@agent-infra/openconnector-adapter/datalego-v5";
 import { jiraServerConnectionCatalog } from "@agent-infra/openconnector-adapter/jira-server";
 import { manhattanConnectionCatalog } from "@agent-infra/openconnector-adapter/manhattan";
 import { rehoboamConnectionCatalog } from "@agent-infra/openconnector-adapter/rehoboam";

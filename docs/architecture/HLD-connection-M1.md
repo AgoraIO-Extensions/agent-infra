@@ -260,6 +260,15 @@ Adapter 以 `submissionOutcome=rejected` 明确证明该逻辑操作未提交，
 取消 HTTP 非成功响应必须保留 HTTP 状态，但不能只凭 4xx 声称外部效果确定未发生；
 无明确提交结果契约时保留 UNCERTAIN，禁止盲重试。新版本仍遵守 30.0 的审批与授权门禁。
 
+DataLego v4→v5 修复只改变取消防护和错误结果处理，四个 Action 的名称、输入、effect、scope、
+个人身份和固定 origins 保持等价。可信 catalog wrapper 登记精确 source/target release 与 executor
+digest 的兼容证据，引用已评审的 #1228；不改写已发布 executor。按 30.0 验证原有效审批、
+账号和 Credential，并只映射已批准 Action 子集，保留原审批来源与有效期，Consumer 原选择不扩大。
+显式升级保留原 OAuth refresh token、access/refresh 到期信息，以账号归属验证、内部加密读取和
+Credential CAS 写入完成；这些数据不进入浏览器或 Consumer。兼容证明缺失或原审批无效时仍
+拒绝迁移，页面应说明需要申请新版能力，不将它描述为普通资源访问失败。
+验证返回的 access token 若已改变，则不得沿用旧 refresh token，必须要求重新授权。
+
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
 Bearer 认证。账号 identity proof 使用 `whoami` 后精确匹配唯一 active user，并以稳定 user ID

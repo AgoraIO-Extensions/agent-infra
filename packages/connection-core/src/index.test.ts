@@ -2044,6 +2044,63 @@ describe("Connection application service", () => {
 		).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
 	});
 
+	it.each([false, true])(
+		"preserves OAuth lifecycle only for the validated original token (changed: %s)",
+		async (changed) => {
+			const repository = new MemoryRepository();
+			const current = {
+				accessToken: "access-fixture",
+				refreshToken: "refresh-fixture",
+				expiresAt: "2030-01-01T00:00:00.000Z",
+				refreshExpiresAt: "2030-01-08T00:00:00.000Z",
+				credentialVersionId: "credential-v4",
+				externalAccount: "alice@example.invalid",
+				grantedScopes: ["datalego.query"],
+				providerId: "datalego",
+			};
+			repository.getProviderCredentialForUpgrade = async () => current;
+			let stored: Record<string, unknown> | undefined;
+			repository.storeProviderCredential = async (input) => {
+				stored = input;
+				return { connectionId: "connection-datalego" };
+			};
+			const service = new ConnectionApplicationService(
+				repository,
+				{ execute: async () => ({}) },
+				undefined,
+				{
+					datalego: {
+						providerId: "datalego",
+						providerReleaseId: "datalego-connection-v5",
+						validateCredential: async (accessToken) => ({
+							accessToken: changed ? "changed-token-fixture" : accessToken,
+							displayName: "Alice",
+							externalAccount: current.externalAccount,
+							grantedScopes: current.grantedScopes,
+							providerId: "datalego",
+							providerReleaseId: "datalego-connection-v5",
+						}),
+					},
+				},
+			);
+			if (changed) {
+				await expect(
+					service.upgradeProviderConnection("alice", "connection-datalego"),
+				).rejects.toMatchObject({ code: "PROVIDER_REAUTHORIZATION_REQUIRED" });
+				expect(stored).toBeUndefined();
+				return;
+			}
+			await service.upgradeProviderConnection("alice", "connection-datalego");
+			expect(stored).toMatchObject({
+				expectedConnectionId: "connection-datalego",
+				expectedCredentialVersionId: current.credentialVersionId,
+				expiresAt: current.expiresAt,
+				refreshExpiresAt: current.refreshExpiresAt,
+				refreshToken: current.refreshToken,
+			});
+		},
+	);
+
 	it.each([undefined, "approved-upgrade-request"])(
 		"upgrades with stored credential and approval %s",
 		async (accessRequestId) => {

@@ -17,6 +17,7 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ConnectionApiError } from "../api";
 
 const api = vi.hoisted(() => ({
 	confirmAuthorization: vi.fn(async () => ({ grantId: "grant-created" })),
@@ -635,96 +636,109 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(api.submitConnectionAccessRequest).not.toHaveBeenCalled();
 	});
 
-	it("批量升级按 Connection 去重并隔离失败", async () => {
-		const initial = await api.getConnections();
-		initial.overview.upgradeTasks = [
-			{
-				campaignId: "campaign-1",
-				connectionId: "connection-alpha",
-				consumerId: "consumer-codex",
-				consumerName: "Codex",
-				deadlineAt: null,
-				providerId: "jenkins-ci",
-				reason: "Provider upgraded",
-				status: "PENDING_CONNECTION",
-				targetProviderReleaseId: "jenkins-ci-connection-v8",
-				taskId: "task-alpha-codex",
-			},
-			{
-				campaignId: "campaign-1",
-				connectionId: "connection-alpha",
-				consumerId: "consumer-rehoboam",
-				consumerName: "RehoboamAI",
-				deadlineAt: null,
-				providerId: "jenkins-ci",
-				reason: "Provider upgraded",
-				status: "PENDING_CONNECTION",
-				targetProviderReleaseId: "jenkins-ci-connection-v8",
-				taskId: "task-alpha-rehoboam",
-			},
-			{
-				campaignId: "campaign-2",
-				connectionId: "connection-beta",
-				consumerId: "consumer-codex",
-				consumerName: "Codex",
-				deadlineAt: null,
-				providerId: "rehoboam",
-				reason: "Provider upgraded",
-				status: "PENDING_CONNECTION",
-				targetProviderReleaseId: "rehoboam-connection-v4",
-				taskId: "task-beta-codex",
-			},
-			{
-				campaignId: "campaign-manhattan",
-				connectionId: "connection-manhattan",
-				consumerId: "consumer-codex",
-				consumerName: "Codex",
-				deadlineAt: null,
-				providerId: "manhattan",
-				reason: "Provider upgraded",
-				status: "PENDING_CONNECTION",
-				targetProviderReleaseId: "manhattan-connection-v5",
-				taskId: "task-manhattan",
-			},
-		];
-		const refreshed = structuredClone(initial);
-		refreshed.overview.upgradeTasks = [
-			{
-				...initial.overview.upgradeTasks[0],
-				status: "PENDING_AUTHORIZATION",
-			},
-			initial.overview.upgradeTasks[2],
-			initial.overview.upgradeTasks[3],
-		];
-		api.getConnections
-			.mockResolvedValueOnce(initial)
-			.mockResolvedValueOnce(refreshed);
-		api.upgradeProviderConnection
-			.mockResolvedValueOnce({ connectionId: "connection-alpha" })
-			.mockRejectedValueOnce(new Error("upgrade failed"));
+	it.each([false, true])(
+		"批量升级按 Connection 去重并隔离失败（审批引导：%s）",
+		async (approvalRequired) => {
+			const initial = await api.getConnections();
+			initial.overview.upgradeTasks = [
+				{
+					campaignId: "campaign-1",
+					connectionId: "connection-alpha",
+					consumerId: "consumer-codex",
+					consumerName: "Codex",
+					deadlineAt: null,
+					providerId: "jenkins-ci",
+					reason: "Provider upgraded",
+					status: "PENDING_CONNECTION",
+					targetProviderReleaseId: "jenkins-ci-connection-v8",
+					taskId: "task-alpha-codex",
+				},
+				{
+					campaignId: "campaign-1",
+					connectionId: "connection-alpha",
+					consumerId: "consumer-rehoboam",
+					consumerName: "RehoboamAI",
+					deadlineAt: null,
+					providerId: "jenkins-ci",
+					reason: "Provider upgraded",
+					status: "PENDING_CONNECTION",
+					targetProviderReleaseId: "jenkins-ci-connection-v8",
+					taskId: "task-alpha-rehoboam",
+				},
+				{
+					campaignId: "campaign-2",
+					connectionId: "connection-beta",
+					consumerId: "consumer-codex",
+					consumerName: "Codex",
+					deadlineAt: null,
+					providerId: "rehoboam",
+					reason: "Provider upgraded",
+					status: "PENDING_CONNECTION",
+					targetProviderReleaseId: "rehoboam-connection-v4",
+					taskId: "task-beta-codex",
+				},
+				{
+					campaignId: "campaign-manhattan",
+					connectionId: "connection-manhattan",
+					consumerId: "consumer-codex",
+					consumerName: "Codex",
+					deadlineAt: null,
+					providerId: "manhattan",
+					reason: "Provider upgraded",
+					status: "PENDING_CONNECTION",
+					targetProviderReleaseId: "manhattan-connection-v5",
+					taskId: "task-manhattan",
+				},
+			];
+			const refreshed = structuredClone(initial);
+			refreshed.overview.upgradeTasks = [
+				{
+					...initial.overview.upgradeTasks[0],
+					status: "PENDING_AUTHORIZATION",
+				},
+				initial.overview.upgradeTasks[2],
+				initial.overview.upgradeTasks[3],
+			];
+			api.getConnections
+				.mockResolvedValueOnce(initial)
+				.mockResolvedValueOnce(refreshed);
+			api.upgradeProviderConnection
+				.mockResolvedValueOnce({ connectionId: "connection-alpha" })
+				.mockRejectedValueOnce(
+					approvalRequired
+						? new ConnectionApiError({
+								code: "FORBIDDEN",
+								messageKey:
+									"connection.error.provider_upgrade_approval_required",
+								retryable: false,
+								traceId: "test",
+							})
+						: new Error("upgrade failed"),
+				);
 
-		renderPage(<ConnectionsPage />);
-		fireEvent.click(
-			await screen.findByRole("button", {
-				name: "一键升级 2 个连接",
-			}),
-		);
+			renderPage(<ConnectionsPage />);
+			fireEvent.click(
+				await screen.findByRole("button", {
+					name: "一键升级 2 个连接",
+				}),
+			);
 
-		await waitFor(() =>
-			expect(api.upgradeProviderConnection).toHaveBeenCalledTimes(2),
-		);
-		expect(calls(api.upgradeProviderConnection).map((call) => call[0])).toEqual(
-			["connection-alpha", "connection-beta"],
-		);
-		expect(
-			await screen.findByText(
-				"批量处理完成：1 个连接已升级，1 个失败，1 条授权待确认。",
-			),
-		).toBeTruthy();
-		expect(
-			screen.getByRole("button", { name: "重试 1 个失败项" }),
-		).toBeTruthy();
-	});
+			await waitFor(() =>
+				expect(api.upgradeProviderConnection).toHaveBeenCalledTimes(2),
+			);
+			expect(
+				calls(api.upgradeProviderConnection).map((call) => call[0]),
+			).toEqual(["connection-alpha", "connection-beta"]);
+			expect(
+				await screen.findByText(
+					`批量处理完成：1 个连接已升级，1 个失败，1 条授权待确认。${approvalRequired ? " 当前审批不能直接用于新版连接，请申请新版能力，或联系管理员确认兼容升级已开放。" : ""}`,
+				),
+			).toBeTruthy();
+			expect(
+				screen.getByRole("button", { name: "重试 1 个失败项" }),
+			).toBeTruthy();
+		},
+	);
 
 	it("升级任务复用服务端保存的凭证", async () => {
 		const initial = await api.getConnections();

@@ -105,6 +105,10 @@ Helm 的 `secretEnv` 中仅登记空值键名，使 API 通过 `secretKeyRef` �
 由迁移停用但历史记录保留，不能删除或重写 v3 Credential/Grant。发布前应完成 chart 渲染和当前
 release 安全检查；发布后由测试用户完成 SSO、个人身份和真实 READ 验收，才能宣称线上可用。
 旧申请与 v4 不匹配时须按新版本重新申请并连接；新增 Action 不自动进入 Consumer Grant。
+v4→v5 的取消修复通过精确 release/digest 兼容证据支持显式升级：员工点击“处理升级”后，
+保留有效原审批的来源、有效期、已批准 Action 子集和 OAuth refresh/到期信息；不自动扩大
+Consumer 已选能力。证据不匹配或原审批已失效时，页面引导申请新版能力；凭据验证失败时
+仍需重新授权，不能通过手工更新 Credential 或审批状态绕过门禁。
 试验 Provider 停用迁移完成后，不可直接回滚至仍发布该 Provider 的旧程序；旧程序会拒绝已停用的
 catalog。恢复应发布修复后的正式版本，不能通过重启或重写 Credential 绕过版本门禁。
 
