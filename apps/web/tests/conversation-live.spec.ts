@@ -776,7 +776,38 @@ test("saves the next-message model and stops the bound execution", async ({
 			page.getByRole("textbox", { name: "消息", exact: true }),
 			page.getByRole("button", { name: "发送补充指令", exact: true }),
 		].entries()) {
-			await control.scrollIntoViewIfNeeded();
+			await control.evaluate((node) =>
+				node.scrollIntoView({
+					block: "center",
+					inline: "nearest",
+					behavior: "instant",
+				}),
+			);
+			await info.attach(
+				`model-controls-and-composer-${viewport.width}-${index}-geometry`,
+				{
+					body: JSON.stringify(
+						await control.evaluate((node) => ({
+							target: node.getBoundingClientRect().toJSON(),
+							viewport: { width: innerWidth, height: innerHeight },
+							scroll: { x: scrollX, y: scrollY },
+							ancestors: [".timeline", ".chat-workspace"].map((selector) => {
+								const ancestor = node.closest(selector);
+								return ancestor
+									? {
+											selector,
+											rect: ancestor.getBoundingClientRect().toJSON(),
+											scrollTop: ancestor.scrollTop,
+											clientHeight: ancestor.clientHeight,
+											scrollHeight: ancestor.scrollHeight,
+										}
+									: null;
+							}),
+						})),
+					),
+					contentType: "application/json",
+				},
+			);
 			await info.attach(
 				`model-controls-and-composer-${viewport.width}-${index}`,
 				{
