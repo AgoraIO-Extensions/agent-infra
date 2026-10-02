@@ -287,6 +287,16 @@ for (const compact of [false, true]) {
 		await expect(dialog).toContainText("后台组件 · platform_worker");
 		await expect(dialog).toContainText("用户 · audit-user-a");
 		await expect(dialog).toContainText("实际后台组件");
+		await info.attach("controlled-original-audit-detail-viewport", {
+			body: await page.screenshot({ animations: "disabled" }),
+			contentType: "image/png",
+		});
+		await expect(
+			dialog.getByRole("heading", { name: "审计详情", exact: true }),
+		).toBeInViewport({ ratio: 1 });
+		await expect(
+			dialog.getByRole("button", { name: "关闭窗口", exact: true }),
+		).toBeInViewport({ ratio: 1 });
 		expect(
 			await page.evaluate(
 				() => document.documentElement.scrollWidth <= innerWidth,
