@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
 	type ApiPrincipalV1,
 	createConversationEventUseCaseV1,
@@ -740,6 +740,128 @@ describe("controlled PostgreSQL audit query", () => {
 		`;
 		await expect(
 			query.getAudit(f.scope, f.auditId, detail, request()),
+		).rejects.toMatchObject({ code: "access_denied" });
+	});
+});
+
+// Controlled credential rows prove query conformance, not #1165 application issuance.
+async function credentialQueryFixture(
+	f: Awaited<ReturnType<typeof fixture>>,
+	kind: "user" | "application" = "user",
+) {
+	if (f.scope.kind !== "execution" || !f.scope.user)
+		throw new Error("Missing controlled user");
+	const material = `papi_${randomBytes(32).toString("base64url")}`;
+	if (kind === "application")
+		await sql`insert into platform.platform_applications (id,name,responsible_user_id,status,authorization_revision)
+			values (${f.scope.principal.id},'Controlled query application',${f.scope.principal.id},'active','app-revision')`;
+	await sql`insert into platform.platform_api_credentials (id,principal_type,principal_id,credential_hash,scopes)
+		values (${randomUUID()},${kind},${f.scope.principal.id},${createHash("sha256").update(material).digest("hex")},'["agent:use"]'::jsonb)`;
+	return {
+		kind: "api-credential" as const,
+		material,
+		userDirectory: {
+			resolveUser: async () =>
+				f.scope.kind === "execution" ? (f.scope.user ?? null) : null,
+		},
+	};
+}
+
+async function queryUseGrant(
+	f: Awaited<ReturnType<typeof fixture>>,
+	revision = "current-agent-revision",
+) {
+	if (f.scope.kind !== "execution")
+		throw new Error("Missing controlled principal");
+	await sql`insert into platform.agent_principal_grants (agent_id,principal_type,principal_id,grant_type,authorization_revision)
+		values (${f.agentId},'user',${f.scope.principal.id},'use',${revision})`;
+}
+
+describe("credential-backed audit query consumer", () => {
+	it("reads only its original accepted records with current API use and does not borrow browser availability", async () => {
+		const f = await fixture();
+		const other = await fixture(undefined, f.agentId);
+		const source = await credentialQueryFixture(f);
+		await expect(
+			query.listAudit(
+				source,
+				{ limit: 100, filters: { agentId: f.agentId } },
+				request(),
+			),
+		).rejects.toMatchObject({ code: "access_denied" });
+		await queryUseGrant(f);
+		const result = await query.listAudit(
+			source,
+			{ limit: 100, filters: { agentId: f.agentId } },
+			request(),
+		);
+		expect(result.items.some((row) => row.auditId === f.auditId)).toBe(true);
+		expect(result.items.some((row) => row.auditId === other.auditId)).toBe(
+			false,
+		);
+		await expect(
+			query.getAudit(source, f.auditId, detail, request()),
+		).resolves.toMatchObject({ auditId: f.auditId });
+		await expect(
+			query.getAudit(source, other.auditId, detail, request()),
+		).rejects.toMatchObject({ code: "access_denied" });
+		expect(JSON.stringify(result)).not.toContain(source.material);
+	});
+
+	it("denies stale or revoked API grants before an explicit Agent query can become empty success", async () => {
+		const f = await fixture();
+		const source = await credentialQueryFixture(f);
+		await queryUseGrant(f, "stale-revision");
+		const input = { limit: 10, filters: { agentId: f.agentId } };
+		await expect(
+			query.listAudit(source, input, request()),
+		).rejects.toMatchObject({ code: "access_denied" });
+		await sql`update platform.agent_principal_grants set authorization_revision = 'current-agent-revision', revoked_at = now()
+			where agent_id = ${f.agentId} and principal_id = ${f.scope.kind === "execution" ? f.scope.principal.id : ""}`;
+		await expect(
+			query.listAudit(source, input, request()),
+		).rejects.toMatchObject({ code: "access_denied" });
+	});
+
+	it("rolls back the success audit when the final directory revalidation changes revision", async () => {
+		const f = await fixture();
+		const source = await credentialQueryFixture(f);
+		await queryUseGrant(f);
+		let reads = 0;
+		source.userDirectory.resolveUser = async () => {
+			reads++;
+			if (f.scope.kind !== "execution" || !f.scope.user) return null;
+			return {
+				...f.scope.user,
+				authorizationRevision:
+					reads === 1 ? "first-current" : "changed-current",
+			};
+		};
+		const context = request();
+		await expect(query.listAudit(source, page, context)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+		expect(reads).toBe(2);
+		const rows =
+			await sql`select action,details from platform.audit_events where request_id = ${context.requestId}`;
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.action).toBe("audit.query.failed");
+		expect(JSON.stringify(rows)).not.toContain(source.material);
+	});
+
+	it("never substitutes a same-ID user's grant or responsible-person rights for application authority", async () => {
+		const f = await fixture();
+		await queryUseGrant(f);
+		const source = await credentialQueryFixture(f, "application");
+		source.userDirectory.resolveUser = async () => {
+			throw new Error("Application must not resolve a responsible user");
+		};
+		await expect(
+			query.listAudit(
+				source,
+				{ limit: 10, filters: { agentId: f.agentId } },
+				request(),
+			),
 		).rejects.toMatchObject({ code: "access_denied" });
 	});
 });

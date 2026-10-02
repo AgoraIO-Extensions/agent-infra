@@ -64,6 +64,7 @@ describe("platform-store package surface", () => {
 			"PostgresPersonalApiCredentialStoreV1",
 			"PostgresPersonalRelayKeyStoreV1",
 			"PostgresPlatformAuditQueryV1",
+			"PostgresRelayKeyVersionStoreV1",
 			"PostgresScopedPlatformAuditQueryV1",
 			"PostgresSecretActivationStoreV1",
 			"PostgresSecretKeyRotationStoreV1",
@@ -85,6 +86,7 @@ describe("platform-store package surface", () => {
 			"platformDatabaseUrlFromEnvironment",
 			"readPlatformQueueResourceSnapshot",
 			"requireCurrentPersonalApiTaskAdmissionV1",
+			"resolveApiAuditCredentialIdentityV1",
 			"resolvePersonalApiTaskAdmissionAuthorityV1",
 			"validateWecomSetupCredentialRecordV1",
 		]);
