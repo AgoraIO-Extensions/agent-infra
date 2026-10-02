@@ -32,6 +32,19 @@ export interface RuntimeExternalActionAuthorization {
 	readonly purpose?: "source-reserve" | "source-bind";
 }
 
+/** Host authority and credential are request-local; never part of durable commands. */
+export interface RuntimeExternalActionAuthorizationResult {
+	readonly relayKey?: string;
+	/** Synchronous current Host guard, called after the final persistence await. */
+	readonly revalidate?: () => void;
+}
+
+export type RuntimeExternalActionAuthorizer = (
+	action: RuntimeExternalActionAuthorization,
+) =>
+	| Promise<void>
+	| Promise<RuntimeExternalActionAuthorizationResult | undefined>;
+
 export interface RuntimeOriginalEvidenceBinding {
 	readonly principal: RuntimePrincipalV1;
 	readonly scope: {

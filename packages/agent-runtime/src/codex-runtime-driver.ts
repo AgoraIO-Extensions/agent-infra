@@ -31,6 +31,7 @@ import {
 	codexConversationKey,
 	runCodexConnectionRecovery,
 	validateModelAccess,
+	validateModelEndpoint,
 } from "./codex-app-server-bridge.js";
 import {
 	type CodexConnectionEvidence,
@@ -86,6 +87,8 @@ import type {
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
+	RuntimeExternalActionAuthorizer,
 	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
 	RuntimeOriginalEvidenceRecoveryRef,
@@ -187,9 +190,7 @@ export interface CodexRuntimeDriverOptions {
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly CodexRuntimeModelOption[];
-	readonly authorizeExternalAction?: (
-		action: RuntimeExternalActionAuthorization,
-	) => Promise<void>;
+	readonly authorizeExternalAction?: RuntimeExternalActionAuthorizer;
 	// Independent client delivery is trusted deployment input, never a Runtime command.
 	readonly connectionClient?: {
 		/** Independently configured service allowlist; never derived from the profile. */
@@ -2188,10 +2189,7 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 	const values: unknown = options.modelOptions;
 	if (!Array.isArray(values) || values.length === 0) configurationInvalid();
 	const routed = values.every(
-		(value) =>
-			isPlainRecord(value) &&
-			value.endpoint !== undefined &&
-			value.credential !== undefined,
+		(value) => isPlainRecord(value) && value.endpoint !== undefined,
 	);
 	if (
 		!routed &&
@@ -2203,9 +2201,18 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 	) {
 		configurationInvalid();
 	}
+	const keyed =
+		routed && values.every((value) => value.credential === undefined);
+	if (
+		routed &&
+		!keyed &&
+		values.some((value) => value.credential === undefined)
+	)
+		configurationInvalid();
 	for (const value of values) {
 		const expectedKeys = ["modelOptionId", "model", "reasoningLevels"];
-		if (routed) expectedKeys.push("endpoint", "credential");
+		if (routed) expectedKeys.push("endpoint");
+		if (routed && !keyed) expectedKeys.push("credential");
 		if (
 			!isPlainRecord(value) ||
 			!hasOnlyKeys(value, expectedKeys) ||
@@ -2227,10 +2234,12 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 			? `${createHash("sha256").update(value.modelOptionId).digest("hex")}/${value.model}`
 			: value.model;
 		if (routed) {
-			const access = validateModelAccess({
-				endpoint: value.endpoint,
-				credential: value.credential,
-			});
+			const access = keyed
+				? { endpoint: validateModelEndpoint(value.endpoint) }
+				: validateModelAccess({
+						endpoint: value.endpoint,
+						credential: value.credential,
+					});
 			if (!access) configurationInvalid();
 			routes.push({
 				internalModel,
@@ -2838,9 +2847,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly probeNative?: (
 			signal: AbortSignal,
 		) => Promise<RuntimeCapabilitiesV1>,
-		private readonly authorizeExternalAction?: (
-			action: RuntimeExternalActionAuthorization,
-		) => Promise<void>,
+		private readonly authorizeExternalAction?: RuntimeExternalActionAuthorizer,
 		private readonly connectionClientOptions?: CodexRuntimeDriverOptions["connectionClient"],
 		private readonly recoveryLaunch?: typeof runCodexConnectionRecovery,
 		private readonly recoveryDirectory?: string,
@@ -7087,9 +7094,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			});
 			this.notifyEventStream(streamKey);
 		};
+		let authorization: RuntimeExternalActionAuthorizationResult | undefined;
 		const assertCurrent = () => {
 			// Re-read original state after each Host or durable-started await.
 			signal.throwIfAborted();
+			if (
+				authorization?.relayKey !== undefined &&
+				typeof authorization.revalidate !== "function"
+			)
+				unavailable();
+			const revalidation: unknown = authorization?.revalidate?.();
+			if (revalidation !== undefined) {
+				void Promise.resolve(revalidation).catch(() => {});
+				unavailable();
+			}
 			const state = this.readState();
 			const session = ownRecordValue(state.sessions, prepared.nativeSessionRef);
 			const execution =
@@ -7148,19 +7166,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const waiting = new AbortController();
 			try {
 				signal.throwIfAborted();
-				await Promise.race([
-					once(signal, "abort", { signal: waiting.signal }).then(() => {
-						throw unavailableError();
-					}),
-					this.authorizeExternalAction({
-						nativeSessionRef: prepared.nativeSessionRef,
-						executionId: prepared.executionId,
-						runtimeOperationId: prepared.executionId,
-						operationRef: prepared.fact.operationRef,
-						attemptRef: prepared.fact.attemptRef,
-						kind: "model",
-					}),
-				]);
+				authorization =
+					(await Promise.race([
+						once(signal, "abort", { signal: waiting.signal }).then(() => {
+							throw unavailableError();
+						}),
+						this.authorizeExternalAction({
+							nativeSessionRef: prepared.nativeSessionRef,
+							executionId: prepared.executionId,
+							runtimeOperationId: prepared.executionId,
+							operationRef: prepared.fact.operationRef,
+							attemptRef: prepared.fact.attemptRef,
+							kind: "model",
+						}),
+					])) || undefined;
 				signal.throwIfAborted();
 			} finally {
 				waiting.abort();
@@ -7180,6 +7199,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		return {
+			...(authorization?.relayKey === undefined
+				? {}
+				: { credential: authorization.relayKey }),
 			assertCurrent,
 			started: (startedAt) => record("started", { startedAt }),
 			finish: (outcome) =>
