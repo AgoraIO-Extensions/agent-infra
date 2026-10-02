@@ -80,10 +80,21 @@ export type CodexModelRequestOutcome = {
 );
 
 export interface CodexModelRequestJournal {
+	/** Synchronous original Driver state check at the actual fetch boundary. */
+	readonly assertCurrent?: () => void;
 	/** Called only after the actual fetch has been invoked. */
 	started(startedAt: string): Promise<void>;
 	/** Must commit before a terminal response can be published to native. */
 	finish(outcome: CodexModelRequestOutcome): Promise<void>;
+}
+
+function assertCurrentModelRequest(journal: CodexModelRequestJournal): void {
+	const assertion: unknown = journal.assertCurrent?.();
+	if (assertion !== undefined) {
+		// A mistaken async guard is rejected; consume its rejection without awaiting it.
+		void Promise.resolve(assertion).catch(() => {});
+		throw new Error();
+	}
 }
 
 export interface CodexModelTransportObserver {
@@ -1455,6 +1466,7 @@ export async function openCodexModelTransport(
 				controller.signal,
 			);
 			journal = await awaitPersistence(journalPromise, controller.signal);
+			assertCurrentModelRequest(journal);
 			// Stop/revoke may arrive while intent or the Host authorization guard is
 			// awaiting durable storage. No await separates this check from fetch.
 			if (
@@ -1475,6 +1487,7 @@ export async function openCodexModelTransport(
 				startedPersistence = journal.started(requestStartedAt);
 				await awaitPersistence(startedPersistence, controller.signal);
 			}
+			assertCurrentModelRequest(journal);
 			// The durable started fact is the commit barrier for the external request.
 			// If it cannot be persisted, do not invoke the provider at all.
 			if (
