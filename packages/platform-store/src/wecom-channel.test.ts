@@ -1,5 +1,6 @@
 import {
 	createWecomChannelV1,
+	type WecomConnectionFenceV1,
 	type WecomMessageV1,
 	wecomChannelIdV1,
 } from "@agent-infra/platform-core";
@@ -101,7 +102,11 @@ function channel(target = store) {
 	});
 	return {
 		...base,
-		async receive(input: WecomMessageV1) {
+		async receive(
+			input: WecomMessageV1,
+			connectionFence?: WecomConnectionFenceV1,
+			signal?: AbortSignal,
+		) {
 			const keyId = `fixture-key:personal:${input.senderId}`;
 			await sql`insert into platform.relay_key_subjects
 				(purpose, subject_id, last_version, current_version)
@@ -112,7 +117,7 @@ function channel(target = store) {
 				values ('personal', ${input.senderId}, 1, ${keyId},
 					${sql.json({ purpose: "personal", subjectId: input.senderId, keyId, keyVersion: 1 })})
 				on conflict (purpose, subject_id, key_version) do nothing`;
-			return base.receive(input);
+			return base.receive(input, connectionFence, signal);
 		},
 	};
 }
