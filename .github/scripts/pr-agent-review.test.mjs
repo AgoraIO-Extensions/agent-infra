@@ -526,7 +526,7 @@ test("rejects a changed head or cross-repository target before publishing", asyn
   }
 });
 
-test("retains HTTP status/request ID without reading or logging error bodies", async (t) => {
+test("retains HTTP status/request ID without parsing or logging arbitrary error bodies", async (t) => {
   for (const [status, requestId] of [
     [403, "ABCD:1234:5678"],
     [422, "ABCD:1234:5678"],
@@ -552,6 +552,181 @@ test("retains HTTP status/request ID without reading or logging error bodies", a
       ...(status !== 500 ? { requestId } : {}),
     });
   }
+});
+
+test("terminal permission/rate failures expose only fixed messages and bounded headers", async (t) => {
+  for (const [status, message, messageCategory] of [
+    [403, "Resource not accessible by integration", "integration-permission"],
+    [403, "Resource not accessible by personal access token", "token-permission"],
+    [403, "API rate limit exceeded for PRIVATE_TOKEN_SENTINEL", "primary-rate-limit"],
+    [429, "You have exceeded a secondary rate limit. PRIVATE_TOKEN_SENTINEL", "secondary-rate-limit"],
+  ]) {
+    let posts = 0;
+    t.mock.method(globalThis, "fetch", async (_url, options) => {
+      assert.equal(options.method, "POST");
+      posts++;
+      return new Response(JSON.stringify({ message,
+        documentation_url: "https://docs.github.com/rest/overview/resources-in-the-rest-api?PRIVATE_TOKEN_SENTINEL#secondary-rate-limits",
+        secret: "PRIVATE_TOKEN_SENTINEL",
+      }), { status, headers: {
+        "x-github-request-id": "ABCD:1234:5678",
+        "retry-after": "60",
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": "1790907800",
+        "x-ratelimit-resource": "core",
+        "x-accepted-github-permissions": "pull_requests=write,contents=read; issues=read,metadata=read",
+        "x-private-header": "PRIVATE_TOKEN_SENTINEL",
+      } });
+    });
+    const error = await githubRequest("/repos/org/repo/pulls/42/reviews", { method: "POST" }).catch((error) => error);
+    assert.deepEqual(publicationFailure({ stage: "post-review" }, error), {
+      stage: "post-review", category: "http", method: "POST", route: "reviews", status,
+      requestId: "ABCD:1234:5678", retryAfterSeconds: 60, rateLimitRemaining: 0,
+      rateLimitReset: 1790907800, rateLimitResource: "core",
+      acceptedPermissions: "pull_requests=write,contents=read;issues=read,metadata=read",
+      messageCategory,
+      documentationUrl: "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api",
+    });
+    assert.equal(posts, 1);
+    assert.doesNotMatch(JSON.stringify(error.diagnostic), /PRIVATE/);
+  }
+});
+
+test("unknown/control messages, URLs and unapproved headers never enter diagnostics", async (t) => {
+  for (const [message, documentation_url] of [
+    ["PRIVATE_TOKEN_SENTINEL", "https://private.example/PRIVATE_TOKEN_SENTINEL"],
+    ["Resource not accessible by integration\nPRIVATE_TOKEN_SENTINEL", "https://docs.github.com/PRIVATE_TOKEN_SENTINEL"],
+    ["PRIVATE_TOKEN_SENTINEL", "https://PRIVATE_TOKEN_SENTINEL@docs.github.com/rest/pulls/reviews"],
+  ]) {
+    t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ message, documentation_url }), {
+      status: 403, headers: {
+        "retry-after": "86401", "x-ratelimit-remaining": "-1", "x-ratelimit-reset": "4102444801",
+        "x-ratelimit-resource": "PRIVATE_TOKEN_SENTINEL", "x-accepted-github-permissions": "PRIVATE_TOKEN_SENTINEL=write",
+        "x-github-request-id": "ABCD:1234:5678",
+      },
+    }));
+    const error = await githubRequest("/repos/org/repo/pulls/42/reviews", { method: "POST" }).catch((error) => error);
+    assert.deepEqual(publicationFailure({ stage: "post-review" }, error), {
+      stage: "post-review", category: "http", method: "POST", route: "reviews", status: 403, requestId: "ABCD:1234:5678",
+    });
+  }
+});
+
+test("invalid, oversized, unreadable and stalled bodies retain the original HTTP failure", async (t) => {
+  let cancelled = 0;
+  for (const body of [
+    "PRIVATE_BODY_SENTINEL: not JSON",
+    JSON.stringify({ message: `API rate limit exceeded ${"x".repeat(4096)}` }),
+    new ReadableStream({ start(controller) { controller.error(new Error("PRIVATE_BODY_SENTINEL")); } }),
+    new ReadableStream({ cancel() { cancelled++; } }),
+  ]) {
+    t.mock.method(globalThis, "fetch", async () => new Response(body, {
+      status: 403, headers: { "x-github-request-id": "ABCD:1234:5678" },
+    }));
+    const start = Date.now();
+    const error = await githubRequest("/repos/org/repo/pulls/42/reviews", { method: "POST" }).catch((error) => error);
+    assert.deepEqual(publicationFailure({ stage: "post-review" }, error), {
+      stage: "post-review", category: "http", method: "POST", route: "reviews", status: 403, requestId: "ABCD:1234:5678",
+    });
+    assert.ok(Date.now() - start < 2500, "Diagnostic body read is bounded");
+  }
+  assert.equal(cancelled, 1);
+});
+
+test("control characters invalidate otherwise valid response header values", async (t) => {
+  for (const suffix of ["\n", "\u2028", "\u2029"]) {
+    const values = { "retry-after": `1${suffix}`, "x-ratelimit-remaining": `0${suffix}`,
+      "x-ratelimit-reset": `1790907800${suffix}`, "x-accepted-github-permissions": `pull_requests=write${suffix}` };
+    t.mock.method(globalThis, "fetch", async () => ({ ok: false, status: 403,
+      headers: { get: (name) => values[name] ?? null }, body: null }));
+    const error = await githubRequest("/repos/org/repo/pulls/42/reviews", { method: "POST" }).catch((error) => error);
+    assert.deepEqual(publicationFailure({ stage: "post-review" }, error), {
+      stage: "post-review", category: "http", method: "POST", route: "reviews", status: 403,
+    });
+  }
+});
+
+test("an expired original request deadline ends body diagnostics before the one-second limit", async (t) => {
+  const controller = new AbortController();
+  let cancelled = 0;
+  t.mock.method(AbortSignal, "timeout", (milliseconds) => {
+    assert.equal(milliseconds, 15_000);
+    return controller.signal;
+  });
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    assert.equal(options.signal, controller.signal);
+    controller.abort(new Error("PRIVATE_ERROR_SENTINEL"));
+    return new Response(new ReadableStream({ cancel() { cancelled++; } }), { status: 403 });
+  });
+  const start = Date.now();
+  const error = await githubRequest("/repos/org/repo/pulls/42/reviews", { method: "POST" }).catch((error) => error);
+  assert.ok(Date.now() - start < 800, "The original deadline must not get another one-second budget");
+  assert.equal(cancelled, 1);
+  assert.deepEqual(publicationFailure({ stage: "post-review" }, error), {
+    stage: "post-review", category: "http", method: "POST", route: "reviews", status: 403,
+  });
+});
+
+test("success parsing and existing bounded GET retries remain unchanged", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return calls === 1
+      ? new Response("PRIVATE_BODY_SENTINEL", { status: 429, headers: { "retry-after": "0" } })
+      : new Response('{"ok":true}');
+  });
+  assert.deepEqual(await githubRequest("/repos/org/repo/pulls/42"), { ok: true });
+  assert.equal(calls, 2);
+  t.mock.method(globalThis, "fetch", async () => new Response("successful text"));
+  assert.equal(await githubRequest("/repos/org/repo/pulls/42", { responseType: "text" }), "successful text");
+});
+
+test("the real publisher reports safe POST failure, unchanged payload and no successful receipt", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "pr-agent-http-"));
+  const eventPath = join(directory, "event.json");
+  const outputPath = join(directory, "output");
+  await writeFile(eventPath, JSON.stringify({ pull_request: { number: 42, head: { sha: head } } }));
+  await writeFile(outputPath, "");
+  const env = { GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath,
+    GITHUB_REPOSITORY: "org/repo", GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1",
+    PR_AGENT_REVIEW: '{"key_issues_to_review":[]}', PR_AGENT_REVIEW_SCOPE_REQUIRED: "false", PR_AGENT_REVIEW_SCOPE: "",
+    GITHUB_TOKEN: "PRIVATE_TOKEN_SENTINEL" };
+  const previous = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  const exitCode = process.exitCode;
+  t.after(async () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    process.exitCode = exitCode;
+    await rm(directory, { recursive: true, force: true });
+  });
+  Object.assign(process.env, env);
+  const original = api();
+  let posts = 0;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (options.method === "POST") {
+      posts++;
+      const payload = JSON.parse(options.body);
+      assert.equal(payload.event, "COMMENT");
+      assert.equal(payload.commit_id, head);
+      assert.deepEqual(payload.comments, []);
+      return new Response(JSON.stringify({ message: "Resource not accessible by integration", secret: "PRIVATE_BODY_SENTINEL" }), {
+        status: 403, headers: { "x-accepted-github-permissions": "pull_requests=write" },
+      });
+    }
+    return new Response(JSON.stringify(await original.request(url.replace("https://api.github.com", ""))));
+  });
+  const logs = [];
+  t.mock.method(console, "error", (...args) => logs.push(args));
+  await runPrAgentPublisher();
+  assert.equal(posts, 1);
+  assert.equal(process.exitCode, 1);
+  assert.deepEqual(JSON.parse(logs[0][1]), {
+    stage: "post-review", category: "http", method: "POST", route: "reviews", status: 403,
+    acceptedPermissions: "pull_requests=write", messageCategory: "integration-permission",
+  });
+  assert.doesNotMatch(JSON.stringify(logs), /PRIVATE/);
+  assert.equal(await readFile(outputPath, "utf8"), "");
 });
 
 test("network/JSON failures and local exceptions cannot log arbitrary messages", async (t) => {

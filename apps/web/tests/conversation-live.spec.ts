@@ -3,6 +3,7 @@ import {
 	BrowserSessionProjectionV1Schema,
 	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
+	ConversationPageV1Schema,
 	ExecutionDetailProjectionV2Schema,
 	PersistedConversationEventV2Schema,
 	PilotProtocolErrorV1Schema,
@@ -222,6 +223,10 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
 		if (path.endsWith("/session")) {
 			await route.fulfill({ json: owner });
 			return;
@@ -387,6 +392,10 @@ test("renders an authorization failure without retaining another subject's conve
 	});
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const path = new URL(route.request().url()).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
 		if (path.endsWith("/session")) {
 			await route.fulfill({
 				json: {
@@ -444,6 +453,10 @@ test("recovers an ordinary conversation 404 through read-only reconnect", async 
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		if (route.request().method() !== "GET") writes += 1;
 		const path = new URL(route.request().url()).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
 		if (path.endsWith("/session")) {
 			await route.fulfill({ json: ownerSession() });
 			return;
@@ -521,6 +534,10 @@ test("clears a loaded execution after 404 and recovers without resending", async
 		const request = route.request();
 		if (request.method() !== "GET") writes += 1;
 		const url = new URL(request.url());
+		if (url.pathname === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
 		if (url.pathname.endsWith("/session")) {
 			await route.fulfill({ json: ownerSession() });
 		} else if (url.pathname === `/api/v2/agents/${agentId}`) {
@@ -648,6 +665,10 @@ test("saves the next-message model and stops the bound execution", async ({
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
 		if (path.endsWith("/events")) {
 			await route.fulfill({
 				status: 200,
@@ -792,6 +813,10 @@ test("regenerates a terminal answer and opens its execution details", async ({
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
 		if (path.endsWith("/events")) {
 			await route.fulfill({
 				status: 200,
@@ -901,6 +926,13 @@ for (const source of ["standard", "custom"] as const) {
 			await page.route(/\/api\/v[12]\//, async (route) => {
 				const request = route.request();
 				const path = new URL(request.url()).pathname;
+				if (path === "/api/v2/me/conversations/recent")
+					return route.fulfill({
+						json: ConversationPageV1Schema.parse({
+							items: [],
+							nextCursor: null,
+						}),
+					});
 				if (request.method() !== "GET")
 					writes.push({ path, body: request.postDataJSON() });
 				if (request.method() === "GET" && path.endsWith("/session"))

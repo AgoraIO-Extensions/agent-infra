@@ -1,6 +1,7 @@
 import {
 	AgentApplicationProjectionV2Schema,
 	AgentProjectionV2Schema,
+	ConversationPageV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
 	createPilotAgentMockServerV2,
@@ -236,6 +237,15 @@ async function fixture(
 		const request = route.request();
 		const pathname = new URL(request.url()).pathname;
 		const body = request.postData() ? request.postDataJSON() : undefined;
+		if (
+			request.method() === "GET" &&
+			pathname === "/api/v2/me/conversations/recent"
+		) {
+			await route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
+			return;
+		}
 		// Deliberately bypass the schema-valid mock server for protocol negatives.
 		if (
 			request.method() === "GET" &&

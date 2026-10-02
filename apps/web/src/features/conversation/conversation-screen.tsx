@@ -15,6 +15,7 @@ import { getAgentV2 } from "../../pilot/generated-v2/sdk.gen.js";
 import { ActiveConversation } from "./active-conversation.js";
 import { NewConversation, PersonalHistory } from "./conversation-navigation.js";
 import { ConversationReadError, responseFailure } from "./execution-detail.js";
+import { RecentConversationHistory } from "./recent-conversation-history.js";
 
 export type ConversationScreenProps = {
 	agentId: string;
@@ -53,6 +54,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 	);
 	const [denied, setDenied] = useState(false);
 	const [internalHistory, setInternalHistory] = useState(false);
+	const historyPanel = useRef<HTMLElement>(null);
 	const showHistory =
 		props.view === undefined ? internalHistory : props.view === "history";
 	function setHistory(value: boolean) {
@@ -141,15 +143,20 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		<section className="chat-layout min-w-0 space-y-5">
 			<header className="flex flex-wrap items-start justify-between gap-3 border-border border-b pb-4">
 				<div>
-					<h1 className="font-semibold text-[28px]">
-						{showHistory ? "个人历史" : agent.name}
-					</h1>
+					<h1 className="font-semibold text-[28px]">{agent.name}</h1>
 					<p className="mt-1 text-muted-foreground text-sm">
 						个人 Web 对话 · 离开页面不会取消已提交的任务
 					</p>
 				</div>
 				<div className="flex flex-wrap gap-2">
-					<Button variant="outline" onClick={() => setHistory(!showHistory)}>
+					<Button
+						variant="outline"
+						aria-controls={`${instanceId}-history`}
+						onClick={() => {
+							setHistory(!showHistory);
+							historyPanel.current?.focus();
+						}}
+					>
 						{showHistory ? (
 							<ArrowLeft aria-hidden="true" />
 						) : (
@@ -185,39 +192,56 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 					</AlertDescription>
 				</Alert>
 			)}
-			{showHistory ? (
-				<PersonalHistory
-					agentId={agentId}
-					identityKey={identityKey}
-					current={conversationId}
-					onSelect={(id) => {
-						setInternalHistory(false);
-						onConversationChange(id);
-					}}
-					onDenied={deny}
-				/>
-			) : null}
-			<div hidden={showHistory} className="chat-workspace">
-				{selfManaged ? (
-					<p>此 Agent 使用自有交互入口，请从 Agent 详情进入。</p>
-				) : conversationId ? (
-					<ActiveConversation
-						key={conversationId}
-						{...props}
-						agent={agent}
-						available={available}
-						onDenied={deny}
-						refreshAgent={() => void agentQuery.refetch()}
-					/>
-				) : (
-					<NewConversation
-						agentId={agentId}
-						identityKey={identityKey}
-						available={available}
-						onCreated={onConversationChange}
-						onDenied={deny}
-					/>
-				)}
+			<div className="conversation-columns">
+				<div className="chat-workspace">
+					{selfManaged ? (
+						<p>此 Agent 使用自有交互入口，请从 Agent 详情进入。</p>
+					) : conversationId ? (
+						<ActiveConversation
+							key={conversationId}
+							{...props}
+							agent={agent}
+							available={available}
+							onDenied={deny}
+							refreshAgent={() => void agentQuery.refetch()}
+						/>
+					) : (
+						<NewConversation
+							agentId={agentId}
+							identityKey={identityKey}
+							available={available}
+							onCreated={onConversationChange}
+							onDenied={deny}
+						/>
+					)}
+				</div>
+				<aside
+					ref={historyPanel}
+					id={`${instanceId}-history`}
+					aria-label="对话历史"
+					tabIndex={-1}
+					className="conversation-history-panel"
+				>
+					{showHistory ? (
+						<PersonalHistory
+							agentId={agentId}
+							identityKey={identityKey}
+							current={conversationId}
+							onSelect={(id) => {
+								setInternalHistory(false);
+								onConversationChange(id);
+							}}
+							onDenied={deny}
+						/>
+					) : (
+						<RecentConversationHistory
+							agentId={agentId}
+							conversationId={conversationId}
+							identityKey={identityKey}
+							onSelect={onConversationChange}
+						/>
+					)}
+				</aside>
 			</div>
 		</section>
 	);
