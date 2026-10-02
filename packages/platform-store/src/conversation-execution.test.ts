@@ -27,6 +27,7 @@ const storeConformanceAuthority: ConversationExecutionAuthorityV1 = {
 	actorId: "actor_fixture",
 	agentId: "agent_fixture",
 	channelId: "web",
+	authorizationRevision: "authorization_fixture_1",
 	taskBoundary: {
 		schemaVersion: 1,
 		principal: { kind: "user", id: "actor_fixture" },
