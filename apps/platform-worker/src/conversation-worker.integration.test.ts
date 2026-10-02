@@ -408,7 +408,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 export const signing = { ...${JSON.stringify(signing)}, privateKey: createPrivateKey(await readFile(${JSON.stringify(join(directory, "signing.pem"))})) };
 export const serviceToken = 'synthetic-runtime-token';
 export const directory = { async resolveUser(userId) { if (userId !== 'user-cli') return null; return { schemaVersion: 1, userId, accountStatus:'active',organizationIds:[],authorizationRevision:'identity-1'}; } };
-export const workloadInput = { databaseUrl: ${JSON.stringify(database.databaseUrl)}, policy: ${JSON.stringify(policy)},
+export const workloadInput = { policy: ${JSON.stringify(policy)},
 kubernetes: { mode:'kubeconfig', path:${JSON.stringify(kubePath)}, context:'test', expectedServer:${JSON.stringify(kubeUrl)} },
 registry: { endpoint:'https://registry.example.test', imageReferencePrefix:'registry.example.test', policy:{authorize:async()=>({status:'rejected'})} },
 admissionPolicyRef:'policy',registrySubjectRef:'worker', templateModelBindings:[], executionCapacityProfiles:[${JSON.stringify(capacity)}],
@@ -425,6 +425,8 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				{
 					env: {
 						...process.env,
+						PLATFORM_DATABASE_URL: database.databaseUrl,
+						PLATFORM_WORKER_NAMESPACE: policy.namespace,
 						PLATFORM_WORKER_DEPLOYMENT_MODULE: pathToFileURL(
 							join(moduleDirectory ?? "", "deployment.mjs"),
 						).href,

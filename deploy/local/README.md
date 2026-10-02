@@ -5,6 +5,9 @@
 任务投递仍由 [#482](https://github.com/AgoraIO-Extensions/agent-infra/issues/482) 的唯一生产
 循环提供，Connection 使用自己的服务、身份与授权。
 
+API 与 Worker 的数据库地址由本入口统一生成；Worker 的环境变量优先级及 namespace
+约束见[正式 Worker 部署说明](../platform-worker/README.md#打包与启动)。
+
 ## 配置
 
 复制 [.env.example](.env.example) 到仓库外的本地配置文件，填写本地 Docker context、独立

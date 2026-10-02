@@ -10,7 +10,7 @@ import {
 type DeploymentConfiguration = {
 	readonly workloadInput: Omit<
 		Parameters<typeof createProductionWorkloadWorkerOptionsV1>[0],
-		"workerId" | "runtimeProbe"
+		"workerId" | "runtimeProbe" | "databaseUrl"
 	>;
 	readonly signing: ConversationRuntimeOptionsV2["signing"];
 	readonly serviceToken: string;
@@ -29,9 +29,33 @@ const instanceId = randomUUID();
 let prepared: ReturnType<typeof createPrepared> | undefined;
 
 async function createPrepared(signal: AbortSignal) {
+	const databaseUrl = process.env.PLATFORM_DATABASE_URL;
+	try {
+		if (!databaseUrl) throw new Error();
+		const parsed = new URL(databaseUrl);
+		if (
+			!["postgres:", "postgresql:"].includes(parsed.protocol) ||
+			!parsed.hostname ||
+			parsed.pathname.length < 2
+		)
+			throw new Error();
+	} catch {
+		throw new Error("PLATFORM_DATABASE_URL must name a PostgreSQL database");
+	}
+	const namespace = process.env.PLATFORM_WORKER_NAMESPACE;
+	if (
+		!namespace ||
+		namespace.length > 63 ||
+		!/^([a-z0-9])([-a-z0-9]*[a-z0-9])?$/.test(namespace) ||
+		namespace !== workloadInput.policy.namespace
+	)
+		throw new Error(
+			"PLATFORM_WORKER_NAMESPACE must match the workload policy namespace",
+		);
 	const workload = await createProductionWorkloadWorkerOptionsV1(
 		{
 			...workloadInput,
+			databaseUrl,
 			workerId: signing.workerId,
 			runtimeProbe: createWorkloadReadinessAuthorizationV1({
 				...signing,

@@ -198,6 +198,12 @@ test("production Worker requires a private module and runtime authorization moun
 		)?.value,
 		"true",
 	);
+	assert.deepEqual(
+		worker.containers[0].env.find(
+			(entry) => entry.name === "PLATFORM_WORKER_NAMESPACE",
+		)?.valueFrom,
+		{ fieldRef: { fieldPath: "metadata.namespace" } },
+	);
 	assert.equal(worker.securityContext.fsGroup, 1000);
 	assert.deepEqual(
 		worker.volumes.find((volume) => volume.name === "deployment-module")
