@@ -119,7 +119,7 @@ export function MyAgentsScreen({
 												</Badge>
 												<Badge
 													variant="outline"
-													className="max-w-full whitespace-normal [overflow-wrap:anywhere]"
+													className="max-w-full whitespace-normal rounded-[7px] [overflow-wrap:anywhere]"
 												>
 													{application.source.kind === "standard"
 														? application.source.templateId

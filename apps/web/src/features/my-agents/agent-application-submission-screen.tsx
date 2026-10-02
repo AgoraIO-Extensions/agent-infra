@@ -167,7 +167,7 @@ export function AgentApplicationSubmissionScreen(
 					) : null}
 					{props.result ? (
 						<Link
-							className={buttonVariants({ variant: "link", className: "px-0" })}
+							className={buttonVariants()}
 							params={{ applicationId: props.result.applicationId }}
 							to="/my-agents/$applicationId"
 						>

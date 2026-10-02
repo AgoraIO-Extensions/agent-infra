@@ -374,7 +374,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 											)}
 										</TableCell>
 										<TableCell data-label="结果">
-											<Badge variant="outline">
+											<Badge variant="outline" data-result={record.result}>
 												{auditOutcomeLabel(record)}
 											</Badge>
 										</TableCell>

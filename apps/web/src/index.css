@@ -1153,9 +1153,6 @@ body {
 	gap: 6px;
 	flex-wrap: wrap;
 }
-.workbench-agent-tags [data-slot="badge"] {
-	border-radius: 7px;
-}
 .workbench-recent-row h3,
 .workbench-application-row h3 {
 	font-size: 14px;
@@ -1208,7 +1205,9 @@ body {
 }
 .ia-workbench [data-slot="badge"],
 .ia-agent-directory [data-slot="badge"],
-.agent-detail [data-slot="badge"] {
+.agent-detail [data-slot="badge"],
+[data-slot="badge"][data-status],
+[data-slot="badge"][data-result] {
 	height: auto;
 	min-height: 24px;
 	max-width: 100%;
@@ -1226,8 +1225,9 @@ body {
 }
 .ia-workbench .pill-live,
 [data-slot="badge"][data-status="ready"],
-[data-slot="badge"][data-status="available"] {
-	color: color-mix(in oklch, var(--success) 45%, var(--foreground));
+[data-slot="badge"][data-status="available"],
+[data-slot="badge"][data-result="succeeded"] {
+	color: var(--success);
 	border-color: color-mix(in oklch, var(--success) 25%, var(--border));
 	background: color-mix(in oklch, var(--success) 8%, var(--surface));
 }
@@ -1236,7 +1236,7 @@ body {
 [data-slot="badge"][data-status="updating"],
 [data-slot="badge"][data-status="pending_approval"],
 [data-slot="badge"][data-status="creating"] {
-	color: color-mix(in oklch, var(--warning) 45%, var(--foreground));
+	color: color-mix(in oklch, var(--warning) 78%, var(--foreground));
 	border-color: color-mix(in oklch, var(--warning) 32%, var(--border));
 	background: color-mix(in oklch, var(--warning) 10%, var(--surface));
 }
@@ -1244,8 +1244,9 @@ body {
 [data-slot="badge"][data-status="unavailable"],
 [data-slot="badge"][data-status="creation_failed"],
 [data-slot="badge"][data-status="disabled"],
-[data-slot="badge"][data-status="rejected"] {
-	color: color-mix(in oklch, var(--destructive) 75%, var(--foreground));
+[data-slot="badge"][data-status="rejected"],
+[data-slot="badge"][data-result="failed"] {
+	color: var(--destructive);
 	border-color: color-mix(in oklch, var(--destructive) 28%, var(--border));
 	background: color-mix(in oklch, var(--destructive) 8%, var(--surface));
 }
@@ -1290,8 +1291,10 @@ body {
 	font-size: 13px;
 	line-height: 1.65;
 }
+.ia-workbench .workbench-agent-tags [data-slot="badge"],
 .ia-agent-directory .directory-tags [data-slot="badge"] {
-	border-radius: 6px;
+	border-radius: 7px;
+	padding-inline: 8px;
 }
 .ia-agent-directory .directory-card-foot {
 	justify-content: space-between;
@@ -1476,7 +1479,7 @@ a[class~="group/button"] {
 	}
 	.workbench-section-head h2,
 	.ia-agent-directory .directory-section-head h2 {
-		font-size: 21px;
+		font-size: 20px;
 	}
 	.management-content .form-layout > div:first-child,
 	.agent-detail-panel,
@@ -1558,7 +1561,9 @@ a[class~="group/button"] {
 	min-width: 0;
 }
 .agent-detail .detail-section h2 {
+	font-family: inherit;
 	font-size: 16px;
+	letter-spacing: 0;
 }
 .detail-panel-heading h2 {
 	font-family: var(--font-display);
@@ -1695,6 +1700,7 @@ a[class~="group/button"]:focus-visible,
 	box-shadow: none;
 }
 [data-slot="badge"][data-status]::before,
+[data-slot="badge"][data-result]::before,
 .pill-live::before,
 .pill-wait::before,
 .pill-danger::before {

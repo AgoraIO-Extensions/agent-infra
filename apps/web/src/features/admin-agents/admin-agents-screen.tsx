@@ -236,7 +236,10 @@ export function AdminAgentsScreen({
 											</TableCell>
 											<TableCell data-label="状态">
 												<div className="space-y-2">
-													<Badge variant="secondary">
+													<Badge
+														variant="outline"
+														data-status={agent.managementStatus}
+													>
 														{
 															agentManagementStatusLabels[
 																agent.managementStatus

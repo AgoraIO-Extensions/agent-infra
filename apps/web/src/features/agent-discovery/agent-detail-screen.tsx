@@ -267,7 +267,7 @@ export function AgentDetailScreen({
 								无法替你查看正文。
 							</p>
 							<Link
-								className={buttonVariants({ variant: "ghost" })}
+								className={buttonVariants({ variant: "outline" })}
 								to="/chat/$agentId/{-$conversationId}"
 								params={{ agentId: agent.agentId, conversationId: undefined }}
 								search={{ view: "history" }}

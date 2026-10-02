@@ -366,7 +366,7 @@ export function AgentDiscoveryScreen({
 											<Link
 												className={cn(
 													buttonVariants({
-														variant: "outline",
+														variant: "ghost",
 														className: "min-w-0",
 													}),
 												)}

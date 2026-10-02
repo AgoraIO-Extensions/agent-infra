@@ -406,7 +406,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 				eyebrow="根据当前账号与组织范围过滤"
 				title="可用 Agent"
 				action={
-					<Link className={linkClass} to="/agents">
+					<Link className={buttonVariants({ variant: "ghost" })} to="/agents">
 						查看全部 Agent
 					</Link>
 				}
