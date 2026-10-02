@@ -1,4 +1,7 @@
 DO $migration$
+DECLARE
+  waiting_order real;
+  submitted_order real;
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_enum value
@@ -9,6 +12,21 @@ BEGIN
       AND value.enumlabel = 'waiting'
   ) THEN
     EXECUTE 'ALTER TYPE "platform"."conversation_execution_status" ADD VALUE ''waiting'' BEFORE ''submitted''';
+  END IF;
+
+  SELECT waiting.enumsortorder, submitted.enumsortorder
+  INTO waiting_order, submitted_order
+  FROM pg_enum waiting
+  JOIN pg_type type ON type.oid = waiting.enumtypid
+  JOIN pg_namespace namespace ON namespace.oid = type.typnamespace
+  JOIN pg_enum submitted
+    ON submitted.enumtypid = waiting.enumtypid
+    AND submitted.enumlabel = 'submitted'
+  WHERE namespace.nspname = 'platform'
+    AND type.typname = 'conversation_execution_status'
+    AND waiting.enumlabel = 'waiting';
+  IF waiting_order IS NULL OR submitted_order IS NULL OR waiting_order >= submitted_order THEN
+    RAISE EXCEPTION 'Incompatible conversation execution status enum order';
   END IF;
 END
 $migration$;
@@ -59,7 +77,11 @@ BEGIN
       AND actual.column_name = expected.column_name
     WHERE actual.column_name IS NULL
       OR actual.data_type <> expected.data_type
-      OR (expected.column_name = 'principal_type' AND actual.is_nullable <> 'NO')
+      OR (expected.column_name = 'principal_type' AND (
+        actual.is_nullable <> 'NO'
+        OR actual.character_maximum_length <> 16
+        OR actual.column_default IS DISTINCT FROM '''user''::character varying'
+      ))
   ) THEN
     RAISE EXCEPTION 'Incompatible historical typed task columns';
   END IF;

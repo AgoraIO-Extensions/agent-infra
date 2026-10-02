@@ -518,7 +518,10 @@ describe("historical task authorization upgrade", () => {
 		).toEqual([{ actor_id: "original-user-read-isolation" }]);
 		expect(
 			await migration.readLegacyControlRecovery("execution-read-isolation"),
-		).toBeNull();
+		).toMatchObject({
+			executionId: "execution-read-isolation",
+			originalPrincipal: { id: "original-user-read-isolation" },
+		});
 	});
 
 	it("rejects replay with missing required acceptance audit or a replacement migration identity", async () => {

@@ -587,6 +587,10 @@ describe("Platform PostgreSQL migration foundation", () => {
 						...config.uniqueConstraints.map((constraint) => constraint.name),
 					];
 				})
+				.concat([
+					"conversation_execution_agent_wait_idx",
+					"conversation_execution_task_wait_order_unique",
+				])
 				.toSorted();
 			const migratedIndexes = await client`
 					select indexes.indexname
@@ -1777,19 +1781,127 @@ describe("published Relay authority migration", () => {
 	}
 
 	async function records() {
+		const project = async (
+			table: string,
+			order: string,
+			keys: readonly string[],
+		) => {
+			const rows = await client.unsafe(
+				`select to_jsonb(t)::text as record from ${table} t order by ${order}`,
+			);
+			return rows.map(({ record }) => {
+				const value = JSON.parse(record) as Record<string, unknown>;
+				return JSON.stringify(
+					Object.fromEntries(
+						keys.filter((key) => key in value).map((key) => [key, value[key]]),
+					),
+				);
+			});
+		};
 		return {
-			subjects: [
-				...(await client`select to_jsonb(t)::text as record from platform.relay_key_subjects t order by purpose, subject_id`),
-			],
-			versions: [
-				...(await client`select to_jsonb(t)::text as record from platform.relay_key_versions t order by purpose, subject_id, key_version`),
-			],
-			conversations: [
-				...(await client`select to_jsonb(t)::text as record from platform.conversations t order by id`),
-			],
-			executions: [
-				...(await client`select to_jsonb(t)::text as record from platform.conversation_executions t order by execution_id`),
-			],
+			subjects: await project(
+				"platform.relay_key_subjects",
+				"purpose, subject_id",
+				[
+					"purpose",
+					"subject_id",
+					"last_version",
+					"current_version",
+					"updated_at",
+				],
+			),
+			versions: await project(
+				"platform.relay_key_versions",
+				"purpose, subject_id, key_version",
+				[
+					"purpose",
+					"subject_id",
+					"key_version",
+					"key_id",
+					"ciphertext",
+					"created_at",
+				],
+			),
+			conversations: await project("platform.conversations", "id", [
+				"id",
+				"agent_id",
+				"actor_id",
+				"channel_id",
+				"status",
+				"session_generation",
+				"authorization_revision",
+			]),
+			executions: await project(
+				"platform.conversation_executions",
+				"execution_id",
+				[
+					"execution_id",
+					"conversation_id",
+					"agent_id",
+					"actor_id",
+					"channel_id",
+					"turn_id",
+					"status",
+					"session_generation",
+					"delivery_fence",
+					"authorization_revision",
+					"created_at",
+					"execution_source",
+					"relay_key_purpose",
+					"relay_key_subject_id",
+					"relay_key_id",
+					"relay_key_version",
+				],
+			),
+		};
+	}
+
+	function schemaDelta(
+		before: Awaited<ReturnType<typeof relayCatalog>>,
+		after: Awaited<ReturnType<typeof relayCatalog>>,
+	) {
+		const byKey = (
+			rows: readonly Record<string, unknown>[],
+			keys: readonly string[],
+		) =>
+			new Map(
+				rows.map((row) => [
+					keys.map((key) => String(row[key])).join(":"),
+					JSON.stringify(row),
+				]),
+			);
+		const changed = (
+			rowsBefore: readonly Record<string, unknown>[],
+			rowsAfter: readonly Record<string, unknown>[],
+			keys: readonly string[],
+		) => {
+			const previous = byKey(rowsBefore, keys);
+			return rowsAfter
+				.filter(
+					(row) =>
+						previous.get(keys.map((key) => String(row[key])).join(":")) !==
+						JSON.stringify(row),
+				)
+				.map((row) => keys.map((key) => String(row[key])).join(":"))
+				.sort();
+		};
+		return {
+			columns: changed(before.catalog.columns, after.catalog.columns, [
+				"table_name",
+				"column_name",
+			]),
+			checks: changed(before.catalog.checks, after.catalog.checks, [
+				"table_name",
+				"constraint_name",
+			]),
+			indexes: changed(before.catalog.indexes, after.catalog.indexes, [
+				"tablename",
+				"indexname",
+			]),
+			enums: changed(before.catalog.enums, after.catalog.enums, [
+				"typname",
+				"enumlabel",
+			]),
 		};
 	}
 
@@ -1932,11 +2044,47 @@ describe("published Relay authority migration", () => {
 						}),
 					),
 			);
-			expect(await relayCatalog()).toEqual(catalog);
+			const afterCatalog = await relayCatalog();
+			expect(schemaDelta(catalog, afterCatalog)).toEqual({
+				columns: [
+					"conversation_executions:execution_source",
+					"conversation_executions:original_operation_digest",
+					"conversation_executions:original_submit_host_session_ref",
+					"conversation_executions:principal_type",
+					"conversation_executions:relay_key_id",
+					"conversation_executions:relay_key_purpose",
+					"conversation_executions:relay_key_subject_id",
+					"conversation_executions:relay_key_version",
+					"conversation_executions:runtime_submit_protocol",
+					"conversation_executions:task_wait_deadline",
+					"conversation_executions:task_wait_order",
+					"conversations:principal_type",
+				],
+				checks: [
+					"conversation_executions:conversation_execution_key_binding",
+					"conversation_executions:conversation_execution_original_digest_binding",
+					"conversation_executions:conversation_execution_principal_type_valid",
+					"conversation_executions:conversation_execution_task_wait_binding",
+					"conversation_events:conversation_event_source_binding",
+					"conversation_generation_tombstones:conversation_generation_tombstone_principal_valid",
+					"conversations:conversation_principal_type_valid",
+				],
+				indexes:
+					kind === "original27"
+						? [
+								"conversation_executions:conversation_execution_agent_wait_idx",
+								"conversation_executions:conversation_execution_task_wait_order_unique",
+							]
+						: [],
+				enums:
+					kind === "original27"
+						? ["conversation_execution_status:waiting"]
+						: [],
+			});
 			expect(await records()).toEqual(data);
 			await builtStore.migratePlatformDatabase({ databaseUrl });
 			expect(await history()).toEqual(after);
-			expect(await relayCatalog()).toEqual(catalog);
+			expect(await relayCatalog()).toEqual(afterCatalog);
 			expect(await records()).toEqual(data);
 		},
 	);

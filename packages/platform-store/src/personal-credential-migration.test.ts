@@ -366,7 +366,45 @@ describe("personal credential disable authority append", () => {
 				.slice(29)
 				.map(({ hash, created_at }) => ({ hash, created_at })),
 		).toEqual(appendedHistory);
-		expect(after.schema).toEqual(before.schema);
+		const principalUpgradeColumns = new Set([
+			"conversations:principal_type",
+			"conversation_executions:principal_type",
+		]);
+		const principalUpgradeConstraints = new Set([
+			"conversation_principal_binding_unique",
+			"conversation_execution_principal_binding_fk",
+			"conversation_execution_principal_type_valid",
+			"conversation_principal_type_valid",
+		]);
+		const withoutPrincipalUpgrade = (
+			schema: Awaited<ReturnType<typeof checkpointSchema>>,
+		) => ({
+			...schema,
+			columns: schema.columns.filter(
+				(row) => !principalUpgradeColumns.has(`${row.table_name}:${row.name}`),
+			),
+			constraints: schema.constraints.filter(
+				(row) => !principalUpgradeConstraints.has(row.name),
+			),
+		});
+		expect(withoutPrincipalUpgrade(after.schema)).toEqual(
+			withoutPrincipalUpgrade(before.schema),
+		);
+		expect(after.schema.columns).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					table_name: "conversations",
+					name: "principal_type",
+				}),
+				expect.objectContaining({
+					table_name: "conversation_executions",
+					name: "principal_type",
+				}),
+			]),
+		);
+		expect(after.schema.constraints.map((row) => row.name)).toEqual(
+			expect.arrayContaining([...principalUpgradeConstraints]),
+		);
 		expect(after.data).toEqual(before.data);
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		const repeated = await snapshot();

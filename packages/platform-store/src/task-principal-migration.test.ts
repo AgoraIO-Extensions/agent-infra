@@ -56,6 +56,52 @@ async function execution() {
 	await sql`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,last_event_sequence,created_at) values('execution','conversation','agent','same-id','web','turn','completed',1,1,'agent-1',1,'2026-01-01T00:00:00Z')`;
 }
 describe("0032 typed Task principal upgrade", () => {
+	it("rejects a waiting enum value ordered after submitted", async () => {
+		await legacy();
+		await sql`alter type platform.conversation_execution_status add value 'waiting'`;
+		const history =
+			await sql`select hash,created_at from platform_migrations.history order by created_at`;
+		await expect(
+			migratePlatformDatabase({ databaseUrl: database.databaseUrl }),
+		).rejects.toThrow("Platform migration failed");
+		expect(
+			await sql`select hash,created_at from platform_migrations.history order by created_at`,
+		).toEqual(history);
+	});
+
+	it.each([
+		{
+			name: "wrong principal default",
+			definition: "varchar(16) default 'application' not null",
+		},
+		{
+			name: "wrong principal length",
+			definition: "varchar(255) default 'user' not null",
+		},
+	] as const)(
+		"rejects $name in an existing typed principal column",
+		async ({ definition }) => {
+			await legacy();
+			await sql`alter type platform.conversation_execution_status add value 'waiting' before 'submitted'`;
+			await sql.unsafe(
+				`alter table platform.conversations add column principal_type ${definition}`,
+			);
+			await sql.unsafe(
+				`alter table platform.conversation_executions add column principal_type ${definition}`,
+			);
+			await sql`alter table platform.conversation_executions add column task_wait_order bigint`;
+			await sql`alter table platform.conversation_executions add column task_wait_deadline timestamptz`;
+			const history =
+				await sql`select hash,created_at from platform_migrations.history order by created_at`;
+			await expect(
+				migratePlatformDatabase({ databaseUrl: database.databaseUrl }),
+			).rejects.toThrow("Platform migration failed");
+			expect(
+				await sql`select hash,created_at from platform_migrations.history order by created_at`,
+			).toEqual(history);
+		},
+	);
+
 	it("preserves legacy IDs, terminal state, events, cursor and idempotency through the real migrator", async () => {
 		await legacy();
 		await conversation();
