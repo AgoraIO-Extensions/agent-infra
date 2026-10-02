@@ -48,6 +48,105 @@ async function authorizeCurrentConsumer(
 
 describe("PostgreSQL Connection business authority", () => {
 	integrationTest(
+		"serializes concurrent declaration revisions for existing and new Consumers",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 23),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			const catalogs = ["github", "bitbucket"].map((provider) => ({
+				...githubConnectionCatalog,
+				provider,
+				providerReleaseId: `startup-${provider}-${suffix}`,
+				actions: githubConnectionCatalog.actions.slice(0, 2).map((action) => ({
+					...action,
+					id: `${action.id}-${provider}-${suffix}`,
+				})),
+			}));
+			try {
+				const firstCatalog = catalogs[0];
+				if (!firstCatalog) throw new Error("Missing catalog fixture");
+				for (const catalog of catalogs)
+					await repository.publishProviderCatalog(catalog);
+				for (const existing of [true, false]) {
+					const consumer = {
+						id: `startup-consumer-${existing}-${suffix}`,
+						name: "Startup consumer",
+					};
+					if (existing)
+						await sql`INSERT INTO connection_consumers (id, display_name, status) VALUES (${consumer.id}, ${consumer.name}, 'ACTIVE')`;
+					const inputs = catalogs.map((catalog) => ({
+						consumer,
+						providerReleaseId: catalog.providerReleaseId,
+						actionVersionIds: catalog.actions.map((action) => action.id),
+					}));
+					const publications = await Promise.all(
+						inputs.flatMap((input) =>
+							Array.from({ length: 3 }, () =>
+								repository.publishConsumerDeclaration(input),
+							),
+						),
+					);
+					expect(
+						new Set(publications.map((result) => result.declarationId)).size,
+					).toBe(2);
+					const revisions =
+						await sql`SELECT revision::text FROM connection_consumer_action_declarations WHERE consumer_id = ${consumer.id} AND status = 'PUBLISHED' ORDER BY revision`;
+					expect(revisions).toHaveLength(2);
+					expect(
+						BigInt(revisions[1]?.revision) - BigInt(revisions[0]?.revision),
+					).toBe(1n);
+					const [before] =
+						await sql`SELECT revision::text, xmin::text FROM connection_consumers WHERE id = ${consumer.id}`;
+					expect(before?.revision).toBe(revisions[1]?.revision);
+					await Promise.all(
+						inputs.map((input) => repository.publishConsumerDeclaration(input)),
+					);
+					const [after] =
+						await sql`SELECT revision::text, xmin::text FROM connection_consumers WHERE id = ${consumer.id}`;
+					expect(after).toEqual(before);
+					const input = inputs[0];
+					if (!input) throw new Error("Missing publication fixture");
+					const first = await repository.publishConsumerDeclaration(input);
+					expect(
+						await repository.publishConsumerDeclaration({
+							...input,
+							consumer: { ...consumer, name: "Renamed consumer" },
+						}),
+					).toEqual(first);
+					const [renamed] =
+						await sql`SELECT display_name, revision::text FROM connection_consumers WHERE id = ${consumer.id}`;
+					expect(renamed).toEqual({
+						display_name: "Renamed consumer",
+						revision: before?.revision,
+					});
+					await sql`UPDATE connection_provider_releases SET status = 'DISABLED' WHERE id = ${input.providerReleaseId}`;
+					await expect(
+						repository.publishConsumerDeclaration(input),
+					).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+					await expect(
+						repository.publishProviderCatalog(firstCatalog),
+					).rejects.toThrow(
+						"Pinned ProviderRelease does not match the catalog",
+					);
+					await sql`UPDATE connection_provider_releases SET status = 'PUBLISHED' WHERE id = ${input.providerReleaseId}`;
+				}
+			} finally {
+				await sql.end();
+				await repository.close();
+			}
+		},
+		30_000,
+	);
+
+	integrationTest(
 		"retires only the duplicate DataLego Provider without deleting catalog history",
 		async () => {
 			if (!databaseUrl) return;

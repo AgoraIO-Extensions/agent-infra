@@ -9,10 +9,120 @@ import {
 	createGithubOAuthFetcherSelector,
 	createPreSubmitGithubOAuthAdapter,
 	createReadFallbackFetch,
+	publishStartupConsumerDeclarations,
 } from "./runtime-app";
 
 const tokenUrl = "https://github.com/login/oauth/access_token";
 const profileUrl = "https://api.github.com/user";
+
+describe("startup Consumer declaration scheduling", () => {
+	it("overlaps independent Consumers while preserving duplicate-ID revision order", async () => {
+		const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+		const active = new Set<string>();
+		let maximum = 0;
+		const calls: string[] = [];
+		const publishConsumerDeclaration = vi.fn(
+			async (input: {
+				consumer: { id: string; name: string };
+				providerReleaseId: string;
+			}) => {
+				expect(active.has(input.consumer.id)).toBe(false);
+				active.add(input.consumer.id);
+				maximum = Math.max(maximum, active.size);
+				calls.push(`${input.consumer.name}:${input.providerReleaseId}`);
+				await Promise.resolve();
+				active.delete(input.consumer.id);
+				return { declarationId: "test-declaration" };
+			},
+		);
+		try {
+			await publishStartupConsumerDeclarations(
+				{ publishConsumerDeclaration },
+				[
+					{ id: "a", name: "a" },
+					{ id: "b", name: "b" },
+					{ id: "c", name: "c" },
+					{ id: "a", name: "a-renamed" },
+				],
+				[
+					{
+						provider: "one",
+						providerReleaseId: "one",
+						actions: [{ id: "one@v1" }],
+					},
+					{
+						provider: "two",
+						providerReleaseId: "two",
+						actions: [{ id: "two@v1" }],
+					},
+				],
+			);
+			expect(maximum).toBe(3);
+			expect(calls.filter((call) => call.startsWith("a"))).toEqual([
+				"a:one",
+				"a:two",
+				"a-renamed:one",
+				"a-renamed:two",
+			]);
+			expect(publishConsumerDeclaration).toHaveBeenCalledTimes(8);
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it("drains in-flight chains before rejecting and logs no private failure text", async () => {
+		const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+		let finish: (() => void) | undefined;
+		let settled = false;
+		const publishConsumerDeclaration = vi.fn(
+			async (input: { consumer: { id: string } }) => {
+				if (input.consumer.id === "failed")
+					throw new Error("private-database-diagnostic");
+				await new Promise<void>((resolve) => {
+					finish = resolve;
+				});
+				return { declarationId: "test-declaration" };
+			},
+		);
+		try {
+			const result = publishStartupConsumerDeclarations(
+				{ publishConsumerDeclaration },
+				[
+					{ id: "failed", name: "failed" },
+					{ id: "slow", name: "slow" },
+				],
+				[
+					{
+						provider: "one",
+						providerReleaseId: "one",
+						actions: [{ id: "one@v1" }],
+					},
+				],
+			);
+			const expected = expect(result).rejects.toThrow(
+				"private-database-diagnostic",
+			);
+			void result.then(
+				() => {
+					settled = true;
+				},
+				() => {
+					settled = true;
+				},
+			);
+			await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+			expect(settled).toBe(false);
+			finish?.();
+			await expected;
+			expect(log.mock.calls.flat().join("\n")).not.toContain(
+				"private-database-diagnostic",
+			);
+		} finally {
+			finish?.();
+			log.mockRestore();
+		}
+	});
+});
 
 it("production assembly uses registered diagnostic service names", () => {
 	const source = ts.createSourceFile(
