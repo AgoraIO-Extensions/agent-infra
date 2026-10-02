@@ -156,9 +156,8 @@ export class PostgresTaskAuthorizationStoreV1 {
 		readonly agentId: string;
 	}): Promise<CurrentTaskApplicationV1 | null> {
 		try {
-			return await this.#client.begin(
-				"read committed read only",
-				(transaction) => readCurrentTaskApplicationV1(transaction, input),
+			return await this.#client.begin("read only", (transaction) =>
+				readCurrentTaskApplicationV1(transaction, input),
 			);
 		} catch {
 			throw new TaskAuthorizationStoreError();
@@ -171,9 +170,8 @@ export class PostgresTaskAuthorizationStoreV1 {
 		readonly agentId: string;
 	}): Promise<CurrentTaskApiUseGrantV1 | null> {
 		try {
-			return await this.#client.begin(
-				"read committed read only",
-				(transaction) => readCurrentTaskApiUseGrantV1(transaction, input),
+			return await this.#client.begin("read only", (transaction) =>
+				readCurrentTaskApiUseGrantV1(transaction, input),
 			);
 		} catch {
 			throw new TaskAuthorizationStoreError();
