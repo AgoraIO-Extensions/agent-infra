@@ -2,6 +2,10 @@ import type { startObservability } from "@agent-infra/observability";
 import { createHttpObservability } from "@agent-infra/observability/http";
 import { Hono } from "hono";
 import {
+	type ApplicationMaterialGrantRouteDependencies,
+	registerApplicationMaterialGrantRoutes,
+} from "./http/application-material-grant-routes.js";
+import {
 	type ApplicationRegistrationRouteDependencies,
 	registerApplicationRegistrationRoutes,
 } from "./http/application-registration-routes.js";
@@ -67,6 +71,7 @@ export interface PlatformAppDependencies {
 	) => Promise<Response>;
 	readonly files?: FileRoutesDependenciesV1;
 	readonly applications?: ApplicationRegistrationRouteDependencies;
+	readonly applicationMaterialGrants?: ApplicationMaterialGrantRouteDependencies;
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
@@ -139,6 +144,11 @@ export function createPlatformApp(
 	registerV2ManagementRoutes(app, dependencies.management);
 	if (dependencies.applications)
 		registerApplicationRegistrationRoutes(app, dependencies.applications);
+	if (dependencies.applicationMaterialGrants)
+		registerApplicationMaterialGrantRoutes(
+			app,
+			dependencies.applicationMaterialGrants,
+		);
 	if (dependencies.personalApiCredentials)
 		registerPersonalApiCredentialRoutes(
 			app,

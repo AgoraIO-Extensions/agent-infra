@@ -1,3 +1,4 @@
+export * from "./application-material-grants.ts";
 export * from "./application-registration.ts";
 export * from "./audit.ts";
 export * from "./browser.ts";
