@@ -34,6 +34,7 @@ import {
 	auditOutcomeLabel,
 	auditPrincipalLabels,
 	auditResultLabels,
+	auditSubjectLabels,
 	auditTimestamp,
 } from "./audit-labels.js";
 import type { AuditFilters, AuditScope } from "./audit-query.js";
@@ -124,7 +125,21 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 	return (
 		<>
 			<div className="page-heading">
-				<h1>{administrator ? "平台审计" : "我的执行审计"}</h1>
+				<div className="min-w-0">
+					{administrator && (
+						<p className="mb-2 text-muted-foreground text-sm">
+							系统管理员 · 只读
+						</p>
+					)}
+					<h1>
+						{administrator ? "复核 M1 范围内的关键变更。" : "我的执行审计"}
+					</h1>
+					{administrator && (
+						<p className="mt-3 max-w-3xl text-muted-foreground leading-6">
+							查看 Agent 治理、配置与生命周期，以及请求和执行操作的元数据。
+						</p>
+					)}
+				</div>
 				<Button
 					variant="ghost"
 					size="icon"
@@ -258,7 +273,21 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 				}}
 			>
 				<section className="py-5" aria-label="审计记录" aria-busy={busy}>
-					<h2 className="mb-4 font-semibold text-base">审计记录</h2>
+					<div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+						<div>
+							{administrator && (
+								<p className="mb-1 text-muted-foreground text-sm">事件时间线</p>
+							)}
+							<h2 className="font-semibold text-base">
+								{administrator ? "平台操作记录" : "审计记录"}
+							</h2>
+						</div>
+						{administrator && (
+							<p className="text-muted-foreground text-sm">
+								不包含会话正文、凭证值或模型内部思考
+							</p>
+						)}
+					</div>
 					{denied ? (
 						<Alert variant="destructive">
 							<AlertDescription>
@@ -290,9 +319,9 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 								<TableHeader>
 									<TableRow>
 										<TableHead>时间</TableHead>
-										<TableHead>动作</TableHead>
-										<TableHead>主体</TableHead>
-										<TableHead>Agent / Execution</TableHead>
+										<TableHead>事件</TableHead>
+										<TableHead>对象</TableHead>
+										<TableHead>操作主体</TableHead>
 										<TableHead>结果</TableHead>
 										<TableHead>
 											<span className="sr-only">详情</span>
@@ -307,29 +336,46 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 													{auditTimestamp(record.occurredAt)}
 												</time>
 											</TableCell>
-											<TableCell data-label="动作">
+											<TableCell data-label="事件">
 												<strong className="font-medium">
 													{auditActionLabels[record.action]}
 												</strong>
+												<small className="mt-1 block">{record.summary}</small>
 												<small className="mt-1 block break-all text-muted-foreground">
 													{record.action}
 												</small>
 											</TableCell>
-											<TableCell data-label="主体">
-												{
-													auditPrincipalLabels[
-														(record.originalPrincipal ?? record.actor).kind
-													]
-												}
+											<TableCell data-label="对象">
+												<span>{auditSubjectLabels[record.subject.kind]}</span>
 												<small className="mt-1 block break-all">
-													{record.originalPrincipal?.id ?? record.actor.actorId}
+													{record.subject.subjectId}
+												</small>
+												<small className="mt-1 block break-all text-muted-foreground">
+													Agent：{record.agentId ?? "未提供"}
+												</small>
+												<small className="mt-1 block break-all text-muted-foreground">
+													Execution：{record.executionId ?? "未提供"}
 												</small>
 											</TableCell>
-											<TableCell data-label="Agent / Execution">
-												<span>{record.agentId ?? "未提供"}</span>
-												<small className="mt-1 block break-all text-muted-foreground">
-													{record.executionId ?? "未提供"}
+											<TableCell data-label="操作主体">
+												<span>
+													可信操作主体 ·{" "}
+													{auditPrincipalLabels[record.actor.kind]}
+												</span>
+												<small className="mt-1 block break-all">
+													{record.actor.actorId}
 												</small>
+												{record.originalPrincipal && (
+													<small className="mt-1 block break-all text-muted-foreground">
+														原发起主体 ·{" "}
+														{
+															auditPrincipalLabels[
+																record.originalPrincipal.kind
+															]
+														}
+														：{record.originalPrincipal.id}
+													</small>
+												)}
 											</TableCell>
 											<TableCell data-label="结果">
 												<Badge variant="outline">
@@ -440,6 +486,18 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					) : null}
 				</SheetContent>
 			</Sheet>
+			{administrator && (
+				<Alert className="mt-5">
+					<AlertDescription className="space-y-1">
+						<strong>最小审计数据</strong>
+						<p>
+							记录谁在何时对哪个对象做了什么及其结果，不保存对话正文、凭证值或模型内部思考。
+							Connection 授权与外部效果由独立 Connection
+							审计核实，关联引用不授予查询权限。
+						</p>
+					</AlertDescription>
+				</Alert>
+			)}
 		</>
 	);
 }

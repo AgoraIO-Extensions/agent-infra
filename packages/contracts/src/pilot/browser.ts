@@ -22,6 +22,8 @@ import {
 	PersonalApiCredentialIssueResponseV1Schema,
 	PersonalApiCredentialListQueryV1Schema,
 	PersonalApiCredentialMetadataV1Schema,
+	PersonalApiCredentialNarrowRequestV1Schema,
+	PersonalApiCredentialNarrowResponseV1Schema,
 	PersonalApiCredentialPageV1Schema,
 	PersonalApiCredentialRevokeResponseV1Schema,
 } from "./personal-api-credentials.ts";
@@ -1242,6 +1244,27 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 		},
 	},
 	"/api/v2/me/api-credentials/{credentialId}": {
+		patch: {
+			operationId: "narrowPersonalApiCredentialV2",
+			summary: "Restrict one personal credential's scopes or expiry",
+			description:
+				"Active browser user only. Any Authorization header is rejected. Scopes can only be a nonempty subset; expiry can only be made earlier. Revoked or expired credentials are never revived. Same-key replay returns current metadata. Cross-person and absent IDs both return 404. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ credentialId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(
+				PersonalApiCredentialNarrowRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Current restricted credential metadata",
+					PersonalApiCredentialNarrowResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
 		delete: {
 			operationId: "revokePersonalApiCredentialV2",
 			summary: "Revoke one credential owned by the current browser user",
@@ -1481,6 +1504,10 @@ export const pilotBrowserSchemasV2 = {
 	PersonalApiCredentialMetadataV1: PersonalApiCredentialMetadataV1Schema,
 	PersonalApiCredentialListQueryV1: PersonalApiCredentialListQueryV1Schema,
 	PersonalApiCredentialPageV1: PersonalApiCredentialPageV1Schema,
+	PersonalApiCredentialNarrowRequestV1:
+		PersonalApiCredentialNarrowRequestV1Schema,
+	PersonalApiCredentialNarrowResponseV1:
+		PersonalApiCredentialNarrowResponseV1Schema,
 	PersonalApiCredentialRevokeResponseV1:
 		PersonalApiCredentialRevokeResponseV1Schema,
 	AgentLifecycleCommandRequestV1: AgentLifecycleCommandRequestV1Schema,

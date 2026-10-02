@@ -546,11 +546,11 @@ a[class~="group/button"] {
 	max-width: 100%;
 	min-height: 480px;
 }
-.chat-layout > header {
+.conversation-header {
 	flex-shrink: 0;
 }
 .chat-layout h1 {
-	font-size: 22px;
+	font-size: 26px;
 	overflow-wrap: anywhere;
 }
 .chat-workspace {
@@ -620,6 +620,30 @@ a[class~="group/button"] {
 .chat-layout .exchange {
 	max-width: 780px;
 	margin: 0 auto 30px;
+}
+.chat-message {
+	display: grid;
+	grid-template-columns: 34px minmax(0, 1fr);
+	gap: 12px;
+}
+.chat-message-avatar {
+	display: grid;
+	place-items: center;
+	width: 34px;
+	height: 34px;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	background: var(--surface);
+}
+.chat-message-body {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.chat-message-user .chat-message-body {
+	padding: 14px 16px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--surface);
 }
 .assistant-markdown {
 	line-height: 1.8;
@@ -754,14 +778,14 @@ a[class~="group/button"] {
 	.platform-breadcrumb {
 		padding-top: 5px;
 	}
-	.chat-layout > header {
+	.conversation-header {
 		align-items: flex-start;
 	}
-	.chat-layout > header > div:last-child,
-	.chat-layout > header > div:last-child > [data-slot="button"] {
+	.conversation-header > div:last-child,
+	.conversation-header > div:last-child > [data-slot="button"] {
 		width: 100%;
 	}
-	.chat-layout > header > div:last-child {
+	.conversation-header > div:last-child {
 		flex-direction: column;
 	}
 	.chat-status {

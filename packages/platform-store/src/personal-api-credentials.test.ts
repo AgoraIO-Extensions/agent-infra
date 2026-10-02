@@ -138,6 +138,89 @@ describe("PostgreSQL personal API credential governance", () => {
 		}
 	});
 
+	it("serializes PATCH replay, survives restart, and never revives revoked material", async () => {
+		const adapter = store();
+		const first = await adapter.issue(context, command);
+		const id = first.metadata.credentialId;
+		const patchContext = nextContext("patch.concurrent");
+		const results = await Promise.all(
+			[adapter, store()].map((instance) =>
+				instance.narrow(patchContext, id, { scopes: ["agent:read"] }),
+			),
+		);
+		expect(results.map((result) => result.replayed).sort()).toEqual([
+			false,
+			true,
+		]);
+		const counts =
+			await client`select count(*)::int as count from platform.audit_events where action='api.credential.narrowed' and outcome='succeeded'`;
+		expect(counts[0]?.count).toBe(1);
+		await adapter.close();
+		const restarted = store();
+		await expect(
+			restarted.narrow(patchContext, id, { scopes: ["agent:use"] }),
+		).rejects.toMatchObject({ code: "idempotency_conflict" });
+		const revoked = await restarted.revoke(
+			nextContext("revoke.after.patch"),
+			id,
+		);
+		expect(
+			await restarted.narrow(patchContext, id, { scopes: ["agent:read"] }),
+		).toEqual({ metadata: revoked.metadata, replayed: true });
+		const again = await restarted.narrow(nextContext("patch.revoked"), id, {
+			expiresAt: "2020-01-01T00:00:00Z",
+		});
+		expect(again.metadata.revokedAt).toBe(revoked.metadata.revokedAt);
+		expect(again.metadata.expiresAt).toBe("2020-01-01T00:00:00.000Z");
+		await expect(
+			restarted.narrow(nextContext("patch.extend"), id, {
+				expiresAt: "2035-01-01T00:00:00Z",
+			}),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			restarted.narrow(nextContext("patch.other", "user_bob"), id, {
+				scopes: ["agent:read"],
+			}),
+		).rejects.toMatchObject({ code: "not_found" });
+		await expect(
+			restarted.narrow(nextContext("patch.missing", "user_bob"), "missing", {
+				scopes: ["agent:read"],
+			}),
+		).rejects.toMatchObject({ code: "not_found" });
+	});
+
+	it.each([false, true])(
+		"rolls back narrowed scopes and withholds a list at audit/commit failure",
+		async (deferred) => {
+			const adapter = store();
+			const first = await adapter.issue(context, command);
+			await armAuditFailure(deferred);
+			await expect(
+				adapter.narrow(
+					nextContext("patch.audit"),
+					first.metadata.credentialId,
+					{ scopes: ["agent:read"] },
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+			await expect(
+				adapter.list(
+					{
+						userId: context.userId,
+						requestId: "read.fault",
+						traceId: context.traceId,
+					},
+					{},
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+			const [row] =
+				await client`select scopes from platform.platform_api_credentials where id=${first.metadata.credentialId}`;
+			expect(row?.scopes).toEqual(first.metadata.scopes);
+			const [idempotency] =
+				await client`select count(*)::int as count from platform.idempotency_records where command_type='api.credential.narrowed'`;
+			expect(idempotency?.count).toBe(0);
+		},
+	);
+
 	it("pages only personal metadata, binds cursors, and persists necessary read audit", async () => {
 		const adapter = store();
 		const issued = await Promise.all(

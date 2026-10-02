@@ -1,6 +1,7 @@
 import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, History, Plus } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { ArrowLeft, Bot, History, Plus } from "lucide-react";
 import {
 	useCallback,
 	useId,
@@ -10,8 +11,10 @@ import {
 	useState,
 } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "../../components/ui/button.js";
+import { Button, buttonVariants } from "../../components/ui/button.js";
 import { getAgentV2 } from "../../pilot/generated-v2/sdk.gen.js";
+import { agentServiceAvailabilityLabel } from "../agent-discovery/agent-discovery-screen.js";
+import { agentManagementStatusLabels } from "../agent-management-status.js";
 import { ActiveConversation } from "./active-conversation.js";
 import { NewConversation, PersonalHistory } from "./conversation-navigation.js";
 import { ConversationReadError, responseFailure } from "./execution-detail.js";
@@ -141,59 +144,93 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		agent.source.interactionMode === "self-managed";
 	return (
 		<section className="chat-layout min-w-0 space-y-5">
-			<header className="flex flex-wrap items-start justify-between gap-3 border-border border-b pb-4">
-				<div>
-					<h1 className="font-semibold text-[28px]">{agent.name}</h1>
-					<p className="mt-1 text-muted-foreground text-sm">
-						个人 Web 对话 · 离开页面不会取消已提交的任务
-					</p>
-				</div>
-				<div className="flex flex-wrap gap-2">
-					<Button
-						variant="outline"
-						aria-controls={`${instanceId}-history`}
-						onClick={() => {
-							setHistory(!showHistory);
-							historyPanel.current?.focus();
-						}}
-					>
-						{showHistory ? (
-							<ArrowLeft aria-hidden="true" />
-						) : (
-							<History aria-hidden="true" />
-						)}
-						{showHistory ? "返回对话" : "个人历史"}
-					</Button>
-					<Button
-						variant="outline"
-						disabled={!available || selfManaged}
-						onClick={() => {
-							setInternalHistory(false);
-							onConversationChange(undefined);
-						}}
-					>
-						<Plus aria-hidden="true" />
-						新建会话
-					</Button>
-				</div>
-			</header>
-			{!available && (
-				<Alert role="status" className="bg-muted">
-					<AlertDescription>
-						{agent.serviceAvailability === "updating"
-							? "Agent 更新中"
-							: agent.serviceAvailability === "starting"
-								? "Agent 启动中"
-								: "Agent 当前不可用"}
-						，历史保持只读。
-						<Button variant="ghost" onClick={() => void agentQuery.refetch()}>
-							刷新 Agent 状态
-						</Button>
-					</AlertDescription>
-				</Alert>
-			)}
 			<div className="conversation-columns">
 				<div className="chat-workspace">
+					<header className="conversation-header mb-5 flex flex-wrap items-start justify-between gap-3 border-border border-b pb-4">
+						<div className="flex min-w-0 gap-3">
+							<span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+								<Bot aria-hidden="true" />
+							</span>
+							<div className="min-w-0 space-y-1">
+								<h1 className="font-semibold text-[26px]">{agent.name}</h1>
+								<p className="text-muted-foreground text-sm">
+									{agent.source.kind === "standard"
+										? `标准模板 · ${agent.source.templateId}`
+										: `自定义 Agent · ${selfManaged ? "自有交互入口" : "平台交互入口"}`}
+								</p>
+								<p className="flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground text-sm">
+									<span>
+										管理状态：
+										{agentManagementStatusLabels[agent.managementStatus]}
+									</span>
+									{agent.serviceAvailability !== null && (
+										<span>
+											服务状态：
+											{agentServiceAvailabilityLabel(agent.serviceAvailability)}
+										</span>
+									)}
+								</p>
+								{!selfManaged && (
+									<p className="text-muted-foreground text-sm">
+										个人 Web 对话 · 离开页面不会取消已提交的任务
+									</p>
+								)}
+							</div>
+						</div>
+						<div className="flex flex-wrap gap-2">
+							<Link
+								to="/agents"
+								search={{ mode: "conversation" }}
+								className={buttonVariants({ variant: "ghost" })}
+							>
+								切换 Agent
+							</Link>
+							<Button
+								variant="outline"
+								aria-controls={`${instanceId}-history`}
+								onClick={() => {
+									setHistory(!showHistory);
+									historyPanel.current?.focus();
+								}}
+							>
+								{showHistory ? (
+									<ArrowLeft aria-hidden="true" />
+								) : (
+									<History aria-hidden="true" />
+								)}
+								{showHistory ? "返回对话" : "个人历史"}
+							</Button>
+							<Button
+								variant="outline"
+								disabled={!available || selfManaged}
+								onClick={() => {
+									setInternalHistory(false);
+									onConversationChange(undefined);
+								}}
+							>
+								<Plus aria-hidden="true" />
+								新建会话
+							</Button>
+						</div>
+					</header>
+					{!available && (
+						<Alert role="status" className="mb-5 bg-muted">
+							<AlertDescription>
+								{agent.serviceAvailability === "updating"
+									? "Agent 更新中"
+									: agent.serviceAvailability === "starting"
+										? "Agent 启动中"
+										: "Agent 当前不可用"}
+								，历史保持只读。
+								<Button
+									variant="ghost"
+									onClick={() => void agentQuery.refetch()}
+								>
+									刷新 Agent 状态
+								</Button>
+							</AlertDescription>
+						</Alert>
+					)}
 					{selfManaged ? (
 						<p>此 Agent 使用自有交互入口，请从 Agent 详情进入。</p>
 					) : conversationId ? (
