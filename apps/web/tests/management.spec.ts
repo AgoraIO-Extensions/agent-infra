@@ -1592,7 +1592,7 @@ test("Agent directory keeps independent Connection in navigation and creation in
 	if (await connection.count()) {
 		await expect(connection).toHaveAttribute("target", "_blank");
 		expect(await connection.getAttribute("href")).not.toContain("/agents");
-	} else await expect(nav).toContainText("Connection 尚未接入");
+	} else await expect(nav).not.toContainText("Connection");
 	if (info.project.name === "mobile") await page.keyboard.press("Escape");
 	const create = page
 		.locator("main .page-heading")

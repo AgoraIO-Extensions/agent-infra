@@ -189,6 +189,11 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					</Link>
 				</nav>
 			)}
+			{!administrator && (
+				<p className="mb-5 break-words text-muted-foreground text-sm">
+					审计范围：当前用户 · {session.user.displayName || session.user.userId}
+				</p>
+			)}
 			<form
 				ref={form}
 				onSubmit={apply}
@@ -203,28 +208,28 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					<Label htmlFor={fieldId("until")}>结束时间</Label>
 					<Input id={fieldId("until")} name="until" type="datetime-local" />
 				</div>
-				<div>
-					<Label htmlFor={fieldId("principalKind")}>主体类型</Label>
-					{administrator ? (
-						<NativeSelect id={fieldId("principalKind")} name="principalKind">
-							<NativeSelectOption value="">全部类型</NativeSelectOption>
-							<NativeSelectOption value="user">用户</NativeSelectOption>
-							<NativeSelectOption value="application">应用</NativeSelectOption>
-						</NativeSelect>
-					) : (
-						<Input id={fieldId("principalKind")} value="用户" readOnly />
-					)}
-				</div>
-				<div>
-					<Label htmlFor={fieldId("principalId")}>主体 ID</Label>
-					<Input
-						id={fieldId("principalId")}
-						name={administrator ? "principalId" : undefined}
-						defaultValue={administrator ? "" : session.user.userId}
-						readOnly={!administrator}
-						maxLength={128}
-					/>
-				</div>
+				{administrator && (
+					<>
+						<div>
+							<Label htmlFor={fieldId("principalKind")}>主体类型</Label>
+							<NativeSelect id={fieldId("principalKind")} name="principalKind">
+								<NativeSelectOption value="">全部类型</NativeSelectOption>
+								<NativeSelectOption value="user">用户</NativeSelectOption>
+								<NativeSelectOption value="application">
+									应用
+								</NativeSelectOption>
+							</NativeSelect>
+						</div>
+						<div>
+							<Label htmlFor={fieldId("principalId")}>主体 ID</Label>
+							<Input
+								id={fieldId("principalId")}
+								name="principalId"
+								maxLength={128}
+							/>
+						</div>
+					</>
+				)}
 				<div>
 					<Label htmlFor={fieldId("agentId")}>Agent ID</Label>
 					<Input id={fieldId("agentId")} name="agentId" maxLength={128} />

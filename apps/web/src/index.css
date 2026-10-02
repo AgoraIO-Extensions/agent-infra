@@ -1384,9 +1384,13 @@ body {
 	background: var(--surface);
 }
 [data-slot="select-trigger"],
-[data-slot="alert"],
-[data-slot="empty"] {
+[data-slot="alert"] {
 	border-radius: 10px;
+}
+[data-slot="empty"] {
+	border: 1px dashed var(--border);
+	border-radius: 14px;
+	background: var(--surface);
 }
 [data-slot="dialog-content"],
 [data-slot="select-content"] {

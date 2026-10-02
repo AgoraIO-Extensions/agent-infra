@@ -128,7 +128,7 @@ export function AgentDiscoveryScreen({
 		<section aria-labelledby="agents-heading">
 			<header className="page-heading">
 				<div>
-					<p className="directory-eyebrow">工作区 / Agent 目录</p>
+					<p className="page-eyebrow">工作区 / Agent 目录</p>
 					<h1 id="agents-heading" className="font-semibold text-[28px]">
 						{conversationSelection
 							? "选择 Agent 开始对话"

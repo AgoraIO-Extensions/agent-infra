@@ -253,7 +253,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						<ClipboardMinus size={17} strokeWidth={1.8} aria-hidden="true" />
 						我的执行审计
 					</Link>
-					{connectionUrl ? (
+					{connectionUrl && (
 						<a
 							className="platform-nav-item platform-nav-external"
 							href={connectionUrl}
@@ -266,8 +266,6 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							</span>
 							<ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
 						</a>
-					) : (
-						<p className="platform-nav-label">Connection 尚未接入</p>
 					)}
 				</nav>
 				{admin && (
@@ -415,18 +413,17 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						</AuthenticatedContent>
 					) : (
 						<main className="platform-content max-w-2xl">
-							<h1 className="font-semibold text-[28px]">
-								{session.state.kind === "loading"
+							<h1 className="font-semibold text-[28px]">登录工作空间</h1>
+							<p className="mt-5 text-muted-foreground" role="status">
+								{session.isFetching
 									? "正在确认登录状态…"
-									: "登录工作空间"}
-							</h1>
+									: session.state.kind !== "loading" &&
+										(session.state.retryable
+											? "暂时无法确认登录状态，请重试。"
+											: "请先登录，再查看 Agent、提交申请或继续对话。")}
+							</p>
 							{session.state.kind !== "loading" && (
 								<div className="mt-5 space-y-4">
-									<p className="text-muted-foreground">
-										{session.state.retryable
-											? "暂时无法确认登录状态，请重试。"
-											: "请先登录，再查看 Agent、提交申请或继续对话。"}
-									</p>
 									{loginUrl ? (
 										development ? (
 											<a className={buttonVariants()} href={loginUrl}>
@@ -452,7 +449,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 										onClick={() => void session.refetch()}
 										disabled={session.isFetching}
 									>
-										重新检查
+										{session.isFetching ? "正在检查…" : "重新检查"}
 									</Button>
 								</div>
 							)}

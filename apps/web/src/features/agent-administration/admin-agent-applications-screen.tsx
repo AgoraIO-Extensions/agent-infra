@@ -381,8 +381,6 @@ export function AdminAgentApplicationsScreen({
 				<AlertDescription>当前无法访问审批。</AlertDescription>
 			</Alert>
 		);
-	if (state.kind === "loading")
-		return <p aria-live="polite">正在读取审批申请…</p>;
 	return (
 		<section aria-labelledby="agent-approvals-heading">
 			<header className="page-heading">
@@ -399,7 +397,9 @@ export function AdminAgentApplicationsScreen({
 				)}
 			</header>
 			<DecisionFeedback decision={decisionResult} />
-			{state.kind === "unavailable" ? (
+			{state.kind === "loading" ? (
+				<p role="status">正在读取审批申请…</p>
+			) : state.kind === "unavailable" ? (
 				<Alert className="mt-5">
 					<AlertDescription>
 						{state.retryable

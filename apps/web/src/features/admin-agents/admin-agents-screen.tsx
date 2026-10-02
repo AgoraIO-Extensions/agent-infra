@@ -95,7 +95,7 @@ export function AdminAgentsScreen({
 		<section aria-labelledby={`${id}-heading`}>
 			<header className="page-heading">
 				<div>
-					<p className="directory-eyebrow">系统管理员</p>
+					<p className="page-eyebrow">系统管理 / Agent 管理</p>
 					<h1 id={`${id}-heading`}>看清所有 Agent 的运行资格。</h1>
 					<p>
 						查看已创建 Agent 的来源、Owner
