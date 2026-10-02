@@ -704,12 +704,18 @@ export function createPersonalApiCredentialUseCaseV1(dependencies: {
 				credentialId: parsePersonalApiCredentialIdV1(credentialId),
 				command: parsePersonalApiCredentialNarrowingV1(input),
 			}));
-			return execute(
+			return execute<{
+				metadata: PersonalApiCredentialMetadataV1;
+				replayed: boolean;
+			}>(
 				request,
 				"api.credential.narrowed",
 				async (transaction, ownCredential) => {
 					if (snapshot instanceof PersonalApiCredentialErrorV1) throw snapshot;
-					const digest = platformIdempotencyV1.canonicalRequestDigest(snapshot);
+					const digest = platformIdempotencyV1.canonicalRequestDigest({
+						credentialId: snapshot.credentialId,
+						command: { ...snapshot.command },
+					});
 					const replayId = await replayCredentialId(
 						transaction,
 						request,
