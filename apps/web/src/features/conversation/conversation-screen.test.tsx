@@ -768,9 +768,9 @@ describe("functional conversation screen", () => {
 					? Response.json({ ...agent, serviceAvailability })
 					: undefined,
 			);
-			await screen.findByRole("heading", { name: agent.name, exact: true });
+			await screen.findByRole("heading", { name: agent.name });
 			const header = screen
-				.getByRole("heading", { name: agent.name, exact: true })
+				.getByRole("heading", { name: agent.name })
 				.closest("header");
 			if (!header) throw new Error("Expected conversation header");
 			expect(within(header).getByText("管理状态：可用")).toBeTruthy();
