@@ -608,7 +608,12 @@ export function createRuntimeProbeProtocol({
 					operation: businessRequest.operation,
 					keyBinding: businessRequest.keyBinding,
 				},
-				keyDelivery: { relayKey: "synthetic-pinned-key-k1" },
+				keyDelivery: {
+					relayKey:
+						request.selection.modelOptionId === "selected-option"
+							? credentials.selected
+							: credentials.default,
+				},
 			},
 		};
 	}
@@ -691,29 +696,27 @@ function deployment(origin, directory) {
 		AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY: publicKeyPem,
 		AGENT_INFRA_RUNTIME_GRANT_ISSUER: "synthetic-platform",
 		AGENT_INFRA_RUNTIME_SERVICE_TOKEN: serviceToken,
-		AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT: credentials.default,
-		AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_SELECTED: credentials.selected,
 		AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
-			schemaVersion: 2,
+			schemaVersion: 4,
 			configVersion: expectedConfigVersion,
 			defaultModelOptionId: "default-option",
 			defaultReasoningLevel: "medium",
 			modelOptions: [
 				{
 					modelOptionId: "default-option",
+					protocol: "openai-responses-v1",
+					authentication: "bearer",
 					endpoint: `${origin}/approved-default/v1`,
 					model: "gpt-5.6-sol",
 					reasoningLevels: ["medium"],
-					credentialEnvironmentVariable:
-						"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT",
 				},
 				{
 					modelOptionId: "selected-option",
+					protocol: "openai-responses-v1",
+					authentication: "bearer",
 					endpoint: `${origin}/approved-selected/v1`,
 					model: "gpt-5.6-sol",
 					reasoningLevels: ["high"],
-					credentialEnvironmentVariable:
-						"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_SELECTED",
 				},
 			],
 		}),
