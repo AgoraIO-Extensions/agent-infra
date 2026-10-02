@@ -1721,6 +1721,199 @@ export type DisableOwnApplicationV2Responses = {
 
 export type DisableOwnApplicationV2Response = DisableOwnApplicationV2Responses[keyof DisableOwnApplicationV2Responses];
 
+export type GrantApplicationMaterialV2Data = {
+    body: {
+        principalId: string;
+        principalType: 'user' | 'application';
+    };
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}/material-grant';
+};
+
+export type GrantApplicationMaterialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GrantApplicationMaterialV2Error = GrantApplicationMaterialV2Errors[keyof GrantApplicationMaterialV2Errors];
+
+export type GrantApplicationMaterialV2Responses = {
+    /**
+     * Material grant metadata
+     */
+    201: {
+        metadata: {
+            applicationId: string;
+            authorizationRevision: string;
+            createdAt: string;
+            principalId: string;
+            principalType: 'user' | 'application';
+            revokedAt: string | null;
+        };
+        replayed: boolean;
+    };
+};
+
+export type GrantApplicationMaterialV2Response = GrantApplicationMaterialV2Responses[keyof GrantApplicationMaterialV2Responses];
+
+export type ReadApplicationMaterialV2Data = {
+    body?: never;
+    path: {
+        applicationId: string;
+        principalType: 'user' | 'application';
+        principalId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}';
+};
+
+export type ReadApplicationMaterialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadApplicationMaterialV2Error = ReadApplicationMaterialV2Errors[keyof ReadApplicationMaterialV2Errors];
+
+export type ReadApplicationMaterialV2Responses = {
+    /**
+     * Material grant metadata
+     */
+    200: {
+        metadata: {
+            applicationId: string;
+            authorizationRevision: string;
+            createdAt: string;
+            principalId: string;
+            principalType: 'user' | 'application';
+            revokedAt: string | null;
+        };
+        replayed: boolean;
+    };
+};
+
+export type ReadApplicationMaterialV2Response = ReadApplicationMaterialV2Responses[keyof ReadApplicationMaterialV2Responses];
+
+export type RevokeApplicationMaterialV2Data = {
+    body: {
+        expectedRevision?: string;
+        status: 'revoked';
+    };
+    path: {
+        applicationId: string;
+        principalType: 'user' | 'application';
+        principalId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}';
+};
+
+export type RevokeApplicationMaterialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokeApplicationMaterialV2Error = RevokeApplicationMaterialV2Errors[keyof RevokeApplicationMaterialV2Errors];
+
+export type RevokeApplicationMaterialV2Responses = {
+    /**
+     * Revoked material grant metadata
+     */
+    200: {
+        metadata: {
+            applicationId: string;
+            authorizationRevision: string;
+            createdAt: string;
+            principalId: string;
+            principalType: 'user' | 'application';
+            revokedAt: string | null;
+        };
+        replayed: boolean;
+    };
+};
+
+export type RevokeApplicationMaterialV2Response = RevokeApplicationMaterialV2Responses[keyof RevokeApplicationMaterialV2Responses];
+
 export type GetConversationV2Data = {
     body?: never;
     path: {
