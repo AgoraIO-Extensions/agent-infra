@@ -3,6 +3,30 @@
 UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#21-技术栈)为准。
 本次迁移对应 [#389](https://github.com/AgoraIO-Extensions/agent-infra/issues/389)，不增加产品能力。
 
+## OpenDesign 视觉版本
+
+[#1208](https://github.com/AgoraIO-Extensions/agent-infra/issues/1208) 对整体 Web 采用新的 OpenDesign
+设计，保留工作区、我的管理、系统管理的职责分组和现有服务端契约。原 #400 原型保留。
+设计项目为 `agent-infra-web-redesign-1208`，对话为 `ab988058-7eb4-4da7-98dc-0d07bdc88c8e`。
+在 OpenDesign 中打开该项目的 `index.html` 可交互预览；`DESIGN.md` 定义视觉规则，
+`IMPLEMENTATION.md` 映射现有页面。落地版本的 SHA-256 为：
+
+| 文件 | SHA-256 |
+| --- | --- |
+| `index.html` | `c278d81ade83e5e2237d852cbca1f9930759652811ddd6ef99fef099a4405940` |
+| `DESIGN.md` | `f0d87a857af95f9be912cb832ede9764a521639313f56ef14ff9ce2495904021` |
+| `IMPLEMENTATION.md` | `364e9ffcb2f5b60a5b1974ff2359f63e69423cb5f9c59356cd4e26a2d7ea8111` |
+
+`src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
+映射到现有 shadcn 变量。页面共享内容宽度、标题和表单样式；桌面侧栏为 248px，
+低于 1024px 使用现有 Sheet。工作台先展示最近对话和职责事项，再展示 Agent 与申请。
+Agent 详情中的 Owner、渠道、模型和范围均取自实际投影；Owner 配置入口仍由权限结果控制。
+对话时间线独立滚动，保留消息输入区及代码、表格的局部滚动。
+视口高度不超过 600px 时改用页面滚动，避免从执行详情返回后的键盘焦点被聊天容器裁切。
+
+原型中的示例人员、模型、就绪提示和演示操作不作为生产数据或新增能力。
+申请、审批、配置、生命周期及审计继续复用现有组件、请求和权限校验。
+
 ## 组件与调用方
 
 `apps/web/components.json` 保持 `base-lyra`、`neutral`、CSS variables、`@/` aliases 和 lucide。

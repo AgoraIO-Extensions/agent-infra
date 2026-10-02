@@ -4,7 +4,6 @@ import { fireEvent, screen } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { safeDeploymentUrl } from "../application-shell.js";
 import { AgentDiscoveryScreen } from "./agent-discovery-screen.js";
 import { renderWithAgentRouter } from "./test-router.js";
 
@@ -150,7 +149,9 @@ describe("AgentDiscoveryScreen", () => {
 			expect(
 				screen.getByRole("link", { name: `查看 ${name} 详情` }),
 			).toBeTruthy();
-			expect(screen.getByText(label)).toBeTruthy();
+			expect(
+				screen.getByText(label, { selector: '[data-slot="badge"]' }),
+			).toBeTruthy();
 			expect(screen.getByRole("status").textContent).toBe(
 				"2 个获授权 Agent，匹配 1 个",
 			);
@@ -226,46 +227,39 @@ describe("AgentDiscoveryScreen", () => {
 		expect(screen.queryByRole("link", { name: "开始对话" })).toBeNull();
 	});
 
-	it("renders controlled Connection and application guidance without projecting authorization", async () => {
+	it("filters only the authorized projection by status, template and model and clears filters", async () => {
+		const ready = AgentProjectionV2Schema.parse({
+			...startingAgent,
+			agentId: "ready-agent",
+			name: "可用编程助手",
+			serviceAvailability: "ready",
+		});
 		await renderWithAgentRouter(
 			<AgentDiscoveryScreen
-				connectionUrl={safeDeploymentUrl("https://connection.example/portal")}
-				state={{ kind: "ready", agents: [] }}
+				state={{ kind: "ready", agents: [startingAgent, ready] }}
 			/>,
 		);
-		const connectionLink = screen.getByRole("link", {
-			name: "查看我的 Connection",
+		fireEvent.change(screen.getByRole("combobox", { name: "状态" }), {
+			target: { value: "ready" },
 		});
-		expect(connectionLink.getAttribute("href")).toBe(
-			"https://connection.example/portal",
-		);
-		expect(connectionLink.getAttribute("target")).toBe("_blank");
-		expect(connectionLink.getAttribute("rel")).toBe("noreferrer");
 		expect(
-			screen.getByRole("link", { name: "查看我的申请" }).getAttribute("href"),
-		).toBe("/my-agents");
+			screen.getByRole("link", { name: "查看 可用编程助手 详情" }),
+		).toBeTruthy();
 		expect(
-			screen.queryByText(/已授权|未授权|Owner 已配置的 Provider/),
+			screen.queryByRole("link", { name: "查看 Release assistant 详情" }),
 		).toBeNull();
+		fireEvent.change(screen.getByRole("searchbox", { name: "搜索 Agent" }), {
+			target: { value: "不存在" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
+		expect(
+			screen.getAllByRole("link", { name: /^查看 .+ 详情$/ }),
+		).toHaveLength(2);
+		expect(
+			screen.getByRole("link", { name: "创建申请" }).getAttribute("href"),
+		).toBe("/my-agents/new");
 	});
 
-	it.each([undefined, "http://connection.example", "//connection.example"])(
-		"does not synthesize a Connection entry for missing or rejected deployment URL %s",
-		async (connectionUrl) => {
-			await renderWithAgentRouter(
-				<AgentDiscoveryScreen
-					connectionUrl={safeDeploymentUrl(connectionUrl)}
-					state={{ kind: "ready", agents: [] }}
-				/>,
-			);
-			expect(
-				screen.queryByRole("link", { name: "查看我的 Connection" }),
-			).toBeNull();
-			expect(
-				screen.getByText("暂时无法打开 Connection，请联系管理员确认访问入口。"),
-			).toBeTruthy();
-		},
-	);
 	it("drops previously visible Agents when the authorized collection changes", async () => {
 		function Collection() {
 			const [agents, setAgents] = useState([startingAgent]);
@@ -300,7 +294,9 @@ describe("AgentDiscoveryScreen", () => {
 
 		const link = screen.getByRole("link", { name: /Release assistant/ });
 		expect(link.getAttribute("href")).toBe("/agents/agent-pilot-1");
-		expect(screen.getByText("启动中")).toBeTruthy();
+		expect(
+			screen.getByText("启动中", { selector: '[data-slot="badge"]' }),
+		).toBeTruthy();
 		expect(link.className).toContain("min-w-0");
 	});
 
@@ -380,7 +376,9 @@ describe("AgentDiscoveryScreen", () => {
 				<AgentDiscoveryScreen state={{ kind: "ready", agents: [agent] }} />,
 			);
 			expect(screen.getByText("可用")).toBeTruthy();
-			expect(screen.getByText(label)).toBeTruthy();
+			expect(
+				screen.getByText(label, { selector: '[data-slot="badge"]' }),
+			).toBeTruthy();
 		},
 	);
 

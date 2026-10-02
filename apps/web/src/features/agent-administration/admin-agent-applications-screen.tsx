@@ -11,7 +11,20 @@ import {
 	DialogTrigger,
 } from "@/components/ui/dialog";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+	NativeSelect,
+	NativeSelectOption,
+} from "@/components/ui/native-select";
+import {
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow,
+} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useResultFocus } from "@/hooks/use-result-focus";
 import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
@@ -317,6 +330,33 @@ export function AdminAgentApplicationsScreen({
 	onRetry,
 	retrying = false,
 }: AdminAgentApplicationsScreenProps) {
+	const [search, setSearch] = useState("");
+	const [source, setSource] = useState("all");
+	const filterId = useId();
+	const applications = state.kind === "ready" ? state.applications : [];
+	const sources = [
+		...new Set(
+			applications.map((a) =>
+				a.source.kind === "standard" ? a.source.templateId : "自定义 Agent",
+			),
+		),
+	];
+	const filteredApplications = applications.filter(
+		(a) =>
+			(source === "all" ||
+				source ===
+					(a.source.kind === "standard"
+						? a.source.templateId
+						: "自定义 Agent")) &&
+			[
+				a.name,
+				a.description,
+				...a.configuration.owners.map((o) => o.displayName || o.userId),
+			]
+				.join(" ")
+				.toLocaleLowerCase()
+				.includes(search.trim().toLocaleLowerCase()),
+	);
 	const [openApplicationId, setOpenApplicationId] = useState<string | null>(
 		null,
 	);
@@ -341,20 +381,25 @@ export function AdminAgentApplicationsScreen({
 				<AlertDescription>当前无法访问审批。</AlertDescription>
 			</Alert>
 		);
-	if (state.kind === "loading")
-		return <p aria-live="polite">正在读取审批申请…</p>;
 	return (
 		<section aria-labelledby="agent-approvals-heading">
-			<header className="page-heading flex-col space-y-2">
-				<h1 id="agent-approvals-heading" className="font-semibold text-[28px]">
-					审批
-				</h1>
-				<p className="text-muted-foreground">
-					审阅 Agent 创建申请，确认预设资源占用。
-				</p>
+			<header className="page-heading">
+				<div>
+					<p className="page-eyebrow">系统管理 / 创建审批</p>
+					<h1 id="agent-approvals-heading">把资源审批做得更快，也更可核对。</h1>
+					<p>审批信息保持紧凑：来源、Owner、范围、模型与渠道一屏完成判断。</p>
+				</div>
+				{state.kind === "ready" && (
+					<Badge variant="outline" data-status="pending_approval">
+						{applications.filter((a) => a.status === "pending_approval").length}{" "}
+						项待处理
+					</Badge>
+				)}
 			</header>
 			<DecisionFeedback decision={decisionResult} />
-			{state.kind === "unavailable" ? (
+			{state.kind === "loading" ? (
+				<p role="status">正在读取审批申请…</p>
+			) : state.kind === "unavailable" ? (
 				<Alert className="mt-5">
 					<AlertDescription>
 						{state.retryable
@@ -376,63 +421,117 @@ export function AdminAgentApplicationsScreen({
 				</Alert>
 			) : (
 				<>
-					<div className="tabs mt-6 border-border border-b pb-3">
-						<span className="font-medium text-sm">
-							待审批{" "}
-							{
-								state.applications.filter(
-									(application) => application.status === "pending_approval",
-								).length
-							}
-						</span>
+					<div className="approval-filters">
+						<div>
+							<Label htmlFor={`${filterId}-search`}>搜索申请或 Owner</Label>
+							<Input
+								id={`${filterId}-search`}
+								type="search"
+								placeholder="搜索申请名称或 Owner"
+								value={search}
+								onChange={(event) => setSearch(event.target.value)}
+							/>
+						</div>
+						<div>
+							<Label htmlFor={`${filterId}-source`}>来源</Label>
+							<NativeSelect
+								id={`${filterId}-source`}
+								value={source}
+								onChange={(event) => setSource(event.target.value)}
+							>
+								<NativeSelectOption value="all">全部来源</NativeSelectOption>
+								{sources.map((value) => (
+									<NativeSelectOption key={value} value={value}>
+										{value}
+									</NativeSelectOption>
+								))}
+							</NativeSelect>
+						</div>
 					</div>
-					{state.applications.length === 0 ? (
+					{filteredApplications.length === 0 ? (
 						<Empty className="py-12">
-							<EmptyDescription>暂无待审批申请。</EmptyDescription>
+							<EmptyDescription>
+								{applications.length ? "没有匹配的申请。" : "暂无待审批申请。"}
+							</EmptyDescription>
 						</Empty>
 					) : (
-						<ul>
-							{state.applications.map((application) => (
-								<li
-									className="record-row flex flex-wrap items-center gap-4 border-border border-b py-5"
-									key={application.applicationId}
-								>
-									<div className="min-w-0 flex-1">
-										<h2 className="break-words font-semibold">
-											{application.name}
-										</h2>
-										<p className="mt-1 break-words text-muted-foreground text-sm">
-											{application.description}
-										</p>
-										<p className="mt-1 text-muted-foreground text-sm">
-											提交时间：
-											{new Date(application.submittedAt).toLocaleString()}
-										</p>
-									</div>
-									<Badge variant="outline">
-										{agentManagementStatusLabels[application.status]}
-									</Badge>
-									{application.status === "pending_approval" && (
-										<ApplicationReview
-											application={application}
-											onDecision={onDecision}
-											pendingDecision={pendingDecision}
-											decisionError={
-												openApplicationId === application.applicationId
-													? decisionError
-													: null
-											}
-											decisionResult={decisionResult}
-											onOpenChange={(open) =>
-												setOpenApplicationId(
-													open ? application.applicationId : null,
+						<Table className="approval-table" aria-label="创建审批">
+							<TableHeader>
+								<TableRow>
+									<TableHead>申请</TableHead>
+									<TableHead>来源 / Owner</TableHead>
+									<TableHead>可用范围</TableHead>
+									<TableHead>模型</TableHead>
+									<TableHead>提交时间</TableHead>
+									<TableHead>
+										<span className="sr-only">操作</span>
+									</TableHead>
+								</TableRow>
+							</TableHeader>
+							<TableBody>
+								{filteredApplications.map((application) => (
+									<TableRow key={application.applicationId}>
+										<TableCell>
+											<strong>{application.name}</strong>
+											<small>{application.description}</small>
+											<Badge variant="outline" data-status={application.status}>
+												{agentManagementStatusLabels[application.status]}
+											</Badge>
+										</TableCell>
+										<TableCell>
+											{application.source.kind === "standard"
+												? application.source.templateId
+												: "自定义 Agent"}
+											<small>
+												Owner ·{" "}
+												{application.configuration.owners
+													.map((o) => o.displayName || o.userId)
+													.join("、") || "未提供"}
+											</small>
+										</TableCell>
+										<TableCell>
+											{application.configuration.availability
+												.map((target) =>
+													target.kind === "user"
+														? `用户 ${target.userId}`
+														: `组织 ${target.organizationId}`,
 												)
-											}
-										/>
-									)}
-								</li>
-							))}
-						</ul>
+												.join("、") || "未额外指定"}
+										</TableCell>
+										<TableCell>
+											{application.configuration.modelOptions
+												.map((model) => model.displayName)
+												.join("、") || "未提供模型选项"}
+										</TableCell>
+										<TableCell>
+											<time dateTime={application.submittedAt}>
+												{new Date(application.submittedAt).toLocaleString()}
+											</time>
+										</TableCell>
+										<TableCell>
+											{application.status === "pending_approval" && (
+												<ApplicationReview
+													application={application}
+													onDecision={onDecision}
+													pendingDecision={pendingDecision}
+													decisionError={
+														openApplicationId === application.applicationId
+															? decisionError
+															: null
+													}
+													decisionResult={decisionResult}
+													onOpenChange={(open) =>
+														setOpenApplicationId(
+															open ? application.applicationId : null,
+														)
+													}
+												/>
+											)}
+										</TableCell>
+									</TableRow>
+								))}
+							</TableBody>
+						</Table>
 					)}
 				</>
 			)}

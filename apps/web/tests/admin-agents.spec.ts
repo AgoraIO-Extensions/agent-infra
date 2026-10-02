@@ -1,6 +1,7 @@
 import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
+import { captureDesignContract, designViewports } from "./design-contract";
 
 const baseline = AgentProjectionV2Schema.parse(
 	pilotFakeScenariosV2.starting.response.body,
@@ -259,4 +260,18 @@ test("original navigation groups, long fields and short viewport remain operable
 	await nav.getByRole("link", { name: "Agent 管理", exact: true }).click();
 	await expect(page.getByRole("searchbox")).toBeVisible();
 	await capture(page, info, "admin-inventory-short-viewport");
+});
+
+test("exported design viewport matrix admin Agents", async ({ page }, info) => {
+	test.skip(
+		info.project.name !== "desktop",
+		"The exported nine-viewport matrix runs once.",
+	);
+	await fixture(page);
+	await page.goto("/admin/agents");
+	await expect(page.getByRole("row")).not.toHaveCount(0);
+	for (const viewport of designViewports) {
+		await page.setViewportSize(viewport);
+		await captureDesignContract(page, info, "admin-agents");
+	}
 });

@@ -447,6 +447,11 @@ function ModelRows({
 								>
 									允许的推理档位
 								</legend>
+								{!selectedModel && (
+									<p className="text-muted-foreground text-sm">
+										选择模型后显示可用档位。
+									</p>
+								)}
 								{(selectedModel?.reasoningLevels ?? []).map((level) => {
 									const selected = model.reasoningLevels
 										.split("\n")
@@ -1520,8 +1525,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							模型配置
 						</legend>
 						<p className="text-muted-foreground text-sm">
-							标准模板在申请时必须配置模型。填写获准端点和模型
-							ID，允许的推理档位每行一项；默认项须属于本次配置。
+							标准模板在申请时必须配置模型。选择获准模型和允许的推理档位，填写模型凭证；默认项须属于本次配置。
 						</p>
 						{props.mode === "update" ? (
 							<div className="space-y-2">

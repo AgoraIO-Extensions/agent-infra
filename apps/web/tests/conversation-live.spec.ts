@@ -771,7 +771,6 @@ test("saves the next-message model and stops the bound execution", async ({
 		for (const [index, control] of [
 			controls.getByRole("combobox", { name: "模型", exact: true }),
 			controls.getByRole("combobox", { name: "推理强度", exact: true }),
-			controls.getByRole("button", { name: "保存模型选择" }),
 			page.getByText("继续检查当前任务", { exact: true }),
 			page.getByRole("textbox", { name: "消息", exact: true }),
 			page.getByRole("button", { name: "发送补充指令", exact: true }),
@@ -816,7 +815,7 @@ test("saves the next-message model and stops the bound execution", async ({
 				},
 			);
 			await expect(control).toBeInViewport({ ratio: 1 });
-			if (index !== 3) {
+			if (index !== 2) {
 				expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(
 					44,
 				);
@@ -1192,6 +1191,44 @@ for (const source of ["standard", "custom"] as const) {
 			await expect(page).toHaveURL(
 				new RegExp(`/chat/${agentId}/${conversationId}$`),
 			);
+			await info.attach("recovered-composer-geometry", {
+				body: JSON.stringify(
+					await input.evaluate((node) => ({
+						rect: node.getBoundingClientRect().toJSON(),
+						viewport: [innerWidth, innerHeight],
+						scrollY,
+						hit: (() => {
+							const r = node.getBoundingClientRect();
+							return document
+								.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+								?.outerHTML.slice(0, 300);
+						})(),
+						ancestors: [
+							".composer-zone",
+							".chat-thread",
+							".chat-workspace",
+							".conversation-columns",
+							".chat-layout",
+							".platform-content",
+							"#main-content",
+						].map((selector) => {
+							const el = node.closest(selector);
+							return {
+								selector,
+								rect: el?.getBoundingClientRect().toJSON(),
+								overflow: el && getComputedStyle(el).overflow,
+								height: el && getComputedStyle(el).height,
+							};
+						}),
+					})),
+				),
+				contentType: "application/json",
+			});
+			await info.attach("recovered-composer", {
+				body: await page.screenshot({ animations: "disabled" }),
+				contentType: "image/png",
+			});
+
 			await expect
 				.poll(() =>
 					input.evaluate((node) => {

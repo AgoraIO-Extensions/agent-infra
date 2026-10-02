@@ -37,7 +37,9 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 				<h2 className="font-semibold text-base">
 					{auditActionLabels[record.action]}
 				</h2>
-				<Badge variant="outline">{auditOutcomeLabel(record)}</Badge>
+				<Badge variant="outline" data-result={record.result}>
+					{auditOutcomeLabel(record)}
+				</Badge>
 			</div>
 			<Section title="操作与身份">
 				<Field label="操作摘要">{record.summary}</Field>
