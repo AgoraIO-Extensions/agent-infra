@@ -31,7 +31,12 @@ export interface PostgresPersonalApiCredentialOptionsV1 {
 	readonly databaseUrl: string;
 }
 
-function metadata(row: CredentialRow): PersonalApiCredentialMetadataV1 {
+function metadata(
+	row: Pick<
+		CredentialRow,
+		"id" | "scopes" | "expiresAt" | "revokedAt" | "createdAt" | "lastUsedAt"
+	>,
+): PersonalApiCredentialMetadataV1 {
 	try {
 		return {
 			credentialId: row.id,
@@ -153,7 +158,14 @@ function transactionOperations(
 		},
 		async listCredentials(userId, limit, afterId) {
 			const rows = await transaction
-				.select()
+				.select({
+					id: platformApiCredentials.id,
+					scopes: platformApiCredentials.scopes,
+					expiresAt: platformApiCredentials.expiresAt,
+					revokedAt: platformApiCredentials.revokedAt,
+					createdAt: platformApiCredentials.createdAt,
+					lastUsedAt: platformApiCredentials.lastUsedAt,
+				})
 				.from(platformApiCredentials)
 				.where(
 					and(

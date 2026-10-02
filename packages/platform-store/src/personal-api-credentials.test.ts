@@ -41,9 +41,9 @@ let database: PostgresTestDatabase;
 let client: ReturnType<typeof postgres>;
 let resolveUser: TaskUserDirectoryV1["resolveUser"];
 const stores: PostgresPersonalApiCredentialStoreV1[] = [];
-function store() {
+function store(databaseUrl = database.databaseUrl) {
 	const adapter = new PostgresPersonalApiCredentialStoreV1({
-		databaseUrl: database.databaseUrl,
+		databaseUrl,
 	});
 	stores.push(adapter);
 	return {
@@ -99,6 +99,45 @@ afterAll(async () => {
 });
 
 describe("PostgreSQL personal API credential governance", () => {
+	it("lists metadata when PostgreSQL denies reading credential hashes", async () => {
+		const issued = await store().issue(context, command);
+		await client`create role personal_credential_metadata_reader login password 'fixture-reader'`;
+		await client`grant usage on schema platform to personal_credential_metadata_reader`;
+		await client`grant select (id, principal_type, principal_id, scopes, expires_at,
+			revoked_at, created_at, last_used_at), update (id)
+			on platform.platform_api_credentials to personal_credential_metadata_reader`;
+		await client`grant select, update on platform.platform_user_disables to personal_credential_metadata_reader`;
+		await client`grant insert on platform.audit_events to personal_credential_metadata_reader`;
+		const url = new URL(database.databaseUrl);
+		url.username = "personal_credential_metadata_reader";
+		url.password = "fixture-reader";
+		const reader = postgres(url.toString(), { max: 1 });
+		const adapter = store(url.toString());
+		try {
+			await expect(
+				reader`select credential_hash from platform.platform_api_credentials`,
+			).rejects.toMatchObject({ code: "42501" });
+			const page = await adapter.list(
+				{
+					userId: context.userId,
+					requestId: "list.no-hash",
+					traceId: "trace.no-hash",
+				},
+				{ limit: 2 },
+			);
+			expect(page.items).toEqual([issued.metadata]);
+			const [audit] =
+				await client`select count(*)::int as count from platform.audit_events
+				where action='api.credential.metadata.read' and request_id='list.no-hash' and outcome='succeeded'`;
+			expect(audit?.count).toBe(1);
+		} finally {
+			await reader.end();
+			await adapter.close();
+			await client`drop owned by personal_credential_metadata_reader`;
+			await client`drop role personal_credential_metadata_reader`;
+		}
+	});
+
 	it("pages only personal metadata, binds cursors, and persists necessary read audit", async () => {
 		const adapter = store();
 		const issued = await Promise.all(
