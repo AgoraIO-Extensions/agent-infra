@@ -41,7 +41,7 @@ export function resolveFileLimitsV1(
 		expiresAt: new Date(
 			Math.min(...values.map((value) => Date.parse(value.expiresAt))),
 		).toISOString(),
-		maxBytes: Math.min(...values.map((value) => value.maxBytes)),
+		maxBytes: Math.max(...values.map((value) => value.maxBytes)),
 		mediaTypes,
 	};
 }
