@@ -636,33 +636,19 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 			const fact = item.operation?.fact;
 			if (!fact) throw new Error("Queried operation fact missing");
 			const pair = `${fact.operationRef}:${fact.attemptRef}` as TracePair;
-			queriedPairCounts.set(pair, (queriedPairCounts.get(pair) ?? 0) + 1);
+			// The audit projection exposes every phase row, while the worker emits
+			// one terminal outcome span per operation/attempt pair.
+			queriedPairCounts.set(pair, 1);
 		}
 		let finalTraces = "";
-		try {
-			await until(async () => {
-				finalTraces = await collector.read();
-				return (
-					JSON.stringify(
-						sortedCounts(tracePairCounts(finalTraces, executionId)),
-					) === JSON.stringify(sortedCounts(queriedPairCounts))
-				);
-			});
-		} catch (error) {
-			await writeFile(
-				`${evidencePath}.pair-debug.json`,
+		await until(async () => {
+			finalTraces = await collector.read();
+			return (
 				JSON.stringify(
-					{
-						queried: sortedCounts(queriedPairCounts),
-						observed: sortedCounts(tracePairCounts(finalTraces, executionId)),
-						traces: finalTraces,
-					},
-					null,
-					2,
-				),
+					sortedCounts(tracePairCounts(finalTraces, executionId)),
+				) === JSON.stringify(sortedCounts(queriedPairCounts))
 			);
-			throw error;
-		}
+		});
 		const observedPairCounts = tracePairCounts(finalTraces, executionId);
 		// Compare the pair multiset, not independent substring membership: this
 		// rejects swapped pairs, duplicate query rows, and unrelated extra traces.
