@@ -1113,10 +1113,7 @@ export class PostgresConversationExecutionTransactionV1
 			} catch (error) {
 				if (
 					input.conversationId !== undefined &&
-					error instanceof PersonalApiCredentialErrorV1 &&
-					(error.code === "not_found" ||
-						error.code === "authentication_required" ||
-						error.code === "forbidden")
+					error instanceof PersonalApiCredentialErrorV1
 				)
 					return null;
 				throw error;

@@ -138,6 +138,15 @@ export async function revalidateWaitingTask(
 						error.code !== "forbidden"
 					)
 						throw error;
+					const [clock] = await transaction<{ now: Date }[]>`
+						select clock_timestamp() as now
+					`;
+					if (
+						state.execution.task_wait_deadline &&
+						clock &&
+						state.execution.task_wait_deadline <= clock.now
+					)
+						return true;
 					revoked = true;
 				}
 			}
