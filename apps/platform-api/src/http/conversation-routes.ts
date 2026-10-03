@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import {
 	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
@@ -129,7 +130,13 @@ export interface ConversationRoutesDependencies {
 		| "stop"
 	>;
 	readonly query: ConversationQuery;
+	/** Idle reauthorization interval, 1–30,000 ms; default 1,000 ms. */
 	readonly streamPollIntervalMs?: number;
+	/** Bound each authorization/replay read and SSE write, 1–30,000 ms; default 1,000 ms.
+	 * Idle detection is bounded by poll + two reads (default 3 s).
+	 * Terminal delivery adds at most two writes (default 2 s); stalls exclude event-loop starvation.
+	 */
+	readonly streamReadTimeoutMs?: number;
 }
 
 type ConversationProjection = ReturnType<
@@ -515,36 +522,109 @@ function replaySelector(request: Request, traceId: string) {
 	}
 }
 
+type StreamAuthorization =
+	| { readonly outcome: "allowed"; readonly identity: IdentityContext }
+	| {
+			readonly outcome: "closed";
+			readonly reason:
+				| "revoked"
+				| "disabled"
+				| "session_invalid"
+				| "subject_changed"
+				| "dependency_unavailable"
+				| "invalid_response"
+				| "resource_unavailable";
+	  };
+
 async function stillAuthorized(
 	dependencies: ConversationRoutesDependencies,
 	request: Request,
 	initialUserId: string,
 	conversationId: string,
 	traceId: string,
-): Promise<"allowed" | "revoked" | "unavailable"> {
+): Promise<StreamAuthorization> {
+	// Keep dependency rejection distinct from a returned but invalid identity.
+	let resolved = false;
+	let identity: IdentityContext;
 	try {
-		const identity = await resolveIdentity(
-			dependencies.identity,
+		identity = await resolveIdentity(
+			{
+				resolve: async (currentRequest) => {
+					const value = await dependencies.identity.resolve(currentRequest);
+					resolved = true;
+					return value;
+				},
+				hydrateUsers: (ids) => dependencies.identity.hydrateUsers(ids),
+			},
 			request,
 			traceId,
 		);
-		if (identity.userId !== initialUserId) return "revoked";
-		const decision = await dependencies.authorization.authorize(identity, {
+	} catch (error) {
+		const code =
+			error instanceof HttpProtocolError ? error.body.code : undefined;
+		return {
+			outcome: "closed",
+			reason:
+				code === "AUTHORIZATION_REVOKED"
+					? "disabled"
+					: code === "AUTHENTICATION_REQUIRED"
+						? "session_invalid"
+						: resolved
+							? "invalid_response"
+							: "dependency_unavailable",
+		};
+	}
+	if (identity.userId !== initialUserId)
+		return { outcome: "closed", reason: "subject_changed" };
+	let decision: AuthorizationDecision;
+	try {
+		decision = await dependencies.authorization.authorize(identity, {
 			schemaVersion: 1,
 			operation: "conversation.read",
 			conversationId,
 		});
-		if (decision.outcome === "unavailable") return "unavailable";
-		if (decision.outcome !== "allowed") return "revoked";
-		return authorityMatches(decision.authority, identity)
-			? "allowed"
-			: "unavailable";
-	} catch (error) {
-		return error instanceof HttpProtocolError &&
-			(error.body.code === "AUTHENTICATION_REQUIRED" ||
-				error.body.code === "AUTHORIZATION_REVOKED")
-			? "revoked"
-			: "unavailable";
+	} catch {
+		return { outcome: "closed", reason: "dependency_unavailable" };
+	}
+	if (!decision || typeof decision !== "object")
+		return { outcome: "closed", reason: "invalid_response" };
+	if (decision.outcome === "unavailable")
+		return { outcome: "closed", reason: "dependency_unavailable" };
+	if (decision.outcome === "denied" || decision.outcome === "revoked")
+		return { outcome: "closed", reason: "revoked" };
+	if (
+		decision.outcome !== "allowed" ||
+		!authorityMatches(decision.authority, identity)
+	)
+		return { outcome: "closed", reason: "invalid_response" };
+	return { outcome: "allowed", identity };
+}
+
+/** Bounds an in-flight authorization or replay; late results never reach the stream. */
+async function streamRead<T>(
+	task: () => Promise<T>,
+	timeoutMs: number,
+	signal: AbortSignal,
+): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let abort: () => void = () => {};
+	const interrupted = new Promise<never>((_, reject) => {
+		abort = () => reject(new Error("Stream read interrupted"));
+		if (signal.aborted) return abort();
+		signal.addEventListener("abort", abort, { once: true });
+		timer = setTimeout(abort, timeoutMs);
+	});
+	try {
+		return await Promise.race([
+			interrupted,
+			Promise.resolve().then(() => {
+				if (signal.aborted) throw new Error("Stream read interrupted");
+				return task();
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+		signal.removeEventListener("abort", abort);
 	}
 }
 
@@ -598,6 +678,14 @@ export function registerConversationRoutes(
 	app: Hono,
 	dependencies: ConversationRoutesDependencies,
 ): void {
+	const pollIntervalMs = dependencies.streamPollIntervalMs ?? 1000;
+	const readTimeoutMs = dependencies.streamReadTimeoutMs ?? 1000;
+	for (const value of [pollIntervalMs, readTimeoutMs]) {
+		if (!Number.isInteger(value) || value < 1 || value > 30_000)
+			throw new Error(
+				"Conversation stream intervals must be integers from 1 to 30000 ms",
+			);
+	}
 	app.get("/api/v2/me/conversations/recent", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
@@ -1063,71 +1151,131 @@ export function registerConversationRoutes(
 					return streamSSE(
 						context,
 						async (stream) => {
-							let replay: ConversationReplayResultV1 = initialReplay;
-							let cursor = replay.resumeCursor;
-							while (!request.signal.aborted && !stream.aborted) {
-								const batch = replay;
-								if (batch.outcome === "reload") {
-									const authorization = await stillAuthorized(
-										dependencies,
-										request,
-										identity.userId,
-										conversationId,
-										metadata.traceId,
-									);
-									if (authorization !== "allowed") {
-										if (authorization === "revoked") {
-											await writeAuthorizationRevoked(stream, metadata.traceId);
-										}
-										return;
-									}
-									await writeSseMessage(
-										stream,
-										ConversationSseMessageV1Schema.parse({
-											schemaVersion: 1,
-											kind: "control",
-											type: "timeline.reload",
-											reason: batch.reason,
-											resumeCursor: batch.resumeCursor,
-										}),
-									);
-									return;
+							const lifetime = new AbortController();
+							const abort = () => lifetime.abort();
+							request.signal.addEventListener("abort", abort, { once: true });
+							stream.onAbort(abort);
+							if (request.signal.aborted || stream.aborted) abort();
+							let currentIdentity = identity;
+							const write = async <T>(task: () => Promise<T>): Promise<T> => {
+								try {
+									return await streamRead(task, readTimeoutMs, lifetime.signal);
+								} catch (error) {
+									// Cancel the underlying reader to discard queued writes on backpressure.
+									stream.abort();
+									throw error;
 								}
-								for (const persisted of batch.events) {
-									const authorization = await stillAuthorized(
-										dependencies,
-										request,
-										identity.userId,
-										conversationId,
-										metadata.traceId,
-									);
-									if (authorization !== "allowed") {
-										if (authorization === "revoked") {
-											await writeAuthorizationRevoked(stream, metadata.traceId);
-										}
-										return;
-									}
-									const message = eventProjection(persisted);
-									if (v2) {
-										await writeSseMessageV2(stream, message);
-										cursor = persisted.conversationCursor;
-										continue;
-									}
-									// V1 clients retain their original wire types; V2 facts stay durable.
-									if (message.schemaVersion === 1)
-										await writeSseMessage(stream, message);
-
-									cursor = persisted.conversationCursor;
-								}
-								await stream.sleep(dependencies.streamPollIntervalMs ?? 1000);
-								if (request.signal.aborted || stream.aborted) return;
-								const next = await dependencies.query.replay(
-									scope(identity),
-									conversationId,
-									{ kind: "cursor", value: cursor },
+							};
+							const output = {
+								writeSSE: (message: { id?: string; data: string }) =>
+									write(() => stream.writeSSE(message)),
+							};
+							const terminate = async (
+								reason: Extract<
+									StreamAuthorization,
+									{ outcome: "closed" }
+								>["reason"],
+							) => {
+								if (lifetime.signal.aborted) return;
+								// SSE comments expose only a fixed terminal reason, never identity/resource data.
+								// They add no business event, cursor or new Contract Schema wire type.
+								await write(() =>
+									stream.write(`: conversation-stream.closed ${reason}\n\n`),
 								);
-								if (!next) return;
-								replay = next;
+								if (
+									!lifetime.signal.aborted &&
+									[
+										"revoked",
+										"disabled",
+										"session_invalid",
+										"subject_changed",
+									].includes(reason)
+								)
+									await writeAuthorizationRevoked(output, metadata.traceId);
+							};
+							const check = async () => {
+								if (lifetime.signal.aborted) return false;
+								let result: StreamAuthorization;
+								try {
+									result = await streamRead(
+										() =>
+											stillAuthorized(
+												dependencies,
+												request,
+												identity.userId,
+												conversationId,
+												metadata.traceId,
+											),
+										readTimeoutMs,
+										lifetime.signal,
+									);
+								} catch {
+									result = {
+										outcome: "closed",
+										reason: "dependency_unavailable",
+									};
+								}
+								if (lifetime.signal.aborted) return false;
+								if (result.outcome === "closed") {
+									await terminate(result.reason);
+									return false;
+								}
+								currentIdentity = result.identity;
+								return true;
+							};
+							try {
+								let replay: ConversationReplayResultV1 = initialReplay;
+								let cursor = replay.resumeCursor;
+								while (!lifetime.signal.aborted) {
+									const batch = replay;
+									if (batch.outcome === "reload") {
+										if (!(await check())) return;
+										await writeSseMessage(
+											output,
+											ConversationSseMessageV1Schema.parse({
+												schemaVersion: 1,
+												kind: "control",
+												type: "timeline.reload",
+												reason: batch.reason,
+												resumeCursor: batch.resumeCursor,
+											}),
+										);
+										return;
+									}
+									for (const persisted of batch.events) {
+										if (!(await check())) return;
+										const message = eventProjection(persisted);
+										if (v2) await writeSseMessageV2(output, message);
+										// V1 skips V2 facts but advances the durable cursor.
+										else if (message.schemaVersion === 1)
+											await writeSseMessage(output, message);
+										cursor = persisted.conversationCursor;
+									}
+									await delay(pollIntervalMs, undefined, {
+										signal: lifetime.signal,
+									});
+									if (!(await check())) return;
+									const next = await streamRead(
+										() =>
+											dependencies.query.replay(
+												scope(currentIdentity),
+												conversationId,
+												{ kind: "cursor", value: cursor },
+											),
+										readTimeoutMs,
+										lifetime.signal,
+									);
+									if (!next) {
+										await terminate("resource_unavailable");
+										return;
+									}
+									replay = next;
+								}
+							} catch {
+								await terminate("dependency_unavailable");
+							} finally {
+								request.signal.removeEventListener("abort", abort);
+								abort();
 							}
 						},
 						async (_error, stream) => stream.close(),

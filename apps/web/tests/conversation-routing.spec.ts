@@ -1,5 +1,6 @@
 import {
 	AgentProjectionV2Schema,
+	ConnectionCapabilityProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
 	ConversationPageV1Schema,
 	ConversationProjectionV1Schema,
@@ -165,6 +166,17 @@ async function routingFixture(
 								: [],
 							nextCursor: null,
 						}),
+			});
+		if (
+			request.method() === "GET" &&
+			url.pathname === "/api/v1/connection/capability"
+		)
+			return route.fulfill({
+				json: ConnectionCapabilityProjectionV1Schema.parse({
+					schemaVersion: 1,
+					status: "unavailable",
+					reason: "missing",
+				}),
 			});
 		if (url.pathname === "/api/v1/session")
 			return route.fulfill({

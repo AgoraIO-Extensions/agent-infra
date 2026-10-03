@@ -17,6 +17,7 @@ import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { readAgentManagementState } from "./agent-management.js";
+import { awaitConversationExecutionQueryV1 } from "./conversation-execution-abort.js";
 import {
 	readCurrentTaskApiUseGrantV1,
 	readCurrentTaskApplicationV1,
@@ -58,16 +59,18 @@ export async function insertTaskAuthorization(
 	// Old callers keep their original records. Trusted dispatch rejects missing provenance.
 	if (input.boundary === undefined) return;
 	const boundary = parseTaskAuthorizationBoundaryV1(input.boundary);
-	const [binding] = await transaction<
-		{
-			agent_id: string;
-			actor_id: string;
-			channel_id: string;
-			principal_type: string;
-			execution_authorization_revision: string;
-			authorization_revision: string;
-		}[]
-	>`
+	const [binding] = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<
+			{
+				agent_id: string;
+				actor_id: string;
+				channel_id: string;
+				principal_type: string;
+				execution_authorization_revision: string;
+				authorization_revision: string;
+			}[]
+		>`
 		select execution.agent_id, execution.actor_id, execution.channel_id, execution.principal_type,
 			execution.authorization_revision as execution_authorization_revision, agent.authorization_revision
 		from platform.conversation_executions execution
@@ -79,7 +82,8 @@ export async function insertTaskAuthorization(
 			and conversation.principal_type = execution.principal_type
 		where execution.execution_id = ${input.executionId}
 		for share of agent
-	`;
+	`,
+	);
 	if (
 		!binding ||
 		boundary.principal.kind !== binding.principal_type ||
@@ -94,14 +98,20 @@ export async function insertTaskAuthorization(
 	)
 		throw new TaskAuthorizationStoreError();
 	const recordId = randomUUID();
-	await transaction`
+	await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction`
 		insert into platform.task_authorization_records (id, execution_id, boundary)
 		values (${recordId}, ${input.executionId}, ${transaction.json(boundary as unknown as JsonValue)})
-	`;
-	await transaction`
+	`,
+	);
+	await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction`
 		insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
 		values (${randomUUID()}, ${input.traceId}, ${boundary.principal.kind}, ${boundary.principal.id}, 'task.authorization.accepted', 'execution', ${input.executionId}, 'succeeded', ${input.requestId}, ${boundary.agentId}, ${transaction.json({ authorizationRecordId: recordId, identityRevision: boundary.identityRevision, agentAuthorizationRevision: boundary.agentAuthorizationRevision })})
-	`;
+	`,
+	);
 }
 
 export class PostgresTaskAuthorizationStoreV1 {

@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { appendFile, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { selectCurrentGateCheck } from "./check-run-contract.mjs";
 import { extractPrimaryIssueNumbers } from "./pr-gates.mjs";
 import { githubRequest, PrAgentTargetSuperseded, requirePrAgentTarget, verifyPrAgentPublication } from "./pr-agent-review.mjs";
@@ -80,31 +82,175 @@ async function findBaseline(context, primary, baseRef, mergeBaseSha) {
   return null;
 }
 
-// git parses quoted/renamed paths without interpreting repository code. Matching
-// the immutable compare's per-file counts rejects incomplete raw API responses.
+// Git accepts both literal UTF-8 and C-quoted paths. Compare metadata against
+// the API identity without parsing ambiguous spaces or escapes ourselves.
+function gitPaths(path) {
+  const quoted = [...Buffer.from(path)].map((byte) => {
+    if (byte === 34 || byte === 92) return `\\${String.fromCharCode(byte)}`;
+    if (byte < 32 || byte >= 127) return `\\${byte.toString(8).padStart(3, "0")}`;
+    return String.fromCharCode(byte);
+  }).join("");
+  // Git spells these control characters with named escapes.
+  const named = quoted.replace(/\\(007|010|011|012|013|014|015)/g,
+    (_, octal) => `\\${{ "007": "a", "010": "b", "011": "t", "012": "n", "013": "v", "014": "f", "015": "r" }[octal]}`);
+  return [path, `"${quoted}"`, `"${named}"`];
+}
+
 export function validateDiffInput(diff, files) {
   if (typeof diff !== "string" || Buffer.byteLength(diff) > 10 * 1024 * 1024 ||
       !Array.isArray(files) || files.length >= 300) throw new Error("PR-Agent range diff is incomplete or too large");
-  let stat;
-  try {
-    stat = execFileSync("git", ["apply", "--numstat", "-z", "--allow-empty"],
-      { input: diff, encoding: "utf8", maxBuffer: 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] });
-  } catch { throw new Error("PR-Agent range diff cannot be parsed"); }
-  const entries = stat.split("\0");
-  const actual = new Map();
-  for (let index = 0; index < entries.length - 1; index++) {
-    const match = /^(\d+|-)\t(\d+|-)\t(.*)$/s.exec(entries[index]);
-    if (!match || match[1] === "-" || match[2] === "-") throw new Error("PR-Agent range contains unsupported binary changes");
-    let filename = match[3];
-    if (!filename) { index++; filename = entries[++index]; }
-    if (!filename || actual.has(filename)) throw new Error("PR-Agent range file identity is invalid");
-    actual.set(filename, [Number(match[1]), Number(match[2])]);
+  const identities = new Map();
+  for (const file of files) {
+    if (!file || typeof file.filename !== "string" || !file.filename || file.filename.includes("\0") ||
+        identities.has(file.filename) || !["added", "removed", "modified", "renamed"].includes(file.status) ||
+        (file.status === "renamed" ? typeof file.previous_filename !== "string" || !file.previous_filename ||
+          file.previous_filename === file.filename || file.previous_filename.includes("\0") : file.previous_filename !== undefined))
+      throw new Error("PR-Agent range file identity is invalid");
+    identities.set(file.filename, file);
   }
-  if (actual.size !== files.length || files.some((file) => {
-    const counts = actual.get(file.filename);
-    return !counts || counts[0] !== file.additions || counts[1] !== file.deletions;
-  })) throw new Error("PR-Agent range diff does not match immutable file counts");
+  const blocks = diff ? diff.split(/(?=^diff --git )/m) : [];
+  if (blocks.length !== files.length) throw new Error("PR-Agent range diff does not match immutable file identities");
+  const seen = new Set();
+  for (const block of blocks) {
+    let stat;
+    try {
+      stat = execFileSync("git", ["apply", "--numstat", "-z", "--allow-empty"],
+        { input: block, encoding: "utf8", maxBuffer: 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] });
+    } catch { throw new Error("PR-Agent range diff cannot be parsed"); }
+    const match = /^(\d+|-)\t(\d+|-)\t([^\0]+)\0$/.exec(stat);
+    if (!match) throw new Error("PR-Agent range file identity is invalid");
+    if (match[1] === "-" || match[2] === "-") throw new Error("PR-Agent range contains unsupported binary changes");
+    const file = identities.get(match[3]);
+    if (!file || seen.has(match[3])) throw new Error("PR-Agent range diff does not match immutable file identities");
+    seen.add(match[3]);
+    const lines = block.split("\n");
+    const oldPath = file.previous_filename ?? file.filename;
+    if (!gitPaths(`a/${oldPath}`).some((a) => gitPaths(`b/${file.filename}`).some((b) => lines[0] === `diff --git ${a} ${b}`)))
+      throw new Error("PR-Agent range diff does not match immutable file identities");
+    const hunkStart = lines.findIndex((line) => line.startsWith("@@ "));
+    const header = lines.slice(1, hunkStart === -1 ? -1 : hunkStart);
+    if (!block.endsWith("\n") || header.some((line) =>
+      !/^(?:index |old mode |new mode |new file mode |deleted file mode |similarity index |rename from |rename to |--- |\+\+\+ )/.test(line)))
+      throw new Error("PR-Agent range diff cannot be parsed");
+    const metadata = (prefix) => header.filter((line) => line.startsWith(prefix));
+    const hasPath = (prefix, path) => {
+      const values = metadata(prefix);
+      const value = ["--- ", "+++ "].includes(prefix) ? values[0]?.replace(/\t$/, "") : values[0];
+      return values.length === 1 && gitPaths(path).some((encoded) => value === prefix + encoded);
+    };
+    const added = metadata("new file mode ").length;
+    const removed = metadata("deleted file mode ").length;
+    const renamed = metadata("rename from ").length + metadata("rename to ").length;
+    if (added !== Number(file.status === "added") || removed !== Number(file.status === "removed") ||
+        renamed !== (file.status === "renamed" ? 2 : 0) ||
+        (renamed && (!hasPath("rename from ", oldPath) || !hasPath("rename to ", file.filename))) ||
+        (metadata("--- ").length + metadata("+++ ").length > 0 &&
+          (!hasPath("--- ", file.status === "added" ? "/dev/null" : `a/${oldPath}`) ||
+           !hasPath("+++ ", file.status === "removed" ? "/dev/null" : `b/${file.filename}`))))
+      throw new Error("PR-Agent range diff does not match immutable file status");
+    const headerKeys = header.map((line) => /^(index |old mode |new mode |new file mode |deleted file mode |similarity index |rename from |rename to |--- |\+\+\+ )/.exec(line)[0]);
+    if (new Set(headerKeys).size !== headerKeys.length ||
+        (hunkStart === -1 && (metadata("--- ").length || metadata("+++ ").length)))
+      throw new Error("PR-Agent range diff cannot be parsed");
+    if (hunkStart === -1) {
+      const index = /^index ([a-f0-9]+)\.\.([a-f0-9]+)(?: [0-7]{6})?$/.exec(metadata("index ")[0] ?? "");
+      const emptyBlob = (value) => value?.length >= 7 && "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391".startsWith(value);
+      const unchangedContent = !metadata("index ").length || (index && index[1] === index[2]);
+      const modeChange = /^old mode [0-7]{6}$/.test(metadata("old mode ")[0] ?? "") &&
+        /^new mode [0-7]{6}$/.test(metadata("new mode ")[0] ?? "") &&
+        metadata("old mode ")[0].slice(9) !== metadata("new mode ")[0].slice(9);
+      const valid = file.status === "added" ? index && /^0+$/.test(index[1]) && emptyBlob(index[2])
+        : file.status === "removed" ? index && emptyBlob(index[1]) && /^0+$/.test(index[2])
+        : file.status === "renamed" ? unchangedContent && metadata("similarity index ")[0] === "similarity index 100%"
+        : unchangedContent && modeChange;
+      if (!valid) throw new Error("PR-Agent range diff is missing content hunks");
+    }
+    // Git can ignore trailing text. Consume every hunk ourselves, then compare
+    // actual line counts to numstat; API statistics are never authoritative.
+    let oldRemaining = 0;
+    let newRemaining = 0;
+    let additions = 0;
+    let deletions = 0;
+    let previousLine;
+    for (const line of hunkStart === -1 ? [] : lines.slice(hunkStart, -1)) {
+      const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@(?: .*)?$/.exec(line);
+      if (hunk && oldRemaining === 0 && newRemaining === 0) {
+        oldRemaining = Number(hunk[1] ?? 1);
+        newRemaining = Number(hunk[2] ?? 1);
+        if (!Number.isSafeInteger(oldRemaining) || !Number.isSafeInteger(newRemaining) ||
+            oldRemaining + newRemaining === 0) throw new Error("PR-Agent range diff cannot be parsed");
+      } else if (line === "\\ No newline at end of file" && /^[ +\-]/.test(previousLine ?? "")) {
+        // This marker does not consume a source line.
+      } else if (/^[ +\-]/.test(line)) {
+        if (line[0] !== "+") oldRemaining--;
+        if (line[0] !== "-") newRemaining--;
+        if (line[0] === "+") additions++;
+        if (line[0] === "-") deletions++;
+        if (oldRemaining < 0 || newRemaining < 0) throw new Error("PR-Agent range diff cannot be parsed");
+      } else throw new Error("PR-Agent range diff cannot be parsed");
+      previousLine = line;
+    }
+    if (oldRemaining || newRemaining || Number(match[1]) !== additions || Number(match[2]) !== deletions)
+      throw new Error("PR-Agent range diff does not match immutable hunk counts");
+  }
   return { diffSha256: hash(diff), diffBytes: Buffer.byteLength(diff) };
+}
+
+// Independently apply the supplied hunks to immutable source contents. Numstat
+// alone cannot detect a missing whole hunk with otherwise valid syntax.
+export async function verifyRangeContents(context, fromSha, diff, files) {
+  if (!files.length) return;
+  const trees = await Promise.all([fromSha, context.expectedHead].map(async (ref) => {
+    const commit = await context.request(`/repos/${context.repository}/git/commits/${ref}`);
+    if (commit.sha !== ref || !sha(commit.tree?.sha)) throw new Error("PR-Agent range commit is invalid");
+    const tree = await context.request(`/repos/${context.repository}/git/trees/${commit.tree.sha}?recursive=1`);
+    if (tree.sha !== commit.tree.sha || tree.truncated !== false || !Array.isArray(tree.tree))
+      throw new Error("PR-Agent range tree is incomplete");
+    const entries = new Map();
+    for (const entry of tree.tree) {
+      if (!entry || typeof entry.path !== "string" || !entry.path || entries.has(entry.path))
+        throw new Error("PR-Agent range tree identity is invalid");
+      entries.set(entry.path, entry);
+    }
+    return entries;
+  }));
+  const read = async (name, tree) => {
+    const entry = tree.get(name);
+    if (entry?.type !== "blob" || !sha(entry.sha)) throw new Error("PR-Agent range blob identity is invalid");
+    const blob = await context.request(`/repos/${context.repository}/git/blobs/${entry.sha}`);
+    if (blob.sha !== entry.sha || blob.encoding !== "base64" || typeof blob.content !== "string")
+      throw new Error("PR-Agent range blob contents are invalid");
+    const encoded = blob.content.replace(/\s/g, "");
+    const bytes = Buffer.from(encoded, "base64");
+    if (bytes.toString("base64") !== encoded) throw new Error("PR-Agent range blob encoding is invalid");
+    return bytes;
+  };
+  const directory = await mkdtemp(join(tmpdir(), "pr-agent-range-"));
+  try {
+    for (const block of diff.split(/(?=^diff --git )/m)) {
+      const stat = execFileSync("git", ["apply", "--numstat", "-z"],
+        { input: block, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      const filename = stat.slice(stat.indexOf("\t", stat.indexOf("\t") + 1) + 1, -1);
+      const file = files.find((candidate) => candidate.filename === filename);
+      if (!file) throw new Error("PR-Agent range file identity is invalid");
+      const [before, after] = await Promise.all([
+        file.status === "added" ? Buffer.alloc(0) : read(file.previous_filename ?? filename, trees[0]),
+        file.status === "removed" ? Buffer.alloc(0) : read(filename, trees[1]),
+      ]);
+      const hunkStart = block.indexOf("\n@@ ");
+      await writeFile(join(directory, "file"), before, "utf8");
+      if (hunkStart !== -1) {
+        // Synthetic fixed paths avoid writing repository-controlled filenames.
+        const patch = "diff --git a/file b/file\n--- a/file\n+++ b/file\n" + block.slice(hunkStart + 1);
+        try {
+          execFileSync("git", ["apply", "--unidiff-zero", "--whitespace=nowarn", "-"],
+            { cwd: directory, input: patch, stdio: ["pipe", "pipe", "pipe"] });
+        } catch { throw new Error("PR-Agent range hunks do not match immutable contents"); }
+      }
+      if (!(await readFile(join(directory, "file"))).equals(after))
+        throw new Error("PR-Agent range diff does not match immutable contents");
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
 async function readRange(context, fromSha) {
@@ -113,7 +259,9 @@ async function readRange(context, fromSha) {
   if (comparison.merge_base_commit?.sha !== fromSha || !["ahead", "identical"].includes(comparison.status))
     throw new Error("PR-Agent range baseline is not an ancestor");
   const diff = await context.request(path, { responseType: "text", headers: { Accept: "application/vnd.github.diff" } });
-  return { diff, ...validateDiffInput(diff, comparison.files) };
+  const fingerprint = validateDiffInput(diff, comparison.files);
+  await verifyRangeContents(context, fromSha, diff, comparison.files);
+  return { diff, ...fingerprint };
 }
 
 export async function prepareReviewScope(context, primary) {

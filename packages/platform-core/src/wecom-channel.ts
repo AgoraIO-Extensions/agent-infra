@@ -89,6 +89,7 @@ export interface WecomChannelStorePortV1 {
 		execute: (
 			conversation: ConversationExecutionUseCaseV1,
 		) => Promise<Omit<WecomReceiptV1, "receiptId">>,
+		signal?: AbortSignal,
 	): Promise<WecomAcceptanceV1>;
 }
 async function authorizeAdmission(
@@ -274,6 +275,7 @@ export function createWecomChannelV1(dependencies: {
 						executionId: decision.result.executionId,
 					};
 				},
+				signal,
 			);
 		},
 	};

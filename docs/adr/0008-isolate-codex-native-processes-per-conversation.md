@@ -1,5 +1,10 @@
 # 按 Conversation 隔离 Codex 原生进程与文件边界
 
+本 ADR 记录 #404 的历史 Codex 进程/文件修复。其“不改变部署与 Runtime Contract、
+不引入平台统一 Sandbox”的范围结论已由
+[Session-owned Sandbox ADR](0017-session-owned-sandbox-isolation.md)替代；以下原生平台实验
+和仍适用的进程/文件防护保留，不能作为当前跨 Runtime、跨入口的 Sandbox 验收证据。
+
 [#404](https://github.com/AgoraIO-Extensions/agent-infra/issues/404) 的真实 pinned Codex 双用户复现表明，
 同一 Agent 的两个用户共用一个原生进程时，双向都能读到对方的合成私有文件。原生 read-only 沙箱允许
 全盘读取，同一 `CODEX_HOME` 也让历史彼此可见，因此仅靠 Session 绑定、不同 `threadId` 或平台能力开关
@@ -46,5 +51,5 @@ Darwin 的 profile 使本人 `workspace` 可写、`home` 只读，因此原生�
 准入改为按进程执行：每个原生进程独立验证 provenance 与受限配置，Driver 打开时不再预启动进程。代价是
 部署配置错误在首个 Turn 才暴露，收益是任一进程都不能借另一进程的准入结果获得信任。
 
-不改变部署单元、Runtime Contract、Grant 校验与 §10.8 的模型传输边界，也不引入平台统一 Sandbox。隔离
-门禁只能由包含本修复的版本在真实 pinned Codex 上跑出的验收证据解除。
+历史 #404 的修复未改变当时的部署单元与 Runtime Contract，其验收只覆盖具名 Codex 版本和场景。
+当前资源/授权契约与运行验收遵循上述 Sandbox ADR，不把历史门禁解除外推到新范围。

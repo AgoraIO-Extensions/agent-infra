@@ -300,6 +300,18 @@ export type CommandAcceptedProjectionV1 = {
     status: 'submitted' | 'processing' | 'already_finished';
 };
 
+export type ConnectionCapabilityProjectionV1 = {
+    configFingerprint: string;
+    mcpPath: string;
+    publicOrigin: string;
+    schemaVersion: 1;
+    status: 'available';
+} | {
+    reason: 'missing' | 'invalid' | 'unapproved' | 'unavailable';
+    schemaVersion: 1;
+    status: 'unavailable';
+};
+
 export type ConversationDetailProjectionV1 = {
     conversation: ConversationProjectionV1;
     messages: Array<MessageProjectionV1>;
@@ -2480,6 +2492,55 @@ export type GetOwnExecutionAuditResponses = {
 };
 
 export type GetOwnExecutionAuditResponse = GetOwnExecutionAuditResponses[keyof GetOwnExecutionAuditResponses];
+
+export type GetConnectionCapabilityData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/capability';
+};
+
+export type GetConnectionCapabilityErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetConnectionCapabilityError = GetConnectionCapabilityErrors[keyof GetConnectionCapabilityErrors];
+
+export type GetConnectionCapabilityResponses = {
+    /**
+     * Server-resolved Connection capability
+     */
+    200: ConnectionCapabilityProjectionV1;
+};
+
+export type GetConnectionCapabilityResponse = GetConnectionCapabilityResponses[keyof GetConnectionCapabilityResponses];
 
 export type GetConversationData = {
     body?: never;

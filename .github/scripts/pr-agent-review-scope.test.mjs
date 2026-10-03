@@ -3,7 +3,7 @@ import test from "node:test";
 import { gateExternalId, GATE_PUBLISHER_APP_ID } from "./check-run-contract.mjs";
 import { publishPrAgentReview } from "./pr-agent-review.mjs";
 import { buildCoverageCheckOutput } from "./review-coverage.mjs";
-import { issueContractHash, prepareReviewScope, validateDiffInput, verifyReviewScope } from "./pr-agent-review-scope.mjs";
+import { issueContractHash, prepareReviewScope, validateDiffInput, verifyRangeContents, verifyReviewScope } from "./pr-agent-review-scope.mjs";
 
 const repository = "org/repo";
 const base = "b".repeat(40);
@@ -22,13 +22,19 @@ function fixture() {
       head: { sha: state.head, repo: { full_name: repository } },
       base: { sha: base, ref: "main", repo: { full_name: repository } } };
     if (path.endsWith("/issues/7")) return state.issue;
+    if (path.includes("/git/")) {
+      const ref = path.split("/").at(-1).split("?")[0];
+      if (path.includes("/commits/")) return { sha: ref, tree: { sha: ref } };
+      if (path.includes("/trees/")) return { sha: ref, truncated: false, tree: [{ path: "src/math.ts", type: "blob", sha: ref }] };
+      return { sha: ref, encoding: "base64", content: Buffer.from(`${source[ref] ?? "new base"}\n`).toString("base64") };
+    }
     const compare = /\/compare\/([a-f0-9]+)\.\.\.([a-f0-9]+)$/.exec(path);
     if (compare) {
       const [, from, to] = compare;
       const diff = source[from] === source[to] ? "" : patch(source[from], source[to]);
       return options.responseType === "text" ? diff : {
         status: from === to ? "identical" : "ahead", merge_base_commit: { sha: from },
-        files: diff ? [{ filename: "src/math.ts", additions: 1, deletions: 1 }] : [],
+        files: diff ? [{ filename: "src/math.ts", status: "modified", additions: 1, deletions: 1 }] : [],
       };
     }
     if (path.includes("/files?")) return [{ filename: "src/math.ts", patch: patch(source[base], source[state.head]) }];
@@ -140,7 +146,7 @@ test("changed base, merge base or rewritten history resets to a complete PR revi
     const request = async (path, options) => {
       if (path.endsWith(`/compare/${newBase}...${second}`)) return options?.responseType === "text"
         ? patch("new base", source[second])
-        : { status: "ahead", merge_base_commit: { sha: newBase }, files: [{ filename: "src/math.ts", additions: 1, deletions: 1 }] };
+        : { status: "ahead", merge_base_commit: { sha: newBase }, files: [{ filename: "src/math.ts", status: "modified", additions: 1, deletions: 1 }] };
       const response = await f.context().request(path, options);
       if (change === "base" && path.endsWith("/pulls/42")) response.base.ref = "release";
       if (change === "merge-base" && path.endsWith(`/compare/${base}...${second}`) && !options?.responseType)
@@ -185,10 +191,145 @@ test("no-change commits inherit only a certified baseline and publish an explici
 
 test("truncated, mismatched or binary raw diffs cannot be accepted as complete input", () => {
   const diff = patch("before", "after");
-  assert.equal(validateDiffInput(diff, [{ filename: "src/math.ts", additions: 1, deletions: 1 }]).diffBytes, Buffer.byteLength(diff));
+  assert.equal(validateDiffInput(diff, [{ filename: "src/math.ts", status: "modified", additions: 1, deletions: 1 }]).diffBytes, Buffer.byteLength(diff));
   assert.throws(() => validateDiffInput(diff, []), /does not match/);
-  assert.throws(() => validateDiffInput(diff, [{ filename: "src/math.ts", additions: 2, deletions: 1 }]), /does not match/);
-  assert.throws(() => validateDiffInput(diff.slice(0, -12), [{ filename: "src/math.ts", additions: 1, deletions: 1 }]), /cannot be parsed/);
+  assert.equal(validateDiffInput(diff, [{ filename: "src/math.ts", status: "modified", additions: 0, deletions: 0 }]).diffBytes, Buffer.byteLength(diff));
+  assert.throws(() => validateDiffInput(diff.slice(0, -12), [{ filename: "src/math.ts", status: "modified", additions: 1, deletions: 1 }]), /cannot be parsed/);
   const binary = "diff --git a/image.png b/image.png\nindex 1111111..2222222 100644\nBinary files a/image.png and b/image.png differ\n";
-  assert.throws(() => validateDiffInput(binary, [{ filename: "image.png", additions: 0, deletions: 0 }]), /unsupported binary/);
+  assert.throws(() => validateDiffInput(binary, [{ filename: "image.png", status: "modified", additions: 0, deletions: 0 }]), /unsupported binary/);
+});
+
+test("API patch omission and unusable statistics do not override immutable hunk counts", () => {
+  for (const statistics of [{ additions: 0, deletions: 0 }, { additions: 999, deletions: 999 }, {}]) {
+    assert.equal(validateDiffInput(patch("before", "after"), [
+      { filename: "src/math.ts", status: "modified", ...statistics },
+    ]).diffBytes, Buffer.byteLength(patch("before", "after")));
+  }
+});
+
+test("missing, duplicate, unknown and inconsistent identities or statuses fail closed", () => {
+  const diff = patch("before", "after");
+  const file = { filename: "src/math.ts", status: "modified" };
+  for (const files of [[file, file], [{ ...file, filename: "wrong.ts" }], [{ ...file, status: "added" }],
+    [{ ...file, status: "removed" }], [{ ...file, status: "renamed" }], [{ ...file, status: "copied" }],
+    [{ ...file, previous_filename: "old.ts" }], [null], [{}]]) {
+    assert.throws(() => validateDiffInput(diff, files));
+  }
+  assert.throws(() => validateDiffInput(diff + diff, [file, { filename: "other.ts", status: "modified" }]));
+  assert.throws(() => validateDiffInput(diff.replace("--- a/src/math.ts", "--- a/other.ts"), [file]));
+  assert.throws(() => validateDiffInput(diff.replace("@@ -1 +1 @@", "@@ -1,2 +1,2 @@"), [file]));
+});
+
+test("additions, deletions, mode-only changes and renames retain their API boundaries", () => {
+  const added = "diff --git a/new.ts b/new.ts\nnew file mode 100644\nindex 0000000..2222222\n--- /dev/null\n+++ b/new.ts\n@@ -0,0 +1 @@\n+new\n";
+  const removed = "diff --git a/old.ts b/old.ts\ndeleted file mode 100644\nindex 1111111..0000000\n--- a/old.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n";
+  const mode = "diff --git a/script b/script\nold mode 100644\nnew mode 100755\n";
+  const rename = "diff --git a/old.ts b/new.ts\nsimilarity index 100%\nrename from old.ts\nrename to new.ts\n";
+  for (const [diff, file] of [[added, { filename: "new.ts", status: "added" }],
+    [removed, { filename: "old.ts", status: "removed" }],
+    [mode, { filename: "script", status: "modified" }],
+    [rename, { filename: "new.ts", previous_filename: "old.ts", status: "renamed" }],
+    [rename.replace("100%", "50%") + "index 1111111..2222222 100644\n--- a/old.ts\n+++ b/new.ts\n@@ -1 +1 @@\n-old\n+new\n",
+      { filename: "new.ts", previous_filename: "old.ts", status: "renamed" }]]) {
+    assert.equal(validateDiffInput(diff, [file]).diffBytes, Buffer.byteLength(diff));
+    assert.throws(() => validateDiffInput(diff, [{ ...file, status: "unknown" }]));
+  }
+  assert.throws(() => validateDiffInput(rename, [{ filename: "new.ts", previous_filename: "wrong.ts", status: "renamed" }]));
+});
+
+test("quoted paths, whitespace and non-ASCII paths use Git file identity", () => {
+  for (const [filename, encoded] of [["space name.ts", "space name.ts"], ["中文.ts", '"\\344\\270\\255\\346\\226\\207.ts"'], ["tab\tname.ts", '"tab\\tname.ts"']]) {
+    const prefixed = (prefix) => encoded.startsWith('"') ? `"${prefix}/${encoded.slice(1)}` : `${prefix}/${encoded}`;
+    const diff = patch("before", "after").replaceAll("a/src/math.ts", prefixed("a")).replaceAll("b/src/math.ts", prefixed("b"));
+    assert.equal(validateDiffInput(diff, [{ filename, status: "modified" }]).diffBytes, Buffer.byteLength(diff));
+  }
+});
+
+
+test("trailing garbage, missing newline, partial hunks and unchanged input retain fail-closed boundaries", () => {
+  const diff = patch("before", "after");
+  const files = [{ filename: "src/math.ts", status: "modified" }];
+  for (const invalid of [diff + "garbage\n", diff + "@@ invalid hunk\n", diff + " extra context\n",
+    diff.slice(0, diff.indexOf("@@")), diff.replace("index ", "index 3333333..4444444 100644\nindex "), diff.slice(0, -1), diff.replace("+after\n", ""),
+    diff.replace("index ", "unexpected "), diff + "@@ -2 +2 @@\n-old\n"]) {
+    assert.throws(() => validateDiffInput(invalid, files));
+  }
+  assert.equal(validateDiffInput("", []).diffBytes, 0);
+  assert.throws(() => validateDiffInput("", files));
+  assert.throws(() => validateDiffInput(diff, Array(300).fill(files[0])));
+  assert.throws(() => validateDiffInput("x".repeat(10 * 1024 * 1024 + 1), []));
+});
+
+
+test("no-hunk changes must prove empty content, pure rename or mode-only changes", () => {
+  const base = "diff --git a/f b/f\n";
+  for (const [header, status] of [["index 1111111..2222222 100644\n", "modified"],
+    ["new file mode 100644\nindex 0000000..2222222\n", "added"],
+    ["deleted file mode 100644\nindex 1111111..0000000\n", "removed"],
+    ["old mode 100644\nnew mode 100755\nindex 1111111..2222222\n", "modified"]]) {
+    assert.throws(() => validateDiffInput(base + header, [{ filename: "f", status }]), /missing content hunks/);
+  }
+  for (const [header, status] of [["new file mode 100644\nindex 0000000..e69de29\n", "added"],
+    ["deleted file mode 100644\nindex e69de29..0000000\n", "removed"]]) {
+    assert.equal(validateDiffInput(base + header, [{ filename: "f", status }]).diffBytes, Buffer.byteLength(base + header));
+  }
+  const rename = "diff --git a/old b/f\nsimilarity index 50%\nrename from old\nrename to f\nindex 1111111..2222222 100644\n";
+  assert.throws(() => validateDiffInput(rename, [{ filename: "f", previous_filename: "old", status: "renamed" }]), /missing content hunks/);
+});
+
+
+test("no-newline markers preserve source bytes and do not consume hunk counts", async () => {
+  const file = { filename: "src/math.ts", status: "modified" };
+  const diff = patch("before", "after").replace("-before\n", "-before\n\\ No newline at end of file\n") + "\\ No newline at end of file\n";
+  assert.ok(validateDiffInput(diff, [file]).diffBytes);
+  const request = blobFixture("before", "after");
+  await verifyRangeContents({ repository, expectedHead: first, request }, base, diff, [file]);
+});
+
+test("immutable contents reject a complete omitted hunk even when numstat agrees", async () => {
+  const before = "one\n" + "keep\n".repeat(8) + "ten\n";
+  const after = "ONE\n" + "keep\n".repeat(8) + "TEN\n";
+  const truncated = patch("one", "ONE");
+  const complete = truncated + "@@ -10 +10 @@\n-ten\n+TEN\n";
+  const files = [{ filename: "src/math.ts", status: "modified" }];
+  const request = blobFixture(before, after);
+  const context = { repository, expectedHead: first, request };
+  assert.ok(validateDiffInput(truncated, files).diffBytes);
+  await assert.rejects(verifyRangeContents(context, base, truncated, files), /immutable contents/);
+  await verifyRangeContents(context, base, complete, files);
+  await assert.rejects(verifyRangeContents({ ...context, request: async () => ({}) }, base, complete, files), /commit is invalid/);
+});
+
+
+function blobFixture(before, after, filename = "src/math.ts", mode = "100644") {
+  return async (path) => {
+    const ref = path.split("/").at(-1).split("?")[0];
+    if (path.includes("/git/commits/")) return { sha: ref, tree: { sha: ref } };
+    if (path.includes("/git/trees/")) return { sha: ref, truncated: false, tree: [{ path: filename, type: "blob", mode, sha: ref }] };
+    assert.ok(path.includes("/git/blobs/"), "Contents API must not dereference symlinks");
+    return { sha: ref, encoding: "base64", content: Buffer.from(ref === base ? before : after).toString("base64") };
+  };
+}
+
+test("symlink verification reads the link blob, not dereferenced target contents", async () => {
+  const diff = patch("old-target.ts", "new-target.ts").replace("100644", "120000")
+    .replace("-old-target.ts\n", "-old-target.ts\n\\ No newline at end of file\n") + "\\ No newline at end of file\n";
+  const files = [{ filename: "src/math.ts", status: "modified" }];
+  validateDiffInput(diff, files);
+  const request = blobFixture("old-target.ts", "new-target.ts", "src/math.ts", "120000");
+  await verifyRangeContents({ repository, expectedHead: first, request }, base, diff, files);
+});
+
+test("incomplete trees, duplicate entries and mismatched blobs fail closed", async () => {
+  for (const corrupt of [
+    (value) => { if (value.tree instanceof Array) value.truncated = true; },
+    (value) => { if (value.tree instanceof Array) value.tree.push(value.tree[0]); },
+    (value) => { if (value.encoding) value.sha = "0".repeat(40); },
+    (value) => { if (value.encoding) value.content = "not!base64"; },
+  ]) {
+    const original = blobFixture("before\n", "after\n");
+    const request = async (path) => { const value = await original(path); corrupt(value); return value; };
+    await assert.rejects(verifyRangeContents({ repository, expectedHead: first, request }, base,
+      patch("before", "after"), [{ filename: "src/math.ts", status: "modified" }]));
+  }
 });

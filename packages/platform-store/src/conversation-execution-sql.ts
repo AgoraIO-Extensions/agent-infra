@@ -12,6 +12,7 @@ import type {
 } from "@agent-infra/platform-core";
 import { parseTaskPrincipalV1 } from "@agent-infra/platform-core";
 import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+import { awaitConversationExecutionQueryV1 } from "./conversation-execution-abort.js";
 import {
 	type AgentConfigurationRow,
 	activeExecutionStatuses,
@@ -52,7 +53,9 @@ export async function lockAgentConfiguration(
 	  }
 	| undefined
 > {
-	const rows = await transaction<AgentConfigurationRow[]>`
+	const rows = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<AgentConfigurationRow[]>`
 		select agent.current_configuration_revision, agent.authorization_revision,
 			configuration.configuration
 		from platform.agents as agent
@@ -62,7 +65,8 @@ export async function lockAgentConfiguration(
 		where agent.id = ${agentId}
 		limit 1
 		for share of agent
-	`;
+	`,
+	);
 	const row = rows[0];
 	if (!row) return undefined;
 	if (row.configuration === null) {
@@ -153,7 +157,9 @@ export async function readIdempotency(
 		readonly key: string;
 	},
 ): Promise<IdempotencyRow | undefined> {
-	const rows = await transaction<IdempotencyRow[]>`
+	const rows = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<IdempotencyRow[]>`
 		select request_digest, status, result
 		from platform.idempotency_records
 		where scope_type = ${input.scopeType}
@@ -162,7 +168,8 @@ export async function readIdempotency(
 			and command_type = ${input.commandType}
 			and idempotency_key = ${input.key}
 		limit 1
-	`;
+	`,
+	);
 	return rows[0];
 }
 
@@ -179,7 +186,9 @@ export async function reserveIdempotency(
 	},
 ): Promise<string | undefined> {
 	const id = randomUUID();
-	const inserted = await transaction<{ id: string }[]>`
+	const inserted = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<{ id: string }[]>`
 		insert into platform.idempotency_records
 			(id, scope_type, scope_id, actor_id, command_type, idempotency_key,
 			 request_digest, status, created_at, updated_at)
@@ -190,7 +199,8 @@ export async function reserveIdempotency(
 		on conflict (scope_type, scope_id, actor_id, command_type, idempotency_key)
 		do nothing
 		returning id
-	`;
+	`,
+	);
 	return inserted[0]?.id;
 }
 
@@ -200,13 +210,16 @@ export async function completeIdempotency(
 	result: unknown,
 	occurredAt: Date,
 ): Promise<void> {
-	const completed = await transaction<{ id: string }[]>`
+	const completed = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<{ id: string }[]>`
 		update platform.idempotency_records
 		set status = 'completed', result = ${transaction.json(result as JsonValue)},
 			updated_at = ${occurredAt}
 		where id = ${id} and status = 'reserved'
 		returning id
-	`;
+	`,
+	);
 	if (completed.length !== 1) unavailable();
 }
 
@@ -214,16 +227,21 @@ export async function lockConversation(
 	transaction: Transaction,
 	conversationId: string,
 ): Promise<ConversationExecutionConversationStateV1 | undefined> {
-	const rows = await transaction<ConversationRow[]>`
+	const rows = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<ConversationRow[]>`
 		select id, agent_id, actor_id, channel_id, principal_type, status, session_generation,
 			host_session_ref, authorization_revision, last_conversation_cursor,
 			selected_model_option_id, selected_reasoning_level, created_at, updated_at
 		from platform.conversations where id = ${conversationId} for update
-	`;
+	`,
+	);
 	const row = rows[0];
 	if (!row) return undefined;
-	const [pending] =
-		await transaction`select 1 from platform.conversation_generation_tombstones where conversation_id = ${conversationId} and session_generation = ${row.session_generation} and status = 'pending'`;
+	const [pending] = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction`select 1 from platform.conversation_generation_tombstones where conversation_id = ${conversationId} and session_generation = ${row.session_generation} and status = 'pending'`,
+	);
 	return conversationFromRow(row, !!pending);
 }
 
@@ -249,7 +267,9 @@ export async function readMessageState(
 	conversation: ConversationExecutionConversationStateV1,
 ): Promise<ConversationExecutionStateV1> {
 	const agent = await lockAgentConfiguration(transaction, conversation.agentId);
-	const activeRows = await transaction<ExecutionRow[]>`
+	const activeRows = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<ExecutionRow[]>`
 		select execution_id, conversation_id, actor_id, principal_type, agent_id, channel_id, turn_id, session_generation,
 			model_configuration_revision, model_option_id, reasoning_level,
 			last_event_sequence, status
@@ -258,7 +278,8 @@ export async function readMessageState(
 			and status in ('submitted', 'processing', 'unknown')
 		limit 2
 		for update
-	`;
+	`,
+	);
 	if (activeRows.length > 1) unavailable();
 	const active = activeRows[0];
 	if (!active) {
@@ -280,12 +301,16 @@ export async function readMessageState(
 		active.principal_type !== conversation.principal?.kind
 	)
 		unavailable();
-	const stopRows = await transaction<StopRow[]>`
+	if (!activeExecutionStatuses.has(status)) unavailable();
+	const stopRows = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<StopRow[]>`
 		select execution_id, stop_request_id, status
 		from platform.conversation_stops
 		where execution_id = ${active.execution_id}
 		limit 1
-	`;
+	`,
+	);
 	const stop = stopRows[0];
 	if (stop && stop.status !== "submitted" && stop.status !== "completed")
 		unavailable();
@@ -468,12 +493,15 @@ export async function requireCreateReplay(
 	result: ReturnType<typeof parseCreatedResult>,
 	authority: ConversationExecutionAuthorityV1,
 ): Promise<void> {
-	const rows = await transaction<ConversationRow[]>`
+	const rows = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<ConversationRow[]>`
 		select id, agent_id, actor_id, channel_id, principal_type, status, session_generation,
 			host_session_ref, authorization_revision, last_conversation_cursor,
 			selected_model_option_id, selected_reasoning_level, created_at, updated_at
 		from platform.conversations where id = ${result.conversationId} limit 1
-	`;
+	`,
+	);
 	const conversation = rows[0] && conversationFromRow(rows[0]);
 	if (
 		!conversation ||
@@ -490,16 +518,18 @@ export async function requireMessageReplay(
 	conversationId: string,
 	authority: ConversationExecutionAuthorityV1,
 ): Promise<void> {
-	const rows = await transaction<
-		{
-			readonly message_id: string;
-			readonly message_conversation_id: string;
-			readonly message_actor_id: string;
-			readonly execution_id: string;
-			readonly execution_conversation_id: string;
-			readonly execution_actor_id: string;
-		}[]
-	>`
+	const rows = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<
+			{
+				readonly message_id: string;
+				readonly message_conversation_id: string;
+				readonly message_actor_id: string;
+				readonly execution_id: string;
+				readonly execution_conversation_id: string;
+				readonly execution_actor_id: string;
+			}[]
+		>`
 		select message.message_id, message.conversation_id as message_conversation_id,
 			message.actor_id as message_actor_id, execution.execution_id,
 			execution.conversation_id as execution_conversation_id,
@@ -509,7 +539,8 @@ export async function requireMessageReplay(
 			on execution.execution_id = message.execution_id
 		where message.message_id = ${result.messageId}
 		limit 1
-	`;
+	`,
+	);
 	const row = rows[0];
 	if (
 		!row ||
@@ -593,7 +624,9 @@ export async function insertModelSelectionFallback(
 ): Promise<void> {
 	if (!fallback) return;
 	const timeline = fallback.timelineEvent;
-	await transaction`
+	await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction`
 		insert into platform.conversation_events
 			(event_id, conversation_id, execution_id, adapter_event_key, sequence,
 			 conversation_cursor, event_type, event_payload, event_digest, source,
@@ -605,17 +638,23 @@ export async function insertModelSelectionFallback(
 			 ${transaction.json(timeline.event as unknown as JsonValue)},
 			 ${createHash("sha256").update(JSON.stringify(timeline.event)).digest("hex")},
 			 'platform', null, ${timeline.occurredAt})
-	`;
-	const updated = await transaction<{ execution_id: string }[]>`
+	`,
+	);
+	const updated = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<{ execution_id: string }[]>`
 		update platform.conversation_executions
 		set last_event_sequence = ${timeline.sequence}, updated_at = now()
 		where execution_id = ${timeline.executionId}
 			and conversation_id = ${timeline.conversationId}
 			and last_event_sequence = ${timeline.sequence - 1}
 		returning execution_id
-	`;
+	`,
+	);
 	if (updated.length !== 1) unavailable();
-	await transaction`
+	await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction`
 		insert into platform.conversation_audit_events
 			(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id,
 			 request_id, occurred_at, details)
@@ -632,5 +671,6 @@ export async function insertModelSelectionFallback(
 					modelOptionId: fallback.modelOptionId,
 					reasoningLevel: fallback.reasoningLevel,
 				} as JsonValue)})
-	`;
+	`,
+	);
 }

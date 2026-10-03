@@ -98,6 +98,24 @@ export const BrowserSessionProjectionV1Schema = z.strictObject({
 	user: BrowserUserProjectionV1Schema,
 });
 
+export const ConnectionCapabilityProjectionV1Schema = z.discriminatedUnion(
+	"status",
+	[
+		z.strictObject({
+			status: z.literal("available"),
+			schemaVersion: z.literal(1),
+			publicOrigin: z.string().url(),
+			mcpPath: z.string().startsWith("/"),
+			configFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+		}),
+		z.strictObject({
+			status: z.literal("unavailable"),
+			schemaVersion: z.literal(1),
+			reason: z.enum(["missing", "invalid", "unapproved", "unavailable"]),
+		}),
+	],
+);
+
 export const AvailabilityTargetV1Schema = z.discriminatedUnion("kind", [
 	z.strictObject({ kind: z.literal("user"), userId: OpaqueIdV1Schema }),
 	z.strictObject({
@@ -864,6 +882,18 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 			},
 		},
 	},
+	"/api/v1/connection/capability": {
+		get: {
+			operationId: "getConnectionCapability",
+			responses: {
+				"200": jsonResponse(
+					"Server-resolved Connection capability",
+					ConnectionCapabilityProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v1/agent-applications": {
 		get: {
 			operationId: "listAgentApplications",
@@ -1569,6 +1599,7 @@ export const pilotBrowserSchemasV1 = {
 	AgentResourceProfileProjectionV1: AgentResourceProfileProjectionV1Schema,
 	ApprovalDecisionRequestV1: ApprovalDecisionRequestV1Schema,
 	BrowserSessionProjectionV1: BrowserSessionProjectionV1Schema,
+	ConnectionCapabilityProjectionV1: ConnectionCapabilityProjectionV1Schema,
 	CommandAcceptedProjectionV1: CommandAcceptedProjectionV1Schema,
 	ChannelBindingInputV1: ChannelBindingInputV1Schema,
 	ChannelBindingProjectionV1: ChannelBindingProjectionV1Schema,

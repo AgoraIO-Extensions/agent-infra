@@ -27,7 +27,9 @@ afterEach(async () => {
 	);
 });
 
-async function createSlowCollector(options: { responseDelayMs?: number } = {}) {
+async function createSlowCollector(
+	options: { responseDelayMs?: number; dripResponse?: boolean } = {},
+) {
 	const requests: RequestRecord[] = [];
 	const responseTimers = new Set<ReturnType<typeof setTimeout>>();
 	const sockets = new Set<Socket>();
@@ -41,6 +43,16 @@ async function createSlowCollector(options: { responseDelayMs?: number } = {}) {
 				body: Buffer.concat(chunks),
 			});
 			pending.push({ response });
+			if (options.dripResponse) {
+				response.writeHead(200, { "Content-Type": "application/x-protobuf" });
+				// Unknown protobuf varint field: valid response bytes, no partial frame.
+				const chunk = Buffer.from([0x78, 0x00]);
+				response.write(chunk);
+				const timer = setInterval(() => {
+					if (!response.destroyed) response.write(chunk);
+				}, 250);
+				responseTimers.add(timer);
+			}
 			if (options.responseDelayMs !== undefined) {
 				const timer = setTimeout(() => {
 					responseTimers.delete(timer);
@@ -66,6 +78,11 @@ async function createSlowCollector(options: { responseDelayMs?: number } = {}) {
 	return {
 		endpoint: `http://127.0.0.1:${address.port}`,
 		requests,
+		finishResponses() {
+			for (const timer of responseTimers) clearTimeout(timer);
+			responseTimers.clear();
+			for (const { response } of pending) response.end();
+		},
 		async close() {
 			for (const timer of responseTimers) clearTimeout(timer);
 			responseTimers.clear();
@@ -173,6 +190,63 @@ it("bounds real trace export under a slow OTLP sink and closes within five secon
 		"PRIVATE_SENTINEL",
 	);
 }, 20_000);
+
+it("keeps real SDK shutdown closing at its deadline and suppresses later exports", async () => {
+	const collector = await createSlowCollector({ dripResponse: true });
+	activeCollectors.push(collector);
+	const telemetry = startObservability({
+		service: "platform-worker",
+		otlpEndpoint: collector.endpoint,
+		metricIntervalMs: 1000,
+		output: new Writable({
+			write(_chunk, _encoding, done) {
+				done();
+			},
+		}),
+	});
+	activeTelemetry.push(telemetry);
+	telemetry.record({
+		stage: "worker",
+		outcome: "completed",
+		operationRef: "drip",
+	});
+	await waitFor(() =>
+		["/v1/traces", "/v1/metrics"].every((path) =>
+			collector.requests.some((request) => request.path === path),
+		),
+	);
+	// HTTP socket timeout measures inactivity. Dripping keeps the real transport
+	// pending beyond the package deadline without replacing SDK code or timers.
+	const startedAt = performance.now();
+	await telemetry.close();
+	const elapsed = performance.now() - startedAt;
+	// Node timers have millisecond granularity; closing-at-return proves timeout.
+	expect(elapsed).toBeGreaterThanOrEqual(CLOSE_BOUND_MS - 25);
+	// Allow timer delivery jitter, not a longer configured shutdown deadline.
+	expect(elapsed).toBeLessThan(CLOSE_BOUND_MS + 500);
+	expect(telemetry.status().state).toBe("closing");
+	expect(telemetry.status().exportFailures).toBeGreaterThan(0);
+	const requestsAtDeadline = collector.requests.length;
+	telemetry.record({
+		stage: "worker",
+		outcome: "completed",
+		operationRef: "late",
+	});
+	await telemetry.close();
+	await new Promise((resolve) => setTimeout(resolve, 1000));
+	expect(telemetry.status().state).toBe("closing");
+	expect(collector.requests.length).toBe(requestsAtDeadline);
+	collector.finishResponses();
+	await waitFor(() => telemetry.status().state === "closed");
+	telemetry.record({
+		stage: "worker",
+		outcome: "completed",
+		operationRef: "closed",
+	});
+	await new Promise((resolve) => setTimeout(resolve, 2500));
+	// Both signal paths are counted, including the metric reader's final flush.
+	expect(collector.requests.length).toBe(requestsAtDeadline);
+}, 15_000);
 
 it("shows bounded trace queue pressure when a slow sink eventually responds", async () => {
 	const collector = await createSlowCollector({ responseDelayMs: 100 });
