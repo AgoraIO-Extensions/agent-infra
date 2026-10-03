@@ -1,4 +1,7 @@
-import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
+import {
+	AgentProjectionV2Schema,
+	ConnectionCapabilityProjectionV1Schema,
+} from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, test } from "@playwright/test";
 import { pendingApplication } from "../src/features/my-agents/test-fixtures";
@@ -32,6 +35,17 @@ test("logout and another login cancel old collection pages without restoring the
 	await page.route("**/api/**", async (route) => {
 		const request = route.request();
 		const url = new URL(request.url());
+		if (
+			request.method() === "GET" &&
+			url.pathname === "/api/v1/connection/capability"
+		)
+			return route.fulfill({
+				json: ConnectionCapabilityProjectionV1Schema.parse({
+					schemaVersion: 1,
+					status: "unavailable",
+					reason: "missing",
+				}),
+			});
 		if (url.pathname === "/api/v1/session") {
 			if (actor === null)
 				return route.fulfill({
