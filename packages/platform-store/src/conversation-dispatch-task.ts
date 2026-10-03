@@ -193,7 +193,9 @@ export async function recordTaskStatus(
 	)
 		throw new StaleDispatchLease();
 	const event = publicTaskStatusEventV1({
-		isTask: state.execution.task_wait_order !== null || boundary !== undefined,
+		isTask:
+			state.execution.task_wait_order !== null ||
+			(boundary !== undefined && state.execution.channel_id === "api"),
 		status,
 		reason,
 	});
