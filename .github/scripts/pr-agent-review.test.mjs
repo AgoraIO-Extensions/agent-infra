@@ -206,6 +206,7 @@ async function gitQuotedPathDiff() {
   const directory = await mkdtemp(join(tmpdir(), "pr-agent-quoted-paths-"));
   const files = [
     { filename: "src/aaa.ts", line: 2 },
+    { filename: "src/space name.ts", line: 2 },
     { filename: "src/tab\t\"quote\\name.ts", line: 3 },
     { filename: "src/中文.ts", line: 4 },
   ];
@@ -250,7 +251,7 @@ test("publishes and reads back nonempty scoped findings for Git-quoted paths", a
     if (path.endsWith("/issues/7")) return issue;
     if (path.includes("/compare/")) return options.responseType === "text" ? diff
       : { status: "ahead", merge_base_commit: { sha: "b".repeat(40) },
-          files: files.map(({ filename }) => ({ filename, additions: 1, deletions: 1 })) };
+          files: files.map(({ filename }) => ({ filename, status: "modified", additions: 1, deletions: 1 })) };
     if (path.includes("/files?")) return files;
     return remote.request(path, options);
   };

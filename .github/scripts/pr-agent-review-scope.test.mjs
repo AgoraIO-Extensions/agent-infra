@@ -238,3 +238,18 @@ test("quoted paths, whitespace and non-ASCII paths use Git file identity", () =>
     assert.equal(validateDiffInput(diff, [{ filename, status: "modified" }]).diffBytes, Buffer.byteLength(diff));
   }
 });
+
+
+test("trailing garbage, missing newline, partial hunks and unchanged input retain fail-closed boundaries", () => {
+  const diff = patch("before", "after");
+  const files = [{ filename: "src/math.ts", status: "modified" }];
+  for (const invalid of [diff + "garbage\n", diff + "@@ invalid hunk\n", diff + " extra context\n",
+    diff.slice(0, diff.indexOf("@@")), diff.replace("index ", "index 3333333..4444444 100644\nindex "), diff.slice(0, -1), diff.replace("+after\n", ""),
+    diff.replace("index ", "unexpected "), diff + "@@ -2 +2 @@\n-old\n"]) {
+    assert.throws(() => validateDiffInput(invalid, files));
+  }
+  assert.equal(validateDiffInput("", []).diffBytes, 0);
+  assert.throws(() => validateDiffInput("", files));
+  assert.throws(() => validateDiffInput(diff, Array(300).fill(files[0])));
+  assert.throws(() => validateDiffInput("x".repeat(10 * 1024 * 1024 + 1), []));
+});

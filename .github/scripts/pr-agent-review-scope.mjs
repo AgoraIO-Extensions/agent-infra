@@ -133,7 +133,8 @@ export function validateDiffInput(diff, files) {
     const metadata = (prefix) => header.filter((line) => line.startsWith(prefix));
     const hasPath = (prefix, path) => {
       const values = metadata(prefix);
-      return values.length === 1 && gitPaths(path).some((value) => values[0] === prefix + value);
+      const value = ["--- ", "+++ "].includes(prefix) ? values[0]?.replace(/\t$/, "") : values[0];
+      return values.length === 1 && gitPaths(path).some((encoded) => value === prefix + encoded);
     };
     const added = metadata("new file mode ").length;
     const removed = metadata("deleted file mode ").length;
@@ -141,19 +142,40 @@ export function validateDiffInput(diff, files) {
     if (added !== Number(file.status === "added") || removed !== Number(file.status === "removed") ||
         renamed !== (file.status === "renamed" ? 2 : 0) ||
         (renamed && (!hasPath("rename from ", oldPath) || !hasPath("rename to ", file.filename))) ||
-        metadata("copy from ").length || metadata("copy to ").length ||
         (metadata("--- ").length + metadata("+++ ").length > 0 &&
           (!hasPath("--- ", file.status === "added" ? "/dev/null" : `a/${oldPath}`) ||
            !hasPath("+++ ", file.status === "removed" ? "/dev/null" : `b/${file.filename}`))))
       throw new Error("PR-Agent range diff does not match immutable file status");
-    // API counts can be 0/0 when GitHub omits a patch. Count actual hunk lines
-    // and let git validate hunk lengths; never use API statistics as authority.
-    const body = hunkStart === -1 ? [] : lines.slice(hunkStart, -1);
-    if (body.some((line) => !/^(?:@@ |[ +\-]|\\ No newline at end of file$)/.test(line)))
+    const headerKeys = header.map((line) => /^(index |old mode |new mode |new file mode |deleted file mode |similarity index |rename from |rename to |--- |\+\+\+ )/.exec(line)[0]);
+    if (new Set(headerKeys).size !== headerKeys.length ||
+        (hunkStart === -1 && (metadata("--- ").length || metadata("+++ ").length)))
       throw new Error("PR-Agent range diff cannot be parsed");
-    const additions = body.filter((line) => line.startsWith("+")).length;
-    const deletions = body.filter((line) => line.startsWith("-")).length;
-    if (Number(match[1]) !== additions || Number(match[2]) !== deletions)
+    // Git can ignore trailing text. Consume every hunk ourselves, then compare
+    // actual line counts to numstat; API statistics are never authoritative.
+    let oldRemaining = 0;
+    let newRemaining = 0;
+    let additions = 0;
+    let deletions = 0;
+    let previousLine;
+    for (const line of hunkStart === -1 ? [] : lines.slice(hunkStart, -1)) {
+      const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@(?: .*)?$/.exec(line);
+      if (hunk && oldRemaining === 0 && newRemaining === 0) {
+        oldRemaining = Number(hunk[1] ?? 1);
+        newRemaining = Number(hunk[2] ?? 1);
+        if (!Number.isSafeInteger(oldRemaining) || !Number.isSafeInteger(newRemaining) ||
+            oldRemaining + newRemaining === 0) throw new Error("PR-Agent range diff cannot be parsed");
+      } else if (line === "\\ No newline at end of file" && /^[ +\-]/.test(previousLine ?? "")) {
+        // This marker does not consume a source line.
+      } else if (/^[ +\-]/.test(line)) {
+        if (line[0] !== "+") oldRemaining--;
+        if (line[0] !== "-") newRemaining--;
+        if (line[0] === "+") additions++;
+        if (line[0] === "-") deletions++;
+        if (oldRemaining < 0 || newRemaining < 0) throw new Error("PR-Agent range diff cannot be parsed");
+      } else throw new Error("PR-Agent range diff cannot be parsed");
+      previousLine = line;
+    }
+    if (oldRemaining || newRemaining || Number(match[1]) !== additions || Number(match[2]) !== deletions)
       throw new Error("PR-Agent range diff does not match immutable hunk counts");
   }
   return { diffSha256: hash(diff), diffBytes: Buffer.byteLength(diff) };
