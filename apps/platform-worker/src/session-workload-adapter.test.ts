@@ -151,7 +151,7 @@ describe("session sandbox workload adapter", () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 		await adapter.apply(allocation);
-		const pod = await client.read("Pod", allocation.podName);
+		const pod = (await client.read("Pod", allocation.podName)) as V1Pod | null;
 		if (!pod?.spec) throw new Error("missing pod spec");
 		pod.spec.containers.push({ name: "unexpected", image: "busybox" });
 		await expect(adapter.apply(allocation)).rejects.toMatchObject({
@@ -163,7 +163,7 @@ describe("session sandbox workload adapter", () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 		await adapter.apply(allocation);
-		const pod = await client.read("Pod", allocation.podName);
+		const pod = (await client.read("Pod", allocation.podName)) as V1Pod | null;
 		if (!pod?.spec?.containers[0]) throw new Error("missing runtime container");
 		pod.spec.containers[0].securityContext = {
 			runAsNonRoot: true,
