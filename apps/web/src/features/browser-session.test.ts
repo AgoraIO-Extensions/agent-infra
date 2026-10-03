@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createClient } from "../pilot/generated/client/index.js";
 import { loadBrowserSession } from "./browser-session.js";
@@ -14,6 +14,7 @@ const session = {
 };
 
 describe("shared browser session reader", () => {
+	afterEach(() => vi.useRealTimers());
 	it("reads the current session and its server-issued generation", async () => {
 		const requests: Request[] = [];
 		const generation = "g".repeat(43);
@@ -55,6 +56,7 @@ describe("shared browser session reader", () => {
 	);
 
 	it("makes the session ready when the capability request stalls", async () => {
+		vi.useFakeTimers();
 		let capabilityAborted = false;
 		const client = createClient({
 			baseUrl: "https://platform.example.test",
@@ -73,7 +75,9 @@ describe("shared browser session reader", () => {
 				});
 			},
 		});
-		await expect(loadBrowserSession(client)).resolves.toEqual({
+		const state = loadBrowserSession(client);
+		await vi.advanceTimersByTimeAsync(3_000);
+		await expect(state).resolves.toEqual({
 			kind: "ready",
 			session,
 		});
