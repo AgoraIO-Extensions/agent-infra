@@ -3,6 +3,7 @@ import {
 	type AgentManagementStateV1,
 	type ConversationDispatchExecutionStatusV1,
 	decideConversationTaskWaitingV1,
+	isTaskApiChannelV1,
 	isTaskApplicationAuthorizationCurrentV1,
 	parseTaskAuthorizationBoundaryV1,
 	planTaskSystemControlV1,
@@ -195,8 +196,8 @@ export async function recordTaskStatus(
 	const event = publicTaskStatusEventV1({
 		isTask:
 			state.execution.task_wait_order !== null ||
-			(boundary !== undefined && state.execution.channel_id === "api") ||
-			reason === "TASK_CANCELLED",
+			(boundary !== undefined &&
+				isTaskApiChannelV1(state.execution.channel_id, boundary.principal)),
 		status,
 		reason,
 	});
