@@ -1,6 +1,7 @@
 import {
 	AgentApplicationProjectionV2Schema,
 	AgentProjectionV2Schema,
+	ConnectionCapabilityProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
 	ConversationPageV1Schema,
 	PilotProtocolErrorV1Schema,
@@ -267,6 +268,17 @@ async function workbenchFixture(
 			unexpected.push(`${request.method()} ${url.pathname}`);
 			return route.abort();
 		}
+		if (
+			request.method() === "GET" &&
+			url.pathname === "/api/v1/connection/capability"
+		)
+			return route.fulfill({
+				json: ConnectionCapabilityProjectionV1Schema.parse({
+					schemaVersion: 1,
+					status: "unavailable",
+					reason: "missing",
+				}),
+			});
 		if (url.pathname === "/api/v1/session")
 			return route.fulfill({
 				json: {

@@ -22,6 +22,7 @@ import {
 
 const requiredOperations = [
 	"getCurrentSession",
+	"getConnectionCapability",
 	"listAgentApplications",
 	"createAgentApplication",
 	"getAgentApplication",

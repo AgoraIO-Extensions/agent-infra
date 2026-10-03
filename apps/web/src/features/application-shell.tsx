@@ -150,7 +150,14 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const admin = user?.roles.includes("system_admin") ?? false;
 	const loginUrl = safeDeploymentUrl(import.meta.env.VITE_PLATFORM_LOGIN_URL);
 	const logoutUrl = safeDeploymentUrl(import.meta.env.VITE_PLATFORM_LOGOUT_URL);
-	const connectionUrl = safeDeploymentUrl(import.meta.env.VITE_CONNECTION_URL);
+	const connectionUrl =
+		session.state.kind === "ready" &&
+		session.state.connection?.status === "available"
+			? safeDeploymentUrl(
+					session.state.connection.publicOrigin +
+						session.state.connection.mcpPath,
+				)
+			: undefined;
 	const development =
 		import.meta.env.DEV &&
 		import.meta.env.VITE_PLATFORM_DEVELOPMENT_MODE === "controlled";
@@ -259,7 +266,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						<ClipboardMinus size={17} strokeWidth={1.8} aria-hidden="true" />
 						我的执行审计
 					</Link>
-					{connectionUrl && (
+					{connectionUrl ? (
 						<a
 							className="platform-nav-item platform-nav-external"
 							href={connectionUrl}
@@ -272,6 +279,20 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							</span>
 							<ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
 						</a>
+					) : (
+						<span
+							className="platform-nav-item"
+							aria-disabled="true"
+							title={
+								session.state.kind === "ready" &&
+								session.state.connection?.status === "unavailable"
+									? `Connection: ${session.state.connection.reason}`
+									: "Connection: unavailable"
+							}
+						>
+							<KeyRound size={17} strokeWidth={1.8} aria-hidden="true" />
+							我的 Connection（暂不可用）
+						</span>
 					)}
 				</nav>
 				{admin && (

@@ -1,6 +1,7 @@
 import {
 	AgentApplicationProjectionV2Schema,
 	AgentProjectionV2Schema,
+	ConnectionCapabilityProjectionV1Schema,
 	ConversationPageV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
@@ -237,6 +238,17 @@ async function fixture(
 		const request = route.request();
 		const pathname = new URL(request.url()).pathname;
 		const body = request.postData() ? request.postDataJSON() : undefined;
+		if (
+			request.method() === "GET" &&
+			pathname === "/api/v1/connection/capability"
+		)
+			return route.fulfill({
+				json: ConnectionCapabilityProjectionV1Schema.parse({
+					schemaVersion: 1,
+					status: "unavailable",
+					reason: "missing",
+				}),
+			});
 		if (
 			request.method() === "GET" &&
 			pathname === "/api/v2/me/conversations/recent"
@@ -1588,31 +1600,53 @@ test("Agent catalog follows original IA card columns and keeps keyboard detail n
 	}
 });
 
-test("Agent directory keeps independent Connection in navigation and creation in the page heading", async ({
-	page,
-}, info) => {
-	await fixture(page, "employee");
-	await page.goto("/agents");
-	if (info.project.name === "mobile")
-		await page.getByRole("button", { name: "打开导航" }).click();
-	const nav =
-		info.project.name === "mobile"
-			? page.getByRole("dialog", { name: "主导航" })
-			: page.locator(".platform-sidebar");
-	const connection = nav.getByRole("link", { name: "我的 Connection" });
-	if (await connection.count()) {
-		await expect(connection).toHaveAttribute("target", "_blank");
-		expect(await connection.getAttribute("href")).not.toContain("/agents");
-	} else await expect(nav).not.toContainText("Connection");
-	if (info.project.name === "mobile") await page.keyboard.press("Escape");
-	const create = page
-		.locator("main .page-heading")
-		.getByRole("link", { name: "创建申请" });
-	await create.focus();
-	await page.keyboard.press("Enter");
-	await expect(page).toHaveURL(/\/my-agents\/new$/);
-	await expect(page.getByLabel("Agent 名称", { exact: true })).toBeVisible();
-});
+for (const available of [true, false]) {
+	test(`Agent directory shows Connection available=${available} and keeps creation in the page heading`, async ({
+		page,
+	}, info) => {
+		await fixture(page, "employee");
+		if (available)
+			await page.route("**/api/v1/connection/capability", (route) =>
+				route.fulfill({
+					json: ConnectionCapabilityProjectionV1Schema.parse({
+						schemaVersion: 1,
+						status: "available",
+						publicOrigin: "https://connection.example.test",
+						mcpPath: "/mcp",
+						configFingerprint: "a".repeat(64),
+					}),
+				}),
+			);
+		await page.goto("/agents");
+		if (info.project.name === "mobile")
+			await page.getByRole("button", { name: "打开导航" }).click();
+		const nav =
+			info.project.name === "mobile"
+				? page.getByRole("dialog", { name: "主导航" })
+				: page.locator(".platform-sidebar");
+		const connection = nav.getByRole("link", { name: "我的 Connection" });
+		if (available) {
+			await expect(connection).toHaveAttribute("target", "_blank");
+			await expect(connection).toHaveAttribute(
+				"href",
+				"https://connection.example.test/mcp",
+			);
+		} else {
+			await expect(connection).toHaveCount(0);
+			await expect(
+				nav.getByText("我的 Connection（暂不可用）"),
+			).toHaveAttribute("aria-disabled", "true");
+		}
+		if (info.project.name === "mobile") await page.keyboard.press("Escape");
+		const create = page
+			.locator("main .page-heading")
+			.getByRole("link", { name: "创建申请" });
+		await create.focus();
+		await page.keyboard.press("Enter");
+		await expect(page).toHaveURL(/\/my-agents\/new$/);
+		await expect(page.getByLabel("Agent 名称", { exact: true })).toBeVisible();
+	});
+}
 
 test("directory detail binds the selected Agent and hides a previously visible resource on opaque denial", async ({
 	page,
