@@ -94,6 +94,10 @@ spec:
             {{- if not .Values.workloadTopology.enabled }}
             - name: PLATFORM_WORKER_DEPLOYMENT_MODULE
               value: {{ required "platformWorker.deploymentModule must name a module packaged in the deployment image" .Values.platformWorker.deploymentModule | quote }}
+            - name: PLATFORM_WORKER_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: PLATFORM_WORKER_WECOM_ENABLED
               value: {{ .Values.platformWorker.wecomEnabled | quote }}
             {{- end }}
