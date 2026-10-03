@@ -121,30 +121,24 @@ const conversation = ConversationProjectionV1Schema.parse({
 	updatedAt: "2026-09-30T21:00:00Z",
 });
 
-describe("Original IA workbench presentation", () => {
-	it("keeps the original six regions and safe empty-state navigation", async () => {
+describe("OpenDesign workbench presentation", () => {
+	it("keeps all responsibility regions and safe empty-state navigation", async () => {
 		await showWorkbench(<WorkbenchScreen {...empty} />);
 		expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
-			"从可用 Agent 开始今天的工作。",
+			"把下一步工作交给合适的 Agent。",
 		);
 		expect(
 			screen
 				.getAllByRole("heading", { level: 2 })
 				.map((heading) => heading.textContent),
-		).toEqual([
-			"最近的个人对话",
-			"可用 Agent",
-			"创建状态",
-			"需要你处理",
-			"需要管理员处理",
-		]);
+		).toEqual(["最近的个人对话", "待处理", "可用 Agent", "我的申请"]);
 		expect(screen.getByText("暂无个人对话。")).toBeTruthy();
-		expect(screen.getByText("暂无需要你处理的事项。")).toBeTruthy();
+		expect(screen.getByText("暂无需要修改的申请。")).toBeTruthy();
 		expect(
 			screen.getByRole("link", { name: "新对话" }).getAttribute("href"),
 		).toBe("/agents?mode=conversation");
 		expect(
-			screen.getByRole("link", { name: "创建 Agent" }).getAttribute("href"),
+			screen.getByRole("link", { name: "创建申请" }).getAttribute("href"),
 		).toBe("/my-agents/new");
 	});
 
@@ -175,11 +169,10 @@ describe("Original IA workbench presentation", () => {
 			screen.getByRole("link", { name: "配置与管理" }).getAttribute("href"),
 		).toBe("/agents/owned-failed-agent/configuration");
 		expect(screen.getByText("请缩小申请的可用范围。")).toBeTruthy();
-		expect(screen.getByText("暂未提供创建失败原因。")).toBeTruthy();
 		expect(
 			screen.getByRole("link", { name: "查看失败清单" }).getAttribute("href"),
 		).toBe("/admin/agents?status=creation_failed");
-		expect(screen.getByText("1 项待审批")).toBeTruthy();
+		expect(screen.getByText("1 项申请等待系统管理员审阅")).toBeTruthy();
 		expect(
 			document.querySelector('a[href*="/agents/another-owner-agent"]'),
 		).toBeNull();

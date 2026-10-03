@@ -36,6 +36,59 @@ const record = {
 };
 
 describe("scoped public audit contract", () => {
+	it.each([
+		"api.credential.issued",
+		"api.credential.revoked",
+		"api.credential.narrowed",
+	])(
+		"preserves the known credential reference for %s without private details",
+		(action) => {
+			const mutation = {
+				...record,
+				action,
+				actor: { kind: "user", actorId: "user-a" },
+				subject: { kind: "api_credential", subjectId: "api_credential_a" },
+				result: "succeeded",
+				summary: action,
+				agentId: null,
+				conversationId: null,
+				executionId: null,
+				authorizationRecordId: null,
+				originalPrincipal: null,
+				executor: null,
+				operation: null,
+			};
+			expect(ScopedPlatformAuditProjectionV1Schema.parse(mutation)).toEqual(
+				mutation,
+			);
+		},
+	);
+
+	it.each(["credential", "credentialHash", "scopes", "expiresAt", "details"])(
+		"rejects credential %s in the object reference or projection",
+		(field) => {
+			const subject = { kind: "api_credential", subjectId: "api_credential_a" };
+			for (const input of [
+				{ ...record, subject: { ...subject, [field]: "SENSITIVE_SENTINEL" } },
+				{ ...record, subject, [field]: "SENSITIVE_SENTINEL" },
+			]) {
+				expect(
+					ScopedPlatformAuditProjectionV1Schema.safeParse(input).success,
+				).toBe(false);
+			}
+		},
+	);
+
+	it.each([
+		{ kind: "api_credential", subjectId: "" },
+		{ kind: "invented_credential", subjectId: "api_credential_a" },
+	])("rejects invalid credential object references", (subject) => {
+		expect(
+			ScopedPlatformAuditProjectionV1Schema.safeParse({ ...record, subject })
+				.success,
+		).toBe(false);
+	});
+
 	it("preserves the original application and actual Worker separately", () => {
 		expect(ScopedPlatformAuditProjectionV1Schema.parse(record)).toEqual(record);
 	});

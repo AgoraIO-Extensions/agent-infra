@@ -11,9 +11,13 @@ import {
 import { startPlatformWorkerFromDeploymentV2 } from "../../apps/platform-worker/src/index.js";
 import type { startObservability } from "../../packages/observability/src/index.js";
 import { createObservedConversationEvents } from "../../packages/observability/src/worker.js";
+import type { ConversationOperationFactV2 } from "../../packages/platform-core/src/index.js";
 import { PostgresConversationEventTransactionV1 } from "../../packages/platform-store/src/conversation-events.js";
 import { migratePlatformDatabase } from "../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../packages/platform-store/src/postgres-test.js";
+import { PostgresScopedPlatformAuditQueryV1 } from "../../packages/platform-store/src/scoped-audit-query.js";
+import { insertTaskAuthorization } from "../../packages/platform-store/src/task-authorization.js";
+import { startAlertBackend } from "./alert-backend.js";
 import { evaluateAlerts } from "./alerts.js";
 import {
 	assertDockerCapacity,
@@ -29,6 +33,50 @@ const requireStore = createRequire(
 const postgres = requireStore(
 	"postgres",
 ) as typeof import("../../packages/platform-store/node_modules/postgres");
+
+type TracePair = `${string}:${string}`;
+
+function tracePairCounts(text: string, executionId: string) {
+	const counts = new Map<TracePair, number>();
+	for (const line of text.split("\n")) {
+		if (!line.trim()) continue;
+		const record = JSON.parse(line) as {
+			resourceSpans?: Array<{
+				scopeSpans?: Array<{
+					spans?: Array<{
+						attributes?: Array<{
+							key?: string;
+							value?: { stringValue?: string };
+						}>;
+					}>;
+				}>;
+			}>;
+		};
+		for (const resourceSpan of record.resourceSpans ?? [])
+			for (const scopeSpan of resourceSpan.scopeSpans ?? [])
+				for (const span of scopeSpan.spans ?? []) {
+					const attributes = new Map(
+						(span.attributes ?? []).map((attribute) => [
+							attribute.key,
+							attribute.value?.stringValue,
+						]),
+					);
+					if (attributes.get("executionId") !== executionId) continue;
+					const operationRef = attributes.get("operationRef");
+					const attemptRef = attributes.get("attemptRef");
+					if (!operationRef || !attemptRef) continue;
+					const pair = `${operationRef}:${attemptRef}` as TracePair;
+					counts.set(pair, (counts.get(pair) ?? 0) + 1);
+				}
+	}
+	return counts;
+}
+
+function sortedCounts(counts: Map<TracePair, number>) {
+	return [...counts.entries()].sort(([left], [right]) =>
+		left.localeCompare(right),
+	);
+}
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(check: () => Promise<boolean>) {
 	for (let attempt = 0; attempt < 60; attempt++) {
@@ -83,13 +131,18 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		| Awaited<ReturnType<typeof startPlatformWorkerFromDeploymentV2>>
 		| undefined;
 	let telemetry: ReturnType<typeof startObservability> | undefined;
+	let auditQuery: PostgresScopedPlatformAuditQueryV1 | undefined;
 	const thresholds = { pending: 1, errors: 1, sustainMs: 1000 };
 	const samples: Parameters<typeof evaluateAlerts>[0][number][] = [];
 	const alerts: { phase: string; state: ReturnType<typeof evaluateAlerts> }[] =
 		[];
 	const failures: unknown[] = [];
+	let backend: Awaited<ReturnType<typeof startAlertBackend>> | undefined;
 	try {
 		await migratePlatformDatabase(db);
+		auditQuery = new PostgresScopedPlatformAuditQueryV1({
+			databaseUrl: db.databaseUrl,
+		});
 		configureDatabase(db.databaseUrl);
 		const startApi = () =>
 			startPlatformApiFromDeployment({
@@ -121,8 +174,27 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		const before = await response.json();
 		const conversationId = randomUUID();
 		const executionId = randomUUID();
+		// Controlled admission uses the original authorization/audit writer.
+		// It does not prove a real identity, dispatch or native Execution.
+		await sql`insert into platform.agents (id, authorization_revision) values ('agent','auth')`;
 		await sql`insert into platform.conversations (id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision) values (${conversationId},'agent','actor','web','active',3,'auth')`;
-		await sql`insert into platform.conversation_executions (execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,created_at,updated_at) values (${executionId},${conversationId},'agent','actor','web','turn','unknown',3,5,'auth',now(),now())`;
+		await sql`insert into platform.conversation_executions (execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,model_configuration_revision,model_option_id,reasoning_level,created_at,updated_at) values (${executionId},${conversationId},'agent','actor','web','turn','unknown',3,5,'auth',1,'option-1','medium',now(),now())`;
+		await sql.begin((transaction) =>
+			insertTaskAuthorization(transaction, {
+				executionId,
+				boundary: {
+					schemaVersion: 1,
+					principal: { kind: "user", id: "actor" },
+					agentId: "agent",
+					channelId: "web",
+					identityRevision: "controlled-identity",
+					agentAuthorizationRevision: "auth",
+					accessSources: [{ kind: "user", userId: "actor" }],
+				},
+				traceId: randomUUID(),
+				requestId: randomUUID(),
+			}),
+		);
 		const events = createObservedConversationEvents({
 			transaction,
 			telemetry: observation,
@@ -185,6 +257,17 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		};
 		const initialPending = await readPending();
 		await waitForApiResources(initialPending);
+		backend = await startAlertBackend(
+			collector.name,
+			thresholds,
+			`${evidencePath}.alerts-cleanup.json`,
+		);
+		const alertBackend = backend;
+		await until(
+			async () =>
+				(await alertBackend.query('max(up{job="platform"})')).data.result[0]
+					?.value[1] === "1",
+		);
 		const record = async (
 			phase: string,
 			serviceAvailable: boolean,
@@ -206,17 +289,37 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 			persistentBacklog: false,
 			abnormalErrors: false,
 		});
+		const backlogMark = await backend.mark();
 		await sql`insert into platform.outbox_items (id,scope_type,scope_id,operation,payload,trace_id) values ('collector-backlog','acceptance','collector','acceptance.no-dispatch','{}',${randomUUID()})`;
 		await record("backlog-start", true, 0);
 		await wait(1100);
 		expect((await record("backlog-firing", true, 0)).persistentBacklog).toBe(
 			true,
 		);
+		const backlogFired = await backend.waitFor(
+			"PlatformPersistentBacklog",
+			"firing",
+			backlogMark,
+		);
+		expect(
+			(
+				await backend.query(
+					'sum(agent_platform_resource_count{service="platform-api",kind="outbox_pending"})',
+				)
+			).data.result[0]?.value[1],
+		).toBe(String(initialPending + 1));
 		await sql`delete from platform.outbox_items where id = 'collector-backlog'`;
 		expect((await record("backlog-recovered", true, 0)).persistentBacklog).toBe(
 			false,
 		);
+		await backend.waitFor(
+			"PlatformPersistentBacklog",
+			"resolved",
+			backlogFired,
+		);
 		// Force an actual HTTP query failure in this disposable database only.
+		const errorsMark = await backend.mark();
+		let errorsFired: number | undefined;
 		await sql`alter table platform.agent_applications rename to collector_applications`;
 		try {
 			expect(
@@ -243,12 +346,30 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 					)
 				).abnormalErrors,
 			).toBe(true);
+			// The actual HTTP failure counter must have two scraped observations.
+			for (let attempt = 0; attempt < 3; attempt++) {
+				await wait(1100);
+				expect(
+					(await fetch(`${origin()}/api/v2/agent-applications`)).status,
+				).toBeGreaterThanOrEqual(500);
+			}
+			errorsFired = await backend.waitFor(
+				"PlatformHttpErrors",
+				"firing",
+				errorsMark,
+			);
+			await backend.query(
+				'sum(increase(agent_platform_operations_total{service="platform-api",stage="http",outcome="failed"}[5s]))',
+			);
 		} finally {
 			await sql`alter table platform.collector_applications rename to agent_applications`;
 		}
 		expect((await fetch(`${origin()}/api/v2/agent-applications`)).status).toBe(
 			200,
 		);
+		if (errorsFired === undefined)
+			throw new Error("No HTTP error firing receipt");
+		await backend.waitFor("PlatformHttpErrors", "resolved", errorsFired);
 		const observedErrors = async () => {
 			const value = metricValue(
 				await collector.query(),
@@ -298,7 +419,25 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		).toBe(false);
 		const failuresBeforeDisconnect =
 			worker.observabilityStatus().exportFailures;
+		const tokenValue = (
+			text: string,
+			kind: "input" | "output" | "cached_input",
+		) =>
+			metricValue(text, "agent_platform_model_tokens_total", {
+				service: "platform-worker",
+				kind,
+			});
+		expect(tokenValue(await collector.query(), "input")).toBeUndefined();
+		const unavailableMark = await backend.mark();
 		await collector.disconnect();
+		const unavailableFired = await backend.waitFor(
+			"PlatformCollectorUnavailable",
+			"firing",
+			unavailableMark,
+		);
+		expect(
+			(await backend.query('max(up{job="platform"})')).data.result[0]?.value[1],
+		).toBe("0");
 		const failedExportResponse = await fetch(
 			`${origin()}/api/v2/agent-applications`,
 		);
@@ -326,22 +465,215 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 				failuresBeforeDisconnect,
 		);
 		const exportFailureStatus = worker.observabilityStatus();
+		// Keep the exporter failure proof scoped to the text event above. The
+		// operation correlation facts below must be emitted while the collector is
+		// connected so every queried pair has a corresponding trace readback.
+		await collector.reconnect();
 		const rows =
 			await sql`select count(*)::int as count from platform.conversation_events where execution_id = ${executionId}`;
 		expect(rows[0]?.count).toBe(2);
-		await collector.reconnect();
+		// Controlled canonical facts, not native Runtime evidence. The same real
+		// event/audit transaction confirms them while the exporter is unavailable.
+		const model: ConversationOperationFactV2 = {
+			kind: "model",
+			operationRef: randomUUID(),
+			attemptRef: randomUUID(),
+			phase: "intent",
+			model: {
+				configVersion: "config-1",
+				modelOptionId: "option-1",
+				modelId: "PRIVATE_MODEL_SENTINEL",
+				reasoningLevel: "medium",
+			},
+		};
+		const persistModel = (fact: ConversationOperationFactV2, key: string) =>
+			events.persist({
+				...command,
+				adapterEventKey: key,
+				runtimeCursor: `PRIVATE_CURSOR_SENTINEL-${key}`,
+				event: { schemaVersion: 2, type: "execution.operation", fact },
+			});
+		expect((await persistModel(model, "model-intent")).outcome).toBe(
+			"accepted",
+		);
+		expect(
+			(await persistModel({ ...model, phase: "started" }, "model-started"))
+				.outcome,
+		).toBe("accepted");
+		const unknown: ConversationOperationFactV2 = {
+			...model,
+			phase: "unknown",
+			usage: { inputTokens: 7 },
+		};
+		expect((await persistModel(unknown, "model-unknown")).outcome).toBe(
+			"accepted",
+		);
+		expect((await persistModel(unknown, "model-unknown")).outcome).toBe(
+			"replayed",
+		);
 		await until(async () => {
 			try {
-				return count(await collector.query()) === 2;
+				const text = await collector.query();
+				return count(text) === 5 && tokenValue(text, "input") === 7;
 			} catch {
 				return false;
 			}
 		});
+		expect(tokenValue(await collector.query(), "output")).toBeUndefined();
+		const recovered: ConversationOperationFactV2 = {
+			...model,
+			phase: "completed",
+			usage: { inputTokens: 7, outputTokens: 3, cachedInputTokens: 0 },
+		};
+		expect((await persistModel(recovered, "model-recovered")).outcome).toBe(
+			"accepted",
+		);
+		expect((await persistModel(recovered, "model-recovered")).outcome).toBe(
+			"replayed",
+		);
+		await until(async () => {
+			const text = await collector.query();
+			return (
+				tokenValue(text, "input") === 7 &&
+				tokenValue(text, "output") === 3 &&
+				tokenValue(text, "cached_input") === 0
+			);
+		});
+		const next = { ...model, attemptRef: randomUUID() };
+		expect((await persistModel(next, "model-next-intent")).outcome).toBe(
+			"accepted",
+		);
+		expect(
+			(await persistModel({ ...next, phase: "started" }, "model-next-started"))
+				.outcome,
+		).toBe("accepted");
+		expect(
+			(
+				await persistModel(
+					{
+						...next,
+						phase: "completed",
+						usage: { inputTokens: 2, outputTokens: 1, cachedInputTokens: 1 },
+					},
+					"model-next-completed",
+				)
+			).outcome,
+		).toBe("accepted");
+		await until(async () => {
+			const text = await collector.query();
+			return (
+				count(text) === 9 &&
+				tokenValue(text, "input") === 9 &&
+				tokenValue(text, "output") === 4 &&
+				tokenValue(text, "cached_input") === 1
+			);
+		});
+		const modelOutcomes = metricValue(
+			await collector.query(),
+			"agent_platform_operations_total",
+			{ service: "platform-worker", stage: "model", outcome: "unknown" },
+		);
+		expect(modelOutcomes).toBe(1);
+		const finalRows =
+			await sql`select count(*)::int as count from platform.conversation_events where execution_id = ${executionId}`;
+		expect(finalRows[0]?.count).toBe(9);
+		const [operationAudits] =
+			await sql`select count(*)::int as count, count(distinct details ->> 'authorizationRecordId')::int as bindings
+				from platform.audit_events where action = 'execution.operation.observed' and target_id = ${executionId}`;
+		expect(operationAudits?.count).toBe(7);
+		expect(operationAudits?.bindings).toBe(1);
+		if (!auditQuery) throw new Error("Audit query missing");
+		const queried = await auditQuery.listAudit(
+			{ kind: "administrator", administratorId: "platform-admin" },
+			{ limit: 100, filters: { executionId } },
+			{ requestId: randomUUID(), traceId: randomUUID() },
+		);
+		const queriedOperations = queried.items.filter(
+			(item) => item.action === "execution.operation.observed",
+		);
+		expect(queriedOperations).toHaveLength(7);
+		expect(
+			queriedOperations.every(
+				(item) =>
+					item.executionId === executionId &&
+					item.operation?.fact.operationRef !== undefined &&
+					item.operation?.fact.attemptRef !== undefined,
+			),
+		).toBe(true);
+		const queriedPairs = new Set(
+			queriedOperations.map(
+				(item) =>
+					`${item.operation?.fact.operationRef}:${item.operation?.fact.attemptRef}`,
+			),
+		);
+		expect(queriedPairs.size).toBe(2);
+		const unrelated = await auditQuery.listAudit(
+			{ kind: "administrator", administratorId: "platform-admin" },
+			{ limit: 100, filters: { executionId: randomUUID() } },
+			{ requestId: randomUUID(), traceId: randomUUID() },
+		);
+		expect(unrelated.items).toHaveLength(0);
+		await expect(
+			auditQuery.listAudit(
+				{
+					kind: "execution",
+					principal: { kind: "user", id: "other-actor" },
+					user: {
+						schemaVersion: 1,
+						userId: "other-actor",
+						accountStatus: "active",
+						organizationIds: [],
+						authorizationRevision: "other-revision",
+					},
+				},
+				{ limit: 100, filters: { executionId } },
+				{ requestId: randomUUID(), traceId: randomUUID() },
+			),
+		).rejects.toMatchObject({ code: "access_denied" });
 		const finalMetrics = await collector.query();
-		const finalTraces = await collector.read();
+		const queriedPairCounts = new Map<TracePair, number>();
+		for (const item of queriedOperations) {
+			const fact = item.operation?.fact;
+			if (!fact) throw new Error("Queried operation fact missing");
+			const pair = `${fact.operationRef}:${fact.attemptRef}` as TracePair;
+			// The audit projection exposes every phase row, while the worker emits
+			// one terminal outcome span per operation/attempt pair.
+			queriedPairCounts.set(pair, 1);
+		}
+		let finalTraces = "";
+		await until(async () => {
+			finalTraces = await collector.read();
+			return (
+				JSON.stringify(
+					sortedCounts(tracePairCounts(finalTraces, executionId)),
+				) === JSON.stringify(sortedCounts(queriedPairCounts))
+			);
+		});
+		const observedPairCounts = tracePairCounts(finalTraces, executionId);
+		// Compare terminal trace pairs, not independent substring membership: this
+		// rejects swapped pairs, duplicate terminal traces, and unrelated extras.
+		expect(sortedCounts(observedPairCounts)).toEqual(
+			sortedCounts(queriedPairCounts),
+		);
+		expect(
+			[...observedPairCounts.values()].reduce((sum, count) => sum + count, 0),
+		).toBe(queriedPairCounts.size);
+		await backend.waitFor(
+			"PlatformCollectorUnavailable",
+			"resolved",
+			unavailableFired,
+		);
+		const alertBackendEvidence = await backend.evidence();
+		for (const sentinel of [
+			"PRIVATE_BODY_SENTINEL",
+			"PRIVATE_CURSOR_SENTINEL",
+		]) {
+			expect(JSON.stringify(alertBackendEvidence)).not.toContain(sentinel);
+		}
 		for (const text of [finalMetrics, finalTraces, logs]) {
 			expect(text).not.toContain("PRIVATE_BODY_SENTINEL");
 			expect(text).not.toContain("PRIVATE_CURSOR_SENTINEL");
+			expect(text).not.toContain("PRIVATE_MODEL_SENTINEL");
 		}
 		await writeFile(
 			evidencePath,
@@ -363,14 +695,31 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 					structuredLogEvidence: logs,
 					thresholds,
 					alerts,
+					alertBackend: alertBackendEvidence,
 					exportFailureStatus,
-					persistedEvents: rows[0]?.count,
+					persistedEvents: finalRows[0]?.count,
+					modelUsage: {
+						input: tokenValue(finalMetrics, "input"),
+						output: tokenValue(finalMetrics, "output"),
+						cachedInput: tokenValue(finalMetrics, "cached_input"),
+						unknownOutcomes: modelOutcomes,
+						controlledFacts: true,
+						controlledAuthorization: true,
+						operationAudits: operationAudits?.count,
+						authorizationBindings: operationAudits?.bindings,
+						queriedOperationCount: queriedOperations.length,
+						queriedOperationPairs: queriedPairs.size,
+						unrelatedExecutionCount: unrelated.items.length,
+						queryAuthorizationNegative: true,
+					},
 					finalMetrics,
 					limitations: [
 						"Controlled identity and admissions",
 						"Worker lifecycle plus real event transaction only; dispatch not exercised",
-						"Backlog seeded in disposable database; production sampler not wired",
+						"Backlog seeded in disposable database; formal API sampler wired; Worker resource sampler not exercised",
+						"Controlled alert backend/webhook only; production capacity and operational destination not accepted",
 						"No Runtime or Connection evidence; AC1-9 not complete",
+						"Audit query evidence is limited to the same controlled PG transaction and does not prove external Connection or production audit acceptance",
 					],
 				},
 				null,
@@ -381,6 +730,7 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		failures.push(error);
 	} finally {
 		for (const close of [
+			async () => backend?.stop(),
 			async () => {
 				if (api) await createPlatformApiShutdown(api)();
 			},
@@ -388,6 +738,9 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 				await worker?.stop();
 			},
 			() => transaction.close(),
+			async () => {
+				await auditQuery?.close();
+			},
 			() => sql.end(),
 			() => db.stop(),
 			() => collector.stop(),
@@ -401,4 +754,4 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 	}
 	if (failures.length)
 		throw new AggregateError(failures, "Acceptance or cleanup failed");
-}, 120_000);
+}, 300_000);

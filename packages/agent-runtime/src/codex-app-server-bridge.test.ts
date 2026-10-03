@@ -60,6 +60,7 @@ import type {
 	CodexConnectionRecoveryResponse,
 } from "./codex-connection-client.js";
 import type { CodexNativeCallbackHandler } from "./codex-native-callback.js";
+import { codexSkillLaunch } from "./codex-skill-launch.internal.js";
 
 const directories: string[] = [];
 const originalPath = process.env.PATH;
@@ -1877,8 +1878,8 @@ it.each([false, true])(
 			const server = captures[2];
 			const probe = captures[0];
 			if (!server || !probe) throw new Error("Missing launch captures");
-			const launch = bridge.nativeSkillLaunch();
-			expect(launch).toBe(bridge.nativeSkillLaunch());
+			const launch = bridge[codexSkillLaunch];
+			expect(launch).toBe(bridge[codexSkillLaunch]);
 			expect(Object.isFrozen(launch)).toBe(true);
 			expect(launch.transport).toBe(bridge);
 			expect(launch.cwd).toBe(server.cwd);
@@ -1892,7 +1893,7 @@ it.each([false, true])(
 			expect(server.args).toContain("features.plugins=false");
 			await bridge.close();
 			await expectPathRemoved(probe.cwd);
-			expect(() => bridge.nativeSkillLaunch()).toThrow();
+			expect(() => bridge[codexSkillLaunch]).toThrow();
 		} finally {
 			await bridge.close();
 		}

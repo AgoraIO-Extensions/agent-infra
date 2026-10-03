@@ -50,10 +50,20 @@ describe("AgentDetailScreen", () => {
 			screen.getByRole("heading", { name: "Release assistant" }),
 		).toBeTruthy();
 		expect(screen.getByText("Helps the release team")).toBeTruthy();
-		expect(screen.getByText("可用")).toBeTruthy();
-		expect(screen.getByText("启动中")).toBeTruthy();
+		expect(
+			screen.getByText("可用", {
+				selector: '.status-line [data-slot="badge"]',
+			}),
+		).toBeTruthy();
+		expect(
+			screen.getByText("启动中", {
+				selector: '.status-line [data-slot="badge"]',
+			}),
+		).toBeTruthy();
 		expect(screen.getByText("Owner", { selector: "dt" })).toBeTruthy();
-		expect(screen.getByText("Web：可用、企微机器人：未配置")).toBeTruthy();
+		expect(
+			screen.getByRole("region", { name: "运行与渠道" }).textContent,
+		).toContain("Web可用企微机器人未配置");
 		expect(screen.getByText("模型范围", { selector: "dt" })).toBeTruthy();
 		expect(screen.getByText("默认选项", { selector: "dt" })).toBeTruthy();
 		expect(screen.getByText(/Primary model.*medium、high/)).toBeTruthy();

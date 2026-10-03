@@ -851,7 +851,8 @@ export function validateTrustedScriptSources(sources) {
   const coverageRequirements = [
     'COVERAGE_CHECK_NAME = "Automated Review Coverage"',
     "gateCheckRequest,",
-    "requireCurrentReviewTarget({",
+    'coverage.provider === "pr-agent" ? requirePrAgentTarget : requireCurrentReviewTarget',
+    "await requireTarget({",
     'job.name === "PR-Agent Analysis"',
     "/actions/jobs/${jobs[0].id}/logs",
     "selectReviewGateCheck(",
@@ -1186,7 +1187,9 @@ export function validateWorkflowDocuments(workflows) {
       envKeys.join("\0") !== [...SOURCE_OUTCOME_ENV_KEYS].sort().join("\0") ||
       outcomeStep?.env?.SUMMARY_OPERATION !== contract.operation ||
       outcomeStep?.env?.SUMMARY_NEXT_OWNER !== SOURCE_OUTCOME_NEXT_OWNER ||
-      outcomeStep?.env?.SUMMARY_OUTCOME !== SOURCE_OUTCOME_RESULT ||
+      outcomeStep?.env?.SUMMARY_OUTCOME !== (name === "pr-agent-review.yml"
+        ? SOURCE_OUTCOME_RESULT.replace("contains(needs.*.result, 'success')", "(needs.analyze.outputs.applicable == 'false' || needs.publish.outputs.applicable == 'false') && 'skipped' || contains(needs.*.result, 'success')")
+        : SOURCE_OUTCOME_RESULT) ||
       referencedSecrets(outcomeStep?.env).length > 0 ||
       unsafeSummarySource.test(summarySources)
     ) {
@@ -1608,7 +1611,7 @@ export function validateWorkflowDocuments(workflows) {
   };
   if (
     JSON.stringify(prAgent?.on?.pull_request_target?.types) !==
-      JSON.stringify(["opened", "reopened", "ready_for_review", "review_requested", "edited"]) ||
+      JSON.stringify(["opened", "reopened", "ready_for_review", "review_requested", "edited", "synchronize"]) ||
     !sameObject(prAgent?.permissions, {}) ||
     !sameObject(prAgent?.concurrency, {
       group: "pr-agent-review-${{ github.event.pull_request.number }}",
@@ -1620,7 +1623,12 @@ export function validateWorkflowDocuments(workflows) {
     ) ||
     !prAgentCondition.includes("github.event.sender.type != 'Bot'") ||
     !prAgentCondition.includes("github.event.pull_request.draft == false") ||
-    prAgentSuggestionsCondition !== prAgentCondition ||
+    !prAgentCondition.includes("github.event.pull_request.state == 'open'") ||
+    prAgentSuggestionsCondition !== prAgentCondition.replace(
+      "github.event.pull_request.head.repo.full_name == github.repository",
+      "github.event.action != 'synchronize' && needs.analyze.outputs.applicable == 'true' && github.event.pull_request.head.repo.full_name == github.repository",
+    ) ||
+    prAgentSuggestions?.needs !== "analyze" ||
     !prAgentCoverageCondition.includes("always()") ||
     !prAgentCoverageCondition.includes("vars.PR_REVIEW_PROVIDER != 'claude'") ||
     !prAgentCoverageCondition.includes(
@@ -1628,12 +1636,16 @@ export function validateWorkflowDocuments(workflows) {
     ) ||
     !prAgentCoverageCondition.includes("github.event.sender.type != 'Bot'") ||
     !prAgentCoverageCondition.includes("github.event.pull_request.draft == false") ||
-    !sameObject(prAgentAnalyze?.permissions, { contents: "read", issues: "read", "pull-requests": "read" }) ||
+    !prAgentCoverageCondition.includes("github.event.pull_request.state == 'open'") ||
+    !prAgentCoverageCondition.includes("needs.analyze.outputs.applicable != 'false'") ||
+    !prAgentCoverageCondition.includes("needs.publish.outputs.applicable != 'false'") ||
+    !sameObject(prAgentAnalyze?.permissions, { contents: "read", issues: "read", checks: "read", "pull-requests": "read" }) ||
     !sameObject(prAgentSuggestions?.permissions, prAgentPermissions) ||
     !sameObject(prAgentCoverage?.permissions, {
       actions: "read",
       checks: "read",
       contents: "read",
+      issues: "read",
       "pull-requests": "read",
     }) ||
     prAgentCoverage?.name !== "Publish Automated Review Coverage" ||
@@ -1641,7 +1653,7 @@ export function validateWorkflowDocuments(workflows) {
     prAgentCoverage?.["continue-on-error"] !== true ||
     Object.keys(prAgent?.jobs ?? {}).sort().join("\0") !==
       ["analyze", "coverage", "outcome", "publish", "suggestions"].join("\0") ||
-    prAgentAnalyze?.steps?.length !== 5 ||
+    prAgentAnalyze?.steps?.length !== 6 ||
     !sameObject(prAgentAnalyze?.steps?.[1], {
       name: "Set up Node.js", uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
       with: { "node-version": 24 },
@@ -1652,23 +1664,36 @@ export function validateWorkflowDocuments(workflows) {
       run: "node .github/scripts/pr-agent-primary-issue.mjs",
     }) ||
     prAgentAnalyze?.steps?.[0] !== prAgentAnalyzeCheckout ||
-    prAgentAnalyze?.steps?.[3] !== prAgentAction ||
-    !sameObject(prAgentAnalyze?.steps?.[4], {
+    !sameObject(prAgentAnalyze?.steps?.[3], {
+      name: "Prepare certified review range", id: "scope",
+      if: "steps.primary-issue.outputs.applicable == 'true'",
+      env: { GITHUB_TOKEN: "${{ github.token }}", PRIMARY_ISSUE_EVIDENCE: "${{ steps.primary-issue.outputs.evidence }}" },
+      run: "node .github/scripts/pr-agent-review-scope.mjs",
+    }) ||
+    prAgentAnalyze?.steps?.[4] !== prAgentAction ||
+    !sameObject(prAgentAnalyze?.steps?.[5], {
       name: "Prepare review findings output", id: "review-output",
+      if: "steps.scope.outputs.applicable == 'true' && steps.scope.outputs.mode != 'unchanged'",
       env: { PR_AGENT_REVIEW: "${{ steps.pr-agent.outputs.review }}" },
       run: "node .github/scripts/pr-agent-review-output.mjs",
     }) ||
-    !sameObject(prAgentAnalyze?.outputs, { review: "${{ steps.review-output.outputs.review }}" }) ||
+    !sameObject(prAgentAnalyze?.outputs, {
+      review: "${{ steps.review-output.outputs.review }}",
+      applicable: "${{ steps.primary-issue.outputs.applicable == 'false' && 'false' || steps.scope.outputs.applicable }}",
+      scope: "${{ steps.scope.outputs.scope }}",
+    }) ||
     !sameObject(prAgentPublish, {
       name: "PR-Agent Publish Review", needs: "analyze", "runs-on": "ubuntu-24.04", "timeout-minutes": 5,
-      permissions: { contents: "read", "pull-requests": "write" },
-      outputs: { review_receipt: "${{ steps.publish-review.outputs.receipt }}" },
+      if: "needs.analyze.outputs.applicable == 'true'",
+      permissions: { contents: "read", issues: "read", checks: "read", "pull-requests": "write" },
+      outputs: { review_receipt: "${{ steps.publish-review.outputs.receipt }}", applicable: "${{ steps.publish-review.outputs.applicable }}" },
       steps: [
         { name: "Checkout trusted default branch", uses: CHECKOUT_ACTION,
           with: { ref: "${{ github.event.repository.default_branch }}", "fetch-depth": 1, "persist-credentials": false } },
         { name: "Set up Node.js", uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020", with: { "node-version": 24 } },
         { name: "Validate and publish Review", id: "publish-review",
-          env: { GITHUB_TOKEN: "${{ github.token }}", PR_AGENT_REVIEW: "${{ needs.analyze.outputs.review }}" },
+          env: { GITHUB_TOKEN: "${{ github.token }}", PR_AGENT_REVIEW: "${{ needs.analyze.outputs.review }}",
+            PR_AGENT_REVIEW_SCOPE: "${{ needs.analyze.outputs.scope }}", PR_AGENT_REVIEW_SCOPE_REQUIRED: "true" },
           run: "node .github/scripts/pr-agent-review.mjs" },
       ],
     }) ||
@@ -1707,11 +1732,17 @@ export function validateWorkflowDocuments(workflows) {
       REVIEW_PROVIDER: "pr-agent",
       REVIEW_RUN_RESULT: "${{ needs.analyze.result != 'success' && needs.analyze.result || needs.publish.result }}",
       PR_AGENT_REVIEW_RECEIPT: "${{ needs.publish.outputs.review_receipt }}",
+      PR_AGENT_REVIEW_SCOPE_REQUIRED: "true",
     }) ||
     JSON.stringify(prAgent?.jobs?.outcome?.needs) !==
       JSON.stringify(["analyze", "publish", "suggestions"]) ||
     gatePublisherTokenReferences(prAgent).length !== 1 ||
     prAgentAction?.uses !== PR_AGENT_ACTION ||
+    prAgentAction?.if !== "steps.scope.outputs.applicable == 'true' && steps.scope.outputs.mode != 'unchanged'" ||
+    !sameObject(prAgentAction?.with, {
+      entrypoint: "python",
+      args: `-c "import os; os.chdir('/tmp'); from pr_agent.cli import run; from pr_agent.log import LoggingFormat, setup_logger; setup_logger(fmt=LoggingFormat.JSON); run()" --diff-file /github/workspace/.pr-agent-review-input.diff review`,
+    }) ||
     prAgentSuggestionsAction?.uses !== PR_AGENT_ACTION ||
     prAgentSuggestionsAction?.["continue-on-error"] !== true ||
     !sameObject(prAgentAction?.env, {
@@ -1723,7 +1754,7 @@ export function validateWorkflowDocuments(workflows) {
       "github_action_config.enable_output": "true",
       "pr_reviewer.persistent_comment": "false",
       "pr_reviewer.persistent_finding_state": "false",
-      "pr_reviewer.extra_instructions": "Return exactly one YAML object with the top-level key review. Nest key_issues_to_review under review, including when it is an empty list. Never return key_issues_to_review at the top level. Report only verifiable failures of the primary Issue's stable AC-N acceptance criteria or regressions introduced by this pull request. Do not report pre-existing problems or optional improvements as blocking findings.",
+      "pr_reviewer.extra_instructions": "Return exactly one YAML object with the top-level key review. Nest key_issues_to_review under review, including when it is an empty list. Never return key_issues_to_review at the top level. Report only verifiable failures of the primary Issue's stable AC-N acceptance criteria or regressions introduced by this pull request. Do not report pre-existing problems or optional improvements as blocking findings. Treat the supplied diff as the review scope; do not infer missing implementation from files absent from this range.",
       "pr_code_suggestions.commitable_code_suggestions": "true",
       "pr_reviewer.enable_review_labels_effort": "false",
       "pr_reviewer.enable_review_labels_security": "false",

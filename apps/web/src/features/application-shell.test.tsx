@@ -12,7 +12,7 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import { type ReactNode, StrictMode, useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	ApplicationShell,
 	safeDeploymentUrl,
@@ -26,6 +26,21 @@ vi.mock("@tanstack/react-router", () => ({
 		<a href={to}>{children}</a>
 	),
 }));
+beforeEach(() => {
+	vi.stubGlobal(
+		"matchMedia",
+		vi.fn((media: string) => ({
+			matches: false,
+			media,
+			onchange: null,
+			addEventListener: vi.fn(),
+			removeEventListener: vi.fn(),
+			addListener: vi.fn(),
+			removeListener: vi.fn(),
+			dispatchEvent: vi.fn(),
+		})),
+	);
+});
 const clients: QueryClient[] = [];
 const identity = (
 	userId: string,
@@ -47,6 +62,7 @@ afterEach(() => {
 	cleanup();
 	for (const client of clients) client.clear();
 	clients.length = 0;
+	vi.unstubAllGlobals();
 });
 function setup(initial: unknown, children: ReactNode = <p>受保护内容</p>) {
 	const client = new QueryClient({

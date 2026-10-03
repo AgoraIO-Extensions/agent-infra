@@ -1,4 +1,4 @@
-import { verifyPrAgentPublication } from "./pr-agent-review.mjs";
+import { PrAgentTargetSuperseded, requirePrAgentTarget, verifyPrAgentPublication } from "./pr-agent-review.mjs";
 import { pathToFileURL } from "node:url";
 import { appendFile, readFile } from "node:fs/promises";
 
@@ -65,6 +65,9 @@ function evaluatePrAgent({
   analysisJobConclusion,
   analysisLog,
   publicationVerified,
+  scope,
+  scopeVerified,
+  receipt,
 }) {
   const failed = runFailure("pr-agent", expectedHead, runResult);
   if (failed) return failed;
@@ -79,6 +82,7 @@ function evaluatePrAgent({
   }
 
   const records = jobLogRecords(analysisLog);
+  if (scope && scopeVerified !== true) return result("pr-agent", expectedHead, "failure", "review-scope-invalid");
   // A native input omission is independent of the existing diff coverage test.
   // Match the logger call site so the same text in PR/Issue data cannot reject it.
   if (records.some((record) =>
@@ -96,9 +100,16 @@ function evaluatePrAgent({
   const prunedMatches = messages.filter((message) =>
     PRUNED_DIFF_PATTERN.test(message),
   );
+  if (scope?.mode === "unchanged") {
+    if (scopeVerified && publicationVerified === true && scope.diffBytes === 0 &&
+        completeMatches.length === 0 && prunedMatches.length === 0)
+      return { ...result("pr-agent", expectedHead, "success", "complete-unchanged"), scope, receipt };
+    return result("pr-agent", expectedHead, "failure", "review-scope-invalid");
+  }
   if (completeMatches.length === 1 && prunedMatches.length === 0) {
     if (publicationVerified !== true) return result("pr-agent", expectedHead, "failure", "review-output-invalid");
-    return result("pr-agent", expectedHead, "success", "complete");
+    return { ...result("pr-agent", expectedHead, "success", scope?.mode === "incremental" ? "complete-incremental" : "complete"),
+      ...(scope ? { scope, receipt } : {}) };
   }
   if (prunedMatches.length === 1 && completeMatches.length === 0) {
     return result(
@@ -164,6 +175,7 @@ export function evaluateReviewCoverage(input) {
 const COLLECTION_STAGES = new Set([
   "analysis-job-list", "publication-receipt-parse", "publication-verify",
   "analysis-log-fetch", "analysis-log-read", "unknown",
+  "review-scope-verify",
 ]);
 const COLLECTION_FAILURES = new Set([
   "api-denied", "api-unavailable", "job-count-mismatch", "job-identity-mismatch",
@@ -204,10 +216,16 @@ export function buildCoverageCheckOutput(coverage) {
       `head_sha: ${coverage.headSha}`,
       `reason_code: ${coverage.reasonCode}`,
       `omitted_file_count: ${omittedFileCount}`,
+      ...(complete && coverage.scope ? [
+        `review_scope: ${JSON.stringify(coverage.scope)}`,
+        `publication_receipt: ${JSON.stringify(coverage.receipt)}`,
+      ] : []),
       ...collectionSummaryLines(coverage),
       "",
       complete
-        ? "Coverage Gate accepted complete current-head Review evidence."
+        ? coverage.scope?.mode === "incremental" || coverage.scope?.mode === "unchanged"
+          ? "Coverage Gate accepted a certified baseline plus the complete current-head delta."
+          : "Coverage Gate accepted complete current-head Review evidence."
         : "Coverage Gate rejected current-head Review evidence.",
     ].join("\n"),
   };
@@ -278,7 +296,8 @@ export async function publishCoverageCheck({
   request,
   checkRequest = gateCheckRequest,
 }) {
-  await requireCurrentReviewTarget({
+  const requireTarget = coverage.provider === "pr-agent" ? requirePrAgentTarget : requireCurrentReviewTarget;
+  await requireTarget({
     repository,
     prNumber,
     expectedHead,
@@ -312,7 +331,7 @@ export async function publishCoverageCheck({
     });
   }
 
-  await requireCurrentReviewTarget({
+  await requireTarget({
     repository,
     prNumber,
     expectedHead,
@@ -349,7 +368,7 @@ async function githubRequest(path, options = {}) {
   if (!response.ok) {
     throw Object.assign(new Error("GitHub API request failed"), { status: response.status });
   }
-  return response.status === 204 ? null : response.json();
+  return response.status === 204 ? null : options.responseType === "text" ? readBoundedTextResponse(response) : response.json();
 }
 
 export async function readBoundedTextResponse(
@@ -391,6 +410,7 @@ async function githubLogResponse(path) {
 
 export async function collectPrAgentEvidence({
   repository, prNumber, expectedHead, runId, attempt, receipt,
+  requireScope = false,
   request = githubRequest, logResponse = githubLogResponse,
 }) {
   const evidence = { collectionFailures: [] };
@@ -418,7 +438,11 @@ export async function collectPrAgentEvidence({
     return jobs;
   });
   const parsedReceipt = await collect("publication-receipt-parse", async () => {
-    try { return JSON.parse(receipt); }
+    try {
+      const parsed = JSON.parse(receipt);
+      if (requireScope && !parsed?.scope) throw new Error("Missing scope");
+      return parsed;
+    }
     catch { throw { code: "invalid-receipt" }; }
   });
   if (parsedReceipt !== undefined) {
@@ -428,6 +452,15 @@ export async function collectPrAgentEvidence({
       });
       if (!evidence.publicationVerified) throw { code: "receipt-mismatch" };
     });
+    if (parsedReceipt?.scope) {
+      await collect("review-scope-verify", async () => {
+        const { verifyReviewScope } = await import("./pr-agent-review-scope.mjs");
+        await verifyReviewScope({ repository, prNumber, expectedHead, request }, parsedReceipt.scope);
+        evidence.scope = parsedReceipt.scope;
+        evidence.receipt = parsedReceipt;
+        evidence.scopeVerified = true;
+      });
+    }
   }
   if (jobs) {
     const response = await collect("analysis-log-fetch", () =>
@@ -450,6 +483,7 @@ async function collectEvidence({ repository, prNumber, expectedHead, provider })
       runId: requiredEnvironment("GITHUB_RUN_ID"),
       attempt: requiredEnvironment("GITHUB_RUN_ATTEMPT"),
       receipt: process.env.PR_AGENT_REVIEW_RECEIPT,
+      requireScope: process.env.PR_AGENT_REVIEW_SCOPE_REQUIRED === "true",
     });
   }
   if (provider === "claude") {
@@ -517,6 +551,10 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
+    if (error instanceof PrAgentTargetSuperseded) {
+      console.log(error.message);
+      return;
+    }
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   });

@@ -4,7 +4,9 @@ import {
 } from "@agent-infra/contracts/workload";
 import type {
 	RuntimeModelProjectionV1,
+	RuntimeModelProjectionV4,
 	runtimeModelInjectionV1,
+	runtimeModelInjectionV4,
 } from "@agent-infra/model-catalog";
 import type {
 	KubernetesObject,
@@ -38,9 +40,13 @@ import type { workloadEgressRulesV1 } from "./workload-network.js";
 import { workloadRuntimeAuthEnvironmentV1 } from "./workload-runtime-auth.js";
 export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	readonly policy: KubernetesWorkloadPolicyV1;
-	readonly modelProjection: RuntimeModelProjectionV1 | undefined;
+	readonly modelProjection:
+		| RuntimeModelProjectionV1
+		| RuntimeModelProjectionV4
+		| undefined;
 	readonly modelInjection:
 		| ReturnType<typeof runtimeModelInjectionV1>
+		| ReturnType<typeof runtimeModelInjectionV4>
 		| undefined;
 	readonly egress: ReturnType<typeof workloadEgressRulesV1>;
 }) {
@@ -51,22 +57,34 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 			value.agentId !== modelProjection.agentId ||
 			value.configRevision !== modelProjection.configurationRevision ||
 			Object.keys(value.env).some((name) => name.startsWith("AGENT_INFRA_")) ||
-			modelProjection.options.some(
-				(option) =>
-					!value.secretRefs.some(
-						(ref) =>
-							ref.name === option.secretRef.name &&
-							ref.secretId === option.secretRef.secretId &&
-							ref.secretVersion === option.secretRef.secretVersion &&
-							ref.configRevision === option.secretRef.configRevision,
-					),
-			)
+			(modelProjection.schemaVersion === 1 &&
+				modelProjection.options.some(
+					(option) =>
+						!value.secretRefs.some(
+							(ref) =>
+								ref.name === option.secretRef.name &&
+								ref.secretId === option.secretRef.secretId &&
+								ref.secretVersion === option.secretRef.secretVersion &&
+								ref.configRevision === option.secretRef.configRevision,
+						),
+				))
 		)
 			throw new WorkloadKubernetesError("policy");
 		return modelInjection;
 	}
 	function workloadEnvironment(value: AgentWorkloadDesiredV1) {
 		const injection = modelBindings(value);
+		const binding = modelProjection?.standardTemplateBinding;
+		if (
+			injection &&
+			(!binding ||
+				binding.imageDigest !== value.imageDigest ||
+				value.runtimeManifest.interactionMode !== "platform-adapter" ||
+				modelProjection?.options.some(
+					(option) => option.endpoint.protocol !== binding.protocol,
+				))
+		)
+			throw new WorkloadKubernetesError("policy");
 		const runtimeAuth =
 			value.runtimeManifest.interactionMode === "platform-adapter" &&
 			policy.runtimeAuth
@@ -80,6 +98,9 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		return [
 			...Object.entries(value.env).map(([name, value]) => ({ name, value })),
 			...(injection?.env ?? []),
+			...(injection && binding
+				? [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: binding.driver }]
+				: []),
 			...runtimeAuth,
 		];
 	}
@@ -87,8 +108,11 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		modelBindings(value);
 		return value.secretRefs.filter(
 			(ref) =>
-				!modelProjection?.options.some(
-					(option) => option.secretRef.name === ref.name,
+				!(
+					modelProjection?.schemaVersion === 1 &&
+					modelProjection.options.some(
+						(option) => option.secretRef.name === ref.name,
+					)
 				),
 		);
 	}

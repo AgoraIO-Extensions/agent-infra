@@ -20,7 +20,6 @@ import {
 import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
 	type: "json",
 };
-
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CODEX_MODEL_ONLY_CONFIG,
@@ -28,10 +27,10 @@ import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 	type CodexModelAccess,
-	type CodexSkillLaunchProvenance,
 	codexConversationKey,
 	runCodexConnectionRecovery,
 	validateModelAccess,
+	validateModelEndpoint,
 } from "./codex-app-server-bridge.js";
 import {
 	type CodexConnectionEvidence,
@@ -81,12 +80,18 @@ import {
 	sameCodexNativeAttemptV1,
 } from "./codex-native-callback.js";
 import release from "./codex-release.json" with { type: "json" };
+import {
+	type CodexSkillLaunchProvenance,
+	codexSkillLaunch,
+} from "./codex-skill-launch.internal.js";
 import type {
 	RuntimeDriver,
 	RuntimeDriverCommand,
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
+	RuntimeExternalActionAuthorizer,
 	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
 	RuntimeOriginalEvidenceRecoveryRef,
@@ -99,7 +104,7 @@ import {
 } from "./runtime-authorization.js";
 
 interface CodexAppServerTransport {
-	nativeSkillLaunch?(): CodexSkillLaunchProvenance;
+	[codexSkillLaunch]?: CodexSkillLaunchProvenance;
 	send(frame: CodexAppServerFrame): Promise<void>;
 	frames(): AsyncIterable<CodexAppServerFrame>;
 	close?(): Promise<void>;
@@ -309,9 +314,7 @@ export interface CodexRuntimeDriverOptions {
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly CodexRuntimeModelOption[];
-	readonly authorizeExternalAction?: (
-		action: RuntimeExternalActionAuthorization,
-	) => Promise<void>;
+	readonly authorizeExternalAction?: RuntimeExternalActionAuthorizer;
 	// Independent client delivery is trusted deployment input, never a Runtime command.
 	readonly connectionClient?: {
 		/** Independently configured service allowlist; never derived from the profile. */
@@ -2322,10 +2325,7 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 	const values: unknown = options.modelOptions;
 	if (!Array.isArray(values) || values.length === 0) configurationInvalid();
 	const routed = values.every(
-		(value) =>
-			isPlainRecord(value) &&
-			value.endpoint !== undefined &&
-			value.credential !== undefined,
+		(value) => isPlainRecord(value) && value.endpoint !== undefined,
 	);
 	if (
 		!routed &&
@@ -2337,9 +2337,18 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 	) {
 		configurationInvalid();
 	}
+	const keyed =
+		routed && values.every((value) => value.credential === undefined);
+	if (
+		routed &&
+		!keyed &&
+		values.some((value) => value.credential === undefined)
+	)
+		configurationInvalid();
 	for (const value of values) {
 		const expectedKeys = ["modelOptionId", "model", "reasoningLevels"];
-		if (routed) expectedKeys.push("endpoint", "credential");
+		if (routed) expectedKeys.push("endpoint");
+		if (routed && !keyed) expectedKeys.push("credential");
 		if (
 			!isPlainRecord(value) ||
 			!hasOnlyKeys(value, expectedKeys) ||
@@ -2361,10 +2370,12 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 			? `${createHash("sha256").update(value.modelOptionId).digest("hex")}/${value.model}`
 			: value.model;
 		if (routed) {
-			const access = validateModelAccess({
-				endpoint: value.endpoint,
-				credential: value.credential,
-			});
+			const access = keyed
+				? { endpoint: validateModelEndpoint(value.endpoint) }
+				: validateModelAccess({
+						endpoint: value.endpoint,
+						credential: value.credential,
+					});
 			if (!access) configurationInvalid();
 			routes.push({
 				internalModel,
@@ -2974,13 +2985,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			admission: CodexModelTurnAdmission,
 		) => void,
 		private readonly cancelModelTurn?: (turn: CodexModelTurn) => Promise<void>,
+		private readonly drainModelTurn?: (turn: CodexModelTurn) => Promise<void>,
 		private readonly revokeModelTurn?: (turn: CodexModelTurn) => void,
 		private readonly probeNative?: (
 			signal: AbortSignal,
 		) => Promise<RuntimeCapabilitiesV1>,
-		private readonly authorizeExternalAction?: (
-			action: RuntimeExternalActionAuthorization,
-		) => Promise<void>,
+		private readonly authorizeExternalAction?: RuntimeExternalActionAuthorizer,
 		private readonly connectionClientOptions?: CodexRuntimeDriverOptions["connectionClient"],
 		private readonly recoveryLaunch?: typeof runCodexConnectionRecovery,
 		private readonly recoveryDirectory?: string,
@@ -3777,7 +3787,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.requiredRuntime.lane === "official-model-only"
 		) {
 			try {
-				const launch = bridge.nativeSkillLaunch?.();
+				const launch = bridge[codexSkillLaunch];
 				if (
 					!launch ||
 					!Object.isFrozen(launch) ||
@@ -4250,7 +4260,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				modelTransport?.registerTurn,
 				modelTransport?.waitForModelRequest,
 				modelTransport?.abandonTurnAdmission,
-				modelTransport?.cancelTurn,
+				modelTransport
+					? async (turn) => {
+							await modelTransport.cancelTurn(turn);
+							await modelTransport.drainTurn(turn);
+						}
+					: undefined,
+				modelTransport?.drainTurn,
 				modelTransport?.revokeTurn,
 				probeNative,
 				options.authorizeExternalAction,
@@ -4616,7 +4632,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		assertProcess = () => {
 			let sameLaunch = false;
 			try {
-				sameLaunch = process.bridge.nativeSkillLaunch?.() === process.launch;
+				sameLaunch = process.bridge[codexSkillLaunch] === process.launch;
 			} catch {
 				/* The owned process may have exited before its final frame. */
 			}
@@ -5302,6 +5318,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			executionId,
 		);
 		if (status !== "running") {
+			const terminalExecution = ownRecordValue(
+				this.session(nativeSessionRef).executions,
+				executionId,
+			);
+			if (!terminalExecution) unavailable();
+			await Promise.all(
+				this.executionNativeTurns(
+					nativeSessionRef,
+					terminalExecution.nativeTurnId,
+				).map((turn) => this.cancelModelTurn?.(turn)),
+			);
 			const state = this.readState();
 			const hasRunningCancellation = Object.values(state.operations).some(
 				(operation) =>
@@ -5312,15 +5339,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					operation.record.result.status === "running",
 			);
 			if (hasRunningCancellation) {
-				const session = this.session(nativeSessionRef);
-				const execution = ownRecordValue(session.executions, executionId);
-				if (!execution) unavailable();
-				await Promise.all(
-					this.executionNativeTurns(
-						nativeSessionRef,
-						execution.nativeTurnId,
-					).map((turn) => this.cancelModelTurn?.(turn)),
-				);
 				await this.update((current) => {
 					for (const operation of Object.values(current.operations)) {
 						const record = operation.record;
@@ -5400,8 +5418,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				threadId: session.threadId,
 				turnId: execution.nativeTurnId,
 			};
-			if (this.cancelModelTurn)
-				await this.cancelModelTurn(nativeTurn).catch(() => undefined);
+			if (this.cancelModelTurn) await this.cancelModelTurn(nativeTurn);
 			return this.updateExecutionStatus(
 				nativeSessionRef,
 				executionId,
@@ -5506,6 +5523,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					executionId,
 					execution.nativeTurnId,
 					items,
+				);
+			}
+			if (status !== "running") {
+				await Promise.all(
+					this.executionNativeTurns(
+						nativeSessionRef,
+						execution.nativeTurnId,
+					).map((turn) => this.cancelModelTurn?.(turn)),
 				);
 			}
 			const persistedStatus = await this.updateExecutionStatus(
@@ -6983,12 +7008,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 		}
 		if (!prepared.replay && request.phase === "source-terminal") {
-			try {
-				await this.cancelModelTurn?.({ ...request.source, conversationKey });
-			} catch {
-				// The native terminal receipt remains authoritative even if model cleanup
-				// is already closed or otherwise unavailable.
-			}
+			// A native receipt cannot close the Execution before this source's actual
+			// model request and original outcome write have drained successfully.
+			await this.cancelModelTurn?.({ ...request.source, conversationKey });
 		}
 		signal.throwIfAborted();
 		let saved = await this.update((state) => {
@@ -7370,34 +7392,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			});
 			this.notifyEventStream(streamKey);
 		};
-		try {
-			// Never call Host while holding the Driver durable-file queue. Host may
-			// still be awaiting this Driver's original submit result.
-			// Model and tool actions require the Host authorization seam; fail closed
-			// when this deployment did not supply it.
-			if (!this.authorizeExternalAction) unavailable();
-			const waiting = new AbortController();
-			try {
-				signal.throwIfAborted();
-				await Promise.race([
-					once(signal, "abort", { signal: waiting.signal }).then(() => {
-						throw unavailableError();
-					}),
-					this.authorizeExternalAction({
-						nativeSessionRef: prepared.nativeSessionRef,
-						executionId: prepared.executionId,
-						runtimeOperationId: prepared.executionId,
-						operationRef: prepared.fact.operationRef,
-						attemptRef: prepared.fact.attemptRef,
-						kind: "model",
-					}),
-				]);
-				signal.throwIfAborted();
-			} finally {
-				waiting.abort();
+		let authorization: RuntimeExternalActionAuthorizationResult | undefined;
+		const assertCurrent = () => {
+			// Re-read original state after each Host or durable-started await.
+			signal.throwIfAborted();
+			if (
+				authorization?.relayKey !== undefined &&
+				typeof authorization.revalidate !== "function"
+			)
+				unavailable();
+			const revalidation: unknown = authorization?.revalidate?.();
+			if (revalidation !== undefined) {
+				void Promise.resolve(revalidation).catch(() => {});
+				unavailable();
 			}
-			// Authorization may have waited while another original action failed
-			// or stop sealed this Execution. Recheck the committed Driver state.
 			const state = this.readState();
 			const session = ownRecordValue(state.sessions, prepared.nativeSessionRef);
 			const execution =
@@ -7414,6 +7422,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const sourceRecord = currentSource?.sourceRecord;
 			if (
 				!currentSource ||
+				currentSource.nativeSessionRef !== prepared.nativeSessionRef ||
+				currentSource.execution !== execution ||
+				currentSource.journal !== journal ||
 				currentSource.journal.nativeTurnId !== prepared.journalTurnId ||
 				this.closed ||
 				!session ||
@@ -7432,7 +7443,46 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				)
 			)
 				unavailable();
+			this.assertJournalOpen(journal);
 			this.assertExecutionConfiguration(state, session, execution);
+			const operation = this.executionOperation(state, session, execution);
+			const selection = this.operationSelection(operation);
+			if (
+				operation.admissionPending ||
+				operation.admissionRecoveryPending ||
+				selection?.model !== context.internalModel ||
+				selection.effort !== context.reasoningLevel
+			)
+				unavailable();
+		};
+		try {
+			// Never call Host while holding the Driver durable-file queue. Host may
+			// still be awaiting this Driver's original submit result.
+			// Model and tool actions require the Host authorization seam; fail closed
+			// when this deployment did not supply it.
+			if (!this.authorizeExternalAction) unavailable();
+			const waiting = new AbortController();
+			try {
+				signal.throwIfAborted();
+				authorization =
+					(await Promise.race([
+						once(signal, "abort", { signal: waiting.signal }).then(() => {
+							throw unavailableError();
+						}),
+						this.authorizeExternalAction({
+							nativeSessionRef: prepared.nativeSessionRef,
+							executionId: prepared.executionId,
+							runtimeOperationId: prepared.executionId,
+							operationRef: prepared.fact.operationRef,
+							attemptRef: prepared.fact.attemptRef,
+							kind: "model",
+						}),
+					])) || undefined;
+				signal.throwIfAborted();
+			} finally {
+				waiting.abort();
+			}
+			assertCurrent();
 		} catch (error) {
 			if (signal.aborted) {
 				await record("unknown", { failureCode: "interrupted" });
@@ -7447,6 +7497,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		return {
+			...(authorization?.relayKey === undefined
+				? {}
+				: { credential: authorization.relayKey }),
+			assertCurrent,
 			started: (startedAt) => record("started", { startedAt }),
 			finish: (outcome) =>
 				record(outcome.phase === "succeeded" ? "completed" : outcome.phase, {
@@ -7598,10 +7652,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 		const completed = turnCompletedNotification(frame);
 		if (completed) {
-			// A cancelled native Turn may still have an in-flight provider request;
-			// drain it before publishing the terminal event. Normal completion and
-			// failure already represent a settled provider request and must not cancel
-			// a transport that may be finishing its final response.
+			// Every native terminal must join the actual provider handler and its
+			// durable outcome before publishing the original terminal event. Ordinary
+			// completion drains without aborting the native final response.
 			const completedState = this.readState();
 			const resolvedCompleted = this.resolveNotificationJournal(
 				completedState,
@@ -7618,17 +7671,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const admissionPending =
 				resolvedCompleted?.pendingOperationKey !== undefined &&
 				this.modelTurnAdmissions.has(resolvedCompleted.pendingOperationKey);
-			if (
-				owningSession &&
-				(completed.status === "cancelled" || admissionPending)
-			)
-				await this.cancelModelTurn?.({
+			if (owningSession) {
+				const turn = {
 					conversationKey: this.modelConversationKey(
 						codexConversationKey(owningSession),
 					),
 					threadId: completed.threadId,
 					turnId: completed.nativeTurnId,
-				});
+				};
+				if (completed.status === "cancelled" || admissionPending)
+					await this.cancelModelTurn?.(turn);
+				else await this.drainModelTurn?.(turn);
+			}
 			const streamKey = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
@@ -8952,6 +9006,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeTurnId?: string,
 		admissionPending = false,
 	) {
+		if (
+			result.outcome === "accepted" &&
+			result.status !== "running" &&
+			nativeTurnId
+		) {
+			await Promise.all(
+				this.executionNativeTurns(nativeSessionRef, nativeTurnId).map((turn) =>
+					this.cancelModelTurn?.(turn),
+				),
+			);
+		}
 		let record = driverRecord(command, {
 			schemaVersion: command.schemaVersion,
 			agentId: command.agentId,

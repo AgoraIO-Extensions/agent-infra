@@ -371,19 +371,33 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   `PR_AGENT_ENABLED` 不再参与选择。
 - 每个适用的 PR 只运行选定 Reviewer；较新的 head 取消同一 PR 的 stale run。Claude 在确定性
   CI 成功后启动，PR-Agent 在下列适用的 PR 事件上启动。
-- PR-Agent 只在 PR `opened`、`reopened`、`ready_for_review`、`review_requested` 或 `edited` 事件启动；
-  非 Bot 编辑 PR 元数据可对当前 head 显式重跑 Analysis、Suggestions 和 Coverage。
-  `synchronize` 不启动 Analysis 或 Suggestions，连续提交不会产生新的 PR-Agent Review/thread。
+- PR-Agent 在同仓、非 Bot、open 且非 Draft PR 的 `opened`、`reopened`、`ready_for_review`、
+  `review_requested`、`edited` 和 `synchronize` 事件检查当前状态。排队期间已合并、关闭、转为
+  Draft 或被新 head 替代时停止，记录跳过原因；不将过时事件记作当前 head 的成功评审。
+- 首次评审覆盖完整 PR 差异；后续提交只评审最后一次成功覆盖的提交至当前 head 的净差异，
+  保留 diff 中理解变更所需的上下文。同一 head 与同一需求已完成评审时跳过重复事件。
+  可选 Suggestions 不在 `synchronize` 上运行，避免重复全量建议。
+  范围输入以固定 from/head 的原始 diff 为准，用 Git numstat 校验实际 hunk 行数；compare API
+  文件列表只用于文件身份、状态和重命名边界，不以可能因 patch 省略而归零的统计判定完整性。
+  另从固定 from/head 的 Git tree/blob 读取原始文件内容（不解引用 symlink），
+  将收到的 hunks 应用于 from 内容并与 head 内容逐字节核对，
+  防止整段合法 hunk 遗漏仍被接受；内容读取或应用失败时拒绝覆盖。
+  文件缺失、重复、身份或状态不一致、无法解析及 binary 输入均失败关闭；既有大小与文件上限不变。
+- 增量起点必须来自同一 PR 的 dedicated App 成功 Coverage Check，并回读其绑定的原生 Review、
+  comments 和 receipt。只有成功发布且覆盖验证通过的运行能推进起点；失败、取消或仅有评论的
+  运行不推进。原未解决 threads 继续由 required conversation resolution 管理。
+  primary Issue 标题或正文、目标分支、merge-base 变化，或历史改写使旧起点不再是祖先时，
+  重新建立完整评审起点。旧版本没有可信范围元数据的记录不能作为增量起点。
 - PR-Agent 评审指令只允许报告 primary Issue 的稳定 `AC-N` 验收不符合，或本 PR 引入的可证明
   回归；既有问题和可选改进不作为阻塞 finding。
 - Analysis 的可信准备步骤复用 Issue Gate 的唯一同仓 primary 规则，通过只读 API 取得完整
   Issue 正文，作为官方 `related_tickets` 用户数据输入，不经过 PR 描述摘要或截断。缺失、歧义、
   身份无效、读取失败或超过输入长度上限时停止；正文不能成为系统指令或运行配置。关闭正文
-  debug 日志，准备回执只记录当前 head、Issue 版本和正文摘要；准备成功不证明实际模型送达或
+  debug 日志，准备回执只记录当前 head、Issue 版本和契约摘要；准备成功不证明实际模型送达或
   审查发现，实际输入须另以固定镜像的安全接口核验，未取得该证据时明确标记未验。
   既有 Analysis 日志读取处独立匹配官方预算适配的整票省略事件；即使 diff 完整且 Review
   已发布，也返回 `review-input-incomplete`。只接受原生日志调用点，PR 或 Issue 的同名文本
-  不作为事件；原 full-diff 覆盖算法与 publisher 保持不变。
+  不作为事件。真实契约错误与读取失败保留失败状态，并输出不含正文或凭证的阶段及 HTTP 诊断。
 - 需要阻塞合并的问题必须发布为 Review thread，并通过 GitHub required conversation resolution
   闭环；Review 摘要不阻塞合并。
 - provider-aware 的 `Automated Review Coverage` 是 default branch required Gate。它只接受所选
@@ -392,7 +406,10 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   官方结构化输出，将 findings 发布为当前 head 的 Review threads；空列表发布明确的无问题结论。
   Gate 回读 Review 与 comments，校验作者、提交、run/attempt、问题数量和内容摘要；模型输出缺失、
   格式无效或发布失败不能通过。Claude 复用 dedicated App `Claude Review Gate` 的验证结果。Gate 对
-  完整覆盖返回 `complete`；token 裁剪、输出缺失或无效、旧 head、provider mismatch、运行失败或
+  完整评审返回 `complete`；已验证起点加完整增量返回 `complete-incremental`，表示累积输入覆盖，
+  不代表重新执行了当前快照的全量推理。起点至新 head 没有净差异时，经确定性核对和明确的
+  无模型发布回执返回 `complete-unchanged`，不调用模型或伪造模型输出。
+  token 裁剪、输出缺失或无效、旧 head、provider mismatch、运行失败或
   取消分别返回失败 Check 和稳定 reason code。
 - `Automated Review Coverage` 只由隔离的 check-only App 发布到精确 head；provider workflow 中的
   publisher job/step 保持 non-blocking 且使用不同名称，不能成为同名 required context。普通 workflow
@@ -406,7 +423,15 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
 - PR-Agent Suggestions 保持多 chunk 的局部 finding 工具，不是 cross-file Review coverage authority；
   Suggestions 成功不能把不完整的 Analysis evidence 改为完整。
 - PR-Agent Analysis 与 Suggestions 使用固定 digest 的官方容器镜像，不通过可变镜像标签执行。
-  Analysis 只使用官方结构化输出，关闭上游评论发布与持久 finding state，发布交由可信步骤完成。
+  Analysis 使用官方 CLI 的 `--diff-file` 输入，将可信 SHA 范围的统一 diff 交给原生 reviewer；
+  在无 Git 工作树的目录运行 patch-only 模式，保留官方 JSON 日志供 Coverage 判定，
+  避免混入默认分支工作树的文件内容；不从本轮范围之外的文件推断实现缺失。
+  准备步骤核对 immutable compare 的文件集合、增删行数和实际 diff；超过 API 文件上限、
+  二进制或无法验证的差异明确失败。范围、输入摘要、需求摘要和起点 Check ID 随发布回执进入
+  Coverage，并在发布与 Gate 阶段重新核对；源码、diff 和 prompt 不进入持久范围证据。
+  Analysis 只使用官方结构化输出，关闭持久 finding state；CLI 的本地输出不写 GitHub，
+  Review/thread 仍由隔离的可信 Publisher 发布。Publisher 对只读瞬时故障有界重试；POST 结果
+  不确定时只恢复同 run/attempt、同 head 且内容完整匹配的既有 Review，不盲目重复写入。
   Analysis 开启大 diff 分块，最多 3 次 chunk 调用。局部结果
   合并不等于完整覆盖或完整跨文件推理。当前 Coverage Gate
   仍按单次 diff 的可信 token decision 判定；即使后续分块成功，已有裁剪证据仍失败，直到

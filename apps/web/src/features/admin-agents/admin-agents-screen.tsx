@@ -95,8 +95,8 @@ export function AdminAgentsScreen({
 		<section aria-labelledby={`${id}-heading`}>
 			<header className="page-heading">
 				<div>
-					<p className="directory-eyebrow">系统管理员</p>
-					<h1 id={`${id}-heading`}>管理 Agent 的系统状态。</h1>
+					<p className="page-eyebrow">系统管理 / Agent 管理</p>
+					<h1 id={`${id}-heading`}>看清所有 Agent 的运行资格。</h1>
 					<p>
 						查看已创建 Agent 的来源、Owner
 						和管理状态。创建申请请在“创建审批”中处理。
@@ -236,7 +236,10 @@ export function AdminAgentsScreen({
 											</TableCell>
 											<TableCell data-label="状态">
 												<div className="space-y-2">
-													<Badge variant="secondary">
+													<Badge
+														variant="outline"
+														data-status={agent.managementStatus}
+													>
 														{
 															agentManagementStatusLabels[
 																agent.managementStatus

@@ -53,7 +53,7 @@ export function AgentApplicationSubmissionScreen(
 	const resultRef = useResultFocus(props.result);
 	const heading =
 		props.mode === "create"
-			? "申请 Agent"
+			? "创建一个新的 Agent。"
 			: agentApplicationEditActionLabels[props.action];
 	const cancelLabel = props.mode === "create" ? "退出创建" : "取消";
 	const cancelAction = props.submitting ? (
@@ -88,13 +88,27 @@ export function AgentApplicationSubmissionScreen(
 		<section aria-labelledby="agent-application-submission-heading">
 			<header className="page-heading">
 				<div>
-					<h1 id="agent-application-submission-heading">{heading}</h1>
-					<p>配置用途与使用范围，提交后由管理员审批。</p>
+					<p className="page-eyebrow">我的管理 / 创建申请</p>
+					<h1 id="agent-application-submission-heading">
+						{props.result ? "申请已提交" : heading}
+					</h1>
+					<p>
+						先说明使用场景，再配置
+						Owner、范围、模型和渠道。服务端会重新校验全部字段。
+					</p>
 				</div>
 				{props.mode === "create" ? cancelAction : null}
 			</header>
-			<div className="form-layout">
+			<div className="form-layout full-width-form">
 				<div className="min-w-0">
+					{!props.result && (
+						<ol className="form-stepper" aria-label="申请填写顺序">
+							<li>基本信息</li>
+							<li>配置</li>
+							<li>范围</li>
+							<li>提交</li>
+						</ol>
+					)}
 					{deploymentUnavailable ? (
 						<div className="mb-4 flex items-center gap-3" role="status">
 							<p className="text-muted-foreground text-sm">
@@ -153,7 +167,7 @@ export function AgentApplicationSubmissionScreen(
 					) : null}
 					{props.result ? (
 						<Link
-							className={buttonVariants({ variant: "link", className: "px-0" })}
+							className={buttonVariants()}
 							params={{ applicationId: props.result.applicationId }}
 							to="/my-agents/$applicationId"
 						>
@@ -161,21 +175,6 @@ export function AgentApplicationSubmissionScreen(
 						</Link>
 					) : null}
 				</div>
-				<aside className="form-aside">
-					<h2>申请说明</h2>
-					<p>审批用于确认预设资源占用。</p>
-					<ol>
-						<li>填写配置并提交申请</li>
-						<li>管理员审阅</li>
-						<li>批准后创建 Agent</li>
-					</ol>
-					<p>审批结果可在申请详情中查看。</p>
-					<p className="text-muted-foreground text-sm">
-						标准模板与获准模型从部署提供的选项中选择。共同 Owner
-						和使用范围所需的用户或组织
-						ID，请向部署管理员获取；服务端会校验权限与配置。
-					</p>
-				</aside>
 			</div>
 		</section>
 	);

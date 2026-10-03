@@ -9,4 +9,6 @@ const missing = (name) => {
 export const directory = missing("directory");
 export const signing = missing("signing");
 export const serviceToken = missing("serviceToken");
+// databaseUrl comes from PLATFORM_DATABASE_URL, never from this module.
+// policy.namespace must match the Pod namespace in PLATFORM_WORKER_NAMESPACE.
 export const workloadInput = missing("workloadInput");

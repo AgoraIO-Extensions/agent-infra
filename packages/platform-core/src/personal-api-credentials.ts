@@ -24,7 +24,8 @@ export type PersonalApiCredentialScopeV1 =
 
 export type PersonalApiCredentialMutationV1 =
 	| "api.credential.issued"
-	| "api.credential.revoked";
+	| "api.credential.revoked"
+	| "api.credential.narrowed";
 
 export type PersonalApiCredentialErrorCodeV1 =
 	| "invalid_input"
@@ -44,6 +45,12 @@ export class PersonalApiCredentialErrorV1 extends Error {
 export interface PersonalApiCredentialIssuanceV1 {
 	readonly scopes: readonly PersonalApiCredentialScopeV1[];
 	readonly expiresAt: string | null;
+}
+
+/** PATCH only restricts existing material; it never issues replacement material. */
+export interface PersonalApiCredentialNarrowingV1 {
+	readonly scopes?: readonly PersonalApiCredentialScopeV1[];
+	readonly expiresAt?: string;
 }
 
 export interface PersonalApiCredentialMetadataV1 {
@@ -74,16 +81,29 @@ export interface PersonalApiCredentialAuditV1 {
 	readonly traceId: string;
 	readonly userId: string | null;
 	readonly credentialId: string | null;
-	readonly action: PersonalApiCredentialMutationV1;
+	readonly action:
+		| PersonalApiCredentialMutationV1
+		| "api.credential.metadata.read";
 	readonly outcome: "succeeded" | "failed" | "rejected";
 	readonly details: {
 		readonly reason?: PersonalApiCredentialErrorCodeV1;
 		readonly scopes?: readonly PersonalApiCredentialScopeV1[];
 		readonly expiresAt?: string | null;
+		readonly returnedCredentialIds?: readonly string[];
 	};
 }
 
-/** Operations available only inside one issuance/revocation transaction. */
+export interface PersonalApiCredentialListV1 {
+	readonly limit: number;
+	readonly cursor?: string;
+}
+
+export interface PersonalApiCredentialPageV1 {
+	readonly items: readonly PersonalApiCredentialMetadataV1[];
+	readonly nextCursor: string | null;
+}
+
+/** Operations available only inside one personal credential transaction. */
 export interface PersonalApiCredentialTransactionV1 {
 	lockUserDisabled(userId: string): Promise<boolean>;
 	databaseTime(): Promise<Date>;
@@ -100,6 +120,16 @@ export interface PersonalApiCredentialTransactionV1 {
 		credentialId: string,
 		userId: string,
 	): Promise<PersonalApiCredentialMetadataV1 | null>;
+	/** Personal owner predicate and deterministic ID ordering apply before projection. */
+	listCredentials(
+		userId: string,
+		limit: number,
+		afterId: string | null,
+	): Promise<readonly PersonalApiCredentialMetadataV1[]>;
+	narrowCredential(
+		credentialId: string,
+		input: PersonalApiCredentialIssuanceV1,
+	): Promise<PersonalApiCredentialMetadataV1>;
 	insertCredential(input: {
 		readonly credentialId: string;
 		readonly userId: string;
@@ -140,10 +170,25 @@ export interface PersonalApiCredentialUseCaseV1 {
 		readonly metadata: PersonalApiCredentialMetadataV1;
 		readonly replayed: boolean;
 	}>;
+	narrow(
+		request: PersonalApiCredentialRequestV1,
+		credentialId: string,
+		input: unknown,
+	): Promise<{
+		readonly metadata: PersonalApiCredentialMetadataV1;
+		readonly replayed: boolean;
+	}>;
+	list(
+		request: Pick<
+			PersonalApiCredentialRequestV1,
+			"userId" | "requestId" | "traceId"
+		>,
+		input: unknown,
+	): Promise<PersonalApiCredentialPageV1>;
 	/** The optional actor is supplied only after the HTTP identity boundary succeeds. */
 	recordRefusal(
 		metadata: Pick<PersonalApiCredentialRequestV1, "requestId" | "traceId">,
-		action: PersonalApiCredentialMutationV1,
+		action: PersonalApiCredentialMutationV1 | "api.credential.metadata.read",
 		reason: PersonalApiCredentialErrorCodeV1,
 		trustedUserId?: string,
 	): Promise<void>;
@@ -180,29 +225,150 @@ export function parsePersonalApiCredentialScopesV1(
 	}
 }
 
+function parsePersonalApiCredentialExpiryV1(expiresAt: unknown): string | null {
+	if (
+		expiresAt !== null &&
+		(typeof expiresAt !== "string" ||
+			!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(expiresAt) ||
+			!Number.isFinite(Date.parse(expiresAt)) ||
+			new Date(expiresAt).toISOString().slice(0, 19) !== expiresAt.slice(0, 19))
+	) {
+		throw new Error();
+	}
+	return expiresAt === null ? null : new Date(expiresAt).toISOString();
+}
+
 export function parsePersonalApiCredentialIssuanceV1(
 	input: unknown,
 ): PersonalApiCredentialIssuanceV1 {
 	try {
 		const value = snapshotAgentManagementDataObject(input);
 		requireAgentManagementExactKeys(value, ["scopes", "expiresAt"]);
-		const expiresAt = value.expiresAt;
-		if (
-			expiresAt !== null &&
-			(typeof expiresAt !== "string" ||
-				!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(
-					expiresAt,
-				) ||
-				!Number.isFinite(Date.parse(expiresAt)) ||
-				new Date(expiresAt).toISOString().slice(0, 19) !==
-					expiresAt.slice(0, 19))
-		) {
-			throw new Error();
-		}
+		const expiresAt = parsePersonalApiCredentialExpiryV1(value.expiresAt);
 		return Object.freeze({
 			scopes: parsePersonalApiCredentialScopesV1(value.scopes),
-			expiresAt: expiresAt === null ? null : new Date(expiresAt).toISOString(),
+			expiresAt,
 		});
+	} catch {
+		throw new PersonalApiCredentialErrorV1("invalid_input");
+	}
+}
+
+/** Snapshot all PATCH fields before identity/transaction awaits. */
+export function parsePersonalApiCredentialNarrowingV1(
+	input: unknown,
+): PersonalApiCredentialNarrowingV1 {
+	try {
+		const values = snapshotAgentManagementDataObject(input);
+		const keys = Object.keys(values);
+		if (
+			keys.length === 0 ||
+			keys.some((key) => key !== "scopes" && key !== "expiresAt")
+		)
+			throw new Error();
+		const scopes = Object.hasOwn(values, "scopes")
+			? parsePersonalApiCredentialScopesV1(values.scopes)
+			: undefined;
+		const expiresAt = Object.hasOwn(values, "expiresAt")
+			? parsePersonalApiCredentialExpiryV1(values.expiresAt)
+			: undefined;
+		// Null would remove the deadline and is never a narrowing operation.
+		if (expiresAt === null) throw new Error();
+		return Object.freeze({
+			...(scopes === undefined ? {} : { scopes }),
+			...(expiresAt === undefined ? {} : { expiresAt }),
+		});
+	} catch {
+		throw new PersonalApiCredentialErrorV1("invalid_input");
+	}
+}
+
+/** Scope and expiry are intersected with the currently locked credential. */
+export function requirePersonalApiCredentialNarrowingV1(
+	current: PersonalApiCredentialMetadataV1,
+	command: PersonalApiCredentialNarrowingV1,
+): PersonalApiCredentialIssuanceV1 {
+	const scopes = parsePersonalApiCredentialScopesV1(current.scopes);
+	if (
+		command.scopes?.some((scope) => !scopes.includes(scope)) ||
+		(command.expiresAt !== undefined &&
+			current.expiresAt !== null &&
+			Date.parse(command.expiresAt) > Date.parse(current.expiresAt))
+	) {
+		throw new PersonalApiCredentialErrorV1("invalid_input");
+	}
+	if (
+		current.expiresAt !== null &&
+		!Number.isFinite(Date.parse(current.expiresAt))
+	) {
+		throw new PersonalApiCredentialErrorV1("unavailable");
+	}
+	return Object.freeze({
+		scopes: command.scopes ?? scopes,
+		expiresAt: command.expiresAt ?? current.expiresAt,
+	});
+}
+
+function parsePersonalApiCredentialListV1(
+	input: unknown,
+): PersonalApiCredentialListV1 {
+	try {
+		const values = snapshotAgentManagementDataObject(input);
+		if (Object.keys(values).some((key) => key !== "limit" && key !== "cursor"))
+			throw new Error();
+		const limit = Object.hasOwn(values, "limit") ? values.limit : 20;
+		if (
+			typeof limit !== "number" ||
+			!Number.isInteger(limit) ||
+			limit < 1 ||
+			limit > 100
+		)
+			throw new Error();
+		if (
+			Object.hasOwn(values, "cursor") &&
+			(typeof values.cursor !== "string" ||
+				!/^[A-Za-z0-9_-]{1,4096}$/.test(values.cursor))
+		)
+			throw new Error();
+		return Object.freeze({
+			limit,
+			...(Object.hasOwn(values, "cursor")
+				? { cursor: values.cursor as string }
+				: {}),
+		});
+	} catch {
+		throw new PersonalApiCredentialErrorV1("invalid_input");
+	}
+}
+
+function cursorFingerprint(userId: string, limit: number): string {
+	return createHash("sha256")
+		.update(JSON.stringify(["personal_api_credential", userId, limit]))
+		.digest("hex");
+}
+
+function decodePersonalCredentialCursor(
+	input: PersonalApiCredentialListV1,
+	userId: string,
+): string | null {
+	if (input.cursor === undefined) return null;
+	try {
+		const bytes = Buffer.from(input.cursor, "base64url");
+		if (bytes.toString("base64url") !== input.cursor) throw new Error();
+		const cursor = snapshotAgentManagementDataObject(
+			JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+		);
+		requireAgentManagementExactKeys(cursor, [
+			"version",
+			"fingerprint",
+			"credentialId",
+		]);
+		if (
+			cursor.version !== 1 ||
+			cursor.fingerprint !== cursorFingerprint(userId, input.limit)
+		)
+			throw new Error();
+		return parsePersonalApiCredentialIdV1(cursor.credentialId);
 	} catch {
 		throw new PersonalApiCredentialErrorV1("invalid_input");
 	}
@@ -332,7 +498,7 @@ export function createPersonalApiCredentialUseCaseV1(dependencies: {
 	const port = dependencies.transaction;
 	async function refusal(
 		request: Pick<PersonalApiCredentialRequestV1, "requestId" | "traceId">,
-		action: PersonalApiCredentialMutationV1,
+		action: PersonalApiCredentialMutationV1 | "api.credential.metadata.read",
 		reason: PersonalApiCredentialErrorCodeV1,
 		evidence: { userId: string | null; credentialId: string | null },
 	): Promise<void> {
@@ -351,7 +517,7 @@ export function createPersonalApiCredentialUseCaseV1(dependencies: {
 	}
 	async function execute<T>(
 		request: PersonalApiCredentialRequestV1,
-		action: PersonalApiCredentialMutationV1,
+		action: PersonalApiCredentialMutationV1 | "api.credential.metadata.read",
 		work: (
 			transaction: PersonalApiCredentialTransactionV1,
 			ownCredential: (id: string) => Promise<PersonalApiCredentialMetadataV1>,
@@ -529,6 +695,108 @@ export function createPersonalApiCredentialUseCaseV1(dependencies: {
 						metadata,
 					);
 					return { result: { metadata, replayed: false } };
+				},
+			);
+		},
+		async narrow(context, credentialId, input) {
+			const request = parsePersonalApiCredentialRequestV1(context);
+			const snapshot = snapshotCommand(() => ({
+				credentialId: parsePersonalApiCredentialIdV1(credentialId),
+				command: parsePersonalApiCredentialNarrowingV1(input),
+			}));
+			return execute<{
+				metadata: PersonalApiCredentialMetadataV1;
+				replayed: boolean;
+			}>(
+				request,
+				"api.credential.narrowed",
+				async (transaction, ownCredential) => {
+					if (snapshot instanceof PersonalApiCredentialErrorV1) throw snapshot;
+					const digest = platformIdempotencyV1.canonicalRequestDigest({
+						credentialId: snapshot.credentialId,
+						command: { ...snapshot.command },
+					});
+					const replayId = await replayCredentialId(
+						transaction,
+						request,
+						"api.credential.narrowed",
+						digest,
+					);
+					if (replayId !== null && replayId !== snapshot.credentialId)
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					const current = await ownCredential(snapshot.credentialId);
+					if (replayId !== null)
+						return { result: { metadata: current, replayed: true } };
+					const restricted = requirePersonalApiCredentialNarrowingV1(
+						current,
+						snapshot.command,
+					);
+					const metadata = await transaction.narrowCredential(
+						snapshot.credentialId,
+						restricted,
+					);
+					await complete(
+						transaction,
+						request,
+						"api.credential.narrowed",
+						digest,
+						metadata,
+					);
+					return { result: { metadata, replayed: false } };
+				},
+			);
+		},
+		async list(context, input) {
+			const values = snapshotAgentManagementDataObject(context);
+			requireAgentManagementExactKeys(values, [
+				"userId",
+				"requestId",
+				"traceId",
+			]);
+			const request = parsePersonalApiCredentialRequestV1({
+				...values,
+				idempotencyKey: "unkeyed",
+			});
+			const snapshot = snapshotCommand(() =>
+				parsePersonalApiCredentialListV1(input),
+			);
+			return execute(
+				request,
+				"api.credential.metadata.read",
+				async (transaction) => {
+					if (snapshot instanceof PersonalApiCredentialErrorV1) throw snapshot;
+					const rows = await transaction.listCredentials(
+						request.userId,
+						snapshot.limit + 1,
+						decodePersonalCredentialCursor(snapshot, request.userId),
+					);
+					const items = rows.slice(0, snapshot.limit);
+					const last = items.at(-1);
+					const nextCursor =
+						rows.length > snapshot.limit && last
+							? Buffer.from(
+									JSON.stringify({
+										version: 1,
+										fingerprint: cursorFingerprint(
+											request.userId,
+											snapshot.limit,
+										),
+										credentialId: last.credentialId,
+									}),
+								).toString("base64url")
+							: null;
+					await transaction.recordAudit({
+						requestId: request.requestId,
+						traceId: request.traceId,
+						userId: request.userId,
+						credentialId: null,
+						action: "api.credential.metadata.read",
+						outcome: "succeeded",
+						details: {
+							returnedCredentialIds: items.map((item) => item.credentialId),
+						},
+					});
+					return { result: { items, nextCursor } };
 				},
 			);
 		},

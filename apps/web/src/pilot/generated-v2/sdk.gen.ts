@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CommandAgentLifecycleV2Data, CommandAgentLifecycleV2Errors, CommandAgentLifecycleV2Responses, CreateAgentApplicationV2Data, CreateAgentApplicationV2Errors, CreateAgentApplicationV2Responses, DecideAgentApplicationV2Data, DecideAgentApplicationV2Errors, DecideAgentApplicationV2Responses, GetAgentApplicationV2Data, GetAgentApplicationV2Errors, GetAgentApplicationV2Responses, GetAgentV2Data, GetAgentV2Errors, GetAgentV2Responses, GetConversationV2Data, GetConversationV2Errors, GetConversationV2Responses, GetDeploymentConfigurationV2Data, GetDeploymentConfigurationV2Errors, GetDeploymentConfigurationV2Responses, GetExecutionDetailV2Data, GetExecutionDetailV2Errors, GetExecutionDetailV2Responses, GetPersonalRelayKeyV2Data, GetPersonalRelayKeyV2Errors, GetPersonalRelayKeyV2Responses, IssuePersonalApiCredentialV2Data, IssuePersonalApiCredentialV2Errors, IssuePersonalApiCredentialV2Responses, ListAdminAgentsV2Data, ListAdminAgentsV2Errors, ListAdminAgentsV2Responses, ListAgentApplicationsV2Data, ListAgentApplicationsV2Errors, ListAgentApplicationsV2Responses, ListAgentsV2Data, ListAgentsV2Errors, ListAgentsV2Responses, ListPendingAgentApplicationsV2Data, ListPendingAgentApplicationsV2Errors, ListPendingAgentApplicationsV2Responses, ListPlatformAuditV2Data, ListPlatformAuditV2Errors, ListPlatformAuditV2Responses, ListRecentPersonalConversationsV2Data, ListRecentPersonalConversationsV2Errors, ListRecentPersonalConversationsV2Responses, ReplacePersonalRelayKeyV2Data, ReplacePersonalRelayKeyV2Errors, ReplacePersonalRelayKeyV2Responses, RevokePersonalApiCredentialV2Data, RevokePersonalApiCredentialV2Errors, RevokePersonalApiCredentialV2Responses, RevokePersonalRelayKeyV2Data, RevokePersonalRelayKeyV2Errors, RevokePersonalRelayKeyV2Responses, StreamConversationEventsV2Data, StreamConversationEventsV2Errors, StreamConversationEventsV2Response, StreamConversationEventsV2Responses, UpdateAgentApplicationV2Data, UpdateAgentApplicationV2Errors, UpdateAgentApplicationV2Responses, UpdateAgentConfigurationV2Data, UpdateAgentConfigurationV2Errors, UpdateAgentConfigurationV2Responses, WithdrawAgentApplicationV2Data, WithdrawAgentApplicationV2Errors, WithdrawAgentApplicationV2Responses } from './types.gen';
+import type { CommandAgentLifecycleV2Data, CommandAgentLifecycleV2Errors, CommandAgentLifecycleV2Responses, CreateAgentApplicationV2Data, CreateAgentApplicationV2Errors, CreateAgentApplicationV2Responses, DecideAgentApplicationV2Data, DecideAgentApplicationV2Errors, DecideAgentApplicationV2Responses, DisableOwnApplicationV2Data, DisableOwnApplicationV2Errors, DisableOwnApplicationV2Responses, GetAgentApplicationV2Data, GetAgentApplicationV2Errors, GetAgentApplicationV2Responses, GetAgentV2Data, GetAgentV2Errors, GetAgentV2Responses, GetConversationV2Data, GetConversationV2Errors, GetConversationV2Responses, GetDeploymentConfigurationV2Data, GetDeploymentConfigurationV2Errors, GetDeploymentConfigurationV2Responses, GetExecutionDetailV2Data, GetExecutionDetailV2Errors, GetExecutionDetailV2Responses, GetOwnApplicationV2Data, GetOwnApplicationV2Errors, GetOwnApplicationV2Responses, GetPersonalRelayKeyV2Data, GetPersonalRelayKeyV2Errors, GetPersonalRelayKeyV2Responses, GrantApplicationMaterialV2Data, GrantApplicationMaterialV2Errors, GrantApplicationMaterialV2Responses, IssuePersonalApiCredentialV2Data, IssuePersonalApiCredentialV2Errors, IssuePersonalApiCredentialV2Responses, ListAdminAgentsV2Data, ListAdminAgentsV2Errors, ListAdminAgentsV2Responses, ListAgentApplicationsV2Data, ListAgentApplicationsV2Errors, ListAgentApplicationsV2Responses, ListAgentsV2Data, ListAgentsV2Errors, ListAgentsV2Responses, ListPendingAgentApplicationsV2Data, ListPendingAgentApplicationsV2Errors, ListPendingAgentApplicationsV2Responses, ListPersonalApiCredentialsV2Data, ListPersonalApiCredentialsV2Errors, ListPersonalApiCredentialsV2Responses, ListPlatformAuditV2Data, ListPlatformAuditV2Errors, ListPlatformAuditV2Responses, ListRecentPersonalConversationsV2Data, ListRecentPersonalConversationsV2Errors, ListRecentPersonalConversationsV2Responses, NarrowPersonalApiCredentialV2Data, NarrowPersonalApiCredentialV2Errors, NarrowPersonalApiCredentialV2Responses, ReadApplicationMaterialV2Data, ReadApplicationMaterialV2Errors, ReadApplicationMaterialV2Responses, RegisterApplicationV2Data, RegisterApplicationV2Errors, RegisterApplicationV2Responses, ReplacePersonalRelayKeyV2Data, ReplacePersonalRelayKeyV2Errors, ReplacePersonalRelayKeyV2Responses, RevokeApplicationMaterialV2Data, RevokeApplicationMaterialV2Errors, RevokeApplicationMaterialV2Responses, RevokePersonalApiCredentialV2Data, RevokePersonalApiCredentialV2Errors, RevokePersonalApiCredentialV2Responses, RevokePersonalRelayKeyV2Data, RevokePersonalRelayKeyV2Errors, RevokePersonalRelayKeyV2Responses, StreamConversationEventsV2Data, StreamConversationEventsV2Errors, StreamConversationEventsV2Response, StreamConversationEventsV2Responses, UpdateAgentApplicationV2Data, UpdateAgentApplicationV2Errors, UpdateAgentApplicationV2Responses, UpdateAgentConfigurationV2Data, UpdateAgentConfigurationV2Errors, UpdateAgentConfigurationV2Responses, WithdrawAgentApplicationV2Data, WithdrawAgentApplicationV2Errors, WithdrawAgentApplicationV2Responses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -86,6 +86,112 @@ export const commandAgentLifecycleV2 = <ThrowOnError extends boolean = false>(op
     }
 });
 
+/**
+ * Register an application owned by the current browser user
+ *
+ * Active browser session only; no Authorization header or query. Responsibility is bound by the server. Same-key replay returns the original metadata. No credential or grant is issued. Responses are no-store.
+ */
+export const registerApplicationV2 = <ThrowOnError extends boolean = false>(options: Options<RegisterApplicationV2Data, ThrowOnError>): RequestResult<RegisterApplicationV2Responses, RegisterApplicationV2Errors, ThrowOnError> => (options.client ?? client).post<RegisterApplicationV2Responses, RegisterApplicationV2Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/applications',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Read an application owned by the current browser user
+ *
+ * Active browser session only; no Authorization header, query or request body. Cross-person and missing applications both return 404. Metadata contains no material or grants. Responses are no-store.
+ */
+export const getOwnApplicationV2 = <ThrowOnError extends boolean = false>(options: Options<GetOwnApplicationV2Data, ThrowOnError>): RequestResult<GetOwnApplicationV2Responses, GetOwnApplicationV2Errors, ThrowOnError> => (options.client ?? client).get<GetOwnApplicationV2Responses, GetOwnApplicationV2Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/applications/{applicationId}',
+    ...options
+});
+
+/**
+ * Disable an application owned by the current browser user
+ *
+ * Active browser session only; no Authorization header or query. Current ownership is rechecked on replay. Cross-person and missing applications both return 404. No credential material is returned. Responses are no-store.
+ */
+export const disableOwnApplicationV2 = <ThrowOnError extends boolean = false>(options: Options<DisableOwnApplicationV2Data, ThrowOnError>): RequestResult<DisableOwnApplicationV2Responses, DisableOwnApplicationV2Errors, ThrowOnError> => (options.client ?? client).patch<DisableOwnApplicationV2Responses, DisableOwnApplicationV2Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/applications/{applicationId}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Grant application credential material access to a typed recipient
+ *
+ * Current system_admin only. The response contains grant metadata and never credential material; responsibility and administrator roles alone do not return material.
+ */
+export const grantApplicationMaterialV2 = <ThrowOnError extends boolean = false>(options: Options<GrantApplicationMaterialV2Data, ThrowOnError>): RequestResult<GrantApplicationMaterialV2Responses, GrantApplicationMaterialV2Errors, ThrowOnError> => (options.client ?? client).post<GrantApplicationMaterialV2Responses, GrantApplicationMaterialV2Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/applications/{applicationId}/material-grant',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Read typed application credential material grant metadata
+ *
+ * Current system_admin only. Grant metadata is returned; credential material is never returned.
+ */
+export const readApplicationMaterialV2 = <ThrowOnError extends boolean = false>(options: Options<ReadApplicationMaterialV2Data, ThrowOnError>): RequestResult<ReadApplicationMaterialV2Responses, ReadApplicationMaterialV2Errors, ThrowOnError> => (options.client ?? client).get<ReadApplicationMaterialV2Responses, ReadApplicationMaterialV2Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}',
+    ...options
+});
+
+/**
+ * Revoke a typed application credential material grant
+ *
+ * Current system_admin only. expectedRevision is required to prevent a stale revoke from changing a newer grant.
+ */
+export const revokeApplicationMaterialV2 = <ThrowOnError extends boolean = false>(options: Options<RevokeApplicationMaterialV2Data, ThrowOnError>): RequestResult<RevokeApplicationMaterialV2Responses, RevokeApplicationMaterialV2Errors, ThrowOnError> => (options.client ?? client).patch<RevokeApplicationMaterialV2Responses, RevokeApplicationMaterialV2Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
 export const getConversationV2 = <ThrowOnError extends boolean = false>(options: Options<GetConversationV2Data, ThrowOnError>): RequestResult<GetConversationV2Responses, GetConversationV2Errors, ThrowOnError> => (options.client ?? client).get<GetConversationV2Responses, GetConversationV2Errors, ThrowOnError>({ url: '/api/v2/conversations/{conversationId}', ...options });
 
 export const streamConversationEventsV2 = <ThrowOnError extends boolean = false>(options: Options<StreamConversationEventsV2Data, ThrowOnError, StreamConversationEventsV2Response>): Promise<ServerSentEventsResult<StreamConversationEventsV2Responses>> => (options.client ?? client).sse.get<StreamConversationEventsV2Responses, StreamConversationEventsV2Errors, ThrowOnError>({ url: '/api/v2/conversations/{conversationId}/events', ...options });
@@ -93,6 +199,21 @@ export const streamConversationEventsV2 = <ThrowOnError extends boolean = false>
 export const getExecutionDetailV2 = <ThrowOnError extends boolean = false>(options: Options<GetExecutionDetailV2Data, ThrowOnError>): RequestResult<GetExecutionDetailV2Responses, GetExecutionDetailV2Errors, ThrowOnError> => (options.client ?? client).get<GetExecutionDetailV2Responses, GetExecutionDetailV2Errors, ThrowOnError>({ url: '/api/v2/conversations/{conversationId}/executions/{executionId}', ...options });
 
 export const getDeploymentConfigurationV2 = <ThrowOnError extends boolean = false>(options?: Options<GetDeploymentConfigurationV2Data, ThrowOnError>): RequestResult<GetDeploymentConfigurationV2Responses, GetDeploymentConfigurationV2Errors, ThrowOnError> => (options?.client ?? client).get<GetDeploymentConfigurationV2Responses, GetDeploymentConfigurationV2Errors, ThrowOnError>({ url: '/api/v2/deployment/configuration', ...options });
+
+/**
+ * List only the current browser user's credential metadata
+ *
+ * Any Authorization header is rejected. Limit defaults to 20; cursor is bound to this user and limit. Credential material and hashes are never returned. Responses are no-store.
+ */
+export const listPersonalApiCredentialsV2 = <ThrowOnError extends boolean = false>(options?: Options<ListPersonalApiCredentialsV2Data, ThrowOnError>): RequestResult<ListPersonalApiCredentialsV2Responses, ListPersonalApiCredentialsV2Errors, ThrowOnError> => (options?.client ?? client).get<ListPersonalApiCredentialsV2Responses, ListPersonalApiCredentialsV2Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/me/api-credentials',
+    ...options
+});
 
 /**
  * Issue a personal credential with one-time material delivery
@@ -126,6 +247,25 @@ export const revokePersonalApiCredentialV2 = <ThrowOnError extends boolean = fal
         }],
     url: '/api/v2/me/api-credentials/{credentialId}',
     ...options
+});
+
+/**
+ * Restrict one personal credential's scopes or expiry
+ *
+ * Active browser user only. Any Authorization header is rejected. Scopes can only be a nonempty subset; expiry can only be made earlier. Revoked or expired credentials are never revived. Same-key replay returns current metadata. Cross-person and absent IDs both return 404. Responses are no-store.
+ */
+export const narrowPersonalApiCredentialV2 = <ThrowOnError extends boolean = false>(options: Options<NarrowPersonalApiCredentialV2Data, ThrowOnError>): RequestResult<NarrowPersonalApiCredentialV2Responses, NarrowPersonalApiCredentialV2Errors, ThrowOnError> => (options.client ?? client).patch<NarrowPersonalApiCredentialV2Responses, NarrowPersonalApiCredentialV2Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/me/api-credentials/{credentialId}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });
 
 /**

@@ -42,9 +42,7 @@ function AgentApplicationSubmissionScreen(
 }
 
 function creationHeader() {
-	const header = screen
-		.getByRole("heading", { name: "申请 Agent" })
-		.closest("header");
+	const header = screen.getByRole("heading", { level: 1 }).closest("header");
 	if (!header) throw new Error("Missing creation header");
 	return within(header);
 }
@@ -60,7 +58,7 @@ describe("AgentApplicationSubmissionScreen", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("heading", { name: "申请 Agent" })).toBeTruthy();
+		expect(screen.getByRole("heading", { name: "申请已提交" })).toBeTruthy();
 		expect(screen.getByRole("status").textContent).toBe("申请已提交：待审批。");
 		expect(
 			screen.getByRole("link", { name: "查看申请详情" }).getAttribute("href"),
@@ -155,7 +153,9 @@ describe("AgentApplicationSubmissionScreen", () => {
 		expect(screen.queryByRole("link", { name: "取消" })).toBeNull();
 		fireEvent.click(creationHeader().getByRole("link", { name: "退出创建" }));
 		await waitFor(() => {
-			expect(screen.queryByRole("heading", { name: "申请 Agent" })).toBeNull();
+			expect(
+				screen.queryByRole("heading", { name: "创建一个新的 Agent。" }),
+			).toBeNull();
 		});
 		expect(onSubmit).not.toHaveBeenCalled();
 	});

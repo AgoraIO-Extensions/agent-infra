@@ -68,6 +68,18 @@ export interface OperationalEvent {
 	readonly attemptRef?: string;
 }
 
+export interface ModelTokenUsage {
+	readonly inputTokens?: number;
+	readonly outputTokens?: number;
+	readonly cachedInputTokens?: number;
+}
+
+const tokenKinds = {
+	inputTokens: "input",
+	outputTokens: "output",
+	cachedInputTokens: "cached_input",
+} as const;
+
 export const resourceKinds = [
 	"sse_connections",
 	"sse_pending_events",
@@ -330,6 +342,10 @@ export function startObservability(options: ObservabilityOptions) {
 		unit: "ms",
 		description: "Observed platform stage duration",
 	});
+	const tokens = meter?.createCounter("agent_platform_model_tokens_total", {
+		unit: "{token}",
+		description: "First committed observations of known model token fields",
+	});
 	meter
 		?.createObservableGauge("agent_platform_resource_count", {
 			unit: "1",
@@ -356,6 +372,29 @@ export function startObservability(options: ObservabilityOptions) {
 		});
 	let closing: Promise<void> | undefined;
 	return {
+		recordModelUsage(usage: ModelTokenUsage) {
+			if (state !== "active") return;
+			try {
+				const fields = Object.keys(tokenKinds) as (keyof ModelTokenUsage)[];
+				const samples = fields.map((field) => [field, usage[field]] as const);
+				if (
+					samples.some(
+						([, value]) =>
+							value !== undefined &&
+							(!Number.isSafeInteger(value) || value < 0),
+					)
+				) {
+					invalidRecords++;
+					return;
+				}
+				for (const [field, value] of samples) {
+					if (value !== undefined)
+						tokens?.add(value, { service, kind: tokenKinds[field] });
+				}
+			} catch {
+				captureFailures++;
+			}
+		},
 		observeResource(snapshot: ResourceSnapshot) {
 			if (state !== "active") return;
 			try {

@@ -1536,6 +1536,14 @@ export class FileRuntimeStore {
 		await this.authorizedOriginalExecution(action, readNow);
 	}
 
+	/** Final synchronous committed-state check, called immediately before actual external fetch. */
+	assertExternalActionCurrent(
+		action: RuntimeExternalActionAuthorization,
+		readNow: () => number,
+	) {
+		this.checkAuthorizedOriginalExecution(this.file.read(), action, readNow);
+	}
+
 	async resolveOriginalExecutionBinding(
 		reference: RuntimeOriginalExecutionRef,
 		readNow: () => number,
@@ -1570,7 +1578,22 @@ export class FileRuntimeStore {
 		},
 		readNow: () => number,
 	) {
-		const state = await this.file.readCommitted();
+		return this.checkAuthorizedOriginalExecution(
+			await this.file.readCommitted(),
+			action,
+			readNow,
+		);
+	}
+
+	private checkAuthorizedOriginalExecution(
+		state: RuntimeStoreState,
+		action: {
+			nativeSessionRef?: string;
+			executionId: string;
+			runtimeOperationId: string;
+		},
+		readNow: () => number,
+	) {
 		assertStoreState(state);
 		// A queued durable write may outlive the Grant being checked.
 		const now = readNow();

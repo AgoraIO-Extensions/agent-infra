@@ -135,7 +135,18 @@ flowchart LR
 | `directory snapshot database` | 企微员工与部门的已确认完整快照、同步版本和有效期；不是 LDAP 身份或 Platform 授权权威 | 是，仅对目录快照 |
 | `connection database` | 独立身份与客户端授权、Grant、Provider/Action、外部账号、加密凭证、OAuth 状态、调用/效果和审计 | 是 |
 
-`platform-api` 与 `platform-worker` 使用同一平台领域模块，但以不同进程部署，并通过 Platform DB 状态与 outbox 协作，不建立直接 RPC 依赖。Web 和 `platform-api` 的部署位置不受 Kubernetes Workload Plane 限制；只有 `platform-worker` 获得目标 Kubernetes namespace 的 API 权限。Connection 使用独立数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。
+`platform-api` 与 `platform-worker` 使用同一平台领域模块，但以不同进程部署，并通过 Platform DB 状态与 outbox 协作；除下述 `native_metadata_read` 例外外，不建立直接 RPC 依赖。Web 和 `platform-api` 的部署位置不受 Kubernetes Workload Plane 限制；只有 `platform-worker` 获得目标 Kubernetes namespace 的 API 权限。Connection 使用独立数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。
+
+仅 [§9.3.1 的 `native_metadata_read`](#931-原生元数据读取授权) 可使用受认证内部 HTTP，
+承载 API→Worker 的一次读取投递，以及 Host→Worker→承载原 Request 的 API 实例的在线当前确认。
+Worker 保持唯一证明签发与投递方；Host 不直接查询 Platform DB 或 IdentityAdapter。
+该通路只服务于同一原 Request 及其可信绑定的 API/Worker/Host 实例关联；服务身份和实例映射由可信部署装配固定，
+不能接受调用方回调 URL、任意 origin 或通过负载均衡猜测原实例。
+原请求终结、当前确认不可核实、关联丢失或任一关联实例重启使本次读取永久失效，不恢复、续期或复用旧允许结果。
+原用户凭证只留承载原 Request 的 API 内存，不进入内部 wire、DB、journal、日志或遥测。
+当前认证、读取政策、原持久范围、固定期限、逐相关 await 与响应 bytes 前的复核均遵循 §9.3.1，不能用服务身份替代读取权。
+任务调度、Execution/Session/Turn 创建和 control/recovery 仍通过 Platform DB/outbox，不能使用此通路；
+metadata 读取不写任务、恢复、fence 或 Key 状态，也不新增持久授权或消息状态机。
 
 目录服务与 Platform 同集群部署，经内部受认证服务边界通信，可使用同一 PostgreSQL 集群的独立数据库账号。它不读取 Platform 或 Connection 数据库；Platform 不把同步快照当作 LDAP 账号状态。Connection 的单一账号级权威和独立 Web 部署取舍分别见 [ADR: Connection 使用单一账号级权威](../adr/0005-use-one-account-backed-connection-authority.md)与 [ADR: 独立部署 Connection Web](../adr/0006-deploy-connection-web-independently.md)。
 
@@ -345,6 +356,8 @@ Web/企微依次校验可信用户当前状态、Agent 可用范围/有效 Owner
 `platform-core` 的 Access 模块维护独立应用、注册责任人、API 凭证元数据与显式 Agent 授权；用户状态/组织关系仍来自 IdentityAdapter。API Adapter 验证凭证后生成可信用户或应用上下文，保留主体类型、稳定 ID、凭证引用、操作范围及有效期，不能由请求字段覆盖。凭证只保存不可逆校验材料和必要元数据，首次交付后不提供原值读取；个人凭证由本人管理，应用凭证由登记责任人管理。
 
 应用凭证管理与取得/使用凭证材料分别授权。责任人角色只授予元数据、范围、轮换和撤销等管理权限，不自动获得凭证值或应用任务权限；签发与轮换时由 Core 重验接收者当前的独立凭证使用授权，只向该接收者受控交付，不能回显给仅有管理权的请求者，也不能通过重设接收者或交付入口绕过授权。授权、接收者及实际交付结果记录必要审计，凭证值不入审计；不引入新的身份或凭证服务。获授权接收者调用时仍以应用为任务主体，当前 Agent 权限和凭证范围继续生效。
+
+应用凭证材料 grant 的授予/撤销遵循[平台 PRD 7.3](../prd/PRD-agent-platform-M1.md#73-api-身份凭证与授权)：writer 仅来自 9.1 的可信 `system_admin`，每次操作重验当前账号有效、Platform 未禁用及 LDAP 稳定 UID 仍精确匹配管理员配置；责任人或凭证管理角色不能替代该检查。Access 持久保存应用 ID 与接收者可信主体类型、稳定 ID 的绑定，授予、撤销及材料使用均按完整绑定检查，不能仅比较裸 ID。授权变更与必要审计原子保存，审计失败不得放行；授予命令仅返回授权元数据，不签发或交付材料。管理员作为接收者（包括显式自授）仍须在签发、轮换和交付时通过当前独立 grant 检查，撤销后不能继续交付；材料不得进入普通读取、日志、Trace 或审计。
 
 创建用例将 Agent、创建主体、Owner、初始管理/使用授权、outbox 和必要审计原子保存。用户创建的 Owner 为本人，应用创建的 Owner 为登记的自然人责任人，创建主体仍为应用。API 不进入 Web 申请审批状态机，也不设预审批；镜像/配置与运行能力准入仍适用。管理与使用授权可分别撤销，应用不继承责任人的权限，Owner 不能绕过已撤销的 API 授权。
 
@@ -890,6 +903,61 @@ BuildServiceAdapter 的任务状态至少区分排队、运行、成功、失败
 
 成功结果形成不可变 Agent/系统版本；发布需要用户确认，Platform DB 保留当前运行版本与版本历史，升级和回滚复用既有 Agent 生命周期。合并受保护分支和正式生产发布仍需现有相应授权主体明确确认。签名、扫描和 Registry 准入沿用部署政策，不在 BuildServiceAdapter 外新增 Builder 审批流程。当前真实构建、OCI 导出/Digest 及 Registry push 尚待验证；本 Spec 不将某个具体构建器、rootless 实现或探针结果视为已验收事实。
 
+#### 10.12.1 构建批次与可信结果关联
+
+构建和 PR 创建、合并分别执行，均绑定同一固定源码提交。Core 只能根据已有 Connection 的
+可信读取结果固定获权仓库的不可变 ID、归属与完整 source commit；可变分支、模型输出和
+调用方提交的相同字符串不能建立关联。构建定义摘要绑定该提交中的实际构建输入。
+源码变更仍须独立提交 PR；关联 PR 时重新核实仓库 ID 与精确 head commit，后续 head 变化
+不改写原批次。PR 交付状态与失败独立保存，创建失败不取消已获权的构建。
+
+批次是原 Conversation/Execution 下的业务记录，复用原 Task 的受理、当前授权、控制记录、
+审计和 Worker 调度，不新增任务队列或独立 Builder API。受理事务固定发起主体、执行该任务的
+Agent、原 Conversation/Execution、源码证据引用、构建定义摘要、目标 Linux 架构、构建后端
+及版本、部署批准的构建参数和时间/资源/网络上限。同一事务生成批次及产物归属使用的
+不可变目标 Agent/Service ID；目标 ID 不代表 Agent 已创建，也不授予创建权限。
+幂等键沿原主体与任务命名空间串行化；完整输入及归属相同返回原批次，任一绑定变化则拒绝。
+读取原批次和幂等重放也必须复核当前访问资格，不泄露其他主体的记录。
+
+Worker 首次提交前持久保存批次、业务幂等键、确切输入及实际调用意图。后端调用只能使用
+部署已准入的固定构建入口与有界参数；不接受任意 Job、URL、命令或外部凭据。
+直接调用部署批准的 Build Service 时，Worker 只取得该后端获准的服务调用身份，并同时检查
+原任务当前业务权限和后端自身授权；服务身份不能代替用户授权或获得外部账号凭据。
+若构建后端使用 Connection，实际提交、查询、停止和清理由 [§13.1](#131-独立直连与权威边界)的
+Agent 独立客户端路径执行，Worker 只编排原任务并消费绑定原 Execution 的可信结果。
+该客户端的独立 Consumer/Instance/Actor、安装级证明、Grant、WRITE 确认、撤权与 Dispatch
+必须满足 [Connection HLD](HLD-connection-M1.md)；没有合法实际客户端时该绑定不启用。
+按 [§13.2](#132-调用与审计关联)，Platform API/Worker 不代理 Connection 调用或持有其查询
+凭据，不借用 Owner 身份、跨库读取凭据或把 Platform 授权当作 Connection Grant。
+
+后端受理结果须保存可信调用引用与原 queue/build 等后端引用，查询仅沿该绑定有界执行。
+提交超时、响应丢失或重启时无法确认 WRITE 结果，批次记为 `unknown`，只核实原调用，
+不得再次提交构建来代替对账。后端不能提供原调用核实、停止及清理能力时，不能启用该绑定。
+每次实际调用复核当前授权；撤权或任务控制生效后拒绝新增业务操作，停止与清理由原系统控制
+记录和后端获准的控制权限执行，不因用户撤权丢弃原调用或伪造停止成功。
+
+构建状态区分排队、运行、结果未知、停止中、清理中、失败、取消和待确认发布。
+后端成功仍须核实原调用、输入、源码提交、构建定义摘要、目标架构、批次及产物归属。
+镜像路径按本节规定使用服务端不可变 ID；Digest 来自后端产物记录并通过既有 Registry 准入
+读取实际 OCI 内容和目标架构，不能只信任 Tag、日志或模型摘要。全部本批次服务产物准入
+成功且临时工作区清理已确认，才可进入待确认发布；该状态不创建 Agent，也不代表发布成功。
+版本绑定和发布继续执行本节最终资源准入、当前创建/部署授权和用户确认。
+
+状态写入与原调用绑定及 Worker 当前 fence 原子比较，拒绝陈旧 Worker 和不匹配结果。
+重复结果不重复发布状态；停止已受理时，迟到的成功只能登记为待清理产物，不能恢复待发布。
+重启恢复沿原输入、调用、控制记录和 fence，不改绑 source、主体或产物。
+失败或取消的终态要求确认后端不再产生输出，并确认临时工作区、未完成产物和该批次未绑定
+Digest 已清理；未确认时继续显示未知、停止中或清理中，不释放对应占用或创建 Agent。
+后台 GC 以批次和版本绑定核实归属，不能删除已绑定版本或其他批次、用户、Agent 的资源。
+
+同一原任务查询和聊天时间线消费上述持久状态、独立 PR 结果与脱敏失败原因。
+批次、源码证据、PR、后端调用、产物准入及清理记录保留可信关联，审计分别记录原发起人与
+实际执行组件，供既有审计查询消费；普通页面只显示有权读取的摘要，不返回凭据、证明、
+原始日志或内部配置。Trace 和模型输出不承担构建业务权威。
+各部署绑定启用前须证明固定输入的真实提交、查询、Registry 准入、停止、清理和重启恢复，
+并覆盖撤权、跨主体/仓库/源码/Job/产物替换及迟到结果。Fixture/CI 与真实外部验收分别记录；
+单服务批次通过不代替多服务、发布、最终资源准入、失败回退和升级回滚的完整验收。
+
 ### 10.13 OpenCode 原生工具回执与来源
 
 标准 OpenCode 路径使用固定官方 release，版本和 target 字节以
@@ -1098,6 +1166,89 @@ Connection 在实际外部操作开始前持久保存意图，并在执行前重
 Connection 只复用固定且经 allowlist 审核的 OpenConnector Provider/OAuth/executor Kernel，保留来源、许可证、notice 和 digest；上游 Runtime Server、Credential Store 和 Web Console 不进入正式拓扑。首个受监督 GitHub Pilot 的范围以 PRD 为准，不把局部 Pilot 推广为完整 M1。
 
 Connection 的 LDAP、OAuth 客户端、MCP/API、Grant、凭证保护、Provider Action、幂等/对账及 Pilot 验证矩阵由 [Connection M1 HLD](HLD-connection-M1.md) 细化。跨文档整合按第 25 节完成，不能以旧的代调用协议覆盖本节独立直连边界。
+
+### 13.5 Platform 外部 Connection Consumer 配置契约
+
+本节冻结 [#1269](https://github.com/AgoraIO-Extensions/agent-infra/issues/1269) 的部署配置，
+不改变两份 PRD 的独立直连边界。适用的 Connection HLD 条款为
+[§3 系统上下文](HLD-connection-M1.md#3-系统上下文)、
+[§5.2 Consumer 与 Instance](HLD-connection-M1.md#52-consumer-与-instance)、
+[§7 MCP/API 调用流程](HLD-connection-M1.md#7-mcpapi-调用流程)和
+[§11 审计与跨系统关联](HLD-connection-M1.md#11-审计与跨系统关联)。
+
+#### 13.5.1 字段与配置来源
+
+一个部署使用一个完整的 Consumer 配置快照；以下字段全部必填，不能从用户、Agent 或任务输入补齐。
+
+| 字段 | 语义与约束 |
+| --- | --- |
+| `schemaVersion` | 本配置契约的整数版本，当前为 `1`；不是 Connection API、MCP 或客户端产物版本。 |
+| `publicOrigin` | 部署批准并与 Connection 发布配置一致的 HTTPS origin，只含 scheme、host 和可选端口；使用 URL origin 的规范形式，不含凭据、路径、尾斜杠、query 或 fragment。批准范围按完整 origin 精确匹配，不使用域名后缀或通配符。 |
+| `mcpPath` | 相对此 origin 的独立绝对路径，以单个 `/` 开始；不含 scheme、host、query、fragment、反斜杠、`.`/`..` 路径段或编码后的路径分隔符及点段。最终 MCP endpoint 为 `publicOrigin + mcpPath`，不以 URL 解析的相对路径回退或重定向改变目标。 |
+| `consumerId` | Connection 为该产品注册的非空 Consumer 标识，按原值精确匹配；不是 Principal、ConsumerInstance、Actor 或授权证明，不能由 Platform 创建实例身份或代替 Connection 的认证解析。 |
+| `audience` | Connection 为该 Consumer 部署批准的非空目标资源标识，按原值精确匹配；不能从 origin、路径或 Platform Runtime Execution Grant 的 audience 推导。 |
+| `egressProfile` | 非敏感的 `{ ref, revision }`，两项均为非空字符串，引用部署批准的出站策略及不可变修订。该策略限定到达上述 Connection 目标所需的网络路径、DNS 和 TLS 校验；引用名不授予授权，也不允许访问 Connection DB 或 Provider。 |
+
+配置来源按以下顺序确定，不在进程内逐字段叠加：
+
+1. 部署显式选择外部配置引用时，该引用的固定修订是整个快照的唯一来源；无法读取或校验失败
+   时拒绝启用，不能回退到 Helm values。
+2. 未选择外部引用时，使用目标环境的 Helm values 渲染完整非敏感 ConfigMap；ConfigMap 是
+   该 values 的交付形式，不是另一层覆盖源。外部引用与内联快照同时配置时视为冲突并拒绝。
+3. 源码、镜像和前端包不内置环境 endpoint 或兜底值。普通环境变量、请求体、Agent 配置、
+   模型/工具参数和前端常量均不能覆盖快照；环境选择只发生在受控部署配置中。
+
+#### 13.5.2 版本、指纹与失败行为
+
+版本 `1` 只接受上述字段及 `egressProfile` 的两个子字段，拒绝未知字段、缺失值、错误类型和
+不满足约束的值；不静默忽略新字段或自动降级。字段集合、语义或规范化规则变化须发布新
+`schemaVersion`，并在启用前确认部署与消费方均支持。支持配置版本不表示客户端、MCP/API
+或 Connection 服务端兼容；它们仍须通过各自的版本和 readiness 门禁。
+
+配置指纹为以下数组经 `JSON.stringify` 序列化后的 UTF-8 字节的 SHA-256，以小写十六进制
+表示；不添加空白、BOM 或尾换行。先完成字段校验；字符串保持原值，不 trim、改写大小写或隐式解码。
+
+```text
+[schemaVersion, publicOrigin, mcpPath, consumerId, audience, egressProfile.ref, egressProfile.revision]
+```
+
+指纹覆盖有效非敏感配置及出站策略修订，不包含 SecretRef、token、私钥或其 hash；
+它用于配置一致性核对，不是签名、安装身份或 Connection 授权。源引用及修订与指纹一并记录，
+相同内容从不同批准来源交付可具有相同指纹；出站策略内容变化必须产生新修订和新指纹。
+
+部署以完整快照校验并发布，消费方在启用 Connection 能力前核对预期版本和指纹。
+缺失批准来源、origin 未获准、路径非法、Consumer/audience 与批准登记不符、出站策略
+不可解析或未落实、版本不支持、指纹不符时，受影响的 Connection 能力保持不可用，不发出调用。
+更新不允许混用新旧字段；现有客户端不能原地切换 origin、Consumer 或 audience 并复用旧安装
+凭据。恢复须重新核对完整配置和原安装绑定，不回退到旧快照、其他环境、匿名、Owner 或平台
+服务身份；已发生但结果未知的外部操作仍沿原调用核实，不向新 endpoint 重放。
+
+#### 13.5.3 SecretRef、权威与交付边界
+
+非敏感快照使用 Helm values/ConfigMap 或上述受控外部配置。必要的安装凭据仅由已批准的
+SecretRef 和受保护客户端边界提供；SecretRef 只定位安装隔离的受控凭据，不构成授权，
+不得来自请求或 Agent 输入。引用必须解析到与原 Principal、ConsumerInstance、Actor（如适用）、
+audience 和凭据修订一致的安装；缺失、失效或绑定不符时拒绝，不能跨安装共享。
+具体签发、持有证明、撤销和刷新遵循 Connection HLD §5.2；Codex 的交付与隔离遵循
+[Runtime HLD §9.1](HLD-agent-runtime-M1.md#91-codex-独立-connection-consumer-profile)，
+不能把 SecretRef 解释为普通 env、argv 或工具进程可读的 token 注入许可。
+
+Platform 在 Connection 相关数据中只保存 Consumer 非敏感配置和 §13.2 的受信关联引用；
+不代理 MCP、不读取 Connection DB、不保存 Provider Credential 或 Grant，不复制 Connection
+授权与审计权威。Platform API/Worker 不取得客户端凭据来代调用或查询 Connection。
+客户端凭据和原始秘密不得进入 Platform DB、ConfigMap、普通配置、日志/错误、模型上下文、
+前端 bundle、Issue 或 PR 文本；SecretRef 的解析仅发生在已批准的安装凭据/客户端边界。
+
+本节不实现 API/Worker/Web 接线（分别由
+[#1270](https://github.com/AgoraIO-Extensions/agent-infra/issues/1270)、
+[#1271](https://github.com/AgoraIO-Extensions/agent-infra/issues/1271)、
+[#1272](https://github.com/AgoraIO-Extensions/agent-infra/issues/1272)承接）。
+[#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851)负责真实客户端的安装证明和
+受保护交付；[#395](https://github.com/AgoraIO-Extensions/agent-infra/issues/395)负责独立
+Connection runtime/readiness；[#435](https://github.com/AgoraIO-Extensions/agent-infra/issues/435)
+是双系统联合验收的职责入口。配置契约或静态校验通过不代表这些验收完成，也不接管
+[#907](https://github.com/AgoraIO-Extensions/agent-infra/issues/907)、
+[#601](https://github.com/AgoraIO-Extensions/agent-infra/issues/601)或 Connection 服务端实现。
 
 ## 14. 使用渠道
 

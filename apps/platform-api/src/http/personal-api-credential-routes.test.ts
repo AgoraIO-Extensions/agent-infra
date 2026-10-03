@@ -40,6 +40,8 @@ function setup() {
 				metadata: { ...metadata, revokedAt: "2030-01-01T01:00:00.000Z" },
 				replayed: false,
 			})),
+			list: vi.fn(async () => ({ items: [metadata], nextCursor: null })),
+			narrow: vi.fn(async () => ({ metadata, replayed: false })),
 			recordRefusal: vi.fn(async () => {}),
 		},
 	};
@@ -64,6 +66,132 @@ function issue(
 }
 
 describe("personal credential HTTP protocol", () => {
+	it("uses browser current identity for PATCH and returns no-store metadata", async () => {
+		const { app, credentials } = setup();
+		const patch = await app.request(
+			`/api/v2/me/api-credentials/${metadata.credentialId}`,
+			{
+				method: "PATCH",
+				headers: {
+					"Content-Type": "application/json",
+					"Idempotency-Key": "patch.1",
+					Cookie: "browser_fixture",
+				},
+				body: JSON.stringify({ scopes: ["agent:read"] }),
+			},
+		);
+		expect(patch.status).toBe(200);
+		expect(patch.headers.get("Cache-Control")).toBe("no-store");
+		expect(JSON.stringify(await patch.json())).not.toContain(material);
+		expect(credentials.narrow).toHaveBeenCalledWith(
+			expect.objectContaining({
+				userId: identity.userId,
+				idempotencyKey: "patch.1",
+			}),
+			metadata.credentialId,
+			{ scopes: ["agent:read"] },
+		);
+	});
+	it.each([
+		{},
+		{ scopes: [] },
+		{ expiresAt: null },
+		{ scopes: ["agent:read"], userId: "other" },
+	])("rejects malformed PATCH before Store", async (body) => {
+		const { app, credentials } = setup();
+		expect(
+			(
+				await app.request(
+					`/api/v2/me/api-credentials/${metadata.credentialId}`,
+					{
+						method: "PATCH",
+						headers: {
+							"Content-Type": "application/json",
+							"Idempotency-Key": "patch.1",
+						},
+						body: JSON.stringify(body),
+					},
+				)
+			).status,
+		).toBe(400);
+		expect(credentials.narrow).not.toHaveBeenCalled();
+	});
+
+	it.each([`Bearer ${material}`, "Basic fixture", ""])(
+		"rejects PATCH Authorization even with Cookie before identity/Store",
+		async (authorization) => {
+			const { app, credentials, identity: adapter } = setup();
+			const response = await app.request(
+				`/api/v2/me/api-credentials/${metadata.credentialId}`,
+				{
+					method: "PATCH",
+					headers: {
+						Cookie: "browser_fixture",
+						Authorization: authorization,
+						"Content-Type": "application/json",
+						"Idempotency-Key": "patch.authorization",
+					},
+					body: JSON.stringify({ scopes: ["agent:read"] }),
+				},
+			);
+			expect(response.status).toBe(401);
+			expect(adapter.resolve).not.toHaveBeenCalled();
+			expect(credentials.narrow).not.toHaveBeenCalled();
+			expect(credentials.recordRefusal).toHaveBeenCalledWith(
+				expect.anything(),
+				"api.credential.narrowed",
+				"authentication_required",
+				undefined,
+			);
+		},
+	);
+
+	it("uses browser current identity for GET and returns no-store metadata", async () => {
+		const { app, credentials } = setup();
+		const list = await app.request("/api/v2/me/api-credentials?limit=2", {
+			headers: { Cookie: "browser_fixture" },
+		});
+		expect(list.status).toBe(200);
+		expect(list.headers.get("Cache-Control")).toBe("no-store");
+		expect(await list.json()).toEqual({ items: [metadata], nextCursor: null });
+		expect(credentials.list).toHaveBeenCalledWith(
+			expect.objectContaining({ userId: identity.userId }),
+			{ limit: 2 },
+		);
+	});
+	it.each([
+		"limit=0",
+		"limit=101",
+		"limit=1&limit=2",
+		"userId=other",
+		"recipient=other",
+		"cursor=+bad",
+	])("rejects invalid list query %s before Store", async (query) => {
+		const { app, credentials } = setup();
+		expect(
+			(await app.request(`/api/v2/me/api-credentials?${query}`)).status,
+		).toBe(400);
+		expect(credentials.list).not.toHaveBeenCalled();
+	});
+	it.each([`Bearer ${material}`, "Basic fixture", ""])(
+		"rejects GET Authorization even with Cookie before identity/Store",
+		async (authorization) => {
+			const { app, credentials, identity } = setup();
+			const response = await app.request("/api/v2/me/api-credentials", {
+				headers: { Cookie: "browser_fixture", Authorization: authorization },
+			});
+			expect(response.status).toBe(401);
+			expect(identity.resolve).not.toHaveBeenCalled();
+			expect(credentials.list).not.toHaveBeenCalled();
+			expect(credentials.recordRefusal).toHaveBeenCalledWith(
+				expect.anything(),
+				"api.credential.metadata.read",
+				"authentication_required",
+				undefined,
+			);
+		},
+	);
+
 	it("keeps the generated expiry request field string or null", () => {
 		expectTypeOf<
 			PersonalApiCredentialIssueRequestV1["expiresAt"]

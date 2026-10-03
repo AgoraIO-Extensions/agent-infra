@@ -75,6 +75,32 @@ test("accepts a complete current-head PR-Agent review", () => {
   );
 });
 
+test("incremental coverage needs both a verified baseline/range and an actual complete analysis", () => {
+  const input = { provider: "pr-agent", expectedHead: head, runResult: "success",
+    analysisJobConclusion: "success", analysisLog: completeLog, publicationVerified: true,
+    scope: { mode: "incremental", diffBytes: 100 }, receipt: { reviewId: 7 } };
+  assert.equal(evaluateReviewCoverage(input).conclusion, "failure");
+  const valid = evaluateReviewCoverage({ ...input, scopeVerified: true });
+  assert.equal(valid.reasonCode, "complete-incremental");
+  assert.match(buildCoverageCheckOutput(valid).summary, /^review_scope: /m);
+  for (const change of [{ publicationVerified: false }, { analysisLog: prunedLog }, { runResult: "cancelled" }]) {
+    const failed = evaluateReviewCoverage({ ...input, scopeVerified: true, ...change });
+    assert.equal(failed.conclusion, "failure");
+    assert.doesNotMatch(buildCoverageCheckOutput(failed).summary, /^review_scope: /m);
+  }
+});
+
+test("no-model coverage is allowed only for a verified empty delta with a verified receipt", () => {
+  const input = { provider: "pr-agent", expectedHead: head, runResult: "success",
+    analysisJobConclusion: "success", analysisLog: "trusted scope preparation completed",
+    publicationVerified: true, scopeVerified: true, scope: { mode: "unchanged", diffBytes: 0 }, receipt: { reviewId: 7 } };
+  assert.equal(evaluateReviewCoverage(input).reasonCode, "complete-unchanged");
+  for (const change of [{ publicationVerified: false }, { scopeVerified: false }, { analysisLog: completeLog },
+    { scope: { mode: "unchanged", diffBytes: 1 } }]) {
+    assert.equal(evaluateReviewCoverage({ ...input, ...change }).conclusion, "failure");
+  }
+});
+
 const ticketOmissionMessage = "Clipped related tickets to preserve the prompt token budget";
 const nativeTicketOmission = {
   message: ticketOmissionMessage,
@@ -316,7 +342,7 @@ test("publishes the required Gate through a current-head dedicated App path", as
       requests.push(path);
       if (path === "/repos/example/repo/pulls/42") {
         targetReads += 1;
-        return { state: "open", head: { sha: head } };
+        return { state: "open", head: { sha: head, repo: { full_name: "example/repo" } } };
       }
       return { check_runs: [] };
     },
@@ -426,6 +452,13 @@ test("collects the native log for the exact attempt and verifies actual publicat
   assert.equal(evidence.publicationVerified, true);
   assert.deepEqual(evidence.collectionFailures, []);
   assert.equal(collectedCoverage(evidence).reasonCode, "complete");
+});
+
+test("the scoped workflow rejects a legacy receipt without range evidence", async () => {
+  const evidence = await collectPrAgentEvidence({ ...collectionFixture().input, requireScope: true });
+  assert.deepEqual(evidence.collectionFailures.map(({ stage, failure }) => [stage, failure]),
+    [["publication-receipt-parse", "invalid-receipt"]]);
+  assert.equal(collectedCoverage(evidence).conclusion, "failure");
 });
 
 test("distinguishes API failures from missing or mismatched Analysis jobs", async () => {

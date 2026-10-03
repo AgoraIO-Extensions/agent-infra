@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseRuntimeStatusResponse } from "./conversation-dispatch-runtime.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 import { FakeConversationRuntimeHostV1 } from "./fake-conversation-runtime-host.js";
@@ -1591,6 +1591,158 @@ describe("Conversation Worker dispatch", () => {
 		});
 		expect(raw.events.persisted).toHaveLength(0);
 	});
+
+	describe.each([false, true])(
+		"Platform reserved events with original recovery=%s",
+		(recoveringOriginal) => {
+			describe.each([1, 2])("Runtime event schema %s", (schemaVersion) => {
+				it.each([
+					{
+						label: "waiting task",
+						type: "task.status",
+						payload: { status: "waiting" },
+					},
+					{
+						label: "completed task",
+						type: "task.status",
+						payload: { status: "completed" },
+					},
+					{
+						label: "unconfirmed stop",
+						type: "task.status",
+						payload: {
+							status: "unknown",
+							reason: "STOP_CONFIRMATION_TIMEOUT",
+						},
+					},
+					{
+						label: "model selection fallback",
+						type: "model.selection.fell_back",
+						payload: {
+							modelOptionId: "model-option-2",
+							reasoningLevel: "low",
+							reason: "selection_unavailable",
+						},
+					},
+				])(
+					"rejects Runtime-forged $label before commit and ACK",
+					async (forged) => {
+						const hostSessionRef = "host-session-conversation-1";
+						const store = new MemoryDispatchStore(
+							claim(
+								recoveringOriginal
+									? {
+											executionStatus: "unknown",
+											stopPending: true,
+											hostSessionRef,
+											runtimeCursor: "cursor-1",
+										}
+									: {},
+							),
+						);
+						const retry = vi.spyOn(store, "retry");
+						const inner = new FakeConversationRuntimeHostV1();
+						const acknowledged: string[] = [];
+						const eventCursors: Array<string | undefined> = [];
+						let dispatchCalls = 0;
+						let recoveryCalls = 0;
+						let forgedDeliveries = 0;
+						let trailingReads = 0;
+						const runtimeHost: ConversationRuntimeHostPortV1 = {
+							async dispatch(request) {
+								dispatchCalls++;
+								if (recoveringOriginal) throw new Error("Unexpected resubmit");
+								return inner.dispatch(request);
+							},
+							async recoverStatus() {
+								throw new Error("Unexpected legacy recovery");
+							},
+							async recoverOriginalStatus(request) {
+								recoveryCalls++;
+								expect(request).toMatchObject({
+									hostSessionRef,
+									executionId: "execution-1",
+									turnId: "turn-1",
+									sessionGeneration: 1,
+									deliveryFence: store.current.executionDeliveryFence,
+								});
+								return {
+									schemaVersion: 2,
+									hostSessionRef,
+									executionId: request.executionId,
+									outcome: "found",
+									status: "running",
+								};
+							},
+							async *events(request) {
+								eventCursors.push(request.afterCursor);
+								if (!recoveringOriginal) yield runtimeEvent(1, "running");
+								forgedDeliveries++;
+								yield {
+									...runtimeEvent(2),
+									schemaVersion,
+									type: forged.type,
+									payload: forged.payload,
+								} as never;
+								trailingReads++;
+								yield runtimeEvent(3);
+							},
+							async acknowledge(request) {
+								acknowledged.push(request.confirmedCursor);
+							},
+						};
+						const h = setup({ store, runtimeHost });
+						const deliveries = recoveringOriginal ? 2 : 1;
+						for (let delivery = 0; delivery < deliveries; delivery++) {
+							await expect(dispatch(h.useCase)).resolves.toMatchObject({
+								outcome: "retry",
+								retryScheduled: true,
+							});
+							expect(store.current).toMatchObject({
+								executionId: "execution-1",
+								turnId: "turn-1",
+								sessionGeneration: 1,
+								hostSessionRef,
+								runtimeCursor: "cursor-1",
+								executionStatus: "unknown",
+								stopPending: recoveringOriginal,
+							});
+							expect(store.current.runtimeTerminalEventSeen).toBeUndefined();
+							expect(store.outboxStatus).toBe("retry_scheduled");
+							expect(retry).toHaveBeenLastCalledWith(
+								expect.objectContaining({
+									transition: {
+										executionStatus: "unknown",
+										conversationStatus: "active",
+									},
+								}),
+							);
+						}
+						expect(
+							h.events.persisted.map((event) => event.runtimeCursor),
+						).toEqual(recoveringOriginal ? [] : ["cursor-1"]);
+						expect(acknowledged).toEqual(Array(deliveries).fill("cursor-1"));
+						expect(eventCursors).toEqual(
+							Array(deliveries).fill(
+								recoveringOriginal ? "cursor-1" : undefined,
+							),
+						);
+						expect({
+							dispatchCalls,
+							recoveryCalls,
+							forgedDeliveries,
+							trailingReads,
+						}).toEqual({
+							dispatchCalls: recoveringOriginal ? 0 : 1,
+							recoveryCalls: recoveringOriginal ? 2 : 0,
+							forgedDeliveries: deliveries,
+							trailingReads: 0,
+						});
+					},
+				);
+			});
+		},
+	);
 
 	it("isolates a failed Runtime Session from another Conversation", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
