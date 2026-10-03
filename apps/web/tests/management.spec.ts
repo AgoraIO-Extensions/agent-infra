@@ -341,7 +341,15 @@ async function fixture(
 					...application,
 					name: draft.name,
 					description: draft.description,
-					source: draft.source,
+					// templateRevision is a request-only optimistic concurrency field;
+					// V2 application projections retain the V1 source shape.
+					source:
+						draft.source.kind === "standard"
+							? {
+									kind: "standard",
+									templateId: draft.source.templateId,
+								}
+							: draft.source,
 					status: "pending_approval",
 					decision: null,
 				};
