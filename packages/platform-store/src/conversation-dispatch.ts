@@ -690,6 +690,12 @@ export class PostgresConversationDispatchStoreV1
 				stop,
 				payload,
 			);
+			await recordTaskStatus(
+				transaction,
+				state,
+				"cancelled",
+				input.claim.leaseOwner,
+			);
 		});
 	}
 

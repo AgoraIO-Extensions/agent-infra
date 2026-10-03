@@ -25,6 +25,7 @@ import {
 import {
 	finishWaitingTask,
 	lockWaitingApplicationAuthority,
+	recordTaskStatus,
 	revalidateWaitingApplication,
 	waitingDecision,
 } from "./conversation-dispatch-task.js";
@@ -200,6 +201,12 @@ export async function claimWork(
 			execution,
 			stop,
 			payload,
+		);
+		await recordTaskStatus(
+			transaction,
+			{ outbox, conversation, execution },
+			"cancelled",
+			input.workerId,
 		);
 		return { outcome: "succeeded" };
 	}
