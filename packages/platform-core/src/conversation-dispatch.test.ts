@@ -575,6 +575,24 @@ describe("Conversation Worker dispatch", () => {
 		expect(() =>
 			parseRuntimeStatusResponse(binding, claim({ hostSessionRef: "other" })),
 		).toThrow();
+		expect(() =>
+			parseRuntimeStatusResponse(
+				binding,
+				claim({ hostSessionRef: "durable-original" }),
+			),
+		).toThrow();
+		expect(() =>
+			parseRuntimeStatusResponse(
+				{
+					schemaVersion: 2,
+					outcome: "recovery_failed",
+					hostSessionRef: "durable-original",
+					executionId: original.executionId,
+					code: "RUNTIME_SESSION_RECOVERY_FAILED",
+				},
+				original,
+			),
+		).toThrow();
 	});
 
 	it("keeps a missing-ref unknown stop pending when the Host has no reliable binding", async () => {
