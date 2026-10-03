@@ -28,7 +28,7 @@ function fixture() {
       const diff = source[from] === source[to] ? "" : patch(source[from], source[to]);
       return options.responseType === "text" ? diff : {
         status: from === to ? "identical" : "ahead", merge_base_commit: { sha: from },
-        files: diff ? [{ filename: "src/math.ts", additions: 1, deletions: 1 }] : [],
+        files: diff ? [{ filename: "src/math.ts", status: "modified", additions: 1, deletions: 1 }] : [],
       };
     }
     if (path.includes("/files?")) return [{ filename: "src/math.ts", patch: patch(source[base], source[state.head]) }];
@@ -140,7 +140,7 @@ test("changed base, merge base or rewritten history resets to a complete PR revi
     const request = async (path, options) => {
       if (path.endsWith(`/compare/${newBase}...${second}`)) return options?.responseType === "text"
         ? patch("new base", source[second])
-        : { status: "ahead", merge_base_commit: { sha: newBase }, files: [{ filename: "src/math.ts", additions: 1, deletions: 1 }] };
+        : { status: "ahead", merge_base_commit: { sha: newBase }, files: [{ filename: "src/math.ts", status: "modified", additions: 1, deletions: 1 }] };
       const response = await f.context().request(path, options);
       if (change === "base" && path.endsWith("/pulls/42")) response.base.ref = "release";
       if (change === "merge-base" && path.endsWith(`/compare/${base}...${second}`) && !options?.responseType)
@@ -185,10 +185,56 @@ test("no-change commits inherit only a certified baseline and publish an explici
 
 test("truncated, mismatched or binary raw diffs cannot be accepted as complete input", () => {
   const diff = patch("before", "after");
-  assert.equal(validateDiffInput(diff, [{ filename: "src/math.ts", additions: 1, deletions: 1 }]).diffBytes, Buffer.byteLength(diff));
+  assert.equal(validateDiffInput(diff, [{ filename: "src/math.ts", status: "modified", additions: 1, deletions: 1 }]).diffBytes, Buffer.byteLength(diff));
   assert.throws(() => validateDiffInput(diff, []), /does not match/);
-  assert.throws(() => validateDiffInput(diff, [{ filename: "src/math.ts", additions: 2, deletions: 1 }]), /does not match/);
-  assert.throws(() => validateDiffInput(diff.slice(0, -12), [{ filename: "src/math.ts", additions: 1, deletions: 1 }]), /cannot be parsed/);
+  assert.equal(validateDiffInput(diff, [{ filename: "src/math.ts", status: "modified", additions: 0, deletions: 0 }]).diffBytes, Buffer.byteLength(diff));
+  assert.throws(() => validateDiffInput(diff.slice(0, -12), [{ filename: "src/math.ts", status: "modified", additions: 1, deletions: 1 }]), /cannot be parsed/);
   const binary = "diff --git a/image.png b/image.png\nindex 1111111..2222222 100644\nBinary files a/image.png and b/image.png differ\n";
-  assert.throws(() => validateDiffInput(binary, [{ filename: "image.png", additions: 0, deletions: 0 }]), /unsupported binary/);
+  assert.throws(() => validateDiffInput(binary, [{ filename: "image.png", status: "modified", additions: 0, deletions: 0 }]), /unsupported binary/);
+});
+
+test("API patch omission and unusable statistics do not override immutable hunk counts", () => {
+  for (const statistics of [{ additions: 0, deletions: 0 }, { additions: 999, deletions: 999 }, {}]) {
+    assert.equal(validateDiffInput(patch("before", "after"), [
+      { filename: "src/math.ts", status: "modified", ...statistics },
+    ]).diffBytes, Buffer.byteLength(patch("before", "after")));
+  }
+});
+
+test("missing, duplicate, unknown and inconsistent identities or statuses fail closed", () => {
+  const diff = patch("before", "after");
+  const file = { filename: "src/math.ts", status: "modified" };
+  for (const files of [[file, file], [{ ...file, filename: "wrong.ts" }], [{ ...file, status: "added" }],
+    [{ ...file, status: "removed" }], [{ ...file, status: "renamed" }], [{ ...file, status: "copied" }],
+    [{ ...file, previous_filename: "old.ts" }], [null], [{}]]) {
+    assert.throws(() => validateDiffInput(diff, files));
+  }
+  assert.throws(() => validateDiffInput(diff + diff, [file, { filename: "other.ts", status: "modified" }]));
+  assert.throws(() => validateDiffInput(diff.replace("--- a/src/math.ts", "--- a/other.ts"), [file]));
+  assert.throws(() => validateDiffInput(diff.replace("@@ -1 +1 @@", "@@ -1,2 +1,2 @@"), [file]));
+});
+
+test("additions, deletions, mode-only changes and renames retain their API boundaries", () => {
+  const added = "diff --git a/new.ts b/new.ts\nnew file mode 100644\nindex 0000000..2222222\n--- /dev/null\n+++ b/new.ts\n@@ -0,0 +1 @@\n+new\n";
+  const removed = "diff --git a/old.ts b/old.ts\ndeleted file mode 100644\nindex 1111111..0000000\n--- a/old.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n";
+  const mode = "diff --git a/script b/script\nold mode 100644\nnew mode 100755\n";
+  const rename = "diff --git a/old.ts b/new.ts\nsimilarity index 100%\nrename from old.ts\nrename to new.ts\n";
+  for (const [diff, file] of [[added, { filename: "new.ts", status: "added" }],
+    [removed, { filename: "old.ts", status: "removed" }],
+    [mode, { filename: "script", status: "modified" }],
+    [rename, { filename: "new.ts", previous_filename: "old.ts", status: "renamed" }],
+    [rename.replace("100%", "50%") + "index 1111111..2222222 100644\n--- a/old.ts\n+++ b/new.ts\n@@ -1 +1 @@\n-old\n+new\n",
+      { filename: "new.ts", previous_filename: "old.ts", status: "renamed" }]]) {
+    assert.equal(validateDiffInput(diff, [file]).diffBytes, Buffer.byteLength(diff));
+    assert.throws(() => validateDiffInput(diff, [{ ...file, status: "unknown" }]));
+  }
+  assert.throws(() => validateDiffInput(rename, [{ filename: "new.ts", previous_filename: "wrong.ts", status: "renamed" }]));
+});
+
+test("quoted paths, whitespace and non-ASCII paths use Git file identity", () => {
+  for (const [filename, encoded] of [["space name.ts", "space name.ts"], ["中文.ts", '"\\344\\270\\255\\346\\226\\207.ts"'], ["tab\tname.ts", '"tab\\tname.ts"']]) {
+    const prefixed = (prefix) => encoded.startsWith('"') ? `"${prefix}/${encoded.slice(1)}` : `${prefix}/${encoded}`;
+    const diff = patch("before", "after").replaceAll("a/src/math.ts", prefixed("a")).replaceAll("b/src/math.ts", prefixed("b"));
+    assert.equal(validateDiffInput(diff, [{ filename, status: "modified" }]).diffBytes, Buffer.byteLength(diff));
+  }
 });

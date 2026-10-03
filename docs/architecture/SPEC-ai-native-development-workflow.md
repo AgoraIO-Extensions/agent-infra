@@ -377,6 +377,9 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
 - 首次评审覆盖完整 PR 差异；后续提交只评审最后一次成功覆盖的提交至当前 head 的净差异，
   保留 diff 中理解变更所需的上下文。同一 head 与同一需求已完成评审时跳过重复事件。
   可选 Suggestions 不在 `synchronize` 上运行，避免重复全量建议。
+  范围输入以固定 from/head 的原始 diff 为准，用 Git numstat 校验实际 hunk 行数；compare API
+  文件列表只用于文件身份、状态和重命名边界，不以可能因 patch 省略而归零的统计判定完整性。
+  文件缺失、重复、身份或状态不一致、无法解析及 binary 输入均失败关闭；既有大小与文件上限不变。
 - 增量起点必须来自同一 PR 的 dedicated App 成功 Coverage Check，并回读其绑定的原生 Review、
   comments 和 receipt。只有成功发布且覆盖验证通过的运行能推进起点；失败、取消或仅有评论的
   运行不推进。原未解决 threads 继续由 required conversation resolution 管理。
