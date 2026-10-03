@@ -4,6 +4,35 @@
 
 已批准直接在隔离的 GZ3 production namespace 实现。LA3 Provider Egress 因当前 HCI 不提供可用的 workload mTLS 入口而延期；接入广泛生产流量前仍受 Issue #601 的国内 PostgreSQL、代理稳定性证据和 Security/SRE 评审约束。
 
+Issue [#1276](https://github.com/AgoraIO-Extensions/agent-infra/issues/1276) 的上海分阶段迁移方案
+已由迁移 Owner 确认，替代下述 GZ3 目标地域；确认仅授权架构与离线配置准备，不表示已切换、
+已通过 Security/SRE 门禁或已授权生产操作。切换前 GZ3 仍是现网唯一控制面。
+
+## 上海分阶段迁移
+
+目标控制面为上海 `hcicore-acs-sh-prod01` 的 `agent-connector` namespace，公开 origin 为
+`https://agent-connector.agoralab.co`。先迁 API/Web，暂用现有美国 PostgreSQL；待上海数据库
+的数据连续性、备份恢复和切换方案通过验收后再迁数据库。过渡期间数据库仍是唯一权威，
+不双写；不得把该过渡安排视为跨境数据或广泛生产合规批准。
+
+切换时先冻结入口并处理在途 Call/Effect，关闭 GZ3 全部 API 和后台写入角色，再启动上海单主。
+回退时先关闭上海写入，再恢复 GZ3；同库阶段不恢复旧备份或覆盖已提交的数据。身份 realm、
+身份与凭证加密密钥、业务 IDs 和授权数据保持不变。DNS/TLS、新 issuer/resource、Provider OAuth
+回调及客户端重新登录须验收；namespace 不替代 RBAC、资源配额、出口隔离或 Secret 分发门禁。
+
+上海 GitHub 先使用直连，保留配置切换代理的能力：
+
+- 不配置 `GITHUB_EGRESS_PROXY_URL` 时使用直连；配置有效代理地址时使用代理。
+- 修改配置后重启 API 生效，不是热切换；新出口先验证连通性、TLS、真实 OAuth 和适用的
+  Provider 验收，不自动沿用 GZ3 pilot 的出口风险接受。
+- `GITHUB_READ_FALLBACK_PROXY_URL` 只能随主代理配置，用于既有只读回退契约，
+  不表示 WRITE 或 OAuth code 可以自动跨路径重试。
+- 无论直连或代理，已提交而响应未知的 WRITE 仍进入 `UNCERTAIN`；消费状态未知的 OAuth
+  code 不换路径重放。出口与凭据保护、审计及恢复门禁不变。
+
+生产切换、Secret 传输、正式镜像发布和外部配置修改按独立执行授权办理。GZ3 专用发布脚本
+继续只面向 GZ3，不直接作为上海部署入口；切换前需审查上海资源管理方式和回退路径。
+
 ## 决策
 
 Connection 的唯一 control plane、PostgreSQL authority、Identity、Credential、Grant、Call/Effect 和审计部署在 GZ3。国内 Provider 从 GZ3 直连；GitHub 服务端请求默认通过 `103.101.125.158:28062` 代理，GZ3 pilot 的首次 OAuth code exchange 适用下述直连回退，浏览器 authorize 页面仍由用户浏览器直接访问。该代理只用于 GitHub，不用于 GZ3 可直连的 Bitbucket、Jira、Confluence 或 Jenkins。GitHub WRITE 在请求提交后响应未知时仍进入 `UNCERTAIN`，禁止盲重试。拒绝 LA3/GZ3 双活数据库和通用多区域调度平台。

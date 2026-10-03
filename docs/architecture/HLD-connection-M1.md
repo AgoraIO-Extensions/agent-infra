@@ -516,17 +516,24 @@ flowchart TB
     Proxy --> Provider["External Provider"]
 ```
 
-M1 只有一个权威 Connection 业务部署单元 `connection-api`，单主位于 GZ3。MCP、HTTP、OAuth
+M1 只有一个权威 Connection 业务部署单元 `connection-api`；上海迁移切换前单主位于 GZ3，
+切换后位于上海。MCP、HTTP、OAuth
 callback、后台 lease/outbox/reconciliation 可以在同一镜像中以不同进程角色运行；不增加独立
-业务 Worker 服务。国内 Provider 从 GZ3 直连；GitHub 服务端请求默认使用 GZ3 固定代理，首次 OAuth
+业务 Worker 服务。国内 Provider 从当前单主地域直连；GZ3 GitHub 服务端请求默认使用固定代理，首次 OAuth
 code exchange 在 GZ3 pilot 可按 ADR 的受控条件直连回退。LA3 `connection-provider-egress` 因 HCI 暂无合规 workload mTLS 入口而延期，不属于当前生产
 拓扑。完整区域决策见
 [Connection GZ3 控制面与 GitHub 代理出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
 该 ADR 的[GitHub OAuth 出口回退决策](../adr/ADR-connection-regional-control-plane-and-github-egress.md#gz3-pilotgithub-oauth-出口回退)仅适用于 GZ3 pilot；此次发布不以独立 NetworkPolicy 签收为前置，广泛生产门禁保持不变。
 
-GitHub WRITE 通过固定代理提交后，response lost 仍进入 `UNCERTAIN`，不能切换路径盲重试。
+上海分阶段迁移的目标 namespace、公开 origin、暂留美国数据库及 GitHub 直连/代理配置切换，
+以该 ADR 的[上海迁移决策](../adr/ADR-connection-regional-control-plane-and-github-egress.md#上海分阶段迁移)
+为准。架构确认不代表生产切换或安全验收；关闭旧地域所有写入角色后才能启动新单主，
+不自动继承 GZ3 pilot 的出口例外。
+
+GitHub WRITE 经直连或代理提交后，response lost 仍进入 `UNCERTAIN`，不能切换路径盲重试。
 GitHub OAuth code exchange 失败且消费状态未知时重新发起登录，不重放 code。Connection DB 最终
-必须位于国内并由 GZ3 单主写入，禁止保留 LA3 可写副本或跨区域授权双写。未来重新启用 LA3
+必须位于国内并由当前唯一控制面写入；上海服务迁移阶段暂留原美国库，数据库另行验收迁移。
+禁止保留其他地域可写控制面或跨区域授权双写。未来重新启用 LA3
 Provider Egress 前，必须先满足 ADR 中的 workload mTLS 与 crash-window 门禁。
 
 本地开发可以在同一机器运行 API 和 PostgreSQL，但 LDAP、KMS 与 Provider

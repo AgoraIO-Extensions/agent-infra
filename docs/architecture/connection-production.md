@@ -1,5 +1,10 @@
 # Connection 生产部署
 
+Issue [#1276](https://github.com/AgoraIO-Extensions/agent-infra/issues/1276) 已确认上海分阶段迁移的
+架构方案，详见[区域 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md#上海分阶段迁移)。
+该方案尚不表示上海已经部署；本文 GZ3 命令和旧 origin 仍描述现网，不可直接用于上海。
+正式切换须另行验收镜像、Secret、入口、OAuth 回调和单主停写步骤。
+
 `connection-api` 是唯一 Connection control plane，`connection-web` 是独立的无状态中文 React
 入口。PostgreSQL 是唯一权威存储；OpenConnector
 Runtime、SQLite、global alias 和 Runtime token 不进入部署拓扑。[#301](https://github.com/AgoraIO-Extensions/agent-infra/issues/301)
