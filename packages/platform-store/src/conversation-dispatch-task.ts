@@ -176,7 +176,6 @@ export async function recordTaskStatus(
 	status: ConversationDispatchExecutionStatusV1,
 	workerId: string,
 	reason?: string,
-	isTaskStatus = false,
 ) {
 	const [authorization] = await transaction<{ boundary: unknown }[]>`
 		select boundary from platform.task_authorization_records where execution_id = ${state.execution.execution_id}
@@ -196,7 +195,6 @@ export async function recordTaskStatus(
 		throw new StaleDispatchLease();
 	const event = publicTaskStatusEventV1({
 		isTask:
-			isTaskStatus ||
 			state.execution.task_wait_order !== null ||
 			(boundary !== undefined &&
 				isTaskApiChannelV1(state.execution.channel_id, boundary.principal)),
@@ -307,6 +305,6 @@ export async function finishWaitingTask(
 		returning message_id
 	`;
 	if (messages.length !== 1) throw new StaleDispatchLease();
-	await recordTaskStatus(transaction, state, status, workerId, reason, true);
+	await recordTaskStatus(transaction, state, status, workerId, reason);
 	state.execution.status = status;
 }

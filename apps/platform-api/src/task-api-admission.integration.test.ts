@@ -97,7 +97,7 @@ async function snapshot(task: Accepted) {
 		select row_to_json(e) as execution, row_to_json(c) as conversation,
 			row_to_json(m) as message, row_to_json(o) as outbox,
 			(select boundary from platform.task_authorization_records where execution_id=e.execution_id) as authority,
-			(select count(*)::int from platform.audit_events where target_id=e.execution_id and action='task.status.changed') as statusAudits,
+			(select count(*)::int from platform.audit_events where target_id=e.execution_id and action='task.status.changed') as "statusAudits",
 			(select count(*)::int from platform.conversation_events where execution_id=e.execution_id) as events,
 			(select count(*)::int from platform.conversation_stops where execution_id=e.execution_id) as stops,
 			(select count(*)::int from platform.idempotency_records where command_type='stop' and scope_id=c.id) as cancellations,
