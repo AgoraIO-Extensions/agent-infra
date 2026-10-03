@@ -17,7 +17,7 @@
 		"@agent-infra/enterprise-directory": "workspace:*",
 		"@agent-infra/enterprise-directory-store": "workspace:*",
 		"@hono/node-server": "^2.0.12",
-		"hono": "^4.12.32"
+		"hono": "4.13.7"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",

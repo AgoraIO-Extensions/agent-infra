@@ -37,7 +37,7 @@
 		"@opentelemetry/sdk-metrics": "2.11.0",
 		"@opentelemetry/sdk-trace-base": "2.11.0",
 		"pino": "10.3.1",
-		"hono": "^4.12.32"
+		"hono": "4.13.7"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
