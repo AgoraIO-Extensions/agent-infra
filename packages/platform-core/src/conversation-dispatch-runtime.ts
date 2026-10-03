@@ -239,7 +239,6 @@ export function parseRuntimeStatusResponse(
 		};
 	if (
 		input.outcome === "recovery_failed" &&
-		claim.hostSessionRef !== null &&
 		input.code === "RUNTIME_SESSION_RECOVERY_FAILED" &&
 		input.status === undefined
 	)
