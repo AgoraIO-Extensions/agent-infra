@@ -432,6 +432,7 @@ jobs:
             --read-only --tmpfs /tmp:rw,size=64m,mode=1777 \
             --env AGENT_INFRA_CODEX_NATIVE_TEST=1 \
             --env AGENT_INFRA_RUNTIME_INSTALLED_SKILL=workspace-summary-v1 \
+            --env PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin \
             --label "ao.session=$(cat "$evidence/session.txt")" \
             --label agent-infra.native-skill-discovery=true \
             --entrypoint pnpm "$test_id" \
