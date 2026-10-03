@@ -1,7 +1,0 @@
-{
-	"extends": "@agent-infra/config/tsconfig.base.json",
-	"compilerOptions": {
-		"allowImportingTsExtensions": true,
-		"paths": { "@agent-infra/platform-core": ["../platform-core/src/index.ts"] }
-	}
-}
