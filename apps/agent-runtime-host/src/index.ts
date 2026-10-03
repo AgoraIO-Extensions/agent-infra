@@ -7,6 +7,7 @@ import {
 	CodexRuntimeDriver,
 	createExecutionGrantVerifier,
 	createRuntimeExecutionGrantVerifierV2,
+	createRuntimeNativeMetadataProofVerifierV1,
 	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
@@ -14,6 +15,7 @@ import {
 	openPiRuntime,
 	RuntimeHost,
 	RuntimeHostError,
+	type RuntimeHostNativeMetadataOptionsV1,
 	verifyCodexPilotInstallation,
 } from "@agent-infra/agent-runtime";
 import type {
@@ -29,6 +31,7 @@ import {
 	readCodexInstalledSkillDeployment,
 	readCodexPilotConfiguration,
 	readRuntimeModelConfigurationV3,
+	readRuntimeNativeMetadataConfigurationV1,
 	readWorkloadReadinessBindingV1,
 	runtimeConfigurationInvalid,
 } from "./configuration.js";
@@ -45,11 +48,13 @@ import {
 	previewRuntimeLegacyMigration,
 	readRuntimeLegacyJournal,
 } from "./legacy-migration-journal.js";
+import { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-current-client.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
 
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 
 interface StartOptions {
+	nativeMetadata?: Parameters<typeof createRuntimeHostApp>[0]["nativeMetadata"];
 	readinessWorkerId?: string;
 	runtimeWorkerId?: string;
 	verifyGrantV2?: (
@@ -128,6 +133,10 @@ export async function assembleRuntimeHost(
 	}
 	const port = runtimePort(environment.PORT, 3003);
 	const readinessBinding = readWorkloadReadinessBindingV1(environment);
+	const metadataConfiguration =
+		readRuntimeNativeMetadataConfigurationV1(environment);
+	if (metadataConfiguration && binding !== "codex")
+		runtimeConfigurationInvalid();
 	const runtimeWorkerId =
 		readinessBinding?.workerId ??
 		(binding === "codex"
@@ -140,6 +149,11 @@ export async function assembleRuntimeHost(
 	)
 		runtimeConfigurationInvalid();
 	if (runtimeWorkerId !== undefined && !runtimeWorkerId.trim())
+		runtimeConfigurationInvalid();
+	if (
+		metadataConfiguration &&
+		metadataConfiguration.workerId !== runtimeWorkerId
+	)
 		runtimeConfigurationInvalid();
 	const keyId = required("AGENT_INFRA_RUNTIME_GRANT_KEY_ID");
 	const serviceToken = required("AGENT_INFRA_RUNTIME_SERVICE_TOKEN");
@@ -154,6 +168,26 @@ export async function assembleRuntimeHost(
 		}
 	} catch {
 		runtimeConfigurationInvalid();
+	}
+	let metadataPublicKey: KeyObject | undefined;
+	if (metadataConfiguration) {
+		try {
+			metadataPublicKey = createPublicKey({
+				key: Buffer.from(metadataConfiguration.publicKeyDerBase64, "base64"),
+				format: "der",
+				type: "spki",
+			});
+			if (
+				metadataPublicKey.asymmetricKeyType !== "ed25519" ||
+				metadataConfiguration.keyVersion === keyId ||
+				metadataPublicKey
+					.export({ format: "der", type: "spki" })
+					.equals(publicKey.export({ format: "der", type: "spki" }))
+			)
+				runtimeConfigurationInvalid();
+		} catch {
+			runtimeConfigurationInvalid();
+		}
 	}
 	const configuration =
 		binding === "codex" ? readCodexPilotConfiguration(environment) : undefined;
@@ -268,7 +302,39 @@ export async function assembleRuntimeHost(
 		closeDriver = async () => {
 			if ("close" in driver) await driver.close();
 		};
+		let nativeMetadata: RuntimeHostNativeMetadataOptionsV1 | undefined;
+		if (metadataConfiguration && metadataPublicKey) {
+			const allowedAgentIds = new Set([metadataConfiguration.agentId]);
+			nativeMetadata = {
+				expectedWorkerId: metadataConfiguration.workerId,
+				allowedAgentIds,
+				maxActiveReads: metadataConfiguration.maxActiveReads,
+				verifyProof: createRuntimeNativeMetadataProofVerifierV1({
+					expectedIssuer: metadataConfiguration.issuer,
+					expectedWorkerId: metadataConfiguration.workerId,
+					allowedAgentIds,
+					publicKeys: new Map([
+						[metadataConfiguration.keyVersion, metadataPublicKey],
+					]),
+				}),
+				current: createRuntimeNativeMetadataCurrentClientV1({
+					baseUrl: metadataConfiguration.workerOrigin,
+					serviceToken: metadataConfiguration.callbackToken,
+					expectedWorkerId: metadataConfiguration.workerId,
+				}),
+				readMetadata: async (selector, read) => {
+					if (!(driver instanceof CodexRuntimeDriver))
+						throw new RuntimeHostError(
+							"RUNTIME_NATIVE_METADATA_UNAVAILABLE",
+							"Native metadata is unavailable",
+							503,
+						);
+					return driver.readNativeMetadataV1(selector, read);
+				},
+			};
+		}
 		const host = await RuntimeHost.open({
+			...(nativeMetadata ? { nativeMetadata } : {}),
 			...(readinessBinding
 				? {
 						readinessVerifier: createWorkloadReadinessVerifierV1({
@@ -297,6 +363,14 @@ export async function assembleRuntimeHost(
 		const verify = createExecutionGrantVerifier(new Map([[keyId, publicKey]]));
 		return {
 			host,
+			...(metadataConfiguration
+				? {
+						nativeMetadata: {
+							workerId: metadataConfiguration.workerId,
+							serviceToken: metadataConfiguration.serviceToken,
+						},
+					}
+				: {}),
 			...(readinessBinding
 				? { readinessWorkerId: readinessBinding.workerId }
 				: {}),

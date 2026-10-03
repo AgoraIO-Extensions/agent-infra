@@ -59,6 +59,19 @@ platformWorker:
   replicas: 1
   wecomEnabled: false
 
+nativeMetadata:
+  enabled: false
+  workerPort: 3010
+  apiConfigurationSecretRef:
+    name: ""
+    key: api-metadata.mjs
+  workerConfigurationSecretRef:
+    name: ""
+    key: worker-metadata.mjs
+  # Fixed namespace + nonempty podLabels, or one explicit /32 or /128 endpoint.
+  apiPeer: {}
+  hostPeer: {}
+
 enterpriseDirectorySync:
   enabled: false
   rootDepartmentId: 1

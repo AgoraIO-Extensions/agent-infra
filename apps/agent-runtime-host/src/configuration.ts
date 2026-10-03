@@ -181,3 +181,79 @@ export function readCodexPilotConfiguration(
 		modelOptions,
 	};
 }
+
+/** Private deployment configuration; service credentials are separate reserved Secret env keys. */
+export function readRuntimeNativeMetadataConfigurationV1(
+	environment: NodeJS.ProcessEnv,
+) {
+	const raw = environment.AGENT_INFRA_RUNTIME_NATIVE_METADATA_CONFIG;
+	if (raw === undefined) return undefined;
+	try {
+		const value: unknown = JSON.parse(raw);
+		if (
+			!record(value) ||
+			!keys(value, [
+				"schemaVersion",
+				"workerId",
+				"issuer",
+				"keyVersion",
+				"publicKeyDerBase64",
+				"maxActiveReads",
+				"workerOrigin",
+			]) ||
+			value.schemaVersion !== 1 ||
+			typeof value.workerId !== "string" ||
+			!identifier.test(value.workerId) ||
+			typeof value.issuer !== "string" ||
+			!identifier.test(value.issuer) ||
+			typeof value.keyVersion !== "string" ||
+			!identifier.test(value.keyVersion) ||
+			typeof value.publicKeyDerBase64 !== "string" ||
+			Buffer.from(value.publicKeyDerBase64, "base64").toString("base64") !==
+				value.publicKeyDerBase64 ||
+			typeof value.maxActiveReads !== "number" ||
+			!Number.isSafeInteger(value.maxActiveReads) ||
+			value.maxActiveReads < 1 ||
+			typeof value.workerOrigin !== "string"
+		)
+			runtimeConfigurationInvalid();
+		const origin = new URL(value.workerOrigin);
+		if (
+			!["http:", "https:"].includes(origin.protocol) ||
+			origin.username ||
+			origin.password ||
+			origin.pathname !== "/" ||
+			origin.search ||
+			origin.hash
+		)
+			runtimeConfigurationInvalid();
+		const serviceToken = environment.AGENT_INFRA_RUNTIME_METADATA_WORKER_TOKEN;
+		const callbackToken = environment.AGENT_INFRA_RUNTIME_METADATA_HOST_TOKEN;
+		const agentId = environment.AGENT_INFRA_RUNTIME_AGENT_ID;
+		if (
+			!agentId ||
+			!identifier.test(agentId) ||
+			!serviceToken ||
+			!callbackToken ||
+			!/^[\x21-\x7e]{1,8192}$/.test(serviceToken) ||
+			!/^[\x21-\x7e]{1,8192}$/.test(callbackToken) ||
+			serviceToken === callbackToken ||
+			serviceToken === environment.AGENT_INFRA_RUNTIME_SERVICE_TOKEN ||
+			callbackToken === environment.AGENT_INFRA_RUNTIME_SERVICE_TOKEN
+		)
+			runtimeConfigurationInvalid();
+		return {
+			workerId: value.workerId,
+			issuer: value.issuer,
+			keyVersion: value.keyVersion,
+			publicKeyDerBase64: value.publicKeyDerBase64,
+			maxActiveReads: value.maxActiveReads,
+			workerOrigin: origin.origin,
+			agentId,
+			serviceToken,
+			callbackToken,
+		};
+	} catch {
+		runtimeConfigurationInvalid();
+	}
+}

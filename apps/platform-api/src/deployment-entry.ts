@@ -13,6 +13,24 @@ if (!configurationModule || new URL(configurationModule).protocol !== "file:") {
 }
 const { ldap, isPlatformDisabled, organizationIds, publicOrigin, apiInput } =
 	await import(configurationModule);
+const metadataModule =
+	process.env.PLATFORM_API_NATIVE_METADATA_CONFIGURATION_MODULE;
+let nativeMetadata: Parameters<
+	typeof createProductionPlatformApiAssemblyInputV1
+>[0]["nativeMetadata"];
+if (metadataModule) {
+	try {
+		if (
+			new URL(metadataModule).protocol !== "file:" ||
+			apiInput.nativeMetadata !== undefined
+		)
+			throw new Error();
+		nativeMetadata = (await import(metadataModule)).nativeMetadata;
+		if (!nativeMetadata) throw new Error();
+	} catch {
+		throw new Error("Native metadata API configuration is unavailable");
+	}
+}
 const databaseUrl = process.env.PLATFORM_DATABASE_URL;
 if (!databaseUrl) throw new Error("PLATFORM_DATABASE_URL is required");
 if (typeof ldap?.verifyCurrentStatus !== "function") {
@@ -37,6 +55,7 @@ export const browserAuth = browser.browserAuth;
 export function createPlatformApiAssemblyInput() {
 	return createProductionPlatformApiAssemblyInputV1({
 		...apiInput,
+		...(nativeMetadata ? { nativeMetadata } : {}),
 		databaseUrl,
 		identity: browser.identity,
 	});

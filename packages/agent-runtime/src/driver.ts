@@ -57,6 +57,13 @@ export interface RuntimeOriginalEvidenceReadContext {
 	commit<T>(write: () => Promise<T>): Promise<T>;
 }
 
+/** Host-owned, bounded authority used only by native metadata consumers. */
+export interface RuntimeNativeMetadataReadContext
+	 extends Pick<RuntimeOriginalEvidenceReadContext, "signal" | "expiresAt" | "assertCurrent"> {
+	readonly nativeSessionRef: string;
+	revalidate(): Promise<RuntimeOriginalEvidenceBinding>;
+}
+
 export interface RuntimeDriver {
 	/** Validate the action refs against the Driver's durable operation journal. */
 	validateExternalAction?(

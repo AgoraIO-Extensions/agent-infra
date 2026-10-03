@@ -10,6 +10,10 @@ import {
 	type RuntimeExecutionGrantV2,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeGenerationCancelRequestV3Schema,
+	RuntimeNativeMetadataBindingRequestV1Schema,
+	RuntimeNativeMetadataBindingResponseV1Schema,
+	RuntimeNativeMetadataReadRequestV1Schema,
+	RuntimeNativeMetadataReadResponseV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
@@ -26,12 +30,15 @@ import {
 	WorkloadReadinessRequestV1Schema,
 } from "@agent-infra/contracts/runtime";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
 export const runtimeHostService = "agent-runtime-host";
 
 interface RuntimeHostAppOptions {
+	/** Dedicated metadata transport credential identifies the verifier's exact Worker. */
+	nativeMetadata?: { readonly workerId: string; readonly serviceToken: string };
 	/** Identity authenticated by this deployment's service token. Never a caller field. */
 	runtimeWorkerId?: string;
 	verifyGrantV2?: (
@@ -75,15 +82,28 @@ function authorized(header: string | undefined, expectedToken: string) {
 }
 
 export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
-	const app = new Hono();
+	if (
+		options.nativeMetadata &&
+		(!options.nativeMetadata.workerId ||
+			!options.nativeMetadata.serviceToken ||
+			options.nativeMetadata.serviceToken === options.serviceToken)
+	)
+		throw new Error("Metadata service identity configuration is invalid");
+	const app = new Hono<{ Variables: { metadataSignal: AbortSignal } }>();
 
 	app.get("/healthz", (context) =>
 		context.json({ service: runtimeHostService, status: "ok" }),
 	);
 
 	app.use("/internal/runtime/*", async (context, next) => {
+		const expectedToken = context.req.path.startsWith(
+			"/internal/runtime/native-metadata/",
+		)
+			? options.nativeMetadata?.serviceToken
+			: options.serviceToken;
 		if (
-			!authorized(context.req.header("authorization"), options.serviceToken)
+			!expectedToken ||
+			!authorized(context.req.header("authorization"), expectedToken)
 		) {
 			return context.json(
 				{
@@ -98,6 +118,75 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		}
 		await next();
 	});
+
+	app.use("/internal/runtime/native-metadata/*", async (context, next) => {
+		context.set("metadataSignal", context.req.raw.signal);
+		await next();
+	});
+	app.use(
+		"/internal/runtime/native-metadata/*",
+		bodyLimit({
+			maxSize: 65_536,
+			onError: () => {
+				throw new RuntimeHostError(
+					"RUNTIME_REQUEST_INVALID",
+					"Runtime request is invalid",
+					400,
+				);
+			},
+		}),
+	);
+	if (options.nativeMetadata) {
+		app.post(
+			"/internal/runtime/native-metadata/v1/binding",
+			async (context) => {
+				const request = context.req.raw;
+				const signal = context.get("metadataSignal");
+				const workerId = options.nativeMetadata?.workerId;
+				if (!workerId || new URL(request.url).search)
+					throw new RuntimeHostError(
+						"RUNTIME_REQUEST_INVALID",
+						"Runtime request is invalid",
+						400,
+					);
+				const body = await parseBody(
+					request,
+					RuntimeNativeMetadataBindingRequestV1Schema,
+				);
+				signal.throwIfAborted();
+				const result = RuntimeNativeMetadataBindingResponseV1Schema.parse(
+					await options.host.resolveNativeMetadataBindingV1(
+						body,
+						workerId,
+						signal,
+					),
+				);
+				signal.throwIfAborted();
+				return context.json(result);
+			},
+		);
+		app.post("/internal/runtime/native-metadata/v1/read", async (context) => {
+			const request = context.req.raw;
+			const signal = context.get("metadataSignal");
+			const workerId = options.nativeMetadata?.workerId;
+			if (!workerId || new URL(request.url).search)
+				throw new RuntimeHostError(
+					"RUNTIME_REQUEST_INVALID",
+					"Runtime request is invalid",
+					400,
+				);
+			const body = await parseBody(
+				request,
+				RuntimeNativeMetadataReadRequestV1Schema,
+			);
+			signal.throwIfAborted();
+			const result = RuntimeNativeMetadataReadResponseV1Schema.parse(
+				await options.host.readNativeMetadataV1(body, workerId, signal),
+			);
+			signal.throwIfAborted();
+			return context.json(result);
+		});
+	}
 
 	app.post("/internal/runtime/v1/turns", async (context) => {
 		const request = await parseBody(

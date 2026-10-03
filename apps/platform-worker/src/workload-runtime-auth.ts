@@ -1,10 +1,17 @@
 import { createPublicKey } from "node:crypto";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
+import type { RuntimeModelProjectionV1 } from "@agent-infra/model-catalog";
 import type { V1EnvVar } from "@kubernetes/client-node";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
+import {
+	validateWorkloadNativeMetadataAuthV1,
+	type WorkloadNativeMetadataAuthV1,
+	workloadNativeMetadataEnvironmentV1,
+} from "./workload-native-metadata-auth.js";
 
 /** Public verification material and a deployment-provisioned transport token reference only. */
 export interface WorkloadRuntimeAuthV1 {
+	readonly nativeMetadata?: WorkloadNativeMetadataAuthV1;
 	readonly workerId: string;
 	readonly grantKeyId: string;
 	readonly grantPublicKey: string;
@@ -18,7 +25,9 @@ export function validateWorkloadRuntimeAuthV1(
 	try {
 		if (
 			Object.keys(input).sort().join(",") !==
-				"grantIssuer,grantKeyId,grantPublicKey,serviceTokenSecret,workerId" ||
+				(input.nativeMetadata
+					? "grantIssuer,grantKeyId,grantPublicKey,nativeMetadata,serviceTokenSecret,workerId"
+					: "grantIssuer,grantKeyId,grantPublicKey,serviceTokenSecret,workerId") ||
 			![input.grantKeyId, input.grantIssuer, input.workerId].every(
 				(value) =>
 					typeof value === "string" && /^[\x21-\x7e]{1,256}$/.test(value),
@@ -38,6 +47,7 @@ export function validateWorkloadRuntimeAuthV1(
 			!/^[-A-Za-z0-9_.]{1,253}$/.test(input.serviceTokenSecret.key)
 		)
 			throw new Error();
+		validateWorkloadNativeMetadataAuthV1(input);
 	} catch {
 		throw new WorkloadKubernetesError("policy");
 	}
@@ -46,8 +56,10 @@ export function validateWorkloadRuntimeAuthV1(
 export function workloadRuntimeAuthEnvironmentV1(
 	auth: WorkloadRuntimeAuthV1,
 	desired: AgentWorkloadDesiredV1,
+	binding?: RuntimeModelProjectionV1["standardTemplateBinding"],
 ): V1EnvVar[] {
 	return [
+		...workloadNativeMetadataEnvironmentV1(auth, desired, binding),
 		{
 			name: "AGENT_INFRA_RUNTIME_READINESS_BINDING",
 			value: JSON.stringify({

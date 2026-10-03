@@ -58,6 +58,10 @@ metadata:
     app.kubernetes.io/component: platform-worker
 spec:
   replicas: {{ .Values.platformWorker.replicas }}
+  {{- if .Values.nativeMetadata.enabled }}
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
@@ -91,6 +95,12 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
           env:
+            {{- if .Values.nativeMetadata.enabled }}
+            - name: PLATFORM_WORKER_NATIVE_METADATA_ENABLED
+              value: "true"
+            - name: PLATFORM_WORKER_NATIVE_METADATA_CONFIGURATION_MODULE
+              value: file:///var/run/agent-infra/native-metadata/worker-metadata.mjs
+            {{- end }}
             {{- if not .Values.workloadTopology.enabled }}
             - name: PLATFORM_WORKER_DEPLOYMENT_MODULE
               value: {{ required "platformWorker.deploymentModule must name a module packaged in the deployment image" .Values.platformWorker.deploymentModule | quote }}
@@ -114,6 +124,11 @@ spec:
             - configMapRef:
                 name: {{ $bindings }}
           volumeMounts:
+            {{- if .Values.nativeMetadata.enabled }}
+            - name: native-metadata
+              mountPath: /var/run/agent-infra/native-metadata
+              readOnly: true
+            {{- end }}
             {{- if not .Values.workloadTopology.enabled }}
             - name: deployment-module
               mountPath: /app/dist/configuration.mjs
@@ -135,6 +150,15 @@ spec:
               mountPath: /var/run/agent-infra/keyring
               readOnly: true
       volumes:
+        {{- if .Values.nativeMetadata.enabled }}
+        - name: native-metadata
+          secret:
+            secretName: {{ .Values.nativeMetadata.workerConfigurationSecretRef.name }}
+            defaultMode: 288
+            items:
+              - key: {{ required "nativeMetadata.workerConfigurationSecretRef.key is required" .Values.nativeMetadata.workerConfigurationSecretRef.key }}
+                path: worker-metadata.mjs
+        {{- end }}
         {{- if not .Values.workloadTopology.enabled }}
         - name: deployment-module
           secret:

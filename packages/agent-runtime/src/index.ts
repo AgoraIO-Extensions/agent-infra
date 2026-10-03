@@ -15,6 +15,7 @@ export * from "./file-runtime-store.js";
 export * from "./grant.js";
 export * from "./grant-v2.js";
 export * from "./grant-v4.js";
+export * from "./native-metadata-proof.js";
 export * from "./opencode-bootstrap.js";
 export * from "./opencode-installation.js";
 export * from "./pi-bootstrap.js";

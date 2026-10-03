@@ -1,4 +1,8 @@
 import type {
+	RuntimeNativeMetadataBindingRequestV1,
+	RuntimeNativeMetadataBindingResponseV1,
+	RuntimeNativeMetadataReadRequestV1,
+	RuntimeNativeMetadataReadResponseV1,
 	RuntimeAuthorizationRenewRequestV3,
 	RuntimeCapabilitiesRequestV1,
 	RuntimeCapabilitiesResponseV1,
@@ -27,6 +31,13 @@ import type {
 	WorkloadReadinessRequestV1,
 	WorkloadReadinessResponseV1,
 } from "@agent-infra/contracts/runtime";
+import { NativeMetadataCurrentRequestV1Schema } from "@agent-infra/contracts";
+import type {
+	NativeMetadataCurrentResponseV1,
+	NativeMetadataObjectScopeV1,
+	NativeMetadataProjectionV1,
+	NativeMetadataSelectorV1,
+} from "@agent-infra/contracts";
 import {
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesV1Schema,
@@ -46,8 +57,13 @@ import {
 	RuntimeSupplementRequestV1Schema,
 	WorkloadReadinessRequestV1Schema,
 	WorkloadReadinessResponseV1Schema,
+	RuntimeNativeMetadataBindingRequestV1Schema,
+	RuntimeNativeMetadataReadRequestV1Schema,
 } from "@agent-infra/contracts/runtime";
-import type { RuntimeDriver } from "./driver.js";
+import type {
+	RuntimeDriver,
+	RuntimeNativeMetadataReadContext,
+} from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
 import {
 	type FileRuntimeStore,
@@ -68,6 +84,7 @@ import {
 import { RuntimeHostV3 } from "./runtime-host-v3.js";
 
 interface RuntimeHostOptions {
+	nativeMetadata?: RuntimeHostNativeMetadataOptionsV1;
 	grantValidationV2?: RuntimeGrantValidationOptionsV2;
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
 	store: FileRuntimeStore;
@@ -76,6 +93,25 @@ interface RuntimeHostOptions {
 	afterOperationPrepared?: (operationId: string) => void | Promise<void>;
 	afterDriverResult?: (operationId: string) => void | Promise<void>;
 	afterOperationResolved?: (operationId: string) => void | Promise<void>;
+}
+
+export interface RuntimeHostNativeMetadataOptionsV1 {
+	readonly expectedWorkerId: string;
+	readonly allowedAgentIds: ReadonlySet<string>;
+	readonly maxActiveReads: number;
+	readonly verifyProof: (
+		request: RuntimeNativeMetadataReadRequestV1,
+		authenticatedWorkerId: string,
+	) => unknown;
+	readonly current: (
+		request: import("@agent-infra/contracts").NativeMetadataCurrentRequestV1,
+		workerId: string,
+		signal: AbortSignal,
+	) => Promise<NativeMetadataCurrentResponseV1>;
+	readonly readMetadata: (
+		selector: NativeMetadataSelectorV1,
+		read: RuntimeNativeMetadataReadContext,
+	) => Promise<NativeMetadataProjectionV1>;
 }
 
 function invalidRequest(): never {
@@ -311,6 +347,7 @@ export class RuntimeHost {
 		controller: AbortController;
 		done: Promise<void>;
 	}>();
+	private activeNativeMetadataReads = 0;
 	private closed = false;
 
 	private readonly v3?: RuntimeHostV3;
@@ -434,6 +471,151 @@ export class RuntimeHost {
 			reference,
 			this.options.grantValidationV2?.now ?? Date.now,
 		);
+	}
+
+	private nativeMetadataScope(
+		request:
+			| RuntimeNativeMetadataBindingRequestV1
+			| RuntimeNativeMetadataReadRequestV1,
+	): NativeMetadataObjectScopeV1 {
+		if (
+			!this.options.nativeMetadata?.allowedAgentIds.has(request.scope.agentId)
+		)
+			throw new RuntimeHostError(
+				"RUNTIME_NATIVE_METADATA_DENIED",
+				"Native metadata is not authorized for this Agent",
+				403,
+			);
+		return request.scope;
+	}
+
+	private async nativeMetadataCurrent(
+		request: RuntimeNativeMetadataBindingRequestV1 | RuntimeNativeMetadataReadRequestV1,
+		workerId: string,
+		signal: AbortSignal,
+		phase: "resolve_original_binding" | "read_metadata",
+		originalHostScopeRef: string | null,
+	) {
+		const options = this.options.nativeMetadata;
+		if (!options || workerId !== options.expectedWorkerId) {
+			throw new RuntimeHostError(
+				"RUNTIME_NATIVE_METADATA_DENIED",
+				"Native metadata service identity is invalid",
+				403,
+			);
+		}
+		const current = await options.current(
+			NativeMetadataCurrentRequestV1Schema.parse({
+				...request,
+				phase,
+				originalHostScopeRef,
+			}),
+			workerId,
+			signal,
+		);
+		if (current.outcome !== "allowed")
+			throw new RuntimeHostError(
+				current.outcome === "denied"
+					? "RUNTIME_NATIVE_METADATA_DENIED"
+					: "RUNTIME_NATIVE_METADATA_UNAVAILABLE",
+				"Native metadata current authorization is unavailable",
+				current.outcome === "denied" ? 403 : 503,
+				current.outcome === "unavailable",
+			);
+	}
+
+	async resolveNativeMetadataBindingV1(
+		value: RuntimeNativeMetadataBindingRequestV1,
+		workerId: string,
+		signal: AbortSignal,
+	): Promise<RuntimeNativeMetadataBindingResponseV1> {
+		this.requireLegacyHost();
+		const request = RuntimeNativeMetadataBindingRequestV1Schema.safeParse(value);
+		if (!request.success) invalidRequest();
+		this.nativeMetadataScope(request.data);
+		await this.nativeMetadataCurrent(request.data, workerId, signal, "resolve_original_binding", null);
+		const binding = this.options.store.readOriginalNativeMetadataBindingV1(
+			request.data.scope,
+		);
+		return { ...request.data, originalHostScopeRef: binding.originalHostScopeRef };
+	}
+
+	async readNativeMetadataV1(
+		value: RuntimeNativeMetadataReadRequestV1,
+		workerId: string,
+		signal: AbortSignal,
+	): Promise<RuntimeNativeMetadataReadResponseV1> {
+		this.requireLegacyHost();
+		const options = this.options.nativeMetadata;
+		if (!options || this.activeNativeMetadataReads >= options.maxActiveReads)
+			throw new RuntimeHostError(
+				"RUNTIME_NATIVE_METADATA_UNAVAILABLE",
+				"Native metadata capacity is unavailable",
+				503,
+				true,
+			);
+		const parsed = RuntimeNativeMetadataReadRequestV1Schema.safeParse(value);
+		if (!parsed.success) invalidRequest();
+		const request = parsed.data;
+		this.nativeMetadataScope(request);
+		options.verifyProof(request, workerId);
+		await this.nativeMetadataCurrent(request, workerId, signal, "read_metadata", request.originalHostScopeRef);
+		const durable = this.options.store.readOriginalNativeMetadataBindingV1(request.scope);
+		if (durable.originalHostScopeRef !== request.originalHostScopeRef)
+			throw new RuntimeHostError(
+				"RUNTIME_NATIVE_METADATA_DENIED",
+				"Native metadata binding is stale",
+				403,
+			);
+		const controller = new AbortController();
+		const active = AbortSignal.any([signal, this.lifetime.signal, controller.signal]);
+		const expiresAt = request.expiresAt;
+		let invalid = false;
+		const assertCurrent = () => {
+			if (invalid || active.aborted || Date.now() >= expiresAt || this.closed)
+				throw new RuntimeHostError(
+					"RUNTIME_NATIVE_METADATA_UNAVAILABLE",
+					"Native metadata read is no longer current",
+					503,
+					true,
+				);
+			const current = this.options.store.readOriginalNativeMetadataBindingV1(request.scope);
+			if (current.originalHostScopeRef !== request.originalHostScopeRef)
+				throw new RuntimeHostError(
+					"RUNTIME_NATIVE_METADATA_DENIED",
+					"Native metadata binding is stale",
+					403,
+				);
+			return current;
+		};
+		const read: RuntimeNativeMetadataReadContext = {
+			nativeSessionRef: durable.nativeSessionRef,
+			signal: active,
+			expiresAt,
+			assertCurrent,
+			revalidate: async () => {
+				try {
+					assertCurrent();
+					await this.nativeMetadataCurrent(request, workerId, active, "read_metadata", request.originalHostScopeRef);
+					const current = assertCurrent();
+					return current;
+				} catch (error) {
+					invalid = true;
+					controller.abort();
+					throw error;
+				}
+			},
+		};
+		this.activeNativeMetadataReads += 1;
+		try {
+			const projection = await options.readMetadata(request.selector, read);
+			await read.revalidate();
+			return { ...request, projection };
+		} finally {
+			invalid = true;
+			controller.abort();
+			this.activeNativeMetadataReads -= 1;
+		}
 	}
 
 	static async open(options: RuntimeHostOptions) {

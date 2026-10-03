@@ -28,6 +28,7 @@ import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 
 export interface ProductionPlatformApiInputV1
 	extends Omit<DeploymentAdmissionInputV1, "currentIdentity"> {
+	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
 	readonly wecom?: PlatformApiAssemblyInput["wecom"];
 	readonly wecomIdentity?: PlatformApiAssemblyInput["wecomIdentity"];
 	readonly wecomCredentialEncryptionKeys?: PlatformApiAssemblyInput["wecomCredentialEncryptionKeys"];
@@ -117,6 +118,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 				}
 			: undefined;
 	return {
+		...(input.nativeMetadata ? { nativeMetadata: input.nativeMetadata } : {}),
 		...(personalRelayKeys ? { personalRelayKeys } : {}),
 		...(input.wecom ? { wecom: input.wecom } : {}),
 		...(input.wecomIdentity ? { wecomIdentity: input.wecomIdentity } : {}),

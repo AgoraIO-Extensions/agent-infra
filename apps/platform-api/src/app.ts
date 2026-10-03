@@ -15,6 +15,7 @@ import {
 	type FileRoutesDependenciesV1,
 	registerFileRoutesV1,
 } from "./http/file-routes.js";
+import { registerNativeMetadataCurrentRoutesV1 } from "./http/native-metadata-current.js";
 import {
 	type PersonalApiCredentialRouteDependencies,
 	registerPersonalApiCredentialRoutes,
@@ -53,6 +54,9 @@ type ApiObservability = Pick<
 >;
 
 export interface PlatformAppDependencies {
+	readonly nativeMetadata?: Parameters<
+		typeof registerNativeMetadataCurrentRoutesV1
+	>[1];
 	readonly requestScope?: (
 		request: Request,
 		work: () => Promise<Response>,
@@ -146,5 +150,7 @@ export function createPlatformApp(
 	if (dependencies.scopedAudit)
 		registerScopedAuditRoutes(app, dependencies.scopedAudit);
 	if (dependencies.files) registerFileRoutesV1(app, dependencies.files);
+	if (dependencies.nativeMetadata)
+		registerNativeMetadataCurrentRoutesV1(app, dependencies.nativeMetadata);
 	return app;
 }

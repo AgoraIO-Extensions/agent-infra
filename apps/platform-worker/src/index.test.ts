@@ -670,4 +670,60 @@ describe("Platform Worker production V2 lifecycle", () => {
 		expect(primary.stop).toHaveBeenCalledOnce();
 		expect(workload.stop).toHaveBeenCalledOnce();
 	});
+	it("closes metadata reads before draining existing loops and still drains after listener stop fails", async () => {
+		const stopOrder: string[] = [];
+		const worker = await startPlatformWorkerFromDeploymentV2({
+			startPrimary: () => ({
+				stop: () => {
+					stopOrder.push("primary");
+				},
+			}),
+			startWorkload: async () => ({
+				stop: async () => {
+					stopOrder.push("workload");
+				},
+			}),
+			startConversation: async () => ({
+				stop: async () => {
+					stopOrder.push("conversation");
+				},
+			}),
+			startNativeMetadata: async () => ({
+				stop: async () => {
+					stopOrder.push("metadata");
+					throw new Error("metadata stop failure");
+				},
+			}),
+		});
+		const stopping = worker.stop();
+		expect(worker.stop()).toBe(stopping);
+		await expect(stopping).rejects.toThrow("metadata stop failure");
+		expect(stopOrder).toEqual([
+			"metadata",
+			"conversation",
+			"workload",
+			"primary",
+		]);
+		expect(worker.observabilityStatus().state).toBe("closed");
+	});
+	it("unwinds the real process assembly when an enabled metadata listener fails startup", async () => {
+		const stops = {
+			primary: vi.fn(),
+			workload: vi.fn(async () => {}),
+			conversation: vi.fn(async () => {}),
+		};
+		await expect(
+			startPlatformWorkerFromDeploymentV2({
+				startPrimary: () => ({ stop: stops.primary }),
+				startWorkload: async () => ({ stop: stops.workload }),
+				startConversation: async () => ({ stop: stops.conversation }),
+				startNativeMetadata: async () => {
+					throw new Error("metadata listener unavailable");
+				},
+			}),
+		).rejects.toThrow("metadata listener unavailable");
+		expect(stops.primary).toHaveBeenCalledOnce();
+		expect(stops.workload).toHaveBeenCalledOnce();
+		expect(stops.conversation).toHaveBeenCalledOnce();
+	});
 });

@@ -45,6 +45,10 @@ import {
 } from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
 import {
+	assemblePlatformNativeMetadataApiV1,
+	type PlatformNativeMetadataApiDeploymentV1,
+} from "./native-metadata-assembly.js";
+import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
 } from "./projection.js";
@@ -62,6 +66,7 @@ interface AssemblyQueries {
 }
 
 export interface PlatformApiAssemblyInput {
+	readonly nativeMetadata?: PlatformNativeMetadataApiDeploymentV1;
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly files?: PlatformFileDeploymentV1;
 	readonly databaseUrl: string;
@@ -224,6 +229,15 @@ export function assemblePlatformApi(
 		typeof input.admissions === "function"
 			? input.admissions({ configurationQuery })
 			: input.admissions;
+	const nativeMetadata = input.nativeMetadata
+		? assemblePlatformNativeMetadataApiV1({
+				identity: input.identity,
+				query: conversationQuery,
+				managementQuery,
+				configurationQuery,
+				deployment: input.nativeMetadata,
+			})
+		: undefined;
 	const channelAdmission =
 		resolveWecomBinding || wecomSetup
 			? {
@@ -396,6 +410,7 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		...(nativeMetadata ? { nativeMetadata } : {}),
 		...(personalRelayKeys
 			? {
 					personalRelayKeys: {
@@ -460,6 +475,7 @@ export function assemblePlatformApi(
 			? {}
 			: { deploymentConfiguration: input.deploymentConfiguration }),
 		conversation: {
+			...(nativeMetadata ? { nativeMetadata: nativeMetadata.reads } : {}),
 			identity: input.identity,
 			authorization: conversationAuthorization,
 			commands: (identity) =>
@@ -512,6 +528,7 @@ export function assemblePlatformApi(
 		readResourceSnapshot: (signal) =>
 			conversationQuery.readResourceSnapshot(signal),
 		async close() {
+			nativeMetadata?.close();
 			let failed = false;
 			for (const adapter of adapters.toReversed()) {
 				try {

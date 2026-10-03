@@ -1562,6 +1562,89 @@ export class FileRuntimeStore {
 		};
 	}
 
+	/** Read the unique durable Host/native binding for metadata-only reads. */
+	readOriginalNativeMetadataBindingV1(scope: {
+		readonly principal: RuntimePrincipalV1;
+		readonly agentId: string;
+		readonly channelId: string;
+		readonly conversationId: string;
+		readonly executionId: string;
+		readonly sessionGeneration: number;
+	}) {
+		let state: RuntimeStoreState;
+		try {
+			state = this.file.read();
+			assertStoreState(state);
+		} catch {
+			throw new RuntimeHostError(
+				"RUNTIME_NATIVE_METADATA_UNAVAILABLE",
+				"Native metadata binding is unavailable",
+				503,
+				true,
+			);
+		}
+		const hostSessionRef = state.sessionBindings[
+			sessionBindingKey({ agentId: scope.agentId, conversationId: scope.conversationId })
+		];
+		const session = hostSessionRef ? state.sessions[hostSessionRef] : undefined;
+		const operation = session?.operations[scope.executionId];
+		const pinned = RuntimePinnedExecutionKeyScopeV4Schema.safeParse(
+			operation?.keyScopeV4,
+		);
+		if (
+			!session ||
+			!operation ||
+			operation.kind !== "submit-turn" ||
+			operation.state !== "resolved" ||
+			operation.result?.outcome !== "accepted" ||
+			!session.nativeSessionRef ||
+			!session.authority ||
+			!pinned.success ||
+			pinned.data.principal.kind !== scope.principal.kind ||
+			pinned.data.principal.id !== scope.principal.id ||
+			pinned.data.agentId !== scope.agentId ||
+			pinned.data.channelId !== scope.channelId ||
+			pinned.data.conversationId !== scope.conversationId ||
+			pinned.data.executionId !== scope.executionId ||
+			pinned.data.sessionGeneration !== scope.sessionGeneration ||
+			session.sessionGeneration !== scope.sessionGeneration ||
+			session.generationBarrier
+		)
+			throw new RuntimeHostError(
+				"RUNTIME_NATIVE_METADATA_UNAVAILABLE",
+				"Native metadata binding is unavailable",
+				503,
+				true,
+			);
+		const originalHostScopeRef = createHash("sha256")
+			.update(
+				JSON.stringify([
+					"runtime-native-metadata-host-scope-v1",
+					session.authority.principal,
+					session.agentId,
+					session.conversationId,
+					session.sessionGeneration,
+					scope.executionId,
+					session.nativeSessionRef,
+					operation.turnId,
+					operation.requestDigest,
+					operation.command.schemaVersion,
+				]),
+			)
+			.digest("hex");
+		return {
+			principal: structuredClone(session.authority.principal),
+			scope: {
+				agentId: session.agentId,
+				conversationId: session.conversationId,
+				executionId: scope.executionId,
+				sessionGeneration: session.sessionGeneration,
+			},
+			nativeSessionRef: session.nativeSessionRef,
+			originalHostScopeRef,
+		};
+	}
+
 	private async authorizedOriginalExecution(
 		action: {
 			nativeSessionRef?: string;

@@ -283,9 +283,15 @@ importers:
       '@agent-infra/wecom':
         specifier: workspace:*
         version: link:../../packages/wecom
+      '@hono/node-server':
+        specifier: ^2.0.12
+        version: 2.1.0(hono@4.13.0)
       '@kubernetes/client-node':
         specifier: 2.0.0
         version: 2.0.0
+      hono:
+        specifier: ^4.12.32
+        version: 4.13.0
     devDependencies:
       '@agent-infra/agent-runtime':
         specifier: workspace:*
