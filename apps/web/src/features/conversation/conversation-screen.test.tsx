@@ -896,7 +896,7 @@ describe("functional conversation screen", () => {
 				? Response.json(custom)
 				: undefined,
 		);
-		await screen.findByText("自定义 Agent · 自有交互入口");
+		await screen.findByText("此 Agent 使用自有交互入口，请从 Agent 详情进入。");
 		expect(
 			screen.queryByText("个人 Web 对话 · 离开页面不会取消已提交的任务"),
 		).toBeNull();
