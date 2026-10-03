@@ -639,14 +639,30 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 			queriedPairCounts.set(pair, (queriedPairCounts.get(pair) ?? 0) + 1);
 		}
 		let finalTraces = "";
-		await until(async () => {
-			finalTraces = await collector.read();
-			return (
+		try {
+			await until(async () => {
+				finalTraces = await collector.read();
+				return (
+					JSON.stringify(
+						sortedCounts(tracePairCounts(finalTraces, executionId)),
+					) === JSON.stringify(sortedCounts(queriedPairCounts))
+				);
+			});
+		} catch (error) {
+			await writeFile(
+				`${evidencePath}.pair-debug.json`,
 				JSON.stringify(
-					sortedCounts(tracePairCounts(finalTraces, executionId)),
-				) === JSON.stringify(sortedCounts(queriedPairCounts))
+					{
+						queried: sortedCounts(queriedPairCounts),
+						observed: sortedCounts(tracePairCounts(finalTraces, executionId)),
+						traces: finalTraces,
+					},
+					null,
+					2,
+				),
 			);
-		});
+			throw error;
+		}
 		const observedPairCounts = tracePairCounts(finalTraces, executionId);
 		// Compare the pair multiset, not independent substring membership: this
 		// rejects swapped pairs, duplicate query rows, and unrelated extra traces.
