@@ -91,6 +91,13 @@ try {
 			await page
 				.getByRole("button", { name: "使用当前模板", exact: true })
 				.click();
+			// The existing form clears write-only credentials after every attempt.
+			await expect(page.getByLabel("模型凭证", { exact: true })).toHaveValue(
+				"",
+			);
+			await page
+				.getByLabel("模型凭证", { exact: true })
+				.fill("synthetic-browser-model-value");
 		}
 		const response = page.waitForResponse(
 			(r) =>
