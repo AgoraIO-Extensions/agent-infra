@@ -2095,6 +2095,8 @@ export class ConnectionApplicationService {
 			}
 			if (isProviderPermissionFailure(error)) {
 				if (isProviderAuthorizationDenied(error)) {
+					const providerStatus = (error as { providerStatus?: unknown })
+						.providerStatus;
 					const helpUrl =
 						invocation.providerId === "manhattan"
 							? "https://manhattan.agoralab.co/permission/user"
@@ -2104,7 +2106,13 @@ export class ConnectionApplicationService {
 						`外部系统 ${invocation.providerId} 拒绝了此操作。请联系该系统管理员核对对应 API 权限或网关配置后重试。${helpUrl ? `管理入口：${helpUrl}` : ""}`,
 						{
 							providerCode: "authorization_failed",
-							providerHttpStatus: 403,
+							providerHttpStatus:
+								typeof providerStatus === "number" &&
+								Number.isInteger(providerStatus) &&
+								providerStatus >= 100 &&
+								providerStatus <= 599
+									? providerStatus
+									: 403,
 							...(helpUrl ? { helpUrl } : {}),
 						},
 					);
