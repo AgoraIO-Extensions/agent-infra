@@ -339,6 +339,7 @@ export async function submitConversationTask(
 		await transaction`
 			update platform.conversations
 			set last_conversation_cursor = ${finalCursor},
+				authorization_revision = ${authority.authorizationRevision},
 				selected_model_option_id = ${plan.modelOptionId},
 				selected_reasoning_level = ${plan.reasoningLevel},
 				updated_at = ${plan.acceptedAt}

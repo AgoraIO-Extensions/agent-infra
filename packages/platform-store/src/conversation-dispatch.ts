@@ -625,7 +625,11 @@ export class PostgresConversationDispatchStoreV1
 						if (
 							!original ||
 							(workload.verified?.configuration.source.kind === "standard"
-								? original.runtimeSubmitProtocol !== "v4"
+								? original.runtimeSubmitProtocol !== "v4" &&
+									!(
+										input.claim.channelId === "web" &&
+										original.runtimeSubmitProtocol === "v2"
+									)
 								: original.runtimeSubmitProtocol !== "v2")
 						)
 							throw new DispatchCapacityUnavailable("capacity_unavailable");

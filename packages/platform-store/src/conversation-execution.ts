@@ -107,7 +107,7 @@ import { insertTaskAuthorization } from "./task-authorization.js";
 function legacyWebExecutionBinding(
 	authority: ConversationExecutionAuthorityV1,
 ) {
-	return authority.channelId === "web"
+	return authority.channelId === "web" && !authority.taskBoundary
 		? { executionSource: null, relayKeyBinding: null }
 		: undefined;
 }
@@ -1096,16 +1096,28 @@ export class PostgresConversationExecutionTransactionV1
 			const channelId = target?.channel_id ?? "api";
 			if (!["api", "api:user", "api:application"].includes(channelId))
 				return null;
-			const admission = await resolvePersonalApiTaskAdmissionAuthorityV1(
-				transaction,
-				{
-					material: input.material,
-					agentId,
-					channelId: channelId as TaskApiChannelV1,
-					operation: input.operation,
-				},
-				this.#userDirectory,
-			);
+			let admission: Awaited<
+				ReturnType<typeof resolvePersonalApiTaskAdmissionAuthorityV1>
+			>;
+			try {
+				admission = await resolvePersonalApiTaskAdmissionAuthorityV1(
+					transaction,
+					{
+						material: input.material,
+						agentId,
+						channelId: channelId as TaskApiChannelV1,
+						operation: input.operation,
+					},
+					this.#userDirectory,
+				);
+			} catch (error) {
+				if (
+					error instanceof PersonalApiCredentialErrorV1 &&
+					error.code === "not_found"
+				)
+					return null;
+				throw error;
+			}
 			const [agent] = await transaction<
 				{ authorization_revision: string | null }[]
 			>`

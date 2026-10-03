@@ -855,6 +855,31 @@ export function validateModelAccess(
 	return { endpoint: input.endpoint, credential: input.credential };
 }
 
+export function validateModelEndpoint(input: unknown): string {
+	if (
+		typeof input !== "string" ||
+		input.length > 2048 ||
+		/[\s\\?#]/.test(input)
+	)
+		configurationInvalid();
+	try {
+		const endpoint = new URL(input);
+		const literalLoopback =
+			/^http:\/\/(?:127\.0\.0\.1|\[::1\])(?::[0-9]+)?(?:\/|$)/.test(input);
+		if (
+			(endpoint.protocol !== "https:" && !literalLoopback) ||
+			endpoint.username ||
+			endpoint.password ||
+			endpoint.search ||
+			endpoint.hash
+		)
+			configurationInvalid();
+	} catch {
+		configurationInvalid();
+	}
+	return input;
+}
+
 function modelAccessArguments(access: CodexModelAccess | undefined) {
 	if (!access) return [];
 	const settings = {
