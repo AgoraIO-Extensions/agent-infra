@@ -45,7 +45,6 @@ export function registerTaskRoutes(
 			);
 			audit.principal = initial.taskBoundary.principal;
 			audit.target = { kind: "agent", agentId };
-			await audit.record("access", "succeeded", "request_accepted");
 			const current = await authorize(
 				dependencies,
 				initial,
@@ -53,6 +52,7 @@ export function registerTaskRoutes(
 				metadata.traceId,
 				context.req.raw,
 			);
+			await audit.record("access", "succeeded", "request_accepted");
 			const decision = await dependencies.commands(current).submitTask({
 				...body,
 				agentId,
@@ -103,7 +103,6 @@ export function registerTaskRoutes(
 				conversationId,
 				executionId,
 			};
-			await audit.record("access", "succeeded", "request_accepted");
 			await authorize(
 				dependencies,
 				initial,
@@ -111,6 +110,7 @@ export function registerTaskRoutes(
 				metadata.traceId,
 				context.req.raw,
 			);
+			await audit.record("access", "succeeded", "request_accepted");
 			return context.json(taskProjection(detail));
 		}),
 	);
@@ -148,7 +148,6 @@ export function registerTaskRoutes(
 				conversationId,
 				executionId,
 			};
-			await audit.record("access", "succeeded", "request_accepted");
 			const current = await authorize(
 				dependencies,
 				initial,
@@ -156,6 +155,7 @@ export function registerTaskRoutes(
 				metadata.traceId,
 				context.req.raw,
 			);
+			await audit.record("access", "succeeded", "request_accepted");
 			const decision = await dependencies.commands(current).stop({
 				schemaVersion: 1,
 				command: "stop",
