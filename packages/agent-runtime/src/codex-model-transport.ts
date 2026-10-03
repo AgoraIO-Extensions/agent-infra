@@ -1436,7 +1436,11 @@ export async function openCodexModelTransport(
 				});
 				readyModelTurns.delete(turnKey);
 				outcomeReported = true;
-			})();
+			})().catch((error: unknown) => {
+				// A fallback outcome cannot erase the original durable write failure.
+				failedDrains.add(turnKey);
+				throw error;
+			});
 			outcomeReport = pending;
 			void pending
 				.finally(() => {
