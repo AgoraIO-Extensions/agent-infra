@@ -195,7 +195,8 @@ export async function recordTaskStatus(
 	const event = publicTaskStatusEventV1({
 		isTask:
 			state.execution.task_wait_order !== null ||
-			(boundary !== undefined && state.execution.channel_id === "api"),
+			(boundary !== undefined && state.execution.channel_id === "api") ||
+			reason === "TASK_CANCELLED",
 		status,
 		reason,
 	});
