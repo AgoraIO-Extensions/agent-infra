@@ -191,7 +191,7 @@ describe("Task router/factory with actual Bearer and PostgreSQL", () => {
 							body: JSON.stringify({ schemaVersion: 1 }),
 						})
 					).status,
-				).toBe(403);
+				).toBe(404);
 				expect(
 					await sql`select id from platform.task_control_records`,
 				).toHaveLength(0);
@@ -282,7 +282,7 @@ describe("Task router/factory with actual Bearer and PostgreSQL", () => {
 			const response = await router.request(path(), {
 				headers: headers("application"),
 			});
-			expect(response.status).toBe(change === "credential" ? 401 : 403);
+			expect(response.status).toBe(change === "credential" ? 404 : 403);
 			expect(await response.text()).not.toContain("application output");
 			expect(
 				await sql`select execution_id from platform.conversation_executions where execution_id='execution-application' and status='completed'`,
@@ -299,7 +299,7 @@ describe("Task router/factory with actual Bearer and PostgreSQL", () => {
 		expect(
 			(await router.request(path(), { headers: headers("application") }))
 				.status,
-		).toBe(401);
+		).toBe(404);
 		expect(
 			(await router.request(path(), { headers: headers("replacement") }))
 				.status,
@@ -319,7 +319,7 @@ describe("Task router/factory with actual Bearer and PostgreSQL", () => {
 			},
 			body: JSON.stringify({ schemaVersion: 1 }),
 		});
-		expect(response.status).toBe(403);
+		expect(response.status).toBe(404);
 		expect(
 			await sql`select execution_id from platform.conversation_stops`,
 		).toHaveLength(0);

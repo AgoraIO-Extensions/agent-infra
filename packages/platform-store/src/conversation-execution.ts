@@ -1096,28 +1096,16 @@ export class PostgresConversationExecutionTransactionV1
 			const channelId = target?.channel_id ?? "api";
 			if (!["api", "api:user", "api:application"].includes(channelId))
 				return null;
-			let admission: Awaited<
-				ReturnType<typeof resolvePersonalApiTaskAdmissionAuthorityV1>
-			>;
-			try {
-				admission = await resolvePersonalApiTaskAdmissionAuthorityV1(
-					transaction,
-					{
-						material: input.material,
-						agentId,
-						channelId: channelId as TaskApiChannelV1,
-						operation: input.operation,
-					},
-					this.#userDirectory,
-				);
-			} catch (error) {
-				if (
-					input.conversationId !== undefined &&
-					error instanceof PersonalApiCredentialErrorV1
-				)
-					return null;
-				throw error;
-			}
+			const admission = await resolvePersonalApiTaskAdmissionAuthorityV1(
+				transaction,
+				{
+					material: input.material,
+					agentId,
+					channelId: channelId as TaskApiChannelV1,
+					operation: input.operation,
+				},
+				this.#userDirectory,
+			);
 			const [agent] = await transaction<
 				{ authorization_revision: string | null }[]
 			>`
@@ -1171,6 +1159,14 @@ export class PostgresConversationExecutionTransactionV1
 				this.#userDirectory,
 			);
 			return authority;
+		}).catch((error: unknown) => {
+			// Initial and final credential checks share the missing-resource response.
+			if (
+				input.conversationId !== undefined &&
+				error instanceof PersonalApiCredentialErrorV1
+			)
+				return null;
+			throw error;
 		});
 	}
 

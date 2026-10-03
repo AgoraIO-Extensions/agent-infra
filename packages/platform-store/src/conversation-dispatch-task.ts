@@ -133,20 +133,18 @@ export async function revalidateWaitingTask(
 						!agent ||
 						!isTaskAuthorizationCurrentV1({ boundary, user, agent, useGrant });
 				} catch (error) {
-					if (
-						!(error instanceof PersonalApiCredentialErrorV1) ||
-						error.code !== "forbidden"
-					)
-						throw error;
+					if (!(error instanceof PersonalApiCredentialErrorV1)) throw error;
 					const [clock] = await transaction<{ now: Date }[]>`
 						select clock_timestamp() as now
 					`;
 					if (
+						state.execution.status === "waiting" &&
 						state.execution.task_wait_deadline &&
 						clock &&
 						state.execution.task_wait_deadline <= clock.now
 					)
 						return true;
+					if (error.code !== "forbidden") throw error;
 					revoked = true;
 				}
 			}

@@ -156,6 +156,93 @@ afterAll(async () => {
 });
 describe("actual Bearer Task admission and original-transaction waiting cancellation", () => {
 	it.each(["user", "application"] as const)(
+		"cancels %s continuation after model fallback without an event sequence collision",
+		async (kind) => {
+			const initial = await submit(kind);
+			expect((await cancel(initial, kind)).status).toBe(202);
+			// Persist the former selection, which is absent from the current model configuration.
+			await sql`update platform.conversations set selected_model_option_id = 'removed-option' where id = ${initial.conversationId}`;
+			const response = await request(
+				`/api/v1/agents/${configuration.agentId}/tasks`,
+				kind,
+				{
+					schemaVersion: 1,
+					conversationId: initial.conversationId,
+					text: "controlled fallback continuation",
+				},
+				"continuation",
+			);
+			expect(response.status).toBe(202);
+			const task = (await response.json()) as Accepted;
+			const before = TaskProjectionV1Schema.parse(
+				await (await request(path(task), kind)).json(),
+			);
+			expect(
+				before.events.map((event) => [event.sequence, event.type]),
+			).toEqual([
+				[1, "task.status"],
+				[2, "model.selection.fell_back"],
+			]);
+			expect((await cancel(task, kind, "cancel-continuation")).status).toBe(
+				202,
+			);
+			const after = TaskProjectionV1Schema.parse(
+				await (await request(path(task), kind)).json(),
+			);
+			expect(after.status).toBe("cancelled");
+			expect(after.events.map((event) => event.sequence)).toEqual([1, 2, 3]);
+			expect((await cancel(task, kind, "cancel-continuation")).status).toBe(
+				202,
+			);
+			expect(
+				TaskProjectionV1Schema.parse(
+					await (await request(path(task), kind)).json(),
+				),
+			).toEqual(after);
+		},
+	);
+	it.each(["user", "application"] as const)(
+		"uses identical hidden HTTP results for %s missing/revoked Bearer and foreign legacy channel probes",
+		async (kind) => {
+			const own = await submit(kind);
+			const opposite = kind === "user" ? "application" : "user";
+			const foreign = { ...own, conversationId: `legacy-${opposite}` };
+			await sql`insert into platform.conversations(id, agent_id, actor_id, principal_type, channel_id, status, session_generation, authorization_revision)
+				values (${foreign.conversationId}, ${configuration.agentId}, 'same-id', ${opposite}, ${`api:${opposite}`}, 'ready', 1, 'agent-1')`;
+			const missing = { ...own, conversationId: "missing-conversation" };
+			for (const mode of ["valid", "missing", "revoked"] as const) {
+				if (mode === "revoked")
+					await sql`update platform.platform_api_credentials set revoked_at = now() where id = ${`credential-${kind}`}`;
+				const token =
+					mode === "missing" ? `papi_${"Z".repeat(43)}` : material[kind];
+				for (const task of mode === "valid"
+					? [foreign, missing]
+					: [own, foreign, missing]) {
+					for (const operation of ["read", "cancel"] as const) {
+						const response = await router.request(
+							`${path(task)}${operation === "cancel" ? "/cancel" : ""}`,
+							{
+								method: operation === "read" ? "GET" : "POST",
+								headers: {
+									Authorization: `Bearer ${token}`,
+									"Content-Type": "application/json",
+									"Idempotency-Key": "probe",
+								},
+								...(operation === "cancel"
+									? { body: JSON.stringify({ schemaVersion: 1 }) }
+									: {}),
+							},
+						);
+						expect(response.status).toBe(404);
+						expect(await response.text()).not.toContain(
+							"synthetic private task input",
+						);
+					}
+				}
+			}
+		},
+	);
+	it.each(["user", "application"] as const)(
 		"uses the original deployment loader and real HTTP to admit, bound, isolate and cancel %s waiting Tasks",
 		async (kind) => {
 			const moduleSpecifier = new URL(
@@ -281,7 +368,7 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 						2,
 					);
 					await sql`update platform.platform_api_credentials set revoked_at=clock_timestamp() where id=${`credential-${kind}`}`;
-					expect((await send(path(task))).status).toBe(401);
+					expect((await send(path(task))).status).toBe(404);
 					expect(
 						(
 							await send(
@@ -290,7 +377,7 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 								"revoked-cancel",
 							)
 						).status,
-					).toBe(401);
+					).toBe(404);
 					expect(await snapshot(task)).toEqual(initial);
 					const replacement = `papi_${"R".repeat(43)}`;
 					await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes) values('assembly-replacement',${kind},'same-id',${createHash("sha256").update(replacement).digest("hex")},${sql.json(["agent:read", "agent:use"])})`;

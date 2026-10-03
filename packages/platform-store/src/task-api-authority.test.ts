@@ -68,6 +68,63 @@ beforeEach(async () => {
 	}
 });
 describe("original Store actual-Bearer Task API supplier", () => {
+	it.each(["agent:read", "agent:use"] as const)(
+		"conceals missing/revoked credentials and incompatible principal channels for %s",
+		async (operation) => {
+			const tx = store();
+			for (const kind of ["user", "application"] as const) {
+				await client`update platform.conversations set channel_id = ${`api:${kind}`} where id = ${`conversation-${kind}`}`;
+			}
+			for (const kind of ["user", "application"] as const) {
+				const foreign = `conversation-${kind === "user" ? "application" : "user"}`;
+				for (const conversationId of [foreign, "missing-conversation"]) {
+					expect(
+						await tx.authorizeTaskApi({
+							material: material[kind],
+							operation,
+							conversationId,
+						}),
+					).toBeNull();
+				}
+				await client`update platform.platform_api_credentials set revoked_at = now() where id = ${`credential-${kind}`}`;
+				for (const token of [material[kind], material.replacement]) {
+					for (const conversationId of [
+						`conversation-${kind}`,
+						foreign,
+						"missing-conversation",
+					]) {
+						expect(
+							await tx.authorizeTaskApi({
+								material: token,
+								operation,
+								conversationId,
+							}),
+						).toBeNull();
+					}
+				}
+			}
+		},
+	);
+	it("conceals authority lost during the final directory recheck like a missing Conversation", async () => {
+		let reads = 0;
+		const tx = store({
+			resolveUser: async () => (++reads === 1 ? user : null),
+		});
+		expect(
+			await tx.authorizeTaskApi({
+				material: material.user,
+				operation: "agent:read",
+				conversationId: "conversation-user",
+			}),
+		).toBeNull();
+		expect(
+			await tx.authorizeTaskApi({
+				material: material.user,
+				operation: "agent:read",
+				conversationId: "missing-conversation",
+			}),
+		).toBeNull();
+	});
 	it.each(["user", "application"] as const)(
 		"binds %s to its C and refuses opposite kind with the same ID",
 		async (kind) => {
@@ -128,7 +185,7 @@ describe("original Store actual-Bearer Task API supplier", () => {
 				operation: "agent:use",
 				conversationId: "conversation-application",
 			}),
-		).rejects.toMatchObject({ code: "authentication_required" });
+		).resolves.toBeNull();
 		expect(
 			await tx.authorizeTaskApi({
 				material: material.replacement,
@@ -161,7 +218,7 @@ describe("original Store actual-Bearer Task API supplier", () => {
 				operation: "agent:use",
 				conversationId: "conversation-user",
 			}),
-		).rejects.toMatchObject({ code: "forbidden" });
+		).resolves.toBeNull();
 		await client`insert into platform.agent_owners(agent_id,owner_id,created_at) values('agent','same-id',now())`;
 		await client`delete from platform.agent_principal_grants where principal_type='user'`;
 		await expect(
@@ -170,7 +227,7 @@ describe("original Store actual-Bearer Task API supplier", () => {
 				operation: "agent:read",
 				conversationId: "conversation-user",
 			}),
-		).rejects.toMatchObject({ code: "not_found" });
+		).resolves.toBeNull();
 	});
 	it("samples fresh DB clock after the final directory await rather than returning expired authority", async () => {
 		let reads = 0;
@@ -213,6 +270,6 @@ describe("original Store actual-Bearer Task API supplier", () => {
 				operation: "agent:read",
 				conversationId: "conversation-user",
 			}),
-		).rejects.toMatchObject({ code: "unavailable" });
+		).resolves.toBeNull();
 	});
 });

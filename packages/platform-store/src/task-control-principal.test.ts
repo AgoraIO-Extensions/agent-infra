@@ -764,6 +764,73 @@ it("does not revoke a user Task when an application with the same ID is disabled
 });
 
 describe("waiting user authority", () => {
+	it.each(["claim", "prepare"] as const)(
+		"settles an expired waiting user task at %s during a directory outage and preserves the result after restart",
+		async (phase) => {
+			await waitingTask("user");
+			let directoryUnavailable = phase === "claim";
+			const options = {
+				...database,
+				userDirectory: {
+					resolveUser: async (id: string) => {
+						if (directoryUnavailable)
+							throw new Error("controlled directory outage");
+						return userDirectory.resolveUser(id);
+					},
+				},
+			};
+			const request = {
+				schemaVersion: 1 as const,
+				itemId: "conversation:turn:execution",
+				workerId: "worker",
+				leaseDurationMs: 30_000,
+			};
+			let dispatch = new PostgresConversationDispatchStoreV1(options);
+			try {
+				const claimed =
+					phase === "prepare" ? await dispatch.claim(request) : undefined;
+				directoryUnavailable = true;
+				await client`update platform.conversation_executions set created_at = clock_timestamp() - interval '2 seconds', task_wait_deadline = clock_timestamp() - interval '1 second' where execution_id = 'execution'`;
+				await client`update platform.agent_applications set service_availability = 'starting' where agent_id = 'agent'`;
+				await client`update platform.outbox_items set available_at = 'infinity' where id = 'conversation:turn:execution'`;
+				if (phase === "claim")
+					expect(await dispatch.findDispatchable({ limit: 8 })).toContainEqual({
+						itemId: request.itemId,
+						operation: "conversation.turn.submit.v1",
+					});
+				if (phase === "prepare") {
+					if (claimed?.outcome !== "claimed")
+						throw new Error("Expected waiting claim");
+					expect(
+						await dispatch.prepareRuntimeDispatch({
+							claim: claimed.claim,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(false);
+				} else
+					expect(await dispatch.claim(request)).toEqual({ outcome: "failed" });
+				const after = await waitingSnapshot();
+				expect(after.executions[0]).toMatchObject({
+					status: "failed",
+					delivery_fence: phase === "prepare" ? "1" : "0",
+					last_event_sequence: "1",
+				});
+				expect(after.outboxes[0]).toMatchObject({
+					status: "failed",
+					lease_owner: null,
+				});
+				expect(after.authorizations[0]?.revoked_at).toBeNull();
+				await dispatch.close();
+				dispatch = new PostgresConversationDispatchStoreV1(options);
+				expect(
+					await dispatch.claim({ ...request, workerId: "restarted" }),
+				).toEqual({ outcome: "failed" });
+				expect(await waitingSnapshot()).toEqual(after);
+			} finally {
+				await dispatch.close();
+			}
+		},
+	);
 	it.each([
 		"disabled",
 		"missing",
