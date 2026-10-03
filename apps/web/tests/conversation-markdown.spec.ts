@@ -173,6 +173,7 @@ test("assistant Markdown stays readable through history reload and version switc
 		}
 		await checkSurface("conversation", true);
 		await page.getByRole("button", { name: "个人历史" }).click();
+		await page.getByRole("button", { name: "此 Agent 的全部历史" }).click();
 		const personalHistory = page.getByRole("region", { name: "个人历史" });
 		await expect(
 			personalHistory.getByRole("link", { name: /Test conversation/ }),
