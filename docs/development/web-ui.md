@@ -3,6 +3,32 @@
 UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#21-技术栈)为准。
 本次迁移对应 [#389](https://github.com/AgoraIO-Extensions/agent-infra/issues/389)，不增加产品能力。
 
+## OpenDesign 视觉版本
+
+[#1208](https://github.com/AgoraIO-Extensions/agent-infra/issues/1208) 对整体 Web 采用新的 OpenDesign
+设计，保留工作区、我的管理、系统管理的职责分组和现有服务端契约。原 #400 原型保留。
+设计项目为 `agent-infra-web-redesign-1208`，对话为 `ab988058-7eb4-4da7-98dc-0d07bdc88c8e`。
+在 OpenDesign 中打开该项目的 `index.html` 可交互预览；`DESIGN.md` 定义视觉规则，
+`IMPLEMENTATION.md` 映射现有页面。落地版本的 SHA-256 为：
+
+| 文件 | SHA-256 |
+| --- | --- |
+| `index.html` | `c278d81ade83e5e2237d852cbca1f9930759652811ddd6ef99fef099a4405940` |
+| `DESIGN.md` | `f0d87a857af95f9be912cb832ede9764a521639313f56ef14ff9ce2495904021` |
+| `IMPLEMENTATION.md` | `364e9ffcb2f5b60a5b1974ff2359f63e69423cb5f9c59356cd4e26a2d7ea8111` |
+| `DESIGN-HANDOFF.md` | `25af7c1631e9051b93b25d34c5f4882c5f8b47e04bae9d5ea89dae9ecb7eacda` |
+| `DESIGN-MANIFEST.json` | `1a89acc1289824518ab2b40012145cade03e6c7e899c909475e0078f3f47e4e5` |
+
+`src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
+映射到现有 shadcn 变量。页面共享内容宽度、标题和表单样式；桌面侧栏为 248px，
+低于 1024px 使用现有 Sheet。工作台先展示最近对话和职责事项，再展示 Agent 与申请。
+Agent 详情中的 Owner、渠道、模型和范围均取自实际投影；Owner 配置入口仍由权限结果控制。
+对话时间线独立滚动，保留消息输入区及代码、表格的局部滚动。
+视口高度不超过 600px 时改用页面滚动，避免从执行详情返回后的键盘焦点被聊天容器裁切。
+
+原型中的示例人员、模型、就绪提示和演示操作不作为生产数据或新增能力。
+申请、审批、配置、生命周期及审计继续复用现有组件、请求和权限校验。
+
 ## 组件与调用方
 
 `apps/web/components.json` 保持 `base-lyra`、`neutral`、CSS variables、`@/` aliases 和 lucide。
@@ -67,3 +93,41 @@ CI 保存 `web-management-<head SHA>` artifact，HTML 报告包含 head 元数�
 PR 的人工 UI 验收仍遵循[工作流 §7.4](../architecture/SPEC-ai-native-development-workflow.md#74-人工验证)。
 [#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192) 可复用这些基础组件；
 [#194](https://github.com/AgoraIO-Extensions/agent-infra/issues/194) 的 UI 基础验收仍以 #389 完成为前提。
+
+### 导出设计验收矩阵
+
+`tests/design-contract.ts` 定义导出包的九种视口：360×800、390×844、430×932、600×960、
+820×1180、1024×768、1366×768、1440×900、1920×1080。
+矩阵在 desktop project 中逐一切换视口；mobile project 不重复执行同一矩阵。
+每次捕获保留截图及布局测量，检查页面无横向溢出、72px 顶栏、248px 桌面侧栏及主题 tokens。
+页面须先出现业务内容或可操作表单，不能仅凭加载页的标题就判定默认状态通过。
+
+| 页面/状态 | 浏览器测试文件 | 截图标识 |
+| --- | --- | --- |
+| 工作台 | `workbench-recent.spec.ts` | `workbench` |
+| Agent 目录、详情 | `management.spec.ts` | `-agents`、`-agents-agent-pilot-1` |
+| 对话 | `conversation-routing.spec.ts` | `conversation` |
+| 我的申请、已创建 Agent | `management.spec.ts` | `-my-agents`、`my-agents-owned` |
+| 创建、编辑申请 | `management.spec.ts` | `-my-agents-new`、`-my-agents-application-browser-1-edit` |
+| 申请详情 | `management.spec.ts` | `-my-agents-application-browser-1` |
+| Owner 配置 | `management.spec.ts` | `-agents-agent-pilot-1-configuration` |
+| 创建审批 | `management.spec.ts` | `-admin-approvals` |
+| 管理员 Agent 列表 | `admin-agents.spec.ts` | `admin-agents` |
+| 个人、平台审计 | `audit.spec.ts` | `-audit`、`-admin-audit` |
+
+关键状态与行为另由以下测试覆盖，不增加原型状态产品路由：
+
+- `management.spec.ts`：申请/审批/配置的 pending、loading、empty、error、权限拒绝、长字段，
+  移动 Sheet 的焦点、Escape、导航关闭及桌面断点关闭。
+- `conversation-routing.spec.ts`：加载与 503 恢复、403 拒绝、不可用历史只读、深链/返回、
+  窄屏历史切换与消息输入区。失败状态沿用对话标题层级，返回目录不产生业务写入。
+- `conversation-live.spec.ts`、`conversation-markdown.spec.ts`：消息、模型保存、执行详情、
+  长正文和代码/表格局部滚动。
+- `conversation-screen.test.tsx`：终态经事件或历史回读后清除等待提示并刷新最近会话，
+  新建会话成功后刷新最近会话。
+- `use-agent-detail.test.tsx`：生命周期过渡到 ready 后更新展示数据并停止轮询；403/503 不继续轮询。
+
+截图反映受控 API fixture，不证明 LDAP、真实模型、Kubernetes 或独立 Connection 验收。
+数据条数、身份、模型选项、权限相关操作与导出样例的差异须以实际契约为准；
+原型里的平台就绪、风险评级、保存草稿和示例凭证不能作为生产能力移植。
+测量通过仍须回读截图；PR 中记录绑定当前 head 的报告、视觉差异及人工结论。

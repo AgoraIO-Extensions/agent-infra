@@ -367,6 +367,9 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	process.on("SIGINT", stop);
 	process.on("SIGTERM", stop);
 	void workerPromise.catch(() => {
+		console.error(
+			"Platform Worker failed to start; check deployment configuration",
+		);
 		process.exitCode = 1;
 	});
 }
