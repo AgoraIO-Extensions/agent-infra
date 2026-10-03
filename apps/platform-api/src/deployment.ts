@@ -11,6 +11,7 @@ import {
 	createRelayKeyEncryptorV1,
 	createSecretEncryptorV1,
 } from "@agent-infra/secret-store";
+import { createAgentDefaultRelayKeyCandidatesV1 } from "./agent-default-relay-key-validation.js";
 
 import type { PlatformApiAssemblyInput } from "./assembly.js";
 import { createConnectionCapability } from "./connection-consumer-profile.js";
@@ -82,6 +83,10 @@ export interface ProductionPlatformApiInputV1
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	/** Public wrapping keys only. Worker private keys belong to the Worker deployment. */
 	readonly encryptionKeys: unknown;
+	/** Exact existing template/image/Driver bindings for default Key validation. */
+	readonly agentDefaultRelayKeyTemplateBindings?: Parameters<
+		typeof createAgentDefaultRelayKeyCandidatesV1
+	>[0]["templateBindings"];
 	/** Approved fixed billing profile and deployment-owned CA/TLS transport only. */
 	readonly personalRelayKeyValidation?: Parameters<
 		typeof createPersonalRelayKeyValidatorV1
@@ -272,6 +277,23 @@ export function createProductionPlatformApiAssemblyInputV1(
 				: {}),
 		},
 		...(personalRelayKeys ? { personalRelayKeys } : {}),
+		...(personalRelayKeys &&
+		relayKeyEncryptor &&
+		input.personalRelayKeyValidation &&
+		input.agentDefaultRelayKeyTemplateBindings
+			? {
+					agentDefaultRelayKeys: {
+						currentIdentity: personalRelayKeys.currentIdentity,
+						encrypt: (binding, keyValue) =>
+							relayKeyEncryptor.encrypt({ ...binding, plaintext: keyValue }),
+						candidates: createAgentDefaultRelayKeyCandidatesV1({
+							modelCatalog: input.modelCatalog,
+							templateBindings: input.agentDefaultRelayKeyTemplateBindings,
+							validation: input.personalRelayKeyValidation,
+						}),
+					},
+				}
+			: {}),
 		...(input.wecom ? { wecom: input.wecom } : {}),
 		...(input.wecomIdentity ? { wecomIdentity: input.wecomIdentity } : {}),
 		...(input.wecomCredentialEncryptionKeys
