@@ -159,6 +159,22 @@ describe("session sandbox workload adapter", () => {
 		});
 	});
 
+	it("accepts an owned Pod when equivalent fields were reordered", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const pod = await client.read("Pod", allocation.podName);
+		if (!pod?.spec?.containers[0]) throw new Error("missing runtime container");
+		pod.spec.containers[0].securityContext = {
+			runAsNonRoot: true,
+			readOnlyRootFilesystem: false,
+			allowPrivilegeEscalation: false,
+		};
+		await expect(adapter.apply(allocation)).resolves.toMatchObject({
+			sandboxId: allocation.sandboxId,
+		});
+	});
+
 	it.each([
 		[
 			"image",

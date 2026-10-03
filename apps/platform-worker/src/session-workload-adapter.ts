@@ -203,6 +203,18 @@ function pvcSpecMatches(
 	);
 }
 
+function stableJson(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+	if (value && typeof value === "object") {
+		return `{${Object.entries(value as Record<string, unknown>)
+			.filter(([, item]) => item !== undefined)
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+			.join(",")}}`;
+	}
+	return JSON.stringify(value);
+}
+
 function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 	const currentSpec = (current as V1Pod).spec;
 	const expectedSpec = expected.spec;
@@ -234,18 +246,18 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		currentContainer.image === expectedContainer.image &&
 		currentContainer.imagePullPolicy === expectedContainer.imagePullPolicy &&
 		currentContainer.workingDir === expectedContainer.workingDir &&
-		JSON.stringify(currentContainer.ports ?? []) ===
-			JSON.stringify(expectedContainer.ports ?? []) &&
-		JSON.stringify(normalizeEnv(currentContainer.env)) ===
-			JSON.stringify(normalizeEnv(expectedContainer.env)) &&
-		JSON.stringify(currentContainer.volumeMounts ?? []) ===
-			JSON.stringify(expectedContainer.volumeMounts ?? []) &&
-		JSON.stringify(currentContainer.securityContext ?? {}) ===
-			JSON.stringify(expectedContainer.securityContext ?? {}) &&
-		JSON.stringify(currentContainer.readinessProbe ?? {}) ===
-			JSON.stringify(expectedContainer.readinessProbe ?? {}) &&
-		JSON.stringify(currentSpec.volumes ?? []) ===
-			JSON.stringify(expectedSpec.volumes ?? [])
+		stableJson(currentContainer.ports ?? []) ===
+			stableJson(expectedContainer.ports ?? []) &&
+		stableJson(normalizeEnv(currentContainer.env)) ===
+			stableJson(normalizeEnv(expectedContainer.env)) &&
+		stableJson(currentContainer.volumeMounts ?? []) ===
+			stableJson(expectedContainer.volumeMounts ?? []) &&
+		stableJson(currentContainer.securityContext ?? {}) ===
+			stableJson(expectedContainer.securityContext ?? {}) &&
+		stableJson(currentContainer.readinessProbe ?? {}) ===
+			stableJson(expectedContainer.readinessProbe ?? {}) &&
+		stableJson(currentSpec.volumes ?? []) ===
+			stableJson(expectedSpec.volumes ?? [])
 	);
 }
 
