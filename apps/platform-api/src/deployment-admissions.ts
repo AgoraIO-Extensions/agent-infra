@@ -1,8 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-	DeploymentConfigurationProjectionV2Schema,
-	standardTemplateDefinitionsV1,
-} from "@agent-infra/contracts/pilot";
+import { DeploymentConfigurationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import {
 	ImmutableOciDigestV1Schema,
 	OciImageReferenceV1Schema,
@@ -17,6 +14,7 @@ import {
 	type StandardTemplateModelBindingV1,
 	standardTemplateReadinessV1,
 } from "@agent-infra/model-catalog";
+import { standardTemplateDefinitionsV1 } from "@agent-infra/model-catalog/standard-templates";
 import {
 	type AgentConfigurationRecordV2,
 	type AgentConfigurationSecretMetadataV1,

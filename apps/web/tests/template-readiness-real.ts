@@ -12,7 +12,7 @@ if (
 	!apiOrigin ||
 	!/^http:\/\/127\.0\.0\.1:\d+$/.test(apiOrigin) ||
 	!token ||
-	!["disabled", "ready"].includes(mode ?? "")
+	!["disabled", "ready", "retry"].includes(mode ?? "")
 )
 	throw new Error("Controlled local API inputs required");
 const web = await preview({
@@ -77,6 +77,21 @@ try {
 			.fill("synthetic-browser-model-value");
 		await choose("默认模型", "endpoint-a · model-a");
 		await choose("默认推理档位", "medium");
+		if (mode === "retry") {
+			const rejected = page.waitForResponse(
+				(r) =>
+					new URL(r.url()).pathname === "/api/v2/agent-applications" &&
+					r.request().method() === "POST",
+			);
+			await page.getByRole("button", { name: "提交申请", exact: true }).click();
+			expect((await rejected).status()).toBeGreaterThanOrEqual(400);
+			await expect(
+				page.getByText("模板已更新，请确认后再提交。", { exact: true }),
+			).toBeVisible();
+			await page
+				.getByRole("button", { name: "使用当前模板", exact: true })
+				.click();
+		}
 		const response = page.waitForResponse(
 			(r) =>
 				new URL(r.url()).pathname === "/api/v2/agent-applications" &&
@@ -87,7 +102,7 @@ try {
 		await expect(
 			page.getByRole("heading", { name: "申请已提交", exact: true }),
 		).toBeVisible();
-		expect(submissions).toBe(1);
+		expect(submissions).toBe(mode === "retry" ? 2 : 1);
 	}
 	const evidence = process.env.TEMPLATE_TEST_EVIDENCE_DIR;
 	if (evidence) {

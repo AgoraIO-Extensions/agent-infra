@@ -1027,8 +1027,17 @@ it.skipIf(!process.env.TEMPLATE_READINESS_BROWSER)(
 		fixture = deploymentInput(database.databaseUrl);
 		await openApi();
 		const run = promisify(execFile);
-		for (const mode of ["disabled", "ready"] as const) {
-			fixture.validation.status = mode === "ready" ? "passed" : "disabled";
+		for (const mode of ["disabled", "ready", "retry"] as const) {
+			fixture.validation.status = mode === "disabled" ? "disabled" : "passed";
+			if (mode === "retry")
+				fixture.authorize.mockImplementationOnce(async () => {
+					fixture.validation.executionId = "replacement-validation";
+					return {
+						status: "admitted",
+						decisionRef: "decision-a",
+						evaluatedAt: "2026-09-14T00:00:00Z",
+					};
+				});
 			const result = await run(
 				process.execPath,
 				[
@@ -1054,8 +1063,9 @@ it.skipIf(!process.env.TEMPLATE_READINESS_BROWSER)(
 		expect(applications).toMatchObject({
 			items: expect.arrayContaining([
 				expect.objectContaining({ name: "Readiness browser ready" }),
+				expect.objectContaining({ name: "Readiness browser retry" }),
 			]),
 		});
 	},
-	130_000,
+	190_000,
 );

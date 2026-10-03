@@ -1,4 +1,4 @@
-import { standardTemplateDefinitionsV1 } from "@agent-infra/contracts/pilot";
+import { standardTemplateDefinitionsV1 } from "@agent-infra/model-catalog/standard-templates";
 import type {
 	Client,
 	RequestResult,

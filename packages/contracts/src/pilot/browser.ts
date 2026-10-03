@@ -559,13 +559,6 @@ export const DeploymentConfigurationStatusV2Schema = z.enum([
 	"stale",
 ]);
 
-export const standardTemplateDefinitionsV1 = [
-	{ driver: "codex", templateId: "codex", displayName: "Codex" },
-	{ driver: "claude", templateId: "claude", displayName: "Claude Code" },
-	{ driver: "acp", templateId: "opencode", displayName: "OpenCode" },
-	{ driver: "pi", templateId: "pi", displayName: "Pi" },
-] as const;
-
 export const DeploymentTemplateProjectionV2Schema = z.strictObject({
 	readiness: z
 		.strictObject({
