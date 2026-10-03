@@ -197,7 +197,7 @@ export async function recordTaskStatus(
 		isTask:
 			state.execution.task_wait_order !== null ||
 			(boundary !== undefined &&
-				isTaskApiChannelV1(boundary.channelId, boundary.principal)),
+				isTaskApiChannelV1(state.execution.channel_id, boundary.principal)),
 		status,
 		reason,
 	});
