@@ -138,6 +138,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		}
 	}, [routeHref]);
 	useEffect(() => {
+		if (typeof window.matchMedia !== "function") return;
 		const desktop = window.matchMedia("(min-width: 1024px)");
 		const closeOnDesktop = () => {
 			if (desktop.matches) setSheet(false);
