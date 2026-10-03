@@ -1167,6 +1167,89 @@ Connection 只复用固定且经 allowlist 审核的 OpenConnector Provider/OAut
 
 Connection 的 LDAP、OAuth 客户端、MCP/API、Grant、凭证保护、Provider Action、幂等/对账及 Pilot 验证矩阵由 [Connection M1 HLD](HLD-connection-M1.md) 细化。跨文档整合按第 25 节完成，不能以旧的代调用协议覆盖本节独立直连边界。
 
+### 13.5 Platform 外部 Connection Consumer 配置契约
+
+本节冻结 [#1269](https://github.com/AgoraIO-Extensions/agent-infra/issues/1269) 的部署配置，
+不改变两份 PRD 的独立直连边界。适用的 Connection HLD 条款为
+[§3 系统上下文](HLD-connection-M1.md#3-系统上下文)、
+[§5.2 Consumer 与 Instance](HLD-connection-M1.md#52-consumer-与-instance)、
+[§7 MCP/API 调用流程](HLD-connection-M1.md#7-mcpapi-调用流程)和
+[§11 审计与跨系统关联](HLD-connection-M1.md#11-审计与跨系统关联)。
+
+#### 13.5.1 字段与配置来源
+
+一个部署使用一个完整的 Consumer 配置快照；以下字段全部必填，不能从用户、Agent 或任务输入补齐。
+
+| 字段 | 语义与约束 |
+| --- | --- |
+| `schemaVersion` | 本配置契约的整数版本，当前为 `1`；不是 Connection API、MCP 或客户端产物版本。 |
+| `publicOrigin` | 部署批准并与 Connection 发布配置一致的 HTTPS origin，只含 scheme、host 和可选端口；使用 URL origin 的规范形式，不含凭据、路径、尾斜杠、query 或 fragment。批准范围按完整 origin 精确匹配，不使用域名后缀或通配符。 |
+| `mcpPath` | 相对此 origin 的独立绝对路径，以单个 `/` 开始；不含 scheme、host、query、fragment、反斜杠、`.`/`..` 路径段或编码后的路径分隔符及点段。最终 MCP endpoint 为 `publicOrigin + mcpPath`，不以 URL 解析的相对路径回退或重定向改变目标。 |
+| `consumerId` | Connection 为该产品注册的非空 Consumer 标识，按原值精确匹配；不是 Principal、ConsumerInstance、Actor 或授权证明，不能由 Platform 创建实例身份或代替 Connection 的认证解析。 |
+| `audience` | Connection 为该 Consumer 部署批准的非空目标资源标识，按原值精确匹配；不能从 origin、路径或 Platform Runtime Execution Grant 的 audience 推导。 |
+| `egressProfile` | 非敏感的 `{ ref, revision }`，两项均为非空字符串，引用部署批准的出站策略及不可变修订。该策略限定到达上述 Connection 目标所需的网络路径、DNS 和 TLS 校验；引用名不授予授权，也不允许访问 Connection DB 或 Provider。 |
+
+配置来源按以下顺序确定，不在进程内逐字段叠加：
+
+1. 部署显式选择外部配置引用时，该引用的固定修订是整个快照的唯一来源；无法读取或校验失败
+   时拒绝启用，不能回退到 Helm values。
+2. 未选择外部引用时，使用目标环境的 Helm values 渲染完整非敏感 ConfigMap；ConfigMap 是
+   该 values 的交付形式，不是另一层覆盖源。外部引用与内联快照同时配置时视为冲突并拒绝。
+3. 源码、镜像和前端包不内置环境 endpoint 或兜底值。普通环境变量、请求体、Agent 配置、
+   模型/工具参数和前端常量均不能覆盖快照；环境选择只发生在受控部署配置中。
+
+#### 13.5.2 版本、指纹与失败行为
+
+版本 `1` 只接受上述字段及 `egressProfile` 的两个子字段，拒绝未知字段、缺失值、错误类型和
+不满足约束的值；不静默忽略新字段或自动降级。字段集合、语义或规范化规则变化须发布新
+`schemaVersion`，并在启用前确认部署与消费方均支持。支持配置版本不表示客户端、MCP/API
+或 Connection 服务端兼容；它们仍须通过各自的版本和 readiness 门禁。
+
+配置指纹为以下数组经 `JSON.stringify` 序列化后的 UTF-8 字节的 SHA-256，以小写十六进制
+表示；不添加空白、BOM 或尾换行。先完成字段校验；字符串保持原值，不 trim、改写大小写或隐式解码。
+
+```text
+[schemaVersion, publicOrigin, mcpPath, consumerId, audience, egressProfile.ref, egressProfile.revision]
+```
+
+指纹覆盖有效非敏感配置及出站策略修订，不包含 SecretRef、token、私钥或其 hash；
+它用于配置一致性核对，不是签名、安装身份或 Connection 授权。源引用及修订与指纹一并记录，
+相同内容从不同批准来源交付可具有相同指纹；出站策略内容变化必须产生新修订和新指纹。
+
+部署以完整快照校验并发布，消费方在启用 Connection 能力前核对预期版本和指纹。
+缺失批准来源、origin 未获准、路径非法、Consumer/audience 与批准登记不符、出站策略
+不可解析或未落实、版本不支持、指纹不符时，受影响的 Connection 能力保持不可用，不发出调用。
+更新不允许混用新旧字段；现有客户端不能原地切换 origin、Consumer 或 audience 并复用旧安装
+凭据。恢复须重新核对完整配置和原安装绑定，不回退到旧快照、其他环境、匿名、Owner 或平台
+服务身份；已发生但结果未知的外部操作仍沿原调用核实，不向新 endpoint 重放。
+
+#### 13.5.3 SecretRef、权威与交付边界
+
+非敏感快照使用 Helm values/ConfigMap 或上述受控外部配置。必要的安装凭据仅由已批准的
+SecretRef 和受保护客户端边界提供；SecretRef 只定位安装隔离的受控凭据，不构成授权，
+不得来自请求或 Agent 输入。引用必须解析到与原 Principal、ConsumerInstance、Actor（如适用）、
+audience 和凭据修订一致的安装；缺失、失效或绑定不符时拒绝，不能跨安装共享。
+具体签发、持有证明、撤销和刷新遵循 Connection HLD §5.2；Codex 的交付与隔离遵循
+[Runtime HLD §9.1](HLD-agent-runtime-M1.md#91-codex-独立-connection-consumer-profile)，
+不能把 SecretRef 解释为普通 env、argv 或工具进程可读的 token 注入许可。
+
+Platform 在 Connection 相关数据中只保存 Consumer 非敏感配置和 §13.2 的受信关联引用；
+不代理 MCP、不读取 Connection DB、不保存 Provider Credential 或 Grant，不复制 Connection
+授权与审计权威。Platform API/Worker 不取得客户端凭据来代调用或查询 Connection。
+客户端凭据和原始秘密不得进入 Platform DB、ConfigMap、普通配置、日志/错误、模型上下文、
+前端 bundle、Issue 或 PR 文本；SecretRef 的解析仅发生在已批准的安装凭据/客户端边界。
+
+本节不实现 API/Worker/Web 接线（分别由
+[#1270](https://github.com/AgoraIO-Extensions/agent-infra/issues/1270)、
+[#1271](https://github.com/AgoraIO-Extensions/agent-infra/issues/1271)、
+[#1272](https://github.com/AgoraIO-Extensions/agent-infra/issues/1272)承接）。
+[#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851)负责真实客户端的安装证明和
+受保护交付；[#395](https://github.com/AgoraIO-Extensions/agent-infra/issues/395)负责独立
+Connection runtime/readiness；[#435](https://github.com/AgoraIO-Extensions/agent-infra/issues/435)
+是双系统联合验收的职责入口。配置契约或静态校验通过不代表这些验收完成，也不接管
+[#907](https://github.com/AgoraIO-Extensions/agent-infra/issues/907)、
+[#601](https://github.com/AgoraIO-Extensions/agent-infra/issues/601)或 Connection 服务端实现。
+
 ## 14. 使用渠道
 
 ### 14.1 Web
