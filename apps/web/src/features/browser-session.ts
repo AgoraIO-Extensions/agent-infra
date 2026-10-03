@@ -37,12 +37,22 @@ export async function loadBrowserSession(
 			responseStyle: "fields",
 			throwOnError: false,
 		}),
-		getConnectionCapability<false>({
-			client,
-			responseStyle: "fields",
-			throwOnError: false,
-			signal: AbortSignal.timeout(3_000),
-		}).catch(() => undefined),
+		(async () => {
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 3_000);
+			try {
+				return await getConnectionCapability<false>({
+					client,
+					responseStyle: "fields",
+					throwOnError: false,
+					signal: controller.signal,
+				});
+			} catch {
+				return undefined;
+			} finally {
+				clearTimeout(timeout);
+			}
+		})(),
 	]);
 	const generation = result.response?.headers.get(
 		"x-platform-session-generation",
