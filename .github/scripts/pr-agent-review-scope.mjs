@@ -150,6 +150,19 @@ export function validateDiffInput(diff, files) {
     if (new Set(headerKeys).size !== headerKeys.length ||
         (hunkStart === -1 && (metadata("--- ").length || metadata("+++ ").length)))
       throw new Error("PR-Agent range diff cannot be parsed");
+    if (hunkStart === -1) {
+      const index = /^index ([a-f0-9]+)\.\.([a-f0-9]+)(?: [0-7]{6})?$/.exec(metadata("index ")[0] ?? "");
+      const emptyBlob = (value) => value?.length >= 7 && "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391".startsWith(value);
+      const unchangedContent = !metadata("index ").length || (index && index[1] === index[2]);
+      const modeChange = /^old mode [0-7]{6}$/.test(metadata("old mode ")[0] ?? "") &&
+        /^new mode [0-7]{6}$/.test(metadata("new mode ")[0] ?? "") &&
+        metadata("old mode ")[0].slice(9) !== metadata("new mode ")[0].slice(9);
+      const valid = file.status === "added" ? index && /^0+$/.test(index[1]) && emptyBlob(index[2])
+        : file.status === "removed" ? index && emptyBlob(index[1]) && /^0+$/.test(index[2])
+        : file.status === "renamed" ? unchangedContent && metadata("similarity index ")[0] === "similarity index 100%"
+        : unchangedContent && modeChange;
+      if (!valid) throw new Error("PR-Agent range diff is missing content hunks");
+    }
     // Git can ignore trailing text. Consume every hunk ourselves, then compare
     // actual line counts to numstat; API statistics are never authoritative.
     let oldRemaining = 0;

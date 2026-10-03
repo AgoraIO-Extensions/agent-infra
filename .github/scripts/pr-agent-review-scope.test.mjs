@@ -253,3 +253,20 @@ test("trailing garbage, missing newline, partial hunks and unchanged input retai
   assert.throws(() => validateDiffInput(diff, Array(300).fill(files[0])));
   assert.throws(() => validateDiffInput("x".repeat(10 * 1024 * 1024 + 1), []));
 });
+
+
+test("no-hunk changes must prove empty content, pure rename or mode-only changes", () => {
+  const base = "diff --git a/f b/f\n";
+  for (const [header, status] of [["index 1111111..2222222 100644\n", "modified"],
+    ["new file mode 100644\nindex 0000000..2222222\n", "added"],
+    ["deleted file mode 100644\nindex 1111111..0000000\n", "removed"],
+    ["old mode 100644\nnew mode 100755\nindex 1111111..2222222\n", "modified"]]) {
+    assert.throws(() => validateDiffInput(base + header, [{ filename: "f", status }]), /missing content hunks/);
+  }
+  for (const [header, status] of [["new file mode 100644\nindex 0000000..e69de29\n", "added"],
+    ["deleted file mode 100644\nindex e69de29..0000000\n", "removed"]]) {
+    assert.equal(validateDiffInput(base + header, [{ filename: "f", status }]).diffBytes, Buffer.byteLength(base + header));
+  }
+  const rename = "diff --git a/old b/f\nsimilarity index 50%\nrename from old\nrename to f\nindex 1111111..2222222 100644\n";
+  assert.throws(() => validateDiffInput(rename, [{ filename: "f", previous_filename: "old", status: "renamed" }]), /missing content hunks/);
+});
