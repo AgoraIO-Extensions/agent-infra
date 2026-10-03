@@ -2,6 +2,7 @@ import {
 	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 	CommandAcceptedProjectionV1Schema,
+	ConnectionCapabilityProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
 	ConversationPageV1Schema,
 	ExecutionDetailProjectionV2Schema,
@@ -1035,6 +1036,17 @@ for (const source of ["standard", "custom"] as const) {
 			await page.route(/\/api\/v[12]\//, async (route) => {
 				const request = route.request();
 				const path = new URL(request.url()).pathname;
+				if (
+					request.method() === "GET" &&
+					path === "/api/v1/connection/capability"
+				)
+					return route.fulfill({
+						json: ConnectionCapabilityProjectionV1Schema.parse({
+							schemaVersion: 1,
+							status: "unavailable",
+							reason: "missing",
+						}),
+					});
 				if (path === "/api/v2/me/conversations/recent")
 					return route.fulfill({
 						json: ConversationPageV1Schema.parse({

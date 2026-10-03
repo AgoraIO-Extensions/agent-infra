@@ -1,4 +1,7 @@
-import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
+import {
+	AgentProjectionV2Schema,
+	ConnectionCapabilityProjectionV1Schema,
+} from "@agent-infra/contracts/pilot";
 import {
 	createPilotAgentMockServerV2,
 	pilotFakeScenariosV2,
@@ -103,6 +106,17 @@ async function fixture(page: Page) {
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const url = new URL(request.url());
+		if (
+			request.method() === "GET" &&
+			url.pathname === "/api/v1/connection/capability"
+		)
+			return route.fulfill({
+				json: ConnectionCapabilityProjectionV1Schema.parse({
+					schemaVersion: 1,
+					status: "unavailable",
+					reason: "missing",
+				}),
+			});
 		if (request.method() !== "GET") {
 			commands.push(`${request.method()} ${url.pathname}`);
 			return route.abort();
