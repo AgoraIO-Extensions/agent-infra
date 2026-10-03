@@ -1,6 +1,5 @@
-import { channel } from "node:diagnostics_channel";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -12,20 +11,45 @@ import {
 import { verifyCodexPilotInstallation } from "./codex-installation.js";
 import { seedNativeCommandState } from "./codex-native-command.test-support.js";
 import { CodexRuntimeDriver } from "./codex-runtime-driver.js";
+import { codexSkillLaunch } from "./codex-skill-launch.internal.js";
+
+function evidenceValue(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(evidenceValue);
+	if (typeof value !== "object" || value === null) return value;
+	const result: Record<string, unknown> = {};
+	for (const [key, item] of Object.entries(value)) {
+		result[key] = /credential|token|secret|password|authorization/i.test(key)
+			? "[redacted]"
+			: evidenceValue(item);
+	}
+	return result;
+}
 
 class ObservedNativeSkillDriver extends CodexRuntimeDriver {
 	static async openObserved(
 		options: Parameters<typeof CodexRuntimeDriver.open>[0],
 		requests: CodexAppServerFrame[],
 		notifications: string[],
+		responses: Array<{ method: string; frame: CodexAppServerFrame }>,
+		launches: Array<{
+			processId: string;
+			cwd: string;
+			bundledSkillsDisabled: boolean;
+		}>,
 	) {
 		return ObservedNativeSkillDriver.openWithBridge(
 			options,
 			async (bridgeOptions) => {
 				const bridge = await CodexAppServerBridge.open(bridgeOptions);
+				const requestMethods = new Map<string, string>();
 				const send = bridge.send.bind(bridge);
 				bridge.send = async (frame) => {
 					requests.push(frame);
+					if (
+						"id" in frame &&
+						(typeof frame.id === "string" || typeof frame.id === "number")
+					)
+						requestMethods.set(String(frame.id), String(frame.method));
 					return send(frame);
 				};
 				const frames = bridge.frames.bind(bridge);
@@ -33,9 +57,24 @@ class ObservedNativeSkillDriver extends CodexRuntimeDriver {
 					for await (const frame of frames()) {
 						if ("method" in frame && typeof frame.method === "string")
 							notifications.push(frame.method);
+						else if (
+							"id" in frame &&
+							(typeof frame.id === "string" || typeof frame.id === "number")
+						) {
+							const method = requestMethods.get(String(frame.id));
+							if (method) responses.push({ method, frame });
+						}
 						yield frame;
 					}
 				};
+				const launch = bridge[codexSkillLaunch];
+				if (launch) {
+					launches.push({
+						processId: launch.processId,
+						cwd: launch.cwd,
+						bundledSkillsDisabled: launch.bundledSkillsDisabled,
+					});
+				}
 				return bridge;
 			},
 		);
@@ -53,24 +92,29 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 			);
 			if (!descriptor) throw new Error("Missing installed Skill descriptor");
 			const directory = await mkdtemp(join(tmpdir(), "codex-native-skill-"));
+			let providerRequests = 0;
 			const provider = createServer((_, response) => {
+				providerRequests++;
 				response.writeHead(503);
 				response.end();
 			});
+			let secondaryProviderRequests = 0;
 			const secondaryProvider = createServer((_, response) => {
+				secondaryProviderRequests++;
 				response.writeHead(503);
 				response.end();
 			});
 			const requests: CodexAppServerFrame[] = [];
 			const notifications: string[] = [];
-			const http = channel("http.server.request.start");
-			const httpByPort = new Map<number, number>();
-			const observe = (event: unknown) => {
-				const address = (event as { server: Server }).server.address();
-				if (address && typeof address !== "string")
-					httpByPort.set(address.port, (httpByPort.get(address.port) ?? 0) + 1);
-			};
-			http.subscribe(observe);
+			const responses: Array<{
+				method: string;
+				frame: CodexAppServerFrame;
+			}> = [];
+			const launches: Array<{
+				processId: string;
+				cwd: string;
+				bundledSkillsDisabled: boolean;
+			}> = [];
 			let driver: CodexRuntimeDriver | undefined;
 			try {
 				await new Promise<void>((resolve) =>
@@ -90,6 +134,12 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 					throw new Error("Missing providers");
 				const endpoint = `http://127.0.0.1:${address.port}`;
 				const secondaryEndpoint = `http://127.0.0.1:${secondaryAddress.port}`;
+				for (const control of [endpoint, secondaryEndpoint]) {
+					const response = await fetch(control);
+					await response.arrayBuffer();
+				}
+				expect(providerRequests).toBe(1);
+				expect(secondaryProviderRequests).toBe(1);
 				const seeded = await seedNativeCommandState(
 					directory,
 					"native-skill-thread",
@@ -124,6 +174,8 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 					},
 					requests,
 					notifications,
+					responses,
+					launches,
 				);
 				const read = {
 					nativeSessionRef: seeded.nativeSessionRef,
@@ -166,11 +218,43 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 					"skills/extraRoots/set",
 					"skills/list",
 				]);
-				expect(httpByPort.get(address.port) ?? 0).toBe(0);
-				expect(httpByPort.get(secondaryAddress.port) ?? 0).toBe(0);
+				expect(providerRequests).toBe(1);
+				expect(secondaryProviderRequests).toBe(1);
+				expect(launches).toHaveLength(1);
+				expect(launches[0]).toMatchObject({
+					bundledSkillsDisabled: true,
+					cwd: expect.any(String),
+					processId: expect.any(String),
+				});
+				expect(
+					responses.filter(({ method }) =>
+						["config/read", "skills/extraRoots/set", "skills/list"].includes(
+							method,
+						),
+					),
+				).toHaveLength(3);
+				console.log(
+					`NATIVE_SKILL_EVIDENCE ${JSON.stringify({
+						launches,
+						requests: evidenceValue(
+							requests.filter(
+								(request) =>
+									typeof request.method === "string" &&
+									[
+										"config/read",
+										"skills/extraRoots/set",
+										"skills/list",
+									].includes(request.method),
+							),
+						),
+						responses: evidenceValue(responses),
+						notifications,
+						providerRequests,
+						secondaryProviderRequests,
+					})}`,
+				);
 			} finally {
 				await driver?.close();
-				http.unsubscribe(observe);
 				await new Promise<void>((resolve, reject) =>
 					provider.close((error) => (error ? reject(error) : resolve())),
 				);
