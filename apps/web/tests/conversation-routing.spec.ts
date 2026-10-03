@@ -890,6 +890,14 @@ for (const status of [503, 403]) {
 			"font-size",
 			info.project.name === "mobile" ? "22px" : "28px",
 		);
+		const titleBox = await heading.boundingBox();
+		const eyebrowBox = await page
+			.locator(".conversation-eyebrow")
+			.boundingBox();
+		if (!titleBox || !eyebrowBox)
+			throw new Error("Expected conversation heading");
+		expect(titleBox.x).toBe(eyebrowBox.x);
+		expect(titleBox.y).toBeGreaterThanOrEqual(eyebrowBox.y + eyebrowBox.height);
 		await info.attach("conversation-loading", {
 			body: await page.screenshot(),
 			contentType: "image/png",
@@ -897,6 +905,7 @@ for (const status of [503, 403]) {
 		release();
 		await expect(page.getByRole("alert")).toBeVisible();
 		await expect(heading).toBeVisible();
+		expect(await heading.boundingBox()).toEqual(titleBox);
 		await expect(
 			page.getByRole("link", { name: "返回 Agent 列表", exact: true }),
 		).toBeVisible();
@@ -939,6 +948,19 @@ test("exported design viewport matrix conversation", async ({ page }, info) => {
 			node.scrollTop = node.scrollHeight;
 		});
 		expect(await input.boundingBox()).toEqual(before);
+		if (viewport.width <= 430) {
+			const heading = await page
+				.locator(".conversation-agent-switch")
+				.boundingBox();
+			const actions = await page
+				.locator(".conversation-heading-actions")
+				.boundingBox();
+			const models = await page.locator(".model-controls").boundingBox();
+			if (!heading || !actions || !models)
+				throw new Error("Expected compact conversation controls");
+			expect(actions.y).toBeLessThan(heading.y + heading.height);
+			expect(models.y).toBeLessThanOrEqual(240);
+		}
 		await captureDesignContract(page, info, "conversation");
 		if (viewport.width < 1024) {
 			await page.getByRole("button", { name: "个人历史", exact: true }).click();
