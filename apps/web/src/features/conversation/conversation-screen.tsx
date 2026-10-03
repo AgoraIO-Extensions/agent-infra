@@ -1,7 +1,7 @@
 import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, History, Plus } from "lucide-react";
+import { ArrowLeft, ChevronDown, History, Plus } from "lucide-react";
 import {
 	useCallback,
 	useId,
@@ -116,29 +116,37 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		queryClient.removeQueries({ queryKey, exact: true });
 		deniedCallback.current?.();
 	}, [denied, queryClient, queryKey]);
-	if (denied || !identityKey)
-		return (
-			<Alert className="my-6">
-				<AlertDescription>
-					当前登录或访问权限已失效，请重新登录或返回 Agent 列表。
-				</AlertDescription>
-			</Alert>
-		);
 	const agent = agentQuery.data;
-	if (!agent)
+	if (denied || !identityKey || !agent)
 		return (
-			<section className="space-y-4 py-6">
-				<h1 className="font-semibold text-[28px]">对话</h1>
-				{agentQuery.isPending ? (
+			<section className="chat-layout">
+				<header className="conversation-header">
+					<div className="conversation-heading-copy">
+						<p className="conversation-eyebrow">工作区 / 对话</p>
+						<h1>对话</h1>
+					</div>
+				</header>
+				{denied || !identityKey ? (
+					<Alert>
+						<AlertDescription>
+							当前登录或访问权限已失效，请重新登录或返回 Agent 列表。
+						</AlertDescription>
+					</Alert>
+				) : agentQuery.isPending ? (
 					<p role="status">正在读取 Agent…</p>
 				) : (
-					<>
-						<Alert>
-							<AlertDescription>Agent 信息暂时无法读取。</AlertDescription>
-						</Alert>
-						<Button onClick={() => void agentQuery.refetch()}>重新读取</Button>
-					</>
+					<Alert>
+						<AlertDescription>Agent 信息暂时无法读取。</AlertDescription>
+					</Alert>
 				)}
+				<div className="mt-4 flex flex-wrap gap-2">
+					{!denied && identityKey && !agentQuery.isPending && (
+						<Button onClick={() => void agentQuery.refetch()}>重新读取</Button>
+					)}
+					<Link to="/agents" className={buttonVariants({ variant: "outline" })}>
+						返回 Agent 列表
+					</Link>
+				</div>
 			</section>
 		);
 	const available =
@@ -150,42 +158,45 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 	return (
 		<section className="chat-layout">
 			<header className="conversation-header">
-				<div className="flex min-w-0 gap-3">
-					<div className="conversation-heading-copy">
-						<p className="conversation-eyebrow">工作区 / 对话</p>
-						<h1 className="font-semibold text-[26px]">{agent.name}</h1>
-						<p className="conversation-summary text-muted-foreground text-sm">
-							{agent.source.kind === "standard"
-								? `标准模板 · ${agent.source.templateId}`
-								: `自定义 Agent · ${selfManaged ? "自有交互入口" : "平台交互入口"}`}
-						</p>
-						<p className="flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground text-sm">
-							<span>
-								管理状态：
-								{agentManagementStatusLabels[agent.managementStatus]}
-							</span>
-							{agent.serviceAvailability !== null && (
-								<span>
-									服务状态：
-									{agentServiceAvailabilityLabel(agent.serviceAvailability)}
-								</span>
-							)}
-						</p>
-						{!selfManaged && (
-							<p className="conversation-summary text-muted-foreground text-sm">
-								个人 Web 对话 · 离开页面不会取消已提交的任务
-							</p>
-						)}
-					</div>
-				</div>
-				<div className="conversation-heading-actions">
+				<div className="conversation-heading-copy">
 					<Link
 						to="/agents"
 						search={{ mode: "conversation" }}
-						className={buttonVariants({ variant: "ghost" })}
+						aria-label="切换 Agent"
+						title="切换 Agent"
+						className="conversation-agent-switch"
 					>
-						切换 Agent
+						<p className="conversation-eyebrow">工作区 / 对话</p>
+						<h1 className="font-semibold text-[26px]">
+							{agent.name}
+							<ChevronDown aria-hidden="true" className="ml-1 inline size-3" />
+						</h1>
 					</Link>
+					<p className="conversation-summary text-muted-foreground text-sm">
+						{agent.source.kind === "standard"
+							? `标准模板 · ${agent.source.templateId}`
+							: `自定义 Agent · ${selfManaged ? "自有交互入口" : "平台交互入口"}`}
+					</p>
+
+					<p className="conversation-availability flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground text-sm">
+						<span>
+							管理状态：
+							{agentManagementStatusLabels[agent.managementStatus]}
+						</span>
+						{agent.serviceAvailability !== null && (
+							<span>
+								服务状态：
+								{agentServiceAvailabilityLabel(agent.serviceAvailability)}
+							</span>
+						)}
+					</p>
+					{!selfManaged && (
+						<p className="conversation-summary text-muted-foreground text-sm">
+							个人 Web 对话 · 离开页面不会取消已提交的任务
+						</p>
+					)}
+				</div>
+				<div className="conversation-heading-actions">
 					<Button
 						variant="outline"
 						ref={historyToggle}

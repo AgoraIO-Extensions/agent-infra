@@ -575,6 +575,15 @@ a[class~="group/button"] {
 	gap: 12px;
 	margin-bottom: 16px;
 }
+.conversation-agent-switch {
+	display: block;
+	min-height: 44px;
+	border-radius: 4px;
+}
+.conversation-agent-switch:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: 4px;
+}
 .conversation-heading-copy {
 	min-width: 0;
 }
@@ -791,13 +800,32 @@ a[class~="group/button"] {
 		padding: 12px 16px max(8px, env(safe-area-inset-bottom));
 	}
 	.conversation-header {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 6px;
 		margin-bottom: 12px;
 	}
 	.conversation-header h1 {
 		font-size: 22px;
 	}
+	.conversation-heading-copy:has(.conversation-agent-switch) {
+		display: contents;
+	}
+	.conversation-agent-switch {
+		grid-column: 1;
+		grid-row: 1;
+	}
+	.conversation-availability {
+		grid-column: 1 / -1;
+		grid-row: 2;
+	}
 	.conversation-heading-actions {
+		grid-column: 2;
+		grid-row: 1;
 		gap: 6px;
+	}
+	.conversation-heading-actions svg {
+		display: none;
 	}
 	.conversation-heading-actions > * {
 		padding-inline: 10px;

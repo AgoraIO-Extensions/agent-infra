@@ -173,11 +173,17 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 										? "创建审批"
 										: pathname === "/my-agents/new"
 											? "创建申请"
-											: pathname.startsWith("/my-agents")
-												? "我的 Agent"
-												: pathname === "/agents" || pathname === "/agents/"
-													? "Agent 目录"
-													: "Agent 详情";
+											: pathname.startsWith("/my-agents/") &&
+													pathname.endsWith("/edit")
+												? "编辑申请"
+												: pathname.startsWith("/my-agents/") &&
+														pathname !== "/my-agents/"
+													? "申请详情"
+													: pathname.startsWith("/my-agents")
+														? "我的 Agent"
+														: pathname === "/agents" || pathname === "/agents/"
+															? "Agent 目录"
+															: "Agent 详情";
 	const navigation = (
 		<>
 			<Link className="platform-brand" to="/" onClick={() => setSheet(false)}>
@@ -340,7 +346,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						<SheetTrigger
 							render={
 								<Button
-									variant="ghost"
+									variant="outline"
 									size="icon"
 									className="mobile-menu"
 									aria-label="打开导航"

@@ -863,6 +863,72 @@ test("keeps canonical chat and long personal-history titles usable at 320 by 370
 	});
 });
 
+for (const status of [503, 403]) {
+	test(`conversation loading and ${status} keep the page heading and recovery boundary`, async ({
+		page,
+	}, info) => {
+		const fixture = await routingFixture(page);
+		let release = () => {};
+		const pending = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		await page.route("**/api/v2/agents/agent-1", async (route) => {
+			await pending;
+			await route.fulfill({
+				status,
+				json: { message: "Controlled Agent read failure" },
+			});
+		});
+		await page.goto(canonical(fixture.agentId, fixture.conversationId));
+		await expect(page.getByText("正在读取 Agent…")).toBeVisible();
+		const heading = page.getByRole("heading", {
+			name: "对话",
+			exact: true,
+			level: 1,
+		});
+		await expect(heading).toHaveCSS(
+			"font-size",
+			info.project.name === "mobile" ? "22px" : "28px",
+		);
+		const titleBox = await heading.boundingBox();
+		const eyebrowBox = await page
+			.locator(".conversation-eyebrow")
+			.boundingBox();
+		if (!titleBox || !eyebrowBox)
+			throw new Error("Expected conversation heading");
+		expect(titleBox.x).toBe(eyebrowBox.x);
+		expect(titleBox.y).toBeGreaterThanOrEqual(eyebrowBox.y + eyebrowBox.height);
+		await info.attach("conversation-loading", {
+			body: await page.screenshot(),
+			contentType: "image/png",
+		});
+		release();
+		await expect(page.getByRole("alert")).toBeVisible();
+		await expect(heading).toBeVisible();
+		expect(await heading.boundingBox()).toEqual(titleBox);
+		await expect(
+			page.getByRole("link", { name: "返回 Agent 列表", exact: true }),
+		).toBeVisible();
+		await expect(page.getByLabel("消息", { exact: true })).toHaveCount(0);
+		await info.attach(`conversation-${status}`, {
+			body: await page.screenshot(),
+			contentType: "image/png",
+		});
+		if (status === 503) {
+			await page.unroute("**/api/v2/agents/agent-1");
+			await page.getByRole("button", { name: "重新读取", exact: true }).click();
+			await assertChat(page);
+		} else {
+			await expect(
+				page.getByRole("button", { name: "重新读取", exact: true }),
+			).toHaveCount(0);
+		}
+		expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+			true,
+		);
+	});
+}
+
 test("exported design viewport matrix conversation", async ({ page }, info) => {
 	test.skip(
 		info.project.name !== "desktop",
@@ -882,6 +948,19 @@ test("exported design viewport matrix conversation", async ({ page }, info) => {
 			node.scrollTop = node.scrollHeight;
 		});
 		expect(await input.boundingBox()).toEqual(before);
+		if (viewport.width <= 430) {
+			const heading = await page
+				.locator(".conversation-agent-switch")
+				.boundingBox();
+			const actions = await page
+				.locator(".conversation-heading-actions")
+				.boundingBox();
+			const models = await page.locator(".model-controls").boundingBox();
+			if (!heading || !actions || !models)
+				throw new Error("Expected compact conversation controls");
+			expect(actions.y).toBeLessThan(heading.y + heading.height);
+			expect(models.y).toBeLessThanOrEqual(240);
+		}
 		await captureDesignContract(page, info, "conversation");
 		if (viewport.width < 1024) {
 			await page.getByRole("button", { name: "个人历史", exact: true }).click();
