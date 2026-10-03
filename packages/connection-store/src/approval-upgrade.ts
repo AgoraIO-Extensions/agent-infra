@@ -2,6 +2,100 @@ import { randomUUID } from "node:crypto";
 import { ConnectionError, canonicalHash } from "@agent-infra/connection-core";
 import type postgres from "postgres";
 
+export type AuthorizationCompatibility = {
+	provider: string;
+	fromReleaseId: string;
+	toReleaseId: string;
+	fromExecutorDigest: string;
+	toExecutorDigest: string;
+	rationale: string;
+	reviewReference: string;
+};
+
+export async function compatibleApprovalProfile(
+	sql: postgres.Sql | postgres.TransactionSql,
+	input: {
+		capabilityProfileId: string;
+		fromReleaseId: string;
+		toReleaseId: string;
+		authorizationCompatibility?: readonly AuthorizationCompatibility[];
+	},
+) {
+	const [release] = await sql<
+		{
+			provider: string;
+			from_executor_digest: string;
+			to_executor_digest: string;
+		}[]
+	>`
+		SELECT target.provider, source.executor_digest AS from_executor_digest,
+			target.executor_digest AS to_executor_digest FROM connection_provider_releases source
+		JOIN connection_provider_releases target ON target.id = ${input.toReleaseId}
+		WHERE source.id = ${input.fromReleaseId}
+			AND source.provider = target.provider
+			AND source.status = 'PUBLISHED' AND target.status = 'PUBLISHED'
+			AND source.auth_profile = target.auth_profile
+			AND source.deployment_profile = target.deployment_profile
+			AND source.executor_digest ~ '^sha256:[a-f0-9]{64}$'
+			AND target.executor_digest ~ '^sha256:[a-f0-9]{64}$'
+		FOR SHARE OF source, target
+	`;
+	if (!release) return null;
+	const evidence = input.authorizationCompatibility?.find(
+		(item) =>
+			item.provider === release.provider &&
+			item.fromReleaseId === input.fromReleaseId &&
+			item.toReleaseId === input.toReleaseId &&
+			item.fromExecutorDigest === release.from_executor_digest &&
+			item.toExecutorDigest === release.to_executor_digest &&
+			item.rationale.trim() &&
+			item.reviewReference.trim(),
+	);
+	if (release.from_executor_digest !== release.to_executor_digest && !evidence)
+		return null;
+	const [profile] = await sql<
+		{
+			effect_ceiling: string;
+			required_scopes: postgres.JSONValue;
+		}[]
+	>`
+		SELECT effect_ceiling, required_scopes FROM connection_capability_profiles
+		WHERE id = ${input.capabilityProfileId}
+			AND provider_release_id = ${input.fromReleaseId}
+			AND status IN ('PUBLISHED', 'SUPERSEDED')
+		FOR SHARE
+	`;
+	if (!profile) return null;
+	const sourceActions = await sql<{ id: string }[]>`
+		SELECT action.id FROM connection_capability_profile_actions member
+		JOIN connection_action_versions action ON action.id = member.action_version_id
+		WHERE member.capability_profile_id = ${input.capabilityProfileId}
+		FOR SHARE OF action
+	`;
+	const mapping = await sql<{ source_id: string; target_id: string }[]>`
+		SELECT source.id AS source_id, target.id AS target_id
+		FROM connection_capability_profile_actions member
+		JOIN connection_action_versions source ON source.id = member.action_version_id
+		JOIN connection_action_versions target ON target.provider_release_id = ${input.toReleaseId}
+			AND target.name = source.name AND target.effect = source.effect
+			AND target.input_schema = source.input_schema
+			AND target.required_scopes = source.required_scopes
+			AND target.description = source.description
+		WHERE member.capability_profile_id = ${input.capabilityProfileId}
+			AND source.status = 'PUBLISHED' AND target.status = 'PUBLISHED'
+		FOR SHARE OF source, target
+	`;
+	if (
+		sourceActions.length === 0 ||
+		mapping.length !== sourceActions.length ||
+		new Set(mapping.map((item) => item.source_id)).size !==
+			sourceActions.length ||
+		new Set(mapping.map((item) => item.target_id)).size !== sourceActions.length
+	)
+		return null;
+	return { release, evidence, profile, mapping };
+}
+
 // The caller holds the account/current-credential locks and verifies credential CAS.
 export async function migrateCompatibleApproval(
 	sql: postgres.TransactionSql,
@@ -11,6 +105,7 @@ export async function migrateCompatibleApproval(
 		externalAccount: string;
 		fromReleaseId: string;
 		toReleaseId: string;
+		authorizationCompatibility?: readonly AuthorizationCompatibility[];
 	},
 ) {
 	const denied = () => {
@@ -41,59 +136,12 @@ export async function migrateCompatibleApproval(
 		FOR UPDATE OF access
 	`;
 	if (!access) return denied();
-	const [release] = await sql<{ id: string }[]>`
-		SELECT target.id FROM connection_provider_releases source
-		JOIN connection_provider_releases target ON target.id = ${input.toReleaseId}
-		WHERE source.id = ${input.fromReleaseId}
-			AND source.provider = target.provider
-			AND source.status = 'PUBLISHED' AND target.status = 'PUBLISHED'
-			AND source.auth_profile = target.auth_profile
-			AND source.deployment_profile = target.deployment_profile
-			AND source.executor_digest = target.executor_digest
-			AND source.executor_digest ~ '^sha256:[a-f0-9]{64}$'
-		FOR SHARE OF source, target
-	`;
-	if (!release) return denied();
-	const [profile] = await sql<
-		{
-			effect_ceiling: string;
-			required_scopes: postgres.JSONValue;
-		}[]
-	>`
-		SELECT effect_ceiling, required_scopes FROM connection_capability_profiles
-		WHERE id = ${access.capability_profile_id}
-			AND provider_release_id = ${input.fromReleaseId}
-			AND status IN ('PUBLISHED', 'SUPERSEDED')
-		FOR SHARE
-	`;
-	if (!profile) return denied();
-	const sourceActions = await sql<{ id: string }[]>`
-		SELECT action.id FROM connection_capability_profile_actions member
-		JOIN connection_action_versions action ON action.id = member.action_version_id
-		WHERE member.capability_profile_id = ${access.capability_profile_id}
-		FOR SHARE OF action
-	`;
-	const mapping = await sql<{ source_id: string; target_id: string }[]>`
-		SELECT source.id AS source_id, target.id AS target_id
-		FROM connection_capability_profile_actions member
-		JOIN connection_action_versions source ON source.id = member.action_version_id
-		JOIN connection_action_versions target ON target.provider_release_id = ${input.toReleaseId}
-			AND target.name = source.name AND target.effect = source.effect
-			AND target.input_schema = source.input_schema
-			AND target.required_scopes = source.required_scopes
-			AND target.description = source.description
-		WHERE member.capability_profile_id = ${access.capability_profile_id}
-			AND source.status = 'PUBLISHED' AND target.status = 'PUBLISHED'
-		FOR SHARE OF source, target
-	`;
-	if (
-		sourceActions.length === 0 ||
-		mapping.length !== sourceActions.length ||
-		new Set(mapping.map((item) => item.source_id)).size !==
-			sourceActions.length ||
-		new Set(mapping.map((item) => item.target_id)).size !== sourceActions.length
-	)
-		return denied();
+	const proof = await compatibleApprovalProfile(sql, {
+		...input,
+		capabilityProfileId: access.capability_profile_id,
+	});
+	if (!proof) return denied();
+	const { release, evidence, profile, mapping } = proof;
 	const profileId = `upgrade-profile-${randomUUID()}`;
 	const actionVersionIds = mapping.map((item) => item.target_id).sort();
 	await sql`
@@ -141,7 +189,11 @@ export async function migrateCompatibleApproval(
 				toReleaseId: input.toReleaseId,
 				fromProfileId: access.capability_profile_id,
 				toProfileId: profileId,
-				proof: "IDENTICAL_EXECUTOR_AUTH_DEPLOYMENT_AND_APPROVED_ACTIONS",
+				proof:
+					release.from_executor_digest === release.to_executor_digest
+						? "IDENTICAL_EXECUTOR_AUTH_DEPLOYMENT_AND_APPROVED_ACTIONS"
+						: "REVIEWED_EXECUTOR_COMPATIBILITY_AND_IDENTICAL_AUTH_DEPLOYMENT_APPROVED_ACTIONS",
+				executorCompatibility: evidence ?? null,
 				mapping,
 			},
 		)})

@@ -1,6 +1,329 @@
+import { readFileSync } from "node:fs";
+import { observeProviderFetch } from "@agent-infra/connection-core";
+import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 
-import { createFixedOriginFetch, createReadFallbackFetch } from "./runtime-app";
+import {
+	createFixedOriginFetch,
+	createGithubOAuthDirectFetch,
+	createGithubOAuthFetcherSelector,
+	createPreSubmitGithubOAuthAdapter,
+	createReadFallbackFetch,
+	publishStartupConsumerDeclarations,
+} from "./runtime-app";
+
+const tokenUrl = "https://github.com/login/oauth/access_token";
+const profileUrl = "https://api.github.com/user";
+
+describe("startup Consumer declaration scheduling", () => {
+	it("overlaps independent Consumers while preserving duplicate-ID revision order", async () => {
+		const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+		const active = new Set<string>();
+		let maximum = 0;
+		const calls: string[] = [];
+		const publishConsumerDeclaration = vi.fn(
+			async (input: {
+				consumer: { id: string; name: string };
+				providerReleaseId: string;
+			}) => {
+				expect(active.has(input.consumer.id)).toBe(false);
+				active.add(input.consumer.id);
+				maximum = Math.max(maximum, active.size);
+				calls.push(`${input.consumer.name}:${input.providerReleaseId}`);
+				await Promise.resolve();
+				active.delete(input.consumer.id);
+				return { declarationId: "test-declaration" };
+			},
+		);
+		try {
+			await publishStartupConsumerDeclarations(
+				{ publishConsumerDeclaration },
+				[
+					{ id: "a", name: "a" },
+					{ id: "b", name: "b" },
+					{ id: "c", name: "c" },
+					{ id: "a", name: "a-renamed" },
+				],
+				[
+					{
+						provider: "one",
+						providerReleaseId: "one",
+						actions: [{ id: "one@v1" }],
+					},
+					{
+						provider: "two",
+						providerReleaseId: "two",
+						actions: [{ id: "two@v1" }],
+					},
+				],
+			);
+			expect(maximum).toBe(3);
+			expect(calls.filter((call) => call.startsWith("a"))).toEqual([
+				"a:one",
+				"a:two",
+				"a-renamed:one",
+				"a-renamed:two",
+			]);
+			expect(publishConsumerDeclaration).toHaveBeenCalledTimes(8);
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it("drains in-flight chains before rejecting and logs no private failure text", async () => {
+		const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+		let finish: (() => void) | undefined;
+		let settled = false;
+		const publishConsumerDeclaration = vi.fn(
+			async (input: { consumer: { id: string } }) => {
+				if (input.consumer.id === "failed")
+					throw new Error("private-database-diagnostic");
+				await new Promise<void>((resolve) => {
+					finish = resolve;
+				});
+				return { declarationId: "test-declaration" };
+			},
+		);
+		try {
+			const result = publishStartupConsumerDeclarations(
+				{ publishConsumerDeclaration },
+				[
+					{ id: "failed", name: "failed" },
+					{ id: "slow", name: "slow" },
+				],
+				[
+					{
+						provider: "one",
+						providerReleaseId: "one",
+						actions: [{ id: "one@v1" }],
+					},
+				],
+			);
+			const expected = expect(result).rejects.toThrow(
+				"private-database-diagnostic",
+			);
+			void result.then(
+				() => {
+					settled = true;
+				},
+				() => {
+					settled = true;
+				},
+			);
+			await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+			expect(settled).toBe(false);
+			finish?.();
+			await expected;
+			expect(log.mock.calls.flat().join("\n")).not.toContain(
+				"private-database-diagnostic",
+			);
+		} finally {
+			finish?.();
+			log.mockRestore();
+		}
+	});
+});
+
+it("production assembly uses registered diagnostic service names", () => {
+	const source = ts.createSourceFile(
+		"runtime-app.ts",
+		readFileSync(new URL("./runtime-app.ts", import.meta.url), "utf8"),
+		ts.ScriptTarget.Latest,
+		true,
+	);
+	const services: string[] = [];
+	const visit = (node: ts.Node) => {
+		if (
+			ts.isCallExpression(node) &&
+			ts.isIdentifier(node.expression) &&
+			node.expression.text === "observeProviderFetch"
+		) {
+			const service = node.arguments[0];
+			if (!service || !ts.isStringLiteral(service))
+				throw new Error("Runtime diagnostic service must be fixed");
+			services.push(service.text);
+			expect(() => observeProviderFetch(service.text, vi.fn())).not.toThrow();
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(source);
+	expect(services).toContain("datalego");
+	expect(() => observeProviderFetch("unregistered-service", vi.fn())).toThrow(
+		"Unknown diagnostic service",
+	);
+});
+
+describe("GitHub OAuth pre-submit egress", () => {
+	it("uses the approved request scopes instead of catalog-wide defaults", () => {
+		const adapter = createPreSubmitGithubOAuthAdapter(
+			{ clientId: "client", clientSecret: "secret" },
+			vi.fn<typeof fetch>(),
+			async () => vi.fn<typeof fetch>(),
+		);
+		const input = {
+			codeChallenge: "challenge",
+			redirectUri: "https://connection.test/oauth/callback",
+			state: "state",
+		};
+		const limited = new URL(
+			adapter.getAuthorizationUrl({
+				...input,
+				requestedScopes: ["repo", "read:user"],
+			}),
+		);
+		expect(limited.searchParams.get("scope")).toBe("read:user repo");
+		const shared = new URL(adapter.getAuthorizationUrl(input));
+		expect(shared.searchParams.get("scope")).toBe(
+			"read:user user:email repo delete_repo workflow",
+		);
+	});
+
+	it("keeps the proxy after an HTTP response, even an error status", async () => {
+		const primary = vi
+			.fn<typeof fetch>()
+			.mockResolvedValue(new Response(null, { status: 503 }));
+		const direct = vi.fn<typeof fetch>();
+		const onDirect = vi.fn();
+		expect(
+			await createGithubOAuthFetcherSelector(
+				primary,
+				direct,
+				onDirect,
+			)(tokenUrl),
+		).toBe(primary);
+		expect(primary).toHaveBeenCalledWith(
+			tokenUrl,
+			expect.objectContaining({ method: "HEAD" }),
+		);
+		expect(onDirect).not.toHaveBeenCalled();
+	});
+
+	it("selects direct before submission only for proxy transport failures", async () => {
+		const failure = new TypeError("fetch failed", {
+			cause: Object.assign(new Error(), { code: "ECONNRESET" }),
+		});
+		const primary = vi.fn<typeof fetch>().mockRejectedValue(failure);
+		const direct = vi.fn<typeof fetch>();
+		const onDirect = vi.fn();
+		const select = createGithubOAuthFetcherSelector(primary, direct, onDirect);
+		expect(await select(tokenUrl)).toBe(direct);
+		expect(onDirect).toHaveBeenCalledOnce();
+		expect(await select("https://other.example/token")).toBe(primary);
+		expect(primary).toHaveBeenCalledOnce();
+	});
+
+	it("does not switch routes for an unexpected preflight error", async () => {
+		const primary = vi
+			.fn<typeof fetch>()
+			.mockRejectedValue(new Error("policy rejected"));
+		const direct = vi.fn<typeof fetch>();
+		await expect(
+			createGithubOAuthFetcherSelector(primary, direct)(tokenUrl),
+		).rejects.toThrow("policy rejected");
+		expect(direct).not.toHaveBeenCalled();
+	});
+
+	it("uses one selected direct route for token and profile without replaying a failed POST", async () => {
+		const failure = new TypeError("fetch failed", {
+			cause: Object.assign(new Error(), { code: "ECONNRESET" }),
+		});
+		const primary = vi.fn<typeof fetch>().mockRejectedValue(failure);
+		const transport = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(
+				Response.json({
+					access_token: "token",
+					scope: "read:user",
+					token_type: "bearer",
+				}),
+			)
+			.mockResolvedValueOnce(Response.json({ id: 42, login: "octocat" }));
+		const direct = createGithubOAuthDirectFetch(transport);
+		const adapter = createPreSubmitGithubOAuthAdapter(
+			{ clientId: "client", clientSecret: "secret" },
+			primary,
+			() => createGithubOAuthFetcherSelector(primary, direct)(tokenUrl),
+		);
+		const input = {
+			code: "code",
+			codeVerifier: "verifier",
+			redirectUri: "https://connection.test/oauth/callback",
+		};
+		const stages: string[] = [];
+		expect(
+			(await adapter.exchangeCode(input, (stage) => stages.push(stage)))
+				.externalAccount,
+		).toBe("42");
+		expect(stages).toEqual(["token_exchange", "profile_lookup"]);
+		expect(primary).toHaveBeenCalledOnce();
+		expect(transport.mock.calls.map(([url]) => String(url))).toEqual([
+			tokenUrl,
+			profileUrl,
+		]);
+
+		transport.mockRejectedValueOnce(failure);
+		stages.length = 0;
+		await expect(
+			adapter.exchangeCode(input, (stage) => stages.push(stage)),
+		).rejects.toThrow("OAuth token request failed");
+		expect(stages).toEqual(["token_exchange"]);
+		expect(primary).toHaveBeenCalledTimes(2);
+		expect(transport).toHaveBeenCalledTimes(3);
+	});
+
+	it("does not retry direct if the proxy fails after the code POST starts", async () => {
+		const failure = new TypeError("fetch failed", {
+			cause: Object.assign(new Error(), { code: "ECONNRESET" }),
+		});
+		const primary = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(new Response(null, { status: 404 }))
+			.mockRejectedValueOnce(failure);
+		const direct = vi.fn<typeof fetch>();
+		const adapter = createPreSubmitGithubOAuthAdapter(
+			{ clientId: "client", clientSecret: "secret" },
+			primary,
+			() => createGithubOAuthFetcherSelector(primary, direct)(tokenUrl),
+		);
+		await expect(
+			adapter.exchangeCode({
+				code: "code",
+				codeVerifier: "verifier",
+				redirectUri: "https://connection.test/oauth/callback",
+			}),
+		).rejects.toThrow("OAuth token request failed");
+		expect(primary).toHaveBeenCalledTimes(2);
+		expect(primary.mock.calls[1]?.[1]?.method).toBe("POST");
+		expect(direct).not.toHaveBeenCalled();
+	});
+
+	it("restricts direct traffic to exact OAuth endpoints and rejects redirects", async () => {
+		const transport = vi.fn<typeof fetch>().mockResolvedValue(
+			new Response(null, {
+				status: 302,
+				headers: { location: "https://other.example/" },
+			}),
+		);
+		const direct = createGithubOAuthDirectFetch(transport);
+		await expect(
+			direct("https://api.github.com/repos/owner/repo"),
+		).rejects.toThrow("direct target is not allowed");
+		await expect(direct(`${profileUrl}?token=leak`)).rejects.toThrow(
+			"direct target is not allowed",
+		);
+		await expect(direct(tokenUrl, { method: "GET" })).rejects.toThrow(
+			"direct target is not allowed",
+		);
+		expect(transport).not.toHaveBeenCalled();
+		await expect(direct(tokenUrl, { method: "POST" })).rejects.toThrow(
+			"direct redirect is not allowed",
+		);
+		expect(transport).toHaveBeenCalledWith(
+			tokenUrl,
+			expect.objectContaining({ method: "POST", redirect: "manual" }),
+		);
+	});
+});
 
 describe("GitHub regional egress fallback", () => {
 	it("falls back only for transport-failed READ requests", async () => {

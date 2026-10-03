@@ -51,6 +51,7 @@ export function ApprovalPoliciesPage() {
 	const [editingDraft, setEditingDraft] = useState<{
 		revision: string;
 		draft: AccessPolicyDraft;
+		published: boolean;
 	} | null>(null);
 	const editable = !policyId || Boolean(editingDraft);
 	const [stageIndex, setStageIndex] = useState(0);
@@ -83,6 +84,7 @@ export function ApprovalPoliciesPage() {
 	const [policyDeadline, setPolicyDeadline] = useState("");
 	const [policyReason, setPolicyReason] = useState("");
 	const [policyRevokeOpen, setPolicyRevokeOpen] = useState(false);
+	const [policyRetireOpen, setPolicyRetireOpen] = useState(false);
 	const [policyRevokeReason, setPolicyRevokeReason] = useState("");
 	const blocked = useQuery({
 		queryKey: ["approval-routing-blocked"],
@@ -206,8 +208,17 @@ export function ApprovalPoliciesPage() {
 			),
 		) ?? false;
 	useEffect(() => {
-		if (creatingNew || policyId || !catalog.data?.policies.length) return;
-		const first = catalog.data.policies[0];
+		if (
+			creatingNew ||
+			(policyId &&
+				!catalog.data?.policies.some(
+					(item) => item.id === policyId && item.status === "SUPERSEDED",
+				))
+		)
+			return;
+		const first = catalog.data?.policies.find(
+			(item) => item.status === "PUBLISHED" || item.status === "DRAFT",
+		);
 		if (!first) return;
 		setPolicyId(first.id);
 		setProfileId(first.capabilityProfileId);
@@ -224,10 +235,19 @@ export function ApprovalPoliciesPage() {
 	const refresh = () =>
 		client.invalidateQueries({ queryKey: ["approval-catalog"] });
 	const loadDraft = useMutation({
-		mutationFn: connectionApi.getConnectionAccessPolicyDraft,
-		onSuccess: (result) => {
+		mutationFn: (input: { policyId: string; published: boolean }) =>
+			input.published
+				? connectionApi.getPublishedConnectionAccessPolicyEditorSource(
+						input.policyId,
+					)
+				: connectionApi.getConnectionAccessPolicyDraft(input.policyId),
+		onSuccess: (result, input) => {
 			if (result.policyId !== selectedPolicyId.current) return;
-			setEditingDraft({ revision: result.revision, draft: result.draft });
+			setEditingDraft({
+				revision: result.revision,
+				draft: result.draft,
+				published: input.published,
+			});
 			setStages(result.draft.stages);
 			setCandidateLabels(
 				Object.fromEntries(
@@ -254,6 +274,25 @@ export function ApprovalPoliciesPage() {
 			}
 			await refresh();
 			await client.invalidateQueries({ queryKey: ["approval-policy-stages"] });
+		},
+	});
+	const revisePolicy = useMutation({
+		mutationFn: connectionApi.revisePublishedConnectionAccessPolicy,
+		onSuccess: async (result) => {
+			setEditingDraft(null);
+			setPolicyId(result.policyVersionId);
+			setNotice("策略已更新，新申请使用新版；既有批准不变。");
+			await refresh();
+			await client.invalidateQueries({ queryKey: ["approval-policy-stages"] });
+		},
+	});
+	const retirePolicy = useMutation({
+		mutationFn: connectionApi.retirePublishedConnectionAccessPolicy,
+		onSuccess: async () => {
+			setPolicyRetireOpen(false);
+			setPolicyId("");
+			setNotice("策略已从新申请中移除；已有申请与连接资格不变。");
+			await refresh();
 		},
 	});
 	const createPolicy = useMutation({
@@ -299,12 +338,16 @@ export function ApprovalPoliciesPage() {
 	const busy =
 		loadDraft.isPending ||
 		updatePolicy.isPending ||
+		revisePolicy.isPending ||
+		retirePolicy.isPending ||
 		createPolicy.isPending ||
 		publishPolicy.isPending ||
 		revokePolicy.isPending;
 	const error =
 		loadDraft.error ||
 		updatePolicy.error ||
+		revisePolicy.error ||
+		retirePolicy.error ||
 		createPolicy.error ||
 		publishPolicy.error ||
 		revokePolicy.error ||
@@ -375,7 +418,9 @@ export function ApprovalPoliciesPage() {
 			requestTtlSeconds: base?.requestTtlSeconds ?? 14 * 86_400,
 			stages,
 		};
-		if (editingDraft)
+		if (editingDraft?.published)
+			revisePolicy.mutate({ policyId, revision: editingDraft.revision, body });
+		else if (editingDraft)
 			updatePolicy.mutate({ policyId, revision: editingDraft.revision, body });
 		else createPolicy.mutate(body);
 	}
@@ -443,28 +488,32 @@ export function ApprovalPoliciesPage() {
 							<Plus size={16} />
 						</Button>
 					</div>
-					{catalog.data?.policies.map((item) => (
-						<button
-							key={item.id}
-							className={policyId === item.id ? "active" : ""}
-							onClick={() => selectPolicy(item.id)}
-							type="button"
-						>
-							<b>
-								{catalog.data?.profiles.find(
-									(profile) => profile.id === item.capabilityProfileId,
-								)?.name ?? item.capabilityProfileId}
-							</b>
-							<span>
-								{item.status} ·{" "}
-								{catalog.data?.providers.find(
-									(provider) =>
-										provider.providerReleaseId === item.providerReleaseId,
-								)?.provider ?? item.providerReleaseId}
-							</span>
-							<ChevronRight size={16} />
-						</button>
-					))}
+					{catalog.data?.policies
+						.filter(
+							(item) => item.status === "PUBLISHED" || item.status === "DRAFT",
+						)
+						.map((item) => (
+							<button
+								key={item.id}
+								className={policyId === item.id ? "active" : ""}
+								onClick={() => selectPolicy(item.id)}
+								type="button"
+							>
+								<b>
+									{catalog.data?.profiles.find(
+										(profile) => profile.id === item.capabilityProfileId,
+									)?.name ?? item.capabilityProfileId}
+								</b>
+								<span>
+									{item.status} ·{" "}
+									{catalog.data?.providers.find(
+										(provider) =>
+											provider.providerReleaseId === item.providerReleaseId,
+									)?.provider ?? item.providerReleaseId}
+								</span>
+								<ChevronRight size={16} />
+							</button>
+						))}
 					{catalog.isPending ? <p role="status">正在加载策略…</p> : null}
 				</aside>
 				<section className="approval-editor">
@@ -474,7 +523,7 @@ export function ApprovalPoliciesPage() {
 							<h2>{profile?.name ?? "新建审批策略"}</h2>
 							<p>
 								{published
-									? "已发布版本不可修改。"
+									? "编辑将发布新版本；既有批准保留原策略。"
 									: "顺序审批完成后才允许员工连接外部账号。"}
 							</p>
 						</div>
@@ -741,7 +790,7 @@ export function ApprovalPoliciesPage() {
 						{editable ? (
 							<>
 								<Button disabled={busy || !profile} onClick={savePolicy}>
-									保存草稿
+									{editingDraft?.published ? "保存并发布" : "保存草稿"}
 								</Button>
 								{editingDraft ? (
 									<Button
@@ -758,7 +807,9 @@ export function ApprovalPoliciesPage() {
 								<Button
 									variant="secondary"
 									disabled={busy}
-									onClick={() => loadDraft.mutate(policyId)}
+									onClick={() =>
+										loadDraft.mutate({ policyId, published: false })
+									}
 								>
 									<Pencil size={16} />
 									编辑草稿
@@ -793,16 +844,37 @@ export function ApprovalPoliciesPage() {
 								) : null}
 							</>
 						) : selectedPolicy?.status === "PUBLISHED" ? (
-							<Button
-								variant="danger"
-								disabled={busy}
-								onClick={() => {
-									setPolicyRevokeReason("");
-									setPolicyRevokeOpen(true);
-								}}
-							>
-								<ShieldX size={16} /> 撤销策略
-							</Button>
+							<>
+								<Button
+									variant="secondary"
+									disabled={busy || !catalog.data?.approvalDirectoryEnabled}
+									onClick={() =>
+										loadDraft.mutate({ policyId, published: true })
+									}
+								>
+									<Pencil size={16} />
+									编辑
+								</Button>
+								<Button
+									variant="secondary"
+									disabled={busy}
+									onClick={() => setPolicyRetireOpen(true)}
+								>
+									<Trash2 size={16} />
+									移除
+								</Button>
+								<Button
+									variant="danger"
+									disabled={busy}
+									onClick={() => {
+										setPolicyRevokeReason("");
+										setPolicyRevokeOpen(true);
+									}}
+								>
+									<ShieldX size={16} />
+									紧急撤销
+								</Button>
+							</>
 						) : null}
 					</div>
 				</section>
@@ -812,13 +884,13 @@ export function ApprovalPoliciesPage() {
 			</div>
 			<section
 				className="approval-routing"
-				aria-label="审批异常处理"
+				aria-label="审批路由处理"
 				hidden={area === "catalog"}
 			>
 				<div className="section-heading">
 					<div>
 						<h2>需要管理员处理</h2>
-						<p>仅处理当前无法完成审批的申请。</p>
+						<p>处理路由异常和遗漏的管理员审批人。</p>
 					</div>
 					<span className="status">{blocked.data?.requests.length ?? 0}</span>
 				</div>
@@ -1120,6 +1192,40 @@ export function ApprovalPoliciesPage() {
 								确认发布
 							</Button>
 						</div>
+					</div>
+				</DialogContent>
+			</Dialog>
+			<Dialog open={policyRetireOpen} onOpenChange={setPolicyRetireOpen}>
+				<DialogContent aria-describedby={undefined}>
+					<DialogHeader>
+						<DialogTitle>从新申请中移除策略</DialogTitle>
+					</DialogHeader>
+					<p>
+						该策略将不再供新申请选择。待审申请、已批准连接及其权限保持不变；紧急停权请使用“紧急撤销”。
+					</p>
+					{retirePolicy.isError ? (
+						<PageError error={retirePolicy.error} />
+					) : null}
+					<div className="approval-panel-actions">
+						<Button
+							variant="secondary"
+							onClick={() => setPolicyRetireOpen(false)}
+						>
+							取消
+						</Button>
+						<Button
+							variant="danger"
+							disabled={!selectedPolicy || retirePolicy.isPending}
+							onClick={() =>
+								selectedPolicy &&
+								retirePolicy.mutate({
+									policyId: selectedPolicy.id,
+									revision: selectedPolicy.revision,
+								})
+							}
+						>
+							确认移除
+						</Button>
 					</div>
 				</DialogContent>
 			</Dialog>

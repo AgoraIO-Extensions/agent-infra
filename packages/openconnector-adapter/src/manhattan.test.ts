@@ -6,6 +6,7 @@ import {
 	ManhattanAdapter,
 	ManhattanOAuthAdapter,
 	manhattanConnectionCatalog,
+	manhattanLegacyProviderReleaseIds,
 } from "./manhattan.ts";
 import { manhattanExecutorDigest } from "./manhattan-integrity.ts";
 
@@ -16,15 +17,27 @@ test("Manhattan executor digest pins its reviewed source", () => {
 	assert.equal(manhattanExecutorDigest, `sha256:${digest}`);
 });
 
-test("Manhattan catalog is read only", () => {
-	assert.equal(manhattanConnectionCatalog.actions.length, 4);
+test("Manhattan v6 catalog adds only explicit crash evidence READ Actions", () => {
+	assert.equal(
+		manhattanConnectionCatalog.providerReleaseId,
+		"manhattan-connection-v6",
+	);
+	assert.deepEqual(manhattanLegacyProviderReleaseIds, [
+		"manhattan-connection-v4",
+		"manhattan-connection-v5",
+	]);
+	assert.equal(manhattanConnectionCatalog.actions.length, 8);
 	assert.deepEqual(
 		manhattanConnectionCatalog.actions.map((action) => action.id),
 		[
-			"manhattan.get_current_user@v4",
-			"manhattan.list_sdk_dumps@v4",
-			"manhattan.get_sdk_dump@v4",
-			"manhattan.list_symbols@v4",
+			"manhattan.get_current_user@v6",
+			"manhattan.list_sdk_dumps@v6",
+			"manhattan.get_sdk_dump@v6",
+			"manhattan.list_symbols@v6",
+			"manhattan.get_crash_profile@v6",
+			"manhattan.get_crash_thread@v6",
+			"manhattan.find_crash_threads@v1",
+			"manhattan.get_crash_thread_evidence@v1",
 		],
 	);
 	assert.ok(
@@ -32,6 +45,96 @@ test("Manhattan catalog is read only", () => {
 			(action) => action.effect === "READ",
 		),
 	);
+});
+
+test("Manhattan parses a crash profile URL but only requests fixed bounded endpoints", async () => {
+	const requests: Array<{ headers: Headers; url: string }> = [];
+	const adapter = new ManhattanAdapter(async (input, init) => {
+		requests.push({ headers: new Headers(init?.headers), url: String(input) });
+		return Response.json({
+			data: { eventUuid: "0123456789ABCDEF0123456789ABCDEF" },
+		});
+	}, "machine-key");
+	const url =
+		"https://manhattan.agoralab.co/crash/profile?id=0123456789abcdef0123456789abcdef";
+	await adapter.execute({
+		action: "manhattan.get_crash_profile",
+		credential: { accessToken: "personal-token" },
+		input: { url, threadOffset: 20, threadLimit: 2, moduleLimit: 1 },
+	});
+	await adapter.execute({
+		action: "manhattan.get_crash_thread",
+		credential: { accessToken: "personal-token" },
+		input: { url, index: 7, offset: 10, limit: 5 },
+	});
+	await adapter.execute({
+		action: "manhattan.find_crash_threads",
+		credential: { accessToken: "personal-token" },
+		input: { url, kind: "JVM", name: "main", offset: 2, limit: 3 },
+	});
+	await adapter.execute({
+		action: "manhattan.get_crash_thread_evidence",
+		credential: { accessToken: "personal-token" },
+		input: { url, index: 203, offset: 5, limit: 8 },
+	});
+	assert.deepEqual(
+		requests.map((request) => request.url),
+		[
+			"https://manhattan-api.agoralab.co/api/connection/crash/profile?id=0123456789ABCDEF0123456789ABCDEF&threadOffset=20&threadLimit=2&moduleLimit=1",
+			"https://manhattan-api.agoralab.co/api/connection/crash/thread?id=0123456789ABCDEF0123456789ABCDEF&index=7&offset=10&limit=5",
+			"https://manhattan-api.agoralab.co/api/connection/crash/threads?id=0123456789ABCDEF0123456789ABCDEF&kind=JVM&name=main&offset=2&limit=3",
+			"https://manhattan-api.agoralab.co/api/connection/crash/thread/evidence?id=0123456789ABCDEF0123456789ABCDEF&index=203&offset=5&limit=8",
+		],
+	);
+	assert.ok(
+		requests.every(
+			(request) =>
+				request.headers.get("authorization") === "Bearer personal-token" &&
+				request.headers.get("apikey") === "machine-key",
+		),
+	);
+
+	for (const invalid of [
+		"http://manhattan.agoralab.co/crash/profile?id=0123456789ABCDEF0123456789ABCDEF",
+		"https://manhattan.agoralab.co.evil.invalid/crash/profile?id=0123456789ABCDEF0123456789ABCDEF",
+		"https://user@manhattan.agoralab.co/crash/profile?id=0123456789ABCDEF0123456789ABCDEF",
+		"https://manhattan.agoralab.co/crash/list?id=0123456789ABCDEF0123456789ABCDEF",
+		`${url}&download=1`,
+		`${url}&id=0123456789ABCDEF0123456789ABCDEF`,
+		`${url}#fragment`,
+		"https://manhattan.agoralab.co/crash/profile?id=bad",
+	]) {
+		await assert.rejects(
+			adapter.execute({
+				action: "manhattan.get_crash_profile",
+				credential: { accessToken: "personal-token" },
+				input: { url: invalid },
+			}),
+			/crash profile URL/,
+		);
+	}
+	await assert.rejects(
+		adapter.execute({
+			action: "manhattan.get_crash_thread",
+			credential: { accessToken: "personal-token" },
+			input: { url, index: 0, limit: 21 },
+		}),
+		/limit is out of range/,
+	);
+	for (const input of [
+		{ url, kind: "JAVA" },
+		{ url, name: "\nmain" },
+		{ url, limit: 21 },
+	]) {
+		await assert.rejects(
+			adapter.execute({
+				action: "manhattan.find_crash_threads",
+				credential: { accessToken: "personal-token" },
+				input,
+			}),
+		);
+	}
+	assert.equal(requests.length, 4);
 });
 
 test("Manhattan validates only an OAuth token through its fixed identity endpoint", async () => {

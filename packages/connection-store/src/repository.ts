@@ -27,6 +27,7 @@ import {
 	normalizeSharedScopeDisplayName,
 	type OAuthTransaction,
 	type ProviderUpgradeCampaignSummary,
+	type ProviderUpgradeReadiness,
 	projectCallDiagnostics,
 	type ReconciliationJob,
 	type StoredCall,
@@ -36,11 +37,26 @@ import {
 	consumeConnectPermitInTransaction,
 	lookupApprovedConnectPermit,
 } from "./access-request-repository";
-import { migrateCompatibleApproval } from "./approval-upgrade";
+import {
+	type AuthorizationCompatibility,
+	compatibleApprovalProfile,
+	migrateCompatibleApproval,
+} from "./approval-upgrade";
 
 const githubProvider = "github";
 
 export type PublishedProviderCatalog = {
+	credentialUpgradeBehavior?: "DIRECT" | "REAUTHORIZE";
+	upgradePaths?: readonly {
+		provider: string;
+		fromReleaseId: string;
+		toReleaseId: string;
+		fromExecutorDigest: string;
+		toExecutorDigest: string;
+		strategy: string;
+		reviewReference: string;
+	}[];
+	authorizationCompatibility?: readonly AuthorizationCompatibility[];
 	actions: readonly ActionDefinition[];
 	authProfile: Readonly<Record<string, unknown>>;
 	deploymentProfile: Readonly<Record<string, unknown>>;
@@ -339,6 +355,18 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	private readonly authorizationPreviewTtlMs: number;
 	private readonly protector: CredentialProtector;
 	private readonly publishedProviderReleaseIds = new Map<string, string>();
+	private readonly authorizationCompatibility = new Map<
+		string,
+		readonly AuthorizationCompatibility[]
+	>();
+	private readonly upgradeBehaviors = new Map<
+		string,
+		"DIRECT" | "REAUTHORIZE"
+	>();
+	private readonly upgradePaths = new Map<
+		string,
+		NonNullable<PublishedProviderCatalog["upgradePaths"]>
+	>();
 	private readonly sql;
 
 	constructor(
@@ -393,10 +421,53 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		`;
 	}
 
+	private async expireDisconnectedUpgradeTasks(
+		sql: postgres.TransactionSql,
+		principalId?: string,
+		connectionId?: string,
+	) {
+		await sql`
+			WITH expired AS (
+				UPDATE connection_provider_upgrade_tasks task
+				SET status = 'EXPIRED', updated_at = now()
+				FROM connection_accounts account
+				WHERE task.connection_id = account.id
+					AND account.owner_type = 'PERSONAL'
+					AND account.status = 'DISCONNECTED'
+					AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
+					AND (${principalId ?? null}::text IS NULL OR task.principal_id = ${principalId ?? null})
+					AND (${connectionId ?? null}::text IS NULL OR task.connection_id = ${connectionId ?? null})
+				RETURNING task.id, task.campaign_id, task.principal_id
+			), audited AS (
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				SELECT principal_id, 'PROVIDER_UPGRADE_TASK_EXPIRED',
+					jsonb_build_object('taskId', id, 'campaignId', campaign_id,
+						'reason', 'CONNECTION_DISCONNECTED')
+				FROM expired
+			), settled AS (
+				UPDATE connection_work_items item
+				SET status = 'EXPIRED', completed_at = now(), updated_at = now()
+				FROM expired
+				WHERE item.business_type = 'PROVIDER_UPGRADE_TASK'
+					AND item.business_id = expired.id
+					AND item.recipient_principal_id = expired.principal_id
+					AND item.status = 'OPEN'
+			)
+			INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+			SELECT 'outbox-disconnected-' || id,
+				'connection.provider-upgrade.expired', id,
+				jsonb_build_object('campaignId', campaign_id,
+					'principalId', principal_id, 'reason', 'CONNECTION_DISCONNECTED')
+			FROM expired
+			ON CONFLICT (topic, aggregate_id) DO NOTHING
+		`;
+	}
+
 	private async reconcileProviderUpgradeTasks(
 		sql: postgres.TransactionSql,
 		principalId?: string,
 	) {
+		await this.expireDisconnectedUpgradeTasks(sql, principalId);
 		await sql`
 			WITH superseded AS (
 				UPDATE connection_provider_upgrade_tasks task
@@ -426,6 +497,44 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			ON CONFLICT (topic, aggregate_id) DO NOTHING
 		`;
 		await sql`
+			WITH advanced AS (
+				UPDATE connection_provider_upgrade_tasks task
+				SET status = 'PENDING_AUTHORIZATION', updated_at = now()
+				FROM connection_provider_upgrade_campaigns campaign,
+					connection_accounts account
+				WHERE task.campaign_id = campaign.id
+					AND task.connection_id = account.id
+					AND task.principal_id = account.owner_principal_id
+					AND account.owner_type = 'PERSONAL'
+					AND account.status = 'ACTIVE'
+					AND account.provider_release_id = campaign.target_provider_release_id
+					AND task.status = 'PENDING_CONNECTION'
+					AND (campaign.deadline_at IS NULL OR campaign.deadline_at > now())
+					AND (${principalId ?? null}::text IS NULL OR task.principal_id = ${principalId ?? null})
+					AND EXISTS (
+						SELECT 1 FROM connection_effective_access_authorizations access
+						WHERE access.connection_id = task.connection_id
+							AND access.principal_id = task.principal_id
+							AND access.provider_release_id = campaign.target_provider_release_id
+							AND access.state = 'ACTIVE'
+							AND (access.valid_until IS NULL OR access.valid_until > now())
+					)
+				RETURNING task.id, task.campaign_id, task.principal_id, task.connection_id
+			), audited AS (
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				SELECT principal_id, 'PROVIDER_UPGRADE_AUTHORIZATION_REQUIRED',
+					jsonb_build_object('taskId', id, 'campaignId', campaign_id)
+				FROM advanced
+			)
+			INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+			SELECT 'outbox-authorization-required-' || id,
+				'connection.provider-upgrade.authorization-required', id,
+				jsonb_build_object('campaignId', campaign_id,
+					'principalId', principal_id, 'connectionId', connection_id)
+			FROM advanced
+			ON CONFLICT (topic, aggregate_id) DO NOTHING
+		`;
+		await sql`
 			INSERT INTO connection_provider_upgrade_tasks (
 				id, campaign_id, principal_id, connection_id,
 				authorization_root_id, consumer_id, provider_id, actor_key, status
@@ -437,6 +546,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			JOIN connection_accounts account
 				ON account.provider_id = campaign.provider_id
 				AND account.provider_release_id = campaign.source_provider_release_id
+				AND account.status = 'ACTIVE'
 			JOIN connection_authorization_roots root ON root.provider_id = account.provider_id
 			JOIN connection_grants active_grant
 				ON active_grant.id = root.current_grant_id
@@ -476,20 +586,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			throw new Error("Provider executor digest is invalid");
 		}
 		await this.sql.begin(async (sql) => {
-			await sql`
-				INSERT INTO connection_provider_releases (
-					id, provider, source_commit, deployment_profile, auth_profile,
-					executor_digest, catalog_checksum, status
-				)
-				VALUES (
-					${catalog.providerReleaseId}, ${catalog.provider}, ${catalog.sourceCommit},
-					${sql.json(catalog.deploymentProfile as postgres.JSONValue)},
-					${sql.json(catalog.authProfile as postgres.JSONValue)},
-					${catalog.executorDigest}, ${catalogChecksum}, 'PUBLISHED'
-				)
-				ON CONFLICT (id) DO NOTHING
-			`;
-			const [release] = await sql<
+			const readRelease = () => sql<
 				{
 					auth_profile: unknown;
 					catalog_checksum: string;
@@ -503,7 +600,25 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				SELECT provider, source_commit, deployment_profile, auth_profile,
 					executor_digest, catalog_checksum, status
 				FROM connection_provider_releases WHERE id = ${catalog.providerReleaseId}
+				FOR SHARE
 			`;
+			let [release] = await readRelease();
+			if (!release) {
+				await sql`
+					INSERT INTO connection_provider_releases (
+						id, provider, source_commit, deployment_profile, auth_profile,
+						executor_digest, catalog_checksum, status
+					)
+					VALUES (
+						${catalog.providerReleaseId}, ${catalog.provider}, ${catalog.sourceCommit},
+						${sql.json(catalog.deploymentProfile as postgres.JSONValue)},
+						${sql.json(catalog.authProfile as postgres.JSONValue)},
+						${catalog.executorDigest}, ${catalogChecksum}, 'PUBLISHED'
+					)
+					ON CONFLICT (id) DO NOTHING
+				`;
+				[release] = await readRelease();
+			}
 			if (
 				release?.provider !== catalog.provider ||
 				release.source_commit !== catalog.sourceCommit ||
@@ -517,36 +632,60 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			) {
 				throw new Error("Pinned ProviderRelease does not match the catalog");
 			}
-			for (const action of catalog.actions) {
+			const readActions = () => sql<
+				{
+					id: string;
+					description: string;
+					effect: string;
+					input_schema: unknown;
+					name: string;
+					provider_release_id: string;
+					required_scopes: unknown;
+					status: string;
+				}[]
+			>`
+				SELECT id, provider_release_id, name, description, effect, input_schema,
+					required_scopes, status
+				FROM connection_action_versions
+				WHERE id = ANY(${catalog.actions.map((action) => action.id)}::text[])
+				ORDER BY id FOR SHARE
+			`;
+			let storedActions = await readActions();
+			const storedIds = new Set(storedActions.map((action) => action.id));
+			const missingActions = catalog.actions.filter(
+				(action) => !storedIds.has(action.id),
+			);
+			if (missingActions.length > 0) {
 				await sql`
-						INSERT INTO connection_action_versions (
-							id, provider_release_id, name, description, effect, input_schema,
-							required_scopes, status
-						)
-						VALUES (
-							${action.id}, ${catalog.providerReleaseId}, ${action.name},
-							${action.description}, ${action.effect},
-							${sql.json(action.inputSchema as postgres.JSONValue)},
-							${sql.json([...action.requiredScopes])},
-							'PUBLISHED'
-						)
-						ON CONFLICT (id) DO NOTHING
-					`;
-				const [stored] = await sql<
-					{
-						description: string;
-						effect: string;
-						input_schema: unknown;
-						name: string;
-						provider_release_id: string;
-						required_scopes: unknown;
-						status: string;
-					}[]
-				>`
-							SELECT provider_release_id, name, description, effect, input_schema,
-								required_scopes, status
-					FROM connection_action_versions WHERE id = ${action.id}
+					INSERT INTO connection_action_versions (
+						id, provider_release_id, name, description, effect, input_schema,
+						required_scopes, status
+					)
+					SELECT action.id, ${catalog.providerReleaseId}, action.name,
+						action.description, action.effect, action.input_schema,
+						action.required_scopes, 'PUBLISHED'
+					FROM jsonb_to_recordset(${sql.json(
+						missingActions.map((action) => ({
+							id: action.id,
+							name: action.name,
+							description: action.description,
+							effect: action.effect,
+							input_schema: action.inputSchema as postgres.JSONValue,
+							required_scopes: [...action.requiredScopes],
+						})),
+					)}) AS action(
+						id text, name text, description text, effect text,
+						input_schema jsonb, required_scopes jsonb
+					)
+					ON CONFLICT (id) DO NOTHING
 				`;
+				storedActions = await readActions();
+			}
+			const storedById = new Map(
+				storedActions.map((action) => [action.id, action]),
+			);
+			for (const action of catalog.actions) {
+				const stored = storedById.get(action.id);
 				if (
 					stored?.provider_release_id !== catalog.providerReleaseId ||
 					stored.name !== action.name ||
@@ -607,6 +746,22 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			catalog.provider,
 			catalog.providerReleaseId,
 		);
+		this.authorizationCompatibility.set(
+			catalog.providerReleaseId,
+			(catalog.authorizationCompatibility ?? []).map((item) => ({ ...item })),
+		);
+		this.upgradeBehaviors.set(
+			catalog.providerReleaseId,
+			catalog.credentialUpgradeBehavior ?? "DIRECT",
+		);
+		this.upgradePaths.set(
+			catalog.providerReleaseId,
+			(catalog.upgradePaths ?? []).filter(
+				(path) =>
+					path.provider === catalog.provider &&
+					path.toReleaseId === catalog.providerReleaseId,
+			),
+		);
 	}
 
 	/** @deprecated Use publishProviderCatalog. */
@@ -662,21 +817,30 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					"Consumer declaration contains an unpublished ActionVersion",
 				);
 			}
-			await sql`
-				INSERT INTO connection_consumers (id, display_name, status)
-				VALUES (${input.consumer.id}, ${input.consumer.name}, 'ACTIVE')
-				ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name
-			`;
 			const [consumer] = await sql<
 				{
 					revision: string;
 					status: string;
 				}[]
 			>`
-				SELECT revision::text, status
-				FROM connection_consumers
-				WHERE id = ${input.consumer.id}
-				FOR UPDATE
+				WITH locked AS MATERIALIZED (
+					SELECT id, revision, status, display_name FROM connection_consumers
+					WHERE id = ${input.consumer.id} FOR UPDATE
+				), inserted AS (
+					INSERT INTO connection_consumers (id, display_name, status)
+					SELECT ${input.consumer.id}, ${input.consumer.name}, 'ACTIVE'
+					WHERE NOT EXISTS (SELECT 1 FROM locked)
+					ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name
+					RETURNING revision, status
+				), renamed AS (
+					UPDATE connection_consumers consumer
+					SET display_name = ${input.consumer.name}
+					FROM locked
+					WHERE consumer.id = locked.id
+						AND locked.display_name IS DISTINCT FROM ${input.consumer.name}
+				)
+				SELECT revision::text, status FROM locked
+				UNION ALL SELECT revision::text, status FROM inserted
 			`;
 			if (consumer?.status !== "ACTIVE") forbidden();
 			const declarationDigest = canonicalHash({
@@ -684,6 +848,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				providerId,
 				providerReleaseId: input.providerReleaseId,
 			});
+			// Take a fresh snapshot after the Consumer lock, including a competing publisher's commit.
 			const [current] = await sql<{ digest: string; id: string }[]>`
 				SELECT id, digest FROM connection_consumer_action_declarations
 				WHERE consumer_id = ${input.consumer.id}
@@ -716,14 +881,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					${nextRevision}, ${declarationDigest}, 'PUBLISHED'
 				)
 			`;
-			for (const actionVersionId of actionVersionIds) {
-				await sql`
-					INSERT INTO connection_consumer_declared_actions (
-						declaration_id, action_version_id
-					)
-					VALUES (${declarationId}, ${actionVersionId})
-				`;
-			}
+			await sql`
+				INSERT INTO connection_consumer_declared_actions (
+					declaration_id, action_version_id
+				)
+				SELECT ${declarationId}, action_id
+				FROM unnest(${actionVersionIds}::text[]) AS action_id
+			`;
 			await sql`
 				UPDATE connection_consumers
 				SET revision = ${nextRevision},
@@ -1607,17 +1771,23 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					consumerId: grant.consumer_id,
 					principalId: grant.principal_id,
 				});
-				if (renewal)
-					target = selectAuthorizationActions(target, grant.action_version_ids);
 			} catch (error) {
-				if (
-					!(error instanceof ConnectionError) ||
-					(error.code !== "FORBIDDEN" &&
-						!(renewal && error.code === "INVALID_REQUEST"))
-				) {
+				if (!(error instanceof ConnectionError) || error.code !== "FORBIDDEN") {
 					throw error;
 				}
 				target = undefined;
+			}
+			if (target) {
+				try {
+					target = selectAuthorizationActions(target, grant.action_version_ids);
+				} catch (error) {
+					if (
+						!(error instanceof ConnectionError) ||
+						error.code !== "INVALID_REQUEST"
+					)
+						throw error;
+					target = undefined;
+				}
 			}
 			const decision = decideReconnectAuthorization({
 				current: {
@@ -3138,6 +3308,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					${identity.refreshExpiresAt ?? null}
 				)
 			`;
+			await sql`
+				UPDATE connection_accounts
+				SET last_credential_version_id = ${credentialId}
+				WHERE id = ${claim.connectionId}
+			`;
 			await this.restoreGrantsAfterReconnect(sql, claim.connectionId);
 			await sql`
 				UPDATE connection_credential_refresh_attempts
@@ -3347,7 +3522,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	async createOAuthTransaction(input: OAuthTransaction & { state: string }) {
 		const stateHash = hash(input.state);
 		const protectedVerifier = this.protector.encrypt(
-			input.codeVerifier,
+			input.upgradeBinding
+				? JSON.stringify({
+						version: 2,
+						codeVerifier: input.codeVerifier,
+						upgradeBinding: input.upgradeBinding,
+					})
+				: input.codeVerifier,
 			`oauth:${stateHash}:${input.principalId}`,
 		);
 		await this.sql.begin(async (sql) => {
@@ -3389,24 +3570,65 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			this.sql,
 			input.principalId,
 			input.requestId,
+			{
+				providerReleases: this.publishedProviderReleaseIds,
+				authorizationCompatibility: this.authorizationCompatibility,
+			},
 		);
 		if (permit.providerId !== input.providerId) forbidden();
+		return { requiredScopes: permit.requiredScopes };
 	}
 
 	async validatePersonalReconnect(input: {
 		connectionId: string;
 		principalId: string;
 	}) {
+		const [active] = await this.sql<
+			{
+				id: string;
+				provider_id: string;
+				credential_id: string;
+				scope_json: unknown;
+			}[]
+		>`
+			SELECT account.id,account.provider_id,credential.id AS credential_id,credential.scope_json
+			FROM connection_accounts account JOIN connection_credential_versions credential
+				ON credential.id=account.last_credential_version_id AND credential.connection_id=account.id
+			WHERE account.id=${input.connectionId} AND account.owner_principal_id=${input.principalId}
+				AND account.owner_type='PERSONAL' AND account.status='ACTIVE'
+		`;
+		if (active) {
+			const readiness = await this.getProviderUpgradeReadiness(input);
+			if (
+				readiness.nextAction === "REQUEST_APPROVAL" ||
+				!Array.isArray(active.scope_json) ||
+				active.scope_json.some(
+					(scope) => typeof scope !== "string" || !scope || /\s/u.test(scope),
+				)
+			)
+				forbidden();
+			return {
+				providerId: active.provider_id,
+				requiredScopes: [...new Set(active.scope_json as string[])].sort(),
+				upgradeBinding: {
+					connectionId: active.id,
+					credentialVersionId: active.credential_id,
+					targetProviderReleaseId: readiness.targetProviderReleaseId,
+				},
+			};
+		}
 		const [target] = await this.sql<
 			{
 				external_account: string;
 				external_account_fingerprint: string;
 				provider_id: string;
 				provider_release_id: string;
+				scope_json: unknown;
 			}[]
 		>`
 			SELECT account.provider_id, account.provider_release_id,
-				account.external_account, access.external_account_fingerprint
+				account.external_account, access.external_account_fingerprint,
+				prior.scope_json
 			FROM connection_accounts account
 			JOIN connection_credential_versions prior
 				ON prior.id = account.last_credential_version_id
@@ -3437,7 +3659,17 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				target.provider_release_id
 		)
 			forbidden();
-		return { providerId: target.provider_id };
+		if (
+			!Array.isArray(target.scope_json) ||
+			target.scope_json.some(
+				(scope) => typeof scope !== "string" || !scope || /\s/u.test(scope),
+			)
+		)
+			forbidden();
+		return {
+			providerId: target.provider_id,
+			requiredScopes: [...new Set(target.scope_json)].sort(),
+		};
 	}
 
 	async consumeOAuthTransaction(state: string, providerId: string) {
@@ -3472,21 +3704,53 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					"OAuth state is invalid, expired, or already consumed",
 				);
 			}
+			const protectedValue = this.protector.decrypt(
+				{
+					ciphertext: row.verifier_ciphertext,
+					nonce: row.verifier_nonce,
+					tag: row.verifier_tag,
+				},
+				`oauth:${stateHash}:${row.principal_id}`,
+			);
+			let verifier: {
+				codeVerifier: string;
+				upgradeBinding?: OAuthTransaction["upgradeBinding"];
+			} = { codeVerifier: protectedValue };
+			if (protectedValue.startsWith("{")) {
+				const envelope = JSON.parse(protectedValue);
+				if (
+					envelope.version !== 2 ||
+					typeof envelope.codeVerifier !== "string" ||
+					!envelope.upgradeBinding ||
+					[
+						"connectionId",
+						"credentialVersionId",
+						"targetProviderReleaseId",
+					].some(
+						(key) =>
+							typeof envelope.upgradeBinding[key] !== "string" ||
+							!envelope.upgradeBinding[key] ||
+							envelope.upgradeBinding[key].length > 512,
+					) ||
+					envelope.upgradeBinding.connectionId !== row.reconnect_connection_id
+				)
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"Invalid OAuth upgrade binding",
+					);
+				verifier = {
+					codeVerifier: envelope.codeVerifier,
+					upgradeBinding: envelope.upgradeBinding,
+				};
+			}
 			return {
+				...verifier,
 				...(row.access_request_id
 					? { accessRequestId: row.access_request_id }
 					: {}),
 				...(row.reconnect_connection_id
 					? { reconnectConnectionId: row.reconnect_connection_id }
 					: {}),
-				codeVerifier: this.protector.decrypt(
-					{
-						ciphertext: row.verifier_ciphertext,
-						nonce: row.verifier_nonce,
-						tag: row.verifier_tag,
-					},
-					`oauth:${stateHash}:${row.principal_id}`,
-				),
 				principalId: row.principal_id,
 				providerId: row.provider_id,
 				redirectUri: row.redirect_uri,
@@ -3622,10 +3886,16 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					FOR SHARE
 				`
 				: [];
+			const replacementCredential =
+				activeCredential ??
+				(existing?.status === "ACTIVE" &&
+				input.expectedCredentialVersionId === lastCredential?.id
+					? lastCredential
+					: undefined);
 			if (
 				input.expectedConnectionId &&
 				(existing?.id !== input.expectedConnectionId ||
-					activeCredential?.id !== input.expectedCredentialVersionId)
+					replacementCredential?.id !== input.expectedCredentialVersionId)
 			) {
 				throw new ConnectionError(
 					"INVALID_REQUEST",
@@ -3644,7 +3914,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						expectedConnectionId: input.expectedConnectionId,
 						expectedStatus: "ACTIVE",
 						storedStatus: existing.status,
-						currentScopes: activeCredential?.scope_json,
+						currentScopes: replacementCredential?.scope_json,
 						grantedScopes,
 						providerReleaseId: existing.provider_release_id,
 						storedProviderReleaseId: existing.provider_release_id,
@@ -3656,6 +3926,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						externalAccount: input.externalAccount,
 						fromReleaseId: existing.provider_release_id,
 						toReleaseId: input.providerReleaseId,
+						authorizationCompatibility: this.authorizationCompatibility.get(
+							input.providerReleaseId,
+						),
 					});
 					existing.provider_release_id = input.providerReleaseId;
 				}
@@ -3668,7 +3941,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						connectionId: existing?.id,
 						currentScopes: reconnecting
 							? lastCredential?.scope_json
-							: activeCredential?.scope_json,
+							: replacementCredential?.scope_json,
 						expectedConnectionId: input.expectedConnectionId,
 						expectedStatus: reconnecting ? "DISCONNECTED" : "ACTIVE",
 						grantedScopes,
@@ -3789,6 +4062,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					grantedScopes,
 					principalId: input.principalId,
 					requestId: input.accessRequestId,
+					authorizationCompatibility: this.authorizationCompatibility.get(
+						input.providerReleaseId,
+					),
 				});
 			}
 			await this.restoreGrantsAfterReconnect(sql, connectionId);
@@ -3803,6 +4079,103 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		});
 	}
 
+	async getProviderUpgradeReadiness(input: {
+		principalId: string;
+		connectionId: string;
+	}): Promise<ProviderUpgradeReadiness> {
+		return this.sql.begin(async (sql) => {
+			const [account] = await sql<
+				{
+					provider_id: string;
+					provider_release_id: string;
+					external_account: string;
+					credential_status: string | null;
+					credential_expired: boolean | null;
+					scope_json: unknown;
+				}[]
+			>`
+				SELECT account.provider_id,account.provider_release_id,account.external_account,
+					credential.status AS credential_status,credential.scope_json,
+					credential.expires_at <= now() AS credential_expired
+				FROM connection_accounts account
+				LEFT JOIN connection_credential_versions credential ON credential.id=account.last_credential_version_id
+					AND credential.connection_id=account.id
+				WHERE account.id=${input.connectionId} AND account.owner_type='PERSONAL'
+					AND account.owner_principal_id=${input.principalId} AND account.status='ACTIVE'
+			`;
+			if (!account) forbidden();
+			const target = this.publishedProviderReleaseIds.get(account.provider_id);
+			if (!target)
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Published upgrade target is unavailable",
+				);
+			const base = {
+				connectionId: input.connectionId,
+				providerId: account.provider_id,
+				targetProviderReleaseId: target,
+			};
+			const apply = () => ({
+				...base,
+				nextAction: "REQUEST_APPROVAL" as const,
+				reason: "APPROVAL_REQUIRED",
+			});
+			const [access] = await sql<{ capability_profile_id: string }[]>`
+				SELECT capability_profile_id FROM connection_effective_access_authorizations
+				WHERE connection_id=${input.connectionId} AND principal_id=${input.principalId}
+					AND provider_release_id=${account.provider_release_id}
+					AND external_account_fingerprint=${canonicalHash({ externalAccount: account.external_account, providerReleaseId: account.provider_release_id })}
+					AND (state='ACTIVE' OR (state='REAPPROVAL_REQUIRED' AND reapproval_deadline_at > now()))
+					AND (valid_until IS NULL OR valid_until > now())
+			`;
+			if (!access) return apply();
+			const proof = await compatibleApprovalProfile(sql, {
+				capabilityProfileId: access.capability_profile_id,
+				fromReleaseId: account.provider_release_id,
+				toReleaseId: target,
+				authorizationCompatibility: this.authorizationCompatibility.get(target),
+			});
+			const approvedScopes = proof?.profile.required_scopes;
+			if (
+				!proof ||
+				!Array.isArray(account.scope_json) ||
+				!Array.isArray(approvedScopes) ||
+				account.scope_json.some(
+					(scope) =>
+						typeof scope !== "string" || !approvedScopes.includes(scope),
+				)
+			)
+				return apply();
+			const path = this.upgradePaths
+				.get(target)
+				?.find(
+					(item) =>
+						item.fromReleaseId === account.provider_release_id &&
+						item.fromExecutorDigest === proof.release.from_executor_digest &&
+						item.toExecutorDigest === proof.release.to_executor_digest,
+				);
+			if (path?.strategy === "REAPPROVAL_REQUIRED") return apply();
+			if (account.credential_status !== "ACTIVE" || account.credential_expired)
+				return {
+					...base,
+					nextAction: "REAUTHORIZE",
+					reason: "CREDENTIAL_REAUTHORIZATION_REQUIRED",
+				};
+			if (account.provider_release_id === target)
+				return { ...base, nextAction: "NONE", reason: "ALREADY_CURRENT" };
+			if (
+				this.upgradeBehaviors.get(target) === "REAUTHORIZE" ||
+				path?.strategy === "REAUTHORIZATION_REQUIRED"
+			)
+				return {
+					...base,
+					nextAction: "REAUTHORIZE",
+					reason: "PROVIDER_REAUTHORIZATION_REQUIRED",
+				};
+			return { ...base, nextAction: "UPGRADE", reason: "COMPATIBLE_APPROVAL" };
+		});
+	}
+
 	async getProviderCredentialForUpgrade(input: {
 		allowCurrentRelease?: boolean;
 		connectionId: string;
@@ -3811,16 +4184,23 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		const [row] = await this.sql<
 			{
 				ciphertext: string;
+				expires_at: Date | null;
 				external_account: string;
 				id: string;
 				nonce: string;
 				provider_id: string;
 				provider_release_id: string;
+				refresh_ciphertext: string | null;
+				refresh_nonce: string | null;
+				refresh_tag: string | null;
+				refresh_expires_at: Date | null;
 				scope_json: unknown;
 				tag: string;
 			}[]
 		>`
 			SELECT credential.id, credential.ciphertext, credential.nonce, credential.tag,
+				credential.expires_at, credential.refresh_expires_at,
+				credential.refresh_ciphertext, credential.refresh_nonce, credential.refresh_tag,
 				account.external_account, account.provider_id, account.provider_release_id,
 				credential.scope_json
 			FROM connection_accounts account
@@ -3853,6 +4233,19 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				row,
 				`credential:${row.id}:${input.connectionId}`,
 			),
+			expiresAt: row.expires_at?.toISOString(),
+			refreshExpiresAt: row.refresh_expires_at?.toISOString(),
+			refreshToken:
+				row.refresh_ciphertext && row.refresh_nonce && row.refresh_tag
+					? this.protector.decrypt(
+							{
+								ciphertext: row.refresh_ciphertext,
+								nonce: row.refresh_nonce,
+								tag: row.refresh_tag,
+							},
+							`credential-refresh:${row.id}:${input.connectionId}`,
+						)
+					: undefined,
 			credentialVersionId: row.id,
 			externalAccount: row.external_account,
 			grantedScopes,
@@ -4352,6 +4745,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					WHERE id = ${grant.root_id} AND current_grant_id = ${grant.id}
 				`;
 			}
+			await this.expireDisconnectedUpgradeTasks(
+				sql,
+				input.principalId,
+				input.connectionId,
+			);
 			await sql`
 				INSERT INTO connection_audit_records (principal_id, event, detail)
 				VALUES (

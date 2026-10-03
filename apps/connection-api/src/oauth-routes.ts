@@ -34,6 +34,7 @@ import {
 	ConnectionError,
 	type ConnectionOAuthService,
 	OAuthProtocolError,
+	type ProviderOAuthCallbackStage,
 } from "@agent-infra/connection-core";
 import type {
 	PostgresConnectionApprovalRepository,
@@ -42,18 +43,12 @@ import type {
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
-function providerCredentialValue(
-	body: ProviderCredentialRequest,
-	email?: string | null,
-	hciSession?: string,
-) {
+function providerCredentialValue(body: ProviderCredentialRequest) {
 	if (body.providerId === "datalego") {
-		if (!hciSession)
-			throw new ConnectionError(
-				"AUTHENTICATION_FAILED",
-				"Company HCI login is required",
-			);
-		return JSON.stringify({ email, sessionToken: hciSession });
+		throw new ConnectionError(
+			"INVALID_REQUEST",
+			"DataLego requires OAuth authorization",
+		);
 	}
 	return "accessToken" in body
 		? body.accessToken
@@ -104,6 +99,7 @@ export type ConnectionOAuthServerOptions = {
 const browserSessionCookie = "connection_session";
 const browserSessionCookiePath = "/";
 const manhattanOAuthStateCookie = "connection_manhattan_oauth_state";
+const datalegoOAuthStateCookie = "connection_datalego_oauth_state";
 
 const dynamicRegistrationFields = new Set([
 	"application_type",
@@ -330,22 +326,36 @@ function browserConnectionError(context: Context, error: ConnectionError) {
 	const directoryGateUnavailable =
 		error.code === "PROVIDER_UNAVAILABLE" &&
 		error.message === "Employee directory approval gate is unavailable";
+	const requestOutdated =
+		error.code === "INVALID_REQUEST" &&
+		error.message === "Connection request requires reapplication";
+	const upgradeApprovalRequired =
+		error.code === "FORBIDDEN" &&
+		error.message ===
+			"Provider upgrade requires approval: authorization equivalence is not proven";
 	return browserApiError(context, {
 		code: error.code,
-		messageKey: directoryGateUnavailable
-			? "connection.error.approval_directory_unavailable"
-			: error.code === "INVALID_REQUEST" &&
-					error.message === "Provider credential validation failed"
-				? "connection.error.provider_authentication_failed"
-				: error.code === "FORBIDDEN" || error.code === "RESOURCE_NOT_FOUND"
-					? "connection.error.resource_not_found"
-					: error.code === "IDEMPOTENCY_CONFLICT"
-						? "connection.error.idempotency_conflict"
-						: error.code === "RESULT_UNCERTAIN"
-							? "connection.error.result_uncertain"
-							: error.code === "PROVIDER_UNAVAILABLE"
-								? "connection.error.provider_unavailable"
-								: "connection.error.request_failed",
+		messageKey: upgradeApprovalRequired
+			? "connection.error.provider_upgrade_approval_required"
+			: error.code === "PROVIDER_REAUTHORIZATION_REQUIRED"
+				? "connection.error.provider_reauthorization_required"
+				: requestOutdated
+					? "connection.error.connect_request_outdated"
+					: directoryGateUnavailable
+						? "connection.error.approval_directory_unavailable"
+						: error.code === "INVALID_REQUEST" &&
+								error.message === "Provider credential validation failed"
+							? "connection.error.provider_authentication_failed"
+							: error.code === "FORBIDDEN" ||
+									error.code === "RESOURCE_NOT_FOUND"
+								? "connection.error.resource_not_found"
+								: error.code === "IDEMPOTENCY_CONFLICT"
+									? "connection.error.idempotency_conflict"
+									: error.code === "RESULT_UNCERTAIN"
+										? "connection.error.result_uncertain"
+										: error.code === "PROVIDER_UNAVAILABLE"
+											? "connection.error.provider_unavailable"
+											: "connection.error.request_failed",
 		retryable:
 			error.code === "PROVIDER_UNAVAILABLE" && !directoryGateUnavailable,
 		status:
@@ -1172,6 +1182,92 @@ export function createConnectionOAuthApp(
 			},
 		);
 
+		for (const action of ["revise", "retire"] as const) {
+			app.post(
+				`/api/v1/connection/admin/capability-profiles/:profileId/${action}`,
+				async (context) => {
+					requireSameOrigin(context.req.raw.headers, options.issuer);
+					const session = await currentBrowserApiAdministrator(context);
+					if (session instanceof Response) return session;
+					const ifMatch = context.req.header("if-match");
+					if (!ifMatch || !/^"[1-9][0-9]*"$/.test(ifMatch))
+						throw new ConnectionError(
+							"INVALID_REQUEST",
+							"A current revision is required",
+						);
+					const catalog = management.approvalCatalog;
+					if (!catalog)
+						throw new ConnectionError(
+							"PROVIDER_UNAVAILABLE",
+							"Approval catalog is unavailable",
+						);
+					const sourceId = context.req.param("profileId");
+					const body =
+						action === "revise"
+							? parseJsonBody(
+									capabilityProfileDraftSchema,
+									await context.req.json().catch(() => undefined),
+								)
+							: undefined;
+					if (action === "revise") {
+						if (!management.approvalDirectoryEnabled)
+							throw new ConnectionError(
+								"PROVIDER_UNAVAILABLE",
+								"Employee directory approval gate is unavailable",
+							);
+						if (
+							!body ||
+							!management.catalogs?.some(
+								(item) => item.providerReleaseId === body.providerReleaseId,
+							)
+						)
+							throw new ConnectionError(
+								"INVALID_REQUEST",
+								"Target ProviderRelease is unavailable for execution",
+							);
+						for (const policy of (await catalog.listCatalog()).policies.filter(
+							(item) =>
+								item.status === "PUBLISHED" &&
+								item.capabilityProfileId === sourceId,
+						))
+							await verifyPolicyApprovers(policy.id);
+					}
+					const result = await browserApiOperation(context, () =>
+						browserCommand(
+							options,
+							context,
+							{
+								operation: `connection.capability-profile.${action}`,
+								request: {
+									sourceId,
+									expectedRevision: ifMatch.slice(1, -1),
+									...body,
+								},
+								subject: session.account.principalId,
+							},
+							() =>
+								action === "revise" && body
+									? catalog.revisePublishedCapabilityProfile({
+											...body,
+											id: `capability-profile-${randomUUID()}`,
+											sourceId,
+											expectedRevision: ifMatch.slice(1, -1),
+											actorPrincipalId: session.account.principalId,
+										})
+									: catalog.retirePublishedCapabilityProfile({
+											sourceId,
+											expectedRevision: ifMatch.slice(1, -1),
+											actorPrincipalId: session.account.principalId,
+										}),
+						),
+					);
+					if (result instanceof Response) return result;
+					context.header("cache-control", "no-store");
+					return context.json(result);
+				},
+			);
+		}
+
 		app.get("/api/v1/connection/admin/disclaimers", async (context) => {
 			const session = await currentBrowserApiAdministrator(context);
 			if (session instanceof Response) return session;
@@ -1306,82 +1402,187 @@ export function createConnectionOAuthApp(
 			},
 		);
 
+		for (const action of ["revise", "retire"] as const) {
+			app.post(
+				`/api/v1/connection/admin/disclaimers/:disclaimerId/${action}`,
+				async (context) => {
+					requireSameOrigin(context.req.raw.headers, options.issuer);
+					const session = await currentBrowserApiAdministrator(context);
+					if (session instanceof Response) return session;
+					const ifMatch = context.req.header("if-match");
+					if (!ifMatch || !/^"[1-9][0-9]*"$/.test(ifMatch))
+						throw new ConnectionError(
+							"INVALID_REQUEST",
+							"A current revision is required",
+						);
+					const catalog = management.approvalCatalog;
+					if (!catalog)
+						throw new ConnectionError(
+							"PROVIDER_UNAVAILABLE",
+							"Approval catalog is unavailable",
+						);
+					const sourceId = context.req.param("disclaimerId");
+					const body =
+						action === "revise"
+							? parseJsonBody(
+									disclaimerDraftSchema,
+									await context.req.json().catch(() => undefined),
+								)
+							: undefined;
+					if (action === "revise") {
+						if (!management.approvalDirectoryEnabled)
+							throw new ConnectionError(
+								"PROVIDER_UNAVAILABLE",
+								"Employee directory approval gate is unavailable",
+							);
+						for (const policy of (await catalog.listCatalog()).policies.filter(
+							(item) =>
+								item.status === "PUBLISHED" &&
+								item.disclaimerVersionIds.includes(sourceId),
+						))
+							await verifyPolicyApprovers(policy.id);
+					}
+					const result = await browserApiOperation(context, () =>
+						browserCommand(
+							options,
+							context,
+							{
+								operation: `connection.disclaimer.${action}`,
+								request: {
+									sourceId,
+									expectedRevision: ifMatch.slice(1, -1),
+									...body,
+								},
+								subject: session.account.principalId,
+							},
+							() =>
+								action === "revise" && body
+									? catalog.revisePublishedDisclaimer({
+											...body,
+											sourceId,
+											expectedRevision: ifMatch.slice(1, -1),
+											actorPrincipalId: session.account.principalId,
+										})
+									: catalog.retirePublishedDisclaimer({
+											sourceId,
+											expectedRevision: ifMatch.slice(1, -1),
+											actorPrincipalId: session.account.principalId,
+										}),
+						),
+					);
+					if (result instanceof Response) return result;
+					context.header("cache-control", "no-store");
+					return context.json(result);
+				},
+			);
+		}
+
+		const getPolicyEditorSource = async (context: Context) => {
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			const catalog = management.approvalCatalog;
+			if (!catalog)
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Approval catalog is unavailable",
+				);
+			const result = await browserApiOperation(context, async () => {
+				const policyId = context.req.param("policyId");
+				if (!policyId)
+					throw new ConnectionError("INVALID_REQUEST", "Policy ID is required");
+				const publishedSource = context.req.path.endsWith("/revision-source");
+				const policy = publishedSource
+					? await catalog.getPublishedPolicyVersion(policyId)
+					: await catalog.getPolicyDraft(policyId);
+				const principalIds = policy.stages.flatMap((stage) =>
+					stage.approvers.map((approver) => approver.principalId),
+				);
+				const candidates =
+					await options.service.prepareEmployeeCandidatesForPrincipals(
+						session.account.principalId,
+						publishedSource ? [] : principalIds,
+					);
+				if (publishedSource)
+					for (const principalId of new Set(principalIds)) {
+						try {
+							candidates.push(
+								...(await options.service.prepareEmployeeCandidatesForPrincipals(
+									session.account.principalId,
+									[principalId],
+								)),
+							);
+						} catch (error) {
+							if (
+								!(
+									error instanceof OAuthProtocolError &&
+									error.error === "access_denied" &&
+									error.message === "Approver identity is unavailable"
+								)
+							)
+								throw error;
+						}
+					}
+				const candidateIds = new Map(
+					candidates.map((candidate) => [
+						candidate.principalId,
+						candidate.candidateId,
+					]),
+				);
+				return {
+					policyId: policy.id,
+					revision: policy.revision,
+					candidates: candidates.map(
+						({ candidateId, displayName, email, alias }) => ({
+							candidateId,
+							displayName,
+							email,
+							alias,
+						}),
+					),
+					draft: {
+						allowPermanent: policy.allowPermanent,
+						capabilityProfileId: policy.capabilityProfileId,
+						connectTtlSeconds: policy.connectTtlSeconds,
+						defaultDurationDays: policy.defaultDurationDays,
+						disclaimerVersionIds: policy.disclaimerVersionIds,
+						durations: policy.durations.map((duration) =>
+							duration.kind === "FINITE"
+								? { kind: duration.kind, days: duration.days }
+								: { kind: duration.kind },
+						),
+						priority: policy.priority,
+						providerReleaseId: policy.providerReleaseId,
+						renewalLeadSeconds: policy.renewalLeadSeconds,
+						requestTtlSeconds: policy.requestTtlSeconds,
+						stages: policy.stages.map((stage) => ({
+							name: stage.name,
+							quorumType: stage.quorumType,
+							quorumCount: stage.quorumCount,
+							timeoutSeconds: stage.timeoutSeconds,
+							approverCandidateIds: stage.approvers.flatMap((approver) => {
+								const candidateId = candidateIds.get(approver.principalId);
+								if (!candidateId && !publishedSource)
+									throw new ConnectionError(
+										"PROVIDER_UNAVAILABLE",
+										"Approver candidate is unavailable",
+									);
+								return candidateId ? [candidateId] : [];
+							}),
+						})),
+					},
+				};
+			});
+			if (result instanceof Response) return result;
+			context.header("cache-control", "no-store");
+			return context.json(result);
+		};
 		app.get(
 			"/api/v1/connection/admin/access-policies/:policyId",
-			async (context) => {
-				const session = await currentBrowserApiAdministrator(context);
-				if (session instanceof Response) return session;
-				const catalog = management.approvalCatalog;
-				if (!catalog)
-					throw new ConnectionError(
-						"PROVIDER_UNAVAILABLE",
-						"Approval catalog is unavailable",
-					);
-				const result = await browserApiOperation(context, async () => {
-					const policy = await catalog.getPolicyDraft(
-						context.req.param("policyId"),
-					);
-					const candidates =
-						await options.service.prepareEmployeeCandidatesForPrincipals(
-							session.account.principalId,
-							policy.stages.flatMap((stage) =>
-								stage.approvers.map((approver) => approver.principalId),
-							),
-						);
-					const candidateIds = new Map(
-						candidates.map((candidate) => [
-							candidate.principalId,
-							candidate.candidateId,
-						]),
-					);
-					return {
-						policyId: policy.id,
-						revision: policy.revision,
-						candidates: candidates.map(
-							({ candidateId, displayName, email, alias }) => ({
-								candidateId,
-								displayName,
-								email,
-								alias,
-							}),
-						),
-						draft: {
-							allowPermanent: policy.allowPermanent,
-							capabilityProfileId: policy.capabilityProfileId,
-							connectTtlSeconds: policy.connectTtlSeconds,
-							defaultDurationDays: policy.defaultDurationDays,
-							disclaimerVersionIds: policy.disclaimerVersionIds,
-							durations: policy.durations.map((duration) =>
-								duration.kind === "FINITE"
-									? { kind: duration.kind, days: duration.days }
-									: { kind: duration.kind },
-							),
-							priority: policy.priority,
-							providerReleaseId: policy.providerReleaseId,
-							renewalLeadSeconds: policy.renewalLeadSeconds,
-							requestTtlSeconds: policy.requestTtlSeconds,
-							stages: policy.stages.map((stage) => ({
-								name: stage.name,
-								quorumType: stage.quorumType,
-								quorumCount: stage.quorumCount,
-								timeoutSeconds: stage.timeoutSeconds,
-								approverCandidateIds: stage.approvers.map((approver) => {
-									const candidateId = candidateIds.get(approver.principalId);
-									if (!candidateId)
-										throw new ConnectionError(
-											"PROVIDER_UNAVAILABLE",
-											"Approver candidate is unavailable",
-										);
-									return candidateId;
-								}),
-							})),
-						},
-					};
-				});
-				if (result instanceof Response) return result;
-				context.header("cache-control", "no-store");
-				return context.json(result);
-			},
+			getPolicyEditorSource,
+		);
+		app.get(
+			"/api/v1/connection/admin/access-policies/:policyId/revision-source",
+			getPolicyEditorSource,
 		);
 
 		const saveAccessPolicyDraft = async (context: Context) => {
@@ -1513,6 +1714,134 @@ export function createConnectionOAuthApp(
 				);
 				if (result instanceof Response) return result;
 				return context.body(null, 204);
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/admin/access-policies/:policyId/revise",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const ifMatch = context.req.header("if-match");
+				if (!ifMatch || !/^"[1-9][0-9]*"$/.test(ifMatch))
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"A current revision is required",
+					);
+				if (!management.approvalDirectoryEnabled)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Employee directory approval gate is unavailable",
+					);
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				const sourceId = context.req.param("policyId");
+				const body = parseJsonBody(
+					accessPolicyDraftSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.access-policy.revise",
+							request: {
+								sourceId,
+								expectedRevision: ifMatch.slice(1, -1),
+								...body,
+							},
+							subject: session.account.principalId,
+						},
+						async () => {
+							const stages = [];
+							for (const stage of body.stages) {
+								const approvers = [];
+								for (const candidateId of stage.approverCandidateIds) {
+									const approver =
+										await options.service.resolveEmployeeCandidateForDraft(
+											session.account.principalId,
+											candidateId,
+										);
+									await options.service.ensureActiveEmployeePrincipal(
+										approver.principalId,
+									);
+									approvers.push(approver);
+								}
+								stages.push({
+									...stage,
+									id: `approval-stage-${randomUUID()}`,
+									approvers,
+								});
+							}
+							return catalog.revisePublishedPolicy({
+								...body,
+								id: `access-policy-${randomUUID()}`,
+								sourceId,
+								expectedRevision: ifMatch.slice(1, -1),
+								createdByPrincipalId: session.account.principalId,
+								durations: body.durations.map((duration) => ({
+									...duration,
+									id: `duration-${randomUUID()}`,
+								})),
+								stages,
+							});
+						},
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result);
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/admin/access-policies/:policyId/retire",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const ifMatch = context.req.header("if-match");
+				if (!ifMatch || !/^"[1-9][0-9]*"$/.test(ifMatch))
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"A current revision is required",
+					);
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				const policyVersionId = context.req.param("policyId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.access-policy.retire",
+							request: {
+								policyVersionId,
+								expectedRevision: ifMatch.slice(1, -1),
+							},
+							subject: session.account.principalId,
+						},
+						() =>
+							catalog.retirePublishedPolicy({
+								actorPrincipalId: session.account.principalId,
+								policyVersionId,
+								expectedRevision: ifMatch.slice(1, -1),
+							}),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result);
 			},
 		);
 
@@ -2353,10 +2682,12 @@ export function createConnectionOAuthApp(
 				),
 			);
 			if (authorization instanceof Response) return authorization;
-			if (providerId === "manhattan")
+			if (providerId === "manhattan" || providerId === "datalego")
 				setCookie(
 					context,
-					manhattanOAuthStateCookie,
+					providerId === "manhattan"
+						? manhattanOAuthStateCookie
+						: datalegoOAuthStateCookie,
 					new URL(authorization.authorizationUrl).searchParams.get("state") ??
 						"",
 					{
@@ -2393,11 +2724,7 @@ export function createConnectionOAuthApp(
 						return management.service.connectProviderCredential(
 							session.account.principalId,
 							body.providerId,
-							providerCredentialValue(
-								body,
-								session.account.email,
-								getCookie(context, "HCIAuthToken"),
-							),
+							providerCredentialValue(body),
 							body.accessRequestId,
 						);
 					},
@@ -2458,11 +2785,7 @@ export function createConnectionOAuthApp(
 								session.account.principalId,
 								connectionId,
 								body.providerId,
-								providerCredentialValue(
-									body,
-									session.account.email,
-									getCookie(context, "HCIAuthToken"),
-								),
+								providerCredentialValue(body),
 							),
 					),
 				);
@@ -2593,6 +2916,23 @@ export function createConnectionOAuthApp(
 				if (disconnected instanceof Response) return disconnected;
 				context.header("cache-control", "no-store");
 				return context.body(null, 204);
+			},
+		);
+
+		app.get(
+			"/api/v1/connection/connections/:connectionId/upgrade-readiness",
+			async (context) => {
+				const session = await currentBrowserApiAccount(context);
+				if (session instanceof Response) return session;
+				const readiness = await browserApiOperation(context, () =>
+					management.service.getProviderUpgradeReadiness(
+						session.account.principalId,
+						context.req.param("connectionId"),
+					),
+				);
+				if (readiness instanceof Response) return readiness;
+				context.header("cache-control", "no-store");
+				return context.json(readiness);
 			},
 		);
 
@@ -3052,40 +3392,59 @@ export function createConnectionOAuthApp(
 		app.get("/oauth/callback", async (context) => {
 			context.header("cache-control", "no-store");
 			context.header("referrer-policy", "no-referrer");
+			let stage: ProviderOAuthCallbackStage = "callback_input";
 			try {
-				const providerId = context.req.query("provider") ?? "github";
-				if (providerId !== "github" && providerId !== "manhattan")
+				const callbackProvider = context.req.query("provider") ?? "github";
+				if (!["github", "manhattan", "datalego"].includes(callbackProvider))
 					throw new ConnectionError(
 						"INVALID_REQUEST",
 						"Unsupported OAuth provider",
 					);
-				if (providerId === "manhattan") {
+				const providerId = callbackProvider;
+				if (providerId === "manhattan" || providerId === "datalego") {
+					const stateCookie =
+						providerId === "manhattan"
+							? manhattanOAuthStateCookie
+							: datalegoOAuthStateCookie;
 					const state = context.req.query("state") ?? "";
-					if (!state || getCookie(context, manhattanOAuthStateCookie) !== state)
+					if (!state || getCookie(context, stateCookie) !== state)
 						throw new ConnectionError(
 							"INVALID_REQUEST",
-							"Manhattan OAuth browser state does not match",
+							"Provider OAuth browser state does not match",
 						);
-					deleteCookie(context, manhattanOAuthStateCookie, {
+					deleteCookie(context, stateCookie, {
 						path: "/oauth/callback",
 					});
 				}
-				await (providerId === "github"
+				const connected = await (providerId === "github"
 					? management.service.completeGithubOAuth(
 							context.req.query("code") ?? "",
 							context.req.query("state") ?? "",
+							(value) => {
+								stage = value;
+							},
 						)
 					: management.service.completeProviderOAuth(
 							providerId,
 							context.req.query("code") ?? "",
 							context.req.query("state") ?? "",
+							(value) => {
+								stage = value;
+							},
 						));
-				return context.redirect("/connection/connections", 303);
+				const success = new URLSearchParams({
+					oauth: "connected",
+					provider: providerId,
+					connectionId: connected.connectionId,
+				});
+				return context.redirect(`/connection/connections?${success}`, 303);
 			} catch (error) {
 				console.error(
 					JSON.stringify({
-						errorType: error instanceof Error ? error.name : typeof error,
+						category:
+							error instanceof ConnectionError ? error.code : "UNEXPECTED",
 						event: "connection_provider_oauth_callback_rejected",
+						stage,
 					}),
 				);
 				return context.redirect(
@@ -3094,7 +3453,9 @@ export function createConnectionOAuthApp(
 								.providerAuthorizationDenied === true
 							? "/connection/connections?oauth=permission_denied&provider=manhattan"
 							: "/connection/connections?oauth=callback_failed&provider=manhattan"
-						: "/connection/connections?oauth=callback_failed",
+						: context.req.query("provider") === "datalego"
+							? "/connection/connections?oauth=callback_failed&provider=datalego"
+							: "/connection/connections?oauth=callback_failed",
 					303,
 				);
 			}

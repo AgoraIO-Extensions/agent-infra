@@ -1,8 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { connectionApi } from "./api";
+import { ConnectionApiError, connectionApi } from "./api";
 
 describe("Connection Web 表单校验", () => {
+	it("distinguishes upgrade approval guidance from inaccessible resources", () => {
+		const detail = { code: "FORBIDDEN", retryable: false, traceId: "test" };
+		expect(
+			new ConnectionApiError({
+				...detail,
+				messageKey: "connection.error.provider_upgrade_approval_required",
+			}).message,
+		).toContain("请申请新版能力");
+		expect(
+			new ConnectionApiError({
+				...detail,
+				messageKey: "connection.error.resource_not_found",
+			}).message,
+		).toBe("无法访问该资源");
+	});
 	it("在发送请求前使用中文拒绝无效输入", () => {
 		expect(() =>
 			connectionApi.login({ password: "password", username: "   " }),

@@ -32,6 +32,11 @@ export type ConnectionApiRuntimeConfig = {
 
 export type FullConnectionRuntimeConfig = ConnectionApiRuntimeConfig & {
 	credentialKey: Uint8Array;
+	datalegoOAuth: {
+		clientId: string;
+		clientSecret: string;
+		redirectUri: string;
+	};
 	github: {
 		authorizationUrl?: string;
 		clientId: string;
@@ -370,6 +375,14 @@ export function fullConnectionRuntimeConfig(
 			username: requireValue(environment, "JENKINS_CI_TOKEN_USERNAME"),
 		},
 		manhattanApiKey: requireValue(environment, "MANHATTAN_KONG_API_KEY"),
+		datalegoOAuth: {
+			clientId: requireValue(environment, "DATALEGO_OAUTH_CLIENT_ID"),
+			clientSecret: requireValue(environment, "DATALEGO_OAUTH_CLIENT_SECRET"),
+			redirectUri: new URL(
+				"/oauth/callback?provider=datalego",
+				api.publicBaseUrl,
+			).toString(),
+		},
 		manhattanOAuth: {
 			clientId: requireValue(environment, "MANHATTAN_OAUTH_CLIENT_ID"),
 			clientSecret: requireValue(environment, "MANHATTAN_OAUTH_CLIENT_SECRET"),

@@ -10,9 +10,10 @@ import {
 	type GitHubOAuthProvider,
 	type InvocationContext,
 	OAuthProtocolError,
+	type ProviderOAuthCallbackStage,
 	type StoredCall,
 } from "@agent-infra/connection-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createConnectionApp } from "./app";
 import { createConnectionOAuthApp } from "./oauth-routes";
@@ -60,6 +61,15 @@ const delegated: InvocationContext = {
 };
 
 class TestRepository implements ConnectionRepository {
+	async getProviderUpgradeReadiness() {
+		return {
+			connectionId: "connection-fixture",
+			providerId: "fixture",
+			targetProviderReleaseId: "fixture-v2",
+			nextAction: "UPGRADE" as const,
+			reason: "COMPATIBLE_APPROVAL",
+		};
+	}
 	getProviderCredentialForUpgrade(): Promise<{
 		accessToken: string;
 		credentialVersionId: string;
@@ -88,7 +98,9 @@ class TestRepository implements ConnectionRepository {
 	}
 
 	async ensurePrincipal() {}
-	async validatePersonalConnectRequest() {}
+	async validatePersonalConnectRequest() {
+		return { requiredScopes: ["read:user", "repo"] };
+	}
 	async authorizeConnectionAdministration() {
 		return false;
 	}
@@ -992,6 +1004,26 @@ describe("Connection API", () => {
 				retryable: false,
 			},
 		});
+		const revised = await app.request(
+			"/api/v1/connection/admin/capability-profiles/profile-1/revise",
+			{
+				method: "POST",
+				headers: {
+					...headers,
+					"if-match": '"2"',
+					"idempotency-key": "revise-disabled-directory",
+				},
+				body: JSON.stringify({
+					name: "Revised",
+					providerReleaseId: "release-1",
+					actionVersionIds: ["action-1"],
+				}),
+			},
+		);
+		expect(revised.status).toBe(503);
+		expect(await revised.json()).toMatchObject({
+			error: { messageKey: "connection.error.approval_directory_unavailable" },
+		});
 	});
 
 	it("preserves retryable directory unavailability in direct and wrapped browser routes", async () => {
@@ -1219,7 +1251,17 @@ describe("Connection API", () => {
 			issuer: "https://connection.example/",
 			management: {
 				approvalCatalog: {
-					listCatalog: async () => ({ disclaimers: [] }),
+					listCatalog: async () => ({
+						disclaimers: [],
+						policies: [
+							{
+								id: "policy-1",
+								status: "PUBLISHED",
+								capabilityProfileId: "profile-1",
+								disclaimerVersionIds: ["disclaimer-1"],
+							},
+						],
+					}),
 					getCapabilityProfile: async (id: string) => ({
 						id,
 						providerReleaseId: "github-release",
@@ -1244,6 +1286,55 @@ describe("Connection API", () => {
 						calls.push({ disclaimerDraft: input });
 						return { disclaimerVersionId: "disclaimer-1" };
 					},
+					revisePublishedCapabilityProfile: async (input: unknown) => {
+						calls.push({ revisedProfile: input });
+						return { capabilityProfileId: "profile-2", affectedPolicies: 1 };
+					},
+					retirePublishedCapabilityProfile: async (input: unknown) => {
+						calls.push({ retiredProfile: input });
+						return { affectedPolicies: 1 };
+					},
+					revisePublishedDisclaimer: async (input: unknown) => {
+						calls.push({ revisedDisclaimer: input });
+						return { disclaimerVersionId: "disclaimer-2", affectedPolicies: 1 };
+					},
+					retirePublishedDisclaimer: async (input: unknown) => {
+						calls.push({ retiredDisclaimer: input });
+						return { affectedPolicies: 1 };
+					},
+					getPublishedPolicyVersion: async () => ({
+						id: "policy-1",
+						revision: "2",
+						providerReleaseId: "github-release",
+						capabilityProfileId: "profile-1",
+						priority: 100,
+						allowPermanent: true,
+						connectTtlSeconds: 3600,
+						requestTtlSeconds: 3600,
+						renewalLeadSeconds: 0,
+						createdByPrincipalId: "admin-1",
+						durations: [{ kind: "PERMANENT" }],
+						disclaimerVersionIds: ["disclaimer-1"],
+						stages: [
+							{
+								name: "Review",
+								quorumType: "ANY",
+								timeoutSeconds: 3600,
+								approvers: [
+									{ principalId: "approver-1", displaySnapshot: {} },
+									{ principalId: "missing-approver", displaySnapshot: {} },
+								],
+							},
+						],
+					}),
+					revisePublishedPolicy: async (input: unknown) => {
+						calls.push({ revisedPolicy: input });
+						return { policyVersionId: "policy-2" };
+					},
+					retirePublishedPolicy: async (input: unknown) => {
+						calls.push({ retiredPolicy: input });
+						return { policyVersionId: "policy-1" };
+					},
 					listPolicyApproverPrincipalIds: async () => ["approver-1"],
 					publishPolicy: async (input: unknown) => {
 						calls.push({ publishPolicy: input });
@@ -1258,6 +1349,13 @@ describe("Connection API", () => {
 					},
 				} as never,
 				approvalDirectoryEnabled: true,
+				catalogs: [
+					{
+						provider: "github",
+						providerReleaseId: "github-release",
+						actions: [],
+					},
+				],
 				approvalService: {
 					createDelegation: async (principalId: string, input: unknown) => {
 						calls.push({ principalId, delegation: input });
@@ -1331,6 +1429,32 @@ describe("Connection API", () => {
 				ensureActiveEmployeePrincipal: async (principalId: string) => {
 					calls.push({ verifiedApprover: principalId });
 				},
+				prepareEmployeeCandidatesForPrincipals: async (
+					_admin: string,
+					principals: string[],
+				) => {
+					if (principals.includes("missing-approver"))
+						throw new OAuthProtocolError(
+							"access_denied",
+							"Approver identity is unavailable",
+							403,
+						);
+					return principals.includes("approver-1")
+						? [
+								{
+									principalId: "approver-1",
+									candidateId: "candidate-approver-1",
+									displayName: "Reviewer",
+									email: null,
+									alias: null,
+								},
+							]
+						: [];
+				},
+				resolveEmployeeCandidateForDraft: async () => ({
+					principalId: "approver-1",
+					displaySnapshot: { displayName: "Reviewer" },
+				}),
 				getBrowserAccount: async () => ({
 					principalId: "admin-1",
 					displayName: "Admin",
@@ -1462,6 +1586,201 @@ describe("Connection API", () => {
 			disclaimerDraft: {
 				id: "disclaimer-1",
 				expectedRevision: "1",
+				actorPrincipalId: "admin-1",
+			},
+		});
+		const revisedProfile = await app.request(
+			"/api/v1/connection/admin/capability-profiles/profile-1/revise",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "revise-profile-1",
+				},
+				body: JSON.stringify({
+					providerReleaseId: "github-release",
+					name: "GitHub read",
+					actionVersionIds: ["github.read@v1"],
+				}),
+			},
+		);
+		expect(revisedProfile.status).toBe(200);
+		expect(await revisedProfile.json()).toMatchObject({
+			capabilityProfileId: "profile-2",
+			affectedPolicies: 1,
+		});
+		expect(calls.at(-1)).toMatchObject({
+			revisedProfile: {
+				sourceId: "profile-1",
+				expectedRevision: "2",
+				actorPrincipalId: "admin-1",
+			},
+		});
+		const unavailableRelease = await app.request(
+			"/api/v1/connection/admin/capability-profiles/profile-1/revise",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "revise-unavailable-release",
+				},
+				body: JSON.stringify({
+					providerReleaseId: "historic-release",
+					name: "GitHub read",
+					actionVersionIds: ["old-action"],
+				}),
+			},
+		);
+		expect(unavailableRelease.status).toBe(400);
+		const retiredProfile = await app.request(
+			"/api/v1/connection/admin/capability-profiles/profile-1/retire",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "retire-profile-1",
+				},
+			},
+		);
+		expect(retiredProfile.status).toBe(200);
+		expect(calls.at(-1)).toMatchObject({
+			retiredProfile: { sourceId: "profile-1", actorPrincipalId: "admin-1" },
+		});
+		const missingRevisionRetire = await app.request(
+			"/api/v1/connection/admin/disclaimers/disclaimer-1/retire",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"idempotency-key": "retire-disclaimer-missing",
+				},
+			},
+		);
+		expect(missingRevisionRetire.status).toBe(400);
+		const revisedDisclaimer = await app.request(
+			"/api/v1/connection/admin/disclaimers/disclaimer-1/revise",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "revise-disclaimer-1",
+				},
+				body: JSON.stringify({
+					kind: "GLOBAL",
+					locale: "zh-CN",
+					content: "Updated",
+					materialChange: false,
+				}),
+			},
+		);
+		expect(revisedDisclaimer.status).toBe(200);
+		expect(calls.at(-1)).toMatchObject({
+			revisedDisclaimer: {
+				sourceId: "disclaimer-1",
+				actorPrincipalId: "admin-1",
+			},
+		});
+		const retiredDisclaimer = await app.request(
+			"/api/v1/connection/admin/disclaimers/disclaimer-1/retire",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "retire-disclaimer-1",
+				},
+			},
+		);
+		expect(retiredDisclaimer.status).toBe(200);
+		expect(calls.at(-1)).toMatchObject({
+			retiredDisclaimer: {
+				sourceId: "disclaimer-1",
+				actorPrincipalId: "admin-1",
+			},
+		});
+		const policyEditor = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1/revision-source",
+			{ headers: { cookie: "connection_session=test" } },
+		);
+		expect(policyEditor.status).toBe(200);
+		expect(await policyEditor.json()).toMatchObject({
+			policyId: "policy-1",
+			revision: "2",
+			draft: { stages: [{ approverCandidateIds: ["candidate-approver-1"] }] },
+		});
+		const policyBody = {
+			providerReleaseId: "github-release",
+			capabilityProfileId: "profile-1",
+			priority: 101,
+			allowPermanent: true,
+			connectTtlSeconds: 3600,
+			requestTtlSeconds: 3600,
+			renewalLeadSeconds: 0,
+			durations: [{ kind: "PERMANENT" }],
+			disclaimerVersionIds: ["disclaimer-1"],
+			stages: [
+				{
+					name: "Updated review",
+					quorumType: "ANY",
+					timeoutSeconds: 3600,
+					approverCandidateIds: ["candidate-approver-1"],
+				},
+			],
+		};
+		const missingPolicyRevision = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1/revise",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"idempotency-key": "policy-revision-missing",
+				},
+				body: JSON.stringify(policyBody),
+			},
+		);
+		expect(missingPolicyRevision.status).toBe(400);
+		const revisedPolicy = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1/revise",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "policy-revision-1",
+				},
+				body: JSON.stringify(policyBody),
+			},
+		);
+		expect(revisedPolicy.status).toBe(200);
+		expect(await revisedPolicy.json()).toEqual({ policyVersionId: "policy-2" });
+		expect(calls.at(-1)).toMatchObject({
+			revisedPolicy: {
+				sourceId: "policy-1",
+				expectedRevision: "2",
+				createdByPrincipalId: "admin-1",
+				stages: [{ approvers: [{ principalId: "approver-1" }] }],
+			},
+		});
+		const retiredPolicy = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1/retire",
+			{
+				method: "POST",
+				headers: {
+					...updateHeaders,
+					"if-match": '"2"',
+					"idempotency-key": "policy-retire-1",
+				},
+			},
+		);
+		expect(retiredPolicy.status).toBe(200);
+		expect(calls.at(-1)).toMatchObject({
+			retiredPolicy: {
+				policyVersionId: "policy-1",
+				expectedRevision: "2",
 				actorPrincipalId: "admin-1",
 			},
 		});
@@ -2339,7 +2658,7 @@ describe("Connection API", () => {
 					name: "provider-callback",
 					value: { providerId, code, state },
 				});
-				return { connectionId: "connection-manhattan" };
+				return { connectionId: `connection-${providerId}` };
 			},
 			disconnectConnection: async (
 				principalId: string,
@@ -2468,11 +2787,33 @@ describe("Connection API", () => {
 				});
 				return { connectionId: "connection-bitbucket" };
 			},
+			getProviderUpgradeReadiness: async (
+				principalId: string,
+				connectionId: string,
+			) => {
+				if (connectionId !== "connection-old")
+					throw new ConnectionError("FORBIDDEN", "Unavailable");
+				expect(principalId).toBe("principal-user");
+				return {
+					connectionId,
+					providerId: "datalego",
+					targetProviderReleaseId: "datalego-connection-v5",
+					nextAction: "UPGRADE",
+					reason: "COMPATIBLE_APPROVAL",
+				};
+			},
 			upgradeProviderConnection: async (
 				principalId: string,
 				connectionId: string,
 				accessRequestId?: string,
 			) => {
+				if (connectionId === "connection-upgrade-approval-required")
+					throw new ConnectionError(
+						"FORBIDDEN",
+						"Provider upgrade requires approval: authorization equivalence is not proven",
+					);
+				if (connectionId === "connection-upgrade-forbidden")
+					throw new ConnectionError("FORBIDDEN", "Connection is unavailable");
 				calls.push({
 					name: "upgrade",
 					value: {
@@ -2491,6 +2832,8 @@ describe("Connection API", () => {
 				providerRedirectUris: {
 					manhattan:
 						"https://connection.example/oauth/callback?provider=manhattan",
+					datalego:
+						"https://connection.example/oauth/callback?provider=datalego",
 				},
 				service: management,
 			},
@@ -2661,7 +3004,7 @@ describe("Connection API", () => {
 			}),
 		];
 		expect(apiResponses.map(({ status }) => status)).toEqual([
-			200, 201, 201, 201, 201, 201, 200, 201, 204, 204, 201,
+			200, 201, 201, 201, 201, 201, 200, 201, 204, 204, 400,
 		]);
 		expect(await apiResponses[0]?.json()).toEqual({
 			authorizationUrl: "https://github.test/login/oauth/authorize",
@@ -2685,8 +3028,8 @@ describe("Connection API", () => {
 		expect(await apiResponses[6]?.json()).toEqual({
 			connectionId: "connection-old",
 		});
-		expect(await apiResponses[10]?.json()).toEqual({
-			connectionId: "connection-datalego",
+		expect(await apiResponses[10]?.json()).toMatchObject({
+			error: { code: "INVALID_REQUEST" },
 		});
 		expect(calls).toEqual([
 			{
@@ -2760,13 +3103,6 @@ describe("Connection API", () => {
 					principalId: "principal-user",
 				},
 			},
-			{
-				name: "connect-datalego",
-				value: {
-					principalId: "principal-user",
-					providerId: "datalego",
-				},
-			},
 		]);
 		const manhattanStart = await app.request(
 			"/api/v1/connection/oauth-transactions",
@@ -2813,7 +3149,9 @@ describe("Connection API", () => {
 			{ headers: { cookie: oauthCookie }, redirect: "manual" },
 		);
 		expect(callback.status).toBe(303);
-		expect(callback.headers.get("location")).toBe("/connection/connections");
+		expect(callback.headers.get("location")).toBe(
+			"/connection/connections?oauth=connected&provider=manhattan&connectionId=connection-manhattan",
+		);
 		expect(callback.headers.get("cache-control")).toBe("no-store");
 		expect(callback.headers.get("referrer-policy")).toBe("no-referrer");
 		expect(calls.at(-1)).toEqual({
@@ -2824,6 +3162,74 @@ describe("Connection API", () => {
 				state: "opaque-state",
 			},
 		});
+		const datalegoStart = await app.request(
+			"/api/v1/connection/oauth-transactions",
+			{
+				method: "POST",
+				headers: {
+					cookie,
+					origin: "https://connection.example",
+					"content-type": "application/json",
+					"idempotency-key": "datalego-oauth-start",
+				},
+				body: JSON.stringify({
+					providerId: "datalego",
+					accessRequestId: "approved-request",
+				}),
+			},
+		);
+		expect(datalegoStart.status).toBe(200);
+		const datalegoCookie =
+			(datalegoStart.headers.get("set-cookie") ?? "").split(";", 1)[0] ?? "";
+		expect(datalegoCookie).toBe("connection_datalego_oauth_state=opaque-state");
+		expect(calls.at(-1)).toMatchObject({
+			value: {
+				providerId: "datalego",
+				redirectUri:
+					"https://connection.example/oauth/callback?provider=datalego",
+			},
+		});
+		const rejectedDatalegoCallback = await app.request(
+			"/oauth/callback?provider=datalego&code=one-time-code&state=opaque-state",
+			{
+				headers: { cookie: oauthCookie },
+				redirect: "manual",
+			},
+		);
+		expect(rejectedDatalegoCallback.headers.get("location")).toContain(
+			"callback_failed&provider=datalego",
+		);
+		const datalegoCallback = await app.request(
+			"/oauth/callback?provider=datalego&code=one-time-code&state=opaque-state",
+			{
+				headers: { cookie: datalegoCookie },
+				redirect: "manual",
+			},
+		);
+		expect(datalegoCallback.headers.get("location")).toBe(
+			"/connection/connections?oauth=connected&provider=datalego&connectionId=connection-datalego",
+		);
+		expect(calls.at(-1)).toEqual({
+			name: "provider-callback",
+			value: {
+				providerId: "datalego",
+				code: "one-time-code",
+				state: "opaque-state",
+			},
+		});
+		const githubCallback = await app.request(
+			"/oauth/callback?code=github-one-time-code&state=github-opaque-state",
+			{ redirect: "manual" },
+		);
+		expect(githubCallback.headers.get("location")).toBe(
+			"/connection/connections?oauth=connected&provider=github&connectionId=connection-github",
+		);
+		expect(githubCallback.headers.get("location")).not.toContain(
+			"one-time-code",
+		);
+		expect(githubCallback.headers.get("location")).not.toContain(
+			"opaque-state",
+		);
 		const approvedUpgrade = await app.request(
 			"/api/v1/connection/connections/connection-old/upgrade",
 			{
@@ -2838,6 +3244,54 @@ describe("Connection API", () => {
 			},
 		);
 		expect(approvedUpgrade.status).toBe(200);
+		const readinessResponse = await app.request(
+			"/api/v1/connection/connections/connection-old/upgrade-readiness",
+			{ headers: { cookie } },
+		);
+		expect(readinessResponse.status).toBe(200);
+		expect(readinessResponse.headers.get("cache-control")).toBe("no-store");
+		expect(await readinessResponse.json()).toMatchObject({
+			nextAction: "UPGRADE",
+			providerId: "datalego",
+		});
+		expect(
+			(
+				await app.request(
+					"/api/v1/connection/connections/other-account/upgrade-readiness",
+					{ headers: { cookie } },
+				)
+			).status,
+		).toBe(404);
+		expect(
+			(
+				await app.request(
+					"/api/v1/connection/connections/connection-old/upgrade-readiness",
+				)
+			).status,
+		).toBe(401);
+		for (const [connectionId, messageKey] of [
+			[
+				"connection-upgrade-approval-required",
+				"connection.error.provider_upgrade_approval_required",
+			],
+			["connection-upgrade-forbidden", "connection.error.resource_not_found"],
+		] as const) {
+			const response = await app.request(
+				`/api/v1/connection/connections/${connectionId}/upgrade`,
+				{
+					method: "POST",
+					headers: {
+						cookie,
+						origin: "https://connection.example",
+						"idempotency-key": connectionId,
+					},
+				},
+			);
+			expect(response.status).toBe(404);
+			expect(await response.json()).toMatchObject({
+				error: { code: "FORBIDDEN", messageKey },
+			});
+		}
 		expect(calls.at(-1)).toEqual({
 			name: "upgrade",
 			value: {
@@ -3705,17 +4159,22 @@ describe("Connection API", () => {
 
 	it("redirects a rejected Provider OAuth callback without replaying it", async () => {
 		let attempts = 0;
+		const logged = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => undefined);
 		const app = createConnectionOAuthApp({
 			issuer: "https://connection.example/",
 			management: {
 				githubRedirectUri: "https://connection.example/oauth/callback",
 				service: {
-					completeGithubOAuth: async () => {
+					completeGithubOAuth: async (
+						_code: string,
+						_state: string,
+						onStage: (stage: ProviderOAuthCallbackStage) => void,
+					) => {
 						attempts += 1;
-						throw new ConnectionError(
-							"INVALID_REQUEST",
-							"OAuth state is invalid, expired, or already consumed",
-						);
+						onStage("token_exchange");
+						throw new Error("provider-code consumed-state provider-secret");
 					},
 				} as unknown as ConnectionApplicationService,
 			},
@@ -3723,16 +4182,28 @@ describe("Connection API", () => {
 			service: {} as ConnectionOAuthService,
 		});
 
-		const response = await app.request(
-			"/oauth/callback?code=provider-code&state=consumed-state",
-			{ redirect: "manual" },
-		);
+		try {
+			const response = await app.request(
+				"/oauth/callback?code=provider-code&state=consumed-state",
+				{ redirect: "manual" },
+			);
 
-		expect(attempts).toBe(1);
-		expect(response.status).toBe(303);
-		expect(response.headers.get("location")).toBe(
-			"/connection/connections?oauth=callback_failed",
-		);
+			expect(attempts).toBe(1);
+			expect(response.status).toBe(303);
+			expect(response.headers.get("location")).toBe(
+				"/connection/connections?oauth=callback_failed",
+			);
+			expect(JSON.parse(String(logged.mock.calls.at(-1)?.[0]))).toEqual({
+				category: "UNEXPECTED",
+				event: "connection_provider_oauth_callback_rejected",
+				stage: "token_exchange",
+			});
+			expect(JSON.stringify(logged.mock.calls)).not.toMatch(
+				/provider-code|consumed-state|provider-secret/,
+			);
+		} finally {
+			logged.mockRestore();
+		}
 	});
 
 	it("reports Manhattan RBAC denial without exposing the OAuth code", async () => {

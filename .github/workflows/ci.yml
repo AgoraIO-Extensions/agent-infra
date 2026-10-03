@@ -56,6 +56,12 @@ jobs:
         if: github.event_name == 'pull_request' && github.base_ref == 'connection'
         run: node .github/scripts/connection-release-guard.mjs --approval-baseline origin/connection
 
+      - name: Verify runtime catalog snapshot and Provider upgrade paths
+        if: github.event_name == 'pull_request' && github.base_ref == 'connection'
+        run: |
+          node packages/openconnector-adapter/scripts/provider-release-snapshot.mjs
+          node .github/scripts/connection-release-guard.mjs --upgrade-baseline origin/connection
+
       - name: Check formatting and lint
         run: pnpm check
 

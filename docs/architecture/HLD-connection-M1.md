@@ -194,6 +194,23 @@ Secret Manager 治理另由 [#907](https://github.com/AgoraIO-Extensions/agent-i
 列表四个 READ Actions，固定访问 `/api/connection/*`，禁止调用方提交 URL、Header 或用户邮箱；响应上限
 为 64 KiB。首版不开放上传、删除、重新解析、配置或告警写入。
 
+`manhattan-connection-v5` 保留 v4 的四个 READ Actions，并新增按 Manhattan crash profile URL
+读取有界概览/线程目录、按 CrashUUID 与线程序号分页读取符号化堆栈帧两个 READ Actions。Connection
+仅接受 HTTPS `manhattan.agoralab.co/crash/profile` 上唯一的 32 位十六进制 `id`，解析后只调用固定
+`/api/connection/crash/*` 路由，不请求用户提交的 URL；新 Action 不自动进入既有 Grant。Manhattan
+复用 Symbol Profile 的解析结果，但不返回 OSS 原文、寄存器、设备 ID、Session/频道或无限制模块列表；
+每次返回的线程、模块和帧均分页且有长度上限。除机器 key 和个人 Bearer 外，Manhattan 对两条路由
+逐次校验专门的 crash profile 读取 RBAC，403 不降级为开放访问。Crash 堆栈是非可信数据，仅作为
+AI 分析输入；Connection 不生成、存储或写回分析结论，现有 v4 连接继续按原版本路由。
+
+`manhattan-connection-v6` 在不接收解析文件的前提下，新增按 native/JVM 类型及真实线程名分页查找、
+按线程索引分页读取带有限 unwind 来源的帧证据两个 READ Actions。Manhattan 从既有 Symbol Profile
+结果投影 JVM 线程状态及 `CONTEXT`、`CALL_FRAME_INFO`、`INLINE`、`STACK_SCAN`、`UNKNOWN` 或
+`JVM_THREAD_INFO`，不把扫描帧视作已证实调用链；模块计数止于映射区，不包含后续 OS/JVM 段。
+两条固定 `/api/connection/crash/*` 路由仍须逐次验证 Kong key、个人 Bearer 及 crash-profile RBAC，
+响应保持 64 KiB 上限，不返回寄存器、设备/会话或原始解析文本。v4/v5 已授权 Action 仍可执行，
+新 Action 不自动进入已有 Grant，升级时需明确确认选择。
+
 DataLego 的首个 **[设计决策]** Provider profile 固定为
 `https://datalego.agoralab.co`，只发布当前用户、提交 SQL 查询、查询任务状态和取消任务四个有界动作。
 浏览器连接请求不得提交 LDAP 密码或 Token；Connection API 仅从同站请求携带的 HttpOnly
@@ -212,6 +229,45 @@ LDAP 密码或客户端 Token 输入。
 探针，并发布 `datalego-connection-v2` 与 `@v2` ActionVersion；不得修改已发布的 v1 catalog。
 身份校验发生一次受控 refresh 时，Adapter 必须把实际验证成功的新 session 写入 Credential envelope，
 并以 `datalego-connection-v3` 与 `@v3` ActionVersion 发布；不得修改已发布的 v2 catalog。
+
+DataLego 正式入口统一使用 `datalego` Provider 的 `datalego-connection-v4`，新连接与重连采用
+authorization-code，不再收集 HCI Cookie 或访问 Grafana。v1–v3 是历史 Credential 契约，不修改其
+catalog、Credential 或 Grant；试验 Provider 停用并保留历史记录，不能自动映射其凭据或授权到
+正式 Provider。v4 保留上述四个有界动作的名称与 effect，发布独立 `@v4` ActionVersion；提交和
+取消仍为 WRITE，必须由批准的能力档案和 Consumer Grant 明确授权。版本升级遵循 30.0，旧申请
+或账号的版本、scope、身份或审批不匹配时要求重新申请/连接，不放宽准入门禁。
+
+其 confidential client 使用已登记的
+`https://agent-connector.gz3.agoralab.co/oauth/callback?provider=datalego`，一次性 transaction/state
+与 `datalego` 精确绑定，不能接受任意 redirect URI。OAuth 端点采用与 Manhattan 相同的 legacy
+confidential-client Basic 认证，不宣称支持 PKCE。只有 OAuth `/api/v2/userInfo` 返回稳定 email，
+且同一个人 access token 对固定不存在 job 的 status READ 探针返回 HTTP 400、JSON `message`
+精确为 `record not found` 时，才建立加密 OAuth Credential。执行仍通过 `accessToken` Header 调用
+固定业务路径，查询 creator 仅来自服务端验证的个人身份。refresh token 使用现有 CredentialVersion
+CAS 和失效处理，不回退 Grafana、机器人身份或密码；业务 WRITE 不由 Adapter 自动刷新重放。
+机器 client secret 仅从部署 Secret 注入。正式上线验收仍须完成真实授权码、个人身份与有界 READ，
+代码测试不替代真实 Provider 验收。
+
+DataLego 取消防护以不可变 `datalego-connection-v5` 和 `@v5` 发布，保留个人 OAuth、
+四个 Action 的名称、effect、scope 与固定 origins；历史 v4 executor 保持不变。
+取消前先读取原任务状态，已终结的 `success/error/cancel/forbid` 返回
+`cancellation.applied=false, reason=already_finished`，不提交 PUT、不声称取消成功；
+只有 `pending/waiting/running` 才发送一次取消。状态读取失败或未知状态不提交取消，
+Adapter 以 `submissionOutcome=rejected` 明确证明该逻辑操作未提交，不进入对账；
+成功的空取消响应只报告请求已接受，不声称任务已经取消。
+非空取消响应只有明确的 `status=cancel` 可作为已取消结果；未知对象（包括 HTTP 200 的空 JSON
+对象）不能标记成功，必须进入 UNCERTAIN。
+取消 HTTP 非成功响应必须保留 HTTP 状态，但不能只凭 4xx 声称外部效果确定未发生；
+无明确提交结果契约时保留 UNCERTAIN，禁止盲重试。新版本仍遵守 30.0 的审批与授权门禁。
+
+DataLego v4→v5 修复只改变取消防护和错误结果处理，四个 Action 的名称、输入、effect、scope、
+个人身份和固定 origins 保持等价。可信 catalog wrapper 登记精确 source/target release 与 executor
+digest 的兼容证据，引用已评审的 #1228；不改写已发布 executor。按 30.0 验证原有效审批、
+账号和 Credential，并只映射已批准 Action 子集，保留原审批来源与有效期，Consumer 原选择不扩大。
+显式升级保留原 OAuth refresh token、access/refresh 到期信息，以账号归属验证、内部加密读取和
+Credential CAS 写入完成；这些数据不进入浏览器或 Consumer。兼容证明缺失或原审批无效时仍
+拒绝迁移，页面应说明需要申请新版能力，不将它描述为普通资源访问失败。
+验证返回的 access token 若已改变，则不得沿用旧 refresh token，必须要求重新授权。
 
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
@@ -462,10 +518,11 @@ flowchart TB
 
 M1 只有一个权威 Connection 业务部署单元 `connection-api`，单主位于 GZ3。MCP、HTTP、OAuth
 callback、后台 lease/outbox/reconciliation 可以在同一镜像中以不同进程角色运行；不增加独立
-业务 Worker 服务。国内 Provider 从 GZ3 直连；GitHub 服务端 OAuth 与 API 请求使用 GZ3 固定代理
-出口。LA3 `connection-provider-egress` 因 HCI 暂无合规 workload mTLS 入口而延期，不属于当前生产
+业务 Worker 服务。国内 Provider 从 GZ3 直连；GitHub 服务端请求默认使用 GZ3 固定代理，首次 OAuth
+code exchange 在 GZ3 pilot 可按 ADR 的受控条件直连回退。LA3 `connection-provider-egress` 因 HCI 暂无合规 workload mTLS 入口而延期，不属于当前生产
 拓扑。完整区域决策见
 [Connection GZ3 控制面与 GitHub 代理出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
+该 ADR 的[GitHub OAuth 出口回退决策](../adr/ADR-connection-regional-control-plane-and-github-egress.md#gz3-pilotgithub-oauth-出口回退)仅适用于 GZ3 pilot；此次发布不以独立 NetworkPolicy 签收为前置，广泛生产门禁保持不变。
 
 GitHub WRITE 通过固定代理提交后，response lost 仍进入 `UNCERTAIN`，不能切换路径盲重试。
 GitHub OAuth code exchange 失败且消费状态未知时重新发起登录，不重放 code。Connection DB 最终
@@ -1158,9 +1215,15 @@ type CredentialVersion = {
 
 `ConnectionAccessPolicyVersion` 固定 exact ProviderRelease、Capability Profile、离散时长、Disclaimer version bundle 和 1–10 个严格顺序 ApprovalStage。每阶段固定 LDAP Principal 候选集合与 `ANY | ALL | AT_LEAST_N` quorum；PUBLISHED 后不可修改。同一最高优先级匹配多条、没有匹配或任何安全输入缺失时拒绝申请。
 
+目录管理员对已发布 Capability Profile 或 Disclaimer 的“编辑”在单个事务中创建新的不可变发布版本，并把引用旧版的 current PUBLISHED Policy 复制成绑定新版的替代版本；原 Profile、Disclaimer 和 Policy 仅转为 SUPERSEDED。替代 Policy 保留原审批阶段、期限、优先级及其余条款，新申请只看到新版；旧 Request、Permit、Authorization 和 Grant 仍绑定原版，不自动扩权或重写确认。管理员“删除”仅把目标及引用它的 current Policy 转为 SUPERSEDED，从新申请目录撤下，不硬删除或撤销既有资格。所有操作校验管理员身份、目标 revision 和并发引用，审计/outbox 与状态更新同事务；重大免责声明变更仍遵循下文的重审门禁，不能通过快捷修订绕过。
+
+当被编辑的 Profile 绑定的旧 ProviderRelease 不在当前运行 Catalog 时，管理页必须展示旧 release 来源并要求管理员显式选择当前同一 Provider 的可执行 release；切换时清空旧 ActionVersion 选择，不按名称、效果或序号自动映射。修订事务验证来源/目标 Provider 一致、目标 release 仍 PUBLISHED 且由当前执行器提供、所选 ActionVersion 全属目标 release，并将受影响的 current Policy 同时替换为目标 release/Profile 的新版本。旧 Policy、Request、Authorization、Credential 和 Grant 保留原 release 与批准范围；跨 Provider、旧执行器不可用、条款作用域不匹配或并发变更时拒绝修订。
+
+管理员对 current PUBLISHED Policy 的快捷“编辑”同样在一个事务中发布冻结所有字段的新 Policy Version，并将原版本转为 SUPERSEDED；可改变阶段、候选人、时长和已发布能力包/非重大条款，但只影响新申请。既有 Request、Permit、Authorization 和 Grant 继续按原 Policy 冻结值执行，不因快捷编辑触发重审或自动扩权。快捷“移除”仅将 current Policy 转为 SUPERSEDED，停止该策略的新申请，不终止待审或已批准资格；界面必须与紧急撤销明显区分。两者均以管理员身份和 current revision 做事务内 CAS，快捷编辑还须重新验证目录、候选人、Provider/Profile/Disclaimer 发布状态、阶段 quorum 和依赖完整性；新增重大 Disclaimer 仍须使用显式 material 发布与重审流程。
+
 紧急撤销 current PUBLISHED Policy 时，在同一事务将其 ProviderRelease + Capability Profile 的 PUBLISHED/SUPERSEDED 版本标记 REVOKED，取消对应未终结 Request/未消费 Permit，暂停该组合的 ACTIVE、REAPPROVAL_REQUIRED 与 DISCONNECTED 个人 Access Authorization，提升 account revision/execution fence 并暂停 active Grant。进行中的 Renewal 同样取消；Request、WorkItem、Notification、audit/outbox 同事务收敛。旧 Provider submission 已进入 `SUBMISSION_STARTED` 时仍保留真实结果或 `UNCERTAIN`。撤销不能因状态重放而恢复资格。
 
-替代版本发布明确记录是否为 material；material 发布必须携带管理员指定的未来重审截止时间和原因，在同一事务创建 POLICY ReapprovalCampaign 并标记受影响资格为 REAPPROVAL_REQUIRED。新增 material Disclaimer bundle 不能声明为非 material。非 material 换版只影响新申请，不改变既有 Authorization。
+要求既有资格重审的替代版本发布明确记录 material；material 发布必须携带管理员指定的未来重审截止时间和原因，在同一事务创建 POLICY ReapprovalCampaign 并标记受影响资格为 REAPPROVAL_REQUIRED。新增 material Disclaimer bundle 不能声明为非 material。普通换版和上述快捷编辑仅影响新申请，不改变既有 Authorization。
 已断开的同账号资格仍属于 material Campaign 的受影响对象；重审前不能凭旧 `DISCONNECTED` 状态直接重连。
 
 ```ts
@@ -1185,6 +1248,8 @@ type ConnectionAccessAuthorizationState =
 
 ApprovalDecision 只接受 current Stage 的合格审批人，以 Request、Stage 和 routing revision 做事务内 CAS；Decision 不可修改。全部 Stage 满足 quorum 后产生服务端一次性 Connect Permit。OAuth/PAT/API Key validation 成功、稳定外部账号已证明、Connection 与 Access Authorization 已持久化时，Permit 才在同一事务消费。
 
+申请人自审仅对提交时及决定时均有效的 `CONNECTION_ADMIN` 开放，且本人必须在已发布 Policy 的当前 Stage 审批人名单中。创建 Request 时按当时管理员状态纳入原始路由；查询待办、生成通知及提交 Decision 时复核有效角色及角色授予时间不晚于 Request 创建时间。代理审批不能用于申请人自审。旧 Request 因该排除规则进入 `ROUTING_BLOCKED`，或仍为 `IN_REVIEW` 但当前路由漏掉该管理员且本阶段尚无 Decision 时，仅当原 Policy 当前 Stage 已包含该管理员，才可显式补回本人。对 `IN_REVIEW` 只增补本人，保留其他当前审批人；不降低 quorum、改变阶段顺序或绕过 revision CAS 与审计。普通申请人、提交后才取得管理员角色者、失去管理员角色者及不在原 Policy 名单中的管理员均不能自审。
+
 阶段处理时限 `timeoutSeconds` 用于提醒当前审批人与管理员，不是 Decision 的硬截止，不跳级也不自动批准。
 Request 总有效期到达才进入 EXPIRED；阶段仍为 current PENDING 且 Request 未过期时，合格审批人仍可提交决定。
 
@@ -1194,13 +1259,17 @@ Request 总有效期到达才进入 EXPIRED；阶段仍为 current PENDING 且 R
 
 所有个人 Connection 入口必须解析同一批准事实，包括 OAuth start/callback、PAT/API Key、credential store 和 reconnect。调用方不能提交可信 Principal、Policy、Permit、scope、Connection 或账号 selector。Connect Permit、OAuth state 与 Credential 各自一次性且不能互相替代。
 
+已批准但尚未连接的 Request 增加服务端派生的连接可用性投影，与审批 state 分离。检查使用受信 runtime 的当前 ProviderRelease 目录，不以数据库中仍保留的旧 PUBLISHED Release 推断当前 Adapter 可用；新申请选项和提交也绑定当前 runtime 版本（固定来源的续期除外）。OAuth start、callback 与凭据存储重新检查同一条件，不能只在页面检查。原版本与当前版本不一致时，仅在下述 exact compatibility 证明成立后允许继续连接；第一次绑定的外部身份仍须由 Provider 证明，并在消费 Permit 的事务内复核身份、scope、批准及数据库时间。使用原 Request 的来源复合外键建立 Access Authorization，通过已有 upgraded 字段记录目标能力包、逐项映射及审计，不改写原 Request、Decision 或 Policy，不延长 Permit/申请有效期，也不扩大 Consumer Grant。
+
+未证明兼容时，投影指向当前目标版本并禁止进入 Credential/OAuth；页面结合当前可申请选项，展示重新申请或等待管理员开放。重新申请只预填用途及目标策略允许的匹配时长，不自动提交、批准、取消旧申请或继承免责声明确认。管理员普通发布/修订本身不取消历史申请，显式撤销、自然到期与重大重审规则保持不变。
+
 Access Authorization 冻结 Principal、Connection、稳定外部账号指纹、ProviderRelease、Capability Profile、有效期和 revision。Invocation 建立与 Provider submission admission 都必须验证 current ACTIVE Authorization 及数据库时间；后台 expiry worker 只推进状态和通知，不是唯一门禁。到期、撤销和暂停提升 account/authorization revision 与 execution fence，并暂停相关 Grant；`SUBMISSION_STARTED` 调用仍按 Effect/UNCERTAIN 语义收敛。
 
 Provider 兼容升级是版本绑定的受控迁移，不是新的公司批准。原 Request、Decision、PolicyVersion、Capability Profile 和批准时的版本绑定必须保留为不可变审批来源；迁移记录必须关联原批准与精确目标 ProviderRelease、逐项 ActionVersion 映射及兼容性依据。不得改写历史 Request，也不得只删除 exact-release 检查来放行升级。
 
 存储保留 Authorization 原 `provider_release_id` / `capability_profile_id` 与 source Request 的复合外键，通过成对的 `upgraded_provider_release_id` / `upgraded_capability_profile_id` 保存当前映射；统一 effective view 用于执行资格与能力范围校验，审批来源字段用于原策略撤销、重审和续期。迁移审计记录每次源/目标版本、能力包与逐项映射。兼容升级后的续期仍按原批准来源申请和审核，并校验当前映射账号与凭证；升级本身不续期，升级期间已提交的续期申请仍可正常完成。
 
-首期自动兼容证明采用保守的充分条件：源/目标 PUBLISHED Release 的认证配置、部署配置和有效执行器摘要相同，获批 Action 的名称、效果、输入 Schema、所需 scopes 与描述逐项相同且一一对应。不因目录额外增加其他 Action 拒绝迁移；执行器摘要变化时不能只根据 Action 名称或 Schema 猜测等价，走重新审批及存储凭证复用入口。
+自动兼容证明要求源/目标 PUBLISHED Release 的认证配置、部署配置相同，获批 Action 的名称、效果、输入 Schema、所需 scopes 与描述逐项相同且一一对应。不因目录额外增加其他 Action 拒绝迁移。执行器摘要标识实现，不单独代表扩权：摘要相同，或受信发布代码提供经过代码评审的权限兼容声明时，才允许继承原审批。声明必须绑定 Provider、确切源/目标 Release 和各自 SHA-256 摘要，记录修复依据与评审引用；不能由 Browser、Consumer 或请求参数提供，不能跨版本或传递复用。声明只证明执行器修复未改变能力的授权语义，不能替代上述逐项检查、原审批有效期、账号及凭证检查，也不自动扩大 Consumer Grant。缺少声明或任一绑定不匹配时，仍走重新审批及存储凭证复用入口。兼容迁移审计记录声明及实际版本/摘要，历史 Release 不原地改写。
 
 兼容性判断覆盖整个获批 Capability Profile，而非只检查某个 Consumer 当前勾选的子集；Consumer Grant 仍是独立且不大于公司批准上限的授权。目标仅包含原获批能力的一一映射，Provider 目录新增加的其他能力不纳入批准。既有 Consumer 选择按该映射保留，不得以默认 READ 集合或目标目录全集替代。获批范围之外的能力必须先经新公司审批，Consumer 尚未确认的能力仍需独立预览与确认。
 
@@ -2384,7 +2453,7 @@ Audit 使用每 partition hash chain 或外部 append-only sink。保留策略�
 - TLS SNI、证书 hostname 校验和 HTTP `Host` 继续使用 Catalog 原始 hostname，不能使用或接受调用方提供的替代值。
 - 每次 redirect 和新连接都重新执行 scheme、host、DNS/IP、TLS 和 header 校验；默认禁止跨 origin。
 - 禁止 Consumer 控制 Host、Authorization、Cookie、Proxy-*、Forwarded 和 hop-by-hop headers。
-- Egress Proxy 是唯一公网路径；NetworkPolicy 阻止 `connection-api` 直连公网。
+- Egress Proxy 是默认公网路径。GZ3 pilot 的首次 GitHub OAuth 直连回退按 ADR 接受实际 NetworkPolicy 未核实、直连 fetch 未证明 DNS/IP pinning 的风险；不得将应用目标白名单表述为网络层隔离。广泛生产仍要求核查 NetworkPolicy 并完成受控出口。
 
 ### 27.5 Secret 泄露防护
 
@@ -2545,9 +2614,29 @@ attributes 使用低基数 enum/opaque ID；不记录 args、token、external ac
 
 ### 30.0 Provider Upgrade Campaign
 
+发布端必须使用与 runtime 相同的 Provider catalog 生成并校验发布快照。快照只包含 release、
+executor、认证/部署与 Action 授权边界的标识或摘要及可信兼容证据，不包含个人数据或 Credential。
+相邻正式版本改变 ProviderRelease 时必须登记精确 source/target release/digest 和经评审的
+升级路径：兼容修复、重新审批或重新授权。兼容声明必须有等价边界和现有可信证据；
+声明不能代替 runtime 对本人原审批、有效期、Action 子集、身份、Scope 与 Credential CAS 的检查。
+PR CI、镜像发布与 GZ3 发布共用该门禁，镜像发布还必须实际运行隔离 PostgreSQL 的旧连接升级
+生命周期回归；不能用通过标记、文件名或服务健康代替升级验收。
+
+本人可只读查询指定个人连接的升级准备状态；target release 和后续步骤只由服务端确定。
+准备状态区分直接升级、新版审批申请和重新连接，Web 的账号、升级任务与批量处理共用此结果，
+不以 Provider 名称硬编码替代准备检查，不自动提交申请或授予新 Action。准备结果只是操作引导，
+执行阶段仍重新验证准入条件，不能以旧准备结果绕过撤销或审批失效。
+
+有效个人连接的显式重授权只在原审批及 source→target 兼容校验通过后开始。
+账号 ID、原 CredentialVersion ID 和目标 ProviderRelease ID 与 verifier 一同保存在现有加密 OAuth
+transaction 的 v2 envelope 中；普通 transaction 保留旧格式，reader 同时支持两种格式。
+回调在交换 code 前重新检查绑定，写入时使用原 CredentialVersion CAS，目标版本或原审批变化
+即失败关闭，不能覆盖并发产生的新凭据。旧程序不能处理 v2 升级 transaction 时，应失败关闭并
+由用户在恢复新程序后重新发起授权，不能重放旧 state/code。该路径不创建新审批或自动扩权。
+
 ProviderRelease 发布必须先分类为静默兼容或需要使用者操作。只有 stable account proof、Credential scope、已确认 ActionVersion 集合、effect 与 authorization digest 均保持等价时才允许静默迁移；任一条件无法证明时创建 `ProviderUpgradeCampaign`。
 
-Campaign 绑定 source/target ProviderRelease、原因、可选截止时间和创建时间。每个受影响 AuthorizationRoot 创建唯一 `ProviderUpgradeTask`，状态只允许按 `PENDING_CONNECTION -> PENDING_AUTHORIZATION -> COMPLETED` 收敛，截止后未完成可进入 `EXPIRED`。发布事务同时写入 task 和 `connection.provider-upgrade.required` outbox event；重复发布按 source/target release 与 AuthorizationRoot 幂等。连接升级后若原 Consent 可复用则直接完成，否则进入待重新确认，新的 Grant 提交后完成。状态变化写 audit/outbox，外部通知投递失败不得伪造完成状态。
+Campaign 绑定 source/target ProviderRelease、原因、可选截止时间和创建时间。每个受影响 AuthorizationRoot 创建唯一 `ProviderUpgradeTask`，状态只允许按 `PENDING_CONNECTION -> PENDING_AUTHORIZATION -> COMPLETED` 收敛；截止后未完成或个人 Connection 主动断开时转为终态 `EXPIRED`，不随重连恢复。断开连接与其待升级任务终结、对应待办关闭在同一事务完成，记录脱敏 audit/outbox；任务对账还须收敛此前已断开账号的遗留待办，投影与重建不得纳入已断开的账号。发布事务同时写入 task 和 `connection.provider-upgrade.required` outbox event；重复发布按 source/target release 与 AuthorizationRoot 幂等。同一 Connection 已切至目标 ProviderRelease，且同一 Principal 在该连接上具有有效目标版本 Access Authorization 时，对账可将遗留的 `PENDING_CONNECTION` 推进至 `PENDING_AUTHORIZATION`；其他账号的审批不能代替旧账号升级，也不得据此自动创建 Consumer Grant。连接升级后若原 Consent 可复用则直接完成，否则进入待重新确认，新的 Grant 提交后完成。状态变化写 audit/outbox，外部通知投递失败不得伪造完成状态。
 
 普通使用者只能读取自己的未完成 task 和精确 Connection 操作入口。Connection 管理员只读取 Provider、source/target release、原因、截止时间及聚合计数，不读取 Credential、授权快照正文或无关外部账号。M1 的 Connection Web 提供站内待办；邮件、企微等通道可后续消费 outbox，但不属于 Campaign 的完成条件。
 

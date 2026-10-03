@@ -26,13 +26,9 @@ test("runtime publication, consumer grants and approval management share every P
 			const initializer = node.initializer;
 			assert.ok(
 				initializer &&
-					ts.isAsExpression(initializer) &&
-					ts.isArrayLiteralExpression(initializer.expression),
+					ts.isIdentifier(initializer) &&
+					initializer.text === "connectionProviderCatalogs",
 			);
-			names = initializer.expression.elements.map((element) => {
-				assert.ok(ts.isIdentifier(element));
-				return element.text;
-			});
 		}
 		if (
 			ts.isForOfStatement(node) &&
@@ -45,12 +41,36 @@ test("runtime publication, consumer grants and approval management share every P
 		ts.forEachChild(node, visit);
 	}
 	visit(file);
+	const registry = ts.createSourceFile(
+		"provider-catalogs.ts",
+		await read("packages/openconnector-adapter/src/provider-catalogs.ts"),
+		ts.ScriptTarget.Latest,
+		true,
+		ts.ScriptKind.TS,
+	);
+	function readRegistry(node) {
+		if (
+			ts.isVariableDeclaration(node) &&
+			ts.isIdentifier(node.name) &&
+			node.name.text === "catalogs"
+		) {
+			assert.ok(
+				ts.isAsExpression(node.initializer) &&
+					ts.isArrayLiteralExpression(node.initializer.expression),
+			);
+			names = node.initializer.expression.elements.map(
+				(element) => element.text,
+			);
+		}
+		ts.forEachChild(node, readRegistry);
+	}
+	readRegistry(registry);
 	assert.deepEqual(names, [
 		"githubConnectionCatalog",
 		"bitbucketServerConnectionCatalog",
 		"jiraServerConnectionCatalog",
 		"confluenceServerConnectionCatalog",
-		"datalegoConnectionCatalog",
+		"datalegoV5ConnectionCatalog",
 		"jenkinsCiConnectionCatalog",
 		"jenkinsReleaseConnectionCatalog",
 		"manhattanConnectionCatalog",
@@ -58,6 +78,19 @@ test("runtime publication, consumer grants and approval management share every P
 	]);
 	assert.equal(loops, 2);
 	assert.equal(managementBindings, 1);
+	const compatibilityImport = file.statements.find(
+		(statement) =>
+			ts.isImportDeclaration(statement) &&
+			statement.moduleSpecifier.text ===
+				"@agent-infra/openconnector-adapter/authorization-compatibility",
+	);
+	assert.ok(compatibilityImport);
+	assert.ok(
+		compatibilityImport.importClause.namedBindings.elements.some(
+			(binding) => binding.name.text === "datalegoV5ConnectionCatalog",
+		),
+		"DataLego publication and approval must receive the exact reviewed repair evidence",
+	);
 });
 
 test("Turbo forwards every CI Connection integration database", async () => {
@@ -170,6 +203,8 @@ test("production startup uses the formal runtime without fixture invocation", as
 			"GITHUB_OAUTH_CLIENT_SECRET",
 			"GITHUB_OAUTH_AUTHORIZATION_URL",
 			"GITHUB_OAUTH_TOKEN_URL",
+			"DATALEGO_OAUTH_CLIENT_ID",
+			"DATALEGO_OAUTH_CLIENT_SECRET",
 			"JIRA_TOKEN_SERVER_URL",
 			"JIRA_TOKEN_CLIENT_ID",
 			"JIRA_TOKEN_CLIENT_SECRET",
@@ -215,8 +250,13 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 	assert.equal(apiManifest.scripts.local, undefined);
 	assert.deepEqual(adapterManifest.exports, {
 		".": "./src/index.ts",
+		"./authorization-compatibility": "./src/authorization-compatibility.ts",
+		"./provider-catalogs": "./src/provider-catalogs.ts",
 		"./confluence-server": "./src/confluence-server.ts",
 		"./datalego": "./src/datalego.ts",
+		"./datalego-oauth": "./src/datalego-oauth.ts",
+		"./datalego-v4": "./src/datalego-v4.ts",
+		"./datalego-v5": "./src/datalego-v5.ts",
 		"./jira-server": "./src/jira-server.ts",
 		"./manhattan": "./src/manhattan.ts",
 		"./rehoboam": "./src/rehoboam.ts",

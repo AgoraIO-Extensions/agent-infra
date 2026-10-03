@@ -23,6 +23,7 @@ import {
 	type InvocationContext,
 	normalizeSharedScopeDisplayName,
 	ProviderExecutorRouter,
+	type ProviderOAuthCallbackStage,
 	type ReconciliationJob,
 	type StoredCall,
 } from "./index";
@@ -111,6 +112,16 @@ const delegated: InvocationContext = {
 };
 
 class MemoryRepository implements ConnectionRepository {
+	upgradeReadiness: import("./index").ProviderUpgradeReadiness = {
+		connectionId: "connection-fixture",
+		providerId: "fixture",
+		targetProviderReleaseId: "fixture-v2",
+		nextAction: "UPGRADE",
+		reason: "COMPATIBLE_APPROVAL",
+	};
+	async getProviderUpgradeReadiness() {
+		return this.upgradeReadiness;
+	}
 	getProviderCredentialForUpgrade(): Promise<{
 		accessToken: string;
 		credentialVersionId: string;
@@ -176,6 +187,8 @@ class MemoryRepository implements ConnectionRepository {
 	directInvocation = direct;
 	credentialAccessToken = "test-secret";
 	connectValidationError?: ConnectionError;
+	readonly approvedScopes = new Map<string, readonly string[]>();
+	reconnectScopes: readonly string[] = ["read:user", "repo"];
 	readonly connectValidations: Array<{
 		principalId: string;
 		providerId: string;
@@ -195,6 +208,12 @@ class MemoryRepository implements ConnectionRepository {
 	}) {
 		this.connectValidations.push(input);
 		if (this.connectValidationError) throw this.connectValidationError;
+		const key = `${input.principalId}:${input.requestId ?? ""}`;
+		if (this.approvedScopes.size && !this.approvedScopes.has(key))
+			throw new ConnectionError("FORBIDDEN", "Connect approval is required");
+		return {
+			requiredScopes: this.approvedScopes.get(key) ?? ["read:user", "repo"],
+		};
 	}
 	async authorizeConnectionAdministration() {
 		return false;
@@ -347,7 +366,7 @@ class MemoryRepository implements ConnectionRepository {
 			input.principalId !== "alice"
 		)
 			throw new ConnectionError("FORBIDDEN", "Reconnect target is unavailable");
-		return { providerId: "github" };
+		return { providerId: "github", requiredScopes: this.reconnectScopes };
 	}
 	async storeProviderCredential(input: {
 		accessRequestId?: string;
@@ -1072,6 +1091,35 @@ describe("Connection application service", () => {
 		expect(repository.reconciliationJobs).toHaveLength(0);
 	});
 
+	it("distinguishes a Provider 409 rejection from an ambiguous 503 write", async () => {
+		for (const [providerStatus, expectedStatus, expectedCode] of [
+			[409, "FAILED", "INVALID_REQUEST"],
+			[503, "UNCERTAIN", "PROVIDER_UNCERTAIN"],
+		] as const) {
+			const repository = new MemoryRepository();
+			const service = new ConnectionApplicationService(repository, {
+				execute: async () => {
+					throw Object.assign(new Error("Bitbucket Server request failed"), {
+						providerStatus,
+					});
+				},
+			});
+			await expect(
+				service.invokeDirect("direct", "github.createPullRequest", {
+					base: "main",
+					head: "feature/rejected",
+					idempotencyKey: `bitbucket-${providerStatus}`,
+					repository: "acme/widgets",
+					title: "Rejected",
+				}),
+			).rejects.toMatchObject({ code: expectedCode });
+			expect(repository.calls[0]?.status).toBe(expectedStatus);
+			expect(repository.reconciliationJobs).toHaveLength(
+				expectedStatus === "UNCERTAIN" ? 1 : 0,
+			);
+		}
+	});
+
 	it("preserves Provider-owned details for deterministic write rejection", async () => {
 		const repository = new MemoryRepository();
 		const service = new ConnectionApplicationService(repository, {
@@ -1287,7 +1335,19 @@ describe("Connection application service", () => {
 		const state = authorizationUrl.searchParams.get("state");
 		expect(state).toHaveLength(43);
 		expect(authorizationUrl.searchParams.get("challenge")).toHaveLength(43);
-		await service.completeGithubOAuth("authorization-code", state ?? "");
+		const stages: ProviderOAuthCallbackStage[] = [];
+		await service.completeGithubOAuth(
+			"authorization-code",
+			state ?? "",
+			(stage) => stages.push(stage),
+		);
+		expect(stages).toEqual([
+			"callback_input",
+			"transaction",
+			"authorization",
+			"exchange",
+			"credential_store",
+		]);
 		expect(repository.storedOAuthCredential).toEqual({
 			accessToken: "provider-secret",
 			displayName: "Alice GitHub",
@@ -1295,9 +1355,13 @@ describe("Connection application service", () => {
 			grantedScopes: ["repo"],
 			principalId: "alice",
 		});
+		stages.length = 0;
 		await expect(
-			service.completeGithubOAuth("authorization-code", state ?? ""),
+			service.completeGithubOAuth("authorization-code", state ?? "", (stage) =>
+				stages.push(stage),
+			),
 		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		expect(stages).toEqual(["callback_input", "transaction"]);
 
 		const shared = await service.startSharedGithubOAuth(
 			"admin",
@@ -1333,6 +1397,94 @@ describe("Connection application service", () => {
 			expectedConnectionId: "connection-oauth",
 			externalAccount: "alice-github",
 		});
+	});
+
+	it("binds personal GitHub OAuth scopes to each approved request without widening reconnect or shared flow", async () => {
+		const repository = new MemoryRepository();
+		repository.approvedScopes.set("alice:request-read", ["read:user"]);
+		repository.approvedScopes.set("bob:request-write", ["read:user", "repo"]);
+		repository.approvedScopes.set("bob:request-empty", []);
+		repository.approvedScopes.set("bob:request-malformed", [
+			"repo delete_repo",
+		]);
+		let authorizationUrls = 0;
+		const oauth: GitHubOAuthProvider = {
+			getAuthorizationUrl: ({ requestedScopes, state }) => {
+				authorizationUrls += 1;
+				const url = new URL("https://github.test/authorize");
+				url.searchParams.set("state", state);
+				url.searchParams.set(
+					"scope",
+					requestedScopes?.join(" ") ?? "shared-default",
+				);
+				return url.toString();
+			},
+			exchangeCode: async () => {
+				throw new Error("not used");
+			},
+			refresh: async () => {
+				throw new Error("not used");
+			},
+		};
+		const service = new ConnectionApplicationService(
+			repository,
+			{ execute: async () => ({}) },
+			oauth,
+		);
+		const redirectUri = "https://connection.test/oauth/callback";
+		const alice = await service.startGithubOAuth(
+			"alice",
+			redirectUri,
+			"request-read",
+		);
+		const bob = await service.startGithubOAuth(
+			"bob",
+			redirectUri,
+			"request-write",
+		);
+		expect(new URL(alice.authorizationUrl).searchParams.get("scope")).toBe(
+			"read:user",
+		);
+		expect(new URL(bob.authorizationUrl).searchParams.get("scope")).toBe(
+			"read:user repo",
+		);
+		await expect(
+			service.startGithubOAuth("bob", redirectUri, "request-read"),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		await expect(
+			service.startGithubOAuth("bob", redirectUri, "request-empty"),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		await expect(
+			service.startGithubOAuth("bob", redirectUri, "request-malformed"),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		expect(authorizationUrls).toBe(2);
+		const reconnect = await service.startGithubOAuth(
+			"alice",
+			redirectUri,
+			undefined,
+			"connection-oauth",
+		);
+		expect(new URL(reconnect.authorizationUrl).searchParams.get("scope")).toBe(
+			"read:user repo",
+		);
+		repository.reconnectScopes = ["repo\tdelete_repo"];
+		await expect(
+			service.startGithubOAuth(
+				"alice",
+				redirectUri,
+				undefined,
+				"connection-oauth",
+			),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		expect(authorizationUrls).toBe(3);
+		const shared = await service.startSharedGithubOAuth(
+			"admin",
+			"shared-scope-company",
+			redirectUri,
+		);
+		expect(new URL(shared.authorizationUrl).searchParams.get("scope")).toBe(
+			"shared-default",
+		);
 	});
 
 	it("binds Manhattan OAuth state to its provider and stores only the exchanged token", async () => {
@@ -1424,6 +1576,77 @@ describe("Connection application service", () => {
 			service.completeProviderOAuth("manhattan", "one-time-code", state),
 		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
 	});
+
+	it("records an adapter-proven pre-submit rejection without reconciliation", async () => {
+		const repository = new MemoryRepository();
+		let executions = 0;
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => {
+				executions++;
+				throw Object.assign(new Error("No mutation submitted"), {
+					providerCode: "cancel_not_submitted",
+					providerMessage: "Cancellation was not submitted",
+					providerSubmissionOutcome: "rejected",
+				});
+			},
+		});
+		const input = {
+			base: "main",
+			head: "feature/not-submitted",
+			idempotencyKey: "no-mutation-submitted",
+			repository: "acme/widgets",
+			title: "Preflight",
+		};
+		await expect(
+			service.invokeDirect("direct", "github.createPullRequest", input),
+		).rejects.toMatchObject({
+			code: "INVALID_REQUEST",
+			data: {
+				submissionOutcome: "rejected",
+				providerCode: "cancel_not_submitted",
+			},
+		});
+		expect(repository.calls[0]?.status).toBe("FAILED");
+		expect(repository.reconciliationJobs).toHaveLength(0);
+		await service.invokeDirect("direct", "github.createPullRequest", input);
+		expect(executions).toBe(1);
+	});
+
+	it.each([200, 400, 401, 403, 500])(
+		"retains HTTP %i evidence for an uncertain write without retry",
+		async (status) => {
+			const repository = new MemoryRepository();
+			let executions = 0;
+			const service = new ConnectionApplicationService(repository, {
+				execute: async () => {
+					executions++;
+					throw Object.assign(new Error("private upstream body"), {
+						providerStatus: status,
+						submissionUncertain: true,
+						...(status === 401 || status === 403
+							? { providerCredentialInvalid: true }
+							: {}),
+					});
+				},
+			});
+			const input = {
+				base: "main",
+				head: "feature/uncertain",
+				idempotencyKey: "uncertain-http-evidence",
+				repository: "acme/widgets",
+				title: "Uncertain",
+			};
+			await expect(
+				service.invokeDirect("direct", "github.createPullRequest", input),
+			).rejects.toMatchObject({
+				code: "PROVIDER_UNCERTAIN",
+				data: { providerHttpStatus: status },
+			});
+			expect(repository.calls[0]?.status).toBe("UNCERTAIN");
+			await service.invokeDirect("direct", "github.createPullRequest", input);
+			expect(executions).toBe(1);
+		},
+	);
 
 	it("reconciles an admitted write with missing terminal evidence", async () => {
 		const repository = new MemoryRepository();
@@ -1893,6 +2116,63 @@ describe("Connection application service", () => {
 		).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
 	});
 
+	it.each([false, true])(
+		"preserves OAuth lifecycle only for the validated original token (changed: %s)",
+		async (changed) => {
+			const repository = new MemoryRepository();
+			const current = {
+				accessToken: "access-fixture",
+				refreshToken: "refresh-fixture",
+				expiresAt: "2030-01-01T00:00:00.000Z",
+				refreshExpiresAt: "2030-01-08T00:00:00.000Z",
+				credentialVersionId: "credential-v4",
+				externalAccount: "alice@example.invalid",
+				grantedScopes: ["datalego.query"],
+				providerId: "datalego",
+			};
+			repository.getProviderCredentialForUpgrade = async () => current;
+			let stored: Record<string, unknown> | undefined;
+			repository.storeProviderCredential = async (input) => {
+				stored = input;
+				return { connectionId: "connection-datalego" };
+			};
+			const service = new ConnectionApplicationService(
+				repository,
+				{ execute: async () => ({}) },
+				undefined,
+				{
+					datalego: {
+						providerId: "datalego",
+						providerReleaseId: "datalego-connection-v5",
+						validateCredential: async (accessToken) => ({
+							accessToken: changed ? "changed-token-fixture" : accessToken,
+							displayName: "Alice",
+							externalAccount: current.externalAccount,
+							grantedScopes: current.grantedScopes,
+							providerId: "datalego",
+							providerReleaseId: "datalego-connection-v5",
+						}),
+					},
+				},
+			);
+			if (changed) {
+				await expect(
+					service.upgradeProviderConnection("alice", "connection-datalego"),
+				).rejects.toMatchObject({ code: "PROVIDER_REAUTHORIZATION_REQUIRED" });
+				expect(stored).toBeUndefined();
+				return;
+			}
+			await service.upgradeProviderConnection("alice", "connection-datalego");
+			expect(stored).toMatchObject({
+				expectedConnectionId: "connection-datalego",
+				expectedCredentialVersionId: current.credentialVersionId,
+				expiresAt: current.expiresAt,
+				refreshExpiresAt: current.refreshExpiresAt,
+				refreshToken: current.refreshToken,
+			});
+		},
+	);
+
 	it.each([undefined, "approved-upgrade-request"])(
 		"upgrades with stored credential and approval %s",
 		async (accessRequestId) => {
@@ -1976,6 +2256,7 @@ describe("Connection application service", () => {
 
 	it("requires SSO instead of upgrading an unrefreshable Manhattan token", async () => {
 		const repository = new MemoryRepository();
+		repository.upgradeReadiness.nextAction = "REAUTHORIZE";
 		repository.getProviderCredentialForUpgrade = async () => ({
 			accessToken: "old-short-lived-token",
 			credentialVersionId: "credential-v3",
@@ -1990,6 +2271,120 @@ describe("Connection application service", () => {
 			service.upgradeProviderConnection("alice", "connection-manhattan"),
 		).rejects.toMatchObject({ code: "PROVIDER_REAUTHORIZATION_REQUIRED" });
 	});
+
+	it.each(["REQUEST_APPROVAL", "REAUTHORIZE", "NONE"] as const)(
+		"uses the current preparation path %s before reading or replacing credentials",
+		async (nextAction) => {
+			const repository = new MemoryRepository();
+			repository.upgradeReadiness.nextAction = nextAction;
+			const service = new ConnectionApplicationService(repository, {
+				execute: async () => ({}),
+			});
+			if (nextAction === "NONE")
+				await expect(
+					service.upgradeProviderConnection("alice", "connection"),
+				).resolves.toEqual({ connectionId: "connection" });
+			else
+				await expect(
+					service.upgradeProviderConnection("alice", "connection"),
+				).rejects.toMatchObject({
+					code:
+						nextAction === "REQUEST_APPROVAL"
+							? "FORBIDDEN"
+							: "PROVIDER_REAUTHORIZATION_REQUIRED",
+				});
+			expect(repository.storedOAuthCredential).toBeUndefined();
+		},
+	);
+
+	it.each([false, true])(
+		"OAuth upgrade callback honors the sealed Credential binding (stale: %s)",
+		async (stale) => {
+			const repository = new MemoryRepository();
+			const binding = {
+				connectionId: "connection-data",
+				credentialVersionId: "credential-v4",
+				targetProviderReleaseId: "datalego-connection-v5",
+			};
+			repository.consumeOAuthTransaction = async () => ({
+				principalId: "alice",
+				providerId: "datalego",
+				codeVerifier: "verifier-fixture",
+				redirectUri:
+					"https://connection.example/oauth/callback?provider=datalego",
+				reconnectConnectionId: binding.connectionId,
+				upgradeBinding: binding,
+			});
+			repository.validatePersonalReconnect = async () => ({
+				providerId: "datalego",
+				requiredScopes: ["datalego.query"],
+				upgradeBinding: {
+					...binding,
+					credentialVersionId: stale
+						? "newer-credential"
+						: binding.credentialVersionId,
+				},
+			});
+			repository.upgradeReadiness.targetProviderReleaseId =
+				binding.targetProviderReleaseId;
+			let exchanges = 0;
+			const identity = {
+				accessToken: "access-fixture",
+				refreshToken: "refresh-fixture",
+				externalAccount: "alice@example.invalid",
+				displayName: "Alice",
+				grantedScopes: ["datalego.query"],
+				expiresAt: "2030-01-01T00:00:00.000Z",
+			};
+			const service = new ConnectionApplicationService(
+				repository,
+				{ execute: async () => ({}) },
+				undefined,
+				{
+					datalego: {
+						providerId: "datalego",
+						providerReleaseId: binding.targetProviderReleaseId,
+						validateCredential: async () => ({
+							...identity,
+							providerId: "datalego",
+							providerReleaseId: binding.targetProviderReleaseId,
+						}),
+					},
+				},
+				{
+					datalego: {
+						getAuthorizationUrl: () => "https://oauth.example",
+						refresh: async () => identity,
+						exchangeCode: async () => {
+							exchanges++;
+							return identity;
+						},
+					},
+				},
+			);
+			if (stale) {
+				await expect(
+					service.completeProviderOAuth(
+						"datalego",
+						"code-fixture",
+						"state-fixture",
+					),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				expect(exchanges).toBe(0);
+				expect(repository.storedOAuthCredential).toBeUndefined();
+			} else {
+				await service.completeProviderOAuth(
+					"datalego",
+					"code-fixture",
+					"state-fixture",
+				);
+				expect(repository.storedOAuthCredential).toMatchObject({
+					expectedConnectionId: binding.connectionId,
+					expectedCredentialVersionId: binding.credentialVersionId,
+				});
+			}
+		},
+	);
 
 	it("does not retry an uncertain Bitbucket write with the same idempotency key", async () => {
 		const repository = new MemoryRepository();

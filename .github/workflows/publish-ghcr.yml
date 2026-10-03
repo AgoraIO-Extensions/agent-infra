@@ -13,9 +13,71 @@ permissions:
   packages: write
 
 jobs:
+  upgrade-validation:
+    name: Validate existing Connection upgrades
+    if: startsWith(github.ref_name, 'connection-v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+        env:
+          POSTGRES_DB: connection_upgrade_test
+          POSTGRES_USER: connection_test
+          POSTGRES_PASSWORD: connection_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U connection_test -d connection_upgrade_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install --global pnpm@11.20.0
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify actual runtime catalog snapshot
+        run: node packages/openconnector-adapter/scripts/provider-release-snapshot.mjs
+      - name: Verify canonical Connection release and upgrade paths
+        shell: bash
+        run: |
+          baseline=""
+          while IFS= read -r tag; do
+            if [[ "$tag" != "$GITHUB_REF_NAME" ]]; then
+              baseline="$tag"
+              break
+            fi
+          done < <(git tag --merged HEAD --list 'connection-v*' --sort=-version:refname)
+          test -n "$baseline"
+          node .github/scripts/connection-release-guard.mjs --baseline "$baseline" | tee connection-catalog-diff.txt
+          cat connection-catalog-diff.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Run existing-account upgrade regression
+        env:
+          CONNECTION_RECONNECT_TEST_DATABASE_URL: postgres://connection_test:connection_test@127.0.0.1:5432/connection_upgrade_test
+        run: >-
+          pnpm --filter @agent-infra/connection-store exec vitest run
+          src/approval-upgrade.integration.test.ts
+          src/approval-reconnect.integration.test.ts --no-file-parallelism
+
   publish:
     name: Publish ${{ matrix.name }}
     runs-on: ubuntu-24.04
+    needs: [upgrade-validation]
+    if: >-
+      always() &&
+      (needs.upgrade-validation.result == 'success' ||
+       (!startsWith(github.ref_name, 'connection-v') && needs.upgrade-validation.result == 'skipped'))
     strategy:
       fail-fast: false
       matrix:
@@ -38,22 +100,6 @@ jobs:
           fetch-tags: true
           persist-credentials: false
 
-      - name: Verify canonical Connection release and catalog monotonicity
-        if: startsWith(github.ref_name, 'connection-v')
-        shell: bash
-        run: |
-          baseline=$(git tag --merged HEAD --list 'connection-v*' --sort=-version:refname | grep -v "^${GITHUB_REF_NAME}$" | head -1)
-          if [ -z "$baseline" ]; then
-            baseline=$(git tag --merged HEAD --list 'v*' --sort=-version:refname | head -1)
-          fi
-          test -n "$baseline"
-          if ! catalog_diff=$(node .github/scripts/connection-release-guard.mjs --baseline "$baseline"); then
-            echo 'Connection catalog guard failed' >&2
-            exit 1
-          fi
-          printf '%s\n' "$catalog_diff" | tee connection-catalog-diff.txt
-          cat connection-catalog-diff.txt >> "$GITHUB_STEP_SUMMARY"
-
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -71,7 +117,7 @@ jobs:
 
   outcome:
     name: Publish terminal outcome
-    needs: [publish]
+    needs: [upgrade-validation, publish]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 1

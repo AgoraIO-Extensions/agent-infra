@@ -31,7 +31,7 @@ export const issueTokenRequestSchema = z.strictObject({
 export const oauthTransactionRequestSchema = z
 	.strictObject({
 		accessRequestId: opaqueId.optional(),
-		providerId: z.enum(["github", "manhattan"]).default("github"),
+		providerId: z.enum(["github", "manhattan", "datalego"]).default("github"),
 		reconnectConnectionId: opaqueId.optional(),
 		sharedScopeId: opaqueId.optional(),
 	})
@@ -81,6 +81,17 @@ export const providerReconnectRequestSchema = z.union([
 export const providerUpgradeRequestSchema = z.strictObject({
 	accessRequestId: opaqueId.optional(),
 });
+
+export const providerUpgradeReadinessSchema = z.strictObject({
+	connectionId: opaqueId,
+	providerId: opaqueId,
+	targetProviderReleaseId: opaqueId,
+	nextAction: z.enum(["UPGRADE", "REQUEST_APPROVAL", "REAUTHORIZE", "NONE"]),
+	reason: z.string().min(1).max(256),
+});
+export type ProviderUpgradeReadiness = z.infer<
+	typeof providerUpgradeReadinessSchema
+>;
 
 export const authorizationPreviewRequestSchema = z.strictObject({
 	actionVersionIds: z.array(opaqueId).min(1).max(500).optional(),

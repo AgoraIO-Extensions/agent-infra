@@ -61,6 +61,8 @@ import {
 	getConnectionAccessPolicyDraft,
 	getConnectionAccessRequest,
 	getConnections,
+	getProviderUpgradeReadiness,
+	getPublishedConnectionAccessPolicyEditorSource,
 	getSession,
 	getSharedConnections,
 	grantAdministrator,
@@ -95,9 +97,11 @@ import {
 	type ProviderCredentialRequest,
 	type ProviderReconnectRequest,
 	type ProviderUpgradeCampaignsResponse,
+	type ProviderUpgradeReadiness,
 	prepareConnectionAccess,
 	providerCredentialRequestSchema,
 	providerReconnectRequestSchema,
+	providerUpgradeReadinessSchema,
 	publishApprovalCapabilityProfile,
 	publishApprovalDisclaimer,
 	publishConnectionAccessPolicy,
@@ -107,7 +111,13 @@ import {
 	reauthorizeProviderConnection,
 	renameSharedScope,
 	rerouteApprovalRequest,
+	retirePublishedApprovalCapabilityProfile,
+	retirePublishedApprovalDisclaimer,
+	retirePublishedConnectionAccessPolicy,
 	retryConnectionOutboxFailure,
+	revisePublishedApprovalCapabilityProfile,
+	revisePublishedApprovalDisclaimer,
+	revisePublishedConnectionAccessPolicy,
 	revokeAdminAccessAuthorization,
 	revokeAdministrator,
 	revokeApprovalDelegation,
@@ -211,6 +221,12 @@ const errorMessages: Record<string, string> = {
 	"connection.error.approval_directory_unavailable":
 		"员工目录尚未启用，暂不能发布审批策略，请联系系统管理员。",
 	"connection.error.request_failed": "请求无法完成",
+	"connection.error.connect_request_outdated":
+		"连接器已更新，请返回连接页面按新版重新申请；若新版尚未开放，请联系管理员",
+	"connection.error.provider_upgrade_approval_required":
+		"当前审批不能直接用于新版连接，请申请新版能力，或联系管理员确认兼容升级已开放。",
+	"connection.error.provider_reauthorization_required":
+		"外部账号需要重新授权，请重新连接后重试。",
 	"connection.error.resource_not_found": "无法访问该资源",
 	"connection.error.result_uncertain": "请求结果暂时无法确认，请勿重复操作",
 	"connection.error.server_error": "Connection 服务暂时不可用",
@@ -319,6 +335,17 @@ export const connectionApi = {
 				body: parseClientInput(
 					notificationBatchSchema,
 					{ notificationIds: [input.notificationId] },
+					"通知标识无效",
+				),
+				headers: commandHeaders(),
+			}),
+		),
+	archiveApprovalNotifications: (notificationIds: string[]) =>
+		unwrap<void>(
+			archiveConnectionNotifications({
+				body: parseClientInput(
+					notificationBatchSchema,
+					{ notificationIds },
 					"通知标识无效",
 				),
 				headers: commandHeaders(),
@@ -433,6 +460,32 @@ export const connectionApi = {
 				path: { profileId },
 			}),
 		),
+	revisePublishedApprovalCapabilityProfile: (input: {
+		profileId: string;
+		revision: string;
+		body: CapabilityProfileDraft;
+	}) =>
+		unwrap(
+			revisePublishedApprovalCapabilityProfile({
+				body: parseClientInput(
+					capabilityProfileDraftSchema,
+					input.body,
+					"能力包无效",
+				),
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { profileId: input.profileId },
+			}),
+		),
+	retirePublishedApprovalCapabilityProfile: (input: {
+		profileId: string;
+		revision: string;
+	}) =>
+		unwrap(
+			retirePublishedApprovalCapabilityProfile({
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { profileId: input.profileId },
+			}),
+		),
 	createApprovalDisclaimer: (body: DisclaimerDraft) =>
 		unwrap(
 			createApprovalDisclaimer({
@@ -463,8 +516,38 @@ export const connectionApi = {
 				path: { disclaimerId },
 			}),
 		),
+	revisePublishedApprovalDisclaimer: (input: {
+		disclaimerId: string;
+		revision: string;
+		body: DisclaimerDraft;
+	}) =>
+		unwrap(
+			revisePublishedApprovalDisclaimer({
+				body: parseClientInput(
+					disclaimerDraftSchema,
+					input.body,
+					"免责声明无效",
+				),
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { disclaimerId: input.disclaimerId },
+			}),
+		),
+	retirePublishedApprovalDisclaimer: (input: {
+		disclaimerId: string;
+		revision: string;
+	}) =>
+		unwrap(
+			retirePublishedApprovalDisclaimer({
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { disclaimerId: input.disclaimerId },
+			}),
+		),
 	getConnectionAccessPolicyDraft: (policyId: string) =>
 		unwrap(getConnectionAccessPolicyDraft({ path: { policyId } })),
+	getPublishedConnectionAccessPolicyEditorSource: (policyId: string) =>
+		unwrap(
+			getPublishedConnectionAccessPolicyEditorSource({ path: { policyId } }),
+		),
 	createConnectionAccessPolicy: (body: AccessPolicyDraft) =>
 		unwrap(
 			createConnectionAccessPolicy({
@@ -484,6 +567,32 @@ export const connectionApi = {
 					input.body,
 					"审批策略无效",
 				),
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { policyId: input.policyId },
+			}),
+		),
+	revisePublishedConnectionAccessPolicy: (input: {
+		policyId: string;
+		revision: string;
+		body: AccessPolicyDraft;
+	}) =>
+		unwrap(
+			revisePublishedConnectionAccessPolicy({
+				body: parseClientInput(
+					accessPolicyDraftSchema,
+					input.body,
+					"审批策略无效",
+				),
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { policyId: input.policyId },
+			}),
+		),
+	retirePublishedConnectionAccessPolicy: (input: {
+		policyId: string;
+		revision: string;
+	}) =>
+		unwrap(
+			retirePublishedConnectionAccessPolicy({
 				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
 				path: { policyId: input.policyId },
 			}),
@@ -606,6 +715,19 @@ export const connectionApi = {
 				headers: commandHeaders(),
 			}),
 		),
+	startDatalegoOAuth: (
+		input: { accessRequestId?: string; reconnectConnectionId?: string } = {},
+	) =>
+		unwrap<OAuthTransaction>(
+			startGithubOAuth({
+				body: parseClientInput(
+					oauthTransactionRequestSchema,
+					{ providerId: "datalego", ...input },
+					"DataLego 授权请求无效",
+				),
+				headers: commandHeaders(),
+			}),
+		),
 	connectProviderCredential: (body: ProviderCredentialRequest) =>
 		unwrap<ConnectionCreated>(
 			connectProviderCredential({
@@ -674,6 +796,18 @@ export const connectionApi = {
 				path: { connectionId },
 			}),
 		),
+	getProviderUpgradeReadiness: async (
+		connectionId: string,
+	): Promise<ProviderUpgradeReadiness> => {
+		const result = await unwrap(
+			getProviderUpgradeReadiness({ path: { connectionId } }),
+		);
+		return parseClientInput(
+			providerUpgradeReadinessSchema,
+			result,
+			"升级准备信息无效，请刷新后重试",
+		);
+	},
 	upgradeApprovedConnection: (input: {
 		connectionId: string;
 		accessRequestId: string;

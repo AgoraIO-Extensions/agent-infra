@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { ArchiveConnectionNotificationsData, ArchiveConnectionNotificationsErrors, ArchiveConnectionNotificationsResponses, CancelConnectionAccessRequestData, CancelConnectionAccessRequestErrors, CancelConnectionAccessRequestResponses, ConfirmAuthorizationData, ConfirmAuthorizationErrors, ConfirmAuthorizationResponses, ConnectProviderCredentialData, ConnectProviderCredentialErrors, ConnectProviderCredentialResponses, CreateApprovalCapabilityProfileData, CreateApprovalCapabilityProfileErrors, CreateApprovalCapabilityProfileResponses, CreateApprovalDelegationData, CreateApprovalDelegationErrors, CreateApprovalDelegationResponses, CreateApprovalDisclaimerData, CreateApprovalDisclaimerErrors, CreateApprovalDisclaimerResponses, CreateAuthorizationPreviewData, CreateAuthorizationPreviewErrors, CreateAuthorizationPreviewResponses, CreateConnectionAccessPolicyData, CreateConnectionAccessPolicyErrors, CreateConnectionAccessPolicyResponses, CreateReapprovalCampaignData, CreateReapprovalCampaignErrors, CreateReapprovalCampaignResponses, CreateSharedScopeData, CreateSharedScopeErrors, CreateSharedScopeResponses, DecideConnectionAccessRequestData, DecideConnectionAccessRequestErrors, DecideConnectionAccessRequestResponses, DisconnectConnectionData, DisconnectConnectionErrors, DisconnectConnectionResponses, DisconnectSharedConnectionData, DisconnectSharedConnectionErrors, DisconnectSharedConnectionResponses, GetApprovalCapabilityProfileData, GetApprovalCapabilityProfileErrors, GetApprovalCapabilityProfileResponses, GetApprovalPolicyStagesData, GetApprovalPolicyStagesErrors, GetApprovalPolicyStagesResponses, GetAuditCallData, GetAuditCallErrors, GetAuditCallResponses, GetConnectionAccessPolicyDraftData, GetConnectionAccessPolicyDraftErrors, GetConnectionAccessPolicyDraftResponses, GetConnectionAccessRequestData, GetConnectionAccessRequestErrors, GetConnectionAccessRequestResponses, GetConnectionBrowserOpenApiData, GetConnectionBrowserOpenApiResponses, GetConnectionsData, GetConnectionsErrors, GetConnectionsResponses, GetSessionData, GetSessionErrors, GetSessionResponses, GetSharedConnectionsData, GetSharedConnectionsErrors, GetSharedConnectionsResponses, GrantAdministratorData, GrantAdministratorErrors, GrantAdministratorResponses, GrantSharedScopePrincipalData, GrantSharedScopePrincipalErrors, GrantSharedScopePrincipalResponses, IssueTokenData, IssueTokenErrors, IssueTokenResponses, ListAdminAccessAuthorizationsData, ListAdminAccessAuthorizationsErrors, ListAdminAccessAuthorizationsResponses, ListAdministratorsData, ListAdministratorsErrors, ListAdministratorsResponses, ListApprovalDelegationsData, ListApprovalDelegationsErrors, ListApprovalDelegationsResponses, ListApprovalDisclaimersData, ListApprovalDisclaimersErrors, ListApprovalDisclaimersResponses, ListApprovalPolicyCatalogData, ListApprovalPolicyCatalogErrors, ListApprovalPolicyCatalogResponses, ListApprovalRoutingBlockedData, ListApprovalRoutingBlockedErrors, ListApprovalRoutingBlockedResponses, ListAuditCallsData, ListAuditCallsErrors, ListAuditCallsResponses, ListConnectionAccessOptionsData, ListConnectionAccessOptionsErrors, ListConnectionAccessOptionsResponses, ListConnectionAccessRequestsData, ListConnectionAccessRequestsErrors, ListConnectionAccessRequestsResponses, ListConnectionApprovalQueueData, ListConnectionApprovalQueueErrors, ListConnectionApprovalQueueResponses, ListConnectionNotificationsData, ListConnectionNotificationsErrors, ListConnectionNotificationsResponses, ListConnectionOutboxFailuresData, ListConnectionOutboxFailuresErrors, ListConnectionOutboxFailuresResponses, ListConnectionWorkItemsData, ListConnectionWorkItemsErrors, ListConnectionWorkItemsResponses, ListProviderUpgradeCampaignsData, ListProviderUpgradeCampaignsErrors, ListProviderUpgradeCampaignsResponses, ListTokensData, ListTokensErrors, ListTokensResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutErrors, LogoutResponses, PrepareConnectionAccessData, PrepareConnectionAccessErrors, PrepareConnectionAccessResponses, PublishApprovalCapabilityProfileData, PublishApprovalCapabilityProfileErrors, PublishApprovalCapabilityProfileResponses, PublishApprovalDisclaimerData, PublishApprovalDisclaimerErrors, PublishApprovalDisclaimerResponses, PublishConnectionAccessPolicyData, PublishConnectionAccessPolicyErrors, PublishConnectionAccessPolicyResponses, ReadConnectionNotificationsData, ReadConnectionNotificationsErrors, ReadConnectionNotificationsResponses, ReauthorizeProviderConnectionData, ReauthorizeProviderConnectionErrors, ReauthorizeProviderConnectionResponses, RenameSharedScopeData, RenameSharedScopeErrors, RenameSharedScopeResponses, RerouteApprovalRequestData, RerouteApprovalRequestErrors, RerouteApprovalRequestResponses, RetryConnectionOutboxFailureData, RetryConnectionOutboxFailureErrors, RetryConnectionOutboxFailureResponses, RevokeAdminAccessAuthorizationData, RevokeAdminAccessAuthorizationErrors, RevokeAdminAccessAuthorizationResponses, RevokeAdministratorData, RevokeAdministratorErrors, RevokeAdministratorResponses, RevokeApprovalDelegationData, RevokeApprovalDelegationErrors, RevokeApprovalDelegationResponses, RevokeConnectionAccessPolicyData, RevokeConnectionAccessPolicyErrors, RevokeConnectionAccessPolicyResponses, RevokeGrantData, RevokeGrantErrors, RevokeGrantResponses, RevokeSharedScopePrincipalData, RevokeSharedScopePrincipalErrors, RevokeSharedScopePrincipalResponses, RevokeTokenData, RevokeTokenErrors, RevokeTokenResponses, SearchApprovalEmployeeCandidatesData, SearchApprovalEmployeeCandidatesErrors, SearchApprovalEmployeeCandidatesResponses, StartGithubOAuthData, StartGithubOAuthErrors, StartGithubOAuthResponses, SubmitConnectionAccessRenewalData, SubmitConnectionAccessRenewalErrors, SubmitConnectionAccessRenewalResponses, SubmitConnectionAccessRequestData, SubmitConnectionAccessRequestErrors, SubmitConnectionAccessRequestResponses, UpdateApprovalCapabilityProfileDraftData, UpdateApprovalCapabilityProfileDraftErrors, UpdateApprovalCapabilityProfileDraftResponses, UpdateApprovalDisclaimerDraftData, UpdateApprovalDisclaimerDraftErrors, UpdateApprovalDisclaimerDraftResponses, UpdateConnectionAccessPolicyData, UpdateConnectionAccessPolicyErrors, UpdateConnectionAccessPolicyResponses, UpgradeProviderConnectionData, UpgradeProviderConnectionErrors, UpgradeProviderConnectionResponses } from './types.gen';
+import type { ArchiveConnectionNotificationsData, ArchiveConnectionNotificationsErrors, ArchiveConnectionNotificationsResponses, CancelConnectionAccessRequestData, CancelConnectionAccessRequestErrors, CancelConnectionAccessRequestResponses, ConfirmAuthorizationData, ConfirmAuthorizationErrors, ConfirmAuthorizationResponses, ConnectProviderCredentialData, ConnectProviderCredentialErrors, ConnectProviderCredentialResponses, CreateApprovalCapabilityProfileData, CreateApprovalCapabilityProfileErrors, CreateApprovalCapabilityProfileResponses, CreateApprovalDelegationData, CreateApprovalDelegationErrors, CreateApprovalDelegationResponses, CreateApprovalDisclaimerData, CreateApprovalDisclaimerErrors, CreateApprovalDisclaimerResponses, CreateAuthorizationPreviewData, CreateAuthorizationPreviewErrors, CreateAuthorizationPreviewResponses, CreateConnectionAccessPolicyData, CreateConnectionAccessPolicyErrors, CreateConnectionAccessPolicyResponses, CreateReapprovalCampaignData, CreateReapprovalCampaignErrors, CreateReapprovalCampaignResponses, CreateSharedScopeData, CreateSharedScopeErrors, CreateSharedScopeResponses, DecideConnectionAccessRequestData, DecideConnectionAccessRequestErrors, DecideConnectionAccessRequestResponses, DisconnectConnectionData, DisconnectConnectionErrors, DisconnectConnectionResponses, DisconnectSharedConnectionData, DisconnectSharedConnectionErrors, DisconnectSharedConnectionResponses, GetApprovalCapabilityProfileData, GetApprovalCapabilityProfileErrors, GetApprovalCapabilityProfileResponses, GetApprovalPolicyStagesData, GetApprovalPolicyStagesErrors, GetApprovalPolicyStagesResponses, GetAuditCallData, GetAuditCallErrors, GetAuditCallResponses, GetConnectionAccessPolicyDraftData, GetConnectionAccessPolicyDraftErrors, GetConnectionAccessPolicyDraftResponses, GetConnectionAccessRequestData, GetConnectionAccessRequestErrors, GetConnectionAccessRequestResponses, GetConnectionBrowserOpenApiData, GetConnectionBrowserOpenApiResponses, GetConnectionsData, GetConnectionsErrors, GetConnectionsResponses, GetProviderUpgradeReadinessData, GetProviderUpgradeReadinessErrors, GetProviderUpgradeReadinessResponses, GetPublishedConnectionAccessPolicyEditorSourceData, GetPublishedConnectionAccessPolicyEditorSourceErrors, GetPublishedConnectionAccessPolicyEditorSourceResponses, GetSessionData, GetSessionErrors, GetSessionResponses, GetSharedConnectionsData, GetSharedConnectionsErrors, GetSharedConnectionsResponses, GrantAdministratorData, GrantAdministratorErrors, GrantAdministratorResponses, GrantSharedScopePrincipalData, GrantSharedScopePrincipalErrors, GrantSharedScopePrincipalResponses, IssueTokenData, IssueTokenErrors, IssueTokenResponses, ListAdminAccessAuthorizationsData, ListAdminAccessAuthorizationsErrors, ListAdminAccessAuthorizationsResponses, ListAdministratorsData, ListAdministratorsErrors, ListAdministratorsResponses, ListApprovalDelegationsData, ListApprovalDelegationsErrors, ListApprovalDelegationsResponses, ListApprovalDisclaimersData, ListApprovalDisclaimersErrors, ListApprovalDisclaimersResponses, ListApprovalPolicyCatalogData, ListApprovalPolicyCatalogErrors, ListApprovalPolicyCatalogResponses, ListApprovalRoutingBlockedData, ListApprovalRoutingBlockedErrors, ListApprovalRoutingBlockedResponses, ListAuditCallsData, ListAuditCallsErrors, ListAuditCallsResponses, ListConnectionAccessOptionsData, ListConnectionAccessOptionsErrors, ListConnectionAccessOptionsResponses, ListConnectionAccessRequestsData, ListConnectionAccessRequestsErrors, ListConnectionAccessRequestsResponses, ListConnectionApprovalQueueData, ListConnectionApprovalQueueErrors, ListConnectionApprovalQueueResponses, ListConnectionNotificationsData, ListConnectionNotificationsErrors, ListConnectionNotificationsResponses, ListConnectionOutboxFailuresData, ListConnectionOutboxFailuresErrors, ListConnectionOutboxFailuresResponses, ListConnectionWorkItemsData, ListConnectionWorkItemsErrors, ListConnectionWorkItemsResponses, ListProviderUpgradeCampaignsData, ListProviderUpgradeCampaignsErrors, ListProviderUpgradeCampaignsResponses, ListTokensData, ListTokensErrors, ListTokensResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutErrors, LogoutResponses, PrepareConnectionAccessData, PrepareConnectionAccessErrors, PrepareConnectionAccessResponses, PublishApprovalCapabilityProfileData, PublishApprovalCapabilityProfileErrors, PublishApprovalCapabilityProfileResponses, PublishApprovalDisclaimerData, PublishApprovalDisclaimerErrors, PublishApprovalDisclaimerResponses, PublishConnectionAccessPolicyData, PublishConnectionAccessPolicyErrors, PublishConnectionAccessPolicyResponses, ReadConnectionNotificationsData, ReadConnectionNotificationsErrors, ReadConnectionNotificationsResponses, ReauthorizeProviderConnectionData, ReauthorizeProviderConnectionErrors, ReauthorizeProviderConnectionResponses, RenameSharedScopeData, RenameSharedScopeErrors, RenameSharedScopeResponses, RerouteApprovalRequestData, RerouteApprovalRequestErrors, RerouteApprovalRequestResponses, RetirePublishedApprovalCapabilityProfileData, RetirePublishedApprovalCapabilityProfileErrors, RetirePublishedApprovalCapabilityProfileResponses, RetirePublishedApprovalDisclaimerData, RetirePublishedApprovalDisclaimerErrors, RetirePublishedApprovalDisclaimerResponses, RetirePublishedConnectionAccessPolicyData, RetirePublishedConnectionAccessPolicyErrors, RetirePublishedConnectionAccessPolicyResponses, RetryConnectionOutboxFailureData, RetryConnectionOutboxFailureErrors, RetryConnectionOutboxFailureResponses, RevisePublishedApprovalCapabilityProfileData, RevisePublishedApprovalCapabilityProfileErrors, RevisePublishedApprovalCapabilityProfileResponses, RevisePublishedApprovalDisclaimerData, RevisePublishedApprovalDisclaimerErrors, RevisePublishedApprovalDisclaimerResponses, RevisePublishedConnectionAccessPolicyData, RevisePublishedConnectionAccessPolicyErrors, RevisePublishedConnectionAccessPolicyResponses, RevokeAdminAccessAuthorizationData, RevokeAdminAccessAuthorizationErrors, RevokeAdminAccessAuthorizationResponses, RevokeAdministratorData, RevokeAdministratorErrors, RevokeAdministratorResponses, RevokeApprovalDelegationData, RevokeApprovalDelegationErrors, RevokeApprovalDelegationResponses, RevokeConnectionAccessPolicyData, RevokeConnectionAccessPolicyErrors, RevokeConnectionAccessPolicyResponses, RevokeGrantData, RevokeGrantErrors, RevokeGrantResponses, RevokeSharedScopePrincipalData, RevokeSharedScopePrincipalErrors, RevokeSharedScopePrincipalResponses, RevokeTokenData, RevokeTokenErrors, RevokeTokenResponses, SearchApprovalEmployeeCandidatesData, SearchApprovalEmployeeCandidatesErrors, SearchApprovalEmployeeCandidatesResponses, StartGithubOAuthData, StartGithubOAuthErrors, StartGithubOAuthResponses, SubmitConnectionAccessRenewalData, SubmitConnectionAccessRenewalErrors, SubmitConnectionAccessRenewalResponses, SubmitConnectionAccessRequestData, SubmitConnectionAccessRequestErrors, SubmitConnectionAccessRequestResponses, UpdateApprovalCapabilityProfileDraftData, UpdateApprovalCapabilityProfileDraftErrors, UpdateApprovalCapabilityProfileDraftResponses, UpdateApprovalDisclaimerDraftData, UpdateApprovalDisclaimerDraftErrors, UpdateApprovalDisclaimerDraftResponses, UpdateConnectionAccessPolicyData, UpdateConnectionAccessPolicyErrors, UpdateConnectionAccessPolicyResponses, UpgradeProviderConnectionData, UpgradeProviderConnectionErrors, UpgradeProviderConnectionResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -135,6 +135,16 @@ export const upgradeProviderConnection = <ThrowOnError extends boolean = false>(
         'Content-Type': 'application/json',
         ...options.headers
     }
+});
+
+export const getProviderUpgradeReadiness = <ThrowOnError extends boolean = false>(options: Options<GetProviderUpgradeReadinessData, ThrowOnError>): RequestResult<GetProviderUpgradeReadinessResponses, GetProviderUpgradeReadinessErrors, ThrowOnError> => (options.client ?? client).get<GetProviderUpgradeReadinessResponses, GetProviderUpgradeReadinessErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/connections/{connectionId}/upgrade-readiness',
+    ...options
 });
 
 export const connectProviderCredential = <ThrowOnError extends boolean = false>(options: Options<ConnectProviderCredentialData, ThrowOnError>): RequestResult<ConnectProviderCredentialResponses, ConnectProviderCredentialErrors, ThrowOnError> => (options.client ?? client).post<ConnectProviderCredentialResponses, ConnectProviderCredentialErrors, ThrowOnError>({
@@ -497,6 +507,30 @@ export const publishApprovalCapabilityProfile = <ThrowOnError extends boolean = 
     ...options
 });
 
+export const revisePublishedApprovalCapabilityProfile = <ThrowOnError extends boolean = false>(options: Options<RevisePublishedApprovalCapabilityProfileData, ThrowOnError>): RequestResult<RevisePublishedApprovalCapabilityProfileResponses, RevisePublishedApprovalCapabilityProfileErrors, ThrowOnError> => (options.client ?? client).post<RevisePublishedApprovalCapabilityProfileResponses, RevisePublishedApprovalCapabilityProfileErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/capability-profiles/{profileId}/revise',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const retirePublishedApprovalCapabilityProfile = <ThrowOnError extends boolean = false>(options: Options<RetirePublishedApprovalCapabilityProfileData, ThrowOnError>): RequestResult<RetirePublishedApprovalCapabilityProfileResponses, RetirePublishedApprovalCapabilityProfileErrors, ThrowOnError> => (options.client ?? client).post<RetirePublishedApprovalCapabilityProfileResponses, RetirePublishedApprovalCapabilityProfileErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/capability-profiles/{profileId}/retire',
+    ...options
+});
+
 export const listApprovalDisclaimers = <ThrowOnError extends boolean = false>(options?: Options<ListApprovalDisclaimersData, ThrowOnError>): RequestResult<ListApprovalDisclaimersResponses, ListApprovalDisclaimersErrors, ThrowOnError> => (options?.client ?? client).get<ListApprovalDisclaimersResponses, ListApprovalDisclaimersErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
@@ -542,6 +576,30 @@ export const publishApprovalDisclaimer = <ThrowOnError extends boolean = false>(
             type: 'apiKey'
         }],
     url: '/api/v1/connection/admin/disclaimers/{disclaimerId}/publish',
+    ...options
+});
+
+export const revisePublishedApprovalDisclaimer = <ThrowOnError extends boolean = false>(options: Options<RevisePublishedApprovalDisclaimerData, ThrowOnError>): RequestResult<RevisePublishedApprovalDisclaimerResponses, RevisePublishedApprovalDisclaimerErrors, ThrowOnError> => (options.client ?? client).post<RevisePublishedApprovalDisclaimerResponses, RevisePublishedApprovalDisclaimerErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/disclaimers/{disclaimerId}/revise',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const retirePublishedApprovalDisclaimer = <ThrowOnError extends boolean = false>(options: Options<RetirePublishedApprovalDisclaimerData, ThrowOnError>): RequestResult<RetirePublishedApprovalDisclaimerResponses, RetirePublishedApprovalDisclaimerErrors, ThrowOnError> => (options.client ?? client).post<RetirePublishedApprovalDisclaimerResponses, RetirePublishedApprovalDisclaimerErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/disclaimers/{disclaimerId}/retire',
     ...options
 });
 
@@ -600,6 +658,40 @@ export const getApprovalPolicyStages = <ThrowOnError extends boolean = false>(op
             type: 'apiKey'
         }],
     url: '/api/v1/connection/admin/access-policies/{policyId}/stages',
+    ...options
+});
+
+export const getPublishedConnectionAccessPolicyEditorSource = <ThrowOnError extends boolean = false>(options: Options<GetPublishedConnectionAccessPolicyEditorSourceData, ThrowOnError>): RequestResult<GetPublishedConnectionAccessPolicyEditorSourceResponses, GetPublishedConnectionAccessPolicyEditorSourceErrors, ThrowOnError> => (options.client ?? client).get<GetPublishedConnectionAccessPolicyEditorSourceResponses, GetPublishedConnectionAccessPolicyEditorSourceErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/access-policies/{policyId}/revision-source',
+    ...options
+});
+
+export const revisePublishedConnectionAccessPolicy = <ThrowOnError extends boolean = false>(options: Options<RevisePublishedConnectionAccessPolicyData, ThrowOnError>): RequestResult<RevisePublishedConnectionAccessPolicyResponses, RevisePublishedConnectionAccessPolicyErrors, ThrowOnError> => (options.client ?? client).post<RevisePublishedConnectionAccessPolicyResponses, RevisePublishedConnectionAccessPolicyErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/access-policies/{policyId}/revise',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const retirePublishedConnectionAccessPolicy = <ThrowOnError extends boolean = false>(options: Options<RetirePublishedConnectionAccessPolicyData, ThrowOnError>): RequestResult<RetirePublishedConnectionAccessPolicyResponses, RetirePublishedConnectionAccessPolicyErrors, ThrowOnError> => (options.client ?? client).post<RetirePublishedConnectionAccessPolicyResponses, RetirePublishedConnectionAccessPolicyErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/access-policies/{policyId}/retire',
     ...options
 });
 

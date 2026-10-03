@@ -48,6 +48,258 @@ async function authorizeCurrentConsumer(
 
 describe("PostgreSQL Connection business authority", () => {
 	integrationTest(
+		"serializes concurrent declaration revisions for existing and new Consumers",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 23),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			const catalogs = ["github", "bitbucket"].map((provider) => ({
+				...githubConnectionCatalog,
+				provider,
+				providerReleaseId: `startup-${provider}-${suffix}`,
+				actions: githubConnectionCatalog.actions.slice(0, 2).map((action) => ({
+					...action,
+					id: `${action.id}-${provider}-${suffix}`,
+				})),
+			}));
+			try {
+				const firstCatalog = catalogs[0];
+				if (!firstCatalog) throw new Error("Missing catalog fixture");
+				for (const catalog of catalogs)
+					await repository.publishProviderCatalog(catalog);
+				for (const existing of [true, false]) {
+					const consumer = {
+						id: `startup-consumer-${existing}-${suffix}`,
+						name: "Startup consumer",
+					};
+					if (existing)
+						await sql`INSERT INTO connection_consumers (id, display_name, status) VALUES (${consumer.id}, ${consumer.name}, 'ACTIVE')`;
+					const inputs = catalogs.map((catalog) => ({
+						consumer,
+						providerReleaseId: catalog.providerReleaseId,
+						actionVersionIds: catalog.actions.map((action) => action.id),
+					}));
+					const publications = await Promise.all(
+						inputs.flatMap((input) =>
+							Array.from({ length: 3 }, () =>
+								repository.publishConsumerDeclaration(input),
+							),
+						),
+					);
+					expect(
+						new Set(publications.map((result) => result.declarationId)).size,
+					).toBe(2);
+					const revisions =
+						await sql`SELECT revision::text FROM connection_consumer_action_declarations WHERE consumer_id = ${consumer.id} AND status = 'PUBLISHED' ORDER BY revision`;
+					expect(revisions).toHaveLength(2);
+					expect(
+						BigInt(revisions[1]?.revision) - BigInt(revisions[0]?.revision),
+					).toBe(1n);
+					const [before] =
+						await sql`SELECT revision::text, xmin::text FROM connection_consumers WHERE id = ${consumer.id}`;
+					expect(before?.revision).toBe(revisions[1]?.revision);
+					await Promise.all(
+						inputs.map((input) => repository.publishConsumerDeclaration(input)),
+					);
+					const [after] =
+						await sql`SELECT revision::text, xmin::text FROM connection_consumers WHERE id = ${consumer.id}`;
+					expect(after).toEqual(before);
+					const input = inputs[0];
+					if (!input) throw new Error("Missing publication fixture");
+					const first = await repository.publishConsumerDeclaration(input);
+					expect(
+						await repository.publishConsumerDeclaration({
+							...input,
+							consumer: { ...consumer, name: "Renamed consumer" },
+						}),
+					).toEqual(first);
+					const [renamed] =
+						await sql`SELECT display_name, revision::text FROM connection_consumers WHERE id = ${consumer.id}`;
+					expect(renamed).toEqual({
+						display_name: "Renamed consumer",
+						revision: before?.revision,
+					});
+					await sql`UPDATE connection_provider_releases SET status = 'DISABLED' WHERE id = ${input.providerReleaseId}`;
+					await expect(
+						repository.publishConsumerDeclaration(input),
+					).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+					await expect(
+						repository.publishProviderCatalog(firstCatalog),
+					).rejects.toThrow(
+						"Pinned ProviderRelease does not match the catalog",
+					);
+					await sql`UPDATE connection_provider_releases SET status = 'PUBLISHED' WHERE id = ${input.providerReleaseId}`;
+				}
+			} finally {
+				await sql.end();
+				await repository.close();
+			}
+		},
+		30_000,
+	);
+
+	integrationTest(
+		"retires only the duplicate DataLego Provider without deleting catalog history",
+		async () => {
+			if (!databaseUrl) return;
+			const directory = resolve(
+				import.meta.dirname,
+				"../../../migrations/connection",
+			);
+			await migrateConnectionDatabase(databaseUrl, directory);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 23),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			const pilotId = `retire-pilot-${suffix}`;
+			const formalId = `retire-formal-${suffix}`;
+			try {
+				for (const [provider, providerReleaseId] of [
+					["datalego-oauth-pilot", pilotId],
+					["datalego", formalId],
+				] as const) {
+					await repository.publishProviderCatalog({
+						...githubConnectionCatalog,
+						provider,
+						providerReleaseId,
+						actions: [],
+					});
+				}
+				await sql.unsafe(
+					await readFile(
+						resolve(directory, "0036_retire_datalego_oauth_pilot.sql"),
+						"utf8",
+					),
+				);
+				const rows =
+					await sql`SELECT id, status, executor_digest FROM connection_provider_releases WHERE id IN (${pilotId}, ${formalId}) ORDER BY id`;
+				expect(rows).toHaveLength(2);
+				expect(rows.find((row) => row.id === pilotId)?.status).toBe("DISABLED");
+				expect(rows.find((row) => row.id === formalId)?.status).toBe(
+					"PUBLISHED",
+				);
+				expect(
+					rows.every(
+						(row) =>
+							row.executor_digest === githubConnectionCatalog.executorDigest,
+					),
+				).toBe(true);
+			} finally {
+				await sql`DELETE FROM connection_provider_releases WHERE id IN (${pilotId}, ${formalId})`;
+				await sql.end();
+			}
+		},
+	);
+	integrationTest(
+		"validates every batched Action and preserves declaration idempotency",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 23),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			const catalog = {
+				...githubConnectionCatalog,
+				providerReleaseId: `batch-release-${suffix}`,
+				actions: Array.from({ length: 250 }, (_, index) => ({
+					description: `Batch action ${index}`,
+					effect: "READ" as const,
+					id: `github.batch_${suffix}_${index}@v1`,
+					inputSchema: {
+						required: [],
+						type: "object",
+						properties: { value: { type: "string" } },
+					},
+					name: `github.batch_${index}`,
+					requiredScopes: ["repo"],
+				})),
+			};
+			const input = {
+				consumer: { id: `batch-consumer-${suffix}`, name: "Batch consumer" },
+				providerReleaseId: catalog.providerReleaseId,
+				actionVersionIds: catalog.actions.map((action) => action.id),
+			};
+			try {
+				await repository.publishProviderCatalog(catalog);
+				await repository.publishProviderCatalog(catalog);
+				const first = await repository.publishConsumerDeclaration(input);
+				const [before] =
+					await sql`SELECT revision FROM connection_consumers WHERE id = ${input.consumer.id}`;
+				expect(await repository.publishConsumerDeclaration(input)).toEqual(
+					first,
+				);
+				const [after] =
+					await sql`SELECT revision FROM connection_consumers WHERE id = ${input.consumer.id}`;
+				expect(after).toEqual(before);
+				const declared =
+					await sql`SELECT action_version_id FROM connection_consumer_declared_actions WHERE declaration_id = ${first.declarationId}`;
+				expect(declared.map((row) => row.action_version_id).sort()).toEqual(
+					[...input.actionVersionIds].sort(),
+				);
+				const action = catalog.actions[249];
+				if (!action) throw new Error("Missing batch fixture");
+				await sql`UPDATE connection_action_versions SET input_schema = '{}'::jsonb WHERE id = ${action.id}`;
+				await expect(
+					repository.publishProviderCatalog(catalog),
+				).rejects.toThrow(
+					`Published ActionVersion does not match ${action.id}`,
+				);
+				await sql`UPDATE connection_action_versions SET input_schema = ${sql.json(action.inputSchema)}, status = 'DISABLED' WHERE id = ${action.id}`;
+				await expect(
+					repository.publishProviderCatalog(catalog),
+				).rejects.toThrow(
+					`Published ActionVersion does not match ${action.id}`,
+				);
+				await expect(
+					repository.publishConsumerDeclaration(input),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				await sql`UPDATE connection_action_versions SET status = 'PUBLISHED' WHERE id = ${action.id}`;
+				await sql`UPDATE connection_consumers SET status = 'DISABLED' WHERE id = ${input.consumer.id}`;
+				await expect(
+					repository.publishConsumerDeclaration(input),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				// A conflicting Action must roll back the entire new release, including other batch rows.
+				const conflicting = {
+					...catalog,
+					providerReleaseId: `batch-conflict-${suffix}`,
+					actions: [{ ...action, id: `github.batch_new_${suffix}@v1` }, action],
+				};
+				await expect(
+					repository.publishProviderCatalog(conflicting),
+				).rejects.toThrow(
+					`Published ActionVersion does not match ${action.id}`,
+				);
+				expect(
+					await sql`SELECT id FROM connection_provider_releases WHERE id = ${conflicting.providerReleaseId}`,
+				).toHaveLength(0);
+				expect(
+					await sql`SELECT id FROM connection_action_versions WHERE id = ${`github.batch_new_${suffix}@v1`}`,
+				).toHaveLength(0);
+			} finally {
+				await sql.end();
+				await repository.close();
+			}
+		},
+		30_000,
+	);
+
+	integrationTest(
 		"orders grant history by consent decisions rather than Grant IDs",
 		async () => {
 			if (!databaseUrl) return;
@@ -1082,6 +1334,41 @@ describe("PostgreSQL Connection business authority", () => {
 						action: `github.undeclared_${suffix}`,
 					}),
 				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await sql`UPDATE connection_accounts SET provider_release_id = ${v2.providerReleaseId}
+				WHERE id = ${connection.connectionId}`;
+				expect(
+					(await repository.getOverview(principalId)).upgradeTasks,
+				).toEqual([expect.objectContaining({ status: "PENDING_CONNECTION" })]);
+				await sql`UPDATE connection_accounts SET provider_release_id = ${v1.providerReleaseId}
+				WHERE id = ${connection.connectionId}`;
+				await repository.storeGithubOAuthCredential({
+					accessToken: `other-account-secret-${suffix}`,
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId,
+						providerReleaseId: v2.providerReleaseId,
+						scopes: ["repo"],
+					}),
+					displayName: "Different GitHub account",
+					externalAccount: `other-${suffix}`,
+					grantedScopes: ["repo"],
+					principalId,
+				});
+				expect(
+					(await repository.getOverview(principalId)).upgradeTasks,
+				).toEqual([
+					expect.objectContaining({
+						connectionId: connection.connectionId,
+						status: "PENDING_CONNECTION",
+					}),
+				]);
+				await sql`UPDATE connection_grants SET status = 'PAUSED_CREDENTIAL'
+				WHERE connection_id = ${connection.connectionId} AND status = 'ACTIVE'`;
+				await sql`UPDATE connection_authorization_roots root
+				SET current_grant_id = NULL, fence = fence + 1
+				WHERE current_grant_id IN (
+					SELECT id FROM connection_grants
+					WHERE connection_id = ${connection.connectionId} AND status = 'PAUSED_CREDENTIAL'
+				)`;
 
 				await repository.storeGithubOAuthCredential({
 					accessToken: `replacement-provider-secret-${suffix}`,
@@ -1100,13 +1387,27 @@ describe("PostgreSQL Connection business authority", () => {
 					consumer: { id: consumerId, name: "Catalog test consumer" },
 					providerReleaseId: v2.providerReleaseId,
 				});
-				const reconnected = (
-					await repository.getOverview(principalId)
-				).connections.find((entry) => entry.id === connection.connectionId);
+				const upgradedOverview = await repository.getOverview(principalId);
+				const reconnected = upgradedOverview.connections.find(
+					(entry) => entry.id === connection.connectionId,
+				);
 				expect(reconnected).toMatchObject({
 					actionVersionIds: [v2ActionId],
 					requiresReconnect: false,
 				});
+				expect(upgradedOverview.upgradeTasks).toEqual([
+					expect.objectContaining({
+						connectionId: connection.connectionId,
+						status: "PENDING_AUTHORIZATION",
+					}),
+				]);
+				const [unconfirmedRoot] = await sql<
+					{ current_grant_id: string | null }[]
+				>`
+				SELECT current_grant_id FROM connection_authorization_roots
+				WHERE principal_id = ${principalId} AND consumer_id = ${consumerId}
+			`;
+				expect(unconfirmedRoot?.current_grant_id).toBeNull();
 				await expect(
 					repository.resolveDirectIdentity(directIdentity),
 				).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -1136,6 +1437,114 @@ describe("PostgreSQL Connection business authority", () => {
 					WHERE id = ${v1.providerReleaseId}
 				`;
 				expect(release?.status).toBe("PUBLISHED");
+				const v2Action = v2.actions[0];
+				if (!v2Action) throw new Error("V2 Action is missing");
+				const v3 = {
+					...v2,
+					actions: [
+						{
+							...v2Action,
+							id: `github.catalog_v3_${suffix}@v1`,
+							name: `github.catalog_v3_${suffix}`,
+						},
+					],
+					providerReleaseId: `github-release-v3-${suffix}`,
+					sourceCommit: "3".repeat(40),
+				};
+				await repository.publishGithubCatalog(v3, {
+					mode: "USER_ACTION_REQUIRED",
+					reason: "Disconnect must settle pending upgrades",
+				});
+				const [pendingTask] = await sql<
+					{ campaign_id: string; id: string; status: string }[]
+				>`
+				SELECT id, campaign_id, status FROM connection_provider_upgrade_tasks
+				WHERE connection_id = ${connection.connectionId}
+					AND status = 'PENDING_CONNECTION'
+			`;
+				if (!pendingTask) throw new Error("Upgrade task is missing");
+				const secondConsumerId = `upgrade-consumer-${suffix}`;
+				const secondRootId = `upgrade-root-${suffix}`;
+				const secondTaskId = `upgrade-task-${suffix}`;
+				await sql`INSERT INTO connection_consumers (id, display_name, status)
+				VALUES (${secondConsumerId}, 'Second upgrade consumer', 'ACTIVE')`;
+				await sql`INSERT INTO connection_authorization_roots
+				(id, principal_id, consumer_id, actor_key, provider_id, status)
+				VALUES (${secondRootId}, ${principalId}, ${secondConsumerId},
+					'', 'github', 'ACTIVE')`;
+				await sql`INSERT INTO connection_provider_upgrade_tasks
+				(id, campaign_id, principal_id, connection_id,
+					authorization_root_id, consumer_id, provider_id, actor_key, status)
+				VALUES (${secondTaskId}, ${pendingTask.campaign_id}, ${principalId},
+					${connection.connectionId}, ${secondRootId}, ${secondConsumerId},
+					'github', '', 'PENDING_CONNECTION')`;
+				await sql`
+				INSERT INTO connection_work_items (
+					id, recipient_principal_id, business_type, business_id,
+					business_revision, action_type, status
+				) VALUES (
+					${`upgrade-work-${pendingTask.id}`}, ${principalId},
+					'PROVIDER_UPGRADE_TASK', ${pendingTask.id}, 1, 'UPGRADE', 'OPEN'),
+					(${`upgrade-work-${secondTaskId}`}, ${principalId},
+					'PROVIDER_UPGRADE_TASK', ${secondTaskId}, 1, 'UPGRADE', 'OPEN')
+			`;
+				await repository.disconnectConnection({
+					connectionId: connection.connectionId,
+					principalId,
+				});
+				expect(
+					(await repository.getOverview(principalId)).upgradeTasks,
+				).toEqual([]);
+				const [settled] = await sql<
+					{
+						audit_count: number;
+						outbox_count: number;
+						status: string;
+						work_status: string;
+					}[]
+				>`
+				SELECT task.status,
+					(SELECT status FROM connection_work_items WHERE business_id = task.id AND action_type = 'UPGRADE') AS work_status,
+					(SELECT count(*)::int FROM connection_audit_records WHERE event = 'PROVIDER_UPGRADE_TASK_EXPIRED' AND detail->>'taskId' = task.id) AS audit_count,
+					(SELECT count(*)::int FROM connection_outbox_events WHERE topic = 'connection.provider-upgrade.expired' AND aggregate_id = task.id) AS outbox_count
+				FROM connection_provider_upgrade_tasks task WHERE task.id = ${pendingTask.id}
+			`;
+				expect(settled).toEqual({
+					status: "EXPIRED",
+					work_status: "EXPIRED",
+					audit_count: 1,
+					outbox_count: 1,
+				});
+				const [secondSettled] = await sql<
+					{ status: string; work_status: string }[]
+				>`
+				SELECT task.status,
+					(SELECT status FROM connection_work_items WHERE business_id = task.id AND action_type = 'UPGRADE') AS work_status
+				FROM connection_provider_upgrade_tasks task WHERE task.id = ${secondTaskId}
+			`;
+				expect(secondSettled).toEqual({
+					status: "EXPIRED",
+					work_status: "EXPIRED",
+				});
+				// Reproduce a task left pending by the pre-fix disconnect path.
+				await sql`UPDATE connection_provider_upgrade_tasks SET status = 'PENDING_CONNECTION'
+				WHERE id = ${pendingTask.id}`;
+				await sql`UPDATE connection_work_items SET status = 'OPEN', completed_at = NULL
+				WHERE business_id = ${pendingTask.id}`;
+				expect(
+					(await repository.getOverview(principalId)).upgradeTasks,
+				).toEqual([]);
+				const [reconciled] = await sql<
+					{ status: string; work_status: string }[]
+				>`
+				SELECT task.status,
+					(SELECT status FROM connection_work_items WHERE business_id = task.id AND action_type = 'UPGRADE') AS work_status
+				FROM connection_provider_upgrade_tasks task WHERE task.id = ${pendingTask.id}
+			`;
+				expect(reconciled).toEqual({
+					status: "EXPIRED",
+					work_status: "EXPIRED",
+				});
 			} finally {
 				await sql.end();
 				await repository.close();

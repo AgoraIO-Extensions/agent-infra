@@ -230,7 +230,7 @@ export type ConnectionsResponse = {
 
 export type OAuthTransactionRequest = unknown & {
     accessRequestId?: string;
-    providerId?: 'github' | 'manhattan';
+    providerId?: 'github' | 'manhattan' | 'datalego';
     reconnectConnectionId?: string;
     sharedScopeId?: string;
 };
@@ -266,6 +266,7 @@ export type AccessConnectReady = {
 };
 
 export type AccessOption = {
+    availableForNewConnections?: boolean;
     providerId: string;
     providerReleaseId: string;
     actions: Array<{
@@ -313,6 +314,10 @@ export type AccessRequestStage = {
 export type AccessRequest = AccessRequestFields;
 
 export type AccessRequestFields = {
+    connectReadiness?: {
+        status: 'READY' | 'REAPPLY_REQUIRED';
+        targetProviderReleaseId: string | null;
+    };
     id: string;
     providerId: string;
     providerReleaseId: string;
@@ -512,10 +517,20 @@ export type CapabilityProfileCreated = {
     capabilityProfileId: string;
 };
 
+export type CapabilityProfileRevision = {
+    capabilityProfileId: string;
+    affectedPolicies: number;
+};
+
+export type CatalogRetirement = {
+    affectedPolicies: number;
+};
+
 export type CapabilityProfileDetailResponse = {
     profile: {
         id: string;
         providerReleaseId: string;
+        providerId?: string;
         name: string;
         effectCeiling: 'READ' | 'WRITE';
         revision: string;
@@ -540,6 +555,11 @@ export type DisclaimerDraft = {
 
 export type DisclaimerCreated = {
     disclaimerVersionId: string;
+};
+
+export type DisclaimerRevision = {
+    disclaimerVersionId: string;
+    affectedPolicies: number;
 };
 
 export type ApprovalPolicyStageDraft = {
@@ -1217,6 +1237,47 @@ export type UpgradeProviderConnectionResponses = {
 };
 
 export type UpgradeProviderConnectionResponse = UpgradeProviderConnectionResponses[keyof UpgradeProviderConnectionResponses];
+
+export type GetProviderUpgradeReadinessData = {
+    body?: never;
+    path: {
+        connectionId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/connections/{connectionId}/upgrade-readiness';
+};
+
+export type GetProviderUpgradeReadinessErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type GetProviderUpgradeReadinessError = GetProviderUpgradeReadinessErrors[keyof GetProviderUpgradeReadinessErrors];
+
+export type GetProviderUpgradeReadinessResponses = {
+    /**
+     * Owned personal connection upgrade preparation
+     */
+    200: {
+        connectionId: string;
+        providerId: string;
+        targetProviderReleaseId: string;
+        nextAction: 'UPGRADE' | 'REQUEST_APPROVAL' | 'REAUTHORIZE' | 'NONE';
+        reason: string;
+    };
+};
+
+export type GetProviderUpgradeReadinessResponse = GetProviderUpgradeReadinessResponses[keyof GetProviderUpgradeReadinessResponses];
 
 export type ConnectProviderCredentialData = {
     body: ProviderCredentialRequest;
@@ -2249,6 +2310,92 @@ export type PublishApprovalCapabilityProfileResponses = {
 
 export type PublishApprovalCapabilityProfileResponse = PublishApprovalCapabilityProfileResponses[keyof PublishApprovalCapabilityProfileResponses];
 
+export type RevisePublishedApprovalCapabilityProfileData = {
+    body: CapabilityProfileDraft;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        profileId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/capability-profiles/{profileId}/revise';
+};
+
+export type RevisePublishedApprovalCapabilityProfileErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RevisePublishedApprovalCapabilityProfileError = RevisePublishedApprovalCapabilityProfileErrors[keyof RevisePublishedApprovalCapabilityProfileErrors];
+
+export type RevisePublishedApprovalCapabilityProfileResponses = {
+    /**
+     * Published profile and policies revised
+     */
+    200: CapabilityProfileRevision;
+};
+
+export type RevisePublishedApprovalCapabilityProfileResponse = RevisePublishedApprovalCapabilityProfileResponses[keyof RevisePublishedApprovalCapabilityProfileResponses];
+
+export type RetirePublishedApprovalCapabilityProfileData = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        profileId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/capability-profiles/{profileId}/retire';
+};
+
+export type RetirePublishedApprovalCapabilityProfileErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RetirePublishedApprovalCapabilityProfileError = RetirePublishedApprovalCapabilityProfileErrors[keyof RetirePublishedApprovalCapabilityProfileErrors];
+
+export type RetirePublishedApprovalCapabilityProfileResponses = {
+    /**
+     * Profile retired from new applications
+     */
+    200: CatalogRetirement;
+};
+
+export type RetirePublishedApprovalCapabilityProfileResponse = RetirePublishedApprovalCapabilityProfileResponses[keyof RetirePublishedApprovalCapabilityProfileResponses];
+
 export type ListApprovalDisclaimersData = {
     body?: never;
     path?: never;
@@ -2394,6 +2541,92 @@ export type PublishApprovalDisclaimerResponses = {
 };
 
 export type PublishApprovalDisclaimerResponse = PublishApprovalDisclaimerResponses[keyof PublishApprovalDisclaimerResponses];
+
+export type RevisePublishedApprovalDisclaimerData = {
+    body: DisclaimerDraft;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        disclaimerId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/disclaimers/{disclaimerId}/revise';
+};
+
+export type RevisePublishedApprovalDisclaimerErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RevisePublishedApprovalDisclaimerError = RevisePublishedApprovalDisclaimerErrors[keyof RevisePublishedApprovalDisclaimerErrors];
+
+export type RevisePublishedApprovalDisclaimerResponses = {
+    /**
+     * Published disclaimer and policies revised
+     */
+    200: DisclaimerRevision;
+};
+
+export type RevisePublishedApprovalDisclaimerResponse = RevisePublishedApprovalDisclaimerResponses[keyof RevisePublishedApprovalDisclaimerResponses];
+
+export type RetirePublishedApprovalDisclaimerData = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        disclaimerId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/disclaimers/{disclaimerId}/retire';
+};
+
+export type RetirePublishedApprovalDisclaimerErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RetirePublishedApprovalDisclaimerError = RetirePublishedApprovalDisclaimerErrors[keyof RetirePublishedApprovalDisclaimerErrors];
+
+export type RetirePublishedApprovalDisclaimerResponses = {
+    /**
+     * Disclaimer retired from new applications
+     */
+    200: CatalogRetirement;
+};
+
+export type RetirePublishedApprovalDisclaimerResponse = RetirePublishedApprovalDisclaimerResponses[keyof RetirePublishedApprovalDisclaimerResponses];
 
 export type ListApprovalPolicyCatalogData = {
     body?: never;
@@ -2576,6 +2809,131 @@ export type GetApprovalPolicyStagesResponses = {
 };
 
 export type GetApprovalPolicyStagesResponse = GetApprovalPolicyStagesResponses[keyof GetApprovalPolicyStagesResponses];
+
+export type GetPublishedConnectionAccessPolicyEditorSourceData = {
+    body?: never;
+    path: {
+        policyId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies/{policyId}/revision-source';
+};
+
+export type GetPublishedConnectionAccessPolicyEditorSourceErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type GetPublishedConnectionAccessPolicyEditorSourceError = GetPublishedConnectionAccessPolicyEditorSourceErrors[keyof GetPublishedConnectionAccessPolicyEditorSourceErrors];
+
+export type GetPublishedConnectionAccessPolicyEditorSourceResponses = {
+    /**
+     * Published policy editor source with administrator-bound candidates
+     */
+    200: AccessPolicyDraftResponse;
+};
+
+export type GetPublishedConnectionAccessPolicyEditorSourceResponse = GetPublishedConnectionAccessPolicyEditorSourceResponses[keyof GetPublishedConnectionAccessPolicyEditorSourceResponses];
+
+export type RevisePublishedConnectionAccessPolicyData = {
+    body: AccessPolicyDraft;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        policyId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies/{policyId}/revise';
+};
+
+export type RevisePublishedConnectionAccessPolicyErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type RevisePublishedConnectionAccessPolicyError = RevisePublishedConnectionAccessPolicyErrors[keyof RevisePublishedConnectionAccessPolicyErrors];
+
+export type RevisePublishedConnectionAccessPolicyResponses = {
+    /**
+     * Replacement policy published for new applications
+     */
+    200: AccessPolicyCreated;
+};
+
+export type RevisePublishedConnectionAccessPolicyResponse = RevisePublishedConnectionAccessPolicyResponses[keyof RevisePublishedConnectionAccessPolicyResponses];
+
+export type RetirePublishedConnectionAccessPolicyData = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        policyId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies/{policyId}/retire';
+};
+
+export type RetirePublishedConnectionAccessPolicyErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RetirePublishedConnectionAccessPolicyError = RetirePublishedConnectionAccessPolicyErrors[keyof RetirePublishedConnectionAccessPolicyErrors];
+
+export type RetirePublishedConnectionAccessPolicyResponses = {
+    /**
+     * Policy retired from new applications
+     */
+    200: AccessPolicyCreated;
+};
+
+export type RetirePublishedConnectionAccessPolicyResponse = RetirePublishedConnectionAccessPolicyResponses[keyof RetirePublishedConnectionAccessPolicyResponses];
 
 export type PublishConnectionAccessPolicyData = {
     body: ApprovalPolicyPublishRequest;

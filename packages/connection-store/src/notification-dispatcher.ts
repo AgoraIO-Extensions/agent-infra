@@ -20,6 +20,7 @@ const approvalTopics = [
 	"connection.access-baseline.created",
 	"connection.access-enforcement.activated",
 	"connection.access-policy.published",
+	"connection.access-policy.retired",
 	"connection.access-policy.draft-updated",
 	"connection.access-policy.revoked",
 	"connection.access-request.approve",
@@ -32,7 +33,9 @@ const approvalTopics = [
 	"connection.approval-delegation.created",
 	"connection.approval-delegation.revoked",
 	"connection.capability-profile.published",
+	"connection.capability-profile.retired",
 	"connection.disclaimer.published",
+	"connection.disclaimer.retired",
 	"connection.reapproval-campaign.created",
 ] as const;
 

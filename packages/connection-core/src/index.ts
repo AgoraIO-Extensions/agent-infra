@@ -188,6 +188,14 @@ export type ProviderUpgradeCampaignSummary = {
 	totalCount: number;
 };
 
+export type ProviderUpgradeReadiness = {
+	connectionId: string;
+	providerId: string;
+	targetProviderReleaseId: string;
+	nextAction: "UPGRADE" | "REQUEST_APPROVAL" | "REAUTHORIZE" | "NONE";
+	reason: string;
+};
+
 export type ConnectionPrincipalSummary = {
 	displayName: string;
 	email: string | null;
@@ -468,6 +476,7 @@ export type GitHubProfileRefreshCandidate = CredentialForExecution & {
 
 export type GitHubOAuthAuthorization = {
 	codeChallenge: string;
+	requestedScopes?: readonly string[];
 	state: string;
 };
 
@@ -603,6 +612,11 @@ export function decideReconnectAuthorization(input: {
 }
 
 export type OAuthTransaction = {
+	upgradeBinding?: {
+		connectionId: string;
+		credentialVersionId: string;
+		targetProviderReleaseId: string;
+	};
 	accessRequestId?: string;
 	reconnectConnectionId?: string;
 	codeVerifier: string;
@@ -718,11 +732,15 @@ export interface ConnectionRepository {
 		principalId: string;
 		providerId: string;
 		requestId?: string;
-	}): Promise<void>;
+	}): Promise<{ requiredScopes: readonly string[] }>;
 	validatePersonalReconnect?(input: {
 		connectionId: string;
 		principalId: string;
-	}): Promise<{ providerId: string }>;
+	}): Promise<{
+		providerId: string;
+		requiredScopes: readonly string[];
+		upgradeBinding?: OAuthTransaction["upgradeBinding"];
+	}>;
 	storeGithubOAuthCredential(input: {
 		accessRequestId?: string;
 		expectedConnectionId?: string;
@@ -758,9 +776,12 @@ export interface ConnectionRepository {
 	}): Promise<
 		CredentialForExecution & {
 			credentialVersionId: string;
+			expiresAt?: string;
 			externalAccount: string;
 			grantedScopes: readonly string[];
 			providerId: string;
+			refreshExpiresAt?: string;
+			refreshToken?: string;
 		}
 	>;
 	storeSharedGithubOAuthCredential(input: {
@@ -780,6 +801,10 @@ export interface ConnectionRepository {
 		invocation: InvocationContext;
 	}): Promise<StoredCall | undefined>;
 	getCredential(invocation: InvocationContext): Promise<CredentialForExecution>;
+	getProviderUpgradeReadiness(input: {
+		principalId: string;
+		connectionId: string;
+	}): Promise<ProviderUpgradeReadiness>;
 	claimCredentialRefresh?(
 		invocation: InvocationContext,
 	): Promise<
@@ -944,13 +969,25 @@ export interface GitHubOAuthProvider {
 	getAuthorizationUrl(
 		input: GitHubOAuthAuthorization & { redirectUri: string },
 	): string;
-	exchangeCode(input: {
-		code: string;
-		codeVerifier: string;
-		redirectUri: string;
-	}): Promise<GitHubOAuthIdentity>;
+	exchangeCode(
+		input: {
+			code: string;
+			codeVerifier: string;
+			redirectUri: string;
+		},
+		onStage?: (stage: ProviderOAuthCallbackStage) => void,
+	): Promise<GitHubOAuthIdentity>;
 	refresh(refreshToken: string): Promise<GitHubOAuthIdentity>;
 }
+
+export type ProviderOAuthCallbackStage =
+	| "callback_input"
+	| "transaction"
+	| "authorization"
+	| "exchange"
+	| "token_exchange"
+	| "profile_lookup"
+	| "credential_store";
 
 export class ConnectionError extends Error {
 	constructor(
@@ -1063,6 +1100,13 @@ export class ConnectionApplicationService {
 		return overview;
 	}
 
+	getProviderUpgradeReadiness(principalId: string, connectionId: string) {
+		return this.repository.getProviderUpgradeReadiness({
+			principalId,
+			connectionId,
+		});
+	}
+
 	private async refreshGitHubProfileLabels(principalId: string) {
 		const list = this.repository.listGitHubProfileRefreshCandidates;
 		const store = this.repository.storeGitHubProfileLabel;
@@ -1130,6 +1174,7 @@ export class ConnectionApplicationService {
 			);
 		}
 		await this.repository.ensurePrincipal({ principalId });
+		let reconnectBinding: OAuthTransaction["upgradeBinding"];
 		if (reconnectConnectionId) {
 			const target = await this.repository.validatePersonalReconnect?.({
 				principalId,
@@ -1140,6 +1185,7 @@ export class ConnectionApplicationService {
 					"FORBIDDEN",
 					"Reconnect target is unavailable",
 				);
+			reconnectBinding = target.upgradeBinding;
 		} else {
 			await this.repository.validatePersonalConnectRequest({
 				principalId,
@@ -1170,6 +1216,9 @@ export class ConnectionApplicationService {
 		}
 		return this.repository.storeProviderCredential({
 			...identity,
+			...(reconnectBinding
+				? { expectedCredentialVersionId: reconnectBinding.credentialVersionId }
+				: {}),
 			accessRequestId,
 			...(reconnectConnectionId
 				? { expectedConnectionId: reconnectConnectionId }
@@ -1198,16 +1247,27 @@ export class ConnectionApplicationService {
 		connectionId: string,
 		accessRequestId?: string,
 	) {
+		const readiness = await this.repository.getProviderUpgradeReadiness({
+			principalId,
+			connectionId,
+		});
+		if (!accessRequestId && readiness.nextAction === "NONE")
+			return { connectionId };
+		if (!accessRequestId && readiness.nextAction === "REQUEST_APPROVAL")
+			throw new ConnectionError(
+				"FORBIDDEN",
+				"Provider upgrade requires approval: authorization equivalence is not proven",
+			);
+		if (readiness.nextAction === "REAUTHORIZE")
+			throw new ConnectionError(
+				"PROVIDER_REAUTHORIZATION_REQUIRED",
+				"Provider requires a new authorization",
+			);
 		const current = await this.repository.getProviderCredentialForUpgrade({
 			...(accessRequestId ? { allowCurrentRelease: true } : {}),
 			connectionId,
 			principalId,
 		});
-		if (current.providerId === "manhattan")
-			throw new ConnectionError(
-				"PROVIDER_REAUTHORIZATION_REQUIRED",
-				"Manhattan requires a new SSO authorization",
-			);
 		if (accessRequestId) {
 			await this.repository.validatePersonalConnectRequest({
 				principalId,
@@ -1245,7 +1305,15 @@ export class ConnectionApplicationService {
 				"Provider identity changed during upgrade",
 			);
 		}
+		if (current.refreshToken && identity.accessToken !== current.accessToken)
+			throw new ConnectionError(
+				"PROVIDER_REAUTHORIZATION_REQUIRED",
+				"Provider OAuth credential changed during upgrade",
+			);
 		return this.repository.storeProviderCredential({
+			expiresAt: current.expiresAt,
+			refreshExpiresAt: current.refreshExpiresAt,
+			refreshToken: current.refreshToken,
 			...identity,
 			...(accessRequestId ? { accessRequestId } : {}),
 			expectedConnectionId: connectionId,
@@ -1750,6 +1818,8 @@ export class ConnectionApplicationService {
 		}
 		const oauth = this.requireProviderOAuth(providerId);
 		await this.repository.ensurePrincipal({ principalId });
+		let requestedScopes: readonly string[] | undefined;
+		let upgradeBinding: OAuthTransaction["upgradeBinding"];
 		if (reconnectConnectionId) {
 			const target = await this.repository.validatePersonalReconnect?.({
 				principalId,
@@ -1760,17 +1830,31 @@ export class ConnectionApplicationService {
 					"FORBIDDEN",
 					"Reconnect target is unavailable",
 				);
+			requestedScopes = target.requiredScopes;
+			upgradeBinding = target.upgradeBinding;
 		} else {
-			await this.repository.validatePersonalConnectRequest({
+			const permit = await this.repository.validatePersonalConnectRequest({
 				principalId,
 				providerId,
 				...(accessRequestId ? { requestId: accessRequestId } : {}),
 			});
+			requestedScopes = permit.requiredScopes;
 		}
+		if (
+			providerId === "github" &&
+			(!requestedScopes?.length ||
+				requestedScopes.some((scope) => !scope || /\s/u.test(scope)) ||
+				new Set(requestedScopes).size !== requestedScopes.length)
+		)
+			throw new ConnectionError(
+				"FORBIDDEN",
+				"Approved OAuth scopes are unavailable",
+			);
 		const state = randomToken();
 		const codeVerifier = randomToken();
 		const codeChallenge = base64UrlHash(codeVerifier);
 		await this.repository.createOAuthTransaction({
+			...(upgradeBinding ? { upgradeBinding } : {}),
 			...(accessRequestId ? { accessRequestId } : {}),
 			...(reconnectConnectionId ? { reconnectConnectionId } : {}),
 			codeVerifier,
@@ -1783,6 +1867,7 @@ export class ConnectionApplicationService {
 			authorizationUrl: oauth.getAuthorizationUrl({
 				codeChallenge,
 				redirectUri,
+				...(providerId === "github" ? { requestedScopes } : {}),
 				state,
 			}),
 		};
@@ -1815,17 +1900,28 @@ export class ConnectionApplicationService {
 		};
 	}
 
-	async completeGithubOAuth(code: string, state: string) {
-		return this.completeProviderOAuth("github", code, state);
+	async completeGithubOAuth(
+		code: string,
+		state: string,
+		onStage?: (stage: ProviderOAuthCallbackStage) => void,
+	) {
+		return this.completeProviderOAuth("github", code, state, onStage);
 	}
 
-	async completeProviderOAuth(providerId: string, code: string, state: string) {
+	async completeProviderOAuth(
+		providerId: string,
+		code: string,
+		state: string,
+		onStage?: (stage: ProviderOAuthCallbackStage) => void,
+	) {
+		onStage?.("callback_input");
 		if (!code || !state) {
 			throw new ConnectionError(
 				"INVALID_REQUEST",
 				"OAuth callback requires code and state",
 			);
 		}
+		onStage?.("transaction");
 		const transaction = await this.repository.consumeOAuthTransaction(
 			state,
 			providerId,
@@ -1836,6 +1932,7 @@ export class ConnectionApplicationService {
 				"OAuth state does not match provider",
 			);
 		}
+		onStage?.("authorization");
 		if (!transaction.sharedScopeId) {
 			if (transaction.reconnectConnectionId) {
 				const target = await this.repository.validatePersonalReconnect?.({
@@ -1847,6 +1944,15 @@ export class ConnectionApplicationService {
 						"FORBIDDEN",
 						"Reconnect target is unavailable",
 					);
+				if (
+					transaction.upgradeBinding &&
+					JSON.stringify(transaction.upgradeBinding) !==
+						JSON.stringify(target.upgradeBinding)
+				)
+					throw new ConnectionError(
+						"FORBIDDEN",
+						"Upgrade authorization changed before callback",
+					);
 			} else {
 				await this.repository.validatePersonalConnectRequest({
 					principalId: transaction.principalId,
@@ -1857,11 +1963,30 @@ export class ConnectionApplicationService {
 				});
 			}
 		}
-		const identity = await this.requireProviderOAuth(providerId).exchangeCode({
-			code,
-			codeVerifier: transaction.codeVerifier,
-			redirectUri: transaction.redirectUri,
-		});
+		onStage?.("exchange");
+		const identity = await this.requireProviderOAuth(providerId).exchangeCode(
+			{
+				code,
+				codeVerifier: transaction.codeVerifier,
+				redirectUri: transaction.redirectUri,
+			},
+			onStage,
+		);
+		onStage?.("credential_store");
+		if (
+			transaction.upgradeBinding &&
+			(
+				await this.repository.getProviderUpgradeReadiness({
+					principalId: transaction.principalId,
+					connectionId: transaction.upgradeBinding.connectionId,
+				})
+			).targetProviderReleaseId !==
+				transaction.upgradeBinding.targetProviderReleaseId
+		)
+			throw new ConnectionError(
+				"FORBIDDEN",
+				"Upgrade target changed during authorization",
+			);
 		if (providerId === "github" && transaction.sharedScopeId)
 			return this.repository.storeSharedGithubOAuthCredential({
 				...identity,
@@ -1871,6 +1996,12 @@ export class ConnectionApplicationService {
 		if (providerId === "github")
 			return this.repository.storeGithubOAuthCredential({
 				...identity,
+				...(transaction.upgradeBinding
+					? {
+							expectedCredentialVersionId:
+								transaction.upgradeBinding.credentialVersionId,
+						}
+					: {}),
 				...(transaction.reconnectConnectionId
 					? { expectedConnectionId: transaction.reconnectConnectionId }
 					: {}),
@@ -1887,6 +2018,12 @@ export class ConnectionApplicationService {
 			);
 		return this.repository.storeProviderCredential({
 			...identity,
+			...(transaction.upgradeBinding
+				? {
+						expectedCredentialVersionId:
+							transaction.upgradeBinding.credentialVersionId,
+					}
+				: {}),
 			...(transaction.reconnectConnectionId
 				? { expectedConnectionId: transaction.reconnectConnectionId }
 				: {}),
@@ -2060,6 +2197,7 @@ export class ConnectionApplicationService {
 				throw new ConnectionError(
 					"PROVIDER_UNCERTAIN",
 					"Provider write submission outcome is unknown; reconciliation is pending",
+					providerFailureData(error),
 				);
 			}
 			if (error instanceof ConnectionError) {
@@ -2264,6 +2402,10 @@ function isDeterministicProviderRejection(error: unknown) {
 	return (
 		isProviderReauthorizationFailure(error) ||
 		isProviderPermissionFailure(error) ||
+		(typeof error === "object" &&
+			error !== null &&
+			(error as { providerSubmissionOutcome?: unknown })
+				.providerSubmissionOutcome === "rejected") ||
 		(typeof error === "object" &&
 			error !== null &&
 			((error as { providerStatus?: number }).providerStatus ?? 0) >= 400 &&

@@ -26,13 +26,18 @@ import {
 	useRef,
 	useState,
 } from "react";
-
+import {
+	canConnectRequest,
+	latestProviderRequest,
+	reapplicationOptions,
+} from "../access-request-state";
 import { ConnectionApiError, connectionApi } from "../api";
 import { Button } from "../components/ui/button";
 import {
 	Dialog,
 	DialogClose,
 	DialogContent,
+	DialogDescription,
 	DialogHeader,
 	DialogTitle,
 } from "../components/ui/dialog";
@@ -77,7 +82,6 @@ export function ConnectionsPage() {
 	const [confluenceOpen, setConfluenceOpen] = useState(false);
 	const [confluencePending, setConfluencePending] = useState(false);
 	const [confluenceError, setConfluenceError] = useState<Error | null>(null);
-	const [datalegoError, setDatalegoError] = useState<Error | null>(null);
 	const [jenkinsOpen, setJenkinsOpen] = useState(false);
 	const [jenkinsProviderId, setJenkinsProviderId] = useState<
 		"jenkins-ci" | "jenkins-release"
@@ -112,6 +116,7 @@ export function ConnectionsPage() {
 	const requestReady = Boolean(
 		approvedRequest.data?.id === accessRequestId &&
 			approvedRequest.data?.state === "APPROVED_PENDING_CONNECTION" &&
+			approvedRequest.data?.connectReadiness?.status !== "REAPPLY_REQUIRED" &&
 			approvedRequest.data?.connectExpiresAt &&
 			Date.parse(approvedRequest.data.connectExpiresAt) > Date.now() &&
 			approvedRequest.data?.providerId === approvedProvider,
@@ -142,13 +147,24 @@ export function ConnectionsPage() {
 	});
 	const [newCredentialRequestId, setNewCredentialRequestId] =
 		useState<string>();
+	const [dismissedReuseRequestId, setDismissedReuseRequestId] =
+		useState<string>();
+	const [upgradeTargetReleaseId, setUpgradeTargetReleaseId] = useState("");
 	const reusableConnections = (
 		overview.data?.overview.connections ?? []
 	).filter(
 		(connection) =>
 			connection.providerId === approvedProvider &&
 			connection.providerId !== "github" &&
+			connection.providerId !== "manhattan" &&
+			connection.providerId !== "datalego" &&
 			connection.status === "ACTIVE",
+	);
+	const credentialReuseAvailable = Boolean(
+		approvedAccessRequestId &&
+			completedAccessRequestId !== approvedAccessRequestId &&
+			newCredentialRequestId !== approvedAccessRequestId &&
+			reusableConnections.length > 0,
 	);
 	const [bulkUpgrade, setBulkUpgrade] = useState<{
 		completed: number;
@@ -159,15 +175,28 @@ export function ConnectionsPage() {
 	const callbackFailed =
 		new URLSearchParams(window.location.search).get("oauth") ===
 		"callback_failed";
+	const callbackConnected =
+		new URLSearchParams(window.location.search).get("oauth") === "connected";
+	const callbackConnectionId = new URLSearchParams(window.location.search).get(
+		"connectionId",
+	);
 	const permissionDenied =
 		new URLSearchParams(window.location.search).get("oauth") ===
 		"permission_denied";
+	const callbackProviderId = new URLSearchParams(window.location.search).get(
+		"provider",
+	);
 	const callbackProvider =
-		new URLSearchParams(window.location.search).get("provider") === "manhattan"
-			? "manhattan"
+		callbackProviderId === "manhattan" || callbackProviderId === "datalego"
+			? callbackProviderId
 			: "github";
 	const manhattanOAuth = useMutation({
 		mutationFn: connectionApi.startManhattanOAuth,
+		onSuccess: ({ authorizationUrl }) =>
+			window.location.assign(authorizationUrl),
+	});
+	const datalegoOAuth = useMutation({
+		mutationFn: connectionApi.startDatalegoOAuth,
 		onSuccess: ({ authorizationUrl }) =>
 			window.location.assign(authorizationUrl),
 	});
@@ -178,6 +207,8 @@ export function ConnectionsPage() {
 		if (!["connect", "reauthorize"].includes(search.get("intent") ?? ""))
 			return;
 		const provider = search.get("provider");
+		if (approvedRequest.data?.connectReadiness?.status === "REAPPLY_REQUIRED")
+			return;
 		if (
 			accessRequestId &&
 			(approvedRequest.isPending ||
@@ -199,12 +230,17 @@ export function ConnectionsPage() {
 			approvedAccessRequestId &&
 			startedOAuthRequest.current !== approvedAccessRequestId
 		) {
-			if (provider === "manhattan" || provider === "github") {
+			if (
+				provider === "manhattan" ||
+				provider === "github" ||
+				provider === "datalego"
+			) {
 				startedOAuthRequest.current = approvedAccessRequestId;
 				if (provider === "github")
 					oauth.begin(undefined, approvedAccessRequestId);
-				else
+				else if (provider === "manhattan")
 					manhattanOAuth.mutate({ accessRequestId: approvedAccessRequestId });
+				else datalegoOAuth.mutate({ accessRequestId: approvedAccessRequestId });
 			}
 		}
 		if (provider === "bitbucket") setBitbucketOpen(true);
@@ -219,6 +255,7 @@ export function ConnectionsPage() {
 		accessRequestId,
 		approvedAccessRequestId,
 		approvedRequest.isPending,
+		approvedRequest.data?.connectReadiness?.status,
 		requestReady,
 		prepareConnect.isSuccess,
 		prepareConnect.isError,
@@ -227,6 +264,7 @@ export function ConnectionsPage() {
 		newCredentialRequestId,
 		completedAccessRequestId,
 		manhattanOAuth.mutate,
+		datalegoOAuth.mutate,
 		oauth.begin,
 	]);
 	const accessRequests = useQuery({
@@ -251,11 +289,41 @@ export function ConnectionsPage() {
 			queryClient.invalidateQueries({ queryKey: ["connections"] }),
 	});
 	const upgrade = useMutation({
-		mutationFn: connectionApi.upgradeProviderConnection,
+		mutationFn: async (connectionId: string) => {
+			const readiness =
+				await connectionApi.getProviderUpgradeReadiness(connectionId);
+			if (readiness.connectionId !== connectionId)
+				throw new Error("升级准备信息不匹配，请刷新后重试");
+			if (readiness.nextAction === "UPGRADE") {
+				await connectionApi.upgradeProviderConnection(connectionId);
+			}
+			return readiness;
+		},
 		onMutate: () => setUpgradeNotice(null),
-		onSuccess: async () => {
+		onSuccess: async (readiness) => {
+			if (readiness.nextAction === "REQUEST_APPROVAL") {
+				requestProviderUpgrade(
+					readiness.providerId as ConnectorProviderId,
+					readiness.targetProviderReleaseId,
+				);
+				setUpgradeNotice("此升级需要新版审批，请确认用途和能力后提交申请。");
+				return;
+			}
+			if (readiness.nextAction === "REAUTHORIZE") {
+				setReconnectTargetId(readiness.connectionId);
+				openProviderCredential(
+					readiness.providerId as ConnectorProviderId,
+					readiness.connectionId,
+				);
+				setUpgradeNotice("此升级需要重新连接外部账号，请完成授权。");
+				return;
+			}
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
-			setUpgradeNotice("连接已升级，可以重新确认客户端授权。");
+			setUpgradeNotice(
+				readiness.nextAction === "NONE"
+					? "连接已是当前版本，已刷新状态。"
+					: "连接已升级，可以重新确认客户端授权。",
+			);
 		},
 	});
 	async function completeAccessRequest(requestId: string) {
@@ -377,18 +445,6 @@ export function ConnectionsPage() {
 			setConfluencePending(false);
 		}
 	};
-	const connectDatalego = async (targetId: string | null = null) => {
-		setDatalegoError(null);
-		try {
-			await connectCredential({ providerId: "datalego" }, targetId);
-			setReconnectTargetId(null);
-			await queryClient.invalidateQueries({ queryKey: ["connections"] });
-		} catch (error) {
-			setDatalegoError(
-				error instanceof Error ? error : new Error("DataLego 连接失败"),
-			);
-		}
-	};
 	const connectJenkins = async (credential: {
 		apiToken: string;
 		username: string;
@@ -458,7 +514,6 @@ export function ConnectionsPage() {
 		targetId: string | null = null,
 	) => {
 		if (providerId === "bitbucket") setBitbucketOpen(true);
-		else if (providerId === "datalego") void connectDatalego(targetId);
 		else if (providerId === "rehoboam") setRehoboamOpen(true);
 		else if (providerId === "manhattan")
 			manhattanOAuth.mutate(
@@ -466,14 +521,23 @@ export function ConnectionsPage() {
 					? { reconnectConnectionId: targetId }
 					: { accessRequestId: approvedAccessRequestId },
 			);
+		else if (providerId === "datalego")
+			datalegoOAuth.mutate(
+				targetId
+					? { reconnectConnectionId: targetId }
+					: { accessRequestId: approvedAccessRequestId },
+			);
 		else if (providerId === "jira") setJiraOpen(true);
 		else if (providerId === "confluence") setConfluenceOpen(true);
+		else if (providerId === "github" && targetId)
+			reconnectOAuth.mutate(targetId);
 		else if (providerId === "jenkins-ci" || providerId === "jenkins-release") {
 			setJenkinsProviderId(providerId);
 			setJenkinsOpen(true);
 		} else beginOAuth();
 	};
 	const connectProvider = (providerId: ConnectorProviderId) => {
+		setUpgradeTargetReleaseId("");
 		if (!approvedAccessRequestId || approvedProvider !== providerId) {
 			setRenewalTarget(null);
 			setRenewalProviderId("");
@@ -485,7 +549,27 @@ export function ConnectionsPage() {
 				?.scrollIntoView?.({ behavior: "smooth", block: "start" });
 			return;
 		}
+		if (credentialReuseAvailable) {
+			approvedUpgrade.reset();
+			setDismissedReuseRequestId(undefined);
+			return;
+		}
 		openProviderCredential(providerId);
+	};
+	const requestProviderUpgrade = (
+		providerId: ConnectorProviderId,
+		targetReleaseId: string,
+	) => {
+		const url = new URL(window.location.href);
+		url.searchParams.delete("accessRequestId");
+		url.searchParams.delete("intent");
+		window.history.replaceState(null, "", url);
+		setRenewalTarget(null);
+		setRenewalProviderId("");
+		setReconnectTargetId(null);
+		setRequestTargetProvider(providerId);
+		setRequestTrigger((value) => value + 1);
+		setUpgradeTargetReleaseId(targetReleaseId);
 	};
 
 	const data = overview.data?.overview;
@@ -512,6 +596,20 @@ export function ConnectionsPage() {
 			connection.status === "ACTIVE" &&
 			!connection.requiresReconnect,
 	);
+	const connectedCallbackAccount =
+		callbackConnected &&
+		data?.connections.find(
+			(connection) =>
+				connection.id === callbackConnectionId &&
+				connection.providerId === callbackProviderId &&
+				connection.status === "ACTIVE" &&
+				!connection.requiresReconnect &&
+				(!connection.accessAuthorization ||
+					(connection.accessAuthorization.state === "ACTIVE" &&
+						(!connection.accessAuthorization.validUntil ||
+							Date.parse(connection.accessAuthorization.validUntil) >
+								Date.now()))),
+		);
 	useEffect(() => {
 		if (!callbackFailed || !callbackConnectionHealthy) return;
 		const url = new URL(window.location.href);
@@ -551,13 +649,6 @@ export function ConnectionsPage() {
 				...new Set(
 					data.upgradeTasks
 						.filter((task) => task.status === "PENDING_CONNECTION")
-						.filter((task) =>
-							data.connections.every(
-								(connection) =>
-									connection.id !== task.connectionId ||
-									connection.providerId !== "manhattan",
-							),
-						)
 						.map((task) => task.connectionId),
 				),
 			]
@@ -571,12 +662,32 @@ export function ConnectionsPage() {
 			total: connectionIds.length,
 		});
 		const failedConnectionIds: string[] = [];
+		let approvalFailureMessage: string | undefined;
+		let requiresApproval = 0;
+		let requiresAuthorization = 0;
+		let upgradedCount = 0;
 		let completed = 0;
 		for (const connectionId of connectionIds) {
 			try {
-				await connectionApi.upgradeProviderConnection(connectionId);
-			} catch {
+				const readiness =
+					await connectionApi.getProviderUpgradeReadiness(connectionId);
+				if (readiness.connectionId !== connectionId)
+					throw new Error("升级准备信息不匹配");
+				if (readiness.nextAction === "REQUEST_APPROVAL") requiresApproval++;
+				else if (readiness.nextAction === "REAUTHORIZE")
+					requiresAuthorization++;
+				else if (readiness.nextAction === "UPGRADE") {
+					await connectionApi.upgradeProviderConnection(connectionId);
+					upgradedCount++;
+				}
+			} catch (error) {
 				failedConnectionIds.push(connectionId);
+				if (
+					error instanceof ConnectionApiError &&
+					error.detail.messageKey ===
+						"connection.error.provider_upgrade_approval_required"
+				)
+					approvalFailureMessage = error.message;
 			}
 			completed += 1;
 			setBulkUpgrade({
@@ -618,7 +729,7 @@ export function ConnectionsPage() {
 			total: connectionIds.length,
 		});
 		setUpgradeNotice(
-			`批量处理完成：${connectionIds.length - retryableFailedConnectionIds.length} 个连接已升级，${retryableFailedConnectionIds.length} 个失败，${needsAuthorization} 条授权待确认。`,
+			`批量处理完成：${upgradedCount} 个连接已升级，${retryableFailedConnectionIds.length} 个失败，${needsAuthorization} 条授权待确认。${requiresApproval || requiresAuthorization ? ` ${requiresApproval} 个需要申请新版能力，${requiresAuthorization} 个需要重新连接，请分别处理。` : ""}${retryableFailedConnectionIds.length && approvalFailureMessage ? ` ${approvalFailureMessage}` : ""}`,
 		);
 	};
 	return (
@@ -656,6 +767,22 @@ export function ConnectionsPage() {
 				</p>
 			) : null}
 			{overview.isError ? <PageError error={overview.error} /> : null}
+			{connectedCallbackAccount ? (
+				<p className="alert alert-success" role="status">
+					{providerLabel(connectedCallbackAccount.providerId)}{" "}
+					已连接成功，可在下方授权客户端。
+				</p>
+			) : null}
+			{approvedRequest.isFetching || prepareConnect.isPending ? (
+				<p className="alert" role="status">
+					正在检查连接申请…
+				</p>
+			) : null}
+			{datalegoOAuth.isPending ? (
+				<p className="alert" role="status">
+					正在前往 DataLego 授权页面…
+				</p>
+			) : null}
 			{oauth.isError ? <PageError error={oauth.error} /> : null}
 			{approvedRequest.isError ? (
 				<PageError error={approvedRequest.error} />
@@ -671,48 +798,97 @@ export function ConnectionsPage() {
 			{manhattanOAuth.isError ? (
 				<PageError error={manhattanOAuth.error} />
 			) : null}
+			{datalegoOAuth.isError ? <PageError error={datalegoOAuth.error} /> : null}
 			{jiraError ? <PageError error={jiraError} /> : null}
 			{confluenceError ? <PageError error={confluenceError} /> : null}
-			{datalegoError ? <PageError error={datalegoError} /> : null}
 			{jenkinsError ? <PageError error={jenkinsError} /> : null}
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}
 			{upgrade.isError ? <PageError error={upgrade.error} /> : null}
-			{approvedUpgrade.isError ? (
-				<PageError error={approvedUpgrade.error} />
-			) : null}
-			{approvedAccessRequestId &&
-			completedAccessRequestId !== approvedAccessRequestId &&
-			newCredentialRequestId !== approvedAccessRequestId &&
-			reusableConnections.length > 0 ? (
-				<section className="content-stack" aria-label="使用已批准的连接">
-					<h2>选择已有连接</h2>
-					{reusableConnections.map((connection) => (
-						<div className="connection-selected-account" key={connection.id}>
-							<div>
-								<p title={connection.displayName}>{connection.displayName}</p>
-							</div>
+			<Dialog
+				open={
+					credentialReuseAvailable &&
+					dismissedReuseRequestId !== approvedAccessRequestId
+				}
+				onOpenChange={(open) => {
+					if (!open && !approvedUpgrade.isPending)
+						setDismissedReuseRequestId(approvedAccessRequestId);
+				}}
+			>
+				{approvedAccessRequestId ? (
+					<DialogContent className="credential-reuse-dialog">
+						<DialogHeader>
+							<DialogTitle>选择已有连接</DialogTitle>
+							<DialogClose asChild>
+								<Button
+									variant="secondary"
+									size="icon"
+									aria-label="关闭账号选择"
+									disabled={approvedUpgrade.isPending}
+								>
+									<X size={16} />
+								</Button>
+							</DialogClose>
+						</DialogHeader>
+						<DialogDescription className="credential-reuse-description">
+							{providerLabel(approvedProvider ?? "")}{" "}
+							申请已批准。选择已有账号，或连接其他账号。
+						</DialogDescription>
+						{approvedUpgrade.isError ? (
+							<PageError error={approvedUpgrade.error} />
+						) : null}
+						<div className="credential-reuse-list">
+							{reusableConnections.map((connection) => (
+								<div className="credential-reuse-account" key={connection.id}>
+									<div>
+										<strong title={connection.displayName}>
+											{connection.displayName}
+										</strong>
+										{connection.externalAccount !== connection.displayName ? (
+											<span title={connection.externalAccount}>
+												{connection.externalAccount}
+											</span>
+										) : null}
+									</div>
+									<Button
+										disabled={approvedUpgrade.isPending}
+										onClick={() =>
+											approvedUpgrade.mutate({
+												connectionId: connection.id,
+												accessRequestId: approvedAccessRequestId,
+											})
+										}
+									>
+										{approvedUpgrade.isPending &&
+										approvedUpgrade.variables?.connectionId === connection.id
+											? "正在连接…"
+											: "使用现有凭证"}
+									</Button>
+								</div>
+							))}
+						</div>
+						<div className="credential-reuse-actions">
+							<DialogClose asChild>
+								<Button
+									variant="secondary"
+									disabled={approvedUpgrade.isPending}
+								>
+									取消
+								</Button>
+							</DialogClose>
 							<Button
+								variant="secondary"
 								disabled={approvedUpgrade.isPending}
 								onClick={() =>
-									approvedUpgrade.mutate({
-										connectionId: connection.id,
-										accessRequestId: approvedAccessRequestId,
-									})
+									setNewCredentialRequestId(approvedAccessRequestId)
 								}
 							>
-								使用现有凭证
+								连接其他账号
 							</Button>
 						</div>
-					))}
-					<Button
-						disabled={approvedUpgrade.isPending}
-						onClick={() => setNewCredentialRequestId(approvedAccessRequestId)}
-					>
-						连接其他账号
-					</Button>
-				</section>
-			) : null}
+					</DialogContent>
+				) : null}
+			</Dialog>
 			{upgradeNotice ? (
 				<p className="alert alert-success" role="status">
 					{upgradeNotice}
@@ -736,6 +912,7 @@ export function ConnectionsPage() {
 					revokePending={false}
 					requestTrigger={requestTrigger}
 					requestTargetProvider={requestTargetProvider}
+					upgradeTargetReleaseId={upgradeTargetReleaseId}
 					renewalTarget={null}
 					renewalProviderId=""
 					onShowHistoryChange={() => undefined}
@@ -781,6 +958,7 @@ export function ConnectionsPage() {
 									<thead>
 										<tr>
 											<th>平台</th>
+											<th>账号</th>
 											<th>客户端</th>
 											<th>目标版本</th>
 											<th>状态</th>
@@ -793,13 +971,18 @@ export function ConnectionsPage() {
 												<td className="primary-cell">
 													{providerLabel(task.providerId)}
 												</td>
+												<td>
+													{data.connections.find(
+														(connection) => connection.id === task.connectionId,
+													)?.externalAccount ?? task.connectionId}
+												</td>
 												<td>{task.consumerName}</td>
 												<td>{task.targetProviderReleaseId}</td>
 												<td>
 													{task.status === "PENDING_CONNECTION"
 														? "升级连接"
 														: task.status === "PENDING_AUTHORIZATION"
-															? "重新确认授权"
+															? "待确认客户端授权"
 															: "已过期"}
 												</td>
 												<td className="table-action">
@@ -875,6 +1058,10 @@ export function ConnectionsPage() {
 						onRequestSubmitted={() => {
 							setRenewalTarget(null);
 							setRenewalProviderId("");
+							const url = new URL(window.location.href);
+							url.searchParams.delete("accessRequestId");
+							url.searchParams.delete("intent");
+							window.history.replaceState(null, "", url);
 						}}
 						onDisconnect={(connectionId) => {
 							const connection = data.connections.find(
@@ -908,6 +1095,7 @@ export function ConnectionsPage() {
 						}}
 						requestTrigger={requestTrigger}
 						requestTargetProvider={requestTargetProvider}
+						upgradeTargetReleaseId={upgradeTargetReleaseId}
 						renewalTarget={renewalTarget}
 						renewalProviderId={renewalProviderId}
 						onRevoke={(grantId) => revokeGrant.mutate(grantId)}
@@ -1392,11 +1580,16 @@ function ConnectorManagementWorkspace(props: {
 	revokePending: boolean;
 	requestTrigger: number;
 	requestTargetProvider: string;
+	upgradeTargetReleaseId: string;
 	renewalTarget: Connection["accessAuthorization"];
 	renewalProviderId: string;
 	showHistory: boolean;
 	upgradingConnectionId: string | null;
 }) {
+	const accessOptions = useQuery({
+		queryKey: ["connection-access-options"],
+		queryFn: connectionApi.getConnectionAccessOptions,
+	});
 	const activeConnections = props.connections.filter(
 		(connection) => connection.status === "ACTIVE",
 	);
@@ -1412,7 +1605,13 @@ function ConnectorManagementWorkspace(props: {
 		connectorDefinitions[0]?.providerId ??
 		"github";
 	const [providerId, setProviderId] = useState(initialProvider);
-	const [connectionId, setConnectionId] = useState<string | null>(null);
+	useEffect(() => {
+		if (props.requestTargetProvider && props.requestTrigger)
+			setProviderId(props.requestTargetProvider);
+	}, [props.requestTargetProvider, props.requestTrigger]);
+	const [connectionId, setConnectionId] = useState<string | null>(() =>
+		new URLSearchParams(window.location.search).get("connectionId"),
+	);
 	const [query, setQuery] = useState("");
 	const visibleConnectors = connectorDefinitions.filter((connector) =>
 		`${connector.name} ${connector.category} ${connector.description}`
@@ -1422,16 +1621,15 @@ function ConnectorManagementWorkspace(props: {
 	const connector =
 		connectorDefinitions.find((item) => item.providerId === providerId) ??
 		connectorDefinitions[0];
-	const currentRequest = props.accessRequests.find(
-		(item) =>
-			item.providerId === connector?.providerId &&
-			[
-				"SUBMITTED",
-				"IN_REVIEW",
-				"ROUTING_BLOCKED",
-				"APPROVED_PENDING_CONNECTION",
-			].includes(item.state),
+	const currentRequest = latestProviderRequest(
+		props.accessRequests,
+		connector?.providerId,
 	);
+	const outdatedRequest =
+		currentRequest?.connectReadiness?.status === "REAPPLY_REQUIRED";
+	const canReapply =
+		reapplicationOptions(currentRequest, accessOptions.data?.options ?? [])
+			.length > 0;
 	const accounts = props.connections
 		.filter(
 			(connection) =>
@@ -1515,9 +1713,20 @@ function ConnectorManagementWorkspace(props: {
 						<h2>{connector?.name}</h2>
 						<p>{connector?.description}</p>
 					</div>
-					{currentRequest?.state === "APPROVED_PENDING_CONNECTION" &&
-					currentRequest.connectExpiresAt &&
-					Date.parse(currentRequest.connectExpiresAt) > Date.now() ? (
+					{outdatedRequest ? (
+						<Button
+							disabled={accessOptions.isPending || !canReapply}
+							onClick={() => connector && props.onConnect(connector.providerId)}
+						>
+							{accessOptions.isPending
+								? "正在检查新版申请…"
+								: accessOptions.isError
+									? "申请选项暂不可用"
+									: canReapply
+										? "按新版重新申请"
+										: "等待管理员开放新版"}
+						</Button>
+					) : currentRequest && canConnectRequest(currentRequest) ? (
 						<a
 							className="button button-primary"
 							href={`/connection/connections?provider=${encodeURIComponent(providerId)}&intent=connect&accessRequestId=${encodeURIComponent(currentRequest.id)}`}
@@ -1552,6 +1761,7 @@ function ConnectorManagementWorkspace(props: {
 						requestsPending={props.accessRequestsPending}
 						startProviderId={props.requestTargetProvider}
 						startSignal={props.requestTrigger}
+						targetProviderReleaseId={props.upgradeTargetReleaseId}
 					/>
 				) : null}
 				{selected ? (

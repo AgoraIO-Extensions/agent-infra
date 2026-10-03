@@ -276,6 +276,50 @@
 				}
 			}
 		},
+		"/api/v1/connection/connections/{connectionId}/upgrade-readiness": {
+			"get": {
+				"operationId": "getProviderUpgradeReadiness",
+				"parameters": [{ "$ref": "#/components/parameters/ConnectionId" }],
+				"responses": {
+					"200": {
+						"description": "Owned personal connection upgrade preparation",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"additionalProperties": false,
+									"required": [
+										"connectionId",
+										"providerId",
+										"targetProviderReleaseId",
+										"nextAction",
+										"reason"
+									],
+									"properties": {
+										"connectionId": { "type": "string" },
+										"providerId": { "type": "string" },
+										"targetProviderReleaseId": { "type": "string" },
+										"nextAction": {
+											"type": "string",
+											"enum": [
+												"UPGRADE",
+												"REQUEST_APPROVAL",
+												"REAUTHORIZE",
+												"NONE"
+											]
+										},
+										"reason": { "type": "string" }
+									}
+								}
+							}
+						}
+					},
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"503": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
 		"/api/v1/connection/provider-credentials": {
 			"post": {
 				"operationId": "connectProviderCredential",
@@ -1057,6 +1101,86 @@
 				}
 			}
 		},
+		"/api/v1/connection/admin/capability-profiles/{profileId}/revise": {
+			"post": {
+				"operationId": "revisePublishedApprovalCapabilityProfile",
+				"parameters": [
+					{ "$ref": "#/components/parameters/IdempotencyKey" },
+					{
+						"name": "profileId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					},
+					{
+						"name": "If-Match",
+						"in": "header",
+						"required": true,
+						"schema": { "type": "string", "pattern": "^\"[1-9][0-9]*\"$" }
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/CapabilityProfileDraft"
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Published profile and policies revised",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/CapabilityProfileRevision"
+								}
+							}
+						}
+					},
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/capability-profiles/{profileId}/retire": {
+			"post": {
+				"operationId": "retirePublishedApprovalCapabilityProfile",
+				"parameters": [
+					{ "$ref": "#/components/parameters/IdempotencyKey" },
+					{
+						"name": "profileId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					},
+					{
+						"name": "If-Match",
+						"in": "header",
+						"required": true,
+						"schema": { "type": "string", "pattern": "^\"[1-9][0-9]*\"$" }
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Profile retired from new applications",
+						"content": {
+							"application/json": {
+								"schema": { "$ref": "#/components/schemas/CatalogRetirement" }
+							}
+						}
+					},
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
 		"/api/v1/connection/admin/disclaimers": {
 			"get": {
 				"operationId": "listApprovalDisclaimers",
@@ -1157,6 +1281,82 @@
 				],
 				"responses": {
 					"204": { "description": "Disclaimer published" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/disclaimers/{disclaimerId}/revise": {
+			"post": {
+				"operationId": "revisePublishedApprovalDisclaimer",
+				"parameters": [
+					{ "$ref": "#/components/parameters/IdempotencyKey" },
+					{
+						"name": "disclaimerId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					},
+					{
+						"name": "If-Match",
+						"in": "header",
+						"required": true,
+						"schema": { "type": "string", "pattern": "^\"[1-9][0-9]*\"$" }
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": { "$ref": "#/components/schemas/DisclaimerDraft" }
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Published disclaimer and policies revised",
+						"content": {
+							"application/json": {
+								"schema": { "$ref": "#/components/schemas/DisclaimerRevision" }
+							}
+						}
+					},
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/disclaimers/{disclaimerId}/retire": {
+			"post": {
+				"operationId": "retirePublishedApprovalDisclaimer",
+				"parameters": [
+					{ "$ref": "#/components/parameters/IdempotencyKey" },
+					{
+						"name": "disclaimerId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					},
+					{
+						"name": "If-Match",
+						"in": "header",
+						"required": true,
+						"schema": { "type": "string", "pattern": "^\"[1-9][0-9]*\"$" }
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Disclaimer retired from new applications",
+						"content": {
+							"application/json": {
+								"schema": { "$ref": "#/components/schemas/CatalogRetirement" }
+							}
+						}
+					},
+					"400": { "$ref": "#/components/responses/Error" },
 					"401": { "$ref": "#/components/responses/Error" },
 					"404": { "$ref": "#/components/responses/Error" },
 					"409": { "$ref": "#/components/responses/Error" }
@@ -1301,6 +1501,111 @@
 					},
 					"401": { "$ref": "#/components/responses/Error" },
 					"404": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/access-policies/{policyId}/revision-source": {
+			"get": {
+				"operationId": "getPublishedConnectionAccessPolicyEditorSource",
+				"parameters": [
+					{
+						"name": "policyId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Published policy editor source with administrator-bound candidates",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AccessPolicyDraftResponse"
+								}
+							}
+						}
+					},
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"503": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/access-policies/{policyId}/revise": {
+			"post": {
+				"operationId": "revisePublishedConnectionAccessPolicy",
+				"parameters": [
+					{ "$ref": "#/components/parameters/IdempotencyKey" },
+					{
+						"name": "policyId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					},
+					{
+						"name": "If-Match",
+						"in": "header",
+						"required": true,
+						"schema": { "type": "string", "pattern": "^\"[1-9][0-9]*\"$" }
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": { "$ref": "#/components/schemas/AccessPolicyDraft" }
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Replacement policy published for new applications",
+						"content": {
+							"application/json": {
+								"schema": { "$ref": "#/components/schemas/AccessPolicyCreated" }
+							}
+						}
+					},
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" },
+					"503": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
+		"/api/v1/connection/admin/access-policies/{policyId}/retire": {
+			"post": {
+				"operationId": "retirePublishedConnectionAccessPolicy",
+				"parameters": [
+					{ "$ref": "#/components/parameters/IdempotencyKey" },
+					{
+						"name": "policyId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					},
+					{
+						"name": "If-Match",
+						"in": "header",
+						"required": true,
+						"schema": { "type": "string", "pattern": "^\"[1-9][0-9]*\"$" }
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Policy retired from new applications",
+						"content": {
+							"application/json": {
+								"schema": { "$ref": "#/components/schemas/AccessPolicyCreated" }
+							}
+						}
+					},
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
 				}
 			}
 		},
@@ -2450,7 +2755,7 @@
 					"accessRequestId": { "type": "string" },
 					"providerId": {
 						"type": "string",
-						"enum": ["github", "manhattan"],
+						"enum": ["github", "manhattan", "datalego"],
 						"default": "github"
 					},
 					"reconnectConnectionId": { "type": "string" },
@@ -2546,6 +2851,7 @@
 					"disclaimers"
 				],
 				"properties": {
+					"availableForNewConnections": { "type": "boolean" },
 					"providerId": { "type": "string" },
 					"providerReleaseId": { "type": "string" },
 					"actions": {
@@ -2668,6 +2974,18 @@
 					"stages"
 				],
 				"properties": {
+					"connectReadiness": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["status", "targetProviderReleaseId"],
+						"properties": {
+							"status": {
+								"type": "string",
+								"enum": ["READY", "REAPPLY_REQUIRED"]
+							},
+							"targetProviderReleaseId": { "type": ["string", "null"] }
+						}
+					},
 					"id": { "type": "string" },
 					"providerId": { "type": "string" },
 					"providerReleaseId": { "type": "string" },
@@ -3150,6 +3468,23 @@
 				"required": ["capabilityProfileId"],
 				"properties": { "capabilityProfileId": { "type": "string" } }
 			},
+			"CapabilityProfileRevision": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["capabilityProfileId", "affectedPolicies"],
+				"properties": {
+					"capabilityProfileId": { "type": "string" },
+					"affectedPolicies": { "type": "integer", "minimum": 0 }
+				}
+			},
+			"CatalogRetirement": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["affectedPolicies"],
+				"properties": {
+					"affectedPolicies": { "type": "integer", "minimum": 0 }
+				}
+			},
 			"CapabilityProfileDetailResponse": {
 				"type": "object",
 				"additionalProperties": false,
@@ -3170,6 +3505,7 @@
 						"properties": {
 							"id": { "type": "string" },
 							"providerReleaseId": { "type": "string" },
+							"providerId": { "type": "string" },
 							"name": { "type": "string" },
 							"effectCeiling": { "type": "string", "enum": ["READ", "WRITE"] },
 							"revision": { "type": "string" },
@@ -3214,6 +3550,15 @@
 				"additionalProperties": false,
 				"required": ["disclaimerVersionId"],
 				"properties": { "disclaimerVersionId": { "type": "string" } }
+			},
+			"DisclaimerRevision": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["disclaimerVersionId", "affectedPolicies"],
+				"properties": {
+					"disclaimerVersionId": { "type": "string" },
+					"affectedPolicies": { "type": "integer", "minimum": 0 }
+				}
 			},
 			"ApprovalPolicyStageDraft": {
 				"type": "object",

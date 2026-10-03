@@ -13,7 +13,7 @@
 		"build": "6007002",
 		"apiOrigin": "https://bitbucket-api.agoralab.co",
 		"authentication": "Personal Access Token sent as an Authorization Bearer value",
-		"executorDigest": "sha256:83020de92cebd6809da73806d6926c442909b0fb520f88666974ae2f7c364654"
+		"executorDigest": "sha256:36e421531152628f993691b6e61e4966dc84af4ad4fced71ab4b84f44b025b67"
 	},
 	"atlassianCliReference": {
 		"version": "0.1.18",
@@ -52,7 +52,9 @@
 		"Exclude Cloud-only action families and add reviewed Server project, build-status, diff, approval, and comment actions.",
 		"Add a bounded Server-only compare_refs read action that resolves immutable commit IDs and filters changed-file diffs by caller-approved path globs.",
 		"Resolve compare_refs branch, tag, and commit inputs through the query-based commits API so refs containing slashes remain valid.",
-		"Read Pull Request comments from the Server activities API and project only comment-bearing activities."
+		"Read Pull Request comments from the Server activities API and project only comment-bearing activities.",
+		"Preserve the numeric HTTP status of rejected Server requests without exposing Provider response bodies.",
+		"Send fixed Atlassian XSRF and JSON headers for bodyless POST actions and accept an empty Decline success response."
 	],
 	"overlap": {
 		"openConnectorAndServer": [

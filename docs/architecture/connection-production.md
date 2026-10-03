@@ -96,6 +96,22 @@ SDK dump 和 Symbol Action 在实际调用时由 Manhattan 逐路由检查 RBAC�
 此发布包含 `0035_provider_oauth_transactions.sql`，必须先执行经评审的生产 migration 路径；
 普通 GZ3 `--no-hooks` 发布脚本会按设计阻止直接部署。
 
+DataLego OAuth 只读试验的批准边界见 [HLD DataLego profile](HLD-connection-M1.md#321-初期-provider-实现范围)。
+`DATALEGO_OAUTH_CLIENT_ID` 和 `DATALEGO_OAUTH_CLIENT_SECRET` 必须先存在于 `connection-config`，并在
+Helm 的 `secretEnv` 中仅登记空值键名，使 API 通过 `secretKeyRef` 注入；使用 `--reuse-values` 时须显式
+补齐这两项，不能只更新 Secret 后假定 Pod 已读取。注册回调固定为
+`https://agent-connector.gz3.agoralab.co/oauth/callback?provider=datalego`，对应独立的
+`datalego` Provider 的 v4；页面只保留正式 DataLego 入口。旧 DataLego 不自动迁移，试验 Provider
+由迁移停用但历史记录保留，不能删除或重写 v3 Credential/Grant。发布前应完成 chart 渲染和当前
+release 安全检查；发布后由测试用户完成 SSO、个人身份和真实 READ 验收，才能宣称线上可用。
+旧申请与 v4 不匹配时须按新版本重新申请并连接；新增 Action 不自动进入 Consumer Grant。
+v4→v5 的取消修复通过精确 release/digest 兼容证据支持显式升级：员工点击“处理升级”后，
+保留有效原审批的来源、有效期、已批准 Action 子集和 OAuth refresh/到期信息；不自动扩大
+Consumer 已选能力。证据不匹配或原审批已失效时，页面引导申请新版能力；凭据验证失败时
+仍需重新授权，不能通过手工更新 Credential 或审批状态绕过门禁。
+试验 Provider 停用迁移完成后，不可直接回滚至仍发布该 Provider 的旧程序；旧程序会拒绝已停用的
+catalog。恢复应发布修复后的正式版本，不能通过重启或重写 Credential 绕过版本门禁。
+
 ## 验收边界
 
 本机 type check、unit test、临时 PostgreSQL 集成测试和 Docker build 只能证明源码接线。HCI pilot 验收
@@ -139,6 +155,8 @@ Consumer 名称来自当前身份目录，不表示执行时的 profile 快照�
 Attempt、Effect receipt、完整审计或恢复证据，数据保留门禁不因此关闭。
 
 ### 发布步骤
+
+GZ3 pilot 的首次 GitHub OAuth 直连回退依照[区域出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md#gz3-pilotgithub-oauth-出口回退)发布，不再要求单独的 Security/SRE NetworkPolicy 签收。当前网络层出口范围未核实，应用白名单不能证明隔离；部署就绪后仍须由申请人重新发起真实 GitHub OAuth，确认回调和连接状态，未验证时不得宣称该功能已验收。
 
 创建 PR 前先运行：
 

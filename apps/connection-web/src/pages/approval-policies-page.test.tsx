@@ -6,6 +6,7 @@ import type {
 	AccessPolicyDraftResponse,
 	ApprovalDelegationsResponse,
 	ApprovalPolicyCatalog,
+	CapabilityProfileDetailResponse,
 	OutboxFailuresResponse,
 } from "@agent-infra/connection-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -48,6 +49,37 @@ const api = vi.hoisted(() => ({
 			},
 		}),
 	),
+	getPublishedConnectionAccessPolicyEditorSource: vi.fn(async () => ({
+		policyId: "policy-1",
+		revision: "2",
+		candidates: [
+			{
+				candidateId: "candidate-1",
+				displayName: "Reviewer",
+				email: null,
+				alias: null,
+			},
+		],
+		draft: {
+			allowPermanent: true,
+			capabilityProfileId: "profile-1",
+			providerReleaseId: "jira-release-1",
+			connectTtlSeconds: 3600,
+			requestTtlSeconds: 3600,
+			renewalLeadSeconds: 0,
+			priority: 100,
+			disclaimerVersionIds: ["global-1"],
+			durations: [{ kind: "PERMANENT" as const }],
+			stages: [
+				{
+					name: "Review",
+					quorumType: "ANY" as const,
+					timeoutSeconds: 3600,
+					approverCandidateIds: ["candidate-1"],
+				},
+			],
+		},
+	})),
 	updateConnectionAccessPolicy: vi.fn(async (_input: unknown) => ({
 		policyVersionId: "policy-1",
 	})),
@@ -60,25 +92,28 @@ const api = vi.hoisted(() => ({
 			providers: [],
 		}),
 	),
-	getApprovalCapabilityProfile: vi.fn(async (id: string) => ({
-		profile: {
-			id,
-			providerReleaseId: "jira-release-1",
-			name: "Jira Read",
-			effectCeiling: "READ" as const,
-			revision: "1",
-			status: "PUBLISHED",
-			actions: [
-				{
-					id: "jira.read@v1",
-					name: "jira.read",
-					description: "Read",
-					effect: "READ" as const,
-					status: "PUBLISHED",
-				},
-			],
-		},
-	})),
+	getApprovalCapabilityProfile: vi.fn(
+		async (id: string): Promise<CapabilityProfileDetailResponse> => ({
+			profile: {
+				id,
+				providerId: "jira",
+				providerReleaseId: "jira-release-1",
+				name: "Jira Read",
+				effectCeiling: "READ" as const,
+				revision: "1",
+				status: "PUBLISHED",
+				actions: [
+					{
+						id: "jira.read@v1",
+						name: "jira.read",
+						description: "Read",
+						effect: "READ" as const,
+						status: "PUBLISHED",
+					},
+				],
+			},
+		}),
+	),
 	createApprovalCapabilityProfile: vi.fn(async (_body: unknown) => ({
 		capabilityProfileId: "profile-created",
 	})),
@@ -86,6 +121,13 @@ const api = vi.hoisted(() => ({
 		capabilityProfileId: "draft-1",
 	})),
 	publishApprovalCapabilityProfile: vi.fn(async (_id: string) => undefined),
+	revisePublishedApprovalCapabilityProfile: vi.fn(async (_input: unknown) => ({
+		capabilityProfileId: "profile-new",
+		affectedPolicies: 1,
+	})),
+	retirePublishedApprovalCapabilityProfile: vi.fn(async (_input: unknown) => ({
+		affectedPolicies: 1,
+	})),
 	createApprovalDisclaimer: vi.fn(async (_body: unknown) => ({
 		disclaimerVersionId: "disclaimer-created",
 	})),
@@ -93,6 +135,13 @@ const api = vi.hoisted(() => ({
 		disclaimerVersionId: "disclaimer-1",
 	})),
 	publishApprovalDisclaimer: vi.fn(async (_id: string) => undefined),
+	revisePublishedApprovalDisclaimer: vi.fn(async (_input: unknown) => ({
+		disclaimerVersionId: "disclaimer-new",
+		affectedPolicies: 1,
+	})),
+	retirePublishedApprovalDisclaimer: vi.fn(async (_input: unknown) => ({
+		affectedPolicies: 1,
+	})),
 	listApprovalRoutingBlocked: vi.fn(async () => ({ requests: [] })),
 	listOutboxFailures: vi.fn(
 		async (): Promise<OutboxFailuresResponse> => ({ events: [] }),
@@ -140,6 +189,12 @@ const api = vi.hoisted(() => ({
 		affectedConnections: 1,
 	})),
 	publishConnectionAccessPolicy: vi.fn(async (_input: unknown) => undefined),
+	revisePublishedConnectionAccessPolicy: vi.fn(async (_input: unknown) => ({
+		policyVersionId: "policy-new",
+	})),
+	retirePublishedConnectionAccessPolicy: vi.fn(async (_input: unknown) => ({
+		policyVersionId: "policy-1",
+	})),
 	revokeConnectionAccessPolicy: vi.fn(async (_input: unknown) => ({
 		policyVersionId: "policy-1",
 		canceledRequests: 2,
@@ -153,12 +208,333 @@ vi.mock("../shell", () => ({
 	PageError: () => <div role="alert">请求失败</div>,
 }));
 
+import { ApprovalCatalogManager } from "./approval-catalog-manager";
 import { ApprovalPoliciesPage } from "./approval-policies-page";
 
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
 	vi.restoreAllMocks();
+});
+
+it("edits a published package and confirms removal without mutating old approvals", async () => {
+	const catalog: ApprovalPolicyCatalog = {
+		approvalDirectoryEnabled: true,
+		profiles: [
+			{
+				id: "profile-1",
+				providerReleaseId: "jira-release-1",
+				name: "Jira Read",
+				effectCeiling: "READ",
+				revision: "2",
+				status: "PUBLISHED",
+			},
+		],
+		policies: [
+			{
+				id: "policy-1",
+				providerReleaseId: "jira-release-1",
+				capabilityProfileId: "profile-1",
+				status: "PUBLISHED",
+				revision: "2",
+				materialChange: false,
+				disclaimerVersionIds: [],
+			},
+		],
+		disclaimers: [],
+		providers: [
+			{
+				provider: "jira",
+				providerReleaseId: "jira-release-1",
+				actions: [{ id: "jira.read@v1", name: "jira.read", effect: "READ" }],
+			},
+		],
+	};
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
+	const { rerender } = render(
+		<QueryClientProvider client={client}>
+			<ApprovalCatalogManager
+				catalog={catalog}
+				onRefresh={vi.fn(async () => undefined)}
+			/>
+		</QueryClientProvider>,
+	);
+	await waitFor(() =>
+		expect(
+			(screen.getByRole("button", { name: "编辑" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(false),
+	);
+	fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+	expect(
+		screen.getByRole("heading", { name: "编辑已发布能力包" }),
+	).toBeTruthy();
+	fireEvent.click(screen.getByRole("button", { name: "保存并发布" }));
+	await waitFor(() =>
+		expect(api.revisePublishedApprovalCapabilityProfile).toHaveBeenCalledWith({
+			profileId: "profile-1",
+			revision: "2",
+			body: {
+				name: "Jira Read",
+				providerReleaseId: "jira-release-1",
+				actionVersionIds: ["jira.read@v1"],
+			},
+		}),
+	);
+	await screen.findByText(/能力包已更新/);
+	const previousProfile = catalog.profiles[0];
+	const previousPolicy = catalog.policies[0];
+	if (!previousProfile || !previousPolicy)
+		throw new Error("Catalog fixture is missing");
+	rerender(
+		<QueryClientProvider client={client}>
+			<ApprovalCatalogManager
+				catalog={{
+					...catalog,
+					profiles: [
+						{ ...previousProfile, status: "SUPERSEDED" },
+						{ ...previousProfile, id: "profile-new", status: "PUBLISHED" },
+					],
+					policies: [
+						{
+							...previousPolicy,
+							id: "policy-new",
+							capabilityProfileId: "profile-new",
+						},
+					],
+				}}
+				onRefresh={vi.fn(async () => undefined)}
+			/>
+		</QueryClientProvider>,
+	);
+	expect(screen.getByRole("heading", { name: "Jira Read" })).toBeTruthy();
+	fireEvent.click(await screen.findByRole("button", { name: "移除" }));
+	expect(screen.getByRole("dialog").textContent).toContain(
+		"1条关联策略的新申请入口",
+	);
+	fireEvent.click(screen.getByRole("button", { name: "确认移除" }));
+	await waitFor(() =>
+		expect(api.retirePublishedApprovalCapabilityProfile).toHaveBeenCalledWith({
+			profileId: "profile-new",
+			revision: "2",
+		}),
+	);
+});
+
+it("edits published non-material terms and confirms removal", async () => {
+	const catalog: ApprovalPolicyCatalog = {
+		approvalDirectoryEnabled: true,
+		profiles: [],
+		policies: [
+			{
+				id: "policy-1",
+				providerReleaseId: "jira-release-1",
+				capabilityProfileId: "profile-1",
+				status: "PUBLISHED",
+				revision: "2",
+				materialChange: false,
+				disclaimerVersionIds: ["disclaimer-1"],
+			},
+		],
+		disclaimers: [
+			{
+				id: "disclaimer-1",
+				kind: "GLOBAL",
+				providerId: null,
+				locale: "zh-CN",
+				content: "Old terms",
+				materialChange: false,
+				status: "PUBLISHED",
+				revision: "2",
+			},
+		],
+		providers: [],
+	};
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
+	const { rerender } = render(
+		<QueryClientProvider client={client}>
+			<ApprovalCatalogManager
+				catalog={catalog}
+				onRefresh={vi.fn(async () => undefined)}
+			/>
+		</QueryClientProvider>,
+	);
+	fireEvent.click(screen.getByRole("tab", { name: "免责声明" }));
+	fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+	fireEvent.change(screen.getByRole("textbox", { name: "条款正文" }), {
+		target: { value: "New terms" },
+	});
+	fireEvent.click(screen.getByRole("button", { name: "保存并发布" }));
+	await waitFor(() =>
+		expect(api.revisePublishedApprovalDisclaimer).toHaveBeenCalledWith({
+			disclaimerId: "disclaimer-1",
+			revision: "2",
+			body: {
+				kind: "GLOBAL",
+				locale: "zh-CN",
+				content: "New terms",
+				materialChange: false,
+			},
+		}),
+	);
+	await screen.findByText(/免责声明已更新/);
+	const previousDisclaimer = catalog.disclaimers[0];
+	const previousPolicy = catalog.policies[0];
+	if (!previousDisclaimer || !previousPolicy)
+		throw new Error("Catalog fixture is missing");
+	rerender(
+		<QueryClientProvider client={client}>
+			<ApprovalCatalogManager
+				catalog={{
+					...catalog,
+					disclaimers: [
+						{ ...previousDisclaimer, status: "SUPERSEDED" },
+						{
+							...previousDisclaimer,
+							id: "disclaimer-new",
+							content: "New terms",
+							revision: "1",
+							status: "PUBLISHED",
+						},
+					],
+					policies: [
+						{
+							...previousPolicy,
+							id: "policy-new",
+							disclaimerVersionIds: ["disclaimer-new"],
+						},
+					],
+				}}
+				onRefresh={vi.fn(async () => undefined)}
+			/>
+		</QueryClientProvider>,
+	);
+	expect(screen.getByText("New terms")).toBeTruthy();
+	fireEvent.click(screen.getByRole("button", { name: "移除" }));
+	fireEvent.click(screen.getByRole("button", { name: "确认移除" }));
+	await waitFor(() =>
+		expect(api.retirePublishedApprovalDisclaimer).toHaveBeenCalledWith({
+			disclaimerId: "disclaimer-new",
+			revision: "1",
+		}),
+	);
+});
+
+it("moves an old published package to the current same-Provider release only after exact Action selection", async () => {
+	api.getApprovalCapabilityProfile.mockResolvedValueOnce({
+		profile: {
+			id: "profile-v4",
+			providerId: "manhattan",
+			providerReleaseId: "manhattan-connection-v4",
+			name: "manhattan basic",
+			effectCeiling: "READ",
+			revision: "2",
+			status: "PUBLISHED",
+			actions: [
+				{
+					id: "old-1",
+					name: "manhattan.old_one",
+					description: "Old",
+					effect: "READ",
+					status: "PUBLISHED",
+				},
+				{
+					id: "old-2",
+					name: "manhattan.old_two",
+					description: "Old",
+					effect: "READ",
+					status: "PUBLISHED",
+				},
+			],
+		},
+	});
+	const catalog: ApprovalPolicyCatalog = {
+		approvalDirectoryEnabled: true,
+		profiles: [
+			{
+				id: "profile-v4",
+				providerReleaseId: "manhattan-connection-v4",
+				name: "manhattan basic",
+				effectCeiling: "READ",
+				revision: "2",
+				status: "PUBLISHED",
+			},
+		],
+		policies: [],
+		disclaimers: [],
+		providers: [
+			{
+				provider: "manhattan",
+				providerReleaseId: "manhattan-connection-v5",
+				actions: [
+					{ id: "new-read", name: "manhattan.get_profile", effect: "READ" },
+					{ id: "new-write", name: "manhattan.write", effect: "WRITE" },
+				],
+			},
+			{ provider: "jira", providerReleaseId: "jira-v1", actions: [] },
+		],
+	};
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<ApprovalCatalogManager
+				catalog={catalog}
+				onRefresh={vi.fn(async () => undefined)}
+			/>
+		</QueryClientProvider>,
+	);
+	await waitFor(() =>
+		expect(
+			(screen.getByRole("button", { name: "编辑" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(false),
+	);
+	fireEvent.click(screen.getByRole("button", { name: "复制为新能力包" }));
+	expect(
+		(screen.getByRole("combobox", { name: "Provider" }) as HTMLSelectElement)
+			.disabled,
+	).toBe(false);
+	expect(screen.getByText("已选 0 / 0")).toBeTruthy();
+	fireEvent.click(screen.getByRole("button", { name: "取消" }));
+	fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+	const release = screen.getByRole("combobox", {
+		name: "Provider",
+	}) as HTMLSelectElement;
+	expect(release.disabled).toBe(false);
+	expect(release.value).toBe("manhattan-connection-v4");
+	expect(screen.getByText(/旧版来源含 2 项能力/)).toBeTruthy();
+	expect(screen.getByText("已选 0 / 0")).toBeTruthy();
+	expect(
+		(screen.getByRole("button", { name: "保存并发布" }) as HTMLButtonElement)
+			.disabled,
+	).toBe(true);
+	expect(screen.queryByRole("option", { name: /jira · jira-v1/ })).toBeNull();
+	fireEvent.change(release, { target: { value: "manhattan-connection-v5" } });
+	expect(screen.getByText("已选 0 / 2")).toBeTruthy();
+	fireEvent.click(
+		screen.getByRole("checkbox", { name: /manhattan.get_profile/ }),
+	);
+	fireEvent.click(screen.getByRole("button", { name: "保存并发布" }));
+	await waitFor(() =>
+		expect(api.revisePublishedApprovalCapabilityProfile).toHaveBeenCalledOnce(),
+	);
+	expect(
+		api.revisePublishedApprovalCapabilityProfile.mock.calls[0]?.[0],
+	).toMatchObject({
+		profileId: "profile-v4",
+		revision: "2",
+		body: {
+			providerReleaseId: "manhattan-connection-v5",
+			actionVersionIds: ["new-read"],
+		},
+	});
 });
 
 it("creates an exact capability draft from the independent catalog without publishing it", async () => {
@@ -1151,6 +1527,123 @@ it("keeps a draft without a global disclaimer unpublished", async () => {
 	).toBe(true);
 });
 
+it("revises a published policy and removes it without emergency revocation", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
+		profiles: [
+			{
+				id: "profile-1",
+				providerReleaseId: "jira-release-1",
+				name: "Jira Read",
+				effectCeiling: "READ",
+				status: "PUBLISHED",
+				revision: "2",
+			},
+		],
+		disclaimers: [
+			{
+				id: "global-1",
+				kind: "GLOBAL",
+				providerId: null,
+				locale: "zh-CN",
+				content: "Terms",
+				status: "PUBLISHED",
+				revision: "2",
+				materialChange: false,
+			},
+		],
+		providers: [
+			{
+				provider: "jira",
+				providerReleaseId: "jira-release-1",
+				actions: [{ id: "jira.read@v1", name: "jira.read", effect: "READ" }],
+			},
+		],
+		policies: [
+			{
+				id: "policy-1",
+				providerReleaseId: "jira-release-1",
+				capabilityProfileId: "profile-1",
+				status: "PUBLISHED",
+				revision: "2",
+				materialChange: false,
+				disclaimerVersionIds: ["global-1"],
+			},
+		],
+	});
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+	await screen.findByRole("button", { name: "保存并发布" });
+	fireEvent.click(screen.getByRole("button", { name: "保存并发布" }));
+	await waitFor(() =>
+		expect(api.revisePublishedConnectionAccessPolicy).toHaveBeenCalledOnce(),
+	);
+	expect(
+		api.revisePublishedConnectionAccessPolicy.mock.calls[0]?.[0],
+	).toMatchObject({
+		policyId: "policy-1",
+		revision: "2",
+		body: {
+			providerReleaseId: "jira-release-1",
+			capabilityProfileId: "profile-1",
+			stages: [{ approverCandidateIds: ["candidate-1"] }],
+		},
+	});
+	expect(api.revokeConnectionAccessPolicy).not.toHaveBeenCalled();
+});
+
+it("removes a published policy only from new applications", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		approvalDirectoryEnabled: true,
+		profiles: [],
+		disclaimers: [],
+		providers: [],
+		policies: [
+			{
+				id: "policy-1",
+				providerReleaseId: "jira-release-1",
+				capabilityProfileId: "profile-1",
+				status: "PUBLISHED",
+				revision: "7",
+				materialChange: false,
+				disclaimerVersionIds: [],
+			},
+		],
+	});
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	fireEvent.click(await screen.findByRole("button", { name: "移除" }));
+	expect(screen.getByRole("dialog").textContent).toContain(
+		"待审申请、已批准连接及其权限保持不变",
+	);
+	fireEvent.click(screen.getByRole("button", { name: "确认移除" }));
+	await waitFor(() =>
+		expect(api.retirePublishedConnectionAccessPolicy).toHaveBeenCalledOnce(),
+	);
+	expect(
+		api.retirePublishedConnectionAccessPolicy.mock.calls[0]?.[0],
+	).toMatchObject({
+		policyId: "policy-1",
+		revision: "7",
+	});
+	expect(api.revokeConnectionAccessPolicy).not.toHaveBeenCalled();
+});
+
 it("revokes the current policy with its revision and reason", async () => {
 	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
 		approvalDirectoryEnabled: true,
@@ -1177,7 +1670,7 @@ it("revokes the current policy with its revision and reason", async () => {
 			<ApprovalPoliciesPage />
 		</QueryClientProvider>,
 	);
-	fireEvent.click(await screen.findByRole("button", { name: "撤销策略" }));
+	fireEvent.click(await screen.findByRole("button", { name: "紧急撤销" }));
 	fireEvent.change(screen.getByLabelText("撤销原因"), {
 		target: { value: "紧急安全事件" },
 	});

@@ -3,6 +3,7 @@ import {
 	ConnectionApplicationService,
 	ConnectionOAuthService,
 	ConnectionRecoveryService,
+	type GitHubOAuthProvider,
 	observeProviderFetch,
 	ProviderExecutorRouter,
 	portablePatConsumerId,
@@ -20,7 +21,7 @@ import {
 } from "@agent-infra/connection-store";
 import {
 	BitbucketServerAdapter,
-	bitbucketServerConnectionCatalog,
+	bitbucketServerLegacyProviderReleaseIds,
 	githubConnectionCatalog,
 	JenkinsAdapter,
 	jenkinsCiConnectionCatalog,
@@ -31,6 +32,10 @@ import {
 	OpenConnectorGitHubOAuthAdapter,
 } from "@agent-infra/openconnector-adapter";
 import {
+	bitbucketServerConnectionCatalog,
+	datalegoV5ConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/authorization-compatibility";
+import {
 	ConfluenceServerAdapter,
 	confluenceServerConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/confluence-server";
@@ -38,6 +43,11 @@ import {
 	DataLegoAdapter,
 	datalegoConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/datalego";
+import {
+	DataLegoV4Adapter,
+	datalegoV4ConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/datalego-v4";
+import { DataLegoV5Adapter } from "@agent-infra/openconnector-adapter/datalego-v5";
 import {
 	JiraServerAdapter,
 	JiraServerOAuthTokenProvider,
@@ -47,7 +57,9 @@ import {
 	ManhattanAdapter,
 	ManhattanOAuthAdapter,
 	manhattanConnectionCatalog,
+	manhattanLegacyProviderReleaseIds,
 } from "@agent-infra/openconnector-adapter/manhattan";
+import { connectionProviderCatalogs } from "@agent-infra/openconnector-adapter/provider-catalogs";
 import {
 	RehoboamAdapter,
 	rehoboamConnectionCatalog,
@@ -63,6 +75,66 @@ export async function createConnectionRuntimeApp(
 	environment: Record<string, string | undefined> = process.env,
 ) {
 	return (await createConnectionRuntime(environment)).app;
+}
+
+async function startupPhase<T>(
+	phase: "provider_catalog" | "consumer_declaration",
+	provider: string,
+	operation: () => Promise<T>,
+) {
+	const startedAt = performance.now();
+	let outcome = "failure";
+	try {
+		const result = await operation();
+		outcome = "success";
+		return result;
+	} finally {
+		console.info(
+			JSON.stringify({
+				service: "connection-api",
+				event: "startup_phase",
+				phase,
+				provider,
+				outcome,
+				durationMs: Math.round(performance.now() - startedAt),
+			}),
+		);
+	}
+}
+
+export async function publishStartupConsumerDeclarations(
+	repository: Pick<PostgresConnectionRepository, "publishConsumerDeclaration">,
+	consumers: readonly { id: string; name: string }[],
+	catalogs: readonly {
+		provider: string;
+		providerReleaseId: string;
+		actions: readonly { id: string }[];
+	}[],
+) {
+	// The runtime supplies three Consumers. Keep duplicate IDs and each revision chain serial.
+	const groups = new Map<string, { id: string; name: string }[]>();
+	for (const consumer of consumers) {
+		const group = groups.get(consumer.id) ?? [];
+		group.push(consumer);
+		groups.set(consumer.id, group);
+	}
+	const results = await Promise.allSettled(
+		[...groups.values()].map(async (group) => {
+			for (const consumer of group) {
+				for (const catalog of catalogs) {
+					await startupPhase("consumer_declaration", catalog.provider, () =>
+						repository.publishConsumerDeclaration({
+							consumer,
+							providerReleaseId: catalog.providerReleaseId,
+							actionVersionIds: catalog.actions.map((action) => action.id),
+						}),
+					);
+				}
+			}
+		}),
+	);
+	const failure = results.find((result) => result.status === "rejected");
+	if (failure?.status === "rejected") throw failure.reason;
 }
 
 export async function createConnectionRuntime(
@@ -83,10 +155,27 @@ export async function createConnectionRuntime(
 		config.databaseUrl,
 		config.credentialKey,
 	);
+	const catalogs = connectionProviderCatalogs;
 	const approvalRepository = new PostgresConnectionAccessRequestRepository(
 		config.databaseUrl,
 		(sql, connectionId) =>
 			repository.restoreGrantsAfterRenewal(sql, connectionId),
+		{
+			providerReleases: new Map(
+				catalogs.map((catalog) => [
+					catalog.provider,
+					catalog.providerReleaseId,
+				]),
+			),
+			authorizationCompatibility: new Map(
+				catalogs.map((catalog) => [
+					catalog.providerReleaseId,
+					"authorizationCompatibility" in catalog
+						? catalog.authorizationCompatibility
+						: [],
+				]),
+			),
+		},
 	);
 	const notificationDispatcher = new PostgresConnectionNotificationDispatcher(
 		config.databaseUrl,
@@ -97,36 +186,25 @@ export async function createConnectionRuntime(
 	const approvalCatalog = new PostgresConnectionApprovalRepository(
 		config.databaseUrl,
 	);
-	const catalogs = [
-		githubConnectionCatalog,
-		bitbucketServerConnectionCatalog,
-		jiraServerConnectionCatalog,
-		confluenceServerConnectionCatalog,
-		datalegoConnectionCatalog,
-		jenkinsCiConnectionCatalog,
-		jenkinsReleaseConnectionCatalog,
-		manhattanConnectionCatalog,
-		rehoboamConnectionCatalog,
-	] as const;
+
+	// Reconciliation writes shared upgrade tasks across Providers; keep catalog transactions serial.
 	for (const catalog of catalogs) {
-		await repository.publishProviderCatalog(catalog, {
-			mode: "USER_ACTION_REQUIRED",
-			reason: `${catalog.provider} Provider authorization contract changed`,
-		});
+		await startupPhase("provider_catalog", catalog.provider, () =>
+			repository.publishProviderCatalog(catalog, {
+				mode: "USER_ACTION_REQUIRED",
+				reason: `${catalog.provider} Provider authorization contract changed`,
+			}),
+		);
 	}
-	for (const consumer of [
-		config.directConsumer,
-		{ id: portablePatConsumerId, name: "Portable Connection PAT" },
-		rehoboamAiConsumer,
-	]) {
-		for (const catalog of catalogs) {
-			await repository.publishConsumerDeclaration({
-				actionVersionIds: catalog.actions.map((action) => action.id),
-				consumer,
-				providerReleaseId: catalog.providerReleaseId,
-			});
-		}
-	}
+	await publishStartupConsumerDeclarations(
+		repository,
+		[
+			config.directConsumer,
+			{ id: portablePatConsumerId, name: "Portable Connection PAT" },
+			rehoboamAiConsumer,
+		],
+		catalogs,
+	);
 	const directory = new LdapDirectoryAuthenticator(config.ldap);
 	const oauth = new ConnectionOAuthService({
 		consumer: config.directConsumer,
@@ -159,7 +237,29 @@ export async function createConnectionRuntime(
 					),
 				)
 			: githubPrimaryFetch;
+	const selectGithubOAuthFetcher = config.githubEgressProxyUrl
+		? createGithubOAuthFetcherSelector(
+				githubPrimaryFetch,
+				createGithubOAuthDirectFetch(),
+				() =>
+					console.info(
+						JSON.stringify({
+							event: "github_oauth_egress_selected",
+							reason: "proxy_preflight_transport_failure",
+							route: "direct",
+						}),
+					),
+			)
+		: undefined;
 	const github = new OpenConnectorGitHubAdapter(githubFetch);
+	const githubOAuth = selectGithubOAuthFetcher
+		? createPreSubmitGithubOAuthAdapter(config.github, githubFetch, () =>
+				selectGithubOAuthFetcher(config.github.tokenUrl ?? githubOAuthTokenUrl),
+			)
+		: new OpenConnectorGitHubOAuthAdapter({
+				...config.github,
+				fetcher: githubFetch,
+			});
 	const bitbucketFetch = createGuardedFetch({
 		fetch: observeProviderFetch("bitbucket", fetch),
 		allowPrivateNetwork: false,
@@ -232,15 +332,39 @@ export async function createConnectionRuntime(
 			fetch: observeProviderFetch("datalego", fetch),
 		}),
 	);
+	const datalegoOAuthV4 = new DataLegoV4Adapter(
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: observeProviderFetch("datalego", fetch),
+		}),
+		config.datalegoOAuth,
+	);
+	const datalegoOAuth = new DataLegoV5Adapter(
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: observeProviderFetch("datalego", fetch),
+		}),
+		config.datalegoOAuth,
+	);
 	const executors = new ProviderExecutorRouter({
 		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
+		...Object.fromEntries(
+			bitbucketServerLegacyProviderReleaseIds.map((id) => [id, bitbucket]),
+		),
 		[githubConnectionCatalog.providerReleaseId]: github,
 		[jiraServerConnectionCatalog.providerReleaseId]: jira,
 		[confluenceServerConnectionCatalog.providerReleaseId]: confluence,
 		[datalegoConnectionCatalog.providerReleaseId]: datalego,
+		[datalegoV4ConnectionCatalog.providerReleaseId]: datalegoOAuthV4,
+		[datalegoV5ConnectionCatalog.providerReleaseId]: datalegoOAuth,
 		[jenkinsCiConnectionCatalog.providerReleaseId]: jenkinsCi,
 		[jenkinsReleaseConnectionCatalog.providerReleaseId]: jenkins,
 		[manhattanConnectionCatalog.providerReleaseId]: manhattan,
+		...Object.fromEntries(
+			manhattanLegacyProviderReleaseIds.map((id) => [id, manhattan]),
+		),
 		[rehoboamConnectionCatalog.providerReleaseId]: rehoboam,
 		...Object.fromEntries(
 			rehoboamLegacyProviderReleaseIds.map((id) => [id, rehoboam]),
@@ -249,21 +373,21 @@ export async function createConnectionRuntime(
 	const service = new ConnectionApplicationService(
 		repository,
 		executors,
-		new OpenConnectorGitHubOAuthAdapter({
-			...config.github,
-			fetcher: githubFetch,
-		}),
+		githubOAuth,
 		{
 			bitbucket,
 			confluence,
-			datalego,
+			[datalegoOAuth.providerId]: datalegoOAuth,
 			[jenkins.providerId]: jenkins,
 			[jenkinsCi.providerId]: jenkinsCi,
 			[manhattan.providerId]: manhattan,
 			[rehoboam.providerId]: rehoboam,
 			jira,
 		},
-		{ manhattan: manhattanOAuth },
+		{
+			manhattan: manhattanOAuth,
+			[datalegoOAuth.providerId]: datalegoOAuth,
+		},
 	);
 	const app = createConnectionApp({
 		accessTokens: oauth,
@@ -285,6 +409,7 @@ export async function createConnectionRuntime(
 				githubRedirectUri: config.github.redirectUri,
 				providerRedirectUris: {
 					manhattan: config.manhattanOAuth.redirectUri,
+					[datalegoOAuth.providerId]: config.datalegoOAuth.redirectUri,
 				},
 				service,
 			},
@@ -308,7 +433,7 @@ export async function createConnectionRuntime(
 			bitbucketServerConnectionCatalog.provider,
 			jiraServerConnectionCatalog.provider,
 			confluenceServerConnectionCatalog.provider,
-			datalegoConnectionCatalog.provider,
+			datalegoV5ConnectionCatalog.provider,
 			jenkinsCiConnectionCatalog.provider,
 			jenkinsReleaseConnectionCatalog.provider,
 			rehoboamConnectionCatalog.provider,
@@ -337,6 +462,112 @@ export function createReadFallbackFetch(
 			if (method !== "GET" && method !== "HEAD") throw error;
 			return fallback(input, init);
 		}
+	};
+}
+
+const githubOAuthTokenUrl = "https://github.com/login/oauth/access_token";
+const githubOAuthProfileUrl = "https://api.github.com/user";
+const proxyPreflightTransportErrors = new Set([
+	"ECONNRESET",
+	"ECONNREFUSED",
+	"ETIMEDOUT",
+	"EHOSTUNREACH",
+	"ENETUNREACH",
+	"UND_ERR_CONNECT_TIMEOUT",
+	"UND_ERR_SOCKET",
+]);
+
+export function createPreSubmitGithubOAuthAdapter(
+	options: ConstructorParameters<typeof OpenConnectorGitHubOAuthAdapter>[0],
+	primary: typeof fetch,
+	selectExchangeFetcher: () => Promise<typeof fetch>,
+): GitHubOAuthProvider {
+	const defaultAdapter = new OpenConnectorGitHubOAuthAdapter({
+		...options,
+		fetcher: primary,
+	});
+	return {
+		getAuthorizationUrl: (input) => {
+			const authorizationUrl = defaultAdapter.getAuthorizationUrl(input);
+			if (!input.requestedScopes) return authorizationUrl;
+			const url = new URL(authorizationUrl);
+			url.searchParams.set(
+				"scope",
+				[...input.requestedScopes].sort().join(" "),
+			);
+			return url.toString();
+		},
+		exchangeCode: async (input, onStage) => {
+			const selected = await selectExchangeFetcher();
+			const observedFetch: typeof fetch = (request, init) => {
+				const url = request instanceof Request ? request.url : String(request);
+				const method = (
+					init?.method ?? (request instanceof Request ? request.method : "GET")
+				).toUpperCase();
+				if (url === githubOAuthTokenUrl && method === "POST")
+					onStage?.("token_exchange");
+				if (url === githubOAuthProfileUrl && method === "GET")
+					onStage?.("profile_lookup");
+				return selected(request, init);
+			};
+			return new OpenConnectorGitHubOAuthAdapter({
+				...options,
+				fetcher: observedFetch,
+			}).exchangeCode(input);
+		},
+		refresh: (token) => defaultAdapter.refresh(token),
+	};
+}
+
+export function createGithubOAuthFetcherSelector(
+	primary: typeof fetch,
+	direct: typeof fetch,
+	onDirect: () => void = () => undefined,
+) {
+	return async (tokenUrl: string): Promise<typeof fetch> => {
+		if (tokenUrl !== githubOAuthTokenUrl) return primary;
+		let response: Response;
+		try {
+			response = await primary(tokenUrl, {
+				method: "HEAD",
+				redirect: "manual",
+				signal: AbortSignal.timeout(5_000),
+			});
+		} catch (error) {
+			const code = (error as { cause?: { code?: unknown } })?.cause?.code;
+			if (
+				!(error instanceof Error && error.name === "TimeoutError") &&
+				!(typeof code === "string" && proxyPreflightTransportErrors.has(code))
+			)
+				throw error;
+			onDirect();
+			return direct;
+		}
+		void response.body?.cancel().catch(() => undefined);
+		return primary;
+	};
+}
+
+export function createGithubOAuthDirectFetch(
+	transport: typeof fetch = createGuardedFetch({ maxRedirects: 0 }),
+): typeof fetch {
+	return async (input, init) => {
+		const request = input instanceof Request ? input : undefined;
+		const url = request?.url ?? String(input);
+		const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
+		if (
+			!(
+				(url === githubOAuthTokenUrl && method === "POST") ||
+				(url === githubOAuthProfileUrl && method === "GET")
+			)
+		)
+			throw new Error("GitHub OAuth direct target is not allowed");
+		const response = await transport(input, { ...init, redirect: "manual" });
+		if (response.status >= 300 && response.status < 400) {
+			await response.body?.cancel();
+			throw new Error("GitHub OAuth direct redirect is not allowed");
+		}
+		return response;
 	};
 }
 
