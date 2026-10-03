@@ -122,7 +122,12 @@ export async function revalidateWaitingTask(
 			revoked =
 				disabled.length !== 0 ||
 				(isTaskApiChannelV1(boundary.channelId, boundary.principal) &&
-					(!useGrant || useGrant.revoked));
+					(!useGrant ||
+						useGrant.revoked ||
+						boundary.accessSources.length !== 1 ||
+						boundary.accessSources[0]?.kind !== "api-use" ||
+						boundary.accessSources[0].useGrantRevision !==
+							useGrant.authorizationRevision));
 			if (!revoked) {
 				try {
 					const user = await resolveCurrentPersonalApiUserV1(

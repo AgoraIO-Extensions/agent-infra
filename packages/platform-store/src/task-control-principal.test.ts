@@ -839,6 +839,7 @@ describe("waiting user authority", () => {
 		"grant-revoked",
 		"revoked-directory-unavailable",
 		"grant-revision",
+		"grant-revision-directory-unavailable",
 	] as const)(
 		"durably cancels %s before availability and preserves settlement after restart",
 		async (change) => {
@@ -855,7 +856,10 @@ describe("waiting user authority", () => {
 				change === "revoked-directory-unavailable"
 			)
 				await client`update platform.agent_principal_grants set revoked_at = now() where principal_type = 'user'`;
-			if (change === "grant-revision")
+			if (
+				change === "grant-revision" ||
+				change === "grant-revision-directory-unavailable"
+			)
 				await client`update platform.agent_principal_grants set authorization_revision = 'use-2' where principal_type = 'user'`;
 			const directory = {
 				resolveUser: async (id: string) => {

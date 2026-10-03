@@ -155,6 +155,24 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 		adapter.resolveUser = resolveUser;
 		resolveUser.mockReset().mockResolvedValue(currentUser);
 		await db.unsafe("truncate platform.agents, platform.conversations cascade");
+		await db.unsafe("truncate platform.relay_key_subjects cascade");
+		await db.unsafe(
+			"insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('personal',$1,1,1)",
+			[identity.userId],
+		);
+		await db.unsafe(
+			"insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('personal',$1,1,'controlled-personal-key',$2::text::jsonb)",
+			[
+				identity.userId,
+				JSON.stringify({
+					schemaVersion: 1,
+					purpose: "personal",
+					subjectId: identity.userId,
+					keyId: "controlled-personal-key",
+					keyVersion: 1,
+				}),
+			],
+		);
 		await db.unsafe(
 			"truncate platform.outbox_items, platform.idempotency_records, platform.audit_events",
 		);
@@ -267,6 +285,20 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 				},
 			},
 		]);
+	});
+	it("rejects a missing personal Key without persisting task effects", async () => {
+		const conversationId = await createConversation();
+		await db.unsafe(
+			"update platform.relay_key_subjects set current_version=null where purpose='personal'",
+		);
+		const before = await snapshot();
+		const response = await post(
+			`/conversations/${conversationId}/messages`,
+			{ schemaVersion: 1, text: "synthetic" },
+			"missing-key",
+		);
+		expect(response.status).toBe(404);
+		expect(await snapshot()).toEqual(before);
 	});
 	it.each(["stale", "unavailable", "failure"] as const)(
 		"rejects a %s capability snapshot without persisting a task",
@@ -745,7 +777,8 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 			{ schemaVersion: 1, text: "synthetic" },
 			"revision_race",
 		);
-		expect(response.status).toBe(503);
+		// Changed authority is denied before any acceptance write.
+		expect(response.status).toBe(404);
 		expect(await snapshot()).toEqual(before);
 	});
 });
