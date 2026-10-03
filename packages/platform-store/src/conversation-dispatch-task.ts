@@ -3,7 +3,6 @@ import {
 	type AgentManagementStateV1,
 	type ConversationDispatchExecutionStatusV1,
 	decideConversationTaskWaitingV1,
-	isTaskApiChannelV1,
 	isTaskApplicationAuthorizationCurrentV1,
 	parseTaskAuthorizationBoundaryV1,
 	planTaskSystemControlV1,
@@ -194,10 +193,7 @@ export async function recordTaskStatus(
 	)
 		throw new StaleDispatchLease();
 	const event = publicTaskStatusEventV1({
-		isTask:
-			state.execution.task_wait_order !== null ||
-			(boundary !== undefined &&
-				isTaskApiChannelV1(boundary.channelId, boundary.principal)),
+		isTask: state.execution.task_wait_order !== null || boundary !== undefined,
 		status,
 		reason,
 	});
