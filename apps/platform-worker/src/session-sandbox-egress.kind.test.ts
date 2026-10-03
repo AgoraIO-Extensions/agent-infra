@@ -1,7 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { KubeConfig, type V1NetworkPolicy } from "@kubernetes/client-node";
+import {
+	CoreV1Api,
+	KubeConfig,
+	type KubernetesObject,
+	type V1NetworkPolicy,
+} from "@kubernetes/client-node";
 import { expect, it } from "vitest";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import {
@@ -39,10 +44,15 @@ it.skipIf(!kubeconfig || !image || !evidence)(
 					stdio: ["pipe", "pipe", "pipe"],
 				},
 			);
-		const create = (object: object) => kubectl(["create", "-f", "-"], object);
+		const create = (object: object) =>
+			JSON.parse(
+				kubectl(["create", "-f", "-", "-o", "json"], object),
+			) as KubernetesObject;
 		mkdirSync(evidence, { recursive: true });
 		const config = new KubeConfig();
 		config.loadFromFile(kubeconfig);
+		const core = config.makeApiClient(CoreV1Api);
+		const podUids = new Map<string, string>();
 		const client = createWorkerKubernetesClientV1(namespace, config);
 		const profile = {
 			ref: "controlled-cni-probe",
@@ -121,14 +131,13 @@ it.skipIf(!kubeconfig || !image || !evidence)(
 			}
 			throw new Error("CNI probe did not reach expected result");
 		}
-		create({
+		const createdNamespace = create({
 			apiVersion: "v1",
 			kind: "Namespace",
 			metadata: { name: namespace },
 		});
-		const namespaceUid = JSON.parse(
-			kubectl(["get", "namespace", namespace, "-o", "json"]),
-		).metadata.uid;
+		const namespaceUid = createdNamespace.metadata?.uid;
+		if (!namespaceUid) throw new Error("Missing created Namespace UID");
 		try {
 			const receiptA = await adapter.apply(a);
 			const receiptB = await adapter.apply(b);
@@ -152,7 +161,7 @@ it.skipIf(!kubeconfig || !image || !evidence)(
 							}
 						: {}),
 				};
-				create({
+				const pod = create({
 					apiVersion: "v1",
 					kind: "Pod",
 					metadata: { namespace, name, labels },
@@ -179,6 +188,8 @@ it.skipIf(!kubeconfig || !image || !evidence)(
 						],
 					},
 				});
+				if (!pod.metadata?.uid) throw new Error("Missing created Pod UID");
+				podUids.set(name, pod.metadata.uid);
 				create({
 					apiVersion: "v1",
 					kind: "Service",
@@ -241,8 +252,12 @@ it.skipIf(!kubeconfig || !image || !evidence)(
 			await eventually(() => !fetchFrom("sandbox-a", "unapproved"));
 			outcomes.drift =
 				"widened policy detected and repaired; real packets denied after repair";
+			const modelIP = JSON.parse(
+				kubectl(["-n", namespace, "get", "service", "model", "-o", "json"]),
+			).spec.clusterIP as string;
+			expect(fetchFrom("sandbox-a", modelIP)).toBe(true);
 			await adapter.revoke(a, receiptA);
-			await eventually(() => !fetchFrom("sandbox-a", "model"));
+			await eventually(() => !fetchFrom("sandbox-a", modelIP));
 			expect(fetchFrom("sandbox-b", "model")).toBe(true);
 			outcomes.revocation = "a denied; b still allowed";
 			writeFileSync(
@@ -260,15 +275,23 @@ it.skipIf(!kubeconfig || !image || !evidence)(
 				join(evidence, "cni.json"),
 				kubectl(["-n", "kube-system", "get", "daemonsets", "-o", "json"]),
 			);
-			kubectl([
-				"-n",
-				namespace,
-				"delete",
-				"pod",
-				"sandbox-a",
-				"sandbox-b",
-				"--wait=true",
-			]);
+			for (const name of ["sandbox-a", "sandbox-b"]) {
+				const uid = podUids.get(name);
+				if (!uid) throw new Error("Missing owned Pod UID");
+				await core.deleteNamespacedPod({
+					name,
+					namespace,
+					body: { preconditions: { uid } },
+				});
+				kubectl([
+					"-n",
+					namespace,
+					"wait",
+					"--for=delete",
+					`pod/${name}`,
+					"--timeout=60s",
+				]);
+			}
 			await adapter.revoke(b, receiptB);
 			await adapter.remove(a, receiptA);
 			await adapter.remove(b, receiptB);
@@ -280,19 +303,15 @@ it.skipIf(!kubeconfig || !image || !evidence)(
 				join(evidence, "result.json"),
 				JSON.stringify(outcomes, null, 2),
 			);
-			const current = JSON.parse(
-				kubectl(["get", "namespace", namespace, "-o", "json"]),
-			);
-			expect(
-				current.metadata.uid,
-				"Namespace identity changed; cleanup refused",
-			).toBe(namespaceUid);
-			// This unique namespace was created by this invocation and contains only its probes.
+			// Delete only the Namespace UID returned by this invocation's create.
+			await core.deleteNamespace({
+				name: namespace,
+				body: { preconditions: { uid: namespaceUid } },
+			});
 			kubectl([
-				"delete",
-				"namespace",
-				namespace,
-				"--wait=true",
+				"wait",
+				"--for=delete",
+				`namespace/${namespace}`,
 				"--timeout=60s",
 			]);
 		}

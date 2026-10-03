@@ -63,12 +63,12 @@ export function createSessionSandboxEgressV1(options: {
 	if (!profile.ref || !profile.revision)
 		throw new WorkloadKubernetesError("policy");
 	const egress = workloadEgressRulesV1(profile);
-	function expected(value: SessionSandboxEgressBindingV1, revoked = false) {
+	function assertValidBinding(value: SessionSandboxEgressBindingV1) {
 		if (
 			value.schemaVersion !== 1 ||
 			value.namespace !== client.namespace ||
-			![value.agentId, value.sessionId, value.sandboxId].every((id) =>
-				labelValue.test(id),
+			![value.agentId, value.sessionId, value.sandboxId].every(
+				(id) => typeof id === "string" && labelValue.test(id),
 			) ||
 			typeof value.principalId !== "string" ||
 			!value.principalId ||
@@ -84,6 +84,9 @@ export function createSessionSandboxEgressV1(options: {
 			value.leaseExpiresAt <= Date.now()
 		)
 			throw new WorkloadKubernetesError("policy");
+	}
+	function expected(value: SessionSandboxEgressBindingV1, revoked = false) {
+		assertValidBinding(value);
 		const labels = {
 			[`${prefix}agent-id`]: value.agentId,
 			[`${prefix}session-id`]: value.sessionId,
@@ -199,7 +202,7 @@ export function createSessionSandboxEgressV1(options: {
 				);
 				if (current) owned(current, desired, known, true);
 				else if (known) throw new WorkloadKubernetesError("conflict");
-				expected(binding); // Lease can expire during API reads.
+				assertValidBinding(binding); // Lease can expire during API reads.
 				const applied = current
 					? matchesNetworkPolicySpec(current.spec, desired.spec) &&
 						Object.entries(desired.metadata?.annotations ?? {}).every(
@@ -225,7 +228,7 @@ export function createSessionSandboxEgressV1(options: {
 				if (!matchesNetworkPolicySpec(observed.spec, desired.spec))
 					throw new WorkloadKubernetesError("conflict");
 				await exclusive(desired);
-				expected(binding);
+				assertValidBinding(binding);
 				return receipt(observed);
 			},
 		);
@@ -253,7 +256,7 @@ export function createSessionSandboxEgressV1(options: {
 				if (!current) return false;
 				owned(current, desired, known);
 				await exclusive(desired);
-				expected(binding);
+				assertValidBinding(binding);
 				return matchesNetworkPolicySpec(current.spec, desired.spec);
 			});
 		},
@@ -277,7 +280,7 @@ export function createSessionSandboxEgressV1(options: {
 					!matchesNetworkPolicySpec(current.spec, desired.spec)
 				)
 					throw new WorkloadKubernetesError("policy");
-				expected(binding);
+				assertValidBinding(binding);
 				await client.delete(current); // Existing client uses UID/resourceVersion preconditions.
 			});
 		},
