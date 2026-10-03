@@ -197,12 +197,12 @@ export async function recordTaskStatus(
 		isTask:
 			state.execution.task_wait_order !== null ||
 			(state.execution.principal_type !== "user" &&
-				state.execution.principal_type !== "application"
-					? false
-					: isTaskApiChannelV1(state.execution.channel_id, {
-							kind: state.execution.principal_type,
-							id: state.execution.actor_id,
-						})),
+			state.execution.principal_type !== "application"
+				? false
+				: isTaskApiChannelV1(state.execution.channel_id, {
+						kind: state.execution.principal_type,
+						id: state.execution.actor_id,
+					})),
 		status,
 		reason,
 	});
