@@ -825,34 +825,15 @@ export function validateModelAccess(
 	if (
 		!isPlainRecord(input) ||
 		!exactKeys(input, ["endpoint", "credential"]) ||
-		typeof input.endpoint !== "string" ||
-		input.endpoint.length > 2048 ||
-		/[\s\\?#]/.test(input.endpoint) ||
 		typeof input.credential !== "string" ||
 		!/^[\x21-\x7e]{16,8192}$/.test(input.credential)
 	) {
 		configurationInvalid();
 	}
-	try {
-		const endpoint = new URL(input.endpoint);
-		// Match the literal authority, not URL-normalized numeric host aliases.
-		const literalLoopback =
-			/^http:\/\/(?:127\.0\.0\.1|\[::1\])(?::[0-9]+)?(?:\/|$)/.test(
-				input.endpoint,
-			);
-		if (
-			(endpoint.protocol !== "https:" && !literalLoopback) ||
-			endpoint.username ||
-			endpoint.password ||
-			endpoint.search ||
-			endpoint.hash
-		) {
-			configurationInvalid();
-		}
-	} catch {
-		configurationInvalid();
-	}
-	return { endpoint: input.endpoint, credential: input.credential };
+	return {
+		endpoint: validateModelEndpoint(input.endpoint),
+		credential: input.credential,
+	};
 }
 
 export function validateModelEndpoint(input: unknown): string {
@@ -864,6 +845,7 @@ export function validateModelEndpoint(input: unknown): string {
 		configurationInvalid();
 	try {
 		const endpoint = new URL(input);
+		// Match the literal authority, not URL-normalized numeric host aliases.
 		const literalLoopback =
 			/^http:\/\/(?:127\.0\.0\.1|\[::1\])(?::[0-9]+)?(?:\/|$)/.test(input);
 		if (
