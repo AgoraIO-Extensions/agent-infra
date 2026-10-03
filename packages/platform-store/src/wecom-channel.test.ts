@@ -2,8 +2,8 @@ import { createConnection, createServer, type Socket } from "node:net";
 import {
 	createWecomAuthorizationV1,
 	createWecomChannelV1,
-	type WecomConnectionFenceV1,
 	type WecomChannelStorePortV1,
+	type WecomConnectionFenceV1,
 	type WecomIdentityPortV1,
 	type WecomMessageV1,
 	wecomChannelIdV1,

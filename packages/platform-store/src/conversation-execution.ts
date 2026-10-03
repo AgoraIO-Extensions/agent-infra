@@ -29,14 +29,13 @@ import {
 } from "./conversation-dispatch-sql.js";
 import { finishWaitingTask } from "./conversation-dispatch-task.js";
 import {
-	type AcceptedExecutionKeyProjectionV4,
-	readAcceptedExecutionKeyInTransactionV4,
-} from "./conversation-execution-accepted-key.js";
-
-import {
 	awaitConversationExecutionQueryV1,
 	bindConversationExecutionSignalV1,
 } from "./conversation-execution-abort.js";
+import {
+	type AcceptedExecutionKeyProjectionV4,
+	readAcceptedExecutionKeyInTransactionV4,
+} from "./conversation-execution-accepted-key.js";
 import {
 	type ConversationQueryProject,
 	type ConversationQueryRequest,
@@ -136,7 +135,7 @@ export class PostgresConversationExecutionTransactionV1
 					readonly transaction: Transaction;
 					readonly userDirectory?: TaskUserDirectoryV1;
 					readonly signal?: AbortSignal;
-				  },
+			  },
 	) {
 		this.#userDirectory = options.userDirectory;
 		if ("transaction" in options) {

@@ -17,7 +17,6 @@ import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { readAgentManagementState } from "./agent-management.js";
-import { awaitConversationExecutionQueryV1 } from "./conversation-execution-abort.js";
 import {
 	readCurrentTaskApiUseGrantV1,
 	readCurrentTaskApplicationV1,
@@ -28,6 +27,7 @@ import {
 	lockOutbox,
 } from "./conversation-dispatch-sql.js";
 import { finishWaitingTask } from "./conversation-dispatch-task.js";
+import { awaitConversationExecutionQueryV1 } from "./conversation-execution-abort.js";
 import {
 	agents,
 	conversationExecutions,
