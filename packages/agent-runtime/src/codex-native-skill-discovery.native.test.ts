@@ -57,6 +57,10 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 				response.writeHead(503);
 				response.end();
 			});
+			const secondaryProvider = createServer((_, response) => {
+				response.writeHead(503);
+				response.end();
+			});
 			const requests: CodexAppServerFrame[] = [];
 			const notifications: string[] = [];
 			const http = channel("http.server.request.start");
@@ -72,10 +76,20 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 				await new Promise<void>((resolve) =>
 					provider.listen(0, "127.0.0.1", resolve),
 				);
+				await new Promise<void>((resolve) =>
+					secondaryProvider.listen(0, "127.0.0.1", resolve),
+				);
 				const address = provider.address();
-				if (!address || typeof address === "string")
-					throw new Error("Missing provider");
+				const secondaryAddress = secondaryProvider.address();
+				if (
+					!address ||
+					typeof address === "string" ||
+					!secondaryAddress ||
+					typeof secondaryAddress === "string"
+				)
+					throw new Error("Missing providers");
 				const endpoint = `http://127.0.0.1:${address.port}`;
+				const secondaryEndpoint = `http://127.0.0.1:${secondaryAddress.port}`;
 				const seeded = await seedNativeCommandState(
 					directory,
 					"native-skill-thread",
@@ -94,6 +108,13 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 								reasoningLevels: ["high"],
 								endpoint,
 								credential: "synthetic-native-read-credential",
+							},
+							{
+								modelOptionId: "secondary",
+								model: "gpt-5.6-sol",
+								reasoningLevels: ["high"],
+								endpoint: secondaryEndpoint,
+								credential: "synthetic-native-read-credential-2",
 							},
 						],
 						installedSkill: descriptor,
@@ -136,14 +157,22 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 					expect.any(String),
 				]);
 				expect(notifications).toContain("skills/changed");
-				expect(
-					[...httpByPort.values()].reduce((sum, count) => sum + count, 0),
-				).toBe(0);
+				expect(requests.map((request) => request.method)).toEqual([
+					"skills/extraRoots/set",
+					"skills/list",
+				]);
+				expect(httpByPort.get(address.port) ?? 0).toBe(0);
+				expect(httpByPort.get(secondaryAddress.port) ?? 0).toBe(0);
 			} finally {
 				await driver?.close();
 				http.unsubscribe(observe);
 				await new Promise<void>((resolve, reject) =>
 					provider.close((error) => (error ? reject(error) : resolve())),
+				);
+				await new Promise<void>((resolve, reject) =>
+					secondaryProvider.close((error) =>
+						error ? reject(error) : resolve(),
+					),
 				);
 				await rm(directory, { recursive: true, force: true });
 			}
