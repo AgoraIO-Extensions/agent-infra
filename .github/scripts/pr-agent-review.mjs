@@ -25,6 +25,7 @@ const agentAuthor = (user) =>
 
 const stageCategories = {
   "event-read": "input",
+  "read-output": "input-missing",
   "validate-output": "validation",
   "validate-scope": "validation",
   "target-entry": "target",
@@ -401,6 +402,10 @@ export async function publishPrAgentReview(context) {
   validateContext(context);
   markStage(context, "target-entry");
   const current = await requirePrAgentTarget(context);
+  if (context.scope?.mode !== "unchanged" && (raw === undefined || raw === "")) {
+    markStage(context, "read-output");
+    throw new Error("PR-Agent publisher input is missing");
+  }
   markStage(context, "validate-output");
   const findings = context.scope?.mode === "unchanged" ? [] : parsePrAgentReview(raw);
   let verifiedRange;
