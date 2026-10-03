@@ -170,7 +170,7 @@ beforeEach(async () => {
 	await sql`delete from platform.platform_user_disables`;
 	await sql`insert into platform.agents (id, current_configuration_revision, authorization_revision) values ('agent_01', 7, 'auth-1')`;
 	await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent_01', 'owner_01', now())`;
-	await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, configuration) values ('agent_01', 7, 'template_01', ${sql.json(fixture as unknown as postgres.JSONValue)})`;
+	await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values ('agent_01', 7, 'template_01', now(), ${sql.json(fixture as unknown as postgres.JSONValue)})`;
 	const keys = createAgentDefaultRelayKeyUseCaseV1({
 		transaction: store,
 		currentIdentity: async () => ({
