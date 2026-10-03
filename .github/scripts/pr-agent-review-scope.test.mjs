@@ -3,7 +3,7 @@ import test from "node:test";
 import { gateExternalId, GATE_PUBLISHER_APP_ID } from "./check-run-contract.mjs";
 import { publishPrAgentReview } from "./pr-agent-review.mjs";
 import { buildCoverageCheckOutput } from "./review-coverage.mjs";
-import { issueContractHash, prepareReviewScope, validateDiffInput, verifyReviewScope } from "./pr-agent-review-scope.mjs";
+import { issueContractHash, prepareReviewScope, validateDiffInput, verifyRangeContents, verifyReviewScope } from "./pr-agent-review-scope.mjs";
 
 const repository = "org/repo";
 const base = "b".repeat(40);
@@ -22,6 +22,10 @@ function fixture() {
       head: { sha: state.head, repo: { full_name: repository } },
       base: { sha: base, ref: "main", repo: { full_name: repository } } };
     if (path.endsWith("/issues/7")) return state.issue;
+    if (path.includes("/contents/")) {
+      const ref = new URL(`https://example.test${path}`).searchParams.get("ref");
+      return { type: "file", sha: ref, encoding: "base64", content: Buffer.from(`${source[ref] ?? "new base"}\n`).toString("base64") };
+    }
     const compare = /\/compare\/([a-f0-9]+)\.\.\.([a-f0-9]+)$/.exec(path);
     if (compare) {
       const [, from, to] = compare;
@@ -269,4 +273,29 @@ test("no-hunk changes must prove empty content, pure rename or mode-only changes
   }
   const rename = "diff --git a/old b/f\nsimilarity index 50%\nrename from old\nrename to f\nindex 1111111..2222222 100644\n";
   assert.throws(() => validateDiffInput(rename, [{ filename: "f", previous_filename: "old", status: "renamed" }]), /missing content hunks/);
+});
+
+
+test("no-newline markers preserve source bytes and do not consume hunk counts", async () => {
+  const file = { filename: "src/math.ts", status: "modified" };
+  const diff = patch("before", "after").replace("-before\n", "-before\n\\ No newline at end of file\n") + "\\ No newline at end of file\n";
+  assert.ok(validateDiffInput(diff, [file]).diffBytes);
+  const request = async (path) => ({ type: "file", sha: base, encoding: "base64",
+    content: Buffer.from(path.endsWith(`ref=${base}`) ? "before" : "after").toString("base64") });
+  await verifyRangeContents({ repository, expectedHead: first, request }, base, diff, [file]);
+});
+
+test("immutable contents reject a complete omitted hunk even when numstat agrees", async () => {
+  const before = "one\n" + "keep\n".repeat(8) + "ten\n";
+  const after = "ONE\n" + "keep\n".repeat(8) + "TEN\n";
+  const truncated = patch("one", "ONE");
+  const complete = truncated + "@@ -10 +10 @@\n-ten\n+TEN\n";
+  const files = [{ filename: "src/math.ts", status: "modified" }];
+  const request = async (path) => ({ type: "file", sha: base, encoding: "base64",
+    content: Buffer.from(path.endsWith(`ref=${base}`) ? before : after).toString("base64") });
+  const context = { repository, expectedHead: first, request };
+  assert.ok(validateDiffInput(truncated, files).diffBytes);
+  await assert.rejects(verifyRangeContents(context, base, truncated, files), /immutable contents/);
+  await verifyRangeContents(context, base, complete, files);
+  await assert.rejects(verifyRangeContents({ ...context, request: async () => ({}) }, base, complete, files), /contents are invalid/);
 });

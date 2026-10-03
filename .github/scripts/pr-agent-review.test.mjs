@@ -222,6 +222,8 @@ async function gitQuotedPathDiff() {
       const lines = before.trimEnd().split("\n");
       lines[file.line - 1] = "regression";
       await writeFile(join(directory, file.filename), `${lines.join("\n")}\n`);
+      file.before = before;
+      file.after = `${lines.join("\n")}\n`;
       file.patch = git("diff", "--no-ext-diff", "--no-textconv", "--", file.filename);
     }
     return { files, diff: git("diff", "--no-ext-diff", "--no-textconv") };
@@ -249,6 +251,13 @@ test("publishes and reads back nonempty scoped findings for Git-quoted paths", a
       return { ...current, body: "Closes #7", base: { ...current.base, ref: "main", repo: { full_name: context.repository } } };
     }
     if (path.endsWith("/issues/7")) return issue;
+    if (path.includes("/contents/")) {
+      const url = new URL(`https://example.test${path}`);
+      const filename = decodeURIComponent(url.pathname.split("/contents/")[1]);
+      const file = files.find((candidate) => candidate.filename === filename);
+      const value = url.searchParams.get("ref") === head ? file.after : file.before;
+      return { type: "file", sha: head, encoding: "base64", content: Buffer.from(value).toString("base64") };
+    }
     if (path.includes("/compare/")) return options.responseType === "text" ? diff
       : { status: "ahead", merge_base_commit: { sha: "b".repeat(40) },
           files: files.map(({ filename }) => ({ filename, status: "modified", additions: 1, deletions: 1 })) };

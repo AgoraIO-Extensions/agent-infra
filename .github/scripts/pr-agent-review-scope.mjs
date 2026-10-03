@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { appendFile, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { selectCurrentGateCheck } from "./check-run-contract.mjs";
 import { extractPrimaryIssueNumbers } from "./pr-gates.mjs";
-import { githubRequest, PrAgentTargetSuperseded, requirePrAgentTarget, verifyPrAgentPublication } from "./pr-agent-review.mjs";
+import { githubRequest, PrAgentTargetSuperseded, requirePrAgentTarget, readGitHubFile, verifyPrAgentPublication } from "./pr-agent-review.mjs";
 
 const CHECK = "Automated Review Coverage";
 const sha = (value) => typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
@@ -194,13 +196,48 @@ export function validateDiffInput(diff, files) {
   return { diffSha256: hash(diff), diffBytes: Buffer.byteLength(diff) };
 }
 
+// Independently apply the supplied hunks to immutable source contents. Numstat
+// alone cannot detect a missing whole hunk with otherwise valid syntax.
+export async function verifyRangeContents(context, fromSha, diff, files) {
+  if (!files.length) return;
+  const directory = await mkdtemp(join(tmpdir(), "pr-agent-range-"));
+  try {
+    for (const block of diff.split(/(?=^diff --git )/m)) {
+      const stat = execFileSync("git", ["apply", "--numstat", "-z"],
+        { input: block, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      const filename = stat.slice(stat.indexOf("\t", stat.indexOf("\t") + 1) + 1, -1);
+      const file = files.find((candidate) => candidate.filename === filename);
+      if (!file) throw new Error("PR-Agent range file identity is invalid");
+      const read = (name, ref) => readGitHubFile({ ...context, filename: name, ref, encoding: null });
+      const [before, after] = await Promise.all([
+        file.status === "added" ? Buffer.alloc(0) : read(file.previous_filename ?? filename, fromSha),
+        file.status === "removed" ? Buffer.alloc(0) : read(filename, context.expectedHead),
+      ]);
+      const hunkStart = block.indexOf("\n@@ ");
+      await writeFile(join(directory, "file"), before, "utf8");
+      if (hunkStart !== -1) {
+        // Synthetic fixed paths avoid writing repository-controlled filenames.
+        const patch = "diff --git a/file b/file\n--- a/file\n+++ b/file\n" + block.slice(hunkStart + 1);
+        try {
+          execFileSync("git", ["apply", "--unidiff-zero", "--whitespace=nowarn", "-"],
+            { cwd: directory, input: patch, stdio: ["pipe", "pipe", "pipe"] });
+        } catch { throw new Error("PR-Agent range hunks do not match immutable contents"); }
+      }
+      if (!(await readFile(join(directory, "file"))).equals(after))
+        throw new Error("PR-Agent range diff does not match immutable contents");
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+}
+
 async function readRange(context, fromSha) {
   const path = `/repos/${context.repository}/compare/${fromSha}...${context.expectedHead}`;
   const comparison = await context.request(path);
   if (comparison.merge_base_commit?.sha !== fromSha || !["ahead", "identical"].includes(comparison.status))
     throw new Error("PR-Agent range baseline is not an ancestor");
   const diff = await context.request(path, { responseType: "text", headers: { Accept: "application/vnd.github.diff" } });
-  return { diff, ...validateDiffInput(diff, comparison.files) };
+  const fingerprint = validateDiffInput(diff, comparison.files);
+  await verifyRangeContents(context, fromSha, diff, comparison.files);
+  return { diff, ...fingerprint };
 }
 
 export async function prepareReviewScope(context, primary) {
