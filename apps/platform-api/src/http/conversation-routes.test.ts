@@ -1085,6 +1085,76 @@ describe("Conversation persisted SSE", () => {
 		expect(input.query.replay).toHaveBeenCalledTimes(reads);
 	});
 
+	it.each([1, 2])(
+		"reauthorizes stopped execution replay when revocation races a stop on V%d",
+		async (version) => {
+			const input = dependencies();
+			const pendingReplay = Promise.withResolvers<void>();
+			const releaseReplay = Promise.withResolvers<void>();
+			const controller = new AbortController();
+			let revoked = false;
+			input.authorization.authorize = vi
+				.fn()
+				.mockImplementation(async () =>
+					revoked ? { outcome: "revoked" } : { outcome: "allowed", authority },
+				);
+			input.query.replay = vi
+				.fn()
+				.mockResolvedValueOnce({
+					outcome: "events",
+					events: [],
+					resumeCursor: "cursor-0",
+				})
+				.mockImplementation(async () => {
+					pendingReplay.resolve();
+					await releaseReplay.promise;
+					return {
+						outcome: "events",
+						events: [
+							{
+								...persistedEvent,
+								eventType: "execution.status",
+								eventPayload: { type: "execution.status", status: "cancelled" },
+							},
+						],
+						resumeCursor: "cursor-1",
+					};
+				});
+			const app = testApp(input).app;
+			try {
+				const response = await app.request(
+					`/api/v${version}/conversations/conversation-1/events?cursor=cursor-0`,
+					{ signal: controller.signal },
+				);
+				await pendingReplay.promise;
+				const stop = await app.request(
+					"/api/v1/conversations/conversation-1/stops",
+					{
+						method: "POST",
+						headers: commandHeaders,
+						body: JSON.stringify({
+							schemaVersion: 1,
+							targetExecutionId: "execution-1",
+						}),
+					},
+				);
+				expect(stop.status).toBe(202);
+				expect(input.commands).toHaveBeenCalledWith(identity);
+				// Stop acceptance cannot preserve the stream's prior authorization.
+				revoked = true;
+				releaseReplay.resolve();
+				const body = await response.text();
+				expect(body).toContain(": conversation-stream.closed revoked");
+				expect(body).toContain("authorization.revoked");
+				expect(body).not.toMatch(/execution.status|cancelled|event-1|cursor-1/);
+				expect(input.query.replay).toHaveBeenCalledTimes(2);
+			} finally {
+				controller.abort();
+				releaseReplay.resolve();
+			}
+		},
+	);
+
 	it("closes a real HTTP idle SSE connection within the configured detection budget", async () => {
 		const poll = 30;
 		const timeout = 50;
