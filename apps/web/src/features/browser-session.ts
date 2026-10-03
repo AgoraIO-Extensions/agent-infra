@@ -41,7 +41,8 @@ export async function loadBrowserSession(
 			client,
 			responseStyle: "fields",
 			throwOnError: false,
-		}),
+			signal: AbortSignal.timeout(3_000),
+		}).catch(() => undefined),
 	]);
 	const generation = result.response?.headers.get(
 		"x-platform-session-generation",
@@ -50,7 +51,7 @@ export async function loadBrowserSession(
 		? {
 				kind: "ready",
 				session: result.data,
-				...(capability.data && "status" in capability.data
+				...(capability?.data && "status" in capability.data
 					? { connection: capability.data }
 					: {}),
 				...(generation && /^[A-Za-z0-9_-]{43}$/.test(generation)
