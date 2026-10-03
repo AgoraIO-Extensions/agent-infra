@@ -32,6 +32,7 @@ describe("shared browser session reader", () => {
 		});
 		expect(requests.map((request) => [request.method, request.url])).toEqual([
 			["GET", "https://platform.example.test/api/v1/session"],
+			["GET", "https://platform.example.test/api/v1/connection/capability"],
 		]);
 	});
 

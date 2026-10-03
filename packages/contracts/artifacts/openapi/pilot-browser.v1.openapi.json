@@ -1675,6 +1675,72 @@
         ],
         "type": "object"
       },
+      "ConnectionCapabilityProjectionV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "configFingerprint": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "mcpPath": {
+                "pattern": "^\\/.*",
+                "type": "string"
+              },
+              "publicOrigin": {
+                "format": "uri",
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "status": {
+                "const": "available",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "schemaVersion",
+              "publicOrigin",
+              "mcpPath",
+              "configFingerprint"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "enum": [
+                  "missing",
+                  "invalid",
+                  "unapproved",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "status": {
+                "const": "unavailable",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "schemaVersion",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ],
+        "type": "object"
+      },
       "ConversationDetailProjectionV1": {
         "additionalProperties": false,
         "properties": {
@@ -7787,6 +7853,93 @@
             "platformApiCredential": []
           }
         ]
+      }
+    },
+    "/api/v1/connection/capability": {
+      "get": {
+        "operationId": "getConnectionCapability",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionCapabilityProjectionV1"
+                }
+              }
+            },
+            "description": "Server-resolved Connection capability"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
       }
     },
     "/api/v1/conversations/{conversationId}": {

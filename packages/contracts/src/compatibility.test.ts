@@ -1094,6 +1094,29 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toBe("");
 	});
 
+	it("accepts the additive server-resolved Connection capability", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		delete previous.components.schemas.BrowserSessionProjectionV1.properties
+			.connection;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-connection-capability-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			const result = comparePaths(currentPath, previousPath);
+			expect(result.status).toBe(0);
+			expect(result.stderr).toBe("");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects every deviation from the fallback OpenAPI addition", async () => {
 		const previous = fixturePath("openapi-component-ref-base");
 		const additive = JSON.parse(

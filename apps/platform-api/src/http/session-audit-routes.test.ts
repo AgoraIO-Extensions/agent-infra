@@ -19,7 +19,16 @@ const activeIdentity = {
 	authorizationRevision: "authorization-1",
 };
 
-function createApp(identity = activeIdentity) {
+function createApp(
+	identity = activeIdentity,
+	connectionCapability?: {
+		status: "available";
+		schemaVersion: 1;
+		publicOrigin: string;
+		mcpPath: string;
+		configFingerprint: string;
+	},
+) {
 	const app = new Hono();
 	app.onError((error, context) =>
 		error instanceof HttpProtocolError
@@ -54,7 +63,11 @@ function createApp(identity = activeIdentity) {
 			nextCursor: "audit-next",
 		}),
 	};
-	registerSessionAuditRoutes(app, { identity: identityAdapter, audit });
+	registerSessionAuditRoutes(app, {
+		identity: identityAdapter,
+		audit,
+		...(connectionCapability ? { connectionCapability } : {}),
+	});
 	return { app, identityAdapter, audit };
 }
 
@@ -120,6 +133,27 @@ describe("session and audit routes", () => {
 		expect(identityAdapter.hydrateUsers).toHaveBeenCalledWith(["actor-1"]);
 		expect(JSON.stringify(body)).not.toContain('"kind":"user"');
 		expect(JSON.stringify(body)).not.toContain("details");
+	});
+
+	it("returns only the server-resolved Connection capability", async () => {
+		const { app } = createApp(activeIdentity, {
+			status: "available",
+			schemaVersion: 1,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			configFingerprint:
+				"7821b88d0acd40836eed51877a2e959774434f72cc4672475f7da41c89359331",
+		});
+		const response = await app.request("/api/v1/connection/capability");
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			status: "available",
+			schemaVersion: 1,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			configFingerprint:
+				"7821b88d0acd40836eed51877a2e959774434f72cc4672475f7da41c89359331",
+		});
 	});
 
 	it("rejects non-administrators before querying audit persistence", async () => {

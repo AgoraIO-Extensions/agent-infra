@@ -46,6 +46,13 @@ const identity = (
 	userId: string,
 	admin = false,
 	sessionGeneration?: string,
+	connection?: {
+		status: "available";
+		schemaVersion: 1;
+		publicOrigin: string;
+		mcpPath: string;
+		configFingerprint: string;
+	},
 ) => ({
 	kind: "ready",
 	session: {
@@ -56,6 +63,7 @@ const identity = (
 			roles: admin ? ["employee", "system_admin"] : ["employee"],
 		},
 	},
+	...(connection ? { connection } : {}),
 	...(sessionGeneration ? { sessionGeneration } : {}),
 });
 afterEach(() => {
@@ -257,6 +265,23 @@ describe("application session boundary", () => {
 	);
 });
 describe("deployment links", () => {
+	it("uses the server session capability for the Connection entry", () => {
+		setup(
+			identity("owner", false, undefined, {
+				status: "available",
+				schemaVersion: 1,
+				publicOrigin: "https://connection.example.test",
+				mcpPath: "/mcp",
+				configFingerprint: "a".repeat(64),
+			}),
+		);
+		expect(
+			screen
+				.getByRole("link", { name: /我的 Connection/ })
+				.getAttribute("href"),
+		).toBe("https://connection.example.test/mcp");
+	});
+
 	it("accepts configured HTTPS or local paths and rejects executable or ambiguous URLs", () => {
 		expect(safeDeploymentUrl("/__local/login")).toBe("/__local/login");
 		expect(safeDeploymentUrl("https://identity.example.test/login")).toBe(

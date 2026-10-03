@@ -11,8 +11,15 @@ const configurationModule = process.env.PLATFORM_API_CONFIGURATION_MODULE;
 if (!configurationModule || new URL(configurationModule).protocol !== "file:") {
 	throw new Error("PLATFORM_API_CONFIGURATION_MODULE must be a file URL");
 }
-const { ldap, isPlatformDisabled, organizationIds, publicOrigin, apiInput } =
-	await import(configurationModule);
+const {
+	ldap,
+	isPlatformDisabled,
+	organizationIds,
+	publicOrigin,
+	connectionConsumerProfile,
+	connectionConsumerProfileApproved,
+	apiInput,
+} = await import(configurationModule);
 const databaseUrl = process.env.PLATFORM_DATABASE_URL;
 if (!databaseUrl) throw new Error("PLATFORM_DATABASE_URL is required");
 if (typeof ldap?.verifyCurrentStatus !== "function") {
@@ -37,6 +44,8 @@ export const browserAuth = browser.browserAuth;
 export function createPlatformApiAssemblyInput() {
 	return createProductionPlatformApiAssemblyInputV1({
 		...apiInput,
+		connectionConsumerProfile,
+		connectionConsumerProfileApproved,
 		databaseUrl,
 		identity: browser.identity,
 	});

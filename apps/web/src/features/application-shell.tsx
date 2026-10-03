@@ -150,7 +150,16 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const admin = user?.roles.includes("system_admin") ?? false;
 	const loginUrl = safeDeploymentUrl(import.meta.env.VITE_PLATFORM_LOGIN_URL);
 	const logoutUrl = safeDeploymentUrl(import.meta.env.VITE_PLATFORM_LOGOUT_URL);
-	const connectionUrl = safeDeploymentUrl(import.meta.env.VITE_CONNECTION_URL);
+	const connectionUrl =
+		session.state.kind === "ready" &&
+		session.state.connection?.status === "available"
+			? safeDeploymentUrl(
+					new URL(
+						session.state.connection.mcpPath,
+						session.state.connection.publicOrigin,
+					).href,
+				)
+			: undefined;
 	const development =
 		import.meta.env.DEV &&
 		import.meta.env.VITE_PLATFORM_DEVELOPMENT_MODE === "controlled";
