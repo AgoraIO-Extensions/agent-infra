@@ -3,6 +3,7 @@
 import type {
 	AccessOptionsResponse,
 	AccessRequestsResponse,
+	ProviderUpgradeReadiness,
 	ProviderUpgradeTask,
 } from "@agent-infra/connection-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -20,6 +21,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectionApiError } from "../api";
 
 const api = vi.hoisted(() => ({
+	getProviderUpgradeReadiness: vi.fn(
+		async (connectionId: string): Promise<ProviderUpgradeReadiness> => ({
+			connectionId,
+			providerId: connectionId.includes("manhattan") ? "manhattan" : "rehoboam",
+			targetProviderReleaseId: connectionId.includes("manhattan")
+				? "manhattan-connection-v5"
+				: "fixture-v2",
+			nextAction: connectionId.includes("manhattan")
+				? ("REQUEST_APPROVAL" as const)
+				: ("UPGRADE" as const),
+			reason: "fixture",
+		}),
+	),
 	confirmAuthorization: vi.fn(async () => ({ grantId: "grant-created" })),
 	connectProviderCredential: vi.fn(async () => ({
 		connectionId: "connection-bitbucket",
@@ -719,7 +733,7 @@ describe("Connection 管理 mutation wiring", () => {
 			renderPage(<ConnectionsPage />);
 			fireEvent.click(
 				await screen.findByRole("button", {
-					name: "一键升级 2 个连接",
+					name: "一键升级 3 个连接",
 				}),
 			);
 
@@ -731,7 +745,7 @@ describe("Connection 管理 mutation wiring", () => {
 			).toEqual(["connection-alpha", "connection-beta"]);
 			expect(
 				await screen.findByText(
-					`批量处理完成：1 个连接已升级，1 个失败，1 条授权待确认。${approvalRequired ? " 当前审批不能直接用于新版连接，请申请新版能力，或联系管理员确认兼容升级已开放。" : ""}`,
+					`批量处理完成：1 个连接已升级，1 个失败，1 条授权待确认。 1 个需要申请新版能力，0 个需要重新连接，请分别处理。${approvalRequired ? " 当前审批不能直接用于新版连接，请申请新版能力，或联系管理员确认兼容升级已开放。" : ""}`,
 				),
 			).toBeTruthy();
 			expect(
@@ -767,6 +781,43 @@ describe("Connection 管理 mutation wiring", () => {
 			),
 		);
 		expect(screen.queryByRole("heading", { name: "连接 Rehoboam" })).toBeNull();
+	});
+
+	it("升级准备要求重新授权时打开原账号的 OAuth，不执行凭据升级", async () => {
+		const initial = await api.getConnections();
+		const connection = initial.overview.connections[0];
+		if (!connection) throw new Error("Missing fixture");
+		initial.overview.upgradeTasks = [
+			{
+				campaignId: "campaign-data",
+				connectionId: connection.id,
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "datalego",
+				reason: "upgrade",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "datalego-connection-v5",
+				taskId: "task-data",
+			},
+		];
+		api.getConnections.mockResolvedValueOnce(initial);
+		api.getProviderUpgradeReadiness.mockResolvedValueOnce({
+			connectionId: connection.id,
+			providerId: "datalego",
+			targetProviderReleaseId: "datalego-connection-v5",
+			nextAction: "REAUTHORIZE",
+			reason: "CREDENTIAL_REAUTHORIZATION_REQUIRED",
+		});
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(await screen.findByRole("button", { name: "处理升级" }));
+		await waitFor(() =>
+			expect(calls(api.startDatalegoOAuth)[0]?.[0]).toEqual({
+				reconnectConnectionId: connection.id,
+			}),
+		);
+		expect(api.upgradeProviderConnection).not.toHaveBeenCalled();
+		expect(api.submitConnectionAccessRequest).not.toHaveBeenCalled();
 	});
 
 	it("已连接目标版本后展示对应账号及待确认的客户端授权", async () => {
@@ -849,9 +900,7 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 		renderPage(<ConnectionsPage />);
 
-		fireEvent.click(
-			await screen.findByRole("button", { name: "申请新版能力" }),
-		);
+		fireEvent.click(await screen.findByRole("button", { name: "处理升级" }));
 		expect(
 			await screen.findByText("Manhattan", { selector: "h2" }),
 		).toBeTruthy();

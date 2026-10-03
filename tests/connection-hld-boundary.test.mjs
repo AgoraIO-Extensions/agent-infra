@@ -26,13 +26,9 @@ test("runtime publication, consumer grants and approval management share every P
 			const initializer = node.initializer;
 			assert.ok(
 				initializer &&
-					ts.isAsExpression(initializer) &&
-					ts.isArrayLiteralExpression(initializer.expression),
+					ts.isIdentifier(initializer) &&
+					initializer.text === "connectionProviderCatalogs",
 			);
-			names = initializer.expression.elements.map((element) => {
-				assert.ok(ts.isIdentifier(element));
-				return element.text;
-			});
 		}
 		if (
 			ts.isForOfStatement(node) &&
@@ -45,6 +41,30 @@ test("runtime publication, consumer grants and approval management share every P
 		ts.forEachChild(node, visit);
 	}
 	visit(file);
+	const registry = ts.createSourceFile(
+		"provider-catalogs.ts",
+		await read("packages/openconnector-adapter/src/provider-catalogs.ts"),
+		ts.ScriptTarget.Latest,
+		true,
+		ts.ScriptKind.TS,
+	);
+	function readRegistry(node) {
+		if (
+			ts.isVariableDeclaration(node) &&
+			ts.isIdentifier(node.name) &&
+			node.name.text === "catalogs"
+		) {
+			assert.ok(
+				ts.isAsExpression(node.initializer) &&
+					ts.isArrayLiteralExpression(node.initializer.expression),
+			);
+			names = node.initializer.expression.elements.map(
+				(element) => element.text,
+			);
+		}
+		ts.forEachChild(node, readRegistry);
+	}
+	readRegistry(registry);
 	assert.deepEqual(names, [
 		"githubConnectionCatalog",
 		"bitbucketServerConnectionCatalog",
@@ -231,6 +251,7 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 	assert.deepEqual(adapterManifest.exports, {
 		".": "./src/index.ts",
 		"./authorization-compatibility": "./src/authorization-compatibility.ts",
+		"./provider-catalogs": "./src/provider-catalogs.ts",
 		"./confluence-server": "./src/confluence-server.ts",
 		"./datalego": "./src/datalego.ts",
 		"./datalego-oauth": "./src/datalego-oauth.ts",

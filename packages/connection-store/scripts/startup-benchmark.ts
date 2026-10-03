@@ -1,19 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-	githubConnectionCatalog,
-	jenkinsCiConnectionCatalog,
-	jenkinsReleaseConnectionCatalog,
-} from "@agent-infra/openconnector-adapter";
-import {
-	bitbucketServerConnectionCatalog,
-	datalegoV5ConnectionCatalog,
-} from "@agent-infra/openconnector-adapter/authorization-compatibility";
-import { confluenceServerConnectionCatalog } from "@agent-infra/openconnector-adapter/confluence-server";
-import { jiraServerConnectionCatalog } from "@agent-infra/openconnector-adapter/jira-server";
-import { manhattanConnectionCatalog } from "@agent-infra/openconnector-adapter/manhattan";
-import { rehoboamConnectionCatalog } from "@agent-infra/openconnector-adapter/rehoboam";
+import { connectionProviderCatalogs } from "@agent-infra/openconnector-adapter/provider-catalogs";
 import { migrateConnectionDatabase } from "../src/migrations";
 import { assertIsolatedTestDatabaseUrl } from "../src/test-database";
 
@@ -41,17 +29,7 @@ const repository = new PostgresConnectionRepository(
 	Buffer.alloc(32, 23),
 );
 const suffix = randomUUID();
-const catalogs = [
-	githubConnectionCatalog,
-	bitbucketServerConnectionCatalog,
-	jiraServerConnectionCatalog,
-	confluenceServerConnectionCatalog,
-	datalegoV5ConnectionCatalog,
-	jenkinsCiConnectionCatalog,
-	jenkinsReleaseConnectionCatalog,
-	manhattanConnectionCatalog,
-	rehoboamConnectionCatalog,
-].map((catalog) => ({
+const catalogs = connectionProviderCatalogs.map((catalog) => ({
 	...catalog,
 	providerReleaseId: `${catalog.providerReleaseId}-benchmark-${suffix}`,
 	actions: catalog.actions.map((action) => ({

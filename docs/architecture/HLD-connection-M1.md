@@ -2614,6 +2614,26 @@ attributes 使用低基数 enum/opaque ID；不记录 args、token、external ac
 
 ### 30.0 Provider Upgrade Campaign
 
+发布端必须使用与 runtime 相同的 Provider catalog 生成并校验发布快照。快照只包含 release、
+executor、认证/部署与 Action 授权边界的标识或摘要及可信兼容证据，不包含个人数据或 Credential。
+相邻正式版本改变 ProviderRelease 时必须登记精确 source/target release/digest 和经评审的
+升级路径：兼容修复、重新审批或重新授权。兼容声明必须有等价边界和现有可信证据；
+声明不能代替 runtime 对本人原审批、有效期、Action 子集、身份、Scope 与 Credential CAS 的检查。
+PR CI、镜像发布与 GZ3 发布共用该门禁，镜像发布还必须实际运行隔离 PostgreSQL 的旧连接升级
+生命周期回归；不能用通过标记、文件名或服务健康代替升级验收。
+
+本人可只读查询指定个人连接的升级准备状态；target release 和后续步骤只由服务端确定。
+准备状态区分直接升级、新版审批申请和重新连接，Web 的账号、升级任务与批量处理共用此结果，
+不以 Provider 名称硬编码替代准备检查，不自动提交申请或授予新 Action。准备结果只是操作引导，
+执行阶段仍重新验证准入条件，不能以旧准备结果绕过撤销或审批失效。
+
+有效个人连接的显式重授权只在原审批及 source→target 兼容校验通过后开始。
+账号 ID、原 CredentialVersion ID 和目标 ProviderRelease ID 与 verifier 一同保存在现有加密 OAuth
+transaction 的 v2 envelope 中；普通 transaction 保留旧格式，reader 同时支持两种格式。
+回调在交换 code 前重新检查绑定，写入时使用原 CredentialVersion CAS，目标版本或原审批变化
+即失败关闭，不能覆盖并发产生的新凭据。旧程序不能处理 v2 升级 transaction 时，应失败关闭并
+由用户在恢复新程序后重新发起授权，不能重放旧 state/code。该路径不创建新审批或自动扩权。
+
 ProviderRelease 发布必须先分类为静默兼容或需要使用者操作。只有 stable account proof、Credential scope、已确认 ActionVersion 集合、effect 与 authorization digest 均保持等价时才允许静默迁移；任一条件无法证明时创建 `ProviderUpgradeCampaign`。
 
 Campaign 绑定 source/target ProviderRelease、原因、可选截止时间和创建时间。每个受影响 AuthorizationRoot 创建唯一 `ProviderUpgradeTask`，状态只允许按 `PENDING_CONNECTION -> PENDING_AUTHORIZATION -> COMPLETED` 收敛；截止后未完成或个人 Connection 主动断开时转为终态 `EXPIRED`，不随重连恢复。断开连接与其待升级任务终结、对应待办关闭在同一事务完成，记录脱敏 audit/outbox；任务对账还须收敛此前已断开账号的遗留待办，投影与重建不得纳入已断开的账号。发布事务同时写入 task 和 `connection.provider-upgrade.required` outbox event；重复发布按 source/target release 与 AuthorizationRoot 幂等。同一 Connection 已切至目标 ProviderRelease，且同一 Principal 在该连接上具有有效目标版本 Access Authorization 时，对账可将遗留的 `PENDING_CONNECTION` 推进至 `PENDING_AUTHORIZATION`；其他账号的审批不能代替旧账号升级，也不得据此自动创建 Consumer Grant。连接升级后若原 Consent 可复用则直接完成，否则进入待重新确认，新的 Grant 提交后完成。状态变化写 audit/outbox，外部通知投递失败不得伪造完成状态。

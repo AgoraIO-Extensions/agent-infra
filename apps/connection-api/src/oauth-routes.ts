@@ -2919,6 +2919,23 @@ export function createConnectionOAuthApp(
 			},
 		);
 
+		app.get(
+			"/api/v1/connection/connections/:connectionId/upgrade-readiness",
+			async (context) => {
+				const session = await currentBrowserApiAccount(context);
+				if (session instanceof Response) return session;
+				const readiness = await browserApiOperation(context, () =>
+					management.service.getProviderUpgradeReadiness(
+						session.account.principalId,
+						context.req.param("connectionId"),
+					),
+				);
+				if (readiness instanceof Response) return readiness;
+				context.header("cache-control", "no-store");
+				return context.json(readiness);
+			},
+		);
+
 		app.post(
 			"/api/v1/connection/connections/:connectionId/upgrade",
 			async (context) => {

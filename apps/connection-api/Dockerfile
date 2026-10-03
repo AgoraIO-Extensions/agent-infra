@@ -43,6 +43,7 @@ COPY packages/connection-store/src packages/connection-store/src
 COPY packages/connection-store/tsconfig.json packages/connection-store/tsconfig.json
 COPY packages/connection-store/tsdown.config.ts packages/connection-store/tsdown.config.ts
 COPY packages/openconnector-adapter/src packages/openconnector-adapter/src
+COPY packages/openconnector-adapter/provider-upgrade-plans.json packages/openconnector-adapter/provider-upgrade-plans.json
 COPY packages/openconnector-adapter/tsconfig.json packages/openconnector-adapter/tsconfig.json
 COPY packages/openconnector-kernel/src packages/openconnector-kernel/src
 COPY packages/openconnector-kernel/tsconfig.json packages/openconnector-kernel/tsconfig.json

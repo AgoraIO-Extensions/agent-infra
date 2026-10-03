@@ -289,11 +289,41 @@ export function ConnectionsPage() {
 			queryClient.invalidateQueries({ queryKey: ["connections"] }),
 	});
 	const upgrade = useMutation({
-		mutationFn: connectionApi.upgradeProviderConnection,
+		mutationFn: async (connectionId: string) => {
+			const readiness =
+				await connectionApi.getProviderUpgradeReadiness(connectionId);
+			if (readiness.connectionId !== connectionId)
+				throw new Error("升级准备信息不匹配，请刷新后重试");
+			if (readiness.nextAction === "UPGRADE") {
+				await connectionApi.upgradeProviderConnection(connectionId);
+			}
+			return readiness;
+		},
 		onMutate: () => setUpgradeNotice(null),
-		onSuccess: async () => {
+		onSuccess: async (readiness) => {
+			if (readiness.nextAction === "REQUEST_APPROVAL") {
+				requestProviderUpgrade(
+					readiness.providerId as ConnectorProviderId,
+					readiness.targetProviderReleaseId,
+				);
+				setUpgradeNotice("此升级需要新版审批，请确认用途和能力后提交申请。");
+				return;
+			}
+			if (readiness.nextAction === "REAUTHORIZE") {
+				setReconnectTargetId(readiness.connectionId);
+				openProviderCredential(
+					readiness.providerId as ConnectorProviderId,
+					readiness.connectionId,
+				);
+				setUpgradeNotice("此升级需要重新连接外部账号，请完成授权。");
+				return;
+			}
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
-			setUpgradeNotice("连接已升级，可以重新确认客户端授权。");
+			setUpgradeNotice(
+				readiness.nextAction === "NONE"
+					? "连接已是当前版本，已刷新状态。"
+					: "连接已升级，可以重新确认客户端授权。",
+			);
 		},
 	});
 	async function completeAccessRequest(requestId: string) {
@@ -499,6 +529,8 @@ export function ConnectionsPage() {
 			);
 		else if (providerId === "jira") setJiraOpen(true);
 		else if (providerId === "confluence") setConfluenceOpen(true);
+		else if (providerId === "github" && targetId)
+			reconnectOAuth.mutate(targetId);
 		else if (providerId === "jenkins-ci" || providerId === "jenkins-release") {
 			setJenkinsProviderId(providerId);
 			setJenkinsOpen(true);
@@ -524,7 +556,10 @@ export function ConnectionsPage() {
 		}
 		openProviderCredential(providerId);
 	};
-	const requestManhattanUpgrade = (targetReleaseId: string) => {
+	const requestProviderUpgrade = (
+		providerId: ConnectorProviderId,
+		targetReleaseId: string,
+	) => {
 		const url = new URL(window.location.href);
 		url.searchParams.delete("accessRequestId");
 		url.searchParams.delete("intent");
@@ -532,7 +567,7 @@ export function ConnectionsPage() {
 		setRenewalTarget(null);
 		setRenewalProviderId("");
 		setReconnectTargetId(null);
-		setRequestTargetProvider("manhattan");
+		setRequestTargetProvider(providerId);
 		setRequestTrigger((value) => value + 1);
 		setUpgradeTargetReleaseId(targetReleaseId);
 	};
@@ -614,7 +649,6 @@ export function ConnectionsPage() {
 				...new Set(
 					data.upgradeTasks
 						.filter((task) => task.status === "PENDING_CONNECTION")
-						.filter((task) => task.providerId !== "manhattan")
 						.map((task) => task.connectionId),
 				),
 			]
@@ -629,10 +663,23 @@ export function ConnectionsPage() {
 		});
 		const failedConnectionIds: string[] = [];
 		let approvalFailureMessage: string | undefined;
+		let requiresApproval = 0;
+		let requiresAuthorization = 0;
+		let upgradedCount = 0;
 		let completed = 0;
 		for (const connectionId of connectionIds) {
 			try {
-				await connectionApi.upgradeProviderConnection(connectionId);
+				const readiness =
+					await connectionApi.getProviderUpgradeReadiness(connectionId);
+				if (readiness.connectionId !== connectionId)
+					throw new Error("升级准备信息不匹配");
+				if (readiness.nextAction === "REQUEST_APPROVAL") requiresApproval++;
+				else if (readiness.nextAction === "REAUTHORIZE")
+					requiresAuthorization++;
+				else if (readiness.nextAction === "UPGRADE") {
+					await connectionApi.upgradeProviderConnection(connectionId);
+					upgradedCount++;
+				}
 			} catch (error) {
 				failedConnectionIds.push(connectionId);
 				if (
@@ -682,7 +729,7 @@ export function ConnectionsPage() {
 			total: connectionIds.length,
 		});
 		setUpgradeNotice(
-			`批量处理完成：${connectionIds.length - retryableFailedConnectionIds.length} 个连接已升级，${retryableFailedConnectionIds.length} 个失败，${needsAuthorization} 条授权待确认。${retryableFailedConnectionIds.length && approvalFailureMessage ? ` ${approvalFailureMessage}` : ""}`,
+			`批量处理完成：${upgradedCount} 个连接已升级，${retryableFailedConnectionIds.length} 个失败，${needsAuthorization} 条授权待确认。${requiresApproval || requiresAuthorization ? ` ${requiresApproval} 个需要申请新版能力，${requiresAuthorization} 个需要重新连接，请分别处理。` : ""}${retryableFailedConnectionIds.length && approvalFailureMessage ? ` ${approvalFailureMessage}` : ""}`,
 		);
 	};
 	return (
@@ -944,21 +991,13 @@ export function ConnectionsPage() {
 															disabled={
 																upgrade.isPending || bulkUpgrade?.running
 															}
-															onClick={() =>
-																task.providerId === "manhattan"
-																	? requestManhattanUpgrade(
-																			task.targetProviderReleaseId,
-																		)
-																	: upgrade.mutate(task.connectionId)
-															}
+															onClick={() => upgrade.mutate(task.connectionId)}
 															variant="secondary"
 														>
 															{upgrade.isPending &&
 															upgrade.variables === task.connectionId
 																? "正在升级"
-																: task.providerId === "manhattan"
-																	? "申请新版能力"
-																	: "处理升级"}
+																: "处理升级"}
 														</Button>
 													) : task.status === "PENDING_AUTHORIZATION" ? (
 														<button

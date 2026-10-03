@@ -78,6 +78,9 @@ describe("compatible approval upgrade", () => {
 					...identity,
 					accessRequestId: requestId,
 				});
+				await expect(
+					repository.getProviderUpgradeReadiness({ principalId, connectionId }),
+				).resolves.toMatchObject({ nextAction: "NONE" });
 				const [originalAccess] =
 					await sql`SELECT id,valid_until,source_request_id FROM connection_effective_access_authorizations WHERE connection_id=${connectionId}`;
 				const originalCredential =
@@ -93,11 +96,30 @@ describe("compatible approval upgrade", () => {
 					}),
 				).rejects.toMatchObject({ code: "FORBIDDEN" });
 				await repository.publishProviderCatalog(immutableDatalegoV5);
+				await expect(
+					repository.getProviderUpgradeReadiness({ principalId, connectionId }),
+				).resolves.toMatchObject({ nextAction: "REQUEST_APPROVAL" });
 				const adapter = new DataLegoV5Adapter(
-					async (url) =>
-						String(url) === "https://oauth.agoralab.co/api/v2/userInfo"
-							? Response.json({ email: identity.externalAccount })
-							: Response.json({ message: "record not found" }, { status: 400 }),
+					async (url, init) => {
+						if (String(url) === "https://oauth.agoralab.co/oauth/token")
+							return Response.json({
+								access_token: "rotated-access-fixture",
+								token_type: "Bearer",
+								refresh_token: "rotated-refresh-fixture",
+								expires_in: 3600,
+							});
+						if (String(url) === "https://oauth.agoralab.co/api/v2/userInfo") {
+							expect([
+								"Bearer datalego-access-fixture",
+								"Bearer rotated-access-fixture",
+							]).toContain(new Headers(init?.headers).get("authorization"));
+							return Response.json({ email: identity.externalAccount });
+						}
+						return Response.json(
+							{ message: "record not found" },
+							{ status: 400 },
+						);
+					},
 					{
 						clientId: "test-client",
 						clientSecret: "test-secret",
@@ -107,8 +129,9 @@ describe("compatible approval upgrade", () => {
 				);
 				const service = new ConnectionApplicationService(
 					repository,
-					{ execute: async () => ({}) },
+					{ execute: (input) => adapter.execute(input) },
 					undefined,
+					{ datalego: adapter },
 					{ datalego: adapter },
 				);
 				await expect(
@@ -128,6 +151,42 @@ describe("compatible approval upgrade", () => {
 				).rejects.toMatchObject({ code: "FORBIDDEN" });
 				await repository.publishProviderCatalog(datalegoV5ConnectionCatalog);
 				await expect(
+					repository.getProviderUpgradeReadiness({ principalId, connectionId }),
+				).resolves.toMatchObject({ nextAction: "UPGRADE" });
+				await expect(
+					repository.getProviderUpgradeReadiness({
+						principalId: "other-user",
+						connectionId,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				const binding = await repository.validatePersonalReconnect({
+					principalId,
+					connectionId,
+				});
+				expect(binding.upgradeBinding?.targetProviderReleaseId).toBe(
+					datalegoV5ConnectionCatalog.providerReleaseId,
+				);
+				const transaction = {
+					providerId: "datalego",
+					principalId,
+					codeVerifier: "verifier-fixture",
+					redirectUri:
+						"https://connection.example/oauth/callback?provider=datalego",
+					reconnectConnectionId: connectionId,
+					upgradeBinding: binding.upgradeBinding,
+					state: randomUUID(),
+				};
+				await repository.createOAuthTransaction(transaction);
+				const decoded = await repository.consumeOAuthTransaction(
+					transaction.state,
+					"datalego",
+				);
+				expect(decoded.codeVerifier).toBe(transaction.codeVerifier);
+				expect(decoded.upgradeBinding).toEqual(binding.upgradeBinding);
+				await expect(
+					repository.consumeOAuthTransaction(transaction.state, "datalego"),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				await expect(
 					service.upgradeProviderConnection(principalId, connectionId),
 				).resolves.toEqual({ connectionId });
 				const current = await repository.getProviderCredentialForUpgrade({
@@ -135,6 +194,102 @@ describe("compatible approval upgrade", () => {
 					connectionId,
 					allowCurrentRelease: true,
 				});
+				await expect(
+					repository.getProviderUpgradeReadiness({ principalId, connectionId }),
+				).resolves.toMatchObject({ nextAction: "NONE" });
+				expect(
+					(
+						await repository.validatePersonalReconnect({
+							principalId,
+							connectionId,
+						})
+					).upgradeBinding?.credentialVersionId,
+				).not.toBe(decoded.upgradeBinding?.credentialVersionId);
+				await expect(
+					adapter.execute({
+						action: "datalego.get_current_user",
+						credential: { accessToken: current.accessToken },
+						input: {},
+					}),
+				).resolves.toEqual({ email: identity.externalAccount });
+				await sql`UPDATE connection_credential_versions SET expires_at=now()-interval '1 minute' WHERE id=${current.credentialVersionId}`;
+				await expect(
+					repository.getProviderUpgradeReadiness({ principalId, connectionId }),
+				).resolves.toMatchObject({ nextAction: "REAUTHORIZE" });
+				await sql`UPDATE connection_credential_versions SET expires_at=${identity.expiresAt} WHERE id=${current.credentialVersionId}`;
+				const consumerId = `upgrade-read-${randomUUID()}`;
+				const instanceId = `instance-${randomUUID()}`;
+				await repository.publishConsumerDeclaration({
+					consumer: { id: consumerId, name: "Upgrade lifecycle test" },
+					providerReleaseId: datalegoV5ConnectionCatalog.providerReleaseId,
+					actionVersionIds: datalegoV5ConnectionCatalog.actions.map(
+						(action) => action.id,
+					),
+				});
+				await sql`INSERT INTO connection_consumer_instances
+					(id,consumer_id,kind,auth_subject,status,principal_id)
+					VALUES (${instanceId},${consumerId},'DEVICE',${instanceId},'ACTIVE',${principalId})`;
+				const preview =
+					await repository.createCurrentConsumerAuthorizationPreview({
+						principalId,
+						consumerId,
+						connectionId,
+						actionVersionIds: ["datalego.get_current_user@v5"],
+					});
+				await repository.confirmCurrentConsumerAuthorization({
+					principalId,
+					previewId: preview.previewId,
+					confirmationToken: preview.confirmationToken,
+					idempotencyKey: randomUUID(),
+				});
+				const directIdentity = { principalId, consumerId, instanceId };
+				await expect(
+					service.invokeDirectForIdentity(
+						directIdentity,
+						"datalego.get_current_user",
+						{},
+					),
+				).resolves.toMatchObject({
+					status: "SUCCEEDED",
+					result: { email: identity.externalAccount },
+				});
+				await sql`UPDATE connection_credential_versions SET expires_at=now()-interval '1 minute' WHERE id=${current.credentialVersionId}`;
+				await expect(
+					service.invokeDirectForIdentity(
+						directIdentity,
+						"datalego.get_current_user",
+						{},
+					),
+				).resolves.toMatchObject({
+					status: "SUCCEEDED",
+					result: { email: identity.externalAccount },
+				});
+				const refreshed = await repository.getProviderCredentialForUpgrade({
+					principalId,
+					connectionId,
+					allowCurrentRelease: true,
+				});
+				expect(refreshed.refreshToken).toBe("rotated-refresh-fixture");
+				expect(refreshed.credentialVersionId).not.toBe(
+					current.credentialVersionId,
+				);
+				await expect(
+					repository.getProviderUpgradeReadiness({ principalId, connectionId }),
+				).resolves.toMatchObject({ nextAction: "NONE" });
+				const [refreshedAccount] = await sql`
+					SELECT last_credential_version_id FROM connection_accounts WHERE id=${connectionId}
+				`;
+				expect(refreshedAccount?.last_credential_version_id).toBe(
+					refreshed.credentialVersionId,
+				);
+				const refreshedActions = await sql<{ action_version_id: string }[]>`
+					SELECT member.action_version_id FROM connection_authorization_roots root
+					JOIN connection_grant_actions member ON member.grant_id=root.current_grant_id
+					WHERE root.consumer_id=${consumerId} AND root.principal_id=${principalId}
+				`;
+				expect(refreshedActions.map((row) => row.action_version_id)).toEqual([
+					"datalego.get_current_user@v5",
+				]);
 				expect(current).toMatchObject({
 					accessToken: identity.accessToken,
 					refreshToken: identity.refreshToken,

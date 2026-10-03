@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { verifyUpgradePaths } from "./provider-upgrade-guard.mjs";
 
 export const providerSources = {
 	bitbucket: "packages/openconnector-adapter/src/bitbucket-server.ts",
@@ -150,6 +151,14 @@ export function markdownDiff(rows) {
 }
 
 async function main() {
+	const upgradeBaselineIndex = process.argv.indexOf("--upgrade-baseline");
+	if (upgradeBaselineIndex >= 0) {
+		const baselineRef = process.argv[upgradeBaselineIndex + 1];
+		if (!baselineRef) throw new Error("--upgrade-baseline requires a ref");
+		git("fetch", "origin", "connection", "--prune");
+		process.stdout.write(`${JSON.stringify({upgradePaths:verifyUpgradePaths(baselineRef)})}\n`);
+		return;
+	}
 	const approvalBaselineIndex = process.argv.indexOf("--approval-baseline");
 	if (approvalBaselineIndex >= 0) {
 		const baselineRef = process.argv[approvalBaselineIndex + 1];
@@ -168,12 +177,13 @@ async function main() {
 	git("fetch", "origin", "connection", "--prune");
 	const sha = verifyCanonicalSha();
 	const rows = compareCatalogs(readCatalog(process.argv[baselineIndex + 1]), readCatalog("HEAD"));
+	const upgradePaths = verifyUpgradePaths(process.argv[baselineIndex + 1]);
 	const approvalFence = compareApprovalFence(
 		readApprovalFence(process.argv[baselineIndex + 1]),
 		readApprovalFence("HEAD"),
 		JSON.parse(git("show", `HEAD:${migrationJournalPath}`)),
 	);
-	process.stdout.write(`${JSON.stringify({ sha, rows, approvalFence })}\n${markdownDiff(rows)}\nApproval fence: ${approvalFence ? `${approvalFence.before ?? "none"} -> v${approvalFence.after}` : "not enabled"}\n`);
+	process.stdout.write(`${JSON.stringify({ sha, rows, approvalFence, upgradePaths })}\n${markdownDiff(rows)}\nApproval fence: ${approvalFence ? `${approvalFence.before ?? "none"} -> v${approvalFence.after}` : "not enabled"}\nUpgrade paths verified: ${upgradePaths.length}\n`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

@@ -27,6 +27,7 @@ import {
 	normalizeSharedScopeDisplayName,
 	type OAuthTransaction,
 	type ProviderUpgradeCampaignSummary,
+	type ProviderUpgradeReadiness,
 	projectCallDiagnostics,
 	type ReconciliationJob,
 	type StoredCall,
@@ -38,12 +39,23 @@ import {
 } from "./access-request-repository";
 import {
 	type AuthorizationCompatibility,
+	compatibleApprovalProfile,
 	migrateCompatibleApproval,
 } from "./approval-upgrade";
 
 const githubProvider = "github";
 
 export type PublishedProviderCatalog = {
+	credentialUpgradeBehavior?: "DIRECT" | "REAUTHORIZE";
+	upgradePaths?: readonly {
+		provider: string;
+		fromReleaseId: string;
+		toReleaseId: string;
+		fromExecutorDigest: string;
+		toExecutorDigest: string;
+		strategy: string;
+		reviewReference: string;
+	}[];
 	authorizationCompatibility?: readonly AuthorizationCompatibility[];
 	actions: readonly ActionDefinition[];
 	authProfile: Readonly<Record<string, unknown>>;
@@ -346,6 +358,14 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	private readonly authorizationCompatibility = new Map<
 		string,
 		readonly AuthorizationCompatibility[]
+	>();
+	private readonly upgradeBehaviors = new Map<
+		string,
+		"DIRECT" | "REAUTHORIZE"
+	>();
+	private readonly upgradePaths = new Map<
+		string,
+		NonNullable<PublishedProviderCatalog["upgradePaths"]>
 	>();
 	private readonly sql;
 
@@ -729,6 +749,18 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		this.authorizationCompatibility.set(
 			catalog.providerReleaseId,
 			(catalog.authorizationCompatibility ?? []).map((item) => ({ ...item })),
+		);
+		this.upgradeBehaviors.set(
+			catalog.providerReleaseId,
+			catalog.credentialUpgradeBehavior ?? "DIRECT",
+		);
+		this.upgradePaths.set(
+			catalog.providerReleaseId,
+			(catalog.upgradePaths ?? []).filter(
+				(path) =>
+					path.provider === catalog.provider &&
+					path.toReleaseId === catalog.providerReleaseId,
+			),
 		);
 	}
 
@@ -1739,17 +1771,23 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					consumerId: grant.consumer_id,
 					principalId: grant.principal_id,
 				});
-				if (renewal)
-					target = selectAuthorizationActions(target, grant.action_version_ids);
 			} catch (error) {
-				if (
-					!(error instanceof ConnectionError) ||
-					(error.code !== "FORBIDDEN" &&
-						!(renewal && error.code === "INVALID_REQUEST"))
-				) {
+				if (!(error instanceof ConnectionError) || error.code !== "FORBIDDEN") {
 					throw error;
 				}
 				target = undefined;
+			}
+			if (target) {
+				try {
+					target = selectAuthorizationActions(target, grant.action_version_ids);
+				} catch (error) {
+					if (
+						!(error instanceof ConnectionError) ||
+						error.code !== "INVALID_REQUEST"
+					)
+						throw error;
+					target = undefined;
+				}
 			}
 			const decision = decideReconnectAuthorization({
 				current: {
@@ -3270,6 +3308,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					${identity.refreshExpiresAt ?? null}
 				)
 			`;
+			await sql`
+				UPDATE connection_accounts
+				SET last_credential_version_id = ${credentialId}
+				WHERE id = ${claim.connectionId}
+			`;
 			await this.restoreGrantsAfterReconnect(sql, claim.connectionId);
 			await sql`
 				UPDATE connection_credential_refresh_attempts
@@ -3479,7 +3522,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	async createOAuthTransaction(input: OAuthTransaction & { state: string }) {
 		const stateHash = hash(input.state);
 		const protectedVerifier = this.protector.encrypt(
-			input.codeVerifier,
+			input.upgradeBinding
+				? JSON.stringify({
+						version: 2,
+						codeVerifier: input.codeVerifier,
+						upgradeBinding: input.upgradeBinding,
+					})
+				: input.codeVerifier,
 			`oauth:${stateHash}:${input.principalId}`,
 		);
 		await this.sql.begin(async (sql) => {
@@ -3534,6 +3583,40 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		connectionId: string;
 		principalId: string;
 	}) {
+		const [active] = await this.sql<
+			{
+				id: string;
+				provider_id: string;
+				credential_id: string;
+				scope_json: unknown;
+			}[]
+		>`
+			SELECT account.id,account.provider_id,credential.id AS credential_id,credential.scope_json
+			FROM connection_accounts account JOIN connection_credential_versions credential
+				ON credential.id=account.last_credential_version_id AND credential.connection_id=account.id
+			WHERE account.id=${input.connectionId} AND account.owner_principal_id=${input.principalId}
+				AND account.owner_type='PERSONAL' AND account.status='ACTIVE'
+		`;
+		if (active) {
+			const readiness = await this.getProviderUpgradeReadiness(input);
+			if (
+				readiness.nextAction === "REQUEST_APPROVAL" ||
+				!Array.isArray(active.scope_json) ||
+				active.scope_json.some(
+					(scope) => typeof scope !== "string" || !scope || /\s/u.test(scope),
+				)
+			)
+				forbidden();
+			return {
+				providerId: active.provider_id,
+				requiredScopes: [...new Set(active.scope_json as string[])].sort(),
+				upgradeBinding: {
+					connectionId: active.id,
+					credentialVersionId: active.credential_id,
+					targetProviderReleaseId: readiness.targetProviderReleaseId,
+				},
+			};
+		}
 		const [target] = await this.sql<
 			{
 				external_account: string;
@@ -3621,21 +3704,53 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					"OAuth state is invalid, expired, or already consumed",
 				);
 			}
+			const protectedValue = this.protector.decrypt(
+				{
+					ciphertext: row.verifier_ciphertext,
+					nonce: row.verifier_nonce,
+					tag: row.verifier_tag,
+				},
+				`oauth:${stateHash}:${row.principal_id}`,
+			);
+			let verifier: {
+				codeVerifier: string;
+				upgradeBinding?: OAuthTransaction["upgradeBinding"];
+			} = { codeVerifier: protectedValue };
+			if (protectedValue.startsWith("{")) {
+				const envelope = JSON.parse(protectedValue);
+				if (
+					envelope.version !== 2 ||
+					typeof envelope.codeVerifier !== "string" ||
+					!envelope.upgradeBinding ||
+					[
+						"connectionId",
+						"credentialVersionId",
+						"targetProviderReleaseId",
+					].some(
+						(key) =>
+							typeof envelope.upgradeBinding[key] !== "string" ||
+							!envelope.upgradeBinding[key] ||
+							envelope.upgradeBinding[key].length > 512,
+					) ||
+					envelope.upgradeBinding.connectionId !== row.reconnect_connection_id
+				)
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"Invalid OAuth upgrade binding",
+					);
+				verifier = {
+					codeVerifier: envelope.codeVerifier,
+					upgradeBinding: envelope.upgradeBinding,
+				};
+			}
 			return {
+				...verifier,
 				...(row.access_request_id
 					? { accessRequestId: row.access_request_id }
 					: {}),
 				...(row.reconnect_connection_id
 					? { reconnectConnectionId: row.reconnect_connection_id }
 					: {}),
-				codeVerifier: this.protector.decrypt(
-					{
-						ciphertext: row.verifier_ciphertext,
-						nonce: row.verifier_nonce,
-						tag: row.verifier_tag,
-					},
-					`oauth:${stateHash}:${row.principal_id}`,
-				),
 				principalId: row.principal_id,
 				providerId: row.provider_id,
 				redirectUri: row.redirect_uri,
@@ -3771,10 +3886,16 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					FOR SHARE
 				`
 				: [];
+			const replacementCredential =
+				activeCredential ??
+				(existing?.status === "ACTIVE" &&
+				input.expectedCredentialVersionId === lastCredential?.id
+					? lastCredential
+					: undefined);
 			if (
 				input.expectedConnectionId &&
 				(existing?.id !== input.expectedConnectionId ||
-					activeCredential?.id !== input.expectedCredentialVersionId)
+					replacementCredential?.id !== input.expectedCredentialVersionId)
 			) {
 				throw new ConnectionError(
 					"INVALID_REQUEST",
@@ -3793,7 +3914,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						expectedConnectionId: input.expectedConnectionId,
 						expectedStatus: "ACTIVE",
 						storedStatus: existing.status,
-						currentScopes: activeCredential?.scope_json,
+						currentScopes: replacementCredential?.scope_json,
 						grantedScopes,
 						providerReleaseId: existing.provider_release_id,
 						storedProviderReleaseId: existing.provider_release_id,
@@ -3820,7 +3941,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						connectionId: existing?.id,
 						currentScopes: reconnecting
 							? lastCredential?.scope_json
-							: activeCredential?.scope_json,
+							: replacementCredential?.scope_json,
 						expectedConnectionId: input.expectedConnectionId,
 						expectedStatus: reconnecting ? "DISCONNECTED" : "ACTIVE",
 						grantedScopes,
@@ -3955,6 +4076,103 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				)
 			`;
 			return { connectionId };
+		});
+	}
+
+	async getProviderUpgradeReadiness(input: {
+		principalId: string;
+		connectionId: string;
+	}): Promise<ProviderUpgradeReadiness> {
+		return this.sql.begin(async (sql) => {
+			const [account] = await sql<
+				{
+					provider_id: string;
+					provider_release_id: string;
+					external_account: string;
+					credential_status: string | null;
+					credential_expired: boolean | null;
+					scope_json: unknown;
+				}[]
+			>`
+				SELECT account.provider_id,account.provider_release_id,account.external_account,
+					credential.status AS credential_status,credential.scope_json,
+					credential.expires_at <= now() AS credential_expired
+				FROM connection_accounts account
+				LEFT JOIN connection_credential_versions credential ON credential.id=account.last_credential_version_id
+					AND credential.connection_id=account.id
+				WHERE account.id=${input.connectionId} AND account.owner_type='PERSONAL'
+					AND account.owner_principal_id=${input.principalId} AND account.status='ACTIVE'
+			`;
+			if (!account) forbidden();
+			const target = this.publishedProviderReleaseIds.get(account.provider_id);
+			if (!target)
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Published upgrade target is unavailable",
+				);
+			const base = {
+				connectionId: input.connectionId,
+				providerId: account.provider_id,
+				targetProviderReleaseId: target,
+			};
+			const apply = () => ({
+				...base,
+				nextAction: "REQUEST_APPROVAL" as const,
+				reason: "APPROVAL_REQUIRED",
+			});
+			const [access] = await sql<{ capability_profile_id: string }[]>`
+				SELECT capability_profile_id FROM connection_effective_access_authorizations
+				WHERE connection_id=${input.connectionId} AND principal_id=${input.principalId}
+					AND provider_release_id=${account.provider_release_id}
+					AND external_account_fingerprint=${canonicalHash({ externalAccount: account.external_account, providerReleaseId: account.provider_release_id })}
+					AND (state='ACTIVE' OR (state='REAPPROVAL_REQUIRED' AND reapproval_deadline_at > now()))
+					AND (valid_until IS NULL OR valid_until > now())
+			`;
+			if (!access) return apply();
+			const proof = await compatibleApprovalProfile(sql, {
+				capabilityProfileId: access.capability_profile_id,
+				fromReleaseId: account.provider_release_id,
+				toReleaseId: target,
+				authorizationCompatibility: this.authorizationCompatibility.get(target),
+			});
+			const approvedScopes = proof?.profile.required_scopes;
+			if (
+				!proof ||
+				!Array.isArray(account.scope_json) ||
+				!Array.isArray(approvedScopes) ||
+				account.scope_json.some(
+					(scope) =>
+						typeof scope !== "string" || !approvedScopes.includes(scope),
+				)
+			)
+				return apply();
+			const path = this.upgradePaths
+				.get(target)
+				?.find(
+					(item) =>
+						item.fromReleaseId === account.provider_release_id &&
+						item.fromExecutorDigest === proof.release.from_executor_digest &&
+						item.toExecutorDigest === proof.release.to_executor_digest,
+				);
+			if (path?.strategy === "REAPPROVAL_REQUIRED") return apply();
+			if (account.credential_status !== "ACTIVE" || account.credential_expired)
+				return {
+					...base,
+					nextAction: "REAUTHORIZE",
+					reason: "CREDENTIAL_REAUTHORIZATION_REQUIRED",
+				};
+			if (account.provider_release_id === target)
+				return { ...base, nextAction: "NONE", reason: "ALREADY_CURRENT" };
+			if (
+				this.upgradeBehaviors.get(target) === "REAUTHORIZE" ||
+				path?.strategy === "REAUTHORIZATION_REQUIRED"
+			)
+				return {
+					...base,
+					nextAction: "REAUTHORIZE",
+					reason: "PROVIDER_REAUTHORIZATION_REQUIRED",
+				};
+			return { ...base, nextAction: "UPGRADE", reason: "COMPATIBLE_APPROVAL" };
 		});
 	}
 
