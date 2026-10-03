@@ -49,6 +49,7 @@ function fakeStore(
 		applicationExists?: boolean;
 		recipientEligible?: boolean;
 		auditFails?: boolean;
+		afterGrantLocked?: () => void;
 	} = {},
 ): ApplicationMaterialGrantStoreV1 & {
 	row: ApplicationMaterialGrantMetadataV1 | null;
@@ -70,12 +71,16 @@ function fakeStore(
 		},
 		async execute(work) {
 			const before = state.row;
+			const auditsBefore = state.audits;
 			try {
 				return await work({
 					lockUserDisabled: async () => false,
 					applicationExists: async () => options.applicationExists ?? true,
 					recipientEligible: async () => options.recipientEligible ?? true,
-					lockGrant: async () => state.row,
+					lockGrant: async () => {
+						options.afterGrantLocked?.();
+						return state.row;
+					},
 					upsertGrant: async (r, revision, createdAt) => {
 						state.row = {
 							applicationId: r.applicationId,
@@ -103,12 +108,60 @@ function fakeStore(
 				});
 			} catch (error) {
 				state.row = before;
+				state.audits = auditsBefore;
 				throw error;
 			}
 		},
 	};
 }
 describe("application material grant authority", () => {
+	it.each([
+		{ operation: "grant", existing: false, revoked: false },
+		{ operation: "grant", existing: true, revoked: false },
+		{ operation: "revoke", existing: true, revoked: false },
+		{ operation: "revoke", existing: true, revoked: true },
+		{ operation: "read", existing: true, revoked: false },
+	] as const)(
+		"rolls back $operation (existing=$existing, revoked=$revoked) when administrator authority is removed while waiting for the grant lock",
+		async ({ operation, existing, revoked }) => {
+			let administratorConfigured = true;
+			const store = fakeStore({
+				afterGrantLocked: () => {
+					administratorConfigured = false;
+				},
+			});
+			const before: ApplicationMaterialGrantMetadataV1 | null = existing
+				? {
+						applicationId: "app-1",
+						principalType: "user",
+						principalId: "recipient-1",
+						authorizationRevision: "rev-1",
+						createdAt: "2026-10-03T00:00:00.000Z",
+						revokedAt: revoked ? "2026-10-03T01:00:00.000Z" : null,
+					}
+				: null;
+			store.row = before;
+			const useCase = createApplicationMaterialGrantUseCaseV1({
+				store,
+				resolveUser: async () => ({ accountStatus: "active" }),
+				resolveCurrentActor: async () => ({
+					accountStatus: "active",
+					isSystemAdmin: true,
+					ldapStableUid: "ldap-admin-1",
+					ldapAdministratorConfigured: administratorConfigured,
+					authorizationRevision: "auth-1",
+				}),
+			});
+			await expect(
+				useCase[operation](
+					request(existing ? { expectedRevision: "rev-1" } : {}),
+				),
+			).rejects.toMatchObject({ code: "authentication_required" });
+			expect(store.row).toEqual(before);
+			expect(store.audits).toBe(0);
+		},
+	);
+
 	it("fails closed when the actor has no current LDAP administrator proof", async () => {
 		const store = fakeStore();
 		const useCase = makeUseCase({
