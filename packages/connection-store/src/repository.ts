@@ -4129,6 +4129,18 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					AND (valid_until IS NULL OR valid_until > now())
 			`;
 			if (!access) return apply();
+			if (account.provider_release_id === target) {
+				if (
+					account.credential_status !== "ACTIVE" ||
+					account.credential_expired
+				)
+					return {
+						...base,
+						nextAction: "REAUTHORIZE",
+						reason: "CREDENTIAL_REAUTHORIZATION_REQUIRED",
+					};
+				return { ...base, nextAction: "NONE", reason: "ALREADY_CURRENT" };
+			}
 			const proof = await compatibleApprovalProfile(sql, {
 				capabilityProfileId: access.capability_profile_id,
 				fromReleaseId: account.provider_release_id,
@@ -4161,8 +4173,6 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					nextAction: "REAUTHORIZE",
 					reason: "CREDENTIAL_REAUTHORIZATION_REQUIRED",
 				};
-			if (account.provider_release_id === target)
-				return { ...base, nextAction: "NONE", reason: "ALREADY_CURRENT" };
 			if (
 				this.upgradeBehaviors.get(target) === "REAUTHORIZE" ||
 				path?.strategy === "REAUTHORIZATION_REQUIRED"

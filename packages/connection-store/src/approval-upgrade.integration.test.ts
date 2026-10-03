@@ -36,6 +36,228 @@ if (process.env.CI && !databaseUrl)
 	throw new Error("Upgrade test database required");
 
 describe("compatible approval upgrade", () => {
+	for (const recovery of ["renewal", "reconnect"] as const) {
+		(databaseUrl ? it : it.skip)(
+			`${recovery} recovers obsolete selections but propagates invalid authorization lookups`,
+			async () => {
+				if (!databaseUrl) return;
+				await migrateConnectionDatabase(
+					databaseUrl,
+					resolve(import.meta.dirname, "../../../migrations/connection"),
+				);
+				const sql = postgres(databaseUrl);
+				const repository = new PostgresConnectionRepository(
+					databaseUrl,
+					Buffer.alloc(32, 23),
+				);
+				const suffix = randomUUID();
+				const principalId = `recovery-${suffix}`;
+				const consumerId = `consumer-${suffix}`;
+				try {
+					await repository.publishProviderCatalog(immutableDatalegoV5);
+					await sql`INSERT INTO connection_principals (id, display_name) VALUES (${principalId}, 'Recovery owner')`;
+					const identity = {
+						principalId,
+						providerId: "datalego",
+						providerReleaseId: immutableDatalegoV5.providerReleaseId,
+						externalAccount: "recovery@example.invalid",
+						displayName: "Recovery account",
+						accessToken: "recovery-fixture",
+						grantedScopes: ["datalego.query"],
+					};
+					const { connectionId } = await repository.storeProviderCredential({
+						...identity,
+						accessRequestId: await seedApprovedConnectPermit(sql, {
+							principalId,
+							providerReleaseId: identity.providerReleaseId,
+							scopes: identity.grantedScopes,
+						}),
+					});
+					const declaration = {
+						consumer: { id: consumerId, name: "Recovery consumer" },
+						providerReleaseId: identity.providerReleaseId,
+					};
+					const selected = "datalego.get_current_user@v5";
+					await repository.publishConsumerDeclaration({
+						...declaration,
+						actionVersionIds: [selected],
+					});
+					await sql`INSERT INTO connection_consumer_instances (id,consumer_id,kind,auth_subject,status,principal_id)
+						VALUES (${`instance-${suffix}`},${consumerId},'DEVICE',${suffix},'ACTIVE',${principalId})`;
+					const input = { principalId, consumerId, connectionId };
+					const preview =
+						await repository.createCurrentConsumerAuthorizationPreview({
+							...input,
+							actionVersionIds: [selected],
+						});
+					await repository.confirmCurrentConsumerAuthorization({
+						principalId,
+						previewId: preview.previewId,
+						confirmationToken: preview.confirmationToken,
+						idempotencyKey: randomUUID(),
+					});
+					const credential = await repository.getProviderCredentialForUpgrade({
+						principalId,
+						connectionId,
+						allowCurrentRelease: true,
+					});
+					const recover = () =>
+						recovery === "renewal"
+							? sql.begin(async (transaction) => {
+									await repository.restoreGrantsAfterRenewal(
+										transaction,
+										connectionId,
+									);
+								})
+							: repository.storeProviderCredential({
+									...identity,
+									expectedConnectionId: connectionId,
+									expectedCredentialVersionId: credential.credentialVersionId,
+								});
+					const { declarationId } = await repository.publishConsumerDeclaration(
+						{
+							...declaration,
+							actionVersionIds: ["datalego.get_query_status@v5"],
+						},
+					);
+					// Empty lookup results are malformed, even while restoring a Grant.
+					await sql`DELETE FROM connection_consumer_declared_actions WHERE declaration_id=${declarationId}`;
+					await expect(
+						repository.createCurrentConsumerAuthorizationPreview(input),
+					).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+					await expect(recover()).rejects.toMatchObject({
+						code: "INVALID_REQUEST",
+					});
+					await sql`INSERT INTO connection_consumer_declared_actions (declaration_id, action_version_id) VALUES (${declarationId}, 'datalego.get_query_status@v5')`;
+					// A stale selection is rejected on normal preview, but restoration must require fresh consent.
+					await expect(
+						repository.createCurrentConsumerAuthorizationPreview({
+							...input,
+							actionVersionIds: [selected],
+						}),
+					).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+					await recover();
+					const [root] =
+						await sql`SELECT current_grant_id FROM connection_authorization_roots WHERE principal_id=${principalId} AND consumer_id=${consumerId}`;
+					expect(root?.current_grant_id).toBeNull();
+					await expect(
+						repository.createCurrentConsumerAuthorizationPreview({
+							...input,
+							actionVersionIds: ["datalego.get_query_status@v5"],
+						}),
+					).resolves.toMatchObject({
+						actions: [{ id: "datalego.get_query_status@v5" }],
+					});
+				} finally {
+					await repository.close();
+					await sql.end();
+				}
+			},
+			30_000,
+		);
+	}
+	(databaseUrl ? it : it.skip)(
+		"current releases require valid approval and credentials but no migration proof",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const sql = postgres(databaseUrl);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 23),
+			);
+			const principalId = `current-release-${randomUUID()}`;
+			let createdConnectionId: string | undefined;
+			const catalog = {
+				...immutableDatalegoV5,
+				providerReleaseId: `current-${principalId}`,
+				actions: immutableDatalegoV5.actions.map((action) => ({
+					...action,
+					id: `${action.id}-${principalId}`,
+				})),
+			};
+			try {
+				await repository.publishProviderCatalog(catalog);
+				await sql`INSERT INTO connection_principals (id, display_name) VALUES (${principalId}, 'Current release owner')`;
+				const { connectionId } = await repository.storeProviderCredential({
+					principalId,
+					providerId: "datalego",
+					providerReleaseId: catalog.providerReleaseId,
+					externalAccount: "current@example.invalid",
+					displayName: "Current account",
+					accessToken: "current-fixture",
+					grantedScopes: ["datalego.query"],
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId,
+						providerReleaseId: catalog.providerReleaseId,
+						scopes: ["datalego.query"],
+					}),
+				});
+				createdConnectionId = connectionId;
+				const input = { principalId, connectionId };
+				// Retiring one Action does not require migrating an already-current account.
+				// Other approved Actions remain available; self-migration cannot map the retired Action.
+				await sql`UPDATE connection_action_versions SET status='DISABLED' WHERE id=${catalog.actions[0]?.id ?? "missing"}`;
+				await expect(
+					repository.getProviderUpgradeReadiness(input),
+				).resolves.toMatchObject({
+					nextAction: "NONE",
+					reason: "ALREADY_CURRENT",
+				});
+				await expect(
+					repository.getProviderUpgradeReadiness({
+						...input,
+						principalId: "another-owner",
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await sql`UPDATE connection_credential_versions SET status='REVOKED' WHERE connection_id=${connectionId}`;
+				await expect(
+					repository.getProviderUpgradeReadiness(input),
+				).resolves.toMatchObject({
+					nextAction: "REAUTHORIZE",
+					reason: "CREDENTIAL_REAUTHORIZATION_REQUIRED",
+				});
+				await sql`UPDATE connection_credential_versions SET status='ACTIVE', expires_at=now()-interval '1 minute' WHERE connection_id=${connectionId}`;
+				await expect(
+					repository.getProviderUpgradeReadiness(input),
+				).resolves.toMatchObject({
+					nextAction: "REAUTHORIZE",
+					reason: "CREDENTIAL_REAUTHORIZATION_REQUIRED",
+				});
+				await sql`UPDATE connection_credential_versions SET expires_at=now()+interval '1 hour' WHERE connection_id=${connectionId}`;
+				await expect(
+					repository.getProviderUpgradeReadiness(input),
+				).resolves.toMatchObject({
+					nextAction: "NONE",
+					reason: "ALREADY_CURRENT",
+				});
+				for (const state of ["REVOKED", "SUSPENDED", "EXPIRED"] as const) {
+					await sql`UPDATE connection_access_authorizations SET state=${state} WHERE connection_id=${connectionId}`;
+					await expect(
+						repository.getProviderUpgradeReadiness(input),
+					).resolves.toMatchObject({ nextAction: "REQUEST_APPROVAL" });
+				}
+				await sql`UPDATE connection_access_authorizations SET state='ACTIVE', validity_kind='FINITE', valid_until=now()-interval '1 minute' WHERE connection_id=${connectionId}`;
+				await expect(
+					repository.getProviderUpgradeReadiness(input),
+				).resolves.toMatchObject({ nextAction: "REQUEST_APPROVAL" });
+			} finally {
+				if (createdConnectionId) {
+					await repository.disconnectConnection({
+						principalId,
+						connectionId: createdConnectionId,
+					});
+					await sql`UPDATE connection_access_authorizations SET state='REVOKED' WHERE connection_id=${createdConnectionId}`;
+				}
+				await repository.close();
+				await sql.end();
+			}
+		},
+		30_000,
+	);
 	(databaseUrl ? it : it.skip)(
 		"upgrades real DataLego v4 OAuth catalog without expanding approval or losing refresh credentials",
 		async () => {
