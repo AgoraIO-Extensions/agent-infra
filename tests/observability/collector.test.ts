@@ -631,7 +631,6 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 			),
 		).rejects.toMatchObject({ code: "access_denied" });
 		const finalMetrics = await collector.query();
-		const finalTraces = await collector.read();
 		const queriedPairCounts = new Map<TracePair, number>();
 		for (const item of queriedOperations) {
 			const fact = item.operation?.fact;
@@ -639,6 +638,15 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 			const pair = `${fact.operationRef}:${fact.attemptRef}` as TracePair;
 			queriedPairCounts.set(pair, (queriedPairCounts.get(pair) ?? 0) + 1);
 		}
+		let finalTraces = "";
+		await until(async () => {
+			finalTraces = await collector.read();
+			return (
+				JSON.stringify(
+					sortedCounts(tracePairCounts(finalTraces, executionId)),
+				) === JSON.stringify(sortedCounts(queriedPairCounts))
+			);
+		});
 		const observedPairCounts = tracePairCounts(finalTraces, executionId);
 		// Compare the pair multiset, not independent substring membership: this
 		// rejects swapped pairs, duplicate query rows, and unrelated extra traces.
