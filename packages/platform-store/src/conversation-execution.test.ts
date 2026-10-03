@@ -20,7 +20,10 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
-import { PostgresTaskAuthorizationStoreV1 } from "./task-authorization.ts";
+import {
+	insertTaskAuthorization,
+	PostgresTaskAuthorizationStoreV1,
+} from "./task-authorization.ts";
 
 const authority: ConversationExecutionAuthorityV1 = {
 	schemaVersion: 1,
@@ -1720,4 +1723,73 @@ it("atomically binds confirmed input files with their Message and preserves bind
 		await files.close();
 		await transaction.close();
 	}
+});
+
+it("guards supplied Conversation SQL after the original transaction aborts and rolls back", async () => {
+	const controller = new AbortController();
+	let late: PostgresConversationExecutionTransactionV1 | undefined;
+	let original: postgres.TransactionSql | undefined;
+	await expect(
+		client.begin(async (transaction) => {
+			original = transaction;
+			late = new PostgresConversationExecutionTransactionV1({
+				transaction,
+				signal: controller.signal,
+			});
+			controller.abort();
+			throw new Error("Controlled original rollback");
+		}),
+	).rejects.toThrow("Controlled original rollback");
+	if (!late) throw new Error("Missing supplied adapter");
+	const supplied = late;
+	const useCase = createConversationExecutionUseCaseV1({
+		transaction: supplied,
+		authorization: {
+			authorize: async () => ({ outcome: "allowed", authority }),
+		},
+	});
+	await expect(
+		useCase.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "late-supplied",
+			traceId: "late-trace",
+			requestId: "late-request",
+		}),
+	).rejects.toBeDefined();
+	await expect(
+		useCase.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId: "late-supplied",
+			text: "controlled late input",
+			idempotencyKey: "late-supplied-message",
+			traceId: "late-trace",
+			requestId: "late-request",
+		}),
+	).rejects.toBeDefined();
+	if (!original) throw new Error("Missing original transaction");
+	await expect(
+		insertTaskAuthorization(original, {
+			executionId: "late-supplied-execution",
+			boundary: {
+				schemaVersion: 1,
+				principal: { kind: "user", id: authority.actorId },
+				agentId: authority.agentId,
+				channelId: authority.channelId,
+				identityRevision: "identity-1",
+				agentAuthorizationRevision: authority.authorizationRevision,
+				accessSources: [{ kind: "user", userId: authority.actorId }],
+			},
+			traceId: "late-trace",
+			requestId: "late-request",
+		}),
+	).rejects.toBeDefined();
+	expect(
+		await client`select id from platform.task_authorization_records`,
+	).toHaveLength(0);
+	expect(await client`select id from platform.conversations`).toHaveLength(0);
+	expect(
+		await client`select id from platform.idempotency_records`,
+	).toHaveLength(0);
 });
