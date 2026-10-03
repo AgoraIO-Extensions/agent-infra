@@ -1,6 +1,7 @@
 import type {
 	KubernetesObject,
 	V1PersistentVolumeClaim,
+	V1Pod,
 } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import type {
@@ -141,6 +142,58 @@ describe("session sandbox workload adapter", () => {
 				accessModes: ["ReadWriteMany"],
 			};
 		}
+		await expect(adapter.apply(allocation)).rejects.toMatchObject({
+			code: "conflict",
+		});
+	});
+
+	it.each([
+		[
+			"image",
+			(pod: V1Pod) => {
+				const container = pod.spec?.containers[0];
+				if (!container) throw new Error("missing runtime container");
+				container.image = `registry.example.test/other@sha256:${"b".repeat(64)}`;
+			},
+		],
+		[
+			"service account",
+			(pod: V1Pod) => {
+				if (!pod.spec) throw new Error("missing pod spec");
+				pod.spec.serviceAccountName = "foreign-account";
+			},
+		],
+		[
+			"workspace mount",
+			(pod: V1Pod) => {
+				const mount = pod.spec?.containers[0]?.volumeMounts?.[0];
+				if (!mount) throw new Error("missing workspace mount");
+				mount.mountPath = "/foreign";
+			},
+		],
+		[
+			"PVC claim",
+			(pod: V1Pod) => {
+				const volume = pod.spec?.volumes?.[0];
+				if (!volume?.persistentVolumeClaim)
+					throw new Error("missing workspace volume");
+				volume.persistentVolumeClaim.claimName = "foreign-pvc";
+			},
+		],
+		[
+			"container port",
+			(pod: V1Pod) => {
+				const port = pod.spec?.containers[0]?.ports?.[0];
+				if (!port) throw new Error("missing container port");
+				port.containerPort = 9090;
+			},
+		],
+	] as const)("rejects owned Pod %s drift", async (_field, mutate) => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const pod = await client.read("Pod", allocation.podName);
+		mutate(pod as V1Pod);
 		await expect(adapter.apply(allocation)).rejects.toMatchObject({
 			code: "conflict",
 		});

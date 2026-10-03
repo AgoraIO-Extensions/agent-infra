@@ -203,6 +203,41 @@ function pvcSpecMatches(
 	);
 }
 
+function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
+	const currentSpec = (current as V1Pod).spec;
+	const expectedSpec = expected.spec;
+	const currentContainer = currentSpec?.containers?.[0];
+	const expectedContainer = expectedSpec?.containers?.[0];
+	if (!currentSpec || !expectedSpec || !currentContainer || !expectedContainer)
+		return false;
+	const normalizeEnv = (env: typeof expectedContainer.env) =>
+		(env ?? [])
+			.map(({ name, value, valueFrom }) => ({ name, value, valueFrom }))
+			.sort((left, right) => left.name.localeCompare(right.name));
+	return (
+		currentSpec.serviceAccountName === expectedSpec.serviceAccountName &&
+		currentSpec.automountServiceAccountToken ===
+			expectedSpec.automountServiceAccountToken &&
+		currentSpec.restartPolicy === expectedSpec.restartPolicy &&
+		currentContainer.name === expectedContainer.name &&
+		currentContainer.image === expectedContainer.image &&
+		currentContainer.imagePullPolicy === expectedContainer.imagePullPolicy &&
+		currentContainer.workingDir === expectedContainer.workingDir &&
+		JSON.stringify(currentContainer.ports ?? []) ===
+			JSON.stringify(expectedContainer.ports ?? []) &&
+		JSON.stringify(normalizeEnv(currentContainer.env)) ===
+			JSON.stringify(normalizeEnv(expectedContainer.env)) &&
+		JSON.stringify(currentContainer.volumeMounts ?? []) ===
+			JSON.stringify(expectedContainer.volumeMounts ?? []) &&
+		JSON.stringify(currentContainer.securityContext ?? {}) ===
+			JSON.stringify(expectedContainer.securityContext ?? {}) &&
+		JSON.stringify(currentContainer.readinessProbe ?? {}) ===
+			JSON.stringify(expectedContainer.readinessProbe ?? {}) &&
+		JSON.stringify(currentSpec.volumes ?? []) ===
+			JSON.stringify(expectedSpec.volumes ?? [])
+	);
+}
+
 function owned(
 	current: KubernetesObject,
 	expected: KubernetesObject,
@@ -272,7 +307,10 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						)
 					)
 						throw new WorkloadKubernetesError("conflict");
-				} else if (expected.kind !== "Pod")
+				} else if (expected.kind === "Pod") {
+					if (!podSpecMatches(current, expected as V1Pod))
+						throw new WorkloadKubernetesError("conflict");
+				} else
 					await options.client.replace({
 						...expected,
 						metadata: {
