@@ -116,29 +116,37 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		queryClient.removeQueries({ queryKey, exact: true });
 		deniedCallback.current?.();
 	}, [denied, queryClient, queryKey]);
-	if (denied || !identityKey)
-		return (
-			<Alert className="my-6">
-				<AlertDescription>
-					当前登录或访问权限已失效，请重新登录或返回 Agent 列表。
-				</AlertDescription>
-			</Alert>
-		);
 	const agent = agentQuery.data;
-	if (!agent)
+	if (denied || !identityKey || !agent)
 		return (
-			<section className="space-y-4 py-6">
-				<h1 className="font-semibold text-[28px]">对话</h1>
-				{agentQuery.isPending ? (
+			<section className="chat-layout">
+				<header className="conversation-header">
+					<div className="conversation-heading-copy">
+						<p className="conversation-eyebrow">工作区 / 对话</p>
+						<h1>对话</h1>
+					</div>
+				</header>
+				{denied || !identityKey ? (
+					<Alert>
+						<AlertDescription>
+							当前登录或访问权限已失效，请重新登录或返回 Agent 列表。
+						</AlertDescription>
+					</Alert>
+				) : agentQuery.isPending ? (
 					<p role="status">正在读取 Agent…</p>
 				) : (
-					<>
-						<Alert>
-							<AlertDescription>Agent 信息暂时无法读取。</AlertDescription>
-						</Alert>
-						<Button onClick={() => void agentQuery.refetch()}>重新读取</Button>
-					</>
+					<Alert>
+						<AlertDescription>Agent 信息暂时无法读取。</AlertDescription>
+					</Alert>
 				)}
+				<div className="mt-4 flex flex-wrap gap-2">
+					{!denied && identityKey && !agentQuery.isPending && (
+						<Button onClick={() => void agentQuery.refetch()}>重新读取</Button>
+					)}
+					<Link to="/agents" className={buttonVariants({ variant: "outline" })}>
+						返回 Agent 列表
+					</Link>
+				</div>
 			</section>
 		);
 	const available =

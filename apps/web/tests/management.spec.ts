@@ -1074,6 +1074,8 @@ test("mobile navigation traps focus and returns it on Escape", async ({
 	await fixture(page, "employee");
 	await page.goto("/agents");
 	const trigger = page.getByRole("button", { name: "打开导航" });
+	await expect(trigger).toHaveCSS("border-top-width", "1px");
+	await expect(trigger).toHaveCSS("border-radius", "10px");
 	await trigger.click();
 	const dialog = page.getByRole("dialog", { name: "主导航" });
 	await expect(dialog).toBeVisible();
@@ -1089,9 +1091,18 @@ test("mobile navigation traps focus and returns it on Escape", async ({
 	await expect(dialog).not.toBeVisible();
 	await expect(trigger).toBeFocused();
 	await trigger.click();
+	await expect(dialog).toBeVisible();
+	await page.setViewportSize({ width: 1024, height: 768 });
+	await expect(dialog).not.toBeVisible();
+	await expect(trigger).not.toBeVisible();
+	await page.setViewportSize({ width: 390, height: 844 });
+	await expect(trigger).toBeVisible();
+	await expect(dialog).not.toBeVisible();
+	await trigger.click();
 	await dialog.getByRole("link", { name: "我的 Agent", exact: true }).click();
 	await expect(page).toHaveURL(/\/my-agents$/);
 	await expect(dialog).not.toBeVisible();
+	await capture(page, info, "mobile-navigation-route-recovery");
 });
 
 const zoomOwnerManagementPaths = [
@@ -1940,6 +1951,7 @@ for (const route of [
 	"/my-agents",
 	"/my-agents/new",
 	"/my-agents/application-browser-1",
+	"/my-agents/application-browser-1/edit",
 	"/agents/agent-pilot-1/configuration",
 	"/admin/approvals",
 ]) {
@@ -1955,10 +1967,32 @@ for (const route of [
 		api.threeAgents();
 		await page.goto(route);
 		await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-		if (route === "/my-agents/new")
+		if (route === "/my-agents/new" || route.endsWith("/edit"))
 			await expect(
 				page.getByLabel("Agent 名称", { exact: true }),
 			).toBeVisible();
+		else if (route.endsWith("/configuration"))
+			await expect(
+				page.getByRole("button", { name: "校验并保存", exact: true }),
+			).toBeVisible();
+		else if (route === "/admin/approvals")
+			await expect(
+				page.getByRole("button", { name: "审阅申请", exact: true }).first(),
+			).toBeVisible();
+		else if (route === "/my-agents")
+			await expect(
+				page.getByRole("link", { name: "查看申请", exact: true }).first(),
+			).toBeVisible();
+		else if (route === "/agents")
+			await expect(page.locator(".directory-card")).toHaveCount(3);
+		else
+			await expect(page.getByRole("heading", { level: 1 })).toContainText(
+				"Release assistant",
+			);
+		if (route.includes("application-browser-1"))
+			await expect(page.locator('[data-slot="breadcrumb-page"]')).toHaveText(
+				route.endsWith("/edit") ? "编辑申请" : "申请详情",
+			);
 		for (const viewport of designViewports) {
 			await page.setViewportSize(viewport);
 			await captureDesignContract(
@@ -1966,6 +2000,14 @@ for (const route of [
 				info,
 				route.replaceAll("/", "-") || "workbench",
 			);
+			if (route === "/my-agents") {
+				await page
+					.getByRole("tab", { name: "已创建 Agent", exact: true })
+					.click();
+				await expect(page.locator(".owned-agent-card").first()).toBeVisible();
+				await captureDesignContract(page, info, "my-agents-owned");
+				await page.getByRole("tab", { name: "申请", exact: true }).click();
+			}
 		}
 	});
 }
