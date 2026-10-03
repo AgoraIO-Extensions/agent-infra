@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { selectCurrentGateCheck } from "./check-run-contract.mjs";
 import { extractPrimaryIssueNumbers } from "./pr-gates.mjs";
-import { githubRequest, PrAgentTargetSuperseded, requirePrAgentTarget, readGitHubFile, verifyPrAgentPublication } from "./pr-agent-review.mjs";
+import { githubRequest, PrAgentTargetSuperseded, requirePrAgentTarget, verifyPrAgentPublication } from "./pr-agent-review.mjs";
 
 const CHECK = "Automated Review Coverage";
 const sha = (value) => typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
@@ -200,6 +200,31 @@ export function validateDiffInput(diff, files) {
 // alone cannot detect a missing whole hunk with otherwise valid syntax.
 export async function verifyRangeContents(context, fromSha, diff, files) {
   if (!files.length) return;
+  const trees = await Promise.all([fromSha, context.expectedHead].map(async (ref) => {
+    const commit = await context.request(`/repos/${context.repository}/git/commits/${ref}`);
+    if (commit.sha !== ref || !sha(commit.tree?.sha)) throw new Error("PR-Agent range commit is invalid");
+    const tree = await context.request(`/repos/${context.repository}/git/trees/${commit.tree.sha}?recursive=1`);
+    if (tree.sha !== commit.tree.sha || tree.truncated !== false || !Array.isArray(tree.tree))
+      throw new Error("PR-Agent range tree is incomplete");
+    const entries = new Map();
+    for (const entry of tree.tree) {
+      if (!entry || typeof entry.path !== "string" || !entry.path || entries.has(entry.path))
+        throw new Error("PR-Agent range tree identity is invalid");
+      entries.set(entry.path, entry);
+    }
+    return entries;
+  }));
+  const read = async (name, tree) => {
+    const entry = tree.get(name);
+    if (entry?.type !== "blob" || !sha(entry.sha)) throw new Error("PR-Agent range blob identity is invalid");
+    const blob = await context.request(`/repos/${context.repository}/git/blobs/${entry.sha}`);
+    if (blob.sha !== entry.sha || blob.encoding !== "base64" || typeof blob.content !== "string")
+      throw new Error("PR-Agent range blob contents are invalid");
+    const encoded = blob.content.replace(/\s/g, "");
+    const bytes = Buffer.from(encoded, "base64");
+    if (bytes.toString("base64") !== encoded) throw new Error("PR-Agent range blob encoding is invalid");
+    return bytes;
+  };
   const directory = await mkdtemp(join(tmpdir(), "pr-agent-range-"));
   try {
     for (const block of diff.split(/(?=^diff --git )/m)) {
@@ -208,10 +233,9 @@ export async function verifyRangeContents(context, fromSha, diff, files) {
       const filename = stat.slice(stat.indexOf("\t", stat.indexOf("\t") + 1) + 1, -1);
       const file = files.find((candidate) => candidate.filename === filename);
       if (!file) throw new Error("PR-Agent range file identity is invalid");
-      const read = (name, ref) => readGitHubFile({ ...context, filename: name, ref, encoding: null });
       const [before, after] = await Promise.all([
-        file.status === "added" ? Buffer.alloc(0) : read(file.previous_filename ?? filename, fromSha),
-        file.status === "removed" ? Buffer.alloc(0) : read(filename, context.expectedHead),
+        file.status === "added" ? Buffer.alloc(0) : read(file.previous_filename ?? filename, trees[0]),
+        file.status === "removed" ? Buffer.alloc(0) : read(filename, trees[1]),
       ]);
       const hunkStart = block.indexOf("\n@@ ");
       await writeFile(join(directory, "file"), before, "utf8");

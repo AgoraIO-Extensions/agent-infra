@@ -170,24 +170,23 @@ const encodedPath = (filename) =>
     .map((segment) => encodeURIComponent(segment))
     .join("/");
 
-function decodeBase64Content(value, encoding = "utf8") {
+function decodeBase64Content(value) {
   if (typeof value !== "string") throw new Error("GitHub file content is invalid");
-  const bytes = Buffer.from(value.replace(/\s/g, ""), "base64");
-  return encoding === null ? bytes : bytes.toString(encoding);
+  return Buffer.from(value.replace(/\s/g, ""), "base64").toString("utf8");
 }
 
 /**
  * Read a file through the Contents API and fall back to the Git Blob API for
  * files where Contents returns encoding=none (currently the large-file path).
  */
-export async function readGitHubFile({ repository, filename, ref, request, encoding = "utf8" }) {
+async function readGitHubFile({ repository, filename, ref, request }) {
   const content = await request(
     `/repos/${repository}/contents/${encodedPath(filename)}?ref=${encodeURIComponent(ref)}`,
   );
   if (content?.type !== "file" || !sha(content.sha))
     throw new Error("PR-Agent review file contents are invalid");
   if (content.encoding === "base64" && typeof content.content === "string")
-    return decodeBase64Content(content.content, encoding);
+    return decodeBase64Content(content.content);
 
   const blob = await request(`/repos/${repository}/git/blobs/${content.sha}`);
   if (
@@ -196,7 +195,7 @@ export async function readGitHubFile({ repository, filename, ref, request, encod
     typeof blob.content !== "string"
   )
     throw new Error("PR-Agent review file blob is invalid");
-  return decodeBase64Content(blob.content, encoding);
+  return decodeBase64Content(blob.content);
 }
 
 async function resolveMergeBase({ repository, baseSha, headSha, request }) {

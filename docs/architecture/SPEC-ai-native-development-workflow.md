@@ -379,7 +379,8 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   可选 Suggestions 不在 `synchronize` 上运行，避免重复全量建议。
   范围输入以固定 from/head 的原始 diff 为准，用 Git numstat 校验实际 hunk 行数；compare API
   文件列表只用于文件身份、状态和重命名边界，不以可能因 patch 省略而归零的统计判定完整性。
-  另从固定 from/head 读取文件内容，将收到的 hunks 应用于 from 内容并与 head 内容逐字节核对，
+  另从固定 from/head 的 Git tree/blob 读取原始文件内容（不解引用 symlink），
+  将收到的 hunks 应用于 from 内容并与 head 内容逐字节核对，
   防止整段合法 hunk 遗漏仍被接受；内容读取或应用失败时拒绝覆盖。
   文件缺失、重复、身份或状态不一致、无法解析及 binary 输入均失败关闭；既有大小与文件上限不变。
 - 增量起点必须来自同一 PR 的 dedicated App 成功 Coverage Check，并回读其绑定的原生 Review、

@@ -22,9 +22,11 @@ function fixture() {
       head: { sha: state.head, repo: { full_name: repository } },
       base: { sha: base, ref: "main", repo: { full_name: repository } } };
     if (path.endsWith("/issues/7")) return state.issue;
-    if (path.includes("/contents/")) {
-      const ref = new URL(`https://example.test${path}`).searchParams.get("ref");
-      return { type: "file", sha: ref, encoding: "base64", content: Buffer.from(`${source[ref] ?? "new base"}\n`).toString("base64") };
+    if (path.includes("/git/")) {
+      const ref = path.split("/").at(-1).split("?")[0];
+      if (path.includes("/commits/")) return { sha: ref, tree: { sha: ref } };
+      if (path.includes("/trees/")) return { sha: ref, truncated: false, tree: [{ path: "src/math.ts", type: "blob", sha: ref }] };
+      return { sha: ref, encoding: "base64", content: Buffer.from(`${source[ref] ?? "new base"}\n`).toString("base64") };
     }
     const compare = /\/compare\/([a-f0-9]+)\.\.\.([a-f0-9]+)$/.exec(path);
     if (compare) {
@@ -280,8 +282,7 @@ test("no-newline markers preserve source bytes and do not consume hunk counts", 
   const file = { filename: "src/math.ts", status: "modified" };
   const diff = patch("before", "after").replace("-before\n", "-before\n\\ No newline at end of file\n") + "\\ No newline at end of file\n";
   assert.ok(validateDiffInput(diff, [file]).diffBytes);
-  const request = async (path) => ({ type: "file", sha: base, encoding: "base64",
-    content: Buffer.from(path.endsWith(`ref=${base}`) ? "before" : "after").toString("base64") });
+  const request = blobFixture("before", "after");
   await verifyRangeContents({ repository, expectedHead: first, request }, base, diff, [file]);
 });
 
@@ -291,11 +292,44 @@ test("immutable contents reject a complete omitted hunk even when numstat agrees
   const truncated = patch("one", "ONE");
   const complete = truncated + "@@ -10 +10 @@\n-ten\n+TEN\n";
   const files = [{ filename: "src/math.ts", status: "modified" }];
-  const request = async (path) => ({ type: "file", sha: base, encoding: "base64",
-    content: Buffer.from(path.endsWith(`ref=${base}`) ? before : after).toString("base64") });
+  const request = blobFixture(before, after);
   const context = { repository, expectedHead: first, request };
   assert.ok(validateDiffInput(truncated, files).diffBytes);
   await assert.rejects(verifyRangeContents(context, base, truncated, files), /immutable contents/);
   await verifyRangeContents(context, base, complete, files);
-  await assert.rejects(verifyRangeContents({ ...context, request: async () => ({}) }, base, complete, files), /contents are invalid/);
+  await assert.rejects(verifyRangeContents({ ...context, request: async () => ({}) }, base, complete, files), /commit is invalid/);
+});
+
+
+function blobFixture(before, after, filename = "src/math.ts", mode = "100644") {
+  return async (path) => {
+    const ref = path.split("/").at(-1).split("?")[0];
+    if (path.includes("/git/commits/")) return { sha: ref, tree: { sha: ref } };
+    if (path.includes("/git/trees/")) return { sha: ref, truncated: false, tree: [{ path: filename, type: "blob", mode, sha: ref }] };
+    assert.ok(path.includes("/git/blobs/"), "Contents API must not dereference symlinks");
+    return { sha: ref, encoding: "base64", content: Buffer.from(ref === base ? before : after).toString("base64") };
+  };
+}
+
+test("symlink verification reads the link blob, not dereferenced target contents", async () => {
+  const diff = patch("old-target.ts", "new-target.ts").replace("100644", "120000")
+    .replace("-old-target.ts\n", "-old-target.ts\n\\ No newline at end of file\n") + "\\ No newline at end of file\n";
+  const files = [{ filename: "src/math.ts", status: "modified" }];
+  validateDiffInput(diff, files);
+  const request = blobFixture("old-target.ts", "new-target.ts", "src/math.ts", "120000");
+  await verifyRangeContents({ repository, expectedHead: first, request }, base, diff, files);
+});
+
+test("incomplete trees, duplicate entries and mismatched blobs fail closed", async () => {
+  for (const corrupt of [
+    (value) => { if (value.tree instanceof Array) value.truncated = true; },
+    (value) => { if (value.tree instanceof Array) value.tree.push(value.tree[0]); },
+    (value) => { if (value.encoding) value.sha = "0".repeat(40); },
+    (value) => { if (value.encoding) value.content = "not!base64"; },
+  ]) {
+    const original = blobFixture("before\n", "after\n");
+    const request = async (path) => { const value = await original(path); corrupt(value); return value; };
+    await assert.rejects(verifyRangeContents({ repository, expectedHead: first, request }, base,
+      patch("before", "after"), [{ filename: "src/math.ts", status: "modified" }]));
+  }
 });

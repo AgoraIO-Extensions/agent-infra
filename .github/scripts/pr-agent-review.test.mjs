@@ -251,12 +251,14 @@ test("publishes and reads back nonempty scoped findings for Git-quoted paths", a
       return { ...current, body: "Closes #7", base: { ...current.base, ref: "main", repo: { full_name: context.repository } } };
     }
     if (path.endsWith("/issues/7")) return issue;
-    if (path.includes("/contents/")) {
-      const url = new URL(`https://example.test${path}`);
-      const filename = decodeURIComponent(url.pathname.split("/contents/")[1]);
-      const file = files.find((candidate) => candidate.filename === filename);
-      const value = url.searchParams.get("ref") === head ? file.after : file.before;
-      return { type: "file", sha: head, encoding: "base64", content: Buffer.from(value).toString("base64") };
+    if (path.includes("/git/")) {
+      const ref = path.split("/").at(-1).split("?")[0];
+      if (path.includes("/commits/")) return { sha: ref, tree: { sha: ref } };
+      if (path.includes("/trees/")) return { sha: ref, truncated: false,
+        tree: files.map((file, index) => ({ path: file.filename, type: "blob", sha: ref.slice(0, 38) + String(index).padStart(2, "0") })) };
+      const file = files[Number(ref.slice(-2))];
+      const value = ref.startsWith(head.slice(0, 38)) ? file.after : file.before;
+      return { sha: ref, encoding: "base64", content: Buffer.from(value).toString("base64") };
     }
     if (path.includes("/compare/")) return options.responseType === "text" ? diff
       : { status: "ahead", merge_base_commit: { sha: "b".repeat(40) },
