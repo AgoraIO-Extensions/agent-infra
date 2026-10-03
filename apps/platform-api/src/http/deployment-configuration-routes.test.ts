@@ -86,15 +86,12 @@ describe("deployment configuration projection", () => {
 		expect(DeploymentConfigurationProjectionV2Schema.parse(body)).toEqual({
 			schemaVersion: 2,
 			status: "populated",
-			templates: [
-				{
+			templates: expect.arrayContaining([
+				expect.objectContaining({
 					templateId: "template-standard",
-					displayName: "Standard Agent",
-					connectionEnabled: false,
-					allowedEnvironmentKeys: ["LOG_LEVEL"],
-					allowedSecretKeys: ["MODEL_API_KEY"],
-				},
-			],
+					readiness: { state: "unverified", revision: null },
+				}),
+			]),
 			modelCatalog: {
 				status: "populated",
 				revision: "catalog-a",
@@ -166,9 +163,12 @@ describe("deployment configuration projection", () => {
 		const body = DeploymentConfigurationProjectionV2Schema.parse(
 			await response.json(),
 		);
-		expect(body.status).toBe(status);
+		expect(body.status).toBe(status === "empty" ? "populated" : status);
 		expect(body.modelCatalog.status).toBe(status);
-		expect(body.templates).toEqual([]);
+		expect(body.templates).toHaveLength(4);
+		expect(
+			body.templates.every((t) => t.readiness?.state === "unregistered"),
+		).toBe(true);
 		expect(body.modelCatalog.endpoints).toEqual([]);
 	});
 

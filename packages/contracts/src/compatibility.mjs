@@ -1102,6 +1102,35 @@ function isDeploymentConfigurationV2OpenApiAddition(previous, current) {
 	);
 }
 
+// #1259 adds only optional readiness metadata and the displayed selection revision.
+function isTemplateReadinessV2OpenApiAddition(previous, current) {
+	const schemas = current.components?.schemas;
+	const addition = {
+		readiness: schemas?.DeploymentTemplateProjectionV2?.properties?.readiness,
+		createRevision:
+			schemas?.AgentApplicationCreateRequestV2?.properties?.source?.anyOf?.[0]
+				?.properties?.templateRevision,
+		updateRevision:
+			schemas?.AgentApplicationUpdateRequestV2?.properties?.source?.anyOf?.[0]
+				?.properties?.templateRevision,
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"4a1caabb7b8190f3cf6362aa915c81048146767d58bd96fdbdda4fe375ad8b16"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas.DeploymentTemplateProjectionV2.properties
+		.readiness;
+	for (const name of [
+		"AgentApplicationCreateRequestV2",
+		"AgentApplicationUpdateRequestV2",
+	])
+		delete normalized.components.schemas[name].properties.source.anyOf[0]
+			.properties.templateRevision;
+	return sameValue(previous, normalized);
+}
+
 // Only the reviewed #442 additive file surface may differ; every old contract remains exact.
 function isFileAuthorityOpenApiAddition(previous, current) {
 	const paths = [
@@ -1685,6 +1714,7 @@ function findBreakingChanges(previous, current) {
 			!isOwnApplicationDisableV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
+			!isTemplateReadinessV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
 			!isAdministratorAgentReadV2OpenApiAddition(previous, current) &&
 			!isPersonalApiCredentialV2OpenApiAddition(previous, current) &&

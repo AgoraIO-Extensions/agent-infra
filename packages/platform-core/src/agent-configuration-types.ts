@@ -107,7 +107,11 @@ export interface AgentConfigurationModelOptionInputV1 {
 }
 
 export type AgentConfigurationSourceSelectionV1 =
-	| { readonly kind: "standard"; readonly templateId: string }
+	| {
+			readonly kind: "standard";
+			readonly templateId: string;
+			readonly templateRevision?: string;
+	  }
 	| {
 			readonly kind: "custom";
 			readonly imageReference: string;
@@ -411,6 +415,8 @@ export interface AgentConfigurationImageAdmissionPortV1 {
 		readonly requestId: string;
 		readonly traceId: string;
 		readonly requested: AgentConfigurationSourceSelectionV1;
+		/** Set only after the independent standard-template release authorization. */
+		readonly releaseTarget?: StandardTemplateReleaseTargetV1;
 	}): Promise<
 		| {
 				readonly schemaVersion: 1;

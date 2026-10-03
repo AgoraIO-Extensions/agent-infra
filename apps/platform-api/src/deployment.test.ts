@@ -1,9 +1,12 @@
+import { execFile } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
+import { promisify } from "node:util";
 import {
 	AgentApplicationProjectionV2Schema,
 	AgentProjectionV2Schema,
+	DeploymentConfigurationProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import {
@@ -115,7 +118,7 @@ const applicationBody = {
 	schemaVersion: 2,
 	name: "Production assembly test",
 	description: "Synthetic persistent lifecycle",
-	source: { kind: "standard", templateId: "codex" },
+	source: { kind: "standard", templateId: "codex", templateRevision: "" },
 	coOwnerIds: [],
 	availability: [{ kind: "organization", organizationId: "org-a" }],
 	modelConfiguration: modelConfiguration(plaintext.model),
@@ -192,6 +195,19 @@ function deploymentInput(
 	}));
 	const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
 	const der = publicKey.export({ format: "der", type: "spki" });
+	const validation = {
+		schemaVersion: 1,
+		templateId: "codex",
+		imageDigest,
+		driver: "codex",
+		configurationRevision: "config-test",
+		status: "passed",
+		evidenceKind: "real-runtime-model",
+		executionId: "test-execution",
+		modelId: "model-a",
+		validatedAt: Date.now() - 1000,
+		validUntil: Date.now() + 3600_000,
+	};
 	const input: ProductionPlatformApiInputV1 = {
 		databaseUrl,
 		imageRepository: "registry.example.test/agents/codex",
@@ -214,6 +230,14 @@ function deploymentInput(
 		templates: [
 			{
 				templateId: "codex",
+				modelBinding: {
+					templateId: "codex",
+					imageDigest,
+					driver: "codex",
+					protocol: "openai-responses-v1",
+				},
+				configurationRevision: "config-test",
+				loadValidation: async () => validation,
 				imageDigest,
 				imageReference: `registry.example.test/agents/codex@${imageDigest}`,
 				allowedEnvironmentKeys: ["LANG"],
@@ -272,7 +296,7 @@ function deploymentInput(
 			},
 		},
 	};
-	return { input, fetch, authorize, imageDigest };
+	return { input, fetch, authorize, imageDigest, validation };
 }
 
 let database: PostgresTestDatabase;
@@ -291,6 +315,11 @@ async function openApi() {
 		log: () => {},
 	});
 	origin = `http://127.0.0.1:${(running.server.address() as AddressInfo).port}`;
+	const choices = DeploymentConfigurationProjectionV2Schema.parse(
+		await (await request("/api/v2/deployment/configuration", "alice")).json(),
+	);
+	applicationBody.source.templateRevision =
+		choices.templates[0]?.readiness?.revision ?? "missing";
 }
 function request(path: string, user: User, body?: unknown, key?: string) {
 	return fetch(`${origin}${path}`, {
@@ -956,3 +985,87 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		},
 	);
 });
+
+it("rejects a selected template after disable, expiry, missing revision or forged readiness without a database write", async () => {
+	const before = await snapshot();
+	const saved = { ...fixture.validation };
+	try {
+		for (const [index, status] of ["disabled", "failed"].entries()) {
+			fixture.validation.status = status;
+			const response = await request(
+				"/api/v2/agent-applications",
+				"alice",
+				applicationBody,
+				`readiness-negative-${index}`,
+			);
+			expect(response.status).toBeGreaterThanOrEqual(400);
+		}
+		Object.assign(fixture.validation, saved);
+		for (const source of [
+			{ kind: "standard", templateId: "codex" },
+			{ ...applicationBody.source, templateRevision: "forged" },
+			{ ...applicationBody.source, readiness: "ready" },
+		]) {
+			const response = await request(
+				"/api/v2/agent-applications",
+				"alice",
+				{ ...applicationBody, source },
+				"readiness-forged",
+			);
+			expect(response.status).toBeGreaterThanOrEqual(400);
+		}
+		expect(await snapshot()).toEqual(before);
+	} finally {
+		Object.assign(fixture.validation, saved);
+	}
+});
+
+it.skipIf(!process.env.TEMPLATE_READINESS_BROWSER)(
+	"runs the template journey in a browser against this real API and PostgreSQL",
+	async () => {
+		await createPlatformApiShutdown(running)();
+		fixture = deploymentInput(database.databaseUrl);
+		await openApi();
+		const run = promisify(execFile);
+		for (const mode of ["disabled", "ready", "retry"] as const) {
+			fixture.validation.status = mode === "disabled" ? "disabled" : "passed";
+			if (mode === "retry")
+				fixture.authorize.mockImplementationOnce(async () => {
+					fixture.validation.executionId = "replacement-validation";
+					return {
+						status: "admitted",
+						decisionRef: "decision-a",
+						evaluatedAt: "2026-09-14T00:00:00Z",
+					};
+				});
+			const result = await run(
+				process.execPath,
+				[
+					new URL("../../web/tests/template-readiness-real.ts", import.meta.url)
+						.pathname,
+				],
+				{
+					env: {
+						...process.env,
+						TEMPLATE_TEST_API_ORIGIN: origin,
+						TEMPLATE_TEST_SESSION: sessionKeys.alice,
+						TEMPLATE_TEST_MODE: mode,
+					},
+					timeout: 60_000,
+				},
+			);
+			expect(result.stdout).toContain(`Controlled browser ${mode}: passed`);
+		}
+		const applications = await json(
+			await request("/api/v2/agent-applications", "alice"),
+			200,
+		);
+		expect(applications).toMatchObject({
+			items: expect.arrayContaining([
+				expect.objectContaining({ name: "Readiness browser ready" }),
+				expect.objectContaining({ name: "Readiness browser retry" }),
+			]),
+		});
+	},
+	190_000,
+);
