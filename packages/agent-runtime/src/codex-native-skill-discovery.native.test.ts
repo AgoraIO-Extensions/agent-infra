@@ -121,10 +121,24 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 				expect(JSON.stringify(first)).not.toContain("native-skill-thread");
 				const persisted = await readFile(seeded.path);
 				expect(persisted.toString()).not.toContain("workspace-summary");
-				expect(requests.map((request) => request.method)).toContain(
-					"skills/list",
+				const set = requests.find(
+					(request) => request.method === "skills/extraRoots/set",
 				);
+				expect(set?.params).toEqual({
+					extraRoots: [descriptor.manifest.extraRoot],
+				});
+				const list = requests.find(
+					(request) => request.method === "skills/list",
+				);
+				expect(list?.params).toMatchObject({ forceReload: true });
+				if (!list) throw new Error("Missing skills/list request");
+				expect((list.params as { cwds?: unknown }).cwds).toEqual([
+					expect.any(String),
+				]);
 				expect(notifications).toContain("skills/changed");
+				expect(
+					[...httpByPort.values()].reduce((sum, count) => sum + count, 0),
+				).toBe(0);
 			} finally {
 				await driver?.close();
 				http.unsubscribe(observe);

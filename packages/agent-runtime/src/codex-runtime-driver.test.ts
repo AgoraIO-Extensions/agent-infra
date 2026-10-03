@@ -24,7 +24,6 @@ import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 	type CodexModelAccess,
-	type CodexSkillLaunchProvenance,
 	codexConversationKey,
 } from "./codex-app-server-bridge.js";
 import type {
@@ -42,6 +41,10 @@ import {
 	type CodexRuntimeDriverOptions,
 } from "./codex-runtime-driver.js";
 import { openCodexRuntimeDriverForTest } from "./codex-runtime-driver.test-support.js";
+import {
+	type CodexSkillLaunchProvenance,
+	codexSkillLaunch,
+} from "./codex-skill-launch.internal.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
@@ -10308,6 +10311,10 @@ class SkillDiscoveryBridge extends TestCodexBridge {
 	nativeSkillLaunch() {
 		if (!this.launch || this.closedCount) throw new Error("No current launch");
 		return this.launch;
+	}
+
+	get [codexSkillLaunch]() {
+		return this.nativeSkillLaunch();
 	}
 
 	override async send(frame: CodexAppServerFrame) {

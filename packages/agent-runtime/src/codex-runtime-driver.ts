@@ -20,7 +20,6 @@ import {
 import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
 	type: "json",
 };
-
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CODEX_MODEL_ONLY_CONFIG,
@@ -28,7 +27,6 @@ import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 	type CodexModelAccess,
-	type CodexSkillLaunchProvenance,
 	codexConversationKey,
 	runCodexConnectionRecovery,
 	validateModelAccess,
@@ -82,6 +80,10 @@ import {
 	sameCodexNativeAttemptV1,
 } from "./codex-native-callback.js";
 import release from "./codex-release.json" with { type: "json" };
+import {
+	type CodexSkillLaunchProvenance,
+	codexSkillLaunch,
+} from "./codex-skill-launch.internal.js";
 import type {
 	RuntimeDriver,
 	RuntimeDriverCommand,
@@ -102,7 +104,7 @@ import {
 } from "./runtime-authorization.js";
 
 interface CodexAppServerTransport {
-	nativeSkillLaunch?(): CodexSkillLaunchProvenance;
+	[codexSkillLaunch]?: CodexSkillLaunchProvenance;
 	send(frame: CodexAppServerFrame): Promise<void>;
 	frames(): AsyncIterable<CodexAppServerFrame>;
 	close?(): Promise<void>;
@@ -3785,7 +3787,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.requiredRuntime.lane === "official-model-only"
 		) {
 			try {
-				const launch = bridge.nativeSkillLaunch?.();
+				const launch = bridge[codexSkillLaunch];
 				if (
 					!launch ||
 					!Object.isFrozen(launch) ||
@@ -4630,7 +4632,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		assertProcess = () => {
 			let sameLaunch = false;
 			try {
-				sameLaunch = process.bridge.nativeSkillLaunch?.() === process.launch;
+				sameLaunch = process.bridge[codexSkillLaunch] === process.launch;
 			} catch {
 				/* The owned process may have exited before its final frame. */
 			}
