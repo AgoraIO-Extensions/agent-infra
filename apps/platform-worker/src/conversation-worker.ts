@@ -59,6 +59,7 @@ export function createPlatformConversationWorkerV2(
 		: controller.signal;
 	const store = openPostgresConversationDispatchStoreV1({
 		databaseUrl: options.databaseUrl,
+		userDirectory: options.directory,
 	});
 	const taskAuthorizationStore = new PostgresTaskAuthorizationStoreV1({
 		databaseUrl: options.databaseUrl,

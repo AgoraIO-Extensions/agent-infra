@@ -1,6 +1,7 @@
 import type {
 	ConversationDispatchClaimDecisionV1,
 	ConversationDispatchClaimV1,
+	TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import {
 	executionKeyProjection,
@@ -24,9 +25,9 @@ import {
 } from "./conversation-dispatch-sql.js";
 import {
 	finishWaitingTask,
-	lockWaitingApplicationAuthority,
+	lockWaitingTaskAuthority,
 	recordTaskStatus,
-	revalidateWaitingApplication,
+	revalidateWaitingTask,
 	waitingDecision,
 } from "./conversation-dispatch-task.js";
 import {
@@ -44,9 +45,10 @@ export async function claimWork(
 		readonly workerId: string;
 		readonly leaseDurationMs: number;
 	},
+	userDirectory?: TaskUserDirectoryV1,
 ): Promise<ConversationDispatchClaimDecisionV1> {
 	// Application/use governance precedes the original Agent -> outbox -> Conversation locks.
-	await lockWaitingApplicationAuthority(transaction, input.itemId);
+	await lockWaitingTaskAuthority(transaction, input.itemId);
 	await transaction`
 		select a.id from platform.agents a
 		join platform.conversations c on c.agent_id = a.id
@@ -126,7 +128,12 @@ export async function claimWork(
 		`;
 		const state = { outbox, conversation, execution };
 		if (
-			!(await revalidateWaitingApplication(transaction, state, input.workerId))
+			!(await revalidateWaitingTask(
+				transaction,
+				state,
+				input.workerId,
+				userDirectory,
+			))
 		)
 			return { outcome: "failed" };
 		const decision = await waitingDecision(

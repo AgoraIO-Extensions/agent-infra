@@ -3472,11 +3472,14 @@ describe("waiting Task original Store promotion", () => {
 			async (sourceKind) => {
 				await seedCapacityAgent("agent-dispatch", 8, sourceKind);
 				const work = await acceptedKeyWork(channel);
+				if (channel === "api:user") {
+					await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'user', 'actor-dispatch', 'use', 'use-dispatch')`;
+				}
 				if (channel === "api:application") {
 					await client`insert into platform.platform_applications (id, name, responsible_user_id, authorization_revision) values ('actor-dispatch', 'Fixture', 'owner-a', 'identity-dispatch')`;
 					await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'application', 'actor-dispatch', 'use', 'use-dispatch')`;
-					await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'owner-a', now()) on conflict do nothing`;
 				}
+				await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'owner-a', now()) on conflict do nothing`;
 				if (sourceKind === "custom") {
 					await client`update platform.conversation_executions set execution_source=null, relay_key_purpose=null, relay_key_subject_id=null, relay_key_id=null, relay_key_version=null,
 					model_configuration_revision=null, model_option_id=null, reasoning_level=null where execution_id=${work.executionId}`;
@@ -3484,7 +3487,18 @@ describe("waiting Task original Store promotion", () => {
 				}
 				await client`update platform.conversation_executions set status='waiting', task_wait_order=1, task_wait_deadline=clock_timestamp()+interval '60 seconds' where execution_id=${work.executionId}`;
 				await client`update platform.outbox_items set available_at='infinity' where id=${work.itemId}`;
-				const store = open();
+				const store = new PostgresConversationDispatchStoreV1({
+					databaseUrl,
+					userDirectory: {
+						resolveUser: async (userId) => ({
+							schemaVersion: 1,
+							userId,
+							accountStatus: "active",
+							organizationIds: [],
+							authorizationRevision: "identity-dispatch",
+						}),
+					},
+				});
 				try {
 					expect(await store.findDispatchable({ limit: 8 })).toContainEqual({
 						itemId: work.itemId,

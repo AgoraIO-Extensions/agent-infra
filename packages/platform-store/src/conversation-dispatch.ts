@@ -13,6 +13,7 @@ import {
 	planConversationGenerationIsolationV1,
 	planTaskSystemControlV1,
 	type TaskPrincipalV1,
+	type TaskUserDirectoryV1,
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
@@ -42,9 +43,9 @@ import {
 } from "./conversation-dispatch-sql.js";
 import {
 	finishWaitingTask,
-	lockWaitingApplicationAuthority,
+	lockWaitingTaskAuthority,
 	recordTaskStatus,
-	revalidateWaitingApplication,
+	revalidateWaitingTask,
 	waitingDecision,
 } from "./conversation-dispatch-task.js";
 import {
@@ -64,6 +65,7 @@ import { readLegacyControlRecoveryInTransaction } from "./task-authorization-mig
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.ts";
 
 export interface PostgresConversationDispatchOptionsV1 {
+	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly databaseUrl: string;
 }
 
@@ -71,11 +73,13 @@ export class PostgresConversationDispatchStoreV1
 	implements ConversationDispatchStorePortV1
 {
 	readonly #client: Client;
+	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
 
 	constructor(options: PostgresConversationDispatchOptionsV1) {
 		if (!options || typeof options !== "object") {
 			throw new TypeError("Conversation dispatch Store options are invalid");
 		}
+		this.#userDirectory = options.userDirectory;
 		this.#client = postgres(
 			platformDatabaseUrlFromEnvironment({
 				PLATFORM_DATABASE_URL: options.databaseUrl,
@@ -230,7 +234,7 @@ export class PostgresConversationDispatchStoreV1
 			return await databaseOperation(() =>
 				this.#client.begin(async (transaction) => {
 					await transaction`select set_config('lock_timeout', '5s', true)`;
-					return claimWork(transaction, input);
+					return claimWork(transaction, input, this.#userDirectory);
 				}),
 			);
 		} catch (error) {
@@ -471,10 +475,7 @@ export class PostgresConversationDispatchStoreV1
 			const prepared = await transactionResult(
 				this.#client,
 				async (transaction) => {
-					await lockWaitingApplicationAuthority(
-						transaction,
-						input.claim.itemId,
-					);
+					await lockWaitingTaskAuthority(transaction, input.claim.itemId);
 					// Governance precedes Agent; management uses this same Agent row.
 					// Never hold another Conversation's execution lock while waiting for it.
 					await transaction`select id from platform.agents where id = ${input.claim.agentId} for update`;
@@ -509,10 +510,11 @@ export class PostgresConversationDispatchStoreV1
 					);
 					if (state.execution.status === "waiting") {
 						if (
-							!(await revalidateWaitingApplication(
+							!(await revalidateWaitingTask(
 								transaction,
 								state,
 								input.claim.leaseOwner,
+								this.#userDirectory,
 							))
 						) {
 							settledWaiting = true;

@@ -36,6 +36,15 @@ import {
 let database: PostgresTestDatabase;
 let client: ReturnType<typeof postgres>;
 let store: PostgresTaskAuthorizationStoreV1;
+const userDirectory = {
+	resolveUser: async (userId: string) => ({
+		schemaVersion: 1,
+		userId,
+		accountStatus: "active",
+		organizationIds: [],
+		authorizationRevision: "identity-1",
+	}),
+};
 
 const boundary = (
 	kind: TaskPrincipalV1["kind"],
@@ -58,7 +67,7 @@ beforeAll(async () => {
 	});
 }, 120_000);
 afterEach(async () => {
-	await client`truncate platform.platform_api_credentials, platform.platform_applications, platform.audit_events, platform.task_control_records, platform.task_authorization_records,
+	await client`truncate platform.platform_user_disables, platform.platform_api_credentials, platform.platform_applications, platform.audit_events, platform.task_control_records, platform.task_authorization_records,
 		platform.conversation_stops, platform.outbox_items, platform.conversation_executions,
 		platform.conversations, platform.agents cascade`;
 });
@@ -203,9 +212,8 @@ async function waitingTask(kind: TaskPrincipalV1["kind"]) {
 	if (kind === "application") {
 		await client`insert into platform.platform_applications (id, name, responsible_user_id, authorization_revision)
 			values ('same-id', 'Fixture', 'owner', 'identity-1')`;
-		await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision)
-			values ('agent', 'application', 'same-id', 'use', 'use-1')`;
 	}
+	await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent', ${kind}, 'same-id', 'use', 'use-1')`;
 	await client`insert into platform.agent_applications
 		(id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, service_availability, workload_revision, fence)
 		values ('agent-application', 'agent', 'owner', 'Agent', 'Fixture', 'available', 'trace', 'request', now(), 1, 1, 'running', 'ready', 1, 1)`;
@@ -566,12 +574,16 @@ describe("waiting settlement and per-Conversation ordering", () => {
 			await waitingTask(kind);
 			await client`update platform.conversations set status = 'unavailable', authorization_revision = 'agent-2' where id = 'conversation'`;
 			const result = await client.begin((transaction) =>
-				claimWork(transaction, {
-					schemaVersion: 1,
-					itemId: "conversation:turn:execution",
-					workerId: "worker",
-					leaseDurationMs: 30_000,
-				}),
+				claimWork(
+					transaction,
+					{
+						schemaVersion: 1,
+						itemId: "conversation:turn:execution",
+						workerId: "worker",
+						leaseDurationMs: 30_000,
+					},
+					userDirectory,
+				),
 			);
 			expect(result).toEqual({ outcome: "failed" });
 			const after = await waitingSnapshot();
@@ -731,12 +743,16 @@ it("does not revoke a user Task when an application with the same ID is disabled
 	await client`insert into platform.platform_applications (id, name, responsible_user_id, status, authorization_revision)
 		values ('same-id', 'Other namespace', 'owner', 'disabled', 'identity-2')`;
 	const result = await client.begin((transaction) =>
-		claimWork(transaction, {
-			schemaVersion: 1,
-			itemId: "conversation:turn:execution",
-			workerId: "worker",
-			leaseDurationMs: 30_000,
-		}),
+		claimWork(
+			transaction,
+			{
+				schemaVersion: 1,
+				itemId: "conversation:turn:execution",
+				workerId: "worker",
+				leaseDurationMs: 30_000,
+			},
+			userDirectory,
+		),
 	);
 	expect(result.outcome).toBe("claimed");
 	expect(
@@ -745,4 +761,122 @@ it("does not revoke a user Task when an application with the same ID is disabled
 	expect(await client`select id from platform.task_control_records`).toEqual(
 		[],
 	);
+});
+
+describe("waiting user authority", () => {
+	it.each([
+		"disabled",
+		"missing",
+		"platform-disabled",
+		"disabled-directory-unavailable",
+		"grant-revoked",
+		"revoked-directory-unavailable",
+		"grant-revision",
+	] as const)(
+		"durably cancels %s before availability and preserves settlement after restart",
+		async (change) => {
+			await waitingTask("user");
+			await client`update platform.agent_applications set service_availability = 'starting' where agent_id = 'agent'`;
+			await client`update platform.outbox_items set available_at = 'infinity' where id = 'conversation:turn:execution'`;
+			if (
+				change === "platform-disabled" ||
+				change === "disabled-directory-unavailable"
+			)
+				await client`insert into platform.platform_user_disables (user_id) values ('same-id')`;
+			if (
+				change === "grant-revoked" ||
+				change === "revoked-directory-unavailable"
+			)
+				await client`update platform.agent_principal_grants set revoked_at = now() where principal_type = 'user'`;
+			if (change === "grant-revision")
+				await client`update platform.agent_principal_grants set authorization_revision = 'use-2' where principal_type = 'user'`;
+			const directory = {
+				resolveUser: async (id: string) => {
+					if (change.endsWith("directory-unavailable"))
+						throw new Error("controlled directory failure");
+					return change === "missing"
+						? null
+						: {
+								...(await userDirectory.resolveUser(id)),
+								accountStatus: change === "disabled" ? "disabled" : "active",
+							};
+				},
+			};
+			let dispatch = new PostgresConversationDispatchStoreV1({
+				...database,
+				userDirectory: directory,
+			});
+			const request = {
+				schemaVersion: 1 as const,
+				itemId: "conversation:turn:execution",
+				workerId: "worker",
+				leaseDurationMs: 30_000,
+			};
+			try {
+				expect(await dispatch.findDispatchable({ limit: 8 })).toContainEqual({
+					itemId: request.itemId,
+					operation: "conversation.turn.submit.v1",
+				});
+				expect(await dispatch.claim(request)).toEqual({ outcome: "failed" });
+				const after = await waitingSnapshot();
+				expect(after.executions[0]).toMatchObject({
+					status: "cancelled",
+					last_event_sequence: "1",
+				});
+				expect(after.outboxes[0]).toMatchObject({ status: "failed" });
+				expect(
+					await client`select revoked_at from platform.task_authorization_records where execution_id = 'execution'`,
+				).toEqual([{ revoked_at: expect.any(Date) }]);
+				expect(
+					await client`select reason from platform.task_control_records where execution_id = 'execution'`,
+				).toEqual([{ reason: "authorization_revoked" }]);
+				await dispatch.close();
+				dispatch = new PostgresConversationDispatchStoreV1({
+					...database,
+					userDirectory,
+				});
+				expect(await dispatch.claim(request)).toEqual({ outcome: "failed" });
+				expect(await waitingSnapshot()).toEqual(after);
+			} finally {
+				await dispatch.close();
+			}
+		},
+	);
+	it("keeps accepted work after credential expiry and fails closed on directory failure", async () => {
+		await waitingTask("user");
+		await client`insert into platform.platform_api_credentials (id, principal_type, principal_id, credential_hash, scopes, expires_at) values ('expired', 'user', 'same-id', ${"b".repeat(64)}, '["agent:use"]'::jsonb, now() - interval '1 minute')`;
+		const before = await waitingSnapshot();
+		const request = {
+			schemaVersion: 1 as const,
+			itemId: "conversation:turn:execution",
+			workerId: "worker",
+			leaseDurationMs: 30_000,
+		};
+		const unavailable = new PostgresConversationDispatchStoreV1({
+			...database,
+			userDirectory: {
+				resolveUser: async () => {
+					throw new Error("controlled failure");
+				},
+			},
+		});
+		try {
+			await expect(unavailable.claim(request)).rejects.toThrow();
+			expect(await waitingSnapshot()).toEqual(before);
+		} finally {
+			await unavailable.close();
+		}
+		const dispatch = new PostgresConversationDispatchStoreV1({
+			...database,
+			userDirectory,
+		});
+		try {
+			expect((await dispatch.claim(request)).outcome).toBe("claimed");
+			expect(
+				await client`select id from platform.task_control_records`,
+			).toEqual([]);
+		} finally {
+			await dispatch.close();
+		}
+	});
 });

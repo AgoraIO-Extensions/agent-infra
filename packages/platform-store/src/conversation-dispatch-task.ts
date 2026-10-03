@@ -5,11 +5,18 @@ import {
 	decideConversationTaskWaitingV1,
 	isTaskApiChannelV1,
 	isTaskApplicationAuthorizationCurrentV1,
+	isTaskAuthorizationCurrentV1,
+	PersonalApiCredentialErrorV1,
 	parseTaskAuthorizationBoundaryV1,
 	planTaskSystemControlV1,
 	publicTaskStatusEventV1,
+	resolveCurrentPersonalApiUserV1,
+	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
-import { readCurrentTaskApplicationV1 } from "./application-task-authorization.js";
+import {
+	readCurrentTaskApiUseGrantV1,
+	readCurrentTaskApplicationV1,
+} from "./application-task-authorization.js";
 import {
 	type DispatchState,
 	executionPrincipalProjection,
@@ -22,10 +29,11 @@ import { exactPayload } from "./conversation-dispatch-validation.js";
 import { persistTaskControl } from "./task-control-record.js";
 
 /** Governance rows precede Agent/outbox locks; no credential participates in accepted work. */
-export async function lockWaitingApplicationAuthority(
+export async function lockWaitingTaskAuthority(
 	transaction: Transaction,
 	itemId: string,
 ) {
+	await transaction`lock table platform.platform_user_disables in share mode`;
 	await transaction`
 		select a.id from platform.platform_applications a
 		join platform.conversation_executions e on e.principal_type = 'application' and e.actor_id = a.id
@@ -35,8 +43,7 @@ export async function lockWaitingApplicationAuthority(
 	`;
 	await transaction`
 		select g.principal_id from platform.agent_principal_grants g
-		join platform.conversation_executions e on e.principal_type = 'application'
-			and g.principal_type = e.principal_type and g.principal_id = e.actor_id and g.agent_id = e.agent_id
+		join platform.conversation_executions e on g.principal_type = e.principal_type and g.principal_id = e.actor_id and g.agent_id = e.agent_id
 		join platform.outbox_items o on o.payload->>'executionId' = e.execution_id and o.scope_id = e.conversation_id
 		where o.id = ${itemId} and o.scope_type = 'conversation' and e.status = 'waiting' and g.grant_type = 'use'
 		for share of g
@@ -44,10 +51,11 @@ export async function lockWaitingApplicationAuthority(
 }
 
 /** Recheck before availability/capacity waits and again before first Runtime preparation. */
-export async function revalidateWaitingApplication(
+export async function revalidateWaitingTask(
 	transaction: Transaction,
 	state: DispatchState,
 	workerId: string,
+	userDirectory: TaskUserDirectoryV1 | undefined,
 ): Promise<boolean> {
 	const [record] = await transaction<
 		{ id: string; boundary: unknown; revoked_at: Date | null }[]
@@ -75,11 +83,7 @@ export async function revalidateWaitingApplication(
 		},
 	});
 	let revoked = record.revoked_at !== null;
-	if (!revoked && boundary.principal.kind === "application") {
-		const application = await readCurrentTaskApplicationV1(transaction, {
-			applicationId: boundary.principal.id,
-			agentId: boundary.agentId,
-		});
+	if (!revoked) {
 		const [management] = await transaction<{ agent: AgentManagementStateV1 }[]>`
 			select jsonb_build_object(
 				'schemaVersion', 1, 'applicationId', a.id, 'agentId', a.agent_id,
@@ -95,14 +99,49 @@ export async function revalidateWaitingApplication(
 			) as agent from platform.agent_applications a where a.agent_id = ${boundary.agentId}
 		`;
 		const agent = management?.agent;
-		revoked =
-			!application ||
-			!agent ||
-			!isTaskApplicationAuthorizationCurrentV1({
-				boundary,
-				application,
-				agent,
+		if (boundary.principal.kind === "application") {
+			const application = await readCurrentTaskApplicationV1(transaction, {
+				applicationId: boundary.principal.id,
+				agentId: boundary.agentId,
 			});
+			revoked =
+				!application ||
+				!agent ||
+				!isTaskApplicationAuthorizationCurrentV1({
+					boundary,
+					application,
+					agent,
+				});
+		} else {
+			const disabled =
+				await transaction`select user_id from platform.platform_user_disables where user_id = ${boundary.principal.id}`;
+			const useGrant = await readCurrentTaskApiUseGrantV1(transaction, {
+				principal: boundary.principal,
+				agentId: boundary.agentId,
+			});
+			revoked =
+				disabled.length !== 0 ||
+				(isTaskApiChannelV1(boundary.channelId, boundary.principal) &&
+					(!useGrant || useGrant.revoked));
+			if (!revoked) {
+				try {
+					const user = await resolveCurrentPersonalApiUserV1(
+						userDirectory,
+						boundary.principal.id,
+					);
+					revoked =
+						!agent ||
+						!isTaskAuthorizationCurrentV1({ boundary, user, agent, useGrant });
+				} catch (error) {
+					if (
+						!(error instanceof PersonalApiCredentialErrorV1) ||
+						error.code !== "forbidden"
+					)
+						throw error;
+					revoked = true;
+				}
+			}
+		}
 	}
 	if (!revoked) return true;
 	if (plan.ensureStop || !state.outbox.request_id)
