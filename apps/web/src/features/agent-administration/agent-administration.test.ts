@@ -132,6 +132,7 @@ describe("Agent administration generated-client consumer", () => {
 			server.requests.map((request) => [request.method, request.url]),
 		).toEqual([
 			["GET", "https://platform.example.test/api/v1/session"],
+			["GET", "https://platform.example.test/api/v1/connection/capability"],
 			["GET", "https://platform.example.test/api/v2/admin/agent-applications"],
 			[
 				"POST",
@@ -142,10 +143,10 @@ describe("Agent administration generated-client consumer", () => {
 				"https://platform.example.test/api/v2/agents/agent-pilot-1/lifecycle",
 			],
 		]);
-		expect(server.requests[2]?.headers.get("Idempotency-Key")).toBe(
+		expect(server.requests[3]?.headers.get("Idempotency-Key")).toBe(
 			"approval-request-1",
 		);
-		expect(server.requests[3]?.headers.get("Idempotency-Key")).toBe(
+		expect(server.requests[4]?.headers.get("Idempotency-Key")).toBe(
 			"lifecycle-request-1",
 		);
 	});
