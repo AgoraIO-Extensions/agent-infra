@@ -650,14 +650,14 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 			);
 		});
 		const observedPairCounts = tracePairCounts(finalTraces, executionId);
-		// Compare the pair multiset, not independent substring membership: this
-		// rejects swapped pairs, duplicate query rows, and unrelated extra traces.
+		// Compare terminal trace pairs, not independent substring membership: this
+		// rejects swapped pairs, duplicate terminal traces, and unrelated extras.
 		expect(sortedCounts(observedPairCounts)).toEqual(
 			sortedCounts(queriedPairCounts),
 		);
 		expect(
 			[...observedPairCounts.values()].reduce((sum, count) => sum + count, 0),
-		).toBe(queriedOperations.length);
+		).toBe(queriedPairCounts.size);
 		await backend.waitFor(
 			"PlatformCollectorUnavailable",
 			"resolved",
