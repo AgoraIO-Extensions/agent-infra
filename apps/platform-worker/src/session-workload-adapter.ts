@@ -27,6 +27,7 @@ export interface SessionSandboxAllocationV1 {
 	readonly pvcName: string;
 	readonly networkPolicyName: string;
 	readonly imageDigest: string;
+	readonly authorizedIngressSelector: Readonly<Record<string, string>>;
 	readonly containerPort: number;
 	readonly workspaceMountPath: string;
 	readonly env?: Readonly<Record<string, string>>;
@@ -37,8 +38,8 @@ export type SessionSandboxResourceSetV1 = readonly [
 	V1ServiceAccount,
 	V1PersistentVolumeClaim,
 	V1NetworkPolicy,
-	V1Pod,
 	V1Service,
+	V1Pod,
 ];
 
 const labels = (allocation: SessionSandboxAllocationV1) => ({
@@ -76,7 +77,9 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		!value.serviceAccountName ||
 		!value.pvcName ||
 		!value.networkPolicyName ||
-		!/^sha256:[0-9a-f]{64}$/.test(value.imageDigest) ||
+		!/^[^\s@]+@sha256:[0-9a-f]{64}$/.test(value.imageDigest) ||
+		Object.keys(value.authorizedIngressSelector).length === 0 ||
+		Object.values(value.authorizedIngressSelector).some((item) => !item) ||
 		!Number.isSafeInteger(value.containerPort) ||
 		value.containerPort < 1 ||
 		value.containerPort > 65535 ||
@@ -112,7 +115,18 @@ export function sessionSandboxResourcesV1(
 		spec: {
 			podSelector: { matchLabels: resourceLabels },
 			policyTypes: ["Ingress", "Egress"],
-			ingress: [],
+			ingress: [
+				{
+					_from: [
+						{
+							podSelector: {
+								matchLabels: allocation.authorizedIngressSelector,
+							},
+						},
+					],
+					ports: [{ protocol: "TCP", port: allocation.containerPort }],
+				},
+			],
 			egress: [],
 		},
 	};
@@ -173,7 +187,20 @@ export function sessionSandboxResourcesV1(
 			],
 		},
 	};
-	return [account, pvc, policy, pod, service];
+	return [account, pvc, policy, service, pod];
+}
+
+function pvcSpecMatches(
+	current: KubernetesObject,
+	expected: V1PersistentVolumeClaim,
+) {
+	const spec = (current as V1PersistentVolumeClaim).spec;
+	return (
+		JSON.stringify(spec?.accessModes ?? []) ===
+			JSON.stringify(expected.spec?.accessModes ?? []) &&
+		spec?.resources?.requests?.storage ===
+			expected.spec?.resources?.requests?.storage
+	);
 }
 
 function owned(
@@ -217,6 +244,13 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						if (!owned(current, expected, allocation))
 							throw new WorkloadKubernetesError("conflict");
 						await options.client.delete(current);
+						if (
+							await options.client.read(
+								expected.kind,
+								expected.metadata?.name ?? "",
+							)
+						)
+							throw new WorkloadKubernetesError("unavailable");
 					}
 					continue;
 				}
@@ -231,13 +265,14 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					throw new WorkloadKubernetesError("conflict");
 				if (!current) await options.client.create(expected);
 				else if (expected.kind === "PersistentVolumeClaim") {
-					// PVCs are retained and never replaced by a later generation.
 					if (
-						current.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
-						String(allocation.fence)
+						!pvcSpecMatches(
+							current as V1PersistentVolumeClaim,
+							expected as V1PersistentVolumeClaim,
+						)
 					)
 						throw new WorkloadKubernetesError("conflict");
-				} else
+				} else if (expected.kind !== "Pod")
 					await options.client.replace({
 						...expected,
 						metadata: {

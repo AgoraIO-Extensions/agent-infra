@@ -1,4 +1,7 @@
-import type { KubernetesObject } from "@kubernetes/client-node";
+import type {
+	KubernetesObject,
+	V1PersistentVolumeClaim,
+} from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import type {
 	WorkerKubernetesClientV1,
@@ -61,7 +64,8 @@ const allocation: SessionSandboxAllocationV1 = {
 	serviceAccountName: "sandbox-a",
 	pvcName: "sandbox-a-workspace",
 	networkPolicyName: "sandbox-a-network",
-	imageDigest: `sha256:${"a".repeat(64)}`,
+	imageDigest: `registry.example.test/runtime@sha256:${"a".repeat(64)}`,
+	authorizedIngressSelector: { component: "dispatcher" },
 	containerPort: 8080,
 	workspaceMountPath: "/workspace",
 	env: { SESSION_ID: "session-a" },
@@ -75,8 +79,8 @@ describe("session sandbox workload adapter", () => {
 			"ServiceAccount",
 			"PersistentVolumeClaim",
 			"NetworkPolicy",
-			"Pod",
 			"Service",
+			"Pod",
 		]);
 		for (const resource of resources) {
 			expect(resource.metadata?.labels).toMatchObject({
@@ -91,7 +95,9 @@ describe("session sandbox workload adapter", () => {
 		}
 		const pvc = resources[1];
 		expect(pvc.spec?.accessModes).toEqual(["ReadWriteOnce"]);
-		expect(resources[2].spec?.ingress).toEqual([]);
+		expect(resources[2].spec?.ingress).toMatchObject([
+			{ ports: [{ port: 8080 }] },
+		]);
 		expect(resources[2].spec?.egress).toEqual([]);
 	});
 
@@ -121,6 +127,23 @@ describe("session sandbox workload adapter", () => {
 		await expect(
 			client.read("PersistentVolumeClaim", allocation.pvcName),
 		).resolves.toMatchObject({ metadata: { name: allocation.pvcName } });
+	});
+
+	it("rejects PVC storage drift and does not replace an owned Pod", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const pvc = await client.read("PersistentVolumeClaim", allocation.pvcName);
+		if (pvc) {
+			const pvcValue = pvc as V1PersistentVolumeClaim;
+			pvcValue.spec = {
+				...pvcValue.spec,
+				accessModes: ["ReadWriteMany"],
+			};
+		}
+		await expect(adapter.apply(allocation)).rejects.toMatchObject({
+			code: "conflict",
+		});
 	});
 
 	it("cleans only resources owned by the exact generation and fence", async () => {
