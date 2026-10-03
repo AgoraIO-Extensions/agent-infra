@@ -1,0 +1,84 @@
+{
+	"openapi": "3.1.0",
+	"paths": {
+		"/events": {
+			"get": {
+				"operationId": "streamEvents",
+				"responses": {
+					"200": {
+						"content": {
+							"text/event-stream": {
+								"schema": {
+									"$ref": "#/components/schemas/PersistedConversationEventV1"
+								}
+							}
+						},
+						"description": "Events"
+					}
+				}
+			}
+		}
+	},
+	"components": {
+		"schemas": {
+			"PersistedConversationEventV1": {
+				"oneOf": [
+					{
+						"additionalProperties": false,
+						"properties": {
+							"payload": {
+								"additionalProperties": false,
+								"properties": {
+									"text": {
+										"type": "string"
+									}
+								},
+								"required": ["text"],
+								"type": "object"
+							},
+							"type": {
+								"const": "text.delta",
+								"type": "string"
+							}
+						},
+						"required": ["type", "payload"],
+						"type": "object"
+					},
+					{
+						"$ref": "#/components/schemas/ModelSelectionFallbackEventV1"
+					}
+				]
+			},
+			"ModelSelectionFallbackEventV1": {
+				"additionalProperties": false,
+				"properties": {
+					"payload": {
+						"additionalProperties": false,
+						"properties": {
+							"modelOptionId": {
+								"minLength": 1,
+								"type": "string"
+							},
+							"reason": {
+								"const": "selection_unavailable",
+								"type": "string"
+							},
+							"reasoningLevel": {
+								"minLength": 1,
+								"type": "string"
+							}
+						},
+						"required": ["modelOptionId", "reasoningLevel", "reason"],
+						"type": "object"
+					},
+					"type": {
+						"const": "model.selection.fell_back",
+						"type": "string"
+					}
+				},
+				"required": ["type", "payload"],
+				"type": "object"
+			}
+		}
+	}
+}

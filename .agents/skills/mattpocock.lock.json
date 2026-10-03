@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "source": "https://github.com/mattpocock/skills.git",
+  "revision": "6654f6b60cd9d5be8b54c6fafe44346dabeb3b76",
+  "skills": {
+    "code-review": {
+      "sourcePath": "skills/engineering/code-review",
+      "treeSha": "d8e341cee7980127dddda05159bedf25dc853615"
+    },
+    "implement": {
+      "sourcePath": "skills/engineering/implement",
+      "treeSha": "f07d230f645fc9ac390cf13a450bbff12ad791a3"
+    },
+    "tdd": {
+      "sourcePath": "skills/engineering/tdd",
+      "treeSha": "79288be15c67b849f22b6572056601090fd20913"
+    }
+  }
+}

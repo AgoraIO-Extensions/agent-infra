@@ -1,0 +1,163 @@
+--- a/codex-rs/http-client/Cargo.toml
++++ b/codex-rs/http-client/Cargo.toml
+@@ -41,6 +41,7 @@
+ opentelemetry_sdk = { workspace = true }
+ pretty_assertions = { workspace = true }
+ rcgen = { workspace = true }
++reqwest = { workspace = true, features = ["native-tls"] }
+ tempfile = { workspace = true }
+ tracing-subscriber = { workspace = true }
+
+--- a/codex-rs/http-client/src/route_aware_client_pool.rs
++++ b/codex-rs/http-client/src/route_aware_client_pool.rs
+@@ -127,7 +127,13 @@
+             if error.to_string() == "tunnel error: proxy authorization required" {
+                 return Some(RouteFailureClass::ProxyAuthenticationRequired);
+             }
+-            source = error.source();
++            source = if let Some(error) = error.downcast_ref::<io::Error>() {
++                error
++                    .get_ref()
++                    .map(|inner| inner as &(dyn std::error::Error + 'static))
++            } else {
++                error.source()
++            };
+         }
+
+         match self {
+--- a/codex-rs/http-client/src/route_aware_client_pool_tests.rs
++++ b/codex-rs/http-client/src/route_aware_client_pool_tests.rs
+@@ -18,6 +18,17 @@
+
+ use super::*;
+ use crate::OutboundProxyPolicy;
++
++#[test]
++fn request_failures_classify_nested_io_certificate_errors() {
++    let error = io::Error::other(io::Error::new(
++        io::ErrorKind::InvalidData,
++        rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer),
++    ));
++    let error = RouteAwareRequestError::Route(RouteAwareClientPoolError::Resolve(error));
++
++    assert_eq!(error.failure_class(), Some(RouteFailureClass::TlsError));
++}
+
+ #[tokio::test]
+ async fn request_failures_classify_real_untrusted_certificate_handshakes() {
+--- a/codex-rs/http-client/src/route_aware_tls_fallback_tests.rs
++++ b/codex-rs/http-client/src/route_aware_tls_fallback_tests.rs
+@@ -30,15 +30,31 @@
+
+ type SuccessfulTlsFallbackServer = (String, HttpClient, mpsc::Receiver<io::Result<Vec<String>>>);
+
++// These tests require an actual native TLS first attempt even when the environment selects
++// rustls through a custom CA bundle. Keep that choice in this test fixture.
++fn native_tls_pool() -> RouteAwareClientPool {
++    let client = reqwest::Client::builder()
++        .no_proxy()
++        .use_native_tls()
++        .build()
++        .expect("native TLS client should build");
++    let pool = RouteAwareClientPool::new(
++        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
++        ClientRouteClass::Other,
++    );
++    pool.clients
++        .lock()
++        .expect("client cache should lock")
++        .insert(OutboundProxyRoute::Direct, HttpClient::new(client));
++    pool
++}
++
+ #[tokio::test]
+ async fn default_pool_does_not_retry_a_native_tls_protocol_failure() {
+     let (url, attempts, stop_server) =
+         spawn_protocol_version_rejection_server(/*maximum_attempts*/ 2)
+             .expect("TLS rejection server should start");
+-    let pool = RouteAwareClientPool::new(
+-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+-        ClientRouteClass::Other,
+-    );
++    let pool = native_tls_pool();
+     let request = reqwest::Request::new(
+         Method::POST,
+         reqwest::Url::parse(&url).expect("valid HTTPS URL"),
+@@ -65,11 +81,7 @@
+     let (url, attempts, stop_server) =
+         spawn_protocol_version_rejection_server(/*maximum_attempts*/ 2)
+             .expect("TLS rejection server should start");
+-    let pool = RouteAwareClientPool::new(
+-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+-        ClientRouteClass::Other,
+-    )
+-    .with_tls_backend_fallback();
++    let pool = native_tls_pool().with_tls_backend_fallback();
+     let destination = reqwest::Url::parse(&url).expect("valid HTTPS URL");
+     let mut request = reqwest::Request::new(Method::POST, destination.clone());
+     *request.body_mut() = Some(Bytes::from_static(b"mcp-initialize").into());
+@@ -106,11 +118,7 @@
+     let (url, attempts, stop_server) =
+         spawn_protocol_version_rejection_server(/*maximum_attempts*/ 2)
+             .expect("TLS rejection server should start");
+-    let pool = RouteAwareClientPool::new(
+-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+-        ClientRouteClass::Other,
+-    )
+-    .with_tls_backend_fallback();
++    let pool = native_tls_pool().with_tls_backend_fallback();
+     let destination = reqwest::Url::parse(&url).expect("valid HTTPS URL");
+     let (route, native_client, selected_tls_backend) = pool
+         .client_for_url_with_resolver(destination.as_str(), |_| async {
+@@ -163,11 +171,7 @@
+     let (url, attempts, stop_server) =
+         spawn_protocol_version_rejection_server(/*maximum_attempts*/ 2)
+             .expect("TLS rejection server should start");
+-    let pool = RouteAwareClientPool::new(
+-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+-        ClientRouteClass::Other,
+-    )
+-    .with_tls_backend_fallback();
++    let pool = native_tls_pool().with_tls_backend_fallback();
+     let destination = reqwest::Url::parse(&url).expect("valid HTTPS URL");
+     let rustls_client = pool
+         .rustls_client_for_route(&OutboundProxyRoute::Direct)
+@@ -199,11 +203,7 @@
+ async fn successful_rustls_fallback_replays_the_request_and_reuses_the_destination() {
+     let (url, trusted_rustls_client, observed_requests) =
+         spawn_successful_tls_fallback_server().expect("TLS fallback server should start");
+-    let pool = RouteAwareClientPool::new(
+-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+-        ClientRouteClass::Other,
+-    )
+-    .with_tls_backend_fallback();
++    let pool = native_tls_pool().with_tls_backend_fallback();
+     let destination = reqwest::Url::parse(&url).expect("valid HTTPS URL");
+     let existing_destination =
+         reqwest::Url::parse("https://another-mcp.example.com/mcp").expect("valid HTTPS URL");
+@@ -264,11 +264,7 @@
+     let (url, attempts, stop_server) =
+         spawn_protocol_version_rejection_server(/*maximum_attempts*/ 2)
+             .expect("TLS rejection server should start");
+-    let pool = RouteAwareClientPool::new(
+-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+-        ClientRouteClass::Other,
+-    )
+-    .with_tls_backend_fallback();
++    let pool = native_tls_pool().with_tls_backend_fallback();
+     let mut destination = reqwest::Url::parse(&url).expect("valid HTTPS URL");
+     destination.set_path("/certificate/hostname/expired/revoked/mcp");
+     let request = reqwest::Request::new(Method::POST, destination);
+@@ -295,11 +291,7 @@
+     let (url, attempts, stop_server) =
+         spawn_protocol_version_rejection_server(/*maximum_attempts*/ 2)
+             .expect("TLS rejection server should start");
+-    let pool = RouteAwareClientPool::new(
+-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+-        ClientRouteClass::Other,
+-    )
+-    .with_tls_backend_fallback();
++    let pool = native_tls_pool().with_tls_backend_fallback();
+     let mut request = reqwest::Request::new(
+         Method::POST,
+         reqwest::Url::parse(&url).expect("valid HTTPS URL"),

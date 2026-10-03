@@ -1,0 +1,423 @@
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { once } from "node:events";
+import { createSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
+import postgres from "postgres";
+import { expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
+import { assembleWecomSetupApiV1 } from "../../../apps/platform-api/src/wecom-setup-assembly.ts";
+import { createWecomSetupWorkerV1 } from "../../../apps/platform-worker/src/wecom-setup.ts";
+import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
+import { createWecomChannelAdmissionV1 } from "../../wecom/src/admission.ts";
+import { PostgresAgentConfigurationQueryV1 } from "./agent-configuration.ts";
+import { PostgresPlatformAuditQueryV1 } from "./audit.ts";
+import { migratePlatformDatabase } from "./migrate.ts";
+import { startPostgresTestDatabase } from "./postgres-test.ts";
+import { PostgresWecomConnectionsV1 } from "./wecom-connections.ts";
+import { PostgresWecomSetupV1 } from "./wecom-setup.ts";
+
+it.each([
+	"success",
+	"probe-closed",
+	"concurrent-submit",
+	"revoked",
+	"wrong-secret",
+	"stale-config",
+	"timeout",
+	"activation-unavailable",
+	"commit-unavailable",
+	"replacement-success",
+	"replacement-expired-success",
+	"replacement-wrong-secret",
+	"replacement-disconnected-wrong-secret",
+	"replacement-commit-unavailable",
+	"cross-agent-deployed-bot",
+] as const)(
+	"manual onboarding %s uses Worker authentication and the existing configuration authority",
+	async (mode) => {
+		const replacement = mode.startsWith("replacement-");
+		const offlineReplacement =
+			mode === "replacement-expired-success" ||
+			mode === "replacement-disconnected-wrong-secret";
+		const recovers = [
+			"timeout",
+			"activation-unavailable",
+			"commit-unavailable",
+			"replacement-commit-unavailable",
+		].includes(mode);
+		const succeeds =
+			[
+				"success",
+				"probe-closed",
+				"concurrent-submit",
+				"replacement-success",
+				"replacement-expired-success",
+			].includes(mode) || recovers;
+		const db = await startPostgresTestDatabase("wecom-setup");
+		const sql = postgres(db.databaseUrl);
+		const store = new PostgresWecomSetupV1(db);
+		const leases = new PostgresWecomConnectionsV1(db);
+		const query = new PostgresAgentConfigurationQueryV1(db);
+		const audits = new PostgresPlatformAuditQueryV1(db);
+		const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+		await once(server, "listening");
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("No address");
+		let active = true;
+		let authFrames = 0;
+		let probeClosed = false;
+		let dependencyUnavailable = mode === "activation-unavailable";
+		server.on("connection", (socket) => {
+			socket.on("close", () => {
+				probeClosed = true;
+			});
+			socket.on("message", (raw) => {
+				const frame = JSON.parse(raw.toString());
+				if (frame.cmd !== "aibot_subscribe") return;
+				authFrames++;
+				if (mode === "timeout" && authFrames === 1) return;
+				if (mode === "revoked") active = false;
+				socket.send(
+					JSON.stringify({
+						headers: frame.headers,
+						errcode:
+							mode === "wrong-secret" ||
+							mode === "replacement-wrong-secret" ||
+							mode === "replacement-disconnected-wrong-secret"
+								? 40014
+								: 0,
+					}),
+				);
+			});
+		});
+		const pair = generateKeyPairSync("rsa", { modulusLength: 3072 });
+		const der = pair.publicKey.export({ format: "der", type: "spki" });
+		const encryptionKeys = {
+			schemaVersion: 1,
+			activeWrappingKeyVersion: "fixture",
+			keys: [
+				{
+					schemaVersion: 1,
+					keyVersion: "fixture",
+					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+					publicKeySpkiDerBase64: der.toString("base64"),
+					publicKeyFingerprint: createHash("sha256").update(der).digest("hex"),
+					rsaModulusBits: 3072,
+					status: "active",
+				},
+			],
+		};
+		const directory = {
+			async resolveUser(userId: string) {
+				if (mode === "probe-closed" && authFrames > 0)
+					await expect.poll(() => probeClosed, { timeout: 1000 }).toBe(true);
+				if (dependencyUnavailable && authFrames > 0)
+					throw new Error("Identity dependency unavailable");
+				return {
+					schemaVersion: 1,
+					userId,
+					accountStatus: active ? "active" : "disabled",
+					organizationIds: [],
+					authorizationRevision: "identity",
+				};
+			},
+		};
+		const api = assembleWecomSetupApiV1({
+			...db,
+			encryptionKeys,
+			identity: {
+				...directory,
+				resolve: async () => null,
+				hydrateUsers: async () => [],
+			},
+		});
+		const decryptor = createSecretKeyringDecryptorV1({
+			keys: [
+				{
+					keyVersion: "fixture",
+					privateKeyPkcs8DerBase64: pair.privateKey
+						.export({ format: "der", type: "pkcs8" })
+						.toString("base64"),
+				},
+			],
+		});
+		const decrypt = vi.fn(decryptor.decrypt);
+		const worker = createWecomSetupWorkerV1({
+			...db,
+			directory,
+			decryptor: { decrypt },
+			endpoint: `ws://127.0.0.1:${address.port}`,
+			protectReply: async () => "fixture",
+			revealReply: async () => {
+				throw new Error("unused");
+			},
+		});
+		try {
+			await migratePlatformDatabase(db);
+			const configuration = {
+				...agentConfigurationConformanceRecordV1,
+				agentId: "agent",
+				revision: 1,
+				channels: [{ kind: "wecom_bot", bindingReference: "old-binding" }],
+			};
+			await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values ('agent',1,'authorization')`;
+			await sql`insert into platform.agent_applications (id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,desired_state,service_availability,workload_revision,fence) values ('application','agent','owner','Fixture','Fixture','available','trace','request',now(),1,1,'running','ready',1,1)`;
+			await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values ('agent','owner',now())`;
+			await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values ('agent',1,'template_01',${sql.json(configuration as unknown as postgres.JSONValue)},now())`;
+			const oldClaim = {
+				agentId: "agent",
+				bindingReference: "old-binding",
+				botId: "fixture-bot",
+				holderId: "old-worker",
+				fence: 7,
+				leaseUntil: new Date(Date.now() + 60_000),
+			};
+			if (replacement) {
+				await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id) values ('old-binding','agent','owner',1,'authorization','old',now()+interval '1 day','active','fixture-bot')`;
+				await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status) values ('fixture-bot','agent','old-binding','old-worker',7,now()+interval '1 minute','connected')`;
+				expect(await leases.current(oldClaim)).toBe(true);
+			}
+			const session = await api.setup.begin("agent", "owner");
+			const submit = () =>
+				api.setup.submit(
+					{
+						agentId: "agent",
+						sessionId: session.sessionId,
+						state: session.state,
+						botId: "fixture-bot",
+						secret: "fixture-secret",
+						takeoverConfirmed: true,
+					},
+					"owner",
+				);
+			if (mode === "cross-agent-deployed-bot") {
+				await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values ('other-agent',1,'authorization')`;
+				await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values ('other-agent',1,'template_01',${sql.json({ ...configuration, agentId: "other-agent", channels: [{ kind: "wecom_bot", bindingReference: "deployed-binding" }] } as unknown as postgres.JSONValue)},now())`;
+				await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status) values ('fixture-bot','other-agent','deployed-binding','old-worker',1,now()-interval '1 second','disconnected')`;
+				await expect(submit()).rejects.toThrow("stale");
+				expect((await store.read(session.sessionId))?.status).toBe(
+					"awaiting_input",
+				);
+				expect(
+					(
+						await sql`select agent_id from platform.wecom_connections where bot_id='fixture-bot'`
+					)[0]?.agent_id,
+				).toBe("other-agent");
+				return;
+			}
+			if (mode === "concurrent-submit") {
+				const results = await Promise.allSettled([submit(), submit()]);
+				expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+				expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+			} else await submit();
+			await expect(
+				api.setup.submit(
+					{
+						agentId: "agent",
+						sessionId: session.sessionId,
+						state: session.state,
+						botId: "fixture-bot",
+						secret: "fixture-secret",
+						takeoverConfirmed: true,
+					},
+					"owner",
+				),
+			).rejects.toThrow("unavailable");
+			if (mode === "stale-config")
+				await sql`update platform.agents set authorization_revision='updated' where id='agent'`;
+			if (offlineReplacement)
+				await sql`update platform.wecom_connections set lease_until=now()-interval '1 second',status=${mode === "replacement-expired-success" ? "connected" : "disconnected"} where bot_id='fixture-bot'`;
+			if (
+				mode === "commit-unavailable" ||
+				mode === "replacement-commit-unavailable"
+			)
+				await sql`alter table platform.agent_configuration_revisions add constraint fixture_commit_unavailable check (revision < 2)`;
+			if (recovers) {
+				if (mode !== "timeout") await expect(worker.tick()).rejects.toThrow();
+				else await worker.tick();
+				const pending = await store.read(session.sessionId);
+				expect(pending?.status).toBe("verifying");
+				expect(pending?.encryptedCredential).toBeTruthy();
+				if (replacement) expect(await leases.current(oldClaim)).toBe(true);
+				dependencyUnavailable = false;
+				if (
+					mode === "commit-unavailable" ||
+					mode === "replacement-commit-unavailable"
+				)
+					await sql`alter table platform.agent_configuration_revisions drop constraint fixture_commit_unavailable`;
+			}
+			await worker.tick();
+			const saved = await store.read(session.sessionId);
+			expect(saved?.status).toBe(
+				succeeds
+					? "active"
+					: mode === "wrong-secret" ||
+							mode === "replacement-wrong-secret" ||
+							mode === "replacement-disconnected-wrong-secret"
+						? "auth_failed"
+						: "conflict",
+			);
+			expect(authFrames).toBe(mode === "stale-config" ? 0 : recovers ? 2 : 1);
+			const current = await query.readAuthority({
+				agentId: "agent",
+				actorId: "owner",
+				organizationIds: [],
+				isAdministrator: false,
+			});
+			if (current.outcome !== "found")
+				throw new Error("Missing current configuration");
+			expect(current.configuration.channels).toEqual([
+				{
+					kind: "wecom_bot",
+					bindingReference: succeeds ? session.sessionId : "old-binding",
+				},
+			]);
+			expect(current.configuration.revision).toBe(succeeds ? 2 : 1);
+			if (replacement) {
+				expect(await leases.current(oldClaim)).toBe(
+					!succeeds && !offlineReplacement,
+				);
+				expect((await store.read("old-binding"))?.status).toBe(
+					succeeds ? "cancelled" : "active",
+				);
+				if (offlineReplacement && !succeeds) {
+					const [connection] = await sql<
+						{ binding_reference: string; fence: string }[]
+					>`select binding_reference,fence from platform.wecom_connections where bot_id='fixture-bot'`;
+					expect(connection).toEqual({
+						binding_reference: "old-binding",
+						fence: "7",
+					});
+				}
+			}
+			expect(JSON.stringify(saved)).not.toContain("fixture-secret");
+			expect(
+				await sql`select secret_id from platform.secret_records`,
+			).toHaveLength(0);
+			const page = await audits.listAudit(
+				{ schemaVersion: 1, kind: "administrator", administratorId: "admin" },
+				{ schemaVersion: 1, limit: 100 },
+			);
+			expect(
+				page.items.filter(
+					(row) => row.action === "wecom.credentials_submitted",
+				),
+			).toHaveLength(1);
+			if (mode === "success") {
+				const admission = createWecomChannelAdmissionV1(
+					(reference) => api.resolveBinding(reference, async () => null),
+					api.resolveManagedBotAdmission,
+				);
+				const retainedBot = {
+					schemaVersion: 1 as const,
+					agentId: "agent",
+					requestId: "retained-bot",
+					traceId: "retained-bot",
+					current: [
+						{ kind: "wecom_bot" as const, bindingReference: session.sessionId },
+					],
+					requested: [],
+				};
+				expect(await admission.admitChannels(retainedBot)).toMatchObject({
+					status: "admitted",
+					channels: retainedBot.current,
+				});
+				const managed = await api.resolveManagedBotAdmission(session.sessionId);
+				expect(managed).toEqual({
+					agentId: "agent",
+					kind: "wecom_bot",
+					bindingReference: session.sessionId,
+					credentialVersion: session.sessionId,
+				});
+				expect(JSON.stringify(managed)).not.toContain("fixture-secret");
+				const before = decrypt.mock.calls.length;
+				expect(await worker.bindings()).toHaveLength(1);
+				expect(await worker.bindings()).toHaveLength(1);
+				expect(decrypt).toHaveBeenCalledTimes(before + 1);
+				await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}','[]'::jsonb) where agent_id='agent' and revision=2`;
+				expect(
+					await api.resolveManagedBotAdmission(session.sessionId),
+				).toBeNull();
+				expect(await admission.admitChannels(retainedBot)).toMatchObject({
+					status: "rejected",
+				});
+				expect(await worker.bindings()).toHaveLength(0);
+				await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}',${sql.json([{ kind: "wecom_bot", bindingReference: session.sessionId }])}::jsonb) where agent_id='agent' and revision=2`;
+				expect(await worker.bindings()).toHaveLength(1);
+				expect(decrypt).toHaveBeenCalledTimes(before + 2);
+				await sql`update platform.wecom_setup_sessions set encrypted_credential='{}'::jsonb where session_id=${session.sessionId}`;
+				expect(await worker.bindings()).toHaveLength(0);
+				expect(
+					await api.resolveManagedBotAdmission(session.sessionId),
+				).toBeNull();
+				await sql`update platform.wecom_setup_sessions set encrypted_credential=${sql.json(saved?.encryptedCredential as postgres.JSONValue)} where session_id=${session.sessionId}`;
+				expect(await worker.bindings()).toHaveLength(1);
+				expect(decrypt).toHaveBeenCalledTimes(before + 3);
+			}
+
+			if (!succeeds)
+				expect(
+					page.items.some((row) => row.action === "wecom.setup_failed"),
+				).toBe(true);
+		} finally {
+			await worker.close();
+			await api.close();
+			await audits.close();
+			await query.close();
+			await leases.close();
+			await store.close();
+			await sql.end();
+			for (const socket of server.clients) socket.terminate();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await db.stop();
+		}
+	},
+	30000,
+);
+
+it("returns all current active bindings beyond the former 100-row limit", async () => {
+	const db = await startPostgresTestDatabase("wecom-bindings");
+	const sql = postgres(db.databaseUrl);
+	const store = new PostgresWecomSetupV1(db);
+	try {
+		await migratePlatformDatabase(db);
+		await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) select 'agent-'||i,1,'authorization' from generate_series(1,101) i`;
+		await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) select 'agent-'||i,1,'template',jsonb_build_object('schemaVersion',2,'agentId','agent-'||i,'revision',1,'channels',jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference','session-'||i))),now() from generate_series(1,101) i`;
+		await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id) select 'session-'||i,'agent-'||i,'owner',1,'authorization','digest',now(),'active','bot-'||i from generate_series(1,101) i`;
+		const bindings = await store.bindings();
+		expect(bindings).toHaveLength(101);
+		expect(new Set(bindings.map((binding) => binding.agentId)).size).toBe(101);
+		await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}','[]'::jsonb) where agent_id='agent-101'`;
+		expect(await store.bindings()).toHaveLength(100);
+		await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}',${sql.json([{ kind: "wecom_bot", bindingReference: "session-101", enabled: false }])}::jsonb) where agent_id='agent-101'`;
+		expect(await store.bindings()).toHaveLength(100);
+	} finally {
+		await store.close();
+		await sql.end();
+		await db.stop();
+	}
+});
+
+it("selects unattempted setups before a released timeout and skips live probes", async () => {
+	const db = await startPostgresTestDatabase("wecom-fairness");
+	const sql = postgres(db.databaseUrl);
+	const store = new PostgresWecomSetupV1(db);
+	try {
+		await migratePlatformDatabase(db);
+		await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) select 'agent-'||i,1,'auth' from generate_series(1,2) i`;
+		await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) select 'agent-'||i,'owner',now() from generate_series(1,2) i`;
+		await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id) select 'session-'||i,'agent-'||i,'owner',1,'auth','digest',now()+i*interval '1 minute','verifying','bot-'||i from generate_series(1,2) i`;
+		await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status) values ('bot-1','agent-1','session-1','worker',1,now()-interval '1 second','disconnected')`;
+		expect((await store.candidates()).map((s) => s.sessionId)).toEqual([
+			"session-2",
+			"session-1",
+		]);
+		await sql`update platform.wecom_connections set lease_until=now()+interval '30 seconds' where bot_id='bot-1'`;
+		expect((await store.candidates()).map((s) => s.sessionId)).toEqual([
+			"session-2",
+		]);
+	} finally {
+		await store.close();
+		await sql.end();
+		await db.stop();
+	}
+}, 30000);

@@ -1,0 +1,5 @@
+CREATE UNIQUE INDEX "task_authorization_id_execution_unique" ON "platform"."task_authorization_records" USING btree ("id","execution_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "task_control_id_execution_unique" ON "platform"."task_control_records" USING btree ("id","execution_id");--> statement-breakpoint
+ALTER TABLE "platform"."conversation_generation_tombstones" ADD CONSTRAINT "conversation_generation_execution_fk" FOREIGN KEY ("execution_id") REFERENCES "platform"."conversation_executions"("execution_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "platform"."conversation_generation_tombstones" ADD CONSTRAINT "conversation_generation_control_execution_fk" FOREIGN KEY ("control_record_id","execution_id") REFERENCES "platform"."task_control_records"("id","execution_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "platform"."task_control_records" ADD CONSTRAINT "task_control_authorization_execution_fk" FOREIGN KEY ("authorization_record_id","execution_id") REFERENCES "platform"."task_authorization_records"("id","execution_id") ON DELETE no action ON UPDATE no action;

@@ -1,0 +1,152 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  activePilotPullRequests,
+  normalizeGitHubApiUrl,
+  parsePilotIssueNumber,
+  validatePilotSnapshot,
+} from "./gh-aw-pilot.mjs";
+import { executionContent } from "./worker-contract.mjs";
+
+const issue = {
+  number: 42,
+  state: "open",
+  title: "Implement the pilot target",
+  body: `## Problem
+
+Problem
+
+## Scope
+
+Scope
+
+## Acceptance criteria
+
+- [ ] **AC-1:** Complete the target.
+
+## Validation
+
+Run tests.
+
+## Blocked by
+
+None
+`,
+  labels: [{ name: "enhancement" }],
+};
+
+const valid = {
+  repository: "AgoraIO-Extensions/agent-infra",
+  issueNumber: 42,
+  issue,
+  blockers: [],
+  activePullRequests: [],
+  branchExists: false,
+  actor: "LichKing-2234",
+  triggeringActor: "LichKing-2234",
+  expectedActor: "LichKing-2234",
+  actorAccount: { type: "User" },
+  membership: { state: "active", role: "member" },
+  phase: "authorize",
+  expectedExecutionContentHash: executionContent(issue).hash,
+};
+
+test("authorizes and rechecks one unchanged pilot target", () => {
+  const authorized = validatePilotSnapshot(valid);
+  assert.equal(authorized.category, "enhancement");
+  assert.match(authorized.targetHash, /^[0-9a-f]{64}$/);
+  assert.deepEqual(
+    validatePilotSnapshot({
+      ...valid,
+      phase: "recheck",
+      expectedTargetHash: authorized.targetHash,
+    }),
+    authorized,
+  );
+});
+
+test("rejects alternate Issue spellings and unauthorized execution content", () => {
+  assert.equal(parsePilotIssueNumber("42"), 42);
+  for (const value of ["042", "42 ", "0", "-1", "x"]) {
+    assert.throws(() => parsePilotIssueNumber(value), /Issue number/);
+  }
+  assert.throws(
+    () =>
+      validatePilotSnapshot({
+        ...valid,
+        expectedExecutionContentHash: "0".repeat(64),
+      }),
+    /dispatch authorization/,
+  );
+  assert.throws(
+    () =>
+      validatePilotSnapshot({
+        ...valid,
+        phase: "recheck",
+        expectedTargetHash: "0".repeat(64),
+      }),
+    /changed after authorization/,
+  );
+});
+
+test("accepts only credential-free HTTPS GitHub API URLs", () => {
+  assert.equal(
+    normalizeGitHubApiUrl("https://github.example.com/api/v3/"),
+    "https://github.example.com/api/v3",
+  );
+  for (const value of [
+    "http://github.example.com/api/v3",
+    "https://token@github.example.com/api/v3",
+    "https://github.example.com/api/v3?token=x",
+  ]) {
+    assert.throws(() => normalizeGitHubApiUrl(value), /API URL/);
+  }
+});
+
+test("ignores fork pull requests that mimic pilot ownership", () => {
+  const repository = "AgoraIO-Extensions/agent-infra";
+  const branch = "gh-aw/pilot-42";
+  const pullRequests = [
+    { number: 1, head: { ref: branch, repo: { full_name: "external/fork" } }, body: "" },
+    {
+      number: 2,
+      head: { ref: "feature", repo: { full_name: "external/fork" } },
+      body: "Closes #42",
+    },
+    { number: 3, head: { ref: branch, repo: { full_name: repository } }, body: "" },
+    {
+      number: 4,
+      head: { ref: "feature", repo: { full_name: repository } },
+      body: "Closes #42",
+    },
+  ];
+  assert.deepEqual(
+    activePilotPullRequests(pullRequests, { repository, branch, issueNumber: 42 }).map(
+      (pullRequest) => pullRequest.number,
+    ),
+    [3, 4],
+  );
+});
+
+test("fails closed across actor, Team, Issue, blocker, and ownership boundaries", () => {
+  const cases = [
+    [{ triggeringActor: "other-admin" }, /operator/],
+    [{ actorAccount: { type: "Bot" } }, /membership/],
+    [{ membership: { state: "inactive", role: "member" } }, /membership/],
+    [{ issue: { ...issue, state: "closed" } }, /open Issue/],
+    [
+      { issue: { ...issue, labels: [{ name: "bug" }, { name: "enhancement" }] } },
+      /one source category/,
+    ],
+    [
+      { blockers: [{ number: 7, state: "open", state_reason: null, labels: [] }] },
+      /incomplete native blocker/,
+    ],
+    [{ activePullRequests: [{ number: 9 }] }, /active implementation/],
+    [{ branchExists: true }, /active implementation/],
+  ];
+  for (const [overrides, error] of cases) {
+    assert.throws(() => validatePilotSnapshot({ ...valid, ...overrides }), error);
+  }
+});

@@ -1,0 +1,540 @@
+import { generateKeyPairSync, sign } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import {
+	createExecutionGrantVerifier,
+	FakeRuntimeDriver,
+	FileRuntimeStore,
+	type RuntimeDriver,
+	RuntimeHost,
+	RuntimeHostError,
+} from "@agent-infra/agent-runtime";
+import type {
+	ExecutionGrantClaimsV1,
+	ExecutionGrantCommandV1,
+	ExecutionGrantV1,
+} from "@agent-infra/contracts/runtime";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { createRuntimeHostApp } from "./app.js";
+
+const directories: string[] = [];
+const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+
+interface GrantBinding {
+	agentId: string;
+	actorId: string;
+	channelId: string;
+	conversationId: string;
+	executionId: string;
+	turnId: string;
+	sessionGeneration: number;
+	traceId: string;
+}
+
+function executionGrant(
+	binding: GrantBinding,
+	allowedCommands: ExecutionGrantCommandV1[],
+	grantId: string,
+): ExecutionGrantV1 {
+	const claims: ExecutionGrantClaimsV1 = {
+		schemaVersion: 1,
+		issuer: "agent-platform",
+		audience: ["runtime_host"],
+		issuedAt: "2026-08-28T09:59:00Z",
+		expiresAt: "2026-08-28T10:01:00Z",
+		grantId,
+		agentId: binding.agentId,
+		actorId: binding.actorId,
+		channelId: binding.channelId,
+		conversationId: binding.conversationId,
+		turnId: binding.turnId,
+		executionId: binding.executionId,
+		sessionGeneration: binding.sessionGeneration,
+		allowedCommands,
+		attachments: [],
+		actionSetVersion: "actions-http",
+		actionIds: [],
+		traceId: binding.traceId,
+	};
+	const protectedSegment = Buffer.from(
+		JSON.stringify({ alg: "EdDSA", kid: "key-http" }),
+	).toString("base64url");
+	const payloadSegment = Buffer.from(JSON.stringify(claims)).toString(
+		"base64url",
+	);
+	const signingInput = `${protectedSegment}.${payloadSegment}`;
+	const signatureSegment = sign(
+		null,
+		Buffer.from(signingInput, "ascii"),
+		privateKey,
+	).toString("base64url");
+	return {
+		schemaVersion: 1,
+		format: "compact-jws",
+		token: `${signingInput}.${signatureSegment}`,
+	};
+}
+
+async function setup(
+	wrapDriver?: (driver: FakeRuntimeDriver) => RuntimeDriver,
+) {
+	const directory = await mkdtemp(join(tmpdir(), "runtime-host-http-"));
+	directories.push(directory);
+	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+	const hostPath = join(directory, "host.json");
+	const host = await RuntimeHost.open({
+		store: await FileRuntimeStore.open(hostPath),
+		driver: wrapDriver?.(driver) ?? driver,
+		grantValidation: {
+			expectedIssuer: "agent-platform",
+			now: () => "2026-08-28T10:00:00Z",
+		},
+	});
+	return {
+		app: createRuntimeHostApp({
+			host,
+			serviceToken: "synthetic-service-proof",
+			verifyGrant: createExecutionGrantVerifier(
+				new Map([["key-http", publicKey]]),
+			),
+		}),
+		driver,
+		hostPath,
+	};
+}
+
+async function storedHostOperation(
+	path: string,
+	hostSessionRef: string,
+	operationId: string,
+) {
+	const state = JSON.parse(await readFile(path, "utf8")) as {
+		sessions: Record<
+			string,
+			{
+				operations: Record<
+					string,
+					{
+						state?: unknown;
+						result?: { outcome?: unknown; status?: unknown };
+					}
+				>;
+			}
+		>;
+	};
+	return state.sessions[hostSessionRef]?.operations[operationId];
+}
+
+function submitBody() {
+	const binding = {
+		agentId: "agent-http",
+		actorId: "actor-http",
+		channelId: "web",
+		conversationId: "conversation-http",
+		executionId: "execution-http",
+		turnId: "turn-http",
+		sessionGeneration: 1,
+		traceId: "trace-http",
+	};
+	return {
+		schemaVersion: 1 as const,
+		requestId: "request-http",
+		...binding,
+		deliveryFence: 1,
+		grant: executionGrant(
+			binding,
+			["turn.submit", "events.replay"],
+			"grant-http",
+		),
+		input: { text: "synthetic-http-input", attachments: [] },
+	};
+}
+
+const authorizedHeaders = {
+	authorization: "Bearer synthetic-service-proof",
+	"content-type": "application/json",
+};
+
+afterEach(async () => {
+	await Promise.all(
+		directories.splice(0).map((value) => rm(value, { recursive: true })),
+	);
+});
+
+describe("RuntimeHost HTTP/SSE adapter", () => {
+	it("adds a selection-required V2 Turn route without removing V1", async () => {
+		const { app } = await setup();
+		const legacy = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(submitBody()),
+		});
+		expect(legacy.status).toBe(200);
+		const { app: v2App } = await setup();
+
+		const missingSelection = await v2App.request("/internal/runtime/v2/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify({ ...submitBody(), schemaVersion: 2 }),
+		});
+		expect(missingSelection.status).toBe(400);
+
+		const body = submitBody();
+		const v2Binding = {
+			...body,
+			executionId: "execution-http-v2",
+			turnId: "turn-http-v2",
+		};
+		const selected = await v2App.request("/internal/runtime/v2/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify({
+				...v2Binding,
+				schemaVersion: 2,
+				requestId: "request-http-v2",
+				grant: executionGrant(v2Binding, ["turn.submit"], "grant-http-v2"),
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-option-primary",
+					reasoningLevel: "high",
+				},
+			}),
+		});
+		expect(selected.status).toBe(200);
+		expect(await selected.json()).toMatchObject({
+			schemaVersion: 2,
+			result: { outcome: "accepted" },
+		});
+	});
+
+	it("rejects unauthenticated and malformed commands before Runtime side effects", async () => {
+		const { app, driver } = await setup();
+		const unauthorized = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(submitBody()),
+		});
+		expect(unauthorized.status).toBe(401);
+
+		const malformed = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify({ schemaVersion: 1 }),
+		});
+		expect(malformed.status).toBe(400);
+		const invalidGrant = submitBody();
+		const segments = invalidGrant.grant.token.split(".");
+		segments[2] = "dGFtcGVyZWQ";
+		invalidGrant.grant.token = segments.join(".");
+		const rejected = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(invalidGrant),
+		});
+		expect(rejected.status).toBe(403);
+		Object.assign(driver, {
+			execute: async () => {
+				throw new RuntimeHostError(
+					"UPSTREAM_SECRET_ERROR",
+					"Provider returned bearer secret-value",
+					418,
+				);
+			},
+		});
+		const driverFailure = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(submitBody()),
+		});
+		expect(driverFailure.status).toBe(503);
+		const driverFailureBody = await driverFailure.json();
+		expect(driverFailureBody).toMatchObject({
+			code: "RUNTIME_DRIVER_INVALID",
+			message: "Runtime Driver response is invalid",
+		});
+		expect(JSON.stringify(driverFailureBody)).not.toContain("secret-value");
+		expect(await driver.sideEffectCount()).toBe(0);
+	});
+
+	it("keeps the HTTP stop response and Host record pending until Driver cancellation completes", async () => {
+		let releaseDriver: (() => void) | undefined;
+		let stopStarted: (() => void) | undefined;
+		const driverGate = new Promise<void>((resolve) => {
+			releaseDriver = resolve;
+		});
+		const stopStartedPromise = new Promise<void>((resolve) => {
+			stopStarted = resolve;
+		});
+		const { app, hostPath } = await setup((driver) => ({
+			execute: async (command) => {
+				if (command.kind === "stop") {
+					stopStarted?.();
+					await driverGate;
+				}
+				return driver.execute(command);
+			},
+			lookupOperation: (command) => driver.lookupOperation(command),
+			getStatus: (nativeSessionRef, executionId) =>
+				driver.getStatus(nativeSessionRef, executionId),
+			getCapabilities: () => driver.getCapabilities(),
+			replayEvents: (nativeSessionRef, executionId, afterCursor) =>
+				driver.replayEvents(nativeSessionRef, executionId, afterCursor),
+			subscribeEvents: (nativeSessionRef, executionId, afterCursor, signal) =>
+				driver.subscribeEvents(
+					nativeSessionRef,
+					executionId,
+					afterCursor,
+					signal,
+				),
+		}));
+		const body = submitBody();
+		const submittedResponse = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(body),
+		});
+		expect(submittedResponse.status).toBe(200);
+		const submitted = (await submittedResponse.json()) as {
+			hostSessionRef: string;
+		};
+		const stop = {
+			schemaVersion: 1 as const,
+			requestId: "request-http-stop",
+			agentId: body.agentId,
+			actorId: body.actorId,
+			channelId: body.channelId,
+			conversationId: body.conversationId,
+			executionId: body.executionId,
+			turnId: body.turnId,
+			sessionGeneration: body.sessionGeneration,
+			traceId: body.traceId,
+			deliveryFence: 1,
+			executionDeliveryFence: 1,
+			hostSessionRef: submitted.hostSessionRef,
+			stopRequestId: "stop-http",
+			grant: executionGrant(body, ["turn.stop"], "grant-http-stop"),
+		};
+		const stopResponsePromise = Promise.resolve(
+			app.request("/internal/runtime/v1/stops", {
+				method: "POST",
+				headers: authorizedHeaders,
+				body: JSON.stringify(stop),
+			}),
+		);
+		void stopResponsePromise.catch(() => {});
+		let responded = false;
+		void stopResponsePromise.then(
+			() => {
+				responded = true;
+			},
+			() => {
+				responded = true;
+			},
+		);
+
+		await stopStartedPromise;
+		await new Promise<void>((resolve) => setTimeout(resolve, 50));
+		try {
+			expect(responded).toBe(false);
+			const pendingStop = await storedHostOperation(
+				hostPath,
+				submitted.hostSessionRef,
+				stop.stopRequestId,
+			);
+			expect(pendingStop).toMatchObject({ state: "prepared" });
+			expect(pendingStop?.result).toBeUndefined();
+		} finally {
+			releaseDriver?.();
+		}
+
+		const stoppedResponse = await stopResponsePromise;
+		expect(stoppedResponse.status).toBe(200);
+		expect(await stoppedResponse.json()).toMatchObject({
+			result: { outcome: "accepted", status: "cancelled" },
+		});
+		expect(
+			await storedHostOperation(
+				hostPath,
+				submitted.hostSessionRef,
+				stop.stopRequestId,
+			),
+		).toMatchObject({
+			state: "resolved",
+			result: { outcome: "accepted", status: "cancelled" },
+		});
+	});
+
+	it("submits a Turn and replays normalized events as SSE", async () => {
+		const { app } = await setup();
+		const body = submitBody();
+		const submittedResponse = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(body),
+		});
+		expect(submittedResponse.status).toBe(200);
+		const submitted = (await submittedResponse.json()) as {
+			hostSessionRef: string;
+		};
+
+		const replayResponse = await app.request(
+			"/internal/runtime/v1/events/replay",
+			{
+				method: "POST",
+				headers: authorizedHeaders,
+				body: JSON.stringify({
+					...body,
+					requestId: "request-http-replay",
+					hostSessionRef: submitted.hostSessionRef,
+					input: undefined,
+				}),
+			},
+		);
+		expect(replayResponse.status).toBe(200);
+		expect(replayResponse.headers.get("content-type")).toContain(
+			"text/event-stream",
+		);
+		const stream = await replayResponse.text();
+		expect(stream).toContain("id: fake-cursor-1");
+		expect(stream).toContain('"type":"status"');
+		expect(stream).not.toMatch(/native|vendor|stdio|protocol/i);
+
+		const recovered = await app.request("/internal/runtime/v2/status", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify({
+				...body,
+				schemaVersion: 2,
+				requestId: "request-http-status-recovery",
+				deliveryFence: 2,
+				hostSessionRef: submitted.hostSessionRef,
+				input: undefined,
+				recovery: { schemaVersion: 1, input: body.input },
+				grant: executionGrant(
+					body,
+					["session.status", "turn.submit"],
+					"grant-http-status-recovery",
+				),
+			}),
+		});
+		expect(recovered.status).toBe(200);
+		expect(await recovered.json()).toMatchObject({
+			schemaVersion: 2,
+			outcome: "found",
+			status: "running",
+		});
+	});
+
+	it("returns a redacted failure before opening SSE when initial recovery fails", async () => {
+		const { app, driver } = await setup();
+		const body = submitBody();
+		const submittedResponse = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(body),
+		});
+		const submitted = (await submittedResponse.json()) as {
+			hostSessionRef: string;
+		};
+		Object.assign(driver, {
+			subscribeEvents: async () => {
+				throw new RuntimeHostError(
+					"UPSTREAM_RECOVERY_ERROR",
+					"native recovery detail",
+					503,
+				);
+			},
+		});
+
+		const response = await app.request("/internal/runtime/v1/events/stream", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify({
+				...body,
+				requestId: "request-http-initial-stream-recovery",
+				hostSessionRef: submitted.hostSessionRef,
+				input: undefined,
+			}),
+		});
+
+		expect(response.status).toBe(503);
+		expect(response.headers.get("content-type")).toContain("application/json");
+		const error = await response.json();
+		expect(error).toMatchObject({ code: "RUNTIME_DRIVER_INVALID" });
+		expect(JSON.stringify(error)).not.toContain("native recovery detail");
+	});
+
+	it("keeps a live SSE subscription open after the confirmed cursor", async () => {
+		const { app } = await setup();
+		const body = submitBody();
+		const submittedResponse = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(body),
+		});
+		const submitted = (await submittedResponse.json()) as {
+			hostSessionRef: string;
+		};
+		const abort = new AbortController();
+		const liveResponse = await app.request(
+			"/internal/runtime/v1/events/stream",
+			{
+				method: "POST",
+				headers: authorizedHeaders,
+				signal: abort.signal,
+				body: JSON.stringify({
+					...body,
+					requestId: "request-http-live",
+					hostSessionRef: submitted.hostSessionRef,
+					afterCursor: "fake-cursor-1",
+					input: undefined,
+				}),
+			},
+		);
+		expect(liveResponse.status).toBe(200);
+		expect(liveResponse.headers.get("content-type")).toContain(
+			"text/event-stream",
+		);
+		const reader = liveResponse.body?.getReader();
+		if (!reader) throw new Error("expected live SSE body");
+
+		const supplemented = await app.request(
+			"/internal/runtime/v1/instructions",
+			{
+				method: "POST",
+				headers: authorizedHeaders,
+				body: JSON.stringify({
+					...body,
+					requestId: "request-http-live-supplement",
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+					hostSessionRef: submitted.hostSessionRef,
+					messageId: "message-http-live",
+					grant: executionGrant(
+						body,
+						["turn.supplement"],
+						"grant-http-supplement",
+					),
+					input: { text: "synthetic-live-supplement", attachments: [] },
+				}),
+			},
+		);
+		expect(supplemented.status).toBe(200);
+		const next = await Promise.race([
+			reader.read(),
+			new Promise<never>((_resolve, reject) =>
+				setTimeout(() => reject(new Error("live SSE event timed out")), 2_000),
+			),
+		]);
+		expect(next.done).toBe(false);
+		const chunk = new TextDecoder().decode(next.value);
+		expect(chunk).toContain("id: fake-cursor-2");
+		expect(chunk).not.toContain("fake-cursor-1");
+
+		abort.abort();
+		await reader.cancel();
+	});
+});

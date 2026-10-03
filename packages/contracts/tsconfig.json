@@ -1,0 +1,12 @@
+{
+	"extends": "@agent-infra/config/tsconfig.base.json",
+	"exclude": ["dist", "node_modules"],
+	"compilerOptions": {
+		"allowImportingTsExtensions": true,
+		"paths": {
+			"@agent-infra/contracts/pilot": ["./src/pilot/index.ts"],
+			"@agent-infra/contracts/runtime": ["./src/runtime/index.ts"],
+			"@agent-infra/contracts/workload": ["./src/workload/index.ts"]
+		}
+	}
+}

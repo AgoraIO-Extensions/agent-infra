@@ -1,0 +1,147 @@
+{
+  "$defs": {
+    "RuntimeModelConfigurationV3": {
+      "additionalProperties": false,
+      "description": "JSON Schema validates structure only. Configuration admission additionally requires unique modelOptionId values, unique reasoningLevels within each option, and a default option/reasoning pair present in modelOptions, as enforced by RuntimeModelConfigurationV3Schema. Passing JSON Schema validation does not replace shared semantic validation or Runtime Host admission.",
+      "properties": {
+        "configVersion": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "type": "string"
+        },
+        "defaultModelOptionId": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "type": "string"
+        },
+        "defaultReasoningLevel": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "type": "string"
+        },
+        "modelOptions": {
+          "items": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "authentication": {
+                    "const": "bearer",
+                    "type": "string"
+                  },
+                  "credentialEnvironmentVariable": {
+                    "pattern": "^AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_[A-Z0-9_]{1,96}$",
+                    "type": "string"
+                  },
+                  "endpoint": {
+                    "maxLength": 2048,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "model": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "modelOptionId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "protocol": {
+                    "const": "openai-responses-v1",
+                    "type": "string"
+                  },
+                  "reasoningLevels": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                      "type": "string"
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "modelOptionId",
+                  "endpoint",
+                  "model",
+                  "reasoningLevels",
+                  "credentialEnvironmentVariable",
+                  "protocol",
+                  "authentication"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "authentication": {
+                    "enum": [
+                      "bearer",
+                      "api-key"
+                    ],
+                    "type": "string"
+                  },
+                  "credentialEnvironmentVariable": {
+                    "pattern": "^AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_[A-Z0-9_]{1,96}$",
+                    "type": "string"
+                  },
+                  "endpoint": {
+                    "maxLength": 2048,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "model": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "modelOptionId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "protocol": {
+                    "const": "anthropic-messages-v1",
+                    "type": "string"
+                  },
+                  "reasoningLevels": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                      "type": "string"
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "modelOptionId",
+                  "endpoint",
+                  "model",
+                  "reasoningLevels",
+                  "credentialEnvironmentVariable",
+                  "protocol",
+                  "authentication"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 3,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "configVersion",
+        "defaultModelOptionId",
+        "defaultReasoningLevel",
+        "modelOptions"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-configuration.v3.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Infra Runtime Configuration V3"
+}

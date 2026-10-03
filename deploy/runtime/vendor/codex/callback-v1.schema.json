@@ -1,0 +1,1101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-infra:codex-mandatory-callback:v1",
+  "description": "Private inherited socket callback for native attempts and source lifecycle; never an app-server public API.",
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "turnId",
+        "callId",
+        "attemptRef",
+        "toolName"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "turnId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "callId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "attemptRef": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "toolName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "parentAttemptRef": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      }
+    },
+    "sourceOwner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rootThreadId",
+        "rootTurnId"
+      ],
+      "properties": {
+        "rootThreadId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "rootTurnId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        }
+      }
+    },
+    "nativeSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "threadId",
+        "turnId"
+      ],
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "turnId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        }
+      }
+    },
+    "sourceReservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reservationId",
+        "parent",
+        "parentPermitId",
+        "childThreadId",
+        "submissionId"
+      ],
+      "properties": {
+        "reservationId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "parent": {
+          "$ref": "#/$defs/identity"
+        },
+        "parentPermitId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "childThreadId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "submissionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        }
+      }
+    },
+    "operationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "occurredAt"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "enum": [
+            "intent",
+            "started",
+            "outcome"
+          ]
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "permitId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "outcome": {
+          "enum": [
+            "completed",
+            "failed",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "authorization_denied",
+            "authorization_unavailable",
+            "cancelled_before_dispatch",
+            "execution_failed",
+            "execution_cancelled",
+            "dispatch_unconfirmed",
+            "result_unconfirmed"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "phase": {
+                "const": "intent"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "permitId"
+                  ]
+                },
+                {
+                  "required": [
+                    "outcome"
+                  ]
+                },
+                {
+                  "required": [
+                    "reason"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "phase": {
+                "const": "started"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "permitId"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "outcome"
+                  ]
+                },
+                {
+                  "required": [
+                    "reason"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "phase": {
+                "const": "outcome"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "outcome",
+              "permitId"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reason"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "enum": [
+                  "authorization_denied",
+                  "authorization_unavailable",
+                  "cancelled_before_dispatch",
+                  "execution_failed",
+                  "execution_cancelled"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "enum": [
+                  "dispatch_unconfirmed",
+                  "result_unconfirmed"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "operationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "decision"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "enum": [
+            "intent",
+            "started",
+            "outcome"
+          ]
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "decision": {
+          "enum": [
+            "permit",
+            "deny",
+            "ack"
+          ]
+        },
+        "permitId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reason": {
+          "enum": [
+            "authorization_denied",
+            "authorization_unavailable",
+            "persistence_unavailable"
+          ]
+        },
+        "sourceOwner": {
+          "$ref": "#/$defs/sourceOwner"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "permit"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "phase": {
+                "const": "intent"
+              }
+            },
+            "required": [
+              "permitId",
+              "expiresAt",
+              "sourceOwner"
+            ],
+            "not": {
+              "required": [
+                "reason"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "deny"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "phase": {
+                "const": "intent"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "permitId"
+                  ]
+                },
+                {
+                  "required": [
+                    "expiresAt"
+                  ]
+                }
+              ]
+            },
+            "allOf": [
+              {
+                "not": {
+                  "required": [
+                    "sourceOwner"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "ack"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "phase": {
+                "enum": [
+                  "started",
+                  "outcome"
+                ]
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "permitId"
+                  ]
+                },
+                {
+                  "required": [
+                    "expiresAt"
+                  ]
+                },
+                {
+                  "required": [
+                    "reason"
+                  ]
+                }
+              ]
+            },
+            "allOf": [
+              {
+                "not": {
+                  "required": [
+                    "sourceOwner"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "sourceReserveRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "occurredAt",
+        "reservation"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "source-reserve"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation": {
+          "$ref": "#/$defs/sourceReservation"
+        }
+      }
+    },
+    "sourceBindRequest": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sourceBindStartedRequest"
+        },
+        {
+          "$ref": "#/$defs/sourceBindSteeredRequest"
+        }
+      ]
+    },
+    "sourceNotStartedRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "occurredAt",
+        "reservation",
+        "stage",
+        "reason"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "source-not-started"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation": {
+          "$ref": "#/$defs/sourceReservation"
+        },
+        "stage": {
+          "enum": [
+            "not_queued",
+            "not_routed",
+            "gate_rejected"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "queue_closed",
+            "routing_rejected",
+            "cancelled_before_start",
+            "binding_denied"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/nativeSource"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "stage": {
+                "const": "gate_rejected"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "source"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "source"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "stage": {
+                "const": "not_queued"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "queue_closed",
+                  "cancelled_before_start"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "stage": {
+                "const": "not_routed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "routing_rejected",
+                  "cancelled_before_start"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "stage": {
+                "const": "gate_rejected"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "binding_denied",
+                  "cancelled_before_start"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sourceTerminalRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "occurredAt",
+        "reservation",
+        "source",
+        "nativeStatus"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "source-terminal"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation": {
+          "$ref": "#/$defs/sourceReservation"
+        },
+        "source": {
+          "$ref": "#/$defs/nativeSource"
+        },
+        "nativeStatus": {
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        }
+      }
+    },
+    "sourceRequest": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sourceReserveRequest"
+        },
+        {
+          "$ref": "#/$defs/sourceBindRequest"
+        },
+        {
+          "$ref": "#/$defs/sourceNotStartedRequest"
+        },
+        {
+          "$ref": "#/$defs/sourceTerminalRequest"
+        }
+      ]
+    },
+    "sourceResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "sourceOwner"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-reserve"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceReserveRequest"
+            },
+            "decision": {
+              "const": "ack"
+            },
+            "sourceOwner": {
+              "$ref": "#/$defs/sourceOwner"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "reason"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-reserve"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceReserveRequest"
+            },
+            "decision": {
+              "const": "deny"
+            },
+            "reason": {
+              "enum": [
+                "authorization_denied",
+                "authorization_unavailable",
+                "persistence_unavailable"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "sourceOwner"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-bind"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceBindStartedRequest"
+            },
+            "decision": {
+              "const": "ack"
+            },
+            "sourceOwner": {
+              "$ref": "#/$defs/sourceOwner"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "sourceOwner"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-bind"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceBindSteeredRequest"
+            },
+            "decision": {
+              "const": "ack"
+            },
+            "sourceOwner": {
+              "$ref": "#/$defs/sourceOwner"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "reason"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-bind"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceBindStartedRequest"
+            },
+            "decision": {
+              "const": "deny"
+            },
+            "reason": {
+              "enum": [
+                "authorization_denied",
+                "authorization_unavailable",
+                "persistence_unavailable"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-not-started"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceNotStartedRequest"
+            },
+            "decision": {
+              "const": "ack"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-terminal"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceTerminalRequest"
+            },
+            "decision": {
+              "const": "ack"
+            }
+          }
+        }
+      ]
+    },
+    "request": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/operationRequest"
+        },
+        {
+          "$ref": "#/$defs/sourceRequest"
+        }
+      ]
+    },
+    "response": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/operationResponse"
+        },
+        {
+          "$ref": "#/$defs/sourceResponse"
+        }
+      ]
+    },
+    "sourceBindStartedRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "occurredAt",
+        "reservation",
+        "source",
+        "delivery"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "source-bind"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation": {
+          "$ref": "#/$defs/sourceReservation"
+        },
+        "source": {
+          "$ref": "#/$defs/nativeSource"
+        },
+        "delivery": {
+          "const": "started"
+        }
+      }
+    },
+    "sourceBindSteeredRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "occurredAt",
+        "reservation",
+        "source",
+        "delivery"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "source-bind"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation": {
+          "$ref": "#/$defs/sourceReservation"
+        },
+        "source": {
+          "$ref": "#/$defs/nativeSource"
+        },
+        "delivery": {
+          "const": "steered"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
+  ]
+}

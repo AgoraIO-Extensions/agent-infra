@@ -1,0 +1,51 @@
+{
+	"openapi": "3.1.0",
+	"paths": {
+		"/events": {
+			"get": {
+				"operationId": "streamEvents",
+				"responses": {
+					"200": {
+						"content": {
+							"text/event-stream": {
+								"schema": {
+									"$ref": "#/components/schemas/PersistedConversationEventV1"
+								}
+							}
+						},
+						"description": "Events"
+					}
+				}
+			}
+		}
+	},
+	"components": {
+		"schemas": {
+			"PersistedConversationEventV1": {
+				"oneOf": [
+					{
+						"additionalProperties": false,
+						"properties": {
+							"payload": {
+								"additionalProperties": false,
+								"properties": {
+									"text": {
+										"type": "string"
+									}
+								},
+								"required": ["text"],
+								"type": "object"
+							},
+							"type": {
+								"const": "text.delta",
+								"type": "string"
+							}
+						},
+						"required": ["type", "payload"],
+						"type": "object"
+					}
+				]
+			}
+		}
+	}
+}

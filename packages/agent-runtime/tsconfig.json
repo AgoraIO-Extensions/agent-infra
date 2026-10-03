@@ -1,0 +1,10 @@
+{
+	"extends": "@agent-infra/config/tsconfig.base.json",
+	"exclude": ["dist", "node_modules"],
+	"compilerOptions": {
+		"allowImportingTsExtensions": true,
+		"paths": {
+			"@agent-infra/contracts/runtime": ["../contracts/src/runtime/index.ts"]
+		}
+	}
+}

@@ -1,0 +1,593 @@
+name: CI
+run-name: >-
+  ${{
+    github.event_name == 'pull_request' &&
+    format('PR #{0} | ci | pull_request', github.event.pull_request.number) ||
+    'main | ci | push'
+  }}
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      TRIVY_TOOL_DIR: .trivy-tool
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        run: npm install --global pnpm@11.20.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting and lint
+        run: pnpm check
+
+      - name: Check TypeScript
+        run: pnpm check-types
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Validate real observability Collector and PostgreSQL
+        id: observability
+        timeout-minutes: 10
+        env:
+          AO_SESSION_ID: observability-${{ github.run_id }}-${{ github.run_attempt }}
+          DOCKER_HOST: unix:///var/run/docker.sock
+          OBSERVABILITY_DOCKER_MODE: hosted-linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset DOCKER_CONTEXT COLIMA_PROFILE
+          evidence="$RUNNER_TEMP/observability"
+          mkdir -p "$evidence"
+          cleanup() {
+            status=$?
+            trap - EXIT
+            docker ps --all --quiet --filter "label=ao.session=$AO_SESSION_ID" > "$evidence/remaining-before.ids" || status=1
+            if [[ -s "$evidence/remaining-before.ids" ]]; then
+              if (( status == 0 )); then status=1; fi
+              xargs -r docker rm --force --volumes < "$evidence/remaining-before.ids" > "$evidence/cleanup.log" 2>&1 || status=1
+            fi
+            docker ps --all --quiet --filter "label=ao.session=$AO_SESSION_ID" > "$evidence/remaining-after.ids" || status=1
+            if [[ -s "$evidence/remaining-after.ids" ]]; then status=1; fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          test "$(git rev-parse HEAD)" = "$SCAN_COMMIT"
+          printf '%s\n' "$SCAN_COMMIT" > "$evidence/source.txt"
+          docker info --format '{{json .}}' > "$evidence/daemon.json"
+          docker_root=$(jq -r '.DockerRootDir // empty' "$evidence/daemon.json")
+          test -n "$docker_root"
+          test -d "$docker_root"
+          df -Pk "$docker_root" > "$evidence/capacity-before.txt"
+          available_kib=$(awk 'NR==2 {print $4}' "$evidence/capacity-before.txt")
+          (( available_kib >= 5242880 ))
+          docker pull otel/opentelemetry-collector-contrib:0.133.0 > "$evidence/collector-pull.log" 2>&1
+          docker pull postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416 > "$evidence/postgres-pull.log" 2>&1
+          docker image inspect otel/opentelemetry-collector-contrib:0.133.0 postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416 > "$evidence/images.json"
+          df -Pk "$docker_root" > "$evidence/capacity-after-provision.txt"
+          available_kib=$(awk 'NR==2 {print $4}' "$evidence/capacity-after-provision.txt")
+          (( available_kib >= 5242880 ))
+          pnpm exec tsc -p tests/observability/tsconfig.json --noEmit
+          OBSERVABILITY_EVIDENCE="$evidence/platform-api-resources.json" pnpm exec vitest run tests/observability/platform-api-resources.test.ts --maxWorkers=1 --no-file-parallelism --cache=false --reporter=json --outputFile="$evidence/platform-api-resources.result.json" > "$evidence/platform-api-resources.log" 2>&1
+          OBSERVABILITY_EVIDENCE="$evidence/collector.json" pnpm exec vitest run tests/observability/collector.test.ts --maxWorkers=1 --no-file-parallelism --cache=false --reporter=json --outputFile="$evidence/collector.result.json" > "$evidence/collector.log" 2>&1
+          node --input-type=module - "$evidence" "$SCAN_COMMIT" <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const [directory, head] = process.argv.slice(2);
+          for (const name of ['platform-api-resources', 'collector']) {
+            const result = JSON.parse(readFileSync(`${directory}/${name}.result.json`, 'utf8'));
+            assert.equal(result.success, true);
+            assert.equal(result.numTotalTests, 1);
+            assert.equal(result.numPassedTests, 1);
+            assert.equal(result.numPendingTests, 0);
+            const receipt = JSON.parse(readFileSync(`${directory}/${name}.json`, 'utf8'));
+            assert.equal(receipt.sourceSha, head);
+            assert.match(receipt.collectorImageId, /^sha256:[a-f0-9]{64}$/);
+          }
+          NODE
+
+      - name: Preserve observability acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: observability-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/observability
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build pinned Codex native test environment
+        run: >-
+          docker build --target builder -f apps/agent-runtime-host/Dockerfile
+          --tag agent-infra-codex-native-test .
+
+      - name: Verify native Codex metadata command
+        id: codex_native_command
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          evidence="$RUNNER_TEMP/codex-native-command-evidence"
+          mkdir -p "$evidence"
+          printf 'not_started\n' > "$evidence/result.txt"
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          printf '%s\n' "$SOURCE_COMMIT" > "$evidence/source.txt"
+          sha256sum packages/agent-runtime/src/codex-native-command{.native.test.ts,.test-support.ts,.test.ts} \
+            packages/agent-runtime/src/codex-runtime-driver.ts \
+            apps/agent-runtime-host/Dockerfile pnpm-lock.yaml > "$evidence/source.sha256"
+          docker info --format '{{json .}}' | jq '{ID, DockerRootDir, Architecture}' > "$evidence/daemon.json"
+          docker image inspect agent-infra-codex-native-test \
+            --format '{{json .}}' | jq '{Id, RepoDigests, Os, Architecture}' > "$evidence/image.json"
+          docker_root=$(docker info --format '{{.DockerRootDir}}')
+          df -Pk "$docker_root" > "$evidence/capacity-before.txt"
+          available_kib=$(awk 'NR==2 {print $4}' "$evidence/capacity-before.txt")
+          if (( available_kib < 5242880 )); then
+            printf 'capacity_blocked\n' > "$evidence/result.txt"
+            cat "$evidence/capacity-before.txt"
+            exit 1
+          fi
+          container="codex-native-command-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          set +e
+          timeout --signal=TERM --kill-after=5s 175s \
+            docker run --rm --pull=never --name "$container" \
+            --network=none --read-only --user 1000:1000 \
+            --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,exec,size=256m,mode=1777 \
+            --env AGENT_INFRA_CODEX_NATIVE_TEST=1 \
+            --env PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin \
+            agent-infra-codex-native-test sh -ec '
+              cat /opt/codex/share/release.json >&2
+              sha256sum /opt/codex/bin/codex /opt/codex/share/release.json >&2
+              exec pnpm --filter @agent-infra/agent-runtime exec vitest run \
+                src/codex-native-command.native.test.ts --cache=false \
+                --maxWorkers=1 --no-file-parallelism --reporter=json
+            ' > "$evidence/test.json" 2> "$evidence/native.stderr.log"
+          status=$?
+          set -e
+          printf '%s\n' "$status" > "$evidence/exit-code.txt"
+          if docker container inspect "$container" >/dev/null 2>&1; then
+            docker stop --time 5 "$container"
+          fi
+          df -Pk "$docker_root" > "$evidence/capacity-after.txt"
+          cat "$evidence/native.stderr.log" "$evidence/test.json"
+          if (( status != 0 )); then
+            printf 'failed_or_timed_out\n' > "$evidence/result.txt"
+            exit "$status"
+          fi
+          if ! jq -e '.success == true and .numTotalTests == 1 and .numPassedTests == 1 and .numPendingTests == 0' \
+            "$evidence/test.json"; then
+            printf 'skipped_or_invalid_report\n' > "$evidence/result.txt"
+            exit 1
+          fi
+          printf 'passed_one_native_test\n' > "$evidence/result.txt"
+
+      - name: Upload Codex metadata command evidence
+        if: ${{ !cancelled() && steps.codex_native_command.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-native-command-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/codex-native-command-evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Verify native Codex recovery
+        run: |
+          docker run --rm --pull=never --network=none --read-only \
+            --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,exec,size=256m,mode=1777 \
+            --env AGENT_INFRA_CODEX_NATIVE_TEST=1 \
+            --env PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin \
+            agent-infra-codex-native-test \
+            pnpm --filter @agent-infra/agent-runtime exec vitest run \
+            src/codex-native-recovery.test.ts --cache=false
+
+      - name: Verify native Claude conformance in the pinned Linux image
+        run: |
+          docker run --rm --pull=never --network=none --read-only \
+            --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,exec,size=256m,mode=1777 \
+            agent-infra-codex-native-test \
+            pnpm --filter @agent-infra/agent-runtime exec vitest run \
+            src/claude-native.test.ts src/claude-runtime-driver.test.ts \
+            src/runtime-driver-conformance.test.ts --cache=false
+
+      - name: Verify Generic ACP, OpenCode and Pi conformance in the pinned Linux image
+        run: |
+          docker run --init --rm --pull=never --network=none --read-only \
+            --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,exec,size=512m,mode=1777 \
+            --env OPENCODE_EXECUTABLE=/opt/opencode/bin/opencode \
+            agent-infra-codex-native-test \
+            pnpm --filter @agent-infra/agent-runtime exec vitest run \
+            src/acp-runtime-driver.test.ts src/acp-session.test.ts \
+            src/pi-native.test.ts src/pi-runtime-driver.test.ts src/pi-policy.test.ts \
+            src/opencode-native.test.ts src/runtime-driver-conformance.test.ts --maxWorkers=1 --cache=false
+
+      - name: Build applications
+        run: pnpm build
+
+      - name: Smoke test applications
+        run: pnpm smoke
+
+      - name: Install browser for Web validation
+        run: pnpm --filter @agent-infra/web exec playwright install --with-deps chromium
+
+      - name: Validate Web management journeys
+        run: pnpm --filter @agent-infra/web test:browser
+
+      - name: Upload Web browser evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-management-${{ github.event.pull_request.head.sha || github.sha }}
+          path: apps/web/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Build deployment images
+        id: images
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node .github/scripts/vulnerability-scan.mjs build
+
+      - name: Verify built Web image compatibility
+        timeout-minutes: 3
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          evidence=.vulnerability-scan/web-smoke
+          mkdir -p "$evidence"
+          static_container="web-static-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          tls_container="web-config-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          fixture=""
+          cleanup() {
+            status=$?
+            trap - EXIT
+            for container in "$static_container" "$tls_container"; do
+              if docker container inspect "$container" >/dev/null 2>&1; then
+                docker rm -f "$container" || status=1
+              fi
+            done
+            if [[ -n "$fixture" ]]; then rm -rf "$fixture" || status=1; fi
+            printf '%s\n' "$status" > "$evidence/exit-code.txt"
+            if (( status == 0 )); then
+              printf 'passed_static_http_and_local_config_syntax\n' > "$evidence/result.txt"
+            else
+              printf 'failed_or_incomplete\n' > "$evidence/result.txt"
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          cp .vulnerability-scan/build.json "$evidence/build.json"
+          web_image=$(jq -er --arg head "$SOURCE_COMMIT" '
+            select(.schemaVersion == 1 and .source.commit == $head)
+            | [.images[] | select(.name == "web")]
+            | select(length == 1) | .[0].imageId
+            | select(type == "string" and test("^sha256:[a-f0-9]{64}$"))
+          ' "$evidence/build.json")
+          lock_sha=$(sha256sum pnpm-lock.yaml | cut -d ' ' -f 1)
+          jq -e --arg lock "$lock_sha" '.source.lockfileSha256 == $lock' "$evidence/build.json"
+          docker image inspect "$web_image" | jq 'map({Id,Architecture,Os,User:.Config.User,Entrypoint:.Config.Entrypoint,Cmd:.Config.Cmd,Labels:.Config.Labels})' > "$evidence/image.json"
+          jq -e --arg image "$web_image" --arg head "$SOURCE_COMMIT" --arg lock "$lock_sha" '
+            length == 1 and (.[0] | .Id == $image and .User == "nginx"
+              and .Entrypoint == ["nginx"] and .Cmd == ["-g", "daemon off;"]
+              and .Labels["org.opencontainers.image.revision"] == $head
+              and .Labels["agent-infra.lockfile-sha256"] == $lock)
+          ' "$evidence/image.json"
+          timeout --signal=TERM --kill-after=5s 60s docker run --rm --pull=never --interactive \
+            --name "$static_container" --network=none --read-only \
+            --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,size=16m,mode=1777 \
+            --entrypoint /bin/sh "$web_image" -se <<'WEB_SMOKE' 2>&1 | tee "$evidence/static.log"
+              test "$(id -u)" -ne 0
+              printf "effective_uid=%s\n" "$(id -u)"
+              apk info -e -v pcre2=10.49-r0
+              ldd /usr/sbin/nginx > /tmp/nginx.ldd
+              cat /tmp/nginx.ldd
+              grep -F libpcre2-8.so.0 /tmp/nginx.ldd
+              if grep -F "not found" /tmp/nginx.ldd; then exit 1; fi
+              nginx -t
+              nginx -g "daemon off;" &
+              nginx_pid=$!
+              trap "kill $nginx_pid 2>/dev/null || true; wait $nginx_pid 2>/dev/null || true" EXIT
+              ready=false
+              for attempt in 1 2 3 4 5; do
+                if wget -S -O /tmp/root http://127.0.0.1:8080/ 2>/tmp/root.headers; then ready=true; break; fi
+                sleep 1
+              done
+              test "$ready" = true
+              grep -E "HTTP/[0-9.]+ 200" /tmp/root.headers
+              grep -Fi "Content-Type: text/html" /tmp/root.headers
+              if grep -F immutable /tmp/root.headers; then exit 1; fi
+              cmp /tmp/root /usr/share/nginx/html/index.html
+              asset=$(sed -n "s/.*src=\"\(\/assets\/[^\"]*\.js\)\".*/\1/p" /tmp/root | head -n 1)
+              test -n "$asset"
+              wget -S -O /tmp/asset "http://127.0.0.1:8080$asset" 2>/tmp/asset.headers
+              cmp /tmp/asset "/usr/share/nginx/html$asset"
+              grep -E "HTTP/[0-9.]+ 200" /tmp/asset.headers
+              grep -E "Content-Type: (application|text)/javascript" /tmp/asset.headers
+              grep -F "Cache-Control: public, max-age=31536000, immutable" /tmp/asset.headers
+              wget -S -O /tmp/deep http://127.0.0.1:8080/chat/smoke-agent/smoke-conversation 2>/tmp/deep.headers
+              cmp /tmp/deep /usr/share/nginx/html/index.html
+              grep -E "HTTP/[0-9.]+ 200" /tmp/deep.headers
+              grep -Fi "Content-Type: text/html" /tmp/deep.headers
+              if grep -F immutable /tmp/deep.headers; then exit 1; fi
+              if wget -S -O /tmp/missing http://127.0.0.1:8080/assets/1175-missing.js 2>/tmp/missing.headers; then exit 1; fi
+              grep -E "HTTP/[0-9.]+ 404" /tmp/missing.headers
+              echo passed_nonroot_static_asset_and_fallback
+          WEB_SMOKE
+          fixture=$(mktemp -d "$RUNNER_TEMP/web-tls-fixture.XXXXXX")
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
+            -keyout "$fixture/tls.key" -out "$fixture/tls.crt" 2>/dev/null
+          chmod 755 "$fixture"
+          chmod 644 "$fixture/tls.key" "$fixture/tls.crt"
+          timeout --signal=TERM --kill-after=5s 30s docker run --rm --pull=never \
+            --name "$tls_container" --network=none --read-only \
+            --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,size=16m,mode=1777 \
+            --add-host platform-api:127.0.0.1 \
+            --mount "type=bind,src=$PWD/deploy/local/nginx.conf,dst=/etc/nginx/conf.d/default.conf,readonly" \
+            --mount "type=bind,src=$fixture,dst=/var/run/platform-web,readonly" \
+            "$web_image" -t 2>&1 | tee "$evidence/local-config.log"
+
+      - name: Verify installed workspace-summary image
+        id: installed_skill
+        timeout-minutes: 10
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/installed-skill-evidence"
+          context="$RUNNER_TEMP/installed-skill-context-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$evidence" "$context"
+          printf 'failed_or_incomplete\n' > "$evidence/result.txt"
+          trap 'status=$?; printf "%s\n" "$status" > "$evidence/exit-code.txt"; rm -rf "$context"; exit "$status"' EXIT
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test -z "$(git status --porcelain)"
+          printf '%s\n' "$SOURCE_COMMIT" > "$evidence/source.txt"
+          git ls-tree -r HEAD > "$evidence/source-tree.txt"
+          cp .vulnerability-scan/build.json "$evidence/build.json"
+          sha256sum apps/agent-runtime-host/Dockerfile \
+            apps/agent-runtime-host/src/{configuration.ts,installed-skill.ts,index.ts} \
+            packages/agent-runtime/src/{codex-installation.ts,codex-runtime-driver.ts} \
+            deploy/runtime/skills/workspace-summary{.manifest.json,.manifest.schema.json,/SKILL.md} \
+            tests/runtime-installed-skill-image.ts .github/scripts/vulnerability-scan.mjs \
+            .github/workflows/ci.yml pnpm-lock.yaml > "$evidence/source.sha256"
+          runner_id=$(node --input-type=module -e '
+            import {readFile} from "node:fs/promises";
+            import {runtimeImageFromScanBuild} from "./deploy/release/runtime-probe.mjs";
+            console.log(runtimeImageFromScanBuild(JSON.parse(await readFile(".vulnerability-scan/build.json","utf8")),process.argv[1]));
+          ' "$SOURCE_COMMIT")
+          printf '%s\n' "$runner_id" > "$evidence/runner.iid"
+          docker_root=$(docker info --format '{{.DockerRootDir}}')
+          docker info --format '{{json .}}' | jq '{ID,DockerRootDir,Architecture}' > "$evidence/daemon.json"
+          capacity() {
+            df -Pk "$docker_root" > "$evidence/capacity-$1.txt"
+            available_kib=$(awk 'NR==2 {print $4}' "$evidence/capacity-$1.txt")
+            (( available_kib >= 5242880 ))
+          }
+          architecture=$(docker image inspect "$runner_id" --format '{{.Architecture}}')
+          case "$architecture" in amd64|arm64) ;; *) exit 1 ;; esac
+          session="504-1050-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          config_version="1050-ci-$SOURCE_COMMIT-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          printf '%s\n' "$session" > "$evidence/session.txt"
+          printf '%s\n' "$config_version" > "$evidence/config-version.txt"
+          capacity before-build
+          git archive "$SOURCE_COMMIT" | tar -x -C "$context"
+          timeout --signal=TERM --kill-after=5s 300s docker build \
+            --platform "linux/$architecture" --progress=plain --target installed-skill-test \
+            --build-arg "SOURCE_COMMIT=$SOURCE_COMMIT" --label "ao.session=$session" \
+            --tag "agent-infra-ci/installed-skill-test:$SOURCE_COMMIT" \
+            --file "$context/apps/agent-runtime-host/Dockerfile" \
+            --iidfile "$evidence/test.iid" "$context" 2>&1 | tee "$evidence/test-build.log"
+          test_id=$(cat "$evidence/test.iid")
+          docker image inspect "$runner_id" "$test_id" | jq 'map({Id,RepoDigests,Descriptor,Os,Architecture,User:.Config.User,Labels:.Config.Labels})' > "$evidence/images.json"
+          capacity before-cli
+          timeout --signal=TERM --kill-after=5s 180s node tests/runtime-installed-skill-image.ts \
+            "$runner_id" "$test_id" "$SOURCE_COMMIT" "$config_version" \
+            "$evidence/installation.json" "$session" 2>&1 | tee "$evidence/installation.log"
+          capacity after-cli
+          printf 'passed_installation_only\n' > "$evidence/result.txt"
+
+      - name: Preserve installed Skill image evidence
+        if: ${{ !cancelled() && steps.installed_skill.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installed-skill-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installed-skill-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Probe native Codex runtime image
+        id: runtime_probe
+        run: >-
+          node deploy/release/runtime-probe.mjs --scan-build
+          .vulnerability-scan/build.json "$RUNNER_TEMP/codex-runtime-probe.json"
+
+      - name: Verify Custom Base Image inheritance
+        run: >-
+          node deploy/release/custom-base-image.mjs
+          "agent-infra-ci/custom-agent-base:$SCAN_COMMIT"
+          "$RUNNER_TEMP/custom-base-image.json"
+
+      - name: Preserve Custom Base Image evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: custom-base-image-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/custom-base-image.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Preserve Codex runtime image evidence
+        if: ${{ !cancelled() && steps.runtime_probe.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-runtime-probe-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/codex-runtime-probe.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Lint Markdown
+        run: >-
+          npx --yes markdownlint-cli2@0.23.2
+          README.md AGENTS.md ".github/**/*.md" "docs/**/*.md"
+
+      - name: Check Markdown links
+        shell: bash
+        run: |
+          while IFS= read -r -d '' file; do
+            npx --yes markdown-link-check@3.15.0 \
+              --config .markdown-link-check.json "$file"
+          done < <(find README.md AGENTS.md .github docs -type f -name '*.md' -print0)
+
+      - name: Verify workflow policy
+        run: node .github/scripts/verify-workflow-policy.mjs
+
+      - name: Lint workflows
+        run: .github/scripts/run-actionlint.sh
+
+      - name: Check whitespace errors
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            git show --check --format=fuller "$HEAD_SHA"
+          else
+            git diff --check "$BASE_SHA" "$HEAD_SHA"
+          fi
+
+      - name: Install verified vulnerability scanner
+        if: ${{ !cancelled() && steps.images.outcome == 'success' }}
+        run: node .github/scripts/install-trivy.mjs "$TRIVY_TOOL_DIR"
+
+      - name: Scan dependencies and built images
+        if: ${{ !cancelled() && steps.images.outcome == 'success' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VULNERABILITY_EXCEPTIONS: ${{ vars.VULNERABILITY_EXCEPTIONS }}
+        run: node .github/scripts/vulnerability-scan.mjs scan
+
+      - name: Upload vulnerability evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vulnerability-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .vulnerability-scan/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Download vulnerability evidence
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vulnerability-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vulnerability-readback
+
+      - name: Verify downloaded evidence and enforce policy
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VULNERABILITY_EXCEPTIONS: ${{ vars.VULNERABILITY_EXCEPTIONS }}
+          VULNERABILITY_REPORT_DIR: ${{ runner.temp }}/vulnerability-readback
+        run: node .github/scripts/vulnerability-scan.mjs verify
+
+  workload-kind:
+    name: Workload kind
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install tools and dependencies
+        run: |
+          npm install --global pnpm@11.20.0
+          go install sigs.k8s.io/kind@v0.30.0
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+          pnpm install --frozen-lockfile
+      - name: Build Workload dependencies
+        run: pnpm exec turbo run build --filter=@agent-infra/platform-worker
+      - name: Verify Kubernetes lifecycle and isolation
+        env:
+          WORKLOAD_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          WORKLOAD_KIND_EVIDENCE_DIR: ${{ runner.temp }}/workload-host-evidence
+        run: bash deploy/kind/workload.sh
+      - name: Upload default Host configuration evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workload-host-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/workload-host-evidence
+          if-no-files-found: warn
+
+  outcome:
+    name: Publish terminal outcome
+    needs: [ci, workload-kind]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Publish terminal Job Summary
+        env:
+          SUMMARY_ACTION: ${{ github.event.action || github.event_name }}
+          SUMMARY_ATTEMPT: ""
+          SUMMARY_CYCLE: ""
+          SUMMARY_EVENT: ${{ github.event_name }}
+          SUMMARY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SUMMARY_NEXT_OWNER: ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'repository-maintainer' || 'none' }}
+          SUMMARY_OPERATION: ci
+          SUMMARY_OUTCOME: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || contains(needs.*.result, 'success') && 'success' || 'skipped' }}
+          SUMMARY_TARGET: "${{ github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || 'main' }}"
+          SUMMARY_TARGET_URL: ${{ github.event_name == 'pull_request' && format('{0}/{1}/pull/{2}', github.server_url, github.repository, github.event.pull_request.number) || format('{0}/{1}/tree/{2}', github.server_url, github.repository, github.event.repository.default_branch) }}
+        shell: bash
+        run: |
+          {
+            echo "## Workflow terminal outcome"
+            echo
+            echo "- Target: [$SUMMARY_TARGET]($SUMMARY_TARGET_URL)"
+            echo "- Run: [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo "- Operation: \`$SUMMARY_OPERATION\`"
+            echo "- Event/action: \`$SUMMARY_EVENT\` / \`$SUMMARY_ACTION\`"
+            echo "- Head SHA: \`$SUMMARY_HEAD_SHA\`"
+            echo "- Cycle: ${SUMMARY_CYCLE:-N/A}"
+            echo "- Attempt: ${SUMMARY_ATTEMPT:-N/A}"
+            echo "- Terminal outcome: \`$SUMMARY_OUTCOME\`"
+            echo "- Next owner: \`$SUMMARY_NEXT_OWNER\`"
+          } >> "$GITHUB_STEP_SUMMARY"

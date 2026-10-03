@@ -1,0 +1,1847 @@
+import { EventEmitter } from "node:events";
+import { existsSync, mkdtempSync } from "node:fs";
+import {
+	access,
+	chmod,
+	lstat,
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
+import { PassThrough } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
+	type: "json",
+};
+
+// Exercise Linux admission on every test host; the helper itself is synthetic.
+vi.mock("node:process", async (importOriginal) => ({
+	...(await importOriginal<typeof import("node:process")>()),
+	platform: "linux",
+}));
+
+vi.mock("node:crypto", async (importOriginal) => {
+	const original = await importOriginal<typeof import("node:crypto")>();
+	return {
+		createHash: () => {
+			let value = "";
+			return {
+				update: (input: Uint8Array) => {
+					value += Buffer.from(input).toString("utf8");
+					return {
+						digest: () =>
+							value === "schema-matches"
+								? "d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a"
+								: original.createHash("sha256").update(value).digest("hex"),
+					};
+				},
+			};
+		},
+	};
+});
+
+import { readCallbackCorpusBytes } from "../../../deploy/runtime/vendor/codex/callback-corpus.mjs";
+import {
+	CODEX_APP_SERVER_V2_PROVENANCE,
+	CODEX_MODEL_ONLY_CONFIG,
+	CodexAppServerBridge,
+	runCodexConnectionRecovery,
+	validateModelAccess,
+} from "./codex-app-server-bridge.js";
+import type {
+	CodexConnectionEvidenceUpdateRequest,
+	CodexConnectionRecoveryResponse,
+} from "./codex-connection-client.js";
+import type { CodexNativeCallbackHandler } from "./codex-native-callback.js";
+
+const directories: string[] = [];
+const originalPath = process.env.PATH;
+const originalHome = process.env.HOME;
+const originalCodexHome = process.env.CODEX_HOME;
+const originalMcpConfiguration = process.env.AGENT_INFRA_TEST_MCP_CONFIGURATION;
+const originalConnectionCredential =
+	process.env.AGENT_INFRA_TEST_CONNECTION_CREDENTIAL;
+const childPids: number[] = [];
+const isolatedEnvironmentKeys = [
+	"CODEX_HOME",
+	"HOME",
+	"PATH",
+	...(process.platform === "darwin" ? ["__CF_USER_TEXT_ENCODING"] : []),
+].sort();
+
+async function installFakeCodex(mode: string, recoveryFrame?: unknown) {
+	const evidenceFrame =
+		recoveryFrame ??
+		(mode.startsWith("recovery-") ? recoveryEvidenceFrame() : null);
+	const directory = await mkdtemp(
+		join(tmpdir(), "agent-runtime-codex-bridge-"),
+	);
+	directories.push(directory);
+	const executable = join(directory, "codex");
+	const capturePath = join(directory, "captured-arguments.json");
+	await writeFile(
+		executable,
+		`#!/usr/bin/env node
+const { appendFileSync, closeSync, mkdirSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+const args = process.argv.slice(2);
+const mode = ${JSON.stringify(mode)};
+const capturePath = ${JSON.stringify(capturePath)};
+if (mode === "stdin-closed" && args[0] === "app-server" && args[1] !== "generate-json-schema") {
+  closeSync(0);
+}
+if (capturePath) {
+  appendFileSync(capturePath, JSON.stringify({
+    args,
+    executable: process.argv[1],
+    launchPath: process.env.PATH,
+    pid: process.pid,
+    cwd: process.cwd(),
+    environmentKeys: Object.keys(process.env).sort(),
+    environment: {
+      codexHome: process.env.CODEX_HOME,
+      home: process.env.HOME,
+      cfUserTextEncoding: process.env.__CF_USER_TEXT_ENCODING,
+      hasMcpConfiguration: Object.hasOwn(process.env, "AGENT_INFRA_TEST_MCP_CONFIGURATION"),
+      hasConnectionCredential: Object.hasOwn(process.env, "AGENT_INFRA_TEST_CONNECTION_CREDENTIAL"),
+      modelCredentialMatches: process.env.AGENT_INFRA_CODEX_MODEL_CREDENTIAL === "synthetic-loopback-token",
+      execServerUrl: process.env.CODEX_EXEC_SERVER_URL,
+    },
+  }) + "\\n");
+}
+if (args[0] === "--version") {
+  if (mode === "version-hangs") setInterval(() => {}, 1_000);
+  if (mode === "version-mismatch") process.stdout.write("codex-cli 0.0.0\\n");
+  else process.stdout.write("codex-cli 0.153.0\\n");
+  if (mode !== "version-hangs") process.exit(0);
+}
+if (args[0] === "app-server" && args[1] === "generate-json-schema") {
+  if (mode === "schema-hangs") {
+    setInterval(() => {}, 1_000);
+  } else {
+    const output = args[args.indexOf("--out") + 1];
+    mkdirSync(output, { recursive: true });
+    writeFileSync(join(output, "codex_app_server_protocol.v2.schemas.json"), mode === "schema-mismatch" ? "schema-mismatch" : "schema-matches");
+    process.exit(0);
+  }
+}
+if (args[0] === "--agent-infra-native-barrier-info") {
+  if (mode === "barrier-missing") process.exit(2);
+  const info = ${JSON.stringify(nativeBarrier)};
+  if (mode === "barrier-mismatch") info.coverageSha256 = "sha256:" + "0".repeat(64);
+  if (mode === "barrier-extra-field") info.unexpected = true;
+  process.stdout.write(JSON.stringify(info) + "\\n");
+  process.exit(0);
+}
+if (args.includes("--agent-infra-connection-recovery")) {
+ const { Socket } = require("node:net");
+ const { randomUUID } = require("node:crypto");
+ const socket = new Socket({ fd: 3 });
+ let count = 0;
+ const profile = JSON.parse(args[args.indexOf("--agent-infra-connection-profile") + 1]);
+ const processNonce = randomUUID();
+ const frame = ${JSON.stringify(evidenceFrame)};
+ let lastRecoveryId;
+ let firstRecoveryId;
+ let repeatedEvidence = false;
+ const pull = (previousRecoveryId) => socket.write(JSON.stringify({schemaVersion:2,phase:"connection-recovery",requestId:randomUUID(),profileRef:profile.profileRef,processNonce,...(previousRecoveryId ? {previousRecoveryId} : {})}) + "\\n");
+ socket.on("data", (chunk) => {
+  const response = JSON.parse(chunk.toString());
+  if (response.decision === "done") socket.end(() => process.exit(0));
+  else if (response.phase === "connection-evidence") {
+   if (mode === "recovery-duplicate-evidence" && !repeatedEvidence) {
+    repeatedEvidence = true;
+    socket.write(JSON.stringify(frame) + "\\n");
+   }
+   else if (mode === "recovery-premature" && count === 16) socket.end(() => process.exit(0));
+   else if (mode === "recovery-previous-missing") pull();
+   else if (mode === "recovery-previous-foreign") pull(randomUUID());
+   else if (mode === "recovery-previous-stale") pull(firstRecoveryId);
+   else pull(lastRecoveryId);
+  }
+  else {
+   count++;
+   lastRecoveryId = response.recoveryId;
+   firstRecoveryId ??= response.recoveryId;
+   if (mode === "recovery-skip-evidence" || (mode === "recovery-skip-final-evidence" && count === 16)) pull(lastRecoveryId);
+   else socket.write(JSON.stringify(frame) + "\\n");
+  }
+ });
+ if (mode === "recovery-frame") socket.write(JSON.stringify(frame) + "\\n");
+ else pull(mode === "recovery-previous-initial" ? randomUUID() : undefined);
+ return;
+}
+if (mode === "startup-exit") process.exit(9);
+if (mode === "malformed-frame") process.stdout.write("not-json\\n");
+if (mode === "oversized-frame") process.stdout.write("x".repeat(65_537) + "\\n");
+if (mode === "queue-overflow") {
+  for (let index = 0; index <= 256; index += 1) {
+    process.stdout.write(JSON.stringify({ id: index }) + "\\n");
+  }
+}
+if (mode === "stderr-exit") {
+  process.stderr.write("redacted-child-output\\n");
+  process.exit(9);
+}
+if (["shutdown-hangs", "schema-hangs", "version-hangs", "stdin-closed"].includes(mode)) {
+	if (mode === "shutdown-hangs") {
+		process.on("SIGTERM", () => {});
+		setInterval(() => {}, 1_000);
+	}
+	if (mode === "stdin-closed") setInterval(() => {}, 1_000);
+	else process.stdin.resume();
+} else {
+  process.stdin.on("data", (chunk) => process.stdout.write(chunk));
+  process.stdin.on("end", () => process.exit(0));
+}
+`,
+	);
+	await chmod(executable, 0o755);
+	const sandboxCapturePath = join(directory, "sandbox-admission.json");
+	const boundaryCapturePath = join(directory, "sandbox-boundary.json");
+	const helper = join(directory, "setpriv");
+	await writeFile(
+		helper,
+		`#!/usr/bin/env node
+const { writeFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+const separator = args.indexOf("--");
+const command = separator < 0 ? [] : args.slice(separator + 1);
+const admission = command[0] === "/bin/true";
+writeFileSync(admission ? ${JSON.stringify(sandboxCapturePath)} : ${JSON.stringify(boundaryCapturePath)}, JSON.stringify({
+  args,
+  pid: process.pid,
+  cwd: process.cwd(),
+  environmentKeys: Object.keys(process.env).sort(),
+}));
+if (!admission) {
+  // The real helper execs its command, so the launch must stay one process.
+  process.argv = [process.argv[0], command[0], ...command.slice(1)];
+  require(command[0]);
+} else if (${JSON.stringify(mode)} === "sandbox-hangs") {
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1_000);
+} else process.exit(${JSON.stringify(mode)} === "sandbox-unsupported" ? 127 : 0);
+`,
+	);
+	await chmod(helper, 0o755);
+	process.env.PATH = `${directory}${process.platform === "win32" ? ";" : ":"}${originalPath ?? ""}`;
+	return { capturePath, sandboxCapturePath, boundaryCapturePath };
+}
+
+function options(overrides: Record<string, unknown> = {}) {
+	const directory = mkdtempSync(join(tmpdir(), "agent-runtime-codex-pvc-"));
+	directories.push(directory);
+	return {
+		dataDirectory: join(directory, "native"),
+		conversationKey: testConversationKey,
+		model: "gpt-5.3-codex",
+		reasoningEffort: "high",
+		provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+		startupTimeoutMs: 5_000,
+		shutdownTimeoutMs: 1_000,
+		// Exercise the optional barrier hook explicitly; production defaults to
+		// the current release manifest and does not require Wave 3 artifacts.
+		nativeBarrierRequired: true,
+		...overrides,
+	};
+}
+
+const testConversationKey = `${"9".repeat(63)}a`;
+
+// Native storage is one directory per Conversation beneath a shared boundary.
+function conversationRoot(dataDirectory: string) {
+	return join(dataDirectory, "conversations", testConversationKey);
+}
+
+// Only the parent of the data root is symlink-resolved, matching the bridge.
+async function conversationRootPath(
+	dataDirectory: string,
+	conversationKey = testConversationKey,
+) {
+	return join(
+		await realpath(dirname(dataDirectory)),
+		basename(dataDirectory),
+		"conversations",
+		conversationKey,
+	);
+}
+
+const landlockDataRights = [
+	"execute",
+	"write-file",
+	"read-file",
+	"read-dir",
+	"remove-dir",
+	"remove-file",
+	"make-char",
+	"make-dir",
+	"make-reg",
+	"make-sock",
+	"make-fifo",
+	"make-block",
+	"make-sym",
+	"refer",
+	"truncate",
+].join(",");
+
+async function boundaryCapture(path: string) {
+	return JSON.parse(await readFile(path, "utf8")) as {
+		args: string[];
+		cwd: string;
+		environmentKeys: string[];
+	};
+}
+
+function createStalledBridge(isolatedDirectory: string) {
+	const process = new EventEmitter();
+	Object.assign(process, {
+		stdin: Object.assign(new EventEmitter(), { end: vi.fn() }),
+		stdout: new EventEmitter(),
+		stderr: Object.assign(new EventEmitter(), { resume: vi.fn() }),
+		kill: vi.fn(),
+		stdio: [null, null, null, new PassThrough()],
+	});
+	const Bridge = CodexAppServerBridge as unknown as new (
+		child: never,
+		shutdownTimeoutMs: number,
+		directory: string,
+	) => CodexAppServerBridge;
+	return {
+		bridge: new Bridge(process as never, 25, isolatedDirectory),
+		process,
+	};
+}
+
+async function readAppCapture(path: string) {
+	const captures = await readCaptures(path, 4);
+	const capture = captures.at(-1);
+	if (capture?.args[0] !== "app-server") {
+		throw new Error("fake Codex did not record its app-server launch");
+	}
+	return capture;
+}
+
+async function readCaptures(path: string, minimum = 1) {
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		try {
+			const contents = await readFile(path, "utf8");
+			const captures = contents
+				.trim()
+				.split("\n")
+				.filter(Boolean)
+				.map(
+					(line) =>
+						JSON.parse(line) as {
+							args: string[];
+							executable: string;
+							launchPath: string;
+							pid: number;
+							cwd: string;
+							environmentKeys: string[];
+							environment: {
+								codexHome?: string;
+								home?: string;
+								cfUserTextEncoding?: string;
+								hasMcpConfiguration: boolean;
+								hasConnectionCredential: boolean;
+								modelCredentialMatches: boolean;
+								execServerUrl?: string;
+							};
+						},
+				);
+			if (captures.length >= minimum) return captures;
+		} catch {}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("fake Codex did not record its launch");
+}
+
+async function expectChildExited(pid: number) {
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		try {
+			process.kill(pid, 0);
+		} catch {
+			return;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("bridge child remained alive after a fatal error");
+}
+
+async function expectPathRemoved(path: string) {
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		try {
+			await access(path);
+		} catch {
+			return;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("bridge private runtime directory remained after child exit");
+}
+
+afterEach(async () => {
+	for (const pid of childPids.splice(0)) {
+		try {
+			process.kill(pid, "SIGKILL");
+		} catch {
+			// The test already confirmed this child exited.
+		}
+	}
+	process.env.PATH = originalPath;
+	if (originalHome === undefined) delete process.env.HOME;
+	else process.env.HOME = originalHome;
+	if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+	else process.env.CODEX_HOME = originalCodexHome;
+	if (originalMcpConfiguration === undefined) {
+		delete process.env.AGENT_INFRA_TEST_MCP_CONFIGURATION;
+	} else {
+		process.env.AGENT_INFRA_TEST_MCP_CONFIGURATION = originalMcpConfiguration;
+	}
+	if (originalConnectionCredential === undefined) {
+		delete process.env.AGENT_INFRA_TEST_CONNECTION_CREDENTIAL;
+	} else {
+		process.env.AGENT_INFRA_TEST_CONNECTION_CREDENTIAL =
+			originalConnectionCredential;
+	}
+	await Promise.all(
+		directories
+			.splice(0)
+			.map((directory) => rm(directory, { recursive: true })),
+	);
+});
+
+describe.sequential("Codex app-server v2 bridge", () => {
+	it("admits Linux sandbox capabilities before sharing model credentials", async () => {
+		const { sandboxCapturePath } = await installFakeCodex("echo");
+		const bridge = await CodexAppServerBridge.open(
+			options({
+				model: "option_a/synthetic-model",
+				modelAccess: {
+					endpoint: "http://127.0.0.1:12345",
+					credential: "synthetic-loopback-token",
+				},
+			}),
+		);
+		await bridge.close();
+		const capture = JSON.parse(await readFile(sandboxCapturePath, "utf8"));
+		expect(capture.args).toEqual([
+			"--no-new-privs",
+			"--landlock-access",
+			"fs:ioctl-dev",
+			"--",
+			"/bin/true",
+		]);
+		expect(capture.environmentKeys).toEqual(isolatedEnvironmentKeys);
+		await expectPathRemoved(capture.cwd);
+	});
+
+	it("fixes the official model-only launch policy without inheriting executor overrides", async () => {
+		const { capturePath } = await installFakeCodex("barrier-missing");
+		const previous = process.env.CODEX_EXEC_SERVER_URL;
+		process.env.CODEX_EXEC_SERVER_URL = "ws://127.0.0.1:9999";
+		try {
+			const bridge = await CodexAppServerBridge.open(
+				options({
+					modelOnly: true,
+					nativeBarrierRequired: false,
+					model: "synthetic/gpt-5.6-sol",
+					modelAccess: {
+						endpoint: "http://127.0.0.1:8080",
+						credential: "synthetic-loopback-token",
+					},
+				}),
+			);
+			try {
+				const captures = await readCaptures(capturePath, 3);
+				expect(
+					captures.some((capture) =>
+						capture.args.includes("--agent-infra-native-barrier-info"),
+					),
+				).toBe(false);
+				const server = captures[2];
+				expect(server?.environment.execServerUrl).toBe("none");
+				for (const [key, value] of Object.entries(CODEX_MODEL_ONLY_CONFIG))
+					expect(server?.args).toContain(`${key}=${JSON.stringify(value)}`);
+			} finally {
+				await bridge.close();
+			}
+		} finally {
+			if (previous === undefined) delete process.env.CODEX_EXEC_SERVER_URL;
+			else process.env.CODEX_EXEC_SERVER_URL = previous;
+		}
+	});
+
+	it.each([
+		{ nativeCallback: async () => ({}) },
+		{ nativeBarrierRequired: true },
+		{ modelAccess: undefined },
+	])("rejects incompatible official model-only launch %j", async (override) => {
+		await installFakeCodex("echo");
+		await expect(
+			CodexAppServerBridge.open(
+				options({
+					modelOnly: true,
+					nativeBarrierRequired: false,
+					model: "synthetic/gpt-5.6-sol",
+					modelAccess: {
+						endpoint: "http://127.0.0.1:8080",
+						credential: "synthetic-loopback-token",
+					},
+					...override,
+				}),
+			),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_CONFIGURATION_INVALID" });
+	});
+
+	it("supports the official upstream release without its derived-only barrier", async () => {
+		const { capturePath } = await installFakeCodex("barrier-missing");
+		const bridge = await CodexAppServerBridge.open(
+			options({ nativeBarrierRequired: false }),
+		);
+		const captures = await readCaptures(capturePath, 3);
+		expect(captures.map((capture) => capture.args[0])).toEqual([
+			"--version",
+			"app-server",
+			"app-server",
+		]);
+		expect(
+			captures.some((capture) =>
+				capture.args.includes("--agent-infra-native-barrier-info"),
+			),
+		).toBe(false);
+		await bridge.close();
+	});
+
+	it("does not probe the optional barrier for the current official release by default", async () => {
+		const { capturePath } = await installFakeCodex("barrier-missing");
+		const { nativeBarrierRequired: _barrier, ...configuration } = options();
+		const bridge = await CodexAppServerBridge.open(configuration);
+		const captures = await readCaptures(capturePath, 3);
+		expect(captures.map((capture) => capture.args[0])).toEqual([
+			"--version",
+			"app-server",
+			"app-server",
+		]);
+		expect(
+			captures.some((capture) =>
+				capture.args.includes("--agent-infra-native-barrier-info"),
+			),
+		).toBe(false);
+		await bridge.close();
+	});
+
+	it("requires the native barrier whenever a private callback lane is configured", async () => {
+		const { capturePath } = await installFakeCodex("barrier-missing");
+		const callback = vi.fn();
+		const configuration = options({
+			nativeBarrierRequired: undefined,
+			nativeCallback: callback,
+		});
+		await expect(
+			CodexAppServerBridge.open(configuration),
+		).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_UNAVAILABLE",
+		});
+		const captures = await readCaptures(capturePath, 3);
+		expect(captures.map((capture) => capture.args[0])).toEqual([
+			"--version",
+			"app-server",
+			"--agent-infra-native-barrier-info",
+		]);
+		expect(captures.some((capture) => capture.args.includes("--stdio"))).toBe(
+			false,
+		);
+	});
+
+	it("rejects an explicit barrier bypass for a private callback lane", async () => {
+		await installFakeCodex("echo");
+		await expect(
+			CodexAppServerBridge.open(
+				options({
+					nativeBarrierRequired: false,
+					nativeCallback: vi.fn(),
+				}),
+			),
+		).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+		});
+	});
+
+	it.each(["sandbox-unsupported", "sandbox-hangs", "sandbox-missing"])(
+		"rejects %s before starting app-server or creating persistent storage",
+		async (mode) => {
+			const { capturePath, sandboxCapturePath } = await installFakeCodex(mode);
+			if (mode === "sandbox-missing")
+				await rm(join(dirname(capturePath), "setpriv"));
+			const configuration = options({
+				launchPath: `${dirname(capturePath)}:${dirname(process.execPath)}`,
+				// Only the hanging helper needs a short deadline; the other two reject
+				// deterministically, so a short one only makes them flaky under load.
+				startupTimeoutMs: mode === "sandbox-hangs" ? 2_000 : 20_000,
+				model: "option_a/synthetic-model",
+				modelAccess: {
+					endpoint: "http://127.0.0.1:12345",
+					credential: "synthetic-loopback-token",
+				},
+			});
+			await expect(
+				CodexAppServerBridge.open(configuration).then(async (bridge) => {
+					await bridge.close();
+					return bridge;
+				}),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_SANDBOX_UNAVAILABLE",
+				retryable: false,
+			});
+			const captures = await readCaptures(capturePath, 3);
+			expect(captures).toHaveLength(3);
+			expect(captures.map((capture) => capture.args[0])).toEqual([
+				"--version",
+				"app-server",
+				"--agent-infra-native-barrier-info",
+			]);
+			expect(captures[1]?.args[1]).toBe("generate-json-schema");
+			for (const capture of captures)
+				expect(capture.environmentKeys).toEqual(isolatedEnvironmentKeys);
+			await expect(access(configuration.dataDirectory)).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+			if (mode !== "sandbox-missing") {
+				const capture = JSON.parse(await readFile(sandboxCapturePath, "utf8"));
+				expect(capture.environmentKeys).toEqual(isolatedEnvironmentKeys);
+				await expectPathRemoved(capture.cwd);
+				expect(() => process.kill(capture.pid, 0)).toThrow();
+			}
+		},
+		15_000,
+	);
+
+	it("isolates concurrent explicit launch paths from the parent PATH", async () => {
+		const first = await installFakeCodex("echo");
+		const second = await installFakeCodex("echo");
+		process.env.PATH = "/synthetic-parent-path-without-codex";
+		const captures = [first, second];
+		const paths = captures.map(
+			({ capturePath }) =>
+				`${dirname(capturePath)}:${dirname(process.execPath)}`,
+		);
+		const bridges = await Promise.all(
+			paths.map((launchPath) =>
+				CodexAppServerBridge.open(options({ launchPath })),
+			),
+		);
+		try {
+			expect(process.env.PATH).toBe("/synthetic-parent-path-without-codex");
+			for (const [index, capture] of captures.entries()) {
+				const launches = await readCaptures(capture.capturePath, 4);
+				expect(launches).toHaveLength(4);
+				for (const launch of launches) {
+					expect(launch.launchPath).toBe(paths[index]);
+					expect(launch.executable).toBe(
+						await realpath(join(dirname(capture.capturePath), "codex")),
+					);
+				}
+			}
+		} finally {
+			await Promise.all(bridges.map((bridge) => bridge.close()));
+		}
+	});
+	it.each([
+		["empty", ""],
+		["relative", "bin"],
+		["mixed relative", "/usr/bin:bin"],
+		["leading empty component", ":/usr/bin"],
+		["trailing empty component", "/usr/bin:"],
+		["interior empty component", "/usr/bin::/bin"],
+		["NUL", "/usr/bin\0"],
+		["newline", "/usr/bin\n"],
+		["DEL", "/usr/bin\x7f"],
+		["null", null],
+		["array", ["/usr/bin"]],
+	])(
+		"rejects an explicit launch PATH with %s before spawning",
+		async (_name, launchPath) => {
+			const { capturePath } = await installFakeCodex("echo");
+			const parentPath = process.env.PATH;
+			await expect(
+				CodexAppServerBridge.open(options({ launchPath })),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+			expect(process.env.PATH).toBe(parentPath);
+			await expect(readFile(capturePath, "utf8")).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+		},
+	);
+
+	it("does not fall back to parent PATH when an explicit launch path is unavailable", async () => {
+		await installFakeCodex("echo");
+		const parentPath = process.env.PATH;
+		await expect(
+			CodexAppServerBridge.open(
+				options({ launchPath: "/synthetic-missing-codex" }),
+			),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_UNAVAILABLE" });
+		expect(process.env.PATH).toBe(parentPath);
+	});
+	it("reuses native storage while replacing and cleaning only the temporary HOME", async () => {
+		const { capturePath } = await installFakeCodex("echo");
+		const configuration = options();
+		const first = await CodexAppServerBridge.open(configuration);
+		const before = await readAppCapture(capturePath);
+		await writeFile(join(before.cwd, "synthetic.txt"), "persisted");
+		await first.close();
+		const second = await CodexAppServerBridge.open(configuration);
+		const captures = await readCaptures(capturePath, 8);
+		const after = captures.at(-1);
+		expect(after?.cwd).toBe(before.cwd);
+		expect(after?.environment.codexHome).toBe(before.environment.codexHome);
+		expect(after?.environment.home).not.toBe(before.environment.home);
+		expect(await readFile(join(before.cwd, "synthetic.txt"), "utf8")).toBe(
+			"persisted",
+		);
+		await second.close();
+		for (const launch of [before, after]) {
+			if (!launch?.environment.home)
+				throw new Error("Missing synthetic launch");
+			await expectPathRemoved(launch.environment.home);
+		}
+	});
+
+	it.each(["", "/", "relative", "/tmp/../native"])(
+		"rejects an uncontrolled storage path %s",
+		async (dataDirectory) => {
+			await installFakeCodex("echo");
+			await expect(
+				CodexAppServerBridge.open(options({ dataDirectory })),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+		},
+	);
+
+	it("never turns a relative launch PATH entry into a boundary rule", async () => {
+		const { capturePath, boundaryCapturePath } = await installFakeCodex("echo");
+		// A tool runner can inject a relative entry, and the helper would resolve
+		// it in the native working directory instead of this process directory.
+		process.env.PATH = `./node_modules/.bin${delimiter}${process.env.PATH ?? ""}`;
+		const configuration = options();
+		const bridge = await CodexAppServerBridge.open(configuration);
+		await bridge.close();
+		await readCaptures(capturePath, 4);
+		const boundary = await boundaryCapture(boundaryCapturePath);
+		expect(
+			boundary.args.some((argument) => argument.includes("./node_modules")),
+		).toBe(false);
+		expect(
+			boundary.args.every(
+				(argument) =>
+					!argument.startsWith("path-beneath:") ||
+					isAbsolute(argument.slice(argument.lastIndexOf(":") + 1)),
+			),
+		).toBe(true);
+	});
+
+	it.each([
+		"",
+		"..",
+		"../sibling",
+		"a/b",
+		`${"0".repeat(63)}/..`,
+		"0".repeat(63),
+		"0".repeat(65),
+		"Z".repeat(64),
+	])(
+		"rejects the uncontrolled Conversation storage key %s",
+		async (conversationKey) => {
+			await installFakeCodex("echo");
+			await expect(
+				CodexAppServerBridge.open(options({ conversationKey })),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+		},
+	);
+
+	it("separates native storage and the enforced boundary per Conversation", async () => {
+		const { capturePath, boundaryCapturePath } = await installFakeCodex("echo");
+		const directory = mkdtempSync(join(tmpdir(), "agent-runtime-codex-pvc-"));
+		directories.push(directory);
+		const dataDirectory = join(directory, "native");
+		const keys = [`${"1".repeat(63)}b`, `${"2".repeat(63)}c`];
+		const launches: {
+			cwd: string;
+			codexHome: string;
+			boundary: string[];
+		}[] = [];
+		for (const conversationKey of keys) {
+			const bridge = await CodexAppServerBridge.open(
+				options({ dataDirectory, conversationKey }),
+			);
+			await bridge.close();
+			const captures = await readCaptures(capturePath, 4);
+			const server = captures.at(-1);
+			if (!server?.environment.codexHome)
+				throw new Error("Missing synthetic launch");
+			launches.push({
+				cwd: server.cwd,
+				codexHome: server.environment.codexHome,
+				boundary: (await boundaryCapture(boundaryCapturePath)).args,
+			});
+			await rm(capturePath, { force: true });
+		}
+		const [first, second] = launches;
+		if (!first || !second) throw new Error("Missing synthetic launch");
+		// Distinct Conversations never share a workspace or a native home.
+		expect(first.cwd).not.toBe(second.cwd);
+		expect(first.codexHome).not.toBe(second.codexHome);
+		for (const [index, launch] of launches.entries()) {
+			const key = keys[index];
+			if (!key) throw new Error("Missing synthetic key");
+			const conversation = await conversationRootPath(dataDirectory, key);
+			expect(launch.cwd).toBe(join(conversation, "workspace"));
+			expect(launch.codexHome).toBe(join(conversation, "home"));
+			// Landlock rules only add access, so the allowlist names this
+			// Conversation and never the shared boundary or a sibling.
+			expect(launch.boundary).toEqual(
+				expect.arrayContaining([
+					"--no-new-privs",
+					"--landlock-access",
+					`fs:${landlockDataRights}`,
+					"--landlock-rule",
+					`path-beneath:${landlockDataRights}:${join(conversation, "home")}`,
+					"--landlock-rule",
+					`path-beneath:${landlockDataRights}:${join(conversation, "workspace")}`,
+				]),
+			);
+			// Neither the Conversation root nor the shared boundary is writable.
+			for (const path of [conversation, dirname(conversation)]) {
+				expect(launch.boundary).not.toContain(
+					`path-beneath:${landlockDataRights}:${path}`,
+				);
+			}
+			// `/proc` is only ever listed, never readable: a sibling native
+			// process's environment would otherwise expose its model credential.
+			// The directory only exists on Linux hosts, so this asserts the rights
+			// of whichever `/proc` rule the platform produced.
+			expect(
+				launch.boundary.filter(
+					(argument) =>
+						argument.startsWith("path-beneath:") && argument.endsWith(":/proc"),
+				),
+			).toEqual(existsSync("/proc") ? ["path-beneath:read-dir:/proc"] : []);
+			const other = keys[index === 0 ? 1 : 0];
+			if (!other) throw new Error("Missing synthetic key");
+			expect(launch.boundary.some((argument) => argument.includes(other))).toBe(
+				false,
+			);
+		}
+	});
+
+	it.each(["root", "home", "workspace"])(
+		"rejects permissions exposing persistent %s to other users",
+		async (target) => {
+			if (!process.getuid) return;
+			const { capturePath } = await installFakeCodex("echo");
+			const configuration = options();
+			const bridge = await CodexAppServerBridge.open(configuration);
+			await bridge.close();
+			const path =
+				target === "root"
+					? conversationRoot(configuration.dataDirectory)
+					: join(conversationRoot(configuration.dataDirectory), target);
+			await writeFile(join(path, "sentinel"), "unchanged");
+			for (const mode of [0o740, 0o702]) {
+				await chmod(path, mode);
+				await expect(
+					CodexAppServerBridge.open(configuration),
+				).rejects.toMatchObject({
+					code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+				});
+				expect((await lstat(path)).mode & 0o777).toBe(mode);
+			}
+			expect(await readFile(join(path, "sentinel"), "utf8")).toBe("unchanged");
+			expect(
+				(await readCaptures(capturePath, 7)).filter(({ args }) =>
+					args.includes("--stdio"),
+				),
+			).toHaveLength(1);
+		},
+	);
+
+	it("rejects persistent storage owned by a different runtime UID", async () => {
+		if (!process.getuid) return;
+		await installFakeCodex("echo");
+		const configuration = options();
+		const bridge = await CodexAppServerBridge.open(configuration);
+		await bridge.close();
+		const uid = vi
+			.spyOn(process, "getuid")
+			.mockReturnValue(process.getuid() + 1);
+		try {
+			await expect(
+				CodexAppServerBridge.open(configuration),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+		} finally {
+			uid.mockRestore();
+		}
+	});
+
+	it.each(["HOME", "CODEX_HOME", "cwd"])(
+		"rejects both directions of persistent storage overlap with %s",
+		async (source) => {
+			const { capturePath } = await installFakeCodex("echo");
+			for (const relation of ["equal", "ancestor", "descendant"]) {
+				const configuration = options();
+				const personal =
+					relation === "equal"
+						? configuration.dataDirectory
+						: relation === "ancestor"
+							? join(configuration.dataDirectory, "personal")
+							: dirname(configuration.dataDirectory);
+				await mkdir(personal, { recursive: true });
+				await writeFile(join(personal, "sentinel"), "unchanged");
+				const cwd =
+					source === "cwd"
+						? vi.spyOn(process, "cwd").mockReturnValue(personal)
+						: undefined;
+				if (source !== "cwd") vi.stubEnv(source, personal);
+				try {
+					await expect(
+						CodexAppServerBridge.open(configuration),
+					).rejects.toMatchObject({
+						code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+					});
+				} finally {
+					cwd?.mockRestore();
+					vi.unstubAllEnvs();
+				}
+				expect(await readFile(join(personal, "sentinel"), "utf8")).toBe(
+					"unchanged",
+				);
+			}
+			expect(
+				(await readCaptures(capturePath, 8)).some(({ args }) =>
+					args.includes("--stdio"),
+				),
+			).toBe(false);
+		},
+	);
+
+	it.each(["root", "home", "workspace"])(
+		"rejects symlinked persistent %s without touching its target",
+		async (target) => {
+			await installFakeCodex("echo");
+			const configuration = options();
+			const bridge = await CodexAppServerBridge.open(configuration);
+			await bridge.close();
+			const linkedPath =
+				target === "root"
+					? conversationRoot(configuration.dataDirectory)
+					: join(conversationRoot(configuration.dataDirectory), target);
+			const personal = await mkdtemp(join(tmpdir(), "synthetic-personal-"));
+			directories.push(personal);
+			await writeFile(join(personal, "sentinel"), "unchanged");
+			await rm(linkedPath, { recursive: true });
+			await symlink(personal, linkedPath);
+			await expect(
+				CodexAppServerBridge.open(configuration),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+			expect(await readFile(join(personal, "sentinel"), "utf8")).toBe(
+				"unchanged",
+			);
+		},
+	);
+
+	it.each([
+		"config.toml",
+		"auth.json",
+		"managed_config.toml",
+		"workspace config",
+	])(
+		"rejects persistent %s as an untrusted configuration source",
+		async (source) => {
+			await installFakeCodex("echo");
+			const configuration = options();
+			const bridge = await CodexAppServerBridge.open(configuration);
+			await bridge.close();
+			const root = conversationRoot(configuration.dataDirectory);
+			if (source === "workspace config")
+				await mkdir(join(root, "workspace", ".codex"));
+			else
+				await writeFile(
+					join(root, "home", source),
+					"synthetic-untrusted-configuration",
+				);
+			await expect(
+				CodexAppServerBridge.open(configuration),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+		},
+	);
+
+	it("retains native session data and workspace when the process closes", async () => {
+		const { capturePath } = await installFakeCodex("echo");
+		const bridge = await CodexAppServerBridge.open(options());
+		const captures = await readCaptures(capturePath, 4);
+		const launch = captures[3];
+		if (!launch?.environment.codexHome) throw new Error("missing launch");
+		await writeFile(
+			join(launch.environment.codexHome, "synthetic-session"),
+			"session",
+		);
+		await writeFile(join(launch.cwd, "synthetic-workspace"), "workspace");
+		await bridge.close();
+		expect(
+			await readFile(
+				join(launch.environment.codexHome, "synthetic-session"),
+				"utf8",
+			),
+		).toBe("session");
+		expect(
+			await readFile(join(launch.cwd, "synthetic-workspace"), "utf8"),
+		).toBe("workspace");
+	});
+
+	it("starts every Codex subprocess with an isolated deployment-owned tool configuration", async () => {
+		process.env.CODEX_HOME = "/parent-codex-home";
+		process.env.HOME = "/parent-home";
+		process.env.AGENT_INFRA_TEST_MCP_CONFIGURATION = "mcp-private";
+		process.env.AGENT_INFRA_TEST_CONNECTION_CREDENTIAL = "connection-private";
+		const { capturePath } = await installFakeCodex("echo");
+		const configuration = options();
+		const bridge = await CodexAppServerBridge.open(configuration);
+		const captures = await readCaptures(capturePath, 4);
+		try {
+			for (const capture of captures) {
+				expect(capture.cwd).not.toBe(process.cwd());
+				expect(capture.environmentKeys).toEqual(
+					capture.args.includes("--stdio")
+						? [
+								...isolatedEnvironmentKeys,
+								"TMPDIR",
+								"NO_PROXY",
+								"no_proxy",
+							].sort()
+						: isolatedEnvironmentKeys,
+				);
+				expect(capture.environment.codexHome).toBeDefined();
+				expect(capture.environment.home).toBeDefined();
+				if (process.platform === "darwin") {
+					expect(capture.environment.cfUserTextEncoding).toBe(
+						process.env.__CF_USER_TEXT_ENCODING ?? "",
+					);
+				}
+				if (!capture.args.includes("--stdio")) {
+					expect(capture.environment.codexHome).toBe(capture.environment.home);
+				} else {
+					expect(capture.environment.codexHome).not.toBe(
+						capture.environment.home,
+					);
+				}
+				expect(capture.environment.hasMcpConfiguration).toBe(false);
+				expect(capture.environment.hasConnectionCredential).toBe(false);
+			}
+			expect(captures[3]?.args).toEqual([
+				"app-server",
+				"--stdio",
+				"--strict-config",
+				"--config",
+				'model="gpt-5.3-codex"',
+				"--config",
+				'model_reasoning_effort="high"',
+				"--config",
+				"mcp_servers={}",
+				"--config",
+				"features.plugins=false",
+				"--config",
+				'sandbox_mode="danger-full-access"',
+				"--config",
+				"features.use_legacy_landlock=true",
+			]);
+		} finally {
+			await bridge.close();
+		}
+		for (const capture of captures) {
+			if (capture.args.includes("--stdio"))
+				await expect(access(capture.cwd)).resolves.toBeUndefined();
+			else await expect(access(capture.cwd)).rejects.toThrow();
+		}
+	});
+
+	it("passes only the fixed nonsecret Connection profile and dedicated MCP target to native", async () => {
+		const { capturePath } = await installFakeCodex("echo");
+		const profile = {
+			profileRef: "connection-fixture-v1",
+			serviceRef: "connection-fixture",
+			issuer: "https://connection.example.test",
+			resource: "https://connection.example.test/mcp",
+		};
+		const bootstrap = vi.fn();
+		const bridge = await CodexAppServerBridge.open(
+			options({
+				connectionProfile: profile,
+				authorizedConnectionService: {
+					serviceRef: profile.serviceRef,
+					issuer: profile.issuer,
+					resource: profile.resource,
+				},
+				nativeConnectionBootstrap: bootstrap,
+				nativeCallback: vi.fn(),
+			}),
+		);
+		try {
+			const captures = await readCaptures(capturePath, 4);
+			const native = captures.find((capture) =>
+				capture.args.includes("--stdio"),
+			);
+			expect(native?.args.slice(0, 3)).toEqual([
+				"--agent-infra-connection-profile",
+				JSON.stringify(profile),
+				"app-server",
+			]);
+			expect(native?.args).toContain(
+				`mcp_servers.connection.url=${JSON.stringify(profile.resource)}`,
+			);
+			expect(native?.args.indexOf("mcp_servers={}")).toBeLessThan(
+				native?.args.indexOf(
+					`mcp_servers.connection.url=${JSON.stringify(profile.resource)}`,
+				) ?? -1,
+			);
+			expect(native?.environment.hasConnectionCredential).toBe(false);
+			expect(bootstrap).not.toHaveBeenCalled();
+		} finally {
+			await bridge.close();
+		}
+	});
+
+	it("requires the credential lane and fixed profile together and rejects extra credential configuration", async () => {
+		const profile = {
+			profileRef: "connection-fixture-v1",
+			serviceRef: "connection-fixture",
+			issuer: "https://connection.example.test",
+			resource: "https://connection.example.test/mcp",
+		};
+		for (const extra of [
+			{ connectionProfile: profile },
+			{ nativeConnectionBootstrap: vi.fn() },
+			{
+				connectionProfile: {
+					...profile,
+					headers: { Authorization: "FAKE-TEST" },
+				},
+				nativeConnectionBootstrap: vi.fn(),
+			},
+			{
+				connectionProfile: {
+					...profile,
+					resource: "https://attacker.example.test/mcp",
+				},
+				nativeConnectionBootstrap: vi.fn(),
+			},
+		])
+			await expect(
+				CodexAppServerBridge.open(options(extra)),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+	});
+
+	it("measures one resolved executable before starting supported bounded argv", async () => {
+		const { capturePath } = await installFakeCodex("echo");
+		const configuration = options();
+		const bridge = await CodexAppServerBridge.open(configuration);
+		const iterator = bridge.frames()[Symbol.asyncIterator]();
+		await bridge.send({ id: 1, method: "synthetic/request" });
+		await iterator.next();
+		expect(bridge).not.toHaveProperty("process");
+		const captures = await readCaptures(capturePath);
+		expect(captures).toHaveLength(4);
+		expect(captures.map(({ executable }) => executable)).toEqual([
+			captures[0]?.executable,
+			captures[0]?.executable,
+			captures[0]?.executable,
+			captures[0]?.executable,
+		]);
+		expect(captures[0]?.args).toEqual(["--version"]);
+		expect(captures[1]?.args).toEqual([
+			"app-server",
+			"generate-json-schema",
+			"--out",
+			expect.any(String),
+		]);
+		const schemaDirectory = captures[1]?.args[3];
+		if (!schemaDirectory) throw new Error("expected schema directory");
+		await expect(access(schemaDirectory)).rejects.toThrow();
+		expect(captures[2]?.args).toEqual(["--agent-infra-native-barrier-info"]);
+		const captured = captures[3];
+		if (!captured) throw new Error("expected app-server launch");
+		expect(captured.args).toEqual([
+			"app-server",
+			"--stdio",
+			"--strict-config",
+			"--config",
+			'model="gpt-5.3-codex"',
+			"--config",
+			'model_reasoning_effort="high"',
+			"--config",
+			"mcp_servers={}",
+			"--config",
+			"features.plugins=false",
+			"--config",
+			'sandbox_mode="danger-full-access"',
+			"--config",
+			"features.use_legacy_landlock=true",
+		]);
+		expect(captured.args).not.toContain("--session-source");
+		expect(bridge.provenance()).toEqual(CODEX_APP_SERVER_V2_PROVENANCE);
+		await bridge.close();
+	});
+
+	it("pins the loopback Responses provider and exposes only its short-lived token", async () => {
+		const { capturePath } = await installFakeCodex("echo");
+		const bridge = await CodexAppServerBridge.open(
+			options({
+				model: "synthetic/gpt-5.3-codex",
+				modelAccess: {
+					endpoint: "http://127.0.0.1:8080",
+					credential: "synthetic-loopback-token",
+				},
+			}),
+		);
+		const captures = await readCaptures(capturePath, 4);
+		const server = captures[3];
+		if (!server) throw new Error("expected app-server launch");
+		expect(
+			captures
+				.slice(0, 3)
+				.every(
+					(capture) =>
+						!capture.environmentKeys.includes(
+							"AGENT_INFRA_CODEX_MODEL_CREDENTIAL",
+						),
+				),
+		).toBe(true);
+		expect(server.environmentKeys).toEqual(
+			[
+				...isolatedEnvironmentKeys,
+				"AGENT_INFRA_CODEX_MODEL_CREDENTIAL",
+				"TMPDIR",
+				"NO_PROXY",
+				"no_proxy",
+			].sort(),
+		);
+		expect(server.environment.modelCredentialMatches).toBe(true);
+		expect(server.args).toEqual(
+			expect.arrayContaining([
+				'model_provider="agent_infra"',
+				'model_providers.agent_infra.name="Agent Infra Active Model"',
+				'model_providers.agent_infra.base_url="http://127.0.0.1:8080"',
+				'model_providers.agent_infra.env_key="AGENT_INFRA_CODEX_MODEL_CREDENTIAL"',
+				'model_providers.agent_infra.wire_api="responses"',
+				"model_providers.agent_infra.requires_openai_auth=false",
+				"model_providers.agent_infra.supports_websockets=false",
+				"model_providers.agent_infra.request_max_retries=0",
+				"model_providers.agent_infra.stream_max_retries=0",
+			]),
+		);
+		await bridge.close();
+	});
+
+	it("rejects unpinned provenance and unsafe launch configuration before spawning", async () => {
+		const { capturePath } = await installFakeCodex("echo");
+		await expect(
+			CodexAppServerBridge.open(
+				options({
+					provenance: {
+						...CODEX_APP_SERVER_V2_PROVENANCE,
+						schemaSha256: `sha256:${"0".repeat(64)}`,
+					},
+				}),
+			),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_PROVENANCE_MISMATCH" });
+		await expect(
+			CodexAppServerBridge.open(options({ model: "model\nunsafe" })),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_CONFIGURATION_INVALID" });
+		for (const modelAccess of [
+			{ endpoint: "https://model.invalid/v1?private=value", credential: "x" },
+			{ endpoint: "file:///private", credential: "x" },
+			{ endpoint: "https://model.invalid/v1", credential: "contains space" },
+			{ endpoint: "https://model.invalid/v1", credential: "line\nbreak" },
+		]) {
+			await expect(
+				CodexAppServerBridge.open(options({ modelAccess })),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+		}
+		await expect(readFile(capturePath, "utf8")).rejects.toThrow();
+	});
+
+	it("fails closed when the executable version differs from the pin without leaking stderr", async () => {
+		await installFakeCodex("version-mismatch");
+		await expect(CodexAppServerBridge.open(options())).rejects.toEqual(
+			expect.objectContaining({
+				code: "CODEX_APP_SERVER_PROVENANCE_MISMATCH",
+				message:
+					"Codex app-server provenance does not match the pinned release",
+			}),
+		);
+		await installFakeCodex("stderr-exit");
+		const bridge = await CodexAppServerBridge.open(options());
+		const error = await bridge
+			.frames()
+			[Symbol.asyncIterator]()
+			.next()
+			.catch((value: unknown) => value);
+		expect(error).toEqual(
+			expect.objectContaining({ code: "CODEX_APP_SERVER_EXITED" }),
+		);
+		expect(error).not.toMatchObject({
+			message: expect.stringContaining("redacted-child-output"),
+		});
+		await bridge.close();
+	});
+
+	it.each(["barrier-missing", "barrier-mismatch", "barrier-extra-field"])(
+		"rejects %s before launching any business process",
+		async (mode) => {
+			const { capturePath } = await installFakeCodex(mode);
+			const configuration = options();
+			await expect(
+				CodexAppServerBridge.open(configuration),
+			).rejects.toMatchObject({
+				code:
+					mode === "barrier-missing"
+						? "CODEX_APP_SERVER_UNAVAILABLE"
+						: "CODEX_APP_SERVER_PROVENANCE_MISMATCH",
+			});
+			const captures = await readCaptures(capturePath, 3);
+			expect(captures.map((capture) => capture.args[0])).toEqual([
+				"--version",
+				"app-server",
+				"--agent-infra-native-barrier-info",
+			]);
+			expect(captures.some((capture) => capture.args.includes("--stdio"))).toBe(
+				false,
+			);
+			await expect(access(configuration.dataDirectory)).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+		},
+	);
+
+	it("fails closed when the measured app-server schema differs from the pin", async () => {
+		const { capturePath } = await installFakeCodex("schema-mismatch");
+		const error = await CodexAppServerBridge.open(options()).catch(
+			(value: unknown) => value,
+		);
+		expect(error).toMatchObject({
+			code: "CODEX_APP_SERVER_PROVENANCE_MISMATCH",
+		});
+		expect(error).not.toMatchObject({
+			message: expect.stringContaining("agent-runtime-codex-schema"),
+		});
+		const captures = await readCaptures(capturePath);
+		expect(captures.map(({ args }) => args.slice(0, 2))).toEqual([
+			["--version"],
+			["app-server", "generate-json-schema"],
+		]);
+	});
+
+	it("frames JSONL without exposing the child process", async () => {
+		await installFakeCodex("echo");
+		const bridge = await CodexAppServerBridge.open(options());
+		const iterator = bridge.frames()[Symbol.asyncIterator]();
+		await bridge.send({ id: 7, method: "synthetic/request" });
+		expect(await iterator.next()).toEqual({
+			done: false,
+			value: { id: 7, method: "synthetic/request" },
+		});
+		await bridge.close();
+		await expect(
+			bridge.send({ id: 8, method: "synthetic/request" }),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_CLOSED" });
+	});
+
+	it.each([
+		["undefined", { toJSON: (): undefined => undefined }],
+		["a scalar", { toJSON: (): number => 1 }],
+	] as const)(
+		"rejects a frame whose toJSON serializes to %s",
+		async (_name, frame) => {
+			await installFakeCodex("echo");
+			const bridge = await CodexAppServerBridge.open(options());
+			await expect(bridge.send(frame)).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_FRAME_INVALID",
+			});
+			await bridge.close();
+		},
+	);
+
+	it.each([
+		["malformed-frame", "CODEX_APP_SERVER_FRAME_INVALID"],
+		["oversized-frame", "CODEX_APP_SERVER_FRAME_INVALID"],
+		["startup-exit", "CODEX_APP_SERVER_EXITED"],
+	] as const)("returns a stable redacted error for %s", async (mode, code) => {
+		await installFakeCodex(mode);
+		const bridge = await CodexAppServerBridge.open(options());
+		const iterator = bridge.frames()[Symbol.asyncIterator]();
+		await expect(iterator.next()).rejects.toEqual(
+			expect.objectContaining({ code }),
+		);
+		await bridge.close();
+	});
+
+	it("removes only its temporary HOME after an unexpected child exit", async () => {
+		const { capturePath } = await installFakeCodex("startup-exit");
+		const bridge = await CodexAppServerBridge.open(options());
+		const { cwd, environment } = await readAppCapture(capturePath);
+		await expect(
+			bridge.frames()[Symbol.asyncIterator]().next(),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_EXITED" });
+		await expectPathRemoved(environment.home ?? "");
+		await expect(access(cwd)).resolves.toBeUndefined();
+		await bridge.close();
+	});
+
+	it.each(["malformed-frame", "oversized-frame", "queue-overflow"])(
+		"reaps its child after fatal %s output without an explicit close",
+		async (mode) => {
+			const { capturePath } = await installFakeCodex(mode);
+			const bridge = await CodexAppServerBridge.open(options());
+			const { pid } = await readAppCapture(capturePath);
+			childPids.push(pid);
+			await expectChildExited(pid);
+			await expect(
+				bridge.frames()[Symbol.asyncIterator]().next(),
+			).rejects.toMatchObject({ code: "CODEX_APP_SERVER_FRAME_INVALID" });
+		},
+	);
+
+	it("fails queue consumers and reaps a process whose stdin rejects writes", async () => {
+		const { capturePath } = await installFakeCodex("stdin-closed");
+		const bridge = await CodexAppServerBridge.open(options());
+		const { pid } = await readAppCapture(capturePath);
+		childPids.push(pid);
+		const iterator = bridge.frames()[Symbol.asyncIterator]();
+		await expect(
+			bridge.send({ id: 9, method: "synthetic/request" }),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_EXITED" });
+		await expect(iterator.next()).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_EXITED",
+		});
+		await expectChildExited(pid);
+	});
+
+	it("bounds a hanging provenance probe", async () => {
+		await installFakeCodex("version-hangs");
+		await expect(
+			CodexAppServerBridge.open(options({ startupTimeoutMs: 25 })),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_TIMEOUT" });
+	});
+
+	it("bounds a hanging schema probe", async () => {
+		const { capturePath } = await installFakeCodex("schema-hangs");
+		await expect(CodexAppServerBridge.open(options())).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_TIMEOUT",
+		});
+		const captures = await readCaptures(capturePath, 2);
+		expect(captures[1]?.args.slice(0, 2)).toEqual([
+			"app-server",
+			"generate-json-schema",
+		]);
+	}, 10_000);
+
+	it("kills a bridge process that ignores graceful shutdown", async () => {
+		const { capturePath } = await installFakeCodex("shutdown-hangs");
+		const bridge = await CodexAppServerBridge.open(
+			options({ shutdownTimeoutMs: 25 }),
+		);
+		const { pid } = await readAppCapture(capturePath);
+		childPids.push(pid);
+		await expect(bridge.close()).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_TIMEOUT",
+		});
+		await expectChildExited(pid);
+	});
+
+	it("keeps its private runtime directory until an unreaped child closes", async () => {
+		const isolatedDirectory = await mkdtemp(
+			join(tmpdir(), "agent-runtime-codex-bridge-stalled-"),
+		);
+		directories.push(isolatedDirectory);
+		const { bridge, process } = createStalledBridge(isolatedDirectory);
+		await expect(bridge.close()).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_TIMEOUT",
+		});
+		await expect(access(isolatedDirectory)).resolves.toBeUndefined();
+		process.emit("close");
+		await expectPathRemoved(isolatedDirectory);
+		directories.splice(directories.indexOf(isolatedDirectory), 1);
+	});
+
+	it("waits for private runtime cleanup after a concurrent reap", async () => {
+		const isolatedDirectory = await mkdtemp(
+			join(tmpdir(), "agent-runtime-codex-bridge-reaping-"),
+		);
+		directories.push(isolatedDirectory);
+		const { bridge, process } = createStalledBridge(isolatedDirectory);
+		const internals = bridge as unknown as {
+			reapOwnedChild(): Promise<void>;
+			cleanIsolatedDirectory(): Promise<void>;
+		};
+		let releaseCleanup!: () => void;
+		const cleanup = new Promise<void>((resolve) => {
+			releaseCleanup = resolve;
+		});
+		const clean = vi
+			.spyOn(internals, "cleanIsolatedDirectory")
+			.mockReturnValue(cleanup);
+		const reaping = internals.reapOwnedChild();
+		const closing = bridge.close();
+		process.emit("close");
+		await reaping;
+		await vi.waitFor(() => expect(clean).toHaveBeenCalled());
+		let settled = false;
+		void closing.then(() => {
+			settled = true;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		expect(settled).toBe(false);
+		releaseCleanup();
+		await closing;
+		clean.mockRestore();
+	});
+});
+
+describe("model access admission", () => {
+	it.each([
+		"https://model.invalid/v1?",
+		"https://model.invalid/v1#",
+		"https://model.invalid/v1?query=value",
+		"https://model.invalid/v1#fragment",
+		"http://127.0.0.1:1234/v1?",
+		"http://[::1]:1234/v1#",
+	])("rejects endpoint query or fragment delimiters %s", (endpoint) => {
+		expect(() =>
+			validateModelAccess({
+				endpoint,
+				credential: "synthetic-model-credential",
+			}),
+		).toThrow();
+	});
+	it.each([
+		"e",
+		"x".repeat(15),
+		"x".repeat(8193),
+		"contains a space",
+		"synthetic\ncredential",
+	])("rejects inadmissible credential length or characters", (credential) => {
+		expect(() =>
+			validateModelAccess({ endpoint: "https://model.invalid/v1", credential }),
+		).toThrow();
+	});
+	it.each(["x".repeat(16), "x".repeat(8192)])(
+		"accepts credential boundary lengths",
+		(credential) => {
+			expect(
+				validateModelAccess({
+					endpoint: "https://model.invalid/v1",
+					credential,
+				}),
+			).toEqual({ endpoint: "https://model.invalid/v1", credential });
+		},
+	);
+	it.each([
+		"http://model.invalid/v1",
+		"http://localhost/v1",
+		"http://127.1/v1",
+		"http://2130706433/v1",
+		"http://0x7f000001/v1",
+		"http://127.0.0.2/v1",
+		"http://[::ffff:127.0.0.1]/v1",
+		"http://127.0.0.1@model.invalid/v1",
+	])("rejects cleartext nonliteral loopback %s", (endpoint) => {
+		expect(() =>
+			validateModelAccess({
+				endpoint,
+				credential: "synthetic-model-credential",
+			}),
+		).toThrow();
+	});
+	it.each([
+		"https://model.invalid/v1",
+		"http://127.0.0.1:1234/v1",
+		"http://[::1]:1234/v1",
+	])("accepts approved transport scheme %s", (endpoint) => {
+		expect(
+			validateModelAccess({
+				endpoint,
+				credential: "synthetic-model-credential",
+			})?.endpoint,
+		).toBe(endpoint);
+	});
+});
+
+function recoveryEvidenceFrame() {
+	const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8"));
+	return corpus.cases.find(
+		(entry: { id: string }) => entry.id === "v2-connection-evidence-update",
+	).frame as CodexConnectionEvidenceUpdateRequest;
+}
+
+function recoveryTestOptions(maximumVerifications = 1) {
+	const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8"));
+	const fixture = corpus.cases.find(
+		(entry: { id: string }) => entry.id === "recovery-verify-valid",
+	).frame as Extract<CodexConnectionRecoveryResponse, { decision: "verify" }>;
+	const recovery = vi.fn(async (request: typeof fixture.request) => {
+		const base = {
+			schemaVersion: 2 as const,
+			phase: "connection-recovery" as const,
+			requestId: request.requestId,
+			request,
+		};
+		if (recovery.mock.calls.length > maximumVerifications)
+			return { ...base, decision: "done" as const };
+		return {
+			...structuredClone(fixture),
+			...base,
+			recoveryId: `00000000-0000-4000-8000-${String(recovery.mock.calls.length).padStart(12, "0")}`,
+			expiresAt: Date.now() + 20_000,
+			currentClient: {
+				...fixture.currentClient,
+				credential: {
+					...fixture.currentClient.credential,
+					expiresAt: Date.now() + 30_000,
+				},
+			},
+		};
+	});
+	const evidence = vi.fn<CodexNativeCallbackHandler>(async (request) => {
+		if (request.schemaVersion !== 2 || request.phase !== "connection-evidence")
+			throw new Error("unexpected recovery evidence");
+		return {
+			schemaVersion: 2,
+			phase: "connection-evidence",
+			requestId: request.requestId,
+			identity: request.identity,
+			connectionRequest: request.connectionRequest,
+			decision: "ack",
+		};
+	});
+	return {
+		...options(),
+		profile: {
+			serviceRef: "connection",
+			profileRef: fixture.request.profileRef,
+			issuer: "https://connection.example.test",
+			resource: "https://connection.example.test/mcp",
+		},
+		authorizedConnectionService: {
+			serviceRef: "connection",
+			issuer: "https://connection.example.test",
+			resource: "https://connection.example.test/mcp",
+		},
+		signal: new AbortController().signal,
+		recovery,
+		evidence,
+	};
+}
+
+it.each([
+	"v1-operation-intent",
+	"v1-source-reserve-request",
+	"v1-source-bind-started",
+	"v2-connection-intent",
+])(
+	"rejects %s on the recovery channel before the evidence handler",
+	async (id) => {
+		const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8"));
+		const frame = corpus.cases.find(
+			(entry: { id: string }) => entry.id === id,
+		).frame;
+		await installFakeCodex("recovery-frame", frame);
+		const configuration = recoveryTestOptions();
+		await expect(runCodexConnectionRecovery(configuration)).rejects.toThrow();
+		expect(configuration.evidence).not.toHaveBeenCalled();
+		expect(configuration.recovery).not.toHaveBeenCalled();
+	},
+);
+
+it("allows recovery evidence to be acknowledged before the final pull", async () => {
+	const frame = recoveryEvidenceFrame();
+	await installFakeCodex("recovery-evidence", frame);
+	const configuration = recoveryTestOptions();
+	await expect(
+		runCodexConnectionRecovery(configuration),
+	).resolves.toBeUndefined();
+	expect(configuration.evidence).toHaveBeenCalledExactlyOnceWith(
+		frame,
+		expect.any(AbortSignal),
+	);
+	expect(configuration.recovery).toHaveBeenCalledTimes(2);
+	expect(configuration.recovery.mock.calls[1]?.[0].previousRecoveryId).toBe(
+		"00000000-0000-4000-8000-000000000001",
+	);
+});
+
+it("rejects recovery evidence before a verification has been issued", async () => {
+	await installFakeCodex("recovery-frame", recoveryEvidenceFrame());
+	const configuration = recoveryTestOptions();
+	await expect(runCodexConnectionRecovery(configuration)).rejects.toThrow();
+	expect(configuration.evidence).not.toHaveBeenCalled();
+	expect(configuration.recovery).not.toHaveBeenCalled();
+});
+
+it.each([
+	["initial", 0],
+	["missing", 1],
+	["foreign", 1],
+	["stale", 2],
+] as const)(
+	"rejects %s previousRecoveryId before the recovery handler",
+	async (kind, calls) => {
+		await installFakeCodex(`recovery-previous-${kind}`);
+		const configuration = recoveryTestOptions(2);
+		await expect(runCodexConnectionRecovery(configuration)).rejects.toThrow();
+		expect(configuration.recovery).toHaveBeenCalledTimes(calls);
+		expect(configuration.evidence).toHaveBeenCalledTimes(calls);
+	},
+);
+
+it.each(["recovery-premature", "recovery-done"])(
+	"requires terminal done after recovery budget: %s",
+	async (mode) => {
+		await installFakeCodex(mode);
+		const configuration = recoveryTestOptions(16);
+		const launch = runCodexConnectionRecovery(configuration);
+		if (mode === "recovery-premature") await expect(launch).rejects.toThrow();
+		else await expect(launch).resolves.toBeUndefined();
+		expect(configuration.recovery).toHaveBeenCalledTimes(
+			mode === "recovery-premature" ? 16 : 17,
+		);
+		expect(configuration.evidence).toHaveBeenCalledTimes(16);
+	},
+);
+
+it.each([
+	["recovery-skip-evidence", 1, 0],
+	["recovery-skip-final-evidence", 16, 15],
+] as const)(
+	"rejects %s before the next pull handler",
+	async (mode, pulls, acknowledgements) => {
+		await installFakeCodex(mode);
+		const configuration = recoveryTestOptions(
+			mode === "recovery-skip-evidence" ? 1 : 16,
+		);
+		await expect(runCodexConnectionRecovery(configuration)).rejects.toThrow();
+		expect(configuration.recovery).toHaveBeenCalledTimes(pulls);
+		expect(configuration.evidence).toHaveBeenCalledTimes(acknowledgements);
+	},
+);
+
+it.each([
+	"sessionId",
+	"turnId",
+	"callId",
+	"attemptRef",
+	"toolName",
+	"parentAttemptRef",
+	"permitId",
+	"connectionRequest",
+	"originalResponse",
+	"unverified",
+] as const)(
+	"rejects recovery evidence with foreign %s before its handler",
+	async (field) => {
+		const frame = recoveryEvidenceFrame();
+		if (field === "permitId")
+			frame.permitId = "00000000-0000-4000-8000-999999999999";
+		else if (field === "connectionRequest")
+			frame.connectionRequest.rpcRequestId = 99;
+		else if (field === "originalResponse") {
+			if (!frame.connectionEvidence.originalResponse)
+				throw new Error("fixture");
+			frame.connectionEvidence.originalResponse.receivedAt++;
+		} else if (field === "unverified") {
+			frame.connectionEvidence = {
+				verification: "unverified",
+				reason: "record_unavailable",
+			};
+		} else
+			frame.identity[field] =
+				field === "attemptRef" || field === "parentAttemptRef"
+					? "00000000-0000-4000-8000-999999999999"
+					: "foreign-source";
+		await installFakeCodex("recovery-evidence", frame);
+		const configuration = recoveryTestOptions();
+		await expect(runCodexConnectionRecovery(configuration)).rejects.toThrow();
+		expect(configuration.evidence).not.toHaveBeenCalled();
+		expect(configuration.recovery).toHaveBeenCalledTimes(1);
+	},
+);
+
+it.each([
+	"schemaVersion",
+	"phase",
+	"requestId",
+	"identity",
+	"connectionRequest",
+	"decision",
+	"extra",
+	"throws",
+	"abort",
+] as const)(
+	"rejects recovery evidence ACK %s without permitting the next pull",
+	async (failure) => {
+		await installFakeCodex("recovery-evidence");
+		const configuration = recoveryTestOptions();
+		const controller = new AbortController();
+		configuration.signal = controller.signal;
+		const acknowledge = configuration.evidence.getMockImplementation();
+		if (!acknowledge) throw new Error("fixture");
+		configuration.evidence.mockImplementation(async (request, signal) => {
+			const response = await acknowledge(request, signal);
+			if (failure === "throws")
+				throw new Error("synthetic persistence failure");
+			if (failure === "abort") controller.abort();
+			else
+				Object.assign(response, {
+					[failure]: failure === "schemaVersion" ? 1 : "invalid-ack",
+				});
+			return response;
+		});
+		await expect(runCodexConnectionRecovery(configuration)).rejects.toThrow();
+		expect(configuration.evidence).toHaveBeenCalledTimes(1);
+		expect(configuration.recovery).toHaveBeenCalledTimes(1);
+	},
+);
+
+it("allows identical recovery evidence retries after ACK without advancing the item", async () => {
+	await installFakeCodex("recovery-duplicate-evidence");
+	const configuration = recoveryTestOptions();
+	await expect(
+		runCodexConnectionRecovery(configuration),
+	).resolves.toBeUndefined();
+	expect(configuration.evidence).toHaveBeenCalledTimes(2);
+	expect(configuration.evidence.mock.calls[0]?.[0]).toEqual(
+		configuration.evidence.mock.calls[1]?.[0],
+	);
+	expect(configuration.recovery).toHaveBeenCalledTimes(2);
+});

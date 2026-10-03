@@ -1,0 +1,1644 @@
+diff --git a/codex-rs/rmcp-client/src/native_connection/callback.rs b/codex-rs/rmcp-client/src/native_connection/callback.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_connection/callback.rs
+@@ -0,0 +1,185 @@
++//! Strict typed V2 callback branches. Core continues to own unchanged V1 types.
++use super::wire::*;
++use serde::Deserialize;
++use serde::Serialize;
++use serde_json::Value;
++
++#[derive(Clone, Deserialize, Serialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(super) struct Identity {
++    session_id: String,
++    turn_id: String,
++    call_id: String,
++    attempt_ref: String,
++    pub(super) tool_name: String,
++    #[serde(
++        default,
++        deserialize_with = "optional",
++        skip_serializing_if = "Option::is_none"
++    )]
++    parent_attempt_ref: Option<String>,
++}
++impl Identity {
++    pub(super) fn valid(&self) -> bool {
++        bounded(&self.session_id)
++            && bounded(&self.turn_id)
++            && bounded(&self.call_id)
++            && bounded(&self.tool_name)
++            && uuid(&self.attempt_ref)
++            && self.parent_attempt_ref.as_deref().is_none_or(uuid)
++    }
++}
++#[derive(Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++struct SourceOwner {
++    root_thread_id: String,
++    root_turn_id: String,
++}
++#[derive(Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++struct Operation {
++    schema_version: u8,
++    request_id: String,
++    phase: String,
++    identity: Identity,
++    connection_request: Descriptor,
++    #[serde(default, deserialize_with = "optional")]
++    occurred_at: Option<u64>,
++    #[serde(default, deserialize_with = "optional")]
++    permit_id: Option<String>,
++    #[serde(default, deserialize_with = "optional")]
++    outcome: Option<String>,
++    #[serde(default, deserialize_with = "optional")]
++    reason: Option<String>,
++    #[serde(default, deserialize_with = "optional")]
++    connection_evidence: Option<Evidence>,
++    #[serde(default, deserialize_with = "optional")]
++    decision: Option<String>,
++    #[serde(default, deserialize_with = "optional")]
++    expires_at: Option<u64>,
++    #[serde(default, deserialize_with = "optional")]
++    source_owner: Option<SourceOwner>,
++}
++impl Operation {
++    fn valid(&self) -> bool {
++        if self.schema_version != 2
++            || !uuid(&self.request_id)
++            || !self.identity.valid()
++            || !self.connection_request.valid()
++            || self.permit_id.as_deref().is_some_and(|v| !uuid(v))
++            || self
++                .connection_evidence
++                .as_ref()
++                .is_some_and(|v| !v.valid_shape())
++        {
++            return false;
++        }
++        if let Some(decision) = self.decision.as_deref() {
++            if self.occurred_at.is_some()
++                || self.outcome.is_some()
++                || self.connection_evidence.is_some()
++            {
++                return false;
++            }
++            return match (self.phase.as_str(), decision) {
++                ("intent", "permit") => {
++                    self.permit_id.is_some()
++                        && self.expires_at.is_some_and(timestamp)
++                        && self.reason.is_none()
++                        && self
++                            .source_owner
++                            .as_ref()
++                            .is_some_and(|s| bounded(&s.root_thread_id) && bounded(&s.root_turn_id))
++                }
++                ("intent", "deny") => {
++                    self.permit_id.is_none()
++                        && self.expires_at.is_none()
++                        && self.source_owner.is_none()
++                        && matches!(
++                            self.reason.as_deref(),
++                            Some(
++                                "authorization_denied"
++                                    | "authorization_unavailable"
++                                    | "persistence_unavailable"
++                            )
++                        )
++                }
++                ("started" | "outcome" | "connection-evidence", "ack") => {
++                    self.permit_id.is_none()
++                        && self.expires_at.is_none()
++                        && self.source_owner.is_none()
++                        && self.reason.is_none()
++                }
++                _ => false,
++            };
++        }
++        if !self.occurred_at.is_some_and(timestamp)
++            || self.expires_at.is_some()
++            || self.source_owner.is_some()
++        {
++            return false;
++        }
++        match self.phase.as_str() {
++            "intent" => {
++                self.permit_id.is_none()
++                    && self.outcome.is_none()
++                    && self.reason.is_none()
++                    && self.connection_evidence.is_none()
++            }
++            "started" => {
++                self.permit_id.is_some()
++                    && self.outcome.is_none()
++                    && self.reason.is_none()
++                    && self.connection_evidence.is_none()
++            }
++            "outcome" => {
++                self.permit_id.is_some()
++                    && (self.connection_request.tool_name == "execute_action")
++                        == self.connection_evidence.is_some()
++                    && match self.outcome.as_deref() {
++                        Some("completed") => self.reason.is_none(),
++                        Some("failed") => matches!(
++                            self.reason.as_deref(),
++                            Some(
++                                "authorization_denied"
++                                    | "authorization_unavailable"
++                                    | "cancelled_before_dispatch"
++                                    | "execution_failed"
++                                    | "execution_cancelled"
++                            )
++                        ),
++                        Some("unknown") => matches!(
++                            self.reason.as_deref(),
++                            Some("dispatch_unconfirmed" | "result_unconfirmed")
++                        ),
++                        _ => false,
++                    }
++            }
++            "connection-evidence" => {
++                self.permit_id.is_some()
++                    && self.connection_request.tool_name == "execute_action"
++                    && self.connection_evidence.is_some()
++                    && self.outcome.is_none()
++                    && self.reason.is_none()
++            }
++            _ => false,
++        }
++    }
++}
++pub(super) fn valid(value: &Value) -> bool {
++    if value.get("schemaVersion") != Some(&Value::from(2)) {
++        return false;
++    }
++    if value.get("phase") == Some(&Value::from("connection-bootstrap")) {
++        if value.get("decision").is_some() {
++            serde_json::from_value::<BootstrapResponse>(value.clone())
++                .is_ok_and(|v| v.valid_shape())
++        } else {
++            serde_json::from_value::<BootstrapRequest>(value.clone()).is_ok_and(|v| v.valid_shape())
++        }
++    } else if value.get("phase") == Some(&Value::from("connection-recovery")) {
++        super::recovery_wire::valid(value)
++    } else {
++        serde_json::from_value::<Operation>(value.clone()).is_ok_and(|v| v.valid())
++    }
++}
+diff --git a/codex-rs/rmcp-client/src/native_connection/evidence.rs b/codex-rs/rmcp-client/src/native_connection/evidence.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_connection/evidence.rs
+@@ -0,0 +1,158 @@
++//! Only the original authenticated rmcp transport response supplies a receipt.
++//! Read-only record verification never dispatches or retries a Provider action.
++use super::current_entry;
++use super::now_ms;
++use super::original_slot;
++use super::unavailable;
++use super::wire::*;
++use rmcp::model::JsonRpcMessage;
++use rmcp::model::ServerResult;
++use rmcp::service::RoleClient;
++use rmcp::service::RxJsonRpcMessage;
++use serde_json::Value;
++use std::io;
++use std::sync::Arc;
++
++pub(crate) async fn collect_evidence(
++    descriptor: &Value,
++    message: Option<&mut RxJsonRpcMessage<RoleClient>>,
++) -> io::Result<Option<Value>> {
++    let descriptor: Descriptor =
++        serde_json::from_value(descriptor.clone()).map_err(|_| unavailable())?;
++    if !descriptor.valid() {
++        return Err(unavailable());
++    }
++    let mut receipt_value = None;
++    let mut rpc_id = None;
++    if let Some(message) = message {
++        match message {
++            JsonRpcMessage::Response(response) => {
++                rpc_id = Some(serde_json::to_value(&response.id).map_err(|_| unavailable())?);
++                if let ServerResult::CallToolResult(result) = &mut response.result
++                    && let Some(meta) = &mut result.meta
++                {
++                    receipt_value = meta.remove(RECEIPT_META);
++                    meta.remove(REQUEST_META);
++                }
++            }
++            JsonRpcMessage::Error(response) => {
++                rpc_id = response
++                    .id
++                    .as_ref()
++                    .map(serde_json::to_value)
++                    .transpose()
++                    .map_err(|_| unavailable())?;
++                if let Some(Value::Object(data)) = &mut response.error.data
++                    && let Some(Value::Object(meta)) = data.get_mut("_meta")
++                {
++                    receipt_value = meta.remove(RECEIPT_META);
++                    meta.remove(REQUEST_META);
++                }
++                response.error.message = "Connection operation failed".into();
++                response.error.data = None;
++            }
++            JsonRpcMessage::Request(_) | JsonRpcMessage::Notification(_) => {}
++        }
++    }
++    if descriptor.tool_name != "execute_action" {
++        return Ok(None);
++    }
++    let slot = original_slot(&descriptor.slot_id)?;
++    let evidence = match (receipt_value, rpc_id) {
++        (Some(value), Some(id)) if id == descriptor.rpc_request_id => {
++            match serde_json::from_value::<Receipt>(value) {
++                Ok(receipt) if receipt.matches(&descriptor, &slot.identity) => {
++                    verify_original(
++                        &descriptor,
++                        OriginalResponse {
++                            rpc_request_id: id,
++                            received_at: now_ms()?,
++                            receipt,
++                        },
++                    )
++                    .await?
++                }
++                _ => Evidence::unverified("binding_mismatch", None),
++            }
++        }
++        (None, _) => Evidence::unverified("receipt_missing", None),
++        _ => Evidence::unverified("binding_mismatch", None),
++    };
++    serde_json::to_value(evidence)
++        .map(Some)
++        .map_err(|_| unavailable())
++}
++async fn verify_original(
++    descriptor: &Descriptor,
++    original: OriginalResponse,
++) -> io::Result<Evidence> {
++    let slot = original_slot(&descriptor.slot_id)?;
++    if original.rpc_request_id != descriptor.rpc_request_id
++        || !original.receipt.matches(descriptor, &slot.identity)
++        || original.received_at > now_ms()?
++    {
++        return Err(unavailable());
++    }
++    let Ok(current) = current_entry() else {
++        return Ok(Evidence::unverified(
++            "authorization_unavailable",
++            Some(original),
++        ));
++    };
++    if current.identity != slot.identity || !current.binding.same_owner(&slot.binding) {
++        return Ok(Evidence::unverified(
++            "authorization_unavailable",
++            Some(original),
++        ));
++    }
++    let queried_at = now_ms()?;
++    // Current independently authorized calls:read token. A retired slot supplies
++    // only original binding metadata and never an old credential.
++    Ok(
++        match current.read_record(&original.receipt.call_ref).await {
++            Ok(record) if record.matches(&original.receipt, &slot.identity) => Evidence {
++                verification: "verified".into(),
++                original_response: Some(original),
++                record_query: Some(RecordQuery {
++                    queried_at,
++                    credential_revision: current.revision.clone(),
++                    record,
++                }),
++                verified_at: Some(now_ms()?),
++                reason: None,
++            },
++            Ok(_) => Evidence::unverified("binding_mismatch", Some(original)),
++            Err(_) => Evidence::unverified("record_unavailable", Some(original)),
++        },
++    )
++}
++/// One bounded in-process retry after the terminal is durable, awaited before
++/// delivering the result to the model and releasing the original source. It
++/// retains the original response, cannot reopen outcomes, and is not recovery.
++pub(crate) async fn complete_evidence_update(
++    descriptor: Value,
++    evidence: Value,
++    attempt: Arc<dyn crate::NativeMcpAttempt>,
++) {
++    let Ok(descriptor) = serde_json::from_value::<Descriptor>(descriptor) else {
++        return;
++    };
++    let Ok(evidence) = serde_json::from_value::<Evidence>(evidence) else {
++        return;
++    };
++    if !descriptor.valid() || evidence.verification != "unverified" {
++        return;
++    }
++    let Some(original) = evidence.original_response else {
++        return;
++    };
++    {
++        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
++        if let Ok(updated) = verify_original(&descriptor, original).await
++            && updated.verification == "verified"
++            && let Ok(value) = serde_json::to_value(updated)
++        {
++            let _ = attempt.update_connection_evidence(value).await;
++        }
++    }
++}
+diff --git a/codex-rs/rmcp-client/src/native_connection/http.rs b/codex-rs/rmcp-client/src/native_connection/http.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_connection/http.rs
+@@ -0,0 +1,268 @@
++//! Credential-bearing HTTP remains in this native process. This adapter never
++//! uses the supplied runtime/remote executor HTTP capability.
++use super::current_entry;
++use super::now_ms;
++use super::parse_strict_json;
++use super::unavailable;
++use super::wire::*;
++use codex_exec_server::ExecServerError;
++use codex_exec_server::HttpClient;
++use codex_exec_server::HttpHeader;
++use codex_exec_server::HttpRequestParams;
++use codex_exec_server::HttpRequestResponse;
++use codex_exec_server::HttpResponseBodyStream;
++use codex_http_client::ClientRouteClass;
++use codex_http_client::HttpClientBuilder;
++use codex_http_client::HttpClientFactory;
++use codex_http_client::OutboundProxyPolicy;
++use futures::FutureExt;
++use futures::StreamExt;
++use futures::future::BoxFuture;
++use serde_json::Value;
++use std::io;
++use std::time::Duration;
++use url::Url;
++
++// No Debug/Serialize/Clone: the old credential is dropped when its slot retires.
++pub(super) struct Entry {
++    pub slot_id: String,
++    pub binding: OriginalBinding,
++    pub identity: ConnectionIdentity,
++    pub expires_at: u64,
++    pub revision: String,
++    service: Service,
++    origin: Url,
++    token: String,
++    client: codex_http_client::HttpClient,
++}
++impl Entry {
++    pub(super) fn new(slot: Slot) -> io::Result<Self> {
++        let resource = Url::parse(&slot.service.resource).map_err(|_| unavailable())?;
++        // Use the existing local client with fixed native proxy policy, TLS,
++        // no redirects, no cookie store, and disabled URL/header/body logging.
++        let client = HttpClientBuilder::new()
++            .without_redirects()
++            .without_request_logging()
++            .connect_timeout(Duration::from_secs(5))
++            .build_respecting_outbound_proxy_policy(
++                &HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
++                resource.as_str(),
++                ClientRouteClass::Other,
++            )
++            .map_err(|_| unavailable())?;
++        let origin = resource.join("/").map_err(|_| unavailable())?;
++        Ok(Self {
++            slot_id: slot.slot_id,
++            binding: slot.original_binding,
++            identity: slot.connection_identity,
++            expires_at: slot.credential.expires_at,
++            revision: slot.credential.revision,
++            token: slot.credential.access_token,
++            service: slot.service,
++            origin,
++            client,
++        })
++    }
++    pub(super) async fn verify_identity(&self) -> io::Result<()> {
++        let value = self.read_fixed("/api/client/identity").await?;
++        let observed: IdentityResponse =
++            serde_json::from_value(value).map_err(|_| unavailable())?;
++        if !observed.matches(
++            &self.identity,
++            &self.service,
++            &self.revision,
++            self.expires_at,
++            now_ms()?,
++        ) {
++            return Err(unavailable());
++        }
++        Ok(())
++    }
++    pub(super) async fn read_record(&self, call_ref: &str) -> io::Result<Record> {
++        if !opaque(call_ref) {
++            return Err(unavailable());
++        }
++        let path = format!("/api/client/calls/{}", urlencoding::encode(call_ref));
++        let value = self.read_fixed(&path).await?;
++        serde_json::from_value(value).map_err(|_| unavailable())
++    }
++    async fn read_fixed(&self, path: &str) -> io::Result<Value> {
++        if self.expires_at <= now_ms()? {
++            return Err(unavailable());
++        }
++        let url = self.origin.join(path).map_err(|_| unavailable())?;
++        if url.origin() != self.origin.origin() {
++            return Err(unavailable());
++        }
++        let response = self
++            .client
++            .get(url)
++            .bearer_auth(&self.token)
++            .header("accept", "application/json")
++            .timeout(Duration::from_secs(5))
++            .send()
++            .await
++            .map_err(|_| unavailable())?;
++        if !response.status().is_success() {
++            return Err(unavailable());
++        }
++        let mut stream = response.bytes_stream();
++        let mut bytes = Vec::new();
++        while let Some(chunk) = stream.next().await {
++            let chunk = chunk.map_err(|_| unavailable())?;
++            if bytes.len().saturating_add(chunk.len()) > 16_384 {
++                return Err(unavailable());
++            }
++            bytes.extend_from_slice(&chunk);
++        }
++        parse_strict_json(&bytes)
++    }
++    async fn send(&self, params: HttpRequestParams) -> io::Result<codex_http_client::HttpResponse> {
++        if params.url != self.service.resource || self.expires_at <= now_ms()? {
++            return Err(unavailable());
++        }
++        if !matches!(params.method.as_str(), "POST" | "GET" | "DELETE") {
++            return Err(unavailable());
++        }
++        self.verify_identity().await?;
++        let mut headers = ::http::HeaderMap::new();
++        for header in params.headers {
++            let name = header.name.to_ascii_lowercase();
++            if header.value_env_var.is_some()
++                || !matches!(
++                    name.as_str(),
++                    "accept"
++                        | "content-type"
++                        | "mcp-session-id"
++                        | "mcp-protocol-version"
++                        | "last-event-id"
++                )
++            {
++                return Err(unavailable());
++            }
++            let name =
++                ::http::HeaderName::from_bytes(name.as_bytes()).map_err(|_| unavailable())?;
++            let value = ::http::HeaderValue::from_str(&header.value).map_err(|_| unavailable())?;
++            if headers.insert(name, value).is_some() {
++                return Err(unavailable());
++            }
++        }
++        let method =
++            ::http::Method::from_bytes(params.method.as_bytes()).map_err(|_| unavailable())?;
++        let mut request = self
++            .client
++            .request(method, &self.service.resource)
++            .headers(headers)
++            .bearer_auth(&self.token)
++            .timeout(Duration::from_millis(
++                params.timeout_ms.unwrap_or(30_000).min(30_000),
++            ));
++        let body = params.body.map(|body| body.into_inner());
++        let dispatch = crate::native_dispatch::current_http_dispatch();
++        if let Some(body) = &body {
++            let parsed = parse_strict_json(body)?;
++            if parsed["method"] == "tools/call" {
++                let dispatch = dispatch.as_ref().ok_or_else(unavailable)?;
++                if params.method != "POST" {
++                    return Err(unavailable());
++                }
++                dispatch.validate_connection_body(body)?;
++            } else if dispatch.is_some() {
++                return Err(unavailable());
++            }
++        } else if dispatch.is_some() {
++            return Err(unavailable());
++        }
++        if let Some(body) = body {
++            request = request.body(body);
++        }
++        if let Some(dispatch) = &dispatch {
++            if !dispatch.is_connection() {
++                return Err(unavailable());
++            }
++            dispatch.begin().await?;
++            dispatch.mark_connection_dispatch(&self.slot_id)?;
++        }
++        let sent = request.send().await.map_err(|_| unavailable());
++        if let Some(dispatch) = &dispatch {
++            if sent.is_ok() {
++                dispatch.started().await?;
++            } else {
++                dispatch.finish(crate::NativeMcpResult::Unknown).await?;
++            }
++        }
++        let response = sent?;
++        // A redirect is never a replay opportunity for Connection operations.
++        if response.status().is_redirection() {
++            return Err(unavailable());
++        }
++        Ok(response)
++    }
++}
++pub(crate) struct ConnectionHttpClient;
++fn error(_: io::Error) -> ExecServerError {
++    ExecServerError::HttpRequest("NATIVE_CONNECTION_UNAVAILABLE".into())
++}
++fn response_meta(response: &codex_http_client::HttpResponse) -> HttpRequestResponse {
++    HttpRequestResponse {
++        status: response.status().as_u16(),
++        // Only transport headers reach rmcp; cookies and auth challenges cannot
++        // activate browser, keyring, or token exchange fallback.
++        headers: response
++            .headers()
++            .iter()
++            .filter(|(name, _)| {
++                matches!(
++                    name.as_str(),
++                    "content-type" | "mcp-session-id" | "mcp-protocol-version"
++                )
++            })
++            .filter_map(|(name, value)| {
++                value.to_str().ok().map(|value| HttpHeader {
++                    name: name.to_string(),
++                    value: value.into(),
++                    value_env_var: None,
++                })
++            })
++            .collect(),
++        body: Vec::new().into(),
++    }
++}
++impl HttpClient for ConnectionHttpClient {
++    fn http_request(
++        &self,
++        params: HttpRequestParams,
++    ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
++        async move {
++            let entry = current_entry().map_err(error)?;
++            let response = entry.send(params).await.map_err(error)?;
++            let mut result = response_meta(&response);
++            let mut stream = response.bytes_stream();
++            let mut bytes = Vec::new();
++            while let Some(chunk) = stream.next().await {
++                let chunk = chunk.map_err(|_| error(unavailable()))?;
++                if bytes.len().saturating_add(chunk.len()) > 1_048_576 {
++                    return Err(error(unavailable()));
++                }
++                bytes.extend_from_slice(&chunk);
++            }
++            result.body = bytes.into();
++            Ok(result)
++        }
++        .boxed()
++    }
++    fn http_request_stream(
++        &self,
++        params: HttpRequestParams,
++    ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>> {
++        async move {
++            let entry = current_entry().map_err(error)?;
++            let response = entry.send(params).await.map_err(error)?;
++            Ok((
++                response_meta(&response),
++                HttpResponseBodyStream::local(response),
++            ))
++        }
++        .boxed()
++    }
++}
+diff --git a/codex-rs/rmcp-client/src/native_connection/mod.rs b/codex-rs/rmcp-client/src/native_connection/mod.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_connection/mod.rs
+@@ -0,0 +1,352 @@
++//! Independent Connection client inside the protected native process.
++//! Only the anonymous callback obtains credentials; no OAuth/keyring fallback.
++mod callback;
++mod evidence;
++mod http;
++mod recovery;
++mod recovery_wire;
++mod strict_json;
++mod wire;
++
++use serde_json::Value;
++use serde_json::json;
++use sha2::Digest;
++use std::future::Future;
++use std::io;
++use std::pin::Pin;
++use std::sync::Arc;
++use std::sync::Mutex;
++use std::sync::OnceLock;
++use uuid::Uuid;
++use wire::*;
++
++pub(crate) use evidence::collect_evidence;
++pub(crate) use evidence::complete_evidence_update;
++pub use recovery::run_native_connection_recovery;
++pub(crate) use strict_json::parse_strict_json;
++
++pub type PrivateExchange<'a> = Pin<Box<dyn Future<Output = io::Result<Value>> + Send + 'a>>;
++/// The core implementation exchanges bounded private FD3 frames. It must never
++/// fingerprint, persist, trace, or echo bootstrap responses containing tokens.
++pub trait NativeConnectionBootstrap: Send + Sync {
++    fn exchange<'a>(&'a self, request: &'a Value) -> PrivateExchange<'a>;
++}
++struct Configuration {
++    profile: Profile,
++    process_nonce: String,
++    bootstrap: Arc<dyn NativeConnectionBootstrap>,
++}
++static CONFIGURATION: OnceLock<Configuration> = OnceLock::new();
++static CURRENT: Mutex<Option<Arc<http::Entry>>> = Mutex::new(None);
++static ORIGINAL: Mutex<Option<(OriginalBinding, ConnectionIdentity)>> = Mutex::new(None);
++static SLOTS: OnceLock<Mutex<std::collections::HashMap<String, SlotMetadata>>> = OnceLock::new();
++#[derive(Clone)]
++pub(super) struct SlotMetadata {
++    pub binding: OriginalBinding,
++    pub identity: ConnectionIdentity,
++}
++pub(super) fn original_slot(slot_id: &str) -> io::Result<SlotMetadata> {
++    SLOTS
++        .get_or_init(Mutex::default)
++        .lock()
++        .map_err(|_| unavailable())?
++        .get(slot_id)
++        .cloned()
++        .ok_or_else(unavailable)
++}
++static BOOTSTRAP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
++
++pub(super) fn unavailable() -> io::Error {
++    io::Error::other("NATIVE_CONNECTION_UNAVAILABLE")
++}
++pub(super) fn now_ms() -> io::Result<u64> {
++    let value = u64::try_from(
++        std::time::SystemTime::now()
++            .duration_since(std::time::UNIX_EPOCH)
++            .map_err(|_| unavailable())?
++            .as_millis(),
++    )
++    .map_err(|_| unavailable())?;
++    if timestamp(value) {
++        Ok(value)
++    } else {
++        Err(unavailable())
++    }
++}
++/// Called synchronously by the CLI only after actual process protection and FD3
++/// validation. The immutable nonsecret profile is not a public Runtime option.
++pub fn initialize_native_connection_profile(
++    profile_json: &str,
++    bootstrap: Arc<dyn NativeConnectionBootstrap>,
++) -> io::Result<()> {
++    let profile: Profile = serde_json::from_value(parse_strict_json(profile_json.as_bytes())?)
++        .map_err(|_| unavailable())?;
++    if !profile.valid() {
++        return Err(unavailable());
++    }
++    CONFIGURATION
++        .set(Configuration {
++            profile,
++            process_nonce: Uuid::new_v4().to_string(),
++            bootstrap,
++        })
++        .map_err(|_| unavailable())
++}
++pub(crate) fn is_connection_server(server_name: &str, resource: &str) -> io::Result<bool> {
++    let Some(config) = CONFIGURATION.get() else {
++        return if server_name == "connection" {
++            Err(unavailable())
++        } else {
++            Ok(false)
++        };
++    };
++    if server_name == "connection" {
++        if resource != config.profile.resource {
++            return Err(unavailable());
++        }
++        return Ok(true);
++    }
++    // A copied URL under another configured name cannot route through V1.
++    let selected = url::Url::parse(resource).map_err(|_| unavailable())?;
++    let fixed = url::Url::parse(&config.profile.resource).map_err(|_| unavailable())?;
++    if selected.origin() == fixed.origin() {
++        return Err(unavailable());
++    }
++    Ok(false)
++}
++/// Refresh for each admitted original root execution, including sequential
++/// executions in a reused native thread. Children inherit the original slot.
++/// Failure disables Connection without replacing other native capabilities.
++#[allow(
++    clippy::await_holding_invalid_type,
++    reason = "A complete private bootstrap is serialized before replacing credential slots"
++)]
++pub async fn refresh_native_connection_slot(native_thread_id: Option<&str>) -> io::Result<()> {
++    let Some(config) = CONFIGURATION.get() else {
++        return Ok(());
++    };
++    let _guard = BOOTSTRAP_LOCK.lock().await;
++    CURRENT.lock().map_err(|_| unavailable())?.take();
++    let request = BootstrapRequest {
++        schema_version: 2,
++        request_id: Uuid::new_v4().to_string(),
++        phase: "connection-bootstrap".into(),
++        profile_ref: config.profile.profile_ref.clone(),
++        process_nonce: config.process_nonce.clone(),
++        native_session_ref: native_thread_id.map(str::to_owned),
++    };
++    if request
++        .native_session_ref
++        .as_deref()
++        .is_some_and(|id| !bounded(id))
++    {
++        return Err(unavailable());
++    }
++    let request_value = serde_json::to_value(&request).map_err(|_| unavailable())?;
++    let response_value = config.bootstrap.exchange(&request_value).await?;
++    let response: BootstrapResponse =
++        serde_json::from_value(response_value).map_err(|_| unavailable())?;
++    let slot = response.into_slot(&request, &config.profile, now_ms()?)?;
++    {
++        let original = ORIGINAL.lock().map_err(|_| unavailable())?;
++        if original.as_ref().is_some_and(|(binding, identity)| {
++            !binding.same_owner(&slot.original_binding) || identity != &slot.connection_identity
++        }) {
++            return Err(unavailable());
++        }
++    }
++    let entry = Arc::new(http::Entry::new(slot)?);
++    entry.verify_identity().await?;
++    {
++        let mut slots = SLOTS
++            .get_or_init(Mutex::default)
++            .lock()
++            .map_err(|_| unavailable())?;
++        if slots.len() >= 1024 || slots.contains_key(&entry.slot_id) {
++            return Err(unavailable());
++        }
++        slots.insert(
++            entry.slot_id.clone(),
++            SlotMetadata {
++                binding: entry.binding.clone(),
++                identity: entry.identity.clone(),
++            },
++        );
++    }
++    let mut original = ORIGINAL.lock().map_err(|_| unavailable())?;
++    *original = Some((entry.binding.clone(), entry.identity.clone()));
++    *CURRENT.lock().map_err(|_| unavailable())? = Some(entry);
++    Ok(())
++}
++pub(super) fn current_entry() -> io::Result<Arc<http::Entry>> {
++    let entry = CURRENT
++        .lock()
++        .map_err(|_| unavailable())?
++        .clone()
++        .ok_or_else(unavailable)?;
++    if entry.expires_at <= now_ms()? {
++        return Err(unavailable());
++    }
++    Ok(entry)
++}
++pub(crate) async fn connection_http_client() -> io::Result<Arc<dyn codex_exec_server::HttpClient>> {
++    if CURRENT.lock().map_err(|_| unavailable())?.is_none() {
++        refresh_native_connection_slot(None).await?;
++    }
++    current_entry()?;
++    Ok(Arc::new(http::ConnectionHttpClient))
++}
++
++pub(crate) struct ConnectionCall {
++    operation_nonce: String,
++    descriptor: Mutex<Option<(Descriptor, Value)>>,
++    sent: std::sync::atomic::AtomicBool,
++}
++impl ConnectionCall {
++    pub(crate) fn new() -> Self {
++        Self {
++            operation_nonce: Uuid::new_v4().to_string(),
++            descriptor: Mutex::new(None),
++            sent: std::sync::atomic::AtomicBool::new(false),
++        }
++    }
++    pub(crate) fn prepare(
++        &self,
++        id: Value,
++        request: &mut rmcp::model::CallToolRequest,
++    ) -> io::Result<()> {
++        let mut descriptor = self.descriptor.lock().map_err(|_| unavailable())?;
++        let arguments = Value::Object(request.params.arguments.clone().ok_or_else(unavailable)?);
++        // Reserved metadata is injected at the transport leaf. Business arguments
++        // are hashed without defaults, normalization, credentials, or receipts.
++        if arguments.get("_meta").is_some() {
++            return Err(unavailable());
++        }
++        let tool_name = request.params.name.to_string();
++        let preimage = json!({"version": DIGEST_VERSION, "method": "tools/call", "toolName": tool_name, "arguments": arguments});
++        let meta = request.params.meta.as_mut().ok_or_else(unavailable)?;
++        if descriptor.is_none() {
++            if meta.contains_key(REQUEST_META) || meta.contains_key(RECEIPT_META) {
++                return Err(unavailable());
++            }
++            let current = current_entry()?;
++            let config = CONFIGURATION.get().ok_or_else(unavailable)?;
++            let action_selector =
++                if matches!(tool_name.as_str(), "execute_action" | "get_action_guide") {
++                    Some(ActionSelector {
++                        action_id: arguments
++                            .get("actionId")
++                            .and_then(Value::as_str)
++                            .filter(|v| bounded(v))
++                            .ok_or_else(unavailable)?
++                            .to_owned(),
++                    })
++                } else {
++                    None
++                };
++            let canonical =
++                serde_json_canonicalizer::to_vec(&preimage).map_err(|_| unavailable())?;
++            let value = Descriptor {
++                slot_id: current.slot_id.clone(),
++                profile_ref: config.profile.profile_ref.clone(),
++                service_ref: config.profile.service_ref.clone(),
++                operation_nonce: self.operation_nonce.clone(),
++                attempt_nonce: Uuid::new_v4().to_string(),
++                idempotency_key: self.operation_nonce.clone(),
++                rpc_request_id: id.clone(),
++                request_digest_version: DIGEST_VERSION.into(),
++                request_digest: format!("{:x}", sha2::Sha256::digest(canonical)),
++                method: "tools/call".into(),
++                tool_name,
++                action_selector,
++            };
++            if !value.valid() {
++                return Err(unavailable());
++            }
++            *descriptor = Some((value, preimage.clone()));
++        }
++        let (value, original) = descriptor.as_ref().ok_or_else(unavailable)?;
++        if value.rpc_request_id != id || original != &preimage {
++            return Err(unavailable());
++        }
++        let reserved = json!({"operationNonce": value.operation_nonce, "attemptNonce": value.attempt_nonce, "idempotencyKey": value.idempotency_key});
++        if meta
++            .get(REQUEST_META)
++            .is_some_and(|existing| existing != &reserved)
++        {
++            return Err(unavailable());
++        }
++        meta.insert(REQUEST_META.into(), reserved);
++        Ok(())
++    }
++    pub(crate) fn validate_wire_body(&self, body: &[u8]) -> io::Result<()> {
++        if body.len() > 1_048_576 {
++            return Err(unavailable());
++        }
++        let wire = parse_strict_json(body)?;
++        let state = self.descriptor.lock().map_err(|_| unavailable())?;
++        let (descriptor, original) = state.as_ref().ok_or_else(unavailable)?;
++        if wire["jsonrpc"] != "2.0"
++            || wire["id"] != descriptor.rpc_request_id
++            || wire["method"] != "tools/call"
++            || wire["params"]["name"] != descriptor.tool_name
++            || wire["params"]["arguments"] != original["arguments"]
++            || wire["params"]["_meta"][REQUEST_META]
++                != json!({"operationNonce":descriptor.operation_nonce,
++                "attemptNonce":descriptor.attempt_nonce,"idempotencyKey":descriptor.idempotency_key})
++            || wire["params"]["_meta"]
++                .get("_agentInfraNativeDispatch")
++                .is_some()
++        {
++            return Err(unavailable());
++        }
++        Ok(())
++    }
++    pub(crate) fn descriptor(&self) -> io::Result<Value> {
++        let descriptor = self.descriptor.lock().map_err(|_| unavailable())?;
++        serde_json::to_value(&descriptor.as_ref().ok_or_else(unavailable)?.0)
++            .map_err(|_| unavailable())
++    }
++    pub(crate) fn mark_dispatch(&self, actual_slot_id: &str) -> io::Result<()> {
++        let descriptor = self.descriptor.lock().map_err(|_| unavailable())?;
++        let descriptor = &descriptor.as_ref().ok_or_else(unavailable)?.0;
++        if actual_slot_id != descriptor.slot_id
++            || current_entry()?.slot_id != descriptor.slot_id
++            || self.sent.swap(true, std::sync::atomic::Ordering::AcqRel)
++        {
++            return Err(unavailable());
++        }
++        Ok(())
++    }
++}
++
++/// Strict bounded callback framing parser, also used by the core FD3 transport.
++pub fn parse_native_private_json(bytes: &[u8]) -> io::Result<Value> {
++    if bytes.len() > 16_384 {
++        return Err(unavailable());
++    }
++    let value = parse_strict_json(bytes)?;
++    if !value.is_object() {
++        return Err(unavailable());
++    }
++    Ok(value)
++}
++/// Validate the nonsecret descriptor against the canonical V2 branch.
++pub fn validate_native_connection_descriptor(value: &Value) -> bool {
++    serde_json::from_value::<Descriptor>(value.clone()).is_ok_and(|value| value.valid())
++}
++
++/// Validate only canonical V2 structure; authorization and response binding are separate.
++pub fn validate_native_callback_v2(value: &Value) -> bool {
++    callback::valid(value)
++}
++
++#[cfg(test)]
++#[path = "tests.rs"]
++mod tests;
++
++pub(crate) fn is_fixed_connection_resource(resource: &str) -> bool {
++    CONFIGURATION
++        .get()
++        .is_some_and(|config| config.profile.resource == resource)
++}
+diff --git a/codex-rs/rmcp-client/src/native_connection/recovery.rs b/codex-rs/rmcp-client/src/native_connection/recovery.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_connection/recovery.rs
+@@ -0,0 +1,134 @@
++//! A separate native mode verifies original receipts without task admission.
++use super::CONFIGURATION;
++use super::http::Entry;
++use super::now_ms;
++use super::recovery_wire::Request;
++use super::recovery_wire::Response;
++use super::unavailable;
++use super::wire::Evidence;
++use super::wire::RecordQuery;
++use serde_json::Value;
++use serde_json::json;
++use std::collections::HashSet;
++use std::io;
++use std::time::Duration;
++use uuid::Uuid;
++
++/// Called only from the protected private CLI mode. It never creates or updates
++/// CURRENT, ORIGINAL or SLOTS and never opens a Runtime Session or MCP transport.
++pub async fn run_native_connection_recovery() -> io::Result<()> {
++    let config = CONFIGURATION.get().ok_or_else(unavailable)?;
++    let deadline = now_ms()?.checked_add(30_000).ok_or_else(unavailable)?;
++    tokio::time::timeout(Duration::from_secs(30), async {
++        let mut previous_recovery_id = None;
++        let mut seen = HashSet::new();
++        for _ in 0..16 {
++            let request = Request {
++                schema_version: 2,
++                request_id: Uuid::new_v4().to_string(),
++                phase: "connection-recovery".into(),
++                profile_ref: config.profile.profile_ref.clone(),
++                process_nonce: config.process_nonce.clone(),
++                previous_recovery_id,
++            };
++            let request_value = serde_json::to_value(&request).map_err(|_| unavailable())?;
++            let response = tokio::time::timeout(
++                remaining(deadline, /*maximum*/ 4_500)?,
++                config.bootstrap.exchange(&request_value),
++            )
++            .await
++            .map_err(|_| unavailable())??;
++            let response: Response = serde_json::from_value(response).map_err(|_| unavailable())?;
++            if !response.matches(&request) {
++                return Err(unavailable());
++            }
++            if matches!(response.decision.as_str(), "done" | "unavailable") {
++                return Ok(());
++            }
++            let recovery_id = response.recovery_id.ok_or_else(unavailable)?;
++            if !seen.insert(recovery_id.clone()) {
++                return Err(unavailable());
++            }
++            previous_recovery_id = Some(recovery_id);
++            let item_deadline = response.expires_at.ok_or_else(unavailable)?.min(deadline);
++            let original = response.original.ok_or_else(unavailable)?;
++            let current = response.current_client.ok_or_else(unavailable)?;
++            let Ok(slot) = current.into_slot(&original, &config.profile, now_ms()?) else {
++                continue;
++            };
++            let item_deadline = item_deadline.min(slot.credential.expires_at);
++            let Ok(budget) = remaining(item_deadline, /*maximum*/ 30_000) else {
++                continue;
++            };
++            // Entry is local to this item. Only its two fixed read methods are
++            // reachable here; no shared slot or business send path is installed.
++            let verified = tokio::time::timeout(budget, async {
++                let entry = Entry::new(slot)?;
++                entry.verify_identity().await?;
++                let queried_at = now_ms()?;
++                let record = entry
++                    .read_record(&original.original_response.receipt.call_ref)
++                    .await?;
++                if !record.matches(
++                    &original.original_response.receipt,
++                    &original.connection_origin.connection_identity,
++                ) {
++                    return Err(unavailable());
++                }
++                Ok::<_, io::Error>(Evidence {
++                    verification: "verified".into(),
++                    original_response: Some(original.original_response.clone()),
++                    record_query: Some(RecordQuery {
++                        queried_at,
++                        credential_revision: entry.revision.clone(),
++                        record,
++                    }),
++                    verified_at: Some(now_ms()?),
++                    reason: None,
++                })
++            })
++            .await;
++            let Ok(Ok(evidence)) = verified else {
++                continue;
++            };
++            let Ok(budget) = remaining(item_deadline, /*maximum*/ 4_500) else {
++                continue;
++            };
++            let update = json!({
++                "schemaVersion": 2, "requestId": Uuid::new_v4().to_string(),
++                "phase": "connection-evidence", "identity": original.identity,
++                "permitId": original.permit_id, "occurredAt": now_ms()?,
++                "connectionRequest": original.connection_request, "connectionEvidence": evidence,
++            });
++            let ack = tokio::time::timeout(budget, config.bootstrap.exchange(&update))
++                .await
++                .map_err(|_| unavailable())??;
++            if !ack_matches(&update, &ack) {
++                return Err(unavailable());
++            }
++        }
++        Ok(())
++    })
++    .await
++    .map_err(|_| unavailable())?
++}
++fn remaining(deadline: u64, maximum: u64) -> io::Result<Duration> {
++    let millis = deadline
++        .checked_sub(now_ms()?)
++        .filter(|value| *value > 0)
++        .ok_or_else(unavailable)?;
++    Ok(Duration::from_millis(millis.min(maximum)))
++}
++fn ack_matches(request: &Value, response: &Value) -> bool {
++    super::validate_native_callback_v2(response)
++        && response["schemaVersion"] == 2
++        && response["phase"] == "connection-evidence"
++        && response["decision"] == "ack"
++        && response["requestId"] == request["requestId"]
++        && response["identity"] == request["identity"]
++        && response["connectionRequest"] == request["connectionRequest"]
++}
++
++#[cfg(test)]
++#[path = "recovery_tests.rs"]
++mod tests;
+diff --git a/codex-rs/rmcp-client/src/native_connection/recovery_tests.rs b/codex-rs/rmcp-client/src/native_connection/recovery_tests.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_connection/recovery_tests.rs
+@@ -0,0 +1,122 @@
++use super::super::recovery_wire::CurrentClient;
++use super::super::recovery_wire::Original;
++use super::super::wire::Profile;
++use super::*;
++
++fn response_frame() -> Value {
++    let corpus: Value = serde_json::from_str(include_str!("callback-v2-corpus.json")).unwrap();
++    corpus["cases"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .find(|case| case["id"] == "recovery-verify-valid")
++        .expect("shared recovery fixture")["frame"]
++        .clone()
++}
++fn fixture() -> (Value, Value, Profile) {
++    let original = response_frame();
++    let profile: Profile = serde_json::from_value(json!({
++        "profileRef": original["request"]["profileRef"],
++        "serviceRef": original["original"]["connectionOrigin"]["service"]["serviceRef"],
++        "issuer": original["original"]["connectionOrigin"]["service"]["issuer"],
++        "resource": original["original"]["connectionOrigin"]["service"]["resource"],
++    }))
++    .unwrap();
++    (
++        original["original"].clone(),
++        original["currentClient"].clone(),
++        profile,
++    )
++}
++#[test]
++fn recovery_reply_must_echo_the_exact_process_and_cursor_request() {
++    let frame = response_frame();
++    let request: Request = serde_json::from_value(frame["request"].clone()).unwrap();
++    let response: Response = serde_json::from_value(frame.clone()).unwrap();
++    assert!(response.matches(&request));
++    for (pointer, replacement) in [
++        ("/request/profileRef", json!("other-profile")),
++        ("/request/processNonce", json!(Uuid::new_v4().to_string())),
++        ("/request/requestId", json!(Uuid::new_v4().to_string())),
++        ("/requestId", json!(Uuid::new_v4().to_string())),
++    ] {
++        let mut changed = frame.clone();
++        *changed.pointer_mut(pointer).unwrap() = replacement;
++        let response: Response = serde_json::from_value(changed).unwrap();
++        assert!(!response.matches(&request), "{pointer}");
++    }
++    let mut changed = frame;
++    changed["request"]["previousRecoveryId"] = json!(Uuid::new_v4().to_string());
++    let response: Response = serde_json::from_value(changed).unwrap();
++    assert!(!response.matches(&request));
++}
++#[test]
++fn recovery_requires_original_full_execution_binding_and_response() {
++    let (original, client, profile) = fixture();
++    let now = original["originalResponse"]["receivedAt"].as_u64().unwrap() + 1;
++    let parsed: Original = serde_json::from_value(original.clone()).unwrap();
++    let current: CurrentClient = serde_json::from_value(client.clone()).unwrap();
++    assert!(current.into_slot(&parsed, &profile, now).is_ok());
++    for (pointer, replacement) in [
++        (
++            "/originalBinding/scope/executionId",
++            json!("foreign-execution"),
++        ),
++        ("/originalBinding/scope/agentId", json!("foreign-agent")),
++        (
++            "/originalBinding/scope/conversationId",
++            json!("foreign-conversation"),
++        ),
++        ("/originalBinding/scope/sessionGeneration", json!(99)),
++        ("/connectionIdentity/consumerId", json!("foreign-consumer")),
++        ("/connectionIdentity/clientId", json!("foreign-client")),
++        (
++            "/connectionIdentity/principal/key",
++            json!("foreign-principal"),
++        ),
++        ("/connectionIdentity/actorId", json!("foreign-actor")),
++        ("/credential/expiresAt", json!(now)),
++    ] {
++        let mut changed = client.clone();
++        *changed.pointer_mut(pointer).unwrap() = replacement;
++        let current: CurrentClient = serde_json::from_value(changed).unwrap();
++        assert!(
++            current.into_slot(&parsed, &profile, now).is_err(),
++            "{pointer}"
++        );
++    }
++    for (pointer, replacement) in [
++        ("/identity/toolName", json!("connection/search_actions")),
++        (
++            "/connectionOrigin/slotId",
++            json!(Uuid::new_v4().to_string()),
++        ),
++        ("/originalResponse/rpcRequestId", json!("different-rpc")),
++        ("/originalResponse/receivedAt", json!(now + 1)),
++        ("/originalResponse/receipt/callRef", json!("")),
++        (
++            "/originalResponse/receipt/attemptNonce",
++            json!(Uuid::new_v4().to_string()),
++        ),
++    ] {
++        let mut changed = original.clone();
++        *changed.pointer_mut(pointer).unwrap() = replacement;
++        let changed: Original = serde_json::from_value(changed).unwrap();
++        assert!(!changed.matches(&profile, now), "{pointer}");
++    }
++}
++#[test]
++fn recovery_ack_cannot_change_original_identity_or_descriptor() {
++    let (original, _, _) = fixture();
++    let request = json!({"requestId": Uuid::new_v4().to_string(),
++        "identity": original["identity"], "connectionRequest": original["connectionRequest"]});
++    let mut ack = json!({"schemaVersion": 2, "phase": "connection-evidence", "decision": "ack",
++        "requestId": request["requestId"], "identity": request["identity"], "connectionRequest": request["connectionRequest"]});
++    assert!(ack_matches(&request, &ack));
++    ack["identity"]["callId"] = json!("another-call");
++    assert!(!ack_matches(&request, &ack));
++    ack["identity"] = request["identity"].clone();
++    ack["connectionRequest"]["requestDigest"] = json!("0".repeat(64));
++    assert!(!ack_matches(&request, &ack));
++    assert!(remaining(/*deadline*/ 0, /*maximum*/ 4_500).is_err());
++}
+diff --git a/codex-rs/rmcp-client/src/native_connection/recovery_wire.rs b/codex-rs/rmcp-client/src/native_connection/recovery_wire.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_connection/recovery_wire.rs
+@@ -0,0 +1,199 @@
++//! Private recovery frames contain no task prompt and are never persisted here.
++use super::callback::Identity;
++use super::unavailable;
++use super::wire::*;
++use serde::Deserialize;
++use serde::Serialize;
++use serde_json::Value;
++use std::io;
++
++#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(super) struct Request {
++    pub schema_version: u8,
++    pub request_id: String,
++    pub phase: String,
++    pub profile_ref: String,
++    pub process_nonce: String,
++    #[serde(
++        default,
++        deserialize_with = "optional",
++        skip_serializing_if = "Option::is_none"
++    )]
++    pub previous_recovery_id: Option<String>,
++}
++impl Request {
++    fn valid(&self) -> bool {
++        self.schema_version == 2
++            && self.phase == "connection-recovery"
++            && uuid(&self.request_id)
++            && opaque(&self.profile_ref)
++            && uuid(&self.process_nonce)
++            && self.previous_recovery_id.as_deref().is_none_or(uuid)
++    }
++}
++#[derive(Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(super) struct Origin {
++    pub schema_version: u8,
++    pub slot_id: String,
++    pub original_binding: OriginalBinding,
++    pub service: Service,
++    pub connection_identity: ConnectionIdentity,
++}
++#[derive(Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(super) struct Original {
++    pub identity: Identity,
++    pub permit_id: String,
++    pub connection_request: Descriptor,
++    pub connection_origin: Origin,
++    pub original_response: OriginalResponse,
++}
++impl Original {
++    fn valid_shape(&self) -> bool {
++        let origin = &self.connection_origin;
++        self.identity.valid()
++            && uuid(&self.permit_id)
++            && self.connection_request.valid()
++            && self.connection_request.tool_name == "execute_action"
++            && origin.schema_version == 1
++            && uuid(&origin.slot_id)
++            && origin.original_binding.valid()
++            && origin.connection_identity.valid()
++            && origin.service.valid_shape()
++            && Evidence::unverified("record_unavailable", Some(self.original_response.clone()))
++                .valid_shape()
++    }
++    pub(super) fn matches(&self, profile: &Profile, now: u64) -> bool {
++        let origin = &self.connection_origin;
++        let descriptor = &self.connection_request;
++        self.valid_shape()
++            && self.identity.tool_name == "connection/execute_action"
++            && descriptor.profile_ref == profile.profile_ref
++            && descriptor.service_ref == profile.service_ref
++            && descriptor.slot_id == origin.slot_id
++            && origin.service.service_ref == profile.service_ref
++            && origin.service.issuer == profile.issuer
++            && origin.service.resource == profile.resource
++            && self.original_response.rpc_request_id == descriptor.rpc_request_id
++            && self.original_response.received_at <= now
++            && self
++                .original_response
++                .receipt
++                .matches(descriptor, &origin.connection_identity)
++    }
++}
++// This credential has no Debug/Serialize and is consumed into one local Entry.
++#[derive(Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(super) struct CurrentClient {
++    original_binding: OriginalBinding,
++    service: Service,
++    connection_identity: ConnectionIdentity,
++    credential: Credential,
++}
++impl CurrentClient {
++    fn valid_shape(&self) -> bool {
++        self.original_binding.valid()
++            && self.connection_identity.valid()
++            && self.service.valid_shape()
++            && self.credential.valid_shape()
++    }
++    pub(super) fn into_slot(
++        self,
++        original: &Original,
++        profile: &Profile,
++        now: u64,
++    ) -> io::Result<Slot> {
++        if !original.matches(profile, now)
++            || self.original_binding != original.connection_origin.original_binding
++            || self.service != original.connection_origin.service
++            || self.connection_identity != original.connection_origin.connection_identity
++        {
++            return Err(unavailable());
++        }
++        let slot = Slot {
++            slot_id: original.connection_origin.slot_id.clone(),
++            original_binding: self.original_binding,
++            service: self.service,
++            connection_identity: self.connection_identity,
++            credential: self.credential,
++        };
++        if !slot.valid(profile, now) {
++            return Err(unavailable());
++        }
++        Ok(slot)
++    }
++}
++#[derive(Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(super) struct Response {
++    schema_version: u8,
++    request_id: String,
++    phase: String,
++    request: Request,
++    pub decision: String,
++    #[serde(default, deserialize_with = "optional")]
++    pub recovery_id: Option<String>,
++    #[serde(default, deserialize_with = "optional")]
++    pub expires_at: Option<u64>,
++    #[serde(default, deserialize_with = "optional")]
++    pub original: Option<Original>,
++    #[serde(default, deserialize_with = "optional")]
++    pub current_client: Option<CurrentClient>,
++    #[serde(default, deserialize_with = "optional")]
++    reason: Option<String>,
++}
++impl Response {
++    fn valid_shape(&self) -> bool {
++        self.schema_version == 2
++            && self.phase == "connection-recovery"
++            && uuid(&self.request_id)
++            && self.request.valid()
++            && match self.decision.as_str() {
++                "verify" => {
++                    self.recovery_id.as_deref().is_some_and(uuid)
++                        && self.expires_at.is_some_and(timestamp)
++                        && self.original.as_ref().is_some_and(Original::valid_shape)
++                        && self
++                            .current_client
++                            .as_ref()
++                            .is_some_and(CurrentClient::valid_shape)
++                        && self.reason.is_none()
++                }
++                "done" | "unavailable" => {
++                    self.recovery_id.is_none()
++                        && self.expires_at.is_none()
++                        && self.original.is_none()
++                        && self.current_client.is_none()
++                        && if self.decision == "done" {
++                            self.reason.is_none()
++                        } else {
++                            matches!(
++                                self.reason.as_deref(),
++                                Some(
++                                    "authorization_unavailable"
++                                        | "credential_unavailable"
++                                        | "credential_expired"
++                                        | "binding_mismatch"
++                                        | "isolation_unavailable"
++                                        | "profile_unavailable"
++                                )
++                            )
++                        }
++                }
++                _ => false,
++            }
++    }
++    pub(super) fn matches(&self, request: &Request) -> bool {
++        self.valid_shape() && self.request == *request && self.request_id == request.request_id
++    }
++}
++pub(super) fn valid(value: &Value) -> bool {
++    if value.get("decision").is_some() {
++        serde_json::from_value::<Response>(value.clone()).is_ok_and(|value| value.valid_shape())
++    } else {
++        serde_json::from_value::<Request>(value.clone()).is_ok_and(|value| value.valid())
++    }
++}
+diff --git a/codex-rs/rmcp-client/src/native_connection/strict_json.rs b/codex-rs/rmcp-client/src/native_connection/strict_json.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_connection/strict_json.rs
+@@ -0,0 +1,68 @@
++//! Preserve JSON token kinds and reject duplicate keys before building Value.
++//! RawValue avoids arbitrary_precision's private number-map representation.
++use serde::Deserializer;
++use serde::de::MapAccess;
++use serde::de::Visitor;
++use serde_json::Map;
++use serde_json::Value;
++use serde_json::value::RawValue;
++use std::fmt;
++use std::io;
++
++pub(crate) fn parse_strict_json(bytes: &[u8]) -> io::Result<Value> {
++    let raw: &RawValue = serde_json::from_slice(bytes).map_err(|_| super::unavailable())?;
++    parse_raw(raw, /*depth*/ 0)
++}
++
++fn parse_raw(raw: &RawValue, depth: usize) -> io::Result<Value> {
++    let text = raw.get();
++    match text.as_bytes()[0] {
++        // Match serde_json's default limit of 127 nested containers.
++        b'{' | b'[' if depth >= 127 => Err(super::unavailable()),
++        b'{' => serde_json::Deserializer::from_str(text)
++            .deserialize_map(StrictObject { depth })
++            .map_err(|_| super::unavailable()),
++        b'[' => {
++            let elements: Vec<&RawValue> =
++                serde_json::from_str(text).map_err(|_| super::unavailable())?;
++            elements
++                .into_iter()
++                .map(|element| parse_raw(element, depth + 1))
++                .collect::<io::Result<Vec<_>>>()
++                .map(Value::Array)
++        }
++        _ => {
++            let value: Value = serde_json::from_str(text).map_err(|_| super::unavailable())?;
++            if let Value::Number(number) = &value
++                && !number.as_f64().is_some_and(f64::is_finite)
++            {
++                return Err(super::unavailable());
++            }
++            Ok(value)
++        }
++    }
++}
++
++struct StrictObject {
++    depth: usize,
++}
++impl<'de> Visitor<'de> for StrictObject {
++    type Value = Value;
++
++    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
++        formatter.write_str("strict JSON object")
++    }
++
++    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
++        let mut values = Map::new();
++        while let Some((key, raw)) = map.next_entry::<String, &RawValue>()? {
++            if values.contains_key(&key) {
++                return Err(serde::de::Error::custom("duplicate JSON key"));
++            }
++            let value = parse_raw(raw, self.depth + 1)
++                .map_err(|_| serde::de::Error::custom("invalid JSON"))?;
++            values.insert(key, value);
++        }
++        Ok(Value::Object(values))
++    }
++}
+diff --git a/codex-rs/rmcp-client/src/native_connection/tests.rs b/codex-rs/rmcp-client/src/native_connection/tests.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_connection/tests.rs
+@@ -0,0 +1,368 @@
++use super::*;
++use pretty_assertions::assert_eq;
++
++fn corpus() -> Value {
++    serde_json::from_str(include_str!("callback-v2-corpus.json")).unwrap()
++}
++#[test]
++fn canonical_v2_shared_structural_corpus() {
++    let corpus = corpus();
++    let mut count = 0;
++    for case in corpus["cases"].as_array().unwrap() {
++        let frame = &case["frame"];
++        // The unchanged V1/source subset is covered by core's typed parsers.
++        if frame["schemaVersion"] != 2 {
++            continue;
++        }
++        // Schema validity is independent of the transport byte limit.
++        let parsed = parse_strict_json(&serde_json::to_vec(frame).unwrap()).unwrap();
++        assert_eq!(
++            validate_native_callback_v2(&parsed),
++            case["schemaValid"].as_bool().unwrap(),
++            "{}",
++            case["id"]
++        );
++        count += 1;
++    }
++    assert_eq!(count, 153);
++}
++#[test]
++fn canonical_shared_framing_corpus_rejects_before_value_conversion() {
++    for case in corpus()["framingCases"].as_array().unwrap() {
++        let bytes = if let Some(text) = case["wireUtf8"].as_str() {
++            text.as_bytes().to_vec()
++        } else {
++            decode_hex(case["wireHex"].as_str().unwrap())
++        };
++        assert_eq!(
++            parse_native_private_json(&bytes).is_ok(),
++            case["transportAccept"].as_bool().unwrap(),
++            "{}",
++            case["id"]
++        );
++    }
++    for case in corpus()["cases"].as_array().unwrap() {
++        if case["layer"] == "transport" {
++            assert_eq!(
++                parse_native_private_json(&serde_json::to_vec(&case["frame"]).unwrap()).is_ok(),
++                case["semanticExpected"]["accept"].as_bool().unwrap(),
++                "{}",
++                case["id"]
++            );
++        }
++    }
++    assert!(parse_native_private_json(br#"{"requestId":"a","request\u0049d":"b"}"#).is_err());
++}
++fn decode_hex(text: &str) -> Vec<u8> {
++    text.as_bytes()
++        .chunks_exact(2)
++        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
++        .collect()
++}
++#[test]
++fn rfc8785_shared_vectors_use_pinned_jcs_implementation() {
++    for case in corpus()["jcsVectors"].as_array().unwrap() {
++        let actual = if let Some(bits) = case["ieee754Hex"].as_str() {
++            let number = f64::from_bits(u64::from_str_radix(bits, 16).unwrap());
++            serde_json_canonicalizer::to_vec(&number).map_err(|_| unavailable())
++        } else {
++            parse_strict_json(case["inputJson"].as_str().unwrap().as_bytes()).and_then(|value| {
++                serde_json_canonicalizer::to_vec(&value).map_err(|_| unavailable())
++            })
++        };
++        if case["accept"] == false {
++            assert!(actual.is_err(), "{}", case["id"]);
++        } else {
++            let actual = actual.unwrap();
++            assert_eq!(
++                std::str::from_utf8(&actual).unwrap(),
++                case["canonicalUtf8"].as_str().unwrap(),
++                "{}",
++                case["id"]
++            );
++            assert_eq!(
++                format!("{:x}", sha2::Sha256::digest(actual)),
++                case["sha256"].as_str().unwrap(),
++                "{}",
++                case["id"]
++            );
++        }
++    }
++}
++#[test]
++fn receipt_and_record_reject_foreign_identity_or_attempt() {
++    let corpus = corpus();
++    let verified = corpus["cases"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .find(|case| {
++            case["schemaValid"] == true
++                && case["frame"]["connectionEvidence"]["verification"] == "verified"
++        })
++        .unwrap();
++    let frame = &verified["frame"];
++    let descriptor: Descriptor =
++        serde_json::from_value(frame["connectionRequest"].clone()).unwrap();
++    let evidence: Evidence = serde_json::from_value(frame["connectionEvidence"].clone()).unwrap();
++    let receipt = &evidence.original_response.as_ref().unwrap().receipt;
++    let record = &evidence.record_query.as_ref().unwrap().record;
++    let identity = ConnectionIdentity {
++        principal: receipt.principal.clone(),
++        actor_id: receipt.actor_id.clone(),
++        consumer_id: record.consumer_id.clone(),

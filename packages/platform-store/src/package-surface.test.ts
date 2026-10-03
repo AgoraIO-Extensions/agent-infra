@@ -1,0 +1,149 @@
+import { execFileSync, spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
+
+const manifestPath = fileURLToPath(new URL("../package.json", import.meta.url));
+const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+
+describe("platform-store package surface", () => {
+	it("keeps migration configuration out of CLI failures", () => {
+		const result = spawnSync(
+			process.execPath,
+			[fileURLToPath(new URL("../dist/migrate-cli.mjs", import.meta.url))],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					PLATFORM_DATABASE_URL: "https://user:secret@example.com/platform",
+				},
+			},
+		);
+		expect(result.status).toBe(1);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("Platform migration failed\n");
+	});
+
+	it("publishes only Store adapters and packaged migrations", async () => {
+		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+		expect(manifest.exports).toEqual({
+			".": {
+				types: "./dist/index.d.mts",
+				import: "./dist/index.mjs",
+			},
+		});
+		expect(manifest.files).toEqual(["dist"]);
+
+		const surface = await import(
+			new URL("../dist/index.mjs", import.meta.url).href
+		);
+		expect(Object.keys(surface).toSorted()).toEqual([
+			"AgentConfigurationStoreError",
+			"ApplicationRevisionStoreError",
+			"ConversationDispatchStoreError",
+			"ConversationQueryError",
+			"LegacyTaskMigrationError",
+			"OutboxStoreError",
+			"PlatformAuditQueryError",
+			"PostgresAgentConfigurationQueryV1",
+			"PostgresAgentConfigurationTransactionV1",
+			"PostgresAgentManagementQueryV1",
+			"PostgresAgentManagementTransactionV1",
+			"PostgresApplicationFoundationTransactionV1",
+			"PostgresApplicationMaterialGrantStoreV1",
+			"PostgresApplicationRegistrationStoreV1",
+			"PostgresApplicationRevisionTransactionV1",
+			"PostgresConversationDispatchStoreV1",
+			"PostgresConversationEventTransactionV1",
+			"PostgresConversationExecutionTransactionV1",
+			"PostgresConversationQueryV1",
+			"PostgresFileStoreV1",
+			"PostgresLdapSessionStoreV1",
+			"PostgresLegacyTaskAuthorizationMigrationV1",
+			"PostgresLegacyTaskRecoveryReaderV1",
+			"PostgresPersonalApiCredentialStoreV1",
+			"PostgresPersonalRelayKeyStoreV1",
+			"PostgresPlatformAuditQueryV1",
+			"PostgresRelayKeyVersionStoreV1",
+			"PostgresScopedPlatformAuditQueryV1",
+			"PostgresSecretActivationStoreV1",
+			"PostgresSecretKeyRotationStoreV1",
+			"PostgresTaskAuthorizationStoreV1",
+			"PostgresWecomChannelV1",
+			"PostgresWecomConnectionsV1",
+			"PostgresWecomSetupV1",
+			"SecretActivationStoreError",
+			"SecretKeyRotationStoreError",
+			"TaskAuthorizationStoreError",
+			"TaskCurrentAuthorityUnavailableErrorV1",
+			"createPostgresOutboxStore",
+			"decodePlatformAuditRowV1",
+			"migratePlatformDatabase",
+			"openPostgresConversationDispatchStoreV1",
+			"openPostgresPlatformIdempotencyStore",
+			"openPostgresSecretActivationStoreV1",
+			"openPostgresSecretKeyRotationStoreV1",
+			"openPostgresWorkloadReconciliationStoreV1",
+			"platformDatabaseUrlFromEnvironment",
+			"readCurrentTaskApiUseGrantV1",
+			"readCurrentTaskApplicationV1",
+			"readPlatformQueueResourceSnapshot",
+			"requireCurrentPersonalApiTaskAdmissionV1",
+			"resolveApiAuditCredentialIdentityV1",
+			"resolvePersonalApiTaskAdmissionAuthorityV1",
+			"validateWecomSetupCredentialRecordV1",
+		]);
+		expect(surface.PostgresPersonalRelayKeyStoreV1).toBeTypeOf("function");
+
+		const pack = JSON.parse(
+			execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+				cwd: packageRoot,
+				encoding: "utf8",
+			}),
+		)[0];
+		const packedFiles = pack.files.map((file: { path: string }) => file.path);
+		expect(packedFiles).toEqual(
+			expect.arrayContaining([
+				"dist/index.d.mts",
+				"dist/index.mjs",
+				"dist/migrations/0000_platform_infrastructure.sql",
+				"dist/migrations/0001_application_foundation.sql",
+				"dist/migrations/0002_agent_persistence.sql",
+				"dist/migrations/0003_secret_records.sql",
+				"dist/migrations/0004_conversation_execution.sql",
+				"dist/migrations/0005_conversation_events.sql",
+				"dist/migrations/0006_secret_candidate_activation.sql",
+				"dist/migrations/0007_secret_key_rotation.sql",
+				"dist/migrations/meta/0000_snapshot.json",
+				"dist/migrations/meta/0001_snapshot.json",
+				"dist/migrations/meta/0002_snapshot.json",
+				"dist/migrations/meta/0003_snapshot.json",
+				"dist/migrations/meta/0004_snapshot.json",
+				"dist/migrations/meta/0005_snapshot.json",
+				"dist/migrations/meta/0006_snapshot.json",
+				"dist/migrations/meta/0007_snapshot.json",
+				"dist/migrations/0015_trusted_task_authorization.sql",
+				"dist/migrations/0016_conversation_generation_tombstones.sql",
+				"dist/migrations/0017_wecom_text.sql",
+				"dist/migrations/0018_wecom_setup.sql",
+				"dist/migrations/0019_trusted_task_authorization_integrity.sql",
+				"dist/migrations/0020_task_boundary_generation_binding.sql",
+				"dist/migrations/0021_browser_sessions.sql",
+				"dist/migrations/meta/0015_snapshot.json",
+				"dist/migrations/meta/0016_snapshot.json",
+				"dist/migrations/meta/0017_snapshot.json",
+				"dist/migrations/meta/0018_snapshot.json",
+				"dist/migrations/meta/0019_snapshot.json",
+				"dist/migrations/meta/0020_snapshot.json",
+				"dist/migrations/meta/0021_snapshot.json",
+				"dist/migrations/meta/_journal.json",
+			]),
+		);
+		expect(
+			packedFiles.some((path: string) =>
+				/schema|postgres|drizzle|test/.test(path),
+			),
+		).toBe(false);
+	});
+});

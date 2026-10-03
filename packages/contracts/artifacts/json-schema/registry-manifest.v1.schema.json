@@ -1,0 +1,1378 @@
+{
+  "$defs": {
+    "ImageAdmissionPolicyEvidenceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "decisionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "evaluatedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "type": "string"
+        },
+        "imageDigest": {
+          "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+          "type": "string"
+        },
+        "policyRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "subjectRef": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "policyRef",
+        "decisionRef",
+        "subjectRef",
+        "agentId",
+        "imageDigest",
+        "evaluatedAt"
+      ],
+      "type": "object"
+    },
+    "ImageRegistryAdmissionErrorV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "IMAGE_REFERENCE_INVALID",
+              "type": "string"
+            },
+            "message": {
+              "const": "Image reference is invalid",
+              "type": "string"
+            },
+            "retryable": {
+              "const": false,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "code",
+            "message",
+            "retryable",
+            "traceId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "IMAGE_NOT_FOUND",
+              "type": "string"
+            },
+            "message": {
+              "const": "Image was not found",
+              "type": "string"
+            },
+            "retryable": {
+              "const": false,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "code",
+            "message",
+            "retryable",
+            "traceId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "IMAGE_NOT_ADMITTED",
+              "type": "string"
+            },
+            "message": {
+              "const": "The image is not admitted by deployment policy",
+              "type": "string"
+            },
+            "retryable": {
+              "const": false,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "code",
+            "message",
+            "retryable",
+            "traceId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "OCI_CONFIG_INVALID",
+              "type": "string"
+            },
+            "message": {
+              "const": "OCI image config is invalid",
+              "type": "string"
+            },
+            "retryable": {
+              "const": false,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "code",
+            "message",
+            "retryable",
+            "traceId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "RUNTIME_MANIFEST_MISSING",
+              "type": "string"
+            },
+            "message": {
+              "const": "Runtime Manifest is missing",
+              "type": "string"
+            },
+            "retryable": {
+              "const": false,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "code",
+            "message",
+            "retryable",
+            "traceId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "RUNTIME_MANIFEST_INVALID",
+              "type": "string"
+            },
+            "message": {
+              "const": "Runtime Manifest is invalid",
+              "type": "string"
+            },
+            "retryable": {
+              "const": false,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "code",
+            "message",
+            "retryable",
+            "traceId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "IMAGE_REGISTRY_UNAVAILABLE",
+              "type": "string"
+            },
+            "message": {
+              "const": "Image registry is unavailable",
+              "type": "string"
+            },
+            "retryable": {
+              "const": true,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "code",
+            "message",
+            "retryable",
+            "traceId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "IMAGE_ADMISSION_POLICY_UNAVAILABLE",
+              "type": "string"
+            },
+            "message": {
+              "const": "Image admission policy is unavailable",
+              "type": "string"
+            },
+            "retryable": {
+              "const": true,
+              "type": "boolean"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "code",
+            "message",
+            "retryable",
+            "traceId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ImageRegistryAdmissionRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "admissionPolicyRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "imageReference": {
+          "pattern": "^(?=.{1,512}(?![\\s\\S]))(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[(?:(?:[A-Fa-f0-9]{1,4}:){7}[A-Fa-f0-9]{1,4}|(?:[A-Fa-f0-9]{1,4}:){1,7}:|(?:[A-Fa-f0-9]{1,4}:){1,6}:[A-Fa-f0-9]{1,4}|(?:[A-Fa-f0-9]{1,4}:){1,5}(?::[A-Fa-f0-9]{1,4}){1,2}|(?:[A-Fa-f0-9]{1,4}:){1,4}(?::[A-Fa-f0-9]{1,4}){1,3}|(?:[A-Fa-f0-9]{1,4}:){1,3}(?::[A-Fa-f0-9]{1,4}){1,4}|(?:[A-Fa-f0-9]{1,4}:){1,2}(?::[A-Fa-f0-9]{1,4}){1,5}|[A-Fa-f0-9]{1,4}:(?:(?::[A-Fa-f0-9]{1,4}){1,6})|:(?:(?::[A-Fa-f0-9]{1,4}){1,7}|:))\\])(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?(?![\\s\\S])",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "subjectRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "usage": {
+          "enum": [
+            "standard-template",
+            "custom-agent"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "subjectRef",
+        "agentId",
+        "imageReference",
+        "usage",
+        "admissionPolicyRef"
+      ],
+      "type": "object"
+    },
+    "ImageRegistryAdmissionResultV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "immutableDigest": {
+              "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+              "type": "string"
+            },
+            "ociConfig": {
+              "additionalProperties": false,
+              "properties": {
+                "architecture": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "command": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "configDigest": {
+                  "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                  "type": "string"
+                },
+                "declaredEnvKeys": {
+                  "items": {
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "entrypoint": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "operatingSystem": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "user": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "workingDirectory": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "configDigest",
+                "operatingSystem",
+                "architecture"
+              ],
+              "type": "object"
+            },
+            "policyEvidence": {
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "decisionRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "evaluatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                  "type": "string"
+                },
+                "imageDigest": {
+                  "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+                  "type": "string"
+                },
+                "policyRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "subjectRef": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "policyRef",
+                "decisionRef",
+                "subjectRef",
+                "agentId",
+                "imageDigest",
+                "evaluatedAt"
+              ],
+              "type": "object"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "runtimeManifest": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "capabilities": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "attachments": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "connection": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "modelSelection": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "resultFiles": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "supplementaryInstruction": {
+                          "default": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "health": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": {
+                          "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path"
+                      ],
+                      "type": "object"
+                    },
+                    "interactionMode": {
+                      "const": "self-managed",
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "service": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "port": {
+                          "maximum": 65535,
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "port"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "interactionMode",
+                    "service",
+                    "health"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "capabilities": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "attachments": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "connection": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "modelSelection": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "resultFiles": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "supplementaryInstruction": {
+                          "default": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "health": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": {
+                          "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path"
+                      ],
+                      "type": "object"
+                    },
+                    "interactionMode": {
+                      "const": "platform-adapter",
+                      "type": "string"
+                    },
+                    "protocol": {
+                      "const": "acp",
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "service": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "port": {
+                          "maximum": 65535,
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "port"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "interactionMode",
+                    "protocol",
+                    "service",
+                    "health"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "runtimeManifestLabel": {
+              "maxLength": 65536,
+              "minLength": 1,
+              "type": "string"
+            },
+            "runtimeManifestParsingEvidence": {
+              "additionalProperties": false,
+              "properties": {
+                "duplicateKeysDetected": {
+                  "const": false,
+                  "type": "boolean"
+                },
+                "labelName": {
+                  "const": "io.agora.agent.runtime.manifest",
+                  "type": "string"
+                },
+                "maxDepth": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 8,
+                  "type": "integer"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "unknownFieldsDetected": {
+                  "const": false,
+                  "type": "boolean"
+                },
+                "utf8ByteLength": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 65536,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "labelName",
+                "utf8ByteLength",
+                "maxDepth",
+                "duplicateKeysDetected",
+                "unknownFieldsDetected"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "admitted",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "traceId",
+            "status",
+            "immutableDigest",
+            "ociConfig",
+            "runtimeManifestLabel",
+            "runtimeManifest",
+            "runtimeManifestParsingEvidence",
+            "policyEvidence"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "IMAGE_REFERENCE_INVALID",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Image reference is invalid",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "code",
+                    "message",
+                    "retryable",
+                    "traceId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "IMAGE_NOT_FOUND",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Image was not found",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "code",
+                    "message",
+                    "retryable",
+                    "traceId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "IMAGE_NOT_ADMITTED",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "The image is not admitted by deployment policy",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "code",
+                    "message",
+                    "retryable",
+                    "traceId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "OCI_CONFIG_INVALID",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "OCI image config is invalid",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "code",
+                    "message",
+                    "retryable",
+                    "traceId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_MANIFEST_MISSING",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime Manifest is missing",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "code",
+                    "message",
+                    "retryable",
+                    "traceId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_MANIFEST_INVALID",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime Manifest is invalid",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "code",
+                    "message",
+                    "retryable",
+                    "traceId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "IMAGE_REGISTRY_UNAVAILABLE",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Image registry is unavailable",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "code",
+                    "message",
+                    "retryable",
+                    "traceId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "IMAGE_ADMISSION_POLICY_UNAVAILABLE",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Image admission policy is unavailable",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "code",
+                    "message",
+                    "retryable",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "status": {
+              "const": "rejected",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "traceId",
+            "status",
+            "error"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ImmutableOciDigestV1": {
+      "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+      "type": "string"
+    },
+    "OciDeclaredEnvironmentKeyV1": {
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])",
+      "type": "string"
+    },
+    "OciImageConfigV1": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "configDigest": {
+          "pattern": "^sha256:[a-f0-9]{64}(?![\\s\\S])",
+          "type": "string"
+        },
+        "declaredEnvKeys": {
+          "items": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "entrypoint": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "operatingSystem": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "user": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workingDirectory": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "configDigest",
+        "operatingSystem",
+        "architecture"
+      ],
+      "type": "object"
+    },
+    "OciImageReferenceV1": {
+      "pattern": "^(?=.{1,512}(?![\\s\\S]))(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[(?:(?:[A-Fa-f0-9]{1,4}:){7}[A-Fa-f0-9]{1,4}|(?:[A-Fa-f0-9]{1,4}:){1,7}:|(?:[A-Fa-f0-9]{1,4}:){1,6}:[A-Fa-f0-9]{1,4}|(?:[A-Fa-f0-9]{1,4}:){1,5}(?::[A-Fa-f0-9]{1,4}){1,2}|(?:[A-Fa-f0-9]{1,4}:){1,4}(?::[A-Fa-f0-9]{1,4}){1,3}|(?:[A-Fa-f0-9]{1,4}:){1,3}(?::[A-Fa-f0-9]{1,4}){1,4}|(?:[A-Fa-f0-9]{1,4}:){1,2}(?::[A-Fa-f0-9]{1,4}){1,5}|[A-Fa-f0-9]{1,4}:(?:(?::[A-Fa-f0-9]{1,4}){1,6})|:(?:(?::[A-Fa-f0-9]{1,4}){1,7}|:))\\])(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?(?![\\s\\S])",
+      "type": "string"
+    },
+    "RuntimeCapabilitySetV1": {
+      "additionalProperties": false,
+      "properties": {
+        "attachments": {
+          "default": false,
+          "type": "boolean"
+        },
+        "connection": {
+          "default": false,
+          "type": "boolean"
+        },
+        "modelSelection": {
+          "default": false,
+          "type": "boolean"
+        },
+        "resultFiles": {
+          "default": false,
+          "type": "boolean"
+        },
+        "supplementaryInstruction": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "RuntimeHealthV1": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "RuntimeManifestParsingEvidenceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "duplicateKeysDetected": {
+          "const": false,
+          "type": "boolean"
+        },
+        "labelName": {
+          "const": "io.agora.agent.runtime.manifest",
+          "type": "string"
+        },
+        "maxDepth": {
+          "exclusiveMinimum": 0,
+          "maximum": 8,
+          "type": "integer"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "unknownFieldsDetected": {
+          "const": false,
+          "type": "boolean"
+        },
+        "utf8ByteLength": {
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "labelName",
+        "utf8ByteLength",
+        "maxDepth",
+        "duplicateKeysDetected",
+        "unknownFieldsDetected"
+      ],
+      "type": "object"
+    },
+    "RuntimeManifestV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "capabilities": {
+              "additionalProperties": false,
+              "properties": {
+                "attachments": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "connection": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "modelSelection": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "resultFiles": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "supplementaryInstruction": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            },
+            "health": {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "interactionMode": {
+              "const": "self-managed",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "service": {
+              "additionalProperties": false,
+              "properties": {
+                "port": {
+                  "maximum": 65535,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "port"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "interactionMode",
+            "service",
+            "health"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "capabilities": {
+              "additionalProperties": false,
+              "properties": {
+                "attachments": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "connection": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "modelSelection": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "resultFiles": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "supplementaryInstruction": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            },
+            "health": {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "pattern": "^\\/(?!\\/)(?!(?:.*\\/)?\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[A-Za-z0-9._~/-]*(?![\\s\\S])",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "interactionMode": {
+              "const": "platform-adapter",
+              "type": "string"
+            },
+            "protocol": {
+              "const": "acp",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "service": {
+              "additionalProperties": false,
+              "properties": {
+                "port": {
+                  "maximum": 65535,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "port"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "interactionMode",
+            "protocol",
+            "service",
+            "health"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RuntimeServiceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "port"
+      ],
+      "type": "object"
+    },
+    "WorkloadBoundaryErrorV1": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "code",
+        "message",
+        "retryable",
+        "traceId"
+      ],
+      "type": "object"
+    },
+    "WorkloadFenceV1": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "WorkloadOpaqueIdV1": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "WorkloadRevisionV1": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "WorkloadSchemaVersionV1": {
+      "const": 1,
+      "type": "number"
+    },
+    "WorkloadTimestampV1": {
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+      "type": "string"
+    }
+  },
+  "$id": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/registry-manifest.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Infra Registry and Runtime Manifest Contracts V1"
+}

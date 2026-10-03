@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "completed",
+    "issue_number",
+    "cycle",
+    "execution_content_hash",
+    "start_sha",
+    "branch",
+    "summary",
+    "acceptance_criteria",
+    "blocker_proposals",
+    "human_handoffs",
+    "tests",
+    "not_run",
+    "human_validation_required",
+    "human_validation",
+    "risks"
+  ],
+  "properties": {
+    "completed": {
+      "type": "boolean"
+    },
+    "issue_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "cycle": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "execution_content_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "start_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "branch": {
+      "type": "string",
+      "pattern": "^codex/issue-[1-9][0-9]*-cycle-[1-9][0-9]*$"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "status",
+          "evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^AC-[1-9][0-9]*$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "not_applicable",
+              "blocked"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        }
+      }
+    },
+    "blocker_proposals": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "$ref": "#/$defs/blockerProposal"
+      }
+    },
+    "human_handoffs": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "$ref": "#/$defs/humanHandoff"
+      }
+    },
+    "tests": {
+      "$ref": "#/$defs/boundedList"
+    },
+    "not_run": {
+      "$ref": "#/$defs/boundedList"
+    },
+    "human_validation_required": {
+      "type": "boolean"
+    },
+    "human_validation": {
+      "$ref": "#/$defs/boundedList"
+    },
+    "risks": {
+      "$ref": "#/$defs/boundedList"
+    }
+  },
+  "$defs": {
+    "blockerProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposal_id",
+        "title",
+        "problem",
+        "deliverable",
+        "scope",
+        "acceptance_criteria",
+        "validation"
+      ],
+      "properties": {
+        "proposal_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "problem": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "deliverable": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "scope": {
+          "$ref": "#/$defs/nonEmptyBoundedList"
+        },
+        "acceptance_criteria": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "text"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^AC-[1-9][0-9]*$"
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              }
+            }
+          }
+        },
+        "validation": {
+          "$ref": "#/$defs/nonEmptyBoundedList"
+        }
+      }
+    },
+    "humanHandoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "handoff_id",
+        "reason",
+        "required_action"
+      ],
+      "properties": {
+        "handoff_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "permission_required",
+            "protected_path_change",
+            "requirements_conflict",
+            "credential_required",
+            "architecture_decision"
+          ]
+        },
+        "required_action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
+    "boundedList": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    },
+    "nonEmptyBoundedList": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    }
+  }
+}

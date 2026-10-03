@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image", "mode", "dataClaim", "candidateClaim", "issuer", "binding", "trust"],
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest"],
+      "properties": {
+        "repository": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._:/-]+$" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "mode": { "enum": ["candidate", "offline-commit"] },
+    "dataClaim": { "$ref": "#/$defs/name" },
+    "candidateClaim": { "$ref": "#/$defs/name" },
+    "issuer": { "$ref": "#/$defs/identifier" },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workerId", "agentId", "workloadRevision", "fence", "imageDigest"],
+      "properties": {
+        "workerId": { "$ref": "#/$defs/identifier" },
+        "agentId": { "$ref": "#/$defs/identifier" },
+        "workloadRevision": { "type": "integer", "minimum": 1 },
+        "fence": { "type": "integer", "minimum": 1 },
+        "imageDigest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keyId", "manifest", "publicKey"],
+      "properties": {
+        "keyId": { "$ref": "#/$defs/identifier" },
+        "manifest": { "$ref": "#/$defs/secret" },
+        "publicKey": { "$ref": "#/$defs/secret" }
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "not": { "const": "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+    },
+    "name": { "type": "string", "maxLength": 253, "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" },
+    "identifier": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^\\S+$" },
+    "secret": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "key"],
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "key": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9._-]+$", "not": { "enum": [".", ".."] } }
+      }
+    }
+  }
+}

@@ -1,0 +1,199 @@
+# Kubernetes 交付拓扑
+
+`deploy/helm/agent-infra` 提供 M1 Platform 的 Kubernetes 配置入口。它固定以下边界：
+
+- `platform-worker` 始终部署在 Workload Plane，并只获得 release namespace 内的 RBAC。
+- Web 与 `platform-api` 分别选择 `external` 或 `in-cluster`，两者不获得 Kubernetes API 凭证。
+- Platform migration 使用独立的 Helm pre-install/pre-upgrade Job，并复用
+  `platform-api` 的不可变镜像。
+- `enterpriseDirectorySync.enabled` 可选部署独立目录同步服务；其 migration Job 使用独立
+  DB Secret，运行 Pod 使用目录 DB、企微 Corp Secret、内部读取 Token 和 TLS Secret。
+  pre-install Job 不引用安装后才创建的 ServiceAccount。
+- 镜像只接受 `repository@sha256:<digest>`；values 不接受 Tag、内联数据库 URL 或密钥内容。
+- `platform-api` 只挂载版本化加密公钥，`platform-worker` 只挂载包含同一版本的解密
+  keyring，两个引用必须属于不同 Secret。
+- Identity、Image Registry、Model Catalog、Object Storage、Kubernetes Runtime 和 Workload
+  Route 只保存部署 Adapter binding，不限定部署产品或内部地址。
+
+所有 values 都由 `values.schema.json` fail closed 校验。默认值只用于展示结构；部署前必须替换
+镜像 Digest、Secret 引用、Adapter binding 和对外 Base URL。数据库兼容基线是 PostgreSQL 16
+与 `expand-contract-v1` migration 策略。
+
+`workloadTopology.enabled` 只用于拓扑验证。它渲染一个单副本 StatefulSet、无 Kubernetes API
+权限的 ServiceAccount、PVC、内部 RuntimeHost 端口、受控路由端口、NetworkPolicy 和 TLS
+Ingress。真实 Agent Workload 的创建、停止、升级、回滚和失败恢复仍由
+[#190](https://github.com/AgoraIO-Extensions/agent-infra/issues/190) 的
+KubernetesRuntimeAdapter 调谐；镜像发布与 release/rollback 校验属于
+[#334](https://github.com/AgoraIO-Extensions/agent-infra/issues/334)。
+
+目录服务由 [#889](https://github.com/AgoraIO-Extensions/agent-infra/issues/889) 独立交付。
+启用 Helm 部署时，设置 `enterpriseDirectorySync.enabled=true`、`platformApi.placement=in-cluster`、
+真实 Corp ID、不可变目录镜像
+Digest、已存在的独立运行数据库角色 `runtimeDatabaseRole`，并预先创建 values 中引用的五个 Secret：目录运行 DB URL、独立 migration DB URL、
+企微 Corp Secret、至少 32 字节的内部读取 Token 和服务端 TLS 证书/私钥。
+`enterpriseDirectorySync` 的 ClusterIP HTTPS Service 只允许同一 release 的 Platform API Pod
+入站；外置 API 不能启用该 Helm 目录部署。证书信任与 Token 消费由 Platform API 的独立
+装配负责；模板渲染不证明真实目录权限。
+
+根 Compose 的 `enterprise-directory` profile 需要在受控 env file 中提供
+`DIRECTORY_DATABASE_URL`、`DIRECTORY_MIGRATION_DATABASE_URL`、`DIRECTORY_RUNTIME_DATABASE_ROLE`、`DIRECTORY_ROOT_DEPARTMENT_ID`、
+`WECOM_CORP_ID`，以及 `DIRECTORY_READ_TOKEN_PATH`、`DIRECTORY_CORP_SECRET_PATH`、
+`DIRECTORY_TLS_CERT_PATH`、`DIRECTORY_TLS_KEY_PATH` 指向本机受控文件。运行入口是
+`docker compose --env-file <private-env-file> --profile enterprise-directory up -d enterprise-directory-sync`；
+它等待 PostgreSQL 健康和独立目录 migration 成功，再启动 HTTPS 服务。空环境仅可用于
+`docker compose --profile enterprise-directory config --quiet` 的结构检查，不能作为业务运行证据。
+
+## Helm 检查
+
+```bash
+helm lint deploy/helm/agent-infra \
+  --values deploy/environments/kind.values.yaml \
+  --strict
+deploy/kind/topology.sh render
+```
+
+## 不可变镜像与 release 检查
+
+从 clean Git commit 构建部署镜像并生成 image manifest：
+
+```bash
+IMAGE_REPOSITORY_PREFIX=registry.example/agent-infra \
+  PLATFORM=linux/amd64 \
+  node deploy/release/build-images.mjs /tmp/agent-infra-images.json
+```
+
+该入口对每个镜像执行两次无缓存构建并比较 Digest，检查最终镜像的 non-root 用户，并以只读
+根文件系统运行最小 probe。全部镜像通过后，入口使用现有 Docker 登录态发布唯一一份已验证
+artifact；发布 Tag 由 Commit SHA 与目标 Platform 共同限定，避免不同架构互相覆盖。入口回读
+Registry Digest 作为 image manifest 的权威引用；必须显式提供通用
+`IMAGE_REPOSITORY_PREFIX`，`PLATFORM` 也可设为 `linux/arm64`。仅本机测试 Registry 可设置
+`IMAGE_REGISTRY_INSECURE=true`，生产 Registry 必须使用 HTTPS。
+
+RuntimeHost 镜像额外通过[Codex Pilot 原生 HTTP/SSE probe](runtime/README.md#镜像验证)，
+对应证据与 image manifest 使用相同 commit 和镜像 Digest。
+
+自定义 Agent 的推荐父镜像使用同一入口的 `--custom-base-image` 模式独立构建、扫描、发布和
+验证继承，见 [Custom Agent Base Image](images/custom-agent-base/README.md)。它不进入 Platform
+Helm 的部署镜像清单。
+
+release、独立 migration 和 rollback 在部署前复用同一 Helm schema、模板与现有 migration
+检查：
+
+```bash
+node deploy/release/validate.mjs release /tmp/agent-infra-images.json deployment-values.yaml
+node deploy/release/validate.mjs migration /tmp/agent-infra-images.json deployment-values.yaml
+node deploy/release/validate.mjs rollback current-images.json target-images.json target-values.yaml
+```
+
+release 和 migration 要求启用 migration Job；rollback 要求目标是另一份不可变 image manifest，
+并关闭 migration Job。任一 image 引用与 manifest 不一致、配置无效或 migration 漂移都会在 Helm
+部署前失败。三种检查都必须在 clean checkout 中执行；release 和 migration 的 `HEAD` 必须等于
+image manifest 的 Commit，rollback 的 `HEAD` 必须等于 target image manifest 的 Commit，current
+image manifest 只标识当前已部署 release。
+
+## kind 拓扑验证
+
+### 单 Agent 标准模板发布
+
+部署运维包可独立装配 `createProductionSingleAgentTemplateReleaseAppV1`。它消费一个固定发布
+目标，不挂载普通 Owner 配置路由；权限边界见
+[工程 Spec §10.4](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#104-模板与自定义镜像升级)。
+以下是部署包内的装配片段，变量均由部署包从受控配置和 Adapter 装配结果提供：
+
+```ts
+import { createProductionSingleAgentTemplateReleaseAppV1 } from "@agent-infra/platform-api";
+import { serve } from "@hono/node-server";
+
+const release = createProductionSingleAgentTemplateReleaseAppV1({
+  ...deploymentAdapters,
+  target: releaseTarget,
+  loadReleaseBinding: () => loadCurrentReleaseBinding(releaseTarget.releaseId),
+});
+const server = serve({ fetch: release.app.fetch, hostname: "127.0.0.1", port: 3514 });
+
+async function close() {
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => error ? reject(error) : resolve()),
+  );
+  await release.close();
+}
+```
+
+`deploymentAdapters` 对应导出类型 `ProductionSingleAgentTemplateReleaseInputV1` 的其余字段：
+数据库 URL、实际 `IdentityAdapter`、固定镜像 repository、Registry 与准入策略、模板声明、模型
+目录、渠道策略和当前主体目录读取。数据库与 Registry 凭证只从部署 Secret 装配，不进入示例、
+日志或 HTTP 响应。部署包负责在进程退出时调用 `close()`。
+
+`releaseTarget` 必须固定 `schemaVersion: 1`、`releaseId`、`agentId`、`templateId`、
+`expectedConfigurationRevision`、`expectedImageDigest` 和 `targetImageDigest`。
+`loadCurrentReleaseBinding` 每次读取当前 `StandardTemplateReleaseDeploymentBindingV1`：
+`schemaVersion: 1`、非空 `revision`、相同 `target` 和具备运维资格的 `operatorIds`。
+变更目标或撤销资格时更新 binding revision；不得缓存旧身份或将请求中的主体、角色和目标当成
+部署绑定。监听地址为私有地址也仍须完成真实身份校验。
+
+操作者向 `POST /internal/ops/standard-template-releases/{releaseId}/apply` 发送经该部署身份
+Adapter 认证的请求，带 `Idempotency-Key` 和严格 JSON 请求体 `{"schemaVersion":1}`。
+HTTP `202` 仅表示新配置修订已提交；同一发布重试沿用原 key，Workload 验证、提升和任务恢复
+由 Worker 后续完成。仓库测试使用真实 HTTP/PostgreSQL 和受控身份、Registry transport；
+真实账号、Registry、Workload 与首通联合验收仍由
+[#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192) 跟进。
+
+### Workload 调谐
+
+生产 Worker 必须在 `platformWorker.deploymentModule` 显式配置部署镜像中已打包模块的绝对路径或 `file:///` URL，例如仓库基础镜像中的 `file:///app/dist/deployment.mjs`。生产 Helm 同时要求 `platformWorker.configurationModuleSecretRef` 指向受信任的相邻 `configuration.mjs`，并要求 `platformWorker.runtimeAuthSecretRef` 指向 Worker 独占的签名私钥与服务 token；只读挂载与 Secret 名称不能证明模块已实际导入或业务流程已运行。发布前必须在最终镜像与实际挂载下确认模块可加载并导出下述工厂。缺少任一引用时生产 Helm 渲染失败；Kind 拓扑仅运行占位进程，不代表生产 Worker 可用。Worker 加载部署包导出的
+`createPlatformWorkloadWorkerOptionsV1(signal: AbortSignal)`。部署包必须在装配前检查
+signal，并把它传给数据库、网络和其他异步装配操作；取消后须停止继续创建资源并清理已经
+创建的资源。收到 SIGINT 或 SIGTERM 后，Worker 会取消装配并停止已有循环；装配或停止未在
+10 秒内全部完成时进程以状态 1 强制退出。该截止可能截断 60 秒 admission 排空，后续实例
+依靠 Platform DB 中的持久化调谐状态恢复。
+
+部署包装配 namespace-scoped Kubernetes client、ImageRegistryAdapter、Worker-only
+Secret decryptor、资源和网络 Profile，
+以及 RuntimeHost Client 的核心与 capability 探测。探测必须绑定传入的 Agent、
+Workload revision 和固定 Service origin；`platform-adapter` 的核心探测必须满足
+[Runtime HLD](../docs/architecture/HLD-agent-runtime-M1.md#4-runtime-manifest)。
+Worker 不从 API RPC 获取期望状态，也不加载 Runtime Driver。
+
+部署包必须显式提供 `templateModelBindings`，将标准模板 ID、实际镜像 Digest、必需 `driver` 与模型协议
+绑定；支持标准 Agent 时还须装配 `modelCatalog` 和 `modelAccess`。升级已有部署包时需一起
+补齐此字段，缺失会在 Worker 打开 Store 前拒绝启动。仅支持自定义 Agent 的部署包传入空
+数组；标准 Agent 不会从模板名称或模型 ID 推断协议。绑定契约见
+[Runtime HLD §3.1](../docs/architecture/HLD-agent-runtime-M1.md#31-标准-runtime)。
+
+迁移 `0012` 保存每个 Agent 的调谐进度、候选与已验证修订。Worker 在 Agent 行锁内
+执行一个可重入步骤；多个 Worker 使用 `SKIP LOCKED` 处理不同 Agent。停止和停用
+先关闭路由再缩容，升级先停止旧 Pod，再复用 PVC 启动候选。预检拒绝保留旧版本，
+运行期候选失败则把已验证配置作为新的 Workload revision 调谐。新建失败清理完成后
+才记录创建失败。Secret 明文只在 Worker 解密和 Kubernetes Secret 写入期间存在。
+
+Agent 默认拒绝全部 egress，Profile 不接受 Owner 提交的任意网络规则。唯一受控出站
+属于[后续生产化加固](../docs/architecture/PLAN-M1-delivery-convergence.md)，当前
+Workload 调谐不开放直接 DNS 或可选代理出站，也不宣称完成外部模型与 Connection 出站能力。
+
+独立的生命周期与网络测试使用 kind v0.30.0、Kubernetes v1.33.4 和 Calico v3.30.3：
+
+```bash
+pnpm build
+bash deploy/kind/workload.sh
+```
+
+脚本创建临时 registry 与独立 kind cluster，构建两个不同 Digest 的合成测试镜像，
+验证真实 Kubernetes RBAC、NetworkPolicy、版本化 Secret、PVC、停止/重启、路由切换、
+失败候选回滚和资源清理，退出时删除该次测试资源。普通 `pnpm test` 不启动 kind；
+CI 的 Workload kind job 单独运行本测试。网络插件安装依据
+[Calico kind 安装说明](https://docs.tigera.io/calico/3.30/getting-started/kubernetes/kind)。
+
+### 部署拓扑
+
+安装 `kind v0.30.0`、Helm 3、kubectl 和 Docker 后运行：
+
+```bash
+deploy/kind/topology.sh up
+deploy/kind/topology.sh verify
+deploy/kind/topology.sh down
+```
+
+脚本使用固定的 Kubernetes `v1.33.4` node image Digest、独立临时 kubeconfig 和唯一集群名
+`agent-infra-topology`。fixture Secret 只包含不可用于真实系统的占位内容。验证只覆盖资源、存储、
+网络入口和 RBAC，不覆盖 [M1 工程架构 Spec](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md)
+定义的生命周期状态机或产品 E2E。

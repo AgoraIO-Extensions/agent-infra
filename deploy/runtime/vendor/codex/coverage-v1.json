@@ -1,0 +1,204 @@
+{
+  "schemaVersion": 1,
+  "upstreamCommit": "41e22fee981a63b3698df7ed36bad393cda24715",
+  "scope": "native operation/source attempts, protected independent Connection bootstrap and authenticated leaf evidence; not arbitrary syscalls",
+  "verification": "WIP current source: prior V1 focused tests apply to predecessor patch only; current fmt, locked metadata and Bazel lock update passed; new native compile/shared corpus execution pending",
+  "requiredPaths": [
+    {
+      "id": "process-attempt",
+      "path": "codex-rs/core/src/tools/orchestrator.rs",
+      "boundary": "run_attempt initial and sandbox retry"
+    },
+    {
+      "id": "shell-started",
+      "path": "codex-rs/core/src/exec.rs",
+      "boundary": "actual spawn and result"
+    },
+    {
+      "id": "unified-exec-started",
+      "path": "codex-rs/core/src/unified_exec/process_manager.rs",
+      "boundary": "actual local/exec-server process start"
+    },
+    {
+      "id": "patch-attempt",
+      "path": "codex-rs/core/src/tools/runtimes/apply_patch.rs",
+      "boundary": "verified native patch and shell interception; actual filesystem dispatch"
+    },
+    {
+      "id": "stdin-attempt",
+      "path": "codex-rs/core/src/unified_exec/process_manager.rs",
+      "boundary": "nonempty stdin, own callId/attemptRef and original parentAttemptRef"
+    },
+    {
+      "id": "background-result",
+      "path": "codex-rs/core/src/unified_exec/async_watcher.rs",
+      "boundary": "original exec attempt terminal result before model consumption"
+    },
+    {
+      "id": "mcp-attempt",
+      "path": "codex-rs/core/src/mcp_tool_call.rs",
+      "boundary": "controlled client actual dispatch and internal retry audit"
+    },
+    {
+      "id": "dynamic-attempt",
+      "path": "codex-rs/core/src/tools/handlers/dynamic.rs",
+      "boundary": "awaited client dynamic tool dispatch"
+    },
+    {
+      "id": "remaining-native-catalog",
+      "path": "codex-rs/core/src/tools/registry.rs",
+      "boundary": "explicit catalog/path classification before any unguarded handler execution"
+    },
+    {
+      "id": "source-spawn",
+      "path": "codex-rs/core/src/agent/control/spawn.rs",
+      "boundary": "original spawn/resume thread creation; spawn initial input retains original operation attempt"
+    },
+    {
+      "id": "source-submission",
+      "path": "codex-rs/core/src/session/mod.rs",
+      "boundary": "real submission ID; durable reservation before original queue acceptance"
+    },
+    {
+      "id": "source-routing",
+      "path": "codex-rs/core/src/session/turn_input.rs",
+      "boundary": "same-owner steer before actual append; actual Started or Steered routing fact"
+    },
+    {
+      "id": "source-gate-terminal",
+      "path": "codex-rs/core/src/tasks/mod.rs",
+      "boundary": "Started bind before child task/lifecycle; joined abort and completed cleanup before original terminal events"
+    },
+    {
+      "id": "source-owner-control",
+      "path": "codex-rs/core/src/native_sources/mod.rs",
+      "boundary": "immutable thread+Turn owner; retain provisional and unknown lifecycle until durable ACK"
+    },
+    {
+      "id": "source-control-dispatch",
+      "path": "codex-rs/core/src/native_sources/control.rs",
+      "boundary": "close/resume/interrupt owner and permit recheck at actual native control dispatch, including after queue wait"
+    },
+    {
+      "id": "control-queue-receipt",
+      "path": "codex-rs/core/src/thread_manager.rs",
+      "boundary": "original Interrupt/Shutdown send queue acceptance before started receipt"
+    },
+    {
+      "id": "hook-command",
+      "path": "codex-rs/hooks/src/engine/command_runner.rs",
+      "boundary": "real native hook run ID; actual spawn and process terminal; async capture of original task context"
+    },
+    {
+      "id": "hook-mcp",
+      "path": "codex-rs/core/src/native_hook_dispatch.rs",
+      "boundary": "real hook run ID with original thread/Turn; existing rmcp client actual dispatch and retry attempts"
+    },
+    {
+      "id": "hook-queued-source-occupancy",
+      "path": "codex-rs/core/src/native_hook_dispatch.rs",
+      "boundary": "original thread+Turn activity guard before original JoinSet scheduling; per-Turn drain before source terminal; cancelled queued hook bypasses other Turn semaphore wait"
+    },
+    {
+      "id": "connection-process-protection",
+      "path": "codex-rs/linux-sandbox/src/memory.rs",
+      "boundary": "private CLI Linux aarch64 TSYNC filter denies ptrace, process_vm_readv/writev, pidfd_getfd and perf_event_open after native hardening; actual installed marker required"
+    },
+    {
+      "id": "connection-bootstrap",
+      "path": "codex-rs/core/src/native_connection_bootstrap.rs",
+      "boundary": "strict nonsecret CLI profile and independent FD3 token bootstrap; no durable token/replay/log path"
+    },
+    {
+      "id": "connection-original-slot",
+      "path": "codex-rs/rmcp-client/src/native_connection/mod.rs",
+      "boundary": "fixed profile and independent identity verification; each original root turn refreshes current slot; old slots retain only nonsecret original metadata"
+    },
+    {
+      "id": "connection-private-http",
+      "path": "codex-rs/rmcp-client/src/native_connection/http.rs",
+      "boundary": "native local HTTP only, fixed HTTPS destination, no redirects/cookies/stored OAuth/auth fallback; actual final body and auth slot checked before permission and send"
+    },
+    {
+      "id": "connection-receipt",
+      "path": "codex-rs/rmcp-client/src/native_connection/evidence.rs",
+      "boundary": "matching actual authenticated response receipt stripped before model, independently authenticated calls GET, one bounded metadata-only retry awaited before original tool result release"
+    },
+    {
+      "id": "connection-v2-callback",
+      "path": "codex-rs/core/src/native_mcp_dispatch.rs",
+      "boundary": "descriptor-bound durable V2 intent/started/outcome and metadata-only evidence; no operation replay or counter/time rewrites"
+    }
+  ],
+  "requiredControls": [
+    "immutable original IDs",
+    "new retry attemptRef",
+    "durable intent before permit",
+    "started after actual dispatch",
+    "durable result before model/retry",
+    "async stop/status",
+    "EOF/timeout/malformed poison",
+    "fd3 CLOEXEC before helpers",
+    "tool FD/proc/Darwin negative evidence",
+    "unknown without reexecution",
+    "original native tools remain usable",
+    "full original source request echo",
+    "immutable source owner is not permission",
+    "real submission ID before enqueue",
+    "Started bind before task and start lifecycle",
+    "Steered ACK-only after original append",
+    "joined task and cleanup before terminal",
+    "reuse completed child thread through new actual Turn",
+    "unknown source held until durable terminal",
+    "hook original context preserved across asynchronous execution",
+    "scheduled asynchronous hooks counted before original task terminal, including semaphore wait",
+    "canonical strict V1/V2 corpus parity and duplicate-key rejection before Value parsing",
+    "RFC8785 digest over final business arguments via pinned serde_json_canonicalizer",
+    "current independent calls:read for original record; no Platform proxy",
+    "same-response RPC ID, receipt, nonce, digest and original identity binding",
+    "Darwin hardening-only never enables Connection credentials"
+  ],
+  "unsupportedPaths": [
+    {
+      "path": "codex-rs/core/src/tasks/mod.rs",
+      "condition": "child task has no original source reservation",
+      "behavior": "fail closed before task.run and action-capable lifecycle; includes unhanded V2 mailbox/recovery/automatic entries"
+    },
+    {
+      "path": "codex-rs/hooks/src/legacy_notify.rs",
+      "condition": "legacy notify has no original native hook run ID and confirmed terminal",
+      "behavior": "explicit unsupported; no synthesized identity"
+    },
+    {
+      "path": "codex-rs/core/src/native_hook_dispatch.rs",
+      "condition": "session/startup hook has no trusted original task context",
+      "behavior": "missing factory fails closed"
+    },
+    {
+      "path": "codex-rs/core/src/native_connection_bootstrap.rs",
+      "condition": "Darwin hardening-only or Linux non-aarch64",
+      "behavior": "Connection credentials unavailable; no isolation acceptance implied"
+    },
+    {
+      "path": "codex-rs/core/src/native_hook_dispatch.rs",
+      "condition": "Connection tool invoked through hook_mcp identity rather than fixed connection/tool original operation identity",
+      "behavior": "fail closed before Connection dispatch; dedicated hook identity mapping not implemented"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_connection/evidence.rs",
+      "condition": "process loss or missing original receipt",
+      "behavior": "retain unverified; no recovery input, fabricated receipt, Provider replay, or TS record GET"
+    }
+  ],
+  "pendingRuntimeEvidence": [
+    "release binary build, startup probe SHA, release pin, SBOM and image",
+    "derived binary inherited FD3, exec inheritance, proc reopen and Darwin/Linux isolation negatives",
+    "full original user-input spawn/send_input source queue/gate/cancel races against derived native binary",
+    "remote exec-server actual write receipt beyond queued Accepted status",
+    "hosted MCP upload pre-call dispatch and non-stdio/websocket dynamic writers",
+    "remaining enabled native catalog classification and actual leaf validation",
+    "new native Connection and isolation code compilation, focused lint and all shared corpus execution; a guarded focused test attempt stopped during dependency compilation at the 2 GiB disk guard",
+    "Linux aarch64 binary/image random-sentinel cross-process memory negatives including actual perf_event_open",
+    "real independent OAuth identities and receipt/calls endpoints; assumed consumer contract does not establish #432 delivery"
+  ]
+}

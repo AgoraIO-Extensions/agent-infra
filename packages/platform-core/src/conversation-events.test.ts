@@ -1,0 +1,560 @@
+import { describe, expect, it } from "vitest";
+import { conversationEventConformanceV1 } from "./conversation.conformance.ts";
+import {
+	ConversationEventError,
+	type ConversationEventStateV1,
+	type ConversationEventTransactionPortV1,
+	type ConversationEventUseCaseV1,
+	createConversationEventUseCaseV1,
+	parseConversationPersistedEventPayloadV1,
+	publicTaskStatusEventV1,
+} from "./conversation-events.js";
+import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
+
+const event = {
+	schemaVersion: 1 as const,
+	conversationId: "conversation_events",
+	executionId: "execution_events",
+	sessionGeneration: 3,
+	deliveryFence: 5,
+	adapterEventKey: "adapter_event_1",
+	runtimeCursor: "runtime_cursor_1",
+	occurredAt: "2026-09-04T00:00:00.000Z",
+	event: { type: "text.delta" as const, text: "Hello" },
+};
+
+conversationEventConformanceV1("Fake", async () => {
+	let nextEventId = 1;
+	const fake = new FakeConversationEventsV1({
+		fileScope: {
+			actorId: "actor",
+			agentId: "agent",
+			channelId: "web",
+			conversationId: "conversation_event_fixture",
+		},
+		conversationId: "conversation_event_fixture",
+		executionId: "execution_event_fixture",
+		sessionGeneration: 3,
+		deliveryFence: 5,
+		newId: () => `event_fixture_${nextEventId++}`,
+	});
+	fake.seedFile({
+		fileId: "file_fixture",
+		objectRef: "00000000-0000-4000-8000-000000000001",
+		kind: "result",
+		idempotencyKey: "result_fixture",
+		actorId: "actor",
+		agentId: "agent",
+		channelId: "web",
+		conversationId: "conversation_event_fixture",
+		executionId: "execution_event_fixture",
+		messageId: null,
+		sessionGeneration: 3,
+		status: "available",
+		descriptor: {
+			name: "fixture.txt",
+			mediaType: "text/plain",
+			sizeBytes: 16,
+			sha256: "0".repeat(64),
+		},
+		objectVersion: "version",
+		etag: "etag",
+		createdAt: "2026-09-04T00:00:00Z",
+		updatedAt: "2026-09-04T00:00:00Z",
+		expiresAt: "2026-09-04T01:00:00Z",
+		revision: 1,
+	});
+	let loseNextResponse = false;
+	const events: ConversationEventUseCaseV1 = {
+		async persist(command) {
+			const decision = await fake.persist(command);
+			if (loseNextResponse) {
+				loseNextResponse = false;
+				throw new Error("Injected response loss");
+			}
+			return decision;
+		},
+	};
+	return {
+		events,
+		failNextCommit() {
+			fake.failNextCommit();
+		},
+		loseNextResponseAfterCommit() {
+			loseNextResponse = true;
+		},
+		async snapshot() {
+			const snapshot = fake.snapshot();
+			return {
+				events: snapshot.events.length,
+				conversationCursor: snapshot.lastConversationCursor,
+				executionSequence: fake.executionSequence(),
+				runtimeCursor: fake.runtimeCursor(),
+			};
+		},
+		async close() {},
+	};
+});
+
+function activeState(): ConversationEventStateV1 {
+	return {
+		conversation: {
+			conversationId: event.conversationId,
+			sessionGeneration: event.sessionGeneration,
+			lastConversationCursor: 0,
+		},
+		execution: {
+			executionId: event.executionId,
+			conversationId: event.conversationId,
+			sessionGeneration: event.sessionGeneration,
+			deliveryFence: event.deliveryFence,
+			lastSequence: 0,
+		},
+		existingEvent: undefined,
+	};
+}
+
+describe("Conversation event ingestion", () => {
+	it("allocates once and replays the original event before stale-fence classification", async () => {
+		const events = new FakeConversationEventsV1({
+			conversationId: event.conversationId,
+			executionId: event.executionId,
+			sessionGeneration: event.sessionGeneration,
+			deliveryFence: event.deliveryFence,
+			newId: () => "event_1",
+		});
+
+		const accepted = await events.persist(event);
+		if (accepted.outcome !== "accepted") {
+			throw new Error("Expected the first event to be accepted");
+		}
+		expect(accepted).toEqual({
+			outcome: "accepted",
+			event: {
+				schemaVersion: 1,
+				eventId: "event_1",
+				conversationId: event.conversationId,
+				executionId: event.executionId,
+				sequence: 1,
+				conversationCursor: 1,
+				occurredAt: event.occurredAt,
+				event: event.event,
+			},
+		});
+
+		expect(
+			await events.persist({
+				...event,
+				deliveryFence: event.deliveryFence - 1,
+			}),
+		).toEqual({
+			outcome: "replayed",
+			event: accepted.event,
+		});
+		expect(events.snapshot().lastConversationCursor).toBe(1);
+	});
+
+	it("accepts the current zero delivery fence without exposing private cursor metadata", async () => {
+		const events = new FakeConversationEventsV1({
+			conversationId: event.conversationId,
+			executionId: event.executionId,
+			sessionGeneration: event.sessionGeneration,
+			deliveryFence: 0,
+			newId: () => "event_zero_fence",
+		});
+
+		const accepted = await events.persist({ ...event, deliveryFence: 0 });
+		if (accepted.outcome !== "accepted") {
+			throw new Error("Expected the zero-fence event to be accepted");
+		}
+		expect(accepted).toMatchObject({
+			outcome: "accepted",
+			event: {
+				eventId: "event_zero_fence",
+				sequence: 1,
+				conversationCursor: 1,
+			},
+		});
+		expect(accepted.event).not.toHaveProperty("runtimeCursor");
+	});
+
+	it("rejects a first stale event without creating an event or advancing the cursor", async () => {
+		const events = new FakeConversationEventsV1({
+			conversationId: event.conversationId,
+			executionId: event.executionId,
+			sessionGeneration: event.sessionGeneration,
+			deliveryFence: event.deliveryFence,
+		});
+
+		await expect(
+			events.persist({
+				...event,
+				sessionGeneration: event.sessionGeneration - 1,
+			}),
+		).resolves.toEqual({ outcome: "stale" });
+		await expect(
+			events.persist({
+				...event,
+				deliveryFence: event.deliveryFence - 1,
+			}),
+		).resolves.toEqual({ outcome: "stale" });
+		expect(events.snapshot()).toEqual({
+			events: [],
+			lastConversationCursor: 0,
+		});
+	});
+
+	it("uses deterministic Fake IDs for equal text at distinct adapter event keys", async () => {
+		const events = new FakeConversationEventsV1({
+			conversationId: event.conversationId,
+			executionId: event.executionId,
+			sessionGeneration: event.sessionGeneration,
+			deliveryFence: event.deliveryFence,
+		});
+
+		const first = await events.persist(event);
+		const second = await events.persist({
+			...event,
+			adapterEventKey: "adapter_event_2",
+			runtimeCursor: "runtime_cursor_2",
+		});
+		if (first.outcome !== "accepted" || second.outcome !== "accepted") {
+			throw new Error("Expected both normalized events to be accepted");
+		}
+		expect(second.event).toMatchObject({
+			eventId: "event_2",
+			sequence: 2,
+			conversationCursor: 2,
+			event: event.event,
+		});
+		expect(first.event.eventId).toBe("event_1");
+		expect(events.snapshot().events).toEqual([first.event, second.event]);
+	});
+
+	it("rejects raw native fields and conflicting reuse of an adapter event key", async () => {
+		const events = new FakeConversationEventsV1({
+			conversationId: event.conversationId,
+			executionId: event.executionId,
+			sessionGeneration: event.sessionGeneration,
+			deliveryFence: event.deliveryFence,
+		});
+
+		await expect(
+			events.persist({
+				...event,
+				event: {
+					...event.event,
+					nativeSessionId: "private_runtime_session",
+				} as never,
+			}),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persist({
+				...event,
+				event: {
+					type: "execution.status",
+					status: "unknown",
+					reason: "STOP_CONFIRMATION_TIMEOUT",
+				} as never,
+			}),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persist({ ...event, source: "platform" } as never),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persist({
+				...event,
+				event: {
+					type: "model.selection.fell_back",
+					modelOptionId: "model_primary",
+					reasoningLevel: "medium",
+					reason: "selection_unavailable",
+				},
+			} as never),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persist({
+				...event,
+				transition: {
+					executionStatus: "completed",
+					conversationStatus: "ready",
+				},
+			} as never),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persist({
+				...event,
+				event: { type: "execution.status", status: "completed" },
+				transition: {
+					executionStatus: "processing",
+					conversationStatus: "active",
+				},
+			} as never),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await events.persist(event);
+		await expect(
+			events.persist({
+				...event,
+				event: { type: "text.delta", text: "changed" },
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		expect(events.snapshot().lastConversationCursor).toBe(1);
+	});
+
+	it("fails closed when a transaction returns a forged event decision", async () => {
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async (_request, decide) => {
+				decide(activeState());
+				return {
+					outcome: "accepted",
+					event: {
+						schemaVersion: 1,
+						eventId: "event_forged",
+						conversationId: "conversation_other",
+						executionId: event.executionId,
+						sequence: 1,
+						conversationCursor: 1,
+						occurredAt: event.occurredAt,
+						event: event.event,
+					},
+				} as never;
+			},
+		};
+		const events = createConversationEventUseCaseV1(
+			{ transaction },
+			{ newId: () => "event_1" },
+		);
+
+		await expect(events.persist(event)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	});
+
+	it("maps a transaction adapter failure to unavailable after command validation", async () => {
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async () => {
+				throw new ConversationEventError("invalid_input");
+			},
+		};
+		const events = createConversationEventUseCaseV1({ transaction });
+
+		await expect(events.persist(event)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	});
+
+	it("fails closed when a transaction mutates the Core event plan", async () => {
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async (_request, decide) => {
+				const plan = decide(activeState());
+				if (Object.hasOwn(plan, "outcome")) {
+					throw new Error("Expected an accepted event plan");
+				}
+				const mutablePlan = plan as {
+					event: { conversationId: string };
+				};
+				mutablePlan.event.conversationId = "conversation_other";
+				return { outcome: "accepted", event: mutablePlan.event } as never;
+			},
+		};
+		const events = createConversationEventUseCaseV1(
+			{ transaction },
+			{ newId: () => "event_1" },
+		);
+
+		await expect(events.persist(event)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	});
+
+	it("fails closed when a transaction returns a raw replay event", async () => {
+		const persisted = {
+			schemaVersion: 1 as const,
+			eventId: "event_replayed",
+			conversationId: event.conversationId,
+			executionId: event.executionId,
+			sequence: 1,
+			conversationCursor: 1,
+			occurredAt: event.occurredAt,
+			event: event.event,
+		};
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async (request, decide) => {
+				decide({
+					...activeState(),
+					existingEvent: {
+						event: persisted,
+						eventDigest: request.eventDigest,
+					},
+				});
+				return {
+					outcome: "replayed",
+					event: {
+						...persisted,
+						event: {
+							...persisted.event,
+							nativeSessionId: "private_runtime_session",
+						},
+					},
+				} as never;
+			},
+		};
+		const events = createConversationEventUseCaseV1({ transaction });
+
+		await expect(events.persist(event)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	});
+
+	it("rejects a Platform fallback forged as an existing Runtime event", async () => {
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async (request, decide) => {
+				const forged = {
+					schemaVersion: 1 as const,
+					eventId: "event_forged_fallback",
+					conversationId: event.conversationId,
+					executionId: event.executionId,
+					sequence: 1,
+					conversationCursor: 1,
+					occurredAt: event.occurredAt,
+					event: {
+						type: "model.selection.fell_back" as const,
+						modelOptionId: "model_primary",
+						reasoningLevel: "medium",
+						reason: "selection_unavailable" as const,
+					},
+				};
+				decide({
+					...activeState(),
+					existingEvent: {
+						event: forged,
+						eventDigest: request.eventDigest,
+					},
+				} as never);
+				return { outcome: "replayed", event: forged } as never;
+			},
+		};
+		const events = createConversationEventUseCaseV1({ transaction });
+
+		await expect(events.persist(event)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	});
+});
+
+describe("platform-owned task status reasons", () => {
+	it("publishes only bounded reasons for the matching state", () => {
+		expect(
+			publicTaskStatusEventV1({
+				isTask: true,
+				status: "failed",
+				reason: "TASK_WAIT_TIMEOUT",
+			}),
+		).toEqual({
+			type: "task.status",
+			status: "failed",
+			reason: "TASK_WAIT_TIMEOUT",
+		});
+		expect(
+			publicTaskStatusEventV1({
+				isTask: true,
+				status: "failed",
+				reason: "private runtime text",
+			}),
+		).toEqual({
+			type: "task.status",
+			status: "failed",
+		});
+		expect(
+			publicTaskStatusEventV1({
+				isTask: false,
+				status: "failed",
+				reason: "TASK_WAIT_TIMEOUT",
+			}),
+		).toBeNull();
+	});
+
+	it("reads bounded failure and stop reasons while rejecting invalid pairs", () => {
+		expect(
+			parseConversationPersistedEventPayloadV1({
+				type: "task.status",
+				status: "unknown",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+			}),
+		).toEqual({
+			type: "task.status",
+			status: "unknown",
+			reason: "STOP_CONFIRMATION_TIMEOUT",
+		});
+		expect(
+			parseConversationPersistedEventPayloadV1({
+				type: "task.status",
+				status: "failed",
+				reason: "AGENT_UNAVAILABLE",
+			}),
+		).toEqual({
+			type: "task.status",
+			status: "failed",
+			reason: "AGENT_UNAVAILABLE",
+		});
+		for (const payload of [
+			{
+				type: "task.status",
+				status: "processing",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+			},
+			{
+				type: "task.status",
+				status: "unknown",
+				reason: "private runtime text",
+			},
+			{ type: "task.status", status: "waiting", reason: "TASK_WAIT_TIMEOUT" },
+			{
+				type: "execution.status",
+				status: "unknown",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+			},
+		])
+			expect(() => parseConversationPersistedEventPayloadV1(payload)).toThrow(
+				ConversationEventError,
+			);
+	});
+});
+
+describe("waiting control event ownership", () => {
+	it("reads the platform cancellation event without exposing its internal reason", () => {
+		const payload = publicTaskStatusEventV1({
+			isTask: true,
+			status: "cancelled",
+			reason: "AUTHORIZATION_REVOKED",
+		});
+		expect(payload).toEqual({ type: "task.status", status: "cancelled" });
+		expect(parseConversationPersistedEventPayloadV1(payload)).toEqual(payload);
+	});
+
+	it("rejects a platform task event forged as a previously persisted Runtime event", async () => {
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async (request, decide) => {
+				const forged = {
+					schemaVersion: 1 as const,
+					eventId: "event_forged_task",
+					conversationId: event.conversationId,
+					executionId: event.executionId,
+					sequence: 1,
+					conversationCursor: 1,
+					occurredAt: event.occurredAt,
+					event: { type: "task.status" as const, status: "cancelled" as const },
+				};
+				decide({
+					...activeState(),
+					existingEvent: { event: forged, eventDigest: request.eventDigest },
+				} as never);
+				return { outcome: "replayed", event: forged } as never;
+			},
+		};
+		const events = createConversationEventUseCaseV1({ transaction });
+		await expect(events.persist(event)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	});
+});

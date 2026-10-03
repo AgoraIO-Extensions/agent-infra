@@ -1,0 +1,25 @@
+{
+	"provenance": {
+		"protocolVersion": 2,
+		"codexVersion": "0.153.0",
+		"upstreamTag": "rust-v0.153.0",
+		"upstreamCommit": "41e22fee981a63b3698df7ed36bad393cda24715",
+		"schemaSha256": "sha256:d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a"
+	},
+	"artifacts": {
+		"amd64": {
+			"name": "codex-x86_64-unknown-linux-musl",
+			"archiveSha256": "sha256:35a82c153d83959de09c2cb84ac70ba69d05788aeeb08d4a95ca68e39f86680e",
+			"executableSha256": "sha256:fce635028842bfe9257140e8b7d53162732945e2f356fc35225be0702b4974be"
+		},
+		"arm64": {
+			"name": "codex-aarch64-unknown-linux-musl",
+			"archiveSha256": "sha256:cc2c0c365d4d51c18163bba93cce5b922836900ca867f5bcf89b0e714a952a53",
+			"executableSha256": "sha256:c92824b2e068b8cb15eecba45271f7e3dd35a5b3929383593284a36074d40aec"
+		}
+	},
+	"legal": {
+		"LICENSE": "sha256:d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
+		"NOTICE": "sha256:9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915"
+	}
+}

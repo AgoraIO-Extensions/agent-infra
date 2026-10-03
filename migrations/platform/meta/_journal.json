@@ -1,0 +1,223 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1788086787945,
+      "tag": "0000_platform_infrastructure",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788092286715,
+      "tag": "0001_application_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788247137478,
+      "tag": "0002_agent_persistence",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788435756848,
+      "tag": "0003_secret_records",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788509799806,
+      "tag": "0004_conversation_execution",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788522609767,
+      "tag": "0005_conversation_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788603181370,
+      "tag": "0006_secret_candidate_activation",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788624140845,
+      "tag": "0007_secret_key_rotation",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788671305002,
+      "tag": "0008_conversation_model_selection",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788702289211,
+      "tag": "0009_conversation_event_sources",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788757593205,
+      "tag": "0010_conversation_event_persistence_time",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788765830613,
+      "tag": "0011_conversation_message_delivery_failure",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788786782153,
+      "tag": "0012_workload_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789460914953,
+      "tag": "0013_file_authority",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789460914954,
+      "tag": "0014_configuration_v2",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1789460914955,
+      "tag": "0015_trusted_task_authorization",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1789460914956,
+      "tag": "0016_conversation_generation_tombstones",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1789460914957,
+      "tag": "0017_wecom_text",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789460914958,
+      "tag": "0018_wecom_setup",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789819160039,
+      "tag": "0019_trusted_task_authorization_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790158201320,
+      "tag": "0020_task_boundary_generation_binding",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790663754117,
+      "tag": "0021_browser_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1790686705954,
+      "tag": "0022_wecom_application_setup",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1790699393053,
+      "tag": "0023_wecom_replacement_probe",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790724093107,
+      "tag": "0024_application_targets",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790792430787,
+      "tag": "0029_platform_user_disables",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1790844089732,
+      "tag": "0030_relay_key_authority_compatibility",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790889832289,
+      "tag": "0031_accepted_execution_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790893402698,
+      "tag": "0032_typed_task_principal",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790895708046,
+      "tag": "0033_typed_generation_principal",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790898575204,
+      "tag": "0034_task_status_event_source",
+      "breakpoints": true
+    }
+  ]
+}

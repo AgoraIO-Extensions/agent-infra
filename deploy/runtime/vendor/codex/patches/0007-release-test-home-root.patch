@@ -1,0 +1,23 @@
+diff --git a/codex-rs/test-binary-support/lib.rs b/codex-rs/test-binary-support/lib.rs
+index 4adefbc71f0cf83592ebeb2e041de0bf586297de..2d4589ab624523cf479940f08abc51cc5a5ca5d7 100644
+--- a/codex-rs/test-binary-support/lib.rs
++++ b/codex-rs/test-binary-support/lib.rs
+@@ -44,7 +44,17 @@ where
+         }
+         TestBinaryDispatchMode::Skip => None,
+         TestBinaryDispatchMode::InstallAliases => {
+-            let codex_home = match tempfile::Builder::new().prefix(codex_home_prefix).tempdir() {
++            let mut builder = tempfile::Builder::new();
++            builder.prefix(codex_home_prefix);
++            let directory = match std::env::var_os("CODEX_TEST_HOME_ROOT") {
++                Some(root) => {
++                    let root = Path::new(&root);
++                    assert!(root.is_absolute(), "CODEX_TEST_HOME_ROOT must be absolute");
++                    builder.tempdir_in(root)
++                }
++                None => builder.tempdir(),
++            };
++            let codex_home = match directory {
+                 Ok(codex_home) => codex_home,
+                 Err(error) => panic!("failed to create test CODEX_HOME: {error}"),
+             };

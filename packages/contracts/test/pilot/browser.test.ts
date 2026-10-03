@@ -1,0 +1,632 @@
+import { describe, expect, it } from "vitest";
+import { createDocument } from "zod-openapi";
+
+import {
+	AgentApplicationCreateRequestV1Schema,
+	AgentApplicationProjectionV1Schema,
+	AgentApplicationUpdateRequestV1Schema,
+	AgentConfigurationProjectionV1Schema,
+	AgentConfigurationUpdateRequestV1Schema,
+	AgentLifecycleCommandRequestV1Schema,
+	AgentProjectionV1Schema,
+	BrowserSessionProjectionV1Schema,
+	ExecutionDetailProjectionV1Schema,
+	MessageCommandRequestV1Schema,
+	MessageProjectionV1Schema,
+	PlatformAuditProjectionV1Schema,
+	PlatformAuditProjectionV2Schema,
+	pilotBrowserOpenApiPathsV1,
+	pilotBrowserOpenApiPathsV2,
+	WecomSetupCredentialsV1Schema,
+} from "../../src/pilot/browser.js";
+
+const requiredOperations = [
+	"getCurrentSession",
+	"listAgentApplications",
+	"createAgentApplication",
+	"getAgentApplication",
+	"updateAgentApplication",
+	"withdrawAgentApplication",
+	"listPendingAgentApplications",
+	"decideAgentApplication",
+	"listAgents",
+	"getAgent",
+	"updateAgentConfiguration",
+	"commandAgentLifecycle",
+	"listConversations",
+	"createConversation",
+	"getConversation",
+	"submitMessage",
+	"regenerateAnswer",
+	"stopExecution",
+	"updateConversationModelSelection",
+	"getExecutionDetail",
+	"listPlatformAudit",
+	"listWecomReceipts",
+	"getWecomReceipt",
+	"abandonUnknownWecomDelivery",
+	"getWecomBotConnection",
+	"beginWecomSetup",
+	"getWecomSetup",
+	"submitWecomCredentials",
+	"cancelWecomSetup",
+	"getWecomAppConnection",
+	"beginWecomAppSetup",
+	"getWecomAppSetup",
+	"submitWecomAppCredentials",
+	"cancelWecomAppSetup",
+];
+
+const validApplication = {
+	schemaVersion: 1,
+	name: "Release assistant",
+	description: "Helps the release team",
+	source: { kind: "standard", templateId: "codex" },
+	coOwnerIds: ["user-co-owner"],
+	availability: [{ kind: "organization", organizationId: "org-platform" }],
+	modelConfiguration: {
+		options: [
+			{
+				optionId: "model-primary",
+				endpointId: "endpoint-approved",
+				modelId: "gpt-5",
+				reasoningLevels: ["medium", "high"],
+				credentialValue: "one-time-input",
+			},
+		],
+		defaultOptionId: "model-primary",
+		defaultReasoningLevel: "medium",
+	},
+	actions: [
+		{ providerId: "github", actionId: "issues.read", actionVersion: "v3" },
+	],
+	environment: [{ name: "WORKSPACE_NAME", value: "release" }],
+	secrets: [{ name: "MODEL_API_KEY", value: "one-time-input" }],
+};
+
+describe("Pilot browser contracts", () => {
+	it("returns a bounded WeCom setup state that can be submitted unchanged", () => {
+		const response =
+			pilotBrowserOpenApiPathsV1["/api/v1/agents/{agentId}/wecom-setup"].post
+				.responses["200"].content["application/json"].schema;
+		for (const state of ["s", "s".repeat(1024), "", "s".repeat(1025)]) {
+			const expected = state.length > 0 && state.length <= 1024;
+			expect(
+				response.safeParse({
+					sessionId: "setup",
+					agentId: "agent",
+					configurationRevision: 1,
+					expiresAt: "2026-09-21T00:00:00Z",
+					status: "awaiting_input",
+					state,
+					qrAvailable: false,
+					qrUnavailableReason: "authorization_correlation_unverified",
+				}).success,
+			).toBe(expected);
+			expect(
+				WecomSetupCredentialsV1Schema.safeParse({
+					state,
+					botId: "bot",
+					secret: "one-time-secret-input",
+					takeoverConfirmed: true,
+				}).success,
+			).toBe(expected);
+		}
+	});
+
+	it("publishes application setup with a callback URL and write-only credentials", () => {
+		const paths = pilotBrowserOpenApiPathsV1;
+		const begun =
+			paths["/api/v1/agents/{agentId}/wecom-app-setup"].post.responses["200"]
+				.content["application/json"].schema;
+		expect(
+			begun.safeParse({
+				sessionId: "setup",
+				agentId: "agent",
+				configurationRevision: 1,
+				expiresAt: "2026-09-21T00:00:00Z",
+				status: "awaiting_input",
+				state: "one-time-state",
+				callbackUrl: "https://example.invalid/callbacks/wecom/setup",
+			}).success,
+		).toBe(true);
+		const document = createDocument({
+			openapi: "3.1.0",
+			info: { title: "Pilot browser API", version: "1.0.0" },
+			paths,
+		});
+		const credentials =
+			document.paths?.[
+				"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials"
+			]?.post?.requestBody;
+		expect(JSON.stringify(credentials)).toContain('"writeOnly":true');
+		for (const path of [
+			"/api/v1/agents/{agentId}/wecom-app",
+			"/api/v1/agents/{agentId}/wecom-app-setup",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel",
+		])
+			expect(document.paths).toHaveProperty(path);
+	});
+
+	it("publishes the complete approved management and text-conversation journey", () => {
+		const document = createDocument({
+			openapi: "3.1.0",
+			info: { title: "Pilot browser API", version: "1.0.0" },
+			paths: pilotBrowserOpenApiPathsV1,
+		});
+		const operations = Object.values(document.paths ?? {})
+			.flatMap((path) => Object.values(path ?? {}))
+			.flatMap((operation) =>
+				operation && typeof operation === "object" && "operationId" in operation
+					? [operation.operationId]
+					: [],
+			);
+
+		expect(operations.sort()).toEqual(requiredOperations.sort());
+		for (const path of Object.values(document.paths ?? {})) {
+			for (const operation of Object.values(path ?? {})) {
+				if (
+					!operation ||
+					typeof operation !== "object" ||
+					!("responses" in operation)
+				)
+					continue;
+				expect(operation.responses).toHaveProperty("500");
+				expect(JSON.stringify(operation.responses["500"])).toContain(
+					"INTERNAL_ERROR",
+				);
+				if ("requestBody" in operation) {
+					expect(operation.requestBody).toMatchObject({ required: true });
+				}
+			}
+		}
+		const serialized = JSON.stringify(document);
+		for (const forbiddenProperty of [
+			"issuer",
+			"subject",
+			"identityContext",
+			"kubernetesObject",
+			"connectionId",
+			"secretPlaintext",
+		]) {
+			expect(serialized).not.toContain(`"${forbiddenProperty}"`);
+		}
+		expect(
+			AgentProjectionV1Schema.shape.interactionUrl.safeParse(
+				"javascript:alert(1)",
+			).success,
+		).toBe(false);
+		expect(
+			AgentProjectionV1Schema.shape.interactionUrl.safeParse(
+				"https://user:password@agent.example.test",
+			).success,
+		).toBe(false);
+		expect(
+			AgentProjectionV1Schema.shape.interactionUrl.safeParse(
+				"https://agent.example.test?access_token=secret",
+			).success,
+		).toBe(false);
+		expect(
+			AgentProjectionV1Schema.shape.interactionUrl.safeParse(
+				"https://agent.example.test/#token=secret",
+			).success,
+		).toBe(false);
+		expect(
+			AgentProjectionV1Schema.shape.interactionUrl.safeParse(
+				"https://agent.example.test/chat",
+			).success,
+		).toBe(true);
+	});
+
+	it("accepts product inputs while rejecting caller-supplied identity and authorization", () => {
+		expect(
+			AgentApplicationCreateRequestV1Schema.parse(validApplication),
+		).toEqual(validApplication);
+		expect(
+			AgentApplicationCreateRequestV1Schema.safeParse({
+				...validApplication,
+				actorId: "caller-controlled",
+			}).success,
+		).toBe(false);
+		expect(
+			MessageCommandRequestV1Schema.safeParse({
+				schemaVersion: 1,
+				text: "ship it",
+				actorId: "caller-controlled",
+				connectionId: "another-users-connection",
+			}).success,
+		).toBe(false);
+		expect(
+			AgentApplicationCreateRequestV1Schema.safeParse({
+				...validApplication,
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/agent:v1",
+					interactionMode: "self-managed",
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			AgentApplicationCreateRequestV1Schema.safeParse({
+				...validApplication,
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/agent:v1",
+					interactionMode: "platform-adapter",
+					identityResponsibility: "platform-managed",
+				},
+			}).success,
+		).toBe(false);
+	});
+
+	it("keeps trusted identity and secret values out of browser projections", () => {
+		expect(
+			BrowserSessionProjectionV1Schema.safeParse({
+				schemaVersion: 1,
+				user: {
+					userId: "user-1",
+					displayName: "Ada",
+					roles: ["employee"],
+					issuer: "internal-idp",
+					subject: "upstream-subject",
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			AgentConfigurationUpdateRequestV1Schema.safeParse({
+				schemaVersion: 1,
+				secretPlaintext: "not-a-supported-field",
+			}).success,
+		).toBe(false);
+		expect(
+			AgentConfigurationProjectionV1Schema.safeParse({
+				owners: [{ userId: "user-1", displayName: "Ada", roles: ["employee"] }],
+				availability: [],
+				modelOptions: [],
+				defaultModelOptionId: null,
+				defaultReasoningLevel: null,
+				actions: [],
+				environment: [],
+				channels: [],
+				secrets: [
+					{ name: "MODEL_API_KEY", isSet: true, version: 1, value: "leak" },
+				],
+			}).success,
+		).toBe(false);
+		expect(
+			AgentApplicationUpdateRequestV1Schema.safeParse({
+				...validApplication,
+				secrets: undefined,
+			}).success,
+		).toBe(true);
+		expect(
+			AgentApplicationCreateRequestV1Schema.safeParse({
+				...validApplication,
+				secrets: undefined,
+			}).success,
+		).toBe(false);
+	});
+
+	it("models channel binding and custom image upgrades without exposing credentials", () => {
+		expect(
+			AgentConfigurationUpdateRequestV1Schema.parse({
+				schemaVersion: 1,
+				channels: [
+					{
+						kind: "wecom_bot",
+						enabled: true,
+						bindingReference: "binding-1",
+					},
+				],
+			}),
+		).toMatchObject({ schemaVersion: 1 });
+		expect(
+			AgentConfigurationUpdateRequestV1Schema.safeParse({
+				schemaVersion: 1,
+				channels: [{ kind: "wecom_bot", enabled: true }],
+			}).success,
+		).toBe(false);
+		expect(
+			AgentConfigurationUpdateRequestV1Schema.parse({
+				schemaVersion: 1,
+				channels: [{ kind: "wecom_bot", enabled: false }],
+			}),
+		).toMatchObject({ schemaVersion: 1 });
+		expect(
+			AgentLifecycleCommandRequestV1Schema.parse({
+				schemaVersion: 1,
+				command: "upgrade_custom_image",
+				imageReference: "registry.example/agent:v2",
+			}),
+		).toMatchObject({ command: "upgrade_custom_image" });
+		expect(
+			AgentLifecycleCommandRequestV1Schema.safeParse({
+				schemaVersion: 1,
+				command: "upgrade_custom_image",
+			}).success,
+		).toBe(false);
+	});
+
+	it("carries an approved application through the full management status journey", () => {
+		const application = {
+			schemaVersion: 1,
+			applicationId: "application-1",
+			agentId: "agent-1",
+			name: "Release assistant",
+			description: "Helps the release team",
+			source: { kind: "standard", templateId: "codex" },
+			status: "creating",
+			resourceProfile: {
+				profileId: "standard-medium",
+				displayName: "Standard medium",
+				estimatedResources: {
+					cpuMillicores: 2000,
+					memoryMiB: 4096,
+					storageGiB: 20,
+				},
+			},
+			configuration: {
+				owners: [{ userId: "user-1", displayName: "Ada", roles: ["employee"] }],
+				availability: [],
+				modelOptions: [],
+				defaultModelOptionId: null,
+				defaultReasoningLevel: null,
+				actions: [],
+				environment: [],
+				channels: [{ kind: "web", status: "available" }],
+				secrets: [],
+			},
+			submittedAt: "2026-08-28T10:00:00Z",
+			decision: {
+				decidedAt: "2026-08-28T10:01:00Z",
+				reason: null,
+			},
+		};
+
+		expect(AgentApplicationProjectionV1Schema.parse(application)).toEqual(
+			application,
+		);
+		expect(
+			AgentApplicationCreateRequestV1Schema.safeParse({
+				...validApplication,
+				resourceProfile: application.resourceProfile,
+			}).success,
+		).toBe(false);
+		expect(
+			AgentApplicationProjectionV1Schema.safeParse({
+				...application,
+				resourceProfile: {
+					...application.resourceProfile,
+					estimatedResources: {
+						...application.resourceProfile.estimatedResources,
+						cpuMillicores: 0,
+					},
+				},
+			}).success,
+		).toBe(false);
+	});
+
+	it("projects answer versions and actual model or Connection execution records", () => {
+		expect(
+			MessageProjectionV1Schema.parse({
+				messageId: "message-answer-2",
+				role: "assistant",
+				text: "Regenerated answer",
+				status: "completed",
+				executionId: "execution-2",
+				replyToMessageId: "message-user-1",
+				answerVersion: 2,
+				isCurrentAnswer: true,
+				error: null,
+				createdAt: "2026-08-28T10:02:00Z",
+			}),
+		).toMatchObject({ answerVersion: 2, isCurrentAnswer: true });
+		for (const code of [
+			"ORIGINAL_RESPONSE_NOT_STARTED",
+			"ORIGINAL_RESPONSE_ALREADY_FINISHED",
+			"AUTHORIZATION_REVOKED",
+			"EXECUTION_FAILED",
+		] as const) {
+			expect(
+				MessageProjectionV1Schema.parse({
+					messageId: `message-${code}`,
+					role: "user",
+					text: "Supplementary instruction",
+					status: "failed",
+					executionId: "execution-2",
+					replyToMessageId: null,
+					answerVersion: null,
+					isCurrentAnswer: null,
+					error: {
+						schemaVersion: 1,
+						code,
+						message: "The message could not be delivered",
+						retryable: false,
+						traceId: "trace-message",
+					},
+					createdAt: "2026-08-28T10:02:00Z",
+				}),
+			).toMatchObject({ status: "failed", error: { code } });
+		}
+		expect(
+			MessageProjectionV1Schema.safeParse({
+				messageId: "message-invalid-error",
+				role: "assistant",
+				text: "Completed answer",
+				status: "completed",
+				executionId: "execution-2",
+				replyToMessageId: "message-user-1",
+				answerVersion: 1,
+				isCurrentAnswer: true,
+				error: {
+					schemaVersion: 1,
+					code: "EXECUTION_FAILED",
+					message: "Contradictory error",
+					retryable: false,
+					traceId: "trace-message",
+				},
+				createdAt: "2026-08-28T10:02:00Z",
+			}).success,
+		).toBe(false);
+		expect(
+			MessageProjectionV1Schema.safeParse({
+				messageId: "message-missing-error",
+				role: "user",
+				text: "Supplementary instruction",
+				status: "failed",
+				executionId: "execution-2",
+				replyToMessageId: null,
+				answerVersion: null,
+				isCurrentAnswer: null,
+				error: null,
+				createdAt: "2026-08-28T10:02:00Z",
+			}).success,
+		).toBe(false);
+		expect(
+			ExecutionDetailProjectionV1Schema.parse({
+				schemaVersion: 1,
+				executionId: "execution-2",
+				conversationId: "conversation-1",
+				status: "completed",
+				processSummary: [
+					{
+						occurredAt: "2026-08-28T10:01:00Z",
+						kind: "model_call",
+						modelId: "gpt-5",
+						reasoningLevel: "medium",
+						status: "succeeded",
+						summary: "Model call completed",
+					},
+					{
+						occurredAt: "2026-08-28T10:01:30Z",
+						kind: "connection_call",
+						callId: "call-1",
+						providerId: "github",
+						accountDisplay: "org/repository",
+						actionId: "issues.read",
+						actionVersion: "v3",
+						status: "succeeded",
+						summary: "Issue read completed",
+					},
+					{
+						occurredAt: "2026-08-28T10:01:45Z",
+						kind: "agent_summary",
+						category: "connection_call",
+						callId: "call-2",
+						summary: "Runtime reported a delegated tool call",
+					},
+				],
+				startedAt: "2026-08-28T10:00:00Z",
+				finishedAt: "2026-08-28T10:02:00Z",
+				error: null,
+			}),
+		).toMatchObject({ status: "completed" });
+		expect(
+			ExecutionDetailProjectionV1Schema.safeParse({
+				schemaVersion: 1,
+				executionId: "execution-failed",
+				conversationId: "conversation-1",
+				status: "failed",
+				processSummary: [],
+				startedAt: "2026-08-28T10:00:00Z",
+				finishedAt: "2026-08-28T10:02:00Z",
+				error: null,
+			}).success,
+		).toBe(false);
+		expect(
+			ExecutionDetailProjectionV1Schema.safeParse({
+				schemaVersion: 1,
+				executionId: "execution-completed",
+				conversationId: "conversation-1",
+				status: "completed",
+				processSummary: [],
+				startedAt: "2026-08-28T10:00:00Z",
+				finishedAt: "2026-08-28T10:02:00Z",
+				error: {
+					schemaVersion: 1,
+					code: "EXECUTION_FAILED",
+					message: "Contradictory error",
+					retryable: false,
+					traceId: "trace-execution",
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			PlatformAuditProjectionV1Schema.parse({
+				schemaVersion: 1,
+				auditId: "audit-1",
+				action: "agent.configuration.updated",
+				actor: {
+					userId: "user-1",
+					displayName: "Ada",
+					roles: ["employee"],
+				},
+				subjectType: "configuration",
+				subjectId: "agent-1",
+				result: "succeeded",
+				summary: "Agent configuration updated",
+				occurredAt: "2026-08-28T10:02:00Z",
+				traceId: "trace-audit-1",
+			}),
+		).toMatchObject({ action: "agent.configuration.updated" });
+	});
+
+	it("accepts exact system audit actors and rejects invalid variants", () => {
+		const audit = {
+			schemaVersion: 2,
+			auditId: "audit-system-1",
+			action: "agent.workload.observed",
+			actor: { kind: "system", actorId: "platform-worker" },
+			subjectType: "agent",
+			subjectId: "agent-1",
+			result: "succeeded",
+			summary: "Agent workload observed",
+			occurredAt: "2026-08-28T10:02:00Z",
+			traceId: "trace-audit-system-1",
+		};
+
+		expect(PlatformAuditProjectionV2Schema.parse(audit).actor).toEqual({
+			kind: "system",
+			actorId: "platform-worker",
+		});
+		expect(PlatformAuditProjectionV1Schema.safeParse(audit).success).toBe(
+			false,
+		);
+		expect(
+			PlatformAuditProjectionV2Schema.parse({
+				...audit,
+				actor: {
+					userId: "user-1",
+					displayName: "Ada",
+					roles: ["system_admin"],
+				},
+			}).actor,
+		).toEqual({
+			userId: "user-1",
+			displayName: "Ada",
+			roles: ["system_admin"],
+		});
+		for (const actor of [
+			{ kind: "unknown", actorId: "platform-worker" },
+			{ kind: "system" },
+			{
+				kind: "system",
+				actorId: "platform-worker",
+				userId: "user-1",
+				displayName: "Ada",
+				roles: ["system_admin"],
+			},
+			{ kind: "system", actorId: "platform-worker", displayName: "Worker" },
+		]) {
+			expect(
+				PlatformAuditProjectionV2Schema.safeParse({ ...audit, actor }).success,
+			).toBe(false);
+		}
+		expect(pilotBrowserOpenApiPathsV1).not.toHaveProperty(
+			"/api/v2/admin/audit",
+		);
+		expect(pilotBrowserOpenApiPathsV2).toHaveProperty("/api/v2/admin/audit");
+	});
+});

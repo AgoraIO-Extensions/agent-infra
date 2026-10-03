@@ -1,0 +1,181 @@
+name: agent-infra
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    init: true
+    environment:
+      POSTGRES_DB: agent_infra
+      POSTGRES_PASSWORD: agent_infra_local
+      POSTGRES_USER: agent_infra
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - local-topology-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_infra -d agent_infra"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  object-storage:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
+    init: true
+    environment:
+      MINIO_ROOT_PASSWORD: agent_infra_local_storage
+      MINIO_ROOT_USER: agent_infra
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - local-topology-object-storage:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    ports:
+      - "3001:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  platform-api:
+    build:
+      context: .
+      dockerfile: apps/platform-api/Dockerfile
+    init: true
+    read_only: true
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/healthz').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  platform-worker:
+    build:
+      context: .
+      dockerfile: apps/platform-worker/Dockerfile
+    init: true
+    read_only: true
+
+  enterprise-directory-migration:
+    build:
+      context: .
+      dockerfile: apps/enterprise-directory-sync/Dockerfile
+    command: ["node", "scripts/migrate.mjs"]
+    init: true
+    read_only: true
+    profiles: ["enterprise-directory"]
+    environment:
+      DIRECTORY_MIGRATION_DATABASE_URL: ${DIRECTORY_MIGRATION_DATABASE_URL:-}
+      DIRECTORY_RUNTIME_DATABASE_ROLE: ${DIRECTORY_RUNTIME_DATABASE_ROLE:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  enterprise-directory-sync:
+    build:
+      context: .
+      dockerfile: apps/enterprise-directory-sync/Dockerfile
+    init: true
+    read_only: true
+    profiles: ["enterprise-directory"]
+    environment:
+      DIRECTORY_ROOT_DEPARTMENT_ID: ${DIRECTORY_ROOT_DEPARTMENT_ID:-1}
+      WECOM_CORP_ID: ${WECOM_CORP_ID:-}
+      DIRECTORY_DATABASE_URL: ${DIRECTORY_DATABASE_URL:-}
+      DIRECTORY_READ_TOKEN_FILE: /run/secrets/directory_read_token
+      WECOM_CORP_SECRET_FILE: /run/secrets/directory_corp_secret
+      DIRECTORY_TLS_CERT_FILE: /run/secrets/directory_tls_cert
+      DIRECTORY_TLS_KEY_FILE: /run/secrets/directory_tls_key
+    secrets:
+      - directory_read_token
+      - directory_corp_secret
+      - directory_tls_cert
+      - directory_tls_key
+    depends_on:
+      enterprise-directory-migration:
+        condition: service_completed_successfully
+
+  connection-api:
+    build:
+      context: .
+      dockerfile: apps/connection-api/Dockerfile
+    init: true
+    read_only: true
+    ports:
+      - "3002:3002"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3002/healthz').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  agent-runtime-host:
+    profiles: ["runtime"]
+    build:
+      context: .
+      dockerfile: apps/agent-runtime-host/Dockerfile
+      args:
+        SOURCE_COMMIT: ${SOURCE_COMMIT:-unknown}
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+
+  custom-agent-base:
+    profiles: ["runtime"]
+    build:
+      context: .
+      dockerfile: deploy/images/custom-agent-base/Dockerfile
+    read_only: true
+    network_mode: none
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /workspace:size=16m,uid=1000,gid=1000,mode=0700
+
+volumes:
+  local-topology-object-storage:
+  local-topology-postgres:
+
+secrets:
+  directory_read_token:
+    file: ${DIRECTORY_READ_TOKEN_PATH:-/dev/null}
+  directory_corp_secret:
+    file: ${DIRECTORY_CORP_SECRET_PATH:-/dev/null}
+  directory_tls_cert:
+    file: ${DIRECTORY_TLS_CERT_PATH:-/dev/null}
+  directory_tls_key:
+    file: ${DIRECTORY_TLS_KEY_PATH:-/dev/null}

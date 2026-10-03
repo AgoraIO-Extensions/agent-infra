@@ -1,0 +1,85 @@
+# Sanitized values shape for the production Worker deployment.
+# Replace repository names, immutable digests and Secret names in a private file.
+# Do not put Secret values, kubeconfig data or private keys in this file.
+images:
+  web:
+    repository: ghcr.io/example/agent-infra-web
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  platformApi:
+    repository: ghcr.io/example/agent-infra-platform-api
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  platformWorker:
+    repository: ghcr.io/example/agent-infra-platform-worker
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  enterpriseDirectorySync:
+    repository: ghcr.io/example/agent-infra-enterprise-directory-sync
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  runtimeHost:
+    repository: ghcr.io/example/agent-infra-runtime-host
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  pullPolicy: IfNotPresent
+database:
+  engine: postgresql
+  majorVersion: 16
+  compatibility: expand-contract-v1
+  secretRef:
+    name: platform-database
+    key: url
+keys:
+  encryptionPublicKey:
+    version: key-v1
+    secretRef:
+      name: platform-encryption-public-key
+      key: public.pem
+  workerDecryptionKeyring:
+    versions: [key-v1]
+    secretRef:
+      name: worker-decryption-keyring
+      key: keyring.pem
+adapters:
+  identity: deployment-identity
+  imageRegistry: deployment-image-registry
+  modelCatalog: deployment-model-catalog
+  objectStorage: deployment-object-storage
+  kubernetesRuntime: in-cluster
+  workloadRoute: ingress
+web:
+  placement: external
+  externalBaseUrl: https://web.example.invalid
+platformApi:
+  placement: external
+  externalBaseUrl: https://api.example.invalid
+  deploymentModule: deployment-platform-api
+platformWorker:
+  configurationModuleSecretRef:
+    name: platform-worker-configuration
+    key: configuration.mjs
+  runtimeAuthSecretRef:
+    name: platform-worker-runtime-auth
+    privateKeyKey: runtime-grant.pem
+    serviceTokenKey: service-token
+  deploymentModule: file:///app/dist/deployment.mjs
+  replicas: 1
+enterpriseDirectorySync:
+  enabled: false
+  rootDepartmentId: 1
+  corpId: ""
+  runtimeDatabaseRole: ""
+  databaseSecretRef: { name: directory-database, key: url }
+  migrationDatabaseSecretRef: { name: directory-migration-database, key: url }
+  corpSecretRef: { name: directory-wecom, key: corp-secret }
+  readTokenSecretRef: { name: directory-read-token, key: token }
+  tlsSecretRef: { name: directory-tls, certKey: tls.crt, privateKeyKey: tls.key }
+migration:
+  enabled: true
+  backoffLimit: 1
+workloadTopology:
+  enabled: false
+  storageSize: 1Gi
+  service: { runtimePort: 3003, routePort: 8080 }
+  route:
+    enabled: false
+    ingressClassName: nginx
+    ingressNamespace: ingress-nginx
+    host: agent.example.invalid
+    tlsSecretName: agent-runtime-tls
