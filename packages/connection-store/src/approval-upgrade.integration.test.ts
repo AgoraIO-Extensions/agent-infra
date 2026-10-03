@@ -101,6 +101,7 @@ describe("compatible approval upgrade", () => {
 						if (String(url) === "https://oauth.agoralab.co/oauth/token")
 							return Response.json({
 								access_token: "rotated-access-fixture",
+								token_type: "Bearer",
 								refresh_token: "rotated-refresh-fixture",
 								expires_in: 3600,
 							});
