@@ -743,7 +743,7 @@ describe("functional conversation screen", () => {
 		expect(screen.getByRole("region", { name: "最近对话" })).toBeTruthy();
 		expect(await composer()).toBe(input);
 		expect(input.value).toBe("Scope draft");
-		expect(streams).toHaveLength(1);
+		await waitFor(() => expect(streams).toHaveLength(1));
 		expect(requests.every((request) => request.method === "GET")).toBe(true);
 	});
 

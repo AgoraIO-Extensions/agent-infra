@@ -65,6 +65,12 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		setInternalHistory(value);
 		props.onViewChange?.(value ? "history" : "conversation");
 	}
+	function selectConversation(id: string | undefined) {
+		setRecentOpen(false);
+		setInternalHistory(false);
+		historyToggle.current?.focus();
+		onConversationChange(id);
+	}
 	const agentQuery = useQuery({
 		queryKey,
 		enabled: Boolean(identityKey && agentId) && !denied,
@@ -269,12 +275,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 							agentId={agentId}
 							identityKey={identityKey}
 							current={conversationId}
-							onSelect={(id) => {
-								setRecentOpen(false);
-								setInternalHistory(false);
-								historyToggle.current?.focus();
-								onConversationChange(id);
-							}}
+							onSelect={selectConversation}
 							onDenied={deny}
 						/>
 					) : (
@@ -282,12 +283,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 							agentId={agentId}
 							conversationId={conversationId}
 							identityKey={identityKey}
-							onSelect={(id) => {
-								setRecentOpen(false);
-								setInternalHistory(false);
-								historyToggle.current?.focus();
-								onConversationChange(id);
-							}}
+							onSelect={selectConversation}
 						/>
 					)}
 					<div className="history-scope-actions">
