@@ -118,6 +118,7 @@ const bindings = [
 		templateId: "template_01",
 		imageDigest: `sha256:${"a".repeat(64)}`,
 		driver: "codex" as const,
+		reasoningLevels: ["low"],
 		protocol: "openai-responses-v1" as const,
 	},
 ];
@@ -180,6 +181,8 @@ beforeEach(async () => {
 		encrypt: (binding, keyValue) =>
 			encryptor.encrypt({ ...binding, plaintext: keyValue }),
 		candidates: createAgentDefaultRelayKeyCandidatesV1({
+			relayEndpointId: "endpoint_01",
+			relayBaseUrl: "https://relay.example.test/v1",
 			modelCatalog: { revision: "catalog_3", load: async () => catalog() },
 			templateBindings: bindings,
 			validation: {

@@ -84,9 +84,10 @@ export interface ProductionPlatformApiInputV1
 	/** Public wrapping keys only. Worker private keys belong to the Worker deployment. */
 	readonly encryptionKeys: unknown;
 	/** Exact existing template/image/Driver bindings for default Key validation. */
-	readonly agentDefaultRelayKeyTemplateBindings?: Parameters<
-		typeof createAgentDefaultRelayKeyCandidatesV1
-	>[0]["templateBindings"];
+	readonly agentDefaultRelayKeyPolicy?: Pick<
+		Parameters<typeof createAgentDefaultRelayKeyCandidatesV1>[0],
+		"templateBindings" | "relayEndpointId" | "relayBaseUrl"
+	>;
 	/** Approved fixed billing profile and deployment-owned CA/TLS transport only. */
 	readonly personalRelayKeyValidation?: Parameters<
 		typeof createPersonalRelayKeyValidatorV1
@@ -280,7 +281,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(personalRelayKeys &&
 		relayKeyEncryptor &&
 		input.personalRelayKeyValidation &&
-		input.agentDefaultRelayKeyTemplateBindings
+		input.agentDefaultRelayKeyPolicy
 			? {
 					agentDefaultRelayKeys: {
 						currentIdentity: personalRelayKeys.currentIdentity,
@@ -288,7 +289,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 							relayKeyEncryptor.encrypt({ ...binding, plaintext: keyValue }),
 						candidates: createAgentDefaultRelayKeyCandidatesV1({
 							modelCatalog: input.modelCatalog,
-							templateBindings: input.agentDefaultRelayKeyTemplateBindings,
+							...input.agentDefaultRelayKeyPolicy,
 							validation: input.personalRelayKeyValidation,
 						}),
 					},

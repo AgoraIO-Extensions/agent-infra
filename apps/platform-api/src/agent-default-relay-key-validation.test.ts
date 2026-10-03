@@ -7,6 +7,7 @@ const binding = {
 	templateId: "template_01",
 	imageDigest: `sha256:${"a".repeat(64)}`,
 	driver: "codex" as const,
+	reasoningLevels: ["low"],
 	protocol: "openai-responses-v1" as const,
 };
 function fixture(mode = "valid") {
@@ -30,6 +31,8 @@ function fixture(mode = "valid") {
 		);
 	});
 	const candidates = createAgentDefaultRelayKeyCandidatesV1({
+		relayEndpointId: "endpoint_01",
+		relayBaseUrl: "https://relay.example.test/v1",
 		validation: {
 			profile: "sub2api-key-billing-v1",
 			billingUrl: "https://sub2api.la3.agoralab.co/v1/sub2api/billing",
@@ -45,7 +48,10 @@ function fixture(mode = "valid") {
 				endpoints: [
 					{
 						endpointId: "endpoint_01",
-						baseUrl: "https://relay.example.test/v1",
+						baseUrl:
+							mode === "different route"
+								? "https://relay.example.test/other"
+								: "https://relay.example.test/v1",
 						origin: "https://relay.example.test",
 						protocol:
 							mode === "incompatible"
@@ -56,7 +62,7 @@ function fixture(mode = "valid") {
 						capabilities: {
 							streaming: true,
 							tools: true,
-							reasoningLevels: ["low"],
+							reasoningLevels: ["low", "high"],
 						},
 						allowedModels: ["gpt-5"],
 						available: true,
@@ -76,6 +82,12 @@ describe("default Key visibility with controlled Relay responses", () => {
 			await fixture("incompatible").candidates(key, configuration),
 		).toEqual([]);
 	});
+	it("never sends the submitted Key to another catalog route", async () => {
+		const f = fixture("different route");
+		expect(await f.candidates(key, configuration)).toEqual([]);
+		expect(f.fetcher.mock.calls).toHaveLength(1);
+	});
+
 	it.each(["invalid key", "redirect", "unavailable", "malformed", "stale"])(
 		"rejects %s with sanitized errors",
 		async (mode) => {

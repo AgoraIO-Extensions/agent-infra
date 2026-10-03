@@ -194,6 +194,8 @@ describe("standard contract artifacts", () => {
 			"/api/v2/agents/{agentId}/application-use-grants/{applicationId}",
 			"/api/v2/agents/{agentId}/commands",
 			"/api/v2/agents/{agentId}/configuration",
+			"/api/v2/agents/{agentId}/default-relay-key",
+			"/api/v2/agents/{agentId}/default-relay-key/candidates",
 			"/api/v2/agents/{agentId}/lifecycle",
 			"/api/v2/agents/{agentId}/state",
 			"/api/v2/applications",

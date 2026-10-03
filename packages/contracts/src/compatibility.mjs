@@ -2732,6 +2732,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isPersonalApiAgentReadAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyV2OpenApiAddition(previous, current) &&
+			!isAgentDefaultRelayKeyV2OpenApiAddition(previous, current) &&
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isTaskHttpV1SseOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
