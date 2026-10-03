@@ -932,6 +932,23 @@ export class PostgresConversationExecutionTransactionV1
 					control.workerId,
 				);
 				await transaction`
+					insert into platform.audit_events
+						(id, trace_id, actor_type, actor_id, action, target_type, target_id,
+						 outcome, request_id, agent_id, details)
+					select ${randomUUID()}, ${request.command.traceId}, 'system', ${control.workerId},
+						'task.status.changed', 'execution', ${execution.execution_id}, 'succeeded',
+						${request.command.requestId}, ${execution.agent_id}, ${transaction.json(
+							{
+								status: "cancelled",
+								reason: "TASK_CANCELLED",
+							},
+						)}
+					where not exists (
+						select 1 from platform.audit_events
+						where target_id = ${execution.execution_id} and action = 'task.status.changed'
+					)
+				`;
+				await transaction`
      insert into platform.conversation_stops
       (execution_id, stop_request_id, status, created_at, updated_at)
      values (${execution.execution_id}, ${randomUUID()}, 'completed', ${occurredAt}, ${occurredAt})
