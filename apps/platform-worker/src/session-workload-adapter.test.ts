@@ -130,7 +130,7 @@ describe("session sandbox workload adapter", () => {
 		).resolves.toMatchObject({ metadata: { name: allocation.pvcName } });
 	});
 
-	it("rejects PVC storage drift and does not replace an owned Pod", async () => {
+	it("rejects PVC storage drift", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 		await adapter.apply(allocation);
@@ -142,6 +142,18 @@ describe("session sandbox workload adapter", () => {
 				accessModes: ["ReadWriteMany"],
 			};
 		}
+		await expect(adapter.apply(allocation)).rejects.toMatchObject({
+			code: "conflict",
+		});
+	});
+
+	it("rejects an owned Pod with an extra container", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const pod = await client.read("Pod", allocation.podName);
+		if (!pod?.spec) throw new Error("missing pod spec");
+		pod.spec.containers.push({ name: "unexpected", image: "busybox" });
 		await expect(adapter.apply(allocation)).rejects.toMatchObject({
 			code: "conflict",
 		});

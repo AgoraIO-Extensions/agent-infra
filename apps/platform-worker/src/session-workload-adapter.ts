@@ -210,6 +210,14 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 	const expectedContainer = expectedSpec?.containers?.[0];
 	if (!currentSpec || !expectedSpec || !currentContainer || !expectedContainer)
 		return false;
+	if (
+		currentSpec.containers.length !== expectedSpec.containers.length ||
+		(currentSpec.initContainers?.length ?? 0) !==
+			(expectedSpec.initContainers?.length ?? 0) ||
+		(currentSpec.ephemeralContainers?.length ?? 0) !==
+			(expectedSpec.ephemeralContainers?.length ?? 0)
+	)
+		return false;
 	const normalizeEnv = (env: typeof expectedContainer.env) =>
 		(env ?? [])
 			.map(({ name, value, valueFrom }) => ({ name, value, valueFrom }))
@@ -219,6 +227,9 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		currentSpec.automountServiceAccountToken ===
 			expectedSpec.automountServiceAccountToken &&
 		currentSpec.restartPolicy === expectedSpec.restartPolicy &&
+		currentSpec.hostNetwork === expectedSpec.hostNetwork &&
+		currentSpec.hostPID === expectedSpec.hostPID &&
+		currentSpec.hostIPC === expectedSpec.hostIPC &&
 		currentContainer.name === expectedContainer.name &&
 		currentContainer.image === expectedContainer.image &&
 		currentContainer.imagePullPolicy === expectedContainer.imagePullPolicy &&
