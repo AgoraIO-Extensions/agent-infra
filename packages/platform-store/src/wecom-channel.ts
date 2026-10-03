@@ -74,7 +74,8 @@ export class PostgresWecomChannelV1
 {
 	readonly #sql: ReturnType<typeof postgres>;
 	readonly #databaseUrl: string;
-	readonly #cancelSettlements = new Set<Promise<void>>();
+	readonly #acceptSettlements = new Set<Promise<void>>();
+	#closed = false;
 	readonly #management: PostgresAgentManagementTransactionV1;
 	readonly #connectionHolderId: string | null;
 	readonly #observe: (status: WecomDeliveryStatusV1) => void;
@@ -96,11 +97,12 @@ export class PostgresWecomChannelV1
 		this.#management = new PostgresAgentManagementTransactionV1(options);
 	}
 	async close() {
+		this.#closed = true;
 		const pools = await Promise.allSettled([
 			this.#sql.end(),
 			this.#management.close(),
 		]);
-		const cancellations = await Promise.allSettled(this.#cancelSettlements);
+		const cancellations = await Promise.allSettled(this.#acceptSettlements);
 		for (const result of [...pools, ...cancellations])
 			if (result.status === "rejected") throw result.reason;
 	}
@@ -146,12 +148,22 @@ export class PostgresWecomChannelV1
 		execute: Parameters<WecomChannelStorePortV1["accept"]>[1],
 		callerSignal?: AbortSignal,
 	): Promise<WecomAcceptanceV1> {
+		if (this.#closed) throw new TaskAuthorizationStoreError();
 		const deadlineAt = Date.now() + 10_000;
 		const deadline = AbortSignal.timeout(10_000);
 		const signal = callerSignal
 			? AbortSignal.any([callerSignal, deadline])
 			: deadline;
 		signal.throwIfAborted();
+		while (this.#acceptSettlements.size >= 5)
+			await awaitTaskAuthorizationDependencyV1(
+				() => Promise.race(this.#acceptSettlements),
+				signal,
+			);
+		if (this.#closed) throw new TaskAuthorizationStoreError();
+		// Keep the backend exclusive until every in-flight cancellation has settled.
+		// A shared pool releases it before begin's Promise continuation can run.
+		const admissionSql = postgres(this.#databaseUrl, { max: 1 });
 		const cancelSql = postgres(this.#databaseUrl, {
 			max: 1,
 			connect_timeout: 1,
@@ -176,7 +188,7 @@ export class PostgresWecomChannelV1
 			})();
 		};
 		signal.addEventListener("abort", cancelOriginalTransaction, { once: true });
-		const committed = this.#sql.begin(async (sql) => {
+		const committed = admissionSql.begin(async (sql) => {
 			const run = <T extends readonly (object | undefined)[]>(
 				query: postgres.PendingQuery<T>,
 			) => awaitTaskAuthorizationQueryV1(query, signal);
@@ -344,14 +356,18 @@ export class PostgresWecomChannelV1
 			try {
 				await cancelSql.end({ timeout: 1 });
 			} finally {
-				await cancellation;
+				try {
+					await cancellation;
+				} finally {
+					await admissionSql.end();
+				}
 			}
 		};
 		const cancellationSettled = committed.then(
 			finishCancellation,
 			finishCancellation,
 		);
-		this.#cancelSettlements.add(cancellationSettled);
+		this.#acceptSettlements.add(cancellationSettled);
 		try {
 			return (await committed).value;
 		} catch (error) {
@@ -361,7 +377,7 @@ export class PostgresWecomChannelV1
 			try {
 				await cancellationSettled;
 			} finally {
-				this.#cancelSettlements.delete(cancellationSettled);
+				this.#acceptSettlements.delete(cancellationSettled);
 			}
 		}
 	}

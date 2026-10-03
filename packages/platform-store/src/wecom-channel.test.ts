@@ -1034,6 +1034,107 @@ describe("existing WeCom transaction cancellation", () => {
 		15_000,
 	);
 
+	it("close rejects further admission without opening a new transaction", async () => {
+		const input = await scope("closed-admission");
+		const target = new PostgresWecomChannelV1({ databaseUrl: db.databaseUrl });
+		await target.close();
+		let key = "";
+		await expect(
+			producer((plan, execute, signal) => {
+				key = plan.eventKey;
+				return target.accept(plan, execute, signal);
+			}).receive(input),
+		).rejects.toThrow();
+		await zero(input, key);
+	});
+
+	it("an in-flight cancellation cannot cancel the next admission after the original rollback", async () => {
+		const first = await scope("cancel-reuse-first");
+		const next = await scope("cancel-reuse-next");
+		const url = new URL(db.databaseUrl);
+		url.searchParams.set("search_path", "platform,pg_catalog");
+		const target = new PostgresWecomChannelV1({ databaseUrl: url.toString() });
+		const controller = new AbortController();
+		const releaseSignal = cancellationGate();
+		const releaseBusiness = cancellationGate();
+		const locked = cancellationGate();
+		let locks: Promise<unknown> | undefined;
+		let pending: Promise<unknown> | undefined;
+		let failed: Promise<unknown> | undefined;
+		let following:
+			| ReturnType<ReturnType<typeof producer>["receive"]>
+			| undefined;
+		let firstKey = "";
+		try {
+			// Delay the signal *after* the production PID/xact predicate matched.
+			// The function delegates to the real PostgreSQL cancellation primitive.
+			await sql`create table platform.cancel_reuse_calls (pid integer, signalled boolean)`;
+			await sql`create function platform.pg_cancel_backend(target integer) returns boolean language plpgsql as $$ declare sent boolean; begin perform pg_advisory_xact_lock(11380003); sent := pg_catalog.pg_cancel_backend(target); insert into platform.cancel_reuse_calls values (target,sent); return sent; end $$`;
+			await sql`create function platform.block_cancel_reuse() returns trigger language plpgsql as $$ begin if new.agent_id in (TG_ARGV[0],TG_ARGV[1]) then perform pg_advisory_xact_lock(11380004); end if; return new; end $$`;
+			await sql`create trigger block_cancel_reuse before insert on platform.conversations for each row execute function platform.block_cancel_reuse(${argument(first.agentId)},${argument(next.agentId)})`;
+			locks = sql.begin(async (transaction) => {
+				await transaction`select pg_advisory_lock(11380003)`;
+				let signalLocked = true;
+				try {
+					await transaction`select pg_advisory_xact_lock(11380004)`;
+					locked.open();
+					await releaseSignal.waiting;
+					await transaction`select pg_advisory_unlock(11380003)`;
+					signalLocked = false;
+					await releaseBusiness.waiting;
+				} finally {
+					if (signalLocked)
+						await transaction`select pg_advisory_unlock(11380003)`;
+				}
+			});
+			await locked.waiting;
+			pending = producer((plan, execute, signal) => {
+				firstKey = plan.eventKey;
+				return target.accept(plan, execute, signal);
+			}).receive(first, undefined, controller.signal);
+			failed = expect(pending).rejects.toThrow();
+			const original = await originalBackend(
+				"%insert into platform.conversations%",
+				"advisory",
+			);
+			controller.abort();
+			await originalBackend("select pg_cancel_backend(pid)%", "advisory");
+			await sql`select pg_catalog.pg_cancel_backend(${original.pid})`;
+			await waitForCancellation(async () =>
+				(
+					await sql`select pid from pg_stat_activity where pid=${original.pid} and xact_start::text=${original.started_at}`
+				).length === 0
+					? [true]
+					: [],
+			);
+			following = producer((...args) => target.accept(...args)).receive(next);
+			// Attach a rejection handler before deliberately delivering the old signal.
+			const result = following.then(
+				(value) => ({ value }),
+				(error) => ({ error }),
+			);
+			await originalBackend("%insert into platform.conversations%", "advisory");
+			releaseSignal.open();
+			await waitForCancellation(
+				() =>
+					sql`select 1 from platform.cancel_reuse_calls where pid=${original.pid} and signalled`,
+			);
+			releaseBusiness.open();
+			await cancellationReturn(failed);
+			expect(await result).toMatchObject({ value: { outcome: "accepted" } });
+			await zero(first, firstKey);
+		} finally {
+			releaseSignal.open();
+			releaseBusiness.open();
+			await Promise.allSettled([pending, failed, following, locks]);
+			await target.close();
+			await sql`drop trigger if exists block_cancel_reuse on platform.conversations`;
+			await sql`drop function if exists platform.block_cancel_reuse()`;
+			await sql`drop function if exists platform.pg_cancel_backend(integer)`;
+			await sql`drop table if exists platform.cancel_reuse_calls`;
+		}
+	}, 15_000);
+
 	it("receipt SQL ends at the runner deadline before its unchanged statement timeout", async () => {
 		const input = await scope("receipt-deadline");
 		const observer = postgres(db.databaseUrl, { max: 1 });
