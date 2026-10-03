@@ -206,6 +206,7 @@ async function gitQuotedPathDiff() {
   const directory = await mkdtemp(join(tmpdir(), "pr-agent-quoted-paths-"));
   const files = [
     { filename: "src/aaa.ts", line: 2 },
+    { filename: "src/space name.ts", line: 2 },
     { filename: "src/tab\t\"quote\\name.ts", line: 3 },
     { filename: "src/中文.ts", line: 4 },
   ];
@@ -221,6 +222,8 @@ async function gitQuotedPathDiff() {
       const lines = before.trimEnd().split("\n");
       lines[file.line - 1] = "regression";
       await writeFile(join(directory, file.filename), `${lines.join("\n")}\n`);
+      file.before = before;
+      file.after = `${lines.join("\n")}\n`;
       file.patch = git("diff", "--no-ext-diff", "--no-textconv", "--", file.filename);
     }
     return { files, diff: git("diff", "--no-ext-diff", "--no-textconv") };
@@ -248,9 +251,18 @@ test("publishes and reads back nonempty scoped findings for Git-quoted paths", a
       return { ...current, body: "Closes #7", base: { ...current.base, ref: "main", repo: { full_name: context.repository } } };
     }
     if (path.endsWith("/issues/7")) return issue;
+    if (path.includes("/git/")) {
+      const ref = path.split("/").at(-1).split("?")[0];
+      if (path.includes("/commits/")) return { sha: ref, tree: { sha: ref } };
+      if (path.includes("/trees/")) return { sha: ref, truncated: false,
+        tree: files.map((file, index) => ({ path: file.filename, type: "blob", sha: ref.slice(0, 38) + String(index).padStart(2, "0") })) };
+      const file = files[Number(ref.slice(-2))];
+      const value = ref.startsWith(head.slice(0, 38)) ? file.after : file.before;
+      return { sha: ref, encoding: "base64", content: Buffer.from(value).toString("base64") };
+    }
     if (path.includes("/compare/")) return options.responseType === "text" ? diff
       : { status: "ahead", merge_base_commit: { sha: "b".repeat(40) },
-          files: files.map(({ filename }) => ({ filename, additions: 1, deletions: 1 })) };
+          files: files.map(({ filename }) => ({ filename, status: "modified", additions: 1, deletions: 1 })) };
     if (path.includes("/files?")) return files;
     return remote.request(path, options);
   };
