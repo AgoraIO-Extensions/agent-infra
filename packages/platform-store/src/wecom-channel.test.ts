@@ -1034,6 +1034,50 @@ describe("existing WeCom transaction cancellation", () => {
 		15_000,
 	);
 
+	it("caller abort settles while the admission backend is still connecting", async () => {
+		const input = await scope("cancel-connect");
+		const connected = cancellationGate();
+		const sockets = new Set<Socket>();
+		// Accept the real TCP connection but withhold PostgreSQL startup replies.
+		const server = createServer((socket) => {
+			sockets.add(socket);
+			socket.on("error", () => {});
+			socket.on("close", () => sockets.delete(socket));
+			connected.open();
+		});
+		await new Promise<void>((resolve) =>
+			server.listen(0, "127.0.0.1", resolve),
+		);
+		const address = server.address();
+		if (!address || typeof address === "string")
+			throw new Error("Missing TCP fixture address");
+		const url = new URL(db.databaseUrl);
+		url.port = String(address.port);
+		const target = new PostgresWecomChannelV1({ databaseUrl: url.toString() });
+		const controller = new AbortController();
+		let pending: Promise<unknown> | undefined;
+		let failed: Promise<unknown> | undefined;
+		let key = "";
+		try {
+			pending = producer((plan, execute, signal) => {
+				key = plan.eventKey;
+				return target.accept(plan, execute, signal);
+			}).receive(input, undefined, controller.signal);
+			failed = expect(pending).rejects.toThrow();
+			await connected.waiting;
+			controller.abort();
+			await cancellationReturn(failed);
+			await zero(input, key);
+		} finally {
+			for (const socket of sockets) socket.destroy();
+			await Promise.allSettled([pending, failed]);
+			await target.close();
+			await new Promise<void>((resolve, reject) =>
+				server.close((error) => (error ? reject(error) : resolve())),
+			);
+		}
+	}, 10_000);
+
 	it("close rejects further admission without opening a new transaction", async () => {
 		const input = await scope("closed-admission");
 		const target = new PostgresWecomChannelV1({ databaseUrl: db.databaseUrl });

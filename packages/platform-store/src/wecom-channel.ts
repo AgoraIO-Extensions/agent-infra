@@ -163,7 +163,10 @@ export class PostgresWecomChannelV1
 		if (this.#closed) throw new TaskAuthorizationStoreError();
 		// Keep the backend exclusive until every in-flight cancellation has settled.
 		// A shared pool releases it before begin's Promise continuation can run.
-		const admissionSql = postgres(this.#databaseUrl, { max: 1 });
+		const admissionSql = postgres(this.#databaseUrl, {
+			max: 1,
+			connect_timeout: 1,
+		});
 		const cancelSql = postgres(this.#databaseUrl, {
 			max: 1,
 			connect_timeout: 1,
