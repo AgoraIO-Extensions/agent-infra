@@ -303,6 +303,7 @@ function createAgentConfigurationUseCaseV1Internal(
 						requestId: command.requestId,
 						traceId: command.traceId,
 						requested: structuredClone(changes.source),
+						...(release ? { releaseTarget: release } : {}),
 					}),
 				);
 			} catch {

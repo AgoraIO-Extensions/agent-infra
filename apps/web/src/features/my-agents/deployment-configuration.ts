@@ -1,3 +1,4 @@
+import { standardTemplateDefinitionsV1 } from "@agent-infra/contracts/pilot";
 import type {
 	Client,
 	RequestResult,
@@ -82,4 +83,28 @@ export async function loadDeploymentConfiguration(
 	});
 	if (!result.data) return unavailable(result.error);
 	return { kind: "ready", configuration: result.data };
+}
+
+export const templateReadinessMessages = {
+	ready: "可申请",
+	unregistered: "尚未登记，请联系平台管理员。",
+	unverified: "尚未完成真实运行与模型验证。",
+	failed: "验证失败，暂不可申请。",
+	disabled: "模板已停用。",
+	stale: "模板或验证已过期，请刷新后重试。",
+	unavailable: "暂时无法读取验证结果，请刷新后重试。",
+} as const;
+
+export function applicationTemplateChoices(
+	configuration: DeploymentConfigurationProjectionV2,
+) {
+	if (configuration.templates.length > 0) return configuration.templates;
+	return standardTemplateDefinitionsV1.map((template) => ({
+		templateId: template.templateId,
+		displayName: template.displayName,
+		connectionEnabled: false,
+		allowedEnvironmentKeys: [],
+		allowedSecretKeys: [],
+		readiness: { state: "unavailable" as const, revision: null },
+	}));
 }

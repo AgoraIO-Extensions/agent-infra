@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { DeploymentConfigurationProjectionV2Schema } from "@agent-infra/contracts/pilot";
+import {
+	DeploymentConfigurationProjectionV2Schema,
+	standardTemplateDefinitionsV1,
+} from "@agent-infra/contracts/pilot";
 import {
 	ImmutableOciDigestV1Schema,
 	OciImageReferenceV1Schema,
@@ -11,6 +14,8 @@ import {
 	ModelConfigurationErrorV1,
 	modelIdentifier,
 	modelOperationV1,
+	type StandardTemplateModelBindingV1,
+	standardTemplateReadinessV1,
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationRecordV2,
@@ -43,7 +48,14 @@ export interface DeploymentAdmissionInputV1 {
 		| "allowedSecretKeys"
 		| "platformManagedKeys"
 		| "connectionEnabled"
-	> & { readonly imageReference: string; readonly displayName?: string })[];
+	> & {
+		readonly imageReference: string;
+		readonly displayName?: string;
+		readonly modelBinding?: StandardTemplateModelBindingV1;
+		readonly configurationRevision?: string;
+		/** Reads the current trusted deployment validation record; missing evidence denies admission. */
+		readonly loadValidation?: (signal: AbortSignal) => Promise<unknown>;
+	})[];
 	readonly modelCatalog: {
 		readonly revision: string;
 		readonly load: (signal: AbortSignal) => Promise<unknown>;
@@ -56,6 +68,54 @@ export interface DeploymentAdmissionInputV1 {
 			readonly actorIds: readonly string[];
 		})[];
 	};
+}
+
+type Template = DeploymentAdmissionInputV1["templates"][number];
+function snapshotTemplates(templates: readonly Template[]) {
+	return templates.map(({ loadValidation, ...registration }) => ({
+		...structuredClone(registration),
+		loadValidation,
+	}));
+}
+async function readTemplateReadiness(template: Template): Promise<{
+	state:
+		| "ready"
+		| "unregistered"
+		| "unverified"
+		| "failed"
+		| "disabled"
+		| "stale"
+		| "unavailable";
+	revision: string | null;
+}> {
+	const loadValidation = template.loadValidation;
+	if (!loadValidation) return { state: "unverified", revision: null };
+	try {
+		const signal = AbortSignal.timeout(10_000);
+		const validation = await modelOperationV1(signal, () =>
+			loadValidation(signal),
+		);
+		const readiness = standardTemplateReadinessV1({
+			templateId: template.templateId,
+			imageDigest: template.imageDigest,
+			binding: template.modelBinding,
+			configurationRevision: template.configurationRevision,
+			validation,
+			now: Date.now(),
+		});
+		const { loadValidation: _load, ...registration } = template;
+		return readiness.state === "ready"
+			? {
+					...readiness,
+					revision: revision("template", {
+						registration,
+						validation: readiness.revision,
+					}),
+				}
+			: readiness;
+	} catch {
+		return { state: "unavailable", revision: null };
+	}
 }
 
 function revision(prefix: string, value: unknown) {
@@ -71,16 +131,45 @@ export function createDeploymentConfigurationProjectionV2(input: {
 	readonly templates: DeploymentAdmissionInputV1["templates"];
 	readonly modelCatalog: DeploymentAdmissionInputV1["modelCatalog"];
 }) {
-	const templates = structuredClone(input.templates);
+	const templates = snapshotTemplates(input.templates);
 	const loadModelCatalog = input.modelCatalog.load;
-	const templateOptions = templates.map((template) => ({
-		templateId: template.templateId,
-		displayName: template.displayName ?? template.templateId,
-		connectionEnabled: template.connectionEnabled,
-		allowedEnvironmentKeys: [...template.allowedEnvironmentKeys],
-		allowedSecretKeys: [...template.allowedSecretKeys],
-	}));
+
 	return async () => {
+		const templateOptions = await Promise.all(
+			templates.map(async (template) => ({
+				templateId: template.templateId,
+				displayName:
+					template.displayName ??
+					standardTemplateDefinitionsV1.find(
+						(standard) =>
+							standard.driver === template.modelBinding?.driver ||
+							standard.templateId === template.templateId,
+					)?.displayName ??
+					template.templateId,
+				connectionEnabled: template.connectionEnabled,
+				allowedEnvironmentKeys: [...template.allowedEnvironmentKeys],
+				allowedSecretKeys: [...template.allowedSecretKeys],
+				readiness: await readTemplateReadiness(template),
+			})),
+		);
+		for (const standard of standardTemplateDefinitionsV1) {
+			if (
+				!templates.some(
+					(t) =>
+						t.modelBinding?.driver === standard.driver ||
+						t.templateId === standard.templateId,
+				)
+			) {
+				templateOptions.push({
+					templateId: standard.templateId,
+					displayName: standard.displayName,
+					connectionEnabled: false,
+					allowedEnvironmentKeys: [],
+					allowedSecretKeys: [],
+					readiness: { state: "unregistered", revision: null },
+				});
+			}
+		}
 		let catalogStatus: "populated" | "empty" | "unavailable" | "stale";
 		let catalogRevision: string | null = null;
 		let endpoints: Array<{
@@ -176,14 +265,27 @@ export function createDeploymentAdmissionsV1(
 			typeof input.modelCatalog.load !== "function"
 		)
 			throw new Error();
-		templates = structuredClone(input.templates);
+		templates = snapshotTemplates(input.templates);
 		channels = structuredClone(input.channelPolicy);
 		if (
 			new Set(templates.map(({ templateId }) => templateId)).size !==
 			templates.length
 		)
 			throw new Error();
+		const drivers = templates.flatMap((template) =>
+			template.modelBinding ? [template.modelBinding.driver] : [],
+		);
+		if (new Set(drivers).size !== drivers.length) throw new Error();
 		for (const template of templates) {
+			const standard = standardTemplateDefinitionsV1.find(
+				(s) => s.templateId === template.templateId,
+			);
+			if (
+				standard &&
+				template.modelBinding &&
+				standard.driver !== template.modelBinding.driver
+			)
+				throw new Error();
 			if (
 				!template.templateId ||
 				!ImmutableOciDigestV1Schema.safeParse(template.imageDigest).success ||
@@ -268,6 +370,22 @@ export function createDeploymentAdmissionsV1(
 						? templates.find((item) => item.templateId === selection.templateId)
 						: undefined;
 				if (selection.kind === "standard" && !template) return denied;
+				const readiness = template
+					? await readTemplateReadiness(template)
+					: undefined;
+				if (
+					selection.kind === "standard" &&
+					(readiness?.state !== "ready" ||
+						(selection.templateRevision !== readiness.revision &&
+							!(
+								selection.templateRevision === undefined &&
+								request.releaseTarget?.agentId === request.agentId &&
+								request.releaseTarget.templateId === selection.templateId &&
+								request.releaseTarget.targetImageDigest ===
+									template?.imageDigest
+							)))
+				)
+					return denied;
 				const imageReference =
 					selection.kind === "custom"
 						? selection.imageReference
@@ -295,7 +413,12 @@ export function createDeploymentAdmissionsV1(
 				if (result.status !== "admitted") return denied;
 				const manifest = result.runtimeManifest;
 				if (selection.kind === "standard") {
+					const currentReadiness = template
+						? await readTemplateReadiness(template)
+						: undefined;
 					if (
+						currentReadiness?.state !== "ready" ||
+						currentReadiness.revision !== readiness?.revision ||
 						!template ||
 						result.immutableDigest !== template.imageDigest ||
 						manifest.interactionMode !== "platform-adapter" ||
@@ -313,6 +436,7 @@ export function createDeploymentAdmissionsV1(
 							admissionRevision: revision("image", {
 								evidence: result.policyEvidence,
 								template,
+								readinessRevision: currentReadiness.revision,
 							}),
 							allowedEnvironmentKeys: [...template.allowedEnvironmentKeys],
 							allowedSecretKeys: [...template.allowedSecretKeys],

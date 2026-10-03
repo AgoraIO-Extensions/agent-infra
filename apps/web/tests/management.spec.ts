@@ -45,6 +45,7 @@ const deploymentConfiguration: DeploymentConfigurationProjectionV2 = {
 			allowedSecretKeys: ["MODEL_API_KEY"],
 			connectionEnabled: false,
 			displayName: "Codex",
+			readiness: { state: "ready", revision: "test-template-revision" },
 			templateId: "codex",
 		},
 	],

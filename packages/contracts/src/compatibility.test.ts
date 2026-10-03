@@ -1487,7 +1487,15 @@ describe("contract compatibility command", () => {
 				"utf8",
 			),
 		);
-		// Isolate lifecycle from later personal API/Relay Key and registration additions.
+		// Isolate lifecycle from later readiness, personal API/Relay Key and registration additions.
+		for (const name of [
+			"AgentApplicationCreateRequestV2",
+			"AgentApplicationUpdateRequestV2",
+		])
+			delete current.components.schemas[name].properties.source.anyOf[0]
+				.properties.templateRevision;
+		delete current.components.schemas.DeploymentTemplateProjectionV2.properties
+			.readiness;
 		restorePreRelayKeyContract(current);
 		delete current.paths["/api/v2/applications"];
 		delete current.paths["/api/v2/applications/{applicationId}"];
@@ -1855,4 +1863,58 @@ describe("contract compatibility command", () => {
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");
 	});
+});
+
+it("admits only the pinned readiness addition and rejects authority or schema widening", async () => {
+	const current = JSON.parse(
+		await readFile(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v2.openapi.json",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	);
+	const previous = structuredClone(current);
+	delete previous.components.schemas.DeploymentTemplateProjectionV2.properties
+		.readiness;
+	for (const name of [
+		"AgentApplicationCreateRequestV2",
+		"AgentApplicationUpdateRequestV2",
+	])
+		delete previous.components.schemas[name].properties.source.anyOf[0]
+			.properties.templateRevision;
+	const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-readiness-"));
+	const previousPath = resolve(directory, "previous.json");
+	const currentPath = resolve(directory, "current.json");
+	try {
+		await writeFile(previousPath, JSON.stringify(previous));
+		await writeFile(currentPath, JSON.stringify(current));
+		expect(comparePaths(currentPath, previousPath).status).toBe(0);
+		for (const mutate of [
+			(document: typeof current) => {
+				document.components.schemas.DeploymentTemplateProjectionV2.properties.readiness.properties.state.enum.push(
+					"assumed_ready",
+				);
+			},
+			(document: typeof current) => {
+				document.components.schemas.AgentApplicationCreateRequestV2.properties.source.anyOf[0].required.push(
+					"templateRevision",
+				);
+			},
+			(document: typeof current) => {
+				document.components.schemas.AgentApplicationUpdateRequestV2.properties.source.anyOf[0].additionalProperties = true;
+			},
+			(document: typeof current) => {
+				document.paths["/api/v2/deployment/configuration"].get.security = [];
+			},
+		]) {
+			const changed = structuredClone(current);
+			mutate(changed);
+			await writeFile(currentPath, JSON.stringify(changed));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
 });

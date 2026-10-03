@@ -11,6 +11,7 @@ const standardCreateDraft = {
 	description: "Helps the release team",
 	sourceKind: "standard",
 	templateId: "codex",
+	templateRevision: "template-test-revision",
 	imageReference: "",
 	identityResponsibility: "platform-managed",
 	coOwnerIds: "owner-2\nowner-3",
@@ -40,7 +41,11 @@ describe("Agent application draft", () => {
 				schemaVersion: 2,
 				name: "Release assistant",
 				description: "Helps the release team",
-				source: { kind: "standard", templateId: "codex" },
+				source: {
+					kind: "standard",
+					templateId: "codex",
+					templateRevision: "template-test-revision",
+				},
 				coOwnerIds: ["owner-2", "owner-3"],
 				availability: [
 					{ kind: "user", userId: "user-available" },
@@ -83,7 +88,11 @@ describe("Agent application draft", () => {
 			schemaVersion: 2,
 			name: "Release assistant",
 			description: "Helps the release team",
-			source: { kind: "standard", templateId: "codex" },
+			source: {
+				kind: "standard",
+				templateId: "codex",
+				templateRevision: "template-test-revision",
+			},
 			coOwnerIds: ["owner-2", "owner-3"],
 			availability: [
 				{ kind: "user", userId: "user-available" },
@@ -98,14 +107,22 @@ describe("Agent application draft", () => {
 		expect(
 			buildAgentApplicationRequest("update", {
 				...standardCreateDraft,
-				source: { kind: "standard", templateId: "codex" },
+				source: {
+					kind: "standard",
+					templateId: "codex",
+					templateRevision: "template-test-revision",
+				},
 				templateId: "changed-template",
 				configureModels: false,
 				secrets: [],
 			}),
 		).toEqual(
 			expect.objectContaining({
-				source: { kind: "standard", templateId: "codex" },
+				source: {
+					kind: "standard",
+					templateId: "codex",
+					templateRevision: "template-test-revision",
+				},
 			}),
 		);
 	});
