@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
 	type AgentConfigurationUseCaseDependenciesV1,
+	type AgentDefaultRelayKeyDependenciesV1,
 	createAgentConfigurationUseCaseV1,
+	createAgentDefaultRelayKeyUseCaseV1,
 	createAgentManagementV1,
 	createApplicationFoundationUseCaseV1,
 	createApplicationMaterialGrantUseCaseV1,
@@ -17,6 +19,7 @@ import {
 import {
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
+	PostgresAgentDefaultRelayKeyStoreV1,
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
 	PostgresApplicationFoundationTransactionV1,
@@ -73,6 +76,10 @@ export interface PlatformApiAssemblyInput {
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
+	readonly agentDefaultRelayKeys?: Omit<
+		AgentDefaultRelayKeyDependenciesV1,
+		"transaction"
+	>;
 	readonly personalRelayKeys?: Pick<
 		Parameters<typeof createPersonalRelayKeyUseCaseV1>[0],
 		"currentIdentity" | "validate" | "encrypt"
@@ -208,6 +215,18 @@ export function assemblePlatformApi(
 		new PostgresApplicationRegistrationStoreV1({
 			databaseUrl: input.databaseUrl,
 		});
+	const agentDefaultRelayKeyStore = input.agentDefaultRelayKeys
+		? new PostgresAgentDefaultRelayKeyStoreV1({
+				databaseUrl: input.databaseUrl,
+			})
+		: undefined;
+	const agentDefaultRelayKeys =
+		agentDefaultRelayKeyStore && input.agentDefaultRelayKeys
+			? createAgentDefaultRelayKeyUseCaseV1({
+					...input.agentDefaultRelayKeys,
+					transaction: agentDefaultRelayKeyStore,
+				})
+			: undefined;
 	const personalRelayKeyStore = input.personalRelayKeys
 		? new PostgresPersonalRelayKeyStoreV1({ databaseUrl: input.databaseUrl })
 		: undefined;
@@ -425,6 +444,14 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		...(agentDefaultRelayKeys
+			? {
+					agentDefaultRelayKeys: {
+						identity: input.identity,
+						keys: agentDefaultRelayKeys,
+					},
+				}
+			: {}),
 		...(personalRelayKeys
 			? {
 					personalRelayKeys: {
@@ -548,6 +575,7 @@ export function assemblePlatformApi(
 		applicationRegistrationStore,
 		applicationMaterialGrantStore,
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
+		...(agentDefaultRelayKeyStore ? [agentDefaultRelayKeyStore] : []),
 	];
 	return {
 		dependencies,
