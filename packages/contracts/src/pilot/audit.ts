@@ -52,6 +52,8 @@ export const ScopedPlatformAuditActionV1Schema = z.enum([
 	"api.application.created",
 	"api.credential.issued",
 	"api.credential.revoked",
+	"api.credential.narrowed",
+	"api.credential.metadata.read",
 	"api.credential.delivery.granted",
 	"api.credential.delivery.revoked",
 	"api.agent.grant.granted",
@@ -123,6 +125,7 @@ export const ScopedPlatformAuditProjectionV1Schema = z.strictObject({
 			"conversation",
 			"execution",
 			"configuration",
+			"api_credential",
 		]),
 		subjectId: OpaqueIdV1Schema,
 	}),
@@ -224,10 +227,20 @@ const detail = (operationId: string, security: Record<string, never[]>[]) => ({
 });
 
 export const pilotScopedAuditOpenApiPathsV1 = {
-	"/api/v1/audit": list("listOwnExecutionAudit", [{}]),
-	"/api/v1/audit/{auditId}": detail("getOwnExecutionAudit", [{}]),
-	"/api/v3/admin/audit": list("listScopedAdministratorAudit", []),
-	"/api/v3/admin/audit/{auditId}": detail("getScopedAdministratorAudit", []),
+	"/api/v1/audit": list("listOwnExecutionAudit", [
+		{ PlatformSession: [] },
+		{ platformApiCredential: [] },
+	]),
+	"/api/v1/audit/{auditId}": detail("getOwnExecutionAudit", [
+		{ PlatformSession: [] },
+		{ platformApiCredential: [] },
+	]),
+	"/api/v3/admin/audit": list("listScopedAdministratorAudit", [
+		{ PlatformSession: [] },
+	]),
+	"/api/v3/admin/audit/{auditId}": detail("getScopedAdministratorAudit", [
+		{ PlatformSession: [] },
+	]),
 } as const;
 
 export const pilotScopedAuditSchemasV1 = {

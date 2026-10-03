@@ -2,6 +2,8 @@ import {
 	AgentConfigurationError,
 	AgentManagementError,
 	ApplicationFoundationError,
+	ApplicationMaterialGrantErrorV1,
+	ApplicationRegistrationErrorV1,
 	ApplicationRevisionError,
 	PersonalApiCredentialErrorV1,
 	PersonalRelayKeyErrorV1,
@@ -24,7 +26,11 @@ export function mapCoreError(
 		} as const;
 		return new HttpProtocolError(codes[error.code], traceId);
 	}
-	if (error instanceof PersonalApiCredentialErrorV1) {
+	if (
+		error instanceof ApplicationMaterialGrantErrorV1 ||
+		error instanceof PersonalApiCredentialErrorV1 ||
+		error instanceof ApplicationRegistrationErrorV1
+	) {
 		const codes = {
 			invalid_input: "INVALID_REQUEST",
 			authentication_required: "AUTHENTICATION_REQUIRED",

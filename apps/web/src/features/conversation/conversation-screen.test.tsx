@@ -7,12 +7,19 @@ import {
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+	createMemoryHistory,
+	createRootRoute,
+	createRouter,
+	RouterContextProvider,
+} from "@tanstack/react-router";
+import {
 	act,
 	cleanup,
 	fireEvent,
 	render,
 	screen,
 	waitFor,
+	within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { client as v1 } from "../../pilot/generated/client.gen.js";
@@ -55,6 +62,8 @@ function setup(
 		const custom = await handler?.(request);
 		if (custom) return custom;
 		const path = new URL(request.url).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return Response.json({ items: [], nextCursor: null });
 		if (path === "/api/v2/agents/agent-1") return Response.json(agent);
 		if (path.endsWith("/events")) {
 			const stream = sse();
@@ -81,10 +90,16 @@ function setup(
 		onConversationChange: vi.fn(),
 		...changes,
 	};
+	const router = createRouter({
+		routeTree: createRootRoute(),
+		history: createMemoryHistory({ initialEntries: ["/"] }),
+	});
 	const view = (value: ConversationScreenProps) => (
-		<QueryClientProvider client={queryClient}>
-			<ConversationScreen {...value} />
-		</QueryClientProvider>
+		<RouterContextProvider router={router}>
+			<QueryClientProvider client={queryClient}>
+				<ConversationScreen {...value} />
+			</QueryClientProvider>
+		</RouterContextProvider>
 	);
 	const result = render(view(props));
 	return {
@@ -135,6 +150,58 @@ function userMessage(text = "Private question") {
 }
 
 describe("functional conversation screen", () => {
+	it.each(["stream", "snapshot"] as const)(
+		"clears waiting and refreshes recent history when completion arrives via %s",
+		async (source) => {
+			let accepted = false;
+			let completed = false;
+			const completedEvent = {
+				...event(1),
+				schemaVersion: 1 as const,
+				type: "execution.status" as const,
+				payload: { status: "completed" as const },
+			};
+			const { streams } = setup((request) => {
+				if (new URL(request.url).pathname === "/api/v2/me/conversations/recent")
+					return Response.json({
+						items: [
+							{
+								...history().conversation,
+								title: completed ? "Completed task" : "Pending task",
+							},
+						],
+						nextCursor: null,
+					});
+				if (request.method === "POST") {
+					accepted = true;
+					return receipt();
+				}
+				if (
+					new URL(request.url).pathname ===
+					"/api/v2/conversations/conversation-1"
+				)
+					return Response.json({
+						...history("conversation-1", completed ? [completedEvent] : []),
+						messages: accepted ? [userMessage()] : [],
+					});
+			});
+			fireEvent.change(await composer(), {
+				target: { value: "Complete this task" },
+			});
+			fireEvent.click(screen.getByRole("button", { name: "发送" }));
+			await screen.findByText("消息已受理，等待处理结果。");
+			await screen.findByRole("link", { name: /Pending task/ });
+			completed = true;
+			if (source === "stream") act(() => streams.at(-1)?.send(completedEvent));
+			else fireEvent.click(screen.getByRole("button", { name: "刷新会话" }));
+			await screen.findByText("已完成");
+			expect(screen.queryByText("消息已受理，等待处理结果。")).toBeNull();
+			expect(
+				await screen.findByRole("link", { name: /Completed task/ }),
+			).toBeTruthy();
+		},
+	);
+
 	it.each(["timeline", "unknown", "removed-unknown"] as const)(
 		"restores focus after closing execution details opened from %s",
 		async (entry) => {
@@ -502,22 +569,69 @@ describe("functional conversation screen", () => {
 		);
 	});
 
-	it("clears private draft and timeline before a new identity read completes", async () => {
+	it("clears private roles and draft before a new identity read and rejects the previous private conversation", async () => {
 		let delayed = false;
 		const next = deferred<Response>();
-		const state = setup((request) =>
-			delayed && new URL(request.url).pathname.includes("/agents/")
-				? next.promise
-				: undefined,
-		);
+		const state = setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (path === "/api/v2/agents/agent-1")
+				return delayed
+					? next.promise
+					: Response.json({ ...agent, name: "Private Agent A" });
+			if (path === "/api/v2/conversations/conversation-1") {
+				if (delayed)
+					return Response.json(
+						PilotProtocolErrorV1Schema.parse({
+							schemaVersion: 1,
+							code: "AUTHORIZATION_REVOKED",
+							message: "Controlled current-subject denial",
+							retryable: false,
+							traceId: "controlled-identity-denial",
+						}),
+						{ status: 403 },
+					);
+				return Response.json(
+					history("conversation-1", [
+						{
+							...event(1),
+							schemaVersion: 1,
+							type: "text.delta",
+							payload: {
+								text: "Private reply A",
+							},
+						},
+					]),
+				);
+			}
+			return undefined;
+		});
 		const input = await composer();
+		await screen.findByRole("article", { name: "Private Agent A的消息" });
+		await screen.findByText("Private reply A");
 		fireEvent.change(input, { target: { value: "Private draft A" } });
 		delayed = true;
 		state.rerenderScope({ identityKey: "session-b" });
 		expect(screen.queryByDisplayValue("Private draft A")).toBeNull();
 		expect(screen.queryByRole("textbox")).toBeNull();
-		await act(async () => next.resolve(Response.json(agent)));
-		expect((await composer()).value).toBe("");
+		expect(
+			screen.queryByRole("article", { name: "Private Agent A的消息" }),
+		).toBeNull();
+		expect(screen.queryByText("Private reply A")).toBeNull();
+		await act(async () =>
+			next.resolve(Response.json({ ...agent, name: "Current Agent B" })),
+		);
+		await screen.findByText(/当前登录或访问权限已失效/);
+		expect(screen.queryByRole("textbox")).toBeNull();
+		expect(
+			screen.queryByRole("article", { name: "Current Agent B的消息" }),
+		).toBeNull();
+		expect(
+			screen.queryByRole("article", { name: "Private Agent A的消息" }),
+		).toBeNull();
+		expect(screen.queryByText("Private reply A")).toBeNull();
+		expect(
+			state.requests.filter((request) => request.method === "POST"),
+		).toHaveLength(0);
 		expect(
 			JSON.stringify(
 				state.queryClient
@@ -567,7 +681,7 @@ describe("functional conversation screen", () => {
 	});
 
 	it("preserves the composer while viewing personal history and binds navigation to server IDs", async () => {
-		const { props } = setup((request) =>
+		const { props, requests, streams } = setup((request) =>
 			new URL(request.url).pathname === "/api/v1/agents/agent-1/conversations"
 				? Response.json({
 						items: [history().conversation],
@@ -576,7 +690,11 @@ describe("functional conversation screen", () => {
 				: undefined,
 		);
 		fireEvent.change(await composer(), { target: { value: "Kept draft" } });
+		await screen.findByRole("heading", { name: "最近对话" });
+		await waitFor(() => expect(streams).toHaveLength(1));
 		fireEvent.click(screen.getByRole("button", { name: "个人历史" }));
+		expect((await composer()).value).toBe("Kept draft");
+		expect(document.activeElement?.getAttribute("aria-label")).toBe("对话历史");
 		const historyLink = await screen.findByRole("link", {
 			name: /Test conversation/,
 		});
@@ -592,6 +710,68 @@ describe("functional conversation screen", () => {
 			await screen.findByRole("link", { name: /Test conversation/ }),
 		);
 		expect(props.onConversationChange).toHaveBeenCalledWith("conversation-1");
+		expect(streams).toHaveLength(1);
+		expect(requests.every((request) => request.method === "GET")).toBe(true);
+	});
+
+	it.each([
+		[401, "最近对话无法读取，请重新登录。"],
+		[403, "当前无权读取最近对话。"],
+		[404, "最近对话读取入口不可用。"],
+		[503, "最近对话暂时无法读取。"],
+	])(
+		"keeps recent read failure %s distinct from an empty list and conversation denial",
+		async (status, message) => {
+			const onAccessDenied = vi.fn();
+			const { requests } = setup(
+				(request) =>
+					new URL(request.url).pathname === "/api/v2/me/conversations/recent"
+						? Response.json(
+								{ message: "Controlled failure" },
+								{ status: Number(status) },
+							)
+						: undefined,
+				{ onAccessDenied },
+			);
+			await screen.findByText(String(message));
+			await composer();
+			expect(screen.queryByText("暂无个人对话。")).toBeNull();
+			expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
+			expect(onAccessDenied).not.toHaveBeenCalled();
+			expect(requests.every((request) => request.method === "GET")).toBe(true);
+		},
+	);
+
+	it("discards a late recent response when the login identity changes", async () => {
+		const old = deferred<Response>();
+		let changed = false;
+		const { rerenderScope } = setup((request) => {
+			if (new URL(request.url).pathname !== "/api/v2/me/conversations/recent")
+				return undefined;
+			return changed
+				? Response.json({
+						items: [
+							{ ...history().conversation, title: "New identity recent" },
+						],
+						nextCursor: null,
+					})
+				: old.promise;
+		});
+		await screen.findByText("正在读取最近对话…");
+		changed = true;
+		rerenderScope({ identityKey: "session-b" });
+		await screen.findByRole("link", { name: /New identity recent/ });
+		await act(async () => {
+			old.resolve(
+				Response.json({
+					items: [
+						{ ...history().conversation, title: "Old identity private recent" },
+					],
+					nextCursor: null,
+				}),
+			);
+		});
+		expect(screen.queryByText("Old identity private recent")).toBeNull();
 	});
 
 	it("restores the history deep link and reports view navigation without replacing the conversation", async () => {
@@ -600,7 +780,7 @@ describe("functional conversation screen", () => {
 			view: "history",
 			onViewChange,
 		});
-		await screen.findByRole("heading", { name: "个人历史", level: 1 });
+		await screen.findByRole("heading", { name: "个人历史", level: 2 });
 		fireEvent.click(screen.getByRole("button", { name: "返回对话" }));
 		expect(onViewChange).toHaveBeenCalledWith("conversation");
 		expect(props.onConversationChange).not.toHaveBeenCalled();
@@ -610,14 +790,23 @@ describe("functional conversation screen", () => {
 		expect(onViewChange).toHaveBeenLastCalledWith("history");
 	});
 
-	it("creates a durable conversation before navigating", async () => {
+	it("creates a durable conversation and refreshes recent history before navigating", async () => {
+		let created = false;
 		const { props, requests } = setup(
-			(request) =>
-				request.method === "POST"
-					? Response.json(history().conversation, { status: 201 })
-					: undefined,
+			(request) => {
+				if (request.method === "POST") {
+					created = true;
+					return Response.json(history().conversation, { status: 201 });
+				}
+				if (new URL(request.url).pathname === "/api/v2/me/conversations/recent")
+					return Response.json({
+						items: created ? [history().conversation] : [],
+						nextCursor: null,
+					});
+			},
 			{ conversationId: undefined },
 		);
+		await screen.findByText("暂无个人对话。");
 		fireEvent.click(await screen.findByRole("button", { name: "创建会话" }));
 		await waitFor(() =>
 			expect(props.onConversationChange).toHaveBeenCalledWith("conversation-1"),
@@ -625,6 +814,71 @@ describe("functional conversation screen", () => {
 		expect(
 			requests.filter((request) => request.method === "POST"),
 		).toHaveLength(1);
+		expect(
+			await screen.findByRole("link", { name: /Test conversation/ }),
+		).toBeTruthy();
+	});
+
+	it.each([
+		["starting", "启动中"],
+		["updating", "更新中"],
+		["unavailable", "暂时不可用"],
+		[null, null],
+	] as const)(
+		"keeps service %s distinct from management availability",
+		async (serviceAvailability, label) => {
+			setup((request) =>
+				new URL(request.url).pathname === "/api/v2/agents/agent-1"
+					? Response.json({ ...agent, serviceAvailability })
+					: undefined,
+			);
+			await screen.findByRole("heading", { name: agent.name });
+			const header = screen
+				.getByRole("heading", { name: agent.name })
+				.closest("header");
+			if (!header) throw new Error("Expected conversation header");
+			expect(within(header).getByText("管理状态：可用")).toBeTruthy();
+			if (label)
+				expect(within(header).getByText(`服务状态：${label}`)).toBeTruthy();
+			else expect(within(header).queryByText(/^服务状态：/)).toBeNull();
+			expect(within(header).queryByText("服务状态：就绪")).toBeNull();
+			expect(
+				within(header)
+					.getByRole("link", { name: "切换 Agent" })
+					.getAttribute("href"),
+			).toBe("/agents?mode=conversation");
+			expect((await composer()).disabled).toBe(true);
+		},
+	);
+
+	it("keeps self-managed header navigation without platform composer or creation", async () => {
+		const custom = AgentProjectionV2Schema.parse({
+			...agent,
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/pilot@sha256:abc",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+			},
+		});
+		const { requests } = setup((request) =>
+			new URL(request.url).pathname === "/api/v2/agents/agent-1"
+				? Response.json(custom)
+				: undefined,
+		);
+		await screen.findByText("自定义 Agent · 自有交互入口");
+		expect(
+			screen.queryByText("个人 Web 对话 · 离开页面不会取消已提交的任务"),
+		).toBeNull();
+		expect(
+			screen.getByRole("link", { name: "切换 Agent" }).getAttribute("href"),
+		).toBe("/agents?mode=conversation");
+		expect(screen.queryByRole("textbox", { name: "消息" })).toBeNull();
+		expect(
+			(screen.getByRole("button", { name: "新建会话" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(true);
+		expect(requests.every((request) => request.method === "GET")).toBe(true);
 	});
 
 	it("keeps stopped Agents read-only while showing retained messages", async () => {
@@ -670,14 +924,20 @@ describe("functional conversation screen", () => {
 	});
 
 	it("renders snapshot plus new deltas once and opens the selected answer version detail", async () => {
+		let agentName = "正式投影工程助手";
 		const first = {
 			...event(1),
 			schemaVersion: 1 as const,
 			type: "text.delta" as const,
 			payload: { text: "Old answer" },
 		};
-		const { streams, requests } = setup((request) =>
-			new URL(request.url).pathname === "/api/v2/conversations/conversation-1"
+		const { streams, requests } = setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (path === "/api/v2/agents/agent-1")
+				return Response.json(
+					AgentProjectionV2Schema.parse({ ...agent, name: agentName }),
+				);
+			return path === "/api/v2/conversations/conversation-1"
 				? Response.json({
 						...history("conversation-1", [first]),
 						messages: [
@@ -703,9 +963,18 @@ describe("functional conversation screen", () => {
 							},
 						],
 					})
-				: undefined,
-		);
+				: undefined;
+		});
 		await screen.findByText("New answer");
+		const answer = await screen.findByRole("article", {
+			name: `${agentName}的消息`,
+		});
+		expect(within(answer).getByText(agentName)).toBeTruthy();
+		expect(
+			within(screen.getByRole("article", { name: "你的消息" })).getByText(
+				"Private question",
+			),
+		).toBeTruthy();
 		act(() =>
 			streams.at(-1)?.send({
 				...event(2),
@@ -717,6 +986,16 @@ describe("functional conversation screen", () => {
 		fireEvent.click(screen.getByRole("button", { name: "上一个回答版本" }));
 		await screen.findByText("Old answer");
 		expect(screen.queryByText("Old answerOld answer")).toBeNull();
+		agentName = "更新后的正式投影助手";
+		fireEvent.click(screen.getByRole("button", { name: "刷新会话" }));
+		await screen.findByRole("article", { name: `${agentName}的消息` });
+		expect(
+			screen.queryByRole("article", { name: "正式投影工程助手的消息" }),
+		).toBeNull();
+		expect(screen.getByText("Old answer")).toBeTruthy();
+		expect(
+			requests.filter((request) => request.method === "POST"),
+		).toHaveLength(0);
 		fireEvent.click(screen.getByRole("button", { name: "执行详情" }));
 		await waitFor(() =>
 			expect(
@@ -747,6 +1026,10 @@ describe("functional conversation screen", () => {
 				: undefined,
 		);
 		await screen.findByText("执行失败");
+		const live = screen.getByRole("article", { name: `${agent.name}的消息` });
+		expect(within(live).getByText(agent.name)).toBeTruthy();
+		expect(within(live).getByText("执行失败")).toBeTruthy();
+		expect(screen.getByRole("article", { name: "你的消息" })).toBeTruthy();
 		expect(screen.getAllByRole("button", { name: "执行详情" })).toHaveLength(2);
 	});
 });

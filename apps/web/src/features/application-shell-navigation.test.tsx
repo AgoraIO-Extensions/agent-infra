@@ -14,9 +14,24 @@ import {
 	screen,
 	within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApplicationShell } from "./application-shell.js";
 
+beforeEach(() => {
+	vi.stubGlobal(
+		"matchMedia",
+		vi.fn((media: string) => ({
+			matches: false,
+			media,
+			onchange: null,
+			addEventListener: vi.fn(),
+			removeEventListener: vi.fn(),
+			addListener: vi.fn(),
+			removeListener: vi.fn(),
+			dispatchEvent: vi.fn(),
+		})),
+	);
+});
 const clients: QueryClient[] = [];
 afterEach(() => {
 	cleanup();
@@ -105,23 +120,21 @@ describe("Original IA workbench navigation", () => {
 			expect(chat.getAttribute("aria-current")).toBe("page");
 			expect(
 				within(work)
-					.getByRole("link", { name: "Agent" })
+					.getByRole("link", { name: "Agent 目录" })
 					.getAttribute("aria-current"),
 			).toBeNull();
 			expect(work.querySelectorAll(".selected")).toHaveLength(1);
 			expect(
 				screen.getByText(
-					entry.startsWith("/chat/")
-						? "文本对话与个人历史"
-						: "选择 Agent 开始对话",
+					entry.startsWith("/chat/") ? "对话" : "选择 Agent 开始对话",
 					{ selector: '[data-slot="breadcrumb-page"]' },
 				),
 			).toBeTruthy();
-			fireEvent.click(within(work).getByRole("link", { name: "Agent" }));
+			fireEvent.click(within(work).getByRole("link", { name: "Agent 目录" }));
 			await screen.findByRole("heading", { name: "受控 Agent 目录" });
 			expect(
 				within(work)
-					.getByRole("link", { name: "Agent" })
+					.getByRole("link", { name: "Agent 目录" })
 					.getAttribute("aria-current"),
 			).toBe("page");
 			expect(
@@ -140,7 +153,9 @@ describe("Original IA workbench navigation", () => {
 			const link = within(work).getByRole("link", { name: "工作台" });
 			expect(link.getAttribute("href")).toBe("/");
 			expect(
-				within(work).getByRole("link", { name: "Agent" }).getAttribute("href"),
+				within(work)
+					.getByRole("link", { name: "Agent 目录" })
+					.getAttribute("href"),
 			).toBe("/agents");
 			expect(screen.getByRole("navigation", { name: "我的管理" })).toBeTruthy();
 			expect(

@@ -19,6 +19,10 @@ import {
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
+	ModelEndpointV1Schema,
+	runtimeModelInjectionV1,
+	validateRuntimeModelProjectionV1,
+	validateRuntimeModelProjectionV4,
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationRecordV2,
@@ -615,9 +619,14 @@ describe("assembled Workload Runtime contracts", () => {
 			);
 		},
 	);
-	it.each([false, true])(
-		"cleans the exact failed model config Secret when recorded identity is %s",
-		async (hasIdentity) => {
+	it.each([
+		{ hasIdentity: false, legacy: false },
+		{ hasIdentity: true, legacy: false },
+		{ hasIdentity: false, legacy: true },
+		{ hasIdentity: true, legacy: true },
+	])(
+		"cleans the exact model config with unavailable binding (%j)",
+		async ({ hasIdentity, legacy }) => {
 			const record = pendingSecretRecord({
 				name: "model:primary",
 				secretId: "model-secret-a",
@@ -649,11 +658,54 @@ describe("assembled Workload Runtime contracts", () => {
 			);
 			await f.tick(4);
 			assert(f.state);
+			let candidate = f.state.candidate;
+			const identity = f.state.identity;
+			if (legacy) {
+				// Controlled historical bytes are cleanup input, never new apply authority.
+				const {
+					standardTemplateBinding: _,
+					fingerprint: _fingerprint,
+					...content
+				} = validateRuntimeModelProjectionV1(candidate.modelProjection);
+				const modelProjection = validateRuntimeModelProjectionV1({
+					...content,
+					fingerprint: createHash("sha256")
+						.update(JSON.stringify(content))
+						.digest("hex"),
+				});
+				candidate = { ...candidate, modelProjection };
+				const original = runtimeModelInjectionV1(
+					validateRuntimeModelProjectionV1(f.state.candidate.modelProjection),
+				);
+				const historical = runtimeModelInjectionV1(modelProjection);
+				const secret = f.resources.get(
+					`Secret/${original.secretName}`,
+				) as V1Secret;
+				assert(secret?.metadata);
+				f.resources.delete(`Secret/${original.secretName}`);
+				const historicalSecret: V1Secret = {
+					...secret,
+					metadata: { ...secret.metadata, name: historical.secretName },
+					data: {
+						configuration: Buffer.from(historical.configuration).toString(
+							"base64",
+						),
+					},
+				};
+				f.resources.set(`Secret/${historical.secretName}`, historicalSecret);
+				const workload = f.resources.get(
+					`StatefulSet/${workloadResourceNameV1("agent-a")}`,
+				) as V1StatefulSet;
+				assert(workload.spec?.template.spec?.containers[0]);
+				workload.spec.template.spec.containers[0].env = historical.env;
+			}
 			const state = {
 				...f.state,
+				candidate,
 				phase: "cleaning" as const,
-				identity: hasIdentity ? f.state.identity : null,
+				identity: hasIdentity ? identity : null,
 			};
+			Object.assign(f.options, { templateModelBindings: [] });
 			const configSecret = [...f.resources.values()].find(
 				(value) =>
 					value.kind === "Secret" &&
@@ -685,7 +737,155 @@ describe("assembled Workload Runtime contracts", () => {
 			);
 		},
 	);
-	it.each(["codex", "claude", "acp"] as const)(
+	it("retains one Runtime while rendering different Messages Drivers and rejects existing selector drift before Secret I/O", async () => {
+		const catalog = catalogFixture();
+		catalog.endpoints = catalog.endpoints.map((endpoint) => ({
+			...endpoint,
+			protocol: "anthropic-messages-v1",
+			authentication: "bearer",
+		}));
+		const decrypt = vi.fn(async () => ({
+			outcome: "decrypted" as const,
+			plaintext: new TextEncoder().encode("synthetic-primary-credential"),
+		}));
+		const bindings = (["claude", "pi"] as const).map((driver, index) => ({
+			templateId: `template-${index}`,
+			imageDigest: `sha256:${String(index + 1).repeat(64)}`,
+			driver,
+			protocol: "anthropic-messages-v1" as const,
+		}));
+		const f = fixture({
+			templateModelBindings: bindings,
+			modelCatalog: createFakeModelCatalogAdapterV1(catalog),
+			modelAccess: createFakeModelAccessValidatorV1([
+				{
+					endpointId: "endpoint-a",
+					modelId: "model-a",
+					reasoningLevels: ["medium"],
+					credential: "synthetic-primary-credential",
+				},
+			]),
+			decryptor: { decrypt },
+		});
+		await f.tick(1);
+		assert(f.state);
+		const runtime = createWorkloadRuntimeV1(f.options);
+		for (const binding of bindings) {
+			const agentId = `agent-${binding.driver}`;
+			const originalConfiguration = standardModelConfiguration({ agentId });
+			assert(originalConfiguration.source.kind === "standard");
+			const configuration = {
+				...originalConfiguration,
+				source: {
+					...originalConfiguration.source,
+					templateId: binding.templateId,
+					imageDigest: binding.imageDigest,
+				},
+			};
+			const original = pendingSecretRecord({
+				name: "model:primary",
+				secretId: "model-secret-a",
+			});
+			const record = validatePlatformSecretRecordV1({
+				...original,
+				agentId,
+				crypto: {
+					...original.crypto,
+					aadBinding: { ...original.crypto.aadBinding, agentId },
+				},
+			});
+			const candidate: WorkloadReconciliationStateV1["candidate"] = {
+				...f.state.candidate,
+				configuration,
+			};
+			const state = { ...f.state, agentId, candidate };
+			const input = {
+				configuration,
+				state,
+				management: { ...f.management, agentId },
+				secrets: cleanupSecrets(secretCleanupStore(record)),
+				requestId: "request-a",
+				traceId: "trace-a",
+			};
+			state.candidate = await runtime.preflight(input, state);
+			const identity = await runtime.apply(state, false, input);
+			assert(identity !== "pending");
+			assert(identity && "uid" in identity);
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				workloadResourceNameV1(agentId),
+			);
+			assert(workload?.spec?.template.spec?.containers[0]);
+			const container = workload.spec.template.spec.containers[0];
+			const environment = structuredClone(container.env ?? []);
+			expect(container.image).toBe(
+				`${f.options.policy.imageRepository}@${binding.imageDigest}`,
+			);
+			expect(
+				environment.filter(
+					(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
+				),
+			).toEqual([
+				{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: binding.driver },
+			]);
+			const selector = environment.find(
+				(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
+			);
+			assert(selector);
+			const remainder = environment.filter((entry) => entry !== selector);
+			const mutations = [
+				remainder,
+				[...environment, selector],
+				[
+					...remainder,
+					{
+						name: selector.name,
+						valueFrom: { fieldRef: { fieldPath: "metadata.name" } },
+					},
+				],
+				[
+					...remainder,
+					{
+						name: selector.name,
+						value: binding.driver === "pi" ? "claude" : "pi",
+					},
+				],
+			];
+			const originalImage = container.image;
+			assert(originalImage);
+			for (const image of [
+				originalImage,
+				`old-registry.example.test/agent@${binding.imageDigest}`,
+			]) {
+				container.image = image;
+				for (const env of mutations) {
+					container.env = env;
+					f.resources.set(
+						`StatefulSet/${workloadResourceNameV1(agentId)}`,
+						workload,
+					);
+					decrypt.mockClear();
+					const writes = f.writes.length;
+					await expect(
+						runtime.apply(state, false, input),
+					).rejects.toBeInstanceOf(WorkloadKubernetesError);
+					expect(decrypt).not.toHaveBeenCalled();
+					expect(f.writes).toHaveLength(writes);
+					expect(workload.metadata?.uid).toBe(identity.uid);
+				}
+			}
+			container.image = originalImage;
+			container.env = environment;
+			f.resources.set(
+				`StatefulSet/${workloadResourceNameV1(agentId)}`,
+				workload,
+			);
+			await expect(runtime.apply(state, false, input)).resolves.toEqual(
+				identity,
+			);
+		}
+	});
+	it.each(["codex", "claude", "acp", "pi"] as const)(
 		"projects two options with the same model into isolated endpoint and credential bindings consumed by %s Runtime",
 		async (driver) => {
 			const configuration = standardModelConfiguration();
@@ -817,6 +1017,12 @@ describe("assembled Workload Runtime contracts", () => {
 				driver !== "codex"
 					? readRuntimeModelConfigurationV3(environment, driver)
 					: readCodexPilotConfiguration(environment);
+			expect(environment.AGENT_INFRA_RUNTIME_DRIVER).toBe(driver);
+			expect(
+				workload.spec.template.spec.containers[0].env?.filter(
+					(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
+				),
+			).toEqual([{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: driver }]);
 			expect(
 				JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? "")
 					.schemaVersion,
@@ -892,6 +1098,137 @@ describe("assembled Workload Runtime contracts", () => {
 			expect(await runtime.observe(JSON.parse(JSON.stringify(state)))).toBe(
 				"healthy",
 			);
+			const projected = validateRuntimeModelProjectionV1(
+				state.candidate.modelProjection,
+			);
+			const binding = f.options.templateModelBindings[0];
+			assert(binding);
+			expect(projected.standardTemplateBinding).toEqual(binding);
+			const saved = JSON.parse(
+				JSON.stringify(state),
+			) as WorkloadReconciliationStateV1;
+			const verified = {
+				...saved,
+				phase: "ready" as const,
+				verified: saved.candidate,
+				verifiedRevision: saved.revision,
+				rollback: true,
+			};
+			const input = {
+				configuration: saved.candidate.configuration,
+				management: f.management,
+				state: saved,
+				secrets: {
+					bindings: records.map((record) => ({
+						materialization: "current" as const,
+						record,
+					})),
+					store: secretCleanupStore(records[0]).store,
+					async auditDecryption() {},
+				},
+				requestId: "request-a",
+				traceId: "trace-a",
+			};
+			await expect(runtime.apply(saved, false, input)).resolves.toEqual(
+				saved.identity,
+			);
+			const restored = createWorkloadRuntimeV1(f.options);
+			await expect(restored.observe(saved)).resolves.toBe("healthy");
+			const io = ["read", "list", "create", "replace", "delete"] as const;
+			const calls = io.map((method) => vi.spyOn(f.client, method));
+			const decrypt = vi.spyOn(f.options.decryptor, "decrypt");
+			const otherBinding =
+				driver === "codex"
+					? {
+							...binding,
+							driver: "claude" as const,
+							protocol: "anthropic-messages-v1" as const,
+						}
+					: {
+							...binding,
+							driver:
+								driver === "claude" ? ("acp" as const) : ("claude" as const),
+						};
+			const {
+				standardTemplateBinding: _legacyBinding,
+				fingerprint: _fingerprint,
+				...legacyContent
+			} = projected;
+			const legacyProjection = {
+				...legacyContent,
+				fingerprint: createHash("sha256")
+					.update(JSON.stringify(legacyContent))
+					.digest("hex"),
+			};
+			const { fingerprint: _originalFingerprint, ...content } = projected;
+			const changedContent = {
+				...content,
+				standardTemplateBinding: otherBinding,
+			};
+			const changedProjection = {
+				...changedContent,
+				fingerprint: createHash("sha256")
+					.update(JSON.stringify(changedContent))
+					.digest("hex"),
+			};
+			const changedBindings = [
+				[],
+				[otherBinding],
+				[{ ...binding, templateId: "changed-template" }],
+				[{ ...binding, imageDigest: `sha256:${"b".repeat(64)}` }],
+			];
+			for (const scenario of [
+				{ runtime, projection: changedProjection },
+				{ runtime: restored, projection: legacyProjection },
+				...changedBindings.map((templateModelBindings) => ({
+					runtime: createWorkloadRuntimeV1({
+						...f.options,
+						templateModelBindings,
+					}),
+					projection: projected,
+				})),
+			]) {
+				const observeVerifiedControl = scenario.runtime.observeVerifiedControl;
+				assert(observeVerifiedControl);
+
+				for (const original of [saved, verified]) {
+					const version = {
+						...original.candidate,
+						modelProjection: scenario.projection,
+					};
+					const changed = {
+						...original,
+						candidate: version,
+						...(original.verified ? { verified: version } : {}),
+					};
+					for (const operation of [
+						() =>
+							scenario.runtime.apply(changed, false, {
+								...input,
+								state: changed,
+							}),
+						() => scenario.runtime.observe(changed),
+						...(changed.verified
+							? [() => observeVerifiedControl(changed)]
+							: []),
+						() =>
+							scenario.runtime.activateSecrets(changed, {
+								...input,
+								state: changed,
+							}),
+						() => scenario.runtime.promote(changed),
+					])
+						await expect(operation()).rejects.toThrow(
+							/^MODEL_CONFIGURATION_UNAVAILABLE$/,
+						);
+				}
+			}
+			for (const call of calls) {
+				expect(call).not.toHaveBeenCalled();
+				call.mockRestore();
+			}
+			expect(decrypt).not.toHaveBeenCalled();
+			decrypt.mockRestore();
 			const unavailable = structuredClone(state.candidate.modelProjection) as {
 				fingerprint: string;
 				options: { endpoint: { available: boolean } }[];
@@ -940,6 +1277,14 @@ describe("assembled Workload Runtime contracts", () => {
 				credentialEntries[1].valueFrom,
 			);
 			expect(await runtime.observe(state)).toBe("drifted");
+			// Withdrawal cannot prevent the existing workload's stop operation.
+			const withdrawn = createWorkloadRuntimeV1({
+				...f.options,
+				templateModelBindings: [],
+			});
+			await expect(withdrawn.apply(saved, true, input)).resolves.toBe(
+				"pending",
+			);
 		},
 	);
 	it.each(["current", "active-origin"] as const)(
@@ -2850,3 +3195,247 @@ it("preserves cancellation and only reopens a closing verified route", async () 
 		}),
 	).rejects.toMatchObject({ name: "AbortError" });
 });
+
+it("renders the original keyless V4 projection without reading static model credentials", async () => {
+	const decrypt = vi.fn();
+	const validate = vi.fn();
+	const f = fixture(
+		{
+			runtimeModelVersion: 4,
+			modelCatalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+			modelAccess: { validate },
+			decryptor: { decrypt },
+		},
+		{ configuration: standardModelConfiguration() },
+	);
+	await f.tick(4);
+	const state = f.state;
+	assert(state?.identity);
+	const projected = validateRuntimeModelProjectionV4(
+		state.candidate.modelProjection,
+		state.candidate.configuration,
+	);
+	expect(projected.standardTemplateBinding).toEqual(
+		f.options.templateModelBindings[0],
+	);
+	expect(
+		validateAgentWorkloadDesiredV1(state.candidate.deployment).secretRefs,
+	).toEqual([]);
+	expect(decrypt).not.toHaveBeenCalled();
+	expect(validate).not.toHaveBeenCalled();
+	const name = workloadResourceNameV1(state.agentId);
+	const sts = await f.client.read<V1StatefulSet>("StatefulSet", name);
+	assert(sts?.spec?.template.spec?.containers[0]);
+	const container = sts.spec.template.spec.containers[0];
+	expect(
+		container.env?.filter(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
+		),
+	).toEqual([{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: "codex" }]);
+	const modelConfig = container.env?.find(
+		(entry) => entry.name === "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
+	)?.valueFrom?.secretKeyRef;
+	assert(modelConfig?.name);
+	expect(modelConfig.key).toBe("configuration");
+	const secret = await f.client.read<V1Secret>("Secret", modelConfig.name);
+	assert(secret?.data?.configuration);
+	const rendered = JSON.parse(
+		Buffer.from(secret.data.configuration, "base64").toString(),
+	);
+	expect(rendered).toMatchObject({
+		schemaVersion: 4,
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				endpoint: "https://models.example.test/team-a/v1",
+			},
+		],
+	});
+	for (const forbidden of [
+		"model-secret-a",
+		"credentialEnvironmentVariable",
+		"secretKey",
+	])
+		expect(JSON.stringify(rendered)).not.toContain(forbidden);
+	expect(
+		container.env?.some((entry) =>
+			entry.name.startsWith("AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_"),
+		),
+	).toBe(false);
+	expect(
+		[...f.resources.keys()].some(
+			(key) => key.startsWith("Secret/") && key.includes("model-secret"),
+		),
+	).toBe(false);
+	expect(await createWorkloadRuntimeV1(f.options).observe(state)).toBe(
+		"healthy",
+	);
+});
+
+it.each(["changed", "removed", "expired"] as const)(
+	"revalidates a ready V4 catalog at the same configuration revision after %s",
+	async (change) => {
+		const catalog = catalogFixture();
+		const f = fixture(
+			{
+				runtimeModelVersion: 4,
+				modelCatalog: createDeploymentModelCatalogAdapterV1({
+					load: async () => catalog,
+				}),
+			},
+			{ configuration: standardModelConfiguration() },
+		);
+		await f.tick(8);
+		const ready = f.state;
+		assert(ready?.identity);
+		expect(ready.phase).toBe("ready");
+		expect(ready.verifiedRevision).toBe(ready.revision);
+		const runtime = createWorkloadRuntimeV1(f.options);
+		expect(await runtime.observe(ready)).toBe("healthy");
+		if (change === "changed") {
+			assert(catalog.endpoints[0]);
+			catalog.endpoints[0].baseUrl = "https://models.example.test/changed/v1";
+		} else if (change === "removed") catalog.endpoints = [];
+		else catalog.validUntil = Date.now() - 1;
+		const writes = f.writes.length;
+		await expect(runtime.observe(ready)).rejects.toThrow(
+			/^MODEL_CONFIGURATION_UNAVAILABLE$/,
+		);
+		await expect(
+			runtime.apply(ready, false, {
+				configuration: ready.candidate.configuration,
+				management: f.management,
+				state: ready,
+				requestId: "request-a",
+				traceId: "trace-a",
+			}),
+		).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+		expect(f.writes).toHaveLength(writes);
+	},
+);
+it("rejects V4 admission for a non-Codex trusted image before static model access or resources", async () => {
+	const decrypt = vi.fn();
+	const validate = vi.fn();
+	const f = fixture(
+		{
+			runtimeModelVersion: 4,
+			modelCatalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+			modelAccess: { validate },
+			decryptor: { decrypt },
+			templateModelBindings: [
+				{
+					templateId: "template-a",
+					imageDigest: `sha256:${"a".repeat(64)}`,
+					driver: "claude",
+					protocol: "anthropic-messages-v1",
+				},
+			],
+		},
+		{ configuration: standardModelConfiguration() },
+	);
+	await f.tick(2);
+	expect(f.state?.phase).toBe("cleaning");
+	expect(f.resources.size).toBe(0);
+	expect(decrypt).not.toHaveBeenCalled();
+	expect(validate).not.toHaveBeenCalled();
+});
+
+it.each(["https://127.0.0.1/v1", "https://localhost/v1", "https://[::1]/v1"])(
+	"rejects non-DNS V4 endpoints at preflight before workload mutations: %s",
+	async (baseUrl) => {
+		const endpoint = ModelEndpointV1Schema.parse(catalogFixture().endpoints[0]);
+		const f = fixture(
+			{
+				runtimeModelVersion: 4,
+				modelCatalog: {
+					async resolve() {
+						return { ...endpoint, baseUrl, origin: new URL(baseUrl).origin };
+					},
+				},
+			},
+			{ configuration: standardModelConfiguration() },
+		);
+		await f.tick(2);
+		expect(f.state?.phase).toBe("cleaning");
+		expect(f.state?.candidate.modelProjection).toBeUndefined();
+		expect(f.writes).toHaveLength(0);
+		expect(f.resources.size).toBe(0);
+	},
+);
+
+it.each([false, true])(
+	"blocks persisted V1 materialization under trusted V4 (rollback=%s)",
+	async (rollback) => {
+		const record = pendingSecretRecord({
+			name: "model:primary",
+			secretId: "model-secret-a",
+		});
+		const secrets = cleanupSecrets(secretCleanupStore(record));
+		const decrypt = vi.fn(async () => ({
+			outcome: "decrypted" as const,
+			plaintext: new TextEncoder().encode("synthetic-primary-credential"),
+		}));
+		const f = fixture(
+			{
+				modelCatalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+				modelAccess: createFakeModelAccessValidatorV1([
+					{
+						endpointId: "endpoint-a",
+						modelId: "model-a",
+						reasoningLevels: ["medium"],
+						credential: "synthetic-primary-credential",
+					},
+				]),
+				decryptor: { decrypt },
+			},
+			{ configuration: standardModelConfiguration(), secrets },
+		);
+		await f.tick(4);
+		assert(f.state?.identity);
+		const state: WorkloadReconciliationStateV1 = {
+			...f.state,
+			phase: "applying",
+			rollback,
+			verified: f.state.candidate,
+			verifiedRevision: f.state.revision,
+		};
+		const projection = structuredClone(state.candidate.modelProjection);
+		expect(
+			validateRuntimeModelProjectionV1(
+				projection,
+				state.candidate.configuration,
+			).schemaVersion,
+		).toBe(1);
+		// A restart must not repair missing Secrets from an old static-Key projection.
+		for (const key of f.resources.keys())
+			if (key.startsWith("Secret/")) f.resources.delete(key);
+		const resources = structuredClone([...f.resources.entries()]);
+		const writes = f.writes.length;
+		decrypt.mockClear();
+		const runtime = createWorkloadRuntimeV1({
+			...f.options,
+			runtimeModelVersion: 4,
+		});
+		const input = {
+			configuration: state.candidate.configuration,
+			management: f.management,
+			state,
+			secrets,
+			requestId: "request-a",
+			traceId: "trace-a",
+		};
+		await expect(runtime.apply(state, false, input)).rejects.toBeInstanceOf(
+			ModelConfigurationErrorV1,
+		);
+		await expect(runtime.activateSecrets(state, input)).rejects.toBeInstanceOf(
+			ModelConfigurationErrorV1,
+		);
+		await expect(runtime.promote(state)).rejects.toBeInstanceOf(
+			ModelConfigurationErrorV1,
+		);
+		expect(decrypt).not.toHaveBeenCalled();
+		expect(f.writes).toHaveLength(writes);
+		expect([...f.resources.entries()]).toEqual(resources);
+		expect(state.candidate.modelProjection).toEqual(projection);
+	},
+);

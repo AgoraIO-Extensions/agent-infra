@@ -12,6 +12,7 @@ import {
 	parseConversationOperationHistoryV2,
 } from "@agent-infra/platform-core";
 import type {
+	ModelTokenUsage,
 	OperationalCode,
 	OperationalEvent,
 	OperationalOutcome,
@@ -69,9 +70,41 @@ function firstOperationOutcome(
 	};
 }
 
+function firstModelUsage(
+	next: ConversationEventWritePlanV1 | ConversationEventDecisionV1,
+	state: ConversationEventStateV1,
+): ModelTokenUsage | undefined {
+	if ("outcome" in next || next.event.event.type !== "execution.operation")
+		return;
+	const fact = next.event.event.fact;
+	if (fact.kind !== "model" || !fact.usage) return;
+	const history = parseConversationOperationHistoryV2(state.operationHistory);
+	const usage: { -readonly [K in keyof ModelTokenUsage]: ModelTokenUsage[K] } =
+		{};
+	for (const field of [
+		"inputTokens",
+		"outputTokens",
+		"cachedInputTokens",
+	] as const) {
+		if (
+			fact.usage[field] !== undefined &&
+			!history.some(
+				(previous) =>
+					previous.kind === "model" &&
+					previous.operationRef === fact.operationRef &&
+					previous.attemptRef === fact.attemptRef &&
+					previous.usage?.[field] !== undefined,
+			)
+		)
+			usage[field] = fact.usage[field];
+	}
+	return Object.keys(usage).length ? usage : undefined;
+}
+
 export function createObservedConversationEvents(
 	dependencies: ConversationEventUseCaseDependenciesV1 & {
-		readonly telemetry: Pick<ReturnType<typeof startObservability>, "record">;
+		readonly telemetry: Pick<ReturnType<typeof startObservability>, "record"> &
+			Partial<Pick<ReturnType<typeof startObservability>, "recordModelUsage">>;
 	},
 	options: ConversationEventUseCaseOptionsV1 = {},
 ): ConversationEventUseCaseV1 {
@@ -91,6 +124,7 @@ export function createObservedConversationEvents(
 				| { readonly conversationId: string; readonly executionId: string }
 				| undefined;
 			let operationOutcome: OperationalEvent | undefined;
+			let modelUsage: ModelTokenUsage | undefined;
 			const events = createConversationEventUseCaseV1(
 				{
 					transaction: {
@@ -104,6 +138,7 @@ export function createObservedConversationEvents(
 								// Read the same locked history; emit only after Core confirms the return value.
 								try {
 									operationOutcome = firstOperationOutcome(next, state);
+									modelUsage = firstModelUsage(next, state);
 								} catch {
 									// An observation failure cannot abort the event/audit transaction.
 								}
@@ -125,6 +160,13 @@ export function createObservedConversationEvents(
 						executionId: decision.event.executionId,
 					});
 					if (operationOutcome) record(operationOutcome);
+					if (modelUsage) {
+						try {
+							telemetry.recordModelUsage?.(modelUsage);
+						} catch {
+							// Usage export is observational; the original ACK is unchanged.
+						}
+					}
 				}
 				return decision;
 			} catch (error) {

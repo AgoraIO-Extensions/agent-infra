@@ -5,22 +5,26 @@ import {
 } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
-	ArrowUpRight,
-	CheckCheck,
-	ClipboardList,
-	Grid2X2,
+	Bot,
+	Check,
+	ClipboardMinus,
+	ExternalLink,
 	House,
+	KeyRound,
 	Layers,
 	List,
 	Menu,
-	MessageSquare,
+	MessageCircle,
+	Plus,
 	X,
 } from "lucide-react";
 import {
 	createContext,
 	type ReactNode,
 	useContext,
+	useEffect,
 	useLayoutEffect,
+	useRef,
 	useState,
 } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -29,7 +33,6 @@ import {
 	BreadcrumbItem,
 	BreadcrumbList,
 	BreadcrumbPage,
-	BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -126,6 +129,22 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		conversationSelection;
 	const chatContext = pathname.startsWith("/chat/") || selectingConversation;
 	const [sheet, setSheet] = useState(false);
+	const routeHref = useLocation({ select: (location) => location.href });
+	const previousRoute = useRef(routeHref);
+	useEffect(() => {
+		if (previousRoute.current !== routeHref) {
+			previousRoute.current = routeHref;
+			setSheet(false);
+		}
+	}, [routeHref]);
+	useEffect(() => {
+		const desktop = window.matchMedia("(min-width: 1024px)");
+		const closeOnDesktop = () => {
+			if (desktop.matches) setSheet(false);
+		};
+		desktop.addEventListener("change", closeOnDesktop);
+		return () => desktop.removeEventListener("change", closeOnDesktop);
+	}, []);
 	const user =
 		session.state.kind === "ready" ? session.state.session.user : undefined;
 	const admin = user?.roles.includes("system_admin") ?? false;
@@ -141,7 +160,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 			: selectingConversation
 				? "选择 Agent 开始对话"
 				: chatContext || pathname.includes("/conversations")
-					? "文本对话与个人历史"
+					? "对话"
 					: pathname.includes("/configuration")
 						? "配置与生命周期"
 						: pathname === "/admin/audit"
@@ -154,11 +173,17 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 										? "创建审批"
 										: pathname === "/my-agents/new"
 											? "创建申请"
-											: pathname.startsWith("/my-agents")
-												? "我的 Agent"
-												: pathname === "/agents" || pathname === "/agents/"
-													? "Agent"
-													: "Agent 详情";
+											: pathname.startsWith("/my-agents/") &&
+													pathname.endsWith("/edit")
+												? "编辑申请"
+												: pathname.startsWith("/my-agents/") &&
+														pathname !== "/my-agents/"
+													? "申请详情"
+													: pathname.startsWith("/my-agents")
+														? "我的 Agent"
+														: pathname === "/agents" || pathname === "/agents/"
+															? "Agent 目录"
+															: "Agent 详情";
 	const navigation = (
 		<>
 			<Link className="platform-brand" to="/" onClick={() => setSheet(false)}>
@@ -167,7 +192,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				</span>
 				<div>
 					<strong>Agora Agent</strong>
-					<small>公司内部工作区</small>
+					<small>Platform workspace</small>
 				</div>
 			</Link>
 			<nav aria-label="主导航">
@@ -179,7 +204,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						to="/"
 						onClick={() => setSheet(false)}
 					>
-						<House size={19} aria-hidden="true" />
+						<House size={17} strokeWidth={1.8} aria-hidden="true" />
 						工作台
 					</Link>
 					<Link
@@ -194,8 +219,8 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						activeOptions={{ explicitUndefined: true }}
 						onClick={() => setSheet(false)}
 					>
-						<Grid2X2 size={19} aria-hidden="true" />
-						Agent
+						<Bot size={17} strokeWidth={1.8} aria-hidden="true" />
+						Agent 目录
 					</Link>
 					<Link
 						aria-current={chatContext ? "page" : undefined}
@@ -204,7 +229,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						search={{ mode: "conversation" }}
 						onClick={() => setSheet(false)}
 					>
-						<MessageSquare size={19} aria-hidden="true" />
+						<MessageCircle size={17} strokeWidth={1.8} aria-hidden="true" />
 						对话
 					</Link>
 				</nav>
@@ -215,7 +240,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						to="/my-agents"
 						onClick={() => setSheet(false)}
 					>
-						<Layers size={19} aria-hidden="true" />
+						<Layers size={17} strokeWidth={1.8} aria-hidden="true" />
 						我的 Agent
 					</Link>
 					<Link
@@ -223,29 +248,30 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						to="/my-agents/new"
 						onClick={() => setSheet(false)}
 					>
-						<Layers size={19} aria-hidden="true" />
-						创建与配置
+						<Plus size={17} strokeWidth={1.8} aria-hidden="true" />
+						创建申请
 					</Link>
 					<Link
 						className={`platform-nav-item ${pathname === "/audit" ? "selected" : ""}`}
 						to="/audit"
 						onClick={() => setSheet(false)}
 					>
-						<ClipboardList size={19} aria-hidden="true" />
+						<ClipboardMinus size={17} strokeWidth={1.8} aria-hidden="true" />
 						我的执行审计
 					</Link>
-					{connectionUrl ? (
+					{connectionUrl && (
 						<a
-							className="platform-nav-item"
+							className="platform-nav-item platform-nav-external"
 							href={connectionUrl}
 							target="_blank"
 							rel="noopener noreferrer"
 						>
-							我的 Connection
-							<ArrowUpRight size={16} aria-hidden="true" />
+							<span>
+								<KeyRound size={17} strokeWidth={1.8} aria-hidden="true" />
+								我的 Connection
+							</span>
+							<ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
 						</a>
-					) : (
-						<p className="platform-nav-label">Connection 尚未接入</p>
 					)}
 				</nav>
 				{admin && (
@@ -256,7 +282,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							to="/admin/approvals"
 							onClick={() => setSheet(false)}
 						>
-							<CheckCheck size={19} aria-hidden="true" />
+							<Check size={17} strokeWidth={1.8} aria-hidden="true" />
 							创建审批
 						</Link>
 						<Link
@@ -265,7 +291,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							to="/admin/agents"
 							onClick={() => setSheet(false)}
 						>
-							<List size={19} aria-hidden="true" />
+							<List size={17} strokeWidth={1.8} aria-hidden="true" />
 							Agent 管理
 						</Link>
 						<Link
@@ -273,7 +299,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							to="/admin/audit"
 							onClick={() => setSheet(false)}
 						>
-							<ClipboardList size={19} aria-hidden="true" />
+							<ClipboardMinus size={17} strokeWidth={1.8} aria-hidden="true" />
 							平台审计
 						</Link>
 					</nav>
@@ -303,7 +329,13 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		</>
 	);
 	return (
-		<div className="platform-shell">
+		<div
+			className={
+				pathname.startsWith("/chat/")
+					? "platform-shell platform-shell-chat"
+					: "platform-shell"
+			}
+		>
 			<a className="platform-skip-link" href="#main-content">
 				跳至主要内容
 			</a>
@@ -314,7 +346,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						<SheetTrigger
 							render={
 								<Button
-									variant="ghost"
+									variant="outline"
 									size="icon"
 									className="mobile-menu"
 									aria-label="打开导航"
@@ -356,12 +388,19 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 										? "我的管理"
 										: "工作区"}
 							</BreadcrumbItem>
-							<BreadcrumbSeparator />
 							<BreadcrumbItem>
 								<BreadcrumbPage>{title}</BreadcrumbPage>
 							</BreadcrumbItem>
 						</BreadcrumbList>
 					</Breadcrumb>
+					{user && (
+						<Avatar
+							className="platform-user"
+							aria-label={`当前用户：${user.displayName}`}
+						>
+							<AvatarFallback>{user.displayName.slice(0, 1)}</AvatarFallback>
+						</Avatar>
+					)}
 					{development && (
 						<span className="text-muted-foreground text-xs">
 							本地开发 · 测试身份
@@ -380,18 +419,17 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						</AuthenticatedContent>
 					) : (
 						<main className="platform-content max-w-2xl">
-							<h1 className="font-semibold text-[28px]">
-								{session.state.kind === "loading"
+							<h1 className="font-semibold text-[28px]">登录工作空间</h1>
+							<p className="mt-5 text-muted-foreground" role="status">
+								{session.isFetching
 									? "正在确认登录状态…"
-									: "登录工作空间"}
-							</h1>
+									: session.state.kind !== "loading" &&
+										(session.state.retryable
+											? "暂时无法确认登录状态，请重试。"
+											: "请先登录，再查看 Agent、提交申请或继续对话。")}
+							</p>
 							{session.state.kind !== "loading" && (
 								<div className="mt-5 space-y-4">
-									<p className="text-muted-foreground">
-										{session.state.retryable
-											? "暂时无法确认登录状态，请重试。"
-											: "请先登录，再查看 Agent、提交申请或继续对话。"}
-									</p>
 									{loginUrl ? (
 										development ? (
 											<a className={buttonVariants()} href={loginUrl}>
@@ -417,7 +455,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 										onClick={() => void session.refetch()}
 										disabled={session.isFetching}
 									>
-										重新检查
+										{session.isFetching ? "正在检查…" : "重新检查"}
 									</Button>
 								</div>
 							)}

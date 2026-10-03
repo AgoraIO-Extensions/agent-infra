@@ -511,7 +511,15 @@ describe("platform worker lifecycle", () => {
 					{ service: "platform-worker", status: "ready" },
 					{ service: "platform-worker", status: "stopped" },
 				]);
-				expect(error).not.toHaveBeenCalled();
+				expect(error.mock.calls).toEqual(
+					rejectsAssembly
+						? [
+								[
+									"Platform Worker failed to start; check deployment configuration",
+								],
+							]
+						: [],
+				);
 				const failed = rejectsAssembly || rejectsShutdown;
 				expect(vi.getTimerCount()).toBe(failed ? 1 : 0);
 				process.emit(signal);

@@ -299,7 +299,7 @@ describe("AgentConfigurationScreen", () => {
 		);
 	});
 
-	it("places the supplied lifecycle controls in the configuration aside", () => {
+	it("places lifecycle controls below the configuration form", () => {
 		render(
 			<AgentConfigurationScreen
 				agent={agent}
@@ -311,7 +311,7 @@ describe("AgentConfigurationScreen", () => {
 			/>,
 		);
 		const controls = screen.getByRole("region", { name: "生命周期" });
-		expect(controls.closest("aside")?.className).toBe("form-aside");
+		expect(controls.closest(".lifecycle-panel")).not.toBeNull();
 		expect(controls.closest(".form-layout")).not.toBeNull();
 	});
 

@@ -201,6 +201,7 @@ export async function startCollector() {
 		const metrics = await endpoint(9464);
 		const otlpEndpoint = await endpoint(4318);
 		return {
+			name,
 			imageId: imageId.trim(),
 			otlpEndpoint,
 			query: async () => {

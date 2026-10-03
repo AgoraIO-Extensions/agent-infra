@@ -4,6 +4,7 @@ import { AgentApplicationSubmissionScreen } from "../../features/my-agents/agent
 import { projectDeploymentConfiguration } from "../../features/my-agents/deployment-configuration.js";
 import { useAgentApplicationSubmission } from "../../features/my-agents/use-agent-application-submission.js";
 import { useDeploymentConfiguration } from "../../features/my-agents/use-deployment-configuration.js";
+import { PageLoadingState } from "../../features/page-loading-state.js";
 
 export const Route = createFileRoute("/my-agents/new")({
 	component: NewAgentApplicationRoute,
@@ -15,7 +16,10 @@ function NewAgentApplicationRoute() {
 	if (deployment.isPending) {
 		return (
 			<main className="platform-content management-content">
-				<p aria-live="polite">正在读取部署选项…</p>
+				<PageLoadingState
+					title="创建一个新的 Agent。"
+					message="正在读取部署选项…"
+				/>
 			</main>
 		);
 	}

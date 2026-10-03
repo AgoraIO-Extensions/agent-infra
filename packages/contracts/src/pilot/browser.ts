@@ -9,13 +9,28 @@ import {
 	TraceIdV1Schema,
 } from "../index.ts";
 import {
+	ApplicationMaterialGrantRequestV1Schema,
+	ApplicationMaterialGrantResponseV1Schema,
+	ApplicationMaterialGrantRevokeRequestV1Schema,
+} from "./application-material-grants.ts";
+import {
+	ApplicationDisableRequestV1Schema,
+	ApplicationMetadataV1Schema,
+	ApplicationRegistrationRequestV1Schema,
+	ApplicationRegistrationResponseV1Schema,
+} from "./application-registration.ts";
+import {
 	PilotInternalErrorV1Schema,
 	PilotProtocolErrorV1Schema,
 } from "./errors.ts";
 import {
 	PersonalApiCredentialIssueRequestV1Schema,
 	PersonalApiCredentialIssueResponseV1Schema,
+	PersonalApiCredentialListQueryV1Schema,
 	PersonalApiCredentialMetadataV1Schema,
+	PersonalApiCredentialNarrowRequestV1Schema,
+	PersonalApiCredentialNarrowResponseV1Schema,
+	PersonalApiCredentialPageV1Schema,
 	PersonalApiCredentialRevokeResponseV1Schema,
 } from "./personal-api-credentials.ts";
 import {
@@ -1102,6 +1117,139 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/applications": {
+		post: {
+			operationId: "registerApplicationV2",
+			summary: "Register an application owned by the current browser user",
+			description:
+				"Active browser session only; no Authorization header or query. Responsibility is bound by the server. Same-key replay returns the original metadata. No credential or grant is issued. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				ApplicationRegistrationRequestV1Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Application committed",
+					ApplicationRegistrationResponseV1Schema,
+				),
+				"200": jsonResponse(
+					"Original application metadata replayed",
+					ApplicationRegistrationResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/applications/{applicationId}/material-grant": {
+		post: {
+			operationId: "grantApplicationMaterialV2",
+			summary:
+				"Grant application credential material access to a typed recipient",
+			description:
+				"Current system_admin only. The response contains grant metadata and never credential material; responsibility and administrator roles alone do not return material.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ applicationId: OpaqueIdV1Schema }),
+			},
+			requestBody: requiredJsonRequestBody(
+				ApplicationMaterialGrantRequestV1Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Material grant metadata",
+					ApplicationMaterialGrantResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}":
+		{
+			patch: {
+				operationId: "revokeApplicationMaterialV2",
+				summary: "Revoke a typed application credential material grant",
+				description:
+					"Current system_admin only. expectedRevision is required to prevent a stale revoke from changing a newer grant.",
+				security: personalCredentialSecurity,
+				requestParams: {
+					path: z.strictObject({
+						applicationId: OpaqueIdV1Schema,
+						principalType: z.enum(["user", "application"]),
+						principalId: OpaqueIdV1Schema,
+					}),
+				},
+				requestBody: requiredJsonRequestBody(
+					ApplicationMaterialGrantRevokeRequestV1Schema,
+				),
+				responses: {
+					"200": jsonResponse(
+						"Revoked material grant metadata",
+						ApplicationMaterialGrantResponseV1Schema,
+					),
+					...errorResponses,
+				},
+			},
+			get: {
+				operationId: "readApplicationMaterialV2",
+				summary: "Read typed application credential material grant metadata",
+				description:
+					"Current system_admin only. Grant metadata is returned; credential material is never returned.",
+				security: personalCredentialSecurity,
+				requestParams: {
+					path: z.strictObject({
+						applicationId: OpaqueIdV1Schema,
+						principalType: z.enum(["user", "application"]),
+						principalId: OpaqueIdV1Schema,
+					}),
+				},
+				responses: {
+					"200": jsonResponse(
+						"Material grant metadata",
+						ApplicationMaterialGrantResponseV1Schema,
+					),
+					...errorResponses,
+				},
+			},
+		},
+	"/api/v2/applications/{applicationId}": {
+		patch: {
+			operationId: "disableOwnApplicationV2",
+			summary: "Disable an application owned by the current browser user",
+			description:
+				"Active browser session only; no Authorization header or query. Current ownership is rechecked on replay. Cross-person and missing applications both return 404. No credential material is returned. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ applicationId: OpaqueIdV1Schema }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(ApplicationDisableRequestV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Disabled application metadata",
+					ApplicationMetadataV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		get: {
+			operationId: "getOwnApplicationV2",
+			summary: "Read an application owned by the current browser user",
+			description:
+				"Active browser session only; no Authorization header, query or request body. Cross-person and missing applications both return 404. Metadata contains no material or grants. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ applicationId: OpaqueIdV1Schema }),
+			},
+			responses: {
+				"200": jsonResponse(
+					"Own application metadata",
+					ApplicationMetadataV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/me/relay-key": {
 		get: {
 			operationId: "getPersonalRelayKeyV2",
@@ -1153,6 +1301,21 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 		},
 	},
 	"/api/v2/me/api-credentials": {
+		get: {
+			operationId: "listPersonalApiCredentialsV2",
+			summary: "List only the current browser user's credential metadata",
+			description:
+				"Any Authorization header is rejected. Limit defaults to 20; cursor is bound to this user and limit. Credential material and hashes are never returned. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: { query: PersonalApiCredentialListQueryV1Schema },
+			responses: {
+				"200": jsonResponse(
+					"Personal credential metadata page",
+					PersonalApiCredentialPageV1Schema,
+				),
+				...errorResponses,
+			},
+		},
 		post: {
 			operationId: "issuePersonalApiCredentialV2",
 			summary: "Issue a personal credential with one-time material delivery",
@@ -1177,6 +1340,27 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 		},
 	},
 	"/api/v2/me/api-credentials/{credentialId}": {
+		patch: {
+			operationId: "narrowPersonalApiCredentialV2",
+			summary: "Restrict one personal credential's scopes or expiry",
+			description:
+				"Active browser user only. Any Authorization header is rejected. Scopes can only be a nonempty subset; expiry can only be made earlier. Revoked or expired credentials are never revived. Same-key replay returns current metadata. Cross-person and absent IDs both return 404. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ credentialId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(
+				PersonalApiCredentialNarrowRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Current restricted credential metadata",
+					PersonalApiCredentialNarrowResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
 		delete: {
 			operationId: "revokePersonalApiCredentialV2",
 			summary: "Revoke one credential owned by the current browser user",
@@ -1403,6 +1587,10 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	ApplicationMetadataV1: ApplicationMetadataV1Schema,
+	ApplicationDisableRequestV1: ApplicationDisableRequestV1Schema,
+	ApplicationRegistrationRequestV1: ApplicationRegistrationRequestV1Schema,
+	ApplicationRegistrationResponseV1: ApplicationRegistrationResponseV1Schema,
 	PersonalRelayKeyStateV1: PersonalRelayKeyStateV1Schema,
 	PersonalRelayKeyReplaceRequestV1: PersonalRelayKeyReplaceRequestV1Schema,
 	PersonalRelayKeyRevokeRequestV1: PersonalRelayKeyRevokeRequestV1Schema,
@@ -1411,6 +1599,12 @@ export const pilotBrowserSchemasV2 = {
 	PersonalApiCredentialIssueResponseV1:
 		PersonalApiCredentialIssueResponseV1Schema,
 	PersonalApiCredentialMetadataV1: PersonalApiCredentialMetadataV1Schema,
+	PersonalApiCredentialListQueryV1: PersonalApiCredentialListQueryV1Schema,
+	PersonalApiCredentialPageV1: PersonalApiCredentialPageV1Schema,
+	PersonalApiCredentialNarrowRequestV1:
+		PersonalApiCredentialNarrowRequestV1Schema,
+	PersonalApiCredentialNarrowResponseV1:
+		PersonalApiCredentialNarrowResponseV1Schema,
 	PersonalApiCredentialRevokeResponseV1:
 		PersonalApiCredentialRevokeResponseV1Schema,
 	AgentLifecycleCommandRequestV1: AgentLifecycleCommandRequestV1Schema,

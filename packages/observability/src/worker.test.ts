@@ -7,7 +7,7 @@ import {
 	type ConversationOperationFactV2,
 } from "@agent-infra/platform-core";
 import { expect, it } from "vitest";
-import type { OperationalEvent } from "./index.js";
+import type { ModelTokenUsage, OperationalEvent } from "./index.js";
 import { createObservedConversationEvents } from "./worker.js";
 
 const command: ConversationEventCommandV1 = {
@@ -228,6 +228,93 @@ function operation(
 		event: { schemaVersion: 2, type: "execution.operation", fact },
 	};
 }
+
+it("observes committed usage once per known attempt field, including recovery", async () => {
+	const fixture = transactionFixture();
+	const usage: ModelTokenUsage[] = [];
+	const outcomes: OperationalEvent[] = [];
+	const telemetry = {
+		record: (event: OperationalEvent) => outcomes.push(event),
+		recordModelUsage: (value: ModelTokenUsage) => {
+			usage.push(value);
+		},
+	};
+	const dependencies = { transaction: fixture.transaction, telemetry };
+	let events = createObservedConversationEvents(dependencies);
+	const fact: ConversationOperationFactV2 = {
+		kind: "model",
+		operationRef: "model-1",
+		attemptRef: "attempt-1",
+		phase: "intent",
+		model: {
+			configVersion: "config-1",
+			modelOptionId: "option-1",
+			modelId: "PRIVATE_MODEL_SENTINEL",
+		},
+	};
+	await events.persist(operation(fact, "usage-intent"));
+	await events.persist(
+		operation({ ...fact, phase: "started" }, "usage-started"),
+	);
+	expect(usage).toEqual([]);
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	fixture.control.beforeCommit = () => {
+		entered.resolve();
+		return release.promise;
+	};
+	const unknown = operation(
+		{ ...fact, phase: "unknown", usage: { inputTokens: 7 } },
+		"usage-unknown",
+	);
+	const pending = events.persist(unknown);
+	await entered.promise;
+	expect(usage).toEqual([]);
+	release.resolve();
+	await pending;
+	fixture.control.beforeCommit = undefined;
+	expect(usage).toEqual([{ inputTokens: 7 }]);
+	// Re-create the consumer: the original locked facts, not a process cache, dedupe.
+	events = createObservedConversationEvents(dependencies);
+	await events.persist(unknown);
+	await events.persist(
+		operation(
+			{
+				...fact,
+				phase: "completed",
+				usage: { inputTokens: 7, outputTokens: 3, cachedInputTokens: 0 },
+			},
+			"usage-recovered",
+		),
+	);
+	expect(usage).toEqual([
+		{ inputTokens: 7 },
+		{ outputTokens: 3, cachedInputTokens: 0 },
+	]);
+	expect(outcomes.filter((event) => event.stage === "model")).toHaveLength(1);
+	const next = { ...fact, attemptRef: "attempt-2" };
+	await events.persist(operation(next, "usage-next-intent"));
+	await events.persist(
+		operation({ ...next, phase: "started" }, "usage-next-started"),
+	);
+	const terminal = operation(
+		{ ...next, phase: "completed", usage: { inputTokens: 2, outputTokens: 1 } },
+		"usage-next-completed",
+	);
+	fixture.control.fail = true;
+	await expect(events.persist(terminal)).rejects.toBeInstanceOf(
+		ConversationEventError,
+	);
+	expect(usage).toHaveLength(2);
+	fixture.control.fail = false;
+	telemetry.recordModelUsage = () => {
+		throw new Error("PRIVATE_CAPTURE_SENTINEL");
+	};
+	expect((await events.persist(terminal)).outcome).toBe("accepted");
+	expect((await events.persist(terminal)).outcome).toBe("replayed");
+	expect(fixture.snapshot().auditCount).toBe(7);
+	expect(JSON.stringify(usage)).not.toContain("SENTINEL");
+});
 
 it.each(["model", "tool"] as const)(
 	"counts the first committed %s outcome without inventing duration or usage",

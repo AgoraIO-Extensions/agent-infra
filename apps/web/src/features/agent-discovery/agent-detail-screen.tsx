@@ -1,9 +1,10 @@
 import { Link } from "@tanstack/react-router";
 import {
 	ArrowLeft,
+	Bot,
 	ExternalLink,
 	History,
-	MessageSquare,
+	MessageCircle,
 	RefreshCw,
 	Settings,
 } from "lucide-react";
@@ -12,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
+import { PageLoadingState } from "../page-loading-state.js";
 import {
 	type AgentDetailState,
 	canStartPlatformConversation,
@@ -61,7 +63,9 @@ export function AgentDetailScreen({
 	state,
 }: AgentDetailScreenProps) {
 	if (state.kind === "loading")
-		return <p aria-live="polite">正在加载 Agent 详情…</p>;
+		return (
+			<PageLoadingState title="Agent 详情" message="正在加载 Agent 详情…" />
+		);
 	if (state.kind === "unavailable")
 		return (
 			<section aria-labelledby="agent-detail-heading" className="space-y-4">
@@ -112,18 +116,38 @@ export function AgentDetailScreen({
 		(option) => option.optionId === agent.configuration.defaultModelOptionId,
 	);
 	return (
-		<section aria-labelledby="agent-detail-heading" className="space-y-6">
+		<section aria-labelledby="agent-detail-heading" className="agent-detail">
+			<div className="agent-detail-back">
+				<Link
+					className={buttonVariants({ variant: "link", className: "px-0" })}
+					to="/agents"
+				>
+					<ArrowLeft aria-hidden="true" />
+					返回 Agent 列表
+				</Link>
+			</div>
 			<header className="page-heading flex flex-wrap items-start justify-between gap-6">
-				<div className="min-w-0 flex-1">
-					<h1
-						id="agent-detail-heading"
-						className="break-words font-semibold text-[28px]"
-					>
-						{agent.name}
-					</h1>
-					<p className="mt-2 max-w-2xl whitespace-pre-wrap break-words text-muted-foreground leading-7">
-						{agent.description}
-					</p>
+				<div className="agent-detail-heading">
+					<span className="agent-detail-symbol" aria-hidden="true">
+						<Bot />
+					</span>
+					<div className="min-w-0">
+						<p className="page-eyebrow">
+							Agent 详情 ·{" "}
+							{agent.source.kind === "standard"
+								? agent.source.templateId
+								: "自定义 Agent"}
+						</p>
+						<h1
+							id="agent-detail-heading"
+							className="break-words font-semibold text-[28px]"
+						>
+							{agent.name}
+						</h1>
+						<p className="mt-2 max-w-2xl whitespace-pre-wrap break-words text-muted-foreground leading-7">
+							{agent.description}
+						</p>
+					</div>
 				</div>
 				<div className="actions flex flex-wrap gap-3">
 					{!selfManaged &&
@@ -134,12 +158,12 @@ export function AgentDetailScreen({
 								params={{ agentId: agent.agentId, conversationId: undefined }}
 								search={{ view: undefined }}
 							>
-								<MessageSquare aria-hidden="true" />
+								<MessageCircle aria-hidden="true" />
 								开始对话
 							</Link>
 						) : (
 							<Button disabled>
-								<MessageSquare aria-hidden="true" />
+								<MessageCircle aria-hidden="true" />
 								开始对话
 							</Button>
 						))}
@@ -154,136 +178,183 @@ export function AgentDetailScreen({
 							<ExternalLink aria-hidden="true" />
 						</a>
 					)}
+					{ownerSettings && (
+						<Link
+							className={buttonVariants({ variant: "outline" })}
+							params={{ agentId: ownerSettings.agentId }}
+							to="/agents/$agentId/configuration"
+						>
+							<Settings aria-hidden="true" />
+							配置与管理
+						</Link>
+					)}
 				</div>
 			</header>
 			<div className="status-line flex flex-wrap items-center gap-3">
-				<Badge variant="outline">
+				<Badge variant="outline" data-status={agent.managementStatus}>
 					{agentManagementStatusLabels[agent.managementStatus]}
 				</Badge>
 				{agent.serviceAvailability && (
-					<Badge variant="secondary">
+					<Badge variant="secondary" data-status={agent.serviceAvailability}>
 						{agentServiceAvailabilityLabel(agent.serviceAvailability)}
 					</Badge>
 				)}
 				{!selfManaged && (
-					<>
-						<span className="text-muted-foreground text-sm">
-							{ready
-								? "每位员工拥有独立的个人会话。"
-								: "历史保留，当前不可发送消息。"}
-						</span>
-						<Link
-							className={buttonVariants({ variant: "ghost" })}
-							to="/chat/$agentId/{-$conversationId}"
-							params={{ agentId: agent.agentId, conversationId: undefined }}
-							search={{ view: "history" }}
-						>
-							<History aria-hidden="true" />
-							个人历史
-						</Link>
-					</>
+					<span className="text-muted-foreground text-sm">
+						{ready
+							? "每位员工拥有独立的个人会话。"
+							: "历史保留，当前不可发送消息。"}
+					</span>
 				)}
 			</div>
-			<section
-				className="detail-section space-y-4 border-border border-b py-6"
-				aria-labelledby="about-agent-heading"
-			>
-				<h2 id="about-agent-heading" className="font-semibold text-lg">
-					关于此 Agent
-				</h2>
-				<dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-[auto_minmax(0,1fr)]">
-					<dt className="text-muted-foreground">Owner</dt>
-					<dd className="break-words">
-						{agent.configuration.owners
-							.map((owner) => owner.displayName)
-							.join("、") || "未提供"}
-					</dd>
-					<dt className="text-muted-foreground">模板与入口</dt>
-					<dd className="break-all">
-						{agent.source.kind === "standard"
-							? `标准模板 · ${agent.source.templateId}`
-							: agent.source.interactionMode === "self-managed"
-								? "自定义 Agent · 自有交互入口"
-								: "自定义 Agent · 平台交互入口"}
-					</dd>
-					<dt className="text-muted-foreground">渠道</dt>
-					<dd className="break-words">
-						{agent.configuration.channels
-							.map(
-								(channel) =>
-									`${agentChannelKindLabels[channel.kind]}：${channelStatusLabels[channel.status]}`,
-							)
-							.join("、") || "暂无平台渠道"}
-					</dd>
-					<dt className="text-muted-foreground">可用范围</dt>
-					<dd className="break-words">
-						{agent.configuration.availability
-							.map((entry) =>
-								entry.kind === "user"
-									? `用户 ${entry.userId}`
-									: `组织 ${entry.organizationId}`,
-							)
-							.join("、") || "未提供范围信息"}
-					</dd>
-					{!selfManaged && (
-						<>
-							<dt className="text-muted-foreground">模型范围</dt>
-							<dd className="break-words">
-								{agent.configuration.modelOptions
-									.map(
-										(option) =>
-											`${option.displayName} · ${option.reasoningLevels.join("、")}`,
-									)
-									.join("；") || "无可选择模型"}
-							</dd>
-							<dt className="text-muted-foreground">默认选项</dt>
-							<dd className="break-words">
-								{defaultModel
-									? `${defaultModel.displayName}${agent.configuration.defaultReasoningLevel ? ` · ${agent.configuration.defaultReasoningLevel}` : ""}`
-									: "未提供"}
-							</dd>
-						</>
-					)}
-				</dl>
-			</section>
-			<section
-				className="detail-section space-y-3 border-border border-b py-6"
-				aria-labelledby="agent-capability-heading"
-			>
-				<h2 id="agent-capability-heading" className="font-semibold text-lg">
-					外部能力
-				</h2>
-				<p>
-					{agent.capabilities.connection
-						? "此 Agent 支持独立 Connection 直连，使用前需由当前主体完成授权。"
-						: "当前 Agent 未提供 Connection 能力。"}
-				</p>
-				{agent.capabilities.connection && (
-					<p className="text-muted-foreground text-sm">
-						登录、OAuth、客户端授权和原调用查询均在独立 Connection
-						中完成。能力说明不代表当前主体已经获得授权，Owner
-						不能替其他主体授权。
-					</p>
-				)}
-			</section>
-			<div className="actions flex flex-wrap gap-3">
-				<Link
-					className={buttonVariants({ variant: "link", className: "px-0" })}
-					to="/agents"
-				>
-					<ArrowLeft aria-hidden="true" />
-					返回 Agent 列表
-				</Link>
-				{ownerSettings && (
-					<Link
-						className={buttonVariants({ variant: "outline" })}
-						params={{ agentId: ownerSettings.agentId }}
-						to="/agents/$agentId/configuration"
+			<div className="agent-detail-grid">
+				<div className="agent-detail-panel">
+					<section
+						className="detail-section space-y-4 border-border border-b py-6"
+						aria-labelledby="about-agent-heading"
 					>
-						<Settings aria-hidden="true" />
-						配置与管理
-					</Link>
-				)}
+						<h2 id="about-agent-heading" className="font-semibold text-lg">
+							关于此 Agent
+						</h2>
+						<dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-[auto_minmax(0,1fr)]">
+							<dt className="text-muted-foreground">Owner</dt>
+							<dd>
+								{agent.configuration.owners
+									.map((owner) => owner.displayName)
+									.join("、") || "未提供"}
+							</dd>
+							<dt className="text-muted-foreground">模板与入口</dt>
+							<dd className="break-all">
+								{agent.source.kind === "standard"
+									? `标准模板 · ${agent.source.templateId}`
+									: agent.source.interactionMode === "self-managed"
+										? "自定义 Agent · 自有交互入口"
+										: "自定义 Agent · 平台交互入口"}
+							</dd>
+							<dt className="text-muted-foreground">可用范围</dt>
+							<dd className="break-words">
+								{agent.configuration.availability
+									.map((entry) =>
+										entry.kind === "user"
+											? `用户 ${entry.userId}`
+											: `组织 ${entry.organizationId}`,
+									)
+									.join("、") || "未提供范围信息"}
+							</dd>
+							{!selfManaged && (
+								<>
+									<dt className="text-muted-foreground">模型范围</dt>
+									<dd className="break-words">
+										{agent.configuration.modelOptions
+											.map(
+												(option) =>
+													`${option.displayName} · ${option.reasoningLevels.join("、")}`,
+											)
+											.join("；") || "无可选择模型"}
+									</dd>
+									<dt className="text-muted-foreground">默认选项</dt>
+									<dd className="break-words">
+										{defaultModel
+											? `${defaultModel.displayName}${agent.configuration.defaultReasoningLevel ? ` · ${agent.configuration.defaultReasoningLevel}` : ""}`
+											: "未提供"}
+									</dd>
+								</>
+							)}
+						</dl>
+					</section>
+					{!selfManaged && (
+						<section className="detail-section">
+							<h2>个人历史</h2>
+							<p className="mb-4 text-muted-foreground text-sm">
+								只显示当前账号提交的消息与执行状态，Agent Owner
+								无法替你查看正文。
+							</p>
+							<Link
+								className={buttonVariants({ variant: "outline" })}
+								to="/chat/$agentId/{-$conversationId}"
+								params={{ agentId: agent.agentId, conversationId: undefined }}
+								search={{ view: "history" }}
+							>
+								<History aria-hidden="true" />
+								个人历史
+							</Link>
+						</section>
+					)}
+					<section
+						className="detail-section space-y-3 border-border border-b py-6"
+						aria-labelledby="agent-capability-heading"
+					>
+						<h2 id="agent-capability-heading" className="font-semibold text-lg">
+							外部能力
+						</h2>
+						<p>
+							{agent.capabilities.connection
+								? "此 Agent 支持独立 Connection 直连，使用前需由当前主体完成授权。"
+								: "当前 Agent 未提供 Connection 能力。"}
+						</p>
+						{agent.capabilities.connection && (
+							<p className="text-muted-foreground text-sm">
+								登录、OAuth、客户端授权和原调用查询均在独立 Connection
+								中完成。能力说明不代表当前主体已经获得授权，Owner
+								不能替其他主体授权。
+							</p>
+						)}
+					</section>
+				</div>
+				<aside className="agent-detail-aside" aria-label="Owner 与渠道">
+					<section
+						className="agent-detail-panel"
+						aria-labelledby="agent-owner-heading"
+					>
+						<header className="detail-panel-heading">
+							<h2 id="agent-owner-heading">Owner</h2>
+							<p>负责范围与运行状态</p>
+						</header>
+						<ul className="detail-list">
+							{agent.configuration.owners.map((owner) => (
+								<li key={owner.userId}>
+									<strong>{owner.displayName}</strong>
+								</li>
+							))}
+							{agent.configuration.owners.length === 0 && <li>未提供 Owner</li>}
+						</ul>
+					</section>
+					<section
+						className="agent-detail-panel"
+						aria-labelledby="agent-runtime-heading"
+					>
+						<header className="detail-panel-heading">
+							<h2 id="agent-runtime-heading">运行与渠道</h2>
+							<p>平台当前观测</p>
+						</header>
+						<ul className="detail-list">
+							<li>
+								<strong>服务状态</strong>
+								<Badge
+									variant="outline"
+									data-status={
+										agent.serviceAvailability ?? agent.managementStatus
+									}
+								>
+									{agent.serviceAvailability
+										? agentServiceAvailabilityLabel(agent.serviceAvailability)
+										: agentManagementStatusLabels[agent.managementStatus]}
+								</Badge>
+							</li>
+							{agent.configuration.channels.map((channel) => (
+								<li key={channel.kind}>
+									<strong>{agentChannelKindLabels[channel.kind]}</strong>
+									<Badge variant="outline" data-status={channel.status}>
+										{channelStatusLabels[channel.status]}
+									</Badge>
+								</li>
+							))}
+							{agent.configuration.channels.length === 0 && (
+								<li>暂无平台渠道</li>
+							)}
+						</ul>
+					</section>
+				</aside>
 			</div>
 		</section>
 	);

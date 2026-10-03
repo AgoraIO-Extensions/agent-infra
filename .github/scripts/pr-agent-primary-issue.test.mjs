@@ -98,9 +98,24 @@ test("rejects PR impostors, wrong repo, closed or late Issues and API failure", 
   await assert.rejects(preparePrimaryIssue({ repository, prNumber: 99, expectedHead: head, runId: "1234", attempt: "1", request: async () => { throw new Error("unreadable"); } }), /unreadable/);
 });
 
-test("rejects stale or foreign review targets before reading any Issue", async () => {
+test("skips merged, draft and superseded events before reading any Issue", async () => {
+  for (const [change, reason] of [
+    [{ state: "closed", merged: true }, "pr-closed"],
+    [{ draft: true }, "pr-draft"],
+    [{ head: { sha: "c".repeat(40), repo: { full_name: repository } } }, "head-superseded"],
+  ]) {
+    const state = fixtures();
+    Object.assign(state.pullRequest, change);
+    const result = await prepare(state);
+    assert.equal(result.reason, reason);
+    assert.equal(result.applicable, false);
+    assert.equal(result.relatedTickets, undefined);
+    assert.deepEqual(result.paths, [`/repos/${repository}/pulls/99`]);
+  }
+});
+
+test("rejects foreign review targets before reading any Issue", async () => {
   for (const mutate of [
-    (pr) => { pr.head.sha = "c".repeat(40); },
     (pr) => { pr.head.repo.full_name = "other/repo"; },
     (pr) => { pr.base.repo.full_name = "other/repo"; },
   ]) {

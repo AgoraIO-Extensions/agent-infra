@@ -199,6 +199,18 @@ test("visible template and channel searches restore across reload and keyboard d
 		await expect(search).toHaveValue(query);
 		await search.focus();
 		await search.press("Tab");
+		await expect(
+			page.getByRole("combobox", { name: "状态", exact: true }),
+		).toBeFocused();
+		await page.keyboard.press("Tab");
+		await expect(
+			page.getByRole("combobox", { name: "模板", exact: true }),
+		).toBeFocused();
+		await page.keyboard.press("Tab");
+		await expect(
+			page.getByRole("combobox", { name: "模型", exact: true }),
+		).toBeFocused();
+		await page.keyboard.press("Tab");
 		const detail = page.getByRole("link", { name: `查看 ${name} 详情` });
 		await expectFocusedAndUnobscured(detail);
 		await capture(page, info, `catalog-${name}-keyboard`);
@@ -314,6 +326,18 @@ test("template search and keyboard detail activation remain visible in short vie
 		await expectFocusedAndUnobscured(search);
 		await expect(page.locator(".agent-list > li")).toHaveCount(1);
 		await search.press("Tab");
+		await expect(
+			page.getByRole("combobox", { name: "状态", exact: true }),
+		).toBeFocused();
+		await page.keyboard.press("Tab");
+		await expect(
+			page.getByRole("combobox", { name: "模板", exact: true }),
+		).toBeFocused();
+		await page.keyboard.press("Tab");
+		await expect(
+			page.getByRole("combobox", { name: "模型", exact: true }),
+		).toBeFocused();
+		await page.keyboard.press("Tab");
 		const detail = page.getByRole("link", { name: "查看 发布助理 详情" });
 		await expectFocusedAndUnobscured(detail);
 		await capture(page, info, `catalog-template-short-${width}px`);

@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
 	type ApiPrincipalV1,
 	createConversationEventUseCaseV1,
+	createPersonalApiCredentialUseCaseV1,
 	type PlatformAuditQueryScopeV1,
 	type TaskAuthorizationBoundaryV1,
 } from "@agent-infra/platform-core";
@@ -9,6 +10,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
+import { PostgresPersonalApiCredentialStoreV1 } from "./personal-api-credentials.ts";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
@@ -565,6 +567,473 @@ describe("controlled PostgreSQL audit query", () => {
 		).rejects.toMatchObject({ code: "unavailable" });
 	});
 
+	it.each(["ordinary", "literal-unknown"])(
+		"projects actual issued/narrowed/revoked credentials for %s users without granting own execution access",
+		async (identity) => {
+			const f = await fixture({
+				kind: "user",
+				id: identity === "literal-unknown" ? "unknown" : randomUUID(),
+			});
+			const other = await fixture(undefined, f.agentId);
+			const adapter = new PostgresPersonalApiCredentialStoreV1({
+				databaseUrl: database.databaseUrl,
+			});
+			const credentials = createPersonalApiCredentialUseCaseV1({
+				transaction: adapter,
+				userDirectory: {
+					resolveUser: async () =>
+						f.scope.kind === "execution" ? (f.scope.user ?? null) : null,
+				},
+			});
+			try {
+				const issueRequest = {
+					userId: f.principal.id,
+					idempotencyKey: randomUUID(),
+					...request(),
+				};
+				const input = {
+					scopes: ["agent:read", "agent:use"] as const,
+					expiresAt: null,
+				};
+				const issued = await credentials.issue(issueRequest, input);
+				expect(issued.credential).toBeTruthy();
+				await credentials.issue({ ...issueRequest, ...request() }, input);
+				const narrowRequest = {
+					userId: f.principal.id,
+					idempotencyKey: randomUUID(),
+					...request(),
+				};
+				const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
+				const command =
+					identity === "literal-unknown"
+						? { scopes: ["agent:use"] as const }
+						: { expiresAt };
+				const snapshot =
+					identity === "literal-unknown"
+						? { scopes: ["agent:use"], expiresAt: null }
+						: { scopes: input.scopes, expiresAt };
+				const narrowed = await credentials.narrow(
+					narrowRequest,
+					issued.metadata.credentialId,
+					command,
+				);
+				expect(narrowed.replayed).toBe(false);
+				expect(narrowed.metadata).toMatchObject(snapshot);
+				await expect(
+					credentials.narrow(
+						{ ...narrowRequest, ...request() },
+						issued.metadata.credentialId,
+						command,
+					),
+				).resolves.toMatchObject({
+					replayed: true,
+					metadata: narrowed.metadata,
+				});
+				await credentials.revoke(
+					{
+						userId: f.principal.id,
+						idempotencyKey: randomUUID(),
+						...request(),
+					},
+					issued.metadata.credentialId,
+				);
+				const stored =
+					await sql`select id, action, details from platform.audit_events
+				where actor_id = ${f.principal.id} and action in ('api.credential.issued', 'api.credential.revoked', 'api.credential.narrowed')`;
+				expect(stored.map((row) => row.action).sort()).toEqual([
+					"api.credential.issued",
+					"api.credential.narrowed",
+					"api.credential.revoked",
+				]);
+				const source = await credentialQueryFixture(f);
+				const applicationSource = await credentialQueryFixture(
+					other,
+					"application",
+				);
+				await queryUseGrant(f);
+				for (const row of stored) {
+					const record = await query.getAudit(admin, row.id, detail, request());
+					expect(record).toMatchObject({
+						action: row.action,
+						result: "succeeded",
+						summary: row.action,
+						actor: { kind: "user", actorId: f.principal.id },
+						subject: {
+							kind: "api_credential",
+							subjectId: issued.metadata.credentialId,
+						},
+						executionId: null,
+						originalPrincipal: null,
+						authorizationRecordId: null,
+					});
+					expect(row.details).toEqual(
+						row.action === "api.credential.issued" ? input : snapshot,
+					);
+					const serialized = JSON.stringify(record);
+					for (const privateValue of [
+						issued.credential,
+						"credentialHash",
+						"scopes",
+						"expiresAt",
+						"details",
+					])
+						expect(serialized).not.toContain(privateValue);
+					expect(record.summary).not.toContain(issued.metadata.credentialId);
+					for (const deniedScope of [
+						f.scope,
+						other.scope,
+						source,
+						applicationSource,
+					])
+						await expect(
+							query.getAudit(deniedScope, row.id, detail, request()),
+						).rejects.toMatchObject({ code: "access_denied" });
+					for (const ownSource of [source, applicationSource]) {
+						expect(
+							(
+								await query.listAudit(
+									ownSource,
+									{ ...page, filters: { action: row.action } },
+									request(),
+								)
+							).items,
+						).toEqual([]);
+					}
+				}
+				const filters = { principal: f.principal };
+				const expected = await query.listAudit(
+					admin,
+					{ ...page, filters },
+					request(),
+				);
+				expect(expected.items.map((item) => item.auditId)).toEqual(
+					expect.arrayContaining([f.auditId, ...stored.map((row) => row.id)]),
+				);
+				const ids: string[] = [];
+				let cursor: string | undefined;
+				do {
+					const result = await query.listAudit(
+						admin,
+						{ limit: 1, filters, ...(cursor ? { cursor } : {}) },
+						request(),
+					);
+					ids.push(...result.items.map((item) => item.auditId));
+					cursor = result.nextCursor ?? undefined;
+					if (ids.length === 1) {
+						await credentials.issue(
+							{ ...issueRequest, idempotencyKey: randomUUID(), ...request() },
+							input,
+						);
+					}
+				} while (cursor);
+				expect(ids).toEqual(expected.items.map((item) => item.auditId));
+			} finally {
+				await adapter.close();
+			}
+		},
+	);
+
+	it.each(["revoked", "narrowed"] as const)(
+		"preserves actual failed/rejected %s facts with known or genuinely unknown subjects",
+		async (mutation) => {
+			const f = await fixture();
+			const adapter = new PostgresPersonalApiCredentialStoreV1({
+				databaseUrl: database.databaseUrl,
+			});
+			let failRevalidation = false;
+			let resolutions = 0;
+			const credentials = createPersonalApiCredentialUseCaseV1({
+				transaction: adapter,
+				userDirectory: {
+					resolveUser: async () => {
+						resolutions++;
+						if (f.scope.kind !== "execution" || !f.scope.user) return null;
+						return failRevalidation && resolutions % 2 === 0
+							? { ...f.scope.user, authorizationRevision: "changed" }
+							: f.scope.user;
+					},
+				},
+			});
+			try {
+				const issued = await credentials.issue(
+					{
+						userId: f.principal.id,
+						idempotencyKey: randomUUID(),
+						...request(),
+					},
+					{ scopes: ["agent:read"], expiresAt: null },
+				);
+				failRevalidation = true;
+				resolutions = 0;
+				const context = request();
+				const mutationRequest = {
+					userId: f.principal.id,
+					idempotencyKey: randomUUID(),
+					...context,
+				};
+				await expect(
+					mutation === "revoked"
+						? credentials.revoke(mutationRequest, issued.metadata.credentialId)
+						: credentials.narrow(
+								mutationRequest,
+								issued.metadata.credentialId,
+								{ scopes: ["agent:read"] },
+							),
+				).rejects.toMatchObject({ code: "unavailable" });
+				const [failed] =
+					await sql`select id from platform.audit_events where request_id = ${context.requestId}`;
+				if (!failed)
+					throw new Error("Actual failed credential audit is missing");
+				await expect(
+					query.getAudit(admin, failed.id, detail, request()),
+				).resolves.toMatchObject({
+					result: "failed",
+					subject: {
+						kind: "api_credential",
+						subjectId: issued.metadata.credentialId,
+					},
+					summary: `api.credential.${mutation}: reason=unavailable`,
+				});
+				for (const [action, reason] of [
+					["api.credential.issued", "authentication_required"],
+					["api.credential.revoked", "unavailable"],
+					["api.credential.narrowed", "authentication_required"],
+					["api.credential.narrowed", "unavailable"],
+				] as const) {
+					const refusal = request();
+					await credentials.recordRefusal(refusal, action, reason);
+					const [row] =
+						await sql`select id from platform.audit_events where request_id = ${refusal.requestId}`;
+					if (!row) throw new Error("Actual credential refusal is missing");
+					await expect(
+						query.getAudit(admin, row.id, detail, request()),
+					).resolves.toMatchObject({
+						result: reason === "unavailable" ? "failed" : "rejected",
+						actor: { kind: "unknown", actorId: "unknown" },
+						subject: { kind: "unknown", subjectId: "unknown" },
+						summary: `${action}: reason=${reason}`,
+					});
+				}
+			} finally {
+				await adapter.close();
+			}
+		},
+	);
+
+	it.each([
+		"api.credential.issued",
+		"api.credential.revoked",
+		"api.credential.narrowed",
+	] as const)(
+		"rejects malformed %s rather than exporting details or fabricating successful targets",
+		async (action) => {
+			for (const change of [
+				{ actorType: "application" },
+				{ actorType: "unknown", actorId: "unknown" },
+				{ targetId: "unknown" },
+				{ targetType: "unknown" },
+				{ requestId: null },
+				{ agentId: randomUUID() },
+				{
+					actorType: "unknown",
+					actorId: "unknown",
+					targetId: `api_credential_${randomUUID()}`,
+					outcome: "failed",
+					details: { reason: "unavailable" },
+				},
+				{
+					actorType: "unknown",
+					actorId: "unknown",
+					targetId: `api_credential_${randomUUID()}`,
+					outcome: "rejected",
+					details: { reason: "forbidden" },
+				},
+				{ details: null },
+				{ details: { scopes: [], expiresAt: null } },
+				{ details: { scopes: ["invented"], expiresAt: null } },
+				{ details: { scopes: ["agent:use"], expiresAt: "PRIVATE_SENTINEL" } },
+				{
+					details: {
+						scopes: ["agent:use"],
+						expiresAt: null,
+						credential: "PRIVATE_SENTINEL",
+					},
+				},
+				{ outcome: "failed", details: { reason: "forbidden" } },
+				{ outcome: "rejected", details: { reason: "unavailable" } },
+				{ outcome: "rejected", details: { reason: "PRIVATE_SENTINEL" } },
+			]) {
+				const id = randomUUID();
+				const row = {
+					actorType: "user",
+					actorId: "credential-user",
+					targetType: "api_credential",
+					targetId: randomUUID(),
+					requestId: randomUUID(),
+					agentId: null,
+					outcome: "succeeded",
+					details: { scopes: ["agent:use"], expiresAt: null },
+					...change,
+				};
+				await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, agent_id, details)
+				values (${id}, 'credential-negative', ${row.requestId}, ${row.actorType}, ${row.actorId}, ${action}, ${row.targetType}, ${row.targetId}, ${row.outcome}, ${row.agentId}, ${sql.json(row.details)})`;
+				try {
+					await expect(
+						query.getAudit(admin, id, detail, request()),
+					).rejects.toMatchObject({ code: "unavailable" });
+				} finally {
+					await sql`delete from platform.audit_events where id = ${id}`;
+				}
+			}
+		},
+	);
+
+	it("reads actual credential metadata list audits only as redacted administrator records", async () => {
+		const f = await fixture();
+		const adapter = new PostgresPersonalApiCredentialStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		const credentials = createPersonalApiCredentialUseCaseV1({
+			transaction: adapter,
+			userDirectory: {
+				resolveUser: async () =>
+					f.scope.kind === "execution" ? (f.scope.user ?? null) : null,
+			},
+		});
+		try {
+			for (const seeded of [false, true]) {
+				if (seeded) await credentialQueryFixture(f);
+				const context = request();
+				const metadata = await credentials.list(
+					{ userId: f.principal.id, ...context },
+					{ limit: 100 },
+				);
+				expect(metadata.items).toHaveLength(Number(seeded));
+				const [stored] =
+					await sql`select id, details from platform.audit_events where request_id = ${context.requestId}`;
+				if (!stored) throw new Error("Metadata producer audit is missing");
+				const record = await query.getAudit(
+					admin,
+					stored.id,
+					detail,
+					request(),
+				);
+				expect(record).toMatchObject({
+					action: "api.credential.metadata.read",
+					actor: { kind: "user", actorId: f.principal.id },
+					subject: { kind: "unknown", subjectId: "unknown" },
+					result: "succeeded",
+					summary: "api.credential.metadata.read",
+					agentId: null,
+					executionId: null,
+					authorizationRecordId: null,
+					originalPrincipal: null,
+				});
+				const input = {
+					limit: 100,
+					filters: { action: "api.credential.metadata.read" as const },
+				};
+				const list = await query.listAudit(admin, input, request());
+				expect(list.items.find((item) => item.auditId === stored.id)).toEqual(
+					record,
+				);
+				expect(
+					(await query.listAudit(f.scope, input, request())).items,
+				).toEqual([]);
+				await expect(
+					query.getAudit(f.scope, stored.id, detail, request()),
+				).rejects.toMatchObject({ code: "access_denied" });
+				expect(stored.details).toEqual({
+					returnedCredentialIds: metadata.items.map(
+						(item) => item.credentialId,
+					),
+				});
+				const projected = JSON.stringify(record);
+				expect(projected).not.toContain("details");
+				for (const item of metadata.items)
+					expect(projected).not.toContain(item.credentialId);
+			}
+			for (const [reason, userId] of [
+				["authentication_required", undefined],
+				["forbidden", f.principal.id],
+				["unavailable", undefined],
+			] as const) {
+				const context = request();
+				await credentials.recordRefusal(
+					context,
+					"api.credential.metadata.read",
+					reason,
+					userId,
+				);
+				const [stored] =
+					await sql`select id from platform.audit_events where request_id = ${context.requestId}`;
+				if (!stored) throw new Error("Metadata refusal audit is missing");
+				await expect(
+					query.getAudit(admin, stored.id, detail, request()),
+				).resolves.toMatchObject({
+					actor: {
+						kind: userId ? "user" : "unknown",
+						actorId: userId ?? "unknown",
+					},
+					result: reason === "unavailable" ? "failed" : "rejected",
+					summary: `api.credential.metadata.read: reason=${reason}`,
+				});
+			}
+		} finally {
+			await adapter.close();
+		}
+	});
+
+	it("rejects malformed credential metadata audits without widening the legacy decoder", async () => {
+		const credentialId = randomUUID();
+		for (const change of [
+			{ actorType: "application" },
+			{ actorType: "unknown", actorId: "invented-actor" },
+			{ actorType: "unknown", actorId: "unknown" },
+			{ targetType: "unknown" },
+			{ targetId: credentialId },
+			{ requestId: null },
+			{ details: null },
+			{ details: [] },
+			{ details: { returnedCredentialIds: [credentialId, credentialId] } },
+			{ details: { returnedCredentialIds: [""] } },
+			{
+				details: {
+					returnedCredentialIds: Array.from({ length: 101 }, () =>
+						randomUUID(),
+					),
+				},
+			},
+			{
+				details: { returnedCredentialIds: [], credential: "PRIVATE_SENTINEL" },
+			},
+			{ outcome: "rejected", details: { reason: "unavailable" } },
+			{ outcome: "failed", details: { reason: "forbidden" } },
+			{ outcome: "rejected", details: { reason: "PRIVATE_SENTINEL" } },
+		]) {
+			const id = randomUUID();
+			const row = {
+				actorType: "user",
+				actorId: "metadata-user",
+				targetType: "api_credential",
+				targetId: "unknown",
+				requestId: randomUUID(),
+				outcome: "succeeded",
+				details: { returnedCredentialIds: [credentialId] },
+				...change,
+			};
+			await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+				values (${id}, 'metadata-negative', ${row.requestId}, ${row.actorType}, ${row.actorId}, 'api.credential.metadata.read', ${row.targetType}, ${row.targetId}, ${row.outcome}, ${sql.json(row.details)})`;
+			try {
+				await expect(
+					query.getAudit(admin, id, detail, request()),
+				).rejects.toMatchObject({ code: "unavailable" });
+			} finally {
+				await sql`delete from platform.audit_events where id = ${id}`;
+			}
+		}
+	});
+
 	it("durably records malformed/rebound requests without persisting caller filters, cursors, IDs or secret sentinels", async () => {
 		const context = request();
 		await expect(
@@ -740,6 +1209,128 @@ describe("controlled PostgreSQL audit query", () => {
 		`;
 		await expect(
 			query.getAudit(f.scope, f.auditId, detail, request()),
+		).rejects.toMatchObject({ code: "access_denied" });
+	});
+});
+
+// Controlled credential rows prove query conformance, not #1165 application issuance.
+async function credentialQueryFixture(
+	f: Awaited<ReturnType<typeof fixture>>,
+	kind: "user" | "application" = "user",
+) {
+	if (f.scope.kind !== "execution" || !f.scope.user)
+		throw new Error("Missing controlled user");
+	const material = `papi_${randomBytes(32).toString("base64url")}`;
+	if (kind === "application")
+		await sql`insert into platform.platform_applications (id,name,responsible_user_id,status,authorization_revision)
+			values (${f.scope.principal.id},'Controlled query application',${f.scope.principal.id},'active','app-revision')`;
+	await sql`insert into platform.platform_api_credentials (id,principal_type,principal_id,credential_hash,scopes)
+		values (${randomUUID()},${kind},${f.scope.principal.id},${createHash("sha256").update(material).digest("hex")},'["agent:use"]'::jsonb)`;
+	return {
+		kind: "api-credential" as const,
+		material,
+		userDirectory: {
+			resolveUser: async () =>
+				f.scope.kind === "execution" ? (f.scope.user ?? null) : null,
+		},
+	};
+}
+
+async function queryUseGrant(
+	f: Awaited<ReturnType<typeof fixture>>,
+	revision = "current-agent-revision",
+) {
+	if (f.scope.kind !== "execution")
+		throw new Error("Missing controlled principal");
+	await sql`insert into platform.agent_principal_grants (agent_id,principal_type,principal_id,grant_type,authorization_revision)
+		values (${f.agentId},'user',${f.scope.principal.id},'use',${revision})`;
+}
+
+describe("credential-backed audit query consumer", () => {
+	it("reads only its original accepted records with current API use and does not borrow browser availability", async () => {
+		const f = await fixture();
+		const other = await fixture(undefined, f.agentId);
+		const source = await credentialQueryFixture(f);
+		await expect(
+			query.listAudit(
+				source,
+				{ limit: 100, filters: { agentId: f.agentId } },
+				request(),
+			),
+		).rejects.toMatchObject({ code: "access_denied" });
+		await queryUseGrant(f);
+		const result = await query.listAudit(
+			source,
+			{ limit: 100, filters: { agentId: f.agentId } },
+			request(),
+		);
+		expect(result.items.some((row) => row.auditId === f.auditId)).toBe(true);
+		expect(result.items.some((row) => row.auditId === other.auditId)).toBe(
+			false,
+		);
+		await expect(
+			query.getAudit(source, f.auditId, detail, request()),
+		).resolves.toMatchObject({ auditId: f.auditId });
+		await expect(
+			query.getAudit(source, other.auditId, detail, request()),
+		).rejects.toMatchObject({ code: "access_denied" });
+		expect(JSON.stringify(result)).not.toContain(source.material);
+	});
+
+	it("denies stale or revoked API grants before an explicit Agent query can become empty success", async () => {
+		const f = await fixture();
+		const source = await credentialQueryFixture(f);
+		await queryUseGrant(f, "stale-revision");
+		const input = { limit: 10, filters: { agentId: f.agentId } };
+		await expect(
+			query.listAudit(source, input, request()),
+		).rejects.toMatchObject({ code: "access_denied" });
+		await sql`update platform.agent_principal_grants set authorization_revision = 'current-agent-revision', revoked_at = now()
+			where agent_id = ${f.agentId} and principal_id = ${f.scope.kind === "execution" ? f.scope.principal.id : ""}`;
+		await expect(
+			query.listAudit(source, input, request()),
+		).rejects.toMatchObject({ code: "access_denied" });
+	});
+
+	it("rolls back the success audit when the final directory revalidation changes revision", async () => {
+		const f = await fixture();
+		const source = await credentialQueryFixture(f);
+		await queryUseGrant(f);
+		let reads = 0;
+		source.userDirectory.resolveUser = async () => {
+			reads++;
+			if (f.scope.kind !== "execution" || !f.scope.user) return null;
+			return {
+				...f.scope.user,
+				authorizationRevision:
+					reads === 1 ? "first-current" : "changed-current",
+			};
+		};
+		const context = request();
+		await expect(query.listAudit(source, page, context)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+		expect(reads).toBe(2);
+		const rows =
+			await sql`select action,details from platform.audit_events where request_id = ${context.requestId}`;
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.action).toBe("audit.query.failed");
+		expect(JSON.stringify(rows)).not.toContain(source.material);
+	});
+
+	it("never substitutes a same-ID user's grant or responsible-person rights for application authority", async () => {
+		const f = await fixture();
+		await queryUseGrant(f);
+		const source = await credentialQueryFixture(f, "application");
+		source.userDirectory.resolveUser = async () => {
+			throw new Error("Application must not resolve a responsible user");
+		};
+		await expect(
+			query.listAudit(
+				source,
+				{ limit: 10, filters: { agentId: f.agentId } },
+				request(),
+			),
 		).rejects.toMatchObject({ code: "access_denied" });
 	});
 });

@@ -978,10 +978,12 @@ test("uses pinned PR-Agent official inline publishing", async () => {
     "ready_for_review",
     "review_requested",
     "edited",
+    "synchronize",
   ]);
   assert.deepEqual(workflow.jobs.analyze.permissions, {
     contents: "read",
     issues: "read",
+    checks: "read",
     "pull-requests": "read",
   });
   assert.deepEqual(workflow.jobs.suggestions.permissions, {
@@ -1030,7 +1032,7 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   );
   assert.equal(
     reviewAction.env["pr_reviewer.extra_instructions"],
-    "Return exactly one YAML object with the top-level key review. Nest key_issues_to_review under review, including when it is an empty list. Never return key_issues_to_review at the top level. Report only verifiable failures of the primary Issue's stable AC-N acceptance criteria or regressions introduced by this pull request. Do not report pre-existing problems or optional improvements as blocking findings.",
+    "Return exactly one YAML object with the top-level key review. Nest key_issues_to_review under review, including when it is an empty list. Never return key_issues_to_review at the top level. Report only verifiable failures of the primary Issue's stable AC-N acceptance criteria or regressions introduced by this pull request. Do not report pre-existing problems or optional improvements as blocking findings. Treat the supplied diff as the review scope; do not infer missing implementation from files absent from this range.",
   );
   assert.equal(
     reviewAction.env["config.max_model_tokens"],
@@ -1140,7 +1142,7 @@ test("requires trusted finding projection without raw transfer or missing-output
   const workflows = await actualWorkflows();
   const analyze = workflows["pr-agent-review.yml"].jobs.analyze;
   const projection = analyze.outputs.review;
-  const step = analyze.steps[4];
+  const step = analyze.steps.find((entry) => entry.id === "review-output");
   for (const unsafe of [
     "${{ steps.pr-agent.outputs.review }}",
     "${{ steps.review-output.outputs.review || '{\"key_issues_to_review\":[]}' }}",
@@ -1196,6 +1198,73 @@ test("requires bounded PR-Agent review chunking and matching immutable versions"
       );
     }
     action.uses = pinned;
+  }
+});
+
+test("locks incremental review to the trusted range and the official patch-only CLI", async () => {
+  const original = await actualWorkflows();
+  for (const change of [
+    (workflow) => { workflow.on.pull_request_target.types.pop(); },
+    (workflow) => { workflow.jobs.analyze.steps.find((step) => step.id === "scope").env.PRIMARY_ISSUE_EVIDENCE = "${{ github.event.pull_request.body }}"; },
+    (workflow) => { workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent").with.args = "review -i"; },
+    (workflow) => { workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent").with.entrypoint = "/bin/sh"; },
+    (workflow) => { workflow.jobs.analyze.steps.find((step) => step.id === "pr-agent").if = "always()"; },
+    (workflow) => { workflow.jobs.publish.steps.at(-1).env.PR_AGENT_REVIEW_SCOPE_REQUIRED = "false"; },
+    (workflow) => { workflow.jobs.coverage.steps.at(-1).env.PR_AGENT_REVIEW_SCOPE_REQUIRED = "false"; },
+  ]) {
+    const workflows = structuredClone(original);
+    change(workflows["pr-agent-review.yml"]);
+    assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("official inline publishing")));
+  }
+});
+
+test("preserves dotted Review configuration through the actual CLI entrypoint", async () => {
+  const workflows = await actualWorkflows();
+  const action = workflows["pr-agent-review.yml"].jobs.analyze.steps.find((step) => step.id === "pr-agent");
+  const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "pr-agent-entrypoint-"));
+  const run = promisify(execFile);
+  const env = {
+    PATH: process.env.PATH,
+    PYTHONPATH: fixture,
+    PYTHONDONTWRITEBYTECODE: "1",
+    "config.model": "sentinel-model",
+    "config.max_model_tokens": "128000",
+    "github_action_config.enable_output": "true",
+  };
+  try {
+    const python = await run("python3", ["-c", "import sys; print(sys.executable)"], { env, timeout: 10_000 });
+    await fs.mkdir(path.join(fixture, "bin"));
+    await fs.symlink(python.stdout.trim(), path.join(fixture, "bin/python"));
+    env.PATH = `${path.join(fixture, "bin")}${path.delimiter}${env.PATH}`;
+    const version = await run("python", ["-c", "import sys; print(sys.version_info.major)"], { env, timeout: 10_000 });
+    assert.equal(version.stdout.trim(), "3");
+    await fs.mkdir(path.join(fixture, "pr_agent/log"), { recursive: true });
+    await fs.writeFile(path.join(fixture, "pr_agent/__init__.py"), "");
+    // These modules observe only the process boundary; no model or Review is produced.
+    await fs.writeFile(path.join(fixture, "pr_agent/cli.py"), [
+      "import json, os, sys",
+      "def run():",
+      "    print(json.dumps({'model': os.getenv('config.model'), 'max_tokens': os.getenv('config.max_model_tokens'), 'enable_output': os.getenv('github_action_config.enable_output'), 'cwd': os.getcwd(), 'argv': sys.argv[1:]}))",
+    ].join("\n"));
+    await fs.writeFile(path.join(fixture, "pr_agent/log/__init__.py"), [
+      "class LoggingFormat:",
+      "    JSON = 'JSON'",
+      "def setup_logger(*, fmt):",
+      "    assert fmt == LoggingFormat.JSON",
+    ].join("\n"));
+    const parsed = await run("python3", ["-c", "import json, shlex, sys; print(json.dumps(shlex.split(sys.argv[1])))", action.with.args], { env, timeout: 10_000 });
+    // The pinned Linux image resolves /bin/sh to dash; use dash for that host boundary.
+    const executable = action.with.entrypoint === "/bin/sh" ? "/bin/dash" : action.with.entrypoint;
+    const executed = await run(executable, JSON.parse(parsed.stdout), { env, timeout: 10_000 });
+    assert.deepEqual(JSON.parse(executed.stdout), {
+      model: "sentinel-model",
+      max_tokens: "128000",
+      enable_output: "true",
+      cwd: await fs.realpath("/tmp"),
+      argv: ["--diff-file", "/github/workspace/.pr-agent-review-input.diff", "review"],
+    });
+  } finally {
+    await fs.rm(fixture, { recursive: true, force: true });
   }
 });
 
@@ -1301,6 +1370,7 @@ test("publishes provider-aware Automated Review Coverage as a required Gate", as
     actions: "read",
     checks: "read",
     contents: "read",
+    issues: "read",
     "pull-requests": "read",
   });
   assert.equal(coverage.name, "Publish Automated Review Coverage");
@@ -1319,6 +1389,7 @@ test("publishes provider-aware Automated Review Coverage as a required Gate", as
     REVIEW_PROVIDER: "pr-agent",
     REVIEW_RUN_RESULT: "${{ needs.analyze.result != 'success' && needs.analyze.result || needs.publish.result }}",
     PR_AGENT_REVIEW_RECEIPT: "${{ needs.publish.outputs.review_receipt }}",
+    PR_AGENT_REVIEW_SCOPE_REQUIRED: "true",
   });
   assert.equal(
     coverageToken.uses,

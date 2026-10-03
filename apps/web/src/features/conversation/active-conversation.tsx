@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Square } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -37,6 +38,7 @@ export function ActiveConversation({
 	onDenied: () => void;
 	refreshAgent: () => void;
 }) {
+	const queryClient = useQueryClient();
 	const [selectedExecution, setSelectedExecution] = useState<string>();
 	const executionTrigger = useRef<HTMLButtonElement>(null);
 	const returnExecutionFocus = useRef(false);
@@ -82,6 +84,15 @@ export function ActiveConversation({
 		acceptedExecution,
 	);
 	const active = Boolean(latestExecution && !isTerminal(status));
+	const visibleNotice =
+		notice ||
+		(stopping && stopping === latestExecution
+			? isTerminal(status)
+				? "原回复已结束。"
+				: "停止请求已受理，正在等待停止确认。已发生的外部操作不会自动撤回。"
+			: active && acceptedExecution === latestExecution
+				? "消息已受理，等待处理结果。"
+				: "");
 	const uncertainExecution = active && status === "unknown";
 	const command = useConversationCommands({
 		agentId,
@@ -119,23 +130,30 @@ export function ActiveConversation({
 		// require a fresh message/version projection.
 		if (
 			!timeline.history?.events.some((item) => item.eventId === event.eventId)
-		)
+		) {
 			void reader.refresh();
-	}, [timeline.events, timeline.history, reader.refresh]);
+		}
+		void queryClient.resetQueries({
+			queryKey: ["personal-recent", identityKey],
+		});
+	}, [
+		timeline.events,
+		timeline.history,
+		reader.refresh,
+		identityKey,
+		queryClient,
+	]);
 	useEffect(() => {
 		const result = command.result;
 		if (!result || result === handled.current) return;
 		handled.current = result;
 		if (result.kind === "accepted") {
+			setNotice("");
 			if (action.current === "stop") {
 				setStopping(result.receipt.executionId ?? undefined);
-				setNotice(
-					"停止请求已受理，正在等待停止确认。已发生的外部操作不会自动撤回。",
-				);
 			} else {
 				if (action.current === "message") setDraft("");
 				setAcceptedExecution(result.receipt.executionId ?? undefined);
-				setNotice("消息已受理，等待处理结果。");
 			}
 			void reader.refresh();
 		} else if (result.kind === "selection-updated") {
@@ -237,8 +255,101 @@ export function ActiveConversation({
 						</AlertDescription>
 					</Alert>
 				)}
+				{agent.capabilities.modelSelection && (
+					<fieldset
+						className="model-controls"
+						disabled={blocked || commandLocked}
+					>
+						<legend className="sr-only">下一条消息的模型</legend>
+						<div className="min-w-0 space-y-1">
+							<Label className="sr-only" htmlFor={`${composerId}-model`}>
+								模型
+							</Label>
+							<Select
+								disabled={blocked || commandLocked}
+								value={currentModelId || null}
+								itemToStringLabel={(value) =>
+									(!option && value === currentModelId
+										? "当前选项已移除"
+										: options.find((item) => item.optionId === value)
+												?.displayName) ?? String(value)
+								}
+								onValueChange={(value) => {
+									if (!value) return;
+									setModelId(value);
+									setReasoning(
+										options.find((item) => item.optionId === value)
+											?.reasoningLevels[0],
+									);
+								}}
+							>
+								<SelectTrigger
+									id={`${composerId}-model`}
+									className="min-h-11 w-full text-base md:text-sm"
+								>
+									<SelectValue placeholder="请选择模型" />
+								</SelectTrigger>
+								<SelectContent>
+									{!option && currentModelId && (
+										<SelectItem value={currentModelId} disabled>
+											当前选项已移除
+										</SelectItem>
+									)}
+									{options.map((item) => (
+										<SelectItem key={item.optionId} value={item.optionId}>
+											{item.displayName}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+						<div className="min-w-0 space-y-1">
+							<Label className="sr-only" htmlFor={`${composerId}-reasoning`}>
+								推理强度
+							</Label>
+							<Select
+								disabled={blocked || commandLocked}
+								value={currentReasoning || null}
+								onValueChange={(value) => setReasoning(value ?? undefined)}
+							>
+								<SelectTrigger
+									id={`${composerId}-reasoning`}
+									className="min-h-11 w-full text-base md:text-sm"
+								>
+									<SelectValue placeholder="请选择推理强度" />
+								</SelectTrigger>
+								<SelectContent>
+									{option?.reasoningLevels.map((value) => (
+										<SelectItem key={value} value={value}>
+											{value}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+						<Button
+							type="button"
+							variant="default"
+							className="model-save"
+							hidden={!selectionDirty}
+							disabled={!option?.reasoningLevels.includes(currentReasoning)}
+							onClick={() => {
+								if (
+									command.selectModel({
+										modelOptionId: currentModelId,
+										reasoningLevel: currentReasoning,
+									})
+								)
+									action.current = "selection";
+							}}
+						>
+							保存模型选择
+						</Button>
+					</fieldset>
+				)}
 				{timeline.history && (
 					<ConversationMessages
+						agentName={agent.name}
 						history={timeline.history}
 						events={timeline.events}
 						onExecution={openExecution}
@@ -269,11 +380,9 @@ export function ActiveConversation({
 				{active && !agent.capabilities.supplementaryInstruction && (
 					<p role="status">当前回复仍在处理，不支持补充指令。草稿会保留。</p>
 				)}
-				{notice && (
+				{visibleNotice && (
 					<p role="status" className="text-sm">
-						{stopping === latestExecution && isTerminal(status)
-							? "原回复已结束。"
-							: notice}
+						{visibleNotice}
 					</p>
 				)}
 				<CommandNotice
@@ -293,7 +402,7 @@ export function ActiveConversation({
 					</p>
 				)}
 				<form
-					className="composer-zone composer space-y-3 rounded border border-border p-4"
+					className="composer-zone composer"
 					data-c02-guard="pending-submit"
 					data-c02-session-id={conversation?.conversationId ?? conversationId}
 					data-c02-message-count={String(
@@ -305,14 +414,23 @@ export function ActiveConversation({
 						send();
 					}}
 				>
-					<Label htmlFor={composerId}>消息</Label>
+					<Label className="sr-only" htmlFor={composerId}>
+						消息
+					</Label>
 					<Textarea
 						ref={composer}
 						id={composerId}
 						rows={3}
 						value={draft}
 						disabled={blocked || commandLocked}
-						placeholder="描述任务和期望结果…"
+						placeholder={`给 ${agent.name} 发一条消息…`}
+						onFocus={(event) => {
+							const input = event.currentTarget;
+							const bounds = input.getBoundingClientRect();
+							// Browsers may reveal only the caret when returning from execution details.
+							if (bounds.top < 0 || bounds.bottom > window.innerHeight)
+								input.scrollIntoView({ block: "nearest" });
+						}}
 						onChange={(event) => setDraft(event.target.value)}
 						onCompositionStart={() => {
 							composing.current = true;
@@ -333,96 +451,8 @@ export function ActiveConversation({
 							}
 						}}
 					/>
-					{agent.capabilities.modelSelection && (
-						<fieldset
-							className="model-controls grid min-w-0 gap-3 sm:grid-cols-[1fr_1fr_auto]"
-							disabled={blocked || commandLocked}
-						>
-							<legend className="text-muted-foreground text-sm">
-								下一条消息的模型
-							</legend>
-							<div className="min-w-0 space-y-1">
-								<Label htmlFor={`${composerId}-model`}>模型</Label>
-								<Select
-									disabled={blocked || commandLocked}
-									value={currentModelId || null}
-									itemToStringLabel={(value) =>
-										(!option && value === currentModelId
-											? "当前选项已移除"
-											: options.find((item) => item.optionId === value)
-													?.displayName) ?? String(value)
-									}
-									onValueChange={(value) => {
-										if (!value) return;
-										setModelId(value);
-										setReasoning(
-											options.find((item) => item.optionId === value)
-												?.reasoningLevels[0],
-										);
-									}}
-								>
-									<SelectTrigger
-										id={`${composerId}-model`}
-										className="h-11 w-full text-base md:text-sm"
-									>
-										<SelectValue placeholder="请选择模型" />
-									</SelectTrigger>
-									<SelectContent>
-										{!option && currentModelId && (
-											<SelectItem value={currentModelId} disabled>
-												当前选项已移除
-											</SelectItem>
-										)}
-										{options.map((item) => (
-											<SelectItem key={item.optionId} value={item.optionId}>
-												{item.displayName}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							</div>
-							<div className="min-w-0 space-y-1">
-								<Label htmlFor={`${composerId}-reasoning`}>推理强度</Label>
-								<Select
-									disabled={blocked || commandLocked}
-									value={currentReasoning || null}
-									onValueChange={(value) => setReasoning(value ?? undefined)}
-								>
-									<SelectTrigger
-										id={`${composerId}-reasoning`}
-										className="h-11 w-full text-base md:text-sm"
-									>
-										<SelectValue placeholder="请选择推理强度" />
-									</SelectTrigger>
-									<SelectContent>
-										{option?.reasoningLevels.map((value) => (
-											<SelectItem key={value} value={value}>
-												{value}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							</div>
-							<Button
-								type="button"
-								variant="outline"
-								className="self-end"
-								disabled={!option?.reasoningLevels.includes(currentReasoning)}
-								onClick={() => {
-									if (
-										command.selectModel({
-											modelOptionId: currentModelId,
-											reasoningLevel: currentReasoning,
-										})
-									)
-										action.current = "selection";
-								}}
-							>
-								保存模型选择
-							</Button>
-						</fieldset>
-					)}
-					<div className="composer-controls flex flex-wrap items-center justify-between gap-3">
+
+					<div className="composer-controls">
 						<p className="text-muted-foreground text-xs">
 							Enter 发送 · Shift + Enter 换行
 						</p>

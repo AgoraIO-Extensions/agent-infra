@@ -41,9 +41,9 @@ let database: PostgresTestDatabase;
 let client: ReturnType<typeof postgres>;
 let resolveUser: TaskUserDirectoryV1["resolveUser"];
 const stores: PostgresPersonalApiCredentialStoreV1[] = [];
-function store() {
+function store(databaseUrl = database.databaseUrl) {
 	const adapter = new PostgresPersonalApiCredentialStoreV1({
-		databaseUrl: database.databaseUrl,
+		databaseUrl,
 	});
 	stores.push(adapter);
 	return {
@@ -99,6 +99,206 @@ afterAll(async () => {
 });
 
 describe("PostgreSQL personal API credential governance", () => {
+	it("lists metadata when PostgreSQL denies reading credential hashes", async () => {
+		const issued = await store().issue(context, command);
+		await client`create role personal_credential_metadata_reader login password 'fixture-reader'`;
+		await client`grant usage on schema platform to personal_credential_metadata_reader`;
+		await client`grant select (id, principal_type, principal_id, scopes, expires_at,
+			revoked_at, created_at, last_used_at), update (id)
+			on platform.platform_api_credentials to personal_credential_metadata_reader`;
+		await client`grant select, update on platform.platform_user_disables to personal_credential_metadata_reader`;
+		await client`grant insert on platform.audit_events to personal_credential_metadata_reader`;
+		const url = new URL(database.databaseUrl);
+		url.username = "personal_credential_metadata_reader";
+		url.password = "fixture-reader";
+		const reader = postgres(url.toString(), { max: 1 });
+		const adapter = store(url.toString());
+		try {
+			await expect(
+				reader`select credential_hash from platform.platform_api_credentials`,
+			).rejects.toMatchObject({ code: "42501" });
+			const page = await adapter.list(
+				{
+					userId: context.userId,
+					requestId: "list.no-hash",
+					traceId: "trace.no-hash",
+				},
+				{ limit: 2 },
+			);
+			expect(page.items).toEqual([issued.metadata]);
+			const [audit] =
+				await client`select count(*)::int as count from platform.audit_events
+				where action='api.credential.metadata.read' and request_id='list.no-hash' and outcome='succeeded'`;
+			expect(audit?.count).toBe(1);
+		} finally {
+			await reader.end();
+			await adapter.close();
+			await client`drop owned by personal_credential_metadata_reader`;
+			await client`drop role personal_credential_metadata_reader`;
+		}
+	});
+
+	it("serializes PATCH replay, survives restart, and never revives revoked material", async () => {
+		const adapter = store();
+		const first = await adapter.issue(context, command);
+		const id = first.metadata.credentialId;
+		const patchContext = nextContext("patch.concurrent");
+		const results = await Promise.all(
+			[adapter, store()].map((instance) =>
+				instance.narrow(patchContext, id, { scopes: ["agent:read"] }),
+			),
+		);
+		expect(results.map((result) => result.replayed).sort()).toEqual([
+			false,
+			true,
+		]);
+		const counts =
+			await client`select count(*)::int as count from platform.audit_events where action='api.credential.narrowed' and outcome='succeeded'`;
+		expect(counts[0]?.count).toBe(1);
+		await adapter.close();
+		const restarted = store();
+		await expect(
+			restarted.narrow(patchContext, id, { scopes: ["agent:use"] }),
+		).rejects.toMatchObject({ code: "idempotency_conflict" });
+		const revoked = await restarted.revoke(
+			nextContext("revoke.after.patch"),
+			id,
+		);
+		expect(
+			await restarted.narrow(patchContext, id, { scopes: ["agent:read"] }),
+		).toEqual({ metadata: revoked.metadata, replayed: true });
+		const again = await restarted.narrow(nextContext("patch.revoked"), id, {
+			expiresAt: "2020-01-01T00:00:00Z",
+		});
+		expect(again.metadata.revokedAt).toBe(revoked.metadata.revokedAt);
+		expect(again.metadata.expiresAt).toBe("2020-01-01T00:00:00.000Z");
+		await expect(
+			restarted.narrow(nextContext("patch.extend"), id, {
+				expiresAt: "2035-01-01T00:00:00Z",
+			}),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			restarted.narrow(nextContext("patch.other", "user_bob"), id, {
+				scopes: ["agent:read"],
+			}),
+		).rejects.toMatchObject({ code: "not_found" });
+		await expect(
+			restarted.narrow(nextContext("patch.missing", "user_bob"), "missing", {
+				scopes: ["agent:read"],
+			}),
+		).rejects.toMatchObject({ code: "not_found" });
+	});
+
+	it.each([false, true])(
+		"rolls back narrowed scopes and withholds a list at audit/commit failure",
+		async (deferred) => {
+			const adapter = store();
+			const first = await adapter.issue(context, command);
+			await armAuditFailure(deferred);
+			await expect(
+				adapter.narrow(
+					nextContext("patch.audit"),
+					first.metadata.credentialId,
+					{ scopes: ["agent:read"] },
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+			await expect(
+				adapter.list(
+					{
+						userId: context.userId,
+						requestId: "read.fault",
+						traceId: context.traceId,
+					},
+					{},
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+			const [row] =
+				await client`select scopes from platform.platform_api_credentials where id=${first.metadata.credentialId}`;
+			expect(row?.scopes).toEqual(first.metadata.scopes);
+			const [idempotency] =
+				await client`select count(*)::int as count from platform.idempotency_records where command_type='api.credential.narrowed'`;
+			expect(idempotency?.count).toBe(0);
+		},
+	);
+
+	it("pages only personal metadata, binds cursors, and persists necessary read audit", async () => {
+		const adapter = store();
+		const issued = await Promise.all(
+			["page.1", "page.2", "page.3"].map((key) =>
+				adapter.issue(nextContext(key), command),
+			),
+		);
+		const foreign = await adapter.issue(
+			nextContext("foreign", "user_bob"),
+			command,
+		);
+		const readContext = {
+			userId: context.userId,
+			requestId: "read.page",
+			traceId: "trace.page",
+		};
+		const first = await adapter.list(readContext, { limit: 2 });
+		const second = await adapter.list(readContext, {
+			limit: 2,
+			cursor: first.nextCursor,
+		});
+		expect(first.items).toHaveLength(2);
+		expect(second.items).toHaveLength(1);
+		expect(second.nextCursor).toBeNull();
+		expect(
+			[...first.items, ...second.items].map((item) => item.credentialId),
+		).toEqual(issued.map((item) => item.metadata.credentialId).sort());
+		for (const result of [...issued, foreign])
+			expect(JSON.stringify([first, second])).not.toContain(result.credential);
+		await expect(
+			adapter.list(
+				{ ...readContext, userId: "user_bob" },
+				{ limit: 2, cursor: first.nextCursor },
+			),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			adapter.list(readContext, { limit: 1, cursor: first.nextCursor }),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		const reads =
+			await client`select * from platform.audit_events where action='api.credential.metadata.read' and outcome='succeeded'`;
+		expect(reads).toHaveLength(2);
+		expect(reads.every((row) => row.actor_id === context.userId)).toBe(true);
+		await adapter.close();
+		expect((await store().list(readContext, { limit: 100 })).items).toEqual([
+			...first.items,
+			...second.items,
+		]);
+	});
+	it.each([false, true])(
+		"withholds metadata when required audit or commit fails (deferred=%s)",
+		async (deferred) => {
+			const adapter = store();
+			const issued = await adapter.issue(context, command);
+			await armAuditFailure(deferred);
+			await expect(
+				adapter.list(
+					{
+						userId: context.userId,
+						requestId: "list.fault",
+						traceId: context.traceId,
+					},
+					{},
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+			const [row] =
+				await client`select credential_hash, scopes from platform.platform_api_credentials where id=${issued.metadata.credentialId}`;
+			expect(row?.credential_hash).toBe(
+				createHash("sha256")
+					.update(issued.credential ?? "")
+					.digest("hex"),
+			);
+			expect(row?.scopes).toEqual(issued.metadata.scopes);
+			const [audits] =
+				await client`select count(*)::int as count from platform.audit_events where action='api.credential.metadata.read' and outcome='succeeded'`;
+			expect(audits?.count).toBe(0);
+		},
+	);
+
 	it("commits matching hash-only material once, survives restart, and never revives a revocation", async () => {
 		const firstStore = store();
 		const first = await firstStore.issue(context, command);
