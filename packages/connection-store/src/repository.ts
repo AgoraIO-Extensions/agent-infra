@@ -1771,15 +1771,23 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					consumerId: grant.consumer_id,
 					principalId: grant.principal_id,
 				});
-				target = selectAuthorizationActions(target, grant.action_version_ids);
 			} catch (error) {
-				if (
-					!(error instanceof ConnectionError) ||
-					(error.code !== "FORBIDDEN" && error.code !== "INVALID_REQUEST")
-				) {
+				if (!(error instanceof ConnectionError) || error.code !== "FORBIDDEN") {
 					throw error;
 				}
 				target = undefined;
+			}
+			if (target) {
+				try {
+					target = selectAuthorizationActions(target, grant.action_version_ids);
+				} catch (error) {
+					if (
+						!(error instanceof ConnectionError) ||
+						error.code !== "INVALID_REQUEST"
+					)
+						throw error;
+					target = undefined;
+				}
 			}
 			const decision = decideReconnectAuthorization({
 				current: {

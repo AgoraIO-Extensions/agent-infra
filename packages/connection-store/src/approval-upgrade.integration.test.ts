@@ -78,6 +78,9 @@ describe("compatible approval upgrade", () => {
 					...identity,
 					accessRequestId: requestId,
 				});
+				await expect(
+					repository.getProviderUpgradeReadiness({ principalId, connectionId }),
+				).resolves.toMatchObject({ nextAction: "NONE" });
 				const [originalAccess] =
 					await sql`SELECT id,valid_until,source_request_id FROM connection_effective_access_authorizations WHERE connection_id=${connectionId}`;
 				const originalCredential =
