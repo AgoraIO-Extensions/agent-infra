@@ -4,6 +4,7 @@ import {
 	ScopedPlatformAuditProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, test } from "@playwright/test";
+import { captureDesignContract, designViewports } from "./design-contract";
 
 const session = (role: "employee" | "admin") => ({
 	schemaVersion: 1,
@@ -196,7 +197,7 @@ test("own audit page filters, paginates, opens detail, and fits mobile", async (
 	const api = await fixture(page);
 	await page.goto("/audit");
 	await expect(
-		page.getByRole("heading", { name: "我的执行审计", exact: true }),
+		page.getByRole("heading", { name: "只看自己的执行事实。", exact: true }),
 	).toBeVisible();
 	await expect(page.getByRole("button", { name: "查看审计详情" })).toHaveCount(
 		1,
@@ -212,7 +213,9 @@ test("own audit page filters, paginates, opens detail, and fits mobile", async (
 		page.getByText("Execution：未提供", { exact: true }),
 	).toBeVisible();
 	await page.getByRole("button", { name: "查看审计详情" }).click();
-	await expect(page.getByRole("dialog")).toContainText("agent-audit-b");
+	await expect(
+		page.getByRole("region", { name: "审计详情", exact: true }),
+	).toContainText("agent-audit-b");
 	await page.keyboard.press("Escape");
 	await expect(
 		page.getByRole("button", { name: "查看审计详情" }),
@@ -239,12 +242,12 @@ for (const compact of [false, true]) {
 		await page.goto("/admin/audit");
 		await expect(
 			page.getByRole("heading", {
-				name: "复核 M1 范围内的关键变更。",
+				name: "复核平台关键变更。",
 				exact: true,
 			}),
 		).toBeVisible();
 		await expect(
-			page.getByText("系统管理员 · 只读", { exact: true }),
+			page.getByText("系统管理 / 平台审计", { exact: true }),
 		).toBeVisible();
 		await expect(
 			page.getByRole("heading", { name: "平台操作记录", exact: true }),
@@ -282,7 +285,7 @@ for (const compact of [false, true]) {
 		);
 		await expect(worker.getByText("结果待核实", { exact: true })).toBeVisible();
 		await worker.getByRole("button", { name: "查看审计详情" }).click();
-		const dialog = page.getByRole("dialog");
+		const dialog = page.getByRole("region", { name: "审计详情", exact: true });
 		await expect(dialog).toContainText(background.summary);
 		await expect(dialog).toContainText("后台组件 · platform_worker");
 		await expect(dialog).toContainText("用户 · audit-user-a");
@@ -295,7 +298,7 @@ for (const compact of [false, true]) {
 			dialog.getByRole("heading", { name: "审计详情", exact: true }),
 		).toBeInViewport({ ratio: 1 });
 		await expect(
-			dialog.getByRole("button", { name: "关闭窗口", exact: true }),
+			dialog.getByRole("button", { name: "关闭审计详情", exact: true }),
 		).toBeInViewport({ ratio: 1 });
 		expect(
 			await page.evaluate(
@@ -357,7 +360,7 @@ for (const compact of [false, true]) {
 			.click();
 		await expect(page).toHaveURL(/\/audit$/);
 		await expect(
-			page.getByRole("heading", { name: "我的执行审计", exact: true }),
+			page.getByRole("heading", { name: "只看自己的执行事实。", exact: true }),
 		).toBeVisible();
 		await expect(page.locator(".audit-table")).toContainText("audit-admin");
 		await expect(page.locator(".audit-table")).not.toContainText(
@@ -463,7 +466,9 @@ test("same-user administrator role revocation clears list and detail despite a l
 			page.getByText(governance.summary, { exact: true }),
 		).toBeVisible();
 		await page.getByRole("button", { name: "查看审计详情" }).click();
-		await expect(page.getByRole("dialog")).toContainText(governance.summary);
+		await expect(
+			page.getByRole("region", { name: "审计详情", exact: true }),
+		).toContainText(governance.summary);
 		const completed = await page.evaluate(
 			() => window.controlledAuditTransport.completed,
 		);
@@ -493,7 +498,9 @@ test("same-user administrator role revocation clears list and detail despite a l
 		await expect(
 			page.getByText("当前无权访问平台审计。", { exact: true }),
 		).toBeVisible();
-		await expect(page.getByRole("dialog")).toHaveCount(0);
+		await expect(
+			page.getByRole("region", { name: "审计详情", exact: true }),
+		).toHaveCount(0);
 		await expect
 			.poll(() => page.evaluate(() => window.controlledAuditTransport.aborted))
 			.toBeGreaterThan(0);
@@ -519,3 +526,21 @@ test("same-user administrator role revocation clears list and detail despite a l
 		api.releaseDetail();
 	}
 });
+
+for (const route of ["/audit", "/admin/audit"]) {
+	test(`exported design viewport matrix ${route}`, async ({ page }, info) => {
+		test.skip(
+			info.project.name !== "desktop",
+			"The exported nine-viewport matrix runs once.",
+		);
+		await fixture(page, route === "/audit" ? "employee" : "admin");
+		await page.goto(route);
+		await expect(
+			page.getByRole("button", { name: "查看审计详情" }).first(),
+		).toBeVisible();
+		for (const viewport of designViewports) {
+			await page.setViewportSize(viewport);
+			await captureDesignContract(page, info, route.replaceAll("/", "-"));
+		}
+	});
+}

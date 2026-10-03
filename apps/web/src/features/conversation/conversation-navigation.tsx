@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { Bot, History, Plus } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -113,14 +114,19 @@ export function NewConversation({
 	onDenied: () => void;
 }) {
 	const command = useConversationCommands({ agentId, identityKey });
+	const queryClient = useQueryClient();
 	const handled = useRef<ConversationCommandResult | undefined>(undefined);
 	useEffect(() => {
 		if (command.result === handled.current) return;
 		handled.current = command.result;
-		if (command.result?.kind === "created")
+		if (command.result?.kind === "created") {
+			void queryClient.resetQueries({
+				queryKey: ["personal-recent", identityKey],
+			});
 			onCreated(command.result.conversationId);
+		}
 		if (command.result?.kind === "denied") onDenied();
-	}, [command.result, onCreated, onDenied]);
+	}, [command.result, identityKey, onCreated, onDenied, queryClient]);
 	return (
 		<Empty className="space-y-5 py-12">
 			<Bot aria-hidden="true" className="mx-auto size-10 text-primary" />

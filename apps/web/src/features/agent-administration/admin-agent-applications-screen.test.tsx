@@ -60,7 +60,9 @@ describe("AdminAgentApplicationsScreen", () => {
 				state={{ kind: "ready", applications: [application] }}
 			/>,
 		);
-		expect(screen.getByRole("heading", { name: "审批" })).toBeTruthy();
+		expect(
+			screen.getByRole("heading", { name: "把资源审批做得更快，也更可核对。" }),
+		).toBeTruthy();
 		expect(screen.getByText("待审批")).toBeTruthy();
 		expect(screen.queryByRole("dialog")).toBeNull();
 		expect(screen.queryByRole("button", { name: "批准并创建" })).toBeNull();

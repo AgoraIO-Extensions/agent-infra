@@ -1,7 +1,19 @@
 import { ScopedPlatformAuditQueryV1Schema } from "@agent-infra/contracts/pilot";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, Eye, RotateCcw, Search } from "lucide-react";
-import { type FormEvent, useId, useRef, useState } from "react";
+import {
+	ArrowLeft,
+	ArrowRight,
+	ChevronRight,
+	RotateCcw,
+	Search,
+} from "lucide-react";
+import {
+	type FormEvent,
+	useId,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -12,14 +24,7 @@ import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
-import {
-	Sheet,
-	SheetContent,
-	SheetDescription,
-	SheetHeader,
-	SheetTitle,
-	SheetTrigger,
-} from "@/components/ui/sheet";
+
 import {
 	Table,
 	TableBody,
@@ -59,6 +64,16 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 	const [auditId, setAuditId] = useState<string | null>(null);
 	const [formFailure, setFormFailure] = useState<string | null>(null);
 	const form = useRef<HTMLFormElement>(null);
+	const detailPanel = useRef<HTMLElement>(null);
+	const detailTrigger = useRef<HTMLButtonElement>(null);
+	useLayoutEffect(() => {
+		if (auditId !== null) detailPanel.current?.focus();
+	}, [auditId]);
+	function closeDetail() {
+		setAuditId(null);
+		detailTrigger.current?.focus();
+	}
+
 	const formId = useId();
 	const query = useAuditQuery({ identityKey, scope, filters, auditId });
 	const busy = query.status === "loading" || query.isFetching;
@@ -126,19 +141,17 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 		<>
 			<div className="page-heading">
 				<div className="min-w-0">
-					{administrator && (
-						<p className="mb-2 text-muted-foreground text-sm">
-							系统管理员 · 只读
-						</p>
-					)}
+					<p className="page-eyebrow">
+						{administrator ? "系统管理 / 平台审计" : "我的管理 / 我的执行审计"}
+					</p>
 					<h1>
-						{administrator ? "复核 M1 范围内的关键变更。" : "我的执行审计"}
+						{administrator ? "复核平台关键变更。" : "只看自己的执行事实。"}
 					</h1>
-					{administrator && (
-						<p className="mt-3 max-w-3xl text-muted-foreground leading-6">
-							查看 Agent 治理、配置与生命周期，以及请求和执行操作的元数据。
-						</p>
-					)}
+					<p>
+						{administrator
+							? "治理、请求与执行元数据可关联查询；不包含会话正文、凭证值或模型内部思考。"
+							: "审计范围绑定当前登录用户；长标识可展开查看。"}
+					</p>
 				</div>
 				<Button
 					variant="ghost"
@@ -155,11 +168,11 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 				</Button>
 			</div>
 			{admin && (
-				<nav className="mb-6 flex flex-wrap gap-2" aria-label="审计范围">
+				<nav className="tabs" aria-label="审计范围">
 					<Link
 						to="/audit"
 						className={buttonVariants({
-							variant: administrator ? "ghost" : "secondary",
+							variant: administrator ? "ghost" : "outline",
 						})}
 						aria-current={administrator ? undefined : "page"}
 					>
@@ -168,13 +181,18 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					<Link
 						to="/admin/audit"
 						className={buttonVariants({
-							variant: administrator ? "secondary" : "ghost",
+							variant: administrator ? "outline" : "ghost",
 						})}
 						aria-current={administrator ? "page" : undefined}
 					>
 						平台审计
 					</Link>
 				</nav>
+			)}
+			{!administrator && (
+				<p className="mb-5 break-words text-muted-foreground text-sm">
+					审计范围：当前用户 · {session.user.displayName || session.user.userId}
+				</p>
 			)}
 			<form
 				ref={form}
@@ -190,28 +208,28 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					<Label htmlFor={fieldId("until")}>结束时间</Label>
 					<Input id={fieldId("until")} name="until" type="datetime-local" />
 				</div>
-				<div>
-					<Label htmlFor={fieldId("principalKind")}>主体类型</Label>
-					{administrator ? (
-						<NativeSelect id={fieldId("principalKind")} name="principalKind">
-							<NativeSelectOption value="">全部类型</NativeSelectOption>
-							<NativeSelectOption value="user">用户</NativeSelectOption>
-							<NativeSelectOption value="application">应用</NativeSelectOption>
-						</NativeSelect>
-					) : (
-						<Input id={fieldId("principalKind")} value="用户" readOnly />
-					)}
-				</div>
-				<div>
-					<Label htmlFor={fieldId("principalId")}>主体 ID</Label>
-					<Input
-						id={fieldId("principalId")}
-						name={administrator ? "principalId" : undefined}
-						defaultValue={administrator ? "" : session.user.userId}
-						readOnly={!administrator}
-						maxLength={128}
-					/>
-				</div>
+				{administrator && (
+					<>
+						<div>
+							<Label htmlFor={fieldId("principalKind")}>主体类型</Label>
+							<NativeSelect id={fieldId("principalKind")} name="principalKind">
+								<NativeSelectOption value="">全部类型</NativeSelectOption>
+								<NativeSelectOption value="user">用户</NativeSelectOption>
+								<NativeSelectOption value="application">
+									应用
+								</NativeSelectOption>
+							</NativeSelect>
+						</div>
+						<div>
+							<Label htmlFor={fieldId("principalId")}>主体 ID</Label>
+							<Input
+								id={fieldId("principalId")}
+								name="principalId"
+								maxLength={128}
+							/>
+						</div>
+					</>
+				)}
 				<div>
 					<Label htmlFor={fieldId("agentId")}>Agent ID</Label>
 					<Input id={fieldId("agentId")} name="agentId" maxLength={128} />
@@ -266,184 +284,192 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					</Button>
 				</div>
 			</form>
-			<Sheet
-				open={auditId !== null}
-				onOpenChange={(open) => {
-					if (!open) setAuditId(null);
-				}}
-			>
-				<section className="py-5" aria-label="审计记录" aria-busy={busy}>
-					<div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-						<div>
-							{administrator && (
-								<p className="mb-1 text-muted-foreground text-sm">事件时间线</p>
-							)}
-							<h2 className="font-semibold text-base">
-								{administrator ? "平台操作记录" : "审计记录"}
-							</h2>
-						</div>
+			<section className="py-5" aria-label="审计记录" aria-busy={busy}>
+				<div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+					<div>
 						{administrator && (
-							<p className="text-muted-foreground text-sm">
-								不包含会话正文、凭证值或模型内部思考
-							</p>
+							<p className="mb-1 text-muted-foreground text-sm">事件时间线</p>
 						)}
+						<h2 className="font-semibold text-base">
+							{administrator ? "平台操作记录" : "审计记录"}
+						</h2>
 					</div>
-					{denied ? (
-						<Alert variant="destructive">
-							<AlertDescription>
-								当前无权访问审计记录，权限或会话可能已变化。
-							</AlertDescription>
-						</Alert>
-					) : query.status === "error" ? (
-						<Alert variant="destructive">
-							<AlertDescription>
-								审计查询失败，请稍后重试。
-								{query.canRetry && (
-									<Button variant="outline" onClick={() => void query.retry()}>
-										重试
-									</Button>
-								)}
-							</AlertDescription>
-						</Alert>
-					) : busy ? (
-						<p role="status" className="py-8 text-muted-foreground">
-							正在读取审计记录…
+					{administrator && (
+						<p className="text-muted-foreground text-sm">
+							不包含会话正文、凭证值或模型内部思考
 						</p>
-					) : !formFailure && items.length === 0 ? (
-						<Empty>
-							<EmptyDescription>暂无审计记录</EmptyDescription>
-						</Empty>
-					) : (
-						!formFailure && (
-							<Table className="audit-table">
-								<TableHeader>
-									<TableRow>
-										<TableHead>时间</TableHead>
-										<TableHead>事件</TableHead>
-										<TableHead>对象</TableHead>
-										<TableHead>操作主体</TableHead>
-										<TableHead>结果</TableHead>
-										<TableHead>
-											<span className="sr-only">详情</span>
-										</TableHead>
-									</TableRow>
-								</TableHeader>
-								<TableBody>
-									{items.map((record) => (
-										<TableRow key={record.auditId}>
-											<TableCell data-label="时间">
-												<time dateTime={record.occurredAt}>
-													{auditTimestamp(record.occurredAt)}
-												</time>
-											</TableCell>
-											<TableCell data-label="事件">
-												<strong className="font-medium">
-													{auditActionLabels[record.action]}
-												</strong>
-												<small className="mt-1 block">{record.summary}</small>
-												<small className="mt-1 block break-all text-muted-foreground">
-													{record.action}
-												</small>
-											</TableCell>
-											<TableCell data-label="对象">
-												<span>{auditSubjectLabels[record.subject.kind]}</span>
-												<small className="mt-1 block break-all">
-													{record.subject.subjectId}
-												</small>
-												<small className="mt-1 block break-all text-muted-foreground">
-													Agent：{record.agentId ?? "未提供"}
-												</small>
-												<small className="mt-1 block break-all text-muted-foreground">
-													Execution：{record.executionId ?? "未提供"}
-												</small>
-											</TableCell>
-											<TableCell data-label="操作主体">
-												<span>
-													可信操作主体 ·{" "}
-													{auditPrincipalLabels[record.actor.kind]}
-												</span>
-												<small className="mt-1 block break-all">
-													{record.actor.actorId}
-												</small>
-												{record.originalPrincipal && (
-													<small className="mt-1 block break-all text-muted-foreground">
-														原发起主体 ·{" "}
-														{
-															auditPrincipalLabels[
-																record.originalPrincipal.kind
-															]
-														}
-														：{record.originalPrincipal.id}
-													</small>
-												)}
-											</TableCell>
-											<TableCell data-label="结果">
-												<Badge variant="outline">
-													{auditOutcomeLabel(record)}
-												</Badge>
-											</TableCell>
-											<TableCell data-label="详情">
-												<SheetTrigger
-													onClick={() => setAuditId(record.auditId)}
-													render={
-														<Button
-															size="icon"
-															variant="ghost"
-															aria-label="查看审计详情"
-															title="查看审计详情"
-														/>
-													}
-												>
-													<Eye aria-hidden="true" />
-												</SheetTrigger>
-											</TableCell>
-										</TableRow>
-									))}
-								</TableBody>
-							</Table>
-						)
 					)}
-					<div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-						{query.status === "ready" && !busy && !formFailure && (
-							<p className="text-muted-foreground text-sm">
-								第 {query.pageNumber} 页 · 本页 {items.length} 条
-							</p>
-						)}
-						<div className="flex gap-2">
-							<Button
-								variant="outline"
-								disabled={
-									busy || formFailure !== null || !query.canPreviousPage
-								}
-								onClick={() => {
-									setAuditId(null);
-									query.previousPage();
-								}}
-							>
-								<ArrowLeft aria-hidden="true" />
-								上一页
-							</Button>
-							<Button
-								variant="outline"
-								disabled={busy || formFailure !== null || !query.hasNextPage}
-								onClick={() => {
-									setAuditId(null);
-									query.nextPage();
-								}}
-							>
-								下一页
-								<ArrowRight aria-hidden="true" />
-							</Button>
-						</div>
+				</div>
+				{denied ? (
+					<Alert variant="destructive">
+						<AlertDescription>
+							当前无权访问审计记录，权限或会话可能已变化。
+						</AlertDescription>
+					</Alert>
+				) : query.status === "error" ? (
+					<Alert variant="destructive">
+						<AlertDescription>
+							审计查询失败，请稍后重试。
+							{query.canRetry && (
+								<Button variant="outline" onClick={() => void query.retry()}>
+									重试
+								</Button>
+							)}
+						</AlertDescription>
+					</Alert>
+				) : busy ? (
+					<p role="status" className="py-8 text-muted-foreground">
+						正在读取审计记录…
+					</p>
+				) : !formFailure && items.length === 0 ? (
+					<Empty>
+						<EmptyDescription>暂无审计记录</EmptyDescription>
+					</Empty>
+				) : (
+					!formFailure && (
+						<Table className="audit-table">
+							<TableHeader>
+								<TableRow>
+									<TableHead>时间</TableHead>
+									<TableHead>事件</TableHead>
+									<TableHead>对象</TableHead>
+									<TableHead>操作主体</TableHead>
+									<TableHead>结果</TableHead>
+									<TableHead>
+										<span className="sr-only">详情</span>
+									</TableHead>
+								</TableRow>
+							</TableHeader>
+							<TableBody>
+								{items.map((record) => (
+									<TableRow key={record.auditId}>
+										<TableCell data-label="时间">
+											<time dateTime={record.occurredAt}>
+												{auditTimestamp(record.occurredAt)}
+											</time>
+										</TableCell>
+										<TableCell data-label="事件">
+											<strong className="font-medium">
+												{auditActionLabels[record.action]}
+											</strong>
+											<small className="mt-1 block">{record.summary}</small>
+											<small className="mt-1 block break-all text-muted-foreground">
+												{record.action}
+											</small>
+										</TableCell>
+										<TableCell data-label="对象">
+											<span>{auditSubjectLabels[record.subject.kind]}</span>
+											<small className="mt-1 block break-all">
+												{record.subject.subjectId}
+											</small>
+											<small className="mt-1 block break-all text-muted-foreground">
+												Agent：{record.agentId ?? "未提供"}
+											</small>
+											<small className="mt-1 block break-all text-muted-foreground">
+												Execution：{record.executionId ?? "未提供"}
+											</small>
+										</TableCell>
+										<TableCell data-label="操作主体">
+											<span>
+												可信操作主体 · {auditPrincipalLabels[record.actor.kind]}
+											</span>
+											<small className="mt-1 block break-all">
+												{record.actor.actorId}
+											</small>
+											{record.originalPrincipal && (
+												<small className="mt-1 block break-all text-muted-foreground">
+													原发起主体 ·{" "}
+													{auditPrincipalLabels[record.originalPrincipal.kind]}
+													：{record.originalPrincipal.id}
+												</small>
+											)}
+										</TableCell>
+										<TableCell data-label="结果">
+											<Badge variant="outline" data-result={record.result}>
+												{auditOutcomeLabel(record)}
+											</Badge>
+										</TableCell>
+										<TableCell data-label="详情">
+											<Button
+												variant="ghost"
+												aria-label="查看审计详情"
+												title="查看审计详情"
+												aria-expanded={auditId === record.auditId}
+												aria-controls={fieldId("detail")}
+												onClick={(event) => {
+													detailTrigger.current = event.currentTarget;
+													setAuditId(record.auditId);
+												}}
+											>
+												<ChevronRight strokeWidth={1.8} aria-hidden="true" />
+												详情
+											</Button>
+										</TableCell>
+									</TableRow>
+								))}
+							</TableBody>
+						</Table>
+					)
+				)}
+				<div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+					{query.status === "ready" && !busy && !formFailure && (
+						<p className="text-muted-foreground text-sm">
+							第 {query.pageNumber} 页 · 本页 {items.length} 条
+						</p>
+					)}
+					<div className="flex gap-2">
+						<Button
+							variant="outline"
+							disabled={busy || formFailure !== null || !query.canPreviousPage}
+							onClick={() => {
+								setAuditId(null);
+								query.previousPage();
+							}}
+						>
+							<ArrowLeft aria-hidden="true" />
+							上一页
+						</Button>
+						<Button
+							variant="outline"
+							disabled={busy || formFailure !== null || !query.hasNextPage}
+							onClick={() => {
+								setAuditId(null);
+								query.nextPage();
+							}}
+						>
+							下一页
+							<ArrowRight aria-hidden="true" />
+						</Button>
 					</div>
-				</section>
-				<SheetContent className="audit-detail overflow-y-auto p-6 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl">
-					<SheetHeader className="mb-6 p-0">
-						<SheetTitle className="text-xl">审计详情</SheetTitle>
-						<SheetDescription className="sr-only">
-							已授权的操作元数据
-						</SheetDescription>
-					</SheetHeader>
+				</div>
+			</section>
+			{auditId !== null && (
+				<section
+					ref={detailPanel}
+					tabIndex={-1}
+					id={fieldId("detail")}
+					aria-label="审计详情"
+					className="audit-detail-panel"
+					onKeyDown={(event) => {
+						if (event.key === "Escape") {
+							event.stopPropagation();
+							closeDetail();
+						}
+					}}
+				>
+					<header className="section-heading">
+						<div>
+							<p className="page-eyebrow">记录详情</p>
+							<h2>审计详情</h2>
+						</div>
+						<Button
+							variant="ghost"
+							onClick={closeDetail}
+							aria-label="关闭审计详情"
+						>
+							关闭
+						</Button>
+					</header>
 					{query.failure || query.detailStatus === "denied" ? (
 						<Alert variant="destructive">
 							<AlertDescription>
@@ -484,8 +510,8 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 							<AuditRecordDetail record={query.detail} />
 						</>
 					) : null}
-				</SheetContent>
-			</Sheet>
+				</section>
+			)}
 			{administrator && (
 				<Alert className="mt-5">
 					<AlertDescription className="space-y-1">

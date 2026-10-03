@@ -17,6 +17,7 @@ import type {
 	AgentProjectionV2,
 	ConversationDetailProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
+import { captureDesignContract, designViewports } from "./design-contract";
 
 type ControlledSession = {
 	tag: "old" | "new";
@@ -578,7 +579,7 @@ test("formal root route consumes fixture recent, opens the same Conversation and
 	await page.goto("/");
 	await expect(page).toHaveURL(/\/$/);
 	await expect(
-		page.getByRole("heading", { name: "从可用 Agent 开始今天的工作。" }),
+		page.getByRole("heading", { name: "把下一步工作交给合适的 Agent。" }),
 	).toBeVisible();
 	await expect(
 		page
@@ -712,7 +713,7 @@ for (const [status, message] of [
 		).toHaveCount(0);
 		await expect(recent.getByRole("button")).toHaveCount(0);
 		await expect(
-			page.getByRole("heading", { name: "从可用 Agent 开始今天的工作。" }),
+			page.getByRole("heading", { name: "把下一步工作交给合适的 Agent。" }),
 		).toBeVisible();
 		await refreshVisibleSession(page);
 		await expect
@@ -847,11 +848,11 @@ for (const boundary of [
 				await expect(
 					page
 						.getByRole("region", { name: "需要管理员处理" })
-						.getByText("1 项待审批", { exact: true }),
+						.getByText("1 项申请等待系统管理员审阅", { exact: true }),
 				).toBeVisible();
 				await expect(
 					page
-						.getByRole("region", { name: "需要管理员处理" })
+						.getByRole("complementary", { name: "待处理" })
 						.getByRole("link", { name: "查看失败清单" }),
 				).toBeVisible();
 				await recent.getByRole("button", { name: "加载更多对话" }).click();
@@ -1132,14 +1133,13 @@ test("administrator root exposes the six original blocks and legitimate Owner an
 	});
 	await page.goto("/");
 	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-		"从可用 Agent 开始今天的工作。",
+		"把下一步工作交给合适的 Agent。",
 	);
 	await expect(page.getByRole("heading", { level: 2 })).toHaveText([
 		"最近的个人对话",
+		"待处理",
 		"可用 Agent",
-		"创建状态",
-		"需要你处理",
-		"需要管理员处理",
+		"我的申请",
 	]);
 	const owner = page.getByRole("region", { name: "需要你处理", exact: true });
 	await expect(
@@ -1161,9 +1161,13 @@ test("administrator root exposes the six original blocks and legitimate Owner an
 		"/admin/approvals",
 	);
 	await expect(
-		admin.getByRole("link", { name: "查看失败清单" }),
+		page
+			.getByRole("complementary", { name: "待处理" })
+			.getByRole("link", { name: "查看失败清单" }),
 	).toHaveAttribute("href", "/admin/agents?status=creation_failed");
-	await expect(admin.getByText("1 项待审批", { exact: true })).toBeVisible();
+	await expect(
+		admin.getByText("1 项申请等待系统管理员审阅", { exact: true }),
+	).toBeVisible();
 	await info.attach("controlled-original-ia-six-blocks", {
 		body: await page.screenshot({ fullPage: true, animations: "disabled" }),
 		contentType: "image/png",
@@ -1243,6 +1247,27 @@ test("320 by 370 workbench long titles keep keyboard navigation and original cha
 		"conversation-z",
 	);
 	await expect(page.getByLabel("消息", { exact: true })).toHaveValue("");
+	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+		true,
+	);
+	expect(fixture.unexpected).toEqual([]);
+});
+
+test("exported design viewport matrix workbench", async ({ page }, info) => {
+	test.skip(
+		info.project.name !== "desktop",
+		"The exported nine-viewport matrix runs once.",
+	);
+	const fixture = await workbenchFixture(page, {
+		administrator: true,
+		attention: true,
+	});
+	await page.goto("/");
+	await expect(page.getByRole("link", { name: "进入审批" })).toBeVisible();
+	for (const viewport of designViewports) {
+		await page.setViewportSize(viewport);
+		await captureDesignContract(page, info, "workbench");
+	}
 	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
 		true,
 	);

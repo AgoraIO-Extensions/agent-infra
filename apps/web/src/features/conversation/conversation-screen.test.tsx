@@ -150,6 +150,58 @@ function userMessage(text = "Private question") {
 }
 
 describe("functional conversation screen", () => {
+	it.each(["stream", "snapshot"] as const)(
+		"clears waiting and refreshes recent history when completion arrives via %s",
+		async (source) => {
+			let accepted = false;
+			let completed = false;
+			const completedEvent = {
+				...event(1),
+				schemaVersion: 1 as const,
+				type: "execution.status" as const,
+				payload: { status: "completed" as const },
+			};
+			const { streams } = setup((request) => {
+				if (new URL(request.url).pathname === "/api/v2/me/conversations/recent")
+					return Response.json({
+						items: [
+							{
+								...history().conversation,
+								title: completed ? "Completed task" : "Pending task",
+							},
+						],
+						nextCursor: null,
+					});
+				if (request.method === "POST") {
+					accepted = true;
+					return receipt();
+				}
+				if (
+					new URL(request.url).pathname ===
+					"/api/v2/conversations/conversation-1"
+				)
+					return Response.json({
+						...history("conversation-1", completed ? [completedEvent] : []),
+						messages: accepted ? [userMessage()] : [],
+					});
+			});
+			fireEvent.change(await composer(), {
+				target: { value: "Complete this task" },
+			});
+			fireEvent.click(screen.getByRole("button", { name: "发送" }));
+			await screen.findByText("消息已受理，等待处理结果。");
+			await screen.findByRole("link", { name: /Pending task/ });
+			completed = true;
+			if (source === "stream") act(() => streams.at(-1)?.send(completedEvent));
+			else fireEvent.click(screen.getByRole("button", { name: "刷新会话" }));
+			await screen.findByText("已完成");
+			expect(screen.queryByText("消息已受理，等待处理结果。")).toBeNull();
+			expect(
+				await screen.findByRole("link", { name: /Completed task/ }),
+			).toBeTruthy();
+		},
+	);
+
 	it.each(["timeline", "unknown", "removed-unknown"] as const)(
 		"restores focus after closing execution details opened from %s",
 		async (entry) => {
@@ -738,14 +790,23 @@ describe("functional conversation screen", () => {
 		expect(onViewChange).toHaveBeenLastCalledWith("history");
 	});
 
-	it("creates a durable conversation before navigating", async () => {
+	it("creates a durable conversation and refreshes recent history before navigating", async () => {
+		let created = false;
 		const { props, requests } = setup(
-			(request) =>
-				request.method === "POST"
-					? Response.json(history().conversation, { status: 201 })
-					: undefined,
+			(request) => {
+				if (request.method === "POST") {
+					created = true;
+					return Response.json(history().conversation, { status: 201 });
+				}
+				if (new URL(request.url).pathname === "/api/v2/me/conversations/recent")
+					return Response.json({
+						items: created ? [history().conversation] : [],
+						nextCursor: null,
+					});
+			},
 			{ conversationId: undefined },
 		);
+		await screen.findByText("暂无个人对话。");
 		fireEvent.click(await screen.findByRole("button", { name: "创建会话" }));
 		await waitFor(() =>
 			expect(props.onConversationChange).toHaveBeenCalledWith("conversation-1"),
@@ -753,6 +814,9 @@ describe("functional conversation screen", () => {
 		expect(
 			requests.filter((request) => request.method === "POST"),
 		).toHaveLength(1);
+		expect(
+			await screen.findByRole("link", { name: /Test conversation/ }),
+		).toBeTruthy();
 	});
 
 	it.each([

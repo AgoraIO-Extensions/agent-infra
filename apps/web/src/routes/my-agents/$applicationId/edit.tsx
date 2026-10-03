@@ -6,12 +6,14 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
 import { projectDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
 import {
+	agentApplicationEditActionLabels,
 	getAgentApplicationEditAction,
 	isRetryableMyAgentApplicationError,
 } from "../../../features/my-agents/my-agent-applications.js";
 import { useAgentApplicationSubmission } from "../../../features/my-agents/use-agent-application-submission.js";
 import { useDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
 import { useMyAgentApplication } from "../../../features/my-agents/use-my-agent-application.js";
+import { PageLoadingState } from "../../../features/page-loading-state.js";
 
 export const Route = createFileRoute("/my-agents/$applicationId/edit")({
 	component: EditAgentApplicationRoute,
@@ -26,7 +28,11 @@ function EditAgentApplicationRoute() {
 		? isRetryableMyAgentApplicationError(query.error)
 		: query.data?.kind === "unavailable" && query.data.retryable;
 	if (query.isPending) {
-		return <p aria-live="polite">正在读取申请…</p>;
+		return (
+			<main className="platform-content management-content">
+				<PageLoadingState title="修改申请" message="正在读取申请…" />
+			</main>
+		);
 	}
 	if (query.isError || !query.data || query.data.kind !== "ready") {
 		return (
@@ -89,7 +95,14 @@ function EditAgentApplicationRoute() {
 		);
 	}
 	if (deployment.isPending) {
-		return <p aria-live="polite">正在读取部署选项…</p>;
+		return (
+			<main className="platform-content management-content">
+				<PageLoadingState
+					title={agentApplicationEditActionLabels[action]}
+					message="正在读取部署选项…"
+				/>
+			</main>
+		);
 	}
 	const error =
 		submission.isError && submission.error instanceof Error

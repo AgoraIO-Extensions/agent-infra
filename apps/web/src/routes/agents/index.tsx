@@ -5,10 +5,7 @@ import {
 	agentDiscoveryQueryMaxLength,
 } from "../../features/agent-discovery/agent-discovery-screen.js";
 import { useAgentDiscovery } from "../../features/agent-discovery/use-agent-discovery.js";
-import {
-	safeDeploymentUrl,
-	useApplicationSession,
-} from "../../features/application-shell.js";
+import { useApplicationSession } from "../../features/application-shell.js";
 
 export const Route = createFileRoute("/agents/")({
 	validateSearch: (
@@ -36,7 +33,6 @@ function AgentsRoute() {
 		<main className="platform-content management-content ia-agent-directory">
 			<div className="space-y-6">
 				<AgentDiscoveryScreen
-					connectionUrl={safeDeploymentUrl(import.meta.env.VITE_CONNECTION_URL)}
 					conversationSelection={mode === "conversation"}
 					query={q ?? ""}
 					onQueryChange={(nextQuery) => {
