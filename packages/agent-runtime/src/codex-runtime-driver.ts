@@ -92,6 +92,7 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
+	RuntimeNativeMetadataReadContext,
 	RuntimeOriginalEvidenceRecoveryRef,
 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
@@ -112,13 +113,7 @@ type OpenCodexBridge = (
 ) => Promise<CodexAppServerTransport>;
 
 /** Host-owned current read authority, never a wire command or business permit. */
-export type CodexNativeCommandReadContext = Pick<
-	RuntimeOriginalEvidenceReadContext,
-	"signal" | "expiresAt" | "assertCurrent"
-> & {
-	readonly nativeSessionRef: string;
-	revalidate(): Promise<RuntimeOriginalEvidenceBinding>;
-};
+export type CodexNativeCommandReadContext = RuntimeNativeMetadataReadContext;
 
 interface NativeMetadataReadBoundary {
 	readonly expiresAt: number;

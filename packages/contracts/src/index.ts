@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export * from "./native-metadata-v1.ts";
+
 const boundedToken = () =>
 	z
 		.string()

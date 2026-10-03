@@ -93,8 +93,7 @@ it("routes only to the fixed deployed Host without readiness or native I/O, reta
 		Response.json({ ...request, originalHostScopeRef: "a".repeat(64) }),
 	);
 	const signal = new AbortController().signal;
-	const revalidate = vi.fn(async () => {});
-	await host.client.resolveOriginalBinding(request, signal, revalidate);
+	await host.client.resolveOriginalBinding(request, signal);
 	expect(fetcher.mock.calls[0]?.[0].toString()).toBe(
 		"https://host-instance.test:3003/internal/runtime/native-metadata/v1/binding",
 	);
@@ -102,7 +101,6 @@ it("routes only to the fixed deployed Host without readiness or native I/O, reta
 	expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({
 		authorization: "Bearer synthetic-worker-to-host",
 	});
-	expect(revalidate.mock.calls.length).toBeGreaterThan(1);
 	const mutable = input.agents.get("agent-1");
 	Object.assign(mutable ?? {}, {
 		hostServiceId: "replacement-host",

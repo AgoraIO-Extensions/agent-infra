@@ -2,6 +2,14 @@ import { Buffer } from "node:buffer";
 
 import { ProtocolErrorV1Schema } from "@agent-infra/contracts";
 import {
+	type RuntimeNativeMetadataBindingRequestV1,
+	type RuntimeNativeMetadataBindingResponseV1,
+	type RuntimeNativeMetadataReadRequestV1,
+	type RuntimeNativeMetadataReadResponseV1,
+	RuntimeNativeMetadataBindingResponseV1Schema,
+	RuntimeNativeMetadataReadResponseV1Schema,
+} from "@agent-infra/contracts/runtime";
+import {
 	ExecutionGrantV1Schema,
 	type RuntimeAuthorizationRenewRequestV3,
 	RuntimeAuthorizationRenewRequestV3Schema,
@@ -446,6 +454,24 @@ export function createWorkerRuntimeHostClientV1(
 				signal,
 			);
 			yield* eventStream(response, RuntimeEventV1Schema);
+		},
+	};
+}
+
+export function createWorkerNativeMetadataHostClientV1(options: WorkerRuntimeHostClientOptionsV1) {
+	if (!options.serviceToken) throw new TypeError("Native metadata Host client options are invalid");
+	const fetcher = options.fetch ?? fetch;
+	const base = endpoint(options.baseUrl, "/");
+	async function postJson<T>(path: string, body: unknown, schema: { parse(value: unknown): T }, signal?: AbortSignal): Promise<T> {
+		const response = await post(fetcher, new URL(path.replace(/^\//, ""), base), options.serviceToken, crypto.randomUUID(), body, signal);
+		try { return schema.parse(JSON.parse(await boundedResponseText(response))); } catch { return failure("RUNTIME_RESPONSE_INVALID", true); }
+	}
+	return {
+		resolveOriginalBinding(request: RuntimeNativeMetadataBindingRequestV1, signal?: AbortSignal) {
+			return postJson<RuntimeNativeMetadataBindingResponseV1>("internal/runtime/native-metadata/v1/binding", request, RuntimeNativeMetadataBindingResponseV1Schema, signal);
+		},
+		readMetadata(request: RuntimeNativeMetadataReadRequestV1, signal?: AbortSignal) {
+			return postJson<RuntimeNativeMetadataReadResponseV1>("internal/runtime/native-metadata/v1/read", request, RuntimeNativeMetadataReadResponseV1Schema, signal);
 		},
 	};
 }
