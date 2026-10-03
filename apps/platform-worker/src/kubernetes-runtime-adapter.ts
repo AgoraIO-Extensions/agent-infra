@@ -9,8 +9,11 @@ import {
 } from "@agent-infra/contracts/workload";
 import {
 	type RuntimeModelProjectionV1,
+	type RuntimeModelProjectionV4,
 	runtimeModelInjectionV1,
+	runtimeModelInjectionV4,
 	validateRuntimeModelProjectionV1,
+	validateRuntimeModelProjectionV4,
 } from "@agent-infra/model-catalog";
 import type {
 	KubernetesObject,
@@ -95,7 +98,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	readonly client: WorkerKubernetesClientV1;
 	readonly policy: KubernetesWorkloadPolicyV1;
 	/** Supplied from Worker persistent state, never restored from live annotations. */
-	readonly modelProjection?: RuntimeModelProjectionV1;
+	readonly modelProjection?:
+		| RuntimeModelProjectionV1
+		| RuntimeModelProjectionV4;
 	readonly probe: (input: {
 		readonly desired: AgentWorkloadDesiredV1;
 		readonly serviceOrigin: string;
@@ -107,9 +112,13 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	const modelProjection =
 		options.modelProjection === undefined
 			? undefined
-			: validateRuntimeModelProjectionV1(options.modelProjection);
+			: options.modelProjection.schemaVersion === 4
+				? validateRuntimeModelProjectionV4(options.modelProjection)
+				: validateRuntimeModelProjectionV1(options.modelProjection);
 	const modelInjection = modelProjection
-		? runtimeModelInjectionV1(modelProjection)
+		? modelProjection.schemaVersion === 4
+			? runtimeModelInjectionV4(modelProjection)
+			: runtimeModelInjectionV1(modelProjection)
 		: undefined;
 	if (
 		client.namespace !== policy.namespace ||
