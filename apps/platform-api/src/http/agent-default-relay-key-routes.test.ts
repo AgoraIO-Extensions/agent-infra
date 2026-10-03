@@ -13,7 +13,9 @@ const state = {
 	configurationRevision: 7,
 };
 function fixture() {
-	const replace = vi.fn(async () => state);
+	const replace = vi.fn<
+		AgentDefaultRelayKeyRoutesDependencies["keys"]["replace"]
+	>(async () => state);
 	const deps: AgentDefaultRelayKeyRoutesDependencies = {
 		identity: {
 			resolve: async () => ({
