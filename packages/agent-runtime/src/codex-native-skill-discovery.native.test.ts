@@ -158,6 +158,11 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 				]);
 				expect(notifications).toContain("skills/changed");
 				expect(requests.map((request) => request.method)).toEqual([
+					// The pinned app-server performs its normal startup handshake before
+					// the Driver can issue the Skill discovery calls.
+					"initialize",
+					"config/read",
+					"model/list",
 					"skills/extraRoots/set",
 					"skills/list",
 				]);
