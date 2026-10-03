@@ -245,11 +245,13 @@ describe("compatible approval upgrade", () => {
 					repository.getProviderUpgradeReadiness(input),
 				).resolves.toMatchObject({ nextAction: "REQUEST_APPROVAL" });
 			} finally {
-				if (createdConnectionId)
+				if (createdConnectionId) {
 					await repository.disconnectConnection({
 						principalId,
 						connectionId: createdConnectionId,
 					});
+					await sql`UPDATE connection_access_authorizations SET state='REVOKED' WHERE connection_id=${createdConnectionId}`;
+				}
 				await repository.close();
 				await sql.end();
 			}
