@@ -735,9 +735,7 @@ describe("functional conversation screen", () => {
 		expect(onViewChange).toHaveBeenLastCalledWith("history");
 		rerenderScope({ view: "history" });
 		await screen.findByRole("heading", { name: "个人历史", level: 2 });
-		fireEvent.click(
-			screen.getByRole("button", { name: "最近对话", exact: true }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: "最近对话" }));
 		expect(onViewChange).toHaveBeenLastCalledWith("conversation");
 		rerenderScope({ view: "conversation" });
 		expect(screen.getByRole("region", { name: "最近对话" })).toBeTruthy();
