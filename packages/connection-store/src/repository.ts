@@ -1771,13 +1771,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					consumerId: grant.consumer_id,
 					principalId: grant.principal_id,
 				});
-				if (renewal)
-					target = selectAuthorizationActions(target, grant.action_version_ids);
+				target = selectAuthorizationActions(target, grant.action_version_ids);
 			} catch (error) {
 				if (
 					!(error instanceof ConnectionError) ||
-					(error.code !== "FORBIDDEN" &&
-						!(renewal && error.code === "INVALID_REQUEST"))
+					(error.code !== "FORBIDDEN" && error.code !== "INVALID_REQUEST")
 				) {
 					throw error;
 				}
@@ -3301,6 +3299,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					${protectedRefresh.tag}, ${expiresAt},
 					${identity.refreshExpiresAt ?? null}
 				)
+			`;
+			await sql`
+				UPDATE connection_accounts
+				SET last_credential_version_id = ${credentialId}
+				WHERE id = ${claim.connectionId}
 			`;
 			await this.restoreGrantsAfterReconnect(sql, claim.connectionId);
 			await sql`
