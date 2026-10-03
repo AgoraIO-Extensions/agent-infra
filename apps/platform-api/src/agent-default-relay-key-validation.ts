@@ -1,8 +1,9 @@
 import {
+	type admitAgentDefaultModelsV1,
 	ModelCatalogSnapshotV1Schema,
 	modelIdentifier,
 	modelOperationV1,
-	type StandardTemplateModelBindingV1,
+	reasoningLevel,
 	standardTemplateModelBindingV1,
 } from "@agent-infra/model-catalog";
 import {
@@ -17,7 +18,11 @@ export function createAgentDefaultRelayKeyCandidatesV1(input: {
 		readonly revision: string;
 		readonly load: (signal: AbortSignal) => Promise<unknown>;
 	};
-	readonly templateBindings: readonly StandardTemplateModelBindingV1[];
+	readonly templateBindings: readonly Parameters<
+		typeof admitAgentDefaultModelsV1
+	>[0]["template"][];
+	readonly relayEndpointId: string;
+	readonly relayBaseUrl: string;
 	readonly validation: Parameters<typeof createPersonalRelayKeyValidatorV1>[0];
 }): AgentDefaultRelayKeyDependenciesV1["candidates"] {
 	const validate = createPersonalRelayKeyValidatorV1(input.validation);
@@ -34,8 +39,21 @@ export function createAgentDefaultRelayKeyCandidatesV1(input: {
 			return await modelOperationV1(signal, async () => {
 				const binding = standardTemplateModelBindingV1(
 					configuration.source,
-					bindings,
+					bindings.map(({ reasoningLevels: _levels, ...binding }) => binding),
 				);
+				const templateReasoning = bindings.find(
+					(template) =>
+						template.templateId === binding.templateId &&
+						template.imageDigest === binding.imageDigest,
+				)?.reasoningLevels;
+				if (
+					!templateReasoning?.length ||
+					templateReasoning.length > 32 ||
+					templateReasoning.some(
+						(level) => !reasoningLevel.safeParse(level).success,
+					)
+				)
+					throw new Error();
 				const catalog = ModelCatalogSnapshotV1Schema.parse(
 					await input.modelCatalog.load(signal),
 				);
@@ -47,11 +65,17 @@ export function createAgentDefaultRelayKeyCandidatesV1(input: {
 				const candidates = [];
 				for (const endpoint of catalog.endpoints) {
 					if (
+						endpoint.endpointId !== input.relayEndpointId ||
+						endpoint.baseUrl !== input.relayBaseUrl ||
 						!endpoint.available ||
 						endpoint.protocol !== binding.protocol ||
 						endpoint.security.tls !== "verify-peer"
 					)
 						continue;
+					const reasoningLevels = endpoint.capabilities.reasoningLevels.filter(
+						(level) => templateReasoning.includes(level),
+					);
+					if (!reasoningLevels.length) continue;
 					const url = `${endpoint.baseUrl.replace(/\/$/, "")}/models`;
 					const response = await fetcher(url, {
 						method: "GET",
@@ -116,7 +140,7 @@ export function createAgentDefaultRelayKeyCandidatesV1(input: {
 							candidates.push({
 								endpointId: endpoint.endpointId,
 								modelId: id,
-								reasoningLevels: [...endpoint.capabilities.reasoningLevels],
+								reasoningLevels,
 							});
 					}
 				}
