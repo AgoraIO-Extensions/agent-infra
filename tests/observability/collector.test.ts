@@ -465,6 +465,10 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 				failuresBeforeDisconnect,
 		);
 		const exportFailureStatus = worker.observabilityStatus();
+		// Keep the exporter failure proof scoped to the text event above. The
+		// operation correlation facts below must be emitted while the collector is
+		// connected so every queried pair has a corresponding trace readback.
+		await collector.reconnect();
 		const rows =
 			await sql`select count(*)::int as count from platform.conversation_events where execution_id = ${executionId}`;
 		expect(rows[0]?.count).toBe(2);
@@ -507,7 +511,6 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		expect((await persistModel(unknown, "model-unknown")).outcome).toBe(
 			"replayed",
 		);
-		await collector.reconnect();
 		await until(async () => {
 			try {
 				const text = await collector.query();
