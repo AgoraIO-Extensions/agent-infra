@@ -428,7 +428,11 @@ const applicationBody = {
 	schemaVersion: 2,
 	name: "Release assistant",
 	description: "Helps the release team",
-	source: { kind: "standard", templateId: "template-1" },
+	source: {
+		kind: "standard",
+		templateId: "template-1",
+		templateRevision: "template-test-revision",
+	},
 	coOwnerIds: [],
 	availability: [{ kind: "organization", organizationId: "org-1" }],
 	environment: [],

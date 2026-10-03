@@ -12,7 +12,6 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-
 import type {
 	AgentApplicationCreateRequestV2Writable,
 	AgentApplicationProjectionV2,
@@ -30,6 +29,10 @@ import {
 	sourceKindFor,
 	validateAgentApplicationDraft,
 } from "./agent-application-draft.js";
+import {
+	applicationTemplateChoices,
+	templateReadinessMessages,
+} from "./deployment-configuration.js";
 import {
 	type AgentApplicationEditAction,
 	agentApplicationEditActionLabels,
@@ -642,6 +645,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const configuration = application?.configuration;
 	const persistedModelOptions = configuration?.modelOptions;
 	const deployment = props.deploymentConfiguration;
+	const templates = applicationTemplateChoices(deployment);
 	const deploymentRetryable = props.deploymentConfigurationRetryable ?? false;
 	const modelEndpoints = deployment.modelCatalog.endpoints;
 	const [name, setName] = useState(application?.name ?? "");
@@ -651,6 +655,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const [templateId, setTemplateId] = useState(
 		application?.source.kind === "standard"
 			? application.source.templateId
+			: "",
+	);
+	const [templateRevision, setTemplateRevision] = useState(
+		application?.source.kind === "standard"
+			? (templateFor(deployment, application.source.templateId)?.readiness
+					?.revision ?? "")
 			: "",
 	);
 	const [sourceKind, setSourceKind] = useState<AgentApplicationSourceKind>(() =>
@@ -792,13 +802,26 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			? (configuration?.modelOptions.map((option) => option.optionId) ?? [])
 			: undefined;
 	const selectedTemplate = templateFor(deployment, templateId);
+	const templateUnavailable =
+		selectedTemplate?.readiness?.state !== "ready" ||
+		!templateRevision ||
+		templateRevision !== selectedTemplate.readiness.revision;
+	const templateMessage =
+		templateId && templateUnavailable
+			? selectedTemplate?.readiness?.state === "ready"
+				? "模板已更新，请确认后再提交。"
+				: templateReadinessMessages[
+						selectedTemplate?.readiness?.state ?? "unverified"
+					]
+			: undefined;
 	const modelCatalogReady = deployment.modelCatalog.status === "populated";
 	const standardChoicesBlocked =
 		sourceKind === "standard" &&
-		modelConfigurationVisible &&
-		(deployment.status !== "populated" ||
-			deployment.templates.length === 0 ||
-			!modelCatalogReady);
+		(templateUnavailable ||
+			(modelConfigurationVisible &&
+				(deployment.status !== "populated" ||
+					deployment.templates.length === 0 ||
+					!modelCatalogReady)));
 	useEffect(() => {
 		if (props.mode !== "update" || modelEndpoints.length === 0) return;
 		setModels((current) => {
@@ -981,6 +1004,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			description,
 			sourceKind,
 			templateId,
+			templateRevision,
 			imageReference,
 			identityResponsibility,
 			coOwnerIds,
@@ -988,7 +1012,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			organizationAvailabilityIds,
 			environment,
 			secrets,
-			source: application?.source,
+			source:
+				application?.source.kind === "standard"
+					? { ...application.source, templateRevision }
+					: application?.source,
 			configureModels,
 			models,
 			defaultModelOptionId,
@@ -997,7 +1024,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		const errors = validateAgentApplicationDraft(draft, {
 			allowedEnvironmentKeys: selectedTemplate?.allowedEnvironmentKeys,
 			allowedSecretKeys: selectedTemplate?.allowedSecretKeys,
-			configurationMessage,
+			configurationMessage: templateMessage ?? configurationMessage,
 			defaultModelReasoningLevels: defaultModel?.reasoningLevels
 				?.split("\n")
 				.filter(Boolean),
@@ -1185,6 +1212,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									onValueChange={(value) => {
 										if (!value) return;
 										setTemplateId(value);
+										setTemplateRevision(
+											templateFor(deployment, value)?.readiness?.revision ?? "",
+										);
 										setSecrets((current) =>
 											current.map((item) => ({ ...item, value: "" })),
 										);
@@ -1205,10 +1235,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										<SelectValue placeholder="选择标准模板" />
 									</SelectTrigger>
 									<SelectContent>
-										{deployment.templates.map((template) => (
+										{templates.map((template) => (
 											<SelectItem
 												key={template.templateId}
 												value={template.templateId}
+												disabled={template.readiness?.state !== "ready"}
 											>
 												{template.displayName}
 											</SelectItem>
@@ -1220,6 +1251,42 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										) : null}
 									</SelectContent>
 								</Select>
+								<ul
+									className="space-y-1 text-muted-foreground text-sm"
+									aria-label="模板就绪状态"
+								>
+									{templates.map((template) => (
+										<li key={template.templateId}>
+											{template.displayName}：
+											{
+												templateReadinessMessages[
+													template.readiness?.state ?? "unverified"
+												]
+											}
+										</li>
+									))}
+								</ul>
+								{templateMessage && templateId ? (
+									<p aria-live="polite" className="text-sm">
+										{templateMessage}
+									</p>
+								) : null}
+								{templateUnavailable &&
+								selectedTemplate?.readiness?.state === "ready" ? (
+									<Button
+										variant="outline"
+										type="button"
+										onClick={() => {
+											setTemplateRevision(
+												selectedTemplate.readiness?.revision ?? "",
+											);
+											clearFieldErrors("templateId");
+										}}
+									>
+										使用当前模板
+									</Button>
+								) : null}
+
 								<FieldError
 									id={errorId("templateId")}
 									message={fieldErrors.templateId}

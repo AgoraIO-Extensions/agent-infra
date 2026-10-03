@@ -118,6 +118,7 @@ function parseSourceSelection(
 		["kind"],
 		[
 			"templateId",
+			"templateRevision",
 			"imageReference",
 			"interactionMode",
 			"identityResponsibility",
@@ -126,11 +127,19 @@ function parseSourceSelection(
 	if (base.kind === "standard") {
 		if (
 			!isText(base.templateId, idMaxBytes) ||
-			Object.keys(base).length !== 2
+			(base.templateRevision !== undefined &&
+				!isText(base.templateRevision, idMaxBytes)) ||
+			Object.keys(base).length !== (base.templateRevision === undefined ? 2 : 3)
 		) {
 			invalidCommand();
 		}
-		return { kind: "standard", templateId: base.templateId };
+		return {
+			kind: "standard",
+			templateId: base.templateId,
+			...(base.templateRevision === undefined
+				? {}
+				: { templateRevision: base.templateRevision as string }),
+		};
 	}
 	if (
 		base.kind !== "custom" ||
