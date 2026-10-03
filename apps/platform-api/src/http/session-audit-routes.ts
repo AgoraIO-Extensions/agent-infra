@@ -165,7 +165,9 @@ export function registerSessionAuditRoutes(
 		const capability =
 			dependencies.connectionCapability ??
 			({ status: "unavailable", schemaVersion: 1, reason: "missing" } as const);
-		return context.json(ConnectionCapabilityProjectionV1Schema.parse(capability));
+		return context.json(
+			ConnectionCapabilityProjectionV1Schema.parse(capability),
+		);
 	});
 
 	app.get("/api/v1/admin/audit", async (context) => {

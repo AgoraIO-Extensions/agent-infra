@@ -1,6 +1,17 @@
 import { createHash } from "node:crypto";
 
+import type { ConnectionCapabilityProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { z } from "zod";
+
+const approvalSchema = z.strictObject({
+	schemaVersion: z.literal(1),
+	configFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+	egressEnforced: z.literal(true),
+	source: z.strictObject({
+		ref: z.string().min(1),
+		revision: z.string().min(1),
+	}),
+});
 
 const profileSchema = z.strictObject({
 	schemaVersion: z.literal(1),
@@ -15,19 +26,9 @@ const profileSchema = z.strictObject({
 });
 
 export type ConnectionConsumerProfileV1 = z.infer<typeof profileSchema>;
-export type ConnectionCapabilityV1 =
-	| {
-			readonly status: "available";
-			readonly schemaVersion: 1;
-			readonly publicOrigin: string;
-			readonly mcpPath: string;
-			readonly configFingerprint: string;
-	  }
-	| {
-			readonly status: "unavailable";
-			readonly schemaVersion: 1;
-			readonly reason: "missing" | "invalid" | "unapproved" | "unavailable";
-	  };
+export type ConnectionCapabilityV1 = z.infer<
+	typeof ConnectionCapabilityProjectionV1Schema
+>;
 
 function validOrigin(value: string): boolean {
 	try {
@@ -42,15 +43,15 @@ function validPath(value: string): boolean {
 	return (
 		value.startsWith("/") &&
 		!value.startsWith("//") &&
-		!/[\\?#]/.test(value) &&
-		!/%(?:2f|2e)/i.test(value) &&
+		!/[\s\p{Cc}\\?#]/u.test(value) &&
+		!/%(?:2f|2e|5c)/i.test(value) &&
 		!value.split("/").some((part) => part === "." || part === "..")
 	);
 }
 
 export function createConnectionCapability(
 	input: unknown,
-	approved = true,
+	approval: unknown,
 ): ConnectionCapabilityV1 {
 	if (input === undefined || input === null) {
 		return { status: "unavailable", schemaVersion: 1, reason: "missing" };
@@ -59,7 +60,8 @@ export function createConnectionCapability(
 	if (!parsed.success) {
 		return { status: "unavailable", schemaVersion: 1, reason: "invalid" };
 	}
-	if (!approved) {
+	const approved = approvalSchema.safeParse(approval);
+	if (!approved.success) {
 		return { status: "unavailable", schemaVersion: 1, reason: "unapproved" };
 	}
 	if (
@@ -82,6 +84,9 @@ export function createConnectionCapability(
 			"utf8",
 		)
 		.digest("hex");
+	if (fingerprint !== approved.data.configFingerprint) {
+		return { status: "unavailable", schemaVersion: 1, reason: "invalid" };
+	}
 	return {
 		status: "available",
 		schemaVersion: 1,

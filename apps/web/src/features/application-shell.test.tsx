@@ -282,6 +282,32 @@ describe("deployment links", () => {
 		).toBe("https://connection.example.test/mcp");
 	});
 
+	it("keeps an unavailable Connection entry without an outbound link", () => {
+		setup(identity("user-1"));
+		expect(
+			screen
+				.getByText("我的 Connection（暂不可用）")
+				.getAttribute("aria-disabled"),
+		).toBe("true");
+		expect(screen.queryByRole("link", { name: /我的 Connection/ })).toBeNull();
+	});
+	it.each(["/\n/evil.test", "/\t/evil.test", "/\r/evil.test"])(
+		"does not normalize unsafe path %j into an external link",
+		(mcpPath) => {
+			setup(
+				identity("user-1", false, undefined, {
+					status: "available",
+					schemaVersion: 1,
+					publicOrigin: "https://connection.example.test",
+					mcpPath,
+					configFingerprint: "a".repeat(64),
+				}),
+			);
+			expect(
+				screen.queryByRole("link", { name: /我的 Connection/ }),
+			).toBeNull();
+		},
+	);
 	it("accepts configured HTTPS or local paths and rejects executable or ambiguous URLs", () => {
 		expect(safeDeploymentUrl("/__local/login")).toBe("/__local/login");
 		expect(safeDeploymentUrl("https://identity.example.test/login")).toBe(

@@ -737,6 +737,46 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			spy.mockRestore();
 		}
 	});
+	it("binds the production Connection capability to the approved deployment snapshot", () => {
+		const profile = {
+			schemaVersion: 1,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			consumerId: "platform-web",
+			audience: "connection-api",
+			egressProfile: { ref: "egress-platform", revision: "r1" },
+		};
+		const approval = {
+			schemaVersion: 1,
+			configFingerprint:
+				"7821b88d0acd40836eed51877a2e959774434f72cc4672475f7da41c89359331",
+			source: { ref: "platform-deployment", revision: "r1" },
+			egressEnforced: true,
+		};
+		const build = (
+			connectionConsumerProfile: unknown,
+			connectionConsumerProfileApproval: unknown,
+		) =>
+			createProductionPlatformApiAssemblyInputV1({
+				...fixture.input,
+				connectionConsumerProfile,
+				connectionConsumerProfileApproval,
+			}).connectionCapability;
+		expect(build(profile, approval)).toEqual({
+			status: "available",
+			schemaVersion: 1,
+			publicOrigin: profile.publicOrigin,
+			mcpPath: profile.mcpPath,
+			configFingerprint: approval.configFingerprint,
+		});
+		expect(
+			build({ ...profile, consumerId: "another-consumer" }, approval),
+		).toMatchObject({ status: "unavailable", reason: "invalid" });
+		expect(build(profile, undefined)).toMatchObject({
+			status: "unavailable",
+			reason: "unapproved",
+		});
+	});
 	it("fails closed without a request scope and closes its owned query once", async () => {
 		const input = createProductionPlatformApiAssemblyInputV1(fixture.input);
 		const read = vi.fn();

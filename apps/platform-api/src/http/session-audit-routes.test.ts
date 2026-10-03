@@ -5,6 +5,7 @@ import {
 } from "@agent-infra/contracts/pilot";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
+import { createConnectionCapability } from "../connection-consumer-profile.js";
 
 import { HttpProtocolError } from "./common.js";
 import { registerSessionAuditRoutes } from "./session-audit-routes.js";
@@ -156,6 +157,38 @@ describe("session and audit routes", () => {
 		});
 	});
 
+	it("keeps caller endpoint selectors out of the deployment capability", async () => {
+		const profile = {
+			schemaVersion: 1,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			consumerId: "platform-web",
+			audience: "connection-api",
+			egressProfile: { ref: "egress-platform", revision: "r1" },
+		};
+		const approval = {
+			schemaVersion: 1,
+			configFingerprint:
+				"7821b88d0acd40836eed51877a2e959774434f72cc4672475f7da41c89359331",
+			source: { ref: "platform-deployment", revision: "r1" },
+			egressEnforced: true,
+		};
+		const capability = createConnectionCapability(profile, approval);
+		if (capability.status !== "available")
+			throw Error("fixture admission failed");
+		const { app } = createApp(activeIdentity, capability);
+		const response = await app.request(
+			"/api/v1/connection/capability?publicOrigin=https://evil.test&consumerId=other",
+			{ headers: { "x-connection-audience": "other" } },
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual(capability);
+		const denied = createApp(activeIdentity, capability);
+		denied.identityAdapter.resolve.mockResolvedValue(null);
+		expect(
+			(await denied.app.request("/api/v1/connection/capability")).status,
+		).toBe(401);
+	});
 	it("rejects non-administrators before querying audit persistence", async () => {
 		const { app, audit } = createApp({
 			...activeIdentity,

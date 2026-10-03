@@ -154,10 +154,8 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		session.state.kind === "ready" &&
 		session.state.connection?.status === "available"
 			? safeDeploymentUrl(
-					new URL(
+					session.state.connection.publicOrigin +
 						session.state.connection.mcpPath,
-						session.state.connection.publicOrigin,
-					).href,
 				)
 			: undefined;
 	const development =
@@ -268,7 +266,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						<ClipboardMinus size={17} strokeWidth={1.8} aria-hidden="true" />
 						我的执行审计
 					</Link>
-					{connectionUrl && (
+					{connectionUrl ? (
 						<a
 							className="platform-nav-item platform-nav-external"
 							href={connectionUrl}
@@ -281,6 +279,20 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							</span>
 							<ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
 						</a>
+					) : (
+						<span
+							className="platform-nav-item"
+							aria-disabled="true"
+							title={
+								session.state.kind === "ready" &&
+								session.state.connection?.status === "unavailable"
+									? `Connection: ${session.state.connection.reason}`
+									: "Connection: unavailable"
+							}
+						>
+							<KeyRound size={17} strokeWidth={1.8} aria-hidden="true" />
+							我的 Connection（暂不可用）
+						</span>
 					)}
 				</nav>
 				{admin && (

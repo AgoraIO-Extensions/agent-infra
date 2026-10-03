@@ -30,7 +30,7 @@ import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 export interface ProductionPlatformApiInputV1
 	extends Omit<DeploymentAdmissionInputV1, "currentIdentity"> {
 	readonly connectionConsumerProfile?: unknown;
-	readonly connectionConsumerProfileApproved?: boolean;
+	readonly connectionConsumerProfileApproval?: unknown;
 	readonly wecom?: PlatformApiAssemblyInput["wecom"];
 	readonly wecomIdentity?: PlatformApiAssemblyInput["wecomIdentity"];
 	readonly wecomCredentialEncryptionKeys?: PlatformApiAssemblyInput["wecomCredentialEncryptionKeys"];
@@ -86,7 +86,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		createDeploymentConfigurationProjectionV2(input);
 	const connectionCapability = createConnectionCapability(
 		input.connectionConsumerProfile,
-		input.connectionConsumerProfileApproved === true,
+		input.connectionConsumerProfileApproval,
 	);
 	const secrets = createDeploymentSecretPreparation(
 		createSecretEncryptorV1({ encryptionKeys: input.encryptionKeys }),

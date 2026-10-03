@@ -17,7 +17,7 @@ const {
 	organizationIds,
 	publicOrigin,
 	connectionConsumerProfile,
-	connectionConsumerProfileApproved,
+	connectionConsumerProfileApproval,
 	apiInput,
 } = await import(configurationModule);
 const databaseUrl = process.env.PLATFORM_DATABASE_URL;
@@ -45,7 +45,7 @@ export function createPlatformApiAssemblyInput() {
 	return createProductionPlatformApiAssemblyInputV1({
 		...apiInput,
 		connectionConsumerProfile,
-		connectionConsumerProfileApproved,
+		connectionConsumerProfileApproval,
 		databaseUrl,
 		identity: browser.identity,
 	});
