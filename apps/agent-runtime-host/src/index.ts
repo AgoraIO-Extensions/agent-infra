@@ -236,7 +236,7 @@ export async function assembleRuntimeHost(
 								"Runtime authorization is not ready",
 								403,
 							);
-						await assembledHost.authorizeExternalAction(action);
+						return assembledHost.authorizeExternalAction(action);
 					},
 					launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
 					path: join(dataDirectory, "codex-driver.json"),
