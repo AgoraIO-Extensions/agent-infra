@@ -14,6 +14,7 @@
 	},
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",
+		"@agent-infra/model-catalog": "workspace:*",
 		"@base-ui/react": "^1.8.0",
 		"@tailwindcss/vite": "^4.3.3",
 		"@tanstack/react-query": "^5.102.8",

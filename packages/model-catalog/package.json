@@ -9,6 +9,10 @@
 		".": {
 			"types": "./dist/index.d.mts",
 			"import": "./dist/index.mjs"
+		},
+		"./standard-templates": {
+			"types": "./dist/standard-templates.d.mts",
+			"import": "./dist/standard-templates.mjs"
 		}
 	},
 	"files": [
