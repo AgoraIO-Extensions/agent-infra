@@ -141,6 +141,7 @@ test("assistant Markdown stays readable through history reload and version switc
 	if (testInfo.project.name === "mobile") {
 		const widths = [160, 200, 215, 320, 390, 430, 768, 1024, 1440];
 		async function checkSurface(name: string, sendReachable = false) {
+			const initialViewport = page.viewportSize();
 			for (const width of widths) {
 				await page.setViewportSize({
 					width,
@@ -170,6 +171,7 @@ test("assistant Markdown stays readable through history reload and version switc
 						fullPage: true,
 					});
 			}
+			if (initialViewport) await page.setViewportSize(initialViewport);
 		}
 		await checkSurface("conversation", true);
 		await page.getByRole("button", { name: "个人历史" }).click();
