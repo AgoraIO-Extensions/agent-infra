@@ -28,6 +28,7 @@ import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 	type CodexModelAccess,
+	type CodexSkillLaunchProvenance,
 	codexConversationKey,
 	runCodexConnectionRecovery,
 	validateModelAccess,
@@ -101,6 +102,7 @@ import {
 } from "./runtime-authorization.js";
 
 interface CodexAppServerTransport {
+	nativeSkillLaunch?(): CodexSkillLaunchProvenance;
 	send(frame: CodexAppServerFrame): Promise<void>;
 	frames(): AsyncIterable<CodexAppServerFrame>;
 	close?(): Promise<void>;
@@ -139,6 +141,126 @@ interface NativeCommandBinding {
 	readonly threadId: string;
 	readonly configVersion: string;
 	readonly requiredRuntime: CodexRuntimeRequirements;
+}
+
+interface NativeSkillProcess {
+	readonly bridge: CodexAppServerTransport;
+	readonly launch: CodexSkillLaunchProvenance;
+	epoch: number;
+	active: boolean;
+}
+
+function skillDirectoryInvalid(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_CODEX_SKILL_DIRECTORY_INVALID",
+		"Installed Skill directory could not be verified",
+		503,
+	);
+}
+
+// Fixed 0.1.0-candidate.1 package: its approved SKILL.md bytes bind the display text.
+const approvedWorkspaceSummary = {
+	entrySha256:
+		"af9ba615c92dcf53c6d5742b3d6043e4452b4499e0cdb561f4748033881472b2",
+	description:
+		"显式选择本 Skill 后，读取当前授权工作区中的指定文本文件并给出有来源依据的摘要。",
+} as const;
+
+function approveSkillResponse(
+	value: unknown,
+	cwd: string,
+	descriptor: CodexInstalledSkillDescriptorV1,
+) {
+	if (
+		!isPlainRecord(value) ||
+		!hasOnlyKeys(value, ["data"]) ||
+		!Array.isArray(value.data) ||
+		value.data.length !== 1
+	)
+		skillDirectoryInvalid();
+	const entry = value.data[0];
+	if (
+		!isPlainRecord(entry) ||
+		!hasOnlyKeys(entry, ["cwd", "skills", "errors"]) ||
+		entry.cwd !== cwd ||
+		!Array.isArray(entry.errors) ||
+		entry.errors.length !== 0 ||
+		!Array.isArray(entry.skills) ||
+		entry.skills.length !== 1
+	)
+		skillDirectoryInvalid();
+	const skill = entry.skills[0];
+	if (
+		!isPlainRecord(skill) ||
+		!hasOnlyKeys(skill, [
+			"name",
+			"description",
+			"shortDescription",
+			"interface",
+			"dependencies",
+			"path",
+			"scope",
+			"enabled",
+			"pluginId",
+		]) ||
+		skill.name !== descriptor.manifest.name ||
+		skill.path !== descriptor.manifest.entryPath ||
+		skill.scope !== "user" ||
+		skill.enabled !== true ||
+		skill.pluginId !== null ||
+		descriptor.manifest.files[0].sha256 !==
+			approvedWorkspaceSummary.entrySha256 ||
+		skill.description !== approvedWorkspaceSummary.description ||
+		(skill.shortDescription !== undefined &&
+			skill.shortDescription !== null &&
+			(typeof skill.shortDescription !== "string" ||
+				skill.shortDescription.length > 1024))
+	)
+		skillDirectoryInvalid();
+	// This fixed one-file package has no assets, remote interface or tool dependencies.
+	// Do not quietly accept capabilities that the approved package does not contain.
+	if (skill.interface !== undefined && skill.interface !== null) {
+		const ui = skill.interface;
+		if (
+			!isPlainRecord(ui) ||
+			!hasOnlyKeys(ui, [
+				"displayName",
+				"shortDescription",
+				"iconSmall",
+				"iconLarge",
+				"iconSmallUrl",
+				"iconLargeUrl",
+				"brandColor",
+				"defaultPrompt",
+			]) ||
+			ui.iconSmallUrl !== null ||
+			ui.iconLargeUrl !== null ||
+			(ui.iconSmall !== undefined && ui.iconSmall !== null) ||
+			(ui.iconLarge !== undefined && ui.iconLarge !== null) ||
+			Object.entries(ui).some(
+				([key, item]) =>
+					key !== "iconSmallUrl" &&
+					key !== "iconLargeUrl" &&
+					item !== null &&
+					(typeof item !== "string" || item.length > 4096),
+			)
+		)
+			skillDirectoryInvalid();
+	}
+	if (
+		skill.dependencies !== undefined &&
+		skill.dependencies !== null &&
+		(!isPlainRecord(skill.dependencies) ||
+			!hasOnlyKeys(skill.dependencies, ["tools"]) ||
+			!Array.isArray(skill.dependencies.tools) ||
+			skill.dependencies.tools.length !== 0)
+	)
+		skillDirectoryInvalid();
+	// Hash the entire approved response, including metadata that is not projected.
+	return {
+		digest: createHash("sha256").update(JSON.stringify(value)).digest("hex"),
+		description: approvedWorkspaceSummary.description,
+	};
 }
 
 /** Trusted deployment input; shape receipt does not verify installation or image provenance. */
@@ -2056,6 +2178,7 @@ function statusForTurn(
 function assertContainedConfiguration(
 	value: unknown,
 	expected: {
+		disableBundledSkills?: boolean;
 		modelOnly?: boolean;
 		model: string;
 		reasoningEffort: string;
@@ -2082,6 +2205,17 @@ function assertContainedConfiguration(
 		configurationInvalid();
 	}
 	assertOnlySessionFlagOrigins(value.origins);
+	if (expected.disableBundledSkills) {
+		if (
+			!isPlainRecord(value.config.skills) ||
+			!isPlainRecord(value.config.skills.bundled) ||
+			value.config.skills.bundled.enabled !== false
+		)
+			configurationInvalid();
+		const origin = ownRecordValue(value.origins, "skills.bundled.enabled");
+		if (origin === undefined) configurationInvalid();
+		assertSessionFlagOrigin(origin);
+	}
 	if (expected.modelOnly) {
 		for (const [key, expectedValue] of Object.entries(
 			CODEX_MODEL_ONLY_CONFIG,
@@ -2508,7 +2642,9 @@ class CodexRpc {
 		signal?: AbortSignal,
 	) {
 		if (this.failed) unavailable();
-		const readOnly = method === "thread/read" && signal !== undefined;
+		const readOnly =
+			(method === "thread/read" || method === "skills/list") &&
+			signal !== undefined;
 		if (
 			readOnly &&
 			(signal?.aborted ||
@@ -2739,6 +2875,11 @@ class CodexRpc {
 }
 
 export class CodexRuntimeDriver implements RuntimeDriver {
+	private readonly nativeSkillProcesses = new Map<string, NativeSkillProcess>();
+	private readonly nativeSkillProcessesByRpc = new WeakMap<
+		CodexRpc,
+		NativeSkillProcess
+	>();
 	private runtimeRequirementsMatch(session: CodexSession) {
 		return isDeepStrictEqual(session.requiredRuntime, this.requiredRuntime);
 	}
@@ -2852,6 +2993,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly recoveryLaunch?: typeof runCodexConnectionRecovery,
 		private readonly recoveryDirectory?: string,
 		private readonly recoveryLaunchPath?: string,
+		private readonly installedSkill?: CodexInstalledSkillDescriptorV1,
 	) {}
 
 	private readonly connectionRecoveries = new Map<
@@ -3637,6 +3779,36 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.conversationRpcs.set(conversationKey, opened.rpc);
 			return opened.rpc;
 		}
+		let skillProcess: NativeSkillProcess | undefined;
+		if (
+			this.installedSkill &&
+			this.requiredRuntime.lane === "official-model-only"
+		) {
+			try {
+				const launch = bridge.nativeSkillLaunch?.();
+				if (
+					!launch ||
+					!Object.isFrozen(launch) ||
+					launch.transport !== bridge ||
+					launch.conversationKey !== conversationKey ||
+					!nonEmptyString(launch.processId) ||
+					!isAbsolute(launch.cwd) ||
+					resolve(launch.cwd) !== launch.cwd ||
+					dirname(launch.cwd) === launch.cwd ||
+					[...launch.cwd].some(
+						(character) =>
+							character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+					) ||
+					launch.bundledSkillsDisabled !== true
+				)
+					unavailable();
+				skillProcess = { bridge, launch, epoch: 0, active: true };
+				this.nativeSkillProcesses.set(conversationKey, skillProcess);
+			} catch {
+				await bridge.close?.().catch(() => {});
+				unavailable();
+			}
+		}
 		const rpc = new CodexRpc(
 			bridge,
 			(frame) =>
@@ -3650,6 +3822,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					this.sharesOneNativeTransport() ? undefined : conversationKey,
 				),
 			() => {
+				if (skillProcess) {
+					skillProcess.active = false;
+					skillProcess.epoch++;
+					if (this.nativeSkillProcesses.get(conversationKey) === skillProcess)
+						this.nativeSkillProcesses.delete(conversationKey);
+				}
 				// A failed RPC is permanently unusable. Retire every cache entry that
 				// points at it before a later request can try to reuse the failed
 				// native process. The scripted shared-transport fixture can alias one
@@ -3665,6 +3843,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				if (cached?.rpc === rpc) this.rpcsByTransport.delete(bridge);
 			},
 		);
+		if (skillProcess) this.nativeSkillProcessesByRpc.set(rpc, skillProcess);
 		try {
 			// Every native process is admitted on its own; a contained
 			// configuration on one process never vouches for another.
@@ -3688,12 +3867,27 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				metadataRead,
 			);
 			assertCurrent?.();
+			if (skillProcess && this.installedSkill) {
+				if (metadataRead) await metadataRead.revalidate();
+				const roots = rpc.request(
+					"skills/extraRoots/set",
+					{ extraRoots: [this.installedSkill.manifest.extraRoot] },
+					(value) => {
+						if (!isEmptyRecord(value)) protocolInvalid();
+					},
+				);
+				await (metadataRead?.wait(roots) ?? roots).finally(() =>
+					assertCurrent?.(),
+				);
+				// The fixed set emits skills/changed before its ACK. First list captures
+				// the epoch only after this assembly operation has fully completed.
+			}
 		} catch (error) {
 			await rpc.close().catch(() => {});
 			if (error instanceof RuntimeHostError) throw error;
 			unavailable();
 		}
-		if (this.closed) {
+		if (this.closed || (skillProcess && !skillProcess.active)) {
 			await rpc.close().catch(() => {});
 			unavailable();
 		}
@@ -3891,6 +4085,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				model: defaultSelection.model,
 				reasoningEffort: defaultSelection.effort,
 				...requiredBridgeOptions,
+				...(!privateLane && installedSkill
+					? { disableBundledSkills: true }
+					: {}),
 				...(privateLane
 					? {
 							nativeCallback: (
@@ -3957,6 +4154,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		const conversationContainedConfiguration = {
 			...containedConfiguration,
+			...(!privateLane && installedSkill ? { disableBundledSkills: true } : {}),
 			...(connectionClient
 				? { connectionProfile: connectionClient.profile }
 				: {}),
@@ -4074,6 +4272,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				runCodexConnectionRecovery,
 				`${options.path}.native`,
 				options.launchPath,
+				installedSkill,
 			);
 		} catch (error) {
 			await modelTransport?.close().catch(() => {});
@@ -4219,6 +4418,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private nativeMetadataRead(
 		read: CodexNativeCommandReadContext,
 		binding: NativeCommandBinding,
+		assertProcess?: () => void,
 	): NativeMetadataReadBoundary {
 		const signal = read.signal;
 		const expiresAt = read.expiresAt;
@@ -4246,6 +4446,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				)
 					runtimeAuthorizationDenied();
 				this.assertNativeCommandBinding(read, binding);
+				assertProcess?.();
 				if (
 					originalRpc &&
 					this.conversationRpcs.get(conversationKey) !== originalRpc
@@ -4303,7 +4504,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			} catch {
 				invalidate();
 			}
-			// Local original config/RPC can change while policy is pending.
+			// Local original config/process/epoch can change while policy is pending.
 			assertCurrent();
 		};
 		return {
@@ -4401,6 +4602,101 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const metadataRead = this.nativeMetadataRead(read, binding);
 		await this.readBoundNativeStatus(read, binding, metadataRead);
 		const directory = this.nativeCommandDirectory(binding);
+		await metadataRead.revalidate();
+		return directory;
+	}
+
+	async discoverNativeSkills(read: CodexNativeCommandReadContext) {
+		const binding = this.nativeCommandBinding(read);
+		const descriptor = this.installedSkill;
+		if (
+			!descriptor ||
+			descriptor.deployment.configVersion !== binding.configVersion
+		)
+			unavailable();
+		let assertProcess: (() => void) | undefined;
+		const metadataRead = this.nativeMetadataRead(read, binding, () =>
+			assertProcess?.(),
+		);
+		const rpc = await this.rpc(
+			binding.nativeSessionRef,
+			metadataRead.assertCurrent,
+			metadataRead,
+		);
+		metadataRead.bindRpc(rpc);
+		const process = this.nativeSkillProcessesByRpc.get(rpc);
+		if (!process) unavailable();
+		const epoch = process.epoch;
+		assertProcess = () => {
+			let sameLaunch = false;
+			try {
+				sameLaunch = process.bridge.nativeSkillLaunch?.() === process.launch;
+			} catch {
+				/* The owned process may have exited before its final frame. */
+			}
+			if (
+				!process.active ||
+				process.epoch !== epoch ||
+				this.nativeSkillProcesses.get(process.launch.conversationKey) !==
+					process ||
+				!sameLaunch
+			)
+				throw new RuntimeHostError(
+					"RUNTIME_CODEX_SKILL_DIRECTORY_STALE",
+					"Installed Skill directory is no longer current",
+					409,
+				);
+		};
+		await metadataRead.revalidate();
+		const response = await metadataRead.wait(
+			rpc.request(
+				"skills/list",
+				{ cwds: [process.launch.cwd], forceReload: true },
+				(value) => value,
+				false,
+				false,
+				Math.min(metadataRead.expiresAt, Date.now() + rpcRequestTimeoutMs),
+				read.signal,
+			),
+		);
+		const approved = approveSkillResponse(
+			response,
+			process.launch.cwd,
+			descriptor,
+		);
+		const revision = createHash("sha256")
+			.update(
+				JSON.stringify([
+					"codex-installed-skill-directory-v1",
+					binding,
+					binding.requiredRuntime,
+					descriptor,
+					process.launch.processId,
+					process.launch.cwd,
+					epoch,
+					approved.digest,
+				]),
+			)
+			.digest("hex");
+		const directory = {
+			revision,
+			capabilities: [
+				{
+					id: createHash("sha256")
+						.update(`installed-skill:${revision}`)
+						.digest("hex"),
+					kind: "skill" as const,
+					name: descriptor.manifest.name,
+					description: approved.description,
+					source: {
+						name: descriptor.manifest.source.repository,
+						version: descriptor.manifest.version,
+					},
+					// Native enabled means discoverable; execution/loading is a later slice.
+					availability: "discovered" as const,
+				},
+			],
+		};
 		await metadataRead.revalidate();
 		return directory;
 	}
@@ -7286,6 +7582,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		frame: CodexAppServerFrame,
 		conversationKey: string | undefined,
 	) {
+		if (frame.method === "skills/changed") {
+			if (!isEmptyRecord(frame.params)) protocolInvalid();
+			const process = conversationKey
+				? this.nativeSkillProcesses.get(conversationKey)
+				: undefined;
+			if (process) process.epoch++;
+			return;
+		}
 		const started = turnStartedNotification(frame);
 		if (started) {
 			const recorded = await this.update((state) => {

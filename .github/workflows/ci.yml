@@ -378,8 +378,10 @@ jobs:
             apps/agent-runtime-host/src/{configuration.ts,installed-skill.ts,index.ts} \
             packages/agent-runtime/src/{codex-installation.ts,codex-runtime-driver.ts} \
             deploy/runtime/skills/workspace-summary{.manifest.json,.manifest.schema.json,/SKILL.md} \
-            tests/runtime-installed-skill-image.ts .github/scripts/vulnerability-scan.mjs \
-            .github/workflows/ci.yml pnpm-lock.yaml > "$evidence/source.sha256"
+            tests/runtime-installed-skill-image.ts \
+            packages/agent-runtime/src/codex-native-skill-discovery.native.test.ts \
+            .github/scripts/vulnerability-scan.mjs .github/workflows/ci.yml \
+            pnpm-lock.yaml > "$evidence/source.sha256"
           runner_id=$(node --input-type=module -e '
             import {readFile} from "node:fs/promises";
             import {runtimeImageFromScanBuild} from "./deploy/release/runtime-probe.mjs";
@@ -415,6 +417,27 @@ jobs:
             "$evidence/installation.json" "$session" 2>&1 | tee "$evidence/installation.log"
           capacity after-cli
           printf 'passed_installation_only\n' > "$evidence/result.txt"
+
+      - name: Run native installed Skill discovery
+        id: native_skill_discovery
+        if: ${{ !cancelled() && steps.installed_skill.outcome == 'success' }}
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/installed-skill-evidence"
+          test_id=$(cat "$evidence/test.iid")
+          timeout --signal=TERM --kill-after=5s 180s docker run --rm --pull=never \
+            --network=none --cap-drop=ALL --security-opt=no-new-privileges \
+            --read-only --tmpfs /tmp:rw,size=64m,mode=1777 \
+            --env AGENT_INFRA_CODEX_NATIVE_TEST=1 \
+            --env AGENT_INFRA_RUNTIME_INSTALLED_SKILL=workspace-summary-v1 \
+            --label "ao.session=$(cat "$evidence/session.txt")" \
+            --label agent-infra.native-skill-discovery=true \
+            --entrypoint pnpm "$test_id" \
+            --filter @agent-infra/agent-runtime exec vitest run \
+            src/codex-native-skill-discovery.native.test.ts --maxWorkers=1 \
+            2>&1 | tee "$evidence/native-discovery.log"
 
       - name: Preserve installed Skill image evidence
         if: ${{ !cancelled() && steps.installed_skill.outcome != 'skipped' }}
