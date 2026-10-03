@@ -1211,6 +1211,68 @@ describe("Connection application service", () => {
 		expect(repository.reconciliationJobs).toHaveLength(0);
 	});
 
+	it.each([
+		{ providerStatus: 451, expectedStatus: 451 },
+		{ providerStatus: 403, expectedStatus: 403 },
+		{ providerStatus: undefined, expectedStatus: 403 },
+		{ providerStatus: "451", expectedStatus: 403 },
+		{ providerStatus: 403.5, expectedStatus: 403 },
+		{ providerStatus: Number.NaN, expectedStatus: 403 },
+		{ providerStatus: Number.POSITIVE_INFINITY, expectedStatus: 403 },
+		{ providerStatus: 99, expectedStatus: 403 },
+		{ providerStatus: 600, expectedStatus: 403 },
+	])(
+		"guides a Manhattan Action denial with status $providerStatus without pausing the credential",
+		async ({ providerStatus, expectedStatus }) => {
+			const repository = new MemoryRepository();
+			repository.directInvocation = {
+				...direct,
+				providerId: "manhattan",
+				providerReleaseId: "manhattan-connection-v4",
+			};
+			repository.listAuthorizedActions = async () => [
+				{
+					...actions[0]!,
+					id: "manhattan.list_symbols@v4",
+					name: "manhattan.list_symbols",
+					inputSchema: {
+						additionalProperties: false,
+						properties: {},
+						required: [],
+						type: "object",
+					},
+				},
+			];
+			const service = new ConnectionApplicationService(repository, {
+				execute: async () => {
+					throw Object.assign(
+						new Error("Manhattan account is not authorized"),
+						{
+							providerAuthorizationDenied: true,
+							...(providerStatus === undefined ? {} : { providerStatus }),
+						},
+					);
+				},
+			});
+
+			await expect(
+				service.invokeDirect("direct", "manhattan.list_symbols", {}),
+			).rejects.toMatchObject({
+				code: "INVALID_REQUEST",
+				message: expect.stringContaining(
+					"https://manhattan.agoralab.co/permission/user",
+				),
+				data: {
+					helpUrl: "https://manhattan.agoralab.co/permission/user",
+					providerCode: "authorization_failed",
+					providerHttpStatus: expectedStatus,
+				},
+			});
+			expect(repository.calls[0]?.status).toBe("FAILED");
+			expect(repository.credentialPaused).toBe(false);
+		},
+	);
+
 	it("terminalizes a write 401 as failed and pauses the credential", async () => {
 		const repository = new MemoryRepository();
 		const service = new ConnectionApplicationService(repository, {

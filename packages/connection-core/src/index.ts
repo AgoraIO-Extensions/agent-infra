@@ -2232,6 +2232,29 @@ export class ConnectionApplicationService {
 				);
 			}
 			if (isProviderPermissionFailure(error)) {
+				if (isProviderAuthorizationDenied(error)) {
+					const providerStatus = (error as { providerStatus?: unknown })
+						.providerStatus;
+					const helpUrl =
+						invocation.providerId === "manhattan"
+							? "https://manhattan.agoralab.co/permission/user"
+							: undefined;
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						`外部系统 ${invocation.providerId} 拒绝了此操作。请联系该系统管理员核对对应 API 权限或网关配置后重试。${helpUrl ? `管理入口：${helpUrl}` : ""}`,
+						{
+							providerCode: "authorization_failed",
+							providerHttpStatus:
+								typeof providerStatus === "number" &&
+								Number.isInteger(providerStatus) &&
+								providerStatus >= 100 &&
+								providerStatus <= 599
+									? providerStatus
+									: 403,
+							...(helpUrl ? { helpUrl } : {}),
+						},
+					);
+				}
 				throw new ConnectionError(
 					"INVALID_REQUEST",
 					providerFailureMessage(error),
@@ -2378,6 +2401,7 @@ function isSubmissionUncertain(error: unknown) {
 function isDeterministicProviderRejection(error: unknown) {
 	return (
 		isProviderReauthorizationFailure(error) ||
+		isProviderPermissionFailure(error) ||
 		(typeof error === "object" &&
 			error !== null &&
 			(error as { providerSubmissionOutcome?: unknown })
@@ -2392,11 +2416,21 @@ function isDeterministicProviderRejection(error: unknown) {
 
 function isProviderPermissionFailure(error: unknown) {
 	return (
+		isProviderAuthorizationDenied(error) ||
+		(typeof error === "object" &&
+			error !== null &&
+			(error as { providerCode?: unknown }).providerCode ===
+				"authorization_failed" &&
+			(error as { providerStatus?: number }).providerStatus === 403)
+	);
+}
+
+function isProviderAuthorizationDenied(error: unknown) {
+	return (
 		typeof error === "object" &&
 		error !== null &&
-		(error as { providerCode?: unknown }).providerCode ===
-			"authorization_failed" &&
-		(error as { providerStatus?: number }).providerStatus === 403
+		(error as { providerAuthorizationDenied?: unknown })
+			.providerAuthorizationDenied === true
 	);
 }
 

@@ -763,7 +763,7 @@ export function ConnectionsPage() {
 			) : null}
 			{permissionDenied && overview.isSuccess ? (
 				<p className="alert alert-warning" role="status">
-					当前账号缺少 Manhattan 访问权限。
+					Manhattan 拒绝了连接验证。请联系管理员核对账号或网关授权后重试。
 				</p>
 			) : null}
 			{overview.isError ? <PageError error={overview.error} /> : null}
