@@ -1,1 +1,0 @@
-ALTER TABLE "platform"."conversation_events" ADD COLUMN "persisted_at" timestamp with time zone DEFAULT now() NOT NULL;
