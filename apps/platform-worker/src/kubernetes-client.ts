@@ -76,7 +76,6 @@ export function createWorkerKubernetesClientV1(
 	const check = (object: KubernetesObject) => {
 		if (
 			object.metadata?.namespace !== namespace ||
-			object.kind === "Pod" ||
 			!Object.hasOwn(workloadApiVersions, object.kind ?? "") ||
 			object.apiVersion !==
 				workloadApiVersions[object.kind as WorkloadResourceKind]
