@@ -23,7 +23,7 @@ catalog:
   zod-openapi: 6.0.1
   typescript: ^6.0.3
   "@types/node": ^24.13.3
-  vitest: ^4.1.10
+  vitest: ^4.1.11
   react: ^19.2.8
   react-dom: ^19.2.8
   "@types/react": ^19.2.17
