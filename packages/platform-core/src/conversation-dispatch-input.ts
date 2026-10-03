@@ -215,7 +215,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		input.taskWaitOrder === undefined
 			? undefined
 			: positiveInteger(input.taskWaitOrder);
-	if ((input.executionStatus === "waiting") !== (taskWaitOrder !== undefined))
+	if (input.executionStatus === "waiting" && taskWaitOrder === undefined)
 		return unavailable();
 	const metadataRecovery =
 		input.metadataRecovery === undefined

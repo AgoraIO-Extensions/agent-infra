@@ -111,6 +111,13 @@ export function registerTaskRoutes(
 				context.req.raw,
 			);
 			await audit.record("access", "succeeded", "request_accepted");
+			await authorize(
+				dependencies,
+				initial,
+				input,
+				metadata.traceId,
+				context.req.raw,
+			);
 			return context.json(taskProjection(detail));
 		}),
 	);

@@ -88,8 +88,8 @@ BEGIN
 END
 $migration$;
 --> statement-breakpoint
-ALTER TABLE "platform"."conversations" DROP CONSTRAINT IF EXISTS "conversation_principal_binding_unique";--> statement-breakpoint
 ALTER TABLE "platform"."conversation_executions" DROP CONSTRAINT IF EXISTS "conversation_execution_principal_binding_fk";--> statement-breakpoint
+ALTER TABLE "platform"."conversations" DROP CONSTRAINT IF EXISTS "conversation_principal_binding_unique";--> statement-breakpoint
 ALTER TABLE "platform"."conversation_executions" DROP CONSTRAINT IF EXISTS "conversation_execution_principal_type_valid";--> statement-breakpoint
 ALTER TABLE "platform"."conversation_executions" DROP CONSTRAINT IF EXISTS "conversation_execution_task_wait_binding";--> statement-breakpoint
 ALTER TABLE "platform"."conversations" DROP CONSTRAINT IF EXISTS "conversation_principal_type_valid";--> statement-breakpoint
