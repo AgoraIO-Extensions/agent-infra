@@ -74,7 +74,7 @@ importers:
         version: 2.5.7
       '@hono/node-server':
         specifier: 2.0.12
-        version: 2.0.12(hono@4.13.0)
+        version: 2.0.12(hono@4.13.7)
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.3
@@ -107,10 +107,10 @@ importers:
         version: link:../../packages/contracts
       '@hono/node-server':
         specifier: ^2.0.12
-        version: 2.1.0(hono@4.13.0)
+        version: 2.1.0(hono@4.13.7)
       hono:
-        specifier: ^4.12.32
-        version: 4.13.0
+        specifier: 4.13.7
+        version: 4.13.7
     devDependencies:
       '@agent-infra/config':
         specifier: workspace:*
@@ -135,10 +135,10 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^2.0.12
-        version: 2.1.0(hono@4.13.0)
+        version: 2.1.0(hono@4.13.7)
       hono:
-        specifier: ^4.12.32
-        version: 4.13.0
+        specifier: 4.13.7
+        version: 4.13.7
     devDependencies:
       '@agent-infra/config':
         specifier: workspace:*
@@ -169,10 +169,10 @@ importers:
         version: link:../../packages/enterprise-directory-store
       '@hono/node-server':
         specifier: ^2.0.12
-        version: 2.1.0(hono@4.13.0)
+        version: 2.1.0(hono@4.13.7)
       hono:
-        specifier: ^4.12.32
-        version: 4.13.0
+        specifier: 4.13.7
+        version: 4.13.7
     devDependencies:
       '@agent-infra/config':
         specifier: workspace:*
@@ -227,10 +227,10 @@ importers:
         version: link:../../packages/wecom
       '@hono/node-server':
         specifier: ^2.0.12
-        version: 2.1.0(hono@4.13.0)
+        version: 2.1.0(hono@4.13.7)
       hono:
-        specifier: ^4.12.32
-        version: 4.13.0
+        specifier: 4.13.7
+        version: 4.13.7
       zod:
         specifier: 'catalog:'
         version: 4.4.3
@@ -674,8 +674,8 @@ importers:
         specifier: 2.11.0
         version: 2.11.0(@opentelemetry/api@1.9.1)
       hono:
-        specifier: ^4.12.32
-        version: 4.13.0
+        specifier: 4.13.7
+        version: 4.13.7
       pino:
         specifier: 10.3.1
         version: 10.3.1
@@ -3660,8 +3660,8 @@ packages:
   highlight.js@10.7.3:
     resolution: {integrity: sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A==}
 
-  hono@4.13.0:
-    resolution: {integrity: sha512-jhunvfHWxd7J5EFfSgH4xsYJzSe/lfqbUCxiyyeaQasUsXeEHXtzVid+7EOGByc5JnFa23SSFL3Y2RV/z1T+eQ==}
+  hono@4.13.7:
+    resolution: {integrity: sha512-c8/gF9ac8Y78/agExVocyLevgR+JlpNB444Py0FSX8pJoPdYUfUzRcXtYEYGwt6l19qIlVZPN5Mfsw9jFShmQQ==}
     engines: {node: '>=16.9.0'}
 
   hookable@6.1.1:
@@ -6482,13 +6482,13 @@ snapshots:
 
   '@hey-api/types@0.1.4': {}
 
-  '@hono/node-server@2.0.12(hono@4.13.0)':
+  '@hono/node-server@2.0.12(hono@4.13.7)':
     dependencies:
-      hono: 4.13.0
+      hono: 4.13.7
 
-  '@hono/node-server@2.1.0(hono@4.13.0)':
+  '@hono/node-server@2.1.0(hono@4.13.7)':
     dependencies:
-      hono: 4.13.0
+      hono: 4.13.7
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
@@ -6549,7 +6549,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.30.0(zod@3.25.76)':
     dependencies:
-      '@hono/node-server': 2.0.12(hono@4.13.0)
+      '@hono/node-server': 2.0.12(hono@4.13.7)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -6559,7 +6559,7 @@ snapshots:
       eventsource-parser: 3.1.0
       express: 5.2.1
       express-rate-limit: 8.6.1(express@5.2.1)
-      hono: 4.13.0
+      hono: 4.13.7
       jose: 6.2.12
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -6571,7 +6571,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.30.0(zod@4.4.3)':
     dependencies:
-      '@hono/node-server': 2.0.12(hono@4.13.0)
+      '@hono/node-server': 2.0.12(hono@4.13.7)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -6581,7 +6581,7 @@ snapshots:
       eventsource-parser: 3.1.0
       express: 5.2.1
       express-rate-limit: 8.6.1(express@5.2.1)
-      hono: 4.13.0
+      hono: 4.13.7
       jose: 6.2.12
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -8079,7 +8079,7 @@ snapshots:
 
   highlight.js@10.7.3: {}
 
-  hono@4.13.0: {}
+  hono@4.13.7: {}
 
   hookable@6.1.1: {}
 
