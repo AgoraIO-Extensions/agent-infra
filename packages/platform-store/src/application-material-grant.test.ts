@@ -128,9 +128,11 @@ describe("application material grant transaction", () => {
 			principalId: "app-1",
 		});
 		expect(await grants.read(applicationRecipient)).toBeNull();
-		await expect(
-			grants.read(request({ applicationId: "app-2", principalId: "app-1" })),
-		).rejects.toMatchObject({ code: "not_found" });
+		expect(
+			await grants.read(
+				request({ applicationId: "app-2", principalId: "app-1" }),
+			),
+		).toBeNull();
 		await expect(
 			grants.grant({ ...applicationRecipient, applicationId: "app-2" }),
 		).rejects.toMatchObject({ code: "not_found" });
