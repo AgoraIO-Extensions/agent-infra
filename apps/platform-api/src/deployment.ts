@@ -100,9 +100,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 	const validatePersonalRelayKey = input.personalRelayKeyValidation
 		? createPersonalRelayKeyValidatorV1(input.personalRelayKeyValidation)
 		: undefined;
-	const relayKeyEncryptor = validatePersonalRelayKey
-		? createRelayKeyEncryptorV1({ encryptionKeys: input.encryptionKeys })
-		: undefined;
+	const relayKeyEncryptor = createRelayKeyEncryptorV1({
+		encryptionKeys: input.encryptionKeys,
+	});
 	const personalRelayKeys: PlatformApiAssemblyInput["personalRelayKeys"] =
 		validatePersonalRelayKey && relayKeyEncryptor
 			? {
@@ -130,6 +130,10 @@ export function createProductionPlatformApiAssemblyInputV1(
 				}
 			: undefined;
 	return {
+		applicationFoundationRelayKeyEncryptor: relayKeyEncryptor,
+		...(validatePersonalRelayKey
+			? { validateDefaultRelayKey: validatePersonalRelayKey }
+			: {}),
 		...(personalRelayKeys ? { personalRelayKeys } : {}),
 		...(personalRelayKeys &&
 		relayKeyEncryptor &&

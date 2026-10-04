@@ -325,6 +325,7 @@ export const AgentConfigurationUpdateRequestV1Schema = z.strictObject({
 export const AgentApplicationCreateRequestV2Schema =
 	AgentApplicationCreateRequestV1Schema.omit({ actions: true }).extend({
 		schemaVersion: z.literal(2),
+		defaultRelayKey: nonEmptyString().meta({ writeOnly: true }).optional(),
 	});
 export const AgentApplicationUpdateRequestV2Schema =
 	AgentApplicationUpdateRequestV1Schema.omit({ actions: true }).extend({
