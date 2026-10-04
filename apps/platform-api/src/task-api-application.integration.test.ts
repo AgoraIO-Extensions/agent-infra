@@ -21,6 +21,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
+import { seedSessionSandboxFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.ts";
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
 import {
 	registerTaskRoutes,
@@ -94,6 +95,7 @@ beforeEach(async () => {
 		await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes) values(${`credential-${kind}`},${kind},'same-id',${createHash("sha256").update(material[kind]).digest("hex")},${sql.json(["agent:read", "agent:use"])})`;
 		await sql`insert into platform.conversations(id,agent_id,actor_id,principal_type,channel_id,status,session_generation,authorization_revision,last_conversation_cursor) values(${`conversation-${kind}`},'agent','same-id',${kind},'api','ready',1,'agent-1',1)`;
 		await sql`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,principal_type,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,last_event_sequence,created_at) values(${`execution-${kind}`},${`conversation-${kind}`},'agent','same-id',${kind},'api',${`turn-${kind}`},'completed',1,1,'agent-1',1,'2026-01-01T00:00:00Z')`;
+		await seedSessionSandboxFixture(sql, `conversation-${kind}`);
 		await sql`insert into platform.conversation_events(event_id,conversation_id,execution_id,adapter_event_key,sequence,conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,occurred_at,source) values(${`event-${kind}`},${`conversation-${kind}`},${`execution-${kind}`},${`adapter-${kind}`},1,1,'text.delta',${sql.json({ type: "text.delta", text: `${kind} output` })},${"c".repeat(64)},${`runtime-${kind}`},now(),'runtime')`;
 	}
 });

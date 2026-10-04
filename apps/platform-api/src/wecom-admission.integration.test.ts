@@ -164,6 +164,10 @@ async function facts(agentId: string) {
 			await tx`select to_jsonb(a) as fact from platform.task_authorization_records a join platform.conversation_executions e on e.execution_id=a.execution_id where e.agent_id=${agentId} order by a.id`,
 		outbox:
 			await tx`select to_jsonb(o) as fact from platform.outbox_items o join platform.conversation_executions e on e.execution_id=o.payload->>'executionId' where e.agent_id=${agentId} and o.operation<>'conversation.turn.stop.v1' order by o.id`,
+		sandbox:
+			await tx`select to_jsonb(s) as fact from platform.session_sandbox_allocations s where s.agent_id=${agentId} order by s.sandbox_id`,
+		sandboxOutbox:
+			await tx`select to_jsonb(o) as fact from platform.outbox_items o join platform.conversations c on c.id=o.scope_id where c.agent_id=${agentId} and o.operation='conversation.sandbox.reconcile.v1' order by o.id`,
 		conversationAudit:
 			await tx`select to_jsonb(a) as fact from platform.conversation_audit_events a where a.agent_id=${agentId} order by a.id`,
 		idempotency:
@@ -262,7 +266,9 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 		});
 		const saved = await facts(f.config.agentId);
 		for (const [kind, rows] of Object.entries(saved))
-			expect(rows).toHaveLength(kind === "idempotency" ? 2 : 1);
+			expect(rows).toHaveLength(
+				kind === "idempotency" || kind === "conversationAudit" ? 2 : 1,
+			);
 		const versions = await sql<{ kind: string; transaction: string }[]>`
 			select 'receipt' as kind,r.xmin::text as transaction from platform.wecom_receipts r where r.id=${f.eventKey}
 			union all select 'conversation',c.xmin::text from platform.conversations c where c.agent_id=${f.config.agentId}
@@ -270,6 +276,8 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 			union all select 'execution',e.xmin::text from platform.conversation_executions e where e.agent_id=${f.config.agentId}
 			union all select 'authority',a.xmin::text from platform.task_authorization_records a join platform.conversation_executions e on e.execution_id=a.execution_id where e.agent_id=${f.config.agentId}
 			union all select 'outbox',o.xmin::text from platform.outbox_items o join platform.conversation_executions e on e.execution_id=o.payload->>'executionId' where e.agent_id=${f.config.agentId}
+			union all select 'sandbox',s.xmin::text from platform.session_sandbox_allocations s where s.agent_id=${f.config.agentId}
+			union all select 'sandbox-outbox',o.xmin::text from platform.outbox_items o join platform.conversations c on c.id=o.scope_id where c.agent_id=${f.config.agentId} and o.operation='conversation.sandbox.reconcile.v1'
 			union all select 'conversation-audit',a.xmin::text from platform.conversation_audit_events a where a.agent_id=${f.config.agentId}
 			union all select 'idempotency',i.xmin::text from platform.idempotency_records i join platform.conversations c on (i.scope_type='agent' and i.command_type='conversation.create' and c.id=i.result->>'conversationId') or (i.scope_type='conversation' and i.command_type='message' and c.id=i.scope_id) where c.agent_id=${f.config.agentId} and i.actor_id=c.actor_id
 			union all select 'audit',a.xmin::text from platform.audit_events a where a.agent_id=${f.config.agentId} and a.action='wecom.accepted'`;
@@ -278,12 +286,15 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 			"authority",
 			"conversation",
 			"conversation-audit",
+			"conversation-audit",
 			"execution",
 			"idempotency",
 			"idempotency",
 			"message",
 			"outbox",
 			"receipt",
+			"sandbox",
+			"sandbox-outbox",
 		]);
 		expect(new Set(versions.map((v) => v.transaction)).size).toBe(1);
 		expect((await f.app.request(f.request())).status).toBe(200);

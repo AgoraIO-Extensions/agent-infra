@@ -17,6 +17,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
+import { seedSessionSandboxFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.ts";
 import { createPlatformApp } from "./app.js";
 import { assemblePlatformApi, type PlatformApiAssembly } from "./assembly.js";
 import type { IdentityAdapter } from "./http/identity.js";
@@ -165,6 +166,7 @@ async function seedConversation(
 	await sql`insert into platform.conversations
     (id, agent_id, actor_id, channel_id, status, session_generation, authorization_revision, created_at, updated_at)
     values (${id}, ${agentId}, ${actor}, ${channel}, 'ready', 1, 'old-grants', '2026-09-01T00:00:00Z', ${updatedAt}::text::timestamptz)`;
+	await seedSessionSandboxFixture(sql, id);
 }
 
 function client(actor = "owner") {
@@ -264,6 +266,18 @@ beforeEach(async () => {
 });
 
 describe("recent generated client → production assembly/HTTP/Core → PostgreSQL", () => {
+	it("hides legacy Conversations without a persistent Sandbox binding", async () => {
+		await seedConversation("legacy", "a", "2026-09-06T00:00:00Z");
+		await seedConversation("bound", "a", "2026-09-06T00:00:01Z");
+		await sql`delete from platform.session_sandbox_allocations where conversation_id='legacy'`;
+		expect((await page()).items.map((item) => item.conversationId)).toEqual([
+			"bound",
+		]);
+		expect(
+			await query.get({ actorId: "owner", channelId: "web" }, "legacy"),
+		).toBeUndefined();
+	});
+
 	it("returns global top-N and traverses 132 rows with stable timestamp/ID ties and no per-Agent cap", async () => {
 		for (let index = 0; index < 132; index++) {
 			await seedConversation(
@@ -528,6 +542,7 @@ describe("recent generated client → production assembly/HTTP/Core → PostgreS
 		for (const index of [1, 2]) {
 			await sql`insert into platform.conversation_executions (execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,created_at,updated_at)
         values (${`execution-${index}`},'history','a','owner','web',${`turn-${index}`},'completed',1,1,'old',now(),now())`;
+			await sql`update platform.conversation_executions e set sandbox_id=s.sandbox_id from platform.session_sandbox_allocations s where e.execution_id=${`execution-${index}`} and s.conversation_id=e.conversation_id`;
 			await sql`insert into platform.conversation_messages (message_id,conversation_id,actor_id,role,text,execution_id,status,created_at,updated_at)
         values (${`message-${index}`},'history','owner','user',${`private-body-${index}`},${`execution-${index}`},'submitted',now(),now())`;
 			await sql`insert into platform.conversation_events

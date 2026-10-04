@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import type { CurrentTaskUserV1 } from "@agent-infra/platform-core";
 import {
@@ -6,6 +5,7 @@ import {
 	PostgresAgentConfigurationQueryV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
+import postgres from "postgres";
 import {
 	afterAll,
 	afterEach,
@@ -21,24 +21,12 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.ts";
+import { markSessionSandboxReadyFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.ts";
 import { workloadDesiredFixture } from "../../platform-worker/src/kubernetes.fixture.js";
 import { assemblePlatformApi, type PlatformApiAssembly } from "./assembly.js";
 import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
 import { startPlatformApi } from "./index.js";
 
-interface DatabaseReader {
-	unsafe(
-		query: string,
-		parameters?: readonly unknown[],
-	): Promise<Record<string, unknown>[]>;
-	end(): Promise<void>;
-}
-const connectDatabase = createRequire(
-	import.meta.resolve("@agent-infra/platform-store"),
-)("postgres") as (
-	url: string,
-	options: { max: number; onnotice: () => void },
-) => DatabaseReader;
 const configuration = {
 	...agentConfigurationConformanceRecordV1,
 	schemaVersion: 1 as const,
@@ -78,7 +66,7 @@ const unavailable = async (): Promise<never> => {
 	throw new Error("Unexpected admission call");
 };
 let database: PostgresTestDatabase;
-let db: DatabaseReader;
+let db: ReturnType<typeof postgres>;
 let assembly: PlatformApiAssembly;
 let server: ReturnType<typeof startPlatformApi>;
 let origin: string;
@@ -96,7 +84,7 @@ async function post(path: string, body: unknown, key: string) {
 		body: JSON.stringify(body),
 	});
 }
-async function createConversation() {
+async function createConversation(ready = true) {
 	const response = await post(
 		`/agents/${configuration.agentId}/conversations`,
 		{ schemaVersion: 1 },
@@ -104,6 +92,7 @@ async function createConversation() {
 	);
 	expect(response.status).toBe(201);
 	const body = (await response.json()) as { conversationId: string };
+	if (ready) await markSessionSandboxReadyFixture(db, body.conversationId);
 	return body.conversationId;
 }
 async function snapshot() {
@@ -122,7 +111,7 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 	beforeAll(async () => {
 		database = await startPostgresTestDatabase("api-task-boundary");
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
-		db = connectDatabase(database.databaseUrl, { max: 2, onnotice: () => {} });
+		db = postgres(database.databaseUrl, { max: 2, onnotice: () => {} });
 		assembly = assemblePlatformApi({
 			taskAdmissionPolicy: {
 				maximumWaitingTasksPerAgent: 2,
@@ -251,6 +240,18 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 		await db?.end();
 		await database?.stop();
 	});
+	it("rejects Web messages before the original Sandbox becomes ready", async () => {
+		const conversationId = await createConversation(false);
+		const before = await snapshot();
+		const response = await post(
+			`/conversations/${conversationId}/messages`,
+			{ schemaVersion: 1, text: "not ready" },
+			"not-ready",
+		);
+		expect(response.status).toBe(404);
+		expect(await snapshot()).toEqual(before);
+	});
+
 	it("persists the current user boundary together with the accepted task", async () => {
 		browserIdentity = {
 			...identity,
@@ -444,7 +445,7 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 		expect(before).toMatchObject({
 			executions: 1,
 			authorizations: 1,
-			outbox: 1,
+			outbox: 2,
 			task_audits: 1,
 		});
 		const audits = await db.unsafe(
@@ -532,7 +533,7 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 		expect(await snapshot()).toMatchObject({
 			executions: 2,
 			authorizations: 2,
-			outbox: 2,
+			outbox: 3,
 			task_audits: 2,
 		});
 	});
