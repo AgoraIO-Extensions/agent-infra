@@ -4,6 +4,7 @@ import { types } from "node:util";
 import { BrowserUserProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import type {
+	ApplicationMaterialGrantActorV1,
 	CurrentTaskUserV1,
 	TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
@@ -25,6 +26,10 @@ export interface IdentityAdapter {
 	hydrateUsers(userIds: readonly string[]): Promise<unknown>;
 	/** Current task facts must come from the directory, never a saved browser Request. */
 	resolveUser?: TaskUserDirectoryV1["resolveUser"];
+	/** Current first-party LDAP facts for sensitive material-grant governance. */
+	resolveMaterialGrantActor?: (
+		userId: string,
+	) => Promise<Required<ApplicationMaterialGrantActorV1> | null>;
 }
 
 export async function resolveCurrentTaskUser(
@@ -40,6 +45,47 @@ export async function resolveCurrentTaskUser(
 				: undefined,
 			userId,
 		);
+	} catch {
+		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+	}
+}
+
+export async function resolveCurrentMaterialGrantActor(
+	adapter: IdentityAdapter,
+	userId: string,
+	traceId: string,
+): Promise<Required<ApplicationMaterialGrantActorV1> | null> {
+	try {
+		if (!adapter.resolveMaterialGrantActor) throw new Error();
+		const value = await adapter.resolveMaterialGrantActor(userId);
+		if (value === null) return null;
+		const actor = record(value, [
+			"userId",
+			"accountStatus",
+			"isSystemAdmin",
+			"ldapStableUid",
+			"ldapAdministratorConfigured",
+			"authorizationRevision",
+		]);
+		if (
+			actor.userId !== userId ||
+			!text(actor.userId) ||
+			(actor.accountStatus !== "active" &&
+				actor.accountStatus !== "disabled") ||
+			typeof actor.isSystemAdmin !== "boolean" ||
+			!text(actor.ldapStableUid) ||
+			typeof actor.ldapAdministratorConfigured !== "boolean" ||
+			!text(actor.authorizationRevision)
+		)
+			throw new Error();
+		return {
+			userId: actor.userId,
+			accountStatus: actor.accountStatus,
+			isSystemAdmin: actor.isSystemAdmin,
+			ldapStableUid: actor.ldapStableUid,
+			ldapAdministratorConfigured: actor.ldapAdministratorConfigured,
+			authorizationRevision: actor.authorizationRevision,
+		};
 	} catch {
 		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}

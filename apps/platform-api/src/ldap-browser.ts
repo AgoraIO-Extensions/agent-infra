@@ -185,6 +185,22 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				}),
 			);
 		},
+		async resolveMaterialGrantActor(id: string) {
+			const account = await input.directory.currentByUserId(id);
+			if (!account) return null;
+			if (account.userId !== id)
+				throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+			const identity = await current(account);
+			return {
+				userId: identity.userId,
+				accountStatus: identity.accountStatus,
+				isSystemAdmin: identity.roles.includes("system_admin"),
+				ldapStableUid: account.uid,
+				// First-party directory roles come from the configured stable UID allow-list.
+				ldapAdministratorConfigured: account.roles.includes("system_admin"),
+				authorizationRevision: identity.authorizationRevision,
+			};
+		},
 		async resolveUser(id: string) {
 			const account = await input.directory.currentByUserId(id);
 			if (!account) return null;

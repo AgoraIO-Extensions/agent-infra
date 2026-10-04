@@ -5,6 +5,7 @@ import { HttpProtocolError } from "./common";
 import {
 	hydrateBrowserUsers,
 	type IdentityAdapter,
+	resolveCurrentMaterialGrantActor,
 	resolveCurrentTaskUser,
 	resolveIdentity,
 } from "./identity";
@@ -285,4 +286,35 @@ describe("current task user directory", () => {
 			expect(JSON.stringify(error)).not.toContain("private directory response");
 		},
 	);
+});
+
+describe("material-grant actor boundary", () => {
+	it("requires the dedicated current LDAP resolver, never ordinary roles", async () => {
+		const source = adapter({ ...activeIdentity, roles: ["system_admin"] });
+		await expect(
+			resolveCurrentMaterialGrantActor(source, "user-01", traceId),
+		).rejects.toMatchObject({ status: 503 });
+	});
+	it.each([
+		{ userId: "other" },
+		{ ldapStableUid: "" },
+		{ ldapAdministratorConfigured: "true" },
+		{ isSystemAdmin: "true" },
+		{ authorizationRevision: "" },
+		{ accountStatus: "unknown" },
+	])("rejects invalid actor facts %j", async (invalid) => {
+		const source = adapter(activeIdentity);
+		source.resolveMaterialGrantActor = vi.fn().mockResolvedValue({
+			userId: "user-01",
+			accountStatus: "active",
+			isSystemAdmin: true,
+			ldapStableUid: "stable-uid",
+			ldapAdministratorConfigured: true,
+			authorizationRevision: "revision",
+			...invalid,
+		});
+		await expect(
+			resolveCurrentMaterialGrantActor(source, "user-01", traceId),
+		).rejects.toMatchObject({ status: 503 });
+	});
 });
