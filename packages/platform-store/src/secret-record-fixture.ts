@@ -4,29 +4,32 @@ import type {
 	PendingSecretRecordAttachmentResolverV1,
 	PendingSecretRecordAttachmentsV1,
 } from "@agent-infra/platform-core";
-import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
+import {
+	createRelayKeyEncryptorV1,
+	createSecretEncryptorV1,
+} from "@agent-infra/secret-store";
 
 const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
 const publicKeySpkiDer = publicKey.export({ format: "der", type: "spki" });
-const encryptor = createSecretEncryptorV1({
-	encryptionKeys: {
-		schemaVersion: 1,
-		activeWrappingKeyVersion: "key_test_01",
-		keys: [
-			{
-				schemaVersion: 1,
-				keyVersion: "key_test_01",
-				wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
-				publicKeySpkiDerBase64: publicKeySpkiDer.toString("base64"),
-				publicKeyFingerprint: createHash("sha256")
-					.update(publicKeySpkiDer)
-					.digest("hex"),
-				rsaModulusBits: 3072,
-				status: "active",
-			},
-		],
-	},
-});
+const encryptionKeys = {
+	schemaVersion: 1,
+	activeWrappingKeyVersion: "key_test_01",
+	keys: [
+		{
+			schemaVersion: 1,
+			keyVersion: "key_test_01",
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+			publicKeySpkiDerBase64: publicKeySpkiDer.toString("base64"),
+			publicKeyFingerprint: createHash("sha256")
+				.update(publicKeySpkiDer)
+				.digest("hex"),
+			rsaModulusBits: 3072,
+			status: "active",
+		},
+	],
+};
+const encryptor = createSecretEncryptorV1({ encryptionKeys });
+const relayEncryptor = createRelayKeyEncryptorV1({ encryptionKeys });
 
 export function createSecretRecordFixtureResolver(): PendingSecretRecordAttachmentResolverV1 {
 	return {
@@ -61,4 +64,13 @@ export async function materializeSecretRecordFixtureAttachments(
 			expected: attachments.expected,
 		}),
 	};
+}
+
+export function encryptRelayKeyFixture(
+	binding: import("./relay-key-versions.js").RelayKeyVersionBindingV1,
+) {
+	return relayEncryptor.encrypt({
+		...binding,
+		plaintext: "controlled-default-relay-key-fixture",
+	});
 }

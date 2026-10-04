@@ -4,7 +4,7 @@ import type {
 } from "@agent-infra/platform-core";
 import { createApplicationFoundationUseCaseV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
 	type ApplicationFoundationFailurePoint,
@@ -23,6 +23,7 @@ import {
 } from "./postgres-test.ts";
 import {
 	createSecretRecordFixtureResolver,
+	encryptRelayKeyFixture,
 	materializeSecretRecordFixtureAttachments,
 } from "./secret-record-fixture.ts";
 
@@ -207,7 +208,7 @@ async function snapshot() {
 }
 
 async function resetDatabase(): Promise<void> {
-	await adminClient`truncate platform.audit_events, platform.outbox_items,
+	await adminClient`truncate platform.relay_key_versions, platform.relay_key_subjects, platform.audit_events, platform.outbox_items,
 		platform.idempotency_records, platform.agent_availability,
 		platform.agent_owners, platform.agent_configuration_revisions,
 		platform.agent_applications, platform.agents cascade`;
@@ -469,6 +470,140 @@ describe("PostgreSQL application foundation transaction", () => {
 			expect(state.auditEvents).toHaveLength(1);
 		} finally {
 			await Promise.all([first.close(), second.close()]);
+		}
+	});
+});
+
+describe("PostgreSQL application default Relay Key atomicity", () => {
+	it("commits one encrypted version and audit even when the create response is replayed", async () => {
+		await resetDatabase();
+		const adapter = new builtStore.PostgresApplicationFoundationTransactionV1({
+			databaseUrl,
+		});
+		try {
+			const { plan, attachments } =
+				await captureApplicationFoundationSubmission();
+			const records =
+				await materializeSecretRecordFixtureAttachments(attachments);
+			const encrypt = vi.fn(encryptRelayKeyFixture);
+			await expect(
+				adapter.commit(plan, records, { encrypt }),
+			).resolves.toMatchObject({ outcome: "committed" });
+			await expect(
+				adapter.commit(plan, records, { encrypt }),
+			).resolves.toMatchObject({ outcome: "replayed" });
+			expect(encrypt).toHaveBeenCalledOnce();
+			const versions =
+				await adminClient`select key_version, ciphertext from platform.relay_key_versions where purpose='agent-default' and subject_id=${plan.agent.agentId}`;
+			expect(versions).toHaveLength(1);
+			expect(String(versions[0]?.key_version)).toBe("1");
+			expect(JSON.stringify(versions)).not.toContain(
+				"controlled-default-relay-key-fixture",
+			);
+			expect(
+				await adminClient`select details from platform.audit_events where action='relay_key.agent_default.replace'`,
+			).toEqual([
+				{
+					details: {
+						schemaVersion: 1,
+						previousVersion: null,
+						keyVersion: 1,
+						configurationRevision: 1,
+					},
+				},
+			]);
+			expect((await snapshot()).applications).toHaveLength(1);
+		} finally {
+			await adapter.close();
+		}
+	});
+
+	it.each(["encryption", "ciphertext binding", "audit"] as const)(
+		"rolls back the entire application and Key on %s failure, then permits retry",
+		async (failure) => {
+			await resetDatabase();
+			const adapter = new builtStore.PostgresApplicationFoundationTransactionV1(
+				{ databaseUrl },
+			);
+			try {
+				const { plan, attachments } =
+					await captureApplicationFoundationSubmission();
+				if (failure === "audit") await armFailure("audit");
+				await expect(
+					adapter.commit(
+						plan,
+						await materializeSecretRecordFixtureAttachments(attachments),
+						{
+							encrypt(binding) {
+								if (failure === "encryption")
+									throw new Error("controlled failure");
+								const ciphertext = encryptRelayKeyFixture(binding);
+								return failure === "ciphertext binding"
+									? { ...ciphertext, subjectId: "another-agent" }
+									: ciphertext;
+							},
+						},
+					),
+				).rejects.toMatchObject({ code: "persistence_failed" });
+				await disarmFailure(failure === "audit" ? "audit" : undefined);
+				await expect(snapshot()).resolves.toEqual(
+					emptyApplicationFoundationSnapshot,
+				);
+				expect(
+					await adminClient`select * from platform.relay_key_subjects`,
+				).toHaveLength(0);
+				expect(
+					await adminClient`select * from platform.relay_key_versions`,
+				).toHaveLength(0);
+				await expect(
+					adapter.commit(
+						plan,
+						await materializeSecretRecordFixtureAttachments(attachments),
+						{ encrypt: encryptRelayKeyFixture },
+					),
+				).resolves.toMatchObject({ outcome: "committed" });
+			} finally {
+				await disarmFailure(failure === "audit" ? "audit" : undefined);
+				await adapter.close();
+			}
+		},
+	);
+
+	it("refuses to overwrite an existing default Key while creating the application", async () => {
+		await resetDatabase();
+		const adapter = new builtStore.PostgresApplicationFoundationTransactionV1({
+			databaseUrl,
+		});
+		const keys = new builtStore.PostgresRelayKeyVersionStoreV1({ databaseUrl });
+		try {
+			const { plan, attachments } =
+				await captureApplicationFoundationSubmission();
+			await keys.replace({
+				purpose: "agent-default",
+				subjectId: plan.agent.agentId,
+				expectedCurrentVersion: null,
+				encrypt: encryptRelayKeyFixture,
+			});
+			const before =
+				await adminClient`select * from platform.relay_key_versions`;
+			const encrypt = vi.fn(encryptRelayKeyFixture);
+			await expect(
+				adapter.commit(
+					plan,
+					await materializeSecretRecordFixtureAttachments(attachments),
+					{ encrypt },
+				),
+			).rejects.toMatchObject({ code: "persistence_failed" });
+			expect(encrypt).not.toHaveBeenCalled();
+			expect(
+				await adminClient`select * from platform.relay_key_versions`,
+			).toEqual(before);
+			await expect(snapshot()).resolves.toEqual(
+				emptyApplicationFoundationSnapshot,
+			);
+		} finally {
+			await adapter.close();
+			await keys.close();
 		}
 	});
 });

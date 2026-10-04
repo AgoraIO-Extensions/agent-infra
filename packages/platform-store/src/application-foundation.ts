@@ -10,13 +10,13 @@ import {
 	type PendingSecretRecordAttachmentsV1,
 	snapshotApplicationFoundationWritePlanV1,
 } from "@agent-infra/platform-core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { isPostgresError } from "./postgres-error.js";
-import { snapshotRelayKeyCiphertextV1 } from "./relay-key-versions.js";
+import { replaceRelayKeyVersionInTransaction } from "./relay-key-versions.js";
 import {
 	agentApplications,
 	agentAvailability,
@@ -26,8 +26,6 @@ import {
 	auditEvents,
 	idempotencyRecords,
 	outboxItems,
-	relayKeySubjects,
-	relayKeyVersions,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
 
@@ -423,48 +421,27 @@ export class PostgresApplicationFoundationTransactionV1
 				if (defaultRelayKey) {
 					if (configuration.source.kind !== "standard")
 						throw new ApplicationFoundationError("persistence_failed");
-					await transaction
-						.insert(relayKeySubjects)
-						.values({ purpose: "agent-default", subjectId: plan.agent.agentId })
-						.onConflictDoNothing();
-					const [subject] = await transaction
-						.select({ lastVersion: relayKeySubjects.lastVersion })
-						.from(relayKeySubjects)
-						.where(
-							and(
-								eq(relayKeySubjects.purpose, "agent-default"),
-								eq(relayKeySubjects.subjectId, plan.agent.agentId),
-							),
-						)
-						.for("update");
-					if (!subject)
-						throw new ApplicationFoundationError("persistence_failed");
-					const binding = {
-						purpose: "agent-default" as const,
-						subjectId: plan.agent.agentId,
-						keyId: randomUUID(),
-						keyVersion: subject.lastVersion + 1,
-					};
-					const ciphertext = snapshotRelayKeyCiphertextV1(
-						await defaultRelayKey.encrypt(binding),
-						binding,
+					// Keep the original Drizzle transaction; adapt only tagged SQL values.
+					const keySql = async (
+						parts: TemplateStringsArray,
+						...parameters: (string | number)[]
+					) => transaction.execute(sql(parts, ...parameters));
+					const replacement = await replaceRelayKeyVersionInTransaction(
+						keySql,
+						{
+							purpose: "agent-default",
+							subjectId: plan.agent.agentId,
+							expectedCurrentVersion: null,
+							encrypt: (binding) =>
+								defaultRelayKey.encrypt({
+									...binding,
+									purpose: "agent-default",
+								}),
+						},
 					);
-					await transaction.insert(relayKeyVersions).values({
-						...binding,
-						ciphertext: ciphertext as unknown as Record<string, unknown>,
-					});
-					await transaction
-						.update(relayKeySubjects)
-						.set({
-							lastVersion: binding.keyVersion,
-							currentVersion: binding.keyVersion,
-						})
-						.where(
-							and(
-								eq(relayKeySubjects.purpose, "agent-default"),
-								eq(relayKeySubjects.subjectId, plan.agent.agentId),
-							),
-						);
+					if (replacement.outcome !== "replaced")
+						throw new ApplicationFoundationError("persistence_failed");
+					const binding = replacement.binding;
 					await transaction.insert(auditEvents).values({
 						id: randomUUID(),
 						traceId: plan.auditEvent.traceId,

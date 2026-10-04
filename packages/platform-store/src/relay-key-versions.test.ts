@@ -84,7 +84,7 @@ function transaction() {
 			if (statement.startsWith("insert into platform.relay_key_versions")) {
 				versions.set(`${key}:${args[2]}`, {
 					key_id: args[3] as string,
-					ciphertext: args[4],
+					ciphertext: JSON.parse(args[4] as string),
 				});
 				return [];
 			}
