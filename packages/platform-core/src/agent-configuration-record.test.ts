@@ -50,6 +50,14 @@ describe("Versioned Agent model configuration", () => {
 			expect(() => decodeAgentConfigurationRecordV3(record)).toThrow();
 		},
 	);
+	it("preserves the legacy canonical property order used by Store integrity checks", () => {
+		expect(
+			JSON.stringify(
+				decodeAgentConfigurationRecordV2(agentConfigurationConformanceRecordV1),
+			),
+		).toBe(JSON.stringify(agentConfigurationConformanceRecordV1));
+	});
+
 	it("rejects V3 custom sources and missing model selection", () => {
 		const record = keylessRecord();
 		expect(() =>

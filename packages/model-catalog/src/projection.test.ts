@@ -427,6 +427,35 @@ it("produces V4 model configuration with the trusted image/Driver tuple and no s
 	}
 	expect(safeProjection).not.toContain("AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_");
 });
+it("projects admitted V3 without synthesizing a per-model credential", async () => {
+	const { configuration, binding, projected } =
+		await keylessProjectionFixture();
+	if (
+		configuration.source.kind !== "standard" ||
+		!configuration.modelConfiguration
+	)
+		throw new Error("Expected standard model configuration");
+	const keyless = {
+		...configuration,
+		schemaVersion: 3 as const,
+		source: configuration.source,
+		modelConfiguration: {
+			...configuration.modelConfiguration,
+			options: configuration.modelConfiguration.options.map(
+				({ credential: _credential, ...option }) => option,
+			),
+		},
+	};
+	const result = await projectRuntimeModelConfigurationV4({
+		configuration: keyless,
+		standardTemplateBinding: binding,
+		catalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+		signal: new AbortController().signal,
+	});
+	expect(result).toEqual(projected);
+	expect(validateRuntimeModelProjectionV4(result, keyless)).toEqual(result);
+	expect(JSON.stringify(result)).not.toContain("credential");
+});
 it("rejects rehashed V4 projection source/Driver drift and static credentials", async () => {
 	const { configuration, projected } = await keylessProjectionFixture();
 	const { fingerprint: _fingerprint, ...original } = projected;

@@ -249,11 +249,11 @@ export function decodeAgentConfigurationRecord(
 	if (values.schemaVersion === 3) {
 		if (source.kind !== "standard" || modelConfiguration === null)
 			invalidCommand();
-		return { ...common, schemaVersion: 3, source, modelConfiguration };
+		return { schemaVersion: 3, ...common, source, modelConfiguration };
 	}
 	return {
-		...common,
 		schemaVersion: 2,
+		...common,
 		modelConfiguration: modelConfiguration as AgentConfigurationModelV1 | null,
 	};
 }
