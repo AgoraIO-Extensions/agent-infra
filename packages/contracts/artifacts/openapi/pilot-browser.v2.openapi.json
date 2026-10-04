@@ -593,6 +593,11 @@
             },
             "type": "array"
           },
+          "defaultRelayKey": {
+            "minLength": 1,
+            "type": "string",
+            "writeOnly": true
+          },
           "description": {
             "minLength": 1,
             "type": "string"
