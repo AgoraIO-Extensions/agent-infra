@@ -10,7 +10,9 @@ import {
 	ApplicationFoundationError,
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
+	type CommitApplicationFoundationCommand,
 	createApplicationFoundationUseCaseV1,
+	snapshotApplicationFoundationWritePlanV1,
 } from "./application-foundation.ts";
 import { FakeApplicationFoundationTransactionV1 } from "./fake-application-foundation.ts";
 import { pendingSecretRecordAttachmentFixtureV1 } from "./secret-record-attachment.fixture.ts";
@@ -487,6 +489,326 @@ describe("Fake application foundation transaction", () => {
 });
 
 describe("Application foundation Secret sidecar", () => {
+	function defaultKeyFixture(keyless = false) {
+		const legacyCommand = {
+			...applicationFoundationCommandV1,
+			defaultRelayKey: "controlled-default-key-for-test",
+		};
+		const command: CommitApplicationFoundationCommand = keyless
+			? {
+					...legacyCommand,
+					schemaVersion: 3,
+					source: { kind: "standard", templateId: "template_01" },
+					secrets: [],
+					modelConfiguration: {
+						options: [
+							{
+								optionId: "model_primary",
+								endpointId: "endpoint_01",
+								modelId: "gpt-5",
+								reasoningLevels: ["low"],
+							},
+							{
+								optionId: "model_secondary",
+								endpointId: "endpoint_01",
+								modelId: "gpt-5",
+								reasoningLevels: ["low"],
+							},
+						],
+						defaultOptionId: "model_primary",
+						defaultReasoningLevel: "low",
+					},
+				}
+			: legacyCommand;
+		const keylessAdmission = vi
+			.fn()
+			.mockImplementation(async ({ requested }) => ({
+				catalogRevision: "catalog_4",
+				...requested,
+			}));
+		const admissions = applicationFoundationAdmissionDependenciesV1();
+		const legacyAdmission = vi.spyOn(admissions.modelAdmission, "admitModels");
+		const identity = vi.fn().mockResolvedValue({
+			userId: applicationFoundationActorContextV1.userId,
+			accountStatus: "active",
+			authorizationRevision: "authorization_9",
+		});
+		const candidates = vi.fn().mockResolvedValue([
+			{
+				endpointId: "endpoint_01",
+				modelId: "gpt-5",
+				reasoningLevels: ["low"],
+			},
+		]);
+		const encrypt = vi
+			.fn()
+			.mockResolvedValue({ encrypted: "controlled-ciphertext" });
+		const commit = vi
+			.fn<ApplicationFoundationTransactionPortV1["commit"]>()
+			.mockImplementation(async (plan, _secrets, key) => {
+				// Exercise the real strict snapshot boundary; plaintext must never join the write plan.
+				expect(snapshotApplicationFoundationWritePlanV1(plan)).toEqual(plan);
+				expect(JSON.stringify(plan)).not.toContain(command.defaultRelayKey);
+				expect(plan).not.toHaveProperty("defaultRelayKey");
+				await key?.encrypt({
+					purpose: "agent-default",
+					subjectId: command.agentId,
+					keyId: "controlled-key-id",
+					keyVersion: 1,
+				});
+				return { outcome: "committed", result: plan.result };
+			});
+		const read = vi
+			.fn<ApplicationFoundationTransactionPortV1["read"]>()
+			.mockResolvedValue({ outcome: "ready" });
+		const useCase = createApplicationFoundationUseCaseV1(
+			{
+				...admissions,
+				keylessModelAdmission: { admitModels: keylessAdmission },
+				transaction: { read, commit },
+				defaultRelayKey: { currentIdentity: identity, candidates, encrypt },
+			},
+			{ now: () => new Date(serverInstant) },
+		);
+		return {
+			command,
+			keylessAdmission,
+			legacyAdmission,
+			identity,
+			candidates,
+			encrypt,
+			commit,
+			read,
+			submit: () =>
+				useCase.submit(
+					command,
+					applicationFoundationActorContextV1,
+					keyless ? undefined : pendingSecretRecordAttachmentFixtureV1(),
+				),
+		};
+	}
+
+	it("creates V3 with one default Key and multiple credential-free models through the original commit", async () => {
+		const fixture = defaultKeyFixture(true);
+		await expect(fixture.submit()).resolves.toMatchObject({
+			status: "pending_approval",
+		});
+		expect(fixture.legacyAdmission).not.toHaveBeenCalled();
+		expect(fixture.keylessAdmission).toHaveBeenCalledOnce();
+		const call = fixture.commit.mock.calls[0];
+		if (!call) throw new Error("missing commit");
+		const [plan, attachments, key] = call;
+		expect(plan.configurationRevision.configuration.schemaVersion).toBe(3);
+		expect(
+			plan.configurationRevision.configuration.modelConfiguration?.options,
+		).toHaveLength(2);
+		expect(JSON.stringify(plan)).not.toMatch(
+			/credential|controlled-default-key/,
+		);
+		expect(attachments).toBeUndefined();
+		expect(key?.encrypt).toBeTypeOf("function");
+		expect(fixture.candidates).toHaveBeenCalledWith(
+			fixture.command.defaultRelayKey,
+			plan.configurationRevision.configuration,
+		);
+	});
+
+	it.each(["credential", "replaceCredential", "keyReference"])(
+		"rejects V3 per-model %s without side effects",
+		async (field) => {
+			const fixture = defaultKeyFixture(true);
+			const option = fixture.command.modelConfiguration?.options[0];
+			if (!option) throw new Error("missing model");
+			Object.assign(option, {
+				[field]: field === "replaceCredential" ? false : "forbidden",
+			});
+			await expect(fixture.submit()).rejects.toMatchObject({
+				code: "invalid_command",
+			});
+			expect(fixture.read).not.toHaveBeenCalled();
+			expect(fixture.commit).not.toHaveBeenCalled();
+		},
+	);
+
+	it("rejects a keyless admission that changes the selected model", async () => {
+		const fixture = defaultKeyFixture(true);
+		fixture.keylessAdmission.mockImplementation(async ({ requested }) => ({
+			catalogRevision: "catalog_4",
+			...requested,
+			defaultOptionId: "model_secondary",
+		}));
+		await expect(fixture.submit()).rejects.toMatchObject({
+			code: "not_admitted",
+		});
+		expect(fixture.commit).not.toHaveBeenCalled();
+	});
+
+	it("refuses V3 when the submitted Key cannot see the resulting selection", async () => {
+		const fixture = defaultKeyFixture(true);
+		fixture.candidates.mockResolvedValue([]);
+		await expect(fixture.submit()).rejects.toMatchObject({
+			code: "not_admitted",
+		});
+		expect(fixture.encrypt).not.toHaveBeenCalled();
+		expect(fixture.commit).not.toHaveBeenCalled();
+	});
+
+	it("distinguishes V3 catalog rejection from dependency failure without leaking input", async () => {
+		const refused = defaultKeyFixture(true);
+		refused.keylessAdmission.mockResolvedValue(null);
+		await expect(refused.submit()).rejects.toMatchObject({
+			code: "not_admitted",
+		});
+		expect(refused.commit).not.toHaveBeenCalled();
+		const unavailable = defaultKeyFixture(true);
+		unavailable.keylessAdmission.mockRejectedValue(
+			new Error(unavailable.command.defaultRelayKey),
+		);
+		await expect(unavailable.submit()).rejects.toMatchObject({
+			code: "dependency_unavailable",
+			message: "Application foundation dependency unavailable",
+		});
+		expect(unavailable.commit).not.toHaveBeenCalled();
+	});
+
+	it("requires a Key for V3 instead of inferring a legacy credential", async () => {
+		const fixture = defaultKeyFixture(true);
+		Reflect.deleteProperty(fixture.command, "defaultRelayKey");
+		await expect(fixture.submit()).rejects.toMatchObject({
+			code: "invalid_command",
+		});
+		expect(fixture.read).not.toHaveBeenCalled();
+	});
+
+	it("commits an admitted default Key via the transaction sidecar without persisting plaintext", async () => {
+		const fixture = defaultKeyFixture();
+		await expect(fixture.submit()).resolves.toMatchObject({
+			status: "pending_approval",
+		});
+		expect(fixture.commit).toHaveBeenCalledOnce();
+		expect(fixture.encrypt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				purpose: "agent-default",
+				subjectId: fixture.command.agentId,
+				keyVersion: 1,
+			}),
+			fixture.command.defaultRelayKey,
+		);
+	});
+
+	it.each([
+		["missing model", []],
+		[
+			"wrong endpoint",
+			[{ endpointId: "other", modelId: "gpt-5", reasoningLevels: ["low"] }],
+		],
+		[
+			"wrong model",
+			[
+				{
+					endpointId: "endpoint_01",
+					modelId: "other",
+					reasoningLevels: ["low"],
+				},
+			],
+		],
+		[
+			"incompatible reasoning",
+			[
+				{
+					endpointId: "endpoint_01",
+					modelId: "gpt-5",
+					reasoningLevels: ["high"],
+				},
+			],
+		],
+	])(
+		"rejects %s before writing any application or Key",
+		async (_name, visible) => {
+			const fixture = defaultKeyFixture();
+			fixture.candidates.mockResolvedValue(visible);
+			await expect(fixture.submit()).rejects.toMatchObject({
+				code: "not_admitted",
+			});
+			expect(fixture.commit).not.toHaveBeenCalled();
+			expect(fixture.encrypt).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		[
+			{
+				userId: "other",
+				accountStatus: "active",
+				authorizationRevision: "authorization_9",
+			},
+			"not_authorized",
+		],
+		[
+			{
+				userId: applicationFoundationActorContextV1.userId,
+				accountStatus: "disabled",
+				authorizationRevision: "authorization_9",
+			},
+			"not_authorized",
+		],
+		[
+			{
+				userId: applicationFoundationActorContextV1.userId,
+				accountStatus: "active",
+				authorizationRevision: "authorization_10",
+			},
+			"dependency_unavailable",
+		],
+	])(
+		"rejects identity or authorization drift before persistence",
+		async (identity, code) => {
+			const fixture = defaultKeyFixture();
+			fixture.identity.mockResolvedValue(identity);
+			await expect(fixture.submit()).rejects.toMatchObject({ code });
+			expect(fixture.commit).not.toHaveBeenCalled();
+		},
+	);
+
+	it("replays without validating or encrypting a second Key version", async () => {
+		const fixture = defaultKeyFixture();
+		const result = await fixture.submit();
+		fixture.read.mockResolvedValue({ outcome: "replayed", result });
+		await expect(fixture.submit()).resolves.toEqual(result);
+		expect(fixture.commit).toHaveBeenCalledOnce();
+		expect(fixture.candidates).toHaveBeenCalledOnce();
+		expect(fixture.encrypt).toHaveBeenCalledOnce();
+	});
+
+	it("sanitizes encryption failure returned by the transaction", async () => {
+		const fixture = defaultKeyFixture();
+		fixture.encrypt.mockRejectedValue(
+			new Error(fixture.command.defaultRelayKey),
+		);
+		await expect(fixture.submit()).rejects.toEqual(
+			new ApplicationFoundationError("persistence_failed"),
+		);
+	});
+
+	it("requires the default Relay Key admission dependency", async () => {
+		let plan: ApplicationFoundationWritePlanV1 | undefined;
+		const command = {
+			...applicationFoundationCommandV1,
+			defaultRelayKey: "relay-key-controlled-test-value",
+		};
+		await expect(
+			createUseCase({
+				async commit(nextPlan) {
+					plan = nextPlan;
+					return { outcome: "committed", result: nextPlan.result };
+				},
+			}).submit(command, applicationFoundationActorContextV1),
+		).rejects.toMatchObject({
+			code: "dependency_unavailable",
+		});
+		expect(plan).toBeUndefined();
+	});
+
 	it("fails closed before persistence when a Secret sidecar is missing", async () => {
 		let commits = 0;
 		const useCase = createApplicationFoundationUseCaseV1(

@@ -35,6 +35,7 @@ describe("platform-core package surface", () => {
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
 			"AgentConfigurationError",
+			"AgentDefaultRelayKeyErrorV1",
 			"AgentManagementError",
 			"ApplicationApiCredentialErrorV1",
 			"ApplicationFoundationError",
@@ -59,6 +60,7 @@ describe("platform-core package surface", () => {
 			"captureTaskAuthorizationBoundaryV1",
 			"cleanupUnactivatedSecretCandidateV1",
 			"createAgentConfigurationUseCaseV1",
+			"createAgentDefaultRelayKeyUseCaseV1",
 			"createAgentManagementV1",
 			"createApplicationApiCredentialIssuerV1",
 			"createApplicationFoundationUseCaseV1",
@@ -87,6 +89,7 @@ describe("platform-core package surface", () => {
 			"decideAgentRuntimePresentationV1",
 			"decideConversationDispatchCapacityV1",
 			"decideConversationDispatchRetryTransitionV1",
+			"decodeAgentConfigurationRecordV3",
 			"immutableSecretNameV1",
 			"isAdministratorAgentReadAllowedV1",
 			"isAgentAccessAllowedV1",

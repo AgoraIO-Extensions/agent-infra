@@ -3,18 +3,30 @@ import { randomUUID } from "node:crypto";
 
 import {
 	ApplicationFoundationError,
+	type ApplicationFoundationRelayKeyAttachmentV1,
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
 	type CommitApplicationFoundationResultV1,
+	decodeAgentConfigurationRecordV3,
 	type PendingSecretRecordAttachmentsV1,
 	snapshotApplicationFoundationWritePlanV1,
 } from "@agent-infra/platform-core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+import { decodeAgentConfigurationRecord as decodeLegacyConfiguration } from "./agent-configuration-record.js";
+
+function decodeAgentConfigurationRecord(input: unknown) {
+	return input !== null &&
+		typeof input === "object" &&
+		Object.getOwnPropertyDescriptor(input, "schemaVersion")?.value === 3
+		? decodeAgentConfigurationRecordV3(input)
+		: decodeLegacyConfiguration(input);
+}
+
 import { isPostgresError } from "./postgres-error.js";
+import { replaceRelayKeyVersionInTransaction } from "./relay-key-versions.js";
 import {
 	agentApplications,
 	agentAvailability,
@@ -337,9 +349,13 @@ export class PostgresApplicationFoundationTransactionV1
 	async commit(
 		input: ApplicationFoundationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
+		defaultRelayKey?: ApplicationFoundationRelayKeyAttachmentV1,
 	): ReturnType<ApplicationFoundationTransactionPortV1["commit"]> {
 		try {
 			const { plan, configuration, result } = validatedPlan(input);
+			if (configuration.schemaVersion === 3 && !defaultRelayKey) {
+				throw new ApplicationFoundationError("persistence_failed");
+			}
 			return await this.#database.transaction(async (transaction) => {
 				const [reservation] = await transaction
 					.insert(idempotencyRecords)
@@ -415,6 +431,50 @@ export class PostgresApplicationFoundationTransactionV1
 					attachments,
 					configuration,
 				);
+				if (defaultRelayKey) {
+					if (configuration.source.kind !== "standard")
+						throw new ApplicationFoundationError("persistence_failed");
+					// Keep the original Drizzle transaction; adapt only tagged SQL values.
+					const keySql = async (
+						parts: TemplateStringsArray,
+						...parameters: (string | number)[]
+					) => transaction.execute(sql(parts, ...parameters));
+					const replacement = await replaceRelayKeyVersionInTransaction(
+						keySql,
+						{
+							purpose: "agent-default",
+							subjectId: plan.agent.agentId,
+							expectedCurrentVersion: null,
+							encrypt: (binding) =>
+								defaultRelayKey.encrypt({
+									...binding,
+									purpose: "agent-default",
+								}),
+						},
+					);
+					if (replacement.outcome !== "replaced")
+						throw new ApplicationFoundationError("persistence_failed");
+					const binding = replacement.binding;
+					await transaction.insert(auditEvents).values({
+						id: randomUUID(),
+						traceId: plan.auditEvent.traceId,
+						requestId: plan.auditEvent.requestId,
+						agentId: plan.agent.agentId,
+						actorType: "user",
+						actorId: plan.auditEvent.actorId,
+						action: "relay_key.agent_default.replace",
+						targetType: "agent",
+						targetId: plan.agent.agentId,
+						outcome: "succeeded",
+						occurredAt: plan.auditEvent.occurredAt,
+						details: {
+							schemaVersion: 1,
+							previousVersion: null,
+							keyVersion: binding.keyVersion,
+							configurationRevision: 1,
+						},
+					});
+				}
 				await transaction.insert(agentOwners).values(
 					plan.access.ownerIds.map((ownerId) => ({
 						agentId: plan.access.agentId,

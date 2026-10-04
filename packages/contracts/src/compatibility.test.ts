@@ -1477,6 +1477,93 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the exact Agent default Key endpoints without changing existing authority", async () => {
+		const current = JSON.parse(
+			await readFile(
+				fileURLToPath(
+					new URL(
+						"../artifacts/openapi/pilot-browser.v2.openapi.json",
+						import.meta.url,
+					),
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		for (const path of [
+			"/api/v2/agents/{agentId}/default-relay-key",
+			"/api/v2/agents/{agentId}/default-relay-key/candidates",
+		])
+			delete previous.paths[path];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-default-key-contract-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			current.paths["/api/v2/agents/{agentId}/default-relay-key"].put.security =
+				[];
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only the optional write-only application default Key and rejects adjacent drift", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		delete previous.components.schemas.AgentApplicationCreateRequestV2
+			.properties.defaultRelayKey;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "default-key-create-compatibility-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutation of [
+				(value: typeof current) => {
+					value.components.schemas.AgentApplicationCreateRequestV2.properties.defaultRelayKey.writeOnly = false;
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentApplicationCreateRequestV2.properties.defaultRelayKey.minLength = 0;
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentApplicationCreateRequestV2.required.push(
+						"defaultRelayKey",
+					);
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentApplicationCreateRequestV2.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/agents"].get.security = [];
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutation(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the exact application issuer addition and preserves existing authority", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -1536,10 +1623,16 @@ describe("contract compatibility command", () => {
 				"utf8",
 			),
 		);
-		// Isolate lifecycle from later personal API/Relay Key and registration additions.
+		// Isolate lifecycle from later default/personal Key and registration additions.
+		delete current.paths["/api/v2/agents/{agentId}/default-relay-key"];
+		delete current.paths[
+			"/api/v2/agents/{agentId}/default-relay-key/candidates"
+		];
 		restorePreRelayKeyContract(current);
 		delete current.paths["/api/v2/applications"];
 		delete current.paths["/api/v2/applications/{applicationId}"];
+		delete current.components.schemas.AgentApplicationCreateRequestV2.properties
+			.defaultRelayKey;
 		for (const name of [
 			"ApplicationMetadataV1",
 			"ApplicationRegistrationRequestV1",

@@ -1,6 +1,10 @@
 import type { startObservability } from "@agent-infra/observability";
 import { createHttpObservability } from "@agent-infra/observability/http";
 import { Hono } from "hono";
+import {
+	type AgentDefaultRelayKeyRoutesDependencies,
+	registerAgentDefaultRelayKeyRoutes,
+} from "./http/agent-default-relay-key-routes.js";
 import { registerApplicationApiCredentialRoutes } from "./http/application-api-credential-routes.js";
 import {
 	type ApplicationMaterialGrantRouteDependencies,
@@ -77,6 +81,7 @@ export interface PlatformAppDependencies {
 	readonly conversation: ConversationRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
 	readonly personalApiCredentials?: PersonalApiCredentialRouteDependencies;
+	readonly agentDefaultRelayKeys?: AgentDefaultRelayKeyRoutesDependencies;
 	readonly personalRelayKeys?: PersonalRelayKeyRoutesDependencies;
 	readonly sessionAudit: SessionAuditRoutesDependencies;
 	readonly wecom?: WecomRoutesDependenciesV1;
@@ -138,6 +143,8 @@ export function createPlatformApp(
 	else if (dependencies.wecomReceipts)
 		registerWecomReceiptRoutesV1(app, dependencies.wecomReceipts);
 	registerRetiredManagementRoutes(app);
+	if (dependencies.agentDefaultRelayKeys)
+		registerAgentDefaultRelayKeyRoutes(app, dependencies.agentDefaultRelayKeys);
 	if (dependencies.personalRelayKeys)
 		registerPersonalRelayKeyRoutes(app, dependencies.personalRelayKeys);
 	registerV2ManagementRoutes(app, dependencies.management);

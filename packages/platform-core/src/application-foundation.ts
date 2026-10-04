@@ -1,17 +1,21 @@
 import { Buffer } from "node:buffer";
-
 import {
 	type AdmittedInitialAgentConfigurationV1,
 	type AgentConfigurationAccessTargetV1,
 	type AgentConfigurationActorContextV1,
 	AgentConfigurationError,
-	type AgentConfigurationRecordV2,
+	type AgentConfigurationRecord,
 	beginInitialAgentConfigurationAdmissionV1,
-	decodeAgentConfigurationRecordV2,
+	decodeAgentConfigurationRecord,
 	type InitialAgentConfigurationAdmissionDependenciesV1,
 	type InitialAgentConfigurationCommandV2,
 	validateLegacyInitialActionsV1,
 } from "./agent-configuration.js";
+import type { InitialAgentConfigurationCommandV3 } from "./agent-configuration-types.js";
+import type {
+	AgentDefaultRelayKeyBindingV1,
+	AgentDefaultRelayKeyDependenciesV1,
+} from "./agent-default-relay-key.js";
 import {
 	type PendingSecretRecordAttachmentResolverV1,
 	type PendingSecretRecordAttachmentsV1,
@@ -24,6 +28,26 @@ export interface CommitApplicationFoundationCommandV2
 	readonly idempotencyKey: string;
 	readonly name: string;
 	readonly description: string;
+	/** Optional during the contract handoff; when present it is persisted atomically with the application. */
+	readonly defaultRelayKey?: string;
+}
+
+export interface CommitApplicationFoundationCommandV3
+	extends Omit<
+			CommitApplicationFoundationCommandV2,
+			"schemaVersion" | "source" | "modelConfiguration" | "defaultRelayKey"
+		>,
+		InitialAgentConfigurationCommandV3 {
+	readonly defaultRelayKey: string;
+}
+export type CommitApplicationFoundationCommand =
+	| CommitApplicationFoundationCommandV2
+	| CommitApplicationFoundationCommandV3;
+
+export interface ApplicationFoundationRelayKeyAttachmentV1 {
+	readonly encrypt: (
+		binding: AgentDefaultRelayKeyBindingV1,
+	) => unknown | Promise<unknown>;
 }
 
 export interface ApplicationFoundationActorContextV1 {
@@ -62,7 +86,7 @@ export interface ApplicationFoundationWritePlanV1 {
 	readonly configurationRevision: {
 		readonly agentId: string;
 		readonly revision: 1;
-		readonly configuration: AgentConfigurationRecordV2;
+		readonly configuration: AgentConfigurationRecord;
 		readonly createdAt: Date;
 	};
 	readonly access: {
@@ -134,6 +158,7 @@ export interface ApplicationFoundationTransactionPortV1 {
 	commit(
 		plan: ApplicationFoundationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
+		defaultRelayKey?: ApplicationFoundationRelayKeyAttachmentV1,
 	): Promise<ApplicationFoundationCommitDecisionV1>;
 }
 
@@ -144,7 +169,7 @@ export interface ApplicationFoundationUseCaseV1 {
 	): Promise<CommitApplicationFoundationResultV1>;
 
 	submit(
-		command: CommitApplicationFoundationCommandV2,
+		command: CommitApplicationFoundationCommand,
 		actorContext: ApplicationFoundationActorContextV1,
 		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<CommitApplicationFoundationResultV1>;
@@ -157,6 +182,10 @@ export interface ApplicationFoundationUseCaseOptionsV1 {
 export interface ApplicationFoundationUseCaseDependenciesV1
 	extends InitialAgentConfigurationAdmissionDependenciesV1 {
 	readonly transaction: ApplicationFoundationTransactionPortV1;
+	readonly defaultRelayKey?: Pick<
+		AgentDefaultRelayKeyDependenciesV1,
+		"candidates" | "encrypt" | "currentIdentity"
+	>;
 }
 
 export type ApplicationFoundationErrorCode =
@@ -252,7 +281,7 @@ const commandRequiredKeys = [
 	"channels",
 	"traceId",
 ] as const;
-const commandOptionalKeys = ["modelConfiguration"] as const;
+const commandOptionalKeys = ["modelConfiguration", "defaultRelayKey"] as const;
 const actorContextKeys = [
 	"schemaVersion",
 	"userId",
@@ -321,7 +350,7 @@ function isCapturedText(value: unknown, maxBytes = 1024): value is string {
 function parseApplicationFoundationCommandV1(
 	command: unknown,
 	legacy = false,
-): CommitApplicationFoundationCommandV2 {
+): CommitApplicationFoundationCommand {
 	try {
 		const values = snapshotExactDataValues(
 			command,
@@ -340,7 +369,9 @@ function parseApplicationFoundationCommandV1(
 			traceId,
 		} = values;
 		if (
-			schemaVersion !== (legacy ? 1 : 2) ||
+			(legacy
+				? schemaVersion !== 1
+				: schemaVersion !== 2 && schemaVersion !== 3) ||
 			!isCapturedText(applicationId) ||
 			!isCapturedText(agentId) ||
 			!isCapturedText(idempotencyKey, 128) ||
@@ -352,6 +383,15 @@ function parseApplicationFoundationCommandV1(
 		) {
 			invalidApplicationFoundationInput();
 		}
+		if (
+			(schemaVersion === 3 || Object.hasOwn(values, "defaultRelayKey")) &&
+			(typeof values.defaultRelayKey !== "string" ||
+				values.defaultRelayKey.length < 16 ||
+				values.defaultRelayKey.length > 8192 ||
+				!/^[\x21-\x7e]+$/.test(values.defaultRelayKey))
+		) {
+			invalidApplicationFoundationInput();
+		}
 		let nameCodePointCount = 0;
 		for (let offset = 0; offset < name.length; nameCodePointCount += 1) {
 			const codePoint = name.codePointAt(offset);
@@ -359,8 +399,8 @@ function parseApplicationFoundationCommandV1(
 			if (nameCodePointCount >= 200) invalidApplicationFoundationInput();
 		}
 		if (legacy) validateLegacyInitialActionsV1(values.actions);
-		return {
-			schemaVersion: 2,
+		const captured = {
+			schemaVersion: schemaVersion === 3 ? 3 : 2,
 			applicationId,
 			agentId,
 			idempotencyKey,
@@ -377,6 +417,11 @@ function parseApplicationFoundationCommandV1(
 							values.modelConfiguration as InitialAgentConfigurationCommandV2["modelConfiguration"],
 					}
 				: {}),
+			...(Object.hasOwn(values, "defaultRelayKey")
+				? {
+						defaultRelayKey: values.defaultRelayKey as string,
+					}
+				: {}),
 			environment:
 				values.environment as InitialAgentConfigurationCommandV2["environment"],
 			secrets: values.secrets as InitialAgentConfigurationCommandV2["secrets"],
@@ -384,6 +429,7 @@ function parseApplicationFoundationCommandV1(
 				values.channels as InitialAgentConfigurationCommandV2["channels"],
 			traceId,
 		};
+		return captured as CommitApplicationFoundationCommand;
 	} catch {
 		invalidApplicationFoundationInput();
 	}
@@ -409,8 +455,9 @@ function parseApplicationFoundationActorContextV1(
 function requiredPlanObject(
 	input: unknown,
 	keys: readonly string[],
+	optionalKeys: readonly string[] = [],
 ): Record<string, unknown> {
-	const values = snapshotExactDataValues(input, keys);
+	const values = snapshotExactDataValues(input, keys, optionalKeys);
 	if (!values) throw new ApplicationFoundationError("persistence_failed");
 	return values;
 }
@@ -466,17 +513,21 @@ export function snapshotApplicationFoundationWritePlanV1(
 	input: unknown,
 ): ApplicationFoundationWritePlanV1 {
 	try {
-		const plan = requiredPlanObject(input, [
-			"schemaVersion",
-			"agent",
-			"application",
-			"configurationRevision",
-			"access",
-			"result",
-			"idempotency",
-			"outboxIntent",
-			"auditEvent",
-		]);
+		const plan = requiredPlanObject(
+			input,
+			[
+				"schemaVersion",
+				"agent",
+				"application",
+				"configurationRevision",
+				"access",
+				"result",
+				"idempotency",
+				"outboxIntent",
+				"auditEvent",
+			],
+			[],
+		);
 		const agent = requiredPlanObject(plan.agent, [
 			"agentId",
 			"currentConfigurationRevision",
@@ -499,10 +550,12 @@ export function snapshotApplicationFoundationWritePlanV1(
 			["agentId", "revision", "configuration", "createdAt"],
 		);
 		if (
-			Object.getOwnPropertyDescriptor(
-				configurationRevision.configuration,
-				"schemaVersion",
-			)?.value !== 2
+			![2, 3].includes(
+				Object.getOwnPropertyDescriptor(
+					configurationRevision.configuration,
+					"schemaVersion",
+				)?.value,
+			)
 		) {
 			throw new ApplicationFoundationError("persistence_failed");
 		}
@@ -572,7 +625,7 @@ export function snapshotApplicationFoundationWritePlanV1(
 			configurationRevision: {
 				agentId: configurationRevision.agentId as string,
 				revision: configurationRevision.revision as 1,
-				configuration: decodeAgentConfigurationRecordV2(
+				configuration: decodeAgentConfigurationRecord(
 					configurationRevision.configuration,
 				),
 				createdAt: snapshotPlanDate(configurationRevision.createdAt),
@@ -758,21 +811,14 @@ export function createApplicationFoundationUseCaseV1(
 		>;
 		try {
 			admission = await beginInitialAgentConfigurationAdmissionV1(
-				{
-					schemaVersion: 2,
-					agentId: command.agentId,
-					requestId: command.requestId,
-					traceId: command.traceId,
-					coOwnerIds: command.coOwnerIds,
-					availability: command.availability,
-					source: command.source,
-					...(command.modelConfiguration === undefined
-						? {}
-						: { modelConfiguration: command.modelConfiguration }),
-					environment: command.environment,
-					secrets: command.secrets,
-					channels: command.channels,
-				},
+				(({
+					applicationId: _applicationId,
+					idempotencyKey: _idempotencyKey,
+					name: _name,
+					description: _description,
+					defaultRelayKey: _key,
+					...initial
+				}) => initial)(command),
 				{
 					schemaVersion: 1,
 					actorId: actorContext.userId,
@@ -816,6 +862,53 @@ export function createApplicationFoundationUseCaseV1(
 			admitted = await admission.complete();
 		} catch (error) {
 			throw normalizeInitialAdmissionError(error);
+		}
+		let defaultRelayKey: ApplicationFoundationRelayKeyAttachmentV1 | undefined;
+		if (command.defaultRelayKey !== undefined) {
+			const keyValue = command.defaultRelayKey;
+			const ports = dependencies.defaultRelayKey;
+			if (!ports)
+				throw new ApplicationFoundationError("dependency_unavailable");
+			if (
+				admitted.configuration.source.kind !== "standard" ||
+				!admitted.configuration.modelConfiguration
+			)
+				throw new ApplicationFoundationError("not_admitted");
+			try {
+				const visible = await ports.candidates(
+					keyValue,
+					structuredClone(admitted.configuration),
+				);
+				if (
+					admitted.configuration.modelConfiguration.options.some(
+						(option) =>
+							!visible.some(
+								(candidate) =>
+									candidate.endpointId === option.endpointId &&
+									candidate.modelId === option.modelId &&
+									option.reasoningLevels.every((level) =>
+										candidate.reasoningLevels.includes(level),
+									),
+							),
+					)
+				)
+					throw new ApplicationFoundationError("not_admitted");
+				const identity = await ports.currentIdentity(command.traceId);
+				if (
+					!identity ||
+					identity.userId !== actorContext.userId ||
+					identity.accountStatus !== "active"
+				)
+					throw new ApplicationFoundationError("not_authorized");
+				if (identity.authorizationRevision !== admitted.authorizationRevision)
+					throw new ApplicationFoundationError("dependency_unavailable");
+				defaultRelayKey = {
+					encrypt: (binding) => ports.encrypt(binding, keyValue),
+				};
+			} catch (error) {
+				if (error instanceof ApplicationFoundationError) throw error;
+				throw new ApplicationFoundationError("dependency_unavailable");
+			}
 		}
 		let submittedAt: Date;
 		try {
@@ -902,7 +995,11 @@ export function createApplicationFoundationUseCaseV1(
 		let decision: ApplicationFoundationCommitDecisionV1;
 		try {
 			decision = parseCommitDecision(
-				await dependencies.transaction.commit(plan, attachments),
+				await dependencies.transaction.commit(
+					plan,
+					attachments,
+					defaultRelayKey,
+				),
 				result,
 			);
 		} catch (error) {

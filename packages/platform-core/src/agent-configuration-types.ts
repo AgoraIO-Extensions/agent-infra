@@ -71,6 +71,28 @@ export interface AgentConfigurationRecordV2 {
 	readonly channelRevision: string;
 }
 
+/** Configuration V3 selects models; Relay Keys are separately bound per Execution. */
+export type AgentConfigurationModelOptionV2 = Omit<
+	AgentConfigurationModelOptionV1,
+	"credential"
+>;
+export interface AgentConfigurationModelV2
+	extends Omit<AgentConfigurationModelV1, "options"> {
+	readonly options: readonly AgentConfigurationModelOptionV2[];
+}
+export interface AgentConfigurationRecordV3
+	extends Omit<
+		AgentConfigurationRecordV2,
+		"schemaVersion" | "modelConfiguration" | "source"
+	> {
+	readonly schemaVersion: 3;
+	readonly source: Extract<AgentConfigurationSourceV1, { kind: "standard" }>;
+	readonly modelConfiguration: AgentConfigurationModelV2;
+}
+export type AgentConfigurationRecord =
+	| AgentConfigurationRecordV2
+	| AgentConfigurationRecordV3;
+
 /** Historical persisted shape; never a current policy or new write. */
 export interface AgentConfigurationRecordV1
 	extends Omit<AgentConfigurationRecordV2, "schemaVersion"> {
@@ -126,6 +148,11 @@ export interface AgentConfigurationModelInputV1 {
 	readonly defaultReasoningLevel: string;
 }
 
+export interface AgentConfigurationModelInputV2
+	extends Omit<AgentConfigurationModelInputV1, "options"> {
+	readonly options: readonly AgentConfigurationModelOptionV2[];
+}
+
 export interface AgentConfigurationSecretReplacementInputV1 {
 	readonly name: string;
 	readonly replace: true;
@@ -167,10 +194,26 @@ export interface InitialAgentConfigurationCommandV2 {
 	readonly channels: readonly AgentConfigurationChannelChangeV1[];
 }
 
+export interface InitialAgentConfigurationCommandV3
+	extends Omit<
+		InitialAgentConfigurationCommandV2,
+		"schemaVersion" | "source" | "modelConfiguration"
+	> {
+	readonly schemaVersion: 3;
+	readonly source: Extract<
+		AgentConfigurationSourceSelectionV1,
+		{ kind: "standard" }
+	>;
+	readonly modelConfiguration: AgentConfigurationModelInputV2;
+}
+export type InitialAgentConfigurationCommand =
+	| InitialAgentConfigurationCommandV2
+	| InitialAgentConfigurationCommandV3;
+
 export interface AdmittedInitialAgentConfigurationV1 {
 	readonly schemaVersion: 1;
 	readonly authorizationRevision: string;
-	readonly configuration: AgentConfigurationRecordV2;
+	readonly configuration: AgentConfigurationRecord;
 	readonly ownerIds: readonly string[];
 	readonly availability: readonly AgentConfigurationAccessTargetV1[];
 }
@@ -453,6 +496,15 @@ export interface AgentConfigurationModelAdmissionPortV1 {
 	>;
 }
 
+export interface AgentConfigurationModelAdmissionPortV2 {
+	admitModels(input: {
+		readonly agentId: string;
+		readonly requestId: string;
+		readonly traceId: string;
+		readonly requested: AgentConfigurationModelInputV2;
+	}): Promise<AgentConfigurationModelV2 | null>;
+}
+
 export interface AgentConfigurationSecretAdmissionPortV1 {
 	admitSecrets(input: {
 		readonly schemaVersion: 1;
@@ -551,6 +603,7 @@ export interface AgentConfigurationUseCaseDependenciesV1 {
 	readonly authorizationAdmission: AgentConfigurationAuthorizationAdmissionPortV1;
 	readonly imageAdmission: AgentConfigurationImageAdmissionPortV1;
 	readonly modelAdmission: AgentConfigurationModelAdmissionPortV1;
+	readonly keylessModelAdmission?: AgentConfigurationModelAdmissionPortV2;
 	readonly secretAdmission: AgentConfigurationSecretAdmissionPortV1;
 	readonly channelAdmission: AgentConfigurationChannelAdmissionPortV1;
 }

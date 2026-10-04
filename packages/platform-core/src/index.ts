@@ -13,12 +13,18 @@ export type {
 	AgentConfigurationErrorCode,
 	AgentConfigurationImageAdmissionPortV1,
 	AgentConfigurationModelAdmissionPortV1,
+	AgentConfigurationModelAdmissionPortV2,
 	AgentConfigurationModelInputV1,
+	AgentConfigurationModelInputV2,
 	AgentConfigurationModelOptionInputV1,
 	AgentConfigurationModelOptionV1,
+	AgentConfigurationModelOptionV2,
 	AgentConfigurationModelV1,
+	AgentConfigurationModelV2,
+	AgentConfigurationRecord,
 	AgentConfigurationRecordV1,
 	AgentConfigurationRecordV2,
+	AgentConfigurationRecordV3,
 	AgentConfigurationResultV1,
 	AgentConfigurationSecretAdmissionPortV1,
 	AgentConfigurationSecretMetadataV1,
@@ -40,10 +46,12 @@ export type {
 export {
 	AgentConfigurationError,
 	createAgentConfigurationUseCaseV1,
+	decodeAgentConfigurationRecordV3,
 	parseAgentConfigurationChangesV1,
 	parseStandardTemplateReleaseTargetV1,
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.js";
+export * from "./agent-default-relay-key.js";
 export * from "./agent-management.js";
 export * from "./agent-runtime-presentation.js";
 export * from "./api-audit-identity.js";

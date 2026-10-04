@@ -13,6 +13,7 @@ import {
 	modelOperationV1,
 } from "@agent-infra/model-catalog";
 import {
+	type AgentConfigurationModelInputV2,
 	type AgentConfigurationRecordV2,
 	type AgentConfigurationSecretMetadataV1,
 	type AgentConfigurationSourceV1,
@@ -23,7 +24,11 @@ import type { IdentityContext } from "./http/identity.js";
 
 type Admissions = Pick<
 	AgentConfigurationUseCaseDependenciesV1,
-	"imageAdmission" | "modelAdmission" | "secretAdmission" | "channelAdmission"
+	| "imageAdmission"
+	| "modelAdmission"
+	| "keylessModelAdmission"
+	| "secretAdmission"
+	| "channelAdmission"
 >;
 type StandardSource = Extract<AgentConfigurationSourceV1, { kind: "standard" }>;
 
@@ -254,6 +259,49 @@ export function createDeploymentAdmissionsV1(
 			throw new Error("PLATFORM_DEPLOYMENT_IDENTITY_UNAVAILABLE");
 		}
 	}
+	async function resolveModelSelection(
+		requested: AgentConfigurationModelInputV2,
+	) {
+		const signal = AbortSignal.timeout(10_000);
+		const snapshot = structuredClone(
+			await modelOperationV1(signal, () => loadModelCatalog(signal)),
+		);
+		const catalog = createDeploymentModelCatalogAdapterV1({
+			load: async () => snapshot,
+		});
+		for (const option of requested.options) {
+			const endpoint = await catalog.resolve(
+				{
+					endpointId: option.endpointId,
+					catalogRevision: modelCatalogRevision,
+				},
+				{ signal },
+			);
+			if (
+				(endpoint.allowedModels !== null &&
+					!endpoint.allowedModels.includes(option.modelId)) ||
+				option.reasoningLevels.some(
+					(level) => !endpoint.capabilities.reasoningLevels.includes(level),
+				)
+			) {
+				return null;
+			}
+		}
+		return {
+			catalogRevision: modelCatalogRevision,
+			options: requested.options.map(
+				({ optionId, endpointId, modelId, reasoningLevels }) => ({
+					optionId,
+					endpointId,
+					modelId,
+					reasoningLevels: [...reasoningLevels],
+				}),
+			),
+			defaultOptionId: requested.defaultOptionId,
+			defaultReasoningLevel: requested.defaultReasoningLevel,
+		};
+	}
+
 	return {
 		imageAdmission: {
 			async admitImage(request) {
@@ -349,33 +397,12 @@ export function createDeploymentAdmissionsV1(
 					modelConfiguration: request.requested,
 				}).modelConfiguration;
 				if (!requested) return denied;
-				const signal = AbortSignal.timeout(10_000);
+
 				try {
-					// Resolve every option from one actual snapshot, retaining its deployment revision.
-					const snapshot = structuredClone(
-						await modelOperationV1(signal, () => loadModelCatalog(signal)),
-					);
-					const catalog = createDeploymentModelCatalogAdapterV1({
-						load: async () => snapshot,
-					});
+					const selection = await resolveModelSelection(requested);
+					if (!selection) return denied;
 					const options = [];
 					for (const option of requested.options) {
-						const endpoint = await catalog.resolve(
-							{
-								endpointId: option.endpointId,
-								catalogRevision: modelCatalogRevision,
-							},
-							{ signal },
-						);
-						if (
-							(endpoint.allowedModels !== null &&
-								!endpoint.allowedModels.includes(option.modelId)) ||
-							option.reasoningLevels.some(
-								(level) =>
-									!endpoint.capabilities.reasoningLevels.includes(level),
-							)
-						)
-							return denied;
 						const current = request.current?.options.find(
 							(item) => item.optionId === option.optionId,
 						)?.credential;
@@ -394,16 +421,24 @@ export function createDeploymentAdmissionsV1(
 					return {
 						...correlation(request),
 						status: "admitted",
-						configuration: {
-							catalogRevision: modelCatalogRevision,
-							options,
-							defaultOptionId: requested.defaultOptionId,
-							defaultReasoningLevel: requested.defaultReasoningLevel,
-						},
+						configuration: { ...selection, options },
 					};
 				} catch (error) {
 					if (error instanceof ModelConfigurationErrorV1 && !error.retryable)
 						return denied;
+					throw new Error("PLATFORM_DEPLOYMENT_MODEL_ADMISSION_UNAVAILABLE");
+				}
+			},
+		},
+		keylessModelAdmission: {
+			async admitModels(request) {
+				await identity(request.traceId);
+				// Key/template visibility is jointly checked by the original foundation use case before commit.
+				try {
+					return await resolveModelSelection(request.requested);
+				} catch (error) {
+					if (error instanceof ModelConfigurationErrorV1 && !error.retryable)
+						return null;
 					throw new Error("PLATFORM_DEPLOYMENT_MODEL_ADMISSION_UNAVAILABLE");
 				}
 			},

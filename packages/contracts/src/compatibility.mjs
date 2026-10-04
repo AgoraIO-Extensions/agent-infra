@@ -1506,6 +1506,46 @@ function isPersonalRelayKeyAuditOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #1260 adds one write-only create input; every other request and route stays exact.
+function isApplicationDefaultRelayKeyV2OpenApiAddition(previous, current) {
+	const name = "AgentApplicationCreateRequestV2";
+	const previousSchema = previous.components?.schemas?.[name];
+	const currentSchema = current.components?.schemas?.[name];
+	if (
+		previousSchema?.properties?.defaultRelayKey !== undefined ||
+		!isDeepStrictEqual(currentSchema?.properties?.defaultRelayKey, {
+			minLength: 1,
+			type: "string",
+			writeOnly: true,
+		}) ||
+		currentSchema?.required?.includes("defaultRelayKey")
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas[name].properties.defaultRelayKey;
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #1260 admits only these exact session-bound default Key operations.
+function isAgentDefaultRelayKeyV2OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/agents/{agentId}/default-relay-key",
+		"/api/v2/agents/{agentId}/default-relay-key/candidates",
+	];
+	if (paths.some((path) => previous.paths?.[path] !== undefined)) return false;
+	const addition = Object.fromEntries(
+		paths.map((path) => [path, current.paths?.[path]]),
+	);
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"cb5d42ff2f8ad50c3c85325e38e6f5ff40fdef88e65744033406a2016929f310"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 // #1089 admits exactly the browser-owned Key path, three closed schemas and session scheme.
 function isPersonalRelayKeyV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/me/relay-key";
@@ -1709,6 +1749,8 @@ function findBreakingChanges(previous, current) {
 			!isPersonalApiAgentReadAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyV2OpenApiAddition(previous, current) &&
+			!isAgentDefaultRelayKeyV2OpenApiAddition(previous, current) &&
+			!isApplicationDefaultRelayKeyV2OpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isConversationSseV2NotFoundAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&

@@ -8,7 +8,10 @@ import {
 	AgentConfigurationError,
 	type AgentConfigurationModelOptionV1,
 	type AgentConfigurationModelV1,
+	type AgentConfigurationModelV2,
+	type AgentConfigurationRecord,
 	type AgentConfigurationRecordV2,
+	type AgentConfigurationRecordV3,
 } from "./agent-configuration-types.js";
 import {
 	compareText,
@@ -25,6 +28,19 @@ import {
 import { snapshotAgentManagementDataObject } from "./agent-management-input.js";
 
 export function parseStoredModel(input: unknown): AgentConfigurationModelV1 {
+	return parseStoredModelVersion(input, false) as AgentConfigurationModelV1;
+}
+
+export function parseStoredKeylessModel(
+	input: unknown,
+): AgentConfigurationModelV2 {
+	return parseStoredModelVersion(input, true);
+}
+
+function parseStoredModelVersion(
+	input: unknown,
+	keyless: boolean,
+): AgentConfigurationModelV2 {
 	const values = exactObject(input, [
 		"catalogRevision",
 		"options",
@@ -40,7 +56,9 @@ export function parseStoredModel(input: unknown): AgentConfigurationModelV1 {
 	}
 	const inputs = denseArray(values.options, maxModelOptions);
 	if (inputs.length === 0) invalidCommand();
-	const options: AgentConfigurationModelOptionV1[] = [];
+	const options: (Omit<AgentConfigurationModelOptionV1, "credential"> & {
+		credential?: AgentConfigurationModelOptionV1["credential"];
+	})[] = [];
 	const seen = new Set<string>();
 	for (const inputOption of inputs) {
 		const option = exactObject(inputOption, [
@@ -48,7 +66,7 @@ export function parseStoredModel(input: unknown): AgentConfigurationModelV1 {
 			"endpointId",
 			"modelId",
 			"reasoningLevels",
-			"credential",
+			...(keyless ? [] : ["credential"]),
 		]);
 		if (
 			!isText(option.optionId, idMaxBytes) ||
@@ -65,19 +83,18 @@ export function parseStoredModel(input: unknown): AgentConfigurationModelV1 {
 			if (!isText(level, idMaxBytes)) invalidCommand();
 			return level;
 		});
-		const credential = exactObject(option.credential, [
-			"secretId",
-			"version",
-			"isSet",
-		]);
+		const credential = keyless
+			? undefined
+			: exactObject(option.credential, ["secretId", "version", "isSet"]);
 		if (
 			reasoningLevels.length === 0 ||
 			new Set(reasoningLevels).size !== reasoningLevels.length ||
-			!isText(credential.secretId, idMaxBytes) ||
-			typeof credential.version !== "number" ||
-			!Number.isSafeInteger(credential.version) ||
-			credential.version < 1 ||
-			credential.isSet !== true
+			(credential !== undefined &&
+				(!isText(credential.secretId, idMaxBytes) ||
+					typeof credential.version !== "number" ||
+					!Number.isSafeInteger(credential.version) ||
+					credential.version < 1 ||
+					credential.isSet !== true))
 		) {
 			invalidCommand();
 		}
@@ -87,11 +104,15 @@ export function parseStoredModel(input: unknown): AgentConfigurationModelV1 {
 			endpointId: option.endpointId,
 			modelId: option.modelId,
 			reasoningLevels: reasoningLevels.toSorted(),
-			credential: {
-				secretId: credential.secretId,
-				version: credential.version,
-				isSet: true,
-			},
+			...(credential === undefined
+				? {}
+				: {
+						credential: {
+							secretId: credential.secretId as string,
+							version: credential.version as number,
+							isSet: true as const,
+						},
+					}),
 		});
 	}
 	const defaultOption = options.find(
@@ -149,6 +170,22 @@ export function parseStoredSecrets(
 export function decodeAgentConfigurationRecordV2(
 	input: unknown,
 ): AgentConfigurationRecordV2 {
+	const record = decodeAgentConfigurationRecord(input);
+	if (record.schemaVersion !== 2) invalidCommand();
+	return record;
+}
+
+export function decodeAgentConfigurationRecordV3(
+	input: unknown,
+): AgentConfigurationRecordV3 {
+	const record = decodeAgentConfigurationRecord(input);
+	if (record.schemaVersion !== 3) invalidCommand();
+	return record;
+}
+
+export function decodeAgentConfigurationRecord(
+	input: unknown,
+): AgentConfigurationRecord {
 	const header = snapshotAgentManagementDataObject(input);
 	const legacy = header.schemaVersion === 1;
 	const values = exactObject(input, [
@@ -164,7 +201,9 @@ export function decodeAgentConfigurationRecordV2(
 		"channelRevision",
 	]);
 	if (
-		(values.schemaVersion !== 1 && values.schemaVersion !== 2) ||
+		(values.schemaVersion !== 1 &&
+			values.schemaVersion !== 2 &&
+			values.schemaVersion !== 3) ||
 		!isText(values.agentId, idMaxBytes) ||
 		typeof values.revision !== "number" ||
 		!Number.isSafeInteger(values.revision) ||
@@ -178,7 +217,9 @@ export function decodeAgentConfigurationRecordV2(
 	const modelConfiguration =
 		values.modelConfiguration === null
 			? null
-			: parseStoredModel(values.modelConfiguration);
+			: values.schemaVersion === 3
+				? parseStoredKeylessModel(values.modelConfiguration)
+				: parseStoredModel(values.modelConfiguration);
 	if (legacy) {
 		const historicalActions = canonicalActions(values.actions);
 		if (!source.connectionEnabled && historicalActions.length > 0)
@@ -194,8 +235,7 @@ export function decodeAgentConfigurationRecordV2(
 		secrets,
 		channels,
 	});
-	return {
-		schemaVersion: 2,
+	const common = {
 		agentId: values.agentId,
 		revision: values.revision,
 		source,
@@ -205,11 +245,22 @@ export function decodeAgentConfigurationRecordV2(
 		channels,
 		channelRevision: values.channelRevision,
 	};
+
+	if (values.schemaVersion === 3) {
+		if (source.kind !== "standard" || modelConfiguration === null)
+			invalidCommand();
+		return { schemaVersion: 3, ...common, source, modelConfiguration };
+	}
+	return {
+		schemaVersion: 2,
+		...common,
+		modelConfiguration: modelConfiguration as AgentConfigurationModelV1 | null,
+	};
 }
 
 export function requireAdmittedConfigurationPolicy(
 	configuration: Pick<
-		AgentConfigurationRecordV2,
+		AgentConfigurationRecord,
 		"source" | "modelConfiguration" | "environment" | "secrets" | "channels"
 	>,
 ): void {
