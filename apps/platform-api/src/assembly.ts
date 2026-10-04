@@ -5,6 +5,7 @@ import {
 	createAgentConfigurationUseCaseV1,
 	createAgentDefaultRelayKeyUseCaseV1,
 	createAgentManagementV1,
+	createApplicationApiCredentialIssuerV1,
 	createApplicationFoundationUseCaseV1,
 	createApplicationMaterialGrantUseCaseV1,
 	createApplicationRegistrationUseCaseV1,
@@ -22,6 +23,7 @@ import {
 	PostgresAgentDefaultRelayKeyStoreV1,
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
+	PostgresApplicationApiCredentialIssuerStoreV1,
 	PostgresApplicationFoundationTransactionV1,
 	PostgresApplicationMaterialGrantStoreV1,
 	PostgresApplicationRegistrationStoreV1,
@@ -44,6 +46,7 @@ import {
 	assemblePlatformFilesV1,
 	type PlatformFileDeploymentV1,
 } from "./file-assembly.js";
+import { createApplicationCredentialProcessDeliveryV1 } from "./http/application-api-credential-routes.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import type { ConversationAuthorization } from "./http/conversation-routes.js";
 import type { DeploymentConfigurationRoutesDependencies } from "./http/deployment-configuration-routes.js";
@@ -71,6 +74,9 @@ interface AssemblyQueries {
 }
 
 export interface PlatformApiAssemblyInput {
+	readonly applicationCredentialDelivery?: Parameters<
+		typeof createApplicationCredentialProcessDeliveryV1
+	>[0];
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly files?: PlatformFileDeploymentV1;
 	readonly databaseUrl: string;
@@ -199,6 +205,22 @@ export function assemblePlatformApi(
 	});
 	const personalApiCredentialStore = new PostgresPersonalApiCredentialStoreV1({
 		databaseUrl: input.databaseUrl,
+	});
+	const applicationApiCredentialStore =
+		new PostgresApplicationApiCredentialIssuerStoreV1({
+			databaseUrl: input.databaseUrl,
+		});
+	const applicationApiCredentials = createApplicationApiCredentialIssuerV1({
+		store: applicationApiCredentialStore,
+		userDirectory: {
+			resolveUser: (userId) =>
+				resolveCurrentTaskUser(input.identity, userId, randomUUID()),
+		},
+		delivery: input.applicationCredentialDelivery
+			? createApplicationCredentialProcessDeliveryV1(
+					input.applicationCredentialDelivery,
+				)
+			: undefined,
 	});
 	const applicationMaterialGrantStore =
 		new PostgresApplicationMaterialGrantStoreV1({
@@ -521,6 +543,10 @@ export function assemblePlatformApi(
 			readAgentProjection: projections.readConfigurationAgentProjection,
 		},
 		applications: { identity: input.identity, applications },
+		applicationApiCredentials: {
+			identity: input.identity,
+			issuer: applicationApiCredentials,
+		},
 		applicationMaterialGrants: {
 			identity: input.identity,
 			grants: applicationMaterialGrants,
@@ -586,6 +612,7 @@ export function assemblePlatformApi(
 		personalApiCredentialStore,
 		applicationRegistrationStore,
 		applicationMaterialGrantStore,
+		applicationApiCredentialStore,
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
 		...(agentDefaultRelayKeyStore ? [agentDefaultRelayKeyStore] : []),
 	];

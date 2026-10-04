@@ -55,6 +55,7 @@ export * from "./agent-default-relay-key.js";
 export * from "./agent-management.js";
 export * from "./agent-runtime-presentation.js";
 export * from "./api-audit-identity.js";
+export * from "./application-api-credentials.js";
 export * from "./application-foundation.js";
 export * from "./application-material-grant.js";
 export * from "./application-registration.js";

@@ -1910,6 +1910,121 @@ export type DisableOwnApplicationV2Responses = {
 
 export type DisableOwnApplicationV2Response = DisableOwnApplicationV2Responses[keyof DisableOwnApplicationV2Responses];
 
+export type IssueOrRotateApplicationApiCredentialV2Data = {
+    body: {
+        expiresAt: string | null;
+        operation: 'issue';
+        recipient: {
+            principalId: string;
+            principalType: 'user' | 'application';
+        };
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+    } | {
+        credentialId: string;
+        expiresAt: string | null;
+        operation: 'rotate';
+        recipient: {
+            principalId: string;
+            principalType: 'user' | 'application';
+        };
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+    };
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}/credentials';
+};
+
+export type IssueOrRotateApplicationApiCredentialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type IssueOrRotateApplicationApiCredentialV2Error = IssueOrRotateApplicationApiCredentialV2Errors[keyof IssueOrRotateApplicationApiCredentialV2Errors];
+
+export type IssueOrRotateApplicationApiCredentialV2Responses = {
+    /**
+     * Original metadata and delivery status replayed
+     */
+    200: {
+        delivery: {
+            attemptId: string;
+            grantRevision: string;
+            recipient: {
+                principalId: string;
+                principalType: 'user' | 'application';
+            };
+            status: 'delivery_pending' | 'delivery_in_flight' | 'accepted' | 'failed' | 'unknown';
+        };
+        metadata: {
+            applicationId: string;
+            createdAt: string;
+            credentialId: string;
+            expiresAt: string | null;
+            lastUsedAt: string | null;
+            revokedAt: string | null;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+        };
+        replayed: boolean;
+    };
+    /**
+     * Credential committed; inspect delivery status
+     */
+    201: {
+        delivery: {
+            attemptId: string;
+            grantRevision: string;
+            recipient: {
+                principalId: string;
+                principalType: 'user' | 'application';
+            };
+            status: 'delivery_pending' | 'delivery_in_flight' | 'accepted' | 'failed' | 'unknown';
+        };
+        metadata: {
+            applicationId: string;
+            createdAt: string;
+            credentialId: string;
+            expiresAt: string | null;
+            lastUsedAt: string | null;
+            revokedAt: string | null;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+        };
+        replayed: boolean;
+    };
+};
+
+export type IssueOrRotateApplicationApiCredentialV2Response = IssueOrRotateApplicationApiCredentialV2Responses[keyof IssueOrRotateApplicationApiCredentialV2Responses];
+
 export type GrantApplicationMaterialV2Data = {
     body: {
         expectedRevision?: string;

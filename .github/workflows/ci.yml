@@ -8,6 +8,7 @@ run-name: >-
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
 
@@ -15,9 +16,47 @@ permissions:
   contents: read
   pull-requests: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  ci-exemption:
+    name: Check CI exemption
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.label.outputs.skip }}
+    steps:
+      - name: Read current CI exemption label
+        id: label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          skip=false
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            if ! skip=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+              --jq 'any(.labels[]; .name == "ci:skip")'); then
+              skip=false
+              echo '::warning::Could not read the CI exemption label; running normal checks.'
+            fi
+          fi
+          if [[ "$skip" == true ]]; then
+            echo 'CI and Workload kind are waived by the current ci:skip label; tests did not run. Issue and human validation gates still apply.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No CI exemption; normal checks apply.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   ci:
     name: CI
+    needs: ci-exemption
+    # Failure to read the label must run CI, never grant an exemption.
+    if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -523,6 +562,8 @@ jobs:
 
   workload-kind:
     name: Workload kind
+    needs: ci-exemption
+    if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -555,39 +596,3 @@ jobs:
           name: workload-host-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/workload-host-evidence
           if-no-files-found: warn
-
-  outcome:
-    name: Publish terminal outcome
-    needs: [ci, workload-kind]
-    if: always()
-    runs-on: ubuntu-24.04
-    timeout-minutes: 1
-    permissions: {}
-    steps:
-      - name: Publish terminal Job Summary
-        env:
-          SUMMARY_ACTION: ${{ github.event.action || github.event_name }}
-          SUMMARY_ATTEMPT: ""
-          SUMMARY_CYCLE: ""
-          SUMMARY_EVENT: ${{ github.event_name }}
-          SUMMARY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          SUMMARY_NEXT_OWNER: ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'repository-maintainer' || 'none' }}
-          SUMMARY_OPERATION: ci
-          SUMMARY_OUTCOME: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || contains(needs.*.result, 'success') && 'success' || 'skipped' }}
-          SUMMARY_TARGET: "${{ github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || 'main' }}"
-          SUMMARY_TARGET_URL: ${{ github.event_name == 'pull_request' && format('{0}/{1}/pull/{2}', github.server_url, github.repository, github.event.pull_request.number) || format('{0}/{1}/tree/{2}', github.server_url, github.repository, github.event.repository.default_branch) }}
-        shell: bash
-        run: |
-          {
-            echo "## Workflow terminal outcome"
-            echo
-            echo "- Target: [$SUMMARY_TARGET]($SUMMARY_TARGET_URL)"
-            echo "- Run: [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
-            echo "- Operation: \`$SUMMARY_OPERATION\`"
-            echo "- Event/action: \`$SUMMARY_EVENT\` / \`$SUMMARY_ACTION\`"
-            echo "- Head SHA: \`$SUMMARY_HEAD_SHA\`"
-            echo "- Cycle: ${SUMMARY_CYCLE:-N/A}"
-            echo "- Attempt: ${SUMMARY_ATTEMPT:-N/A}"
-            echo "- Terminal outcome: \`$SUMMARY_OUTCOME\`"
-            echo "- Next owner: \`$SUMMARY_NEXT_OWNER\`"
-          } >> "$GITHUB_STEP_SUMMARY"
