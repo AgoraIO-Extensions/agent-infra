@@ -62,7 +62,9 @@ it.each([1, 2])(
 					projection(d).properties.status = { type: "string" };
 				},
 				(d: typeof current) => {
-					delete d.paths[Object.keys(d.paths)[0]];
+					const [path] = Object.keys(d.paths);
+					if (!path) throw new Error("Expected a published contract path");
+					delete d.paths[path];
 				},
 				(d: typeof current) => {
 					d.components.securitySchemes = {};
