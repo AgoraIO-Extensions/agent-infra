@@ -262,7 +262,15 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 		});
 		const saved = await facts(f.config.agentId);
 		for (const [kind, rows] of Object.entries(saved))
-			expect(rows).toHaveLength(kind === "idempotency" ? 2 : 1);
+			expect(rows).toHaveLength(
+				kind === "idempotency" || kind === "conversationAudit" ? 2 : 1,
+			);
+		expect(
+			await sql`select action from platform.conversation_audit_events where agent_id=${f.config.agentId} order by action`,
+		).toEqual([
+			{ action: "conversation.message.accepted" },
+			{ action: "conversation.sandbox.allocated" },
+		]);
 		const versions = await sql<{ kind: string; transaction: string }[]>`
 			select 'receipt' as kind,r.xmin::text as transaction from platform.wecom_receipts r where r.id=${f.eventKey}
 			union all select 'conversation',c.xmin::text from platform.conversations c where c.agent_id=${f.config.agentId}
@@ -277,6 +285,7 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 			"audit",
 			"authority",
 			"conversation",
+			"conversation-audit",
 			"conversation-audit",
 			"execution",
 			"idempotency",

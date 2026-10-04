@@ -870,10 +870,16 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 				"conversations",
 				"conversation_executions",
 				"conversation_messages",
-				"outbox_items",
 				"task_authorization_records",
 			])
 				expect(firstFacts[table]?.count).toBe(1);
+			expect(firstFacts.outbox_items?.count).toBe(2);
+			expect(
+				await sql`select operation from platform.outbox_items order by operation`,
+			).toEqual([
+				{ operation: "conversation.sandbox.reconcile.v1" },
+				{ operation: "conversation.turn.submit.v1" },
+			]);
 			expect((await snapshot(task))?.execution).toMatchObject({
 				principal_type: "user",
 				actor_id: "user_alice",
