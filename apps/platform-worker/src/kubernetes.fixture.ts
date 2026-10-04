@@ -26,6 +26,7 @@ const workloadTestTlsAgents = [
 	"agent-acp",
 	"agent-pi",
 	"agent-cli",
+	"selector-host-agent",
 ];
 
 export const workloadTestPolicy: KubernetesWorkloadPolicyV1 = {

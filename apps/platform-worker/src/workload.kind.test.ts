@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -32,7 +33,10 @@ import {
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
-import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
+import {
+	createKubernetesRuntimeAdapterV1,
+	workloadResourceNameV1,
+} from "./kubernetes-runtime-adapter.js";
 import { createPlatformWorkloadWorkerV1 } from "./workload-worker.js";
 
 const execFile = promisify(execFileCallback);
@@ -95,6 +99,50 @@ function apply(object: unknown) {
 	);
 	if (result.status !== 0)
 		throw new Error(`Fixture apply failed: ${result.stderr}`);
+}
+async function applyRuntimeTlsSecret(agentId: string) {
+	const resourceName = workloadResourceNameV1(agentId);
+	const directory = await mkdtemp(join(tmpdir(), "agent-infra-kind-tls-"));
+	const keyPath = join(directory, "tls.key");
+	const certPath = join(directory, "tls.crt");
+	try {
+		await execFile("openssl", [
+			"req",
+			"-x509",
+			"-newkey",
+			"rsa:2048",
+			"-nodes",
+			"-keyout",
+			keyPath,
+			"-out",
+			certPath,
+			"-days",
+			"1",
+			"-subj",
+			`/CN=${resourceName}.${namespace}.svc`,
+			"-addext",
+			`subjectAltName=DNS:${resourceName}.${namespace}.svc,DNS:${resourceName}-probe.${namespace}.svc`,
+			"-addext",
+			"basicConstraints=critical,CA:FALSE",
+			"-addext",
+			"keyUsage=critical,digitalSignature,keyEncipherment",
+			"-addext",
+			"extendedKeyUsage=serverAuth",
+		]);
+		apply({
+			apiVersion: "v1",
+			kind: "Secret",
+			metadata: { name: `${resourceName}-tls`, namespace },
+			immutable: true,
+			type: "kubernetes.io/tls",
+			stringData: {
+				"tls.crt": await readFile(certPath, "utf8"),
+				"tls.key": await readFile(keyPath, "utf8"),
+			},
+		});
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
 }
 async function eventually<T>(
 	read: () => Promise<T>,
@@ -340,6 +388,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				expect(tokenBytes.every((byte) => byte >= 0x20 && byte <= 0x7e)).toBe(
 					true,
 				);
+				await applyRuntimeTlsSecret(seed.agentId);
 				let probeCalls = 0;
 				const rejectProbe = async () => {
 					probeCalls++;
