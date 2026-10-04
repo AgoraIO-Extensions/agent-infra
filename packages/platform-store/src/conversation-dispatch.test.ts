@@ -2778,6 +2778,22 @@ describe("durable generation isolation in the existing dispatch loop", () => {
 
 	it("survives restart and two Workers with the same tombstone and rolls back every confirmation write when audit fails", async () => {
 		const work = await seedIsolation();
+		const resourceItemId = `conversation:sandbox:${work.conversationId}:1`;
+		await client`insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, request_id, status, lease_owner, lease_expires_at)
+			values (${resourceItemId}, 'conversation', ${work.conversationId}, 'conversation.sandbox.reconcile.v1',
+			${client.json({ schemaVersion: 1, conversationId: work.conversationId, sessionGeneration: 1 })}, 'resource-trace', 'resource-request',
+			'processing', 'old-resource-worker', clock_timestamp() + interval '1 minute')`;
+		const resourceState = async () => ({
+			allocation: (
+				await client`select sandbox_id, workspace_scope, session_generation::int as generation,
+				resource_fence::int as fence, status, resource_policy, resource_observation
+				from platform.session_sandbox_allocations where conversation_id = ${work.conversationId}`
+			)[0],
+			outbox: (
+				await client`select status, lease_owner, lease_expires_at from platform.outbox_items where id = ${resourceItemId}`
+			)[0],
+		});
+		const resourceBefore = await resourceState();
 		const supplement = await seedSupplement(work);
 		await seedStop(work);
 		const first = await claim(work.itemId, "first");
@@ -2834,6 +2850,7 @@ describe("durable generation isolation in the existing dispatch loop", () => {
 				isolation_status: "pending",
 				execution_status: "unknown",
 			});
+			expect(await resourceState()).toEqual(resourceBefore);
 			expect(
 				(
 					await client`select status from platform.conversation_messages where message_id = ${supplement}`
@@ -2843,6 +2860,18 @@ describe("durable generation isolation in the existing dispatch loop", () => {
 				"drop trigger isolation_confirmation_failure on platform.audit_events",
 			);
 			expect(await store.confirmGenerationIsolation(confirmation)).toBe(true);
+			expect(await resourceState()).toEqual({
+				allocation: {
+					...resourceBefore.allocation,
+					generation: 2,
+					fence: Number(resourceBefore.allocation?.fence) + 1,
+					status: "unavailable",
+				},
+				outbox: { status: "failed", lease_owner: null, lease_expires_at: null },
+			});
+			const resourceAfter = await resourceState();
+			expect(await store.confirmGenerationIsolation(confirmation)).toBe(false);
+			expect(await resourceState()).toEqual(resourceAfter);
 			expect(await isolationState(work)).toMatchObject({
 				generation: 2,
 				isolation_status: "confirmed",

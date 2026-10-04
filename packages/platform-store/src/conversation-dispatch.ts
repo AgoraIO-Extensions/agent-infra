@@ -532,13 +532,22 @@ export class PostgresConversationDispatchStoreV1
       `;
 			const rebound = await transaction<{ sandbox_id: string }[]>`
 				update platform.session_sandbox_allocations
-				set session_generation = ${plan.nextGeneration}, status = 'unavailable', updated_at = clock_timestamp()
+				set session_generation = ${plan.nextGeneration}, resource_fence = resource_fence + 1,
+					status = 'unavailable', updated_at = clock_timestamp()
 				where conversation_id = ${claim.conversationId} and sandbox_id = ${claim.sandbox?.sandboxId ?? null}
 					and session_generation = ${claim.sessionGeneration}
 				returning sandbox_id
 			`;
 			if (rebound.length !== 1)
 				throw new Error("Sandbox generation binding changed");
+			// The confirmed Runtime barrier invalidates the source resource lease too.
+			// Retain its identities/PVC as evidence; it does not prove resource absence.
+			await transaction`update platform.outbox_items
+				set status = 'failed', lease_owner = null, lease_expires_at = null, updated_at = clock_timestamp()
+				where scope_type = 'conversation' and scope_id = ${claim.conversationId}
+					and operation = 'conversation.sandbox.reconcile.v1'
+					and payload->>'sessionGeneration' = ${String(claim.sessionGeneration)}
+					and status in ('pending', 'retry_scheduled', 'processing')`;
 			await transaction`update platform.conversation_generation_tombstones set status = 'confirmed', confirmed_at = clock_timestamp() where operation_id = ${isolation.operation_id}`;
 			await transaction`
         insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
