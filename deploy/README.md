@@ -167,7 +167,7 @@ Worker 不从 API RPC 获取期望状态，也不加载 Runtime Driver。
 才记录创建失败。Secret 明文只在 Worker 解密和 Kubernetes Secret 写入期间存在。
 
 Agent 默认拒绝全部 egress，Profile 不接受 Owner 提交的任意网络规则。唯一受控出站的
-交付与验收见[阶段安排 #150](https://github.com/AgoraIO-Extensions/agent-infra/issues/150)，当前
+交付与验收见[阶段安排 #144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144)，当前
 Workload 调谐不开放直接 DNS 或可选代理出站，也不宣称完成外部模型与 Connection 出站能力。
 
 独立的生命周期与网络测试使用 kind v0.30.0、Kubernetes v1.33.4 和 Calico v3.30.3：

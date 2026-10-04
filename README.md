@@ -25,7 +25,7 @@
 
 仓库已进入 M1 领域功能实现阶段，已交付 Platform 管理、配置、Conversation 持久化与
 HTTP/SSE、RuntimeHost 和 Codex Driver 组件。主系统本地整装、真实 GitHub Pilot 和完整
-M1 上线是独立验收层次，当前仍有未完成门禁，见 [阶段验收与交付边界 #150](https://github.com/AgoraIO-Extensions/agent-infra/issues/150)。
+M1 上线是独立验收层次，当前仍有未完成门禁，见 [阶段验收与交付边界 #144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144)。
 
 | 部署单元 | 目录 | 当前能力 |
 | --- | --- | --- |
