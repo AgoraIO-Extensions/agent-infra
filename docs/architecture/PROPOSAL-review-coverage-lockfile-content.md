@@ -20,11 +20,15 @@ Primary：[Issue #1304](https://github.com/AgoraIO-Extensions/agent-infra/issues
 
 ## 推荐决策与精确改动面
 
-推荐先向上游提交并等待官方 PR-Agent release，目标改动只在 `pr_agent/git_providers/plain_diff_provider.py` 的 `PlainDiffGitProvider.get_diff_files()`：解析 `plain_diff.content` 后保留每一个 `FilePatchInfo`，不得再调用 GitHub provider 的 `is_valid_file`/`bad_extensions` 过滤；继续执行路径安全检查、patch 解析、hunk 规范化和 patch-only 模式。这样只修复 plain-diff 内容覆盖，不改变 GitHub provider 的产品策略。
+当前 pinned image 的 source layer `sha256:68a027dc7ba9a398a9ef655df14122cab846531270b81536ee9008c410a7bd7a` 已回读 `language_handler.py`（SHA-256 `37453385f735cc3e14cbe531a5768e82ad0ce9bd583e97652adbe32cb4d94637`），其中 `is_valid_file()` 硬编码拒绝 root/nested `pnpm-lock.yaml`。固定 `v0.47.0` 上游原函数链进一步显示：`PlainDiffGitProvider.get_diff_files()`（`plain_diff_provider.py:48-91`）先解析并保留 `FilePatchInfo`；`pr_processing.py:166-178` 随后调用 `sort_files_by_main_languages()`，`language_handler.py:110` 再无条件调用 `filter_bad_extensions()`。因此 root/nested lockfile 在进入 `pr_generate_extended_diff()` 前被丢弃，lockfile-only 的模型 diff 为 0 bytes；mixed diff 只留下普通源码文件。此前只改 provider 方法的边界不完整。当前 pinned image 的后续模块未被 Docker daemon 读取，不能把上游静态链冒充为该 image 的完整运行证据。
 
-若上游 release 在本票期限内不可用，备选是构建一个明确标注为 **derived PR-Agent runtime** 的短期镜像，只携带上述单文件补丁，生成并固定新的 OCI image digest。workflow 仅替换 image pin，保留现有 `--diff-file`、scope receipt、Publisher、Coverage 和 fail-closed 判据；Review receipt 与 Coverage 必须把 `provider=plain-diff-derived`、source commit、patch SHA-256、image digest 写入同一身份记录。该路径不能声称“官方 provider conformance”，必须在架构 Spec §7.3 的 provider 资格条款增加“经批准的 derived runtime 需披露 source/patch/digest，且不得转移官方 provider 证据”的明确例外，并以 ADR 记录回退期限；PRD 不需要改动。
+推荐先向上游提交并等待官方 PR-Agent release，目标是一个最小的 plain-diff 保留能力：为 `sort_files_by_main_languages()` 增加显式的 `preserve_all_files`/等价 provider capability，默认保持现有过滤；在 `get_pr_diff()`、`get_pr_diff_multiple_patchs()` 及第三个 multi-diff 调用点传入该 capability，使 plain-diff 保留每一个已解析的 `FilePatchInfo`，但继续执行路径安全检查、patch 解析、hunk 规范化和 patch-only 模式。不得修改 GitHub provider 的 `is_valid_file`/`bad_extensions` 产品策略。
+
+若上游 release 在本票期限内不可用，备选是构建一个明确标注为 **derived PR-Agent runtime** 的短期镜像，只携带上述最小多文件补丁，生成并固定新的 OCI image digest。此路径不能继续声称使用“官方 provider runtime”：workflow 必须显式使用 `provider=plain-diff-derived`，并把 source commit、patch SHA-256、image digest 写入同一身份记录；`--diff-file`、scope receipt、Publisher、Coverage 和 fail-closed 判据保持不变。实现前必须在架构 Spec §7.3 的 provider 资格条款增加该披露例外，并以 ADR 记录回退期限；PRD 不需要改动。
 
 没有已验证的官方配置开关可以关闭 `pnpm-lock.yaml` 过滤；`--diff-file` 已存在且本次失败证明仅启用该入口不足。替代整个 provider 或接受 filtered-filename metadata 都扩大了信任边界，列为拒绝方案。
+
+外部 handoff 中的 native source trace 直接加载 pinned image 回读的 `language_handler.py` 函数（source SHA-256 `37453385f735cc3e14cbe531a5768e82ad0ce9bd583e97652adbe32cb4d94637`）：`pnpm-lock.yaml` 与 `nested/pnpm-lock.yaml` 的 `is_valid_file` 均为 `False`，排序/过滤后 lockfile-only 保留 0 个文件，mixed 仅保留 `src/qs.ts`，对应模型输入分别为 0 和 21 bytes。该 trace 不导入或修改仓库代码，也不外发模型请求；上游 `v0.47.0` 的 `PlainDiffGitProvider` 与 `pr_processing` 只作为静态调用链证据。
 
 实现后若任一身份、字节或输出校验失败，回退到当前固定官方 image 并让 Coverage 保持失败；不得回退到允许合并的 waiver。负例必须覆盖 root/nested lockfile-only、mixed diff、空文件、缺失文件、截断、非法 unified diff、路径穿越、旧 head、错误 run/attempt、provider/image/patch SHA 不匹配，以及模型未调用和 receipt 缺失。
 
@@ -33,13 +37,13 @@ Primary：[Issue #1304](https://github.com/AgoraIO-Extensions/agent-infra/issues
 在完成 plain-diff 故障诊断后，只接受以下两类修复之一：
 
 - 固定版本的官方 plain-diff/local-diff 修复；或
-- 经正式批准的最小仓库侧修复，端到端证明现有输入文件、container 路径、CLI 解析、provider 模式、输出传输和 receipt 绑定均未丢失。
+- 经正式批准的最小 derived runtime 修复，端到端证明输入文件、container 路径、CLI 解析、provider 模式、输出传输和 receipt 绑定均未丢失，并显式披露其非官方身份。
 
 任何获批修复都必须：
 
 1. 获取 workflow 已认证的 exact head 与 merge-base 对应的 immutable GitHub PR diff；
 2. 在不改名路径、不改 hunk 的前提下，将保持字节不变的 unified diff 写入短生命周期 runner 文件；
-3. 保留现有固定的官方 PR-Agent runtime 和 `--diff-file` plain-diff 入口（或采用经过评审的上游等价修复）；
+3. 官方修复路径保留固定的官方 PR-Agent runtime 和 `--diff-file` 入口；derived 路径必须固定新的 digest 并使用 `plain-diff-derived` provider identity，不得混称 official conformance；
 4. 用相同的 PR、head、run、attempt、merge-base、diff SHA-256、provider pin 和 model identity 记录 native review 结果及 token decision log；
 5. 通过现有受信 Publisher 发布 findings，并原样使用现有专用 Coverage publisher；
 6. 在 diff 为空、文件缺失或截断、CLI 输出 malformed、receipt identity 不一致，或 head/run/attempt/provider 不匹配时 fail closed。
