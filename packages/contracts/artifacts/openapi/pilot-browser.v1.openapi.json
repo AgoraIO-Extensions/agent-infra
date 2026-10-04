@@ -1800,6 +1800,9 @@
               }
             ]
           },
+          "sandboxReady": {
+            "type": "boolean"
+          },
           "schemaVersion": {
             "const": 1,
             "type": "number"

@@ -292,6 +292,7 @@ function conversationProjection(
 		agentId: input.agentId,
 		title: null,
 		status: effective.conversation.status,
+		sandboxReady: effective.conversation.sandboxReady === true,
 		selectedModelOptionId: effective.conversation.selectedModelOptionId,
 		selectedReasoningLevel: effective.conversation.selectedReasoningLevel,
 		lastConversationCursor: input.lastConversationCursor,

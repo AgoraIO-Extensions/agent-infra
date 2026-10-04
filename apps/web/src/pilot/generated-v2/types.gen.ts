@@ -293,6 +293,7 @@ export type ConversationDetailProjectionV2 = {
         conversationId: string;
         createdAt: string;
         lastConversationCursor: string | null;
+        sandboxReady?: boolean;
         schemaVersion: 1;
         selectedModelOptionId: string | null;
         selectedReasoningLevel: string | null;
@@ -2399,6 +2400,7 @@ export type ListRecentPersonalConversationsV2Responses = {
             conversationId: string;
             createdAt: string;
             lastConversationCursor: string | null;
+            sandboxReady?: boolean;
             schemaVersion: 1;
             selectedModelOptionId: string | null;
             selectedReasoningLevel: string | null;

@@ -377,6 +377,7 @@ export const ConversationProjectionV1Schema = z.strictObject({
 	agentId: OpaqueIdV1Schema,
 	title: nonEmptyString().nullable(),
 	status: z.enum(["ready", "active", "unavailable"]),
+	sandboxReady: z.boolean().optional(),
 	selectedModelOptionId: OpaqueIdV1Schema.nullable(),
 	selectedReasoningLevel: nonEmptyString().nullable(),
 	lastConversationCursor: OpaqueCursorV1Schema.nullable(),

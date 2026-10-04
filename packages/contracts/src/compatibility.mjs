@@ -1206,8 +1206,49 @@ function isFileAuthorityOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1250 adds only server-resolved readiness on the existing conversation projections.
+function sessionSandboxReadinessSchemas(document) {
+	return [
+		document.components?.schemas?.ConversationProjectionV1,
+		document.components?.schemas?.ConversationDetailProjectionV2?.properties
+			?.conversation,
+		document.paths?.["/api/v2/me/conversations/recent"]?.get?.responses?.["200"]
+			?.content?.["application/json"]?.schema?.properties?.items?.items,
+	].filter(Boolean);
+}
+
+function withoutSessionSandboxReadiness(document) {
+	const normalized = structuredClone(document);
+	for (const schema of sessionSandboxReadinessSchemas(normalized)) {
+		if (
+			sameValue(schema.properties?.sandboxReady, { type: "boolean" }) &&
+			!schema.required?.includes("sandboxReady")
+		)
+			delete schema.properties.sandboxReady;
+	}
+	return normalized;
+}
+
+function isSessionSandboxReadinessAddition(previous, current) {
+	const before = sessionSandboxReadinessSchemas(previous);
+	const after = sessionSandboxReadinessSchemas(current);
+	return (
+		before.length > 0 &&
+		before.length === after.length &&
+		before.every((schema) => schema.properties?.sandboxReady === undefined) &&
+		after.every(
+			(schema) =>
+				sameValue(schema.properties?.sandboxReady, { type: "boolean" }) &&
+				!schema.required?.includes("sandboxReady"),
+		) &&
+		findBreakingChanges(previous, withoutSessionSandboxReadiness(current))
+			.length === 0
+	);
+}
+
 // #508 adds V2 operation history/SSE without altering published management/audit.
 function isConversationFactsV2OpenApiAddition(previous, current) {
+	const pinned = withoutSessionSandboxReadiness(current);
 	const paths = [
 		"/api/v2/conversations/{conversationId}",
 		"/api/v2/conversations/{conversationId}/events",
@@ -1237,10 +1278,10 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		return false;
 	const addition = {
 		paths: Object.fromEntries(
-			paths.map((path) => [path, current.paths?.[path]]),
+			paths.map((path) => [path, pinned.paths?.[path]]),
 		),
 		schemas: Object.fromEntries(
-			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+			schemas.map((name) => [name, pinned.components?.schemas?.[name]]),
 		),
 	};
 	if (
@@ -1281,7 +1322,10 @@ function isConversationSseV2NotFoundAddition(previous, current) {
 function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/me/conversations/recent";
 	const scheme = current.components?.securitySchemes?.PlatformSession;
-	const addition = { path: current.paths?.[path], securityScheme: scheme };
+	const addition = {
+		path: withoutSessionSandboxReadiness(current).paths?.[path],
+		securityScheme: scheme,
+	};
 	if (
 		previous.paths?.[path] !== undefined ||
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
@@ -1724,6 +1768,7 @@ function findBreakingChanges(previous, current) {
 	if (previous.openapi !== undefined) {
 		if (
 			!sameValue(previous, current) &&
+			!isSessionSandboxReadinessAddition(previous, current) &&
 			!isConnectionCapabilityOpenApiAddition(previous, current) &&
 			!isKnownCredentialAuditSubjectAddition(previous, current) &&
 			!isPersonalCredentialNarrowOpenApiAddition(previous, current) &&

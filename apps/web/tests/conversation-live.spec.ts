@@ -137,6 +137,7 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 		agentId,
 		title: "实时验收会话",
 		status: "ready",
+		sandboxReady: true,
 		selectedModelOptionId: null,
 		selectedReasoningLevel: null,
 		lastConversationCursor: null,
@@ -913,6 +914,7 @@ test("regenerates a terminal answer and opens its execution details", async ({
 		conversation: {
 			...history(conversationId, []).conversation,
 			status: "ready",
+			sandboxReady: true,
 			selectedModelOptionId: "model-primary",
 			selectedReasoningLevel: "medium",
 		},
@@ -1090,6 +1092,7 @@ for (const source of ["standard", "custom"] as const) {
 							conversation: {
 								...history(conversationId, []).conversation,
 								status: "ready",
+								sandboxReady: true,
 								selectedModelOptionId: "model-secondary",
 								selectedReasoningLevel: "high",
 								lastConversationCursor: accepted
@@ -1269,3 +1272,67 @@ for (const source of ["standard", "custom"] as const) {
 		});
 	}
 }
+
+test("Sandbox readiness refresh preserves read-only history and never submits", async ({
+	page,
+}, testInfo) => {
+	let ready = false;
+	let posts = 0;
+	await keepConversationStreamOpen(page);
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		const path = new URL(request.url()).pathname;
+		if (request.method() === "POST") posts += 1;
+		if (path.endsWith("/session"))
+			return route.fulfill({ json: ownerSession() });
+		if (path === `/api/v2/agents/${agentId}`)
+			return route.fulfill({ json: activeAgent() });
+		if (path === `/api/v2/conversations/${conversationId}`)
+			return route.fulfill({
+				json: {
+					...history(conversationId, []),
+					conversation: {
+						...history(conversationId, []).conversation,
+						status: "ready",
+						sandboxReady: ready,
+					},
+				},
+			});
+		if (path.endsWith("/events"))
+			return route.fulfill({
+				contentType: "text/event-stream",
+				body: ": heartbeat\n\n",
+			});
+		return route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+	await page.goto(`/chat/${agentId}/${conversationId}`);
+	const input = page.getByRole("textbox", { name: "消息" });
+	await expect(input).toHaveAttribute("readonly", "");
+	await expect(
+		page.getByRole("button", { name: "发送", exact: true }),
+	).toBeDisabled();
+	await expect(
+		page.getByText("当前会话运行环境尚未就绪，可查看历史，暂不能发送消息。"),
+	).toBeVisible();
+	await page.screenshot({
+		path: testInfo.outputPath("sandbox-unready.png"),
+		fullPage: true,
+	});
+	ready = true;
+	await page.getByRole("button", { name: "刷新运行状态" }).click();
+	await expect(input).toBeEditable();
+	await input.fill("仅保留草稿，不自动提交");
+	await expect(
+		page.getByRole("button", { name: "发送", exact: true }),
+	).toBeEnabled();
+	expect(posts).toBe(0);
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= window.innerWidth,
+		),
+	).toBe(true);
+	await page.screenshot({
+		path: testInfo.outputPath("sandbox-ready-draft.png"),
+		fullPage: true,
+	});
+});

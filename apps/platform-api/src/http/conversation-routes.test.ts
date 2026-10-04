@@ -114,6 +114,7 @@ function dependencies(
 					actorId: identity.userId,
 					channelId: "web",
 					status: conversation.status,
+					sandboxReady: false,
 					sessionGeneration: 1,
 					hostSessionRef: null,
 					authorizationRevision: identity.authorizationRevision,
@@ -227,6 +228,7 @@ describe("Conversation HTTP routes", () => {
 		const executionBody = ExecutionDetailProjectionV2Schema.parse(
 			await execution.json(),
 		);
+		expect(detailBody.conversation.sandboxReady).toBe(false);
 		expect(detailBody.events).toHaveLength(1);
 		expect(executionBody.events).toHaveLength(1);
 	});

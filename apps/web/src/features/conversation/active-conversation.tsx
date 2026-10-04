@@ -181,6 +181,8 @@ export function ActiveConversation({
 		denied ||
 		conversation?.status === "unavailable" ||
 		timeline.status !== "ready";
+	const sandboxUnavailable = conversation?.sandboxReady !== true;
+	const businessBlocked = blocked || sandboxUnavailable;
 	const selectionDirty =
 		(modelId !== undefined &&
 			modelId !== conversation?.selectedModelOptionId) ||
@@ -188,7 +190,7 @@ export function ActiveConversation({
 			reasoning !== conversation?.selectedReasoningLevel);
 	const commandLocked = command.isPending || command.result?.kind === "unknown";
 	const canSend =
-		!blocked &&
+		!businessBlocked &&
 		!commandLocked &&
 		!selectionDirty &&
 		!uncertainExecution &&
@@ -203,7 +205,7 @@ export function ActiveConversation({
 		}
 	}
 	function regenerate(messageId: string) {
-		if (blocked || commandLocked || active) return;
+		if (businessBlocked || commandLocked || active) return;
 		if (command.regenerate(messageId)) {
 			action.current = "regenerate";
 			setNotice("");
@@ -354,7 +356,7 @@ export function ActiveConversation({
 						events={timeline.events}
 						onExecution={openExecution}
 						onRegenerate={regenerate}
-						canRegenerate={!blocked && !commandLocked && !active}
+						canRegenerate={!businessBlocked && !commandLocked && !active}
 						onResend={(text) => {
 							setDraft(text);
 							setNotice("请确认草稿后手动发送；不会自动提交。");
@@ -379,6 +381,18 @@ export function ActiveConversation({
 				)}
 				{active && !agent.capabilities.supplementaryInstruction && (
 					<p role="status">当前回复仍在处理，不支持补充指令。草稿会保留。</p>
+				)}
+				{conversation && sandboxUnavailable && (
+					<p role="status" className="text-sm">
+						当前会话运行环境尚未就绪，可查看历史，暂不能发送消息。
+						<Button
+							variant="ghost"
+							disabled={timeline.status === "loading"}
+							onClick={() => void reader.refresh()}
+						>
+							刷新运行状态
+						</Button>
+					</p>
 				)}
 				{visibleNotice && (
 					<p role="status" className="text-sm">
@@ -421,6 +435,7 @@ export function ActiveConversation({
 						ref={composer}
 						id={composerId}
 						rows={3}
+						readOnly={sandboxUnavailable}
 						value={draft}
 						disabled={blocked || commandLocked}
 						placeholder={`给 ${agent.name} 发一条消息…`}

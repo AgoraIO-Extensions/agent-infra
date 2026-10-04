@@ -35,6 +35,7 @@ export function history(
 			agentId: "agent-1",
 			title: "Test conversation",
 			status: "active",
+			sandboxReady: true,
 			selectedModelOptionId: null,
 			selectedReasoningLevel: null,
 			lastConversationCursor: events.at(-1)?.conversationCursor ?? null,

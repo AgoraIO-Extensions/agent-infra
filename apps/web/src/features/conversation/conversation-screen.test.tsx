@@ -150,6 +150,63 @@ function userMessage(text = "Private question") {
 }
 
 describe("functional conversation screen", () => {
+	it("keeps an unready Sandbox read-only and refreshes readiness without resending", async () => {
+		let ready = false;
+		const { requests } = setup((request) => {
+			if (
+				new URL(request.url).pathname === "/api/v2/conversations/conversation-1"
+			)
+				return Response.json({
+					...history("conversation-1", []),
+					conversation: {
+						...history().conversation,
+						status: "ready",
+						sandboxReady: ready,
+					},
+				});
+		});
+		const input = await composer();
+		await screen.findByText(
+			"当前会话运行环境尚未就绪，可查看历史，暂不能发送消息。",
+		);
+		expect(input.readOnly).toBe(true);
+		fireEvent.change(input, {
+			target: { value: "draft must not auto-submit" },
+		});
+		expect(
+			(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(true);
+		ready = true;
+		fireEvent.click(screen.getByRole("button", { name: "刷新运行状态" }));
+		await waitFor(() => expect(input.readOnly).toBe(false));
+		expect(input.value).toBe("draft must not auto-submit");
+		expect(
+			requests.filter((request) => request.method === "POST"),
+		).toHaveLength(0);
+	});
+	it("retains history and original stop while its Sandbox is unready", async () => {
+		const { requests } = setup((request) => {
+			if (request.method === "POST") return receipt();
+			if (
+				new URL(request.url).pathname === "/api/v2/conversations/conversation-1"
+			)
+				return Response.json({
+					...history("conversation-1", []),
+					conversation: { ...history().conversation, sandboxReady: false },
+					messages: [userMessage()],
+				});
+		});
+		await screen.findByText("Private question");
+		const stop = await screen.findByRole("button", { name: "停止回复" });
+		expect((stop as HTMLButtonElement).disabled).toBe(false);
+		fireEvent.click(stop);
+		await screen.findByRole("button", { name: "正在停止" });
+		expect(
+			await requests.find((request) => request.method === "POST")?.json(),
+		).toEqual({ schemaVersion: 1, targetExecutionId: "execution-1" });
+	});
+
 	it.each(["stream", "snapshot"] as const)(
 		"clears waiting and refreshes recent history when completion arrives via %s",
 		async (source) => {
