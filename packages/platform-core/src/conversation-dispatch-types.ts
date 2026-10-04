@@ -1,3 +1,4 @@
+import type { ConversationExecutionSourceV1 } from "./conversation-execution-types.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
 
@@ -8,6 +9,7 @@ export type ConversationDispatchOperationV1 =
 	| "conversation.turn.stop.v1";
 
 export type ConversationDispatchExecutionStatusV1 =
+	| "waiting"
 	| "submitted"
 	| "processing"
 	| "unknown"
@@ -96,9 +98,12 @@ export interface ConversationMetadataRecoveryV1 {
 }
 
 export interface ConversationDispatchClaimV1 {
+	/** Durable Execution namespace; absence preserves only historical user claims. */
+	readonly principal?: import("./task-authorization.js").TaskPrincipalV1;
 	readonly metadataRecovery?: ConversationMetadataRecoveryV1;
 	readonly generationIsolation?: ConversationGenerationIsolationV1;
 	readonly schemaVersion: 1;
+	readonly taskWaitOrder?: number;
 	readonly itemId: string;
 	readonly leaseOwner: string;
 	readonly operation: ConversationDispatchOperationV1;
@@ -119,6 +124,13 @@ export interface ConversationDispatchClaimV1 {
 	readonly modelConfigurationRevision: number | null;
 	readonly modelOptionId: string | null;
 	readonly reasoningLevel: string | null;
+	readonly executionSource?: ConversationExecutionSourceV1;
+	readonly relayKeyBinding?: {
+		readonly purpose: "personal" | "agent-default";
+		readonly subjectId: string;
+		readonly keyId: string;
+		readonly keyVersion: number;
+	};
 	readonly hostSessionRef: string | null;
 	readonly runtimeCursor: string | null;
 	/** Derived by the Store from the original committed Runtime terminal event. */

@@ -7,7 +7,11 @@ import {
 } from "./conversation-dispatch.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import {
+	type CurrentTaskApiUseGrantV1,
+	type CurrentTaskApplicationV1,
 	type CurrentTaskUserV1,
+	isTaskApiChannelV1,
+	isTaskApplicationAuthorizationCurrentV1,
 	isTaskAuthorizationCurrentV1,
 	parseTaskAuthorizationBoundaryV1,
 	type TaskAuthorizationBoundaryV1,
@@ -102,6 +106,16 @@ interface Options {
 		userId: string,
 		signal: AbortSignal,
 	): Promise<CurrentTaskUserV1 | null>;
+	resolveCurrentApplication?(
+		applicationId: string,
+		agentId: string,
+		signal: AbortSignal,
+	): Promise<CurrentTaskApplicationV1 | null>;
+	resolveCurrentApiUseGrant?(
+		principal: TaskPrincipalV1,
+		agentId: string,
+		signal: AbortSignal,
+	): Promise<CurrentTaskApiUseGrantV1 | null>;
 	recordControl(
 		input: {
 			readonly executionId: string;
@@ -195,7 +209,6 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 		}
 		if (
 			record.executionId !== claim.executionId ||
-			boundary.principal.kind !== "user" ||
 			boundary.principal.id !== claim.actorId ||
 			boundary.agentId !== claim.agentId ||
 			boundary.channelId !== claim.channelId ||
@@ -371,23 +384,57 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 				authority: await control(context, "authorization_revoked", signal),
 				record,
 			};
-		const user = await options.resolveCurrentUser(
-			record.boundary.principal.id,
-			signal,
-		);
+		let application: CurrentTaskApplicationV1 | null = null;
+		let user: CurrentTaskUserV1 | null = null;
+		let useGrant: CurrentTaskApiUseGrantV1 | null = null;
+		if (record.boundary.principal.kind === "application") {
+			if (!options.resolveCurrentApplication) unavailable();
+			application = await options.resolveCurrentApplication(
+				record.boundary.principal.id,
+				record.boundary.agentId,
+				signal,
+			);
+		} else {
+			user = await options.resolveCurrentUser(
+				record.boundary.principal.id,
+				signal,
+			);
+			if (
+				isTaskApiChannelV1(record.boundary.channelId, record.boundary.principal)
+			) {
+				if (!options.resolveCurrentApiUseGrant) unavailable();
+				useGrant = await options.resolveCurrentApiUseGrant(
+					record.boundary.principal,
+					record.boundary.agentId,
+					signal,
+				);
+			}
+		}
 		const latest = await recordFor(context.claim, signal);
-		if (latest.authorizationRecordId !== context.authorizationRecordId)
+		if (
+			latest.authorizationRecordId !== context.authorizationRecordId ||
+			latest.boundary.principal.kind !== context.principal.kind ||
+			latest.boundary.principal.id !== context.principal.id
+		)
 			denied("TASK_AUTHORIZATION_BINDING_INVALID");
 		if (
 			latest.revokedAt ||
 			(options.channelAuthorizationCurrent &&
 				!(await options.channelAuthorizationCurrent(latest, signal))) ||
-			!user ||
-			!isTaskAuthorizationCurrentV1({
-				boundary: latest.boundary,
-				user,
-				agent: latest.agent,
-			})
+			!(latest.boundary.principal.kind === "application"
+				? application &&
+					isTaskApplicationAuthorizationCurrentV1({
+						boundary: latest.boundary,
+						application,
+						agent: latest.agent,
+					})
+				: user &&
+					isTaskAuthorizationCurrentV1({
+						boundary: latest.boundary,
+						user,
+						useGrant,
+						agent: latest.agent,
+					}))
 		)
 			return {
 				authority: await control(context, "authorization_revoked", signal),

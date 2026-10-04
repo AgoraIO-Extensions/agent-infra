@@ -3,6 +3,7 @@ import {
 	createWecomAuthorizationV1,
 	createWecomChannelV1,
 	type WecomChannelStorePortV1,
+	type WecomConnectionFenceV1,
 	type WecomIdentityPortV1,
 	type WecomMessageV1,
 	wecomChannelIdV1,
@@ -20,6 +21,16 @@ import { PostgresWecomChannelV1 } from "./wecom-channel.ts";
 let db: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
 let store: PostgresWecomChannelV1;
+const fixtureUserDirectory = {
+	resolveUser: async (userId: string) => ({
+		schemaVersion: 1 as const,
+		userId,
+		accountStatus: "active" as const,
+		organizationIds: ["controlled-org"],
+		authorizationRevision: "identity-1",
+	}),
+};
+
 const message: WecomMessageV1 = {
 	providerId: "provider-1",
 	agentId: "wecom_agent",
@@ -72,7 +83,7 @@ const configuration = {
 	channelRevision: "channels_1",
 };
 function channel(target = store) {
-	return createWecomChannelV1({
+	const base = createWecomChannelV1({
 		store: target,
 		authorization: {
 			async authorize(scope) {
@@ -103,12 +114,35 @@ function channel(target = store) {
 			},
 		},
 	});
+	return {
+		...base,
+		async receive(
+			input: WecomMessageV1,
+			connectionFence?: WecomConnectionFenceV1,
+			signal?: AbortSignal,
+		) {
+			const keyId = `fixture-key:personal:${input.senderId}`;
+			await sql`insert into platform.relay_key_subjects
+				(purpose, subject_id, last_version, current_version)
+				values ('personal', ${input.senderId}, 1, 1)
+				on conflict (purpose, subject_id) do nothing`;
+			await sql`insert into platform.relay_key_versions
+				(purpose, subject_id, key_version, key_id, ciphertext)
+				values ('personal', ${input.senderId}, 1, ${keyId},
+					${sql.json({ purpose: "personal", subjectId: input.senderId, keyId, keyVersion: 1 })})
+				on conflict (purpose, subject_id, key_version) do nothing`;
+			return base.receive(input, connectionFence, signal);
+		},
+	};
 }
 beforeAll(async () => {
 	db = await startPostgresTestDatabase("wecom-channel");
 	await migratePlatformDatabase(db);
 	sql = postgres(db.databaseUrl);
-	store = new PostgresWecomChannelV1(db);
+	store = new PostgresWecomChannelV1({
+		...db,
+		userDirectory: fixtureUserDirectory,
+	});
 	await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values (${message.agentId},1,'authorization_1')`;
 	await sql`insert into platform.agent_applications (id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values ('app_1',${message.agentId},'owner_1','Fixture','Fixture','available','trace_1','request_1',now(),1,1,'ready','running',1,1)`;
 	await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${message.agentId},1,'fixture',${sql.json(configuration)},now())`;
@@ -130,7 +164,10 @@ it("commits one receipt with one execution under concurrent callbacks and replay
 		(accepted.outcome !== "accepted" && accepted.outcome !== "replayed")
 	)
 		throw new Error("Expected receipt");
-	const restarted = new PostgresWecomChannelV1(db);
+	const restarted = new PostgresWecomChannelV1({
+		...db,
+		userDirectory: fixtureUserDirectory,
+	});
 	try {
 		expect(await channel(restarted).receive(message)).toEqual({
 			...accepted,
@@ -234,7 +271,10 @@ it("does not resend a reply after a worker crashes in the external send window",
 	expect(Number(botLease?.seconds)).toBeGreaterThan(0);
 	expect(Number(botLease?.seconds)).toBeLessThan(30);
 	await sql`update platform.wecom_receipts set lease_until=now()-interval '1 second' where id=${claim.receiptId}`;
-	const restarted = new PostgresWecomChannelV1(db);
+	const restarted = new PostgresWecomChannelV1({
+		...db,
+		userDirectory: fixtureUserDirectory,
+	});
 	try {
 		expect(await restarted.claim()).toBeNull();
 		expect(await restarted.read(claim.receiptId, "sender_crash")).toMatchObject(
@@ -412,10 +452,12 @@ it("fences WebSocket ingress inside the transaction and reserves replies for the
 	await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status) values (${message.providerId},${message.agentId},${message.bindingReference},'worker-one',1,now()+interval '30 seconds','connected')`;
 	const owner = new PostgresWecomChannelV1({
 		...db,
+		userDirectory: fixtureUserDirectory,
 		connectionHolderId: "worker-one",
 	});
 	const other = new PostgresWecomChannelV1({
 		...db,
+		userDirectory: fixtureUserDirectory,
 		connectionHolderId: "worker-two",
 	});
 	try {
@@ -527,6 +569,7 @@ it("keeps an unclaimed connection receipt pending after its connection lease exp
     on conflict (bot_id) do update set agent_id=excluded.agent_id,binding_reference=excluded.binding_reference,holder_id=excluded.holder_id,fence=excluded.fence,lease_until=excluded.lease_until,status=excluded.status`;
 	const owner = new PostgresWecomChannelV1({
 		...db,
+		userDirectory: fixtureUserDirectory,
 		connectionHolderId: "worker-stale",
 	});
 	try {
@@ -558,10 +601,12 @@ it("replays a claimed receipt after its connection lease expires before prepare"
     on conflict (bot_id) do update set agent_id=excluded.agent_id,binding_reference=excluded.binding_reference,holder_id=excluded.holder_id,fence=excluded.fence,lease_until=excluded.lease_until,status=excluded.status`;
 	const owner = new PostgresWecomChannelV1({
 		...db,
+		userDirectory: fixtureUserDirectory,
 		connectionHolderId: "worker-stale",
 	});
 	const replacement = new PostgresWecomChannelV1({
 		...db,
+		userDirectory: fixtureUserDirectory,
 		connectionHolderId: "worker-fresh",
 	});
 	try {
@@ -813,6 +858,16 @@ describe("existing WeCom transaction cancellation", () => {
 		activeUsers: async (ids: readonly string[]) => ids,
 	};
 	async function scope(userId: string) {
+		const keyId = `fixture-key:personal:${userId}`;
+		await sql`insert into platform.relay_key_subjects
+			(purpose, subject_id, last_version, current_version)
+			values ('personal', ${userId}, 1, 1)
+			on conflict (purpose, subject_id) do nothing`;
+		await sql`insert into platform.relay_key_versions
+			(purpose, subject_id, key_version, key_id, ciphertext)
+			values ('personal', ${userId}, 1, ${keyId},
+				${sql.json({ purpose: "personal", subjectId: userId, keyId, keyVersion: 1 })})
+			on conflict (purpose, subject_id, key_version) do nothing`;
 		const suffix = ++sequence;
 		const input = {
 			...message,
@@ -1053,7 +1108,10 @@ describe("existing WeCom transaction cancellation", () => {
 			throw new Error("Missing TCP fixture address");
 		const url = new URL(db.databaseUrl);
 		url.port = String(address.port);
-		const target = new PostgresWecomChannelV1({ databaseUrl: url.toString() });
+		const target = new PostgresWecomChannelV1({
+			databaseUrl: url.toString(),
+			userDirectory: fixtureUserDirectory,
+		});
 		const controller = new AbortController();
 		let pending: Promise<unknown> | undefined;
 		let failed: Promise<unknown> | undefined;
@@ -1080,7 +1138,10 @@ describe("existing WeCom transaction cancellation", () => {
 
 	it("close rejects further admission without opening a new transaction", async () => {
 		const input = await scope("closed-admission");
-		const target = new PostgresWecomChannelV1({ databaseUrl: db.databaseUrl });
+		const target = new PostgresWecomChannelV1({
+			databaseUrl: db.databaseUrl,
+			userDirectory: fixtureUserDirectory,
+		});
 		await target.close();
 		let key = "";
 		await expect(
@@ -1097,7 +1158,10 @@ describe("existing WeCom transaction cancellation", () => {
 		const next = await scope("cancel-reuse-next");
 		const url = new URL(db.databaseUrl);
 		url.searchParams.set("search_path", "platform,pg_catalog");
-		const target = new PostgresWecomChannelV1({ databaseUrl: url.toString() });
+		const target = new PostgresWecomChannelV1({
+			databaseUrl: url.toString(),
+			userDirectory: fixtureUserDirectory,
+		});
 		const controller = new AbortController();
 		const releaseSignal = cancellationGate();
 		const releaseBusiness = cancellationGate();
@@ -1310,6 +1374,7 @@ describe("existing WeCom transaction cancellation", () => {
 				transport = await pendingCommitTransport(url.toString(), true);
 				target = new PostgresWecomChannelV1({
 					databaseUrl: transport.databaseUrl,
+					userDirectory: fixtureUserDirectory,
 				});
 				await sql`create function platform.block_cancel_reply() returns trigger language plpgsql as $$ begin if new.agent_id=TG_ARGV[0] then perform pg_advisory_xact_lock(11380002); end if; return new; end $$`;
 				await sql`create trigger block_cancel_reply before insert on platform.conversations for each row execute function platform.block_cancel_reply(${argument(input.agentId)})`;
@@ -1523,6 +1588,7 @@ describe("existing WeCom transaction cancellation", () => {
 		databaseUrl.searchParams.set("application_name", applicationName);
 		const target = new PostgresWecomChannelV1({
 			databaseUrl: databaseUrl.toString(),
+			userDirectory: fixtureUserDirectory,
 		});
 		const controller = new AbortController();
 		let key = "";

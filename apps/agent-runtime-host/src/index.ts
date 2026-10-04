@@ -6,7 +6,6 @@ import {
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createExecutionGrantVerifier,
-	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
 	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
@@ -19,7 +18,6 @@ import {
 } from "@agent-infra/agent-runtime";
 import type {
 	ExecutionGrantV1,
-	RuntimeBusinessRequestV4,
 	RuntimeExecutionGrantV2,
 	VerifiedExecutionGrantV1,
 	VerifiedRuntimeExecutionGrantV2,
@@ -59,10 +57,6 @@ interface StartOptions {
 	) =>
 		| VerifiedRuntimeExecutionGrantV2
 		| Promise<VerifiedRuntimeExecutionGrantV2>;
-	verifyGrantV4?: (request: unknown) => Promise<{
-		request: RuntimeBusinessRequestV4;
-		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
-	}>;
 	host: RuntimeHost;
 	serviceToken: string;
 	verifyGrant: (
@@ -274,28 +268,6 @@ export async function assembleRuntimeHost(
 		closeDriver = async () => {
 			if ("close" in driver) await driver.close();
 		};
-		const validateBusinessV4 =
-			runtimeWorkerId && binding === "codex"
-				? createRuntimeExecutionGrantValidatorV4(
-						new Map([[keyId, publicKey]]),
-						{
-							expectedIssuer,
-							expectedWorkerId: runtimeWorkerId,
-						},
-					)
-				: undefined;
-		const validateV4 = validateBusinessV4
-			? async (request: unknown) => {
-					const verified = await validateBusinessV4(request);
-					if (agentId && verified.claims.agentId !== agentId)
-						throw new RuntimeHostError(
-							"RUNTIME_GRANT_INVALID",
-							"Runtime authorization does not match this deployment",
-							403,
-						);
-					return verified;
-				}
-			: undefined;
 		const host = await RuntimeHost.open({
 			...(readinessBinding
 				? {
@@ -308,8 +280,6 @@ export async function assembleRuntimeHost(
 				: {}),
 			store,
 			driver,
-			// Retained Codex configurations are readable, but new business uses V4.
-			allowLegacyBusiness: binding !== "codex",
 			grantValidation: { expectedIssuer },
 			...(runtimeWorkerId
 				? {
@@ -319,7 +289,6 @@ export async function assembleRuntimeHost(
 						},
 					}
 				: {}),
-			...(validateV4 ? { validateGrantV4: validateV4 } : {}),
 		});
 		assembledHost = host;
 		const verifyV2 = createRuntimeExecutionGrantVerifierV2(
@@ -348,9 +317,6 @@ export async function assembleRuntimeHost(
 							return verified;
 						},
 					}
-				: {}),
-			...(validateV4
-				? { verifyGrantV4: (request: unknown) => validateV4(request) }
 				: {}),
 			...(activeConfiguration
 				? { configVersion: activeConfiguration.configVersion }

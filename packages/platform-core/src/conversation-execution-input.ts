@@ -15,7 +15,11 @@ import {
 	snapshotObject,
 	unavailable,
 } from "./conversation-execution-values.js";
-import { parseTaskAuthorizationBoundaryV1 } from "./task-authorization.js";
+import { parsePersonalApiTaskAdmissionAuthorityV1 } from "./personal-api-task-authorization.js";
+import {
+	isTaskApiChannelV1,
+	parseTaskAuthorizationBoundaryV1,
+} from "./task-authorization.js";
 
 export function parseCreateCommand(
 	input: unknown,
@@ -213,7 +217,9 @@ export function parseConversationStateQuery(
 	return { schemaVersion: 1, conversationId: values.conversationId };
 }
 
-function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
+export function parseAuthority(
+	input: unknown,
+): ConversationExecutionAuthorityV1 {
 	const values = snapshotObject(input, [
 		"schemaVersion",
 		"actorId",
@@ -225,6 +231,11 @@ function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 		typeof input === "object" &&
 		Object.hasOwn(input, "taskBoundary")
 			? ["taskBoundary"]
+			: []),
+		...(input !== null &&
+		typeof input === "object" &&
+		Object.hasOwn(input, "personalApiAdmissionAuthority")
+			? ["personalApiAdmissionAuthority"]
 			: []),
 	]);
 	if (
@@ -243,11 +254,32 @@ function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 			: parseTaskAuthorizationBoundaryV1(values.taskBoundary);
 	if (
 		taskBoundary &&
-		(taskBoundary.principal.kind !== "user" ||
-			taskBoundary.principal.id !== values.actorId ||
+		(taskBoundary.principal.id !== values.actorId ||
 			taskBoundary.agentId !== values.agentId ||
 			taskBoundary.channelId !== values.channelId ||
 			taskBoundary.agentAuthorizationRevision !== values.authorizationRevision)
+	)
+		invalidInput();
+	if (
+		(values.channelId === "api" || values.channelId.startsWith("api:")) &&
+		(!taskBoundary ||
+			!isTaskApiChannelV1(values.channelId, taskBoundary.principal))
+	)
+		invalidInput();
+	const personalApiAdmissionAuthority =
+		values.personalApiAdmissionAuthority === undefined
+			? undefined
+			: parsePersonalApiTaskAdmissionAuthorityV1(
+					values.personalApiAdmissionAuthority,
+				);
+	if (
+		personalApiAdmissionAuthority &&
+		(personalApiAdmissionAuthority.principal.id !== values.actorId ||
+			!taskBoundary ||
+			personalApiAdmissionAuthority.principal.kind !==
+				taskBoundary.principal.kind ||
+			personalApiAdmissionAuthority.agentId !== values.agentId ||
+			personalApiAdmissionAuthority.channelId !== values.channelId)
 	)
 		invalidInput();
 	return {
@@ -258,6 +290,7 @@ function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 		authorizationRevision: values.authorizationRevision,
 		supportsSupplementaryInstruction: values.supportsSupplementaryInstruction,
 		...(taskBoundary ? { taskBoundary } : {}),
+		...(personalApiAdmissionAuthority ? { personalApiAdmissionAuthority } : {}),
 	};
 }
 

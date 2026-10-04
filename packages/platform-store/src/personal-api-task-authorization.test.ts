@@ -122,7 +122,7 @@ beforeAll(async () => {
 beforeEach(async () => {
 	resolveUser = async (id) => currentUser(id);
 	await client`truncate platform.agents,platform.conversations,platform.platform_api_credentials,
-		platform.platform_user_disables,platform.idempotency_records,platform.audit_events,
+		platform.platform_user_disables,platform.platform_applications,platform.idempotency_records,platform.audit_events,
 		platform.outbox_items cascade`;
 	await client`insert into platform.agents(id,authorization_revision) values (${agentId},'agent_1')`;
 	await client`insert into platform.agent_principal_grants
@@ -432,5 +432,108 @@ describe("PostgreSQL same-transaction personal Task policy", () => {
 			expect(String(error)).not.toContain("PRIVATE_IDENTITY_PAYLOAD");
 			expect(String(error)).not.toContain(credential.credential);
 		}
+	});
+});
+
+// Synthetic stored material validates this helper's actual hash/row protocol;
+// it does not prove an application issuer, recipient delivery or public Task API.
+const appMaterial = `papi_${"B".repeat(43)}`;
+async function seedApplicationCredential() {
+	await client`insert into platform.platform_applications
+		(id,name,responsible_user_id,status,authorization_revision)
+		values (${userId},'controlled application',${userId},'active','application_1')`;
+	await client`insert into platform.platform_api_credentials
+		(id,principal_type,principal_id,credential_hash,scopes)
+		values ('application_credential','application',${userId},
+		${createHash("sha256").update(appMaterial).digest("hex")},${client.json(["agent:use"])})`;
+	await client`insert into platform.agent_principal_grants
+		(agent_id,principal_type,principal_id,grant_type,authorization_revision)
+		values (${agentId},'application',${userId},'use','use_1')`;
+}
+
+describe("same-transaction typed application API policy", () => {
+	it.each(["api", "api:application"] as const)(
+		"resolves actual stored material and preserves %s",
+		async (channelId) => {
+			await seedApplicationCredential();
+			await client`insert into platform.platform_user_disables(user_id) values (${userId})`;
+			resolveUser = async () => {
+				throw new Error("application must not inherit the same-ID user");
+			};
+			await client.begin(async (transaction) => {
+				const authority = await resolvePersonalApiTaskAdmissionAuthorityV1(
+					transaction,
+					{ material: appMaterial, agentId, channelId },
+					undefined,
+				);
+				expect(authority.principal).toEqual({
+					kind: "application",
+					id: userId,
+				});
+				expect(authority.credentialHash).toBe(
+					createHash("sha256").update(appMaterial).digest("hex"),
+				);
+				const result = await requireCurrentPersonalApiTaskAdmissionV1(
+					transaction,
+					authority,
+					{
+						principal: authority.principal,
+						actorId: userId,
+						agentId,
+						channelId,
+					},
+					undefined,
+				);
+				expect(result).toMatchObject({
+					identityRevision: "application_1",
+					useGrantRevision: "use_1",
+					channelId,
+				});
+				expect(JSON.stringify(result)).not.toContain(authority.credentialHash);
+			});
+		},
+	);
+	it("rejects expired used material after final audit and rolls the original transaction back", async () => {
+		await seedApplicationCredential();
+		await expect(
+			client.begin(async (transaction) => {
+				const authority = await resolvePersonalApiTaskAdmissionAuthorityV1(
+					transaction,
+					{ material: appMaterial, agentId },
+					undefined,
+				);
+				await transaction`insert into platform.audit_events
+				(id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id)
+				values ('app_policy_audit','policy_trace','application',${userId},'policy.test','agent',${agentId},'succeeded','policy_request')`;
+				await transaction`update platform.platform_api_credentials set expires_at=clock_timestamp() where id='application_credential'`;
+				await requireCurrentPersonalApiTaskAdmissionV1(
+					transaction,
+					authority,
+					{
+						principal: authority.principal,
+						actorId: userId,
+						agentId,
+						channelId: "api",
+					},
+					undefined,
+				);
+			}),
+		).rejects.toMatchObject({ code: "authentication_required" });
+		const audit =
+			await client`select id from platform.audit_events where id='app_policy_audit'`;
+		expect(audit).toHaveLength(0);
+	});
+	it("does not replace missing application use with its responsible user's valid use", async () => {
+		await seedApplicationCredential();
+		await client`delete from platform.agent_principal_grants where principal_type='application' and principal_id=${userId}`;
+		await expect(
+			client.begin((transaction) =>
+				resolvePersonalApiTaskAdmissionAuthorityV1(
+					transaction,
+					{ material: appMaterial, agentId },
+					undefined,
+				),
+			),
+		).rejects.toMatchObject({ code: "not_found" });
 	});
 });

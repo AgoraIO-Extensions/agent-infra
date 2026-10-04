@@ -40,6 +40,10 @@ import {
 	registerSessionAuditRoutes,
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
+import {
+	registerTaskRoutes,
+	type TaskRoutesDependencies,
+} from "./http/task-routes.js";
 import { registerV2ConfigurationRoutes } from "./http/v2-configuration-routes.js";
 import {
 	type ManagementRouteDependencies,
@@ -71,6 +75,7 @@ export interface PlatformAppDependencies {
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
+	readonly tasks?: TaskRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
 	readonly personalApiCredentials?: PersonalApiCredentialRouteDependencies;
 	readonly personalRelayKeys?: PersonalRelayKeyRoutesDependencies;
@@ -159,6 +164,7 @@ export function createPlatformApp(
 		...dependencies.conversation,
 		files: dependencies.files,
 	});
+	if (dependencies.tasks) registerTaskRoutes(app, dependencies.tasks);
 	registerSessionAuditRoutes(app, dependencies.sessionAudit);
 	if (dependencies.scopedAudit)
 		registerScopedAuditRoutes(app, dependencies.scopedAudit);

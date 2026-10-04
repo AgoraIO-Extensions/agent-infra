@@ -113,6 +113,10 @@ function deploymentInput(): ProductionPlatformApiInputV1 {
 		throw new Error("Unused controlled dependency");
 	};
 	return {
+		taskAdmissionPolicy: {
+			maximumWaitingTasksPerAgent: 2,
+			waitingTimeoutMs: 60_000,
+		},
 		databaseUrl: database.databaseUrl,
 		imageRepository: "registry.example.test/agents/codex",
 		encryptionKeys,

@@ -151,9 +151,15 @@ async function snapshotHistory() {
 		"idempotency_records",
 		"outbox_items",
 	]) {
+		const record =
+			table === "conversation_executions"
+				? "to_jsonb(record) - 'principal_type' - 'task_wait_order' - 'task_wait_deadline' - 'execution_source' - 'relay_key_purpose' - 'relay_key_subject_id' - 'relay_key_id' - 'relay_key_version' - 'runtime_submit_protocol' - 'original_operation_digest' - 'original_submit_host_session_ref'"
+				: table === "conversations"
+					? "to_jsonb(record) - 'principal_type'"
+					: "to_jsonb(record)";
 		snapshots.push(
 			await sql.unsafe(
-				`select row_to_json(record)::text as value from platform.${table} record order by row_to_json(record)::text`,
+				`select ${record}::text as value from platform.${table} record order by ${record}::text`,
 			),
 		);
 	}
@@ -206,6 +212,18 @@ beforeAll(async () => {
 		await sql`insert into platform_migrations.history (hash, created_at) values (${entry.hash}, ${entry.folderMillis})`;
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 	expect(await snapshotHistory()).toEqual(before);
+	expect(
+		await sql`select count(*)::int as count from platform.conversation_executions
+			where task_wait_order is not null or task_wait_deadline is not null
+				or runtime_submit_protocol is not null or original_operation_digest is not null
+				or original_submit_host_session_ref is not null`,
+	).toEqual([{ count: 0 }]);
+	expect(
+		await sql`select count(*)::int as count from platform.conversation_executions where principal_type <> 'user'`,
+	).toEqual([{ count: 0 }]);
+	expect(
+		await sql`select count(*)::int as count from platform.conversations where principal_type <> 'user'`,
+	).toEqual([{ count: 0 }]);
 	const history =
 		await sql`select * from platform_migrations.history order by id`;
 	expect(history).toHaveLength(migrations.length);
@@ -489,10 +507,21 @@ describe("historical task authorization upgrade", () => {
 				"execution-read-isolation",
 			),
 		).toBeUndefined();
-		await sql`update platform.conversation_executions set actor_id = 'another-user' where execution_id = 'execution-read-isolation'`;
+		await expect(
+			sql`update platform.conversation_executions set actor_id = 'another-user' where execution_id = 'execution-read-isolation'`,
+		).rejects.toMatchObject({
+			code: "23503",
+			constraint_name: "conversation_execution_principal_binding_fk",
+		});
+		expect(
+			await sql`select actor_id from platform.conversation_executions where execution_id = 'execution-read-isolation'`,
+		).toEqual([{ actor_id: "original-user-read-isolation" }]);
 		expect(
 			await migration.readLegacyControlRecovery("execution-read-isolation"),
-		).toBeNull();
+		).toMatchObject({
+			executionId: "execution-read-isolation",
+			originalPrincipal: { id: "original-user-read-isolation" },
+		});
 	});
 
 	it("rejects replay with missing required acceptance audit or a replacement migration identity", async () => {

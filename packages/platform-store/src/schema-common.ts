@@ -14,6 +14,7 @@ export const platformStatusValues = {
 	idempotencyStatus: ["reserved", "completed"],
 	conversationStatus: ["ready", "active", "unavailable"],
 	conversationExecutionStatus: [
+		"waiting",
 		"submitted",
 		"processing",
 		"unknown",

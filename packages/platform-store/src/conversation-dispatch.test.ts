@@ -58,7 +58,7 @@ afterEach(async () => {
 		platform.outbox_items, platform.idempotency_records,
 		platform.conversation_stops, platform.conversation_messages,
 		platform.conversation_executions, platform.conversations`;
-	await client`truncate platform.agents cascade`;
+	await client`truncate platform.platform_applications, platform.agents cascade`;
 });
 
 afterAll(async () => {
@@ -142,7 +142,9 @@ async function seedCapacityAgent(
 		failureCode: null,
 		attempts: 0,
 	};
-	await client`insert into platform.agents (id, current_configuration_revision) values (${agentId}, 4) on conflict do nothing`;
+	await client`insert into platform.agents (id, current_configuration_revision, authorization_revision)
+		values (${agentId}, 4, 'authorization-dispatch')
+		on conflict (id) do update set authorization_revision = excluded.authorization_revision`;
 	await client`insert into platform.agent_applications
 		(id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at,
 		management_revision, approval_revision, desired_state, service_availability, workload_revision, fence)
@@ -165,9 +167,12 @@ async function seed(
 		hostSessionRef?: string | null;
 		legacySelection?: boolean;
 		agentId?: string;
+		channel?: "web" | "api:user" | "api:application";
 	} = {},
 ) {
 	const agentId = options.agentId ?? "agent-dispatch";
+	const channel = options.channel ?? "web";
+	const principalKind = channel === "api:application" ? "application" : "user";
 	await seedCapacityAgent(agentId);
 	const suffix = fixture++;
 	const conversationId = `conversation-dispatch-${suffix}`;
@@ -187,24 +192,24 @@ async function seed(
 	const executionFence = options.executionFence ?? 0;
 	await client`
 		insert into platform.conversations
-			(id, agent_id, actor_id, channel_id, status, session_generation,
+			(id, agent_id, actor_id, principal_type, channel_id, status, session_generation,
 			 host_session_ref, authorization_revision, last_conversation_cursor,
 			 created_at, updated_at)
 		values
-			(${conversationId}, ${agentId}, 'actor-dispatch', 'web',
+			(${conversationId}, ${agentId}, 'actor-dispatch', ${principalKind}, ${channel},
 			 ${executionStatus === "completed" ? "ready" : "active"}, 1,
 			 ${options.hostSessionRef ?? null}, 'authorization-dispatch', 0,
 			 now(), now())
 	`;
 	await client`
 		insert into platform.conversation_executions
-			(execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id,
+			(execution_id, conversation_id, agent_id, actor_id, principal_type, channel_id, turn_id,
 			 status, session_generation, delivery_fence, authorization_revision,
 			 model_configuration_revision, model_option_id, reasoning_level,
 			 created_at, updated_at)
 		values
-			(${executionId}, ${conversationId}, ${agentId}, 'actor-dispatch',
-			 'web', ${turnId}, ${executionStatus}, 1, ${executionFence},
+			(${executionId}, ${conversationId}, ${agentId}, 'actor-dispatch', ${principalKind},
+			 ${channel}, ${turnId}, ${executionStatus}, 1, ${executionFence},
 			 'authorization-dispatch', ${options.legacySelection ? null : 4},
 			 ${options.legacySelection ? null : "model-option-dispatch"},
 			 ${options.legacySelection ? null : "medium"},
@@ -259,6 +264,53 @@ async function seed(
 			 ${client.json(payload)}, 'trace-dispatch', 'request-dispatch',
 			 now(), now(), now())
 	`;
+	if (
+		executionStatus === "submitted" &&
+		options.hostSessionRef === undefined &&
+		!options.legacySelection &&
+		(channel === "web" ||
+			channel === "api:user" ||
+			channel === "api:application")
+	) {
+		const purpose = channel === "web" ? "personal" : "agent-default";
+		const subjectId = channel === "web" ? "actor-dispatch" : agentId;
+		const keyId = `seed-key:${purpose}:${subjectId}`;
+		await client`insert into platform.relay_key_subjects
+			(purpose, subject_id, last_version, current_version)
+			values (${purpose}, ${subjectId}, 1, 1)
+			on conflict (purpose, subject_id) do nothing`;
+		await client`insert into platform.relay_key_versions
+			(purpose, subject_id, key_version, key_id, ciphertext)
+			values (${purpose}, ${subjectId}, 1, ${keyId},
+				${client.json({ purpose, subjectId, keyId, keyVersion: 1 })})
+			on conflict (purpose, subject_id, key_version) do nothing`;
+		const [persistedKey] = await client<{ key_id: string }[]>`
+			select key_id from platform.relay_key_versions
+			where purpose = ${purpose} and subject_id = ${subjectId} and key_version = 1
+		`;
+		if (!persistedKey) throw new Error("Expected dispatch fixture relay key");
+		await client`insert into platform.task_authorization_records(id, execution_id, boundary)
+			values (${`authorization-${executionId}`}, ${executionId}, ${client.json({
+				schemaVersion: 1,
+				principal: {
+					kind: channel === "api:application" ? "application" : "user",
+					id: "actor-dispatch",
+				},
+				agentId,
+				channelId: channel,
+				identityRevision: "identity-dispatch",
+				agentAuthorizationRevision: "authorization-dispatch",
+				accessSources:
+					channel === "web"
+						? [{ kind: "user", userId: "actor-dispatch" }]
+						: [{ kind: "api-use", useGrantRevision: "use-dispatch" }],
+			})}) on conflict (execution_id) do nothing`;
+		await client`update platform.conversation_executions set
+			execution_source=${channel === "web" ? "web" : "platform-api"},
+			relay_key_purpose=${purpose}, relay_key_subject_id=${subjectId},
+			relay_key_id=${persistedKey.key_id}, relay_key_version=1
+			where execution_id=${executionId}`;
+	}
 	return {
 		conversationId,
 		executionId,
@@ -732,7 +784,9 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 	);
 
 	it("derives recovery digest from accepted input and rejects expired or foreign leases", async () => {
-		const work = await seed();
+		const work = await seed("conversation.turn.submit.v1", {
+			legacySelection: true,
+		});
 		const { store, decision } = await claim(work.itemId);
 		try {
 			if (decision.outcome !== "claimed")
@@ -745,11 +799,6 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						executionId: work.executionId,
 						input: { attachments: [], text: "bounded dispatch fixture" },
 						kind: "submit-turn",
-						selection: {
-							modelOptionId: "model-option-dispatch",
-							reasoningLevel: "medium",
-							schemaVersion: 1,
-						},
 						sessionGeneration: 1,
 						turnId: work.turnId,
 					}),
@@ -1091,7 +1140,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				agentAuthorizationRevision: "authorization-dispatch",
 				accessSources: [{ kind: "user", userId: "actor-dispatch" }],
 			},
-		)})`;
+		)}) on conflict (execution_id) do nothing`;
 		await client`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
 			values (${`acceptance-${work.executionId}`}, 'trace-original', 'user', 'actor-dispatch', 'task.authorization.accepted', 'execution', ${work.executionId}, 'succeeded', 'request-original', 'agent-dispatch', ${client.json({ authorizationRecordId })})`;
 		const store = open();
@@ -2566,7 +2615,7 @@ describe("PostgreSQL terminal outbox event recovery", () => {
 					identityRevision: "identity-1",
 					agentAuthorizationRevision: "authorization-dispatch",
 					accessSources: [{ kind: "user", userId: "actor-dispatch" }],
-				})})`;
+				})}) on conflict (execution_id) do nothing`;
 			await client`insert into platform.audit_events
 				(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
 				values (${`acceptance-${work.executionId}`}, 'trace-original', 'user', 'actor-dispatch', 'task.authorization.accepted', 'execution',
@@ -2790,7 +2839,7 @@ describe("authorized historical metadata rearm", () => {
 				agentAuthorizationRevision: "authorization-dispatch",
 				accessSources: [{ kind: "user", userId: "actor-dispatch" }],
 			},
-		)})`;
+		)}) on conflict (execution_id) do nothing`;
 		await client`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
 			values (${`acceptance-${work.executionId}`}, 'trace-original', 'user', 'actor-dispatch', 'task.authorization.accepted', 'execution', ${work.executionId}, 'succeeded', 'request-original', 'agent-dispatch', ${client.json({ authorizationRecordId })})`;
 		const eventTransaction = new PostgresConversationEventTransactionV1({
@@ -3076,8 +3125,8 @@ describe("authorized historical metadata rearm", () => {
 			if (!hostSessionRef) throw new Error("missing original Host");
 			const executionId = "new-execution";
 			const itemId = `conversation:turn:${executionId}`;
-			await client`insert into platform.conversation_executions (execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, status, session_generation, delivery_fence, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, created_at, updated_at)
-				select ${executionId}, conversation_id, agent_id, actor_id, channel_id, 'new-turn', 'submitted', session_generation, 0, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, now(), now() from platform.conversation_executions where execution_id = ${h.work.executionId}`;
+			await client`insert into platform.conversation_executions (execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, status, session_generation, delivery_fence, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version, created_at, updated_at)
+				select ${executionId}, conversation_id, agent_id, actor_id, channel_id, 'new-turn', 'submitted', session_generation, 0, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version, now(), now() from platform.conversation_executions where execution_id = ${h.work.executionId}`;
 			await client`insert into platform.conversation_messages (message_id, conversation_id, actor_id, role, text, execution_id, status, created_at, updated_at)
 				values ('new-message', ${h.work.conversationId}, 'actor-dispatch', 'user', 'new task', ${executionId}, 'submitted', now(), now())`;
 			await client`insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, request_id)
@@ -3219,4 +3268,337 @@ describe("authorized historical metadata rearm", () => {
 			await h.close();
 		}
 	});
+});
+
+/** Component fixture starts at the original accepted/claim stage; not HTTP acceptance proof. */
+async function acceptedKeyWork(
+	channel: "web" | "api:user" | "api:application",
+) {
+	const kind = channel === "api:application" ? "application" : "user";
+	const source = channel === "web" ? "web" : "platform-api";
+	const purpose = channel === "web" ? "personal" : "agent-default";
+	const subjectId = channel === "web" ? "actor-dispatch" : "agent-dispatch";
+	const keyId = `accepted-key:${purpose}:${subjectId}`;
+	await client`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version)
+	 values (${purpose},${subjectId},1,1) on conflict do nothing`;
+	await client`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext)
+		values (${purpose},${subjectId},1,${keyId},${client.json({ purpose, subjectId, keyId, keyVersion: 1 })}) on conflict do nothing`;
+	const [persistedKey] = await client<{ key_id: string }[]>`
+		select key_id from platform.relay_key_versions
+		where purpose = ${purpose} and subject_id = ${subjectId} and key_version = 1
+	`;
+	if (!persistedKey) throw new Error("Expected accepted fixture relay key");
+	const work = await seed("conversation.turn.submit.v1", { channel });
+	await client`update platform.conversation_executions set
+		execution_source=${source}, relay_key_purpose=${purpose}, relay_key_subject_id=${subjectId},
+		relay_key_id=${persistedKey.key_id}, relay_key_version=1 where execution_id=${work.executionId}`;
+	await client`insert into platform.task_authorization_records(id, execution_id, boundary)
+  values (${`authorization-${work.executionId}`}, ${work.executionId}, ${client.json(
+		{
+			schemaVersion: 1,
+			principal: { kind, id: "actor-dispatch" },
+			agentId: "agent-dispatch",
+			channelId: channel,
+			identityRevision: "identity-dispatch",
+			agentAuthorizationRevision: "authorization-dispatch",
+			accessSources:
+				channel === "web"
+					? [{ kind: "user", userId: "actor-dispatch" }]
+					: [{ kind: "api-use", useGrantRevision: "use-dispatch" }],
+		},
+	)}) on conflict (id) do nothing`;
+	return work;
+}
+
+async function savedPreparationPins(executionId: string) {
+	const [row] =
+		await client`select status, runtime_submit_protocol, original_operation_digest,
+  original_submit_host_session_ref from platform.conversation_executions where execution_id=${executionId}`;
+	return row;
+}
+
+describe("accepted Task V4 preparation pins", () => {
+	it.each(["web", "api:user", "api:application"] as const)(
+		"persists the accepted %s binding before dispatch and keeps it on recovery",
+		async (channel) => {
+			const work = await acceptedKeyWork(channel);
+			const { store, decision } = await claim(work.itemId);
+			try {
+				if (decision.outcome !== "claimed")
+					throw new Error("Expected original claim");
+				expect(
+					await store.prepareRuntimeDispatch({
+						claim: decision.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				const saved = await savedPreparationPins(work.executionId);
+				expect(saved?.status).toBe("unknown");
+				expect(saved?.runtime_submit_protocol).toBe("v4");
+				expect(saved?.original_operation_digest).toMatch(/^[A-Za-z0-9_-]{43}$/);
+				expect(saved?.original_submit_host_session_ref).toBeNull();
+				const original = await store.readRuntimeState({
+					claim: decision.claim,
+				});
+				expect(original?.runtimeSubmitProtocol).toBe("v4");
+				expect(original?.originalOperationDigest).toBe(
+					saved?.original_operation_digest,
+				);
+				expect(original?.originalSubmitHostSessionRef).toBeNull();
+				await client`update platform.conversation_messages set text='later mutable text' where message_id=${work.messageId}`;
+				await client`update platform.conversations set host_session_ref='current-session' where id=${work.conversationId}`;
+				const recovered = await store.readRuntimeState({
+					claim: decision.claim,
+				});
+				expect(recovered?.hostSessionRef).toBe("current-session");
+				expect(recovered?.originalSubmitHostSessionRef).toBeNull();
+				expect(recovered?.originalOperationDigest).toBe(
+					original?.originalOperationDigest,
+				);
+				expect(
+					await store.prepareRuntimeDispatch({
+						claim: decision.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				expect(await savedPreparationPins(work.executionId)).toEqual(saved);
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
+	it.each([
+		"principal-kind",
+		"principal-id",
+		"missing-key",
+		"expired-lease",
+		"stale-fence",
+		"pending-stop",
+		"duplicate-origin",
+		"partial-pin",
+	] as const)(
+		"does not write pins or occupy new work for %s",
+		async (fault) => {
+			const work = await acceptedKeyWork("api:application");
+			if (fault === "missing-key")
+				await client`update platform.conversation_executions set execution_source=null, relay_key_purpose=null,
+     relay_key_subject_id=null, relay_key_id=null, relay_key_version=null where execution_id=${work.executionId}`;
+			const { store, decision } = await claim(work.itemId);
+			try {
+				if (decision.outcome !== "claimed")
+					throw new Error("Expected original claim");
+				if (fault === "principal-kind" || fault === "principal-id")
+					await client`update platform.task_authorization_records set boundary=jsonb_set(boundary,
+      ${fault === "principal-kind" ? "{principal,kind}" : "{principal,id}"}::text[],
+      ${JSON.stringify(fault === "principal-kind" ? "user" : "other-actor")}::jsonb)
+      where execution_id=${work.executionId}`;
+				if (fault === "expired-lease")
+					await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id=${work.itemId}`;
+				if (fault === "stale-fence")
+					await client`update platform.conversation_executions set delivery_fence=delivery_fence+1 where execution_id=${work.executionId}`;
+				if (fault === "pending-stop") await seedStop(work);
+				if (fault === "duplicate-origin")
+					await client`insert into platform.outbox_items(id,scope_type,scope_id,operation,payload,trace_id,request_id)
+      select ${`conversation:regenerate:${work.executionId}`},scope_type,scope_id,'conversation.turn.regenerate.v1',payload,trace_id,request_id
+      from platform.outbox_items where id=${work.itemId}`;
+				if (fault === "partial-pin") {
+					const before = await savedPreparationPins(work.executionId);
+					await expect(
+						client`update platform.conversation_executions set original_operation_digest=${"a".repeat(43)} where execution_id=${work.executionId}`,
+					).rejects.toThrow();
+					expect(await savedPreparationPins(work.executionId)).toEqual(before);
+					return;
+				}
+				const before = await savedPreparationPins(work.executionId);
+				const preparing = store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				});
+				if (fault === "principal-kind")
+					await expect(preparing).rejects.toThrow();
+				else expect(await preparing).not.toBe(true);
+				const after = await savedPreparationPins(work.executionId);
+				expect(after).toEqual(before);
+				expect(after?.status).toBe("submitted");
+				await client.begin(async (sql) => {
+					await sql`select execution_id from platform.conversation_executions where execution_id=${work.executionId} for update nowait`;
+					await sql`select id from platform.outbox_items where id=${work.itemId} for update nowait`;
+				});
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
+	it("rolls back occupied status and all pins when the original prepare CAS fails", async () => {
+		const work = await acceptedKeyWork("api:user");
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			await client.unsafe(`create function platform.accepted_key_pin_failure() returns trigger language plpgsql as $$
+    begin if new.runtime_submit_protocol is distinct from old.runtime_submit_protocol then raise exception 'PIN_WRITE_FAULT'; end if; return new; end $$`);
+			await client.unsafe(`create trigger accepted_key_pin_failure before update on platform.conversation_executions
+    for each row execute function platform.accepted_key_pin_failure()`);
+			const before = await savedPreparationPins(work.executionId);
+			await expect(
+				store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).rejects.toThrow();
+			expect(await savedPreparationPins(work.executionId)).toEqual(before);
+			await client.begin(async (sql) => {
+				await sql`select execution_id from platform.conversation_executions where execution_id=${work.executionId} for update nowait`;
+				await sql`select id from platform.outbox_items where id=${work.itemId} for update nowait`;
+			});
+		} finally {
+			await client.unsafe(
+				"drop trigger if exists accepted_key_pin_failure on platform.conversation_executions",
+			);
+			await client.unsafe(
+				"drop function if exists platform.accepted_key_pin_failure()",
+			);
+			await store.close();
+		}
+	});
+});
+
+describe("waiting Task original Store promotion", () => {
+	it("keeps blocked work discoverable across restart and settles its expired deadline", async () => {
+		const blocked = await acceptedKeyWork("api:user");
+		const runnable = await seed("conversation.turn.submit.v1", {
+			agentId: "other-agent",
+		});
+		await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'user', 'actor-dispatch', 'use', 'use-dispatch')`;
+		await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'owner-a', now()) on conflict do nothing`;
+		await client`update platform.agent_applications set service_availability='starting' where agent_id='agent-dispatch'`;
+		await client`update platform.conversation_executions set status='waiting', task_wait_order=1, task_wait_deadline=clock_timestamp()+interval '60 seconds' where execution_id=${blocked.executionId}`;
+		await client`update platform.outbox_items set available_at='infinity' where id=${blocked.itemId}`;
+		const options = {
+			databaseUrl,
+			userDirectory: {
+				resolveUser: async (userId: string) => ({
+					schemaVersion: 1 as const,
+					userId,
+					accountStatus: "active" as const,
+					organizationIds: [],
+					authorizationRevision: "identity-dispatch",
+				}),
+			},
+		};
+		const claim = (itemId: string) => ({
+			schemaVersion: 1 as const,
+			itemId,
+			workerId: "fairness-worker",
+			leaseDurationMs: 30_000,
+		});
+		let store = new PostgresConversationDispatchStoreV1(options);
+		try {
+			expect(await store.claim(claim(blocked.itemId))).toMatchObject({
+				outcome: "busy",
+			});
+			const page = await store.findDispatchable({
+				limit: 256,
+				afterItemId: blocked.itemId,
+			});
+			expect(page[0]?.itemId).toBe(runnable.itemId);
+			expect(await store.claim(claim(runnable.itemId))).toMatchObject({
+				outcome: "claimed",
+			});
+			await store.close();
+			store = new PostgresConversationDispatchStoreV1(options);
+			expect(await store.findDispatchable({ limit: 256 })).toContainEqual({
+				itemId: blocked.itemId,
+				operation: "conversation.turn.submit.v1",
+			});
+			expect(await store.claim(claim(blocked.itemId))).toMatchObject({
+				outcome: "busy",
+			});
+			await client`update platform.conversation_executions set created_at=clock_timestamp()-interval '2 minutes', task_wait_deadline=clock_timestamp()-interval '1 minute' where execution_id=${blocked.executionId}`;
+			await store.close();
+			store = new PostgresConversationDispatchStoreV1(options);
+			expect(await store.claim(claim(blocked.itemId))).toMatchObject({
+				outcome: "failed",
+			});
+			const [execution] =
+				await client`select status from platform.conversation_executions where execution_id=${blocked.executionId}`;
+			expect(execution?.status).toBe("failed");
+			const [outbox] =
+				await client`select status from platform.outbox_items where id=${blocked.itemId}`;
+			expect(outbox?.status).toBe("failed");
+		} finally {
+			await store.close();
+		}
+	});
+
+	for (const channel of ["api:user", "api:application"] as const) {
+		it.each(["standard", "custom"] as const)(
+			`${channel} rechecks capacity and pins %s work before first dispatch`,
+			async (sourceKind) => {
+				await seedCapacityAgent("agent-dispatch", 8, sourceKind);
+				const work = await acceptedKeyWork(channel);
+				if (channel === "api:user") {
+					await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'user', 'actor-dispatch', 'use', 'use-dispatch')`;
+				}
+				if (channel === "api:application") {
+					await client`insert into platform.platform_applications (id, name, responsible_user_id, authorization_revision) values ('actor-dispatch', 'Fixture', 'owner-a', 'identity-dispatch')`;
+					await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'application', 'actor-dispatch', 'use', 'use-dispatch')`;
+				}
+				await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'owner-a', now()) on conflict do nothing`;
+				if (sourceKind === "custom") {
+					await client`update platform.conversation_executions set execution_source=null, relay_key_purpose=null, relay_key_subject_id=null, relay_key_id=null, relay_key_version=null,
+					model_configuration_revision=null, model_option_id=null, reasoning_level=null where execution_id=${work.executionId}`;
+					await client`update platform.outbox_items set payload=payload || '{"modelConfigurationRevision":null,"modelOptionId":null,"reasoningLevel":null}'::jsonb where id=${work.itemId}`;
+				}
+				await client`update platform.conversation_executions set status='waiting', task_wait_order=1, task_wait_deadline=clock_timestamp()+interval '60 seconds' where execution_id=${work.executionId}`;
+				await client`update platform.outbox_items set available_at='infinity' where id=${work.itemId}`;
+				const store = new PostgresConversationDispatchStoreV1({
+					databaseUrl,
+					userDirectory: {
+						resolveUser: async (userId) => ({
+							schemaVersion: 1,
+							userId,
+							accountStatus: "active",
+							organizationIds: [],
+							authorizationRevision: "identity-dispatch",
+						}),
+					},
+				});
+				try {
+					expect(await store.findDispatchable({ limit: 8 })).toContainEqual({
+						itemId: work.itemId,
+						operation: "conversation.turn.submit.v1",
+					});
+					const decision = await store.claim({
+						schemaVersion: 1,
+						itemId: work.itemId,
+						workerId: "waiting-worker",
+						leaseDurationMs: 30_000,
+					});
+					if (decision.outcome !== "claimed")
+						throw new Error("Expected waiting claim");
+					expect(decision.claim.executionStatus).toBe("waiting");
+					expect(
+						await store.readRuntimeState({ claim: decision.claim }),
+					).not.toBeNull();
+					expect(
+						await store.prepareRuntimeDispatch({
+							claim: decision.claim,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(true);
+					expect(await savedPreparationPins(work.executionId)).toMatchObject({
+						status: "unknown",
+						runtime_submit_protocol: sourceKind === "standard" ? "v4" : "v2",
+						original_operation_digest:
+							expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+					});
+				} finally {
+					await store.close();
+				}
+			},
+		);
+	}
 });

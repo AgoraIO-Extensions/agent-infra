@@ -2,7 +2,6 @@ import {
 	AgentConfigurationError,
 	AgentManagementError,
 	ApplicationFoundationError,
-	ApplicationMaterialGrantErrorV1,
 	ApplicationRegistrationErrorV1,
 	ApplicationRevisionError,
 	PersonalApiCredentialErrorV1,
@@ -27,7 +26,6 @@ export function mapCoreError(
 		return new HttpProtocolError(codes[error.code], traceId);
 	}
 	if (
-		error instanceof ApplicationMaterialGrantErrorV1 ||
 		error instanceof PersonalApiCredentialErrorV1 ||
 		error instanceof ApplicationRegistrationErrorV1
 	) {

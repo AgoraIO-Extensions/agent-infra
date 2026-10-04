@@ -15,8 +15,11 @@ import {
 	ConversationRuntimeHostError,
 	type ConversationRuntimeHostPortV1,
 	type ConversationRuntimeStatusRequestV2,
+	type CurrentTaskApiUseGrantV1,
+	type CurrentTaskApplicationV1,
 	createTaskRuntimeAuthorizationUseCaseV1,
 	type LegacyTaskControlRecoveryV1,
+	type TaskPrincipalV1,
 	type TaskRuntimeAuthorizationContextV1,
 	type TaskRuntimeAuthorizationRecordV1,
 	type TaskRuntimeRecoveryStateV1,
@@ -68,6 +71,16 @@ export interface ConversationRuntimeOptionsV2 {
 		readonly now?: () => number;
 	};
 	readonly directory: TaskUserDirectoryV1;
+	readonly resolveCurrentApplication?: (
+		applicationId: string,
+		agentId: string,
+		signal: AbortSignal,
+	) => Promise<CurrentTaskApplicationV1 | null>;
+	readonly resolveCurrentApiUseGrant?: (
+		principal: TaskPrincipalV1,
+		agentId: string,
+		signal: AbortSignal,
+	) => Promise<CurrentTaskApiUseGrantV1 | null>;
 	readonly taskAuthorizationStore: ConversationTaskAuthorizationStoreV2;
 	readonly legacyControlStore?: ConversationLegacyControlStoreV2;
 	readonly dispatchStore: {
@@ -153,6 +166,8 @@ export function createConversationRuntimeV2(
 		signal ? AbortSignal.any([lifetime, signal]) : lifetime;
 
 	const legacyControlStore = options.legacyControlStore;
+	const resolveCurrentApplication = options.resolveCurrentApplication;
+	const resolveCurrentApiUseGrant = options.resolveCurrentApiUseGrant;
 	const taskAuthorization = createTaskRuntimeAuthorizationUseCaseV1({
 		workerId: options.workerId,
 		channelAuthorizationCurrent: (record, signal) =>
@@ -177,6 +192,32 @@ export function createConversationRuntimeV2(
 			: {}),
 		resolveCurrentUser: (userId, signal) =>
 			bounded(resolveCurrentTaskUserV1(options.directory, userId), signal),
+		...(resolveCurrentApplication
+			? {
+					resolveCurrentApplication: (
+						applicationId: string,
+						agentId: string,
+						signal: AbortSignal,
+					) =>
+						bounded(
+							resolveCurrentApplication(applicationId, agentId, signal),
+							signal,
+						),
+				}
+			: {}),
+		...(resolveCurrentApiUseGrant
+			? {
+					resolveCurrentApiUseGrant: (
+						principal: TaskPrincipalV1,
+						agentId: string,
+						signal: AbortSignal,
+					) =>
+						bounded(
+							resolveCurrentApiUseGrant(principal, agentId, signal),
+							signal,
+						),
+				}
+			: {}),
 		recordControl: (input, signal) =>
 			bounded(options.taskAuthorizationStore.recordControl(input), signal),
 	});

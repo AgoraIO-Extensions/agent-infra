@@ -3,7 +3,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
@@ -36,29 +35,16 @@ async function setup() {
 	const verify = createRuntimeExecutionGrantVerifierV2(
 		new Map([["synthetic-key", keys.publicKey]]),
 	);
-	const verifyV4 = createRuntimeExecutionGrantValidatorV4(
-		new Map([["synthetic-key", keys.publicKey]]),
-		{
-			expectedIssuer: "synthetic-platform",
-			expectedWorkerId: runtimeProbeWorkerId,
-			now: () => clock.now,
-		},
-	);
 	const selection = {
 		schemaVersion: 1,
 		modelOptionId: "selected-option",
 		reasoningLevel: "high",
 	};
-	const defaultSelection = {
-		schemaVersion: 1,
-		modelOptionId: "default-option",
-		reasoningLevel: "medium",
-	};
 	const hosts = [];
 	async function open() {
 		const driver = await FakeRuntimeDriver.open(
 			join(directory, "driver.json"),
-			[defaultSelection, selection],
+			[selection],
 		);
 		const store = await FileRuntimeStore.open(join(directory, "host.json"));
 		const host = await RuntimeHost.open({
@@ -70,8 +56,6 @@ async function setup() {
 				expectedWorkerId: runtimeProbeWorkerId,
 				now: () => clock.now,
 			},
-			allowLegacyBusiness: false,
-			validateGrantV4: verifyV4,
 		});
 		hosts.push(host);
 		const options = {
@@ -82,15 +66,10 @@ async function setup() {
 				throw new Error("Legacy grants must not be used");
 			},
 			verifyGrantV2: verify,
-			verifyGrantV4: verifyV4,
 		};
 		const app = createRuntimeHostApp(options);
 		function post(path, body, token = options.serviceToken) {
-			const version = path.startsWith("v4/") ? "v4/" : "v3/";
-			const relativePath = path.startsWith("v4/")
-				? path.slice("v4/".length)
-				: path;
-			return app.request(`/internal/runtime/${version}${relativePath}`, {
+			return app.request(`/internal/runtime/v3/${path}`, {
 				method: "POST",
 				headers: {
 					authorization: `Bearer ${token}`,
@@ -117,18 +96,16 @@ async function setup() {
 				},
 				"turn.submit",
 			);
-			const response = await post("v4/turns", submit);
+			const response = await post("turns", submit);
 			expect(response.status).toBe(200);
 			const accepted = await response.json();
 			expect(accepted).toMatchObject({
-				schemaVersion: 4,
+				schemaVersion: 3,
 				result: { outcome: "accepted" },
 			});
-			const businessRequest = submit.businessRequest;
 			return {
-				submit: businessRequest,
-				originalOperationDigest:
-					protocol.originalOperationDigest(businessRequest),
+				submit,
+				originalOperationDigest: protocol.originalOperationDigest(submit),
 				lookup: { ...lookup, hostSessionRef: accepted.hostSessionRef },
 			};
 		}
@@ -138,19 +115,19 @@ async function setup() {
 		for (const host of hosts) await host.close();
 		await rm(directory, { recursive: true, force: true });
 	});
-	return { protocol, clock, open, verify, verifyV4, ...(await open()) };
+	return { protocol, clock, open, verify, ...(await open()) };
 }
 
-it("the image probe signs V4 business requests and preserves Host rejection boundaries", async () => {
+it("the image probe signs command-specific V3 requests and preserves Host rejection boundaries", async () => {
 	const env = await setup();
 	const selected = await env.submit("selection", undefined, true);
-	const claims = (await env.verifyV4(selected.submit)).claims;
+	const claims = env.verify(selected.submit.grant).claims;
 	expect(claims.allowedCommands).toEqual(["turn.submit"]);
 	expect(claims.expiresAt - claims.issuedAt).toBe(30_000);
 	expect(claims.workerId).toBe(runtimeProbeWorkerId);
 	const replay = env.protocol.signRequest(selected.submit, "turn.submit");
-	expect(replay.businessRequest.requestId).not.toBe(selected.submit.requestId);
-	expect((await env.post("v4/turns", replay)).status).toBe(200);
+	expect(replay.requestId).not.toBe(selected.submit.requestId);
+	expect((await env.post("turns", replay)).status).toBe(200);
 	const conflict = env.protocol.signRequest(
 		{
 			...selected.submit,
@@ -162,50 +139,32 @@ it("the image probe signs V4 business requests and preserves Host rejection boun
 		},
 		"turn.submit",
 	);
-	const conflictResponse = await env.post("v4/turns", conflict);
+	const conflictResponse = await env.post("turns", conflict);
 	expect(conflictResponse.status).toBe(409);
 	expect((await conflictResponse.json()).code).toBe(
 		"RUNTIME_OPERATION_CONFLICT",
 	);
 	for (const body of [
+		{ ...replay, input: { text: "tampered", attachments: [] } },
+		{ ...replay, requestId: "request-tampered" },
 		{
 			...replay,
-			businessRequest: {
-				...replay.businessRequest,
-				input: { text: "tampered", attachments: [] },
+			operation: {
+				...replay.operation,
+				deliveryFence: 2,
+				executionDeliveryFence: 2,
 			},
 		},
 		{
 			...replay,
-			businessRequest: {
-				...replay.businessRequest,
-				requestId: "request-tampered",
-			},
-		},
-		{
-			...replay,
-			businessRequest: {
-				...replay.businessRequest,
-				operation: {
-					...replay.businessRequest.operation,
-					deliveryFence: 2,
-					executionDeliveryFence: 2,
-				},
-			},
-		},
-		{
-			...replay,
-			businessRequest: {
-				...replay.businessRequest,
-				grant: {
-					...replay.businessRequest.grant,
-					token: `${replay.businessRequest.grant.token.split(".").slice(0, 2).join(".")}.${Buffer.alloc(64).toString("base64url")}`,
-				},
+			grant: {
+				...replay.grant,
+				token: `${replay.grant.token.split(".").slice(0, 2).join(".")}.${Buffer.alloc(64).toString("base64url")}`,
 			},
 		},
 	])
-		expect((await env.post("v4/turns", body)).status).toBe(403);
-	expect((await env.post("v4/turns", replay, "other-token")).status).toBe(401);
+		expect((await env.post("turns", body)).status).toBe(403);
+	expect((await env.post("turns", replay, "other-token")).status).toBe(401);
 	for (const override of [
 		{ principal: { kind: "user", id: "other-principal" } },
 		{ agentId: "other-agent" },
@@ -219,7 +178,7 @@ it("the image probe signs V4 business requests and preserves Host rejection boun
 			},
 			"turn.submit",
 		);
-		expect((await env.post("v4/turns", foreign)).status).toBe(403);
+		expect((await env.post("turns", foreign)).status).toBe(403);
 	}
 	const otherWorker = createRuntimeHostApp({
 		...env.options,
@@ -227,7 +186,7 @@ it("the image probe signs V4 business requests and preserves Host rejection boun
 	});
 	expect(
 		(
-			await otherWorker.request("/internal/runtime/v4/turns", {
+			await otherWorker.request("/internal/runtime/v3/turns", {
 				method: "POST",
 				headers: {
 					authorization: "Bearer synthetic-service-token",
@@ -238,11 +197,11 @@ it("the image probe signs V4 business requests and preserves Host rejection boun
 		).status,
 	).toBe(403);
 	env.clock.now += 30_001;
-	expect((await env.post("v4/turns", replay)).status).toBe(403);
+	expect((await env.post("turns", replay)).status).toBe(403);
 	expect(
 		(
 			await env.post(
-				"v4/turns",
+				"turns",
 				env.protocol.signRequest(selected.submit, "turn.submit"),
 			)
 		).status,
@@ -311,7 +270,7 @@ it("the probe recovers without input, stops only its Conversation, and preserves
 			status: "cancelled",
 		});
 		const replay = await runtime.post(
-			"v4/turns",
+			"turns",
 			env.protocol.signRequest(continuation.submit, "turn.submit"),
 		);
 		expect(replay.status).toBe(409);

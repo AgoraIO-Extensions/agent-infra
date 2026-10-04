@@ -7,6 +7,7 @@ import {
 	jsonb,
 	text,
 	timestamp,
+	unique,
 	uniqueIndex,
 	varchar,
 } from "drizzle-orm/pg-core";
@@ -17,6 +18,7 @@ import {
 	conversationStopStatus,
 	platformSchema,
 } from "./schema-common";
+import { relayKeyVersions } from "./schema-relay-keys";
 
 export const conversations = platformSchema.table(
 	"conversations",
@@ -44,9 +46,23 @@ export const conversations = platformSchema.table(
 			.notNull(),
 		selectedModelOptionId: text("selected_model_option_id"),
 		selectedReasoningLevel: text("selected_reasoning_level"),
+		principalType: varchar("principal_type", { length: 16 })
+			.default("user")
+			.notNull(),
 	},
 	(table) => [
 		check("conversation_id_non_empty", sql`char_length(${table.id}) > 0`),
+		check(
+			"conversation_principal_type_valid",
+			sql`(${table.principalType} = 'user' AND ${table.channelId} <> 'api:application') OR (${table.principalType} = 'application' AND ${table.channelId} in ('api', 'api:application'))`,
+		),
+		unique("conversation_principal_binding_unique").on(
+			table.id,
+			table.agentId,
+			table.actorId,
+			table.channelId,
+			table.principalType,
+		),
 		check(
 			"conversation_agent_id_non_empty",
 			sql`char_length(${table.agentId}) > 0`,
@@ -121,6 +137,19 @@ export const conversationExecutions = platformSchema.table(
 		}),
 		modelOptionId: text("model_option_id"),
 		reasoningLevel: text("reasoning_level"),
+		executionSource: text("execution_source"),
+		relayKeyPurpose: text("relay_key_purpose"),
+		relayKeySubjectId: text("relay_key_subject_id"),
+		relayKeyId: text("relay_key_id"),
+		relayKeyVersion: bigint("relay_key_version", { mode: "number" }),
+		runtimeSubmitProtocol: text("runtime_submit_protocol"),
+		originalOperationDigest: text("original_operation_digest"),
+		originalSubmitHostSessionRef: text("original_submit_host_session_ref"),
+		principalType: varchar("principal_type", { length: 16 })
+			.default("user")
+			.notNull(),
+		taskWaitOrder: bigint("task_wait_order", { mode: "number" }),
+		taskWaitDeadline: timestamp("task_wait_deadline", { withTimezone: true }),
 	},
 	(table) => [
 		foreignKey({
@@ -128,6 +157,46 @@ export const conversationExecutions = platformSchema.table(
 			foreignColumns: [conversations.id],
 			name: "conversation_execution_conversation_fk",
 		}),
+		check(
+			"conversation_execution_principal_type_valid",
+			sql`(${table.principalType} = 'user' AND ${table.channelId} <> 'api:application') OR (${table.principalType} = 'application' AND ${table.channelId} in ('api', 'api:application'))`,
+		),
+		foreignKey({
+			columns: [
+				table.conversationId,
+				table.agentId,
+				table.actorId,
+				table.channelId,
+				table.principalType,
+			],
+			foreignColumns: [
+				conversations.id,
+				conversations.agentId,
+				conversations.actorId,
+				conversations.channelId,
+				conversations.principalType,
+			],
+			name: "conversation_execution_principal_binding_fk",
+		}),
+		foreignKey({
+			columns: [
+				table.relayKeyPurpose,
+				table.relayKeySubjectId,
+				table.relayKeyVersion,
+				table.relayKeyId,
+			],
+			foreignColumns: [
+				relayKeyVersions.purpose,
+				relayKeyVersions.subjectId,
+				relayKeyVersions.keyVersion,
+				relayKeyVersions.keyId,
+			],
+			name: "conversation_execution_key_version_fk",
+		}),
+		check(
+			"conversation_execution_task_wait_binding",
+			sql`(${table.taskWaitOrder} IS NULL AND ${table.taskWaitDeadline} IS NULL AND ${table.status}::text <> 'waiting') OR (${table.taskWaitOrder} IS NOT NULL AND ${table.taskWaitOrder} between 1 and 9007199254740991 AND ${table.taskWaitDeadline} IS NOT NULL AND ${table.taskWaitDeadline} > ${table.createdAt})`,
+		),
 		check(
 			"conversation_execution_id_non_empty",
 			sql`char_length(${table.executionId}) > 0`,
@@ -183,6 +252,44 @@ export const conversationExecutions = platformSchema.table(
 				AND char_length(${table.reasoningLevel}) > 0
 			)`,
 		),
+		check(
+			"conversation_execution_original_digest_binding",
+			sql`(${table.runtimeSubmitProtocol} IS NULL AND ${table.originalOperationDigest} IS NULL AND ${table.originalSubmitHostSessionRef} IS NULL) OR (${table.runtimeSubmitProtocol} IS NOT NULL AND ${table.originalOperationDigest} IS NOT NULL AND ${table.runtimeSubmitProtocol} in ('v2', 'v4') AND ${table.originalOperationDigest} ~ '^[A-Za-z0-9_-]{43}$' AND (${table.runtimeSubmitProtocol} <> 'v4' OR ${table.executionSource} IS NOT NULL) AND (${table.runtimeSubmitProtocol} <> 'v2' OR (${table.executionSource} IS NULL AND ${table.originalSubmitHostSessionRef} IS NULL)))`,
+		),
+		check(
+			"conversation_execution_key_binding",
+			sql`(
+				${table.executionSource} IS NULL
+				AND ${table.relayKeyPurpose} IS NULL
+				AND ${table.relayKeySubjectId} IS NULL
+				AND ${table.relayKeyId} IS NULL
+				AND ${table.relayKeyVersion} IS NULL
+			) OR (
+				${table.executionSource} IS NOT NULL
+				AND ${table.relayKeyPurpose} IS NOT NULL
+				AND ${table.relayKeySubjectId} IS NOT NULL
+				AND ${table.relayKeyId} IS NOT NULL
+				AND ${table.relayKeyVersion} IS NOT NULL
+				AND ${table.executionSource} in ('web', 'wecom', 'platform-api', 'eval')
+				AND ${table.relayKeyPurpose} in ('personal', 'agent-default')
+				AND char_length(${table.relayKeySubjectId}) > 0
+				AND char_length(${table.relayKeyId}) > 0
+				AND ${table.relayKeyVersion} between 1 and 9007199254740991
+				AND ((${table.executionSource} = 'web' AND ${table.channelId} = 'web')
+					OR (${table.executionSource} = 'wecom' AND (${table.channelId} = 'wecom'
+						OR left(${table.channelId}, 10) = 'wecom_bot:'
+						OR left(${table.channelId}, 10) = 'wecom_app:'))
+					OR (${table.executionSource} = 'platform-api' AND (${table.channelId} = 'api'
+						OR ${table.channelId} LIKE 'api:%'))
+					OR (${table.executionSource} = 'eval' AND ${table.channelId} = 'eval'))
+				AND ((${table.executionSource} in ('web', 'wecom')
+					AND ${table.relayKeyPurpose} = 'personal'
+					AND ${table.relayKeySubjectId} = ${table.actorId})
+					OR (${table.executionSource} in ('platform-api', 'eval')
+					AND ${table.relayKeyPurpose} = 'agent-default'
+					AND ${table.relayKeySubjectId} = ${table.agentId}))
+			)`,
+		),
 		uniqueIndex("conversation_execution_id_conversation_unique").on(
 			table.executionId,
 			table.conversationId,
@@ -191,6 +298,13 @@ export const conversationExecutions = platformSchema.table(
 			table.executionId,
 			table.conversationId,
 			table.sessionGeneration,
+		),
+		uniqueIndex("conversation_execution_task_wait_order_unique")
+			.on(table.agentId, table.taskWaitOrder)
+			.where(sql`${table.taskWaitOrder} IS NOT NULL`),
+		index("conversation_execution_agent_wait_idx").on(
+			table.agentId,
+			table.taskWaitOrder,
 		),
 		uniqueIndex("conversation_active_execution_unique")
 			.on(table.conversationId)
@@ -417,11 +531,11 @@ export const conversationEvents = platformSchema.table(
 					${table.source} = 'runtime'
 					AND ${table.runtimeCursor} IS NOT NULL
 					AND char_length(${table.runtimeCursor}) > 0
-					AND ${table.eventType} <> 'model.selection.fell_back'
+					AND ${table.eventType} not in ('model.selection.fell_back', 'task.status')
 				) OR (
 					${table.source} = 'platform'
 					AND ${table.runtimeCursor} IS NULL
-					AND ${table.eventType} = 'model.selection.fell_back'
+					AND ${table.eventType} in ('model.selection.fell_back', 'task.status')
 				)`,
 		),
 		uniqueIndex("conversation_event_execution_adapter_key_unique")

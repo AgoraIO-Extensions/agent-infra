@@ -1,7 +1,124 @@
 import type { ConversationMetadataRecoveryV1 } from "./conversation-dispatch.js";
 import type { PersistedConversationEventV1 } from "./conversation-events.js";
 import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
-import type { TaskAuthorizationBoundaryV1 } from "./task-authorization.js";
+import type { PersonalApiTaskAdmissionAuthorityV1 } from "./personal-api-task-authorization.js";
+import {
+	type CurrentTaskApplicationV1,
+	type CurrentTaskUserV1,
+	isTaskApiChannelV1,
+	parseCurrentTaskApplicationV1,
+	parseCurrentTaskUserV1,
+	parseTaskAuthorizationBoundaryV1,
+	type TaskAuthorizationBoundaryV1,
+	type TaskPrincipalV1,
+} from "./task-authorization.js";
+
+export type ConversationExecutionSourceV1 =
+	| "web"
+	| "wecom"
+	| "platform-api"
+	| "eval";
+
+/** The channel comes from the server authorization port, never the command. */
+export function conversationExecutionSourceV1(
+	channelId: string,
+): ConversationExecutionSourceV1 {
+	if (channelId === "web") return "web";
+	if (
+		channelId === "wecom" ||
+		(channelId.startsWith("wecom_bot:") &&
+			channelId.length > "wecom_bot:".length) ||
+		(channelId.startsWith("wecom_app:") &&
+			channelId.length > "wecom_app:".length)
+	)
+		return "wecom";
+	if (
+		channelId === "api" ||
+		channelId === "api:user" ||
+		channelId === "api:application"
+	)
+		return "platform-api";
+	if (channelId === "eval") return "eval";
+	throw new TypeError("Execution source cannot be confirmed");
+}
+
+/** Current Agent access is protected by its locked revision in the Store. */
+export function conversationExecutionKeySubjectV1(
+	authority: ConversationExecutionAuthorityV1,
+	sourceKind: "standard" | "custom" | null | undefined,
+	currentPrincipal: CurrentTaskUserV1 | CurrentTaskApplicationV1,
+): {
+	readonly executionSource: ConversationExecutionSourceV1;
+	readonly purpose: "personal" | "agent-default";
+	readonly subjectId: string;
+} | null {
+	if (sourceKind === "custom") return null;
+	if (sourceKind !== "standard")
+		throw new TypeError("Execution source cannot be confirmed");
+	let boundary: TaskAuthorizationBoundaryV1;
+	try {
+		boundary = parseTaskAuthorizationBoundaryV1(authority.taskBoundary);
+	} catch {
+		throw new TypeError("Execution Key authority cannot be confirmed");
+	}
+	if (
+		boundary.principal.id !== authority.actorId ||
+		boundary.agentId !== authority.agentId ||
+		boundary.channelId !== authority.channelId ||
+		boundary.agentAuthorizationRevision !== authority.authorizationRevision
+	) {
+		throw new TypeError("Execution Key authority cannot be confirmed");
+	}
+	if (boundary.principal.kind === "application") {
+		const application = parseCurrentTaskApplicationV1(currentPrincipal);
+		const grant = application.useGrant;
+		if (
+			application.applicationId !== boundary.principal.id ||
+			application.status !== "active" ||
+			application.authorizationRevision !== boundary.identityRevision ||
+			!grant ||
+			grant.revoked ||
+			grant.agentId !== boundary.agentId ||
+			boundary.accessSources.length !== 1 ||
+			boundary.accessSources[0]?.kind !== "api-use" ||
+			boundary.accessSources[0].useGrantRevision !== grant.authorizationRevision
+		)
+			return null;
+		return {
+			executionSource: "platform-api",
+			purpose: "agent-default",
+			subjectId: boundary.agentId,
+		};
+	}
+	const user = parseCurrentTaskUserV1(currentPrincipal);
+	if (user.userId !== boundary.principal.id)
+		throw new TypeError("Execution Key authority cannot be confirmed");
+	if (
+		user.accountStatus !== "active" ||
+		user.authorizationRevision !== boundary.identityRevision ||
+		!boundary.accessSources.some(
+			(source) =>
+				source.kind !== "organization" ||
+				user.organizationIds.includes(source.organizationId),
+		)
+	) {
+		return null;
+	}
+	if (
+		isTaskApiChannelV1(boundary.channelId, boundary.principal) &&
+		(boundary.accessSources.length !== 1 ||
+			boundary.accessSources[0]?.kind !== "api-use")
+	)
+		return null;
+	const executionSource = conversationExecutionSourceV1(boundary.channelId);
+	return executionSource === "web" || executionSource === "wecom"
+		? { executionSource, purpose: "personal", subjectId: boundary.principal.id }
+		: {
+				executionSource,
+				purpose: "agent-default",
+				subjectId: boundary.agentId,
+			};
+}
 
 export interface ConversationExecutionAuthorityV1 {
 	readonly schemaVersion: 1;
@@ -11,6 +128,8 @@ export interface ConversationExecutionAuthorityV1 {
 	readonly authorizationRevision: string;
 	readonly supportsSupplementaryInstruction: boolean;
 	readonly taskBoundary?: TaskAuthorizationBoundaryV1;
+	/** Transient server authority; never part of the accepted durable boundary. */
+	readonly personalApiAdmissionAuthority?: PersonalApiTaskAdmissionAuthorityV1;
 }
 
 export interface ConversationExecutionAuthorizationPortV1 {
@@ -144,6 +263,8 @@ export interface ConversationModelConfigurationV1 {
 }
 
 export interface ConversationExecutionConversationStateV1 {
+	/** Persisted C/E identity; legacy non-API user states may omit it. */
+	readonly principal?: TaskPrincipalV1;
 	readonly isolationPending?: true;
 	readonly schemaVersion: 1;
 	readonly conversationId: string;
@@ -185,6 +306,7 @@ export interface ConversationExecutionStateV1 {
 				readonly executionId: string;
 				readonly conversationId: string;
 				readonly actorId: string;
+				readonly principal?: TaskPrincipalV1;
 				readonly sessionGeneration: number;
 				readonly modelConfigurationRevision: number | null;
 				readonly modelOptionId: string | null;
@@ -210,6 +332,7 @@ export interface ConversationExecutionStateV1 {
 				readonly executionId: string;
 				readonly conversationId: string;
 				readonly actorId: string;
+				readonly principal?: TaskPrincipalV1;
 				readonly turnId: string;
 				readonly sessionGeneration: number;
 				readonly modelConfigurationRevision: number | null;

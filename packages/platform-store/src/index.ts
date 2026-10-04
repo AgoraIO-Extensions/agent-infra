@@ -39,6 +39,11 @@ export {
 	PostgresApplicationRevisionTransactionV1,
 } from "./application-revision.ts";
 export {
+	readCurrentTaskApiUseGrantV1,
+	readCurrentTaskApplicationV1,
+	TaskCurrentAuthorityUnavailableErrorV1,
+} from "./application-task-authorization.ts";
+export {
 	type AuditRow,
 	decodePlatformAuditRowV1,
 	type PlatformAuditActionV1,

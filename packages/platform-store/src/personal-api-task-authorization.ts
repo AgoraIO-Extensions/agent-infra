@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+	type CurrentTaskApplicationV1,
 	PersonalApiCredentialErrorV1,
 	type PersonalApiTaskAdmissionAuthorityV1,
 	type PersonalApiTaskBindingV1,
@@ -8,9 +9,12 @@ import {
 	requirePersonalApiTaskBindingV1,
 	requirePersonalApiTaskUseAuthorizationV1,
 	resolveCurrentPersonalApiUserV1,
+	type TaskApiChannelV1,
+	type TaskPrincipalV1,
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import type postgres from "postgres";
+import { readCurrentTaskApplicationV1 } from "./application-task-authorization.js";
 
 interface CredentialRow {
 	id: string;
@@ -34,21 +38,25 @@ async function requireReadCommitted(transaction: postgres.TransactionSql) {
 async function currentFacts(
 	transaction: postgres.TransactionSql,
 	input: {
-		userId: string;
+		principal: TaskPrincipalV1;
 		credentialId: string;
 		credentialHash: string;
 		agentId: string;
 	},
-	userDirectory: TaskUserDirectoryV1,
+	userDirectory: TaskUserDirectoryV1 | undefined,
 ) {
 	await requireReadCommitted(transaction);
 	// SHARE protects missing disable/grant rows too. Governance writes are ordered
 	// by PostgreSQL's table and row locks, not an entry authentication snapshot.
-	await transaction`lock table platform.platform_user_disables in share mode`;
-	const disabled = await transaction<{ user_id: string }[]>`
-		select user_id from platform.platform_user_disables
-		where user_id = ${input.userId}
-	`;
+	let disabled = false;
+	if (input.principal.kind === "user") {
+		await transaction`lock table platform.platform_user_disables in share mode`;
+		const rows = await transaction<{ user_id: string }[]>`
+			select user_id from platform.platform_user_disables
+			where user_id = ${input.principal.id}
+		`;
+		disabled = rows.length !== 0;
+	}
 	const [credential] = await transaction<CredentialRow[]>`
 		select id, credential_hash, principal_type, principal_id, scopes, expires_at, revoked_at
 		from platform.platform_api_credentials where id = ${input.credentialId} for update
@@ -60,7 +68,16 @@ async function currentFacts(
 	if (matching.length > 1) {
 		throw new PersonalApiCredentialErrorV1("unavailable");
 	}
+	let application: CurrentTaskApplicationV1 | null = null;
+	if (input.principal.kind === "application") {
+		await transaction`lock table platform.platform_applications in share mode`;
+	}
 	await transaction`lock table platform.agent_principal_grants in share mode`;
+	if (input.principal.kind === "application")
+		application = await readCurrentTaskApplicationV1(transaction, {
+			applicationId: input.principal.id,
+			agentId: input.agentId,
+		});
 	const [grant] = await transaction<
 		{
 			agent_id: string;
@@ -73,13 +90,13 @@ async function currentFacts(
 	>`
 		select agent_id, principal_type, principal_id, grant_type,
 			authorization_revision, revoked_at from platform.agent_principal_grants
-		where principal_type = 'user' and principal_id = ${input.userId}
+		where principal_type = ${input.principal.kind} and principal_id = ${input.principal.id}
 			and agent_id = ${input.agentId} and grant_type = 'use'
 	`;
-	const user = await resolveCurrentPersonalApiUserV1(
-		userDirectory,
-		input.userId,
-	);
+	const user =
+		input.principal.kind === "user"
+			? await resolveCurrentPersonalApiUserV1(userDirectory, input.principal.id)
+			: null;
 	// Resolve external identity before taking a fresh database clock sample.
 	const [clock] = await transaction<{ now: Date }[]>`
 		select clock_timestamp() as now
@@ -107,7 +124,8 @@ async function currentFacts(
 				}
 			: null,
 		user,
-		disabled: disabled.length !== 0,
+		application,
+		disabled,
 		now: clock?.now ?? new Date(Number.NaN),
 	};
 }
@@ -115,8 +133,13 @@ async function currentFacts(
 /** Resolve the actual Bearer inside the caller's transaction; never open a pool. */
 export async function resolvePersonalApiTaskAdmissionAuthorityV1(
 	transaction: postgres.TransactionSql,
-	request: { readonly material: string; readonly agentId: string },
-	userDirectory: TaskUserDirectoryV1,
+	request: {
+		readonly material: string;
+		readonly agentId: string;
+		readonly channelId?: TaskApiChannelV1;
+		readonly operation?: "agent:use" | "agent:read";
+	},
+	userDirectory: TaskUserDirectoryV1 | undefined,
 ): Promise<PersonalApiTaskAdmissionAuthorityV1> {
 	try {
 		const material = request.material;
@@ -140,13 +163,20 @@ export async function resolvePersonalApiTaskAdmissionAuthorityV1(
 			throw new PersonalApiCredentialErrorV1("unavailable");
 		}
 		const reference = rows[0];
-		if (!reference || reference.principal_type !== "user") {
+		if (
+			!reference ||
+			(reference.principal_type !== "user" &&
+				reference.principal_type !== "application")
+		) {
 			throw new PersonalApiCredentialErrorV1("authentication_required");
 		}
 		const facts = await currentFacts(
 			transaction,
 			{
-				userId: reference.principal_id,
+				principal: {
+					kind: reference.principal_type,
+					id: reference.principal_id,
+				},
 				credentialId: reference.id,
 				credentialHash,
 				agentId: request.agentId,
@@ -159,13 +189,19 @@ export async function resolvePersonalApiTaskAdmissionAuthorityV1(
 		try {
 			authority = parsePersonalApiTaskAdmissionAuthorityV1({
 				schemaVersion: 1,
-				principal: { kind: "user", id: reference.principal_id },
+				principal: {
+					kind: reference.principal_type,
+					id: reference.principal_id,
+				},
 				credentialId: reference.id,
 				credentialHash,
 				agentId: request.agentId,
-				channelId: "api",
-				operation: "agent:use",
-				identityRevision: facts.user.authorizationRevision,
+				channelId: request.channelId ?? "api",
+				operation: request.operation ?? "agent:use",
+				identityRevision:
+					facts.user?.authorizationRevision ??
+					facts.application?.authorizationRevision ??
+					"missing",
 				useGrantRevision: facts.grant?.authorizationRevision ?? "missing",
 			});
 		} catch {
@@ -184,7 +220,7 @@ export async function requireCurrentPersonalApiTaskAdmissionV1(
 	transaction: postgres.TransactionSql,
 	input: PersonalApiTaskAdmissionAuthorityV1,
 	binding: PersonalApiTaskBindingV1,
-	userDirectory: TaskUserDirectoryV1,
+	userDirectory: TaskUserDirectoryV1 | undefined,
 ): Promise<PersonalApiTaskUseAuthorizationV1> {
 	try {
 		const authority = parsePersonalApiTaskAdmissionAuthorityV1(input);
@@ -192,7 +228,7 @@ export async function requireCurrentPersonalApiTaskAdmissionV1(
 		const facts = await currentFacts(
 			transaction,
 			{
-				userId: authority.principal.id,
+				principal: authority.principal,
 				credentialId: authority.credentialId,
 				credentialHash: authority.credentialHash,
 				agentId: authority.agentId,

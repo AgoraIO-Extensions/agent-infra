@@ -1,8 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-	RuntimeModelConfigurationV3Schema,
-	RuntimeModelConfigurationV4Schema,
-} from "@agent-infra/contracts/runtime";
+import { RuntimeModelConfigurationV3Schema } from "@agent-infra/contracts/runtime";
 import type {
 	AgentConfigurationRecordV1,
 	AgentConfigurationRecordV2,
@@ -10,19 +7,14 @@ import type {
 import { expect, it } from "vitest";
 import { catalogFixture } from "./catalog.fixture.js";
 import {
-	createDeploymentModelCatalogAdapterV1,
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
 	projectRuntimeModelConfigurationV1,
-	projectRuntimeModelConfigurationV4,
-	revalidateRuntimeModelCatalogV4,
 	runtimeModelInjectionV1,
-	runtimeModelInjectionV4,
 	type StandardTemplateModelBindingV1,
 	standardTemplateModelBindingV1,
 	standardTemplateModelProtocolV1,
 	validateRuntimeModelProjectionV1,
-	validateRuntimeModelProjectionV4,
 	validateStandardTemplateModelBindingsV1,
 } from "./index.js";
 
@@ -346,180 +338,3 @@ it("reads historical tuple-free bytes without rebinding or changing their runtim
 		JSON.parse(runtimeModelInjectionV1(historical).configuration).configVersion,
 	).toBe(`configuration-${content.configurationRevision}-${fingerprint}`);
 });
-
-async function keylessProjectionFixture() {
-	const configuration: AgentConfigurationRecordV2 = {
-		...configurationV2,
-		modelConfiguration: {
-			catalogRevision: "catalog-a",
-			defaultOptionId: "primary",
-			defaultReasoningLevel: "high",
-			options: [
-				{
-					optionId: "primary",
-					modelId: "model-a",
-					endpointId: "endpoint-a",
-					reasoningLevels: ["high"],
-					credential: {
-						secretId: "old-model-secret-not-read",
-						version: 9,
-						isSet: true,
-					},
-				},
-			],
-		},
-	};
-	if (configuration.source.kind !== "standard")
-		throw new Error("Expected standard configuration");
-	const binding: StandardTemplateModelBindingV1 = {
-		templateId: configuration.source.templateId,
-		imageDigest: configuration.source.imageDigest,
-		driver: "codex",
-		protocol: "openai-responses-v1",
-	};
-	const projected = await projectRuntimeModelConfigurationV4({
-		configuration,
-		standardTemplateBinding: binding,
-		catalog: createFakeModelCatalogAdapterV1(catalogFixture()),
-		signal: new AbortController().signal,
-	});
-	return { configuration, binding, projected };
-}
-it("produces V4 model configuration with the trusted image/Driver tuple and no static Key references", async () => {
-	const { projected, binding } = await keylessProjectionFixture();
-	expect(projected.standardTemplateBinding).toEqual(binding);
-	const injection = runtimeModelInjectionV4(projected);
-	const parsedConfiguration = RuntimeModelConfigurationV4Schema.parse(
-		JSON.parse(injection.configuration),
-	);
-	expect(parsedConfiguration).toMatchObject({
-		schemaVersion: 4,
-		modelOptions: [
-			{
-				modelOptionId: "primary",
-				endpoint: "https://models.example.test/team-a/v1",
-			},
-		],
-	});
-	expect(injection.env).toEqual([
-		{
-			name: "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
-			valueFrom: {
-				secretKeyRef: {
-					name: injection.secretName,
-					key: "configuration",
-					optional: false,
-				},
-			},
-		},
-	]);
-	const safeProjection = JSON.stringify({
-		projected,
-		configuration: parsedConfiguration,
-	});
-	for (const forbidden of [
-		"old-model-secret-not-read",
-		"credentialEnvironmentVariable",
-		"secretRef",
-		"secretKey",
-	]) {
-		expect(safeProjection).not.toContain(forbidden);
-	}
-	expect(safeProjection).not.toContain("AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_");
-});
-it("rejects rehashed V4 projection source/Driver drift and static credentials", async () => {
-	const { configuration, projected } = await keylessProjectionFixture();
-	const { fingerprint: _fingerprint, ...original } = projected;
-	const { standardTemplateBinding: _binding, ...tupleFree } = original;
-	for (const content of [
-		tupleFree,
-		{ ...original, agentId: "another-agent" },
-		{
-			...original,
-			standardTemplateBinding: {
-				...original.standardTemplateBinding,
-				templateId: "another-template",
-			},
-		},
-		{
-			...original,
-			standardTemplateBinding: {
-				...original.standardTemplateBinding,
-				imageDigest: `sha256:${"b".repeat(64)}`,
-			},
-		},
-		{
-			...original,
-			standardTemplateBinding: {
-				...original.standardTemplateBinding,
-				driver: "claude",
-				protocol: "anthropic-messages-v1",
-			},
-		},
-		{
-			...original,
-			options: original.options.map((option) => ({
-				...option,
-				secretKey: "STATIC_KEY",
-			})),
-		},
-	]) {
-		expect(() =>
-			validateRuntimeModelProjectionV4(
-				{
-					...content,
-					fingerprint: hash(JSON.stringify(content)).toLowerCase(),
-				},
-				configuration,
-			),
-		).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
-	}
-});
-it.each(["changed", "removed", "expired"])(
-	"revalidates V4 catalog facts before use after %s",
-	async (change) => {
-		const { projected } = await keylessProjectionFixture();
-		const catalog = catalogFixture();
-		const endpoint = catalog.endpoints[0];
-		if (!endpoint) throw new Error("Missing endpoint fixture");
-		if (change === "changed")
-			endpoint.baseUrl = "https://models.example.test/changed/v1";
-		else if (change === "removed") catalog.endpoints = [];
-		else catalog.validUntil = Date.now() - 1;
-		await expect(
-			revalidateRuntimeModelCatalogV4(
-				projected,
-				createDeploymentModelCatalogAdapterV1({ load: async () => catalog }),
-				new AbortController().signal,
-			),
-		).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
-	},
-);
-
-it.each(["https://127.0.0.1/v1", "https://localhost/v1", "https://[::1]/v1"])(
-	"rejects V4 non-DNS endpoint in the producer before injection: %s",
-	async (baseUrl) => {
-		const { configuration, binding } = await keylessProjectionFixture();
-		const catalog = catalogFixture();
-		const endpoint = catalog.endpoints[0];
-		if (!endpoint) throw new Error("Missing endpoint fixture");
-		const fakeCatalog = createFakeModelCatalogAdapterV1(catalog);
-		await expect(
-			projectRuntimeModelConfigurationV4({
-				configuration,
-				standardTemplateBinding: binding,
-				catalog: {
-					async resolve(input, options) {
-						const typedEndpoint = await fakeCatalog.resolve(input, options);
-						return {
-							...typedEndpoint,
-							baseUrl,
-							origin: new URL(baseUrl).origin,
-						};
-					},
-				},
-				signal: new AbortController().signal,
-			}),
-		).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
-	},
-);
