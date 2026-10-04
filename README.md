@@ -80,7 +80,7 @@ Pod/PVC 调谐、多人运行上下文隔离和真实 Pilot 仍由对应交付�
 
 ## 开发工作流
 
-开发流转、角色权限、Worker 授权、门禁、失败恢复和通知规则见
+本地开发与评审、确定性 CI、人工验证和合并规则见
 [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md)。
 
 开始工作前请阅读 [AGENTS.md](AGENTS.md)。

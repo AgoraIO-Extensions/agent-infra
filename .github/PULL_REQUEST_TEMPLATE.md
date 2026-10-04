@@ -10,7 +10,7 @@ Closes #
 
 ## 验收标准
 
-<!-- 每个来源 Issue 的 AC-N 恰好一行；Status 只使用 pass 或 not_applicable。 -->
+<!-- 逐条记录来源 Issue 的 AC-N 与证据；失败或待验证项如实写 fail / pending。 -->
 
 | AC | Status | Evidence |
 | --- | --- | --- |
