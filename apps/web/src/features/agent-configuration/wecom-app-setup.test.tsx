@@ -196,3 +196,28 @@ it("restores a pending session after reload so the Owner can cancel it", async (
 		expect(screen.queryByRole("button", { name: "取消配置" })).toBeNull(),
 	);
 });
+
+it("clears the displayed application state immediately when unbinding", async () => {
+	client.setConfig({ baseUrl: "https://platform.test" });
+	const onUnbind = vi.fn();
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () =>
+			Response.json({
+				status: "connected",
+				callbackUrl: "https://callback.test",
+			}),
+		),
+	);
+	render(<WecomAppSetup agentId="agent" onUnbind={onUnbind} />);
+	await waitFor(() =>
+		expect(screen.getByRole("button", { name: "解除应用绑定" })).toBeTruthy(),
+	);
+	fireEvent.click(screen.getByRole("button", { name: "解除应用绑定" }));
+	expect(screen.getByText("未配置")).toBeTruthy();
+	expect(screen.queryByText(/callback.test/)).toBeNull();
+	expect(onUnbind).toHaveBeenCalledWith({
+		schemaVersion: 2,
+		channels: [{ kind: "wecom_app", enabled: false }],
+	});
+});

@@ -221,10 +221,8 @@ export function WecomAppSetup({
 				code !== 408 &&
 				code !== 429
 			) {
-				session.current = undefined;
-				setBusy(false);
-				setStatus(undefined);
-				setError("凭证提交被拒绝，请检查输入并重试。");
+				setError("凭证提交被拒绝，正在查询配置状态；可取消本次配置后重试。");
+				await poll(attempt);
 				return;
 			}
 		} catch {
@@ -449,12 +447,14 @@ export function WecomAppSetup({
 						type="button"
 						variant="outline"
 						disabled={busy}
-						onClick={() =>
+						onClick={() => {
+							setStatus("not_configured");
+							setCallbackUrl("");
 							onUnbind({
 								schemaVersion: 2,
 								channels: [{ kind: "wecom_app", enabled: false }],
-							})
-						}
+							});
+						}}
 					>
 						解除应用绑定
 					</Button>
