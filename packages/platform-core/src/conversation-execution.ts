@@ -143,6 +143,8 @@ export function createConversationExecutionUseCaseV1(
 								!conversation ||
 								conversation.conversationId !== query.conversationId ||
 								conversation.actorId !== authority.actorId ||
+								(conversation.principal?.kind ?? "user") !==
+									(authority.taskBoundary?.principal.kind ?? "user") ||
 								conversation.agentId !== authority.agentId ||
 								conversation.channelId !== authority.channelId
 							) {
@@ -265,6 +267,8 @@ export function createConversationExecutionUseCaseV1(
 								!conversation ||
 								conversation.conversationId !== command.conversationId ||
 								conversation.actorId !== authority.actorId ||
+								(conversation.principal?.kind ?? "user") !==
+									(authority.taskBoundary?.principal.kind ?? "user") ||
 								conversation.agentId !== authority.agentId ||
 								conversation.channelId !== authority.channelId
 							) {
@@ -505,6 +509,8 @@ export function createConversationExecutionUseCaseV1(
 								!configuration ||
 								conversation.conversationId !== command.conversationId ||
 								conversation.actorId !== authority.actorId ||
+								(conversation.principal?.kind ?? "user") !==
+									(authority.taskBoundary?.principal.kind ?? "user") ||
 								conversation.agentId !== authority.agentId ||
 								conversation.channelId !== authority.channelId ||
 								conversation.status === "unavailable" ||
@@ -584,6 +590,8 @@ export function createConversationExecutionUseCaseV1(
 								!conversation ||
 								conversation.conversationId !== command.conversationId ||
 								conversation.actorId !== authority.actorId ||
+								(conversation.principal?.kind ?? "user") !==
+									(authority.taskBoundary?.principal.kind ?? "user") ||
 								conversation.agentId !== authority.agentId ||
 								conversation.channelId !== authority.channelId ||
 								!sourceMessage ||
@@ -724,6 +732,8 @@ export function createConversationExecutionUseCaseV1(
 								!conversation ||
 								conversation.conversationId !== command.conversationId ||
 								conversation.actorId !== authority.actorId ||
+								(conversation.principal?.kind ?? "user") !==
+									(authority.taskBoundary?.principal.kind ?? "user") ||
 								conversation.agentId !== authority.agentId ||
 								conversation.channelId !== authority.channelId ||
 								!targetExecution ||

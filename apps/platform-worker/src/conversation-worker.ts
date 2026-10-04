@@ -18,7 +18,11 @@ import {
 export interface PlatformConversationWorkerOptionsV2
 	extends Omit<
 		ConversationRuntimeOptionsV2,
-		"dispatchStore" | "taskAuthorizationStore" | "legacyControlStore"
+		| "dispatchStore"
+		| "taskAuthorizationStore"
+		| "legacyControlStore"
+		| "resolveCurrentApplication"
+		| "resolveCurrentApiUseGrant"
 	> {
 	readonly databaseUrl: string;
 	readonly pollIntervalMs?: number;
@@ -55,6 +59,7 @@ export function createPlatformConversationWorkerV2(
 		: controller.signal;
 	const store = openPostgresConversationDispatchStoreV1({
 		databaseUrl: options.databaseUrl,
+		userDirectory: options.directory,
 	});
 	const taskAuthorizationStore = new PostgresTaskAuthorizationStoreV1({
 		databaseUrl: options.databaseUrl,
@@ -74,6 +79,24 @@ export function createPlatformConversationWorkerV2(
 			dispatchStore: store,
 			taskAuthorizationStore,
 			legacyControlStore,
+			resolveCurrentApplication: async (applicationId, agentId, signal) => {
+				signal.throwIfAborted();
+				const current = await taskAuthorizationStore.readCurrentApplication({
+					applicationId,
+					agentId,
+				});
+				signal.throwIfAborted();
+				return current;
+			},
+			resolveCurrentApiUseGrant: async (principal, agentId, signal) => {
+				signal.throwIfAborted();
+				const current = await taskAuthorizationStore.readCurrentApiUseGrant({
+					principal,
+					agentId,
+				});
+				signal.throwIfAborted();
+				return current;
+			},
 		});
 		dispatch = createConversationDispatchUseCaseV1(
 			{
@@ -177,6 +200,7 @@ export function createPlatformConversationWorkerV2(
 			signal,
 		});
 		let launched = 0;
+		let lastBusinessItemId: string | undefined;
 		for (const item of items) {
 			if (stopped || signal.aborted) break;
 			// Advance after every scanned item; the Store wraps deferred work on the next lap.
@@ -204,9 +228,12 @@ export function createPlatformConversationWorkerV2(
 				)
 				.finally(() => running.delete(item.itemId));
 			running.set(item.itemId, { control, promise });
+			if (!control) lastBusinessItemId = item.itemId;
 			launched += 1;
 		}
-		if (items.length < limit) afterItemId = undefined;
+		// Resume after the last business attempt, including a busy claim.
+		// When saturated, keep scanning pages so stop work remains reachable.
+		if (lastBusinessItemId) afterItemId = lastBusinessItemId;
 		return launched;
 	}
 	function tick() {

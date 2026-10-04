@@ -18,4 +18,7 @@ export const publicOrigin = "https://localhost:3001";
 
 // apiInput is the credential-free Platform admission boundary. Keep Worker
 // private keys and raw model credentials out of this API-only module.
+// apiInput.taskAdmissionPolicy is required: maximumWaitingTasksPerAgent (tasks)
+// and waitingTimeoutMs (milliseconds) must both be positive safe integers.
+// Supply reviewed deployment values explicitly; fixture values are not defaults.
 export const apiInput = missing("apiInput");

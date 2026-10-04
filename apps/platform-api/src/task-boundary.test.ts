@@ -39,7 +39,12 @@ const connectDatabase = createRequire(
 	url: string,
 	options: { max: number; onnotice: () => void },
 ) => DatabaseReader;
-const configuration = agentConfigurationConformanceRecordV1;
+const configuration = {
+	...agentConfigurationConformanceRecordV1,
+	schemaVersion: 1 as const,
+	actions: [],
+	actionSetRevision: "actions_1",
+};
 const identity: IdentityContext = {
 	schemaVersion: 1 as const,
 	userId: "user_01",
@@ -119,6 +124,10 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		db = connectDatabase(database.databaseUrl, { max: 2, onnotice: () => {} });
 		assembly = assemblePlatformApi({
+			taskAdmissionPolicy: {
+				maximumWaitingTasksPerAgent: 2,
+				waitingTimeoutMs: 60_000,
+			},
 			databaseUrl: database.databaseUrl,
 			identity: adapter,
 			admissions: {
@@ -146,6 +155,24 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 		adapter.resolveUser = resolveUser;
 		resolveUser.mockReset().mockResolvedValue(currentUser);
 		await db.unsafe("truncate platform.agents, platform.conversations cascade");
+		await db.unsafe("truncate platform.relay_key_subjects cascade");
+		await db.unsafe(
+			"insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('personal',$1,1,1)",
+			[identity.userId],
+		);
+		await db.unsafe(
+			"insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('personal',$1,1,'controlled-personal-key',$2::text::jsonb)",
+			[
+				identity.userId,
+				JSON.stringify({
+					schemaVersion: 1,
+					purpose: "personal",
+					subjectId: identity.userId,
+					keyId: "controlled-personal-key",
+					keyVersion: 1,
+				}),
+			],
+		);
 		await db.unsafe(
 			"truncate platform.outbox_items, platform.idempotency_records, platform.audit_events",
 		);
@@ -168,6 +195,48 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 		await db.unsafe(
 			"insert into platform.agent_availability(agent_id,target_type,target_id) values($1,'organization','org_current')",
 			[configuration.agentId],
+		);
+		const deploymentBase = workloadDesiredFixture(
+			1,
+			configuration.agentId,
+			"internal-only",
+		);
+		const deployment = {
+			...deploymentBase,
+			configRevision: configuration.revision,
+			imageDigest: configuration.source.imageDigest,
+			registryAdmission: {
+				...deploymentBase.registryAdmission,
+				immutableDigest: configuration.source.imageDigest,
+				policyEvidence: {
+					...deploymentBase.registryAdmission.policyEvidence,
+					imageDigest: configuration.source.imageDigest,
+				},
+			},
+		};
+		const runtimeVersion = { configuration, deployment };
+		await db.unsafe(
+			"insert into platform.workload_reconciliations(agent_id,revision,state,next_attempt_at) values($1,1,$2::text::jsonb,now())",
+			[
+				configuration.agentId,
+				JSON.stringify({
+					schemaVersion: 1,
+					agentId: configuration.agentId,
+					sourceConfigurationRevision: configuration.revision,
+					sourceLifecycleRevision: 1,
+					revision: 1,
+					fence: 1,
+					phase: "ready",
+					candidate: runtimeVersion,
+					verified: runtimeVersion,
+					verifiedRevision: 1,
+					identity: { uid: "task-boundary", generation: 1 },
+					rollback: false,
+					failureCode: null,
+					attempts: 0,
+					capabilities: { supplementaryInstruction: true },
+				}),
+			],
 		);
 	});
 	afterEach(() => {
@@ -217,6 +286,20 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 			},
 		]);
 	});
+	it("rejects a missing personal Key without persisting task effects", async () => {
+		const conversationId = await createConversation();
+		await db.unsafe(
+			"update platform.relay_key_subjects set current_version=null where purpose='personal'",
+		);
+		const before = await snapshot();
+		const response = await post(
+			`/conversations/${conversationId}/messages`,
+			{ schemaVersion: 1, text: "synthetic" },
+			"missing-key",
+		);
+		expect(response.status).toBe(404);
+		expect(await snapshot()).toEqual(before);
+	});
 	it.each(["stale", "unavailable", "failure"] as const)(
 		"rejects a %s capability snapshot without persisting a task",
 		async (mode) => {
@@ -260,9 +343,22 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 	it.each(["enabled", "disabled", "absent", "drifted"] as const)(
 		"accepts supplements only with a currently verified capability: %s",
 		async (mode) => {
+			const deploymentBase = workloadDesiredFixture(
+				1,
+				configuration.agentId,
+				"internal-only",
+			);
 			const deployment = {
-				...workloadDesiredFixture(1, configuration.agentId, "internal-only"),
+				...deploymentBase,
 				configRevision: configuration.revision,
+				registryAdmission: {
+					...deploymentBase.registryAdmission,
+					immutableDigest: deploymentBase.imageDigest,
+					policyEvidence: {
+						...deploymentBase.registryAdmission.policyEvidence,
+						imageDigest: deploymentBase.imageDigest,
+					},
+				},
 			};
 			const configured = {
 				...configuration,
@@ -272,11 +368,21 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 				},
 			};
 			await db.unsafe(
-				"update platform.agent_configuration_revisions set configuration=$2::text::jsonb where agent_id=$1",
-				[configuration.agentId, JSON.stringify(configured)],
+				"update platform.agent_configuration_revisions set source_reference=$2, configuration=$3::text::jsonb where agent_id=$1",
+				[
+					configuration.agentId,
+					configured.source.kind === "standard"
+						? configured.source.templateId
+						: configured.source.imageDigest,
+					JSON.stringify(configured),
+				],
 			);
 			const version = { configuration: configured, deployment };
-			if (mode !== "absent")
+			if (mode !== "absent") {
+				await db.unsafe(
+					"delete from platform.workload_reconciliations where agent_id=$1 and revision=1",
+					[configuration.agentId],
+				);
 				await db.unsafe(
 					"insert into platform.workload_reconciliations(agent_id,revision,state,next_attempt_at) values($1,1,$2::text::jsonb,now())",
 					[
@@ -300,6 +406,7 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 						}),
 					],
 				);
+			}
 			const conversationId = await createConversation();
 			const first = await post(
 				`/conversations/${conversationId}/messages`,
@@ -670,7 +777,8 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 			{ schemaVersion: 1, text: "synthetic" },
 			"revision_race",
 		);
-		expect(response.status).toBe(503);
+		// Changed authority is denied before any acceptance write.
+		expect(response.status).toBe(404);
 		expect(await snapshot()).toEqual(before);
 	});
 });

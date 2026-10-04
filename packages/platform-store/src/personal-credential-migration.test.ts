@@ -126,6 +126,10 @@ beforeAll(async () => {
 	expect(appendEntries.map(({ idx, tag }) => ({ idx, tag }))).toEqual([
 		{ idx: 29, tag: "0029_platform_user_disables" },
 		{ idx: 30, tag: "0030_relay_key_authority_compatibility" },
+		{ idx: 31, tag: "0031_accepted_execution_key" },
+		{ idx: 32, tag: "0032_typed_task_principal" },
+		{ idx: 33, tag: "0033_typed_generation_principal" },
+		{ idx: 34, tag: "0034_task_status_event_source" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
@@ -362,8 +366,26 @@ describe("personal credential disable authority append", () => {
 				.slice(29)
 				.map(({ hash, created_at }) => ({ hash, created_at })),
 		).toEqual(appendedHistory);
-		expect(after.schema).toEqual(before.schema);
-		expect(after.data).toEqual(before.data);
+		const withoutTypedPrincipal = (data: typeof before.data) =>
+			Object.fromEntries(
+				Object.entries(data).map(([table, rows]) => [
+					table,
+					rows.map((row) => {
+						if (
+							table !== "conversations" &&
+							table !== "conversation_executions"
+						)
+							return row;
+						if (!row || typeof row !== "object") return row;
+						const copy = { ...(row as Record<string, unknown>) };
+						delete copy.principal_type;
+						return copy;
+					}),
+				]),
+			);
+		expect(withoutTypedPrincipal(after.data)).toEqual(
+			withoutTypedPrincipal(before.data),
+		);
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		const repeated = await snapshot();
 		expect(repeated).toEqual(after);

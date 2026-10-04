@@ -195,6 +195,7 @@ describe("Conversation Worker discovery and shutdown", () => {
 		const worker = createPlatformConversationWorkerV2(options);
 		try {
 			expect(await worker.tick()).toBe(1);
+			expect(await worker.tick()).toBe(0);
 			expect(await worker.tick()).toBe(1);
 			expect(mocks.dispatch.mock.calls.map((call) => call[0].itemId)).toEqual([
 				"turn-000",
@@ -202,7 +203,7 @@ describe("Conversation Worker discovery and shutdown", () => {
 			]);
 			expect(mocks.find.mock.calls[1]?.[0]).toMatchObject({
 				limit: 256,
-				afterItemId: "turn-255",
+				afterItemId: "turn-000",
 			});
 			pending.resolve();
 			await vi.waitFor(() => expect(completed.has("turn-000")).toBe(true));
@@ -213,7 +214,29 @@ describe("Conversation Worker discovery and shutdown", () => {
 			await worker.stop();
 		}
 	});
-	it("restarts discovery from the beginning after a short page", async () => {
+	it("does not starve runnable work behind a repeatedly busy short-page item", async () => {
+		const items = ["blocked-a", "runnable-b"].map((itemId) => ({
+			itemId,
+			operation: "conversation.turn.submit.v1",
+		}));
+		mocks.find.mockImplementation(async ({ afterItemId }) => [
+			...items.filter((item) => !afterItemId || item.itemId > afterItemId),
+			...items.filter((item) => afterItemId && item.itemId <= afterItemId),
+		]);
+		mocks.dispatch.mockResolvedValue({ outcome: "busy" });
+		const worker = createPlatformConversationWorkerV2(options);
+		try {
+			await worker.tick();
+			await worker.tick();
+			expect(mocks.dispatch.mock.calls.map((call) => call[0].itemId)).toEqual([
+				"blocked-a",
+				"runnable-b",
+			]);
+		} finally {
+			await worker.stop();
+		}
+	});
+	it("keeps the cursor after a short page and lets the Store wrap", async () => {
 		mocks.find
 			.mockResolvedValueOnce([
 				{ itemId: "turn-b", operation: "conversation.turn.submit.v1" },

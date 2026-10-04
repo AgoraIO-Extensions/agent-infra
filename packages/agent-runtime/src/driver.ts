@@ -35,7 +35,6 @@ export interface RuntimeExternalActionAuthorization {
 /** Host authority and credential are request-local; never part of durable commands. */
 export interface RuntimeExternalActionAuthorizationResult {
 	readonly relayKey?: string;
-	/** Synchronous current Host guard, called after the final persistence await. */
 	readonly revalidate?: () => void;
 }
 

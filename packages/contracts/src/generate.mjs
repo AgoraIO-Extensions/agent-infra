@@ -40,6 +40,8 @@ import {
 	pilotScopedAuditOpenApiPathsV1,
 	pilotScopedAuditSchemasV1,
 	pilotSseSchemasV1,
+	pilotTaskOpenApiPathsV1,
+	pilotTaskSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
 } from "./pilot/index.ts";
 import { platformAuthOpenApiPathsV1 } from "./platform-auth.ts";
@@ -639,6 +641,7 @@ function buildArtifacts() {
 			...fileOpenApiPathsV1,
 			...pilotBrowserSseOpenApiPathsV1,
 			...pilotScopedAuditOpenApiPathsV1,
+			...pilotTaskOpenApiPathsV1,
 		},
 		components: {
 			securitySchemes: {
@@ -654,6 +657,7 @@ function buildArtifacts() {
 				...pilotSseSchemasV1,
 				...fileSchemasV1,
 				...pilotScopedAuditSchemasV1,
+				...pilotTaskSchemasV1,
 			},
 		},
 	});

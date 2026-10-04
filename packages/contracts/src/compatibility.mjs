@@ -1012,6 +1012,59 @@ function isApplicationMaterialGrantV2OpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #482 C admits only the frozen three Task HTTP paths and six closed schemas.
+function isTaskHttpV1OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v1/agents/{agentId}/tasks",
+		"/api/v1/conversations/{conversationId}/tasks/{executionId}",
+		"/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel",
+	];
+	const schemas = [
+		"SubmitTaskRequestV1",
+		"TaskAcceptedV1",
+		"TaskProjectionV1",
+		"TaskStatusEventV1",
+		"CancelTaskRequestV1",
+		"TaskCancellationV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+		security: {
+			platformApiCredential:
+				current.components?.securitySchemes?.platformApiCredential,
+		},
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"062938f470294f68ec205f6e2007fa01a6306c40e3a59fe2195b8cad9e580a48"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	if (
+		previous.components?.securitySchemes?.platformApiCredential === undefined
+	) {
+		delete normalized.components.securitySchemes.platformApiCredential;
+		if (
+			Object.keys(normalized.components.securitySchemes).length === 0 &&
+			previous.components?.securitySchemes === undefined
+		)
+			delete normalized.components.securitySchemes;
+	}
+	return sameValue(previous, normalized);
+}
+
 // #1277 permits only the reviewed issuer operation; all previous contracts remain exact.
 function isApplicationCredentialIssuerV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/applications/{applicationId}/credentials";
@@ -1709,6 +1762,7 @@ function findBreakingChanges(previous, current) {
 			!isPersonalApiAgentReadAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyV2OpenApiAddition(previous, current) &&
+			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isConversationSseV2NotFoundAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&

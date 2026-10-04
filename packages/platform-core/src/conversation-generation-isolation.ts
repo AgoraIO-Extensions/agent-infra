@@ -15,11 +15,15 @@ export function planConversationGenerationIsolationV1(input: {
 	readonly failureCode: "RUNTIME_SESSION_RECOVERY_FAILED";
 }) {
 	const { claim, originalPrincipal } = input;
+	const claimPrincipal = claim.principal ?? {
+		kind: "user" as const,
+		id: claim.actorId,
+	};
 	if (
 		input.failureCode !== "RUNTIME_SESSION_RECOVERY_FAILED" ||
 		!input.controlSourceId ||
-		originalPrincipal.kind !== "user" ||
-		originalPrincipal.id !== claim.actorId ||
+		originalPrincipal.kind !== claimPrincipal.kind ||
+		originalPrincipal.id !== claimPrincipal.id ||
 		![
 			"conversation.turn.submit.v1",
 			"conversation.turn.regenerate.v1",
@@ -70,8 +74,10 @@ export function planConversationGenerationConfirmationV1(
 		!claim.hostSessionRef ||
 		claim.generationIsolation.operationId !==
 			`generation:${claim.conversationId}:${claim.sessionGeneration}` ||
-		claim.generationIsolation.originalPrincipal.kind !== "user" ||
-		claim.generationIsolation.originalPrincipal.id !== claim.actorId ||
+		claim.generationIsolation.originalPrincipal.kind !==
+			(claim.principal?.kind ?? "user") ||
+		claim.generationIsolation.originalPrincipal.id !==
+			(claim.principal?.id ?? claim.actorId) ||
 		!Number.isSafeInteger(claim.sessionGeneration) ||
 		claim.sessionGeneration < 1 ||
 		claim.sessionGeneration >= Number.MAX_SAFE_INTEGER

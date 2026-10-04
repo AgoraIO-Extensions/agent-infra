@@ -8,6 +8,10 @@ function fixture(requestScope: PlatformAppDependencies["requestScope"]) {
 		throw new Error("unused fixture dependency");
 	};
 	const assembly = assemblePlatformApi({
+		taskAdmissionPolicy: {
+			maximumWaitingTasksPerAgent: 2,
+			waitingTimeoutMs: 60_000,
+		},
 		databaseUrl: "postgres://invalid:invalid@127.0.0.1:1/invalid",
 		identity: { resolve: async () => null, hydrateUsers: async () => [] },
 		admissions: {

@@ -36,6 +36,7 @@ export interface ProductionPlatformApiInputV1
 	readonly wecomCredentialEncryptionKeys?: PlatformApiAssemblyInput["wecomCredentialEncryptionKeys"];
 	readonly wecomApplicationSetup?: PlatformApiAssemblyInput["wecomApplicationSetup"];
 	readonly databaseUrl: string;
+	readonly taskAdmissionPolicy: PlatformApiAssemblyInput["taskAdmissionPolicy"];
 	/** Same immutable image repository used by the Worker's resource policy. */
 	readonly imageRepository: string;
 	/** An actual deployment identity boundary; no browser-provided identity headers. */
@@ -69,6 +70,15 @@ export function createProductionPlatformApiAssemblyInputV1(
 			typeof input.identity?.resolve !== "function" ||
 			typeof input.identity?.hydrateUsers !== "function" ||
 			typeof input.loadAuthorityContext !== "function"
+		)
+			throw new Error();
+		if (
+			!Number.isSafeInteger(
+				input.taskAdmissionPolicy?.maximumWaitingTasksPerAgent,
+			) ||
+			input.taskAdmissionPolicy.maximumWaitingTasksPerAgent < 1 ||
+			!Number.isSafeInteger(input.taskAdmissionPolicy?.waitingTimeoutMs) ||
+			input.taskAdmissionPolicy.waitingTimeoutMs < 1
 		)
 			throw new Error();
 		resourceProfile = AgentResourceProfileProjectionV1Schema.parse(
@@ -134,6 +144,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 			? { wecomApplicationSetup: input.wecomApplicationSetup }
 			: {}),
 		databaseUrl: input.databaseUrl,
+		taskAdmissionPolicy: input.taskAdmissionPolicy,
 		identity: input.identity,
 		requestScope: identityScope.requestScope,
 		conversationReplayWindow: input.conversationReplayWindow,

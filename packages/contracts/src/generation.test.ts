@@ -30,6 +30,41 @@ function generate() {
 }
 
 describe("standard contract artifacts", () => {
+	it("publishes the exact Task C path/schema set with Bearer authentication", () => {
+		const document = JSON.parse(generate()).pilotBrowserOpenapi;
+		expect(
+			Object.keys(document.paths).filter((path) => path.includes("/tasks")),
+		).toEqual([
+			"/api/v1/agents/{agentId}/tasks",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel",
+		]);
+		expect(
+			Object.keys(document.components.schemas).filter((name) =>
+				name.includes("Task"),
+			),
+		).toEqual([
+			"CancelTaskRequestV1",
+			"SubmitTaskRequestV1",
+			"TaskAcceptedV1",
+			"TaskCancellationV1",
+			"TaskProjectionV1",
+			"TaskStatusEventV1",
+		]);
+		expect(document.components.securitySchemes.platformApiCredential).toEqual({
+			type: "http",
+			scheme: "bearer",
+		});
+		for (const path of [
+			"/api/v1/agents/{agentId}/tasks",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel",
+		]) {
+			const operation = document.paths[path].post ?? document.paths[path].get;
+			expect(operation.security).toEqual([{ platformApiCredential: [] }]);
+		}
+	});
+
 	it("keeps publication response validation equivalent in generated OpenAPI and Zod", () => {
 		const artifacts = JSON.parse(generate());
 		const schema =

@@ -77,6 +77,10 @@ beforeAll(async () => {
 		throw new Error("Unrelated adapter called");
 	};
 	assemblyInput = {
+		taskAdmissionPolicy: {
+			maximumWaitingTasksPerAgent: 2,
+			waitingTimeoutMs: 60_000,
+		},
 		databaseUrl: database.databaseUrl,
 		identity: adapter,
 		admissions: {

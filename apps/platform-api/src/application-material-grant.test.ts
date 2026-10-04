@@ -79,6 +79,10 @@ beforeEach(async () => {
 		throw new Error("Unrelated adapter called");
 	};
 	assembly = assemblePlatformApi({
+		taskAdmissionPolicy: {
+			maximumWaitingTasksPerAgent: 2,
+			waitingTimeoutMs: 60_000,
+		},
 		databaseUrl: database.databaseUrl,
 		identity: browser.identityAdapter,
 		admissions: {

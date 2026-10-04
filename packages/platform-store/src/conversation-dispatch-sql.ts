@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type {
 	ConversationDispatchClaimV1,
 	ConversationDispatchStateTransitionV1,
@@ -10,6 +11,8 @@ import {
 	type DispatchState,
 	databaseOperation,
 	type ExecutionRow,
+	executionKeyProjection,
+	executionPrincipalProjection,
 	type GenerationTombstoneRow,
 	type MessageRow,
 	type OutboxRow,
@@ -38,7 +41,8 @@ export async function readGenerationIsolation(
 	if (
 		row.operation_id !== `generation:${conversationId}:${generation}` ||
 		!row.control_record_id ||
-		row.original_principal?.kind !== "user" ||
+		(row.original_principal?.kind !== "user" &&
+			row.original_principal?.kind !== "application") ||
 		!row.original_principal.id ||
 		!row.host_session_ref
 	)
@@ -59,14 +63,37 @@ export function isolationProjection(
 export async function lockOutbox(
 	transaction: Transaction,
 	itemId: string,
+	expectedConversationId?: string,
 ): Promise<OutboxRow | undefined> {
+	// The unlocked row only locates the mutex; never use it as authority.
+	const [location] = await transaction<
+		{ scope_type: string; scope_id: string }[]
+	>`
+		select scope_type, scope_id from platform.outbox_items where id = ${itemId}
+	`;
+	if (
+		location?.scope_type !== "conversation" ||
+		(expectedConversationId !== undefined &&
+			location.scope_id !== expectedConversationId)
+	)
+		return undefined;
+	// Recovery and control already hold Conversation before their original Outbox.
+	// Separate statements enforce the same order for claim/read/renew/finish.
+	if (!(await lockConversation(transaction, location.scope_id)))
+		return undefined;
 	const rows = await transaction<OutboxRow[]>`
 		select id, scope_type, scope_id, operation, payload, status, attempt_count,
-			available_at, lease_owner, lease_expires_at, delivery_fence::text,
+			available_at, available_at <= clock_timestamp() as available_now,
+			available_at = 'infinity'::timestamptz as waiting_available,
+			lease_owner, lease_expires_at, delivery_fence::text,
 			trace_id, request_id, clock_timestamp() as decision_at
 		from platform.outbox_items where id = ${itemId} for update
 	`;
-	return rows[0];
+	const outbox = rows[0];
+	return outbox?.scope_type === location.scope_type &&
+		outbox.scope_id === location.scope_id
+		? outbox
+		: undefined;
 }
 
 export async function lockConversation(
@@ -74,7 +101,7 @@ export async function lockConversation(
 	conversationId: string,
 ): Promise<ConversationRow | undefined> {
 	const rows = await transaction<ConversationRow[]>`
-		select id, agent_id, actor_id, channel_id, status, session_generation::text,
+		select id, agent_id, actor_id, principal_type, channel_id, status, session_generation::text,
 			host_session_ref, authorization_revision
 		from platform.conversations where id = ${conversationId} for update
 	`;
@@ -87,10 +114,13 @@ export async function lockExecution(
 	executionId: string,
 ): Promise<ExecutionRow | undefined> {
 	const rows = await transaction<ExecutionRow[]>`
-		select execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id,
+		select execution_id, conversation_id, agent_id, actor_id, principal_type, channel_id, turn_id,
 			status, session_generation::text, delivery_fence::text,
 			authorization_revision, last_runtime_cursor,
-			model_configuration_revision::text, model_option_id, reasoning_level
+			model_configuration_revision::text, model_option_id, reasoning_level,
+			execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id,
+			relay_key_version::text, runtime_submit_protocol, original_operation_digest,
+			original_submit_host_session_ref, task_wait_order::text, task_wait_deadline
 		from platform.conversation_executions
 		where execution_id = ${executionId} and conversation_id = ${conversationId}
 		for update
@@ -172,6 +202,7 @@ export async function cancelStoppedTurn(
 	const stopOutbox = await lockOutbox(
 		transaction,
 		`conversation:stop:${stop.stop_request_id}`,
+		conversation.id,
 	);
 	const stopPayload = stopOutbox
 		? exactPayload(stopOutbox.payload, "conversation.turn.stop.v1")
@@ -251,7 +282,28 @@ export function bindingMatches(
 	payload: ConversationPayload,
 	conversation: ConversationRow,
 	execution: ExecutionRow,
+	purpose:
+		| "business"
+		| "waiting-cancellation"
+		| "waiting-settlement" = "business",
 ) {
+	const waitingCancellation = purpose !== "business";
+	if (
+		waitingCancellation &&
+		(execution.status !== "waiting" ||
+			safeCounter(execution.task_wait_order, 1) === undefined ||
+			safeCounter(execution.delivery_fence) === undefined ||
+			safeCounter(execution.delivery_fence) !==
+				safeCounter(outbox.delivery_fence) ||
+			execution.runtime_submit_protocol !== null ||
+			execution.original_operation_digest !== null ||
+			execution.original_submit_host_session_ref !== null ||
+			execution.last_runtime_cursor !== null ||
+			outbox.operation !== "conversation.turn.submit.v1" ||
+			payload.metadataRecovery !== undefined ||
+			payload.turnId !== execution.turn_id)
+	)
+		return false;
 	const generation = safeCounter(conversation.session_generation, 1);
 	const executionGeneration = safeCounter(execution.session_generation, 1);
 	const executionModelRevision =
@@ -279,13 +331,16 @@ export function bindingMatches(
 		execution.conversation_id === conversation.id &&
 		conversation.agent_id === execution.agent_id &&
 		conversation.actor_id === execution.actor_id &&
+		conversation.principal_type === execution.principal_type &&
 		conversation.channel_id === execution.channel_id &&
-		(payload.metadataRecovery !== undefined ||
+		(waitingCancellation ||
+			payload.metadataRecovery !== undefined ||
 			conversation.authorization_revision ===
 				execution.authorization_revision) &&
 		generation === payload.sessionGeneration &&
 		executionGeneration === payload.sessionGeneration &&
-		(payload.metadataRecovery !== undefined ||
+		(waitingCancellation ||
+			payload.metadataRecovery !== undefined ||
 			conversation.status !== "unavailable") &&
 		validText(outbox.trace_id) &&
 		validText(outbox.request_id) &&
@@ -302,8 +357,15 @@ function claimMatchesState(
 	state: DispatchState,
 ) {
 	const payload = exactPayload(state.outbox.payload, claim.operation);
+	const key = executionKeyProjection(state.execution);
+	const principal = executionPrincipalProjection(state.execution);
 	if (
 		!payload ||
+		principal.kind !== (claim.principal?.kind ?? "user") ||
+		principal.id !== (claim.principal?.id ?? claim.actorId) ||
+		state.conversation.principal_type !== principal.kind ||
+		claim.executionSource !== key.executionSource ||
+		!isDeepStrictEqual(claim.relayKeyBinding, key.relayKeyBinding) ||
 		JSON.stringify(payload.metadataRecovery) !==
 			JSON.stringify(claim.metadataRecovery) ||
 		(claim.metadataRecovery &&
@@ -360,7 +422,11 @@ export async function ownedState(
 	claim: ConversationDispatchClaimV1,
 	allowStopChange = false,
 ): Promise<DispatchState | undefined> {
-	const outbox = await lockOutbox(transaction, claim.itemId);
+	const outbox = await lockOutbox(
+		transaction,
+		claim.itemId,
+		claim.conversationId,
+	);
 	if (!outbox) return undefined;
 	const conversation = await lockConversation(
 		transaction,
@@ -389,7 +455,8 @@ function transitionAllowed(
 	// Only prepareRuntimeDispatch can reserve new Agent capacity. A later event
 	// or retry must never turn an occupied execution back into unreserved waiting.
 	if (
-		(state.execution.status === "submitted" &&
+		((state.execution.status === "submitted" ||
+			state.execution.status === "waiting") &&
 			(transition.executionStatus === "unknown" ||
 				transition.executionStatus === "processing")) ||
 		(state.execution.status !== "submitted" &&

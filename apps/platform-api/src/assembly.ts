@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
 	type AgentConfigurationUseCaseDependenciesV1,
+	type ConversationTaskAdmissionPolicyV1,
 	createAgentConfigurationUseCaseV1,
 	createAgentManagementV1,
 	createApplicationApiCredentialIssuerV1,
@@ -52,6 +53,7 @@ import {
 	resolveCurrentMaterialGrantActor,
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
+import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
 import {
 	createPlatformProjectionReaders,
@@ -77,6 +79,7 @@ export interface PlatformApiAssemblyInput {
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly files?: PlatformFileDeploymentV1;
 	readonly databaseUrl: string;
+	readonly taskAdmissionPolicy: ConversationTaskAdmissionPolicyV1;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
@@ -120,6 +123,18 @@ export function assemblePlatformApi(
 		!input.wecomIdentity
 	)
 		throw new Error("WeCom setup requires a receipt identity deployment");
+	if (
+		(input.wecom || input.wecomApplicationSetup) &&
+		!input.wecom?.userDirectory &&
+		typeof input.identity.resolveUser !== "function"
+	)
+		throw new Error(
+			"WeCom message admission requires a trusted user directory",
+		);
+	const userDirectory = {
+		resolveUser: (userId: string) =>
+			resolveCurrentTaskUser(input.identity, userId, randomUUID()),
+	};
 	const wecomSetup = input.wecomCredentialEncryptionKeys
 		? assembleWecomSetupApiV1({
 				databaseUrl: input.databaseUrl,
@@ -131,10 +146,16 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	const wecomDeployment =
-		input.wecom ??
+		(input.wecom
+			? {
+					...input.wecom,
+					userDirectory: input.wecom.userDirectory ?? userDirectory,
+				}
+			: undefined) ??
 		(input.wecomApplicationSetup && input.wecomIdentity
 			? {
 					identity: input.wecomIdentity,
+					userDirectory,
 					replyEncryptionPublicKeyPem:
 						input.wecomApplicationSetup.replyEncryptionPublicKeyPem,
 					resolveBinding: async () => null,
@@ -196,6 +217,10 @@ export function assemblePlatformApi(
 	const personalApiCredentialStore = new PostgresPersonalApiCredentialStoreV1({
 		databaseUrl: input.databaseUrl,
 	});
+	const applicationRegistrationStore =
+		new PostgresApplicationRegistrationStoreV1({
+			databaseUrl: input.databaseUrl,
+		});
 	const applicationApiCredentialStore =
 		new PostgresApplicationApiCredentialIssuerStoreV1({
 			databaseUrl: input.databaseUrl,
@@ -229,10 +254,6 @@ export function assemblePlatformApi(
 			return user ? { accountStatus: user.accountStatus } : null;
 		},
 	});
-	const applicationRegistrationStore =
-		new PostgresApplicationRegistrationStoreV1({
-			databaseUrl: input.databaseUrl,
-		});
 	const personalRelayKeyStore = input.personalRelayKeys
 		? new PostgresPersonalRelayKeyStoreV1({ databaseUrl: input.databaseUrl })
 		: undefined;
@@ -245,10 +266,6 @@ export function assemblePlatformApi(
 					encrypt: input.personalRelayKeys.encrypt,
 				})
 			: undefined;
-	const userDirectory = {
-		resolveUser: (userId: string) =>
-			resolveCurrentTaskUser(input.identity, userId, randomUUID()),
-	};
 	const personalApiCredentials = createPersonalApiCredentialUseCaseV1({
 		transaction: personalApiCredentialStore,
 		userDirectory,
@@ -264,6 +281,7 @@ export function assemblePlatformApi(
 	const conversationTransaction =
 		new PostgresConversationExecutionTransactionV1({
 			databaseUrl: input.databaseUrl,
+			userDirectory,
 		});
 	const conversationQuery = new PostgresConversationQueryV1({
 		databaseUrl: input.databaseUrl,
@@ -273,6 +291,11 @@ export function assemblePlatformApi(
 		...(input.conversationReplayWindowMs === undefined
 			? {}
 			: { replayWindowMs: input.conversationReplayWindowMs }),
+	});
+	const tasks = createTaskRoutesDependenciesV1({
+		transaction: conversationTransaction,
+		query: conversationQuery,
+		policy: input.taskAdmissionPolicy,
 	});
 	const admissions =
 		typeof input.admissions === "function"
@@ -450,6 +473,7 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		tasks,
 		...(personalRelayKeys
 			? {
 					personalRelayKeys: {

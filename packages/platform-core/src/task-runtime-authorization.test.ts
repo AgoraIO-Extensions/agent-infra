@@ -3,6 +3,7 @@ import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
 import type { AgentManagementStateV1 } from "./agent-management.js";
 import type { ConversationDispatchClaimV1 } from "./conversation-dispatch.js";
 import type {
+	CurrentTaskApplicationV1,
 	CurrentTaskUserV1,
 	TaskAuthorizationBoundaryV1,
 } from "./task-authorization.js";
@@ -499,4 +500,207 @@ it("keeps original custom execution controls during an unverified platform adapt
 			([call]) => call.reason !== "authorization_revoked",
 		),
 	).toBe(true);
+});
+
+function applicationHarness() {
+	const h = harness();
+	if (!h.record) throw new Error("Expected original authorization record");
+	const claim = { ...h.claim, actorId: "user", channelId: "api" };
+	const boundary: TaskAuthorizationBoundaryV1 = {
+		...h.boundary,
+		principal: { kind: "application", id: "user" },
+		channelId: "api",
+		identityRevision: "application-1",
+		accessSources: [{ kind: "api-use", useGrantRevision: "use-1" }],
+	};
+	const record = { ...h.record, boundary };
+	h.setRecord(record);
+	let application: CurrentTaskApplicationV1 | null = {
+		schemaVersion: 1,
+		applicationId: "user",
+		status: "active",
+		authorizationRevision: "application-1",
+		useGrant: {
+			grantType: "use",
+			principal: boundary.principal,
+			agentId: "agent",
+			authorizationRevision: "use-1",
+			revoked: false,
+		},
+	};
+	const ports = {
+		...h.ports,
+		resolveCurrentApplication: vi.fn(async () => application),
+	};
+	const context: TaskRuntimeAuthorizationContextV1 = {
+		...h.context,
+		claim,
+		principal: boundary.principal,
+	};
+	return {
+		...h,
+		claim,
+		boundary,
+		record,
+		context,
+		application,
+		ports,
+		basePorts: h.ports,
+		useCase: createTaskRuntimeAuthorizationUseCaseV1(ports),
+		setApplication(value: CurrentTaskApplicationV1 | null) {
+			application = value;
+		},
+	};
+}
+
+describe("application Task current consumer", () => {
+	it("uses the application authority without resolving its same-ID user or any credential", async () => {
+		const h = applicationHarness();
+		h.setUser(null); // No user identity can authorize this application.
+		expect(
+			(await h.useCase.current(h.context, h.state, "turn.submit", signal()))
+				.authority.purpose,
+		).toBe("business");
+		expect(h.ports.resolveCurrentApplication).toHaveBeenCalledWith(
+			"user",
+			"agent",
+			expect.any(AbortSignal),
+		);
+		expect(h.ports.resolveCurrentUser).not.toHaveBeenCalled();
+		expect(h.ports.recordControl).not.toHaveBeenCalled();
+	});
+	it("fails unavailable with no application supplier and never falls back to Owner/user", async () => {
+		const h = applicationHarness();
+		const useCase = createTaskRuntimeAuthorizationUseCaseV1(h.basePorts);
+		expect(await useCase.authorizeClaim(h.claim, signal())).toEqual({
+			outcome: "unavailable",
+		});
+		expect(h.ports.resolveCurrentUser).not.toHaveBeenCalled();
+		expect(h.ports.recordControl).not.toHaveBeenCalled();
+	});
+	it.each(["missing", "disabled", "revoked", "regranted"] as const)(
+		"routes %s through original durable system control",
+		async (change) => {
+			const h = applicationHarness();
+			if (!h.application?.useGrant)
+				throw new Error("Expected original use grant");
+			h.setApplication(
+				change === "missing"
+					? null
+					: {
+							...h.application,
+							...(change === "disabled" ? { status: "disabled" as const } : {}),
+							useGrant: {
+								...h.application.useGrant,
+								...(change === "revoked" ? { revoked: true } : {}),
+								...(change === "regranted"
+									? { authorizationRevision: "new-use" }
+									: {}),
+							},
+						},
+			);
+			expect(
+				(await h.useCase.current(h.context, h.state, "turn.submit", signal()))
+					.authority,
+			).toMatchObject({ purpose: "control", reason: "authorization_revoked" });
+			expect(h.ports.recordControl).toHaveBeenCalledWith(
+				expect.objectContaining({
+					executionId: "execution",
+					authorizationRecordId: "original-authorization",
+					reason: "authorization_revoked",
+				}),
+				expect.any(AbortSignal),
+			);
+		},
+	);
+	it("rechecks permanent Task revocation after the current authority wait", async () => {
+		const h = applicationHarness();
+		h.ports.resolveCurrentApplication.mockImplementationOnce(async () => {
+			h.setRecord({ ...h.record, revokedAt: new Date(1) });
+			return h.application;
+		});
+		expect(
+			(await h.useCase.current(h.context, h.state, "turn.submit", signal()))
+				.authority,
+		).toMatchObject({ purpose: "control", reason: "authorization_revoked" });
+	});
+	it("does not resurrect already revoked Tasks when current grants look active", async () => {
+		const h = applicationHarness();
+		h.setRecord({ ...h.record, revokedAt: new Date(1) });
+		expect(
+			(await h.useCase.current(h.context, h.state, "turn.submit", signal()))
+				.authority.purpose,
+		).toBe("control");
+		expect(h.ports.resolveCurrentApplication).not.toHaveBeenCalled();
+	});
+	it("rejects a same-ID change from application to user during the authority wait", async () => {
+		const h = applicationHarness();
+		h.ports.resolveCurrentApplication.mockImplementationOnce(async () => {
+			h.setRecord({
+				...h.record,
+				boundary: {
+					...h.record.boundary,
+					principal: { kind: "user", id: "user" },
+				},
+			});
+			return h.application;
+		});
+		await expect(
+			h.useCase.current(h.context, h.state, "turn.submit", signal()),
+		).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_BINDING_INVALID" });
+		expect(h.ports.recordControl).not.toHaveBeenCalled();
+	});
+	it("reports malformed or failed current authority as unavailable, never as confirmed cancellation", async () => {
+		for (const mode of ["malformed", "failed"] as const) {
+			const h = applicationHarness();
+			if (mode === "malformed")
+				h.ports.resolveCurrentApplication.mockResolvedValue({
+					...h.application,
+					status: "unknown",
+				} as never);
+			else
+				h.ports.resolveCurrentApplication.mockRejectedValue(
+					new Error("dependency unavailable"),
+				);
+			expect(await h.useCase.authorizeClaim(h.claim, signal())).toEqual({
+				outcome: "unavailable",
+			});
+			expect(h.ports.recordControl).not.toHaveBeenCalled();
+		}
+	});
+	it("keeps personal API use bound to the explicit grant after admission, not Web Owner", async () => {
+		const h = harness();
+		if (!h.record) throw new Error("Expected original record");
+		const boundary: TaskAuthorizationBoundaryV1 = {
+			...h.boundary,
+			channelId: "api",
+			accessSources: [{ kind: "api-use", useGrantRevision: "use-1" }],
+		};
+		h.setRecord({ ...h.record, boundary });
+		const context = { ...h.context, claim: { ...h.claim, channelId: "api" } };
+		const grant = {
+			grantType: "use" as const,
+			principal: boundary.principal,
+			agentId: "agent",
+			authorizationRevision: "use-1",
+			revoked: false,
+		};
+		const ports = {
+			...h.ports,
+			resolveCurrentApiUseGrant: vi.fn(async () => grant),
+		};
+		const useCase = createTaskRuntimeAuthorizationUseCaseV1(ports);
+		expect(
+			(await useCase.current(context, h.state, "turn.submit", signal()))
+				.authority.purpose,
+		).toBe("business");
+		ports.resolveCurrentApiUseGrant.mockResolvedValue({
+			...grant,
+			revoked: true,
+		});
+		expect(
+			(await useCase.current(context, h.state, "turn.submit", signal()))
+				.authority,
+		).toMatchObject({ purpose: "control", reason: "authorization_revoked" });
+	});
 });

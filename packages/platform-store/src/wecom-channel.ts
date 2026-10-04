@@ -3,6 +3,7 @@ import {
 	createConversationExecutionUseCaseV1,
 	parseTaskAuthorizationBoundaryV1,
 	type TaskAuthorizationBoundaryV1,
+	type TaskUserDirectoryV1,
 	type WecomAcceptancePlanV1,
 	type WecomAcceptanceV1,
 	type WecomAuthorityV1,
@@ -78,13 +79,16 @@ export class PostgresWecomChannelV1
 	#closed = false;
 	readonly #management: PostgresAgentManagementTransactionV1;
 	readonly #connectionHolderId: string | null;
+	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
 	readonly #observe: (status: WecomDeliveryStatusV1) => void;
 	constructor(options: {
 		readonly databaseUrl: string;
+		readonly userDirectory?: TaskUserDirectoryV1;
 		readonly connectionHolderId?: string;
 		readonly observe?: (status: WecomDeliveryStatusV1) => void;
 	}) {
 		this.#connectionHolderId = options.connectionHolderId ?? null;
+		this.#userDirectory = options.userDirectory;
 		this.#observe = (status) => {
 			try {
 				options.observe?.(status);
@@ -298,6 +302,7 @@ export class PostgresWecomChannelV1
 			}
 			const transaction = new PostgresConversationExecutionTransactionV1({
 				transaction: sql,
+				userDirectory: this.#userDirectory,
 				signal,
 			});
 			const result = await awaitTaskAuthorizationDependencyV1(

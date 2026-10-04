@@ -212,6 +212,10 @@ beforeAll(async () => {
 		throw new Error("unused fixture adapter");
 	};
 	assembly = assemblePlatformApi({
+		taskAdmissionPolicy: {
+			maximumWaitingTasksPerAgent: 2,
+			waitingTimeoutMs: 60_000,
+		},
 		databaseUrl: database.databaseUrl,
 		identity,
 		admissions: {

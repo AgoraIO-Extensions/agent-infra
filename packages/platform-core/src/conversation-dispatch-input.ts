@@ -16,7 +16,15 @@ import {
 	text,
 	unavailable,
 } from "./conversation-dispatch-values.js";
+import {
+	type ConversationExecutionSourceV1,
+	conversationExecutionSourceV1,
+} from "./conversation-execution-types.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
+import {
+	parseTaskPrincipalV1,
+	type TaskPrincipalV1,
+} from "./task-authorization.js";
 
 export function parseConversationMetadataRecoveryV1(
 	value: unknown,
@@ -47,6 +55,7 @@ function executionStatus(
 	value: unknown,
 ): ConversationDispatchExecutionStatusV1 {
 	if (
+		value !== "waiting" &&
 		value !== "submitted" &&
 		value !== "processing" &&
 		value !== "unknown" &&
@@ -56,6 +65,25 @@ function executionStatus(
 	) {
 		return unavailable();
 	}
+	return value;
+}
+
+function principal(value: unknown): TaskPrincipalV1 {
+	try {
+		return parseTaskPrincipalV1(value);
+	} catch {
+		return unavailable();
+	}
+}
+
+function executionSource(value: unknown): ConversationExecutionSourceV1 {
+	if (
+		value !== "web" &&
+		value !== "wecom" &&
+		value !== "platform-api" &&
+		value !== "eval"
+	)
+		return unavailable();
 	return value;
 }
 
@@ -104,7 +132,15 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"executionStatus",
 			"stopPending",
 		],
-		["generationIsolation", "runtimeTerminalEventSeen", "metadataRecovery"],
+		[
+			"generationIsolation",
+			"runtimeTerminalEventSeen",
+			"metadataRecovery",
+			"principal",
+			"executionSource",
+			"relayKeyBinding",
+			"taskWaitOrder",
+		],
 	);
 	if (
 		input.schemaVersion !== 1 ||
@@ -117,6 +153,70 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 	)
 		return unavailable();
 	const parsedOperation = operation(input.operation);
+	const parsedPrincipal =
+		input.principal === undefined
+			? ({ kind: "user", id: text(input.actorId) } as const)
+			: principal(input.principal);
+	if (parsedPrincipal.id !== text(input.actorId)) return unavailable();
+	let parsedExecutionSource: ConversationExecutionSourceV1 | undefined;
+	if (input.executionSource !== undefined) {
+		parsedExecutionSource = executionSource(input.executionSource);
+		try {
+			if (
+				parsedExecutionSource !==
+				conversationExecutionSourceV1(text(input.channelId))
+			)
+				return unavailable();
+		} catch {
+			return unavailable();
+		}
+	}
+	let parsedRelayKeyBinding:
+		| ConversationDispatchClaimV1["relayKeyBinding"]
+		| undefined;
+	if (input.relayKeyBinding !== undefined) {
+		const key = exactObject(input.relayKeyBinding, [
+			"purpose",
+			"subjectId",
+			"keyId",
+			"keyVersion",
+		]);
+		if (key.purpose !== "personal" && key.purpose !== "agent-default")
+			return unavailable();
+		parsedRelayKeyBinding = {
+			purpose: key.purpose,
+			subjectId: text(key.subjectId),
+			keyId: text(key.keyId),
+			keyVersion: positiveInteger(key.keyVersion),
+		};
+		const expectedSubject =
+			parsedRelayKeyBinding.purpose === "personal"
+				? parsedPrincipal.id
+				: text(input.agentId);
+		if (parsedRelayKeyBinding.subjectId !== expectedSubject)
+			return unavailable();
+	}
+	if (
+		(parsedExecutionSource === undefined) !==
+		(parsedRelayKeyBinding === undefined)
+	)
+		return unavailable();
+	if (parsedExecutionSource && parsedRelayKeyBinding) {
+		const personalSource =
+			parsedExecutionSource === "web" || parsedExecutionSource === "wecom";
+		if (
+			(parsedRelayKeyBinding.purpose === "personal") !== personalSource ||
+			(parsedRelayKeyBinding.purpose === "personal" &&
+				parsedPrincipal.kind !== "user")
+		)
+			return unavailable();
+	}
+	const taskWaitOrder =
+		input.taskWaitOrder === undefined
+			? undefined
+			: positiveInteger(input.taskWaitOrder);
+	if (input.executionStatus === "waiting" && taskWaitOrder === undefined)
+		return unavailable();
 	const metadataRecovery =
 		input.metadataRecovery === undefined
 			? undefined
@@ -156,12 +256,15 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"originalPrincipal",
 		]);
 		const principal = exactObject(isolation.originalPrincipal, ["kind", "id"]);
-		if (principal.kind !== "user" || principal.id !== input.actorId)
+		if (
+			principal.kind !== parsedPrincipal.kind ||
+			principal.id !== parsedPrincipal.id
+		)
 			unavailable();
 		generationIsolation = {
 			operationId: text(isolation.operationId),
 			controlRecordId: text(isolation.controlRecordId),
-			originalPrincipal: { kind: "user", id: text(principal.id) },
+			originalPrincipal: { ...parsedPrincipal },
 		};
 	}
 	const isStop = parsedOperation === "conversation.turn.stop.v1";
@@ -179,6 +282,14 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 	}
 	return {
 		schemaVersion: 1,
+		...(input.principal !== undefined ? { principal: parsedPrincipal } : {}),
+		...(parsedExecutionSource
+			? { executionSource: parsedExecutionSource }
+			: {}),
+		...(parsedRelayKeyBinding
+			? { relayKeyBinding: parsedRelayKeyBinding }
+			: {}),
+		...(taskWaitOrder !== undefined ? { taskWaitOrder } : {}),
 		itemId: text(input.itemId),
 		leaseOwner: text(input.leaseOwner),
 		operation: parsedOperation,
