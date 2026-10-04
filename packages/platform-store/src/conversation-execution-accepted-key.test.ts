@@ -5,7 +5,9 @@ import {
 } from "@agent-infra/contracts/runtime";
 import { parseTaskAuthorizationBoundaryV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { claimWork } from "./conversation-dispatch-claim.ts";
+import { lockOutbox, ownedState } from "./conversation-dispatch-sql.ts";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
@@ -287,4 +289,238 @@ it("supplement uses the saved message operation and current trusted Session whil
 	).toBeNull();
 	await client`update platform.conversation_messages set actor_id='other-subject' where message_id='supplement-message'`;
 	expect(await store.readAcceptedExecution(supplement)).toBeNull();
+});
+
+async function waitForConversationWaiters(count: number) {
+	await vi.waitFor(async () => {
+		const [row] = await client<
+			{ count: number }[]
+		>`select count(*)::int as count from pg_stat_activity
+   where datname=current_database() and wait_event_type='Lock' and query like '%from platform.conversations%for update%'`;
+		expect(row?.count).toBe(count);
+	});
+}
+
+// Both public Store calls run against the same real PostgreSQL rows. Queue them
+// behind a third transaction to make the old Conversation/Outbox inversion deterministic.
+it("converges metadata recovery with a late accepted-key read without a lock inversion", async () => {
+	const { store, request } = await accepted();
+	await client`update platform.conversation_executions set status='completed', last_runtime_cursor='terminal-cursor'`;
+	await client`update platform.outbox_items set status='succeeded', lease_owner=null, lease_expires_at=null`;
+	await client`insert into platform.conversation_events
+  (event_id,conversation_id,execution_id,adapter_event_key,sequence,conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,occurred_at,source)
+  values ('terminal-tool',${request.conversationId},${request.executionId},'terminal-tool',1,1,'execution.operation',${client.json(
+		{
+			schemaVersion: 2,
+			type: "execution.operation",
+			fact: {
+				kind: "tool",
+				toolId: "tool",
+				operationRef: "operation",
+				attemptRef: "attempt",
+				phase: "unknown",
+				connection: {
+					serviceRef: "service",
+					verification: "unverified",
+					reason: "receipt_missing",
+				},
+			},
+		},
+	)},${"a".repeat(64)},'terminal-cursor',clock_timestamp(),'runtime')`;
+	const blocker = postgres(database.databaseUrl, { max: 1 });
+	let recovery: Promise<unknown> | undefined;
+	let reader: Promise<unknown> | undefined;
+	const settle = (work: Promise<unknown>) =>
+		work.then(
+			(result) => ({ result }),
+			(error) => ({ error }),
+		);
+	try {
+		await blocker.begin(async (transaction) => {
+			await transaction`select id from platform.conversations where id=${request.conversationId} for update`;
+			recovery = settle(
+				store.requestMetadataRecovery(
+					{
+						query: {
+							schemaVersion: 1,
+							conversationId: request.conversationId,
+							executionId: request.executionId,
+						},
+						authority: {
+							schemaVersion: 1,
+							actorId: request.principal.id,
+							agentId: request.agentId,
+							channelId: "web",
+							authorizationRevision: "agent-revision",
+							supportsSupplementaryInstruction: true,
+						},
+					},
+					(state) => {
+						expect(state.candidates).toHaveLength(1);
+						return { result: { outcome: "not_applicable" }, updates: [] };
+					},
+				),
+			);
+			await waitForConversationWaiters(1);
+			reader = settle(store.readAcceptedExecution(request));
+			await waitForConversationWaiters(2);
+		});
+		expect(await recovery).toEqual({ result: { outcome: "not_applicable" } });
+		expect(await reader).toEqual({ result: null });
+	} finally {
+		await Promise.all([recovery, reader]);
+		await blocker.end();
+	}
+});
+
+it.each(["lease", "fence", "authority"] as const)(
+	"rechecks %s after waiting for the Conversation lock",
+	async (change) => {
+		const { store, request } = await accepted();
+		const blocker = postgres(database.databaseUrl, { max: 1 });
+		let pending: Promise<unknown> | undefined;
+		try {
+			await blocker.begin(async (transaction) => {
+				const [owner] = await transaction<
+					{ pid: number }[]
+				>`select pg_backend_pid() as pid`;
+				if (!owner) throw new Error("Missing lock owner");
+				await transaction`select id from platform.conversations where id=${request.conversationId} for update`;
+				pending = store.readAcceptedExecution(request).then(
+					(result) => ({ result }),
+					(error) => ({ error }),
+				);
+				await vi.waitFor(async () => {
+					const [row] = await client<{ blocked: boolean }[]>`select exists (
+      select 1 from pg_stat_activity where datname=current_database() and wait_event_type='Lock'
+       and ${owner.pid}=any(pg_blocking_pids(pid)) and query like '%from platform.conversations%'
+     ) as blocked`;
+					expect(row?.blocked).toBe(true);
+				});
+				// The reader must not hold the Outbox while waiting for this Conversation.
+				await transaction`select id from platform.outbox_items where id=${`conversation:turn:${request.executionId}`} for update`;
+				if (change === "lease")
+					await transaction`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second'`;
+				if (change === "fence")
+					await transaction`update platform.outbox_items set delivery_fence=8`;
+				if (change === "authority")
+					await transaction`update platform.task_authorization_records set revoked_at=clock_timestamp()`;
+			});
+			expect(await pending).toEqual({ result: null });
+		} finally {
+			await pending;
+			await blocker.end();
+		}
+	},
+);
+
+it.each(["claim", "ownedState"] as const)(
+	"serializes an accepted reader with %s on the original rows",
+	async (mode) => {
+		const { store, request } = await accepted();
+		const itemId = `conversation:turn:${request.executionId}`;
+		const command = {
+			schemaVersion: 1 as const,
+			itemId,
+			workerId: "original-worker",
+			leaseDurationMs: 60_000,
+		};
+		await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second'`;
+		const decision = await client.begin((transaction) =>
+			claimWork(transaction, command),
+		);
+		if (decision.outcome !== "claimed")
+			throw new Error("Expected original claim");
+		const currentRequest = {
+			...request,
+			operation: {
+				...request.operation,
+				deliveryFence: decision.claim.deliveryFence,
+				executionDeliveryFence: decision.claim.executionDeliveryFence,
+			},
+		};
+		const blocker = postgres(database.databaseUrl, { max: 1 });
+		let reader: Promise<unknown> | undefined;
+		let dispatch: Promise<unknown> | undefined;
+		try {
+			await blocker.begin(async (transaction) => {
+				await transaction`select id from platform.conversations where id=${request.conversationId} for update`;
+				reader = store.readAcceptedExecution(currentRequest).then(
+					(result) => ({ result }),
+					(error) => ({ error }),
+				);
+				await waitForConversationWaiters(1);
+				dispatch = client
+					.begin(async (sql) =>
+						mode === "claim"
+							? claimWork(sql, command)
+							: ownedState(sql, decision.claim),
+					)
+					.then(
+						(result) => ({ result }),
+						(error) => ({ error }),
+					);
+				await waitForConversationWaiters(2);
+			});
+			expect(await reader).toMatchObject({
+				result: { authorizationRecordId: "accepted-authorization" },
+			});
+			expect(await dispatch).toMatchObject({
+				result:
+					mode === "claim" ? { outcome: "busy" } : { outbox: { id: itemId } },
+			});
+			const [saved] = await client<
+				{ fence: string; attempts: number }[]
+			>`select delivery_fence::text as fence, attempt_count as attempts from platform.outbox_items where id=${itemId}`;
+			expect(saved).toEqual({
+				fence: String(decision.claim.deliveryFence),
+				attempts: 1,
+			});
+		} finally {
+			await Promise.all([reader, dispatch]);
+			await blocker.end();
+		}
+	},
+);
+
+it("rejects a crossed expected Conversation before locking it and scope drift after a lock wait", async () => {
+	const { request } = await accepted();
+	const itemId = `conversation:turn:${request.executionId}`;
+	const blocker = postgres(database.databaseUrl, { max: 1 });
+	let pending: Promise<unknown> | undefined;
+	try {
+		await blocker.begin(async (transaction) => {
+			const [owner] = await transaction<
+				{ pid: number }[]
+			>`select pg_backend_pid() as pid`;
+			if (!owner) throw new Error("Missing lock owner");
+			await transaction`select id from platform.conversations where id=${request.conversationId} for update`;
+			const crossed = await client.begin(async (sql) => {
+				await sql`set local lock_timeout = '100ms'`;
+				return (await lockOutbox(sql, itemId, "other-conversation")) ?? null;
+			});
+			expect(crossed).toBeNull();
+			pending = client
+				.begin(
+					async (sql) =>
+						(await lockOutbox(sql, itemId, request.conversationId)) ?? null,
+				)
+				.then(
+					(result) => ({ result }),
+					(error) => ({ error }),
+				);
+			await vi.waitFor(async () => {
+				const [row] = await client<{ blocked: boolean }[]>`select exists (
+     select 1 from pg_stat_activity where datname=current_database() and wait_event_type='Lock'
+      and ${owner.pid}=any(pg_blocking_pids(pid)) and query like '%from platform.conversations%'
+    ) as blocked`;
+				expect(row?.blocked).toBe(true);
+			});
+			await transaction`update platform.outbox_items set scope_id='other-conversation' where id=${itemId}`;
+		});
+		expect(await pending).toEqual({ result: null });
+	} finally {
+		await pending;
+		await blocker.end();
+	}
 });

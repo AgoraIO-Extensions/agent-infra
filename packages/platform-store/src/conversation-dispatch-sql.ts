@@ -63,7 +63,24 @@ export function isolationProjection(
 export async function lockOutbox(
 	transaction: Transaction,
 	itemId: string,
+	expectedConversationId?: string,
 ): Promise<OutboxRow | undefined> {
+	// The unlocked row only locates the mutex; never use it as authority.
+	const [location] = await transaction<
+		{ scope_type: string; scope_id: string }[]
+	>`
+		select scope_type, scope_id from platform.outbox_items where id = ${itemId}
+	`;
+	if (
+		location?.scope_type !== "conversation" ||
+		(expectedConversationId !== undefined &&
+			location.scope_id !== expectedConversationId)
+	)
+		return undefined;
+	// Recovery and control already hold Conversation before their original Outbox.
+	// Separate statements enforce the same order for claim/read/renew/finish.
+	if (!(await lockConversation(transaction, location.scope_id)))
+		return undefined;
 	const rows = await transaction<OutboxRow[]>`
 		select id, scope_type, scope_id, operation, payload, status, attempt_count,
 			available_at, available_at <= clock_timestamp() as available_now,
@@ -72,7 +89,11 @@ export async function lockOutbox(
 			trace_id, request_id, clock_timestamp() as decision_at
 		from platform.outbox_items where id = ${itemId} for update
 	`;
-	return rows[0];
+	const outbox = rows[0];
+	return outbox?.scope_type === location.scope_type &&
+		outbox.scope_id === location.scope_id
+		? outbox
+		: undefined;
 }
 
 export async function lockConversation(
@@ -181,6 +202,7 @@ export async function cancelStoppedTurn(
 	const stopOutbox = await lockOutbox(
 		transaction,
 		`conversation:stop:${stop.stop_request_id}`,
+		conversation.id,
 	);
 	const stopPayload = stopOutbox
 		? exactPayload(stopOutbox.payload, "conversation.turn.stop.v1")
@@ -400,7 +422,11 @@ export async function ownedState(
 	claim: ConversationDispatchClaimV1,
 	allowStopChange = false,
 ): Promise<DispatchState | undefined> {
-	const outbox = await lockOutbox(transaction, claim.itemId);
+	const outbox = await lockOutbox(
+		transaction,
+		claim.itemId,
+		claim.conversationId,
+	);
 	if (!outbox) return undefined;
 	const conversation = await lockConversation(
 		transaction,

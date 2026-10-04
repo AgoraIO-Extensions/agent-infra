@@ -47,7 +47,7 @@ export async function claimWork(
 	},
 	userDirectory?: TaskUserDirectoryV1,
 ): Promise<ConversationDispatchClaimDecisionV1> {
-	// Application/use governance precedes the original Agent -> outbox -> Conversation locks.
+	// Application/use governance precedes the original Agent -> Conversation -> Outbox locks.
 	await lockWaitingTaskAuthority(transaction, input.itemId);
 	await transaction`
 		select a.id from platform.agents a

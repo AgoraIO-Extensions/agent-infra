@@ -61,7 +61,11 @@ export async function readAcceptedExecutionKeyInTransactionV4(
 	`;
 	if (candidates.length !== 1 || !candidates[0]) return null;
 	// Reuse the original dispatch lock order and row projections.
-	const outbox = await lockOutbox(transaction, candidates[0].id);
+	const outbox = await lockOutbox(
+		transaction,
+		candidates[0].id,
+		request.conversationId,
+	);
 	if (!outbox) return null;
 	const conversation = await lockConversation(
 		transaction,
