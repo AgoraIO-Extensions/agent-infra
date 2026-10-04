@@ -218,6 +218,13 @@
       "when": 1790898575204,
       "tag": "0034_task_status_event_source",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791095776367,
+      "tag": "0035_session_sandbox_allocations",
+      "breakpoints": true
     }
   ]
 }

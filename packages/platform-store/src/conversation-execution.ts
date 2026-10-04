@@ -101,6 +101,7 @@ import {
 	requireCurrentPersonalApiTaskAdmissionV1,
 	resolvePersonalApiTaskAdmissionAuthorityV1,
 } from "./personal-api-task-authorization.js";
+import { insertSessionSandboxBinding } from "./session-sandbox.js";
 import { writeTaskApiAuditV1 } from "./task-api-audit.js";
 import { insertTaskAuthorization } from "./task-authorization.js";
 
@@ -390,6 +391,11 @@ export class PostgresConversationExecutionTransactionV1
 						 ${plan.conversation.selectedReasoningLevel}, ${occurredAt}, ${occurredAt})
 			`,
 			);
+			await insertSessionSandboxBinding(transaction, plan.sandbox, {
+				requestId: request.command.requestId,
+				traceId: request.command.traceId,
+				occurredAt,
+			});
 			await completeIdempotency(
 				transaction,
 				reservationId,
@@ -481,14 +487,14 @@ export class PostgresConversationExecutionTransactionV1
 					transaction,
 					transaction`
 					insert into platform.conversation_executions
-						(execution_id, conversation_id, agent_id, actor_id, channel_id,
+						(execution_id, conversation_id, sandbox_id, agent_id, actor_id, channel_id,
 						 turn_id, status, session_generation, delivery_fence,
 						 authorization_revision, model_configuration_revision,
 						 model_option_id, reasoning_level, execution_source,
 						relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version,
 						created_at, updated_at)
 					values
-						(${plan.execution.executionId}, ${plan.execution.conversationId},
+						(${plan.execution.executionId}, ${plan.execution.conversationId}, ${conversation.sandbox?.sandboxId ?? null},
 						 ${plan.execution.agentId}, ${plan.execution.actorId},
 						 ${plan.execution.channelId}, ${plan.execution.turnId},
 						 ${plan.execution.status}, ${plan.execution.sessionGeneration},
@@ -769,14 +775,14 @@ export class PostgresConversationExecutionTransactionV1
 			if (updated.length !== 1) unavailable();
 			await transaction`
 				insert into platform.conversation_executions
-					(execution_id, conversation_id, agent_id, actor_id, channel_id,
+					(execution_id, conversation_id, sandbox_id, agent_id, actor_id, channel_id,
 					 turn_id, status, session_generation, delivery_fence,
 					 authorization_revision, model_configuration_revision,
 					 model_option_id, reasoning_level, execution_source,
 						relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version,
 						created_at, updated_at)
 				values
-					(${plan.execution.executionId}, ${plan.execution.conversationId},
+					(${plan.execution.executionId}, ${plan.execution.conversationId}, ${conversation.sandbox?.sandboxId ?? null},
 					 ${plan.execution.agentId}, ${plan.execution.actorId},
 					 ${plan.execution.channelId}, ${plan.execution.turnId},
 					 ${plan.execution.status}, ${plan.execution.sessionGeneration},

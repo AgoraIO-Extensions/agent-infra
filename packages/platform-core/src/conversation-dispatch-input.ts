@@ -21,6 +21,7 @@ import {
 	conversationExecutionSourceV1,
 } from "./conversation-execution-types.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
+import { parseSessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
 	parseTaskPrincipalV1,
 	type TaskPrincipalV1,
@@ -137,6 +138,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"runtimeTerminalEventSeen",
 			"metadataRecovery",
 			"principal",
+			"sandbox",
 			"executionSource",
 			"relayKeyBinding",
 			"taskWaitOrder",
@@ -217,6 +219,20 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			: positiveInteger(input.taskWaitOrder);
 	if (input.executionStatus === "waiting" && taskWaitOrder === undefined)
 		return unavailable();
+	const sandbox =
+		input.sandbox === undefined
+			? undefined
+			: parseSessionSandboxBindingV1(input.sandbox);
+	if (
+		sandbox &&
+		(sandbox.sessionId !== input.conversationId ||
+			sandbox.agentId !== input.agentId ||
+			sandbox.channelId !== input.channelId ||
+			sandbox.generation !== input.sessionGeneration ||
+			sandbox.principal.id !== parsedPrincipal.id ||
+			sandbox.principal.kind !== parsedPrincipal.kind)
+	)
+		unavailable();
 	const metadataRecovery =
 		input.metadataRecovery === undefined
 			? undefined
@@ -283,6 +299,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 	return {
 		schemaVersion: 1,
 		...(input.principal !== undefined ? { principal: parsedPrincipal } : {}),
+		...(sandbox ? { sandbox } : {}),
 		...(parsedExecutionSource
 			? { executionSource: parsedExecutionSource }
 			: {}),

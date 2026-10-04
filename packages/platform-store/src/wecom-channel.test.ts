@@ -1006,8 +1006,10 @@ describe("existing WeCom transaction cancellation", () => {
    union all select xmin::text from platform.conversation_executions where agent_id=${input.agentId}
    union all select xmin::text from platform.task_authorization_records where boundary->>'agentId'=${input.agentId}
    union all select xmin::text from platform.outbox_items where trace_id=${key}
+   union all select xmin::text from platform.session_sandbox_allocations where agent_id=${input.agentId}
+   union all select xmin::text from platform.conversation_audit_events where agent_id=${input.agentId} and action='conversation.sandbox.allocated'
    union all select xmin::text from platform.audit_events where agent_id=${input.agentId} and action in ('wecom.accepted','task.authorization.accepted')`;
-		expect(rows).toHaveLength(8);
+		expect(rows).toHaveLength(11);
 		expect(new Set(rows.map((row) => row.transaction_id)).size).toBe(1);
 		expect((await channel.receive(input)).outcome).toBe("replayed");
 		expect(await facts(input, key)).toEqual({
@@ -1016,7 +1018,7 @@ describe("existing WeCom transaction cancellation", () => {
 			executions: 1,
 			messages: 1,
 			authority: 1,
-			outbox: 1,
+			outbox: 2,
 			accepted_audit: 1,
 			authority_audit: 1,
 		});
@@ -1707,7 +1709,7 @@ describe("existing WeCom transaction cancellation", () => {
 				executions: 1,
 				messages: 1,
 				authority: 1,
-				outbox: 1,
+				outbox: 2,
 				accepted_audit: 1,
 				authority_audit: 1,
 			});

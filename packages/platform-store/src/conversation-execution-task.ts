@@ -8,7 +8,10 @@ import type {
 	TaskApiChannelV1,
 	TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
-import { isTaskApiChannelV1 } from "@agent-infra/platform-core";
+import {
+	isTaskApiChannelV1,
+	parseSessionSandboxBindingV1,
+} from "@agent-infra/platform-core";
 import {
 	safeInteger,
 	type Transaction,
@@ -29,6 +32,10 @@ import {
 	reserveIdempotency,
 } from "./conversation-execution-sql.js";
 import { requireCurrentPersonalApiTaskAdmissionV1 } from "./personal-api-task-authorization.js";
+import {
+	insertSessionSandboxBinding,
+	readSessionSandboxBinding,
+} from "./session-sandbox.js";
 import { insertTaskAuthorization } from "./task-authorization.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
@@ -176,13 +183,14 @@ async function requireReplay(
 			execution_channel_id: string;
 			execution_principal_type: string;
 			message_actor_id: string;
+			execution_sandbox_id: string | null;
 		}[]
 	>`
 		select c.agent_id as conversation_agent_id, c.actor_id as conversation_actor_id,
 			c.channel_id as conversation_channel_id, c.principal_type as conversation_principal_type,
 			e.principal_type as execution_principal_type, e.agent_id as execution_agent_id,
 			e.actor_id as execution_actor_id, e.channel_id as execution_channel_id,
-			m.actor_id as message_actor_id
+			m.actor_id as message_actor_id, e.sandbox_id as execution_sandbox_id
 		from platform.conversations c
 		join platform.conversation_executions e on e.conversation_id = c.id
 		join platform.conversation_messages m on m.execution_id = e.execution_id
@@ -191,8 +199,14 @@ async function requireReplay(
 		limit 1
 	`;
 	const authority = request.authority;
+	const sandbox = await readSessionSandboxBinding(
+		transaction,
+		result.conversationId,
+	);
 	if (
 		!row ||
+		!sandbox ||
+		row.execution_sandbox_id !== sandbox.sandboxId ||
 		row.conversation_agent_id !== authority.agentId ||
 		row.execution_agent_id !== authority.agentId ||
 		row.conversation_actor_id !== authority.actorId ||
@@ -325,6 +339,16 @@ export async function submitConversationTask(
 	});
 	if (!reservationId) unavailable();
 	if (plan.createConversation) {
+		const binding = parseSessionSandboxBindingV1(plan.sandbox);
+		if (
+			binding.sessionId !== plan.conversationId ||
+			binding.agentId !== authority.agentId ||
+			binding.principal.kind !== principal.kind ||
+			binding.principal.id !== principal.id ||
+			binding.channelId !== authority.channelId ||
+			binding.generation !== 1
+		)
+			unavailable();
 		await transaction`
 			insert into platform.conversations
 				(id, agent_id, actor_id, channel_id, principal_type, status, session_generation,
@@ -335,6 +359,11 @@ export async function submitConversationTask(
 				${finalCursor}, ${plan.modelOptionId}, ${plan.reasoningLevel},
 				${plan.acceptedAt}, ${plan.acceptedAt})
 		`;
+		await insertSessionSandboxBinding(transaction, binding, {
+			requestId: request.command.requestId,
+			traceId: request.command.traceId,
+			occurredAt: plan.acceptedAt,
+		});
 	} else {
 		await transaction`
 			update platform.conversations
@@ -346,15 +375,20 @@ export async function submitConversationTask(
 			where id = ${plan.conversationId}
 		`;
 	}
+	const committedSandbox = await readSessionSandboxBinding(
+		transaction,
+		plan.conversationId,
+	);
+	if (!committedSandbox) unavailable();
 	await transaction`
 		insert into platform.conversation_executions
-			(execution_id, conversation_id, agent_id, actor_id, channel_id, principal_type,
+			(execution_id, conversation_id, sandbox_id, agent_id, actor_id, channel_id, principal_type,
 			 turn_id, status, task_wait_order, task_wait_deadline, session_generation,
 			 delivery_fence, authorization_revision, model_configuration_revision,
 			 model_option_id, reasoning_level, execution_source, relay_key_purpose,
 			 relay_key_subject_id, relay_key_id, relay_key_version, last_event_sequence,
 			 created_at, updated_at)
-		values (${plan.executionId}, ${plan.conversationId}, ${authority.agentId},
+		values (${plan.executionId}, ${plan.conversationId}, ${committedSandbox.sandboxId}, ${authority.agentId},
 			${authority.actorId}, ${authority.channelId}, ${principal.kind}, ${plan.turnId}, ${plan.executionStatus},
 			${plan.waitOrder}, ${plan.waitDeadline}, ${plan.outbox.payload.sessionGeneration}, 0,
 			${authority.authorizationRevision}, ${plan.modelConfigurationRevision},

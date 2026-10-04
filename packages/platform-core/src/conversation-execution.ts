@@ -41,6 +41,7 @@ import {
 	snapshotObject,
 	unavailable,
 } from "./conversation-execution-values.js";
+import { createSessionSandboxBindingV1 } from "./session-sandbox.js";
 
 export {
 	type ConversationCommandDecisionV1,
@@ -204,6 +205,10 @@ export function createConversationExecutionUseCaseV1(
 							};
 							return {
 								schemaVersion: 1,
+								sandbox: createSessionSandboxBindingV1(
+									authority,
+									conversationId,
+								),
 								conversation: {
 									schemaVersion: 1,
 									conversationId,
@@ -276,7 +281,10 @@ export function createConversationExecutionUseCaseV1(
 							}
 							if (
 								conversation.status === "unavailable" ||
-								conversation.isolationPending
+								conversation.isolationPending ||
+								(authority.channelId === "web" &&
+									conversation.sandbox !== undefined &&
+									conversation.sandboxReady !== true)
 							)
 								return { outcome: "denied" };
 							const modelSelection = effectiveModelSelection(
@@ -602,7 +610,10 @@ export function createConversationExecutionUseCaseV1(
 							}
 							if (
 								conversation.status === "unavailable" ||
-								conversation.isolationPending
+								conversation.isolationPending ||
+								(authority.channelId === "web" &&
+									conversation.sandbox !== undefined &&
+									conversation.sandboxReady !== true)
 							)
 								return { outcome: "denied" };
 							if (state.activeExecution) return { outcome: "busy" };

@@ -108,6 +108,13 @@ export type {
 	PendingSecretRecordAttachmentsV1,
 	PendingSecretRecordExpectationV1,
 } from "./secret-record-attachments.js";
+export {
+	createSessionSandboxBindingV1,
+	parseSessionSandboxBindingV1,
+	type SessionSandboxBindingV1,
+} from "./session-sandbox.js";
+export * from "./session-sandbox-lifecycle.js";
+export * from "./session-sandbox-reconciliation.js";
 export * from "./task-api-audit.js";
 export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";
