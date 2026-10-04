@@ -24,17 +24,9 @@
 
 M1 的自有产品与控制代码采用全 TypeScript 单仓库，使用 Better-T-Stack 初始化基础工程。Better-T-Stack 只负责生成工程骨架，不作为运行时依赖，也不决定领域模块的接口。Codex 使用固定官方 release，由 Native Driver/Adapter 消费上游能力；第三方源码、私有接缝与执行屏障的边界见 [10.11](#1011-codex-上游原生补丁与执行屏障)。
 
-CI 的 PR-Agent 上游 Python 源码允许一个受控例外：仅对 plain-diff 输入增加显式文件保留
-capability，恢复 lockfile 内容覆盖；默认过滤与 GitHub provider 策略不变。这不授权自有 Python
-控制逻辑：HTTP recorder、Git inventory、shadow、Publisher 和 Coverage validator 继续使用
-TypeScript。该例外不适用于产品 Runtime、Host、Grant 或 Driver，不扩展 §10.11 的 Codex 边界。
-来源与制品身份、最小补丁范围、失败处理及退出条件以
-[PR-Agent derived runtime ADR](../adr/ADR-0014-pr-agent-derived-runtime.md) 为准；本条款、
-[Workflow Spec §7.3](SPEC-ai-native-development-workflow.md#73-automated-pr-review) 与该 ADR 须先完成
-独立评审及维护者接收，再实施生产补丁、构建派生镜像或启用 workflow。所有既有 token cap、
-required checks 和安全扫描要求保持不变。派生制品还必须提供可回读的 OCI build provenance /
-attestation，至少绑定基础镜像 digest、构建工作流与 commit、补丁摘要、构建器身份和制品 digest；
-缺失、不可验证或与 `sourceCommit`/`patchSha256`/`imageDigest` 不匹配时不得进入生产。
+CI 的 PR-Agent 直接使用官方 GitHub Action，仅启用 Review 与 Suggestions；不维护自有
+PR-Agent 脚本、上游补丁或派生 runtime。配置与权限边界见
+[Workflow Spec §7.3](SPEC-ai-native-development-workflow.md#73-automated-pr-review)。
 
 ### 2.1 技术栈
 
@@ -1380,7 +1372,7 @@ Platform 在 Connection 相关数据中只保存 Consumer 非敏感配置和 §1
 Connection runtime/readiness；[#435](https://github.com/AgoraIO-Extensions/agent-infra/issues/435)
 是已关闭（NOT_PLANNED）的历史联合验收回链，不恢复该入口或已停止探针；当前代表旅程由
 [#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192)回链
-[#150](https://github.com/AgoraIO-Extensions/agent-infra/issues/150)，完整 Pilot 义务仍按原计划保留。
+[#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144)，完整 Pilot 义务仍按原验收要求保留。
 配置契约或静态校验通过不代表这些验收完成，也不接管
 [#907](https://github.com/AgoraIO-Extensions/agent-infra/issues/907)、
 [#601](https://github.com/AgoraIO-Extensions/agent-infra/issues/601)或 Connection 服务端实现。

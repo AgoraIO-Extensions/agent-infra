@@ -1,51 +1,124 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import * as checkRunContract from "./check-run-contract.mjs";
-import * as prGates from "./pr-gates.mjs";
 import {
-  affectedPullRequests,
-  auditDescription,
-  buildCheckRunPayload,
   buildGateRecords,
-  buildReviewState,
-  claudeReviewGateUpdate,
-  evaluateClaudeReviewGate,
   evaluateHumanValidationGate,
   evaluateIssueGate,
-  evaluateIssueReadinessGate,
   extractPrimaryIssueNumbers,
-  parseWaiverCommand,
-  pendingGateNames,
+  runGate,
   shouldReapplyHumanValidation,
 } from "./pr-gates.mjs";
-import { buildAcceptanceCriteriaEvidenceMarker } from "./worker-contract.mjs";
+
+function gateFixture({ action = "edited", labels = [], events = [], actor, membership } = {}) {
+  const head = "a".repeat(40);
+  const pr = {
+    number: 7, head: { sha: head }, body: "Closes #42", labels,
+    created_at: "2026-10-02T00:00:00Z", updated_at: "2026-10-03T00:00:00Z",
+    html_url: "https://github.com/example/repo/pull/7",
+  };
+  const event = {
+    action, pull_request: structuredClone(pr), sender: actor,
+    label: { name: "ready-for-human" },
+  };
+  const calls = [];
+  const request = async (apiPath, options = {}) => {
+    calls.push({ apiPath, ...options });
+    if (apiPath === "/repos/example/repo/pulls/7") return structuredClone(pr);
+    if (apiPath === "/repos/example/repo/issues/42") return {
+      number: 42, state: "open", labels: [], created_at: "2026-10-01T00:00:00Z",
+    };
+    if (apiPath.includes("/events?")) return events;
+    if (apiPath.includes("/memberships/")) return membership;
+    if (apiPath.endsWith("/labels") && options.method === "POST") return [];
+    throw new Error(`Unexpected request: ${apiPath}`);
+  };
+  return { pr, event, calls, request, repository: "example/repo" };
+}
+
+test("native Issue job reads the live primary Issue and rejects missing references", async () => {
+  const fixture = gateFixture();
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, true);
+  fixture.pr.body = "No primary Issue";
+  fixture.calls.length = 0;
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, false);
+  assert.equal(fixture.calls.length, 1);
+});
+
+test("stale PR events cannot validate either job or write labels", async () => {
+  for (const mode of ["issue", "human"]) {
+    const fixture = gateFixture();
+    fixture.pr.head.sha = "b".repeat(40);
+    assert.equal((await runGate({ ...fixture, mode })).ok, false);
+    assert.equal(fixture.calls.length, 1);
+  }
+});
+
+test("human job needs no Team lookup when validation was never required", async () => {
+  const fixture = gateFixture();
+  assert.equal((await runGate({ ...fixture, mode: "human" })).ok, true);
+  assert.equal(fixture.calls.some((call) => call.tokenEnvironment), false);
+});
+
+test("an active human Team member can confirm validation on the event head", async () => {
+  const fixture = gateFixture({
+    action: "unlabeled", actor: { login: "owner", type: "User" },
+    membership: { state: "active", role: "member" },
+  });
+  assert.equal((await runGate({ ...fixture, mode: "human" })).ok, true);
+  assert.equal(fixture.calls.find((call) => call.apiPath.includes("/memberships/"))?.tokenEnvironment,
+    "TEAM_MEMBERSHIP_TOKEN");
+  assert.equal(fixture.calls.some((call) => call.method === "POST"), false);
+});
+
+test("Bots and nonmembers cannot clear human validation", async () => {
+  for (const actor of [{ login: "robot[bot]", type: "Bot" }, { login: "outsider", type: "User" }]) {
+    const fixture = gateFixture({ action: "unlabeled", actor, membership: null });
+    assert.equal((await runGate({ ...fixture, mode: "human" })).ok, false);
+    const write = fixture.calls.find((call) => call.method === "POST");
+    assert.deepEqual(JSON.parse(write.body), { labels: ["ready-for-human"] });
+  }
+});
+
+test("a synchronize event restores an earlier human validation requirement", async () => {
+  const fixture = gateFixture({
+    action: "synchronize", events: [{ event: "labeled", label: { name: "ready-for-human" } }],
+  });
+  assert.equal((await runGate({ ...fixture, mode: "human" })).ok, false);
+  assert.equal(fixture.calls.at(-1).method, "POST");
+});
+
+test("Team lookup errors fail the job instead of accepting validation", async () => {
+  const fixture = gateFixture({ action: "unlabeled", actor: { login: "owner", type: "User" } });
+  const request = async (apiPath, options) => {
+    if (apiPath.includes("/memberships/")) throw new Error("Membership unavailable");
+    return fixture.request(apiPath, options);
+  };
+  await assert.rejects(runGate({ ...fixture, mode: "human", request }), /Membership unavailable/);
+  assert.equal(fixture.calls.some((call) => call.method === "POST"), false);
+});
+
+test("a head change during evaluation prevents label restoration", async () => {
+  const fixture = gateFixture({ action: "unlabeled", actor: { login: "robot[bot]", type: "Bot" } });
+  let reads = 0;
+  const request = async (apiPath, options) => {
+    if (apiPath.endsWith("/pulls/7") && ++reads > 1) return { head: { sha: "b".repeat(40) } };
+    return fixture.request(apiPath, options);
+  };
+  await assert.rejects(runGate({ ...fixture, mode: "human", request }), /head changed before label update/);
+  assert.equal(fixture.calls.some((call) => call.method === "POST"), false);
+});
+
+test("incomplete event pagination fails closed", async () => {
+  const fixture = gateFixture({ events: Array.from({ length: 100 }, () => ({ event: "commented" })) });
+  await assert.rejects(runGate({ ...fixture, mode: "human" }), /pagination limit/);
+});
 
 test("extracts one canonical primary Issue reference", () => {
   assert.deepEqual(
     extractPrimaryIssueNumbers("Summary\n\nCloses #42\n\nRelated to #7"),
     [42],
   );
-});
-
-test("scheduled membership reconciliation reevaluates every open PR", () => {
-  const pulls = [
-    { number: 1, body: "Closes #10" },
-    { number: 2, body: "Closes #20" },
-  ];
-  assert.deepEqual(
-    affectedPullRequests({ eventName: "schedule", pulls }),
-    pulls,
-  );
-  assert.deepEqual(
-    affectedPullRequests({ eventName: "issues", issueNumber: 20, pulls }),
-    [pulls[1]],
-  );
-  assert.deepEqual(
-    affectedPullRequests({ eventName: "issue_comment", issueNumber: 10, pulls }),
-    [pulls[0]],
-  );
-  assert.throws(() => affectedPullRequests({ eventName: "pull_request_target", pulls }));
 });
 
 test("ignores closing keywords inside fenced examples", () => {
@@ -128,213 +201,7 @@ test("Issue Gate rejects a closed or wontfix Issue", () => {
   );
 });
 
-test("Issue Gate binds Worker branches to ready-for-agent Issues", () => {
-  assert.deepEqual(
-    evaluateIssueGate({
-      issueNumbers: [42],
-      issue: {
-        number: 42,
-        state: "open",
-        labels: [{ name: "ready-for-agent" }],
-        created_at: "2026-08-11T08:00:00Z",
-      },
-      headRef: "codex/issue-42-cycle-1",
-      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
-    }),
-    { ok: true, description: "Worker Issue #42 is ready for Agent" },
-  );
-  assert.equal(
-    evaluateIssueGate({
-      issueNumbers: [42],
-      issue: {
-        number: 42,
-        state: "open",
-        labels: [{ name: "ready-for-agent" }],
-        created_at: "2026-08-11T08:00:00Z",
-      },
-      headRef: "codex/issue-7-cycle-1",
-      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
-    }).ok,
-    false,
-  );
-  assert.equal(
-    evaluateIssueGate({
-      issueNumbers: [42],
-      issue: {
-        number: 42,
-        state: "open",
-        labels: [],
-        created_at: "2026-08-11T08:00:00Z",
-      },
-      headRef: "codex/issue-42-cycle-1",
-      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
-    }).ok,
-    false,
-  );
-  assert.equal(
-    evaluateIssueGate({
-      issueNumbers: [42],
-      issue: {
-        number: 42,
-        state: "open",
-        labels: [{ name: "ready-for-agent" }],
-        created_at: "2026-08-11T08:00:00Z",
-      },
-      headRef: "codex/issue-not-a-number",
-      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
-    }).ok,
-    false,
-  );
-});
-
-test("Issue Readiness Gate is not applicable to human PRs", () => {
-  assert.deepEqual(
-    evaluateIssueReadinessGate({
-      repository: "AgoraIO-Extensions/agent-infra",
-      defaultBranch: "main",
-      pullRequest: { head: { ref: "feat/human" } },
-    }),
-    {
-      ok: true,
-      applicable: false,
-      description: "not_applicable: human-authored PR",
-    },
-  );
-});
-
-test("Issue Readiness Gate binds cycle, content, ownership, blockers, and AC evidence", () => {
-  const contract = {
-    hash: "d".repeat(64),
-    blockedByHash: "b".repeat(64),
-    acceptanceCriteriaIds: ["AC-1", "AC-2"],
-  };
-  const authorizationRecord = {
-    issueNumber: 42,
-    cycle: 3,
-    state: "active",
-    executionContentHash: contract.hash,
-    blockedByHash: contract.blockedByHash,
-  };
-  const marker = buildAcceptanceCriteriaEvidenceMarker(
-    [
-      { id: "AC-1", status: "pass", evidence: "unit test" },
-      { id: "AC-2", status: "not_applicable", evidence: "no runtime dependency" },
-    ],
-    contract.acceptanceCriteriaIds,
-  );
-  const pullRequest = {
-    number: 9,
-    body: `Closes #42\n\n## 验收标准\n\n${marker}`,
-    head: {
-      ref: "codex/issue-42-cycle-3",
-      repo: { full_name: "AgoraIO-Extensions/agent-infra" },
-    },
-    base: { ref: "main" },
-  };
-  const issue = {
-    number: 42,
-    state: "open",
-    labels: [{ name: "ready-for-agent" }],
-  };
-  const workerPullRequests = [
-    {
-      number: 9,
-      state: "open",
-      merged_at: null,
-      head: { ref: "codex/issue-42-cycle-3" },
-    },
-  ];
-  const input = {
-    repository: "AgoraIO-Extensions/agent-infra",
-    defaultBranch: "main",
-    pullRequest,
-    issue,
-    blockers: [],
-    workerPullRequests,
-    contract,
-    authorizationRecord,
-  };
-  assert.deepEqual(evaluateIssueReadinessGate(input), {
-    ok: true,
-    applicable: true,
-    description: "Worker Issue #42 cycle 3 is ready for review",
-  });
-  assert.equal(
-    evaluateIssueReadinessGate({
-      ...input,
-      authorizationRecord: {
-        ...authorizationRecord,
-        executionContentHash: "e".repeat(64),
-      },
-    }).ok,
-    false,
-  );
-  assert.equal(
-    evaluateIssueReadinessGate({
-      ...input,
-      authorizationRecord: {
-        ...authorizationRecord,
-        blockedByHash: "c".repeat(64),
-      },
-    }).ok,
-    false,
-  );
-  assert.equal(
-    evaluateIssueReadinessGate({
-      ...input,
-      blockers: [{ number: 7, state: "open" }],
-    }).ok,
-    false,
-  );
-  for (const blocker of [
-    { number: 7, state: "closed", state_reason: "not_planned" },
-    { number: 7, state: "closed", state_reason: null },
-    {
-      number: 7,
-      state: "closed",
-      state_reason: "completed",
-      labels: [{ name: "wontfix" }],
-    },
-  ]) {
-    assert.equal(
-      evaluateIssueReadinessGate({ ...input, blockers: [blocker] }).ok,
-      false,
-    );
-  }
-  assert.equal(
-    evaluateIssueReadinessGate({
-      ...input,
-      blockers: [{ number: 7, state: "closed", state_reason: "completed" }],
-    }).ok,
-    true,
-  );
-  assert.equal(
-    evaluateIssueReadinessGate({
-      ...input,
-      pullRequest: { ...pullRequest, body: "Closes #42" },
-    }).ok,
-    false,
-  );
-});
-
-test("parses only current-head Claude waiver commands with non-empty reasons", () => {
-  const headSha = "a".repeat(40);
-  assert.deepEqual(
-    parseWaiverCommand(`/claude-review-waiver ${headSha}\nProvider timeout.`),
-    {
-      headSha,
-      reason: "Provider timeout.",
-    },
-  );
-  assert.equal(
-    parseWaiverCommand(`/human-validation ${headSha}\nTested in staging.`),
-    null,
-  );
-  assert.equal(parseWaiverCommand(`/claude-review-waiver ${headSha}`), null);
-  assert.equal(parseWaiverCommand("looks good"), null);
-});
-
-test("builds validation from label removal and waivers from current-head comments", () => {
+test("builds validation from label removal", () => {
   const currentHead = "a".repeat(40);
   const validationEvent = {
     event: "unlabeled",
@@ -344,25 +211,6 @@ test("builds validation from label removal and waivers from current-head comment
     url: "https://api.github.com/repos/example/repo/issues/events/2",
   };
   const records = buildGateRecords({
-    comments: [
-      {
-        body: `/human-validation ${currentHead}\nTested in staging.`,
-        created_at: "2026-08-06T00:00:00Z",
-        html_url: "https://github.com/example/repo/pull/1#issuecomment-1",
-        user: { login: "ignored", type: "User" },
-      },
-      {
-        body: `/claude-review-waiver ${currentHead}\nProvider timeout.`,
-        created_at: "2026-08-06T00:02:00Z",
-        html_url: "https://github.com/example/repo/pull/1#issuecomment-2",
-        user: { login: "owner", type: "User" },
-      },
-      {
-        body: "looks good",
-        html_url: "https://github.com/example/repo/pull/1#issuecomment-3",
-        user: { login: "owner", type: "User" },
-      },
-    ],
     events: [
       {
         event: "labeled",
@@ -388,20 +236,9 @@ test("builds validation from label removal and waivers from current-head comment
       recordedAt: "2026-08-06T00:01:00Z",
       url: "https://api.github.com/repos/example/repo/issues/events/2",
     },
-    waivers: [
-      {
-        actor: { login: "owner", type: "User" },
-        headSha: currentHead,
-        membership: { state: "active", role: "member" },
-        reason: "Provider timeout.",
-        recordedAt: "2026-08-06T00:02:00Z",
-        url: "https://github.com/example/repo/pull/1#issuecomment-2",
-      },
-    ],
   });
   assert.deepEqual(
     buildGateRecords({
-      comments: [],
       events: [],
       event: {
         action: "unlabeled",
@@ -419,33 +256,6 @@ test("builds validation from label removal and waivers from current-head comment
       ]),
     }).validation,
     records.validation,
-  );
-});
-
-test("binds audit evidence to the exact actor selected by the Gate", () => {
-  const records = {
-    validation: {
-      actor: { login: "validator" },
-      headSha: "a".repeat(40),
-      reason: "ready-for-human removed",
-      recordedAt: "2026-08-06T00:01:00Z",
-      url: "https://api.github.com/repos/example/repo/issues/events/2",
-    },
-    waivers: [],
-  };
-  assert.equal(
-    auditDescription(
-      {
-        ok: true,
-        description: "Human validation confirmed by validator for current head",
-      },
-      records,
-      "human-validation",
-    ),
-    "Human validation confirmed by validator for current head\n\n" +
-      "Reason: ready-for-human removed\n\n" +
-      "Recorded at: 2026-08-06T00:01:00Z\n\n" +
-      "Evidence: https://api.github.com/repos/example/repo/issues/events/2",
   );
 });
 
@@ -508,351 +318,6 @@ test("Human Validation Gate requires a current-head active Team member record", 
   );
 });
 
-test("Claude Review Gate accepts only current-head success or a bounded infrastructure waiver", () => {
-  const currentHead = "a".repeat(40);
-  const review = {
-    appId: 4503079,
-    conclusion: "success",
-    failureKind: null,
-    headSha: currentHead,
-    reasonCode: "success",
-    status: "completed",
-  };
-  const waiver = {
-    actor: { login: "owner", type: "User" },
-    headSha: currentHead,
-    membership: { state: "active", role: "member" },
-    reason: "Provider timeout.",
-    recordedAt: "2026-08-06T00:00:00Z",
-    url: "https://github.com/example/repo/pull/1#issuecomment-2",
-  };
-  assert.deepEqual(
-    evaluateClaudeReviewGate({ currentHead, review, waivers: [] }),
-    { ok: true, waived: false, description: "Claude Review passed for current head" },
-  );
-  assert.deepEqual(
-    evaluateClaudeReviewGate({
-      currentHead,
-      review: {
-        ...review,
-        conclusion: "failure",
-        reasonCode: "blocking_finding",
-        blockingFindingCount: 1,
-      },
-      publishedBlockingFindingCount: 1,
-      waivers: [],
-    }),
-    { ok: true, waived: false, description: "Claude Review passed for current head" },
-  );
-  assert.deepEqual(
-    evaluateClaudeReviewGate({
-      currentHead,
-      review: { ...review, conclusion: "failure", reasonCode: "unresolved_thread" },
-      waivers: [],
-    }),
-    { ok: true, waived: false, description: "Claude Review passed for current head" },
-  );
-  for (const invalidReview of [
-    undefined,
-    { ...review, headSha: "b".repeat(40) },
-    { ...review, status: "in_progress", conclusion: null },
-    { ...review, appId: null },
-  ]) {
-    assert.equal(
-      evaluateClaudeReviewGate({ currentHead, review: invalidReview, waivers: [] }).ok,
-      false,
-    );
-  }
-  assert.deepEqual(
-    evaluateClaudeReviewGate({
-      currentHead,
-      review: {
-        ...review,
-        conclusion: "failure",
-        failureKind: "infrastructure_failure",
-        reasonCode: "infrastructure_failure",
-      },
-      waivers: [waiver],
-    }),
-    {
-      ok: true,
-      waived: true,
-      description: "Claude Review infrastructure failure waived by owner for current head",
-    },
-  );
-  const appliedWaiver = {
-    ...review,
-    conclusion: "success",
-    failureKind: "infrastructure_failure",
-    reasonCode: "waived_infrastructure_failure",
-  };
-  assert.equal(
-    evaluateClaudeReviewGate({ currentHead, review: appliedWaiver, waivers: [] }).ok,
-    false,
-  );
-  assert.deepEqual(
-    evaluateClaudeReviewGate({ currentHead, review: appliedWaiver, waivers: [waiver] }),
-    {
-      ok: true,
-      waived: true,
-      description: "Claude Review infrastructure failure waived by owner for current head",
-    },
-  );
-  for (const blocked of [
-    {
-      review: {
-        ...review,
-        conclusion: "failure",
-        failureKind: "invalid_output",
-        reasonCode: "invalid_output",
-      },
-      waivers: [waiver],
-    },
-    {
-      review: {
-        ...review,
-        conclusion: "failure",
-        failureKind: "infrastructure_failure",
-        reasonCode: "infrastructure_failure",
-      },
-      waivers: [{ ...waiver, actor: { login: "owner[bot]", type: "Bot" } }],
-    },
-    {
-      review: {
-        ...review,
-        conclusion: "failure",
-        failureKind: "infrastructure_failure",
-        reasonCode: "infrastructure_failure",
-      },
-      waivers: [waiver],
-      hasPublishedBlockingFinding: true,
-    },
-    {
-      review: {
-        ...review,
-        conclusion: "failure",
-        failureKind: "infrastructure_failure",
-        reasonCode: "infrastructure_failure",
-      },
-      waivers: [waiver],
-      hasUnresolvedThread: true,
-    },
-  ]) {
-    assert.equal(evaluateClaudeReviewGate({ currentHead, ...blocked }).ok, false);
-  }
-});
-
-test("accepts a disabled Claude Review only from the current-head successful Gate", () => {
-  const currentHead = "a".repeat(40);
-  const state = buildReviewState({
-    checkRuns: [
-      {
-        id: 1,
-        name: "Claude Review Gate",
-        head_sha: currentHead,
-        app: { id: 4503079 },
-        external_id: `agent-infra:pr:42:claude-review-gate:${currentHead}`,
-        status: "completed",
-        conclusion: "success",
-        output: { summary: "reason_code: disabled" },
-      },
-    ],
-    currentHead,
-    prNumber: 42,
-  });
-
-  assert.equal(state.review.reasonCode, "disabled");
-  assert.deepEqual(evaluateClaudeReviewGate({ currentHead, ...state }), {
-    ok: true,
-    waived: false,
-    description: "Claude Review passed for current head",
-  });
-  assert.equal(
-    evaluateClaudeReviewGate({
-      currentHead,
-      ...state,
-      review: { ...state.review, conclusion: "failure" },
-    }).ok,
-    false,
-  );
-});
-
-test("normalizes only current-head App Review state and blocking thread evidence", () => {
-  const currentHead = "a".repeat(40);
-  const oldHead = "b".repeat(40);
-  const expectedExternalId = `agent-infra:pr:42:claude-review-gate:${currentHead}`;
-  assert.deepEqual(
-    buildReviewState({
-      checkRuns: [
-        {
-          id: 1,
-          name: "Claude Review Gate",
-          head_sha: oldHead,
-          app: { id: 4503079 },
-          external_id: expectedExternalId,
-          status: "completed",
-          conclusion: "success",
-          output: { summary: "reason_code: success" },
-        },
-        {
-          id: 2,
-          name: "Claude Review Gate",
-          head_sha: currentHead,
-          app: { id: 4503079 },
-          external_id: expectedExternalId,
-          status: "completed",
-          conclusion: "failure",
-          output: { summary: "reason_code: infrastructure_failure" },
-        },
-        {
-          id: 3,
-          name: "Claude Review Gate",
-          head_sha: currentHead,
-          app: { id: 999 },
-          external_id: expectedExternalId,
-          status: "completed",
-          conclusion: "success",
-          output: { summary: "reason_code: success" },
-        },
-        {
-          id: 4,
-          name: "Claude Review Gate",
-          head_sha: currentHead,
-          app: { id: 4503079 },
-          external_id: `agent-infra:pr:99:claude-review-gate:${currentHead}`,
-          status: "completed",
-          conclusion: "success",
-          output: { summary: "reason_code: success" },
-        },
-      ],
-      threads: [
-        {
-          isResolved: false,
-          comments: {
-            nodes: [
-              {
-                author: { login: "github-actions" },
-                body: `**P1: Bug**\n\n<!-- agent-infra-claude-review:${currentHead}:key -->`,
-              },
-            ],
-          },
-        },
-      ],
-      currentHead,
-      prNumber: 42,
-    }),
-    {
-      review: {
-        appId: 4503079,
-        checkRunId: 2,
-        conclusion: "failure",
-        failureKind: "infrastructure_failure",
-        headSha: currentHead,
-        reasonCode: "infrastructure_failure",
-        status: "completed",
-      },
-      hasPublishedBlockingFinding: true,
-      hasUnresolvedThread: true,
-    },
-  );
-});
-
-test("preserves the trusted Review result beneath derived thread failures", () => {
-  const currentHead = "a".repeat(40);
-  const state = buildReviewState({
-    checkRuns: [
-      {
-        id: 5,
-        name: "Claude Review Gate",
-        head_sha: currentHead,
-        app: { id: 4503079 },
-        external_id: `agent-infra:pr:42:claude-review-gate:${currentHead}`,
-        status: "completed",
-        conclusion: "failure",
-        output: {
-          summary: "reason_code: blocking_finding\nblocking_finding_count: 1",
-        },
-      },
-    ],
-    threads: [
-      {
-        isResolved: true,
-        comments: {
-          nodes: [
-            {
-              author: { login: "github-actions" },
-              body: `**P1: Fixed**\n\n<!-- agent-infra-claude-review:${currentHead}:key -->`,
-            },
-          ],
-        },
-      },
-    ],
-    currentHead,
-    prNumber: 42,
-  });
-  assert.equal(
-    state.review.reasonCode,
-    "blocking_finding",
-  );
-  assert.equal(state.hasPublishedBlockingFinding, false);
-  assert.equal(state.hasUnresolvedThread, false);
-  assert.equal(
-    evaluateClaudeReviewGate({
-      currentHead,
-      review: state.review,
-      hasPublishedBlockingFinding: state.hasPublishedBlockingFinding,
-      hasUnresolvedThread: state.hasUnresolvedThread,
-      publishedBlockingFindingCount: state.publishedBlockingFindingCount,
-    }).ok,
-    true,
-  );
-});
-
-test("keeps a blocking Review failed when its trusted finding comment is deleted", () => {
-  const currentHead = "a".repeat(40);
-  const state = buildReviewState({
-    checkRuns: [
-      {
-        id: 6,
-        name: "Claude Review Gate",
-        head_sha: currentHead,
-        app: { id: 4503079 },
-        external_id: `agent-infra:pr:42:claude-review-gate:${currentHead}`,
-        status: "completed",
-        conclusion: "failure",
-        output: {
-          summary: "reason_code: unresolved_thread\nblocking_finding_count: 2",
-        },
-      },
-    ],
-    threads: [
-      {
-        isResolved: true,
-        comments: {
-          nodes: [
-            {
-              author: { login: "github-actions" },
-              body: `**P1: Fixed**\n\n<!-- agent-infra-claude-review:${currentHead}:key -->`,
-            },
-          ],
-        },
-      },
-    ],
-    currentHead,
-    prNumber: 42,
-  });
-
-  assert.deepEqual(
-    evaluateClaudeReviewGate({ currentHead, ...state }),
-    {
-      ok: false,
-      waived: false,
-      reasonCode: "blocking_finding",
-      description: "Blocking Review finding evidence is incomplete",
-    },
-  );
-});
-
 test("a new commit restores a previously required human validation label", () => {
   assert.equal(
     shouldReapplyHumanValidation({
@@ -877,212 +342,5 @@ test("label removal can complete validation until another commit", () => {
       events,
     }),
     false,
-  );
-});
-
-test("gate Check Runs bind the expected App result to the current head", () => {
-  const headSha = "a".repeat(40);
-  assert.deepEqual(
-    buildCheckRunPayload({
-      name: "Issue Gate",
-      headSha,
-      prNumber: 42,
-      status: "completed",
-      conclusion: "success",
-      description: "Re-evaluating PR metadata",
-      targetUrl: "https://github.com/example/repo/pull/1",
-    }),
-    {
-      name: "Issue Gate",
-      head_sha: headSha,
-      status: "completed",
-      conclusion: "success",
-      details_url: "https://github.com/example/repo/pull/1",
-      external_id: `agent-infra:pr:42:issue-gate:${headSha}`,
-      output: {
-        title: "Issue Gate: success",
-        summary: "Re-evaluating PR metadata",
-      },
-    },
-  );
-  assert.throws(() =>
-    buildCheckRunPayload({
-      name: "Issue Gate",
-      headSha: "stale",
-      prNumber: 42,
-      status: "in_progress",
-      description: "Re-evaluating PR metadata",
-      targetUrl: "https://github.com/example/repo/pull/1",
-    }),
-  );
-});
-
-test("gate Check Runs trust only the dedicated publisher App", () => {
-  const headSha = "a".repeat(40);
-  const externalId = `agent-infra:pr:42:issue-gate:${headSha}`;
-  assert.equal(checkRunContract.GATE_PUBLISHER_APP_ID, 4_503_079);
-  assert.equal(typeof prGates.gateCheckRequest, "function");
-  assert.equal(
-    checkRunContract.selectCurrentGateCheck(
-      [
-        {
-          id: 1,
-          name: "Issue Gate",
-          head_sha: headSha,
-          app: { id: checkRunContract.GITHUB_ACTIONS_APP_ID },
-          external_id: externalId,
-        },
-        {
-          id: 2,
-          name: "Issue Gate",
-          head_sha: headSha,
-          app: { id: 4_503_079 },
-          external_id: externalId,
-        },
-      ],
-      { name: "Issue Gate", headSha, prNumber: 42 },
-    )?.id,
-    2,
-  );
-});
-
-test("Gate publication authenticates only with the check-only token", async () => {
-  const previousFetch = globalThis.fetch;
-  const previousGateToken = process.env.GATE_CHECK_TOKEN;
-  const previousGitHubToken = process.env.GITHUB_TOKEN;
-  let authorization;
-  process.env.GATE_CHECK_TOKEN = "gate-token";
-  process.env.GITHUB_TOKEN = "workflow-token";
-  globalThis.fetch = async (_url, options) => {
-    authorization = options.headers.Authorization;
-    return { ok: true, status: 204 };
-  };
-  try {
-    await prGates.gateCheckRequest("/repos/example/repo/check-runs", {
-      method: "POST",
-    });
-    assert.equal(authorization, "Bearer gate-token");
-  } finally {
-    globalThis.fetch = previousFetch;
-    if (previousGateToken === undefined) delete process.env.GATE_CHECK_TOKEN;
-    else process.env.GATE_CHECK_TOKEN = previousGateToken;
-    if (previousGitHubToken === undefined) delete process.env.GITHUB_TOKEN;
-    else process.env.GITHUB_TOKEN = previousGitHubToken;
-  }
-});
-
-test("PR Gates never creates a competing Claude Review Gate", () => {
-  assert.deepEqual(pendingGateNames(), [
-    "Issue Gate",
-    "Issue Readiness Gate",
-    "Human Validation Gate",
-  ]);
-});
-
-test("revokes an applied waiver when its current audit record becomes invalid", () => {
-  assert.deepEqual(
-    claudeReviewGateUpdate({
-      result: { ok: true, waived: true, description: "Approved waiver" },
-      review: { reasonCode: "infrastructure_failure" },
-    }),
-    {
-      conclusion: "success",
-      description: "Approved waiver",
-      reasonCode: "waived_infrastructure_failure",
-    },
-  );
-  assert.deepEqual(
-    claudeReviewGateUpdate({
-      result: { ok: false, waived: false, description: "Waiver is invalid" },
-      review: { reasonCode: "waived_infrastructure_failure" },
-    }),
-    {
-      conclusion: "failure",
-      description: "Waiver is invalid",
-      reasonCode: "infrastructure_failure",
-    },
-  );
-  assert.equal(
-    claudeReviewGateUpdate({
-      result: { ok: true, waived: false, description: "Review passed" },
-      review: { reasonCode: "success" },
-    }),
-    null,
-  );
-});
-
-test("writes blocking Review thread state to the Gate and restores Review success", () => {
-  assert.deepEqual(
-    claudeReviewGateUpdate({
-      result: {
-        ok: false,
-        waived: false,
-        reasonCode: "blocking_finding",
-        description: "P0/P1 finding cannot be waived",
-      },
-      review: { reasonCode: "success" },
-    }),
-    {
-      conclusion: "failure",
-      description: "P0/P1 finding cannot be waived",
-      reasonCode: "blocking_finding",
-    },
-  );
-  assert.deepEqual(
-    claudeReviewGateUpdate({
-      result: {
-        ok: false,
-        waived: false,
-        reasonCode: "unresolved_thread",
-        description: "Blocking Review thread is unresolved",
-      },
-      review: { reasonCode: "disabled" },
-    }),
-    {
-      conclusion: "failure",
-      description: "Blocking Review thread is unresolved",
-      reasonCode: "unresolved_thread",
-    },
-  );
-  assert.deepEqual(
-    claudeReviewGateUpdate({
-      result: {
-        ok: false,
-        waived: false,
-        reasonCode: "unresolved_thread",
-        description: "Blocking Review thread is unresolved",
-      },
-      review: { reasonCode: "blocking_finding", blockingFindingCount: 2 },
-    }),
-    {
-      conclusion: "failure",
-      description: "Blocking Review thread is unresolved",
-      reasonCode: "unresolved_thread",
-      blockingFindingCount: 2,
-    },
-  );
-  assert.deepEqual(
-    claudeReviewGateUpdate({
-      result: { ok: true, waived: false, description: "Claude Review passed" },
-      review: { reasonCode: "unresolved_thread", blockingFindingCount: 2 },
-    }),
-    {
-      conclusion: "success",
-      description: "Claude Review passed",
-      reasonCode: "success",
-      blockingFindingCount: 2,
-    },
-  );
-  assert.equal(
-    claudeReviewGateUpdate({
-      result: {
-        ok: false,
-        waived: false,
-        reasonCode: "blocking_finding",
-        description: "P0/P1 finding cannot be waived",
-      },
-      review: { reasonCode: "infrastructure_failure" },
-    }),
-    null,
   );
 });
