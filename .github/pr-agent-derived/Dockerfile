@@ -3,7 +3,7 @@
 FROM pragent/pr-agent@sha256:548b760b81ab4b3f729182428695ccc1194bbf87528c2b1e2b2b07e5223af7b6
 
 ARG SOURCE_COMMIT=46d7ee02b77bc1f323c327e32be4ee70e4cd306a
-ARG PATCH_SHA256=cedefb366a7ea4dd32a7ab944eed3bd47320a9e023b46b108470ca2e7b8e8257
+ARG PATCH_SHA256=2c0befeb4194fd4f866c1b7123cc7c66d5b81f7711d0ac9c512f7fff60895803
 
 LABEL org.opencontainers.image.title="agent-infra PR-Agent plain-diff derived runtime" \
       org.opencontainers.image.description="Preserves parsed plain-diff files for lockfile review" \
