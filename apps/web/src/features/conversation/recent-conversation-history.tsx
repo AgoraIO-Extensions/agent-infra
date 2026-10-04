@@ -16,7 +16,7 @@ export function RecentConversationHistory({
 	const recent = useRecentPersonalConversations({ identityKey });
 	const { state } = recent;
 	return (
-		<section aria-label="最近对话" className="space-y-4">
+		<section aria-label="最近对话" className="space-y-3">
 			<div>
 				<p className="text-muted-foreground text-xs">个人历史</p>
 				<h2 className="font-semibold">最近对话</h2>
@@ -40,13 +40,13 @@ export function RecentConversationHistory({
 			{state.kind === "ready" && (
 				<>
 					{state.conversations.length === 0 && <p>暂无个人对话。</p>}
-					<ul className="space-y-3">
+					<ul className="space-y-1">
 						{state.conversations.map((item) => {
 							const current =
 								item.agentId === agentId &&
 								item.conversationId === conversationId;
 							return (
-								<li key={item.conversationId}>
+								<li key={JSON.stringify([item.agentId, item.conversationId])}>
 									<a
 										href={`/chat/${encodeURIComponent(item.agentId)}/${encodeURIComponent(item.conversationId)}`}
 										aria-current={current ? "page" : undefined}
@@ -71,13 +71,13 @@ export function RecentConversationHistory({
 									>
 										<span className="min-w-0 break-words">
 											{item.title || "未命名会话"}
-											<span className="block text-muted-foreground text-xs">
+											<small>
 												{current && "当前对话 · "}
 												<time dateTime={item.updatedAt}>
 													{new Date(item.updatedAt).toLocaleString("zh-CN")}
 												</time>
 												{item.status === "unavailable" && " · 会话不可用"}
-											</span>
+											</small>
 										</span>
 									</a>
 								</li>

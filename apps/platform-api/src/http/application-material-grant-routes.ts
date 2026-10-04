@@ -9,7 +9,11 @@ import type { ApplicationMaterialGrantUseCaseV1 } from "@agent-infra/platform-co
 import type { Context, Hono } from "hono";
 import { HttpProtocolError, parseJson, requestMetadata } from "./common.js";
 import { mapCoreError } from "./core-errors.js";
-import { type IdentityAdapter, resolveIdentity } from "./identity.js";
+import {
+	type IdentityAdapter,
+	resolveCurrentMaterialGrantActor,
+	resolveIdentity,
+} from "./identity.js";
 export interface ApplicationMaterialGrantRouteDependencies {
 	readonly identity: IdentityAdapter;
 	readonly grants: ApplicationMaterialGrantUseCaseV1;
@@ -68,15 +72,20 @@ export function registerApplicationMaterialGrantRoutes(
 			const principalIdResult = OpaqueIdV1Schema.safeParse(principalId);
 			if (!principalTypeResult.success || !principalIdResult.success)
 				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+			const actor = await resolveCurrentMaterialGrantActor(
+				dependencies.identity,
+				identity.userId,
+				metadata.traceId,
+			);
+			if (!actor)
+				throw new HttpProtocolError(
+					"AUTHENTICATION_REQUIRED",
+					metadata.traceId,
+				);
 			const request = {
 				requestId: metadata.requestId,
 				traceId: metadata.traceId,
-				actor: {
-					userId: identity.userId,
-					accountStatus: identity.accountStatus,
-					isSystemAdmin: identity.roles.includes("system_admin"),
-					authorizationRevision: identity.authorizationRevision,
-				},
+				actor,
 				applicationId,
 				principalType: principalTypeResult.data,
 				principalId: principalIdResult.data,
