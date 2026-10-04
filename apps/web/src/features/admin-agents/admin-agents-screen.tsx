@@ -20,8 +20,10 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
-import { agentServiceAvailabilityLabel } from "../agent-discovery/agent-discovery-screen.js";
-import { agentManagementStatusLabels } from "../agent-management-status.js";
+import {
+	agentManagementStatusLabels,
+	agentServiceAvailabilityLabel,
+} from "../agent-management-status.js";
 import type { AdminAgentsState } from "./admin-agents.js";
 
 export const adminAgentStatuses = [

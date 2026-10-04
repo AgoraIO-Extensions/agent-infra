@@ -3076,9 +3076,11 @@ it.each(["explicit access revoke", "LRU eviction"] as const)(
 );
 
 describe("original model request drain", () => {
-	it.each([false, true])(
+	it.each(["none", "always", "first"] as const)(
 		"joins pending original outcome persistence before drain, failure=%s",
-		async (failure) => {
+		async (failureMode) => {
+			const failure = failureMode !== "none";
+			const outcomes: CodexModelRequestOutcome[] = [];
 			const endpoint = await listen(
 				createServer((_incoming, response) => {
 					response.writeHead(200, { "content-type": "text/event-stream" });
@@ -3090,10 +3092,12 @@ describe("original model request drain", () => {
 			const value = await transport(endpoint, true, {
 				beforeRequest: async () => ({
 					started: async () => {},
-					finish: async () => {
+					finish: async (outcome) => {
+						outcomes.push(outcome);
 						entered.resolve();
 						await release.promise;
-						if (failure) throw new Error("store failed");
+						if (failureMode === "always" || (failure && outcomes.length === 1))
+							throw new Error("store failed");
 					},
 				}),
 			});
@@ -3117,6 +3121,12 @@ describe("original model request drain", () => {
 			}
 			await checked;
 			await pending;
+			if (failureMode === "first") {
+				expect(outcomes.map(({ phase }) => phase)).toEqual([
+					"succeeded",
+					"unknown",
+				]);
+			}
 			const retry = await request(value.modelAccess);
 			expect(retry.status).toBe(409);
 			await retry.text();

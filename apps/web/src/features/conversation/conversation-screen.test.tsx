@@ -692,7 +692,9 @@ describe("functional conversation screen", () => {
 		fireEvent.change(await composer(), { target: { value: "Kept draft" } });
 		await screen.findByRole("heading", { name: "最近对话" });
 		await waitFor(() => expect(streams).toHaveLength(1));
-		fireEvent.click(screen.getByRole("button", { name: "个人历史" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "此 Agent 的全部历史" }),
+		);
 		expect((await composer()).value).toBe("Kept draft");
 		expect(document.activeElement?.getAttribute("aria-label")).toBe("对话历史");
 		const historyLink = await screen.findByRole("link", {
@@ -705,12 +707,41 @@ describe("functional conversation screen", () => {
 		expect(props.onConversationChange).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("button", { name: "返回对话" }));
 		expect((await composer()).value).toBe("Kept draft");
-		fireEvent.click(screen.getByRole("button", { name: "个人历史" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "此 Agent 的全部历史" }),
+		);
 		fireEvent.click(
 			await screen.findByRole("link", { name: /Test conversation/ }),
 		);
 		expect(props.onConversationChange).toHaveBeenCalledWith("conversation-1");
 		expect(streams).toHaveLength(1);
+		expect(requests.every((request) => request.method === "GET")).toBe(true);
+	});
+
+	it("opens recent history without changing the route and returns from full history to recent scope", async () => {
+		const onViewChange = vi.fn();
+		const { rerenderScope, streams, requests } = setup(undefined, {
+			view: "conversation",
+			onViewChange,
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Scope draft" } });
+		fireEvent.click(screen.getByRole("button", { name: "个人历史" }));
+		expect(screen.getByRole("region", { name: "最近对话" })).toBeTruthy();
+		expect(onViewChange).not.toHaveBeenCalled();
+		fireEvent.click(
+			screen.getByRole("button", { name: "此 Agent 的全部历史" }),
+		);
+		expect(onViewChange).toHaveBeenLastCalledWith("history");
+		rerenderScope({ view: "history" });
+		await screen.findByRole("heading", { name: "个人历史", level: 2 });
+		fireEvent.click(screen.getByRole("button", { name: "最近对话" }));
+		expect(onViewChange).toHaveBeenLastCalledWith("conversation");
+		rerenderScope({ view: "conversation" });
+		expect(screen.getByRole("region", { name: "最近对话" })).toBeTruthy();
+		expect(await composer()).toBe(input);
+		expect(input.value).toBe("Scope draft");
+		await waitFor(() => expect(streams).toHaveLength(1));
 		expect(requests.every((request) => request.method === "GET")).toBe(true);
 	});
 
@@ -741,6 +772,31 @@ describe("functional conversation screen", () => {
 			expect(requests.every((request) => request.method === "GET")).toBe(true);
 		},
 	);
+
+	it("shows projection-backed source and separate management/service status in the header", async () => {
+		setup();
+		const header = (
+			await screen.findByRole("heading", { name: agent.name })
+		).closest("header");
+		if (!header) throw new Error("Expected conversation header");
+		expect(within(header).getByText("标准模板 · codex")).toBeTruthy();
+		expect(within(header).getByText("管理：可用")).toBeTruthy();
+		expect(within(header).getByText("服务：就绪")).toBeTruthy();
+	});
+
+	it("keeps unknown service availability out of the header status", async () => {
+		setup((request) =>
+			new URL(request.url).pathname === "/api/v2/agents/agent-1"
+				? Response.json({ ...agent, serviceAvailability: null })
+				: undefined,
+		);
+		const header = await screen
+			.findByRole("heading", { name: agent.name })
+			.then((heading) => heading.closest("header"));
+		if (!header) throw new Error("Expected conversation header");
+		expect(within(header).getByText("管理：可用")).toBeTruthy();
+		expect(within(header).queryByText(/服务：/)).toBeNull();
+	});
 
 	it("discards a late recent response when the login identity changes", async () => {
 		const old = deferred<Response>();
@@ -786,7 +842,9 @@ describe("functional conversation screen", () => {
 		expect(props.onConversationChange).not.toHaveBeenCalled();
 		rerenderScope({ view: "conversation" });
 		await composer();
-		fireEvent.click(screen.getByRole("button", { name: "个人历史" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "此 Agent 的全部历史" }),
+		);
 		expect(onViewChange).toHaveBeenLastCalledWith("history");
 	});
 
@@ -822,8 +880,8 @@ describe("functional conversation screen", () => {
 	it.each([
 		["starting", "启动中"],
 		["updating", "更新中"],
-		["unavailable", "暂时不可用"],
-		[null, null],
+		["unavailable", "当前不可用"],
+		[null, "当前不可用"],
 	] as const)(
 		"keeps service %s distinct from management availability",
 		async (serviceAvailability, label) => {
@@ -837,11 +895,8 @@ describe("functional conversation screen", () => {
 				.getByRole("heading", { name: agent.name })
 				.closest("header");
 			if (!header) throw new Error("Expected conversation header");
-			expect(within(header).getByText("管理状态：可用")).toBeTruthy();
-			if (label)
-				expect(within(header).getByText(`服务状态：${label}`)).toBeTruthy();
-			else expect(within(header).queryByText(/^服务状态：/)).toBeNull();
-			expect(within(header).queryByText("服务状态：就绪")).toBeNull();
+			expect(screen.getByText(new RegExp(`Agent ${label}`))).toBeTruthy();
+			expect(screen.queryByText("服务状态：就绪")).toBeNull();
 			expect(
 				within(header)
 					.getByRole("link", { name: "切换 Agent" })
@@ -866,7 +921,7 @@ describe("functional conversation screen", () => {
 				? Response.json(custom)
 				: undefined,
 		);
-		await screen.findByText("自定义 Agent · 自有交互入口");
+		await screen.findByText("此 Agent 使用自有交互入口，请从 Agent 详情进入。");
 		expect(
 			screen.queryByText("个人 Web 对话 · 离开页面不会取消已提交的任务"),
 		).toBeNull();
