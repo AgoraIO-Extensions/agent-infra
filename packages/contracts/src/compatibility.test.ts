@@ -1531,7 +1531,8 @@ describe("contract compatibility command", () => {
 		restorePreRelayKeyContract(current);
 		delete current.paths["/api/v2/applications"];
 		delete current.paths["/api/v2/applications/{applicationId}"];
-		delete current.components.schemas.AgentApplicationCreateRequestV2.properties.defaultRelayKey;
+		delete current.components.schemas.AgentApplicationCreateRequestV2.properties
+			.defaultRelayKey;
 		for (const name of [
 			"ApplicationMetadataV1",
 			"ApplicationRegistrationRequestV1",
