@@ -1025,6 +1025,7 @@ export type AgentApplicationCreateRequestV2Writable = {
         organizationId: string;
     }>;
     coOwnerIds: Array<string>;
+    defaultRelayKey?: string;
     description: string;
     environment: Array<{
         name: string;
