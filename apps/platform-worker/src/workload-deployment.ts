@@ -25,8 +25,10 @@ import { KubeConfig } from "@kubernetes/client-node";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import {
 	createKubernetesRuntimeAdapterV1,
+	type KubernetesWorkloadPolicyV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
+import { runtimeTlsFetch } from "./runtime-tls-transport.js";
 import type { PlatformWorkloadWorkerOptionsV1 } from "./workload-worker.js";
 
 type ProbeRequest = Omit<WorkloadReadinessRequestV1, "grant">;
@@ -72,6 +74,8 @@ export interface ProductionWorkloadWorkerInputV1 {
 	/** Separate transports keep registry authentication out of model and Runtime requests. */
 	readonly modelFetch?: typeof fetch;
 	readonly runtimeFetch?: typeof fetch;
+	/** Deployment-owned verified transport; injectable only for controlled local HTTPS fixtures. */
+	readonly runtimeTlsFetch?: () => typeof fetch;
 	readonly pollIntervalMs?: number;
 	readonly maximumAttempts?: number;
 	readonly log?: (message: string) => void;
@@ -187,6 +191,8 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			workerId: input.workerId,
 			authorization: input.runtimeProbe,
 			fetch: input.runtimeFetch,
+			tlsFetch: input.runtimeTlsFetch ?? runtimeTlsFetch,
+			runtimeTls: input.policy.runtimeTls,
 		});
 		signal.throwIfAborted();
 		return {
@@ -207,6 +213,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 				input.executionCapacityProfiles,
 			),
 			fetch: input.runtimeFetch,
+			runtimeTlsFetch: input.runtimeTlsFetch ?? runtimeTlsFetch,
 			pollIntervalMs: input.pollIntervalMs,
 			maximumAttempts: input.maximumAttempts,
 			log: input.log,
@@ -222,6 +229,8 @@ export function createWorkloadRuntimeProbeV1(options: {
 	readonly workerId: string;
 	readonly authorization: WorkloadRuntimeProbeAuthorizationV1;
 	readonly fetch?: typeof fetch;
+	readonly tlsFetch?: () => typeof fetch;
+	readonly runtimeTls?: KubernetesWorkloadPolicyV1["runtimeTls"];
 }): PlatformWorkloadWorkerOptionsV1["probeRuntime"] {
 	return async (input) => {
 		const signal = AbortSignal.any([input.signal, AbortSignal.timeout(10_000)]);
@@ -234,7 +243,10 @@ export function createWorkloadRuntimeProbeV1(options: {
 					signal.addEventListener("abort", abort, { once: true });
 				}),
 				(async () => {
-					const origin = `http://${workloadResourceNameV1(input.agentId)}-probe.${options.namespace}.svc:${input.manifest.service.port}`;
+					const secure = options.runtimeTls?.some(
+						(binding) => binding.agentId === input.agentId,
+					);
+					const origin = `${secure ? "https" : "http"}://${workloadResourceNameV1(input.agentId)}-probe.${options.namespace}.svc:${input.manifest.service.port}`;
 					if (
 						input.baseUrl !== origin ||
 						!Number.isSafeInteger(input.workloadRevision) ||
@@ -285,7 +297,9 @@ export function createWorkloadRuntimeProbeV1(options: {
 						)
 					)
 						throw new Error();
-					const response = await (options.fetch ?? fetch)(
+					const response = await (secure
+						? (options.tlsFetch?.() ?? runtimeTlsFetch())
+						: (options.fetch ?? fetch))(
 						`${origin}/internal/runtime/v1/readiness`,
 						{
 							method: "POST",

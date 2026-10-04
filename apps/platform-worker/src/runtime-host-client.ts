@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-
 import { ProtocolErrorV1Schema } from "@agent-infra/contracts";
 import {
 	ExecutionGrantV1Schema,
@@ -46,15 +45,27 @@ import {
 	type ConversationRuntimeOperationEventV2,
 	type ConversationRuntimeStatusRequestV2,
 } from "@agent-infra/platform-core";
+import { runtimeTlsFetch } from "./runtime-tls-transport.js";
 
 export interface WorkerRuntimeHostClientOptionsV1 {
 	readonly baseUrl: string;
 	readonly serviceToken: string;
 	readonly fetch?: typeof fetch;
+	readonly tlsFetch?: () => typeof fetch;
 }
 
 const maximumResponseBytes = 65_536;
 const maximumEventFrameBytes = 131_072;
+
+function runtimeFetchForEndpoint(
+	base: URL,
+	injected: typeof fetch | undefined,
+	tlsFetch?: () => typeof fetch,
+): typeof fetch {
+	return base.protocol === "https:"
+		? (tlsFetch?.() ?? runtimeTlsFetch())
+		: (injected ?? fetch);
+}
 
 function endpoint(baseUrl: string, path: string) {
 	let base: URL;
@@ -134,6 +145,7 @@ function requestInit(
 ): RequestInit {
 	return {
 		method: "POST",
+		redirect: "error",
 		headers: {
 			authorization: `Bearer ${serviceToken}`,
 			"content-type": "application/json",
@@ -375,8 +387,12 @@ export function createWorkerRuntimeHostClientV1(
 	if (!options || typeof options !== "object" || !options.serviceToken) {
 		throw new TypeError("RuntimeHost client options are invalid");
 	}
-	const fetcher = options.fetch ?? fetch;
 	const dispatchBase = endpoint(options.baseUrl, "/");
+	const fetcher = runtimeFetchForEndpoint(
+		dispatchBase,
+		options.fetch,
+		options.tlsFetch,
+	);
 	return {
 		async dispatch(request, signal) {
 			let selected: ReturnType<typeof dispatchBody>;
@@ -543,8 +559,12 @@ export function createWorkerRuntimeHostClientV3(
 ) {
 	if (!options || typeof options !== "object" || !options.serviceToken)
 		throw new TypeError("RuntimeHost client options are invalid");
-	const fetcher = options.fetch ?? fetch;
 	const base = endpoint(options.baseUrl, "/");
+	const fetcher = runtimeFetchForEndpoint(
+		base,
+		options.fetch,
+		options.tlsFetch,
+	);
 	async function request<T extends { traceId: string }, R>(
 		path: string,
 		value: T,

@@ -5,8 +5,16 @@ import {
 } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
-import { copyFile, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+	copyFile,
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
@@ -29,6 +37,7 @@ import postgres from "postgres";
 import { expect, it } from "vitest";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
+import { markSessionSandboxReadyFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.js";
 import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
 import {
 	fakeKubernetesApi,
@@ -200,7 +209,10 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		);
 	});
 	let host: RuntimeHost | undefined;
-	let runtimeServer: ReturnType<typeof createServer> | undefined;
+	let runtimeServer:
+		| ReturnType<typeof createServer>
+		| ReturnType<typeof createHttpsServer>
+		| undefined;
 	let execution: PostgresConversationExecutionTransactionV1 | undefined;
 	let authorization: PostgresTaskAuthorizationStoreV1 | undefined;
 	let moduleDirectory: string | undefined;
@@ -309,42 +321,108 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				new Map([[signing.keyId, keys.publicKey]]),
 			),
 		});
+		const caKey = join(directory, "runtime-ca.key");
+		const caCert = join(directory, "runtime-ca.crt");
+		const leafKey = join(directory, "runtime-leaf.key");
+		const leafCsr = join(directory, "runtime-leaf.csr");
+		const leafCert = join(directory, "runtime-leaf.crt");
+		const leafExt = join(directory, "runtime-leaf.ext");
+		await execFile("openssl", [
+			"req",
+			"-x509",
+			"-newkey",
+			"rsa:2048",
+			"-nodes",
+			"-keyout",
+			caKey,
+			"-out",
+			caCert,
+			"-days",
+			"1",
+			"-subj",
+			"/CN=Agent Infra Test CA",
+			"-addext",
+			"basicConstraints=critical,CA:TRUE",
+			"-addext",
+			"keyUsage=critical,keyCertSign,cRLSign",
+		]);
+		await execFile("openssl", [
+			"req",
+			"-new",
+			"-newkey",
+			"rsa:2048",
+			"-nodes",
+			"-keyout",
+			leafKey,
+			"-out",
+			leafCsr,
+			"-subj",
+			"/CN=localhost",
+		]);
+		await writeFile(
+			leafExt,
+			"subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n",
+		);
+		await execFile("openssl", [
+			"x509",
+			"-req",
+			"-in",
+			leafCsr,
+			"-CA",
+			caCert,
+			"-CAkey",
+			caKey,
+			"-CAcreateserial",
+			"-out",
+			leafCert,
+			"-days",
+			"1",
+			"-sha256",
+			"-extfile",
+			leafExt,
+		]);
 		let ackCount = 0;
-		runtimeServer = createServer(async (req, res) => {
-			traces.push(`runtime:${req.method}:${req.url}`);
-			if (req.url === "/healthz") {
-				res.end("ok");
-				return;
-			}
-			const chunks: Uint8Array[] = [];
-			for await (const chunk of req) chunks.push(chunk);
-			const body = Buffer.concat(chunks).toString();
-			const parsed = body ? JSON.parse(body) : {};
-			const observedRequest: (typeof requests)[number] = {
-				path: req.url ?? "",
-				executionId: parsed.executionId,
-				deliveryFence: parsed.operation?.executionDeliveryFence,
-				confirmedCursor: parsed.confirmedCursor,
-			};
-			requests.push(observedRequest);
-			const requestController = new AbortController();
-			res.on("close", () => requestController.abort());
-			const response = await app.request(`http://runtime${req.url}`, {
-				signal: requestController.signal,
-				method: req.method,
-				headers: req.headers as Record<string, string>,
-				...(body ? { body } : {}),
-			});
-			observedRequest.responseStatus = response.status;
-			if (req.url?.endsWith("/ack") && response.ok) ackCount++;
-			traces.push(`response:${req.url}:${response.status}`);
-			res.writeHead(response.status, Object.fromEntries(response.headers));
-			if (response.body) {
-				const stream = Readable.fromWeb(response.body as never);
-				res.on("close", () => stream.destroy());
-				stream.pipe(res);
-			} else res.end();
-		});
+		runtimeServer = createHttpsServer(
+			{
+				key: await readFile(leafKey),
+				cert: await readFile(leafCert),
+			},
+			async (req, res) => {
+				traces.push(`runtime:${req.method}:${req.url}`);
+				if (req.url === "/healthz") {
+					res.end("ok");
+					return;
+				}
+				const chunks: Uint8Array[] = [];
+				for await (const chunk of req) chunks.push(chunk);
+				const body = Buffer.concat(chunks).toString();
+				const parsed = body ? JSON.parse(body) : {};
+				const observedRequest: (typeof requests)[number] = {
+					path: req.url ?? "",
+					executionId: parsed.executionId,
+					deliveryFence: parsed.operation?.executionDeliveryFence,
+					confirmedCursor: parsed.confirmedCursor,
+				};
+				requests.push(observedRequest);
+				const requestController = new AbortController();
+				res.on("close", () => requestController.abort());
+				const response = await app.request(`http://runtime${req.url}`, {
+					signal: requestController.signal,
+					method: req.method,
+					headers: req.headers as Record<string, string>,
+					...(body ? { body } : {}),
+				});
+				observedRequest.responseStatus = response.status;
+				if (req.url?.endsWith("/ack") && response.ok) ackCount++;
+				traces.push(`response:${req.url}:${response.status}`);
+				res.writeHead(response.status, Object.fromEntries(response.headers));
+				if (response.body) {
+					const stream = Readable.fromWeb(response.body as never);
+					res.on("close", () => stream.destroy());
+					stream.pipe(res);
+				} else res.end();
+			},
+		);
 		kube.listen(0, "127.0.0.1");
 		runtimeServer.listen(0, "127.0.0.1");
 		await Promise.all([
@@ -361,7 +439,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		)
 			throw Error();
 		const kubeUrl = `http://127.0.0.1:${address.port}`;
-		const runtimeUrl = `http://127.0.0.1:${runtimeAddress.port}`;
+		const runtimeUrl = `https://127.0.0.1:${runtimeAddress.port}`;
 		const config = new KubeConfig();
 		config.loadFromOptions({
 			clusters: [{ name: "test", server: kubeUrl, skipTLSVerify: true }],
@@ -408,12 +486,13 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 export const signing = { ...${JSON.stringify(signing)}, privateKey: createPrivateKey(await readFile(${JSON.stringify(join(directory, "signing.pem"))})) };
 export const serviceToken = 'synthetic-runtime-token';
 export const directory = { async resolveUser(userId) { if (userId !== 'user-cli') return null; return { schemaVersion: 1, userId, accountStatus:'active',organizationIds:[],authorizationRevision:'identity-1'}; } };
+export const runtimeTlsFetch = () => (url, init) => { const source = new URL(url); return fetch(${JSON.stringify(runtimeUrl)} + source.pathname, init); };
 export const workloadInput = { policy: ${JSON.stringify(policy)},
 kubernetes: { mode:'kubeconfig', path:${JSON.stringify(kubePath)}, context:'test', expectedServer:${JSON.stringify(kubeUrl)} },
 registry: { endpoint:'https://registry.example.test', imageReferencePrefix:'registry.example.test', policy:{authorize:async()=>({status:'rejected'})} },
 admissionPolicyRef:'policy',registrySubjectRef:'worker', templateModelBindings:[], executionCapacityProfiles:[${JSON.stringify(capacity)}],
 keyring: { keys:[{keyVersion:'key',privateKeyPkcs8DerBase64:(await readFile(${JSON.stringify(join(directory, "wrapping.der"))})).toString('base64')}] },
-modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stringify(runtimeUrl)} + new URL(url).pathname,init), pollIntervalMs:100 };
+modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stringify(runtimeUrl)} + new URL(url).pathname,init), runtimeTlsFetch, pollIntervalMs:100 };
 `;
 		await writeFile(join(moduleDirectory, "configuration.mjs"), configSource, {
 			mode: 0o600,
@@ -425,6 +504,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				{
 					env: {
 						...process.env,
+						NODE_EXTRA_CA_CERTS: caCert,
 						PLATFORM_DATABASE_URL: database.databaseUrl,
 						PLATFORM_WORKER_NAMESPACE: policy.namespace,
 						PLATFORM_WORKER_DEPLOYMENT_MODULE: pathToFileURL(
@@ -487,6 +567,49 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			});
 			if (created.outcome !== "accepted")
 				throw Error(`Create: ${created.outcome}`);
+			// Production admission is read-only until the original SessionSandbox
+			// reconcile has a verified ready observation. This fixture seeds that
+			// persisted allocation; the negative pre-ready gate remains covered by
+			// the Core/Store tests.
+			await markSessionSandboxReadyFixture(sql, created.result.conversationId);
+			const [sandbox] = await sql`
+				select sandbox_id, resource_name
+				from platform.session_sandbox_allocations
+				where conversation_id = ${created.result.conversationId}`;
+			if (!sandbox) throw Error("SessionSandbox allocation was not persisted");
+			const sandboxResources = [
+				"Pod",
+				"Service",
+				"ServiceAccount",
+				"PersistentVolumeClaim",
+				"NetworkPolicy",
+				"StatefulSet",
+			].map((kind) => ({
+				kind,
+				namespace: policy.namespace,
+				name: sandbox.resource_name,
+				uid: `${sandbox.sandbox_id}-${kind}`,
+				resourceVersion: "1",
+				...(kind === "Pod"
+					? { controllerUid: `${sandbox.sandbox_id}-StatefulSet` }
+					: {}),
+			}));
+			await sql`
+				update platform.session_sandbox_allocations
+				set resource_policy = ${sql.json({
+					namespace: policy.namespace,
+					imageDigest: desired.imageDigest,
+					configurationRevision: 1,
+					managementFence: 1,
+					workloadRevision: 1,
+					resourceConfigurationHash:
+						workloadResourceConfigurationHashV1(policy),
+				})},
+				resource_observation = ${sql.json({
+					status: "ready",
+					resources: sandboxResources,
+				})}
+				where conversation_id = ${created.result.conversationId}`;
 			const accepted = await api.accept({
 				schemaVersion: 1,
 				command: "message",

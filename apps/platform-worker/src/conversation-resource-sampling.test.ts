@@ -87,6 +87,11 @@ const options = {
 		serviceToken: "synthetic",
 		workerId: "transport",
 	}),
+	sandboxPolicy: {
+		namespace: "synthetic",
+		resourceConfigurationHash: "synthetic",
+	},
+	receiveSandbox: async () => ({ status: "unknown" as const, resources: [] }),
 	log: () => {},
 };
 let workers: ReturnType<typeof createPlatformConversationWorkerV2>[];

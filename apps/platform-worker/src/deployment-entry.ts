@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { createProductionConversationRuntimeResolverV2 } from "./conversation-deployment.js";
+import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { createWecomDeploymentCoordinatorV1 } from "./wecom-deployment.js";
 import {
 	createProductionWorkloadWorkerOptionsV1,
 	createWorkloadReadinessAuthorizationV1,
 } from "./workload-deployment.js";
+import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
 
 type DeploymentConfiguration = {
 	readonly workloadInput: Omit<
@@ -77,12 +78,25 @@ async function createPrepared(signal: AbortSignal) {
 			signing,
 			directory,
 			channelAuthorizationCurrent: wecomDeployment.channelAuthorizationCurrent,
-			resolveRuntimeHost: createProductionConversationRuntimeResolverV2({
-				workload: { ...workload, workerId: signing.workerId },
-				signing,
-				serviceToken,
-			}),
+			sandboxPolicy: {
+				namespace: workload.policy.namespace,
+				resourceConfigurationHash: workloadResourceConfigurationHashV1(
+					workload.policy,
+				),
+			},
+			receiveSandbox:
+				conversationDeployment.createProductionSessionSandboxReceiverV1({
+					...workload,
+					workerId: signing.workerId,
+				}),
+			resolveRuntimeHost:
+				conversationDeployment.createProductionConversationRuntimeResolverV2({
+					workload: { ...workload, workerId: signing.workerId },
+					signing,
+					serviceToken,
+				}),
 			fetch: workload.fetch,
+			runtimeTlsFetch: workload.runtimeTlsFetch,
 		},
 		wecom: wecomDeployment,
 	};

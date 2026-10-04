@@ -3,6 +3,9 @@ import { createObservedConversationEvents } from "@agent-infra/observability/wor
 import {
 	createConversationDispatchUseCaseV1,
 	createConversationEventUseCaseV1,
+	type SessionSandboxObservationV1,
+	type SessionSandboxPolicyV1,
+	type SessionSandboxReconciliationClaimV1,
 } from "@agent-infra/platform-core";
 import {
 	openPostgresConversationDispatchStoreV1,
@@ -25,6 +28,11 @@ export interface PlatformConversationWorkerOptionsV2
 		| "resolveCurrentApiUseGrant"
 	> {
 	readonly databaseUrl: string;
+	readonly sandboxPolicy: SessionSandboxPolicyV1;
+	readonly receiveSandbox: (
+		claim: SessionSandboxReconciliationClaimV1,
+		signal: AbortSignal,
+	) => Promise<SessionSandboxObservationV1>;
 	readonly pollIntervalMs?: number;
 	readonly maximumConcurrentDispatches?: number;
 	readonly leaseDurationMs?: number;
@@ -60,6 +68,7 @@ export function createPlatformConversationWorkerV2(
 	const store = openPostgresConversationDispatchStoreV1({
 		databaseUrl: options.databaseUrl,
 		userDirectory: options.directory,
+		sandboxPolicy: options.sandboxPolicy,
 	});
 	const taskAuthorizationStore = new PostgresTaskAuthorizationStoreV1({
 		databaseUrl: options.databaseUrl,
@@ -191,6 +200,104 @@ export function createPlatformConversationWorkerV2(
 					resourceTimer = setTimeout(sampleResources, 1000);
 			});
 	}
+	async function dispatchItem(item: {
+		readonly itemId: string;
+		readonly operation: string;
+	}) {
+		if (item.operation !== "conversation.sandbox.reconcile.v1")
+			return dispatch.dispatch({
+				schemaVersion: 1,
+				itemId: item.itemId,
+				workerId: options.workerId,
+			});
+		signal.throwIfAborted();
+		const leaseDurationMs = options.leaseDurationMs ?? 30_000;
+		const claim = await store.claimSandboxReconciliation({
+			schemaVersion: 1,
+			itemId: item.itemId,
+			workerId: options.workerId,
+			leaseDurationMs,
+		});
+		if (!claim) return;
+		signal.throwIfAborted();
+		if (
+			!(await store.prepareSandboxReconciliation({
+				claim,
+				leaseDurationMs,
+			}))
+		)
+			return;
+		let observation: SessionSandboxObservationV1;
+		let renewal: ReturnType<typeof setInterval> | undefined;
+		try {
+			// Renew the original Store lease immediately before and after the Kubernetes
+			// mutation and periodically while it runs; a lost lease never gets to
+			// submit a committed observation. Kubernetes mutations are not cancellable
+			// by the client, so the receiver is allowed to finish its receipt.
+			if (
+				!(await store.prepareSandboxReconciliation({
+					claim,
+					leaseDurationMs,
+				}))
+			)
+				return;
+			let leaseLost = false;
+			renewal = setInterval(
+				() => {
+					void store
+						.prepareSandboxReconciliation({
+							claim,
+							leaseDurationMs,
+						})
+						.then((held) => {
+							if (!held) leaseLost = true;
+						})
+						.catch(() => {
+							leaseLost = true;
+						});
+				},
+				Math.max(100, Math.floor(leaseDurationMs / 3)),
+			);
+			observation = await options.receiveSandbox(
+				claim,
+				// Kubernetes mutations are not cancellable by the client. Keep the
+				// logical operation alive until the receiver returns a complete receipt;
+				// lease renewal and the subsequent CAS decide whether it may commit.
+				signal,
+			);
+			clearInterval(renewal);
+			renewal = undefined;
+			if (leaseLost) {
+				observation = {
+					status: "unknown",
+					resources: claim.previousObservation?.resources ?? [],
+				};
+			}
+			if (
+				!(await store.prepareSandboxReconciliation({
+					claim,
+					leaseDurationMs,
+				}))
+			)
+				return;
+		} catch {
+			if (renewal) clearInterval(renewal);
+			// Keep the original binding and occupancy; the same outbox owns recovery.
+			observation = {
+				status: "unknown",
+				resources: claim.previousObservation?.resources ?? [],
+			};
+		}
+		signal.throwIfAborted();
+		if (
+			!(await store.prepareSandboxReconciliation({
+				claim,
+				leaseDurationMs,
+			}))
+		)
+			return;
+		await store.recordSandboxObservation({ claim, observation });
+	}
 	async function discover() {
 		if (stopped || signal.aborted) return 0;
 		const limit = 256;
@@ -214,12 +321,7 @@ export function createPlatformConversationWorkerV2(
 			if (count >= (control ? 2 : maximum)) {
 				continue;
 			}
-			const promise = dispatch
-				.dispatch({
-					schemaVersion: 1,
-					itemId: item.itemId,
-					workerId: options.workerId,
-				})
+			const promise = dispatchItem(item)
 				.then(
 					() => undefined,
 					() => {

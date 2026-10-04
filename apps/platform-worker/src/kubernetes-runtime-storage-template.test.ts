@@ -217,7 +217,24 @@ describe("GA Kubernetes Workload adapter", () => {
 	it("removes a stale Ingress before opening an internal-only Service", async () => {
 		const f = fixture();
 		const external = workloadDesiredFixture();
-		const adapter = f.adapter();
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: f.client,
+			policy: {
+				...workloadTestPolicy,
+				runtimeTls: [
+					{
+						agentId: external.agentId,
+						namespace: workloadTestPolicy.namespace,
+						serviceDnsNames: ["", "-probe"].map(
+							(suffix) =>
+								`${external.service.name}${suffix}.${workloadTestPolicy.namespace}.svc`,
+						),
+						serverSecretRef: { name: "agent-a-tls" },
+					},
+				],
+			},
+			probe: f.probe,
+		});
 		const externalIdentity = await adapter.apply(external);
 		if (!externalIdentity || externalIdentity === "pending") throw new Error();
 		await adapter.promote(external, externalIdentity);
@@ -229,6 +246,7 @@ describe("GA Kubernetes Workload adapter", () => {
 			internal.workloadRevision,
 			internal.fence,
 		);
+		expect(await adapter.apply(internal)).toBe("pending");
 		const internalIdentity = await adapter.apply(internal);
 		if (!internalIdentity || internalIdentity === "pending") throw new Error();
 		await adapter.promote(internal, internalIdentity);

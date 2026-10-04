@@ -19,6 +19,15 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 
+const workloadTestTlsAgents = [
+	"agent-a",
+	"agent-codex",
+	"agent-claude",
+	"agent-acp",
+	"agent-pi",
+	"agent-cli",
+];
+
 export const workloadTestPolicy: KubernetesWorkloadPolicyV1 = {
 	namespace: "workload-test",
 	namespaceRef: "pilot",
@@ -37,6 +46,18 @@ export const workloadTestPolicy: KubernetesWorkloadPolicyV1 = {
 	ingressClassName: "test",
 	routeHostSuffix: "agent.example.test",
 	tlsSecretName: "workload-tls",
+	runtimeTls: workloadTestTlsAgents.map((agentId) => {
+		const resourceName = workloadResourceNameV1(agentId);
+		return {
+			agentId,
+			namespace: "workload-test",
+			serviceDnsNames: [
+				`${resourceName}.workload-test.svc`,
+				`${resourceName}-probe.workload-test.svc`,
+			],
+			serverSecretRef: { name: `${resourceName}-tls` },
+		};
+	}),
 	platformAuthAnnotations: {
 		"nginx.ingress.kubernetes.io/auth-url": "https://auth.example.test/verify",
 	},

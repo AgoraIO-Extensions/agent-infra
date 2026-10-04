@@ -22,7 +22,21 @@ function fixture() {
 	};
 	const adapter = createKubernetesRuntimeAdapterV1({
 		client: api.client,
-		policy: { ...workloadTestPolicy, runtimeAuth },
+		policy: {
+			...workloadTestPolicy,
+			runtimeAuth,
+			runtimeTls: [
+				{
+					agentId: "custom-agent",
+					namespace: workloadTestPolicy.namespace,
+					serviceDnsNames: ["", "-probe"].map(
+						(suffix) =>
+							`${workloadDesiredFixture(2, "custom-agent", "internal-only").service.name}${suffix}.${workloadTestPolicy.namespace}.svc`,
+					),
+					serverSecretRef: { name: "custom-agent-tls" },
+				},
+			],
+		},
 		probe: async () => true,
 	});
 	return { ...api, adapter, runtimeAuth };

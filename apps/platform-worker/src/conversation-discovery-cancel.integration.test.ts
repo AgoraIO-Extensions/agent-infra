@@ -375,6 +375,14 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 				callbacks += 1;
 				throw new Error("Empty discovery must not dispatch to a Host");
 			},
+			sandboxPolicy: {
+				namespace: "synthetic",
+				resourceConfigurationHash: "0".repeat(64),
+			},
+			receiveSandbox: async () => ({
+				status: "unknown" as const,
+				resources: [],
+			}),
 			log: () => {},
 		};
 		const worker = createPlatformConversationWorkerV2(options);

@@ -44,6 +44,7 @@ import {
 	type KubernetesWorkloadPolicyV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
+import { runtimeTlsFetch } from "./runtime-tls-transport.js";
 
 export interface WorkloadRuntimeOptionsV1 {
 	readonly workerId: string;
@@ -62,6 +63,8 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly templateModelBindings: readonly StandardTemplateModelBindingV1[];
 	readonly executionCapacityProfiles?: readonly WorkloadExecutionCapacityV1[];
 	readonly fetch?: typeof fetch;
+	/** Deployment-owned transport for verified HTTPS Runtime listeners. */
+	readonly runtimeTlsFetch?: () => typeof fetch;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
 		readonly workloadRevision: number;
@@ -423,10 +426,17 @@ export function createWorkloadRuntimeV1(
 			modelProjection,
 			async probe({ desired, serviceOrigin }) {
 				const baseUrl = serviceOrigin;
-				const response = await fetcher(`${baseUrl}${desired.health.path}`, {
-					redirect: "error",
-					signal: AbortSignal.timeout(desired.health.timeoutSeconds * 1000),
-				});
+				const secure = baseUrl.startsWith("https:");
+				const probeFetcher = secure
+					? (options.runtimeTlsFetch?.() ?? runtimeTlsFetch())
+					: fetcher;
+				const response = await probeFetcher(
+					`${baseUrl}${desired.health.path}`,
+					{
+						redirect: "error",
+						signal: AbortSignal.timeout(desired.health.timeoutSeconds * 1000),
+					},
+				);
 				await response.body?.cancel();
 				if (!response.ok) return false;
 				if (desired.runtimeManifest.interactionMode === "self-managed") {

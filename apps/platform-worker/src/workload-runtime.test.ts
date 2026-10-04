@@ -27,6 +27,7 @@ import {
 	createWorkloadReconciliationV1,
 	type SecretActivationCandidateV1,
 	type SecretActivationStorePortV1,
+	type SessionSandboxRuntimeStateV1,
 	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
@@ -313,6 +314,11 @@ function fixture(
 		approvalRevision: 1,
 		failureCode: null,
 	};
+	const fixtureFetch = vi.fn(async () => new Response("ok"));
+	const overrideFetch = overrides.fetch;
+	const fixtureTlsFetch =
+		overrides.runtimeTlsFetch ??
+		(overrideFetch ? () => overrideFetch : () => fixtureFetch);
 	const options: WorkloadRuntimeOptionsV1 = {
 		templateModelBindings: [
 			{
@@ -345,7 +351,8 @@ function fixture(
 				code: "SECRET_KEY_UNAVAILABLE",
 			}),
 		},
-		fetch: vi.fn(async () => new Response("ok")),
+		fetch: fixtureFetch,
+		runtimeTlsFetch: fixtureTlsFetch,
 		probeRuntime: async () => ({ core: "passed", capabilities: {} }),
 		...overrides,
 	};
@@ -2749,7 +2756,7 @@ describe("assembled Workload Runtime contracts", () => {
 		new DOMException("probe timed out", "TimeoutError"),
 	])("closes a ready route when its health probe throws: %s", async (error) => {
 		const fetcher = vi.fn(async () => new Response("ok"));
-		const f = fixture({ fetch: fetcher });
+		const f = fixture({ fetch: fetcher, runtimeTlsFetch: () => fetcher });
 		await f.tick(8);
 		const ready = f.state;
 		if (ready?.phase !== "ready") throw new Error();
@@ -2930,11 +2937,15 @@ describe("assembled Workload Runtime contracts", () => {
 			core: "passed" as const,
 			capabilities: {},
 		}));
-		const f = fixture({ fetch: fetcher, probeRuntime: probe });
+		const f = fixture({
+			fetch: fetcher,
+			runtimeTlsFetch: () => fetcher,
+			probeRuntime: probe,
+		});
 		await f.tick(5);
 		expect(fetcher).toHaveBeenCalledWith(
 			expect.stringMatching(
-				/^http:\/\/agent-[a-f0-9]+-probe\.workload-test\.svc:8080\/healthz$/,
+				/^https:\/\/agent-[a-f0-9]+-probe\.workload-test\.svc:8080\/healthz$/,
 			),
 			expect.objectContaining({
 				redirect: "error",
@@ -3135,6 +3146,161 @@ it("persists exact capacity and binds readiness to fence/image while preserving 
 		}),
 	).rejects.toMatchObject({
 		code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+	});
+});
+
+it("fails closed when a production conversation has no current SessionSandbox allocation", async () => {
+	const keys = generateKeyPairSync("ed25519");
+	const signing = {
+		workerId: "worker-a",
+		issuer: "platform",
+		keyId: "key",
+		privateKey: keys.privateKey,
+	};
+	const f = fixture({
+		policy: {
+			...workloadTestPolicy,
+			runtimeAuth: {
+				workerId: signing.workerId,
+				grantIssuer: signing.issuer,
+				grantKeyId: signing.keyId,
+				grantPublicKey: keys.publicKey
+					.export({ type: "spki", format: "pem" })
+					.toString(),
+				serviceTokenSecret: { name: "transport", key: "token" },
+			},
+		},
+	});
+	await f.tick(8);
+	const ready = f.state;
+	if (!ready) throw Error("Expected ready fixture");
+	const resolver = createProductionConversationRuntimeResolverV2({
+		workload: f.options,
+		signing,
+		serviceToken: "synthetic-transport",
+	});
+	await expect(
+		resolver({
+			agentId: ready.agentId,
+			conversationId: "conversation-missing",
+			actorId: "actor-missing",
+			channelId: "web",
+			principal: { kind: "user", id: "actor-missing" },
+			sessionGeneration: 1,
+			deliveryFence: 1,
+			workload: ready,
+			signal: new AbortController().signal,
+			purpose: "control",
+			command: "session.status",
+		}),
+	).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+});
+
+it("routes original control through a persisted stopped SessionSandbox source", async () => {
+	const keys = generateKeyPairSync("ed25519");
+	const signing = {
+		workerId: "worker-a",
+		issuer: "platform",
+		keyId: "key",
+		privateKey: keys.privateKey,
+	};
+	const f = fixture({
+		policy: {
+			...workloadTestPolicy,
+			runtimeAuth: {
+				workerId: signing.workerId,
+				grantIssuer: signing.issuer,
+				grantKeyId: signing.keyId,
+				grantPublicKey: keys.publicKey
+					.export({ type: "spki", format: "pem" })
+					.toString(),
+				serviceTokenSecret: { name: "transport", key: "token" },
+			},
+		},
+	});
+	await f.tick(8);
+	const ready = f.state;
+	if (!ready?.verified?.deployment) throw Error("Expected verified fixture");
+	const verifiedDeployment = validateAgentWorkloadDesiredV1(
+		ready.verified.deployment,
+	);
+	const sandboxId = "00000000-0000-4000-8000-000000000001";
+	const sandbox = {
+		schemaVersion: 1 as const,
+		sandboxId,
+		sessionId: "conversation-source",
+		agentId: ready.agentId,
+		principal: { kind: "user" as const, id: "actor-source" },
+		channelId: "web",
+		generation: 1,
+		resourceName: `sandbox-${sandboxId}`,
+		workspaceScope: sandboxId,
+	};
+	const sourcePolicy = {
+		namespace: f.options.policy.namespace,
+		resourceConfigurationHash: workloadResourceConfigurationHashV1(
+			f.options.policy,
+		),
+		configurationRevision: ready.verified.configuration.revision,
+		workloadRevision: verifiedDeployment.workloadRevision,
+		managementFence: 1,
+		imageDigest: verifiedDeployment.imageDigest,
+	};
+	const sourceKinds = [
+		"Pod",
+		"Service",
+		"ServiceAccount",
+		"PersistentVolumeClaim",
+		"NetworkPolicy",
+		"StatefulSet",
+	] as const;
+	const sourceResources = sourceKinds.map((kind) => ({
+		kind,
+		namespace: sourcePolicy.namespace,
+		name: sandbox.resourceName,
+		uid: `${kind}-source`,
+		resourceVersion: "7",
+		...(kind === "Pod" ? { controllerUid: "StatefulSet-source" } : {}),
+	}));
+	const sandboxResource: SessionSandboxRuntimeStateV1 = {
+		sandbox,
+		resourceFence: 2,
+		desiredState: "stopped",
+		status: "stopped",
+		policy: sourcePolicy,
+		observation: {
+			status: "ready",
+			resources: sourceResources,
+		},
+		controlSource: {
+			sandbox,
+			resourceFence: 1,
+			policy: sourcePolicy,
+			observation: {
+				status: "ready",
+				resources: sourceResources,
+			},
+			deployment: verifiedDeployment,
+		},
+	};
+	const resolver = createProductionConversationRuntimeResolverV2({
+		workload: f.options,
+		signing,
+		serviceToken: "synthetic-transport",
+	});
+	await expect(
+		resolver({
+			agentId: ready.agentId,
+			conversationId: sandbox.sessionId,
+			sessionGeneration: sandbox.generation,
+			workload: null,
+			sandboxResource,
+			signal: new AbortController().signal,
+			purpose: "control",
+			command: "session.status",
+		}),
+	).resolves.toMatchObject({
+		baseUrl: `http://${sandbox.resourceName}.${sourcePolicy.namespace}.svc:${verifiedDeployment.service.port}`,
 	});
 });
 

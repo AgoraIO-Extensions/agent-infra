@@ -19,6 +19,7 @@ import {
 	type CurrentTaskApplicationV1,
 	createTaskRuntimeAuthorizationUseCaseV1,
 	type LegacyTaskControlRecoveryV1,
+	type SessionSandboxRuntimeStateV1,
 	type TaskPrincipalV1,
 	type TaskRuntimeAuthorizationContextV1,
 	type TaskRuntimeAuthorizationRecordV1,
@@ -29,6 +30,12 @@ import {
 
 import { createWorkerRuntimeGrantSignerV2 } from "./runtime-grant-signer.js";
 import { createWorkerRuntimeHostClientV3 } from "./runtime-host-client.js";
+
+function principalFromClaim(
+	claim: ConversationDispatchClaimV1,
+): TaskPrincipalV1 | undefined {
+	return claim.principal;
+}
 
 export type ConversationRuntimeStateV2 = TaskRuntimeRecoveryStateV1;
 
@@ -90,8 +97,15 @@ export interface ConversationRuntimeOptionsV2 {
 	};
 	readonly resolveRuntimeHost: (input: {
 		readonly agentId: string;
+		readonly conversationId?: string;
+		readonly actorId?: string;
+		readonly channelId?: string;
+		readonly principal?: TaskPrincipalV1;
+		readonly sessionGeneration?: number;
+		readonly deliveryFence?: number;
 		readonly signal: AbortSignal;
 		readonly workload: WorkloadReconciliationStateV1 | null;
+		readonly sandboxResource?: SessionSandboxRuntimeStateV1 | null;
 		readonly purpose: "business" | "control";
 		readonly command: RuntimeBusinessCommandV2 | RuntimeControlCommandV2;
 	}) => Promise<{
@@ -100,6 +114,7 @@ export interface ConversationRuntimeOptionsV2 {
 		readonly workerId: string;
 	}>;
 	readonly fetch?: typeof fetch;
+	readonly runtimeTlsFetch?: () => typeof fetch;
 	readonly reconnectDelayMs?: number;
 	readonly signal?: AbortSignal;
 }
@@ -265,8 +280,15 @@ export function createConversationRuntimeV2(
 		const target = await bounded(
 			options.resolveRuntimeHost({
 				agentId: context.claim.agentId,
+				conversationId: context.claim.conversationId,
+				actorId: context.claim.actorId,
+				channelId: context.claim.channelId,
+				principal: principalFromClaim(context.claim),
+				sessionGeneration: context.claim.sessionGeneration,
+				deliveryFence: context.claim.deliveryFence,
 				signal,
 				workload: beforeRoute.record.workload,
+				sandboxResource: state.sandboxResource,
 				purpose: authority.purpose,
 				command,
 			}),
@@ -308,8 +330,15 @@ export function createConversationRuntimeV2(
 		const finalTarget = await bounded(
 			options.resolveRuntimeHost({
 				agentId: context.claim.agentId,
+				conversationId: context.claim.conversationId,
+				actorId: context.claim.actorId,
+				channelId: context.claim.channelId,
+				principal: principalFromClaim(context.claim),
+				sessionGeneration: context.claim.sessionGeneration,
+				deliveryFence: context.claim.deliveryFence,
 				signal,
 				workload: finalRoute.record.workload,
+				sandboxResource: state.sandboxResource,
 				purpose: finalRoute.authority.purpose,
 				command,
 			}),
@@ -345,8 +374,15 @@ export function createConversationRuntimeV2(
 		const postTarget = await bounded(
 			options.resolveRuntimeHost({
 				agentId: context.claim.agentId,
+				conversationId: context.claim.conversationId,
+				actorId: context.claim.actorId,
+				channelId: context.claim.channelId,
+				principal: principalFromClaim(context.claim),
+				sessionGeneration: context.claim.sessionGeneration,
+				deliveryFence: context.claim.deliveryFence,
 				signal,
 				workload: postTargetRoute.record.workload,
+				sandboxResource: state.sandboxResource,
 				purpose: postTargetRoute.authority.purpose,
 				command,
 			}),
@@ -384,6 +420,7 @@ export function createConversationRuntimeV2(
 		const client = createWorkerRuntimeHostClientV3({
 			...postTarget,
 			fetch: options.fetch,
+			tlsFetch: options.runtimeTlsFetch,
 		});
 		const base = {
 			schemaVersion: 3 as const,

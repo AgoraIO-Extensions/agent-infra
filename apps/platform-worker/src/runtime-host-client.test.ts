@@ -1,7 +1,22 @@
 import type { ExecutionGrantV1 } from "@agent-infra/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
 
-import { createWorkerRuntimeHostClientV1 } from "./runtime-host-client.js";
+import {
+	createWorkerRuntimeHostClientV1 as createRuntimeHostClient,
+	type WorkerRuntimeHostClientOptionsV1,
+} from "./runtime-host-client.js";
+
+function createWorkerRuntimeHostClientV1(
+	options: WorkerRuntimeHostClientOptionsV1,
+) {
+	const injected = options.fetch;
+	return createRuntimeHostClient({
+		...options,
+		...(options.baseUrl.startsWith("https:") && injected
+			? { tlsFetch: () => injected }
+			: {}),
+	});
+}
 
 const grant: ExecutionGrantV1 = {
 	schemaVersion: 1,
@@ -96,6 +111,25 @@ function response(
 }
 
 describe("Worker RuntimeHost HTTP/SSE client", () => {
+	it("does not use a generic fetcher for an HTTPS endpoint", async () => {
+		const injected = vi.fn<typeof fetch>(async () =>
+			response({ outcome: "accepted", status: "running" }, 2),
+		);
+		const verified = vi.fn<typeof fetch>(async () =>
+			response({ outcome: "accepted", status: "running" }, 2),
+		);
+		const client = createRuntimeHostClient({
+			baseUrl: "https://runtime.internal",
+			serviceToken: "synthetic-service-token",
+			fetch: injected,
+			tlsFetch: () => verified,
+		});
+
+		await client.dispatch(request());
+		expect(verified).toHaveBeenCalledOnce();
+		expect(injected).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		["turn.submit", "/internal/runtime/v2/turns"],
 		["turn.supplement", "/internal/runtime/v1/instructions"],
