@@ -773,6 +773,31 @@ describe("functional conversation screen", () => {
 		},
 	);
 
+	it("shows projection-backed source and separate management/service status in the header", async () => {
+		setup();
+		const header = (
+			await screen.findByRole("heading", { name: agent.name })
+		).closest("header");
+		if (!header) throw new Error("Expected conversation header");
+		expect(within(header).getByText("标准模板 · codex")).toBeTruthy();
+		expect(within(header).getByText("管理：可用")).toBeTruthy();
+		expect(within(header).getByText("服务：就绪")).toBeTruthy();
+	});
+
+	it("keeps unknown service availability out of the header status", async () => {
+		setup((request) =>
+			new URL(request.url).pathname === "/api/v2/agents/agent-1"
+				? Response.json({ ...agent, serviceAvailability: null })
+				: undefined,
+		);
+		const header = await screen
+			.findByRole("heading", { name: agent.name })
+			.then((heading) => heading.closest("header"));
+		if (!header) throw new Error("Expected conversation header");
+		expect(within(header).getByText("管理：可用")).toBeTruthy();
+		expect(within(header).queryByText(/服务：/)).toBeNull();
+	});
+
 	it("discards a late recent response when the login identity changes", async () => {
 		const old = deferred<Response>();
 		let changed = false;

@@ -587,6 +587,19 @@ a[class~="group/button"] {
 .conversation-heading-copy {
 	min-width: 0;
 }
+.conversation-agent-status {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 8px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+.conversation-agent-status > span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
 .conversation-header h1 {
 	font-family: var(--font-display);
 	font-size: 28px;

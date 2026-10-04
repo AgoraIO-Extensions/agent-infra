@@ -11,8 +11,11 @@ import {
 	useState,
 } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "../../components/ui/button.js";
 import { getAgentV2 } from "../../pilot/generated-v2/sdk.gen.js";
+import { agentServiceAvailabilityLabel } from "../agent-discovery/agent-discovery-screen.js";
+import { agentManagementStatusLabels } from "../agent-management-status.js";
 import { ActiveConversation } from "./active-conversation.js";
 import { NewConversation, PersonalHistory } from "./conversation-navigation.js";
 import { ConversationReadError, responseFailure } from "./execution-detail.js";
@@ -161,6 +164,12 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 	const selfManaged =
 		agent.source.kind === "custom" &&
 		agent.source.interactionMode === "self-managed";
+	const sourceLabel =
+		agent.source.kind === "standard"
+			? `标准模板 · ${agent.source.templateId}`
+			: agent.source.interactionMode === "self-managed"
+				? "自定义 Agent · 自有交互入口"
+				: "自定义 Agent · 平台交互入口";
 	return (
 		<section className="chat-layout">
 			<header className="conversation-header">
@@ -178,11 +187,20 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 							<ChevronDown aria-hidden="true" className="ml-1 inline size-3" />
 						</h1>
 					</Link>
-					{!selfManaged && (
-						<p className="conversation-summary text-muted-foreground text-sm">
-							个人 Web 对话 · 离开页面不会取消已提交的任务
-						</p>
-					)}
+					<div className="conversation-agent-status">
+						<span>{sourceLabel}</span>
+						<Badge variant="outline" data-status={agent.managementStatus}>
+							管理：{agentManagementStatusLabels[agent.managementStatus]}
+						</Badge>
+						{agent.serviceAvailability && (
+							<Badge
+								variant="secondary"
+								data-status={agent.serviceAvailability}
+							>
+								服务：{agentServiceAvailabilityLabel(agent.serviceAvailability)}
+							</Badge>
+						)}
+					</div>
 				</div>
 				<div className="conversation-heading-actions">
 					<Button
