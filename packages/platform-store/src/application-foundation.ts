@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import {
 	ApplicationFoundationError,
+	type ApplicationFoundationRelayKeyEncryptorV1,
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
 	type CommitApplicationFoundationResultV1,
@@ -15,6 +16,7 @@ import postgres from "postgres";
 
 import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { isPostgresError } from "./postgres-error.js";
+import { snapshotRelayKeyCiphertextV1 } from "./relay-key-versions.js";
 import {
 	agentApplications,
 	agentAvailability,
@@ -24,11 +26,14 @@ import {
 	auditEvents,
 	idempotencyRecords,
 	outboxItems,
+	relayKeySubjects,
+	relayKeyVersions,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
 
 export interface PostgresApplicationFoundationOptions {
 	readonly databaseUrl: string;
+	readonly relayKeyEncryptor?: ApplicationFoundationRelayKeyEncryptorV1;
 }
 
 interface IdempotencyRow {
@@ -292,6 +297,65 @@ export class PostgresApplicationFoundationTransactionV1
 	constructor(options: PostgresApplicationFoundationOptions) {
 		this.#client = postgres(options.databaseUrl, { max: 10 });
 		this.#database = drizzle(this.#client);
+		this.#relayKeyEncryptor = options.relayKeyEncryptor;
+	}
+	readonly #relayKeyEncryptor?: ApplicationFoundationRelayKeyEncryptorV1;
+
+	async #persistDefaultRelayKey(
+		transaction: Parameters<
+			Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
+		>[0],
+		plan: ApplicationFoundationWritePlanV1,
+	): Promise<void> {
+		if (plan.defaultRelayKey === undefined) return;
+		if (!this.#relayKeyEncryptor)
+			throw new ApplicationFoundationError("persistence_failed");
+		await transaction
+			.insert(relayKeySubjects)
+			.values({ purpose: "agent-default", subjectId: plan.agent.agentId })
+			.onConflictDoNothing()
+			.execute();
+		const [subject] = await transaction
+			.select({ lastVersion: relayKeySubjects.lastVersion })
+			.from(relayKeySubjects)
+			.where(
+				and(
+					eq(relayKeySubjects.purpose, "agent-default"),
+					eq(relayKeySubjects.subjectId, plan.agent.agentId),
+				),
+			)
+			.for("update");
+		if (!subject) throw new ApplicationFoundationError("persistence_failed");
+		const keyVersion = subject.lastVersion + 1;
+		const binding = {
+			purpose: "agent-default" as const,
+			subjectId: plan.agent.agentId,
+			keyId: randomUUID(),
+			keyVersion,
+		};
+		const ciphertext = this.#relayKeyEncryptor.encrypt({
+			...binding,
+			plaintext: plan.defaultRelayKey,
+		});
+		let validatedCiphertext: ReturnType<typeof snapshotRelayKeyCiphertextV1>;
+		try {
+			validatedCiphertext = snapshotRelayKeyCiphertextV1(ciphertext, binding);
+		} catch {
+			throw new ApplicationFoundationError("persistence_failed");
+		}
+		await transaction.insert(relayKeyVersions).values({
+			...binding,
+			ciphertext: validatedCiphertext as unknown as Record<string, unknown>,
+		});
+		await transaction
+			.update(relayKeySubjects)
+			.set({ lastVersion: keyVersion, currentVersion: keyVersion })
+			.where(
+				and(
+					eq(relayKeySubjects.purpose, "agent-default"),
+					eq(relayKeySubjects.subjectId, plan.agent.agentId),
+				),
+			);
 	}
 
 	async read(
@@ -415,6 +479,7 @@ export class PostgresApplicationFoundationTransactionV1
 					attachments,
 					configuration,
 				);
+				await this.#persistDefaultRelayKey(transaction, plan);
 				await transaction.insert(agentOwners).values(
 					plan.access.ownerIds.map((ownerId) => ({
 						agentId: plan.access.agentId,

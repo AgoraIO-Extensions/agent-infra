@@ -1477,6 +1477,42 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the exact Agent default Key endpoints without changing existing authority", async () => {
+		const current = JSON.parse(
+			await readFile(
+				fileURLToPath(
+					new URL(
+						"../artifacts/openapi/pilot-browser.v2.openapi.json",
+						import.meta.url,
+					),
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		for (const path of [
+			"/api/v2/agents/{agentId}/default-relay-key",
+			"/api/v2/agents/{agentId}/default-relay-key/candidates",
+		])
+			delete previous.paths[path];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-default-key-contract-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			current.paths["/api/v2/agents/{agentId}/default-relay-key"].put.security =
+				[];
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the V2 lifecycle addition and preserves existing audit authority", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -1487,7 +1523,11 @@ describe("contract compatibility command", () => {
 				"utf8",
 			),
 		);
-		// Isolate lifecycle from later personal API/Relay Key and registration additions.
+		// Isolate lifecycle from later default/personal Key and registration additions.
+		delete current.paths["/api/v2/agents/{agentId}/default-relay-key"];
+		delete current.paths[
+			"/api/v2/agents/{agentId}/default-relay-key/candidates"
+		];
 		restorePreRelayKeyContract(current);
 		delete current.paths["/api/v2/applications"];
 		delete current.paths["/api/v2/applications/{applicationId}"];

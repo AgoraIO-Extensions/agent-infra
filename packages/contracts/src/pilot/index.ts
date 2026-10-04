@@ -1,3 +1,4 @@
+export * from "./agent-default-relay-key.ts";
 export * from "./application-material-grants.ts";
 export * from "./application-registration.ts";
 export * from "./audit.ts";
