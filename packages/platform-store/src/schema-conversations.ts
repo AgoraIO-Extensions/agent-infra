@@ -299,6 +299,13 @@ export const conversationExecutions = platformSchema.table(
 			table.conversationId,
 			table.sessionGeneration,
 		),
+		uniqueIndex("conversation_execution_task_wait_order_unique")
+			.on(table.agentId, table.taskWaitOrder)
+			.where(sql`${table.taskWaitOrder} IS NOT NULL`),
+		index("conversation_execution_agent_wait_idx").on(
+			table.agentId,
+			table.taskWaitOrder,
+		),
 		uniqueIndex("conversation_active_execution_unique")
 			.on(table.conversationId)
 			.where(sql`${table.status} in ('submitted', 'processing', 'unknown')`),

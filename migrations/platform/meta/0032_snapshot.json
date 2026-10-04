@@ -1695,6 +1695,49 @@
 				}
 			},
 			"indexes": {
+				"conversation_execution_task_wait_order_unique": {
+					"name": "conversation_execution_task_wait_order_unique",
+					"columns": [
+						{
+							"expression": "agent_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						},
+						{
+							"expression": "task_wait_order",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": true,
+					"where": "\"platform\".\"conversation_executions\".\"task_wait_order\" IS NOT NULL",
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
+				"conversation_execution_agent_wait_idx": {
+					"name": "conversation_execution_agent_wait_idx",
+					"columns": [
+						{
+							"expression": "agent_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						},
+						{
+							"expression": "task_wait_order",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
 				"conversation_execution_id_conversation_unique": {
 					"name": "conversation_execution_id_conversation_unique",
 					"columns": [

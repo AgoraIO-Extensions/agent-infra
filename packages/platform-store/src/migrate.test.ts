@@ -587,10 +587,6 @@ describe("Platform PostgreSQL migration foundation", () => {
 						...config.uniqueConstraints.map((constraint) => constraint.name),
 					];
 				})
-				.concat([
-					"conversation_execution_agent_wait_idx",
-					"conversation_execution_task_wait_order_unique",
-				])
 				.toSorted();
 			const migratedIndexes = await client`
 					select indexes.indexname
