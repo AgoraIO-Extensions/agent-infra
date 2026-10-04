@@ -1,6 +1,7 @@
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 import type {
 	SessionSandboxLifecycleV1,
+	SessionSandboxSourceV1,
 	SessionSandboxStopReceiptV1,
 } from "./session-sandbox-lifecycle.js";
 import type { TaskAuthorizationBoundaryV1 } from "./task-authorization.js";
@@ -47,7 +48,7 @@ export interface SessionSandboxReconciliationClaimV1 {
 	readonly desiredState: "running" | "stopped";
 	readonly authorization: TaskAuthorizationBoundaryV1 | null;
 	readonly purpose: "prepare" | "drain";
-	/** False permits route closure only; original Execution control still owns termination. */
+	/** False preserves the original Service/control route and compute until Execution termination. */
 	readonly drainComputeAllowed: boolean;
 	readonly lifecycle: SessionSandboxLifecycleV1 | null;
 	readonly policy: SessionSandboxVerifiedPolicyV1;
@@ -64,6 +65,8 @@ export interface SessionSandboxObservationV1 {
 
 /** Persisted resource facts, not a grant to call or recreate the Runtime. */
 export interface SessionSandboxRuntimeStateV1 {
+	/** Source facts only; require original control-purpose authority and live resource verification. */
+	readonly controlSource?: SessionSandboxSourceV1;
 	readonly sandbox: SessionSandboxBindingV1;
 	readonly resourceFence: number;
 	readonly desiredState: "running" | "stopped";

@@ -13,6 +13,8 @@ export interface SessionSandboxSourceV1 {
 	readonly resourceFence: number;
 	readonly policy: SessionSandboxVerifiedPolicyV1 | null;
 	readonly observation: SessionSandboxObservationV1 | null;
+	/** Original verified preparation input; absent for allocations never prepared. */
+	readonly deployment?: unknown;
 }
 
 export interface SessionSandboxStopReceiptV1 {

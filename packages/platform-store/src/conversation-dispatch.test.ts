@@ -1036,6 +1036,90 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					await client`select status, lease_expires_at <= clock_timestamp() as expired from platform.outbox_items where id = ${itemId}`,
 				).toEqual([{ status: "processing", expired: true }]);
 			}
+			// Preserve the original signed control route after management closes
+			// business readiness, even when current deployment facts are replaced.
+			const managementStore = new PostgresAgentManagementTransactionV1({
+				databaseUrl,
+			});
+			try {
+				const [managementRow] =
+					await client`select management_revision from platform.agent_applications where agent_id = 'agent-dispatch'`;
+				expect(
+					await createAgentManagementV1(
+						managementStore,
+					).executeManagementCommand(
+						{
+							schemaVersion: 1,
+							command: "stop_agent",
+							agentId: "agent-dispatch",
+							expectedRevision: Number(managementRow!.management_revision),
+							idempotencyKey: "control-source-stop",
+							requestId: "control-source-stop",
+							traceId: "control-source-stop",
+						},
+						{
+							schemaVersion: 1,
+							userId: "actor-dispatch",
+							accountStatus: "active",
+							organizationIds: [],
+							isAdministrator: false,
+						},
+					),
+				).toMatchObject({ outcome: "accepted" });
+			} finally {
+				await managementStore.close();
+			}
+			const [intent] =
+				await client`select payload from platform.outbox_items where id = ${itemId}`;
+			expect(intent!.payload.lifecycle.source.deployment).toEqual(
+				claim.deployment,
+			);
+			await client`update platform.workload_reconciliations set state = jsonb_set(state, '{verified}', 'null'::jsonb) where agent_id = 'agent-dispatch'`;
+			const sourceState = (
+				await store.readRuntimeState({ claim: business.claim })
+			)?.sandboxResource;
+			expect(sourceState).toMatchObject({
+				status: "unknown",
+				desiredState: "stopped",
+				resourceFence: 2,
+				controlSource: {
+					sandbox: claim.sandbox,
+					resourceFence: 1,
+					policy: claim.policy,
+					deployment: claim.deployment,
+					observation: { resources },
+				},
+			});
+			expect(
+				await store.readRuntimeState({
+					claim: {
+						...business.claim,
+						deliveryFence: business.claim.deliveryFence + 1,
+					},
+				}),
+			).toBeNull();
+			for (const [path, value] of [
+				["{lifecycle,source,deployment}", "null"],
+				["{lifecycle,source,deployment,agentId}", '"other-agent"'],
+				["{lifecycle,source,deployment,configRevision}", "999"],
+				["{lifecycle,source,resourceFence}", "2"],
+				["{lifecycle,source,sandbox,generation}", "2"],
+				["{lifecycle,source,sandbox,principal,id}", '"other-user"'],
+				["{lifecycle,source,observation,resources,0,uid}", '"foreign-uid"'],
+				["{lifecycle,preparation}", '{"generation":1,"resourceFence":2}'],
+				["{lifecycle,stopReceipt}", '{"schemaVersion":1}'],
+			] as const) {
+				await client`update platform.outbox_items set payload = jsonb_set(${client.json(intent!.payload)}::jsonb, ${path}::text[], ${value}::jsonb) where id = ${itemId}`;
+				expect(
+					(await store.readRuntimeState({ claim: business.claim }))
+						?.sandboxResource,
+				).toBeNull();
+			}
+			await client`update platform.outbox_items set payload = ${client.json(intent!.payload)} where id = ${itemId}`;
+			expect(
+				(await store.readRuntimeState({ claim: business.claim }))
+					?.sandboxResource,
+			).toEqual(sourceState);
 		} finally {
 			await transaction.close();
 			await store.close();

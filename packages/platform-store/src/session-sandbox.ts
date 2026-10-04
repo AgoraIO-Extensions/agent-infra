@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { AgentWorkloadDesiredV1Schema } from "@agent-infra/contracts/workload";
 import {
 	isSessionSandboxObservationValidV1,
 	parseSessionSandboxBindingV1,
 	type SessionSandboxBindingV1,
+	type SessionSandboxLifecycleV1,
 	type SessionSandboxPolicyV1,
 	type SessionSandboxRuntimeStateV1,
 } from "@agent-infra/platform-core";
@@ -23,6 +25,9 @@ export async function readSessionSandboxRuntimeState(
 			management_fence: string;
 			workload_revision: number;
 			workload_state: unknown;
+			application_id: string;
+			management_revision: number;
+			management_desired_state: string;
 			desired_state: SessionSandboxRuntimeStateV1["desiredState"];
 			status: SessionSandboxRuntimeStateV1["status"];
 			resource_policy: SessionSandboxRuntimeStateV1["policy"];
@@ -31,7 +36,8 @@ export async function readSessionSandboxRuntimeState(
 	>`
 		select s.resource_fence::text, s.desired_state, s.status, s.resource_policy, s.resource_observation,
 			a.current_configuration_revision as configuration_revision,
-			m.fence::text as management_fence, m.workload_revision, w.state as workload_state
+			m.fence::text as management_fence, m.workload_revision, w.state as workload_state,
+			m.id as application_id, m.management_revision, m.desired_state as management_desired_state
 		from platform.session_sandbox_allocations s
 		join platform.agents a on a.id = s.agent_id
 		join platform.agent_applications m on m.agent_id = s.agent_id
@@ -42,6 +48,70 @@ export async function readSessionSandboxRuntimeState(
 	if (!row) return null;
 	const resourceFence = Number(row.resource_fence);
 	const policy = row.resource_policy;
+	// A management transition closes business readiness while the original
+	// Execution may still require its signed stop/status route. Only persisted
+	// preparation facts survive here; current configuration cannot recreate them.
+	if (row.desired_state === "stopped") {
+		const intents = await transaction<
+			{ payload: { lifecycle?: SessionSandboxLifecycleV1 } }[]
+		>`
+			select payload from platform.outbox_items where scope_type = 'conversation'
+				and scope_id = ${sandbox.sessionId} and operation = 'conversation.sandbox.reconcile.v1'`;
+		const lifecycle =
+			intents.length === 1 ? intents[0]?.payload.lifecycle : null;
+		const source = lifecycle?.source;
+		const authority = lifecycle?.authority;
+		const parsedSource = AgentWorkloadDesiredV1Schema.safeParse(
+			source?.deployment,
+		);
+		if (
+			lifecycle?.schemaVersion !== 1 ||
+			!source?.policy ||
+			!source.observation ||
+			!authority ||
+			lifecycle.stopReceipt ||
+			lifecycle.preparation ||
+			authority.kind !== "management" ||
+			authority.applicationId !== row.application_id ||
+			authority.managementRevision > Number(row.management_revision) ||
+			authority.managementFence !== Number(row.management_fence) ||
+			authority.workloadRevision !== Number(row.workload_revision) ||
+			authority.targetDesiredState !== row.management_desired_state ||
+			!isDeepStrictEqual(source.sandbox, sandbox) ||
+			!Number.isSafeInteger(source.resourceFence) ||
+			source.resourceFence < 1 ||
+			!Number.isSafeInteger(resourceFence) ||
+			source.resourceFence >= resourceFence ||
+			source.policy.namespace !== workerPolicy.namespace ||
+			!isDeepStrictEqual(source.policy, policy) ||
+			!isDeepStrictEqual(source.observation, row.resource_observation) ||
+			!isSessionSandboxObservationValidV1(
+				{ sandbox, policy: source.policy, desiredState: "running" },
+				{ ...source.observation, status: "ready" },
+			) ||
+			!parsedSource.success
+		)
+			return null;
+		const deployment = parsedSource.data;
+		if (
+			deployment.agentId !== sandbox.agentId ||
+			deployment.desiredState !== "running" ||
+			deployment.runtimeManifest.interactionMode !== "platform-adapter" ||
+			deployment.configRevision !== source.policy.configurationRevision ||
+			deployment.workloadRevision !== source.policy.workloadRevision ||
+			deployment.imageDigest !== source.policy.imageDigest
+		)
+			return null;
+		return {
+			sandbox,
+			resourceFence,
+			desiredState: row.desired_state,
+			status: row.status === "unknown" ? "unknown" : "unavailable",
+			policy,
+			observation: row.resource_observation,
+			controlSource: { ...source, deployment },
+		};
+	}
 	if (
 		!Number.isSafeInteger(resourceFence) ||
 		resourceFence < 1 ||

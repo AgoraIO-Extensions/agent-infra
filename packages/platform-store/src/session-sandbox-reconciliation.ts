@@ -113,7 +113,9 @@ async function lockedContext(
 		Array.isArray(payload) ||
 		!isDeepStrictEqual(
 			Object.fromEntries(
-				Object.entries(payload).filter(([key]) => key !== "lifecycle"),
+				Object.entries(payload).filter(
+					([key]) => key !== "lifecycle" && key !== "deployment",
+				),
 			),
 			{
 				schemaVersion: 1,
@@ -352,7 +354,7 @@ export async function claimSandboxReconciliation(
 				}
 			: context.lifecycle;
 	if (!isDeepStrictEqual(claimedLifecycle, context.lifecycle)) {
-		await transaction`update platform.outbox_items set payload = ${transaction.json(
+		await transaction`update platform.outbox_items set payload = payload || ${transaction.json(
 			{
 				schemaVersion: 1,
 				conversationId: sandbox.sessionId,
@@ -361,6 +363,10 @@ export async function claimSandboxReconciliation(
 			} as unknown as Parameters<typeof transaction.json>[0],
 		)}
 			where id = ${input.itemId}`;
+	}
+	if (context.purpose === "prepare") {
+		await transaction`update platform.outbox_items set payload = payload || jsonb_build_object('deployment',
+			${transaction.json(context.deployment as unknown as Parameters<typeof transaction.json>[0])}::jsonb) where id = ${input.itemId}`;
 	}
 	await transaction`update platform.outbox_items set status = 'processing', lease_owner = ${input.workerId},
 		lease_expires_at = clock_timestamp() + (${input.leaseDurationMs}::bigint * interval '1 millisecond'),
@@ -489,7 +495,7 @@ export async function recordSandboxObservation(
 		where id = ${claim.itemId} and lease_expires_at > clock_timestamp() returning id`;
 	if (recorded.length !== 1) return "stale";
 	if (context.lifecycle && "stopReceipt" in decision && decision.stopReceipt) {
-		await transaction`update platform.outbox_items set payload = ${transaction.json(
+		await transaction`update platform.outbox_items set payload = payload || ${transaction.json(
 			{
 				schemaVersion: 1,
 				conversationId: claim.sandbox.sessionId,
