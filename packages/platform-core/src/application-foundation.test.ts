@@ -8,10 +8,10 @@ import {
 } from "./application-foundation.conformance.ts";
 import {
 	ApplicationFoundationError,
-	snapshotApplicationFoundationWritePlanV1,
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
 	createApplicationFoundationUseCaseV1,
+	snapshotApplicationFoundationWritePlanV1,
 } from "./application-foundation.ts";
 import { FakeApplicationFoundationTransactionV1 } from "./fake-application-foundation.ts";
 import { pendingSecretRecordAttachmentFixtureV1 } from "./secret-record-attachment.fixture.ts";
@@ -493,22 +493,18 @@ describe("Application foundation Secret sidecar", () => {
 			...applicationFoundationCommandV1,
 			defaultRelayKey: "controlled-default-key-for-test",
 		};
-		const identity = vi
-			.fn()
-			.mockResolvedValue({
-				userId: applicationFoundationActorContextV1.userId,
-				accountStatus: "active",
-				authorizationRevision: "authorization_9",
-			});
-		const candidates = vi
-			.fn()
-			.mockResolvedValue([
-				{
-					endpointId: "endpoint_01",
-					modelId: "gpt-5",
-					reasoningLevels: ["low"],
-				},
-			]);
+		const identity = vi.fn().mockResolvedValue({
+			userId: applicationFoundationActorContextV1.userId,
+			accountStatus: "active",
+			authorizationRevision: "authorization_9",
+		});
+		const candidates = vi.fn().mockResolvedValue([
+			{
+				endpointId: "endpoint_01",
+				modelId: "gpt-5",
+				reasoningLevels: ["low"],
+			},
+		]);
 		const encrypt = vi
 			.fn()
 			.mockResolvedValue({ encrypted: "controlled-ciphertext" });
