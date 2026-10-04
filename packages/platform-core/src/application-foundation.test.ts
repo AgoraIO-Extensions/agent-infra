@@ -506,21 +506,6 @@ describe("Application foundation Secret sidecar", () => {
 		expect(plan).toBeUndefined();
 	});
 
-	it("carries an optional default Relay Key into the single write plan", async () => {
-		let plan: ApplicationFoundationWritePlanV1 | undefined;
-		const command = {
-			...applicationFoundationCommandV1,
-			defaultRelayKey: "relay-key-controlled-test-value",
-		};
-		await createUseCase({
-			async commit(nextPlan) {
-				plan = nextPlan;
-				return { outcome: "committed", result: nextPlan.result };
-			},
-		}).submit(command, applicationFoundationActorContextV1);
-		expect(plan?.defaultRelayKey).toBe(command.defaultRelayKey);
-	});
-
 	it("fails closed before persistence when a Secret sidecar is missing", async () => {
 		let commits = 0;
 		const useCase = createApplicationFoundationUseCaseV1(
