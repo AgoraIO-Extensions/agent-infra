@@ -584,7 +584,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				and o.scope_id=${deferred.conversationId} and o.operation='conversation.turn.submit.v1'
 				and e.execution_id=${deferred.executionId} and e.conversation_id=${deferred.conversationId}
 				and o.payload->>'conversationId'=${deferred.conversationId}`;
-		if (!deferredItem || deferredItem.execution_status !== "submitted")
+		if (deferredItem?.execution_status !== "submitted")
 			throw Error("Deferred recovery identity or Execution status changed");
 		if (deferredItem.status === "processing") {
 			if (!deferredItem.lease_owner) throw Error("Dead claim has no owner");
