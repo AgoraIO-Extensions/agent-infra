@@ -36,6 +36,7 @@ describe("platform-core package surface", () => {
 		expect(Object.keys(surface).toSorted()).toEqual([
 			"AgentConfigurationError",
 			"AgentManagementError",
+			"ApplicationApiCredentialErrorV1",
 			"ApplicationFoundationError",
 			"ApplicationMaterialGrantErrorV1",
 			"ApplicationRegistrationErrorV1",
@@ -64,6 +65,7 @@ describe("platform-core package surface", () => {
 			"conversationExecutionSourceV1",
 			"createAgentConfigurationUseCaseV1",
 			"createAgentManagementV1",
+			"createApplicationApiCredentialIssuerV1",
 			"createApplicationFoundationUseCaseV1",
 			"createApplicationMaterialGrantUseCaseV1",
 			"createApplicationRegistrationUseCaseV1",
@@ -106,6 +108,7 @@ describe("platform-core package surface", () => {
 			"isTaskApplicationAuthorizationCurrentV1",
 			"isTaskAuthorizationCurrentV1",
 			"parseAgentConfigurationChangesV1",
+			"parseApplicationApiCredentialCommandV1",
 			"parseConversationMetadataRecoveryV1",
 			"parseConversationOperationEventV2",
 			"parseConversationOperationFactV2",
