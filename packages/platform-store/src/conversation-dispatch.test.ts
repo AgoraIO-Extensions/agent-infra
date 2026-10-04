@@ -414,6 +414,295 @@ async function dispatchState(work: { itemId: string; executionId: string }) {
 }
 
 describe("PostgreSQL Conversation dispatch Store", () => {
+	it.each(["stop-first", "claim-first"] as const)(
+		"serializes never-prepared stop with first resource authorization (%s)",
+		async (order) => {
+			const verified = await seedCapacityAgent("agent-dispatch", 8, "custom");
+			await client`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration)
+			values ('agent-dispatch',4,'never-prepared',now(),${client.json(verified.verified.configuration)})`;
+			await client`insert into platform.agent_owners (agent_id,owner_id,created_at) values ('agent-dispatch','actor-dispatch',now())`;
+			const transaction = new PostgresConversationExecutionTransactionV1({
+				databaseUrl,
+			});
+			const api = createConversationExecutionUseCaseV1({
+				transaction,
+				authorization: {
+					async authorize() {
+						return {
+							outcome: "allowed",
+							authority: {
+								schemaVersion: 1,
+								actorId: "actor-dispatch",
+								agentId: "agent-dispatch",
+								channelId: "web",
+								authorizationRevision: "authorization-dispatch",
+								supportsSupplementaryInstruction: false,
+							},
+						};
+					},
+				},
+			});
+			const managementStore = new PostgresAgentManagementTransactionV1({
+				databaseUrl,
+			});
+			const management = createAgentManagementV1(managementStore);
+			let active = true;
+			const store = new PostgresConversationDispatchStoreV1({
+				databaseUrl,
+				sandboxPolicy: {
+					namespace: workloadTestPolicy.namespace,
+					resourceConfigurationHash:
+						workloadResourceConfigurationHashV1(workloadTestPolicy),
+				},
+				userDirectory: {
+					async resolveUser(userId) {
+						return {
+							schemaVersion: 1,
+							userId,
+							accountStatus: active ? "active" : "disabled",
+							organizationIds: [],
+							authorizationRevision: "current",
+						};
+					},
+				},
+			});
+			const actor = {
+				schemaVersion: 1 as const,
+				userId: "actor-dispatch",
+				accountStatus: "active" as const,
+				organizationIds: [],
+				isAdministrator: false,
+			};
+			try {
+				const created = await api.createConversation({
+					schemaVersion: 1,
+					agentId: "agent-dispatch",
+					idempotencyKey: "unprepared-create",
+					requestId: "unprepared-create",
+					traceId: "unprepared-create",
+				});
+				if (created.outcome !== "accepted") throw new Error("Expected Session");
+				const conversationId = created.result.conversationId;
+				const request = {
+					schemaVersion: 1 as const,
+					itemId: `conversation:sandbox:${conversationId}:1`,
+					workerId: "first-resource-worker",
+					leaseDurationMs: 30_000,
+				};
+				const stopCommand = {
+					schemaVersion: 1 as const,
+					command: "stop_agent" as const,
+					agentId: "agent-dispatch",
+					expectedRevision: 1,
+					idempotencyKey: "first-stop",
+					requestId: "first-stop",
+					traceId: "first-stop",
+				};
+				if (order === "stop-first") {
+					await client.unsafe(`create function platform.fail_never_prepared_audit() returns trigger language plpgsql as $$
+					begin if new.action = 'conversation.sandbox.never_prepared_stopped' then raise exception 'controlled audit failure'; end if; return new; end $$`);
+					await client.unsafe(
+						`create trigger fail_never_prepared_audit before insert on platform.audit_events for each row execute function platform.fail_never_prepared_audit()`,
+					);
+					try {
+						await expect(
+							management.executeManagementCommand(stopCommand, actor),
+						).rejects.toThrow();
+					} finally {
+						await client.unsafe(
+							"drop trigger fail_never_prepared_audit on platform.audit_events",
+						);
+						await client.unsafe(
+							"drop function platform.fail_never_prepared_audit()",
+						);
+					}
+					expect(
+						await client`select status,resource_fence::int as fence from platform.session_sandbox_allocations where conversation_id=${conversationId}`,
+					).toEqual([{ status: "allocated", fence: 0 }]);
+					expect(
+						await client`select status,delivery_fence::int as fence,payload->'lifecycle' as lifecycle from platform.outbox_items where id=${request.itemId}`,
+					).toEqual([{ status: "pending", fence: 0, lifecycle: null }]);
+				}
+
+				let stopPromise:
+					| ReturnType<typeof management.executeManagementCommand>
+					| undefined;
+				let claimPromise:
+					| ReturnType<typeof store.claimSandboxReconciliation>
+					| undefined;
+				await client.begin(async (blocker) => {
+					const [owner] = await blocker<
+						{ pid: number }[]
+					>`select pg_backend_pid() as pid`;
+					if (!owner) throw new Error("Expected blocker");
+					await blocker`select id from platform.conversations where id = ${conversationId} for update`;
+					if (order === "stop-first")
+						stopPromise = management.executeManagementCommand(
+							stopCommand,
+							actor,
+						);
+					else claimPromise = store.claimSandboxReconciliation(request);
+					await expect
+						.poll(
+							async () =>
+								(
+									await client`select 1 from pg_stat_activity where ${owner.pid} = any(pg_blocking_pids(pid))`
+								).length,
+							{
+								interval: 10,
+								timeout: 1000,
+								message:
+									"Expected first operation holding Agent authority while waiting for Conversation",
+							},
+						)
+						.toBeGreaterThan(0);
+					if (order === "stop-first")
+						claimPromise = store.claimSandboxReconciliation(request);
+					else
+						stopPromise = management.executeManagementCommand(
+							stopCommand,
+							actor,
+						);
+				});
+				expect(await stopPromise).toMatchObject({ outcome: "accepted" });
+				const first = await claimPromise;
+				const [stopped] =
+					await client`select status,payload from platform.outbox_items where id=${request.itemId}`;
+				if (order === "claim-first") {
+					if (!first) throw new Error("Expected first preparation");
+					expect(stopped?.status).toBe("pending");
+					expect(stopped?.payload.lifecycle.sourceState).toBeUndefined();
+					expect(stopped?.payload.lifecycle.source).toMatchObject({
+						resourceFence: 1,
+						policy: first.policy,
+						deployment: first.deployment,
+						observation: null,
+					});
+					expect(
+						await store.prepareSandboxReconciliation({
+							claim: first,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(false);
+					return;
+				}
+				expect(first).toBeNull();
+				expect(stopped).toMatchObject({
+					status: "succeeded",
+					payload: {
+						lifecycle: {
+							sourceState: "never-prepared",
+							stopReceipt: null,
+							source: {
+								resourceFence: 0,
+								policy: null,
+								observation: null,
+								deployment: null,
+							},
+						},
+					},
+				});
+				expect(
+					await client`select status,resource_fence::int as fence,resource_observation from platform.session_sandbox_allocations where conversation_id=${conversationId}`,
+				).toEqual([
+					{ status: "stopped", fence: 1, resource_observation: null },
+				]);
+				expect(
+					await client`select count(*)::int as count from platform.audit_events where details->>'conversationId'=${conversationId} and action='conversation.sandbox.never_prepared_stopped'`,
+				).toEqual([{ count: 1 }]);
+				expect(
+					await management.executeManagementCommand(
+						{
+							...stopCommand,
+							command: "restart_agent",
+							expectedRevision: 2,
+							idempotencyKey: "first-restart",
+						},
+						actor,
+					),
+				).toMatchObject({ outcome: "accepted" });
+				const target = structuredClone(verified);
+				target.sourceLifecycleRevision = 6;
+				target.fence = 6;
+				target.revision = 6;
+				target.candidate.deployment.workloadRevision = 6;
+				target.candidate.deployment.fence = 6;
+				target.verified.deployment.workloadRevision = 6;
+				target.verified.deployment.fence = 6;
+				await client`update platform.workload_reconciliations set revision=6,state=${client.json(target)} where agent_id='agent-dispatch'`;
+				expect(
+					await management.recordWorkloadObservation({
+						schemaVersion: 1,
+						observation: "service_ready",
+						observationId: "first-ready",
+						agentId: "agent-dispatch",
+						expectedRevision: 3,
+						workloadRevision: 6,
+						fence: 6,
+						requestId: "first-ready",
+						traceId: "first-ready",
+					}),
+				).toMatchObject({ outcome: "accepted" });
+				active = false;
+				expect(await store.claimSandboxReconciliation(request)).toBeNull();
+				active = true;
+				const prepared = await store.claimSandboxReconciliation(request);
+				if (!prepared)
+					throw new Error("Expected first authorization after restart");
+				expect(prepared).toMatchObject({
+					purpose: "prepare",
+					resourceFence: 2,
+					lifecycle: {
+						sourceState: "never-prepared",
+						preparation: { generation: 1, resourceFence: 2 },
+						stopReceipt: null,
+					},
+				});
+				expect(
+					await store.prepareSandboxReconciliation({
+						claim: prepared,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				expect(
+					await management.executeManagementCommand(
+						{
+							...stopCommand,
+							expectedRevision: 4,
+							idempotencyKey: "second-stop",
+						},
+						actor,
+					),
+				).toMatchObject({ outcome: "accepted" });
+				const [next] =
+					await client`select status,payload from platform.outbox_items where id=${request.itemId}`;
+				expect(next?.status).toBe("pending");
+				expect(next?.payload.lifecycle.sourceState).toBeUndefined();
+				expect(next?.payload.lifecycle.source).toMatchObject({
+					resourceFence: 2,
+					policy: prepared.policy,
+					deployment: prepared.deployment,
+					observation: null,
+				});
+				expect(
+					await store.prepareSandboxReconciliation({
+						claim: prepared,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(false);
+				expect(
+					await client`select count(*)::int as count from platform.conversation_executions`,
+				).toEqual([{ count: 0 }]);
+			} finally {
+				await Promise.all([
+					transaction.close(),
+					managementStore.close(),
+					store.close(),
+				]);
+			}
+		},
+	);
+
 	it.each(["recover", "stop-during-prepare", "lost-observation"] as const)(
 		"rebuilds the same allocation and PVC only after durable stop proof and fresh business authority (%s)",
 		async (mode) => {

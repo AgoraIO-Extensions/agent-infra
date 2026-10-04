@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
 	type AgentManagementWritePlanV1,
 	parseSessionSandboxBindingV1,
@@ -53,12 +54,18 @@ export async function persistSessionSandboxManagementIntents(
 		});
 		const intents = await transaction.execute<{
 			id: string;
+			status: string;
+			attempt_count: number;
+			delivery_fence: string;
 			payload: {
+				schemaVersion?: unknown;
+				conversationId?: unknown;
+				sessionGeneration?: unknown;
 				lifecycle?: SessionSandboxLifecycleV1;
 				sourceSnapshot?: SessionSandboxSourceV1;
 				deployment?: unknown;
 			};
-		}>(sql`select id, payload from platform.outbox_items
+		}>(sql`select id, status, attempt_count, delivery_fence::text, payload from platform.outbox_items
 			where scope_type = 'conversation' and scope_id = ${id} and operation = 'conversation.sandbox.reconcile.v1' for update`);
 		if (intents.length > 1)
 			throw new Error("Ambiguous original Sandbox intent");
@@ -75,6 +82,19 @@ export async function persistSessionSandboxManagementIntents(
 			},
 			previous: intent?.payload.lifecycle ?? null,
 			sourceSnapshot: intent?.payload.sourceSnapshot,
+			originalIntent:
+				intent &&
+				intent.id === `conversation:sandbox:${id}:${sandbox.generation}` &&
+				intent.payload.schemaVersion === 1 &&
+				intent.payload.conversationId === id &&
+				intent.payload.sessionGeneration === sandbox.generation &&
+				Object.keys(intent.payload).length === 3
+					? {
+							status: intent.status,
+							attemptCount: intent.attempt_count,
+							deliveryFence: Number(intent.delivery_fence),
+						}
+					: undefined,
 		});
 		const payload = {
 			schemaVersion: 1,
@@ -87,10 +107,17 @@ export async function persistSessionSandboxManagementIntents(
 			set desired_state = ${next.desiredState}, status = ${next.status}, resource_fence = ${next.resourceFence}, updated_at = ${plan.outboxIntent.occurredAt.toISOString()}
 			where sandbox_id = ${sandbox.sandboxId}`);
 		await transaction.execute(sql`insert into platform.outbox_items
-			(id, scope_type, scope_id, operation, payload, trace_id, request_id, available_at, created_at, updated_at)
+			(id, scope_type, scope_id, operation, payload, trace_id, request_id, available_at, created_at, updated_at, status)
 			values (${intent?.id ?? `conversation:sandbox:${id}:${sandbox.generation}`}, 'conversation', ${id}, 'conversation.sandbox.reconcile.v1',
-				${JSON.stringify(payload)}::jsonb, ${plan.outboxIntent.traceId}, ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt.toISOString()}, ${plan.outboxIntent.occurredAt.toISOString()}, ${plan.outboxIntent.occurredAt.toISOString()})
-			on conflict (id) do update set payload = excluded.payload, status = 'pending', lease_owner = null, lease_expires_at = null,
+				${JSON.stringify(payload)}::jsonb, ${plan.outboxIntent.traceId}, ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt.toISOString()}, ${plan.outboxIntent.occurredAt.toISOString()}, ${plan.outboxIntent.occurredAt.toISOString()}, ${next.settled ? "succeeded" : "pending"})
+			on conflict (id) do update set payload = excluded.payload, status = excluded.status, lease_owner = null, lease_expires_at = null,
 				trace_id = excluded.trace_id, request_id = excluded.request_id, available_at = excluded.available_at, updated_at = excluded.updated_at`);
+		if (next.settled) {
+			await transaction.execute(sql`insert into platform.audit_events
+				(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, occurred_at, details)
+				values (${randomUUID()}, ${plan.auditEvent.traceId}, ${plan.operation.startsWith("observe_") ? "system" : "user"}, ${plan.auditEvent.actorId},
+					'conversation.sandbox.never_prepared_stopped', 'sandbox', ${sandbox.sandboxId}, 'succeeded', ${plan.auditEvent.requestId}, ${sandbox.agentId}, ${plan.auditEvent.occurredAt.toISOString()},
+					${JSON.stringify({ conversationId: id, sourceResourceFence: 0, resourceFence: next.resourceFence, reason: "never-prepared" })}::jsonb)`);
+		}
 	}
 }

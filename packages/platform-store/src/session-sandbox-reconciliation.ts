@@ -132,6 +132,7 @@ async function lockedContext(
 	if (!allocation) return null;
 	const lifecycle =
 		(payload as { lifecycle?: SessionSandboxLifecycleV1 }).lifecycle ?? null;
+	let preparationAllowed = false;
 	if (lifecycle) {
 		const authority = lifecycle.authority;
 		const source = lifecycle.source;
@@ -139,7 +140,6 @@ async function lockedContext(
 			lifecycle.schemaVersion !== 1 ||
 			!authority ||
 			!source ||
-			!source.policy ||
 			authority.kind !== "management" ||
 			authority.applicationId !== management.applicationId ||
 			!Number.isSafeInteger(authority.managementRevision) ||
@@ -154,18 +154,21 @@ async function lockedContext(
 			!Number.isSafeInteger(source.sandbox.generation) ||
 			source.sandbox.generation > sandbox.generation ||
 			!Number.isSafeInteger(source.resourceFence) ||
-			source.resourceFence < 1 ||
+			source.resourceFence < 0 ||
 			source.resourceFence >= Number(allocation.resource_fence) ||
-			source.policy.namespace !== policy.namespace
+			(source.policy && source.policy.namespace !== policy.namespace)
 		)
 			return null;
 		const executions = await transaction<
 			{ status: string; delivery_fence: string }[]
 		>`select status, delivery_fence::text from platform.conversation_executions where conversation_id = ${sandbox.sessionId}`;
-		if (lifecycle.stopReceipt) {
+		if (lifecycle.stopReceipt || lifecycle.sourceState === "never-prepared") {
 			const pending =
 				await transaction`select 1 from platform.conversation_generation_tombstones where conversation_id = ${sandbox.sessionId} and status = 'pending' limit 1`;
 			if (
+				(lifecycle.sourceState === "never-prepared" &&
+					!lifecycle.preparation &&
+					allocation.resource_policy !== null) ||
 				!canPrepareSessionSandboxReplacementV1({
 					sandbox,
 					resourceFence: Number(allocation.resource_fence),
@@ -179,8 +182,11 @@ async function lockedContext(
 				})
 			)
 				return null;
+			preparationAllowed = true;
 		} else {
 			if (
+				!source.policy ||
+				source.resourceFence < 1 ||
 				allocation.desired_state !== "stopped" ||
 				!isDeepStrictEqual(source.policy, allocation.resource_policy) ||
 				!isDeepStrictEqual(source.observation, allocation.resource_observation)
@@ -202,7 +208,7 @@ async function lockedContext(
 		}
 	}
 	if (
-		(allocation.desired_state !== "running" && !lifecycle?.stopReceipt) ||
+		(allocation.desired_state !== "running" && !preparationAllowed) ||
 		conversation.authorization_revision !== agent.authorization_revision ||
 		management.status !== "available" ||
 		management.desiredState !== "running"
@@ -347,7 +353,10 @@ export async function claimSandboxReconciliation(
 	)
 		throw new TypeError("Invalid Sandbox fence");
 	const claimedLifecycle =
-		context.purpose === "prepare" && context.lifecycle?.stopReceipt
+		context.purpose === "prepare" &&
+		context.lifecycle &&
+		(context.lifecycle.stopReceipt ||
+			context.lifecycle.sourceState === "never-prepared")
 			? {
 					...context.lifecycle,
 					preparation: { generation: sandbox.generation, resourceFence },

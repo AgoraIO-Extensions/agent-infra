@@ -97,6 +97,75 @@ function fixture() {
 }
 
 describe("original source stop proof", () => {
+	it("requires an explicit never-prepared witness and consumes it before any authorized creation", () => {
+		const input = fixture();
+		const lifecycle: SessionSandboxLifecycleV1 = {
+			...input.lifecycle,
+			sourceState: "never-prepared",
+			authority: {
+				...input.lifecycle.authority,
+				targetDesiredState: "running",
+			},
+			source: {
+				...input.lifecycle.source,
+				resourceFence: 0,
+				policy: null,
+				observation: null,
+				deployment: null,
+			},
+		};
+		const request = {
+			...input,
+			lifecycle,
+			observation: null,
+			executions: [],
+			generationBarrierPending: false,
+		};
+		expect(canPrepareSessionSandboxReplacementV1(request)).toBe(true);
+		for (const source of [
+			{ ...lifecycle.source, resourceFence: 1 },
+			{ ...lifecycle.source, policy: input.lifecycle.source.policy },
+			{
+				...lifecycle.source,
+				observation: { status: "unknown" as const, resources: [] },
+			},
+			{ ...lifecycle.source, deployment: undefined },
+		])
+			expect(
+				canPrepareSessionSandboxReplacementV1({
+					...request,
+					lifecycle: { ...lifecycle, source },
+				}),
+			).toBe(false);
+		expect(
+			canPrepareSessionSandboxReplacementV1({
+				...request,
+				lifecycle: { ...lifecycle, sourceState: undefined },
+			}),
+		).toBe(false);
+		expect(
+			canPrepareSessionSandboxReplacementV1({
+				...request,
+				generationBarrierPending: true,
+			}),
+		).toBe(false);
+		expect(
+			canPrepareSessionSandboxReplacementV1({
+				...request,
+				executions: [{ status: "unknown", deliveryFence: 0 }],
+			}),
+		).toBe(false);
+		expect(
+			canPrepareSessionSandboxReplacementV1({
+				...request,
+				lifecycle: {
+					...lifecycle,
+					preparation: { generation: 1, resourceFence: 99 },
+				},
+			}),
+		).toBe(false);
+	});
+
 	it.each(["missing", "partial", "changed-uid", "incomplete"] as const)(
 		"refines %s source observations without authorizing readiness",
 		(mode) => {

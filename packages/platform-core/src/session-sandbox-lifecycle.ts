@@ -52,6 +52,8 @@ export interface SessionSandboxLifecycleV1 {
 		readonly targetDesiredState: "running" | "stopped";
 	};
 	readonly source: SessionSandboxSourceV1;
+	/** Original outbox proved no resource preparation was ever authorized. */
+	readonly sourceState?: "never-prepared";
 	readonly stopReceipt: SessionSandboxStopReceiptV1 | null;
 	/** Set atomically before any replacement mutation can be authorized. */
 	readonly preparation?: {
@@ -66,6 +68,11 @@ export function planSessionSandboxManagementTransitionV1(input: {
 	readonly status: string;
 	readonly sourceSnapshot?: SessionSandboxSourceV1;
 	readonly previous: SessionSandboxLifecycleV1 | null;
+	readonly originalIntent?: {
+		readonly status: string;
+		readonly attemptCount: number;
+		readonly deliveryFence: number;
+	};
 }) {
 	const { plan, current, previous } = input;
 	if (
@@ -94,9 +101,29 @@ export function planSessionSandboxManagementTransitionV1(input: {
 		source.sandbox.generation > current.sandbox.generation
 	)
 		throw new TypeError("Sandbox lifecycle source changed");
+	const neverPrepared =
+		source.resourceFence === 0 &&
+		source.policy === null &&
+		source.observation === null &&
+		source.deployment === null &&
+		(retained
+			? previous.sourceState === "never-prepared"
+			: !previous &&
+				!input.sourceSnapshot &&
+				input.status === "allocated" &&
+				input.originalIntent?.status === "pending" &&
+				input.originalIntent.attemptCount === 0 &&
+				input.originalIntent.deliveryFence === 0);
+	const settled = neverPrepared && plan.state.desiredState === "stopped";
+
 	return {
 		resourceFence: current.resourceFence + 1,
-		status: input.status === "unknown" ? "unknown" : "unavailable",
+		status: settled
+			? "stopped"
+			: input.status === "unknown"
+				? "unknown"
+				: "unavailable",
+		settled,
 		desiredState: "stopped" as const,
 		lifecycle: {
 			schemaVersion: 1,
@@ -109,6 +136,7 @@ export function planSessionSandboxManagementTransitionV1(input: {
 				targetDesiredState: plan.state.desiredState,
 			},
 			source,
+			...(neverPrepared ? { sourceState: "never-prepared" as const } : {}),
 			stopReceipt: retained ? previous.stopReceipt : null,
 		} satisfies SessionSandboxLifecycleV1,
 	};
@@ -270,18 +298,11 @@ export function canPrepareSessionSandboxReplacementV1(input: {
 	const { sandbox, resourceFence, lifecycle, observation } = input;
 	const receipt = lifecycle.stopReceipt;
 	if (
-		!receipt ||
 		(lifecycle.preparation &&
 			(lifecycle.preparation.generation !== sandbox.generation ||
 				lifecycle.preparation.resourceFence !== resourceFence)) ||
 		lifecycle.authority.targetDesiredState !== "running" ||
 		input.generationBarrierPending ||
-		!Number.isSafeInteger(receipt.targetGeneration) ||
-		receipt.targetGeneration < lifecycle.source.sandbox.generation ||
-		receipt.targetGeneration > sandbox.generation ||
-		!Number.isSafeInteger(receipt.targetResourceFence) ||
-		receipt.targetResourceFence <= lifecycle.source.resourceFence ||
-		receipt.targetResourceFence > resourceFence ||
 		!input.executions.every(
 			({ status, deliveryFence }) =>
 				["completed", "failed", "cancelled"].includes(status) ||
@@ -289,6 +310,31 @@ export function canPrepareSessionSandboxReplacementV1(input: {
 		)
 	)
 		return false;
+	if (lifecycle.sourceState === "never-prepared") {
+		const source = lifecycle.source;
+		return (
+			!receipt &&
+			source.resourceFence === 0 &&
+			source.policy === null &&
+			source.observation === null &&
+			source.deployment === null &&
+			source.sandbox.generation === sandbox.generation &&
+			Number.isSafeInteger(resourceFence) &&
+			resourceFence > 0 &&
+			(!!lifecycle.preparation || observation === null)
+		);
+	}
+	if (
+		!receipt ||
+		!Number.isSafeInteger(receipt.targetGeneration) ||
+		receipt.targetGeneration < lifecycle.source.sandbox.generation ||
+		receipt.targetGeneration > sandbox.generation ||
+		!Number.isSafeInteger(receipt.targetResourceFence) ||
+		receipt.targetResourceFence <= lifecycle.source.resourceFence ||
+		receipt.targetResourceFence > resourceFence
+	)
+		return false;
+
 	if (
 		!decideSessionSandboxDrainObservationV1({
 			sandbox: { ...sandbox, generation: receipt.targetGeneration },
