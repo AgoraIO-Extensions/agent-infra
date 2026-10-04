@@ -3,7 +3,12 @@
 状态：PM 已接收，待合并；未部署（不改变当前 main）
 
 日期：2026-10-04
-关联：Issue #1304、Workflow Spec §6.3、§7.3、§7.3.1
+关联：Issue #1304
+
+- [Workflow Spec §6.3](../architecture/SPEC-ai-native-development-workflow.md#63-执行环境与-secret-隔离)
+- [Workflow Spec §7.3](../architecture/SPEC-ai-native-development-workflow.md#73-automated-pr-review)
+- [Workflow Spec §7.3.1](../architecture/SPEC-ai-native-development-workflow.md#731-pr-agent-有界分块覆盖目标契约)
+- [Engineering Spec §2](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#2-架构结论)
 
 ## 决策
 
