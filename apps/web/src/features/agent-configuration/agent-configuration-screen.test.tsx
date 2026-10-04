@@ -348,8 +348,9 @@ describe("AgentConfigurationScreen", () => {
 	);
 });
 
-it("shows group visibility before an Owner submits a WeCom binding through the existing configuration request", () => {
+it("shows group visibility and the self-built application setup contract", () => {
 	const onSave = vi.fn();
+	vi.stubGlobal("fetch", vi.fn(async () => Response.json({ status: "not_configured" })));
 	render(
 		<AgentConfigurationScreen
 			agent={agent}
@@ -360,16 +361,7 @@ it("shows group visibility before an Owner submits a WeCom binding through the e
 		/>,
 	);
 	expect(screen.getByText(/群消息和 Agent 回复对群成员可见/)).toBeTruthy();
-	fireEvent.click(screen.getByRole("checkbox", { name: "修改自建应用绑定" }));
-	fireEvent.change(screen.getByLabelText("自建应用配置标识"), {
-		target: { value: "approved_bot" },
-	});
-	fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
-	expect(onSave).toHaveBeenCalledWith(
-		expect.objectContaining({
-			channels: [
-				{ kind: "wecom_app", enabled: true, bindingReference: "approved_bot" },
-			],
-		}),
-	);
+	expect(screen.getByRole("region", { name: "自建应用配置" })).toBeTruthy();
+	expect(screen.getByLabelText("企业 ID")).toBeTruthy();
+	expect(screen.queryByLabelText("自建应用配置标识")).toBeNull();
 });
