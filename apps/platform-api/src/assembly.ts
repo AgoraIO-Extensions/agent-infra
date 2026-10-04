@@ -46,6 +46,7 @@ import type { ConversationAuthorization } from "./http/conversation-routes.js";
 import type { DeploymentConfigurationRoutesDependencies } from "./http/deployment-configuration-routes.js";
 import {
 	type IdentityAdapter,
+	resolveCurrentMaterialGrantActor,
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
@@ -195,6 +196,8 @@ export function assemblePlatformApi(
 		});
 	const applicationMaterialGrants = createApplicationMaterialGrantUseCaseV1({
 		store: applicationMaterialGrantStore,
+		resolveCurrentActor: (userId) =>
+			resolveCurrentMaterialGrantActor(input.identity, userId, randomUUID()),
 		resolveUser: async (userId) => {
 			const user = await resolveCurrentTaskUser(
 				input.identity,
