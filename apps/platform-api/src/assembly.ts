@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	type AgentDefaultRelayKeyDependenciesV1,
-	type ApplicationFoundationRelayKeyEncryptorV1,
 	createAgentConfigurationUseCaseV1,
 	createAgentDefaultRelayKeyUseCaseV1,
 	createAgentManagementV1,
@@ -75,7 +74,6 @@ export interface PlatformApiAssemblyInput {
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly files?: PlatformFileDeploymentV1;
 	readonly databaseUrl: string;
-	readonly applicationFoundationRelayKeyEncryptor?: ApplicationFoundationRelayKeyEncryptorV1;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
@@ -174,9 +172,6 @@ export function assemblePlatformApi(
 			: undefined;
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl: input.databaseUrl,
-		...(input.applicationFoundationRelayKeyEncryptor
-			? { relayKeyEncryptor: input.applicationFoundationRelayKeyEncryptor }
-			: {}),
 	});
 	const revisionTransaction = new PostgresApplicationRevisionTransactionV1({
 		databaseUrl: input.databaseUrl,
@@ -298,6 +293,9 @@ export function assemblePlatformApi(
 			: input.presentAgent.create({ configurationQuery });
 	const foundation = createApplicationFoundationUseCaseV1({
 		transaction: foundationTransaction,
+		...(input.agentDefaultRelayKeys
+			? { defaultRelayKey: input.agentDefaultRelayKeys }
+			: {}),
 		...admissions,
 		...channelAdmission,
 	});

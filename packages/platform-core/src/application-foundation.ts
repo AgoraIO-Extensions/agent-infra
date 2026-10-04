@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-
 import {
 	type AdmittedInitialAgentConfigurationV1,
 	type AgentConfigurationAccessTargetV1,
@@ -12,6 +11,10 @@ import {
 	type InitialAgentConfigurationCommandV2,
 	validateLegacyInitialActionsV1,
 } from "./agent-configuration.js";
+import type {
+	AgentDefaultRelayKeyBindingV1,
+	AgentDefaultRelayKeyDependenciesV1,
+} from "./agent-default-relay-key.js";
 import {
 	type PendingSecretRecordAttachmentResolverV1,
 	type PendingSecretRecordAttachmentsV1,
@@ -28,14 +31,10 @@ export interface CommitApplicationFoundationCommandV2
 	readonly defaultRelayKey?: string;
 }
 
-export interface ApplicationFoundationRelayKeyEncryptorV1 {
-	encrypt(input: {
-		readonly purpose: "agent-default";
-		readonly subjectId: string;
-		readonly keyId: string;
-		readonly keyVersion: number;
-		readonly plaintext: string;
-	}): unknown;
+export interface ApplicationFoundationRelayKeyAttachmentV1 {
+	readonly encrypt: (
+		binding: AgentDefaultRelayKeyBindingV1,
+	) => unknown | Promise<unknown>;
 }
 
 export interface ApplicationFoundationActorContextV1 {
@@ -77,7 +76,6 @@ export interface ApplicationFoundationWritePlanV1 {
 		readonly configuration: AgentConfigurationRecordV2;
 		readonly createdAt: Date;
 	};
-	readonly defaultRelayKey?: string;
 	readonly access: {
 		readonly agentId: string;
 		readonly ownerIds: readonly string[];
@@ -147,6 +145,7 @@ export interface ApplicationFoundationTransactionPortV1 {
 	commit(
 		plan: ApplicationFoundationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
+		defaultRelayKey?: ApplicationFoundationRelayKeyAttachmentV1,
 	): Promise<ApplicationFoundationCommitDecisionV1>;
 }
 
@@ -170,6 +169,10 @@ export interface ApplicationFoundationUseCaseOptionsV1 {
 export interface ApplicationFoundationUseCaseDependenciesV1
 	extends InitialAgentConfigurationAdmissionDependenciesV1 {
 	readonly transaction: ApplicationFoundationTransactionPortV1;
+	readonly defaultRelayKey?: Pick<
+		AgentDefaultRelayKeyDependenciesV1,
+		"candidates" | "encrypt" | "currentIdentity"
+	>;
 }
 
 export type ApplicationFoundationErrorCode =
@@ -507,20 +510,8 @@ export function snapshotApplicationFoundationWritePlanV1(
 				"outboxIntent",
 				"auditEvent",
 			],
-			["defaultRelayKey"],
+			[],
 		);
-		const defaultRelayKey = Object.hasOwn(plan, "defaultRelayKey")
-			? plan.defaultRelayKey
-			: undefined;
-		if (
-			defaultRelayKey !== undefined &&
-			(typeof defaultRelayKey !== "string" ||
-				defaultRelayKey.length < 16 ||
-				defaultRelayKey.length > 8192 ||
-				!/^[\x21-\x7e]+$/.test(defaultRelayKey))
-		) {
-			throw new ApplicationFoundationError("persistence_failed");
-		}
 		const agent = requiredPlanObject(plan.agent, [
 			"agentId",
 			"currentConfigurationRevision",
@@ -621,7 +612,6 @@ export function snapshotApplicationFoundationWritePlanV1(
 				),
 				createdAt: snapshotPlanDate(configurationRevision.createdAt),
 			},
-			...(defaultRelayKey === undefined ? {} : { defaultRelayKey }),
 			access: {
 				agentId: access.agentId as string,
 				ownerIds: snapshotPlanArray(access.ownerIds, 256) as string[],
@@ -862,6 +852,53 @@ export function createApplicationFoundationUseCaseV1(
 		} catch (error) {
 			throw normalizeInitialAdmissionError(error);
 		}
+		let defaultRelayKey: ApplicationFoundationRelayKeyAttachmentV1 | undefined;
+		if (command.defaultRelayKey !== undefined) {
+			const keyValue = command.defaultRelayKey;
+			const ports = dependencies.defaultRelayKey;
+			if (!ports)
+				throw new ApplicationFoundationError("dependency_unavailable");
+			if (
+				admitted.configuration.source.kind !== "standard" ||
+				!admitted.configuration.modelConfiguration
+			)
+				throw new ApplicationFoundationError("not_admitted");
+			try {
+				const visible = await ports.candidates(
+					keyValue,
+					structuredClone(admitted.configuration),
+				);
+				if (
+					admitted.configuration.modelConfiguration.options.some(
+						(option) =>
+							!visible.some(
+								(candidate) =>
+									candidate.endpointId === option.endpointId &&
+									candidate.modelId === option.modelId &&
+									option.reasoningLevels.every((level) =>
+										candidate.reasoningLevels.includes(level),
+									),
+							),
+					)
+				)
+					throw new ApplicationFoundationError("not_admitted");
+				const identity = await ports.currentIdentity(command.traceId);
+				if (
+					!identity ||
+					identity.userId !== actorContext.userId ||
+					identity.accountStatus !== "active"
+				)
+					throw new ApplicationFoundationError("not_authorized");
+				if (identity.authorizationRevision !== admitted.authorizationRevision)
+					throw new ApplicationFoundationError("dependency_unavailable");
+				defaultRelayKey = {
+					encrypt: (binding) => ports.encrypt(binding, keyValue),
+				};
+			} catch (error) {
+				if (error instanceof ApplicationFoundationError) throw error;
+				throw new ApplicationFoundationError("dependency_unavailable");
+			}
+		}
 		let submittedAt: Date;
 		try {
 			const milliseconds = Date.prototype.getTime.call(now());
@@ -895,9 +932,6 @@ export function createApplicationFoundationUseCaseV1(
 				configuration: admitted.configuration,
 				createdAt: submittedAt,
 			},
-			...(command.defaultRelayKey === undefined
-				? {}
-				: { defaultRelayKey: command.defaultRelayKey }),
 			access: {
 				agentId: command.agentId,
 				ownerIds: admitted.ownerIds,
@@ -950,7 +984,11 @@ export function createApplicationFoundationUseCaseV1(
 		let decision: ApplicationFoundationCommitDecisionV1;
 		try {
 			decision = parseCommitDecision(
-				await dependencies.transaction.commit(plan, attachments),
+				await dependencies.transaction.commit(
+					plan,
+					attachments,
+					defaultRelayKey,
+				),
 				result,
 			);
 		} catch (error) {

@@ -130,7 +130,6 @@ export function createProductionPlatformApiAssemblyInputV1(
 				}
 			: undefined;
 	return {
-		applicationFoundationRelayKeyEncryptor: relayKeyEncryptor,
 		...(validatePersonalRelayKey
 			? { validateDefaultRelayKey: validatePersonalRelayKey }
 			: {}),
