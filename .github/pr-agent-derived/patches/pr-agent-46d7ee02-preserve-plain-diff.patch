@@ -1,7 +1,7 @@
 --- a/pr_agent/algo/language_handler.py
 +++ b/pr_agent/algo/language_handler.py
-@@ -85,7 +85,7 @@
-     return {k: v for k, v in (languages or {}).items() if isinstance(v, (int, float))}
+@@ -73,7 +73,7 @@
+     return get_language
  
  
 -def sort_files_by_main_languages(languages: Dict, files: list):
@@ -9,7 +9,7 @@
      """
      Sort files by their main language, put the files that are in the main language first and the rest files after
      """
-@@ -107,7 +107,7 @@
+@@ -94,7 +94,7 @@
      get_language = build_language_file_matcher(language_extension_map_org)
  
      # filter out files bad extensions
@@ -20,8 +20,8 @@
      # and the rest files after, map languages_sorted to their respective files
 --- a/pr_agent/algo/pr_processing.py
 +++ b/pr_agent/algo/pr_processing.py
-@@ -166,7 +166,10 @@
-     diff_files = git_provider.get_diff_files()
+@@ -65,7 +65,10 @@
+         raise
  
      # get pr languages
 -    pr_languages = sort_files_by_main_languages(git_provider.get_languages(), diff_files)
@@ -32,8 +32,8 @@
      if pr_languages:
          try:
              get_logger().info(f"PR main language: {pr_languages[0]['language']}")
-@@ -292,7 +295,10 @@
-     diff_files = git_provider.get_diff_files()
+@@ -159,7 +162,10 @@
+         raise
  
      # get pr languages
 -    pr_languages = sort_files_by_main_languages(git_provider.get_languages(), diff_files)
@@ -44,8 +44,8 @@
      if pr_languages:
          try:
              get_logger().info(f"PR main language: {pr_languages[0]['language']}")
-@@ -837,7 +843,10 @@
-     diff_files = git_provider.get_diff_files()
+@@ -414,7 +420,10 @@
+         raise
  
      # Sort files by main language
 -    pr_languages = sort_files_by_main_languages(git_provider.get_languages(), diff_files)
@@ -58,12 +58,12 @@
      PATCH_EXTRA_LINES_BEFORE = get_settings().config.patch_extra_lines_before
 --- a/pr_agent/git_providers/plain_diff_provider.py
 +++ b/pr_agent/git_providers/plain_diff_provider.py
-@@ -22,6 +22,8 @@
+@@ -26,6 +26,8 @@
+     Treat the pr_url arg as an ignored sentinel.
+     """
  
- 
- class PlainDiffGitProvider(GitProvider):
 +    preserve_all_files_for_plain_diff = True
 +
-     """Provider that reviews a raw unified diff (stdin/file), no hosting platform.
- 
-     Read the diff text and optional output paths from global settings
+     def __init__(self, pr_url=None, incremental=False):
+         diff_text = get_settings().get("plain_diff.content", None)
+         if not diff_text or not str(diff_text).strip():
