@@ -77,6 +77,8 @@ function fakeStore(
 					lockUserDisabled: async () => false,
 					applicationExists: async () => options.applicationExists ?? true,
 					recipientEligible: async () => options.recipientEligible ?? true,
+					expireDeliveryReceipts: async () => {},
+					hasInFlightDelivery: async () => false,
 					lockGrant: async () => {
 						options.afterGrantLocked?.();
 						return state.row;
