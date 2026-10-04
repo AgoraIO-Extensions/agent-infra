@@ -255,6 +255,42 @@ describe("original Store actual-Bearer Task API supplier", () => {
 		).rejects.toMatchObject({ code: "authentication_required" });
 		expect(reads).toBe(2);
 	}, 10_000);
+	it.each(["user", "application"] as const)(
+		"reads %s history with no allocation without granting command authority or backfilling",
+		async (kind) => {
+			const conversationId = `conversation-${kind}`;
+			await client`delete from platform.session_sandbox_allocations where conversation_id=${conversationId}`;
+			const tx = store();
+			const request = { material: material[kind], conversationId };
+			expect(
+				await tx.authorizeTaskApi({ ...request, operation: "agent:read" }),
+			).toMatchObject({
+				actorId: "same-id",
+				taskBoundary: { principal: { kind, id: "same-id" } },
+			});
+			expect(
+				await tx.authorizeTaskApi({ ...request, operation: "agent:use" }),
+			).toBeNull();
+			expect(
+				await tx.authorizeTaskApi({
+					...request,
+					material: material[kind === "user" ? "application" : "user"],
+					operation: "agent:read",
+				}),
+			).toBeNull();
+			expect(
+				await client`select sandbox_id from platform.session_sandbox_allocations where conversation_id=${conversationId}`,
+			).toEqual([]);
+			// A persisted allocation fact identifies a new Session even before its first Execution.
+			await client`insert into platform.conversation_audit_events
+				(id,conversation_id,agent_id,actor_id,action,trace_id,request_id,occurred_at,details)
+				values (${`allocated-${kind}`},${conversationId},'agent','same-id','conversation.sandbox.allocated','trace','request',now(),'{}')`;
+			expect(
+				await tx.authorizeTaskApi({ ...request, operation: "agent:read" }),
+			).toBeNull();
+		},
+	);
+
 	it("preserves legacy typed API channel and refuses missing current user directory", async () => {
 		await client`delete from platform.session_sandbox_allocations where conversation_id = ${"conversation-application"}`;
 		await client`update platform.conversations set channel_id='api:application' where id='conversation-application'`;

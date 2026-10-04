@@ -1139,10 +1139,10 @@ export class PostgresConversationExecutionTransactionV1
 				},
 			});
 			if (input.conversationId !== undefined) {
-				const conversation = await lockConversation(
-					transaction,
-					input.conversationId,
-				);
+				const conversation =
+					input.operation === "agent:read"
+						? await lockConversationForRead(transaction, input.conversationId)
+						: await lockConversation(transaction, input.conversationId);
 				if (
 					!conversation ||
 					conversation.agentId !== agentId ||

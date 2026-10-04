@@ -18,7 +18,11 @@ import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
  * A present but mismatched allocation must never fall through as legacy history.
  */
 export const conversationSandboxReadBindingSql = `
- (s.sandbox_id is null or (
+ ((s.sandbox_id is null and not exists (
+   select 1 from platform.conversation_audit_events allocation
+   where allocation.conversation_id = c.id
+     and allocation.action = 'conversation.sandbox.allocated'
+ )) or (
    s.agent_id = c.agent_id and s.actor_id = c.actor_id
    and s.principal_type = c.principal_type and s.channel_id = c.channel_id
    and s.session_generation = c.session_generation

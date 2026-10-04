@@ -751,3 +751,26 @@ it("preserves unallocated history and replay without treating missing or corrupt
 		(await query.list(scope, "legacy-agent", { limit: 10 })).items,
 	).toEqual([]);
 });
+
+it("does not treat a newly allocated empty Session with a missing allocation as historical", async () => {
+	const scope = { actorId: "new-user", channelId: "web" };
+	await client`insert into platform.conversations
+		(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision)
+		values ('lost-allocation','new-agent','new-user','web','ready',1,'auth')`;
+	await client`insert into platform.conversation_audit_events
+		(id,conversation_id,agent_id,actor_id,action,trace_id,request_id,occurred_at,details)
+		values ('allocation-fact','lost-allocation','new-agent','new-user','conversation.sandbox.allocated','trace','request',now(),'{}')`;
+	expect(await query.get(scope, "lost-allocation")).toBeUndefined();
+	expect(
+		await query.getAuthorizationTarget(scope, "lost-allocation"),
+	).toBeUndefined();
+	expect(
+		await query.replay(scope, "lost-allocation", undefined),
+	).toBeUndefined();
+	expect((await query.list(scope, "new-agent", { limit: 10 })).items).toEqual(
+		[],
+	);
+	expect(
+		await client`select sandbox_id from platform.session_sandbox_allocations where conversation_id='lost-allocation'`,
+	).toEqual([]);
+});
