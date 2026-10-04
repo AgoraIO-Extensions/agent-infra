@@ -18,6 +18,16 @@ Primary：[Issue #1304](https://github.com/AgoraIO-Extensions/agent-infra/issues
 
 工程 Workflow Spec §7.3 仍是权威：必须有 exact current-head provider 证据、确定性的 token decision log、同一 run/attempt 的 native Review publication receipt、专用且只检查的 Coverage publication，并对缺失、非法、截断、旧 head 或 provider 不匹配输出 fail closed。
 
+## 推荐决策与精确改动面
+
+推荐先向上游提交并等待官方 PR-Agent release，目标改动只在 `pr_agent/git_providers/plain_diff_provider.py` 的 `PlainDiffGitProvider.get_diff_files()`：解析 `plain_diff.content` 后保留每一个 `FilePatchInfo`，不得再调用 GitHub provider 的 `is_valid_file`/`bad_extensions` 过滤；继续执行路径安全检查、patch 解析、hunk 规范化和 patch-only 模式。这样只修复 plain-diff 内容覆盖，不改变 GitHub provider 的产品策略。
+
+若上游 release 在本票期限内不可用，备选是构建一个明确标注为 **derived PR-Agent runtime** 的短期镜像，只携带上述单文件补丁，生成并固定新的 OCI image digest。workflow 仅替换 image pin，保留现有 `--diff-file`、scope receipt、Publisher、Coverage 和 fail-closed 判据；Review receipt 与 Coverage 必须把 `provider=plain-diff-derived`、source commit、patch SHA-256、image digest 写入同一身份记录。该路径不能声称“官方 provider conformance”，必须在架构 Spec §7.3 的 provider 资格条款增加“经批准的 derived runtime 需披露 source/patch/digest，且不得转移官方 provider 证据”的明确例外，并以 ADR 记录回退期限；PRD 不需要改动。
+
+没有已验证的官方配置开关可以关闭 `pnpm-lock.yaml` 过滤；`--diff-file` 已存在且本次失败证明仅启用该入口不足。替代整个 provider 或接受 filtered-filename metadata 都扩大了信任边界，列为拒绝方案。
+
+实现后若任一身份、字节或输出校验失败，回退到当前固定官方 image 并让 Coverage 保持失败；不得回退到允许合并的 waiver。负例必须覆盖 root/nested lockfile-only、mixed diff、空文件、缺失文件、截断、非法 unified diff、路径穿越、旧 head、错误 run/attempt、provider/image/patch SHA 不匹配，以及模型未调用和 receipt 缺失。
+
 ## 有界提案
 
 在完成 plain-diff 故障诊断后，只接受以下两类修复之一：
