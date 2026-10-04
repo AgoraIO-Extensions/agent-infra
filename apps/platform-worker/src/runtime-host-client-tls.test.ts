@@ -57,8 +57,8 @@ const originalBinding = {
 	},
 };
 
-async function listen(server: Server) {
-	server.listen(0, "127.0.0.1");
+async function listen(server: Server, port = 0) {
+	server.listen(port, "127.0.0.1");
 	await once(server, "listening");
 	const address = server.address();
 	if (!address || typeof address === "string")
@@ -143,6 +143,73 @@ describe("Runtime client real TLS transport", () => {
 			await shortLived.cleanup();
 		}
 	}, 10_000);
+	it("withdraws old CA trust and closes its existing streams on transport replacement", async () => {
+		const replacement = await runtimeTlsFixture();
+		const overlap = createRuntimeTlsTransport(
+			`${material.ca}\n${replacement.ca}`,
+		);
+		const current = createRuntimeTlsTransport(replacement.ca);
+		let oldRequests = 0;
+		const previousServer = createServer(material, (_, response) => {
+			oldRequests++;
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.write(": connected\n\n");
+		});
+		const currentServer = createServer(replacement, (_, response) =>
+			response.end("current issuer"),
+		);
+		try {
+			const previousOrigin = await listen(previousServer);
+			const currentOrigin = await listen(currentServer);
+			const stream = await overlap.fetch(previousOrigin);
+			const interrupted = expect(stream.text()).rejects.toThrow();
+			expect(await (await overlap.fetch(currentOrigin)).text()).toBe(
+				"current issuer",
+			);
+			// Model the existing deployment restart boundary: discard the old pool
+			// before using a new explicitly reduced trust set. No hot reload.
+			await overlap.close();
+			await interrupted;
+			await expect(overlap.fetch(previousOrigin)).rejects.toThrow();
+			await expect(current.fetch(previousOrigin)).rejects.toThrow();
+			expect(oldRequests).toBe(1);
+			expect(await (await current.fetch(currentOrigin)).text()).toBe(
+				"current issuer",
+			);
+		} finally {
+			await overlap.close();
+			await current.close();
+			await close(previousServer);
+			await close(currentServer);
+			await replacement.cleanup();
+		}
+	});
+	it("accepts a renewed same-identity leaf after Host replacement without replacing the Worker transport", async () => {
+		const renewed = await runtimeTlsFixture({
+			issuerDirectory: material.directory,
+		});
+		const previousServer = createServer(material, (_, response) =>
+			response.end("previous leaf"),
+		);
+		const replacementServer = createServer(renewed, (_, response) =>
+			response.end("renewed leaf"),
+		);
+		try {
+			expect(renewed.ca).toBe(material.ca);
+			expect(renewed.cert).not.toBe(material.cert);
+			const origin = await listen(previousServer);
+			expect(await (await transport.fetch(origin)).text()).toBe(
+				"previous leaf",
+			);
+			await close(previousServer);
+			await listen(replacementServer, Number(new URL(origin).port));
+			expect(await (await transport.fetch(origin)).text()).toBe("renewed leaf");
+		} finally {
+			if (previousServer.listening) await close(previousServer);
+			if (replacementServer.listening) await close(replacementServer);
+			await renewed.cleanup();
+		}
+	});
 	it("sends the existing token and Grant only through a CA- and hostname-verified connection", async () => {
 		let received: { authorization?: string; body: string } | undefined;
 		const server = createServer(material, async (incoming, response) => {

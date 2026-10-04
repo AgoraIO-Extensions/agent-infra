@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,7 @@ export async function runtimeTlsFixture(
 		dnsNames?: readonly string[];
 		days?: number;
 		caDays?: number;
+		issuerDirectory?: string;
 		extendedKeyUsage?: string;
 		commonName?: string;
 		expiresAt?: Date;
@@ -19,23 +20,31 @@ export async function runtimeTlsFixture(
 		execFileSync("openssl", args, { cwd: directory, stdio: "ignore" });
 	const cleanup = () => rm(directory, { recursive: true, force: true });
 	try {
-		run(
-			"req",
-			"-x509",
-			"-newkey",
-			"rsa:2048",
-			"-nodes",
-			"-days",
-			String(options.caDays ?? 2),
-			"-subj",
-			"/CN=Runtime test CA",
-			"-addext",
-			"basicConstraints=critical,CA:TRUE",
-			"-keyout",
-			"ca.key",
-			"-out",
-			"ca.crt",
-		);
+		if (options.issuerDirectory) {
+			for (const name of ["ca.crt", "ca.key"]) {
+				await copyFile(
+					join(options.issuerDirectory, name),
+					join(directory, name),
+				);
+			}
+		} else
+			run(
+				"req",
+				"-x509",
+				"-newkey",
+				"rsa:2048",
+				"-nodes",
+				"-days",
+				String(options.caDays ?? 2),
+				"-subj",
+				"/CN=Runtime test CA",
+				"-addext",
+				"basicConstraints=critical,CA:TRUE",
+				"-keyout",
+				"ca.key",
+				"-out",
+				"ca.crt",
+			);
 		run(
 			"req",
 			"-new",
