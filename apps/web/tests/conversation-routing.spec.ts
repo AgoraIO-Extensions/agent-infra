@@ -6,7 +6,7 @@ import {
 	ConversationProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import {
 	event,
 	history,
@@ -544,6 +544,28 @@ for (const compact of [false, true]) {
 	});
 }
 
+async function assertNarrowHistoryPosition(
+	page: Page,
+	info: TestInfo,
+	state: string,
+) {
+	const header = await page.locator(".conversation-header").boundingBox();
+	const panel = await page.locator(".conversation-history-panel").boundingBox();
+	if (!header || !panel)
+		throw new Error("Expected header and personal history");
+	const gap = panel.y - header.y - header.height;
+	await info.attach(`history-${state}-${page.viewportSize()?.width}-geometry`, {
+		body: JSON.stringify({ header, panel, gap }),
+		contentType: "application/json",
+	});
+	// Only the normal margin and gutter may separate the header from history.
+	expect(gap).toBeGreaterThanOrEqual(0);
+	expect(gap).toBeLessThanOrEqual(40);
+	await expect(
+		page.getByRole("button", { name: "返回对话", exact: true }),
+	).toBeVisible();
+}
+
 test("collapses narrow history while preserving the draft, SSE and original cross-Agent record", async ({
 	page,
 }, info) => {
@@ -857,7 +879,17 @@ test("keeps canonical chat and long personal-history titles usable at 320 by 370
 	await expect(message).toBeFocused();
 	await message.fill("受控中文草稿，导航不会提交。");
 	await page.getByRole("button", { name: "个人历史", exact: true }).click();
+	await assertNarrowHistoryPosition(page, info, "recent");
+	await captureDesignContract(page, info, "compact-history-recent");
 	await page.getByRole("button", { name: "此 Agent 的全部历史" }).click();
+	await assertNarrowHistoryPosition(page, info, "full");
+	await captureDesignContract(page, info, "compact-history-full");
+	await expect(message).toHaveValue("受控中文草稿，导航不会提交。");
+	await page.reload();
+	await expect(page).toHaveURL(/\?view=history$/);
+	await expect(page.getByRole("heading", { name: "个人历史" })).toBeVisible();
+	await assertNarrowHistoryPosition(page, info, "refreshed");
+	await captureDesignContract(page, info, "compact-history-refreshed");
 	const original = page.getByRole("link", { name: /^受控历史 conversation-1/ });
 	await original.scrollIntoViewIfNeeded();
 	await original.focus();
@@ -1003,9 +1035,11 @@ test("exported design viewport matrix conversation", async ({ page }, info) => {
 			await expect(
 				panel.getByRole("region", { name: "最近对话" }),
 			).toBeVisible();
+			await assertNarrowHistoryPosition(page, info, "recent");
 			await captureDesignContract(page, info, "conversation-recent");
 			await panel.getByRole("button", { name: "此 Agent 的全部历史" }).click();
 			await expect(page).toHaveURL(/\?view=history$/);
+			await assertNarrowHistoryPosition(page, info, "full");
 			await captureDesignContract(page, info, "conversation-agent-history");
 			await page.getByRole("button", { name: "返回对话", exact: true }).click();
 			await expect(input).toBeInViewport({ ratio: 1 });

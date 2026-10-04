@@ -815,6 +815,9 @@ a[class~="group/button"] {
 	.conversation-history-panel {
 		display: none;
 	}
+	.conversation-columns[data-history-open="true"] {
+		grid-template-rows: auto minmax(0, 1fr);
+	}
 	.conversation-columns[data-history-open="true"] .conversation-history-panel {
 		display: block;
 	}
