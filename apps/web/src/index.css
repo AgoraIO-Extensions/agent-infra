@@ -587,6 +587,19 @@ a[class~="group/button"] {
 .conversation-heading-copy {
 	min-width: 0;
 }
+.conversation-agent-status {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 8px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+.conversation-agent-status > span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
 .conversation-header h1 {
 	font-family: var(--font-display);
 	font-size: 28px;
@@ -805,7 +818,9 @@ a[class~="group/button"] {
 	.conversation-columns[data-history-open="true"] .conversation-history-panel {
 		display: block;
 	}
-	.conversation-columns[data-history-open="true"] .chat-workspace {
+	.conversation-columns[data-history-open="true"]
+		.chat-workspace
+		> :not(.conversation-header) {
 		display: none;
 	}
 }
@@ -853,6 +868,24 @@ a[class~="group/button"] {
 	}
 	.chat-message-body {
 		padding: 10px 12px;
+	}
+}
+
+@media (max-width: 430px) {
+	.conversation-header {
+		gap: 6px;
+		margin-bottom: 8px;
+	}
+	.conversation-heading-copy {
+		flex: 0 0 100%;
+	}
+	.conversation-agent-status {
+		gap: 4px;
+		margin-top: 4px;
+		font-size: 11px;
+	}
+	.chat-thread.space-y-5 > :not([hidden]) ~ :not([hidden]) {
+		margin-top: 8px;
 	}
 }
 

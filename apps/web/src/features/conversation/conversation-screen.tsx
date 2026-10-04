@@ -11,8 +11,14 @@ import {
 	useState,
 } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "../../components/ui/button.js";
 import { getAgentV2 } from "../../pilot/generated-v2/sdk.gen.js";
+import {
+	agentConversationSourceLabel,
+	agentManagementStatusLabels,
+	agentServiceAvailabilityLabel,
+} from "../agent-management-status.js";
 import { ActiveConversation } from "./active-conversation.js";
 import { NewConversation, PersonalHistory } from "./conversation-navigation.js";
 import { ConversationReadError, responseFailure } from "./execution-detail.js";
@@ -163,67 +169,80 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		agent.source.interactionMode === "self-managed";
 	return (
 		<section className="chat-layout">
-			<header className="conversation-header">
-				<div className="conversation-heading-copy">
-					<Link
-						to="/agents"
-						search={{ mode: "conversation" }}
-						aria-label="切换 Agent"
-						title="切换 Agent"
-						className="conversation-agent-switch"
-					>
-						<p className="conversation-eyebrow">工作区 / 对话</p>
-						<h1 className="font-semibold text-[26px]">
-							{agent.name}
-							<ChevronDown aria-hidden="true" className="ml-1 inline size-3" />
-						</h1>
-					</Link>
-					{!selfManaged && (
-						<p className="conversation-summary text-muted-foreground text-sm">
-							个人 Web 对话 · 离开页面不会取消已提交的任务
-						</p>
-					)}
-				</div>
-				<div className="conversation-heading-actions">
-					<Button
-						variant="outline"
-						ref={historyToggle}
-						className="conversation-history-toggle"
-						aria-expanded={historyExpanded}
-						aria-controls={`${instanceId}-history`}
-						onClick={() => {
-							if (historyExpanded) {
-								setRecentOpen(false);
-								setHistory(false);
-								historyToggle.current?.focus();
-							} else {
-								setRecentOpen(true);
-							}
-						}}
-					>
-						{historyExpanded ? (
-							<ArrowLeft aria-hidden="true" />
-						) : (
-							<History aria-hidden="true" />
-						)}
-						{historyExpanded ? "返回对话" : "个人历史"}
-					</Button>
-					<Button
-						variant="outline"
-						disabled={!available || selfManaged}
-						onClick={() => {
-							setRecentOpen(false);
-							setInternalHistory(false);
-							onConversationChange(undefined);
-						}}
-					>
-						<Plus aria-hidden="true" />
-						新建会话
-					</Button>
-				</div>
-			</header>
 			<div className="conversation-columns" data-history-open={historyExpanded}>
 				<div className="chat-workspace">
+					<header className="conversation-header">
+						<div className="conversation-heading-copy">
+							<Link
+								to="/agents"
+								search={{ mode: "conversation" }}
+								aria-label="切换 Agent"
+								title="切换 Agent"
+								className="conversation-agent-switch"
+							>
+								<p className="conversation-eyebrow">工作区 / 对话</p>
+								<h1 className="font-semibold text-[26px]">
+									{agent.name}
+									<ChevronDown
+										aria-hidden="true"
+										className="ml-1 inline size-3"
+									/>
+								</h1>
+							</Link>
+							<div className="conversation-agent-status">
+								<span>{agentConversationSourceLabel(agent)}</span>
+								<Badge variant="outline" data-status={agent.managementStatus}>
+									管理：{agentManagementStatusLabels[agent.managementStatus]}
+								</Badge>
+								{agent.serviceAvailability && (
+									<Badge
+										variant="secondary"
+										data-status={agent.serviceAvailability}
+									>
+										服务：
+										{agentServiceAvailabilityLabel(agent.serviceAvailability)}
+									</Badge>
+								)}
+							</div>
+						</div>
+						<div className="conversation-heading-actions">
+							<Button
+								variant="outline"
+								ref={historyToggle}
+								className="conversation-history-toggle"
+								aria-expanded={historyExpanded}
+								aria-controls={`${instanceId}-history`}
+								onClick={() => {
+									if (historyExpanded) {
+										setRecentOpen(false);
+										setHistory(false);
+										historyToggle.current?.focus();
+									} else {
+										setRecentOpen(true);
+									}
+								}}
+							>
+								{historyExpanded ? (
+									<ArrowLeft aria-hidden="true" />
+								) : (
+									<History aria-hidden="true" />
+								)}
+								{historyExpanded ? "返回对话" : "个人历史"}
+							</Button>
+							<Button
+								variant="outline"
+								disabled={!available || selfManaged}
+								onClick={() => {
+									setRecentOpen(false);
+									setInternalHistory(false);
+									onConversationChange(undefined);
+								}}
+							>
+								<Plus aria-hidden="true" />
+								新建会话
+							</Button>
+						</div>
+					</header>
 					{!available && (
 						<Alert role="status" className="mb-5 bg-muted">
 							<AlertDescription>

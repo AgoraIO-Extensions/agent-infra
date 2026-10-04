@@ -14,11 +14,11 @@ import {
 	type AgentDiscoveryState,
 	canStartPlatformConversation,
 } from "../agent-discovery/agent-discovery.js";
+import { agentChannelKindLabels } from "../agent-discovery/agent-discovery-screen.js";
 import {
-	agentChannelKindLabels,
+	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
-} from "../agent-discovery/agent-discovery-screen.js";
-import { agentManagementStatusLabels } from "../agent-management-status.js";
+} from "../agent-management-status.js";
 import type {
 	CollectionReadFailureReason,
 	CollectionReadUnavailable,
