@@ -1,9 +1,1 @@
 default_permissions = ":workspace"
-
-[permissions.github-worker]
-extends = ":workspace"
-
-[permissions.github-worker.network]
-enabled = true
-mode = "full"
-allow_local_binding = false
