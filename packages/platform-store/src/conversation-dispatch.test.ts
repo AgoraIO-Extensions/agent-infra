@@ -502,7 +502,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					await client.unsafe(`create function platform.fail_never_prepared_audit() returns trigger language plpgsql as $$
 					begin if new.action = 'conversation.sandbox.never_prepared_stopped' then raise exception 'controlled audit failure'; end if; return new; end $$`);
 					await client.unsafe(
-						`create trigger fail_never_prepared_audit before insert on platform.audit_events for each row execute function platform.fail_never_prepared_audit()`,
+						"create trigger fail_never_prepared_audit before insert on platform.audit_events for each row execute function platform.fail_never_prepared_audit()",
 					);
 					try {
 						await expect(
@@ -799,6 +799,37 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					await client`update platform.outbox_items set available_at = now() where id = ${request.itemId}`;
 					drain = await store.claimSandboxReconciliation(request);
 					if (!drain) throw new Error("Expected missing source retry");
+					const partial = {
+						status: "observed" as const,
+						resources: originalResources.filter(
+							(resource: { kind: string }) =>
+								resource.kind === "ServiceAccount",
+						),
+					};
+					expect(
+						await store.recordSandboxObservation({
+							claim: drain,
+							observation: partial,
+						}),
+					).toBe("unknown");
+					expect(
+						await store.prepareSandboxReconciliation({
+							claim: drain,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(false);
+					const [partialRow] =
+						await client`select status,resource_observation from platform.session_sandbox_allocations where conversation_id = ${work.conversationId}`;
+					expect(partialRow).toMatchObject({
+						status: "unknown",
+						resource_observation: partial,
+					});
+					await client`update platform.outbox_items set available_at = now() where id = ${request.itemId}`;
+					drain = await store.claimSandboxReconciliation(request);
+					if (!drain) throw new Error("Expected partial source retry");
+					expect(drain.lifecycle?.source.observation).toEqual(partial);
+					expect(drain.lifecycle?.stopReceipt).toBeNull();
+					expect(drain.purpose).toBe("drain");
 					expect(
 						await store.recordSandboxObservation({
 							claim: drain,

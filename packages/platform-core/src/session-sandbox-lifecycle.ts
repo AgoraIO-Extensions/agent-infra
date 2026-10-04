@@ -162,10 +162,19 @@ export function decideSessionSandboxDrainObservationV1(input: {
 		stopReceipt: null,
 	});
 	// A prepare may have created resources before its observation committed.
-	// Adopt only a complete owned readback, preserving every previously known UID.
+	// Keep partial owned readbacks too, preserving every previously known UID.
 	// This is evidence refinement, never readiness or stop/absence proof.
+	const resources = Array.isArray(observation.resources)
+		? observation.resources
+		: [];
+	const pod = resources.find((resource) => resource?.kind === "Pod");
+	const controller = resources.find(
+		(resource) => resource?.kind === "StatefulSet",
+	);
 	if (
 		observation.status === "observed" &&
+		resources.length > 0 &&
+		(!pod || !controller || pod.controllerUid === controller.uid) &&
 		!observation.sourceStop &&
 		source.policy &&
 		!lifecycle.stopReceipt &&
@@ -176,7 +185,7 @@ export function decideSessionSandboxDrainObservationV1(input: {
 				policy: source.policy,
 				desiredState: "running",
 			},
-			{ ...observation, status: "ready" },
+			observation,
 		) &&
 		(source.observation?.resources ?? []).every((prior) =>
 			observation.resources.some(

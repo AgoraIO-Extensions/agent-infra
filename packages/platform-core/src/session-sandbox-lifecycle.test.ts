@@ -203,8 +203,92 @@ describe("original source stop proof", () => {
 				stopReceipt: null,
 			});
 			expect(decision.observation).toEqual(
-				mode === "missing" || mode === "partial" ? observation : prior,
+				mode === "changed-uid" ? prior : observation,
 			);
+		},
+	);
+
+	it.each([
+		"grow",
+		"shrink",
+		"pvc-swap",
+		"controller-late",
+		"controller-conflict",
+		"controller-change",
+		"wrong-namespace",
+		"duplicate",
+		"empty",
+	] as const)(
+		"retains partial source facts without granting stop or replacement (%s)",
+		(mode) => {
+			const input = fixture();
+			const full = input.lifecycle.source.observation!;
+			const pod = { ...full.resources[0]!, controllerUid: "controller-uid" };
+			const pvc = full.resources.find(
+				(resource) => resource.kind === "PersistentVolumeClaim",
+			)!;
+			const prior: SessionSandboxObservationV1 = {
+				status: "observed",
+				resources: [pod, pvc],
+			};
+			let resources = [...prior.resources];
+			if (mode === "grow") resources.push(full.resources[1]!);
+			if (mode === "shrink") resources = [pod];
+			if (mode === "pvc-swap")
+				resources = [pod, { ...pvc, uid: "foreign-pvc" }];
+			if (mode === "controller-late" || mode === "controller-conflict")
+				resources.push({
+					kind: "StatefulSet",
+					namespace: pod.namespace,
+					name: pod.name,
+					uid:
+						mode === "controller-late"
+							? "controller-uid"
+							: "foreign-controller",
+					resourceVersion: "2",
+				});
+			if (mode === "controller-change")
+				resources = [{ ...pod, controllerUid: "foreign-controller" }, pvc];
+			if (mode === "wrong-namespace")
+				resources.push({ ...full.resources[1]!, namespace: "foreign" });
+			if (mode === "duplicate") resources.push(pvc);
+			if (mode === "empty") resources = [];
+			const observation: SessionSandboxObservationV1 = {
+				status: "observed",
+				resources,
+			};
+			const lifecycle = {
+				...input.lifecycle,
+				source: { ...input.lifecycle.source, observation: prior },
+			};
+			const decision = decideSessionSandboxDrainObservationV1({
+				...input,
+				lifecycle,
+				observation,
+			});
+			expect(decision).toMatchObject({
+				status: "unknown",
+				finished: false,
+				stopReceipt: null,
+			});
+			expect(decision.observation).toEqual(
+				mode === "grow" || mode === "controller-late" ? observation : prior,
+			);
+			expect(
+				canPrepareSessionSandboxReplacementV1({
+					...input,
+					lifecycle: {
+						...lifecycle,
+						authority: {
+							...lifecycle.authority,
+							targetDesiredState: "running",
+						},
+					},
+					observation: decision.observation,
+					executions: [],
+					generationBarrierPending: false,
+				}),
+			).toBe(false);
 		},
 	);
 
