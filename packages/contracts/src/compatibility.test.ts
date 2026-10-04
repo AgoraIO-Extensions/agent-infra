@@ -575,6 +575,8 @@ describe("contract compatibility command", () => {
 			),
 		);
 		delete current.paths["/api/v2/applications/{applicationId}"];
+		delete current.components.schemas.AgentApplicationCreateRequestV2.properties
+			.defaultRelayKey;
 		const path = "/api/v2/applications";
 		const previous = structuredClone(current);
 		delete previous.paths[path];
