@@ -329,6 +329,32 @@ M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通�
 
 `platform-worker` 到 Agent Pod 使用遵循 [Contract Schema authority](#64-contract-schema-authority) 的版本化 OpenAPI HTTP 契约；Runtime 增量事件使用由 JSON Schema 校验的内部 SSE。内部接口通过部署提供的服务身份和 mTLS 或等价机制认证，并验证执行授权，不因位于集群内而跳过鉴权。
 
+#### #1164 Proposed：内部 Runtime TLS 契约（未批准）
+
+本段是 #1164 的 **proposed** 文档提案，不是已批准的产品或部署结论；在具名人工决定、适用 Standards/Spec 与 CODEOWNER 评审完成前，不能被 #504 或任何实现 PR 当作实施授权。它只约束 Agent 平台的 `platform-worker`、Runtime Host 和其实际内部 Service，不改变 Connection 的身份、Grant 或外部调用契约。
+
+**推荐机制：服务端 TLS + 既有部署 service token + 签名 Grant。** 若部署把 business/control 分成两个 Service，Runtime Host 为两者提供 TLS server leaf；若保持当前 HLD 的单一 Agent Service，则两条路径共享该 Service origin，不能在本提案中臆造第二个 Service。Worker 仅连接 `https` origin，并以部署提供的 CA 验证链、以实际 Service DNS 验证 hostname；有效证书绑定可信 Agent、namespace 和实际 Service DNS，不使用用户 Ingress 证书代替内部身份。现有 `WorkloadRuntimeAuthV1.serviceTokenSecret`（仅含 Kubernetes Secret `name` 与 `key` 引用）仍由部署以独立受控 Secret 交付 token，token 继续做部署调用方认证；现有 signed Workload Readiness/Execution Grant 继续验证 issuer、audience、时间、唯一 ID、Agent、Execution、revision、fence、Digest 和操作范围。TLS 成功不能替代 token 或 Grant，token/Grant 成功也不能跳过 TLS。
+
+推荐机制的实际变更边界如下：
+
+- `platform-worker` 的 business/control origin 从 `http://` 改为 `https://`；禁止明文 fallback、redirect、跳过 CA/hostname 校验或从请求输入覆盖 origin。
+- 部署 owner 负责发布、轮换、撤销和保留 server leaf、私钥与 CA 信任材料；TLS 材料通过受控 `kubernetes.io/tls` Secret 引用和只读文件装配，Worker 只消费 CA 文件，Runtime Host 只消费 server-key/server-cert 文件。既有 service token 继续使用独立的受控 Secret 引用。私钥、token 和 Grant 原值不得进入日志、持久业务状态、事件或普通查询。
+- 同一可信服务身份的 leaf 续期可以跨 Workload revision 使用；证书材料、Service DNS、namespace 或 CA 引用变化须按一次加载语义重新装配并验证。CA 轮换采用重叠信任、替换验证、撤旧顺序；失效、撤销或泄露材料不得复用。既有 Session/Execution/stop/drain/unknown、PVC、容量、fence、rollback 和 durable recovery 语义不变。
+- TLS 启动、健康或 signed readiness 失败时阻止新 business 调用和 promotion；不得把 Pod 退出、healthz 或控制响应单独当作可信终态。原 Kubernetes authority 仍可执行 fenced closeRoute、scale-zero、ownership cleanup；无法确认的结果继续 pending/unknown。
+
+当前 Runtime HLD §4 只定义单一 `service.port` 和固定 Agent Service origin；它尚未定义 business/control 双 Service、路由/DNS、证书绑定或相应 Manifest 字段。因此“双 Service”是本提案的明确跨文档差额：批准前必须由 HLD/相关契约选择单 Service 或补齐双 Service 映射；本段不把任一选择写成已批准字段，也不授权新增部署配置。
+
+**mTLS 差额（备选，未选定）。** mTLS 还需由同一可信部署 owner 为 Worker 发布 client leaf/key，并为 Host 发布 server leaf/key；Worker 要求 Host 的 CA/hostname 校验，Host 还要校验 Worker client CA 与受控身份 SAN。除 server leaf/CA 外，新增 client leaf 的 Secret/只读文件、双向轮换与撤销、Worker/Host 同时重载或受控重启、双向负向测试和跨 revision 复用规则。mTLS 只增加传输层 peer 身份，仍必须保留既有 service token、signed Grant、revision/fence/Digest 和执行授权；它因此带来双 leaf 供应与更高故障恢复成本，不能以“集群内”或单边 server TLS 代替。
+
+**唯一待人工输入。** 供应 owner/准确产物入口尚不能从现场确认，须由具名可信部署发布 owner 提供：可信 Agent/namespace、按批准的单/双 Service 映射确定的实际 Service DNS、受控引用及写权限、`tls.crt`/`tls.key`（若选 mTLS 另含 Worker client leaf/key）、CA 信任与 hostname/SAN 校验输入，以及发布、续期、撤销、重叠保留和泄露处置责任。上述材料缺失不等于契约已批准，也不阻止先评审本段其余文字。
+
+**提案验收与负向门禁。** 在批准和实施前，评审包必须证明：
+
+1. 两项人工决定（供应输入、server TLS 等价机制或 mTLS）有明确记录，并将 proposed 与已批准内容分开；不以 Secret 存在、命名、fixture、Helm render 或 healthz 充当真实供应证明。
+2. business 与 control 均拒绝明文、错误 Service DNS、错误 CA、过期/撤销/泄露 leaf、无效 token、过期/错误 audience 或跨 Agent/Execution/revision/fence/Digest/操作的 Grant；拒绝 redirect、hostname 校验关闭、空 CA 和调用方覆盖 origin。
+3. 证书续期、CA 重叠轮换、引用变化、Worker/Host 重启、Pod 替换、stop/drain、响应丢失和恢复都沿原 attempt/Session/Execution 收敛；未确认结果保持 unknown/pending，不重发 token/Grant 或外部副作用。
+4. 验收同时覆盖已批准的 Service 映射（当前 HLD 单 Service，或经 HLD 补齐的双 Service）、candidate/verified、business/control、跨主体/Agent、旧 revision late call、回滚和 Worker/Host 分别不可用；真实部署、签发、Secret 内容和生产费用必须另有独立证据。
+
 Agent/客户端到 Connection 的 MCP/API 使用 Connection 的独立身份和契约，不经过 Platform API。平台不读取 Connection Catalog，不持有其目录读取或代调用 workload credential。
 
 M1 不引入 tRPC/oRPC/ConnectRPC。
