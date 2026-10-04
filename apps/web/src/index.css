@@ -871,6 +871,24 @@ a[class~="group/button"] {
 	}
 }
 
+@media (max-width: 430px) {
+	.conversation-header {
+		gap: 6px;
+		margin-bottom: 8px;
+	}
+	.conversation-heading-copy {
+		flex: 0 0 100%;
+	}
+	.conversation-agent-status {
+		gap: 4px;
+		margin-top: 4px;
+		font-size: 11px;
+	}
+	.chat-thread.space-y-5 > :not([hidden]) ~ :not([hidden]) {
+		margin-top: 8px;
+	}
+}
+
 .assistant-markdown {
 	line-height: 1.8;
 	overflow-wrap: anywhere;

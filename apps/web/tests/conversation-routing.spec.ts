@@ -978,8 +978,9 @@ test("exported design viewport matrix conversation", async ({ page }, info) => {
 			const models = await page.locator(".model-controls").boundingBox();
 			if (!heading || !actions || !models)
 				throw new Error("Expected compact conversation controls");
-			expect(actions.y).toBeLessThan(heading.y + heading.height);
-			expect(models.y).toBeLessThanOrEqual(240);
+			expect(actions.y).toBeLessThanOrEqual(heading.y + heading.height + 56);
+			// The restored header includes projection source/status badges above the thread.
+			expect(models.y).toBeLessThanOrEqual(300);
 		}
 		const panel = page.getByRole("complementary", { name: "对话历史" });
 		const toggle = page.getByRole("button", { name: "个人历史", exact: true });
