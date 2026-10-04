@@ -1,6 +1,6 @@
 # ADR-0014：PR-Agent lockfile plain-diff 的 derived runtime
 
-状态：Proposed（未批准，不是当前生产配置）
+状态：PM 已接收，待合并；未部署（不改变当前 main）
 
 日期：2026-10-04
 关联：Issue #1304、Workflow Spec §6.3、§7.3、§7.3.1
