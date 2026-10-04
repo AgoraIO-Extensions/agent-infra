@@ -16,6 +16,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.js";
+import { seedSessionSandboxFixture } from "./session-sandbox.fixture.js";
 
 let database: PostgresTestDatabase;
 let client: ReturnType<typeof postgres>;
@@ -65,6 +66,7 @@ beforeEach(async () => {
 		await client`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values('agent',${kind},'same-id','use',${`use-${kind}`})`;
 		await client`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes) values(${`credential-${kind}`},${kind},'same-id',${createHash("sha256").update(material[kind]).digest("hex")},${client.json(["agent:read", "agent:use"])})`;
 		await client`insert into platform.conversations(id,agent_id,actor_id,principal_type,channel_id,status,session_generation,authorization_revision) values(${`conversation-${kind}`},'agent','same-id',${kind},'api','ready',1,'agent-1')`;
+		await seedSessionSandboxFixture(client, `conversation-${kind}`);
 	}
 });
 describe("original Store actual-Bearer Task API supplier", () => {
@@ -73,7 +75,9 @@ describe("original Store actual-Bearer Task API supplier", () => {
 		async (operation) => {
 			const tx = store();
 			for (const kind of ["user", "application"] as const) {
+				await client`delete from platform.session_sandbox_allocations where conversation_id = ${`conversation-${kind}`}`;
 				await client`update platform.conversations set channel_id = ${`api:${kind}`} where id = ${`conversation-${kind}`}`;
+				await seedSessionSandboxFixture(client, `conversation-${kind}`);
 			}
 			for (const kind of ["user", "application"] as const) {
 				const foreign = `conversation-${kind === "user" ? "application" : "user"}`;
@@ -252,7 +256,9 @@ describe("original Store actual-Bearer Task API supplier", () => {
 		expect(reads).toBe(2);
 	}, 10_000);
 	it("preserves legacy typed API channel and refuses missing current user directory", async () => {
+		await client`delete from platform.session_sandbox_allocations where conversation_id = ${"conversation-application"}`;
 		await client`update platform.conversations set channel_id='api:application' where id='conversation-application'`;
+		await seedSessionSandboxFixture(client, "conversation-application");
 		expect(
 			await store().authorizeTaskApi({
 				material: material.application,

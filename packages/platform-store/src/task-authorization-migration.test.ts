@@ -9,6 +9,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { seedSessionSandboxFixture } from "./session-sandbox.fixture.js";
 import {
 	type LegacyTaskMetadataV1,
 	type LegacyTaskProducerEvidenceV1,
@@ -153,7 +154,7 @@ async function snapshotHistory() {
 	]) {
 		const record =
 			table === "conversation_executions"
-				? "to_jsonb(record) - 'principal_type' - 'task_wait_order' - 'task_wait_deadline' - 'execution_source' - 'relay_key_purpose' - 'relay_key_subject_id' - 'relay_key_id' - 'relay_key_version' - 'runtime_submit_protocol' - 'original_operation_digest' - 'original_submit_host_session_ref'"
+				? "to_jsonb(record) - 'sandbox_id' - 'principal_type' - 'task_wait_order' - 'task_wait_deadline' - 'execution_source' - 'relay_key_purpose' - 'relay_key_subject_id' - 'relay_key_id' - 'relay_key_version' - 'runtime_submit_protocol' - 'original_operation_digest' - 'original_submit_host_session_ref'"
 				: table === "conversations"
 					? "to_jsonb(record) - 'principal_type'"
 					: "to_jsonb(record)";
@@ -212,6 +213,12 @@ beforeAll(async () => {
 		await sql`insert into platform_migrations.history (hash, created_at) values (${entry.hash}, ${entry.folderMillis})`;
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 	expect(await snapshotHistory()).toEqual(before);
+	expect(
+		await sql`select count(*)::int as count from platform.conversation_executions where sandbox_id is not null`,
+	).toEqual([{ count: 0 }]);
+	expect(
+		await sql`select count(*)::int as count from platform.session_sandbox_allocations`,
+	).toEqual([{ count: 0 }]);
 	expect(
 		await sql`select count(*)::int as count from platform.conversation_executions
 			where task_wait_order is not null or task_wait_deadline is not null
@@ -299,6 +306,15 @@ describe("historical task authorization upgrade", () => {
 			deliveryFence: 9,
 			originalOperationDigest: fixture?.evidence?.originalOperationDigest,
 		});
+		// Proven historical Task authority alone does not establish Sandbox isolation.
+		expect(
+			await query.getExecution(
+				{ actorId: "original-user-complete", channelId: "web" },
+				"conversation-complete",
+				"execution-complete",
+			),
+		).toBeUndefined();
+		await seedSessionSandboxFixture(sql, "conversation-complete");
 		const detail = await query.getExecution(
 			{ actorId: "original-user-complete", channelId: "web" },
 			"conversation-complete",
@@ -359,7 +375,7 @@ describe("historical task authorization upgrade", () => {
 				"conversation-recovery",
 				"execution-recovery",
 			),
-		).toMatchObject({ execution: { status: "unknown" } });
+		).toBeUndefined();
 		expect(await migration.migrate(input("recovery"))).toEqual({
 			...result,
 			outcome: "replayed",
