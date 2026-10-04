@@ -11,9 +11,11 @@
 		"@agent-infra/identity": "workspace:*",
 		"@agent-infra/image-registry": "workspace:*",
 		"@agent-infra/model-catalog": "workspace:*",
+		"@agent-infra/observability": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
 		"@agent-infra/platform-store": "workspace:*",
 		"@agent-infra/secret-store": "workspace:*",
+		"@agent-infra/wecom": "workspace:*",
 		"@kubernetes/client-node": "2.0.0"
 	},
 	"scripts": {

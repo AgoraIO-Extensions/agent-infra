@@ -907,7 +907,13 @@ export class PostgresSecretKeyRotationStoreV1
 					await insertAudit(sql, input.retiredAuditEvent, now);
 					return "retired" as const;
 				}
-				if ((await referenceCount(sql, [command.keyVersion])) !== 0) {
+				const channelReferences =
+					await sql`select 1 from platform.wecom_setup_sessions
+					where encrypted_credential->'crypto'->>'wrappingKeyVersion'=${command.keyVersion} limit 1`;
+				if (
+					channelReferences.length ||
+					(await referenceCount(sql, [command.keyVersion])) !== 0
+				) {
 					await insertAudit(sql, input.rejectedAuditEvent, now);
 					return "referenced" as const;
 				}

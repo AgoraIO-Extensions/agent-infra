@@ -11,6 +11,7 @@ import {
 	RuntimeGenerationCancelRequestV3Schema,
 	type RuntimeOperationResponseV1,
 	type RuntimeOperationResponseV2,
+	type RuntimeOriginalBindingResponseV3,
 	type RuntimeStatusRequestV3,
 	RuntimeStatusRequestV3Schema,
 	type RuntimeStatusResponseV3,
@@ -37,6 +38,7 @@ import {
 	type RuntimeGrantValidationOptionsV2,
 	validateRuntimeExecutionGrantV2,
 } from "./grant-v2.js";
+import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 
 interface Options {
 	store: FileRuntimeStore;
@@ -619,6 +621,37 @@ export class RuntimeHostV3 {
 			outcome: "found",
 			status,
 		};
+	}
+
+	async readOriginalBinding(
+		value: RuntimeStatusRequestV3,
+		verification: unknown,
+	): Promise<RuntimeOriginalBindingResponseV3> {
+		this.assertOpen();
+		const request = parseRequest(RuntimeStatusRequestV3Schema, value);
+		if (
+			this.validate(request, "session.status", verification).purpose !==
+			"control"
+		)
+			runtimeAuthorizationDenied();
+		return this.options.serialize(
+			this.options.store.sessionQueueKey(request),
+			async () => {
+				this.assertOpen();
+				const claims = this.validate(request, "session.status", verification);
+				if (claims.purpose !== "control") runtimeAuthorizationDenied();
+				const hostSessionRef = this.options.store.readAcceptedOriginalBindingV4(
+					request,
+					claims,
+				);
+				return {
+					schemaVersion: 3,
+					executionId: request.executionId,
+					outcome: "binding_found",
+					hostSessionRef,
+				};
+			},
+		);
 	}
 
 	async cancelGeneration(

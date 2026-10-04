@@ -16,8 +16,11 @@ import type {
 	AgentManagementInterfaceV1,
 	ApplicationFoundationUseCaseV1,
 	ApplicationRevisionUseCaseV1,
+	CurrentTaskUserV1,
 	PendingSecretRecordAttachmentResolverV1,
+	PersonalApiAgentReadUseCaseV1,
 } from "@agent-infra/platform-core";
+import { isAdministratorAgentReadAllowedV1 } from "@agent-infra/platform-core";
 import type {
 	AgentManagementAgentProjectionV1,
 	AgentManagementAgentScopeV1,
@@ -98,6 +101,13 @@ export interface SecretPreparationResult {
 
 export interface ManagementRouteDependencies {
 	readonly identity: IdentityAdapter;
+	readonly personalApiAgentRead?: PersonalApiAgentReadUseCaseV1;
+	readonly readApiAgentProjection?: (
+		input: RequestMetadata & {
+			readonly apiUser: CurrentTaskUserV1;
+			readonly agent: AgentManagementAgentProjectionV1;
+		},
+	) => Promise<unknown>;
 	readonly foundation: Pick<ApplicationFoundationUseCaseV1, "submit">;
 	readonly revision: Pick<ApplicationRevisionUseCaseV1, "revise">;
 	readonly management: Pick<
@@ -790,8 +800,113 @@ export function registerV2ManagementRoutes(
 			}),
 	);
 
+	app.get("/api/v2/admin/agents", (context) =>
+		boundary(context, async (metadata) => {
+			if (context.req.raw.headers.has("authorization")) {
+				fail("AUTHENTICATION_REQUIRED", metadata.traceId);
+			}
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			if (!isAdministratorAgentReadAllowedV1(actor(identity))) {
+				fail("FORBIDDEN", metadata.traceId);
+			}
+			const queryPage = pageInput(context.req.raw, metadata.traceId);
+			const page = await queryOrUnavailable(
+				() =>
+					dependencies.query.listAgents({ kind: "administrator" }, queryPage),
+				metadata.traceId,
+			);
+			return context.json({
+				items: await Promise.all(
+					page.items.map((item) =>
+						projectAgent(dependencies, item, identity, metadata),
+					),
+				),
+				nextCursor: page.nextAfterId,
+			});
+		}),
+	);
+
 	app.get("/api/v2/agents", (context) =>
 		boundary(context, async (metadata) => {
+			const request = context.req.raw;
+			if (request.headers.has("Authorization")) {
+				context.header("Cache-Control", "no-store");
+				const reader = dependencies.personalApiAgentRead;
+				const authorization = request.headers.get("Authorization") ?? "";
+				const matched = /^Bearer (papi_[A-Za-z0-9_-]{43})$/.exec(authorization);
+				if (
+					!matched ||
+					request.headers.has("Cookie") ||
+					new URL(request.url).searchParams.has("scope")
+				) {
+					await reader?.recordRefusal(metadata, "authentication_required");
+					fail("AUTHENTICATION_REQUIRED", metadata.traceId);
+				}
+				const material = matched[1];
+				const project = dependencies.readApiAgentProjection;
+				if (!reader || !project || !material)
+					fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+				if (
+					request.body !== null ||
+					[
+						"x-user-id",
+						"x-application-id",
+						"x-principal",
+						"x-principal-id",
+						"x-recipient",
+						"x-recipient-user-id",
+						"x-role",
+						"x-roles",
+						"x-scope",
+						"x-agent-id",
+						"x-identity-context",
+					].some((name) => request.headers.has(name))
+				) {
+					await reader.recordRefusal(metadata, "invalid_input");
+					fail("INVALID_REQUEST", metadata.traceId);
+				}
+				let queryPage: AgentManagementPageInputV1;
+				try {
+					queryPage = pageInput(request, metadata.traceId);
+				} catch (error) {
+					await reader.recordRefusal(metadata, "invalid_input");
+					throw error;
+				}
+				const result = await reader.readAgents(
+					metadata,
+					material,
+					async (apiUser) => {
+						const page = await dependencies.query.listAgents(
+							{ kind: "api_user", userId: apiUser.userId },
+							queryPage,
+						);
+						const items = await Promise.all(
+							page.items.map(async (agent) => {
+								const value = await project({ ...metadata, apiUser, agent });
+								const parsed = AgentProjectionV1Schema.safeParse(value);
+								if (!parsed.success)
+									fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+								const { actions: _actions, ...configuration } =
+									parsed.data.configuration;
+								return AgentProjectionV2Schema.parse({
+									...parsed.data,
+									schemaVersion: 2,
+									configuration,
+								});
+							}),
+						);
+						return {
+							result: { items, nextCursor: page.nextAfterId },
+							returnedAgentIds: items.map(({ agentId }) => agentId),
+						};
+					},
+				);
+				return context.json(result);
+			}
 			const identity = await resolveIdentity(
 				dependencies.identity,
 				context.req.raw,

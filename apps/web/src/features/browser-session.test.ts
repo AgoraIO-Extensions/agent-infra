@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment node
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createClient } from "../pilot/generated/client/index.js";
 import { loadBrowserSession } from "./browser-session.js";
@@ -13,6 +14,7 @@ const session = {
 };
 
 describe("shared browser session reader", () => {
+	afterEach(() => vi.useRealTimers());
 	it("reads the current session and its server-issued generation", async () => {
 		const requests: Request[] = [];
 		const generation = "g".repeat(43);
@@ -32,6 +34,7 @@ describe("shared browser session reader", () => {
 		});
 		expect(requests.map((request) => [request.method, request.url])).toEqual([
 			["GET", "https://platform.example.test/api/v1/session"],
+			["GET", "https://platform.example.test/api/v1/connection/capability"],
 		]);
 	});
 
@@ -51,6 +54,50 @@ describe("shared browser session reader", () => {
 			});
 		},
 	);
+
+	it("makes the session ready when the capability request stalls", async () => {
+		vi.useFakeTimers();
+		let capabilityAborted = false;
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async (input) => {
+				const request = input as Request;
+				if (request.url.endsWith("/session")) return Response.json(session);
+				return new Promise<Response>((_resolve, reject) => {
+					request.signal.addEventListener(
+						"abort",
+						() => {
+							capabilityAborted = true;
+							reject(request.signal.reason);
+						},
+						{ once: true },
+					);
+				});
+			},
+		});
+		const state = loadBrowserSession(client);
+		await vi.advanceTimersByTimeAsync(3_000);
+		await expect(state).resolves.toEqual({
+			kind: "ready",
+			session,
+		});
+		expect(capabilityAborted).toBe(true);
+	});
+
+	it("isolates a capability network failure from a successful session", async () => {
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async (input) => {
+				if ((input as Request).url.endsWith("/session"))
+					return Response.json(session);
+				throw new TypeError("Controlled capability network failure");
+			},
+		});
+		await expect(loadBrowserSession(client)).resolves.toEqual({
+			kind: "ready",
+			session,
+		});
+	});
 
 	it.each([false, true])(
 		"keeps a retryable=%s failure opaque",

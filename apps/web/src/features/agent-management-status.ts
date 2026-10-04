@@ -17,3 +17,28 @@ export const agentManagementStatusLabels = {
 	| AgentProjectionV2["managementStatus"],
 	string
 >;
+
+export function agentServiceAvailabilityLabel(
+	availability: NonNullable<AgentProjectionV2["serviceAvailability"]>,
+) {
+	if (availability === "starting") return "启动中";
+	if (availability === "updating") return "更新中";
+	if (availability === "unavailable") return "暂时不可用";
+	return "就绪";
+}
+
+export function agentSourceLabel(agent: Pick<AgentProjectionV2, "source">) {
+	return agent.source.kind === "standard"
+		? `标准模板 · ${agent.source.templateId}`
+		: "自定义 Agent";
+}
+
+export function agentConversationSourceLabel(
+	agent: Pick<AgentProjectionV2, "source">,
+) {
+	return agent.source.kind === "standard"
+		? `标准模板 · ${agent.source.templateId}`
+		: agent.source.interactionMode === "self-managed"
+			? "自定义 Agent · 自有交互入口"
+			: "自定义 Agent · 平台交互入口";
+}

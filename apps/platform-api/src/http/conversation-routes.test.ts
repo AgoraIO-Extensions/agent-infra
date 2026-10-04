@@ -1,9 +1,14 @@
+import { setTimeout as delay } from "node:timers/promises";
 import {
 	ConversationDetailProjectionV1Schema,
+	ConversationDetailProjectionV2Schema,
 	ConversationSseMessageV1Schema,
+	ConversationSseMessageV2Schema,
 	ExecutionDetailProjectionV1Schema,
+	ExecutionDetailProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
+import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
@@ -208,6 +213,43 @@ const commandHeaders = {
 };
 
 describe("Conversation HTTP routes", () => {
+	it("serves V2 detail and execution projections with durable events", async () => {
+		const { app } = testApp();
+		const detail = await app.request("/api/v2/conversations/conversation-1");
+		const execution = await app.request(
+			"/api/v2/conversations/conversation-1/executions/execution-1",
+		);
+		expect(detail.status).toBe(200);
+		expect(execution.status).toBe(200);
+		const detailBody = ConversationDetailProjectionV2Schema.parse(
+			await detail.json(),
+		);
+		const executionBody = ExecutionDetailProjectionV2Schema.parse(
+			await execution.json(),
+		);
+		expect(detailBody.events).toHaveLength(1);
+		expect(executionBody.events).toHaveLength(1);
+	});
+
+	it("keeps V2 conversation and execution reads actor-scoped", async () => {
+		const input = dependencies();
+		input.commands(identity).readConversation = vi
+			.fn()
+			.mockResolvedValue({ outcome: "denied" });
+		for (const path of [
+			"/api/v2/conversations/conversation-1",
+			"/api/v2/conversations/conversation-1/executions/execution-1",
+		]) {
+			const response = await testApp(input).app.request(path);
+			expect(response.status).toBe(404);
+			expect(await response.json()).toMatchObject({
+				code: "RESOURCE_UNAVAILABLE",
+			});
+		}
+		expect(input.query.get).not.toHaveBeenCalled();
+		expect(input.query.getExecution).not.toHaveBeenCalled();
+	});
+
 	it("maps generated command requests to the Core seam without caller identity", async () => {
 		const { app, dependencies: input } = testApp();
 		const create = await app.request("/api/v1/agents/agent-1/conversations", {
@@ -566,6 +608,192 @@ describe("Conversation HTTP routes", () => {
 });
 
 describe("Conversation persisted SSE", () => {
+	const operationEvent = {
+		...persistedEvent,
+		eventSchemaVersion: 2 as const,
+		eventId: "operation-event-2",
+		sequence: 2,
+		conversationCursor: "cursor-2",
+		eventType: "execution.operation",
+		eventPayload: {
+			kind: "model",
+			operationRef: "model-operation-1",
+			attemptRef: "model-attempt-1",
+			phase: "intent",
+			model: {
+				configVersion: "revision-1",
+				modelOptionId: "option-1",
+				modelId: "model-1",
+				reasoningLevel: "medium",
+			},
+		},
+	};
+	it("keeps V1 details readable when V2 operation facts are persisted", async () => {
+		const input = dependencies();
+		const scope = { actorId: identity.userId, channelId: "web" };
+		const detail = await input.query.get(scope, conversation.conversationId);
+		const execution = await input.query.getExecution(
+			scope,
+			conversation.conversationId,
+			"execution-1",
+		);
+		if (!detail || !execution) throw new Error("Missing detail fixture");
+		input.query.get = vi.fn().mockResolvedValue({
+			...detail,
+			events: [...detail.events, operationEvent],
+		});
+		input.query.getExecution = vi.fn().mockResolvedValue({
+			...execution,
+			events: [...execution.events, operationEvent],
+		});
+		const { app } = testApp(input);
+		const v1Detail = await app.request("/api/v1/conversations/conversation-1");
+		const v1Execution = await app.request(
+			"/api/v1/conversations/conversation-1/executions/execution-1",
+		);
+		expect(v1Detail.status).toBe(200);
+		expect(v1Execution.status).toBe(200);
+		expect(
+			ConversationDetailProjectionV1Schema.parse(await v1Detail.json()),
+		).toHaveProperty("messages");
+		expect(
+			ExecutionDetailProjectionV1Schema.parse(await v1Execution.json()),
+		).toHaveProperty("processSummary");
+	});
+	it("preserves mixed V2 history in details and cursor replay", async () => {
+		const input = dependencies();
+		const scope = { actorId: identity.userId, channelId: "web" };
+		const detail = await input.query.get(scope, conversation.conversationId);
+		const execution = await input.query.getExecution(
+			scope,
+			conversation.conversationId,
+			"execution-1",
+		);
+		if (!detail || !execution) throw new Error("Missing detail fixture");
+		const events = [persistedEvent, operationEvent];
+		input.query.get = vi.fn().mockResolvedValue({ ...detail, events });
+		input.query.getExecution = vi
+			.fn()
+			.mockResolvedValue({ ...execution, events });
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [operationEvent],
+				resumeCursor: "cursor-2",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-2",
+			});
+		const { app } = testApp(input);
+		const history = ConversationDetailProjectionV2Schema.parse(
+			await (await app.request("/api/v2/conversations/conversation-1")).json(),
+		);
+		const executionHistory = ExecutionDetailProjectionV2Schema.parse(
+			await (
+				await app.request(
+					"/api/v2/conversations/conversation-1/executions/execution-1",
+				)
+			).json(),
+		);
+		expect(
+			history.events.map((event) => [event.schemaVersion, event.eventId]),
+		).toEqual([
+			[1, "event-1"],
+			[2, "operation-event-2"],
+		]);
+		expect(executionHistory.events).toEqual(history.events);
+		const response = await app.request(
+			"/api/v2/conversations/conversation-1/events?cursor=cursor-1",
+		);
+		const messages = (await response.text())
+			.split("\n")
+			.filter((line) => line.startsWith("data: "))
+			.map((line) =>
+				ConversationSseMessageV2Schema.parse(JSON.parse(line.slice(6))),
+			);
+		expect(messages.filter((message) => message.kind === "event")).toEqual([
+			history.events[1],
+		]);
+		expect(input.query.replay).toHaveBeenNthCalledWith(
+			1,
+			scope,
+			"conversation-1",
+			{ kind: "cursor", value: "cursor-1" },
+		);
+	});
+	it("keeps V1 streaming after validated V2 facts using the original cursor", async () => {
+		const query = dependencies().query;
+		query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [persistedEvent, operationEvent],
+				resumeCursor: "cursor-2",
+			})
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [
+					{
+						...persistedEvent,
+						eventId: "event-3",
+						sequence: 3,
+						conversationCursor: "cursor-3",
+						eventPayload: { type: "text.delta", text: "after operation" },
+					},
+				],
+				resumeCursor: "cursor-3",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-3",
+			});
+		const response = await testApp(dependencies({ query })).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		expect(response.status).toBe(200);
+		const stream = await response.text();
+		const messages = stream
+			.split("\n")
+			.filter((line) => line.startsWith("data: "))
+			.map((line) =>
+				ConversationSseMessageV1Schema.parse(JSON.parse(line.slice(6))),
+			);
+		expect(
+			messages
+				.filter((message) => message.kind === "event")
+				.map((message) => message.eventId),
+		).toEqual(["event-1", "event-3"]);
+		expect(stream).not.toContain("operation-event-2");
+		expect(query.replay).toHaveBeenNthCalledWith(
+			2,
+			{ actorId: identity.userId, channelId: "web" },
+			conversation.conversationId,
+			{ kind: "cursor", value: "cursor-2" },
+		);
+	});
+	it.each([
+		{ eventSchemaVersion: undefined },
+		{
+			eventPayload: { ...operationEvent.eventPayload, secret: "must-not-pass" },
+		},
+		{ eventId: "invalid\nevent" },
+		{ sequence: 0 },
+	])("rejects malformed V2 facts before V1 streaming: %j", async (change) => {
+		const query = dependencies().query;
+		query.replay = vi.fn().mockResolvedValue({
+			outcome: "events",
+			events: [{ ...operationEvent, ...change }],
+			resumeCursor: "cursor-2",
+		});
+		const response = await testApp(dependencies({ query })).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		expect(response.status).toBe(503);
+	});
 	it("maps the persisted model fallback notice without local policy", async () => {
 		const input = dependencies();
 		input.query.replay = vi
@@ -663,87 +891,515 @@ describe("Conversation persisted SSE", () => {
 			"conversation-1",
 			{ kind: "last-event-id", value: "event-before" },
 		);
-		expect(input.authorization.authorize).toHaveBeenCalledTimes(3);
+		expect(input.authorization.authorize).toHaveBeenCalledTimes(4);
 	});
 
-	it("stops before the next push when current access is revoked", async () => {
-		const authorize = vi
+	it.each([1, 2])(
+		"classifies current idle identity failures without replay on V%d",
+		async (version) => {
+			for (const [value, reason] of [
+				[{ ...identity, accountStatus: "disabled" }, "disabled"],
+				[null, "session_invalid"],
+				[{ ...identity, userId: "other-subject" }, "subject_changed"],
+				[{ ...identity, roles: "invalid-private-value" }, "invalid_response"],
+			] as const) {
+				const input = dependencies();
+				input.identity.resolve = vi
+					.fn()
+					.mockResolvedValueOnce(identity)
+					.mockResolvedValue(value);
+				input.query.replay = vi.fn().mockResolvedValue({
+					outcome: "events",
+					events: [],
+					resumeCursor: "cursor-secret",
+				});
+				const response = await testApp(input).app.request(
+					`/api/v${version}/conversations/conversation-1/events`,
+				);
+				const body = await response.text();
+				expect(body).toContain(`: conversation-stream.closed ${reason}`);
+				expect(body.includes("authorization.revoked")).toBe(
+					reason !== "invalid_response",
+				);
+				expect(body).not.toMatch(
+					/other-subject|invalid-private-value|cursor-secret|conversation-1/,
+				);
+				expect(input.query.replay).toHaveBeenCalledTimes(1);
+			}
+		},
+	);
+
+	it.each(["identity", "authorization", "replay"] as const)(
+		"bounds a hanging %s read and ignores its late result",
+		async (dependency) => {
+			const input = dependencies({
+				streamPollIntervalMs: 5,
+				streamReadTimeoutMs: 10,
+			});
+			let release!: (value: never) => void;
+			const pending = new Promise<never>((resolve) => {
+				release = resolve;
+			});
+			input.query.replay = vi.fn().mockResolvedValue({
+				outcome: "events",
+				events: [],
+				resumeCursor: "cursor-1",
+			});
+			if (dependency === "identity")
+				input.identity.resolve = vi
+					.fn()
+					.mockResolvedValueOnce(identity)
+					.mockReturnValue(pending);
+			if (dependency === "authorization")
+				input.authorization.authorize = vi
+					.fn()
+					.mockResolvedValueOnce({ outcome: "allowed", authority })
+					.mockReturnValue(pending);
+			if (dependency === "replay")
+				input.query.replay = vi
+					.fn()
+					.mockResolvedValueOnce({
+						outcome: "events",
+						events: [],
+						resumeCursor: "cursor-1",
+					})
+					.mockReturnValue(pending);
+			const started = performance.now();
+			const response = await testApp(input).app.request(
+				"/api/v2/conversations/conversation-1/events",
+			);
+			expect(await response.text()).toBe(
+				": conversation-stream.closed dependency_unavailable\n\n",
+			);
+			expect(performance.now() - started).toBeLessThan(500);
+			release(undefined as never);
+		},
+	);
+
+	it("keeps polling an empty timeline and resumes only after fresh authorization", async () => {
+		const input = dependencies();
+		input.query.replay = vi
 			.fn()
-			.mockResolvedValueOnce({ outcome: "allowed", authority })
-			.mockResolvedValueOnce({ outcome: "denied" });
-		const input = dependencies({ authorization: { authorize } });
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [],
+				resumeCursor: "cursor-0",
+			})
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [],
+				resumeCursor: "cursor-0",
+			})
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [persistedEvent],
+				resumeCursor: "cursor-1",
+			})
+			.mockResolvedValue(undefined);
 		const response = await testApp(input).app.request(
-			"/api/v1/conversations/conversation-1/events",
+			"/api/v2/conversations/conversation-1/events?cursor=cursor-0",
 		);
 		const body = await response.text();
-
-		expect(body).not.toContain("id: event-1");
-		expect(body).toContain('"type":"authorization.revoked"');
-		expect(body).toContain('"code":"AUTHORIZATION_REVOKED"');
-		expect(body).not.toContain("user-1");
-	});
-
-	it("fails closed without misreporting a temporary authorization outage", async () => {
-		const authorize = vi
-			.fn()
-			.mockResolvedValueOnce({ outcome: "allowed", authority })
-			.mockRejectedValueOnce(new Error("private identity dependency detail"));
-		const response = await testApp(
-			dependencies({ authorization: { authorize } }),
-		).app.request("/api/v1/conversations/conversation-1/events");
-		const body = await response.text();
-
-		expect(body).toBe("");
+		expect(body).toContain("id: event-1");
+		expect(body).toContain(": conversation-stream.closed resource_unavailable");
 		expect(body).not.toContain("authorization.revoked");
-		expect(body).not.toContain("private identity dependency detail");
+		expect(input.identity.resolve).toHaveBeenCalledTimes(5);
+		expect(input.authorization.authorize).toHaveBeenCalledTimes(5);
+		expect(input.query.replay).toHaveBeenLastCalledWith(
+			{ actorId: identity.userId, channelId: "web" },
+			"conversation-1",
+			{ kind: "cursor", value: "cursor-1" },
+		);
 	});
 
-	it("rejects ambiguous replay selectors and non-enumerates initial access", async () => {
-		const ambiguous = await testApp().app.request(
-			"/api/v1/conversations/conversation-1/events?cursor=cursor-1",
-			{ headers: { "Last-Event-ID": "event-1" } },
-		);
-		expect(ambiguous.status).toBe(400);
+	it.each([1, 2])(
+		"discards authorization resolved after disconnect on V%d",
+		async (version) => {
+			const controller = new AbortController();
+			const input = dependencies();
+			input.authorization.authorize = vi
+				.fn()
+				.mockResolvedValueOnce({ outcome: "allowed", authority })
+				.mockImplementation(async () => {
+					controller.abort();
+					return { outcome: "allowed", authority };
+				});
+			const response = await testApp(input).app.request(
+				`/api/v${version}/conversations/conversation-1/events`,
+				{ signal: controller.signal },
+			);
+			expect(await response.text()).toBe("");
+			expect(input.query.replay).toHaveBeenCalledTimes(1);
+		},
+	);
 
-		const denied = dependencies({
-			authorization: {
-				authorize: vi.fn().mockResolvedValue({ outcome: "denied" }),
-			},
+	it.each([1, 2])(
+		"closes invalid authorization responses without claiming revocation on V%d",
+		async (version) => {
+			for (const invalid of [
+				null,
+				{ outcome: "unknown" },
+				{ outcome: "allowed", authority: { ...authority, actorId: "foreign" } },
+			]) {
+				const input = dependencies();
+				input.authorization.authorize = vi
+					.fn()
+					.mockResolvedValueOnce({ outcome: "allowed", authority })
+					.mockResolvedValue(invalid);
+				const response = await testApp(input).app.request(
+					`/api/v${version}/conversations/conversation-1/events`,
+				);
+				expect(await response.text()).toBe(
+					": conversation-stream.closed invalid_response\n\n",
+				);
+			}
+		},
+	);
+
+	it("reauthorizes cursor reconnect after dependency recovery and rejects a switched subject", async () => {
+		const input = dependencies();
+		let outage = true;
+		let switched = false;
+		input.authorization.authorize = vi.fn().mockImplementation(async () => {
+			if (outage) throw new Error("private outage");
+			return switched
+				? { outcome: "denied" }
+				: { outcome: "allowed", authority };
 		});
-		const forbidden = await testApp(denied).app.request(
-			"/api/v1/conversations/conversation-private/events",
-		);
-		expect(forbidden.status).toBe(403);
-		expect(await forbidden.json()).toMatchObject({
-			code: "RESOURCE_UNAVAILABLE",
-		});
+		const app = testApp(input).app;
+		const target =
+			"/api/v2/conversations/conversation-1/events?cursor=cursor-1";
+		expect((await app.request(target)).status).toBe(503);
+		expect(input.query.replay).not.toHaveBeenCalled();
+		outage = false;
+		const recovered = await app.request(target);
+		expect(await recovered.text()).toContain("id: event-1");
+		const reads = vi.mocked(input.query.replay).mock.calls.length;
+		switched = true;
+		input.identity.resolve = vi
+			.fn()
+			.mockResolvedValue({ ...identity, userId: "other-subject" });
+		const denied = await app.request(target);
+		expect(denied.status).toBe(404);
+		expect(await denied.text()).not.toContain("conversation-1");
+		expect(input.query.replay).toHaveBeenCalledTimes(reads);
 	});
 
-	it("never accepts malformed persisted data as an SSE event", async () => {
-		const query = dependencies().query;
-		query.replay = vi.fn().mockResolvedValue({
-			outcome: "events",
-			events: [
-				{
-					...persistedEvent,
-					eventPayload: {
-						type: "text.delta",
-						text: "safe",
-						secret: "must-not-pass",
+	it.each([1, 2])(
+		"reauthorizes stopped execution replay when revocation races a stop on V%d",
+		async (version) => {
+			const input = dependencies();
+			const pendingReplay = Promise.withResolvers<void>();
+			const releaseReplay = Promise.withResolvers<void>();
+			const controller = new AbortController();
+			let revoked = false;
+			input.authorization.authorize = vi
+				.fn()
+				.mockImplementation(async () =>
+					revoked ? { outcome: "revoked" } : { outcome: "allowed", authority },
+				);
+			input.query.replay = vi
+				.fn()
+				.mockResolvedValueOnce({
+					outcome: "events",
+					events: [],
+					resumeCursor: "cursor-0",
+				})
+				.mockImplementation(async () => {
+					pendingReplay.resolve();
+					await releaseReplay.promise;
+					return {
+						outcome: "events",
+						events: [
+							{
+								...persistedEvent,
+								eventType: "execution.status",
+								eventPayload: { type: "execution.status", status: "cancelled" },
+							},
+						],
+						resumeCursor: "cursor-1",
+					};
+				});
+			const app = testApp(input).app;
+			try {
+				const response = await app.request(
+					`/api/v${version}/conversations/conversation-1/events?cursor=cursor-0`,
+					{ signal: controller.signal },
+				);
+				await pendingReplay.promise;
+				const stop = await app.request(
+					"/api/v1/conversations/conversation-1/stops",
+					{
+						method: "POST",
+						headers: commandHeaders,
+						body: JSON.stringify({
+							schemaVersion: 1,
+							targetExecutionId: "execution-1",
+						}),
 					},
-				},
-			],
-			resumeCursor: "cursor-1",
-		});
-		const response = await testApp(
-			dependencies({ query, streamPollIntervalMs: 1 }),
-		).app.request("/api/v1/conversations/conversation-1/events");
+				);
+				expect(stop.status).toBe(202);
+				expect(input.commands).toHaveBeenCalledWith(identity);
+				// Stop acceptance cannot preserve the stream's prior authorization.
+				revoked = true;
+				releaseReplay.resolve();
+				const body = await response.text();
+				expect(body).toContain(": conversation-stream.closed revoked");
+				expect(body).toContain("authorization.revoked");
+				expect(body).not.toMatch(/execution.status|cancelled|event-1|cursor-1/);
+				expect(input.query.replay).toHaveBeenCalledTimes(2);
+			} finally {
+				controller.abort();
+				releaseReplay.resolve();
+			}
+		},
+	);
 
-		expect(response.status).toBe(503);
-		expect(await response.json()).toMatchObject({
-			code: "DEPENDENCY_UNAVAILABLE",
+	it("closes a real HTTP idle SSE connection within the configured detection budget", async () => {
+		const poll = 30;
+		const timeout = 50;
+		const input = dependencies({
+			streamPollIntervalMs: poll,
+			streamReadTimeoutMs: timeout,
 		});
+		let revoked = false;
+		input.authorization.authorize = vi
+			.fn()
+			.mockImplementation(async () =>
+				revoked ? { outcome: "revoked" } : { outcome: "allowed", authority },
+			);
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [persistedEvent],
+				resumeCursor: "cursor-1",
+			})
+			.mockResolvedValue({
+				outcome: "events",
+				events: [],
+				resumeCursor: "cursor-1",
+			});
+		const app = testApp(input).app;
+		const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 });
+		const controller = new AbortController();
+		try {
+			if (!server.listening)
+				await new Promise<void>((resolve) => server.once("listening", resolve));
+			const address = server.address();
+			if (!address || typeof address === "string")
+				throw new Error("Missing test listener");
+			const response = await fetch(
+				`http://127.0.0.1:${address.port}/api/v2/conversations/conversation-1/events`,
+				{ signal: controller.signal },
+			);
+			const reader = response.body?.getReader();
+			if (!reader) throw new Error("Missing SSE body");
+			expect(new TextDecoder().decode((await reader.read()).value)).toContain(
+				"id: event-1",
+			);
+			// Remain idle for multiple complete authorization/replay cycles.
+			await delay(poll * 4);
+			expect(
+				vi.mocked(input.query.replay).mock.calls.length,
+			).toBeGreaterThanOrEqual(3);
+			const reads = vi.mocked(input.query.replay).mock.calls.length;
+			const started = performance.now();
+			revoked = true;
+			let terminal = "";
+			for (;;) {
+				const chunk = await reader.read();
+				if (chunk.done) break;
+				terminal += new TextDecoder().decode(chunk.value);
+			}
+			// Scheduling slack is explicit; logical budget is poll + two bounded reads.
+			expect(performance.now() - started).toBeLessThan(
+				poll + 2 * timeout + 200,
+			);
+			expect(terminal).toContain("authorization.revoked");
+			expect(terminal).not.toMatch(/event-1|heartbeat|cursor-1/);
+			expect(input.query.replay).toHaveBeenCalledTimes(reads);
+		} finally {
+			controller.abort();
+			if ("closeAllConnections" in server) server.closeAllConnections();
+			await new Promise<void>((resolve, reject) =>
+				server.close((error) => (error ? reject(error) : resolve())),
+			);
+		}
 	});
+
+	it("aborts a backpressured SSE writer instead of retaining stale authorization", async () => {
+		const input = dependencies({
+			streamPollIntervalMs: 5,
+			streamReadTimeoutMs: 10,
+		});
+		input.query.replay = vi.fn().mockResolvedValue({
+			outcome: "events",
+			events: Array.from({ length: 20 }, (_, index) => ({
+				...persistedEvent,
+				eventId: `event-${index + 1}`,
+				sequence: index + 1,
+				conversationCursor: `cursor-${index + 1}`,
+			})),
+			resumeCursor: "cursor-20",
+		});
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1/events",
+		);
+		// Deliberately do not consume the response until the writer deadline expires.
+		await delay(80);
+		const checks = vi.mocked(input.authorization.authorize).mock.calls.length;
+		expect(checks).toBeLessThan(21);
+		const body = await response.text();
+		expect(body).not.toContain("event-20");
+		expect(input.query.replay).toHaveBeenCalledTimes(1);
+		await delay(20);
+		expect(input.authorization.authorize).toHaveBeenCalledTimes(checks);
+	});
+
+	it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, 1.5, 30001])(
+		"rejects invalid idle/read bounds: %s",
+		(value) => {
+			expect(() =>
+				testApp(dependencies({ streamPollIntervalMs: value })),
+			).toThrow("intervals");
+			expect(() =>
+				testApp(dependencies({ streamReadTimeoutMs: value })),
+			).toThrow("intervals");
+		},
+	);
+
+	it.each([1, 2])(
+		"reauthorizes an idle stream before reading the next replay on V%d",
+		async (version) => {
+			const input = dependencies();
+			input.query.replay = vi
+				.fn()
+				.mockResolvedValueOnce({
+					outcome: "events",
+					events: [],
+					resumeCursor: "cursor-1",
+				})
+				.mockResolvedValue(undefined);
+			input.authorization.authorize = vi
+				.fn()
+				.mockResolvedValueOnce({ outcome: "allowed", authority })
+				.mockResolvedValue({ outcome: "revoked" });
+			const response = await testApp(input).app.request(
+				`/api/v${version}/conversations/conversation-1/events`,
+			);
+			const body = await response.text();
+			expect(body).toContain('"type":"authorization.revoked"');
+			expect(input.identity.resolve).toHaveBeenCalledTimes(2);
+			expect(input.query.replay).toHaveBeenCalledTimes(1);
+			expect(body).not.toContain("cursor-1");
+		},
+	);
+
+	it.each([1, 2])(
+		"stops before the next push when current access is revoked on V%d",
+		async (version) => {
+			const authorize = vi
+				.fn()
+				.mockResolvedValueOnce({ outcome: "allowed", authority })
+				.mockResolvedValueOnce({ outcome: "denied" });
+			const input = dependencies({ authorization: { authorize } });
+			const response = await testApp(input).app.request(
+				`/api/v${version}/conversations/conversation-1/events`,
+			);
+			const body = await response.text();
+
+			expect(body).not.toContain("id: event-1");
+			expect(body).toContain('"type":"authorization.revoked"');
+			expect(body).toContain('"code":"AUTHORIZATION_REVOKED"');
+			expect(body).not.toContain("user-1");
+		},
+	);
+
+	it.each([1, 2])(
+		"fails closed without misreporting a temporary authorization outage on V%d",
+		async (version) => {
+			const authorize = vi
+				.fn()
+				.mockResolvedValueOnce({ outcome: "allowed", authority })
+				.mockRejectedValueOnce(new Error("private identity dependency detail"));
+			const response = await testApp(
+				dependencies({ authorization: { authorize } }),
+			).app.request(`/api/v${version}/conversations/conversation-1/events`);
+			const body = await response.text();
+
+			expect(body).toBe(
+				": conversation-stream.closed dependency_unavailable\n\n",
+			);
+			expect(body).not.toContain("authorization.revoked");
+			expect(body).not.toContain("private identity dependency detail");
+		},
+	);
+
+	it.each([
+		{ version: 1, status: 403 },
+		{ version: 2, status: 404 },
+	])(
+		"rejects ambiguous replay and non-enumerates V$version initial access",
+		async ({ version, status }) => {
+			const target = `/api/v${version}/conversations/conversation-private/events`;
+			const ambiguous = await testApp().app.request(
+				`${target}?cursor=cursor-1`,
+				{
+					headers: { "Last-Event-ID": "event-1" },
+				},
+			);
+			expect(ambiguous.status).toBe(400);
+			const denied = dependencies({
+				authorization: {
+					authorize: vi.fn().mockResolvedValue({ outcome: "denied" }),
+				},
+			});
+			const forbidden = await testApp(denied).app.request(target);
+			expect(forbidden.status).toBe(status);
+			expect(await forbidden.json()).toMatchObject({
+				code: "RESOURCE_UNAVAILABLE",
+			});
+			expect(denied.query.replay).not.toHaveBeenCalled();
+			const missing = dependencies();
+			missing.query.replay = vi.fn().mockResolvedValue(undefined);
+			const unavailable = await testApp(missing).app.request(target);
+			expect(unavailable.status).toBe(status);
+			const body = await unavailable.text();
+			expect(JSON.parse(body)).toMatchObject({ code: "RESOURCE_UNAVAILABLE" });
+			expect(body).not.toContain("conversation-private");
+			expect(body).not.toContain(identity.userId);
+		},
+	);
+
+	it.each([1, 2])(
+		"never accepts malformed persisted data as an SSE event on V%d",
+		async (version) => {
+			const query = dependencies().query;
+			query.replay = vi.fn().mockResolvedValue({
+				outcome: "events",
+				events: [
+					{
+						...persistedEvent,
+						eventPayload: {
+							type: "text.delta",
+							text: "safe",
+							secret: "must-not-pass",
+						},
+					},
+				],
+				resumeCursor: "cursor-1",
+			});
+			const response = await testApp(
+				dependencies({ query, streamPollIntervalMs: 1 }),
+			).app.request(`/api/v${version}/conversations/conversation-1/events`);
+
+			expect(response.status).toBe(503);
+			expect(await response.json()).toMatchObject({
+				code: "DEPENDENCY_UNAVAILABLE",
+			});
+		},
+	);
 
 	it("emits only messages accepted by the generated SSE schema", () => {
 		expect(

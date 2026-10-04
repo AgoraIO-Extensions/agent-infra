@@ -1,3 +1,4 @@
+import { pilotBrowserHttpOpenApiPathsV2 } from "@agent-infra/contracts/pilot";
 import type {
 	AgentLifecycleCommandRequestV1,
 	ApprovalDecisionRequestV1,
@@ -22,15 +23,23 @@ import type {
 	ListPendingAgentApplicationsV2Errors,
 	ListPendingAgentApplicationsV2Responses,
 } from "../../pilot/generated-v2/types.gen.js";
+import {
+	type CollectionReadUnavailable,
+	collectionReadFailure,
+} from "../collection-read-failure.js";
 
-type UnavailableState = {
-	kind: "unavailable";
-	retryable: boolean;
-};
+type UnavailableState = CollectionReadUnavailable;
 
 export type PendingAgentApplicationsState =
 	| { kind: "ready"; applications: AgentApplicationProjectionV2[] }
 	| UnavailableState;
+
+export function isRetryableAgentAdministrationError(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		(!("retryable" in error) || error.retryable === true)
+	);
+}
 
 export type AgentApplicationDecision =
 	| Pick<
@@ -48,6 +57,9 @@ export type AgentLifecycleCommand = Exclude<
 >;
 
 const maximumPendingApplicationPages = 100;
+const pendingApplicationPageSchema =
+	pilotBrowserHttpOpenApiPathsV2["/api/v2/admin/agent-applications"].get
+		.responses["200"].content["application/json"].schema;
 
 function requestError(retryable: boolean) {
 	return Object.assign(
@@ -62,14 +74,23 @@ function retryableError() {
 	return requestError(true);
 }
 
-function unavailable(error: { retryable?: boolean } | undefined) {
+function unavailable(
+	error:
+		| { retryable?: boolean; reason?: CollectionReadUnavailable["reason"] }
+		| undefined,
+) {
 	if (error?.retryable !== false) throw retryableError();
 
-	return { kind: "unavailable" as const, retryable: false };
+	return {
+		kind: "unavailable" as const,
+		retryable: false,
+		...(error?.reason ? { reason: error.reason } : {}),
+	};
 }
 
 export async function loadPendingAgentApplications(
 	client?: Client,
+	signal?: AbortSignal,
 ): Promise<PendingAgentApplicationsState> {
 	const applications: AgentApplicationProjectionV2[] = [];
 	const cursors = new Set<string>();
@@ -77,6 +98,7 @@ export async function loadPendingAgentApplications(
 	let pages = 0;
 
 	do {
+		signal?.throwIfAborted();
 		if (pages >= maximumPendingApplicationPages) throw retryableError();
 		pages += 1;
 		const query: ListPendingAgentApplicationsV2Data["query"] =
@@ -90,10 +112,18 @@ export async function loadPendingAgentApplications(
 		> = await listPendingAgentApplicationsV2<false>({
 			client,
 			query,
+			signal,
 			responseStyle: "fields",
 			throwOnError: false,
 		});
-		if (!result.data) return unavailable(result.error);
+		signal?.throwIfAborted();
+		const status = result.response?.status;
+		if (status !== 200) return unavailable(collectionReadFailure(status));
+		if (
+			!result.data ||
+			!pendingApplicationPageSchema.safeParse(result.data).success
+		)
+			return unavailable({ retryable: false, reason: "invalid-response" });
 
 		applications.push(...result.data.items);
 		cursor = result.data.nextCursor;

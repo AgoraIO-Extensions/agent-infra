@@ -242,6 +242,29 @@ export type AgentProjectionV2 = {
     };
 };
 
+export type ApplicationDisableRequestV1 = {
+    status: 'disabled';
+};
+
+export type ApplicationMetadataV1 = {
+    applicationId: string;
+    authorizationRevision: string;
+    createdAt: string;
+    name: string;
+    responsibleUserId: string;
+    status: 'active' | 'disabled';
+    updatedAt: string;
+};
+
+export type ApplicationRegistrationRequestV1 = {
+    name: string;
+};
+
+export type ApplicationRegistrationResponseV1 = {
+    metadata: ApplicationMetadataV1;
+    replayed: boolean;
+};
+
 export type ApprovalDecisionRequestV1 = {
     decision: 'approve';
     schemaVersion: 1;
@@ -530,6 +553,80 @@ export type PersistedConversationEventV1 = {
 } | ModelSelectionFallbackEventV1;
 
 export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2;
+
+export type PersonalApiCredentialIssueRequestV1 = {
+    expiresAt: string | null;
+    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+};
+
+export type PersonalApiCredentialIssueResponseV1 = {
+    /**
+     * First committed delivery only; never persisted or replayed.
+     */
+    credential: string;
+    metadata: PersonalApiCredentialMetadataV1;
+    replayed: false;
+} | {
+    credential: null;
+    metadata: PersonalApiCredentialMetadataV1;
+    replayed: true;
+};
+
+export type PersonalApiCredentialListQueryV1 = {
+    cursor?: string;
+    limit?: number;
+};
+
+export type PersonalApiCredentialMetadataV1 = {
+    createdAt: string;
+    credentialId: string;
+    expiresAt: string | null;
+    lastUsedAt: string | null;
+    revokedAt: string | null;
+    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+};
+
+export type PersonalApiCredentialNarrowRequestV1 = {
+    expiresAt?: string;
+    scopes?: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+};
+
+export type PersonalApiCredentialNarrowResponseV1 = {
+    metadata: PersonalApiCredentialMetadataV1;
+    replayed: boolean;
+};
+
+export type PersonalApiCredentialPageV1 = {
+    items: Array<PersonalApiCredentialMetadataV1>;
+    nextCursor: string | null;
+};
+
+export type PersonalApiCredentialRevokeResponseV1 = {
+    metadata: PersonalApiCredentialMetadataV1;
+    replayed: boolean;
+};
+
+export type PersonalRelayKeyReplaceRequestV1 = {
+    expectedVersion: number | null;
+    /**
+     * Write-only personal Relay Key; never returned or persisted as plaintext.
+     */
+    keyValue: string;
+};
+
+export type PersonalRelayKeyRevokeRequestV1 = {
+    expectedVersion: number;
+};
+
+export type PersonalRelayKeyStateV1 = {
+    isSet: false;
+    keyVersion: null;
+    schemaVersion: 1;
+} | {
+    isSet: true;
+    keyVersion: number;
+    schemaVersion: 1;
+};
 
 export type PilotInternalErrorV1 = {
     code: 'INTERNAL_ERROR';
@@ -871,6 +968,61 @@ export type DecideAgentApplicationV2Responses = {
 };
 
 export type DecideAgentApplicationV2Response = DecideAgentApplicationV2Responses[keyof DecideAgentApplicationV2Responses];
+
+export type ListAdminAgentsV2Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/admin/agents';
+};
+
+export type ListAdminAgentsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListAdminAgentsV2Error = ListAdminAgentsV2Errors[keyof ListAdminAgentsV2Errors];
+
+export type ListAdminAgentsV2Responses = {
+    /**
+     * Administrator agents
+     */
+    200: {
+        items: Array<AgentProjectionV2>;
+        nextCursor: string | null;
+    };
+};
+
+export type ListAdminAgentsV2Response = ListAdminAgentsV2Responses[keyof ListAdminAgentsV2Responses];
 
 export type ListPlatformAuditV2Data = {
     body?: never;
@@ -1408,6 +1560,476 @@ export type CommandAgentLifecycleV2Responses = {
 
 export type CommandAgentLifecycleV2Response = CommandAgentLifecycleV2Responses[keyof CommandAgentLifecycleV2Responses];
 
+export type RegisterApplicationV2Data = {
+    body: ApplicationRegistrationRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/applications';
+};
+
+export type RegisterApplicationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RegisterApplicationV2Error = RegisterApplicationV2Errors[keyof RegisterApplicationV2Errors];
+
+export type RegisterApplicationV2Responses = {
+    /**
+     * Original application metadata replayed
+     */
+    200: ApplicationRegistrationResponseV1;
+    /**
+     * Application committed
+     */
+    201: ApplicationRegistrationResponseV1;
+};
+
+export type RegisterApplicationV2Response = RegisterApplicationV2Responses[keyof RegisterApplicationV2Responses];
+
+export type GetOwnApplicationV2Data = {
+    body?: never;
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}';
+};
+
+export type GetOwnApplicationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetOwnApplicationV2Error = GetOwnApplicationV2Errors[keyof GetOwnApplicationV2Errors];
+
+export type GetOwnApplicationV2Responses = {
+    /**
+     * Own application metadata
+     */
+    200: ApplicationMetadataV1;
+};
+
+export type GetOwnApplicationV2Response = GetOwnApplicationV2Responses[keyof GetOwnApplicationV2Responses];
+
+export type DisableOwnApplicationV2Data = {
+    body: ApplicationDisableRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}';
+};
+
+export type DisableOwnApplicationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type DisableOwnApplicationV2Error = DisableOwnApplicationV2Errors[keyof DisableOwnApplicationV2Errors];
+
+export type DisableOwnApplicationV2Responses = {
+    /**
+     * Disabled application metadata
+     */
+    200: ApplicationMetadataV1;
+};
+
+export type DisableOwnApplicationV2Response = DisableOwnApplicationV2Responses[keyof DisableOwnApplicationV2Responses];
+
+export type IssueOrRotateApplicationApiCredentialV2Data = {
+    body: {
+        expiresAt: string | null;
+        operation: 'issue';
+        recipient: {
+            principalId: string;
+            principalType: 'user' | 'application';
+        };
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+    } | {
+        credentialId: string;
+        expiresAt: string | null;
+        operation: 'rotate';
+        recipient: {
+            principalId: string;
+            principalType: 'user' | 'application';
+        };
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+    };
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}/credentials';
+};
+
+export type IssueOrRotateApplicationApiCredentialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type IssueOrRotateApplicationApiCredentialV2Error = IssueOrRotateApplicationApiCredentialV2Errors[keyof IssueOrRotateApplicationApiCredentialV2Errors];
+
+export type IssueOrRotateApplicationApiCredentialV2Responses = {
+    /**
+     * Original metadata and delivery status replayed
+     */
+    200: {
+        delivery: {
+            attemptId: string;
+            grantRevision: string;
+            recipient: {
+                principalId: string;
+                principalType: 'user' | 'application';
+            };
+            status: 'delivery_pending' | 'delivery_in_flight' | 'accepted' | 'failed' | 'unknown';
+        };
+        metadata: {
+            applicationId: string;
+            createdAt: string;
+            credentialId: string;
+            expiresAt: string | null;
+            lastUsedAt: string | null;
+            revokedAt: string | null;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+        };
+        replayed: boolean;
+    };
+    /**
+     * Credential committed; inspect delivery status
+     */
+    201: {
+        delivery: {
+            attemptId: string;
+            grantRevision: string;
+            recipient: {
+                principalId: string;
+                principalType: 'user' | 'application';
+            };
+            status: 'delivery_pending' | 'delivery_in_flight' | 'accepted' | 'failed' | 'unknown';
+        };
+        metadata: {
+            applicationId: string;
+            createdAt: string;
+            credentialId: string;
+            expiresAt: string | null;
+            lastUsedAt: string | null;
+            revokedAt: string | null;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+        };
+        replayed: boolean;
+    };
+};
+
+export type IssueOrRotateApplicationApiCredentialV2Response = IssueOrRotateApplicationApiCredentialV2Responses[keyof IssueOrRotateApplicationApiCredentialV2Responses];
+
+export type GrantApplicationMaterialV2Data = {
+    body: {
+        expectedRevision?: string;
+        principalId: string;
+        principalType: 'user' | 'application';
+    };
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}/material-grant';
+};
+
+export type GrantApplicationMaterialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GrantApplicationMaterialV2Error = GrantApplicationMaterialV2Errors[keyof GrantApplicationMaterialV2Errors];
+
+export type GrantApplicationMaterialV2Responses = {
+    /**
+     * Material grant metadata
+     */
+    201: {
+        metadata: {
+            applicationId: string;
+            authorizationRevision: string;
+            createdAt: string;
+            principalId: string;
+            principalType: 'user' | 'application';
+            revokedAt: string | null;
+        };
+        replayed: boolean;
+    };
+};
+
+export type GrantApplicationMaterialV2Response = GrantApplicationMaterialV2Responses[keyof GrantApplicationMaterialV2Responses];
+
+export type ReadApplicationMaterialV2Data = {
+    body?: never;
+    path: {
+        applicationId: string;
+        principalType: 'user' | 'application';
+        principalId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}';
+};
+
+export type ReadApplicationMaterialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadApplicationMaterialV2Error = ReadApplicationMaterialV2Errors[keyof ReadApplicationMaterialV2Errors];
+
+export type ReadApplicationMaterialV2Responses = {
+    /**
+     * Material grant metadata
+     */
+    200: {
+        metadata: {
+            applicationId: string;
+            authorizationRevision: string;
+            createdAt: string;
+            principalId: string;
+            principalType: 'user' | 'application';
+            revokedAt: string | null;
+        };
+        replayed: boolean;
+    };
+};
+
+export type ReadApplicationMaterialV2Response = ReadApplicationMaterialV2Responses[keyof ReadApplicationMaterialV2Responses];
+
+export type RevokeApplicationMaterialV2Data = {
+    body: {
+        expectedRevision: string;
+        status: 'revoked';
+    };
+    path: {
+        applicationId: string;
+        principalType: 'user' | 'application';
+        principalId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}';
+};
+
+export type RevokeApplicationMaterialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokeApplicationMaterialV2Error = RevokeApplicationMaterialV2Errors[keyof RevokeApplicationMaterialV2Errors];
+
+export type RevokeApplicationMaterialV2Responses = {
+    /**
+     * Revoked material grant metadata
+     */
+    200: {
+        metadata: {
+            applicationId: string;
+            authorizationRevision: string;
+            createdAt: string;
+            principalId: string;
+            principalType: 'user' | 'application';
+            revokedAt: string | null;
+        };
+        replayed: boolean;
+    };
+};
+
+export type RevokeApplicationMaterialV2Response = RevokeApplicationMaterialV2Responses[keyof RevokeApplicationMaterialV2Responses];
+
 export type GetConversationV2Data = {
     body?: never;
     path: {
@@ -1486,6 +2108,10 @@ export type StreamConversationEventsV2Errors = {
      * Conversation access is unavailable
      */
     403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
     /**
      * Internal error
      */
@@ -1607,3 +2233,443 @@ export type GetDeploymentConfigurationV2Responses = {
 };
 
 export type GetDeploymentConfigurationV2Response = GetDeploymentConfigurationV2Responses[keyof GetDeploymentConfigurationV2Responses];
+
+export type ListPersonalApiCredentialsV2Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        limit?: number;
+        cursor?: string;
+    };
+    url: '/api/v2/me/api-credentials';
+};
+
+export type ListPersonalApiCredentialsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListPersonalApiCredentialsV2Error = ListPersonalApiCredentialsV2Errors[keyof ListPersonalApiCredentialsV2Errors];
+
+export type ListPersonalApiCredentialsV2Responses = {
+    /**
+     * Personal credential metadata page
+     */
+    200: PersonalApiCredentialPageV1;
+};
+
+export type ListPersonalApiCredentialsV2Response = ListPersonalApiCredentialsV2Responses[keyof ListPersonalApiCredentialsV2Responses];
+
+export type IssuePersonalApiCredentialV2Data = {
+    body: PersonalApiCredentialIssueRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/me/api-credentials';
+};
+
+export type IssuePersonalApiCredentialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type IssuePersonalApiCredentialV2Error = IssuePersonalApiCredentialV2Errors[keyof IssuePersonalApiCredentialV2Errors];
+
+export type IssuePersonalApiCredentialV2Responses = {
+    /**
+     * Original credential metadata; material is not replayed
+     */
+    200: {
+        credential: null;
+        metadata: PersonalApiCredentialMetadataV1;
+        replayed: true;
+    };
+    /**
+     * Credential committed with first-delivery material
+     */
+    201: {
+        /**
+         * First committed delivery only; never persisted or replayed.
+         */
+        credential: string;
+        metadata: PersonalApiCredentialMetadataV1;
+        replayed: false;
+    };
+};
+
+export type IssuePersonalApiCredentialV2Response = IssuePersonalApiCredentialV2Responses[keyof IssuePersonalApiCredentialV2Responses];
+
+export type RevokePersonalApiCredentialV2Data = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        credentialId: string;
+    };
+    query?: never;
+    url: '/api/v2/me/api-credentials/{credentialId}';
+};
+
+export type RevokePersonalApiCredentialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokePersonalApiCredentialV2Error = RevokePersonalApiCredentialV2Errors[keyof RevokePersonalApiCredentialV2Errors];
+
+export type RevokePersonalApiCredentialV2Responses = {
+    /**
+     * Current revoked credential metadata
+     */
+    200: PersonalApiCredentialRevokeResponseV1;
+};
+
+export type RevokePersonalApiCredentialV2Response = RevokePersonalApiCredentialV2Responses[keyof RevokePersonalApiCredentialV2Responses];
+
+export type NarrowPersonalApiCredentialV2Data = {
+    body: PersonalApiCredentialNarrowRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        credentialId: string;
+    };
+    query?: never;
+    url: '/api/v2/me/api-credentials/{credentialId}';
+};
+
+export type NarrowPersonalApiCredentialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type NarrowPersonalApiCredentialV2Error = NarrowPersonalApiCredentialV2Errors[keyof NarrowPersonalApiCredentialV2Errors];
+
+export type NarrowPersonalApiCredentialV2Responses = {
+    /**
+     * Current restricted credential metadata
+     */
+    200: PersonalApiCredentialRevokeResponseV1;
+};
+
+export type NarrowPersonalApiCredentialV2Response = NarrowPersonalApiCredentialV2Responses[keyof NarrowPersonalApiCredentialV2Responses];
+
+export type ListRecentPersonalConversationsV2Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/me/conversations/recent';
+};
+
+export type ListRecentPersonalConversationsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListRecentPersonalConversationsV2Error = ListRecentPersonalConversationsV2Errors[keyof ListRecentPersonalConversationsV2Errors];
+
+export type ListRecentPersonalConversationsV2Responses = {
+    /**
+     * Conversation history
+     */
+    200: {
+        items: Array<{
+            agentId: string;
+            conversationId: string;
+            createdAt: string;
+            lastConversationCursor: string | null;
+            schemaVersion: 1;
+            selectedModelOptionId: string | null;
+            selectedReasoningLevel: string | null;
+            status: 'ready' | 'active' | 'unavailable';
+            title: string | null;
+            updatedAt: string;
+        }>;
+        nextCursor: string | null;
+    };
+};
+
+export type ListRecentPersonalConversationsV2Response = ListRecentPersonalConversationsV2Responses[keyof ListRecentPersonalConversationsV2Responses];
+
+export type RevokePersonalRelayKeyV2Data = {
+    body: PersonalRelayKeyRevokeRequestV1;
+    path?: never;
+    query?: never;
+    url: '/api/v2/me/relay-key';
+};
+
+export type RevokePersonalRelayKeyV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokePersonalRelayKeyV2Error = RevokePersonalRelayKeyV2Errors[keyof RevokePersonalRelayKeyV2Errors];
+
+export type RevokePersonalRelayKeyV2Responses = {
+    /**
+     * Committed unset personal Key state
+     */
+    200: PersonalRelayKeyStateV1;
+};
+
+export type RevokePersonalRelayKeyV2Response = RevokePersonalRelayKeyV2Responses[keyof RevokePersonalRelayKeyV2Responses];
+
+export type GetPersonalRelayKeyV2Data = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v2/me/relay-key';
+};
+
+export type GetPersonalRelayKeyV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetPersonalRelayKeyV2Error = GetPersonalRelayKeyV2Errors[keyof GetPersonalRelayKeyV2Errors];
+
+export type GetPersonalRelayKeyV2Responses = {
+    /**
+     * Personal Key state only
+     */
+    200: PersonalRelayKeyStateV1;
+};
+
+export type GetPersonalRelayKeyV2Response = GetPersonalRelayKeyV2Responses[keyof GetPersonalRelayKeyV2Responses];
+
+export type ReplacePersonalRelayKeyV2Data = {
+    body: PersonalRelayKeyReplaceRequestV1;
+    path?: never;
+    query?: never;
+    url: '/api/v2/me/relay-key';
+};
+
+export type ReplacePersonalRelayKeyV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReplacePersonalRelayKeyV2Error = ReplacePersonalRelayKeyV2Errors[keyof ReplacePersonalRelayKeyV2Errors];
+
+export type ReplacePersonalRelayKeyV2Responses = {
+    /**
+     * Committed personal Key state
+     */
+    200: PersonalRelayKeyStateV1;
+};
+
+export type ReplacePersonalRelayKeyV2Response = ReplacePersonalRelayKeyV2Responses[keyof ReplacePersonalRelayKeyV2Responses];

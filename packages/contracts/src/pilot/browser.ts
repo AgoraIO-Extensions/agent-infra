@@ -1,5 +1,4 @@
 import { z } from "zod";
-
 import {
 	IdempotencyKeyV1Schema,
 	OpaqueCursorV1Schema,
@@ -9,9 +8,40 @@ import {
 	TraceIdV1Schema,
 } from "../index.ts";
 import {
+	ApplicationApiCredentialRequestV1Schema,
+	ApplicationApiCredentialResponseV1Schema,
+} from "./application-api-credentials.ts";
+import {
+	ApplicationMaterialGrantRequestV1Schema,
+	ApplicationMaterialGrantResponseV1Schema,
+	ApplicationMaterialGrantRevokeRequestV1Schema,
+} from "./application-material-grants.ts";
+import {
+	ApplicationDisableRequestV1Schema,
+	ApplicationMetadataV1Schema,
+	ApplicationRegistrationRequestV1Schema,
+	ApplicationRegistrationResponseV1Schema,
+} from "./application-registration.ts";
+import {
 	PilotInternalErrorV1Schema,
 	PilotProtocolErrorV1Schema,
 } from "./errors.ts";
+import {
+	PersonalApiCredentialIssueRequestV1Schema,
+	PersonalApiCredentialIssueResponseV1Schema,
+	PersonalApiCredentialListQueryV1Schema,
+	PersonalApiCredentialMetadataV1Schema,
+	PersonalApiCredentialNarrowRequestV1Schema,
+	PersonalApiCredentialNarrowResponseV1Schema,
+	PersonalApiCredentialPageV1Schema,
+	PersonalApiCredentialRevokeResponseV1Schema,
+} from "./personal-api-credentials.ts";
+import {
+	PersonalRelayKeyReplaceRequestV1Schema,
+	PersonalRelayKeyRevokeRequestV1Schema,
+	PersonalRelayKeyStateV1Schema,
+} from "./personal-relay-key.ts";
+import { WecomApplicationCredentialsV1Schema } from "./wecom-application.ts";
 
 const nonEmptyString = () => z.string().min(1);
 const idArray = () => z.array(OpaqueIdV1Schema);
@@ -19,6 +49,13 @@ const pathId = () => OpaqueIdV1Schema;
 const idempotencyHeader = z.strictObject({
 	"Idempotency-Key": IdempotencyKeyV1Schema,
 });
+const personalCredentialSecurity: Record<string, never[]>[] = [
+	{ PlatformSession: [] },
+];
+const agentListSecurity: Record<string, never[]>[] = [
+	{ PlatformSession: [] },
+	{ platformApiCredential: [] },
+];
 const pageQuery = z.strictObject({
 	cursor: OpaqueCursorV1Schema.optional(),
 	limit: z.coerce.number().int().min(1).max(100).optional(),
@@ -63,6 +100,24 @@ export const BrowserSessionProjectionV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	user: BrowserUserProjectionV1Schema,
 });
+
+export const ConnectionCapabilityProjectionV1Schema = z.discriminatedUnion(
+	"status",
+	[
+		z.strictObject({
+			status: z.literal("available"),
+			schemaVersion: z.literal(1),
+			publicOrigin: z.string().url(),
+			mcpPath: z.string().startsWith("/"),
+			configFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+		}),
+		z.strictObject({
+			status: z.literal("unavailable"),
+			schemaVersion: z.literal(1),
+			reason: z.enum(["missing", "invalid", "unapproved", "unavailable"]),
+		}),
+	],
+);
 
 export const AvailabilityTargetV1Schema = z.discriminatedUnion("kind", [
 	z.strictObject({ kind: z.literal("user"), userId: OpaqueIdV1Schema }),
@@ -605,6 +660,9 @@ const wecomSetupPath = z.strictObject({
 	agentId: pathId(),
 	sessionId: pathId(),
 });
+const wecomAppSetupProjection = WecomSetupProjectionV1Schema.extend({
+	callbackUrl: z.url(),
+});
 export const pilotBrowserHttpOpenApiPathsV1 = {
 	"/api/v1/agents/{agentId}/wecom-bot": {
 		get: {
@@ -687,6 +745,83 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 			},
 		},
 	},
+	"/api/v1/agents/{agentId}/wecom-app": {
+		get: {
+			operationId: "getWecomAppConnection",
+			requestParams: { path: z.strictObject({ agentId: pathId() }) },
+			responses: {
+				"200": jsonResponse(
+					"Owner application connection status",
+					z.strictObject({
+						status: z.enum([
+							"not_configured",
+							"callback",
+							"verifying",
+							"connected",
+							"disconnected",
+							"auth_failed",
+						]),
+						sessionId: OpaqueIdV1Schema.optional(),
+						callbackUrl: z.url().optional(),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-app-setup": {
+		post: {
+			operationId: "beginWecomAppSetup",
+			requestParams: { path: z.strictObject({ agentId: pathId() }) },
+			responses: {
+				"200": jsonResponse(
+					"Owner application setup session",
+					wecomAppSetupProjection.extend({ state: wecomSetupState }),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}": {
+		get: {
+			operationId: "getWecomAppSetup",
+			requestParams: { path: wecomSetupPath },
+			responses: {
+				"200": jsonResponse(
+					"Owner application setup status",
+					wecomAppSetupProjection,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials": {
+		post: {
+			operationId: "submitWecomAppCredentials",
+			requestParams: { path: wecomSetupPath },
+			requestBody: requiredJsonRequestBody(WecomApplicationCredentialsV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Candidate pending Worker validation",
+					wecomAppSetupProjection,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel": {
+		post: {
+			operationId: "cancelWecomAppSetup",
+			requestParams: { path: wecomSetupPath },
+			responses: {
+				"200": jsonResponse(
+					"Cancelled application setup session",
+					wecomAppSetupProjection,
+				),
+				...errorResponses,
+			},
+		},
+	},
 
 	"/api/v1/wecom/receipts": {
 		get: {
@@ -745,6 +880,18 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 				"200": jsonResponse(
 					"Current browser session",
 					BrowserSessionProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/connection/capability": {
+		get: {
+			operationId: "getConnectionCapability",
+			responses: {
+				"200": jsonResponse(
+					"Server-resolved Connection capability",
+					ConnectionCapabilityProjectionV1Schema,
 				),
 				...errorResponses,
 			},
@@ -1003,6 +1150,297 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/applications/{applicationId}/credentials": {
+		post: {
+			operationId: "issueOrRotateApplicationApiCredentialV2",
+			summary:
+				"Issue or rotate an application credential for an explicitly granted recipient",
+			description:
+				"Current responsible-user browser session only. Material is delivered through the trusted consumer, never this management response. Same-key retry only returns metadata and delivery status; unknown delivery requires explicit rotation with a new key. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ applicationId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(
+				ApplicationApiCredentialRequestV1Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Credential committed; inspect delivery status",
+					ApplicationApiCredentialResponseV1Schema,
+				),
+				"200": jsonResponse(
+					"Original metadata and delivery status replayed",
+					ApplicationApiCredentialResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/applications": {
+		post: {
+			operationId: "registerApplicationV2",
+			summary: "Register an application owned by the current browser user",
+			description:
+				"Active browser session only; no Authorization header or query. Responsibility is bound by the server. Same-key replay returns the original metadata. No credential or grant is issued. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				ApplicationRegistrationRequestV1Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Application committed",
+					ApplicationRegistrationResponseV1Schema,
+				),
+				"200": jsonResponse(
+					"Original application metadata replayed",
+					ApplicationRegistrationResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/applications/{applicationId}/material-grant": {
+		post: {
+			operationId: "grantApplicationMaterialV2",
+			summary:
+				"Grant application credential material access to a typed recipient",
+			description:
+				"Current system_admin only. The response contains grant metadata and never credential material; responsibility and administrator roles alone do not return material.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ applicationId: OpaqueIdV1Schema }),
+			},
+			requestBody: requiredJsonRequestBody(
+				ApplicationMaterialGrantRequestV1Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Material grant metadata",
+					ApplicationMaterialGrantResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}":
+		{
+			patch: {
+				operationId: "revokeApplicationMaterialV2",
+				summary: "Revoke a typed application credential material grant",
+				description:
+					"Current system_admin only. expectedRevision is required to prevent a stale revoke from changing a newer grant.",
+				security: personalCredentialSecurity,
+				requestParams: {
+					path: z.strictObject({
+						applicationId: OpaqueIdV1Schema,
+						principalType: z.enum(["user", "application"]),
+						principalId: OpaqueIdV1Schema,
+					}),
+				},
+				requestBody: requiredJsonRequestBody(
+					ApplicationMaterialGrantRevokeRequestV1Schema,
+				),
+				responses: {
+					"200": jsonResponse(
+						"Revoked material grant metadata",
+						ApplicationMaterialGrantResponseV1Schema,
+					),
+					...errorResponses,
+				},
+			},
+			get: {
+				operationId: "readApplicationMaterialV2",
+				summary: "Read typed application credential material grant metadata",
+				description:
+					"Current system_admin only. Grant metadata is returned; credential material is never returned.",
+				security: personalCredentialSecurity,
+				requestParams: {
+					path: z.strictObject({
+						applicationId: OpaqueIdV1Schema,
+						principalType: z.enum(["user", "application"]),
+						principalId: OpaqueIdV1Schema,
+					}),
+				},
+				responses: {
+					"200": jsonResponse(
+						"Material grant metadata",
+						ApplicationMaterialGrantResponseV1Schema,
+					),
+					...errorResponses,
+				},
+			},
+		},
+	"/api/v2/applications/{applicationId}": {
+		patch: {
+			operationId: "disableOwnApplicationV2",
+			summary: "Disable an application owned by the current browser user",
+			description:
+				"Active browser session only; no Authorization header or query. Current ownership is rechecked on replay. Cross-person and missing applications both return 404. No credential material is returned. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ applicationId: OpaqueIdV1Schema }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(ApplicationDisableRequestV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Disabled application metadata",
+					ApplicationMetadataV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		get: {
+			operationId: "getOwnApplicationV2",
+			summary: "Read an application owned by the current browser user",
+			description:
+				"Active browser session only; no Authorization header, query or request body. Cross-person and missing applications both return 404. Metadata contains no material or grants. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ applicationId: OpaqueIdV1Schema }),
+			},
+			responses: {
+				"200": jsonResponse(
+					"Own application metadata",
+					ApplicationMetadataV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/me/relay-key": {
+		get: {
+			operationId: "getPersonalRelayKeyV2",
+			summary: "Read the current browser user's personal Relay Key state",
+			description:
+				"Active browser session only; no Authorization header, query or request body. No Key material is returned. Responses are no-store.",
+			security: personalCredentialSecurity,
+			responses: {
+				"200": jsonResponse(
+					"Personal Key state only",
+					PersonalRelayKeyStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		put: {
+			operationId: "replacePersonalRelayKeyV2",
+			summary: "Set or replace the current browser user's personal Relay Key",
+			description:
+				"Active browser session only; no Authorization header or query. expectedVersion is a compare-and-swap guard. The approved read-only validation proves authentication only. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestBody: requiredJsonRequestBody(
+				PersonalRelayKeyReplaceRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Committed personal Key state",
+					PersonalRelayKeyStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		delete: {
+			operationId: "revokePersonalRelayKeyV2",
+			summary: "Revoke the current browser user's personal Relay Key pointer",
+			description:
+				"Active browser session only; no Authorization header or query. Already accepted Executions retain their exact original encrypted version. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestBody: requiredJsonRequestBody(
+				PersonalRelayKeyRevokeRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Committed unset personal Key state",
+					PersonalRelayKeyStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/me/api-credentials": {
+		get: {
+			operationId: "listPersonalApiCredentialsV2",
+			summary: "List only the current browser user's credential metadata",
+			description:
+				"Any Authorization header is rejected. Limit defaults to 20; cursor is bound to this user and limit. Credential material and hashes are never returned. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: { query: PersonalApiCredentialListQueryV1Schema },
+			responses: {
+				"200": jsonResponse(
+					"Personal credential metadata page",
+					PersonalApiCredentialPageV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		post: {
+			operationId: "issuePersonalApiCredentialV2",
+			summary: "Issue a personal credential with one-time material delivery",
+			description:
+				"Active browser user only. Any Authorization header is rejected. Same-key replay returns the original current metadata and null material. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				PersonalApiCredentialIssueRequestV1Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Credential committed with first-delivery material",
+					PersonalApiCredentialIssueResponseV1Schema.options[0],
+				),
+				"200": jsonResponse(
+					"Original credential metadata; material is not replayed",
+					PersonalApiCredentialIssueResponseV1Schema.options[1],
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/me/api-credentials/{credentialId}": {
+		patch: {
+			operationId: "narrowPersonalApiCredentialV2",
+			summary: "Restrict one personal credential's scopes or expiry",
+			description:
+				"Active browser user only. Any Authorization header is rejected. Scopes can only be a nonempty subset; expiry can only be made earlier. Revoked or expired credentials are never revived. Same-key replay returns current metadata. Cross-person and absent IDs both return 404. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ credentialId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(
+				PersonalApiCredentialNarrowRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Current restricted credential metadata",
+					PersonalApiCredentialNarrowResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		delete: {
+			operationId: "revokePersonalApiCredentialV2",
+			summary: "Revoke one credential owned by the current browser user",
+			description:
+				"Any Authorization header is rejected. Cross-person and missing credentials both return 404. No request body or identity overrides are accepted. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				header: idempotencyHeader,
+				path: z.strictObject({ credentialId: OpaqueIdV1Schema }),
+			},
+			responses: {
+				"200": jsonResponse(
+					"Current revoked credential metadata",
+					PersonalApiCredentialRevokeResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/deployment/configuration": {
 		get: {
 			operationId: "getDeploymentConfigurationV2",
@@ -1103,9 +1541,22 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+	"/api/v2/admin/agents": {
+		get: {
+			operationId: "listAdminAgentsV2",
+			requestParams: { query: pageQuery },
+			responses: {
+				"200": jsonResponse("Administrator agents", agentPageV2),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agents": {
 		get: {
 			operationId: "listAgentsV2",
+			description:
+				"Browser discovery/Owner uses PlatformSession. Personal Bearer requires agent:read and current explicit manage or use grants; only limit/cursor, no scope override or mixed Cookie.",
+			security: agentListSecurity,
 			requestParams: { query: agentListQuery },
 			responses: {
 				"200": jsonResponse("Visible agents", agentPageV2),
@@ -1179,6 +1630,7 @@ export const pilotBrowserSchemasV1 = {
 	AgentResourceProfileProjectionV1: AgentResourceProfileProjectionV1Schema,
 	ApprovalDecisionRequestV1: ApprovalDecisionRequestV1Schema,
 	BrowserSessionProjectionV1: BrowserSessionProjectionV1Schema,
+	ConnectionCapabilityProjectionV1: ConnectionCapabilityProjectionV1Schema,
 	CommandAcceptedProjectionV1: CommandAcceptedProjectionV1Schema,
 	ChannelBindingInputV1: ChannelBindingInputV1Schema,
 	ChannelBindingProjectionV1: ChannelBindingProjectionV1Schema,
@@ -1197,6 +1649,26 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	ApplicationMetadataV1: ApplicationMetadataV1Schema,
+	ApplicationDisableRequestV1: ApplicationDisableRequestV1Schema,
+	ApplicationRegistrationRequestV1: ApplicationRegistrationRequestV1Schema,
+	ApplicationRegistrationResponseV1: ApplicationRegistrationResponseV1Schema,
+	PersonalRelayKeyStateV1: PersonalRelayKeyStateV1Schema,
+	PersonalRelayKeyReplaceRequestV1: PersonalRelayKeyReplaceRequestV1Schema,
+	PersonalRelayKeyRevokeRequestV1: PersonalRelayKeyRevokeRequestV1Schema,
+	PersonalApiCredentialIssueRequestV1:
+		PersonalApiCredentialIssueRequestV1Schema,
+	PersonalApiCredentialIssueResponseV1:
+		PersonalApiCredentialIssueResponseV1Schema,
+	PersonalApiCredentialMetadataV1: PersonalApiCredentialMetadataV1Schema,
+	PersonalApiCredentialListQueryV1: PersonalApiCredentialListQueryV1Schema,
+	PersonalApiCredentialPageV1: PersonalApiCredentialPageV1Schema,
+	PersonalApiCredentialNarrowRequestV1:
+		PersonalApiCredentialNarrowRequestV1Schema,
+	PersonalApiCredentialNarrowResponseV1:
+		PersonalApiCredentialNarrowResponseV1Schema,
+	PersonalApiCredentialRevokeResponseV1:
+		PersonalApiCredentialRevokeResponseV1Schema,
 	AgentLifecycleCommandRequestV1: AgentLifecycleCommandRequestV1Schema,
 	ApprovalDecisionRequestV1: ApprovalDecisionRequestV1Schema,
 	AgentApplicationCreateRequestV2: AgentApplicationCreateRequestV2Schema,

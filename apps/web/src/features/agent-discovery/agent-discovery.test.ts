@@ -6,7 +6,11 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { createClient } from "../../pilot/generated-v2/client/index.js";
-import { loadAgentDetail, loadAgentDiscovery } from "./agent-discovery.js";
+import {
+	isRetryableAgentDiscoveryError,
+	loadAgentDetail,
+	loadAgentDiscovery,
+} from "./agent-discovery.js";
 
 const startingAgent = AgentProjectionV2Schema.parse(
 	pilotFakeScenariosV2.starting.response.body,
@@ -27,6 +31,87 @@ function createAgentClient(
 }
 
 describe("Agent discovery generated-client consumer", () => {
+	it.each(["visible", "owner"] as const)(
+		"discards prior pages when the %s response contains an invalid projection",
+		async (scope) => {
+			let requests = 0;
+			const client = createClient({
+				baseUrl: "https://platform.example.test",
+				fetch: async () => {
+					requests += 1;
+					return Response.json({
+						items:
+							requests === 1
+								? [startingAgent]
+								: [
+										{
+											...secondAgent,
+											serviceAvailability: "private-invalid-state",
+										},
+									],
+						nextCursor: requests === 1 ? "agent-pilot-1" : null,
+					});
+				},
+			});
+			await expect(loadAgentDiscovery(client, scope)).resolves.toEqual({
+				kind: "unavailable",
+				retryable: false,
+				reason: "invalid-response",
+			});
+			expect(requests).toBe(2);
+		},
+	);
+
+	it.each([
+		null,
+		{ items: [], nextCursor: 42 },
+		{ items: [], nextCursor: null, privateField: "rejected" },
+	])(
+		"fails closed for a malformed successful collection response %j",
+		async (body) => {
+			const client = createClient({
+				baseUrl: "https://platform.example.test",
+				fetch: async () => Response.json(body),
+			});
+			await expect(loadAgentDiscovery(client)).resolves.toEqual({
+				kind: "unavailable",
+				retryable: false,
+				reason: "invalid-response",
+			});
+		},
+	);
+
+	it.each([
+		null,
+		{ ...startingAgent, serviceAvailability: "private-invalid-state" },
+		secondAgent,
+	])(
+		"rejects invalid or mismatched successful detail without returning its data",
+		async (body) => {
+			const client = createClient({
+				baseUrl: "https://platform.example.test",
+				fetch: async () => Response.json(body),
+			});
+			await expect(
+				loadAgentDetail(startingAgent.agentId, client),
+			).resolves.toEqual({
+				kind: "unavailable",
+				retryable: false,
+			});
+		},
+	);
+
+	it("treats unclassified transport errors as retryable", () => {
+		expect(isRetryableAgentDiscoveryError(new Error("network failure"))).toBe(
+			true,
+		);
+		expect(
+			isRetryableAgentDiscoveryError(
+				Object.assign(new Error("forbidden"), { retryable: false }),
+			),
+		).toBe(false);
+	});
+
 	it("consumes the generated visible-Agent list and preserves its projection", async () => {
 		const server = createPilotAgentMockServerV2({
 			listAgents: {
@@ -103,6 +188,7 @@ describe("Agent discovery generated-client consumer", () => {
 			loadAgentDiscovery(createAgentClient(server)),
 		).rejects.toMatchObject({
 			message: "Agent data is temporarily unavailable",
+			retryable: true,
 		});
 		expect(server.requests).toHaveLength(2);
 	});
@@ -124,6 +210,7 @@ describe("Agent discovery generated-client consumer", () => {
 			loadAgentDiscovery(createAgentClient(server)),
 		).rejects.toMatchObject({
 			message: "Agent data is temporarily unavailable",
+			retryable: true,
 		});
 		expect(requests).toBe(100);
 	});
@@ -143,6 +230,7 @@ describe("Agent discovery generated-client consumer", () => {
 			).resolves.toEqual({
 				kind: "unavailable",
 				retryable: false,
+				reason: status === 403 ? "denied" : "not-found",
 			});
 		}
 	});
@@ -201,6 +289,7 @@ describe("Agent discovery generated-client consumer", () => {
 			loadAgentDetail("agent-pilot-1", createAgentClient(server)),
 		).rejects.toMatchObject({
 			message: "Agent data is temporarily unavailable",
+			retryable: true,
 		});
 	});
 });

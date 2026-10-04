@@ -1,6 +1,6 @@
 # ADR：#670 M1 共享契约与最终装配收口
 
-- 状态：已决议（仅覆盖 #670 的拆分交接；不改变 #150 汇合计划的总体状态）
+- 状态：已决议（仅覆盖 #670 的拆分交接；不改变完整 M1 验收状态，现行汇合入口为 #144）
 - 日期：2026-09-22
 - 基线：`origin/main` `76d6ecc10ce8bc9a6c69a7d655e903c52fdd9a6d`
 - 范围：#506 拆分后的 contracts、vendor、Runtime/Host、Platform/local、Web
@@ -55,7 +55,7 @@ Issues #629、#630、#637 只交付冻结输入、契约生成物和读取适配
 | Actual facts / audit | `packages/contracts/src/runtime/events.ts` 与现有 execution/audit consumers | #508/#483 需在实际模型/工具边界持久 intent/result/unknown、attempt、耗时/用量；#484/#441 读取同一事实 | execution/operation/attempt/cursor；真实 driver fault matrix；查询/观测回读 |
 | Web | `apps/web` 已有管理/对话消费代码和 consumer tests | #638 需针对当前 API 的主体/授权、模型选择、SSE 恢复和真实首通完成消费验证 | generated client、HTTP/SSE；浏览器/正式 API 联测 |
 
-这些资产中的 Schema、工厂、healthz、组件或 fixture 测试不能替代正式启动路径。完整产品 AC、真实身份、模型、四模板和 Connection 联合验收仍由 #508/#481/#482/#483/#484/#441、#194、#435 和 #150 负责。
+这些资产中的 Schema、工厂、healthz、组件或 fixture 测试不能替代正式启动路径。完整产品 AC、真实身份、模型、四模板和 Connection 联合验收仍由 #508/#481/#482/#483/#484/#441、#194、#192 等原功能入口取证，由 #144 汇合；#435 保持已退役的历史状态。
 
 ## 唯一装配 seam
 
@@ -73,7 +73,7 @@ Issues #629、#630、#637 只交付冻结输入、契约生成物和读取适配
 - **授权与隔离**：使用正式用户/应用身份验证资源隔离、凭证失效与主体撤权；不能把 Owner、责任人或旧 session 当作调用方身份。
 - **恢复与副作用**：覆盖重启、租约接管、SSE 重连、取消竞态、投递前后崩溃和 unknown；可能已发生的外部操作不能盲重试或换 ID。
 - **事实与审计**：#483 的实际模型/工具证据、#484 的查询和 #441 的观测均能回读同一 execution/operation/attempt 关联；正文、附件、思考和凭证不进入事实/审计/观测。
-- **联合验收**：#194 负责本地主链路，#435 负责 Connection 联合 Pilot，#150 负责完整 M1 汇合。拆分票和本 ADR 不代签这些入口。
+- **联合验收**：#194 负责本地主链路，#192 记录当前 P0 代表旅程，#144 保留完整 M1 与后续 Pilot 的验收义务；#435 不恢复。拆分票和本 ADR 不代签这些入口。
 
 ## 原功能票交接
 

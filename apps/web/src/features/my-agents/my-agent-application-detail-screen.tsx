@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { ArrowLeft, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +16,7 @@ import { useResultFocus } from "@/hooks/use-result-focus";
 
 import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
+import { PageLoadingState } from "../page-loading-state.js";
 import {
 	agentApplicationEditActionLabels,
 	getAgentApplicationEditAction,
@@ -23,7 +25,9 @@ import {
 } from "./my-agent-applications.js";
 
 type MyAgentApplicationDetailScreenProps = {
+	onRetry?: () => void;
 	onWithdraw: () => void;
+	retrying?: boolean;
 	state: MyAgentApplicationState | { kind: "loading" };
 	withdrawalError?: boolean;
 	withdrawalResult?: AgentApplicationProjectionV2;
@@ -31,7 +35,9 @@ type MyAgentApplicationDetailScreenProps = {
 };
 
 export function MyAgentApplicationDetailScreen({
+	onRetry,
 	onWithdraw,
+	retrying = false,
 	state,
 	withdrawalError = false,
 	withdrawalResult,
@@ -64,7 +70,8 @@ export function MyAgentApplicationDetailScreen({
 	useEffect(() => {
 		if (applicationId !== null) setWithdrawalLatched(false);
 	}, [applicationId]);
-	if (state.kind === "loading") return <p role="status">正在读取申请…</p>;
+	if (state.kind === "loading")
+		return <PageLoadingState title="申请详情" message="正在读取申请…" />;
 	if (state.kind === "unavailable")
 		return (
 			<section aria-labelledby="my-agent-application-detail-heading">
@@ -77,6 +84,18 @@ export function MyAgentApplicationDetailScreen({
 							? "暂时无法读取申请，请稍后重试。"
 							: "当前无法查看此申请。"}
 					</AlertDescription>
+					{state.retryable && onRetry ? (
+						<Button
+							className="mt-4"
+							variant="outline"
+							disabled={retrying}
+							onClick={onRetry}
+							type="button"
+						>
+							<RefreshCw aria-hidden="true" data-icon="inline-start" />
+							{retrying ? "正在重新加载…" : "重新加载申请"}
+						</Button>
+					) : null}
 				</Alert>
 				<Link
 					className={buttonVariants({ variant: "outline" })}
@@ -96,29 +115,69 @@ export function MyAgentApplicationDetailScreen({
 		<section aria-labelledby="my-agent-application-detail-heading">
 			<header className="page-heading">
 				<div>
-					<h1 id="my-agent-application-detail-heading">申请详情</h1>
-					<p>申请记录与处理进度。</p>
+					<Link
+						className={buttonVariants({ variant: "ghost" })}
+						to="/my-agents"
+					>
+						<ArrowLeft aria-hidden="true" />
+						返回我的 Agent
+					</Link>
+					<p className="page-eyebrow">申请详情 · {application.applicationId}</p>
+					<h1 id="my-agent-application-detail-heading">{application.name}</h1>
+					<p>{application.description}</p>
 				</div>
-				<Link
-					className={buttonVariants({ variant: "outline" })}
-					to="/my-agents"
-				>
-					返回我的 Agent
-				</Link>
 			</header>
-			<div className="form-layout">
+			<div className="form-layout application-detail-layout">
 				<div className="min-w-0">
-					<div className="status-line">
-						<Badge variant="outline">
+					<div className="section-heading">
+						<div>
+							<h2>审批进度</h2>
+							<p>状态以最新申请记录为准</p>
+						</div>
+						<Badge variant="outline" data-status={application.status}>
 							{agentManagementStatusLabels[application.status]}
 						</Badge>
-						<span>
-							提交于{" "}
-							<time dateTime={application.submittedAt}>
-								{application.submittedAt}
-							</time>
-						</span>
 					</div>
+					<ul className="application-progress">
+						<li>
+							<div>
+								<strong>申请已提交</strong>
+								<small>
+									提交于{" "}
+									<time dateTime={application.submittedAt}>
+										{application.submittedAt}
+									</time>
+								</small>
+							</div>
+							<Badge variant="outline">已提交</Badge>
+						</li>
+						<li>
+							<div>
+								<strong>系统管理员审批</strong>
+								<small>
+									{application.decision ? (
+										<span>
+											审批时间{" "}
+											<time dateTime={application.decision.decidedAt}>
+												{application.decision.decidedAt}
+											</time>
+										</span>
+									) : application.status === "withdrawn" ? (
+										"申请已撤回，不再等待审批。"
+									) : (
+										"等待管理员审阅资源与配置。"
+									)}
+								</small>
+							</div>
+							<Badge variant="outline" data-status={application.status}>
+								{application.decision
+									? "已审批"
+									: application.status === "withdrawn"
+										? "不再审批"
+										: "等待"}
+							</Badge>
+						</li>
+					</ul>
 					{application.decision?.reason ? (
 						<Alert variant="destructive" role="status" className="my-3">
 							<AlertDescription>
@@ -127,77 +186,7 @@ export function MyAgentApplicationDetailScreen({
 							</AlertDescription>
 						</Alert>
 					) : null}
-					<section className="detail-section" aria-label="申请配置摘要">
-						<h2>{application.name}</h2>
-						<p>{application.description}</p>
-						<dl>
-							<dt>
-								{application.source.kind === "standard"
-									? "标准模板"
-									: "镜像地址"}
-							</dt>
-							<dd>
-								{application.source.kind === "standard"
-									? application.source.templateId
-									: application.source.imageReference}
-							</dd>
-							<dt>Owner</dt>
-							<dd>
-								{configuration.owners
-									.map((owner) => owner.displayName)
-									.join("、") || "未提供"}
-							</dd>
-							<dt>使用范围</dt>
-							<dd>
-								{configuration.availability.length ? (
-									<ul>
-										{configuration.availability.map((target) => (
-											<li key={JSON.stringify(target)}>
-												{target.kind === "user"
-													? `用户 ${target.userId}`
-													: `组织 ${target.organizationId}`}
-											</li>
-										))}
-									</ul>
-								) : (
-									"未额外指定"
-								)}
-							</dd>
-							<dt>模型范围</dt>
-							<dd>
-								{configuration.modelOptions.length ? (
-									<ul>
-										{configuration.modelOptions.map((model) => (
-											<li key={model.optionId}>
-												{model.displayName} · {model.modelId} ·{" "}
-												{model.reasoningLevels.join("、")}
-											</li>
-										))}
-									</ul>
-								) : (
-									"未提供模型选项"
-								)}
-							</dd>
-							<dt>默认模型</dt>
-							<dd>
-								{defaultModel?.displayName ??
-									configuration.defaultModelOptionId ??
-									"未提供"}
-							</dd>
-							<dt>默认推理档位</dt>
-							<dd>{configuration.defaultReasoningLevel ?? "未提供"}</dd>
-							{application.decision ? (
-								<>
-									<dt>审批时间</dt>
-									<dd>
-										<time dateTime={application.decision.decidedAt}>
-											{application.decision.decidedAt}
-										</time>
-									</dd>
-								</>
-							) : null}
-						</dl>
-					</section>
+
 					<div className="actions">
 						{editAction ? (
 							<Link
@@ -280,25 +269,80 @@ export function MyAgentApplicationDetailScreen({
 						</Alert>
 					) : null}
 				</div>
-				<aside className="form-aside">
-					<h2>申请说明</h2>
-					<p>审批用于确认预设资源占用。</p>
-					<ol>
-						<li>填写配置并提交申请</li>
-						<li>管理员审阅</li>
-						<li>批准后创建 Agent</li>
-					</ol>
-					<h2>资源预设</h2>
-					<p>{application.resourceProfile.displayName}</p>
-					<p className="text-sm">
-						CPU {application.resourceProfile.estimatedResources.cpuMillicores} m
-						· 内存 {application.resourceProfile.estimatedResources.memoryMiB}{" "}
-						MiB · 存储{" "}
-						{application.resourceProfile.estimatedResources.storageGiB} GiB
-					</p>
-					<p className="text-muted-foreground text-sm">
-						Secret 和模型凭证不回显。申请结果以此处读取的最新状态为准。
-					</p>
+				<aside className="application-detail-aside">
+					{" "}
+					<section className="form-aside" aria-label="申请配置摘要">
+						<h2>申请配置</h2>
+						<dl className="metadata-facts">
+							<dt>
+								{application.source.kind === "standard"
+									? "标准模板"
+									: "镜像地址"}
+							</dt>
+							<dd>
+								{application.source.kind === "standard"
+									? application.source.templateId
+									: application.source.imageReference}
+							</dd>
+							<dt>Owner</dt>
+							<dd>
+								{configuration.owners
+									.map((owner) => owner.displayName)
+									.join("、") || "未提供"}
+							</dd>
+							<dt>使用范围</dt>
+							<dd>
+								{configuration.availability.length ? (
+									<ul>
+										{configuration.availability.map((target) => (
+											<li key={JSON.stringify(target)}>
+												{target.kind === "user"
+													? `用户 ${target.userId}`
+													: `组织 ${target.organizationId}`}
+											</li>
+										))}
+									</ul>
+								) : (
+									"未额外指定"
+								)}
+							</dd>
+							<dt>模型范围</dt>
+							<dd>
+								{configuration.modelOptions.length ? (
+									<ul>
+										{configuration.modelOptions.map((model) => (
+											<li key={model.optionId}>
+												{model.displayName} · {model.modelId} ·{" "}
+												{model.reasoningLevels.join("、")}
+											</li>
+										))}
+									</ul>
+								) : (
+									"未提供模型选项"
+								)}
+							</dd>
+							<dt>默认模型</dt>
+							<dd>
+								{defaultModel?.displayName ??
+									configuration.defaultModelOptionId ??
+									"未提供"}
+							</dd>
+							<dt>默认推理档位</dt>
+							<dd>{configuration.defaultReasoningLevel ?? "未提供"}</dd>
+						</dl>
+					</section>
+					<section className="form-aside">
+						<h2>资源预设</h2>
+						<p>{application.resourceProfile.displayName}</p>
+						<p>
+							CPU {application.resourceProfile.estimatedResources.cpuMillicores}{" "}
+							m · 内存{" "}
+							{application.resourceProfile.estimatedResources.memoryMiB} MiB ·
+							存储 {application.resourceProfile.estimatedResources.storageGiB}{" "}
+							GiB
+						</p>
+						<p>Secret 和模型凭证不回显。</p>
+					</section>
 				</aside>
 			</div>
 		</section>

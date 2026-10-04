@@ -245,24 +245,27 @@ function secretReferenceKey(input: {
 	return `${input.name}\0${input.secretId}\0${input.secretVersion}`;
 }
 
-function expectedSecretReferences(configuration: {
-	readonly secrets: readonly {
-		readonly name: string;
-		readonly secretId: string;
-		readonly version: number;
-		readonly isSet: boolean;
-	}[];
-	readonly modelConfiguration: {
-		readonly options: readonly {
-			readonly optionId: string;
-			readonly credential: {
-				readonly secretId: string;
-				readonly version: number;
-				readonly isSet: boolean;
-			};
+function expectedSecretReferences(
+	configuration: {
+		readonly secrets: readonly {
+			readonly name: string;
+			readonly secretId: string;
+			readonly version: number;
+			readonly isSet: boolean;
 		}[];
-	} | null;
-}) {
+		readonly modelConfiguration: {
+			readonly options: readonly {
+				readonly optionId: string;
+				readonly credential: {
+					readonly secretId: string;
+					readonly version: number;
+					readonly isSet: boolean;
+				};
+			}[];
+		} | null;
+	},
+	includeModelCredentials: boolean,
+) {
 	const references = [
 		...configuration.secrets
 			.filter(({ isSet }) => isSet)
@@ -271,13 +274,15 @@ function expectedSecretReferences(configuration: {
 				secretId,
 				secretVersion: version,
 			})),
-		...(configuration.modelConfiguration?.options
-			.filter(({ credential }) => credential.isSet)
-			.map(({ optionId, credential }) => ({
-				name: `model:${optionId}`,
-				secretId: credential.secretId,
-				secretVersion: credential.version,
-			})) ?? []),
+		...(includeModelCredentials
+			? (configuration.modelConfiguration?.options
+					.filter(({ credential }) => credential.isSet)
+					.map(({ optionId, credential }) => ({
+						name: `model:${optionId}`,
+						secretId: credential.secretId,
+						secretVersion: credential.version,
+					})) ?? [])
+			: []),
 	];
 	if (
 		references.length > 160 ||
@@ -310,8 +315,13 @@ function resolveSecretBindings(
 	},
 	ownerIds: readonly string[],
 	retiredWrappingKeys: ReadonlySet<string>,
+	includeModelCredentials: boolean,
 ): readonly WorkloadSecretBindingV1[] {
-	return expectedSecretReferences(configuration).map((reference) => {
+	const references = expectedSecretReferences(
+		configuration,
+		includeModelCredentials,
+	);
+	return references.map((reference) => {
 		const matches = records.filter(
 			(record) =>
 				record.secretId === reference.secretId &&
@@ -338,10 +348,16 @@ function resolveSecretBindings(
 
 export function openPostgresWorkloadReconciliationStoreV1(options: {
 	readonly databaseUrl: string;
+	readonly runtimeModelVersion?: 4;
 	readonly retryDelayMs?: number;
 	readonly monitorDelayMs?: number;
 	readonly workloadLeaseMs?: number;
 }): WorkloadReconciliationStorePortV1 & { close(): Promise<void> } {
+	if (
+		options.runtimeModelVersion !== undefined &&
+		options.runtimeModelVersion !== 4
+	)
+		throw new TypeError("Invalid Workload runtime model version");
 	const client = postgres(
 		platformDatabaseUrlFromEnvironment({
 			PLATFORM_DATABASE_URL: options.databaseUrl,
@@ -567,11 +583,31 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 								where key_version = any(${sql.array(wrappingKeyVersions)})
 							`
 						: [];
+					// Cleanup follows the original candidate, including its V1 model
+					// bindings. New V4 standard Workloads never consume model Keys;
+					// their pending records therefore need no Kubernetes activation.
+					const historical = state?.rollback || state?.phase === "cleaning";
+					const projection = state?.candidate.modelProjection;
+					const persistedKeyless =
+						projection !== null &&
+						typeof projection === "object" &&
+						"schemaVersion" in projection
+							? projection.schemaVersion === 4
+							: options.runtimeModelVersion === 4;
+					const keyless =
+						secretConfiguration.source.kind === "standard" &&
+						(historical
+							? persistedKeyless
+							: options.runtimeModelVersion === 4 ||
+								(state?.candidate.configuration.revision ===
+									configuration.revision &&
+									persistedKeyless));
 					const bindings = resolveSecretBindings(
 						records,
 						secretConfiguration,
 						management.ownerIds,
 						new Set(retired.map(({ key_version }) => key_version)),
+						!keyless,
 					);
 					const input: WorkloadReconciliationInputV1 = {
 						management,

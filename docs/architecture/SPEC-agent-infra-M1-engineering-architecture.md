@@ -18,11 +18,15 @@
 4. 长任务、流式回复、Pod 生命周期和失败恢复如何落地。
 5. 前后端分别交付什么，以及如何进行测试和上线验收。
 
-本文不改变 PRD 的产品范围。M1 包含用户与应用 API、后台任务调度、运行可观测、模型质量评估与效果分析（Eval）和持久审计。Skill Hub、平台级 Sandbox、多 Agent 协作、知识能力、Agent 删除、Webhook、定时任务和主动通知仍在 Roadmap。
+本文不改变 PRD 的产品范围。M1 包含用户与应用 API、后台任务调度、运行可观测、模型质量评估与效果分析（Eval）、持久审计和 §10.1.1 的 Session-owned Sandbox 隔离。Skill Hub、平台会话隔离以外的通用 Sandbox 产品能力、多 Agent 协作、知识能力、Agent 删除、Webhook、定时任务和主动通知仍在 Roadmap。
 
 ## 2. 架构结论
 
 M1 的自有产品与控制代码采用全 TypeScript 单仓库，使用 Better-T-Stack 初始化基础工程。Better-T-Stack 只负责生成工程骨架，不作为运行时依赖，也不决定领域模块的接口。Codex 使用固定官方 release，由 Native Driver/Adapter 消费上游能力；第三方源码、私有接缝与执行屏障的边界见 [10.11](#1011-codex-上游原生补丁与执行屏障)。
+
+CI 的 PR-Agent 直接使用官方 GitHub Action，仅启用 Review 与 Suggestions；不维护自有
+PR-Agent 脚本、上游补丁或派生 runtime。配置与权限边界见
+[Workflow Spec §7.3](SPEC-ai-native-development-workflow.md#73-automated-pr-review)。
 
 ### 2.1 技术栈
 
@@ -130,12 +134,23 @@ flowchart LR
 | `platform-worker` | Kubernetes Workload Plane 中的 Workload 调谐、模板升级、outbox 认领、有界任务投递、RuntimeHost Client、企微长连接与回复、Eval 执行/评分工作项 | 否 |
 | `enterprise-directory-sync` | 每日同步企微员工和部门，原子发布完整、带版本与有效期的目录快照；通过内网受控接口供 Platform 查询 | 否 |
 | `connection-api` | 独立登录与客户端身份、MCP/API、Provider/Action、OAuth、Grant、凭证、外部执行、恢复和审计 | 否 |
-| `agent pod` | 标准模板与 `platform-adapter` 的 RuntimeHost/Driver，或 `self-managed` Agent 的自有服务与实际运行环境 | 仅保存 Agent 自有运行数据 |
+| `agent pod` | 标准模板与 `platform-adapter` 按 Session-owned Sandbox 运行 RuntimeHost/Driver；`self-managed` 保持自有服务边界 | 仅保存所属运行实例的自有数据 |
 | `platform database` | Agent、Owner、范围、管理员手动禁用、应用/API 凭证及授权、个人和 Agent 默认 Relay Key 密文、审批、配置、会话、执行、Eval、反馈和平台审计 | 是 |
 | `directory snapshot database` | 企微员工与部门的已确认完整快照、同步版本和有效期；不是 LDAP 身份或 Platform 授权权威 | 是，仅对目录快照 |
 | `connection database` | 独立身份与客户端授权、Grant、Provider/Action、外部账号、加密凭证、OAuth 状态、调用/效果和审计 | 是 |
 
-`platform-api` 与 `platform-worker` 使用同一平台领域模块，但以不同进程部署，并通过 Platform DB 状态与 outbox 协作，不建立直接 RPC 依赖。Web 和 `platform-api` 的部署位置不受 Kubernetes Workload Plane 限制；只有 `platform-worker` 获得目标 Kubernetes namespace 的 API 权限。Connection 使用独立数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。
+`platform-api` 与 `platform-worker` 使用同一平台领域模块，但以不同进程部署，并通过 Platform DB 状态与 outbox 协作；除下述 `native_metadata_read` 例外外，不建立直接 RPC 依赖。Web 和 `platform-api` 的部署位置不受 Kubernetes Workload Plane 限制；只有 `platform-worker` 获得目标 Kubernetes namespace 的 API 权限。Connection 使用独立数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。
+
+仅 [§9.3.1 的 `native_metadata_read`](#931-原生元数据读取授权) 可使用受认证内部 HTTP，
+承载 API→Worker 的一次读取投递，以及 Host→Worker→承载原 Request 的 API 实例的在线当前确认。
+Worker 保持唯一证明签发与投递方；Host 不直接查询 Platform DB 或 IdentityAdapter。
+该通路只服务于同一原 Request 及其可信绑定的 API/Worker/Host 实例关联；服务身份和实例映射由可信部署装配固定，
+不能接受调用方回调 URL、任意 origin 或通过负载均衡猜测原实例。
+原请求终结、当前确认不可核实、关联丢失或任一关联实例重启使本次读取永久失效，不恢复、续期或复用旧允许结果。
+原用户凭证只留承载原 Request 的 API 内存，不进入内部 wire、DB、journal、日志或遥测。
+当前认证、读取政策、原持久范围、固定期限、逐相关 await 与响应 bytes 前的复核均遵循 §9.3.1，不能用服务身份替代读取权。
+任务调度、Execution/Session/Turn 创建和 control/recovery 仍通过 Platform DB/outbox，不能使用此通路；
+metadata 读取不写任务、恢复、fence 或 Key 状态，也不新增持久授权或消息状态机。
 
 目录服务与 Platform 同集群部署，经内部受认证服务边界通信，可使用同一 PostgreSQL 集群的独立数据库账号。它不读取 Platform 或 Connection 数据库；Platform 不把同步快照当作 LDAP 账号状态。Connection 的单一账号级权威和独立 Web 部署取舍分别见 [ADR: Connection 使用单一账号级权威](../adr/0005-use-one-account-backed-connection-authority.md)与 [ADR: 独立部署 Connection Web](../adr/0006-deploy-connection-web-independently.md)。
 
@@ -318,6 +333,47 @@ M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通�
 
 `platform-worker` 到 Agent Pod 使用遵循 [Contract Schema authority](#64-contract-schema-authority) 的版本化 OpenAPI HTTP 契约；Runtime 增量事件使用由 JSON Schema 校验的内部 SSE。内部接口通过部署提供的服务身份和 mTLS 或等价机制认证，并验证执行授权，不因位于集群内而跳过鉴权。
 
+#### 内部 Runtime TLS 身份与传输
+
+本契约的机制与部署输入边界已接收，待完成适用评审与合并；TLS 实现和真实部署尚未交付。它只约束 Worker 到 RuntimeHost 的内部传输，不改变 Connection 或 Host/Grant/Driver wire。受控实现须有独立、完整的 primary Issue，绑定已评审契约与精确消费者；真实证书、签发者及生产供应签收缺失只阻塞对应部署和实测，不阻塞不依赖这些材料的受控实现。本文不授予本次文档任务实施或部署权限。
+
+**采用等价机制：server TLS + 既有 deployment service token + signed Grant。** 三道校验分别满足本节的传输保护、部署服务身份和执行授权，不能相互替代：
+
+| 要求 | 采用机制及边界 |
+| --- | --- |
+| Worker 认证 Host 并保护传输 | 只连接部署确定的 HTTPS origin；校验证书链、有效期、serverAuth 用途及与 origin 完全匹配的 DNS SAN。部署把该 DNS、namespace 与可信 Agent 绑定；证书不证明 revision、fence、Digest 或 Session。禁止明文 fallback、redirect、关闭校验和调用方覆盖 origin。 |
+| Host 认证部署调用方 | 继续校验既有 service token；它证明持有部署凭证，不是某个 Worker 进程的私钥持有证明。token 只在已验证 TLS 上传输，部署控制其发布、访问、轮换和撤销；Host 所持 token 也不能取得 Grant 签名私钥。 |
+| Host 核对当前授权与部署 | 保留独立 signed readiness 的 Worker/Agent/revision/fence/Digest 本机绑定；业务及控制 Grant 仍按 [§9.3](#93-服务端授权上下文) 校验签名、issuer、audience、时间、对象、用途和操作范围，继续执行原持久幂等、租约与屏障。不能把 readiness 字段笼统写成每种 Execution Grant 已有的字段。 |
+
+在凭证受控、TLS 严格校验和上述授权屏障全部成立的威胁边界内，本节采用此组合作为等价机制；它不等同于 mTLS 的双向传输层私钥证明。共享 bearer token 泄漏会扩大服务认证风险，捕获仍有效的 Grant 也不能靠 TLS 自动消除重放；必须依赖原用途/对象校验、持久幂等与 fence，并完成对应负向验收。当前 HTTP 实现不满足本契约，挂载 CA 或启用某一 Runtime 版本也不代表满足。
+
+**沿既有 Service 拓扑补齐传输。** [Runtime HLD §4.1](HLD-agent-runtime-M1.md#41-内部-runtime-service-与-tls-映射) 区分 Agent 级 candidate/verified Workload 与业务 Session Sandbox。Agent 级实现已有主 Service 和 `-probe` Service，分别承载 business 与 readiness/verified control；沿这两个实际 DNS 提供同一 Host listener 的 server TLS，不因 TLS 新建或合并 Service、不新增 Manifest 字段。Sandbox 沿其原已批准分配及唯一 Service 身份供证，不复用 Agent 级路由或擅加 `-probe`；本契约不改变 §10.1.1 或 #1322 的资源合同。
+
+**受信部署输入。** 复用[现有 Worker 部署模块](../../deploy/platform-worker/README.md#配置模块形状)，准确入口与最小差额如下；新增项是已接收、待实现的部署输入，不是已存在的 Schema 或产物：
+
+| 输入 | 已有入口 / 所需差额 |
+| --- | --- |
+| 部署代码与身份 | `platformWorker.configurationModuleSecretRef.{name,key}` 只读挂载 `/app/dist/configuration.mjs`；导出 `workloadInput`、`signing`、`serviceToken`。`workloadInput.policy.namespace` 必须与 `PLATFORM_WORKER_NAMESPACE` 一致，Agent 来自服务端持久 Workload，不能从请求、Owner env、模型或 live annotation 获取。 |
+| token 与 Grant | `platformWorker.runtimeAuthSecretRef.{name,privateKeyKey,serviceTokenKey}` 向 Worker 提供 `/var/run/agent-infra/runtime-auth/{runtime-grant.pem,service-token}`；Host 通过 `policy.runtimeAuth.serviceTokenSecret.{name,key}` 的 `secretKeyRef` 得到同一 transport token。保留 `WorkloadRuntimeAuthV1` 原五字段 `workerId/grantKeyId/grantPublicKey/grantIssuer/serviceTokenSecret`；签名私钥仅在 Worker，Host 只得到公钥和预期身份。 |
+| CA | 既有 `platformWorker.trustedCaSecretRef.{name,key}` 挂载 `/var/run/agent-infra/trusted-ca/ca.crt`，由 `NODE_EXTRA_CA_CERTS` 在 Worker 启动时加载。它是附加信任入口，不是 Host leaf，也不自动把 Runtime 信任限定到某一 CA；TLS 消费者须验证配置存在、可解析且含获准 CA，明确实际信任集合，不能把 Node 对坏文件的警告当作 fail closed。 |
+| server leaf（新增受控输入） | 部署须交付可信 `agentId`、`namespace`、从 HLD 对应拓扑计算的 `serviceDnsNames`（Sandbox 另核原分配/归属），以及该 namespace 内原生 `kubernetes.io/tls` 的受控 `serverSecretRef.name`；键固定 `tls.crt`（leaf 与中间链）、`tls.key`（匹配私钥）。与上述 CA 引用分别管理，不复用 Ingress 的 `policy.tlsSecretName` 或 Grant 私钥。只读挂载到 Host `/var/run/agent-infra/runtime-tls/{tls.crt,tls.key}`；这些字段/文件消费者当前尚未实现。 |
+
+可信部署发布角色负责上述输入及 Secret 写权限、签发来源、发布、到期前续期、撤销、保留和泄露处置；生命周期装配角色消费受审阅输入，沿现有 namespace-scoped Kubernetes Adapter 核引用、归属和材料有效性，Host 启动核对挂载证书/私钥及服务绑定。Kubernetes Secret 类型和键存在不证明证书有效。Worker 不获得 Host 私钥挂载，Host 不获得 Grant 签名私钥或 Kubernetes authority；Owner、镜像及请求不能选择 Secret、CA 或 DNS。具体签发者、写入身份、真实引用和操作责任须在 #1164 具名确认，不能从示例名称或 Issue assignee 推断实际供应已存在。
+
+**生命周期与失效。** 同一受信运行实例及其 namespace/DNS（Sandbox 须保持原分配）的有效 leaf 可跨 Workload revision 使用，不建立逐 revision 证书账本，不新增 PKI 服务、CRD 或 TLS reader 框架。Host 沿原受权持久 Pod 替换加载材料，重新验证 HTTPS、signed readiness 后才 promotion；不增热加载。相同 Secret 引用及受信 CA 下续期 leaf 不要求 Worker 重启；受审阅配置引用改变或 Worker 信任集合改变时，按其一次加载语义重启。CA 轮换先加入新 CA 并重启消费者、替换并验证 Host、最后移除旧 CA 并重启消费者，重叠期间不接受已失效材料。
+
+到期、材料不匹配或身份错误须拒绝握手/启动与新业务；CA/hostname 校验本身不保证已撤销证书被拒绝。没有已交付逐 leaf 撤销校验时，泄露/撤销事件采用既有 Kubernetes authority 隔离受影响 Workload，并从 Worker 信任集合移除受影响 CA、关闭旧连接并受控重启后再恢复；同 CA 的其他服务也可能受影响，供应责任人须承担该范围及恢复成本，不能只删 Secret 或换 leaf 就宣称旧 leaf 已不可用。失效或泄露 token 同样须在两端撤旧并受控重载；Grant 仍按原有效期/授权恢复规则处理。
+
+首次 HTTP→TLS 切换先沿原受权持久流程停止新准入、核实/排空原执行并隔离旧通路，不能向旧 HTTP 发送 token/Grant；旧控制不可达时保持 pending/unknown，使用原 Kubernetes fenced closeRoute、scale-zero 和 ownership cleanup 权限收敛。证书失败不能剥夺这些 Kubernetes 权限，也不能把 Pod 退出当作可信终态。保留原 tuple、PVC、Session、Execution、facts、stop/drain、durable recovery/ACK、容量、重试和回滚；回滚不得重新启用明文或复用失效凭证。
+
+**mTLS 备选成本。** 另需 Worker client leaf/key 的受控供应、clientAuth 用途与身份 SAN、Host 侧 client CA 和身份映射、双向轮换/撤销、两端重启与双向故障验收。它加强客户端私钥持有证明，但不替代 token、业务/控制 Grant、fence 或恢复屏障。本契约不增加这些 client leaf 输入；改用 mTLS 须另行审查和批准。
+
+**验收。** 文档评审与后续真实实施分别给证据，不以 fixture、Helm render、Secret 存在或 healthz 签收：
+
+1. #1164 记录已接收的机制、部署输入及供应协调/装配责任；实际部署前填齐真实 Agent/namespace/DNS、Secret/CA 引用、写权限、签发与生命周期签收。材料缺失保持未交付，不冒充受控实现已完成生产验收。
+2. business、control、readiness 均覆盖明文/redirect、错误 DNS/CA、空或损坏 CA、到期/撤销/泄露 leaf、无效 token 和跨用途/主体/Agent/对象的 Grant；分别验证本机 revision/fence/Digest 与旧请求、重复请求的原屏障。
+3. kubelet readiness probe 的 HTTPS scheme、path/port 及实际 Pod/StatefulSet drift 核验保持一致；HTTP 降级、额外 handler 或覆盖 host/header 必须拒绝。kubelet 成功不替代 Worker 的 CA/hostname 校验和 signed readiness。Agent 级主 Service/`-probe` 分别验证 candidate/verified 与业务关路后的控制，Sandbox 验证其独立 Service/分配归属且拒绝跨 Session 路由；原执行恢复/ACK、CA/leaf/token 轮换、响应丢失、Worker/Host 分别重启及回滚均保持原准入和 unknown 语义。证书不能让错误 revision/Session 的后端通过授权。
+
 Agent/客户端到 Connection 的 MCP/API 使用 Connection 的独立身份和契约，不经过 Platform API。平台不读取 Connection Catalog，不持有其目录读取或代调用 workload credential。
 
 M1 不引入 tRPC/oRPC/ConnectRPC。
@@ -346,16 +402,21 @@ Web/企微依次校验可信用户当前状态、Agent 可用范围/有效 Owner
 
 应用凭证管理与取得/使用凭证材料分别授权。责任人角色只授予元数据、范围、轮换和撤销等管理权限，不自动获得凭证值或应用任务权限；签发与轮换时由 Core 重验接收者当前的独立凭证使用授权，只向该接收者受控交付，不能回显给仅有管理权的请求者，也不能通过重设接收者或交付入口绕过授权。授权、接收者及实际交付结果记录必要审计，凭证值不入审计；不引入新的身份或凭证服务。获授权接收者调用时仍以应用为任务主体，当前 Agent 权限和凭证范围继续生效。
 
+应用凭证材料 grant 的授予/撤销遵循[平台 PRD 7.3](../prd/PRD-agent-platform-M1.md#73-api-身份凭证与授权)：writer 仅来自 9.1 的可信 `system_admin`，每次操作重验当前账号有效、Platform 未禁用及 LDAP 稳定 UID 仍精确匹配管理员配置；责任人或凭证管理角色不能替代该检查。Access 持久保存应用 ID 与接收者可信主体类型、稳定 ID 的绑定，授予、撤销及材料使用均按完整绑定检查，不能仅比较裸 ID。授权变更与必要审计原子保存，审计失败不得放行；授予命令仅返回授权元数据，不签发或交付材料。管理员作为接收者（包括显式自授）仍须在签发、轮换和交付时通过当前独立 grant 检查，撤销后不能继续交付；材料不得进入普通读取、日志、Trace 或审计。
+
 创建用例将 Agent、创建主体、Owner、初始管理/使用授权、outbox 和必要审计原子保存。用户创建的 Owner 为本人，应用创建的 Owner 为登记的自然人责任人，创建主体仍为应用。API 不进入 Web 申请审批状态机，也不设预审批；镜像/配置与运行能力准入仍适用。管理与使用授权可分别撤销，应用不继承责任人的权限，Owner 不能绕过已撤销的 API 授权。
 
 上述事务是创建请求的可靠受理点，先于 Workload 创建；实例创建失败保留原 Agent 与初始授权，按现有生命周期权限查询、停止或重试，不能产生只有成功部署后才能管理的 Agent。
 
 每次 API 操作在 Core 中检查：当前主体有效、当前对应业务授权、凭证操作范围与有效期、目标 Agent/渠道/Runtime 能力。任务查询、订阅、结果文件访问与调用方取消还须匹配持久保存的提交主体，并具有当前 Agent 使用权；Owner 或责任人角色不能替代这项匹配。相同主体的另一有效凭证可在其权限范围内操作原任务。
 
+Agent 元数据的 API 列表读取要求凭证包含 `agent:read`，并仅返回主体当前显式拥有管理或使用授权的 Agent；任一授权有效即可读取元数据，两项均撤销时排除该 Agent。元数据读取不授予管理或使用操作权，Owner 或系统管理员角色不能替代独立 API 授权。无可见 Agent 时返回空页，浏览器发现与 Owner 读取仍按其既有规则执行。
+
 | 变化 | API/订阅 | 已受理任务 |
 | --- | --- | --- |
 | 单个凭证过期或撤销 | 拒绝该凭证并关闭其流 | 继续执行，不把凭证失效当作主体撤权 |
-| 主体禁用或 Agent 使用权撤销 | 拒绝新工作和访问 | 取消未开始任务，向进行中任务投递系统取消，并阻止后续平台受控操作 |
+| 主体禁用 | 拒绝该主体全部 API 访问和订阅 | 取消未开始任务，向进行中任务投递系统取消，并阻止后续平台受控操作 |
+| Agent 使用权撤销 | 拒绝新任务及依赖该使用权的访问和订阅；独立管理授权不被一并撤销，元数据和管理操作按当前对应权限检查 | 取消未开始任务，向进行中任务投递系统取消，并阻止后续平台受控操作 |
 | 身份或授权依赖无法确认 | 敏感操作 fail closed | 不凭旧缓存继续投递；保持可解释的等待/未知状态，按原执行恢复核实 |
 
 撤权控制以服务端持久授权关系定位 Execution，由系统身份执行，不能借用已失效调用方凭证。取消请求与实际停止分开保存，不回滚已发生的外部效果；Connection 在自己的入口执行当前授权。
@@ -391,23 +452,147 @@ Workload revision、fence、镜像 Digest 和 `readiness.read` 用途。Host 同
 提交检查结果，迟到结果不能激活其他候选。该边界见
 [ADR: 独立的 Workload 就绪授权](../adr/0010-separate-workload-readiness-authorization.md)。
 
+#### 9.3.1 原生元数据读取授权
+
+原生命令状态、命令目录和已安装 Skill 目录使用独立版本化读取用途 `native_metadata_read`，
+每次读取固定一个 `status | commands | skills` selector。该用途只授权原已持久会话的获准
+元数据，不授予正文、附件、模型、工具、压缩、Turn、控制、恢复、事件回放或 Connection
+权限；business、control、recovery 和 readiness 的许可不能转换成用户读取许可。
+
+`platform-api` 从本次受认证请求重新解析当前主体和适用凭证，Core 按当前读取政策检查
+主体状态、Platform 禁用、对应 Agent/渠道权限及持久提交归属。Web 沿原用户读取规则；
+API/应用仅在其当前读取与实际所用凭证合同已接入时启用，不能外推 Web 或任务受理结果。
+Owner、管理员或服务身份不替代对应读取权。终态或暂不可执行业务的原执行仍按读取政策
+判断，不借业务租约、readiness 或原控制权限放行。
+
+原范围由服务端持久记录解析，绑定主体、Agent、channel、Conversation、原 Execution、
+该 Execution 的 sessionGeneration 和 authorizationRevision。Worker/Host 再核唯一的
+原持久 Host/Driver/native 与配置绑定，以不透明 `originalHostScopeRef` 关联；当前会话代次、
+当前 Agent 配置和模型配置修订不能替代原执行的 Host 配置。调用方不得提交或覆盖主体、
+代次、Host/native ref、thread、配置、路径或任意 RPC。范围或原映射无法唯一确认时拒绝。
+
+读取证明是独立版本化数据，绑定读取用途与 selector、可信 issuer、专用 RuntimeHost
+metadata audience、keyVersion、issuedAt/expiresAt、唯一 readId、上述原范围和
+originalHostScopeRef。API/Core 先完成当前授权及原范围确认，再由唯一投递方 Worker
+沿受认证内部链生成并投递证明；Host 校验部署服务身份、签名与所有绑定。证明不含原始
+凭证、正文、函数或 native 路径；服务身份、readId、证明未过期和修订相等都不能单独授权。
+实际 wire 的版本及字段由读取 producer/consumer 的实现 primary 固定，不扩用旧 Grant
+用途或兼容回退。
+
+本次 operation 使用可信服务器时钟，固定期限不晚于读取起点后 30 秒、可信上游 deadline
+及适用且已知的会话/凭证绝对到期时间，取最早值；调用方不能指定或续长。浏览器认证源
+未暴露绝对到期时间时，不补造该字段，每次重验原请求的当前会话有效性；API 凭证须逐次
+核真实到期、撤销、范围与主体，缺合同不启用。30 秒是资源上限，不是授权缓存或撤权宽限。
+
+API 在原请求存续且等待此次 Worker 读取期间登记有界 request-local readId 与认证来源；
+该关联只允许受认证 Worker/Host 链按同一 selector 和原范围请求当前确认，引用本身不授权。
+每次确认重新核当前认证、Core 政策与同一持久原范围，不使用 initial allowed 或旧 revision
+闭包。API→Worker→Host→Driver 保持原单向投递；Host 的异步确认沿受认证内部链回到该
+请求关联，不直接查询 Platform DB 或 IdentityAdapter，不向 Runtime 传用户原始凭证。
+
+Host 将原请求取消、固定 deadline、本机生命周期及当前确认失败合并为读取 signal；
+同步护栏只核本机已确认状态、deadline、abort 与原持久绑定，异步重验另显式等待。
+在各相关 await 后和结果返回前重新确认；API 也须在写出任何响应 bytes 前重验原请求及
+同一原范围。明确无权、认证失效、范围/配置/进程变化、期限、abort 或依赖无法确认时，
+丢弃结果并使该 context 永久失效，不返回旧结果或伪空目录。请求结束、issuer/Worker/Host
+重启或关联丢失时不恢复旧 context；新的读取须重新认证。该方案不宣称存在即时撤权 feed。
+
+读取不新建业务 Execution、Session 或 Turn，不恢复业务、不写 recovery latch、fence、Key
+或任务状态，不推进 successor。纯原绑定断言独立于旧业务、控制及 evidence-query latch；
+目录不授权后续执行。内部 ref、正文、路径、原始证明和凭证不进入公开投影、审计或遥测。
+具体 Host/Driver 生命周期见 [Runtime HLD §5.2](HLD-agent-runtime-M1.md#52-调用生命周期与兼容)。
+
 ## 10. Agent Workload 与调谐
 
 ### 10.1 Workload 形态
 
 Web 与 `platform-api` 是位置无关的 Platform 服务；`platform-worker`、KubernetesRuntimeAdapter、Agent Workload 和部署访问路由组成 Kubernetes Workload Plane。只有 `platform-worker` 的部署身份可以访问 Kubernetes API，并且权限限制在目标 namespace 内。Web、`platform-api`、Connection 和 Agent Pod 都不能持有 Kubernetes API credential。取舍见 [ADR: Platform 服务与 Kubernetes Workload Plane 分离](../adr/0001-separate-platform-services-from-kubernetes-workload-plane.md)。
 
-开源实现只使用受维护 Kubernetes 版本中的 GA capability baseline：`apps/v1` StatefulSet、core/v1 Service/ServiceAccount/PVC/Secret、`networking.k8s.io/v1` NetworkPolicy，以及 `networking.k8s.io/v1` Ingress 或部署 Adapter 提供的等价受控路由。每个 release 记录经过 `kind` 和真实部署验证的版本矩阵；不为 Kubernetes 1.16、`networking.k8s.io/v1beta1` Ingress 或超出支持 skew 的客户端维护兼容分支。
+开源实现只使用受维护 Kubernetes 版本中的 GA capability baseline：`apps/v1` StatefulSet、core/v1 Pod/Service/ServiceAccount/PVC/Secret、`networking.k8s.io/v1` NetworkPolicy，以及 `networking.k8s.io/v1` Ingress 或部署 Adapter 提供的等价受控路由。每个 release 记录经过 `kind` 和真实部署验证的版本矩阵；不为 Kubernetes 1.16、`networking.k8s.io/v1beta1` Ingress 或超出支持 skew 的客户端维护兼容分支。
 
-- 一个 Agent 对应一个副本为 0 或 1 的 StatefulSet。
-- 运行时为“可用”时副本为 1；已停止或已停用时副本为 0。
-- 每个 Agent 使用独立 Service、ServiceAccount 和持久卷。
+- 标准模板与 `platform-adapter` 的每个 Sandbox 对应独立的实际 Pod/Runtime；可使用副本为 0 或 1 的 StatefulSet 管理该 Pod，不再按 Agent 共享一个运行 Pod。
+- 每个 Sandbox 使用独立内部 Service、ServiceAccount、PVC、NetworkPolicy 和受控 Secret materialization，不与其他 Sandbox 共享可写工作区、进程命名空间、运行时 HOME/cwd 或凭据挂载。
+- Agent 的管理状态控制其所属 Sandbox 的运行资格；实例是否就绪按各自绑定、健康、网络和 Runtime 探测决定，不能用一个实例的就绪代表全部会话。
+- `self-managed` 自有服务不承载 Platform Session；保留其既有部署与唯一用户路由，不自动转换为平台会话或按外部会话创建 Sandbox。
 - ServiceAccount 默认没有 Kubernetes API 权限。
-- Agent Service 只提供集群内部地址，Pod 或 Service 地址不作为用户入口。StatefulSet、Service、部署访问路由和 NetworkPolicy 只由 `platform-worker` 通过 KubernetesRuntimeAdapter 调谐，Agent 与 Owner 都不能直接创建或修改这些资源。
+- Agent Service 只提供集群内部地址，Pod 或 Service 地址不作为用户入口。Pod、可选 StatefulSet、Service、ServiceAccount、PVC、部署访问路由和 NetworkPolicy 只由 `platform-worker` 通过 KubernetesRuntimeAdapter 调谐，Agent 与 Owner 都不能直接创建或修改这些资源。
 - 平台配置、对话和 Connection 授权不保存在 Pod 本地。
-- Agent 自有记忆或工作区通过独立持久卷保存，并由模板或自定义 Agent 负责用户隔离。
+- 平台会话的个人记忆、工作区和原生 Session 数据保存在所属 Sandbox 的独立持久卷；Runtime 内的文件与进程防护继续有效，不能以 Pod 分离代替必要负向验证。
 
 Owner 不能修改 CPU、内存、副本数和存储规格。资源规格由平台按 Agent 类型选择预设 Profile，Web 审批页展示该配置；API 创建复用相同规格选择，不增加审批。
+
+#### 10.1.1 Session-owned Sandbox 权威与资源绑定
+
+平台采用 `agent_id → session_id → sandbox_id`。`session_id` 表示 Platform Conversation 的
+稳定逻辑会话标识，复用 `conversationId`，不新增平行 Session 服务；它不是 Native Session ID、
+Host Session Ref 或登录 Session。Platform DB 保存 Session 到唯一 Sandbox 的分配及主体、
+Agent、渠道、当前代次、资源归属和状态。`sandbox_id` 由服务端分配，不由请求、Runtime 回包、
+Pod 名称或 Connection 身份推导；`project_id` 不参与主键、分配或授权。未来业务工作区字段
+不能改变该隔离键或允许复用另一 Session 的可写资源。
+
+创建或续接会话时，在原 Conversation/任务事务内校验当前主体、Agent 与渠道，并持久化或读取
+同一 Sandbox 绑定；幂等重试、并发受理和 Worker 恢复不能分配第二个有效 Sandbox。分配不等于
+已经创建 Pod 或 Native Session：资源由唯一 Worker 调谐，原生 Session 仍在首次实际投递时创建。
+Web、企微回调/长连接和 API 共用该权威；企微会话键保留发送者，渠道会话不自动合并。
+
+Agent 运行资格、镜像修订验证和 Session 实例就绪分别保存，不能互相代替。创建/升级时的
+Manifest、健康和 ACP 核心验证由 Worker 使用绑定 Agent、候选修订与管理 fence 的独立验证
+Workload 完成；它不属于业务 Session，不挂载任何业务 PVC、会话正文或用户 Connection 凭据，
+不加入业务路由，也不能提升或复用为业务 Sandbox。只读探测授权绑定该验证用途与实例，
+通过或失败后按原修订回收验证资源；它不创建业务 Execution 或 Native Session。
+无 Session 时，当前修订验证通过且管理资格有效即可允许创建首个会话，不要求先有业务 Pod。
+Web 打开新会话先完成持久分配和实例准备，就绪前该会话只读；API/企微沿原任务受理与
+有界等待规则触发分配，就绪前不投递。已有 Session 的可用性只由自身实例决定；Agent 级
+修订验证通过不能覆盖实例失败，单个实例失败也不能将其他就绪会话判为不可用。
+
+Worker 只消费已提交分配，按 Sandbox 串行调谐并校验原 Agent 管理资格。资源名、selector、
+ownership、UID、配置/Workload 修订和租约/fence 必须绑定同一 Sandbox、Session 和代次；
+仅按 Agent ID 选择 Service、PVC 或清理集合不再足够。旧代次、外部同名对象和归属不明的资源
+均拒绝接管；部分创建失败从原分配幂等恢复，不删除其他 Sandbox。只有实例身份、路由、健康、
+Runtime readiness 和出站策略全部符合当前期望时才能投递业务；healthz 成功不单独证明隔离。
+
+Session Sandbox 的必需实际资源为 Pod、Service、ServiceAccount、PVC、NetworkPolicy 五类。
+就绪回执须逐资源回读真实 UID、resourceVersion 与归属，绑定原 allocation、主体、渠道、
+租约、代次及当前 `resourceFence`；不能用资源名、期望清单或合成 receipt 代替实际对象。
+StatefulSet 仅为可选 Pod 控制器，不是所有 Sandbox 就绪回执的必选资源；实际使用时，
+须同时核验其真实 UID/resourceVersion、owner 及与 Pod 的控制关系，不得忽略实际控制器。
+此可选性不改变 `self-managed` 部署、独立验证 Workload 及 §10.6 的既有 StatefulSet 规则。
+
+Pod 重建仍沿同一 Session、Sandbox、PVC 和原 allocation 恢复，先证明旧执行源不能双活，
+再在当前 `resourceFence` 下由原 Store CAS 接受新 Pod UID 与逐资源版本；不能凭 Pod 消失
+推断原 Turn 的副作用或终态。证据不足时保留原身份、占用和 `unknown`，不分配另一实例
+重放业务，也不绕过 Runtime HLD §7.3 的 generation tombstone 与 cancellation barrier。
+停止或删除按当前受控意图操作，以逐资源 UID/resourceVersion 为前置条件，并回读实际
+absence；未证实停止时仍保留占用。计算资源回收不删除原 PVC 或改变原执行未知结果。
+
+业务、控制、readiness 与执行文件授权分别在既有用途内绑定目标 Sandbox；Host 校验服务身份、
+已签名对象绑定和部署注入的本机 Sandbox/Session/代次，不能信任孤立的 `sandbox_id`。
+控制授权仍只允许原执行的停止、核实和屏障，不恢复业务使用权，不成为 Connection 授权。
+新增绑定由原契约 owner 发布版本化 Schema，并同步签发方、Host、文件数据面及消费者；不得
+静默改变既有 V1/V2/V4 wire 含义或兼容性放行无 Sandbox 的新业务调用。readiness 不创建
+业务 Execution；只对已分配实例作只读检查，不能用其授权读取会话或调用模型/工具。
+
+部署批准的出站策略由 Worker 按 Sandbox 落实，默认拒绝未批准目标；允许集群 DNS、获准模型
+和独立 Connection endpoint。Connection 目标和策略修订消费 [§13.5](#135-platform-外部-connection-consumer-配置契约)
+的完整 Consumer 配置，不另建 endpoint 或授权来源。Runtime、镜像、模型参数和调用方不能扩大
+目的地。Connection 安装凭据仍按 Principal/ConsumerInstance/Actor 隔离并经受保护客户端交付；
+Sandbox 身份、ServiceAccount 或网络可达均不授予 Connection 权限。
+
+| 触发 | 必须保持的边界 |
+| --- | --- |
+| Session 关闭 | 先拒绝新命令、关闭业务路由，再沿原执行停止/核实；确认无剩余副作用后回收计算资源。平台历史和合法持久数据按数据政策保留，不新增删除会话入口。 |
+| Agent 停止、停用或升级 | 管理资格作用于所有所属 Sandbox；先阻止新投递，按各实例记录收敛在途任务与路由。升级只复用该 Sandbox 原持久卷，不能共享或交换会话卷；未知执行按恢复规则保持占用。 |
+| 重启或恢复 | Sandbox ID、Session、原执行、Key 版本、持久映射及游标保持；新 Pod UID 须由原分配在当前 fence 下核实，不凭同名资源认定恢复。 |
+| 撤权 | 单凭证失效与主体/Agent 使用权撤销按 §9.2 区分；后者取消等待任务并持久停止活跃执行，阻止后续受控操作。历史读取仍需当前授权，控制恢复不向被撤权用户输出正文。 |
+| 并发或重试 | 同 Session 保持原串行准入；不同 Session 使用不同 Sandbox 并在获准容量内运行。原幂等结果、租约和 fence 防止重复资源及重复副作用，不新增调度权威。 |
+| unknown 或恢复失败 | 超时不证明停止；原 Sandbox 保留核实证据和占用，不换实例重放。代次提升必须等待原 cancellation barrier 确认，详见 Runtime HLD §7.3；其他 Session 不受牵连。 |
+| 跨主体/Session 访问 | 查询、订阅、文件、控制和 Runtime 投递均复核主体及完整对象绑定；同主体另一 Session 也不得直接访问本 Sandbox。拒绝不泄漏对象存在性。 |
+
+历史 Agent 共享 PVC 不能直接标记为新 Sandbox 已隔离。迁移须先停止旧业务准入，核实并排空
+旧执行源；unknown 或归属不明时保持隔离维护，不自动复制共享历史、补造主体或新建 Session。
+只有逐 Session 证明原映射、数据归属和独占资源，才可在原事务/fence 下切换；原证据按政策保留。
+本契约不授予数据删除或破坏性迁移权限。历史与实施交接见
+[ADR: Session-owned Sandbox](../adr/0017-session-owned-sandbox-isolation.md)。
 
 ### 10.2 期望状态
 
@@ -416,7 +601,7 @@ Platform DB 保存：
 - 管理状态与期望运行状态。
 - 模板或自定义镜像的不可变 Digest。
 - 配置修订号。
-- 资源 Profile。
+- 资源 Profile，以及 §10.1.1 的 Session/Sandbox 分配、代次、实例期望与恢复状态。
 - 交互模式、渠道和 Runtime 能力声明。
 - 普通 env、版本化 Secret 密文状态和 active/pending 配置修订。
 
@@ -424,13 +609,15 @@ Platform DB 保存：
 
 1. 读取待处理修订号。
 2. 通过 ImageRegistryAdapter 解析并校验获准 OCI Digest、Runtime Manifest 和访问政策。
-3. 生成或更新 StatefulSet、Service、PVC 和部署访问路由。
+3. 按已提交 Sandbox 分配生成或更新 §10.1.1 的五类资源和内部路由；实际使用 StatefulSet 时一并调谐并核验。自有入口与独立验证 Workload 保留原 StatefulSet 规则。
 4. 根据探针和 Workload 状态计算产品服务可用性。
 5. 写回已应用修订号、可用性和脱敏失败原因。
 
 HTTP 请求只提交期望状态，不等待 Kubernetes 操作完成。
 
-Kubernetes 调谐结果在已停止、期望副本为 0、实际 StatefulSet 不存在且路由已关闭时返回
+Session Sandbox 的停止与资源缺失按 §10.1.1 核实，不能要求未使用的 StatefulSet 身份。
+既有自有入口与独立验证 Workload 的 Kubernetes 调谐结果在已停止、期望副本为 0、
+实际 StatefulSet 不存在且路由已关闭时返回
 `status: absent`，保留请求、Agent、配置修订、Workload 修订和 fence 的完整关联，固定
 `replicas: 0`、`routeClosed: true`，不生成虚构的 Workload UID 或 generation。
 运行中期望不能接受该结果；资源期望身份、归属、fence 或路由关闭校验失败仍返回失败，
@@ -441,9 +628,9 @@ Platform DB 的 outbox 保证状态变更和投递可恢复；API 任务在同�
 ### 10.3 并发与 Leader
 
 - 多个 `platform-worker` 实例可以同时运行。
-- 同一 Agent 的调谐通过 PostgreSQL 行锁或 advisory lock 串行化。
+- Agent 管理变更在原 Agent 锁内串行化；Sandbox 调谐按其分配与修订串行化，复核 Agent 当前资格，不以 Agent 全局运行实例代替会话隔离。
 - 每次 apply 携带配置修订号，旧任务不能覆盖新状态。
-- Kubernetes 资源使用稳定 label 和 annotation 关联 Agent ID 与修订号。
+- 平台会话的 Kubernetes 资源使用稳定 label 和 annotation 关联 Agent、Session、Sandbox、代次与修订/fence。
 - M1 不创建 CRD；Platform DB 是产品期望状态的唯一来源。
 
 ### 10.4 模板与自定义镜像升级
@@ -455,7 +642,7 @@ Platform DB 的 outbox 保证状态变更和投递可恢复；API 任务在同�
 - Manifest 预检通过后，`platform-worker` 应用候选 Workload 并验证健康检查；`platform-adapter` 还必须重新执行 ACP 核心探测。候选 Workload 在验证完成前不加入用户路由或原渠道；无法与旧修订隔离运行时，先关闭用户路由再应用候选 Workload。
 - 全部验证通过后，`platform-worker` 按候选修订号执行可重入提升。Platform DB 保存期望修订和切换进度，Workload、用户路由和渠道确认均绑定该修订号；这些跨 PostgreSQL 与 Kubernetes 的操作不要求分布式原子事务。每一步必须幂等，Worker 重启或部分切换后根据 Platform DB 和 Kubernetes 资源上的修订号继续收敛；用户路由配置始终只指向一个已验证修订，判定失败的候选修订不能继续接收流量。任一步失败时，把旧 Digest 和 Workload 配置写成新的期望修订并重新调谐，保持或恢复旧路由，保留原渠道绑定和平台历史。
 - 标准模板升级失败时，平台把旧 Digest 和 Workload 配置写成新的期望修订，再由 `platform-worker` 通过 Kubernetes API 重新调谐；不能把 Kubernetes 当前状态当作回滚来源。
-- 升级和回滚复用原 PVC，保留 Platform DB 中的配置、渠道和会话数据。M1 不自动创建 PVC 快照，也不承诺 Runtime 自有数据兼容旧版本。
+- 平台会话的升级和回滚只复用目标 Sandbox 自己的原 PVC；自有入口保留原部署由平台管理的持久卷和数据。两者均保留 Platform DB 中的配置、渠道和会话数据。M1 不自动创建 PVC 快照，也不承诺 Runtime 自有数据兼容旧版本。
 - 升级期间产品显示“更新中”；旧修订也无法恢复时才显示 Agent 级“暂时不可用”。任何阶段都不能接受后静默丢弃消息。
 
 调谐状态分别持久化管理 fence 与 Workload revision；新状态绑定管理 fence，本地漂移和重试只推进 Workload revision，所有 Kubernetes 操作使用所绑定的 fence。历史 V1 状态缺失 fence 时，Store 在既有 Agent 行锁事务内以 `max(management.fence, state.revision) + 1` 执行一次技术 epoch 接管，经安全整数校验及 application id、旧 fence、管理与 Workload 修订 CAS 后，原子更新管理 fence 和状态 fence，保留 Workload revision。该兼容接管不表示产品生命周期变化，不生成虚构的生命周期历史；事务失败可重试，出现更高 Kubernetes fence 时仍拒绝，不以 Kubernetes 反推产品期望。
@@ -485,7 +672,9 @@ Owner 配置权限，不替换 PVC，也不恢复已停止或停用 Agent 的运
 
 Manifest 字段、交互模式、Runtime 探测顺序和 capability 派生规则只在 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#4-runtime-manifest) 中维护。
 
-审批通过后，只有 ImageRegistryAdapter 准入与 Manifest 预检通过才启动 Workload。`platform-worker` 创建 StatefulSet、Service、部署访问路由、NetworkPolicy、Kubernetes 配置、Secret 和新 PVC，验证健康检查，再请求 HLD 定义的 Runtime 探测；访问路由只有在健康检查和所需核心探测通过后才接收用户流量。任一步失败时产品状态为“创建失败”，并返回脱敏且可修复的原因。
+审批通过后，只有 ImageRegistryAdapter 准入与 Manifest 预检通过才启动 Workload。自有入口与 §10.1.1 的独立验证 Workload 沿既有规则，由 `platform-worker` 创建 StatefulSet、Service、部署访问路由、NetworkPolicy、Kubernetes 配置、Secret 和新 PVC，验证健康检查，再请求 HLD 定义的 Runtime 探测；自有入口的访问路由只有在健康检查和所需核心探测通过后才接收用户流量，独立验证 Workload 不加入业务路由。任一步失败时产品状态为“创建失败”，并返回脱敏且可修复的原因。
+
+业务 Session Sandbox 消费已验证修订，资源准备与就绪遵循 §10.1.1；StatefulSet 可选，不能用 Agent 级验证 Workload 或其就绪结果替代 Session 的五类实际资源证据。
 
 启动 Workload 后创建失败时，`platform-worker` 必须先关闭访问路由，再幂等清理本次创建的 Kubernetes Workload、访问资源、配置、Secret 和尚未进入“可用”的新 PVC；Platform DB 中的申请、Agent 配置、失败原因和审计保留，重试时重新创建运行资源。升级的候选修订、路由切换和失败恢复见 10.4。
 
@@ -679,6 +868,16 @@ ACK、模型连接中断或进程退出不能合成原 Turn 终态。状态收�
 [Runtime HLD 7–8](HLD-agent-runtime-M1.md#7-sessionturn-与恢复)，缺少可靠结果时保持
 unknown 和原占用。控制续传只交给平台持久化处理器，不向已撤权用户回放正文。
 
+V4 原执行已被 Host 接受而 Platform 丢失 Host Session Ref 时，Worker 可持原执行的
+`session.status` 控制 Grant 和原请求摘要调用 V3 私有控制接口的只读
+`original-binding` 操作，查询
+FileRuntimeStore 已持久的原接受绑定。Host 须重新校验服务身份、控制授权、原
+Execution/Turn/代次/fence 与请求摘要；仅返回已保存的真实 Host Session Ref，
+不得创建或猜测引用、恢复业务准入或重装 Key。Core 在原 claim 的租约/fence 下
+CAS 回填该引用，失败或来源不明时保留 unknown 占用；成功后继续原 stop、终态、
+事件游标与 ACK 路径，不晋升后继执行。该只读控制响应以版本化 Schema 和生成
+OpenAPI 发布，旧 V3 操作与响应保持原义。
+
 RuntimeHost wire contract、Execution 模型选择、Platform/Connection 权威边界和 #403 的原生
 持久数据保持；多用户隔离仍由独立验收证明。正式镜像验收必须包含成功 Turn，以及 HTTP 与
 流内失败、取消、异常流的合成负向场景，递归检查原生持久历史、日志与 HTTP/SSE 的脱敏结果。
@@ -691,7 +890,7 @@ Codex Driver 为每个 Conversation 代次维护一个独立的原生 `app-serve
 原生回包决定。每个进程独立完成 pinned provenance、`initialize` 与受限配置准入；一个进程的准入
 结果不为另一个进程担保。一个原生传输只允许一个请求多路复用器。
 
-原生持久存储位于该 Agent PVC 上 Driver 状态的同级目录，按 `conversations/<key>/{home,workspace}`
+原生持久存储位于该 Session 所属 Sandbox PVC 上 Driver 状态的同级目录，按 `conversations/<key>/{home,workspace}`
 分配；`CODEX_HOME` 与 cwd 按 Conversation 绑定，因此原生历史与 rollout 天然不共享目录。所有层级
 以 0700 创建并校验归属与权限位，持久目录中出现原生配置或凭证文件即拒绝启动。旧布局与丢失所属
 目录的 Session 保留原始文件与映射，相关原生操作 fail closed。
@@ -731,7 +930,8 @@ Darwin 的 profile 使本人 `workspace` 可写、`home` 只读，因此原生�
 平台自有模型传输始终是 loopback 入口，原生进程必须拒绝为 loopback 走代理，避免宿主代理配置
 拦截该入口。原生进程的环境仍是白名单，不继承宿主代理变量或凭证。
 
-Runtime Contract、部署单元、Grant 校验与 §10.8 的模型传输边界不变，也不引入平台统一 Sandbox。
+上述 Codex 进程/文件边界是 Sandbox 内的防护，不再充当 Agent 共享 Pod/PVC 的隔离依据。
+资源与版本化 Grant 绑定遵循 §10.1.1，§10.8 的模型传输与凭据保护继续有效。
 验收必须使用真实 pinned Codex 与正式 Host/Driver/Bridge，覆盖并发、进程重启与原 Session 恢复；
 本人访问必须成功，工具普遍不可用或平台能力关闭都不构成隔离通过。取舍见
 [ADR: 按 Conversation 隔离 Codex 原生进程与文件边界](../adr/0008-isolate-codex-native-processes-per-conversation.md)。
@@ -739,7 +939,7 @@ Runtime Contract、部署单元、Grant 校验与 §10.8 的模型传输边界�
 ### 10.10 Claude 原生模型传输边界
 
 Claude 原生进程会将模型 API 的错误正文写入会话记录；仅归一化 SDK 事件不能满足凭证与
-供应商错误正文不落盘的要求。固定 Claude Driver 在同一 Agent Pod 内为每次 Query 创建
+供应商错误正文不落盘的要求。固定 Claude Driver 在所属 Sandbox Pod 内为每次 Query 创建
 独立的 loopback 传输入口，绑定该 Query 已批准的唯一 endpoint、认证、模型和 reasoning。
 本次 Execution 的 Relay Key 只保留在 Driver 传输层内存；原生进程只获得该入口的随机短期能力，不能
 通过模型名、请求 URL 或请求 header 选择其他选项。该入口不提供平台服务、协议转换、
@@ -827,6 +1027,61 @@ BuildServiceAdapter 的任务状态至少区分排队、运行、成功、失败
 
 成功结果形成不可变 Agent/系统版本；发布需要用户确认，Platform DB 保留当前运行版本与版本历史，升级和回滚复用既有 Agent 生命周期。合并受保护分支和正式生产发布仍需现有相应授权主体明确确认。签名、扫描和 Registry 准入沿用部署政策，不在 BuildServiceAdapter 外新增 Builder 审批流程。当前真实构建、OCI 导出/Digest 及 Registry push 尚待验证；本 Spec 不将某个具体构建器、rootless 实现或探针结果视为已验收事实。
 
+#### 10.12.1 构建批次与可信结果关联
+
+构建和 PR 创建、合并分别执行，均绑定同一固定源码提交。Core 只能根据已有 Connection 的
+可信读取结果固定获权仓库的不可变 ID、归属与完整 source commit；可变分支、模型输出和
+调用方提交的相同字符串不能建立关联。构建定义摘要绑定该提交中的实际构建输入。
+源码变更仍须独立提交 PR；关联 PR 时重新核实仓库 ID 与精确 head commit，后续 head 变化
+不改写原批次。PR 交付状态与失败独立保存，创建失败不取消已获权的构建。
+
+批次是原 Conversation/Execution 下的业务记录，复用原 Task 的受理、当前授权、控制记录、
+审计和 Worker 调度，不新增任务队列或独立 Builder API。受理事务固定发起主体、执行该任务的
+Agent、原 Conversation/Execution、源码证据引用、构建定义摘要、目标 Linux 架构、构建后端
+及版本、部署批准的构建参数和时间/资源/网络上限。同一事务生成批次及产物归属使用的
+不可变目标 Agent/Service ID；目标 ID 不代表 Agent 已创建，也不授予创建权限。
+幂等键沿原主体与任务命名空间串行化；完整输入及归属相同返回原批次，任一绑定变化则拒绝。
+读取原批次和幂等重放也必须复核当前访问资格，不泄露其他主体的记录。
+
+Worker 首次提交前持久保存批次、业务幂等键、确切输入及实际调用意图。后端调用只能使用
+部署已准入的固定构建入口与有界参数；不接受任意 Job、URL、命令或外部凭据。
+直接调用部署批准的 Build Service 时，Worker 只取得该后端获准的服务调用身份，并同时检查
+原任务当前业务权限和后端自身授权；服务身份不能代替用户授权或获得外部账号凭据。
+若构建后端使用 Connection，实际提交、查询、停止和清理由 [§13.1](#131-独立直连与权威边界)的
+Agent 独立客户端路径执行，Worker 只编排原任务并消费绑定原 Execution 的可信结果。
+该客户端的独立 Consumer/Instance/Actor、安装级证明、Grant、WRITE 确认、撤权与 Dispatch
+必须满足 [Connection HLD](HLD-connection-M1.md)；没有合法实际客户端时该绑定不启用。
+按 [§13.2](#132-调用与审计关联)，Platform API/Worker 不代理 Connection 调用或持有其查询
+凭据，不借用 Owner 身份、跨库读取凭据或把 Platform 授权当作 Connection Grant。
+
+后端受理结果须保存可信调用引用与原 queue/build 等后端引用，查询仅沿该绑定有界执行。
+提交超时、响应丢失或重启时无法确认 WRITE 结果，批次记为 `unknown`，只核实原调用，
+不得再次提交构建来代替对账。后端不能提供原调用核实、停止及清理能力时，不能启用该绑定。
+每次实际调用复核当前授权；撤权或任务控制生效后拒绝新增业务操作，停止与清理由原系统控制
+记录和后端获准的控制权限执行，不因用户撤权丢弃原调用或伪造停止成功。
+
+构建状态区分排队、运行、结果未知、停止中、清理中、失败、取消和待确认发布。
+后端成功仍须核实原调用、输入、源码提交、构建定义摘要、目标架构、批次及产物归属。
+镜像路径按本节规定使用服务端不可变 ID；Digest 来自后端产物记录并通过既有 Registry 准入
+读取实际 OCI 内容和目标架构，不能只信任 Tag、日志或模型摘要。全部本批次服务产物准入
+成功且临时工作区清理已确认，才可进入待确认发布；该状态不创建 Agent，也不代表发布成功。
+版本绑定和发布继续执行本节最终资源准入、当前创建/部署授权和用户确认。
+
+状态写入与原调用绑定及 Worker 当前 fence 原子比较，拒绝陈旧 Worker 和不匹配结果。
+重复结果不重复发布状态；停止已受理时，迟到的成功只能登记为待清理产物，不能恢复待发布。
+重启恢复沿原输入、调用、控制记录和 fence，不改绑 source、主体或产物。
+失败或取消的终态要求确认后端不再产生输出，并确认临时工作区、未完成产物和该批次未绑定
+Digest 已清理；未确认时继续显示未知、停止中或清理中，不释放对应占用或创建 Agent。
+后台 GC 以批次和版本绑定核实归属，不能删除已绑定版本或其他批次、用户、Agent 的资源。
+
+同一原任务查询和聊天时间线消费上述持久状态、独立 PR 结果与脱敏失败原因。
+批次、源码证据、PR、后端调用、产物准入及清理记录保留可信关联，审计分别记录原发起人与
+实际执行组件，供既有审计查询消费；普通页面只显示有权读取的摘要，不返回凭据、证明、
+原始日志或内部配置。Trace 和模型输出不承担构建业务权威。
+各部署绑定启用前须证明固定输入的真实提交、查询、Registry 准入、停止、清理和重启恢复，
+并覆盖撤权、跨主体/仓库/源码/Job/产物替换及迟到结果。Fixture/CI 与真实外部验收分别记录；
+单服务批次通过不代替多服务、发布、最终资源准入、失败回退和升级回滚的完整验收。
+
 ### 10.13 OpenCode 原生工具回执与来源
 
 标准 OpenCode 路径使用固定官方 release，版本和 target 字节以
@@ -835,13 +1090,48 @@ ACP 权限请求和进度通知只按各自协议含义消费。实际工具能�
 持久 intent、当前授权、可信开始及结果或 unknown；权限通过、Plugin before/after hook
 或某个工具通过不能补足未观察到的实际尝试与失败终态。
 
+Issue #957 的固定源码回读记录了 v1.18.30 (`3104c1428ec91f809e5ab86631300de41eb6952`)
+与官方 v1.18.33 (`51ef4be1d3c122f18fefb510dca8d778571f4f18`) 的五个接缝文件字节相同；
+该局部比较不等同于整版相同或升级批准。当前仓库 release 清单的 target 是
+`darwin-arm64`、`linux-arm64-musl` 和 `linux-x64-baseline-musl`，其 artifact/hash 仍以
+上方 release 声明为准。源码观察点和边界如下：
+
+| 接缝/观察点 | 固定源码证据 | 结论 |
+| --- | --- | --- |
+| 权限与实际写入 | `packages/opencode/src/tool/edit.ts:102-111`；内部先 `ctx.ask` 再写入 | before hook 不能证明权限通过或实际 I/O 开始 |
+| 调用与成功 | `packages/opencode/src/session/tools.ts:106-133` | `execute`/after hook 只表示外层调用返回，不是逐 attempt receipt |
+| running、错误与取消 | `packages/opencode/src/session/processor.ts:164-206,331-352,585-606` | 原生状态/中断清理不证明实际 I/O 已开始或执行源已退出 |
+| Plugin 接缝 | `packages/plugin/src/index.ts:266-285`；`packages/plugin/src/tool.ts` 的 V1 `ToolContext` | 公开契约没有覆盖每次内部尝试和失败终态的强制 receipt barrier |
+| 内部新尝试 | `packages/opencode/src/session/processor.ts:674-688` | provider retry 不是每个工具内部动作的回执 |
+
+因此固定版本、target 和已有 artifact/hash 可以回读；公开扩展的来源/hash、无歧义调用绑定
+及逐 attempt receipt 仍是启用前置，未证明时保持 fail closed。上述源码观察只证明文档决策，
+不证明四模板真实 Provider/Connection 或 Runtime 验收。
+
+本决策与既有产品和功能票的映射保持如下边界：
+
+| 权威/义务 | 本决策保留的边界 | 状态 |
+| --- | --- | --- |
+| Platform PRD §2/§13.3/§14、#483 | 实际 I/O 与唯一事实仍由受控 Driver 执行叶子和既有 journal/Worker 事务产生 | 设计约束；#483 真实 Provider/Connection 仍开放 |
+| #929 AC-2 | permit 是准入，`started` 只来自实际 I/O/dispatch；未观察到的开始不填造 | 文案已澄清；#929 仍未验收 |
+| #930 | ACP progress、before/after 和自有工具不能替代原生 effect receipt；原 built-in 缺口保留 | #930 Draft/能力缺口保留 |
+| 四模板、恢复、取消、隔离与 P1 工具义务 | 不因本决策或受控扩展通过而缩减原产品矩阵 | 由后续实现票逐项验证 |
+
 优先通过 upstream contribution 提供可等待、不可由模型或 Owner 关闭的原生接缝。
 官方 artifact 缺少可靠接缝时，记录对应能力未通过；不把完整 M1 义务改成模型子集或永久
-unsupported 清单。受控 derived/private artifact 另需明确的来源批准：固定 upstream
-tag/commit、最小补丁及协议、构建与依赖锁、每个 target 的 hash、许可/NOTICE、维护者与
-退出条件。平台 Runtime 维护者承担补丁、升级回归与上游跟进，来源决策由仓库 CODEOWNER
-按正式架构流程评审。没有具体来源批准与实际产物验证时，不构建、发布或启用该路径；运行时
-不下载依赖或编译源码，不另建 vendor 服务、插件平台或推理循环。
+unsupported 清单。当前 M1 不维护、准备、应用或构建 OpenCode 上游补丁、derived/private
+artifact、vendor builder 或修改版发行物，也不把 source-review packet 当作实现交付。若官方
+artifact 缺少可靠接缝，运行时必须拒绝对应能力并保留能力缺口；不能通过本 Issue、架构评审、
+fixture、环境变量或部署说明授权例外。Upstream contribution 可以由上游项目另行接收和维护，
+但不属于本仓实现、运行 pin 或验收证据；不能因此在本仓下载依赖、编译源码、发布或启用修改版，
+也不能另建 vendor 服务、插件平台或推理循环。
+
+官方公开工具扩展可以作为受控执行请求入口，实际 I/O 位于现有 Driver 信任域的执行叶子；
+扩展只能请求执行并等待结果，不能提交可信开始或结果事实。该路径复用既有 journal、Host
+当前授权和 Worker 事务，不新增部署单元或事实权威。启用前须证明工具行为、每次实际尝试、
+取消与恢复等价，并阻断所有绕过屏障的原工具入口；固定扩展及配置不可由模型或 Owner
+改写。受控工具的证明与官方原 built-in 分别记录，不能因替代路径通过而声称原 built-in 已通过，
+也不能缩减完整 M1 工具义务。调用绑定、控制隔离或等价能力尚未证明时，对应能力保持未通过。
 
 原生工具接缝留在 Driver 与原生进程边界，复用唯一公共实际操作事实、现有 journal、Host
 授权和 Worker 事务/游标。控制通道不得被工具子进程继承或由模型配置改写；具体确认顺序、
@@ -851,7 +1141,7 @@ OpenCode 模型传输与 Execution Key 版本、原 Session 和 Connection 独�
 
 候选与回滚 artifact 均须验证原数据、终态读取及 active/unknown 的兼容恢复，复用原 PVC
 并核实原 attempt；缺少原执行要求的接缝时保留未确认状态，不能重建 Session、降级协议或
-重发副作用。退出私有路径以官方 artifact 实际满足相同工具覆盖、隔离与故障矩阵为准，
+重发副作用。官方 artifact 与扩展升级须满足原执行所需的工具覆盖、隔离与故障矩阵，
 升级和回滚继续执行 10.4 的恢复流程。[Runtime HLD 11.1](HLD-agent-runtime-M1.md#111-通用-runtime-与-driver-验证)
 记录原生矩阵；文档决策、Fixture 或共享 Host 通过均不证明四模板真实模型/工具验收完成。
 
@@ -873,9 +1163,19 @@ Agent Pod 的 `/tmp` 挂载部署控制、具有显式容量上限的内存临�
 
 ### 11.3 数据与生命周期边界
 
-Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源，只保存 worker 侧 Client Adapter 使用的不透明 RuntimeHost Session Ref。RuntimeHost 在 Agent PVC 上保存该引用与 `agentId`、`conversationId`、`sessionGeneration` 及 Native Session ID 的绑定；Native Session ID 和原生事件细节不能跨出 RuntimeHost。Host Session Ref 和 Native Session ID 都不能成为浏览器、API、渠道或 Agent 请求中的身份与授权依据。API 与 Eval 复用这套权威关系，不新增 Session 或调度服务。
+Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源，只保存 worker 侧 Client Adapter 使用的不透明 RuntimeHost Session Ref。RuntimeHost 在所属 Sandbox PVC 上保存该引用与 `agentId`、`conversationId`、`sessionGeneration`、§10.1.1 的 Sandbox 归属及 Native Session ID 的绑定；Native Session ID 和原生事件细节不能跨出 RuntimeHost。Host Session Ref 和 Native Session ID 都不能成为浏览器、API、渠道或 Agent 请求中的身份与授权依据。API 与 Eval 复用这套权威关系，不新增 Session 或调度服务。
 
 Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的完整契约见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)，本文不重复定义协议字段。
+
+### 11.4 原生命令与已安装 Skill 边界
+
+产品范围见 [平台 PRD §11.3](../prd/PRD-agent-platform-M1.md#113-原生命令与已安装-skill)；目录、调用、固定官方版本及验证矩阵只在 [Runtime HLD §5.1–5.4](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用) 维护。该能力扩展现有 Platform Conversation Contract，复用公共 Schema、生成 Client、HTTP/SSE 和固定 Driver，不创建插件框架、第二任务调度器或独立聊天应用。
+
+- 部署维护者负责审核并固定命令映射、Skill 包来源、版本及内容摘要，与 Runtime 镜像和配置修订共同验证、升级和回滚。部署只装配获准的目录及资源，排除个人 HOME、祖先目录、全局配置和未经批准的自动发现来源；不把放开一个禁用开关视为完成装配。Skill 包不得夹带凭据、自动安装依赖或扩大工具/网络权限，运行时不能改写已选择版本。
+- Platform Core 解析当前主体、Agent 与 Conversation 归属，校验参数、能力修订及调用权限；Store 继续保存权威受理和结果，Worker 仍是唯一投递方。Host 只在已认证的内部接口上消费当前授权及冻结绑定，Driver 将获准能力映射到该固定版本真实公开接口；原生 ID、文件路径、配置和协议帧不透传 Web。
+- 能力目录不是授权凭据。新业务调用取当前权限与原受理范围的交集，并保持原模型选择、Key 版本、文件授权和 Connection 独立身份边界；目录读取不获得执行权限。只读命令不创建业务 Turn；产生 Turn 或改变原生状态的操作必须先持久受理，复用原 outbox、串行占用、操作事实和恢复路径。
+- 原生 CLI 支持不等于 SDK/API 支持。公开接口缺少所需绑定、事实或恢复接缝时，按具体能力拒绝并记录差额；不能用普通提示、模型自报、私有协议或修改上游产物补齐。尤其不能以 Skill 作为绕过 §10.8–10.13 或文件、隔离、授权门禁的入口。
+- 新契约采用显式版本协商；旧 Driver/Host 缺少命令或 Skill 语义时返回不支持，不把新输入降级为旧文本 submit。旧消息、控制、任务与恢复语义保持；新增能力不能迫使旧任务重建或重放。
 
 ## 12. 对话与长任务
 
@@ -991,6 +1291,92 @@ Connection 只复用固定且经 allowlist 审核的 OpenConnector Provider/OAut
 
 Connection 的 LDAP、OAuth 客户端、MCP/API、Grant、凭证保护、Provider Action、幂等/对账及 Pilot 验证矩阵由 [Connection M1 HLD](HLD-connection-M1.md) 细化。跨文档整合按第 25 节完成，不能以旧的代调用协议覆盖本节独立直连边界。
 
+### 13.5 Platform 外部 Connection Consumer 配置契约
+
+本节冻结 [#1269](https://github.com/AgoraIO-Extensions/agent-infra/issues/1269) 的部署配置，
+不改变两份 PRD 的独立直连边界。适用的 Connection HLD 条款为
+[§3 系统上下文](HLD-connection-M1.md#3-系统上下文)、
+[§5.2 Consumer 与 Instance](HLD-connection-M1.md#52-consumer-与-instance)、
+[§7 MCP/API 调用流程](HLD-connection-M1.md#7-mcpapi-调用流程)和
+[§11 审计与跨系统关联](HLD-connection-M1.md#11-审计与跨系统关联)。
+
+#### 13.5.1 字段与配置来源
+
+一个部署使用一个完整的 Consumer 配置快照；以下字段全部必填，不能从用户、Agent 或任务输入补齐。
+
+| 字段 | 语义与约束 |
+| --- | --- |
+| `schemaVersion` | 本配置契约的整数版本，当前为 `1`；不是 Connection API、MCP 或客户端产物版本。 |
+| `publicOrigin` | 部署批准并与 Connection 发布配置一致的 HTTPS origin，只含 scheme、host 和可选端口；使用 URL origin 的规范形式，不含凭据、路径、尾斜杠、query 或 fragment。批准范围按完整 origin 精确匹配，不使用域名后缀或通配符。 |
+| `mcpPath` | 相对此 origin 的独立绝对路径，以单个 `/` 开始；不含 scheme、host、query、fragment、反斜杠、`.`/`..` 路径段或编码后的路径分隔符及点段。最终 MCP endpoint 为 `publicOrigin + mcpPath`，不以 URL 解析的相对路径回退或重定向改变目标。 |
+| `consumerId` | Connection 为该产品注册的非空 Consumer 标识，按原值精确匹配；不是 Principal、ConsumerInstance、Actor 或授权证明，不能由 Platform 创建实例身份或代替 Connection 的认证解析。 |
+| `audience` | Connection 为该 Consumer 部署批准的非空目标资源标识，按原值精确匹配；不能从 origin、路径或 Platform Runtime Execution Grant 的 audience 推导。 |
+| `egressProfile` | 非敏感的 `{ ref, revision }`，两项均为非空字符串，引用部署批准的出站策略及不可变修订。该策略限定到达上述 Connection 目标所需的网络路径、DNS 和 TLS 校验；引用名不授予授权，也不允许访问 Connection DB 或 Provider。 |
+
+配置来源按以下顺序确定，不在进程内逐字段叠加：
+
+1. 部署显式选择外部配置引用时，该引用的固定修订是整个快照的唯一来源；无法读取或校验失败
+   时拒绝启用，不能回退到 Helm values。
+2. 未选择外部引用时，使用目标环境的 Helm values 渲染完整非敏感 ConfigMap；ConfigMap 是
+   该 values 的交付形式，不是另一层覆盖源。外部引用与内联快照同时配置时视为冲突并拒绝。
+3. 源码、镜像和前端包不内置环境 endpoint 或兜底值。普通环境变量、请求体、Agent 配置、
+   模型/工具参数和前端常量均不能覆盖快照；环境选择只发生在受控部署配置中。
+
+#### 13.5.2 版本、指纹与失败行为
+
+版本 `1` 只接受上述字段及 `egressProfile` 的两个子字段，拒绝未知字段、缺失值、错误类型和
+不满足约束的值；不静默忽略新字段或自动降级。字段集合、语义或规范化规则变化须发布新
+`schemaVersion`，并在启用前确认部署与消费方均支持。支持配置版本不表示客户端、MCP/API
+或 Connection 服务端兼容；它们仍须通过各自的版本和 readiness 门禁。
+
+配置指纹为以下数组经 `JSON.stringify` 序列化后的 UTF-8 字节的 SHA-256，以小写十六进制
+表示；不添加空白、BOM 或尾换行。先完成字段校验；字符串保持原值，不 trim、改写大小写或隐式解码。
+
+```text
+[schemaVersion, publicOrigin, mcpPath, consumerId, audience, egressProfile.ref, egressProfile.revision]
+```
+
+指纹覆盖有效非敏感配置及出站策略修订，不包含 SecretRef、token、私钥或其 hash；
+它用于配置一致性核对，不是签名、安装身份或 Connection 授权。源引用及修订与指纹一并记录，
+相同内容从不同批准来源交付可具有相同指纹；出站策略内容变化必须产生新修订和新指纹。
+
+部署以完整快照校验并发布，消费方在启用 Connection 能力前核对预期版本和指纹。
+缺失批准来源、origin 未获准、路径非法、Consumer/audience 与批准登记不符、出站策略
+不可解析或未落实、版本不支持、指纹不符时，受影响的 Connection 能力保持不可用，不发出调用。
+更新不允许混用新旧字段；现有客户端不能原地切换 origin、Consumer 或 audience 并复用旧安装
+凭据。恢复须重新核对完整配置和原安装绑定，不回退到旧快照、其他环境、匿名、Owner 或平台
+服务身份；已发生但结果未知的外部操作仍沿原调用核实，不向新 endpoint 重放。
+
+#### 13.5.3 SecretRef、权威与交付边界
+
+非敏感快照使用 Helm values/ConfigMap 或上述受控外部配置。必要的安装凭据仅由已批准的
+SecretRef 和受保护客户端边界提供；SecretRef 只定位安装隔离的受控凭据，不构成授权，
+不得来自请求或 Agent 输入。引用必须解析到与原 Principal、ConsumerInstance、Actor（如适用）、
+audience 和凭据修订一致的安装；缺失、失效或绑定不符时拒绝，不能跨安装共享。
+具体签发、持有证明、撤销和刷新遵循 Connection HLD §5.2；Codex 的交付与隔离遵循
+[Runtime HLD §9.1](HLD-agent-runtime-M1.md#91-codex-独立-connection-consumer-profile)，
+不能把 SecretRef 解释为普通 env、argv 或工具进程可读的 token 注入许可。
+
+Platform 在 Connection 相关数据中只保存 Consumer 非敏感配置和 §13.2 的受信关联引用；
+不代理 MCP、不读取 Connection DB、不保存 Provider Credential 或 Grant，不复制 Connection
+授权与审计权威。Platform API/Worker 不取得客户端凭据来代调用或查询 Connection。
+客户端凭据和原始秘密不得进入 Platform DB、ConfigMap、普通配置、日志/错误、模型上下文、
+前端 bundle、Issue 或 PR 文本；SecretRef 的解析仅发生在已批准的安装凭据/客户端边界。
+
+本节不实现 API/Worker/Web 接线（分别由
+[#1270](https://github.com/AgoraIO-Extensions/agent-infra/issues/1270)、
+[#1271](https://github.com/AgoraIO-Extensions/agent-infra/issues/1271)、
+[#1272](https://github.com/AgoraIO-Extensions/agent-infra/issues/1272)承接）。
+[#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851)负责真实客户端的安装证明和
+受保护交付；[#395](https://github.com/AgoraIO-Extensions/agent-infra/issues/395)负责独立
+Connection runtime/readiness；[#435](https://github.com/AgoraIO-Extensions/agent-infra/issues/435)
+是已关闭（NOT_PLANNED）的历史联合验收回链，不恢复该入口或已停止探针；当前代表旅程由
+[#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192)回链
+[#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144)，完整 Pilot 义务仍按原验收要求保留。
+配置契约或静态校验通过不代表这些验收完成，也不接管
+[#907](https://github.com/AgoraIO-Extensions/agent-infra/issues/907)、
+[#601](https://github.com/AgoraIO-Extensions/agent-infra/issues/601)或 Connection 服务端实现。
+
 ## 14. 使用渠道
 
 ### 14.1 Web
@@ -1020,6 +1406,10 @@ Bot Secret 与应用发送 Secret 按既有平台应用层加密规范由 API �
 密文用途绑定 Agent、渠道和配置版本，不走会向 Agent Pod 投射 Secret 的路径。
 官方扫码返回及手动输入的 Secret 只在本次提交中短暂存在，提交后清除；不得查询回显、写浏览器持久存储、
 URL、日志或审计。Agent、模型和 Runtime 均不得获得渠道凭证。
+企微自建应用的官方 [`gettoken`](https://developer.work.weixin.qq.com/document/path/91039) 协议要求 Worker 以
+HTTPS GET 向固定的 `qyapi.weixin.qq.com/cgi-bin/gettoken` 提交 `corpsecret` 查询参数。此供应商出站请求是
+上述 URL 禁令的唯一例外；不得将该 URL 传给浏览器、平台 API、Agent、Runtime、日志、链路追踪或审计。
+Adapter 禁止重定向并将网络及响应错误统一脱敏；部署的出站代理和观测设施必须移除该请求的完整查询串。
 
 自建应用单独校验企业 ID、应用 ID、应用 Secret 和接收消息的 Token、EncodingAESKey、TLS 回调地址。
 应用主动发送凭证不能代替接收消息配置；启用自建应用或显式机器人回调模式时才要求可达的 TLS 回调。
@@ -1069,7 +1459,7 @@ SDK 默认日志、debug 和重试行为必须验证，不照抄输出凭证或�
 - 模板版本、自定义镜像 Digest、Runtime Manifest、env、版本化 Secret 密文状态和资源 Profile。
 - Relay endpoint 的获准配置、Agent 默认与个人 Relay Key 密文/版本/用途、Execution Key 引用、模型选项、渠道绑定和已验证的集成能力。
 - 会话、消息、回答版本、执行和执行事件。
-- worker 侧不透明 RuntimeHost Session Ref、`sessionGeneration` 和恢复状态。
+- Session 到 Sandbox 的唯一分配与资源归属、worker 侧不透明 RuntimeHost Session Ref、`sessionGeneration` 和恢复状态；标识权威见 §10.1.1。
 - 附件与结果文件元数据。
 - 平台实际模型/工具事实与经核实的 Connection 关联引用，不保存 Connection 目录、账号、Grant、状态或审计投影。
 - Eval 用途授权、版本化数据集/标准、实验及逐例 Execution 引用、实际版本、评分/人工复核、主动反馈；正文和评分理由作为受控业务数据保存。
@@ -1161,7 +1551,7 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 - 平台、Connection 和 Agent 使用不同运行身份与数据库账号。
 - Agent Pod 不能访问 Platform DB、Connection DB、部署解密私钥或 Kubernetes API。
 - Agent/客户端使用 Connection 自己的访问凭据直连其 MCP/API；Platform 不充当代理或授权签发方，原始外部凭证始终留在 Connection。
-- 标准模板只使用 ModelCatalogAdapter 返回的获准模型端点；自定义 `platform-adapter` 的 Owner 模型端点和 `self-managed` 的其他出站访问遵循部署网络策略，M1 不新增按 Agent 维护的 egress allowlist。
+- 平台会话的 Sandbox 出站遵循 §10.1.1；标准模板只使用获准模型端点，自定义 `platform-adapter` 的模型端点同样须获部署批准。`self-managed` 的其他出站沿部署网络策略，不从其声明推导平台会话的出站权限。
 - 自定义镜像必须通过 ImageRegistryAdapter 准入，并使用不可变 Digest。
 - 容器以非 root 用户运行，根文件系统默认只读；需要写入的数据挂载到明确卷。
 - 个人与 Agent 默认 Relay Key、Owner Secret 和企微凭证按各自用途加密保存、不回显，只能替换。旧 Key 密文只在仍有已受理 Execution 引用时保留。
@@ -1244,7 +1634,8 @@ Evaluation 是 `platform-core` 内部模块，API 提供管理与查询，Store 
 
 - PostgreSQL 与对象存储使用容器化真实依赖。
 - Conversation、Execution、outbox、双 Worker 和 Pod 重启的集成与故障注入测试执行 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)。
-- Kubernetes `kind` 测试覆盖创建失败后无可路由入口、运行中 Workload 或遗留新 PVC，停止或停用后 StatefulSet 缩容到 0、重启后从 0 恢复且保留原 PVC 与 Platform DB 状态，候选 Service/健康检查变更，候选提升任一步骤的 Worker 重启和部分切换恢复，升级失败后恢复旧 Digest、路由、渠道和平台历史，切换期间不出现双路由或失败候选继续接收流量，原 PVC 复用，以及第 17 节的安全与网络边界。自有交互入口的两种身份责任选择分别只产生一条用户路由；切换并重新调谐后旧路由被删除，Agent Service、Pod 地址和未选入口均不可达。Pod 重启和 Session 恢复执行 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)。
+- Kubernetes `kind` 测试覆盖创建失败后无可路由入口、运行中 Workload 或遗留新 PVC，自有入口与独立验证 Workload 停止或停用后 StatefulSet 缩容到 0、重启后从 0 恢复且保留原 PVC 与 Platform DB 状态，候选 Service/健康检查变更，候选提升任一步骤的 Worker 重启和部分切换恢复，升级失败后恢复旧 Digest、路由、渠道和平台历史，切换期间不出现双路由或失败候选继续接收流量，原 PVC 复用，以及第 17 节的安全与网络边界。自有交互入口的两种身份责任选择分别只产生一条用户路由；切换并重新调谐后旧路由被删除，Agent Service、Pod 地址和未选入口均不可达。Pod 重启和 Session 恢复执行 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)。
+- Session Sandbox 的 `kind` 验证覆盖 §10.1.1 五类实际资源及使用时的 StatefulSet 身份与控制关系；未使用 StatefulSet 时不得要求或合成其 receipt。覆盖逐资源 UID/resourceVersion 漂移、旧 resourceFence、同名外部对象、停止删除前置条件与 absence 回读、原 PVC 保留、Pod 重建的旧执行源排除与 Store CAS，以及 unknown 保留原身份和占用而不重放业务。
 - API 受理事务、同会话串行、双 Worker/取消竞态、等待容量/到期、服务重启与未知结果验证持久状态不丢失；凭证失效任务继续与主体撤权系统取消分别注入故障验证。
 - 审计事务失败、执行前意图保存失败、查询故障、Trace 采样/导出失败与事件重放分别验证，不能丢必要审计、伪造成功或重复计数。Eval 评分失败、版本变化、数据撤权/删除与用量缺失使用受控样本验证。
 - Identity、OCI Registry、模型端点、对象存储和企微边界提供可控 Fake；Fake 使用与正式 Contract 相同的 Schema，不维护第二套接口。
@@ -1310,8 +1701,11 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
   存储后端的不可变 SHA-256）及 rootfs layers 绑定 OS 与应用扫描；此 CI 扫描步骤不发布镜像。
   镜像发布使用独立的 [release 入口](../../deploy/README.md#不可变镜像与-release-检查)。新增
   Dockerfile 必须同步覆盖清单。Connection 此项仅提供 HLD §14/§16 的镜像证据，不替代其 Pilot 门禁。
-- 使用 Trivy 输出的 `Severity` 阻断所有 High/Critical，包括无修复版本；中低等级及
-  Unknown 保留报告。severity 来源采用 Trivy 的 vendor 优先策略：OS 使用发行版
+- 使用 Trivy 输出的 `Severity` 识别所有 High/Critical，包括无修复版本。仅
+  `pull_request` CI 将这些发现作为警告，不因发现本身阻塞 PR；`main` push、默认本地
+  调用和发布入口仍阻断未获有效例外的 High/Critical。中低等级及 Unknown 保留报告。
+  报告保留严格漏洞判定及数量，并单独记录本次 CI 门禁结果；PR 警告不表示漏洞已修复。
+  severity 来源采用 Trivy 的 vendor 优先策略：OS 使用发行版
   advisory，应用包使用其生态数据源（npm 使用 GitHub Advisory Database）；报告保留
   `SeveritySource`、`VendorSeverity` 和 `DataSource`，不改用仅新增或仅有补丁策略。
   Trivy 未输出可选 `SeveritySource` 时，摘要注明 `Trivy auto (source unspecified)`，
@@ -1336,8 +1730,9 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
   无效/到期记录、通配范围、版本/Digest 不匹配、审批撤销或回查失败不能豁免。
   普通基础设施 waiver 不参与漏洞判定，例外不改变其他人工门禁。
 
-首次真实扫描命中阻断项时保留失败证据，由维护者批准精确例外或另开修复 Issue；不得自动
-升级、修复或降低阈值。此检查是 readiness 的前置，不代表生产或完整人工安全审计完成。
+真实扫描命中 High/Critical 时保留完整证据，并跟踪修复 Issue；严格门禁下也可由维护者批准
+精确例外。不得自动升级、修复或降低严重性。PR 仍须通过扫描执行与证据完整性检查；报告性
+发现不阻塞 PR readiness，不代表生产或完整人工安全审计完成。
 
 ### 21.2 发布
 

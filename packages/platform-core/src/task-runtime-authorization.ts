@@ -124,7 +124,15 @@ function denied(code = "AUTHORIZATION_REVOKED"): never {
 
 /** Platform Web channel policy over the Store's current, execution-bound configuration. */
 export function isPlatformConversationChannelCurrentV1(
-	record: TaskRuntimeAuthorizationRecordV1,
+	record: Pick<
+		TaskRuntimeAuthorizationRecordV1,
+		"workload" | "configurationRevision"
+	> & {
+		readonly boundary: Pick<
+			TaskRuntimeAuthorizationRecordV1["boundary"],
+			"agentId" | "channelId"
+		>;
+	},
 ): boolean {
 	if (record.boundary.channelId !== "web")
 		unavailable("CHANNEL_AUTHORIZATION_UNAVAILABLE");

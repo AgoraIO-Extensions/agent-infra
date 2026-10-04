@@ -27,6 +27,21 @@ export default defineConfig({
 			"/api": {
 				target: platformApiTarget,
 				changeOrigin: false,
+				configure(proxy) {
+					proxy.on("proxyRes", (upstream, _request, response) => {
+						if (
+							!/^text\/event-stream(?:\s*;|$)/i.test(
+								upstream.headers["content-type"] ?? "",
+							)
+						)
+							return;
+						// The proxy copies status/headers after this callback returns.
+						queueMicrotask(() => {
+							if (!response.destroyed && !response.headersSent)
+								response.flushHeaders();
+						});
+					});
+				},
 			},
 			"/auth": {
 				target: platformApiTarget,

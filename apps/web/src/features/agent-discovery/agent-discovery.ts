@@ -9,11 +9,12 @@ import type {
 	ListAgentsV2Errors,
 	ListAgentsV2Responses,
 } from "../../pilot/generated-v2/types.gen.js";
+import {
+	type CollectionReadUnavailable,
+	collectionReadFailure,
+} from "../collection-read-failure.js";
 
-type UnavailableState = {
-	kind: "unavailable";
-	retryable: boolean;
-};
+type UnavailableState = CollectionReadUnavailable;
 
 export type AgentDiscoveryState =
 	| {
@@ -26,23 +27,58 @@ export type AgentDetailState =
 	| { kind: "ready"; agent: AgentProjectionV2 }
 	| UnavailableState;
 
-const retryableError = () => new Error("Agent data is temporarily unavailable");
+export function canStartPlatformConversation(
+	agent: AgentProjectionV2,
+): boolean {
+	return (
+		agent.managementStatus === "available" &&
+		agent.serviceAvailability === "ready" &&
+		!(
+			agent.source.kind === "custom" &&
+			agent.source.interactionMode === "self-managed"
+		)
+	);
+}
+
+const retryableError = (): Error & { readonly retryable: true } =>
+	Object.assign(new Error("Agent data is temporarily unavailable"), {
+		retryable: true as const,
+	});
+
+export function isRetryableAgentDiscoveryError(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		(!("retryable" in error) || error.retryable === true)
+	);
+}
 const maximumAgentDiscoveryPages = 100;
 
 export type AgentDiscoveryScope = "visible" | "owner";
 
-function unavailable(error: { retryable?: boolean } | undefined) {
+// Reuse the response schema that generates this endpoint's client contract.
+const agentPageSchema =
+	pilotBrowserHttpOpenApiPathsV2["/api/v2/agents"].get.responses["200"].content[
+		"application/json"
+	].schema;
+
+function unavailable(
+	error:
+		| { retryable?: boolean; reason?: CollectionReadUnavailable["reason"] }
+		| undefined,
+) {
 	if (error?.retryable !== false) throw retryableError();
 
 	return {
 		kind: "unavailable" as const,
 		retryable: false,
+		...(error?.reason ? { reason: error.reason } : {}),
 	};
 }
 
 export async function loadAgentDiscovery(
 	client?: Client,
 	scope: AgentDiscoveryScope = "visible",
+	signal?: AbortSignal,
 ): Promise<AgentDiscoveryState> {
 	const agents: AgentProjectionV2[] = [];
 	const cursors = new Set<string>();
@@ -50,6 +86,7 @@ export async function loadAgentDiscovery(
 	let pages = 0;
 
 	do {
+		signal?.throwIfAborted();
 		if (pages >= maximumAgentDiscoveryPages) throw retryableError();
 		pages += 1;
 		const query: ListAgentsV2Data["query"] = {
@@ -61,10 +98,15 @@ export async function loadAgentDiscovery(
 		> = await listAgentsV2<false>({
 			client,
 			query,
+			signal,
 			responseStyle: "fields",
 			throwOnError: false,
 		});
-		if (!result.data) return unavailable(result.error);
+		signal?.throwIfAborted();
+		const status = result.response?.status;
+		if (status !== 200) return unavailable(collectionReadFailure(status));
+		if (!result.data || !agentPageSchema.safeParse(result.data).success)
+			return unavailable({ retryable: false, reason: "invalid-response" });
 
 		agents.push(...result.data.items);
 		cursor = result.data.nextCursor;
@@ -85,7 +127,14 @@ export async function loadAgentDetail(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	return result.data
-		? { kind: "ready", agent: result.data }
-		: unavailable(result.error);
+	if (result.response?.status !== 200) return unavailable(result.error);
+	const parsed = AgentProjectionV2Schema.safeParse(result.data);
+	if (!parsed.success || parsed.data.agentId !== agentId)
+		return unavailable({ retryable: false });
+	return { kind: "ready", agent: parsed.data };
 }
+
+import {
+	AgentProjectionV2Schema,
+	pilotBrowserHttpOpenApiPathsV2,
+} from "@agent-infra/contracts/pilot";

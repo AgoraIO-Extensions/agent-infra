@@ -59,17 +59,17 @@ export function claudeQuery(options: Options, message: SDKUserMessage) {
 				// A pending SDK read can leave `native.return()` unresolved. Trigger
 				// that cleanup after the process group is retired so it cannot block
 				// the forceful close path.
-				const finishNativeCleanup = () => {
+				const startNativeCleanup = () => {
 					if (typeof native.return === "function") {
 						try {
 							void Promise.resolve(native.return()).catch(() => {});
 						} catch {
-							// The child process still needs to be retired.
+							// Iterator cleanup cannot change confirmed process retirement.
 						}
 					} else native.close();
 				};
 				if (!child) {
-					finishNativeCleanup();
+					startNativeCleanup();
 					return;
 				}
 				const pid = child.pid;
@@ -106,8 +106,10 @@ export function claudeQuery(options: Options, message: SDKUserMessage) {
 					} while (Date.now() < deadline);
 					if (retired) break;
 				}
-				finishNativeCleanup();
-				if (retired) return;
+				if (retired) {
+					startNativeCleanup();
+					return;
+				}
 				throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 			})();
 			return closing;

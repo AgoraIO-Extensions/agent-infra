@@ -50,7 +50,10 @@ describe("platform-store package surface", () => {
 			"PostgresAgentConfigurationTransactionV1",
 			"PostgresAgentManagementQueryV1",
 			"PostgresAgentManagementTransactionV1",
+			"PostgresApplicationApiCredentialIssuerStoreV1",
 			"PostgresApplicationFoundationTransactionV1",
+			"PostgresApplicationMaterialGrantStoreV1",
+			"PostgresApplicationRegistrationStoreV1",
 			"PostgresApplicationRevisionTransactionV1",
 			"PostgresConversationDispatchStoreV1",
 			"PostgresConversationEventTransactionV1",
@@ -60,11 +63,17 @@ describe("platform-store package surface", () => {
 			"PostgresLdapSessionStoreV1",
 			"PostgresLegacyTaskAuthorizationMigrationV1",
 			"PostgresLegacyTaskRecoveryReaderV1",
+			"PostgresPersonalApiCredentialStoreV1",
+			"PostgresPersonalRelayKeyStoreV1",
 			"PostgresPlatformAuditQueryV1",
+			"PostgresRelayKeyVersionStoreV1",
 			"PostgresScopedPlatformAuditQueryV1",
 			"PostgresSecretActivationStoreV1",
 			"PostgresSecretKeyRotationStoreV1",
 			"PostgresTaskAuthorizationStoreV1",
+			"PostgresWecomChannelV1",
+			"PostgresWecomConnectionsV1",
+			"PostgresWecomSetupV1",
 			"SecretActivationStoreError",
 			"SecretKeyRotationStoreError",
 			"TaskAuthorizationStoreError",
@@ -77,7 +86,13 @@ describe("platform-store package surface", () => {
 			"openPostgresSecretKeyRotationStoreV1",
 			"openPostgresWorkloadReconciliationStoreV1",
 			"platformDatabaseUrlFromEnvironment",
+			"readPlatformQueueResourceSnapshot",
+			"requireCurrentPersonalApiTaskAdmissionV1",
+			"resolveApiAuditCredentialIdentityV1",
+			"resolvePersonalApiTaskAdmissionAuthorityV1",
+			"validateWecomSetupCredentialRecordV1",
 		]);
+		expect(surface.PostgresPersonalRelayKeyStoreV1).toBeTypeOf("function");
 
 		const pack = JSON.parse(
 			execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {

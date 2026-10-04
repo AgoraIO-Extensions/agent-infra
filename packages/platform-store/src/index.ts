@@ -23,10 +23,17 @@ export {
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
 } from "./agent-management.ts";
+export * from "./api-audit-identity.js";
+export * from "./application-api-credentials.js";
 export {
 	type PostgresApplicationFoundationOptions,
 	PostgresApplicationFoundationTransactionV1,
 } from "./application-foundation.ts";
+export {
+	type PostgresApplicationMaterialGrantOptionsV1,
+	PostgresApplicationMaterialGrantStoreV1,
+} from "./application-material-grant.ts";
+export { PostgresApplicationRegistrationStoreV1 } from "./application-registration.ts";
 export {
 	ApplicationRevisionStoreError,
 	type PostgresApplicationRevisionOptionsV1,
@@ -71,8 +78,10 @@ export {
 	type ConversationQueryProjectionV1,
 	type ConversationQueryScopeV1,
 	type ConversationReplayResultV1,
+	type PlatformQueueResourceSnapshot,
 	type PostgresConversationQueryOptionsV1,
 	PostgresConversationQueryV1,
+	readPlatformQueueResourceSnapshot,
 } from "./conversation-query.ts";
 export { PostgresFileStoreV1 } from "./files.js";
 export {
@@ -98,6 +107,16 @@ export {
 	type ScheduleOutboxRetryInput,
 	type SucceededOutboxItem,
 } from "./outbox.ts";
+export {
+	type PostgresPersonalApiCredentialOptionsV1,
+	PostgresPersonalApiCredentialStoreV1,
+} from "./personal-api-credentials.ts";
+export {
+	requireCurrentPersonalApiTaskAdmissionV1,
+	resolvePersonalApiTaskAdmissionAuthorityV1,
+} from "./personal-api-task-authorization.ts";
+export { PostgresPersonalRelayKeyStoreV1 } from "./personal-relay-key.ts";
+export { PostgresRelayKeyVersionStoreV1 } from "./relay-key-versions.ts";
 export {
 	PostgresScopedPlatformAuditQueryV1,
 	type ScopedPlatformAuditPageV1,
@@ -128,4 +147,11 @@ export {
 	PostgresLegacyTaskAuthorizationMigrationV1,
 	PostgresLegacyTaskRecoveryReaderV1,
 } from "./task-authorization-migration.js";
+export { PostgresWecomChannelV1 } from "./wecom-channel.ts";
+export type { WecomConnectionClaimV1 } from "./wecom-connections.ts";
+export { PostgresWecomConnectionsV1 } from "./wecom-connections.ts";
+export {
+	PostgresWecomSetupV1,
+	validateWecomSetupCredentialRecordV1,
+} from "./wecom-setup.ts";
 export { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.js";

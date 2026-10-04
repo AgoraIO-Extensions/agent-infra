@@ -116,8 +116,150 @@ describe("AgentDiscoveryScreen", () => {
 			target: { value: "not-in-authorized-response" },
 		});
 		expect(screen.getByText("未找到匹配的 Agent。")).toBeTruthy();
-		expect(screen.queryAllByRole("link")).toHaveLength(0);
+		expect(
+			screen.queryAllByRole("link", { name: /^查看 .+ 详情$/ }),
+		).toHaveLength(0);
 	});
+
+	it("finds displayed template and channel labels independently of name and purpose", async () => {
+		const channelAgent = AgentProjectionV2Schema.parse({
+			...startingAgent,
+			agentId: "channel-agent",
+			name: "团队助理",
+			description: "检查发布说明",
+			source: { kind: "standard", templateId: "opencode" },
+			configuration: {
+				...startingAgent.configuration,
+				channels: [{ kind: "wecom_bot", status: "bound" }],
+			},
+		});
+		await renderWithAgentRouter(
+			<AgentDiscoveryScreen
+				state={{ kind: "ready", agents: [startingAgent, channelAgent] }}
+			/>,
+		);
+		const search = screen.getByRole("searchbox", { name: "搜索 Agent" });
+		expect(search.getAttribute("placeholder")).toBe("搜索名称、模板或渠道");
+		for (const [query, name, label] of [
+			["  CODEX  ", "Release assistant", "标准模板 · codex"],
+			["  wEB  ", "Release assistant", "Web"],
+			["企微机器人", "团队助理", "企微机器人"],
+		]) {
+			fireEvent.change(search, { target: { value: query } });
+			expect(
+				screen.getByRole("link", { name: `查看 ${name} 详情` }),
+			).toBeTruthy();
+			expect(
+				screen.getByText(label, { selector: '[data-slot="badge"]' }),
+			).toBeTruthy();
+			expect(screen.getByRole("status").textContent).toBe(
+				"2 个获授权 Agent，匹配 1 个",
+			);
+		}
+		fireEvent.change(search, { target: { value: "" } });
+		expect(
+			screen.queryAllByRole("link", { name: /^查看 .+ 详情$/ }),
+		).toHaveLength(2);
+	});
+
+	it.each(["not_configured", "binding", "failed"] as const)(
+		"does not match a hidden channel in status %s or hidden configuration fields",
+		async (status) => {
+			const agent = AgentProjectionV2Schema.parse({
+				...startingAgent,
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/private-image-marker:v1",
+					interactionMode: "platform-adapter",
+				},
+				configuration: {
+					...startingAgent.configuration,
+					channels: [{ kind: "wecom_app", status }],
+				},
+			});
+			await renderWithAgentRouter(
+				<AgentDiscoveryScreen state={{ kind: "ready", agents: [agent] }} />,
+			);
+			const search = screen.getByRole("searchbox", { name: "搜索 Agent" });
+			for (const query of [
+				"企微应用",
+				"private-image-marker",
+				"user-owner-1",
+				"MODEL_API_KEY",
+				"gpt-5",
+			]) {
+				fireEvent.change(search, { target: { value: query } });
+				expect(screen.getByText("未找到匹配的 Agent。")).toBeTruthy();
+				expect(
+					screen.queryAllByRole("link", { name: /^查看 .+ 详情$/ }),
+				).toHaveLength(0);
+			}
+			fireEvent.change(search, { target: { value: "暂无可用渠道" } });
+			expect(
+				screen.getByRole("link", { name: /Release assistant/ }),
+			).toBeTruthy();
+		},
+	);
+
+	it("finds the displayed self-managed fallback without granting conversation eligibility", async () => {
+		const agent = AgentProjectionV2Schema.parse({
+			...startingAgent,
+			serviceAvailability: "ready",
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/self-managed:v1",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+			},
+			configuration: { ...startingAgent.configuration, channels: [] },
+		});
+		await renderWithAgentRouter(
+			<AgentDiscoveryScreen
+				conversationSelection
+				query="自有交互入口"
+				state={{ kind: "ready", agents: [agent] }}
+			/>,
+		);
+		expect(screen.getByText("自有交互入口")).toBeTruthy();
+		expect(
+			screen.getByRole("link", { name: /Release assistant/ }),
+		).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "开始对话" })).toBeNull();
+	});
+
+	it("filters only the authorized projection by status, template and model and clears filters", async () => {
+		const ready = AgentProjectionV2Schema.parse({
+			...startingAgent,
+			agentId: "ready-agent",
+			name: "可用编程助手",
+			serviceAvailability: "ready",
+		});
+		await renderWithAgentRouter(
+			<AgentDiscoveryScreen
+				state={{ kind: "ready", agents: [startingAgent, ready] }}
+			/>,
+		);
+		fireEvent.change(screen.getByRole("combobox", { name: "状态" }), {
+			target: { value: "ready" },
+		});
+		expect(
+			screen.getByRole("link", { name: "查看 可用编程助手 详情" }),
+		).toBeTruthy();
+		expect(
+			screen.queryByRole("link", { name: "查看 Release assistant 详情" }),
+		).toBeNull();
+		fireEvent.change(screen.getByRole("searchbox", { name: "搜索 Agent" }), {
+			target: { value: "不存在" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
+		expect(
+			screen.getAllByRole("link", { name: /^查看 .+ 详情$/ }),
+		).toHaveLength(2);
+		expect(
+			screen.getByRole("link", { name: "创建申请" }).getAttribute("href"),
+		).toBe("/my-agents/new");
+	});
+
 	it("drops previously visible Agents when the authorized collection changes", async () => {
 		function Collection() {
 			const [agents, setAgents] = useState([startingAgent]);
@@ -152,9 +294,71 @@ describe("AgentDiscoveryScreen", () => {
 
 		const link = screen.getByRole("link", { name: /Release assistant/ });
 		expect(link.getAttribute("href")).toBe("/agents/agent-pilot-1");
-		expect(screen.getByText("启动中")).toBeTruthy();
+		expect(
+			screen.getByText("启动中", { selector: '[data-slot="badge"]' }),
+		).toBeTruthy();
 		expect(link.className).toContain("min-w-0");
 	});
+
+	it("keeps a ready self-managed Agent out of the platform conversation chooser", async () => {
+		const agent = AgentProjectionV2Schema.parse({
+			...startingAgent,
+			managementStatus: "available",
+			serviceAvailability: "ready",
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/pilot@sha256:abc",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+			},
+		});
+		await renderWithAgentRouter(
+			<AgentDiscoveryScreen
+				conversationSelection
+				state={{ kind: "ready", agents: [agent] }}
+			/>,
+		);
+		expect(screen.queryByRole("link", { name: "开始对话" })).toBeNull();
+		expect(
+			screen.getByRole("link", { name: /查看 Release assistant 详情/ }),
+		).toBeTruthy();
+	});
+
+	it.each([
+		["available", "ready", true],
+		["available", "starting", false],
+		["available", "updating", false],
+		["available", "unavailable", false],
+		["creating", null, false],
+		["stopped", null, false],
+		["disabled", null, false],
+		["creation_failed", null, false],
+	] as const)(
+		"chooses the existing conversation or detail route for %s/%s",
+		async (managementStatus, serviceAvailability, canOpenConversation) => {
+			const agent = AgentProjectionV2Schema.parse({
+				...startingAgent,
+				managementStatus,
+				serviceAvailability,
+			});
+			await renderWithAgentRouter(
+				<AgentDiscoveryScreen
+					conversationSelection
+					state={{ kind: "ready", agents: [agent] }}
+				/>,
+			);
+			const action = screen.getByRole("link", {
+				name: canOpenConversation ? "开始对话" : /查看 Release assistant 详情/,
+			});
+			expect(action.getAttribute("href")).toBe(
+				canOpenConversation
+					? `/chat/${agent.agentId}`
+					: `/agents/${agent.agentId}`,
+			);
+			if (!canOpenConversation)
+				expect(screen.queryByRole("link", { name: "开始对话" })).toBeNull();
+		},
+	);
 
 	it.each([
 		["starting", "启动中"],
@@ -172,7 +376,9 @@ describe("AgentDiscoveryScreen", () => {
 				<AgentDiscoveryScreen state={{ kind: "ready", agents: [agent] }} />,
 			);
 			expect(screen.getByText("可用")).toBeTruthy();
-			expect(screen.getByText(label)).toBeTruthy();
+			expect(
+				screen.getByText(label, { selector: '[data-slot="badge"]' }),
+			).toBeTruthy();
 		},
 	);
 

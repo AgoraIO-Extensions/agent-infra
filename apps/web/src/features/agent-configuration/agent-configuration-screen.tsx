@@ -1,7 +1,8 @@
-import { PlusIcon, Trash2Icon } from "lucide-react";
+import { ArrowLeft, PlusIcon, Trash2Icon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,8 +13,10 @@ import type {
 	AgentConfigurationUpdateRequestV2Writable,
 	AgentProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
-import { agentServiceAvailabilityLabel } from "../agent-discovery/agent-discovery-screen.js";
-import { agentManagementStatusLabels } from "../agent-management-status.js";
+import {
+	agentManagementStatusLabels,
+	agentServiceAvailabilityLabel,
+} from "../agent-management-status.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
 import {
@@ -22,6 +25,7 @@ import {
 	buildAgentConfigurationRequest,
 	configurationDraftFromAgent,
 } from "./agent-configuration-draft.js";
+import { WecomAppSetup } from "./wecom-app-setup.js";
 import { WecomBotSetup } from "./wecom-bot-setup.js";
 
 type ConfigurationSessionState = BrowserSessionState | { kind: "loading" };
@@ -209,29 +213,38 @@ export function AgentConfigurationScreen({
 			aria-labelledby="agent-configuration-heading"
 			className="space-y-6"
 		>
-			<header className="page-heading flex-col space-y-2">
-				<h1
-					id="agent-configuration-heading"
-					className="font-semibold text-[28px]"
-				>
-					配置与生命周期
-				</h1>
-				<p className="break-words text-muted-foreground">
-					{agent.name} · {agent.description}
-				</p>
-				<p className="text-muted-foreground text-sm">
-					{agentManagementStatusLabels[agent.managementStatus]}
-					{agent.serviceAvailability
-						? ` · ${agentServiceAvailabilityLabel(agent.serviceAvailability)}`
-						: ""}
-				</p>
+			<header className="page-heading">
+				<div>
+					<a
+						className={buttonVariants({ variant: "ghost" })}
+						href={`/agents/${encodeURIComponent(agent.agentId)}`}
+					>
+						<ArrowLeft aria-hidden="true" />
+						返回 Agent 详情
+					</a>
+					<p className="page-eyebrow">Owner 配置 · {agent.name}</p>
+					<h1 id="agent-configuration-heading">
+						让 Agent 在正确的范围内运行。
+					</h1>
+					<p>保存后更新运行实例；Secret 只显示状态和版本，不回显值。</p>
+				</div>
+				<div className="tag-row">
+					<Badge variant="outline" data-status={agent.managementStatus}>
+						{agentManagementStatusLabels[agent.managementStatus]}
+					</Badge>
+					{agent.serviceAvailability && (
+						<Badge variant="outline" data-status={agent.serviceAvailability}>
+							{agentServiceAvailabilityLabel(agent.serviceAvailability)}
+						</Badge>
+					)}
+				</div>
 			</header>
 			<p className="text-muted-foreground text-sm">
 				{agent.managementStatus === "disabled"
 					? "运行资格已撤销，Owner 无法恢复。"
 					: "配置变更不需要重新审批。"}
 			</p>
-			<div className="form-layout">
+			<div className="form-layout full-width-form">
 				<div className="min-w-0 space-y-6">
 					{submittedResult ? (
 						<p
@@ -351,106 +364,18 @@ export function AgentConfigurationScreen({
 											Agent，不能阻止群成员阅读已有内容；每位发送者的会话上下文仍独立。
 										</p>
 										<p className="text-muted-foreground text-sm">
-											自建应用使用部署提供的回调配置；智能机器人可在下方直接绑定。
+											自建应用和智能机器人都可在下方完成绑定，凭证通过受保护的接口提交。
 										</p>
 										<WecomBotSetup
 											key={`${agent.agentId}:wecom_bot`}
 											agentId={agent.agentId}
 											onUnbind={onSave}
 										/>
-										{(["wecom_app"] as const).map((kind) => {
-											const label = "自建应用";
-											const change = draft.channels?.find(
-												(c) => c.kind === kind,
-											);
-											const update = (
-												next:
-													| NonNullable<
-															AgentConfigurationUpdateRequestV2Writable["channels"]
-													  >[number]
-													| null,
-											) =>
-												setDraft((current) => ({
-													...current,
-													channels: [
-														...(current.channels ?? []).filter(
-															(c) => c.kind !== kind,
-														),
-														...(next ? [next] : []),
-													],
-												}));
-											return (
-												<div className="space-y-3" key={kind}>
-													<div className="flex items-center gap-2">
-														<Checkbox
-															id={`change-${kind}`}
-															checked={!!change}
-															onCheckedChange={(checked) =>
-																update(
-																	checked
-																		? {
-																				kind,
-																				enabled: true,
-																				bindingReference: "",
-																			}
-																		: null,
-																)
-															}
-														/>
-														<Label htmlFor={`change-${kind}`}>
-															修改{label}绑定
-														</Label>
-													</div>
-													{change ? (
-														<div className="space-y-3 pl-6">
-															<div className="flex items-center gap-2">
-																<Checkbox
-																	id={`enable-${kind}`}
-																	checked={change.enabled}
-																	onCheckedChange={(checked) =>
-																		update(
-																			checked
-																				? {
-																						kind,
-																						enabled: true,
-																						bindingReference: "",
-																					}
-																				: { kind, enabled: false },
-																		)
-																	}
-																/>
-																<Label htmlFor={`enable-${kind}`}>
-																	启用{label}
-																</Label>
-															</div>
-															{change.enabled ? (
-																<div className="space-y-2">
-																	<Label htmlFor={`binding-${kind}`}>
-																		{label}配置标识
-																	</Label>
-																	<Input
-																		id={`binding-${kind}`}
-																		required
-																		value={change.bindingReference}
-																		onChange={(event) =>
-																			update({
-																				kind,
-																				enabled: true,
-																				bindingReference: event.target.value,
-																			})
-																		}
-																	/>
-																</div>
-															) : (
-																<p className="text-muted-foreground text-sm">
-																	保存后解除此渠道绑定。
-																</p>
-															)}
-														</div>
-													) : null}
-												</div>
-											);
-										})}
+										<WecomAppSetup
+											key={`${agent.agentId}:wecom_app`}
+											agentId={agent.agentId}
+											onUnbind={onSave}
+										/>
 									</fieldset>
 								) : null}
 								{agent.source.kind === "standard" ? (
@@ -681,7 +606,9 @@ export function AgentConfigurationScreen({
 						</section>
 					) : null}
 				</div>
-				{lifecycle ? <aside className="form-aside">{lifecycle}</aside> : null}
+				{lifecycle ? (
+					<section className="form-aside lifecycle-panel">{lifecycle}</section>
+				) : null}
 			</div>
 		</section>
 	);

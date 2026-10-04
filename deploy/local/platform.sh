@@ -9,6 +9,13 @@ cd "$repository_root"
   echo "PLATFORM_LOCAL_PROJECT must be a hyphenated agent-infra- name of at most 35 characters" >&2
   exit 1
 }
+local_state_root=${PLATFORM_LOCAL_STATE_DIRECTORY:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-infra/local}
+[[ "$local_state_root" = /* ]] || {
+  echo "PLATFORM_LOCAL_STATE_DIRECTORY must be an absolute path" >&2
+  exit 1
+}
+export PLATFORM_LOCAL_NGINX_CONFIG="$local_state_root/$PLATFORM_LOCAL_PROJECT/nginx.conf"
+export PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE="$local_state_root/$PLATFORM_LOCAL_PROJECT/proxy-token"
 docker_target=(docker --context "$PLATFORM_LOCAL_DOCKER_CONTEXT")
 docker_endpoint=$("${docker_target[@]}" context inspect "$PLATFORM_LOCAL_DOCKER_CONTEXT" --format '{{.Endpoints.docker.Host}}')
 [[ "$docker_endpoint" == unix://* ]] || {
@@ -20,6 +27,7 @@ worker_release="$PLATFORM_LOCAL_PROJECT"
 worker_deployment="$worker_release-agent-infra-platform-worker"
 database_service="$worker_release-postgres"
 database_endpoint="$database_service-docker"
+helm_target=(helm)
 
 worker_context() {
   : "${PLATFORM_LOCAL_KUBECONFIG:?Set an explicit local kubeconfig}"
@@ -72,7 +80,10 @@ worker_context() {
 
 ensure_agents_stopped() {
   local active_workloads active_pods
-  active_workloads=$("${kube_target[@]}" get statefulsets -l agent-infra.agora.io/agent -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.spec.replicas}{"\n"}{end}')
+  if ! active_workloads=$("${kube_target[@]}" get statefulsets -l agent-infra.agora.io/agent -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.spec.replicas}{"\n"}{end}' 2>/dev/null); then
+    echo "Agent Workloads could not be read; Platform stop refused" >&2
+    return 1
+  fi
   while read -r name replicas; do
     [[ -z "$name" ]] && continue
     [[ "$replicas" == 0 ]] || {
@@ -80,7 +91,10 @@ ensure_agents_stopped() {
       return 1
     }
   done <<< "$active_workloads"
-  active_pods=$("${kube_target[@]}" get pods -l agent-infra.agora.io/agent -o name)
+  if ! active_pods=$("${kube_target[@]}" get pods -l agent-infra.agora.io/agent -o name 2>/dev/null); then
+    echo "Agent Pods could not be read; Platform stop refused" >&2
+    return 1
+  fi
   [[ -z "$active_pods" ]] || {
     echo "Wait for Agent Pods to terminate before stopping Platform" >&2
     return 1
@@ -122,6 +136,143 @@ worker_values() {
     --set-string database.secretRef.key=url
     --set-string platformWorker.deploymentModule=file:///app/dist/deployment.mjs
   )
+}
+
+validate_deployment_material() {
+  : "${PLATFORM_LOCAL_API_DIRECTORY:?Set the API-only deployment directory}"
+  : "${PLATFORM_LOCAL_WORKER_VALUES:?Set an absolute local Worker values file}"
+  [[ "$PLATFORM_LOCAL_API_DIRECTORY" = /* && -r "$PLATFORM_LOCAL_API_DIRECTORY/configuration.mjs" ]] || {
+    echo "API configuration.mjs is missing or unreadable" >&2
+    return 1
+  }
+  [[ "$PLATFORM_LOCAL_WORKER_VALUES" = /* && -r "$PLATFORM_LOCAL_WORKER_VALUES" ]] || {
+    echo "PLATFORM_LOCAL_WORKER_VALUES must be an absolute readable file" >&2
+    return 1
+  }
+  if ! node --check "$PLATFORM_LOCAL_API_DIRECTORY/configuration.mjs" >/dev/null 2>&1; then
+    echo "Local API configuration.mjs has invalid syntax" >&2
+    return 1
+  fi
+  worker_values
+  if ! worker_manifest=$("${helm_target[@]}" template "$worker_release" deploy/helm/agent-infra "${worker_options[@]}"); then
+    echo "Local Worker values are missing or invalid" >&2
+    return 1
+  fi
+}
+
+check_worker_secret_material() {
+  local secret_refs secret key secret_json
+  secret_refs=$(printf '%s' "$worker_manifest" | node --input-type=module -e '
+    import { parseAllDocuments } from "yaml";
+    let input = "";
+    process.stdin.on("data", (chunk) => { input += chunk; });
+    process.stdin.on("end", () => {
+      try {
+        const refs = new Map();
+        const add = (name, key = "") => {
+          if (typeof name !== "string" || name.length === 0) return;
+          const values = refs.get(name) ?? new Set();
+          if (typeof key === "string") values.add(key);
+          refs.set(name, values);
+        };
+        const collectPodSecrets = (podSpec) => {
+          if (!podSpec || typeof podSpec !== "object") return;
+          const volumes = new Map();
+          for (const volume of Array.isArray(podSpec.volumes) ? podSpec.volumes : []) {
+            const secret = volume?.secret;
+            if (!secret || typeof secret.secretName !== "string") continue;
+            volumes.set(volume.name, secret.secretName);
+            const items = Array.isArray(secret.items) ? secret.items : [];
+            if (items.length === 0) add(secret.secretName);
+            for (const item of items) add(secret.secretName, item?.key);
+          }
+          for (const container of Array.isArray(podSpec.containers) ? podSpec.containers : []) {
+            for (const mount of Array.isArray(container?.volumeMounts) ? container.volumeMounts : []) {
+              const secretName = volumes.get(mount?.name);
+              if (secretName && typeof mount.subPath === "string") {
+                const volume = podSpec.volumes.find((candidate) => candidate?.name === mount.name);
+                const items = Array.isArray(volume?.secret?.items) ? volume.secret.items : [];
+                // Explicit items were already checked by their Secret keys above.
+                if (items.length === 0) add(secretName, mount.subPath);
+              }
+            }
+          }
+        };
+        const visit = (value) => {
+          if (Array.isArray(value)) {
+            for (const entry of value) visit(entry);
+            return;
+          }
+          if (!value || typeof value !== "object") return;
+          if (value.kind && value.spec?.template?.spec) collectPodSecrets(value.spec.template.spec);
+          if (value.containers) collectPodSecrets(value);
+          if (typeof value.secretName === "string") {
+            const items = Array.isArray(value.items) ? value.items : [];
+            if (items.length === 0) add(value.secretName);
+            for (const item of items) add(value.secretName, item?.key);
+          }
+          const keyRef = value.secretKeyRef;
+          if (keyRef && typeof keyRef === "object") add(keyRef.name, keyRef.key);
+          for (const child of Object.values(value)) visit(child);
+        };
+        for (const document of parseAllDocuments(input)) visit(document.toJS());
+        const lines = [];
+        for (const [name, keys] of refs) {
+          for (const key of keys) lines.push(`${name}\t${key}`);
+        }
+        process.stdout.write(lines.sort().join("\n"));
+      } catch {
+        process.exitCode = 1;
+      }
+    });
+  ') || {
+    echo "Local Worker manifest could not be inspected for Secret references" >&2
+    return 1
+  }
+  [[ -n "$secret_refs" ]] || {
+    echo "Local Worker manifest contains no verifiable Secret references" >&2
+    return 1
+  }
+  while IFS=$'\t' read -r secret key; do
+    [[ -n "$secret" ]] || continue
+    if ! secret_json=$("${kube_target[@]}" get "secret/$secret" --ignore-not-found -o json); then
+      echo "Local Worker Secret could not be read: $secret" >&2
+      return 1
+    fi
+    if ! printf '%s' "$secret_json" | node -e '
+      let input = "";
+      process.stdin.on("data", (chunk) => { input += chunk; });
+      process.stdin.on("end", () => {
+        try {
+          const secret = JSON.parse(input);
+          const metadata = secret.metadata ?? {};
+          const data = secret.data ?? {};
+          if (secret.kind !== "Secret" ||
+              metadata.name !== process.argv[1] ||
+              metadata.namespace !== process.argv[2] ||
+              (process.argv[3] &&
+                (typeof data[process.argv[3]] !== "string" || data[process.argv[3]].length === 0))) process.exitCode = 1;
+        } catch {
+          process.exitCode = 1;
+        }
+      });
+    ' "$secret" "$PLATFORM_LOCAL_NAMESPACE" "$key"; then
+      if [[ -n "$key" ]]; then
+        echo "Local Worker Secret is missing key $key: $secret" >&2
+      else
+        echo "Local Worker Secret is missing: $secret" >&2
+      fi
+      return 1
+    fi
+  done <<< "$secret_refs"
+}
+
+render_proxy_config() {
+  [[ "${PLATFORM_LOCAL_PROXY_TOKEN_FILE:?Set the private local proxy token file}" = /* && -r "$PLATFORM_LOCAL_PROXY_TOKEN_FILE" ]] || {
+    echo "PLATFORM_LOCAL_PROXY_TOKEN_FILE must be an absolute readable file" >&2
+    return 1
+  }
+  node deploy/local/render-nginx.ts "$PLATFORM_LOCAL_PROXY_TOKEN_FILE" "$PLATFORM_LOCAL_NGINX_CONFIG"
 }
 
 check_database_resource_ownership() {
@@ -292,6 +443,81 @@ disconnect_worker_database() {
   "${kube_target[@]}" delete "endpointslice/$database_endpoint" "service/$database_service" "secret/$database_service" --ignore-not-found
 }
 
+delete_owned_agent_pvcs() {
+  local names name pvc_json agent_identity agent_name agent_id
+  [[ -n "${PLATFORM_LOCAL_AGENT_PVC_NAMES:-}" ]] || return 0
+  IFS=',' read -r -a names <<< "$PLATFORM_LOCAL_AGENT_PVC_NAMES"
+  for name in "${names[@]}"; do
+    [[ "$name" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#name} -le 63 ]] || {
+      echo "PLATFORM_LOCAL_AGENT_PVC_NAMES contains an invalid PVC name" >&2
+      return 1
+    }
+    if ! pvc_json=$("${kube_target[@]}" get "pvc/$name" --ignore-not-found -o json); then
+      echo "Refusing to delete an unowned Agent PVC: $name" >&2
+      return 1
+    fi
+    if ! agent_identity=$(printf '%s' "$pvc_json" |
+      node -e '
+        const { createHash } = require("node:crypto");
+        let input = "";
+        process.stdin.on("data", (chunk) => { input += chunk; });
+        process.stdin.on("end", () => {
+          try {
+            const pvc = JSON.parse(input);
+            const metadata = pvc.metadata ?? {};
+            const labels = metadata.labels ?? {};
+            const annotations = metadata.annotations ?? {};
+            const agentId = annotations["agent-infra.agora.io/agent-id"];
+            const agentName = typeof agentId === "string"
+              ? `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`
+              : "";
+            if (pvc.kind !== "PersistentVolumeClaim" ||
+                metadata.name !== process.argv[1] ||
+                metadata.namespace !== process.argv[2] ||
+                metadata.name !== `${agentName}-data` ||
+                labels["agent-infra.agora.io/agent"] !== agentName ||
+                (Array.isArray(metadata.ownerReferences) && metadata.ownerReferences.length > 0)) process.exitCode = 1;
+            else process.stdout.write(`${agentName}\t${agentId}`);
+          } catch {
+            process.exitCode = 1;
+          }
+        });
+      ' "$name" "$PLATFORM_LOCAL_NAMESPACE"); then
+      echo "Refusing to delete an unowned Agent PVC: $name" >&2
+      return 1
+    fi
+    agent_name=${agent_identity%%$'\t'*}
+    agent_id=${agent_identity#*$'\t'}
+    if ! "${kube_target[@]}" get "statefulset/$agent_name" --ignore-not-found -o json |
+      node -e '
+        let input = "";
+        process.stdin.on("data", (chunk) => { input += chunk; });
+        process.stdin.on("end", () => {
+          try {
+            const workload = JSON.parse(input);
+            const metadata = workload.metadata ?? {};
+            const labels = metadata.labels ?? {};
+            const annotations = metadata.annotations ?? {};
+            if (workload.kind !== "StatefulSet" ||
+                metadata.name !== process.argv[1] ||
+                metadata.namespace !== process.argv[2] ||
+                labels["agent-infra.agora.io/agent"] !== process.argv[1] ||
+                annotations["agent-infra.agora.io/agent-id"] !== process.argv[3] ||
+                metadata.deletionTimestamp) process.exitCode = 1;
+          } catch {
+            process.exitCode = 1;
+          }
+        });
+      ' "$agent_name" "$PLATFORM_LOCAL_NAMESPACE" "$agent_id"; then
+      echo "Refusing to delete an Agent PVC without its canonical StatefulSet: $name" >&2
+      return 1
+    fi
+  done
+  for name in "${names[@]}"; do
+    "${kube_target[@]}" delete "pvc/$name" --wait --timeout=5m
+  done
+}
+
 case "${1:-}" in
   build)
     "${compose[@]}" --profile runtime build web platform-api platform-worker agent-runtime-host
@@ -300,19 +526,20 @@ case "${1:-}" in
     "${compose[@]}" up --detach --wait postgres object-storage
     ;;
   migrate)
+    render_proxy_config
     "${compose[@]}" run --rm --no-deps platform-api node node_modules/@agent-infra/platform-store/dist/migrate-cli.mjs
     ;;
   up)
-    [[ -f "${PLATFORM_LOCAL_API_DIRECTORY:?}/platform-api.mjs" ]] || { echo "API deployment module platform-api.mjs is missing" >&2; exit 1; }
     [[ -r "${PLATFORM_WEB_TLS_CERT_FILE:?}" && -r "${PLATFORM_WEB_TLS_KEY_FILE:?}" ]] || { echo "Local Web TLS files are missing" >&2; exit 1; }
     worker_context
-    worker_values
     check_database_resource_ownership
     check_database_network_ownership
-    "${helm_target[@]}" template "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" >/dev/null
+    validate_deployment_material
+    render_proxy_config
     "${compose[@]}" stop web platform-api
     "${compose[@]}" up --detach --wait postgres object-storage
     connect_worker_database
+    check_worker_secret_material
     "${helm_target[@]}" upgrade --install "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" --wait --timeout 5m
     worker_replicas=$("${helm_target[@]}" get values "$worker_release" --all --output json | node -e '
       try {
@@ -326,7 +553,13 @@ case "${1:-}" in
     ')
     "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas="$worker_replicas"
     "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
-    "${compose[@]}" up --detach --wait platform-api web
+    "${compose[@]}" up --detach --wait --force-recreate --no-deps platform-api
+    if ! node deploy/local/check-api-auth.ts "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "${PLATFORM_LOCAL_API_PORT:-3000}" "${PLATFORM_LOCAL_WEB_PORT:-3001}"; then
+      "${compose[@]}" stop platform-api
+      echo "Local API login boundary is unavailable; Web remains stopped" >&2
+      exit 1
+    fi
+    "${compose[@]}" up --detach --wait --force-recreate --no-deps web
     ;;
   status)
     worker_context
@@ -350,6 +583,7 @@ case "${1:-}" in
       "${compose[@]}" stop web platform-api
       disconnect_worker_database
       "${compose[@]}" stop object-storage postgres
+      rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE"
       exit 0
     fi
     [[ "$worker_replicas" =~ ^[0-9]+$ ]] || { echo "Worker deployment has no valid replica count" >&2; exit 1; }
@@ -371,9 +605,25 @@ case "${1:-}" in
     fi
     disconnect_worker_database
     "${compose[@]}" stop object-storage postgres
+    rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE"
+    ;;
+  reset)
+    [[ "${2:-}" == "$PLATFORM_LOCAL_PROJECT" ]] || {
+      echo "Reset requires the exact isolated project name as confirmation" >&2
+      exit 1
+    }
+    worker_context
+    check_database_resource_ownership
+    check_database_network_ownership
+    bash "$0" stop
+    delete_owned_agent_pvcs
+    "${compose[@]}" down --volumes --remove-orphans
+    ;;
+  validate)
+    validate_deployment_material
     ;;
   *)
-    echo "Usage: bash deploy/local/platform.sh build|data|migrate|up|status|stop" >&2
+    echo "Usage: bash deploy/local/platform.sh build|data|migrate|up|status|stop|reset <exact-project>|validate" >&2
     exit 1
     ;;
 esac

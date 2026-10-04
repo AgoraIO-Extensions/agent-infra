@@ -27,6 +27,13 @@ import {
 	conversations,
 } from "./schema-conversations";
 import {
+	agentPrincipalGrants,
+	apiCredentialDeliveryGrants,
+	platformApiCredentials,
+	platformApplications,
+	platformUserDisables,
+} from "./schema-identities";
+import {
 	auditEvents,
 	conversationGenerationTombstones,
 	idempotencyRecords,
@@ -35,6 +42,7 @@ import {
 	taskAuthorizationRecords,
 	taskControlRecords,
 } from "./schema-operations";
+import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 import { browserSessions } from "./schema-sessions";
 
 export {
@@ -85,6 +93,13 @@ export {
 	conversations,
 } from "./schema-conversations";
 export {
+	agentPrincipalGrants,
+	apiCredentialDeliveryGrants,
+	platformApiCredentials,
+	platformApplications,
+	platformUserDisables,
+} from "./schema-identities";
+export {
 	auditEvents,
 	conversationGenerationTombstones,
 	idempotencyRecords,
@@ -93,10 +108,18 @@ export {
 	taskAuthorizationRecords,
 	taskControlRecords,
 } from "./schema-operations";
+export { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 export { browserSessions } from "./schema-sessions";
 
 export const platformInfrastructureTables = [
+	platformUserDisables,
 	browserSessions,
+	agentPrincipalGrants,
+	apiCredentialDeliveryGrants,
+	platformApiCredentials,
+	platformApplications,
+	relayKeySubjects,
+	relayKeyVersions,
 	workloadReconciliations,
 	agents,
 	agentApplications,

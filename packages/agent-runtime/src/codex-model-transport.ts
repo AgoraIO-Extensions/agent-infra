@@ -11,7 +11,7 @@ import {
 import { createParser, type EventSourceMessage } from "eventsource-parser";
 import {
 	type CodexModelAccess,
-	validateModelAccess,
+	validateModelEndpoint,
 } from "./codex-app-server-bridge.js";
 import { createCredentialMatcher } from "./model-credential-matcher.js";
 
@@ -36,7 +36,9 @@ const internalModelPattern =
 const realModelPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const nativeTurnIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-export interface CodexModelRoute extends CodexModelAccess {
+export interface CodexModelRoute {
+	readonly endpoint: string;
+	readonly credential?: string;
 	readonly internalModel: string;
 	readonly model: string;
 }
@@ -80,10 +82,23 @@ export type CodexModelRequestOutcome = {
 );
 
 export interface CodexModelRequestJournal {
-	/** Called only after the actual fetch has been invoked. */
+	/** Execution credential stays inside this actual request. */
+	readonly credential?: string;
+	/** Synchronous original Driver state check at the actual fetch boundary. */
+	readonly assertCurrent?: () => void;
+	/** Durable dispatch barrier, awaited before the actual fetch is invoked. */
 	started(startedAt: string): Promise<void>;
 	/** Must commit before a terminal response can be published to native. */
 	finish(outcome: CodexModelRequestOutcome): Promise<void>;
+}
+
+function assertCurrentModelRequest(journal: CodexModelRequestJournal): void {
+	const assertion: unknown = journal.assertCurrent?.();
+	if (assertion !== undefined) {
+		// A mistaken async guard is rejected; consume its rejection without awaiting it.
+		void Promise.resolve(assertion).catch(() => {});
+		throw new Error();
+	}
 }
 
 export interface CodexModelTransportObserver {
@@ -105,6 +120,7 @@ export interface CodexModelTurnAdmission {
 interface ActiveTurnRequest {
 	readonly terminate: () => void;
 	readonly completion: Promise<void>;
+	readonly drain: Promise<void>;
 }
 
 interface ModelTurnSelection {
@@ -965,35 +981,44 @@ async function forwardValidatedStream(
 	response.end();
 }
 
+type ValidatedRoute = Pick<CodexModelAccess, "endpoint"> & {
+	credential?: string;
+	model: string;
+	target: URL;
+};
+
 function validatedRoutes(input: readonly CodexModelRoute[]) {
 	if (!Array.isArray(input) || input.length === 0 || input.length > 128) {
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	}
-	const routes = new Map<
-		string,
-		CodexModelAccess & { model: string; target: URL }
-	>();
+	const routes = new Map<string, ValidatedRoute>();
+	const keyed = input.every(
+		(route) => isPlainRecord(route) && route.credential === undefined,
+	);
 	for (const inputRoute of input) {
 		if (
 			!isPlainRecord(inputRoute) ||
-			Object.keys(inputRoute).length !== 4 ||
+			Object.keys(inputRoute).length !== (keyed ? 3 : 4) ||
 			typeof inputRoute.internalModel !== "string" ||
 			!internalModelPattern.test(inputRoute.internalModel) ||
 			typeof inputRoute.model !== "string" ||
 			!realModelPattern.test(inputRoute.model) ||
+			keyed !== (inputRoute.credential === undefined) ||
+			(!keyed &&
+				(typeof inputRoute.credential !== "string" ||
+					!/^[\x21-\x7e]{16,8192}$/.test(inputRoute.credential))) ||
 			routes.has(inputRoute.internalModel)
 		) {
 			throw new Error("RUNTIME_CONFIGURATION_INVALID");
 		}
-		const access = validateModelAccess({
-			endpoint: inputRoute.endpoint,
-			credential: inputRoute.credential,
-		});
-		if (!access) throw new Error("RUNTIME_CONFIGURATION_INVALID");
+		const endpoint = validateModelEndpoint(inputRoute.endpoint);
 		routes.set(inputRoute.internalModel, {
-			...access,
+			endpoint,
+			...(typeof inputRoute.credential === "string"
+				? { credential: inputRoute.credential }
+				: {}),
 			model: inputRoute.model,
-			target: new URL(`${access.endpoint.replace(/\/$/, "")}/responses`),
+			target: new URL(`${endpoint.replace(/\/$/, "")}/responses`),
 		});
 	}
 	return routes;
@@ -1020,10 +1045,7 @@ function encodeRequestBody(bytes: Buffer, encoding: string | undefined) {
 function routedRequest(
 	bytes: Buffer,
 	encoding: string | undefined,
-	routes: ReadonlyMap<
-		string,
-		CodexModelAccess & { model: string; target: URL }
-	>,
+	routes: ReadonlyMap<string, ValidatedRoute>,
 	admittedModel: ModelTurnSelection,
 	modelOnly: boolean,
 ) {
@@ -1073,10 +1095,19 @@ export async function openCodexModelTransport(
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	const modelOnly = observer.modelOnly === true;
 	const routes = validatedRoutes(input);
+	const keyed = [...routes.values()].every(
+		({ credential }) => credential === undefined,
+	);
 	const credentials = [
-		...new Set([...routes.values()].map(({ credential }) => credential)),
+		...new Set(
+			[...routes.values()].flatMap(({ credential }) =>
+				credential === undefined ? [] : [credential],
+			),
+		),
 	];
-	const credentialMatcher = createCredentialMatcher(credentials);
+	const staticCredentialMatcher = keyed
+		? undefined
+		: createCredentialMatcher(credentials);
 	const processAccess = new Map<
 		string,
 		{ credential: string; authorization: Buffer }
@@ -1084,6 +1115,8 @@ export async function openCodexModelTransport(
 	const boundThreads = new Set<string>();
 	const active = new Set<ActiveTurnRequest>();
 	const activeTurns = new Map<string, Set<ActiveTurnRequest>>();
+	// A failed durable outcome or native response cannot yield a drain receipt.
+	const failedDrains = new Set<string>();
 	const admittedTurns = new Map<string, ModelTurnSelection>();
 	// Explicit cancellation is final for this transport's lifetime; abandoning a
 	// provisional capability alone must not prevent validated running recovery.
@@ -1342,12 +1375,13 @@ export async function openCodexModelTransport(
 		const completion = new Promise<void>((resolve) => {
 			completeRequest = resolve;
 		});
+		const drained = Promise.withResolvers<void>();
 		const terminate = () => {
 			controller.abort();
 			request.destroy();
 			if (!response.destroyed && !response.writableEnded) response.destroy();
 		};
-		const activeTurn = { terminate, completion };
+		const activeTurn = { terminate, completion, drain: drained.promise };
 		active.add(activeTurn);
 		const turnRequests = activeTurns.get(turnKey) ?? new Set();
 		turnRequests.add(activeTurn);
@@ -1359,6 +1393,7 @@ export async function openCodexModelTransport(
 		let startedPersistence: Promise<void> | undefined;
 		let upstreamResult: Promise<{ value: Response | undefined }> | undefined;
 		let startedAt: number | undefined;
+		let responseFailed = false;
 		let outcomeReported = false;
 		let outcomeReport: Promise<void> | undefined;
 		const recordOutcome = async (outcome: CodexModelRequestOutcome) => {
@@ -1401,7 +1436,11 @@ export async function openCodexModelTransport(
 				});
 				readyModelTurns.delete(turnKey);
 				outcomeReported = true;
-			})();
+			})().catch((error: unknown) => {
+				// A fallback outcome cannot erase the original durable write failure.
+				failedDrains.add(turnKey);
+				throw error;
+			});
 			outcomeReport = pending;
 			void pending
 				.finally(() => {
@@ -1450,8 +1489,19 @@ export async function openCodexModelTransport(
 				controller.signal,
 			);
 			journal = await awaitPersistence(journalPromise, controller.signal);
+			const credential = keyed ? journal.credential : routed.route.credential;
+			if (
+				(keyed && typeof journal.assertCurrent !== "function") ||
+				(!keyed && journal.credential !== undefined) ||
+				typeof credential !== "string" ||
+				!/^[\x21-\x7e]{16,8192}$/.test(credential)
+			)
+				throw new Error();
+			const credentialMatcher =
+				staticCredentialMatcher ?? createCredentialMatcher([credential]);
+			assertCurrentModelRequest(journal);
 			// Stop/revoke may arrive while intent or the Host authorization guard is
-			// awaiting durable storage. No await separates this check from fetch.
+			// awaiting durable storage. Check again after the durable started barrier.
 			if (
 				closing ||
 				controller.signal.aborted ||
@@ -1470,6 +1520,7 @@ export async function openCodexModelTransport(
 				startedPersistence = journal.started(requestStartedAt);
 				await awaitPersistence(startedPersistence, controller.signal);
 			}
+			assertCurrentModelRequest(journal);
 			// The durable started fact is the commit barrier for the external request.
 			// If it cannot be persisted, do not invoke the provider at all.
 			if (
@@ -1489,7 +1540,7 @@ export async function openCodexModelTransport(
 			upstreamResult = fetch(routed.route.target, {
 				method: "POST",
 				headers: {
-					authorization: `Bearer ${routed.route.credential}`,
+					authorization: `Bearer ${credential}`,
 					"content-type": "application/json",
 					...(contentEncoding ? { "content-encoding": contentEncoding } : {}),
 				},
@@ -1545,10 +1596,10 @@ export async function openCodexModelTransport(
 				modelOnly,
 			);
 		} catch {
+			responseFailed = outcomeReported || outcomeReport !== undefined;
 			const interrupted = controller.signal.aborted;
 			controller.abort();
-			// started() can fail while fetch is already running. Join its abort and
-			// release any received body before reporting this request drained.
+			// Cleanup stays bounded; the original fetch remains owned by drain below.
 			const received = upstreamResult
 				? await awaitPersistence(upstreamResult).catch(() => undefined)
 				: undefined;
@@ -1567,12 +1618,22 @@ export async function openCodexModelTransport(
 			if (outcomeReported) await failStream(response);
 			else response.destroy();
 		} finally {
+			// A timed-out cleanup cannot certify drain. Retain the original request
+			// and durable write until they settle, without blocking cancel/close.
+			if (journalPromise && (!outcomeReported || responseFailed))
+				failedDrains.add(turnKey);
 			request.off("aborted", terminate);
 			response.off("close", terminate);
 			active.delete(activeTurn);
-			turnRequests.delete(activeTurn);
-			if (turnRequests.size === 0) activeTurns.delete(turnKey);
 			completeRequest?.();
+			void (async () => {
+				const received = upstreamResult ? await upstreamResult : undefined;
+				await received?.value?.body?.cancel().catch(() => {});
+				await outcomeReport?.catch(() => {});
+				turnRequests.delete(activeTurn);
+				if (turnRequests.size === 0) activeTurns.delete(turnKey);
+				drained.resolve();
+			})();
 		}
 	});
 	server.requestTimeout = requestTimeoutMs;
@@ -1752,6 +1813,15 @@ export async function openCodexModelTransport(
 		},
 		revokeTurn: (turn: CodexModelTurn) => {
 			revokeTurn(nativeTurnKey(turn));
+		},
+		// Native terminal is not itself evidence that the provider handler drained.
+		drainTurn: async (turn: CodexModelTurn) => {
+			const key = nativeTurnKey(turn);
+			revokeTurn(key);
+			const requests = [...(activeTurns.get(key) ?? [])];
+			await Promise.all(requests.map(({ completion }) => completion));
+			if (failedDrains.has(key)) throw new Error("RUNTIME_MODEL_DRAIN_FAILED");
+			await Promise.all(requests.map(({ drain }) => drain));
 		},
 		cancelTurn: async (turn: CodexModelTurn) => {
 			const key = nativeTurnKey(turn);

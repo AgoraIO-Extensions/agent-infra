@@ -1,5 +1,6 @@
 import {
 	BrowserSessionProjectionV1Schema,
+	ConnectionCapabilityProjectionV1Schema,
 	PlatformAuditProjectionV1Schema,
 	PlatformAuditProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
@@ -8,7 +9,7 @@ import {
 	PlatformAuditQueryError,
 } from "@agent-infra/platform-store";
 import type { Hono } from "hono";
-
+import type { ConnectionCapabilityV1 } from "../connection-consumer-profile.js";
 import {
 	HttpProtocolError,
 	parsePageQuery,
@@ -39,6 +40,7 @@ interface PlatformAuditQuery {
 export interface SessionAuditRoutesDependencies {
 	readonly identity: IdentityAdapter;
 	readonly audit: PlatformAuditQuery;
+	readonly connectionCapability?: ConnectionCapabilityV1;
 }
 
 function mapAuditError(error: unknown, traceId: string): never {
@@ -151,6 +153,21 @@ export function registerSessionAuditRoutes(
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 		}
 		return context.json(projection.data);
+	});
+
+	app.get("/api/v1/connection/capability", async (context) => {
+		const metadata = requestMetadata(context.req.raw);
+		await resolveIdentity(
+			dependencies.identity,
+			context.req.raw,
+			metadata.traceId,
+		);
+		const capability =
+			dependencies.connectionCapability ??
+			({ status: "unavailable", schemaVersion: 1, reason: "missing" } as const);
+		return context.json(
+			ConnectionCapabilityProjectionV1Schema.parse(capability),
+		);
 	});
 
 	app.get("/api/v1/admin/audit", async (context) => {

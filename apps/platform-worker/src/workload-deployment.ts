@@ -18,6 +18,7 @@ import { createOciImageRegistryAdapterV1 } from "@agent-infra/image-registry";
 import {
 	createDeploymentModelCatalogAdapterV1,
 	createModelAccessValidatorV1,
+	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
 import { createWorkloadSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { KubeConfig } from "@kubernetes/client-node";
@@ -66,6 +67,7 @@ export interface ProductionWorkloadWorkerInputV1 {
 	>[0];
 	readonly templateModelBindings: PlatformWorkloadWorkerOptionsV1["templateModelBindings"];
 	readonly executionCapacityProfiles?: PlatformWorkloadWorkerOptionsV1["executionCapacityProfiles"];
+	readonly runtimeModelVersion?: PlatformWorkloadWorkerOptionsV1["runtimeModelVersion"];
 	readonly runtimeProbe: WorkloadRuntimeProbeAuthorizationV1;
 	/** Separate transports keep registry authentication out of model and Runtime requests. */
 	readonly modelFetch?: typeof fetch;
@@ -111,12 +113,19 @@ export async function createProductionWorkloadWorkerOptionsV1(
 				new URL(input.databaseUrl).protocol,
 			) ||
 			!Array.isArray(input.templateModelBindings) ||
+			(input.runtimeModelVersion !== undefined &&
+				input.runtimeModelVersion !== 4) ||
+			(input.runtimeModelVersion === 4 &&
+				process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") ||
 			typeof input.modelCatalog?.load !== "function" ||
 			typeof input.runtimeProbe?.authorize !== "function" ||
 			!input.policy.runtimeAuth ||
 			input.policy.runtimeAuth.workerId !== input.workerId
 		)
 			throw new Error();
+		const templateModelBindings = validateStandardTemplateModelBindingsV1(
+			input.templateModelBindings,
+		);
 		stage = "WORKER_KUBERNETES_CONFIGURATION_INVALID";
 		const config = new KubeConfig();
 		if (input.kubernetes.mode === "in-cluster") config.loadFromCluster();
@@ -192,7 +201,8 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			probeRuntime,
 			admissionPolicyRef: input.admissionPolicyRef,
 			registrySubjectRef: input.registrySubjectRef,
-			templateModelBindings: structuredClone(input.templateModelBindings),
+			templateModelBindings,
+			runtimeModelVersion: input.runtimeModelVersion,
 			executionCapacityProfiles: structuredClone(
 				input.executionCapacityProfiles,
 			),

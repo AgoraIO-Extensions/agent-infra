@@ -1,9 +1,16 @@
+import { createHash } from "node:crypto";
+import { once } from "node:events";
+
 import {
 	AgentApplicationProjectionV2Schema,
 	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
+	ConversationDetailProjectionV2Schema,
 	ConversationProjectionV1Schema,
+	ConversationSseMessageV2Schema,
+	ExecutionDetailProjectionV2Schema,
+	PilotProtocolErrorV1Schema,
 	PlatformAuditProjectionV1Schema,
 	PlatformAuditProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
@@ -27,7 +34,9 @@ import {
 	PostgresConversationQueryV1,
 	PostgresPlatformAuditQueryV1,
 } from "@agent-infra/platform-store";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { serve } from "@hono/node-server";
+import postgres from "postgres";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
 	type PostgresTestDatabase,
@@ -93,6 +102,37 @@ type Closable = { close(): Promise<void> };
 let testDatabase: PostgresTestDatabase | undefined;
 const adapters: Closable[] = [];
 let app: ReturnType<typeof createPlatformApp>;
+let database: ReturnType<typeof postgres>;
+const generatedClientV2 = await import(
+	new URL("../../web/src/pilot/generated-v2/client/index.ts", import.meta.url)
+		.href
+);
+const generatedSdkV2 = await import(
+	new URL("../../web/src/pilot/generated-v2/sdk.gen.ts", import.meta.url).href
+);
+
+let managementUseCase: ReturnType<typeof createAgentManagementV1>;
+let managementQuery: PostgresAgentManagementQueryV1;
+let currentBrowserAdmin: IdentityContext = identities.admin;
+let identityDependencyFails = false;
+
+const administratorReadFixtures = [
+	{ status: "creating", owner: "owner" },
+	{ status: "available", owner: "attacker" },
+	{ status: "stopped", owner: "owner" },
+	{ status: "creation_failed", owner: "attacker" },
+	{ status: "disabled", owner: "owner" },
+	{ status: "pending_approval", owner: "owner" },
+	{ status: "rejected", owner: "attacker" },
+] as const;
+const administratorReadResources = administratorReadFixtures.map(
+	(fixture, index) => ({
+		...fixture,
+		agentId: `zz-admin-read-${index}`,
+		applicationId: `application-admin-read-${index}`,
+		idempotencyKey: `admin-read-${index}`,
+	}),
+);
 
 function requestHeaders(
 	identity: keyof typeof identities,
@@ -110,6 +150,8 @@ beforeAll(async () => {
 	testDatabase = await startPostgresTestDatabase("platform-http-routes");
 	await migratePlatformDatabase({ databaseUrl: testDatabase.databaseUrl });
 	const databaseUrl = testDatabase.databaseUrl;
+	database = postgres(databaseUrl);
+	adapters.push({ close: () => database.end() });
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl,
 	});
@@ -119,7 +161,7 @@ beforeAll(async () => {
 	const managementTransaction = new PostgresAgentManagementTransactionV1({
 		databaseUrl,
 	});
-	const managementQuery = new PostgresAgentManagementQueryV1({ databaseUrl });
+	managementQuery = new PostgresAgentManagementQueryV1({ databaseUrl });
 	const configurationTransaction = new PostgresAgentConfigurationTransactionV1({
 		databaseUrl,
 	});
@@ -145,23 +187,27 @@ beforeAll(async () => {
 	);
 
 	const foundationAdmissions = new FakeAgentConfigurationAdmissionsV1({
-		authorizations: ["agent-run", "agent-withdraw", "agent-v2"].map(
-			(agentId) => ({
+		authorizations: [
+			...["agent-run", "agent-withdraw", "agent-v2"].map((agentId) => ({
 				agentId,
-				actorId: identities.owner.userId,
-				authorizationRevision: "authorization-1",
-				authorityContext: {
-					schemaVersion: 1 as const,
-					users: [
-						{
-							userId: identities.owner.userId,
-							accountStatus: "active" as const,
-						},
-					],
-					organizationIds: ["org-1"],
-				},
-			}),
-		),
+				owner: "owner" as const,
+			})),
+			...administratorReadResources,
+		].map(({ agentId, owner }) => ({
+			agentId,
+			actorId: identities[owner].userId,
+			authorizationRevision: "authorization-1",
+			authorityContext: {
+				schemaVersion: 1 as const,
+				users: [
+					{
+						userId: identities[owner].userId,
+						accountStatus: "active" as const,
+					},
+				],
+				organizationIds: ["org-1", "org-other"],
+			},
+		})),
 		images: [{ selection: applicationBody.source, source }],
 		models: [],
 		modelCredentials: [],
@@ -249,7 +295,7 @@ beforeAll(async () => {
 		transaction: revisionTransaction,
 		...sharedAdmissions,
 	});
-	const managementUseCase = createAgentManagementV1(managementTransaction);
+	managementUseCase = createAgentManagementV1(managementTransaction);
 	const configurationUseCase = createAgentConfigurationUseCaseV1({
 		transaction: configurationTransaction,
 		...sharedAdmissions,
@@ -257,6 +303,16 @@ beforeAll(async () => {
 
 	const identityAdapter: IdentityAdapter = {
 		async resolve(request) {
+			if (identityDependencyFails)
+				throw new Error("private-identity-dependency-detail");
+			// Controlled browser identities; this test does not claim real directory/session acceptance.
+			const cookie = request.headers.get("Cookie");
+			if (cookie === "test-browser-session=admin") return currentBrowserAdmin;
+			if (cookie === "test-browser-session=disabled")
+				return { ...identities.admin, accountStatus: "disabled" };
+			if (cookie === "test-browser-session=owner") return identities.owner;
+			if (cookie === "test-browser-session=other-owner")
+				return identities.attacker;
 			const key = request.headers.get("x-test-identity") as
 				| keyof typeof identities
 				| null;
@@ -372,12 +428,21 @@ beforeAll(async () => {
 			management: managementUseCase,
 			configuration: configurationUseCase,
 			query: managementQuery,
-			allocateApplicationIds: async ({ idempotencyKey }) =>
-				idempotencyKey === "create-withdraw"
+			allocateApplicationIds: async ({ idempotencyKey }) => {
+				const resource = administratorReadResources.find(
+					(entry) => entry.idempotencyKey === idempotencyKey,
+				);
+				if (resource)
+					return {
+						applicationId: resource.applicationId,
+						agentId: resource.agentId,
+					};
+				return idempotencyKey === "create-withdraw"
 					? { applicationId: "application-withdraw", agentId: "agent-withdraw" }
 					: idempotencyKey === "create-v2"
 						? { applicationId: "application-v2", agentId: "agent-v2" }
-						: { applicationId: "application-run", agentId: "agent-run" },
+						: { applicationId: "application-run", agentId: "agent-run" };
+			},
 			prepareSecretReplacements: async () => ({ secrets: [] }),
 			readApplicationProjection: projectionReaders.readApplicationProjection,
 			readAgentProjection: projectionReaders.readManagementAgentProjection,
@@ -659,21 +724,20 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		const conversation = ConversationProjectionV1Schema.parse(
 			await createdConversation.json(),
 		);
-		expect(
-			(
-				await app.request(
-					`/api/v1/conversations/${conversation.conversationId}/messages`,
-					{
-						method: "POST",
-						headers: {
-							...requestHeaders("owner", "conversation-message-1"),
-							"content-type": "application/json",
-						},
-						body: JSON.stringify({ schemaVersion: 1, text: "Run it" }),
-					},
-				)
-			).status,
-		).toBe(202);
+		const sentMessage = await app.request(
+			`/api/v1/conversations/${conversation.conversationId}/messages`,
+			{
+				method: "POST",
+				headers: {
+					...requestHeaders("owner", "conversation-message-1"),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ schemaVersion: 1, text: "Run it" }),
+			},
+		);
+		expect(sentMessage.status).toBe(202);
+		const accepted = (await sentMessage.json()) as { executionId: string };
+
 		const conversationList = await app.request(
 			"/api/v1/agents/agent-run/conversations",
 			{ headers: requestHeaders("owner") },
@@ -692,6 +756,142 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				await conversationDetail.json(),
 			).messages,
 		).toEqual([expect.objectContaining({ role: "user", text: "Run it" })]);
+		// Controlled persisted Runtime facts prove this HTTP/Store slice, not Driver execution.
+		const events = [
+			{ type: "text.delta", text: "synthetic MAIN-01 output" },
+			{
+				schemaVersion: 2,
+				type: "execution.operation",
+				fact: {
+					kind: "model",
+					operationRef: "main01-operation",
+					attemptRef: "main01-attempt",
+					phase: "intent",
+					model: {
+						configVersion: "revision-1",
+						modelOptionId: "option-1",
+						modelId: "model-1",
+						reasoningLevel: "medium",
+					},
+				},
+			},
+		];
+		for (const [offset, event] of events.entries()) {
+			const eventId = `main01-event-${offset + 1}`;
+			await database.unsafe(
+				`insert into platform.conversation_events
+				(event_id,conversation_id,execution_id,adapter_event_key,sequence,conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,source,occurred_at)
+				values($1,$2,$3,$1,$4,$4,$5,$6::text::jsonb,$7,$1,'runtime',now())`,
+				[
+					eventId,
+					conversation.conversationId,
+					accepted.executionId,
+					offset + 1,
+					event.type,
+					JSON.stringify(event),
+					createHash("sha256").update(JSON.stringify(event)).digest("hex"),
+				],
+			);
+		}
+		await database.unsafe(
+			"update platform.conversations set last_conversation_cursor=2 where id=$1",
+			[conversation.conversationId],
+		);
+		await database.unsafe(
+			"update platform.conversation_executions set last_event_sequence=2,last_runtime_cursor='main01-event-2' where execution_id=$1",
+			[accepted.executionId],
+		);
+		const clientV2 = generatedClientV2.createClient({
+			baseUrl: "https://platform.example.test",
+			headers: requestHeaders("owner"),
+			fetch: async (input: string | URL | Request, init?: RequestInit) =>
+				app.fetch(input instanceof Request ? input : new Request(input, init)),
+		});
+		const v2 = await generatedSdkV2.getConversationV2({
+			client: clientV2,
+			path: { conversationId: conversation.conversationId },
+		});
+		expect(v2.response.status).toBe(200);
+		const history = ConversationDetailProjectionV2Schema.parse(v2.data);
+		expect(
+			history.events.map((event) => [event.schemaVersion, event.eventId]),
+		).toEqual([
+			[1, "main01-event-1"],
+			[2, "main01-event-2"],
+		]);
+		const executionV2 = await generatedSdkV2.getExecutionDetailV2({
+			client: clientV2,
+			path: {
+				conversationId: conversation.conversationId,
+				executionId: accepted.executionId,
+			},
+		});
+		expect(executionV2.response.status).toBe(200);
+		expect(
+			ExecutionDetailProjectionV2Schema.parse(executionV2.data).events,
+		).toEqual(history.events);
+		expect(
+			(
+				await generatedSdkV2.getConversationV2({
+					client: clientV2,
+					path: { conversationId: conversation.conversationId },
+				})
+			).data,
+		).toEqual(v2.data);
+		const firstEvent = history.events[0];
+		if (!firstEvent) throw new Error("Missing persisted MAIN-01 event");
+		for (const [selector, expected] of [
+			[{}, history.events],
+			[
+				{ query: { cursor: firstEvent.conversationCursor } },
+				history.events.slice(1),
+			],
+			[
+				{ headers: { "Last-Event-ID": firstEvent.eventId } },
+				history.events.slice(1),
+			],
+		] as const) {
+			const abort = new AbortController();
+			const timeout = setTimeout(() => abort.abort(), 5000);
+			try {
+				const { stream } = await generatedSdkV2.streamConversationEventsV2({
+					client: clientV2,
+					path: { conversationId: conversation.conversationId },
+					...selector,
+					signal: abort.signal,
+					sseMaxRetryAttempts: 1,
+				});
+				const received = [];
+				for await (const data of stream) {
+					const event = ConversationSseMessageV2Schema.parse(data);
+					if (event.kind !== "event") continue;
+					received.push(event);
+					if (received.length === expected.length) break;
+				}
+				expect(received).toEqual(expected);
+			} finally {
+				abort.abort();
+				clearTimeout(timeout);
+			}
+		}
+		for (const target of [
+			conversation.conversationId,
+			`missing-${conversation.conversationId}`,
+		]) {
+			for (const path of [
+				`/api/v2/conversations/${target}`,
+				`/api/v2/conversations/${target}/executions/${accepted.executionId}`,
+				`/api/v2/conversations/${target}/events`,
+			]) {
+				const denied = await app.request(path, {
+					headers: requestHeaders("attacker"),
+				});
+				expect(denied.status).toBe(404);
+				expect(await denied.json()).toMatchObject({
+					code: "RESOURCE_UNAVAILABLE",
+				});
+			}
+		}
 		for (const path of [
 			`/api/v1/conversations/${conversation.conversationId}`,
 			`/api/v1/conversations/missing-${conversation.conversationId}`,
@@ -842,4 +1042,340 @@ describe("PostgreSQL Platform HTTP integration", () => {
 			expect([403, 404]).toContain(response.status);
 		}
 	});
+
+	it("reads cross-Owner administrator pages over real HTTP and the generated SDK without writes or expanded employee access", async () => {
+		for (const resource of administratorReadResources) {
+			const created = await app.request("/api/v2/agent-applications", {
+				method: "POST",
+				headers: {
+					...requestHeaders(resource.owner, resource.idempotencyKey),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					...applicationBody,
+					name: `Read fixture ${resource.status}`,
+					availability:
+						resource.status === "available"
+							? [{ kind: "organization", organizationId: "org-1" }]
+							: [],
+				}),
+			});
+			expect(created.status).toBe(201);
+			if (resource.status === "pending_approval") continue;
+			const decision = await app.request(
+				`/api/v2/admin/agent-applications/${resource.applicationId}/decision`,
+				{
+					method: "POST",
+					headers: {
+						...requestHeaders("admin", `decision-${resource.idempotencyKey}`),
+						"content-type": "application/json",
+					},
+					body: JSON.stringify(
+						resource.status === "rejected"
+							? {
+									schemaVersion: 1,
+									decision: "reject",
+									reason: "Controlled fixture rejection",
+								}
+							: { schemaVersion: 1, decision: "approve" },
+					),
+				},
+			);
+			expect(decision.status).toBe(200);
+			if (resource.status === "creating" || resource.status === "rejected")
+				continue;
+			const state = (
+				await managementQuery.getAgent(
+					{ kind: "administrator" },
+					resource.agentId,
+				)
+			)?.management;
+			expect(state).toBeDefined();
+			if (!state) throw new Error("Missing fixture aggregate");
+			// Controlled workload observations through real Core/Store, without a real Worker or external service.
+			const observation = {
+				schemaVersion: 1 as const,
+				observationId: `observation-${resource.idempotencyKey}`,
+				agentId: resource.agentId,
+				expectedRevision: state.revision,
+				workloadRevision: state.workloadRevision,
+				fence: state.fence,
+				requestId: `request-${resource.idempotencyKey}`,
+				traceId: `trace-${resource.idempotencyKey}`,
+			};
+			expect(
+				(
+					await managementUseCase.recordWorkloadObservation(
+						resource.status === "creation_failed"
+							? {
+									...observation,
+									observation: "creation_failed",
+									failureCode: "creation_not_ready",
+								}
+							: { ...observation, observation: "creation_succeeded" },
+					)
+				).outcome,
+			).toBe("accepted");
+			if (resource.status === "stopped" || resource.status === "disabled") {
+				const response = await app.request(
+					`/api/v2/agents/${resource.agentId}/lifecycle`,
+					{
+						method: "POST",
+						headers: {
+							...requestHeaders(
+								resource.status === "disabled" ? "admin" : resource.owner,
+								`lifecycle-${resource.idempotencyKey}`,
+							),
+							"content-type": "application/json",
+						},
+						body: JSON.stringify({
+							schemaVersion: 1,
+							command: resource.status === "disabled" ? "disable" : "stop",
+						}),
+					},
+				);
+				expect(response.status).toBe(202);
+			}
+		}
+
+		if (!testDatabase) throw new Error("Missing PostgreSQL fixture");
+		const sql = postgres(testDatabase.databaseUrl, { max: 1 });
+		const snapshot = async () => {
+			const tables = [
+				"agents",
+				"agent_applications",
+				"agent_configuration_revisions",
+				"agent_owners",
+				"agent_availability",
+				"agent_management_history",
+				"outbox_items",
+				"audit_events",
+				"idempotency_records",
+			];
+			const rows = [];
+			for (const table of tables)
+				rows.push(
+					await sql.unsafe(
+						`select coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text), '[]'::jsonb) as rows from platform.${table} t`,
+					),
+				);
+			return rows;
+		};
+		const before = await snapshot();
+		const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 });
+		try {
+			await once(server, "listening");
+			const address = server.address();
+			if (!address || typeof address === "string")
+				throw new Error("Missing loopback listener");
+			const baseUrl = `http://127.0.0.1:${address.port}`;
+			const { createClient } = await import(
+				new URL(
+					"../../web/src/pilot/generated-v2/client/index.ts",
+					import.meta.url,
+				).href
+			);
+			const { listAdminAgentsV2, listAgentsV2 } = await import(
+				new URL("../../web/src/pilot/generated-v2/index.ts", import.meta.url)
+					.href
+			);
+			const client = createClient({
+				baseUrl,
+				headers: { Cookie: "test-browser-session=admin" },
+			});
+			const items: ReturnType<typeof AgentProjectionV2Schema.parse>[] = [];
+			let cursor: string | null = "zz-admin-read-";
+			const cursors: (string | null)[] = [];
+			do {
+				const result: {
+					response: Response;
+					error?: unknown;
+					data?: { items: unknown[]; nextCursor: string | null };
+				} = await listAdminAgentsV2({
+					client,
+					query: { limit: 2, cursor },
+				});
+				expect(result.response.status).toBe(200);
+				expect(result.error).toBeUndefined();
+				if (!result.data) throw new Error("Missing administrator page");
+				expect(result.data.items.length).toBeLessThanOrEqual(2);
+				items.push(
+					...result.data.items.map((item: unknown) =>
+						AgentProjectionV2Schema.parse(item),
+					),
+				);
+				cursor = result.data.nextCursor;
+				expect(cursors).not.toContain(cursor);
+				cursors.push(cursor);
+			} while (cursor !== null);
+			expect(cursors).toEqual(["zz-admin-read-1", "zz-admin-read-3", null]);
+			expect(items.map(({ agentId }) => agentId)).toEqual(
+				administratorReadResources.slice(0, 5).map(({ agentId }) => agentId),
+			);
+			expect(new Set(items.map(({ agentId }) => agentId)).size).toBe(5);
+			for (const [index, item] of items.entries()) {
+				const resource = administratorReadResources[index];
+				if (!resource) throw new Error("Missing expected fixture");
+				expect(item).toMatchObject({
+					name: `Read fixture ${resource.status}`,
+					source: applicationBody.source,
+					managementStatus: resource.status,
+					serviceAvailability: resource.status === "available" ? "ready" : null,
+					configuration: {
+						owners: [
+							{
+								userId: identities[resource.owner].userId,
+								displayName: identities[resource.owner].displayName,
+								roles: identities[resource.owner].roles,
+							},
+						],
+					},
+				});
+				expect(item).not.toHaveProperty("applicant");
+				expect(item).not.toHaveProperty("operations");
+				expect(item.configuration).not.toHaveProperty("actions");
+			}
+			expect(JSON.stringify(items)).not.toMatch(
+				/imageDigest|admissionRevision|authorizationRevision|secretId|fixture-api-credential|private-identity-dependency-detail/,
+			);
+
+			const ownerClient = createClient({
+				baseUrl,
+				headers: { Cookie: "test-browser-session=owner" },
+			});
+			for (const [scope, expectedIds] of [
+				[undefined, [0, 1, 2, 4]],
+				["owner", [0, 2, 4]],
+			] as const) {
+				const result = await listAgentsV2({
+					client: ownerClient,
+					query: {
+						limit: 100,
+						cursor: "zz-admin-read-",
+						...(scope ? { scope } : {}),
+					},
+				});
+				expect(result.response.status).toBe(200);
+				expect(
+					result.data.items.map(({ agentId }: { agentId: string }) => agentId),
+				).toEqual(expectedIds.map((index) => `zz-admin-read-${index}`));
+			}
+			const ordinaryAdmin = await listAgentsV2({
+				client,
+				query: { limit: 100, cursor: "zz-admin-read-" },
+			});
+			expect(ordinaryAdmin.response.status).toBe(200);
+			expect(ordinaryAdmin.data.items).toEqual([]);
+			for (const intent of ["discover", "manage", "use"] as const) {
+				expect(
+					await managementUseCase.resolveAgentAccess(
+						{ schemaVersion: 1, agentId: "zz-admin-read-1", intent },
+						{
+							schemaVersion: 1,
+							userId: identities.admin.userId,
+							accountStatus: "active",
+							organizationIds: identities.admin.organizationIds,
+							isAdministrator: true,
+						},
+					),
+				).toEqual({ outcome: "denied" });
+			}
+
+			const listQueries = vi.spyOn(managementQuery, "listAgents");
+			for (const [query, headers, status, code] of [
+				[
+					"",
+					{
+						Cookie: "test-browser-session=owner",
+						"x-user-id": "user-admin",
+						"x-role": "system_admin",
+					},
+					403,
+					"RESOURCE_UNAVAILABLE",
+				],
+				[
+					"",
+					{ Cookie: "test-browser-session=disabled" },
+					403,
+					"AUTHORIZATION_REVOKED",
+				],
+				["", {}, 401, "AUTHENTICATION_REQUIRED"],
+				[
+					"",
+					{ Authorization: "Bearer fixture-api-credential" },
+					401,
+					"AUTHENTICATION_REQUIRED",
+				],
+				[
+					"",
+					{
+						Cookie: "test-browser-session=admin",
+						Authorization: "Bearer fixture-api-credential",
+					},
+					401,
+					"AUTHENTICATION_REQUIRED",
+				],
+				[
+					"?scope=administrator",
+					{ Cookie: "test-browser-session=admin" },
+					400,
+					"INVALID_REQUEST",
+				],
+				[
+					"?userId=user-admin",
+					{ Cookie: "test-browser-session=admin" },
+					400,
+					"INVALID_REQUEST",
+				],
+				[
+					"?role=system_admin",
+					{ Cookie: "test-browser-session=admin" },
+					400,
+					"INVALID_REQUEST",
+				],
+			] as const) {
+				const response = await fetch(`${baseUrl}/api/v2/admin/agents${query}`, {
+					headers,
+				});
+				expect(response.status).toBe(status);
+				expect(
+					PilotProtocolErrorV1Schema.parse(await response.json()).code,
+				).toBe(code);
+			}
+			currentBrowserAdmin = identities.owner;
+			const revokedRole = await listAdminAgentsV2({ client });
+			expect(revokedRole.response.status).toBe(403);
+			expect(revokedRole.error.code).toBe("RESOURCE_UNAVAILABLE");
+			currentBrowserAdmin = identities.admin;
+			identityDependencyFails = true;
+			const identityFailure = await listAdminAgentsV2({ client });
+			expect(identityFailure.response.status).toBe(503);
+			expect(identityFailure.error.code).toBe("DEPENDENCY_UNAVAILABLE");
+			expect(JSON.stringify(identityFailure.error)).not.toContain(
+				"private-identity-dependency-detail",
+			);
+			identityDependencyFails = false;
+			expect(listQueries).not.toHaveBeenCalled();
+			// Closing the real Store connection exercises a PostgreSQL dependency failure.
+			await managementQuery.close();
+			const queryFailure = await listAdminAgentsV2({ client });
+			expect(queryFailure.response.status).toBe(503);
+			expect(queryFailure.error.code).toBe("DEPENDENCY_UNAVAILABLE");
+			expect(
+				PilotProtocolErrorV1Schema.safeParse(queryFailure.error).success,
+			).toBe(true);
+			expect(JSON.stringify(queryFailure.error)).not.toMatch(
+				/postgres|password|databaseUrl/,
+			);
+			expect(await snapshot()).toEqual(before);
+		} finally {
+			identityDependencyFails = false;
+			currentBrowserAdmin = identities.admin;
+			vi.restoreAllMocks();
+			await new Promise<void>((resolve, reject) =>
+				server.close((error) => (error ? reject(error) : resolve())),
+			);
+			await sql.end();
+		}
+	}, 60_000);
 });

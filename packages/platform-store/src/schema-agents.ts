@@ -163,8 +163,8 @@ export const agentApplications = platformSchema.table(
 				and ${table.fence} = 0
 				and ${table.failureCode} is null
 			) or (
-				${table.status} not in ('pending_approval', 'withdrawn', 'rejected')
-				and ${table.approvalRevision} is not null
+					${table.status} not in ('pending_approval', 'withdrawn', 'rejected')
+					and ((${table.status} = 'creating' and ${table.approvalRevision} is null) or ${table.approvalRevision} is not null)
 				and ${table.workloadRevision} >= 1
 				and ${table.fence} >= 1
 				and (

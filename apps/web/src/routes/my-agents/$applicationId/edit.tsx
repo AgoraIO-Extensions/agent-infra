@@ -1,13 +1,19 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { RefreshCw } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
-import { unavailableDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
-import { getAgentApplicationEditAction } from "../../../features/my-agents/my-agent-applications.js";
+import { projectDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
+import {
+	agentApplicationEditActionLabels,
+	getAgentApplicationEditAction,
+	isRetryableMyAgentApplicationError,
+} from "../../../features/my-agents/my-agent-applications.js";
 import { useAgentApplicationSubmission } from "../../../features/my-agents/use-agent-application-submission.js";
 import { useDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
 import { useMyAgentApplication } from "../../../features/my-agents/use-my-agent-application.js";
+import { PageLoadingState } from "../../../features/page-loading-state.js";
 
 export const Route = createFileRoute("/my-agents/$applicationId/edit")({
 	component: EditAgentApplicationRoute,
@@ -18,8 +24,15 @@ function EditAgentApplicationRoute() {
 	const query = useMyAgentApplication(applicationId);
 	const submission = useAgentApplicationSubmission(applicationId);
 	const deployment = useDeploymentConfiguration();
+	const retryable = query.isError
+		? isRetryableMyAgentApplicationError(query.error)
+		: query.data?.kind === "unavailable" && query.data.retryable;
 	if (query.isPending) {
-		return <p aria-live="polite">正在读取申请…</p>;
+		return (
+			<main className="platform-content management-content">
+				<PageLoadingState title="修改申请" message="正在读取申请…" />
+			</main>
+		);
 	}
 	if (query.isError || !query.data || query.data.kind !== "ready") {
 		return (
@@ -35,7 +48,21 @@ function EditAgentApplicationRoute() {
 						申请暂不可用
 					</h1>
 					<Alert>
-						<AlertDescription>请稍后重试。</AlertDescription>
+						<AlertDescription>
+							{retryable ? "请稍后重试。" : "请联系管理员。"}
+						</AlertDescription>
+						{retryable ? (
+							<Button
+								className="mt-4"
+								variant="outline"
+								disabled={query.isFetching}
+								onClick={() => void query.refetch()}
+								type="button"
+							>
+								<RefreshCw aria-hidden="true" data-icon="inline-start" />
+								{query.isFetching ? "正在重新加载…" : "重新加载申请"}
+							</Button>
+						) : null}
 					</Alert>
 				</section>
 			</main>
@@ -67,14 +94,28 @@ function EditAgentApplicationRoute() {
 			</main>
 		);
 	}
+	if (deployment.isPending) {
+		return (
+			<main className="platform-content management-content">
+				<PageLoadingState
+					title={agentApplicationEditActionLabels[action]}
+					message="正在读取部署选项…"
+				/>
+			</main>
+		);
+	}
 	const error =
 		submission.isError && submission.error instanceof Error
 			? submission.error
 			: null;
-	const deploymentConfiguration =
-		deployment.data?.kind === "ready"
-			? deployment.data.configuration
-			: unavailableDeploymentConfiguration;
+	const {
+		configuration: deploymentConfiguration,
+		retryable: deploymentConfigurationRetryable,
+	} = projectDeploymentConfiguration(
+		deployment.data,
+		deployment.error,
+		deployment.isError,
+	);
 
 	return (
 		<main className="platform-content management-content">
@@ -87,6 +128,7 @@ function EditAgentApplicationRoute() {
 				result={submission.data}
 				submitting={submission.isPending}
 				deploymentConfiguration={deploymentConfiguration}
+				deploymentConfigurationRetryable={deploymentConfigurationRetryable}
 				onRefreshDeploymentConfiguration={() => void deployment.refetch()}
 				refreshingDeploymentConfiguration={deployment.isFetching}
 			/>

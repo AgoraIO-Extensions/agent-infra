@@ -1,6 +1,6 @@
 FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS builder
 ARG TARGETARCH
-RUN apk add --no-cache --upgrade 'libcrypto3=3.5.8-r0' 'libssl3=3.5.8-r0' \
+RUN apk add --no-cache --upgrade 'libcrypto3=3.5.9-r0' 'libssl3=3.5.9-r0' \
 	&& npm install --global npm@11.19.1 \
 	&& npm install --global pnpm@11.20.0
 WORKDIR /app
@@ -33,10 +33,11 @@ RUN cd /prod/agent-runtime-host && node --input-type=module -e 'import {verifyCl
 
 RUN cd /prod/agent-runtime-host && node --input-type=module -e 'import {verifyPiInstallation} from "@agent-infra/agent-runtime"; import {execFileSync} from "node:child_process"; const p = await verifyPiInstallation(); if (execFileSync(p.executable, [p.cli, "--version"], {encoding:"utf8"}).trim() !== p.nativeVersion) throw new Error("RUNTIME_PI_PROVENANCE_MISMATCH");'
 
-FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS runner
+FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS runtime
 ARG SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
-RUN apk add --no-cache --upgrade 'libcrypto3=3.5.8-r0' 'libssl3=3.5.8-r0' 'setpriv=2.42.3-r1' \
+LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"platform-adapter","protocol":"acp","service":{"port":3003},"health":{"path":"/healthz"}}'
+RUN apk add --no-cache --upgrade 'libcrypto3=3.5.9-r0' 'libssl3=3.5.9-r0' 'setpriv=2.42.3-r1' \
 	&& npm install --global npm@11.19.1
 ENV NODE_ENV=production
 ENV AGENT_INFRA_RUNTIME_DATA_DIR=/var/lib/agent-runtime
@@ -44,7 +45,31 @@ ENV PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /app
 COPY --from=builder /opt/codex/ /opt/codex/
 COPY --from=builder /opt/opencode/ /opt/opencode/
-RUN chmod 0555 /opt/codex /opt/codex/bin /opt/codex/share
+COPY --from=builder --chown=0:0 /app/deploy/runtime/skills/workspace-summary/ /opt/codex/agent-infra-skills/workspace-summary/
+COPY --from=builder --chown=0:0 /app/deploy/runtime/skills/workspace-summary.manifest.json /opt/codex/agent-infra-skills/workspace-summary.manifest.json
+RUN SOURCE_COMMIT="$SOURCE_COMMIT" node --input-type=module -e '\
+  import {readFileSync, readdirSync, writeFileSync} from "node:fs"; \
+  import {createHash} from "node:crypto"; \
+  const hash = bytes => createHash("sha256").update(bytes).digest("hex"); \
+  const sourceRevision = process.env.SOURCE_COMMIT; \
+  if (!/^[a-f0-9]{40}$/.test(sourceRevision) || sourceRevision === "0".repeat(40)) throw new Error("RUNTIME_IMAGE_SOURCE_INVALID"); \
+  const root = "/opt/codex/agent-infra-skills"; \
+  const bytes = readFileSync(`${root}/workspace-summary.manifest.json`); \
+  const manifest = JSON.parse(bytes); \
+  const entry = readFileSync(`${root}/workspace-summary/SKILL.md`); \
+  const file = {path:"SKILL.md", sizeBytes:entry.length, sha256:hash(entry)}; \
+  const inventory = JSON.stringify({domain:"agent-infra.skill-package.v1", files:[[file.path, file.sizeBytes, file.sha256]]}) + "\n"; \
+  if (JSON.stringify(readdirSync(`${root}/workspace-summary`)) !== JSON.stringify(["SKILL.md"]) \
+      || JSON.stringify(manifest.files) !== JSON.stringify([file]) \
+      || manifest.packageDigest.sha256 !== hash(inventory)) throw new Error("RUNTIME_SKILL_PACKAGE_INVALID"); \
+  writeFileSync("/opt/codex/share/workspace-summary-build.json", JSON.stringify({schemaVersion:1, sourceRevision, manifestSha256:hash(bytes), packageSha256:hash(inventory)}) + "\n");'
+RUN chown -R 0:0 /opt/codex/agent-infra-skills \
+    && chown 0:0 /opt/codex/share/workspace-summary-build.json \
+    && chmod 0555 /opt/codex /opt/codex/bin /opt/codex/share \
+       /opt/codex/agent-infra-skills /opt/codex/agent-infra-skills/workspace-summary \
+    && chmod 0444 /opt/codex/agent-infra-skills/workspace-summary/SKILL.md \
+       /opt/codex/agent-infra-skills/workspace-summary.manifest.json /opt/codex/share/workspace-summary-build.json
+ENV AGENT_INFRA_RUNTIME_INSTALLED_SKILL=workspace-summary-v1
 COPY --from=builder --chown=node:node /prod/agent-runtime-host/ ./
 COPY --from=builder --chown=node:node /app/apps/agent-runtime-host/start-runtime-host.sh ./start-runtime-host.sh
 RUN chmod 0755 ./start-runtime-host.sh
@@ -55,3 +80,15 @@ RUN mkdir -p /etc/agent-infra/legacy-migration \
 VOLUME ["/var/lib/agent-runtime"]
 USER node
 CMD ["/bin/sh", "./start-runtime-host.sh"]
+
+# Test tools and source stay outside the default production image. The fixed
+# installation is copied from this same production stage, never installed twice.
+FROM builder AS installed-skill-test
+ARG SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
+LABEL org.agora.agent-infra.runtime-stage=installed-skill-test
+COPY --from=runtime /opt/codex/ /opt/codex/
+ENV AGENT_INFRA_RUNTIME_INSTALLED_SKILL=workspace-summary-v1
+USER node
+
+FROM runtime AS runner

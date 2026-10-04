@@ -258,13 +258,16 @@ export function WecomBotSetup({
 					/>
 				</div>
 			</div>
-			<Label className="flex min-h-11 items-center gap-3 text-sm">
+			<Label className="min-h-11 flex-nowrap items-start gap-3 text-sm leading-6">
 				<Checkbox
+					className="mt-1"
 					checked={confirmed}
 					disabled={busy}
 					onCheckedChange={(value) => setConfirmed(value)}
 				/>
-				我已知悉：连接此机器人可能断开它在其他服务中的现有连接。
+				<span className="min-w-0">
+					我已知悉：连接此机器人可能断开它在其他服务中的现有连接。
+				</span>
 			</Label>
 			<p className="text-slate-600 text-sm">
 				群消息和回复对群成员可见，每位发送者的会话上下文独立。Secret

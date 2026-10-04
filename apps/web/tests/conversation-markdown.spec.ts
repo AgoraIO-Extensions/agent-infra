@@ -1,6 +1,7 @@
 import {
 	AgentProjectionV2Schema,
 	ConversationDetailProjectionV2Schema,
+	ConversationPageV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, test } from "@playwright/test";
@@ -70,6 +71,10 @@ test("assistant Markdown stays readable through history reload and version switc
 	});
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const path = new URL(route.request().url()).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
 		if (path.endsWith("/events")) {
 			await route.fulfill({
 				contentType: "text/event-stream",
@@ -136,6 +141,7 @@ test("assistant Markdown stays readable through history reload and version switc
 	if (testInfo.project.name === "mobile") {
 		const widths = [160, 200, 215, 320, 390, 430, 768, 1024, 1440];
 		async function checkSurface(name: string, sendReachable = false) {
+			const initialViewport = page.viewportSize();
 			for (const width of widths) {
 				await page.setViewportSize({
 					width,
@@ -165,9 +171,11 @@ test("assistant Markdown stays readable through history reload and version switc
 						fullPage: true,
 					});
 			}
+			if (initialViewport) await page.setViewportSize(initialViewport);
 		}
 		await checkSurface("conversation", true);
 		await page.getByRole("button", { name: "个人历史" }).click();
+		await page.getByRole("button", { name: "此 Agent 的全部历史" }).click();
 		const personalHistory = page.getByRole("region", { name: "个人历史" });
 		await expect(
 			personalHistory.getByRole("link", { name: /Test conversation/ }),

@@ -4,8 +4,9 @@ import {
 	ChevronRight,
 	RefreshCw,
 	SlidersHorizontal,
+	User,
 } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Badge } from "../../components/ui/badge.js";
@@ -23,6 +24,7 @@ import {
 } from "./conversation-screen-state.js";
 
 export function ConversationMessages({
+	agentName,
 	history,
 	events,
 	onExecution,
@@ -30,6 +32,7 @@ export function ConversationMessages({
 	canRegenerate,
 	onResend,
 }: {
+	agentName: string;
 	history: ConversationDetailProjectionV2;
 	events: readonly PersistedConversationEventV2[];
 	onExecution: (id: string) => void;
@@ -74,33 +77,27 @@ export function ConversationMessages({
 					? executionStatus(events, selected.executionId, selected.status)
 					: undefined;
 				return (
-					<article
-						className="exchange space-y-4 border-border border-b pb-6"
-						key={message.messageId}
-					>
-						<div className="message-heading font-semibold">你</div>
-						<p className="message-text whitespace-pre-wrap break-words">
-							{message.text}
-						</p>
-						{message.status === "failed" && (
-							<Alert variant="destructive" className="supplement space-y-2">
-								<AlertDescription>
-									{commandFailure(message.error.code)}
-								</AlertDescription>
-								<Button
-									variant="outline"
-									onClick={() => onResend(message.text)}
-								>
-									准备重新发送
-								</Button>
-							</Alert>
-						)}
+					<div className="exchange space-y-6" key={message.messageId}>
+						<MessageFrame name="你" user>
+							<p className="message-text whitespace-pre-wrap break-words">
+								{message.text}
+							</p>
+							{message.status === "failed" && (
+								<Alert variant="destructive" className="supplement space-y-2">
+									<AlertDescription>
+										{commandFailure(message.error.code)}
+									</AlertDescription>
+									<Button
+										variant="outline"
+										onClick={() => onResend(message.text)}
+									>
+										准备重新发送
+									</Button>
+								</Alert>
+							)}
+						</MessageFrame>
 						{selected ? (
-							<>
-								<div className="message-heading flex items-center gap-2 font-semibold">
-									<Bot aria-hidden="true" className="size-5" />
-									Agent
-								</div>
+							<MessageFrame name={agentName}>
 								<div className="answer space-y-3">
 									<AssistantMarkdown>
 										{selected.executionId
@@ -176,7 +173,7 @@ export function ConversationMessages({
 										重新生成
 									</Button>
 								</div>
-							</>
+							</MessageFrame>
 						) : (
 							message.status !== "failed" && (
 								<div className="space-y-2">
@@ -199,40 +196,35 @@ export function ConversationMessages({
 								</div>
 							)
 						)}
-					</article>
+					</div>
 				);
 			})}
 			{liveExecutions.map((id) => (
-				<article
-					className="exchange space-y-3 border-border border-b pb-6"
-					key={id}
-				>
-					<div className="message-heading flex items-center gap-2 font-semibold">
-						<Bot aria-hidden="true" className="size-5" />
-						Agent
-					</div>
-					<AssistantMarkdown>
-						{events
-							.filter(
-								(event) =>
-									event.executionId === id && event.type === "text.delta",
-							)
-							.map((event) =>
-								event.type === "text.delta" ? event.payload.text : "",
-							)
-							.join("")}
-					</AssistantMarkdown>
-					<p className="text-muted-foreground text-sm">
-						{
-							executionStatusLabels[
-								executionStatus(events, id, "processing") ?? "processing"
-							]
-						}
-					</p>
-					<Button variant="ghost" onClick={() => onExecution(id)}>
-						执行详情
-					</Button>
-				</article>
+				<div className="exchange" key={id}>
+					<MessageFrame name={agentName}>
+						<AssistantMarkdown>
+							{events
+								.filter(
+									(event) =>
+										event.executionId === id && event.type === "text.delta",
+								)
+								.map((event) =>
+									event.type === "text.delta" ? event.payload.text : "",
+								)
+								.join("")}
+						</AssistantMarkdown>
+						<p className="text-muted-foreground text-sm">
+							{
+								executionStatusLabels[
+									executionStatus(events, id, "processing") ?? "processing"
+								]
+							}
+						</p>
+						<Button variant="ghost" onClick={() => onExecution(id)}>
+							执行详情
+						</Button>
+					</MessageFrame>
+				</div>
 			))}
 			{events
 				.filter((event) => event.type === "model.selection.fell_back")
@@ -245,5 +237,30 @@ export function ConversationMessages({
 					</p>
 				))}
 		</section>
+	);
+}
+
+function MessageFrame({
+	name,
+	user = false,
+	children,
+}: {
+	name: string;
+	user?: boolean;
+	children: ReactNode;
+}) {
+	return (
+		<article
+			className={user ? "chat-message chat-message-user" : "chat-message"}
+			aria-label={`${name}的消息`}
+		>
+			<div className="chat-message-avatar" aria-hidden="true">
+				{user ? <User className="size-4" /> : <Bot className="size-4" />}
+			</div>
+			<div className="chat-message-body space-y-3">
+				<div className="message-heading font-semibold">{name}</div>
+				{children}
+			</div>
+		</article>
 	);
 }

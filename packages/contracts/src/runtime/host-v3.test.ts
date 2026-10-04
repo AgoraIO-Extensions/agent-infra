@@ -1,6 +1,39 @@
 import { describe, expect, it } from "vitest";
 
-import { runtimeRequestSigningPayloadV3 } from "./host-v3.ts";
+import {
+	RuntimeOriginalBindingResponseV3Schema,
+	runtimeRequestSigningPayloadV3,
+} from "./host-v3.ts";
+
+describe("Runtime V3 original binding response", () => {
+	const response = {
+		schemaVersion: 3,
+		executionId: "execution-1",
+		outcome: "binding_found",
+		hostSessionRef: "host-1",
+	};
+	it("accepts only the original binding receipt without a status projection", () => {
+		expect(RuntimeOriginalBindingResponseV3Schema.parse(response)).toEqual(
+			response,
+		);
+	});
+	it.each([
+		{ status: "running" },
+		{ extra: true },
+		{ schemaVersion: 4 },
+		{ executionId: "" },
+		{ hostSessionRef: null },
+		{ hostSessionRef: "" },
+		{ outcome: "not_found" },
+	])("rejects invalid response fields %j", (fields) => {
+		expect(
+			RuntimeOriginalBindingResponseV3Schema.safeParse({
+				...response,
+				...fields,
+			}).success,
+		).toBe(false);
+	});
+});
 
 describe("Runtime V3 request signing payload", () => {
 	it("uses the same UTF-16 key order for nested objects and array members", () => {

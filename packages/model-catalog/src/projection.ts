@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
 	RuntimeModelConfigurationV3Schema,
+	RuntimeModelConfigurationV4Schema,
 	type RuntimeModelProtocolV1,
+	RuntimeModelProtocolV1Schema,
 } from "@agent-infra/contracts/runtime";
 import type {
 	AgentConfigurationModelOptionV1,
@@ -26,6 +28,37 @@ const secretReferenceSchema = z.strictObject({
 	configRevision: z.number().int().positive(),
 	name: z.string().regex(/^[a-z0-9][a-z0-9.-]{0,251}[a-z0-9]$/),
 });
+export interface StandardTemplateModelBindingV1 {
+	readonly templateId: string;
+	readonly imageDigest: string;
+	readonly driver: "codex" | "claude" | "acp" | "pi";
+	readonly protocol: RuntimeModelProtocolV1;
+}
+
+const templateBindingSchema = z
+	.strictObject({
+		templateId: z
+			.string()
+			.min(1)
+			.max(256)
+			.refine((value) =>
+				[...value].every(
+					(character) =>
+						character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127,
+				),
+			),
+		imageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+		driver: z.enum(["codex", "claude", "acp", "pi"]),
+		protocol: RuntimeModelProtocolV1Schema,
+	})
+	.refine(
+		(binding) =>
+			binding.protocol ===
+			(binding.driver === "codex"
+				? "openai-responses-v1"
+				: "anthropic-messages-v1"),
+	);
+
 const projectionContentSchema = z.strictObject({
 	schemaVersion: z.literal(1),
 	agentId: z.string().min(1).max(256),
@@ -33,6 +66,7 @@ const projectionContentSchema = z.strictObject({
 	catalogRevision: modelIdentifier,
 	defaultOptionId: modelIdentifier,
 	defaultReasoningLevel: reasoningLevel,
+	standardTemplateBinding: templateBindingSchema.optional(),
 	options: z
 		.array(
 			z.strictObject({
@@ -51,6 +85,25 @@ const projectionSchema = projectionContentSchema.extend({
 	fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
 });
 export type RuntimeModelProjectionV1 = z.infer<typeof projectionSchema>;
+const keylessProjectionContentSchema = projectionContentSchema.extend({
+	schemaVersion: z.literal(4),
+	standardTemplateBinding: templateBindingSchema,
+	options: z
+		.array(
+			z.strictObject({
+				optionId: modelIdentifier,
+				endpoint: ModelEndpointV1Schema,
+				modelId: modelIdentifier,
+				reasoningLevels: z.array(reasoningLevel).min(1).max(32),
+			}),
+		)
+		.min(1)
+		.max(128),
+});
+const keylessProjectionSchema = keylessProjectionContentSchema.extend({
+	fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export type RuntimeModelProjectionV4 = z.infer<typeof keylessProjectionSchema>;
 const hash = (value: string) =>
 	createHash("sha256").update(value).digest("hex");
 const credentialVariable = (optionId: string) =>
@@ -58,10 +111,22 @@ const credentialVariable = (optionId: string) =>
 export const runtimeModelConfigurationVariableV1 =
 	"AGENT_INFRA_RUNTIME_MODEL_CONFIG";
 
-export interface StandardTemplateModelBindingV1 {
-	readonly templateId: string;
-	readonly imageDigest: string;
-	readonly protocol: RuntimeModelProtocolV1;
+/** Snapshot the trusted deployment tuples before any Store or Kubernetes operation. */
+export function validateStandardTemplateModelBindingsV1(
+	value: unknown,
+): readonly StandardTemplateModelBindingV1[] {
+	try {
+		const bindings = z.array(templateBindingSchema).parse(value);
+		const pairs = new Set(
+			bindings.map(({ templateId, imageDigest }) =>
+				JSON.stringify([templateId, imageDigest]),
+			),
+		);
+		if (pairs.size !== bindings.length) throw new Error();
+		return Object.freeze(bindings.map((binding) => Object.freeze(binding)));
+	} catch {
+		throw new ModelConfigurationErrorV1();
+	}
 }
 
 // Projection reads admitted model fields, not the configuration write schema.
@@ -76,11 +141,11 @@ type ModelProjectionConfiguration = Pick<
 >;
 
 /** Immutable image admission and the deployment's fixed Driver binding must agree. */
-export function standardTemplateModelProtocolV1(
+export function standardTemplateModelBindingV1(
 	source: AgentConfigurationSourceV1,
 	bindings: readonly StandardTemplateModelBindingV1[],
 ) {
-	const matches = bindings.filter(
+	const matches = validateStandardTemplateModelBindingsV1(bindings).filter(
 		(binding) =>
 			source.kind === "standard" &&
 			binding.templateId === source.templateId &&
@@ -88,7 +153,15 @@ export function standardTemplateModelProtocolV1(
 	);
 	const match = matches[0];
 	if (matches.length !== 1 || !match) throw new ModelConfigurationErrorV1();
-	return match.protocol;
+	return match;
+}
+
+/** Preserve the existing protocol-only caller contract. */
+export function standardTemplateModelProtocolV1(
+	source: AgentConfigurationSourceV1,
+	bindings: readonly StandardTemplateModelBindingV1[],
+) {
+	return standardTemplateModelBindingV1(source, bindings).protocol;
 }
 
 /** A Worker-owned, credential-free snapshot. Never append this to Workload desired annotations. */
@@ -97,7 +170,7 @@ export async function projectRuntimeModelConfigurationV1(input: {
 	readonly catalog: ModelCatalogAdapterV1;
 	readonly access: ModelAccessValidatorV1;
 	/** Bound to the admitted template image by deployment assembly, never an Owner field. */
-	readonly protocol: RuntimeModelProtocolV1;
+	readonly standardTemplateBinding: StandardTemplateModelBindingV1;
 	readonly signal: AbortSignal;
 	readonly credentialFor: (option: AgentConfigurationModelOptionV1) => Promise<{
 		readonly reference: z.infer<typeof secretReferenceSchema>;
@@ -107,6 +180,10 @@ export async function projectRuntimeModelConfigurationV1(input: {
 }): Promise<RuntimeModelProjectionV1> {
 	return modelOperationV1(input.signal, async () => {
 		const { configuration } = input;
+		const standardTemplateBinding = standardTemplateModelBindingV1(
+			configuration.source,
+			[input.standardTemplateBinding],
+		);
 		const model = configuration.modelConfiguration;
 		if (
 			configuration.source.kind !== "standard" ||
@@ -134,7 +211,7 @@ export async function projectRuntimeModelConfigurationV1(input: {
 			if (
 				endpoint.endpointId !== option.endpointId ||
 				!endpoint.available ||
-				endpoint.protocol !== input.protocol
+				endpoint.protocol !== standardTemplateBinding.protocol
 			)
 				throw new ModelConfigurationErrorV1();
 			const credential = await input.credentialFor(option);
@@ -175,6 +252,7 @@ export async function projectRuntimeModelConfigurationV1(input: {
 			catalogRevision: model.catalogRevision,
 			defaultOptionId: model.defaultOptionId,
 			defaultReasoningLevel: model.defaultReasoningLevel,
+			standardTemplateBinding,
 			options,
 		});
 		return validateRuntimeModelProjectionV1(
@@ -205,6 +283,9 @@ export function validateRuntimeModelProjectionV1(
 			content.options.some(
 				(option) =>
 					!option.endpoint.available ||
+					(content.standardTemplateBinding !== undefined &&
+						option.endpoint.protocol !==
+							content.standardTemplateBinding.protocol) ||
 					option.secretRef.configRevision > content.configurationRevision ||
 					new Set(option.reasoningLevels).size !==
 						option.reasoningLevels.length ||
@@ -224,6 +305,11 @@ export function validateRuntimeModelProjectionV1(
 			if (
 				configuration.source.kind !== "standard" ||
 				!model ||
+				(content.standardTemplateBinding !== undefined &&
+					(content.standardTemplateBinding.templateId !==
+						configuration.source.templateId ||
+						content.standardTemplateBinding.imageDigest !==
+							configuration.source.imageDigest)) ||
 				configuration.agentId !== content.agentId ||
 				configuration.revision !== content.configurationRevision ||
 				model.catalogRevision !== content.catalogRevision ||
@@ -331,4 +417,213 @@ export function runtimeModelInjectionV1(value: RuntimeModelProjectionV1) {
 			})),
 		],
 	};
+}
+
+/** V4 admission resolves only catalog and Driver facts; no model Key is read. */
+export async function projectRuntimeModelConfigurationV4(input: {
+	readonly configuration: ModelProjectionConfiguration;
+	readonly catalog: ModelCatalogAdapterV1;
+	readonly standardTemplateBinding: StandardTemplateModelBindingV1;
+	readonly signal: AbortSignal;
+}): Promise<RuntimeModelProjectionV4> {
+	return modelOperationV1(input.signal, async () => {
+		const { configuration } = input;
+		const source = configuration.source;
+		const standardTemplateBinding = standardTemplateModelBindingV1(source, [
+			input.standardTemplateBinding,
+		]);
+		const model = configuration.modelConfiguration;
+		if (
+			source.kind !== "standard" ||
+			standardTemplateBinding.driver !== "codex" ||
+			standardTemplateBinding.protocol !== "openai-responses-v1" ||
+			!model ||
+			[...configuration.environment, ...configuration.secrets].some(
+				({ name }) =>
+					name.startsWith("AGENT_INFRA_") ||
+					source.platformManagedKeys.includes(name),
+			)
+		)
+			throw new ModelConfigurationErrorV1();
+		const options: RuntimeModelProjectionV4["options"] = [];
+		for (const option of model.options) {
+			input.signal.throwIfAborted();
+			const endpoint = ModelEndpointV1Schema.parse(
+				await input.catalog.resolve(
+					{
+						endpointId: option.endpointId,
+						catalogRevision: model.catalogRevision,
+					},
+					{ signal: input.signal },
+				),
+			);
+			if (
+				endpoint.endpointId !== option.endpointId ||
+				!endpoint.available ||
+				endpoint.protocol !== standardTemplateBinding.protocol ||
+				(endpoint.authentication !== undefined &&
+					endpoint.authentication !== "bearer")
+			)
+				throw new ModelConfigurationErrorV1();
+			options.push({
+				optionId: option.optionId,
+				endpoint,
+				modelId: option.modelId,
+				reasoningLevels: [...option.reasoningLevels],
+			});
+		}
+		const content = keylessProjectionContentSchema.parse({
+			schemaVersion: 4,
+			agentId: configuration.agentId,
+			configurationRevision: configuration.revision,
+			catalogRevision: model.catalogRevision,
+			defaultOptionId: model.defaultOptionId,
+			defaultReasoningLevel: model.defaultReasoningLevel,
+			standardTemplateBinding,
+			options,
+		});
+		return validateRuntimeModelProjectionV4(
+			{
+				...content,
+				fingerprint: hash(JSON.stringify(content)),
+			},
+			configuration,
+		);
+	});
+}
+
+export function validateRuntimeModelProjectionV4(
+	value: unknown,
+	configuration?: ModelProjectionConfiguration,
+): RuntimeModelProjectionV4 {
+	try {
+		const projection = keylessProjectionSchema.parse(value);
+		runtimeModelConfigurationV4(projection);
+		const { fingerprint, ...content } = projection;
+		if (
+			fingerprint !== hash(JSON.stringify(content)) ||
+			content.standardTemplateBinding.driver !== "codex" ||
+			content.standardTemplateBinding.protocol !== "openai-responses-v1" ||
+			new Set(content.options.map(({ optionId }) => optionId)).size !==
+				content.options.length ||
+			!content.options.some(
+				({ optionId, reasoningLevels }) =>
+					optionId === content.defaultOptionId &&
+					reasoningLevels.includes(content.defaultReasoningLevel),
+			) ||
+			content.options.some(
+				({ endpoint, modelId, reasoningLevels }) =>
+					!endpoint.available ||
+					endpoint.protocol !== content.standardTemplateBinding.protocol ||
+					(endpoint.authentication !== undefined &&
+						endpoint.authentication !== "bearer") ||
+					new Set(reasoningLevels).size !== reasoningLevels.length ||
+					reasoningLevels.some(
+						(level) => !endpoint.capabilities.reasoningLevels.includes(level),
+					) ||
+					(endpoint.allowedModels !== null &&
+						!endpoint.allowedModels.includes(modelId)),
+			)
+		)
+			throw new ModelConfigurationErrorV1();
+		if (configuration) {
+			const model = configuration.modelConfiguration;
+			if (
+				configuration.source.kind !== "standard" ||
+				!model ||
+				content.standardTemplateBinding.templateId !==
+					configuration.source.templateId ||
+				content.standardTemplateBinding.imageDigest !==
+					configuration.source.imageDigest ||
+				configuration.agentId !== content.agentId ||
+				configuration.revision !== content.configurationRevision ||
+				model.catalogRevision !== content.catalogRevision ||
+				model.defaultOptionId !== content.defaultOptionId ||
+				model.defaultReasoningLevel !== content.defaultReasoningLevel ||
+				!isDeepStrictEqual(
+					model.options.map(
+						({ optionId, endpointId, modelId, reasoningLevels }) => ({
+							optionId,
+							endpointId,
+							modelId,
+							reasoningLevels: [...reasoningLevels],
+						}),
+					),
+					content.options.map(
+						({ optionId, endpoint, modelId, reasoningLevels }) => ({
+							optionId,
+							endpointId: endpoint.endpointId,
+							modelId,
+							reasoningLevels,
+						}),
+					),
+				)
+			)
+				throw new ModelConfigurationErrorV1();
+		}
+		return projection;
+	} catch {
+		throw new ModelConfigurationErrorV1();
+	}
+}
+
+export async function revalidateRuntimeModelCatalogV4(
+	projection: RuntimeModelProjectionV4,
+	catalog: ModelCatalogAdapterV1,
+	signal: AbortSignal,
+): Promise<void> {
+	await modelOperationV1(signal, async () => {
+		for (const option of validateRuntimeModelProjectionV4(projection).options) {
+			const endpoint = await catalog.resolve(
+				{
+					endpointId: option.endpoint.endpointId,
+					catalogRevision: projection.catalogRevision,
+				},
+				{ signal },
+			);
+			if (!isDeepStrictEqual(endpoint, option.endpoint))
+				throw new ModelConfigurationErrorV1();
+		}
+	});
+}
+
+export function runtimeModelInjectionV4(value: RuntimeModelProjectionV4) {
+	const projection = validateRuntimeModelProjectionV4(value);
+	const secretName = `model-config-${projection.fingerprint.slice(0, 48)}`;
+	const configuration = JSON.stringify(runtimeModelConfigurationV4(projection));
+	return {
+		secretName,
+		configuration,
+		env: [
+			{
+				name: runtimeModelConfigurationVariableV1,
+				valueFrom: {
+					secretKeyRef: {
+						name: secretName,
+						key: "configuration",
+						optional: false,
+					},
+				},
+			},
+		],
+	};
+}
+
+function runtimeModelConfigurationV4(projection: RuntimeModelProjectionV4) {
+	return RuntimeModelConfigurationV4Schema.parse({
+		schemaVersion: 4,
+		configVersion: `configuration-${projection.configurationRevision}-${projection.fingerprint}`,
+		defaultModelOptionId: projection.defaultOptionId,
+		defaultReasoningLevel: projection.defaultReasoningLevel,
+		modelOptions: projection.options.map(
+			({ optionId, endpoint, modelId, reasoningLevels }) => ({
+				modelOptionId: optionId,
+				protocol: endpoint.protocol,
+				authentication: endpoint.authentication ?? "bearer",
+				endpoint: endpoint.baseUrl,
+				model: modelId,
+				reasoningLevels,
+			}),
+		),
+	});
 }

@@ -62,6 +62,7 @@ const finish = async (stopReason) => {
 			.join("\n")}\n`,
 	);
 	isStreaming = false;
+	if (mode === "system-prefix-exit") process.exit(0);
 	send({ type: "agent_end" });
 	// Queued duplicates and unknown vendor frames must not create a second terminal.
 	send({ type: "agent_end" });
@@ -109,9 +110,35 @@ for await (const line of createInterface({ input: process.stdin })) {
 			continue;
 		}
 		isStreaming = true;
+		if (
+			[
+				"system-prefix",
+				"system-prefix-exit",
+				"plain-system",
+				"wrong-system-cwd",
+				"duplicate-system",
+			].includes(mode)
+		) {
+			const system = {
+				role: "system",
+				content: mode === "plain-system" ? "unrelated" : "",
+				sections: {
+					preamble: "Synthetic pinned Pi system prompt",
+					cwd: `<cwd>\n${mode === "wrong-system-cwd" ? "/unrelated" : process.cwd()}\n</cwd>`,
+				},
+				timestamp: Date.now(),
+			};
+			messages.push(system);
+			if (mode === "duplicate-system") messages.push({ ...system });
+		}
 		messages.push({
 			role: "user",
-			content: [{ type: "text", text: command.message }],
+			content: [
+				{
+					type: "text",
+					text: mode === "wrong-user" ? "unrelated input" : command.message,
+				},
+			],
 		});
 		if (mode === "wrong-response") {
 			send({

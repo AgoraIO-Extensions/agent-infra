@@ -14,6 +14,11 @@ const clients = [
 			"artifacts/openapi/pilot-browser.v1.openapi.json",
 		),
 		output: resolve(repositoryRoot, "apps/web/src/pilot/generated"),
+		runtimeConfigPath: resolve(
+			repositoryRoot,
+			"apps/web/src/pilot/generated-client-config",
+		),
+		dualAuthenticationPaths: ["/api/v1/audit", "/api/v1/audit/{auditId}"],
 	},
 	{
 		input: resolve(
@@ -21,15 +26,45 @@ const clients = [
 			"artifacts/openapi/pilot-browser.v2.openapi.json",
 		),
 		output: resolve(repositoryRoot, "apps/web/src/pilot/generated-v2"),
+		runtimeConfigPath: resolve(
+			repositoryRoot,
+			"apps/web/src/pilot/generated-client-config",
+		),
+		dualAuthenticationPaths: ["/api/v2/agents"],
 	},
 ];
 const command = process.argv[2];
 
-async function generate(input, directory) {
+async function generate(
+	input,
+	directory,
+	runtimeConfigPath,
+	dualAuthenticationPaths,
+) {
+	let specification = input;
+	if (dualAuthenticationPaths.length > 0) {
+		specification = JSON.parse(await readFile(input, "utf8"));
+		for (const path of dualAuthenticationPaths) {
+			const operation = specification.paths?.[path]?.get;
+			if (
+				JSON.stringify(operation?.security) !==
+				JSON.stringify([{ PlatformSession: [] }, { platformApiCredential: [] }])
+			) {
+				throw new Error(`Unexpected read authentication alternatives: ${path}`);
+			}
+			// The formal API accepts either scheme. SDK string auth selects Bearer;
+			// Cookie callers select the native Cookie security option explicitly.
+			operation.security = [{ platformApiCredential: [] }];
+		}
+	}
 	await createClient({
-		input,
+		input: specification,
 		output: directory,
-		plugins: ["@hey-api/client-fetch", "@hey-api/typescript", "@hey-api/sdk"],
+		plugins: [
+			{ name: "@hey-api/client-fetch", runtimeConfigPath },
+			"@hey-api/typescript",
+			"@hey-api/sdk",
+		],
 	});
 }
 
@@ -58,7 +93,14 @@ const temporaryRoot = await mkdtemp(
 try {
 	for (const [index, client] of clients.entries()) {
 		const generated = resolve(temporaryRoot, String(index));
-		await generate(client.input, generated);
+		await generate(
+			client.input,
+			generated,
+			client.runtimeConfigPath === undefined
+				? undefined
+				: resolve(generated, relative(client.output, client.runtimeConfigPath)),
+			client.dualAuthenticationPaths,
+		);
 		if (command === "--write") {
 			await rm(client.output, { recursive: true, force: true });
 			await cp(generated, client.output, { recursive: true });

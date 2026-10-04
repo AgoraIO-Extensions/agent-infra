@@ -1,4 +1,8 @@
 import { pathToFileURL } from "node:url";
+import {
+	type ObservabilityOptions,
+	startObservability,
+} from "@agent-infra/observability";
 import { serve } from "@hono/node-server";
 
 import {
@@ -11,10 +15,12 @@ import {
 	type PlatformApiAssembly,
 	type PlatformApiAssemblyInput,
 } from "./assembly.js";
+import { startPlatformResourceSampling } from "./resource-sampler.js";
 
 interface StartOptions {
 	dependencies: PlatformAppDependencies;
 	browserAuth?: BrowserAuthHandler;
+	observability?: ReturnType<typeof startObservability>;
 	log?: (message: string) => void;
 	port?: number;
 }
@@ -27,6 +33,7 @@ interface BrowserAuthHandler {
 interface DeploymentStartOptions {
 	log?: (message: string) => void;
 	moduleSpecifier?: string;
+	observabilityOptions?: Omit<ObservabilityOptions, "service">;
 	port?: number;
 }
 
@@ -59,7 +66,7 @@ function authUnavailable(): Response {
 export function startPlatformApi(options: StartOptions) {
 	const port = options.port ?? runtimePort(process.env.PORT, 3000);
 	const log = options.log ?? console.info;
-	const app = createPlatformApp(options.dependencies);
+	const app = createPlatformApp(options.dependencies, options.observability);
 	const browserAuth = options.browserAuth;
 	return serve(
 		{
@@ -116,15 +123,26 @@ export async function loadPlatformApiAssembly(
 	} catch {
 		throw new Error("Platform API deployment module is invalid");
 	}
-	let input: PlatformApiAssemblyInput;
+	let assembly: PlatformApiAssembly;
 	try {
-		input = await deployment.createPlatformApiAssemblyInput();
-	} catch {
-		throw new Error("Platform API deployment dependencies are unavailable");
+		let input: PlatformApiAssemblyInput;
+		try {
+			input = await deployment.createPlatformApiAssemblyInput();
+		} catch {
+			throw new Error("Platform API deployment dependencies are unavailable");
+		}
+		assembly = assemblePlatformApi(input);
+	} catch (error) {
+		try {
+			await deployment.browserAuth?.close?.();
+		} catch {
+			// Keep the startup failure; cleanup errors may contain private material.
+		}
+		throw error;
 	}
-	const assembly = assemblePlatformApi(input);
 	return {
 		dependencies: assembly.dependencies,
+		readResourceSnapshot: assembly.readResourceSnapshot,
 		browserAuth: deployment.browserAuth,
 		async close() {
 			try {
@@ -141,10 +159,24 @@ export async function startPlatformApiFromDeployment(
 ) {
 	const assembly = await loadPlatformApiAssembly(options.moduleSpecifier);
 	let server: ReturnType<typeof startPlatformApi> | undefined;
+	let observability: ReturnType<typeof startObservability> | undefined;
+	let resourceSampling:
+		| ReturnType<typeof startPlatformResourceSampling>
+		| undefined;
 	try {
+		observability = startObservability({
+			service: platformApiService,
+			...(process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT
+				? {
+						otlpEndpoint: process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT,
+					}
+				: {}),
+			...options.observabilityOptions,
+		});
 		server = startPlatformApi({
 			dependencies: assembly.dependencies,
 			browserAuth: assembly.browserAuth,
+			observability,
 			log: options.log,
 			port: options.port,
 		});
@@ -165,24 +197,67 @@ export async function startPlatformApiFromDeployment(
 			server?.once("error", onError);
 			if (server?.listening) onListening();
 		});
-		return { assembly, server };
+		if (observability.status().enabled) {
+			resourceSampling = startPlatformResourceSampling(
+				assembly.readResourceSnapshot,
+				observability,
+				options.observabilityOptions?.metricIntervalMs ?? 5000,
+			);
+		}
+		return {
+			assembly,
+			server,
+			observability,
+			stopResourceSampling: resourceSampling?.stop,
+		};
 	} catch (error) {
 		if (server?.listening) {
 			await new Promise<void>((resolve) => server?.close(() => resolve()));
 		}
-		await assembly.close();
+		try {
+			try {
+				await resourceSampling?.stop();
+			} finally {
+				await assembly.close();
+			}
+		} finally {
+			await observability?.close();
+		}
 		throw error;
 	}
 }
 
 export function createPlatformApiShutdown(
-	running: Awaited<ReturnType<typeof startPlatformApiFromDeployment>>,
+	running: Pick<
+		Awaited<ReturnType<typeof startPlatformApiFromDeployment>>,
+		"assembly" | "server"
+	> & {
+		readonly observability?: ReturnType<typeof startObservability>;
+		readonly stopResourceSampling?: () => Promise<void>;
+	},
 ) {
 	let shutdown: Promise<void> | undefined;
 	return () => {
-		shutdown ??= new Promise<void>((resolve, reject) =>
-			running.server.close((error) => (error ? reject(error) : resolve())),
-		).finally(() => running.assembly.close());
+		shutdown ??= (async () => {
+			const serverClosing = new Promise<void>((resolve, reject) =>
+				running.server.close((error) => (error ? reject(error) : resolve())),
+			);
+			try {
+				const settled = await Promise.allSettled([
+					serverClosing,
+					running.stopResourceSampling?.(),
+				]);
+				for (const result of settled) {
+					if (result.status === "rejected") throw result.reason;
+				}
+			} finally {
+				try {
+					await running.assembly.close();
+				} finally {
+					await running.observability?.close();
+				}
+			}
+		})();
 		return shutdown;
 	};
 }
@@ -213,7 +288,13 @@ export {
 };
 
 const entrypoint = process.argv[1];
-if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
+const entrypointUrl = entrypoint && pathToFileURL(entrypoint).href;
+// Multi-entry builds can move this guard into a sibling shared chunk.
+if (
+	entrypointUrl &&
+	(entrypointUrl === import.meta.url ||
+		entrypointUrl === new URL("./index.mjs", import.meta.url).href)
+) {
 	void startPlatformApiFromDeployment()
 		.then((running) => {
 			const shutdown = createPlatformApiShutdown(running);
@@ -226,8 +307,13 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 			process.once("SIGTERM", handleShutdown);
 			process.once("SIGINT", handleShutdown);
 		})
-		.catch(() => {
-			console.error("Platform API failed to start");
+		.catch((error: unknown) => {
+			console.error(
+				error instanceof Error &&
+					error.message === "PLATFORM_API_DEPLOYMENT_MODULE is required"
+					? error.message
+					: "Platform API failed to start",
+			);
 			process.exitCode = 1;
 		});
 }

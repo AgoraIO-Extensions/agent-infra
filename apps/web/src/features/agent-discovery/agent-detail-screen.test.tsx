@@ -23,10 +23,10 @@ describe("AgentDetailScreen", () => {
 		const chat = screen.getByRole("link", { name: "开始对话" });
 		const history = screen.getByRole("link", { name: "个人历史" });
 		expect(chat.getAttribute("href")).toBe(
-			"/agents/agent%3Atenant%2F01%3Fdraft%23one%25/conversations",
+			"/chat/agent%3Atenant%2F01%3Fdraft%23one%25",
 		);
 		expect(history.getAttribute("href")).toBe(
-			"/agents/agent%3Atenant%2F01%3Fdraft%23one%25/conversations?view=history",
+			"/chat/agent%3Atenant%2F01%3Fdraft%23one%25?view=history",
 		);
 	});
 	it("preserves the history entry but disables new conversations while unavailable", async () => {
@@ -50,10 +50,22 @@ describe("AgentDetailScreen", () => {
 			screen.getByRole("heading", { name: "Release assistant" }),
 		).toBeTruthy();
 		expect(screen.getByText("Helps the release team")).toBeTruthy();
-		expect(screen.getByText("可用")).toBeTruthy();
-		expect(screen.getByText("启动中")).toBeTruthy();
+		expect(
+			screen.getByText("可用", {
+				selector: '.status-line [data-slot="badge"]',
+			}),
+		).toBeTruthy();
+		expect(
+			screen.getByText("启动中", {
+				selector: '.status-line [data-slot="badge"]',
+			}),
+		).toBeTruthy();
 		expect(screen.getByText("Owner", { selector: "dt" })).toBeTruthy();
-		expect(screen.getByText("Web：可用、企微机器人：未配置")).toBeTruthy();
+		expect(
+			screen.getByRole("region", { name: "运行与渠道" }).textContent,
+		).toContain("Web可用企微机器人未配置");
+		expect(screen.getByText("模型范围", { selector: "dt" })).toBeTruthy();
+		expect(screen.getByText("默认选项", { selector: "dt" })).toBeTruthy();
 		expect(screen.getByText(/Primary model.*medium、high/)).toBeTruthy();
 		expect(
 			screen.getByText(
@@ -134,7 +146,43 @@ describe("AgentDetailScreen", () => {
 		expect(screen.queryByText(interactionUrl)).toBeNull();
 	});
 
-	it("omits a self-managed access entry from a platform-adapter projection", async () => {
+	it.each(["self-managed", "platform-managed"] as const)(
+		"omits nonempty model information for a self-managed Agent with %s identity",
+		async (identityResponsibility) => {
+			const agent = AgentProjectionV2Schema.parse({
+				...startingAgent,
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/agents/pilot@sha256:abc",
+					interactionMode: "self-managed",
+					identityResponsibility,
+				},
+			});
+			expect(agent.configuration.modelOptions.length).toBeGreaterThan(0);
+			expect(agent.configuration.defaultModelOptionId).toBeTruthy();
+			expect(agent.configuration.defaultReasoningLevel).toBeTruthy();
+
+			await renderWithAgentRouter(
+				<AgentDetailScreen state={{ kind: "ready", agent }} />,
+			);
+
+			expect(screen.queryByText("模型范围", { selector: "dt" })).toBeNull();
+			expect(screen.queryByText("默认选项", { selector: "dt" })).toBeNull();
+			for (const option of agent.configuration.modelOptions) {
+				expect(
+					screen.queryByText(option.displayName, { exact: false }),
+				).toBeNull();
+				for (const level of option.reasoningLevels)
+					expect(screen.queryByText(level, { exact: false })).toBeNull();
+			}
+			expect(screen.getByText("Owner", { selector: "dt" })).toBeTruthy();
+			expect(
+				screen.getByRole("link", { name: "返回 Agent 列表" }),
+			).toBeTruthy();
+		},
+	);
+
+	it("keeps model information for a platform-adapter projection without a self-managed access entry", async () => {
 		const agent = AgentProjectionV2Schema.parse({
 			...startingAgent,
 			interactionUrl: "https://agent.example.test",
@@ -150,6 +198,9 @@ describe("AgentDetailScreen", () => {
 		);
 
 		expect(screen.queryByRole("link", { name: "打开 Agent" })).toBeNull();
+		expect(screen.getByText("模型范围", { selector: "dt" })).toBeTruthy();
+		expect(screen.getByText("默认选项", { selector: "dt" })).toBeTruthy();
+		expect(screen.getByText(/Primary model.*medium、high/)).toBeTruthy();
 	});
 
 	it("omits a direct access entry when Platform owns self-managed identity", async () => {

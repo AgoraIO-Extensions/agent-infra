@@ -46,7 +46,11 @@ export {
 } from "./agent-configuration.js";
 export * from "./agent-management.js";
 export * from "./agent-runtime-presentation.js";
+export * from "./api-audit-identity.js";
+export * from "./application-api-credentials.js";
 export * from "./application-foundation.js";
+export * from "./application-material-grant.js";
+export * from "./application-registration.js";
 export * from "./application-revision.js";
 export * from "./audit-query.js";
 export * from "./conversation-dispatch.js";
@@ -61,6 +65,7 @@ export {
 } from "./conversation-generation-isolation.js";
 export * from "./conversation-operation-facts.js";
 export * from "./conversation-read-projection.js";
+export * from "./conversation-recent.js";
 export {
 	bindInputFileV1,
 	createFileAuthorityV1,
@@ -86,6 +91,10 @@ export {
 } from "./file-limits.js";
 export * from "./file-reconciliation.js";
 export * from "./idempotency.js";
+export * from "./personal-api-agent-read.js";
+export * from "./personal-api-credentials.js";
+export * from "./personal-api-task-authorization.js";
+export * from "./personal-relay-key.js";
 export * from "./secret-activation.js";
 export * from "./secret-key-rotation.js";
 export type {
@@ -95,5 +104,8 @@ export type {
 } from "./secret-record-attachments.js";
 export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";
+export * from "./wecom-channel.js";
+export * from "./wecom-setup.js";
+export * from "./wecom-setup-activation.js";
 export * from "./workload-reconciliation.js";
 export { parseWorkloadSecretRecoveriesV1 } from "./workload-secret-recovery.js";

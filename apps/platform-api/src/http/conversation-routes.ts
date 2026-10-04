@@ -1,15 +1,21 @@
+import { setTimeout as delay } from "node:timers/promises";
 import {
 	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
+	ConversationDetailProjectionV2Schema,
 	ConversationPageV1Schema,
 	ConversationProjectionV1Schema,
 	ConversationSseMessageV1Schema,
+	type ConversationSseMessageV2Schema,
 	CreateConversationRequestV1Schema,
 	ExecutionDetailProjectionV1Schema,
+	ExecutionDetailProjectionV2Schema,
 	framePilotSseMessageV1,
+	framePilotSseMessageV2,
 	MessageCommandRequestV1Schema,
 	MessageProjectionV1Schema,
 	ModelSelectionUpdateRequestV1Schema,
+	PersistedConversationEventV2Schema,
 	RegenerateCommandRequestV1Schema,
 	resolvePilotReplaySelectorV1,
 	StopCommandRequestV1Schema,
@@ -20,10 +26,13 @@ import {
 	ConversationExecutionError,
 	type ConversationExecutionUseCaseV1,
 	type ConversationStateResultV1,
+	parseConversationOperationFactV2,
 	parseConversationPersistedEventPayloadV1,
 	parseTaskAuthorizationBoundaryV1,
 	projectConversationExecutionV1,
 	projectConversationMessagesV1,
+	RecentPersonalConversationsError,
+	type RecentPersonalConversationsUseCaseV1,
 } from "@agent-infra/platform-core";
 import type {
 	ConversationExecutionDetailV1,
@@ -105,6 +114,7 @@ export interface ConversationQuery {
 }
 
 export interface ConversationRoutesDependencies {
+	readonly recent?: RecentPersonalConversationsUseCaseV1;
 	readonly files?: FileRoutesDependenciesV1;
 	readonly identity: IdentityAdapter;
 	readonly authorization: ConversationAuthorization;
@@ -120,7 +130,13 @@ export interface ConversationRoutesDependencies {
 		| "stop"
 	>;
 	readonly query: ConversationQuery;
+	/** Idle reauthorization interval, 1–30,000 ms; default 1,000 ms. */
 	readonly streamPollIntervalMs?: number;
+	/** Bound each authorization/replay read and SSE write, 1–30,000 ms; default 1,000 ms.
+	 * Idle detection is bounded by poll + two reads (default 3 s).
+	 * Terminal delivery adds at most two writes (default 2 s); stalls exclude event-loop starvation.
+	 */
+	readonly streamReadTimeoutMs?: number;
 }
 
 type ConversationProjection = ReturnType<
@@ -180,6 +196,15 @@ async function boundary(
 				error.code === "invalid_request"
 					? "INVALID_REQUEST"
 					: "DEPENDENCY_UNAVAILABLE",
+				metadata.traceId,
+			);
+		} else if (error instanceof RecentPersonalConversationsError) {
+			protocol = new HttpProtocolError(
+				error.code === "invalid_request"
+					? "INVALID_REQUEST"
+					: error.code === "revoked"
+						? "AUTHORIZATION_REVOKED"
+						: "DEPENDENCY_UNAVAILABLE",
 				metadata.traceId,
 			);
 		} else protocol = new HttpProtocolError("INTERNAL_ERROR", metadata.traceId);
@@ -298,13 +323,9 @@ function project<T>(projection: () => T, traceId: string): T {
 	}
 }
 
-function eventProjection(input: ConversationQueryEventV1): SseMessage {
-	const persisted = parseConversationPersistedEventPayloadV1(
-		input.eventPayload,
-	);
-	if (persisted.type !== input.eventType) {
-		throw new Error("Invalid persisted event type");
-	}
+function eventProjection(
+	input: ConversationQueryEventV1,
+): ReturnType<typeof ConversationSseMessageV2Schema.parse> {
 	const base = {
 		schemaVersion: 1,
 		kind: "event",
@@ -315,6 +336,24 @@ function eventProjection(input: ConversationQueryEventV1): SseMessage {
 		conversationCursor: input.conversationCursor,
 		occurredAt: input.occurredAt.toISOString(),
 	};
+	if (input.eventType === "execution.operation") {
+		if (input.eventSchemaVersion !== 2)
+			throw new Error("Operation event schema is invalid");
+		return PersistedConversationEventV2Schema.parse({
+			...base,
+			schemaVersion: 2,
+			type: "execution.operation",
+			payload: parseConversationOperationFactV2(input.eventPayload),
+		});
+	}
+	if (input.eventSchemaVersion !== undefined)
+		throw new Error("Persisted event schema is invalid");
+	const persisted = parseConversationPersistedEventPayloadV1(
+		input.eventPayload,
+	);
+	if (persisted.type !== input.eventType) {
+		throw new Error("Invalid persisted event type");
+	}
 	let projected: unknown;
 	if (persisted.type === "text.delta") {
 		projected = {
@@ -450,6 +489,17 @@ async function writeSseMessage(
 	});
 }
 
+async function writeSseMessageV2(
+	stream: { writeSSE(message: { id?: string; data: string }): Promise<void> },
+	message: ReturnType<typeof ConversationSseMessageV2Schema.parse>,
+): Promise<void> {
+	const frame = framePilotSseMessageV2(message);
+	await stream.writeSSE({
+		...(frame.id === undefined ? {} : { id: frame.id }),
+		data: JSON.stringify(frame.data),
+	});
+}
+
 function replaySelector(request: Request, traceId: string) {
 	const search = new URL(request.url).searchParams;
 	if (
@@ -472,36 +522,109 @@ function replaySelector(request: Request, traceId: string) {
 	}
 }
 
+type StreamAuthorization =
+	| { readonly outcome: "allowed"; readonly identity: IdentityContext }
+	| {
+			readonly outcome: "closed";
+			readonly reason:
+				| "revoked"
+				| "disabled"
+				| "session_invalid"
+				| "subject_changed"
+				| "dependency_unavailable"
+				| "invalid_response"
+				| "resource_unavailable";
+	  };
+
 async function stillAuthorized(
 	dependencies: ConversationRoutesDependencies,
 	request: Request,
 	initialUserId: string,
 	conversationId: string,
 	traceId: string,
-): Promise<"allowed" | "revoked" | "unavailable"> {
+): Promise<StreamAuthorization> {
+	// Keep dependency rejection distinct from a returned but invalid identity.
+	let resolved = false;
+	let identity: IdentityContext;
 	try {
-		const identity = await resolveIdentity(
-			dependencies.identity,
+		identity = await resolveIdentity(
+			{
+				resolve: async (currentRequest) => {
+					const value = await dependencies.identity.resolve(currentRequest);
+					resolved = true;
+					return value;
+				},
+				hydrateUsers: (ids) => dependencies.identity.hydrateUsers(ids),
+			},
 			request,
 			traceId,
 		);
-		if (identity.userId !== initialUserId) return "revoked";
-		const decision = await dependencies.authorization.authorize(identity, {
+	} catch (error) {
+		const code =
+			error instanceof HttpProtocolError ? error.body.code : undefined;
+		return {
+			outcome: "closed",
+			reason:
+				code === "AUTHORIZATION_REVOKED"
+					? "disabled"
+					: code === "AUTHENTICATION_REQUIRED"
+						? "session_invalid"
+						: resolved
+							? "invalid_response"
+							: "dependency_unavailable",
+		};
+	}
+	if (identity.userId !== initialUserId)
+		return { outcome: "closed", reason: "subject_changed" };
+	let decision: AuthorizationDecision;
+	try {
+		decision = await dependencies.authorization.authorize(identity, {
 			schemaVersion: 1,
 			operation: "conversation.read",
 			conversationId,
 		});
-		if (decision.outcome === "unavailable") return "unavailable";
-		if (decision.outcome !== "allowed") return "revoked";
-		return authorityMatches(decision.authority, identity)
-			? "allowed"
-			: "unavailable";
-	} catch (error) {
-		return error instanceof HttpProtocolError &&
-			(error.body.code === "AUTHENTICATION_REQUIRED" ||
-				error.body.code === "AUTHORIZATION_REVOKED")
-			? "revoked"
-			: "unavailable";
+	} catch {
+		return { outcome: "closed", reason: "dependency_unavailable" };
+	}
+	if (!decision || typeof decision !== "object")
+		return { outcome: "closed", reason: "invalid_response" };
+	if (decision.outcome === "unavailable")
+		return { outcome: "closed", reason: "dependency_unavailable" };
+	if (decision.outcome === "denied" || decision.outcome === "revoked")
+		return { outcome: "closed", reason: "revoked" };
+	if (
+		decision.outcome !== "allowed" ||
+		!authorityMatches(decision.authority, identity)
+	)
+		return { outcome: "closed", reason: "invalid_response" };
+	return { outcome: "allowed", identity };
+}
+
+/** Bounds an in-flight authorization or replay; late results never reach the stream. */
+async function streamRead<T>(
+	task: () => Promise<T>,
+	timeoutMs: number,
+	signal: AbortSignal,
+): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let abort: () => void = () => {};
+	const interrupted = new Promise<never>((_, reject) => {
+		abort = () => reject(new Error("Stream read interrupted"));
+		if (signal.aborted) return abort();
+		signal.addEventListener("abort", abort, { once: true });
+		timer = setTimeout(abort, timeoutMs);
+	});
+	try {
+		return await Promise.race([
+			interrupted,
+			Promise.resolve().then(() => {
+				if (signal.aborted) throw new Error("Stream read interrupted");
+				return task();
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+		signal.removeEventListener("abort", abort);
 	}
 }
 
@@ -555,6 +678,50 @@ export function registerConversationRoutes(
 	app: Hono,
 	dependencies: ConversationRoutesDependencies,
 ): void {
+	const pollIntervalMs = dependencies.streamPollIntervalMs ?? 1000;
+	const readTimeoutMs = dependencies.streamReadTimeoutMs ?? 1000;
+	for (const value of [pollIntervalMs, readTimeoutMs]) {
+		if (!Number.isInteger(value) || value < 1 || value > 30_000)
+			throw new Error(
+				"Conversation stream intervals must be integers from 1 to 30000 ms",
+			);
+	}
+	app.get("/api/v2/me/conversations/recent", (context) =>
+		boundary(context, async (metadata) => {
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			const page = parsePageQuery(context.req.raw, metadata.traceId);
+			if (!dependencies.recent)
+				return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			const result = await dependencies.recent.list(identity.userId, page);
+			return context.json(
+				project(
+					() =>
+						ConversationPageV1Schema.parse({
+							items: result.items.map((item) =>
+								ConversationProjectionV1Schema.parse({
+									schemaVersion: 1,
+									conversationId: item.conversationId,
+									agentId: item.agentId,
+									title: null,
+									status: item.status,
+									selectedModelOptionId: item.selectedModelOptionId,
+									selectedReasoningLevel: item.selectedReasoningLevel,
+									lastConversationCursor: item.lastConversationCursor,
+									createdAt: item.createdAt.toISOString(),
+									updatedAt: item.updatedAt.toISOString(),
+								}),
+							),
+							nextCursor: result.nextCursor,
+						}),
+					metadata.traceId,
+				),
+			);
+		}),
+	);
 	app.get("/api/v1/agents/:agentId/conversations", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
@@ -657,39 +824,58 @@ export function registerConversationRoutes(
 		}),
 	);
 
-	app.get("/api/v1/conversations/:conversationId", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const conversationId = context.req.param("conversationId");
-			const effective = await effectiveConversation(
-				dependencies.commands(identity),
-				conversationId,
-				metadata.traceId,
-			);
-			const detail = await query(
-				() => dependencies.query.get(scope(identity), conversationId),
-				metadata.traceId,
-			);
-			if (!detail) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
-			return context.json(
-				project(
-					() =>
-						ConversationDetailProjectionV1Schema.parse({
-							conversation: conversationProjection(
-								detail.conversation,
-								effective,
-							),
-							messages: messageProjections(detail),
-						}),
+	for (const version of [1, 2] as const)
+		app.get(`/api/v${version}/conversations/:conversationId`, (context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
 					metadata.traceId,
-				),
-			);
-		}),
-	);
+				);
+				const conversationId = context.req.param("conversationId");
+				const effective = await effectiveConversation(
+					dependencies.commands(identity),
+					conversationId,
+					metadata.traceId,
+				);
+				const detail = await query(
+					() => dependencies.query.get(scope(identity), conversationId),
+					metadata.traceId,
+				);
+				if (!detail) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+				const v2 = version === 2;
+				if (v2) {
+					return context.json(
+						project(
+							() =>
+								ConversationDetailProjectionV2Schema.parse({
+									schemaVersion: 2,
+									conversation: conversationProjection(
+										detail.conversation,
+										effective,
+									),
+									messages: messageProjections(detail),
+									events: detail.events.map(eventProjection),
+								}),
+							metadata.traceId,
+						),
+					);
+				}
+				return context.json(
+					project(
+						() =>
+							ConversationDetailProjectionV1Schema.parse({
+								conversation: conversationProjection(
+									detail.conversation,
+									effective,
+								),
+								messages: messageProjections(detail),
+							}),
+						metadata.traceId,
+					),
+				);
+			}),
+		);
 
 	app.put("/api/v1/conversations/:conversationId/model-selection", (context) =>
 		boundary(context, async (metadata) => {
@@ -868,134 +1054,232 @@ export function registerConversationRoutes(
 		}),
 	);
 
-	app.get(
-		"/api/v1/conversations/:conversationId/executions/:executionId",
-		(context) =>
-			boundary(context, async (metadata) => {
-				const identity = await resolveIdentity(
-					dependencies.identity,
-					context.req.raw,
-					metadata.traceId,
-				);
-				const conversationId = context.req.param("conversationId");
-				await effectiveConversation(
-					dependencies.commands(identity),
-					conversationId,
-					metadata.traceId,
-				);
-				const result = await query(
-					() =>
-						dependencies.query.getExecution(
-							scope(identity),
-							conversationId,
-							context.req.param("executionId"),
-						),
-					metadata.traceId,
-				);
-				if (!result) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
-				return context.json(
-					project(() => executionProjection(result), metadata.traceId),
-				);
-			}),
-	);
-
-	app.get("/api/v1/conversations/:conversationId/events", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const conversationId = context.req.param("conversationId");
-			await authorize(
-				dependencies,
-				identity,
-				{ schemaVersion: 1, operation: "conversation.read", conversationId },
-				metadata.traceId,
-				"sse",
-			);
-			const initialReplay = await query(
-				() =>
-					dependencies.query.replay(
-						scope(identity),
+	for (const version of [1, 2] as const)
+		app.get(
+			`/api/v${version}/conversations/:conversationId/executions/:executionId`,
+			(context) =>
+				boundary(context, async (metadata) => {
+					const identity = await resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					);
+					const conversationId = context.req.param("conversationId");
+					await effectiveConversation(
+						dependencies.commands(identity),
 						conversationId,
-						replaySelector(context.req.raw, metadata.traceId),
-					),
-				metadata.traceId,
-			);
-			if (!initialReplay) return fail("FORBIDDEN", metadata.traceId);
-			if (initialReplay.outcome === "events") {
-				try {
-					initialReplay.events.forEach(eventProjection);
-				} catch {
-					return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
-				}
-			}
-			const request = context.req.raw;
-			return streamSSE(
-				context,
-				async (stream) => {
-					let replay: ConversationReplayResultV1 = initialReplay;
-					let cursor = replay.resumeCursor;
-					while (!request.signal.aborted && !stream.aborted) {
-						const batch = replay;
-						if (batch.outcome === "reload") {
-							const authorization = await stillAuthorized(
-								dependencies,
-								request,
-								identity.userId,
+						metadata.traceId,
+					);
+					const result = await query(
+						() =>
+							dependencies.query.getExecution(
+								scope(identity),
 								conversationId,
-								metadata.traceId,
-							);
-							if (authorization !== "allowed") {
-								if (authorization === "revoked") {
-									await writeAuthorizationRevoked(stream, metadata.traceId);
-								}
-								return;
-							}
-							await writeSseMessage(
-								stream,
-								ConversationSseMessageV1Schema.parse({
-									schemaVersion: 1,
-									kind: "control",
-									type: "timeline.reload",
-									reason: batch.reason,
-									resumeCursor: batch.resumeCursor,
-								}),
-							);
-							return;
-						}
-						for (const persisted of batch.events) {
-							const authorization = await stillAuthorized(
-								dependencies,
-								request,
-								identity.userId,
-								conversationId,
-								metadata.traceId,
-							);
-							if (authorization !== "allowed") {
-								if (authorization === "revoked") {
-									await writeAuthorizationRevoked(stream, metadata.traceId);
-								}
-								return;
-							}
-							const message = eventProjection(persisted);
-							await writeSseMessage(stream, message);
-							cursor = persisted.conversationCursor;
-						}
-						await stream.sleep(dependencies.streamPollIntervalMs ?? 1000);
-						if (request.signal.aborted || stream.aborted) return;
-						const next = await dependencies.query.replay(
-							scope(identity),
-							conversationId,
-							{ kind: "cursor", value: cursor },
+								context.req.param("executionId"),
+							),
+						metadata.traceId,
+					);
+					if (!result) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+					if (version === 2) {
+						const projection = project(
+							() => executionProjection(result),
+							metadata.traceId,
 						);
-						if (!next) return;
-						replay = next;
+						return context.json(
+							project(
+								() =>
+									ExecutionDetailProjectionV2Schema.parse({
+										...projection,
+										schemaVersion: 2,
+										events: result.events.map(eventProjection),
+									}),
+								metadata.traceId,
+							),
+						);
 					}
-				},
-				async (_error, stream) => stream.close(),
-			);
-		}),
-	);
+					return context.json(
+						project(() => executionProjection(result), metadata.traceId),
+					);
+				}),
+		);
+
+	for (const version of [1, 2] as const)
+		app.get(
+			`/api/v${version}/conversations/:conversationId/events`,
+			(context) =>
+				boundary(context, async (metadata) => {
+					const v2 = version === 2;
+					const identity = await resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					);
+					const conversationId = context.req.param("conversationId");
+					await authorize(
+						dependencies,
+						identity,
+						{
+							schemaVersion: 1,
+							operation: "conversation.read",
+							conversationId,
+						},
+						metadata.traceId,
+						v2 ? "http" : "sse",
+					);
+					const initialReplay = await query(
+						() =>
+							dependencies.query.replay(
+								scope(identity),
+								conversationId,
+								replaySelector(context.req.raw, metadata.traceId),
+							),
+						metadata.traceId,
+					);
+					if (!initialReplay)
+						return fail(
+							v2 ? "RESOURCE_UNAVAILABLE" : "FORBIDDEN",
+							metadata.traceId,
+						);
+					if (initialReplay.outcome === "events") {
+						try {
+							initialReplay.events.forEach(eventProjection);
+						} catch {
+							return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+						}
+					}
+					const request = context.req.raw;
+					return streamSSE(
+						context,
+						async (stream) => {
+							const lifetime = new AbortController();
+							const abort = () => lifetime.abort();
+							request.signal.addEventListener("abort", abort, { once: true });
+							stream.onAbort(abort);
+							if (request.signal.aborted || stream.aborted) abort();
+							let currentIdentity = identity;
+							const write = async <T>(task: () => Promise<T>): Promise<T> => {
+								try {
+									return await streamRead(task, readTimeoutMs, lifetime.signal);
+								} catch (error) {
+									// Cancel the underlying reader to discard queued writes on backpressure.
+									stream.abort();
+									throw error;
+								}
+							};
+							const output = {
+								writeSSE: (message: { id?: string; data: string }) =>
+									write(() => stream.writeSSE(message)),
+							};
+							const terminate = async (
+								reason: Extract<
+									StreamAuthorization,
+									{ outcome: "closed" }
+								>["reason"],
+							) => {
+								if (lifetime.signal.aborted) return;
+								// SSE comments expose only a fixed terminal reason, never identity/resource data.
+								// They add no business event, cursor or new Contract Schema wire type.
+								await write(() =>
+									stream.write(`: conversation-stream.closed ${reason}\n\n`),
+								);
+								if (
+									!lifetime.signal.aborted &&
+									[
+										"revoked",
+										"disabled",
+										"session_invalid",
+										"subject_changed",
+									].includes(reason)
+								)
+									await writeAuthorizationRevoked(output, metadata.traceId);
+							};
+							const check = async () => {
+								if (lifetime.signal.aborted) return false;
+								let result: StreamAuthorization;
+								try {
+									result = await streamRead(
+										() =>
+											stillAuthorized(
+												dependencies,
+												request,
+												identity.userId,
+												conversationId,
+												metadata.traceId,
+											),
+										readTimeoutMs,
+										lifetime.signal,
+									);
+								} catch {
+									result = {
+										outcome: "closed",
+										reason: "dependency_unavailable",
+									};
+								}
+								if (lifetime.signal.aborted) return false;
+								if (result.outcome === "closed") {
+									await terminate(result.reason);
+									return false;
+								}
+								currentIdentity = result.identity;
+								return true;
+							};
+							try {
+								let replay: ConversationReplayResultV1 = initialReplay;
+								let cursor = replay.resumeCursor;
+								while (!lifetime.signal.aborted) {
+									const batch = replay;
+									if (batch.outcome === "reload") {
+										if (!(await check())) return;
+										await writeSseMessage(
+											output,
+											ConversationSseMessageV1Schema.parse({
+												schemaVersion: 1,
+												kind: "control",
+												type: "timeline.reload",
+												reason: batch.reason,
+												resumeCursor: batch.resumeCursor,
+											}),
+										);
+										return;
+									}
+									for (const persisted of batch.events) {
+										if (!(await check())) return;
+										const message = eventProjection(persisted);
+										if (v2) await writeSseMessageV2(output, message);
+										// V1 skips V2 facts but advances the durable cursor.
+										else if (message.schemaVersion === 1)
+											await writeSseMessage(output, message);
+										cursor = persisted.conversationCursor;
+									}
+									await delay(pollIntervalMs, undefined, {
+										signal: lifetime.signal,
+									});
+									if (!(await check())) return;
+									const next = await streamRead(
+										() =>
+											dependencies.query.replay(
+												scope(currentIdentity),
+												conversationId,
+												{ kind: "cursor", value: cursor },
+											),
+										readTimeoutMs,
+										lifetime.signal,
+									);
+									if (!next) {
+										await terminate("resource_unavailable");
+										return;
+									}
+									replay = next;
+								}
+							} catch {
+								await terminate("dependency_unavailable");
+							} finally {
+								request.signal.removeEventListener("abort", abort);
+								abort();
+							}
+						},
+						async (_error, stream) => stream.close(),
+					);
+				}),
+		);
 }

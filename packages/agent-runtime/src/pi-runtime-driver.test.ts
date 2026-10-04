@@ -215,6 +215,103 @@ it.each([
 	}
 });
 
+it("confirms a text Turn after the pinned Pi structured system prefix", async () => {
+	const f = await fixture("system-prefix");
+	try {
+		const result = await f.driver.execute(command);
+		expect(result.result).toEqual({ outcome: "accepted", status: "running" });
+		await vi.waitFor(async () =>
+			expect(
+				await f.driver.getStatus(result.nativeSessionRef, command.executionId),
+			).toBe("completed"),
+		);
+		await f.restart();
+		expect(
+			await f.driver.getStatus(result.nativeSessionRef, command.executionId),
+		).toBe("completed");
+		expect(
+			(
+				await f.driver.replayEvents(
+					result.nativeSessionRef,
+					command.executionId,
+				)
+			).filter((event) => event.type === "completed"),
+		).toHaveLength(1);
+	} finally {
+		await f.close();
+	}
+});
+
+it.each([false, true])(
+	"recovers a persisted Pi text Turn only with its input binding (missing: %s)",
+	async (missingBinding) => {
+		const f = await fixture("system-prefix-exit");
+		try {
+			const result = await f.driver.execute(command);
+			expect(result.result).toEqual({ outcome: "accepted", status: "running" });
+			await vi.waitFor(async () =>
+				expect(
+					await f.driver.getStatus(
+						result.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("unknown"),
+			);
+			if (missingBinding)
+				await rm(
+					join(f.path, result.nativeSessionRef, "native/prompt-binding.sha256"),
+				);
+			await f.restart();
+			expect(
+				await f.driver.getStatus(result.nativeSessionRef, command.executionId),
+			).toBe(missingBinding ? "unknown" : "completed");
+			expect(
+				(
+					await f.driver.replayEvents(
+						result.nativeSessionRef,
+						command.executionId,
+					)
+				).filter((event) => event.type === "completed"),
+			).toHaveLength(missingBinding ? 0 : 1);
+		} finally {
+			await f.close();
+		}
+	},
+);
+
+it.each(["plain-system", "wrong-system-cwd", "duplicate-system", "wrong-user"])(
+	"keeps a mismatched Pi Turn unknown (%s)",
+	async (mode) => {
+		const f = await fixture(mode);
+		try {
+			const result = await f.driver.execute(command);
+			await vi.waitFor(async () =>
+				expect(
+					await f.driver.getStatus(
+						result.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("unknown"),
+			);
+			expect(
+				(
+					await f.driver.replayEvents(
+						result.nativeSessionRef,
+						command.executionId,
+					)
+				).some((event) => event.type === "completed"),
+			).toBe(false);
+			expect(await f.driver.execute(command)).toEqual(result);
+			await f.restart();
+			expect(
+				await f.driver.getStatus(result.nativeSessionRef, command.executionId),
+			).toBe("unknown");
+		} finally {
+			await f.close();
+		}
+	},
+);
+
 it("fails closed without the workspace policy and retires the process", async () => {
 	const f = await fixture("missing-policy");
 	try {

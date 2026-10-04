@@ -67,19 +67,42 @@ setInterval(()=>{},1000);
 	expect(() => nativeKill(-handle.pid, 0)).toThrow();
 }, 10000);
 
-it("retires the native group before awaiting a stalled SDK cleanup", async () => {
-	fixture.nativeReturn = () => new Promise<void>(() => {});
-	const handle = await start(
-		"process.stdout.write('ready');setInterval(()=>{},1000)",
-	);
+it.each(["stalled", "rejected", "thrown"])(
+	"retires the native group before starting %s SDK cleanup once",
+	async (cleanup) => {
+		let groupGoneAtCleanup = false;
+		const nativeReturn = vi.fn(() => {
+			try {
+				process.kill(-handle.pid, 0);
+			} catch (error) {
+				groupGoneAtCleanup = (error as NodeJS.ErrnoException).code === "ESRCH";
+			}
+			if (cleanup === "thrown")
+				throw new Error("Synthetic SDK cleanup failure");
+			if (cleanup === "rejected")
+				return Promise.reject(new Error("Synthetic SDK cleanup failure"));
+			return new Promise<void>(() => {});
+		});
+		fixture.nativeReturn = nativeReturn;
+		const handle = await start(
+			"process.stdout.write('ready');setInterval(()=>{},1000)",
+		);
 
-	await expect(handle.close()).resolves.toBeUndefined();
-	expect(() => process.kill(-handle.pid, 0)).toThrow();
-}, 10000);
+		const closing = handle.close();
+		expect(handle.close()).toBe(closing);
+		await expect(closing).resolves.toBeUndefined();
+		expect(nativeReturn).toHaveBeenCalledTimes(1);
+		expect(groupGoneAtCleanup).toBe(true);
+		expect(() => process.kill(-handle.pid, 0)).toThrow();
+	},
+	10000,
+);
 
 it.each(["denied", "no-exit"])(
 	"bounds retirement when SIGKILL is %s",
 	async (failure) => {
+		const nativeReturn = vi.fn(async () => {});
+		fixture.nativeReturn = nativeReturn;
 		const handle = await start(
 			"process.on('SIGTERM',()=>{});process.stdout.write('ready');setInterval(()=>{},1000)",
 		);
@@ -100,6 +123,7 @@ it.each(["denied", "no-exit"])(
 			"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
 		);
 		expect(attempted).toBe(true);
+		expect(nativeReturn).not.toHaveBeenCalled();
 	},
 	6000,
 );

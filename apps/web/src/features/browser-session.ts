@@ -1,15 +1,18 @@
-import type { Client, RequestResult } from "../pilot/generated/client/index.js";
-import { getCurrentSession } from "../pilot/generated/sdk.gen.js";
+import type { Client } from "../pilot/generated/client/index.js";
+import {
+	getConnectionCapability,
+	getCurrentSession,
+} from "../pilot/generated/sdk.gen.js";
 import type {
 	BrowserSessionProjectionV1,
-	GetCurrentSessionErrors,
-	GetCurrentSessionResponses,
+	ConnectionCapabilityProjectionV1,
 } from "../pilot/generated/types.gen.js";
 
 export type BrowserSessionState =
 	| {
 			kind: "ready";
 			session: BrowserSessionProjectionV1;
+			connection?: ConnectionCapabilityProjectionV1;
 			sessionGeneration?: string;
 	  }
 	| { kind: "unavailable"; retryable: boolean };
@@ -28,13 +31,29 @@ function unavailable(error: { retryable?: boolean } | undefined) {
 export async function loadBrowserSession(
 	client?: Client,
 ): Promise<BrowserSessionState> {
-	const result: Awaited<
-		RequestResult<GetCurrentSessionResponses, GetCurrentSessionErrors, false>
-	> = await getCurrentSession<false>({
-		client,
-		responseStyle: "fields",
-		throwOnError: false,
-	});
+	const [result, capability] = await Promise.all([
+		getCurrentSession<false>({
+			client,
+			responseStyle: "fields",
+			throwOnError: false,
+		}),
+		(async () => {
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 3_000);
+			try {
+				return await getConnectionCapability<false>({
+					client,
+					responseStyle: "fields",
+					throwOnError: false,
+					signal: controller.signal,
+				});
+			} catch {
+				return undefined;
+			} finally {
+				clearTimeout(timeout);
+			}
+		})(),
+	]);
 	const generation = result.response?.headers.get(
 		"x-platform-session-generation",
 	);
@@ -42,6 +61,9 @@ export async function loadBrowserSession(
 		? {
 				kind: "ready",
 				session: result.data,
+				...(capability?.data && "status" in capability.data
+					? { connection: capability.data }
+					: {}),
 				...(generation && /^[A-Za-z0-9_-]{43}$/.test(generation)
 					? { sessionGeneration: generation }
 					: {}),

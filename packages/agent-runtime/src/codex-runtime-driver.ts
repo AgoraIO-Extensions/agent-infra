@@ -31,6 +31,7 @@ import {
 	codexConversationKey,
 	runCodexConnectionRecovery,
 	validateModelAccess,
+	validateModelEndpoint,
 } from "./codex-app-server-bridge.js";
 import {
 	type CodexConnectionEvidence,
@@ -86,6 +87,9 @@ import type {
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
+	RuntimeExternalActionAuthorizer,
+	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
 	RuntimeOriginalEvidenceRecoveryRef,
 } from "./driver.js";
@@ -106,7 +110,77 @@ type OpenCodexBridge = (
 	options: CodexAppServerBridgeOptions,
 ) => Promise<CodexAppServerTransport>;
 
+/** Host-owned current read authority, never a wire command or business permit. */
+export type CodexNativeCommandReadContext = Pick<
+	RuntimeOriginalEvidenceReadContext,
+	"signal" | "expiresAt" | "assertCurrent"
+> & {
+	readonly nativeSessionRef: string;
+	revalidate(): Promise<RuntimeOriginalEvidenceBinding>;
+};
+
+interface NativeMetadataReadBoundary {
+	readonly expiresAt: number;
+	bindRpc(rpc: CodexRpc): void;
+	assertCurrent(): void;
+	revalidate(): Promise<void>;
+	wait<T>(pending: Promise<T>): Promise<T>;
+}
+
+export interface CodexNativeStatusSelection {
+	readonly capabilityId: string;
+	readonly directoryRevision: string;
+	readonly parameters: Readonly<Record<string, never>>;
+}
+
+interface NativeCommandBinding {
+	readonly authority: RuntimeOriginalEvidenceBinding;
+	readonly nativeSessionRef: string;
+	readonly threadId: string;
+	readonly configVersion: string;
+	readonly requiredRuntime: CodexRuntimeRequirements;
+}
+
+/** Trusted deployment input; shape receipt does not verify installation or image provenance. */
+export interface CodexInstalledSkillDescriptorV1 {
+	readonly schemaVersion: 1;
+	readonly manifestSha256: string;
+	readonly manifest: {
+		readonly schemaVersion: 1;
+		readonly name: "workspace-summary";
+		readonly version: "0.1.0-candidate.1";
+		readonly source: {
+			readonly repository: "AgoraIO-Extensions/agent-infra";
+			readonly path: "deploy/runtime/skills/workspace-summary";
+		};
+		readonly runtime: {
+			readonly kind: "codex";
+			readonly version: "0.153.0";
+			readonly upstreamCommit: "41e22fee981a63b3698df7ed36bad393cda24715";
+		};
+		readonly extraRoot: "/opt/codex/agent-infra-skills";
+		readonly packageRoot: "/opt/codex/agent-infra-skills/workspace-summary";
+		readonly entryPath: "/opt/codex/agent-infra-skills/workspace-summary/SKILL.md";
+		readonly files: readonly [
+			{
+				readonly path: "SKILL.md";
+				readonly sizeBytes: number;
+				readonly sha256: string;
+			},
+		];
+		readonly packageDigest: {
+			readonly algorithm: "sha256-json-file-inventory-v1";
+			readonly sha256: string;
+		};
+	};
+	readonly deployment: {
+		readonly configVersion: string;
+		readonly imageSourceRevision: string;
+	};
+}
+
 export interface CodexRuntimeDriverOptions {
+	readonly installedSkill?: CodexInstalledSkillDescriptorV1;
 	/** Deployment-owned. Private execution still requires a verified native barrier. */
 	readonly nativeLane?: "official-model-only" | "private-callback";
 	readonly path: string;
@@ -116,9 +190,7 @@ export interface CodexRuntimeDriverOptions {
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly CodexRuntimeModelOption[];
-	readonly authorizeExternalAction?: (
-		action: RuntimeExternalActionAuthorization,
-	) => Promise<void>;
+	readonly authorizeExternalAction?: RuntimeExternalActionAuthorizer;
 	// Independent client delivery is trusted deployment input, never a Runtime command.
 	readonly connectionClient?: {
 		/** Independently configured service allowlist; never derived from the profile. */
@@ -364,6 +436,8 @@ interface CodexDriverState {
 
 interface PendingRequest {
 	method: string;
+	readOnly: boolean;
+	abandonedRead?: true;
 	resolve: (value: unknown) => void;
 	reject: (error: Error) => void;
 	nativeSelectionRejection: boolean;
@@ -1751,6 +1825,20 @@ class CodexSessionUnavailableError extends RuntimeHostError {
 	}
 }
 
+class CodexReadRejectedError extends RuntimeHostError {
+	constructor(unsupported: boolean) {
+		super(
+			unsupported
+				? "RUNTIME_CODEX_COMMAND_UNSUPPORTED"
+				: "RUNTIME_CODEX_UNAVAILABLE",
+			unsupported
+				? "Native command is unsupported"
+				: "Codex Runtime is unavailable",
+			503,
+		);
+	}
+}
+
 function protocolInvalidError() {
 	return new RuntimeHostError(
 		"RUNTIME_CODEX_PROTOCOL_INVALID",
@@ -1774,6 +1862,150 @@ function configurationInvalid(): never {
 		"Codex Runtime configuration is unavailable",
 		503,
 	);
+}
+
+function installedSkillRecord(value: unknown, keys: readonly string[]) {
+	if (
+		!isPlainRecord(value) ||
+		Reflect.ownKeys(value).length !== keys.length ||
+		!keys.every((key) =>
+			Object.hasOwn(Object.getOwnPropertyDescriptor(value, key) ?? {}, "value"),
+		)
+	)
+		configurationInvalid();
+	return value;
+}
+
+function installedSkillSha256(value: unknown): value is string {
+	return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+function receiveInstalledSkill(
+	value: unknown,
+	configVersion: string,
+): CodexInstalledSkillDescriptorV1 {
+	try {
+		const descriptor = installedSkillRecord(value, [
+			"schemaVersion",
+			"manifestSha256",
+			"manifest",
+			"deployment",
+		]);
+		const manifest = installedSkillRecord(descriptor.manifest, [
+			"schemaVersion",
+			"name",
+			"version",
+			"source",
+			"runtime",
+			"extraRoot",
+			"packageRoot",
+			"entryPath",
+			"files",
+			"packageDigest",
+		]);
+		const source = installedSkillRecord(manifest.source, [
+			"repository",
+			"path",
+		]);
+		const runtime = installedSkillRecord(manifest.runtime, [
+			"kind",
+			"version",
+			"upstreamCommit",
+		]);
+		const digest = installedSkillRecord(manifest.packageDigest, [
+			"algorithm",
+			"sha256",
+		]);
+		const deployment = installedSkillRecord(descriptor.deployment, [
+			"configVersion",
+			"imageSourceRevision",
+		]);
+		if (
+			!Array.isArray(manifest.files) ||
+			manifest.files.length !== 1 ||
+			Reflect.ownKeys(manifest.files).length !== 2 ||
+			!Object.hasOwn(
+				Object.getOwnPropertyDescriptor(manifest.files, "0") ?? {},
+				"value",
+			)
+		)
+			configurationInvalid();
+		const file = installedSkillRecord(manifest.files[0], [
+			"path",
+			"sizeBytes",
+			"sha256",
+		]);
+		if (
+			descriptor.schemaVersion !== 1 ||
+			!installedSkillSha256(descriptor.manifestSha256) ||
+			manifest.schemaVersion !== 1 ||
+			manifest.name !== "workspace-summary" ||
+			manifest.version !== "0.1.0-candidate.1" ||
+			source.repository !== "AgoraIO-Extensions/agent-infra" ||
+			source.path !== "deploy/runtime/skills/workspace-summary" ||
+			runtime.kind !== "codex" ||
+			runtime.version !== "0.153.0" ||
+			runtime.upstreamCommit !== "41e22fee981a63b3698df7ed36bad393cda24715" ||
+			manifest.extraRoot !== "/opt/codex/agent-infra-skills" ||
+			manifest.packageRoot !==
+				"/opt/codex/agent-infra-skills/workspace-summary" ||
+			manifest.entryPath !==
+				"/opt/codex/agent-infra-skills/workspace-summary/SKILL.md" ||
+			file.path !== "SKILL.md" ||
+			typeof file.sizeBytes !== "number" ||
+			!Number.isSafeInteger(file.sizeBytes) ||
+			file.sizeBytes < 1 ||
+			file.sizeBytes > 8192 ||
+			!installedSkillSha256(file.sha256) ||
+			digest.algorithm !== "sha256-json-file-inventory-v1" ||
+			!installedSkillSha256(digest.sha256) ||
+			typeof deployment.configVersion !== "string" ||
+			deployment.configVersion.length === 0 ||
+			deployment.configVersion !== configVersion ||
+			typeof deployment.imageSourceRevision !== "string" ||
+			!/^[0-9a-f]{40}$/.test(deployment.imageSourceRevision) ||
+			deployment.imageSourceRevision === "0".repeat(40)
+		)
+			configurationInvalid();
+		return Object.freeze({
+			schemaVersion: 1,
+			manifestSha256: descriptor.manifestSha256,
+			manifest: Object.freeze({
+				schemaVersion: 1,
+				name: manifest.name,
+				version: manifest.version,
+				source: Object.freeze({
+					repository: source.repository,
+					path: source.path,
+				}),
+				runtime: Object.freeze({
+					kind: runtime.kind,
+					version: runtime.version,
+					upstreamCommit: runtime.upstreamCommit,
+				}),
+				extraRoot: manifest.extraRoot,
+				packageRoot: manifest.packageRoot,
+				entryPath: manifest.entryPath,
+				files: Object.freeze([
+					Object.freeze({
+						path: file.path,
+						sizeBytes: file.sizeBytes,
+						sha256: file.sha256,
+					}),
+				] as const),
+				packageDigest: Object.freeze({
+					algorithm: digest.algorithm,
+					sha256: digest.sha256,
+				}),
+			}),
+			deployment: Object.freeze({
+				configVersion: deployment.configVersion,
+				imageSourceRevision: deployment.imageSourceRevision,
+			}),
+		});
+	} catch {
+		configurationInvalid();
+	}
 }
 
 function stateInvalid(): never {
@@ -1957,10 +2189,7 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 	const values: unknown = options.modelOptions;
 	if (!Array.isArray(values) || values.length === 0) configurationInvalid();
 	const routed = values.every(
-		(value) =>
-			isPlainRecord(value) &&
-			value.endpoint !== undefined &&
-			value.credential !== undefined,
+		(value) => isPlainRecord(value) && value.endpoint !== undefined,
 	);
 	if (
 		!routed &&
@@ -1972,9 +2201,18 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 	) {
 		configurationInvalid();
 	}
+	const keyed =
+		routed && values.every((value) => value.credential === undefined);
+	if (
+		routed &&
+		!keyed &&
+		values.some((value) => value.credential === undefined)
+	)
+		configurationInvalid();
 	for (const value of values) {
 		const expectedKeys = ["modelOptionId", "model", "reasoningLevels"];
-		if (routed) expectedKeys.push("endpoint", "credential");
+		if (routed) expectedKeys.push("endpoint");
+		if (routed && !keyed) expectedKeys.push("credential");
 		if (
 			!isPlainRecord(value) ||
 			!hasOnlyKeys(value, expectedKeys) ||
@@ -1996,10 +2234,12 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 			? `${createHash("sha256").update(value.modelOptionId).digest("hex")}/${value.model}`
 			: value.model;
 		if (routed) {
-			const access = validateModelAccess({
-				endpoint: value.endpoint,
-				credential: value.credential,
-			});
+			const access = keyed
+				? { endpoint: validateModelEndpoint(value.endpoint) }
+				: validateModelAccess({
+						endpoint: value.endpoint,
+						credential: value.credential,
+					});
 			if (!access) configurationInvalid();
 			routes.push({
 				internalModel,
@@ -2077,13 +2317,16 @@ function parsePinnedModelProfiles(value: unknown) {
 async function assertPinnedModelProfiles(
 	rpc: CodexRpc,
 	modelOptions: ReadonlyMap<string, ConfiguredCodexRuntimeModelOption>,
+	assertCurrent?: () => void,
+	metadataRead?: NativeMetadataReadBoundary,
 ) {
 	const profiles: PinnedModelProfile[] = [];
 	const cursors = new Set<string>();
 	const modelNames = new Set<string>();
 	let cursor: string | undefined;
 	for (let page = 0; page < maximumModelsListPages; page += 1) {
-		const result = await rpc.request(
+		if (metadataRead) await metadataRead.revalidate();
+		const pending = rpc.request(
 			"model/list",
 			{
 				includeHidden: true,
@@ -2091,6 +2334,9 @@ async function assertPinnedModelProfiles(
 				...(cursor ? { cursor } : {}),
 			},
 			parsePinnedModelProfiles,
+		);
+		const result = await (metadataRead?.wait(pending) ?? pending).finally(() =>
+			assertCurrent?.(),
 		);
 		for (const profile of result.profiles) {
 			if (modelNames.has(profile.model)) protocolInvalid();
@@ -2210,6 +2456,34 @@ function turnCompletedNotification(frame: CodexAppServerFrame) {
 	return { threadId: params.threadId, nativeTurnId: params.turn.id, status };
 }
 
+/** Project the pinned thread/read metadata; never return native thread contents. */
+function parseNativeCommandStatus(value: unknown, threadId: string) {
+	const thread = isPlainRecord(value) ? value.thread : undefined;
+	if (
+		!isPlainRecord(thread) ||
+		thread.id !== threadId ||
+		!Array.isArray(thread.turns) ||
+		thread.turns.length !== 0 ||
+		!isPlainRecord(thread.status)
+	)
+		protocolInvalid();
+	const status = thread.status;
+	if (status.type === "active") {
+		if (
+			!Array.isArray(status.activeFlags) ||
+			!status.activeFlags.every(
+				(flag) => flag === "waitingOnApproval" || flag === "waitingOnUserInput",
+			)
+		)
+			protocolInvalid();
+		return "active" as const;
+	}
+	if (status.type === "notLoaded") return "not_loaded" as const;
+	if (status.type === "idle") return "idle" as const;
+	if (status.type === "systemError") return "system_error" as const;
+	protocolInvalid();
+}
+
 class CodexRpc {
 	private readonly pending = new Map<number, PendingRequest>();
 	private readonly consuming: Promise<void>;
@@ -2231,12 +2505,23 @@ class CodexRpc {
 		nativeSelectionRejection = false,
 		allowHistoryMaterializationRetry = false,
 		deadlineAt = Date.now() + rpcRequestTimeoutMs,
+		signal?: AbortSignal,
 	) {
 		if (this.failed) unavailable();
+		const readOnly = method === "thread/read" && signal !== undefined;
+		if (
+			readOnly &&
+			(signal?.aborted ||
+				deadlineAt <= Date.now() ||
+				[...this.pending.values()].filter((entry) => entry.readOnly).length >=
+					16)
+		)
+			unavailable();
 		const id = this.nextRequestId++;
 		const response = new Promise<T>((resolve, reject) => {
 			this.pending.set(id, {
 				method,
+				readOnly,
 				resolve: (value) => resolve(parse(value)),
 				reject,
 				nativeSelectionRejection,
@@ -2246,20 +2531,49 @@ class CodexRpc {
 		void response.catch(() => {});
 		const timeoutError = unavailableError();
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		let interruptedRead = false;
+		let sent = false;
+		let onAbort: (() => void) | undefined;
 		const deadline = new Promise<never>((_, reject) => {
-			timer = setTimeout(
-				() => {
-					this.fail(timeoutError);
-					reject(timeoutError);
-				},
-				Math.max(0, deadlineAt - Date.now()),
-			);
+			const interrupt = () => {
+				if (readOnly) {
+					const pending = this.pending.get(id);
+					if (!pending || pending.abandonedRead) return;
+					interruptedRead = true;
+					if (pending && sent) pending.abandonedRead = true;
+					else this.pending.delete(id);
+					pending?.reject(timeoutError);
+				} else this.fail(timeoutError);
+				reject(timeoutError);
+			};
+			timer = setTimeout(interrupt, Math.max(0, deadlineAt - Date.now()));
+			if (readOnly && signal) {
+				onAbort = interrupt;
+				if (signal.aborted) interrupt();
+				else signal.addEventListener("abort", onAbort, { once: true });
+			}
 		});
+		void deadline.catch(() => {});
 		try {
-			await Promise.race([this.bridge.send({ id, method, params }), deadline]);
+			if (interruptedRead) throw timeoutError;
+			sent = true;
+			let send: Promise<void>;
+			try {
+				send = this.bridge.send({ id, method, params });
+			} catch (error) {
+				if (readOnly) this.fail(unavailableError());
+				throw error;
+			}
+			if (readOnly) {
+				// A response can arrive before the write callback. It completes the
+				// read, but a later genuine send failure must still retire this RPC.
+				void send.catch(() => this.fail(unavailableError()));
+			} else await Promise.race([send, deadline]);
 			return await Promise.race([response, deadline]);
 		} catch (error) {
+			if (readOnly && interruptedRead) throw timeoutError;
 			this.pending.delete(id);
+			if (error instanceof CodexReadRejectedError) throw error;
 			if (error instanceof CodexModelSelectionRejectedError) throw error;
 			if (error instanceof CodexSessionUnavailableError) throw error;
 			if (error instanceof CodexHistoryNotMaterializedError) throw error;
@@ -2269,6 +2583,7 @@ class CodexRpc {
 			throw failure;
 		} finally {
 			if (timer !== undefined) clearTimeout(timer);
+			if (onAbort) signal?.removeEventListener("abort", onAbort);
 		}
 	}
 
@@ -2315,6 +2630,8 @@ class CodexRpc {
 		}
 		if ("method" in frame) {
 			if (
+				"result" in frame ||
+				"error" in frame ||
 				typeof frame.method !== "string" ||
 				!isJsonRpcRequestId(frame.id) ||
 				!containedServerRequestMethods.has(frame.method)
@@ -2333,6 +2650,31 @@ class CodexRpc {
 		if (!pending) {
 			this.fail(protocolInvalidError());
 			return;
+		}
+		if (pending.readOnly) {
+			const error = frame.error;
+			if (
+				!hasOnlyKeys(frame, ["id", "jsonrpc", "result", "error"]) ||
+				(frame.jsonrpc !== undefined && frame.jsonrpc !== "2.0") ||
+				"result" in frame === "error" in frame ||
+				("error" in frame &&
+					(!isPlainRecord(error) ||
+						!hasOnlyKeys(error, ["code", "message", "data"]) ||
+						!Number.isSafeInteger(error.code) ||
+						!nonEmptyString(error.message)))
+			) {
+				this.fail(protocolInvalidError());
+				return;
+			}
+			if (pending.abandonedRead) {
+				this.pending.delete(frame.id);
+				return;
+			}
+			if (isPlainRecord(error)) {
+				pending.reject(new CodexReadRejectedError(error.code === -32601));
+				this.pending.delete(frame.id);
+				return;
+			}
 		}
 		if ("error" in frame) {
 			if (
@@ -2462,6 +2804,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		) => Promise<CodexAppServerTransport>,
 		private readonly assertContainedNativeConfiguration: (
 			rpc: CodexRpc,
+			assertCurrent?: () => void,
+			metadataRead?: NativeMetadataReadBoundary,
 		) => Promise<void>,
 		private readonly modelOptions: ReadonlyMap<
 			string,
@@ -2498,13 +2842,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			admission: CodexModelTurnAdmission,
 		) => void,
 		private readonly cancelModelTurn?: (turn: CodexModelTurn) => Promise<void>,
+		private readonly drainModelTurn?: (turn: CodexModelTurn) => Promise<void>,
 		private readonly revokeModelTurn?: (turn: CodexModelTurn) => void,
 		private readonly probeNative?: (
 			signal: AbortSignal,
 		) => Promise<RuntimeCapabilitiesV1>,
-		private readonly authorizeExternalAction?: (
-			action: RuntimeExternalActionAuthorization,
-		) => Promise<void>,
+		private readonly authorizeExternalAction?: RuntimeExternalActionAuthorizer,
 		private readonly connectionClientOptions?: CodexRuntimeDriverOptions["connectionClient"],
 		private readonly recoveryLaunch?: typeof runCodexConnectionRecovery,
 		private readonly recoveryDirectory?: string,
@@ -3185,18 +3528,27 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		});
 	}
 
-	private async rpc(nativeSessionRef: string) {
+	private async rpc(
+		nativeSessionRef: string,
+		assertCurrent?: () => void,
+		metadataRead?: NativeMetadataReadBoundary,
+	) {
+		if (metadataRead) await metadataRead.revalidate();
+		assertCurrent?.();
 		if (this.closed) unavailable();
 		this.assertRuntimeRequirements(this.session(nativeSessionRef));
 		const key = this.conversationKeyFor(nativeSessionRef);
 		const existing = this.conversationRpcs.get(key);
-		if (existing) return existing;
+		if (existing)
+			return metadataRead
+				? metadataRead.wait(Promise.resolve(existing))
+				: existing;
 		const inFlight = this.inFlightConversationRpcs.get(key);
-		if (inFlight) return inFlight;
-		const opening = this.openConversationRpc(key);
+		if (inFlight) return metadataRead ? metadataRead.wait(inFlight) : inFlight;
+		const opening = this.openConversationRpc(key, assertCurrent, metadataRead);
 		this.inFlightConversationRpcs.set(key, opening);
 		try {
-			return await opening;
+			return await (metadataRead?.wait(opening) ?? opening);
 		} finally {
 			if (this.inFlightConversationRpcs.get(key) === opening) {
 				this.inFlightConversationRpcs.delete(key);
@@ -3204,16 +3556,69 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 	}
 
-	protected async openConversationRpc(conversationKey: string) {
+	protected async openConversationRpc(
+		conversationKey: string,
+		assertCurrent?: () => void,
+		metadataRead?: NativeMetadataReadBoundary,
+	) {
 		let bridge: CodexAppServerTransport;
+		let resolvedBridge: CodexAppServerTransport | undefined;
+		let abandonedOpen = false;
+		let ownedOpening: Promise<CodexRpc> | undefined;
+		const retireProvisional = async (transport: CodexAppServerTransport) => {
+			// A bounded metadata query must never retire an already admitted shared RPC.
+			if (this.rpcsByTransport.has(transport)) return;
+			await transport.close?.().catch(() => {});
+			const currentOpening = this.inFlightConversationRpcs.get(conversationKey);
+			if (
+				this.conversationRpcs.has(conversationKey) ||
+				(currentOpening && currentOpening !== ownedOpening)
+			)
+				return;
+			this.revokeConnectionClient(conversationKey);
+			this.revokeModelConversation?.(
+				this.modelConversationKey(conversationKey),
+			);
+		};
 		try {
-			bridge = await this.openConversationBridge(conversationKey);
-		} catch {
+			if (metadataRead) await metadataRead.revalidate();
+			ownedOpening = this.inFlightConversationRpcs.get(conversationKey);
+			const pending = this.openConversationBridge(conversationKey);
+			void pending.then(
+				(transport) => {
+					resolvedBridge = transport;
+					if (abandonedOpen) void retireProvisional(transport).catch(() => {});
+				},
+				() => {},
+			);
+			bridge = await (metadataRead?.wait(pending) ?? pending);
+		} catch (error) {
+			abandonedOpen = true;
+			if (metadataRead) {
+				if (resolvedBridge)
+					void retireProvisional(resolvedBridge).catch(() => {});
+				if (error instanceof RuntimeHostError) throw error;
+				unavailable();
+			}
 			this.revokeConnectionClient(conversationKey);
 			this.revokeModelConversation?.(
 				this.modelConversationKey(conversationKey),
 			);
 			unavailable();
+		}
+		try {
+			metadataRead?.assertCurrent();
+			assertCurrent?.();
+		} catch (error) {
+			if (metadataRead) await retireProvisional(bridge);
+			else {
+				await bridge.close?.().catch(() => {});
+				this.revokeConnectionClient(conversationKey);
+				this.revokeModelConversation?.(
+					this.modelConversationKey(conversationKey),
+				);
+			}
+			throw error;
 		}
 		const opened = this.rpcsByTransport.get(bridge);
 		if (opened) {
@@ -3263,7 +3668,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		try {
 			// Every native process is admitted on its own; a contained
 			// configuration on one process never vouches for another.
-			await rpc.request(
+			if (metadataRead) await metadataRead.revalidate();
+			const initialize = rpc.request(
 				"initialize",
 				{
 					clientInfo: { name: "agent-infra-runtime", version: "1" },
@@ -3273,7 +3679,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					if (!isPlainRecord(value)) protocolInvalid();
 				},
 			);
-			await this.assertContainedNativeConfiguration(rpc);
+			await (metadataRead?.wait(initialize) ?? initialize).finally(() =>
+				assertCurrent?.(),
+			);
+			await this.assertContainedNativeConfiguration(
+				rpc,
+				assertCurrent,
+				metadataRead,
+			);
+			assertCurrent?.();
 		} catch (error) {
 			await rpc.close().catch(() => {});
 			if (error instanceof RuntimeHostError) throw error;
@@ -3327,6 +3741,40 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		options: CodexRuntimeDriverOptions,
 		openBridge: OpenCodexBridge,
 	) {
+		const installedSkillInput = options.installedSkill;
+		const installedSkill =
+			installedSkillInput === undefined
+				? undefined
+				: receiveInstalledSkill(installedSkillInput, options.configVersion);
+		const installedSkillReferences = () =>
+			installedSkillInput
+				? [
+						installedSkillInput.manifest,
+						installedSkillInput.manifest.source,
+						installedSkillInput.manifest.runtime,
+						installedSkillInput.manifest.files,
+						installedSkillInput.manifest.files[0],
+						installedSkillInput.manifest.packageDigest,
+						installedSkillInput.deployment,
+					]
+				: [];
+		const receivedSkillReferences = installedSkillReferences();
+		const assertInstalledSkillCurrent = () => {
+			if (options.installedSkill !== installedSkillInput)
+				configurationInvalid();
+			if (!installedSkill) return;
+			const current = receiveInstalledSkill(
+				options.installedSkill,
+				options.configVersion,
+			);
+			if (
+				JSON.stringify(current) !== JSON.stringify(installedSkill) ||
+				receivedSkillReferences.some(
+					(reference, index) => reference !== installedSkillReferences()[index],
+				)
+			)
+				configurationInvalid();
+		};
 		if (
 			options.nativeLane !== undefined &&
 			options.nativeLane !== "official-model-only" &&
@@ -3402,16 +3850,27 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			configurationInvalid();
 		const file = await CodexRuntimeDriver.openState(options.path);
 		let driver: CodexRuntimeDriver | undefined;
-		const modelTransport =
-			routes.length > 0
-				? await openCodexModelTransport(routes, {
-						modelOnly: !privateLane,
-						beforeRequest: (context, signal) => {
-							if (!driver) unavailable();
-							return driver.prepareModelRequest(context, signal);
-						},
-					})
-				: undefined;
+		let modelTransport:
+			| Awaited<ReturnType<typeof openCodexModelTransport>>
+			| undefined;
+		try {
+			assertInstalledSkillCurrent();
+			modelTransport =
+				routes.length > 0
+					? await openCodexModelTransport(routes, {
+							modelOnly: !privateLane,
+							beforeRequest: (context, signal) => {
+								if (!driver) unavailable();
+								return driver.prepareModelRequest(context, signal);
+							},
+						})
+					: undefined;
+			assertInstalledSkillCurrent();
+		} catch (error) {
+			await modelTransport?.close().catch(() => {});
+			await file.close().catch(() => {});
+			throw error;
+		}
 		const containedConfiguration = {
 			modelOnly: !privateLane,
 			model: defaultSelection.model,
@@ -3472,12 +3931,28 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const assertContainedConfigurationFor = async (
 			rpc: CodexRpc,
 			expected: Parameters<typeof assertContainedConfiguration>[1],
+			assertCurrent?: () => void,
+			metadataRead?: NativeMetadataReadBoundary,
 		) => {
-			await rpc.request("config/read", { includeLayers: false }, (value) => {
-				assertContainedConfiguration(value, expected);
-			});
+			if (metadataRead) await metadataRead.revalidate();
+			const pending = rpc.request(
+				"config/read",
+				{ includeLayers: false },
+				(value) => {
+					assertContainedConfiguration(value, expected);
+				},
+			);
+			await (metadataRead?.wait(pending) ?? pending).finally(() =>
+				assertCurrent?.(),
+			);
 			if (modelTransport) {
-				await assertPinnedModelProfiles(rpc, modelOptions);
+				await assertPinnedModelProfiles(
+					rpc,
+					modelOptions,
+					assertCurrent,
+					metadataRead,
+				);
+				assertCurrent?.();
 			}
 		};
 		const conversationContainedConfiguration = {
@@ -3486,8 +3961,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				? { connectionProfile: connectionClient.profile }
 				: {}),
 		};
-		const assertContainedNativeConfiguration = (rpc: CodexRpc) =>
-			assertContainedConfigurationFor(rpc, conversationContainedConfiguration);
+		const assertContainedNativeConfiguration = (
+			rpc: CodexRpc,
+			assertCurrent?: () => void,
+			metadataRead?: NativeMetadataReadBoundary,
+		) =>
+			assertContainedConfigurationFor(
+				rpc,
+				conversationContainedConfiguration,
+				assertCurrent,
+				metadataRead,
+			);
 		const probeNative = async (signal: AbortSignal) => {
 			signal.throwIfAborted();
 			// Dedicated temporary native HOME; never pass a real Conversation key or Store.
@@ -3576,7 +4060,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				modelTransport?.registerTurn,
 				modelTransport?.waitForModelRequest,
 				modelTransport?.abandonTurnAdmission,
-				modelTransport?.cancelTurn,
+				modelTransport
+					? async (turn) => {
+							await modelTransport.cancelTurn(turn);
+							await modelTransport.drainTurn(turn);
+						}
+					: undefined,
+				modelTransport?.drainTurn,
 				modelTransport?.revokeTurn,
 				probeNative,
 				options.authorizeExternalAction,
@@ -3592,6 +4082,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		try {
 			await driver.recoverUnconfirmedModelOperations();
+			assertInstalledSkillCurrent();
 			return driver;
 		} catch (error) {
 			await driver.close().catch(() => {});
@@ -3642,6 +4133,318 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				this.inFlightOperations.delete(key);
 			}
 		}
+	}
+
+	private nativeCommandBinding(read: CodexNativeCommandReadContext) {
+		let authority: RuntimeOriginalEvidenceBinding;
+		try {
+			if (
+				read.signal.aborted ||
+				!Number.isFinite(read.expiresAt) ||
+				read.expiresAt <= Date.now()
+			)
+				runtimeAuthorizationDenied();
+			authority = structuredClone(read.assertCurrent());
+		} catch {
+			runtimeAuthorizationDenied();
+		}
+		if (!isPlainRecord(authority)) runtimeAuthorizationDenied();
+		const scope = authority.scope;
+		if (
+			!isPlainRecord(authority.principal) ||
+			(authority.principal.kind !== "user" &&
+				authority.principal.kind !== "application") ||
+			!nonEmptyString(authority.principal.id) ||
+			!isPlainRecord(scope) ||
+			!nonEmptyString(scope.agentId) ||
+			!nonEmptyString(scope.conversationId) ||
+			!nonEmptyString(scope.executionId) ||
+			!Number.isSafeInteger(scope.sessionGeneration) ||
+			scope.sessionGeneration < 1
+		)
+			runtimeAuthorizationDenied();
+		let state: CodexDriverState;
+		try {
+			state = this.readState();
+		} catch {
+			unavailable();
+		}
+		const session = ownRecordValue(state.sessions, read.nativeSessionRef);
+		if (
+			!session ||
+			session.agentId !== scope.agentId ||
+			session.conversationId !== scope.conversationId ||
+			session.sessionGeneration !== scope.sessionGeneration ||
+			!ownRecordValue(session.executions, scope.executionId)
+		)
+			runtimeAuthorizationDenied();
+		if (this.closed || !session.threadId) unavailable();
+		const operation = ownRecordValue(
+			state.operations,
+			operationKey({
+				agentId: session.agentId,
+				conversationId: session.conversationId,
+				sessionGeneration: session.sessionGeneration,
+				kind: "submit-turn",
+				operationId: scope.executionId,
+			}),
+		);
+		if (
+			!operation ||
+			operation.nativeSessionRef !== read.nativeSessionRef ||
+			!nonEmptyString(operation.configVersion) ||
+			operation.configVersion !== this.configVersion ||
+			!session.requiredRuntime ||
+			session.requiredRuntime.lane !== "official-model-only" ||
+			!this.runtimeRequirementsMatch(session)
+		)
+			unavailable();
+		return {
+			authority,
+			nativeSessionRef: read.nativeSessionRef,
+			threadId: session.threadId,
+			configVersion: operation.configVersion,
+			requiredRuntime: session.requiredRuntime,
+		} satisfies NativeCommandBinding;
+	}
+
+	private assertNativeCommandBinding(
+		read: CodexNativeCommandReadContext,
+		binding: NativeCommandBinding,
+	) {
+		if (!isDeepStrictEqual(this.nativeCommandBinding(read), binding))
+			runtimeAuthorizationDenied();
+	}
+
+	private nativeMetadataRead(
+		read: CodexNativeCommandReadContext,
+		binding: NativeCommandBinding,
+	): NativeMetadataReadBoundary {
+		const signal = read.signal;
+		const expiresAt = read.expiresAt;
+		const conversationKey = codexConversationKey(binding.authority.scope);
+		let originalRpc: CodexRpc | undefined;
+		let failed = false;
+		let failure: unknown;
+		const invalidate = (): never => {
+			try {
+				runtimeAuthorizationDenied();
+			} catch (error) {
+				failed = true;
+				failure = error;
+				throw error;
+			}
+		};
+		const assertCurrent = () => {
+			try {
+				if (failed) throw failure;
+				if (
+					read.signal !== signal ||
+					read.expiresAt !== expiresAt ||
+					signal.aborted ||
+					expiresAt <= Date.now()
+				)
+					runtimeAuthorizationDenied();
+				this.assertNativeCommandBinding(read, binding);
+				if (
+					originalRpc &&
+					this.conversationRpcs.get(conversationKey) !== originalRpc
+				)
+					unavailable();
+			} catch (error) {
+				failed = true;
+				failure = error;
+				throw error;
+			}
+		};
+		const bounded = <T>(pending: Promise<T>) =>
+			new Promise<T>((resolve, reject) => {
+				let settled = false;
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				const finish = (complete: () => void) => {
+					if (settled) return;
+					settled = true;
+					if (timer !== undefined) clearTimeout(timer);
+					signal.removeEventListener("abort", interrupt);
+					complete();
+				};
+				const interrupt = () => {
+					try {
+						invalidate();
+					} catch (error) {
+						finish(() => reject(error));
+					}
+				};
+				// Observe late failures even when the original query has already expired.
+				void pending.then(
+					(value) => finish(() => resolve(value)),
+					(error) => finish(() => reject(error)),
+				);
+				try {
+					assertCurrent();
+					signal.addEventListener("abort", interrupt, { once: true });
+					timer = setTimeout(interrupt, Math.max(0, expiresAt - Date.now()));
+				} catch (error) {
+					finish(() => reject(error));
+				}
+			});
+		const revalidate = async () => {
+			assertCurrent();
+			let authority: RuntimeOriginalEvidenceBinding;
+			try {
+				authority = await bounded(
+					Promise.resolve().then(() => {
+						assertCurrent();
+						return read.revalidate();
+					}),
+				);
+				if (!isDeepStrictEqual(authority, binding.authority))
+					runtimeAuthorizationDenied();
+			} catch {
+				invalidate();
+			}
+			// Local original config/RPC can change while policy is pending.
+			assertCurrent();
+		};
+		return {
+			expiresAt,
+			bindRpc: (rpc) => {
+				if (originalRpc && originalRpc !== rpc) invalidate();
+				originalRpc = rpc;
+				assertCurrent();
+			},
+			assertCurrent,
+			revalidate,
+			async wait<T>(pending: Promise<T>) {
+				try {
+					return await bounded(pending);
+				} finally {
+					await revalidate();
+				}
+			},
+		};
+	}
+
+	private nativeCommandDirectory(binding: NativeCommandBinding) {
+		const revision = createHash("sha256")
+			.update(
+				JSON.stringify([
+					"codex-thread-read-v1",
+					binding.authority.principal.kind,
+					binding.authority.principal.id,
+					binding.authority.scope.agentId,
+					binding.authority.scope.conversationId,
+					binding.authority.scope.executionId,
+					binding.authority.scope.sessionGeneration,
+					binding.nativeSessionRef,
+					binding.threadId,
+					binding.configVersion,
+					binding.requiredRuntime,
+				]),
+			)
+			.digest("hex");
+		return {
+			revision,
+			capabilities: [
+				{
+					id: createHash("sha256")
+						.update(`thread/read:${revision}`)
+						.digest("hex"),
+					kind: "command" as const,
+					name: "查看原生会话状态",
+					description: "读取当前原生会话状态，不恢复会话或执行任务",
+					source: {
+						name: "Codex",
+						version: CODEX_APP_SERVER_V2_PROVENANCE.codexVersion,
+					},
+					parameters: [] as readonly never[],
+					effect: "read_only" as const,
+					availability: "available" as const,
+				},
+			],
+		};
+	}
+
+	private async readBoundNativeStatus(
+		read: CodexNativeCommandReadContext,
+		binding: NativeCommandBinding,
+		metadataRead: NativeMetadataReadBoundary,
+	) {
+		const rpc = await this.rpc(
+			binding.nativeSessionRef,
+			metadataRead.assertCurrent,
+			metadataRead,
+		);
+		metadataRead.bindRpc(rpc);
+		await metadataRead.revalidate();
+		const metadata = await metadataRead.wait(
+			rpc.request(
+				"thread/read",
+				{ threadId: binding.threadId, includeTurns: false },
+				(value) => value,
+				false,
+				false,
+				Math.min(metadataRead.expiresAt, Date.now() + rpcRequestTimeoutMs),
+				read.signal,
+			),
+		);
+		const result = {
+			status: parseNativeCommandStatus(metadata, binding.threadId),
+			readAt: new Date().toISOString(),
+		};
+		await metadataRead.revalidate();
+		return result;
+	}
+
+	async discoverNativeCommands(read: CodexNativeCommandReadContext) {
+		const binding = this.nativeCommandBinding(read);
+		const metadataRead = this.nativeMetadataRead(read, binding);
+		await this.readBoundNativeStatus(read, binding, metadataRead);
+		const directory = this.nativeCommandDirectory(binding);
+		await metadataRead.revalidate();
+		return directory;
+	}
+
+	async readNativeStatus(
+		selection: CodexNativeStatusSelection,
+		read: CodexNativeCommandReadContext,
+	) {
+		const binding = this.nativeCommandBinding(read);
+		const directory = this.nativeCommandDirectory(binding);
+		if (
+			!isPlainRecord(selection) ||
+			!hasOnlyKeys(selection, [
+				"capabilityId",
+				"directoryRevision",
+				"parameters",
+			]) ||
+			!isEmptyRecord(selection.parameters)
+		)
+			throw new RuntimeHostError(
+				"RUNTIME_CODEX_COMMAND_PARAMETERS_INVALID",
+				"Native command parameters are invalid",
+				400,
+			);
+		if (selection.directoryRevision !== directory.revision)
+			throw new RuntimeHostError(
+				"RUNTIME_CODEX_COMMAND_DIRECTORY_STALE",
+				"Native command directory is no longer current",
+				409,
+			);
+		if (selection.capabilityId !== directory.capabilities[0]?.id)
+			throw new RuntimeHostError(
+				"RUNTIME_CODEX_COMMAND_UNKNOWN",
+				"Native command is unavailable",
+				404,
+			);
+		const metadataRead = this.nativeMetadataRead(read, binding);
+		const status = await this.readBoundNativeStatus(
+			read,
+			binding,
+			metadataRead,
+		);
+		await metadataRead.revalidate();
+		return status;
 	}
 
 	async validateExternalAction(action: RuntimeExternalActionAuthorization) {
@@ -4217,6 +5020,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			executionId,
 		);
 		if (status !== "running") {
+			const terminalExecution = ownRecordValue(
+				this.session(nativeSessionRef).executions,
+				executionId,
+			);
+			if (!terminalExecution) unavailable();
+			await Promise.all(
+				this.executionNativeTurns(
+					nativeSessionRef,
+					terminalExecution.nativeTurnId,
+				).map((turn) => this.cancelModelTurn?.(turn)),
+			);
 			const state = this.readState();
 			const hasRunningCancellation = Object.values(state.operations).some(
 				(operation) =>
@@ -4227,15 +5041,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					operation.record.result.status === "running",
 			);
 			if (hasRunningCancellation) {
-				const session = this.session(nativeSessionRef);
-				const execution = ownRecordValue(session.executions, executionId);
-				if (!execution) unavailable();
-				await Promise.all(
-					this.executionNativeTurns(
-						nativeSessionRef,
-						execution.nativeTurnId,
-					).map((turn) => this.cancelModelTurn?.(turn)),
-				);
 				await this.update((current) => {
 					for (const operation of Object.values(current.operations)) {
 						const record = operation.record;
@@ -4315,8 +5120,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				threadId: session.threadId,
 				turnId: execution.nativeTurnId,
 			};
-			if (this.cancelModelTurn)
-				await this.cancelModelTurn(nativeTurn).catch(() => undefined);
+			if (this.cancelModelTurn) await this.cancelModelTurn(nativeTurn);
 			return this.updateExecutionStatus(
 				nativeSessionRef,
 				executionId,
@@ -4421,6 +5225,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					executionId,
 					execution.nativeTurnId,
 					items,
+				);
+			}
+			if (status !== "running") {
+				await Promise.all(
+					this.executionNativeTurns(
+						nativeSessionRef,
+						execution.nativeTurnId,
+					).map((turn) => this.cancelModelTurn?.(turn)),
 				);
 			}
 			const persistedStatus = await this.updateExecutionStatus(
@@ -5898,12 +6710,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 		}
 		if (!prepared.replay && request.phase === "source-terminal") {
-			try {
-				await this.cancelModelTurn?.({ ...request.source, conversationKey });
-			} catch {
-				// The native terminal receipt remains authoritative even if model cleanup
-				// is already closed or otherwise unavailable.
-			}
+			// A native receipt cannot close the Execution before this source's actual
+			// model request and original outcome write have drained successfully.
+			await this.cancelModelTurn?.({ ...request.source, conversationKey });
 		}
 		signal.throwIfAborted();
 		let saved = await this.update((state) => {
@@ -6285,34 +7094,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			});
 			this.notifyEventStream(streamKey);
 		};
-		try {
-			// Never call Host while holding the Driver durable-file queue. Host may
-			// still be awaiting this Driver's original submit result.
-			// Model and tool actions require the Host authorization seam; fail closed
-			// when this deployment did not supply it.
-			if (!this.authorizeExternalAction) unavailable();
-			const waiting = new AbortController();
-			try {
-				signal.throwIfAborted();
-				await Promise.race([
-					once(signal, "abort", { signal: waiting.signal }).then(() => {
-						throw unavailableError();
-					}),
-					this.authorizeExternalAction({
-						nativeSessionRef: prepared.nativeSessionRef,
-						executionId: prepared.executionId,
-						runtimeOperationId: prepared.executionId,
-						operationRef: prepared.fact.operationRef,
-						attemptRef: prepared.fact.attemptRef,
-						kind: "model",
-					}),
-				]);
-				signal.throwIfAborted();
-			} finally {
-				waiting.abort();
+		let authorization: RuntimeExternalActionAuthorizationResult | undefined;
+		const assertCurrent = () => {
+			// Re-read original state after each Host or durable-started await.
+			signal.throwIfAborted();
+			if (
+				authorization?.relayKey !== undefined &&
+				typeof authorization.revalidate !== "function"
+			)
+				unavailable();
+			const revalidation: unknown = authorization?.revalidate?.();
+			if (revalidation !== undefined) {
+				void Promise.resolve(revalidation).catch(() => {});
+				unavailable();
 			}
-			// Authorization may have waited while another original action failed
-			// or stop sealed this Execution. Recheck the committed Driver state.
 			const state = this.readState();
 			const session = ownRecordValue(state.sessions, prepared.nativeSessionRef);
 			const execution =
@@ -6329,6 +7124,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const sourceRecord = currentSource?.sourceRecord;
 			if (
 				!currentSource ||
+				currentSource.nativeSessionRef !== prepared.nativeSessionRef ||
+				currentSource.execution !== execution ||
+				currentSource.journal !== journal ||
 				currentSource.journal.nativeTurnId !== prepared.journalTurnId ||
 				this.closed ||
 				!session ||
@@ -6347,7 +7145,46 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				)
 			)
 				unavailable();
+			this.assertJournalOpen(journal);
 			this.assertExecutionConfiguration(state, session, execution);
+			const operation = this.executionOperation(state, session, execution);
+			const selection = this.operationSelection(operation);
+			if (
+				operation.admissionPending ||
+				operation.admissionRecoveryPending ||
+				selection?.model !== context.internalModel ||
+				selection.effort !== context.reasoningLevel
+			)
+				unavailable();
+		};
+		try {
+			// Never call Host while holding the Driver durable-file queue. Host may
+			// still be awaiting this Driver's original submit result.
+			// Model and tool actions require the Host authorization seam; fail closed
+			// when this deployment did not supply it.
+			if (!this.authorizeExternalAction) unavailable();
+			const waiting = new AbortController();
+			try {
+				signal.throwIfAborted();
+				authorization =
+					(await Promise.race([
+						once(signal, "abort", { signal: waiting.signal }).then(() => {
+							throw unavailableError();
+						}),
+						this.authorizeExternalAction({
+							nativeSessionRef: prepared.nativeSessionRef,
+							executionId: prepared.executionId,
+							runtimeOperationId: prepared.executionId,
+							operationRef: prepared.fact.operationRef,
+							attemptRef: prepared.fact.attemptRef,
+							kind: "model",
+						}),
+					])) || undefined;
+				signal.throwIfAborted();
+			} finally {
+				waiting.abort();
+			}
+			assertCurrent();
 		} catch (error) {
 			if (signal.aborted) {
 				await record("unknown", { failureCode: "interrupted" });
@@ -6362,6 +7199,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		return {
+			...(authorization?.relayKey === undefined
+				? {}
+				: { credential: authorization.relayKey }),
+			assertCurrent,
 			started: (startedAt) => record("started", { startedAt }),
 			finish: (outcome) =>
 				record(outcome.phase === "succeeded" ? "completed" : outcome.phase, {
@@ -6505,10 +7346,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 		const completed = turnCompletedNotification(frame);
 		if (completed) {
-			// A cancelled native Turn may still have an in-flight provider request;
-			// drain it before publishing the terminal event. Normal completion and
-			// failure already represent a settled provider request and must not cancel
-			// a transport that may be finishing its final response.
+			// Every native terminal must join the actual provider handler and its
+			// durable outcome before publishing the original terminal event. Ordinary
+			// completion drains without aborting the native final response.
 			const completedState = this.readState();
 			const resolvedCompleted = this.resolveNotificationJournal(
 				completedState,
@@ -6525,17 +7365,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const admissionPending =
 				resolvedCompleted?.pendingOperationKey !== undefined &&
 				this.modelTurnAdmissions.has(resolvedCompleted.pendingOperationKey);
-			if (
-				owningSession &&
-				(completed.status === "cancelled" || admissionPending)
-			)
-				await this.cancelModelTurn?.({
+			if (owningSession) {
+				const turn = {
 					conversationKey: this.modelConversationKey(
 						codexConversationKey(owningSession),
 					),
 					threadId: completed.threadId,
 					turnId: completed.nativeTurnId,
-				});
+				};
+				if (completed.status === "cancelled" || admissionPending)
+					await this.cancelModelTurn?.(turn);
+				else await this.drainModelTurn?.(turn);
+			}
 			const streamKey = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
@@ -7859,6 +8700,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeTurnId?: string,
 		admissionPending = false,
 	) {
+		if (
+			result.outcome === "accepted" &&
+			result.status !== "running" &&
+			nativeTurnId
+		) {
+			await Promise.all(
+				this.executionNativeTurns(nativeSessionRef, nativeTurnId).map((turn) =>
+					this.cancelModelTurn?.(turn),
+				),
+			);
+		}
 		let record = driverRecord(command, {
 			schemaVersion: command.schemaVersion,
 			agentId: command.agentId,

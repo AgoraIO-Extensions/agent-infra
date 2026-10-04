@@ -39,6 +39,7 @@ type AgentApplicationFormProps = { cancelAction?: ReactNode } & (
 	| {
 			mode: "create";
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
+			deploymentConfigurationRetryable?: boolean;
 			onSubmit: (body: AgentApplicationCreateRequestV2Writable) => void;
 			serverError?: AgentApplicationServerError | null;
 			submitting: boolean;
@@ -47,6 +48,7 @@ type AgentApplicationFormProps = { cancelAction?: ReactNode } & (
 			action: AgentApplicationEditAction;
 			application: AgentApplicationProjectionV2;
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
+			deploymentConfigurationRetryable?: boolean;
 			mode: "update";
 			onSubmit: (body: AgentApplicationUpdateRequestV2Writable) => void;
 			serverError?: AgentApplicationServerError | null;
@@ -445,6 +447,11 @@ function ModelRows({
 								>
 									允许的推理档位
 								</legend>
+								{!selectedModel && (
+									<p className="text-muted-foreground text-sm">
+										选择模型后显示可用档位。
+									</p>
+								)}
 								{(selectedModel?.reasoningLevels ?? []).map((level) => {
 									const selected = model.reasoningLevels
 										.split("\n")
@@ -635,6 +642,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const configuration = application?.configuration;
 	const persistedModelOptions = configuration?.modelOptions;
 	const deployment = props.deploymentConfiguration;
+	const deploymentRetryable = props.deploymentConfigurationRetryable ?? false;
 	const modelEndpoints = deployment.modelCatalog.endpoints;
 	const [name, setName] = useState(application?.name ?? "");
 	const [description, setDescription] = useState(
@@ -933,7 +941,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			? "部署选项已过期，请重新加载后再提交。"
 			: deployment.status === "unavailable" ||
 					deployment.modelCatalog.status === "unavailable"
-				? "部署选项暂不可用，请重新加载；标准模板申请暂不能提交。"
+				? deploymentRetryable
+					? "部署选项暂不可用，请重新加载；标准模板申请暂不能提交。"
+					: "部署选项暂不可用，请联系管理员。"
 				: deployment.status === "empty" ||
 						(deployment.templates.length === 0 && sourceKind === "standard") ||
 						(deployment.modelCatalog.status === "empty" &&
@@ -1515,8 +1525,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							模型配置
 						</legend>
 						<p className="text-muted-foreground text-sm">
-							标准模板在申请时必须配置模型。填写获准端点和模型
-							ID，允许的推理档位每行一项；默认项须属于本次配置。
+							标准模板在申请时必须配置模型。选择获准模型和允许的推理档位，填写模型凭证；默认项须属于本次配置。
 						</p>
 						{props.mode === "update" ? (
 							<div className="space-y-2">

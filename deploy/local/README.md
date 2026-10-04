@@ -5,6 +5,9 @@
 任务投递仍由 [#482](https://github.com/AgoraIO-Extensions/agent-infra/issues/482) 的唯一生产
 循环提供，Connection 使用自己的服务、身份与授权。
 
+API 与 Worker 的数据库地址由本入口统一生成；Worker 的环境变量优先级及 namespace
+约束见[正式 Worker 部署说明](../platform-worker/README.md#打包与启动)。
+
 ## 配置
 
 复制 [.env.example](.env.example) 到仓库外的本地配置文件，填写本地 Docker context、独立
@@ -15,24 +18,35 @@ context、已创建的 namespace 和 Worker values 文件。执行前载入所�
 暴露端口与 kubeconfig 的 loopback API 地址；Helm release 和 namespace 均与 Compose
 project 同名。普通停止保留数据库、对象存储卷和 Agent PVC。
 
-API 专属目录至少包含 `platform-api.mjs`。该模块导出
-`createPlatformApiAssemblyInput()`，调用
-[`createProductionPlatformApiAssemblyInputV1`](../../apps/platform-api/src/deployment.ts)。
-容器内可从 `../dist/index.mjs` 导入工厂，数据库 URL 取 `PLATFORM_DATABASE_URL`。部署输入为：
-
-使用第一方 LDAP 浏览器登录时，同一模块还须导出 `browserAuth`。用
-`createPostgresLdapBrowserDeployment()` 创建一次并将其 `identity` 传入装配输入、
-`browserAuth` 作为模块导出；两者因而共用 LDAP Adapter 和 Platform PostgreSQL
-会话表。API 只将 `/auth/login` 和 `/auth/logout` 交给此处理器；处理器失败返回
-无正文 503。先执行 Platform 增量迁移；跨 API 副本的到期和撤销由 PostgreSQL
-Store 执行，测试用内存 Store 不能作为正式部署配置。该工厂还要求高熵
-`trustedProxyToken`，必须只在 TLS 代理和 API 专属配置中提供；代理覆盖客户端提交的
-`X-Platform-Proxy-Token`，API 才接受代理转发的 HTTP 登录请求。现有本地 nginx
-配置尚未注入该令牌，真实浏览器登录需先完成代理与 API 双端私有配置验收。
+API 镜像内置[部署模块](../../apps/platform-api/src/deployment-entry.ts)，固定从
+`file:///app/dist/deployment.mjs` 加载。API 专属目录只提供受审阅的
+`configuration.mjs` 及其私有导入；所需导出及受信身份、目录、Registry 和模型
+依赖见 [API 部署说明](../platform-api/README.md)。内置模块从
+`PLATFORM_DATABASE_URL` 取得数据库 URL，建立第一方 LDAP Adapter 和 PostgreSQL
+会话 Store，再将同一个身份 Adapter 交给生产 API 装配工厂。API 只将
+`/auth/login` 和 `/auth/logout` 交给浏览器处理器；处理器失败返回无正文 503。
+先执行 Platform 增量迁移；跨 API 副本的到期和撤销由 PostgreSQL Store 执行，
+测试用内存 Store 不能作为正式部署配置。工厂还要求高熵
+`trustedProxyToken`，只从 Compose Secret 读取。将 32–96 字节随机值
+编码为 Base64URL，保存在用户持有、权限为 `0600` 的
+`PLATFORM_LOCAL_PROXY_TOKEN_FILE`；其他用户可读或符号链接文件在启动前被拒绝。
+`migrate` 与 `up` 在当前 project 的 `0700` 私有状态目录生成 nginx 配置和 API 专用的只读运行副本，
+供容器中的非 root API 通过 Compose Secret `/run/secrets/platform_proxy_token` 读取；
+内置 API 模块将该值传给工厂。代理固定覆盖客户端提交的 `X-Platform-Proxy-Token`；正常
+`stop` 删除两个生成文件，即使源令牌变量已移除也可继续清理。默认状态目录为
+`${XDG_STATE_HOME:-$HOME/.local/state}/agent-infra/local`，
+可通过 `PLATFORM_LOCAL_STATE_DIRECTORY` 指定绝对路径。配置和令牌不进入镜像、源码或
+Compose 环境变量。选定 Docker context 必须能读取 API 配置、TLS 和生成状态目录；
+源令牌只由本地主机上的启动脚本读取。
+`up` 在开放 Web 前从本机 loopback 以 `HEAD /auth/login` 检查 API：正确令牌须返回
+`405`，错误令牌须返回 `400`。`HEAD` 不触发 LDAP 登录或 Authentik OIDC 跳转；
+这只验证挂载的部署模块与代理令牌接线，
+不提交账号密码，也不代表 LDAP 登录或当前账号复核已经通过；探测失败时 API/Web 保持关闭。
+真实浏览器登录仍需当前 LDAP 与账号事实验收。
 
 | 输入 | 来源和要求 |
 | --- | --- |
-| `identity`、`loadAuthorityContext` | 获准身份服务的真实 Adapter 和当前目录查询；每次敏感操作重新解析，不能固定管理员或信任浏览器身份字段 |
+| `ldap`、`isPlatformDisabled`、`organizationIds`、`loadAuthorityContext` | 第一方 LDAP 配置、当前 Platform 停用状态、目录组织映射和权限事实；每次敏感操作重新解析，不能固定管理员或信任浏览器身份字段 |
 | `registry`、`templates`、`imageRepository` | 实际 OCI endpoint、按当前主体和 Digest 判断的准入政策、不可变标准模板与允许配置键；镜像 repository 与 Worker 保持一致 |
 | `modelCatalog` | 相同 revision 的有效获准端点快照；模型和推理强度必须在快照范围内 |
 | `encryptionKeys` | 版本化加密公钥；不含 Worker 解密私钥 |
@@ -72,6 +86,9 @@ Worker 的模块接口、私有文件挂载和 Runtime 授权以
 `configurationModuleSecretRef`、`runtimeAuthSecretRef` 和 Worker 镜像 Digest；
 Kubernetes 凭证由 Pod ServiceAccount 提供。Worker 与 API 使用同一模板 Digest、
 ModelCatalog revision 和资源政策。挂载或 rollout 成功仍需后续业务验收。
+Worker 访问的内部 Host 或模型预检 Relay 使用私有 CA 时，本地 values 还需指定
+`platformWorker.trustedCaSecretRef`，指向已创建的 CA bundle Secret；Helm 只把它挂给
+Worker。Agent Pod 执行期 Relay 的 CA 信任和地址匹配须在实际模型请求中另行验证。
 
 `PLATFORM_LOCAL_KUBECONFIG` 必须为可读绝对路径，context 必须是 `kind-*` 且当前集群
 API 使用与所选 Docker context 的 kind control-plane 一致的 loopback 端口，namespace
@@ -95,7 +112,8 @@ Kubernetes 对象及预先由其他流程连接的链路均被拒绝。Helm 卸�
 链路，须先核对该测试容器的网络归属，再人工处理孤立连接。
 脚本会固定关闭 Helm migration、目录服务及拓扑占位进程；升级前关闭已有 Web/API，
 启动数据服务并等待 Worker Deployment 就绪，再开放 Compose 中的 Web/API。Worker
-启动失败时 Web/API 保持关闭。
+启动失败时 Web/API 保持关闭。每次 `up` 都重建 API 与 Web 容器，使新生成的代理令牌
+文件重新绑定；PostgreSQL 与对象存储容器不因此重建。
 
 ```bash
 bash deploy/local/platform.sh up
@@ -105,6 +123,9 @@ bash deploy/local/platform.sh status
 模型出站由 Worker 唯一调谐的 `modelEgress` 与 `dnsEgress` 配置：只允许固定 IP 或指定
 namespace/Pod 标签和端口，缺省拒绝全部出站。不增加另一条 allow-all NetworkPolicy。
 Worker 预检与 Agent 模型调用都必须在真实网络上验证。
+隔离 kind 的合成 A/B HTTPS 目标、测试 CA 和脱敏计数回执可通过
+[受控 Relay 探针](relay-probe.md)准备；它只为相同 Pod/Profile 的正负例提供目标，
+不能替代真实 Provider 或 Connection 验收。
 
 停止时先通过 Platform 正常停止 Agent 并确认调谐完成。脚本先关闭 Web/API 写入口，
 把 Worker 缩至零副本并等待退出，再核对 namespace 中的 Agent StatefulSet 已缩至零副本
@@ -123,11 +144,35 @@ bash deploy/local/platform.sh stop
 project 执行下面的命令；它删除 PostgreSQL 和对象存储的数据卷。Agent PVC 的删除也必须
 单独确认具体本地集群和 PVC 名称，不能通过普通停止命令隐式完成。
 
+启动前 up 会检查 API configuration.mjs 的语法并用 Helm 渲染校验 Worker values 和固定部署
+模块；在本地数据库 Secret 建好后，还会通过显式 kubeconfig/context/namespace 逐项读取渲染出的
+Worker Secret 引用，确认 Secret 存在且包含所需 key，再开始 Helm rollout。正式容器启动时还会
+校验可信 LDAP 状态验证器、持久身份映射、组织解析、Registry/ModelCatalog、加密公钥和资源
+Profile 的导出形状；失败只返回固定诊断，不输出私有模块异常或 Secret 内容。可单独运行
+bash deploy/local/platform.sh validate 做 API syntax 与静态 Helm render 检查；它不替代 live
+Secret/key readback。
+
 ```bash
 docker --context "$PLATFORM_LOCAL_DOCKER_CONTEXT" compose \
   --project-name "$PLATFORM_LOCAL_PROJECT" \
   -f docker-compose.yml -f deploy/local/compose.yaml down --volumes
 ```
+
+推荐使用带精确项目名确认的入口，它会先执行完整 stop，再删除该 Compose project 的
+数据卷；不会删除 Agent PVC：
+
+```bash
+bash deploy/local/platform.sh reset "$PLATFORM_LOCAL_PROJECT"
+```
+
+只有在已经核对当前 kind 集群、namespace 和 PVC 名称确实属于本地测试 Agent 时，才设置
+PLATFORM_LOCAL_AGENT_PVC_NAMES 为逗号分隔的 PVC 名称。每个 PVC 必须符合 Runtime 的
+canonical `agent-${sha256(agentId)[0:32]}-data` 命名、owner label/agent-id annotation
+关系，并在当前 namespace 中存在同名且 metadata 仍匹配的 Agent StatefulSet；脚本逐个删除
+并等待完成。Runtime producer 不给 PVC 添加 ownerReference，因此 reset 读取 StatefulSet
+作为实际 workload 归属证明；缺失或删除中的 StatefulSet 会 fail closed。
+未设置时所有 Agent PVC 保留。Reset 仍不会删除其它 namespace、业务卷或未通过完整 owner
+校验的 PVC。
 
 ## 验证边界
 

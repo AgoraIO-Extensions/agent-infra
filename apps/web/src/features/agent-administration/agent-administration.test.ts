@@ -53,6 +53,30 @@ const administratorSession = BrowserSessionProjectionV1Schema.parse({
 });
 
 describe("Agent administration generated-client consumer", () => {
+	it("discards pending application pages when a later HTTP page violates the formal response schema", async () => {
+		let requests = 0;
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async () => {
+				requests += 1;
+				return Response.json({
+					items: [
+						requests === 1
+							? pendingApplication
+							: { ...pendingApplication, decision: { reason: "invalid" } },
+					],
+					nextCursor: requests === 1 ? "opaque-pending/+?=" : null,
+				});
+			},
+		});
+		await expect(loadPendingAgentApplications(client)).resolves.toEqual({
+			kind: "unavailable",
+			retryable: false,
+			reason: "invalid-response",
+		});
+		expect(requests).toBe(2);
+	});
+
 	it("uses schema-validated commands for approval and the matching Agent lifecycle", async () => {
 		const scenario: PilotAgentMockServerScenarioV1 = {
 			listAgents: { status: 200, body: { items: [], nextCursor: null } },
@@ -108,6 +132,7 @@ describe("Agent administration generated-client consumer", () => {
 			server.requests.map((request) => [request.method, request.url]),
 		).toEqual([
 			["GET", "https://platform.example.test/api/v1/session"],
+			["GET", "https://platform.example.test/api/v1/connection/capability"],
 			["GET", "https://platform.example.test/api/v2/admin/agent-applications"],
 			[
 				"POST",
@@ -118,10 +143,10 @@ describe("Agent administration generated-client consumer", () => {
 				"https://platform.example.test/api/v2/agents/agent-pilot-1/lifecycle",
 			],
 		]);
-		expect(server.requests[2]?.headers.get("Idempotency-Key")).toBe(
+		expect(server.requests[3]?.headers.get("Idempotency-Key")).toBe(
 			"approval-request-1",
 		);
-		expect(server.requests[3]?.headers.get("Idempotency-Key")).toBe(
+		expect(server.requests[4]?.headers.get("Idempotency-Key")).toBe(
 			"lifecycle-request-1",
 		);
 	});

@@ -330,6 +330,10 @@ export type ConversationRuntimeStatusResponseV2 = {
 	  }
 	| { readonly outcome: "not_found" }
 	| {
+			readonly outcome: "binding_found";
+			readonly hostSessionRef: string;
+	  }
+	| {
 			readonly outcome: "recovery_failed";
 			readonly hostSessionRef: string;
 			readonly code: "RUNTIME_SESSION_RECOVERY_FAILED";

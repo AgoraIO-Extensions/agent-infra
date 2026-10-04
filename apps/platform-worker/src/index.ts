@@ -1,5 +1,10 @@
 import { pathToFileURL } from "node:url";
+import {
+	type ObservabilityOptions,
+	startObservability,
+} from "@agent-infra/observability";
 import { startPlatformConversationWorkerFromDeploymentV2 } from "./conversation-worker.js";
+import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
 export * from "./conversation-deployment.js";
@@ -8,6 +13,8 @@ export * from "./conversation-worker.js";
 export * from "./kubernetes-client.js";
 export * from "./kubernetes-runtime-adapter.js";
 export * from "./runtime-grant-signer.js";
+export * from "./wecom-deployment.js";
+export { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 export * from "./workload-deployment.js";
 export * from "./workload-runtime.js";
 export * from "./workload-worker.js";
@@ -218,33 +225,65 @@ export async function startPlatformWorkerFromDeploymentV2(
 	options: {
 		readonly startPrimary?: () => { stop(): void | Promise<void> };
 		readonly startWorkload?: () => Promise<{ stop(): Promise<void> }>;
-		readonly startConversation?: () => Promise<{ stop(): Promise<void> }>;
+		readonly startConversation?: (
+			observability: ReturnType<typeof startObservability>,
+		) => Promise<{ stop(): Promise<void> }>;
+		readonly startWecom?: () => Promise<{ stop(): Promise<void> }>;
+		readonly observabilityOptions?: Omit<ObservabilityOptions, "service">;
 	} = {},
 ) {
-	const primary = (options.startPrimary ?? startPlatformWorker)();
+	const observability = startObservability({
+		service: platformWorkerService,
+		...(process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT
+			? {
+					otlpEndpoint: process.env.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT,
+				}
+			: {}),
+		...options.observabilityOptions,
+	});
+	let primary: { stop(): void | Promise<void> };
+	try {
+		primary = (options.startPrimary ?? startPlatformWorker)();
+	} catch (error) {
+		await observability.close();
+		throw error;
+	}
 	let workload: { stop(): Promise<void> } | undefined;
 	let conversation: { stop(): Promise<void> } | undefined;
+	let wecom: { stop(): Promise<void> } | undefined;
 	try {
 		workload = await (
 			options.startWorkload ?? startPlatformWorkloadWorkerFromDeploymentV1
 		)();
+		wecom = await options.startWecom?.();
 		conversation = await (
 			options.startConversation ??
-			startPlatformConversationWorkerFromDeploymentV2
-		)();
+			((telemetry) =>
+				startPlatformConversationWorkerFromDeploymentV2(
+					undefined,
+					undefined,
+					telemetry,
+				))
+		)(observability);
 		let stopping: Promise<void> | undefined;
 		return {
+			observabilityStatus: observability.status,
 			stop() {
 				stopping ??= (async () => {
 					const results: PromiseSettledResult<void>[] = [];
-					for (const stop of [
-						() => conversation?.stop(),
-						() => workload?.stop(),
-						() => primary.stop(),
-					]) {
-						results.push(
-							...(await Promise.allSettled([Promise.resolve().then(stop)])),
-						);
+					try {
+						for (const stop of [
+							() => conversation?.stop(),
+							() => wecom?.stop(),
+							() => workload?.stop(),
+							() => primary.stop(),
+						]) {
+							results.push(
+								...(await Promise.allSettled([Promise.resolve().then(stop)])),
+							);
+						}
+					} finally {
+						await observability.close();
 					}
 					const failure = results.find(
 						(result): result is PromiseRejectedResult =>
@@ -260,7 +299,9 @@ export async function startPlatformWorkerFromDeploymentV2(
 			Promise.resolve().then(() => primary.stop()),
 			Promise.resolve().then(() => workload?.stop()),
 			Promise.resolve().then(() => conversation?.stop()),
+			Promise.resolve().then(() => wecom?.stop()),
 		]);
+		await observability.close();
 		throw error;
 	}
 }
@@ -269,19 +310,36 @@ const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	const shutdownDeadlineMs = 10_000;
 	const termination = new AbortController();
-	const primary = startPlatformWorker();
+	const wecomSetting = process.env.PLATFORM_WORKER_WECOM_ENABLED;
+	if (wecomSetting !== undefined && !["true", "false"].includes(wecomSetting))
+		throw new Error("PLATFORM_WORKER_WECOM_ENABLED must be true or false");
+	const wecomEnabled = wecomSetting === "true";
+	let primary: ReturnType<typeof startPlatformWorker> | undefined;
 	const workerPromise = startPlatformWorkerFromDeploymentV2({
-		startPrimary: () => primary,
-		startConversation: () =>
+		startPrimary: () => {
+			primary = startPlatformWorker();
+			return primary;
+		},
+		startConversation: (observability) =>
 			startPlatformConversationWorkerFromDeploymentV2(
 				undefined,
 				termination.signal,
+				observability,
 			),
 		startWorkload: () =>
 			startPlatformWorkloadWorkerFromDeploymentV1(
 				undefined,
 				termination.signal,
 			),
+		...(wecomEnabled
+			? {
+					startWecom: () =>
+						startPlatformWecomWorkerFromDeploymentV1(
+							undefined,
+							termination.signal,
+						),
+				}
+			: {}),
 	});
 	let stopping = false;
 	const stop = () => {
@@ -292,7 +350,7 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 		termination.abort();
 		let primaryStop: Promise<void>;
 		try {
-			primaryStop = Promise.resolve(primary.stop());
+			primaryStop = Promise.resolve(primary?.stop());
 		} catch {
 			primaryStop = Promise.reject();
 		}
@@ -309,9 +367,13 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	process.on("SIGINT", stop);
 	process.on("SIGTERM", stop);
 	void workerPromise.catch(() => {
+		console.error(
+			"Platform Worker failed to start; check deployment configuration",
+		);
 		process.exitCode = 1;
 	});
 }
 
 export { createWorkerFileClientV1 } from "./file-client.js";
 export { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
+export * from "./session-workload-adapter.js";

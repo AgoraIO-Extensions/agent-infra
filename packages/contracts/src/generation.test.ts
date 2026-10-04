@@ -114,6 +114,23 @@ describe("standard contract artifacts", () => {
 		expect(Object.keys(artifacts.jsonSchema.$defs).sort()).toEqual(schemaNames);
 		expect(first).not.toMatch(/generatedAt|toolVersion|\/Users\//);
 		expect(artifacts.pilotBrowserOpenapi.openapi).toBe("3.1.0");
+		expect(artifacts.pilotBrowserOpenapi.components.securitySchemes).toEqual(
+			artifacts.pilotBrowserOpenapiV2.components.securitySchemes,
+		);
+		for (const path of ["/api/v1/audit", "/api/v1/audit/{auditId}"]) {
+			expect(artifacts.pilotBrowserOpenapi.paths[path].get.security).toEqual([
+				{ PlatformSession: [] },
+				{ platformApiCredential: [] },
+			]);
+		}
+		for (const path of [
+			"/api/v3/admin/audit",
+			"/api/v3/admin/audit/{auditId}",
+		]) {
+			expect(artifacts.pilotBrowserOpenapi.paths[path].get.security).toEqual([
+				{ PlatformSession: [] },
+			]);
+		}
 		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
 			"/api/v1/conversations/{conversationId}/messages",
 		);
@@ -123,6 +140,7 @@ describe("standard contract artifacts", () => {
 		expect(Object.keys(artifacts.pilotBrowserOpenapiV2.paths)).toEqual([
 			"/api/v2/admin/agent-applications",
 			"/api/v2/admin/agent-applications/{applicationId}/decision",
+			"/api/v2/admin/agents",
 			"/api/v2/admin/audit",
 			"/api/v2/agent-applications",
 			"/api/v2/agent-applications/{applicationId}",
@@ -131,11 +149,36 @@ describe("standard contract artifacts", () => {
 			"/api/v2/agents/{agentId}",
 			"/api/v2/agents/{agentId}/configuration",
 			"/api/v2/agents/{agentId}/lifecycle",
+			"/api/v2/applications",
+			"/api/v2/applications/{applicationId}",
+			"/api/v2/applications/{applicationId}/credentials",
+			"/api/v2/applications/{applicationId}/material-grant",
+			"/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}",
 			"/api/v2/conversations/{conversationId}",
 			"/api/v2/conversations/{conversationId}/events",
 			"/api/v2/conversations/{conversationId}/executions/{executionId}",
 			"/api/v2/deployment/configuration",
+			"/api/v2/me/api-credentials",
+			"/api/v2/me/api-credentials/{credentialId}",
+			"/api/v2/me/conversations/recent",
+			"/api/v2/me/relay-key",
 		]);
+		const recent =
+			artifacts.pilotBrowserOpenapiV2.paths["/api/v2/me/conversations/recent"]
+				.get;
+		expect(recent.operationId).toBe("listRecentPersonalConversationsV2");
+		expect(recent.security).toEqual([{ PlatformSession: [] }]);
+		expect(artifacts.pilotBrowserOpenapiV2.components.securitySchemes).toEqual({
+			...artifacts.platformAuthOpenapi.components.securitySchemes,
+			platformApiCredential: { type: "http", scheme: "bearer" },
+		});
+		expect(
+			artifacts.pilotBrowserOpenapiV2.paths["/api/v2/agents"].get.security,
+		).toEqual([{ PlatformSession: [] }, { platformApiCredential: [] }]);
+		expect(
+			recent.responses[200].content["application/json"].schema.properties.items
+				.items.properties.schemaVersion.const,
+		).toBe(1);
 		expect(artifacts.pilotBrowserOpenapiV2.components.schemas).toHaveProperty(
 			"PlatformAuditProjectionV2",
 		);

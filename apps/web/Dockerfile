@@ -9,7 +9,8 @@ ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/web... build
 
 FROM nginx:1.31.6-alpine3.24@sha256:d10753d9289b8e3f884386351f73554ce72b631378949deddd75e83ee296c427 AS runner
-RUN apk add --no-cache libexpat=2.8.5-r0 libuuid=2.42.3-r1
+RUN apk add --no-cache libexpat=2.8.5-r0 libuuid=2.42.3-r1 pcre2=10.49-r0 \
+    libpng=1.6.59-r0 nghttp2-libs=1.70.0-r0
 COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
 COPY apps/web/nginx-main.conf /etc/nginx/nginx.conf
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf

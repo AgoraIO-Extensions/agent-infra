@@ -1,7 +1,13 @@
 import {
 	AgentProjectionV2Schema,
+	BrowserSessionProjectionV1Schema,
+	CommandAcceptedProjectionV1Schema,
+	ConnectionCapabilityProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
+	ConversationPageV1Schema,
+	ExecutionDetailProjectionV2Schema,
 	PersistedConversationEventV2Schema,
+	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, test } from "@playwright/test";
@@ -218,6 +224,10 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
 		if (path.endsWith("/session")) {
 			await route.fulfill({ json: owner });
 			return;
@@ -383,6 +393,10 @@ test("renders an authorization failure without retaining another subject's conve
 	});
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const path = new URL(route.request().url()).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
 		if (path.endsWith("/session")) {
 			await route.fulfill({
 				json: {
@@ -423,9 +437,191 @@ test("renders an authorization failure without retaining another subject's conve
 	).toHaveCount(0);
 });
 
-test("saves the next-message model and stops the bound execution", async ({
+test("recovers an ordinary conversation 404 through read-only reconnect", async ({
 	page,
 }) => {
+	const agent = AgentProjectionV2Schema.parse({
+		...pilotFakeScenariosV2.starting.response.body,
+		agentId,
+		managementStatus: "available",
+		serviceAvailability: "ready",
+	});
+	let missing = true;
+	let historyReads = 0;
+	let streamReads = 0;
+	let writes = 0;
+	await keepConversationStreamOpen(page);
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		if (route.request().method() !== "GET") writes += 1;
+		const path = new URL(route.request().url()).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
+		if (path.endsWith("/session")) {
+			await route.fulfill({ json: ownerSession() });
+			return;
+		}
+		if (path === `/api/v2/agents/${agentId}`) {
+			await route.fulfill({ json: agent });
+			return;
+		}
+		if (path === `/api/v2/conversations/${conversationId}`) {
+			historyReads += 1;
+			if (missing) {
+				await route.fulfill({
+					status: 404,
+					json: { message: "Synthetic route missing" },
+				});
+			} else {
+				await route.fulfill({ json: history(conversationId, []) });
+			}
+			return;
+		}
+		if (path === `/api/v2/conversations/${conversationId}/events`) {
+			streamReads += 1;
+			await route.fulfill({
+				contentType: "text/event-stream",
+				body: ": heartbeat\n\n",
+			});
+			return;
+		}
+		await route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	await expect(
+		page.getByText(
+			"会话连接暂时中断，草稿已保留。重新连接只恢复读取，不重新发送任务。",
+		),
+	).toBeVisible();
+	await expect(
+		page.getByText("当前登录或访问权限已失效，请重新登录或返回 Agent 列表。"),
+	).toHaveCount(0);
+	await expect(page.getByRole("button", { name: "重新连接" })).toBeVisible();
+	await test.info().attach("fake-404-unavailable", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+	const readsBeforeReconnect = historyReads;
+	missing = false;
+	await page.getByRole("button", { name: "重新连接" }).click();
+	await expect(
+		page.getByRole("heading", { name: "Test conversation" }),
+	).toBeVisible();
+	await expect(page.getByRole("button", { name: "重新连接" })).toHaveCount(0);
+	await expect.poll(() => historyReads).toBe(readsBeforeReconnect + 1);
+	await expect.poll(() => streamReads).toBe(1);
+	expect(writes).toBe(0);
+	await test.info().attach("fake-404-read-only-recovery", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+});
+
+test("clears a loaded execution after 404 and recovers without resending", async ({
+	page,
+}) => {
+	let missing = false;
+	let restored = false;
+	let historyReads = 0;
+	let writes = 0;
+	const streamCursors: (string | null)[] = [];
+	const oldSummary = "已读取的历史执行摘要";
+	const newSummary = "重新读取的执行摘要";
+	await keepConversationStreamOpen(page);
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		if (request.method() !== "GET") writes += 1;
+		const url = new URL(request.url());
+		if (url.pathname === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
+		if (url.pathname.endsWith("/session")) {
+			await route.fulfill({ json: ownerSession() });
+		} else if (url.pathname === `/api/v2/agents/${agentId}`) {
+			await route.fulfill({ json: activeAgent() });
+		} else if (url.pathname === `/api/v2/conversations/${conversationId}`) {
+			historyReads += 1;
+			await route.fulfill({
+				json: history(conversationId, [
+					event("execution.status", restored ? 2 : 1, { status: "completed" }),
+				]),
+			});
+		} else if (url.pathname.endsWith(`/executions/${executionId}`)) {
+			await route.fulfill(
+				missing
+					? { status: 404, json: { message: "Synthetic route missing" } }
+					: {
+							json: {
+								...execution(conversationId, executionId),
+								processSummary: [
+									{
+										kind: "agent_summary",
+										category: "model_call",
+										occurredAt: timestamp,
+										summary: restored ? newSummary : oldSummary,
+									},
+								],
+							},
+						},
+			);
+		} else if (url.pathname.endsWith("/events")) {
+			streamCursors.push(url.searchParams.get("cursor"));
+			await route.fulfill({
+				contentType: "text/event-stream",
+				body: ": heartbeat\n\n",
+			});
+		} else {
+			await route.fulfill({ json: { items: [], nextCursor: null } });
+		}
+	});
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	await page.getByRole("button", { name: "执行详情", exact: true }).click();
+	await expect(page.getByText(oldSummary, { exact: true })).toBeVisible();
+	missing = true;
+	await page
+		.getByRole("button", { name: "核实原执行状态", exact: true })
+		.click();
+	const details = page.getByRole("region", { name: "执行详情" });
+	await expect(
+		details.getByText("执行记录暂时无法读取。", { exact: true }),
+	).toBeVisible();
+	await expect(
+		details.getByRole("button", { name: "重新读取详情", exact: true }),
+	).toBeVisible();
+	await expect(page.getByText(oldSummary, { exact: true })).toHaveCount(0);
+	await expect(
+		page.getByText("当前登录或访问权限已失效，请重新登录或返回 Agent 列表。"),
+	).toHaveCount(0);
+	await test.info().attach("fake-execution-404-cleared", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+	const readsBeforeReconnect = historyReads;
+	missing = false;
+	restored = true;
+	await details
+		.getByRole("button", { name: "重新读取详情", exact: true })
+		.click();
+	await expect(page.getByText(newSummary, { exact: true })).toBeVisible();
+	await expect(page.getByText(oldSummary, { exact: true })).toHaveCount(0);
+	await expect.poll(() => historyReads).toBe(readsBeforeReconnect + 1);
+	expect(streamCursors).toEqual(["live-cursor-1", "live-cursor-2"]);
+	expect(writes).toBe(0);
+	await test.info().attach("fake-execution-404-read-only-recovery", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+});
+
+test("saves the next-message model and stops the bound execution", async ({
+	page,
+}, info) => {
 	const agent = activeAgent();
 	const processing = event("execution.status", 1, { status: "processing" });
 	const cancelled = event("execution.status", 2, { status: "cancelled" });
@@ -447,6 +643,7 @@ test("saves the next-message model and stops the bound execution", async ({
 	let selectionBody: unknown;
 	let stopBody: unknown;
 	let stopIdempotencyKey: string | undefined;
+	const unexpectedMessageWrites: string[] = [];
 	const detail = () => {
 		const events =
 			phase === "cancelled" ? [processing, cancelled] : [processing];
@@ -470,6 +667,10 @@ test("saves the next-message model and stops the bound execution", async ({
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
 		if (path.endsWith("/events")) {
 			await route.fulfill({
 				status: 200,
@@ -488,6 +689,14 @@ test("saves the next-message model and stops the bound execution", async ({
 		}
 		if (path === `/api/v2/conversations/${conversationId}`) {
 			await route.fulfill({ json: detail() });
+			return;
+		}
+		if (path === `/api/v1/conversations/${conversationId}/messages`) {
+			unexpectedMessageWrites.push(request.method());
+			await route.fulfill({
+				status: 500,
+				json: { code: "UNEXPECTED_MESSAGE_WRITE" },
+			});
 			return;
 		}
 		if (path.endsWith("/model-selection")) {
@@ -533,8 +742,115 @@ test("saves the next-message model and stops the bound execution", async ({
 		`/agents/${agentId}/conversations?conversation=${conversationId}`,
 	);
 	await expect(page.getByRole("button", { name: "停止回复" })).toBeVisible();
-	await page.getByRole("combobox", { name: "模型" }).click();
-	await page.getByRole("option", { name: "Secondary model" }).click();
+	await page
+		.getByRole("textbox", { name: "消息", exact: true })
+		.fill("保留下一条草稿");
+	const controls = page.getByRole("group", { name: "下一条消息的模型" });
+	await expect(controls).toBeVisible();
+	expect(await controls.evaluate((node) => node.closest("form"))).toBeNull();
+	for (const viewport of [
+		info.project.use.viewport,
+		{ width: 320, height: 370 },
+	]) {
+		if (!viewport) throw new Error("Expected configured viewport");
+		await page.setViewportSize(viewport);
+		const geometry = await controls.evaluate((node) => {
+			const timeline = document.querySelector(".timeline");
+			const title = document.querySelector(".chat-status h2");
+			if (!timeline || !title)
+				throw new Error("Expected conversation title and timeline");
+			return {
+				controls: node.getBoundingClientRect().toJSON(),
+				title: title.getBoundingClientRect().toJSON(),
+				timeline: timeline.getBoundingClientRect().toJSON(),
+				viewport: { width: innerWidth, height: innerHeight },
+				precedesTimeline: Boolean(
+					node.compareDocumentPosition(timeline) &
+						Node.DOCUMENT_POSITION_FOLLOWING,
+				),
+			};
+		});
+		await info.attach(`model-controls-${viewport.width}-geometry`, {
+			body: JSON.stringify(geometry),
+			contentType: "application/json",
+		});
+		expect(geometry.precedesTimeline).toBe(true);
+		expect(geometry.title.bottom).toBeLessThanOrEqual(geometry.controls.top);
+		expect(geometry.timeline.width).toBeGreaterThan(0);
+		expect(geometry.timeline.height).toBeGreaterThan(0);
+		expect(geometry.controls.bottom).toBeLessThanOrEqual(geometry.timeline.top);
+		for (const [index, control] of [
+			controls.getByRole("combobox", { name: "模型", exact: true }),
+			controls.getByRole("combobox", { name: "推理强度", exact: true }),
+			page.getByText("继续检查当前任务", { exact: true }),
+			page.getByRole("textbox", { name: "消息", exact: true }),
+			page.getByRole("button", { name: "发送补充指令", exact: true }),
+		].entries()) {
+			await control.evaluate((node) =>
+				node.scrollIntoView({
+					block: "center",
+					inline: "nearest",
+					behavior: "instant",
+				}),
+			);
+			await info.attach(
+				`model-controls-and-composer-${viewport.width}-${index}-geometry`,
+				{
+					body: JSON.stringify(
+						await control.evaluate((node) => ({
+							target: node.getBoundingClientRect().toJSON(),
+							viewport: { width: innerWidth, height: innerHeight },
+							scroll: { x: scrollX, y: scrollY },
+							ancestors: [".timeline", ".chat-workspace"].map((selector) => {
+								const ancestor = node.closest(selector);
+								return ancestor
+									? {
+											selector,
+											rect: ancestor.getBoundingClientRect().toJSON(),
+											scrollTop: ancestor.scrollTop,
+											clientHeight: ancestor.clientHeight,
+											scrollHeight: ancestor.scrollHeight,
+										}
+									: null;
+							}),
+						})),
+					),
+					contentType: "application/json",
+				},
+			);
+			await info.attach(
+				`model-controls-and-composer-${viewport.width}-${index}`,
+				{
+					body: await page.screenshot({ animations: "disabled" }),
+					contentType: "image/png",
+				},
+			);
+			await expect(control).toBeInViewport({ ratio: 1 });
+			if (index !== 2) {
+				expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(
+					44,
+				);
+			}
+			await control.click({ trial: true });
+		}
+		expect(
+			await page.evaluate(
+				() =>
+					Math.max(
+						document.documentElement.scrollWidth,
+						document.body.scrollWidth,
+					) <= innerWidth,
+			),
+		).toBe(true);
+	}
+
+	await page
+		.getByRole("combobox", { name: "模型", exact: true })
+		.press("Space");
+	await page.getByRole("option", { name: "Secondary model" }).press("Enter");
+	await expect(
+		page.getByRole("button", { name: "发送补充指令", exact: true }),
+	).toBeDisabled();
 	await page.getByRole("combobox", { name: "推理强度" }).click();
 	await page.getByRole("option", { name: "high" }).click();
 	await page.getByRole("button", { name: "保存模型选择" }).click();
@@ -543,6 +859,9 @@ test("saves the next-message model and stops the bound execution", async ({
 			hasText: "模型选择已保存，从下一条消息开始生效。",
 		}),
 	).toBeVisible();
+	await expect(
+		page.getByRole("textbox", { name: "消息", exact: true }),
+	).toHaveValue("保留下一条草稿");
 	await page.getByRole("button", { name: "停止回复" }).click();
 	await expect(
 		page.getByRole("status").filter({ hasText: "原回复已结束。" }),
@@ -558,6 +877,7 @@ test("saves the next-message model and stops the bound execution", async ({
 	});
 	expect(stopIdempotencyKey).toBeTruthy();
 	expect(stopIdempotencyKey).not.toBe("undefined");
+	expect(unexpectedMessageWrites).toEqual([]);
 	await page.setViewportSize({ width: 390, height: 844 });
 	expect(
 		await page.evaluate(
@@ -614,6 +934,10 @@ test("regenerates a terminal answer and opens its execution details", async ({
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
 		if (path.endsWith("/events")) {
 			await route.fulfill({
 				status: 200,
@@ -674,3 +998,285 @@ test("regenerates a terminal answer and opens its execution details", async ({
 		details.getByRole("button", { name: "核实原执行状态" }),
 	).toBeVisible();
 });
+
+for (const source of ["standard", "custom"] as const) {
+	for (const code of ["PROVIDER_RATE_LIMITED", "PROVIDER_REJECTED"] as const) {
+		test(`personal Key recovery for ${code} on ${source} preserves the accepted scope`, async ({
+			page,
+		}, info) => {
+			const agent = AgentProjectionV2Schema.parse({
+				...activeAgent(),
+				...(source === "custom"
+					? {
+							source: {
+								kind: "custom",
+								imageReference: "registry.example/agent:v1",
+								interactionMode: "platform-adapter",
+							},
+						}
+					: {}),
+			});
+			const failure = PilotProtocolErrorV1Schema.parse({
+				schemaVersion: 1,
+				code,
+				message: "Synthetic provider detail must not be rendered",
+				retryable: code === "PROVIDER_RATE_LIMITED",
+				traceId: "trace-personal-key-recovery",
+			});
+			const failedStatus = PersistedConversationEventV2Schema.parse({
+				...event("execution.status", 1, { status: "completed" }),
+				payload: { status: "failed" },
+			});
+			const question = "检查合成任务";
+			const message = {
+				messageId,
+				role: "user",
+				text: question,
+				status: "completed",
+				executionId,
+				replyToMessageId: null,
+				answerVersion: null,
+				isCurrentAnswer: null,
+				error: null,
+				createdAt: timestamp,
+			};
+			let accepted = false;
+			const writes: { path: string; body: unknown }[] = [];
+			const unexpected: string[] = [];
+			await keepConversationStreamOpen(page);
+			await page.route(/\/api\/v[12]\//, async (route) => {
+				const request = route.request();
+				const path = new URL(request.url()).pathname;
+				if (
+					request.method() === "GET" &&
+					path === "/api/v1/connection/capability"
+				)
+					return route.fulfill({
+						json: ConnectionCapabilityProjectionV1Schema.parse({
+							schemaVersion: 1,
+							status: "unavailable",
+							reason: "missing",
+						}),
+					});
+				if (path === "/api/v2/me/conversations/recent")
+					return route.fulfill({
+						json: ConversationPageV1Schema.parse({
+							items: [],
+							nextCursor: null,
+						}),
+					});
+				if (request.method() !== "GET")
+					writes.push({ path, body: request.postDataJSON() });
+				if (request.method() === "GET" && path.endsWith("/session"))
+					await route.fulfill({
+						json: BrowserSessionProjectionV1Schema.parse(ownerSession()),
+					});
+				else if (
+					request.method() === "GET" &&
+					path === `/api/v2/agents/${agentId}`
+				)
+					await route.fulfill({ json: agent });
+				else if (
+					request.method() === "POST" &&
+					path === `/api/v1/conversations/${conversationId}/messages`
+				) {
+					// Acceptance is not a provider result. Errors arrive in later reads.
+					accepted = true;
+					await route.fulfill({
+						status: 202,
+						json: CommandAcceptedProjectionV1Schema.parse({
+							schemaVersion: 1,
+							status: "submitted",
+							messageId,
+							executionId,
+						}),
+					});
+				} else if (
+					request.method() === "GET" &&
+					path === `/api/v2/conversations/${conversationId}`
+				)
+					await route.fulfill({
+						json: ConversationDetailProjectionV2Schema.parse({
+							...history(conversationId, accepted ? [failedStatus] : []),
+							conversation: {
+								...history(conversationId, []).conversation,
+								status: "ready",
+								selectedModelOptionId: "model-secondary",
+								selectedReasoningLevel: "high",
+								lastConversationCursor: accepted
+									? failedStatus.conversationCursor
+									: null,
+							},
+							messages: accepted
+								? [
+										message,
+										{
+											...message,
+											messageId: "answer-provider-failed",
+											role: "assistant",
+											text: "",
+											status: "failed",
+											replyToMessageId: messageId,
+											answerVersion: 1,
+											isCurrentAnswer: true,
+											error: failure,
+										},
+									]
+								: [],
+						}),
+					});
+				else if (
+					request.method() === "GET" &&
+					path === `/api/v2/conversations/${conversationId}/events`
+				)
+					await route.fulfill({
+						contentType: "text/event-stream",
+						body: ": heartbeat\n\n",
+					});
+				else if (
+					request.method() === "GET" &&
+					path ===
+						`/api/v2/conversations/${conversationId}/executions/${executionId}`
+				)
+					await route.fulfill({
+						json: ExecutionDetailProjectionV2Schema.parse({
+							...execution(conversationId, executionId),
+							status: "failed",
+							error: failure,
+							finishedAt: timestamp,
+							events: [failedStatus],
+						}),
+					});
+				else {
+					unexpected.push(`${request.method()} ${path}`);
+					await route.fulfill({ status: 500 });
+				}
+			});
+			await page.goto(`/chat/${agentId}/${conversationId}`);
+			const input = page.getByRole("textbox", { name: "消息", exact: true });
+			await input.fill(question);
+			await page.getByRole("button", { name: "发送", exact: true }).click();
+			const timeline = page.getByRole("region", { name: "会话时间线" });
+			await expect(
+				timeline.getByText("执行失败", { exact: true }),
+			).toBeVisible();
+			await expect(timeline).toContainText(
+				"使用标准模板时，请检查个人 Relay Key",
+			);
+			await input.fill("下一条草稿");
+			await page.getByRole("button", { name: "刷新会话", exact: true }).click();
+			await expect(input).toHaveValue("下一条草稿");
+			await page.getByRole("button", { name: "执行详情", exact: true }).click();
+			const details = page.getByRole("region", { name: "执行详情" });
+			const alert = details.getByRole("alert");
+			await expect(alert).toContainText("使用标准模板时，请检查个人 Relay Key");
+			await expect(alert).toContainText("仍失败请联系 Owner 检查模型配置");
+			await expect(alert.getByRole("link")).toHaveCount(0);
+			await expect(
+				page.getByText(failure.message, { exact: true }),
+			).toHaveCount(0);
+			for (const viewport of [
+				info.project.use.viewport,
+				{ width: 320, height: 370 },
+			]) {
+				if (!viewport) throw new Error("Expected configured browser viewport");
+				await page.setViewportSize(viewport);
+				await alert.scrollIntoViewIfNeeded();
+				await expect(alert).toBeInViewport({ ratio: 1 });
+				await info.attach(
+					`personal-key-recovery-${source}-${code}-${viewport.width}`,
+					{
+						body: await page.screenshot({ animations: "disabled" }),
+						contentType: "image/png",
+					},
+				);
+			}
+			await details
+				.getByRole("button", { name: "返回对话", exact: true })
+				.focus();
+			await page.keyboard.press("Enter");
+			for (
+				let index = 0;
+				index < 12 &&
+				!(await input.evaluate((node) => node === document.activeElement));
+				index += 1
+			)
+				await page.keyboard.press("Tab");
+			await expect(input).toBeFocused();
+			await page.keyboard.type(" / 继续");
+			await expect(input).toHaveValue("下一条草稿 / 继续");
+			await expect(
+				page.getByRole("combobox", { name: "模型", exact: true }),
+			).toContainText("Secondary model");
+			await expect(
+				page.getByRole("combobox", { name: "推理强度", exact: true }),
+			).toContainText("high");
+			await expect(page).toHaveURL(
+				new RegExp(`/chat/${agentId}/${conversationId}$`),
+			);
+			await info.attach("recovered-composer-geometry", {
+				body: JSON.stringify(
+					await input.evaluate((node) => ({
+						rect: node.getBoundingClientRect().toJSON(),
+						viewport: [innerWidth, innerHeight],
+						scrollY,
+						hit: (() => {
+							const r = node.getBoundingClientRect();
+							return document
+								.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+								?.outerHTML.slice(0, 300);
+						})(),
+						ancestors: [
+							".composer-zone",
+							".chat-thread",
+							".chat-workspace",
+							".conversation-columns",
+							".chat-layout",
+							".platform-content",
+							"#main-content",
+						].map((selector) => {
+							const el = node.closest(selector);
+							return {
+								selector,
+								rect: el?.getBoundingClientRect().toJSON(),
+								overflow: el && getComputedStyle(el).overflow,
+								height: el && getComputedStyle(el).height,
+							};
+						}),
+					})),
+				),
+				contentType: "application/json",
+			});
+			await info.attach("recovered-composer", {
+				body: await page.screenshot({ animations: "disabled" }),
+				contentType: "image/png",
+			});
+
+			await expect
+				.poll(() =>
+					input.evaluate((node) => {
+						const rect = node.getBoundingClientRect();
+						const hit = document.elementFromPoint(
+							rect.left + rect.width / 2,
+							rect.top + rect.height / 2,
+						);
+						return (
+							rect.left >= 0 &&
+							rect.right <= innerWidth &&
+							rect.top >= 0 &&
+							rect.bottom <= innerHeight &&
+							hit === node
+						);
+					}),
+				)
+				.toBe(true);
+			expect(writes).toEqual([
+				{
+					path: `/api/v1/conversations/${conversationId}/messages`,
+					body: { schemaVersion: 1, text: question },
+				},
+			]);
+			expect(unexpected).toEqual([]);
+		});
+	}
+}

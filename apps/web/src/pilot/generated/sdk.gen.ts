@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AbandonUnknownWecomDeliveryData, AbandonUnknownWecomDeliveryErrors, AbandonUnknownWecomDeliveryResponses, BeginWecomSetupData, BeginWecomSetupErrors, BeginWecomSetupResponses, CancelWecomSetupData, CancelWecomSetupErrors, CancelWecomSetupResponses, CommandAgentLifecycleData, CommandAgentLifecycleErrors, CommandAgentLifecycleResponses, CompleteFileUploadData, CompleteFileUploadResponses, CreateAgentApplicationData, CreateAgentApplicationErrors, CreateAgentApplicationResponses, CreateConversationData, CreateConversationErrors, CreateConversationResponses, CreateFileUploadData, CreateFileUploadResponses, DecideAgentApplicationData, DecideAgentApplicationErrors, DecideAgentApplicationResponses, DownloadFileContentData, DownloadFileContentResponses, GetAgentApplicationData, GetAgentApplicationErrors, GetAgentApplicationResponses, GetAgentData, GetAgentErrors, GetAgentResponses, GetConversationData, GetConversationErrors, GetConversationResponses, GetCurrentSessionData, GetCurrentSessionErrors, GetCurrentSessionResponses, GetExecutionDetailData, GetExecutionDetailErrors, GetExecutionDetailResponses, GetWecomBotConnectionData, GetWecomBotConnectionErrors, GetWecomBotConnectionResponses, GetWecomReceiptData, GetWecomReceiptErrors, GetWecomReceiptResponses, GetWecomSetupData, GetWecomSetupErrors, GetWecomSetupResponses, IssueFileAccessData, IssueFileAccessResponses, ListAgentApplicationsData, ListAgentApplicationsErrors, ListAgentApplicationsResponses, ListAgentsData, ListAgentsErrors, ListAgentsResponses, ListConversationsData, ListConversationsErrors, ListConversationsResponses, ListPendingAgentApplicationsData, ListPendingAgentApplicationsErrors, ListPendingAgentApplicationsResponses, ListPlatformAuditData, ListPlatformAuditErrors, ListPlatformAuditResponses, ListWecomReceiptsData, ListWecomReceiptsErrors, ListWecomReceiptsResponses, ReadFileLimitsData, ReadFileLimitsResponses, RegenerateAnswerData, RegenerateAnswerErrors, RegenerateAnswerResponses, StopExecutionData, StopExecutionErrors, StopExecutionResponses, StreamConversationEventsData, StreamConversationEventsErrors, StreamConversationEventsResponse, StreamConversationEventsResponses, SubmitMessageData, SubmitMessageErrors, SubmitMessageResponses, SubmitWecomCredentialsData, SubmitWecomCredentialsErrors, SubmitWecomCredentialsResponses, UpdateAgentApplicationData, UpdateAgentApplicationErrors, UpdateAgentApplicationResponses, UpdateAgentConfigurationData, UpdateAgentConfigurationErrors, UpdateAgentConfigurationResponses, UpdateConversationModelSelectionData, UpdateConversationModelSelectionErrors, UpdateConversationModelSelectionResponses, UploadFileContentData, UploadFileContentResponses, WithdrawAgentApplicationData, WithdrawAgentApplicationErrors, WithdrawAgentApplicationResponses } from './types.gen';
+import type { AbandonUnknownWecomDeliveryData, AbandonUnknownWecomDeliveryErrors, AbandonUnknownWecomDeliveryResponses, BeginWecomAppSetupData, BeginWecomAppSetupErrors, BeginWecomAppSetupResponses, BeginWecomSetupData, BeginWecomSetupErrors, BeginWecomSetupResponses, CancelWecomAppSetupData, CancelWecomAppSetupErrors, CancelWecomAppSetupResponses, CancelWecomSetupData, CancelWecomSetupErrors, CancelWecomSetupResponses, CommandAgentLifecycleData, CommandAgentLifecycleErrors, CommandAgentLifecycleResponses, CompleteFileUploadData, CompleteFileUploadResponses, CreateAgentApplicationData, CreateAgentApplicationErrors, CreateAgentApplicationResponses, CreateConversationData, CreateConversationErrors, CreateConversationResponses, CreateFileUploadData, CreateFileUploadResponses, DecideAgentApplicationData, DecideAgentApplicationErrors, DecideAgentApplicationResponses, DownloadFileContentData, DownloadFileContentResponses, GetAgentApplicationData, GetAgentApplicationErrors, GetAgentApplicationResponses, GetAgentData, GetAgentErrors, GetAgentResponses, GetConnectionCapabilityData, GetConnectionCapabilityErrors, GetConnectionCapabilityResponses, GetConversationData, GetConversationErrors, GetConversationResponses, GetCurrentSessionData, GetCurrentSessionErrors, GetCurrentSessionResponses, GetExecutionDetailData, GetExecutionDetailErrors, GetExecutionDetailResponses, GetOwnExecutionAuditData, GetOwnExecutionAuditErrors, GetOwnExecutionAuditResponses, GetScopedAdministratorAuditData, GetScopedAdministratorAuditErrors, GetScopedAdministratorAuditResponses, GetWecomAppConnectionData, GetWecomAppConnectionErrors, GetWecomAppConnectionResponses, GetWecomAppSetupData, GetWecomAppSetupErrors, GetWecomAppSetupResponses, GetWecomBotConnectionData, GetWecomBotConnectionErrors, GetWecomBotConnectionResponses, GetWecomReceiptData, GetWecomReceiptErrors, GetWecomReceiptResponses, GetWecomSetupData, GetWecomSetupErrors, GetWecomSetupResponses, IssueFileAccessData, IssueFileAccessResponses, ListAgentApplicationsData, ListAgentApplicationsErrors, ListAgentApplicationsResponses, ListAgentsData, ListAgentsErrors, ListAgentsResponses, ListConversationsData, ListConversationsErrors, ListConversationsResponses, ListOwnExecutionAuditData, ListOwnExecutionAuditErrors, ListOwnExecutionAuditResponses, ListPendingAgentApplicationsData, ListPendingAgentApplicationsErrors, ListPendingAgentApplicationsResponses, ListPlatformAuditData, ListPlatformAuditErrors, ListPlatformAuditResponses, ListScopedAdministratorAuditData, ListScopedAdministratorAuditErrors, ListScopedAdministratorAuditResponses, ListWecomReceiptsData, ListWecomReceiptsErrors, ListWecomReceiptsResponses, ReadFileLimitsData, ReadFileLimitsResponses, RegenerateAnswerData, RegenerateAnswerErrors, RegenerateAnswerResponses, StopExecutionData, StopExecutionErrors, StopExecutionResponses, StreamConversationEventsData, StreamConversationEventsErrors, StreamConversationEventsResponse, StreamConversationEventsResponses, SubmitMessageData, SubmitMessageErrors, SubmitMessageResponses, SubmitWecomAppCredentialsData, SubmitWecomAppCredentialsErrors, SubmitWecomAppCredentialsResponses, SubmitWecomCredentialsData, SubmitWecomCredentialsErrors, SubmitWecomCredentialsResponses, UpdateAgentApplicationData, UpdateAgentApplicationErrors, UpdateAgentApplicationResponses, UpdateAgentConfigurationData, UpdateAgentConfigurationErrors, UpdateAgentConfigurationResponses, UpdateConversationModelSelectionData, UpdateConversationModelSelectionErrors, UpdateConversationModelSelectionResponses, UploadFileContentData, UploadFileContentResponses, WithdrawAgentApplicationData, WithdrawAgentApplicationErrors, WithdrawAgentApplicationResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -88,6 +88,23 @@ export const commandAgentLifecycle = <ThrowOnError extends boolean = false>(opti
     }
 });
 
+export const getWecomAppConnection = <ThrowOnError extends boolean = false>(options: Options<GetWecomAppConnectionData, ThrowOnError>): RequestResult<GetWecomAppConnectionResponses, GetWecomAppConnectionErrors, ThrowOnError> => (options.client ?? client).get<GetWecomAppConnectionResponses, GetWecomAppConnectionErrors, ThrowOnError>({ url: '/api/v1/agents/{agentId}/wecom-app', ...options });
+
+export const beginWecomAppSetup = <ThrowOnError extends boolean = false>(options: Options<BeginWecomAppSetupData, ThrowOnError>): RequestResult<BeginWecomAppSetupResponses, BeginWecomAppSetupErrors, ThrowOnError> => (options.client ?? client).post<BeginWecomAppSetupResponses, BeginWecomAppSetupErrors, ThrowOnError>({ url: '/api/v1/agents/{agentId}/wecom-app-setup', ...options });
+
+export const getWecomAppSetup = <ThrowOnError extends boolean = false>(options: Options<GetWecomAppSetupData, ThrowOnError>): RequestResult<GetWecomAppSetupResponses, GetWecomAppSetupErrors, ThrowOnError> => (options.client ?? client).get<GetWecomAppSetupResponses, GetWecomAppSetupErrors, ThrowOnError>({ url: '/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}', ...options });
+
+export const cancelWecomAppSetup = <ThrowOnError extends boolean = false>(options: Options<CancelWecomAppSetupData, ThrowOnError>): RequestResult<CancelWecomAppSetupResponses, CancelWecomAppSetupErrors, ThrowOnError> => (options.client ?? client).post<CancelWecomAppSetupResponses, CancelWecomAppSetupErrors, ThrowOnError>({ url: '/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel', ...options });
+
+export const submitWecomAppCredentials = <ThrowOnError extends boolean = false>(options: Options<SubmitWecomAppCredentialsData, ThrowOnError>): RequestResult<SubmitWecomAppCredentialsResponses, SubmitWecomAppCredentialsErrors, ThrowOnError> => (options.client ?? client).post<SubmitWecomAppCredentialsResponses, SubmitWecomAppCredentialsErrors, ThrowOnError>({
+    url: '/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
 export const getWecomBotConnection = <ThrowOnError extends boolean = false>(options: Options<GetWecomBotConnectionData, ThrowOnError>): RequestResult<GetWecomBotConnectionResponses, GetWecomBotConnectionErrors, ThrowOnError> => (options.client ?? client).get<GetWecomBotConnectionResponses, GetWecomBotConnectionErrors, ThrowOnError>({ url: '/api/v1/agents/{agentId}/wecom-bot', ...options });
 
 export const beginWecomSetup = <ThrowOnError extends boolean = false>(options: Options<BeginWecomSetupData, ThrowOnError>): RequestResult<BeginWecomSetupResponses, BeginWecomSetupErrors, ThrowOnError> => (options.client ?? client).post<BeginWecomSetupResponses, BeginWecomSetupErrors, ThrowOnError>({ url: '/api/v1/agents/{agentId}/wecom-setup', ...options });
@@ -104,6 +121,20 @@ export const submitWecomCredentials = <ThrowOnError extends boolean = false>(opt
         ...options.headers
     }
 });
+
+export const listOwnExecutionAudit = <ThrowOnError extends boolean = false>(options?: Options<ListOwnExecutionAuditData, ThrowOnError>): RequestResult<ListOwnExecutionAuditResponses, ListOwnExecutionAuditErrors, ThrowOnError> => (options?.client ?? client).get<ListOwnExecutionAuditResponses, ListOwnExecutionAuditErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/audit',
+    ...options
+});
+
+export const getOwnExecutionAudit = <ThrowOnError extends boolean = false>(options: Options<GetOwnExecutionAuditData, ThrowOnError>): RequestResult<GetOwnExecutionAuditResponses, GetOwnExecutionAuditErrors, ThrowOnError> => (options.client ?? client).get<GetOwnExecutionAuditResponses, GetOwnExecutionAuditErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/audit/{auditId}',
+    ...options
+});
+
+export const getConnectionCapability = <ThrowOnError extends boolean = false>(options?: Options<GetConnectionCapabilityData, ThrowOnError>): RequestResult<GetConnectionCapabilityResponses, GetConnectionCapabilityErrors, ThrowOnError> => (options?.client ?? client).get<GetConnectionCapabilityResponses, GetConnectionCapabilityErrors, ThrowOnError>({ url: '/api/v1/connection/capability', ...options });
 
 export const getConversation = <ThrowOnError extends boolean = false>(options: Options<GetConversationData, ThrowOnError>): RequestResult<GetConversationResponses, GetConversationErrors, ThrowOnError> => (options.client ?? client).get<GetConversationResponses, GetConversationErrors, ThrowOnError>({ url: '/api/v1/conversations/{conversationId}', ...options });
 
@@ -195,3 +226,23 @@ export const listWecomReceipts = <ThrowOnError extends boolean = false>(options?
 export const getWecomReceipt = <ThrowOnError extends boolean = false>(options: Options<GetWecomReceiptData, ThrowOnError>): RequestResult<GetWecomReceiptResponses, GetWecomReceiptErrors, ThrowOnError> => (options.client ?? client).get<GetWecomReceiptResponses, GetWecomReceiptErrors, ThrowOnError>({ url: '/api/v1/wecom/receipts/{receiptId}', ...options });
 
 export const abandonUnknownWecomDelivery = <ThrowOnError extends boolean = false>(options: Options<AbandonUnknownWecomDeliveryData, ThrowOnError>): RequestResult<AbandonUnknownWecomDeliveryResponses, AbandonUnknownWecomDeliveryErrors, ThrowOnError> => (options.client ?? client).post<AbandonUnknownWecomDeliveryResponses, AbandonUnknownWecomDeliveryErrors, ThrowOnError>({ url: '/api/v1/wecom/receipts/{receiptId}/abandon', ...options });
+
+export const listScopedAdministratorAudit = <ThrowOnError extends boolean = false>(options?: Options<ListScopedAdministratorAuditData, ThrowOnError>): RequestResult<ListScopedAdministratorAuditResponses, ListScopedAdministratorAuditErrors, ThrowOnError> => (options?.client ?? client).get<ListScopedAdministratorAuditResponses, ListScopedAdministratorAuditErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v3/admin/audit',
+    ...options
+});
+
+export const getScopedAdministratorAudit = <ThrowOnError extends boolean = false>(options: Options<GetScopedAdministratorAuditData, ThrowOnError>): RequestResult<GetScopedAdministratorAuditResponses, GetScopedAdministratorAuditErrors, ThrowOnError> => (options.client ?? client).get<GetScopedAdministratorAuditResponses, GetScopedAdministratorAuditErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v3/admin/audit/{auditId}',
+    ...options
+});

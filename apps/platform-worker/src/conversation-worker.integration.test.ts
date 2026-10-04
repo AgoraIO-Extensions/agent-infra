@@ -5,7 +5,7 @@ import {
 } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
-import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -56,6 +56,68 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	const children: ChildProcess[] = [];
 	const output: string[] = [];
 	const traces: string[] = [];
+	const admissions: { executionId: string; conversationId: string }[] = [];
+	const dispatchSnapshots: unknown[] = [];
+	async function snapshotDispatch(
+		stage:
+			| "initial_workers"
+			| "old_workers_exited"
+			| "stop_cancelled"
+			| "failed",
+	) {
+		const observedAtMs = performance.now();
+		if (admissions.length !== 2) {
+			dispatchSnapshots.push({
+				stage,
+				observedAtMs,
+				code: "ADMISSIONS_INCOMPLETE",
+			});
+			return;
+		}
+		try {
+			const executionIds = admissions.map((admission) => admission.executionId);
+			const conversationIds = admissions.map(
+				(admission) => admission.conversationId,
+			);
+			const state = await sql.begin(
+				"isolation level repeatable read read only",
+				async (transaction) => ({
+					databaseAt: (await transaction`select clock_timestamp() as at`)[0]
+						?.at,
+					outbox: await transaction`
+						select o.id, o.operation, o.status, o.lease_owner, o.lease_expires_at,
+							o.available_at, o.attempt_count, o.delivery_fence, o.updated_at,
+							e.execution_id, e.conversation_id
+						from platform.outbox_items o
+						join platform.conversation_executions e on e.execution_id = o.payload->>'executionId'
+						where e.execution_id = any(${transaction.array(executionIds)}::text[])
+							and e.conversation_id = any(${transaction.array(conversationIds)}::text[])
+							and o.scope_type = 'conversation' and o.scope_id = e.conversation_id
+						order by o.id`,
+					execution: await transaction`
+						select execution_id, conversation_id, status, session_generation, delivery_fence
+						from platform.conversation_executions
+						where execution_id = any(${transaction.array(executionIds)}::text[])
+							and conversation_id = any(${transaction.array(conversationIds)}::text[])
+						order by execution_id`,
+					pendingTombstones: await transaction`
+						select item_id, execution_id, status
+						from platform.conversation_generation_tombstones
+						where execution_id = any(${transaction.array(executionIds)}::text[])
+							and conversation_id = any(${transaction.array(conversationIds)}::text[])
+							and status = 'pending'
+						order by item_id`,
+				}),
+			);
+			dispatchSnapshots.push({ stage, observedAtMs, ...state });
+		} catch {
+			dispatchSnapshots.push({
+				stage,
+				observedAtMs,
+				code: "SNAPSHOT_UNAVAILABLE",
+			});
+		}
+	}
 	const requests: {
 		path: string;
 		executionId?: string;
@@ -334,15 +396,19 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		moduleDirectory = await mkdtemp(
 			join(resolve(import.meta.dirname, "../dist"), "cli-test-"),
 		);
-		await copyFile(
-			resolve(import.meta.dirname, "../dist/deployment.mjs"),
-			join(moduleDirectory, "deployment.mjs"),
-		);
+		const packagedDirectory = resolve(import.meta.dirname, "../dist");
+		for (const entry of await readdir(packagedDirectory)) {
+			if (entry.endsWith(".mjs"))
+				await copyFile(
+					join(packagedDirectory, entry),
+					join(moduleDirectory, entry),
+				);
+		}
 		const configSource = `import { readFile } from 'node:fs/promises'; import { createPrivateKey } from 'node:crypto';
 export const signing = { ...${JSON.stringify(signing)}, privateKey: createPrivateKey(await readFile(${JSON.stringify(join(directory, "signing.pem"))})) };
 export const serviceToken = 'synthetic-runtime-token';
 export const directory = { async resolveUser(userId) { if (userId !== 'user-cli') return null; return { schemaVersion: 1, userId, accountStatus:'active',organizationIds:[],authorizationRevision:'identity-1'}; } };
-export const workloadInput = { databaseUrl: ${JSON.stringify(database.databaseUrl)}, policy: ${JSON.stringify(policy)},
+export const workloadInput = { policy: ${JSON.stringify(policy)},
 kubernetes: { mode:'kubeconfig', path:${JSON.stringify(kubePath)}, context:'test', expectedServer:${JSON.stringify(kubeUrl)} },
 registry: { endpoint:'https://registry.example.test', imageReferencePrefix:'registry.example.test', policy:{authorize:async()=>({status:'rejected'})} },
 admissionPolicyRef:'policy',registrySubjectRef:'worker', templateModelBindings:[], executionCapacityProfiles:[${JSON.stringify(capacity)}],
@@ -359,6 +425,8 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				{
 					env: {
 						...process.env,
+						PLATFORM_DATABASE_URL: database.databaseUrl,
+						PLATFORM_WORKER_NAMESPACE: policy.namespace,
 						PLATFORM_WORKER_DEPLOYMENT_MODULE: pathToFileURL(
 							join(moduleDirectory ?? "", "deployment.mjs"),
 						).href,
@@ -430,6 +498,10 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			});
 			if (accepted.outcome !== "accepted")
 				throw Error(`Accept: ${accepted.outcome}`);
+			admissions.push({
+				executionId: accepted.result.executionId,
+				conversationId: created.result.conversationId,
+			});
 			return {
 				...accepted.result,
 				conversationId: created.result.conversationId,
@@ -484,8 +556,64 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		const [before] =
 			await sql`select delivery_fence::int as fence, host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
 		const priorRequests = requests.length;
+		await snapshotDispatch("initial_workers");
 		for (const child of children) child.kill("SIGKILL");
 		await Promise.all(children.map((child) => once(child, "exit")));
+		await snapshotDispatch("old_workers_exited");
+		if (
+			children.length !== 2 ||
+			children.some((child) => child.signalCode !== "SIGKILL")
+		)
+			throw Error("Old Worker cohort has not exited");
+		const deferredAdmissions = admissions.filter(
+			(admission) => admission.executionId !== active.execution_id,
+		);
+		if (
+			admissions.length !== 2 ||
+			deferredAdmissions.length !== 1 ||
+			!deferredAdmissions[0]
+		)
+			throw Error("Deferred admission is ambiguous");
+		const deferred = deferredAdmissions[0];
+		const [deferredItem] = await sql`
+			select o.id, o.status, o.lease_owner, o.delivery_fence::int as fence, o.attempt_count,
+				e.status as execution_status
+			from platform.outbox_items o join platform.conversation_executions e
+				on e.execution_id = o.payload->>'executionId'
+			where o.id=${`conversation:turn:${deferred.executionId}`} and o.scope_type='conversation'
+				and o.scope_id=${deferred.conversationId} and o.operation='conversation.turn.submit.v1'
+				and e.execution_id=${deferred.executionId} and e.conversation_id=${deferred.conversationId}
+				and o.payload->>'conversationId'=${deferred.conversationId}`;
+		if (deferredItem?.execution_status !== "submitted")
+			throw Error("Deferred recovery identity or Execution status changed");
+		if (deferredItem.status === "processing") {
+			if (!deferredItem.lease_owner) throw Error("Dead claim has no owner");
+			const expired = await sql`
+				update platform.outbox_items set lease_expires_at=now()-interval '1 second'
+				where id=${deferredItem.id} and scope_type='conversation' and scope_id=${deferred.conversationId}
+					and operation='conversation.turn.submit.v1' and payload->>'executionId'=${deferred.executionId}
+					and payload->>'conversationId'=${deferred.conversationId} and status='processing'
+					and lease_owner=${deferredItem.lease_owner} and delivery_fence=${deferredItem.fence}
+					and attempt_count=${deferredItem.attempt_count}
+					and exists (select 1 from platform.conversation_executions e
+						where e.execution_id=${deferred.executionId} and e.conversation_id=${deferred.conversationId}
+							and e.status='submitted')
+				returning id, lease_owner, delivery_fence::int as fence, attempt_count,
+					lease_expires_at < now() as expired`;
+			if (expired.length !== 1 || expired[0]?.expired !== true)
+				throw Error("Dead deferred claim changed before expiry");
+			console.info(
+				JSON.stringify({
+					component: "worker-dispatch-test",
+					deadCohortExpiry: expired[0],
+				}),
+			);
+		} else if (
+			deferredItem.status !== "pending" &&
+			deferredItem.status !== "retry_scheduled"
+		) {
+			throw Error("Deferred outbox status is unexpected");
+		}
 		await sql`update platform.outbox_items set lease_expires_at=now()-interval '1 second' where payload->>'executionId'=${active.execution_id} and status='processing'`;
 		start();
 		start();
@@ -567,6 +695,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				).length === 1,
 			"durable stop completion",
 		);
+		await snapshotDispatch("stop_cancelled");
 		await waitUntil(
 			async () =>
 				(
@@ -590,8 +719,10 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		]);
 		expect(output.join("")).not.toContain("PRIVATE KEY");
 	} catch (error) {
+		await snapshotDispatch("failed");
 		throw new Error(
 			JSON.stringify({
+				dispatchSnapshots,
 				traces: traces.slice(-30),
 				processes: children.map((child) => ({
 					exitCode: child.exitCode,
@@ -605,6 +736,16 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			{ cause: error },
 		);
 	} finally {
+		try {
+			console.info(
+				JSON.stringify({
+					component: "worker-dispatch-test",
+					dispatchSnapshots,
+				}),
+			);
+		} catch {
+			/* observational only */
+		}
 		for (const child of children)
 			if (child.exitCode === null) child.kill("SIGKILL");
 		await Promise.all(

@@ -33,7 +33,7 @@ Platform API --事务写入--> Platform DB <--认领 outbox-- Platform Worker
                                                             +--内部 HTTP/SSE--> Agent Service
                                                                                   |
                                                                                   v
-                                                                      Agent Pod / RuntimeHost
+                                                                      Sandbox Pod / RuntimeHost
                                                                                   |
                                                                       Runtime Driver --> Runtime
 
@@ -44,9 +44,9 @@ Agent / Client --Connection 独立身份--> Connection MCP/API --> External Prov
 
 - `platform-api` 解析 HTTP/Web/回调入口的可信用户/应用身份；企微长连接由 `platform-worker` 解析可信发送者并调用同一 Core 准入事务，传输边界见[工程 Spec §14.2](SPEC-agent-infra-M1-engineering-architecture.md#142-企微)。API 任务按 8.4 持久受理，以下 Web/托管渠道命令按各自路径原子保存：普通消息保存 Message、初始 Execution 和 Turn outbox；补充指令保存 Message 和绑定当前 Execution 的补充指令 outbox；重新生成复用已有 Message 并保存新的 Execution 和 Turn outbox；停止命令只保存绑定请求目标 Execution 的 stop outbox。两类入口都不能绕过 outbox 直接调用 Agent Pod。
 - `platform-worker` 只投递 Platform Dispatch 按 7.2/8.4 准入的 Execution，并通过 worker 侧 RuntimeHost Client Adapter 调用 Agent Service 的内部 HTTP/SSE Interface；worker 不启动 Runtime 子进程，也不加载 Native/ACP Driver。
-- Agent Pod 内的 RuntimeHost 运行固定 Runtime Driver，将平台 Conversation/Execution 映射为 Runtime Session/Turn，并把原生事件归一化后返回；`platform-worker` 只把已经通过 fence 校验的规范化事件写回 Platform DB。
+- 所属 Sandbox Pod 内的 RuntimeHost 运行固定 Runtime Driver，将平台 Conversation/Execution 映射为 Runtime Session/Turn，并把原生事件归一化后返回；`platform-worker` 只把已经通过 fence 校验的规范化事件写回 Platform DB。
 - `platform-api` 向浏览器/API 订阅者推送事件，`platform-worker` 通过企微 Adapter 回复渠道消息；两者只输出已经持久化且通过当前接收主体授权与访问范围校验的结果。浏览器/API 事件遵循与历史读取相同的授权；初始补发和后续每次推送都不能只依赖 SSE 建连时的授权快照。当前主体权限、API 凭证、Agent 可用范围、渠道绑定或 Conversation 访问范围失效后，服务端停止该主体的输出并关闭或暂停其专属订阅；单个发送者撤权不关闭其他主体共用的机器人长连接。机器人绑定整体失效时才停止对应渠道连接；继续输出前必须重新鉴权。
-- Agent Pod 保存 Runtime 自有工作区和 Session 数据，但不保存平台权威会话或授权。
+- Sandbox Pod 保存本 Session 的 Runtime 自有工作区和数据，但不保存平台权威会话或授权。
 
 ## 3. Runtime Registry 与交互模式
 
@@ -54,14 +54,31 @@ Agent / Client --Connection 独立身份--> Connection MCP/API --> External Prov
 
 M1 Registry 是平台维护的固定配置，不支持运行时插件发现。
 
-| 标准模板 | Platform Adapter | 补充指令 | M1 平台能力 |
-| --- | --- | --- | --- |
-| Codex | Codex Native | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| Claude | Claude Native | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| OpenCode | Generic ACP | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| Pi | Pi RPC | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
+| 标准模板 | Platform Adapter | `driver` | 补充指令 | M1 平台能力 |
+| --- | --- | --- | --- | --- |
+| Codex | Codex Native | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
+| Claude | Claude Native | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
+| OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
+| Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
 
 Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Service/健康检查、capability 和 Owner 可配置的 env/Secret 键。每个模板的 `supplementaryInstruction` 只作为 capability 集合中的一个布尔键维护，不存在独立的第二声明源；缺失时按 `false` 处理，只有对应 Adapter 通过持久幂等 Conformance 后才能设为 `true`，不能按协议名称推断。Owner 不选择或覆盖标准模板的 Adapter，也不能提交 Registry 未声明的 env/Secret。
+
+标准模板的部署维护绑定为 `(templateId, imageDigest, driver, protocol)`。`driver` 必填，
+只接受上表的 `codex | claude | acp | pi`，不接受测试 Driver `fake`。该绑定由平台维护的
+Registry 和经准入的模板发布产生；Worker 按持久 candidate 的标准来源，以模板标识与
+已准入的不可变镜像 Digest 唯一匹配，并同时校验 Driver 与模型协议/profile 一致。
+缺失、未知、重复或歧义、模板/镜像不匹配及 Driver/profile 不符均拒绝，不按模型协议、
+模板名称、镜像内安装包或原生响应推断 Driver。
+
+Worker 将同一候选绑定的 `driver` 交给原标准 Pod renderer，生成平台保留环境变量
+`AGENT_INFRA_RUNTIME_DRIVER`，与原镜像 Digest 和版本化模型配置共同交付。Owner 的请求、
+env/Secret、模型配置或 Skill 不能提供或覆盖 selector；Host 保留缺失/无效 selector 的拒绝，
+不设置默认 Driver。自定义/self-managed 和未配置部署遵循原边界，不从空绑定选择标准 Driver。
+
+同一已接纳模板标识和 Digest 的 Driver 不得静默变化。Driver 变更须经过已有模板/镜像发布、
+配置修订和升级/恢复约束，不得热切 active/unknown Session；升级、回滚与会话控制仍遵循
+[工程 Spec §10.4](SPEC-agent-infra-M1-engineering-architecture.md#104-模板与自定义镜像升级)
+和本文的恢复契约。
 
 标准 Runtime 的 active 配置只包含获准 Relay endpoint、模型、reasoning 和 Driver 能力，不含个人或 Agent 默认 Relay Key。Worker 按 Execution 从其已固化的 Key 版本解密，经受认证的私有接口交付本次 Key；Host/Driver 仅在该执行内存中使用，不能跨用户或执行复用。模板只有真实镜像、Driver 和模型链路各自验证后才标记就绪；未就绪时目录显示原因并拒绝申请。权威配置与迁移边界见工程 Spec 10.7；RuntimeHost 不读取 ModelCatalog、SecretRef、Platform DB 或部署解密 keyring。
 
@@ -111,6 +128,26 @@ Owner 不在产品页面填写协议、端口或探针。创建或升级时，Ru
 使用独立 Workload Readiness Grant。Host 必须在调用 Driver 的无副作用 capability 读取前
 校验本机 Workload 绑定；此路径不使用业务 Session，也不开放任务提交或事件查询。
 
+### 4.1 内部 Runtime Service 与 TLS 映射
+
+本节细化[工程 Spec §8.3](SPEC-agent-infra-M1-engineering-architecture.md#83-内部接口)；机制已接收、待评审合并，尚未部署。受控实现与真实材料的分阶段门禁引用该节。TLS 跟随已有 Workload 拓扑，不增加或合并 Service、监听端口或 Manifest 字段；部署材料不来自镜像 Manifest 或 Owner 配置。
+
+**Agent 级 candidate/verified Workload。** 令 `N = agent-` 加可信 `agentId` 的 SHA-256 十六进制前 32 位（`workloadResourceNameV1`，见[现有命名函数](../../apps/platform-worker/src/kubernetes-runtime-comparison.ts)），`NS = workloadInput.policy.namespace`。`P` 取对应 candidate/verified deployment 的 `service.port`；readiness 取该候选 Manifest 的同一端口。
+
+| 路径 | 已有 origin（HTTP，尚未满足 TLS 契约） | TLS 契约与不变门禁 |
+| --- | --- | --- |
+| business | `http://N.NS.svc:P` | `https://N.NS.svc:P`；只在 ready 时消费 candidate，仍校验实际 ownership、Workload readiness 和新 Turn 容量 |
+| verified control | `http://N-probe.NS.svc:P` | `https://N-probe.NS.svc:P`；取原 verified deployment，`observeVerifiedControl` 成功后才返回路由，保留独立控制 Grant |
+| candidate health / signed readiness | `http://N-probe.NS.svc:P` | 同名 HTTPS origin；分别验证原 `health.path` 和 `/internal/runtime/v1/readiness`，不授予业务准入 |
+
+准确消费者为 `createProductionConversationRuntimeResolverV2`（[conversation resolver](../../apps/platform-worker/src/conversation-deployment.ts)）、`createWorkloadRuntimeProbeV1`（[readiness 装配](../../apps/platform-worker/src/workload-deployment.ts)）及 `createKubernetesRuntimeAdapterV1`（[Kubernetes Adapter](../../apps/platform-worker/src/kubernetes-runtime-adapter.ts)）。Adapter 已创建 `N` 和 `N-probe` 两个 ClusterIP Service，共用 Workload 的 `service.port`；候选阶段 `N` selector 为 `closed`，`N-probe` 选中候选 Pod。`closeAgentAtFence`（[cleanup](../../apps/platform-worker/src/kubernetes-runtime-cleanup.ts)）关闭主路由时保留合规的内部 probe 路由；probe 漂移可被移除，不能保证任意故障下 control 都可达。verified 观测失败必须继续 unavailable/unknown，不能把候选误当旧执行目标。
+
+**kubelet 探针与 Worker 验证分离。** 当前 Adapter 的 `readinessProbe.httpGet` 未设置 `scheme`，默认 HTTP；`hasDriftedPodSpec`（[Pod drift 校验](../../apps/platform-worker/src/kubernetes-runtime-pod-validation.ts)）也把缺失值归为 `HTTP` 并按 HTTP 比较。启用 Host TLS 时须同时把期望探针设为 `scheme: HTTPS` 并对实际 StatefulSet/Pod 核验 scheme、原 path/port 与禁止覆盖项；只改 Host 或 Worker URL 会让健康检查与 drift 判定不一致。该 kubelet 探针只判断容器可用性，不携带 service token 或 Grant，不增加明文健康端口。[Kubernetes HTTPS probe 不验证证书](https://kubernetes.io/docs/concepts/workloads/pods/probes/)，其成功不能证明 CA/SAN、服务身份或执行授权；promotion 和 Runtime 调用仍须经过 Worker 严格 TLS 及 signed readiness，不给 kubelet 承担这些认证职责。
+
+同一 Agent 级 Host leaf 的 DNS SAN 覆盖 `N.NS.svc` 和 `N-probe.NS.svc`，每次连接仍只核实际 origin 的 hostname；不以 `.svc.cluster.local`、Pod IP、用户 Ingress 域名或 wildcard 替代这两个实际名称。可信部署将两个名称绑定同一 Agent/namespace；leaf 不证明 candidate/verified revision，原本机绑定及路由观测不得省略。这里补齐的是既有 Kubernetes 资源映射，不是新增双 Runtime 或双服务供应系统。
+
+**业务 Session Sandbox。** Agent 级上述现状不能证明平台会话已按独立 Sandbox 路由。Session 的分配、Service、原 PVC、resourceFence 与真实 UID/version 继续以 [Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定) 为准；五类必需资源及可选 StatefulSet 的澄清归 #1322。TLS 只消费该分配已有 Service 的实际 DNS/端口与原 Session/Sandbox/代次绑定，不套用 Agent 级 `N`/`N-probe`，不新增 Sandbox probe Service，不让两个 Session 共享 leaf 私钥或后端。准确 Sandbox Service 命名与接线由该 owner 的受审阅交付给出；缺少时拒绝该路由，不能回退到 Agent 级 Service，也不能以本票签收 Sandbox 资源或 Host/Grant/Driver wire。
+
 ## 5. Platform Conversation Contract
 
 Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation Contract；Runtime 不另建身份、任务队列或 Eval 状态权威。Contract 定义以下语义，不暴露具体 Runtime 协议：
@@ -156,20 +193,123 @@ Claude 的持久请求、accepted/unknown、状态和恢复继续遵循 §§7–
 
 标准模板的有效补充指令能力取 Registry 声明与 Adapter Conformance 结果；`platform-adapter` 自定义 Agent 取 Manifest 声明与实际探测结果的交集。缺失、声明为 `false`、探测失败或不能保证 `messageId` 持久去重时都按不支持处理，只影响补充指令分支并返回繁忙，不使 Agent 创建失败。
 
+### 5.1 命令与 Skill 目录及调用
+
+本节细化 [工程 Spec §11.4](SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界)。固定 Driver 的能力目录是受控装配与原生实际发现的交集，不动态发现 Driver。平台控制保持既有入口，命令目录不能注册第二个停止、补充指令或重新生成实现。
+
+| 契约 | 最小语义 |
+| --- | --- |
+| 发现 | 按当前主体、Agent、Conversation、Runtime/配置修订及受控 Skill 包摘要绑定目录修订；返回不透明能力 ID、类别、说明、显示来源/版本、参数描述、只读/产生 Turn/改变状态类别和可用性。原生路径及会话 ID 只留 Host。读取失败不返回伪造空目录 |
+| 参数 | 固定命令使用逐项类型、必填与长度约束；仅有原生 argument hint 的 Skill 使用有界文本参数并标明其不是类型 Schema。参数不作为 shell/argv、路径或身份字段拼接，不允许选择运行目录或任意原生方法 |
+| 选择与提交 | 调用方只提交能力 ID、目录修订、参数和幂等键；业务作用域由当前认证及目标资源服务端解析。服务端重验来源、版本、当前权限与能力可用性，Driver 再按固定绑定核验。未知、失效、越界、参数错误、繁忙和协议不支持分别返回稳定脱敏原因，不回退普通文本 |
+| 目录变化 | 原生变化通知只使缓存失效，重新读取后生成新修订；无通知的模板在提交前重新核对。过期选择要求重新确认，不追随同名新包。已受理调用保留原版本，版本不可用时失败或待核实，不改用新版本重放 |
+| 结果 | 只读命令返回获准字段及读取时间；其他调用沿同一 Execution/规范化事件报告受理、运行和终态。命令/Skill 标识与版本关联到原执行；内部路径、供应商错误、Skill 全文和普通参数不进入审计或遥测 |
+
+目录不可枚举其他主体的 Session、路径或内容；使用权、读取权与执行权分别检查。受控来源记录由部署可信配置产生，不接受模型、Skill frontmatter 或浏览器自报。Skill 参数、说明和内容都不是授权；嵌套资源、脚本、符号链接及原生自动发现须受既有文件与装配边界约束。只读发现不执行 Skill 脚本、模型请求或业务工具。
+
+原生元数据读取的用途、当前政策、证明和期限以
+[工程 Spec §9.3.1](SPEC-agent-infra-M1-engineering-architecture.md#931-原生元数据读取授权)
+为唯一授权合同。API 先按受认证主体/channel 定位 Conversation，再限定其中的原 Execution；
+代次取该 Execution 的持久记录。当前 Conversation 的 Host ref、当前 Agent 配置及模型
+修订不能证明旧执行的 Host/native 配置。Worker/Host 只从唯一原持久绑定解析
+`originalHostScopeRef` 及实际 native ref/thread/config；缺少或矛盾时返回 unavailable，
+不建立新会话或换绑。公开 selector 不允许请求者指定这些字段。
+
+### 5.2 调用生命周期与兼容
+
+只读 metadata 的内部 HTTP 例外及原请求/实例边界遵循 [工程 Spec §4.1](SPEC-agent-infra-M1-engineering-architecture.md#41-部署单元)。
+
+- 只读能力沿原 Session 的受限查询返回投影，不创建 Session/Turn、不恢复业务、不改变平台任务状态。未装载、不可用或无法核实分别返回，不能把 `notLoaded` 当作原任务已停止；当前读取权限失效时不返回结果。
+
+metadata-only concrete context 保留原同步护栏，新增显式异步当前确认：
+
+```ts
+type CodexNativeCommandReadContext = Pick<
+  RuntimeOriginalEvidenceReadContext,
+  "signal" | "expiresAt" | "assertCurrent"
+> & {
+  readonly nativeSessionRef: string;
+  revalidate(): Promise<RuntimeOriginalEvidenceBinding>;
+};
+```
+
+该签名仅用于具体原生 metadata 读取；`RuntimeOriginalEvidenceReadContext` 的同步
+`assertCurrent` 与 recovery 的 commit 保持原义，不用恢复 factory 构造读取权。
+Host factory 先消费当前获准结论和真实原绑定，异步 revalidate 沿可信内部链重验并更新
+本次 request 的局部确认状态；拒绝或不可确认则永久失效并 abort。同步 assertCurrent 只核
+这个局部状态及本机原绑定/配置/进程，不隐藏远程 Promise，不把旧 allowed 当当前授权。
+
+Driver 在开始 native metadata 请求前、每个相关 await 后及最终返回前显式等待 revalidate，
+随后核返回的原主体/范围等于最初绑定，并再次检查 signal、固定期限、原配置、进程和
+Skill epoch。范围不会因当前权限扩大而换成另一原执行。原同步 RPC/config callback 继续
+执行本地护栏；新进程的 initialize、config/read、模型 profile 核验、固定 extraRoots/set 及
+thread/read、skills/list 等等待边界同样受当前读取确认约束，不能只在公开方法尾部补一次。
+等待当前确认也受同一 signal/deadline 约束，不续期、不序列化函数，不返回结果后补验。
+
+原生请求失败、撤权/账号或所用凭证失效、期限/abort、等待期间原范围/config/process/epoch
+变化、当前确认依赖失败、返回前拒绝及迟到响应均须有真实入口负向测试。API 结果交付与
+请求关联失效统一遵循 [Spec §9.3.1](SPEC-agent-infra-M1-engineering-architecture.md#931-原生元数据读取授权)，
+不另设恢复路径。受控、原 native 与浏览器证据按 [§5.4](#54-独立验收与实施交接) 分别验收。
+
+- 产生 Turn 的 Skill/命令复用现有 Message/Execution/outbox；不产生回答但改变原生状态的命令也绑定一个持久 Execution 与命令输入，复用同一调度及事件链，不伪造用户聊天消息或模型回答。活跃、等待或 unknown 占用下返回 busy，不插队、不转成补充指令。
+- 受理时冻结能力/目录/包修订、参数摘要、原主体/Agent/Conversation、模型选择及 Key 引用版本；幂等键沿既有作用域使用。同键同输入回读原结果，同键不同内容冲突；业务原文按普通消息权限保存，审计只保留必要元数据。
+- 调用前按 §§7–9 校验当前业务授权、原执行范围、Session/generation/fence 和操作绑定。目录修订不替代 Grant，Skill 不增加工具权限；当前权限扩大不能扩大旧执行，权限缺失或依赖不可确认时拒绝新副作用。
+- RPC ACK 只证明该接口接收；按原生终态及已持久事实判定完成。Skill 加载证据绑定所选包及真实加载机制，工具效果另按 §8.5 核对。参数合法但原生拒绝、模型/工具失败、无加载证据及结果不确定分别保留，不能以文本中的“完成”补证。
+- 停止、撤权、响应丢失、Worker/Host 重启和 SSE 重连只沿 §§7–8 的原执行、原操作、journal、游标与 ACK 恢复；不因重新获取目录而重发。停止 ACK 不释放未核实占用，外部效果不自动撤销。缺少原生幂等/状态证据时保持 unknown，不能用新 Session、Turn、Key 或同名 Skill 重试掩盖不确定性。
+- 旧版本不理解新增输入时显式拒绝；升级只在原生占用排空且兼容验证通过后生效。历史结果仍按原主体读取，原执行恢复继续使用已冻结版本及既有控制授权；本节不更改原控制绑定恢复契约。
+
+### 5.3 固定官方能力矩阵
+
+以下是公开接口/固定源码核查基线，**不是运行验收通过表**。每行均须由实施票补齐实际部署版本、装配摘要及正负向运行证据，才可在目录启用。版本升级重新核查，不能以最新网页替代固定版本源码；官方接口存在也不证明本仓现有 Driver 已适配。
+
+| Runtime 与固定版本 | 公开发现及真实调用路径 | 当前接入差额与验收边界 |
+| --- | --- | --- |
+| Codex `0.153.0`，官方 commit `41e22fee981a63b3698df7ed36bad393cda24715` | [app-server](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/app-server/README.md)：`skills/extraRoots/set`、`skills/list`、`skills/changed`；`turn/start` 的结构化 `skill` 输入；`thread/read` 只读查询；`thread/compact/start` 原生压缩 | 优先路径见下文。没有把 CLI 斜杠清单当作通用命令 API。压缩参数只有 threadId，须证明原 Session 模型/Key 与本次冻结选择一致及现有屏障有效；否则拒绝压缩，交公共执行 owner 保留具体缺口 |
+| Claude 官方 `@anthropic-ai/claude-agent-sdk@0.3.246` | [固定发行类型](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.246/sdk.d.ts) 的 `supportedCommands()`/`SlashCommand`；[官方 SDK 说明](https://code.claude.com/docs/en/agent-sdk/skills) 的命令提示及 `.claude/skills/<name>/SKILL.md` 原生加载 | 当前 Driver `settingSources: []` 且 `disable-slash-commands`。后续仅开放受控来源及实际列表中的入口，逐项验证 `/compact`/Skill 与终态，不直接移除禁用项继承个人配置；`argumentHint` 不是参数 Schema，文档新行为须对照固定 SDK |
+| OpenCode 官方 `1.18.30`，commit `3104c1428ec91f809e5ab86631300de41eb6952e`；ACP SDK `1.4.0` | [固定 ACP service](https://github.com/anomalyco/opencode/blob/3104c1428ec91f809e5ab86631300de41eb6952e/packages/opencode/src/acp/service.ts) 的 `available_commands_update` 合并命令/Skill；`session/prompt` 解析已知名称后调用原生 `session.command`，`compact` 使用原生 summarize | 原生目录含 Skill，但 ACP 展示未必携带完整来源/版本，须由受控装配核对。未知名称必须在平台拒绝；命令、Skill 真实 I/O 仍受 [Spec §10.13](SPEC-agent-infra-M1-engineering-architecture.md#1013-opencode-原生工具回执与来源) 约束，目录通知不证明工具事实/执行屏障通过 |
+| Pi 官方 `@earendil-works/pi-coding-agent@0.86.0`，commit `ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc` | [固定 RPC 文档](https://github.com/earendil-works/pi/blob/ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc/packages/coding-agent/docs/rpc.md)：`get_commands` 返回来源；`prompt` 展开 `/skill:name`；`compact` 是独立 RPC。TUI-only 命令不在此目录 | 当前装配 `enableSkillCommands: false`、`--no-skills`、`--no-prompt-templates`。后续验证受控 Skill 根及实际展开；不开放任意 extension/包安装，不以 RPC response 或低层 `agent_end` 代替完整终态 |
+
+Codex 的首个只读原生命令定义为“查看原生会话状态”：目录显式绑定 `thread/read`，不假称 CLI `/status`。Driver 只用当前 Conversation 已持久绑定的 threadId，禁用历史正文投影，只返回映射后的状态及读取时间；原生未装载不触发 resume。它证明真实原生查询闭环，不代替产生 Turn 的命令验收。原生 `/compact` 作为独立有状态命令交付，返回空 ACK 后必须跟踪原 `contextCompaction` item 与 Turn 终态；不伪造普通 prompt 代跑，不绕过 §8.5.2 的当前模型和事实约束。
+
+Codex 已安装 Skill 的首条路径：部署提供固定来源/内容摘要的 Skill 包，作为只读资源装配在已获文件准入的固定 Runtime 资源根 `/opt/codex/agent-infra-skills/workspace-summary/SKILL.md` 及配套资源中，不放进可被模型工具改写的 Conversation 工作区或原生 HOME。该名称是实施验收包，不声称官方内置。每个 Conversation 独立 app-server 进程仅把获准的 `/opt/codex/agent-infra-skills` 交给固定版本公开的 `skills/extraRoots/set`；调用前以 `skills/list` 实际返回且 enabled、来源路径及内容摘要匹配作为目录准入，出现额外的个人或项目 Skill 时拒绝该次调用。Host 将能力 ID 解析为本机获准路径，向原 `turn/start` 传递 `skill {name,path}` 与有界任务文本，保持本次模型/reasoning/Key。路径不由 Web 提供；用受控工作区样本验证原生加载该确定内容、只读挂载和跨 Conversation 文件隔离，以及实际工具读取/摘要结果。官方[输入类型](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/protocol/src/user_input.rs)证明结构化入口存在，不能证明既有部署已允许该目录或工具屏障已经通过；缺少这些前置时保持未验证，由原 owner 补齐，禁止以派生二进制或普通提示绕过。
+
+本节源码与官方 SDK 声明属于静态证据；上游测试属于上游证据。运行证据须另列原生版本及发行摘要、受控 Skill 摘要、实际发现/调用、加载及工具事实、平台持久结果与浏览器回读。没有这些证据不得写“支持已验收”；本节不授权新增隔离探针或修改上游实现。
+
+### 5.4 独立验收与实施交接
+
+| 场景 | 通过条件 |
+| --- | --- |
+| 发现与 UI | 固定四模板逐项核对目录、说明、来源/版本、搜索/键盘/输入法/参数/清除与移动布局；目录读取失败区别空目录。真实浏览器使用唯一会话输入框及时间线 |
+| Codex 正向 | 真实 `thread/read` 状态命令、原生压缩及一个确定版本 Skill 各有真实调用与结果；Skill 必含实际工具操作及加载证据。压缩模型/Key/屏障缺口单列未完成，不以只读命令通过抹去 |
+| 参数与变化 | 未知命令、缺参、旧目录、禁用/删除/同名替换包、协议不支持均明确拒绝且零新副作用；普通消息回归，不能静默降级 |
+| 授权与来源 | 两个独立主体、跨 Agent/Conversation/能力 ID 替换、撤权、依赖不可确认、Owner 越权、来源越界均拒绝；个人 HOME 不参与装配，目录/错误/遥测不泄露内容或凭据 |
+| 串行与恢复 | 活跃/等待/unknown 时不发新 Turn；同键重投/异参冲突、受理响应丢失、原生 ACK 后失败、停止竞态、重启和 SSE 重连保持原操作及结果；不重复模型/工具副作用，不提前释放占用 |
+| 其余模板 | Claude/OpenCode/Pi 各按上表真实 SDK/ACP/RPC 路径核对发现、调用、加载/工具及终态；缺口绑定版本、原因、原 owner 与实施 AC，不能以四行 unsupported 结案 |
+
+[#992](https://github.com/AgoraIO-Extensions/agent-infra/issues/992) 以 [#991](https://github.com/AgoraIO-Extensions/agent-infra/issues/991) 契约评审合入为 native blocker；仅文档完成不签收功能或原票 AC。实施前逐 hunk 交接：Web owner 在 [#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192) 唯一输入框/时间线消费生成 Client，遵循 [#400](https://github.com/AgoraIO-Extensions/agent-infra/issues/400) 固定 `agent-infra/index.html`、`screens/chat.html` IA，旧 Pilot 及按当前实现生成的变体不作依据；[#482](https://github.com/AgoraIO-Extensions/agent-infra/issues/482) 拥有任务 API/Store；[#508](https://github.com/AgoraIO-Extensions/agent-infra/issues/508) 拥有公共执行/Host/控制恢复；Runtime 原 owner 拥有各 Driver；正式装配归 [#504](https://github.com/AgoraIO-Extensions/agent-infra/issues/504)。本新增能力不反向阻塞这些票，不接管其未完成验收，也不重定义 OpenCode 工具来源或原控制恢复条款。
+
 ## 6. 数据归属与标识
 
 | 数据 | 权威位置 | 约束 |
 | --- | --- | --- |
+| Session 到 Sandbox 的分配 | Platform DB | 归属与生命周期按工程 Spec §10.1.1；不是 Host 或原生返回值 |
 | Conversation、Message | Platform DB | Web/API/Channel 只使用平台 ID，绑定服务端解析的提交主体与类型 |
 | Execution、回答版本、API 等待顺序/期限及调度状态 | Platform DB | API task 对应一个 Execution，等待不占原生 Turn，重试不重复创建或改绑 |
 | 规范化事件与 SSE 游标、平台执行审计 | Platform DB | 事件与必要审计可靠保存后确认/推送，受控正文不进入审计或遥测 |
 | 模型/工具原操作与未确认事实 | 执行侧持久记录 | RuntimeHost/Driver 在现有 PVC 持久层记录意图与结果，按原操作向平台确认；不成为第二套平台任务或审计查询权威 |
 | Eval 数据集、实验、评分与反馈 | Platform DB/受控对象存储 | 用途授权、版本和内容读取由 Platform 负责，Runtime 只处理获准任务 |
 | RuntimeHost Session 引用 | Platform DB 的 Client Adapter 内部存储 | 保存不透明、不可猜测且不能作为授权依据的 Host Session Ref 和单调递增的 `sessionGeneration`，调用方不能解释或覆盖该引用 |
-| Host Session 到原生 Session 的映射 | Agent PVC 上的 RuntimeHost 状态 | 保存 Host Session Ref 与 `agentId`、`conversationId`、`sessionGeneration` 及原生 Session ID 的绑定；只有对应 Driver 解释原生 Session ID |
-| Runtime 工作区和原生 Session 数据 | Agent PVC | Runtime 自己解释，平台不读取内容 |
+| Host Session 到原生 Session 的映射 | Sandbox PVC 上的 RuntimeHost 状态 | 保存 Host Session Ref 与 `agentId`、`conversationId`、Sandbox、`sessionGeneration` 及原生 Session ID 的绑定；只有对应 Driver 解释原生 Session ID |
+| Runtime 工作区和原生 Session 数据 | 所属 Sandbox PVC | Runtime 自己解释，平台不读取内容 |
 
-一个 Platform Conversation 最多映射一个当前 RuntimeHost Session Ref。创建 Conversation 时，Platform DB 原子初始化 `sessionGeneration = 1` 和“Host Session 未创建”状态；RuntimeHost 创建或恢复 Session 时在 PVC 中维护该引用及其绑定，worker 只持久化和回传不透明引用。每次调用必须先验证服务身份，以及按工程 Spec §9.3 区分业务执行或平台控制用途的当前 Grant；Host 再校验引用保存的 `agentId`、`conversationId` 和 `sessionGeneration` 与 Grant 及请求完全一致，并校验 Execution 相关请求中的 `executionId` 与 Grant 和持久化请求记录一致。Host Session Ref 泄露、错配或跨 Conversation 重放都不能获得访问权。首个及后续 outbox 在创建时保存当前代次。Web/API、Channel、自定义镜像和 Connection 请求都不能提交或覆盖 Host Session Ref、原生 Session ID 或代次。
+Session/Sandbox 的标识、分配、资源和授权权威统一遵循
+[工程 Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定)。
+Platform Session 使用 Conversation 的稳定 ID；Host Session Ref 与 Native Session ID 仍是内部映射，
+不能替代 Sandbox 分配。每次提交、补充、查询、停止、事件回读和恢复均核对原 Sandbox/Session/代次；
+Driver 只能使用该 Sandbox 的进程、HOME/cwd、工作区和受保护客户端，不能按 Agent 选择共享实例。
+Runtime 事件与 Platform 写入绑定同一归属，原 fence、持久事务及 ACK 不因增加 Sandbox 而旁路。
+
+一个 Platform Conversation 最多映射一个当前 RuntimeHost Session Ref。创建 Conversation 时，Platform DB 原子初始化 `sessionGeneration = 1` 和“Host Session 未创建”状态；RuntimeHost 创建或恢复 Session 时在所属 Sandbox PVC 中维护该引用及其绑定，worker 只持久化和回传不透明引用。每次调用必须先验证服务身份，以及按工程 Spec §9.3 区分业务执行或平台控制用途的当前 Grant；Host 再校验引用保存的 `agentId`、`conversationId` 和 `sessionGeneration` 与 Grant 及请求完全一致，并校验 Execution 相关请求中的 `executionId` 与 Grant 和持久化请求记录一致。Host Session Ref 泄露、错配或跨 Conversation 重放都不能获得访问权。首个及后续 outbox 在创建时保存当前代次。Web/API、Channel、自定义镜像和 Connection 请求都不能提交或覆盖 Host Session Ref、原生 Session ID 或代次。
 
 API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接须匹配同主体、同 Agent 及渠道边界。主体类型与稳定 ID 由服务端解析，应用不映射成其自然人责任人。任务输入、已有输出、结果、附件及审计查询使用各自的当前权限，Owner/责任人角色不授予其他主体的任务访问或取消权。
 
@@ -179,26 +319,26 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 
 ### 7.1 Session 生命周期
 
-1. 首个实际投递的 Execution 由 RuntimeHost Driver 创建 Runtime Session；尚在平台等待的任务不提前创建原生 Session。RuntimeHost 在 PVC 中持久化 Host Session Ref 到原生 Session 的映射，worker 侧 Client Adapter 只保存 Conversation 到不透明 Host Session Ref 的映射。
+1. 首个实际投递的 Execution 由 RuntimeHost Driver 创建 Runtime Session；尚在平台等待的任务不提前创建原生 Session。RuntimeHost 在所属 Sandbox PVC 中持久化 Host Session Ref 到原生 Session 的映射，worker 侧 Client Adapter 只保存 Conversation 到不透明 Host Session Ref 的映射。
 2. 后续 Execution 必须恢复同一个 Session，不能以新 Session 代替恢复。
-3. Conversation 关闭或 Agent 停用时，Adapter 可以关闭原生 Session；M1 不向用户提供删除 Conversation。
+3. Conversation 关闭或 Agent 停用时，按工程 Spec §10.1.1 拒绝新业务并停止/核实原执行；确认无剩余副作用后关闭原生 Session 和回收对应计算资源，保留原持久映射与历史。M1 不向用户提供删除 Conversation。
 
 ### 7.2 并发
 
 - 同一 Conversation 同时只允许一个活跃 Turn。
 - Web 初始 Execution 与 Turn outbox 原子提交即占用本 Conversation 的执行位置；API 等待 Execution 只有在 Dispatch 原子准入后才占用。该位置覆盖尚未投递、接受结果不确定、运行中和取消待确认；确认无剩余 Runtime 副作用且终态持久化后才能释放。待核实不能被当作可释放终态。
 - Web/托管渠道在活跃 Turn 存在时，只有与当前 Execution 相同 `actorId` 的新消息可以按 capability 作为补充指令处理；同一发送者不支持补充指令或不同 `actorId` 提交消息时，平台明确返回繁忙。任何新消息都不能启动第二个 Turn。API 同会话后续任务按 8.4 有界等待，不自动转换为补充指令；已合法绑定当前 Turn 的 Web 补充指令仍可处理。
-- 不同 Conversation 在 Agent 已验证容量内并行，Dispatch 在 Platform DB 以原子条件预留和释放容量，不把未经验证的并发下推给 Driver。Adapter 不以 Agent 全局锁替代会话隔离；不新增资源池、优先级、定时任务或第二套排队权威。
+- 不同 Conversation 在各自独立 Sandbox 内、按 Agent 已验证容量并行，Dispatch 在 Platform DB 以原子条件预留和释放容量，不把未经验证的并发下推给 Driver。Adapter 不以 Agent 全局锁替代会话隔离；不新增资源池、优先级、定时任务或第二套排队权威。
 
 ### 7.3 重启恢复
 
 - Generic ACP 使用未修改的原生 Runtime。原 Session 映射、已确认请求结果和首次转发前持久化的事件日志按 §§8.1–8.2 恢复；原生 `session/prompt` 的最终响应先持久化，才能发布对应终态。原生进程退出或最终响应丢失且没有可靠结果证据时，原 Turn 保持 `unknown`，不把进程退出、`cancel` 通知发送成功或 `loadSession` 成功推断为原任务完成、失败或取消。后续查询和同请求重放不重发 prompt，未知 Turn 仍占用该 Conversation 的活跃位置；只有取得可靠终态证据才能接受下一 Turn。用户可以明确新建 Conversation，平台不自动替换 Session。单次结果未知不等于 Session 无法恢复，不因此执行代次隔离；只有实际 Session 或持久状态恢复失败才进入本节的隔离流程。该边界不要求维护原生源码 fork 或增加专用协议扩展；Conformance 必须同时证明已确认终态、事件和游标可恢复，以及不确定窗口不会被伪造为确定结果。
 - `platform-worker` 重启后从 Platform DB 恢复 Execution、outbox 和不透明 Host Session Ref；未开始的 API 任务保留原顺序与等待期限，按当前授权继续调度。运行中任务沿原 Execution/Session 查询，不能因进程重启生成新任务。
 - 标准模板运行中 Execution 的 Key 用途、引用与版本从原受理记录恢复；Worker 在当前业务 Grant 与原执行一致时重交同一版本，Host 只恢复该执行的内存传输能力。Key 替换不改变旧执行；旧密文已被错误回收、Key 用途不符或原授权不能确认时拒绝模型转发，不用 Pod 静态 Key、当前个人 Key 或 Agent 默认 Key 补位。历史事件与无正文控制查询仍按原执行权限读取。
-- Worker 的 Runtime 调用、Adapter 恢复查询、规范化事件和 Execution 状态写入必须携带 outbox 保存的 `sessionGeneration` 与当前 Execution `deliveryFence`；补充指令和 stop 调用还分别携带自身的 `messageId` fence 或 `stopRequestId` fence。Platform DB 对规范化事件按 8.2 的重复事件优先规则处理，仅允许当前 Conversation 代次和相应 fence 产生新事件或状态写；Agent Service、Runtime Host 或 Bridge 在 PVC 中按 Session 和投递标识持久化已见的最高 token，并拒绝更低 token 的迟到调用。
-- Agent Pod 重启后复用原 PVC；Pod 就绪后，RuntimeHost 必须使用已保存的 Host-to-native Session 映射恢复原 Session，并查询未完成 Turn 状态。
+- Worker 的 Runtime 调用、Adapter 恢复查询、规范化事件和 Execution 状态写入必须携带 outbox 保存的 `sessionGeneration` 与当前 Execution `deliveryFence`；补充指令和 stop 调用还分别携带自身的 `messageId` fence 或 `stopRequestId` fence。Platform DB 对规范化事件按 8.2 的重复事件优先规则处理，仅允许当前 Conversation 代次和相应 fence 产生新事件或状态写；Agent Service、Runtime Host 或 Bridge 在所属 Sandbox PVC 中按 Session 和投递标识持久化已见的最高 token，并拒绝更低 token 的迟到调用。
+- Sandbox Pod 重启后仅复用该 Sandbox 的原 PVC；Pod 就绪后，RuntimeHost 必须使用已保存的 Host-to-native Session 映射恢复原 Session，并查询未完成 Turn 状态。
 - 恢复成功后继续接收事件。恢复失败时，`platform-worker` 必须先在 Conversation 锁内保持当前 `sessionGeneration`，将 Conversation 标记为“代次隔离中”，暂停新命令和业务 outbox，并持久化携带目标代次的内部 generation tombstone；当前代次在隔离期间已被 Agent Service 接受的调用、事件和状态仍按原规则保存，不能形成不可见执行。Agent Service 必须幂等持久化并激活目标代次的 cancellation barrier，拒绝新的旧代次调用，并等待或取消已接受的旧代次调用，直到它们不能再产生 Runtime 副作用、事件或状态后才确认 tombstone。只有收到该确认后，Worker 才能再次取得 Conversation 锁，原子提升 `sessionGeneration`、将 Conversation 标记为“会话不可用”，并把活跃 Execution、该 Conversation 尚未开始的 API 任务和业务 outbox 置为带可审计原因的失败终态；Platform DB 从该事务提交起拒绝旧代次的事件和状态写。任一步失败或 Worker 重启都从持久化状态重试；Agent Service 未确认时保持“代次隔离中”，不能恢复业务投递或创建新 Session。当前 Host Session Ref、Host-to-native 映射和平台历史保留只读，其他 Conversation 和 Agent 服务保持正常。
-- 恢复失败时禁止静默创建新 Session。只有用户明确新建 Platform Conversation 时才能创建新的 Runtime Session。
+- 恢复失败时禁止静默创建新 Session。只有用户明确新建 Platform Conversation 时才能分配另一 Sandbox 并创建新的 Runtime Session；这不解除旧 Sandbox 的 unknown、隔离或保留证据义务。
 - Host V3 仅在原执行的 Session 恢复被原生 Runtime 明确拒绝时报告 `RUNTIME_SESSION_RECOVERY_FAILED`。状态查询返回严格的 `recovery_failed` 分支，携带经原主体、请求摘要和执行绑定验证的原 Host Session Ref 与 Execution ID；首次受理回执丢失时，Worker 也能原子保存这一映射与隔离意图，再沿原 tombstone 完成控制流程。其他操作返回 HTTP 503、`retryable=false`，缺少映射时先查询原执行；响应不包含原生诊断正文。传输断开、超时、原 Turn 结果 `unknown` 和 Host 暂时不可用不构成这一证明，保持原执行与占用并继续查询；不能按通用 503 或错误文本触发隔离。
 
 - `generation-cancel` 的持久 `accepted` 终态回执确认目标代次的 cancellation barrier 已完成；它是控制操作结果，不是原 Turn 的原生终态。Host 以该回执确认 tombstone，不以原 Turn 的 `unknown` 或不可查询状态覆盖控制回执。Driver 必须先独立持久化屏障，再确认所有旧代次执行源已退出且在途事件与状态写已排空；即使 Session 或 Turn 持久状态无法恢复，也不能跳过这些条件。无法证明停止副作用时不确认。原 Turn 的未知结果和已保存历史保持原状，不生成合成终态事件。
@@ -401,28 +541,41 @@ Driver 仍只准入本次 Execution 冻结的 B；压缩与后续普通采样都
 
 OpenCode 的来源、维护和启用前置以
 [工程 Spec 10.13](SPEC-agent-infra-M1-engineering-architecture.md#1013-opencode-原生工具回执与来源)为准。
-Generic ACP 保留权限、进度与未知结果的协议语义；接缝能力只由经过验证的原生执行回执提供。
+Generic ACP 保留权限、进度与未知结果的协议语义；可信开始与结果只由经过验证的实际执行端提供。
 公开 Plugin 接缝的可用性须在固定源码和 artifact 中核对，不假定 before hook 位于工具内部
 权限检查之后，也不假定成功后的 after hook 覆盖抛错、取消或内部新尝试。
+
+官方公开扩展的替代边界由固定工具扩展请求现有 Driver 信任域中的执行叶子完成实际 I/O。
+扩展请求与模型/ACP 进度不能写入可信回执；只有执行叶子沿原 journal 记录实际开始和结果。
+模型可用的每项工具须先验证与原承诺行为等价，原 built-in 及其他可绕过该叶子的入口须实际
+阻断。固定扩展、工具和配置受版本/hash 与只读装配控制，不加载 Owner 或工作区可写的替代
+实现；提示词、默认配置或一条自有工具成功不能证明完整覆盖或隔离。
+
+公开入口须把每个真实执行请求无歧义地绑定到 Driver 已冻结的原 Session/Execution、代次
+和 fence，并持久保存 request 与 operation/attempt 的映射。固定 V1 ToolContext 未公开
+callID，不能依赖未声明字段、当前 Execution、参数相等、队列次序或模型自报 ID 补足绑定。
+before hook 提供 callID 本身不证明其与实际请求的关联；同参数并发、跨 Execution、旧请求
+重放及原 Session 重启均须实证。不能建立可信映射时拒绝执行，不补造原生调用事实。
 
 - 原生接缝将可信 session/Turn/callId 和每次内部尝试绑定到原 Execution、代次/fence
   与稳定 operationRef/attemptRef。重复控制请求复用已保存决定，真实新尝试独立标识；
   模型参数、ACP 任意进度帧与另一 Execution 的相同 tool ID 不能建立该绑定。
 - 每次实际文件操作、process/client dispatch 前，Driver 沿现有 journal 确认 intent，
-  释放持久队列后等待当前 Host 授权。Native 校验该 attempt 的许可、代次和本地取消状态；
+  释放持久队列后等待当前 Host 授权。实际执行端校验该 attempt 的许可、代次和本地取消状态；
   拒绝、过期、错配、断连或持久确认失败不开始动作。工具内部权限与普通 hook 保留原职责，
   许可缓存不跳过每次屏障；最终操作内容变化须重新核对，不能使用变更前的许可。
 - Permit 是准入确认。started 只来自实际 I/O 或 dispatch 已开始的回执；前置验证、
   权限等待和拒绝均不记录虚构开始或耗时。结果、抛错、取消和可能发生后的 unknown 沿原
   attempt 保存并确认，确认完成前不向原生推理循环交付该结果或开始后续动作。
-- 控制通道复用原 Native 进程生命周期，ACP stdio 继续承担业务协议，不增加公开 RPC、
+- 控制通道复用现有 Driver/Native 生命周期，ACP stdio 继续承担业务协议，不增加公开 RPC、
   capability 协商或调度循环。接管的控制端必须隔离于工具子进程并在 spawn 前封闭继承，
   模型/Owner 不能关闭、改写或伪造许可；同 UID 可读取的 env Token 或普通 socket 路径
   不能作为隔离证明。确认等待可取消且不占用状态/stop 消费所需的持久锁。
 - stop、撤权和 generation barrier 封闭新准入并排空在途控制请求及实际执行源；未确认
   停止不释放占用。任何一侧在许可、实际开始或结果确认附近崩溃，只核实原 attempt，
   保留已保存结果和未确认交付；未知不自动重发，也不借新 attempt 或 Session 补证。
-- 工具覆盖清单绑定真实 artifact：当前允许的 read/edit 及其内部动作逐项验证，声明的
+- 工具覆盖清单绑定真实 artifact 及扩展：原 built-in 与替代叶子分别记录，read/write/edit
+  及其内部动作逐项验证，声明的
   其他 built-in、委托调用、后台动作和内部 retry 都独立覆盖。能力缺口保持未通过，
   不从另一工具的结果推定；正文、文件内容、参数、凭证和原生错误留在受控业务路径，
   不进入操作事实或遥测。公共事实、必要审计和游标继续使用 8.2/8.5 的唯一事务边界。
@@ -490,11 +643,21 @@ Codex Native Bridge 在 Linux 由部署可信 `setpriv` 的 Landlock 边界承�
 
 ### 10.2 Codex 原生 Conversation 隔离
 
-Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每个 Conversation 代次运行独立的原生进程与持久目录。文件边界在 Linux 由部署可信 `setpriv` 的 Landlock allowlist 单独施加、在 Darwin 由固定 Codex 版本自身的权限 profile 施加，无法施加边界的平台拒绝启动。启动准入按进程执行，因此 Driver 打开时不再预启动原生进程。约束与验收要求以工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)为唯一权威。
+Codex Driver 在所属 Sandbox 内按可信 Agent/Conversation/generation 派生的存储键，为每个 Conversation 代次运行独立的原生进程与持久目录。文件边界在 Linux 由部署可信 `setpriv` 的 Landlock allowlist 单独施加、在 Darwin 由固定 Codex 版本自身的权限 profile 施加，无法施加边界的平台拒绝启动。启动准入按进程执行，因此 Driver 打开时不再预启动原生进程。约束与验收要求以工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)为唯一权威。
 
 ## 11. 验证
 
 ### 11.1 通用 Runtime 与 Driver 验证
+
+Session-owned Sandbox 的 P0 验收须从 Web、企微和 API 三入口分别为同一 Agent 建立两个
+独立 Session，回读不同实际 Pod/Runtime、Service、身份、持久工作区、网络策略及授权/fence。
+至少使用 Codex 与另一个真实支持的 Runtime，其余 Runtime 逐项记录支持与缺口。本人文件读写
+和任务结果必须成功；跨 Session 文件列举/读取/修改、环境、进程、记忆、模型上下文、凭证和
+Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也适用，渠道不合并。
+覆盖并发、幂等、撤权、旧代次 late call、停止/unknown、SSE 与 Pod/Worker/Host/Runtime 重启恢复，
+绑定准确源码、镜像 Digest、配置和 CNI；目录名、thread ID、fixture 或健康检查不构成运行证明。
+文档合并仅冻结契约，不表示上述隔离或完整 Pilot 已验收；唯一交接见
+[Sandbox ADR](../adr/0017-session-owned-sandbox-isolation.md)。
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、带 Execution 级有效模型选择的 Turn、流式事件与按已确认游标重放、停止、状态和 capability。
 - 四模板分别以真实镜像、Driver 与 Relay 模型链路验证可申请状态；未就绪项显示受限原因并拒绝申请。合成目录、`/v1/models` 可见、Fake Driver 或单个模板通过不证明其他模板就绪。
@@ -524,11 +687,16 @@ Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每
   与持久事实，证明未知不重放、不转为 A 或提前回答、不伪造未创建 Turn、不提前释放占用；
   既有普通当前模型压缩、取消和已保存历史读取仍按原契约通过。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
-- OpenCode 工具接缝使用真实固定 Native 与受控 read/edit，逐项核对许可前零动作、实际
+- OpenCode 工具接缝使用真实固定 Native 与受控 read/write/edit，逐项核对许可前零动作、实际
   开始和结果/失败/取消；覆盖内部新尝试、重用 tool ID、跨主体/Execution、回执丢失与结果
   保存失败、原 Session 重启和控制端隔离。验证源码/target/artifact 与覆盖清单、旧终态
   读取和 active/unknown 兼容；合成敏感哨兵不进入事实、错误或遥测。Fixture 只证明其受控
   路径，四模板真实模型/Connection、V4 Key 和 Worker 事务验收继续逐项完成。
+- 官方扩展替代边界另外验证同参数并发请求的原 Execution/attempt 绑定、旧 slot/请求重放、
+  伪造回执、可写配置替换及原工具绕过。intent 保存或授权失败时真实 I/O 为零；实际 I/O
+  完成但 terminal ACK 扣留时，后续模型请求为零，释放 ACK 后才能继续；结果已保存后断连
+  重启只读取原 attempt，实际 I/O 计数不增加。停止须排空实际执行源，控制 ACK 不证明退出。
+  该纵向验证从 read 开始不缩小 write/edit、委托、后台或其他已承诺工具的完整矩阵。
 - 负向测试覆盖未知协议、无交互入口、Manifest Label 缺失或超过 64 KiB、JSON 嵌套超过 8 层、未知或重复字段、非 `1` 的 Schema 版本、`self-managed` 声明 `protocol`、非法 capability 结构、Registry 从 capability 外重复声明 `supplementaryInstruction`、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Service/健康检查、`health.path` 使用 `//`、`.` 或 `..` 路径段、反斜杠、`%` 编码、非允许字符、外部 URL、查询参数、片段、控制字符或凭证，以及健康探针返回 HTTP 重定向、调用方伪造或覆盖 `actorId`、使用另一发送者的 Conversation 查询消息、历史、SSE、附件或结果文件、群内公开事件暴露其他发送者的 Conversation 或 Runtime 上下文、不同发送者向活跃 Turn 追加指令或停止回复、缺失或非法 `Idempotency-Key`、同一 Key 跨命令类型复用时误命中其他操作、普通消息响应丢失后因活跃状态变化把重试误判为补充指令或繁忙、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、使用者停止投递前失去权限后转换为平台撤权停止、没有使用者停止请求时平台主动中止撤权用户的活跃 Execution、身份依赖暂时不可用时不误判撤权或调用 Adapter、检查 stop 后到调用 Runtime 前的并发停止、Turn lease 到期后旧 Worker 迟到提交或回写、接管 Worker 未完成高 fence 取消标记、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、stop 认领后已接受 Turn 的在途事件或真实终态被拒绝、Session 恢复失败后旧代次调用、事件或终态迟到、generation tombstone 重试、繁忙拒绝后创建记录、重复消息、旧 fence 重放已保存事件时重复写入、旧 fence 产生未保存的新事件、双 Worker 并发保存同一 Conversation 事件、Runtime 事件已转发但事务未提交时断线、事务提交后上游确认前崩溃、Worker/Pod 重启后按已确认游标重放、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
 - generation fencing 故障注入覆盖隔离意图提交后 tombstone 尚未激活、Agent Service 激活后 Platform DB 尚未提升代次、两个阶段之间 Worker 重启、tombstone 重复投递和 Agent Service 暂时不可用；任何路径都不能接受新命令、丢弃已接受旧调用的可见结果、在 barrier 确认后产生旧代次副作用，或在确认前提升平台代次。
 - RuntimeHost Conformance 故障注入覆盖 Host Session Ref 泄露、跨 Conversation 重放或与 Grant 绑定不一致，Grant 签名、签发方、audience、有效期、附件引用或操作范围不匹配，缺失或非法模型选择、同一 Execution 选择重放与冲突、相邻 Execution 选择隔离、Driver 不支持的模型或 reasoning，两个 Worker 对同一 Session 和 operation scope 并发提交相同或不同 fence，以及请求记录提交前、提交后但 Driver 调用前、Driver 接受后但 Host 持久化或响应前崩溃。测试必须模拟 durable store 确认前掉电和不完整记录；恢复查询、重复请求和 fence 接管都不能创建第二个 Turn、重复补充指令或重复停止。无法确认时保持 `unknown`，损坏记录使对应 Session fail closed，不能把引用、请求字段、模型 endpoint/credential、原生协议帧或日志文本当作授权或恢复依据。

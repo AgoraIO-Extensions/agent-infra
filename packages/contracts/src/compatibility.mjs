@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageRoot, "../..");
@@ -750,6 +751,30 @@ function isAgentSummaryOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #508 exposes only the original accepted V4 binding through a V3 control read.
+function isRuntimeOriginalBindingV3OpenApiAddition(previous, current) {
+	const path = "/internal/runtime/v3/original-binding";
+	const responseName = "RuntimeOriginalBindingResponseV3";
+	if (
+		previous.paths?.[path] !== undefined ||
+		previous.components?.schemas?.[responseName] !== undefined
+	)
+		return false;
+	const addition = {
+		path: current.paths?.[path],
+		response: current.components?.schemas?.[responseName],
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"1347a9c19999f2a62f397fa830faa1d12308c6590dc89f0ce20f668373073325"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	delete normalized.components.schemas[responseName];
+	return sameValue(previous, normalized);
+}
+
 function isRuntimeStatusRecoveryOpenApiAddition(previous, current) {
 	const path = "/internal/runtime/v2/status";
 	const requestName = "RuntimeStatusRequestV2";
@@ -815,6 +840,191 @@ function isAgentOwnerScopeOpenApiAddition(previous, current) {
 		return false;
 	const normalized = structuredClone(current);
 	normalized.paths[path].get = withoutAgentOwnerScope(currentOperation);
+	return sameValue(previous, normalized);
+}
+
+// #1023 adds one browser administrator read; all prior guards still apply.
+function isAdministratorAgentReadV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/admin/agents";
+	if (
+		previous.paths?.[path] !== undefined ||
+		createHash("sha256")
+			.update(JSON.stringify(current.paths?.[path] ?? null))
+			.digest("hex") !==
+			"eaf53701db321fee9e8323d85d6b77d68043e95d12c6f1f36fe3c10dd0c7bfb8"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #1059 admits only browser personal issuance/revocation. Preserve all old bytes.
+function isPersonalApiCredentialV2OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/me/api-credentials",
+		"/api/v2/me/api-credentials/{credentialId}",
+	];
+	const schemas = [
+		"PersonalApiCredentialIssueRequestV1",
+		"PersonalApiCredentialIssueResponseV1",
+		"PersonalApiCredentialMetadataV1",
+		"PersonalApiCredentialRevokeResponseV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const security = {
+		PlatformSession: current.components?.securitySchemes?.PlatformSession,
+	};
+	for (const [name, definition] of Object.entries(security)) {
+		const existing = previous.components?.securitySchemes?.[name];
+		if (existing !== undefined && !sameValue(existing, definition))
+			return false;
+	}
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+		security,
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"fb689d0afa1624783e81bbb18aa1d48d4c8ab4045787f6cb101801e9cefed2c7"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	for (const name of Object.keys(security)) {
+		if (previous.components?.securitySchemes?.[name] === undefined) {
+			delete normalized.components.securitySchemes[name];
+		}
+	}
+	if (
+		Object.keys(normalized.components.securitySchemes).length === 0 &&
+		previous.components?.securitySchemes === undefined
+	) {
+		delete normalized.components.securitySchemes;
+	}
+	return sameValue(previous, normalized);
+}
+
+// #1167 admits only the reviewed self-registration POST and metadata schemas.
+function isApplicationRegistrationV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/applications";
+	const schemas = [
+		"ApplicationMetadataV1",
+		"ApplicationRegistrationRequestV1",
+		"ApplicationRegistrationResponseV1",
+	];
+	if (
+		previous.paths?.[path] !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		path: current.paths?.[path],
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"b691f8eaca8307dda272c5bc772f4614dae62b54f16dcc3e08b661a98db5b720"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
+// #1219 admits the exact disable command while preserving every prior contract.
+function isOwnApplicationDisableV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/applications/{applicationId}";
+	const schema = "ApplicationDisableRequestV1";
+	if (
+		!previous.paths?.[path] ||
+		previous.paths[path].patch !== undefined ||
+		previous.components?.schemas?.[schema] !== undefined
+	)
+		return false;
+	const addition = {
+		patch: current.paths?.[path]?.patch,
+		schema: current.components?.schemas?.[schema],
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"6ef266859d48ccbac5c7ef73c943f8d95bf3e9dea4c58c99922fbc173d17a5ca"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].patch;
+	delete normalized.components.schemas[schema];
+	return sameValue(previous, normalized);
+}
+
+// #1166 admits only the reviewed own-application metadata GET.
+function isOwnApplicationMetadataV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/applications/{applicationId}";
+	if (previous.paths?.[path] !== undefined) return false;
+	if (
+		createHash("sha256")
+			.update(JSON.stringify(current.paths?.[path] ?? null))
+			.digest("hex") !==
+		"a555914e670700aad94d9ad8b2c3263a9cd8abe14f342dc93a0a74bf21107275"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	return sameValue(previous, normalized);
+}
+
+// #1233 admits only the application credential material grant metadata routes.
+function isApplicationMaterialGrantV2OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/applications/{applicationId}/material-grant",
+		"/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}",
+	];
+	if (paths.some((path) => previous.paths?.[path] !== undefined)) return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+	};
+	if (
+		![
+			"6bf8b1cd3ef226b56b1669dd3b2cc359a8e2384c5fe30aa67f9cc06d91d81aae",
+			"acdf227e2129f2fc1d8d862d8101cc79825d1a8bf87638e4cdae7196b77be70d",
+		].includes(
+			createHash("sha256").update(JSON.stringify(addition)).digest("hex"),
+		)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #1277 permits only the reviewed issuer operation; all previous contracts remain exact.
+function isApplicationCredentialIssuerV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/applications/{applicationId}/credentials";
+	if (previous.paths?.[path] !== undefined) return false;
+	if (
+		createHash("sha256")
+			.update(JSON.stringify(current.paths?.[path] ?? null))
+			.digest("hex") !==
+		"6051aa1324b7504c92636d95c5d0d3bdfd1103560a502d5f81289cf959826ab4"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
 	return sameValue(previous, normalized);
 }
 
@@ -998,7 +1208,7 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	};
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"cd5b8fc76501e7f9e3dafaa0e1d6b4282d5222c86b8a4d5269a0c11d0fa4af1e"
+		"097d6b3631a284fd8faf916f2c35a70d7c721c8bc832f3b97a96389fecfc541f"
 	)
 		return false;
 	const normalized = structuredClone(current);
@@ -1008,6 +1218,53 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		sameValue(previous, normalized) ||
 		isAgentLifecycleV2OpenApiAddition(previous, normalized)
 	);
+}
+
+// #1010 publishes the existing resource-unavailable error for V2 SSE reads.
+function isConversationSseV2NotFoundAddition(previous, current) {
+	const path = "/api/v2/conversations/{conversationId}/events";
+	const previousResponses = previous.paths?.[path]?.get?.responses;
+	const currentResponses = current.paths?.[path]?.get?.responses;
+	const expected =
+		previous.paths?.["/api/v2/conversations/{conversationId}"]?.get
+			?.responses?.["404"];
+	if (
+		!previousResponses ||
+		previousResponses["404"] !== undefined ||
+		expected === undefined ||
+		!sameValue(currentResponses?.["404"], expected)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].get.responses["404"];
+	return sameValue(previous, normalized);
+}
+
+// #1052 publishes the exact #1027 recent read; every prior document field stays exact.
+function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/me/conversations/recent";
+	const scheme = current.components?.securitySchemes?.PlatformSession;
+	const addition = { path: current.paths?.[path], securityScheme: scheme };
+	if (
+		previous.paths?.[path] !== undefined ||
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+			"4d30e31df6c7267739b9ebc4b224f07cb384e3147ad2181a9aeba4cdabc75006"
+	)
+		return false;
+	const previousScheme = previous.components?.securitySchemes?.PlatformSession;
+	if (previousScheme !== undefined && !sameValue(previousScheme, scheme))
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	if (previousScheme === undefined) {
+		delete normalized.components.securitySchemes.PlatformSession;
+		if (
+			previous.components?.securitySchemes === undefined &&
+			Object.keys(normalized.components.securitySchemes).length === 0
+		)
+			delete normalized.components.securitySchemes;
+	}
+	return sameValue(previous, normalized);
 }
 
 // #440 adds bounded receipt management and Owner-scoped bot setup.
@@ -1036,19 +1293,429 @@ function isWecomReceiptOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #440 publishes Owner-managed application setup on the existing browser API.
+function isWecomApplicationOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v1/agents/{agentId}/wecom-app",
+		"/api/v1/agents/{agentId}/wecom-app-setup",
+		"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}",
+		"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials",
+		"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel",
+	];
+	if (paths.some((path) => previous.paths?.[path] !== undefined)) return false;
+	const addition = Object.fromEntries(
+		paths.map((path) => [path, current.paths?.[path]]),
+	);
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"d06bab756ce486299973d81c082e0b88ea18962fba541d10479ed5e428c1b0ef"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #481 publishes the scoped Platform audit surface and its bounded action set.
+function isScopedAuditOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v1/audit",
+		"/api/v1/audit/{auditId}",
+		"/api/v3/admin/audit",
+		"/api/v3/admin/audit/{auditId}",
+	];
+	const schemas = [
+		"ScopedPlatformAuditActionV1",
+		"ScopedPlatformAuditPageV1",
+		"ScopedPlatformAuditProjectionV1",
+		"ScopedPlatformAuditResultV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"bf0c18ff1e607bd2049d2b2e764a88aeb01416bb15da8dbd635feac02ad33d42"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #481 documents the actual scoped audit cookie/Bearer entry points only.
+function isScopedAuditCredentialSecurityAddition(previous, current) {
+	const paths = [
+		"/api/v1/audit",
+		"/api/v1/audit/{auditId}",
+		"/api/v3/admin/audit",
+		"/api/v3/admin/audit/{auditId}",
+	];
+	const schemes = {
+		platformApiCredential: { type: "http", scheme: "bearer" },
+		PlatformSession: {
+			type: "apiKey",
+			in: "cookie",
+			name: "__Host-platform-session",
+		},
+	};
+	const normalized = structuredClone(current);
+	for (const [name, scheme] of Object.entries(schemes)) {
+		if (!isDeepStrictEqual(current.components?.securitySchemes?.[name], scheme))
+			return false;
+		const oldScheme = previous.components?.securitySchemes?.[name];
+		if (oldScheme !== undefined && !isDeepStrictEqual(oldScheme, scheme))
+			return false;
+		if (oldScheme === undefined)
+			delete normalized.components.securitySchemes[name];
+	}
+	if (
+		previous.components?.securitySchemes === undefined &&
+		Object.keys(normalized.components.securitySchemes).length === 0
+	)
+		delete normalized.components.securitySchemes;
+	for (const path of paths) {
+		const own = path.startsWith("/api/v1/");
+		const expected = own
+			? [{ PlatformSession: [] }, { platformApiCredential: [] }]
+			: [{ PlatformSession: [] }];
+		const legacy = own ? [{}] : [];
+		if (!sameValue(current.paths?.[path]?.get?.security, expected))
+			return false;
+		const old = previous.paths?.[path]?.get?.security;
+		if (previous.paths?.[path] !== undefined && !sameValue(old, legacy))
+			return false;
+		normalized.paths[path].get.security = legacy;
+	}
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #1060 extends only the canonical audit action at its existing schema locations.
+function withoutPersonalApiAgentReadAudit(previous, current) {
+	const normalized = structuredClone(current);
+	let additions = 0;
+	const digest = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	function normalize(oldValue, newValue) {
+		if (
+			!oldValue ||
+			!newValue ||
+			typeof oldValue !== "object" ||
+			typeof newValue !== "object"
+		)
+			return;
+		if (
+			Array.isArray(oldValue.enum) &&
+			Array.isArray(newValue.enum) &&
+			digest(oldValue.enum) ===
+				"a6aecc0649885bcee5c2a40342a9b6a4adff5c4f66e7022e5d6f2233bed8dc85" &&
+			digest(newValue.enum) ===
+				"f5a1dca74b127815a080d4c3f30e16fd897ad6be5b31fae6f811353778081b5e"
+		) {
+			newValue.enum = structuredClone(oldValue.enum);
+			additions += 1;
+		}
+		for (const key of Object.keys(oldValue))
+			normalize(oldValue[key], newValue[key]);
+	}
+	normalize(previous, normalized);
+	return additions > 0 ? normalized : undefined;
+}
+
+function isPersonalApiAgentReadAuditOpenApiAddition(previous, current) {
+	const normalized = withoutPersonalApiAgentReadAudit(previous, current);
+	return normalized !== undefined && sameValue(previous, normalized);
+}
+
+// Preserve the #1059 guard and compose its exact addition with this read slice.
+function isPersonalApiAgentReadV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/agents";
+	const previousRead = previous.paths?.[path]?.get;
+	const currentRead = current.paths?.[path]?.get;
+	if (
+		!previousRead ||
+		!currentRead ||
+		previousRead.security !== undefined ||
+		previousRead.description !== undefined ||
+		previous.components?.securitySchemes?.platformApiCredential !== undefined
+	)
+		return false;
+	const addition = {
+		security: current.components?.securitySchemes?.platformApiCredential,
+		agentRead: {
+			security: currentRead.security,
+			description: currentRead.description,
+		},
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"32fc47a11f0ef7eabc2b68b4c50d2c8965ac10d7e674b681fb0ecc8f1df17954"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].get.security;
+	delete normalized.paths[path].get.description;
+	delete normalized.components.securitySchemes.platformApiCredential;
+	const baseline =
+		withoutPersonalApiAgentReadAudit(previous, normalized) ?? normalized;
+	return (
+		sameValue(previous, baseline) ||
+		isPersonalApiCredentialV2OpenApiAddition(previous, baseline)
+	);
+}
+
+// #1089 extends only the existing canonical V1 audit enum.
+function isPersonalRelayKeyAuditOpenApiAddition(previous, current) {
+	const oldAction = previous.components?.schemas?.ScopedPlatformAuditActionV1;
+	const newAction = current.components?.schemas?.ScopedPlatformAuditActionV1;
+	const digest = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	if (
+		!Array.isArray(oldAction?.enum) ||
+		!Array.isArray(newAction?.enum) ||
+		![
+			"a6aecc0649885bcee5c2a40342a9b6a4adff5c4f66e7022e5d6f2233bed8dc85",
+			"f5a1dca74b127815a080d4c3f30e16fd897ad6be5b31fae6f811353778081b5e",
+		].includes(digest(oldAction.enum)) ||
+		digest(newAction.enum) !==
+			"d946b62e4f34078c1f3569524d09a09ce7a68e108cbeda06d255527e47e71ac9"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+		newAction.enum.filter(
+			(action) =>
+				![
+					"relay_key.personal.read",
+					"relay_key.personal.replace",
+					"relay_key.personal.revoke",
+				].includes(action),
+		);
+	// The remaining #1060 addition must still pass its original exact guard.
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #1089 admits exactly the browser-owned Key path, three closed schemas and session scheme.
+function isPersonalRelayKeyV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/me/relay-key";
+	const names = [
+		"PersonalRelayKeyStateV1",
+		"PersonalRelayKeyReplaceRequestV1",
+		"PersonalRelayKeyRevokeRequestV1",
+	];
+	if (
+		previous.paths?.[path] !== undefined ||
+		names.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const security = {
+		PlatformSession: current.components?.securitySchemes?.PlatformSession,
+	};
+	const previousSession = previous.components?.securitySchemes?.PlatformSession;
+	if (
+		previousSession !== undefined &&
+		!sameValue(previousSession, security.PlatformSession)
+	)
+		return false;
+	const addition = {
+		paths: { [path]: current.paths?.[path] },
+		schemas: Object.fromEntries(
+			names.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+		security,
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"f7c4d58dc9cfdd02792216bb617e4522ca0a8a8fe85ab2f4d2398a25887d6c95"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of names) delete normalized.components.schemas[name];
+	// Keep the session scheme: only existing pinned admissions may introduce it.
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #1037 GET slice: only the exact metadata read, two schemas and read audit action.
+function isPersonalCredentialListOpenApiAddition(previous, current) {
+	const path = "/api/v2/me/api-credentials";
+	const names = [
+		"PersonalApiCredentialListQueryV1",
+		"PersonalApiCredentialPageV1",
+	];
+	if (
+		previous.paths?.[path]?.get !== undefined ||
+		names.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		get: current.paths?.[path]?.get,
+		schemas: Object.fromEntries(
+			names
+				.filter((name) => current.components?.schemas?.[name] !== undefined)
+				.map((name) => [name, current.components.schemas[name]]),
+		),
+		audit: current.components?.schemas?.ScopedPlatformAuditActionV1,
+	};
+	const fingerprint = createHash("sha256")
+		.update(JSON.stringify(addition))
+		.digest("hex");
+	if (
+		![
+			"a0900c9a7aea8b1a7142081b2d733cca4e92030f66d93bf81c76993096503131",
+			"5d170cf871a434be99dff5f43a54c362ab26e25b2d87714041e506c1429d5962",
+		].includes(fingerprint)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	if (normalized.paths?.[path]) delete normalized.paths[path].get;
+	for (const name of names) delete normalized.components.schemas[name];
+	const actions = normalized.components.schemas.ScopedPlatformAuditActionV1;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) => action !== "api.credential.metadata.read",
+		);
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #1037 PATCH slice: only exact narrowing, two schemas and the narrowed audit action.
+function isPersonalCredentialNarrowOpenApiAddition(previous, current) {
+	const path = "/api/v2/me/api-credentials/{credentialId}";
+	const names = [
+		"PersonalApiCredentialNarrowRequestV1",
+		"PersonalApiCredentialNarrowResponseV1",
+	];
+	if (
+		previous.paths?.[path]?.patch !== undefined ||
+		names.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		patch: current.paths?.[path]?.patch,
+		schemas: Object.fromEntries(
+			names
+				.filter((name) => current.components?.schemas?.[name] !== undefined)
+				.map((name) => [name, current.components.schemas[name]]),
+		),
+		audit: current.components?.schemas?.ScopedPlatformAuditActionV1,
+	};
+	const fingerprint = createHash("sha256")
+		.update(JSON.stringify(addition))
+		.digest("hex");
+	if (
+		![
+			"857ae40bc4d5554d93a19ca415ebfda2a8f458ef0f2be854376536809bcc0cf5",
+			"bf36bbcb1a655389800b6629fe243efee02a9aaca6cf46db5be7c8fb9753b195",
+		].includes(fingerprint)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	if (normalized.paths?.[path]) delete normalized.paths[path].patch;
+	for (const name of names) delete normalized.components.schemas[name];
+	const actions = normalized.components.schemas.ScopedPlatformAuditActionV1;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) => action !== "api.credential.narrowed",
+		);
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #484 names the known credential object; every other contract field stays exact.
+function isKnownCredentialAuditSubjectAddition(previous, current) {
+	const kinds = [
+		"agent_application",
+		"agent",
+		"secret",
+		"secret_key",
+		"grant",
+		"unknown",
+		"conversation",
+		"execution",
+		"configuration",
+	];
+	const subject = (document) =>
+		document.components?.schemas?.ScopedPlatformAuditProjectionV1?.properties
+			?.subject?.properties?.kind;
+	const oldKind = subject(previous);
+	if (
+		(oldKind !== undefined && !sameValue(oldKind.enum, kinds)) ||
+		!sameValue(subject(current)?.enum, [...kinds, "api_credential"])
+	)
+		return false;
+	const normalized = structuredClone(current);
+	subject(normalized).enum = kinds;
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #1270 admits only the pinned server-resolved capability; old contracts stay exact.
+function isConnectionCapabilityOpenApiAddition(previous, current) {
+	const path = "/api/v1/connection/capability";
+	const name = "ConnectionCapabilityProjectionV1";
+	if (
+		previous.paths?.[path] !== undefined ||
+		previous.components?.schemas?.[name] !== undefined
+	)
+		return false;
+	const addition = {
+		path: current.paths?.[path],
+		schema: current.components?.schemas?.[name],
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"e1e46d38ed8749051748bbb54abfdd6674051907aa237dd38eae022ff63e9326"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	delete normalized.components.schemas[name];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
 		if (
 			!sameValue(previous, current) &&
+			!isConnectionCapabilityOpenApiAddition(previous, current) &&
+			!isKnownCredentialAuditSubjectAddition(previous, current) &&
+			!isPersonalCredentialNarrowOpenApiAddition(previous, current) &&
+			!isPersonalCredentialListOpenApiAddition(previous, current) &&
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
+			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
+			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
+			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
+			!isApplicationMaterialGrantV2OpenApiAddition(previous, current) &&
+			!isApplicationCredentialIssuerV2OpenApiAddition(previous, current) &&
+			!isOwnApplicationDisableV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
+			!isAdministratorAgentReadV2OpenApiAddition(previous, current) &&
+			!isPersonalApiCredentialV2OpenApiAddition(previous, current) &&
+			!isPersonalApiAgentReadV2OpenApiAddition(previous, current) &&
+			!isPersonalApiAgentReadAuditOpenApiAddition(previous, current) &&
+			!isPersonalRelayKeyAuditOpenApiAddition(previous, current) &&
+			!isPersonalRelayKeyV2OpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
+			!isConversationSseV2NotFoundAddition(previous, current) &&
+			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
+			!isWecomApplicationOpenApiAddition(previous, current) &&
+			!isScopedAuditOpenApiAddition(previous, current) &&
+			!isScopedAuditCredentialSecurityAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");

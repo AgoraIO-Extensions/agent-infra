@@ -42,7 +42,7 @@ describe("MyAgentsScreen", () => {
 			} else {
 				expect(link).toBeNull();
 			}
-			expect(screen.getByRole("link", { name: "申请详情" })).toBeTruthy();
+			expect(screen.getByRole("link", { name: "查看申请" })).toBeTruthy();
 		},
 	);
 
@@ -62,7 +62,7 @@ describe("MyAgentsScreen", () => {
 		expect(pendingLink.getAttribute("href")).toBe(
 			"/my-agents/application%3Atenant%2F01%3Fdraft%23one%25",
 		);
-		expect(pendingLink.closest("li")?.className).toContain("record-row");
+		expect(pendingLink.closest("li")?.className).toContain("application-row");
 		expect(screen.getByText("待审批")).toBeTruthy();
 		expect(screen.getByText("创建中")).toBeTruthy();
 		expect(
@@ -78,7 +78,7 @@ describe("MyAgentsScreen", () => {
 
 		expect(screen.getByText("暂无 Agent 申请")).toBeTruthy();
 		expect(
-			screen.getByRole("link", { name: "申请 Agent" }).getAttribute("href"),
+			screen.getByRole("link", { name: "新建申请" }).getAttribute("href"),
 		).toBe("/my-agents/new");
 	});
 
@@ -161,13 +161,13 @@ describe("MyAgentsScreen", () => {
 		expect(
 			screen.getByRole("link", { name: "配置与管理" }).getAttribute("href"),
 		).toBe(`/agents/${owned.agentId}/configuration`);
-		expect(screen.queryByRole("link", { name: "申请详情" })).toBeNull();
+		expect(screen.queryByRole("link", { name: "查看申请" })).toBeNull();
 	});
 
 	it.each([
 		[{ ownedAgentsLoading: true }, "正在读取你管理的 Agent…"],
 		[
-			{ ownedAgentsUnavailable: true },
+			{ ownedAgentsUnavailable: true, ownedAgentsRetryable: true },
 			"暂时无法读取你管理的 Agent，请稍后重试。",
 		],
 		[{}, "尚未读取你管理的 Agent。"],

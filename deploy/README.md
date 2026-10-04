@@ -154,11 +154,11 @@ Workload revision 和固定 Service origin；`platform-adapter` 的核心探测�
 [Runtime HLD](../docs/architecture/HLD-agent-runtime-M1.md#4-runtime-manifest)。
 Worker 不从 API RPC 获取期望状态，也不加载 Runtime Driver。
 
-部署包必须显式提供 `templateModelBindings`，将标准模板 ID、实际镜像 Digest 与模型协议
+部署包必须显式提供 `templateModelBindings`，将标准模板 ID、实际镜像 Digest、必需 `driver` 与模型协议
 绑定；支持标准 Agent 时还须装配 `modelCatalog` 和 `modelAccess`。升级已有部署包时需一起
 补齐此字段，缺失会在 Worker 打开 Store 前拒绝启动。仅支持自定义 Agent 的部署包传入空
 数组；标准 Agent 不会从模板名称或模型 ID 推断协议。绑定契约见
-[Runtime HLD](../docs/architecture/HLD-agent-runtime-M1.md)。
+[Runtime HLD §3.1](../docs/architecture/HLD-agent-runtime-M1.md#31-标准-runtime)。
 
 迁移 `0012` 保存每个 Agent 的调谐进度、候选与已验证修订。Worker 在 Agent 行锁内
 执行一个可重入步骤；多个 Worker 使用 `SKIP LOCKED` 处理不同 Agent。停止和停用
@@ -166,8 +166,8 @@ Worker 不从 API RPC 获取期望状态，也不加载 Runtime Driver。
 运行期候选失败则把已验证配置作为新的 Workload revision 调谐。新建失败清理完成后
 才记录创建失败。Secret 明文只在 Worker 解密和 Kubernetes Secret 写入期间存在。
 
-Agent 默认拒绝全部 egress，Profile 不接受 Owner 提交的任意网络规则。唯一受控出站
-属于[后续生产化加固](../docs/architecture/PLAN-M1-delivery-convergence.md)，当前
+Agent 默认拒绝全部 egress，Profile 不接受 Owner 提交的任意网络规则。唯一受控出站的
+交付与验收见[阶段安排 #144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144)，当前
 Workload 调谐不开放直接 DNS 或可选代理出站，也不宣称完成外部模型与 Connection 出站能力。
 
 独立的生命周期与网络测试使用 kind v0.30.0、Kubernetes v1.33.4 和 Calico v3.30.3：

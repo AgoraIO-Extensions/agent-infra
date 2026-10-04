@@ -23,10 +23,16 @@ export const auditActionLabels: Record<AuditRecord["action"], string> = {
 	"api.application.created": "创建应用",
 	"api.credential.issued": "签发 API 凭证",
 	"api.credential.revoked": "撤销 API 凭证",
+	"api.credential.narrowed": "收窄个人 API 凭证",
+	"api.credential.metadata.read": "查看个人 API 凭证元数据",
 	"api.credential.delivery.granted": "授予凭证获取权限",
 	"api.credential.delivery.revoked": "撤销凭证获取权限",
 	"api.agent.grant.granted": "授予 Agent 权限",
 	"api.agent.grant.revoked": "撤销 Agent 权限",
+	"api.agent.metadata.read": "API Agent 元数据读取",
+	"relay_key.personal.read": "查看个人 Relay Key 状态",
+	"relay_key.personal.replace": "替换个人 Relay Key",
+	"relay_key.personal.revoke": "撤销个人 Relay Key",
 	"task.api.access": "任务 API 访问",
 	"task.api.subscription.started": "建立结果订阅",
 	"task.api.subscription.ended": "结束结果订阅",
@@ -47,6 +53,28 @@ export const auditActionLabels: Record<AuditRecord["action"], string> = {
 	"secret.retire-key": "退役加密密钥",
 	"audit.query.completed": "完成审计查询",
 	"audit.query.failed": "审计查询失败",
+	"wecom.setup_started": "开始企业微信配置",
+	"wecom.credentials_submitted": "提交企业微信凭证",
+	"wecom.setup_cancelled": "取消企业微信配置",
+	"wecom.setup_expired": "企业微信配置过期",
+	"wecom.setup_failed": "企业微信配置失败",
+	"wecom.callback_verified": "验证企业微信回调",
+	"wecom.setup_activated": "启用企业微信配置",
+	"wecom.connection_verifying": "验证企业微信连接",
+	"wecom.connection_connected": "企业微信连接成功",
+	"wecom.connection_disconnected": "企业微信连接断开",
+	"wecom.connection_auth_failed": "企业微信认证失败",
+	"wecom.denied": "拒绝企业微信消息",
+	"wecom.unavailable": "企业微信渠道不可用",
+	"wecom.conflict": "企业微信消息冲突",
+	"wecom.accepted": "受理企业微信消息",
+	"wecom.unknown": "企业微信消息状态待核实",
+	"wecom.sending": "发送企业微信消息中",
+	"wecom.sent": "企业微信消息已发送",
+	"wecom.failed": "企业微信消息发送失败",
+	"wecom.cancelled": "取消企业微信消息",
+	"wecom.expired": "企业微信消息过期",
+	"wecom.abandoned": "放弃企业微信消息",
 };
 
 export const auditResultLabels: Record<AuditRecord["result"], string> = {
@@ -87,6 +115,22 @@ export const auditPrincipalLabels = {
 	application: "应用",
 	system: "后台组件",
 	unknown: "未确认主体",
+};
+
+export const auditSubjectLabels: Record<
+	AuditRecord["subject"]["kind"],
+	string
+> = {
+	agent_application: "创建申请",
+	agent: "Agent",
+	secret: "Secret",
+	secret_key: "Secret 键",
+	grant: "授权记录",
+	unknown: "未确认对象",
+	conversation: "Conversation",
+	execution: "Execution",
+	configuration: "配置",
+	api_credential: "API 凭证",
 };
 
 export function auditOutcomeLabel(record: AuditRecord) {

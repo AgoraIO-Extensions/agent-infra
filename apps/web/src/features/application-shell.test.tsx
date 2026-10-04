@@ -12,7 +12,7 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import { type ReactNode, StrictMode, useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	ApplicationShell,
 	safeDeploymentUrl,
@@ -26,11 +26,33 @@ vi.mock("@tanstack/react-router", () => ({
 		<a href={to}>{children}</a>
 	),
 }));
+beforeEach(() => {
+	vi.stubGlobal(
+		"matchMedia",
+		vi.fn((media: string) => ({
+			matches: false,
+			media,
+			onchange: null,
+			addEventListener: vi.fn(),
+			removeEventListener: vi.fn(),
+			addListener: vi.fn(),
+			removeListener: vi.fn(),
+			dispatchEvent: vi.fn(),
+		})),
+	);
+});
 const clients: QueryClient[] = [];
 const identity = (
 	userId: string,
 	admin = false,
 	sessionGeneration?: string,
+	connection?: {
+		status: "available";
+		schemaVersion: 1;
+		publicOrigin: string;
+		mcpPath: string;
+		configFingerprint: string;
+	},
 ) => ({
 	kind: "ready",
 	session: {
@@ -41,12 +63,14 @@ const identity = (
 			roles: admin ? ["employee", "system_admin"] : ["employee"],
 		},
 	},
+	...(connection ? { connection } : {}),
 	...(sessionGeneration ? { sessionGeneration } : {}),
 });
 afterEach(() => {
 	cleanup();
 	for (const client of clients) client.clear();
 	clients.length = 0;
+	vi.unstubAllGlobals();
 });
 function setup(initial: unknown, children: ReactNode = <p>受保护内容</p>) {
 	const client = new QueryClient({
@@ -116,12 +140,17 @@ describe("application session boundary", () => {
 				.every((entry) => entry.cached === undefined && entry.client !== old),
 		).toBe(true);
 		expect(old?.getQueryData(["private"])).toBeUndefined();
-		expect(screen.getByRole("link", { name: "审批" })).toBeTruthy();
+		expect(screen.getByRole("link", { name: "创建审批" })).toBeTruthy();
+		expect(
+			screen.getByRole("link", { name: "Agent 管理" }).getAttribute("href"),
+		).toBe("/admin/agents");
+		for (const name of ["工作区", "我的管理", "系统管理"])
+			expect(screen.getByRole("navigation", { name })).toBeTruthy();
 		await act(async () => {
 			client.setQueryData(["browser-session"], identity("admin", false));
 		});
 		await waitFor(() =>
-			expect(screen.queryByRole("link", { name: "审批" })).toBeNull(),
+			expect(screen.queryByRole("link", { name: "创建审批" })).toBeNull(),
 		);
 	});
 	it("recreates the feature cache when the same user gets a new session", async () => {
@@ -222,7 +251,7 @@ describe("application session boundary", () => {
 				);
 			});
 			await waitFor(() => {
-				expect(Boolean(screen.queryByRole("link", { name: "审批" }))).toBe(
+				expect(Boolean(screen.queryByRole("link", { name: "创建审批" }))).toBe(
 					toAdmin,
 				);
 			});
@@ -236,6 +265,49 @@ describe("application session boundary", () => {
 	);
 });
 describe("deployment links", () => {
+	it("uses the server session capability for the Connection entry", () => {
+		setup(
+			identity("owner", false, undefined, {
+				status: "available",
+				schemaVersion: 1,
+				publicOrigin: "https://connection.example.test",
+				mcpPath: "/mcp",
+				configFingerprint: "a".repeat(64),
+			}),
+		);
+		expect(
+			screen
+				.getByRole("link", { name: /我的 Connection/ })
+				.getAttribute("href"),
+		).toBe("https://connection.example.test/mcp");
+	});
+
+	it("keeps an unavailable Connection entry without an outbound link", () => {
+		setup(identity("user-1"));
+		expect(
+			screen
+				.getByText("我的 Connection（暂不可用）")
+				.getAttribute("aria-disabled"),
+		).toBe("true");
+		expect(screen.queryByRole("link", { name: /我的 Connection/ })).toBeNull();
+	});
+	it.each(["/\n/evil.test", "/\t/evil.test", "/\r/evil.test"])(
+		"does not normalize unsafe path %j into an external link",
+		(mcpPath) => {
+			setup(
+				identity("user-1", false, undefined, {
+					status: "available",
+					schemaVersion: 1,
+					publicOrigin: "https://connection.example.test",
+					mcpPath,
+					configFingerprint: "a".repeat(64),
+				}),
+			);
+			expect(
+				screen.queryByRole("link", { name: /我的 Connection/ }),
+			).toBeNull();
+		},
+	);
 	it("accepts configured HTTPS or local paths and rejects executable or ambiguous URLs", () => {
 		expect(safeDeploymentUrl("/__local/login")).toBe("/__local/login");
 		expect(safeDeploymentUrl("https://identity.example.test/login")).toBe(

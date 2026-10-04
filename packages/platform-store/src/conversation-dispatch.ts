@@ -51,6 +51,10 @@ import {
 	requireTransition,
 } from "./conversation-dispatch-validation.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
+import {
+	type PlatformQueueResourceSnapshot,
+	readPlatformQueueResourceSnapshot,
+} from "./observability-snapshot.js";
 import { readLegacyControlRecoveryInTransaction } from "./task-authorization-migration.ts";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.ts";
 
@@ -72,6 +76,12 @@ export class PostgresConversationDispatchStoreV1
 				PLATFORM_DATABASE_URL: options.databaseUrl,
 			}),
 		);
+	}
+
+	readResourceSnapshot(
+		signal: AbortSignal,
+	): Promise<PlatformQueueResourceSnapshot> {
+		return readPlatformQueueResourceSnapshot(this.#client, signal);
 	}
 
 	/** Recheck the live lease and derive recovery metadata from the original accepted task. */
@@ -252,6 +262,14 @@ export class PostgresConversationDispatchStoreV1
 					itemId: row.id,
 					operation: row.operation,
 				}));
+			} catch (error) {
+				if (
+					input.signal?.aborted &&
+					error instanceof postgres.PostgresError &&
+					error.code === "57014"
+				)
+					return [];
+				throw error;
 			} finally {
 				input.signal?.removeEventListener("abort", onAbort);
 			}
@@ -809,7 +827,7 @@ export class PostgresConversationDispatchStoreV1
 	}
 
 	async close(): Promise<void> {
-		await databaseOperation(() => this.#client.end());
+		await databaseOperation(() => this.#client.end({ timeout: 5 }));
 	}
 }
 

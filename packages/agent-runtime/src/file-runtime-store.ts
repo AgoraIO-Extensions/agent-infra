@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import {
 	type RuntimeDriverCommandV1,
@@ -10,7 +11,10 @@ import {
 	RuntimeOperationResultV1Schema,
 	type RuntimeOperationResultV2,
 	RuntimeOperationResultV2Schema,
+	type RuntimePinnedExecutionKeyScopeV4,
+	RuntimePinnedExecutionKeyScopeV4Schema,
 	type RuntimePrincipalV1,
+	type RuntimeStatusRequestV3,
 } from "@agent-infra/contracts/runtime";
 import type {
 	RuntimeExternalActionAuthorization,
@@ -47,6 +51,7 @@ export interface StoredOperation {
 	scope: string;
 	deliveryFence: number;
 	requestDigest: string;
+	keyScopeV4?: RuntimePinnedExecutionKeyScopeV4;
 	command: RuntimeDriverCommandV1 | RuntimeDriverSubmitTurnCommandV2;
 	state: "prepared" | "resolved";
 	result?: RuntimeOperationResultV1 | RuntimeOperationResultV2;
@@ -90,6 +95,7 @@ interface PrepareOperation {
 	scope: string;
 	deliveryFence: number;
 	requestDigest: string;
+	keyScopeV4?: RuntimePinnedExecutionKeyScopeV4;
 	executionDeliveryFence?: number;
 	command: (
 		nativeSessionRef?: string,
@@ -263,6 +269,7 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 				"scope",
 				"deliveryFence",
 				"requestDigest",
+				"keyScopeV4",
 				"command",
 				"state",
 				"result",
@@ -272,6 +279,28 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 			!operation.turnId ||
 			!operation.scope ||
 			!operation.requestDigest ||
+			(operation.kind === "supplement" &&
+				!isDeepStrictEqual(
+					session.operations[operation.executionId]?.keyScopeV4,
+					operation.keyScopeV4,
+				)) ||
+			(operation.keyScopeV4 !== undefined &&
+				(!RuntimePinnedExecutionKeyScopeV4Schema.safeParse(operation.keyScopeV4)
+					.success ||
+					!session.authority ||
+					operation.keyScopeV4.principal.kind !==
+						session.authority.principal.kind ||
+					operation.keyScopeV4.principal.id !==
+						session.authority.principal.id ||
+					operation.keyScopeV4.channelId !== session.authority.channelId ||
+					(operation.kind !== "submit-turn" &&
+						operation.kind !== "supplement") ||
+					operation.keyScopeV4.agentId !== session.agentId ||
+					operation.keyScopeV4.conversationId !== session.conversationId ||
+					operation.keyScopeV4.executionId !== operation.executionId ||
+					operation.keyScopeV4.turnId !== operation.turnId ||
+					operation.keyScopeV4.sessionGeneration !==
+						session.sessionGeneration)) ||
 			!(
 				operation.command.schemaVersion === 2
 					? RuntimeDriverSubmitTurnCommandV2Schema
@@ -402,6 +431,15 @@ function assertExecutionBinding(
 	}
 }
 
+function originalBindingUnknown(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_ACCEPTANCE_UNKNOWN",
+		"Runtime command acceptance could not be confirmed",
+		503,
+		true,
+	);
+}
+
 export class FileRuntimeStore {
 	private constructor(
 		private readonly file: DurableJsonFile<RuntimeStoreState>,
@@ -496,6 +534,135 @@ export class FileRuntimeStore {
 		return sessionBindingKey(binding);
 	}
 
+	readOriginalExecutionKeyScopeV4(
+		binding: SessionBinding & { executionId: string },
+	) {
+		const state = this.file.read();
+		assertStoreState(state);
+		const hostSessionRef = state.sessionBindings[sessionBindingKey(binding)];
+		if (!hostSessionRef) return null;
+		const session = sessionFor(state, hostSessionRef, binding);
+		const original = session.operations[binding.executionId];
+		if (original?.kind !== "submit-turn") return null;
+		return {
+			hostSessionRef,
+			scope: original.keyScopeV4 ? structuredClone(original.keyScopeV4) : null,
+			operation: structuredClone(original),
+		};
+	}
+
+	/**
+	 * Read the accepted original binding after Host control Grant verification.
+	 * This does not install authority or confirm the current native Turn status.
+	 */
+	readAcceptedOriginalBindingV4(
+		request: RuntimeStatusRequestV3,
+		claims: RuntimeExecutionGrantClaimsV2,
+	): string {
+		let state: RuntimeStoreState;
+		try {
+			state = this.file.read();
+			assertStoreState(state);
+		} catch {
+			originalBindingUnknown();
+		}
+		const indexedHostSessionRef =
+			state.sessionBindings[sessionBindingKey(request)];
+		if (
+			!indexedHostSessionRef ||
+			(request.hostSessionRef !== null &&
+				request.hostSessionRef !== indexedHostSessionRef) ||
+			claims.purpose !== "control" ||
+			claims.allowedCommands.length !== 1 ||
+			claims.allowedCommands[0] !== "session.status" ||
+			!isDeepStrictEqual(claims.principal, request.principal) ||
+			claims.channelId !== request.channelId ||
+			claims.agentId !== request.agentId ||
+			claims.conversationId !== request.conversationId ||
+			claims.executionId !== request.executionId ||
+			claims.turnId !== request.turnId ||
+			claims.sessionGeneration !== request.sessionGeneration ||
+			claims.traceId !== request.traceId ||
+			claims.hostSessionRef !== request.hostSessionRef ||
+			!isDeepStrictEqual(claims.operation, request.operation) ||
+			request.operation.kind !== "execution" ||
+			request.operation.id !== request.executionId ||
+			request.operation.deliveryFence !==
+				request.operation.executionDeliveryFence
+		)
+			originalBindingUnknown();
+		let session: StoredSession;
+		try {
+			session = sessionFor(state, indexedHostSessionRef, request);
+		} catch (error) {
+			if (
+				error instanceof RuntimeHostError &&
+				[
+					"RUNTIME_GRANT_INVALID",
+					"RUNTIME_GENERATION_CANCELLED",
+					"RUNTIME_SESSION_BINDING_MISMATCH",
+					"RUNTIME_SESSION_NOT_FOUND",
+					"RUNTIME_SESSION_QUARANTINED",
+				].includes(error.code)
+			)
+				originalBindingUnknown();
+			throw error;
+		}
+		const operation = session.operations[request.executionId];
+		const authority = session.executionAuthorities?.[request.executionId];
+		const currentFence =
+			session.highestFences[`execution:${request.executionId}`];
+		const scope = RuntimePinnedExecutionKeyScopeV4Schema.safeParse(
+			operation?.keyScopeV4,
+		);
+		if (!scope.success) originalBindingUnknown();
+		const pinned = scope.data;
+		const expectedPurpose =
+			pinned.executionSource === "web" || pinned.executionSource === "wecom"
+				? "personal"
+				: "agent-default";
+		const expectedSubject =
+			expectedPurpose === "personal"
+				? pinned.principal.kind === "user"
+					? pinned.principal.id
+					: null
+				: pinned.agentId;
+		if (
+			typeof session.nativeSessionRef !== "string" ||
+			!session.nativeSessionRef ||
+			!authority ||
+			authority.workerId !== claims.workerId ||
+			!operation ||
+			operation.kind !== "submit-turn" ||
+			operation.turnId !== request.turnId ||
+			operation.requestDigest !== request.originalOperationDigest ||
+			operation.state !== "resolved" ||
+			operation.result?.outcome !== "accepted" ||
+			pinned.principal.kind !== request.principal.kind ||
+			pinned.principal.id !== request.principal.id ||
+			pinned.channelId !== request.channelId ||
+			pinned.agentId !== request.agentId ||
+			pinned.conversationId !== request.conversationId ||
+			pinned.executionId !== request.executionId ||
+			pinned.turnId !== request.turnId ||
+			pinned.sessionGeneration !== request.sessionGeneration ||
+			(pinned.hostSessionRef !== null &&
+				pinned.hostSessionRef !== indexedHostSessionRef) ||
+			pinned.keyBinding.purpose !== expectedPurpose ||
+			expectedSubject === null ||
+			pinned.keyBinding.subjectId !== expectedSubject ||
+			currentFence === undefined ||
+			request.operation.executionDeliveryFence < currentFence ||
+			request.operation.executionDeliveryFence <
+				authority.executionDeliveryFence ||
+			(authority.control !== undefined &&
+				(authority.control.controlRecordId !== claims.controlRecordId ||
+					authority.control.reason !== claims.reason))
+		)
+			originalBindingUnknown();
+		return indexedHostSessionRef;
+	}
+
 	nativeSessionRef(hostSessionRef: string) {
 		const state = this.file.read();
 		assertStoreState(state);
@@ -504,12 +671,28 @@ export class FileRuntimeStore {
 	}
 
 	prepareOperation(input: PrepareOperation) {
+		const keyScopeV4 = input.keyScopeV4
+			? RuntimePinnedExecutionKeyScopeV4Schema.parse(input.keyScopeV4)
+			: undefined;
 		return this.file.update((state) => {
 			const now =
 				typeof input.now === "function"
 					? input.now()
 					: (input.now ?? Date.now());
 			assertStoreState(state);
+			if (keyScopeV4) {
+				if (input.kind !== "submit-turn" && input.kind !== "supplement")
+					runtimeAuthorizationDenied();
+				assertSessionAuthority(input.authorization, keyScopeV4);
+				if (
+					keyScopeV4.agentId !== input.binding.agentId ||
+					keyScopeV4.conversationId !== input.binding.conversationId ||
+					keyScopeV4.executionId !== input.binding.executionId ||
+					keyScopeV4.turnId !== input.binding.turnId ||
+					keyScopeV4.sessionGeneration !== input.binding.sessionGeneration
+				)
+					runtimeAuthorizationDenied();
+			}
 			const indexedHostSessionRef =
 				state.sessionBindings[sessionBindingKey(input.binding)];
 			const hostSessionRef =
@@ -579,6 +762,14 @@ export class FileRuntimeStore {
 			}
 
 			const operation = session.operations[input.operationId];
+			if (
+				input.kind === "supplement" &&
+				!isDeepStrictEqual(
+					session.operations[input.binding.executionId]?.keyScopeV4,
+					keyScopeV4,
+				)
+			)
+				runtimeAuthorizationDenied();
 			if (input.authorization) {
 				assertSessionAuthority(session.authority, input.binding);
 				const resolvedReplay =
@@ -600,12 +791,46 @@ export class FileRuntimeStore {
 			if (operation) {
 				if (
 					operation.requestDigest !== input.requestDigest ||
-					operation.kind !== input.kind
+					operation.kind !== input.kind ||
+					!isDeepStrictEqual(operation.keyScopeV4, keyScopeV4)
 				) {
 					throw new RuntimeHostError(
 						"RUNTIME_OPERATION_CONFLICT",
 						"Runtime operation was retried with different content",
 						409,
+					);
+				}
+				if (
+					input.kind === "submit-turn" &&
+					keyScopeV4 &&
+					input.authorization &&
+					input.authorization.purpose === "business" &&
+					operation.state === "resolved" &&
+					operation.result?.outcome === "accepted" &&
+					["running", "unknown"].includes(operation.result.status)
+				) {
+					const authorities = session.executionAuthorities;
+					const authority = authorities?.[input.binding.executionId];
+					if (
+						!authorities ||
+						!authority ||
+						authority.stopped ||
+						authority.control ||
+						authority.workerId !== input.authorization.workerId ||
+						authority.authorizationRecordId !==
+							input.authorization.authorizationRecordId ||
+						input.authorization.operation.kind !== "execution" ||
+						input.authorization.operation.id !== input.binding.executionId ||
+						input.authorization.operation.executionDeliveryFence <
+							authority.executionDeliveryFence ||
+						input.authorization.issuedAt < authority.issuedAt
+					)
+						runtimeAuthorizationDenied();
+					applyRuntimeAuthority(
+						authorities,
+						input.authorization,
+						"prepare",
+						now,
 					);
 				}
 				if (input.deliveryFence > operation.deliveryFence) {
@@ -634,6 +859,7 @@ export class FileRuntimeStore {
 				scope: input.scope,
 				deliveryFence: input.deliveryFence,
 				requestDigest: input.requestDigest,
+				...(keyScopeV4 ? { keyScopeV4 } : {}),
 				command: input.command(session.nativeSessionRef),
 				state: "prepared",
 			};
@@ -1310,6 +1536,14 @@ export class FileRuntimeStore {
 		await this.authorizedOriginalExecution(action, readNow);
 	}
 
+	/** Final synchronous committed-state check, called immediately before actual external fetch. */
+	assertExternalActionCurrent(
+		action: RuntimeExternalActionAuthorization,
+		readNow: () => number,
+	) {
+		this.checkAuthorizedOriginalExecution(this.file.read(), action, readNow);
+	}
+
 	async resolveOriginalExecutionBinding(
 		reference: RuntimeOriginalExecutionRef,
 		readNow: () => number,
@@ -1344,7 +1578,22 @@ export class FileRuntimeStore {
 		},
 		readNow: () => number,
 	) {
-		const state = await this.file.readCommitted();
+		return this.checkAuthorizedOriginalExecution(
+			await this.file.readCommitted(),
+			action,
+			readNow,
+		);
+	}
+
+	private checkAuthorizedOriginalExecution(
+		state: RuntimeStoreState,
+		action: {
+			nativeSessionRef?: string;
+			executionId: string;
+			runtimeOperationId: string;
+		},
+		readNow: () => number,
+	) {
 		assertStoreState(state);
 		// A queued durable write may outlive the Grant being checked.
 		const now = readNow();

@@ -31,7 +31,1036 @@ function compare(current: string, previous = "base") {
 	return comparePaths(fixturePath(current), fixturePath(previous));
 }
 
+function restoreOldApiReadActions(input: unknown) {
+	if (!input || typeof input !== "object") return;
+	const value = input as Record<string, unknown>;
+	if (Array.isArray(value.enum))
+		value.enum = value.enum.filter(
+			(action) => action !== "api.agent.metadata.read",
+		);
+	for (const child of Object.values(value)) restoreOldApiReadActions(child);
+}
+
+function restorePreCredentialNarrowContract(value: {
+	paths: Record<string, Record<string, unknown>>;
+	components: { schemas: Record<string, { enum?: unknown[] }> };
+}) {
+	if (value.paths["/api/v2/me/api-credentials/{credentialId}"])
+		delete value.paths["/api/v2/me/api-credentials/{credentialId}"].patch;
+	for (const name of [
+		"PersonalApiCredentialNarrowRequestV1",
+		"PersonalApiCredentialNarrowResponseV1",
+	])
+		delete value.components.schemas[name];
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) => action !== "api.credential.narrowed",
+		);
+}
+
+// Preserve every historical guard test while testing the exact list addition separately.
+function restorePreCredentialManagementContract(value: {
+	paths: Record<string, Record<string, unknown>>;
+	components: { schemas: Record<string, { enum?: unknown[] }> };
+}) {
+	restorePreCredentialNarrowContract(value);
+	if (value.paths["/api/v2/me/api-credentials"])
+		delete value.paths["/api/v2/me/api-credentials"].get;
+	for (const name of [
+		"PersonalApiCredentialListQueryV1",
+		"PersonalApiCredentialPageV1",
+	])
+		delete value.components.schemas[name];
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) => action !== "api.credential.metadata.read",
+		);
+}
+
+// Keep the historical #1059/#1060 tests bound to their original contracts.
+// The separate #1089 tests below pin and mutate every removed addition.
+function restorePreRelayKeyContract(value: {
+	paths: Record<string, Record<string, unknown>>;
+	components: { schemas: Record<string, { enum?: unknown[] }> };
+}) {
+	restorePreCredentialManagementContract(value);
+	delete value.paths["/api/v2/me/relay-key"];
+	for (const name of [
+		"PersonalRelayKeyStateV1",
+		"PersonalRelayKeyReplaceRequestV1",
+		"PersonalRelayKeyRevokeRequestV1",
+	])
+		delete value.components.schemas[name];
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) =>
+				![
+					"relay_key.personal.read",
+					"relay_key.personal.replace",
+					"relay_key.personal.revoke",
+				].includes(String(action)),
+		);
+}
+
 describe("contract compatibility command", () => {
+	it("admits only the known credential audit subject and preserves privacy and security", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		const subject = (document: typeof current) =>
+			document.components.schemas.ScopedPlatformAuditProjectionV1.properties
+				.subject;
+		subject(previous).properties.kind.enum = subject(
+			previous,
+		).properties.kind.enum.filter((kind: string) => kind !== "api_credential");
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-credential-subject-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const beforeNarrow = structuredClone(previous);
+			restorePreCredentialNarrowContract(beforeNarrow);
+			await writeFile(previousPath, JSON.stringify(beforeNarrow));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			await writeFile(previousPath, JSON.stringify(previous));
+			const mutations: ((document: typeof current) => void)[] = [
+				(document) => {
+					document.components.schemas.ScopedPlatformAuditActionV1.enum =
+						document.components.schemas.ScopedPlatformAuditActionV1.enum.filter(
+							(action: string) => action !== "api.credential.narrowed",
+						);
+				},
+				(document) =>
+					subject(document).properties.kind.enum.push("invented_credential"),
+				(document) => subject(document).properties.kind.enum.shift(),
+				(document) => {
+					subject(document).properties.subjectId.minLength = 0;
+				},
+				(document) => {
+					subject(document).additionalProperties = true;
+				},
+				(document) => {
+					document.components.schemas.ScopedPlatformAuditProjectionV1.additionalProperties = true;
+				},
+				(document) => {
+					document.paths["/api/v3/admin/audit"].get.security = [{}];
+				},
+				(document) => {
+					document.paths["/api/v1/audit"].get.security = [];
+				},
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+						"unreviewed.action",
+					),
+			];
+			for (const field of [
+				"credential",
+				"credentialHash",
+				"scopes",
+				"expiresAt",
+				"details",
+			]) {
+				mutations.push((document) => {
+					subject(document).properties[field] = { type: "string" };
+				});
+			}
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only exact scoped audit cookie/Bearer documentation and rejects authority drift", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		for (const path of ["/api/v1/audit", "/api/v1/audit/{auditId}"])
+			previous.paths[path].get.security = [{}];
+		for (const path of ["/api/v3/admin/audit", "/api/v3/admin/audit/{auditId}"])
+			previous.paths[path].get.security = [];
+		delete previous.components.securitySchemes;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-audit-auth-compat-"),
+		);
+		const before = resolve(directory, "previous.json");
+		const after = resolve(directory, "current.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const withExistingSchemes = structuredClone(previous);
+			withExistingSchemes.components.securitySchemes = structuredClone(
+				current.components.securitySchemes,
+			);
+			await writeFile(before, JSON.stringify(withExistingSchemes));
+			expect(comparePaths(after, before).status).toBe(0);
+			await writeFile(before, JSON.stringify(previous));
+			const mutations = [
+				(value: typeof current) => {
+					value.paths["/api/v1/audit"].get.security = [{}];
+				},
+				(value: typeof current) => {
+					value.paths["/api/v1/audit/{auditId}"].get.security = [
+						{ PlatformSession: [], platformApiCredential: [] },
+					];
+				},
+				(value: typeof current) => {
+					value.paths["/api/v3/admin/audit"].get.security = [
+						{ platformApiCredential: [] },
+					];
+				},
+				(value: typeof current) => {
+					value.paths["/api/v3/admin/audit/{auditId}"].get.security = [];
+				},
+				(value: typeof current) => {
+					value.components.securitySchemes.PlatformSession.name =
+						"untrusted-cookie";
+				},
+				(value: typeof current) => {
+					value.components.securitySchemes.platformApiCredential.scheme =
+						"basic";
+				},
+				(value: typeof current) => {
+					delete value.paths["/api/v1/audit"].get.responses["401"];
+				},
+				(value: typeof current) => {
+					value.paths["/api/v1/admin/audit"].get.security = [];
+				},
+			];
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).not.toBe(0);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it.each([1, 2])(
+		"admits only the exact personal PATCH addition for browser V%s",
+		async (version) => {
+			const current = JSON.parse(
+				await readFile(
+					new URL(
+						`../artifacts/openapi/pilot-browser.v${version}.openapi.json`,
+						import.meta.url,
+					),
+					"utf8",
+				),
+			);
+			const previous = structuredClone(current);
+			restorePreCredentialNarrowContract(previous);
+			const directory = await mkdtemp(
+				resolve(tmpdir(), "agent-infra-personal-narrow-compat-"),
+			);
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			try {
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				const beforeGet = structuredClone(previous);
+				restorePreCredentialManagementContract(beforeGet);
+				await writeFile(previousPath, JSON.stringify(beforeGet));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				await writeFile(previousPath, JSON.stringify(previous));
+				const mutations: ((document: typeof current) => void)[] =
+					version === 1
+						? [
+								(document) => {
+									document.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+										"unreviewed.action",
+									);
+								},
+								(document) => {
+									document.components.schemas.ScopedPlatformAuditActionV1.enum.splice(
+										0,
+										1,
+									);
+								},
+							]
+						: [
+								(document) => {
+									document.paths["/api/v2/me/api-credentials"].get.security = [
+										{},
+									];
+								},
+								(document) => {
+									document.paths[
+										"/api/v2/me/api-credentials/{credentialId}"
+									].patch.parameters = [];
+								},
+								(document) => {
+									delete document.components.schemas
+										.PersonalApiCredentialNarrowRequestV1.minProperties;
+								},
+								(document) => {
+									document.components.schemas.PersonalApiCredentialNarrowRequestV1.properties.expiresAt.type =
+										["string", "null"];
+								},
+								(document) => {
+									document.components.schemas.PersonalApiCredentialPageV1.properties.credential =
+										{ type: "string" };
+								},
+								(document) => {
+									document.paths["/api/v2/me/api-credentials"].post.security = [
+										{},
+									];
+								},
+								(document) => {
+									document.components.securitySchemes.PlatformSession = {};
+								},
+							];
+				mutations.push(
+					(document) => {
+						document.paths["/unreviewed"] = {};
+					},
+					(document) => {
+						document.components.schemas.Unreviewed = { type: "object" };
+					},
+				);
+				for (const mutate of mutations) {
+					const changed = structuredClone(current);
+					mutate(changed);
+					await writeFile(currentPath, JSON.stringify(changed));
+					expect(comparePaths(currentPath, previousPath).status).toBe(1);
+				}
+			} finally {
+				await rm(directory, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it.each([1, 2])(
+		"admits only the exact personal list addition for browser V%s",
+		async (version) => {
+			const current = JSON.parse(
+				await readFile(
+					new URL(
+						`../artifacts/openapi/pilot-browser.v${version}.openapi.json`,
+						import.meta.url,
+					),
+					"utf8",
+				),
+			);
+			restorePreCredentialNarrowContract(current);
+			const previous = structuredClone(current);
+			restorePreCredentialManagementContract(previous);
+			const directory = await mkdtemp(
+				resolve(tmpdir(), "agent-infra-personal-list-compat-"),
+			);
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			try {
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				const mutations: ((document: typeof current) => void)[] =
+					version === 1
+						? [
+								(document) => {
+									document.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+										"unreviewed.action",
+									);
+								},
+								(document) => {
+									document.components.schemas.ScopedPlatformAuditActionV1.enum.splice(
+										0,
+										1,
+									);
+								},
+							]
+						: [
+								(document) => {
+									document.paths["/api/v2/me/api-credentials"].get.security = [
+										{},
+									];
+								},
+								(document) => {
+									document.paths["/api/v2/me/api-credentials"].get.parameters =
+										[];
+								},
+								(document) => {
+									document.components.schemas.PersonalApiCredentialPageV1.properties.items.maxItems = 200;
+								},
+								(document) => {
+									document.components.schemas.PersonalApiCredentialPageV1.properties.credential =
+										{ type: "string" };
+								},
+								(document) => {
+									document.paths["/api/v2/me/api-credentials"].post.security = [
+										{},
+									];
+								},
+								(document) => {
+									document.components.securitySchemes.PlatformSession = {};
+								},
+							];
+				mutations.push(
+					(document) => {
+						document.paths["/unreviewed"] = {};
+					},
+					(document) => {
+						document.components.schemas.Unreviewed = { type: "object" };
+					},
+				);
+				for (const mutate of mutations) {
+					const changed = structuredClone(current);
+					mutate(changed);
+					await writeFile(currentPath, JSON.stringify(changed));
+					expect(comparePaths(currentPath, previousPath).status).toBe(1);
+				}
+			} finally {
+				await rm(directory, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it("admits only the exact own-application disable PATCH preserving old interfaces", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/applications/{applicationId}";
+		const previous = structuredClone(current);
+		delete previous.paths[path].patch;
+		delete previous.components.schemas.ApplicationDisableRequestV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-application-disable-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(value: typeof current) => {
+					delete value.paths[path].patch.security;
+				},
+				(value: typeof current) => {
+					delete value.paths[path].patch.parameters;
+				},
+				(value: typeof current) => {
+					value.components.schemas.ApplicationDisableRequestV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.ApplicationDisableRequestV1.properties.status.const =
+						"active";
+				},
+				(value: typeof current) => {
+					delete value.paths[path].get.security;
+				},
+				(value: typeof current) => {
+					delete value.components.securitySchemes.PlatformSession;
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only the exact own-application GET without changing prior contracts", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/applications/{applicationId}";
+		// Keep the historical GET admission fixture independent of #1219 PATCH.
+		delete current.paths[path].patch;
+		delete current.components.schemas.ApplicationDisableRequestV1;
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-own-application-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					document.paths[path].post = document.paths[path].get;
+				},
+				(document: typeof current) => {
+					document.paths[path].get.security = [{}];
+				},
+				(document: typeof current) => {
+					document.paths[path].get.parameters = [];
+				},
+				(document: typeof current) => {
+					delete document.paths[path].get.responses["200"];
+				},
+				(document: typeof current) => {
+					document.paths[path].get.requestBody = { required: false };
+				},
+				(document: typeof current) => {
+					document.paths[path].get.responses["200"].content[
+						"application/json"
+					].schema = { type: "object", additionalProperties: true };
+				},
+				(document: typeof current) => {
+					document.components.schemas.ApplicationMetadataV1.properties.credential =
+						{ type: "string" };
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/applications"].post.operationId = "changed";
+				},
+				(document: typeof current) => {
+					document.components.securitySchemes.PlatformSession = {};
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/unreviewed"] = {};
+				},
+				(document: typeof current) => {
+					document.components.schemas.Unreviewed = { type: "object" };
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+			const occupied = structuredClone(current);
+			occupied.paths[path].get.description = "Existing contract";
+			await writeFile(previousPath, JSON.stringify(occupied));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only the exact application registration POST and preserves all prior contracts", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		delete current.paths["/api/v2/applications/{applicationId}"];
+		const path = "/api/v2/applications";
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		for (const name of [
+			"ApplicationMetadataV1",
+			"ApplicationRegistrationRequestV1",
+			"ApplicationRegistrationResponseV1",
+		])
+			delete previous.components.schemas[name];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-registration-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					delete document.paths[path];
+				},
+				(document: typeof current) => {
+					document.paths[path].get = document.paths[path].post;
+				},
+				(document: typeof current) => {
+					document.paths[path].post.security = [{}];
+				},
+				(document: typeof current) => {
+					document.paths[path].post.parameters = [];
+				},
+				(document: typeof current) => {
+					delete document.paths[path].post.responses["403"];
+				},
+				(document: typeof current) => {
+					document.components.schemas.ApplicationRegistrationRequestV1.additionalProperties = true;
+				},
+				(document: typeof current) => {
+					document.components.schemas.ApplicationMetadataV1.properties.credential =
+						{ type: "string" };
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/unreviewed"] = {};
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/agents"].get.operationId = "changed";
+				},
+				(document: typeof current) => {
+					document.components.schemas.AgentProjectionV2.required = [];
+				},
+				(document: typeof current) => {
+					document.components.securitySchemes.PlatformSession = {};
+				},
+				(document: typeof current) => {
+					document.components.schemas.Unreviewed = { type: "object" };
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only the three pinned personal Relay Key audit actions at the existing V1 location", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		restorePreCredentialManagementContract(current);
+		const previous = structuredClone(current);
+		previous.components.schemas.ScopedPlatformAuditActionV1.enum =
+			previous.components.schemas.ScopedPlatformAuditActionV1.enum.filter(
+				(action: string) =>
+					![
+						"relay_key.personal.read",
+						"relay_key.personal.replace",
+						"relay_key.personal.revoke",
+					].includes(action),
+			);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-relay-audit-compat-"),
+		);
+		const baseline = resolve(directory, "previous.json");
+		try {
+			await writeFile(baseline, JSON.stringify(previous));
+			expect(comparePaths(pilotBrowserArtifactPath, baseline).status).toBe(0);
+			const mutations: Record<string, (value: typeof current) => void> = {
+				inventedAction: (value) => {
+					value.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+						"relay_key.personal.anything",
+					);
+				},
+				removedOldAction: (value) => {
+					value.components.schemas.ScopedPlatformAuditActionV1.enum.shift();
+				},
+				missingNewAction: (value) => {
+					value.components.schemas.ScopedPlatformAuditActionV1.enum =
+						value.components.schemas.ScopedPlatformAuditActionV1.enum.filter(
+							(action: string) => action !== "relay_key.personal.revoke",
+						);
+				},
+				keyReadback: (value) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV1.properties.keyValue =
+						{ type: "string" };
+				},
+				anonymousAudit: (value) => {
+					value.paths["/api/v3/admin/audit"].get.security = [{}];
+				},
+				missingAuthenticationFailure: (value) => {
+					delete value.paths["/api/v3/admin/audit"].get.responses["401"];
+				},
+				missingAuthorizationFailure: (value) => {
+					delete value.paths["/api/v3/admin/audit/{auditId}"].get.responses[
+						"403"
+					];
+				},
+			};
+			for (const baselineKind of ["apiRead", "beforeApiRead"]) {
+				const existing = structuredClone(previous);
+				if (baselineKind === "beforeApiRead")
+					restoreOldApiReadActions(existing);
+				await writeFile(baseline, JSON.stringify(existing));
+				expect(
+					comparePaths(pilotBrowserArtifactPath, baseline).status,
+					baselineKind,
+				).toBe(0);
+				for (const [name, mutate] of Object.entries(mutations)) {
+					const candidate = structuredClone(current);
+					mutate(candidate);
+					expect(candidate, name).not.toEqual(current);
+					const path = resolve(directory, `${name}.json`);
+					await writeFile(path, JSON.stringify(candidate));
+					expect(
+						comparePaths(path, baseline).status,
+						`${baselineKind}-${name}`,
+					).toBe(1);
+				}
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the pinned browser personal Relay Key path and rejects identity/material/security drift", async () => {
+		const artifact = fileURLToPath(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v2.openapi.json",
+				import.meta.url,
+			),
+		);
+		const current = JSON.parse(await readFile(artifact, "utf8"));
+		const previous = structuredClone(current);
+		restorePreRelayKeyContract(previous);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-relay-key-compat-"),
+		);
+		const baseline = resolve(directory, "previous.json");
+		try {
+			await writeFile(baseline, JSON.stringify(previous));
+			expect(comparePaths(artifact, baseline).status).toBe(0);
+			const mutations: Record<string, (value: typeof current) => void> = {
+				anonymous: (value) => {
+					value.paths["/api/v2/me/relay-key"].put.security = [];
+				},
+				bearer: (value) => {
+					value.paths["/api/v2/me/relay-key"].delete.security = [
+						{ platformApiCredential: [] },
+					];
+				},
+				callerIdentity: (value) => {
+					value.components.schemas.PersonalRelayKeyReplaceRequestV1.properties.userId =
+						{ type: "string" };
+				},
+				keyReadback: (value) => {
+					value.components.schemas.PersonalRelayKeyStateV1.oneOf[1].properties.keyValue =
+						{ type: "string" };
+				},
+				keyBounds: (value) => {
+					value.components.schemas.PersonalRelayKeyReplaceRequestV1.properties.keyValue.minLength = 0;
+				},
+				keyPattern: (value) => {
+					delete value.components.schemas.PersonalRelayKeyReplaceRequestV1
+						.properties.keyValue.pattern;
+				},
+				zeroVersion: (value) => {
+					value.components.schemas.PersonalRelayKeyRevokeRequestV1.properties.expectedVersion.minimum = 0;
+				},
+				unknownBodyFields: (value) => {
+					value.components.schemas.PersonalRelayKeyReplaceRequestV1.additionalProperties = true;
+				},
+				inventedPatch: (value) => {
+					value.paths["/api/v2/me/relay-key"].patch =
+						value.paths["/api/v2/me/relay-key"].put;
+				},
+				missingFailureStatus: (value) => {
+					delete value.paths["/api/v2/me/relay-key"].put.responses["503"];
+				},
+				changedCookie: (value) => {
+					value.components.securitySchemes.PlatformSession.name =
+						"caller_session";
+				},
+				unrelatedAnonymousAdmin: (value) => {
+					value.paths["/api/v2/admin/agents"].get.security = [];
+				},
+			};
+			for (const [name, mutate] of Object.entries(mutations)) {
+				const candidate = structuredClone(current);
+				mutate(candidate);
+				const path = resolve(directory, `${name}.json`);
+				await writeFile(path, JSON.stringify(candidate));
+				expect(comparePaths(path, baseline).status, name).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only the exact original binding addition and preserves every prior V3 operation", async () => {
+		const artifact = fileURLToPath(
+			new URL(
+				"../artifacts/openapi/runtime-host.v3.openapi.json",
+				import.meta.url,
+			),
+		);
+		const current = JSON.parse(await readFile(artifact, "utf8"));
+		const previous = structuredClone(current);
+		delete previous.paths["/internal/runtime/v3/original-binding"];
+		delete previous.components.schemas.RuntimeOriginalBindingResponseV3;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-original-binding-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			expect(comparePaths(artifact, previousPath).status).toBe(0);
+			const mutations: Record<string, (value: typeof current) => void> = {
+				widenedRef: (value) => {
+					value.components.schemas.RuntimeOriginalBindingResponseV3.properties.hostSessionRef.minLength = 0;
+				},
+				statusProjection: (value) => {
+					value.components.schemas.RuntimeOriginalBindingResponseV3.properties.status =
+						{ type: "string" };
+				},
+				changedRequest: (value) => {
+					value.paths[
+						"/internal/runtime/v3/original-binding"
+					].post.requestBody.content["application/json"].schema.$ref =
+						"#/components/schemas/RuntimeStopRequestV3";
+				},
+				anonymous: (value) => {
+					value.paths["/internal/runtime/v3/original-binding"].post.security =
+						[];
+				},
+				changedOldStatus: (value) => {
+					value.paths["/internal/runtime/v3/status"].post.operationId =
+						"changed";
+				},
+				changedOldRequest: (value) => {
+					value.components.schemas.RuntimeStatusRequestV3.additionalProperties = true;
+				},
+			};
+			for (const mutate of Object.values(mutations)) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits the exact durable API Agent read audit action while preserving every old action and field", async () => {
+		const artifact = fileURLToPath(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v1.openapi.json",
+				import.meta.url,
+			),
+		);
+		const current = JSON.parse(await readFile(artifact, "utf8"));
+		restorePreRelayKeyContract(current);
+		const previous = structuredClone(current);
+		restoreOldApiReadActions(previous);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-api-read-audit-compat-"),
+		);
+		const baseline = resolve(directory, "previous.json");
+		const historicalCurrent = resolve(directory, "historical-current.json");
+		try {
+			await writeFile(baseline, JSON.stringify(previous));
+			await writeFile(historicalCurrent, JSON.stringify(current));
+			expect(comparePaths(historicalCurrent, baseline).status).toBe(0);
+			for (const [name, mutate] of Object.entries({
+				inventedAction: (value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+						"api.anything",
+					);
+				},
+				removedOldAction: (value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditActionV1.enum.shift();
+				},
+				credentialReadback: (value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV1.properties.credential =
+						{ type: "string" };
+				},
+				anonymousAudit: (value: typeof current) => {
+					value.paths["/api/v1/admin/audit"].get.security = [];
+				},
+			})) {
+				const candidate = structuredClone(current);
+				mutate(candidate);
+				const path = resolve(directory, `${name}.json`);
+				await writeFile(path, JSON.stringify(candidate));
+				expect(comparePaths(path, baseline).status, name).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the pinned personal credential contract and rejects security/material regressions", async () => {
+		const artifact = fileURLToPath(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v2.openapi.json",
+				import.meta.url,
+			),
+		);
+		const current = JSON.parse(await readFile(artifact, "utf8"));
+		const latest = structuredClone(current);
+		restorePreRelayKeyContract(current);
+		const previous = structuredClone(current);
+		for (const path of [
+			"/api/v2/me/api-credentials",
+			"/api/v2/me/api-credentials/{credentialId}",
+		])
+			delete previous.paths[path];
+		for (const name of [
+			"PersonalApiCredentialIssueRequestV1",
+			"PersonalApiCredentialIssueResponseV1",
+			"PersonalApiCredentialMetadataV1",
+			"PersonalApiCredentialRevokeResponseV1",
+		])
+			delete previous.components.schemas[name];
+		delete previous.components.securitySchemes;
+		delete previous.paths["/api/v2/agents"].get.security;
+		delete previous.paths["/api/v2/agents"].get.description;
+		restoreOldApiReadActions(previous);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-personal-credential-compat-"),
+		);
+		const baseline = resolve(directory, "previous.json");
+		const historicalCurrent = resolve(directory, "historical-current.json");
+		try {
+			await writeFile(baseline, JSON.stringify(previous));
+			await writeFile(historicalCurrent, JSON.stringify(current));
+			expect(comparePaths(historicalCurrent, baseline).status).toBe(0);
+			const mutations: Record<string, (value: typeof current) => void> = {
+				anonymous: (value) => {
+					value.paths["/api/v2/me/api-credentials"].post.security = [];
+				},
+				bearerGovernance: (value) => {
+					value.paths[
+						"/api/v2/me/api-credentials/{credentialId}"
+					].delete.security = [{ PersonalApiCredential: [] }];
+				},
+				hashReadback: (value) => {
+					value.components.schemas.PersonalApiCredentialMetadataV1.properties.credentialHash =
+						{ type: "string" };
+				},
+				emptyScopes: (value) => {
+					value.components.schemas.PersonalApiCredentialIssueRequestV1.properties.scopes.minItems = 0;
+				},
+				materialReplay: (value) => {
+					value.paths["/api/v2/me/api-credentials"].post.responses["200"] =
+						value.paths["/api/v2/me/api-credentials"].post.responses["201"];
+				},
+				unexpectedPatch: (value) => {
+					value.paths["/api/v2/me/api-credentials/{credentialId}"].patch =
+						value.paths["/api/v2/me/api-credentials/{credentialId}"].delete;
+				},
+				differentCookie: (value) => {
+					value.components.securitySchemes.PlatformSession.name =
+						"caller_session";
+				},
+				unrelatedOperation: (value) => {
+					value.paths["/unexpected"] =
+						value.paths["/api/v2/me/api-credentials"];
+				},
+				oldAdministratorSecurity: (value) => {
+					value.paths["/api/v2/admin/agents"].get.security = [];
+				},
+				oldMetadataResponse: (value) => {
+					value.components.schemas.AgentProjectionV2.properties.rawCredential =
+						{ type: "string" };
+				},
+				globalSecurity: (value) => {
+					value.security = [{ PlatformSession: [] }];
+				},
+				anonymousAgentRead: (value) => {
+					value.paths["/api/v2/agents"].get.security = [{}];
+				},
+				bearerOwnerOverride: (value) => {
+					value.paths["/api/v2/agents"].get.parameters.find(
+						({ name }: { name: string }) => name === "scope",
+					).schema = { type: "string" };
+				},
+				bearerSchemeChanged: (value) => {
+					value.components.securitySchemes.platformApiCredential = {
+						type: "http",
+						scheme: "basic",
+					};
+				},
+				unrelatedBearerOperation: (value) => {
+					value.paths["/api/v2/admin/agents"].get.security = [
+						{ platformApiCredential: [] },
+					];
+				},
+				andAuthentication: (value) => {
+					value.paths["/api/v2/agents"].get.security = [
+						{ PlatformSession: [], platformApiCredential: [] },
+					];
+				},
+				removedBrowserAuthentication: (value) => {
+					value.paths["/api/v2/agents"].get.security = [
+						{ platformApiCredential: [] },
+					];
+				},
+			};
+			for (const [name, mutate] of Object.entries(mutations)) {
+				const candidate = structuredClone(current);
+				mutate(candidate);
+				const path = resolve(directory, `${name}.json`);
+				await writeFile(path, JSON.stringify(candidate));
+				const result = comparePaths(path, baseline);
+				expect(result.status, name).toBe(1);
+				expect(result.stderr, name).toContain("changed OpenAPI contract");
+			}
+			for (const baselineKind of ["empty", "existingCookie", "governance"]) {
+				const existing = structuredClone(
+					baselineKind === "governance" ? current : previous,
+				);
+				if (baselineKind === "governance") {
+					delete existing.paths["/api/v2/agents"].get.security;
+					delete existing.paths["/api/v2/agents"].get.description;
+					delete existing.components.securitySchemes.platformApiCredential;
+					restoreOldApiReadActions(existing);
+				} else {
+					existing.components.securitySchemes = {};
+				}
+				if (baselineKind === "existingCookie")
+					existing.components.securitySchemes.PlatformSession = structuredClone(
+						current.components.securitySchemes.PlatformSession,
+					);
+				const path = resolve(directory, `${baselineKind}-previous.json`);
+				await writeFile(path, JSON.stringify(existing));
+				if (baselineKind === "governance")
+					expect(comparePaths(path, baseline).status).toBe(0);
+				expect(comparePaths(artifact, path).status, baselineKind).toBe(0);
+				expect(
+					comparePaths(historicalCurrent, path).status,
+					`${baselineKind}-historical`,
+				).toBe(0);
+				for (const [version, contract] of Object.entries({
+					historical: current,
+					latest,
+				})) {
+					for (const [name, mutate] of Object.entries(mutations)) {
+						const candidate = structuredClone(contract);
+						mutate(candidate);
+						const mutated = resolve(
+							directory,
+							`${baselineKind}-${version}-${name}.json`,
+						);
+						await writeFile(mutated, JSON.stringify(candidate));
+						expect(
+							comparePaths(mutated, path).status,
+							`${baselineKind}-${version}-${name}`,
+						).toBe(1);
+					}
+				}
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	}, 30_000);
 	it("tracks published browser, file, readiness and template-release contracts", async () => {
 		const source = await readFile(cliPath, "utf8");
 		for (const path of [
@@ -63,6 +1092,69 @@ describe("contract compatibility command", () => {
 		);
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");
+	});
+
+	it("accepts the additive server-resolved Connection capability", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		expect(previous.paths["/api/v1/connection/capability"]).toBeDefined();
+		delete previous.paths["/api/v1/connection/capability"];
+		delete previous.components.schemas.ConnectionCapabilityProjectionV1;
+		expect(previous).not.toEqual(current);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-connection-capability-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			const result = comparePaths(currentPath, previousPath);
+			expect(result.status).toBe(0);
+			expect(result.stderr).toBe("");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects capability mutations and unrelated contract changes", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		delete previous.paths["/api/v1/connection/capability"];
+		delete previous.components.schemas.ConnectionCapabilityProjectionV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-capability-guard-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			for (const mutate of [
+				(value: typeof current) => {
+					value.paths["/api/v1/connection/capability"].get.security = [];
+				},
+				(value: typeof current) => {
+					value.components.schemas.ConnectionCapabilityProjectionV1 = {
+						type: "object",
+					};
+				},
+				(value: typeof current) => {
+					delete value.paths["/api/v1/session"];
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				expect(changed).not.toEqual(current);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	it("rejects every deviation from the fallback OpenAPI addition", async () => {
@@ -210,6 +1302,11 @@ describe("contract compatibility command", () => {
 			"/api/v1/agents/{agentId}/wecom-setup/{sessionId}",
 			"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/credentials",
 			"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/cancel",
+			"/api/v1/agents/{agentId}/wecom-app",
+			"/api/v1/agents/{agentId}/wecom-app-setup",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel",
 		] as const;
 		const previous = structuredClone(current);
 		for (const path of paths) delete previous.paths[path];
@@ -282,6 +1379,153 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the pinned administrator Agent read and preserves every existing contract", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/admin/agents";
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-admin-read-v2-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const [name, mutate] of [
+				[
+					"operation",
+					(document: typeof current) => {
+						document.paths[path].get.operationId = "unreviewed";
+					},
+				],
+				[
+					"query",
+					(document: typeof current) => {
+						document.paths[path].get.parameters = [];
+					},
+				],
+				[
+					"response",
+					(document: typeof current) => {
+						document.paths[path].get.responses["200"].content[
+							"application/json"
+						].schema.required = [];
+					},
+				],
+				[
+					"operation-security",
+					(document: typeof current) => {
+						document.paths[path].get.security = [];
+					},
+				],
+				[
+					"document-security",
+					(document: typeof current) => {
+						document.security = [];
+					},
+				],
+				[
+					"old-operation",
+					(document: typeof current) => {
+						document.paths["/api/v2/agents"].get.operationId = "unreviewed";
+					},
+				],
+				[
+					"old-component",
+					(document: typeof current) => {
+						document.components.schemas.AgentProjectionV2.required = [];
+					},
+				],
+				[
+					"old-security",
+					(document: typeof current) => {
+						document.components.securitySchemes = {};
+					},
+				],
+				[
+					"extra-path",
+					(document: typeof current) => {
+						document.paths["/api/v2/admin/unreviewed"] = {};
+					},
+				],
+				[
+					"extra-method",
+					(document: typeof current) => {
+						document.paths[path].post = document.paths[path].get;
+					},
+				],
+			] as const) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				const result = comparePaths(currentPath, previousPath);
+				expect(result.status, name).toBe(1);
+				expect(result.stderr, name).toContain("changed OpenAPI contract");
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only the exact application issuer addition and preserves existing authority", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/applications/{applicationId}/credentials";
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-issuer-v2-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					document.paths[path].post.security = [];
+				},
+				(document: typeof current) => {
+					document.paths[path].get = document.paths[path].post;
+				},
+				(document: typeof current) => {
+					delete document.paths[path].post.responses["403"];
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/admin/audit"].get.security = [];
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the V2 lifecycle addition and preserves existing audit authority", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -292,10 +1536,29 @@ describe("contract compatibility command", () => {
 				"utf8",
 			),
 		);
+		// Isolate lifecycle from later personal API/Relay Key and registration additions.
+		restorePreRelayKeyContract(current);
+		delete current.paths["/api/v2/applications"];
+		delete current.paths["/api/v2/applications/{applicationId}"];
+		for (const name of [
+			"ApplicationMetadataV1",
+			"ApplicationRegistrationRequestV1",
+			"ApplicationRegistrationResponseV1",
+		])
+			delete current.components.schemas[name];
+		delete current.paths["/api/v2/agents"].get.security;
+		delete current.paths["/api/v2/agents"].get.description;
 		const previous = structuredClone(current);
 		for (const path of Object.keys(previous.paths)) {
 			if (
 				path !== "/api/v2/admin/audit" &&
+				path !== "/api/v2/me/conversations/recent" &&
+				path !== "/api/v2/me/api-credentials" &&
+				path !== "/api/v2/me/api-credentials/{credentialId}" &&
+				path !== "/api/v2/applications/{applicationId}/credentials" &&
+				path !== "/api/v2/applications/{applicationId}/material-grant" &&
+				path !==
+					"/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}" &&
 				!path.startsWith("/api/v2/conversations/")
 			)
 				delete previous.paths[path];
@@ -357,6 +1620,47 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the existing resource-unavailable response added to V2 SSE", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/conversations/{conversationId}/events";
+		const previous = structuredClone(current);
+		delete previous.paths[path].get.responses["404"];
+		const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-sse404-"));
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					document.paths[path].get.responses["404"].description = "changed";
+				},
+				(document: typeof current) => {
+					document.paths[path].get.responses["200"].description = "changed";
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/agents"].get.operationId = "changed";
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits reviewed V2 operation reads while preserving lifecycle and audit", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -400,6 +1704,15 @@ describe("contract compatibility command", () => {
 			await writeFile(currentPath, JSON.stringify(current));
 			expect(comparePaths(currentPath, previousPath).status).toBe(0);
 			for (const mutate of [
+				(document: typeof current) => {
+					delete document.paths["/api/v2/conversations/{conversationId}/events"]
+						.get.responses["404"];
+				},
+				(document: typeof current) => {
+					document.paths[
+						"/api/v2/conversations/{conversationId}/events"
+					].get.responses["404"].description = "changed";
+				},
 				(document: typeof current) => {
 					delete document.paths[
 						"/api/v2/conversations/{conversationId}/events"

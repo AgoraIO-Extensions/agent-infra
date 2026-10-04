@@ -6,7 +6,9 @@ import {
 	RuntimeAuthorizationRenewRequestV3Schema,
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeEventAckRequestV3Schema,
+	RuntimeEventAckRequestV4Schema,
 	RuntimeEventPersistRequestV3Schema,
+	RuntimeEventReadRequestV4Schema,
 	type RuntimeExecutionGrantV2,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeGenerationCancelRequestV3Schema,
@@ -19,8 +21,10 @@ import {
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSubmitTurnRequestV3Schema,
+	RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV1Schema,
 	RuntimeSupplementRequestV3Schema,
+	RuntimeSupplementTransportV4Schema,
 	type VerifiedExecutionGrantV1,
 	type VerifiedRuntimeExecutionGrantV2,
 	WorkloadReadinessRequestV1Schema,
@@ -39,6 +43,10 @@ interface RuntimeHostAppOptions {
 	) =>
 		| VerifiedRuntimeExecutionGrantV2
 		| Promise<VerifiedRuntimeExecutionGrantV2>;
+	verifyGrantV4?: (request: unknown) => Promise<{
+		request: import("@agent-infra/contracts/runtime").RuntimeBusinessRequestV4;
+		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
+	}>;
 	/** The transport token authenticates this deployment-provisioned Worker identity. */
 	readinessWorkerId?: string;
 	host: RuntimeHost;
@@ -299,6 +307,59 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		RuntimeSupplementRequestV3Schema,
 		(request, verification) => options.host.supplementV3(request, verification),
 	);
+	async function verifyV4(request: unknown) {
+		if (!options.verifyGrantV4 || !options.runtimeWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization is not configured",
+				403,
+			);
+		const verified = await options.verifyGrantV4(request);
+		if (verified.claims.workerId !== options.runtimeWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization does not match this deployment",
+				403,
+			);
+		return verified;
+	}
+	app.post("/internal/runtime/v4/turns", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeSubmitTurnTransportV4Schema,
+		);
+		await verifyV4(request.businessRequest);
+		return context.json(await options.host.submitTurnV4(request));
+	});
+	app.post("/internal/runtime/v4/instructions", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeSupplementTransportV4Schema,
+		);
+		await verifyV4(request.businessRequest);
+		return context.json(await options.host.supplementV4(request));
+	});
+	app.post("/internal/runtime/v4/events/read", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeEventReadRequestV4Schema,
+		);
+		return context.json(
+			await options.host.readEventsV4(request, await verifyV2(request.grant)),
+		);
+	});
+	app.post("/internal/runtime/v4/events/ack", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeEventAckRequestV4Schema,
+		);
+		return context.json(
+			await options.host.acknowledgeEventsV4(
+				request,
+				await verifyV2(request.grant),
+			),
+		);
+	});
 	v3Route("stops", RuntimeStopRequestV3Schema, (request, verification) =>
 		options.host.stopV3(request, verification),
 	);
@@ -307,6 +368,12 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		RuntimeStatusRequestV3Schema,
 		(request, verification, signal) =>
 			options.host.recoverStatusV3(request, verification, signal),
+	);
+	v3Route(
+		"original-binding",
+		RuntimeStatusRequestV3Schema,
+		(request, verification) =>
+			options.host.readOriginalBinding(request, verification),
 	);
 	v3Route(
 		"generations/cancel",

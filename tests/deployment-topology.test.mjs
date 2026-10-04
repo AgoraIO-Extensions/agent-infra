@@ -146,6 +146,12 @@ test("kind values render the reviewable Kubernetes workload-plane topology", () 
 });
 
 test("production Worker requires a private module and runtime authorization mounts", () => {
+	const topologyWecom = render("--set", "platformWorker.wecomEnabled=true");
+	assert.notEqual(topologyWecom.status, 0);
+	assert.match(
+		topologyWecom.stderr,
+		/platformWorker.wecomEnabled requires production Worker deployment/,
+	);
 	const production = [
 		"--set",
 		"workloadTopology.enabled=false",
@@ -158,6 +164,8 @@ test("production Worker requires a private module and runtime authorization moun
 
 	const result = render(
 		...production,
+		"--set",
+		"platformWorker.wecomEnabled=true",
 		"--set-string",
 		"platformWorker.configurationModuleSecretRef.name=worker-module",
 		"--set-string",
@@ -168,6 +176,10 @@ test("production Worker requires a private module and runtime authorization moun
 		"platformWorker.runtimeAuthSecretRef.privateKeyKey=grant.pem",
 		"--set-string",
 		"platformWorker.runtimeAuthSecretRef.serviceTokenKey=service-token",
+		"--set-string",
+		"platformWorker.trustedCaSecretRef.name=worker-trusted-ca",
+		"--set-string",
+		"platformWorker.trustedCaSecretRef.key=ca.pem",
 		"--set",
 		"platformApi.placement=in-cluster",
 		"--set-string",
@@ -180,6 +192,18 @@ test("production Worker requires a private module and runtime authorization moun
 		"Deployment",
 		"topology-agent-infra-platform-worker",
 	).spec.template.spec;
+	assert.equal(
+		worker.containers[0].env.find(
+			(entry) => entry.name === "PLATFORM_WORKER_WECOM_ENABLED",
+		)?.value,
+		"true",
+	);
+	assert.deepEqual(
+		worker.containers[0].env.find(
+			(entry) => entry.name === "PLATFORM_WORKER_NAMESPACE",
+		)?.valueFrom,
+		{ fieldRef: { fieldPath: "metadata.namespace" } },
+	);
 	assert.equal(worker.securityContext.fsGroup, 1000);
 	assert.deepEqual(
 		worker.volumes.find((volume) => volume.name === "deployment-module")
@@ -219,6 +243,30 @@ test("production Worker requires a private module and runtime authorization moun
 			],
 		},
 	);
+	assert.deepEqual(
+		worker.volumes.find((volume) => volume.name === "trusted-ca")?.secret,
+		{
+			secretName: "worker-trusted-ca",
+			defaultMode: 288,
+			items: [{ key: "ca.pem", path: "ca.crt" }],
+		},
+	);
+	assert.deepEqual(
+		worker.containers[0].volumeMounts.find(
+			(mount) => mount.name === "trusted-ca",
+		),
+		{
+			name: "trusted-ca",
+			mountPath: "/var/run/agent-infra/trusted-ca",
+			readOnly: true,
+		},
+	);
+	assert.equal(
+		worker.containers[0].env.find(
+			(entry) => entry.name === "NODE_EXTRA_CA_CERTS",
+		)?.value,
+		"/var/run/agent-infra/trusted-ca/ca.crt",
+	);
 	const api = resource(
 		resources,
 		"Deployment",
@@ -226,10 +274,18 @@ test("production Worker requires a private module and runtime authorization moun
 	).spec.template.spec;
 	assert.equal(
 		(api.volumes ?? []).some((volume) =>
-			["deployment-module", "runtime-auth"].includes(volume.name),
+			["deployment-module", "runtime-auth", "trusted-ca"].includes(volume.name),
 		),
 		false,
 	);
+	const invalidCaRef = render(
+		"--set-string",
+		"platformWorker.trustedCaSecretRef.name=worker-trusted-ca",
+		"--set-string",
+		"platformWorker.trustedCaSecretRef.key=../ca.pem",
+	);
+	assert.notEqual(invalidCaRef.status, 0);
+	assert.match(invalidCaRef.stderr, /trustedCaSecretRef/);
 });
 
 test("enterprise directory deployment keeps migration ahead of its runtime resources", () => {

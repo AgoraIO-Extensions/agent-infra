@@ -14,6 +14,10 @@ import {
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import {
+	awaitConversationExecutionQueryV1,
+	bindConversationExecutionSignalV1,
+} from "./conversation-execution-abort.js";
+import {
 	type ConversationQueryProject,
 	type ConversationQueryRequest,
 	type CreateDecide,
@@ -87,9 +91,10 @@ export class PostgresConversationExecutionTransactionV1
 	constructor(
 		options:
 			| PostgresConversationExecutionOptionsV1
-			| { readonly transaction: Transaction },
+			| { readonly transaction: Transaction; readonly signal?: AbortSignal },
 	) {
 		if ("transaction" in options) {
+			bindConversationExecutionSignalV1(options.transaction, options.signal);
 			this.#existingTransaction = options.transaction;
 			return;
 		}
@@ -305,7 +310,9 @@ export class PostgresConversationExecutionTransactionV1
 				await requireCreateReplay(transaction, result, authority);
 				return { outcome: "replayed", result };
 			}
-			await transaction`
+			await awaitConversationExecutionQueryV1(
+				transaction,
+				transaction`
 					insert into platform.conversations
 						(id, agent_id, actor_id, channel_id, status, session_generation,
 						 host_session_ref, authorization_revision, last_conversation_cursor,
@@ -320,7 +327,8 @@ export class PostgresConversationExecutionTransactionV1
 						 ${plan.conversation.lastConversationCursor},
 						 ${plan.conversation.selectedModelOptionId},
 						 ${plan.conversation.selectedReasoningLevel}, ${occurredAt}, ${occurredAt})
-			`;
+			`,
+			);
 			await completeIdempotency(
 				transaction,
 				reservationId,
@@ -378,7 +386,9 @@ export class PostgresConversationExecutionTransactionV1
 				occurredAt: plan.message.createdAt,
 			});
 			if (!reservationId) unavailable();
-			const updated = await transaction<{ id: string }[]>`
+			const updated = await awaitConversationExecutionQueryV1(
+				transaction,
+				transaction<{ id: string }[]>`
 				update platform.conversations
 				set status = ${plan.conversation.status},
 					authorization_revision = ${plan.conversation.authorizationRevision},
@@ -388,10 +398,13 @@ export class PostgresConversationExecutionTransactionV1
 					updated_at = ${plan.message.createdAt}
 				where id = ${conversation.conversationId}
 				returning id
-			`;
+			`,
+			);
 			if (updated.length !== 1) unavailable();
 			if (plan.execution) {
-				await transaction`
+				await awaitConversationExecutionQueryV1(
+					transaction,
+					transaction`
 					insert into platform.conversation_executions
 						(execution_id, conversation_id, agent_id, actor_id, channel_id,
 						 turn_id, status, session_generation, delivery_fence,
@@ -408,7 +421,8 @@ export class PostgresConversationExecutionTransactionV1
 						 ${plan.execution.modelOptionId}, ${plan.execution.reasoningLevel},
 						 ${plan.execution.createdAt},
 						 ${plan.execution.createdAt})
-				`;
+				`,
+				);
 				await insertTaskAuthorization(transaction, {
 					executionId: plan.execution.executionId,
 					boundary: authority.taskBoundary,
@@ -417,9 +431,12 @@ export class PostgresConversationExecutionTransactionV1
 				});
 			}
 			for (const fileId of request.command.attachments ?? []) {
-				const [row] = await transaction<{ record: FileRecordV1 }[]>`
+				const [row] = await awaitConversationExecutionQueryV1(
+					transaction,
+					transaction<{ record: FileRecordV1 }[]>`
                     select record from platform.files where file_id = ${fileId} and conversation_id = ${conversation.conversationId}
-                `;
+                `,
+				);
 				const file = bindInputFileV1(
 					row?.record ?? null,
 					{
@@ -435,9 +452,14 @@ export class PostgresConversationExecutionTransactionV1
 					},
 					plan.message.createdAt,
 				);
-				await transaction`update platform.files set record = ${transaction.json(file as unknown as JsonValue)}, updated_at = ${plan.message.createdAt} where file_id = ${fileId}`;
+				await awaitConversationExecutionQueryV1(
+					transaction,
+					transaction`update platform.files set record = ${transaction.json(file as unknown as JsonValue)}, updated_at = ${plan.message.createdAt} where file_id = ${fileId}`,
+				);
 			}
-			await transaction`
+			await awaitConversationExecutionQueryV1(
+				transaction,
+				transaction`
 				insert into platform.conversation_messages
 					(message_id, conversation_id, actor_id, role, text, execution_id,
 					 status, created_at, updated_at)
@@ -446,8 +468,11 @@ export class PostgresConversationExecutionTransactionV1
 					 ${plan.message.actorId}, 'user', ${plan.message.text},
 					 ${plan.message.executionId}, ${plan.message.status},
 					 ${plan.message.createdAt}, ${plan.message.createdAt})
-			`;
-			await transaction`
+			`,
+			);
+			await awaitConversationExecutionQueryV1(
+				transaction,
+				transaction`
 				insert into platform.outbox_items
 					(id, scope_type, scope_id, operation, payload, trace_id, request_id,
 					 available_at, created_at, updated_at)
@@ -471,8 +496,11 @@ export class PostgresConversationExecutionTransactionV1
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
 					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt},
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
-			`;
-			await transaction`
+			`,
+			);
+			await awaitConversationExecutionQueryV1(
+				transaction,
+				transaction`
 				insert into platform.conversation_audit_events
 					(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id,
 					 request_id, occurred_at)
@@ -482,7 +510,8 @@ export class PostgresConversationExecutionTransactionV1
 					 ${plan.auditEvent.actorId}, ${plan.auditEvent.action},
 					 ${plan.auditEvent.traceId}, ${plan.auditEvent.requestId},
 					 ${plan.auditEvent.occurredAt})
-			`;
+			`,
+			);
 			await insertModelSelectionFallback(
 				transaction,
 				plan.modelSelectionFallback,

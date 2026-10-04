@@ -37,6 +37,8 @@ import {
 	pilotOperationOpenApiPathsV2,
 	pilotOperationSchemasV2,
 	pilotOperationSseSchemasV2,
+	pilotScopedAuditOpenApiPathsV1,
+	pilotScopedAuditSchemasV1,
 	pilotSseSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
 } from "./pilot/index.ts";
@@ -512,6 +514,12 @@ function buildArtifacts() {
 			"RuntimeStatusResponseV3",
 		],
 		[
+			"original-binding",
+			"readOriginalRuntimeBindingV3",
+			"RuntimeStatusRequestV3",
+			"RuntimeOriginalBindingResponseV3",
+		],
+		[
 			"generations/cancel",
 			"cancelRuntimeGenerationV3",
 			"RuntimeGenerationCancelRequestV3",
@@ -630,12 +638,22 @@ function buildArtifacts() {
 			...pilotBrowserOpenApiPathsV1,
 			...fileOpenApiPathsV1,
 			...pilotBrowserSseOpenApiPathsV1,
+			...pilotScopedAuditOpenApiPathsV1,
 		},
 		components: {
+			securitySchemes: {
+				platformApiCredential: { type: "http", scheme: "bearer" },
+				PlatformSession: {
+					type: "apiKey",
+					in: "cookie",
+					name: "__Host-platform-session",
+				},
+			},
 			schemas: {
 				...pilotBrowserSchemasV1,
 				...pilotSseSchemasV1,
 				...fileSchemasV1,
+				...pilotScopedAuditSchemasV1,
 			},
 		},
 	});
@@ -647,6 +665,14 @@ function buildArtifacts() {
 		},
 		paths: { ...pilotBrowserOpenApiPathsV2, ...pilotOperationOpenApiPathsV2 },
 		components: {
+			securitySchemes: {
+				platformApiCredential: { type: "http", scheme: "bearer" },
+				PlatformSession: {
+					type: "apiKey",
+					in: "cookie",
+					name: "__Host-platform-session",
+				},
+			},
 			schemas: { ...pilotBrowserSchemasV2, ...pilotOperationSchemasV2 },
 		},
 	});

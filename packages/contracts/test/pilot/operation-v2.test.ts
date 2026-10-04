@@ -187,18 +187,60 @@ describe("Pilot mixed-version operation contracts", () => {
 		).toBe(false);
 	});
 
-	it("publishes only the three versioned reads with shared replay and framing semantics", () => {
+	it("rejects recent-query identity or collection overrides and keeps bounded defaults", () => {
+		const query =
+			pilotOperationOpenApiPathsV2["/api/v2/me/conversations/recent"].get
+				.requestParams.query;
+		expect(query.parse({})).toEqual({ limit: 50 });
+		expect(query.parse({ limit: "100", cursor: "opaque-boundary" })).toEqual({
+			limit: 100,
+			cursor: "opaque-boundary",
+		});
+		for (const key of [
+			"actorId",
+			"userId",
+			"agentId",
+			"channel",
+			"scope",
+			"order",
+			"role",
+		])
+			expect(query.safeParse({ [key]: "override" }).success).toBe(false);
+		for (const limit of [0, 101, 1.5, "invalid"])
+			expect(query.safeParse({ limit }).success).toBe(false);
+		expect(query.safeParse({ cursor: "" }).success).toBe(false);
+	});
+
+	it("publishes the original versioned reads and the bounded personal recent contract", () => {
 		const document = createDocument({
 			openapi: "3.1.0",
 			info: { title: "Operation reads", version: "2.0.0" },
 			paths: pilotOperationOpenApiPathsV2,
-			components: { schemas: pilotOperationSchemasV2 },
+			components: {
+				schemas: pilotOperationSchemasV2,
+				securitySchemes: {
+					PlatformSession: {
+						type: "apiKey",
+						in: "cookie",
+						name: "__Host-platform-session",
+					},
+				},
+			},
 		});
 		expect(Object.keys(document.paths ?? {})).toEqual([
+			"/api/v2/me/conversations/recent",
 			"/api/v2/conversations/{conversationId}",
 			"/api/v2/conversations/{conversationId}/executions/{executionId}",
 			"/api/v2/conversations/{conversationId}/events",
 		]);
+		expect(
+			document.paths?.["/api/v2/me/conversations/recent"]?.get?.security,
+		).toEqual([{ PlatformSession: [] }]);
+		expect(document.components?.securitySchemes?.PlatformSession).toEqual({
+			type: "apiKey",
+			in: "cookie",
+			name: "__Host-platform-session",
+		});
 		const stream =
 			document.paths?.["/api/v2/conversations/{conversationId}/events"]?.get;
 		expect(stream?.operationId).toBe("streamConversationEventsV2");

@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { Bot, History, Plus } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -26,7 +27,7 @@ export function PersonalHistory({
 		if (history.status === "denied") onDenied();
 	}, [history.status, onDenied]);
 	return (
-		<section aria-label="个人历史" className="min-w-0 space-y-3 pb-4">
+		<section aria-label="个人历史" className="min-w-0 space-y-3">
 			<h2 className="flex items-center gap-2 font-semibold">
 				<History className="size-4" aria-hidden="true" />
 				个人历史
@@ -42,14 +43,12 @@ export function PersonalHistory({
 					<EmptyDescription>暂无 Web 会话。</EmptyDescription>
 				</Empty>
 			)}
+			<p className="text-muted-foreground text-xs">只显示你的会话</p>
 			<ul className="space-y-1">
 				{history.items.map((item) => (
-					<li
-						className="record-row border-border border-b py-3"
-						key={item.conversationId}
-					>
+					<li key={item.conversationId}>
 						<a
-							href={`/agents/${encodeURIComponent(agentId)}/conversations?conversation=${encodeURIComponent(item.conversationId)}`}
+							href={`/chat/${encodeURIComponent(agentId)}/${encodeURIComponent(item.conversationId)}`}
 							aria-current={
 								current === item.conversationId ? "page" : undefined
 							}
@@ -73,9 +72,10 @@ export function PersonalHistory({
 						>
 							<span className="min-w-0 break-words">
 								{item.title || "未命名会话"}
-								<span className="block text-muted-foreground text-xs">
-									{new Date(item.updatedAt).toLocaleString()}
-								</span>
+								<small>
+									{current === item.conversationId && "当前对话 · "}
+									{new Date(item.updatedAt).toLocaleString("zh-CN")}
+								</small>
 							</span>
 						</a>
 					</li>
@@ -113,14 +113,19 @@ export function NewConversation({
 	onDenied: () => void;
 }) {
 	const command = useConversationCommands({ agentId, identityKey });
+	const queryClient = useQueryClient();
 	const handled = useRef<ConversationCommandResult | undefined>(undefined);
 	useEffect(() => {
 		if (command.result === handled.current) return;
 		handled.current = command.result;
-		if (command.result?.kind === "created")
+		if (command.result?.kind === "created") {
+			void queryClient.resetQueries({
+				queryKey: ["personal-recent", identityKey],
+			});
 			onCreated(command.result.conversationId);
+		}
 		if (command.result?.kind === "denied") onDenied();
-	}, [command.result, onCreated, onDenied]);
+	}, [command.result, identityKey, onCreated, onDenied, queryClient]);
 	return (
 		<Empty className="space-y-5 py-12">
 			<Bot aria-hidden="true" className="mx-auto size-10 text-primary" />
