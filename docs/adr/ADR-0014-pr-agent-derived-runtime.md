@@ -11,7 +11,9 @@
 的 `is_valid_file`/`bad_extensions` 策略不变。该 runtime 不得声称 official provider conformance，
 也不是新的 Automated Reviewer。
 
-生产启用必须在本 ADR 与 Workflow Spec 对应条款获批后进行；当前分支提交不改变 `main`、image、
+生产补丁、派生镜像构建与 workflow 启用必须在
+[工程 Spec §2](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#2-架构结论)、本 ADR
+与 Workflow Spec 对应条款完成独立评审及维护者接收后进行；当前分支提交不改变 `main`、image、
 workflow、Publisher、Coverage validator 或 required checks。
 
 ## 问题边界与最小补丁
@@ -29,11 +31,12 @@ plain-diff diff-processing 调用点传入该 capability。路径安全检查、
 启用时必须在 scope receipt、native Review receipt 和 Coverage metadata 中逐字段绑定：
 
 - `reviewer=pr-agent`；`provider=plain-diff-derived`；`runtimeKind=derived`；
-- 不可变的上游 source commit（tag 只能作为辅助别名，不能作为身份值）；
-- 最小补丁文件清单及 patch SHA-256；
-- OCI image digest；
+- `sourceCommit`：不可变的完整上游 commit SHA（tag 只能作为辅助别名）；
+- 最小补丁文件清单及 `patchSha256`：实际补丁文件原始字节的 SHA-256；
+- `imageDigest`：实际运行的 OCI image digest；
 - repository、PR、base/head/merge-base、diff SHA-256/bytes、workflow run/attempt、Analysis job；
-- 固定模板、TypeScript recorder 版本和生效 token cap。
+- `templateVersion`、`transportVersion`、TypeScript recorder 版本和生效 token cap；版本值
+  必须对应可回读的固定模板与 HTTP 请求/响应格式，未知版本拒绝。
 
 任一字段缺失、截断、摘要不匹配、source/patch/image 不是批准组合，或 provider 与 runtimeKind
 不一致，均使用 `review-output-invalid`/provider mismatch 拒绝，不可进入 `complete`。

@@ -435,8 +435,8 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
 - PR-Agent Analysis 与 Suggestions 默认使用固定 digest 的官方容器镜像，不通过可变镜像标签执行。
   经批准的 `plain-diff-derived` 例外只能用于 lockfile plain-diff 输入边界，并遵守
   [ADR-0014](../adr/ADR-0014-pr-agent-derived-runtime.md) 的固定 identity；没有完整 identity
-  或任一字段不匹配时，Analysis 与 Coverage fail closed，并回退为当前官方 image + Coverage
-  failure；当前 run 不切换 identity 或重跑模型，后续 run 才能按 ADR 受控回滚到官方 image。
+  或任一字段不匹配时，当前 run 的 Analysis 与 Coverage fail closed，不切换 identity 或重跑
+  模型；后续 run 才能按 ADR 受控回滚到官方 image，回滚不改变原失败 run 的结果。
   Analysis 使用官方 CLI 的 `--diff-file` 输入，将可信 SHA 范围的统一 diff 交给原生 reviewer；
   在无 Git 工作树的目录运行 patch-only 模式，保留官方 JSON 日志供 Coverage 判定，
   避免混入默认分支工作树的文件内容；不从本轮范围之外的文件推断实现缺失。
