@@ -1,45 +1,124 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import * as prGates from "./pr-gates.mjs";
 import {
-  affectedPullRequests,
-  auditDescription,
-  buildCheckRunPayload,
   buildGateRecords,
   evaluateHumanValidationGate,
   evaluateIssueGate,
-  evaluateIssueReadinessGate,
   extractPrimaryIssueNumbers,
+  runGate,
   shouldReapplyHumanValidation,
 } from "./pr-gates.mjs";
-import { buildAcceptanceCriteriaEvidenceMarker } from "./worker-contract.mjs";
+
+function gateFixture({ action = "edited", labels = [], events = [], actor, membership } = {}) {
+  const head = "a".repeat(40);
+  const pr = {
+    number: 7, head: { sha: head }, body: "Closes #42", labels,
+    created_at: "2026-10-02T00:00:00Z", updated_at: "2026-10-03T00:00:00Z",
+    html_url: "https://github.com/example/repo/pull/7",
+  };
+  const event = {
+    action, pull_request: structuredClone(pr), sender: actor,
+    label: { name: "ready-for-human" },
+  };
+  const calls = [];
+  const request = async (apiPath, options = {}) => {
+    calls.push({ apiPath, ...options });
+    if (apiPath === "/repos/example/repo/pulls/7") return structuredClone(pr);
+    if (apiPath === "/repos/example/repo/issues/42") return {
+      number: 42, state: "open", labels: [], created_at: "2026-10-01T00:00:00Z",
+    };
+    if (apiPath.includes("/events?")) return events;
+    if (apiPath.includes("/memberships/")) return membership;
+    if (apiPath.endsWith("/labels") && options.method === "POST") return [];
+    throw new Error(`Unexpected request: ${apiPath}`);
+  };
+  return { pr, event, calls, request, repository: "example/repo" };
+}
+
+test("native Issue job reads the live primary Issue and rejects missing references", async () => {
+  const fixture = gateFixture();
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, true);
+  fixture.pr.body = "No primary Issue";
+  fixture.calls.length = 0;
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, false);
+  assert.equal(fixture.calls.length, 1);
+});
+
+test("stale PR events cannot validate either job or write labels", async () => {
+  for (const mode of ["issue", "human"]) {
+    const fixture = gateFixture();
+    fixture.pr.head.sha = "b".repeat(40);
+    assert.equal((await runGate({ ...fixture, mode })).ok, false);
+    assert.equal(fixture.calls.length, 1);
+  }
+});
+
+test("human job needs no Team lookup when validation was never required", async () => {
+  const fixture = gateFixture();
+  assert.equal((await runGate({ ...fixture, mode: "human" })).ok, true);
+  assert.equal(fixture.calls.some((call) => call.tokenEnvironment), false);
+});
+
+test("an active human Team member can confirm validation on the event head", async () => {
+  const fixture = gateFixture({
+    action: "unlabeled", actor: { login: "owner", type: "User" },
+    membership: { state: "active", role: "member" },
+  });
+  assert.equal((await runGate({ ...fixture, mode: "human" })).ok, true);
+  assert.equal(fixture.calls.find((call) => call.apiPath.includes("/memberships/"))?.tokenEnvironment,
+    "TEAM_MEMBERSHIP_TOKEN");
+  assert.equal(fixture.calls.some((call) => call.method === "POST"), false);
+});
+
+test("Bots and nonmembers cannot clear human validation", async () => {
+  for (const actor of [{ login: "robot[bot]", type: "Bot" }, { login: "outsider", type: "User" }]) {
+    const fixture = gateFixture({ action: "unlabeled", actor, membership: null });
+    assert.equal((await runGate({ ...fixture, mode: "human" })).ok, false);
+    const write = fixture.calls.find((call) => call.method === "POST");
+    assert.deepEqual(JSON.parse(write.body), { labels: ["ready-for-human"] });
+  }
+});
+
+test("a synchronize event restores an earlier human validation requirement", async () => {
+  const fixture = gateFixture({
+    action: "synchronize", events: [{ event: "labeled", label: { name: "ready-for-human" } }],
+  });
+  assert.equal((await runGate({ ...fixture, mode: "human" })).ok, false);
+  assert.equal(fixture.calls.at(-1).method, "POST");
+});
+
+test("Team lookup errors fail the job instead of accepting validation", async () => {
+  const fixture = gateFixture({ action: "unlabeled", actor: { login: "owner", type: "User" } });
+  const request = async (apiPath, options) => {
+    if (apiPath.includes("/memberships/")) throw new Error("Membership unavailable");
+    return fixture.request(apiPath, options);
+  };
+  await assert.rejects(runGate({ ...fixture, mode: "human", request }), /Membership unavailable/);
+  assert.equal(fixture.calls.some((call) => call.method === "POST"), false);
+});
+
+test("a head change during evaluation prevents label restoration", async () => {
+  const fixture = gateFixture({ action: "unlabeled", actor: { login: "robot[bot]", type: "Bot" } });
+  let reads = 0;
+  const request = async (apiPath, options) => {
+    if (apiPath.endsWith("/pulls/7") && ++reads > 1) return { head: { sha: "b".repeat(40) } };
+    return fixture.request(apiPath, options);
+  };
+  await assert.rejects(runGate({ ...fixture, mode: "human", request }), /head changed before label update/);
+  assert.equal(fixture.calls.some((call) => call.method === "POST"), false);
+});
+
+test("incomplete event pagination fails closed", async () => {
+  const fixture = gateFixture({ events: Array.from({ length: 100 }, () => ({ event: "commented" })) });
+  await assert.rejects(runGate({ ...fixture, mode: "human" }), /pagination limit/);
+});
 
 test("extracts one canonical primary Issue reference", () => {
   assert.deepEqual(
     extractPrimaryIssueNumbers("Summary\n\nCloses #42\n\nRelated to #7"),
     [42],
   );
-});
-
-test("scheduled membership reconciliation reevaluates every open PR", () => {
-  const pulls = [
-    { number: 1, body: "Closes #10" },
-    { number: 2, body: "Closes #20" },
-  ];
-  assert.deepEqual(
-    affectedPullRequests({ eventName: "schedule", pulls }),
-    pulls,
-  );
-  assert.deepEqual(
-    affectedPullRequests({ eventName: "issues", issueNumber: 20, pulls }),
-    [pulls[1]],
-  );
-  assert.deepEqual(
-    affectedPullRequests({ eventName: "issue_comment", issueNumber: 10, pulls }),
-    [pulls[0]],
-  );
-  assert.throws(() => affectedPullRequests({ eventName: "pull_request_target", pulls }));
 });
 
 test("ignores closing keywords inside fenced examples", () => {
@@ -122,195 +201,6 @@ test("Issue Gate rejects a closed or wontfix Issue", () => {
   );
 });
 
-test("Issue Gate binds Worker branches to ready-for-agent Issues", () => {
-  assert.deepEqual(
-    evaluateIssueGate({
-      issueNumbers: [42],
-      issue: {
-        number: 42,
-        state: "open",
-        labels: [{ name: "ready-for-agent" }],
-        created_at: "2026-08-11T08:00:00Z",
-      },
-      headRef: "codex/issue-42-cycle-1",
-      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
-    }),
-    { ok: true, description: "Worker Issue #42 is ready for Agent" },
-  );
-  assert.equal(
-    evaluateIssueGate({
-      issueNumbers: [42],
-      issue: {
-        number: 42,
-        state: "open",
-        labels: [{ name: "ready-for-agent" }],
-        created_at: "2026-08-11T08:00:00Z",
-      },
-      headRef: "codex/issue-7-cycle-1",
-      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
-    }).ok,
-    false,
-  );
-  assert.equal(
-    evaluateIssueGate({
-      issueNumbers: [42],
-      issue: {
-        number: 42,
-        state: "open",
-        labels: [],
-        created_at: "2026-08-11T08:00:00Z",
-      },
-      headRef: "codex/issue-42-cycle-1",
-      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
-    }).ok,
-    false,
-  );
-  assert.equal(
-    evaluateIssueGate({
-      issueNumbers: [42],
-      issue: {
-        number: 42,
-        state: "open",
-        labels: [{ name: "ready-for-agent" }],
-        created_at: "2026-08-11T08:00:00Z",
-      },
-      headRef: "codex/issue-not-a-number",
-      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
-    }).ok,
-    false,
-  );
-});
-
-test("Issue Readiness Gate is not applicable to human PRs", () => {
-  assert.deepEqual(
-    evaluateIssueReadinessGate({
-      repository: "AgoraIO-Extensions/agent-infra",
-      defaultBranch: "main",
-      pullRequest: { head: { ref: "feat/human" } },
-    }),
-    {
-      ok: true,
-      applicable: false,
-      description: "not_applicable: human-authored PR",
-    },
-  );
-});
-
-test("Issue Readiness Gate binds cycle, content, ownership, blockers, and AC evidence", () => {
-  const contract = {
-    hash: "d".repeat(64),
-    blockedByHash: "b".repeat(64),
-    acceptanceCriteriaIds: ["AC-1", "AC-2"],
-  };
-  const authorizationRecord = {
-    issueNumber: 42,
-    cycle: 3,
-    state: "active",
-    executionContentHash: contract.hash,
-    blockedByHash: contract.blockedByHash,
-  };
-  const marker = buildAcceptanceCriteriaEvidenceMarker(
-    [
-      { id: "AC-1", status: "pass", evidence: "unit test" },
-      { id: "AC-2", status: "not_applicable", evidence: "no runtime dependency" },
-    ],
-    contract.acceptanceCriteriaIds,
-  );
-  const pullRequest = {
-    number: 9,
-    body: `Closes #42\n\n## 验收标准\n\n${marker}`,
-    head: {
-      ref: "codex/issue-42-cycle-3",
-      repo: { full_name: "AgoraIO-Extensions/agent-infra" },
-    },
-    base: { ref: "main" },
-  };
-  const issue = {
-    number: 42,
-    state: "open",
-    labels: [{ name: "ready-for-agent" }],
-  };
-  const workerPullRequests = [
-    {
-      number: 9,
-      state: "open",
-      merged_at: null,
-      head: { ref: "codex/issue-42-cycle-3" },
-    },
-  ];
-  const input = {
-    repository: "AgoraIO-Extensions/agent-infra",
-    defaultBranch: "main",
-    pullRequest,
-    issue,
-    blockers: [],
-    workerPullRequests,
-    contract,
-    authorizationRecord,
-  };
-  assert.deepEqual(evaluateIssueReadinessGate(input), {
-    ok: true,
-    applicable: true,
-    description: "Worker Issue #42 cycle 3 is ready for review",
-  });
-  assert.equal(
-    evaluateIssueReadinessGate({
-      ...input,
-      authorizationRecord: {
-        ...authorizationRecord,
-        executionContentHash: "e".repeat(64),
-      },
-    }).ok,
-    false,
-  );
-  assert.equal(
-    evaluateIssueReadinessGate({
-      ...input,
-      authorizationRecord: {
-        ...authorizationRecord,
-        blockedByHash: "c".repeat(64),
-      },
-    }).ok,
-    false,
-  );
-  assert.equal(
-    evaluateIssueReadinessGate({
-      ...input,
-      blockers: [{ number: 7, state: "open" }],
-    }).ok,
-    false,
-  );
-  for (const blocker of [
-    { number: 7, state: "closed", state_reason: "not_planned" },
-    { number: 7, state: "closed", state_reason: null },
-    {
-      number: 7,
-      state: "closed",
-      state_reason: "completed",
-      labels: [{ name: "wontfix" }],
-    },
-  ]) {
-    assert.equal(
-      evaluateIssueReadinessGate({ ...input, blockers: [blocker] }).ok,
-      false,
-    );
-  }
-  assert.equal(
-    evaluateIssueReadinessGate({
-      ...input,
-      blockers: [{ number: 7, state: "closed", state_reason: "completed" }],
-    }).ok,
-    true,
-  );
-  assert.equal(
-    evaluateIssueReadinessGate({
-      ...input,
-      pullRequest: { ...pullRequest, body: "Closes #42" },
-    }).ok,
-    false,
-  );
-});
-
 test("builds validation from label removal", () => {
   const currentHead = "a".repeat(40);
   const validationEvent = {
@@ -366,31 +256,6 @@ test("builds validation from label removal", () => {
       ]),
     }).validation,
     records.validation,
-  );
-});
-
-test("binds audit evidence to the exact actor selected by the Gate", () => {
-  const records = {
-    validation: {
-      actor: { login: "validator" },
-      headSha: "a".repeat(40),
-      reason: "ready-for-human removed",
-      recordedAt: "2026-08-06T00:01:00Z",
-      url: "https://api.github.com/repos/example/repo/issues/events/2",
-    },
-  };
-  assert.equal(
-    auditDescription(
-      {
-        ok: true,
-        description: "Human validation confirmed by validator for current head",
-      },
-      records,
-    ),
-    "Human validation confirmed by validator for current head\n\n" +
-      "Reason: ready-for-human removed\n\n" +
-      "Recorded at: 2026-08-06T00:01:00Z\n\n" +
-      "Evidence: https://api.github.com/repos/example/repo/issues/events/2",
   );
 });
 
@@ -478,66 +343,4 @@ test("label removal can complete validation until another commit", () => {
     }),
     false,
   );
-});
-
-test("gate Check Runs bind the expected App result to the current head", () => {
-  const headSha = "a".repeat(40);
-  assert.deepEqual(
-    buildCheckRunPayload({
-      name: "Issue Gate",
-      headSha,
-      prNumber: 42,
-      status: "completed",
-      conclusion: "success",
-      description: "Re-evaluating PR metadata",
-      targetUrl: "https://github.com/example/repo/pull/1",
-    }),
-    {
-      name: "Issue Gate",
-      head_sha: headSha,
-      status: "completed",
-      conclusion: "success",
-      details_url: "https://github.com/example/repo/pull/1",
-      external_id: `agent-infra:pr:42:issue-gate:${headSha}`,
-      output: {
-        title: "Issue Gate: success",
-        summary: "Re-evaluating PR metadata",
-      },
-    },
-  );
-  assert.throws(() =>
-    buildCheckRunPayload({
-      name: "Issue Gate",
-      headSha: "stale",
-      prNumber: 42,
-      status: "in_progress",
-      description: "Re-evaluating PR metadata",
-      targetUrl: "https://github.com/example/repo/pull/1",
-    }),
-  );
-});
-
-test("Gate publication authenticates only with the check-only token", async () => {
-  const previousFetch = globalThis.fetch;
-  const previousGateToken = process.env.GATE_CHECK_TOKEN;
-  const previousGitHubToken = process.env.GITHUB_TOKEN;
-  let authorization;
-  process.env.GATE_CHECK_TOKEN = "gate-token";
-  process.env.GITHUB_TOKEN = "workflow-token";
-  globalThis.fetch = async (_url, options) => {
-    authorization = options.headers.Authorization;
-    return { ok: true, status: 204 };
-  };
-  try {
-    await prGates.gateCheckRequest("/repos/example/repo/check-runs", {
-      method: "POST",
-    });
-    assert.equal(authorization, "Bearer gate-token");
-  } finally {
-    globalThis.fetch = previousFetch;
-    if (previousGateToken === undefined) delete process.env.GATE_CHECK_TOKEN;
-    else process.env.GATE_CHECK_TOKEN = previousGateToken;
-    if (previousGitHubToken === undefined) delete process.env.GITHUB_TOKEN;
-    else process.env.GITHUB_TOKEN = previousGitHubToken;
-  }
 });
