@@ -1,69 +1,33 @@
 --- a/pr_agent/algo/language_handler.py
 +++ b/pr_agent/algo/language_handler.py
-@@ -73,7 +73,7 @@
-     return get_language
- 
- 
+@@ -76 +76 @@
 -def sort_files_by_main_languages(languages: Dict, files: list):
 +def sort_files_by_main_languages(languages: Dict, files: list, preserve_all_files: bool = False):
-     """
-     Sort files by their main language, put the files that are in the main language first and the rest files after
-     """
-@@ -94,7 +94,7 @@
-     get_language = build_language_file_matcher(language_extension_map_org)
- 
-     # filter out files bad extensions
+@@ -97 +97 @@
 -    files_filtered = filter_bad_extensions(files)
 +    files_filtered = list(files) if preserve_all_files else filter_bad_extensions(files)
- 
-     # sort files by their language, put the files that are in the main language first
-     # and the rest files after, map languages_sorted to their respective files
 --- a/pr_agent/algo/pr_processing.py
 +++ b/pr_agent/algo/pr_processing.py
-@@ -65,7 +65,10 @@
-         raise
- 
-     # get pr languages
+@@ -68 +68,4 @@
 -    pr_languages = sort_files_by_main_languages(git_provider.get_languages(), diff_files)
 +    pr_languages = sort_files_by_main_languages(
 +        git_provider.get_languages(), diff_files,
 +        preserve_all_files=getattr(git_provider, "preserve_all_files_for_plain_diff", False),
 +    )
-     if pr_languages:
-         try:
-             get_logger().info(f"PR main language: {pr_languages[0]['language']}")
-@@ -159,7 +162,10 @@
-         raise
- 
-     # get pr languages
+@@ -162 +165,4 @@
 -    pr_languages = sort_files_by_main_languages(git_provider.get_languages(), diff_files)
 +    pr_languages = sort_files_by_main_languages(
 +        git_provider.get_languages(), diff_files,
 +        preserve_all_files=getattr(git_provider, "preserve_all_files_for_plain_diff", False),
 +    )
-     if pr_languages:
-         try:
-             get_logger().info(f"PR main language: {pr_languages[0]['language']}")
-@@ -414,7 +420,10 @@
-         raise
- 
-     # Sort files by main language
+@@ -417 +423,4 @@
 -    pr_languages = sort_files_by_main_languages(git_provider.get_languages(), diff_files)
 +    pr_languages = sort_files_by_main_languages(
 +        git_provider.get_languages(), diff_files,
 +        preserve_all_files=getattr(git_provider, "preserve_all_files_for_plain_diff", False),
 +    )
- 
-     # Get the maximum number of extra lines before and after the patch
-     PATCH_EXTRA_LINES_BEFORE = get_settings().config.patch_extra_lines_before
 --- a/pr_agent/git_providers/plain_diff_provider.py
 +++ b/pr_agent/git_providers/plain_diff_provider.py
-@@ -26,6 +26,8 @@
-     Treat the pr_url arg as an ignored sentinel.
-     """
- 
+@@ -28,0 +29,2 @@
 +    preserve_all_files_for_plain_diff = True
 +
-     def __init__(self, pr_url=None, incremental=False):
-         diff_text = get_settings().get("plain_diff.content", None)
-         if not diff_text or not str(diff_text).strip():

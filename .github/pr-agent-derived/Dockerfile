@@ -16,9 +16,9 @@ LABEL org.opencontainers.image.title="agent-infra PR-Agent plain-diff derived ru
 
 COPY patches/pr-agent-46d7ee02-preserve-plain-diff.patch /tmp/pr-agent-46d7ee02-preserve-plain-diff.patch
 RUN set -eux; \
-    test "$(sha256sum /app/pr_agent/algo/language_handler.py | cut -d ' ' -f 1)" = "738f6f000a42f20834afa25a0d933457b21ef56415ea84c8ad589e175f671710"; \
-    test "$(sha256sum /app/pr_agent/algo/pr_processing.py | cut -d ' ' -f 1)" = "519006cf43479d8d6570d1e7333e9f61b19ada30b21c3a435baff6081a5e4b5e"; \
-    test "$(sha256sum /app/pr_agent/git_providers/plain_diff_provider.py | cut -d ' ' -f 1)" = "b52c64e91bdf4cadc862e088dc1598371dd3b2f8131dbfb408d97b52c2e7e2b7"; \
+    test "$(sha256sum /app/pr_agent/algo/language_handler.py | cut -d ' ' -f 1)" = "37453385f735cc3e14cbe531a5768e82ad0ce9bd583e97652adbe32cb4d94637"; \
+    test "$(sha256sum /app/pr_agent/algo/pr_processing.py | cut -d ' ' -f 1)" = "7e13b6f7073f3eeb1d0c135f4f5fe91934cdc0732e036eecb71c6bcbd3d798f"; \
+    test "$(sha256sum /app/pr_agent/git_providers/plain_diff_provider.py | cut -d ' ' -f 1)" = "b9a4f6e81fc591dd9dc157d15492fe26e4c0ca3fcd63b78b9a15b4dc9b84cb53"; \
     test "$(sha256sum /tmp/pr-agent-46d7ee02-preserve-plain-diff.patch | cut -d ' ' -f 1)" = "$PATCH_SHA256"; \
     apt-get update; \
     apt-get install --no-install-recommends -y patch; \
