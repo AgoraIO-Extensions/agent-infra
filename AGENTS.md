@@ -61,7 +61,7 @@ Issues 与 specs 使用 `AgoraIO-Extensions/agent-infra` GitHub Issues；规划�
 
 ## Engineering Baseline
 
-- 自有代码保持全 TypeScript，Better-T-Stack 只用于初始化工程骨架；Codex 上游原生补丁须先满足[工程 Spec 的受控例外](docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)。CI PR-Agent 上游最小补丁另遵循[工程 Spec §2](docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#2-架构结论)，不授权 Python recorder 或其他自有 Python 控制逻辑。
+- 自有代码保持全 TypeScript，Better-T-Stack 只用于初始化工程骨架；Codex 上游原生补丁须先满足[工程 Spec 的受控例外](docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)。PR-Agent 直接使用官方 Action，遵循[工作流 Spec §7.3](docs/architecture/SPEC-ai-native-development-workflow.md#73-automated-pr-review)。
 - Web 使用 React、TanStack Router 和 Vite。
 - 后端使用 Hono 与 Node.js LTS。
 - PostgreSQL 与 Drizzle 保存权威业务数据。

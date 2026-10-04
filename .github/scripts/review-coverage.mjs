@@ -1,4 +1,3 @@
-import { PrAgentTargetSuperseded, requirePrAgentTarget, verifyPrAgentPublication } from "./pr-agent-review.mjs";
 import { pathToFileURL } from "node:url";
 import { appendFile, readFile } from "node:fs/promises";
 
@@ -13,15 +12,6 @@ import {
 } from "./claude-review.mjs";
 
 export const COVERAGE_CHECK_NAME = "Automated Review Coverage";
-const MAX_EVIDENCE_BYTES = 10 * 1024 * 1024;
-
-const FULL_DIFF_PATTERN =
-  /^Tokens: [0-9]+, total tokens under limit: [0-9]+, returning full diff\.$/;
-const PRUNED_DIFF_PATTERN =
-  /^Tokens: [0-9]+, total tokens over limit: [0-9]+, pruning diff\.$/;
-const JOB_LOG_TIMESTAMP_PATTERN =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
-
 function result(provider, headSha, conclusion, reasonCode, omittedFileCount = conclusion === "success" ? 0 : null) {
   return { conclusion, headSha, omittedFileCount, provider, reasonCode };
 }
@@ -37,90 +27,6 @@ function runFailure(provider, headSha, runResult) {
     return result(provider, headSha, "failure", "review-output-missing");
   }
   return null;
-}
-
-function jobLogRecords(log) {
-  const records = [];
-  for (const line of log.split(/\r?\n/)) {
-    const separator = line.indexOf(" ");
-    if (
-      separator < 0 ||
-      !JOB_LOG_TIMESTAMP_PATTERN.test(line.slice(0, separator))
-    ) {
-      continue;
-    }
-    try {
-      const record = JSON.parse(line.slice(separator + 1))?.record;
-      if (typeof record?.message === "string") records.push(record);
-    } catch {
-      continue;
-    }
-  }
-  return records;
-}
-
-function evaluatePrAgent({
-  expectedHead,
-  runResult,
-  analysisJobConclusion,
-  analysisLog,
-  publicationVerified,
-  scope,
-  scopeVerified,
-  receipt,
-}) {
-  const failed = runFailure("pr-agent", expectedHead, runResult);
-  if (failed) return failed;
-  if (!analysisLog) {
-    return result("pr-agent", expectedHead, "failure", "review-output-missing");
-  }
-  if (analysisJobConclusion !== "success") {
-    return result("pr-agent", expectedHead, "failure", "review-output-invalid");
-  }
-  if (Buffer.byteLength(analysisLog, "utf8") > MAX_EVIDENCE_BYTES) {
-    return result("pr-agent", expectedHead, "failure", "review-output-invalid");
-  }
-
-  const records = jobLogRecords(analysisLog);
-  if (scope && scopeVerified !== true) return result("pr-agent", expectedHead, "failure", "review-scope-invalid");
-  // A native input omission is independent of the existing diff coverage test.
-  // Match the logger call site so the same text in PR/Issue data cannot reject it.
-  if (records.some((record) =>
-    record.message === "Clipped related tickets to preserve the prompt token budget" &&
-    record.name === "pr_agent.tools.ticket_pr_compliance_check" &&
-    record.function === "fit_related_tickets_to_prompt_budget" &&
-    record.level?.name === "INFO",
-  )) {
-    return result("pr-agent", expectedHead, "failure", "review-input-incomplete");
-  }
-  const messages = records.map((record) => record.message);
-  const completeMatches = messages.filter((message) =>
-    FULL_DIFF_PATTERN.test(message),
-  );
-  const prunedMatches = messages.filter((message) =>
-    PRUNED_DIFF_PATTERN.test(message),
-  );
-  if (scope?.mode === "unchanged") {
-    if (scopeVerified && publicationVerified === true && scope.diffBytes === 0 &&
-        completeMatches.length === 0 && prunedMatches.length === 0)
-      return { ...result("pr-agent", expectedHead, "success", "complete-unchanged"), scope, receipt };
-    return result("pr-agent", expectedHead, "failure", "review-scope-invalid");
-  }
-  if (completeMatches.length === 1 && prunedMatches.length === 0) {
-    if (publicationVerified !== true) return result("pr-agent", expectedHead, "failure", "review-output-invalid");
-    return { ...result("pr-agent", expectedHead, "success", scope?.mode === "incremental" ? "complete-incremental" : "complete"),
-      ...(scope ? { scope, receipt } : {}) };
-  }
-  if (prunedMatches.length === 1 && completeMatches.length === 0) {
-    return result(
-      "pr-agent",
-      expectedHead,
-      "failure",
-      "review-coverage-incomplete",
-      null,
-    );
-  }
-  return result("pr-agent", expectedHead, "failure", "review-output-invalid");
 }
 
 function reasonCode(summary) {
@@ -154,8 +60,8 @@ function evaluateClaude({ expectedHead, runResult, claudeReview }) {
 }
 
 export function evaluateReviewCoverage(input) {
-  if (["pr-agent", "claude"].includes(input?.provider)) {
-    const coverage = input.provider === "pr-agent" ? evaluatePrAgent(input) : evaluateClaude(input);
+  if (input?.provider === "claude") {
+    const coverage = evaluateClaude(input);
     if (input.collectionFailures?.length) {
       if (coverage.conclusion === "success") {
         Object.assign(coverage, { conclusion: "failure", reasonCode: "review-output-invalid", omittedFileCount: null });
@@ -172,34 +78,20 @@ export function evaluateReviewCoverage(input) {
   );
 }
 
-const COLLECTION_STAGES = new Set([
-  "analysis-job-list", "publication-receipt-parse", "publication-verify",
-  "analysis-log-fetch", "analysis-log-read", "unknown",
-  "review-scope-verify",
-]);
-const COLLECTION_FAILURES = new Set([
-  "api-denied", "api-unavailable", "job-count-mismatch", "job-identity-mismatch",
-  "missing-body", "size-limit", "invalid-receipt", "receipt-mismatch", "unknown",
-]);
-
-function collectionFailure(stage, error, metadata = {}) {
+function collectionFailure(error) {
   const failure = {
-    stage: COLLECTION_STAGES.has(stage) ? stage : "unknown",
-    failure: COLLECTION_FAILURES.has(error?.code) ? error.code
+    stage: "unknown",
+    failure: ["api-denied", "api-unavailable", "unknown"].includes(error?.code) ? error.code
       : [401, 403].includes(error?.status) ? "api-denied"
       : Number.isInteger(error?.status) || error instanceof TypeError ? "api-unavailable" : "unknown",
   };
   if (Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599) failure.apiStatus = error.status;
-  for (const key of ["runId", "attempt", "analysisJobId", "analysisJobCount"]) {
-    const value = metadata[key];
-    if (Number.isSafeInteger(value) && value >= 0) failure[key] = value;
-  }
   return failure;
 }
 
 function collectionSummaryLines(coverage) {
   return (coverage.collectionFailures ?? []).slice(0, 4).flatMap((entry) => {
-    const safe = collectionFailure(entry.stage, { code: entry.failure, status: entry.apiStatus }, entry);
+    const safe = collectionFailure({ code: entry.failure, status: entry.apiStatus });
     return Object.entries(safe).map(([key, value]) => `collection_${key}: ${value}`);
   });
 }
@@ -216,16 +108,10 @@ export function buildCoverageCheckOutput(coverage) {
       `head_sha: ${coverage.headSha}`,
       `reason_code: ${coverage.reasonCode}`,
       `omitted_file_count: ${omittedFileCount}`,
-      ...(complete && coverage.scope ? [
-        `review_scope: ${JSON.stringify(coverage.scope)}`,
-        `publication_receipt: ${JSON.stringify(coverage.receipt)}`,
-      ] : []),
       ...collectionSummaryLines(coverage),
       "",
       complete
-        ? coverage.scope?.mode === "incremental" || coverage.scope?.mode === "unchanged"
-          ? "Coverage Gate accepted a certified baseline plus the complete current-head delta."
-          : "Coverage Gate accepted complete current-head Review evidence."
+        ? "Coverage Gate accepted complete current-head Review evidence."
         : "Coverage Gate rejected current-head Review evidence.",
     ].join("\n"),
   };
@@ -259,7 +145,7 @@ export function coverageCheckFacts(check, expectedHead) {
   const headSha = uniqueSummaryValue(summary, "head_sha: ");
   const reasonCode = uniqueSummaryValue(summary, "reason_code: ");
   if (
-    !["claude", "pr-agent"].includes(provider) ||
+    provider !== "claude" ||
     headSha !== expectedHead ||
     !/^[a-z0-9_-]+$/.test(reasonCode ?? "")
   ) {
@@ -296,8 +182,7 @@ export async function publishCoverageCheck({
   request,
   checkRequest = gateCheckRequest,
 }) {
-  const requireTarget = coverage.provider === "pr-agent" ? requirePrAgentTarget : requireCurrentReviewTarget;
-  await requireTarget({
+  await requireCurrentReviewTarget({
     repository,
     prNumber,
     expectedHead,
@@ -331,7 +216,7 @@ export async function publishCoverageCheck({
     });
   }
 
-  await requireTarget({
+  await requireCurrentReviewTarget({
     repository,
     prNumber,
     expectedHead,
@@ -368,124 +253,10 @@ async function githubRequest(path, options = {}) {
   if (!response.ok) {
     throw Object.assign(new Error("GitHub API request failed"), { status: response.status });
   }
-  return response.status === 204 ? null : options.responseType === "text" ? readBoundedTextResponse(response) : response.json();
-}
-
-export async function readBoundedTextResponse(
-  response,
-  maxBytes = MAX_EVIDENCE_BYTES,
-) {
-  const reader = response.body?.getReader();
-  if (!reader) throw Object.assign(new Error("GitHub job log body is missing"), { code: "missing-body" });
-  const decoder = new TextDecoder();
-  const chunks = [];
-  let size = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > maxBytes) {
-      await reader.cancel();
-      throw Object.assign(new Error("GitHub job log exceeds the evidence size limit"), { code: "size-limit" });
-    }
-    chunks.push(decoder.decode(value, { stream: true }));
-  }
-  chunks.push(decoder.decode());
-  return chunks.join("");
-}
-
-async function githubLogResponse(path) {
-  const response = await fetch(`https://api.github.com${path}`, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${requiredEnvironment("GITHUB_TOKEN")}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
-  if (!response.ok) {
-    throw Object.assign(new Error("GitHub job log request failed"), { status: response.status });
-  }
-  return response;
-}
-
-export async function collectPrAgentEvidence({
-  repository, prNumber, expectedHead, runId, attempt, receipt,
-  requireScope = false,
-  request = githubRequest, logResponse = githubLogResponse,
-}) {
-  const evidence = { collectionFailures: [] };
-  const metadata = { runId: Number(runId), attempt: Number(attempt) };
-  const collect = async (stage, action) => {
-    try { return await action(); }
-    catch (error) { evidence.collectionFailures.push(collectionFailure(stage, error, metadata)); }
-  };
-  const jobs = await collect("analysis-job-list", async () => {
-    const response = await request(`/repos/${repository}/actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100`);
-    const jobs = (response.jobs ?? []).filter((job) => job.name === "PR-Agent Analysis");
-    metadata.analysisJobCount = jobs.length;
-    // Do not accept a partial page as proof that the Analysis job is unique.
-    if (jobs.length !== 1 || response.total_count > response.jobs.length) {
-      throw { code: "job-count-mismatch" };
-    }
-    const selected = jobs[0];
-    if (!Number.isSafeInteger(selected.id) || selected.id < 1 ||
-        selected.run_id !== Number(runId) || selected.run_attempt !== Number(attempt) ||
-        selected.head_sha !== expectedHead || selected.status !== "completed") {
-      throw { code: "job-identity-mismatch" };
-    }
-    metadata.analysisJobId = selected.id;
-    evidence.analysisJobConclusion = selected.conclusion;
-    return jobs;
-  });
-  const parsedReceipt = await collect("publication-receipt-parse", async () => {
-    try {
-      const parsed = JSON.parse(receipt);
-      if (requireScope && !parsed?.scope) throw new Error("Missing scope");
-      return parsed;
-    }
-    catch { throw { code: "invalid-receipt" }; }
-  });
-  if (parsedReceipt !== undefined) {
-    await collect("publication-verify", async () => {
-      evidence.publicationVerified = await verifyPrAgentPublication({
-        repository, prNumber, expectedHead, runId, attempt, receipt: parsedReceipt, request,
-      });
-      if (!evidence.publicationVerified) throw { code: "receipt-mismatch" };
-    });
-    if (parsedReceipt?.scope) {
-      await collect("review-scope-verify", async () => {
-        const { verifyReviewScope } = await import("./pr-agent-review-scope.mjs");
-        await verifyReviewScope({ repository, prNumber, expectedHead, request }, parsedReceipt.scope);
-        evidence.scope = parsedReceipt.scope;
-        evidence.receipt = parsedReceipt;
-        evidence.scopeVerified = true;
-      });
-    }
-  }
-  if (jobs) {
-    const response = await collect("analysis-log-fetch", () =>
-      logResponse(`/repos/${repository}/actions/jobs/${jobs[0].id}/logs`));
-    if (response) {
-      evidence.analysisLog = await collect("analysis-log-read", async () => {
-        const log = await readBoundedTextResponse(response);
-        if (!log) throw { code: "missing-body" };
-        return log;
-      });
-    }
-  }
-  return evidence;
+  return response.status === 204 ? null : response.json();
 }
 
 async function collectEvidence({ repository, prNumber, expectedHead, provider }) {
-  if (provider === "pr-agent") {
-    return collectPrAgentEvidence({
-      repository, prNumber, expectedHead,
-      runId: requiredEnvironment("GITHUB_RUN_ID"),
-      attempt: requiredEnvironment("GITHUB_RUN_ATTEMPT"),
-      receipt: process.env.PR_AGENT_REVIEW_RECEIPT,
-      requireScope: process.env.PR_AGENT_REVIEW_SCOPE_REQUIRED === "true",
-    });
-  }
   if (provider === "claude") {
     const encodedName = encodeURIComponent("Claude Review Gate");
     const response = await githubRequest(
@@ -507,7 +278,7 @@ export async function collectReviewEvidence(runResult, collector) {
   try {
     return await collector();
   } catch (error) {
-    return { collectionFailures: [collectionFailure("unknown", error)] };
+    return { collectionFailures: [collectionFailure(error)] };
   }
 }
 
@@ -551,10 +322,6 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
-    if (error instanceof PrAgentTargetSuperseded) {
-      console.log(error.message);
-      return;
-    }
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   });

@@ -17,7 +17,6 @@ const TRUSTED_OPERATIONS = new Set([
   "claude-pr-review",
   "codex-worker",
   "ci",
-  "pr-agent-review",
   "pr-gates",
   "workflow-outcome",
 ]);
@@ -29,7 +28,6 @@ const WORKFLOW_OPERATIONS = new Map([
   ["Claude PR Review", "claude-pr-review"],
   ["Codex Worker", "codex-worker"],
   ["CI", "ci"],
-  ["PR-Agent Review", "pr-agent-review"],
   ["PR Gates", "pr-gates"],
 ]);
 const WORKFLOW_NAMES_BY_PATH = new Map([
@@ -39,7 +37,6 @@ const WORKFLOW_NAMES_BY_PATH = new Map([
   [".github/workflows/claude-pr-review.yml", "Claude PR Review"],
   [".github/workflows/codex-worker.yml", "Codex Worker"],
   [".github/workflows/ci.yml", "CI"],
-  [".github/workflows/pr-agent-review.yml", "PR-Agent Review"],
   [".github/workflows/pr-gates.yml", "PR Gates"],
 ]);
 const POST_MERGE_MARKER = "agent-infra-post-merge-failure";
@@ -52,7 +49,6 @@ const POST_MERGE_FAILURE_CONCLUSIONS = new Set([
 ]);
 const REVIEW_PROVIDER_BY_WORKFLOW = new Map([
   ["Claude PR Review", "claude"],
-  ["PR-Agent Review", "pr-agent"],
 ]);
 
 function positiveInteger(value, name) {

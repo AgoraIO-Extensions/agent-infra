@@ -70,7 +70,7 @@ const RUN_NAME_CONTRACTS = {
   },
   "pr-agent-review.yml": {
     operation: "pr-agent-review",
-    references: ["github.event.action", "github.event.pull_request.number"],
+    references: ["github.event.action", "github.event.pull_request.number", "github.event.issue.number"],
   },
   "pr-gates.yml": {
     operation: "pr-gates",
@@ -125,10 +125,6 @@ const SOURCE_OUTCOME_CONTRACTS = {
   "connection-github-e2e.yml": {
     needs: ["conformance"],
     operation: "connection-github-e2e",
-  },
-  "pr-agent-review.yml": {
-    needs: ["analyze", "publish", "suggestions"],
-    operation: "pr-agent-review",
   },
   "pr-gates.yml": {
     needs: ["dispatch-issue-update", "gates"],
@@ -757,13 +753,13 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
     if (PR_AGENT_SECRETS.includes(secret)) {
       const reference = `\${{ secrets.${secret} }}`;
       const envName = {
-        PR_AGENT_API_KEY: "OPENAI__KEY",
+        PR_AGENT_API_KEY: "OPENAI_KEY",
         PR_AGENT_API_BASE: "OPENAI__API_BASE",
-        PR_AGENT_MODEL: "config.model",
+        PR_AGENT_MODEL: "CONFIG__MODEL",
       }[secret];
       if (
         workflowName !== "pr-agent-review.yml" ||
-        !["analyze", "suggestions"].includes(jobName) ||
+        jobName !== "review" ||
         step.uses !== PR_AGENT_ACTION ||
         step.env?.[envName] !== reference ||
         occurrences !== 1
@@ -789,8 +785,7 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       const allowedGatePublisherLocation =
         step.id === "gate-publisher-token" &&
         ((workflowName === "pr-gates.yml" && jobName === "gates") ||
-          (workflowName === "claude-pr-review.yml" && jobName === "publish") ||
-          (workflowName === "pr-agent-review.yml" && jobName === "coverage"));
+          (workflowName === "claude-pr-review.yml" && jobName === "publish"));
       if (
         (!allowedMembershipLocation && !allowedGatePublisherLocation) ||
         step.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
@@ -851,12 +846,8 @@ export function validateTrustedScriptSources(sources) {
   const coverageRequirements = [
     'COVERAGE_CHECK_NAME = "Automated Review Coverage"',
     "gateCheckRequest,",
-    'coverage.provider === "pr-agent" ? requirePrAgentTarget : requireCurrentReviewTarget',
-    "await requireTarget({",
-    'job.name === "PR-Agent Analysis"',
-    "/actions/jobs/${jobs[0].id}/logs",
+    "await requireCurrentReviewTarget({",
     "selectReviewGateCheck(",
-    "review-coverage-incomplete",
     "await checkRequest(`/repos/${repository}/check-runs/${check.id}`",
   ];
   const contractRequirements = [
@@ -1187,9 +1178,7 @@ export function validateWorkflowDocuments(workflows) {
       envKeys.join("\0") !== [...SOURCE_OUTCOME_ENV_KEYS].sort().join("\0") ||
       outcomeStep?.env?.SUMMARY_OPERATION !== contract.operation ||
       outcomeStep?.env?.SUMMARY_NEXT_OWNER !== SOURCE_OUTCOME_NEXT_OWNER ||
-      outcomeStep?.env?.SUMMARY_OUTCOME !== (name === "pr-agent-review.yml"
-        ? SOURCE_OUTCOME_RESULT.replace("contains(needs.*.result, 'success')", "(needs.analyze.outputs.applicable == 'false' || needs.publish.outputs.applicable == 'false') && 'skipped' || contains(needs.*.result, 'success')")
-        : SOURCE_OUTCOME_RESULT) ||
+      outcomeStep?.env?.SUMMARY_OUTCOME !== SOURCE_OUTCOME_RESULT ||
       referencedSecrets(outcomeStep?.env).length > 0 ||
       unsafeSummarySource.test(summarySources)
     ) {
@@ -1259,11 +1248,7 @@ export function validateWorkflowDocuments(workflows) {
               ((step.name === "Publish validated Review result" &&
                 step.run === "node .github/scripts/claude-review.mjs") ||
                 (step.name === "Publish Automated Review Coverage" &&
-                  step.run === "node .github/scripts/review-coverage.mjs"))) ||
-            (name === "pr-agent-review.yml" &&
-              jobName === "coverage" &&
-              step.name === "Publish Automated Review Coverage" &&
-              step.run === "node .github/scripts/review-coverage.mjs"));
+                  step.run === "node .github/scripts/review-coverage.mjs"))));
         if (gateTokenReferences.length > 0 && !allowedGatePublisherToken) {
           errors.push(
             `${name}/${jobName}: Gate publisher token is allowed only in fixed Check Run steps`,
@@ -1300,7 +1285,6 @@ export function validateWorkflowDocuments(workflows) {
         "Claude PR Review",
         "Codex Worker",
         "CI",
-        "PR-Agent Review",
         "PR Gates",
       ]) ||
     JSON.stringify(outcomeWorkflow?.on?.workflow_run?.types) !==
@@ -1549,239 +1533,6 @@ export function validateWorkflowDocuments(workflows) {
     })
   ) {
     errors.push("Codex Worker model concurrency must use one of two fixed slots");
-  }
-  const prAgent = workflows["pr-agent-review.yml"];
-  const prAgentAnalyze = prAgent?.jobs?.analyze;
-  const prAgentCoverage = prAgent?.jobs?.coverage;
-  const prAgentPublish = prAgent?.jobs?.publish;
-  const prAgentSuggestions = prAgent?.jobs?.suggestions;
-  const prAgentAction = prAgentAnalyze?.steps?.find((step) => step.id === "pr-agent");
-  const prAgentSuggestionsAction = prAgentSuggestions?.steps?.find(
-    (step) => step.id === "pr-agent-suggestions",
-  );
-  const prAgentAnalyzeCheckout = prAgentAnalyze?.steps?.find(
-    (step) => step.name === "Checkout trusted default branch",
-  );
-  const prAgentCoverageSteps = prAgentCoverage?.steps ?? [];
-  const prAgentCoverageCheckout = prAgentCoverageSteps.find(
-    (step) => step.name === "Checkout trusted default branch",
-  );
-  const prAgentCoverageSetup = prAgentCoverageSteps.find(
-    (step) => step.name === "Set up Node.js",
-  );
-  const prAgentCoverageToken = prAgentCoverageSteps.find(
-    (step) => step.id === "gate-publisher-token",
-  );
-  const prAgentCoveragePublish = prAgentCoverageSteps.find(
-    (step) => step.name === "Publish Automated Review Coverage",
-  );
-  const prAgentCondition = String(prAgentAnalyze?.if ?? "");
-  const prAgentCoverageCondition = String(prAgentCoverage?.if ?? "");
-  const prAgentSuggestionsCondition = String(prAgentSuggestions?.if ?? "");
-  const prAgentPermissions = {
-    contents: "read",
-    issues: "write",
-    "pull-requests": "write",
-  };
-  const prAgentCommonEnv = {
-    GITHUB_TOKEN: "${{ github.token }}",
-    LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES: "true",
-    OPENAI__KEY: "${{ secrets.PR_AGENT_API_KEY }}",
-    OPENAI__API_BASE: "${{ secrets.PR_AGENT_API_BASE }}",
-    "config.model": "${{ secrets.PR_AGENT_MODEL }}",
-    "config.propagate_tool_errors": "true",
-    "config.publish_output": "true",
-    "config.publish_output_progress": "false",
-    "config.restricted_mode": "true",
-    "config.use_repo_settings_file": "false",
-    "config.use_wiki_settings_file": "false",
-    "config.fallback_models": "[]",
-    "config.ai_timeout":
-      "${{ vars.PR_AGENT_AI_TIMEOUT_SECONDS || '120' }}",
-    "config.custom_model_max_tokens":
-      "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
-    "config.max_model_tokens":
-      "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",
-    "litellm.custom_llm_provider": "openai",
-    "litellm.force_streaming_custom_llm_provider": "openai",
-    "litellm.force_streaming_api_base_substrings": '["https://"]',
-    "github_action_config.auto_describe": "false",
-    "github_action_config.pr_actions":
-      '["opened", "reopened", "ready_for_review", "review_requested", "edited"]',
-  };
-  if (
-    JSON.stringify(prAgent?.on?.pull_request_target?.types) !==
-      JSON.stringify(["opened", "reopened", "ready_for_review", "review_requested", "edited", "synchronize"]) ||
-    !sameObject(prAgent?.permissions, {}) ||
-    !sameObject(prAgent?.concurrency, {
-      group: "pr-agent-review-${{ github.event.pull_request.number }}",
-      "cancel-in-progress": true,
-    }) ||
-    !prAgentCondition.includes("vars.PR_REVIEW_PROVIDER != 'claude'") ||
-    !prAgentCondition.includes(
-      "github.event.pull_request.head.repo.full_name == github.repository",
-    ) ||
-    !prAgentCondition.includes("github.event.sender.type != 'Bot'") ||
-    !prAgentCondition.includes("github.event.pull_request.draft == false") ||
-    !prAgentCondition.includes("github.event.pull_request.state == 'open'") ||
-    prAgentSuggestionsCondition !== prAgentCondition.replace(
-      "github.event.pull_request.head.repo.full_name == github.repository",
-      "github.event.action != 'synchronize' && needs.analyze.outputs.applicable == 'true' && github.event.pull_request.head.repo.full_name == github.repository",
-    ) ||
-    prAgentSuggestions?.needs !== "analyze" ||
-    !prAgentCoverageCondition.includes("always()") ||
-    !prAgentCoverageCondition.includes("vars.PR_REVIEW_PROVIDER != 'claude'") ||
-    !prAgentCoverageCondition.includes(
-      "github.event.pull_request.head.repo.full_name == github.repository",
-    ) ||
-    !prAgentCoverageCondition.includes("github.event.sender.type != 'Bot'") ||
-    !prAgentCoverageCondition.includes("github.event.pull_request.draft == false") ||
-    !prAgentCoverageCondition.includes("github.event.pull_request.state == 'open'") ||
-    !prAgentCoverageCondition.includes("needs.analyze.outputs.applicable != 'false'") ||
-    !prAgentCoverageCondition.includes("needs.publish.outputs.applicable != 'false'") ||
-    !sameObject(prAgentAnalyze?.permissions, { contents: "read", issues: "read", checks: "read", "pull-requests": "read" }) ||
-    !sameObject(prAgentSuggestions?.permissions, prAgentPermissions) ||
-    !sameObject(prAgentCoverage?.permissions, {
-      actions: "read",
-      checks: "read",
-      contents: "read",
-      issues: "read",
-      "pull-requests": "read",
-    }) ||
-    prAgentCoverage?.name !== "Publish Automated Review Coverage" ||
-    JSON.stringify(prAgentCoverage?.needs) !== JSON.stringify(["analyze", "publish"]) ||
-    prAgentCoverage?.["continue-on-error"] !== true ||
-    Object.keys(prAgent?.jobs ?? {}).sort().join("\0") !==
-      ["analyze", "coverage", "outcome", "publish", "suggestions"].join("\0") ||
-    prAgentAnalyze?.steps?.length !== 6 ||
-    !sameObject(prAgentAnalyze?.steps?.[1], {
-      name: "Set up Node.js", uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-      with: { "node-version": 24 },
-    }) ||
-    !sameObject(prAgentAnalyze?.steps?.[2], {
-      name: "Prepare complete primary Issue input", id: "primary-issue",
-      env: { GITHUB_TOKEN: "${{ github.token }}" },
-      run: "node .github/scripts/pr-agent-primary-issue.mjs",
-    }) ||
-    prAgentAnalyze?.steps?.[0] !== prAgentAnalyzeCheckout ||
-    !sameObject(prAgentAnalyze?.steps?.[3], {
-      name: "Prepare certified review range", id: "scope",
-      if: "steps.primary-issue.outputs.applicable == 'true'",
-      env: { GITHUB_TOKEN: "${{ github.token }}", PRIMARY_ISSUE_EVIDENCE: "${{ steps.primary-issue.outputs.evidence }}" },
-      run: "node .github/scripts/pr-agent-review-scope.mjs",
-    }) ||
-    prAgentAnalyze?.steps?.[4] !== prAgentAction ||
-    !sameObject(prAgentAnalyze?.steps?.[5], {
-      name: "Prepare review findings output", id: "review-output",
-      if: "steps.scope.outputs.applicable == 'true' && steps.scope.outputs.mode != 'unchanged'",
-      env: { PR_AGENT_REVIEW: "${{ steps.pr-agent.outputs.review }}" },
-      run: "node .github/scripts/pr-agent-review-output.mjs",
-    }) ||
-    !sameObject(prAgentAnalyze?.outputs, {
-      review: "${{ steps.review-output.outputs.review }}",
-      applicable: "${{ steps.primary-issue.outputs.applicable == 'false' && 'false' || steps.scope.outputs.applicable }}",
-      scope: "${{ steps.scope.outputs.scope }}",
-    }) ||
-    !sameObject(prAgentPublish, {
-      name: "PR-Agent Publish Review", needs: "analyze", "runs-on": "ubuntu-24.04", "timeout-minutes": 5,
-      if: "needs.analyze.outputs.applicable == 'true'",
-      permissions: { contents: "read", issues: "read", checks: "read", "pull-requests": "write" },
-      outputs: { review_receipt: "${{ steps.publish-review.outputs.receipt }}", applicable: "${{ steps.publish-review.outputs.applicable }}" },
-      steps: [
-        { name: "Checkout trusted default branch", uses: CHECKOUT_ACTION,
-          with: { ref: "${{ github.event.repository.default_branch }}", "fetch-depth": 1, "persist-credentials": false } },
-        { name: "Set up Node.js", uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020", with: { "node-version": 24 } },
-        { name: "Validate and publish Review", id: "publish-review",
-          env: { GITHUB_TOKEN: "${{ github.token }}", PR_AGENT_REVIEW: "${{ needs.analyze.outputs.review }}",
-            PR_AGENT_REVIEW_SCOPE: "${{ needs.analyze.outputs.scope }}", PR_AGENT_REVIEW_SCOPE_REQUIRED: "true" },
-          run: "node .github/scripts/pr-agent-review.mjs" },
-      ],
-    }) ||
-    prAgentCoverageSteps.length !== 4 ||
-    prAgentSuggestions?.steps?.length !== 1 ||
-    prAgentAnalyzeCheckout?.uses !==
-      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
-    !sameObject(prAgentAnalyzeCheckout?.with, {
-      ref: "${{ github.event.repository.default_branch }}",
-      "fetch-depth": 1,
-      "persist-credentials": false,
-    }) ||
-    prAgentCoverageCheckout?.uses !== CHECKOUT_ACTION ||
-    !sameObject(prAgentCoverageCheckout?.with, {
-      ref: "${{ github.event.repository.default_branch }}",
-      "fetch-depth": 1,
-      "persist-credentials": false,
-    }) ||
-    prAgentCoverageSetup?.uses !==
-      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020" ||
-    !sameObject(prAgentCoverageSetup?.with, { "node-version": 24 }) ||
-    prAgentCoverageToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
-    !sameObject(prAgentCoverageToken?.with, {
-      "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
-      "permission-checks": "write",
-      "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
-      owner: "${{ github.repository_owner }}",
-      repositories: "${{ github.event.repository.name }}",
-    }) ||
-    prAgentCoveragePublish?.if !== "always()" ||
-    prAgentCoveragePublish?.run !== "node .github/scripts/review-coverage.mjs" ||
-    !sameObject(prAgentCoveragePublish?.env, {
-      GATE_CHECK_TOKEN: "${{ steps.gate-publisher-token.outputs.token }}",
-      GITHUB_TOKEN: "${{ github.token }}",
-      PR_NUMBER: "${{ github.event.pull_request.number }}",
-      REVIEW_PROVIDER: "pr-agent",
-      REVIEW_RUN_RESULT: "${{ needs.analyze.result != 'success' && needs.analyze.result || needs.publish.result }}",
-      PR_AGENT_REVIEW_RECEIPT: "${{ needs.publish.outputs.review_receipt }}",
-      PR_AGENT_REVIEW_SCOPE_REQUIRED: "true",
-    }) ||
-    JSON.stringify(prAgent?.jobs?.outcome?.needs) !==
-      JSON.stringify(["analyze", "publish", "suggestions"]) ||
-    gatePublisherTokenReferences(prAgent).length !== 1 ||
-    prAgentAction?.uses !== PR_AGENT_ACTION ||
-    prAgentAction?.if !== "steps.scope.outputs.applicable == 'true' && steps.scope.outputs.mode != 'unchanged'" ||
-    !sameObject(prAgentAction?.with, {
-      entrypoint: "python",
-      args: `-c "import os; os.chdir('/tmp'); from pr_agent.cli import run; from pr_agent.log import LoggingFormat, setup_logger; setup_logger(fmt=LoggingFormat.JSON); run()" --diff-file /github/workspace/.pr-agent-review-input.diff review`,
-    }) ||
-    prAgentSuggestionsAction?.uses !== PR_AGENT_ACTION ||
-    prAgentSuggestionsAction?.["continue-on-error"] !== true ||
-    !sameObject(prAgentAction?.env, {
-      ...prAgentCommonEnv,
-      "config.publish_output": "false",
-      "config.log_level": "INFO",
-      "config.verbosity_level": "0",
-      related_tickets: "${{ steps.primary-issue.outputs.related_tickets }}",
-      "github_action_config.enable_output": "true",
-      "pr_reviewer.persistent_comment": "false",
-      "pr_reviewer.persistent_finding_state": "false",
-      "pr_reviewer.extra_instructions": "Return exactly one YAML object with the top-level key review. Nest key_issues_to_review under review, including when it is an empty list. Never return key_issues_to_review at the top level. Report only verifiable failures of the primary Issue's stable AC-N acceptance criteria or regressions introduced by this pull request. Do not report pre-existing problems or optional improvements as blocking findings. Treat the supplied diff as the review scope; do not infer missing implementation from files absent from this range.",
-      "pr_code_suggestions.commitable_code_suggestions": "true",
-      "pr_reviewer.enable_review_labels_effort": "false",
-      "pr_reviewer.enable_review_labels_security": "false",
-      "pr_reviewer.enable_large_pr_chunking": "true",
-      "pr_reviewer.max_number_of_calls": "3",
-      "pr_reviewer.num_max_findings": "10",
-      "pr_reviewer.require_can_be_split_review": "false",
-      "pr_reviewer.require_estimate_contribution_time_cost": "false",
-      "pr_reviewer.require_estimate_effort_to_review": "false",
-      "pr_reviewer.require_score_review": "false",
-      "pr_reviewer.require_security_review": "false",
-      "pr_reviewer.require_tests_review": "false",
-      "pr_reviewer.require_ticket_analysis_review": "false",
-      "pr_reviewer.require_todo_scan": "false",
-      "github_action_config.auto_review": "true",
-      "github_action_config.auto_improve": "false",
-    }) ||
-    !sameObject(prAgentSuggestionsAction?.env, {
-      ...prAgentCommonEnv,
-      "pr_code_suggestions.commitable_code_suggestions": "true",
-      "github_action_config.auto_review": "false",
-      "github_action_config.auto_improve": "true",
-    })
-  ) {
-    errors.push(
-      "PR-Agent Review must use the pinned runtime with validated output and official inline publishing settings",
-    );
   }
   const implementText = JSON.stringify(implement ?? {});
   if (

@@ -312,13 +312,13 @@ test("rejects an inactive Review provider outcome", () => {
       buildOutcomeRecord({
         repository: "AgoraIO-Extensions/agent-infra",
         sourceRun: sourceRun({
-          name: "PR-Agent Review",
-          display_title: "PR #105 | pr-agent-review | synchronize",
+          name: "Claude PR Review",
+          display_title: "PR #105 | claude-pr-review | synchronize",
           event: "pull_request_target",
         }),
         context: {
           reviewCoverage: {
-            provider: "claude",
+            provider: "pr-agent",
             reasonCode: "review-coverage-incomplete",
           },
         },
@@ -336,7 +336,6 @@ function sourceRun(overrides = {}) {
     "Claude PR Review": ".github/workflows/claude-pr-review.yml",
     "Codex Worker": ".github/workflows/codex-worker.yml",
     "CI": ".github/workflows/ci.yml",
-    "PR-Agent Review": ".github/workflows/pr-agent-review.yml",
     "PR Gates": ".github/workflows/pr-gates.yml",
   };
   return {
@@ -1300,7 +1299,7 @@ test("notifies one failed Automated Review Coverage Gate outcome", async () => {
     conclusion: "failure",
     output: {
       summary: [
-        "provider: pr-agent",
+        "provider: claude",
         `head_sha: ${headSha}`,
         "reason_code: review-run-cancelled",
         "omitted_file_count: unknown",
@@ -1353,8 +1352,8 @@ test("notifies one failed Automated Review Coverage Gate outcome", async () => {
     },
     workflow_run: sourceRun({
       id: 580,
-      name: "PR-Agent Review",
-      display_title: "PR #105 | pr-agent-review | synchronize",
+      name: "Claude PR Review",
+      display_title: "PR #105 | claude-pr-review | source 31464062784",
       event: "pull_request_target",
       head_sha: headSha,
       pull_requests: [{ number: 105, head: { sha: headSha } }],
@@ -1362,7 +1361,7 @@ test("notifies one failed Automated Review Coverage Gate outcome", async () => {
   };
   const sendNotification = async ({ record }) => {
     deliveredReasons.push(record.reviewCoverage.reasonCode);
-    assert.match(renderWeComMessage(record), /Provider: pr-agent/);
+    assert.match(renderWeComMessage(record), /Provider: claude/);
     assert.match(
       renderWeComMessage(record),
       new RegExp(`Reason: ${record.reviewCoverage.reasonCode}`),
@@ -1388,30 +1387,30 @@ test("notifies one failed Automated Review Coverage Gate outcome", async () => {
   const replay = await invoke();
   coverageCheck.output.summary = coverageCheck.output.summary.replace(
     "reason_code: review-run-cancelled",
-    "reason_code: review-coverage-incomplete",
+    "reason_code: review-output-invalid",
   );
   const changedReason = await invoke();
 
   assert.equal(first.record.outcome.code, "review_coverage_failed");
   assert.deepEqual(first.record.reviewCoverage, {
-    provider: "pr-agent",
+    provider: "claude",
     reasonCode: "review-run-cancelled",
   });
   assert.equal(replay.replay, true);
   assert.equal(changedReason.replay, false);
   assert.deepEqual(deliveredReasons, [
     "review-run-cancelled",
-    "review-coverage-incomplete",
+    "review-output-invalid",
   ]);
   assert.deepEqual(
     outcomeChecks.map((check) => check.external_id),
     [
-      "agent-infra:workflow-outcome:review-coverage-check-800-pr-agent-review-run-cancelled:review_coverage_failed",
-      "agent-infra:workflow-outcome:review-coverage-check-800-pr-agent-review-coverage-incomplete:review_coverage_failed",
+      "agent-infra:workflow-outcome:review-coverage-check-800-claude-review-run-cancelled:review_coverage_failed",
+      "agent-infra:workflow-outcome:review-coverage-check-800-claude-review-output-invalid:review_coverage_failed",
     ],
   );
   assert.match(summaries[0], /Coverage reason: `review-run-cancelled`/);
-  assert.match(summaries[2], /Coverage reason: `review-coverage-incomplete`/);
+  assert.match(summaries[2], /Coverage reason: `review-output-invalid`/);
 });
 
 test("finds a semantic Check claim beyond the first filter=all page", async () => {
