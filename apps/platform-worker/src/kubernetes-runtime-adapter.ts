@@ -60,6 +60,12 @@ import {
 } from "./kubernetes-runtime-comparison.js";
 import { createKubernetesWorkloadPolicyHelpersV1 } from "./kubernetes-runtime-policy.js";
 import {
+	type AgentRuntimeTlsBindingV1,
+	runtimeTlsBindingV1,
+	runtimeTlsEnvironmentV1,
+	validateRuntimeTlsPolicyV1,
+} from "./kubernetes-runtime-tls.js";
+import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
@@ -92,6 +98,7 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	/** Trusted deployment auth integration; applied only to platform-auth routes. */
 	readonly platformAuthAnnotations: Readonly<Record<string, string>>;
 	readonly runtimeAuth?: WorkloadRuntimeAuthV1;
+	readonly runtimeTls?: readonly AgentRuntimeTlsBindingV1[];
 }
 
 export function createKubernetesRuntimeAdapterV1(options: {
@@ -109,6 +116,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	const { client, policy } = options;
 	const egress = workloadEgressRulesV1(policy);
 	if (policy.runtimeAuth) validateWorkloadRuntimeAuthV1(policy.runtimeAuth);
+	validateRuntimeTlsPolicyV1(policy);
 	const modelProjection =
 		options.modelProjection === undefined
 			? undefined
@@ -509,7 +517,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		try {
 			return (await options.probe({
 				desired: value,
-				serviceOrigin: `http://${workloadResourceNameV1(value.agentId)}-probe.${policy.namespace}.svc:${value.service.port}`,
+				serviceOrigin: `${runtimeTlsBindingV1(policy, value) ? "https" : "http"}://${workloadResourceNameV1(value.agentId)}-probe.${policy.namespace}.svc:${value.service.port}`,
 			}))
 				? "healthy"
 				: "unhealthy";
@@ -1082,6 +1090,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			input: unknown,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const value = desired(input);
+			// Missing serving material must not prevent an existing workload closing.
+			const tls =
+				value.replicas === 0 ? undefined : runtimeTlsBindingV1(policy, value);
+			if (tls && modelInjection?.secretName === tls.serverSecretRef.name)
+				throw new WorkloadKubernetesError("policy");
 			if (value.replicas !== 0) await assertStandardTemplateSelector(value);
 			const name = workloadResourceNameV1(value.agentId);
 			const current = await statefulSet(value);
@@ -1147,6 +1160,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				? pods.filter((pod) => hasControllingWorkloadOwner(pod, current))
 				: [];
 			const driftedOwnedPod =
+				value.replicas !== 0 &&
 				current &&
 				pods.some(
 					(pod) =>
@@ -1369,7 +1383,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 									ports: [
 										{ name: "runtime", containerPort: value.service.port },
 									],
-									env: workloadEnvironment(value),
+									env: [
+										...workloadEnvironment(value),
+										...runtimeTlsEnvironmentV1(tls),
+									],
 									envFrom: environmentSecrets(value).map((ref) => ({
 										secretRef: { name: ref.name },
 									})),
@@ -1377,6 +1394,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 										httpGet: {
 											path: value.health.path,
 											port: value.service.port,
+											...(tls ? { scheme: "HTTPS" } : {}),
 										},
 										timeoutSeconds: value.health.timeoutSeconds,
 										failureThreshold: value.health.failureThreshold,
@@ -1388,6 +1406,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 											mountPath: value.persistentVolume.mountPath,
 										},
 										{ name: "runtime-tmp", mountPath: "/tmp" },
+										...(tls
+											? [
+													{
+														name: "runtime-tls",
+														mountPath: "/var/run/agent-infra/runtime-tls",
+														readOnly: true,
+													},
+												]
+											: []),
 									],
 								},
 							],
@@ -1402,6 +1429,22 @@ export function createKubernetesRuntimeAdapterV1(options: {
 									name: "runtime-tmp",
 									emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
 								},
+								...(tls
+									? [
+											{
+												name: "runtime-tls",
+												secret: {
+													secretName: tls.serverSecretRef.name,
+													optional: false,
+													defaultMode: 0o440,
+													items: [
+														{ key: "tls.crt", path: "tls.crt" },
+														{ key: "tls.key", path: "tls.key" },
+													],
+												},
+											},
+										]
+									: []),
 							],
 						},
 					},
