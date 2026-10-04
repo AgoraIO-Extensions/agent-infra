@@ -4,6 +4,47 @@ import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import YAML from "yaml";
 
+
+// Fixed trusted full-scope launch and preparation; no caller-supplied command.
+const PR_AGENT_PRODUCER_RUN = "import(process.cwd() + '/.github/scripts/review-coverage-producer.mjs')\n  .then(({ produceAnalysis }) => produceAnalysis())\n  .catch(error => {\n    const code = ['review-output-invalid', 'review-output-missing', 'review-coverage-incomplete'].includes(error?.code) ? error.code : 'review-run-failed';\n    console.error(`${code}: Analysis producer failed`);\n    process.exitCode = 1;\n  });\n";
+const PR_AGENT_INPUT_STEP = {
+  "name": "Prepare trusted full-scope Analysis inputs",
+  "id": "analysis-input",
+  "if": "steps.scope.outputs.applicable == 'true' && steps.scope.outputs.mode == 'full'",
+  "env": {
+    "GITHUB_TOKEN": "${{ github.token }}",
+    "PR_AGENT_REVIEW_SCOPE": "${{ steps.scope.outputs.scope }}",
+    "REVIEW_TOKEN_CAP": "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}"
+  },
+  "run": "corepack pnpm install --frozen-lockfile --ignore-scripts --filter @agent-infra/review-coverage...\ncorepack pnpm --filter @agent-infra/review-coverage build\nnode .github/scripts/review-coverage-prepare.ts\n"
+};
+const PR_AGENT_SHADOW_STEP = {
+  "name": "Verify full-scope trusted chunk shadow",
+  "if": "steps.scope.outputs.applicable == 'true' && steps.scope.outputs.mode == 'full'",
+  "env": {
+    "REVIEW_COVERAGE_METADATA": "${{ steps.analysis-producer.outputs.coverage_metadata }}",
+    "REVIEW_COVERAGE_DIFF_SHA256": "${{ steps.analysis-input.outputs.diff_sha256 }}",
+    "REVIEW_COVERAGE_DIFF_BYTES": "${{ steps.analysis-input.outputs.diff_bytes }}",
+    "REVIEW_COVERAGE_BASE_SHA": "${{ steps.analysis-input.outputs.base_sha }}",
+    "REVIEW_COVERAGE_HEAD_SHA": "${{ steps.analysis-input.outputs.head_sha }}",
+    "REVIEW_COVERAGE_MERGE_BASE_SHA": "${{ steps.analysis-input.outputs.merge_base_sha }}",
+    "REVIEW_COVERAGE_REPOSITORY_ID": "${{ github.repository_id }}",
+    "REVIEW_COVERAGE_PULL_REQUEST": "${{ steps.analysis-input.outputs.pr_number }}",
+    "REVIEW_COVERAGE_ANALYSIS_JOB_ID": "${{ steps.analysis-input.outputs.analysis_job_id }}",
+    "REVIEW_COVERAGE_PROVIDER": "pr-agent",
+    "REVIEW_COVERAGE_REVIEWER": "pr-agent",
+    "REVIEW_COVERAGE_RUNTIME_KIND": "official",
+    "REVIEW_COVERAGE_RECORDER_VERSION": "${{ steps.analysis-input.outputs.recorder_version }}",
+    "REVIEW_COVERAGE_TEMPLATE_VERSION": "sha256:c08dcdec8b0f81ea8f16e8573af29da22858a0aba11d6aa38ab94aa6391b3ca1",
+    "REVIEW_COVERAGE_TRANSPORT_VERSION": "openai-responses-v1",
+    "REVIEW_COVERAGE_TOKEN_CAP": "300000",
+    "REVIEW_COVERAGE_IMAGE_DIGEST": "sha256:548b760b81ab4b3f729182428695ccc1194bbf87528c2b1e2b2b07e5223af7b6",
+    "REVIEW_COVERAGE_MERGED_OUTPUT_SHA256": "${{ steps.analysis-producer.outputs.merged_output_sha256 }}",
+    "REVIEW_COVERAGE_RESPONSE_DIGESTS": "${{ steps.analysis-producer.outputs.successful_response_sha256 }}"
+  },
+  "run": "node .github/scripts/review-coverage-shadow.mjs"
+};
+
 const REQUIRED_WORKFLOWS = [
   "auto-merge.yml",
   "blocker-reconciler.yml",
@@ -764,12 +805,14 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       if (
         workflowName !== "pr-agent-review.yml" ||
         !["analyze", "suggestions"].includes(jobName) ||
-        step.uses !== PR_AGENT_ACTION ||
+        !(step.uses === PR_AGENT_ACTION || (jobName === "analyze" &&
+          step.id === "analysis-producer" && step.shell === "node {0}" &&
+          step.run === PR_AGENT_PRODUCER_RUN)) ||
         step.env?.[envName] !== reference ||
         occurrences !== 1
       ) {
         errors.push(
-          `${workflowName}/${jobName}: ${secret} is allowed only in the pinned PR-Agent Action`,
+          `${workflowName}/${jobName}: ${secret} is allowed only in the pinned PR-Agent Action or fixed Analysis producer`,
         );
       }
       continue;
@@ -1556,6 +1599,9 @@ export function validateWorkflowDocuments(workflows) {
   const prAgentPublish = prAgent?.jobs?.publish;
   const prAgentSuggestions = prAgent?.jobs?.suggestions;
   const prAgentAction = prAgentAnalyze?.steps?.find((step) => step.id === "pr-agent");
+  const prAgentProducer = prAgentAnalyze?.steps?.find((step) => step.id === "analysis-producer");
+  const prAgentInput = prAgentAnalyze?.steps?.find((step) => step.id === "analysis-input");
+  const prAgentShadow = prAgentAnalyze?.steps?.find((step) => step.name === "Verify full-scope trusted chunk shadow");
   const prAgentSuggestionsAction = prAgentSuggestions?.steps?.find(
     (step) => step.id === "pr-agent-suggestions",
   );
@@ -1639,7 +1685,7 @@ export function validateWorkflowDocuments(workflows) {
     !prAgentCoverageCondition.includes("github.event.pull_request.state == 'open'") ||
     !prAgentCoverageCondition.includes("needs.analyze.outputs.applicable != 'false'") ||
     !prAgentCoverageCondition.includes("needs.publish.outputs.applicable != 'false'") ||
-    !sameObject(prAgentAnalyze?.permissions, { contents: "read", issues: "read", checks: "read", "pull-requests": "read" }) ||
+    !sameObject(prAgentAnalyze?.permissions, { contents: "read", actions: "read", issues: "read", checks: "read", "pull-requests": "read" }) ||
     !sameObject(prAgentSuggestions?.permissions, prAgentPermissions) ||
     !sameObject(prAgentCoverage?.permissions, {
       actions: "read",
@@ -1653,7 +1699,7 @@ export function validateWorkflowDocuments(workflows) {
     prAgentCoverage?.["continue-on-error"] !== true ||
     Object.keys(prAgent?.jobs ?? {}).sort().join("\0") !==
       ["analyze", "coverage", "outcome", "publish", "suggestions"].join("\0") ||
-    prAgentAnalyze?.steps?.length !== 6 ||
+    prAgentAnalyze?.steps?.length !== 9 ||
     !sameObject(prAgentAnalyze?.steps?.[1], {
       name: "Set up Node.js", uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
       with: { "node-version": 24 },
@@ -1670,17 +1716,37 @@ export function validateWorkflowDocuments(workflows) {
       env: { GITHUB_TOKEN: "${{ github.token }}", PRIMARY_ISSUE_EVIDENCE: "${{ steps.primary-issue.outputs.evidence }}" },
       run: "node .github/scripts/pr-agent-review-scope.mjs",
     }) ||
-    prAgentAnalyze?.steps?.[4] !== prAgentAction ||
-    !sameObject(prAgentAnalyze?.steps?.[5], {
+    prAgentAnalyze?.steps?.[4] !== prAgentInput ||
+    prAgentAnalyze?.steps?.[5] !== prAgentAction ||
+    prAgentAnalyze?.steps?.[6] !== prAgentProducer ||
+    prAgentAnalyze?.steps?.[8] !== prAgentShadow ||
+    !sameObject(prAgentInput, PR_AGENT_INPUT_STEP) ||
+    !sameObject(prAgentShadow, PR_AGENT_SHADOW_STEP) ||
+    !sameObject(prAgentProducer, {
+      name: "Review full scope through trusted producer", id: "analysis-producer",
+      if: "steps.scope.outputs.applicable == 'true' && steps.scope.outputs.mode == 'full'",
+      shell: "node {0}", run: PR_AGENT_PRODUCER_RUN,
+      env: prAgentProducer?.env,
+    }) ||
+    !sameObject(prAgentProducer?.env, { ...prAgentAction?.env,
+        PR_AGENT_REVIEW_SCOPE: "${{ steps.scope.outputs.scope }}",
+        REVIEW_COVERAGE_ANALYSIS_JOB_ID: "${{ steps.analysis-input.outputs.analysis_job_id }}",
+        REVIEW_COVERAGE_RUNTIME_KIND: "official", REVIEW_COVERAGE_PROVIDER: "pr-agent",
+    }) ||
+    !sameObject(prAgentAnalyze?.steps?.[7], {
       name: "Prepare review findings output", id: "review-output",
       if: "steps.scope.outputs.applicable == 'true' && steps.scope.outputs.mode != 'unchanged'",
-      env: { PR_AGENT_REVIEW: "${{ steps.pr-agent.outputs.review }}" },
+      env: { PR_AGENT_REVIEW: "${{ steps.scope.outputs.mode == 'full' && steps.analysis-producer.outputs.review || steps.pr-agent.outputs.review }}" },
       run: "node .github/scripts/pr-agent-review-output.mjs",
     }) ||
     !sameObject(prAgentAnalyze?.outputs, {
       review: "${{ steps.review-output.outputs.review }}",
       applicable: "${{ steps.primary-issue.outputs.applicable == 'false' && 'false' || steps.scope.outputs.applicable }}",
       scope: "${{ steps.scope.outputs.scope }}",
+      coverage_metadata: "${{ steps.analysis-producer.outputs.coverage_metadata }}",
+      coverage_identity: "${{ steps.analysis-producer.outputs.coverage_identity }}",
+      merged_output_sha256: "${{ steps.analysis-producer.outputs.merged_output_sha256 }}",
+      successful_response_sha256: "${{ steps.analysis-producer.outputs.successful_response_sha256 }}",
     }) ||
     !sameObject(prAgentPublish, {
       name: "PR-Agent Publish Review", needs: "analyze", "runs-on": "ubuntu-24.04", "timeout-minutes": 5,
@@ -1738,7 +1804,7 @@ export function validateWorkflowDocuments(workflows) {
       JSON.stringify(["analyze", "publish", "suggestions"]) ||
     gatePublisherTokenReferences(prAgent).length !== 1 ||
     prAgentAction?.uses !== PR_AGENT_ACTION ||
-    prAgentAction?.if !== "steps.scope.outputs.applicable == 'true' && steps.scope.outputs.mode != 'unchanged'" ||
+    prAgentAction?.if !== "steps.scope.outputs.applicable == 'true' && steps.scope.outputs.mode != 'unchanged' && steps.scope.outputs.mode != 'full'" ||
     !sameObject(prAgentAction?.with, {
       entrypoint: "python",
       args: `-c "import os; os.chdir('/tmp'); from pr_agent.cli import run; from pr_agent.log import LoggingFormat, setup_logger; setup_logger(fmt=LoggingFormat.JSON); run()" --diff-file /github/workspace/.pr-agent-review-input.diff review`,

@@ -1,13 +1,13 @@
 # Trusted chunk coverage shadow
 
-This package is the TypeScript, job-local boundary for the §7.3.1 recorder and shadow verifier.
+本包是工作流 Spec §7.3.1 的 TypeScript、job-local recorder 与 shadow verifier 边界。
 
-`buildGitInventory` reads the immutable `merge-base..head` range with configuration, attributes,
-external diff, and checkout execution disabled. `JobLocalRecorder` accepts only the approved JSON
-request shape, checks every file and hunk before forwarding the unchanged body, retries the same
-logical chunk only, and enforces the three-chunk limit. `serializeMetadata` emits bounded metadata
-only; source, prompts, credentials, and the runtime repository path are not persisted.
+`buildGitInventory` 在不 checkout、不执行 PR 代码且不加载配置、attributes 或 external diff 的条件下读取不可变的
+`merge-base..head`。生产 `JobLocalRecorder` 只接受当前部署的 Responses JSON 或 Responses SSE，
+从实际输入中提取 unified diff，逐文件、逐 hunk 核对后原样转发；同一 logical chunk 共用 retry 预算，
+并在等待网络前预留最多三个 chunk。官方响应必须完成，并且能解析为唯一顶层 `review` 的 YAML/JSON Schema。
+`serializeMetadata` 只输出有界 metadata；源码、prompt、凭证和 runtime repository path 不会持久化。
 
-`verifyShadowMetadata` validates the same run/attempt identity, inventory, file/hunk coverage, and
-response summary. It is a shadow consumer and does not publish or replace the existing required
-Coverage check. Production activation and shared workflow wiring remain a later hosted gate.
+`verifyShadowMetadata` 校验同一 run/attempt、repository、head、inventory、互补 file/hunk coverage、请求和响应摘要、
+合并输出摘要以及 runtime identity。它只是 shadow consumer，不发布或替代现有 required Coverage check。
+共享 workflow 的 producer/job output 与最终接线由 #1304 串行接收；默认分支 hosted 正负验证完成前不会启用分块判据。

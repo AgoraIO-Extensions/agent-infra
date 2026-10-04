@@ -767,6 +767,10 @@ importers:
         version: 8.21.3
 
   packages/review-coverage:
+    dependencies:
+      yaml:
+        specifier: 2.8.3
+        version: 2.8.3
     devDependencies:
       '@agent-infra/config':
         specifier: workspace:*

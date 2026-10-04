@@ -25,5 +25,8 @@
 		"tsdown": "0.22.14",
 		"typescript": "catalog:",
 		"vitest": "catalog:"
+	},
+	"dependencies": {
+		"yaml": "2.8.3"
 	}
 }

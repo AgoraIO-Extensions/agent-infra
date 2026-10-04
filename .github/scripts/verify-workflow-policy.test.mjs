@@ -982,6 +982,7 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   ]);
   assert.deepEqual(workflow.jobs.analyze.permissions, {
     contents: "read",
+    actions: "read",
     issues: "read",
     checks: "read",
     "pull-requests": "read",
@@ -1156,7 +1157,7 @@ test("requires trusted finding projection without raw transfer or missing-output
   delete step["continue-on-error"];
   step.env.PR_AGENT_REVIEW = "${{ github.event.pull_request.body }}";
   assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("official inline publishing")));
-  step.env.PR_AGENT_REVIEW = "${{ steps.pr-agent.outputs.review }}";
+  step.env.PR_AGENT_REVIEW = "${{ steps.scope.outputs.mode == 'full' && steps.analysis-producer.outputs.review || steps.pr-agent.outputs.review }}";
   assert.deepEqual(validateWorkflowDocuments(workflows), []);
 });
 
@@ -2695,4 +2696,94 @@ test("keeps the official Issue Review model on read-only tools", async () => {
       error.includes("Issue Review model must stay read-only"),
     ),
   );
+});
+
+
+test("locks the full-scope producer to trusted inputs, bounded outputs and read-only privileges", async () => {
+  const baseline = await actualWorkflows();
+  assert.deepEqual(validateWorkflowDocuments(baseline), []);
+  const mutations = [
+    (job) => { job.steps.find(s => s.id === "analysis-producer").if = "always()"; },
+    (job) => { job.steps.find(s => s.id === "pr-agent").if = "steps.scope.outputs.applicable == 'true'"; },
+    (job) => { job.steps.find(s => s.id === "analysis-producer").shell = "bash"; },
+    (job) => { job.steps.find(s => s.id === "analysis-producer").run += "\nconsole.log(process.env.OPENAI__KEY);"; },
+    (job) => { job.steps.find(s => s.id === "analysis-producer").env.REVIEW_COVERAGE_PROVIDER = "plain-diff-derived"; },
+    (job) => { job.steps.find(s => s.id === "analysis-producer").env.PR_AGENT_REVIEW_SCOPE = "${{ github.event.pull_request.body }}"; },
+    (job) => { job.steps.find(s => s.id === "analysis-input").run = "echo untrusted"; },
+    (job) => { job.steps.find(s => s.id === "analysis-producer")["continue-on-error"] = true; },
+    (job) => { job.permissions.actions = "write"; },
+    (job) => { job.steps.find(s => s.name === "Verify full-scope trusted chunk shadow").env.REVIEW_COVERAGE_DIFF_SHA256 = "${{ fromJSON(steps.analysis-producer.outputs.coverage_metadata).diffSha256 }}"; },
+    (job) => { delete job.steps.find(s => s.name === "Verify full-scope trusted chunk shadow").env.REVIEW_COVERAGE_DIFF_BYTES; },
+    (job) => { job.steps.push({uses: "actions/upload-artifact@" + "a".repeat(40)}); },
+    (job) => { job.outputs.coverage_metadata = "${{ github.event.pull_request.body }}"; },
+    (job) => { job.steps.find(s => s.name === "Verify full-scope trusted chunk shadow").env.REVIEW_COVERAGE_ANALYSIS_JOB_ID = "${{ fromJSON(steps.analysis-producer.outputs.coverage_identity).analysisJobId }}"; },
+    (job) => { job.steps.find(s => s.name === "Verify full-scope trusted chunk shadow")["continue-on-error"] = true; },
+    (job) => { job.steps.find(s => s.id === "analysis-producer").env["config.max_model_tokens"] = "600000"; },
+  ];
+  for (const mutate of mutations) {
+    const workflows = structuredClone(baseline);
+    mutate(workflows["pr-agent-review.yml"].jobs.analyze);
+    assert.ok(validateWorkflowDocuments(workflows).some(error => error.includes("official inline publishing")), mutate.toString());
+  }
+});
+
+test("trusted Analysis preparation binds its own job and rejects stale or incomplete run evidence", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "analysis-prepare-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  await fs.mkdir(path.join(directory, "packages/review-coverage/dist"), { recursive: true });
+  await fs.writeFile(path.join(directory, "packages/review-coverage/dist/index.mjs"), "// trusted fixture\n");
+  const preload = path.join(directory, "preload.mjs");
+  await fs.writeFile(preload, `
+import assert from 'node:assert/strict';
+import cp from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const mode = process.env.FIXTURE_MODE;
+cp.execFileSync = (command, args, options) => {
+  assert.equal(command, 'git');
+  if (args[0] === 'rev-parse') return 'true';
+  assert(args.includes('--unshallow'));
+  assert(args.includes('https://github.com/fixture/repo.git'));
+  assert(args.includes('a'.repeat(40)) && args.includes('b'.repeat(40)));
+  assert(!args.some(value => value.includes('fixture-token')));
+  assert(options.env.GIT_CONFIG_VALUE_0.startsWith('AUTHORIZATION: basic '));
+  return Buffer.from('');
+};
+syncBuiltinESMExports();
+globalThis.fetch = async url => {
+  assert(url.startsWith('https://api.github.com/repos/fixture/repo/'));
+  if (url.endsWith('/pulls/1')) return Response.json({state:'open',draft:false,
+    head:{sha:mode === 'stale-head' ? 'c'.repeat(40) : 'b'.repeat(40),repo:{full_name:'fixture/repo'}},
+    base:{sha:'a'.repeat(40)}});
+  assert(url.endsWith('/actions/runs/100/attempts/2/jobs?per_page=100'));
+  return Response.json({total_count:mode === 'truncated' ? 101 : 1,jobs:[{
+    id:500,run_id:100,run_attempt:mode === 'wrong-attempt' ? 1 : 2,name:'PR-Agent Analysis',status:'in_progress'
+  }]});
+};
+`);
+  const script = path.resolve(".github/scripts/review-coverage-prepare.ts");
+  for (const mode of ["ok", "wrong-attempt", "truncated", "stale-head", "wrong-cap", "invalid-diff-hash", "missing-diff-hash", "zero-diff-bytes", "string-diff-bytes"]) {
+    const output = path.join(directory, `${mode}.output`);
+    await fs.writeFile(output, "");
+    const run = promisify(execFile)(process.execPath, ["--import", preload, script], {
+      cwd: directory,
+      env: { ...process.env, FIXTURE_MODE: mode, GITHUB_OUTPUT: output, GITHUB_TOKEN: "fixture-token",
+        GITHUB_REPOSITORY: "fixture/repo", GITHUB_RUN_ID: "100", GITHUB_RUN_ATTEMPT: "2",
+        REVIEW_TOKEN_CAP: mode === "wrong-cap" ? "128000" : "300000",
+        PR_AGENT_REVIEW_SCOPE: JSON.stringify({mode:"full",repository:"fixture/repo",prNumber:1,
+          headSha:"b".repeat(40),mergeBaseSha:"a".repeat(40),
+          diffSha256: mode === "missing-diff-hash" ? undefined : mode === "invalid-diff-hash" ? "invalid" : "d".repeat(64),
+          diffBytes: mode === "zero-diff-bytes" ? 0 : mode === "string-diff-bytes" ? "123" : 123}),
+      },
+    });
+    if (mode === "ok") {
+      await run;
+      const result = await fs.readFile(output, "utf8");
+      assert.match(result, /^recorder_version=sha256:[a-f0-9]{64}\nanalysis_job_id=500\n/);
+      assert.match(result, /base_sha=a{40}\nhead_sha=b{40}\nmerge_base_sha=a{40}\npr_number=1\ndiff_sha256=d{64}\ndiff_bytes=123\n$/);
+    } else {
+      await assert.rejects(run, error => error.code === 1 &&
+        error.stderr.trim() === "review-output-invalid: trusted full-scope preparation failed");
+      assert.equal(await fs.readFile(output, "utf8"), "");
+    }
+  }
 });
