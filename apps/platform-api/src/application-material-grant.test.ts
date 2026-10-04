@@ -173,6 +173,7 @@ it("requires an explicit admin self grant and preserves metadata-only read/revok
 		(await call("GET", undefined, "app-1", "application", admin.userId)).status,
 	).toBe(404);
 	const revoked = await call("PATCH", {
+		status: "revoked",
 		expectedRevision: result.metadata.authorizationRevision,
 	});
 	expect(revoked.status).toBe(200);
@@ -204,7 +205,9 @@ it.each(["manager", "disabled", "directory", "removed", "mismatch"])(
 		for (const method of ["POST", "GET", "PATCH"]) {
 			const response = await call(
 				method,
-				method === "PATCH" ? { expectedRevision: "revision" } : undefined,
+				method === "PATCH"
+					? { status: "revoked", expectedRevision: "revision" }
+					: undefined,
 			);
 			expect(response.status).toBe(
 				mode === "directory" || mode === "mismatch"
